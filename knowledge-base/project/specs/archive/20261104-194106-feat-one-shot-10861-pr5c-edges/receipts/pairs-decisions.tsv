@@ -1,0 +1,262 @@
+# PR5c pair dispositions (Ref #10861). suite	path	disposition	evidence
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/lib/session-state.sh	edge-real	test-contention.sh:1324 [[ -f ]]; :1352 source
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/skills/plan/references/plan-issue-templates.md	edge-real	observability-schema-parity.test.ts:101/149 read(TEMPLATES)
+scripts/battery-tag-authorship	tests/scripts/lib/plan-gate-preamble.sh	edge-real	test-plan-gate-preamble.sh:32 source LIB
+scripts/betterstack-emitter-read	apps/web-platform/infra/betterstack-logs-alerts.tf	edge-real	send-failed-alert-probe:117 [[ -f ]]/125 grep; probe-524:34 awk; clientip-7530:150 TF read
+scripts/betterstack-emitter-read	apps/web-platform/infra/server.tf	edge-real	check-deploy-script-parity.sh:113/136 assert_host_name_mapping_stable reads \$ROOT tf
+scripts/betterstack-emitter-read	apps/web-platform/infra/variables.tf	edge-real	check-deploy-script-parity.sh:112/131 parse_host_keys reads \$ROOT tf
+scripts/betterstack-emitter-read	apps/web-platform/infra/zot-registry.tf	edge-real	registry-replace-preflight.sh:142 [[ -r ]]; :147-148 grep -E
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-soak-6178.function-ids.txt	edge-real	inngest-soak-6178.sh:248 [[ -r ]]; :249 grep -vE
+scripts/betterstack-emitter-read	scripts/inngest-dedicated-host-classify.sh	edge-real	inngest-probe-heartbeat-feeder.sh:166 source _ic_lib
+scripts/betterstack-emitter-read	scripts/lib/inngest-probe-row.sh	edge-real	inngest-probe-heartbeat-feeder.sh:150 source _ipr_lib
+scripts/followthrough-varq-ban	knowledge-base/project/specs/archive/20260813-114111-feat-one-shot-7489-7490-marketplace-retire-delivery-followups/upstream-reports.md	edge-real	plugin-delivery-canary-7490.sh:123 [[ -r ]]; :128 grep -c
+tests/scripts/scratch-residue	.github/actions/bot-pr-with-synthetic-checks/action.yml	edge-real	test-weakness-miner.sh:1196 real_comp awk+cmp+_wm_guard reads
+tests/scripts/scratch-residue	.github/workflows/build-inngest-bootstrap-image.yml	edge-real	cloud-init-inngest-bootstrap.test.sh:1430 [[ -r GA_WF ]]; :1565 git show; zot-pull-mutation.test.sh:92 cp -a
+tests/scripts/scratch-residue	.github/workflows/scheduled-vinngest-digest-freshness.yml	edge-real	cloud-init-inngest-bootstrap.test.sh:512 [[ -r AC6D_WF ]]; :514-524 greps; zot-pull-mutation.test.sh:97 cp -a
+tests/scripts/scratch-residue	.github/workflows/weakness-miner.yml	edge-real	test-weakness-miner.sh:192 [[ -f ]] + awk add-paths; :1195-1296 real_wf/real_comp guard reads
+tests/scripts/scratch-residue	knowledge-base/engineering/operations/runbooks/git-data-luks-cutover-5274.md	edge-real	git-data-wipe-assert.test.sh:2611 python3 reads RB; :2639 cmp -s
+tests/scripts/scratch-residue	scripts/dogfood/assert-ollama-loopback.sh	edge-real	grok-gpu-bootstrap.test.sh:17 [[ -f ]]; :20 bash -n
+tests/scripts/scratch-residue	scripts/dogfood/grok-gpu-bootstrap.sh	edge-real	grok-gpu-bootstrap.test.sh:16 [[ -f ]]; :20 bash -n; :27-34 grep -qE
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/actions/cf-tunnel-ssh-bridge/action.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/scripts/test/run-all.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/apply-deploy-pipeline-fix.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/apply-web-platform-infra.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/ci.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/git-data-cutover.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/scheduled-terraform-drift.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-cutover.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.github/workflows/workspaces-luks-verify.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	.nvmrc	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	AGENTS.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	AGENTS.rules.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	CLAUDE.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/.npmrc	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/.nvmrc	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/infra/cloud-init.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/infra/doppler-config-inventory.txt	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/infra/run-registered-suites.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/package-lock.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/package.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/scripts/vitest-related.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/global-setup-git-tripwire.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/repo-wide-containment.test.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/repo-wide-suites.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/setup-dom.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/setup-node.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/test/vitest.canary.config.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/tsconfig.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/vitest.config.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	package-lock.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	package.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/generate-c4-from-components.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/battery-tag-authorship-mutations.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/battery-tag-authorship.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/cf-tunnel-liveness-gate-mutations.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/check-cloudflare-token-drift.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/check-cloudflare-token-drift.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/guard-vacuity-floor.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-orphan-test-suites.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-orphan-test-suites.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/registry-pull-path-health.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/registry-restore-from-ghcr.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/suite-exit-class-parity.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/suite-shard-legs-heavy.tsv	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/suite-shard-legs.tsv	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/test-all-affected.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	scripts/zot-mirror-diagnosis.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/fixtures/battery-tag-bare-fetch.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/fixtures/battery-tag-marker-no-ledger.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/lib/restore-engine-header.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-plan-gate-preamble.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-gate-mutation-battery.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-pull-path-health.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/fanout-suite-scope.test.sh	tests/scripts/test-registry-restore-from-ghcr.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+plugins/soleur/test/preflight-check10-suite-integrity.test.sh	package.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/actions/cf-tunnel-ssh-bridge/action.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/workflows/apply-deploy-pipeline-fix.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/workflows/apply-web-platform-infra.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/workflows/ci.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/workflows/git-data-cutover.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/workflows/scheduled-terraform-drift.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/workflows/workspaces-luks-cutover.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.github/workflows/workspaces-luks-verify.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	.nvmrc	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	AGENTS.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	AGENTS.rules.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	CLAUDE.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/.npmrc	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/.nvmrc	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/infra/cloud-init.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/infra/doppler-config-inventory.txt	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/package-lock.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/package.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/scripts/vitest-related.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/test/global-setup-git-tripwire.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/test/repo-wide-containment.test.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/test/repo-wide-suites.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/test/setup-dom.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/test/setup-node.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/test/vitest.canary.config.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/tsconfig.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	apps/web-platform/vitest.config.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	package-lock.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	package.json	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	plugins/soleur/scripts/generate-c4-from-components.ts	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	plugins/soleur/test/c4-from-components.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	plugins/soleur/test/test-helpers.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/cf-tunnel-liveness-gate-mutations.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/check-cloudflare-token-drift.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/check-cloudflare-token-drift.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/guard-vacuity-floor.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/lib/affected-glob.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/lib/rows-range.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/lint-orphan-test-suites.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/lint-orphan-test-suites.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/registry-pull-path-health.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/registry-restore-from-ghcr.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/suite-shard-legs-heavy.tsv	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/suite-shard-legs.tsv	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/test-all-affected.test.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	scripts/zot-mirror-diagnosis.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	tests/scripts/lib/restore-engine-header.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	tests/scripts/test-registry-gate-mutation-battery.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	tests/scripts/test-registry-pull-path-health.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/battery-tag-authorship	tests/scripts/test-registry-restore-from-ghcr.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	.github/workflows/apply-deploy-pipeline-fix.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	.github/workflows/build-inngest-bootstrap-image.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	.github/workflows/git-data-cutover.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	.github/workflows/inngest-config-drift.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	.github/workflows/reusable-release.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	.github/workflows/scheduled-inngest-health.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	.github/workflows/scheduled-zot-restart-loop.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	knowledge-base/engineering/architecture/decisions/ADR-027-process-local-state-for-runners.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	knowledge-base/engineering/architecture/decisions/ADR-068-multi-host-workspaces-shared-git-data-lease-coordinator.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	scripts/ci-pr-affected-audit.accept.tsv	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-hostmetrics-trim-11602.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	scripts/followthroughs/inngest-luks-keeper-dark-11265.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	scripts/image-cve-triage.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+scripts/betterstack-emitter-read	scripts/inngest-key-rotate.sh	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/git-data-birth.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+tests/scripts/scratch-residue	.github/workflows/git-data-rung2-rehearsal.yml	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+tests/scripts/scratch-residue	knowledge-base/engineering/operations/runbooks/git-data-birth.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+tests/scripts/scratch-residue	knowledge-base/engineering/operations/runbooks/git-data-rung2-rehearsal.md	glob-narrow	anchor file churn >8 commits/90d — accept row refused (tasks.md 1.2); declared-not-scanned input
+.claude/hooks/cla-signed-author-gate.test.sh	.github/workflows/cla.yml	accept-row	mention/data — see refs
+.claude/hooks/ship-kb-archive-gate.test.sh	knowledge-base/project/specs/.gitkeep	accept-row	mention/data — see refs
+plugins/soleur/test/fanout-suite-scope.test.sh	.gitignore	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	.github/actions/cf-tunnel-ssh-bridge/action.yml	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/apply-deploy-pipeline-fix.yml	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/apply-web-platform-infra.yml	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/ci.yml	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/scheduled-terraform-drift.yml	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	.gitignore	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/infra/cloud-init.yml	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/infra/doppler-config-inventory.txt	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/package-lock.json	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/scripts/vitest-related.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/test/global-setup-git-tripwire.ts	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/test/repo-wide-containment.test.ts	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/vitest.config.ts	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	package-lock.json	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/cf-tunnel-liveness-gate-mutations.test.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/check-cloudflare-token-drift.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/check-cloudflare-token-drift.test.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/registry-pull-path-health.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/registry-restore-from-ghcr.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/suite-exit-class-parity.test.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/suite-shard-legs.tsv	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/zot-mirror-diagnosis.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/lib/restore-engine-header.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-plan-gate-preamble.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-registry-gate-mutation-battery.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-registry-pull-path-health.sh	accept-row	mention/data — see refs
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-registry-restore-from-ghcr.sh	accept-row	mention/data — see refs
+scripts/battery-tag-authorship	.gitignore	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	apps/web-platform/infra/cloud-init-registry.yml	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	apps/web-platform/infra/hooks.json.tmpl	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	apps/web-platform/infra/inngest-registry-probe.sh	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md	accept-row	mention/data — see refs
+scripts/betterstack-emitter-read	scripts/betterstack-ingest-probe.sh	accept-row	mention/data — see refs
+scripts/compound-promote	AGENTS.md	accept-row	mention/data — see refs
+scripts/compound-promote	AGENTS.rules.md	accept-row	mention/data — see refs
+scripts/compound-promote	knowledge-base/project/promotion-config.yml	accept-row	mention/data — see refs
+scripts/compound-promote	scripts/retired-rule-ids.txt	accept-row	mention/data — see refs
+scripts/followthrough-varq-ban	README.md	accept-row	mention/data — see refs
+scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	accept-row	mention/data — see refs
+scripts/followthrough-varq-ban	knowledge-base/project/README.md	accept-row	mention/data — see refs
+scripts/followthrough-varq-ban	scripts/ensure-doppler.sh	accept-row	mention/data — see refs
+scripts/followthrough-varq-ban	scripts/lib/trusted-verdict.sh	accept-row	mention/data — see refs
+tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	accept-row	mention/data — see refs
+tests/scripts/git-data-rung2-evidence-capture	scripts/ensure-doppler.sh	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	.gitattributes	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	.github/workflows/cla.yml	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	LICENSE	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	bunfig.toml	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	knowledge-base/marketing/brand-guide.md	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md	accept-row	mention/data — see refs
+tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md	accept-row	mention/data — see refs
+
+.claude/hooks/cla-signed-author-gate.test.sh	.github/workflows/cla.yml	accept-row	.claude/hooks/cla-signed-author-gate.test.sh:115 cat > "$work/.github/workflows/cla.yml" <<'EOF' || .claude/hooks/cla-signed-author-gate.test.sh:127 git -C "$work" add .github/workflows/cla.yml
+.claude/hooks/ship-kb-archive-gate.test.sh	knowledge-base/project/specs/.gitkeep	accept-row	.claude/hooks/ship-kb-archive-gate.test.sh:111 echo "" > "$work/knowledge-base/project/specs/.gitkeep" ;;
+plugins/soleur/test/fanout-suite-scope.test.sh	.gitignore	accept-row	scripts/lib/repo-write-boundary.sh:840 - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+plugins/soleur/test/git-env-list-parity.test.sh	.github/actions/cf-tunnel-ssh-bridge/action.yml	accept-row	scripts/pre-push-ratchet-lane.sh:111 ".github/actions/cf-tunnel-ssh-bridge/action.yml"
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/apply-deploy-pipeline-fix.yml	accept-row	scripts/pre-push-ratchet-lane.sh:113 ".github/workflows/apply-deploy-pipeline-fix.yml"
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/apply-web-platform-infra.yml	accept-row	scripts/pre-push-ratchet-lane.sh:114 ".github/workflows/apply-web-platform-infra.yml"
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/ci.yml	accept-row	scripts/pre-push-ratchet-lane.sh:115 ".github/workflows/ci.yml"
+plugins/soleur/test/git-env-list-parity.test.sh	.github/workflows/scheduled-terraform-drift.yml	accept-row	scripts/pre-push-ratchet-lane.sh:116 ".github/workflows/scheduled-terraform-drift.yml"
+plugins/soleur/test/git-env-list-parity.test.sh	.gitignore	accept-row	scripts/pre-push-ratchet-lane.sh:117 ".gitignore"
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/infra/cloud-init.yml	accept-row	scripts/pre-push-ratchet-lane.sh:104 "apps/web-platform/infra/cloud-init.yml"
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/infra/doppler-config-inventory.txt	accept-row	scripts/pre-push-ratchet-lane.sh:105 "apps/web-platform/infra/doppler-config-inventory.txt"
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/package-lock.json	accept-row	scripts/pre-push-ratchet-lane.sh:106 "apps/web-platform/package-lock.json"
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/scripts/vitest-related.sh	accept-row	scripts/pre-push-ratchet-lane.sh:107 "apps/web-platform/scripts/vitest-related.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/test/global-setup-git-tripwire.ts	accept-row	scripts/pre-push-ratchet-lane.sh:108 "apps/web-platform/test/global-setup-git-tripwire.ts"
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/test/repo-wide-containment.test.ts	accept-row	scripts/pre-push-ratchet-lane.sh:109 "apps/web-platform/test/repo-wide-containment.test.ts"
+plugins/soleur/test/git-env-list-parity.test.sh	apps/web-platform/vitest.config.ts	accept-row	scripts/pre-push-ratchet-lane.sh:110 "apps/web-platform/vitest.config.ts"
+plugins/soleur/test/git-env-list-parity.test.sh	package-lock.json	accept-row	scripts/pre-push-ratchet-lane.sh:106 "apps/web-platform/package-lock.json"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/cf-tunnel-liveness-gate-mutations.test.sh	accept-row	scripts/pre-push-ratchet-lane.sh:129 "scripts/cf-tunnel-liveness-gate-mutations.test.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/check-cloudflare-token-drift.sh	accept-row	scripts/pre-push-ratchet-lane.sh:130 "scripts/check-cloudflare-token-drift.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/check-cloudflare-token-drift.test.sh	accept-row	scripts/pre-push-ratchet-lane.sh:131 "scripts/check-cloudflare-token-drift.test.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/registry-pull-path-health.sh	accept-row	scripts/pre-push-ratchet-lane.sh:133 "scripts/registry-pull-path-health.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/registry-restore-from-ghcr.sh	accept-row	scripts/pre-push-ratchet-lane.sh:134 "scripts/registry-restore-from-ghcr.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/suite-exit-class-parity.test.sh	accept-row	scripts/pre-push-ratchet-lane.sh:135 "scripts/suite-exit-class-parity.test.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/suite-shard-legs.tsv	accept-row	scripts/pre-push-ratchet-lane.sh:136 "scripts/suite-shard-legs.tsv"
+plugins/soleur/test/git-env-list-parity.test.sh	scripts/zot-mirror-diagnosis.sh	accept-row	scripts/pre-push-ratchet-lane.sh:140 "scripts/zot-mirror-diagnosis.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/lib/restore-engine-header.sh	accept-row	scripts/pre-push-ratchet-lane.sh:141 "tests/scripts/lib/restore-engine-header.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-plan-gate-preamble.sh	accept-row	scripts/pre-push-ratchet-lane.sh:142 "tests/scripts/test-plan-gate-preamble.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-registry-gate-mutation-battery.sh	accept-row	scripts/pre-push-ratchet-lane.sh:143 "tests/scripts/test-registry-gate-mutation-battery.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-registry-pull-path-health.sh	accept-row	scripts/pre-push-ratchet-lane.sh:144 "tests/scripts/test-registry-pull-path-health.sh"
+plugins/soleur/test/git-env-list-parity.test.sh	tests/scripts/test-registry-restore-from-ghcr.sh	accept-row	scripts/pre-push-ratchet-lane.sh:145 "tests/scripts/test-registry-restore-from-ghcr.sh"
+scripts/battery-tag-authorship	.gitignore	accept-row	scripts/lib/repo-write-boundary.sh:840 - files matched by .gitignore — `git status --porcelain` is run WITHOUT --ignored, so a
+scripts/betterstack-emitter-read	apps/web-platform/infra/cloud-init-registry.yml	accept-row	scripts/followthroughs/zot-log-channel-7440.sh:592 echo " apps/web-platform/infra/cloud-init-registry.yml." >&2
+scripts/betterstack-emitter-read	apps/web-platform/infra/hooks.json.tmpl	accept-row	scripts/followthroughs/inngest-soak-6178.sh:399 [[ "$foreign" == "0" ]] || cannot_establish "slice_unreadable slice=${kk}/${N_SLICES} caus || scripts/followthroughs/inngest-soak-6178.sh:432 cannot_establish "window_underrun min_started=${min_started} window_head=${SOAK_FROM}" "th
+scripts/betterstack-emitter-read	apps/web-platform/infra/inngest-registry-probe.sh	accept-row	scripts/followthroughs/inngest-soak-6178.sh:315 cannot_establish "registry_unreadable curl_rc=0 http=200 body_class=$(classify_body "$WORK
+scripts/betterstack-emitter-read	knowledge-base/engineering/architecture/decisions/ADR-100-inngest-dedicated-single-host-singleton-control-plane.md	accept-row	scripts/followthroughs/inngest-soak-6178.sh:514 printf ' (1) dispatch the ADR-100 `adopting → accepted` flip PR (knowledge-base/engineerin
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	accept-row	scripts/betterstack-query.sh:104 knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md	accept-row	scripts/followthroughs/inngest-private-nic-8539.sh:88 echo " table in knowledge-base/engineering/operations/runbooks/inngest-server.md." >&2
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md	accept-row	scripts/followthroughs/registry-clientip-alert-7530.sh:576 "register PA-8 (c)/(g) brackets, counsel-review-7440 addendum + frontmatter clientip_monit
+scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.md	accept-row	scripts/followthroughs/registry-htpasswd-stdin-10119.sh:98 echo " Read knowledge-base/engineering/operations/runbooks/registry-host-replace-dispatch.
+scripts/betterstack-emitter-read	scripts/betterstack-ingest-probe.sh	accept-row	scripts/zot-restart-loop-alarm.sh:269 NIC_CAUSE="run scripts/betterstack-ingest-probe.sh; a 402 is vendor quota exhaustion, a 40 || scripts/zot-restart-loop-alarm.sh:508 CAUSE="run scripts/betterstack-ingest-probe.sh for the refusal code; a 402 is vendor quota
+scripts/compound-promote	AGENTS.md	accept-row	scripts/compound-promote.test.sh:139 printf 'idx\x5cn' > "$root/AGENTS.md" || scripts/compound-promote.test.sh:404 printf 'idx\x5cn' > "$root/AGENTS.md"
+scripts/compound-promote	AGENTS.rules.md	accept-row	scripts/compound-promote.test.sh:140 printf 'core\x5cn' > "$root/AGENTS.rules.md" || scripts/compound-promote.test.sh:405 printf 'core\x5cn' > "$root/AGENTS.rules.md"
+scripts/compound-promote	knowledge-base/project/promotion-config.yml	accept-row	scripts/compound-promote.test.sh:248 cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF' || scripts/compound-promote.test.sh:281 cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF' || scripts/compound-promote.test.sh:323 cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF' || scripts/compound-promote.test.sh:361 cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF' || scripts/compound-promote.test.sh:400 cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF' || scripts/compound-promote.test.sh:439 cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF' || scripts/compound-promote.test.sh:526 cat > "$root/knowledge-base/project/promotion-config.yml" <<'EOF'
+scripts/compound-promote	scripts/retired-rule-ids.txt	accept-row	scripts/compound-promote.test.sh:327 cat > "$root/scripts/retired-rule-ids.txt" <<EOF
+scripts/followthrough-varq-ban	README.md	accept-row	scripts/lint-followthrough-varq-ban.test.sh:471 r3_fixture "$d" probe.sh 'Q="${SOME_OVERRIDE:-knowledge-base/project/README.md}"'
+scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	accept-row	scripts/betterstack-query.sh:104 knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+scripts/followthrough-varq-ban	knowledge-base/project/README.md	accept-row	scripts/lint-followthrough-varq-ban.test.sh:471 r3_fixture "$d" probe.sh 'Q="${SOME_OVERRIDE:-knowledge-base/project/README.md}"'
+scripts/followthrough-varq-ban	scripts/ensure-doppler.sh	accept-row	scripts/betterstack-query.sh:109 scripts/ensure-doppler.sh # installs to ~/.local/bin, prints the path || scripts/betterstack-query.sh:110 scripts/ensure-doppler.sh --state # missing | unauthenticated | ready | unknown
+scripts/followthrough-varq-ban	scripts/lib/trusted-verdict.sh	accept-row	scripts/lint-followthrough-varq-ban.sh:318 echo "$f:${lineno:-1}: rule 4: reads issue comments AND branches on a RESULT: verdict or a || scripts/lint-followthrough-varq-ban.sh:354 echo "$f:${hit%%:*}: rule 5: names the comment-author-association field on an executable l || scripts/lint-followthrough-varq-ban.sh:599 echo "FAILED: $violations violation(s) -- banned \x5c${VAR:?}/\x5c${VAR?} on an executable
+tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	accept-row	scripts/betterstack-query.sh:104 knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+tests/scripts/git-data-rung2-evidence-capture	scripts/ensure-doppler.sh	accept-row	scripts/betterstack-query.sh:109 scripts/ensure-doppler.sh # installs to ~/.local/bin, prints the path || scripts/betterstack-query.sh:110 scripts/ensure-doppler.sh --state # missing | unauthenticated | ready | unknown
+tests/scripts/scratch-residue	.gitattributes	accept-row	.claude/hooks/brand-hex-commit-gate.test.sh:776 printf '%s\x5cn' '*.tsx diff=evil' > "$WT/.gitattributes"
+tests/scripts/scratch-residue	.github/workflows/cla.yml	accept-row	.claude/hooks/cla-signed-author-gate.test.sh:115 cat > "$work/.github/workflows/cla.yml" <<'EOF' || .claude/hooks/cla-signed-author-gate.test.sh:127 git -C "$work" add .github/workflows/cla.yml
+tests/scripts/scratch-residue	.grok/config.toml	accept-row	scripts/dogfood/grok-gpu-bootstrap.sh:180 local cfg="/home/${DOGFOOD_USER}/.grok/config.toml"
+tests/scripts/scratch-residue	LICENSE	accept-row	scripts/dogfood/grok-gpu-bootstrap.test.sh:51 if grep -qE '\x5c[\x5c[\x5cs*"\x5c$LICENSE_OK"\x5cs+-eq\x5cs+1\x5cs*\x5c]\x5c]\x5cs*\x5c|\ || scripts/dogfood/grok-gpu-bootstrap.test.sh:54 fail "missing LICENSE_OK control-flow die before pull" || scripts/dogfood/grok-gpu-bootstrap.sh:31 LICENSE_OK=0 || scripts/dogfood/grok-gpu-bootstrap.sh:51 --license-ok) LICENSE_OK=1; shift ;; || scripts/dogfood/grok-gpu-bootstrap.sh:230 [[ "$LICENSE_OK" -eq 1 ]] || die "refuse ollama pull without --license-ok (record license 
+tests/scripts/scratch-residue	bunfig.toml	accept-row	tests/scripts/test-scratch-residue.sh:274 plugins/soleur/test/lib/git-tripwire.ts|bunfig.toml) echo bun-kb-coverage ;; || tests/scripts/test-scratch-residue.sh:275 plugins/soleur/bunfig.toml) echo bun-plugin-cwd ;; || .claude/hooks/incident-sandbox-coverage.test.sh:201 "bunfig.toml" || .claude/hooks/incident-sandbox-coverage.test.sh:202 "plugins/soleur/bunfig.toml" || tests/conftest.py:3 Guard 3 registers a prelude per runner RUNTIME: a `bunfig.toml` preload for bun, a `global
+tests/scripts/scratch-residue	knowledge-base/engineering/architecture/decisions/ADR-232-inngest-bootstrap-pin-bumps-are-authored-by-the-publish-workflow.md	accept-row	.github/scripts/bump-inngest-bootstrap-pin.sh:536 "- decision record: [ADR-232](https://github.com/jikig-ai/soleur/blob/main/knowledge-base/
+tests/scripts/scratch-residue	knowledge-base/marketing/brand-guide.md	accept-row	.claude/hooks/skill-context-queries.test.sh:48 printf '# Brand\x5cnBrand tokens here.\x5cn' > "$FIX/knowledge-base/marketing/brand-guide. || .claude/hooks/skill-context-queries.test.sh:57 mk_skill "with-query" $'context_queries:\x5cn - knowledge-base/marketing/brand-guide.md\x5 || .claude/hooks/skill-context-queries.test.sh:58 mk_skill "inline-query" $'context_queries: [knowledge-base/marketing/brand-guide.md]\x5cn' || .claude/hooks/skill-context-queries.test.sh:89 printf '%s' "$ctx" | grep -cF >/dev/null 'knowledge-base/marketing/brand-guide.md' && pass || .claude/hooks/brand-hex-commit-gate.sh:462 reason="BLOCKED: brand-hex-commit-gate found ${count} raw hex colour literal(s) in staged 
+tests/scripts/scratch-residue	knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cwd/measurements.md	accept-row	tests/scripts/_git_fixture_env.py:4 ``knowledge-base/project/specs/archive/20260904-163540-feat-one-shot-7833-git-dir-beats-cw
+tests/scripts/scratch-residue	knowledge-base/project/weakness-digest.md	accept-row	tests/scripts/test-weakness-miner.sh:154 SOLEUR_WM_DIGEST_PATH="knowledge-base/project/weakness-digest.md" \x5c || tests/scripts/test-weakness-miner.sh:157 if [[ "$dirty" == "knowledge-base/project/weakness-digest.md" ]]; then || tests/scripts/test-weakness-miner.sh:194 if [[ "$ap" == "knowledge-base/project/weakness-digest.md" ]]; then || scripts/weakness-miner.sh:30 DIGEST_PATH="${SOLEUR_WM_DIGEST_PATH:-knowledge-base/project/weakness-digest.md}"

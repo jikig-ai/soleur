@@ -113,15 +113,16 @@ predicates and SLA status.
 
 ## Instructions
 
-1. List open follow-through issues:
-   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author${"`"}
+1. List open follow-through issues (the listing is explicitly bounded at 200 —
+   #8593: an unbounded \`gh issue list\` silently truncates at the default page cap):
+   ${"`"}gh issue list --label follow-through --state open --limit 200 --json number,title,body,createdAt,author${"`"}
 
    An issue whose body carries a ${"`"}soleur:followthrough${"`"} directive is
    SWEEPER-OWNED: ${"`"}scripts/sweep-followthroughs.sh${"`"} polls it daily on its own
    cadence, with its own body format and its own close semantics. Mark those
    issues as you list them — step 3 treats them differently.
 
-   ${"`"}gh issue list --label follow-through --state open --json number,title,body,createdAt,author --jq '[.[] | . + {sweeperOwned: (((.body // "") | test("soleur:followthrough")))}]'${"`"}
+   ${"`"}gh issue list --label follow-through --state open --limit 200 --json number,title,body,createdAt,author --jq '[.[] | . + {sweeperOwned: (((.body // "") | test("soleur:followthrough")))}]'${"`"}
 
    WHAT SWEEPER-OWNED CHANGES, AND WHAT IT DOES NOT. It removes exactly the two
    CLOSING transitions and nothing else. The conflict between the two systems is
@@ -597,10 +598,10 @@ export const cronFollowThroughMonitor = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 9 * * 1-5" },
+      { event: "cron/follow-through-monitor.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 9 * * 1-5" },
-    { event: "cron/follow-through-monitor.manual-trigger" },
-  ],
-  cronFollowThroughMonitorHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronFollowThroughMonitorHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

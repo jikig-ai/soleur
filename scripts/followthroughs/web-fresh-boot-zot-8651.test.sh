@@ -50,8 +50,53 @@ ZOT='- image-origin (`soleur-web-2`, since run anchor): `stage=app_zot host=sole
 READY="fresh-host boot reached fresh_boot_ready — the host booted clean and reported ready."
 
 reset_fx() { rm -rf "$WORK/fx"; mkdir -p "$WORK/fx"; }
-job() {  # <run-id> <job-id> <name> <conclusion>
-  printf '{"jobs":[{"databaseId":1,"name":"preflight","conclusion":"success"},{"databaseId":%s,"name":"%s","conclusion":"%s"}]}\n' "$2" "$3" "$4" > "$WORK/fx/jobs.$1"
+job() {  # <run-id> <job-id> <name> <conclusion> [trail-step-conclusion=success] [trail-startedAt]
+  # startedAt defaults to a real timestamp so recovery-capable fixtures carry
+  # it; pass "-" for the absent arm (the probe's `// "-"` then reads no usable
+  # startedAt). `gh run view --json jobs` spells the field camelCase.
+  local st_json
+  if [[ "${6:-}" == "-" ]]; then st_json='null'; else st_json="\"${6:-$ST_START}\""; fi
+  printf '{"jobs":[{"databaseId":1,"name":"preflight","conclusion":"success"},{"databaseId":%s,"name":"%s","conclusion":"%s","steps":[{"name":"%s","conclusion":"%s","startedAt":%s,"completedAt":%s}]}]}\n' \
+    "$2" "$3" "$4" "$S" "${5:-success}" "$st_json" "$st_json" > "$WORK/fx/jobs.$1"
+}
+ST_START="2026-09-24T10:00:00Z"   # the trail step's startedAt for recovery-capable fixtures
+
+# ── UNKNOWN STEP (attribution-expired) fixture builders — #11607 ─────────────
+# GitHub drops step-name attribution ~2-3 wk post-completion: every line comes
+# back under field 2 "UNKNOWN STEP" while the content survives (#11600).
+# GH_LOG_BOM — the UTF-8 byte-order mark gh writes at the start of EVERY step
+# section after the first (only the stream head is bare). NOT decoration: a
+# lone-BOM document cannot tell `${log//…/}` from `${log/…/}` — the single-strip
+# mutation is pinned only while a SECOND BOM'd section exists.
+GH_LOG_BOM=$'\357\273\277'
+# ul — one emitted line under "UNKNOWN STEP" (field 2); ANSI-echoed variants
+#   are passed literally in the payload args.  ul <line> <ts> <job> [bom]
+ul()   { printf '%s\tUNKNOWN STEP\t%s%s %s\n' "$3" "${4:-}" "$2" "$1"; }
+# ulog <job-name> <startedAt-ISO> <line>... — a faithful attribution-expired
+# document: BARE `Set up job` head (gh strips the BOM only from the stream
+# head), a BOM'd prelude ##[group]Run stamped BEFORE startedAt (the ts>=ps
+# gate must skip it AND it puts the second BOM in the file — the must-PASS
+# prelude), the BOM'd trail-step ##[group]Run AT startedAt, the payload lines
+# stamped at startedAt, then a BOM'd next-step header bounding the region.
+#   ULOG_NO_BOUND=1  omits the closing header (region runs to EOF)
+#   ULOG_EARLY_HDR=1 stamps the trail header BEFORE startedAt (the
+#                    "no ##[group]Run header at/after startedAt" arm)
+ulog() {
+  local jn="$1" st="$2"; shift 2
+  local base epoch pre post l hdr_ts
+  base=${st%Z}; base=${base%%.*}
+  # Epoch arithmetic: `date -d "<ISO> - 10 minutes"` misparses the relative
+  # clause on this platform — go through %s.
+  epoch=$(date -u -d "${base}Z" +%s)
+  pre=$(date -u -d "@$((epoch - 600))" '+%Y-%m-%dT%H:%M:%S.0000000Z')
+  post=$(date -u -d "@$((epoch + 600))" '+%Y-%m-%dT%H:%M:%S.0000000Z')
+  hdr_ts="$st"; [[ "${ULOG_EARLY_HDR:-0}" == 1 ]] && hdr_ts="$pre"
+  printf '%s\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "$jn" "$pre"
+  ul '##[group]Run terraform plan' "$pre" "$jn" "$GH_LOG_BOM"
+  ul 'prelude step output line (not the trail)' "$pre" "$jn"
+  ul '##[group]Run Surface the fresh-host Sentry breadcrumb trail' "$hdr_ts" "$jn" "$GH_LOG_BOM"
+  for l in "$@"; do printf '%s\tUNKNOWN STEP\t%s %s\n' "$jn" "$st" "$l"; done
+  [[ "${ULOG_NO_BOUND:-0}" == 1 ]] || ul '##[group]Run Post job cleanup' "$post" "$jn" "$GH_LOG_BOM"
 }
 run() {  # <want-rc> <want-word> <label>
   local out rc=0
@@ -95,10 +140,79 @@ reset_fx; : > "$WORK/fx/list";                                              run 
 reset_fx; touch "$WORK/fx/list.fail";                                       run 3 TRANSIENT "gh run list fails"
 reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success; touch "$WORK/fx/log.9001.fail"
 run 3 TRANSIENT "job log read fails"
+
+# ── UNKNOWN STEP (attribution-expired) job logs — #11607 ─────────────────────
+# The trail must be recovered from the ##[group]Run region keyed on the step's
+# startedAt, graded through the same emitted-vs-echoed filter, and a success
+# job's degraded channel must trip TRANSIENT — never a silent "no run".
+AST="2026-10-20T10:00:00Z"
+# AC-1: a success job whose whole log is UNKNOWN STEP — BOM'd headers, a
+# pre-startedAt prelude the ts gate must skip, emitted pointer+zot+ready —
+# is graded by content through the recovered region: PASS, never "no run".
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success success "$AST"
+ulog web_host_replace "$AST" "$PTR" "$ZOT" "$READY" > "$WORK/fx/log.9001"
+run 0 PASS "aged UNKNOWN STEP success job: trail recovered from the ##[group]Run region"
+# AC-2: recovery is conclusion-agnostic — a FAILURE job's aged log carrying
+# pointer + booted DARK grades FAIL identically.
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace failure success "$AST"
+ulog web_host_replace "$AST" "$PTR" "$ZOT" '##[error]web-2 (soleur-web-2) booted DARK at stage pull: x' > "$WORK/fx/log.9001"
+run 1 FAIL "aged UNKNOWN STEP failure job: the DARK trail still grades FAIL (conclusion-agnostic)"
+# AC-3: the tripwire survives recovery — a success job whose recovered region
+# holds zero trail-pattern lines exits 3 TRANSIENT; a log with no ##[group]Run
+# header at/after startedAt (early header, no bound) is the same verdict.
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success success "$AST"
+ulog web_host_replace "$AST" 'an unrelated output line' 'another quiet line' > "$WORK/fx/log.9001"
+run 3 TRANSIENT "aged success job, recovered region with no trail-pattern lines reads TRANSIENT"
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success success "$AST"
+ULOG_EARLY_HDR=1 ULOG_NO_BOUND=1 ulog web_host_replace "$AST" "$PTR" "$ZOT" "$READY" > "$WORK/fx/log.9001"
+run 3 TRANSIENT "aged success job, no ##[group]Run header at/after startedAt reads TRANSIENT"
+# AC-3: a success job whose jobs-JSON step entry carries no startedAt cannot
+# be bounded — unbounded is unmeasured -> TRANSIENT.
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success success "-"
+ulog web_host_replace "$AST" "$PTR" "$ZOT" "$READY" > "$WORK/fx/log.9001"
+run 3 TRANSIENT "a missing startedAt on a success job reads TRANSIENT"
+# AC-4: designed absence — a trail step skipped (plan_only) or absent from the
+# jobs JSON keeps today's continue posture: NOT YET, no tripwire.
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success skipped
+run 2 "NOT YET" "a skipped trail step is a designed absence, not a degraded channel"
+reset_fx; echo 900 > "$WORK/fx/list"
+printf '{"jobs":[{"databaseId":1,"name":"preflight","conclusion":"success"},{"databaseId":9001,"name":"web_host_replace","conclusion":"success","steps":[{"name":"Post job cleanup","conclusion":"success","startedAt":"%s","completedAt":"%s"}]}]}\n' "$AST" "$AST" > "$WORK/fx/jobs.900"
+run 2 "NOT YET" "a run predating the trail step (absent from jobs JSON) is a designed absence"
+# AC-5: the recovered region passes through the SAME emitted-vs-echoed filter —
+# an ANSI-echoed ready copy inside the region derives no boot (success job:
+# pointer+zot emitted, ready echoed -> inconclusive), and an ANSI-only region
+# on a failure job credits nothing either.
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success success "$AST"
+ulog web_host_replace "$AST" "$PTR" "$ZOT" $'\033[36;1m'"$READY" > "$WORK/fx/log.9001"
+run 2 "NOT YET" "an ANSI-echoed ready line inside the recovered region derives no PASS"
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace failure success "$AST"
+ulog web_host_replace "$AST" $'\033[36;1m'"$PTR" $'\033[36;1m'"$ZOT" $'\033[36;1m'"$READY" > "$WORK/fx/log.9001"
+run 2 "NOT YET" "an ANSI-echoed-only region on a failure job credits nothing"
+# Matrix row 9 (must-PASS): the trail step as the log's LAST section — the
+# region runs to EOF with no bounding header and still grades.
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success success "$AST"
+ULOG_NO_BOUND=1 ulog web_host_replace "$AST" "$PTR" "$ZOT" "$READY" > "$WORK/fx/log.9001"
+run 0 PASS "trail step as last section grades the EOF-terminated region"
+# The patternless (not just empty) trigger: a named-attribution log whose trail
+# step emitted lines but no trail-pattern line is the same degraded channel.
+reset_fx; echo 900 > "$WORK/fx/list"; job 900 9001 web_host_replace success
+{ l 'an unrelated emitted line'; l 'another quiet line'; } > "$WORK/fx/log.9001"
+run 3 TRANSIENT "a named-attribution patternless trail on a success job reads TRANSIENT"
+
+# Replicated-literal parity: TRAIL_PATTERN is the recovery trigger AND the
+# region-acceptance regex in BOTH trail probes — a drift between the copies
+# would grade the same aged log differently on the two surfaces. The non-empty
+# guard keeps a broken extraction from passing on equal-empty.
+tp_10585=$(grep -o "TRAIL_PATTERN='[^']*'" "$DIR/web-first-deploy-10585.sh")
+tp_zot=$(grep -o "TRAIL_PATTERN='[^']*'" "$PROBE")
+[ -n "$tp_zot" ] && [ "$tp_zot" = "$tp_10585" ] \
+  && ok "TRAIL_PATTERN byte-identical to web-first-deploy-10585's copy" \
+  || no "TRAIL_PATTERN drifted from web-first-deploy-10585's copy"
+
 rc=0; GH_FX="$WORK/fx" PATH="$BIN:$PATH" bash -x "$PROBE" >/dev/null 2>&1 || rc=$?
 [ "$rc" = 78 ] && ok "refuses to run under xtrace (exit 78)" || no "xtrace refusal: rc=$rc"
 
-MIN_CASES=18
+MIN_CASES=30
 if [ $((pass + fail)) -lt "$MIN_CASES" ]; then
   printf 'assertion floor: %d < %d — a case stopped running\n' $((pass + fail)) "$MIN_CASES"; exit 1
 fi

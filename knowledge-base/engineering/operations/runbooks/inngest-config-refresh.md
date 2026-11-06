@@ -49,6 +49,9 @@ from the applied digest.
    gh workflow run build-inngest-config-bundle.yml -f version=<N+1>
    ```
 
+   Building and approving is allowed during the key-continuity-probe hold; only promotion is held
+   (see step 3).
+
    Dispatch only from the **default branch** (no `-r` flag): the host pins
    `@refs/heads/main` in its identity regexp, so a branch-dispatched bundle verifies at the
    producer gate but fails the host's check (`reason=signature`, `detail=identity`).
@@ -69,7 +72,13 @@ from the applied digest.
    reaches GHCR/zot — read the step log's cosign error and fix the producer, never
    re-dispatch past it.
 
-3. **Promote the pointer (separate principal — HARD-6).** The interim route is a MANUAL targeted
+3. **HOLD (#11266): do not promote any bundle built from main after the key-continuity probe merged
+   (#11260) until #11266's gates clear** — the gates are in
+   [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) section 5c, "Delivery". Every bundle
+   built from main carries the probe whatever its reason; this note is time-bound and the owner removes
+   it when #11266 closes.
+
+   **Promote the pointer (separate principal — HARD-6).** The interim route is a MANUAL targeted
    apply in an authorized window — set the Doppler secret `INNGEST_CONFIG_DIGEST=<IMAGE@DIGEST
    sha256>` in `soleur/prd_terraform`, then apply `doppler_secret.inngest_config_digest` (the
    `count`-gated resource springs to life on a non-empty value). The tf-var transformer surfaces
@@ -98,6 +107,8 @@ from the applied digest.
    A `SOLEUR_INFRA_PULL_APPLIED version=<N+1> sha256=<digest> verify=ok` line within the timer window
    is the applied-and-verified signal. A `SOLEUR_INFRA_PULL_VERIFY_FAIL` line means the host rejected
    the bundle and kept last-known-good (fail-closed — HARD-10); read the reason and re-cut.
+
+Delivering the LUKS key-continuity probe (a bounded job inside the refresh-set member `inngest-cutover-flip.sh`, ADR-282 addendum 2026-10-26) uses this same path; its pre-promotion checks, first-row verification and rollback are in [`inngest-luks-cutover-6894.md`](./inngest-luks-cutover-6894.md) section 5c, "Key-continuity probe (#9927 item 2)".
 
 ## Batching & promotion cadence
 

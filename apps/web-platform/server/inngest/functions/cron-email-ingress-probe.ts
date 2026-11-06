@@ -757,12 +757,10 @@ export const cronEmailIngressProbe = inngest.createFunction(
     // PINNED 0 — never raise: default retries silently convert a late probe
     // into a retry-then-green run (see assert-probe-row comment).
     retries: 0,
+    triggers: [
+      { cron: "0 6 * * *" },
+      { event: "cron/email-ingress-probe.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 6 * * *" },
-    { event: "cron/email-ingress-probe.manual-trigger" },
-  ],
-  cronEmailIngressProbeHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronEmailIngressProbeHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

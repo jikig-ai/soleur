@@ -237,9 +237,9 @@ elif case == 'G2-3':
     # pruned with the inline design; the replacement property is "exactly one step in the job
     # invokes terraform apply against tfplan-repush". Add a SECOND production apply.
     sub(WF,
-        '          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush || rc=$?\n',
-        '          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush || rc=$?\n'
-        '          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush || rc=$?\n')
+        '          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush 2>&1 | tf_redact_random_ids || rc=$?\n',
+        '          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush 2>&1 | tf_redact_random_ids || rc=$?\n'
+        '          terraform apply -no-color -input=false -lock-timeout=120s tfplan-repush 2>&1 | tf_redact_random_ids || rc=$?\n')
 
 elif case == 'G2-4':
     # Row 6 (the one R22.6 keeps from R18.2) — wrap the predicate call in a function. Bash

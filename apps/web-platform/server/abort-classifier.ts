@@ -85,6 +85,8 @@ function buildResult(kind: AbortKind | "unknown"): AbortReasonClassification {
 /** Classify an `AbortController.signal.reason` value. Tolerant of
  *  non-Error and legacy-Error inputs; the unknown branch is the
  *  conservative default (treat as non-user disconnect). */
+// Sibling classifier: `server/crash-handlers.ts` › `isBenignClientAbort`
+// classifies inbound socket aborts — a different producer; do not unify.
 export function classifyAbortReason(reason: unknown): AbortReasonClassification {
   if (reason instanceof SessionAbortError) {
     return buildResult(reason.kind);

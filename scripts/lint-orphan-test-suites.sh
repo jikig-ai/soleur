@@ -222,18 +222,20 @@ sed -nE 's/^[[:space:]]*run_suite[[:space:]].*[[:space:]]bash[[:space:]]+"?([A-Z
 #
 # The fallback this whole block relies on is "an unhandled `--print-suite-globs` reads as an
 # unknown TEST_GROUP, so the runner exits 2 and we fail closed". That sentence is only true when
-# TEST_GROUP is UNSET. This linter runs as a registered suite inside `test-all.sh`, which exports
-# `TEST_GROUP=<shard>` — so the child inherits a *valid* group, the unknown-group branch is never
+# TEST_GROUP is UNSET. This linter runs as a registered suite inside `test-all.sh`; whenever the
+# caller exported `TEST_GROUP=<shard>` (the monitor's step env, or a developer's shell) the child
+# inherited a *valid* group — until #11939 the runner kept it exported — so the unknown-group branch is never
 # reached, and instead of exiting 2 the mutant RUNS THE ENTIRE SHARD. That shard contains this
 # suite, which mutates and re-invokes again: unbounded recursion.
 #
-# Measured 2026-08-13, and it is not subtle:
+# Measured 2026-08-13, before the runner dropped the export attribute (#11939), and it is not subtle:
 #   TEST_GROUP unset    -> 17 rows, 65 passed, 10 s
 #   TEST_GROUP=scripts  -> still running at 120 s, three nested copies of the suite alive at once
-#
-# It reproduces in CI, which sets TEST_GROUP per shard, and in the documented local exit gate
-# (`TEST_GROUP=scripts bash scripts/test-all.sh`). It did NOT reproduce standalone, which is
-# exactly why it survived: the suite's own green run leaves TEST_GROUP unset.
+# It reproduced under a caller that exported the group (the monitor's step env, the documented local
+# exit gate `TEST_GROUP=scripts bash scripts/test-all.sh`). The runner now drops the attribute, so the
+# scrub below is defence in depth for direct runs and for any caller that exports it, and must stay.
+# It did NOT reproduce standalone, which is exactly why it survived: the suite's own green run
+# leaves TEST_GROUP unset.
 #
 # Clearing it makes the fail-closed path unconditional — independent of whatever the caller's
 # environment happens to hold, which is the only form of "fail closed" worth the name.
@@ -261,6 +263,14 @@ while IFS= read -r pattern; do
   ( cd "$REPO_ROOT" && for f in $pattern; do [[ -f "$f" ]] && printf '%s\n' "$f"; done ) >> "$WORK/raw2" || true
 done < "$WORK/globs"
 LC_ALL=C sort -u -o "$WORK/raw2" "$WORK/raw2"
+
+# Glob members the loop special-cases AND diverts to literal `run_suite … bash <file>` argv
+# land in BOTH surfaces — subtract only those, or the double-coverage check reds on a
+# legitimate diversion (#11562's ci-pr-affected-replay split). A special case that emits
+# skip_suite only (c4-from-components) stays glob-covered; surface 1 never saw it anyway.
+grep -oE '"\$f" == "[^"]+"' "$RUNNER" | sed 's/.*== "//; s/"$//' | LC_ALL=C sort -u > "$WORK/glob_special"
+comm -12 "$WORK/glob_special" "$WORK/raw1" > "$WORK/glob_diverted"
+comm -23 "$WORK/raw2" "$WORK/glob_diverted" > "$WORK/raw2.f" && mv "$WORK/raw2.f" "$WORK/raw2"
 
 # --- Surface 3: the infra suites, DELEGATED to run-registered-suites.sh --------------------
 # Three authorities already derive over this one domain (this file, run-registered-suites.sh's
@@ -329,9 +339,9 @@ fi
 # workflows' explicit `run: bash …test.sh` steps.
 #
 # Disjointness is DESIRABLE but NOT achieved, and the difference is asserted rather than
-# claimed. Measured 2026-08-13: five suites are legitimately covered twice -- registered both
+# claimed. Measured 2026-08-13: five suites were legitimately covered twice; the array holds seven as of #9927 (the count had already drifted to six) -- registered both
 # locally (test-all.sh) and in a CI workflow, which is belt-and-braces, not a defect. They are
-# listed in DOUBLE_COVERED_ACK below and the check fails on any SIXTH.
+# listed in DOUBLE_COVERED_ACK below and the check fails on any suite not in that array.
 #
 # An earlier revision of this comment asserted disjointness flatly while the live tree carried
 # violations of it, and enforced the invariant only inside the companion suite's synthetic
@@ -429,6 +439,7 @@ DOUBLE_COVERED_ACK=(
   "plugins/soleur/test/gdpr-gate-self-test.test.sh|test-all glob AND its own gdpr-gate-self-test.yml workflow, #7402"
   "apps/web-platform/scripts/sandbox-canary-regression.test.sh|test-all glob AND an infra-validation.yml step, #7402"
   "plugins/soleur/test/gdpr-gate-glob-liveness.test.sh|test-all glob AND its own gdpr-gate-self-test.yml job -- the two surfaces do DIFFERENT things and both are load-bearing: under the glob lefthook is absent so the suite loud-skips, while the workflow installs lefthook and sets SOLEUR_REQUIRE_LEFTHOOK=1 so the skip becomes a hard failure. De-registering either is NOT a no-op. #7710"
+  "apps/web-platform/infra/inngest-luks-sole-copy.test.sh|infra runner glob (deploy-script-tests) AND an explicit test-all.sh run_suite in the required test-scripts leg; the second is what makes a red Guard 1 block merge and the G2f pin in terraform-target-parity.test.ts guards it, #9927"
 )
 : > "$WORK/dupes"
 cat "$WORK"/s1 "$WORK"/s2 "$WORK"/s3 "$WORK"/s4 "$WORK"/s5 "$WORK"/s6 2>/dev/null \
@@ -1365,6 +1376,136 @@ else
     # AFFECTED_CONSUMED_EDGES and is checked there.
     done < "$WORK/aff_runnable"
   fi
+fi
+
+# --- SURFACE 7: registration -> file (dead run_suite targets) -----------------
+# The reverse direction of surfaces 1-6: every SUITE_COMMAND's resolved argv
+# target must exist (tracked or on disk) — a dead registration fails statically
+# here, not at rc 127 runtime (#11662 G4). SUITE_COMMAND_DECLINED field 3 is a
+# rerun string, not argv — excluded by the record filter. A call shape the
+# resolver cannot classify reds (unknown argv0), never silently skips; inline
+# `bash -c`/`sh -c` bodies carry no file operand and are counted. Directory
+# operands are legitimate only under interpreter-class argv0 (`bun test`,
+# `node --test`). Totality is asserted against the stream's own record count,
+# and a synthetic dead registration must flag in each arm — a floor alone
+# cannot see a deleted detection path.
+_s7_scan() { # <stream-file> — prints "checked inline dead"; ERROR lines on stderr
+  local checked=0 inline=0 dead=0 tgt="" dir_ok=0 skip=0 i a0
+  while IFS=$'\t' read -r -a s7f; do
+    [[ "${s7f[0]:-}" == "SUITE_COMMAND" ]] || continue
+    local label="${s7f[1]:-<missing-label>}"
+    local -a av=("${s7f[@]:2}")
+    # Strip env wrappers and VAR=val prefixes to reach the real argv0.
+    while ((${#av[@]})); do
+      case "${av[0]}" in
+        env)  av=("${av[@]:1}") ;;
+        *=*)  av=("${av[@]:1}") ;;
+        *)    break ;;
+      esac
+    done
+    a0="${av[0]:-}"; tgt=""; dir_ok=0; skip=0
+    case "$a0" in
+      bash|sh)
+        for ((i = 1; i < ${#av[@]}; i++)); do
+          case "${av[$i]}" in
+            -c) skip=1; break ;;
+            -*) continue ;;
+            *)  tgt="${av[$i]}"; break ;;
+          esac
+        done ;;
+      python3)
+        if [[ "${av[1]:-}" == "-m" ]]; then
+          case "${av[2]:-}" in
+            unittest)
+              tgt="${av[3]:-}"; tgt="${tgt//.//}.py" ;;
+            pytest)
+              for ((i = 3; i < ${#av[@]}; i++)); do
+                case "${av[$i]}" in -*) continue ;; *) tgt="${av[$i]}"; dir_ok=1; break ;; esac
+              done ;;
+            *)
+              echo "ERROR: registration '${label}' runs unhandled 'python3 -m ${av[2]:-}' — extend the surface-7 resolver." >&2
+              dead=$((dead + 1)); skip=1 ;;
+          esac
+        else
+          for ((i = 1; i < ${#av[@]}; i++)); do
+            case "${av[$i]}" in -*) continue ;; *) tgt="${av[$i]}"; break ;; esac
+          done
+        fi ;;
+      bun|node)
+        for ((i = 1; i < ${#av[@]}; i++)); do
+          case "${av[$i]}" in
+            test|--test|-*) continue ;;
+            *)  tgt="${av[$i]}"; dir_ok=1; break ;;
+          esac
+        done ;;
+      *)
+        echo "ERROR: registration '${label}' has unknown argv0 '${a0}' — the surface-7 resolver cannot classify it, so its target existence is unchecked." >&2
+        dead=$((dead + 1)); skip=1 ;;
+    esac
+    if (( skip )) || [[ -z "$tgt" ]]; then
+      inline=$((inline + 1)); continue
+    fi
+    checked=$((checked + 1))
+    if [[ -d "$REPO_ROOT/$tgt" ]]; then
+      if (( ! dir_ok )); then
+        echo "ERROR: registration '${label}' targets directory '${tgt}' under non-interpreter argv0 '${a0}' — a directory is not a runnable file target." >&2
+        dead=$((dead + 1))
+      fi
+    elif ! _tracked_member "$tgt" && [[ ! -e "$REPO_ROOT/$tgt" ]]; then
+      echo "ERROR: registration '${label}' targets '${tgt}' which does not exist — dead registration, red statically not at rc 127." >&2
+      dead=$((dead + 1))
+    fi
+  done < "$1"
+  printf '%d %d %d\n' "$checked" "$inline" "$dead"
+}
+
+if [[ ! -s "$WORK/aff_enum" ]]; then
+  echo "ERROR: '\$WORK/aff_enum' is absent or empty — surface 7 cannot enumerate registrations, so the dead-target census would certify nothing." >&2
+  fails=$((fails + 1))
+else
+  # Instrument self-check: a synthetic dead registration MUST flag — without it
+  # the whole scan arm can be deleted and stay green.
+  printf 'SUITE_COMMAND\ts7-synthetic-dead\tbash\tsynthetic-no-such-file.test.sh\n' > "$WORK/s7_fixture"
+  read -r _ _ s7_self < <(_s7_scan "$WORK/s7_fixture" 2>/dev/null)
+  if (( s7_self != 1 )); then
+    echo "ERROR: surface 7 self-check failed — a synthetic dead registration did not flag (dead=${s7_self:-<no parse>})." >&2
+    fails=$((fails + 1))
+  fi
+  read -r s7_checked s7_inline s7_dead < <(_s7_scan "$WORK/aff_enum")
+  # Field-1 exact match: SUITE_COMMAND_DECLINED rows share the prefix and are
+  # rerun strings, not argv — they must not inflate the totality denominator.
+  s7_total=$(awk -F'\t' '$1=="SUITE_COMMAND"' "$WORK/aff_enum" | wc -l | tr -d ' ')
+  if (( s7_checked + s7_inline != s7_total )); then
+    echo "ERROR: surface 7 accounted for $((s7_checked + s7_inline)) of ${s7_total} SUITE_COMMAND records — the resolver silently dropped records." >&2
+    fails=$((fails + 1))
+  fi
+  (( s7_dead > 0 )) && fails=$((fails + 1))
+fi
+
+# Infra arm: every `run-registered-suites.sh --enumerate` path must exist on
+# disk — same totality shape (checked == enumerated) and a planted-dead-path
+# self-check.
+s7_infra=0 s7_dead2=0
+while IFS= read -r s7_ip; do
+  [[ -n "$s7_ip" ]] || continue
+  s7_infra=$((s7_infra + 1))
+  [[ -e "$REPO_ROOT/$s7_ip" ]] || { echo "ERROR: infra registration '${s7_ip}' does not exist on disk — dead registration." >&2; s7_dead2=$((s7_dead2 + 1)); }
+done < "$WORK/raw3"
+s7_infra_total=$(wc -l < "$WORK/raw3" | tr -d ' ')
+if (( s7_infra != s7_infra_total )); then
+  echo "ERROR: surface 7 checked ${s7_infra} of ${s7_infra_total} infra paths — the infra enumerate producer narrowed." >&2
+  fails=$((fails + 1))
+fi
+(( s7_dead2 > 0 )) && fails=$((fails + 1))
+cp "$WORK/raw3" "$WORK/raw3s"
+printf 'synthetic-no-such-dir/x.test.sh\n' >> "$WORK/raw3s"
+s7_infra_d=0
+while IFS= read -r s7_ip; do
+  [[ -n "$s7_ip" && ! -e "$REPO_ROOT/$s7_ip" ]] && s7_infra_d=$((s7_infra_d + 1))
+done < "$WORK/raw3s"
+if (( s7_infra_d != 1 )); then
+  echo "ERROR: surface 7 infra self-check failed — a synthetic dead path did not flag (flagged ${s7_infra_d}, expected 1)." >&2
+  fails=$((fails + 1))
 fi
 
 if (( fails > 0 )); then

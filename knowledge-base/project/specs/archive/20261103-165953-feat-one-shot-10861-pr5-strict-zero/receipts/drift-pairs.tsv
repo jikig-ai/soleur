@@ -1,0 +1,2 @@
+scripts/betterstack-emitter-read	scripts/image-cve-triage.sh
+scripts/image-cve-triage	scripts/betterstack-query.sh

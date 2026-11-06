@@ -613,9 +613,7 @@ export const eventScheduledReminder = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: { event: "reminder.scheduled" },
   },
-  { event: "reminder.scheduled" },
-  eventScheduledReminderHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  eventScheduledReminderHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

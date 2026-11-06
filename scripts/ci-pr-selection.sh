@@ -199,7 +199,10 @@ is_pr_gated_decline() {
     "scripts/lint-orphan-test-suites-mutations-a") return 0 ;;
     "scripts/lint-orphan-test-suites-mutations-b") return 0 ;;
     "scripts/cf-tunnel-liveness-gate-mutations") return 0 ;;
-    "scripts/test-all-affected") return 0 ;;
+    "scripts/test-all-affected-a") return 0 ;;
+    "scripts/test-all-affected-b") return 0 ;;
+    "scripts/test-all-affected-c") return 0 ;;
+    "scripts/test-all-affected-d") return 0 ;;
     "tests/scripts/registry-gate-mutation-battery") return 0 ;;
     "scripts/battery-tag-authorship-mutations") return 0 ;;
   esac

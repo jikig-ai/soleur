@@ -203,6 +203,8 @@ SHAPE_IV = {  # TOM 4 shape (iv): RLS enabled, ZERO policies, Customer Data
     "codex_history_transfer_acknowledgments",  # member-scoped ack ledger, RPC-only (migration 149)
     "codex_history_transfer_notice_issuances",  # member-linked issuance metadata, zero policies and RPC-only (migration 175)
     "workspace_egress_audit_rollup",  # per-workspace egress audit rollup, dark until PR2 (migration 162, ADR-288)
+    "git_data_erasure_pending",  # workspace-id-keyed pending git-data erasure ledger (migration 182, #8211)
+    "legal_reauth_event",  # single-use email-code challenge keyed on a user uuid and web session id (migration 184, #12011)
 }
 # Zero-policy tables that hold no Customer Data. Assertion 4 requires every
 # zero-policy table to sit in exactly one of these two lists, so a NEW
@@ -211,6 +213,7 @@ NOT_CUSTOMER_DATA = {
     "_schema_migrations", "flag_flip_audit", "probe_tokens",
     "processed_github_events", "processed_resend_events", "processed_stripe_events",
     "statutory_repin_send", "tool_attempts",
+    "git_data_erasure_counts",  # monthly non-identifying erasure-latency counter, no id/timestamp (migration 182, #8211)
     "email_inbox_routes",  # inbound address -> (workspace, owner) routing config (migration 155, ADR-269); no Customer Data
 }
 WORKSPACE_KEYED = {

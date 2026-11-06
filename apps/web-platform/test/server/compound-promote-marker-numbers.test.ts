@@ -104,6 +104,12 @@ describe("refusal numbers: marker allowlist or an explicit Sentry-only set", () 
     expect([...sentryOnly].filter((k) => !census.includes(k))).toEqual([]);
   });
 
+  it("nearest_in_offered is Sentry-only: read from the source, absent from the marker shape (Ref #10550)", () => {
+    expect([...sentryOnly]).toContain("nearest_in_offered");
+    expect(Object.keys(CREATE_MARKER_NUMBERS)).not.toContain("nearest_in_offered");
+    expect(census).toContain("nearest_in_offered");
+  });
+
   it("every forwarded key is really passed (no stale allowlist entry)", () => {
     expect([...forwarded].filter((k) => !census.includes(k))).toEqual([]);
   });

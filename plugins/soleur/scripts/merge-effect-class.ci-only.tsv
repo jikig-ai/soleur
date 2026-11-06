@@ -15,6 +15,7 @@
 # real-tree directions cover.
 ci.yml	checks only (build, test, lint); its workflow_run followers are listed or path-gated on their own rows
 codeql-main-alert-gate.yml	scanner gate that reads code-scanning alerts after a push; mutates nothing in production
+image-cve-verdict.yml	report-only scanner verdict that fires after a Web Platform Release run (workflow_run, same repo, main only); scans the published image and records a would_block row to Better Stack, gates and deploys nothing, no job needs it
 secret-scan.yml	scanner run on every push and pull request; read-only
 skill-security-scan-corpus.yml	scanner calibration on every push; read-only
 skill-security-scan-postmerge.yml	scanner audit after a merge; read-only

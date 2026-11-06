@@ -1,0 +1,5 @@
+NONCE	d2a8a84a3060aca1
+REV	e3e94dfe7a3fc78bd385154feb092e6102802959
+NETNS	unshare
+IDMAP	current
+W	1	plugins/soleur/test/boundary-prefix.test.sh	1	-	load_refused	17.38	plugins/soleur/test/boundary-prefix.test.sh	plugins/soleur/test/boundary-prefix.test.sh	-

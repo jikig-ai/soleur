@@ -107,6 +107,10 @@ tc 'git-data flip' other
 tc 'git-data rollback' other
 tc 'git-data unfreeze' other
 tc 'git-data redeploy' other
+tc 'git-data refs_assert' other
+tc 'git-data refs_assertX' unparseable
+tc 'git-data refs_assert ' unparseable
+tc 'git-data refs_assert 1' unparseable
 tc "$LEGACY" legacy
 tc 'git-data wipe 12x' wipe_other
 tc 'git-data wipe 1234567890123' wipe_other
@@ -166,6 +170,8 @@ case_wipe_other_ignored && pass "G6 an off-pattern wipe title (a refused dispatc
 check_out "G7 wipe, wipe_finish, wipe_check, proof, flip, unfreeze, redeploy runs after the stamp are all ok" ok 0 -- LR "$(mklist \
   "$(run 'git-data wipe 5' "$AFTER")" "$(run 'git-data wipe_finish 5' "$AFTER")" "$(run 'git-data wipe_check 5' "$AFTER")" "$(run 'git-data snapshot_clear 5' "$AFTER")" \
   "$(run 'git-data proof' "$AFTER")" "$(run 'git-data flip' "$AFTER")" "$(run 'git-data unfreeze' "$AFTER")" "$(run 'git-data redeploy' "$AFTER")")"
+check_out "G7b (#11431) a git-data refs_assert run after the stamp leaves the guard ok (it is the sixth non-wipe mode, never wipe_precondition_run_title_unparseable)" ok 0 -- LR "$(mklist "$(run 'git-data refs_assert' "$AFTER")" "$(run 'git-data proof' "$AFTER")")"
+check_out "G7c (#11431) a near-miss refs title after the stamp still refuses (the \\z anchor is pinned)" wipe_precondition_run_title_unparseable 5 -- LR "$(mklist "$(run 'git-data refs_assertX' "$AFTER")")"
 check_out "G8 an unclassifiable title after the stamp refuses (never a skip)" wipe_precondition_run_title_unparseable 5 -- LR "$(mklist "$(run 'who knows' "$AFTER")")"
 check_out "G9 an unclassifiable title BEFORE the stamp is ignored" ok 0 -- LR "$(mklist "$(run 'who knows' "$BEFORE")")"
 case_unreaching_refuses && pass "G10 a FULL list (100 rows) whose oldest row is newer than the stamp refuses wipe_precondition_run_list_unreaching" || fail "G10 a full list that does not reach the stamp was accepted"
@@ -291,7 +297,7 @@ if mutant_lib wipe-other-unignored 2 's/startswith\("git-data wipe"\)/startswith
 # shellcheck disable=SC2016
 if mutant_lib branch-filter-dropped 2 's/\.headBranch == "main" and \.event == "workflow_dispatch"/true/'; then red_in_mutant branch-filter-dropped case_nonmain_ignored; fi
 # shellcheck disable=SC2016
-if mutant_lib end-anchor-loosened 2 's/redeploy\)\\\\z/redeploy)$/'; then red_in_mutant end-anchor-loosened case_newline_title_ignored; fi
+if mutant_lib end-anchor-loosened 2 's/refs_assert\)\\\\z/refs_assert)$/'; then red_in_mutant end-anchor-loosened case_newline_title_ignored; fi
 # shellcheck disable=SC2016
 if mutant_lib gate-conclusion-ignored 2 's/\.conclusion == "success"/.conclusion != "never"/'; then red_in_mutant gate-conclusion-ignored case_origin_gate_refuses "$(view "git-data wipe $VID" main workflow_dispatch "$BAD_STEP_FAIL")"; fi
 # shellcheck disable=SC2016
@@ -313,7 +319,7 @@ printf '== %d passed, %d failed\n' "$PASS" "$FAIL"
 # PASS==1 at that point, which proves the literal.
 SELFTEST_PASSES=1
 REAL=$(( PASS - SELFTEST_PASSES ))
-MIN_ASSERTIONS=117
+MIN_ASSERTIONS=123
 if [[ "$REAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf '[FATAL] anti-vacuity assertion floor: only %d real assertion(s) ran (PASS=%d minus %d self-test), expected >= %d.\n' \
     "$REAL" "$PASS" "$SELFTEST_PASSES" "$MIN_ASSERTIONS" >&2

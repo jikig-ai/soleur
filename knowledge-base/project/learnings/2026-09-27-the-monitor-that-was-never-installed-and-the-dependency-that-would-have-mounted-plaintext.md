@@ -30,6 +30,9 @@ the heartbeat manifest's static arming guard matched a line of code that had nev
 - `logtail_exploration_alert.luks_monitor_host_timer_dark` pages when no `OK:` row from
   `_SYSTEMD_UNIT=luks-monitor.service` on `host_name='soleur-web-platform'` lands in 27 h. The verify
   job's rows (session scope, no unit) cannot keep it quiet.
+
+  > **Retired (#11631, 2026-10-30).** `logtail_exploration_alert.luks_monitor_host_timer_dark` and its once-a-day absence class were retired by #11631; the successor is the Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`, fed hourly from the Logs archive by `scheduled-deadman-heartbeat-feeder.yml` (ADR-218 amendment 2026-10-30), UNARMED until the owner unpauses it. Runbook: `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631`. The bullet above is the 2026-09-27 record and is unchanged.
+
 - A follow-through closes #8706 after three consecutive host-timer nights.
 
 Review then changed the design in one place that mattered: `luks-monitor.service` carried

@@ -122,6 +122,11 @@ const RUNTIME_FLAGS = {
   // code ships dark. Fail-OPEN on a Flagsmith outage: FLAG_NEW_SESSIONS_PAUSED=0
   // mirror, so the live read-back line (new_sessions_paused=) is the proof.
   "new-sessions-paused": "FLAG_NEW_SESSIONS_PAUSED",
+  // #4672 / ADR-309 — durable action-bound approval requests (gated platform tools held as rows a user decides).
+  // Dark by default; read ONLY through server/approval/flag.ts (`isApprovalQueueEnabled`), evaluated once per gate
+  // per workspace identity so a cohort can be targeted by a per-workspace segment override. Fail-closed:
+  // FLAG_APPROVAL_QUEUE=0 mirror; absent means OFF. Creating and flipping it is an operator step (flag-create).
+  "approval-queue": "FLAG_APPROVAL_QUEUE",
 } as const;
 
 export type EnvFlagName = keyof typeof ENV_FLAGS;
@@ -388,11 +393,15 @@ export async function isNewAgentSessionsPaused(): Promise<boolean> {
   }
   // Flagsmith did not answer (a 200 ms timeout is routine, not rare). The env-mirror snapshot is
   // cached for the full TTL, so trusting it would re-open the gate for 30 s on one slow response in
-  // the middle of the flip window. Hold the last value Flagsmith gave, for a bounded time, and let
-  // the mirror turn the gate ON (never off): the mirror is set to 1 by flip.sh when the owner flips on.
+  // the middle of the flip window. Hold the last value Flagsmith gave, for a bounded time: a fresh held value
+  // is authoritative in BOTH directions. The mirror is baked at deploy time and is 1 whenever the pause was ON at
+  // that deploy (flip.sh writes it), so OR-ing it into a held OFF would re-refuse real users' new sessions on every
+  // Flagsmith blip after the owner turned the pause off (#8211 follow-up, CTO ruling 2026-11-03). The mirror decides
+  // only on a cold start or once the held value is older than the bound. Residual: a re-pause during an outage is
+  // seen by this host only after the bound (the 30 s cache and the run sheet's two-row rule bound the window).
   const mirrorOn = snap["new-sessions-paused"];
   if (_pausedLastKnown && now - _pausedLastKnown.at <= PAUSED_STALE_MAX_MS) {
-    return _pausedLastKnown.value || mirrorOn;
+    return _pausedLastKnown.value;
   }
   return mirrorOn;
 }

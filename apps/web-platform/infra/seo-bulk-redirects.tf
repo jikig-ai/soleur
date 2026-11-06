@@ -95,6 +95,7 @@ locals {
     "2026-09-26-beta-testers-went-quiet"                            = "beta-testers-went-quiet"
     "2026-10-23-agentic-verification-checklist-shipped"             = "agentic-verification-checklist-shipped"
     "2026-10-23-own-your-ai-team-without-vendor-lock-in"            = "own-your-ai-team-without-vendor-lock-in"
+    "2026-10-26-run-your-ai-company-on-google-antigravity"          = "run-your-ai-company-on-google-antigravity"
     "2026-10-27-audited-102-guardrails-four-portable"               = "audited-102-guardrails-four-portable"
     "2026-10-29-property-test-cannot-fail-teaches-nothing"          = "property-test-cannot-fail-teaches-nothing"
     "2026-11-03-first-property-test-found-real-bug"                 = "first-property-test-found-real-bug"
@@ -103,6 +104,8 @@ locals {
     "2026-11-10-test-the-migration-not-just-the-schema"             = "test-the-migration-not-just-the-schema"
     "2026-11-12-map-that-only-records-what-the-agent-saw"           = "map-that-only-records-what-the-agent-saw"
     "2026-11-17-flaky-test-passed-on-retry-quarantine"              = "flaky-test-passed-on-retry-quarantine"
+    "2026-11-19-first-we-made-green-mean-something"                 = "first-we-made-green-mean-something"
+    "2026-12-03-alarm-passed-every-rehearsal-never-rings"           = "alarm-passed-every-rehearsal-never-rings"
   }
 
   # Bulk Redirects match http.request.full_uri EXACTLY, so each slug needs

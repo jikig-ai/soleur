@@ -302,10 +302,10 @@ export const cronDailyTriage = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 4 * * *" },
+      { event: "cron/daily-triage.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 4 * * *" },
-    { event: "cron/daily-triage.manual-trigger" },
-  ],
-  cronDailyTriageHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronDailyTriageHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

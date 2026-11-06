@@ -428,6 +428,12 @@ export function infoSilentFallback(
  *   NOT a userId: one slot per reason per process, because these are decorative reads that can fault on every
  *   page load. A reply error adds a low-cardinality `pg_code` tag (the code, `none` or `other`). A Flagsmith
  *   outage is not a fault: the collection state is "unknown" and the view renders its unavailable state.
+ * - `byok-lease:auth-mode-unresolved:<reason>` (byok-lease `failAuthModeClosed`, error-level via `mirrorWithDebounce`; one slot
+ *   per (user, closed reason), so a resend in an unresolvable conversation does not multiply the event, #11599).
+ * - `settings_read_oauth_credential` (Settings page, error-level via `mirrorWithDebounce`; the stored-token
+ *   read failed, so the Remove control is hidden for that render; #11524). The dedup key passed in the `userId`
+ *   slot is the constant `settings:read-oauth-credential`, an in-process token, NOT a user id: a sustained DB
+ *   outage yields one event per process per 5 minutes, not one per visit.
  * - `workspace-reconcile-push` family: `workspace-reconcile-push:no-workspace-match`
  *   (warn-level via `mirrorWarnWithDebounce`; dedup key is
  *   `${installationId}:${targetRepoUrl}`, an in-process token, NOT a userId —
@@ -459,6 +465,12 @@ export function infoSilentFallback(
  *   `untrusted-content-shape`, `untrusted-content-hook-error` (dedup key is the
  *   `workspaceId` (or "unknown"), an in-process token, NOT a userId; metadata-only
  *   `extra`), and `untrusted-content-flag-unresolved` (dedup key is the userId).
+ * - `crash-handlers` family (#11772): `client-abort` (warn-level via
+ *   `mirrorWarnWithDebounce`; dedup key is the constant `crash-handlers`, an
+ *   in-process token, NOT a userId). The trigger is an unauthenticated inbound
+ *   socket reset — every abort still emits a per-abort pino warn so the burst
+ *   count stays full-fidelity in container stdout, while the Sentry arm is
+ *   bounded to one envelope per process per 5 minutes.
  *
  * Each feature picks a distinct `errorClass` so the per-key TTL bucket
  * cannot collide across features for the same user.

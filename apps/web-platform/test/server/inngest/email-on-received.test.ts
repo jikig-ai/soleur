@@ -386,7 +386,7 @@ describe("owner resolution", () => {
       } as never),
     ).rejects.toThrow(/EMAIL_TRIAGE_OWNER_USER_ID/);
     // Retriable: plain Error, never NonRetriableError — Sentry fires via
-    // Layer 1 (sentry-correlation transformOutput) on exhaustion.
+    // Layer 1 (sentry-correlation onRunError) on exhaustion.
     const err = await emailOnReceivedHandler({
       event: makeEvent(),
       step: makeStep(),

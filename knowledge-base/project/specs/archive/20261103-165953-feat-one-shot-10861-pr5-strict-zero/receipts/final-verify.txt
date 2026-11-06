@@ -1,0 +1,118 @@
+### plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh -> .claude/settings.json
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-lifetime.test.sh:366 | cp "$REPO_ROOT/.claude/settings.json" "$d/.claude/settings.json"
+### plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh -> .mcp.json
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:59 | PIN="$(python3 -c "import json,re,sys; s=json.load(open(sys.argv[1]))['mcpServers']['playwright']['args'][1]; print(re.search(r'@p
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1271 | MCP_ARGS="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcpServers']['playwright']['args'][1])" "$REPO_ROOT/.
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1272 | MCP_ARG0="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['mcpServers']['playwright']['args'][0])" "$REPO_ROOT/.
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1299 | assert_true 'Guard 2 mutant 5: renaming the server key fails the lookup loudly' bash -c '! python3 -c "import json,sys; d=json.loa
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1330 | PLUGIN_MCP="$REPO_ROOT/plugins/soleur/.mcp.json"
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1358 | assert_true 'Guard 3: plugin.json carries mcpServers but NO playwright entry (the plugin server is .mcp.json-only)' python3 - "$RE
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1370 | assert_true "Guard 3: $wf vendored plugin tree excludes plugins/soleur/.mcp.json (live line, ordered after the cp -a)" python3 - "
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1381 | assert_true 'Guard 3: .dockerignore re-excludes _plugin-vendored/.mcp.json after the **/*.json re-include' python3 - "$REPO_ROOT/a
+### plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh -> apps/web-platform/.dockerignore
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1381 | assert_true 'Guard 3: .dockerignore re-excludes _plugin-vendored/.mcp.json after the **/*.json re-include' python3 - "$REPO_ROOT/a
+### plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh -> plugins/soleur/.claude-plugin/plugin.json
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1358 | assert_true 'Guard 3: plugin.json carries mcpServers but NO playwright entry (the plugin server is .mcp.json-only)' python3 - "$RE
+### plugins/soleur/skills/constraint-scaffold/test/generator.test.sh -> AGENTS.md
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:493 | f="$REPO_ROOT/AGENTS.md"
+### plugins/soleur/skills/constraint-scaffold/test/generator.test.sh -> README.md
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:499 | warn "could not append the instructions pointer to ${f#"$REPO_ROOT"/} — the gate is installed and proven; the missing line points 
+### plugins/soleur/test/ci-classify-step-exec.test.sh -> .github/workflows/ci.yml
+   plugins/soleur/test/ci-classify-step-exec.test.sh:24 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+### plugins/soleur/test/ci-e2e-skip-anchors.test.sh -> .github/workflows/ci.yml
+   plugins/soleur/test/ci-e2e-skip-anchors.test.sh:53 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+### plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh -> .github/workflows/codeql-main-alert-gate.yml
+   plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh:27 | WF="$ROOT/.github/workflows/codeql-main-alert-gate.yml"
+### plugins/soleur/test/codeql-main-alert-gate.test.sh -> .github/workflows/codeql-main-alert-gate.yml
+   plugins/soleur/test/codeql-main-alert-gate.test.sh:41 | WF="$ROOT/.github/workflows/codeql-main-alert-gate.yml"
+### plugins/soleur/test/domain-model-headless-append.test.sh -> knowledge-base/engineering/architecture/domain-model.md
+   plugins/soleur/test/domain-model-headless-append.test.sh:45 | REG="$REPO/knowledge-base/engineering/architecture/domain-model.md"
+### plugins/soleur/test/ext-filter-detect-hook.test.sh -> .claude/hooks/devin-dispositions.tsv
+   plugins/soleur/test/ext-filter-detect-hook.test.sh:15 | DISPOSITIONS="$REPO_ROOT/.claude/hooks/devin-dispositions.tsv"
+### plugins/soleur/test/fanout-suite-scope.test.sh -> plugins/soleur/skills/review/SKILL.md
+   plugins/soleur/test/fanout-suite-scope.test.sh:35 | REVIEW_SKILL="$REPO_ROOT/plugins/soleur/skills/review/SKILL.md"
+### plugins/soleur/test/fanout-suite-scope.test.sh -> plugins/soleur/skills/work/SKILL.md
+   plugins/soleur/test/fanout-suite-scope.test.sh:34 | WORK_SKILL="$REPO_ROOT/plugins/soleur/skills/work/SKILL.md"
+### plugins/soleur/test/generate-kb-index.test.sh -> knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
+   plugins/soleur/test/generate-kb-index.test.sh:489 | "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md"
+### plugins/soleur/test/gitleaks-rules.test.sh -> .gitleaks.toml
+   plugins/soleur/test/gitleaks-rules.test.sh:17 | CONFIG="$REPO_ROOT/.gitleaks.toml"
+### plugins/soleur/test/inngest-config-bundle-mirror.test.sh -> .github/workflows/reusable-release.yml
+   plugins/soleur/test/inngest-config-bundle-mirror.test.sh:66 | RR="$REPO_ROOT/.github/workflows/reusable-release.yml"
+### plugins/soleur/test/lane-frontmatter.test.sh -> knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md
+   plugins/soleur/test/lane-frontmatter.test.sh:21 | AUDIT_SPEC="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md"
+### plugins/soleur/test/main-health-monitor-workflow.test.sh -> .github/workflows/infra-validation.yml
+   plugins/soleur/test/main-health-monitor-workflow.test.sh:48 | INFRA_VALIDATION="${MHM_INFRA_VALIDATION:-$REPO_ROOT/.github/workflows/infra-validation.yml}"
+### plugins/soleur/test/merge-queue-stall-check.test.sh -> .github/workflows/merge-queue-stall-check.yml
+   plugins/soleur/test/merge-queue-stall-check.test.sh:29 | WF_REAL="$REPO_ROOT/.github/workflows/merge-queue-stall-check.yml"
+### plugins/soleur/test/merge-queue-stall-check.test.sh -> infra/github/ruleset-ci-required.tf
+   plugins/soleur/test/merge-queue-stall-check.test.sh:30 | TF_REAL="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+### plugins/soleur/test/pr-fanout-ledger.test.sh -> scripts/pr-fanout-ledger.txt
+   plugins/soleur/test/pr-fanout-ledger.test.sh:77 | LEDGER="${PR_FANOUT_LEDGER:-$REPO_ROOT/scripts/pr-fanout-ledger.txt}"
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/review/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:52 | const REVIEW_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/review/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/ship/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:50 | const SHIP_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/ship/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/test-fix-loop/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:53 | const TESTFIX_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/test-fix-loop/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/work/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:51 | const WORK_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/work/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/work/references/work-agent-teams.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:58 | resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-agent-teams.md"),
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/work/references/work-subagent-fanout.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:59 | resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-subagent-fanout.md"),
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> .github/workflows/ci.yml
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:68 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> .github/workflows/main-health-monitor.yml
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:73 | MHM_YML="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> .github/workflows/secret-scan.yml
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:67 | SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> scripts/ci-cla-required-ruleset-canonical-required-status-checks.json
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:74 | CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> scripts/ci-required-ruleset-canonical-required-status-checks.json
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:65 | CANONICAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+### scripts/actions-queue-tail-8450 -> .github/workflows/web-platform-release.yml
+   scripts/followthroughs/actions-queue-tail-8450.test.sh:458 | RELEASE_YML="$(cd "$HERE/../.." && pwd)/.github/workflows/web-platform-release.yml"
+### scripts/followthroughs/ci-push-dedupe-soak-9512 -> .github/workflows/ci.yml
+   scripts/ci-push-dedupe.test.sh:58 | WF="$REPO_ROOT/.github/workflows/ci.yml"
+### scripts/followthroughs/ci-push-dedupe-soak-9512 -> .github/workflows/web-platform-release.yml
+   scripts/ci-push-dedupe.test.sh:828 | REL_YML="$REPO_ROOT/.github/workflows/web-platform-release.yml"
+### scripts/followthroughs/registry-clientip-alert-7530 -> knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
+   scripts/followthroughs/registry-clientip-alert-7530.test.sh:637 | local rb="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md" ok=1 scratch="$WORK/runbook
+   apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh:394 | && [ "$RB_REL" = "knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md" ] && [ -f "$REPO/$RB_REL" ]; t
+### scripts/inngest-probe-heartbeat-feeder -> apps/web-platform/infra/sentry/cron-monitors.tf
+   scripts/inngest-probe-heartbeat-feeder.test.sh:454 | _tfmaxrt="$(awk '/resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat"/{on=1} on && /max_runtime_minutes/{gsub(/[^0-
+### scripts/lib/rule-line-regex-parity.test.sh -> .mcp.json
+   .claude/hooks/session-rules-loader.sh:388 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null ||
+   .claude/hooks/session-rules-loader.sh:390 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugins/soleur/.mcp.json"
+### scripts/lib/rule-line-regex-parity.test.sh -> AGENTS.md
+   .claude/hooks/session-rules-loader.sh:290 | TOTAL_RULES=$(grep -c '^- \x5c[id: ' "$REPO_ROOT/AGENTS.md" 2>/dev/null || true)
+   apps/web-platform/server/inngest/functions/cron-compound-promote.ts:274 | const indexPath = join(repoRoot, "AGENTS.md");
+### scripts/lib/rule-line-regex-parity.test.sh -> AGENTS.rules.md
+   .claude/hooks/session-rules-loader.sh:227 | CORPUS="$REPO_ROOT/AGENTS.rules.md"
+   apps/web-platform/server/inngest/functions/cron-compound-promote.ts:275 | const corpusPath = join(repoRoot, "AGENTS.rules.md");
+### scripts/rules-loader-stamp-probe -> AGENTS.md
+   scripts/rules-loader-stamp-probe.test.sh:54 | cp "$REPO_ROOT/AGENTS.md" "$d/AGENTS.md"
+   .claude/hooks/session-rules-loader.sh:290 | TOTAL_RULES=$(grep -c '^- \x5c[id: ' "$REPO_ROOT/AGENTS.md" 2>/dev/null || true)
+### scripts/rules-loader-stamp-probe -> knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.md
+   scripts/rules-loader-stamp-probe.test.sh:115 | PLAN="$REPO_ROOT/knowledge-base/project/plans/archive/20261013-041741-2026-07-28-chore-collapse-agents-change-class-sidecars-plan.
+### scripts/test-affected-derive -> README.md
+   scripts/test-affected-derive.test.sh:401 | _o="$( cd "$REPO_ROOT" && CI=1 SOLEUR_TEST_FORCE_ALL=1 bash "$BENCH" --base-runner "$B/run.base" --head-runner "$B/run.ci" --probe
+### scripts/tmpfs-guard -> .mcp.json
+   .claude/hooks/session-rules-loader.sh:388 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null ||
+   .claude/hooks/session-rules-loader.sh:390 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugins/soleur/.mcp.json"
+### scripts/tmpfs-guard -> AGENTS.md
+   .claude/hooks/session-rules-loader.sh:290 | TOTAL_RULES=$(grep -c '^- \x5c[id: ' "$REPO_ROOT/AGENTS.md" 2>/dev/null || true)
+### scripts/tmpfs-guard -> plugins/soleur/.claude-plugin/plugin.json
+   .claude/hooks/session-rules-loader.sh:389 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugins/soleur/.claude-pl
+### scripts/tmpfs-guard -> plugins/soleur/.mcp.json
+   .claude/hooks/session-rules-loader.sh:390 | jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugins/soleur/.mcp.json"
+### scripts/web2-luks-live-6931 -> .github/workflows/scheduled-followthrough-sweeper.yml
+   scripts/followthroughs/web2-luks-live-6931.test.sh:260 | SWEEPER="$ROOT/.github/workflows/scheduled-followthrough-sweeper.yml"
+### tests/scripts/destroy-guard-regex-parity -> apps/web-platform/infra/dns.tf
+   tests/scripts/test-destroy-guard-counter-web-platform.sh:1986 | "$REPO_ROOT/apps/web-platform/infra/dns.tf" | grep -oE '[0-9]+\x5c.[0-9]+\x5c.[0-9]+\x5c.[0-9]+' || true)
+   tests/scripts/test-destroy-guard-counter-web-platform.sh:1996 | "$REPO_ROOT/apps/web-platform/infra/dns.tf" | sed 's/.*cloudflare_record\x5c.//' || true)
+### tests/scripts/kb-drift-walker -> AGENTS.md
+   scripts/kb-drift-walker.sh:30 | "$REPO_ROOT/AGENTS.md"
+### tests/scripts/kb-drift-walker -> AGENTS.rules.md
+   scripts/kb-drift-walker.sh:31 | "$REPO_ROOT/AGENTS.rules.md"

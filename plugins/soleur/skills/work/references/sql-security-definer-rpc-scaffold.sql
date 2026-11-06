@@ -7,6 +7,11 @@
 -- and the hard rule:
 --   cq-pg-security-definer-search-path-pin-pg-temp
 --
+-- A NEW TABLE behind these RPCs also owes, in the same PR: its class in scripts/check-tom4-rls-posture.sh (SHAPE_IV or
+-- NOT_CUSTOMER_DATA when RLS is on with zero policies), its rows in test/rls-fuzz/{targets,table-grants,rpc-cases}.ts,
+-- a DSAR_TABLE_EXCLUSIONS or allowlist entry, and a `soleur:no-data-api:` sentinel when no api role holds a privilege.
+-- (PR #12069 shipped without the first and failed the posture gate.)
+--
 -- Three load-bearing pieces the lint checks for EVERY `SECURITY DEFINER` fn:
 --   1. `SET search_path = public, pg_temp` (in that order) in the declaration.
 --   2. A REVOKE that removes EXECUTE from PUBLIC + anon + authenticated.

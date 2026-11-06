@@ -1,0 +1,31 @@
+# PR5d live-pair classifications (task 0.4), taken on work-time origin/main fadd34b5c061.
+# Columns: suite<TAB>path<TAB>class<TAB>evidence(file:line)
+plugins/soleur	.claude/hooks/grep-q-pipe-guard.test.sh	mention	JSDoc citation plugins/soleur/test/ship-learning-probe.test.ts:215
+plugins/soleur	apps/web-platform/infra/arm-heartbeats.sh	edge-real	wiring pin expect(armBody).toContain terraform-target-parity.test.ts:8353
+plugins/soleur	apps/web-platform/infra/cron-egress-nftables.sh	edge-real	trigger-set literal ship-deploy-pipeline-fix-gate.test.ts:586
+plugins/soleur	apps/web-platform/infra/cron-egress-postapply-assert.sh	edge-real	trigger-set literal ship-deploy-pipeline-fix-gate.test.ts:581
+plugins/soleur	apps/web-platform/infra/cron-egress-resolve.sh	edge-real	trigger-set literal ship-deploy-pipeline-fix-gate.test.ts:580 (edge refused: reveal anchor 11/90d -> glob-narrow)
+plugins/soleur	apps/web-platform/infra/git-data-flag-precheck.sh	edge-real	FLAG_WRITERS_ALLOWED member terraform-target-parity.test.ts:9302
+plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	mention	fixture literals model-launch-review.test.ts:706,837
+plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	mention	fixture literals model-launch-review.test.ts:705,807,832,834,841,853
+plugins/soleur	apps/web-platform/server/inngest/leader-prompts/constants.ts	mention	fixture literals model-launch-review.test.ts:725,733
+plugins/soleur	scripts/betterstack-query.sh	mention	parseCommand literals :1231,:1236,:1757 + exec-seam default inngest-key-rotate.sh:135
+plugins/soleur	scripts/check-web-host-escrow-config.sh	mention	M4 mutant inputs web-host-escrow-preflight-census.test.ts:401,403
+plugins/soleur	scripts/ensure-kb-index.sh	edge-real	devinBaseline Invocation vs real hook commands repo-hook-launchers.test.ts:31
+plugins/soleur	scripts/lint-agents-rule-budget.py	mention	rejectReason/ALLOWLISTED inputs preflight-discoverability-test.test.ts:1619,1727
+plugins/soleur	scripts/lint-workflows.sh	mention	rejectReason inputs preflight-discoverability-test.test.ts:1615,1726,1734
+plugins/soleur	scripts/prod-version-drift-b9-probe.sh	mention	parseCommand literals preflight-discoverability-test.test.ts:219,220
+plugins/soleur	scripts/web-host-escrow-preflight.sh	edge-real	PREFLIGHT_RUN vs real workflow steps web-host-escrow-preflight-census.test.ts:50,203
+tests/scripts/argv-bearer-sweep	scripts/betterstack-ingest-probe.sh	edge-real	census content-grep of scripts/*.sh test-argv-bearer-sweep.sh:3288,4264
+tests/scripts/argv-bearer-sweep	scripts/ensure-doppler.sh	edge-real	census content-grep of scripts/*.sh (naming lines betterstack-query.sh:109,110 inngest-host-state.sh:129)
+tests/scripts/argv-bearer-sweep	scripts/kb-drift-walker.sh	edge-real	census content-grep of scripts/*.sh + S3 negative-assert :3821
+tests/scripts/argv-bearer-sweep	scripts/supabase-advisor-scan.sh	edge-real	census content-grep of scripts/*.sh
+tests/scripts/argv-bearer-sweep	scripts/supabase-logs-query.sh	edge-real	census content-grep of scripts/*.sh
+tests/scripts/git-data-birth-readiness-gate	.claude/hooks/grep-q-pipe-guard.test.sh	edge-real	sed-extracts PATTERN test-git-data-birth-readiness-gate.sh:2970 (edge refused: 142 reveals, 71/90d -> glob-narrow)
+plugins/soleur/test/boundary-prefix.test.sh	.claude/settings.json	mention	code line in scanned .test.sh pre-closing-technical-fork-gate.test.sh:60
+plugins/soleur/test/boundary-prefix.test.sh	.gitattributes	mention	deny-message text git-commit-secret-scan.sh:929
+plugins/soleur/test/boundary-prefix.test.sh	.gitignore	mention	printf recovery strings git-commit-secret-scan.sh:187,189
+plugins/soleur/test/boundary-prefix.test.sh	.gitleaks.toml	mention	WARN/emit messages :612,:613,:622,:623 + code lines in scanned file :619,:911
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/marketing/brand-guide.md	mention	deny-reason citation brand-hex-commit-gate.sh:462
+plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md	mention	deny-reason citation git-commit-secret-scan.sh:971
+plugins/soleur/test/boundary-prefix.test.sh	scripts/lib/rule-metrics-constants.sh	mention	source-target assignment in scanned lib incidents.sh:71

@@ -17,10 +17,16 @@ Model selection is **config-driven** so Phase 1 is not throwaway when the brain 
 ## Phase 0 — Capacity gate
 
 ```bash
-export HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain)"
+export HCLOUD_TOKEN="$(doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd_terraform --plain)"
 hcloud server list
 # Confirm free slot vs account server limit before enabling create.
 ```
+
+The capacity check is a GET, so the Read-permission `HCLOUD_TOKEN_READONLY` is the credential.
+`prd_terraform` no longer carries the read/write `HCLOUD_TOKEN` — it was evicted at ADR-241 O10
+and a `doppler secrets get` of it resolves empty; the read/write path is the
+`infra-credentials` loader on a Tier-B environment (see `inngest-server.md` step 0.5 /
+`infra-credential-tiers-8209.md`).
 
 Current fleet (example): web-1, web-2, inngest, registry. Cap historically 5 — verify live.
 

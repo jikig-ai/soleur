@@ -1,0 +1,253 @@
+### .claude/hooks/browser-snapshot-credential-guard.test.sh -> .claude/settings.json
+   .claude/hooks/browser-snapshot-credential-guard.test.sh:31 | LOCAL_SETTINGS="$REPO_ROOT/.claude/settings.json"
+### .claude/hooks/browser-snapshot-credential-guard.test.sh -> plugins/soleur/hooks/hooks.json
+   .claude/hooks/browser-snapshot-credential-guard.test.sh:30 | PLUGIN_MANIFEST="$REPO_ROOT/plugins/soleur/hooks/hooks.json"
+### .claude/hooks/devin-matcher-parity.test.sh -> .claude/settings.json
+   .claude/hooks/devin-matcher-parity.test.sh:43 | SETTINGS="$REPO_ROOT/.claude/settings.json"
+### .claude/hooks/devin-matcher-parity.test.sh -> .devin/config.json
+   .claude/hooks/devin-matcher-parity.test.sh:44 | DEVIN_CFG="$REPO_ROOT/.devin/config.json"
+### .claude/hooks/devin-matcher-parity.test.sh -> plugins/soleur/hooks/hooks.json
+   .claude/hooks/devin-matcher-parity.test.sh:45 | PLUGIN_HOOKS="$REPO_ROOT/plugins/soleur/hooks/hooks.json"
+### .claude/hooks/phase-surface-hint.test.sh -> .claude/phase-surface-map.json
+   .claude/hooks/phase-surface-hint.test.sh:27 | MAP="$REPO_ROOT/.claude/phase-surface-map.json"
+### .claude/hooks/pre-closing-technical-fork-gate.test.sh -> .claude/settings.json
+   .claude/hooks/pre-closing-technical-fork-gate.test.sh:60 | SETTINGS="$REPO_ROOT/.claude/settings.json"
+### .claude/hooks/prod-write-defer-gate.test.sh -> plugins/soleur/test/fixtures/operator-ack-arms.tsv
+   .claude/hooks/prod-write-defer-gate.test.sh:444 | ARMS_G3="$REPO_ROOT_G3/plugins/soleur/test/fixtures/operator-ack-arms.tsv"
+### .claude/hooks/ship-unpushed-commits-gate.test.sh -> .claude/settings.json
+   .claude/hooks/ship-unpushed-commits-gate.test.sh:350 | local settings="$REPO_ROOT/.claude/settings.json"
+   .claude/hooks/ship-unpushed-commits-gate.test.sh:374 | local settings="$REPO_ROOT/.claude/settings.json"
+### apps/cla-evidence/test/ccla-add.test.sh -> README.md
+   apps/cla-evidence/test/ccla-add.test.sh:454 | ln -sf "$REPO_ROOT/README.md" "$WORK/link-inside.bin"
+### apps/cla-evidence/test/ccla-add.test.sh -> apps/cla-evidence/roster/ccla-roster.json
+   apps/cla-evidence/scripts/ccla-add.sh:125 | ROSTER_REL="${CCLA_ADD_ROSTER:-apps/cla-evidence/roster/ccla-roster.json}"
+### apps/web-platform/scripts/dev-ledger-parity.test.sh -> .github/actions/dev-migration-drift-probe/action.yml
+   apps/web-platform/scripts/dev-ledger-parity.test.sh:48 | ACTION="$REPO_ROOT/.github/actions/dev-migration-drift-probe/action.yml"
+### apps/web-platform/scripts/dev-ledger-parity.test.sh -> .github/workflows/scheduled-dev-migration-drift.yml
+   apps/web-platform/scripts/dev-ledger-parity.test.sh:49 | SCHED="$REPO_ROOT/.github/workflows/scheduled-dev-migration-drift.yml"
+### apps/web-platform/scripts/dev-ledger-parity.test.sh -> .github/workflows/tenant-integration.yml
+   apps/web-platform/scripts/dev-ledger-parity.test.sh:47 | WF="$REPO_ROOT/.github/workflows/tenant-integration.yml"
+### plugins/soleur -> .claude-plugin/marketplace.json
+   plugins/soleur/test/plugin-version-fallback.test.ts:28 | const MARKETPLACE_MANIFEST = resolve(REPO_ROOT, ".claude-plugin/marketplace.json");
+### plugins/soleur -> .github/workflows/cutover-inngest.yml
+   plugins/soleur/test/terraform-target-parity.test.ts:4897 | const CUTOVER_WORKFLOW = resolve(REPO_ROOT, ".github/workflows/cutover-inngest.yml");
+### plugins/soleur -> .github/workflows/reusable-release.yml
+   plugins/soleur/test/web-platform-runtime-plugin-trigger.test.ts:33 | const REUSABLE = resolve(REPO_ROOT, ".github/workflows/reusable-release.yml");
+### plugins/soleur -> .github/workflows/web-platform-release.yml
+   plugins/soleur/test/web-platform-runtime-plugin-trigger.test.ts:34 | const WEBPLAT = resolve(REPO_ROOT, ".github/workflows/web-platform-release.yml");
+### plugins/soleur -> CLAUDE.md
+   plugins/soleur/test/welcome-hook.test.ts:137 | writeFileSync(join(tempDir, "CLAUDE.md"), "# My Project\x5cn\x5cnSome instructions.");
+### plugins/soleur -> CONTRIBUTING.md
+   plugins/soleur/test/harness-claim-parity.test.ts:39 | join(REPO_ROOT, "CONTRIBUTING.md"),
+### plugins/soleur -> apps/web-platform/infra/git-data.tf
+   plugins/soleur/test/terraform-target-parity.test.ts:3255 | const tf = resolve(ws, "apps/web-platform/infra/git-data.tf");
+### plugins/soleur -> apps/web-platform/infra/server.tf
+   plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:21 | const SERVER_TF = resolve(REPO_ROOT, "apps/web-platform/infra/server.tf");
+### plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh -> .claude/playwright-mcp.config.json
+   plugins/soleur/skills/agent-browser/test/playwright-mcp-redact-proxy.test.sh:1323 | f'npx @playwright/mcp@{pin} --user-data-dir="$prof" --config=.claude/playwright-mcp.config.json')
+### plugins/soleur/skills/community/test/community-argv.test.sh -> .gitignore
+   plugins/soleur/skills/community/test/community-argv.test.sh:2507 | GI="$SANDBOX/gi"; mkdir -p "$GI"; env -i PATH="$SYS_PATH" HOME="$SANDBOX/home" git init -q -- "$GI"; cp "$HERE/../../../../../.gitignore" "$
+### plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh -> .github/workflows/fix-constraints-stage-a.yml
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:101 | FIXWORKFLOW_A="$TARGET/.github/workflows/fix-constraints-stage-a.yml"
+### plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh -> .github/workflows/fix-constraints-stage-b.yml
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:102 | FIXWORKFLOW_B="$TARGET/.github/workflows/fix-constraints-stage-b.yml"
+### plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh -> AGENTS.md
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:493 | f="$REPO_ROOT/AGENTS.md"
+### plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh -> README.md
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:105 | README="$TARGET/server/README.md"
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:495 | local line="The client/server import boundary and its CI gate are documented in $TARGET_REL/server/README.md (generated by soleur:constraint
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:499 | warn "could not append the instructions pointer to ${f#"$REPO_ROOT"/} — the gate is installed and proven; the missing line points at $TARGET
+### plugins/soleur/skills/constraint-scaffold/test/generator.test.sh -> .github/workflows/fix-constraints-stage-a.yml
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:101 | FIXWORKFLOW_A="$TARGET/.github/workflows/fix-constraints-stage-a.yml"
+### plugins/soleur/skills/constraint-scaffold/test/generator.test.sh -> .github/workflows/fix-constraints-stage-b.yml
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:102 | FIXWORKFLOW_B="$TARGET/.github/workflows/fix-constraints-stage-b.yml"
+### plugins/soleur/skills/constraint-scaffold/test/generator.test.sh -> AGENTS.md
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:493 | f="$REPO_ROOT/AGENTS.md"
+### plugins/soleur/skills/constraint-scaffold/test/generator.test.sh -> README.md
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:105 | README="$TARGET/server/README.md"
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:495 | local line="The client/server import boundary and its CI gate are documented in $TARGET_REL/server/README.md (generated by soleur:constraint
+   plugins/soleur/skills/constraint-scaffold/scripts/constraint-scaffold.sh:499 | warn "could not append the instructions pointer to ${f#"$REPO_ROOT"/} — the gate is installed and proven; the missing line points at $TARGET
+### plugins/soleur/skills/incident/test/redact-sentinel.test.sh -> knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
+   plugins/soleur/skills/incident/test/redact-sentinel.test.sh:26 | NEGATIVE_BASELINE="${REPO_ROOT}/knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md"
+### plugins/soleur/test/ci-classify-step-exec.test.sh -> .github/workflows/ci.yml
+   plugins/soleur/test/ci-classify-step-exec.test.sh:24 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+### plugins/soleur/test/ci-e2e-skip-anchors.test.sh -> .github/workflows/ci.yml
+   plugins/soleur/test/ci-e2e-skip-anchors.test.sh:53 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+### plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh -> .github/workflows/codeql-main-alert-gate.yml
+   plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh:27 | WF="$ROOT/.github/workflows/codeql-main-alert-gate.yml"
+### plugins/soleur/test/codeql-main-alert-gate.test.sh -> .github/workflows/codeql-main-alert-gate.yml
+   plugins/soleur/test/codeql-main-alert-gate.test.sh:41 | WF="$ROOT/.github/workflows/codeql-main-alert-gate.yml"
+### plugins/soleur/test/domain-model-headless-append.test.sh -> knowledge-base/engineering/architecture/domain-model.md
+   plugins/soleur/test/domain-model-headless-append.test.sh:45 | REG="$REPO/knowledge-base/engineering/architecture/domain-model.md"
+### plugins/soleur/test/ext-filter-detect-hook.test.sh -> .claude/hooks/devin-dispositions.tsv
+   plugins/soleur/test/ext-filter-detect-hook.test.sh:15 | DISPOSITIONS="$REPO_ROOT/.claude/hooks/devin-dispositions.tsv"
+### plugins/soleur/test/fanout-suite-scope.test.sh -> plugins/soleur/skills/review/SKILL.md
+   plugins/soleur/test/fanout-suite-scope.test.sh:35 | REVIEW_SKILL="$REPO_ROOT/plugins/soleur/skills/review/SKILL.md"
+### plugins/soleur/test/fanout-suite-scope.test.sh -> plugins/soleur/skills/work/SKILL.md
+   plugins/soleur/test/fanout-suite-scope.test.sh:34 | WORK_SKILL="$REPO_ROOT/plugins/soleur/skills/work/SKILL.md"
+### plugins/soleur/test/generate-kb-index.test.sh -> knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md
+   plugins/soleur/test/generate-kb-index.test.sh:489 | "$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-174-kb-index-exclusion-supersedes-per-feature-archival.md"
+### plugins/soleur/test/gitleaks-rules.test.sh -> .gitleaks.toml
+   plugins/soleur/test/gitleaks-rules.test.sh:17 | CONFIG="$REPO_ROOT/.gitleaks.toml"
+### plugins/soleur/test/go-session-gates.test.sh -> knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt
+   plugins/soleur/test/go-session-gates.test.sh:45 | ARM5_DELIVERED="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/ar
+### plugins/soleur/test/go-session-gates.test.sh -> knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
+   plugins/soleur/test/go-session-gates.test.sh:46 | PROBE_MD="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands
+### plugins/soleur/test/kb-search-lockstep.test.sh -> knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md
+   scripts/learning-retrieval-bench.sh:1394 | got="$(build_close_comment_line vindicate 0.83 knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md)"
+### plugins/soleur/test/lane-frontmatter.test.sh -> knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md
+   plugins/soleur/test/lane-frontmatter.test.sh:21 | AUDIT_SPEC="$REPO_ROOT/knowledge-base/project/specs/archive/20261013-003106-feat-claude-skills-audit/spec.md"
+### plugins/soleur/test/main-health-monitor-workflow.test.sh -> .github/workflows/infra-validation.yml
+   plugins/soleur/test/main-health-monitor-workflow.test.sh:48 | INFRA_VALIDATION="${MHM_INFRA_VALIDATION:-$REPO_ROOT/.github/workflows/infra-validation.yml}"
+### plugins/soleur/test/merge-queue-stall-check.test.sh -> .github/workflows/merge-queue-stall-check.yml
+   plugins/soleur/test/merge-queue-stall-check.test.sh:29 | WF_REAL="$REPO_ROOT/.github/workflows/merge-queue-stall-check.yml"
+### plugins/soleur/test/merge-queue-stall-check.test.sh -> infra/github/ruleset-ci-required.tf
+   plugins/soleur/test/merge-queue-stall-check.test.sh:30 | TF_REAL="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
+### plugins/soleur/test/pr-fanout-ledger.test.sh -> scripts/pr-fanout-ledger.txt
+   plugins/soleur/test/pr-fanout-ledger.test.sh:77 | LEDGER="${PR_FANOUT_LEDGER:-$REPO_ROOT/scripts/pr-fanout-ledger.txt}"
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> README.md
+   plugins/soleur/test/preflight-founder-check.test.ts:184 | writeFileSync(join(dir, "README.md"), "fixture\x5cn");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/review/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:52 | const REVIEW_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/review/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/ship/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:50 | const SHIP_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/ship/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/test-fix-loop/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:53 | const TESTFIX_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/test-fix-loop/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/work/SKILL.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:51 | const WORK_SKILL = resolve(REPO_ROOT, "plugins/soleur/skills/work/SKILL.md");
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/work/references/work-agent-teams.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:58 | resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-agent-teams.md"),
+### plugins/soleur/test/preflight-check10-suite-integrity.test.sh -> plugins/soleur/skills/work/references/work-subagent-fanout.md
+   plugins/soleur/test/fullsuite-merge-gate.test.ts:59 | resolve(REPO_ROOT, "plugins/soleur/skills/work/references/work-subagent-fanout.md"),
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> .github/workflows/ci.yml
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:68 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> .github/workflows/main-health-monitor.yml
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:73 | MHM_YML="$REPO_ROOT/.github/workflows/main-health-monitor.yml"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> .github/workflows/secret-scan.yml
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:67 | SECRET_SCAN_YML="$REPO_ROOT/.github/workflows/secret-scan.yml"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> scripts/ci-cla-required-ruleset-canonical-required-status-checks.json
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:74 | CLA_CANONICAL="$REPO_ROOT/scripts/ci-cla-required-ruleset-canonical-required-status-checks.json"
+### plugins/soleur/test/required-checks-canonical-parity.test.sh -> scripts/ci-required-ruleset-canonical-required-status-checks.json
+   plugins/soleur/test/required-checks-canonical-parity.test.sh:65 | CANONICAL="$REPO_ROOT/scripts/ci-required-ruleset-canonical-required-status-checks.json"
+### plugins/soleur/test/required-checks-merge-group-coverage.test.sh -> infra/github/ruleset-ci-required.tf
+   plugins/soleur/test/required-checks-merge-group-coverage.test.sh:79 | cp "$REPO_ROOT/infra/github/ruleset-ci-required.tf" "$PRISTINE/infra/github/" || exit 2
+### plugins/soleur/test/scripts-shard-totality.test.sh -> .github/workflows/ci.yml
+   plugins/soleur/test/scripts-shard-totality.test.sh:48 | CI_YML="$REPO_ROOT/.github/workflows/ci.yml"
+### plugins/soleur/test/shell-argv-parity.test.sh -> .claude/hooks/lib/filing-shape.pl
+   plugins/soleur/test/shell-argv-parity.test.sh:40 | ORIG_PL="$REPO_ROOT/.claude/hooks/lib/filing-shape.pl"
+### plugins/soleur/test/technical-ruling-gate.test.sh -> AGENTS.rules.md
+   plugins/soleur/test/technical-ruling-gate.test.sh:36 | RULES="$REPO_ROOT/AGENTS.rules.md"
+### plugins/soleur/test/vendor-bundle-coverage.test.sh -> .github/workflows/vendor-pin-verify.yml
+   plugins/soleur/test/vendor-bundle-coverage.test.sh:33 | VERIFY="$REPO_ROOT/.github/workflows/vendor-pin-verify.yml"
+### plugins/soleur/test/vendor-bundle-coverage.test.sh -> lefthook.yml
+   plugins/soleur/test/vendor-bundle-coverage.test.sh:32 | LEFTHOOK="$REPO_ROOT/lefthook.yml"
+### plugins/soleur/test/worktree-manager-install-bounded.test.sh -> package-lock.json
+   plugins/soleur/test/worktree-manager-install-bounded.test.sh:315 | rm -f "$REPO/package-lock.json" "$REPO/apps/demo/package-lock.json"
+### plugins/soleur/test/zot-http-deadlines-required.test.sh -> apps/web-platform/infra/cloud-init-registry.yml
+   plugins/soleur/test/zot-http-deadlines-required.test.sh:29 | CI_YML="$REPO_ROOT/apps/web-platform/infra/cloud-init-registry.yml"
+### plugins/soleur/test/zot-image-mirror-publish.test.sh -> .github/workflows/zot-image-mirror.yml
+   plugins/soleur/test/zot-image-mirror-publish.test.sh:15 | WF="$ROOT/.github/workflows/zot-image-mirror.yml"
+### scripts/actions-queue-tail-8450 -> .github/workflows/web-platform-release.yml
+   scripts/followthroughs/actions-queue-tail-8450.test.sh:458 | RELEASE_YML="$(cd "$HERE/../.." && pwd)/.github/workflows/web-platform-release.yml"
+### scripts/capture-web-1-host-key -> apps/web-platform/infra/web-1-ssh-host-key.pub
+   scripts/capture-web-1-host-key.sh:55 | OUT="$REPO_ROOT/apps/web-platform/infra/web-1-ssh-host-key.pub"
+### scripts/capture-web-2-host-key -> apps/web-platform/infra/web-2-ssh-host-key.pub
+   scripts/capture-web-2-host-key.sh:56 | OUT="$REPO_ROOT/apps/web-platform/infra/web-2-ssh-host-key.pub"
+### scripts/dogfood/grok-measure -> .grok/config.toml
+   scripts/dogfood/grok-measure.sh:118 | _cfg="${HOME}/.grok/config.toml"
+### scripts/followthrough-varq-ban -> README.md
+   scripts/lint-followthrough-varq-ban.test.sh:471 | r3_fixture "$d" probe.sh 'Q="${SOME_OVERRIDE:-knowledge-base/project/README.md}"'
+### scripts/followthrough-varq-ban -> knowledge-base/project/README.md
+   scripts/lint-followthrough-varq-ban.test.sh:471 | r3_fixture "$d" probe.sh 'Q="${SOME_OVERRIDE:-knowledge-base/project/README.md}"'
+### scripts/followthroughs/registry-clientip-alert-7530 -> .github/workflows/infra-validation.yml
+   apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh:50 | IV="${REGCIP_IV:-$REPO/.github/workflows/infra-validation.yml}"
+### scripts/followthroughs/registry-clientip-alert-7530 -> apps/web-platform/infra/cloud-init-registry.yml
+   apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh:51 | CI="${REGCIP_CI:-$REPO/apps/web-platform/infra/cloud-init-registry.yml}"
+### scripts/followthroughs/registry-clientip-alert-7530 -> apps/web-platform/infra/zot-registry.tf
+   apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh:49 | ZOT="${REGCIP_ZOT:-$REPO/apps/web-platform/infra/zot-registry.tf}"
+### scripts/followthroughs/registry-clientip-alert-7530 -> knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md
+   scripts/followthroughs/registry-clientip-alert-7530.test.sh:637 | local rb="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md" ok=1 scratch="$WORK/runbook-noheading
+   apps/web-platform/test/infra/registry-clientip-not-rfc1918-alert.test.sh:394 | && [ "$RB_REL" = "knowledge-base/engineering/operations/runbooks/registry-clientip-rfc1918-7530.md" ] && [ -f "$REPO/$RB_REL" ]; then
+### scripts/infra-drift-autoclose -> .github/workflows/apply-deploy-pipeline-fix.yml
+   scripts/infra-drift-autoclose.test.sh:24 | WORKFLOW="$REPO/.github/workflows/apply-deploy-pipeline-fix.yml"
+### scripts/inngest-probe-heartbeat-feeder -> apps/web-platform/infra/uptime-alerts.tf
+   scripts/inngest-probe-heartbeat-feeder.test.sh:47 | UPTIME_TF="$REPO/apps/web-platform/infra/uptime-alerts.tf"
+### scripts/jobs1-stopgap-7432 -> apps/web-platform/infra/suite-shard-legs.tsv
+   apps/web-platform/infra/run-registered-suites.sh:491 | _shard_mfile="$ROOT/apps/web-platform/infra/suite-shard-legs.tsv"
+### scripts/learning-retrieval-bench -> knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md
+   scripts/learning-retrieval-bench.sh:1394 | got="$(build_close_comment_line vindicate 0.83 knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md)"
+### scripts/lint-agents-compound-sync-unit -> scripts/retired-rule-ids.txt
+   scripts/rule-metrics-aggregate.sh:148 | RETIRED_IDS_SRC="$REPO_ROOT/scripts/retired-rule-ids.txt"
+### scripts/pre-push-ratchet-lane -> knowledge-base/legal/compliance-posture.md
+   scripts/test-affected-kb-consumers.test.sh:638 | printf 'import { join } from "node:path";\x5cnconst p = join(root, "knowledge-base/legal/compliance-posture.md");\x5cn' > "$DSYN/sub/scratch
+### scripts/prod-version-drift-check -> .github/workflows/ci.yml
+   scripts/prod-version-drift-check.test.sh:1606 | cp "$REPO_ROOT/.github/workflows/ci.yml" "$dst/.github/workflows/ci.yml" || return 1
+   scripts/prod-version-drift-check.test.sh:1976 | local CI=".github/workflows/ci.yml"
+### scripts/prod-version-drift-check -> .github/workflows/scheduled-prod-version-drift.yml
+   scripts/prod-version-drift-check.test.sh:44 | WORKFLOW="${DRIFT_TEST_WORKFLOW:-$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml}"
+   scripts/prod-version-drift-check.test.sh:1579 | DRIFT_TEST_WORKFLOW="$sbx/.github/workflows/scheduled-prod-version-drift.yml" \x5c
+   scripts/prod-version-drift-check.test.sh:1596 | cp "$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml" "$dst/.github/workflows/" || return 1
+   scripts/prod-version-drift-check.test.sh:1798 | local WF=".github/workflows/scheduled-prod-version-drift.yml"
+### scripts/prod-version-drift-check -> .github/workflows/web-platform-release.yml
+   scripts/prod-version-drift-check.test.sh:45 | RELEASE_WORKFLOW="${DRIFT_TEST_RELEASE_WORKFLOW:-$REPO_ROOT/.github/workflows/web-platform-release.yml}"
+   scripts/prod-version-drift-check.test.sh:1580 | DRIFT_TEST_RELEASE_WORKFLOW="$sbx/.github/workflows/web-platform-release.yml" \x5c
+   scripts/prod-version-drift-check.test.sh:1977 | local REL=".github/workflows/web-platform-release.yml"
+### scripts/prod-version-drift-check -> apps/web-platform/infra/sentry/cron-monitors.tf
+   scripts/prod-version-drift-check.test.sh:46 | MONITORS_TF="${DRIFT_TEST_MONITORS_TF:-$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf}"
+   scripts/prod-version-drift-check.test.sh:1581 | DRIFT_TEST_MONITORS_TF="$sbx/apps/web-platform/infra/sentry/cron-monitors.tf" \x5c
+### scripts/rules-loader-stamp-probe -> AGENTS.rules.md
+   scripts/rules-loader-stamp-probe.test.sh:56 | head -"$1" "$REPO_ROOT/AGENTS.rules.md" > "$d/AGENTS.rules.md"
+   .claude/hooks/session-rules-loader.sh:227 | CORPUS="$REPO_ROOT/AGENTS.rules.md"
+### scripts/test-affected-derive -> README.md
+   scripts/test-affected-derive.test.sh:362 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.same" --probe README.md --runs 1)"; _rc=$?
+   scripts/test-affected-derive.test.sh:380 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.edgedrop" --probe README.md --runs 1)"; _rc=$?
+   scripts/test-affected-derive.test.sh:384 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.base" --probe README.md --runs 1)"; _rc=$?
+   scripts/test-affected-derive.test.sh:391 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.plus" --probe README.md --runs 1)"; _rc=$?
+   scripts/test-affected-derive.test.sh:396 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.stderr" --probe README.md --runs 1)"; _rc=$?
+   scripts/test-affected-derive.test.sh:401 | _o="$( cd "$REPO_ROOT" && CI=1 SOLEUR_TEST_FORCE_ALL=1 bash "$BENCH" --base-runner "$B/run.base" --head-runner "$B/run.ci" --probe README.md
+   scripts/test-affected-derive.test.sh:406 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.crash" --probe README.md --runs 1)"; _rc=$?
+   scripts/test-affected-derive.test.sh:466 | _o="$(bench --base-runner "$B/run.base" --head-runner "$B/run.flaky" --probe README.md --runs 2)"; _rc=$?
+   scripts/test-affected-derive.test.sh:476 | _o="$(bench --base-runner "$B/run.shortenum" --head-runner "$B/run.base" --probe README.md --runs 1)"; _rc=$?
+   scripts/test-affected-derive.test.sh:1021 | leafbench --base-runner "$LF/run.leaf-base" --head-runner "$LF/run.leaf-decl" --probe README.md --runs 1 --leaf-files runner.sh,idx.sh --roo
+### scripts/test-all-killed-classification -> apps/web-platform/infra/suite-shard-legs.tsv
+   apps/web-platform/infra/run-registered-suites.sh:491 | _shard_mfile="$ROOT/apps/web-platform/infra/suite-shard-legs.tsv"
+### scripts/tmpfs-guard -> AGENTS.rules.md
+   .claude/hooks/session-rules-loader.sh:227 | CORPUS="$REPO_ROOT/AGENTS.rules.md"
+### scripts/zot-restart-loop-alarm-scrub -> apps/web-platform/infra/cloud-init-registry.yml
+   scripts/zot-restart-loop-alarm-scrub.test.sh:34 | CI_TEMPLATE="$(cd "$SCRIPT_DIR/.." && pwd)/apps/web-platform/infra/cloud-init-registry.yml"
+### tests/hooks/drop-sentinel-parity -> knowledge-base/engineering/operations/skill-freshness.json
+   scripts/skill-freshness-aggregate.sh:73 | OUT="$REPO_ROOT/knowledge-base/engineering/operations/skill-freshness.json"
+### tests/hooks/drop-sentinel-parity -> scripts/retired-rule-ids.txt
+   scripts/rule-metrics-aggregate.sh:148 | RETIRED_IDS_SRC="$REPO_ROOT/scripts/retired-rule-ids.txt"
+### tests/scripts/argv-bearer-sweep -> plugins/soleur/skills/reproduce-bug/SKILL.md
+   tests/scripts/test-argv-bearer-sweep.sh:7113 | S7_M1="$(s7_fresh m1)"; S7_M1F="plugins/soleur/skills/reproduce-bug/SKILL.md"
+### tests/scripts/audit-ruleset-bypass -> README.md
+   tests/scripts/test-audit-ruleset-bypass.sh:929 | cp "$REPO_ROOT/infra/github/README.md" "$d/pristine/readme"
+   tests/scripts/test-audit-ruleset-bypass.sh:942 | local readme="${3:-$REPO_ROOT/infra/github/README.md}"
+   tests/scripts/test-audit-ruleset-bypass.sh:1117 | readme-only) cp "$REPO_ROOT/infra/github/README.md" "$d/readme" ;;
+### tests/scripts/destroy-guard-counter-web-platform -> .github/workflows/infra-validation.yml
+   apps/web-platform/infra/apex-single-node-replace.test.sh:66 | VALIDATION_WF="${APEX_GUARD_VALIDATION_WF:-$REPO_ROOT/.github/workflows/infra-validation.yml}"
+   apps/web-platform/infra/apex-single-node-replace.test.sh:73 | APEX_GUARD_VALIDATION_WF) [[ "$VALIDATION_WF" == "$REPO_ROOT/.github/workflows/infra-validation.yml" ]] || { printf '[FATAL] %s is set under
+### tests/scripts/git-data-birth-readiness-gate -> .github/workflows/git-data-rung2-rehearsal.yml
+   tests/scripts/test-git-data-birth-readiness-gate.sh:140 | local path=".github/workflows/git-data-rung2-rehearsal.yml"
+### tests/scripts/git-data-root-key-arm -> apps/web-platform/infra/git-data-root-key.fingerprint
+   tests/scripts/test-git-data-root-key-arm.sh:396 | LIT = 'export GIT_DATA_ROOT_KEY_FINGERPRINT_FILE="${GITHUB_WORKSPACE}/apps/web-platform/infra/git-data-root-key.fingerprint"'
+### tests/scripts/git-data-rung2-evidence-capture -> .github/workflows/git-data-rung2-rehearsal.yml
+   tests/scripts/test-git-data-rung2-evidence-capture.sh:1219 | WF="${ROOT}/.github/workflows/git-data-rung2-rehearsal.yml"
+### tests/scripts/lint-rule-bodies -> AGENTS.rules.md
+   tests/scripts/test_lint_rule_bodies.py:206 | (repo / "AGENTS.rules.md").write_text("\x5cn".join(lines) + "\x5cn")
+   tests/scripts/test_lint_rule_bodies.py:221 | (repo / "AGENTS.rules.md").write_text("\x5cn".join(lines) + "\x5cn")
+   tests/scripts/test_lint_rule_bodies.py:433 | (repo / "AGENTS.rules.md").write_text("\x5cn".join(lines) + "\x5cn")
+   tests/scripts/test_lint_rule_bodies.py:506 | (repo / "AGENTS.rules.md").write_text("\x5cn".join(lines) + "\x5cn")
+### tests/scripts/no-tofu-ssh-mutation -> .github/actions/cf-tunnel-ssh-bridge/action.yml
+   tests/scripts/test-no-tofu-ssh-mutation.sh:124 | BRIDGE="$COPY/.github/actions/cf-tunnel-ssh-bridge/action.yml"
+### tests/scripts/registry-d10-workflow-wiring -> .github/actions/cf-tunnel-registry-bridge/action.yml
+   tests/scripts/test-registry-d10-workflow-wiring.sh:37 | BRIDGE="${ROOT}/.github/actions/cf-tunnel-registry-bridge/action.yml"
+### tests/scripts/registry-d10-workflow-wiring -> apps/web-platform/infra/variables.tf
+   scripts/derive-app-domain-base.sh:44 | TF_FILE="${1:-${REPO_ROOT}/apps/web-platform/infra/variables.tf}"
+### tests/scripts/scratch-residue -> .github/actions/bot-pr-with-synthetic-checks/action.yml
+   tests/scripts/test-weakness-miner.sh:1196 | local real_comp="$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
+### tests/scripts/sentry-alert-drift-workflow -> .github/workflows/scheduled-sentry-alert-drift.yml
+   tests/scripts/test-sentry-alert-drift-workflow.sh:36 | WF="${SENTRY_DRIFT_WF:-$REPO_ROOT/.github/workflows/scheduled-sentry-alert-drift.yml}"
+### tests/scripts/sentry-alert-drift-workflow -> knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migration/phase34-live-workflows-capture-2026-09-09.json
+   scripts/sentry-alert-live-fidelity.sh:89 | FROZEN_CAPTURE="${SENTRY_FROZEN_CAPTURE_FILE:-$REPO_ROOT/knowledge-base/project/specs/archive/20261013-051752-fix-7650-sentry-alert-migratio

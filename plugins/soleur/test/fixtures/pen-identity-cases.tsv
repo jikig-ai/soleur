@@ -1,0 +1,42 @@
+# pen-identity-cases.tsv — shared binary-identity table (Guard 2).
+#
+# Each row is run through BOTH resolvers against a fake package tree built under a temp HOME by
+# plugins/soleur/test/lib/pen-identity-tree.mjs (the `layout` column names a key of its LAYOUTS
+# export; there must be no row without a layout and no layout without a row):
+#   - check_deps.sh `detect_headless_cli`  -> test/check-deps-adapter-drift.test.sh   (check_deps column)
+#   - the adapter's `findPenBinary()`      -> adapter integration test (adapter column)
+# The two columns agree on every row except where a note says otherwise; a row where they differ
+# means one resolver accepts a binary the other refuses (Guard 2, mutation 4).
+#
+# Format: TAB-separated, one row per line, `#` lines and blank lines ignored. Five columns:
+#   layout          name of a LAYOUTS entry in lib/pen-identity-tree.mjs
+#   adapter         accept | refuse   expected verdict of findPenBinary() for $HOME=<tree>
+#   check_deps      accept | refuse   expected verdict of detect_headless_cli for HOME=<tree>
+#   legacy_warning  yes | no          whether a leftover @pencil.dev/cli warning is expected
+#                                     (check_deps warn_pen_cli_state; adapter ignores this column)
+#   note            free text, not asserted
+# "accept" means the resolved binary is the installed @pen.dev/cli package's declared bin.pen target
+# (realpath EQUAL to it, package name @pen.dev/cli, target inside the package directory, separator
+# bounded). A package version other than the pin is accepted with a warning, never refused.
+# <home>/fakebin, when the layout creates it, is prepended to PATH by the runner (no PATH fallback:
+# a foreign `pen` there must never be selected).
+#
+layout	adapter	check_deps	legacy_warning	note
+good	accept	accept	no	correct install at the pin
+version-differs	accept	accept	no	package version != pin: accepted, version warning only
+good-plus-legacy	accept	accept	yes	leftover @pencil.dev/cli is a warning, not a candidate
+legacy-only	refuse	refuse	yes	only the deprecated engine: headless tier not selected
+name-mismatch	refuse	refuse	no	package.json name is not @pen.dev/cli
+declared-bin-missing	refuse	refuse	no	package declares no pen bin
+bin-sibling-prefix	refuse	refuse	no	target under .../@pen.dev/cli-evil (prefix-only match)
+bin-other-file	refuse	refuse	no	target is a different file inside the package
+bin-regular-file	refuse	refuse	no	.bin/pen is a copy, not a link to the declared target
+declared-bin-escapes	refuse	refuse	no	declared bin.pen resolves outside the package directory
+pencil-bin-only	refuse	refuse	no	only .bin/pencil exists: the pencil name is never accepted
+bin-missing	refuse	refuse	no	package present, no .bin entry
+bin-points-at-legacy	refuse	refuse	yes	.bin/pen links into the deprecated engine
+package-json-unreadable	refuse	refuse	no	package.json cannot be read
+declared-bin-nonexistent	refuse	refuse	no	package.json declares a pen bin that does not exist
+declared-bin-is-directory	refuse	refuse	no	the declared bin.pen target is a directory, not a file
+group-writable-package	refuse	refuse	no	package directory is group-writable (an npm ci under umask 002): both resolvers refuse it
+path-pen-only	refuse	refuse	no	foreign pen on PATH, nothing installed: no PATH fallback

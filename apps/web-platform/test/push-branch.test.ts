@@ -201,4 +201,40 @@ describe("pushBranch", () => {
       }),
     ).rejects.toThrow(/Git push failed/);
   });
+
+  test("with a pinned commitSha the refspec is <sha>:refs/heads/<branch> after a cat-file check", async () => {
+    const sha = "a".repeat(40);
+    await pushBranch({
+      installationId: 1,
+      owner: "alice",
+      repo: "my-repo",
+      workspacePath: "/tmp/workspace",
+      branch: "feat-x",
+      force: false,
+      commitSha: sha,
+    });
+    const verify = mockExecFileSync.mock.calls.find((c: unknown[]) => (c[1] as string[]).includes("cat-file"));
+    expect(verify![1]).toEqual(["cat-file", "-e", `${sha}^{commit}`]);
+    expect(mockGitWithAuth.mock.calls[0][0]).toEqual(["push", "https://github.com/alice/my-repo.git", `${sha}:refs/heads/feat-x`]);
+  });
+
+  test("a pinned commitSha that is not a full sha throws before any git call", async () => {
+    for (const bad of ["HEAD", "abc123", "A".repeat(40), `${"a".repeat(40)} `, "-f"]) {
+      await expect(
+        pushBranch({ installationId: 1, owner: "a", repo: "r", workspacePath: "/tmp/w", branch: "feat-x", force: false, commitSha: bad }),
+      ).rejects.toThrow(/valid full commit sha/);
+    }
+    expect(mockGitWithAuth).not.toHaveBeenCalled();
+  });
+
+  test("a pinned commitSha absent from the repository throws and nothing is pushed", async () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes("cat-file")) throw new Error("fatal: Not a valid object name");
+      return Buffer.from("");
+    });
+    await expect(
+      pushBranch({ installationId: 1, owner: "a", repo: "r", workspacePath: "/tmp/w", branch: "feat-x", force: false, commitSha: "b".repeat(40) }),
+    ).rejects.toThrow(/not present/);
+    expect(mockGitWithAuth).not.toHaveBeenCalled();
+  });
 });

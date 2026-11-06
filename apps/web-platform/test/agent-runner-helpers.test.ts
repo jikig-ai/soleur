@@ -419,7 +419,7 @@ describe("buildAgentQueryOptions drift guard (legacy ↔ cc — #2922)", () => {
       ...baseArgs,
       maxTurns: 50,
       maxBudgetUsd: 5.0,
-      allowedTools: ["mcp__soleur_platform__kb_share_create"],
+      allowedTools: ["mcp__soleur_platform__kb_share_list"],
     });
     const cc = buildAgentQueryOptions({
       ...baseArgs,

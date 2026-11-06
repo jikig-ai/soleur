@@ -1,0 +1,5 @@
+WARNING: Bun 1.4.4 installed, expected 1.4.2 (from .bun-version)
+Run: bun upgrade
+[contention] BANNER CAPACITY_UNKNOWN reason=not_probed measured_runs=? measured_suites=? sibling_threshold=1 tmp_avail_mb=? tmp_floor_mb=1024 memavail_mb=?
+[contention] LOCK_SKIPPED_DISABLED: SOLEUR_DISABLE_SESSION_STATE=1; not serializing.
+[shard] enumerate complete: 737 registration(s) assigned of 737 walked (k/N=0/0)

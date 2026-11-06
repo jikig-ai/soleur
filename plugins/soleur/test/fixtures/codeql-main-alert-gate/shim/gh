@@ -75,6 +75,7 @@ case "$cmd" in
     case "$endpoint" in
       */check-runs|*/check-runs\?*) key="check-runs" ;;
       */code-scanning/analyses|*/code-scanning/analyses\?*) key="analyses" ;;
+      */commits/main|*/commits/main\?*) key="main-head" ;;
       */code-scanning/alerts\?*state=open*) key="alerts-open" ;;
       *) echo "shim: refusing unexpected endpoint $endpoint" >&2; exit 64 ;;
     esac

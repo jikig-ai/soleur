@@ -50,5 +50,5 @@ The user's request is the text that follows `/soleur:go`. Treat that text as `$A
 2. Follow every instruction in that file as if you were the `/soleur:go` handler.
 3. Where the file uses `$ARGUMENTS` or `#$ARGUMENTS`, substitute the user's actual request.
 4. When routing to a skill, use the Devin harness adapter: invoke the `/soleur:<skill>` slash command with the user's request as arguments.
-5. When routing to an agent, use the `run_subagent` tool with the agent id and the user's request as the prompt.
+5. When routing to an agent, use the `run_subagent` tool with a profile (`subagent_explore` for read-only tasks needing no exec/git/gh/webfetch, otherwise `subagent_general`) and the user's request plus the agent's absolute definition path as the prompt.
 6. Do not improvise workflow steps. Route through the named skill or agent.

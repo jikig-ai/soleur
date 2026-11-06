@@ -1,0 +1,8 @@
+repo=acme-fixture/launch-demo
+host=github.com
+visibility=PRIVATE
+catalog_hash=da39a3ee5e6b4b0d3255bfef95601890afd80709
+report_hash=e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+created=2026-11-03T00:00:00Z
+id	severity	domain	class	action	title
+CI-01	high	tests-ci	readiness	create	CI workflow present

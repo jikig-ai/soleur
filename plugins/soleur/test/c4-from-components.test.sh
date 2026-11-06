@@ -8,7 +8,7 @@
 # relationship-count gate is observed BOTH red and green by the same producer.
 # A gate that has never been seen red is not a gate.
 #
-# Renders with the pinned likec4@1.50.0, same as c4-model-freshness.test.sh: the
+# Renders with the pinned likec4@1.60.0, same as c4-model-freshness.test.sh: the
 # `test-scripts` CI shard installs it globally (which only warms npx's download cache) and
 # `npx -y` fetches it locally on first run. When the CLI is genuinely unreachable the producer degrades cleanly
 # (status=degraded reason=likec4-unavailable), which this suite treats as a SKIP

@@ -21,7 +21,7 @@ describe("sanitizeErrorForClient", () => {
       sanitizeErrorForClient(
         new Error("Review gate not found or already resolved"),
       ),
-    ).toBe("This review prompt has already been answered.");
+    ).toBe("This prompt is no longer waiting for an answer. If it expired, nothing was done.");
     expect(sanitizeErrorForClient(new Error("Conversation not found"))).toBe(
       "Conversation not found. Please start a new session.",
     );

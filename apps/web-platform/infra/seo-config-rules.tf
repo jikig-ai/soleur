@@ -129,7 +129,7 @@
 # 2026-03-17) and carried one live dashboard-created rule:
 #
 #   description: "Flexible SSL for web platform"
-#   expression:  (http.host eq "app.soleur.ai")
+#   expression:  (http.host in {"app.soleur.ai" "lb-staging.soleur.ai"})
 #   action:      set_config { ssl: "flexible" }
 #
 # Had this resource been applied as originally written — one rules block, no
@@ -272,7 +272,7 @@ resource "cloudflare_ruleset" "seo_config_settings" {
     action      = "set_config"
     description = "Flexible SSL for web platform"
     enabled     = true
-    expression  = "(http.host eq \"app.soleur.ai\")"
+    expression  = "(http.host in {\"app.soleur.ai\" \"lb-staging.soleur.ai\"})"
     ref         = "dcb85b75bc3c4f4aa2a8c13a080bf854"
     action_parameters {
       ssl = "flexible"

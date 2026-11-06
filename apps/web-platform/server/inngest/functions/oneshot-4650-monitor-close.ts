@@ -288,9 +288,7 @@ export const oneshot4650MonitorClose = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: { event: "oneshot/monitor-close-4650.fire" },
   },
-  { event: "oneshot/monitor-close-4650.fire" },
-  oneshot4650MonitorCloseHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  oneshot4650MonitorCloseHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

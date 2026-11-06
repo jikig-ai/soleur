@@ -37,9 +37,9 @@ import "./c4-theme.css";
 import type { Diagnostic } from "@/lib/c4-model-shape";
 
 // By supplying our own MantineProvider (Lever 1, below) we displace
-// @likec4/diagram's DefaultMantineProvider — which the library renders only when
-// no MantineContext is in scope (EnsureMantine.js). That default provider also
-// carries a theme (createTheme in DefaultMantineProvider.js). The diagram BODY is
+// @likec4/diagram's LikeC4MantineProvider — which the library renders only when
+// no MantineContext is in scope (context/EnsureMantine.mjs). That default
+// provider also carries a theme (createTheme in LikeC4MantineProvider.mjs). The diagram BODY is
 // driven by static `--likec4-*` CSS vars and is unaffected, but the interactive
 // chrome (controls, element-details, segmented control) reads Mantine's primary
 // accent + cursor/radius from the theme. Preserve only the zero-drift theme

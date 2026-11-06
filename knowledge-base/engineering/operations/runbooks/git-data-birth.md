@@ -1,6 +1,6 @@
 # Runbook — birthing the git-data host
 
-> **DISABLED from the Option B merge until #11194 (2026-10-26, #8211).** The `git-data-host-create`, `git-data-host-replace` and `git-data-host-rotate` routes still demand the retired plaintext volume and attachment addresses, so their gates refuse every plan. Do not dispatch them. If the git-data host is lost in that window, stop and escalate to the owner; see the "Plaintext-volume destroy (Option B...)" section of `git-data-luks-cutover-5274.md` and ADR-239 Amendment 2026-10-26, item 4.
+> **Dispatch gating (#11194, ADR-239 Amendment 2026-10-28).** The `git-data-host-create`, `git-data-host-replace` and `git-data-host-rotate` gates no longer demand the retired plaintext volume and attachment addresses (`hcloud_volume.git_data`, `hcloud_volume_attachment.git_data`); a create, update, delete or forget on either is refused as out-of-scope (a `no-op` or `read` is not a change). Three things still hold the routes, independently: (a) the **rung-2 rehearsal evidence**, stale since #11342 changed a bound payload (so `plan_only` holds there too; a fresh rehearsal is a paid Hetzner host and the owner's act; letting `plan_only` grade a plan past the hold is tracked in #11460); (b) the **plaintext-id interlock**, which refuses while `apps/web-platform/infra/git-data.tf` passes a non-empty `git_data_volume_id` to `module "git_data_userdata"` (that literal names the plaintext device destroyed on 2026-10-27, and a host created from it boots into the bootstrap's `plaintext_unverified` FATAL), until the `git_data_volume_id = ""` change (#11449) merges; (c) the authorization-map gate and the environment approval are separate gates and are unchanged. The interlock PASS alone releases nothing. **Owner sequence:** (1) The owner merges this change. (2) [owner acknowledgement; paid Hetzner host; reviewer approval on the rehearsal's `web-platform-infra-apply` environment, which reads `prevent_self_review: false` with a single reviewer, so the owner can approve their own dispatch] The owner dispatches `gh workflow run git-data-rung2-rehearsal.yml --ref main -f confirm=REHEARSE-GIT-DATA -f dry_run=false` (`dry_run` defaults to `true`, which only plans and uploads no evidence; `teardown_only` is the recovery arm for a failed teardown; a non-`main` ref is refused later as `RUN_NOT_MAIN`). The hash is identical on `main` and on this branch, so it may run before step 1. (3) The capture script (`scripts/followthroughs/git-data-rung2-evidence-capture.sh`) runs inside the rehearsal workflow. On a PASS its run summary prints the next commands: `gh run download <run id> -n git-data-rung2-boot-evidence`, move the file into `apps/web-platform/infra/`, append the `RUNG2_SENTRY_CROSSCHECK_ACK` line first if the summary says ACK REQUIRED, commit the evidence ALONE on a branch (Guard 4 refuses a commit that also touches a hash-bound file), run `git_data_rung2_rehearsal_gate`, and open the evidence PR. The workflow never commits it (`contents: read`); the owner or a reviewer merges that PR. (4) The owner merges the `git_data_volume_id = ""` change (#11449) only when ready to dispatch in the same sitting: from that merge `scheduled-terraform-drift.yml` files `infra: drift detected in web-platform` until the dispatch. (5) A `plan_only=true` dispatch of `git-data-host-replace`, whose result is pasted on #11194. It can reach a verdict only once the rung-2 evidence is fresh (rung-2 holds first, even under `plan_only`), and the interlock then shows PASS after step 4. (6) The owner records acceptance of the unrehearsed empty-id branch as a comment on #11194 (CTO ruling B). It has never booted on a real host (#10296), and a fresh rehearsal does NOT exercise it (`rehearsal.tf` passes a non-empty id). (7) The owner-only real `git-data-host-replace` dispatch: the `reason` input is required, and the job's environment is `infra-privileged`, which has no reviewers and a main-only branch policy, so there is no approval click; the control is the owner's own go-ahead naming the command. (8) Post-dispatch verification; the owner closes the drift issue by hand after the first drift run that logs "No drift detected in web-platform" (the drift workflow only comments, and `scripts/infra-drift-autoclose.sh` skips plans that replace a host) and closes #11194. #11433 comes later and carries its own rehearsal. If the git-data host is lost before then, stop and escalate to the owner; the `rung2-known-good` break-glass route is not usable for this tree (see "If the git-data host is lost" in the section "Plaintext-volume destroy (Option B...)" of `git-data-luks-cutover-5274.md`).
 
 > ## Release record — the DO-NOT-DISPATCH banner was cleared 2026-09-13 (PR #8128, merged 2026-09-14)
 >
@@ -96,14 +96,12 @@ standing when you decide to dispatch at all.
 `confirm=BIRTH-GIT-DATA` is a **typo guard, not an authorization**. The authorization is the
 environment approval.
 
-**1 — Repositories are NOT encrypted at rest before the cutover.** `luks_mounted` is about
-the **device**, not the repositories. `git-data-bootstrap.sh` pins that wording itself, under
-AC30:
-
-> `luks_mounted` is about the DEVICE. It says NOTHING about the repositories being encrypted
-> at rest — they are NOT, REPO_ROOT is the PLAINTEXT volume until the cutover.
-
-A green boot is fully compatible with every repository sitting on plaintext storage.
+**1 — `luks_mounted` is about the device, not what is stored on it.** `git-data-bootstrap.sh`
+pins that wording itself, under AC30: `luks_mounted` says the mapper serves `$GIT_DATA_ROOT`.
+Since #8211 `REPO_ROOT` is on that device; the other booleans (`fence_on_mapper`,
+`erasure_probe`, `plaintext_empty`) attest the rest, so read those, not `luks_mounted` alone.
+(An earlier version of this item said the repositories are on a plaintext volume until the
+cutover; that stopped being true for the bootstrap with #8211.)
 
 **2 — The approval is NOT two-party.** `web-platform-infra-apply` reports
 `prevent_self_review: false` with a single reviewer, so **the person who dispatches can
@@ -242,11 +240,15 @@ approval: the interlock, the birth gate, and the stock preflight.
    structurally incapable of catching this class: `rung2-rehearsal/rehearsal.tf` sets all
    three pubkeys to one `tls_private_key` by design, so a production collapse is a **no-op**
    there and the evidence still records PASS.
-5. Mints a throwaway SSH key (HCL evaluates `file()` at plan time; the git-data host is
+5. **Plaintext-id interlock** (#11194) — refuses while `git-data.tf` passes a non-empty
+   `git_data_volume_id` to the userdata module. Unconditional on this route: the create job
+   ignores `plan_only` and always blocks. Its verdict is in the step log and inside the
+   `::error::` annotation.
+6. Mints a throwaway SSH key (HCL evaluates `file()` at plan time; the git-data host is
    cloud-init-only and never receives it).
-6. Asserts `SENTRY_DSN` is present and non-empty — *unreadable* and *empty* get different
+7. Asserts `SENTRY_DSN` is present and non-empty — *unreadable* and *empty* get different
    messages, because they have different remedies.
-7. **`terraform plan`** scoped to twenty `-target`s — re-derive rather than trusting the
+8. **`terraform plan`** scoped to twenty `-target`s — re-derive rather than trusting the
    number here:
 
    ```
@@ -256,17 +258,17 @@ approval: the interlock, the birth gate, and the stock preflight.
         END{print n}' .github/workflows/apply-web-platform-infra.yml    # => 20
    ```
 
-8. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
+9. **Birth gate** — refuses unless the plan is exactly the scoped birth. Its message names
    which arm refused. Its last arm (#8189, shared with the replace gate) refuses unless the
    created server carries exactly the default key and the git-data root key, and the root
    key's `SHA256:` fingerprint equals `apps/web-platform/infra/git-data-root-key.fingerprint`:
    `verdict=git_data_root_key_not_in_create reason=<word>`. Remedy: dispatch
    `apply-git-data-root-key.yml`, commit its printed fingerprint, re-dispatch
    (`git-data-luks-cutover-5274.md` › verdict map).
-9. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
+10. **Stock preflight** — refuses if the server type is not orderable in its location. Runs
    *after* the birth gate: the gate proves the plan is the right plan, the preflight proves
    it is a feasible one.
-10. **`terraform apply`**.
+11. **`terraform apply`**.
 
 ## What a green run gives you — and what it does not
 
@@ -394,7 +396,7 @@ runbook by design (`hr-no-ssh-fallback-in-runbooks`).
   --json conclusion,displayTitle`. The job conclusion plus its step summary are the
   terminal signal.
 - **The step summary** restates what you have and what you do not.
-- **Hetzner** — the server, both volumes and both attachments are visible in the console.
+- **Hetzner** — the server, the LUKS volume and its attachment are visible in the console.
 
 - **The web host's reachability probe** — a real, no-SSH, post-apply signal that already
   exists:
@@ -539,9 +541,9 @@ Zero rows means the host never got that far — check (2) for the stage that die
 
 **What the boot signal does NOT say.** It reports `luks_mounted` — the LUKS *device* is open
 and mounted — and asserts **nothing** about the repositories being encrypted at rest,
-because they are not: `REPO_ROOT` is on the PLAINTEXT volume until the
-`GIT_DATA_STORE_ENABLED` cutover. Do not read it as an encryption-at-rest attestation; the
-Art. 30 register carries that distinction explicitly.
+because it says only that the mapper serves `$GIT_DATA_ROOT` (the bootstrap's AC30 wording; since
+#8211 `REPO_ROOT` is on that device, and the other booleans attest the rest). Do not read it as an
+encryption-at-rest attestation; the Art. 30 register carries that distinction explicitly.
 
 ## ForceNew hazard — read before editing either file (#6982)
 
@@ -556,7 +558,7 @@ and `user_data` is **ForceNew**. Both of these are inputs to it:
 
 **Every byte counts, comments included.** Post-birth, a one-word comment fix in either file
 costs a full `git-data-host-replace`: a destroy-then-create of the host holding every
-connected user's source code, with both volumes and the passphrase preserved *by omission*.
+connected user's source code, with the LUKS volume and the passphrase preserved *by omission*.
 Pre-birth the same edit costs a full re-rehearsal instead — the evidence binds these bytes,
 so any edit re-holds the birth until another paid cpx22 boots and a fresh evidence PR lands.
 The omission is deliberate — it preserves the clean replace-to-reprovision path — so this is a

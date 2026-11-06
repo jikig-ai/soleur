@@ -41,7 +41,7 @@ delegates `--affected` / `--full` and maps the runner's exit codes:
 | 1 | a selected suite failed | rc 1 |
 | 2 | usage error / unrecognized flag | rc 4 `runner-refused` |
 | 3 | zero failed but ≥1 suite signal-killed or declined | rc 1 `runner-signal` |
-| 4 | refused — nothing ran | rc 4 `runner-refused` |
+| 4 | refused — nothing ran (when the log shows `N sibling full-gate run(s) already in flight`, the bounded wait in [battery-refusal-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/battery-refusal-wait.md) applies; every other cause stays stop-and-fix) | rc 4 `runner-refused` |
 
 `--print-selection` must print the affected selection and exit before any suite
 runs. A runner that cannot honour this table must not register the flag — the
@@ -170,3 +170,7 @@ gate). Its exit status is the only failure signal.
 - Pytest repo without xdist → serial run with the reason printed; a pytest
   rc-5 collection is treated as empty selection, never a pass.
 - Empty native selection on a code diff → full command, `reason=empty-selection`.
+
+## Parallel pool and live reds while waiting (#12013)
+
+ADR-242 amendment. `affected-tests.sh` hands the runner `SOLEUR_TEST_JOBS=4` for a local `--affected` run (never `--full`, never under `CI`; `SOLEUR_TEST_JOBS=1` forces serial). Once the run holds the lock, the log carries `[parallel] mode engaged — width=4`; a `[parallel] serial fallback — reason=…` line says why it did not (`lock-not-held` follows budget expiry, a missing `flock` or a disabled session state, not a wait that ended in acquisition). While waiting on the rc file, read the log for a red as it happens — extend the wait loop, do not add a second one: `until [ -s "$RCF" ]; do grep -E '^\[run\] .* done \(rc=[1-9]' "$LOG" | sort -u; sleep 30; done`. A hit is provisional: do not kill or relaunch on it. Only the final exit code and the `affected-tests:` verdict line count; a red that shows up only under the pool is re-run alone with `SOLEUR_TEST_JOBS=1` before it is treated as a diff regression. A diff that edits the runner or the affected index selects the self-SUT batteries, which run one at a time at any width, so the pool does not make that run short.

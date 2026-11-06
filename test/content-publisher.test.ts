@@ -676,6 +676,8 @@ describe("post_discord webhook URL resolution", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain("CALLED_URL=https://blog-webhook");
     expect(result.stdout).toContain("[ok] Discord message posted");
+    // Blog webhook in use: no fallback marker
+    expect(result.stderr).not.toContain("SOLEUR_PUBLISHER_FALLBACK");
   });
 
   test("falls back to DISCORD_WEBHOOK_URL when blog URL not set", () => {
@@ -692,6 +694,26 @@ describe("post_discord webhook URL resolution", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toContain("CALLED_URL=https://general-webhook");
     expect(result.stdout).toContain("[ok] Discord message posted");
+    // The silent-misroute regression: fallback must be loud, not silent
+    expect(result.stderr).toContain("SOLEUR_PUBLISHER_FALLBACK");
+    expect(result.stderr).toContain("DISCORD_BLOG_WEBHOOK_URL");
+  });
+
+  test("emits fallback marker when DISCORD_BLOG_WEBHOOK_URL is empty", () => {
+    const result = runFunction(
+      `
+      curl() { echo "CALLED_URL=\${@: -1}" >&2; printf "204"; }
+      export -f curl
+      post_discord "test content"
+    `,
+      {
+        DISCORD_BLOG_WEBHOOK_URL: "",
+        DISCORD_WEBHOOK_URL: "https://general-webhook",
+      }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("CALLED_URL=https://general-webhook");
+    expect(result.stderr).toContain("SOLEUR_PUBLISHER_FALLBACK");
   });
 
   test("skips posting when no webhook URLs set", () => {
@@ -700,6 +722,8 @@ describe("post_discord webhook URL resolution", () => {
     // an all-skip file must stay `scheduled`, never flip to `published`.
     expect(result.exitCode).toBe(3);
     expect(result.stderr).toContain("No Discord webhook URL set");
+    // The skip path has its own warning — the fallback marker must not fire
+    expect(result.stderr).not.toContain("SOLEUR_PUBLISHER_FALLBACK");
   });
 });
 

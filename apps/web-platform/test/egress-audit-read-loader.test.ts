@@ -64,7 +64,10 @@ function client(opts: { summary?: ReplySource; webEgress?: ReplySource; workspac
   const orgLookups: { select: string; eq: [string, unknown][] }[] = [];
   const rpc = vi.fn((fn: string, _args?: unknown) => {
     const onSignal = (signal: unknown) => signals.push({ fn, signal });
-    if (fn === "get_egress_audit_summary") return builder(opts.summary ?? { data: payload(), error: null }, onSignal);
+    // The page reads the windowed function, the Scope Grants card the 177 function; `summary` answers both.
+    if (fn === "get_egress_audit_summary" || fn === "get_egress_audit_window_summary") {
+      return builder(opts.summary ?? { data: payload(), error: null }, onSignal);
+    }
     if (fn === "get_workspace_web_egress") return builder(opts.webEgress ?? { data: true, error: null }, onSignal);
     throw new Error(`unexpected rpc ${fn}`);
   });
@@ -127,14 +130,14 @@ describe("loadEgressAudit: pointer", () => {
   it("an absent workspace pointer is `unbound` and the RPC is never called", async () => {
     h.readWorkspaceIdFromDb.mockResolvedValue(null);
     const c = client({});
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unbound" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unbound" });
     expect(spied(c).rpc).not.toHaveBeenCalled();
   });
 
   it("a throwing pointer read is `unavailable`, mirrored once as a paged workspace_read_error, and the RPC is never called", async () => {
     h.readWorkspaceIdFromDb.mockRejectedValue(new Error("db down"));
     const c = client({});
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unavailable" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(spied(c).rpc).not.toHaveBeenCalled();
     expect(h.reportSilentFallback).toHaveBeenCalledTimes(1);
     const [err, opts] = h.reportSilentFallback.mock.calls[0];
@@ -149,7 +152,7 @@ describe("loadEgressAudit: pointer", () => {
     try {
       h.readWorkspaceIdFromDb.mockReturnValue(new Promise(() => {}));
       const c = client({});
-      const p = loadEgressAudit(c, USER, "all");
+      const p = loadEgressAudit(c, USER, "all", "30d");
       await vi.advanceTimersByTimeAsync(1_999);
       expect(h.reportSilentFallback).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
@@ -169,14 +172,14 @@ describe("loadEgressAudit: 42501 discrimination", () => {
     ["revoked token", "egress audit: token denied"],
   ])("the RPC's in-body %s denial is `forbidden` and is NOT mirrored", async (_label, message) => {
     const c = client({ summary: { data: null, error: { code: "42501", message } } });
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "forbidden" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "forbidden" });
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
     expect(h.mirrorWarnWithDebounce).not.toHaveBeenCalled();
   });
 
   it("the engine's own 42501 (a lost grant) is `unavailable` with exactly one paged rpc_error tagged pg_code=42501", async () => {
-    const c = client({ summary: { data: null, error: { code: "42501", message: "permission denied for function get_egress_audit_summary" } } });
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unavailable" });
+    const c = client({ summary: { data: null, error: { code: "42501", message: "permission denied for function get_egress_audit_window_summary" } } });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(faults()).toHaveLength(1);
     expect(faults()[0]).toMatchObject({
       feature: "egress-audit-read",
@@ -195,7 +198,7 @@ describe("loadEgressAudit: 42501 discrimination", () => {
     ["the right message with a different SQLSTATE", { code: "P0001", message: "egress audit: workspace membership required" }],
   ])("42501 with %s is a fault: `unavailable` plus one paged mirror", async (_label, error) => {
     const c = client({ summary: { data: null, error } });
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unavailable" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(faults()).toHaveLength(1);
     expect(faults()[0].op).toBe("rpc_error");
   });
@@ -204,7 +207,7 @@ describe("loadEgressAudit: 42501 discrimination", () => {
 describe("loadEgressAudit: RPC faults", () => {
   it("any other RPC error is `unavailable` and mirrored with op rpc_error, err null, a static message and the pg_code tag", async () => {
     const c = client({ summary: { data: null, error: { code: "XX000", message: "boom for workspace " + WS } } });
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unavailable" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(h.reportSilentFallback).toHaveBeenCalledTimes(1);
     const [err, opts] = h.reportSilentFallback.mock.calls[0];
     expect(err).toBeNull();
@@ -215,7 +218,7 @@ describe("loadEgressAudit: RPC faults", () => {
   it("pg_code is low-cardinality: PostgREST codes pass, an absent code is `none`, anything else is `other`", async () => {
     const tagFor = async (error: { code?: string; message?: string }) => {
       h.reportSilentFallback.mockClear();
-      await loadEgressAudit(client({ summary: { data: null, error } }), USER, "all");
+      await loadEgressAudit(client({ summary: { data: null, error } }), USER, "all", "30d");
       return faults()[0].tags;
     };
     expect(await tagFor({ code: "PGRST301", message: "jwt" })).toEqual({ pg_code: "PGRST301" });
@@ -226,7 +229,7 @@ describe("loadEgressAudit: RPC faults", () => {
 
   it("an aborted RPC is `unavailable` with op rpc_timeout", async () => {
     const c = client({ summary: { data: null, error: { name: "AbortError", message: "The operation was aborted" } } });
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unavailable" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(faults()).toHaveLength(1);
     expect(faults()[0]).toMatchObject({ op: "rpc_timeout", tags: { pg_code: "none" } });
   });
@@ -235,7 +238,7 @@ describe("loadEgressAudit: RPC faults", () => {
     vi.useFakeTimers();
     try {
       const c = client({ summary: neverRpc });
-      const p = loadEgressAudit(c, USER, "all");
+      const p = loadEgressAudit(c, USER, "all", "30d");
       await vi.advanceTimersByTimeAsync(7_999);
       expect(h.reportSilentFallback).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
@@ -253,13 +256,13 @@ describe("loadEgressAudit: RPC faults", () => {
         throw new Error("fetch failed");
       },
     });
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unavailable" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(faults().map((f) => f.op)).toEqual(["rpc_error"]);
   });
 
   it("collection and web access are not read before the RPC succeeds", async () => {
     const c = client({ summary: { data: null, error: { code: "XX000", message: "x" } } });
-    await loadEgressAudit(c, USER, "all");
+    await loadEgressAudit(c, USER, "all", "30d");
     expect(rpcArgs(c, "get_workspace_web_egress")).toEqual([]);
     expect(spied(c).from).not.toHaveBeenCalled();
     expect(h.readEgressAuditCollectionState).not.toHaveBeenCalled();
@@ -281,12 +284,12 @@ describe("loadEgressAudit: payload validation", () => {
   };
 
   it("control: the near-valid payload the cases below mutate is `ready`", async () => {
-    expect(await loadEgressAudit(client({ summary: { data: base(), error: null } }), USER, "all")).toMatchObject({ kind: "ready" });
+    expect(await loadEgressAudit(client({ summary: { data: base(), error: null } }), USER, "all", "30d")).toMatchObject({ kind: "ready" });
   });
 
   it("a stored decision the view does not know is still accepted (the view maps it to Other)", async () => {
     const data = payload({ rows: [row({ decision: "quarantined" })], overflow: [{ decision: "weird", request_count: 2, last_seen: "2026-10-26T12:00:00Z" }] });
-    expect(await loadEgressAudit(client({ summary: { data, error: null } }), USER, "all")).toMatchObject({ kind: "ready" });
+    expect(await loadEgressAudit(client({ summary: { data, error: null } }), USER, "all", "30d")).toMatchObject({ kind: "ready" });
   });
 
   it.each<[string, unknown]>([
@@ -316,26 +319,39 @@ describe("loadEgressAudit: payload validation", () => {
     ["an overflow element with a negative count", payload({ overflow: [{ decision: "allowed", request_count: -3, last_seen: "2026-10-26T12:00:00Z" }] })],
   ])("a malformed body (%s) is `unavailable` with one paged rpc_error, never an empty `ready`", async (_label, data) => {
     const c = client({ summary: { data, error: null } });
-    await expect(loadEgressAudit(c, USER, "all")).resolves.toEqual({ kind: "unavailable" });
+    await expect(loadEgressAudit(c, USER, "all", "30d")).resolves.toEqual({ kind: "unavailable" });
     expect(faults()).toHaveLength(1);
     expect(faults()[0]).toMatchObject({ op: "rpc_error", message: "egress audit read: summary body was malformed" });
   });
 });
 
 describe("loadEgressAudit: ready", () => {
-  it("calls the RPC with the pointer's workspace id and only the documented arguments; `blocked` maps to `denied`", async () => {
+  it("calls the windowed RPC with the pointer's workspace id and exactly the four named arguments; `blocked` maps to `denied`", async () => {
     const c = client({});
-    await loadEgressAudit(c, USER, "blocked");
-    expect(rpcArgs(c, "get_egress_audit_summary")).toEqual([{ p_workspace_id: WS, p_limit: 200, p_decision: "denied" }]);
+    await loadEgressAudit(c, USER, "blocked", "30d");
+    expect(rpcArgs(c, "get_egress_audit_window_summary")).toEqual([{ p_workspace_id: WS, p_limit: 200, p_decision: "denied", p_window: "30d" }]);
     const c2 = client({});
-    await loadEgressAudit(c2, USER, "all");
-    expect(rpcArgs(c2, "get_egress_audit_summary")).toEqual([{ p_workspace_id: WS, p_limit: 200, p_decision: null }]);
+    await loadEgressAudit(c2, USER, "all", "30d");
+    expect(rpcArgs(c2, "get_egress_audit_window_summary")).toEqual([{ p_workspace_id: WS, p_limit: 200, p_decision: null, p_window: "30d" }]);
+  });
+
+  it.each([
+    ["24h", "all", null],
+    ["24h", "blocked", "denied"],
+    ["7d", "allowed", "allowed"],
+    ["7d", "other", "other"],
+    ["30d", "blocked", "denied"],
+  ] as const)("window %s x decision %s reaches the RPC as p_window=%s with exactly four arguments, one call, and never the 177 function", async (win, filter, decision) => {
+    const c = client({});
+    await loadEgressAudit(c, USER, filter, win);
+    expect(rpcArgs(c, "get_egress_audit_window_summary")).toEqual([{ p_workspace_id: WS, p_limit: 200, p_decision: decision, p_window: win }]);
+    expect(rpcArgs(c, "get_egress_audit_summary")).toEqual([]);
   });
 
   it("both RPC reads carry an AbortSignal, and the web-access and org reads are keyed on the pointer's workspace", async () => {
     const c = client({});
-    await loadEgressAudit(c, USER, "all");
-    for (const fn of ["get_egress_audit_summary", "get_workspace_web_egress"]) {
+    await loadEgressAudit(c, USER, "all", "30d");
+    for (const fn of ["get_egress_audit_window_summary", "get_workspace_web_egress"]) {
       const sigs = signalsFor(c, fn);
       expect([fn, sigs.length]).toEqual([fn, 1]);
       expect([fn, sigs[0] instanceof AbortSignal]).toEqual([fn, true]);
@@ -346,8 +362,24 @@ describe("loadEgressAudit: ready", () => {
     expect(spied(c).orgLookups).toEqual([{ select: "organization_id, name", eq: [["id", WS]] }]);
   });
 
+  it("a PGRST202 reply (the function is not in the schema cache yet) is `unavailable` with one paged rpc_error tagged PGRST202, and never falls back to the 177 function", async () => {
+    const c = client({ summary: { data: null, error: { code: "PGRST202", message: "Could not find the function public.get_egress_audit_window_summary" } } });
+    await expect(loadEgressAudit(c, USER, "all", "7d")).resolves.toEqual({ kind: "unavailable" });
+    expect(faults()).toHaveLength(1);
+    expect(faults()[0]).toMatchObject({ feature: "egress-audit-read", op: "rpc_error", tags: { pg_code: "PGRST202" } });
+    expect(rpcArgs(c, "get_egress_audit_summary")).toEqual([]);
+    expect(rpcArgs(c, "get_egress_audit_window_summary")).toHaveLength(1);
+  });
+
+  it("a 22023 reply (allowlist drift) is a paged rpc_error, not `forbidden`", async () => {
+    const c = client({ summary: { data: null, error: { code: "22023", message: "egress audit: invalid window" } } });
+    await expect(loadEgressAudit(c, USER, "all", "24h")).resolves.toEqual({ kind: "unavailable" });
+    expect(faults()).toHaveLength(1);
+    expect(faults()[0]).toMatchObject({ op: "rpc_error", tags: { pg_code: "22023" } });
+  });
+
   it("carries the payload, the workspace name, collection and web access", async () => {
-    const out = await loadEgressAudit(client({}), USER, "all");
+    const out = await loadEgressAudit(client({}), USER, "all", "30d");
     expect(out).toMatchObject({ kind: "ready", collection: true, webAccess: true, workspaceName: "Acme" });
     if (out.kind === "ready") expect(out.data.rows[0].host).toBe("a.example.test");
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
@@ -358,13 +390,13 @@ describe("loadEgressAudit: ready", () => {
 describe("loadEgressAudit: collection state", () => {
   it.each<[true | false | "unknown"]>([[true], [false], ["unknown"]])("passes the tri-state %s through unchanged", async (state) => {
     h.readEgressAuditCollectionState.mockResolvedValue(state);
-    expect(await loadEgressAudit(client({}), USER, "all")).toMatchObject({ kind: "ready", collection: state });
+    expect(await loadEgressAudit(client({}), USER, "all", "30d")).toMatchObject({ kind: "ready", collection: state });
     expect(h.readEgressAuditCollectionState).toHaveBeenCalledWith(ORG);
   });
 
   it("a throwing flag read is `unknown` with an unpaged flag_eval warning", async () => {
     h.readEgressAuditCollectionState.mockRejectedValue(new Error("flagsmith"));
-    expect(await loadEgressAudit(client({}), USER, "all")).toMatchObject({ kind: "ready", collection: "unknown", workspaceName: "Acme" });
+    expect(await loadEgressAudit(client({}), USER, "all", "30d")).toMatchObject({ kind: "ready", collection: "unknown", workspaceName: "Acme" });
     expect(warns().map((w) => w.op)).toEqual(["flag_eval"]);
     expect(warns()[0].message).toBe("egress audit read: collection flag evaluation failed");
     expect(h.reportSilentFallback).not.toHaveBeenCalled();
@@ -372,7 +404,7 @@ describe("loadEgressAudit: collection state", () => {
 
   it("an org read that errors is `unknown` with an unpaged org_read warning, and the flag is not asked", async () => {
     const bad = client({ workspaceRow: { data: null, error: { message: "rls" } } });
-    expect(await loadEgressAudit(bad, USER, "all")).toMatchObject({ kind: "ready", collection: "unknown", workspaceName: null });
+    expect(await loadEgressAudit(bad, USER, "all", "30d")).toMatchObject({ kind: "ready", collection: "unknown", workspaceName: null });
     expect(warns().map((w) => w.op)).toEqual(["org_read"]);
     expect(warns()[0].message).toBe("egress audit read: collection organisation could not be read");
     expect(h.readEgressAuditCollectionState).not.toHaveBeenCalled();
@@ -385,7 +417,7 @@ describe("loadEgressAudit: collection state", () => {
         throw new Error("net");
       },
     });
-    expect(await loadEgressAudit(bad, USER, "all")).toMatchObject({ collection: "unknown", workspaceName: null });
+    expect(await loadEgressAudit(bad, USER, "all", "30d")).toMatchObject({ collection: "unknown", workspaceName: null });
     expect(warns().map((w) => w.op)).toEqual(["org_read"]);
   });
 
@@ -393,7 +425,7 @@ describe("loadEgressAudit: collection state", () => {
     vi.useFakeTimers();
     try {
       const c = client({ workspaceRow: neverRpc });
-      const p = loadEgressAudit(c, USER, "all");
+      const p = loadEgressAudit(c, USER, "all", "30d");
       await vi.advanceTimersByTimeAsync(1_499);
       expect(h.mirrorWarnWithDebounce).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
@@ -408,7 +440,7 @@ describe("loadEgressAudit: collection state", () => {
     vi.useFakeTimers();
     try {
       h.readEgressAuditCollectionState.mockReturnValue(new Promise(() => {}));
-      const p = loadEgressAudit(client({}), USER, "all");
+      const p = loadEgressAudit(client({}), USER, "all", "30d");
       await vi.advanceTimersByTimeAsync(1_500);
       await expect(p).resolves.toMatchObject({ kind: "ready", collection: "unknown", workspaceName: "Acme" });
       expect(warns().map((w) => w.op)).toEqual(["flag_eval"]);
@@ -421,13 +453,13 @@ describe("loadEgressAudit: collection state", () => {
 
 describe("loadEgressAudit: web access", () => {
   it("true and false are passed through without a mirror", async () => {
-    expect(await loadEgressAudit(client({ webEgress: { data: false, error: null } }), USER, "all")).toMatchObject({ webAccess: false });
-    expect(await loadEgressAudit(client({ webEgress: { data: true, error: null } }), USER, "all")).toMatchObject({ webAccess: true });
+    expect(await loadEgressAudit(client({ webEgress: { data: false, error: null } }), USER, "all", "30d")).toMatchObject({ webAccess: false });
+    expect(await loadEgressAudit(client({ webEgress: { data: true, error: null } }), USER, "all", "30d")).toMatchObject({ webAccess: true });
     expect(h.mirrorWarnWithDebounce).not.toHaveBeenCalled();
   });
 
   it("an RPC error is null with an unpaged web_access_read warning carrying the pg_code tag", async () => {
-    const out = await loadEgressAudit(client({ webEgress: { data: null, error: { code: "42501", message: "x" } } }), USER, "all");
+    const out = await loadEgressAudit(client({ webEgress: { data: null, error: { code: "42501", message: "x" } } }), USER, "all", "30d");
     expect(out).toMatchObject({ kind: "ready", webAccess: null });
     expect(warns()).toHaveLength(1);
     expect(warns()[0]).toMatchObject({ op: "web_access_read", tags: { pg_code: "42501" } });
@@ -440,7 +472,7 @@ describe("loadEgressAudit: web access", () => {
   it("non-boolean data (null, a string) is null with a web_access_read warning", async () => {
     for (const data of [null, "true"]) {
       h.mirrorWarnWithDebounce.mockClear();
-      expect(await loadEgressAudit(client({ webEgress: { data, error: null } }), USER, "all")).toMatchObject({ webAccess: null });
+      expect(await loadEgressAudit(client({ webEgress: { data, error: null } }), USER, "all", "30d")).toMatchObject({ webAccess: null });
       expect(warns().map((w) => w.op)).toEqual(["web_access_read"]);
     }
   });
@@ -451,14 +483,14 @@ describe("loadEgressAudit: web access", () => {
         throw new Error("net");
       },
     });
-    expect(await loadEgressAudit(c, USER, "all")).toMatchObject({ kind: "ready", webAccess: null });
+    expect(await loadEgressAudit(c, USER, "all", "30d")).toMatchObject({ kind: "ready", webAccess: null });
     expect(warns().map((w) => w.op)).toEqual(["web_access_read"]);
   });
 
   it("a web-access RPC that outlives 1.5 s is null with a web_access_read warning; the page still renders", async () => {
     vi.useFakeTimers();
     try {
-      const p = loadEgressAudit(client({ webEgress: neverRpc }), USER, "all");
+      const p = loadEgressAudit(client({ webEgress: neverRpc }), USER, "all", "30d");
       await vi.advanceTimersByTimeAsync(1_500);
       await expect(p).resolves.toMatchObject({ kind: "ready", webAccess: null, collection: true });
       expect(warns().map((w) => w.op)).toEqual(["web_access_read"]);
@@ -479,6 +511,9 @@ describe("loadEgressCardState", () => {
     const out = await loadEgressCardState(c, USER);
     expect(out).toEqual({ lastRequestAt: "2026-10-26T11:00:00Z", collection: true, workspaceId: WS });
     expect(rpcArgs(c, "get_egress_audit_summary")).toEqual([{ p_workspace_id: WS, p_limit: 0, p_decision: null }]);
+    // Ruling 1: the Scope Grants hot path stays on the 177 function, with no window argument.
+    expect(Object.keys((rpcArgs(c, "get_egress_audit_summary")[0] ?? {}) as object)).toEqual(["p_workspace_id", "p_limit", "p_decision"]);
+    expect(rpcArgs(c, "get_egress_audit_window_summary")).toEqual([]);
     const sigs = signalsFor(c, "get_egress_audit_summary");
     expect(sigs).toHaveLength(1);
     expect(sigs[0] instanceof AbortSignal).toBe(true);

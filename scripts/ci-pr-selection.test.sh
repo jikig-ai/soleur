@@ -1490,7 +1490,7 @@ mutate "G2-11 a record absent from the selection is accepted" "$PRISTINE" "$(kil
 mutate "G2-11 an always_on class row is accepted"  "$PRISTINE" "$(kill_guard G2-11-ALWAYS-ON)"             row_groups row_real_shape
 mutate "G2-11 a selected (sel=1) row is accepted"  "$PRISTINE" "$(kill_guard G2-11-SELECTED)"               row_groups row_real_shape
 mutate "G2-11 an empty stream is accepted"         "$PRISTINE" "$(kill_guard G2-11-NO-RECORDS)"            row_groups
-mutate "G2-11 a decline needs no pr-gated label"   "$PRISTINE" 's|^    "scripts/test-all-affected") return 0 ;;$|    *) return 0 ;;|' row_groups row_real_shape
+mutate "G2-11 a decline needs no pr-gated label"   "$PRISTINE" 's|^    "scripts/test-all-affected-a") return 0 ;;$|    *) return 0 ;;|' row_groups row_real_shape
 mutate "G2-11 an empty or unknown group token is kept as is" "$PRISTINE" "$(kill_guard G2-11-EMPTY-TOK)"       row_empty_tok
 mutate "G2-11 an empty group token is not degraded" "$PRISTINE" 's#bad_rc|parse|missing_row|no_records|empty) degraded=1#bad_rc|parse|missing_row|no_records) degraded=1#' row_empty_tok   # EQUIVALENT-LABEL (the reason IS the signal)
 # G2-14

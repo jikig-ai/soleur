@@ -57,6 +57,13 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — deepened excluded tables (co-membe
           values (${ctx.userA}, ${msgA}, 'general', 'auto', ${`h-${randomUUID()}`}, ${`s-${randomUUID()}`}, ${`r-${randomUUID()}`}, ${grantA})
           returning id`;
         ids.action_sends = as.id as string;
+
+        // A pending approval request of wsA (mig 180); owner-gated SELECT. Created through the service-role RPC.
+        const [appr] = await t<{ r: { approval: { id: string } } }[]>`
+          select public.create_approval_request(
+            ${ctx.wsA}::uuid, ${ctx.convA}::uuid, ${ctx.userA}::uuid, 'mcp__soleur_platform__email_send',
+            ${`${randomUUID()}${randomUUID()}`.replaceAll("-", "")}::text, '{"v":1}'::jsonb, 86400) as r`;
+        ids.approval_request = appr.r.approval.id;
       }),
     );
   });
@@ -67,7 +74,7 @@ describe.skipIf(!ENABLED)("RLS/authz-fuzz — deepened excluded tables (co-membe
   // SELECT-USING isolation, shared shape: service_role precondition, OWNER positive
   // control (userA), CO-MEMBER negative (userC — a wsA member who is neither the
   // row's user nor the workspace owner → must be denied).
-  for (const table of ["email_triage_items", "inbox_item", "dsar_export_jobs", "action_sends"]) {
+  for (const table of ["email_triage_items", "inbox_item", "dsar_export_jobs", "action_sends", "approval_request"]) {
     test(`deepened-excluded SELECT isolation: ${table}`, async () => {
       const id = ids[table];
       expect(await withTransientRetry(() => countById(sql, table, id)), `${table}: seed precondition`).toBe(1);

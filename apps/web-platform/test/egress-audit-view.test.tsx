@@ -19,7 +19,15 @@ vi.mock("@/components/settings/egress-audit-refresh-button", () => ({
 
 import { EgressAuditView } from "@/components/settings/egress-audit-view";
 import { EGRESS_AUDIT_HEADING_ID } from "@/components/settings/egress-audit-focus";
-import { EGRESS_AUDIT_PATH, PAGE_LIMIT, type EgressAuditPayload, type EgressAuditResult } from "@/lib/egress-audit/summary";
+import {
+  EGRESS_AUDIT_PATH,
+  PAGE_LIMIT,
+  TIME_WINDOWS,
+  WINDOW_LABEL,
+  type EgressAuditPayload,
+  type EgressAuditResult,
+  type TimeWindow,
+} from "@/lib/egress-audit/summary";
 
 // Substring match on the accessible name: a host is data here, not a pattern.
 const rowFor = (host: string) =>
@@ -67,8 +75,11 @@ const ready = (data: EgressAuditPayload, over: Partial<Extract<EgressAuditResult
   ...over,
 });
 
-const show = (result: EgressAuditResult, filter: "all" | "allowed" | "blocked" | "other" = "all") =>
-  render(<EgressAuditView result={result} filter={filter} now={NOW} />);
+type Filter = "all" | "allowed" | "blocked" | "other";
+// window-assembly: timeWindow — not a regex-extracted source region: it is the selected time window (24h / 7d / 30d)
+// the view is rendered with. The closure assertions below are complete against TIME_WINDOWS and the LADDER states.
+const show = (result: EgressAuditResult, filter: Filter = "all", timeWindow: TimeWindow = "30d") =>
+  render(<EgressAuditView result={result} filter={filter} timeWindow={timeWindow} now={NOW} />);
 
 afterEach(cleanup);
 
@@ -130,7 +141,7 @@ describe("EgressAuditView — populated", () => {
     expect(PAGE_LIMIT).toBeGreaterThan(0);
     const trunc = screen.getByText(`Showing the ${PAGE_LIMIT} most recent entries.`);
     expect(trunc.textContent).toContain(String(PAGE_LIMIT));
-    expect(screen.getByText("Older entries in this 30-day window are not listed, and counts are minimums.")).toBeTruthy();
+    expect(screen.getByText("Older entries in this window are not listed, and counts are minimums.")).toBeTruthy();
     const overflowRow = screen.getAllByRole("row").find((r) => r.textContent?.includes("Other hosts, not listed individually"));
     expect(overflowRow).toBeTruthy();
     expect(within(overflowRow as HTMLElement).getByText("at least 1,240")).toBeTruthy();
@@ -264,9 +275,9 @@ describe("EgressAuditView — empty ladder", () => {
     expect(document.body.textContent).not.toMatch(/Recording since/);
   });
 
-  it("collection on and web access off, no rows: 'Nothing recorded in the last 30 days'", () => {
+  it("collection on and web access off, no rows: 'Nothing recorded in about the last 30 days'", () => {
     show(ready(empty(), { webAccess: false }));
-    expect(screen.getByText("Nothing recorded in the last 30 days")).toBeTruthy();
+    expect(screen.getByText("Nothing recorded in about the last 30 days")).toBeTruthy();
     expect(screen.getByText(/Web access is off, so nothing new is recorded/)).toBeTruthy();
   });
 
@@ -287,7 +298,7 @@ describe("EgressAuditView — empty ladder", () => {
 
   it("a filter with no matches while the window has requests is its own line with 'Show all', chips kept", () => {
     show(ready(empty({ summary: { request_count_min: 500, blocked_request_count_min: 0, last_request_at: "2026-10-26T12:00:00Z" } })), "blocked");
-    expect(screen.getByText("No Blocked requests in the last 30 days.")).toBeTruthy();
+    expect(screen.getByText("No Blocked requests recorded in about the last 30 days.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Show all" }).getAttribute("href")).toBe(BASE);
     expect(screen.getByRole("navigation", { name: "Filter by outcome" })).toBeTruthy();
     expect(screen.queryByText("No requests recorded yet")).toBeNull();
@@ -372,5 +383,348 @@ describe("EgressAuditView — copy rules", () => {
   it("the 'Other' explainer says 'allowed through' and the chips never claim completeness", () => {
     show(ready(payload()));
     expect(screen.getByText(/Other: the request was neither allowed through nor blocked by policy/)).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// #11238 — the time-window selector. The window is chosen by the URL; the view derives every window-scoped
+// sentence from it. Retention and visibility sentences are never windowed.
+// ---------------------------------------------------------------------------------------------------------
+
+const WINDOW_NAV = { name: "Time window" } as const;
+const SOME = { request_count_min: 500, blocked_request_count_min: 0, last_request_at: "2026-10-26T12:00:00Z" };
+const SHORTER = ["24h", "7d"] as const;
+
+const BANNER_LEAD = "A best-effort summary, not a full record.";
+const BANNER_BODY =
+  "Some requests may be missing and counts are minimums. Every current member of this workspace can see this list, including activity from before they joined. No member or session is recorded. Records are deleted about 30 days after they were recorded.";
+const RETENTION = "Records are deleted about 30 days after they were recorded.";
+const WEB_OFF_EMPTY_BODY = "Web access is off, so nothing new is recorded. Records are deleted about 30 days after they were recorded.";
+const RECORDING_OFF_BODY = "Nothing is listed because recording hasn't started, not because agents made no requests. When it starts, the sites agents contact appear here.";
+
+// Wording bans (spec FR4 + CTO ruling 3): the copy describes only what is measured.
+const BANNED = /\bexactly\b|\bcomplete\b|\bguarantee|\bwe block\b|\bprevent|\bprotect|every connection|tamper-proof|\bsessions\b/i;
+
+type Cell = { name: string; result: EgressAuditResult; filter: Filter };
+// The state ladder (Guard 2): every branch of the view that renders window-scoped or retention copy.
+const LADDER: Cell[] = [
+  { name: "forbidden", result: { kind: "forbidden" }, filter: "all" },
+  { name: "unbound", result: { kind: "unbound" }, filter: "all" },
+  { name: "unavailable", result: { kind: "unavailable" }, filter: "all" },
+  { name: "ready with rows", result: ready(payload()), filter: "all" },
+  { name: "ready with rows, filtered", result: ready(payload()), filter: "blocked" },
+  { name: "ready with truncation", result: ready(payload({ truncated: true })), filter: "all" },
+  { name: "ready with truncation, filtered", result: ready(payload({ truncated: true })), filter: "blocked" },
+  { name: "ready filter-empty", result: ready(empty({ summary: SOME })), filter: "blocked" },
+  { name: "ready web-off with rows", result: ready(payload(), { webAccess: false }), filter: "all" },
+  { name: "ready web-off empty", result: ready(empty(), { webAccess: false }), filter: "all" },
+  { name: "ready collection-off", result: ready(empty(), { collection: false }), filter: "all" },
+  { name: "ready collection-unknown", result: ready(empty(), { collection: "unknown" }), filter: "all" },
+  { name: "ready web-access-unknown", result: ready(empty(), { webAccess: null }), filter: "all" },
+  { name: "ready recording-on empty (shorter-window empty at 24h/7d, 30-day empty at 30d)", result: ready(empty()), filter: "all" },
+  { name: "ready recording-on empty, filtered", result: ready(empty()), filter: "blocked" },
+];
+
+// User-visible text with element boundaries kept as spaces (textContent glues neighbouring elements together, so a
+// `\b` after the last word of one element never matches) plus every attribute a screen reader or tooltip exposes.
+const VISIBLE_ATTRS = ["aria-label", "aria-description", "aria-roledescription", "title", "alt", "placeholder"] as const;
+function spacedText(root: HTMLElement): string {
+  const parts: string[] = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) parts.push(n.textContent ?? "");
+  for (const el of Array.from(root.querySelectorAll("*"))) for (const a of VISIBLE_ATTRS) parts.push(el.getAttribute(a) ?? "");
+  return parts.join(" ");
+}
+
+// The single chokepoint of the sweep: renders every cell of ladder x windows and hands back the rendered text.
+function renderSweep(workspaceName: string | null = "Acme"): { name: string; timeWindow: TimeWindow; text: string; root: HTMLElement }[] {
+  const out: { name: string; timeWindow: TimeWindow; text: string; root: HTMLElement }[] = [];
+  for (const timeWindow of TIME_WINDOWS) {
+    for (const cell of LADDER) {
+      const result = cell.result.kind === "ready" ? { ...cell.result, workspaceName } : cell.result;
+      const { container, unmount } = show(result, cell.filter, timeWindow);
+      out.push({ name: cell.name, timeWindow, text: container.textContent ?? "", root: container.cloneNode(true) as HTMLElement });
+      unmount();
+    }
+  }
+  return out;
+}
+
+// What a stray "30" scan sees: the rendered text without the selector's own chip, the "Show 30 days" link and
+// the allowlisted retention sentence (closed list of exact sentences). The workspace name is not content.
+function strayScanText(root: HTMLElement, workspaceName: string | null, allowlist: readonly string[] = [RETENTION]): string {
+  for (const el of Array.from(root.querySelectorAll('nav[aria-label="Time window"]'))) el.remove();
+  for (const a of Array.from(root.querySelectorAll("a"))) if (a.textContent === "Show 30 days") a.remove();
+  // attribute text is user-visible too (screen readers, tooltips): aria-label, title and alt are scanned with the text
+  const attrs = Array.from(root.querySelectorAll(VISIBLE_ATTRS.map((a) => `[${a}]`).join(","))).flatMap((el) =>
+    VISIBLE_ATTRS.map((a) => el.getAttribute(a) ?? ""),
+  );
+  let text = [root.textContent ?? "", ...attrs].join(" ");
+  for (const sentence of allowlist) text = text.split(sentence).join("");
+  if (workspaceName) text = text.split(workspaceName).join("");
+  return text;
+}
+
+describe("EgressAuditView — window selector", () => {
+  it("renders a labelled nav of three link chips in order, aria-current on the selected one, before the outcome chips", () => {
+    show(ready(payload()), "all", "7d");
+    const nav = screen.getByRole("navigation", WINDOW_NAV);
+    const chips = within(nav).getAllByRole("link");
+    expect(chips.map((c) => c.textContent)).toEqual(["24 hours", "7 days", "30 days"]);
+    expect(chips.filter((c) => c.getAttribute("aria-current") === "page").map((c) => c.textContent)).toEqual(["7 days"]);
+    expect(screen.getByText("Time window", { selector: "span, p, div, label" })).toBeTruthy();
+    const outcomeNav = screen.getByRole("navigation", { name: "Filter by outcome" });
+    // Window group first in document order (same row on desktop, stacked above on mobile).
+    expect(nav.compareDocumentPosition(outcomeNav) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("the 30-day view marks the 30 days chip current (the prop is required: the page always passes the parsed window)", () => {
+    show(ready(payload()));
+    const chips = within(screen.getByRole("navigation", WINDOW_NAV)).getAllByRole("link");
+    expect(chips.filter((c) => c.getAttribute("aria-current") === "page").map((c) => c.textContent)).toEqual(["30 days"]);
+  });
+
+  it.each(SHORTER)("%s: a decision filter on a window with no rows stays clearable (outcome chips render, 'All' links back)", (w) => {
+    show(ready(empty()), "blocked", w);
+    const outcome = screen.getByRole("navigation", { name: "Filter by outcome" });
+    const all = within(outcome).getByRole("link", { name: "All" });
+    expect(all.getAttribute("href")).toBe(`${BASE}?window=${w}`);
+  });
+
+  it("window chips carry the current decision; canonical URLs omit the defaults and order decision before window", () => {
+    show(ready(payload()), "all", "30d");
+    let chips = within(screen.getByRole("navigation", WINDOW_NAV)).getAllByRole("link");
+    expect(chips.map((c) => c.getAttribute("href"))).toEqual([`${BASE}?window=24h`, `${BASE}?window=7d`, BASE]);
+    cleanup();
+    show(ready(payload()), "blocked", "30d");
+    chips = within(screen.getByRole("navigation", WINDOW_NAV)).getAllByRole("link");
+    expect(chips.map((c) => c.getAttribute("href"))).toEqual([`${BASE}?decision=blocked&window=24h`, `${BASE}?decision=blocked&window=7d`, `${BASE}?decision=blocked`]);
+  });
+
+  it("outcome chips carry the current window", () => {
+    show(ready(payload()), "blocked", "7d");
+    const chips = within(screen.getByRole("navigation", { name: "Filter by outcome" })).getAllByRole("link");
+    expect(chips.map((c) => c.getAttribute("href"))).toEqual([
+      `${BASE}?window=7d`,
+      `${BASE}?decision=allowed&window=7d`,
+      `${BASE}?decision=blocked&window=7d`,
+      `${BASE}?decision=other&window=7d`,
+    ]);
+    cleanup();
+    show(ready(payload()), "allowed", "30d");
+    const chips30 = within(screen.getByRole("navigation", { name: "Filter by outcome" })).getAllByRole("link");
+    expect(chips30.map((c) => c.getAttribute("href"))).toEqual([BASE, `${BASE}?decision=allowed`, `${BASE}?decision=blocked`, `${BASE}?decision=other`]);
+  });
+
+  it("a window chip is a real link element handled by NavLink (no native button, no bare onClick navigation)", () => {
+    show(ready(payload()), "all", "24h");
+    const nav = screen.getByRole("navigation", WINDOW_NAV);
+    expect(nav.querySelectorAll("button")).toHaveLength(0);
+    for (const a of Array.from(nav.querySelectorAll("a"))) expect(a.getAttribute("href")).toMatch(/^\/dashboard\/settings\/scope-grants\/egress-audit/);
+  });
+
+  it.each([
+    ["populated", ready(payload()), "all"],
+    ["truncated", ready(payload({ truncated: true })), "all"],
+    ["filter-empty", ready(empty({ summary: SOME })), "blocked"],
+    ["web off with rows", ready(payload(), { webAccess: false }), "all"],
+    ["web off, empty", ready(empty(), { webAccess: false }), "all"],
+    ["recording on, empty", ready(empty()), "all"],
+  ] as [string, EgressAuditResult, Filter][])("the window group is present in the %s state under every window", (_n, result, filter) => {
+    for (const w of TIME_WINDOWS) {
+      const { unmount } = show(result, filter, w);
+      expect([w, screen.queryByRole("navigation", WINDOW_NAV) !== null]).toEqual([w, true]);
+      unmount();
+    }
+  });
+
+  it.each([
+    ["forbidden", { kind: "forbidden" } as EgressAuditResult],
+    ["unbound", { kind: "unbound" } as EgressAuditResult],
+    ["unavailable", { kind: "unavailable" } as EgressAuditResult],
+    ["collection off", ready(empty(), { collection: false })],
+    ["collection unknown", ready(empty(), { collection: "unknown" })],
+    ["web access unknown", ready(empty(), { webAccess: null })],
+  ])("the window group is absent where there is no data to scope: %s", (_n, result) => {
+    for (const w of TIME_WINDOWS) {
+      const { unmount } = show(result, "all", w);
+      expect([w, screen.queryByRole("navigation", WINDOW_NAV)]).toEqual([w, null]);
+      unmount();
+    }
+  });
+});
+
+describe("EgressAuditView — window-aware strings", () => {
+  it.each(TIME_WINDOWS)("%s: subtitle, table caption and truncation body say 'about the last N' / 'this window'", (w) => {
+    const n = WINDOW_LABEL[w];
+    show(ready(payload({ truncated: true })), "all", w);
+    expect(screen.getByText(`Sites Acme's agents contacted in about the last ${n}, with the outcome of each (best-effort).`)).toBeTruthy();
+    expect(screen.getByRole("table", { name: `Hosts your workspace's agents contacted in about the last ${n}, with outcome and a minimum request count` })).toBeTruthy();
+    expect(screen.getByText("Older entries in this window are not listed, and counts are minimums.")).toBeTruthy();
+  });
+
+  it.each(TIME_WINDOWS)("%s: the unnamed-workspace subtitle is window-aware too", (w) => {
+    show(ready(payload(), { workspaceName: null }), "all", w);
+    expect(screen.getByText(`Sites your workspace's agents contacted in about the last ${WINDOW_LABEL[w]}, with the outcome of each (best-effort).`)).toBeTruthy();
+  });
+
+  it.each(TIME_WINDOWS)("%s: the filter-empty line says 'recorded' and names the window, and 'Show all' keeps the window", (w) => {
+    show(ready(empty({ summary: SOME })), "blocked", w);
+    expect(screen.getByText(`No Blocked requests recorded in about the last ${WINDOW_LABEL[w]}.`)).toBeTruthy();
+    const showAll = screen.getByRole("link", { name: "Show all" });
+    expect(showAll.getAttribute("href")).toBe(w === "30d" ? BASE : `${BASE}?window=${w}`);
+  });
+
+  it.each(TIME_WINDOWS)("%s: web access off with no rows says 'Nothing recorded in about the last N' with the unchanged body", (w) => {
+    show(ready(empty(), { webAccess: false }), "all", w);
+    expect(screen.getByText(`Nothing recorded in about the last ${WINDOW_LABEL[w]}`)).toBeTruthy();
+    expect(screen.getByText(WEB_OFF_EMPTY_BODY)).toBeTruthy();
+  });
+
+  it.each(SHORTER)("%s: recording on, web access on, no rows is the shorter-window empty state with Refresh and 'Show 30 days'", (w) => {
+    show(ready(empty()), "all", w);
+    expect(screen.getByText(`No requests recorded in about the last ${WINDOW_LABEL[w]}`)).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Nothing was recorded in this window. This list is best-effort, so this does not show that no requests were made. Requests can take some time to appear. A longer window may show more.",
+      ),
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Show 30 days" }).getAttribute("href")).toBe(BASE);
+    expect(screen.queryByText("No requests recorded yet")).toBeNull();
+    // The banner stays above the empty state; the outcome chips are hidden; the window group stays.
+    expect(screen.getByText(BANNER_LEAD)).toBeTruthy();
+    expect(screen.queryByRole("navigation", { name: "Filter by outcome" })).toBeNull();
+    expect(screen.getByRole("navigation", WINDOW_NAV)).toBeTruthy();
+  });
+
+  it("'Show 30 days' drops only the window (keeps an active decision filter)", () => {
+    show(ready(empty()), "blocked", "24h");
+    expect(screen.getByRole("link", { name: "Show 30 days" }).getAttribute("href")).toBe(`${BASE}?decision=blocked`);
+  });
+
+  it("the 30-day empty state is unchanged and has no 'Show 30 days' dead end", () => {
+    show(ready(empty()), "all", "30d");
+    expect(screen.getByText("No requests recorded yet")).toBeTruthy();
+    expect(screen.getByText("Nothing has been recorded yet. Requests can take a few minutes to appear.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Refresh" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Show 30 days" })).toBeNull();
+  });
+});
+
+describe("EgressAuditView — sentences that must not move with the window", () => {
+  it.each(TIME_WINDOWS)("%s: the banner, retention notices, recording-off card, summary line and footer are byte-identical", (w) => {
+    const populated = show(ready(payload(), { webAccess: false }), "all", w);
+    expect(screen.getByText(BANNER_LEAD)).toBeTruthy();
+    expect(screen.getByText(BANNER_BODY, { selector: "span" }).textContent).toBe(BANNER_BODY);
+    expect(screen.getByText("Web access is off. Nothing new is recorded.")).toBeTruthy();
+    expect(screen.getByText(RETENTION, { selector: "span" })).toBeTruthy();
+    expect(screen.getByText("At least 14,326 requests · at least 121 blocked")).toBeTruthy();
+    expect(screen.getByText(/History can't be deleted from this page/).textContent).toBe("History can't be deleted from this page. How to request erasure");
+    populated.unmount();
+
+    const off = show(ready(empty(), { collection: false }), "all", w);
+    expect(screen.getByText("Recording isn't on for this workspace.")).toBeTruthy();
+    expect(screen.getByText(RECORDING_OFF_BODY)).toBeTruthy();
+    off.unmount();
+
+    const webOff = show(ready(empty(), { webAccess: false }), "all", w);
+    expect(screen.getByText(WEB_OFF_EMPTY_BODY)).toBeTruthy();
+    expect(screen.getByText(BANNER_BODY, { selector: "span" }).textContent).toBe(BANNER_BODY);
+    webOff.unmount();
+
+    show(ready(payload()), "blocked", w);
+    expect(screen.getByText("At least 14,326 requests · at least 121 blocked (all outcomes)")).toBeTruthy();
+  });
+
+  it.each(TIME_WINDOWS)("%s: the unavailable, forbidden and unbound cards are unchanged and carry no window group", (w) => {
+    for (const result of [{ kind: "unavailable" }, { kind: "forbidden" }, { kind: "unbound" }] as EgressAuditResult[]) {
+      const { unmount } = show(result, "all", w);
+      expect([w, result.kind, screen.queryByRole("navigation", WINDOW_NAV)]).toEqual([w, result.kind, null]);
+      unmount();
+    }
+    show({ kind: "unavailable" }, "all", w);
+    expect(screen.getByText("Couldn't load the egress audit log.")).toBeTruthy();
+    expect(screen.getByText(BANNER_BODY, { selector: "span" }).textContent).toBe(BANNER_BODY);
+  });
+
+  it("the banner renders above every window state, including the shorter-window empty state", () => {
+    for (const w of TIME_WINDOWS) {
+      for (const result of [ready(payload()), ready(empty()), ready(empty(), { webAccess: false }), ready(empty({ summary: SOME }))]) {
+        const { unmount } = show(result, result.kind === "ready" && result.data.rows.length === 0 && result.data.summary.request_count_min ? "blocked" : "all", w);
+        expect([w, screen.queryByText(BANNER_LEAD) !== null]).toEqual([w, true]);
+        unmount();
+      }
+    }
+  });
+
+  it("no finer last-seen precision: no <time>, no ISO stamp, under any window", () => {
+    for (const w of TIME_WINDOWS) {
+      const { unmount } = show(ready(payload()), "all", w);
+      expect(document.querySelector("time")).toBeNull();
+      expect(document.body.innerHTML).not.toMatch(ISO_STAMP);
+      unmount();
+    }
+  });
+});
+
+describe("Guard 2 — no stale 30-day copy; wording bans (state ladder x windows)", () => {
+  it("the sweep covers the whole cross product (a dropped window or state fails here, not silently)", () => {
+    const cells = renderSweep();
+    // exact, not a floor: dropping a state must be a deliberate edit of this number (a floor tolerates silent drops)
+    expect(LADDER.length).toBe(15);
+    expect(cells).toHaveLength(TIME_WINDOWS.length * LADDER.length);
+    expect(new Set(cells.map((c) => c.timeWindow))).toEqual(new Set(["24h", "7d", "30d"]));
+  });
+
+  it("24h and 7d render no '30' outside the allowlisted retention sentence, the 30-day chip and the 'Show 30 days' link", () => {
+    const cells = renderSweep().filter((c) => c.timeWindow !== "30d");
+    expect(cells).toHaveLength(SHORTER.length * LADDER.length);
+    for (const c of cells) {
+      const scanned = strayScanText(c.root, "Acme");
+      expect([c.timeWindow, c.name, scanned.match(/30/g)?.length ?? 0]).toEqual([c.timeWindow, c.name, 0]);
+    }
+  });
+
+  it("the sweep is load-bearing: with the retention allowlist emptied it goes RED on the legitimate retention sentences", () => {
+    const withRetention = renderSweep().filter((c) => c.timeWindow === "24h" && /^ready (?:with rows|web-off empty)/.test(c.name));
+    expect(withRetention.length).toBeGreaterThan(0);
+    for (const c of withRetention) expect(strayScanText(c.root, "Acme", []).includes("30")).toBe(true);
+  });
+
+  it("the spaced-text scan is load-bearing: a `past month` in an adjacent element, or in an aria-description, is seen", () => {
+    const host = document.createElement("div");
+    host.innerHTML = '<span>Showing the past month</span><p>Nothing</p><i aria-description="in the last month"></i>';
+    const seen = spacedText(host);
+    expect(seen).toMatch(/\b(?:last|past|previous) month/i);
+    expect(host.textContent).toContain("monthNothing");
+  });
+
+  it("a workspace name containing the digits 30 does not trip the scan", () => {
+    const cells = renderSweep("Acme30").filter((c) => c.timeWindow !== "30d");
+    for (const c of cells) expect([c.timeWindow, c.name, strayScanText(c.root, "Acme30").includes("30")]).toEqual([c.timeWindow, c.name, false]);
+  });
+
+  it("the window phrase appears in the windowed strings of the 24h and 7d cells (a hard-coded window cannot hide)", () => {
+    for (const c of renderSweep().filter((x) => x.timeWindow !== "30d" && x.name === "ready with truncation")) {
+      expect(c.text).toContain(`about the last ${WINDOW_LABEL[c.timeWindow]}`);
+      expect(c.text).not.toContain("about the last 30 days");
+    }
+  });
+
+  it("no state x window renders a banned word, a completeness claim or a calendar date in a retention sentence", () => {
+    for (const c of renderSweep()) {
+      const where = `${c.timeWindow} / ${c.name}`;
+      expect([where, BANNED.test(c.text)]).toEqual([where, false]);
+      // a wrong-window sentence need not contain the digits 30
+      // scanned on spaced text + attributes, with no trailing boundary: `past month` followed by another element's text
+      const spaced = spacedText(c.root);
+      expect([where, /\b(?:last|past|previous) month|\b(?:4|four) weeks|\bthirty days?\b/i.test(spaced)]).toEqual([where, false]);
+      expect([where, BANNED.test(spaced)]).toEqual([where, false]);
+      expect([where, COMPLETENESS_CLAIM.test(c.text)]).toEqual([where, false]);
+      expect([where, FORBIDDEN.test(c.text)]).toEqual([where, false]);
+      expect([where, c.root.querySelector("time")]).toEqual([where, null]);
+      expect([where, ISO_STAMP.test(c.root.innerHTML)]).toEqual([where, false]);
+    }
   });
 });

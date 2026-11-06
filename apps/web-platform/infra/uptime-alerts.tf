@@ -567,6 +567,70 @@ resource "doppler_secret" "inngest_server_probe_heartbeat_url" {
   }
 }
 
+# #11631 — archive-fed dead-man heartbeats that replace two native logs alerts
+# (luks_monitor_host_timer_dark, claude_cost_capture_dark). The luks alert read `Current value: 0` through
+# 33 healthy nights (incident 1023423999, #11048): its row arrives once a day and the evaluator did not see
+# it. The cost alert shares the class (86400 s window) but its row arrives a few times a day (n=4 in 24 h)
+# and its blindness was not measured. Both
+# are fed hourly by scheduled-deadman-heartbeat-feeder.yml (scripts/deadman-heartbeat-feeder.sh),
+# which reads the Logs archive itself (remote() UNION s3Cluster) over the OLD alert window and beats
+# only when a qualifying row exists; with none it withholds the beat so the heartbeat times out and
+# pages. It never beats /fail. No host change: the nightly rows are already emitted.
+#
+# period 3600 = the feeder's hourly cadence. grace 7200 (CTO-ruled 2026-10-30) for BOTH: the
+# watchdog clock closes a slot after three failed ticks, so one lost slot leaves the next beat at
+# least 7200 s after the last; the page threshold is period + grace = 10800 s, and detection is the
+# old window (27 h luks-monitor, 24 h cost-capture) plus about 2-3 h.
+#
+# paused = true forever-until-armed (like the other born-paused siblings; registry_disk_prd is paused=false): Better Stack
+# starts expecting pings at creation, so an unfed unpaused heartbeat pages falsely. Arming is
+# owner-gated: after at least two consecutive feeder runs report qualifying_row_heartbeat_paused for
+# the target, the owner arms it through the runbook section "Arming the dead-man heartbeats (#11631)"
+# (workspaces-luks-cutover-6604.md, anchor #arming-the-dead-man-heartbeats-11631) and a
+# record PR drops the heartbeat-manifest.ts `arming_pending` declaration. No doppler_secret: the
+# feeder resolves the ping URL through the read-only API by exact name.
+resource "betteruptime_heartbeat" "luks_monitor_host_timer" {
+  name   = "soleur-luks-monitor-host-timer-prd"
+  period = 3600
+  grace  = 7200
+  # #11068 — push armed, parity with the inngest_server_probe sibling above; revert to `push = false` if the apply refuses it.
+  call      = false
+  sms       = false
+  email     = true
+  push      = true
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Armed out-of-band by the owner after observed beats (#11631); a later apply MUST NOT revert
+    # the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
+
+resource "betteruptime_heartbeat" "claude_cost_capture" {
+  name   = "soleur-claude-cost-capture-prd"
+  period = 3600
+  grace  = 7200
+  # #11068 — push armed, parity with the inngest_server_probe sibling above; revert to `push = false` if the apply refuses it.
+  call      = false
+  sms       = false
+  email     = true
+  push      = true
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Armed out-of-band by the owner after observed beats (#11631); a later apply MUST NOT revert
+    # the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
+
 resource "betteruptime_team_member" "ops" {
   email     = "ops@jikigai.com"
   role      = "responder"

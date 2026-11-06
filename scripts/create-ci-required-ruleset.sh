@@ -76,7 +76,7 @@ if [[ -n "$main_content" ]] && ! grep -q 'context=test' < <(base64 -d 2>/dev/nul
 fi
 
 # Check if ruleset already exists
-existing=$(gh api "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .id" 2>/dev/null || true)
+existing=$(gh api --paginate "repos/${REPO}/rulesets" --jq ".[] | select(.name == \"${RULESET_NAME}\") | .id" 2>/dev/null || true)
 if [[ -n "$existing" ]]; then
   echo "Ruleset '${RULESET_NAME}' already exists (ID: ${existing}). Skipping creation."
   exit 0
@@ -114,11 +114,11 @@ cat > "$skeleton" << 'EOF'
       "parameters": {
         "merge_method": "SQUASH",
         "grouping_strategy": "ALLGREEN",
-        "max_entries_to_merge": 1,
+        "max_entries_to_merge": 3,
         "min_entries_to_merge": 1,
         "min_entries_to_merge_wait_minutes": 0,
         "max_entries_to_build": 2,
-        "check_response_timeout_minutes": 75
+        "check_response_timeout_minutes": 120
       }
     }
   ]

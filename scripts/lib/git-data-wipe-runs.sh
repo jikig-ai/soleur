@@ -5,7 +5,7 @@
 # `gh run list --json` does NOT return dispatch inputs or job outputs, so the only handle on an earlier run is its
 # `displayTitle`, which the workflow's `run-name:` builds from `inputs.mode` (and, for the wipe modes, the volume id):
 #     wipe modes   ^git-data (wipe|wipe_finish|wipe_check|snapshot_clear) [0-9]{1,12}$
-#     other modes  ^git-data (proof|flip|rollback|unfreeze|redeploy)$
+#     other modes  ^git-data (proof|flip|rollback|unfreeze|redeploy|refs_assert)$   (the six cutover-job modes)
 #     legacy       git-data cutover (#5274 / ADR-220 / ADR-239)   (the workflow name: every run before `run-name:` landed)
 #
 # API. Every function prints ONE token on stdout and signals with its return code; none of them exits, none prints a
@@ -14,7 +14,7 @@
 #   wipe_run_title_class <displayTitle>
 #       prints: wipe | wipe_finish | wipe_check | snapshot_clear | other | legacy | wipe_other | unparseable        rc 0 always
 #       `wipe_other` is ANY title starting `git-data wipe` that is not a full match (a refused dispatch whose free-text
-#       volume_id made an off-pattern title): the guard ignores it. `other` covers the five non-wipe modes, rollback
+#       volume_id made an off-pattern title): the guard ignores it. `other` covers the six non-wipe modes (refs_assert, #11431, included), rollback
 #       included (wipe_last_rollback_epoch tells rollback apart by its exact title).
 #
 #   wipe_last_rollback_epoch <gh-run-list-json> <stamp-epoch>        the W3 interim guard (CTO F, decision-challenges)
@@ -62,7 +62,7 @@ _WIPE_RUNS_JQ_DEFS='
   def tclass:
     if type != "string" then "unparseable"
     elif test("^git-data (wipe|wipe_finish|wipe_check|snapshot_clear) [0-9]{1,12}\\z") then capture("^git-data (?<m>wipe_finish|wipe_check|snapshot_clear|wipe) ").m
-    elif test("^git-data (proof|flip|rollback|unfreeze|redeploy)\\z") then "other"
+    elif test("^git-data (proof|flip|rollback|unfreeze|redeploy|refs_assert)\\z") then "other"
     elif . == $legacy then "legacy"
     elif startswith("git-data wipe") or startswith("git-data snapshot_clear") then "wipe_other"
     else "unparseable" end;

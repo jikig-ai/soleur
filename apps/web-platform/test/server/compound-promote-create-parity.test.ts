@@ -42,6 +42,7 @@ import {
   CREATE_PR_BODY_LINE,
   CREATE_STAGE_ORDER,
   OVERLAP_REFUSE_THRESHOLD,
+  OVERLAP_TOP_K,
   checkCreate,
   countDescriptionWords,
   createPathList,
@@ -332,9 +333,14 @@ describe("overlap threshold holds on the REAL skill list", () => {
       .reduce((n, f) => n + statSync(join(dir, f)).size, 0);
     const skills = counted.records.filter((s) => !s.disableModelInvocation);
     const listBytes = Buffer.byteLength(skills.map((s) => `- ${s.name}: ${s.description}`).join("\n"), "utf8");
-    const bound = Math.ceil((pageBytes + listBytes) / CREATE_INPUT_BYTES_PER_TOKEN);
+    // Upper bound of the `create-candidates` block the gate also counts: per page one `<slug>: a, b, c` line (a slug is
+    // at most 81 characters, a skill name is at most the longest real one) plus the fence.
+    const pageCount = readdirSync(dir).filter((f) => f.endsWith(".md")).length;
+    const longestName = Math.max(...skills.map((s) => s.name.length));
+    const candidateBytes = pageCount * (81 + 2 + OVERLAP_TOP_K * (longestName + 2) + 1) + 120;
+    const bound = Math.ceil((pageBytes + listBytes + candidateBytes) / CREATE_INPUT_BYTES_PER_TOKEN);
     // Record: printed so the PR body can cite the measured margin.
-    console.info(`CREATE input bound: pages=${pageBytes}B list=${listBytes}B tokens<=${bound} (ceiling ${CREATE_INPUT_MAX_TOKENS}, bytes/${CREATE_INPUT_BYTES_PER_TOKEN})`);
+    console.info(`CREATE input bound: pages=${pageBytes}B list=${listBytes}B candidates<=${candidateBytes}B tokens<=${bound} (ceiling ${CREATE_INPUT_MAX_TOKENS}, bytes/${CREATE_INPUT_BYTES_PER_TOKEN})`);
     expect(bound).toBeLessThanOrEqual(CREATE_INPUT_MAX_TOKENS);
     // A single over-ceiling skill list is refused by the real gate (never truncated).
     const huge = Array.from({ length: 700 }, (_, i) => ({ name: `s${i}`, description: "This skill should be used when " + "x ".repeat(40), disableModelInvocation: false }));

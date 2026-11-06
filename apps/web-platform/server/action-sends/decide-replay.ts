@@ -24,7 +24,12 @@ export interface ExistingApprovalRow {
 // `idempotency: event.data.actionSendId` is the verified backstop) and the consumer can leave
 // acknowledged_at/failure_reason NULL on a run that executed, so an older replay could post a second
 // artifact. 23h leaves a 1h margin (CTO R1).
+// Mirrored as `interval '23 hours'` in scripts/followthroughs/dispatch-recovery-sweeper-11211.sh; its suite pins the equality.
 export const REPLAY_MAX_AGE_MS = 23 * 60 * 60 * 1000;
+
+// Wire/Sentry vocabulary of a refused replay (the 409 `reason` field and the Sentry `extra.reason`). It differs on
+// purpose from `ReplayDecision`'s kind `clock_skew`, which is a decision name, not a value that crosses the wire.
+export type StaleReplayReason = "expired" | "future_clicked_at";
 
 // `clicked_at` is a DB-clock `DEFAULT now()` read against the app server's clock. A few hundred ms
 // of skew must not destroy an approval that was never dispatched, so a small NEGATIVE age replays;

@@ -156,6 +156,7 @@ ROLLBACK=1002
 EXITRUN=1003
 PB=1004
 ROTATE=1005
+REFS=1006
 WFNAME='git-data cutover (#5274 / ADR-220 / ADR-239)'
 
 # write_run <id> <title> <createdAt> <jobs-json> [workflowName]
@@ -176,6 +177,9 @@ write_run "$FLIP" "git-data flip" "2026-10-20T09:00:00Z" "$FLIP_JOBS"
 write_run "$ROLLBACK" "git-data rollback" "2026-10-20T09:30:00Z" "$RB_JOBS"
 write_run "$EXITRUN" "git-data proof" "2026-10-20T10:00:00Z" '[]'
 write_run "$PB" "git-data proof" "2026-10-20T09:50:00Z" '[]'
+REFS_JOBS='[{"name":"cutover","steps":[
+  {"name":"Host-side refs assertion (store probes + one refs read)","conclusion":"success","completedAt":"2026-10-20T09:36:00Z"}]}]'
+write_run "$REFS" "git-data refs_assert" "2026-10-20T09:35:00Z" "$REFS_JOBS"
 
 # A log line is `<job>\t<step>\t<timestamp> <message>`. The DECOY lines are the step source `run:` echoes at the head of a
 # group (same words, after `echo "`), and a forged line in a DIFFERENT step: neither may count.
@@ -207,6 +211,19 @@ ll() { printf 'cutover\t%s\t%s %s\n' "$1" "$2" "$3"; }
   ll "Host-side proof (access gate + store probes + fence)" "2026-10-20T09:51:00.0000000Z" "##[error]probe=store-empty verdict=store_not_empty"
 } > "$FX/log-$PB.txt"
 
+# The refs_assert run's log: the step source echo (decoy), the real lines, and a forged confirmation in a DIFFERENT step.
+REFS_SHA1="0123456789abcdef0123456789abcdef01234567"
+REFS_SHA2="89abcdef0123456789abcdef0123456789abcdef"
+REFS_STEP_NAME="Host-side refs assertion (store probes + one refs read)"
+# shellcheck disable=SC2016  # literal step source: nothing may expand
+{
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:10.0000000Z" '        log "REFS-CONFIRMED"'
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:30.0000000Z" "[git-data-cutover] STORE probe=refs-assert verdict=ok"
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:31.0000000Z" "[git-data-cutover] REFS-CONFIRMED"
+  ll "$REFS_STEP_NAME" "2026-10-20T09:35:32.0000000Z" "[git-data-cutover] REFS_ASSERT ok repos=1 namespaces=1 refs=2 heads=2 shas=${REFS_SHA1},${REFS_SHA2}"
+  ll "Validate mode" "2026-10-20T09:35:40.0000000Z" "[git-data-cutover] REFS-CONFIRMED"
+} > "$FX/log-$REFS.txt"
+
 FP_OK="SHA256:abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG"
 FP_B="SHA256:ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefg"
 # web-1 has TWO source names (platform and the not-yet-retired inngest alias): the label must SUM them.
@@ -234,6 +251,21 @@ variant() {
   jq --argjson id "$nid" ".databaseId = \$id | $filter" "$FX/run-$src.json" > "$FX/run-$nid.json"
   cp "$FX/log-$src.txt" "$FX/log-$nid.txt" 2>/dev/null || : > "$FX/log-$nid.txt"
 }
+
+# ---- UNKNOWN STEP (attribution-expired) whole-run log builders — #11607 ------
+# GitHub drops step-name attribution ~2-3 wk post-completion: every line comes
+# back under field 2 "UNKNOWN STEP" while the content survives; field 1 (the
+# job name) is pinned to survive — only field 2 expires. A WHOLE-RUN log
+# carries every job's sections concatenated, so these documents carry both
+# `cutover` and `wipe` sections; the graded step's own job is the recovery
+# scope, and a sibling job's `##[group]Run` at/after startedAt is the
+# wrong-region decoy the job-name pre-filter exists to defeat.
+# ul — one emitted line under "UNKNOWN STEP" (field 2).  ul <line> <ts> <job> [bom]
+ul()   { printf '%s\tUNKNOWN STEP\t%s%s %s\n' "$3" "${4:-}" "$2" "$1"; }
+# usec — a `##[group]Run <title>` section header under UNKNOWN STEP, BOM'd by
+# default: gh writes the UTF-8 byte-order mark at the head of EVERY section
+# after the stream's first (only the stream head is bare).  usec <job> <title> <ts> [bom]
+usec() { printf '%s\tUNKNOWN STEP\t%s%s ##[group]Run %s\n' "$1" "${4:-$BOM}" "$3" "$2"; }
 
 # --- the runner -------------------------------------------------------------------------------------------------------
 RC=0; OUT=""; ERR=""
@@ -295,6 +327,7 @@ assert_eq "happy: per-host timestamps are step-scoped and BOM-tolerant (a forged
 assert_eq "happy: app path line, other hosts excluded, both web-1 source names summed, Sentry window printed" \
   "app path:      level 1; startup lines after rollback flag-off: pin $FP_OK (web-1 3, web-2 1), ssh_client present (web-1 3, web-2 1), store disabled (web-1 3, web-2 1); Sentry events R1..R6: 0 (erasure 0, pin_fault 0) in 2026-10-20T09:00:00..2026-10-20T10:00:00" \
   "$(line_of 'app path:')"
+assert_eq "happy: level 1 without --refs leaves the refs line n/a (no synthetic session ran)" "refs read:     n/a (level 1; no synthetic session ran)" "$(line_of 'refs read:')"
 assert_eq "happy: level 1 leaves the level 2 line n/a" "               level 2 only: n/a (level 1)" "$(line_of 'level 2 only')"
 assert_eq "happy: exit read (a forged verdict in another step is ignored)" \
   "exit read:     mode=proof run $U/$EXITRUN   dispatched 2026-10-20T10:00:00Z   conclusion success   verdict clear" "$(line_of 'exit read:')"
@@ -530,7 +563,7 @@ assert_has "sentry counts: summed and itemised, with the window" "$(line_of 'app
 reset_env
 
 # ===== ARM 10: proof verdicts and levels ==================================================================================
-sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --proof-before "$PB"
+sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --proof-before "$PB" --refs "$REFS"
 assert_eq "level 2 (inferred from --proof-before): exit 0" "0" "$RC"
 assert_eq "level 2: proof before and after" "               level 2 only: proof before deletion store_not_empty, proof after deletion clear" "$(line_of 'level 2 only')"
 assert_has "level 2: the level is carried" "$(line_of 'app path:')" "level 2;"
@@ -604,10 +637,273 @@ run_sut bash -x "$MUT" "${BASE_ARGS[@]}"
 assert_eq "xtrace with no credential: tracing stays available (not refused)" "1" "$([[ "$RC" != 78 ]] && echo 1 || echo 0)"
 reset_env
 
+# ===== ARM 13: REFS-CONFIRMED is READ from the mode=refs_assert run (#11431), never owner-typed ==========================
+L2_ARGS=(--flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --proof-before "$PB")
+sut "${L2_ARGS[@]}" --refs "$REFS"
+REFS_OUT="$OUT"; REFS_ERR="$ERR"
+assert_eq "refs: a green run with one confirmation and one anchored answer line reads REFS-CONFIRMED yes, counts only" \
+  "refs read:     mode=refs_assert run $U/$REFS   dispatched 2026-10-20T09:35:00Z   conclusion success   step success   REFS-CONFIRMED yes (repos=1 namespaces=1 refs=2 heads=2)" \
+  "$(line_of 'refs read:')"
+assert_eq "refs: exit 0 at level 2 with the refs run named" "0" "$RC"
+assert_eq "refs: no commit id reaches the block or stderr" "0" "$(printf '%s\n%s\n' "$REFS_OUT" "$REFS_ERR" | grep -cE "$REFS_SHA1|$REFS_SHA2" || true)"
+sut "${L2_ARGS[@]}"
+assert_has "refs: at level 2 a missing --refs is UNREAD(refs-run), never owner-typed" "$(line_of 'refs read:')|rc=$RC" "UNREAD(refs-run)|rc=3"
+sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN" --refs "$REFS" --level 1
+assert_has "refs: optional at level 1 and read when given" "$(line_of 'refs read:')" "REFS-CONFIRMED yes"
+sut --flip "$FLIP" --rollback "$ROLLBACK" --exit "$EXITRUN"
+assert_has "refs: level unknown and no --refs: the owner is told to pass it, not marked UNREAD" "$(line_of 'refs read:')|rc=$RC" "<owner: pass --refs <run id> for a Level 2 rehearsal>|rc=0"
+variant 2140 '.displayTitle = "git-data proof"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2140
+assert_has "refs: a run with the wrong title is refused (run-identity-refs)" "$ERR" "UNREAD(run-identity-refs)"
+variant 2141 '.createdAt = "2026-10-20T09:20:00Z"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2141
+assert_has "refs: a refs run created BEFORE the rollback is refused (run-order-refs)" "$ERR" "UNREAD(run-order-refs)"
+variant 2142 '.createdAt = "2026-10-20T09:55:00Z"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2142
+assert_has "refs: a refs run created after the pre-deletion proof is refused (the order is rollback, refs, proofs)" "$ERR" "UNREAD(run-order-proofbefore)"
+variant 2143 '.jobs[0].steps[0].conclusion = "failure"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2143
+assert_has "refs: a step that did not succeed is NOT CONFIRMED even with the log line present" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2144 '.conclusion = "failure"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2144
+assert_has "refs: a log line inside a red run is not a verdict" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2145 '.' "$REFS"
+grep -v 'REFS-CONFIRMED$' "$FX/log-$REFS.txt" > "$FX/log-2145.txt"
+sut "${L2_ARGS[@]}" --refs 2145
+assert_has "refs: a green run with no REFS-CONFIRMED line in the step (the decoy and the other step's line do not count) is NOT CONFIRMED" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 0, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2146 '.' "$REFS"
+{ cat "$FX/log-$REFS.txt"; ll "$REFS_STEP_NAME" "2026-10-20T09:35:33.0000000Z" "[git-data-cutover] REFS-CONFIRMED"; } > "$FX/log-2146.txt"
+sut "${L2_ARGS[@]}" --refs 2146
+assert_has "refs: two REFS-CONFIRMED lines in the step are NOT CONFIRMED (exactly one)" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 2, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2147 '.' "$REFS"
+sed 's/^\(.*REFS_ASSERT ok .*\)$/\10/' "$FX/log-$REFS.txt" > "$FX/log-2147.txt"
+sut "${L2_ARGS[@]}" --refs 2147
+assert_has "refs: an answer line that is not the anchored shape (a 41-hex id) is NOT CONFIRMED" "$(line_of 'refs read:')|rc=$RC" "REFS-CONFIRMED NOT CONFIRMED (confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)|rc=3"
+variant 2149 '.' "$REFS"
+{ cat "$FX/log-$REFS.txt"; ll "$REFS_STEP_NAME" "2026-10-20T09:35:34.0000000Z" "[git-data-cutover] REFS_ASSERT ok repos=1 namespaces=1 refs=2 heads=2 shas=${REFS_SHA1}"; } > "$FX/log-2149.txt"
+sut "${L2_ARGS[@]}" --refs 2149
+assert_has "refs: two anchored answer lines in the step are NOT CONFIRMED (exactly one)" "rc=$RC|$(line_of 'refs read:')" "(confirmed lines 1, answer lines 2): UNREAD(refs-not-confirmed)"
+variant 2150 '.' "$REFS"
+sed 's/^\(.*REFS_ASSERT ok .*shas=\)[0-9a-f]*,[0-9a-f]*$/\1'"${REFS_SHA1}"'0/' "$FX/log-$REFS.txt" > "$FX/log-2150.txt"
+sut "${L2_ARGS[@]}" --refs 2150
+assert_has "refs: a single 41-hex first id is NOT CONFIRMED (the id length is exact)" "rc=$RC|$(line_of 'refs read:')" "(confirmed lines 1, answer lines 1): UNREAD(refs-not-confirmed)"
+variant 2148 '.jobs[0].steps[0].name = "Refs (renamed)"' "$REFS"
+sut "${L2_ARGS[@]}" --refs 2148
+assert_has "refs: a renamed step is UNREAD, not a plain fact" "$ERR" "UNREAD(step-refs-step)"
+sut "${L2_ARGS[@]}" --refs "$FLIP"
+assert_eq "refs: one run id in two slots exits 64" "64" "$RC"
+ARM_ENV="$ARM_ENV GH_FAIL_IDS=$REFS"
+sut "${L2_ARGS[@]}" --refs "$REFS"
+assert_has "refs: a refs run that cannot be fetched is UNREAD(gh-run-view-refs)" "$ERR" "UNREAD(gh-run-view-refs)"
+reset_env
+
+# ===== ARM 14: attribution-expired (UNKNOWN STEP) logs — #11607 =================================================
+# Aged whole-run logs: every line under field 2 UNKNOWN STEP, content intact.
+# The collector must recover each step's output region on the `##[group]Run`
+# headers — field-1-scoped to the step's own job, first header stamped at or
+# after the step's `startedAt` (camelCase, `gh run view --json jobs`) — and
+# re-measure through the SAME anchored awks; a step that ran but cannot be
+# sliced reads UNREAD(<token>), never a counterfeited zero; a step that did
+# not run keeps the pre-change reading. `startedAt` is added to the fixture
+# jobs JSON only where recovery is exercised (the named-attribution fixtures
+# above never reach the jobs-JSON `startedAt` field).
+
+# 2200 — aged flip: Finalizer unwind + per-host enabled stamps recovered.
+AGED_FLIP_JOBS='[{"name":"cutover","conclusion":"success","steps":[
+  {"name":"Write GIT_DATA_STORE_ENABLED (via the","conclusion":"success","startedAt":"2026-10-20T09:09:00Z","completedAt":"2026-10-20T09:10:00Z"},
+  {"name":"Write GIT_DATA_LUKS_CUTOVER_AT (last — proven cutover only)","conclusion":"success","startedAt":"2026-10-20T09:24:00Z","completedAt":"2026-10-20T09:25:00Z"},
+  {"name":"Per-host git_data_store= assertion (Better Stack)","conclusion":"success","startedAt":"2026-10-20T09:11:00Z","completedAt":"2026-10-20T09:14:00Z"},
+  {"name":"Finalizer — total unwind on an incomplete flip","conclusion":"success","startedAt":"2026-10-20T09:26:00Z","completedAt":"2026-10-20T09:27:00Z"}]},
+ {"name":"wipe","conclusion":"skipped","steps":[]}]'
+write_run 2200 "git-data flip" "2026-10-20T09:00:00Z" "$AGED_FLIP_JOBS"
+{
+  # BARE `Set up job` head (gh strips the BOM only from the stream head), then
+  # prelude sections stamped BEFORE the graded steps' startedAt — the `ts >=`
+  # gate must skip them, and each carries the second+ BOM the global strip
+  # must clear. Every later header is BOM'd (usec default).
+  printf 'cutover\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "2026-10-20T09:00:05.0000000Z"
+  usec cutover 'Validate mode' "2026-10-20T09:00:10.0000000Z"
+  ul 'prelude output line (not a graded step)' "2026-10-20T09:00:11.0000000Z" cutover
+  usec cutover 'Write GIT_DATA_STORE_ENABLED (via the flag)' "2026-10-20T09:09:00.0000000Z"
+  ul 'flag write output line' "2026-10-20T09:09:30.0000000Z" cutover
+  usec cutover 'Per-host git_data_store= assertion (Better Stack)' "2026-10-20T09:11:00.0000000Z"
+  ul 'host web-1: git_data_store=enabled observed (attempt 1)' "2026-10-20T09:11:30.0000000Z" cutover
+  ul 'host web-2: git_data_store=enabled observed (attempt 1)' "2026-10-20T09:12:00.0000000Z" cutover
+  usec cutover 'Finalizer — total unwind on an incomplete flip' "2026-10-20T09:26:00.0000000Z"
+  ul 'echo "finalizer: unwind complete."' "2026-10-20T09:26:05.0000000Z" cutover   # run:-source decoy — never counted
+  ul 'finalizer: unwind complete' "2026-10-20T09:26:10.0000000Z" cutover           # dotless near-miss — never counted
+  ul 'finalizer: unwind complete.' "2026-10-20T09:26:15.0000000Z" cutover
+  usec cutover 'Post job cleanup' "2026-10-20T09:36:00.0000000Z"
+  # the sibling job's own sections — a whole-run log carries every job
+  usec wipe 'Set up job' "2026-10-20T09:00:06.0000000Z"
+  usec wipe 'Wipe the store' "2026-10-20T09:00:20.0000000Z"
+  ul 'sibling job output line' "2026-10-20T09:00:21.0000000Z" wipe
+} > "$FX/log-2200.txt"
+sut --flip 2200 --rollback "$ROLLBACK" --exit "$EXITRUN" --rotate "$ROTATE" --level 1
+assert_eq "aged flip: exit 0 (recovery is not an UNREAD)" "0" "$RC"
+assert_eq "aged flip: the Finalizer unwind is measured through the recovered region" \
+  "flip run:      $U/2200   dispatched 2026-10-20T09:00:00Z   conclusion success   stamp step success   finalizer ran yes (unwound yes)" \
+  "$(line_of 'flip run:')"
+assert_eq "aged flip: the per-host enabled stamps are recovered (UNKNOWN STEP never reads as absent)" \
+  "per-host:      web-1 git_data_store=enabled 2026-10-20T09:11:30Z / disabled 2026-10-20T09:41:11Z;  web-2 git_data_store=enabled 2026-10-20T09:12:00Z / disabled 2026-10-20T09:42:22Z" \
+  "$(line_of 'per-host:')"
+assert_lacks "aged flip: no log-scan UNREAD on a recoverable log" "$OUT$ERR" "UNREAD(log-scan"
+
+# 2201 — aged rollback: probe verdict + per-host disabled stamps recovered.
+AGED_RB_JOBS='[{"name":"cutover","conclusion":"success","steps":[
+  {"name":"Write GIT_DATA_STORE_ENABLED (via the","conclusion":"success","startedAt":"2026-10-20T09:39:00Z","completedAt":"2026-10-20T09:40:30Z"},
+  {"name":"Per-host git_data_store= assertion (Better Stack)","conclusion":"success","startedAt":"2026-10-20T09:41:00Z","completedAt":"2026-10-20T09:43:00Z"},
+  {"name":"Positive replication probe","conclusion":"success","startedAt":"2026-10-20T09:44:00Z","completedAt":"2026-10-20T09:45:00Z"},
+  {"name":"Finalizer — total unwind on an incomplete flip","conclusion":"success","startedAt":"2026-10-20T09:46:00Z","completedAt":"2026-10-20T09:46:30Z"}]},
+ {"name":"wipe","conclusion":"skipped","steps":[]}]'
+write_run 2201 "git-data rollback" "2026-10-20T09:30:00Z" "$AGED_RB_JOBS"
+{
+  printf 'cutover\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "2026-10-20T09:30:05.0000000Z"
+  usec cutover 'Validate mode' "2026-10-20T09:30:10.0000000Z"
+  ul 'prelude output line' "2026-10-20T09:30:11.0000000Z" cutover
+  usec cutover 'Per-host git_data_store= assertion (Better Stack)' "2026-10-20T09:41:00.0000000Z"
+  ul 'host web-1: git_data_store=disabled observed (attempt 1)' "2026-10-20T09:41:11.0000000Z" cutover
+  ul 'host web-2: git_data_store=disabled observed (attempt 1)' "2026-10-20T09:42:22.0000000Z" cutover
+  usec cutover 'Positive replication probe' "2026-10-20T09:44:00.0000000Z"
+  ul 'log "STORE probe=probe verdict=ok"' "2026-10-20T09:44:10.0000000Z" cutover   # run:-source decoy — never counted
+  ul '[git-data-cutover] STORE probe=probe verdict=ok' "2026-10-20T09:44:30.0000000Z" cutover
+  usec cutover 'Finalizer — total unwind on an incomplete flip' "2026-10-20T09:46:00.0000000Z"
+  ul 'finalizer: flip concluded — nothing to unwind.' "2026-10-20T09:46:05.0000000Z" cutover
+  usec cutover 'Post job cleanup' "2026-10-20T09:50:00.0000000Z"
+  usec wipe 'Set up job' "2026-10-20T09:30:06.0000000Z"
+  usec wipe 'Wipe the store' "2026-10-20T09:30:20.0000000Z"
+} > "$FX/log-2201.txt"
+sut --flip "$FLIP" --rollback 2201 --exit "$EXITRUN" --rotate "$ROTATE" --level 1
+assert_eq "aged rollback: exit 0" "0" "$RC"
+assert_eq "aged rollback: the STORE probe line is seen through the recovered region" \
+  "rollback run:  $U/2201   dispatched 2026-10-20T09:30:00Z   conclusion success   probe step success   \"STORE probe=probe verdict=ok\" seen" \
+  "$(line_of 'rollback run:')"
+assert_eq "aged rollback: the per-host disabled stamps are recovered" \
+  "per-host:      web-1 git_data_store=enabled 2026-10-20T09:12:01Z / disabled 2026-10-20T09:41:11Z;  web-2 git_data_store=enabled 2026-10-20T09:13:02Z / disabled 2026-10-20T09:42:22Z" \
+  "$(line_of 'per-host:')"
+
+# 2202 — aged exit proof: verdict=clear recovered; the forged verdict in the
+# prelude step's region must not leak into the graded one.
+write_run 2202 "git-data proof" "2026-10-20T10:00:00Z" '[{"name":"cutover","conclusion":"success","steps":[
+  {"name":"Host-side proof (access gate + store probes + fence)","conclusion":"success","startedAt":"2026-10-20T10:01:00Z","completedAt":"2026-10-20T10:02:00Z"}]},
+ {"name":"wipe","conclusion":"skipped","steps":[]}]'
+{
+  printf 'cutover\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "2026-10-20T10:00:05.0000000Z"
+  usec cutover 'Validate mode' "2026-10-20T10:00:10.0000000Z"
+  ul '##[notice]verdict=store_not_empty' "2026-10-20T10:00:30.0000000Z" cutover   # forged verdict in a NON-graded region
+  usec cutover 'Host-side proof (access gate + store probes + fence)' "2026-10-20T10:01:00.0000000Z"
+  ul '##[notice]verdict=clear' "2026-10-20T10:01:30.0000000Z" cutover
+  usec cutover 'Post job cleanup' "2026-10-20T10:05:00.0000000Z"
+  usec wipe 'Set up job' "2026-10-20T10:00:06.0000000Z"
+} > "$FX/log-2202.txt"
+sut --flip "$FLIP" --rollback "$ROLLBACK" --exit 2202 --rotate "$ROTATE" --level 1
+assert_eq "aged exit proof: verdict clear through the recovered region (the forged prelude verdict does not leak)" \
+  "exit read:     mode=proof run $U/2202   dispatched 2026-10-20T10:00:00Z   conclusion success   verdict clear" "$(line_of 'exit read:')"
+assert_eq "aged exit proof: exit 0" "0" "$RC"
+
+# 2203 — aged refs_assert: REFS-CONFIRMED + the single anchored answer line recovered.
+write_run 2203 "git-data refs_assert" "2026-10-20T09:35:00Z" '[{"name":"cutover","conclusion":"success","steps":[
+  {"name":"Host-side refs assertion (store probes + one refs read)","conclusion":"success","startedAt":"2026-10-20T09:35:00Z","completedAt":"2026-10-20T09:36:00Z"}]},
+ {"name":"wipe","conclusion":"skipped","steps":[]}]'
+{
+  printf 'cutover\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "2026-10-20T09:34:50.0000000Z"
+  usec cutover 'Validate mode' "2026-10-20T09:34:55.0000000Z"
+  ul 'prelude output line' "2026-10-20T09:34:56.0000000Z" cutover
+  usec cutover 'Host-side refs assertion (store probes + one refs read)' "2026-10-20T09:35:00.0000000Z"
+  ul 'log "REFS-CONFIRMED"' "2026-10-20T09:35:10.0000000Z" cutover               # run:-source decoy — never counted
+  ul '[git-data-cutover] STORE probe=refs-assert verdict=ok' "2026-10-20T09:35:30.0000000Z" cutover
+  ul '[git-data-cutover] REFS-CONFIRMED'$'\r' "2026-10-20T09:35:31.0000000Z" cutover   # trailing CR pins fetch_run's `s/\r//g` — without the strip this $-anchored match fails
+  ul "[git-data-cutover] REFS_ASSERT ok repos=1 namespaces=1 refs=2 heads=2 shas=${REFS_SHA1},${REFS_SHA2}" "2026-10-20T09:35:32.0000000Z" cutover
+  usec cutover 'Post job cleanup' "2026-10-20T09:40:00.0000000Z"
+  usec wipe 'Set up job' "2026-10-20T09:34:51.0000000Z"
+} > "$FX/log-2203.txt"
+sut "${L2_ARGS[@]}" --refs 2203
+assert_eq "aged refs: REFS-CONFIRMED yes through the recovered region, counts only" \
+  "refs read:     mode=refs_assert run $U/2203   dispatched 2026-10-20T09:35:00Z   conclusion success   step success   REFS-CONFIRMED yes (repos=1 namespaces=1 refs=2 heads=2)" \
+  "$(line_of 'refs read:')"
+assert_eq "aged refs: exit 0" "0" "$RC"
+assert_eq "aged refs: no commit id reaches the block or stderr" "0" "$(printf '%s\n%s\n' "$OUT" "$ERR" | grep -cE "$REFS_SHA1|$REFS_SHA2" || true)"
+
+# 2210/2211 — a step that RAN but cannot be sliced is UNREAD, never a
+# counterfeited zero: Finalizer startedAt pushed past every log header, and a
+# Finalizer with no startedAt at all. Per-host still recovers beside it.
+variant 2210 '.jobs[0].steps[3].startedAt = "2026-10-20T09:45:00Z"' 2200
+sut --flip 2210 --rollback "$ROLLBACK" --exit "$EXITRUN" --level 1
+assert_has "aged flip, no ##[group]Run at/after startedAt: UNREAD(log-scan-flip), not 'unwound no'" \
+  "$(line_of 'flip run:')|$ERR|rc=$RC" "UNREAD(log-scan-flip)"
+assert_eq "aged flip unrecoverable: exit 3" "3" "$RC"
+variant 2211 'del(.jobs[0].steps[3].startedAt)' 2200
+sut --flip 2211 --rollback "$ROLLBACK" --exit "$EXITRUN" --level 1
+assert_has "aged flip, step without startedAt: unbounded is unmeasured — UNREAD(log-scan-flip)" \
+  "$(line_of 'flip run:')|$ERR|rc=$RC" "UNREAD(log-scan-flip)"
+assert_eq "aged flip no-startedAt: exit 3" "3" "$RC"
+
+# 2212/2213 — designed absence is NOT a degraded channel: a skipped Finalizer
+# reads 'finalizer ran no' (rc-1 keeps the legitimate zero), a Finalizer
+# absent from the jobs JSON keeps the stepc contract — never an invented
+# UNREAD(log-scan-flip).
+variant 2212 '.jobs[0].steps[3].conclusion = "skipped"' 2200
+sut --flip 2212 --rollback "$ROLLBACK" --exit "$EXITRUN" --level 1
+assert_has "aged flip, skipped Finalizer: 'finalizer ran no' — designed absence, not UNREAD" "$(line_of 'flip run:')" "finalizer ran no"
+assert_lacks "aged flip, skipped Finalizer: no invented log-scan UNREAD" "$ERR" "UNREAD(log-scan-flip)"
+variant 2213 'del(.jobs[0].steps[3])' 2200
+sut --flip 2213 --rollback "$ROLLBACK" --exit "$EXITRUN" --level 1
+assert_has "aged flip, Finalizer absent from jobs JSON: the stepc contract reads UNREAD(step-…), not log-scan" \
+  "$ERR" "UNREAD(step-flip-finalizer)"
+assert_lacks "aged flip, absent Finalizer: no invented log-scan UNREAD" "$ERR" "UNREAD(log-scan-flip)"
+
+# 2214 — the job-name pre-filter is load-bearing (matrix row 2): the sibling
+# job `wipe` carries a ##[group]Run header stamped at the Finalizer's
+# startedAt emitting a flag-write line — FIRST in the file, so a slice without
+# the field-1 job scope opens the wrong region.
+variant 2214 '.' 2200
+{
+  printf 'wipe\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "2026-10-20T09:00:05.0000000Z"
+  usec wipe 'Wipe the store' "2026-10-20T09:00:20.0000000Z"
+  ul 'wipe prelude output line' "2026-10-20T09:00:21.0000000Z" wipe
+  usec wipe 'A section stamped at the Finalizer start' "2026-10-20T09:26:00.0000000Z"
+  ul 'finalizer: writing GIT_DATA_STORE_ENABLED=false' "2026-10-20T09:26:05.0000000Z" wipe
+  usec wipe 'Wipe post' "2026-10-20T09:36:00.0000000Z"
+  printf 'cutover\tUNKNOWN STEP\t%s%s ##[group]Run Set up job\n' "$BOM" "2026-10-20T09:00:06.0000000Z"
+  usec cutover 'Validate mode' "2026-10-20T09:00:10.0000000Z"
+  ul 'prelude output line' "2026-10-20T09:00:11.0000000Z" cutover
+  usec cutover 'Per-host git_data_store= assertion (Better Stack)' "2026-10-20T09:11:00.0000000Z"
+  ul 'host web-1: git_data_store=enabled observed (attempt 1)' "2026-10-20T09:11:30.0000000Z" cutover
+  ul 'host web-2: git_data_store=enabled observed (attempt 1)' "2026-10-20T09:12:00.0000000Z" cutover
+  usec cutover 'Finalizer — total unwind on an incomplete flip' "2026-10-20T09:26:00.0000000Z"
+  ul 'finalizer: unwind complete.' "2026-10-20T09:26:15.0000000Z" cutover
+  usec cutover 'Post job cleanup' "2026-10-20T09:36:00.0000000Z"
+} > "$FX/log-2214.txt"
+sut --flip 2214 --rollback "$ROLLBACK" --exit "$EXITRUN" --level 1
+assert_eq "aged flip, sibling-job decoy region: the step's OWN job region is sliced" \
+  "flip run:      $U/2214   dispatched 2026-10-20T09:00:00Z   conclusion success   stamp step success   finalizer ran yes (unwound yes)" \
+  "$(line_of 'flip run:')"
+assert_eq "aged flip, sibling-job decoy: per-host reads still come from the cutover region" \
+  "per-host:      web-1 git_data_store=enabled 2026-10-20T09:11:30Z / disabled 2026-10-20T09:41:11Z;  web-2 git_data_store=enabled 2026-10-20T09:12:00Z / disabled 2026-10-20T09:42:22Z" \
+  "$(line_of 'per-host:')"
+
+# 2215 — must-PASS non-canonical (matrix row 9): a recovered region that
+# genuinely emits zero matching lines is a MEASURED zero, not UNREAD.
+variant 2215 '.' 2201
+{
+  printf 'cutover\tUNKNOWN STEP\t%s ##[group]Run Set up job\n' "2026-10-20T09:30:05.0000000Z"
+  usec cutover 'Per-host git_data_store= assertion (Better Stack)' "2026-10-20T09:41:00.0000000Z"
+  ul 'host web-1: git_data_store=disabled observed (attempt 1)' "2026-10-20T09:41:11.0000000Z" cutover
+  ul 'host web-2: git_data_store=disabled observed (attempt 1)' "2026-10-20T09:42:22.0000000Z" cutover
+  usec cutover 'Positive replication probe' "2026-10-20T09:44:00.0000000Z"
+  ul 'probe output: nothing stored this attempt' "2026-10-20T09:44:10.0000000Z" cutover
+  usec cutover 'Post job cleanup' "2026-10-20T09:50:00.0000000Z"
+  usec wipe 'Set up job' "2026-10-20T09:30:06.0000000Z"
+} > "$FX/log-2215.txt"
+sut --flip "$FLIP" --rollback 2215 --exit "$EXITRUN" --level 1
+assert_has "aged rollback, region-measured zero: 'not seen' is a measurement, not UNREAD" \
+  "$(line_of 'rollback run:')" "\"STORE probe=probe verdict=ok\" not seen"
+assert_eq "aged rollback, region-measured zero: exit 0" "0" "$RC"
+
 # ===== the exact assertion count =======================================================================================
 # Reported with printf + exit, never through fail() (ADR-193). A bare floor is satisfiable by deleting arms; an exact
 # count moves only when this file is edited deliberately.
-EXACT=150
+EXACT=194
 if (( total != EXACT )); then
   printf 'FATAL: %d assertions ran, expected exactly %d -- coverage changed; update EXACT deliberately\n' "$total" "$EXACT" >&2
   exit 1

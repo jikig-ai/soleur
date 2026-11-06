@@ -1457,7 +1457,7 @@ jobs:
           # every re-run of a failing apply.
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
             --limit 100 --json number,title \
-            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty") || { echo "::error::apply-sentry-infra: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
@@ -1513,7 +1513,7 @@ jobs:
           } > "$BODY_FILE"
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
             --limit 100 --json number,title \
-            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty") || { echo "::error::sentry-state-secret: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
               --body "Still matching at ${NOW}. Run: ${RUN_URL}"
@@ -1542,6 +1542,7 @@ jobs:
         run: |
           set -euo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # dedupe: benign — close-path read: a gh fault leaves the apply-failure issue open, which keeps the alarm visible.
           STALE=$(gh issue list --repo "$GH_REPO" --label "ci/apply-sentry-infra" --state open \
             --limit 100 --json number,title \
             --jq 'map(select(.title == "[ci/apply-sentry-infra] apply failed on main")) | .[0].number // empty')

@@ -241,7 +241,7 @@ describe("network surface", () => {
     // On failure: start a Next dev server, POST once with curl -H 'Host: 127.0.0.1:3000' and log
     // request.headers in the route; confirm which x-forwarded-* headers Next adds, then update
     // PROXY_MARKER_HEADERS in server/egress-audit-ingest.ts and this pin together.
-    expect(pkg.version, "Next minor changed: re-measure the headers Next injects (see comment)").toMatch(/^16\.3\./);
+    expect(pkg.version, "Next minor changed: re-measure the headers Next injects (see comment)").toMatch(/^16\.4\./);
   });
 
   it.each(["forwarded", "cf-connecting-ip", "cf-ray", "x-real-ip"])(
@@ -259,7 +259,9 @@ describe("network surface", () => {
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
-  // Measured on Next 16.3.8: the framework adds all four x-forwarded-* headers to EVERY request
+  // Measured on Next 16.3.8, re-measured on 16.4.3 (identical four-header set, grepped
+  // from dist/compiled/next-server/server.runtime.prod.js): the framework adds all four
+  // x-forwarded-* headers to EVERY request
   // it serves, including Vector's. A check on them 401s every legitimate batch.
   it("accepts the x-forwarded-* headers Next.js adds to a request from Vector", async () => {
     const res = await POST(

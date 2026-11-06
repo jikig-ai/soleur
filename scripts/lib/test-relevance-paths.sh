@@ -171,6 +171,7 @@ CF_TUNNEL_BATTERY_PATHS=(
 LINT_ORPHAN_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/lint-orphan-test-suites.sh"                      # SUT
+  "scripts/lib/rows-range.sh"                               # sourced --rows preamble/gate (#11647 S2)
   "scripts/lib/repo-write-boundary.sh"                      # copied into the sandbox
   "apps/web-platform/infra/run-registered-suites.sh"        # copied; a REQUIRED_RUNNERS registration
   ".github/workflows"                                       # cp .github/workflows/*.yml — directory, see above
@@ -198,13 +199,15 @@ TAG_AUTHORSHIP_BATTERY_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
-# scripts/test-all-affected (test-all.sh, light group) — ~440 s on CI. Source of truth:
+# scripts/test-all-affected-{a,b,c,d} (test-all.sh, light group; #11562's --rows split over one
+# battery file) — ~440 s on CI. Source of truth:
 # scripts/test-all-affected.test.sh — RUNNER / AFF_LIB / REL_LIB / RWB_LIB at its top, plus the census
 # sandbox. THE SANDBOX HARDLINKS ALL OF scripts/ (`cp -al "$REPO_ROOT/scripts/."`), so a prefix
 # declaration would arm this battery on over half of recent commits (re-measure with the replay script) for no
 # added signal; it is declared by dependency instead and the hardlinked corpus is ADR-262 residual R3.
 TEST_ALL_AFFECTED_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/lib/rows-range.sh"                               # sourced --rows preamble/gate (#11647 S2)
   "scripts/lib/repo-write-boundary.sh"                      # RWB_LIB
   "scripts/lint-orphan-test-suites.sh"                      # the census linter the sandbox arms drive
   "scripts/test-all-affected.test.sh"                       # SELF — see the note above

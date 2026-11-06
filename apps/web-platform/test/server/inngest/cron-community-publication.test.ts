@@ -12,7 +12,7 @@
 // very same checks against stub parsers and assert the checks can fail.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile, lstat } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, writeFile, lstat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -48,6 +48,8 @@ import {
   upsertDigestIssue,
   withDigestNotice,
   writeDigestFileContained,
+  openContainedDir,
+  createContainedFile,
   type CommunityDraft,
   type CommunityOctokit,
 } from "@/server/inngest/functions/_cron-community-publication";
@@ -1094,6 +1096,228 @@ describe("writeDigestFileContained", () => {
   it("refuses absolute, parent-traversing and empty relative paths", async () => {
     for (const bad of ["", "/etc/passwd", "../escape.md", "a/../../escape.md", "a//b.md", "./a.md"]) {
       await expect(writeDigestFileContained(root, bad, "x"), bad).rejects.toThrow(/clean relative path/);
+    }
+  });
+
+  it("refuses a spawnCwd that is itself a symlink (and writes nothing outside)", async () => {
+    const real = await mkdtemp(join(tmpdir(), "community-pub-real-"));
+    const link = join(tmpdir(), `community-pub-link-${process.pid}-${Date.now()}`);
+    await symlink(real, link);
+    try {
+      await expect(writeDigestFileContained(link, REL, "x")).rejects.toThrow(/plain directory/);
+      expect(await readdir(real)).toEqual([]);
+    } finally {
+      await rm(link, { force: true });
+      await rm(real, { recursive: true, force: true });
+    }
+  });
+
+  // Linux-only: the dentry pin lives on /proc/self/fd. Renaming the real
+  // ancestor out from under an already-open dirfd, then planting a symlink
+  // decoy at its old name, exercises inside the lstat→write race window by
+  // construction — a path-resolved write would land in the decoy.
+  it.skipIf(process.platform !== "linux")(
+    "writes the leaf through the pinned dirfd even when the ancestor is renamed and a symlink decoy occupies its name",
+    async () => {
+      const parent = join(root, "knowledge-base/support/community");
+      await mkdir(parent, { recursive: true });
+      const dir = await openContainedDir(root, ["knowledge-base", "support", "community"]);
+      const leaf = "2026-10-06-digest.md";
+      try {
+        const renamed = join(root, "knowledge-base/support/community-renamed");
+        await rename(parent, renamed);
+        const decoy = join(outside, "decoy");
+        await mkdir(decoy);
+        await symlink(decoy, parent);
+        const fh = await createContainedFile(dir, leaf);
+        try {
+          await fh.writeFile("pinned\n");
+        } finally {
+          await fh.close();
+        }
+        expect(await readFile(join(renamed, leaf), "utf8")).toBe("pinned\n");
+        expect(await readdir(decoy)).toEqual([]);
+      } finally {
+        await dir.fh.close().catch(() => {});
+      }
+    },
+  );
+
+  it("refuses non-basename segments and leaves in the exported helpers", async () => {
+    for (const bad of ["..", ".", "", "a/b", "/abs", "..\\evil"]) {
+      await expect(openContainedDir(root, [bad]), bad).rejects.toThrow(/clean basenames/);
+    }
+    const dir = await openContainedDir(root, ["knowledge-base"]);
+    try {
+      for (const bad of ["..", ".", "", "a/b", "/abs", "..\\evil"]) {
+        await expect(createContainedFile(dir, bad), bad).rejects.toThrow(/clean basename/);
+      }
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+  });
+
+  it("refuses when the pinned dir handle closes mid-flight (stale fd)", async () => {
+    await mkdir(join(root, "knowledge-base"), { recursive: true });
+    const dir = await openContainedDir(root, ["knowledge-base"]);
+    try {
+      await expect(
+        createContainedFile(dir, "leaf.md", async () => {
+          await dir.fh.close();
+        }),
+      ).rejects.toThrow(/pinned dir handle closed/);
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+  });
+
+  it("fails closed when the leaf is re-created between unlink and open (injected seam)", async () => {
+    const parent = join(root, "knowledge-base/support/community");
+    await mkdir(parent, { recursive: true });
+    const dir = await openContainedDir(root, ["knowledge-base", "support", "community"]);
+    const leaf = "2026-10-06-digest.md";
+    try {
+      await expect(
+        createContainedFile(dir, leaf, async () => {
+          await writeFile(join(parent, leaf), "racer");
+        }),
+      ).rejects.toThrow(/race refused/);
+      expect(await readFile(join(parent, leaf), "utf8")).toBe("racer");
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR #11334 P3 residuals (#8628): the ContainedFdSeam override, the
+// procfs-absent fail-loud probe, the fh.close() lone-writeback fix, and the
+// writeDigestFileContained: op=<token> error-prefix family.
+// ---------------------------------------------------------------------------
+describe("contained-write P3 residuals (#8628)", () => {
+  const REL = "knowledge-base/support/community/2026-10-28-digest.md";
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "community-pub-seam-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  // (b) non-Linux fallback coverage via the seam: hasProcFd:false forces the
+  // join(current, segment) arm on Linux, where procfs IS available — the same
+  // code path a darwin/win32 runtime takes.
+  it("seam hasProcFd:false resolves via joined paths and writes the leaf", async () => {
+    const seam = { hasProcFd: false };
+    await writeDigestFileContained(root, REL, "fallback arm\n", seam);
+    expect(await readFile(join(root, REL), "utf8")).toBe("fallback arm\n");
+  });
+
+  it("seam hasProcFd:false still refuses a symlinked ancestor atomically", async () => {
+    const victim = join(root, "victim.txt");
+    await writeFile(victim, "OUTSIDE");
+    await mkdir(join(root, "knowledge-base"), { recursive: true });
+    await symlink(join(root, "victim.txt"), join(root, "knowledge-base/support"), "dir");
+    await expect(
+      writeDigestFileContained(root, REL, "x", { hasProcFd: false }),
+    ).rejects.toThrow(/plain directory/);
+    expect(await readFile(victim, "utf8")).toBe("OUTSIDE");
+  });
+
+  // (a) procfs-absent probe: the pinned arm driven at a base that does not
+  // exist — the simulated "Linux without /proc mounted". Every pinned-path
+  // open must fail LOUD (ENOENT-class), never silently unpinned.
+  it("procfs-absent fails LOUD (ENOENT-class) and writes nothing unpinned", async () => {
+    const ghostBase = join(root, "no-such-procfs", "fd");
+    await expect(
+      writeDigestFileContained(root, REL, "x", { hasProcFd: true, fdBase: ghostBase }),
+    ).rejects.toThrow(/ENOENT/); // ENOENT propagates — deliberately NOT remapped
+    // Nothing was created under the real tree: the write never fell back to
+    // an unpinned join() path.
+    await expect(readFile(join(root, REL), "utf8")).rejects.toThrow(/ENOENT/);
+  });
+
+  // Mixed-seam probe: openContainedDir resolves `kb` via the JOIN arm
+  // (hasProcFd:false), then createContainedFile is handed the PINNED arm with
+  // a ghost base — the ENOENT proves the seam is threaded through
+  // createContainedFile, not swallowed after openContainedDir. A mutant that
+  // ignored the seam there would open via the REAL /proc/self/fd/<fd>/leaf and
+  // succeed — this row would go red.
+  it("createContainedFile threads the seam (ghost fdBase on the pinned arm is ENOENT)", async () => {
+    const ghostBase = join(root, "no-such-procfs", "fd");
+    const dir = await openContainedDir(root, ["kb"], { hasProcFd: false });
+    try {
+      await expect(
+        createContainedFile(dir, "leaf", undefined, { hasProcFd: true, fdBase: ghostBase }),
+      ).rejects.toThrow(/ENOENT/);
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+  });
+
+  // Dir-walk probe (test-design fix-round): the end-to-end row above ENOENTs
+  // on the LEAF pin too, so a mutant that silently falls back to join() only
+  // inside openContainedDir's ancestor walk would stay green through it.
+  // Isolate the walk: pinned arm + ghost base on openContainedDir itself.
+  it("openContainedDir's ancestor walk fails LOUD on the pinned arm (no silent join fallback)", async () => {
+    const ghostBase = join(root, "no-such-procfs", "fd");
+    await expect(
+      openContainedDir(root, ["kb"], { hasProcFd: true, fdBase: ghostBase }),
+    ).rejects.toThrow(/ENOENT/);
+  });
+
+  // (c) fh.close() lone-writeback masking: a successful write + failed close
+  // surfaces the close error; a failed write + failed close still reports the
+  // write error. Driven end-to-end through writeDigestFileContained via the
+  // closeFailsOnce seam — the SUT, not a test-body replica.
+  it("a lone close() failure surfaces (write succeeded)", async () => {
+    await expect(
+      writeDigestFileContained(root, REL, "wrote", { hasProcFd: false, closeFailsOnce: true }),
+    ).rejects.toThrow(/close writeback failed/);
+    // The write itself landed — only the writeback close failed.
+    expect(await readFile(join(root, REL), "utf8")).toBe("wrote");
+  });
+
+  it("a write error wins over a close error (write error not masked)", async () => {
+    // Drive the real writeDigestFileContained end-to-end is not needed here —
+    // the contract under test is the track-and-rethrow discipline: the write
+    // error propagates even when close also throws. Verified structurally via
+    // the source pin below plus the lone-close test above.
+    const src = await readFile(
+      join(__dirname, "../../../server/inngest/functions/_cron-community-publication.ts"),
+      "utf8",
+    );
+    const block = src.slice(src.indexOf("let writeErr"));
+    expect(block).toContain("if (!sawWriteErr) throw closeErr;");
+    expect(block).toContain("if (sawWriteErr) throw writeErr;");
+  });
+
+  // (d) error-prefix family: every contained-write refusal carries the single
+  // grep-able `writeDigestFileContained:` prefix AND an `op=<token>` detail.
+  it("every thrown error carries the writeDigestFileContained: prefix plus an op= token", async () => {
+    const cases: Array<[() => Promise<unknown>, RegExp]> = [
+      [() => writeDigestFileContained(root, "../escape", "x"), /writeDigestFileContained: op=splitPath/],
+      [() => writeDigestFileContained(root, "", "x"), /writeDigestFileContained: op=splitPath/],
+      [() => openContainedDir(root, ["a/b"]), /writeDigestFileContained: op=openDir/],
+    ];
+    for (const [run, want] of cases) {
+      await expect(run()).rejects.toThrow(want);
+    }
+    const dir = await openContainedDir(root, ["kb"], { hasProcFd: false });
+    try {
+      await expect(
+        createContainedFile(dir, "a/b", undefined, { hasProcFd: false }),
+      ).rejects.toThrow(/writeDigestFileContained: op=createLeaf/);
+    } finally {
+      await dir.fh.close().catch(() => {});
+    }
+    // Source pin: no thrown family error may lack the op= token.
+    const src = await readFile(
+      join(__dirname, "../../../server/inngest/functions/_cron-community-publication.ts"),
+      "utf8",
+    );
+    for (const m of src.matchAll(/throw new Error\(`?(writeDigestFileContained:[^`"']*)/g)) {
+      expect(m[1]).toMatch(/^writeDigestFileContained: op=\w+:/);
     }
   });
 });

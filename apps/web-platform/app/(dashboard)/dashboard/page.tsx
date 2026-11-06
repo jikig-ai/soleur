@@ -223,7 +223,10 @@ export default function DashboardPage() {
   const { data: todayItems = [] } = useSWR(
     swrKeys.dashboardToday(),
     async (): Promise<TodayItem[]> => {
-      const res = await fetch("/api/dashboard/today");
+      // no-store: the route answers max-age=60, and a revalidation after a Discard must not be served the
+      // discarded card from the browser HTTP cache (the cards also filter the acted-on item out of the SWR copy via
+      // useRefreshToday, ADR-067).
+      const res = await fetch("/api/dashboard/today", { cache: "no-store" });
       if (!res.ok) return [];
       const body = (await res.json()) as { items: TodayItem[] };
       return body.items ?? [];

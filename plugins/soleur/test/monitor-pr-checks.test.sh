@@ -28,6 +28,9 @@ else
 fi
 
 STUB="$(mktemp -d)"; trap 'rm -rf "$STUB"' EXIT
+# The script takes a per-PR lock (P4c of #10924); keep every arm off a developer's real lock directory. The lock
+# itself is covered by monitor-lock.test.sh, which carries no 10 s interval-floor sleeps (about 30 s, against this suite's 245 s).
+export SOLEUR_MONITOR_LOCK_DIR="$STUB/locks"
 mkstub() {  # mkstub <view-json-tuple> <checks-json>
   cat > "$STUB/gh" <<EOF
 #!/usr/bin/env bash
@@ -439,6 +442,7 @@ case "$1 $2" in
     c='"commits":{"nodes":[{"commit":{"committedDate":"2026-10-04T00:00:00Z"}}]}'
     case "$m" in
       queued)     pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
+      queued_null) pr='{"isInMergeQueue":true,"mergeQueueEntry":{"state":"QUEUED"},"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},'"$c"'}' ;;
       not_queued) pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[]},'"$c"'}' ;;
       dequeued)   pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":null,"timelineItems":{"nodes":[]},'"$c"'}' ;;
       removed)    pr='{"isInMergeQueue":false,"mergeQueueEntry":null,"state":"OPEN","autoMergeRequest":{"enabledAt":"2026-10-04T00:00:00Z"},"timelineItems":{"nodes":[{"reason":"checks_timed_out","createdAt":"2026-10-04T01:00:00Z"}]},'"$c"'}' ;;
@@ -521,6 +525,20 @@ out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 mkqstub 'OPEN|CLEAN|false' "$GREEN_CHECKS" dequeued
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 [[ "$rc" -eq 0 && "$out" == *"AUTO-MERGE NOT ARMED"* && "$out" != *"LEFT THE MERGE QUEUE"* ]] && ok "T24g3 control: unarmed, no removal event, never queued: still 'AUTO-MERGE NOT ARMED'" || no "T24g3 unarmed control" "rc=$rc out=[$out]"
+# T24m (#11789): a QUEUED PR reads autoMergeRequest=null on the REST view — the queue owns the merge —
+# so `automerge=false` alone must never stand as "disarmed": the queue verdict annotates the emission.
+mkqstub 'OPEN|CLEAN|false' "$GREEN_CHECKS" queued_null
+out="$(run 7778 --interval 10 --max-polls 2)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"automerge=false(queued)"* && "$out" == *"IN MERGE QUEUE"* \
+      && "$out" != *"AUTO-MERGE NOT ARMED"* && "$out" != *"needs an explicit merge"* ]]; then
+  ok "T24m queued + autoMergeRequest=null: the poll line is annotated (queued), never the not-armed verdict"
+else no "T24m queued+null annotation" "rc=$rc out=[$out]"; fi
+mkqstub 'OPEN|BLOCKED|false' "$GREEN_CHECKS" queued_null
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 2 && "$out" == *"automerge=false(queued)"* && "$out" == *"IN MERGE QUEUE"* \
+      && "$out" != *"AUTO-MERGE NOT ARMED"* && "$out" != *"CHECKS GREEN BUT BLOCKED"* ]]; then
+  ok "T24m2 queued + autoMergeRequest=null at BLOCKED: annotated, never the not-armed or BLOCKED verdict"
+else no "T24m2 queued+null at BLOCKED" "rc=$rc out=[$out]"; fi
 # T24h: an UNKNOWN read is not a positive not-queued read. Seen queued, then the read fails while the PR reads
 # OPEN CLEAN / auto-merge off: the old in_queue collapsed that to "not queued" and printed a terminal LEFT (rc 1)
 # for a PR that was queued and healthy. It must hold the previous verdict and keep watching (rc 2 at the cap).

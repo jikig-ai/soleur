@@ -1,0 +1,84 @@
+# Vector unit tests for transforms.app_container_compaction (#7577). Run against
+# the REAL vector.toml from scripts/vector-terminator-filter.test.sh:
+#   vector test apps/web-platform/infra/vector.toml apps/web-platform/infra/vector-compaction.test.toml
+# Proves the reduce's group-boundary VRL (vector validate --no-environment does
+# not compile VRL; only vector test does — same doctrine as the terminator and
+# egress-rollup fixtures). All identifiers synthetic.
+
+[[tests]]
+name = "bare-brace opener joins to column-0 closer; nested indented }, does not split"
+
+[[tests.inputs]]
+insert_at = "app_container_compaction"
+type = "log"
+[tests.inputs.log_fields]
+SYSLOG_IDENTIFIER = "soleur-web-platform"
+CONTAINER_NAME = "soleur-web-platform"
+message = "{"
+
+[[tests.inputs]]
+insert_at = "app_container_compaction"
+type = "log"
+[tests.inputs.log_fields]
+SYSLOG_IDENTIFIER = "soleur-web-platform"
+CONTAINER_NAME = "soleur-web-platform"
+message = "  fn: 'cron-x',"
+
+[[tests.inputs]]
+insert_at = "app_container_compaction"
+type = "log"
+[tests.inputs.log_fields]
+SYSLOG_IDENTIFIER = "soleur-web-platform"
+CONTAINER_NAME = "soleur-web-platform"
+message = "  nested: {"
+
+[[tests.inputs]]
+insert_at = "app_container_compaction"
+type = "log"
+[tests.inputs.log_fields]
+SYSLOG_IDENTIFIER = "soleur-web-platform"
+CONTAINER_NAME = "soleur-web-platform"
+message = "    deep: 1"
+
+[[tests.inputs]]
+insert_at = "app_container_compaction"
+type = "log"
+[tests.inputs.log_fields]
+SYSLOG_IDENTIFIER = "soleur-web-platform"
+CONTAINER_NAME = "soleur-web-platform"
+message = "  },"
+
+[[tests.inputs]]
+insert_at = "app_container_compaction"
+type = "log"
+[tests.inputs.log_fields]
+SYSLOG_IDENTIFIER = "soleur-web-platform"
+CONTAINER_NAME = "soleur-web-platform"
+message = "}"
+
+[[tests.outputs]]
+extract_from = "app_container_compaction"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+  .message == "{\n  fn: 'cron-x',\n  nested: {\n    deep: 1\n  },\n}"
+'''
+
+[[tests]]
+name = "single-line pino JSON row passes through unjoined"
+
+[[tests.inputs]]
+insert_at = "app_container_compaction"
+type = "log"
+[tests.inputs.log_fields]
+SYSLOG_IDENTIFIER = "soleur-web-platform"
+CONTAINER_NAME = "soleur-web-platform"
+message = "{\"level\":50,\"msg\":\"warn line\",\"userId\":\"u-1\"}"
+
+[[tests.outputs]]
+extract_from = "app_container_compaction"
+[[tests.outputs.conditions]]
+type = "vrl"
+source = '''
+  .message == "{\"level\":50,\"msg\":\"warn line\",\"userId\":\"u-1\"}"
+'''

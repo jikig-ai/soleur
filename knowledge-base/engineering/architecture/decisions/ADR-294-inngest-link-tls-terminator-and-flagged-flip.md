@@ -95,6 +95,7 @@ Targets NFR-026 (Encryption In-Transit) for the Inngest leg. The register status
 - **ADR-140** (encryption posture as a design-time default). The reason no ledger value or published wording changes in this PR: the posture is claimed only after resolvable evidence exists.
 - **ADR-118** (a shared cert's SANs are the cluster roster). The precedent for Terraform-minted pinned certificates delivered through Doppler and pinned by the client. This certificate differs deliberately: one fixed SAN (`10.0.1.40`, no roster to track), and it is not count-gated, because ADR-118's gating existed to stop a proxy server from logging a silent fallback on mere presence of the material, and no process here reads it before the host replace.
 - **ADR-241** (infra credential tiers). The flip job runs under `infra-privileged` and is added to the D8 census; it reuses the Tier-B write token bound to that environment to write the `prd_terraform` source key, and no new token is minted.
+- **ADR-307** (Inngest key rotation route, 2026-10-27, #10540). A rotation requires this ADR's link flag at `1`, and `inngest-link-flip.sh off` (and `flip`) needs `OFF-AFTER-ROTATION` once a rotation run exists.
 
 ## Addendum (2026-10-19) - what the review changed, and what the repository does and does not show
 

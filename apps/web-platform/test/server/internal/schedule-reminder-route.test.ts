@@ -167,7 +167,8 @@ describe("POST /api/internal/schedule-reminder — validation", () => {
 // Cutover window (#6921 FR16): op=quiesce-web stops the scheduler the app sends
 // to, so inngest.send's fetch is REFUSED until the INNGEST_BASE_URL repoint
 // redeploys. Error shape captured against a closed loopback port with the
-// pinned SDK (inngest 3.54.2, 2026-09-14): TypeError "fetch failed" whose
+// pinned SDK (originally inngest 3.54.2, 2026-09-14; the pin is now inngest
+// 4.26.0 since #8628 — the fetch error shape is unchanged): TypeError "fetch failed" whose
 // `cause` is an Error with code ECONNREFUSED — not a top-level code.
 function refusedFetchError(): TypeError {
   const cause = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8288"), {

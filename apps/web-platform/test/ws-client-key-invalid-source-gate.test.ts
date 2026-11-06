@@ -11,9 +11,10 @@ import { dirname, join } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(join(__dirname, "../lib/ws-client.ts"), "utf8");
 
-/** Extract the `if (msg.errorCode === "key_invalid") { ... }` block body. */
+/** Extract the `if (isCredentialErrorCode(msg.errorCode)) { ... }` block body
+ *  (the single credential predicate: `key_invalid` + `byok_key_missing`). */
 function keyInvalidBranch(src: string): string {
-  const start = src.indexOf('msg.errorCode === "key_invalid"');
+  const start = src.indexOf("isCredentialErrorCode(msg.errorCode)");
   expect(start, "key_invalid branch must exist").toBeGreaterThan(-1);
   // From the marker to the `teardown();` call that closes the branch.
   const teardownAt = src.indexOf("teardown();", start);

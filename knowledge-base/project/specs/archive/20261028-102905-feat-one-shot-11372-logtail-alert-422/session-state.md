@@ -1,0 +1,58 @@
+# Session State
+
+## Plan Phase
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11372-logtail-alert-422/knowledge-base/project/plans/2026-10-28-fix-logtail-key-probe-alert-422-plan.md
+- Plan artifact: complete (selector=branch)
+- Status: complete
+
+### Errors
+- `collision-precheck.sh 11372` flagged open PR #11374 — resolved: it is this pipeline's own auto-created draft PR on this branch, not a foreign duplicate.
+- `technical-ruling-gate.sh` initially failed on a `mechanical` class value in `decision-challenges.md` — fixed (moved the note out of the gated table); gate now PASSes (4 rows).
+- `markdownlint-cli2` flagged 2 bare-URL (MD034) errors in the plan — fixed; final lint is 0 issues.
+- First AC-split edit failed on stale `old_string` — reapplied with exact text.
+- No blocking errors remain.
+
+### Decisions
+- Fix shape (CTO ruling, sequential-fallback inline): narrow `query_period` 10800 → 5400 on `logtail_exploration_alert.inngest_luks_key_probe_fail`, keep `check_period = 300` — sibling `inngest_luks_wrong_volume` is in applied state at 300/5400 on the same source with a heavier query; 1.5 h window preserves hourly-re-probe hysteresis. Contingency ladder if the 422 persists: `check_period` 900 → 3600.
+- Companion edits (4 files): the `.tf` value + comment; drift guard `inngest-luks-key-probe-alert.test.sh` param pin + mutation anchor; two runbook docs (`betterstack-log-query.md`, `inngest-luks-cutover-6894.md`). SQL byte-identical.
+- Ops-remediation convention: PR body uses `Ref #11372`, not `Closes` — remediation only proves at post-merge apply; ACs split into Pre-merge/Post-merge.
+- Scope guard honored: `server.tf` `ignore_changes`/vector allow-set untouched (AC-6); issue 6027 cutover is out of scope.
+- Artifacts: `tasks.md` and `decision-challenges.md` written under `knowledge-base/project/specs/feat-one-shot-11372-logtail-alert-422/`; planning artifacts uncommitted for parent review.
+
+### Components Invoked
+- `soleur:plan` (full run), `soleur:deepen-plan` halt-gate verification (4.4–4.13) — sequential-fallback inline
+- `soleur:engineering:research:repo-research-analyst`, `soleur:engineering:research:learnings-researcher`, `soleur:engineering:cto`, `soleur:operations:coo`, `soleur:plan-review` lenses — sequential-fallback inline
+- `lint-guard-contract.py`, `technical-ruling-gate.sh`, `collision-precheck.sh`, `markdownlint-cli2` run mechanically
+
+## Work Phase
+- Status: complete (commit 7d672b1535)
+- RED→GREEN: guard pin updated first (suite red on .tf still 10800), .tf moved to 5400 → 43/43 green incl. all mutation rows
+- Affected-test exit gate: AFFECTED_RC=6 budget-deferred (~154+ suites ran, 0 real failures) — CI authoritative per contract
+- terraform validate: not run locally (v1.9.8 vs CI-pinned 1.10.5, pre-existing mock_provider mismatch artifact); fmt -check clean; infra-validation.yml owns it
+- GDPR gate: N/A (alert window change on host-emitted probe rows; no regulated-data surface)
+- cto_spawns=1 (planning subagent, sequential-fallback)
+
+## Review Phase
+- Status: complete — 12 seats (3 design-pass + 6 class panel + user-impact + structural-enum + test-design), tier aggregate pattern (declared; mismatch note: one-number diff)
+- P1: none in-diff; structural-enum uncovered paths are pre-existing guard-model gaps → deferred scope-out → issue #11388 (meta/machinery)
+- P2: stale 3h-window locals comment (:334) → fixed 9008affb98
+- P3s: tuple phrasing + contingency qualifier → fixed inline; rest folded into #11388
+- shellcheck clean (semgrep substitute, bash-only source); gdpr-gate N/A (no regulated-data path); #11266 datapoint comment posted
+- Design pass: lever choice (query_period) upheld by all three seats
+
+## Fix Round + QA
+- Fix round: 3 targeted seats + 1 verification pass over 9008affb98..436ea714e2 — all clean, all findings CLOSED
+- QA: plan unit scenarios verified via guard suite (43/43 x3, incl. negative-control RED + 90000-widening mutant); e2e row is pyramid-justified deferred to live verify; AC-4 post-merge apply check pending at postmerge
+
+## Post-panel fix (CI-caught)
+- deploy-script-tests-fixed RED: my second `query_period = 5400` literal broke the SIBLING guard's file-scoped mutation anchor (`count==1`). Scoped its anchor to the sibling block via unique `recovery_period = 10800` context. Both guards re-verified: 23/23 + 43/43. Learning: a shared literal value across same-file alert resources must treat every guard's file-scoped anchors as a collision surface.
+
+## Merge-resolution (sibling fix #11384 landed first, then still 422'd)
+- #11384 merged 7d83c9021 (check 900/query 10800) at 11:16Z; its own post-merge apply run 40678688421 FAILED with the same 422 at 11:18Z — the ceiling binds on DATA RANGE, not cadence. This branch's 300/5400 is the needed fix.
+- Resolved 3 conflicts (tf comment+values, guard param pin, runbook line) toward this branch; resource comment updated to record BOTH 422s.
+- Re-verified merged tree: key-probe guard 43/43, wrong-volume guard 23/23.
+
+## Merge-resolution round 2 (sibling fix #11404 also landed, also 422'd)
+- #11404 merged cd503b827 (check 3600/query 10800) at 13:40Z; its apply run 40698576985 FAILED with the same 422 at 13:41Z. All three check_period rungs at window 10800 are now empirically rejected (300, 900, 3600) — the ceiling binds on data range.
+- Resolved 4 conflicts toward this branch; resource comment now records all three failed applies; contingency rung re-aimed at query_period narrowing (4500) since check_period is exhausted.
+- Re-verified merged tree: key-probe guard 43/43, wrong-volume guard 23/23.

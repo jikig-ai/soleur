@@ -1,0 +1,2 @@
+AUDIT_READS_HEADER	rev=e3e94dfe7a3fc78bd385154feb092e6102802959	mode=check	netns=unshare	idmap=current	reps=2	cover=argv	max_load=4.0	out=/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-10861-pr5d-sweeps/knowledge-base/project/specs/feat-one-shot-10861-pr5d-sweeps/receipts/recorder-runs/run2
+AUDIT_READS	label=plugins/soleur/test/boundary-prefix.test.sh	verdict=unreliable	reason=load_refused	rc=-	files=-	dirs=-	cover=-	unresolved=-	load=17.38	rev=e3e94dfe7a3fc78bd385154feb092e6102802959	mode=check	detail=win:1

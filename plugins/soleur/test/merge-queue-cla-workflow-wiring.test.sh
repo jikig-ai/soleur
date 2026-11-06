@@ -254,8 +254,10 @@ rec("W12", None not in order and order == sorted(order), "indices checkout,verif
 
 # W13: the step list is PINNED (checkout, verify, success post, failure post: nothing between the
 # default-branch checkout and verify can fetch candidate scripts) and every step key is whitelisted:
-# no `shell:` (verify could be a no-op), `working-directory`, `timeout-minutes`, `continue-on-error`.
-STEP_KEYS = {"name", "id", "uses", "with", "run", "env", "if"}
+# no `shell:` (verify could be a no-op), `working-directory`, `continue-on-error`. `timeout-minutes`
+# is whitelisted since #11678 — the verify step carries it so an overrun is a step failure that
+# fires the failure-post, not a job cancellation.
+STEP_KEYS = {"name", "id", "uses", "with", "run", "env", "if", "timeout-minutes"}
 step_shape = [("uses" if "uses" in s else "run") if isinstance(s, dict) else "?" for s in steps]
 extra_keys = sorted({k for s in steps if isinstance(s, dict) for k in s if k not in STEP_KEYS})
 rec("W13", len(steps) == 4 and step_shape == ["uses", "run", "run", "run"] and ck == 0 and vf == 1
@@ -497,8 +499,9 @@ mutant verify-shell   W13 wf pyedit "$VERIFY_HDR" '        id: verify
 mutant verify-workdir W13 wf pyedit "$VERIFY_HDR" '        id: verify
         working-directory: /tmp
         run: bash scripts/merge-queue-cla-verify.sh'
-mutant step-timeout   W13 wf pyedit "$VERIFY_HDR" '        id: verify
-        timeout-minutes: 1
+mutant step-extrakey  W13 wf pyedit "$VERIFY_HDR" '        id: verify
+        outputs:
+          leaked: x
         run: bash scripts/merge-queue-cla-verify.sh'
 mutant checkout-repo  W15 wf pyedit '          persist-credentials: false' '          repository: evil/fork
           persist-credentials: false'

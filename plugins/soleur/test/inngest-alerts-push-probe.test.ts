@@ -44,7 +44,7 @@ describe("inngest-alerts-push-probe", () => {
   });
 
   it("pins TARGETS breadth AND decoy refusal: nested-block and heredoc `push = true` lines cannot arm", () => {
-    // Mutating inngest_consumer (target index 4 of 5) proves the probe walks every resource in
+    // Mutating inngest_consumer (target index 4 of 6) proves the probe walks every resource in
     // TARGETS — a shrunken list would read the real-root arm green here too. The planted decoys
     // (a nested block and a heredoc body each carrying `push = true`) would arm a comment- or
     // heredoc-blind scanner; the lib's codeView + topLevelAttributes path refuses both.

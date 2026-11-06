@@ -1,7 +1,8 @@
 ---
 component: knowledge-base
-updated: 2026-02-06
+updated: 2026-11-02
 primary_location: knowledge-base/
+dependencies: []
 ---
 
 # Knowledge Base
@@ -154,7 +155,7 @@ This documentation. Describes what the project does and its component architectu
 
 ## Dependencies
 
-- **Internal**: All workflow commands read/write here
+- **Internal**: None (read/written by every workflow skill; it depends on no other component)
 - **External**: None (pure markdown)
 
 ## Examples

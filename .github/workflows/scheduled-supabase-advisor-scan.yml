@@ -250,7 +250,7 @@ jobs:
           # single night. Each title dedupes independently.
           EXISTING=$(gh issue list --repo "$GH_REPO" --label "ci/supabase-advisor" --state open \
             --limit 100 --json number,title \
-            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")
+            --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty") || { echo "::error::supabase-advisor: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" \
@@ -272,6 +272,7 @@ jobs:
           # Close BOTH titles independently — recovering from a token expiry must
           # not close a violation issue, and vice versa.
           for TITLE in "[ci/supabase-advisor] public table without RLS" "[ci/supabase-advisor] scan failed"; do
+            # dedupe: benign — close-path read inside the per-title loop: a gh fault leaves the issue open for the next clean scan.
             STALE=$(gh issue list --repo "$GH_REPO" --label "ci/supabase-advisor" --state open \
               --limit 100 --json number,title \
               --jq "map(select(.title == \"${TITLE}\")) | .[0].number // empty")

@@ -21,9 +21,10 @@
 # registry-host-replace / ADR-100 inngest-host-replace) to re-run this host's cloud-init
 # WITHOUT SSH — a scoped, destroy-guarded `terraform apply -replace='hcloud_server.git_data'`
 # that PRESERVES the data volume (hcloud_volume.git_data_luks) and the LUKS passphrase by OMISSION.
-# DISABLED from the Option B merge until #11194 retires the plaintext arms from its gates: the
-# replace, rotate and create gates still demand the retired plaintext addresses, so they refuse every
-# plan (ADR-239 Amendment 2026-10-26, item 4). It is a maintenance-window dispatch, not a per-PR apply;
+# The replace, rotate and create gates no longer demand the retired plaintext addresses (#11194,
+# ADR-239 Amendment 2026-10-28), and each route refuses through a plaintext-id interlock while the
+# module call below passes a non-empty git_data_volume_id (ADR-239 Amendment 2026-10-26, item 4). It
+# is a maintenance-window dispatch, not a per-PR apply;
 # these resources remain excluded from the per-PR `-target=` list. Before it, git-data had
 # ZERO non-SSH reprovision path (hr-prod-host-config-change-immutable-redeploy gap). The
 # invariant that a boot-armed heartbeat needs such a path is mechanically enforced by
@@ -381,13 +382,11 @@ resource "doppler_secret" "git_data_ssh_host_key" {
 # The strip expression and the map now live in modules/git-data-userdata/main.tf. The
 # rung-2 gate derives its hash-input set by grepping THAT file — see
 # tests/scripts/lib/git-data-birth-readiness-gate.sh.
-# git_data_volume_id below is a LITERAL (the retired plaintext volume):
-# SOLEUR-DEBT: literal id naming a device that the dispatched git-data-plaintext-volume-destroy workflow deletes at the provider API (it keeps the rendered user_data byte-identical so hcloud_server.git_data plans NO change, ADR-239 Amendment 2026-10-26) and after that any host rebirth boots into the bootstrap plaintext_unverified FATAL; when #11194 merges (plaintext arms retired from the host replace/birth/rotate gates) set this to "" in a deliberate, owner-named host replace.
 module "git_data_userdata" {
   source = "./modules/git-data-userdata"
 
   host_name               = "soleur-git-data"
-  git_data_volume_id      = "106867358"
+  git_data_volume_id      = ""
   git_data_luks_volume_id = hcloud_volume.git_data_luks.id
   doppler_token           = doppler_service_token.git_data.key
   # (#7025, R1) The literal this template carried until #7025, now passed explicitly. It
@@ -538,12 +537,11 @@ resource "hcloud_server" "git_data" {
 # --- Retired plaintext bare-repo block volume --------------------------------
 # hcloud_volume.git_data (name soleur-git-data-store, id 106867358) and its attachment were
 # declared here until the plaintext volume was retired (ADR-239 Amendment 2026-10-26, Option B).
-# The device is deleted by the dispatched, reviewer-gated workflow
-# .github/workflows/git-data-plaintext-volume-destroy.yml, whose plan gate
-# (tests/scripts/lib/git-data-plaintext-destroy-gate.sh) accepts only that exact delete. Removing
-# the HCL here changes nothing in production by itself: the state still holds both addresses until
-# that workflow runs, so untargeted plans show the two destroys in the meantime. The LUKS store is
-# hcloud_volume.git_data_luks (git-data-luks.tf).
+# The device was deleted at the provider API on 2026-10-27 by a reviewer-gated Terraform destroy
+# (run 40478209838); the state no longer holds either address. The record of the run, its read-back
+# and the claim limit are in the runbook section "Plaintext-volume destroy (Option B, #8211 / #6897)"
+# and in ADR-239 Amendment 2026-10-27. The LUKS store is hcloud_volume.git_data_luks
+# (git-data-luks.tf).
 
 # --- Deny-all PUBLIC ingress firewall ----------------------------------------
 # ZERO inbound rules = deny-all on the PUBLIC interface (P1). Hetzner firewalls
@@ -677,9 +675,9 @@ resource "betteruptime_heartbeat" "git_data_host_prd" {
 # try to create it and Doppler would answer 400 "Name is already in use" on every merge. With
 # literals an absent config makes THIS write fail loudly instead. The config name sits in a local
 # (still a plain string, no resource address) because the token-drift inventory test treats every
-# `config = "<name>"` attribute as a config the drift scan must reach, and `prd_git_data` is not in
-# that inventory today (adding it means minting a drift read token, which is the owner's credential
-# change, not this PR's). The URL is not in user_data, so
+# `config = "<name>"` attribute as a config the drift scan must reach, and `prd_git_data` has been
+# in that inventory since #11857 (its drift read token deliberately has NO depends_on edge to
+# `doppler_config.git_data_prd`, which stays a per-merge exclusion). The URL is not in user_data, so
 # the rung-2 rehearsal render carries no production monitor and a rehearsal host (whose scratch
 # config lacks this secret by construction) cannot ping it. It rides the per-merge -target list
 # beside git_data_prd and is refused by the git-data birth route (GIT_DATA_BIRTH_REFUSED).

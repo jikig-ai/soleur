@@ -547,6 +547,24 @@ describe("dispatchSoleurGo — onStaleResume recovery (#9538)", () => {
     expect(mockTeardownEgressForwarder).toHaveBeenCalledWith("conv-stale");
   });
 
+  it("handleCcCloseQuery detaches (not releases) the worktree lease on auth-failed (#11086)", async () => {
+    const release = vi.fn().mockResolvedValue(undefined);
+    const detach = vi.fn();
+    __registerCcWorktreeLeaseForTests("u-auth", "conv-auth", {
+      leaseGeneration: 1,
+      release,
+      detach,
+    });
+
+    handleCcCloseQuery({ conversationId: "conv-auth", userId: "u-auth", reason: "auth-failed" });
+    await flushMicrotasks(20);
+
+    // Same hold-for-the-immediate-re-acquire shape as the dead-resume re-dispatch: the cold rebuild after a terminal sign-in
+    // failure re-leases the credential and re-acquires the worktree lease, so a deferred release would tombstone the row.
+    expect(release).not.toHaveBeenCalled();
+    expect(detach).toHaveBeenCalledTimes(1);
+  });
+
   it("control: a non-stale close still releases the worktree lease", async () => {
     const release = vi.fn().mockResolvedValue(undefined);
     __registerCcWorktreeLeaseForTests("u-ctl", "conv-ctl", {

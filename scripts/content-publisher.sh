@@ -8,7 +8,9 @@
 #   declared in frontmatter, and updates status to published via sed -i.
 #
 # Environment variables:
-#   DISCORD_BLOG_WEBHOOK_URL - Discord webhook for #blog channel (preferred; optional)
+#   DISCORD_BLOG_WEBHOOK_URL - Discord webhook for #blog channel (preferred; optional).
+#                            - Unset/empty while DISCORD_WEBHOOK_URL is set posts to #general
+#                              and emits the SOLEUR_PUBLISHER_FALLBACK stderr marker.
 #   DISCORD_WEBHOOK_URL      - Discord webhook fallback (optional; skips if neither set)
 #   X_API_KEY              - X API key (optional; skips if unset)
 #   X_API_SECRET           - X API secret
@@ -36,6 +38,20 @@
 #   2 - Partial failure (some platforms failed but fallback issues were created)
 
 set -euo pipefail
+
+# REFUSE TO RUN UNDER xtrace WITH A LIVE CREDENTIAL BOUND (#7797). Shell
+# tracing echoes commands AFTER expansion, so a credential is printed the
+# moment it is used. The test below covers EVERY credential this file
+# references and uses `${VAR:+x}`, which is non-emptiness WITHOUT expanding
+# the value -- `${VAR:-}` would print it here.
+case "$-" in
+  *x*)
+    if [ -n "${BSKY_APP_PASSWORD:+x}${DISCORD_BLOG_WEBHOOK_URL:+x}${DISCORD_WEBHOOK_URL:+x}${GH_TOKEN:+x}${LINKEDIN_ACCESS_TOKEN:+x}${LINKEDIN_ORG_ACCESS_TOKEN:+x}${LINKEDIN_TRACKER_REASON_MISSING_TOKEN:+x}${X_ACCESS_TOKEN:+x}${X_ACCESS_TOKEN_SECRET:+x}${X_API_KEY:+x}${X_API_SECRET:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -333,6 +349,15 @@ post_discord() {
     echo "Warning: No Discord webhook URL set (checked DISCORD_BLOG_WEBHOOK_URL, DISCORD_WEBHOOK_URL). Skipping Discord posting." >&2
     SKIP_REASON="no credentials"
     return 3
+  fi
+
+  # Fallback path: the blog-channel webhook is absent and the post is about to
+  # land in the general channel. Emit a fixed-string warning carrying the
+  # SOLEUR_PUBLISHER_FALLBACK marker so the Inngest harness (which discards
+  # this stderr) can grep + mirror it to Sentry — a missing/misnamed
+  # DISCORD_BLOG_WEBHOOK_URL must never again misroute silently.
+  if [[ -z "${DISCORD_BLOG_WEBHOOK_URL:-}" ]]; then
+    echo "Warning: DISCORD_BLOG_WEBHOOK_URL unset — posting to fallback webhook (general channel) [SOLEUR_PUBLISHER_FALLBACK]" >&2
   fi
 
   local payload

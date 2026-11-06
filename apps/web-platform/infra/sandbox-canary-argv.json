@@ -3,7 +3,7 @@
   "status": "captured",
   "schema": "canonical-bwrap-v1",
   "sdkPackage": "@anthropic-ai/claude-agent-sdk",
-  "sdkVersion": "0.3.284",
+  "sdkVersion": "0.3.311",
   "bwrapSetupArgv": [
     "--new-session",
     "--die-with-parent",
@@ -46,6 +46,8 @@
     "/tmp/cc-socks-0",
     "--tmpfs",
     "/tmp/.cs",
+    "--tmpfs",
+    "${CANARY_SEED_ADMIN}",
     "--tmpfs",
     "${CANARY_BRIDGE_SPAWN}",
     "--tmpfs",
@@ -134,13 +136,16 @@
     "ALL",
     "--bind",
     "/proc",
-    "/proc"
+    "/proc",
+    "--unsetenv",
+    "SRT_ALLOW_NESTED_USERNS"
   ],
   "prepDirs": [
     "${CANARY_WS}",
     "${CANARY_C4_STAGING}",
     "${CANARY_BRIDGE_SPAWN}",
     "${CANARY_TRANSCRIPTS}",
+    "${CANARY_SEED_ADMIN}",
     "${CANARY_WS}/.claude",
     "${CANARY_WS}/.claude/.cc-writes",
     "/tmp/soleur-sandbox-canary",

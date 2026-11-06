@@ -182,13 +182,21 @@ export function exposed(
 
 /**
  * INTERNAL — public relations holding ZERO api-role privileges by design.
- * Empty today: every catalog member carries >=1 api-role grant (all 62
- * relations enumerated on prd 2026-10-26 are covered by the 174 snapshot,
- * `_schema_migrations` included). The classification arm exists for relations
+ * The 62 relations enumerated on prd 2026-10-26 each carry >=1 api-role grant
+ * (covered by the 174 snapshot, `_schema_migrations` included); the entries
+ * below arrived after it. The classification arm is for relations
  * that arrive WITH a `soleur:no-data-api:` sentinel — the lint requires the
  * sentinel to carry a reason; this map requires the same, keyed by relname.
  */
-const INTERNAL: Record<string, string> = {};
+const INTERNAL: Record<string, string> = {
+  // Migration 182 (#8211): the git-data erasure ledger and its counter. RLS on with no policy; every api role is
+  // revoked and the tables are reached only through service_role-only SECURITY DEFINER RPCs (the `soleur:no-data-api:`
+  // sentinels in the migration carry the same reasons).
+  git_data_erasure_pending: "service-role RPC-only erasure ledger (migration 182, #8211): no api-role table privilege, access only via record/claim/resolve SECURITY DEFINER RPCs",
+  git_data_erasure_counts: "service-role RPC-only erasure counter (migration 182, #8211): no api-role table privilege, written only by resolve_git_data_erasure_pending",
+  // Migration 184 (#12011): the single-use email-code challenge. RLS on, no policy, every api role revoked.
+  legal_reauth_event: "service-role RPC-only single-use challenge (migration 184, #12011): no api-role table privilege, reached only via issue/claim/mark SECURITY DEFINER RPCs and record_legal_acceptance",
+};
 
 /**
  * RETIRED — relations the corpus has DROPPED or RENAMED away. The entry is
@@ -216,6 +224,29 @@ const RETIRED: Record<string, string> = {};
  * name; INTERNAL entries must NOT collide (a relation cannot be both).
  */
 const OVERRIDES: Record<string, RegistryEntry> = {
+  // Migration 180 (#4672): durable approval requests. Owner SELECT through RLS is the one api surface (the approvals
+  // landing page reads the row as the signed-in Owner); every write is a SECURITY DEFINER approval RPC and
+  // service_role holds NO table privilege at all (it reaches the table only through the RPCs). Created after the 174 snapshot.
+  "approval_request": exposed({ authenticated: ["SELECT"] }, { provenance: "migration 180 (#4672): authenticated SELECT only (Owner-gated by RLS); no write grant for any api role; service_role has no table access (RPC-only)" }),
+  // Migration 184 (#12011): the founder's legal acceptance record. The founder reads their own rows through RLS
+  // (founder_id = auth.uid()); every write is record_legal_acceptance under a write-once trigger and service_role holds
+  // NO table privilege (it reaches the table only through the RPCs).
+  "legal_acceptance": exposed({ authenticated: ["SELECT"] }, { provenance: "migration 184 (#12011): authenticated SELECT only (founder-gated by RLS); no write grant for any api role; service_role has no table access (RPC-only)" }),
+  // Migration 181 (#11569): the owner-draft UPDATE policy plus a column-narrowed grant. 174's snapshot gave anon and
+  // authenticated the full table-level verb set on messages; 181 revokes the table-level UPDATE from both and re-grants
+  // UPDATE on (status, draft_preview) to authenticated only, so every other verb stays as 174 recorded it. To roll
+  // back, run 181's down file AND delete this entry (the registry would otherwise expect the narrowed posture).
+  "messages": exposed(
+    {
+      anon: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE"],
+      authenticated: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE"],
+      service_role: ["DELETE","INSERT","MAINTAIN","REFERENCES","SELECT","TRIGGER","TRUNCATE","UPDATE"],
+    },
+    {
+      columns: { authenticated: { draft_preview: ["UPDATE"], status: ["UPDATE"] } },
+      provenance: "migration 181 (#11569): table-level UPDATE revoked from anon and authenticated; authenticated re-granted UPDATE on status and draft_preview only (Discard, Edit, send-archive), paired with the messages_owner_draft_update policy; every other verb as 174 recorded it",
+    },
+  ),
   // OVERRIDES for migration 178's default-era api-grant narrowing (#11193 —
   // the deferred pass ADR-303 §Consequences names). Each entry replaces the
   // 174 snapshot's parsed full-DML set with the censused intended posture;

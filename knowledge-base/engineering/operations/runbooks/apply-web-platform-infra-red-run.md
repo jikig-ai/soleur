@@ -196,3 +196,7 @@ that, fall back to the close comments of past gap issues (`gh issue list --repo 
 were never delivered or were closed by hand. An issue body is rewritten on every refresh and holds no history; do not count
 from bodies. The ">1 h with deploy impact" half of the bar is read from the live open issue ("Minutes since cancel" column) at
 the time, not reconstructed afterwards. The bar is recorded in ADR-270 (2026-10-23 addendum).
+
+## Redrive arm (ADR-318, #10033)
+
+Since ADR-318 the follower's `redrive` job auto-re-dispatches `apply-deploy-pipeline-fix.yml --ref main` when every deploy-fix gap row is `evicted-before-start` and nothing is in flight — the same command the issue body prints for a human. `cancelled-mid-run` rows never auto-dispatch (possibly-partial state; verify by hand first). Residual: a sustained storm can re-evict a redispatched run — each eviction re-fires the follower on the next completion, and the 60-minute aged-issue escalation remains the floor. To disable the arm without touching the follower's detection, add a job-level `if: false` to `redrive` or revert the job; the issue flow is unchanged.

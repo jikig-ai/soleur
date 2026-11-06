@@ -115,6 +115,12 @@ was the objection any infra sharding had to answer *with numbers*.
    wrapper (default 360 s, overrides in the runner's bound map for the
    seven suites that carried step-level `timeout-minutes`).
 
+   *Amendment 2026-11-05 (#12091):* the per-leg ceiling is now 20 min. Measured
+   over the 30 latest green pull_request runs, matrix legs reached 14.98 min
+   (median 9.3), so the ~6.7 min model and the 15 min ceiling stated above no
+   longer describe the measured legs. The current measurements live in the
+   comment on the job's `timeout-minutes` in `infra-validation.yml`.
+
 ## Consequences
 
 - A suite landing under `apps/web-platform/infra/` requires no workflow

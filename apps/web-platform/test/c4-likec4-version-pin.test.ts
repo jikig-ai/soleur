@@ -257,6 +257,17 @@ const DRAFT_LIGHT_IF = PUSH_DEDUPE_IF.replace(" }}", " && needs.draft-light.outp
 // activation lock holds (`active` is never 'true'); scripts/ci-push-dedupe.test.sh and scripts/ci-draft-light.test.sh pin the same
 // string against ci.yml, so the install it gates cannot be made conditional by any other spelling.
 const PR_AFFECTED_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", " && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-webplat,')) }}");
+// ADR-276 oracle-only lane (#12156, amendment): the five lane-gated legs append ONE more `!(…)` conjunct after every
+// earlier term — event disjunct covering pull_request AND merge_group, `active == 'true'`, head_sha non-empty, head
+// bound to either event's sha, and membership in `oracle-selection`'s `skip_legs` list — and add `oracle-selection`
+// to `needs:`. The term is inert while `CI_ORACLE_LANE` is unset and while `ORACLE_LANE_LOCKED=1` stands in the
+// driver; scripts/ci-push-dedupe.test.sh pins the same conjunct via or_term() against ci.yml, so the sanctioned
+// spelling lives in exactly one place per harness.
+const ORACLE_LANE_TERM = (leg: string): string =>
+  ` && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',${leg},'))`;
+const ORACLE_WEBPLAT_IF = PR_AFFECTED_WEBPLAT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-webplat")} }}`);
+const ORACLE_SCRIPTS_IF = DRAFT_LIGHT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-scripts")} }}`);
+const ORACLE_BUILD_IF = PUSH_DEDUPE_IF.replace(" }}", `${ORACLE_LANE_TERM("web-platform-build")} }}`);
 const RUNNER_PM_ALLOWED = [/^RUN npm ci --omit=dev$/, /^RUN npx playwright@\S+ install --with-deps chromium$/];
 
 function checkImageStructure(dockerfile: string, ci: string): string[] {
@@ -313,15 +324,22 @@ function checkImageStructure(dockerfile: string, ci: string): string[] {
   }
   const job = doc?.jobs?.["web-platform-build"];
   // A job-level `continue-on-error` or `if` silences BOTH build steps while the step-level checks stay green.
-  // The one sanctioned exception (ADR-276 S2, #9512): `needs: [push-dedupe]` plus the exact condition below, which is true on
-  // every event except a push to main whose identical SHA already passed the full battery in the merge queue. Anything else
-  // (a different condition, a different `needs`) is still refused.
+  // The sanctioned pairs are exactly two: ADR-276 S2 (#9512) `needs: [push-dedupe]` plus the exact PUSH_DEDUPE_IF
+  // condition, and the ADR-276 oracle-lane pair (#12156) `needs: [push-dedupe, oracle-selection]` plus the exact
+  // ORACLE_BUILD_IF condition — the oracle conjunct reads needs.oracle-selection.outputs.*, so the `if:` is only
+  // valid WITH the extra need, and a need that skips its job unconditionally is itself a silent-skip. Anything
+  // else (a different condition, a different `needs`, a crossed pair) is still refused.
+  const needsJoin = Array.isArray(job?.needs) ? job.needs.join(",") : "";
+  const buildPairOk =
+    (needsJoin === "push-dedupe" && job?.if === PUSH_DEDUPE_IF) ||
+    (needsJoin === "push-dedupe,oracle-selection" && job?.if === ORACLE_BUILD_IF);
   for (const k of Object.keys(job ?? {})) {
     if (k === "continue-on-error") violations.push("ci.yml: web-platform-build must not set job-level continue-on-error (the cli-tools gate would go green on failure)");
     else if (k === "if") {
-      if (job?.if !== PUSH_DEDUPE_IF) violations.push("ci.yml: web-platform-build must not be conditional at job level");
+      if (!buildPairOk) violations.push("ci.yml: web-platform-build must not be conditional at job level");
     } else if (k === "needs") {
-      if (!(Array.isArray(job?.needs) && job.needs.length === 1 && job.needs[0] === "push-dedupe")) violations.push(`ci.yml: web-platform-build sets unexpected job key needs (only timeout-minutes, runs-on, steps, and the ADR-276 S2 pair needs: [push-dedupe] with its exact if:)`);
+      const needsShapeOk = needsJoin === "push-dedupe" || (needsJoin === "push-dedupe,oracle-selection" && job?.if === ORACLE_BUILD_IF);
+      if (!needsShapeOk) violations.push(`ci.yml: web-platform-build sets unexpected job key needs (only timeout-minutes, runs-on, steps, and the ADR-276 S2 pair needs: [push-dedupe] with its exact if:, or the ADR-276 oracle-lane pair needs: [push-dedupe, oracle-selection] with the exact oracle-lane if:)`);
     } else if (!["timeout-minutes", "runs-on", "steps"].includes(k)) violations.push(`ci.yml: web-platform-build sets unexpected job key ${k} (only timeout-minutes, runs-on, steps)`);
   }
   if (job && "runs-on" in job && !(typeof job["runs-on"] === "string" && /^ubuntu-/.test(job["runs-on"]))) {
@@ -384,8 +402,20 @@ function checkLikec4InstallJobs(src: string, name: string, expected: string[]): 
       if (typeof s.run !== "string" || extractInstallLines(s.run).length === 0) continue;
       found.push(jobId);
       // A job-level `if` or `continue-on-error` skips or masks every step in it, install included.
-      // Exception: the ADR-276 S2 (#9512) condition, exact, which is true on every event except an elided push to main.
-      if (("if" in job && job.if !== PUSH_DEDUPE_IF && job.if !== DRAFT_LIGHT_IF && !(jobId === "test-webplat" && job.if === PR_AFFECTED_WEBPLAT_IF)) || "continue-on-error" in job) violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
+      // Exceptions, exact strings only: the ADR-276 S2 (#9512) condition and its S3 draft-light append (any job),
+      // the ADR-276 S4 PR-affected term (test-webplat only), and the ADR-276 oracle-lane conjunct (#12156) on the
+      // two legs it is spelled for — ORACLE_WEBPLAT_IF on test-webplat, ORACLE_SCRIPTS_IF on test-scripts. An
+      // oracle-shaped condition on any other job is still refused.
+      if (
+        ("if" in job &&
+          job.if !== PUSH_DEDUPE_IF &&
+          job.if !== DRAFT_LIGHT_IF &&
+          !(jobId === "test-webplat" && job.if === PR_AFFECTED_WEBPLAT_IF) &&
+          !(jobId === "test-webplat" && job.if === ORACLE_WEBPLAT_IF) &&
+          !(jobId === "test-scripts" && job.if === ORACLE_SCRIPTS_IF)) ||
+        "continue-on-error" in job
+      )
+        violations.push(`${name}: job ${jobId} carries the likec4 install and must not be conditional or non-blocking at job level`);
       if ("if" in s || "continue-on-error" in s) violations.push(`${name}: the likec4 install step in ${jobId} must not be conditional or non-blocking`);
     }
   }
@@ -994,6 +1024,13 @@ describe("checkImageStructure self-test (string-fed mutations)", () => {
     expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe]\n    if: ${PUSH_DEDUPE_IF}`))).toBe("");
     expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe]\n    if: ${PUSH_DEDUPE_IF.replace("!cancelled()", "success()")}`))).toMatch(/not be conditional at job level/);
     expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe, other]\n    if: ${PUSH_DEDUPE_IF}`))).toMatch(/unexpected job key needs/);
+    // The ADR-276 oracle-lane pair (#12156) is the second sanctioned shape; crossed pairs and near-misses stay refused.
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe, oracle-selection]\n    if: ${ORACLE_BUILD_IF}`))).toBe("");
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe, oracle-selection]\n    if: ${PUSH_DEDUPE_IF}`))).toMatch(/unexpected job key needs/);
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe]\n    if: ${ORACLE_BUILD_IF}`))).toMatch(/not be conditional at job level/);
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [oracle-selection, push-dedupe]\n    if: ${ORACLE_BUILD_IF}`))).toMatch(/not be conditional at job level/);
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe, oracle-selection]`))).toMatch(/unexpected job key needs/);
+    expect(run(dockerfile(), stepYaml("", "", "", `needs: [push-dedupe, oracle-selection]\n    if: ${ORACLE_BUILD_IF.replace(",web-platform-build,", ",test-bun,")}`))).toMatch(/not be conditional at job level/);
   });
 
   it("ci row 7: an action ref that is not a full commit SHA, and any other job-level key, are refused", () => {
@@ -1057,6 +1094,18 @@ describe("checkLikec4InstallJobs self-test (string-fed mutations)", () => {
     expect(checkCiLikec4Jobs(onWebplat(PR_AFFECTED_WEBPLAT_IF.replace(",test-webplat,", ",test-bun,"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(onWebplat(PR_AFFECTED_WEBPLAT_IF.replace("== 'true'", "!= 'false'"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
     expect(checkCiLikec4Jobs(onWebplat(PR_AFFECTED_WEBPLAT_IF.replace("!cancelled()", "success()"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
+  });
+
+  it("the exact oracle-lane conjunct is sanctioned on its own leg only; a near-miss or another job is refused (ADR-276 #12156)", () => {
+    const onWebplat = (cond: string): string => ci().replace("  test-webplat:\n", `  test-webplat:\n    if: ${cond}\n`);
+    const onScripts = (cond: string): string => ci().replace("  test-scripts:\n", `  test-scripts:\n    if: ${cond}\n`);
+    expect(checkCiLikec4Jobs(onWebplat(ORACLE_WEBPLAT_IF)).join("\n")).toBe("");
+    expect(checkCiLikec4Jobs(onScripts(ORACLE_SCRIPTS_IF)).join("\n")).toBe("");
+    expect(checkCiLikec4Jobs(onWebplat(ORACLE_SCRIPTS_IF)).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onScripts(ORACLE_WEBPLAT_IF)).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onWebplat(ORACLE_WEBPLAT_IF.replace(",test-webplat,", ",test-bun,"))).join("\n")).toMatch(/job test-webplat carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onScripts(ORACLE_SCRIPTS_IF.replace("active == 'true'", "active != 'false'"))).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
+    expect(checkCiLikec4Jobs(onScripts(ORACLE_SCRIPTS_IF.replace("!cancelled()", "success()"))).join("\n")).toMatch(/job test-scripts carries the likec4 install and must not be conditional/);
   });
 
   it("a command that merely quotes the install in a comment is not a site", () => {

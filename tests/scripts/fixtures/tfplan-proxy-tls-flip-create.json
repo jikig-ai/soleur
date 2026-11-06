@@ -1,0 +1,34 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "tls_private_key.proxy_server[0]",
+      "type": "tls_private_key",
+      "name": "proxy_server",
+      "index": 0,
+      "change": { "actions": ["create"], "before": null, "after": {} }
+    },
+    {
+      "address": "tls_self_signed_cert.proxy_server[0]",
+      "type": "tls_self_signed_cert",
+      "name": "proxy_server",
+      "index": 0,
+      "change": { "actions": ["create"], "before": null, "after": {} }
+    },
+    {
+      "address": "doppler_secret.proxy_tls_key[0]",
+      "type": "doppler_secret",
+      "name": "proxy_tls_key",
+      "index": 0,
+      "change": { "actions": ["create"], "before": null, "after": {} }
+    },
+    {
+      "address": "doppler_secret.proxy_tls_cert[0]",
+      "type": "doppler_secret",
+      "name": "proxy_tls_cert",
+      "index": 0,
+      "change": { "actions": ["create"], "before": null, "after": {} }
+    }
+  ]
+}

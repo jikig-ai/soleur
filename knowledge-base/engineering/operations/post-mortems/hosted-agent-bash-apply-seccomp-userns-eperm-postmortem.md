@@ -257,7 +257,7 @@ listed below as items of that tracker.
 | #10455 | (item 1) Own AF_UNIX `socket()` deny folded into the single bwrap filter (option b); re-evaluate on an SDK bump that changes the helper, or a decision to enforce unix-socket blocking; becomes in-scope immediately if the two-session test fails | open |
 | #10455 | (item 2) Runtime synthetic of the wrapped Bash command with a dead-man arm (P2) | open |
 | #10455 | (item 3) Plain-language message when Bash fails (raw apply-seccomp text is the user-visible failure today) | open |
-| #10455 | (item 4) Verify the Slack wake path (ADR-260) across all Better Stack alerts; the new alerts are email-only until then | open |
+| #10455 | (item 4) Verify the Slack wake path (ADR-260) across all Better Stack alerts; see `canary-probe-set.md`, "Slack wake check, dashboard read 2026-11-05" | partly done 2026-11-05 (one alert observed, others inferred) |
 | #10455 | (further items) Classify other helper-step EPERMs; page on at least 2 distinct users or verify server-side (forged-row suppression); SOCKS proxy-auth test | open |
 | #10454 | Standing red outer-wrap canary (`wrong_elevation_userns`, Sentry 152662657): fix the elevation or demote explicitly, with a decision deadline; related to #9797 | open |
 | #10453 | Deploy-time SDK Bash smoke in the canary container (non-blocking first); successor to #5941 for the wrapped-command class | open |

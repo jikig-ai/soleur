@@ -242,10 +242,11 @@ and no test to catch the omission.
 The four proxy-TLS resources in `proxy-tls.tf` (`tls_private_key.proxy_server`,
 `tls_self_signed_cert.proxy_server`, `doppler_secret.proxy_tls_key`,
 `doppler_secret.proxy_tls_cert`) now carry `count = var.host_proxy_tls_enabled ? 1 : 0`, with
-the variable defaulting to `false`. Until the flip they are not in the graph at all, so they stop
+the variable defaulting to `false` until the flip (it defaults to `true` since #12167, see
+"Flip executed" below). Until the flip they were not in the graph at all, so they stopped
 showing as four `will be created` lines in every drift report (#8754). Delivering them earlier
-would be harmful rather than inert: with `SOLEUR_PROXY_BIND` absent from Doppler prd, present
-`PROXY_TLS_*` material makes `createProxyServer` report a silent fallback
+would have been harmful rather than inert: a host with `PROXY_TLS_*` material but no
+`SOLEUR_PROXY_BIND` makes `createProxyServer` report a silent fallback
 (`createProxyServer.no-bind`) on every web container start.
 
 **"PR B must" was not executed.** PR B (#6538) found on 2026-07-17 that the material had never
@@ -262,10 +263,14 @@ flip:
   without the index still selects it.
 - The first apply is a CREATE of all four, so the change that sets `host_proxy_tls_enabled = true`
   targets the key AND the cert together; targeting the cert alone writes a cert to prd with no
-  matching key. The same change adds `SOLEUR_PROXY_BIND` and `SOLEUR_PROXY_PEER_ALLOWLIST` to prd,
-  moves the four addresses out of `OPERATOR_APPLIED_EXCLUSIONS` onto a `-target` list, and inverts
-  the "no workflow targets the gated resources" row of the `#8754 PR-B` describe in
-  `plugins/soleur/test/terraform-target-parity.test.ts`.
+  matching key. The same change moves the four addresses out of `OPERATOR_APPLIED_EXCLUSIONS` onto
+  a `-target` list and inverts the "no workflow targets the gated resources" row of the `#8754
+  PR-B` describe in `plugins/soleur/test/terraform-target-parity.test.ts`. It does **not** add
+  `SOLEUR_PROXY_BIND` to prd: that value is the host's own private IP and cannot be fleet-wide
+  (two hosts would bind each other's address), so `ci-deploy.sh` `resolve_proxy_bind` resolves it
+  per host at deploy time from the 10.0.1.0/24 interface. An earlier draft of this bullet said the
+  flip adds it to prd; that was wrong and is withdrawn. `SOLEUR_PROXY_PEER_ALLOWLIST` and
+  `SOLEUR_HOST_ROSTER` remain operator-class Doppler prd writes, outside Terraform.
 - §3.D. Before the flip, a host added to `var.web_hosts` produces no cert diff, because nothing
   exists. The flip's CREATE derives the SANs from the roster at that moment. After the flip, "the
   cert replacement appears in that PR's own plan" holds only if `doppler_secret.proxy_tls_cert` is
@@ -273,3 +278,33 @@ flip:
   per-merge list.
 
 The SAN derivation from `var.web_hosts` is unchanged.
+
+### Flip executed (#12167, PR-A of the web-2 relay provisioning, epic #8211)
+
+`host_proxy_tls_enabled` now defaults to `true` in `variables.tf`, and the `apply` job's saved
+`terraform plan -out=tfplan` in `apply-web-platform-infra.yml` carries the four unindexed
+`-target=` lines (`tls_private_key.proxy_server`, `tls_self_signed_cert.proxy_server`,
+`doppler_secret.proxy_tls_key`, `doppler_secret.proxy_tls_cert`), key and cert together. The next
+merge-triggered apply therefore CREATES all four (`4 to add, 0 to change, 0 to destroy`, measured
+offline with `proxy-tls.tf` and the real `var.web_hosts`: `ip_addresses ["10.0.1.10","10.0.1.11"]`,
+`dns_names ["web-1","web-2","localhost"]`). The cert's SANs cover every `var.web_hosts` private IP.
+
+- **No TF_VAR or workflow-input route** exists or may be added for the variable; the default is the
+  only switch, and the parity test asserts no workflow text names it. The previous
+  `delegated-act-11181-ac2-envelope.md` command (`-f host_proxy_tls_enabled=true`) never matched a
+  real `workflow_dispatch` input and is retired.
+- **The create is not a retirement.** The destroy-guard filter counts nothing on it (T47b in
+  `tests/scripts/test-destroy-guard-counter-web-platform.sh`). T47 is unchanged in behaviour and is
+  now read as the retire operation's own contract: the quartet stays outside `web2_retire_allow`.
+- **Roster changes are an ordinary ackable delete+create.** After the flip, adding or removing a
+  `var.web_hosts` key re-derives the SANs, so the next per-merge plan replaces the cert
+  (`delete` + `create`) and updates `doppler_secret.proxy_tls_cert` in place; the key never changes.
+  That trips `resource_deletes` (needs `[ack-destroy]`, T47c) but never `host_creates`.
+- **Decision, §3.D: `web_host_create` does NOT target `doppler_secret.proxy_tls_cert`.** Its sourced
+  `web_host_birth_gate` demands zero destroys, and a SAN-driven cert replace is a destroy, so adding
+  the cert would make every real birth plan refuse. The parity test pins the quartet out of the
+  dispatch jobs. The cert replacement therefore appears in the first per-merge plan after the birth
+  merges (loud, under `[ack-destroy]`), not in the birth plan. Until that apply lands, the new host's
+  private IP is absent from the SANs and a proxy dial to it fails verification, which is the
+  fail-closed direction. Teaching the birth gate to admit exactly one cert replace is a follow-up if
+  the ordering proves unacceptable.

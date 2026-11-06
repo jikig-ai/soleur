@@ -175,7 +175,7 @@ const RENDER_TIMEOUT_MS = 25_000;
 // late exit (keptStages).
 const KILL_GRACE_MS = 5_000;
 
-// Preinstalled in the runner image (Dockerfile `npm install -g likec4@1.50.0`).
+// Preinstalled in the runner image (Dockerfile `npm install -g likec4@1.60.0`).
 // Env override exists for tests / local dev only.
 const LIKEC4_BIN = process.env.LIKEC4_BIN || "likec4";
 

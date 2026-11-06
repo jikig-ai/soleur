@@ -35,6 +35,16 @@ or the head render is unmeasurable or over Hetzner's 32,768 B cap — the gate's
 which. These refusals apply on the push arm; a manual re-fire delivers without rendering. A
 delivery decided by a non-template input names what the gate measured in its `Delivering:` line.
 
+**A compare list at the API's 300-file cap never delivers by default (#10650).** The compare API
+truncates `files` at 300 with no truncation flag, and a stale watermark makes a range likely to
+exceed it (the merge of PR #10501, which changed only an unrelated `variables.tf` variable, once
+replaced the host this way). On a cap hit the gate compares the git blob sha of the three render
+inputs at the watermark and at the head through the contents API (3 attempts per read). A blob that
+differs goes through the same by-value, render and wiring checks as above; all three identical is
+`deliver=false`; an input it cannot read is `gate-unproven` (table below) and the run is red. The
+delivery paths that are not list-driven (manual dispatch, no watermark, a watermark that is not an
+ancestor of the head) still deliver, and the preflight still gates them.
+
 **What it still cannot see:** a render input moved out of the three watched files (a new local in
 another `.tf`, a renamed template), the live Hetzner catalog's memory for the server type, and a
 terraform/provider version change that alters `templatefile` output. A change of that kind is
@@ -69,6 +79,7 @@ gh api --paginate --slurp "repos/jikig-ai/soleur/issues/N/comments?per_page=100"
 | `unverified` | the apply's conclusion could not be read in the poll window (job stayed green) | read the apply run; the delivering change's follow-through is the authority |
 | `cancelled` | the job hit its ceiling; a replace may be in flight | read the run before re-firing |
 | `gate-failed` | the delta gate could not classify the diff (compare API), or the head render is unmeasurable / over the 32,768 B cap (#7582) | read the gate's `::error::`, fix, re-fire |
+| `gate-unproven` | the compare API's changed-file list hit its 300-file cap (it is truncated, with no flag) AND a render input (`cloud-init-registry.yml`, `zot-registry.tf` or `variables.tf`) could not be read as a file at the watermark or at the head after 3 attempts (#10650). Nothing was dispatched, the run is red and the watermark did not advance | read the gate's `::error::` (it names the first unreadable input and the failure class: API error or absent path, versus a non-file answer such as a symlink or submodule). For a transient cause, **re-run the run** (`gh run rerun <run-id>`) or wait for the next push, which re-derives the range; neither replaces the host. Every push until then re-reds and adds one more verdict comment (the owner issue is deduplicated, the comments are not). A `workflow_dispatch` re-fire delivers unconditionally and **replaces the host**: use it only for a confirmed add, delete or rename of a render input, which lands here by design (an input absent at either revision is unprovable, never "unchanged") |
 | `undetermined` | no step failed yet the job did not succeed (a checkout failure) | read the run |
 
 The body's `Delivering:` line names the change(s); `(attribution unproven: …)` means the range

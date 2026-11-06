@@ -458,10 +458,10 @@ for job in git_data_host_create git_data_host_replace; do
   tmo="$(grep -m1 -E '^    timeout-minutes: [0-9]+$' <<<"$blk" | grep -oE '[0-9]+$' || true)"
   # 20 reads x (30 s sleep + 45 s read cap + 5 s kill grace) + 10 min for plan/apply
   # + 5 min for the steps that run BEFORE `Terraform plan`. That last term is the one an
-  # earlier revision of this floor omitted: the create job runs eleven of them (checkout,
-  # setup-terraform, the Doppler install, input validation, three interlocks that each reach
-  # Doppler / the GitHub API / Better Stack, keygen, the secrets check, the R2 credential
-  # extraction, terraform init), so a floor priced on plan+apply alone certifies a margin
+  # earlier revision of this floor omitted: the create job runs twelve of them (checkout,
+  # setup-terraform, the credential load, input validation, four interlocks - three that each
+  # reach Doppler / the GitHub API / Better Stack, and the plaintext-id interlock, one local
+  # file read - keygen, the secrets check, the R2 credential extraction, terraform init), so a floor priced on plan+apply alone certifies a margin
   # that does not exist. Overrunning it cancels the job MID-POLL with no VERDICT line —
   # the "could not tell" state this suite's subject exists to remove.
   need=$(( (20 * (30 + 45 + 5) + 59) / 60 + 10 + 5 ))

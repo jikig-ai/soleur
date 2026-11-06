@@ -481,25 +481,33 @@ kill-switch needs explicit CTO acknowledgement and a time box; it is not a routi
 
 **Which helper step failed, and what the tenant sees (#10455 c, e).** The helper embedded in the vendored `claude` binary
 prints `apply-seccomp: <step>: <strerror>` on a failing step. Measured on `claude-agent-sdk` 0.3.284 (the same 17 strings
-are in `claude-code` 2.1.293): 16 `<step>` literals plus the errno-less `observe sendmsg failed`. Runtime order,
+are in `claude-code` 2.1.293; 21 strings at 0.3.311, see the 2026-11-04 note below): 16 `<step>` literals plus the errno-less `observe sendmsg failed`. Runtime order,
 recorded 2026-10-19 with an `LD_PRELOAD` interposer around the helper (not recalled from source):
 `unshare(CLONE_NEWPID|CLONE_NEWNS)` attempt, `unshare(CLONE_NEWUSER)`, `write /proc/self/setgroups`, `write
 /proc/self/uid_map`, `write /proc/self/gid_map`, `unshare(CLONE_NEWPID|CLONE_NEWNS) after userns`, `fork` (the PID-namespace
 init), then in the init `prctl(PR_SET_DUMPABLE)`, `mount(MS_PRIVATE)`, `mount(/proc)`, `prctl(PR_CAP_AMBIENT_CLEAR_ALL)`,
 `fork(worker)`; the worker then runs `prctl(PR_SET_NO_NEW_PRIVS)`, `prctl(PR_SET_SECCOMP)`, `execvp`; both waiting
-processes print `waitpid` AFTER the tenant command ran. All 16 are classified (`helper_userns_eperm` for the userns step,
-`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The 15 steps before the tenant command
+processes print `waitpid` AFTER the tenant command ran. All 16 (at 0.3.284) are classified (`helper_userns_eperm` for the userns step,
+`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The pre-command steps (15 at 0.3.284, 18 at 0.3.311; see the 2026-11-04 note below)
 (`HELPER_STEPS_PRE_COMMAND`: everything above up to and including `execvp`) can trigger the tenant notice; only `waitpid`
 (`HELPER_STEPS_POST_COMMAND`), which prints after the command ran, never does. (CTO ruling 2026-10-19: widened from the 11 steps
 before `fork(worker)`, because the measured order runs `fork(worker)`, both `prctl` steps and `execvp` before the tenant command;
 flip `execvp` out to make it 14 only if a measured argv shows the helper execs the tenant argv directly.) A test re-reads the binary's strings and reds when this list and the binary disagree in either direction, so an SDK
 bump that adds a step surfaces in CI rather than as an unclassified line.
 
+> **Re-measured 2026-11-04 (#12026; SDK 0.3.311 / CLI 2.1.311, one shared binary).** The helper is now the `claude` binary itself,
+> entered by `argv0=apply-seccomp` through `/proc/self/fd/3`. The pool holds 21 strings: 19 `<step>` literals (the 16 above plus
+> `prctl(PR_SET_NO_NEW_PRIVS, stub)`, `prctl(PR_SET_SECCOMP, stub)` and `prctl(PR_SET_SECCOMP, namespaces)`) and 2 errno-less lines
+> (`observe sendmsg failed` and a non-fatal `could not set user.max_user_namespaces (%s); ...` warning). An `LD_PRELOAD` interposer
+> run on 2026-11-04 shows, per process, all three new `prctl` steps before the `execvp` of the tenant command (the outer process applies the stub
+> pair to itself after the init `fork`; the worker applies a second filter next to the existing one), so the pre-command set is 18 and
+> `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record; inline parentheticals marked 0.3.311 were added on 2026-11-04. The two outer-process `stub` prctl steps run concurrently with the init, so their order relative to the command's output is not measured; they are classified pre-command because the notice only fires on a single-line tool_result.
+
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
 pre-exec sandbox line is replaced by: "Platform notice: command execution
 is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The rewrite needs that single
 line to START with `bwrap:` plus a space (and carry EPERM / `Operation not permitted`), or to be an exact-allowlisted `apply-seccomp: <step>:
-Operation not permitted` line for one of the 15 pre-command steps (any classified helper step except `waitpid`); a line that merely
+Operation not permitted` line for one of the pre-command steps (18 at 0.3.311) (any classified helper step except `waitpid`); a line that merely
 CONTAINS "bwrap" (`rm: cannot remove 'bwrap': Operation not permitted`) is never rewritten. The mirror event is
 emitted first from the raw output. The SDK-visible tool_result is not rewritable, so the model still sees the raw line and a
 system-prompt directive (`BASH_UNAVAILABLE_PROMPT_DIRECTIVE`) tells it not to echo it, to retry the same command ONCE only
@@ -523,8 +531,7 @@ line-anchored, nothing trailing), is debounced per user (keyed with the error co
 keep one incident open, suppressing new pages (see the alert's entry in `betterstack-log-query.md`; mitigation tracked
 in #10455). The same forgery can reach the tenant notice: the notice requires the SDK's error flag, a single non-blank
 line and a pre-command helper step, but a command that ran and exited non-zero can print that line. That residual is accepted, which
-is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. The wake path for both alerts is email-only on
-the Better Stack free tier until the ADR-260 Slack integration is verified.
+is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the alert only prompts the check above. Wake path for both alerts: email plus an inferred Slack post (a post is not a guaranteed page); see **Slack wake check, dashboard read 2026-11-05** below.
 
 **Slack wake check, run 2026-10-19 (#10455 d), read-only.** Two reads with the read-only token (Doppler `soleur/prd_terraform`,
 `BETTERSTACK_API_TOKEN_READONLY`; counts and flags only, nothing written):
@@ -546,6 +553,21 @@ doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer
 
 What an agent cannot establish is whether the dashboard routes team alerts to the connected Slack workspace; that is a
 property of the dashboard integration settings, not of anything this repository applies, and it stays open on #10455.
+
+**Slack wake check, dashboard read 2026-11-05 (#10455 item 4).** This supersedes the 2026-10-19 conclusion above that nothing here
+claims Slack wakes. It was read from the Better Stack dashboard (the 2026-10-19 API reads could not show it). **Observed:** the Slack integration is connected (Incidents product, single-channel mode,
+channel `#error-found`, workspace Soleur.ai), and the incident for the Logs alert `soleur-egress-gw-probe-fail-prd` (2026-11-04) shows
+Slack posts on its timeline at incident start and at auto-resolve, next to the email sends. **Inferred:** the integration is account-wide
+and the Logs alerts take a team-level escalation target (the 2026-10-19 read above shows one on all 17 alerts at that date;
+`betterstack-logs-alerts.tf` sets `team_name = "Your team"` on the free tier), so Logs-alert
+incidents reach Slack, including `agent_sandbox_bash_denial` and `faithful_canary_sandbox_broken`, which were not separately observed.
+**Flags (this finding changes none):** those two alerts carry `email = true` with `push`, `call`, `sms` and `critical_alert` false and no
+escalation policy in `betterstack-logs-alerts.tf` (other Logs alerts in that file also arm `push`); the Slack post comes from the
+Incidents integration, not from an alert flag.
+**Limits:** a Slack post is not proof of a phone push or a read (a push depends on the Slack client's notification settings; the
+2026-10-22 heartbeat incidents were posted to the channel and still went unseen, ADR-298), and Logs-alert escalation policies stay gated
+off on the free tier (`var.betterstack_paid_tier`). To repeat the check, read the timeline of a recent Logs-alert incident in the
+dashboard.
 
 ## Tenant-visible: no-egress AF_UNIX deny (#10455 a), runtime flag `agent-sandbox-unix-deny`
 

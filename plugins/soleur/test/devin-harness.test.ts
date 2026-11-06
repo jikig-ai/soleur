@@ -79,11 +79,24 @@ describe("Devin harness", () => {
     expect(routing).toContain("devin/INSTRUCTIONS.md");
     expect(routing).not.toContain("**Skill tool**");
     expect(routing).not.toContain("**Monitor tool**");
+    // The routing spec must teach the profile contract, never the stale
+    // "with agent id" arg shape the PR removed.
+    expect(routing).toContain("subagent_explore");
+    expect(routing).toContain("subagent_general");
+    expect(routing).not.toContain("with agent id");
     expect(pollInstructions("devin")).toContain("run_subagent");
     expect(pollInstructions("devin")).not.toContain("get_output");
+    expect(pollInstructions("devin")).toContain("subagent_general");
     expect(pollInstructions("devin")).toContain("BEHIND");
     expect(pollInstructions("devin")).toContain("/soleur:postmerge");
     expect(pollInstructions("devin")).toContain("/soleur:ship");
+    // formatAgentSpawn's devin arm carries the profile rule and names the
+    // definition path (the id travels in the prompt, not the arg).
+    const fmt = formatAgentSpawn("product/cpo", "Assess");
+    expect(fmt).toContain("subagent_explore");
+    expect(fmt).toContain("subagent_general");
+    expect(fmt).toContain("definition");
+    expect(fmt).not.toContain("with agent id");
   });
 
   test("handles Devin-specific skill invocation format", () => {
@@ -105,6 +118,8 @@ describe("Devin harness", () => {
     expect(spawn.tool).toBe("run_subagent");
     expect(spawn.agent).toBe("soleur:legal:clo");
     expect(spawn.instruction).toContain("run_subagent");
-    expect(spawn.instruction).toContain("Inherit the session model");
+    expect(spawn.instruction).toContain("subagent_explore");
+    expect(spawn.instruction).toContain("subagent_general");
+    expect(spawn.instruction).toContain("profile, not a model");
   });
 });

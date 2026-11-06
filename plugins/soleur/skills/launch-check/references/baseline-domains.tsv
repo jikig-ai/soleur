@@ -1,0 +1,6 @@
+# guard name	domain	severity (label only; membership is derived from guards.tsv)
+secret-scan	security	high
+orphan-test	tests-ci	medium
+commit-on-main	tech-debt	medium
+block-stash	tech-debt	low
+block-rm-rf	tech-debt	low

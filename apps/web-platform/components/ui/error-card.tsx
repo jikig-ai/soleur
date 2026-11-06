@@ -3,6 +3,9 @@
 import { Button } from "@/components/ui/button";
 import { NavLink } from "@/components/ui/nav-link";
 
+const ACTION_CLASS =
+  "rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary";
+
 interface ErrorCardProps {
   title: string;
   message: string;
@@ -11,6 +14,9 @@ interface ErrorCardProps {
   onConfirm?: () => void;
   confirmLabel?: string;
   action?: { label: string; href: string };
+  /** Open the action in a new tab (plain external anchor) so the page that
+   *  rendered the card, its draft and its state survive the trip. */
+  newTab?: boolean;
   onDismiss?: () => void;
 }
 
@@ -22,6 +28,7 @@ export function ErrorCard({
   onConfirm,
   confirmLabel = "Confirm",
   action,
+  newTab = false,
   onDismiss,
 }: ErrorCardProps) {
   return (
@@ -73,10 +80,20 @@ export function ErrorCard({
             {confirmLabel}
           </Button>
         )}
-        {action && (
+        {action && newTab && (
+          <a
+            href={action.href}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={ACTION_CLASS}
+          >
+            {action.label}
+          </a>
+        )}
+        {action && !newTab && (
           <NavLink
             href={action.href}
-            className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
+            className={ACTION_CLASS}
           >
             {action.label}
           </NavLink>

@@ -37,7 +37,7 @@ on:
         default: ''
 
 permissions:
-  contents: read
+  contents: write # evidence commit push (run 41305160049 died 403 on contents: read)
   pull-requests: write
   issues: write # auto-file tracking issue on persistent failure (Kieran F9)
 
@@ -51,6 +51,7 @@ jobs:
     env:
       REPO_FULL: ${{ github.repository }}
       RUN_ID: ${{ github.run_id }}
+      RUN_ATTEMPT: ${{ github.run_attempt }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout main
@@ -212,8 +213,11 @@ jobs:
             exit 1
           fi
 
-      # Upload both artifacts to R2 at timestamps/<yyyy-mm>/. The manifest and
-      # the .tsr together let any future auditor re-run the verify command
+      # Upload both artifacts to R2 at timestamps/<yyyy-mm>/ under a per-run
+      # versioned key (manifest-<run_id>-<attempt>.{jsonl,tsr}): the bucket's
+      # Lock Rule seals every written object, so a fixed monthly key would make
+      # any same-month re-dispatch fail ObjectLockedByBucketPolicy. The manifest
+      # and the .tsr together let any future auditor re-run the verify command
       # offline using only the bundled FreeTSA certs.
       - name: Upload manifest + .tsr to R2
         env:
@@ -226,10 +230,10 @@ jobs:
         run: |
           set -euo pipefail
           aws --endpoint-url "$R2_ENDPOINT" s3 cp out/manifest.jsonl \
-            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest.jsonl" \
+            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest-${RUN_ID}-${RUN_ATTEMPT}.jsonl" \
             --content-type application/x-ndjson
           aws --endpoint-url "$R2_ENDPOINT" s3 cp out/response.tsr \
-            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest.tsr" \
+            "s3://${R2_BUCKET}/timestamps/${YYYY_MM}/manifest-${RUN_ID}-${RUN_ATTEMPT}.tsr" \
             --content-type application/timestamp-reply
 
       # Persist via PR-with-auto-merge to the cla-signatures branch (learning
@@ -264,7 +268,8 @@ jobs:
 
           # If a prior run for the same month already landed identical bytes,
           # there is nothing to commit; exit cleanly. The R2 upload above is
-          # idempotent in practice (PUT overwrites).
+          # never an overwrite — the Lock Rule seals every object, and the
+          # versioned key makes each PutObject write a never-before-written key.
           if git diff --cached --quiet; then
             echo "No new bytes for ${YYYY_MM}; nothing to commit."
             exit 0
@@ -295,7 +300,11 @@ jobs:
             --head "$branch" \
             --title "chore(cla-evidence): RFC 3161 timestamp ${YYYY_MM}" \
             --body-file out/pr-body.txt
-          gh pr merge "$branch" --squash --auto
+          # Direct merge, not --auto: cla-signatures has no required checks,
+          # so GitHub refuses enablePullRequestAutoMerge on the always-clean
+          # PR ("Pull request is in clean status") — the shape that failed
+          # every monthly run since Aug 2026 (#11946). No checks to wait on.
+          gh pr merge "$branch" --squash
 
       # Kieran F9: persistent-failure escalation. On any failure, file or
       # update a tracking issue. If an issue for this month already exists
@@ -319,6 +328,16 @@ jobs:
             printf 'Retry via Actions → cla-evidence-timestamp → Run workflow (workflow_dispatch).\n'
             printf 'After 7 consecutive failures, switch to the paid-TSA fallback documented at `%s`.\n' "$runbook"
           } > out/issue-body.txt
+
+          # Label bootstrap (#3926): `gh issue list/create --label` dies on a
+          # missing label and silently loses the tracking issue — the exact
+          # failure this step exists to prevent (run 41305160049:
+          # `could not add label: 'timestamp-failure' not found`). `gh label
+          # create … || true` is the established self-healing pattern; each
+          # call is a no-op when the label already exists.
+          gh label create cla-evidence --repo "$REPO_FULL" --description "CLA evidence machinery" --color 1f6feb 2>/dev/null || true
+          gh label create timestamp-failure --repo "$REPO_FULL" --description "Monthly RFC 3161 timestamp workflow failure" --color d73a4a 2>/dev/null || true
+          gh label create action-required --repo "$REPO_FULL" --description "Operator action required" --color b60205 2>/dev/null || true
 
           # Dedup by exact title match (deterministic; no list-search needed
           # to construct unique titles).

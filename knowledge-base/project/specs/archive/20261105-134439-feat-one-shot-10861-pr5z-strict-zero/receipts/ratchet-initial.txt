@@ -1,0 +1,30 @@
+stale-accept	plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	4663b0253b8d/1	not-a-gap
+stale-accept	plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	4e5a4d1caf27/1	not-a-gap
+stale-accept	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	0ce179c2ca7a/1	not-a-gap
+stale-accept	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	3be5ad93bfce/1	not-a-gap
+stale-accept	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	da9456338a93/1	not-a-gap
+stale-accept	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	db12ad216e7d/1	not-a-gap
+stale-accept	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	df729b3e38c7/1	not-a-gap
+stale-accept	plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	fa71562066a9/1	not-a-gap
+stale-accept	plugins/soleur	package.json	0b403e085b16/1	anchor-not-live
+stale-accept	plugins/soleur	package.json	8d47cc95bf11/1	anchor-not-live
+stale-accept	plugins/soleur	package.json	f3792010002b/1	anchor-not-live
+remedy: delete the accept row: the tree no longer backs it, or it is malformed
+new-pair	plugins/soleur	scripts/sentry-issue.sh	plugins/soleur/test/components.test.ts:989
+  cause: your change touched neither plugins/soleur/test/components.test.ts nor scripts/sentry-issue.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/components.test.ts:989	ee8220c7499a/1	"Sentry=scripts/sentry-issue.sh",
+  ref	plugins/soleur/test/components.test.ts:992	b50d46d45247/1	expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+new-pair	tests/hooks/emissions	scripts/betterstack-query.sh	plugins/soleur/test/components.test.ts:987
+  cause: your change touched neither plugins/soleur/test/components.test.ts nor scripts/betterstack-query.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/components.test.ts:987	6e9e24010f9b/1	"Better Stack=scripts/betterstack-query.sh",
+  ref	plugins/soleur/test/components.test.ts:992	b50d46d45247/1	expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+new-pair	tests/hooks/emissions	scripts/sentry-issue.sh	plugins/soleur/test/components.test.ts:989
+  cause: your change touched neither plugins/soleur/test/components.test.ts nor scripts/sentry-issue.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/components.test.ts:989	ee8220c7499a/1	"Sentry=scripts/sentry-issue.sh",
+  ref	plugins/soleur/test/components.test.ts:992	b50d46d45247/1	expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file, or the file's state feeds its verdict (that is what the selector must know); editing that file runs the full battery once
+remedy: or add an anchor-keyed accept row to scripts/ci-pr-affected-audit.accept.tsv only when the suite merely names the file (a message, a fixture it writes into a scratch tree, a negative-test string); the reason names the line kind
+remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)
+remedy: an accept row on a file the suite really reads or whose state feeds its verdict is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository's ruleset
+remedy: a baseline row cannot be added
+SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=stale-accept live=3 baseline=0

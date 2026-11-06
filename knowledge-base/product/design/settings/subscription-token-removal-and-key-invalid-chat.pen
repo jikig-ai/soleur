@@ -1,0 +1,4454 @@
+{
+  "version": "2.21",
+  "children": [
+    {
+      "type": "frame",
+      "id": "CIntg",
+      "x": 0,
+      "y": 0,
+      "name": "1 Settings - API Key card (token + API key stored)",
+      "width": 1100,
+      "fill": "$bg-base",
+      "gap": 40,
+      "padding": 40,
+      "children": [
+        {
+          "type": "frame",
+          "id": "BSLZz",
+          "name": "Settings Column",
+          "width": 720,
+          "layout": "vertical",
+          "gap": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "D1ob3",
+              "name": "Page Title",
+              "fill": "$text-primary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Settings",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "QrrAL",
+              "name": "API Key Section",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "A6dnR",
+                  "name": "Section Title",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "API Key",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "Za8qv",
+                  "name": "API Key Card",
+                  "width": "fill_container",
+                  "fill": "$bg-surface-1",
+                  "cornerRadius": 12,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 20,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "W6CJ2",
+                      "name": "Key Status",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 6,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "m8e5I8",
+                          "name": "Status Line",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Provider: Anthropic",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "wYWPK",
+                          "name": "Status Line",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Last validated: 10/28/2026",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "wBWCo",
+                          "name": "Status Line",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Subscription token: connected",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "aOT18",
+                          "name": "Status Line",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Conversations use: Claude subscription (API key also saved)",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "B0w1Lm",
+                      "name": "Key Rotation Form",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "vhJZO",
+                          "name": "API Key Label",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Anthropic API Key",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "N9e5k",
+                          "name": "API Key Input",
+                          "width": "fill_container",
+                          "fill": "$bg-surface-1",
+                          "cornerRadius": 8,
+                          "stroke": "$border-default",
+                          "strokeWidth": 1,
+                          "padding": [
+                            10,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "kAksJ",
+                              "name": "Input Placeholder",
+                              "fill": "$text-muted",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "sk-ant-...",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "klsxR",
+                          "name": "Primary Key Button",
+                          "fill": "$accent-gold",
+                          "cornerRadius": 8,
+                          "padding": [
+                            8,
+                            14
+                          ],
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "oaN2l",
+                              "name": "Rotate Key Label",
+                              "fill": "$on-accent",
+                              "content": "Rotate Key",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "t7F47",
+                      "name": "Divider",
+                      "width": "fill_container",
+                      "height": 1,
+                      "fill": "$border-default"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "iPOR0",
+                      "name": "Subscription Token Remove Block",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 10,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EAFMo",
+                          "name": "Token Block Title",
+                          "fill": "$text-primary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Subscription token",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "nrd4v",
+                          "name": "Token Block Helper",
+                          "fill": "$text-muted",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "A Claude subscription token is saved for this account. It is stored encrypted and never shown here.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "gyqvX",
+                          "name": "Remove Token Control",
+                          "cornerRadius": 8,
+                          "stroke": "$red-900-50",
+                          "strokeWidth": 1,
+                          "padding": [
+                            8,
+                            14
+                          ],
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "H2edHv",
+                              "name": "Remove subscription token Label",
+                              "fill": "$red-300",
+                              "content": "Remove subscription token",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "a7VEqk",
+          "name": "Review Notes",
+          "width": 280,
+          "fill": "$gold-wash",
+          "cornerRadius": 8,
+          "stroke": "$accent-gold",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "cYy57",
+              "name": "Notes Title",
+              "fill": "$accent-gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FRAME 1 - NOTES",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "MgaK2",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Status block adds two lines only: Subscription token + Conversations use. No token fragments are ever shown.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "U24LA",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Remove control sits under the existing form, below Rotate Key, behind a divider. Destructive-outline so it never competes with the gold primary.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "stCcC",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Control is hidden when no token is stored (see 3b).",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "nizQf",
+      "x": 3540,
+      "y": 0,
+      "name": "3b Settings - after token removed (no API key)",
+      "width": 1100,
+      "fill": "$bg-base",
+      "gap": 40,
+      "padding": 40,
+      "children": [
+        {
+          "type": "frame",
+          "id": "Q49rd",
+          "name": "Settings Column",
+          "width": 720,
+          "layout": "vertical",
+          "gap": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "GpSYr",
+              "name": "Page Title",
+              "fill": "$text-primary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Settings",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "w5xNF",
+              "name": "Removed Banner",
+              "width": "fill_container",
+              "fill": "$bg-surface-1",
+              "cornerRadius": 8,
+              "stroke": "$green-500",
+              "strokeWidth": 1,
+              "padding": [
+                10,
+                14
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "JqFKz",
+                  "name": "Removed Banner Text",
+                  "fill": "$green-500",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Subscription token removed. Add an API key to keep using chat.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "vL6Zd",
+              "name": "API Key Section",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "rPW5M",
+                  "name": "Section Title",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "API Key",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 18,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "W8c7W",
+                  "name": "API Key Card",
+                  "width": "fill_container",
+                  "fill": "$bg-surface-1",
+                  "cornerRadius": 12,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "gap": 20,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "nPHJO",
+                      "name": "Key Status",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 6,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "g1esfS",
+                          "name": "Status Line",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "No key configured",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "HJH5P",
+                          "name": "Status Line",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Subscription token: not saved",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "auBCp",
+                          "name": "Status Line",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Conversations use: nothing set up - chat is paused until you add an API key",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "P9gg6",
+                      "name": "Key Rotation Form",
+                      "width": "fill_container",
+                      "layout": "vertical",
+                      "gap": 12,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "kNHPp",
+                          "name": "API Key Label",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Anthropic API Key",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "J3AxiI",
+                          "name": "API Key Input",
+                          "width": "fill_container",
+                          "fill": "$bg-surface-1",
+                          "cornerRadius": 8,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            10,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "U2Yjob",
+                              "name": "Input Placeholder",
+                              "fill": "$text-muted",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "sk-ant-...",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "RHu9U",
+                          "name": "Primary Key Button",
+                          "fill": "$accent-gold",
+                          "cornerRadius": 8,
+                          "padding": [
+                            8,
+                            14
+                          ],
+                          "justifyContent": "center",
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "iC02M",
+                              "name": "Save Key Label",
+                              "fill": "$on-accent",
+                              "content": "Save Key",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Omb66",
+          "name": "Review Notes",
+          "width": 280,
+          "fill": "$gold-wash",
+          "cornerRadius": 8,
+          "stroke": "$accent-gold",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "E7XaP",
+              "name": "Notes Title",
+              "fill": "$accent-gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FRAME 3b - NOTES",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "Oc92g",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Post-removal state. Banner confirms the outcome in plain words.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "ZFUNg",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "'Subscription token: not saved' and the Remove control is gone.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "IJ2QS",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Status is honest: chat is paused until a key is added. The API key field takes focus (gold ring) so the next step is obvious.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "nqTq3",
+      "x": 1180,
+      "y": 0,
+      "name": "2 Confirm dialog A - API key stored",
+      "width": 1100,
+      "fill": "$bg-base",
+      "gap": 40,
+      "padding": 40,
+      "children": [
+        {
+          "type": "frame",
+          "id": "BiAjV",
+          "name": "Scrim over Settings",
+          "width": 720,
+          "height": 560,
+          "fill": "#050505",
+          "cornerRadius": 8,
+          "stroke": "$border-default",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "chPT7",
+              "name": "Remove Token Dialog",
+              "width": 480,
+              "fill": "$bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$border-default",
+              "strokeWidth": 1,
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "olgNH",
+                  "name": "Dialog Header",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "CXuY5",
+                      "name": "Dialog Title",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Remove subscription token?",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "gilxb",
+                  "name": "Dialog Body",
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Conversations will use your Anthropic API key, and its usage charges apply. Conversations already open keep using the token until they end. Removing it here does not revoke it with Anthropic - revoke it in your Claude account if it may be exposed.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "lDrxk",
+                  "name": "Dialog Actions",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "justifyContent": "end",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "wVVUo",
+                      "name": "Button Group",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "aLTbc",
+                          "name": "Keep token Button",
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 8,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 2,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "kOcpM",
+                              "name": "Keep token Label",
+                              "fill": "$text-primary",
+                              "content": "Keep token",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "qlA72",
+                          "name": "Remove token Button",
+                          "fill": "$red-700",
+                          "cornerRadius": 8,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "W55GH",
+                              "name": "Remove token Label",
+                              "fill": "#FFFFFF",
+                              "content": "Remove token",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Zor5m",
+          "name": "Review Notes",
+          "width": 280,
+          "fill": "$gold-wash",
+          "cornerRadius": 8,
+          "stroke": "$accent-gold",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "vSXw1",
+              "name": "Notes Title",
+              "fill": "$accent-gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FRAME 2 - NOTES",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "CrCLJ",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Default focus: Keep token (gold ring). Esc and scrim click also keep the token.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "pdpuM",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Remove token is the only filled-destructive element.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "uxMRD",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Body names the cost change, the open-conversation behaviour, and that Anthropic-side revocation is separate.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "s7nZ5T",
+      "x": 2360,
+      "y": 0,
+      "name": "3 Confirm dialog B - no API key stored",
+      "width": 1100,
+      "fill": "$bg-base",
+      "gap": 40,
+      "padding": 40,
+      "children": [
+        {
+          "type": "frame",
+          "id": "alLFY",
+          "name": "Scrim over Settings",
+          "width": 720,
+          "height": 560,
+          "fill": "#050505",
+          "cornerRadius": 8,
+          "stroke": "$border-default",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "b08dIA",
+              "name": "Remove Token Dialog",
+              "width": 480,
+              "fill": "$bg-surface-1",
+              "cornerRadius": 12,
+              "stroke": "$red-400",
+              "strokeWidth": 2,
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "B2cLs",
+                  "name": "Dialog Header",
+                  "width": "fill_container",
+                  "gap": 10,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon",
+                      "id": "tGGtG",
+                      "name": "Warning Icon",
+                      "width": 20,
+                      "height": 20,
+                      "icon": "triangle-alert",
+                      "library": "lucide",
+                      "fill": "$red-400"
+                    },
+                    {
+                      "type": "text",
+                      "id": "UlPhK",
+                      "name": "Dialog Title",
+                      "fill": "$text-primary",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Remove subscription token?",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "l8Aj3i",
+                  "name": "Dialog Body",
+                  "fill": "$text-secondary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "You will have no sign-in for Claude until you add an API key, and chat will stop working.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "VvCqq",
+                  "name": "Dialog Actions",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "M4wUKr",
+                      "name": "Add API Key Link",
+                      "fill": "$accent-gold",
+                      "content": "Add an API key first",
+                      "lineHeight": 1.5,
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "DuM3y",
+                      "name": "Button Group",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "h2oRE",
+                          "name": "Keep token Button",
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 8,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 2,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "lAf2q",
+                              "name": "Keep token Label",
+                              "fill": "$text-primary",
+                              "content": "Keep token",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "dqNoO",
+                          "name": "Remove token Button",
+                          "fill": "$red-700",
+                          "cornerRadius": 8,
+                          "padding": [
+                            8,
+                            16
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "fIOLn",
+                              "name": "Remove token Label",
+                              "fill": "#FFFFFF",
+                              "content": "Remove token",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "mkGJi",
+          "name": "Review Notes",
+          "width": 280,
+          "fill": "$gold-wash",
+          "cornerRadius": 8,
+          "stroke": "$accent-gold",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 10,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "IV6JB",
+              "name": "Notes Title",
+              "fill": "$accent-gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FRAME 3 - NOTES",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "li3hI",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Same shape, red border and warning icon: this removal ends chat until a key exists.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "ytkgJ",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "'Add an API key first' closes the dialog, scrolls to the API key field and focuses it.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "MHqq7",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Default focus stays on Keep token.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "o4mNw",
+      "x": 0,
+      "y": 900,
+      "name": "4 Chat after key_invalid - token vs API key",
+      "width": 1240,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "lwU9I",
+          "name": "Frame Title",
+          "fill": "$text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Chat after key_invalid",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "u8cz6",
+          "name": "Frame Subtitle",
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Card, disabled composer with helper text, last message marked Not sent. Left: subscription token. Right: API key.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "kZnbn",
+          "name": "Variants Row",
+          "gap": 40,
+          "children": [
+            {
+              "type": "frame",
+              "id": "U0YxG",
+              "name": "Column",
+              "width": 560,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "x5dY5S",
+                  "name": "Variant Label",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "4a Subscription token",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "Dmwmh",
+                  "name": "4a Chat - Claude Sign-in Failed",
+                  "clip": true,
+                  "width": 560,
+                  "height": 640,
+                  "fill": "$bg-base",
+                  "cornerRadius": 8,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "mnlFe",
+                      "name": "Chat Header",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "gh9Qy",
+                          "name": "Chat Title",
+                          "fill": "$text-primary",
+                          "content": "Concierge",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "PEA3n",
+                          "name": "Chat Status",
+                          "fill": "$text-muted",
+                          "content": "Conversation paused",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "zNk6B",
+                      "name": "Messages",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "F2iB0l",
+                          "name": "Assistant Message",
+                          "width": 450,
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 12,
+                          "layout": "vertical",
+                          "padding": [
+                            10,
+                            14
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "JuFJH",
+                              "name": "Assistant Text",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "The launch checklist is drafted. Next I can update the pricing page copy.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "lyYgN",
+                          "name": "User Message Row",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "kpoJu",
+                              "name": "User Bubble",
+                              "width": 410,
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 12,
+                              "stroke": "$red-900-50",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "padding": [
+                                10,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "J6WfTI",
+                                  "name": "User Text",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Yes - update the pricing page copy.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "B7ELb",
+                              "name": "Not Sent Tag",
+                              "gap": 4,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "CPhRQ",
+                                  "name": "circle-alert Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "circle-alert",
+                                  "library": "lucide",
+                                  "fill": "$red-400"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "N2bUm",
+                                  "name": "Not Sent Label",
+                                  "fill": "$red-400",
+                                  "content": "Not sent",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "o0z2s0",
+                          "name": "Error Card",
+                          "width": "fill_container",
+                          "fill": "$red-950-20",
+                          "cornerRadius": 12,
+                          "stroke": "$red-900-50",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": 20,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "JoBDc",
+                              "name": "Card Header",
+                              "width": "fill_container",
+                              "justifyContent": "space_between",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "VghwI",
+                                  "name": "Card Title",
+                                  "fill": "$red-300",
+                                  "content": "Claude Sign-in Failed",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "t8wu6y",
+                                  "name": "Dismiss Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "x",
+                                  "library": "lucide",
+                                  "fill": "$text-secondary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "vjTkn",
+                              "name": "Card Message",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Anthropic rejected your Claude subscription token. It may have expired or been revoked.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "zoCAE",
+                              "name": "Card Actions",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "z14cI",
+                                  "name": "Update token Link",
+                                  "cornerRadius": 8,
+                                  "stroke": "$border-default",
+                                  "strokeWidth": 1,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "j5jTq",
+                                      "name": "Update Label",
+                                      "fill": "$text-secondary",
+                                      "content": "Update token",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "icon",
+                                      "id": "P6Wyl",
+                                      "name": "external-link Icon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "external-link",
+                                      "library": "lucide",
+                                      "fill": "$text-secondary"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "FVKhj",
+                                  "name": "Reconnect Button",
+                                  "fill": "$accent-gold",
+                                  "cornerRadius": 8,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    14
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "c8QIA",
+                                      "name": "Reconnect Label",
+                                      "fill": "$on-accent",
+                                      "content": "Reconnect",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "g7jszH",
+                      "name": "Composer Area",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "p7xK5",
+                          "name": "Composer Row",
+                          "opacity": 0.45,
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "DC0lJ",
+                              "name": "Composer Input (disabled)",
+                              "width": "fill_container",
+                              "fill": "$bg-base",
+                              "cornerRadius": 8,
+                              "stroke": "$border-default",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "j9ntC1",
+                                  "name": "Composer Placeholder",
+                                  "fill": "$text-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Chat is paused",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "qSrss",
+                              "name": "Send Button (disabled)",
+                              "fill": "$accent-gold",
+                              "cornerRadius": 8,
+                              "padding": 10,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "bJ58Y",
+                                  "name": "send Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$on-accent"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "hqlgT",
+                          "name": "Composer Helper Text",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Update it in Settings, then reconnect.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "nKATY",
+                          "name": "aria-live Annotation",
+                          "cornerRadius": 4,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            3,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "NCZrC",
+                              "name": "aria-live Label",
+                              "fill": "$accent-gold",
+                              "content": "aria-live=polite region: helper text and status changes announced here",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kwW1R",
+              "name": "Column",
+              "width": 560,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "oiDyo",
+                  "name": "Variant Label",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "4b API key",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "g5SdDv",
+                  "name": "4b Chat - Invalid API Key",
+                  "clip": true,
+                  "width": 560,
+                  "height": 640,
+                  "fill": "$bg-base",
+                  "cornerRadius": 8,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "OkSjP",
+                      "name": "Chat Header",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "nYKHZ",
+                          "name": "Chat Title",
+                          "fill": "$text-primary",
+                          "content": "Concierge",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "jEUtU",
+                          "name": "Chat Status",
+                          "fill": "$text-muted",
+                          "content": "Conversation paused",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "OSrqW",
+                      "name": "Messages",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "l9KrZ2",
+                          "name": "Assistant Message",
+                          "width": 450,
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 12,
+                          "layout": "vertical",
+                          "padding": [
+                            10,
+                            14
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "JbjqR",
+                              "name": "Assistant Text",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "The launch checklist is drafted. Next I can update the pricing page copy.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "Lf5gX",
+                          "name": "User Message Row",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "FqAXn",
+                              "name": "User Bubble",
+                              "width": 410,
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 12,
+                              "stroke": "$red-900-50",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "padding": [
+                                10,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "O1Nl9n",
+                                  "name": "User Text",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Yes - update the pricing page copy.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "lVFzp",
+                              "name": "Not Sent Tag",
+                              "gap": 4,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "k7G6RQ",
+                                  "name": "circle-alert Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "circle-alert",
+                                  "library": "lucide",
+                                  "fill": "$red-400"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "cHSN2",
+                                  "name": "Not Sent Label",
+                                  "fill": "$red-400",
+                                  "content": "Not sent",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "naZRE",
+                          "name": "Error Card",
+                          "width": "fill_container",
+                          "fill": "$red-950-20",
+                          "cornerRadius": 12,
+                          "stroke": "$red-900-50",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": 20,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "o5Tulm",
+                              "name": "Card Header",
+                              "width": "fill_container",
+                              "justifyContent": "space_between",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "OibrP",
+                                  "name": "Card Title",
+                                  "fill": "$red-300",
+                                  "content": "Invalid API Key",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "vmXGP",
+                                  "name": "Dismiss Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "x",
+                                  "library": "lucide",
+                                  "fill": "$text-secondary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "OPOCg",
+                              "name": "Card Message",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Anthropic rejected your API key. It may have been deleted or rotated.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "k5m2B",
+                              "name": "Card Actions",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "vELJT",
+                                  "name": "Update key Link",
+                                  "cornerRadius": 8,
+                                  "stroke": "$border-default",
+                                  "strokeWidth": 1,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "rHJZV",
+                                      "name": "Update Label",
+                                      "fill": "$text-secondary",
+                                      "content": "Update key",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "icon",
+                                      "id": "pxuoV",
+                                      "name": "external-link Icon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "external-link",
+                                      "library": "lucide",
+                                      "fill": "$text-secondary"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "oVfEo",
+                                  "name": "Reconnect Button",
+                                  "fill": "$accent-gold",
+                                  "cornerRadius": 8,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    14
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "JYJtX",
+                                      "name": "Reconnect Label",
+                                      "fill": "$on-accent",
+                                      "content": "Reconnect",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "a5x5t",
+                      "name": "Composer Area",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "nSXwR",
+                          "name": "Composer Row",
+                          "opacity": 0.45,
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "hARe3",
+                              "name": "Composer Input (disabled)",
+                              "width": "fill_container",
+                              "fill": "$bg-base",
+                              "cornerRadius": 8,
+                              "stroke": "$border-default",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "r3iKfv",
+                                  "name": "Composer Placeholder",
+                                  "fill": "$text-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Chat is paused",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "Fx5ks",
+                              "name": "Send Button (disabled)",
+                              "fill": "$accent-gold",
+                              "cornerRadius": 8,
+                              "padding": 10,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "LZ77l",
+                                  "name": "send Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$on-accent"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "bZssc",
+                          "name": "Composer Helper Text",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Update it in Settings, then reconnect.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "xDyzD",
+                          "name": "aria-live Annotation",
+                          "cornerRadius": 4,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            3,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "gKI7b",
+                              "name": "aria-live Label",
+                              "fill": "$accent-gold",
+                              "content": "aria-live=polite region: helper text and status changes announced here",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "iOOiV",
+          "name": "Review Notes",
+          "width": "fill_container",
+          "fill": "$gold-wash",
+          "cornerRadius": 8,
+          "stroke": "$accent-gold",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "OFtAJ",
+              "name": "Notes Title",
+              "fill": "$accent-gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FRAME 4 - NOTES",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "bzjF6",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Card keeps the existing ErrorCard shape. Title differs by sign-in method, the link says Update token / Update key, and a new Reconnect button re-checks what is saved.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "J5M1cx",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Composer is visibly disabled and the reason sits under it as helper text (not only a placeholder), inside an aria-live region so assistive tech hears changes.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "FfWiY",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "The last user bubble is marked Not sent: the agent never answered it, so the user knows to resend after reconnecting.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "W5P5S",
+      "x": 1320,
+      "y": 900,
+      "name": "5 Chat - tab refocus hint, reconnecting, repeated failure",
+      "width": 1660,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "BImtC",
+          "name": "Frame Title",
+          "fill": "$text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Chat while blocked: refocus, reconnecting, repeated failure",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "wv2Ri",
+          "name": "Frame Subtitle",
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Subscription-token variant shown; the API key variant differs only in title, message and link label.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "Hzzfe",
+          "name": "Variants Row",
+          "gap": 40,
+          "children": [
+            {
+              "type": "frame",
+              "id": "iAzbr",
+              "name": "Column",
+              "width": 500,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "lTXy0",
+                  "name": "Variant Label",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "5a Tab regains focus (inline hint)",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "qkG8A",
+                  "name": "5a Chat - refocus hint",
+                  "clip": true,
+                  "width": 500,
+                  "height": 720,
+                  "fill": "$bg-base",
+                  "cornerRadius": 8,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Lf5wB",
+                      "name": "Chat Header",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "F58b34",
+                          "name": "Chat Title",
+                          "fill": "$text-primary",
+                          "content": "Concierge",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "q0ZZp",
+                          "name": "Chat Status",
+                          "fill": "$text-muted",
+                          "content": "Conversation paused",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ZcZZ8",
+                      "name": "Messages",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "I5u0v",
+                          "name": "Assistant Message",
+                          "width": 390,
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 12,
+                          "layout": "vertical",
+                          "padding": [
+                            10,
+                            14
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "YkiyR",
+                              "name": "Assistant Text",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "The launch checklist is drafted. Next I can update the pricing page copy.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "AicWP",
+                          "name": "User Message Row",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "O1MEB",
+                              "name": "User Bubble",
+                              "width": 350,
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 12,
+                              "stroke": "$red-900-50",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "padding": [
+                                10,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "lOCBH",
+                                  "name": "User Text",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Yes - update the pricing page copy.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "b4AKrT",
+                              "name": "Not Sent Tag",
+                              "gap": 4,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "KhoQk",
+                                  "name": "circle-alert Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "circle-alert",
+                                  "library": "lucide",
+                                  "fill": "$red-400"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "f7y44j",
+                                  "name": "Not Sent Label",
+                                  "fill": "$red-400",
+                                  "content": "Not sent",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "DvyQx",
+                          "name": "Error Card",
+                          "width": "fill_container",
+                          "fill": "$red-950-20",
+                          "cornerRadius": 12,
+                          "stroke": "$red-900-50",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": 20,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "RoE8G",
+                              "name": "Card Header",
+                              "width": "fill_container",
+                              "justifyContent": "space_between",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "NmIWI",
+                                  "name": "Card Title",
+                                  "fill": "$red-300",
+                                  "content": "Claude Sign-in Failed",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "PSIAC",
+                                  "name": "Dismiss Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "x",
+                                  "library": "lucide",
+                                  "fill": "$text-secondary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "cFWyW",
+                              "name": "Card Message",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Anthropic rejected your Claude subscription token. It may have expired or been revoked.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "LhTUF",
+                              "name": "Card Actions",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "LasDd",
+                                  "name": "Update token Link",
+                                  "cornerRadius": 8,
+                                  "stroke": "$border-default",
+                                  "strokeWidth": 1,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "LszCG",
+                                      "name": "Update Label",
+                                      "fill": "$text-secondary",
+                                      "content": "Update token",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "icon",
+                                      "id": "cz4s9",
+                                      "name": "external-link Icon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "external-link",
+                                      "library": "lucide",
+                                      "fill": "$text-secondary"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "isiGY",
+                                  "name": "Reconnect Button",
+                                  "fill": "$accent-gold",
+                                  "cornerRadius": 8,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    14
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "Vo2ue",
+                                      "name": "Reconnect Label",
+                                      "fill": "$on-accent",
+                                      "content": "Reconnect",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "icfGO",
+                      "name": "Composer Area",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "SNLea",
+                          "name": "Focus Hint",
+                          "width": "fill_container",
+                          "fill": "#000000",
+                          "cornerRadius": 8,
+                          "stroke": "#000000",
+                          "strokeWidth": 1,
+                          "gap": 8,
+                          "padding": [
+                            10,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "icon",
+                              "id": "vcQDV",
+                              "name": "info Icon",
+                              "width": 16,
+                              "height": 16,
+                              "icon": "info",
+                              "library": "lucide",
+                              "fill": "$amber-400"
+                            },
+                            {
+                              "type": "text",
+                              "id": "EYvzr",
+                              "name": "Focus Hint Text",
+                              "fill": "$amber-400",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Saved your key? Reconnect to continue. Your last message was not answered - send it again.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "T4EDn",
+                          "name": "Composer Row",
+                          "opacity": 0.45,
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "igQpK",
+                              "name": "Composer Input (disabled)",
+                              "width": "fill_container",
+                              "fill": "$bg-base",
+                              "cornerRadius": 8,
+                              "stroke": "$border-default",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Z4EMnA",
+                                  "name": "Composer Placeholder",
+                                  "fill": "$text-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Chat is paused",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "Vc6uA",
+                              "name": "Send Button (disabled)",
+                              "fill": "$accent-gold",
+                              "cornerRadius": 8,
+                              "padding": 10,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "AiNXv",
+                                  "name": "send Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$on-accent"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "ZD0XT",
+                          "name": "Composer Helper Text",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Update it in Settings, then reconnect.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "z9vcgW",
+                          "name": "aria-live Annotation",
+                          "cornerRadius": 4,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            3,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "A3Iuu",
+                              "name": "aria-live Label",
+                              "fill": "$accent-gold",
+                              "content": "aria-live=polite region: helper text and status changes announced here",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Gcg2N",
+              "name": "Column",
+              "width": 500,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "HKMUi",
+                  "name": "Variant Label",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "5b Reconnecting (loading)",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "DI78R",
+                  "name": "5b Chat - Reconnecting",
+                  "clip": true,
+                  "width": 500,
+                  "height": 720,
+                  "fill": "$bg-base",
+                  "cornerRadius": 8,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "Dpnhp",
+                      "name": "Chat Header",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "xKIM6",
+                          "name": "Chat Title",
+                          "fill": "$text-primary",
+                          "content": "Concierge",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "y5LLYg",
+                          "name": "Chat Status",
+                          "fill": "$text-muted",
+                          "content": "Conversation paused",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "nbiuL",
+                      "name": "Messages",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "j7sUK",
+                          "name": "Assistant Message",
+                          "width": 390,
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 12,
+                          "layout": "vertical",
+                          "padding": [
+                            10,
+                            14
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "gdCvr",
+                              "name": "Assistant Text",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "The launch checklist is drafted. Next I can update the pricing page copy.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "aFuWa",
+                          "name": "User Message Row",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "BOn88",
+                              "name": "User Bubble",
+                              "width": 350,
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 12,
+                              "stroke": "$red-900-50",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "padding": [
+                                10,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "xC8CW",
+                                  "name": "User Text",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Yes - update the pricing page copy.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "jQTp0",
+                              "name": "Not Sent Tag",
+                              "gap": 4,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "lBUp7",
+                                  "name": "circle-alert Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "circle-alert",
+                                  "library": "lucide",
+                                  "fill": "$red-400"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "Vie0I",
+                                  "name": "Not Sent Label",
+                                  "fill": "$red-400",
+                                  "content": "Not sent",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "fjycU",
+                          "name": "Error Card",
+                          "width": "fill_container",
+                          "fill": "$red-950-20",
+                          "cornerRadius": 12,
+                          "stroke": "$red-900-50",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": 20,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "fvAcG",
+                              "name": "Card Header",
+                              "width": "fill_container",
+                              "justifyContent": "space_between",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "cz7zw",
+                                  "name": "Card Title",
+                                  "fill": "$red-300",
+                                  "content": "Claude Sign-in Failed",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "pm3NU",
+                                  "name": "Dismiss Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "x",
+                                  "library": "lucide",
+                                  "fill": "$text-secondary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "DfOi4",
+                              "name": "Card Message",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Anthropic rejected your Claude subscription token. It may have expired or been revoked.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "K9VZF7",
+                              "name": "Card Actions",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "WttXi",
+                                  "name": "Update token Link",
+                                  "cornerRadius": 8,
+                                  "stroke": "$border-default",
+                                  "strokeWidth": 1,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "ZMjnf",
+                                      "name": "Update Label",
+                                      "fill": "$text-secondary",
+                                      "content": "Update token",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "icon",
+                                      "id": "kpw8y",
+                                      "name": "external-link Icon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "external-link",
+                                      "library": "lucide",
+                                      "fill": "$text-secondary"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "clgLU",
+                                  "name": "Reconnect Button",
+                                  "opacity": 0.7,
+                                  "fill": "$accent-gold",
+                                  "cornerRadius": 8,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    14
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "icon",
+                                      "id": "oHWs6",
+                                      "name": "Spinner Icon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "loader",
+                                      "library": "lucide",
+                                      "fill": "$on-accent"
+                                    },
+                                    {
+                                      "type": "text",
+                                      "id": "QOGI0",
+                                      "name": "Reconnect Label",
+                                      "fill": "$on-accent",
+                                      "content": "Reconnecting",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "JPJJk",
+                      "name": "Composer Area",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "p3AZmA",
+                          "name": "Composer Row",
+                          "opacity": 0.45,
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "v4kefi",
+                              "name": "Composer Input (disabled)",
+                              "width": "fill_container",
+                              "fill": "$bg-base",
+                              "cornerRadius": 8,
+                              "stroke": "$border-default",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "pCo9R",
+                                  "name": "Composer Placeholder",
+                                  "fill": "$text-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Chat is paused",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "sG0oj",
+                              "name": "Send Button (disabled)",
+                              "fill": "$accent-gold",
+                              "cornerRadius": 8,
+                              "padding": 10,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "MZagK",
+                                  "name": "send Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$on-accent"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "gH8xd",
+                          "name": "Composer Helper Text",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Update it in Settings, then reconnect.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "JEMe6",
+                          "name": "aria-live Annotation",
+                          "cornerRadius": 4,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            3,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "p2jy2h",
+                              "name": "aria-live Label",
+                              "fill": "$accent-gold",
+                              "content": "aria-live=polite region: helper text and status changes announced here",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ihj9G",
+              "name": "Column",
+              "width": 500,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "XKzvv",
+                  "name": "Variant Label",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "5c Reconnect failed again (fresh failure)",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "p9ymaA",
+                  "name": "5c Chat - repeated failure",
+                  "clip": true,
+                  "width": 500,
+                  "height": 720,
+                  "fill": "$bg-base",
+                  "cornerRadius": 8,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "P4wAhs",
+                      "name": "Chat Header",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "DqqvJ",
+                          "name": "Chat Title",
+                          "fill": "$text-primary",
+                          "content": "Concierge",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "fBY6X",
+                          "name": "Chat Status",
+                          "fill": "$text-muted",
+                          "content": "Conversation paused",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "wOntZ",
+                      "name": "Messages",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "uPGCt",
+                          "name": "Assistant Message",
+                          "width": 390,
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 12,
+                          "layout": "vertical",
+                          "padding": [
+                            10,
+                            14
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "h9aAeL",
+                              "name": "Assistant Text",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "The launch checklist is drafted. Next I can update the pricing page copy.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "GXm9E",
+                          "name": "User Message Row",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "NYiSQ",
+                              "name": "User Bubble",
+                              "width": 350,
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 12,
+                              "stroke": "$red-900-50",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "padding": [
+                                10,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "ybcwL",
+                                  "name": "User Text",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Yes - update the pricing page copy.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "oqVrn",
+                              "name": "Not Sent Tag",
+                              "gap": 4,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "VkAnq",
+                                  "name": "circle-alert Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "circle-alert",
+                                  "library": "lucide",
+                                  "fill": "$red-400"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "IsqTE",
+                                  "name": "Not Sent Label",
+                                  "fill": "$red-400",
+                                  "content": "Not sent",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "M9SXMm",
+                          "name": "Error Card",
+                          "width": "fill_container",
+                          "fill": "$red-950-20",
+                          "cornerRadius": 12,
+                          "stroke": "$red-900-50",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": 20,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "wYvcN",
+                              "name": "Card Header",
+                              "width": "fill_container",
+                              "justifyContent": "space_between",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Q7oDwT",
+                                  "name": "Card Title",
+                                  "fill": "$red-300",
+                                  "content": "Claude Sign-in Failed",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "b98ae",
+                                  "name": "Dismiss Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "x",
+                                  "library": "lucide",
+                                  "fill": "$text-secondary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "emBUv",
+                              "name": "Card Message",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Anthropic rejected your Claude subscription token. It may have expired or been revoked.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "text",
+                              "id": "bYDow",
+                              "name": "Fresh Failure Line",
+                              "fill": "$amber-400",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Checked again at 10:42 - still rejected. This is a new result for this attempt; nothing was sent.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "J65RQ",
+                              "name": "Card Actions",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "TBe6T",
+                                  "name": "Update token Link",
+                                  "cornerRadius": 8,
+                                  "stroke": "$border-default",
+                                  "strokeWidth": 1,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "B6adlx",
+                                      "name": "Update Label",
+                                      "fill": "$text-secondary",
+                                      "content": "Update token",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "icon",
+                                      "id": "qSFGF",
+                                      "name": "external-link Icon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "external-link",
+                                      "library": "lucide",
+                                      "fill": "$text-secondary"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "UJKcZ",
+                                  "name": "Reconnect Button",
+                                  "fill": "$accent-gold",
+                                  "cornerRadius": 8,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    14
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "Z77dN",
+                                      "name": "Reconnect Label",
+                                      "fill": "$on-accent",
+                                      "content": "Reconnect",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "SffLL",
+                      "name": "Composer Area",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "cfhH0",
+                          "name": "Composer Row",
+                          "opacity": 0.45,
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "jGBu8",
+                              "name": "Composer Input (disabled)",
+                              "width": "fill_container",
+                              "fill": "$bg-base",
+                              "cornerRadius": 8,
+                              "stroke": "$border-default",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "gFPLk",
+                                  "name": "Composer Placeholder",
+                                  "fill": "$text-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Chat is paused",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "lvrQK",
+                              "name": "Send Button (disabled)",
+                              "fill": "$accent-gold",
+                              "cornerRadius": 8,
+                              "padding": 10,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "d8rkwG",
+                                  "name": "send Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$on-accent"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "SapLb",
+                          "name": "Composer Helper Text",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Update it in Settings, then reconnect.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "w6ONH",
+                          "name": "aria-live Annotation",
+                          "cornerRadius": 4,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            3,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "WZzyX",
+                              "name": "aria-live Label",
+                              "fill": "$accent-gold",
+                              "content": "aria-live=polite region: helper text and status changes announced here",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "md0Tf",
+          "name": "Review Notes",
+          "width": "fill_container",
+          "fill": "$gold-wash",
+          "cornerRadius": 8,
+          "stroke": "$accent-gold",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "d3PE7k",
+              "name": "Notes Title",
+              "fill": "$accent-gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FRAME 5 - NOTES",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "W7zdut",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "5a: when the tab regains focus while blocked, a quiet inline hint appears above the composer. It does not retry on its own and it does not steal focus.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "EmDcd",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "5b: Reconnect shows a spinner and the word Reconnecting, and is disabled while it runs. The composer stays disabled until the check passes.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "uL9AM",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "5c: if Reconnect fails again the card is replaced in place (never stacked) and says when it re-checked and that the result is new, so it reads as a fresh answer, not a loop. Nothing is sent or retried behind the scenes.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "zt0D3",
+      "x": 3060,
+      "y": 900,
+      "name": "6 Chat - card dismissed, and mobile width",
+      "width": 1070,
+      "fill": "$bg-base",
+      "layout": "vertical",
+      "gap": 20,
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "P24Iz",
+          "name": "Frame Title",
+          "fill": "$text-primary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Dismissed card, and mobile",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 20,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "WJ7SK",
+          "name": "Frame Subtitle",
+          "fill": "$text-secondary",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "6a: card dismissed, composer still disabled. 6b: mobile width (390) of frame 4, subscription-token variant.",
+          "lineHeight": 1.5,
+          "fontFamily": "Inter",
+          "fontSize": 13,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "q9TEgT",
+          "name": "Variants Row",
+          "gap": 40,
+          "children": [
+            {
+              "type": "frame",
+              "id": "vzrIx",
+              "name": "Column",
+              "width": 560,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "wJZMo",
+                  "name": "Variant Label",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "6a Card dismissed (desktop)",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "fAvXY",
+                  "name": "6a Chat - card dismissed",
+                  "clip": true,
+                  "width": 560,
+                  "height": 640,
+                  "fill": "$bg-base",
+                  "cornerRadius": 8,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "pEJfG",
+                      "name": "Chat Header",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Z8QBf8",
+                          "name": "Chat Title",
+                          "fill": "$text-primary",
+                          "content": "Concierge",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "NGZCK",
+                          "name": "Chat Status",
+                          "fill": "$text-muted",
+                          "content": "Conversation paused",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "gaVxO",
+                      "name": "Messages",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "sPSOL",
+                          "name": "Assistant Message",
+                          "width": 450,
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 12,
+                          "layout": "vertical",
+                          "padding": [
+                            10,
+                            14
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "quuYs",
+                              "name": "Assistant Text",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "The launch checklist is drafted. Next I can update the pricing page copy.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "xlfuk",
+                          "name": "User Message Row",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "QyQcT",
+                              "name": "User Bubble",
+                              "width": 410,
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 12,
+                              "stroke": "$red-900-50",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "padding": [
+                                10,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "qHrDM",
+                                  "name": "User Text",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Yes - update the pricing page copy.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "zm9bs",
+                              "name": "Not Sent Tag",
+                              "gap": 4,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "unYMC",
+                                  "name": "circle-alert Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "circle-alert",
+                                  "library": "lucide",
+                                  "fill": "$red-400"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "FgyUA",
+                                  "name": "Not Sent Label",
+                                  "fill": "$red-400",
+                                  "content": "Not sent",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "x1QMD5",
+                      "name": "Composer Area",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "e4qJhu",
+                          "name": "Composer Row",
+                          "opacity": 0.45,
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "bnMiS",
+                              "name": "Composer Input (disabled)",
+                              "width": "fill_container",
+                              "fill": "$bg-base",
+                              "cornerRadius": 8,
+                              "stroke": "$border-default",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "SMVIP",
+                                  "name": "Composer Placeholder",
+                                  "fill": "$text-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Chat is paused",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "h38zE",
+                              "name": "Send Button (disabled)",
+                              "fill": "$accent-gold",
+                              "cornerRadius": 8,
+                              "padding": 10,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "OxxDY",
+                                  "name": "send Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$on-accent"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "DZxTW",
+                          "name": "Composer Helper Text",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Update it in Settings, then reconnect.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "iNcuH",
+                          "name": "Reconnect Link (proposed)",
+                          "fill": "$accent-gold",
+                          "content": "Reconnect",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "N4kXNU",
+                          "name": "aria-live Annotation",
+                          "cornerRadius": 4,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            3,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "YRtLc",
+                              "name": "aria-live Label",
+                              "fill": "$accent-gold",
+                              "content": "aria-live=polite region: helper text and status changes announced here",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "d1cPop",
+              "name": "Column",
+              "width": 390,
+              "layout": "vertical",
+              "gap": 10,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "pbNFo",
+                  "name": "Variant Label",
+                  "fill": "$text-primary",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "6b Mobile 390 - Claude Sign-in Failed",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "Etujb",
+                  "name": "6b Chat - mobile 390",
+                  "clip": true,
+                  "width": 390,
+                  "height": 780,
+                  "fill": "$bg-base",
+                  "cornerRadius": 8,
+                  "stroke": "$border-default",
+                  "strokeWidth": 1,
+                  "layout": "vertical",
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "ptjjQ",
+                      "name": "Chat Header",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "padding": [
+                        12,
+                        16
+                      ],
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ndT0C",
+                          "name": "Chat Title",
+                          "fill": "$text-primary",
+                          "content": "Concierge",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "nPl3m",
+                          "name": "Chat Status",
+                          "fill": "$text-muted",
+                          "content": "Conversation paused",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "T1zsF9",
+                      "name": "Messages",
+                      "width": "fill_container",
+                      "height": "fill_container",
+                      "layout": "vertical",
+                      "gap": 14,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "w7KaSl",
+                          "name": "Assistant Message",
+                          "width": 280,
+                          "fill": "$bg-surface-2",
+                          "cornerRadius": 12,
+                          "layout": "vertical",
+                          "padding": [
+                            10,
+                            14
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "GsKiJ",
+                              "name": "Assistant Text",
+                              "fill": "$text-primary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "The launch checklist is drafted. Next I can update the pricing page copy.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "XBb5m",
+                          "name": "User Message Row",
+                          "width": "fill_container",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "alignItems": "end",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "aEzyH",
+                              "name": "User Bubble",
+                              "width": 240,
+                              "fill": "$bg-surface-1",
+                              "cornerRadius": 12,
+                              "stroke": "$red-900-50",
+                              "strokeWidth": 1,
+                              "layout": "vertical",
+                              "padding": [
+                                10,
+                                14
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "QyJiL",
+                                  "name": "User Text",
+                                  "fill": "$text-primary",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Yes - update the pricing page copy.",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "yxL4H",
+                              "name": "Not Sent Tag",
+                              "gap": 4,
+                              "alignItems": "center",
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "oKxpD",
+                                  "name": "circle-alert Icon",
+                                  "width": 12,
+                                  "height": 12,
+                                  "icon": "circle-alert",
+                                  "library": "lucide",
+                                  "fill": "$red-400"
+                                },
+                                {
+                                  "type": "text",
+                                  "id": "pBTCp",
+                                  "name": "Not Sent Label",
+                                  "fill": "$red-400",
+                                  "content": "Not sent",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 12,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "R8hqe",
+                          "name": "Error Card",
+                          "width": "fill_container",
+                          "fill": "$red-950-20",
+                          "cornerRadius": 12,
+                          "stroke": "$red-900-50",
+                          "strokeWidth": 1,
+                          "layout": "vertical",
+                          "gap": 6,
+                          "padding": 20,
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "c6RSRr",
+                              "name": "Card Header",
+                              "width": "fill_container",
+                              "justifyContent": "space_between",
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "ouJqs",
+                                  "name": "Card Title",
+                                  "fill": "$red-300",
+                                  "content": "Claude Sign-in Failed",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "600"
+                                },
+                                {
+                                  "type": "icon",
+                                  "id": "BAHke",
+                                  "name": "Dismiss Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "x",
+                                  "library": "lucide",
+                                  "fill": "$text-secondary"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "text",
+                              "id": "C5g9K",
+                              "name": "Card Message",
+                              "fill": "$text-secondary",
+                              "textGrowth": "fixed-width",
+                              "width": "fill_container",
+                              "content": "Anthropic rejected your Claude subscription token. It may have expired or been revoked.",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "normal"
+                            },
+                            {
+                              "type": "frame",
+                              "id": "v653XT",
+                              "name": "Card Actions",
+                              "width": "fill_container",
+                              "gap": 8,
+                              "children": [
+                                {
+                                  "type": "frame",
+                                  "id": "gKmHb",
+                                  "name": "Update token Link",
+                                  "cornerRadius": 8,
+                                  "stroke": "$border-default",
+                                  "strokeWidth": 1,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    12
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "BW28Z",
+                                      "name": "Update Label",
+                                      "fill": "$text-secondary",
+                                      "content": "Update token",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "normal"
+                                    },
+                                    {
+                                      "type": "icon",
+                                      "id": "mUUyH",
+                                      "name": "external-link Icon",
+                                      "width": 14,
+                                      "height": 14,
+                                      "icon": "external-link",
+                                      "library": "lucide",
+                                      "fill": "$text-secondary"
+                                    }
+                                  ]
+                                },
+                                {
+                                  "type": "frame",
+                                  "id": "TDjTx",
+                                  "name": "Reconnect Button",
+                                  "fill": "$accent-gold",
+                                  "cornerRadius": 8,
+                                  "gap": 6,
+                                  "padding": [
+                                    8,
+                                    14
+                                  ],
+                                  "alignItems": "center",
+                                  "children": [
+                                    {
+                                      "type": "text",
+                                      "id": "ZsEog",
+                                      "name": "Reconnect Label",
+                                      "fill": "$on-accent",
+                                      "content": "Reconnect",
+                                      "lineHeight": 1.5,
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "GSLCD",
+                      "name": "Composer Area",
+                      "width": "fill_container",
+                      "fill": "$bg-surface-1",
+                      "layout": "vertical",
+                      "gap": 8,
+                      "padding": 16,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "Hqc53",
+                          "name": "Composer Row",
+                          "opacity": 0.45,
+                          "width": "fill_container",
+                          "gap": 8,
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "frame",
+                              "id": "s6x9Pl",
+                              "name": "Composer Input (disabled)",
+                              "width": "fill_container",
+                              "fill": "$bg-base",
+                              "cornerRadius": 8,
+                              "stroke": "$border-default",
+                              "strokeWidth": 1,
+                              "padding": [
+                                10,
+                                12
+                              ],
+                              "children": [
+                                {
+                                  "type": "text",
+                                  "id": "Sh3xk",
+                                  "name": "Composer Placeholder",
+                                  "fill": "$text-muted",
+                                  "textGrowth": "fixed-width",
+                                  "width": "fill_container",
+                                  "content": "Chat is paused",
+                                  "lineHeight": 1.5,
+                                  "fontFamily": "Inter",
+                                  "fontSize": 14,
+                                  "fontWeight": "normal"
+                                }
+                              ]
+                            },
+                            {
+                              "type": "frame",
+                              "id": "qgC6X",
+                              "name": "Send Button (disabled)",
+                              "fill": "$accent-gold",
+                              "cornerRadius": 8,
+                              "padding": 10,
+                              "children": [
+                                {
+                                  "type": "icon",
+                                  "id": "BBWPP",
+                                  "name": "send Icon",
+                                  "width": 16,
+                                  "height": 16,
+                                  "icon": "send",
+                                  "library": "lucide",
+                                  "fill": "$on-accent"
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "HGUtn",
+                          "name": "Composer Helper Text",
+                          "fill": "$text-secondary",
+                          "textGrowth": "fixed-width",
+                          "width": "fill_container",
+                          "content": "Update it in Settings, then reconnect.",
+                          "lineHeight": 1.5,
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "frame",
+                          "id": "C4hEpb",
+                          "name": "aria-live Annotation",
+                          "cornerRadius": 4,
+                          "stroke": "$accent-gold",
+                          "strokeWidth": 1,
+                          "padding": [
+                            3,
+                            8
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "rd1NC",
+                              "name": "aria-live Label",
+                              "fill": "$accent-gold",
+                              "content": "aria-live=polite region",
+                              "lineHeight": 1.5,
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "vtN1X",
+          "name": "Review Notes",
+          "width": "fill_container",
+          "fill": "$gold-wash",
+          "cornerRadius": 8,
+          "stroke": "$accent-gold",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 16,
+          "children": [
+            {
+              "type": "text",
+              "id": "EVgrE",
+              "name": "Notes Title",
+              "fill": "$accent-gold",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "FRAME 6 - NOTES",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "ohO0H",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "6a: dismissing the card only hides the card. The composer stays disabled and its helper text stays, so the block is never invisible.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "G1Db8",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "6a proposal: a text link Reconnect beside the helper is the only recovery path once the card is dismissed (otherwise the user must refocus the tab or reload). Flagged for review.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "T7LUR3",
+              "name": "Note",
+              "fill": "$text-secondary",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "6b: same content at 390 wide. Reconnect and Update token stay on one row; nothing relies on hover.",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "bg-base": {
+      "type": "color",
+      "value": "#0A0A0A"
+    },
+    "bg-surface-1": {
+      "type": "color",
+      "value": "#141414"
+    },
+    "bg-surface-2": {
+      "type": "color",
+      "value": "#1C1C1C"
+    },
+    "border-default": {
+      "type": "color",
+      "value": "#2A2A2A"
+    },
+    "text-primary": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "text-secondary": {
+      "type": "color",
+      "value": "#848484"
+    },
+    "text-muted": {
+      "type": "color",
+      "value": "#6A6A6A"
+    },
+    "accent-gold": {
+      "type": "color",
+      "value": "#C9A962"
+    },
+    "red-300": {
+      "type": "color",
+      "value": "#FCA5A5"
+    },
+    "red-400": {
+      "type": "color",
+      "value": "#F87171"
+    },
+    "red-900-50": {
+      "type": "color",
+      "value": "#7F1D1D80"
+    },
+    "red-950-20": {
+      "type": "color",
+      "value": "#450A0A33"
+    },
+    "green-500": {
+      "type": "color",
+      "value": "#22C55E"
+    },
+    "amber-400": {
+      "type": "color",
+      "value": "#FBBF24"
+    },
+    "on-accent": {
+      "type": "color",
+      "value": "#1A1612"
+    },
+    "scrim": {
+      "type": "color",
+      "value": "#000000B3"
+    },
+    "red-700": {
+      "type": "color",
+      "value": "#B91C1C"
+    },
+    "gold-wash": {
+      "type": "color",
+      "value": "#C9A9621A"
+    }
+  }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Discoverability probe for #11068: do all FIVE Inngest-serving Better Stack alert resources
+// Discoverability probe for #11068: do all SIX Inngest-serving Better Stack alert resources
 // declare `push = true` in SOURCE? The flip is the measured-acceptance convention (#9168,
 // #11001): email stays on, push is additive, and a vendor refusal at apply reverts the
 // attribute — a silent source-level revert is exactly what this probe exists to catch.
@@ -15,7 +15,7 @@
 // plan's discoverability command inside a sandbox behind a shell-active-token reject —
 // the inngest-luks-alert-armed-probe.ts precedent.
 //
-// Exit 0 + "PUSH_ARMED" when all five declare `push = true`; exit 1 +
+// Exit 0 + "PUSH_ARMED" when all six declare `push = true`; exit 1 +
 // "PUSH_MISSING <resource>" naming the first one that does not (or is absent).
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,6 +31,7 @@ const TARGETS: readonly (readonly [string, string])[] = [
   ["betteruptime_heartbeat", "inngest_server_probe"],
   ["betteruptime_heartbeat", "inngest_prd"],
   ["betteruptime_heartbeat", "inngest_consumer"],
+  ["logtail_exploration_alert", "inngest_luks_key_probe_fail"],
 ];
 
 const seen = new Set<string>();

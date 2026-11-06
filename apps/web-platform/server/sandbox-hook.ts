@@ -4,7 +4,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import { isPathInWorkspace } from "./sandbox";
 import { containsSensitiveEnvAccess } from "./bash-sandbox";
-import { isFileTool, extractToolPath } from "./tool-path-checker";
+import { isFileTool, pathFieldsEscape } from "./tool-path-checker";
 import { patternEscapesWorkspace } from "./tool-pattern-checker";
 import { logPermissionDecision } from "./permission-log";
 
@@ -18,11 +18,10 @@ export function createSandboxHook(workspacePath: string): HookCallback {
     // Uses shared FILE_TOOLS list from tool-path-checker.ts.
     // Includes LS, NotebookRead, and NotebookEdit (#891).
     if (isFileTool(toolName)) {
-      const filePath = extractToolPath(toolInput ?? {});
-
       // Empty path is allowed through -- Glob/Grep default to CWD (workspacePath),
-      // and Read/Write/Edit require file_path so the SDK rejects empty values.
-      const pathEscapes = !!filePath && !isPathInWorkspace(filePath, workspacePath);
+      // and Read/Write/Edit require file_path so the SDK rejects empty values. EVERY present
+      // location field is checked, not just the first truthy one (#10455).
+      const pathEscapes = pathFieldsEscape(toolInput ?? {}, (p) => isPathInWorkspace(p, workspacePath));
       const patternEscapes = !pathEscapes && patternEscapesWorkspace(toolName, toolInput ?? {});
       if (pathEscapes || patternEscapes) {
         // A distinct reason: an absolute Glob pattern is an attempt to ENUMERATE a directory (the egress

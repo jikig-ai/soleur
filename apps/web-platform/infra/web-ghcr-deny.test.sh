@@ -11,7 +11,7 @@
 #
 # Checks (each takes a root dir, so the in-suite mutation battery can point it at a sandbox):
 #   parity    A == B == R, whole entry, parsed (render -> yaml.safe_load; terraform console), on
-#             BOTH web_tunnel_connector arms (web-1 is born with true, web-2 with false)
+#             BOTH web_tunnel_connector arms (web-2 is born with true, web-1 with false)
 #   order     runcmd[0] is the trap arm, runcmd[1] is the one deny entry (both arms)
 #   exec      copy B runs under sh + set -e against temp files: one 0.0.0.0 and one :: line per
 #             name, idempotent, unrelated lines untouched, an existing entry not duplicated
@@ -545,7 +545,7 @@ start = s.index("  - |\n    for f in /etc/hosts")
 end = s.index("  # #8651/#6438: converge")
 open(p, "w").write(s[:start] + "%{ if !web_tunnel_connector ~}\n" + s[start:end] + "%{ endif ~}\n" + s[end:])
 PY
-row "17 copy A wrapped so it vanishes on the web_tunnel_connector=true (web-1) arm" parity cloud-init.yml
+row "17 copy A wrapped so it vanishes on the web_tunnel_connector=true (web-2) arm" parity cloud-init.yml
 sub server.tf '  user_data = base64gzip(templatefile("${path.module}/cloud-init.yml", {' '  user_data = base64gzip(replace(templatefile("${path.module}/cloud-init.yml", {'
 row "18 hcloud_server.web user_data post-processed instead of the plain render" wiring server.tf
 sub variables.tf $'    "web-2" = { location = "hel1", private_ip = "10.0.1.11", server_type = "cpx22" }\n' \

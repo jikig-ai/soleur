@@ -496,9 +496,10 @@ describe("cron-email-ingress-probe — registration config", () => {
 
   it("registers the cron schedule AND the derived manual-trigger event", () => {
     const createFn = vi.mocked(inngest.createFunction);
-    const triggers = createFn.mock.calls[0][1] as Array<
-      { cron: string } | { event: string }
-    >;
+    const opts2 = createFn.mock.calls[0][0] as {
+      triggers: Array<{ cron: string } | { event: string }>;
+    };
+    const triggers = opts2.triggers;
     expect(triggers).toContainEqual({ cron: "0 6 * * *" });
     expect(triggers).toContainEqual({
       event: "cron/email-ingress-probe.manual-trigger",

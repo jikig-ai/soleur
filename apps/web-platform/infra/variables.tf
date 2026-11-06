@@ -663,9 +663,9 @@ variable "git_data_betterstack_logs_token" {
 }
 
 variable "host_proxy_tls_enabled" {
-  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default false, which is today's single-serving-host posture (#8754): SOLEUR_PROXY_BIND and SOLEUR_PROXY_PEER_ALLOWLIST are absent from Doppler prd, so delivering PROXY_TLS_* now would make createProxyServer fire a reportSilentFallback (createProxyServer.no-bind) on every web container start. Set true at the multi-host flip (#5274 Phase 3/6), in the same change that adds the bind + allowlist and the -target lines for all four addresses. Target the key and the cert together: a cert in prd without its key is unusable. See the ADR-118 amendment."
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default true since the multi-host flip (#12167, ADR-118 amendment 2026-09-27): the per-merge saved plan in apply-web-platform-infra.yml targets all four addresses, key and cert together (a cert in prd without its key is unusable), and the SANs derive from every var.web_hosts private IP. SOLEUR_PROXY_BIND is NOT a Doppler prd value: ci-deploy.sh resolve_proxy_bind resolves each host's own private IP at deploy time, and SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER are operator-class prd writes; a host with PROXY_TLS_* but no bind fails closed and reports createProxyServer.no-bind. There is deliberately no TF_VAR or workflow-input route to this variable. Set false to retire the material: the four resources then plan as destroys, which needs [ack-destroy]."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "inngest_config_digest" {

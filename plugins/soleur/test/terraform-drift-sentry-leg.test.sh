@@ -237,7 +237,7 @@ run_plan() {
   # shellcheck disable=SC2086  # stub settings are deliberately word-split
   new_run $stub
   ( cd "$cwd" && env PATH="$bindir:$PATH" MATRIX_DIR="$mdir" GITHUB_OUTPUT="$RUN_GO" \
-      RUNNER_TEMP="$RUN_RT" CI_SSH_PUB="$TMP/ci_ssh_key.pub" \
+      RUNNER_TEMP="$RUN_RT" CI_SSH_PUB="$TMP/ci_ssh_key.pub" GITHUB_WORKSPACE="$REPO_ROOT" \
       DOPPLER_TOKEN=stub-doppler DOPPLER_PROJECT=soleur DOPPLER_CONFIG=prd_terraform \
       "$@" bash --noprofile --norc -e "$TMP/plan-step.sh" ) > "$RUN_OUT" 2>&1
   RUN_RC=$?
@@ -552,7 +552,7 @@ if [[ -n "$TF_REAL" ]]; then
       local bad=0
       new_run
       ( cd "$FX" && env PATH="$TMP/bin-r:$PATH" MATRIX_DIR="$SENTRY_DIR" GITHUB_OUTPUT="$RUN_GO" \
-          RUNNER_TEMP="$RUN_RT" CI_SSH_PUB="$TMP/ci_ssh_key.pub" SENTRY_IAC_AUTH_TOKEN=synthetic-iac-r \
+          RUNNER_TEMP="$RUN_RT" CI_SSH_PUB="$TMP/ci_ssh_key.pub" GITHUB_WORKSPACE="$REPO_ROOT" SENTRY_IAC_AUTH_TOKEN=synthetic-iac-r \
           bash --noprofile --norc -e "$TMP/plan-step.sh" ) > "$RUN_OUT" 2>&1
       RUN_RC=$?
       [[ "$(out_val exit_code)" == "$1" ]] || { echo "    exit_code=$(out_val exit_code), want $1"; bad=1; }

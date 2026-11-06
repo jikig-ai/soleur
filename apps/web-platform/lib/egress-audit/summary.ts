@@ -11,6 +11,28 @@ export function parseDecisionFilter(raw: string | string[] | undefined): Decisio
   return (DECISION_FILTERS as readonly string[]).includes(v ?? "") ? (v as DecisionFilter) : "all";
 }
 
+/**
+ * The view window as the URL and the chips spell it (#11238). The value is passed to the windowed RPC as is
+ * (`p_window`); the SQL allowlist (migration 183) must hold exactly these keys. Name the variable `timeWindow`,
+ * never `window` (it would shadow the browser global in client bundles).
+ */
+export type TimeWindow = "24h" | "7d" | "30d";
+
+export const TIME_WINDOWS: readonly TimeWindow[] = ["24h", "7d", "30d"];
+
+export const DEFAULT_TIME_WINDOW: TimeWindow = "30d";
+
+/** An unknown or repeated `?window=` value falls back to the default (30 days); it is never a 400. */
+export function parseTimeWindow(raw: string | string[] | undefined): TimeWindow {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return (TIME_WINDOWS as readonly string[]).includes(v ?? "") ? (v as TimeWindow) : DEFAULT_TIME_WINDOW;
+}
+
+export const WINDOW_LABEL: Record<TimeWindow, string> = { "24h": "24 hours", "7d": "7 days", "30d": "30 days" };
+
+/** "about the last 7 days": 15-minute buckets that straddle the window start are counted whole, so never "exactly". */
+export const windowPhrase = (w: TimeWindow): string => `about the last ${WINDOW_LABEL[w]}`;
+
 /** The RPC's `p_decision` for a filter (`null` = every outcome). */
 export function toRpcDecision(filter: DecisionFilter): "allowed" | "denied" | "other" | null {
   if (filter === "all") return null;
@@ -25,7 +47,7 @@ export function outcomeOf(decision: string): Outcome {
   return "Other";
 }
 
-/** The RPC's jsonb, as `get_egress_audit_summary` returns it (migration 177). */
+/** The RPC's jsonb, as `get_egress_audit_summary` (migration 177) and `get_egress_audit_window_summary` (migration 183) return it. */
 export interface EgressAuditPayload {
   window: { start: string; end: string };
   truncated: boolean;

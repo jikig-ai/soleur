@@ -109,6 +109,65 @@ assert "signkey-test- prefix on dev signing key" "grep -qE '\"signkey-test-' '$I
 assert "lifecycle ignore_changes [value] on each doppler_secret" \
   "[[ \$(grep -c 'ignore_changes = \\[value\\]' '$INNGEST_TF') -ge 7 ]]"
 
+# --- #10540: the app (soleur/prd) copies DERIVE from the dedicated random_id (Terraform-derived channel) ---
+# The shared app<->host channel keys are one value in two Doppler projects. Their single source is
+# random_id.inngest_{signing,event}_key_dedicated (inngest-host.tf); the app `_prd` secrets reference it,
+# so a rotation (-replace on the dedicated random_id, then on the app secret) lands both copies without
+# a plaintext copy step. `ignore_changes=[value]` stays on the app pair so a per-merge plan shows no diff.
+HOST_TF="$SCRIPT_DIR/inngest-host.tf"
+# tf_attr FILE TYPE NAME ATTR -> the right-hand side of ATTR inside that resource block (comments skipped).
+tf_attr() {
+  awk -v t="$2" -v n="$3" -v a="$4" '
+    $0 ~ "^resource \"" t "\" \"" n "\" \\{" { inb=1; next }
+    inb && /^}/ { exit }
+    inb && /^[[:space:]]*#/ { next }
+    inb && $0 ~ "^[[:space:]]*" a "[[:space:]]*=" { sub(/^[^=]*=[[:space:]]*/, ""); print; exit }
+  ' "$1"
+}
+# tf_block FILE TYPE NAME -> the whole resource block, comment lines removed.
+tf_block() {
+  awk -v t="$2" -v n="$3" '
+    $0 ~ "^resource \"" t "\" \"" n "\" \\{" { inb=1 }
+    inb && /^[[:space:]]*#/ { next }
+    inb { print }
+    inb && /^}/ { exit }
+  ' "$1"
+}
+APP_SIGN_VAL="$(tf_attr "$INNGEST_TF" doppler_secret inngest_signing_key_prd value)"
+APP_EVT_VAL="$(tf_attr "$INNGEST_TF" doppler_secret inngest_event_key_prd value)"
+DED_SIGN_VAL="$(tf_attr "$HOST_TF" doppler_secret inngest_signing_key_dedicated value)"
+DED_EVT_VAL="$(tf_attr "$HOST_TF" doppler_secret inngest_event_key_dedicated value)"
+assert "non-vacuity: the four key value expressions were extracted" \
+  "[[ -n '$APP_SIGN_VAL' && -n '$APP_EVT_VAL' && -n '$DED_SIGN_VAL' && -n '$DED_EVT_VAL' ]]"
+assert "app signing key value expression == dedicated signing key value expression" \
+  "[[ '$APP_SIGN_VAL' == '$DED_SIGN_VAL' ]]"
+assert "app event key value expression == dedicated event key value expression" \
+  "[[ '$APP_EVT_VAL' == '$DED_EVT_VAL' ]]"
+assert "app signing key derives from random_id.inngest_signing_key_dedicated.hex" \
+  "[[ '$APP_SIGN_VAL' == *'random_id.inngest_signing_key_dedicated.hex'* ]]"
+assert "app event key derives from random_id.inngest_event_key_dedicated.hex" \
+  "[[ '$APP_EVT_VAL' == *'random_id.inngest_event_key_dedicated.hex'* ]]"
+assert "app key copies no longer reference the orphaned _prd random_id values" \
+  "[[ '$APP_SIGN_VAL$APP_EVT_VAL' != *'key_prd'* ]]"
+assert "app signing key keeps ignore_changes = [value] (per-merge plan stays quiet)" \
+  "grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]' < <(tf_block '$INNGEST_TF' doppler_secret inngest_signing_key_prd)"
+assert "app event key keeps ignore_changes = [value] (per-merge plan stays quiet)" \
+  "grep -qE 'ignore_changes[[:space:]]*=[[:space:]]*\\[value\\]' < <(tf_block '$INNGEST_TF' doppler_secret inngest_event_key_prd)"
+assert "dedicated signing doppler_secret has NO lifecycle block (the issue's verify-whether question)" \
+  "! grep -q 'lifecycle' < <(tf_block '$HOST_TF' doppler_secret inngest_signing_key_dedicated)"
+assert "dedicated event doppler_secret has NO lifecycle block (the issue's verify-whether question)" \
+  "! grep -q 'lifecycle' < <(tf_block '$HOST_TF' doppler_secret inngest_event_key_dedicated)"
+assert "dedicated random_id pair has no lifecycle block (a plain -replace must regenerate)" \
+  "! grep -q 'lifecycle' < <(tf_block '$HOST_TF' random_id inngest_signing_key_dedicated) && ! grep -q 'lifecycle' < <(tf_block '$HOST_TF' random_id inngest_event_key_dedicated)"
+assert "SHARED-CHANNEL CONTRACT no longer instructs an out-of-band copy" \
+  "! grep -qE 'copy the host value in via|reconcile out-of-band' '$INNGEST_TF'"
+assert "SHARED-CHANNEL CONTRACT names the derivation from the dedicated random_id" \
+  "grep -qE 'DERIVED from random_id\\.inngest_\\{signing,event\\}_key_dedicated' '$INNGEST_TF'"
+assert "orphaned _prd random_ids carry a retired comment that points at #11293" \
+  "grep -qE 'RETIRED.*#11293|#11293.*RETIRED' '$INNGEST_TF'"
+assert "closing NOTE no longer calls 'terraform taint random_id' the ONLY supported rotation path" \
+  "! grep -qE 'The ONLY supported rotation path' '$INNGEST_TF'"
+
 # --- BetterStack heartbeat + policy ---
 echo ""
 echo "--- BetterStack ---"
@@ -1308,7 +1367,7 @@ assert "A4 a failed curl degrades http_code to the literal 000, not to an empty 
 # is asserted, in EVERY arm, over EVERY field — including the arms where the expected token is
 # also pinned positively.
 # Presence/parity list. `redis_keys` is here.
-PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns"
+PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires redis_key_patterns data_mount_src data_bytes data_mount_base data_mount_devid registry_fns data_luks"
 # NEVER-ZERO list — deliberately EXCLUDES redis_keys, and that exclusion is the whole point.
 # For every other field `0` is a degradation masquerading as a measurement. For redis_keys `0`
 # is the CLEARING VALUE: an empty keyspace is exactly what authorizes the recut. Putting it in
@@ -1321,10 +1380,12 @@ PROBE_7695_FIELDS="probe_schema host_role flush_latched redis_keys redis_expires
 # its MEANINGFUL reading -- a server that answers and owns nothing, which is the diagnostic-boot
 # signature #8015 exists to grade. Asserting it can never be 0 would assert that the very state
 # the field was added to detect can never be emitted.
-PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid"
+# #8525: data_luks joins the never-zero list -- its accepting values are blkid TYPEs
+# (crypto_LUKS, ext4) and the two sentinels; a literal `0` can only be a degradation.
+PROBE_7695_NEVER_ZERO="probe_schema host_role flush_latched data_mount_src data_bytes data_mount_base data_mount_devid data_luks"
 
-assert "#8017 probe declares probe_schema=8 (the execute gate refuses a stale_schema row, E6)" \
-  "grep -qE 'probe_schema=8( |\$)' '$PROBE_LOG'"
+assert "#8525 probe declares probe_schema=9 (the execute gate refuses a stale_schema row, E6)" \
+  "grep -qE 'probe_schema=9( |\$)' '$PROBE_LOG'"
 for _f7695 in $PROBE_7695_FIELDS; do
   assert "#7695 probe emits a non-empty $_f7695" \
     "grep -qE '$_f7695=[^ ]' '$PROBE_LOG'"
@@ -1370,7 +1431,7 @@ PATH="$PROBE_W_BIN:$PATH" LOGGER_OUT="$PROBE_W_LOG" \
 
 assert "#7695 web host declares host_role=web (the row carries its own role, not just an id)" \
   "grep -qE 'host_role=web( |\$)' '$PROBE_W_LOG'"
-for _f7695 in flush_latched redis_keys data_mount_src data_bytes; do
+for _f7695 in flush_latched redis_keys data_mount_src data_bytes data_luks; do
   assert "#7695 web host with /mnt/data MOUNTED and a latch present, $_f7695 is n/a" \
     "grep -qE '$_f7695=n/a( |\$)' '$PROBE_W_LOG'"
 done
@@ -1892,6 +1953,113 @@ assert "#8013 the field is still non-empty and carries no whitespace" \
   "grep -qE 'redis_key_patterns=[^ ]+( |\$)' '$S8_KEYS'"
 cp "$PROBE_D_BIN/redis-cli" "$PROBE_S8_BIN/redis-cli"
 
+# ============================================================================================
+# ARM 5c — probe_schema=9: data_luks, the LUKS-type read off the BACKING device (#8525)
+# ============================================================================================
+# THE CONFIDENT-WRONG-ANSWER CLASS THIS ARM EXISTS FOR. blkid on the MAPPER node reports the
+# filesystem inside the container (ext4), so a probe that blkid'd $data_mount_src would emit
+# `ext4` on an encrypted store -- the honest-looking plaintext verdict that must never ship.
+# The stubs below answer crypto_LUKS ONLY for the cryptsetup-named backing device (/dev/sdb1):
+# an emitter that reads the mapper, or skips cryptsetup, emits ext4 and goes red.
+PROBE_S9_BIN="$PING_TMP/probe-bin-s9"
+mkdir -p "$PROBE_S9_BIN"
+cp "$PROBE_S8_BIN/"* "$PROBE_S9_BIN/" 2>/dev/null || true
+# findmnt variants: the stub answers one fixed source per arm, exactly as s8's does.
+s9_findmnt() {  # s9_findmnt <source-path>
+  cat > "$PROBE_S9_BIN/findmnt" <<FMNTEOF
+#!/bin/sh
+for a in "\$@"; do [ "\$a" = "/mnt/data" ] && { echo "$1"; exit 0; }; done
+exit 1
+FMNTEOF
+  chmod +x "$PROBE_S9_BIN/findmnt"
+}
+# blkid: keyed on the LAST argument (the device). crypto_LUKS is answered ONLY for the
+# cryptsetup-named backing device; the mapper and the whole disk read ext4 -- the trap the
+# source ordering must avoid. Unknown device args exit 1 (a refused question).
+s9_blkid() {  # s9_blkid <mode: full|empty|garbage>
+  cat > "$PROBE_S9_BIN/blkid" <<BLKIDEOF
+#!/bin/sh
+case "$1" in
+  empty) exit 1 ;;
+  garbage) echo 'not a TYPE'; exit 0 ;;
+esac
+dev=""
+for a in "\$@"; do dev="\$a"; done
+case "\$dev" in
+  /dev/sdb1) echo crypto_LUKS ;;
+  /dev/mapper/*|/dev/sdb) echo ext4 ;;
+  *) exit 1 ;;
+esac
+BLKIDEOF
+  chmod +x "$PROBE_S9_BIN/blkid"
+}
+# cryptsetup: `status <mapper>` prints the `device:` line the emitter parses; <mode: fail>
+# refuses instead (a non-crypt mapper, a missing key -- the question refused, not answered).
+s9_cryptsetup() {  # s9_cryptsetup <mode: ok|fail|garbage>
+  cat > "$PROBE_S9_BIN/cryptsetup" <<CRYEOF
+#!/bin/sh
+case "$1" in
+  fail) exit 1 ;;
+  garbage) echo 'device: ??? not-a-path'; exit 0 ;;
+esac
+case "\$1 \$2" in
+  "status inngest-redis") printf '  /dev/mapper/inngest-redis is active.\n    device:  /dev/sdb1\n' ;;
+  *) exit 1 ;;
+esac
+CRYEOF
+  chmod +x "$PROBE_S9_BIN/cryptsetup"
+}
+s9_run() {
+  _s9_log="$PING_TMP/logger-probe-s9-$1.txt"
+  : > "$_s9_log"
+  PATH="$PROBE_S9_BIN:$PATH" LOGGER_OUT="$_s9_log" \
+    PROBE_LATCH_DIR="$PROBE_D_LATCH/inngest-cutover" \
+    PROBE_DATA_MOUNT="/mnt/data" \
+    PROBE_BYID_DIR="$PROBE_S8_BYID" \
+    DOPPLER_PROJECT="soleur-inngest" \
+    INNGEST_REDIS_PASSWORD="fixture-not-a-real-password" \
+    sh "$PROBE_BODY" >/dev/null 2>&1 || true
+  printf '%s' "$_s9_log"
+}
+
+# --- shape 1: a RAW mount source — blkid's TYPE is emitted verbatim ------------------------
+s9_findmnt /dev/sdb; s9_blkid full; s9_cryptsetup ok; s8_lsblk 'sdb\n\n'
+S9_RAW="$(s9_run raw)"
+assert "#8525 a RAW source emits the blkid TYPE verbatim (ext4 = not a container)" \
+  "grep -qE 'data_luks=ext4( |\$)' '$S9_RAW'"
+
+# --- shape 2: the LUKS mount — cryptsetup names the backing device, blkid reads THAT -------
+s9_findmnt /dev/mapper/inngest-redis; s8_lsblk 'inngest-redis\n`-sdb1\n  `-sdb\n\n'
+S9_LUKS="$(s9_run luks)"
+assert "#8525 a MAPPER source emits crypto_LUKS off the cryptsetup-named backing device" \
+  "grep -qE 'data_luks=crypto_LUKS( |\$)' '$S9_LUKS'"
+assert "#8525 ...and NEVER emits the mapper node's own ext4 (the confident-wrong-answer)" \
+  "! grep -qE 'data_luks=ext4( |\$)' '$S9_LUKS'"
+
+# --- shape 3: cryptsetup refuses to name a device => __UNREADABLE__, never a verdict -------
+s9_cryptsetup fail
+S9_CSFAIL="$(s9_run csfail)"
+assert "#8525 cryptsetup refusing => __UNREADABLE__ (the question was refused, not answered)" \
+  "grep -qE 'data_luks=__UNREADABLE__( |\$)' '$S9_CSFAIL'"
+# --- shape 3b: a garbage device: line is the same refused question --------------------------
+s9_cryptsetup garbage
+S9_CSGARB="$(s9_run csgarbage)"
+assert "#8525 a garbage cryptsetup device: line => __UNREADABLE__, never the raw text" \
+  "grep -qE 'data_luks=__UNREADABLE__( |\$)' '$S9_CSGARB' && ! grep -qF 'not-a-path' '$S9_CSGARB'"
+s9_cryptsetup ok
+
+# --- shape 4: blkid yields nothing parseable ----------------------------------------------
+s9_findmnt /dev/sdb; s9_blkid empty; s8_lsblk 'sdb\n\n'
+S9_BKEMPTY="$(s9_run blkempty)"
+assert "#8525 blkid answering nothing => __UNREADABLE__ (never an empty field)" \
+  "grep -qE 'data_luks=__UNREADABLE__( |\$)' '$S9_BKEMPTY'"
+# --- shape 4b: blkid output outside the TYPE charset (whitespace would split the row) -------
+s9_blkid garbage
+S9_BKGARB="$(s9_run blkgarbage)"
+assert "#8525 blkid output outside the field charset => __UNREADABLE__ (the charset guard)" \
+  "grep -qE 'data_luks=__UNREADABLE__( |\$)' '$S9_BKGARB' && ! grep -qF 'not a TYPE' '$S9_BKGARB'"
+s9_blkid full
+
 # --- source assertions: the classes no stub can catch (#8005 precedent, same file) ----------
 # A stub happily ignores an invented flag, so flag SHAPE is unfalsifiable behaviourally. These
 # assert the emitter's TEXT instead -- the discipline that would have caught `--count`.
@@ -1920,6 +2088,12 @@ assert "#8015 the registry curl discards stderr (untrusted response text must no
   "grep -qE 'v0/gql 2>/dev/null' '$PROBE_SRC'"
 assert "#8013 the histogram uses no regex INTERVAL expressions (older mawk lacks them)" \
   "! grep -nE 'isulid|isuuid|ishex' '$PROBE_SRC' | grep -cE '\{[0-9]+(,[0-9]*)?\}' >/dev/null"
+assert "#8525 the blkid call asks for TYPE only and is BOUNDED, like every other call in this probe" \
+  "grep -qE 'timeout [0-9]+ blkid -o value -s TYPE' '$PROBE_SRC'"
+assert "#8525 the cryptsetup call is BOUNDED, like every other call in this probe" \
+  "grep -qE 'timeout [0-9]+ cryptsetup' '$PROBE_SRC'"
+assert "#8525 blkid is NEVER invoked on \$data_mount_src under a mapper (the ext4 trap): the mapper arm resolves cryptsetup first" \
+  "awk '/\\/dev\\/mapper\\/\\*\)/,/esac/' '$PROBE_SRC' | grep -c 'cryptsetup' >/dev/null && ! awk '/\\/dev\\/mapper\\/\\*\)/,/esac/' '$PROBE_SRC' | grep -c 'blkid.*data_mount_src' >/dev/null"
 
 # ============================================================================================
 # mutate_emitter — emitter-side mutation rows that RUN (#8017 task 1a.1)
@@ -2198,7 +2372,7 @@ PATH="$PROBE_M_BIN:$PATH" LOGGER_OUT="$PROBE_M_LOG" \
   DOPPLER_PROJECT="soleur-inngest" \
   sh "$PROBE_BODY" >/dev/null 2>&1 || true
 
-for _f7695 in data_mount_src data_bytes flush_latched redis_keys; do
+for _f7695 in data_mount_src data_bytes flush_latched redis_keys data_luks; do
   assert "#7695 dedicated with no mount: $_f7695 is __UNREADABLE__ (the question applied)" \
     "grep -qE '$_f7695=__UNREADABLE__( |\$)' '$PROBE_M_LOG'"
 done
@@ -2215,8 +2389,8 @@ for _l7695 in "$PROBE_LOG" "$PROBE_W_LOG" "$PROBE_D_LOG" "$PROBE_N_LOG" "$PROBE_
 done
 # Cardinality guard on the loop above: a typo in either list makes the body run zero times and
 # this block reports success having asserted nothing.
-assert "#7695 never-zero invariant covered 6 logs x 7 fields" \
-  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 7 ]]"
+assert "#7695 never-zero invariant covered 6 logs x 8 fields" \
+  "[[ \$(printf '%s\n' \$PROBE_7695_NEVER_ZERO | wc -l) -eq 8 ]]"
 # TWO more since probe_schema=4: `redis_keys` (0 is its CLEARING value) and
 # `redis_key_patterns` (whose clearing value is the token `__NONE__`, not 0 — it is never
 # numeric, so the never-zero loop has nothing to say about it either).
@@ -2986,8 +3160,11 @@ DCFG_BAD="$(printf '%s\n' "$DOPPLER_CFG_SITES" | grep -vE -- '--config (\$\{inng
 # rehearsal_<runid>).
 # 20 -> 16: #10112 retired the LUKS cutover trio (inngest-luks-cutover.sh carried three sites,
 # inngest-luks-cutover.service one).
-assert "inngest boot-path --config census is exactly 16 sites (unlisted site -> RED, #9175)" \
-  "[[ '$DCFG_N' == '16' ]]"
+# 16 -> 18: #5150 added two sites in inngest-bootstrap.sh — the retention unit
+# `doppler run --config @@DOPPLER_CONFIG@@` and the enable-path
+# `doppler run --config "$DOPPLER_CONFIG"` that runs --ensure-indexes.
+assert "inngest boot-path --config census is exactly 18 sites (unlisted site -> RED, #9175)" \
+  "[[ '$DCFG_N' == '18' ]]"
 assert "every boot-path --config site resolves through a parameterization (no literal config name, #9175)" \
   "[[ -z \"\$DCFG_BAD\" ]]"
 
@@ -3241,6 +3418,20 @@ assert "soleur-inngest-provision.service: every [Service] EnvironmentFile path h
 assert "inngest-redis.service stays deliberately unconditioned on the env file (designed-loud, #9962)" \
   "! _luks_sec '$REDIS_SVC' Unit | grep -cE '^[[:space:]]*ConditionPathExists=' >/dev/null"
 
+# DELIBERATE EXCEPTION to the pairing calibration above (flip-token split, ADR-282 addendum 2026-10-30,
+# #9927 item 4; CTO N1). The cloud-init drop-in that points inngest-cutover-flip.service at
+# /etc/default/inngest-flip carries an UNPREFIXED EnvironmentFile= and NO ConditionPathExists. Every
+# pin above asks "does a late-runcmd EnvironmentFile have a matching Condition"; here the answer is
+# deliberately no: the flip service and timer are installed by the bootstrap only AFTER the runcmd item
+# that writes the flip file, a failed write aborts runcmd (`|| exit 1`), and a Condition would turn a
+# loud failure (the unit fails on every 30 s start, stderr shipped) into a silent skip with no detector
+# that does not share the gate (learnings/bug-fixes/2026-10-11-conditioning-a-unit-also-conditions-...).
+# The base unit's own ConditionPathExists=/etc/default/inngest-server (pinned above) still gates it.
+# inngest-flip-token.test.sh section R proves the resolution; this row pins the shape from this suite.
+_flip_dropin() { awk '/^  - path: \/etc\/systemd\/system\/inngest-cutover-flip\.service\.d\/10-flip-token\.conf$/{f=1;next} f&&/^  - path: /{f=0} f' "$SCRIPT_DIR/cloud-init-inngest.yml"; }
+assert "the flip drop-in has an unprefixed EnvironmentFile=/etc/default/inngest-flip under [Service] and NO ConditionPathExists (deliberate, CTO N1)" \
+  "[[ \$(_flip_dropin | _sec_body_vals Service EnvironmentFile) == /etc/default/inngest-flip ]] && ! _flip_dropin | grep -cE '^[[:space:]]*ConditionPathExists=' >/dev/null"
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
@@ -3271,7 +3462,10 @@ if [[ "$DASH_SKIPPED" -ne 0 && "$DASH_SKIPPED" -ne "$DASH_ROWS" ]]; then printf 
 # rows, and the re-anchored ExecStart + redis.service asserts; measured 585/585 with terraform
 # fmt and the pinned-container dash rows). 585 -> 586 (#11172: writer-default == conf aclfile
 # path pin).
-INNGEST_MIN_ASSERTIONS_FULL=586
+# #10540: 586 -> 601 (the app copies derive from the dedicated random_id: expression equality, derivation, ignore_changes kept,
+# dedicated pair without lifecycle, contract/NOTE/retired-comment pins; 15 rows).
+# flip-token split: 601 -> 602 (the flip drop-in's unprefixed, Condition-less EnvironmentFile= pin).
+INNGEST_MIN_ASSERTIONS_FULL=602
 INNGEST_MIN_ASSERTIONS=$((INNGEST_MIN_ASSERTIONS_FULL - DASH_SKIPPED - TF_SKIPPED))
 if [[ "$PASS" -lt "$INNGEST_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s assertions ran, expected >= %s — a block was skipped or emptied.\n' \

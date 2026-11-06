@@ -84,7 +84,7 @@ FAILURES=0
 # --- (a1) zero scheduled-output-missing events for cron-community-monitor ---
 QUERY='feature:"cron-community-monitor" "scheduled-output-missing"'
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
-URL="https://${API_HOST}/api/0/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=${WINDOW_DAYS}d&per_page=10&field=title&field=timestamp"
+URL="https://${API_HOST}/api/0/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=${WINDOW_DAYS}d&per_page=10&field=title&field=timestamp&sort=-timestamp"
 # Rule D pin (ADR-202): the bearer goes only to the pinned Sentry org on the pinned host.
 case "$URL" in
   "https://de.sentry.io/api/0/organizations/jikigai-eu/"*) ;;
@@ -114,7 +114,7 @@ fi
 
 # --- (a2) ≥1 scheduled-community-monitor issue landed in the window ---
 DIGESTS=$(gh issue list --repo jikig-ai/soleur --label scheduled-community-monitor \
-  --state all --search "created:>=${CUTOFF_ISO}" --json number --limit 10 2>/dev/null \
+  --state all --search "created:>=${CUTOFF_ISO}" --json number --limit 100 2>/dev/null \
   | jq 'length' 2>/dev/null)
 if ! [[ "$DIGESTS" =~ ^[0-9]+$ ]]; then
   echo "TRANSIENT: gh issue list failed" >&2

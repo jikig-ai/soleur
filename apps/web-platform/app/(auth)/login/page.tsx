@@ -2,6 +2,14 @@ import { Suspense } from "react";
 
 import { DevSignInPanel } from "@/components/auth/dev-sign-in-panel";
 import { LoginForm } from "@/components/auth/login-form";
+import {
+  ERASURE_PENDING_DETAIL,
+  ERASURE_PENDING_HEADLINE,
+  ERASURE_RETRY_QUALIFIER,
+  NEW_TAB_CUE,
+  PRIVACY_POLICY_CITATION,
+  PRIVACY_POLICY_URL,
+} from "@/lib/legal/account-deletion-copy";
 
 /**
  * (#8094) The erasure-pending notice lives HERE, on the unauthenticated side of the
@@ -18,34 +26,40 @@ import { LoginForm } from "@/components/auth/login-form";
  */
 function ErasurePendingNotice() {
   return (
+    // role="status", not "alert": the node is server-rendered and already present at load, so
+    // an alert is not reliably announced; status is the polite live-region equivalent.
     <div
-      role="alert"
+      role="status"
       className="mb-6 rounded-xl border border-amber-700/50 bg-amber-950/20 p-5"
     >
-      <h2 className="mb-2 text-base font-semibold text-amber-400">
-        Your account is deleted — one step is still pending
-      </h2>
       {/*
-        The copy states ONLY what was observed. Two earlier drafts overclaimed and both
-        are corrected here:
-          * "your account and its data have been deleted" — "its data" includes the
-            repository, which the next sentence then retracts. A reader who stops after
-            the first sentence takes away the exact claim this feature exists to prevent.
-            Narrowed to the stores the cascade actually confirmed.
-          * "our team has been alerted" — untrue as built, and still not a per-user
-            promise. Since #5914 the cascade reports on Sentry's message path, so rule 1b
-            (art17_erasure_incomplete) does match — but it pages on the first event of each
-            outcome issue only (first-seen / reappeared / regression), not on every deletion.
-            "Recorded as outstanding" is what the code actually guarantees.
-        "Contact support and reference this deletion" was also dropped: the user's account
-        is gone, they cannot log back in to re-read this, and they hold no case id — the
-        instruction dead-ended on something they do not possess.
+        All strings come from lib/legal/account-deletion-copy.ts, derived from the merged
+        Privacy Policy ("Pending-erasure record after account deletion"). The copy states ONLY
+        what was observed and what the policy says, and is best effort throughout:
+          * it does not say the repository copy was, or certainly will be, removed;
+          * it does not say a record exists (the record write is best effort and can fail);
+          * it says nothing about workspace files or lock-file / progress-marker residue;
+          * "our team has been alerted" stays dropped: untrue as a per-user promise.
+        "Contact support and reference this deletion" was also dropped: the user's account is
+        gone, they cannot log back in to re-read this, and they hold no case id.
       */}
+      <h2 className="mb-2 text-base font-semibold text-amber-400">
+        {ERASURE_PENDING_HEADLINE}
+      </h2>
+      <p className="mb-2 text-sm text-soleur-text-secondary">{ERASURE_PENDING_DETAIL}</p>
+      <p className="mb-2 text-sm text-soleur-text-secondary">{ERASURE_RETRY_QUALIFIER}</p>
       <p className="text-sm text-soleur-text-secondary">
-        Your account, your conversations and your workspace files have been deleted. We
-        could not confirm that your stored repository was erased from its host, so we are
-        not going to tell you that it was. It is recorded as outstanding and will be
-        completed; nothing further is needed from you.
+        Read more in the{" "}
+        <a
+          href={PRIVACY_POLICY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-soleur-text-primary"
+        >
+          {PRIVACY_POLICY_CITATION}
+          <span className="sr-only">{NEW_TAB_CUE}</span>
+        </a>
+        .
       </p>
     </div>
   );

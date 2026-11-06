@@ -1,0 +1,34 @@
+# PR5d reveal trials (tasks.md 2.2) — replaces receipts/trials/ full audit dumps (review fix round).
+# Each trial was a scratch-worktree exact-file declaration of the pair; the audit was re-run and the
+# suite's gap line diffed against the 29-pair live set. new_pair_count = pairs appearing in the gap
+# line beyond the remaining originals (the declared pair drains out). anchor_file_commits_90d =
+# `git log --since=90.days --oneline -- <path> | wc -l` on the trialed path — the file whose lines
+# anchor any revealed rows. disposition per receipts/sweep-decisions.tsv.
+# Columns: suite<TAB>path<TAB>new_pair_count<TAB>anchor_file_commits_90d<TAB>disposition
+# Revealed pairs by trial: cron-egress-resolve.sh -> cron-egress-allowlist.txt (2 rows);
+# sandbox-canary.mjs -> package.json; betterstack-query.sh -> scripts/ensure-doppler.sh;
+# lint-agents-rule-budget.py -> lint-agents-enforcement-tags.py, lint-rule-ids.py, migrated-rule-ids.txt;
+# lint-workflows.sh -> cutover-inngest.sh; kb-drift-walker.sh -> AGENTS.md, AGENTS.rules.md;
+# grep-q-pipe-guard.test.sh -> 127 pairs (gap line total 142 = 15 remaining originals + 127 revealed;
+# sweep-decisions.tsv cites the 142 total).
+plugins/soleur	.claude/hooks/grep-q-pipe-guard.test.sh	127	71	accept-mention
+plugins/soleur	apps/web-platform/infra/arm-heartbeats.sh	0	4	edge
+plugins/soleur	apps/web-platform/infra/cron-egress-nftables.sh	0	6	edge
+plugins/soleur	apps/web-platform/infra/cron-egress-postapply-assert.sh	0	5	edge
+plugins/soleur	apps/web-platform/infra/cron-egress-resolve.sh	1	11	glob-narrow
+plugins/soleur	apps/web-platform/infra/git-data-flag-precheck.sh	0	8	edge
+plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	0	1	accept-mention
+plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	1	12	accept-mention
+plugins/soleur	apps/web-platform/server/inngest/leader-prompts/constants.ts	0	3	accept-mention
+plugins/soleur	scripts/betterstack-query.sh	1	7	accept-mention
+plugins/soleur	scripts/check-web-host-escrow-config.sh	0	4	accept-mention
+plugins/soleur	scripts/ensure-kb-index.sh	0	2	edge
+plugins/soleur	scripts/lint-agents-rule-budget.py	3	1	accept-mention
+plugins/soleur	scripts/lint-workflows.sh	1	1	accept-mention
+plugins/soleur	scripts/prod-version-drift-b9-probe.sh	0	1	accept-mention
+plugins/soleur	scripts/web-host-escrow-preflight.sh	0	1	edge
+tests/scripts/argv-bearer-sweep	scripts/betterstack-ingest-probe.sh	0	4	edge
+tests/scripts/argv-bearer-sweep	scripts/ensure-doppler.sh	0	1	edge
+tests/scripts/argv-bearer-sweep	scripts/kb-drift-walker.sh	2	0	edge
+tests/scripts/argv-bearer-sweep	scripts/supabase-advisor-scan.sh	0	1	edge
+tests/scripts/argv-bearer-sweep	scripts/supabase-logs-query.sh	0	2	edge

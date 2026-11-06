@@ -38,10 +38,14 @@ function populate(root: string, n: number): void {
   }
 }
 
-function mockReqRes(remoteAddress: string | undefined, host: string | undefined) {
+function mockReqRes(
+  remoteAddress: string | undefined,
+  host: string | undefined,
+  extraHeaders: Record<string, string> = {},
+) {
   const req = {
     socket: { remoteAddress },
-    headers: { host },
+    headers: { host, ...extraHeaders },
   } as unknown as IncomingMessage;
   const writeHead = vi.fn();
   const end = vi.fn();
@@ -168,6 +172,21 @@ describe("handleReadyzRequest", () => {
     // body must NOT leak topology signals
     expect(end).not.toHaveBeenCalledWith(expect.stringContaining("workspaces_"));
   });
+
+  // A tenant who knows the origin IP can put it behind their OWN Cloudflare zone and rewrite Host
+  // to 127.0.0.1; Cloudflare still adds cf-ray / cf-connecting-ip, which a loopback caller never sends.
+  it.each(["cf-ray", "cf-connecting-ip", "forwarded", "x-real-ip", "x-forwarded-for"])(
+    "loopback peer + loopback Host + proxy marker %s → 403",
+    async (marker) => {
+      process.env.WORKSPACES_ROOT = tmpRoot;
+      populate(tmpRoot, 5);
+      const { handleReadyzRequest } = await import("../../server/readiness");
+      const { req, res, writeHead, end } = mockReqRes("127.0.0.1", "127.0.0.1", { [marker]: "x" });
+      handleReadyzRequest(req, res);
+      expect(writeHead).toHaveBeenCalledWith(403, expect.any(Object));
+      expect(end).not.toHaveBeenCalledWith(expect.stringContaining("workspaces_"));
+    },
+  );
 
   it("loopback peer but non-loopback Host header → 403 (secondary gate)", async () => {
     process.env.WORKSPACES_ROOT = tmpRoot;

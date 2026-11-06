@@ -3,7 +3,7 @@ title: "Soleur on OpenCode: open-weights models, sovereign memory"
 type: feature-launch
 publish_date: 2026-10-27
 channels: x, bluesky
-status: scheduled
+status: published
 pr_reference: "#10723"
 ---
 

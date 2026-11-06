@@ -1,0 +1,8 @@
+# suite-weight-exemptions.tsv — committed-weight cap exemptions (#11662).
+# label<TAB>cap_ms<TAB>reason — the reason MUST cite a #NNN tracking ref.
+# Minimal-ledger invariant: a row whose suite fits the default cap reds.
+# Slack bound: cap_ms must stay <= ~1.3x the row's current committed weight.
+# Stale-key parity: a row keyed on a label no durations table carries reds.
+scripts/test-all-affected-d	794024	atomic --affected battery shard; weight amortization tracked in #11679
+plugins/soleur/test/ci-pr-affected-replay-a	1343022	CI replay battery shard; weight amortization tracked in #11679
+apps/web-platform/infra/workspaces-boot-unlock.test.sh	859950	infra workspaces boot+unlock provision rehearsal; reduction tracked in #11679

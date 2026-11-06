@@ -17,3 +17,5 @@ Agent-callable cold outbound email sends from a **dedicated `outbound.soleur.ai`
 - **Per-row random salt for `recipient_hash`** (stronger unlinkability). **Rejected:** would foreclose cross-campaign suppression matching (the C5 opt-out guarantee), which is *weaker* protection for the data subject. The keyed HMAC is linkable by design and confined to the suppression/audit purpose; the pepper is segregated in Doppler.
 
 See the LIA (`knowledge-base/legal/legitimate-interest-assessments/2026-06-15-outbound-email-authority-lia.md`) and Article 30 PA-28 for the GDPR analysis.
+
+> **Amended 2026-10-27 (#11303):** the review-gate premise above (the human gate is the trust boundary for outbound email) was not enforced on the legacy agent runner until ADR-305: `email_send`, `email_reply` and `email_suppress` were listed in the SDK `allowedTools`, which the SDK approves before it consults `canUseTool`, so no card appeared. The body hash is a handler-local integrity check of the body as sent, not a binding to what a card showed; the binding is `canUseTool` returning `allow(toolInput)`.

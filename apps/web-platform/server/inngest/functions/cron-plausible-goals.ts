@@ -233,12 +233,10 @@ export const cronPlausibleGoals = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 7 1 * *" },
+      { event: "cron/plausible-goals.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 7 1 * *" },
-    { event: "cron/plausible-goals.manual-trigger" },
-  ],
-  cronPlausibleGoalsHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronPlausibleGoalsHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

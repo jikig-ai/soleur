@@ -26,13 +26,15 @@
 import { describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
+  closeSync,
   existsSync,
+  fstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,10 +136,25 @@ function sweep(root: string, enumerate: Enumerator, opts: SweepOptions): number 
   }
   for (const asset of opts.requiredAssets) {
     const full = join(root, asset);
-    if (!existsSync(full) || statSync(full).size === 0) {
+    // One descriptor for the size check and the magic bytes — an existsSync/
+    // statSync check followed by a path read leaves a window where the asset can
+    // be swapped between the two (CodeQL js/file-system-race). An open failure
+    // (ENOENT or an unreadable path) is the same "missing or empty" violation.
+    let fd: number;
+    try {
+      fd = openSync(full, "r");
+    } catch {
       problems.push(`${asset}: vendored font missing or empty`);
-    } else if (readFileSync(full).subarray(0, 4).toString("latin1") !== "wOF2") {
-      problems.push(`${asset}: vendored font is not a WOFF2 file`);
+      continue;
+    }
+    try {
+      if (fstatSync(fd).size === 0) {
+        problems.push(`${asset}: vendored font missing or empty`);
+      } else if (readFileSync(fd).subarray(0, 4).toString("latin1") !== "wOF2") {
+        problems.push(`${asset}: vendored font is not a WOFF2 file`);
+      }
+    } finally {
+      closeSync(fd);
     }
   }
   if (scanned < opts.minFiles) {
@@ -472,7 +489,8 @@ describe("no build-time network font fetch", () => {
         ...ASSET,
       });
       try {
-        const weakened = /fonts\.googleapis\.com|fonts\.gstatic\.com/;
+        const weakened =
+          /^https?:\/\/fonts\.googleapis\.com$|^https?:\/\/fonts\.gstatic\.com$/;
         expect(() =>
           sweep(root, enumerateWalk, { ...FIXTURE_OPTS, pattern: weakened }),
         ).not.toThrow();

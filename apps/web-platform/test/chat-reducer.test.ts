@@ -74,6 +74,30 @@ describe("chatReducer", () => {
     expect(next.connection.phase).toBe("unrecoverable");
   });
 
+  // #11086 ordering property: the server sends the auth-failure `key_invalid`
+  // frame only AFTER `stream_end`. ws-client handles it with `clear_streams`,
+  // so a finalized bubble (state undefined/"done") must survive untouched while
+  // a bubble still streaming would be swept to an `interrupted` chip - the
+  // reason the frame must not arrive mid-stream.
+  test("clear_streams leaves a finalized assistant bubble intact (key_invalid after stream_end)", () => {
+    const finalized: ChatMessage = {
+      ...textMessage("a1", "We couldn't sign in to Claude with your connected subscription."),
+      state: "done",
+    };
+    const state = { ...emptyState(), messages: [finalized] };
+    const next = chatReducer(state, { type: "clear_streams" });
+    expect(next.messages[0]).toBe(finalized);
+    expect(next.messages[0].interrupted).toBeUndefined();
+  });
+
+  test("clear_streams turns a still-streaming bubble into an interrupted chip (why the frame must follow stream_end)", () => {
+    const live: ChatMessage = { ...textMessage("a1", "partial"), state: "streaming" };
+    const state = { ...emptyState(), messages: [live] };
+    const next = chatReducer(state, { type: "clear_streams" });
+    expect(next.messages[0].interrupted).toBe(true);
+    expect(next.messages[0].state).toBeUndefined();
+  });
+
   test("clear_streams also resets workflow slice and spawnIndex (review F1 #2886)", () => {
     // Pre-condition: a prior workflow_started + subagent_spawn populated the
     // ambient slice + spawnIndex. clear_streams (fired on key_invalid /

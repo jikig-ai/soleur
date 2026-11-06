@@ -85,6 +85,8 @@ delivers the probe, emit helper and units, writes the DSN line, arms and asserts
 one run. `logtail_exploration_alert.luks_monitor_host_timer_dark` pages when no host-unit `OK:` row
 lands in 27 h, scoped to web-1 so the verify job's and web-2's rows cannot mask it.
 
+> **Retired (#11631, 2026-10-30).** `logtail_exploration_alert.luks_monitor_host_timer_dark` and its once-a-day absence class were retired by #11631; the successor is the Better Stack heartbeat `soleur-luks-monitor-host-timer-prd`, fed hourly from the Logs archive by `scheduled-deadman-heartbeat-feeder.yml` (ADR-218 amendment 2026-10-30), UNARMED until the owner unpauses it. Runbook: `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631`. The sentence above is the 2026-09 record and is unchanged.
+
 ## Recovery verification
 
 After merge: the apply run's state print shows `UnitFileState=enabled` with `NextElapse` in

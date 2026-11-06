@@ -1,0 +1,11 @@
+tests/scripts/argv-bearer-sweep	
+apps/web-platform/test/destroy-ask-mutation	
+scripts/lint-shell-trace-credential-refusal	
+scripts/test-affected-kb-consumers	
+scripts/lint-orphan-test-suites	
+scripts/guard-vacuity-floor	
+tests/scripts/scratch-residue	
+scripts/image-cve-verdict	
+plugins/soleur/test/ci-pr-affected-replay-a	
+plugins/soleur/test/ci-pr-affected-replay-b	
+plugins/soleur/test/ci-pr-affected-replay-c	

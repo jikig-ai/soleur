@@ -4,7 +4,8 @@ import { randomBytes } from "crypto";
 import type { IncomingMessage, ServerResponse } from "http";
 import { countWorkspaceDirsAt } from "./session-metrics";
 import { reportSilentFallback } from "./observability";
-import { isLoopbackHost, isLoopbackPeer } from "./loopback";
+import { hasProxyMarkers, isLoopbackHost, isLoopbackPeer } from "./loopback";
+import { getProxyStatus, type ProxyStatus } from "./proxy-listener-status";
 
 // Deep-readiness (#5966, ADR-068 Sharp Edge C1). `/health` is liveness-only
 // (hardcoded status:"ok" + a SHARED-Supabase probe) — neither signal reflects
@@ -38,6 +39,11 @@ export interface ReadinessResponse {
     // Rejects a fresh/empty volume that is writable but carries no state.
     workspaces_populated: boolean;
   };
+  // NON-GATING (#12167): what this host's session relay is actually bound to. It is
+  // deliberately NOT part of `ready`: web-1 has no relay bind or TLS material, so
+  // folding it in would make web-1 permanently not-ready and break luks-monitor.
+  // The off-host bind proof is the `relay_probe` warn line (proxy-listener-status).
+  proxy: ProxyStatus;
 }
 
 function getWorkspacesRoot(): string {
@@ -68,6 +74,12 @@ function isWorkspacesWritable(root: string): boolean {
   }
 }
 
+// Read-only populated signal (no write probe, nothing written to disk): the one
+// definition shared by the readyz builder and the per-minute relay_probe line.
+export function isWorkspacesPopulated(root: string = getWorkspacesRoot()): boolean {
+  return countWorkspaceDirsAt(root) > 0;
+}
+
 // Never throws — any internal error resolves to ready:false (fail-closed). The
 // route handler wraps this too (belt-and-suspenders), but keeping the builder
 // itself total means the boot mirror and any future caller are equally safe.
@@ -78,13 +90,15 @@ export function buildReadinessResponse(): ReadinessResponse {
     // split-brain with the `root` the write probe uses).
     const root = getWorkspacesRoot();
     const workspaces_writable = isWorkspacesWritable(root);
-    const workspaces_populated = countWorkspaceDirsAt(root) > 0;
+    const workspaces_populated = isWorkspacesPopulated(root);
+    // `ready` is host-local volume state ONLY; the proxy block never gates it.
     const ready = workspaces_writable && workspaces_populated;
-    return { ready, checks: { workspaces_writable, workspaces_populated } };
+    return { ready, checks: { workspaces_writable, workspaces_populated }, proxy: getProxyStatus() };
   } catch {
     return {
       ready: false,
       checks: { workspaces_writable: false, workspaces_populated: false },
+      proxy: getProxyStatus(),
     };
   }
 }
@@ -121,7 +135,7 @@ export function handleReadyzRequest(
 ): void {
   try {
     const peerLoopback = isLoopbackPeer(req.socket?.remoteAddress);
-    if (!peerLoopback || !isLoopbackHost(req.headers.host)) {
+    if (!peerLoopback || !isLoopbackHost(req.headers.host) || hasProxyMarkers(req.headers)) {
       res.writeHead(403, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: "forbidden" }));
       return;
@@ -138,6 +152,7 @@ export function handleReadyzRequest(
         JSON.stringify({
           ready: false,
           checks: { workspaces_writable: false, workspaces_populated: false },
+          proxy: getProxyStatus(),
         }),
       );
     }

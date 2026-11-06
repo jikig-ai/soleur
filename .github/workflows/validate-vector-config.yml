@@ -180,8 +180,8 @@ jobs:
         run: |
           set -euo pipefail
           f=apps/web-platform/infra/vector.toml
-          grep -qE '^collectors = \["cpu", "memory", "disk", "filesystem", "load"\]$' "$f" \
-            || { echo "FAIL: trimmed collectors list missing/drifted in $f (quota guard, #5110)"; exit 1; }
+          grep -qE '^collectors = \["memory", "filesystem"\]$' "$f" \
+            || { echo "FAIL: trimmed collectors list missing/drifted in $f (quota guard, #5110 — trimmed to [memory, filesystem] at 900s in #7577)"; exit 1; }
           grep -qE '^mountpoints\.includes = \[' "$f" \
             || { echo "FAIL: mountpoints.includes (plural, array) missing in $f — a misspelling is a silent no-op in vector validate (quota guard, #5110)"; exit 1; }
 

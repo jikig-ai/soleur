@@ -204,3 +204,5 @@ must not reinstall it in target repos.
 - **Novel pattern — scrutinize on change:** the Git Data API commit-creation (blob→tree→commit→ref,
   no checkout) has no prior in-repo precedent. `workflow_run` + `conclusion=='success'` does
   (`deploy-docs.yml`, `post-merge-monitor.yml`).
+
+- **Amendment 2026-11-05 (#12146):** Stage A is the one re-emittable workflow (`constraint-scaffold.sh --refresh-stage-a`); the Stage A to Stage B interface (workflow name, artifact-name prefixes, `meta.json` schema) and the `contents: read` privilege are frozen as listed in the ADR-071 amendment of the same date.

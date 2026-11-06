@@ -1,0 +1,9 @@
+# boundary-prefix duration promotion evidence (floor -> measured), 2026-11-05
+# CI suite-timings-scripts-0 artifacts, green merge_group runs:
+run	ms
+42092966799	677
+42092357981	1057
+42084778935	718
+# median=718 -> suite-durations.tsv row now "718 measured"
+# local timed runs (worktree host): 1584, 1437, 1410 ms, all rc=0, 54 tests passed
+# regen note: full --timings-dir regen over these artifacts promotes ~40 unrelated floor rows; surgical single-row promotion chosen to keep the diff scoped — keys parity unchanged

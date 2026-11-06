@@ -92,7 +92,10 @@ describe.skipIf(process.platform !== "linux")(
       }
       // The deny is exactly the auth set: no blanket scrub, and nothing the
       // SDK adds on its own that would hide a connected-service token.
-      expect([...new Set(unset)].sort()).toEqual([...AGENT_AUTH_ENV_VARS].sort());
+      // The one named exception: CLI 2.1.311 / SDK 0.3.311 itself unsets its nested-userns opt-in after the masked-/proc bind
+      // (hardening, ADR-075 addendum 2026-11-04). It is not a connected-service token, and any OTHER SDK-added unset still reds here.
+      const SDK_INTERNAL_UNSETS = ["SRT_ALLOW_NESTED_USERNS"];
+      expect([...new Set(unset.filter((n) => !SDK_INTERNAL_UNSETS.includes(n)))].sort()).toEqual([...AGENT_AUTH_ENV_VARS].sort());
 
       // A later `--setenv <NAME>` would undo the unset; none may follow.
       const reSet = argv.flatMap((tok, i) =>

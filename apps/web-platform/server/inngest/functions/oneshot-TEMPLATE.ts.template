@@ -1,7 +1,7 @@
 // COPY-FILL SCAFFOLD for a self-armed Inngest oneshot.
 // Extension is `.ts.template` (NOT `.ts`) so tsc / vitest / the route-registry
 // count regex do NOT pick it up. Copy to `oneshot-<name>.ts`, then fill the
-// `// FILL:` markers and complete the 3 integration points in the trailer.
+// `// FILL:` markers and complete the 4 integration points in the trailer.
 // Canonical precedent: oneshot-4650-monitor-close.ts. See the runbook
 // knowledge-base/engineering/operations/runbooks/inngest-oneshot-and-reminder-patterns.md
 //
@@ -14,6 +14,10 @@
 // A oneshot gets NO Sentry cron monitor (it would false-alert on missed
 // check-ins); errors route via reportSilentFallback. The token is minted INSIDE
 // step.run and never returned into persisted step state.
+// `Error.name` must stay a code constant (never dynamic content) — inngest@4
+// preserves a thrown error's `name` in the serialized envelope, so it ships
+// into persisted run history and Sentry unscrubbed; same discipline as
+// error_summary.
 
 import { inngest } from "@/server/inngest/client";
 import { reportSilentFallback, warnSilentFallback } from "@/server/observability";
@@ -102,9 +106,9 @@ export const oneshotFILL = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: { event: "oneshot/FILL-name.fire" }, // FILL: the arming event name
   },
-  { event: "oneshot/FILL-name.fire" }, // FILL
-  oneshotFILLHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  oneshotFILLHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 
 // === ALSO DO — the 4 integration points (the function alone does nothing) ===

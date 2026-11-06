@@ -40,70 +40,60 @@ async function runHooks(opts: {
   runId?: string;
   eventName?: string;
   eventData?: Record<string, unknown>;
-  // Final result delivered to transformOutput when `step` is absent.
+  // Final result delivered to onRunComplete/onRunError.
   finalResult?: { error?: unknown; data?: unknown };
-  // Per-step transformOutput invocations BEFORE the final one.
+  // isFinalAttempt handed to onRunError for a thrown final result.
+  isFinalAttempt?: boolean;
+  // Per-step hook invocations BEFORE the final one.
   steps?: Array<{
     name: string;
     op?: string;
     result: { error?: unknown; data?: unknown };
   }>;
 }) {
-  const { sentryCorrelationMiddleware } = await import(
+  const { SentryCorrelationMiddleware } = await import(
     "@/server/inngest/middleware/sentry-correlation"
   );
-  // InngestMiddleware exposes `.init` as a public registration entry-point.
-  // The `as unknown as` is necessary because Inngest's public type is
-  // generic over user-config; we drive it with a minimal shape.
-  type MidLike = {
-    init: () => {
-      onFunctionRun: (args: {
-        ctx: { runId: string; event: { name: string; data?: unknown; id?: string } };
-        fn: { id: () => string };
-      }) => {
-        transformInput?: () => void;
-        beforeMemoization?: () => void;
-        afterMemoization?: () => void;
-        beforeExecution?: () => void;
-        afterExecution?: () => void;
-        transformOutput?: (a: {
-          result: { error?: unknown; data?: unknown };
-          step?: { name: string; op?: string };
-        }) => void;
-      };
-    };
-  };
-  const mid = sentryCorrelationMiddleware as unknown as MidLike;
-  const reg = mid.init();
-  const hooks = reg.onFunctionRun({
-    ctx: {
-      runId: opts.runId ?? "run-abc-123",
-      event: {
-        name: opts.eventName ?? "cron/oauth-probe.manual-trigger",
-        data: opts.eventData ?? {},
-        id: "evt-1",
-      },
+  // v4: the client registers the CLASS; the SDK constructs one instance per
+  // request. Tests drive the instance's hooks directly with minimal arg
+  // shapes (the `as never` casts keep tsc happy without the full SDK ctx).
+  const mw = new SentryCorrelationMiddleware({ client: {} as never });
+  const ctx = {
+    runId: opts.runId ?? "run-abc-123",
+    event: {
+      name: opts.eventName ?? "cron/oauth-probe.manual-trigger",
+      data: opts.eventData ?? {},
+      id: "evt-1",
     },
-    fn: { id: () => opts.fnId ?? "cron-oauth-probe" },
-  });
-  hooks.transformInput?.();
-  hooks.beforeMemoization?.();
-  hooks.afterMemoization?.();
-  hooks.beforeExecution?.();
+  };
+  const fn = { id: () => opts.fnId ?? "cron-oauth-probe" };
+  mw.transformFunctionInput({ ctx, fn, steps: {} } as never);
+  mw.onMemoizationEnd?.({ ctx, fn } as never);
   for (const s of opts.steps ?? []) {
-    hooks.transformOutput?.({
-      result: s.result,
-      step: { name: s.name, op: s.op },
-    });
+    const stepInfo = { options: { id: s.name }, hashedId: s.name, stepType: "run", memoized: false };
+    mw.onStepStart?.({ ctx, fn, stepInfo } as never);
+    if (s.result.error != null) {
+      mw.onStepError?.({ ctx, fn, error: s.result.error, stepInfo, isFinalAttempt: false } as never);
+    } else {
+      mw.onStepComplete?.({ ctx, fn, stepInfo, output: s.result.data } as never);
+    }
   }
-  hooks.afterExecution?.();
   if (opts.finalResult !== undefined) {
-    hooks.transformOutput?.({ result: opts.finalResult });
+    if (opts.finalResult.error != null) {
+      await mw.onRunError?.({
+        ctx,
+        fn,
+        error: opts.finalResult.error,
+        isFinalAttempt: opts.isFinalAttempt ?? true,
+      } as never);
+    } else {
+      await mw.onRunComplete?.({ ctx, fn, output: opts.finalResult.data } as never);
+    }
   }
 }
 
 describe("sentry-correlation middleware", () => {
-  it("tags scope with fn_id, run_id, event_name on transformInput", async () => {
+  it("tags scope with fn_id, run_id, event_name on transformFunctionInput", async () => {
     await runHooks({
       fnId: "cron-oauth-probe",
       runId: "run-42",
@@ -150,7 +140,7 @@ describe("sentry-correlation middleware", () => {
     expect(messages.some((m) => m.startsWith("final ok "))).toBe(true);
   });
 
-  it("captures final error to Sentry on transformOutput(error, no step)", async () => {
+  it("captures final error to Sentry on onRunError(error, final attempt)", async () => {
     const err = new Error("probe died");
     await runHooks({ finalResult: { error: err } });
     expect(sentryCalls.captureException).toHaveBeenCalledTimes(1);
@@ -164,6 +154,28 @@ describe("sentry-correlation middleware", () => {
         "inngest.event_name": expect.any(String),
       },
     });
+  });
+
+  it("non-final failed attempt is gated on the native isFinalAttempt flag (regression: dead gate)", async () => {
+    // A thrown error on a non-final attempt will retry — capturing it would
+    // file a Sentry ISSUE for a recoverable error. The gate lives on
+    // onRunError's native isFinalAttempt (sentry-correlation.ts), so a
+    // regression that ignores the flag is red here. Pattern mirrors
+    // run-log-middleware.test.ts's "non-final failed attempt" row.
+    await runHooks({
+      finalResult: { error: new Error("retry me") },
+      isFinalAttempt: false,
+    });
+    expect(sentryCalls.captureException).not.toHaveBeenCalled();
+    // The non-final attempt still records a warning breadcrumb, not silence.
+    const warningBreadcrumbs = sentryCalls.addBreadcrumb.mock.calls.filter(
+      ([b]) => (b as { level: string }).level === "warning",
+    );
+    expect(
+      warningBreadcrumbs.some(([b]) =>
+        (b as { message: string }).message.startsWith("attempt error "),
+      ),
+    ).toBe(true);
   });
 
   it("does NOT captureException on per-step error (Inngest retries — step is recoverable)", async () => {

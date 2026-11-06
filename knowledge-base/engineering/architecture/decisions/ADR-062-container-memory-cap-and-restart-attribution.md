@@ -111,6 +111,29 @@ recover) → `process.exit(1)`. `sentry.server.config.ts` filters the auto
 fatals report **once**. The "Server startup" event is tagged
 `event_type=server-startup` for the AC12 rate-drop verification query.
 
+**Carve-out (2026-11-01, #11772):** the handlers first classify Node's inbound
+client-abort signature — `Error` with `message === "aborted"` **and**
+`code === "ECONNRESET"` (`connResetException`, minted by `abortIncoming` on
+`_http_server`) — as **non-fatal**: `warnSilentFallback`
+(`feature=crash-handlers`, `op=client-abort`) and the process keeps running.
+This restores stock-Next semantics for the one signature that is benign by
+origin; every other shape keeps the fatal contract. Trigger: vercel/next.js
+#49587 — the proxy/middleware body-clone path (`getCloneableBody().finalize()`
+→ `replaceRequestBody`) copies `_events` onto the `IncomingMessage` and wipes
+its `'error'` listeners, so a routine client disconnect reached
+`uncaughtException` and killed e2e dev servers (and would restart prod on an
+unauthenticated abort). The exemption is exact-pair only: code-less
+`Error("aborted")` producers (`dsar-export.ts` › abort-signal arms) and
+wrong-message `ECONNRESET`s ("socket hang up") still exit. Re-evaluation when a
+released `next` fixes `body-streams` is tracked in #11783 — keep as
+defense-in-depth unless the signature's benign-by-origin property changes.
+Rejected alternatives: patch `next/dist/server/body-streams` (no patch
+machinery in-repo; invisible to review, regen-fragile — re-evaluate on an
+upstream release instead); restructure `middleware.ts` to never return
+proxy-produced responses for body-bearing requests (not airtight — redirects
+must return, and cloning also fires on the request-header path); respawn
+wrapper around the dev server (masks the defect, fixes nothing in prod).
+
 ### Sentry alert
 
 `sentry_issue_alert.container_restart_burst` pages on the monitor's

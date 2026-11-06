@@ -106,12 +106,12 @@ ADR-032 2026-07-01 and 2026-09-14 rulings.
 | Param | Value | Note |
 | --- | --- | --- |
 | `merge_method` | `SQUASH` | Matches `gh pr merge --squash`. |
-| `grouping_strategy` | `ALLGREEN` | Safe default; every group is one PR at `max_entries_to_merge = 1`. |
-| `max_entries_to_merge` | `1` | One candidate per merged group keeps CLA verification exact (the PR number is in `head_ref`). Raising it needs the ADR-270 raise checklist. |
+| `grouping_strategy` | `ALLGREEN` | A failing member splits/ejects the group; group-atomic ejection assumed by the 3-member sizing. |
+| `max_entries_to_merge` | `3` | Raised 1→3 on #11678 under the ADR-270 raise checklist: batches merge LANDINGS, not `merge_group` builds. `merge-queue-cla-verify.sh` enumerates every member (head_ref names only the deepest). Sanctioned values per Guard 2: {1,3}. |
 | `min_entries_to_merge` | `1` | Merge as soon as a candidate is green. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation with bounded runner contention; raise to 3 only after the canary shows contention is not binding. |
-| `check_response_timeout_minutes` | `75` | **Must exceed the slowest required check on `merge_group` including runner start spread.** Canary item 5 (#9454, 2026-10-11) measured 240 `merge_group` CI runs: p50 25.0 min, p95 44.1, longest success 60.5 (above the previous 60), one `checks_timed_out` ejection. Under-setting it *dequeues a green PR*. The stall probe fires at 45 minutes, below it. Raised 60 to 75 on 2026-10-11; the cost is that a hung entry can hold the queue up to 15 minutes longer. Raise again if a success approaches the timeout. |
+| `check_response_timeout_minutes` | `120` | **Must exceed the slowest required check on `merge_group` including runner start spread.** Canary item 5 (#9454, 2026-10-11) measured 240 `merge_group` CI runs: p50 25.0 min, p95 44.1, longest success 60.5 (above the previous 60), one `checks_timed_out` ejection. Under-setting it *dequeues a green PR*. The stall probe fires at 45 minutes, below it. Raised 60 to 75 on 2026-10-11; the cost is that a hung entry can hold the queue up to 15 minutes longer. Raise again if a success approaches the timeout. Raised again 75 to 120 on 2026-11-03 (#12030): under hosted-runner saturation a `merge_group` CI run took 79 minutes (shards waited 10-28 minutes for a runner) and the entry was ejected with `checks_timed_out`; a hung entry can now hold the queue 45 minutes longer than at 75. The demand side is #12030. |
 
 ### Sequencing (what landed together)
 

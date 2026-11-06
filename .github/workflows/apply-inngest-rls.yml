@@ -293,7 +293,7 @@ jobs:
             printf '2. If owner_access_broken: apply the break-glass DISABLE ROW LEVEL SECURITY per affected table (grants stay revoked, so anon stays locked out), then investigate the connection role.\n'
             printf '3. Confirm via the authoritative gate query in the run log.\n'
           } > "$BODY_FILE"
-          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty')
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search "$ISSUE_SEARCH" --json number --jq '.[0].number // empty') || { echo "::error::inngest-rls: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
           if [[ -n "$EXISTING" ]]; then
             gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
           else
@@ -311,6 +311,7 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
           set -euo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # dedupe: benign — close-path read: a gh fault aborts the step with the tracking issue still open, keeping the alarm visible; nothing after the close is skipped.
           STALE=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-rls] Inngest RLS lockdown apply failed"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE" ]]; then

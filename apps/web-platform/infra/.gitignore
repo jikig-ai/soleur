@@ -16,3 +16,4 @@ tfplan.txt
 # `sensitive`), and the binary tfplan-repush survives on the runner whenever the apply step is
 # skipped — the grade-refused path. The glob covers both.
 tfplan-repush*
+tfplan-destroy

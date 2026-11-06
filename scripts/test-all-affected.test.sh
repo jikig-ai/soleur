@@ -89,7 +89,7 @@ pass() { PASS=$((PASS + 1)); echo "  [ok] $1"; }
 fail() { FAIL=$((FAIL + 1)); echo "  [FAIL] $1" >&2; printf '%s\n' "$1" >> "$FAILLOG"; }
 
 for _required in "$RUNNER" "$AFF_LIB" "$REL_LIB" "$RWB_LIB"; do
-  [[ -f "$_required" ]] || { echo "ERROR: $_required missing — the suite cannot run" >&2; exit 1; }
+  [[ -f "$_required" ]] || { echo "ERROR: $_required missing — the suite cannot run" >&2; exit 2; }
 done
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ FAILLOG="$_real_faillog"
 if (( PASS != _self_pass + 1 )) || (( FAIL != _self_fail + 1 )) || (( _self_logged != 1 )); then
   printf '\n[FATAL] instrument self-test failed: pass moved %d, fail moved %d, log lines %d\n' \
     "$((PASS - _self_pass))" "$((FAIL - _self_fail))" "$_self_logged" >&2
-  exit 1
+  exit 2
 fi
 PASS=$_self_pass; FAIL=$_self_fail; cases=0
 
@@ -322,6 +322,47 @@ runnable_n() {
 
 echo "== test-all-affected: mutation matrix =="
 
+# --- Row-range selection (--rows A-B) ------------------------------------------------------
+# ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~29-minute atomic suite this file was
+# a test-scripts shard worst leg, so scripts/test-all.sh registers it as four `-a`..`-d` arms
+# inside the same relevance gate, each carrying a `--rows A-B` range over the DECLARED_TOTAL
+# gated blocks below. A gated site is one `# ---` row block: in_range sequences every block in
+# file order (an added or deleted block shifts _site_seq against DECLARED_TOTAL at
+# the end). Setup, the instrument self-test, ENV_SCRUB, the sandbox builders and the floors
+# are unconditional per arm; for-loops (q8/th census rows) stay inside their block. The union
+# tiling 1..DECLARED_TOTAL is asserted by plugins/soleur/test/scripts-shard-totality.test.sh.
+# A DECLARED_TOTAL bump and the registered-range re-split land in the same commit.
+DECLARED_TOTAL=38   # the gated `# ---` row blocks below (a .. th8m); setup/floors are unconditional
+ROWS_UNIT=blocks
+# S4 per-block case floors (#11647): ROWS_COUNT_VAR names the counter in_range
+# snapshots per gate call; ROWS_BLOCK_CASES carries one declared `>=` minimum
+# per gated ordinal (index = ordinal-1). The declared counts are each block's
+# straight-line cases+= sites — loop-driven blocks (rc/re/tg/th census rows)
+# declare only their unconditional floor so legitimate case growth cannot
+# false-fire. Ordinals map to blocks: 1 a, 2 b, 3 c, 4 d, 5 e, 6 f, 7 g, 8 h,
+# 9 i, 10 j, 11 k, 12 k2-k4, 13 rc*, 14 re*, 15 l, 16 m, 17 n, 18 o, 19 p,
+# 20 q, 21 r, 22 s, 23 t, 24 u, 25 x, 26 w, 27 v, 28 y/z, 29 z8, 30 sc, 31 sc9,
+# 32 t1-t10/m*, 33 p1-p6/m4, 34 q1-q4/m6, 35 q7-q9, 36 tg, 37 th, 38 th6*/th8.
+ROWS_COUNT_VAR=cases
+ROWS_BLOCK_CASES=( 1 1 1 1 1 1 1 1 1 1 1 4 1 19 2 3 1 1 1 1 1 2 1 2 1 2 2 11 1 8 1 18 7 9 3 5 4 4 )
+# shellcheck source=scripts/lib/rows-range.sh
+source "$REPO_ROOT/scripts/lib/rows-range.sh"
+rows_parse_args "$@"
+# in_range (from the lib): called once per gated row block, in file order. _site_seq counts
+# gated blocks; EXECUTED counts dispatched blocks. No per-site ordinal — the block order IS the
+# declared order and the end-of-file _site_seq == DECLARED_TOTAL check is the add/delete guard;
+# a reorder keeps coverage total but silently re-maps which range covers which rows — a balance
+# skew, not a gap.
+
+# Whole-prefix sweep, not a named list — a named GIT_* list went stale within
+# a day once already (sc9's comment). The subshell keeps the unsets out of the
+# caller's env. GIT_TRACE is swept too — fixture ops stay quiet by design.
+# UNCONDITIONAL by necessity (ROWS-SPLIT, #11562): gated blocks 28/37/38 call
+# rc_g but land on different --rows arms than block 13 where it used to live;
+# a gated definition is invisible to a sibling arm and fails `command not found`.
+rc_g() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
+
+if in_range; then
 # --- Row a: --help ------------------------------------------------------------
 cases=$((cases + 1))
 rc=0
@@ -335,6 +376,8 @@ else
   fail "a: --help rc=$rc; out head: $(head -5 <<<"$_help_out")"
 fi
 
+fi
+if in_range; then
 # --- Row b: --affected --full conflict -> exit 2 --------------------------------
 cases=$((cases + 1))
 rc=0
@@ -346,6 +389,8 @@ else
   fail "b: --affected --full rc=$rc, expected 2"
 fi
 
+fi
+if in_range; then
 # --- Row c: trailing positional junk -> exit 2 ---------------------------------
 cases=$((cases + 1))
 rc=0
@@ -357,6 +402,8 @@ else
   fail "c: trailing positional rc=$rc, expected 2"
 fi
 
+fi
+if in_range; then
 # --- Row d: --print-affected-set emits receipts for the runnable stream ---------
 cases=$((cases + 1))
 rc=0
@@ -369,6 +416,8 @@ else
   fail "d: print rc=$rc receipts=${_receipts} runnable=$(runnable_n "$RUNNER")"
 fi
 
+fi
+if in_range; then
 # --- Row e: receipts carry real classes — spot-check the census anchors ---------
 cases=$((cases + 1))
 _cls_lockfile=$(awk -F'\t' '$1=="AFFECTED_CLASS" && $2=="scripts/lint-dual-lockfile"{print $3}' <<<"$_print_out" | head -1)
@@ -380,6 +429,8 @@ else
   fail "e: lockfile='${_cls_lockfile:-<none>}' mutex-wiring='${_cls_mutex:-<none>}' unittest='${_cls_unittest:-<none>}'"
 fi
 
+fi
+if in_range; then
 # --- Row f: affected run declines untouched suites, keeps always-on -------------
 # Force a diff touching only the tenant-integration workflow: its declared-edge
 # suite must be selected; an unrelated edge suite must not; an always-on lint
@@ -402,6 +453,8 @@ else
   fail "f: rc=$_rc ran=${_ran} — $(grep -c 'not-affected' <<<"$ARM_OUT") not-affected lines"
 fi
 
+fi
+if in_range; then
 # --- Row g: --full ignores the diff, runs everything ----------------------------
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -415,6 +468,8 @@ else
   fail "g: --full rc=$_rc ran=${_ran} runnable=$(runnable_n "$ARM_SB")"
 fi
 
+fi
+if in_range; then
 # --- Row h: undecidable-diff arm degrades to full --------------------------------
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -430,6 +485,8 @@ else
   fail "h: rc=$_rc ran=${_ran} out=$(grep -c AFFECTED_FALLBACK <<<"$ARM_OUT") fallback lines"
 fi
 
+fi
+if in_range; then
 # --- Row i: HEAD-diff failure degrades to full -----------------------------------
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -444,6 +501,8 @@ else
   fail "i: rc=$_rc ran=${_ran}"
 fi
 
+fi
+if in_range; then
 # --- Row j: missing declarations lib degrades to full -----------------------------
 cases=$((cases + 1))
 SANDBOX_LIB=no-lib run_arm \
@@ -458,6 +517,8 @@ else
   fail "j: rc=$_rc ran=${_ran}"
 fi
 
+fi
+if in_range; then
 # --- Row k: runner-changed diff degrades to full ----------------------------------
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -472,6 +533,8 @@ else
   fail "k: rc=$_rc ran=${_ran}"
 fi
 
+fi
+if in_range; then
 # --- Rows k2-k4: the runner-changed banner and --help (RUNNER EDITS) ---------------
 # The full-fallback arm must say WHAT happened, what it COSTS and how to PREVIEW or scope
 # it: before this, a registration-only edit read as a bare MODE=full with no cost and no
@@ -539,6 +602,8 @@ else
   fail "k4: --help lacks the RUNNER EDITS block"
 fi
 
+fi
+if in_range; then
 # --- Rows rc*: the registration-only runner-diff classifier (ADR-242 decision 20) ---
 # A registration-only diff must take the bounded selection and ANY other runner/index edit must
 # keep the full fallback. The classifier is a closed grammar over the diff text, so this block
@@ -591,11 +656,6 @@ AFFECTED_A_TWO_PATHS=(
   "scripts/lib/test-affected-paths.sh"   # THIS FILE
 )
 '
-
-# Whole-prefix sweep, not a named list — a named GIT_* list went stale within
-# a day once already (sc9's comment). The subshell keeps the unsets out of the
-# caller's env. GIT_TRACE is swept too — fixture ops stay quiet by design.
-rc_g() { ( for _v in "${!GIT_@}"; do unset "$_v"; done; exec git "$@" ); }
 
 # Build a scratch repo whose origin/main is the base commit. $2 = "broken-lib" makes the base lib
 # unparseable (the G4 row). Never links into the live tree.
@@ -930,6 +990,8 @@ _h2_log_n=$(wc -l < "$_h2_log" | tr -d ' ')
 if (( _h2_ok_rows >= 7 )) && (( _h2_ok_red == _h2_ok_rows )) && (( _h2_log_n == _h2_bad )); then pass "H2: a reject-everything stub reddens all $_h2_ok_rows must-pass (ok_*) rows by name ($_h2_bad rows in total)"
 else fail "H2: reject-all stub reddened $_h2_ok_red of $_h2_ok_rows ok_* rows"; fi
 
+fi
+if in_range; then
 # --- Rows re*: end to end through the sandboxed runner ------------------------------
 # The sandbox replaces the classifier's two READ functions at build time (never shipped inline)
 # with a fabricated diff text and post-image root, so these rows prove the DISPATCH: the pre-pass
@@ -1281,6 +1343,8 @@ else
   fail "H3: classifier text differs between the live runner and the sandbox copy"
 fi
 
+fi
+if in_range; then
 # --- Row l: SOLEUR_SUBAGENT refusal — affected proceeds, --full refuses -----------
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -1305,6 +1369,8 @@ else
   fail "l2: --full+subagent rc=$_rc, expected 4"
 fi
 
+fi
+if in_range; then
 # --- Row m: sibling refusal — affected proceeds, --full refuses, degraded refuses -
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -1340,6 +1406,8 @@ else
   fail "m3: degraded+siblings rc=$_rc, expected 4"
 fi
 
+fi
+if in_range; then
 # --- Row n: explicit TEST_GROUP=infra ask executes the infra runner ---------------
 # The P0 seam: under an explicit group ask the infra registration must RUN even
 # when the diff does not reach it — a counted decline here would report
@@ -1357,6 +1425,8 @@ else
   fail "n: rc=$_rc record=$(cat <<<"$ARM_RECORD" | head -3)"
 fi
 
+fi
+if in_range; then
 # --- Row o: below-floor selection refuses rc=4 -------------------------------------
 # Gut ALWAYS_ON to a single bogus label in the sandbox lib: the live-scanner
 # floor can never be met, so the run must refuse BEFORE anything executes.
@@ -1381,6 +1451,8 @@ else
   fail "o: gutted always-on rc=$rc, expected 4"
 fi
 
+fi
+if in_range; then
 # --- Row p: FORCE_ALL + affected degrades to full -----------------------------------
 cases=$((cases + 1))
 _p_diff=.github/workflows/apply-sentry-infra.yml
@@ -1396,6 +1468,8 @@ else
   fail "p: FORCE_ALL+affected rc=$_rc ran=${_ran} runnable=$(runnable_n "$ARM_SB" "$_p_diff")"
 fi
 
+fi
+if in_range; then
 # --- Row q: epilogue carries not-affected accounting + the --full lever ------------
 cases=$((cases + 1))
 SANDBOX_LIB=with-lib run_arm \
@@ -1408,6 +1482,8 @@ else
   fail "q: epilogue missing not-affected accounting or --full lever"
 fi
 
+fi
+if in_range; then
 # --- Row r: enumerate contract unchanged -------------------------------------------
 cases=$((cases + 1))
 rc=0
@@ -1424,6 +1500,8 @@ else
   fail "r: enumerate rc=$rc records=${_enum_n}"
 fi
 
+fi
+if in_range; then
 # --- Row s: SCRIPTS_SHARD + affected — env -u on the enumerate child is load-bearing
 # The real runner refuses SCRIPTS_SHARD under TEST_GROUP=all (:818) — the only
 # group under which the affected pre-pass runs. The `env -u SCRIPTS_SHARD` on
@@ -1492,6 +1570,8 @@ else
   fail "s2: nounset arm rc=$rc ran=${_ran} divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
 fi
 
+fi
+if in_range; then
 # --- Row t: enumerate/dispatch ordinal divergence drops the map, runs all -------
 # Splice a one-position shift into the sandbox's LABEL map only: the runtime
 # label guard must notice the mismatch, drop _aff_sel, and run EVERYTHING —
@@ -1525,6 +1605,8 @@ else
   fail "t: divergent map ran=${_ran} runnable=$(runnable_n "$_sbn" "$_t_diff") divergent=$(grep -c AFFECTED_DIVERGENT <<<"$ARM_OUT")"
 fi
 
+fi
+if in_range; then
 # --- Row u: self-only derivation demotes to unclassified and RUNS -----------------
 # Remove a declared array in the sandbox lib so its suite derives self-only:
 # the classifier must report `unclassified` (not edge:derived), and the run
@@ -1564,6 +1646,8 @@ else
   fail "u2: class='${_ucls:-<none>}' expected unclassified"
 fi
 
+fi
+if in_range; then
 # --- Row x: declared edges UNION with derived, never shadow ---------------------
 # A declared array records what derivation could not reach AT WRITE TIME. If the
 # suite later gains a derivable dependency — modelled here by splicing the suite
@@ -1598,6 +1682,8 @@ else
   fail "x: rc=$rc class='${_xcls:-<none>}' ran=$(grep -c 'sync-domain-model' <<<"$ARM_RECORD")"
 fi
 
+fi
+if in_range; then
 # --- Rows w: the unscoped untracked append --------------------------------------
 # w1 is the source pin: under _AFFECTED the runner appends `git ls-files
 # --others --exclude-standard` UNSCOPED — a brand-new suite file's self-edge and
@@ -1632,6 +1718,8 @@ else
   fail "w2: rc=$ARM_RC c4=$(grep -c 'c4-model-freshness' <<<"$ARM_RECORD") sync=$(grep -c 'sync-domain-model' <<<"$ARM_RECORD")"
 fi
 
+fi
+if in_range; then
 # --- Rows v: lint-orphan-test-suites census mutations ----------------------------
 # The census consumes the classification index fail-closed. Each arm builds a
 # hardlinked repo sandbox (mutating the REAL lib would corrupt the worktree:
@@ -1683,6 +1771,8 @@ else
   fail "v2: census rc=$rc — $(grep -c ERROR "$TESTROOT/out-$cases") ERROR line(s)"
 fi
 
+fi
+if in_range; then
 # --- Rows y/z: deleted-checkout fail-fast + enumerate watchdog (#8761) ----------
 # The enumerate path previously carried no liveness check and no wall-clock
 # bound: a worktree deleted mid-run left every git probe degrading to
@@ -2074,6 +2164,8 @@ PY
   fi
 fi
 
+fi
+if in_range; then
 # --- z8: a live NON-git cwd fails open (advisor finding #6) ------------------
 cases=$((cases + 1))
 _ng_dir="$TESTROOT/non-git-cwd"
@@ -2088,6 +2180,8 @@ else
   fail "z8: rc=${_ng_rc:-0} out=$(tail -3 <<<"$_out" | tr '\n' ' ')"
 fi
 
+fi
+if in_range; then
 # --- Rows sc: --affected-scope=staged (#9173) ---------------------------------
 # The pre-commit gate's unit of work is the COMMIT: under staged scope the
 # selection diff is the index (`git diff --cached`), the branch window is
@@ -2222,6 +2316,8 @@ else
   fail "sc8: rc=$ARM_RC ran=$(ran_count) out=$(tail -3 <<<"$ARM_OUT" | tr '\n' ' ')"
 fi
 
+fi
+if in_range; then
 # --- sc9: the staged branch of the assembly really reads the INDEX ---------
 # The SANDBOX_* seams substitute names, never the invocation — so this arm
 # pins the WIRE, not the artifact (the same real-state technique the infra
@@ -2344,6 +2440,8 @@ else
   fail "sc9: real-state scratch repo could not be built"
 fi
 
+fi
+if in_range; then
 # --- Rows t1-t10 + m1-m3,m5,m7,m8 + t11/m9 + f1: anchored edges (#9307, Guard 3) -----
 # (The `m` ids repeat the earlier contention rows' ids; every failure message carries its row text.)
 # A derived edge that is a DIRECTORY is a path PREFIX, matched at the start of a
@@ -2823,12 +2921,14 @@ cases=$((cases + 1))
 _f1_floor=$(sed -n 's/^_MIN_ALWAYS_ON_DECLARED=\([0-9][0-9]*\)$/\1/p' "$RUNNER")
 # shellcheck source=/dev/null
 _f1_count=$( ( source "$AFF_LIB" >/dev/null 2>&1; echo "${#ALWAYS_ON_SUITES[@]}" ) )
-if [[ "$_f1_floor" == "115" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
-  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 115 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard: 120-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
+if [[ "$_f1_floor" == "113" && "$_f1_count" =~ ^[0-9]+$ ]] && (( _f1_count >= _f1_floor && _f1_count - _f1_floor <= 5 )); then
+  pass "f1: _MIN_ALWAYS_ON_DECLARED is pinned at 113 (#10664 + #9763 + #9947 + #9814 + #8875 + #10331 + #7893 + #10399 feature-map pair registrations + #10861 grep-q-pipe-guard + #11662 anti-regrow pair - #11648 eight >10s drifted labels withdrawn to edge-selection + #9826 image-cve claim-guard and verdict-consumers pair + #10448 boundary-prefix wholesale dir-glob sweep + #9659 lint-gh-dedupe-shape: 118-count minus the slack of 5) and ALWAYS_ON_SUITES ($_f1_count) meets it"
 else
-  fail "f1: floor='${_f1_floor}' (want 115) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
+  fail "f1: floor='${_f1_floor}' (want 113) always-on count='${_f1_count}' (need floor <= count <= floor + 5; move the floor to count - 5 here and in the runner together)"
 fi
 
+fi
+if in_range; then
 # --- Rows p1-p6 + m4: --print-selection (#9307) -------------------------------------
 # `--print-affected-set` prints each registration's CLASS and ignores the diff; it
 # was read as a selection once and reported 306 "selected" for a diff that selects
@@ -2933,6 +3033,8 @@ else
   fail "m4: rc=$ARM_RC — $(grep -c AFFECTED_SELECTED <<<"$ARM_OUT") rows"
 fi
 
+fi
+if in_range; then
 # --- Rows q1-q4 + m6: --print-selection --paths and the why-columns (#9307) --------
 # `--paths=<a,b>` answers "what would THESE paths select?" without a real diff. It
 # is print-only by construction (valid only with --print-selection, which exits
@@ -3057,6 +3159,8 @@ else
   fail "q6: enumerate call carries _aff_child_paths x${_q6_n}, assignment x${_q6_set} (expected 1 and 1)"
 fi
 
+fi
+if in_range; then
 # --- Rows q7-q9: --paths element normalization (#10117) ----------------------------------
 # A --paths element stands in for a diff-name line; a `./`-headed element never
 # matched a git path line and silently selected nothing — a misleading
@@ -3141,6 +3245,8 @@ for _q9_in in 'foo..bar.sh' 'a b.sh' '.github/workflows/x.yml'; do
   fi
 done
 
+fi
+if in_range; then
 # ---- tg rows (Guard 2, #9813): the `glob:` hit arm ---------------------------------------
 # Six extension-bounded kb-corpus carriers hold `glob:` kb-.sh edges — the five
 # original walkers plus repo-write-boundary.test.sh, added under #9969 — a kb
@@ -3277,21 +3383,26 @@ else
 fi
 
 # The receipt carries the minted edge verbatim (real index, print arm). The
-# family is seven since #9294: the five tg walkers, repo-write-boundary.test.sh (#9969),
-# and the trio-baseline census, whose declared array carries the same ^glob:knowledge-base/**.sh edge
-# (it scans the CODE files under the knowledge base, never its prose).
+# family is nine since #11648: the five tg walkers, repo-write-boundary.test.sh (#9969),
+# the trio-baseline census (declared array carries the same ^glob:knowledge-base/**.sh edge —
+# it scans the CODE files under the knowledge base, never its prose), plus
+# grep-q-pipe-guard.test.sh and lint-gh-argv-arg-live, whose #11648 demotion edge sets each
+# carry ^glob:knowledge-base/**.sh (the guard sweeps kb code files; the linter os.walks every
+# tracked .sh). All nine decline a kb .md line, so each row lands here with selected=0.
 # The probe and needle are COMPOSED — a literal `knowledge-base/<path>` here is a
 # fixture the kb-consumers oracle would otherwise charge to this suite as a read.
 cases=$((cases + 1))
 _tg_rcpt_n=$(cd "$REPO_ROOT" && env -u CI -u TEST_GROUP SOLEUR_DISABLE_SESSION_STATE=1 timeout 300 \
   bash "$RUNNER" --print-selection --paths="knowledge""-base/project/specs/foo.md" all 2>/dev/null \
   | awk -F'\t' '$1=="AFFECTED_SELECTED" && index($5, "^glob:knowledge" "-base/**.sh") && $3=="0" {n++} END{print n+0}')
-if [[ "$_tg_rcpt_n" == "7" ]]; then
-  pass "tg6: the seven kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
+if [[ "$_tg_rcpt_n" == "9" ]]; then
+  pass "tg6: the nine kb-.sh glob: walkers' kb-.md AFFECTED_SELECTED rows carry the ^glob: edge, selected=0"
 else
-  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 7)"
+  fail "tg6: ^glob: sel=0 rows: ${_tg_rcpt_n} (want 9)"
 fi
 
+fi
+if in_range; then
 # ---- th rows (#9969): whole-tree corpus suites' `glob:` edges ---------------
 # guard-vacuity-floor and lint-orphan-test-suites scan `git ls-files '*.test.sh'`
 # whole-tree; repo-write-boundary.test.sh scans whole-tree `*.sh` content-keyed
@@ -3618,6 +3729,10 @@ _th6_missing=$(
       || echo "repo-write-boundary.test.sh:${_r}$(_th6_declined AFFECTED_SCRIPTS_LIB_REPO_WRITE_BOUNDARY_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
     _th6_root_covered AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" .sh \
       || echo "trio-baseline-census:${_r}$(_th6_declined AFFECTED_TESTS_SCRIPTS_TRIO_BASELINE_CENSUS_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS "$_r" .sh \
+      || echo "grep-q-pipe-guard:${_r}$(_th6_declined AFFECTED_CLAUDE_HOOKS_GREP_Q_PIPE_GUARD_TEST_SH_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
+    _th6_root_covered AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS "$_r" .sh \
+      || echo "lint-gh-argv-arg-live:${_r}$(_th6_declined AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS "$_r" | sed 's/^ */ [declined: /;s/$/]/')"
   done <<<"$_TH_ROOTS"
 )
 if [[ -z "$_th6_missing" ]]; then
@@ -3648,6 +3763,8 @@ else
   fail "th7: labels absent from the keep-list — decline asserts read trim artifacts:${_th7_missing}"
 fi
 
+fi
+if in_range; then
 # --- th6v + th6m + th8 rows (#10117): census matchability + dir-less root detection --------
 #
 # Function-mutation dispatch for THIS file's own machinery — extract the named
@@ -4095,17 +4212,30 @@ else
 fi
 
 echo ""
+fi
 # Conservation + floor: a truncated row block must not read as green.
 if (( PASS + FAIL != cases )); then
   echo "[FATAL] verdict mismatch: PASS($PASS)+FAIL($FAIL) != cases($cases) — a row was skipped" >&2
   exit 2
 fi
+# Ranged-sum reconciliation (ROWS-SPLIT, #11562): every declared block reached the gate and
+# the gate dispatched exactly the range — a deleted block cannot hide behind
+# the conservation check above.
+EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
+rows_gate_floor   # shared lib: _site_seq == declared total, EXECUTED == EXPECTED_EXECUTED, >= 1
 # The floor embeds the live _TH_ROOTS census (~3 cases per tracked top-level
 # dir across th4/th4b/th4c): a top-level-dir REMOVAL shrinks the corpus
 # legitimately — recompute the literal rather than misdiagnosing truncation.
+# Ranged form (#11562): case emitters per block run 1-30 (non-uniform), so a
+# MIN_CASES-scaled share false-fires on sparse arms — arm -a legitimately emits
+# 19 cases in 13 blocks. The ranged floor is therefore EXPECTED_EXECUTED: every
+# dispatched block must produce >=1 case. Dispatch completeness is already
+# asserted by _site_seq==DECLARED_TOTAL + EXECUTED==EXPECTED_EXECUTED + the
+# PASS+FAIL conservation check above; a full (unranged) run keeps MIN_CASES.
 MIN_CASES=243
-if (( cases < MIN_CASES )); then
-  echo "[FATAL] only $cases cases ran — below the $MIN_CASES floor; a row block went missing" >&2
+if (( ROWS_HI == 0 )); then MIN_ARM_CASES=$MIN_CASES; else MIN_ARM_CASES=$EXPECTED_EXECUTED; fi
+if (( cases < MIN_ARM_CASES )); then
+  echo "[FATAL] only $cases cases ran — below the $MIN_ARM_CASES ranged floor (MIN_CASES=$MIN_CASES full / $EXPECTED_EXECUTED dispatched blocks); a row block went missing" >&2
   exit 2
 fi
 echo "test-all-affected: $PASS passed, $FAIL failed of $((PASS + FAIL)) (cases=$cases)"

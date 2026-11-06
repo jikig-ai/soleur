@@ -10,6 +10,7 @@ import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
 import { logProxyCertExpiryAtStartup } from "./proxy-tls";
+import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, startOriginTlsListener } from "./origin-tls";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -25,6 +26,7 @@ import {
 } from "./cc-dispatcher";
 import { activeLegacySessionCount } from "./agent-session-registry";
 import { startQuietWindowReporter } from "./quiet-window";
+import { startProxyListenerReporter } from "./proxy-listener-status";
 // feat-open-web-egress (#9534) — the orphan-forwarder reaper runs at BOOT,
 // not lazily on first dispatch (getSoleurGoRunner): a dispatcher restart
 // leaves the previous generation's forwarders reparented to init with live
@@ -54,8 +56,9 @@ import {
 import {
   handleReadyzRequest,
   verifyWorkspacesMountOnce,
+  isWorkspacesPopulated,
 } from "./readiness";
-import { isLoopbackHost } from "./loopback";
+import { hasProxyMarkers, isLoopbackHost } from "./loopback";
 import { verifyC4RenderSandboxOnce } from "./c4-render";
 import { verifyAgentSandboxHardening } from "./agent-runner-sandbox-config";
 import { verifyOuterWrapInterpose } from "./agent-runner-query-options";
@@ -123,7 +126,7 @@ app.prepare().then(() => {
     // (DoS-tuning feedback loop) or per-user counts (competitive scraping).
     // resource-monitor.sh curls http://127.0.0.1:3000/internal/metrics.
     if (parsedUrl.pathname === "/internal/metrics") {
-      if (!isLoopbackHost(req.headers.host)) {
+      if (!isLoopbackHost(req.headers.host) || hasProxyMarkers(req.headers)) {
         res.writeHead(403, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "forbidden" }));
         return;
@@ -156,7 +159,20 @@ app.prepare().then(() => {
     handle(req, res, parsedUrl);
   });
 
+  // #10479 (review of #12181): idle keep-alive must outlast Cloudflare's reuse of pooled origin connections.
+  // Node's 5 s default closes them first, and Cloudflare then reuses a dead socket (intermittent 502/520) or
+  // re-handshakes constantly. Same constant as the :443 listener; headersTimeout stays above it. The
+  // canary is a health gate and does not exercise Cloudflare's connection reuse, so watch the 502/520
+  // rate after the deploy.
+  server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;
+  server.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS + 5_000;
+
   const wss = setupWebSocket(server, dev);
+
+  // #10479 — the Cloudflare-to-origin TLS listener (strict SSL mode). Started inside the
+  // `server.listen` callback below so both listeners come up together; inert (null) without valid
+  // ORIGIN_TLS_* material and shares every handler with `server`. See ./origin-tls.
+  let originTls: ReturnType<typeof startOriginTlsListener> = null;
 
   // #5274 Phase 3 Sub-PR 3.D (ADR-068 b2) — the OWNER host's private-net TLS
   // proxy listener. A session that lands on a non-owning web host is relayed
@@ -213,6 +229,14 @@ app.prepare().then(() => {
       ccQueries: activeCcQueryCount(),
       legacySessions: activeLegacySessionCount(),
     }),
+  });
+
+  // #12167 — the relay reports its OWN bind: one fixed-grammar warn-level line per
+  // minute (relay_probe proxy_state= addr= port= workspaces_populated=), read off-host
+  // from Better Stack by host_name (no new HTTP endpoint). State is read at emit time;
+  // the populated bit is the read-only readiness signal, never a write probe.
+  const proxyListenerReporterTimer = startProxyListenerReporter({
+    readWorkspacesPopulated: () => isWorkspacesPopulated(),
   });
 
   // #8495 / ADR-248 — the watchdog dispatch clock: fires workflow_dispatch for
@@ -299,6 +323,7 @@ app.prepare().then(() => {
   }
 
   server.listen(port, () => {
+    originTls = startOriginTlsListener({ httpServer: server });
     // #9534 — reap orphaned forwarder processes + their gateway tokens before
     // serving dispatches (best-effort, never throws). Only on the owning
     // dispatcher — see the import comment.
@@ -396,6 +421,7 @@ app.prepare().then(() => {
     const forceExit = setTimeout(() => {
       log.warn("Shutdown timeout reached, forcing exit");
       server.closeAllConnections();
+      originTls?.closeAllConnections();
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
@@ -406,6 +432,7 @@ app.prepare().then(() => {
     // #5371 — stop the cc idle reaper before draining for the same reason.
     clearInterval(ccIdleReaperTimer);
     clearInterval(quietWindowReporterTimer);
+    clearInterval(proxyListenerReporterTimer);
     // #8495 — stop the watchdog dispatch clock (synchronous; an in-flight tick is
     // bounded at 90 s and the other web host covers its slot).
     watchdogClock.stop();
@@ -433,6 +460,7 @@ app.prepare().then(() => {
 
     server.close();
     server.closeIdleConnections();
+    originTls?.close();
 
     // #5274 3.D — stop accepting new proxied sessions from peer hosts. Inert
     // (null) in dev/single-host. In-flight proxied sessions drain via the wss

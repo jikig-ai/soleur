@@ -441,7 +441,7 @@ RUNS = {
 CUTOVER_IF = "inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check' && inputs.mode != 'snapshot_clear'"
 WIPE_IF = "inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear'"
 RUN_NAME = "${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}"
-MODES = ["proof", "flip", "rollback", "unfreeze", "redeploy", "wipe", "wipe_finish", "wipe_check", "snapshot_clear"]
+MODES = ["proof", "flip", "rollback", "unfreeze", "redeploy", "refs_assert", "wipe", "wipe_finish", "wipe_check", "snapshot_clear"]
 NOTIFY_MODES = MODES + ["wipe_unknown"]
 WIPE_FAMILY_MODES = ("wipe", "wipe_finish", "wipe_check", "snapshot_clear")
 PHASE_CHAIN = "${{ steps.wipe_readback.outputs.phase || steps.wipe_delete.outputs.phase || steps.wipe_delete_gate.outputs.phase || steps.wipe_detach.outputs.phase || steps.wipe_detach_gate.outputs.phase }}"
@@ -523,7 +523,7 @@ class Census:
         c("WS-runname-eval: the run-name expression, EVALUATED for every mode, yields `git-data <mode> <id>` for the wipe family and `git-data <mode>` (no trailing space or id) for every other mode",
           titles == want, {k: v for k, v in titles.items() if want[k] != v})
         modes_opt = (inputs.get("mode") or {}).get("options")
-        c("WS-modes: the mode input is a choice with exactly proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, snapshot_clear in that order",
+        c("WS-modes: the mode input is a choice with exactly proof, flip, rollback, unfreeze, redeploy, refs_assert, wipe, wipe_finish, wipe_check, snapshot_clear in that order",
           modes_opt == MODES and (inputs.get("mode") or {}).get("type") == "choice", modes_opt)
         c("WS-inputs: the dispatch inputs are exactly confirm, lineage, mode, origin_run, volume_id; volume_id and origin_run are optional strings defaulting to the empty string",
           sorted(inputs) == ["confirm", "lineage", "mode", "origin_run", "volume_id"]
@@ -774,7 +774,7 @@ class Census:
           and nbe.get("WIPE_VOLUME_ID") == "${{ inputs.volume_id }}", nbe)
         nrun = nb.get("run") or ""
         m = re.search(r'^\s*case "\$MODE" in ([^)]*)\) ;; \*\) MODE=unknown ;; esac$', nrun, re.M)
-        c("G3-notify-case-list: the MODE whitelist of the notify body lists exactly the nine modes, wipe_unknown included (a wipe-family mode dropped from it reads MODE=unknown)", bool(m) and m.group(1).split("|") == NOTIFY_MODES, m.group(1) if m else None)
+        c("G3-notify-case-list: the MODE whitelist of the notify body lists exactly the ten modes plus wipe_unknown (a wipe-family mode dropped from it reads MODE=unknown)", bool(m) and m.group(1).split("|") == NOTIFY_MODES, m.group(1) if m else None)
         c("G3-notify-lost-runner: a wipe job that published no outputs (MODE empty while the cutover job was skipped) becomes MODE=wipe_unknown BEFORE the whitelist, so it is read as a wipe-family failure",
           'if [ -z "$MODE" ] && [ "${CUTOVER_RESULT:-}" = skipped ]; then MODE=wipe_unknown; fi' in nrun and nrun.find('MODE=wipe_unknown') < nrun.find('case "$MODE" in proof'), "")
         wblock = re.search(r'case "\$MODE" in wipe\|wipe_finish\|wipe_check\|snapshot_clear\|wipe_unknown\)\n(.*?)\nesac\nif \[ "\$\{FREEZE_HELD', nrun, re.S)
@@ -1749,7 +1749,7 @@ DGATE_MARK_FIRST = [
     S("wipe_delete_gate", '\n          echo "phase=delete_attempted" >> "$GITHUB_OUTPUT"\'', "'"),
     S("wipe_delete_gate", "            bash -c 'set -euo pipefail\n", "            bash -c 'set -euo pipefail\n          echo \"phase=delete_attempted\" >> \"$GITHUB_OUTPUT\"\n"),
 ]
-MODE_LIST = "proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac"
+MODE_LIST = "proof|flip|rollback|unfreeze|redeploy|refs_assert|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac"
 
 MUTANTS = {
     # Guard 1
@@ -1798,7 +1798,7 @@ MUTANTS = {
     "g3-8-phase-arm-removed": [J("notify", 'deleted) words=" VOLUME_DELETED_TEARDOWN_FAILED (the provider API read-back confirmed the volume is no longer listed; only the runner teardown failed afterwards)"; swords=" VOLUME_DELETED_TEARDOWN_FAILED" ;;', "")],
     # Guard 4
     "g4-1-cutover-if-operand": [F("    if: inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'wipe_check' && inputs.mode != 'snapshot_clear'\n", "    if: inputs.mode != 'wipe' && inputs.mode != 'wipe_finish' && inputs.mode != 'snapshot_clear'\n")],
-    "g4-2-fourth-mode": [F("options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, snapshot_clear]", "options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, snapshot_clear, wipe_force]")],
+    "g4-2-fourth-mode": [F("options: [proof, flip, rollback, unfreeze, redeploy, refs_assert, wipe, wipe_finish, wipe_check, snapshot_clear]", "options: [proof, flip, rollback, unfreeze, redeploy, refs_assert, wipe, wipe_finish, wipe_check, snapshot_clear, wipe_force]")],
     "g4-3-volume-id-in-flip": [J("cutover", 'if [[ -n "${VOLUME_ID:-}" || -n "${ORIGIN_RUN:-}" ]]; then', 'if [[ ( -n "${VOLUME_ID:-}" || -n "${ORIGIN_RUN:-}" ) && "$MODE" != flip ]]; then')],
     "g4-4-attempt-in-one-mode": [S("wipe_confirm", 'if [[ "$RUN_ATTEMPT" != "1" ]]; then', 'if [[ "$RUN_ATTEMPT" != "1" && "$MODE" != "wipe_check" ]]; then')],
     "g4-5-runname-trailing-id": [F("|| format('git-data {0}', inputs.mode) }}", "|| format('git-data {0} {1}', inputs.mode, inputs.volume_id) }}")],
@@ -2247,12 +2247,18 @@ for _m in g3-5-mode-before-refusal g4-4-attempt-in-one-mode; do
 done
 # the cutover confirm step: volume_id and origin_run refused for EVERY mode it serves
 NCASES=(); W_OK=(); W_REF=()
-for _pair in proof:CUTOVER-GIT-DATA flip:FLIP-GIT-DATA rollback:ROLLBACK-GIT-DATA unfreeze:UNFREEZE-GIT-DATA redeploy:REDEPLOY-GIT-DATA; do
+for _pair in proof:CUTOVER-GIT-DATA flip:FLIP-GIT-DATA rollback:ROLLBACK-GIT-DATA unfreeze:UNFREEZE-GIT-DATA redeploy:REDEPLOY-GIT-DATA refs_assert:REFS-ASSERT-GIT-DATA; do
   _mo="${_pair%%:*}"; _tk="${_pair#*:}"
   okc "ok-$_mo" "$_mo" "$_tk" "" "" "" 1
   refc "r-vol-$_mo" "$_mo" "$_tk" 42 "" "" 1
   refc "r-origin-$_mo" "$_mo" "$_tk" "" 42 "" 1
 done
+# refs_assert (#11431): its own token is the only accepted one, every other mode's token is refused for it, and lineage is refused with it
+for _tk in CUTOVER-GIT-DATA FLIP-GIT-DATA ROLLBACK-GIT-DATA UNFREEZE-GIT-DATA REDEPLOY-GIT-DATA WIPE-CHECK-GIT-DATA refs_assert REFS-ASSERT-GIT-DATA-X ""; do
+  refc "r-tok-refs-${_tk:-empty}" refs_assert "$_tk" "" "" "" 1
+done
+refc r-lineage-refs refs_assert REFS-ASSERT-GIT-DATA "" "" cutover-1 1
+refc r-tok-refs-as-proof proof REFS-ASSERT-GIT-DATA "" "" "" 1
 CC_N=${#NCASES[@]}
 cc_run() { # <name> <workflow>
   local name="$1" wfp="$2" id bad=0 line rc gho
@@ -2271,7 +2277,7 @@ cc_run() { # <name> <workflow>
   echo "$bad"
 }
 _b="$(cc_run cc-pristine "$WF")"
-[ "$_b" = 0 ] && pass "G4: the cutover confirm step, executed for all 5 modes, accepts the plain dispatch and refuses volume_id and origin_run ($CC_N cases)" || fail "G4: the cutover confirm table misbehaved" "$_b"
+[ "$_b" = 0 ] && pass "G4: the cutover confirm step, executed for all 6 modes, accepts the plain dispatch and refuses volume_id and origin_run ($CC_N cases)" || fail "G4: the cutover confirm table misbehaved" "$_b"
 mutate g4-3-volume-id-in-flip "$WF" && { _b="$(cc_run cc-m-g4-3 "$MUT_FILE")"
   if [ "$_b" != 0 ] && [ "$_b" != CRASH ]; then pass "M-g4-3: with volume_id accepted in mode=flip the executed cutover-confirm table goes RED"; else fail "M-g4-3: executed table stayed GREEN" "$_b"; fi; }
 CASES_RUN=$((W1_CASES_N + CC_N))

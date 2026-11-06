@@ -61,7 +61,7 @@ cleanup() {
   fi
   echo ""
   echo "IMPORTANT: After deleting the App installation, sweep bypass_actors for ghost entries:"
-  echo "  gh api /repos/${TENANT_ORG}/${SLUG}/rulesets --jq '.[].bypass_actors'"
+  echo "  gh api --paginate /repos/${TENANT_ORG}/${SLUG}/rulesets --jq '.[].bypass_actors'"
   echo ""
   echo "Bootstrap cleanup: Revoke the GitHub PAT used for bootstrapping — it is no longer needed."
   exit "$exit_code"
@@ -208,7 +208,7 @@ if $DRY_RUN; then
   echo "--- Teardown ---"
   echo "  gh api -X DELETE /app/installations/<install-id>"
   echo "  cd ${PROVISIONING_DIR} && terraform destroy"
-  echo "  Sweep bypass_actors: gh api /repos/${TENANT_ORG}/${SLUG}/rulesets --jq '.[].bypass_actors'"
+  echo "  Sweep bypass_actors: gh api --paginate /repos/${TENANT_ORG}/${SLUG}/rulesets --jq '.[].bypass_actors'"
   echo ""
   echo "All provisioning complete. Run runbook Steps 5-10 manually."
   exit 0

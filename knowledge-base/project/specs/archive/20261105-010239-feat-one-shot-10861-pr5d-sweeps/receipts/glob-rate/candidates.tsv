@@ -1,0 +1,3 @@
+plugins/soleur	
+tests/scripts/argv-bearer-sweep	
+plugins/soleur/test/boundary-prefix.test.sh	

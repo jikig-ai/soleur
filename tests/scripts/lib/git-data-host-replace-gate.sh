@@ -12,33 +12,39 @@
 # git_data_host_replace_gate directly, so the CI decision logic is the SAME bytes the test
 # exercises (no re-derived inline copy to drift).
 #
-# SELF-CONTAINED jq: the git-data replace has a small, fixed 5-member allow-set, so the
+# SELF-CONTAINED jq: the git-data replace has a small, fixed allow-set, so the
 # counter logic lives inline here (same posture as registry-host-replace-gate.sh).
 #
 # It reads a `terraform show -json <plan>` document and PERMITS EXACTLY the scoped
-# git-data-host recreate: a -replace of hcloud_server.git_data + its 4 id-referencing
-# dependents (network + BOTH volume attachments + firewall attachment):
+# git-data-host recreate: a -replace of hcloud_server.git_data + its id-referencing
+# dependents (network + the LUKS volume attachment + firewall attachment):
 #   - hcloud_server_network.git_data     (network.tf:48; server_id is ForceNew -> replace;
 #       the ONLY private-net transport path 10.0.1.20 for web-host push/pull)
-#   - hcloud_volume_attachment.git_data       (git-data.tf:275; server_id ForceNew -> replace;
-#       else /mnt/git-data — the plaintext bare-repo store — boots UNMOUNTED)
 #   - hcloud_volume_attachment.git_data_luks  (git-data-luks.tf, `resource "hcloud_volume_attachment"
 #       "git_data_luks"`; server_id ForceNew -> replace;
 #       else /mnt/git-data-luks — the LUKS at-rest store — boots UNMOUNTED)
-#   - hcloud_firewall_attachment.git_data     (git-data.tf:296; server_ids update-in-place —
+#   - hcloud_firewall_attachment.git_data     (git-data.tf, `resource "hcloud_firewall_attachment"
+#       "git_data"`; server_ids update-in-place —
 #       registry-style INCLUDE, NOT the inngest omission. A fresh Hetzner host has a public
 #       IPv4/IPv6; without re-attaching the deny-all firewall it boots NAKED on its public IP.)
 #
-# DELIBERATELY DIFFERENT FROM REGISTRY (the two data VOLUMES are NOT in the allow-set):
-#   - hcloud_volume.git_data       (git-data.tf:264) — plaintext bare-repo store, and
+# DELIBERATELY DIFFERENT FROM REGISTRY (the data VOLUME is NOT in the allow-set):
 #   - hcloud_volume.git_data_luks  (git-data-luks.tf, `resource "hcloud_volume" "git_data_luks"`) — LUKS at-rest store
-# are PRESERVED BY OMISSION: an untargeted resource cannot be planned for destroy, so leaving
-# them out of the -target set is simpler AND strictly safer than including them. Because they
-# are OUTSIDE the allow-set, `out_of_scope` catches any positive action on them directly.
+# is PRESERVED BY OMISSION: an untargeted resource cannot be planned for destroy, so leaving
+# it out of the -target set is simpler AND strictly safer than including it. Because it is
+# OUTSIDE the allow-set, `out_of_scope` catches any positive action on it directly.
 # Registry needed its `store_destroyed` named backstop only because its volume WAS in the
-# allow-set (it rode a 10->30 GB resize); git-data has no pending resize, so the volumes stay
+# allow-set (it rode a 10->30 GB resize); git-data has no pending resize, so the volume stays
 # out and the named backstops below are INTENTIONALLY REDUNDANT — high-value error text, not
 # the primary brake.
+#
+# RETIRED ADDRESSES (#11194, ADR-239 Amendment 2026-10-28): the plaintext pair
+# hcloud_volume.git_data and hcloud_volume_attachment.git_data was destroyed at the provider on
+# 2026-10-27 and left the HCL. Neither is in the allow-set, so a create, update, delete or forget
+# on either is `out_of_scope` (a `no-op` or `read` is not a change and passes by design); there is
+# deliberately NO separate counter for them (the single `out_of_scope` filter is the brake, and a
+# second one could only disagree with it). The suite's RETIRED_ADDRS rows pin that refusal for each
+# of the four verbs, in replace and in rotate.
 #
 # LUKS-passphrase safety (CTO High-if-mis-scoped risk): random_password.git_data_luks and
 # doppler_secret.git_data_luks_key are ALSO out of the allow-set. A rotated passphrase would
@@ -47,11 +53,11 @@
 # out_of_scope, but names the specific catastrophe). The idempotent isLuks skip in
 # cloud-init-git-data.yml:152-173 only preserves data when the passphrase is unchanged.
 #
-# LARGER + STRICTER than the inngest gate (5-member allow-set, positive NIC / BOTH-attachment /
-# firewall assertions, named volume + passphrase preserves). Do NOT "simplify" it to the
-# inngest or single-attachment shape — a "server replaced but a store attachment or the NIC or
-# the firewall stripped" plan must NOT pass, or the new host boots with a store unmounted /
-# invisible on the private net / naked on its public IP.
+# LARGER + STRICTER than the inngest gate (positive NIC / store-attachment / firewall
+# assertions, named volume + passphrase preserves). Do NOT "simplify" it to the inngest shape —
+# a "server replaced but the store attachment or the NIC or the firewall stripped" plan must NOT
+# pass, or the new host boots with the store unmounted / invisible on the private net / naked on
+# its public IP.
 #
 # NO [ack-destroy] BYPASS: a destructive prod host recreate is authorized by the menu-ack
 # workflow_dispatch (hr-menu-option-ack-not-prod-write-auth), never a commit trailer.
@@ -61,16 +67,14 @@
 # source read (or any no-op dependency the -target set pulls in) does NOT false-abort.
 #
 # PASS (rc=0) iff:
-#   out_of_scope==0 && git_data_volume_destroyed==0 && luks_volume_destroyed==0 &&
-#   luks_passphrase_touched==0 && server_replaced==1 && nic_recreated>=1 &&
-#   plaintext_attachment_recreated>=1 && luks_attachment_recreated>=1 && firewall_ok>=1
-# plaintext_attachment_recreated / luks_attachment_recreated are SEPARATE counters (symmetric to
-# nic_recreated): each store attachment must show a `create`. If a future mis-edit dropped one
-# -target the new host would boot with that store UNMOUNTED, yet server/nic/firewall/other-store
-# could all still pass. An unmounted store is as broken as a no-NIC host, so assert each
-# positively. git_data_volume_destroyed / luks_volume_destroyed / luks_passphrase_touched are
-# named "must be preserved" backstops (operator-legible + GDPR-relevant: the LUKS volume is the
-# Art.17 at-rest store + rollback backstop).
+#   out_of_scope==0 && luks_volume_destroyed==0 && luks_passphrase_touched==0 &&
+#   server_replaced==1 && nic_recreated>=1 && luks_attachment_recreated>=1 && firewall_ok>=1
+# luks_attachment_recreated is a counter symmetric to nic_recreated: the store attachment must
+# show a `create`. If a future mis-edit dropped its -target the new host would boot with the store
+# UNMOUNTED, yet server/nic/firewall could all still pass. An unmounted store is as broken as a
+# no-NIC host, so assert it positively. luks_volume_destroyed / luks_passphrase_touched are named
+# "must be preserved" backstops (operator-legible + GDPR-relevant: the LUKS volume is the Art.17
+# at-rest store + rollback backstop).
 #
 # ROOT-KEY ARM (#8189, ADR-220, Guard 4). A plan that passes every counter above is still
 # refused unless git_data_root_key_arm (git-data-root-key-arm-gate.sh) proves the recreated host
@@ -108,10 +112,8 @@
 #   hcloud_volume.git_data_luks        MUST be ["delete","create"]  (fresh LUKS store)
 #   random_password.git_data_luks      MUST be ["delete","create"]  (re-minted passphrase)
 #   doppler_secret.git_data_luks_key   MUST be create/update/replace (re-published)
-# The plaintext volume (hcloud_volume.git_data) stays preserved by omission in BOTH modes —
-# it is the Art.17/rollback backstop and the #8571 wipe is a separate decision. The workflow
-# asserts served_repos=0 on the host (Better Stack readback) BEFORE this plan runs; the gate
-# grades only the plan document.
+# The workflow asserts served_repos=0 on the host (Better Stack readback) BEFORE this plan runs;
+# the gate grades only the plan document.
 
 # THE FAIL-CLOSED PREAMBLE (#6997). A gate that authorises destructive production
 # infrastructure must never let "I could not check" read as "it is fine". These three
@@ -136,7 +138,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/git-data-root-key-arm-gate
 
 git_data_host_replace_gate() {
   local plan_json="$1" mode="${2:-replace}"
-  local counts oos gvd lvd lpt replaced nic patt latt fw hkr hkp lvr lpr lkp
+  local counts oos lvd lpt replaced nic latt fw hkr hkp lvr lpr lkp
   case "$mode" in
     replace|rotate) : ;;
     *) echo "git_data_host_replace_gate: unknown mode '${mode}' — wiring fault, refusing"; return 1 ;;
@@ -163,7 +165,6 @@ git_data_host_replace_gate() {
       def allow: [
         "hcloud_server.git_data",
         "hcloud_server_network.git_data",
-        "hcloud_volume_attachment.git_data",
         "hcloud_volume_attachment.git_data_luks",
         "hcloud_firewall_attachment.git_data",
         "tls_private_key.git_data_host_ssh",
@@ -183,15 +184,6 @@ git_data_host_replace_gate() {
             [ $plan.resource_changes[]?
               | select(.change.actions? | any(. == "create" or . == "update" or . == "delete" or . == "forget"))
               | select(IN(.address; allow[]) | not) ]
-            | length
-          ),
-          git_data_volume_destroyed: (
-            # Named backstop for the plaintext bare-repo store (git-data.tf:264). It is OUT of
-            # the allow-set, so out_of_scope already catches any positive action — this is the
-            # operator-legible "your git history would be destroyed" line.
-            [ $plan.resource_changes[]?
-              | select(.address == "hcloud_volume.git_data")
-              | select(.change.actions? | any(. == "delete" or . == "forget")) ]
             | length
           ),
           luks_volume_destroyed: (
@@ -221,12 +213,6 @@ git_data_host_replace_gate() {
           nic_recreated: (
             [ $plan.resource_changes[]?
               | select(.address == "hcloud_server_network.git_data")
-              | select(.change.actions? | index("create")) ]
-            | length
-          ),
-          plaintext_attachment_recreated: (
-            [ $plan.resource_changes[]?
-              | select(.address == "hcloud_volume_attachment.git_data")
               | select(.change.actions? | index("create")) ]
             | length
           ),
@@ -272,12 +258,10 @@ git_data_host_replace_gate() {
     return 1
   fi
   oos=$(echo "$counts" | jq -r '.out_of_scope')
-  gvd=$(echo "$counts" | jq -r '.git_data_volume_destroyed')
   lvd=$(echo "$counts" | jq -r '.luks_volume_destroyed')
   lpt=$(echo "$counts" | jq -r '.luks_passphrase_touched')
   replaced=$(echo "$counts" | jq -r '.server_replaced')
   nic=$(echo "$counts" | jq -r '.nic_recreated')
-  patt=$(echo "$counts" | jq -r '.plaintext_attachment_recreated')
   latt=$(echo "$counts" | jq -r '.luks_attachment_recreated')
   fw=$(echo "$counts" | jq -r '.firewall_ok')
   hkr=$(echo "$counts" | jq -r '.host_key_rotated')
@@ -290,31 +274,31 @@ git_data_host_replace_gate() {
   # A counter that did not evaluate is the empty string, and [[ "" -gt 0 ]] is FALSE
   # under bash coercion — so an uncomputed counter silently satisfies every threshold.
   # The shared helper names WHICH counter failed rather than reporting them all.
-  plan_gate_assert_numeric "git_data_host_replace_gate" "out_of_scope=${oos}" "git_data_volume_destroyed=${gvd}" "luks_volume_destroyed=${lvd}" "luks_passphrase_touched=${lpt}" "server_replaced=${replaced}" "nic_recreated=${nic}" "plaintext_attachment_recreated=${patt}" "luks_attachment_recreated=${latt}" "firewall_ok=${fw}" "host_key_rotated=${hkr}" "host_key_published=${hkp}" "luks_volume_rotated=${lvr}" "luks_passphrase_rotated=${lpr}" "luks_key_published=${lkp}" || return 1
+  plan_gate_assert_numeric "git_data_host_replace_gate" "out_of_scope=${oos}" "luks_volume_destroyed=${lvd}" "luks_passphrase_touched=${lpt}" "server_replaced=${replaced}" "nic_recreated=${nic}" "luks_attachment_recreated=${latt}" "firewall_ok=${fw}" "host_key_rotated=${hkr}" "host_key_published=${hkp}" "luks_volume_rotated=${lvr}" "luks_passphrase_rotated=${lpr}" "luks_key_published=${lkp}" || return 1
 
-  echo "out_of_scope=${oos} git_data_volume_destroyed=${gvd} luks_volume_destroyed=${lvd} luks_passphrase_touched=${lpt} server_replaced=${replaced} nic_recreated=${nic} plaintext_attachment_recreated=${patt} luks_attachment_recreated=${latt} firewall_ok=${fw} host_key_rotated=${hkr} host_key_published=${hkp} mode=${mode} luks_volume_rotated=${lvr} luks_passphrase_rotated=${lpr} luks_key_published=${lkp}"
+  echo "out_of_scope=${oos} luks_volume_destroyed=${lvd} luks_passphrase_touched=${lpt} server_replaced=${replaced} nic_recreated=${nic} luks_attachment_recreated=${latt} firewall_ok=${fw} host_key_rotated=${hkr} host_key_published=${hkp} mode=${mode} luks_volume_rotated=${lvr} luks_passphrase_rotated=${lpr} luks_key_published=${lkp}"
   local luks_ok
   if [[ "$mode" = rotate ]]; then
-    # Rotate: the preserve backstops INVERT into positive requirements. The plaintext
-    # volume is still preserved; the LUKS volume must be delete+create WITH a re-minted
-    # passphrase AND a re-published key — a partial rotation is a stranding, not a rotate.
+    # Rotate: the preserve backstops INVERT into positive requirements. The LUKS volume
+    # must be delete+create WITH a re-minted passphrase AND a re-published key — a partial
+    # rotation is a stranding, not a rotate.
     luks_ok=$(( lvr == 1 && lpr == 1 && lkp == 1 ))
   else
     luks_ok=$(( lvd == 0 && lpt == 0 ))
   fi
-  if [[ "$oos" -eq 0 && "$gvd" -eq 0 && "$luks_ok" -eq 1 && "$replaced" -eq 1 && "$nic" -ge 1 && "$patt" -ge 1 && "$latt" -ge 1 && "$fw" -ge 1 && "$hkr" -eq 1 && "$hkp" -eq 1 ]]; then
+  if [[ "$oos" -eq 0 && "$luks_ok" -eq 1 && "$replaced" -eq 1 && "$nic" -ge 1 && "$latt" -ge 1 && "$fw" -ge 1 && "$hkr" -eq 1 && "$hkp" -eq 1 ]]; then
     git_data_root_key_arm "$plan_json" "${GIT_DATA_ROOT_KEY_FINGERPRINT_FILE:-}" || return 1
     if [[ "$mode" = rotate ]]; then
-      echo "git_data_host_replace_gate: PASS — scoped git-data-host ROTATE permitted (server + 4 dependents + LUKS volume/passphrase/key all re-minted together; plaintext volume preserved; NIC + both store attachments + deny-all firewall re-attached; SSH host key rotated and its pin re-published)"
+      echo "git_data_host_replace_gate: PASS — scoped git-data-host ROTATE permitted (server + dependents + LUKS volume/passphrase/key all re-minted together; NIC + LUKS store attachment + deny-all firewall re-attached; SSH host key rotated and its pin re-published)"
     else
-      echo "git_data_host_replace_gate: PASS — scoped git-data-host recreate permitted (server + 4 dependents; BOTH data volumes + LUKS passphrase preserved by omission; NIC + both store attachments + deny-all firewall re-attached; SSH host key rotated and its pin re-published)"
+      echo "git_data_host_replace_gate: PASS — scoped git-data-host recreate permitted (server + dependents; the LUKS data volume + LUKS passphrase preserved by omission; NIC + LUKS store attachment + deny-all firewall re-attached; SSH host key rotated and its pin re-published)"
     fi
     return 0
   fi
   if [[ "$mode" = rotate ]]; then
-    echo "git_data_host_replace_gate: ABORT — plan is NOT the exact scoped git-data-host ROTATE (out-of-scope change, a plaintext-volume destroy/forget, an INCOMPLETE LUKS rotation [volume/passphrase/key must all move together — a new passphrase on the retained volume cannot luksOpen], no server replace, stripped private NIC, an unmounted store, a stripped firewall, or an SSH host key/pin not rotated and re-published)"
+    echo "git_data_host_replace_gate: ABORT — plan is NOT the exact scoped git-data-host ROTATE (out-of-scope change, an INCOMPLETE LUKS rotation [volume/passphrase/key must all move together — a new passphrase on the retained volume cannot luksOpen], no server replace, stripped private NIC, an unmounted store, a stripped firewall, or an SSH host key/pin not rotated and re-published)"
   else
-    echo "git_data_host_replace_gate: ABORT — plan is NOT the exact scoped git-data-host recreate (out-of-scope change, a git-data/LUKS volume destroy/forget, a LUKS passphrase rotation, no server replace, stripped private NIC, an unmounted store [a volume-attachment not re-created], a stripped firewall, or an SSH host key that was not rotated with the host / a pin that was not re-published)"
+    echo "git_data_host_replace_gate: ABORT — plan is NOT the exact scoped git-data-host recreate (out-of-scope change, a LUKS volume destroy/forget, a LUKS passphrase rotation, no server replace, stripped private NIC, an unmounted store [the volume-attachment not re-created], a stripped firewall, or an SSH host key that was not rotated with the host / a pin that was not re-published)"
   fi
   return 1
 }
@@ -323,12 +307,13 @@ git_data_host_replace_gate() {
 #
 # THE POST-APPLY BACKSTOP (#10137). The apply step of job git_data_host_replace re-reads the
 # SAVED plan it just applied and asserts, belt-and-suspenders to git_data_host_replace_gate:
-#   - no volume in the mode's preserved set shows a delete/forget action,
-#   - the private NIC and BOTH store attachments show a create (re-attached).
-# The preserved set is per mode, built structurally: replace keeps BOTH data volumes, rotate keeps
-# ONLY the plaintext volume — rotate replaces hcloud_volume.git_data_luks on purpose, and the
-# pre-apply gate already requires luks_volume_rotated == 1 on the same plan, so no second positive
-# LUKS assertion is made here. The mode is the one the plan step's gate accepted (the workflow
+#   - in replace mode the LUKS data volume shows no delete/forget action,
+#   - the private NIC and the LUKS store attachment show a create (re-attached).
+# The volume assertion is per mode: replace keeps the LUKS volume, rotate asserts none — rotate
+# replaces hcloud_volume.git_data_luks on purpose, and the pre-apply gate already requires
+# luks_volume_rotated == 1 on the same plan, so no second positive LUKS assertion is made here. The
+# retired plaintext pair is not asserted (it is out of the HCL and state; the pre-apply gate refuses
+# any positive action on it). The mode is the one the plan step's gate accepted (the workflow
 # publishes it as that step's gate_mode output); an unknown, empty or absent mode is a wiring fault
 # and refuses.
 #
@@ -341,18 +326,17 @@ git_data_host_replace_gate() {
 # no API, so it is the pre-apply gate's own bytes graded again after the apply has COMPLETED. A
 # refusal is therefore detective: the infrastructure has already changed. Wording below says "saved
 # plan shows" for that reason, never "the volume is preserved" as an observed outcome.
-# VOLUMES are matched by the plan's own `.type` + `.name` (which cover root, indexed and
+# The LUKS VOLUME is matched by the plan's own `.type` + `.name` (which cover root, indexed and
 # module-prefixed resources whatever the index key holds), with an address fallback for root and
-# indexed addresses, so a later `count`, `for_each` or module move of a data volume cannot make the
-# check count zero and pass. This is deliberately BROADER than the sibling gates' exact-address
+# indexed addresses, so a later `count`, `for_each` or module move of the data volume cannot make
+# the check count zero and pass. This is deliberately BROADER than the sibling gates' exact-address
 # match: a zero count here reads as "preserved", so the fail-closed direction is the wider net.
 # OUTPUT DISCIPLINE: addresses and counts only, never a .change.before/.change.after value.
 git_data_host_post_apply_assert() {
   local plan_json="$1" mode="${2:-}"
-  local vols=() vol vol_deletes nic_creates att att_creates safe_mode
+  local vol_deletes nic_creates att att_creates safe_mode
   case "$mode" in
-    replace) vols=(git_data git_data_luks) ;;
-    rotate)  vols=(git_data) ;;
+    replace|rotate) : ;;
     *)
       safe_mode="${mode//[^A-Za-z_-]/?}"
       echo "git_data_host_post_apply_assert: unknown mode '${safe_mode:0:16}' — wiring fault, refusing"
@@ -360,16 +344,16 @@ git_data_host_post_apply_assert() {
   esac
   plan_gate_assert_readable     "git_data_host_post_apply_assert" "$plan_json" || return 1
   plan_gate_assert_classifiable "git_data_host_post_apply_assert" "$plan_json" || return 1
-  for vol in "${vols[@]}"; do
-    vol_deletes=$(jq --arg n "$vol" '("hcloud_volume." + $n) as $r | [.resource_changes[]?
-      | select((.type == "hcloud_volume" and .name == $n)
+  if [[ "$mode" == replace ]]; then
+    vol_deletes=$(jq '"hcloud_volume.git_data_luks" as $r | [.resource_changes[]?
+      | select((.type == "hcloud_volume" and .name == "git_data_luks")
                or ((.address // "") as $a | $a == $r or ($a | startswith($r + "["))))
       | select(.change.actions? | any(. == "delete" or . == "forget"))] | length' "$plan_json" 2>/dev/null) || vol_deletes=""
     if [[ "$vol_deletes" != "0" ]]; then
-      echo "::error::hcloud_volume.${vol} shows ${vol_deletes:-<unreadable>} delete/forget action(s) in the saved plan that was applied — the data store must be preserved, and the apply has already completed. This should have been caught by the guard; failing hard."
+      echo "::error::hcloud_volume.git_data_luks shows ${vol_deletes:-<unreadable>} delete/forget action(s) in the saved plan that was applied — the data store must be preserved, and the apply has already completed. This should have been caught by the guard; failing hard."
       return 1
     fi
-  done
+  fi
   nic_creates=$(jq '[.resource_changes[]?
     | select(.address == "hcloud_server_network.git_data")
     | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || nic_creates=""
@@ -377,19 +361,18 @@ git_data_host_post_apply_assert() {
     echo "::error::hcloud_server_network.git_data shows no create action in the saved plan that was applied — the new host would have no private NIC. This should have been caught by the guard; failing hard."
     return 1
   fi
-  for att in hcloud_volume_attachment.git_data hcloud_volume_attachment.git_data_luks; do
-    att_creates=$(jq --arg a "$att" '[.resource_changes[]?
-      | select(.address == $a)
-      | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || att_creates=""
-    if [[ ! "$att_creates" =~ ^[1-9][0-9]*$ ]]; then
-      echo "::error::${att} shows no create action in the saved plan that was applied — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
-      return 1
-    fi
-  done
+  att=hcloud_volume_attachment.git_data_luks
+  att_creates=$(jq --arg a "$att" '[.resource_changes[]?
+    | select(.address == $a)
+    | select(.change.actions? | index("create"))] | length' "$plan_json" 2>/dev/null) || att_creates=""
+  if [[ ! "$att_creates" =~ ^[1-9][0-9]*$ ]]; then
+    echo "::error::${att} shows no create action in the saved plan that was applied — the new host would boot with that store UNMOUNTED. This should have been caught by the guard; failing hard."
+    return 1
+  fi
   if [[ "$mode" = rotate ]]; then
-    echo "plaintext volume preserved (saved plan shows 0 delete/forget); LUKS volume replaced as intended by the rotate arm; private NIC + both store attachments re-attached (create present) in the saved plan."
+    echo "LUKS volume replaced as intended by the rotate arm; private NIC + LUKS store attachment re-attached (create present) in the saved plan."
   else
-    echo "both data volumes preserved (saved plan shows 0 delete/forget), private NIC + both store attachments re-attached (create present) in the saved plan."
+    echo "LUKS data volume preserved (saved plan shows 0 delete/forget), private NIC + LUKS store attachment re-attached (create present) in the saved plan."
   fi
   return 0
 }

@@ -3,7 +3,7 @@ title: "The First Property Test We Wrote Found a Real Bug"
 type: pillar
 publish_date: 2026-11-03
 channels: x, bluesky, discord, linkedin-personal
-status: scheduled
+status: published
 issue_reference: "#10636"
 ---
 

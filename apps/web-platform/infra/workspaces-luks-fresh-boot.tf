@@ -30,9 +30,10 @@
 # (scripts/check-web-host-escrow-config.sh --live) asserts web-1's R2 pair names are absent from the `prd`
 # root, so this branch cannot inherit them.
 #
-# Deliberately NOT in doppler-config-inventory.txt, for the reason the marker config below is not: that file
-# is the token-drift scan's reach and floor (ADR-164/168), adding a name mints a read token for it and forces
-# floor edits. Whoever adds it owns the floor edits listed there.
+# Listed in doppler-config-inventory.txt since #11857 (with the marker config below): that file is the
+# token-drift scan's reach and floor (ADR-164/168), so this name has a read token minted for it and the floor
+# counts it. `doppler_service_token.token_drift` depends_on this config (a string `config = each.key` builds no
+# edge); it is a per-merge -target, so the edge grows the closure by nothing.
 resource "doppler_config" "workspaces_luks_web" {
   project     = "soleur"
   environment = "prd"
@@ -115,9 +116,10 @@ resource "doppler_service_token" "workspaces_luks_fresh_boot" {
 # The config is created EMPTY and stays empty until the first green verify run: absent key == "not
 # soaked" == the gate fails closed, so creating it grants nothing.
 #
-# It is deliberately NOT in doppler-config-inventory.txt: that file is the token-drift scan's reach and
-# floor (ADR-164/168), adding a name mints a read token for it, and prd_git_data (also TF-declared and
-# also absent from the inventory) is the precedent. Whoever adds it owns the floor edits listed there.
+# It is listed in doppler-config-inventory.txt since #11857: that file is the token-drift scan's reach and
+# floor (ADR-164/168), so a read token is minted for it and the floor counts it, and
+# `doppler_service_token.token_drift` depends_on this config. It is created empty, so the token adds a
+# credential with no unique secret behind it.
 resource "doppler_config" "workspaces_luks_marker" {
   project     = "soleur"
   environment = "prd"

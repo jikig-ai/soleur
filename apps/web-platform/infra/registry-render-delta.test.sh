@@ -55,32 +55,13 @@ PY
 W=cccccccccccccccccccccccccccccccccccccccc   # the delivery watermark (BEFORE)
 A=dddddddddddddddddddddddddddddddddddddddd   # github.sha (AFTER)
 
+# ONE shared refusing `gh` stub for every gate harness (#10650): plugins/soleur/test/lib/registry-gate-gh-stub.sh.
+# It answers only the requests the gate really makes and REFUSES (exit 64 + a line in $STUB_ERR) anything
+# else, so a gate that asks for the wrong thing cannot read the right fixture.
 mkdir -p "$TMP/bin"
-cat > "$TMP/bin/gh" <<'STUB'
-#!/usr/bin/env bash
-printf '%s\n' "$*" >> "$GH_LOG"
-# Every refusal ALSO lands in $STUB_ERR: the gate discards gh's stderr (`2>/dev/null`), so a
-# refusal visible only on stderr would be swallowed and the row would pass for the wrong reason.
-refuse() { printf 'stub: %s\n' "$*" | tee -a "$STUB_ERR" >&2; exit 64; }
-case " $* " in
-  *" run list "*) printf '%s\n' "$STUB_WATERMARK"; exit 0 ;;
-  *"/compare/"*)
-    case " $* " in *"/compare/${STUB_WATERMARK}...${STUB_AFTER} "*) ;; *) refuse "compare for an unexpected range: $*" ;; esac
-    printf '%s' "$STUB_COMPARE"; exit 0 ;;
-  *"/contents/"*)
-    url=""; for a in "$@"; do case "$a" in *"/contents/"*) url="$a" ;; esac; done
-    p="${url#*/contents/}"; ref="${p##*\?ref=}"; p="${p%%\?ref=*}"
-    [[ "$ref" == "$STUB_WATERMARK" ]] || refuse "contents read for unexpected ref '$ref'"
-    # A modelled API failure (G12) is NOT a refusal: the gate asked the right question.
-    [[ -n "${STUB_CONTENTS_FAIL:-}" ]] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
-    f="$STUB_BEFORE/$p"
-    [[ -f "$f" ]] || refuse "no BEFORE fixture for $p"
-    # The real API wraps base64 at 60 columns; the gate pipes `.content` through `base64 -d`.
-    base64 -w 60 "$f"; exit 0 ;;
-esac
-refuse "unrouted gh call: $*"
-STUB
-chmod +x "$TMP/bin/gh"
+cp "$ROOT/plugins/soleur/test/lib/registry-gate-gh-stub.sh" "$TMP/bin/gh"; chmod +x "$TMP/bin/gh"
+# No-op sleep: the gate's retry delays (fetch_before, the blob reads) must not cost wall time.
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TMP/bin/sleep"; chmod +x "$TMP/bin/sleep"
 
 SB="$TMP/sb"; BF="$TMP/before"
 reset_trees() {
@@ -106,11 +87,21 @@ PY
 compare_of() {  # filenames... -> compare JSON
   printf '%s\n' "$@" | jq -R . | jq -sc '{status:"ahead", total_commits:1, files: map({filename: .})}'
 }
+# A compare of EXACTLY 300 files naming no render input: the shape a truncated list hides a change
+# behind (#10650). Asserts its own preconditions so a fixture edit cannot silently test the list path.
+cap_compare_of() {
+  local j
+  j="$(seq 1 300 | sed 's#^#docs/filler-#; s#$#.md#' | jq -R . | jq -sc '{status:"ahead", total_commits:64, files: map({filename: .})}')"
+  [[ "$(jq '.files|length' <<<"$j")" -eq 300 ]] || { echo "  FATAL: cap fixture is not exactly 300 files" >&2; exit 2; }
+  [[ "$(jq -r '.files[].filename' <<<"$j" | grep -cE 'cloud-init-registry|zot-registry|variables\.tf' || true)" -eq 0 ]] || { echo "  FATAL: cap fixture names a render input" >&2; exit 2; }
+  printf '%s' "$j"
+}
 # The Actions default shell for a `run:` with no `shell:` key.
 run_gate() {  # extra env assignments... ; uses $COMPARE
   : > "$TMP/out"; : > "$TMP/gh.log"; : > "$TMP/stub.err"
   ( cd "$SB" && env PATH="$TMP/bin:${GATE_PATH:-$PATH}" GH_LOG="$TMP/gh.log" STUB_ERR="$TMP/stub.err" \
-      STUB_WATERMARK="$W" STUB_AFTER="$A" STUB_COMPARE="$COMPARE" STUB_BEFORE="$BF" \
+      STUB_WATERMARK="$W" STUB_AFTER="$A" STUB_COMPARE="$COMPARE" STUB_BEFORE="$BF" STUB_HEAD="$SB" \
+      STUB_INPUTS="$CFG_REL $TF_REL $VARS_REL" \
       GITHUB_OUTPUT="$TMP/out" GITHUB_REPOSITORY=jikig-ai/soleur GH_TOKEN=x \
       EVENT_NAME=push AFTER_SHA="$A" CFG="$CFG_REL" SELF=registry-host-replace-dispatch.yml "$@" \
       bash --noprofile --norc -eo pipefail "$TMP/gate.sh" > "$TMP/log" 2>&1 ); RC=$?
@@ -119,7 +110,7 @@ run_gate() {  # extra env assignments... ; uses $COMPARE
   fi
 }
 out() { sed -n "s/^$1=//p" "$TMP/out" | tail -1; }
-fetched() { grep -qF "contents/$1?ref=$W" "$TMP/gh.log"; }
+fetched() { grep -qF -- "contents/$1?ref=$W --jq .content" "$TMP/gh.log"; }
 # A PATH with every directory holding a `terraform` removed (the G8 / G3 arms).
 NO_TF_PATH=""
 IFS=: read -ra _pp <<<"$PATH"
@@ -275,6 +266,32 @@ mutate "$BF/$TF_REL" "s.replace('$ZOT_AMD64_DIGEST', '$OTHER_HEX')"
 COMPARE="$(compare_of "$TF_REL")"; GATE_PATH="$NO_TF_PATH" run_gate CI=
 [[ "$(out deliver)" != "false" && "$RC" -ne 0 ]] && pass "G8: an unmeasured render (no terraform) is a refusal, never deliver=false" || fail "G8: rc=$RC deliver=$(out deliver)"
 
+echo "gate: compare-API cap rows (#10650)"
+
+# K3 — a cap hit HIDING a zot digest bump (blob differs, second input): the RENDER decides, not a cap
+# fallback. The old cap arm also delivered, so the `why` text is what carries the RED.
+reset_trees
+mutate "$BF/$TF_REL" "s.replace('$ZOT_AMD64_DIGEST', '$OTHER_HEX')"
+COMPARE="$(cap_compare_of)"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out render_changed)" == "true" && "$(out why)" == *"rendered user_data differs"* ]] && pass "K3: cap hit + zot digest bump -> deliver=true decided by the render (why names it)" || fail "K3: rc=$RC deliver=$(out deliver) render_changed=$(out render_changed) why=$(out why)"
+
+# K4 — a cap hit with a comment-only template edit: the blob differs, the render does not -> false
+# (#9149: "a >=300-file compare with render unchanged must yield deliver=false").
+reset_trees
+mutate "$BF/$CFG_REL" "s.replace('#cloud-config\n', '#cloud-config\n# rationale-only line (K4)\n', 1)"
+COMPARE="$(cap_compare_of)"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "false" ]] && pass "K4: cap hit + comment-only template edit -> deliver=false (render unchanged)" || fail "K4: rc=$RC deliver=$(out deliver) — $(tail -2 "$TMP/log" | tr '\n' ' ')"
+
+# K5 — a cap hit whose watermark render is UNMEASURABLE still delivers (#9149: "or could not be
+# computed"), through the downstream arm, with its warning and why.
+reset_trees
+mutate "$BF/$TF_REL" "re.sub(r'(zot_image_amd64 = \")[^\"]*(\")', r'\\1not-a-pinned-ref\\2', s, count=1)"
+COMPARE="$(cap_compare_of)"; run_gate
+[[ "$RC" -eq 0 && "$(out deliver)" == "true" && "$(out why)" == *"unmeasurable by the head render"* ]] && grep -q '::warning::' "$TMP/log" && pass "K5: cap hit + unmeasurable watermark render -> deliver=true, ::warning::, why names it" || fail "K5: rc=$RC deliver=$(out deliver) why=$(out why)"
+
+# (The terraform-free cap rows -- identical blobs, unreadable blobs, the 299/300 boundary -- live in
+# plugins/soleur/test/registry-host-replace-dispatch-verdict.test.sh, which every workflow edit selects.)
+
 echo "workflow wiring"
 wf_tfv="$(python3 -c 'import sys,yaml; print((yaml.safe_load(open(sys.argv[1])).get("env") or {}).get("TERRAFORM_VERSION",""))' "$WF")"
 ap_tfv="$(python3 -c 'import sys,yaml; print((yaml.safe_load(open(sys.argv[1])).get("env") or {}).get("TERRAFORM_VERSION",""))' "$ROOT/.github/workflows/apply-web-platform-infra.yml")"
@@ -304,8 +321,8 @@ if [[ "$PASS" -ne $((_cp+1)) || "$FAIL" -ne $((_cf+1)) || "${#FAILURES[@]}" -ne 
 fi
 FAIL=$((FAIL-1)); unset 'FAILURES[-1]'
 # EQUALITY, not a floor: adding a row must move this literal.
-if [[ "$((PASS + FAIL - HARN))" -ne 29 ]]; then
-  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 29 are expected (fix the dispatch, do not edit the literal to match).\n' "$((PASS + FAIL - HARN))" >&2
+if [[ "$((PASS + FAIL - HARN))" -ne 32 ]]; then
+  printf '  FATAL: anti-vacuity: %s assertions ran; exactly 32 are expected (fix the dispatch, do not edit the literal to match).\n' "$((PASS + FAIL - HARN))" >&2
   exit 1
 fi
 echo "=== Results: $PASS/$((PASS+FAIL)) passed, $FAIL failed ==="

@@ -19,6 +19,12 @@
 // is the supported vehicle for turning those rule families on (notably react/no-danger,
 // which is off today while five files use dangerouslySetInnerHTML). Removing it is a
 // deliberate separate decision, not a tidy-up to fold into this PR.
+// ENABLEMENT TRAP (#11823): the blanket `"minimatch": "^11.0.1"` override forces these
+// plugin subtrees onto minimatch@11, whose CJS export is a non-callable namespace —
+// eslint-plugin-react calls `minimatch(name, entry)` directly and
+// eslint-plugin-import/-jsx-a11y call `_interopRequireDefault(...).default`, both of
+// which TypeError under v11 (they were compiled against minimatch@3's function export).
+// Enabling any of those rule families requires a minimatch call-shape audit FIRST.
 //
 // Provenance of the six imports, since the same false comment credited all six to
 // eslint-config-next: @next/eslint-plugin-next, @typescript-eslint/parser and

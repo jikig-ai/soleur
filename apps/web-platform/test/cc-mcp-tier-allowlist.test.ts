@@ -202,6 +202,8 @@ describe("edit_c4_diagram registration (#5388)", () => {
   // when the c4 flag is OFF (the #2909 FR2 / AC2 silent-failure surface).
   test("base constant does NOT contain the c4 FQN (append is per-dispatch)", () => {
     expect(CC_REGISTERED_PLATFORM_TOOL_NAMES).not.toContain(C4_TOOL_FQN);
+    // #11636: nor the gated push tool (flag + entitlement + repo gated, published per conversation by the factory).
+    expect(CC_REGISTERED_PLATFORM_TOOL_NAMES).not.toContain("mcp__soleur_platform__github_push_branch");
   });
 
   // AC1 — c4 registered (per-dispatch set includes the c4 FQN) ⇒ no mirror.

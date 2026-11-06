@@ -36,6 +36,7 @@ import { z } from "zod";
 import { createServiceClient } from "@/lib/supabase/service";
 import { isEgressAuditCollectionOn } from "@/server/egress-audit-collection";
 import { mirrorWarnWithDebounce, mirrorWithDebounce } from "@/server/observability";
+import { PROXY_MARKER_HEADERS } from "@/server/loopback";
 
 const FEATURE = "egress-audit-ingest";
 
@@ -46,10 +47,8 @@ const BUCKET_RETENTION_MS = 30 * 86_400_000;
 const BUCKET_FUTURE_MS = 15 * 60_000 + 15 * 60_000;
 
 const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?$/i;
-// Cloudflare adds the first two on every proxied request; the others are the usual
-// reverse-proxy set. Vector's request carries none of them. (x-forwarded-* are added by
-// Next.js itself and are handled separately, see the header comment.)
-const PROXY_MARKER_HEADERS = ["forwarded", "cf-connecting-ip", "cf-ray", "x-real-ip"] as const;
+// The proxy-marker list (single source: ./loopback). Vector's request carries none of them.
+// (x-forwarded-* are added by Next.js itself and are handled separately, see the header comment.)
 
 // The same shapes Vector's egress_audit_prep and migration 162 enforce, so a row that passes
 // here cannot be rejected by a CHECK. z.string().uuid() is deliberately not used: it accepts

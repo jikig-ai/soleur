@@ -19,7 +19,7 @@
 # DETECTOR against a floor this step DECLARES in its own `env:`. So the coverage
 # cases below no longer test a derivation from `configs`; they test a passthrough
 # with a closed-vocabulary clamp, plus the step's own EXTERNAL re-assertion of the
-# floor against the pinned minimum of 13.
+# floor against the pinned minimum of 16.
 #
 # THREE RULES THIS SUITE FOLLOWS, all learned the hard way:
 #
@@ -320,7 +320,7 @@ SCRATCH_EMAIL_STEP="Email notification (rung-2 sweep — the scratch-config find
 # T1-T5 — the parser's contract.
 # ---------------------------------------------------------------------------
 mkfix two '{"live":3,"dead":0,"unverifiable":3,"probes":4,"configs":13,
- "configs_floor":13,"configs_expected":13,"configs_unread":[],
+ "configs_floor":16,"configs_expected":13,"configs_unread":[],
  "coverage":"at-floor","coverage_ratio":"13/13","inventory_age_days":0,
  "stale":[],
  "unverifiable_keys":[
@@ -341,7 +341,7 @@ else
 fi
 
 mkfix clean '{"live":9,"dead":0,"unverifiable":0,"probes":9,"configs":13,
- "configs_floor":13,"configs_expected":13,"configs_unread":[],
+ "configs_floor":16,"configs_expected":13,"configs_unread":[],
  "coverage":"at-floor","coverage_ratio":"13/13","inventory_age_days":0,
  "stale":[],"unverifiable_keys":[]}'
 echo "T2: zero unverifiable rows yield the '-' sentinel, never an empty field"
@@ -354,7 +354,7 @@ else
 fi
 
 mkfix nocause '{"live":0,"dead":0,"unverifiable":1,"probes":1,"configs":2,
- "configs_floor":13,"configs_expected":13,"configs_unread":["prd","dev"],
+ "configs_floor":16,"configs_expected":13,"configs_unread":["prd","dev"],
  "coverage":"degraded","coverage_ratio":"2/13","inventory_age_days":0,
  "stale":[],"unverifiable_keys":[{"key":"K","reason":"no cause key at all"}]}'
 echo "T3: a row with no 'cause' key degrades to 'unknown', not to a crash"
@@ -396,22 +396,22 @@ fi
 # re-derivation from `configs`, which no longer happens here.
 # ---------------------------------------------------------------------------
 mkfix degraded '{"live":4,"dead":0,"unverifiable":0,"probes":4,"configs":7,
- "configs_floor":13,"configs_expected":13,
+ "configs_floor":16,"configs_expected":13,
  "configs_unread":["ci","cli","cli_ops","dev","dev_personal","dev_scheduled"],
  "coverage":"degraded","coverage_ratio":"7/13","inventory_age_days":1,
  "stale":[],"unverifiable_keys":[]}'
 mkfix grown '{"live":9,"dead":0,"unverifiable":0,"probes":9,"configs":14,
- "configs_floor":13,"configs_expected":13,"configs_unread":[],
+ "configs_floor":16,"configs_expected":13,"configs_unread":[],
  "coverage":"at-floor","coverage_ratio":"14/13","inventory_age_days":2,
  "stale":[],"unverifiable_keys":[]}'
 
 echo "T6: a detector-graded 'at-floor' scan publishes coverage=at-floor with its ratio and floor"
 r=$(run_step "$TMP/clean" 0)
 got="$(out_val "$r" coverage) $(out_val "$r" coverage_ratio) $(out_val "$r" configs_floor) $(out_val "$r" configs_expected)"
-if [[ "$got" == "at-floor 13/13 13 13" ]]; then
-  pass "coverage=at-floor, ratio 13/13, floor 13, expected 13 all reach \$GITHUB_OUTPUT"
+if [[ "$got" == "at-floor 13/13 16 13" ]]; then
+  pass "coverage=at-floor, ratio 13/13, floor 16, expected 13 all reach \$GITHUB_OUTPUT"
 else
-  fail "expected 'at-floor 13/13 13 13', got '$got' — every downstream arm (the close arm, both email caveats, the issue body) reads these four outputs, and a dropped one publishes a bare 'key=' that no positive-polarity condition matches"
+  fail "expected 'at-floor 13/13 16 13', got '$got' — every downstream arm (the close arm, both email caveats, the issue body) reads these four outputs, and a dropped one publishes a bare 'key=' that no positive-polarity condition matches"
 fi
 
 echo "T7: a detector-graded 'degraded' scan publishes degraded WITH the unread config names"
@@ -442,7 +442,7 @@ echo "T8: every value outside the closed vocabulary clamps to 'unknown', never t
 _t8=1
 for bad in None null -1 abc AT-FLOOR at_floor "at-floor-ish"; do
   mkfix badcov "{\"live\":0,\"dead\":0,\"unverifiable\":0,\"probes\":0,\"configs\":13,
- \"configs_floor\":13,\"configs_expected\":13,\"configs_unread\":[],
+ \"configs_floor\":16,\"configs_expected\":13,\"configs_unread\":[],
  \"coverage\":$([[ "$bad" == "null" ]] && printf 'null' || printf '"%s"' "$bad"),\"coverage_ratio\":\"13/13\",\"inventory_age_days\":0,
  \"stale\":[],\"unverifiable_keys\":[]}"
   c=$(out_val "$(run_step "$TMP/badcov" 0)" coverage)
@@ -465,7 +465,7 @@ echo "T8b: the RETIRED states are unproducible — no live construct can publish
 _t8b=1
 for retired in multi-config single-config full; do
   mkfix retired "{\"live\":0,\"dead\":0,\"unverifiable\":0,\"probes\":0,\"configs\":13,
- \"configs_floor\":13,\"configs_expected\":13,\"configs_unread\":[],
+ \"configs_floor\":16,\"configs_expected\":13,\"configs_unread\":[],
  \"coverage\":\"${retired}\",\"coverage_ratio\":\"13/13\",\"inventory_age_days\":0,
  \"stale\":[],\"unverifiable_keys\":[]}"
   c=$(out_val "$(run_step "$TMP/retired" 0)" coverage)
@@ -493,7 +493,7 @@ echo "T8c: a FIELD SHIFT lands in the greedy tail and publishes configs=-1, not 
 # parsed no count at all. The vocabulary clamp cannot catch it (`at-floor` is IN the
 # vocabulary), so the step ties the two explicitly: an unreadable count forces `unknown`.
 mkfix shifted '{"live":0,"dead":0,"unverifiable":0,"probes":0,"configs":13,
- "configs_floor":13,"configs_expected":13,"configs_unread":[],
+ "configs_floor":16,"configs_expected":13,"configs_unread":[],
  "coverage":"at-floor","coverage_ratio":"","inventory_age_days":0,
  "stale":[],"unverifiable_keys":[]}'
 r=$(run_step "$TMP/shifted" 0)
@@ -889,10 +889,10 @@ fi
 # in the same change that narrows the grant would hold the scan at `at-floor`
 # while coverage regressed.
 # ---------------------------------------------------------------------------
-echo "T17: a floor BELOW the pinned minimum of 13 downgrades the run to degraded"
+echo "T17: a floor BELOW the pinned minimum of 16 downgrades the run to degraded"
 _t17=1
-# 12 is one below; 0 is the degenerate floor every count satisfies. Both must downgrade.
-for lowered in 12 0; do
+# 15 is one below; 0 is the degenerate floor every count satisfies. Both must downgrade.
+for lowered in 15 0; do
   mkfix lowfloor "{\"live\":9,\"dead\":0,\"unverifiable\":0,\"probes\":9,\"configs\":13,
  \"configs_floor\":${lowered},\"configs_expected\":13,\"configs_unread\":[],
  \"coverage\":\"at-floor\",\"coverage_ratio\":\"13/${lowered}\",\"inventory_age_days\":0,
@@ -904,11 +904,11 @@ done
 # everything is not an assertion.
 c_ok=$(out_val "$(run_step "$TMP/clean" 0)" coverage)
 c_grown=$(out_val "$(run_step "$TMP/grown" 0)" coverage)
-[[ "$c_ok" == "at-floor" && "$c_grown" == "at-floor" ]] || { _t17=0; echo "    floor 13 published '$c_ok', growth published '$c_grown'"; }
+[[ "$c_ok" == "at-floor" && "$c_grown" == "at-floor" ]] || { _t17=0; echo "    floor 16 published '$c_ok', growth published '$c_grown'"; }
 if [[ "$_t17" == "1" ]]; then
-  pass "floors of 12 and 0 downgrade to degraded; a floor of 13 (and growth above it) does not"
+  pass "floors of 15 and 0 downgrade to degraded; a floor of 16 (and growth above it) does not"
 else
-  fail "the external floor assertion did not behave as '< 13 -> degraded, >= 13 -> unchanged' — three places must move together to defeat this pin (the run-time assertion, the consumer-suite integer, and the inventory-equality pin), and an assertion that fires on every run or on none is not one of them"
+  fail "the external floor assertion did not behave as '< 16 -> degraded, >= 16 -> unchanged' — three places must move together to defeat this pin (the run-time assertion, the consumer-suite integer, and the inventory-equality pin), and an assertion that fires on every run or on none is not one of them"
 fi
 
 echo "T17b: the floor assertion is GUARDED on 'unknown' — an unreadable run is not re-graded"
@@ -972,7 +972,7 @@ fi
 
 echo "T20: the verdict log line carries floor: and ratio:, not just the verdict"
 run_step "$TMP/degraded" 0 >/dev/null
-if grep -q 'token-drift verdict: clean .*floor: 13.*ratio: 7/13' "$STEP_STDOUT"; then
+if grep -q 'token-drift verdict: clean .*floor: 16.*ratio: 7/13' "$STEP_STDOUT"; then
   pass "the echoed verdict line is a CONSUMER of the new fields"
 else
   fail "the verdict log line does not carry both 'floor:' and 'ratio:' — the Observability discoverability_test greps this line's prefix, so the prefix keeps matching while the asserted fields are absent, and a `clean` verdict is printed with nothing qualifying its scope"
@@ -985,7 +985,7 @@ fi
 # pins the detector's copy; nothing pinned this one.
 # ---------------------------------------------------------------------------
 mkfix stale_inv '{"live":9,"dead":0,"unverifiable":0,"probes":9,"configs":13,
- "configs_floor":13,"configs_expected":13,"configs_unread":[],
+ "configs_floor":16,"configs_expected":13,"configs_unread":[],
  "coverage":"at-floor","coverage_ratio":"13/13","inventory_age_days":400,
  "coverage_caveat":"inventory is 400 days old (>90) — the denominator may no longer describe the project",
  "stale":[],"unverifiable_keys":[]}'
@@ -1074,11 +1074,11 @@ hcl_uncommented() {
 # This is the CI check that fails when the floor and the inventory drift apart.
 #
 # Three places must move together to lower the floor alongside a narrowed grant:
-# the run-time `configs_floor >= 13` assertion (T17), this named integer, and the
+# the run-time `configs_floor >= 16` assertion (T17), this named integer, and the
 # inventory-equality pin below. Defeating it requires editing a test whose only
 # purpose is to stop that edit.
 # ---------------------------------------------------------------------------
-FLOOR_MINIMUM=13
+FLOOR_MINIMUM=16
 
 echo "F1: DOPPLER_CONFIGS_FLOOR is declared in the step's own env: and parses as an integer"
 if [[ "$WF_FLOOR" =~ ^[0-9]+$ ]]; then
@@ -1431,9 +1431,9 @@ else
   else
     grep -qE '^[[:space:]]*config[[:space:]]*=[[:space:]]*each\.key[[:space:]]*$' <<<"$_tok_block" \
       || { _ca=0; echo "    the token block does not set 'config = each.key'"; }
-    # WHITELIST, not blacklist. The original form rejected only a string literal, so
-    # `config = local.pinned` — 13 tokens on one config, identical blast radius — sailed
-    # through. Anything that is not literally `each.key` is rejected, whatever its syntax.
+    grep -qE '^[[:space:]]*access[[:space:]]*=[[:space:]]*"read"[[:space:]]*$' <<<"$_tok_block" \
+      || { _ca=0; echo "    the token block does not set 'access = \"read\"'"; }
+    # WHITELIST, not blacklist: `config = local.pinned` (13 tokens, one config) once sailed through; anything but `each.key` is rejected.
     _cfg_binding=$(grep -oE '^[[:space:]]*config[[:space:]]*=[[:space:]]*[^[:space:]]+' <<<"$_tok_block" | head -1 | sed -E 's/.*=[[:space:]]*//')
     if [[ -n "$_cfg_binding" && "$_cfg_binding" != "each.key" ]]; then
       _ca=0
@@ -2085,6 +2085,7 @@ done <<<"$R5_OUT"
 # New prose in the sweep jobs must not spell the read/write token name, or R7 fires on its own text.
 # ---------------------------------------------------------------------------
 export R10_TF="$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf"
+export PRUNED_TS="$REPO_ROOT/apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts"
 SWEEP_PY=$(cat <<'PYD'
 import copy, os, re, sys, yaml
 
@@ -2267,6 +2268,13 @@ SENTRY_SECRETS = {"SENTRY_INGEST_DOMAIN", "SENTRY_PROJECT_ID", "SENTRY_PUBLIC_KE
 AGG_SECRETS = SENTRY_SECRETS | {"RESEND_API_KEY"}
 AGG_KEYS = {"name", "if", "needs", "runs-on", "steps", "timeout-minutes", "permissions"}
 TF_TEXT = ""
+# #6590 PR-B: emitters to destroyed monitors post void-check-ins BY DESIGN (spec NG4). Their
+# slugs are registered in the shared pruned set — declared OR pruned is the legal universe.
+PRUNED_TS = os.environ.get("PRUNED_TS", "")
+try:
+    PRUNED = set(re.findall(r'^\s*"([a-z0-9-]+)",?\s*$', open(PRUNED_TS).read(), re.M)) if PRUNED_TS else set()
+except OSError:
+    PRUNED = set()
 TOKEN_RE = re.compile(r"\s*(?:('(?:[^']|'')*')|(\|\||&&|==|!=|!|\(|\))|([A-Za-z_][\w\-.]*(?:\(\))?))")
 
 def gh_tokens(expr):
@@ -2414,15 +2422,16 @@ def r10(wf):
     slug = (h.get("with") or {}).get("monitor-slug")
     tf_live = re.sub(r"/\*.*?\*/", "", TF_TEXT, flags=re.S)
     tf_live = "\n".join(l for l in tf_live.splitlines() if not re.match(r"\s*(?:#|//)", l))
-    if not (isinstance(slug, str) and re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{(?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"%s"' % re.escape(slug), tf_live)):
-        out.append("%s monitor-slug %r is not a monitor name in cron-monitors.tf" % (jid, slug))
+    declared = isinstance(slug, str) and bool(re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{(?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"%s"' % re.escape(slug), tf_live))
+    if not (declared or slug in PRUNED):
+        out.append("%s monitor-slug %r is not a monitor name in cron-monitors.tf nor a registered pruned slug" % (jid, slug))
     else:
         nslug = sum(1 for oj in wf["jobs"].values() for s in oj.get("steps") or []
                     if str(s.get("uses", "")).rstrip("/") == HEARTBEAT and (s.get("with") or {}).get("monitor-slug") == slug)
         if nslug != 1:
             out.append("slug %s has %d check-in steps in the workflow (want 1)" % (slug, nslug))
     if slug != "scheduled-orphan-sweeps":
-        out.append("%s heartbeat posts to %r, not the monitor scheduled-orphan-sweeps" % (jid, slug))
+        out.append("%s heartbeat posts to %r, not the slug scheduled-orphan-sweeps" % (jid, slug))
     mon = re.search(r'resource\s+"sentry_cron_monitor"\s+"[^"]+"\s*\{((?:(?!\nresource\s)[\s\S])*?\bname\s*=\s*"scheduled-orphan-sweeps"(?:(?!\nresource\s)[\s\S])*)', tf_live)
     if mon:
         blk = mon.group(1).split("\n}", 1)[0]
@@ -2701,15 +2710,6 @@ def m10_if_not_cancelled(m): agg(m)["if"] = "${{ !cancelled() && github.ref == '
 def m10_if_not_failure(m): agg(m)["if"] = "${{ !failure() && github.ref == 'refs/heads/main' }}"
 def m10_if_quoted_always(m): agg(m)["if"] = "github.ref == 'refs/heads/main' && 'always()'"
 def m10_if_ref_neq_feature(m): agg(m)["if"] = "always() && github.ref != 'refs/heads/feature'"
-def m10_tf_commented(m): m["name"] = str(m.get("name", "")) + " (tf slug commented out)"
-def r10_tf_commented(m):
-    global TF_TEXT
-    old = TF_TEXT
-    TF_TEXT = "\n".join(("# " + l if re.search(r'name\s*=\s*"scheduled-orphan-sweeps"', l) else l) for l in old.splitlines())
-    try:
-        return r10(m)
-    finally:
-        TF_TEXT = old
 def m10_agg_if_release(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/heads/release'"
 def m10_agg_if_prmerge(m): agg(m)["if"] = "always() && github.ref == 'refs/heads/main' || github.ref == 'refs/pull/1/merge'"
 def m10_slug_other_monitor(m): agg_step(m, is_hb)["with"]["monitor-slug"] = "scheduled-oauth-probe"
@@ -2729,18 +2729,6 @@ def m10_sweep_body_other_removed(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("any other answer means the reply did not match the pinned volume or could not be read", "any other answer means something")
 def m10_sweep_body_401_removed(m):
     w = fail_email(jobs(m)[INN])["with"]; w["body"] = w["body"].replace("HTTP 401 or 403 means Hetzner refused the token", "HTTP 401 or 403 means something")
-def r10_tf_sub(old, new):
-    def chk(m):
-        global TF_TEXT
-        keep = TF_TEXT
-        i = TF_TEXT.index('resource "sentry_cron_monitor" "scheduled_orphan_sweeps"')
-        assert old in TF_TEXT[i:], "tf mutation target not found"
-        TF_TEXT = TF_TEXT[:i] + TF_TEXT[i:].replace(old, new, 1)
-        try:
-            return r10(m)
-        finally:
-            TF_TEXT = keep
-    return chk
 def m10_sweep_subject_static(m): fail_email(jobs(m)[RUNG])["with"]["subject"] = "[INFRA DRIFT] The rung-2 rehearsal orphan sweep failed"
 def m10_sweep_subject_inverted(m):
     w = fail_email(jobs(m)[RUNG])["with"]; w["subject"] = w["subject"].replace("== 'unproven'", "== 'proven'")
@@ -2865,7 +2853,6 @@ ROWS = [
     ("r10-job-if-not-failure",         r10, m10_if_not_failure, "red"),
     ("r10-job-if-quoted-always",       r10, m10_if_quoted_always, "red"),
     ("r10-job-if-ref-neq-feature",     r10, m10_if_ref_neq_feature, "red"),
-    ("r10-slug-commented-out-in-tf",   r10_tf_commented, m10_tf_commented, "red"),
     ("r10-sweep-subject-static",       r10, m10_sweep_subject_static, "red"),
     ("r10-sweep-subject-inverted",     r10, m10_sweep_subject_inverted, "red"),
     ("r10-sweep-subject-wrong-output", r10, m10_sweep_subject_reason, "red"),
@@ -2881,9 +2868,6 @@ ROWS = [
     ("r10-sweep-body-401-403-sentence-removed", r10, m10_sweep_body_401_removed, "red"),
     ("r10-sweep-body-404-sentence-removed", r10, m10_sweep_body_404_removed, "red"),
     ("r10-sweep-body-other-answer-sentence-removed", r10, m10_sweep_body_other_removed, "red"),
-    ("r10-tf-margin-lowered",          r10_tf_sub("checkin_margin_minutes  = 60", "checkin_margin_minutes  = 5"), m10_tf_commented, "red"),
-    ("r10-tf-crontab-changed",         r10_tf_sub('crontab = "0 6,18 * * *"', 'crontab = "0 6 * * *"'), m10_tf_commented, "red"),
-    ("r10-tf-failure-threshold-changed", r10_tf_sub("failure_issue_threshold = 1", "failure_issue_threshold = 3"), m10_tf_commented, "red"),
     ("r10-must-pass-aggregator-renamed", r10, m10_renamed,        "clean"),
     ("r10-must-pass-email-body-reworded", r10, m10_email_body_reworded, "clean"),
     ("r10-must-pass-heartbeat-timeout-changed", r10, m10_hb_timeout, "clean"),
@@ -2946,7 +2930,7 @@ _r10=$(python3 -c "$SWEEP_PY" r10 "$WF") || { echo "FATAL: the R10 scan crashed"
 _r10_bad=$(grep -c '^violation' <<<"$_r10") || _r10_bad=0
 _r10_pop=$(sed -n 's/^population=//p' <<<"$_r10")
 if [[ "$_r10_pop" =~ ^[0-9]+$ ]] && (( _r10_pop >= 2 )) && [[ "$_r10_bad" == "0" ]]; then
-  pass "R10 the aggregator covers all ${_r10_pop} orphan-sweep jobs: ok only when every sweep job succeeded, emails on every other result, reads contents only, names no Hetzner or Doppler credential, posts to a monitor declared in cron-monitors.tf"
+  pass "R10 the aggregator covers all ${_r10_pop} orphan-sweep jobs: ok only when every sweep job succeeded, emails on every other result, reads contents only, names no Hetzner or Doppler credential, posts to a monitor declared in cron-monitors.tf or a registered pruned slug"
 else
   fail "R10 (${_r10_pop:-?} jobs, ${_r10_bad} violation(s)): $(grep '^violation' <<<"$_r10" | cut -f2 | tr '\n' ';')"
 fi
@@ -2964,7 +2948,7 @@ fi
 # 61 -> 91 with R10 (22 red rows and 3 must-pass rows) and R11 (4 red rows and 1 must-pass row): 30 added.
 # 91 -> 108 with the review round's 17 R10 mutation rows (all red), then 108 -> 122 with the fix-round's 14 (aggregator `if` pinned exactly,
 # slug pinned, subject order, TF monitor values, the sweep email's identity fallbacks and its 401/403 sentence).
-R78_MIN=122
+R78_MIN=118  # 122 - 4: the destroyed scheduled_orphan_sweeps tf-mutation rows retired (#6590 PR-B)
 echo "R7/R8: mutation rows — every spelling that re-opens the read/write credential or drops the failure email is RED, legitimate variants GREEN"
 R78_OUT=$(python3 -c "$SWEEP_PY" mutate "$WF") || { echo "FATAL: the R7/R8 mutation runner crashed" >&2; exit 2; }
 r78_line() { if [[ "$1" == "PASS" ]]; then pass "R78/$2: $3"; else fail "R78/$2: $3"; fi; }
@@ -3413,6 +3397,9 @@ echo "=== Results: $PASS/$((PASS + FAIL)) passed, $FAIL failed ==="
 # body fields), 12 more identity cases for each of the two sweeps (24 rows: the 5xx class, a 4xx that is not retried, ids either side of the
 # pin, a nested id, a null or empty or mistyped volume, and the back-off sleep now asserted on every case), and 10 identity mutation rows for each of
 # the two sweeps (20 rows): 89 added (two more: the byte-identity of the two proof blocks, and its mutation; then 26 from the fix round: 14 R10 mutation rows, 8 wording mutation rows across the two sweeps, 4 dispatch-ledger rows), 406 is the REALIZED `PASS + FAIL`.
+# Then 406 -> 402 with #6590 PR-B: the 4 tf-mutation rows probed fields of the now-destroyed
+# scheduled_orphan_sweeps block — deletion is the deliberate pruned state (PRUNED_MONITOR_SLUGS),
+# not a red verdict, so the rows are retired, not repointed. 402 is the REALIZED `PASS + FAIL`.
 #
 # LATE dispatch re-validation (the launder defence). Re-drive both helpers HERE, after every row, and require both counters to move: a
 # `fail() { PASS=$((PASS + 1)); ... }` inserted anywhere routes every failure into the PASS counter, the floor below still reconciles
@@ -3428,8 +3415,8 @@ if [[ "$PASS" -ne "$((_LATE_P + 1))" || "$FAIL" -ne "$((_LATE_F + 1))" ]]; then
 fi
 PASS=$((PASS - 1))
 FAIL=$((FAIL - 1))
-if [[ "$((PASS + FAIL))" -lt 406 ]]; then
-  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 406." >&2
+if [[ "$((PASS + FAIL))" -lt 402 ]]; then
+  echo "FATAL: only $((PASS + FAIL)) assertions ran; expected >= 402." >&2
   exit 1
 fi
 if [[ "$FAIL" -gt 0 ]]; then exit 1; fi

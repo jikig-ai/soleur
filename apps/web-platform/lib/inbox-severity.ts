@@ -17,12 +17,24 @@
 // YOU or below the pin.
 
 import type { EmailTriageItem } from "@/components/inbox/email-triage-row";
+import type { ApprovalWireStatus } from "@/lib/approval-wire";
+import { isUuid } from "@/lib/is-uuid";
 
 export type InboxItemSeverity = "action_required" | "attention" | "info";
 
-/** v1-emittable native sources (mig 122 CHECK). The full intended enum
- * (approval_required / autopilot_run) ships with #4672 / #4674. */
-export type InboxItemSource = "task_completed" | "system";
+/** Native sources (mig 122 CHECK, widened by mig 180 for #4672). `autopilot_run` ships with #4674. */
+export type InboxItemSource = "task_completed" | "system" | "approval_required";
+
+/**
+ * Render-time facts about the approval request behind an `approval_required` row, attached by GET /api/inbox from an
+ * Owner-RLS read (the stored `title` is static and content-free by design; the row text and the expiry chip come from the
+ * request itself). Absent on every other source and whenever the enrichment read failed: the row then renders its static
+ * title and no chip.
+ */
+export interface InboxApprovalInfo {
+  status: ApprovalWireStatus;
+  expiresAt: string;
+}
 
 /** A native inbox_item row (subset the surface + merge consume). */
 export interface InboxItemRowData {
@@ -36,6 +48,8 @@ export interface InboxItemRowData {
   read_at: string | null;
   acted_at: string | null;
   archived_at: string | null;
+  /** #4672 — present only on enriched `approval_required` rows. */
+  approval?: InboxApprovalInfo;
 }
 
 /** The unified, ordered row the route returns and the surface renders. */
@@ -109,8 +123,13 @@ export function buildInboxDeepLink(
       if (path && path.startsWith("/") && !path.startsWith("//")) return path;
       return "/dashboard";
     }
+    case "approval_required": {
+      // The id is interpolated into a path, so it must be exactly a UUID (never a free string from a stored ref).
+      const id = sourceRef?.approvalId;
+      return id && isUuid(id) ? `/dashboard/approvals/${id}` : null;
+    }
     default:
-      // approval_required / autopilot_run targets are built by #4672 / #4674.
+      // autopilot_run's target is built by #4674.
       return null;
   }
 }

@@ -19,8 +19,8 @@
 //   context, NEVER from request body/params. Passing user-controlled
 //   input here would let an attacker name an arbitrary user as caller
 //   and harvest delegations targeted at that user. The 5 prod call
-//   sites (agent-runner.ts:882, agent-runner.ts:2401, cc-dispatcher.ts
-//   :890, cfo-on-payment-failed.ts:199, github-on-event.ts:208) pass
+//   sites (agent-runner.ts startAgentSession + routing lease, cc-dispatcher.ts
+//   realSdkQueryFactory, cfo-on-payment-failed.ts, github-on-event.ts) pass
 //   `args.userId` which IS server-derived; the PR body enumerates the
 //   provenance of `callerUserId` at every call site. Future call sites
 //   MUST preserve this invariant.
@@ -29,6 +29,7 @@ import {
   runWithByokLease,
   type ByokLease,
 } from "./byok-lease";
+import type { AuthModeResolverFn } from "./auth-mode-error";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
@@ -136,6 +137,16 @@ type ResolveRow = {
 };
 
 /**
+ * How the lease learns the conversation's auth mode (#11591). REQUIRED on every call so `tsc` fails any
+ * caller that forgets to choose: an Agent-SDK caller passes the conversation's resolver; a caller that only
+ * uses `getRestApiKey` (structurally api_key only) passes `{ restOnly: true }`. A caller that omits the
+ * resolver but then calls `getAgentCredential()` for an owner holding a subscription row fails closed.
+ */
+export type LeaseModeOpts =
+  | { resolveAuthMode: AuthModeResolverFn }
+  | { restOnly: true };
+
+/**
  * Resolve the BYOK key owner and run `fn` inside a freshly bound
  * `ByokLease`. See module docstring for behavior + the security
  * invariant on `callerUserId`.
@@ -144,7 +155,19 @@ export async function resolveKeyOwnerThenLease<T>(
   callerUserId: string,
   workspaceContextUserId: string,
   fn: (lease: ByokLease) => Promise<T>,
+  opts: LeaseModeOpts,
 ): Promise<T> {
+  // One chokepoint for all five lease branches below: the mode resolver (or its explicit absence)
+  // cannot be dropped by a single branch (#11591).
+  const resolveAuthMode = "resolveAuthMode" in opts ? opts.resolveAuthMode : undefined;
+  // `delegationWorkspaceId` rides with an active delegation only (#11594): the cross-owner api-key skip requires the
+  // conversation binding's workspace to equal the workspace the delegation was resolved in.
+  const run = (keyOwnerUserId: string, delegationId?: string, delegationWorkspaceId?: string): Promise<T> =>
+    runWithByokLease(
+      { workspaceContextUserId, keyOwnerUserId, delegationId, delegationWorkspaceId, resolveAuthMode },
+      fn,
+    );
+
   const supabase = createServiceClient();
 
   // Derive the member's ACTIVE workspace — the shared workspace an owner
@@ -162,19 +185,13 @@ export async function resolveKeyOwnerThenLease<T>(
     workspaceId = await resolveCurrentWorkspaceId(workspaceContextUserId, supabase);
   } catch (err) {
     log.warn({ err, workspaceContextUserId }, "byok-resolver: workspace lookup failed; falling back to direct lease");
-    return runWithByokLease(
-      { workspaceContextUserId, keyOwnerUserId: callerUserId },
-      fn,
-    );
+    return run(callerUserId);
   }
 
   const orgId = await resolveOrgIdForWorkspace(workspaceId);
   const identity: Identity = { userId: callerUserId, role: "prd", orgId, email: null, subscriptionStatus: null };
   if (!(await isByokDelegationsEnabled(orgId, identity))) {
-    return runWithByokLease(
-      { workspaceContextUserId, keyOwnerUserId: callerUserId },
-      fn,
-    );
+    return run(callerUserId);
   }
 
   // Flag fully on for this org. Consult the SQL resolver.
@@ -190,30 +207,18 @@ export async function resolveKeyOwnerThenLease<T>(
       { err: error, callerUserId, workspaceId },
       "byok-resolver: resolve_byok_key_owner failed; falling back to direct lease",
     );
-    return runWithByokLease(
-      { workspaceContextUserId, keyOwnerUserId: callerUserId },
-      fn,
-    );
+    return run(callerUserId);
   }
 
   if (!data) {
     // No own-key AND no active delegation. The lease body will raise
     // `MissingByokKeyError` when getApiKey() is invoked, which is the
     // desired fail-closed UX.
-    return runWithByokLease(
-      { workspaceContextUserId, keyOwnerUserId: callerUserId },
-      fn,
-    );
+    return run(callerUserId);
   }
 
-  return runWithByokLease(
-    {
-      workspaceContextUserId,
-      keyOwnerUserId: data.key_owner_user_id,
-      delegationId: data.delegation_id ?? undefined,
-    },
-    fn,
-  );
+  const delegationId = data.delegation_id ?? undefined;
+  return run(data.key_owner_user_id, delegationId, delegationId !== undefined ? workspaceId : undefined);
 }
 
 // ─── Effective-key gate (feat-skip-api-key-onboarding #4642) ──────────

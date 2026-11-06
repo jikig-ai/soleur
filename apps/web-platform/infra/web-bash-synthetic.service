@@ -2,6 +2,18 @@
 Description=Runtime Bash synthetic: one real wrapped Bash call in the running web container (web host, #10455 b)
 After=network-online.target docker.service
 Wants=network-online.target
+# SKIP-VS-FAIL (#10078, the #9962/#9939 pattern): /etc/default/web-bash-synthetic is
+# written by web-probe-envwrite.sh, a `|| true`-tolerated late-runcmd write, and the
+# 15min timer is armed unconditionally — an absent file must SKIP this start (one
+# "skipped, unmet condition check" notice per fire), never FAIL it into an
+# every-15min journal storm. The EnvironmentFile= line stays unprefixed: once a
+# start IS attempted, an absent file still fails the unit — the fail-closed
+# contract is retained. The condition re-evaluates on every timer fire, so the
+# synthetic self-heals when the file appears. The detectors that do NOT share this
+# gated dependency: the `soleur-boot-emit web_probe_envwrite fatal` boot row on a
+# writer failure, and the missing betteruptime_heartbeat.web_bash_synthetic beat —
+# a skipped run pings nothing.
+ConditionPathExists=/etc/default/web-bash-synthetic
 
 [Service]
 Type=oneshot

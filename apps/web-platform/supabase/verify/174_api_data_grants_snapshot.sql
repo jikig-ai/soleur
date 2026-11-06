@@ -122,9 +122,9 @@ SELECT 'grants_message_attachments_authenticated' AS check_name, count(*)::int A
 UNION ALL
 SELECT 'grants_message_attachments_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."message_attachments"',v.verb)
 UNION ALL
-SELECT 'grants_messages_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('anon','public."messages"',v.verb)
+SELECT 'grants_messages_anon' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE')) v(verb) WHERE NOT has_table_privilege('anon','public."messages"',v.verb)
 UNION ALL
-SELECT 'grants_messages_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."messages"',v.verb)
+SELECT 'grants_messages_authenticated' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE')) v(verb) WHERE NOT has_table_privilege('authenticated','public."messages"',v.verb)
 UNION ALL
 SELECT 'grants_messages_service_role' AS check_name, count(*)::int AS bad FROM (VALUES ('DELETE'),('INSERT'),('MAINTAIN'),('REFERENCES'),('SELECT'),('TRIGGER'),('TRUNCATE'),('UPDATE')) v(verb) WHERE NOT has_table_privilege('service_role','public."messages"',v.verb)
 UNION ALL

@@ -42,7 +42,9 @@ describe("runLikeInngest — step-boundary facts", () => {
     const caught = out.value!.caught as Error & { leaseAgeMs?: number };
     expect(caught).toBeInstanceOf(StepError);
     expect(caught).not.toBeInstanceOf(ProbeCustomError);
-    expect(caught.name).toBe("Error");
+    // inngest@4: the rebuilt StepError preserves the thrown error's `name`
+    // (v3 flattened it to "Error") — still not the original class.
+    expect(caught.name).toBe("ProbeCustomError");
     expect(caught.leaseAgeMs).toBeUndefined();
     expect(caught.message).toBe("[probe] deploy in progress (lease age 1234ms)");
   });

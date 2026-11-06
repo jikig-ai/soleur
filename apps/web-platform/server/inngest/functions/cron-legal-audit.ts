@@ -310,7 +310,7 @@ export async function cronLegalAuditHandler({
           feature: "cron-legal-audit",
           op: "claude-eval-fatal",
           message:
-            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red",
+            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red (destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-legal-audit", ...decision.sentryExtra },
         },
       );
@@ -325,7 +325,7 @@ export async function cronLegalAuditHandler({
           feature: "cron-legal-audit",
           op: "claude-eval-nonzero-noop",
           message:
-            "claude-eval exited non-zero (benign best-effort); cron monitor stays green (liveness, not success)",
+            "claude-eval exited non-zero (benign best-effort); cron monitor stays green (liveness, not success; destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-legal-audit", ...decision.sentryExtra },
         },
       );
@@ -373,10 +373,10 @@ export const cronLegalAudit = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 11 1 1,4,7,10 *" },
+      { event: "cron/legal-audit.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 11 1 1,4,7,10 *" },
-    { event: "cron/legal-audit.manual-trigger" },
-  ],
-  cronLegalAuditHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronLegalAuditHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

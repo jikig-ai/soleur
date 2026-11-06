@@ -76,6 +76,7 @@ template rather than shipping the monolith.
 | `prod-write-defer-gate.sh` | soleur-coupled | Soleur prod-write surface definitions. |
 | `rule-incident-marker-capture.sh` | soleur-coupled | Soleur rule-incident marker capture. |
 | `session-rules-loader.sh` | soleur-coupled | Loads `AGENTS.rules.md` — the Soleur rule corpus itself. |
+| `ship-cmo-content-gate.sh` | soleur-coupled | `soleur:ship` CMO content-opportunity gate. |
 | `ship-kb-archive-gate.sh` | soleur-coupled | `soleur:ship` KB-archive gate. |
 | `ship-net-issue-flow-gate.sh` | soleur-coupled | ship flow. |
 | `ship-operator-step-gate.sh` | soleur-coupled | ship flow. |
@@ -111,8 +112,9 @@ template rather than shipping the monolith.
 | `lint-feature-map-coverage.sh` | soleur-coupled | `apps/web-platform/app/**` page set + `feature-map.md`. |
 | `lint-followthrough-varq-ban.sh` | soleur-coupled | Soleur probe-set/varq conventions. |
 | `lint-gh-argv-arg.py` | generic | Repo-wide `gh` argv vs jq-flag-token lint over workflows + `*.sh`; no Soleur coupling. |
+| `lint-gh-dedupe-shape.py` | generic | Repo-wide `gh issue|pr list/search` capture-shape census over `.github/workflows/` — typed `dedupe:` markers (fail-closed/benign), vacuous-arm + condition-list detection; workflow-only producer, no Soleur coupling. |
 | `lint-guard-contract.py` | soleur-coupled | Soleur plan/SKILL.md guard-contract shape (deepen-plan §4.11). |
-| `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store and its one allowlisted `op=backup` read. |
+| `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store. Zero-tolerance — #9755 retired the `op=backup` allowlist entry. |
 | `lint-infra-no-human-steps.py` | soleur-coupled | `hr-no-ssh-fallback-in-runbooks` on `knowledge-base` docs. |
 | `lint-inngest-step-boundary.py` | soleur-coupled | `apps/web-platform/server/inngest/functions/` step-boundary error-identity census + named allowlist. |
 | `lint-integration-env-gates.sh` | soleur-coupled | `apps/web-platform/{test,lib}` env-gate wiring + `scheduled-integration-suites.yml`. |

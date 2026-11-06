@@ -117,6 +117,12 @@ case "$-" in
     ;;
 esac
 
+# Count --agents-expected from the panel THIS diff's class prescribes AFTER the
+# skill's own substitutions (the structural-enumeration seat replaces one
+# adversarial seat; shellcheck replaces semgrep on a bash-only diff), not from
+# every seat considered. An over-count commits `Reviewed-Coverage: degraded`;
+# the fix is a `git reset --soft` of the unpushed empty commits and a re-emit.
+# Why: #11286 — expected 11 for a 9-seat panel.
 usage() {
   cat <<'EOF'
 Usage: emit-review-trailer.sh [--findings <n>] [--summary <text>]

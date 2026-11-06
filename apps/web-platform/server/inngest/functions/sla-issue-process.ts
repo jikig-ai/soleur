@@ -350,7 +350,7 @@ export const slaIssueProcess = inngest.createFunction(
     id: "sla-issue-process",
     concurrency: [{ scope: "fn", limit: 3 }],
     retries: 1,
+    triggers: { event: PROCESS_ISSUE_EVENT },
   },
-  { event: PROCESS_ISSUE_EVENT },
-  slaIssueProcessHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  slaIssueProcessHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

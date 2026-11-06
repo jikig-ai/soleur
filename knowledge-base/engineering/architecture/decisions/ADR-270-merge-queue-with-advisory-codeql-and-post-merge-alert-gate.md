@@ -218,7 +218,7 @@ Adopt option A, as declarative IaC in `infra/github/ruleset-ci-required.tf`:
 | `min_entries_to_merge` | `1` | Merge a green candidate immediately. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation (the point of the queue) with bounded runner contention: each entry runs all 25 contexts, so three parallel builds is about 3x the jobs. Raise to 3 only after the canary shows contention is not binding. |
-| `check_response_timeout_minutes` | `75` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. Raised from 60 to 75 on 2026-10-11 after canary item 5 measured a 60.5-minute success (see "Addendum 2026-10-11"). The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
+| `check_response_timeout_minutes` | `120` | Must exceed the slowest required check on `merge_group` including runner start spread: PR wall-clock max 32.8 min plus ADR-032's 2026-09-14 measurement of a 28-minute (1708 s) maximum start spread on a drained group puts spread plus critical path near 43 min. The earlier value (15) was sized on an 8-minute critical path; an under-set value dequeues a green PR and re-creates the starvation. Raised from 60 to 75 on 2026-10-11 after canary item 5 measured a 60.5-minute success (see "Addendum 2026-10-11"). Raised again from 75 to 120 on 2026-11-03 (see "Addendum 2026-11-03"). The stall probe threshold is 45 minutes, below this, so a stuck entry can be reported before the queue ejects it silently (best-effort: see "Stall probe"). |
 
 The values equal the `.tf`, the DR skeleton and the `infra/github/README.md`
 table; the parity gate in `tests/scripts/test-audit-ruleset-bypass.sh` (successor
@@ -276,7 +276,7 @@ fire `push` workflows); queue merges are not token pushes, and canary 6 checks i
 `merge-queue-stall-check.yml` files `merge-queue stall: PR #N` (labels
 `merge-queue-stall` and `action-required`, with agent-runnable `gh api graphql` and
 `gh run list --event merge_group` commands in the body) for a queue entry pending
-past 45 minutes, below the 75-minute timeout. It ages only entries at
+past 45 minutes, below the 120-minute timeout. It ages only entries at
 `position <= max_entries_to_build` (2), because an entry deeper in a healthy drain
 waits its turn and can pass 45 minutes from `enqueuedAt` without being stalled
 (`position` being 1-based is assumed, not yet observed on a live entry; if it is
@@ -285,7 +285,7 @@ latency is the threshold plus the schedule delivery delay, and GitHub `schedule:
 delivery on this repository is degraded: the sibling `*/15` workflow
 `scheduled-inngest-health.yml` measured a median gap of about 275 min (n=59 fires,
 max about 479) and `scheduled-actions-queue-health.yml` (`*/30`) gaps of 2.7 to 6 h.
-Against the 30-minute window between threshold and timeout the probe will often miss a
+Against the window between threshold and timeout (30 minutes when written, 75 since the 2026-11-03 raise to 120) the probe will often miss a
 stuck entry, so no issue is not proof of a healthy queue; it is best-effort. A filed
 issue is a SUSPECTED stall that needs verification, not a confirmed one: the age counts
 from `enqueuedAt`, so an entry promoted to position 1 or 2 after waiting behind others,
@@ -594,7 +594,7 @@ order.
    fence sync pushes per merged PR (before and after the queue).
 10. Measure the `schedule`-event gap of `merge-queue-stall-check.yml`
     (`gh run list --workflow merge-queue-stall-check.yml --event schedule`) against
-    the 30-minute window between the 45-minute threshold and the 75-minute timeout;
+    the 75-minute window between the 45-minute threshold and the 120-minute timeout;
     a wider median gap makes Follow-up (a) the next change (Follow-up (a) landed; the
     dispatched-run spacing and runner-start latency are measured on #9482 after merge).
 
@@ -682,6 +682,28 @@ a fresh build. The stall probe threshold stays 45 minutes, so the window between
 to 30 minutes. The Parameters row, the "Stall probe" section and canary item 10 state the new value; dated records
 above (Canary results of 2026-10-04, item 5's measurement text, the 2026-10-09 amendment quotation) are left as
 written. Raise again if a success approaches 75. The live value is verified after the apply on #9454.
+
+### Addendum 2026-11-03 (#12030): `check_response_timeout_minutes` 75 to 120
+
+On 2026-11-03 one PR was ejected from the queue twice. The first ejection (`failed_checks`) was an unrelated 5-minute
+`actions/checkout` hang in the `tenant-integration-required` aggregator. The second (`checks_timed_out`) was runner
+starvation: the entry joined the queue at 20:09:01Z and was removed at 21:28:29Z, 79 minutes later, while its
+`merge_group` CI run was still waiting on runners. Its `test-scripts` shards queued 10-28 minutes before starting and
+the aggregate `test` job queued another 17 minutes; the aggregate began 7 seconds after the removal and went green.
+At 21:32Z the repository sat at 60 jobs running and 222 queued across 77 active runs, consistent with a 60
+concurrent-job cap that I recall for the Team plan and did not verify against the plan documentation. Passing
+`merge_group` CI runs that afternoon took 43-55 minutes, so 75 had no margin once runner wait added more than about 20
+minutes.
+
+Decision: raise the value to 120 in the same Terraform root as a stopgap; the operator asked for it in session on
+2026-11-03. This is not sized by the "longest observed success plus about 15 minutes" rule of the 2026-10-11 addendum,
+because the longest observation (79 minutes) is a removal, not a success. Cost of the choice: a hung entry now holds the
+queue up to 45 minutes longer than at 75, and the entry behind it is rebuilt after the ejection. The stall probe
+threshold stays 45 minutes, so the window between threshold and timeout widens from 30 to 75 minutes. The Parameters
+row, the "Stall probe" section and canary item 10 state the new value; dated records above are left as written. The
+demand side (the concurrency cap, per-run job fan-out, cancelled-run waste, `merge_group` rebuilds) is tracked in #12030
+and may make a smaller value correct again. The live value is verified after the apply.
+Re-verified 2026-11-04: Team = 60 concurrent jobs on standard runners (<https://docs.github.com/en/actions/reference/limits>); this supersedes the unverified recall above.
 
 ### Addendum 2026-10-20 (#9869, #9868): `--step` and the pre-merge hook refuse an armed BEHIND PR on a merge-queue repo
 
@@ -978,3 +1000,179 @@ the heading "Canary measurements (flip `adopting` to `accepted` when these hold)
 `adopting` until one clean pass" are superseded by this amendment, not rewritten.
 The pending measurements keep being recorded on #9454 as each completes; a measured failure of item 1 (the admin
 bypass) still triggers the rollback recipe above regardless of this status.
+
+### Addendum 2026-10-31 (#11678): `max_entries_to_merge` 1→3 + the queue-jump path
+
+**What changed.** `max_entries_to_merge` raised 1→3 under the Raise checklist above,
+in the same PR that lands `scripts/merge-queue-jump.sh` (a deliberate queue-jump
+path via GraphQL `enqueuePullRequest(jump: true)`).
+
+**Mechanism semantics (verified against GitHub docs, not assumed).** Merge limits
+batch merge *landings*, not `merge_group` *builds* — GitHub documents "Merge limits
+do not combine merge_group builds." Under ALLGREEN every queued position still pays
+its own cumulative candidate build, so the raise amortizes merge boundaries and
+post-merge work (push CI / deploy / alert-gate per group), not per-PR build wait
+(`max_entries_to_build = 2`, unchanged, is the build-concurrency knob and stays a
+canary-gated separate lever).
+
+**Enumeration design (Raise checklist item 1).** The CLA synthetic's verifier
+(`scripts/merge-queue-cla-verify.sh`) no longer trusts the single `pr-<N>` in
+`merge_group.head_ref` — that names only the deepest member. Members are the
+queue entries at `position <=` the entry whose `headCommit.oid == HEAD_SHA`
+(the headCommit binding anchors which entry owns this candidate; positions-≤
+the named PR's entry is the documented fallback). Fail-closed invariants:
+pagination must be fully consumed (`first:100`, `hasNextPage` dies), the member
+set must be non-empty, and the named PR must appear and be maximal (a
+non-deepest naming would silently skip the tail — the under-enumeration hole).
+Each member's own `headRefOid` (the entry's recorded queued head — a pushed PR
+would have been dequeued) must carry completed/success `cla-check` +
+`cla-evidence` from app 15368. Backward compatibility: singleton groups verify
+identically, so the verifier greens during the merge→apply window while the
+live value is still 1.
+
+**Guard changes.** Guard-2's safety pin became a sanctioned-set check `{1,3}`
+(the adoption window: a value-only 1↔3 PR needs no guard edit; removing `1`
+from the set is a separate deliberate act after soak). T-mq-1.m9 now mutates to
+an *unsanctioned* value. A grouped-shape fixture row (Q9) pins that a deeper
+member's `merge_group` run is judged on its own delta (`HEAD^1` = the shallower
+member's candidate), and the five `pr-<N>-` triage sites carry the grouped-ref
+caveat (member lookups correlate by `headSha`/`createdAt` when the
+`startswith("…/pr-<N>-")` select is empty).
+
+**Timeout re-derivation (checklist item 3).** `check_response_timeout_minutes`
+stays 75: the clock is per-candidate-build, not per-queue-dwell — a member's
+candidate build is dispatched at its position like a singleton's, and the
+measured bound (p95 44.1, longest success 60.5, canary item 5) is unchanged by
+grouping. Recorded keep-75 justification (the value later moved to 120, see "Addendum 2026-11-03"); if the canary shows the ejection
+clock counting from enqueue rather than build dispatch, re-derive before any
+further raise.
+
+**Open measurements for the canary** (agent-run, no SSH; record-as-observed):
+grouped `merge_group.head_ref` shape and which member `pr-<N>` names; whether
+in-flight group members stay listed in `mergeQueue.entries` while building;
+ALLGREEN bisection-vs-group-atomic ejection (the 0.85^N sizing assumes
+group-atomic); per-PR squash commit shape and push-event count per group
+(ADR-276 dedupe interaction); `headCommit.oid == HEAD_SHA` correlation on a
+real group.
+
+**Queue-jump path.** `scripts/merge-queue-jump.sh` is a deliberate operator
+act (`--reason` attribution comment, `--yes` on non-TTY, `expectedHeadOid`
+re-pinned after confirmation, distinct jumped-but-unattributed exit code),
+runbook at `knowledge-base/engineering/operations/runbooks/merge-queue-jump.md`.
+A jump keeps the integrated merge-queue checks (unlike `--admin`), rebuilds
+every in-flight entry, and — because it renumbers positions mid-verify — is
+the reason the enumeration binds by `headCommit` rather than by name alone.
+Rollback note: a queue-OFF arm remains the kill switch (the tf comment's
+block-removal recipe); a value-only 3→1 rollback is green by the {1,3}
+sanctioned set.
+
+### Addendum 2026-11-01 (#11678, #11768): grouped-landing canary — ejection stopped, `members=3` observed
+
+**What was observed.** The first live grouped candidate builds ran on
+2026-11-01 after the #11753 hotfix (01:55Z). Nine consecutive
+`merge-queue-cla-synthetics.yml` runs succeeded post-hotfix — every
+`tampered pairing is refused` rejection ends at 01:45Z, pre-hotfix. One run
+logged `members=3` (`41269037117`, 03:24Z), six logged `members=2`
+(`41264507975`, `41268398857`, `41270354718`, `41271524552`, `41273043596`,
+`41277558939`), and two logged `members=1` (`41263787987`, `41277321658`).
+Grouping applied to the candidate build, not the landing: the members=3
+group dissolved before landing and its members merged individually
+(03:44Z / 04:02Z / 05:03Z, composition drifting between reads —
+`min_entries_to_merge` unraised, so no member waits for its group).
+
+**Grouped `merge_group.head_ref` shape and which member `pr-<N>` names.**
+Every grouped candidate's head_ref is
+`gh-readonly-queue/main/pr-<deepest>-<embedded-oid>` where `pr-<deepest>` names
+the deepest member of the group — `pr-11756` for the members=3 group
+(`merge-queue-cla-verify=OK members=3 anchor=headCommit
+embedded=0e8a6ebb0242538b67953fd44f72a89fab715012 pr11734@b073c17123
+pr11728@263f0dd5b2 pr11756@3fd3d716d4` —
+`gh-readonly-queue/main/pr-11756-0e8a6ebb0242538b67953fd44f72a89fab715012`),
+`pr-11763` for the `pr11691@… pr11763@…` pair (run `41277558939`). The
+embedded oid is the
+queue-minted precomputed squash of the group's shallowest member
+(`0e8a6ebb02…` equals #11734's landing squash, minted before that landing
+ran) — on every observed run it names the base the deeper candidates build
+on, not the group's tip — and it is provenance, exactly the #11753
+semantics: the binding stayed `anchor=headCommit` on every observed run.
+
+**In-flight member listing.** `mergeQueue.entries` listed every in-flight
+member while the group built: the members=3 run enumerated
+`pr11734@b073c17123 pr11728@263f0dd5b2 pr11756@3fd3d716d4` from the live queue
+read, so member enumeration holds under grouping.
+
+**Per-member squash commit shape and push-event count.** Each member landed
+as its own single squash commit on `main` — `0e8a6ebb02` (#11734),
+`95231bda1b` (#11756), `4366c47940` (#11728) — and each produced its own
+`codeql-main-alert-gate.yml` push run (03:44Z, 04:02Z, 05:03Z respectively):
+push-event count per group is N, one per member landing, so the ADR-276
+alert-gate dedupe sees per-member events rather than one group event.
+
+**`headCommit.oid == HEAD_SHA` correlation.** Held on a real group — the
+`anchor=headCommit` marker verified on every post-hotfix run while the
+minted ref-embedded oid diverged from `HEAD_SHA` on rebuilt and multi-member
+candidates exactly as the hotfix predicted. No entry was bound by the
+embedded value.
+
+**ALLGREEN bisection-vs-group-atomic ejection.** Still unobserved — no
+post-hotfix ejection exists to discriminate the 0.85^N sizing assumption.
+Recorded open.
+
+**Residual.** #11688 was ejected pre-hotfix (`failed_checks` at 01:14Z) and
+has not re-entered the queue at write time: `isInMergeQueue=false`,
+auto-merge disarmed, `mergeStateStatus` `DIRTY`. Re-arm is the PR owner's
+action (owners were notified on #11688); its only failing check is the
+advisory `affected-index-ratchet` (the drift this PR files). #11739 and
+#11734 re-armed and landed: mergedAt 03:24Z (squash `4393472919`) and 03:44Z
+(squash `0e8a6ebb02`).
+
+### Addendum 2026-11-03: follower detection-only contract partially superseded by ADR-318
+
+The 2026-10-23 addendum records the apply-delivery-gap follower as "detection only — applies nothing, dispatches nothing". ADR-318 adds a bounded redrive arm: a `redrive` job holding `actions: write` may re-dispatch `apply-deploy-pipeline-fix.yml --ref main` when every deploy-fix gap row is `evicted-before-start` and nothing is in flight. `cancelled-mid-run` stays human-only; the `infra` key stays manual. The `follow` job and this ADR's merge-queue/advisory-gate decisions are unchanged.
+
+### Addendum 2026-11-04 (#12065, #12066): one filer, two triggers — the daily sweep now runs the gate script
+
+The daily `codeql-to-issues.yml` `check-alerts` job is no longer a second
+filer with its own inline `gh`/`jq` body. It is a second **trigger** of
+`scripts/codeql-main-alert-gate.sh`: the job is a pinned-SHA sparse checkout
+of the script plus one `run:` step, invoked with `SWEEP=true`. The
+convergence design, the degraded-signal subsumption, and the rejected
+alternatives are the CTO ruling on issue #12004 (comment 6625921398,
+2026-11-04).
+
+**Sweep mode.** `SWEEP=true` makes `SHA` optional: when empty the script
+resolves main HEAD itself (`repos/{repo}/commits/main`, one bounded
+`fetch_page` call, the 40-hex re-validated, failure degrades `api-error`)
+and skips phases 1–2 — there is no pushed commit to wait on, so the
+check-run and analyses-settle waits do not apply. Phase 3 is byte-identical
+in both modes: ref-scoped open critical/high alert read, bot-authored
+`sec: CodeQL alert #N` dedupe, `LABELS_P1` tracker filing. Sweep-filed
+trackers therefore carry the same `type/security` + `priority/p1-high` +
+`action-required` set as push-filed ones and the two modes still cannot
+double-file. The `check-alerts` run carries `DEADLINE_SECONDS=240` under
+`timeout-minutes: 10` and a `dry_run` dispatch input mirrored to `DRY_RUN`;
+`permissions` gained `contents: read` for the checkout.
+
+**The `|| true` residual is retired.** The accepted-residual line above —
+the cron "swallows API errors with `|| true` today, Follow-up (b)" — no
+longer holds. The inline body that swallowed them is deleted; a failed read
+in sweep mode degrades through the same `degrade` machinery as push mode
+and upserts a durable page. The difference between the two triggers is now
+exactly the degraded-issue title, not the failure semantics.
+
+**Two degraded titles.** `upsert_degraded` is mode-aware: push mode upserts
+`codeql-gate-degraded` as before; sweep mode upserts `codeql-sweep-degraded`
+— same `LABELS_P2` (`meta/machinery`, `type/security`, `priority/p2-medium`,
+`action-required`), same upsert-and-comment dedupe, body naming the
+scheduled sweep rather than a push. A red scheduled run now pages the same
+way a red push run does; neither title masks the other's signal.
+
+**`fixed`-state reaper.** `close-orphans` previously reaped a tracker only
+when every referenced alert was `dismissed`; GitHub marks remediated alerts
+`fixed` (the `state` enum is `open|dismissed|fixed`), so fixed-alert
+trackers accumulated as permanently open `type/security` issues and
+inflated the 200-row `--limit` dedupe population both triggers read. The
+predicate now accepts `dismissed` or `fixed` per referenced alert, the
+close comment reads "dismissed or fixed", and the recorded per-alert reason
+carries the actual state. `keep-open` and lookup-failure still keep the
+tracker open.

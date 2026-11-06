@@ -500,7 +500,10 @@ else
 fi
 
 # Mutation rows drive the ORACLE with edited inputs.
-_first=$(cd "$REPO_ROOT" && python3 - "$ROWS" "$TESTROOT/refs.tsv" "$ORACLE" <<'PY'
+_flagged_files="$TESTROOT/flagged-files.txt"
+( cd "$REPO_ROOT" && python3 "$ORACLE" check "$ROWS" "$CMDS" /dev/null 2>/dev/null \
+  | grep -F 'VIOLATION' | cut -f2 | sort -u > "$_flagged_files" ) || true
+_first=$(cd "$REPO_ROOT" && python3 - "$ROWS" "$TESTROOT/refs.tsv" "$ORACLE" "$_flagged_files" <<'PY'
 import sys, importlib.util
 spec = importlib.util.spec_from_file_location("o", sys.argv[3]); o = importlib.util.module_from_spec(spec); spec.loader.exec_module(o)
 rows = o.load_rows(sys.argv[1])
@@ -508,12 +511,21 @@ refs = {}
 for line in open(sys.argv[2]):
     _, label, p = line.rstrip("\n").split("\t")
     refs.setdefault(label, set()).add(p)
+flagged = {l.rstrip("\n") for l in open(sys.argv[4]) if l.strip()}
 # A suite whose EVERY reference is covered and that carries a knowledge-base edge: removing
-# that edge must be the only thing that makes the oracle flag it.
+# that edge must be the only thing that makes the oracle flag it. refs coverage is necessary
+# but not sufficient — a suite whose corpus already contains flagged files (baselined or
+# argv-code violations) is not a clean mutation subject, so skip it.
 for label in sorted(refs):
+    prefix = label + "/"
+    if any(f == label or f.startswith(prefix) for f in flagged):
+        continue
     cls, edges = rows.get(label, ("", []))
-    if cls.startswith("edge:") and any("knowledge-base" in e for e in edges) \
-       and all(any(o.covers(e, p) for e in edges) for p in refs[label]):
+    kb = [e for e in edges if "knowledge-base" in e]
+    other = [e for e in edges if "knowledge-base" not in e]
+    if cls.startswith("edge:") and kb \
+       and all(any(o.covers(e, p) for e in edges) for p in refs[label]) \
+       and any(not any(o.covers(e, p) for e in other) for p in refs[label]):
         print(label); break
 PY
 )

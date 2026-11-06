@@ -115,6 +115,13 @@ vi.mock("@/server/logger", () => ({
     error: vi.fn(),
   }),
 }));
+// #11591: startAgentSession now leases with a binding-backed auth-mode resolver. This suite pins tool
+// registration and the system prompt, not credential selection (driven through the real lease in
+// byok-lease-auth-mode-binding.test.ts), so the resolver is pinned to the managed path.
+vi.mock("@/server/engine-binding-auth-mode", () => ({
+  makeConversationAuthModeResolver: vi.fn(() => async () => "managed"),
+  readConversationBindingAuthMode: async () => null,
+}));
 vi.mock("@/server/byok", () => ({
   decryptKey: vi.fn(() => Buffer.from("sk-test-key", "utf8")),
   decryptKeyLegacy: vi.fn(() => Buffer.from("sk-test-key", "utf8")),
@@ -301,6 +308,17 @@ describe("buildEmailTriageTools", () => {
     // set_status tool ever ships (a prompt-injected ack unpins a statutory clock).
     for (const name of names) {
       expect(name).not.toMatch(/set_status|acknowledge|archive|triage_update/);
+    }
+  });
+
+  test("email_send / email_reply cap the body at 4000 and the subject at 200 (the review card shows the whole send)", async () => {
+    const tools = (await buildTools()) as unknown as Array<{ name: string; schema: Record<string, { safeParse: (v: unknown) => { success: boolean } }> }>;
+    for (const name of ["email_send", "email_reply"]) {
+      const schema = tools.find((t) => t.name === name)!.schema;
+      expect(schema.body.safeParse("b".repeat(4000)).success).toBe(true);
+      expect(schema.body.safeParse("b".repeat(4001)).success).toBe(false);
+      expect(schema.subject.safeParse("s".repeat(200)).success).toBe(true);
+      expect(schema.subject.safeParse("s".repeat(201)).success).toBe(false);
     }
   });
 
@@ -565,7 +583,9 @@ describe("registration + tiering (AC11)", () => {
       };
     }
 
-    test("registers the read tools + three gated write tools in allowedTools (#5325)", async () => {
+    // #11303: the three outbound write tools are gated, so they must NOT be pre-approved via allowedTools (the SDK would
+    // run them before canUseTool and the review card would never appear); only the read tools are.
+    test("pre-approves the two read tools; the three gated write tools are absent from allowedTools (#5325, #11303)", async () => {
       const options = await bootSession();
       const emailTools = options.allowedTools.filter(
         (t) =>
@@ -575,9 +595,6 @@ describe("registration + tiering (AC11)", () => {
           t.includes("email_suppress"),
       );
       expect([...emailTools].sort()).toEqual([
-        "mcp__soleur_platform__email_reply",
-        "mcp__soleur_platform__email_send",
-        "mcp__soleur_platform__email_suppress",
         "mcp__soleur_platform__email_triage_get",
         "mcp__soleur_platform__email_triage_list",
       ]);

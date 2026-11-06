@@ -163,16 +163,27 @@ export interface BuilderTail {
   terminated: boolean;
 }
 
-/** `[--dev /dev] [--unshare-pid] [--unshare-user ...caps] then the two exclusive proc branches. */
+/**
+ * `[--dev /dev] [--unshare-pid] [--unshare-user ...caps] then the two exclusive proc branches, then
+ * `--unsetenv <var>` and the conditional `--disable-userns` (claude-code 2.1.311 / SDK 0.3.311). Both new calls sit AFTER
+ * the proc branch: the mask is still the last mount the builder emits. `--unsetenv` takes an identifier (opaque);
+ * `--disable-userns` is pushed only when no seccomp helper is in use AND nested user namespaces are not allowed AND the
+ * bubblewrap it probes supports it (>= 0.8.0, not setuid). Measured 2026-11-04: ABSENT from the production-image capture and
+ * from a live spawn through our shim, present in the builder, so a spawn may legitimately omit it (see `normalizeSpawnTail`).
+ */
 export const EXPECTED_TAIL_CALLS: readonly TailCall[] = [
   { args: ["--dev", "/dev"], opaque: false },
   { args: ["--unshare-pid"], opaque: false },
   { args: ["--unshare-user"], opaque: true },
   { args: ["--proc", "/proc"], opaque: false },
   { args: ["--bind", "/proc", "/proc"], opaque: false },
+  { args: ["--unsetenv"], opaque: true },
+  { args: ["--disable-userns"], opaque: false },
 ];
 
 export const CAP_SEGMENT = "<CAP_SEGMENT>";
+/** Stands for the env var name the builder passes to `--unsetenv` (an identifier in the binary, a literal in a spawn). */
+export const UNSETENV_VAR = "<UNSETENV_VAR>";
 
 function parseCalls(win: string): { calls: TailCall[]; terminated: boolean } {
   const calls: TailCall[] = [];
@@ -272,13 +283,47 @@ export function builderTailTokens(tail: BuilderTail, branch: "proc" | "bind"): s
       if (branch === "proc" ? !isProcBranch(c) : !isBindBranch(c)) return;
     }
     out.push(...c.args);
-    if (c.opaque) out.push(CAP_SEGMENT);
+    if (c.opaque) out.push(c.args[0] === "--unsetenv" ? UNSETENV_VAR : CAP_SEGMENT);
   });
   return out;
 }
 
 // ---------------------------------------------------------------------------------------------
 // Cap segment + spawn-tail normalization.
+
+/** Normalizes a spawn or builder tail for comparison: cap segment first, then the trailing flags. */
+export function normalizeSpawnTail(tokens: readonly string[]): string[] {
+  return normalizeTrailingFlags(normalizeCapSegment(tokens));
+}
+
+/**
+ * The two flags the builder appends AFTER the proc branch. `--unsetenv <var>`: the name is an identifier in the binary
+ * and a literal in a spawn, so both sides collapse to one marker AFTER checking it is a plausible env var name (an
+ * `--unsetenv` with no operand, or one that swallowed a flag, is `UNSETENV_SHAPE`). `--disable-userns` is host-conditional
+ * (see EXPECTED_TAIL_CALLS), so it is dropped from BOTH sides before comparison; its presence and position in the builder
+ * are pinned by `EXPECTED_TAIL_CALLS`. Dropping it hides a MOUNT from nothing (whatever follows it is still compared), but it
+ * does hide the flag itself: the builder emits it only when no seccomp helper is used, enableWeakerNestedSandbox is off and
+ * bwrap lists it, which our production config never reaches, and on the production bwrap 0.8.0 it is the flag recorded as
+ * breaking. The production-config live spawn therefore asserts its ABSENCE separately (sandbox-proc-mask-runtime.test.ts).
+ */
+function normalizeTrailingFlags(tokens: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    if (t === "--disable-userns") continue;
+    if (t === "--unsetenv") {
+      const v = tokens[i + 1];
+      if (v !== UNSETENV_VAR && !(typeof v === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(v))) {
+        throw new Error(`UNSETENV_SHAPE: --unsetenv must be followed by one environment variable name, got ${JSON.stringify(v)} in: ${tokens.join(" ")}`);
+      }
+      out.push(t, UNSETENV_VAR);
+      i += 1;
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
 
 /**
  * Collapses the cap segment (the run of `--cap-drop` / `--cap-add` pairs right after `--unshare-user`)
@@ -287,7 +332,7 @@ export function builderTailTokens(tail: BuilderTail, branch: "proc" | "bind"): s
  * normalization that ignored the segment would let `--cap-add CAP_SYS_ADMIN` through, so anything
  * that is not exactly {one `--cap-drop ALL`, zero or more `--cap-add CAP_SETFCAP`} is `CAP_BARRIER`.
  */
-export function normalizeSpawnTail(tokens: readonly string[]): string[] {
+function normalizeCapSegment(tokens: readonly string[]): string[] {
   if (tokens.includes(CAP_SEGMENT)) return [...tokens];
   const u = tokens.indexOf("--unshare-user");
   if (u < 0) {
@@ -378,8 +423,23 @@ export interface LiteralPins {
 
 export interface LiteralCensus {
   counts: LiteralPins;
+  /** Mount-table literal counts (see MOUNT_TABLE_NEEDLES), read in the same pass. */
+  mountTable: MountTablePins;
   offsets: Record<string, number[]>;
 }
+
+/**
+ * The pre-`--dev` mount table is built by code the tail parser never reads (an opaque spread), so a new `--tmpfs` / `--bind` /
+ * `--ro-bind` / `--dev-bind` site added there passes every tail pin. These raw literal counts (all callers in the binary, the hook
+ * sandbox and the capability probes included) make such an addition a reviewed re-pin instead of a silent one. Measured, not derived.
+ */
+export const MOUNT_TABLE_NEEDLES = {
+  tmpfs: '"--tmpfs"',
+  bind: '"--bind"',
+  roBind: '"--ro-bind"',
+  devBind: '"--dev-bind"',
+} as const;
+export type MountTablePins = Record<keyof typeof MOUNT_TABLE_NEEDLES, number>;
 
 const CENSUS_NEEDLES = {
   procSites: '"--proc","/proc"',
@@ -396,6 +456,7 @@ const CENSUS_NEEDLES = {
 export function scanLiterals(src: ByteSource, opts: ScanOptions = {}): LiteralCensus {
   const needles: Record<string, Buffer> = {};
   for (const [k, v] of Object.entries(CENSUS_NEEDLES)) needles[k] = Buffer.from(v, "latin1");
+  for (const [k, v] of Object.entries(MOUNT_TABLE_NEEDLES)) needles[`mount:${k}`] = Buffer.from(v, "latin1");
   const offsets = scanNeedles(src, needles, opts);
   const hook = Buffer.from(CENSUS_NEEDLES.hookAnchors, "latin1");
   let hookProcSites = 0;
@@ -417,8 +478,27 @@ export function scanLiterals(src: ByteSource, opts: ScanOptions = {}): LiteralCe
       capAddTotal: c("capAddTotal"),
       hookAnchors: c("hookAnchors"),
     },
+    mountTable: {
+      tmpfs: offsets["mount:tmpfs"].length,
+      bind: offsets["mount:bind"].length,
+      roBind: offsets["mount:roBind"].length,
+      devBind: offsets["mount:devBind"].length,
+    },
     offsets,
   };
+}
+
+/** Throws MOUNT_TABLE_COUNT naming every mount flag whose literal count moved from the pin. */
+export function assertMountTable(census: LiteralCensus, pins: MountTablePins, label: string, context: string): void {
+  const lines = (Object.keys(MOUNT_TABLE_NEEDLES) as (keyof MountTablePins)[])
+    .filter((k) => census.mountTable[k] !== pins[k])
+    .map((k) => `MOUNT_TABLE_COUNT want ${pins[k]} got ${census.mountTable[k]} (${MOUNT_TABLE_NEEDLES[k]} literals)`);
+  if (lines.length === 0) return;
+  throw new Error(
+    `[${label}] (${context}) ${lines.join("; ")}. A mount flag count moved in the vendored binary: inspect the new site ` +
+      "(`/usr/bin/grep -abo -F '<needle>' apps/web-platform/node_modules/@anthropic-ai/{claude-agent-sdk,claude-code}-linux-x64/claude` prints each offset) and decide whether it mounts anything a tenant can read " +
+      "before re-pinning MEASURED_MOUNT_TABLE in apps/web-platform/test/sandbox-vendored-argv-tail.test.ts; a re-pin is a security decision, not a way to turn this green.",
+  );
 }
 
 /** Throws one error listing every deviation, each line starting with its failure code. */
@@ -474,31 +554,46 @@ export const HELPER_SELECTION_NEEDLES: Readonly<Record<string, string>> = Object
   skipLine: "Skipping seccomp filter - allowAllUnixSockets is enabled",
   applyLine: "Applying seccomp filter for Unix socket blocking",
   missingLine: "apply-seccomp binary not available - unix socket blocking disabled",
-  settingsMapping: "sandbox?.network?.allowAllUnixSockets",
+});
+
+/**
+ * The settings -> builder mapping. The pre-0.3.311 optional-chain source form (`sandbox?.network?.allowAllUnixSockets`)
+ * is gone from the bundle: the knob is now read through a settings resolver that can also drop it under a managed policy
+ * (`network.allowAllUnixSockets` in the policy-controlled key list). A minified identifier or an optional chain is NOT a stable
+ * anchor, so these are content anchors only: the property key as written in the settings schema / config literals, and
+ * the dotted setting path the managed-policy key list names. DRIFT TRIPWIRE ONLY, never the proof: that
+ * `network.allowAllUnixSockets: true` still skips the `apply-seccomp` wrapper under OUR config is shown by the
+ * wrapped-command arm (test/sandbox-wrapped-command-runtime.test.ts and infra/sandbox-masked-proc-docker.test.sh), which
+ * has its own negative control (knob off, helper present).
+ */
+export const SETTINGS_MAPPING_NEEDLES: Readonly<Record<string, string>> = Object.freeze({
+  propertyKey: "allowAllUnixSockets:",
+  settingPath: "network.allowAllUnixSockets",
 });
 
 export interface HelperSelectionPins {
   skipLine: number;
   applyLine: number;
   missingLine: number;
-  /** 0 for the CLI package, which never reads the programmatic `sandbox` option. */
-  settingsMapping: number;
 }
 
-export function scanHelperSelection(src: ByteSource): Record<keyof HelperSelectionPins, number> {
+export function scanHelperSelection(src: ByteSource): Record<keyof HelperSelectionPins, number> & { settingsMapping: Record<string, number> } {
   const needles: Record<string, Buffer> = {};
   for (const [k, v] of Object.entries(HELPER_SELECTION_NEEDLES)) needles[k] = Buffer.from(v);
+  for (const [k, v] of Object.entries(SETTINGS_MAPPING_NEEDLES)) needles[`mapping:${k}`] = Buffer.from(v);
   const hits = scanNeedles(src, needles);
+  const settingsMapping: Record<string, number> = {};
+  for (const k of Object.keys(SETTINGS_MAPPING_NEEDLES)) settingsMapping[k] = hits[`mapping:${k}`].length;
   return {
     skipLine: hits.skipLine.length,
     applyLine: hits.applyLine.length,
     missingLine: hits.missingLine.length,
-    settingsMapping: hits.settingsMapping.length,
+    settingsMapping,
   };
 }
 
 export function assertHelperSelection(
-  counts: Record<keyof HelperSelectionPins, number>,
+  counts: Record<keyof HelperSelectionPins, number> & { settingsMapping: Record<string, number> },
   pins: HelperSelectionPins,
   label: string,
 ): void {
@@ -507,6 +602,13 @@ export function assertHelperSelection(
     if (counts[k] !== pins[k]) {
       lines.push(`HELPER_SELECTION ${k} want ${pins[k]} got ${counts[k]} (${JSON.stringify(HELPER_SELECTION_NEEDLES[k])})`);
     }
+  }
+  // At least one hit per mapping anchor (a tripwire, not a census: the key also appears in the settings schema, destructures and the managed-policy list, so its count moves with unrelated edits; measured 12 and 4 hits at 2.1.311).
+  const mappingKeys = Object.keys(SETTINGS_MAPPING_NEEDLES);
+  if (mappingKeys.length === 0) lines.push("HELPER_SELECTION settingsMapping has no anchors (a tripwire over zero needles cannot fire)");
+  for (const k of mappingKeys) {
+    const n = counts.settingsMapping[k] ?? 0;
+    if (n < 1) lines.push(`HELPER_SELECTION settingsMapping.${k} want >= 1 got ${n} (${JSON.stringify(SETTINGS_MAPPING_NEEDLES[k])})`);
   }
   if (lines.length === 0) return;
   throw new Error(
@@ -521,9 +623,10 @@ export function assertHelperSelection(
 //
 // The SDK's command-side helper (the multicall embedded in the same `claude` binary) prints
 // `apply-seccomp: <step>: <strerror>` for each failing step. The step literal sits in the binary's string
-// pool as `apply-seccomp: <step>` followed by NUL. Measured on claude-agent-sdk 0.3.284 (and identical in
-// claude-code 2.1.293): 17 distinct strings, one occurrence each. 16 are `<step>` literals that take a
-// `: <strerror>` suffix; `observe sendmsg failed` is a fixed message with no errno.
+// pool as `apply-seccomp: <step>` followed by NUL. Measured on claude-agent-sdk 0.3.311 (the same binary as
+// claude-code 2.1.311): 21 distinct strings, one occurrence each. 19 are `<step>` literals that take a
+// `: <strerror>` suffix; `observe sendmsg failed` and the `user.max_user_namespaces` warning are fixed messages with no
+// errno suffix. (0.3.284 / 2.1.293 carried 17: 16 steps and `observe sendmsg failed`.)
 
 export const HELPER_STEP_PREFIX = "apply-seccomp: ";
 /** A step literal is short printable ASCII; the longest measured is ~110 bytes. Bounded read, no regex on the binary. */
@@ -554,7 +657,13 @@ export interface HelperStepPins {
 /** Census: binary strings === classified ∪ excluded, both directions, with a floor. */
 /** Helper strings deliberately NOT classified (a fixed message with no errno suffix). Test-only: the census needs
  *  it to tell "known and excluded" from "new in the binary"; production never reads it. */
-export const HELPER_NON_STEP_LINES: readonly string[] = ["observe sendmsg failed"];
+export const HELPER_NON_STEP_LINES: readonly string[] = [
+  "observe sendmsg failed",
+  // Added by claude-code 2.1.311 / SDK 0.3.311: a non-fatal warning (the seccomp filter alone still blocks namespace creation),
+  // printed by the init before the tenant command, with a `(%s)` errno slot in the middle and NO `: <errno>` suffix, so the
+  // classifier's exact-step allowlist does not contain it, so `^apply-seccomp: <step>: Operation not permitted$` never classifies it.
+  "could not set user.max_user_namespaces (%s); the seccomp filter alone keeps the command from making namespaces",
+];
 
 export function assertHelperStepCensus(found: readonly string[], pins: HelperStepPins, label: string): void {
   const known = new Set([...pins.classified, ...pins.excluded]);
@@ -583,21 +692,27 @@ export function assertHelperStepCensus(found: readonly string[], pins: HelperSte
 //
 // The AF_UNIX-deny seccomp variant is safe for NO-EGRESS sessions only because of how the builder lays out the per-command
 // network: with a restricted network it `--unshare-net`s, binds the two bridge sockets, and wraps EVERY command in a shell
-// that starts the `socat TCP-LISTEN:3128/1080 ... UNIX-CONNECT:<sock>` bridges BEFORE the user command (the bridges are
+// that starts the `socat TCP6-LISTEN:3128/1080 ... UNIX-CONNECT:<sock>` bridges BEFORE the user command (the bridges are
 // what an egress session reaches its proxy through; under the variant they fail to open their AF_UNIX client and the
 // no-egress session simply has no working proxy, which it must not have anyway). The source-form of both functions is
 // embedded in the binary (minified names differ per release), so they are matched with name-agnostic regexes.
-// Measured 2026-10-19 on claude-agent-sdk 0.3.284 and claude-code 2.1.293: one source-form occurrence each.
+// Measured 2026-11-04 on claude-agent-sdk 0.3.311 and claude-code 2.1.311 (one byte-identical binary): one source-form occurrence.
+// (0.3.284 / 2.1.293 anchored on `TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${`, which the IPv6-first rewrite removed.)
 
-export const BRIDGE_WRAPPER_ANCHOR = "TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${";
+export const BRIDGE_WRAPPER_ANCHOR = "TCP6-LISTEN:${";
 export const BRIDGE_NET_ANCHOR = '.push("--unshare-net"),';
 const BRIDGE_WINDOW_BYTES = 1600;
 
 export const BRIDGE_PINS = Object.freeze({ wrapperHits: 1, netHits: 1 });
 
-// `[bridge-3128, bridge-1080, trap]` is built first, then the user command is appended AFTER it (`[...S, T]`).
+// `[bridge-3128, _srt_http=$!, bridge-1080, _srt_socks=$!, trap, ...watchdog]` is built first (the array `I`), then the user
+// command is appended AFTER it (`[...I, D]`, or `[...I, eval <cmd>]` when there is no hook site). The bridge itself is now a
+// `{ socat TCP6-LISTEN:<port>,ipv6only=0,... || exec socat TCP4-LISTEN:<port>,... ; } &` group. Identifiers are minified and
+// change per release, so each is `[\w$]+`; every other byte is a content anchor.
 const BRIDGE_WRAPPER_RE =
-  /^TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:\$\{\w+\} >\/dev\/null 2>&1 &`,`\$\{\w+\} TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:\$\{\w+\} >\/dev\/null 2>&1 &`,"trap 'rc=\$\?; kill %1 %2 2>\/dev\/null; exit \$rc' EXIT"\];if\(\w+\)\{let \w+=\w+\+\w+\(\[\w+,"-c",\w+\]\),\w+=\[\.\.\.\w+,\w+\]\.join\(/;
+  /^TCP6-LISTEN:\$\{[\w$]+\},ipv6only=0,fork,reuseaddr,backlog=4096 UNIX-CONNECT:\$\{[\w$]+\} \|\| exec \$\{[\w$]+\} TCP4-LISTEN:\$\{[\w$]+\},fork,reuseaddr,backlog=4096 UNIX-CONNECT:\$\{[\w$]+\}; \} >\/dev\/null 2>&1 &`,[\w$]+=\[[\w$]+\(3128,[\w$]+\),"_srt_http=\$!",[\w$]+\(1080,[\w$]+\),"_srt_socks=\$!","trap 'rc=\$\?; kill %1 %2 2>\/dev\/null; exit \$rc' EXIT",\.\.\.[\w$]+\];if\([\w$]+\)\{let [\w$]+=[\w$]+\+[\w$]+\(\[[\w$]+,"-c",[\w$]+\]\),[\w$]+=\[\.\.\.[\w$]+,[\w$]+\]\.join\(/;
+// The no-hook-site branch of the same function appends `eval <cmd>` after the same array.
+const BRIDGE_ELSE_RE = /\}else\{let [\w$]+=\[\.\.\.[\w$]+,`eval \$\{[\w$]+\(\[[\w$]+\]\)\}`\]\.join\(/;
 // `--unshare-net` first, then (when both bridge sockets exist) the two bridge binds.
 const BRIDGE_NET_RE =
   /^\.push\("--unshare-net"\),\w+&&\w+\)\{if\(!\w+\.existsSync\(\w+\)\)throw Error\(`Linux HTTP bridge socket does not exist[^`]*`\);if\(!\w+\.existsSync\(\w+\)\)throw Error\(`Linux SOCKS bridge socket does not exist[^`]*`\);if\(\w+\.push\("--bind",\w+,\w+\),\w+!==\w+\)\w+\.push\("--bind",\w+,\w+\);/;
@@ -627,8 +742,8 @@ export function assertBridgeStructure(scan: BridgeScan, label: string): void {
   const problems: string[] = [];
   if (scan.wrapperHits !== BRIDGE_PINS.wrapperHits) {
     problems.push(`bridge wrapper anchor ${JSON.stringify(BRIDGE_WRAPPER_ANCHOR)} found ${scan.wrapperHits}, want ${BRIDGE_PINS.wrapperHits}`);
-  } else if (!BRIDGE_WRAPPER_RE.test(scan.wrapperWindow)) {
-    problems.push("BRIDGE_ORDER: the wrapper no longer builds [bridge 3128, bridge 1080, trap] and then appends the user command");
+  } else if (!BRIDGE_WRAPPER_RE.test(scan.wrapperWindow) || !BRIDGE_ELSE_RE.test(scan.wrapperWindow)) {
+    problems.push("BRIDGE_ORDER: the wrapper no longer builds [bridge 3128, bridge 1080, trap, ...] and then appends the user command (both branches)");
   }
   if (scan.netHits !== BRIDGE_PINS.netHits) {
     problems.push(`net anchor ${JSON.stringify(BRIDGE_NET_ANCHOR)} found ${scan.netHits}, want ${BRIDGE_PINS.netHits}`);
@@ -640,5 +755,102 @@ export function assertBridgeStructure(scan: BridgeScan, label: string): void {
     `[${label}] ${problems.join("; ")}. The unixdeny variant assumes the vendored builder starts the socat proxy bridges before ` +
       "the user command inside an unshared net namespace. Re-measure through the real SDK (test/sandbox-wrapped-command-runtime.test.ts, " +
       "the AF_UNIX-deny variant block) before updating the pins; a no-egress session's Bash must still start under the variant (ADR-075 addendum 2026-10-19).",
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Embedded Bun runtime floor (CVE-2026-111497, Brotli decoder RCE, fixed in Bun 1.4.4; #12026).
+//
+// The `claude` platform binaries are Bun single-file executables: the vulnerable decoder is the one in the runtime the binary
+// embeds, not in anything the package manager resolves, so a pin test proves the package version and NOT the runtime. This
+// reads the runtime banner out of each binary. The version appears as `Bun v<maj>.<min>.<patch> (` (the banner carries a
+// platform or commit in the parentheses); the string pool also carries bare `Bun v` fragments, which are NOT a version and are
+// ignored, so a scan that finds only fragments reds "no version found" instead of passing. The minimum over ALL occurrences is
+// compared (numeric, never lexicographic), so a later lower occurrence after a compliant first cannot hide.
+
+export const BUN_FLOOR: readonly [number, number, number] = [1, 4, 4];
+/** Both packages are examined by the same code path, so they can diverge again (they are one byte-identical binary at 0.3.311 / 2.1.311). */
+export const BUN_FLOOR_PACKAGES: readonly ("claude-agent-sdk" | "claude-code")[] = ["claude-agent-sdk", "claude-code"];
+const BUN_BANNER_PREFIX = "Bun v";
+const BUN_BANNER_READ_BYTES = 40;
+const BUN_BANNER_RE = /^(\d+)\.(\d+)\.(\d+) \(/;
+
+/** Every distinct `Bun v<x.y.z> (` banner in the source, as `x.y.z`, sorted. Bare `Bun v` fragments are ignored. */
+export function scanEmbeddedBunVersions(src: ByteSource, opts: ScanOptions = {}): string[] {
+  const hits = scanNeedles(src, { bun: Buffer.from(BUN_BANNER_PREFIX, "latin1") }, opts).bun;
+  const found = new Set<string>();
+  for (const at of hits) {
+    const text = src.read(at + BUN_BANNER_PREFIX.length, BUN_BANNER_READ_BYTES).toString("latin1");
+    const m = BUN_BANNER_RE.exec(text);
+    if (m) found.add(`${m[1]}.${m[2]}.${m[3]}`);
+  }
+  return [...found].sort(compareSemver);
+}
+
+/** Numeric `x.y.z` comparison. Throws on anything else, so a malformed value cannot compare as equal. */
+export function compareSemver(a: string, b: string): number {
+  const parse = (v: string): number[] => {
+    if (!/^\d+\.\d+\.\d+$/.test(v)) throw new Error(`SEMVER_SHAPE: ${JSON.stringify(v)} is not x.y.z`);
+    return v.split(".").map(Number);
+  };
+  const pa = parse(a);
+  const pb = parse(b);
+  for (let i = 0; i < 3; i += 1) if (pa[i] !== pb[i]) return pa[i] - pb[i];
+  return 0;
+}
+
+export interface EmbeddedBunRow {
+  pkg: string;
+  /** For failure messages: package plus installed version. */
+  label: string;
+  versions: readonly string[];
+}
+
+/** Reads the embedded runtime version(s) of each named package's installed linux-x64 binary (bounded, chunked reads). */
+export function scanInstalledEmbeddedBun(
+  nodeModulesDir: string,
+  pkgs: readonly ("claude-agent-sdk" | "claude-code")[] = BUN_FLOOR_PACKAGES,
+): EmbeddedBunRow[] {
+  return pkgs.map((pkg) => {
+    const bin = resolveVendoredBinary(pkg, nodeModulesDir);
+    const fs = fileSource(bin.path);
+    try {
+      return { pkg, label: `${pkg}@${bin.version}`, versions: scanEmbeddedBunVersions(fs.source) };
+    } finally {
+      fs.close();
+    }
+  });
+}
+
+/**
+ * Throws unless EVERY required package was examined (a scan of zero or one binary cannot pass) and each one embeds a Bun
+ * runtime at or above the floor, judged on the lowest version it carries.
+ */
+export function assertEmbeddedBunFloor(
+  rows: readonly EmbeddedBunRow[],
+  floor: readonly [number, number, number] = BUN_FLOOR,
+  required: readonly string[] = BUN_FLOOR_PACKAGES,
+): void {
+  const floorStr = floor.join(".");
+  const problems: string[] = [];
+  const examined = rows.map((r) => r.pkg);
+  for (const pkg of required) {
+    if (!examined.includes(pkg)) problems.push(`BUN_COVERAGE ${pkg} was not examined (examined: [${examined.join(", ")}], want: [${required.join(", ")}])`);
+  }
+  for (const r of rows) {
+    if (r.versions.length === 0) {
+      problems.push(`BUN_VERSION_NOT_FOUND ${r.label}: no "Bun v<x.y.z> (" banner (bare "Bun v" string-pool fragments are not a version)`);
+      continue;
+    }
+    const lowest = [...r.versions].sort(compareSemver)[0];
+    if (compareSemver(lowest, floorStr) < 0) {
+      problems.push(`BUN_BELOW_FLOOR ${r.label} embeds Bun ${lowest} (all occurrences: ${r.versions.join(", ")}), below the ${floorStr} floor`);
+    }
+  }
+  if (problems.length === 0) return;
+  throw new Error(
+    `${problems.join("; ")}. CVE-2026-111497 (Brotli decoder RCE) is fixed in Bun ${floorStr}; the runtime embedded in the ` +
+      "claude binary decodes `Content-Encoding: br` responses itself. Bump the @anthropic-ai/claude-code and " +
+      "@anthropic-ai/claude-agent-sdk pins together to a pair whose binary embeds a fixed Bun, and re-prove the sandbox builder properties (#12026).",
   );
 }

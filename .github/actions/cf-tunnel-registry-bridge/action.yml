@@ -95,7 +95,7 @@ inputs:
     description: 'Doppler service token scoped to the prd root config (read-only). Caller forwards the DOPPLER_TOKEN repo secret. Reads the CF Access registry_push token AND ZOT_PUSH_* + ZOT_REGISTRY_URL — all from the prd root.'
     required: true
   cloudflared-version:
-    description: 'cloudflared release version to install (e.g. 2026.5.0). Keep in sync with the SSH bridge pin.'
+    description: 'cloudflared release version to install (e.g. 2026.10.4). Keep in sync with the SSH bridge pin.'
     required: true
   cloudflared-sha256:
     description: 'SHA-256 of the cloudflared-linux-amd64 binary at cloudflared-version (recompute against the real binary — see header).'

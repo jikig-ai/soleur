@@ -89,7 +89,7 @@ describe("resolveProtectedBranches union rule (AC-3)", () => {
 
   test("an owner or repo that is not a safe path segment never reaches the API", async () => {
     const fetchDefaultBranch = vi.fn().mockResolvedValue("main");
-    for (const [owner, repo] of [["a/b", "app"], ["alice", "x y"], ["alice", [UP, "x"].join("/")], ["al\nice", "app"]]) {
+    for (const [owner, repo] of [["a/b", "app"], ["alice", "x y"], ["alice", [UP, "x"].join("/")], ["al\nice", "app"], [".", "app"], [UP, "app"], ["alice", "."], ["alice", UP]]) {
       const r = await createProtectedBranchResolver(input({ owner, repo }), { fetchDefaultBranch })();
       expect(r.authoritative, `${owner}/${repo}`).toBe(false);
     }

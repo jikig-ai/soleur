@@ -95,11 +95,9 @@ export const cronInngestConfigDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    // EVENT-ONLY until the #6178 cutover (see the dormancy note above). The cutover adds the
+    // `{ cron: }` schedule alongside the pointer + Sentry monitor.
+    triggers: [{ event: "cron/inngest-config-drift.manual-trigger" }],
   },
-  // EVENT-ONLY until the #6178 cutover (see the dormancy note above). The cutover adds the
-  // `{ cron: }` schedule alongside the pointer + Sentry monitor.
-  [{ event: "cron/inngest-config-drift.manual-trigger" }],
-  cronInngestConfigDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronInngestConfigDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

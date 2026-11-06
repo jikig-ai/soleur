@@ -138,6 +138,14 @@ const READ_ONLY_PROBES = [
 // the safe-commit invariant does not apply. Both acknowledged here so the
 // cron-tier2-parity sibling-set sweep sees this dependent when
 // EXPECTED_CRON_FUNCTIONS grows.
+// `cron-approval-expiry` (#4672, ADR-309) is the `cron-bot-pr-reaper` class: one `sweep_approvals()` RPC through the
+// service client plus generic notifications, holding no git and opening no PR — the safe-commit invariant does not
+// apply and it needs no MIGRATED/EXEMPT entry (covered by invariant 1's directory walk). Acknowledged here so the
+// cron-tier2-parity sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+// `cron-git-data-erasure-redrive` (#8211 PR-B2) is the `cron-approval-expiry` class: it claims rows from the pending-erasure
+// ledger through service-role RPCs and calls the git-data host removal, holding no git and opening no PR — the safe-commit
+// invariant does not apply and it needs no MIGRATED/EXEMPT entry (covered by invariant 1's directory walk). Acknowledged
+// here so the cron-tier2-parity sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
 
 // #6657: cron-gh-pages-cert-reissue is a fifth class — an EVENT-TRIGGERED
 // live-infra remediation. It flips CF DNS proxy state + re-orders the GitHub
@@ -421,6 +429,24 @@ describe("#6602 — cron-expenses-verify-by is a non-git dispatch-hybrid cron", 
   it("has no CRON_BASH_ALLOWLISTS entry and is not Tier-2 deferred", () => {
     expect(CRON_BASH_ALLOWLISTS["cron-expenses-verify-by"]).toBeUndefined();
     expect(TIER2_DEFERRED_CRONS.has("cron-expenses-verify-by")).toBe(false);
+  });
+});
+
+describe("#8839 — cron-agent-spawn-stale-settle is a non-git DB-write cron", () => {
+  // The stale-"Working" backstop sweep settles action_sends rows via the shared
+  // agent-on-spawn-settle path and reports stale_working to spawn-dead-letter;
+  // it does NO git operations, so it neither calls safeCommitAndPr nor carries
+  // a CRON_BASH_ALLOWLISTS entry, and is not a deferred Tier-2 cron.
+  // Acknowledged here so the sibling-set sweep sees this dependent when
+  // EXPECTED_CRON_FUNCTIONS grows (cron-tier2-parity set).
+  it("has no CRON_BASH_ALLOWLISTS entry, is not Tier-2 deferred, and holds no safeCommitAndPr", () => {
+    expect(CRON_BASH_ALLOWLISTS["cron-agent-spawn-stale-settle"]).toBeUndefined();
+    expect(TIER2_DEFERRED_CRONS.has("cron-agent-spawn-stale-settle")).toBe(false);
+    const src = readFileSync(
+      join(FUNCTIONS_DIR, "cron-agent-spawn-stale-settle.ts"),
+      "utf-8",
+    );
+    expect(src).not.toMatch(/safeCommitAndPr\(\{/);
   });
 });
 

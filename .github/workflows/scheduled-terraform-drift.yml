@@ -175,7 +175,11 @@ jobs:
 
           echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
-          printf '%s' "$PLAN_OUTPUT" | head -c 60000 > ${RUNNER_TEMP}/plan-output.txt
+          # random_id's `id` is the base64url of the live key bytes and a full-root plan prints it on
+          # every `Refreshing state` line; plan-output.txt is cat'ed into a PUBLIC issue body (#10540).
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          printf '%s' "$PLAN_OUTPUT" | tf_redact_random_ids | head -c 60000 > ${RUNNER_TEMP}/plan-output.txt
           sed -i \
             -e 's/\(token\s*=\s*\)"[^"]*"/\1"***"/gi' \
             -e 's/\(secret\s*=\s*\)"[^"]*"/\1"***"/gi' \
@@ -259,9 +263,10 @@ jobs:
           # `degraded` — a credential is absent — rather than the malformed-map arm, whose
           # remedy says the Doppler identity is not at fault.
           #
-          # DOPPLER_CONFIGS_FLOOR deliberately STAYS 13. Do NOT "fix" a red by lowering it:
-          # that is the floor-edited-down-to-match-a-narrowed-grant shape, and the runtime
-          # `configs_floor < 13` assertion below forces `degraded` anyway.
+          # DOPPLER_CONFIGS_FLOOR is pinned equal to the inventory's name count by F2/F3 in
+          # plugins/soleur/test/token-drift-workflow-causes.test.sh. Do NOT "fix" a red by
+          # lowering it: that is the floor-edited-down-to-match-a-narrowed-grant shape, and
+          # the runtime `configs_floor` assertion below forces `degraded` anyway.
           DOPPLER_TOKEN_MAP: ${{ secrets.DOPPLER_TOKEN_DRIFT_MAP }}
           DOPPLER_PROJECT: soleur
           # NO DOPPLER_CONFIG, and no bare DOPPLER_TOKEN. The detector reads each config
@@ -279,14 +284,15 @@ jobs:
           # Three places move together when the project's config set changes: this
           # literal, the name count in apps/web-platform/infra/doppler-config-inventory.txt,
           # and the pin in plugins/soleur/test/token-drift-workflow-causes.test.sh, which
-          # asserts this parses, is >= 13, and equals the inventory's name count.
+          # asserts this parses, is at or above its pinned minimum, and equals the
+          # inventory's name count.
           #
           # THE INVENTORY NOW ALSO DETERMINES REACH, not just the printed denominator: it is
           # the `for_each` list the per-config tokens are minted from. So shrinking it
           # DESTROYS tokens, which the destroy guard catches — the one layer that fires
-          # ABOVE 13, where the three literals above only bound it from below. The
+          # ABOVE the floor, where the three literals above only bound it from below. The
           # inventory's own header carries the full floor-raising checklist.
-          DOPPLER_CONFIGS_FLOOR: 13
+          DOPPLER_CONFIGS_FLOOR: 16
         run: |
           set -uo pipefail
           # ── FLOOR GUARD: WRITE THE OUTPUTS, *THEN* FAIL ────────────────────────────
@@ -478,7 +484,7 @@ jobs:
           # what this step demands, but a number cannot catch its own reduction: a floor
           # edited DOWN in the same change that narrows the grant would hold the scan at
           # `at-floor` while coverage regressed. So the value the detector echoed back is
-          # re-checked here against the literal 13, and a failure downgrades to
+          # re-checked here against the literal 16, and a failure downgrades to
           # `degraded`. (The PR-time half of this pin lives in
           # plugins/soleur/test/token-drift-workflow-causes.test.sh.)
           #
@@ -490,8 +496,8 @@ jobs:
           # `(( ))` errors, and — because an arithmetic error in an `if` condition is not
           # fatal under `set -e` — control falls through to the CONFIDENT state.
           if [[ "$coverage" != "unknown" ]] \
-             && { [[ ! "$cfg_floor" =~ ^[0-9]+$ ]] || (( 10#$cfg_floor < 13 )); }; then
-            echo "::warning::Cloudflare token drift ran against a declared coverage floor of '${cfg_floor}', below the pinned minimum of 13. A floor lowered alongside a narrowed credential would report healthy while coverage regressed, so this run is downgraded to coverage: degraded regardless of what it read."
+             && { [[ ! "$cfg_floor" =~ ^[0-9]+$ ]] || (( 10#$cfg_floor < 16 )); }; then
+            echo "::warning::Cloudflare token drift ran against a declared coverage floor of '${cfg_floor}', below the pinned minimum of 16. A floor lowered alongside a narrowed credential would report healthy while coverage regressed, so this run is downgraded to coverage: degraded regardless of what it read."
             coverage=degraded
           fi
           {
@@ -519,7 +525,7 @@ jobs:
             echo "token-drift coverage caveat: the committed config inventory is ${inv_age} days old, so the denominator in '${cov_ratio}' may not reflect the project's current config set. Regenerate it with the command in the file's own '# command:' header."
           fi
           # TWO ARMS, matching the two non-healthy rungs. The retired `single-config` arm
-          # is gone with the state: at a floor of 13 it collapses into `degraded`.
+          # is gone with the state: at the floor it collapses into `degraded`.
           if [[ "$coverage" == "degraded" ]]; then
             echo "::warning::Cloudflare token drift read ${cov_ratio} Doppler config(s), below its declared floor of ${cfg_floor} — this run CANNOT detect fan-out drift in the configs it did not read, which is the failure class this detector exists for. The verdict '${verdict}' is scoped to what was visible, not to the fleet. Unread: ${cfg_unread}. The credential set is DOPPLER_TOKEN_DRIFT_MAP, one config-scoped read token per config; at ${cov_ratio} either the whole secret is missing or empty (0/N — including the window between merging a credential change and the infra apply that publishes it), or the individual tokens for the unread configs are revoked, expired or were never minted. The unread list names exactly which. This is per-config, so a partial number is actionable: it names the tokens to re-mint, not a grant to widen."
           elif [[ "$coverage" == "unknown" ]]; then
@@ -734,6 +740,7 @@ jobs:
           # design reads empty as "file one", so every transient fault added a permanent
           # duplicate. The condition is standing, so declining to act costs at most 12h.
           LIST_RC=0
+          # dedupe: fail-closed — deliberate LIST_RC: an unreadable list declines to create a possible duplicate; the standing condition re-files within 12h.
           EXISTING=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
             fail_channel "token_drift_coverage_list_failed — could not query open ${LABEL} issues (gh exit ${LIST_RC}); declining to create a possible duplicate. Coverage '${COVERAGE}' (${COVERAGE_RATIO}) reached no issue channel this run."
@@ -991,6 +998,7 @@ jobs:
           RUN_URL="${SERVER_URL}/${REPOSITORY}/actions/runs/${RUN_ID}"
           echo "channel_failed=false" >> "$GITHUB_OUTPUT"
           LIST_RC=0
+          # dedupe: fail-closed — deliberate LIST_RC: an unreadable list leaves the coverage issue open and flags channel_failed for the fallback email.
           N=$(gh issue list --label "$LABEL" --state open -L 5 --json number --jq '.[0].number // empty') || LIST_RC=$?
           if (( LIST_RC != 0 )); then
             # A NAMED SLUG AND THE FLAG, matching this step's own close-failure branch below and
@@ -1124,7 +1132,7 @@ jobs:
           } > "${RUNNER_TEMP}/token-drift-issue.md"
 
           EXISTING=$(gh issue list --label "$LABEL" --state open --limit 100 \
-            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1)
+            --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || { echo "::error::ci-ssh-dead: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             # Re-assert the labels before commenting. If `action-required` is ever stripped
@@ -1216,7 +1224,7 @@ jobs:
             --limit 100 \
             --json number,title \
             --jq ".[] | select(.title == \"${TITLE}\") | .number" \
-            | head -1)
+            | head -1) || { echo "::error::infra-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             {
@@ -1615,6 +1623,7 @@ jobs:
             echo "</details>"
           }
 
+          # dedupe: fail-closed — deliberate bare capture: a failed lookup fails the step (the reconcile outcome itself is the observable) instead of reading as "no open mismatch issue" and filing a duplicate.
           OPEN_ISSUES=$(gh issue list --label "heartbeat-reconcile-mismatch" --state open \
             --limit 100 \
             --json number,title \
@@ -1724,6 +1733,7 @@ jobs:
           TITLE="infra: Better Stack heartbeat live-reconcile mismatch"
           # Bare assignment from a command substitution: a failed lookup fails the step (the Sentry
           # check-in reads this step's outcome) instead of reading as "no open issue".
+          # dedupe: fail-closed — deliberate bare capture: a failed lookup fails the step (the Sentry check-in reads this step's outcome) instead of reading as "no open issue".
           OPEN_ISSUES=$(gh issue list --label "heartbeat-reconcile-mismatch" --state open \
             --limit 100 \
             --json number,title \
@@ -2523,7 +2533,7 @@ jobs:
           # the committed inventory; see the ratchet note in
           # `apps/web-platform/infra/doppler-config-inventory.txt` and ADR-164's Known
           # limitations. Three literals, one number.
-          RUNG2_CONFIGS_FLOOR: 13
+          RUNG2_CONFIGS_FLOOR: 16
         run: |
           set -euo pipefail
           # The token reaches curl on its stdin config through the shared library (ADR-280); a library that cannot be loaded ends the sweep with no verdict.
@@ -2753,9 +2763,9 @@ jobs:
         run: |
           set -euo pipefail
           # Idempotent: one open issue for this class, not one per scheduled run.
-          existing="$(gh issue list --label infra-drift --state open \
+          existing=$(gh issue list --label infra-drift --state open \
                         --search "orphaned rung-2 rehearsal in:title" \
-                        --json number --jq '.[0].number // empty')"
+                        --json number --jq '.[0].number // empty') || { echo "::error::rung2-rehearsal-orphan: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; existing=""; }
           {
             echo "The Hetzner API reports server(s) matching the rung-2 rehearsal prefix that"
             echo "no Terraform state owns. Each is a **paying** box running the git transport"
@@ -2862,6 +2872,7 @@ jobs:
           }
 
           LIST_RC=0
+          # dedupe: fail-closed — deliberate LIST_RC: an unreadable list declines to create a possible duplicate of the rung-2 sweep issue.
           EXISTING=$(gh issue list --label infra-drift --state open --limit 100 \
             --json number,title --jq ".[] | select(.title == \"${TITLE}\") | .number" | head -1) || LIST_RC=$?
           if (( LIST_RC != 0 )); then
@@ -2997,7 +3008,8 @@ jobs:
 
       # ── A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON ──────────────────
       # The only reader of this job's conclusion is the orphan-sweeps-checkin job below (the cron only dispatches the
-      # workflow), and its Sentry monitor is unrouted until #10972, so a red run alone reaches nobody quickly. This fires when a step AFTER checkout fails: the Doppler install,
+      # workflow), and its Sentry monitor was destroyed by the #6590 prune (PR-B) rather than routed under #10972, so
+      # a red run alone reaches nobody quickly. This fires when a step AFTER checkout fails: the Doppler install,
       # the secret read, the Hetzner listing or an issue filer. It does not fire when checkout itself fails (the local
       # action it uses is not on disk yet) or when the job is cancelled or times out (`failure()` is false then), and
       # a Resend rejection leaves a warning, not a retry (#10430). It may send alongside the scratch-config email above:
@@ -3224,9 +3236,9 @@ jobs:
         run: |
           set -euo pipefail
           # Idempotent: one open issue for this class, not one per scheduled run.
-          existing="$(gh issue list --label infra-drift --state open \
+          existing=$(gh issue list --label infra-drift --state open \
                         --search "orphaned inngest rehearsal in:title" \
-                        --json number --jq '.[0].number // empty')"
+                        --json number --jq '.[0].number // empty') || { echo "::error::inngest-rehearsal-orphan: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; existing=""; }
           {
             echo "The Hetzner API reports resource(s) matching the inngest-provision rehearsal"
             echo "label that no Terraform state owns. A surviving rehearsal box is a **paying**"
@@ -3277,8 +3289,8 @@ jobs:
           fi
 
       # A SWEEP THAT CANNOT PRODUCE A VERDICT MUST REACH A PERSON. The only reader of this job's conclusion is the
-      # orphan-sweeps-checkin job below (the cron only dispatches the workflow), and its Sentry monitor is unrouted until
-      # #10972, so a red run alone reaches nobody quickly. This
+      # orphan-sweeps-checkin job below (the cron only dispatches the workflow), and its Sentry monitor was destroyed by
+      # the #6590 prune (PR-B) rather than routed under #10972, so a red run alone reaches nobody quickly. This
       # fires when a step AFTER checkout fails: the Doppler install, the secret read, the Hetzner listing or the issue
       # filer. It does not fire when checkout fails or when the job is cancelled or times out. It never fails the job.
       - name: Email notification (inngest rehearsal sweep — the job failed)
@@ -3305,12 +3317,12 @@ jobs:
   # (the residual is recorded in ADR-241). The check-in key is a public write-only ingest key, so anyone holding it can post `ok`
   # (already true of every monitor). The sole-copy-protection-check job joins later by adding itself to `needs` (#10430).
   #
-  # THE EMAIL STEP IS PERMANENT, NOT A STOPGAP. The Sentry monitor emails once per incident and never re-pages, and while it is
-  # unrouted its issues email nobody; only this step reaches a person on every failed slot. A duplicate beside a sweep's own failure
+  # THE EMAIL STEP IS PERMANENT, NOT A STOPGAP. Only this step reaches a person on every failed slot. A duplicate beside a sweep's own failure
   # email is accepted. The sweeps' emails and this one share ONE mail key, so a dead key silences all of them together: they are
-  # not independent cover for each other, and the routed Sentry monitor (#10972) is the only monitoring path that does not use
-  # it. If this job's own checkout fails nothing is sent from here; whether Sentry then reports a missed check-in for a monitor
-  # that has never checked in is unverified and nothing relies on it.
+  # not independent cover for each other. The routed Sentry monitor the #10972 tracker asked for was instead destroyed by the
+  # #6590 prune (PR-B) — the trade is recorded here so it reads as seen, not missed: it was the only orphan-sweep signal that did
+  # not share this mail key, and every surviving cover now depends on it. If that independence is wanted back, the vehicle is
+  # reopening the prune verdict, not this comment. If this job's own checkout fails nothing is sent from here.
   #
   # LEAST PRIVILEGE. The workflow-level permissions also grant `issues: write`, which this job does not need. It holds only the
   # three Sentry ingest secrets and the mail key: no Hetzner or secret-store credential, no Hetzner host name (that would make it an
@@ -3357,5 +3369,5 @@ jobs:
         uses: ./.github/actions/notify-ops-email
         with:
           subject: '[INFRA DRIFT] Orphan sweep did not complete (rung-2 ${{ needs.rung2-rehearsal-orphan-sweep.result }}, inngest ${{ needs.inngest-rehearsal-orphan-sweep.result }})'
-          body: '<p><strong>At least one of the twice-daily Hetzner orphan sweeps did not complete.</strong> A sweep that did not complete is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch config was not reported.</p><p>Results: rung-2 sweep <code>${{ needs.rung2-rehearsal-orphan-sweep.result }}</code>, inngest sweep <code>${{ needs.inngest-rehearsal-orphan-sweep.result }}</code>. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step of each sweep; a named error slug says the cause. A cancelled run (including a deliberate cancel) reads as not complete.</p><p>This email is sent on every slot where either sweep is not success, because the monitor alone emails once per incident. A sweep may also have sent its own failure email; that duplicate is expected. This job holds no Hetzner or secret-store credential.</p>'
+          body: '<p><strong>At least one of the twice-daily Hetzner orphan sweeps did not complete.</strong> A sweep that did not complete is not a clean sweep: it produced no verdict, so any stranded rehearsal server, volume, firewall, SSH key or scratch config was not reported.</p><p>Results: rung-2 sweep <code>${{ needs.rung2-rehearsal-orphan-sweep.result }}</code>, inngest sweep <code>${{ needs.inngest-rehearsal-orphan-sweep.result }}</code>. <a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Open the run</a> and read the first failed step of each sweep; a named error slug says the cause. A cancelled run (including a deliberate cancel) reads as not complete.</p><p>This email is sent on every slot where either sweep is not success, because the scheduled-orphan-sweeps Sentry monitor was destroyed by the #6590 prune and nothing else reaches a person for a silently-skipped slot. A sweep may also have sent its own failure email; that duplicate is expected. This job holds no Hetzner or secret-store credential.</p>'
           resend-api-key: ${{ secrets.RESEND_API_KEY }}

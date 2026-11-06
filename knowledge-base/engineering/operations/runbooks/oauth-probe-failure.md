@@ -22,6 +22,7 @@ the prod public auth surface (`app.soleur.ai/login`, `api.soleur.ai/auth/v1/...`
 last_alive_at via the dashboard at <https://uptime.betterstack.com/team/376797/monitors>
 — if >2 min ago, this issue is likely a substrate-down false-positive
 (cross-check sibling `scheduled-daily-triage` / `scheduled-follow-through`
+— both destroyed by the #6590 PR-B prune, so only `scheduled-oauth-probe` remains
 Sentry monitors; they share the same Inngest worker).**
 
 ## Sentry check-in failures are silent to the workflow log

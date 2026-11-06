@@ -576,6 +576,9 @@ GATE_COVERED=("cloudflare_ruleset")
 ADJUDICATED_OUT=(
   "cloudflare_bot_management"
   "cloudflare_list"
+  "cloudflare_load_balancer"
+  "cloudflare_load_balancer_monitor"
+  "cloudflare_load_balancer_pool"
   "cloudflare_notification_policy"
   "cloudflare_pages_domain"
   "cloudflare_pages_project"

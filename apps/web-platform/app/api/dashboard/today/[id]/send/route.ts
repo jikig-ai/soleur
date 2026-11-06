@@ -67,6 +67,7 @@ import { enqueueAgentSpawn } from "@/server/action-sends/enqueue-agent-spawn";
 import {
   decideReplay,
   type ExistingApprovalRow,
+  type StaleReplayReason,
 } from "@/server/action-sends/decide-replay";
 import { PG_UNIQUE_VIOLATION, sqlStateFromError } from "@/lib/postgres-errors";
 import { isTransientFetchError } from "@/server/inngest/send-with-retry";
@@ -289,7 +290,7 @@ export async function POST(
 
   const refuseStaleReplay = (
     actionSendId: string,
-    reason: "expired" | "future_clicked_at",
+    reason: StaleReplayReason,
   ) => {
     warnSilentFallback(null, {
       feature: "spawn-agent",
@@ -299,7 +300,7 @@ export async function POST(
       extra: { userId, messageId, actionSendId, replay: true, reason },
     });
     return NextResponse.json(
-      { error: "approval_expired", message_id: messageId },
+      { error: "approval_expired", message_id: messageId, reason },
       { status: 409 },
     );
   };

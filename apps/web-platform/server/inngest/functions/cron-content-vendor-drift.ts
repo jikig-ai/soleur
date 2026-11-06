@@ -346,7 +346,8 @@ export function couldNotMeasure(totals: ComparisonTotals): boolean {
  * a healthy weekly cron with the 21-day write suppression sees ages of 7, 14,
  * 21 (writes, resets to 0), so it never approaches 30. If a write fails to
  * land, the next run sees the age keep climbing, and at 30 the monitor pages —
- * one cadence after the banner would have fired for a human anyway.
+ * one cadence after the banner would have fired for a human anyway (monitor
+ * destroyed by the #6590 PR-B prune — void-posts by design, spec NG4).
  *
  * @param observedAgeDays age of `last-verified` on the default branch as read
  *   BEFORE this run's write, or `null` when it could not be read at all.
@@ -2689,12 +2690,10 @@ export const cronContentVendorDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "17 11 * * 1" },
+      { event: "cron/content-vendor-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "17 11 * * 1" },
-    { event: "cron/content-vendor-drift.manual-trigger" },
-  ],
-  cronContentVendorDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronContentVendorDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

@@ -293,7 +293,7 @@ export async function cronAgentNativeAuditHandler({
           feature: "cron-agent-native-audit",
           op: "claude-eval-fatal",
           message:
-            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red",
+            "claude-eval failed for a FATAL class (credit/auth/spawn/timeout); cron monitor flips red (destroyed #6590 PR-B — void-post)",
           extra: { fn: "cron-agent-native-audit", ...decision.sentryExtra },
         },
       );
@@ -357,10 +357,10 @@ export const cronAgentNativeAudit = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 9 15 * *" },
+      { event: "cron/agent-native-audit.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 9 15 * *" },
-    { event: "cron/agent-native-audit.manual-trigger" },
-  ],
-  cronAgentNativeAuditHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronAgentNativeAuditHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

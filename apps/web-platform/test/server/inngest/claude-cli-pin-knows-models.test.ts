@@ -59,6 +59,17 @@ import {
   EXECUTION_MODEL,
 } from "@/server/inngest/model-tiers";
 import { stripComments } from "../../helpers/strip-comments";
+import {
+  BUN_FLOOR,
+  BUN_FLOOR_PACKAGES,
+  assertEmbeddedBunFloor,
+  bufferSource,
+  compareSemver,
+  scanEmbeddedBunVersions,
+  scanInstalledEmbeddedBun,
+  shouldSkipRealBinaryRows,
+  type EmbeddedBunRow,
+} from "../../helpers/vendored-bwrap-tail";
 
 const APP_ROOT = join(__dirname, "../../..");
 const PKG = "@anthropic-ai/claude-code";
@@ -95,8 +106,9 @@ const REVIEWED_DEFAULT_EFFORT: Record<string, string> = {
   //
   // Re-checked 2026-10-08 against claude-code 2.1.293 (the first release whose
   // bundle knows claude-haiku-5-5): this guard passes with both rows still at
-  // `medium`. The Haiku id never reaches the cron CLI, so it has no row here;
-  // the id-set guard below is what covers it.
+  // `medium`. Re-checked 2026-11-04 against 2.1.311 (#12026): the guard passes
+  // unchanged, both rows still `medium`. The Haiku id never reaches the cron CLI,
+  // so it has no row here; the id-set guard below is what covers it.
   [EXECUTION_MODEL]: "medium",
 };
 
@@ -578,3 +590,133 @@ describe.skipIf(!HAVE_BIN && !MUST_RUN)(
     }, 60_000);
   },
 );
+
+// ---------------------------------------------------------------------------------------------
+// Guard 1 (#12026, CVE-2026-111497): the Bun runtime EMBEDDED in each installed `claude` binary is at least 1.4.4.
+//
+// Everything above proves the PACKAGE version, and a package version says nothing about the runtime inside the binary: the
+// claude-code 2.1.293 / agent-sdk 0.3.284 binaries embed Bun 1.4.3, whose Brotli decoder is the CVE. The Dockerfile's
+// global install tree is not reached here (its pin is asserted equal to package.json above and the shipped copy is read from
+// the released image after merge). The same pin equality stands in for `bin/claude.exe` (a postinstall copy of the exact-pinned platform
+// package this reads) and for the arm64 / musl variants, which are not shipped to the server (a deliberate scope limit, #12073 review); this reads the `npm ci` tree both runtime paths use. The floor is a constant in
+// test/helpers/vendored-bwrap-tail.ts, so one diff could lower it and move the pins together: it proves consistency with the stated floor, not integrity
+// of the floor, and the sdk-bump attestation plus this header are what a reviewer sees in that diff.
+//
+// The issue's own probe, `strings <bin> | grep -m1 '^Bun v'`, can NEVER report a version: its first hit is the bare string-pool
+// fragment `Bun v` in both measured pairs (2.1.293 and 2.1.311). Only a `Bun v<x.y.z> (` banner counts here.
+
+describe("embedded Bun floor — synthetic mutation rows (#12026 Guard 1)", () => {
+  const banner = (v: string, tail = "(Linux x64)") => `Bun v${v} ${tail}`;
+  const rowOf = (pkg: string, text: string): EmbeddedBunRow => ({
+    pkg,
+    label: `${pkg}@synthetic`,
+    versions: scanEmbeddedBunVersions(bufferSource(Buffer.from(text, "latin1"))),
+  });
+  const ok = (pkg: string) => rowOf(pkg, `xx ${banner("1.4.4")} \0 yy ${banner("1.4.4", "(0ae49f8b6)")}`);
+  const failureOf = (fn: () => void): string => {
+    try {
+      fn();
+      return "";
+    } catch (e) {
+      return (e as Error).message;
+    }
+  };
+
+  it("the floor is 1.4.4 and both packages are required", () => {
+    expect([...BUN_FLOOR]).toEqual([1, 4, 4]);
+    expect([...BUN_FLOOR_PACKAGES]).toEqual(["claude-agent-sdk", "claude-code"]);
+  });
+
+  it("must-PASS control: both packages at 1.4.4, in both banner spellings", () => {
+    expect(failureOf(() => assertEmbeddedBunFloor([ok("claude-agent-sdk"), ok("claude-code")]))).toBe("");
+  });
+
+  it("row 1: a binary whose only banner is Bun 1.4.3 reds BUN_BELOW_FLOOR naming the package and both versions", () => {
+    const vuln = rowOf("claude-code", `xx ${banner("1.4.3")} \0 yy ${banner("1.4.3", "(eecfd55de)")}`);
+    const msg = failureOf(() => assertEmbeddedBunFloor([ok("claude-agent-sdk"), vuln]));
+    expect(msg).toMatch(/BUN_BELOW_FLOOR claude-code@synthetic embeds Bun 1\.4\.3/);
+    expect(msg).toMatch(/1\.4\.4 floor/);
+    expect(msg).not.toMatch(/claude-agent-sdk@synthetic embeds/);
+  });
+
+  it("row 2: only bare `Bun v` fragments (the issue's probe shape) reds BUN_VERSION_NOT_FOUND, never a pass or a skip", () => {
+    const bare = rowOf("claude-code", "Bun v\0 more Bun v\0 and Bun vX Bun v 1.4.4 without the paren");
+    expect(bare.versions).toEqual([]);
+    const msg = failureOf(() => assertEmbeddedBunFloor([ok("claude-agent-sdk"), bare]));
+    expect(msg).toMatch(/BUN_VERSION_NOT_FOUND claude-code@synthetic/);
+    expect(msg).toMatch(/bare "Bun v"/);
+  });
+
+  it("row 3: a package list that resolves zero binaries, or only one of the two, reds BUN_COVERAGE (\"0 checked\" cannot pass)", () => {
+    expect(failureOf(() => assertEmbeddedBunFloor([]))).toMatch(/BUN_COVERAGE claude-agent-sdk was not examined/);
+    const one = failureOf(() => assertEmbeddedBunFloor([ok("claude-agent-sdk")]));
+    expect(one).toMatch(/BUN_COVERAGE claude-code was not examined/);
+    expect(one).not.toMatch(/BUN_COVERAGE claude-agent-sdk/);
+  });
+
+  it("row 4: a compliant first banner followed by a LOWER later one reds (minimum over all occurrences, not the first)", () => {
+    const mixed = rowOf("claude-agent-sdk", `${banner("1.4.4")} \0\0 ${banner("1.4.3", "(eecfd55de)")}`);
+    expect(mixed.versions).toEqual(["1.4.3", "1.4.4"]);
+    expect(failureOf(() => assertEmbeddedBunFloor([mixed, ok("claude-code")]))).toMatch(/BUN_BELOW_FLOOR claude-agent-sdk@synthetic embeds Bun 1\.4\.3 \(all occurrences: 1\.4\.3, 1\.4\.4\)/);
+  });
+
+  it("row 5: one package compliant and the other swapped to a 1.4.3 buffer reds naming only the swapped one", () => {
+    const msg = failureOf(() => assertEmbeddedBunFloor([ok("claude-agent-sdk"), rowOf("claude-code", banner("1.4.3"))]));
+    expect(msg).toMatch(/BUN_BELOW_FLOOR claude-code@synthetic/);
+    expect(msg).not.toMatch(/BUN_BELOW_FLOOR claude-agent-sdk/);
+  });
+
+  it("harness: numeric, not lexicographic, comparison — 1.4.10 and 1.5.0 pass (must-PASS non-canonical), 1.4.3 and 0.9.99 do not", () => {
+    for (const v of ["1.4.10", "1.5.0", "2.0.0", "1.10.0"]) {
+      expect(failureOf(() => assertEmbeddedBunFloor([rowOf("claude-agent-sdk", banner(v)), rowOf("claude-code", banner(v))])), v).toBe("");
+    }
+    for (const v of ["1.4.3", "0.9.99", "1.3.99"]) {
+      expect(failureOf(() => assertEmbeddedBunFloor([rowOf("claude-agent-sdk", banner(v)), rowOf("claude-code", banner(v))])), v).toMatch(/BUN_BELOW_FLOOR/);
+    }
+    expect(compareSemver("1.4.10", "1.4.4")).toBeGreaterThan(0);
+    expect(failureOf(() => compareSemver("1.4", "1.4.4"))).toMatch(/SEMVER_SHAPE/);
+  });
+
+  it("harness: a banner straddling a chunk boundary is still read once, and a pre-release suffix is not a clean version", () => {
+    const text = `${"z".repeat(50)}${banner("1.4.4")}${"z".repeat(50)}`;
+    const at = text.indexOf("Bun v");
+    for (const chunkSize of [at + 2, at, at + 5, 7]) {
+      expect(scanEmbeddedBunVersions(bufferSource(Buffer.from(text, "latin1")), { chunkSize, overlap: 64 }), `chunkSize=${chunkSize}`).toEqual(["1.4.4"]);
+    }
+    expect(scanEmbeddedBunVersions(bufferSource(Buffer.from("Bun v1.4.4-canary.1 (Linux x64)", "latin1")))).toEqual([]);
+  });
+});
+
+describe.skipIf(shouldSkipRealBinaryRows(process.platform, process.arch, process.env.CI))(
+  "embedded Bun floor — the installed claude binaries (#12026 Guard 1)",
+  () => {
+    it(
+      "both the agent-sdk and the claude-code linux-x64 binaries embed Bun >= 1.4.4 (BINARY_MISSING, never a skip, on linux-x64 and under CI)",
+      () => {
+        const rows = scanInstalledEmbeddedBun(join(APP_ROOT, "node_modules"));
+        // Suite-level count: resolving fewer packages cannot leave this row green.
+        expect(rows.map((r) => r.pkg)).toEqual([...BUN_FLOOR_PACKAGES]);
+        // The floor is also asserted here directly, independent of assertEmbeddedBunFloor below: deleting that call
+        // (mutation survivor in the #12073 review) must still red a vulnerable binary.
+        for (const r of rows) {
+          expect(r.versions.length, `${r.label}: no embedded Bun banner read`).toBeGreaterThanOrEqual(1);
+          for (const v of r.versions) {
+            expect(compareSemver(v, BUN_FLOOR.join(".")), `${r.label} embeds Bun ${v}, below the floor`).toBeGreaterThanOrEqual(0);
+          }
+        }
+        process.stdout.write(`embedded Bun: ${rows.map((r) => `${r.label}=${r.versions.join("/")}`).join(" ")}\n`);
+        assertEmbeddedBunFloor(rows);
+      },
+      180_000,
+    );
+  },
+);
+
+// Every CI `oven-sh/setup-bun` step reads `.bun-version` (#12009). It is the same CVE floor for the toolchain Bun, and it was the one
+// member of the set that no test bounded (review of #12073: `echo 1.4.3 > .bun-version` stayed green).
+describe("CI toolchain Bun floor (#12026)", () => {
+  it(".bun-version is a plain x.y.z at or above the embedded-runtime floor", () => {
+    const v = readFileSync(join(APP_ROOT, "..", "..", ".bun-version"), "utf8").trim();
+    expect(compareSemver(v, BUN_FLOOR.join(".")), `.bun-version ${v} is below ${BUN_FLOOR.join(".")}`).toBeGreaterThanOrEqual(0);
+  });
+});

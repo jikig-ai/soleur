@@ -918,6 +918,16 @@ case_count_parity() { # <script> <bootstrap>
   COUNT_PARITY_DETAIL="script=[$sx] bootstrap=[$bx]"
   [ -n "$sx" ] && [ "$sx" = "$bx" ] && [ "$(grep -cE "find -H [^)]*-printf \." "$1")" = 1 ]
 }
+# P4b (#11431) — the refs_assert host script enumerates the repositories directory with the bootstrap's `_repo_count` exclusions (typed, both sides).
+case_refs_count_parity() { # <refs-assert script> <bootstrap>
+  local sx bx
+  sx="$(grep -vE '^[[:space:]]*#' "$1" | grep -E 'find -H .*-mindepth 1' | grep -oE -- "-name '?[^ ')]+'?" | tr -d "'" | LC_ALL=C sort | paste -sd' ' -)"
+  bx="$(awk '/^_repo_count\(\) \{/,/^\}/' "$2" | grep -oE "! -name [^ ]+" | sed 's/^! //' | tr -d "'" | LC_ALL=C sort | paste -sd' ' -)"
+  REFS_PARITY_DETAIL="refs-assert=[$sx] bootstrap=[$bx]"
+  [ -n "$sx" ] && [ "$sx" = "$bx" ] && [ "$(grep -vE '^[[:space:]]*#' "$1" | grep -cE 'find -H .*-mindepth 1')" = 1 ]
+}
+if case_refs_count_parity "$DIR/git-data-refs-assert.sh" "$DIR/git-data-bootstrap.sh"; then pass "P4b: the refs_assert host script's repository enumeration names exactly the bootstrap's _repo_count exclusions ($REFS_PARITY_DETAIL)"
+else fail "P4b: the refs_assert enumeration's exclusions drifted from the bootstrap's _repo_count" "$REFS_PARITY_DETAIL"; fi
 if case_count_parity "$SCRIPT" "$DIR/git-data-bootstrap.sh"; then pass "P4: the count skips exactly what the bootstrap's _repo_count skips ($COUNT_PARITY_DETAIL)"
 else fail "P4: the count's exclusions drifted from the bootstrap's _repo_count" "$COUNT_PARITY_DETAIL"; fi
 
@@ -1444,13 +1454,14 @@ case_capture_census() { # <script>
   # `: "$(gd_capture ...)"` and `if gd_capture ...; then`); the definition `gd_capture() {` and prose mentions do not match
   calls="$(printf '%s\n' "$code" | grep -oE '(^[[:space:]]*|[;&|({!][[:space:]]*|\$\([[:space:]]*|\b(if|then|do|else|while|until|elif)[[:space:]]+)gd_capture[[:space:]]' | wc -l | tr -d ' ')"
   # the stdin-file and bound parameters (#10138) belong to ONE caller: mode_wipe_assert's call, and no other gd_capture call carries them
-  params="$(printf '%s\n' "$code" | awk '/^mode_wipe_assert\(\) \{/ {f=1} f && /^\}/ {f=0} f' | grep -cE 'gd_capture[^|]*"\$body"[[:space:]]+"\$tmo"' || true)"
-  stray="$(printf '%s\n' "$code" | awk '/^mode_wipe_assert\(\) \{/ {f=1; next} f && /^\}/ {f=0; next} !f' | grep -E 'gd_capture[[:space:]]' | grep -cE '"\$body"|"\$tmo"|\$body|\$tmo|/dev/null [0-9]' || true)"
+  params="$(printf '%s\n' "$code" | awk '/^mode_(wipe|refs)_assert\(\) \{/ {f=1} f && /^\}/ {f=0} f' | grep -cE 'gd_capture[^|]*"\$body"[[:space:]]+"\$tmo"' || true)"
+  stray="$(printf '%s\n' "$code" | awk '/^mode_(wipe|refs)_assert\(\) \{/ {f=1; next} f && /^\}/ {f=0; next} !f' | grep -E 'gd_capture[[:space:]]' | grep -cE '"\$body"|"\$tmo"|\$body|\$tmo|/dev/null [0-9]' || true)"
   CAPTURE_DETAIL="calls=$calls params=$params stray=$stray outside=[$(printf '%s' "$outside" | tr '\n' '|' | cut -c1-300)]"
-  # Six: refuse_if_unmounted, the store session, the freeze probe, the fence probe, the freeze gc check
-  # and mode_wipe_assert's one call (#10138: it adds the optional stdin-file and bound parameters, the
-  # single ssh site is unchanged).
-  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 6 ] && [ "$params" = 1 ] && [ "$stray" = 0 ]
+  # Seven: refuse_if_unmounted, the store session, the freeze probe, the fence probe, the freeze gc check,
+  # mode_wipe_assert's one call (#10138: it adds the optional stdin-file and bound parameters, the single ssh site is
+  # unchanged) and mode_refs_assert's one call (#11431: the same two parameters; the stdin/bound callers are a NAME
+  # ALLOW-LIST, mode_wipe_assert|mode_refs_assert, so the next stdin verb is a one-token edit, not a call-site count).
+  [ -z "$outside" ] && [ "$calls" -ge 1 ] && [ "$calls" = 7 ] && [ "$params" = 2 ] && [ "$stray" = 0 ]
 }
 if case_line2; then pass "S8a/G5: a findmnt answer with an injected second line is probe_failed rc=96 and neither line is printed"
 else fail "S8a/G5: a multi-line captured value was accepted or printed" "$(ctx)"; fi
@@ -1460,7 +1471,7 @@ run_case g5big "${KEYED[@]}" SHIM_FINDMNT=big
 if [ "$RC" = 5 ] && grep -qxF '[git-data-cutover] STORE probe=store-mounted verdict=probe_failed rc=96' "$OUT" && ! grep -q 'aaaaaaaaaa' "$OUT"; then
   pass "G5: a 5005-byte answer that would match once truncated is refused (cap 4096), never printed"
 else fail "G5: an oversized answer was truncated into an accepted value, or printed" "$(ctx)"; fi
-if case_capture_census "$SCRIPT"; then pass "G5 census: exactly six gd_capture call sites in every call form (line-leading, \$(...), if/then, after ; & |); the stdin-file and bound parameters are passed by mode_wipe_assert's one call and no other; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
+if case_capture_census "$SCRIPT"; then pass "G5 census: exactly seven gd_capture call sites in every call form (line-leading, \$(...), if/then, after ; & |); the stdin-file and bound parameters are passed by mode_wipe_assert's and mode_refs_assert's one call each and no other; no ssh invocation is expanded outside access_gate/gd_capture ($CAPTURE_DETAIL)"
 else fail "G5 census: a raw capture or a stray invocation exists" "$CAPTURE_DETAIL"; fi
 
 # ── GUARD 7 — real modes are refused before any remote call ───────────────────────────
@@ -1872,9 +1883,9 @@ iv = yaml.safe_load(open(iv_path)); ap = yaml.safe_load(open(apply_path))
 on = wf.get(True) or wf.get("on") or {}
 check("WF-on: the only trigger is workflow_dispatch (on: read through the True-key lookup)", isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"], on if not isinstance(on, dict) else list(on.keys()))
 inputs = ((on.get("workflow_dispatch") or {}).get("inputs") or {}) if isinstance(on, dict) else {}
-check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the nine modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
-check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear",
-      sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "rollback", "snapshot_clear", "unfreeze", "wipe", "wipe_check", "wipe_finish"],
+check("G7/AC9: workflow_dispatch inputs are exactly {confirm, lineage, mode, origin_run, volume_id} (mode selects the ten modes; lineage is the stranded-sentinel lever for unfreeze; volume_id and origin_run are read by the wipe modes only, #10138)", sorted(inputs.keys()) == ["confirm", "lineage", "mode", "origin_run", "volume_id"], sorted(inputs.keys()))
+check("AC9: the mode input is a closed choice of exactly proof|flip|rollback|unfreeze|redeploy|refs_assert|wipe|wipe_finish|wipe_check|snapshot_clear (#11431: refs_assert is the tenth)",
+      sorted((inputs.get("mode") or {}).get("options") or []) == ["flip", "proof", "redeploy", "refs_assert", "rollback", "snapshot_clear", "unfreeze", "wipe", "wipe_check", "wipe_finish"],
       (inputs.get("mode") or {}).get("options"))
 RUN_NAME = "${{ (inputs.mode == 'wipe' || inputs.mode == 'wipe_finish' || inputs.mode == 'wipe_check' || inputs.mode == 'snapshot_clear') && format('git-data {0} {1}', inputs.mode, inputs.volume_id) || format('git-data {0}', inputs.mode) }}"
 check("WF-runname: run-name is EXACTLY the pinned closed pattern (the wipe family carries the typed volume id, every other mode is `git-data <mode>`; the wipe preconditions parse it, scripts/lib/git-data-wipe-runs.sh)",
@@ -1920,6 +1931,7 @@ pos = {
     "key_fetch": idx(lambda s: s.get("id") == "key_fetch"),
     "ssh_config": idx(lambda s: s.get("id") == "ssh_config"),
     "host_proof": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "proof"),
+    "refs": idx(lambda s: s.get("id") == "refs"),
     "freeze": idx(lambda s: isinstance(s.get("env"), dict) and s["env"].get("MODE") == "freeze"),
     "flag_write": idx(lambda s: s.get("id") == "flag_write"),
     "redeploy": idx(lambda s: isinstance(s.get("run"), str) and "dispatch-web-redeploy/track.sh" in s["run"] and not s.get("if") == "always()"),
@@ -1929,8 +1941,8 @@ pos = {
     "finalizer": idx(lambda s: s.get("name") and "Finalizer" in s["name"]),
 }
 single = all(len(v) == 1 for v in pos.values())
-order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "flip_preconditions", "bridge", "key_fetch", "ssh_config", "host_proof", "freeze", "flag_write", "redeploy", "unfreeze", "probe", "finalizer", "teardown"]
-check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < preconditions < bridge < key fetch < ssh_config < proof < freeze < flag write < redeploy < unfreeze < probe < finalizer < teardown (the finalizer runs BEFORE the bridge teardown — its unfreeze arm needs the SSH path alive)",
+order = ["confirm", "checkout", "doppler", "flag_precheck", "secrets_check", "flip_preconditions", "bridge", "key_fetch", "ssh_config", "host_proof", "refs", "freeze", "flag_write", "redeploy", "unfreeze", "probe", "finalizer", "teardown"]
+check("D-6: each step exists exactly once, in order confirm < checkout < doppler < flag precheck < secrets check < preconditions < bridge < key fetch < ssh_config < proof < refs assertion < freeze < flag write < redeploy < unfreeze < probe < finalizer < teardown (the finalizer runs BEFORE the bridge teardown — its unfreeze arm needs the SSH path alive)",
       single and [pos[k][0] for k in order] == sorted(pos[k][0] for k in order), {k: v for k, v in pos.items()})
 def step(k):
     return steps[pos[k][0]] if len(pos[k]) == 1 else {}
@@ -1942,14 +1954,23 @@ check("WF-pinfault: the pin-fault read GETs organizations/jikigai-eu/workflows/1
       _fpcode.count('"${host}/api/0/organizations/jikigai-eu/workflows/1310055/"') == 1
       and "alert-rules" not in _fpcode and "https://sentry.io" not in _fpcode,
       [_fpcode.count("workflows/1310055"), "alert-rules" in _fpcode, "https://sentry.io" in _fpcode])
+# #11704 (CTO F9): the new_sessions_paused read binds the Better Stack credential under a DIFFERENT name at step level (BS_DOPPLER_TOKEN) and
+# hands it to the reader per command, so no step-level DOPPLER_TOKEN is visible to the Sentry read, gh or any other command of the step. The
+# behaviour is pinned by the EXECUTED PS rows; this row pins the binding and that the block is the step's last gate before the final echo.
+_fpenv = _fp.get("env") or {}
+_fprun = _fp.get("run") or ""
+_i_deny = _fprun.find('ver_le "$GIT_DATA_DENY_FLOOR" "$running"'); _i_mark = _fprun.find("# new_sessions_paused (#11704)"); _i_echo = _fprun.find('echo "preconditions clear')
+check("WF-pausegate: the flip preconditions step binds BS_DOPPLER_TOKEN: secrets.DOPPLER_TOKEN and no step-level DOPPLER_TOKEN, and the new_sessions_paused block sits after the deny-floor check and before the final echo",
+      _fpenv.get("BS_DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN }}" and "DOPPLER_TOKEN" not in _fpenv
+      and -1 < _i_deny < _i_mark < _i_echo, [sorted(k for k in _fpenv if "DOPPLER" in k), _i_deny, _i_mark, _i_echo])
 b = step("bridge")
 check("WF3: bridge passes server-ip from env.WEB_HOST_PRIVATE_IP", (b.get("with") or {}).get("server-ip") == "${{ env.WEB_HOST_PRIVATE_IP }}", (b.get("with") or {}).get("server-ip"))
 check("WF4: the bridge is gated to the host-touching modes (not redeploy; not a nothing-rollback)",
       bool(b) and "!= 'redeploy'" in str(b.get("if")) and "nothing_to_rollback != '1'" in str(b.get("if")) and "env" not in b, b.get("if"))
 check("WF-bridge-token: bridge doppler-token is secrets.DOPPLER_TOKEN", (b.get("with") or {}).get("doppler-token") == "${{ secrets.DOPPLER_TOKEN }}", (b.get("with") or {}).get("doppler-token"))
 fp = step("flag_precheck")
-check("AC9: flag precheck binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD, FLAG_MODE} and runs the precheck script, gated off redeploy",
-      fp.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode }}"}
+check("AC9: flag precheck binds exactly {DOPPLER_TOKEN: secrets.DOPPLER_TOKEN_PRD, FLAG_MODE: the mode, with refs_assert mapped to proof so a flag that is on refuses flag_already_true} and runs the precheck script, gated off redeploy",
+      fp.get("env") == {"DOPPLER_TOKEN": "${{ secrets.DOPPLER_TOKEN_PRD }}", "FLAG_MODE": "${{ steps.confirm.outputs.mode == 'refs_assert' && 'proof' || steps.confirm.outputs.mode }}"}
       and "git-data-flag-precheck.sh" in str(fp.get("run", "")) and "!= 'redeploy'" in str(fp.get("if")),
       (fp.get("env"), fp.get("if")))
 sc = step("secrets_check")
@@ -1966,6 +1987,15 @@ check("WF6: the host-side proof step binds {WEB_HOSTS, GIT_DATA_SSH, MODE=proof,
 check("WF10: the proof step runs the script, mode-gated to proof|flip — unfreeze is EXCLUDED (the proof refuses a held sentinel, which is unfreeze's only reason to exist)",
       str(r.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh"
       and "proof" in str(r.get("if")) and "'unfreeze'" not in str(r.get("if")), (r.get("run"), r.get("if")))
+fw0 = step("flag_write")
+rs = step("refs")
+check("WF-refs: the refs assertion step binds exactly {WEB_HOSTS, GIT_DATA_SSH, MODE=refs_assert} (no CUTOVER_LINEAGE, so a held sentinel is never tolerated as resume arm A; no CONTAINER_PROBE), runs the script once, and is gated to refs_assert alone (never a nothing-to-rollback run)",
+      rs.get("env") == {"WEB_HOSTS": "${{ env.WEB_HOST_PRIVATE_IP }}", "GIT_DATA_SSH": "ssh -F ${{ runner.temp }}/gd-ssh-config", "MODE": "refs_assert"}
+      and str(rs.get("run", "")).strip() == "bash apps/web-platform/infra/git-data-cutover.sh"
+      and str(rs.get("if")) == "steps.confirm.outputs.mode == 'refs_assert' && steps.flag_precheck.outputs.nothing_to_rollback != '1'"
+      and "continue-on-error" not in rs, (rs.get("env"), rs.get("if")))
+check("WF-flagwrite-refs: the flag_write step's if: never matches refs_assert (only the flip and rollback arms), so the mapped FLAG_MODE=proof read can never write the flag",
+      "refs_assert" not in str(fw0.get("if")) and "refs_assert" not in json.dumps(fw0.get("env") or {}), (fw0.get("if"), fw0.get("env")))
 uf = step("unfreeze")
 check("WF10b: the unfreeze step accepts the operator lineage override (stranded sentinel recovery) and falls back to this run's lineage",
       bool(uf) and "inputs.lineage" in json.dumps(uf.get("env") or {}), (uf.get("env") or {}).get("CUTOVER_LINEAGE"))
@@ -2149,7 +2179,7 @@ check("N-body: no notify run: body interpolates a ${{ }} expression and the job 
       bool(notify) and not any("${{" in b for b in bodies)
       and _nb_json.count(_vid_bind) == 1 and not re.search(r"\binputs\b|github\.event|toJSON|vars\.", _nb_json.replace(_vid_bind, ""))
       and "case \"${WIPE_VOLUME_ID:-}\" in ''|*[!0-9]*) ;;" in "\n".join(bodies), [b[:60] for b in bodies if "${{" in b])
-EXPR_OK = [r"needs\.cutover\.result", r"needs\.cutover\.outputs\.(mode|finalizer_ran|freeze_held|recovery_failed|probe_failed|gc_timer_stopped|started)",
+EXPR_OK = [r"needs\.cutover\.result", r"needs\.cutover\.outputs\.(mode|finalizer_ran|freeze_held|recovery_failed|probe_failed|gc_timer_stopped|started|refs_class)",
            r"needs\.wipe\.result", r"needs\.wipe\.outputs\.(mode|started|phase|refusal)", re.escape("inputs.volume_id"),
            re.escape("needs.cutover.outputs.mode || needs.wipe.outputs.mode"),
            re.escape("needs.cutover.result == 'skipped' && needs.wipe.result || needs.cutover.result"),
@@ -2158,13 +2188,13 @@ EXPR_OK = [r"needs\.cutover\.result", r"needs\.cutover\.outputs\.(mode|finalizer
 exprs = [e.strip() for e in re.findall(r"\$\{\{(.*?)\}\}", json.dumps(nsteps))]
 bad_exprs = [e for e in exprs if not any(re.fullmatch(p_, e) for p_ in EXPR_OK)]
 body_env = (next((x for x in nsteps if x.get("id") == "body"), {}).get("env")) or {}
-check("N-exprs: every ${{ }} expression in the notify steps is on the allowlist (the needs.cutover and needs.wipe verdict outputs and results, the two pinned || forms, run id/url, the two secrets, the body step's own outputs and the email outcome), and the body step's env is EXACTLY the fourteen inputs (the MODE and RESULT merges, the cutover result, the three wipe outputs plus the typed volume id, the five cutover verdict inputs plus the run id and url) with their canonical sources",
+check("N-exprs: every ${{ }} expression in the notify steps is on the allowlist (the needs.cutover and needs.wipe verdict outputs and results, the two pinned || forms, run id/url, the two secrets, the body step's own outputs and the email outcome), and the body step's env is EXACTLY the fifteen inputs (the MODE and RESULT merges, the cutover result, the three wipe outputs plus the typed volume id, the five cutover verdict inputs, the refs class, plus the run id and url) with their canonical sources",
       bool(exprs) and not bad_exprs and body_env == {
           "MODE": "${{ needs.cutover.outputs.mode || needs.wipe.outputs.mode }}", "RESULT": "${{ needs.cutover.result == 'skipped' && needs.wipe.result || needs.cutover.result }}", "CUTOVER_RESULT": "${{ needs.cutover.result }}",
           "WIPE_STARTED": "${{ needs.wipe.outputs.started }}", "WIPE_PHASE": "${{ needs.wipe.outputs.phase }}", "WIPE_REFUSAL": "${{ needs.wipe.outputs.refusal }}",
           "WIPE_VOLUME_ID": "${{ inputs.volume_id }}", "FINALIZER_RAN": "${{ needs.cutover.outputs.finalizer_ran }}", "FREEZE_HELD": "${{ needs.cutover.outputs.freeze_held }}",
           "RECOVERY_FAILED": "${{ needs.cutover.outputs.recovery_failed }}", "PROBE_FAILED": "${{ needs.cutover.outputs.probe_failed }}",
-          "GC_TIMER_STOPPED": "${{ needs.cutover.outputs.gc_timer_stopped }}", "RUN_ID": "${{ github.run_id }}", "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"},
+          "GC_TIMER_STOPPED": "${{ needs.cutover.outputs.gc_timer_stopped }}", "REFS_CLASS": "${{ needs.cutover.outputs.refs_class }}", "RUN_ID": "${{ github.run_id }}", "RUN_URL": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"},
       (bad_exprs, sorted(body_env)))
 # every steps.<id>.outputs / steps.<id>.outcome reference must resolve to a declared step id in ITS job
 def ref_ok(jname, jobd):
@@ -2174,12 +2204,12 @@ def ref_ok(jname, jobd):
 check("N-refs: every steps.<id>.outputs/outcome reference in either job resolves to a step id declared in that same job (a renamed id would otherwise read empty and still pass every substring row)",
       not ref_ok("cutover", job) and not ref_ok("notify-failure", notify), (ref_ok("cutover", job), ref_ok("notify-failure", notify)))
 oc = job.get("outputs") or {}
-check("N-outputs: the cutover job exports exactly {mode, started, finalizer_ran, freeze_held, recovery_failed, probe_failed, gc_timer_stopped} with these exact expressions",
+check("N-outputs: the cutover job exports exactly {mode, started, finalizer_ran, freeze_held, recovery_failed, probe_failed, gc_timer_stopped, refs_class} with these exact expressions (refs_class is written by the refs step on its refusal path only)",
       oc == {"mode": "${{ steps.confirm.outputs.mode }}", "started": "${{ steps.confirm.outputs.mode != '' }}",
              "finalizer_ran": "${{ steps.finalizer.outputs.ran }}", "freeze_held": "${{ steps.finalizer.outputs.freeze_held }}",
              "recovery_failed": "${{ steps.finalizer.outputs.recovery_failed }}",
              "probe_failed": "${{ steps.probe.outcome == 'failure' && '1' || '' }}",
-             "gc_timer_stopped": "${{ steps.finalizer.outputs.gc_timer_stopped }}"}, oc)
+             "gc_timer_stopped": "${{ steps.finalizer.outputs.gc_timer_stopped }}", "refs_class": "${{ steps.refs.outputs.refs_class }}"}, oc)
 check("N-finalizer: the finalizer step has id finalizer and is fed the unfreeze step's outcome AND its gc_timer_failed output (its behaviour is pinned by the executed FZ rows)",
       step("finalizer").get("id") == "finalizer" and (step("finalizer").get("env") or {}).get("UNFREEZE_OUTCOME") == "${{ steps.unfreeze.outcome }}"
       and (step("finalizer").get("env") or {}).get("GC_TIMER_FAILED") == "${{ steps.unfreeze.outputs.gc_timer_failed }}"
@@ -2221,7 +2251,7 @@ while IFS=$'\t' read -r v name detail; do
   _wf_n=$((_wf_n + 1))
   if [ "$v" = ok ]; then pass "$name"; else fail "$name" "$detail"; fi
 done < "$T/wf.tsv"
-[ "$_wf_n" -eq 58 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 58) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
+[ "$_wf_n" -eq 61 ] || fail "WF: $_wf_n workflow verdicts were produced (expected exactly 61) — the YAML leg crashed, or a row was added or deleted without restating the count" "$(head -c 300 "$T/wf.err")"
 
 # ── WORKFLOW STEPS, EXECUTED ──────────────────────────────────────────────────────────
 # Per-name Doppler shim: answers per project/config/secret AND per flag presence, mirroring the
@@ -2321,6 +2351,240 @@ FPCASES
   done
   if [ -z "$_fp_bad" ]; then pass "FP3: a SENTRY_API_HOST other than the pinned org host refuses before any request, so the read token is never sent elsewhere"
   else fail "FP3: an unpinned SENTRY_API_HOST reached the network or did not refuse" "$_fp_bad"; fi
+fi
+
+# new_sessions_paused precondition (#11704, CTO F1/F2/F8/F9): EXECUTE the real block of the `Flip preconditions` step (the step head through the
+# one-line fail(), plus the bytes from the marker comment to the line before the final "preconditions clear" echo) against a fake Better Stack
+# reader and PATH shims for doppler and sleep. The SQL cannot be validated offline; its live dry run is recorded in the PR (shape only).
+PSD="$T/ps"; assert_fixture_dir "$PSD"; rm -rf "$PSD"; mkdir -p "$PSD/ws/scripts/lib" "$PSD/bin" "$PSD/seq" || { printf 'FAIL SETUP: mkdir ps\n' >&2; exit 1; }
+cp "$ROOT/scripts/lib/betterstack-read-classify.sh" "$PSD/ws/scripts/lib/betterstack-read-classify.sh" || { printf 'FAIL SETUP: classify lib\n' >&2; exit 1; }
+cat > "$PSD/bin/doppler" <<'SHIM'
+#!/usr/bin/env bash
+printf 'doppler %s\n' "$*" >> "$PS_DIR/log"
+if [ "${DOPPLER_TOKEN:-}" = "fixture-bs-token" ]; then echo "token=bound" >> "$PS_DIR/log"; else echo "token=wrong" >> "$PS_DIR/log"; fi
+[ "${1:-}" = run ] || exit 64
+shift; while [ $# -gt 0 ] && [ "$1" != -- ]; do shift; done; shift
+exec "$@"
+SHIM
+cat > "$PSD/bin/sleep" <<'SHIM'
+#!/usr/bin/env bash
+printf 'sleep %s\n' "$*" >> "$PS_DIR/log"
+SHIM
+cat > "$PSD/ws/scripts/betterstack-query.sh" <<'SHIM'
+#!/usr/bin/env bash
+d="${PS_DIR:?}"
+n=$(( $(cat "$d/count" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$d/count"
+printf '%s\n' "${1:-}" >> "$d/sql"
+[ -f "$d/seq/$n.out" ] || n=1
+cat "$d/seq/$n.out"
+[ -f "$d/seq/$n.err" ] && cat "$d/seq/$n.err" >&2
+echo "reader-stderr-canary-77 BETTERSTACK_QUERY_PASSWORD=hunter2" >&2
+exit "$(cat "$d/seq/$n.rc")"
+SHIM
+chmod +x "$PSD/bin/doppler" "$PSD/bin/sleep" "$PSD/ws/scripts/betterstack-query.sh"
+ps_build() { # <flip_preconditions.sh> — head through fail(), then the new block, then the end marker
+  sed -n '1,/^[[:space:]]*fail() {/p' "$1" > "$PSD/slice.sh"
+  sed -n '/^[[:space:]]*# new_sessions_paused (#11704)/,/^[[:space:]]*echo "preconditions clear/p' "$1" | sed '$d' > "$PSD/block.sh"
+  cat "$PSD/block.sh" >> "$PSD/slice.sh"
+  printf '\necho PS_REACHED_END\n' >> "$PSD/slice.sh"
+}
+ps_set() { printf '%s' "$3" > "$PSD/seq/$1.out"; printf '%s' "$2" > "$PSD/seq/$1.rc"; } # <attempt> <reader-rc> <stdout>
+ps_row() { printf '{"leg":"%s","age_s":%s,"p":%s}\n' "$1" "$2" "$3"; } # <leg> <age_s> <p>
+ps_reset() { rm -f "$PSD"/seq/* "$PSD/count" "$PSD"/bs-pause-err.*; : > "$PSD/log"; : > "$PSD/sql"; }
+ps_run() {
+  (cd "$PSD/ws" && env -i PATH="$PSD/bin:/usr/bin:/bin" RUNNER_TEMP="$PSD" GITHUB_WORKSPACE="$PSD/ws" BS_DOPPLER_TOKEN=fixture-bs-token PS_DIR="$PSD" \
+    bash --noprofile --norc -eo pipefail "$PSD/slice.sh" > "$PSD/out" 2>&1)
+  PS_RC=$?
+  PS_READS="$(cat "$PSD/count" 2>/dev/null || echo 0)"; PS_SLEEPS="$(grep -c '^sleep 20$' "$PSD/log" || true)"
+}
+# ps_check <rc-want> <verdict|none> <reads> <sleeps> <reached 0|1> — 0 when the last run matches; PS_WHY says what differed.
+ps_check() {
+  local bad=""
+  [ "$PS_RC" = "$1" ] || bad="$bad rc=$PS_RC"
+  if [ "$2" = none ]; then ! grep -q 'verdict=' "$PSD/out" || bad="$bad verdict-present"
+  else
+    grep -qF "::error title=git-data-cutover preconditions::verdict=$2" "$PSD/out" || bad="$bad no-verdict-$2"
+    grep -q '^remedy: ' "$PSD/out" || bad="$bad no-remedy"
+  fi
+  [ "$PS_READS" = "$3" ] || bad="$bad reads=$PS_READS"
+  [ "$PS_SLEEPS" = "$4" ] || bad="$bad sleeps=$PS_SLEEPS"
+  if [ "$5" = 1 ]; then grep -q '^PS_REACHED_END$' "$PSD/out" || bad="$bad end-not-reached"
+  else ! grep -q 'PS_REACHED_END' "$PSD/out" || bad="$bad end-reached"; fi
+  ! grep -q 'token=wrong' "$PSD/log" || bad="$bad token-not-bound"
+  ! grep -qE 'fixture-bs-token|hunter2|reader-stderr-canary' "$PSD/out" || bad="$bad secret-or-stderr-in-output"
+  # the reader's stderr temp file (and its .rows sibling) is removed on every path (RUNNER_TEMP is $PSD here)
+  ! ls "$PSD"/bs-pause-err.* >/dev/null 2>&1 || bad="$bad stderr-tempfile-left"
+  PS_WHY="$bad"; [ -z "$bad" ]
+}
+case_ps1() { # <step.sh> — both legs fresh and green: passes; one read; the exact SQL; the token bound per command
+  ps_build "$1"; ps_reset
+  ps_set 1 0 "$(ps_row web-2 30 1; ps_row web-1 40 1; ps_row web-2 90 1; ps_row web-1 100 1)"
+  ps_run
+  ps_check 0 none 1 0 1 || return 1
+  grep -qF "IN ('soleur-web-platform','soleur-inngest-prd')" "$PSD/sql" && grep -qF "= 'soleur-web-2'" "$PSD/sql" \
+    && grep -qF 'INTERVAL 2 MINUTE' "$PSD/sql" && grep -qF 'remote($BS_TABLE)' "$PSD/sql" \
+    && grep -qF "match(raw,'agent_sessions_live=[0-9]+ cc_queries=[0-9]+ legacy_sessions=[0-9]+ starting=[0-9]+ new_sessions_paused=[01] refused_since_last=[0-9]+')" "$PSD/sql" \
+    && grep -q 'token=bound' "$PSD/log" || { PS_WHY="sql-pin"; return 1; }
+  # the rest of the query contract the fake reader cannot enforce (it ignores the SQL): the age is computed server-side, p is an
+  # integer extracted behind the closed-grammar match, the window is a `dt >` bound, the row cap and the output format are literal.
+  grep -qF "dateDiff('second', dt, now()) AS age_s" "$PSD/sql" \
+    && grep -qF "toUInt8OrNull(extract(raw,'new_sessions_paused=([01])')) AS p" "$PSD/sql" \
+    && grep -qF 'WHERE dt > now() - INTERVAL 2 MINUTE' "$PSD/sql" \
+    && grep -qF 'ORDER BY dt DESC LIMIT 200 FORMAT JSONEachRow' "$PSD/sql" || { PS_WHY="sql-pin-2"; return 1; }
+  # the reader call is scoped to the three query secrets (as inngest-config-drift.yml does) with the token handed over per command
+  grep -qF 'doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh' "$PSD/log" \
+    || { PS_WHY="reader-not-scoped"; return 1; }
+}
+case_ps2() { # web-1 carries a 0 row OLDER than its newest 1 row: refused at once, no retry; the remedy is the owner-only command with its real path
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1; ps_row web-1 50 1; ps_row web-1 80 0; ps_row web-2 10 1)"
+  ps_run; ps_check 1 pause_not_on 1 0 0 || return 1
+  grep -qF 'remedy: Owner action (agents must not run it): bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd on, then ask the owner to re-dispatch' "$PSD/out" \
+    && [ -f "$ROOT/plugins/soleur/skills/flag-set-role/scripts/flip.sh" ] || { PS_WHY="remedy-content"; return 1; }
+}
+case_ps3() { # the 0 row on web-2 only
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1; ps_row web-2 10 1; ps_row web-2 90 0)"
+  ps_run; ps_check 1 pause_not_on 1 0 0
+}
+case_ps4() { # web-1 newest row aged 90 s: the F8 bound, three reads
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 90 1; ps_row web-1 110 1; ps_row web-2 10 1)"
+  ps_run; ps_check 1 pause_unread 3 2 0
+}
+case_ps5() { # no row for web-2 after three reads; the remedy names the read-only check
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1)"
+  ps_run; ps_check 1 pause_unread 3 2 0 || return 1
+  # distinct clauses of the remedy text (each exists in the workflow's pause_unread message), not the bare word "owner"
+  local _r; _r="$(grep '^remedy: ' "$PSD/out")"
+  grep -qF 'Read-only check (an agent may run it; it needs the Doppler prd_terraform query secrets): bash scripts/betterstack-query.sh' <<<"$_r" \
+    && grep -qF 'so the owner checks the web hosts' <<<"$_r" \
+    && grep -qF 'class=credentials-rejected (or a SOLEUR_CREDENTIAL_REFUSED line above) needs the owner to fix the BETTERSTACK_QUERY_* secrets in Doppler prd_terraform' <<<"$_r" \
+    || { PS_WHY="remedy-content"; return 1; }
+}
+case_ps75() { # the newest row exactly 75 s old is still fresh: one read, passes (the bound is -gt 75, not -ge)
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 75 1; ps_row web-1 95 1; ps_row web-2 10 1)"
+  ps_run; ps_check 0 none 1 0 1
+}
+case_ps76() { # 76 s is stale: three reads, pause_unread (one second over the 75 s bound)
+  ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 76 1; ps_row web-1 96 1; ps_row web-2 10 1)"
+  ps_run; ps_check 1 pause_unread 3 2 0
+}
+case_ps_negzero() { # a =0 row whose age is negative or non-integer is still a pause that is not on, never a bare unreadable answer
+  local _l
+  for _l in '{"leg":"web-1","age_s":-5,"p":0}' '{"leg":"web-2","age_s":1.5,"p":0}' '{"leg":"web-2","age_s":"x","p":"0"}'; do
+    ps_build "$1"; ps_reset; ps_set 1 0 "$(ps_row web-1 20 1; ps_row web-2 10 1; printf '%s\n' "$_l")"
+    ps_run; ps_check 1 pause_not_on 1 0 0 || { PS_WHY="$PS_WHY [$_l]"; return 1; }
+  done
+}
+case_ps_trunc() { # 199 green rows pass; 200 rows hit the LIMIT 200 cap, so an older =0 row could be hidden: pause_unread after ONE read, no sleep (a full page cannot change in 20 s)
+  local _i _rows
+  _rows="$(_i=0; while [ "$_i" -lt 199 ]; do ps_row "web-$((_i % 2 + 1))" "$((10 + _i % 50))" 1; _i=$((_i + 1)); done)"
+  ps_build "$1"; ps_reset; ps_set 1 0 "$_rows"; ps_run; ps_check 0 none 1 0 1 || { PS_WHY="$PS_WHY [199 rows]"; return 1; }
+  _rows="$(_i=0; while [ "$_i" -lt 200 ]; do ps_row "web-$((_i % 2 + 1))" "$((10 + _i % 50))" 1; _i=$((_i + 1)); done)"
+  ps_reset; ps_set 1 0 "$_rows"; ps_run; ps_check 1 pause_unread 1 0 0 || { PS_WHY="$PS_WHY [200 rows]"; return 1; }
+  grep -qF 'truncated' "$PSD/out" || { PS_WHY="$PS_WHY [200 rows: cause truncated not named]"; return 1; }
+}
+case_ps_refused() { # the reader's SOLEUR_CREDENTIAL_REFUSED line is surfaced (a refusal reads as a refusal); its other stderr is not
+  ps_build "$1"; ps_reset; ps_set 1 2 ""; printf 'SOLEUR_CREDENTIAL_REFUSED reader=betterstack reason=fixture\n' > "$PSD/seq/1.err"
+  ps_run; ps_check 1 pause_unread 3 2 0 || return 1
+  grep -q '^SOLEUR_CREDENTIAL_REFUSED reader=betterstack reason=fixture$' "$PSD/out" || { PS_WHY="refusal-not-surfaced"; return 1; }
+}
+if [ ! -s "$T/steps/flip_preconditions.sh" ]; then
+  fail "PS0: the flip preconditions step body was not extracted" "never a pass on zero"
+else
+  ps_build "$T/steps/flip_preconditions.sh"
+  if [ ! -s "$PSD/block.sh" ]; then fail "PS0: the new_sessions_paused block (marker comment '# new_sessions_paused (#11704)') is absent from the step" "RED until the block exists"; fi
+  if case_ps1 "$T/steps/flip_preconditions.sh"; then pass "PS1: both legs fresh (newest 30/40 s) and every row 1 -> the block passes after exactly one read; the SQL names both web-1 host names, web-2, INTERVAL 2 MINUTE and the full closed-grammar match; the reader ran with the token bound per command"
+  else fail "PS1: the green pause path or its SQL differs" "$PS_WHY"; fi
+  if case_ps2 "$T/steps/flip_preconditions.sh"; then pass "PS2: a 0 row older than the newest 1 row on web-1 refuses with verdict=pause_not_on plus a remedy: line, after one read, without sleeping, never reaching the end"
+  else fail "PS2: an older 0 row did not refuse as pause_not_on" "$PS_WHY"; fi
+  if case_ps3 "$T/steps/flip_preconditions.sh"; then pass "PS3: the same 0 row on web-2 only refuses with verdict=pause_not_on (the second leg is judged)"
+  else fail "PS3: a 0 row on web-2 did not refuse" "$PS_WHY"; fi
+  if case_ps4 "$T/steps/flip_preconditions.sh"; then pass "PS4: web-1 newest row 90 s old (all rows 1) refuses with verdict=pause_unread after three reads and two sleeps (the F8 75 s bound)"
+  else fail "PS4: a stale newest row did not refuse as pause_unread" "$PS_WHY"; fi
+  if case_ps5 "$T/steps/flip_preconditions.sh"; then pass "PS5: no row for web-2 (web-1 green) refuses with verdict=pause_unread after three reads and two sleeps"
+  else fail "PS5: a missing leg did not refuse as pause_unread" "$PS_WHY"; fi
+  # PS6 — the reader exits non-zero on every attempt: pause_unread, the class token, no credential text.
+  _ps_bad=""
+  for spec in "1|reader-exit-1|" "22|credentials-rejected|Code: 516 Authentication failed" "124|transport|"; do
+    IFS='|' read -r _rc _cls _body <<<"$spec"
+    ps_reset; ps_set 1 "$_rc" "$_body"; ps_run
+    ps_check 1 pause_unread 3 2 0 && grep -qF "class=$_cls" "$PSD/out" || _ps_bad="$_ps_bad [rc=$_rc cls=$_cls: $PS_WHY]"
+  done
+  if [ -z "$_ps_bad" ]; then pass "PS6: a reader failing on every attempt (rc 1, 22, 124) refuses with verdict=pause_unread and the bs_read_classify token (reader-exit-1, credentials-rejected, transport); no credential or reader stderr text reaches the log"
+  else fail "PS6: a failing reader did not refuse as pause_unread with its class" "$_ps_bad"; fi
+  # PS7 — fails once, then valid (quoted integers, as ClickHouse JSONEachRow may emit 64-bit values): passes on attempt 2.
+  ps_reset; ps_set 1 1 ""; ps_set 2 0 "$(printf '%s\n' '{"leg":"web-1","age_s":"12","p":1}' '{"leg":"web-2","age_s":"9","p":"1"}')"; ps_run
+  if ps_check 0 none 2 1 1; then pass "PS7: a reader failing on attempt 1 and valid on attempt 2 passes after one sleep (quoted integers accepted)"
+  else fail "PS7: the retry did not recover" "$PS_WHY"; fi
+  # PS8 — a non-integer or missing p / age_s, an unknown leg, a non-JSON line: pause_unread (fail closed), never a pass.
+  _ps_bad=""
+  while IFS= read -r _line; do
+    ps_reset; ps_set 1 0 "$(ps_row web-1 20 1; ps_row web-2 10 1; printf '%s\n' "$_line")"; ps_run
+    ps_check 1 pause_unread 3 2 0 || _ps_bad="$_ps_bad [$_line: $PS_WHY]"
+  done <<'PSBAD'
+{"leg":"web-1","age_s":10}
+{"leg":"web-1","age_s":10,"p":null}
+{"leg":"web-1","age_s":10,"p":"x"}
+{"leg":"web-1","age_s":10,"p":2}
+{"leg":"web-2","age_s":"abc","p":1}
+{"leg":"web-2","age_s":null,"p":1}
+{"leg":"web-2","age_s":1.5,"p":1}
+{"leg":"web-3","age_s":10,"p":1}
+<html>not json</html>
+PSBAD
+  if [ -z "$_ps_bad" ]; then pass "PS8: a missing, null or non-integer p / age_s, an unknown leg or a non-JSON line among otherwise green rows refuses with verdict=pause_unread (fail closed)"
+  else fail "PS8: a malformed row did not fail closed" "$_ps_bad"; fi
+  # PS9 — static pins on the block that no behavioural row can see: no xtrace, stderr never discarded, nothing but integers and labels printed.
+  # (Position is the WF-pausegate census row; the guarded reader and the per-command token are exercised by PS1/PS6.)
+  _ps_bad=""
+  [ -s "$PSD/block.sh" ] || _ps_bad="$_ps_bad [empty-block]"
+  ! grep -qE 'set[[:space:]]+-[a-zA-Z]*x|set[[:space:]]+-o[[:space:]]+xtrace' "$PSD/block.sh" || _ps_bad="$_ps_bad [xtrace]"
+  ! grep -qF '2>/dev/null' "$PSD/block.sh" || _ps_bad="$_ps_bad [stderr-discarded]"
+  ! grep -qE 'BS_DOPPLER_TOKEN|pause_rows|pause_tsv|BS_ERR' < <(grep -E '(^|[;[:space:]])(echo|fail)[[:space:]]' "$PSD/block.sh") || _ps_bad="$_ps_bad [prints-rows-or-token]"
+  if [ -z "$_ps_bad" ]; then pass "PS9: the block has no xtrace, never discards stderr and prints no rows or credential"
+  else fail "PS9: a static pin of the pause block failed" "$_ps_bad"; fi
+  # PS10 — the 75 s bound is exact: a newest row at 75 s passes after one read, at 76 s refuses after three.
+  if case_ps75 "$T/steps/flip_preconditions.sh" && case_ps76 "$T/steps/flip_preconditions.sh"; then pass "PS10: web-1 newest row exactly 75 s old passes after one read and 76 s refuses with verdict=pause_unread after three reads (the bound is -gt 75)"
+  else fail "PS10: the 75 s freshness bound is not exact" "$PS_WHY"; fi
+  # PS11 — a =0 row with a negative or non-integer age is a pause that is not on, not an unreadable answer.
+  if case_ps_negzero "$T/steps/flip_preconditions.sh"; then pass "PS11: a valid =0 row with a negative, fractional or quoted-text age refuses with verdict=pause_not_on after one read (the zero is counted before the age check)"
+  else fail "PS11: a =0 row with a bad age was not classed pause_not_on" "$PS_WHY"; fi
+  # PS12 — a full LIMIT 200 answer could hide an older =0 row.
+  if case_ps_trunc "$T/steps/flip_preconditions.sh"; then pass "PS12: 199 green rows pass and 200 rows (the LIMIT 200 cap) refuse with verdict=pause_unread after exactly one read and no sleep (a full page cannot change in 20 s), because truncation could hide an older =0 row"
+  else fail "PS12: the 200-row truncation guard differs" "$PS_WHY"; fi
+  # PS13 — the credential-refusal marker is surfaced, the rest of the reader's stderr is not.
+  if case_ps_refused "$T/steps/flip_preconditions.sh"; then pass "PS13: a reader exit carrying SOLEUR_CREDENTIAL_REFUSED surfaces that one line and still refuses with verdict=pause_unread; the other reader stderr stays out of the log"
+  else fail "PS13: the credential-refusal line was not surfaced" "$PS_WHY"; fi
+  # M-ps-*: each mutant edits ONE line of a COPY of the workflow; the named case runs over the mutant's extracted step body and must go RED.
+  ps_mut() { # <name> <diff-lines> <sed -E program> <case-fn>
+    local name="$1" want="$2" expr="$3" fn="$4" sd
+    if mutate "$name" "$WF" "$want" "$expr"; then
+      sd="$T/mut/steps-$name"; mkdir -p "$sd"
+      python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$sd" > "$T/mut/wf-$name.tsv" 2>&1
+      if [ -s "$sd/flip_preconditions.sh" ]; then mutant_red "$name" "$fn" "$sd/flip_preconditions.sh"
+      else fail "M-$name: no flip_preconditions body was extracted from the mutant" "$(head -c 200 "$T/mut/wf-$name.tsv")"; fi
+    fi
+  }
+  ps_mut ps-removed 53 '/^ +# new_sessions_paused \(#11704\)/,/^ +echo "preconditions clear/{/^ +echo "preconditions clear/!d}' case_ps2
+  ps_mut ps-zero-ignored 2 's#^( +)if \[ "\$pause_zero" -gt 0 \]; then fail pause_not_on#\1if [ "$pause_zero" -gt 999999 ]; then fail pause_not_on#' case_ps2
+  ps_mut ps-empty-passes 2 's#\[ "\$pn" -eq 0 \] \|\| ##' case_ps5
+  ps_mut ps-fresh-bound 2 's#^( +pause_max_age=)75$#\1600#' case_ps4
+  ps_mut ps-grammar-loosened 2 "s#match\\(raw,'agent_sessions_live=[^)]*\\)#positionCaseInsensitive(raw,'new_sessions_paused=') > 0#" case_ps1
+  ps_mut ps-bound-ge 2 's#\[ "\$pa" -gt "\$pause_max_age" \]#[ "$pa" -ge "$pause_max_age" ]#' case_ps75
+  ps_mut ps-bound-widened 2 's#^( +pause_max_age=)75$#\189#' case_ps76
+  ps_mut ps-limit-1 2 's# LIMIT 200 FORMAT JSONEachRow# LIMIT 1 FORMAT JSONEachRow#' case_ps1
+  ps_mut ps-trunc-bound 2 's#\[ "\$pause_total" -ge 200 \]#[ "$pause_total" -gt 200 ]#' case_ps_trunc
+  ps_mut ps-trunc-retries 2 's#(pause_unread="\$\{pause_unread:-truncated\}"); break; fi#\1; fi#' case_ps_trunc
+  ps_mut ps-zero-after-age 2 's#^( +)\$3 == "0" \{ z\[\$1\]\+\+ \}#\1$3 == "0" \&\& $2 ~ /^[0-9]+$/ { z[$1]++ }#' case_ps_negzero
+  ps_mut ps-refused-hidden 2 's#^( +)grep -m1 .\^SOLEUR_CREDENTIAL_REFUSED. "\$BS_ERR" >&2 \|\| true#\1true#' case_ps_refused
+  ps_mut ps-err-kept 2 '/^ +pause_sql=/,/^ +if \[ "\$pause_zero" -gt 0 \]; then fail pause_not_on/s#rm -f "\$BS_ERR" "\$BS_ERR\.rows"#: keep#' case_ps1
+  # 6 diff lines, not 2: #9943's liveness block adds two more `--only-secrets` doppler reads
+  # (BETTERSTACK_API_TOKEN_READONLY for the heartbeat, BETTERSTACK_QUERY_* for the post-boot
+  # state=ok read) — the mutation strips all three, so the diff is 3 lines x 2.
+  ps_mut ps-secrets-unscoped 6 's# --only-secrets [A-Z_,]+##' case_ps1
+  if mutate ps-token-step-level "$WF" 2 's#^( +)BS_DOPPLER_TOKEN: \$\{\{ secrets\.DOPPLER_TOKEN \}\}$#\1DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}#'; then
+    python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-ps-token.tsv" 2>&1
+    mutant_red ps-token-step-level wf_row "$T/mut/wf-ps-token.tsv" "WF-pausegate:"
+  fi
 fi
 
 # Key fetch.
@@ -2956,6 +3220,36 @@ case_cpx_via() { # <label> <expected verdict tail> [VAR=value ...] — the body'
 }
 if case_cpx_ok; then pass "CPX1: the REAL body, a writable root and a wrapper answer -> ok; the key sat in a 0600 file beside the pinned known_hosts line, ssh got the pinned options, the absent-repo command and /dev/null stdin; the scratch dir and the probe dir are gone; the key text never reached any output"
 else fail "CPX1: the executed container body did not clear cleanly" "$(ctx) log=[$(tr '\n' '|' < "$CP/log-ok" | cut -c1-300)]"; fi
+
+# CPU1 (#8211): the command the probe dials is the command real git emits for the APP's remote URL.
+# CPX1 pins the probe to its own literal; nothing tied that literal to the path the app builds, and
+# the app's `/repositories` prefix (an absolute path the wrapper cannot resolve) went unnoticed
+# through two rehearsals. The prefix is extracted from the app constant (exactly one assignment), a
+# recording shim named `ssh` captures git's own emission for a fetch-side URL, and the probe's
+# logged `git-upload-pack '<path>'` (CPX1's log) must equal it byte for byte.
+case_cpu1() {
+  local app_ts="$DIR/../server/git-data-replication.ts" n prefix probe_cmd
+  n="$(grep -cE '^const GIT_DATA_REPO_PATH_PREFIX = "[^"]+";$' "$app_ts")" || n=0
+  [ "$n" = 1 ] || return 1
+  prefix="$(sed -nE 's#^const GIT_DATA_REPO_PATH_PREFIX = "([^"]+)";$#\1#p' "$app_ts")"
+  [ -n "$prefix" ] || return 1
+  probe_cmd="$(sed -nE "s#^inner .* git@10\\.0\\.1\\.20 (git-upload-pack .*)\$#\\1#p" "$CP/log-ok")"
+  [ -n "$probe_cmd" ] || return 1
+  rm -rf "$CP/emit"; mkdir -p "$CP/emit" || return 1
+  cat > "$CP/emit/ssh" <<'EMIT'
+#!/bin/sh
+for last; do :; done
+printf '%s\n' "$last" > "$CPU_EMIT"
+exit 1
+EMIT
+  chmod +x "$CP/emit/ssh" || return 1
+  ( cd "$CP/emit" && CPU_EMIT="$CP/emit/emitted" GIT_SSH_COMMAND="$CP/emit/ssh" \
+      GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
+      git ls-remote "ssh://git@10.0.1.20${prefix}/cutover-container-probe-absent.git" ) >/dev/null 2>&1 || true
+  [ -s "$CP/emit/emitted" ] && [ "$(cat "$CP/emit/emitted")" = "$probe_cmd" ]
+}
+if case_cpu1; then pass "CPU1: the absent-repo command this suite's container probe run dials (root injected as GDCP_REPO_ROOT) equals, byte for byte, the command real git emits for ssh://git@10.0.1.20<app prefix>/cutover-container-probe-absent.git (prefix extracted from the app constant; the probe's own default is pinned by R-PARITY in test/git-data-remote-url-wrapper.test.ts)"
+else fail "CPU1: the probe's dialed command differs from git's emission for the app's URL form" "probe=[$(sed -nE 's#^inner .* git@10\.0\.1\.20 (git-upload-pack .*)$#\1#p' "$CP/log-ok" | cut -c1-200)] emitted=[$(cut -c1-200 "$CP/emit/emitted" 2>/dev/null)]"; fi
 if case_cpx_via frozen ok CP_INNER=frozen; then pass "CPX2: a frozen-store wrapper refusal also proves reachability, key, pin and wrapper -> ok"
 else fail "CPX2: a frozen-store answer was not accepted as reachable" "$(ctx)"; fi
 if case_cpx_via realwrapper ok CP_INNER=wrapper; then pass "CPX3: the REAL transport wrapper's own refusal text (a store that is not mounted) is recognised as the wrapper answering -> ok"
@@ -4105,7 +4399,10 @@ fi
 # Group C (#11072): plus cp-stderr-dropped and cp-first-host-only = 2, so exactly 173.
 # #8211 PR-G: plus cp-keyshape-unmapped, cpb-normalise-dropped, cpb-keygen-unchecked, cpb-linefloor-dropped, cpb-shape-markers-dropped, cpb-blank-trim-dropped = 6, so exactly 179.
 # PR-G review round: plus cpb-first-check-dropped, cpb-last-check-dropped, cpb-floor-raised = 3, so exactly 182.
-MUTANT_FLOOR=182
+# #11704: plus the six M-ps-* mutants (ps-removed, ps-zero-ignored, ps-empty-passes, ps-fresh-bound, ps-grammar-loosened, ps-token-step-level) = 6, so exactly 188 (measured).
+# #11713 review: plus ps-bound-ge, ps-bound-widened (the exact 75 s bound), ps-limit-1 (the LIMIT 200 pin), ps-trunc-bound (a full 200-row answer refuses), ps-zero-after-age (a =0 row with a bad age is pause_not_on), ps-refused-hidden (the credential-refusal line is surfaced), ps-err-kept (the stderr temp file is removed), ps-secrets-unscoped (--only-secrets) = 8, so exactly 196 (measured).
+# #11713 fix round: plus ps-trunc-retries (a full 200-row answer ends the retry loop at once; the mutant removes the break) = 1, so exactly 197 (measured).
+MUTANT_FLOOR=197
 if [ "$MUTANTS_RUN" -ne "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: %s mutants executed, the floor is exactly %s — a matrix row did not land, was deleted, or was added without restating the floor.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4140,7 +4437,12 @@ fi
 # Group C (#11072): CP6, CP5b, CPX7 (3; CPX7 is a SKIP when run as root, still counted) + 2 mutants x 2 (4) = 7 more: 736 -> 743.
 # #8211 PR-G (docker-format key, key_shape): CP2 r31 (1), CPX8-CPX15 (8) = 9 standalone, plus 6 mutants x 2 (12) = 21 more: 743 -> 764.
 # PR-G review round: CPX16-CPX19 (4) + 3 mutants x 2 (6) = 10 more: 764 -> 774.
-FLOOR=774
+# #8211 (remote URL path): CPU1 (1): 774 -> 775.
+# #11431 (refs_assert): P4b (1) and two standalone workflow verdicts (WF-refs, WF-flagwrite-refs; the workflow verdict count 58 -> 60): 775 -> 778. The G5 census, N-outputs, N-exprs, AC9 and D-6 were restated in place.
+# #11704 (new_sessions_paused precondition): PS1-PS9 (9) + the WF-pausegate census verdict (1; the workflow verdict count 60 -> 61) + 6 mutants x 2 (12) = 22 more: 778 -> 800, measured.
+# #11713 review: PS9 trimmed to its three kept static pins (still one row); PS10 (75/76 bound), PS11 (=0 row with a bad age), PS12 (199/200 rows), PS13 (credential-refusal line) = +4, plus 8 mutants x 2 (16) = 20 more: 800 -> 820, measured. The remedy-content, SQL-pin, --only-secrets and temp-file checks sit inside case_ps1/2/5 and ps_check and add no row.
+# #11713 fix round: plus the ps-trunc-retries mutant x 2 = 2 (PS12 and PS5 gained clauses inside existing rows): 820 -> 822 (measured).
+FLOOR=822
 _ran=$((passes + fails + SKIPPED))
 if [ "$_ran" -ne "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran/declared, the floor is exactly %s — cases were deleted, added without restating the floor, skipped, or the suite exited early.\n' "$_ran" "$FLOOR" >&2

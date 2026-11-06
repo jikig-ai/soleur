@@ -172,6 +172,7 @@ run_flip() {
       CUTOVER_DONE_OWNER_MARKER="$OWNER_MARKER" \
       CUTOVER_VERIFY_WINDOW_S=0 \
       CUTOVER_VERIFY_INTERVAL_S=0 \
+      CUTOVER_LUKS_PROBE_STAMP="$WORK/no-probe-dir/luks-key-probe.stamp" \
       ${extra[@]+"${extra[@]}"} \
       bash "$TARGET" --fixture-seams >/dev/null 2>&1 || rc=$?
   printf '%s' "$rc"

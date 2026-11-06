@@ -1,0 +1,16 @@
+NONCE	9ba5869980d901f8
+REV	e6903626b07dc421cd62155fe80dc25ef5f7b1c3
+NETNS	unshare
+IDMAP	current
+W	1	scripts/pre-push-ratchet-lane	1	-	load_refused	30.91	scripts/pre-push-ratchet-lane.test.sh	scripts/pre-push-ratchet-lane.test.sh	-
+W	2	scripts/followthroughs/registry-clientip-alert-7530	1	-	load_refused	25.10	scripts/followthroughs/registry-clientip-alert-7530.test.sh	scripts/followthroughs/registry-clientip-alert-7530.test.sh	-
+W	3	plugins/soleur	1	-	load_refused	20.47	test/|plugins/soleur/	-	-
+W	4	plugins/soleur/test/audit-flag-flip.test.sh	1	-	load_refused	16.76	plugins/soleur/test/audit-flag-flip.test.sh	plugins/soleur/test/audit-flag-flip.test.sh	-
+W	5	plugins/soleur/test/boundary-prefix.test.sh	1	-	load_refused	14.73	plugins/soleur/test/boundary-prefix.test.sh	plugins/soleur/test/boundary-prefix.test.sh	-
+W	6	plugins/soleur/test/gdpr-gate-self-test.test.sh	1	0	-	13.96	plugins/soleur/test/gdpr-gate-self-test.test.sh	plugins/soleur/test/gdpr-gate-self-test.test.sh	-
+W	7	plugins/soleur/test/gdpr-gate-self-test.test.sh	2	0	-	13.96	plugins/soleur/test/gdpr-gate-self-test.test.sh	plugins/soleur/test/gdpr-gate-self-test.test.sh	-
+W	8	plugins/soleur/test/git-env-list-parity.test.sh	1	0	-	13.96	plugins/soleur/test/git-env-list-parity.test.sh	plugins/soleur/test/git-env-list-parity.test.sh	-
+W	9	plugins/soleur/test/git-env-list-parity.test.sh	2	0	-	13.96	plugins/soleur/test/git-env-list-parity.test.sh	plugins/soleur/test/git-env-list-parity.test.sh	-
+W	10	plugins/soleur/test/preflight-check10-suite-integrity.test.sh	1	1	contaminated	13.96	plugins/soleur/test/preflight-check10-suite-integrity.test.sh	plugins/soleur/test/preflight-check10-suite-integrity.test.sh	dirty:plugins/soleur/skills/preflight/scripts/__pycache__/
+W	11	plugins/soleur/test/zot-http-deadlines-required.test.sh	1	-	load_refused	15.66	plugins/soleur/test/zot-http-deadlines-required.test.sh	plugins/soleur/test/zot-http-deadlines-required.test.sh	-
+W	12	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	1	-	load_refused	15.74	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	-

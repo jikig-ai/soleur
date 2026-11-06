@@ -7,9 +7,12 @@
  * desync between two files.
  */
 
+import { CONVERSATION_NOT_FOUND_MESSAGE } from "@/lib/ws-constants";
+
 // agent-runner.ts
 export const ERR_WORKSPACE_NOT_PROVISIONED = "Workspace not provisioned";
-export const ERR_CONVERSATION_NOT_FOUND = "Conversation not found";
+// Single definition lives in lib/ws-constants.ts (the client keys on the same wire text).
+export const ERR_CONVERSATION_NOT_FOUND = CONVERSATION_NOT_FOUND_MESSAGE;
 export const ERR_NO_ACTIVE_SESSION = "No active session";
 export const ERR_REVIEW_GATE_NOT_FOUND = "Review gate not found or already resolved";
 export const ERR_WORKTREE_LEASE_UNAVAILABLE =

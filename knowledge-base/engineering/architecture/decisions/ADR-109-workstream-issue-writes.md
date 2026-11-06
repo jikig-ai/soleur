@@ -46,3 +46,5 @@ Two seams already existed and are load-bearing: (1) `createGitHubAppClient(insta
 - **(c) Direct Project v2 board Status GraphQL write from the web app** — rejected: blocked on the pending `organization_projects:write` grant; labels are canonical for a user's own repo and the `board-status-sync` webhook mirrors to the board.
 - **(d) Remove-then-add label delta** — rejected: a half-fail leaves a wrong Backlog the rollback can't see; the single atomic `setLabels` PUT eliminates it.
 - **(e) Accepting owner/repo/initiatorLogin from the request body** — rejected: cross-tenant write + attribution-spoof vector; all resolve server-side.
+
+> **Amended 2026-10-27 (#11303):** the review-gate premise above (the host review gate is the founder-confirmation surface for workstream writes) was not enforced on the legacy agent runner until ADR-305: the `workstream_issue_*` tools were listed in the SDK `allowedTools` since 2026-07-10, which the SDK approves before it consults `canUseTool`, so no card appeared.

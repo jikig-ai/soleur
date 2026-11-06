@@ -172,6 +172,22 @@ describe("extractGitLockMarkers", () => {
     expect(extractGitLockMarkers("SOLEUR_DOCKER_PRUNED x=1").length).toBe(0);
   });
 
+  // PR-B (launch-check issues): the writer's own markers are deliberately NOT mirrored (ADR-314 amendment; the comment block in
+  // server/git-lock-marker-telemetry.ts). Pin that the extractor stays blind to all three, so adding a family prefix to
+  // MARKER_RE by accident (or on purpose, without revisiting the decision) turns this red.
+  test("does not mirror the launch-check issue writer's summary, plan-ok and abort markers", () => {
+    for (const line of [
+      "SOLEUR_LAUNCH_CHECK_ISSUES created=1 phase=complete",
+      "SOLEUR_LAUNCH_CHECK_PLAN_OK repo=acme/demo host=github.com create=3 items=3",
+      "SOLEUR_LAUNCH_CHECK_ABORT reason=issues-incomplete phase=link detail=http-502 plan=-",
+      "SOLEUR_LAUNCH_CHECK_ISSUES_PLAN repo=acme/demo host=github.com visibility=PRIVATE fork=false create=3 exists=0 closed=0 accepted=0 excluded=0 capped=0 plan=/p",
+    ]) {
+      expect(extractGitLockMarkers(line).length, `${line} must not be mirrored`).toBe(0);
+    }
+    // ...while the one launch-check marker that IS mirrored still is (the negative rows are not a dead extractor).
+    expect(extractGitLockMarkers("SOLEUR_LAUNCH_CHECK_REPORT_INVALID reason=x").length).toBe(1);
+  });
+
   // #10383 — the bare-root CWD marker. Informational, never paged; both
   // producer variants must mirror and a mid-sentence mention must not.
   test("mirrors SOLEUR_BARE_ROOT_CWD without paging", () => {
@@ -424,6 +440,12 @@ describe("drift guard: every sentinel the shell script emits is mirrored", () =>
       "SOLEUR_GIT_REPO_READY",
       "SOLEUR_WORKTREE_LEASE_LIB_OK",
       "SOLEUR_WORKTREE_REAP_CAPABILITY",
+      // launch-check (PR #11867): once-per-run summaries read locally by the agent that ran the
+      // scan/render/verify (counts, a repo-relative report path, a finding count). No failure
+      // direction: a failed run prints SOLEUR_LAUNCH_CHECK_ABORT or _REPORT_INVALID instead.
+      "SOLEUR_LAUNCH_CHECK_RUN",
+      "SOLEUR_LAUNCH_CHECK_WRITE",
+      "SOLEUR_LAUNCH_CHECK_REPORT_OK",
     ]);
     for (const name of unique) {
       if (SUCCESS_PATH_CONTROL_SIGNALS.has(name)) continue;

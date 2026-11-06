@@ -3068,13 +3068,64 @@ describe("#7393 G — credentials_required corpus baseline", () => {
   // TRUTH: the command (`bash apps/web-platform/infra/git-data-plaintext-volume-state.sh`) reads the Hetzner API (volumes and servers by
   // name) with HCLOUD_TOKEN_READONLY from Doppler soleur/prd_terraform. NO SUBSTITUTE: the provider API has no unauthenticated read of
   // volume state, the host is no-SSH, and the offline suite drives the probe against a curl shim, not against the provider. Genuine.
+  // #11195 (2026-10-27): the probe command above is RETIRED (the script was deleted with the one-shot destroy workflow after run
+  // 40478209838). The declaration stays in the archived plan as history, so the count stays 85 and the TRUTH note above no longer holds.
   // #10550 (2026-10-26): +1 (84 -> 85) for `2026-10-26-feat-wikiskill-phase-2-gated-new-skill-creation-plan.md` (now under plans/archive/).
+  // #10550 (2026-10-27): +1 (85 -> 86) for `2026-10-27-fix-create-arm-reserve-week-cap-slot-plan.md` (now under plans/archive/): the same
+  // marker-stream probe as the entry above, for the same reason (the marker exists only in production logs; no unauthenticated read path). Genuine.
   // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
   // TRUTH: the command (`bash scripts/betterstack-query.sh --since 30d --grep SOLEUR_COMPOUND_PROMOTE_OUTCOME --limit 5`) reads the
   // proposer's outcome marker rows from the Better Stack ClickHouse read connection (Better Stack Logs read token, Doppler). NO SUBSTITUTE:
   // the marker exists only in production logs and the warehouse has no unauthenticated read path; the offline suites prove the marker
   // grammar, not that the stored stream carries a run's rows. Genuine.
-  const BASELINE_DECLARED_PROBES = 85;
+  // #11303 (2026-10-27): +1 (86 -> 87) for `2026-10-27-fix-gated-tier-allowedtools-bypass-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-assert-absence.sh --host soleur-web-platform ...`) reads production log rows from the
+  // Better Stack ClickHouse read connection (BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, Doppler soleur/prd_terraform). NO SUBSTITUTE: the
+  // `CAN_USE_TOOL_SHADOWED` rows exist only in production logs and the warehouse has no unauthenticated read path; the offline suites prove
+  // the probe's grading, not that the stored stream carries a session's rows. Genuine.
+  // #4672 (2026-10-29): +1 (87 -> 88) for `2026-10-27-feat-durable-action-bound-approval-requests-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 1h --grep SOLEUR_APPROVAL_SWEEP`) reads the production marker stream from
+  // the Better Stack read connection (read token, Doppler prd_terraform). NO SUBSTITUTE: the sweep marker is emitted by the production cron
+  // and exists only in the stored stream; no unauthenticated probe proves the markers reach the aggregator. Genuine.
+  // #11569 (2026-10-30): +1 (88 -> 89) for `2026-10-30-fix-messages-update-policy-and-harness-hygiene-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command runs the committed `verify/181` catalog queries (pg_policies, column privileges, ACLs of public.messages) against
+  // the production database over the pooler. NO SUBSTITUTE: policy and grant state exist only in the live catalog, so no unauthenticated
+  // probe verifies the same property; the plan's `credentials_required` line names the Doppler prd connection. Genuine.
+  // #11704 / PR #11713 (2026-10-31): +1 (89 -> 90) for `2026-10-31-feat-git-data-flip-preconditions-overlay-classification-success-signal-plan.md` (now under plans/archive/).
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/followthroughs/git-data-replication-signal.sh --since 15m`) reads the reporter line and the
+  // `git_data_replication_success` marker rows from Better Stack through the read connection (Doppler soleur/prd_terraform). NO SUBSTITUTE:
+  // those rows exist only in the stored log stream and Better Stack has no unauthenticated reader, so no probe verifies the same
+  // property without the credentials; the plan's `credentials_required` line names the three BETTERSTACK_QUERY_* secrets. Genuine.
+  // flip-token split (2026-11-01, #9927 item 4): +1 (90 -> 91) for `2026-11-01-feat-inngest-flip-token-split-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 72h --grep provision-unit-armed --limit 1`) reads the boot
+  // phone-home row the replaced host emits once per host life; it verifies BOOT ARMING (the flip write precedes the arming item and a
+  // failed write aborts runcmd), NOT the flip-token property itself. It returns a row only after the owner-gated host replace, and a
+  // healthy host older than 72 h returns nothing (the instance-id keyed recipe in runbooks/inngest-server.md is the precise read).
+  // NO SUBSTITUTE: the row exists only in the stored log stream and Better Stack has no unauthenticated reader; the plan's
+  // `credentials_required` line names the BETTERSTACK_QUERY_* secrets. Genuine.
+  // #6027 (2026-11-01): +1 (91 -> 92) for `2026-11-01-feat-web2-pool-spread-ga-lb-plan.md` — the ga-lb-pool-soak follow-through probe.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the live CF pool-health API + the Better Stack incidents stream; neither
+  // has an unauthenticated substitute. Genuine.
+  // #9826 slice 2a (2026-11-02): +1 (92 -> 93, rebased over #6027 at ship) for `2026-11-02-feat-image-cve-scan-2a-record-v2-report-only-gate-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the command (`bash scripts/betterstack-query.sh --since 2d --raw-only --grep SOLEUR_IMAGE_CVE_VERDICT --limit 20 | jq -R ...`, a
+  // structural decode that selects only decoded rows whose message IS the marker) reads
+  // BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD} (Doppler soleur/prd_terraform) and verifies a per-run verdict row exists (one row per
+  // completed non-push release-workflow run; a row does not imply a deploy). NO SUBSTITUTE:
+  // the row is private BY DESIGN (public repository, so the job log carries counts only) and lands only in the Logs warehouse, which has
+  // no unauthenticated read path; the plan's `credentials_required` line names the three BETTERSTACK_QUERY_* secrets. Genuine.
+  // #6027 AC4 (2026-11-02): +1 (93 -> 94, rebased over #9826 slice 2a at merge) for `2026-11-02-fix-lb-health-alert-new-health-plan.md`.
+  // PLACEMENT: a correctly-indented child of its `discoverability_test:` sub-block, value on one line.
+  // TRUTH: the probe reads the Cloudflare `alerting/v3/policies` list via
+  // CF_API_TOKEN/CF_ACCOUNT_ID (Doppler soleur/prd_terraform) to verify the web_lb_health policy
+  // exists enabled. NO SUBSTITUTE: the CF alerting API has no unauthenticated read surface. Genuine.
+  const BASELINE_DECLARED_PROBES = 94;
 
   test("G1 the number of plans declaring credentials_required equals the baseline", () => {
     const plansDir = join(import.meta.dir, "..", "..", "..", "knowledge-base", "project", "plans");

@@ -1,0 +1,222 @@
+#!/usr/bin/env bash
+
+# #11168 / #11156 — The post-save hard gate in ux-design-lead.md step 3.2 is a
+# `node -e` snippet (no `stat -c`, no `jq`). This suite extracts the DOCUMENTED
+# snippet from the agent body and runs it on fixtures, so the prose cannot drift
+# from a gate that works:
+#   - a 96-byte empty document (the #11143 collapse shape)
+#   - an unchanged file after a refusal (stale guard: bytes identical to pre-edit)
+#   - a valid saved file (size > 128, children >= 1, hash changed)
+#   - a valid file while an UNRESOLVED `REFUSED save:` / `NOT PERSISTED:` result is
+#     outstanding (the flag is 1 until the recovery NAMED FOR THE CODE completes: open_document
+#     + a clean replay for the reload codes, a clean `save` for save-failed/save-incomplete)
+#   - a flag that is neither 0 nor 1 (fail closed: an unset variable is not a pass)
+# The gate trusts the agent to report the flag (CTO ruling 5, ADR-306): a skipped
+# replay is undetectable from the file, which this suite does not pretend to catch.
+# pyramid-justified: none needed; unit-level shell test over documented prose.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/test-helpers.sh"
+
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+AGENT="$REPO_ROOT/plugins/soleur/agents/product/design/ux-design-lead.md"
+
+echo "=== pencil post-save hard gate (documented snippet) ==="
+echo ""
+
+assert_file_exists "$AGENT" "ux-design-lead agent exists"
+
+# Extract the fenced bash block whose first line is the given marker comment.
+extract_block() {
+  local marker="$1"
+  awk -v m="$marker" '
+    /^[[:space:]]*```bash[[:space:]]*$/ { inblk=1; buf=""; first=1; keep=0; next }
+    /^[[:space:]]*```[[:space:]]*$/ && inblk { if (keep) { printf "%s", buf; exit } inblk=0; next }
+    inblk {
+      line=$0; sub(/^   /, "", line)
+      if (first) { first=0; if (line == m) keep=1; next }
+      buf = buf line "\n"
+    }
+  ' "$AGENT"
+}
+
+PRE_BLOCK="$(extract_block '# pre-edit-sha256')"
+GATE_BLOCK="$(extract_block '# post-save-gate')"
+
+if [[ -z "$PRE_BLOCK" || -z "$GATE_BLOCK" ]]; then
+  echo "  FAIL: documented snippets not found in $AGENT (markers '# pre-edit-sha256' and '# post-save-gate')"
+  FAIL=$((FAIL + 1))
+  print_results
+  exit 1
+fi
+assert_contains "$GATE_BLOCK" "node -e" "gate snippet uses node -e"
+if [[ "$GATE_BLOCK" == *"stat -c"* || "$GATE_BLOCK" == *"jq "* ]]; then
+  echo "  FAIL: gate snippet must not use stat -c or jq"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: gate snippet uses neither stat -c nor jq"
+  PASS=$((PASS + 1))
+fi
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+
+# Fixtures. The empty document is exactly 96 bytes (padding inside a JSON string-free
+# whitespace tail keeps it parseable).
+EMPTY="$WORK/empty.pen"
+printf '{"version":"2.21","children":[]}' > "$EMPTY"
+while [[ "$(wc -c < "$EMPTY")" -lt 96 ]]; do printf ' ' >> "$EMPTY"; done
+assert_eq "96" "$(wc -c < "$EMPTY" | tr -d ' ')" "empty fixture is 96 bytes"
+
+VALID="$WORK/valid.pen"
+node -e 'const f=require("fs");const kids=[];for(let i=0;i<3;i++)kids.push({type:"frame",id:"n"+i,name:"Frame "+i,width:320,height:200});f.writeFileSync(process.argv[1],JSON.stringify({version:"2.21",children:kids}))' "$VALID"
+UNCHANGED="$WORK/unchanged.pen"
+cp "$VALID" "$UNCHANGED"
+
+# run_gate <file> <pre-sha|none> <refused 0|1> -> prints output, returns rc
+run_gate() {
+  PEN_FILE="$1" PRE_SHA="$2" REFUSED="$3" bash -c "$GATE_BLOCK" 2>&1
+}
+pre_sha_of() {
+  PEN_FILE="$1" bash -c "$PRE_BLOCK" 2>&1
+}
+
+# The pre-edit block hashes (and echoes)  the file; a missing (new) file yields "none".
+PRE_EMPTY="$(pre_sha_of "$EMPTY")"
+assert_eq "64" "${#PRE_EMPTY}" "pre-edit block prints a 64-hex sha256"
+assert_eq "none" "$(pre_sha_of "$WORK/does-not-exist.pen")" "pre-edit block prints none for a new file"
+
+# 1. Empty 96-byte document: gate fails on size.
+set +e
+out="$(run_gate "$EMPTY" "none" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "96-byte empty document fails the gate"
+assert_contains "$out" "size" "empty document failure names the size check"
+
+# 2. Unchanged file after a refusal: pre-edit hash equals current, REFUSED seen.
+PRE_VALID="$(pre_sha_of "$UNCHANGED")"
+set +e
+out="$(run_gate "$UNCHANGED" "$PRE_VALID" 1)"; rc=$?
+set -e
+assert_eq "1" "$rc" "unchanged file after a refusal fails the gate"
+assert_contains "$out" "REFUSED save:" "refusal failure tells the agent to surface the REFUSED text"
+assert_contains "$out" "NOT PERSISTED:" "refusal failure names the NOT PERSISTED marker as the second unpersisted signal"
+
+# 2b. Unchanged file with NO refusal reported still fails (hash equals pre-edit).
+set +e
+out="$(run_gate "$UNCHANGED" "$PRE_VALID" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "file identical to the pre-edit hash fails the gate"
+assert_contains "$out" "unchanged" "identical-hash failure names the unchanged check"
+
+# 3. Valid saved file (new file: pre-edit none): passes.
+set +e
+out="$(run_gate "$VALID" "none" 0)"; rc=$?
+set -e
+assert_eq "0" "$rc" "valid saved new file passes the gate"
+assert_contains "$out" "POST-SAVE GATE OK" "pass prints POST-SAVE GATE OK"
+
+# 3b. Valid saved file differing from the pre-edit hash of another document: passes.
+set +e
+out="$(run_gate "$VALID" "$PRE_EMPTY" 0)"; rc=$?
+set -e
+assert_eq "0" "$rc" "valid saved file with a changed hash passes the gate"
+
+# 4. Valid file but an unresolved REFUSED save: / NOT PERSISTED: result is outstanding.
+set +e
+out="$(run_gate "$VALID" "none" 1)"; rc=$?
+set -e
+assert_eq "1" "$rc" "valid file with an unresolved unpersisted result fails the gate"
+assert_contains "$out" "REFUSED save:" "unresolved-session failure names REFUSED save:"
+assert_contains "$out" "NOT PERSISTED:" "unresolved-session failure names NOT PERSISTED:"
+assert_contains "$out" "open_document" "unresolved-session failure names the recovery (open_document, then replay)"
+# The failure text is code-aware: the reload codes and the save codes name different recoveries,
+# so an agent holding a save-failed marker is not told that open_document (which discards the
+# only copy of its edit) resolves it.
+assert_contains "$out" "open_document plus a replay for stale, unknown-baseline, refusal-pending, empty (a readable, empty document), unrecognized, unconfirmed and save-incomplete" "unresolved-session failure names the full reload-code list (stale, unknown-baseline, refusal-pending, empty, unrecognized, unconfirmed, save-incomplete)"
+assert_contains "$out" "clean save for save-failed" "unresolved-session failure says a clean save resets the flag for save-failed only"
+assert_contains "$out" "empty with an unreadable count" "unresolved-session failure gives the unreadable-count sub-case its own recovery (retry, or a NEW path)"
+
+# 4a. Recovery-reload branches of the PRE_SHA rule (ux-design-lead.md step 2.4). After a recovery
+# open_document the edit is either NOT on disk (replay needed: re-run step 4 right after the reload,
+# then replay) or ALREADY on disk (an interrupted save had written it: KEEP the original PRE_SHA and skip
+# the replay). Re-running step 4 in the second case would fold the edit into PRE_SHA and fail the gate
+# on "file unchanged" although the file differs from the original.
+ORIG="$WORK/orig.pen"
+node -e 'const f=require("fs");f.writeFileSync(process.argv[1],JSON.stringify({version:"2.21",children:[{type:"frame",id:"a",name:"Original frame",width:320,height:200},{type:"frame",id:"b",name:"Second frame",width:320,height:200}]}))' "$ORIG"
+EDITED="$WORK/edited.pen"
+node -e 'const f=require("fs");const d=JSON.parse(f.readFileSync(process.argv[1],"utf8"));d.children.push({type:"frame",id:"c",name:"Edit",width:320,height:200});f.writeFileSync(process.argv[2],JSON.stringify(d))' "$ORIG" "$EDITED"
+ORIG_SHA="$(pre_sha_of "$ORIG")"
+# (a) edit already present after the reload: keeping the ORIGINAL PRE_SHA passes ...
+set +e
+out="$(run_gate "$EDITED" "$ORIG_SHA" 0)"; rc=$?
+set -e
+assert_eq "0" "$rc" "reload found the edit already on disk: the ORIGINAL PRE_SHA is kept and the gate passes"
+# ... while re-running step 4 on the reloaded (edited) file makes the gate fail "file unchanged"
+RELOADED_SHA="$(pre_sha_of "$EDITED")"
+set +e
+out="$(run_gate "$EDITED" "$RELOADED_SHA" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "re-running step 4 after the edit is already present folds it into PRE_SHA and fails the gate"
+assert_contains "$out" "unchanged" "the folded-in PRE_SHA fails on file unchanged (why the agent keeps the original)"
+# (b) edit NOT on disk after the reload: step 4 re-run on the reloaded file, replay skipped -> fails; replayed -> passes
+RELOADED_SHA="$(pre_sha_of "$ORIG")"
+set +e
+out="$(run_gate "$ORIG" "$RELOADED_SHA" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "reload without the edit and a skipped replay leaves the hash equal to the re-run PRE_SHA: the gate fails"
+set +e
+out="$(run_gate "$EDITED" "$RELOADED_SHA" 0)"; rc=$?
+set -e
+assert_eq "0" "$rc" "reload without the edit, step 4 re-run, then a replayed edit: the gate passes"
+
+# 4b. Fail closed: a flag that is neither 0 nor 1 (unset, empty, typo) never passes.
+set +e
+out="$(run_gate "$VALID" "none" "")"; rc=$?
+set -e
+assert_eq "1" "$rc" "an empty REFUSED flag fails the gate (fail closed)"
+assert_contains "$out" "REFUSED" "empty-flag failure names the flag"
+set +e
+out="$(run_gate "$VALID" "none" "yes")"; rc=$?
+set -e
+assert_eq "1" "$rc" "a non-0/1 REFUSED flag fails the gate (fail closed)"
+
+# 5. Larger than 128 bytes but zero children fails on children.
+NOKIDS="$WORK/nokids.pen"
+node -e 'require("fs").writeFileSync(process.argv[1],JSON.stringify({version:"2.21",children:[],pad:"x".repeat(200)}))' "$NOKIDS"
+set +e
+out="$(run_gate "$NOKIDS" "none" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "document with no top-level children fails the gate"
+assert_contains "$out" "children" "no-children failure names the children check"
+
+# 6. Missing and unparseable files fail (never a node stack trace as the only signal).
+set +e
+out="$(run_gate "$WORK/missing.pen" "none" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "missing file fails the gate"
+printf 'not json at all %0200d' 0 > "$WORK/garbage.pen"
+set +e
+out="$(run_gate "$WORK/garbage.pen" "none" 0)"; rc=$?
+set -e
+assert_eq "1" "$rc" "unparseable file fails the gate"
+
+# The prose around the gate carries the same semantics as the snippet.
+AGENT_TEXT="$(cat "$AGENT")"
+assert_contains "$AGENT_TEXT" "unresolved" "agent prose defines the flag as an unresolved unpersisted state"
+assert_contains "$AGENT_TEXT" "NOT PERSISTED:" "agent prose treats NOT PERSISTED: as unpersisted"
+assert_contains "$AGENT_TEXT" "agent-reported" "agent prose states the agent-reported residual (ruling 5)"
+assert_contains "$AGENT_TEXT" "only when the recovery named for the code has completed" "agent prose states the code-aware reset rule"
+assert_contains "$AGENT_TEXT" "Before replaying, check whether the edit is already present (compare the node count open_document reports, or Get the nodes): this session's own interrupted save may already have written it." "agent prose carries the replay-safety sentence (shared text contract)"
+assert_contains "$AGENT_TEXT" "Do not call Export or TakeScreenshot inside batch_design: use export_nodes and get_screenshot (raw calls skip the adapter's containment, overwrite list and unsaved-memory warning, and a relative path is resolved against the document's directory, so it can write next to the .pen)." "agent prose carries the Export/TakeScreenshot steering sentence (shared text contract)"
+if [[ "$AGENT_TEXT" == *"Node 22.19 is guaranteed"* ]]; then
+  echo "  FAIL: agent prose must not claim Node 22.19 is guaranteed"
+  FAIL=$((FAIL + 1))
+else
+  echo "  PASS: agent prose does not claim Node 22.19 is guaranteed"
+  PASS=$((PASS + 1))
+fi
+
+print_results 42

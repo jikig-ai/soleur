@@ -703,10 +703,10 @@ export const cronCompetitiveAnalysis = inngest.createFunction(
     ],
     retries: 1,
     throttle: { ...CLAUDE_EVAL_THROTTLE }, // #8611 manual-fire bound (cron-budgets.ts)
+    triggers: [
+      { cron: "0 9 1 * *" },
+      { event: "cron/competitive-analysis.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 9 1 * *" },
-    { event: "cron/competitive-analysis.manual-trigger" },
-  ],
-  cronCompetitiveAnalysisHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronCompetitiveAnalysisHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

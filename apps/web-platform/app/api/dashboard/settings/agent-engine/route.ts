@@ -114,7 +114,12 @@ export async function PUT(request: Request) {
     const targetEngineId = definition.settingsSelectable && !definition.enabledForNewRuns
       ? DEFAULT_AGENT_ENGINE_ID
       : definition.id;
-    const result = authMode === undefined
+    let effectiveAuthMode = authMode;
+    if (effectiveAuthMode === undefined) {
+      const current = await repository.getDefaultAuthMode(resolved.workspaceId);
+      if (current !== null && reviewedEngineRegistry.get(targetEngineId).authModes.includes(current)) effectiveAuthMode = current;
+    }
+    const result = effectiveAuthMode === undefined
       ? await repository.setDefaultEngine(resolved.workspaceId, targetEngineId)
       : applyToExistingCodexConversations
         ? await repository.setDefaultEngine(
@@ -124,7 +129,7 @@ export async function PUT(request: Request) {
             true,
             body.expectedAffectedConversationCount as number,
           )
-        : await repository.setDefaultEngine(resolved.workspaceId, targetEngineId, authMode);
+        : await repository.setDefaultEngine(resolved.workspaceId, targetEngineId, effectiveAuthMode);
     const committedSettings = result && typeof result === "object"
       ? result as { defaultEngineId?: unknown; defaultAuthMode?: unknown }
       : undefined;
@@ -140,7 +145,7 @@ export async function PUT(request: Request) {
       : undefined;
     return NextResponse.json({
       defaultEngineId: committedSettings?.defaultEngineId ?? targetEngineId,
-      ...(authMode ? { defaultAuthMode: committedSettings?.defaultAuthMode ?? authMode } : {}),
+      ...(effectiveAuthMode ? { defaultAuthMode: committedSettings?.defaultAuthMode ?? effectiveAuthMode } : {}),
       ...(definition.id === "codex" && authMode ? { codexAuthMode: authMode } : {}),
       ...(typeof affectedConversationCount === "number" ? { affectedConversationCount } : {}),
     });

@@ -389,3 +389,35 @@ apps/web-platform/server/workstream/mutate-workstream-issue.ts
 # error / no-row). Same trusted-server injected-service-client shape as
 # resolve-installation-id-for-workspace.ts / workspace-identity-resolver.ts.
 apps/web-platform/server/session-proxy.ts
+
+# Durable approval requests (#4672, ADR-309): the approval RPCs create_approval_request / consume_approval /
+# get_approval_status / list_live_approvals / sweep_approvals / anonymise_approval_request are granted to service_role
+# ONLY (migration 180: REVOKE ALL FROM PUBLIC, anon, authenticated, then an explicit service_role GRANT), so that no
+# user-JWT client - and therefore no agent holding the founder's tenant client - can mint, consume or sweep a request.
+# decide_approval is the single RPC granted to authenticated, and it is reached through a user-JWT client only
+# (server/approval/decide.ts, pinned by test/approval/decide-boundary.test.ts). The three files below are the server-side
+# callers of the service-only RPCs: gate.ts (the permission-callback gate deps), notify.ts (resolves the RPC-written
+# inbox row for the content-free push) and the Inngest expiry cron (sweep_approvals every 5 minutes, no user in scope).
+# None reads approval_request directly: the table has no service_role privilege.
+apps/web-platform/server/approval/gate.ts
+apps/web-platform/server/approval/notify.ts
+apps/web-platform/server/inngest/functions/cron-approval-expiry.ts
+
+# 2026-10-23 (#8211 PR-B2) — cron-git-data-erasure-redrive.ts re-drives the git-data pending-erasure
+# ledger. No user JWT is in scope (scheduled/manual), and the ledger tables have no client-reachable
+# grant: every access is a service_role-only SECURITY DEFINER RPC (migration 182), exactly five of them:
+# claim_git_data_erasure_pending, resolve_git_data_erasure_pending, record_git_data_erasure_pending,
+# git_data_erasure_owner_gone and git_data_erasure_pending_ages. Same posture as cron-approval-expiry
+# (service-only RPCs that write, no user in scope); it holds no per-tenant data beyond the workspace ids
+# the RPCs return, which it never logs.
+apps/web-platform/server/inngest/functions/cron-git-data-erasure-redrive.ts
+
+# #8839 — cron-agent-spawn-stale-settle.ts is the stale-"Working" spawn backstop
+# sweep: it enumerates `action_sends` spawn rows still on Working whose
+# current_turn_started_at is older than finish-timeout + margin — a
+# platform-wide sweep with no per-tenant key, running in a scheduled Inngest
+# function where no user JWT exists to mint a tenant client from. Same cron
+# posture as cron-workspace-sync-health / event-scheduled-reminder. Its writes
+# go through the shared agent-on-spawn-settle settle path (terminal
+# failure_reason) and the spawn-dead-letter reporter — no PII egress.
+apps/web-platform/server/inngest/functions/cron-agent-spawn-stale-settle.ts

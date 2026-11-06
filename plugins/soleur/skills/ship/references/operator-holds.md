@@ -41,6 +41,8 @@ it.
 The grammar has two kinds, `pr-merged` and `no-inflight-run`. `command` and `run-green` are deferred: the first real
 consumer re-adds them, and only by CTO ruling. A `Gate:` line of any other kind is an unknown kind, and the hold stands.
 
+A read-only check is never a hold line: write the `Gate:` when `pr-merged` or `no-inflight-run` fits; otherwise the CTO runs it ([standing-delegation.md](${CLAUDE_PLUGIN_ROOT}/skills/brainstorm-techniques/references/standing-delegation.md) section 9) and records it as `Checked:` or `Unverified:` in a `## Class R Checks` section beside this one, never `Operator-reserved:` for the read itself (an `Unverified:` read that a merge or deploy depends on makes the act it gates an `Operator-reserved:` hold: section 9 Records) and never a `Hold:` with no `Gate:`. A read result never satisfies a `Gate:` and removes no hold line.
+
 Rules the evaluator applies to this section:
 
 - **The heading** is `Operator Holds` at level 2, 3 or 4, in any case. EVERY `Hold:` or `Gate:` line in the file (fenced
@@ -75,6 +77,8 @@ bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/hold-gate-eval.sh" --plan <plan 
 | 2 | A hold could not be evaluated or is reserved to the operator (unknown gate kind, unreadable probe, unreadable delegation, no `Envelope:` line, two `Delegation:` lines, a hold outside a readable section, a section that parses to zero holds, no time-limit tool, an `Operator-reserved:` hold) | It STANDS. Say so in one plain sentence; never retry it into a pass |
 | 3 | No `Delegation:` line is recorded: legacy prose holds | Evaluate by hand per section 3 |
 | any other status (127 script not found, 124 timed out, 137 killed) | The check did not run | Treat it as 2: the hold STANDS and was not checked. Say so; never read it as a no-op |
+
+Before naming a standing hold (exit 1 or 2), class it per section 8.1b of [technical-ruling-delegation.md](../../brainstorm-techniques/references/technical-ruling-delegation.md): a hold that rests on an evidence judgement is a technical ruling and goes to the CTO first; a plain unmet gate (a date, CI, a missing tool) and an `Operator-reserved:` hold are named as they are.
 
 Exit 3 is decided before every other structure and tool check, so a plan written in the earlier prose format keeps the prose
 path whatever else it contains.

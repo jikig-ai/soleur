@@ -210,24 +210,33 @@ describe("readCollectorStatus — hostile sidecar (#7122)", () => {
     await mkdir(join(cwd, STATUS_DIR), { recursive: true });
     const fifo = join(cwd, STATUS_DIR, STATUS_FILE);
     execFileSync("mkfifo", [fifo]);
-    expect(statSync(fifo).isFIFO()).toBe(true); // non-vacuity: the fixture really is a FIFO
+    // One descriptor serves the non-vacuity check AND the HUNG-path unblock —
+    // statSync-then-open would leave a window where the fixture could be swapped
+    // between the two calls (CodeQL js/file-system-race). O_RDWR never blocks on
+    // a FIFO, so holding it pins the inode the whole race window; a held writer
+    // end is also what a parked reader's open() was waiting on, and closing it
+    // EOFs a reader parked in read() — the same unblock the second open gave.
+    const fifoHandle = await open(fifo, "r+");
+    expect((await fifoHandle.stat()).isFIFO()).toBe(true); // non-vacuity: the fixture really is a FIFO
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const HUNG = Symbol("hung");
-    const raced = await Promise.race([
-      readCollectorStatus(cwd),
-      new Promise<typeof HUNG>((resolve) => {
-        timer = setTimeout(() => resolve(HUNG), 3_000);
-      }),
-    ]);
-    clearTimeout(timer);
-    if (raced === HUNG) {
-      // Unblock the stuck open() so the worker can exit, then fail the row.
-      await (await open(fifo, "r+")).close().catch(() => {});
-      throw new Error("readCollectorStatus hung on a FIFO sidecar");
+    try {
+      const raced = await Promise.race([
+        readCollectorStatus(cwd),
+        new Promise<typeof HUNG>((resolve) => {
+          timer = setTimeout(() => resolve(HUNG), 3_000);
+        }),
+      ]);
+      clearTimeout(timer);
+      if (raced === HUNG) {
+        throw new Error("readCollectorStatus hung on a FIFO sidecar");
+      }
+      expect(raced.present).toBe(true);
+      expect(raced.failed).toEqual([{ collector: "github", command: "unknown", exit: 1, cause: "sidecar-unsafe" }]);
+    } finally {
+      await fifoHandle.close().catch(() => {});
     }
-    expect(raced.present).toBe(true);
-    expect(raced.failed).toEqual([{ collector: "github", command: "unknown", exit: 1, cause: "sidecar-unsafe" }]);
   }, 15_000);
 
   it("an unknown command / collector / cause / warn string is NOT echoed: it maps to `unknown` / `other`", async () => {

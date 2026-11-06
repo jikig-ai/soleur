@@ -32,7 +32,10 @@ interface PendingAttachment {
 }
 
 interface ChatInputProps {
-  onSend: (message: string, attachments?: AttachmentRef[]) => void;
+  /** Return an explicit `false` to refuse the send (e.g. credential blocked or
+   *  socket not open): the draft and staged attachments are kept. Any other
+   *  return value (including `void`) means accepted. */
+  onSend: (message: string, attachments?: AttachmentRef[]) => boolean | void;
   onAtTrigger: (query: string, cursorPosition: number) => void;
   onAtDismiss: () => void;
   disabled?: boolean;
@@ -60,6 +63,11 @@ interface ChatInputProps {
    *  typed text is never clobbered. Seeds the draft; it NEVER auto-sends
    *  (auto-send is `?msg=`'s contract). */
   prefill?: string;
+  /** Text handed back after a FINAL first-run send refusal (the `?msg=` param is
+   *  already stripped, so this is the only copy). Unlike `prefill` it is NEVER
+   *  skipped: an empty composer takes it, a non-empty draft gets it APPENDED on a
+   *  new line (nothing the user typed is overwritten). Applied at most once. */
+  restoredDraft?: string;
   /** When true, Enter key defers to the @mention dropdown instead of sending. */
   atMentionVisible?: boolean;
   /** Stage 4 (#2886): when true, force-disable the input and show the
@@ -101,6 +109,7 @@ export function ChatInput({
   focusRef,
   draftKey,
   prefill,
+  restoredDraft,
   atMentionVisible = false,
   workflowEnded = false,
   streamState = "idle",
@@ -234,6 +243,14 @@ export function ChatInput({
     setValue((prev) => (prev === "" ? prefill : prev));
     textareaRef.current?.focus();
   }, [prefill]);
+
+  const restoreAppliedRef = useRef(false);
+  useEffect(() => {
+    if (restoreAppliedRef.current || !restoredDraft) return;
+    restoreAppliedRef.current = true;
+    setValue((prev) => (prev === "" ? restoredDraft : `${prev}\n${restoredDraft}`));
+    textareaRef.current?.focus();
+  }, [restoredDraft]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
@@ -449,6 +466,9 @@ export function ChatInput({
   }, [attachments, conversationId]);
 
   const handleSubmit = useCallback(async () => {
+    // A disabled composer must not start an upload or call `onSend` (the
+    // Enter key path bypasses the disabled send button).
+    if (disabled) return;
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
 
@@ -465,26 +485,25 @@ export function ChatInput({
       try {
         const uploaded = await uploadAttachments();
         if (uploaded.length > 0) {
-          onSend(trimmed, uploaded);
-          sent = true;
+          sent = onSend(trimmed, uploaded) !== false;
         } else if (trimmed) {
-          onSend(trimmed);
-          sent = true;
+          sent = onSend(trimmed) !== false;
         }
       } finally {
         setIsUploading(false);
-        setAttachments((prev) => prev.filter((a) => a.error));
+        // Prune staged attachments only when the send was accepted; a refused
+        // send keeps them (uploaded refs stay marked `uploaded`).
+        if (sent) setAttachments((prev) => prev.filter((a) => a.error));
       }
     } else {
-      onSend(trimmed);
-      sent = true;
+      sent = onSend(trimmed) !== false;
     }
 
     if (sent) {
       setValue("");
       onAtDismiss();
     }
-  }, [value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
+  }, [disabled, value, attachments, attachmentsUnavailable, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

@@ -1219,6 +1219,22 @@ _k_main() {
   _w_lexstub "empty output" 'print "";' "S=unavailable K=tooling"
   _w_lexstub "E exit2 frame" 'print "E\0exit2\0";' "S=unavailable K=parse"
   _w_lexstub "E depth frame" 'print "E\0depth\0";' "S=unavailable K=bound"
+
+  # K18 SIGPIPE regression (#11379): a lexer that exits without reading stdin while the producer's payload is still in
+  # flight makes the builtin printf write into a closed pipe — the `printf: write error: Broken pipe` line must never
+  # contaminate a 2>&1 capture of the caller. A ~200 KB command (over the 64 KiB pipe buffer) blocks the write until
+  # the reader drains or dies, so the early-exit stub fires the EPIPE deterministically, not on a scheduler race.
+  local sp_stub sp_got sp_ok=1 sp_i
+  sp_stub=$(mktemp "$SUITE_TMP/lexstub-sigpipe.XXXXXX"); printf '%s' 'print "C\0top\0";' > "$sp_stub"
+  for sp_i in $(seq 1 20); do
+    sp_got=$(env bash -c 'source "$1" || { echo SOURCE-FAILED; exit 0; }; CTR_LEXER="$2"; ctr_collect "$(printf "x%.0s" $(seq 1 200000))"; printf "S=%s K=%s" "$CTR_LEX_STATE" "$CTR_LEX_KIND"' _ "$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" "$sp_stub" 2>&1) || true
+    [[ "$sp_got" == "S=unavailable K=parse" ]] || { sp_ok=0; break; }
+  done
+  if [[ "$sp_ok" -eq 1 ]]; then _report "K18 lexstub: an early-exit stub cannot leak 'Broken pipe' into a 2>&1 capture (200 KB command, 20 runs)" ok
+  else _report "K18 lexstub: early-exit stub stderr isolation" fail "iteration $sp_i got '$sp_got'"; fi
+  grep -qF 'printf '"'"'%s'"'"' "$cmd" 2>/dev/null | perl "$CTR_LEXER" 2>/dev/null' "$REPO_ROOT/.claude/hooks/lib/commit-target-roots.sh" \
+    && _report "K18 static: the ctr_collect producer drops stderr (the EPIPE line has nowhere to live)" ok \
+    || _report "K18 static: producer stderr silencing" fail "the printf | perl line lost its 2>/dev/null"
 }
 
 # Second review round: shapes the first fix round left open, and the behaviours it added.
@@ -4530,7 +4546,7 @@ _t_floor_contract
 # a host with no runnable gitleaks skips whole arms (reported, and failed under CI=true by the
 # epilogue), so the floor only binds when nothing was skipped. Reported by printf + exit,
 # never through the helpers it backstops. Raise it in the same edit that adds rows.
-MIN_ASSERTIONS=1708
+MIN_ASSERTIONS=1710
 if (( ${#SKIPPED_ARMS[@]} == 0 )) && (( pass + fail < MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: %s assertion(s) ran, expected at least %s — rows or helpers were dropped\n' "$((pass + fail))" "$MIN_ASSERTIONS" >&2
   exit 1

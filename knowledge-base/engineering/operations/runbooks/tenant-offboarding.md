@@ -105,7 +105,7 @@ SELECT count(*) AS total, count(*) FILTER (WHERE founder_id = '<tenant-founder-u
    For each ruleset on the tenant repo:
 
    ```bash
-   gh api /repos/<tenant-org>/<tenant-repo>/rulesets --jq '.[].id' | \
+   gh api --paginate /repos/<tenant-org>/<tenant-repo>/rulesets --jq '.[].id' | \
      while read ruleset_id; do
        gh api /repos/<tenant-org>/<tenant-repo>/rulesets/$ruleset_id --jq '.bypass_actors'
      done
@@ -135,7 +135,7 @@ gh api /repos/<tenant-org>/<tenant-repo>/installation
 # 2. Enumerate rulesets and assert sweep coverage. The two outputs MUST
 # both be inspected — a zero ruleset count silently passes the
 # bypass-actor check even if Step 2 sub-step 2 was skipped.
-RULESET_COUNT=$(gh api /repos/<tenant-org>/<tenant-repo>/rulesets --jq 'length')
+RULESET_COUNT=$(gh api --paginate /repos/<tenant-org>/<tenant-repo>/rulesets --jq 'length')
 echo "Ruleset count: $RULESET_COUNT"
 
 if [[ "$RULESET_COUNT" -gt 0 ]]; then
@@ -145,7 +145,7 @@ if [[ "$RULESET_COUNT" -gt 0 ]]; then
   echo "edit timestamps from the GitHub UI into the offboarding row in"
   echo "knowledge-base/legal/tenant-dpa-register.md BEFORE proceeding."
   # API-side ghost check (best-effort; UI is the source of truth):
-  gh api /repos/<tenant-org>/<tenant-repo>/rulesets --jq '.[].id' | \
+  gh api --paginate /repos/<tenant-org>/<tenant-repo>/rulesets --jq '.[].id' | \
     while read ruleset_id; do
       gh api /repos/<tenant-org>/<tenant-repo>/rulesets/$ruleset_id \
         --jq '.bypass_actors[] | select(.actor_id == <soleur-app-install-id>)'

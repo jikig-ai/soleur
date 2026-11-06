@@ -681,7 +681,7 @@ cases=$((cases + 1))
 if [[ -s "$RELEASE_WF" ]]; then
   _blk="$(awk '/^  resolve-target:/{f=1; print; next} f && /^  [a-z][a-z0-9-]*:/{exit} f' "$RELEASE_WF" | grep -v '^[[:space:]]*#')"
   _co="$(grep -n 'uses: actions/checkout@' <<< "$_blk" | head -1 | cut -d: -f1)"
-  _ref="$(grep -nE '^ +ref: \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$' <<< "$_blk" | head -1 | cut -d: -f1)"
+  _ref="$(grep -nE '^ +ref: \$\{\{ steps\.gate\.outputs\.deploy_target \}\}$' <<< "$_blk" | head -1 | cut -d: -f1)"
   _res="$(grep -n 'id: resolve$' <<< "$_blk" | head -1 | cut -d: -f1)"
   if [[ -n "$_blk" ]] && ! grep -qE '^    name:' <<< "$_blk" && [[ -n "$_co" && -n "$_ref" && -n "$_res" ]] && (( _co < _ref && _ref < _res )) \
      && grep -qE '^ +echo "resolving deploy target for \$WR_HEAD_SHA"$' <<< "$_blk"; then

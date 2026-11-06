@@ -49,7 +49,9 @@ const {
   mockReportSilentFallback: vi.fn(),
 }));
 
-vi.mock("../../server/tool-path-checker", () => ({
+vi.mock("../../server/tool-path-checker", async (importOriginal) => ({
+  // Keep the real exports a new helper adds (pathFieldsEscape): a wholesale factory breaks every file-tool test the moment one is added.
+  ...(await importOriginal<typeof import("../../server/tool-path-checker")>()),
   UNVERIFIED_PARAM_TOOLS: [] as readonly string[],
   extractToolPath: mockExtractToolPath,
   isFileTool: mockIsFileTool,
@@ -59,6 +61,8 @@ vi.mock("../../server/sandbox", () => ({ isPathInWorkspace: mockIsPathInWorkspac
 vi.mock("../../server/tool-tiers", () => ({
   getToolTier: mockGetToolTier,
   buildGateMessage: mockBuildGateMessage,
+  buildGateCard: (n: string, i: unknown) => ({ card: (mockBuildGateMessage as (...a: unknown[]) => string)(n, i) }),
+  pluginToolPrefix: (server: string) => `mcp__plugin_soleur_${server}__`,
 }));
 vi.mock("../../server/review-gate", () => ({
   extractReviewGateInput: mockExtractReviewGateInput,

@@ -98,7 +98,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 |-----------|-------|
 | Agents | 67 |
 | Commands | 4 |
-| Skills | 104 |
+| Skills | 106 |
 | MCP Servers | 5 |
 
 ## Agents
@@ -294,7 +294,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `dhh-rails-style` | Write Ruby/Rails code in DHH's 37signals style |
 | `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
 | `frontend-design` | Create production-grade frontend interfaces |
-| `model-launch-review` | Audit the per-Anthropic-model-release checklist and auto-fix stale model-ID swaps via a CI-gated PR |
+| `model-launch-review` | Audit the per-model-release checklist (Anthropic; xAI/Cognition freshness rows) and auto-fix stale model-ID swaps via a CI-gated PR |
 | `skill-creator` | Create, refine, audit, and package Claude Code skills |
 | `spec-templates` | Structured feature specifications and task tracking |
 | `user-story-writer` | Decompose features into INVEST-compliant stories using Elephant Carpaccio |
@@ -332,6 +332,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `pencil-setup` | Auto-detect, install, and register Pencil MCP server with Claude Code CLI |
 | `rclone` | Upload files to S3, Cloudflare R2, Backblaze B2, and cloud storage |
 | `reproduce-bug` | Reproduce bugs using logs, console, and browser screenshots |
+| `registry-breakglass-mirror` | Mirror GHCR images into zot datacenter-side when the registry tunnel bridge is down (break-glass only) |
 | `resolve-parallel` | Resolve TODO comments in parallel |
 | `resolve-pr-parallel` | Resolve PR comments in parallel |
 | `resolve-todo-parallel` | Resolve CLI todos in parallel |

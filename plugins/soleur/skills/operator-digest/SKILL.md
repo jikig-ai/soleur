@@ -19,8 +19,8 @@ fixed), and what now needs their attention. Autonomous loops ship features, move
 incidents faster than a solo owner can track; this digest is the antidote to that comprehension debt.
 
 This skill runs **headless inside `claude-code-action`** in the private `jikig-ai/operator-digest`
-repo, with the **public** `jikig-ai/soleur` repo checked out at `$GITHUB_WORKSPACE`. It reads five
-sources, synthesizes five sections of prose, and writes `$GITHUB_WORKSPACE/digest.md`. It then
+repo, with the **public** `jikig-ai/soleur` repo checked out at `$GITHUB_WORKSPACE`. It reads six
+sources, synthesizes six sections of prose, and writes `$GITHUB_WORKSPACE/digest.md`. It then
 **STOPS**. A deterministic workflow post-step scrubs that file (fail-closed) and is the only thing
 that posts the issue — this skill itself must never post the digest (it writes the file and STOPS).
 
@@ -66,7 +66,7 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
 
 ## Scope guardrails (load-bearing — do not weaken)
 
-- **L1 — path scope.** Read ONLY the five named sources below. Any other file path is out of scope.
+- **L1 — path scope.** Read ONLY the six named sources below. Any other file path is out of scope.
   Do not wander the repository.
 - **L2 — summaries only (the named-PII + customer-email control).** A regex cannot catch "Jane Doe".
   - Incidents: build the section from each post-mortem's **frontmatter, title, and status ONLY —
@@ -84,7 +84,7 @@ Only emit the "Nothing …" fallback when the command **succeeded** and genuinel
   neutral hedge on any read doubt, and both are stated as a business consequence — never a raw count, a
   percentage, or an up/down arrow as the signal.
 
-## The five sections
+## The six sections
 
 ### 1. What your company built
 
@@ -244,6 +244,52 @@ claim; the link is the drill-in path.
 does not produce (improvements are global harness edits). Because §5 reuses §1's read, a §1 read
 FAILURE (the ⚠️ warning) suppresses §5 too — do not render a "nothing" line off a failed read.
 
+### 6. Your checks pipeline
+
+Source: the standing tracker issue `ci-wallclock-p90: required-check wall-clock report` on
+jikig-ai/soleur. The weekly wallclock-p90 watch rewrites its **body** with an aggregate table —
+per-required-check p50/p90 wall-clock over the last ~30 green CI runs on each of the pull-request
+and merge-queue surfaces — plus a findings list (bound breaches, unbound or unmeasured required
+checks). Find the issue by its `ci/wallclock-p90` **label**, then match **exact title** — a raw
+recent-issues list would lose the standing tracker below its `--limit` window within days on this
+repo (the watch sets the label at create time and re-adds it on every weekly body rewrite, so a
+stripped label self-heals). List API, **NOT `--search`** — the Search API returns empty cross-repo
+under the in-action App token, exactly as noted in §1; a false-empty would silently render "no
+pipeline data" every week:
+
+```bash
+gh issue list -R jikig-ai/soleur --state open --label ci/wallclock-p90 --json number,title,body,updatedAt,author --limit 50
+# keep ONLY issues whose author.login is github-actions[bot] (also accept
+# github-actions / app/github-actions — mirrors the watch's own predicate); a
+# same-label issue filed by anyone else is not the watch's report. Among
+# those, keep the issue whose title is exactly
+# "ci-wallclock-p90: required-check wall-clock report"; if duplicate labeled
+# watch-authored trackers exist, take the LOWEST issue number. Its body is
+# the report.
+```
+
+**Staleness.** The watch rewrites the body every Friday before this digest runs, so both the
+issue's `updatedAt` and the body's own `Report refreshed: <UTC ISO>` line advance weekly. If
+`updatedAt` is more than ~2 weeks old (or the refresh line disagrees), the watch is dead — say so
+explicitly ("the pipeline watchdog hasn't reported since <date>") rather than presenting last
+month's table as current.
+
+Render **aggregate-only** (L3 — same suppression contract as the velocity metrics). Translate the
+table into consequence language: "Your checks ran at about their usual speed this week" /
+"checks were slower than usual — the slowest required check is the test pipeline at ~N minutes
+in the merge queue" / "the pipeline watchdog flagged <check> — it drifted past its committed
+bound and a red weekly run names it." **Never** emit per-PR or per-run rows, run ids, commit
+SHAs, or any actor attribution — the body is already aggregate; your job is the plain-language
+read of it. When you read the body, ignore the trailing
+`<!-- wallclock-p90-watch:v1 drift=… -->` sentinel comment — it is the watch's dedupe machinery,
+not report content; never surface it in the digest.
+
+**Read failure vs. no match.** If the `gh issue list` call itself FAILED (non-zero exit, or empty/unparseable output), emit
+the ⚠️ read-failure warning line from the contract above — a failed read is NOT "no pipeline
+data," and never a quiet "checks are fine." Only if the call SUCCEEDED but no
+github-actions-authored issue carries the exact title, emit the §6 fallback "No pipeline
+timing data this week."
+
 ## Deterministic fallback (never blank)
 
 A quiet week is itself information. **Even an all-empty week still posts.** If a source yields nothing
@@ -254,6 +300,7 @@ in the window, write the section's labelled fallback line — **never leave a se
 - Section 3 → "Nothing broke this week."
 - Section 4 → "Nothing needs your attention this week."
 - Section 5 → "Nothing was promoted to the shared harness this week."
+- Section 6 → "No pipeline timing data this week."
 
 Every section must contain at least one full sentence. A blank or byte-for-byte command-dump section
 is a failure.
@@ -280,7 +327,7 @@ the operator-visible signal that a week was skipped.
 Write the assembled digest to `$GITHUB_WORKSPACE/digest.md`:
 
 - A short title line: `# Weekly digest: <ISO week or date range>`.
-- The five `##` sections above, in order, each with prose (or its fallback line).
+- The six `##` sections above, in order, each with prose (or its fallback line).
 - The final `Last week: #N` continuity line.
 
 Then **STOP**. Do not open, post, or create any issue — the gated workflow post-step owns publishing.

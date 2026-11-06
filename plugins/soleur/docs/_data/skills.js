@@ -84,6 +84,7 @@ const SKILL_CATEGORIES = {
   invoice: "Workflow",
   "kb-glossary": "Workflow",
   "kb-search": "Workflow",
+  "launch-check": "Workflow",
   "linear-fetch": "Workflow",
   "merge-pr": "Workflow",
   "one-shot": "Workflow",

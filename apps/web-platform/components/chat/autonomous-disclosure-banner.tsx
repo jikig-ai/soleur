@@ -1,6 +1,8 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { RefusedSendNotice, type RefusalContext } from "@/components/chat/refused-send-notice";
 
 /**
  * feat-bash-autonomous-default-on — first-run consent soft-gate banner.
@@ -38,13 +40,30 @@ export function AutonomousDisclosureBanner({
   gateId,
   existingWorkspace,
   resolved,
+  refusal,
+  resetKey,
   onRespond,
 }: {
   gateId: string;
   existingWorkspace: boolean;
   resolved?: boolean;
-  onRespond: (gateId: string, selection: string) => void;
+  /** Why a refused response was refused (credential vs plain connection). */
+  refusal?: RefusalContext;
+  /** Changes when the connection is sendable again: clears a stale refusal line. */
+  resetKey?: number;
+  /** Return `false` when the response was REFUSED (nothing left the client). */
+  onRespond: (gateId: string, selection: string) => boolean | void;
 }) {
+  // #11525 — a refused response keeps the banner actionable; say why.
+  // The count is the notice's React key: a second refusal remounts the alert.
+  const [refusalCount, setRefusalCount] = useState(0);
+  const respond = (selection: string) => {
+    if (onRespond(gateId, selection) === false) setRefusalCount((n) => n + 1);
+    else setRefusalCount(0);
+  };
+  useEffect(() => {
+    setRefusalCount(0);
+  }, [resetKey]);
   return (
     <div
       role="alertdialog"
@@ -66,7 +85,7 @@ export function AutonomousDisclosureBanner({
               variant="outlined"
               type="button"
               disabled={resolved}
-              onClick={() => onRespond(gateId, "Ask me each time")}
+              onClick={() => respond("Ask me each time")}
               className="rounded-none border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2 disabled:opacity-50"
             >
               Ask me each time
@@ -75,7 +94,7 @@ export function AutonomousDisclosureBanner({
               variant="gold"
               type="button"
               disabled={resolved}
-              onClick={() => onRespond(gateId, "Keep autonomous on")}
+              onClick={() => respond("Keep autonomous on")}
               className="rounded-none bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
             >
               Keep autonomous on
@@ -86,13 +105,14 @@ export function AutonomousDisclosureBanner({
             variant="gold"
             type="button"
             disabled={resolved}
-            onClick={() => onRespond(gateId, "Got it")}
+            onClick={() => respond("Got it")}
             className="rounded-none bg-soleur-accent-gold-fg px-3 py-1.5 text-xs font-semibold text-black hover:opacity-90 disabled:opacity-50"
           >
             Got it
           </Button>
         )}
       </div>
+      {refusalCount > 0 && !resolved && <RefusedSendNotice key={refusalCount} refusal={refusal} />}
     </div>
   );
 }

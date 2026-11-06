@@ -7,18 +7,23 @@
 // `PAGES_OPERATOR` (lib/failure-reason.ts) marks `true`, filtering on the
 // `feature`, `op` and `reason` tags this module sets.
 //
-// COVERAGE (#8803): two paths report here. (1) `persistFailure`, for every
-// failure the handler itself catches — no lifecycle suffix. (2) The lifecycle
-// settle (`agent-on-spawn-settle`, reached from the handler's `onFailure` forward
-// and from `inngest/function.cancelled`), for a run the handler never finished —
-// a retry-exhausted throw, the `finish` timeout or an Inngest-level cancel —
-// with a `(failed)`, `(cancelled)`, `(timed_out)` or `(settle_failed)` suffix.
-// Four cases still leave the card on "Working", all tracked in #8839: a run
-// Inngest loses entirely (no lifecycle event fires); a `persist-failure` UPDATE
-// that fails inside `persistFailure` (it returns normally, so no lifecycle event
-// fires; `reportSpawnPersistFailed` reports it under op `persist-failure`, which
+// COVERAGE (#8803, #8839): three paths report here. (1) `persistFailure`, for
+// every failure the handler itself catches — no lifecycle suffix. (2) The
+// lifecycle settle (`agent-on-spawn-settle`, reached from the handler's
+// `onFailure` forward and from `inngest/function.cancelled`), for a run the
+// handler never finished — a retry-exhausted throw, the `finish` timeout or
+// an Inngest-level cancel — with a `(failed)`, `(cancelled)`, `(timed_out)` or
+// `(settle_failed)` suffix. (3) The #8839 sweep (`cron-agent-spawn-stale-settle`),
+// for a row still on Working past finish-timeout+margin — the historical rows
+// and the lost-run case no lifecycle event ever reaches — reported under a
+// `(stale_working)` suffix after the SAME shared settle write.
+// Two cases still leave the card on "Working": a `persist-failure` UPDATE
+// that fails inside `persistFailure` (it returns normally, so no lifecycle
+// event fires and the sweep's Working predicate does eventually re-cover it;
+// `reportSpawnPersistFailed` reports it under op `persist-failure`, which
 // the paging rule does not match); and a settle, or the `onFailure` forward,
-// that exhausts its retries (both page `(settle_failed)`, but nothing is written).
+// that exhausts its retries (both page `(settle_failed)`, but nothing is
+// written — the sweep re-covers the row on its next tick).
 //
 // Triage per suffix: knowledge-base/engineering/operations/runbooks/spawn-dead-letter-triage.md.
 //
@@ -62,9 +67,16 @@ export const PAGED_DEAD_LETTER_REASONS: readonly FailureReason[] = Object.freeze
 /**
  * How a run the handler never finished ended (#8803). `settle_failed` is the
  * settle step itself failing, kept distinct so it never hides inside a real
- * crash's Sentry issue.
+ * crash's Sentry issue. `stale_working` (#8839) is the sweep's suffix: no
+ * lifecycle event ever fired for the row — it went stale on Working and
+ * `cron-agent-spawn-stale-settle` settled it.
  */
-export type SpawnLifecycle = "failed" | "cancelled" | "timed_out" | "settle_failed";
+export type SpawnLifecycle =
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "settle_failed"
+  | "stale_working";
 
 /**
  * The Sentry/pino message for one dead-letter. Grouping key: see GROUPING above.

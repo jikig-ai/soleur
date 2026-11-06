@@ -96,6 +96,8 @@ const GATED_TYPES = [
   "chat",
   "interactive_prompt_response",
   "review_gate_response",
+  // #4672 — the Owner's approval decision is consent-bearing like a review-gate answer.
+  "approval_decide",
 ] as const;
 
 const EXEMPT_TYPES = ["abort_turn", "close_conversation"] as const;

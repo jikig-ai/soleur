@@ -116,3 +116,30 @@ under the exact CI install condition. Post-merge verification of the first real
 ## CLO determination — 2026-10-03 (#9454)
 
 The GitHub merge-queue adoption (ADR-270) does not fire the re-evaluation trigger "any change making `cla-evidence` non-required": `cla-evidence` and `cla-check` stay required, and on `merge_group` they are satisfied only by a synthetic that first verifies the PR head's real `cla-check` / `cla-evidence` check-runs and fails closed on any miss, with `bypass_actors` unchanged.
+
+## CLO addendum — 2026-10-31 (#11678, conditioned on merge of the implementing PR)
+
+Two items, both inside the ruling's existing exceptions:
+
+1. **Grouped merge-queue landings (`max_entries_to_merge` 1→3).** The
+   `cla-check`/`cla-evidence` requiredness is unchanged: under grouped merging the
+   CLA synthetic verifier (`scripts/merge-queue-cla-verify.sh`) enumerates every
+   constituent member of the group — entries at `position <=` the entry whose
+   `headCommit.oid == head_sha` — and requires each member's own queued head to
+   carry completed/success `cla-check` + `cla-evidence` (app 15368). A member it
+   cannot enumerate or verify is a failure, never a pass; the multi-member
+   negative case is pinned by a test row (named-PR-green + member-red → fail).
+   The ruling's "every merged commit carries verified CLA evidence" property is
+   preserved per-member.
+
+2. **Queue-jump path (`scripts/merge-queue-jump.sh`).** A jump via
+   `enqueuePullRequest(jump: true)` moves an urgent PR to the head of the queue
+   while KEEPING the integrated merge-queue checks — it is NOT an admin bypass
+   and does not touch `bypass_actors`. The ruling's deliberate-act requirements
+   are met: attributed (`--reason` is posted verbatim on the PR naming the
+   actor), deliberate (`--yes` non-TTY gate / typed confirmation), recorded
+   (distinct "jumped-but-unattributed" exit code if the comment fails). The
+   runbook (`knowledge-base/engineering/operations/runbooks/merge-queue-jump.md`)
+   sets the urgency bar: prod-down, security, data-loss. If jump cadence becomes
+   routine (~1/week sustained), the label-triggered workflow follow-up needs a
+   fresh CLO look at the added App-token + labeler-authorization surface.

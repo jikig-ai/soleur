@@ -1029,14 +1029,12 @@ export const cronStaleDeferredScopeOuts = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 12 * * *" },
+      { event: "cron/stale-deferred-scope-outs.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 12 * * *" },
-    { event: "cron/stale-deferred-scope-outs.manual-trigger" },
-  ],
-  cronStaleDeferredScopeOutsHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronStaleDeferredScopeOutsHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );
 
 // Test surface — exported only for vitest.

@@ -395,8 +395,8 @@ describe("call-site census", () => {
   it("buildAgentQueryOptions is called from the two runners and the dev probe", () => {
     const lines = grep("\\bbuildAgentQueryOptions\\(", ["server", "scripts"]);
     const f = files(lines).filter((x) => !/\.test\./.test(x));
-    expect(f).toEqual(["scripts/dev-probe-destroy-ask.ts", "server/agent-runner.ts", "server/cc-dispatcher.ts"]);
-    expect(f.length).toBe(3);
+    expect(f).toEqual(["scripts/dev-probe-approval-gate.ts", "scripts/dev-probe-destroy-ask.ts", "server/agent-runner.ts", "server/cc-dispatcher.ts"]);
+    expect(f.length).toBe(4);
     // That both runners pass the RESOLVED flag is driven behaviourally (agent-runner-unix-deny-wire / cc-dispatcher-real-factory).
   });
   it("A6(a): the artifact filenames are named only by the known modules, across the whole app tree", () => {
@@ -423,6 +423,7 @@ describe("call-site census", () => {
 // one must be either routed through the builder or listed here with a justification.
 describe("SDK query() spawn-site census (A6a)", () => {
   const SPAWN_FILES = [
+    "scripts/dev-probe-approval-gate.ts",
     "scripts/dev-probe-destroy-ask.ts",
     "scripts/plugin-root-sandbox-propagation-probe.mjs",
     "scripts/sandbox-canary.mjs",
@@ -481,7 +482,7 @@ describe("SDK query() spawn-site census (A6a)", () => {
     expect(sites.length).toBeGreaterThanOrEqual(SPAWN_FILES.length);
   });
   it("the production runners build their options through buildAgentQueryOptions and pass no env of their own", () => {
-    for (const file of ["server/agent-runner.ts", "server/cc-dispatcher.ts", "scripts/dev-probe-destroy-ask.ts"]) {
+    for (const file of ["server/agent-runner.ts", "server/cc-dispatcher.ts", "scripts/dev-probe-destroy-ask.ts", "scripts/dev-probe-approval-gate.ts"]) {
       const mine = sites.filter((x) => x.file === file);
       expect(mine.length, file).toBeGreaterThanOrEqual(1);
       for (const x of mine) {

@@ -253,6 +253,15 @@ _PRINT_PATHS_REQ=0
 # enum, or a non-affected TEST_GROUP (post-parse validation below).
 _AFF_SCOPE=branch
 _AFF_SCOPE_REQ=0
+# --jobs=N / SOLEUR_TEST_JOBS (#8231): the local parallel-scheduler width.
+# Unset resolves to SERIAL — the explicit, measured default (see the mode
+# resolution block and knowledge-base/project/plans/2026-10-27-fix-8231-parallel-testall-plan.md).
+# `auto` resolves the width from measured host capacity; an explicit N is
+# validated (exit 2 on a malformed value) and clamped to that capacity. The
+# flag wins over the env var, matching the flag-over-env convention the other
+# mode flags follow. Parallel scheduling applies to the RUN path only —
+# selection (--affected, --print-selection, --enumerate) is untouched.
+_JOBS_REQ=""
 # Wall-clock bound for the enumerate family (#8761). Overridable by
 # SOLEUR_ENUM_DEADLINE_S (digits only, else the default holds); the deadline is
 # a safety bound on a seconds-scale walk, not a performance assertion — a clean
@@ -303,6 +312,15 @@ while [[ "${1:-}" == --* ]]; do
     --affected-scope=*)
       _AFF_SCOPE="${1#--affected-scope=}"
       _AFF_SCOPE_REQ=1
+      ;;
+    --jobs=*)
+      # An explicit empty operand is a bad invocation, not "unset" — reject it
+      # like every other --flag= form instead of silently falling to the env.
+      _JOBS_REQ="${1#--jobs=}"
+      if [[ -z "$_JOBS_REQ" ]]; then
+        echo "ERROR: --jobs requires a value (N or auto), e.g. --jobs=4 or --jobs=auto." >&2
+        exit 2
+      fi
       ;;
     --full)
       _FULL_REQ=1
@@ -400,6 +418,17 @@ declines five self-test mutation batteries whose subject the diff does not touch
                         staged (the index — what the pre-commit hook gates on).
                         Selects on the INDEX only: committed edits are not in that
                         window, and a NEW suite is selected only if its files are staged.
+  --jobs=N|auto         parallel suite scheduling width (#8231). SOLEUR_TEST_JOBS
+                        is the env spelling; the flag wins. Unset runs serial —
+                        the measured default while the #7376 interference
+                        diagnosis is open. `auto` measures the host
+                        (nproc + MemAvailable) and resolves a capped width; an
+                        explicit N is clamped to that capacity. Only suite-body
+                        execution is concurrent: verdict lines print in
+                        registration order after drain, and the exit contract
+                        is unchanged. Serial fallback (announced) on: CI,
+                        bash < 5.1, jobs=1, the advisory lock not held, the
+                        lane table unreadable, or a resolved width of 1.
   --enumerate           emit the leg's assigned registration labels; runs nothing.
   --enumerate-commands  emit each registration's argv as SUITE_COMMAND records.
   --capacity            report whether the box can absorb another full gate.
@@ -590,6 +619,15 @@ _WDRIFT_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-weight-drift.sh"
 if [[ -f "$_WDRIFT_LIB" ]]; then
   # shellcheck source=scripts/lib/test-weight-drift.sh
   source "$_WDRIFT_LIB" || true
+fi
+# #8231: the concurrency-lane classifier the parallel scheduler reads per
+# suite. Sourced opportunistically like the other optional libs — a missing
+# lib degrades the scheduler to serial (the lanes-unavailable fallback arm of
+# _pj_resolve_run_mode), never to a guessed classification.
+_LANES_LIB="$(dirname "${BASH_SOURCE[0]}")/lib/test-suite-lanes.sh"
+if [[ -f "$_LANES_LIB" ]]; then
+  # shellcheck source=scripts/lib/test-suite-lanes.sh
+  source "$_LANES_LIB" || true
 fi
 # Provisional owner for the window below: the full EXIT trap (which composes this cleanup) is installed ~2900
 # lines down, and every early `exit` before it (flag modes, usage errors, a timeout kill) left a marker-only
@@ -1407,6 +1445,26 @@ fi
 # inherited by a nested runner.
 unset SCRIPTS_SHARD SOLEUR_SHARD_MANIFEST SOLEUR_SHARD_MANIFEST_HEAVY
 
+# `TEST_GROUP` rides the same rule (#11939). Env beats the positional (`${TEST_GROUP:-${1:-all}}`),
+# so main-health-monitor.yml (step `env:`) and ci.yml (positional) reach this point by different
+# channels, and only the env channel left the variable exported: every suite the runner spawned
+# inherited `TEST_GROUP=scripts`, and a suite that itself ran a nested `--enumerate-commands` or
+# `--print-selection` got a narrowed or refused answer — red under the monitor, green under ci.yml
+# on the same SHA. So demote the export attribute: descendants then see the same environment
+# whichever channel selected the group. Only the attribute goes; the value stays, so no reader below
+# changes (every read is a shell-variable read, and the affected-walk child gets the group as an
+# explicit positional). The line sits beside the SCRIPTS_SHARD unset by convention; what is
+# load-bearing is that it precedes the first suite spawn. Pinned by
+# scripts/test-all-group-affected.test.sh Part C.
+export -n TEST_GROUP
+
+# #12013: the pool width is a carrier too. affected-tests.sh (and an operator) request it through
+# SOLEUR_TEST_JOBS; this runner reads it once in _pj_resolve_run_mode (a SHELL variable read, which
+# `export -n` does not disturb) and no suite it spawns has any use for it. Left exported, a suite
+# that runs a nested test-all.sh would inherit a pool request meant for its parent — the
+# #11939 class, for a different variable. Pinned by scripts/test-all-parallel-scheduler.test.sh A8.
+export -n SOLEUR_TEST_JOBS
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
@@ -1607,8 +1665,8 @@ _aff_edges=()
 # locale, and a hash fallback is collation-free.
 # SCOPE NOTE: this filter lives at the chokepoint, so it is GROUP-AGNOSTIC — with SCRIPTS_SHARD
 # set and TEST_GROUP=all it would partition the webplat/bun/infra registrations too. That is not
-# reachable today (the variable is bound only on ci.yml's test-scripts and test-scripts-heavy
-# jobs, and main-health-monitor.yml's TEST_GROUP=all run does not set it), and the name says
+# reachable today (the variable is bound only on the test-scripts and test-scripts-heavy jobs
+# of ci.yml and of main-health-monitor.yml, each alongside its own scripts group), and the name says
 # `SCRIPTS_` for that reason. Anyone binding it more widely must revisit this.
 _shard_ordinal=0
 _shard_assigned=0
@@ -1807,6 +1865,16 @@ run_suite() {
       return 0
     fi
   fi
+  # #8231: parallel mode does NOT execute the suite here. The chokepoint work
+  # above (shard selection, the affected decline, the ceiling decline, the
+  # `suites` increment) already ran, so population and decline accounting are
+  # identical in both modes; what defers is only the suite BODY. The verdict
+  # prints at drain, in registration order, through the same _run_suite_verdict
+  # the serial path below calls.
+  if (( _pj_mode == 1 )); then
+    _pj_submit "$label" "$@"
+    return 0
+  fi
   local tmp_before=""
   if [[ -n "${TEST_TIMING_LOG:-}" ]]; then
     tmp_before=$(tc_tmp_entry_count)
@@ -1862,6 +1930,18 @@ run_suite() {
   else
     "$@" || rc=$?
   fi
+  _run_suite_verdict "$label" "$rc" "$start" "$tmp_before" "$_suite_log"
+}
+
+# The post-exec half of run_suite, factored so the serial path and the parallel
+# drain render through ONE emitter (#8231). Arguments:
+#   $1 label, $2 rc, $3 start ($EPOCHREALTIME at dispatch), $4 tmp_before
+#   ("" under parallel — the delta is unattributable whenever a sibling was in
+#   flight, so the caller passes the override instead), $5 suite_log,
+#   $6 optional tmp_delta override value (e.g. `unattributed`),
+#   $7 optional end (parallel passes the reap stamp; serial computes now).
+_run_suite_verdict() {
+  local label="$1" rc="$2" start="${3:-}" tmp_before="${4:-}" _suite_log="${5:-}" _tmp_ov="${6:-}" _vend="${7:-}"
   # An ABORTING classifier is its own degradation and must not be absorbed into
   # the ordinary `failed` bucket: that would make a broken classifier — which can
   # mis-bucket every subsequent suite — indistinguishable from one honest test
@@ -1911,7 +1991,8 @@ run_suite() {
   # and the captured value is empty or non-dotted) and exits elapsed_ms=0
   # gracefully instead of arithmetic-overflowing on `${start#*.}` returning
   # the whole string.
-  local end="${EPOCHREALTIME:-}"
+  local end="$_vend"
+  [[ -z "$end" ]] && end="${EPOCHREALTIME:-}"
   local elapsed_ms=0
   if [[ "$start" == *.* && "$end" == *.* ]]; then
     local start_us=$(( ${start%.*} * 1000000 + 10#${start#*.} ))
@@ -1921,8 +2002,13 @@ run_suite() {
   # Appended as a LABELED trailing field (`tmp_delta=<N>`), never as a bare
   # positional one: field 3 already carries the `FAIL` marker, so an unlabeled
   # append would be positionally ambiguous between the ok and FAIL shapes.
+  # Under parallel, a suite whose window intersected another's records
+  # `tmp_delta=unattributed` — a machine-global count cannot be attributed to
+  # one suite while a sibling ran (AP-021: report only what was measured).
   local tmp_field=""
-  if [[ -n "${TEST_TIMING_LOG:-}" && -n "$tmp_before" ]]; then
+  if [[ -n "$_tmp_ov" ]]; then
+    tmp_field=$'\t'"tmp_delta=$_tmp_ov"
+  elif [[ -n "${TEST_TIMING_LOG:-}" && -n "$tmp_before" ]]; then
     tmp_field=$'\t'"tmp_delta=$(( $(tc_tmp_entry_count) - tmp_before ))"
   fi
   # Advisory only: never changes status, never changes the exit code.
@@ -2009,7 +2095,409 @@ skip_suite() {
   printf '%s\t%d\tskip=%s\n' "$label" 0 "$reason" >> "${TEST_TIMING_LOG:-/dev/null}"
 }
 
-# INFRA RELEVANCE DETECTION (#6730/#7014, converted from a boundary to a gate by #7103).
+# --- Parallel scheduler state (#8231) --------------------------------------
+#
+# Declared HERE, at top level and BEFORE the region the runner-SUT suites
+# splice wholesale (tc_acquire .. tc_epilogue), for the same reason as the
+# ceiling state above: run_suite and the scheduler functions live outside that
+# window, so every variable they touch must exist before the window opens or a
+# sandbox aborts under `set -u`. Mode resolution happens INSIDE the window
+# (after tc_acquire, because the lock verdict is an input), so in a sandbox —
+# where the window is replaced and the lock neutered — the defaults below hold:
+# serial mode, no pool. The new scheduler suite's own sandbox re-arms it
+# explicitly.
+_pj_mode=0            # 0 = serial, 1 = parallel
+_pj_jobs=1            # resolved width
+_pj_lock_held=0       # advisory lock actually taken by tc_acquire
+_pj_next=0            # next job index (dispatch order == registration order)
+_pj_live_n=0          # workers currently in flight
+_pj_submitted=0       # jobs the chokepoint handed the scheduler
+_pj_rendered=0        # jobs whose verdict was printed at drain
+_pj_unaccounted=0     # jobs submitted but never measured (UNACCOUNTED class)
+_pj_sig=0             # set by the INT/TERM trap armed with parallel mode
+_pj_cap=""            # per-run capture dir for <idx>.out/.err files
+_pj_queue=()          # FIFO of unlaunched job indices
+_pj_live_pids=()      # pids currently live (kept in sync with _pj_state)
+declare -a _pj_pid=() _pj_label=() _pj_tok=() _pj_argvs=() _pj_state=()
+declare -a _pj_rc=() _pj_start=() _pj_end=() _pj_solo=() _pj_tmp0=() _pj_tmpdelta=()
+# Width inputs, overridable for host classes the measured defaults misfit.
+_PJ_MEM_PER_SUITE_MB="${SOLEUR_TEST_SUITE_MEM_MB:-512}"
+[[ "$_PJ_MEM_PER_SUITE_MB" =~ ^[0-9]+$ ]] && (( 10#$_PJ_MEM_PER_SUITE_MB >= 64 )) || _PJ_MEM_PER_SUITE_MB=512
+_PJ_MEM_PER_SUITE_MB=$(( 10#${_PJ_MEM_PER_SUITE_MB} ))
+_PJ_HARD_CAP="${SOLEUR_TEST_JOBS_CAP:-8}"
+[[ "$_PJ_HARD_CAP" =~ ^[0-9]+$ ]] && (( 10#$_PJ_HARD_CAP >= 1 )) || _PJ_HARD_CAP=8
+_PJ_HARD_CAP=$(( 10#${_PJ_HARD_CAP} ))
+
+# --- Parallel scheduler functions --------------------------------------------
+#
+# THE DESIGN IN ONE SENTENCE: only suite-body execution is concurrent;
+# accounting, classification, printing, the terminal marker and the exit
+# contract stay serial and in registration order.
+#
+# run_suite's chokepoint stays exactly where it was — _shard_selects, the
+# affected and ceiling declines, the `suites` increment — so the suite set is
+# derived from the existing registration source by construction. What defers
+# under _pj_mode==1 is only `"$@"`: each registration becomes a job with an
+# index, a token set from scripts/lib/test-suite-lanes.sh, and a capture file
+# pair. A strict FIFO launches jobs while (a) the pool has a free slot and (b)
+# no token intersects a live job's set — `*` intersects everything and is the
+# drain barrier. `wait -n -p` reaps in completion order; every verdict prints
+# at drain in index order through _run_suite_verdict, so [ok]/[FAIL]/[KILLED]/
+# [TRIPWIRE]/[skip] lines, TEST_TIMING_LOG rows and the terminal marker are
+# produced by the same code as the serial path.
+
+_pj_say_serial() {  # _pj_say_serial <reason> — one announced fallback line.
+  printf '[parallel] serial fallback — reason=%s. Rerun serial explicitly with SOLEUR_TEST_JOBS=1 or --jobs=1.\n' "$1" >&2
+}
+
+_pj_resolve_run_mode() {
+  _pj_mode=0
+  local want="${_JOBS_REQ:-${SOLEUR_TEST_JOBS:-}}"
+  # THE DEFAULT. Unset resolves to serial — the explicit, measured choice:
+  # parallel ships opt-in (the #7376 interference diagnosis closed 2026-10-20; the
+  # default stays serial until flipping it is decided separately — see the runbook
+  # and the ADR-242 #12013 amendment). No banner:
+  # a default must not read as a degraded arm.
+  [[ -z "$want" ]] && return 0
+  # Validation binds everywhere the knob is read — even enumerate/print paths —
+  # because a malformed value is a bad invocation, not a mode request.
+  if [[ "$want" != "auto" && ! "$want" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: --jobs/SOLEUR_TEST_JOBS must be 'auto' or a positive integer (got: '${want//[[:cntrl:]]/?}')." >&2
+    echo "       Unset it for serial, or use 1 for an explicit serial request." >&2
+    exit 2
+  fi
+  # Enumerate/print paths never execute a suite — resolve silently.
+  (( _ENUMERATE == 1 || _PRINT_SELECTION == 1 )) && return 0
+  # Fallback precedence — the FIRST matching condition names the banner.
+  if [[ -n "${CI:-}" ]]; then _pj_say_serial "ci (shards already isolate the battery)"; return 0; fi
+  if (( BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1) )); then
+    _pj_say_serial "bash<5.1 (wait -n -p unavailable)"; return 0
+  fi
+  if [[ "$want" != "auto" ]] && (( 10#$want == 1 )); then return 0; fi  # explicit serial, silent
+  if ! declare -F lane_tokens_for >/dev/null 2>&1; then
+    _pj_say_serial "lane-table-unavailable (scripts/lib/test-suite-lanes.sh)"; return 0
+  fi
+  if (( _pj_lock_held != 1 )); then
+    _pj_say_serial "lock-not-held (the advisory lock was skipped, unavailable or contended)"; return 0
+  fi
+  local nproc_v mem_mb per_cap ceiling width
+  nproc_v="$(nproc 2>/dev/null || echo 1)"; [[ "$nproc_v" =~ ^[0-9]+$ ]] || nproc_v=1
+  mem_mb="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || true)"
+  [[ "$mem_mb" =~ ^[0-9]+$ ]] || mem_mb=1024
+  per_cap=$(( mem_mb / _PJ_MEM_PER_SUITE_MB )); (( per_cap < 1 )) && per_cap=1
+  ceiling=$(( nproc_v < per_cap ? nproc_v : per_cap ))
+  (( ceiling > _PJ_HARD_CAP )) && ceiling=$_PJ_HARD_CAP
+  (( ceiling < 1 )) && ceiling=1
+  if [[ "$want" == "auto" ]]; then
+    width=$ceiling
+  else
+    width=$(( 10#$want ))
+    if (( width > ceiling )); then
+      printf '[parallel] NOTE: requested jobs=%s exceeds measured capacity %s (nproc=%s, avail_mem_mb=%s, per_suite_mb=%s, cap=%s) — clamped.\n' \
+        "$want" "$ceiling" "$nproc_v" "$mem_mb" "$_PJ_MEM_PER_SUITE_MB" "$_PJ_HARD_CAP" >&2
+      width=$ceiling
+    fi
+  fi
+  if (( width <= 1 )); then _pj_say_serial "width-1 (measured capacity leaves one slot)"; return 0; fi
+  # Capture store. The session scratch root is preferred (auto-cleaned); a
+  # mktemp fallback is retained+cleaned by _pj_retain in the EXIT trap path.
+  _pj_cap=""
+  if [[ -n "${_suite_log_dir:-}" ]]; then
+    _pj_cap="$_suite_log_dir/pool"
+  else
+    _pj_cap="$(mktemp -d "${TMPDIR%/}/soleur-pool.XXXXXXXX" 2>/dev/null || true)"
+  fi
+  if [[ -z "$_pj_cap" ]] || ! mkdir -p "$_pj_cap" 2>/dev/null; then
+    _pj_cap=""
+    _pj_say_serial "capture-dir-unwritable"
+    return 0
+  fi
+  _pj_jobs=$width
+  _pj_mode=1
+  # A signal must stop dispatch and drain or reap the pool — armed only when
+  # parallel engages so the serial path's signal behaviour is unchanged.
+  trap '_pj_sig=1' INT TERM
+  printf '[parallel] mode engaged — width=%s (nproc=%s, avail_mem_mb=%s, per_suite_mb=%s, cap=%s). SOLEUR_TEST_JOBS=1 or --jobs=1 forces serial.\n' \
+    "$width" "$nproc_v" "$mem_mb" "$_PJ_MEM_PER_SUITE_MB" "$_PJ_HARD_CAP" >&2
+  return 0
+}
+
+_pj_fmt_done() {  # _pj_fmt_done <idx> — the live reap line (#12013), one writer for all three reap sites.
+  # The drain replays [ok]/[FAIL]/[KILLED] in registration order, so this stderr line is the only
+  # thing a poller sees while the pool runs. It carries the suite's wall time and, for a non-zero rc,
+  # a marker saying it is NOT the verdict: the drain's text is authoritative (ADR-177 — a 128+n rc is
+  # unresolved, and a real-git suite can go red only under load). The text is deliberately not
+  # `[FAIL]`/`[ok]`/`[KILLED]`: those prefixes are parsed by monitors and by battery-refusal-wait.sh.
+  local j="$1" rc="${_pj_rc[$1]:-}" ms="" note="" s="${_pj_start[$1]:-}" e="${_pj_end[$1]:-}"
+  # Same integer arithmetic as run_suite's elapsed_ms (10# defeats octal on a leading zero; the *.*
+  # guard skips bash<5, where EPOCHREALTIME is unset, rather than overflowing).
+  if [[ "$s" == *.* && "$e" == *.* ]]; then
+    ms=$(( ( (${e%.*} * 1000000 + 10#${e#*.}) - (${s%.*} * 1000000 + 10#${s#*.}) ) / 1000 ))
+  fi
+  if [[ "$rc" =~ ^[0-9]+$ ]] && (( rc >= 128 )); then
+    note=" — signal-shaped, unresolved until drain"
+  elif [[ "$rc" != 0 ]]; then
+    note=" — provisional, verdict at drain"
+  fi
+  printf '[run] %s done (rc=%s%s)%s\n' "${_pj_label[j]//[[:cntrl:]]/?}" "$rc" "${ms:+, ${ms}ms}" "$note" >&2
+}
+
+_pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set.
+  local idx="$1"
+  (( _pj_live_n >= _pj_jobs )) && return 1
+  local j
+  for (( j = 0; j < _pj_next; j++ )); do
+    [[ "${_pj_state[j]:-}" == "live" ]] || continue
+    lane_tokens_conflict "${_pj_tok[idx]}" "${_pj_tok[j]}" && return 1
+  done
+  return 0
+}
+
+_pj_launch() {
+  local idx="$1"
+  _pj_tmp0[idx]="$(tc_tmp_entry_count 2>/dev/null || echo 0)"
+  # `( exec "$@" )` — the exec is load-bearing: a backgrounded brace group
+  # keeps the PARENT's argv, so every worker would read as a sibling
+  # test-all.sh run to other worktrees' sibling census, --capacity and the
+  # ADR-196 refusal. exec'd, /proc/<pid>/cmdline carries the suite argv.
+  # stdout and stderr are captured separately so the replay puts each byte
+  # back on the fd the suite wrote it to.
+  eval "( exec bash -c 'rcf=\"\$1\"; shift; \"\$@\"; _wrc=\$?; printf %s \"\$_wrc\" >\"\$rcf\"; exit \"\$_wrc\"' _ \"${_pj_cap}/${idx}.rc\" ${_pj_argvs[idx]} ) >\"${_pj_cap}/${idx}.out\" 2>\"${_pj_cap}/${idx}.err\" &"
+  _pj_pid[idx]=$!
+  _pj_state[idx]=live
+  _pj_start[idx]="${EPOCHREALTIME:-}"
+  if (( _pj_live_n == 0 )); then
+    _pj_solo[idx]=1
+  else
+    _pj_solo[idx]=0
+    local j
+    for (( j = 0; j < _pj_next; j++ )); do
+      [[ "${_pj_state[j]:-}" == "live" ]] && _pj_solo[j]=0
+    done
+  fi
+  _pj_live_n=$(( _pj_live_n + 1 ))
+  _pj_live_pids+=("${_pj_pid[idx]}")
+  printf '[run] %s started (pid=%s)\n' "${_pj_label[idx]}" "${_pj_pid[idx]}" >&2
+}
+
+_pj_fill() {  # launch every queue head that is launchable (strict registration order)
+  while (( ${#_pj_queue[@]} > 0 )); do
+    _pj_launchable "${_pj_queue[0]}" || return 0
+    local idx="${_pj_queue[0]}"
+    _pj_queue=("${_pj_queue[@]:1}")
+    _pj_launch "$idx"
+  done
+}
+
+_pj_reap() {  # reap ONE completed worker; returns 1 when nothing live/observeable.
+  (( _pj_live_n == 0 )) && return 1
+  local rp="" rc=0
+  wait -n -p rp -- "${_pj_live_pids[@]}" || rc=$?
+  if [[ -z "${rp:-}" ]]; then
+    # A completed child can leave the job table before wait -n reaches it —
+    # "wait: <pid>: no such job" with an empty -p var, and -p may leave rp
+    # UNSET (the ${rp:-} form is load-bearing). The sidecar .rc the worker
+    # writes is the second channel: it exists for natural completions even
+    # when the reap path is torn. Signal-killed workers write nothing and
+    # still render through their wait status.
+    local j found=0
+    for (( j = 0; j < _pj_next; j++ )); do
+      [[ "${_pj_state[j]:-}" == "live" && -f "${_pj_cap}/${j}.rc" ]] || continue
+      _pj_rc[j]="$(<"${_pj_cap}/${j}.rc")"
+      _pj_end[j]="${EPOCHREALTIME:-}"
+      _pj_tmpdelta[j]=unattributed
+      _pj_state[j]=done
+      _pj_live_n=$(( _pj_live_n - 1 ))
+      local _np=() _p
+      for _p in "${_pj_live_pids[@]}"; do [[ "$_p" != "${_pj_pid[j]}" ]] && _np+=("$_p"); done
+      if ((${#_np[@]})); then _pj_live_pids=("${_np[@]}"); else _pj_live_pids=(); fi
+      _pj_fmt_done "$j"
+      found=1
+    done
+    (( found == 1 )) && return 0
+    # rc 127 + empty pid var = job table empty (not a suite's own exit 127).
+    # 128+N + empty pid var = the PARENT was signalled — no child was reaped,
+    # so rendering it as a suite's signal shape would be mimicry (ADR-187 §2).
+    (( rc == 127 )) || _pj_sig=1
+    return 1
+  fi
+  local j
+  for (( j = 0; j < _pj_next; j++ )); do
+    [[ "${_pj_state[j]:-}" == "live" && "${_pj_pid[j]:-}" == "$rp" ]] && break
+  done
+  if (( j >= _pj_next )); then
+    # A reaped pid the map does not contain — refuse rather than guess which
+    # suite produced it; misattribution is the worse class.
+    printf 'WARNING: reaped unknown worker pid %s (rc=%s) — counted UNACCOUNTED.\n' "$rp" "$rc" >&2
+    _pj_unaccounted=$(( _pj_unaccounted + 1 ))
+    return 0
+  fi
+  _pj_rc[j]=$rc
+  _pj_end[j]="${EPOCHREALTIME:-}"
+  _pj_tmpdelta[j]=$(( $(tc_tmp_entry_count 2>/dev/null || echo 0) - ${_pj_tmp0[j]:-0} ))
+  _pj_state[j]=done
+  _pj_live_n=$(( _pj_live_n - 1 ))
+  local np=() p
+  for p in "${_pj_live_pids[@]}"; do [[ "$p" != "$rp" ]] && np+=("$p"); done
+  if ((${#np[@]})); then _pj_live_pids=("${np[@]}"); else _pj_live_pids=(); fi
+  _pj_fmt_done "$j"
+  _pj_fill
+  return 0
+}
+
+_pj_submit() {  # _pj_submit <label> <argv...> — the run_suite dispatch under parallel mode.
+  local label="$1"; shift
+  local idx=$_pj_next
+  _pj_next=$(( idx + 1 ))
+  _pj_submitted=$(( _pj_submitted + 1 ))
+  _repo_last_suite="$label"
+  if declare -F stamp_lock_holder >/dev/null 2>&1; then
+    stamp_lock_holder test-all "last_suite=$label" "suites_done=$_suites_completed"
+  fi
+  if (( _pj_sig == 1 )); then
+    _pj_state[idx]=unaccounted
+    _pj_label[idx]="$label"
+    _pj_unaccounted=$(( _pj_unaccounted + 1 ))
+    return 0
+  fi
+  _pj_label[idx]="$label"
+  _pj_state[idx]=queued
+  _pj_tok[idx]="$(lane_tokens_for "$label" "$@" 2>/dev/null || printf '*')"
+  local enc=""
+  printf -v enc '%q ' "$@"
+  _pj_argvs[idx]="$enc"
+  _pj_queue+=("$idx")
+  _pj_fill
+  # Block ONLY on a saturated pool — token-held queue heads wait for a reap.
+  while (( _pj_live_n >= _pj_jobs )); do
+    _pj_reap || break
+    _pj_fill
+  done
+}
+
+_pj_render() {  # _pj_render <idx> — print one suite's block in registration order.
+  # Two `local`s, not one compound: every word expands BEFORE the builtin runs,
+  # so a compound `local idx=.. label=${_pj_label[idx]}` reads idx unbound.
+  local idx="$1"
+  local label="${_pj_label[idx]}"
+  echo "--- $label ---"
+  [[ -f "${_pj_cap}/${idx}.out" ]] && cat "${_pj_cap}/${idx}.out"
+  [[ -f "${_pj_cap}/${idx}.err" ]] && cat "${_pj_cap}/${idx}.err" >&2
+  local _suite_log=""
+  if [[ -n "$_suite_log_dir" ]]; then
+    local _candidate="$_suite_log_dir/${label//\//__}.log"
+    if mkdir -p "$_suite_log_dir" 2>/dev/null \
+       && cat "${_pj_cap}/${idx}.out" "${_pj_cap}/${idx}.err" >"$_candidate" 2>/dev/null; then
+      _suite_log="$_candidate"
+    fi
+  fi
+  local _tov="unattributed"
+  (( ${_pj_solo[idx]:-0} == 1 )) && _tov="${_pj_tmpdelta[idx]:-0}"
+  _run_suite_verdict "$label" "${_pj_rc[idx]:-1}" "${_pj_start[idx]:-}" "" "$_suite_log" "$_tov" "${_pj_end[idx]:-}"
+}
+
+_pj_drain() {
+  (( _pj_mode == 1 )) || return 0
+  while (( _pj_live_n > 0 )) && (( _pj_sig == 0 )); do _pj_reap || break; done
+  (( _pj_sig == 0 )) && _pj_fill || true
+  if (( _pj_sig == 1 )); then
+    # Interrupted: TERM live workers explicitly — a signal targeted at the
+    # runner (kill -TERM <runner-pid>) never reaches them the way a
+    # group-directed SIGINT does. Bound the reap to a fixed window and KILL
+    # what survives it: `wait -n` blocks until the NEXT natural completion,
+    # so a reap-only loop cannot bound itself — poll with kill -0 instead.
+    # Everything still unmeasured after the window is UNACCOUNTED, never a
+    # guessed class.
+    local j d=0
+    for (( j = 0; j < _pj_next; j++ )); do
+      [[ "${_pj_state[j]:-}" == "live" ]] && kill -TERM "${_pj_pid[j]}" 2>/dev/null || true
+    done
+    while (( _pj_live_n > 0 && d < 50 )); do
+      sleep 0.1; d=$(( d + 1 ))
+      for (( j = 0; j < _pj_next; j++ )); do
+        if [[ "${_pj_state[j]:-}" == "live" ]] && ! kill -0 "${_pj_pid[j]}" 2>/dev/null; then
+          if [[ -f "${_pj_cap}/${j}.rc" ]]; then
+            _pj_rc[j]="$(<"${_pj_cap}/${j}.rc")"
+          elif wait "${_pj_pid[j]}" 2>/dev/null; then
+            _pj_rc[j]=0
+          else
+            _wrc=$?
+            (( _wrc == 127 )) && continue
+            _pj_rc[j]=$_wrc
+          fi
+          _pj_end[j]="${EPOCHREALTIME:-}"
+          _pj_tmpdelta[j]=unattributed
+          _pj_state[j]=done
+          _pj_live_n=$(( _pj_live_n - 1 ))
+          _pj_fmt_done "$j"
+        fi
+      done
+    done
+    for (( j = 0; j < _pj_next; j++ )); do
+      if [[ "${_pj_state[j]:-}" == "live" ]]; then
+        kill -KILL "${_pj_pid[j]}" 2>/dev/null || true
+        wait "${_pj_pid[j]}" 2>/dev/null || true
+        _pj_state[j]=unaccounted
+        _pj_unaccounted=$(( _pj_unaccounted + 1 ))
+      elif [[ "${_pj_state[j]:-}" == "queued" ]]; then
+        _pj_state[j]=unaccounted
+        _pj_unaccounted=$(( _pj_unaccounted + 1 ))
+      fi
+    done
+    _pj_live_n=0
+  fi
+  local i
+  for (( i = 0; i < _pj_next; i++ )); do
+    if [[ "${_pj_state[i]:-}" == "queued" || "${_pj_state[i]:-}" == "live" ]]; then
+      # A suite still live at render (reap-failure path) is UNACCOUNTED — its
+      # coverage is unresolved, not a guessed FAIL.
+      _pj_state[i]=unaccounted
+      _pj_unaccounted=$(( _pj_unaccounted + 1 ))
+    fi
+    if [[ "${_pj_state[i]:-}" == "unaccounted" ]]; then
+      echo "--- ${_pj_label[i]:-<suite index $i>} ---"
+      echo "[UNACCOUNTED] ${_pj_label[i]:-<suite index $i>} — dispatched but never measured; its coverage is unresolved." >&2
+      _pj_rendered=$(( _pj_rendered + 1 ))
+      continue
+    fi
+    _pj_render "$i"
+    _pj_rendered=$(( _pj_rendered + 1 ))
+  done
+  # The in-run parity check: every submitted job produced exactly one rendered
+  # verdict — the same shape of guarantee shard totality asserts statically.
+  if (( _pj_rendered != _pj_submitted )); then
+    printf 'ERROR: parallel accounting mismatch — submitted=%s rendered=%s.\n' "$_pj_submitted" "$_pj_rendered" >&2
+    _pj_unaccounted=$(( _pj_unaccounted + 1 ))
+  fi
+  # Disarm on the way out: a signal landing after the drain (repo-write-boundary
+  # sample, summary block) must kill the runner the way it does in serial mode —
+  # leaving `_pj_sig=1` armed would swallow it and still print the green marker.
+  trap - INT TERM
+  (( _pj_sig == 1 )) && exit 1
+  return 0
+}
+
+# EXIT-trap-side retention for parallel captures: copy captures for jobs that
+# never rendered (mid-termination), then drop the mktemp capture dir if the
+# session scratch root was unavailable. Called from _run_log_retain.
+_pj_retain() {
+  [[ -n "${_pj_cap:-}" && -d "${_pj_cap:-}" ]] || return 0
+  if (( ${_pj_next:-0} > 0 )) && mkdir -p "$_durable_log_dir" 2>/dev/null; then
+    local j
+    for (( j = 0; j < _pj_next; j++ )); do
+      [[ "${_pj_state[j]:-}" == "live" || "${_pj_state[j]:-}" == "queued" ]] || continue
+      if [[ -f "${_pj_cap}/${j}.out" || -f "${_pj_cap}/${j}.err" ]]; then
+        cat "${_pj_cap}/${j}.out" "${_pj_cap}/${j}.err" \
+          > "$_durable_log_dir/${_pj_label[j]//\//__}.log" 2>/dev/null \
+          && printf '[suite-log] mid-termination retention: %s\n' "$_durable_log_dir/${_pj_label[j]//\//__}.log" >&2 || true
+      fi
+    done
+  fi
+  case "${_pj_cap}" in */soleur-pool.*) rm -rf "$_pj_cap" 2>/dev/null || true ;; esac
+  return 0
+}
+
+
 # This runner NOW COVERS apps/web-platform/infra/, by registering
 # apps/web-platform/infra/run-registered-suites.sh as a nested suite (see the registration
 # block near the end of this file). That runner DERIVES its list from
@@ -3041,13 +3529,22 @@ _affected_edge_token() {
   # would cut it to `$(dirname` — which is how these tokens arrive.
   _p="${_p//\$\(dirname \"\$\{BASH_SOURCE\[0\]\}\"\)/$_fdir}"
   _p="${_p//\$\(dirname \"\$0\"\)/$_fdir}"
+  # `X="$(cmd)" || X=""` fallback assignments: the var map's greedy quoted capture carries the
+  # ` || X="` tail into the value, so a resolved operand arrives as `<val>" || <name>="<rest>`
+  # (the probe idiom `libdir="$(cd …)" || libdir=""` in the stem-minted SUT learning). Remove the
+  # residue before any arm runs — the quote-strip below would otherwise cut the token at that `"`
+  # and drop `<rest>` (widen-only: `" || <name>="` is never a path byte, and a token whose residue
+  # was already absent is untouched).
+  _p="${_p//\" || [A-Za-z_]*=\"/}"
   # `$(cd "<dir>[/..]" && pwd[ -P])` resolves to its cd TARGET, normalised (D1, #9307): the dirname
   # substitutions above have already turned `<dir>` into the file's own directory, so
   # `REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"` names the repo root two levels up.
   # The greedy replacements below collapse the whole substitution to `$_fdir` and LOSE the `/..`, which
   # put `$REPO_ROOT/lib/x.sh` one or two levels below the repo root and dropped the edge; they stay as the
-  # fallback for any spelling this pattern does not match.
-  if (( _ET_NOD1 == 0 )) && [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
+  # fallback for any spelling this pattern does not match. A redirect between the target and `&& pwd`
+  # is tolerated — the probe idiom `source "$(cd "<dir>" 2>/dev/null && pwd)/x.sh"` carries `2>/dev/null`
+  # or `2>&1` there (the unwalked-SUT learning, 2026-11-02); any other spelling falls to the greedy arm.
+  if (( _ET_NOD1 == 0 )) && [[ "$_p" =~ \$\(cd[[:space:]]+\"?([^\"\&\)]+)\"?([[:space:]]+2[>](/dev/null|&1))?[[:space:]]*\&\&[[:space:]]*pwd([[:space:]]+-P)?\) ]]; then
     local _cdm="${BASH_REMATCH[0]}" _cdt="${BASH_REMATCH[1]}"
     # Only a FULLY resolved target is normalised: `cd "$REPO_ROOT/.." && pwd` (a variable rebuilt from a
     # variable) cannot be resolved here, and normpath would collapse its `$REPO_ROOT/..` to `.`, a path that
@@ -3423,6 +3920,10 @@ _affected_derive() {
       test-*.py|test_*.py)  _stem="${_base#test?}" ;;
       *)                    _stem="" ;;
     esac
+    # Minted-edge snapshot for the stem fan below: the closure frontier reuses this
+    # slice as its seed set, so only candidates that actually minted an edge are probed —
+    # the fan offers up to 31 spellings per suite, most nonexistent.
+    local _stem_pre=${#_AC_EDGES[@]}
     if [[ -n "$_stem" ]]; then
       # The SUT's extension does not have to match the test's — a .test.sh can
       # guard an .mjs/.ts/.py helper — so fan the bare stem across every SUT
@@ -3455,9 +3956,21 @@ _affected_derive() {
       done
       if (( _ns == 1 )); then _AC_SUITE_FILE="$_suite_file"; return 0; fi
     fi
-    # Closure, bounded: follow source/import edges one level at a time.
+    # Closure, bounded: follow source/import edges one level at a time. The frontier
+    # seeds with the suite file AND every file the stem fan minted an edge for (the
+    # `_stem_pre` slice): a SUT's edge is pre-minted by the naming convention, so it
+    # never appears in a walked file's newly-minted slice — an unseeded BFS never
+    # extracts the SUT, and its source/invocation/$VAR/path tokens mint nothing
+    # (learning 2026-11-02-stem-minted-suts-are-never-walked-by-the-derive).
     local -a _queue=("$_suite_file")
     local _sset=$'\n'"$_suite_file"$'\n' _snl=$'\n'
+    local _si _sf
+    for (( _si=_stem_pre; _si<${#_AC_EDGES[@]}; _si++ )); do
+      _sf="${_AC_EDGES[$_si]#^}"
+      if _affected_probe f "$_sf"; then
+        case "$_sset" in *"$_snl$_sf$_snl"*) ;; *) _sset+="$_sf$_snl"; _queue+=("$_sf") ;; esac
+      fi
+    done
     local _depth=0
     while (( ${#_queue[@]} > 0 && _depth < 8 )); do
       # Deleted-cwd re-check inside the one multi-iteration site of a single
@@ -3713,7 +4226,14 @@ _aff_runner_banner() {
 # #7893: +1 always-on (the Art. 30 re-verification unit); re-pinned at 117-5.
 # #10664: +1 always-on (the hcloud-token read-only no-fallback scan); re-pinned at 119-5.
 # #10861: +1 always-on (the grep-q-pipe-guard whole-tree reader, PR4b row 6 verdict); re-pinned at 120-5.
-_MIN_ALWAYS_ON_DECLARED=115
+# #11662: +2 always-on (the anti-regrow guard pair: corpus-weight-budget + always-on-ledger); re-pinned at 122-5.
+# #11648: -8 always-on (the >10s drifted set: test-all-group-affected, lint-ratchet, check-deps-adapter-drift,
+# token-drift-workflow-causes, grep-q-pipe-guard, lint-encryption-posture, gitleaks-merge-commit,
+# lint-gh-argv-arg-live — all withdrawn to edge-selection); re-pinned at 114-5.
+# #9826: +2 always-on (the image-cve public-claim guard + verdict-consumers sweep, both repo-global); re-pinned at 116-5.
+# #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
+# #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
+_MIN_ALWAYS_ON_DECLARED=113
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -4523,6 +5043,11 @@ _wd_descendants() {  # _wd_descendants <exclude-pid> <root-pid...>
 # _soleur_scratch_cleanup in the trap chain — that cleanup deletes the
 # scratch root the source file lives in.
 _run_log_retain() {
+  # #8231: parallel-mode captures for suites that never rendered, plus the
+  # mktemp capture dir when the session root was unavailable. Runs BEFORE the
+  # serial-mode early return — _suite_log_in_flight is only set on the serial
+  # exec path, so under _pj_mode this branch would never reach the call.
+  declare -F _pj_retain >/dev/null 2>&1 && _pj_retain || true
   local src="${_suite_log_in_flight:-}"
   [[ -n "$src" && -f "$src" ]] || return 0
   if mkdir -p "$_durable_log_dir" 2>/dev/null; then
@@ -4838,6 +5363,19 @@ fi
 
 tc_acquire "test-all"
 
+# #8231: read back whether the advisory lock was ACTUALLY taken. tc_acquire
+# returns 0 without serializing on SOLEUR_DISABLE_SESSION_STATE, a missing
+# session-state.sh, a missing flock(1), and on LOCK_CONTENDED_PROCEEDING —
+# going wide with no cross-worktree serialization is the one combination that
+# turns a local optimisation into a cross-worktree corruption surface, so the
+# scheduler resolves against the measured verdict, not the call's rc.
+_pj_lock_held=0
+if declare -p _SESSION_LOCK_ACQUIRED >/dev/null 2>&1 \
+   && [[ -n "${_SESSION_LOCK_ACQUIRED[test-all]:-}" ]]; then
+  _pj_lock_held=1
+fi
+_pj_resolve_run_mode
+
 # #9117: age-reap stale durable logs now that this run holds the lock. Default
 # namespace only; SOLEUR_TEST_ALL_LOG_GC_DAYS (default 14) is the window.
 _gc_durable_logs "${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs" "${SOLEUR_TEST_ALL_LOG_GC_DAYS:-14}" || true
@@ -4996,6 +5534,13 @@ if want_scripts; then
   # Image CVE scan (W3, epic #9601): hermetic suite (stub Grype/curl, file:// /health); scripts/*.test.sh is
   # not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/image-cve-scan" bash scripts/image-cve-scan.test.sh
+  # Slice 2a (#9826): triage (hermetic, stub query script), public-claim guard (state test over public
+  # surfaces); scripts/*.test.sh is not in SUITE_GLOBS, so each is registered explicitly.
+  run_suite "scripts/image-cve-db-pin" bash scripts/image-cve-db-pin.test.sh
+  run_suite "scripts/image-cve-verdict" bash scripts/image-cve-verdict.test.sh
+  run_suite "scripts/image-cve-verdict-consumers" bash scripts/image-cve-verdict-consumers.test.sh
+  run_suite "scripts/image-cve-triage" bash scripts/image-cve-triage.test.sh
+  run_suite "scripts/image-cve-public-claim-guard" bash scripts/image-cve-public-claim-guard.test.sh
   # Egress audit rollup retention/freshness probe (#9545, ADR-288): hermetic (curl PATH shim, stub gateway
   # query); scripts/*.test.sh is not in SUITE_GLOBS, so it is registered explicitly.
   run_suite "scripts/egress-audit-retention-check" bash scripts/egress-audit-retention-check.test.sh
@@ -5072,6 +5617,13 @@ if want_scripts; then
   # tree.
   run_suite "scripts/lint-gh-argv-arg" bash scripts/lint-gh-argv-arg.test.sh
   run_suite "scripts/lint-gh-argv-arg-live" python3 scripts/lint-gh-argv-arg.py
+  # #9659. Same both-halves shape: a bare/silent `VAR=$(gh issue|pr list|search)` dedupe
+  # capture under `set -euo pipefail` aborts the step mid-alarm with no breadcrumb — the
+  # class #9612 normalized kept re-growing past its enumeration. The unit suite proves the
+  # classifier's buckets on fixtures (and carries the planted-defect verify-the-verifier);
+  # the live scan proves every census site is wrapped, ||-handled, or `# dedupe:`-marked.
+  run_suite "scripts/lint-gh-dedupe-shape" bash scripts/lint-gh-dedupe-shape.test.sh
+  run_suite "scripts/lint-gh-dedupe-shape-live" python3 scripts/lint-gh-dedupe-shape.py
   # #7695 review: actionlint flags unparseable run: bodies, but lint-workflows.sh treats its rc=1 as
   # accepted (census tracked in #7042), so the class was green in CI. This one exits non-zero.
   run_suite "scripts/lint-workflow-run-body-syntax" python3 scripts/lint-workflow-run-body-syntax.py
@@ -5250,6 +5802,15 @@ if want_scripts; then
   # #9763: the fast-tier budget ratchet — pins always-on committed weight to
   # <=10s per suite and <=300s total so the local tier cannot silently regrow.
   run_suite "scripts/test-all-fast-tier-budget" bash scripts/test-all-fast-tier-budget.test.sh
+  # #11662: the corpus-wide committed-weight budget — every committed weight
+  # <=600s or exempted in scripts/suite-weight-exemptions.tsv; unmeasured
+  # registrations red. Registered explicitly: scripts/*.test.sh is NOT
+  # auto-globbed (the #5417 orphan class).
+  run_suite "scripts/test-all-corpus-weight-budget" bash scripts/test-all-corpus-weight-budget.test.sh
+  # #11662: the always-on ledger — two-directional keys-parity against
+  # scripts/always-on-justifications.tsv plus the non-live membership ceiling
+  # (NON_LIVE_CAP), distinct from f1's pin-vs-list band.
+  run_suite "scripts/always-on-ledger" bash scripts/always-on-ledger.test.sh
   # #9814: the local weight-drift detector — warns when a suite's local actual
   # exceeds its committed weight by >2x AND >10s (advisory lines, never a gate).
   run_suite "scripts/test-all-weight-drift" bash scripts/test-all-weight-drift.test.sh
@@ -5518,19 +6079,56 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
-  # #10390 defect 3: verdict-matrix harness for the inngest verify-blob soak probe. Registered EXPLICITLY
-  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes
-  # the soak tracker — an undetailed reason=pull row must not read as FAIL.
-  run_suite "scripts/followthroughs/inngest-verify-clean-10390" bash scripts/followthroughs/inngest-verify-clean-10390.test.sh
+  run_suite "scripts/inngest-luks-field-8525" bash scripts/followthroughs/inngest-luks-field-8525.test.sh
+  # #10585: exit-code harness for the standing first-deploy watchdog probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the ONLY signal on
+  # the standing tracker's boot→first-deploy obligation — a vacuous PASS, a reachable 0 (would
+  # close the standing tracker), or a reachable 1 must redden CI.
+  run_suite "scripts/web-first-deploy-10585" bash scripts/followthroughs/web-first-deploy-10585.test.sh
+  # #11704: exit-code harness for the git-data replication-signal read (zero markers while sessions are live).
+  # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the only
+  # signal on the soak's replication evidence, so a vacuous MARKERS_PRESENT must redden CI.
+  run_suite "scripts/git-data-replication-signal-11704" bash scripts/followthroughs/git-data-replication-signal.test.sh
+  # #9782: exit-code harness for the Inngest CLI apply-window probe — pins that a uniformly
+  # failing per-run jobs read is CANNOT-ESTABLISH (rc 3), never the swallowed jq crash that
+  # read as skip-forever NOT-YET. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS).
+  run_suite "scripts/followthroughs/inngest-cli-apply-window-7463" bash scripts/followthroughs/inngest-cli-apply-window-7463.test.sh
   # #10390 (WS3): exit-code harness for the generic post-deploy alert-channel soak — zero new
   # Better Stack incidents AND zero new ci/ issues in [deploy_ts, +Nh], TRANSIENT on read failure.
   # Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code
   # decides whether a soak tracker closes, so a vacuous PASS must redden CI.
   run_suite "scripts/followthroughs/post-deploy-incident-soak" bash scripts/followthroughs/post-deploy-incident-soak.test.sh
+  # Exit-code harness for the Discord blog-webhook fallback verification probe (closes #11532's
+  # companion tracker). Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). Its exit code decides whether the sweeper closes the tracker, so a vacuous
+  # PASS — before the first post-secret publish lands, or on an unmeasured Sentry read — must
+  # redden CI.
+  run_suite "scripts/followthroughs/discord-blog-webhook-fallback" bash scripts/followthroughs/discord-blog-webhook-fallback.test.sh
   # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.
   run_suite "scripts/followthroughs/sdk-bash-smoke-verdict-10548" bash scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh
+  # #11211: exit-code + row-class harness for the dispatch-recovery sweeper re-evaluation probe. Registered EXPLICITLY
+  # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The probe is notify-only (never 0/1) and runs with a broad
+  # Supabase token, so a stray exit 0/1, a body echo or a non-literal query must redden CI.
+  run_suite "scripts/followthroughs/dispatch-recovery-sweeper-11211" bash scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh
+  # #11265: exit-code + row-class harness for the LUKS keeper dark-probe (the dead-man conversion trigger). Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Notify-only (never 0/1): a quoting row counted
+  # as a measurement, an indeterminate row counted as health, or a stray exit 0/1 must redden CI.
+  run_suite "scripts/followthroughs/inngest-luks-keeper-dark-11265" bash scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh
+  # #11602: exit-code harness for the host_metrics-trim measured-close probe (the issue's own GROUP BY
+  # tags.collector acceptance read). Registered EXPLICITLY (scripts/followthroughs/*.test.sh is not in
+  # SUITE_GLOBS). Its exit code decides whether the sweeper closes #11602, so a vacuous PASS — a
+  # superset, a partial set, a zero-count collector, or a truncated read counted as the trim — must
+  # redden CI.
+  run_suite "scripts/followthroughs/inngest-hostmetrics-trim-11602" bash scripts/followthroughs/inngest-hostmetrics-trim-11602.test.sh
+  # #7596: exit-code harness for the boot-trace-allowlist measured-close probe (generation floor +
+  # _BOOT_ID anchor + the BOOT_STAGE second PASS arm + leg-attributed TRANSIENT reasons). Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether
+  # the sweeper closes #7596, so a pre-floor or stale-generation row counted as delivered must
+  # redden CI.
+  run_suite "scripts/followthroughs/inngest-bs-token-restage-7596" bash scripts/followthroughs/inngest-bs-token-restage-7596.test.sh
   # #10552: exit-code + row-class harness for the compound-promote derived-diff probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code decides whether the sweeper closes #10552,
   # so a PASS on a refusal that is not proof (or on a quiet week) must redden CI.
@@ -5563,6 +6161,13 @@ if want_scripts; then
   # sweeper reports NOT YET / CANNOT ESTABLISH / ACTION REQUIRED correctly — a
   # vacuous PASS would close the soak tracker on an unmeasured window.
   run_suite "scripts/watchdog-debounce-soak-9686" bash scripts/followthroughs/watchdog-debounce-soak-9686.test.sh
+  # #11362: exit-code harness for the arc-synthesis publish-window probe. Registered
+  # EXPLICITLY (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). The probe is
+  # notify-only (never 0/1); its arms drive whether the sweeper reports NOT YET /
+  # CANNOT ESTABLISH / ACTION REQUIRED correctly — a vacuous or mis-routed verdict
+  # would either sleep through the Nov 19–26 social window or cry wolf daily on the
+  # tracker. The plan's 5-row mutation matrix is driven here, not manually.
+  run_suite "scripts/followthroughs/parked-green-synthesis-11362" bash scripts/followthroughs/parked-green-synthesis-11362.test.sh
   # #8036 1c: exit-code harness for the host-side-GHCR-retirement follow-through. Registered
   # EXPLICITLY — `scripts/followthroughs/*.test.sh` is not in SUITE_GLOBS, so a new probe's
   # harness gates nothing until this line exists (the orphan-suite class). Its exit code decides
@@ -5725,7 +6330,8 @@ if want_scripts; then
   # harness rows, the anchor trust rows, and per-check deletion mutants of the probe copy.
   run_suite "scripts/inngest-tls-soak-10136" bash scripts/followthroughs/inngest-tls-soak-10136.test.sh
   # #11218 owner-ask probe for A5/A6 of the Inngest TLS arc (#10136). Notify-only (never exits 0 or 1): drives the 7-row
-  # decision table through a gh shim and the REAL trusted-verdict lib (untrusted-author and fenced-anchor rows included).
+  # decision table through a gh shim and the REAL trusted-verdict and relayed-verdict libs (untrusted-author, fenced-anchor and
+  # RELAYED-record rows included; the relayed-verdict lib has no suite of its own, this one drives it).
   run_suite "scripts/inngest-a5-a6-owner-ask-10136" bash scripts/followthroughs/inngest-a5-a6-owner-ask-10136.test.sh
   # CPX22 invoice reconciliation (#7437). An operator-confirmed probe reads a production ledger
   # verdict out of free text a human typed, so the suite pins the two properties that decide
@@ -5933,6 +6539,10 @@ if want_scripts; then
   # the rung2 entries above: nothing auto-discovers tests/scripts/ or scripts/followthroughs/.
   run_suite "tests/scripts/inngest-provision-plan-shape" bash tests/scripts/test-inngest-provision-plan-shape.sh
   run_suite "scripts/followthroughs/inngest-provision-rehearsal-capture" bash scripts/followthroughs/inngest-provision-rehearsal-capture.test.sh
+  # (#11181) The cf-lb-overlay dispatch's plan graders (record/overlay/teardown/GA
+  # allow-sets fail closed). Registered HERE for the same reason as the rung2 and
+  # inngest-provision entries above: nothing auto-discovers tests/scripts/.
+  run_suite "tests/scripts/cf-lb-overlay-gate" bash tests/scripts/test-cf-lb-overlay-gate.sh
   # (#7226 / #5914, ADR-237) SSH host-key pinning guards. Registered HERE for the same
   # reason as the lines above: nothing auto-discovers tests/scripts/. Guard 1 (no unpinned
   # host-key option anywhere in the tree), its mutation harness, and the track.sh
@@ -6142,17 +6752,21 @@ if want_scripts; then
   run_suite "tests/scripts/zot-log-channel-probe" bash tests/scripts/test-zot-log-channel-probe.sh
   # git-data-host-replace scoped-recreate destroy-guard (#6242; 5-target, preserves BOTH data volumes + LUKS passphrase by omission).
   run_suite "tests/scripts/git-data-host-replace-gate" bash tests/scripts/test-git-data-host-replace-gate.sh
-  # Plaintext git-data volume destroy plan gate (Option B of the W0 route; pins volume 106867358 + its attachment, refuses anything else).
-  run_suite "tests/scripts/git-data-plaintext-destroy-gate" bash tests/scripts/test-git-data-plaintext-destroy-gate.sh
   run_suite "tests/scripts/git-data-wipe-wedge" bash tests/scripts/test-git-data-wipe-wedge.sh
   # git-data root-key create-gate arm (#8189, ADR-220, Guard 4), sourced by the replace and birth gates.
   run_suite "tests/scripts/git-data-root-key-arm" bash tests/scripts/test-git-data-root-key-arm.sh
   run_suite "tests/scripts/git-data-root-token-census" bash tests/scripts/test-git-data-root-token-census.sh
   run_suite "tests/scripts/infra-privileged-tier-census" bash tests/scripts/test-infra-privileged-tier-census.sh
+  # Sole-copy LUKS Guard 1 (#9927 item 10, ADR-282): registered HERE so a red Guard 1 blocks merge through the required `test` context
+  # (test-scripts). Also covered by the infra runner glob (deploy-script-tests), hence its DOUBLE_COVERED_ACK entry in
+  # scripts/lint-orphan-test-suites.sh; the G2f pin in plugins/soleur/test/terraform-target-parity.test.ts (test-bun leg) keeps this line from being dropped.
+  run_suite "apps/web-platform/infra/inngest-luks-sole-copy" bash apps/web-platform/infra/inngest-luks-sole-copy.test.sh
   # G1 (#9294): the deploy-channel trio census and its expiring (file, name) baseline.
   run_suite "tests/scripts/trio-baseline-census" bash tests/scripts/test-trio-baseline-census.sh
-  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential outside the one
-  # expiring op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
+  # #11294: the random_* id redaction filter that keeps a random_id's key bytes out of every public terraform log, issue and comment.
+  run_suite "tests/scripts/tf-redact-random-ids" bash tests/scripts/test-tf-redact-random-ids.sh
+  # #10664 (ADR-241 D4): no doppler secrets-get read of the read/write Hetzner credential anywhere —
+  # zero-tolerance since #9755 retired the op=backup allowlist entry (the Hetzner read-only-token no-fallback scan, scripts/lint-hcloud-token-readonly-no-fallback.sh, #10664, ADR-241 D4, driven
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
   # auto-discovers tests/scripts/.
   run_suite "tests/scripts/hcloud-token-readonly-no-fallback-scan" bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh
@@ -6376,6 +6990,18 @@ if want_scripts; then
   # probe sends compared against the committed betterstack-logs-alerts.tf text, and a no-address-in-output
   # assertion on every run). Same explicit-registration and LAST-in-block reasons as above.
   run_suite "scripts/followthroughs/registry-clientip-alert-7530" bash scripts/followthroughs/registry-clientip-alert-7530.test.sh
+  # Code-quality follow-up watchers (code-quality-followups-watch.yml): notify-once, read-only apart from one issue
+  # comment per tracker. Explicit registration (scripts/*.test.sh is not auto-globbed); appended LAST in the block.
+  run_suite "scripts/watch-code-quality-reeval-9730" bash scripts/watch-code-quality-reeval-9730.test.sh
+  run_suite "scripts/watch-lint-ratchet-reeval-10515" bash scripts/watch-lint-ratchet-reeval-10515.test.sh
+  run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
+  run_suite "scripts/watch-shard-balance-11564" bash scripts/watch-shard-balance-11564.test.sh
+  run_suite "scripts/watch-wallclock-p90-11774" bash scripts/watch-wallclock-p90-11774.test.sh
+  # #12156 (ADR-276 amendment): the oracle-lane driver EXECUTED (fixture-diff battery over the real driver, the
+  # surface/exclusion/extent mutation rows, output-grammar pins, the lock and fail-closed defaults, and the
+  # manifest↔registration parity assertion). Same explicit-registration and LAST-in-block reasons as above.
+  # Declared edge set, not always-on.
+  run_suite "scripts/ci-oracle-lane" bash scripts/ci-oracle-lane.test.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -6539,11 +7165,21 @@ if want_webplat; then
   # it there would make the only cross-implementation check in the pair fail on a missing
   # binary rather than on a disagreement.
   run_suite "scripts/followthroughs/ccla-representative-icla-7922" bash scripts/followthroughs/ccla-representative-icla-7922.test.sh
+  # #10455: the notify-only home-census reminder probe. EXPLICIT because scripts/followthroughs/ matches no SUITE_GLOBS entry.
+  run_suite "scripts/followthroughs/home-census-run-10455" bash scripts/followthroughs/home-census-run-10455.test.sh
   # #9776 / ADR-284: the hosted must-ask lane's mutation battery (90 anchor-asserted mutants, one targeted vitest file
   # each, on a COPY of the app tree). EXPLICIT, and in THIS shard: `apps/web-platform/test/*.test.sh` matches no
   # SUITE_GLOBS entry, and the battery needs apps/web-platform/node_modules/.bin/vitest, which the `test-scripts`
   # shard does not install. Its own control run reds the suite when the unedited copy is not green.
   run_suite "apps/web-platform/test/destroy-ask-mutation" bash apps/web-platform/test/destroy-ask-mutation.test.sh
+  # #4672 / ADR-309: the approval consume gate's Guard 1 mutation battery (anchor-asserted mutants of the SQL consume
+  # predicate, the canonical hash, the gated flow, the wait loop, the flag read and the census, one targeted vitest file
+  # each, on a COPY of the app tree). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
+  run_suite "apps/web-platform/test/approval-guard1-mutation" bash apps/web-platform/test/approval-guard1-mutation.test.sh
+  # #10455: the home-census Guard 1/4 mutation battery (23 anchor-asserted mutants on a COPY of the app tree; the full
+  # run is reviewer-only behind HOME_CENSUS_MUTATIONS=1, the always-on part is the baseline, vacuity, landing and
+  # instrument control). EXPLICIT, and in THIS shard, for the same reason as destroy-ask-mutation.
+  run_suite "apps/web-platform/test/home-census-mutations" bash apps/web-platform/test/home-census-mutations.test.sh
 
   # #9815: the wrapper + eligibility suite for the `related` narrowing. EXPLICIT,
   # in THIS arm for the same reason as destroy-ask-mutation — it drives the
@@ -6657,12 +7293,30 @@ if want_scripts; then
   # auto-globbed.
   #
   # PR-GATED (ADR-262). Declared by dependency, not by its whole-scripts/ hardlink copy set.
+  # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~29-min atomic suite this battery
+  # was a test-scripts shard worst leg, so it registers FOUR times — the -a/-b/-c/-d arms
+  # below carrying complementary --rows ranges over its DECLARED_TOTAL gated row blocks.
+  # ONE `if` over all four arms — they share TEST_ALL_AFFECTED_BATTERY_PATHS, so declines
+  # stay identical per arm and the derived-gate-count floor holds. The boundary lives in
+  # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is asserted by
+  # plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges must pin to
+  # distinct legs in the committed manifests. A DECLARED_TOTAL bump in the battery must
+  # land in the same commit as a re-split of these ranges.
   if _diff_touches --pr-gated "${TEST_ALL_AFFECTED_BATTERY_PATHS[@]}"; then
-    run_suite "scripts/test-all-affected" bash scripts/test-all-affected.test.sh
+    run_suite "scripts/test-all-affected-a" bash scripts/test-all-affected.test.sh --rows 1-13
+    run_suite "scripts/test-all-affected-b" bash scripts/test-all-affected.test.sh --rows 14-32
+    run_suite "scripts/test-all-affected-c" bash scripts/test-all-affected.test.sh --rows 33-36
+    run_suite "scripts/test-all-affected-d" bash scripts/test-all-affected.test.sh --rows 37-38
   else
-    _relevance_declined=$((_relevance_declined + 1))
-    skip_suite "scripts/test-all-affected" "relevance" \
-      "bash scripts/test-all-affected.test.sh"
+    _relevance_declined=$((_relevance_declined + 4))
+    skip_suite "scripts/test-all-affected-a" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 1-13"
+    skip_suite "scripts/test-all-affected-b" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 14-32"
+    skip_suite "scripts/test-all-affected-c" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 33-36"
+    skip_suite "scripts/test-all-affected-d" "relevance" \
+      "bash scripts/test-all-affected.test.sh --rows 37-38"
   fi
   # TEST_GROUP=affected (#8621) — the compat alias of the --affected axis
   # (the #8591 heuristic it replaced was folded in). Registered explicitly beside
@@ -6671,6 +7325,14 @@ if want_scripts; then
   # green forever. The suite drives sandbox copies against a fixture git repo,
   # so it never takes the real advisory lock.
   run_suite "scripts/test-all-group-affected" bash scripts/test-all-group-affected.test.sh
+  # #8231: the parallel-scheduler guard + the shared-resource contention guard
+  # + the benchmark harness. Explicit registrations for the reason the
+  # runner-SUT family above states (repo-root `scripts/*.test.sh` is not
+  # globbed). Each drives sandboxed copies of this runner — so the classifier
+  # also gives them `lock:test-all`, and the lane table declares it.
+  run_suite "scripts/test-all-parallel-scheduler" bash scripts/test-all-parallel-scheduler.test.sh
+  run_suite "scripts/test-all-parallel-contention" bash scripts/test-all-parallel-contention.test.sh
+  run_suite "scripts/test-all-parallel-benchmark" bash scripts/test-all-parallel-benchmark.test.sh
   run_suite "scripts/battery-ref-guard" bash scripts/battery-ref-guard.test.sh
   # W2 (#9601): the agent-security discoverability probe's own suite. Registered explicitly for the
   # reason its neighbours state (repo-root `scripts/*.test.sh` is not auto-globbed). It drives COPIES of
@@ -6711,6 +7373,23 @@ if want_scripts; then
           "bash plugins/soleur/test/c4-from-components.test.sh"
         continue
       fi
+    fi
+    # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
+    # battery was the test-scripts shard's worst leg, so it registers THREE times —
+    # the -a/-b/-c arms below carrying complementary --rows ranges over its
+    # DECLARED_TOTAL gated sites. Unconditional like its siblings (no relevance gate,
+    # so no skip_suite pairing — the suite is never declined). The boundary lives in
+    # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
+    # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
+    # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
+    # the battery must land in the same commit as a re-split of these ranges.
+    if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
+      # Literal path in argv, never "$f": the totality checker resolves each
+      # arm's battery from the run_suite command token and dies on <unresolved>.
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
+      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-599
+      continue
     fi
     run_suite "$f" bash "$f"
   done
@@ -6897,6 +7576,12 @@ if (( _ENUMERATE == 1 )); then
   exit 0
 fi
 
+# #8231: drain the worker pool — reap every live suite, render every verdict in
+# registration order, and account for anything submitted but never measured
+# BEFORE the boundary end-sample, so the repo-write boundary covers the whole
+# run in both modes. A no-op under serial mode and under --enumerate.
+_pj_drain
+
 _emit_bytes_probe "__run_boundary_end__"
 tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"
 
@@ -7061,7 +7746,7 @@ _repo_boundary_reported=1
 # from the numerator: with skips in the denominator but not in `failed`, the numerator would
 # report a gated suite as PASSED — a green that is not evidence, produced by the very change
 # that added the gate.
-if (( killed > 0 || skipped > 0 || _ceiling_declined > 0 || _affected_declined > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmeasured_dims:-0} > 0 )); then
+if (( killed > 0 || skipped > 0 || _ceiling_declined > 0 || _affected_declined > 0 || ${_pj_unaccounted:-0} > 0 || ${_repo_observations:-0} > 0 || ${_repo_unmeasured_dims:-0} > 0 )); then
   # `_repo_observations` is APPENDED, never interleaved: every existing field keeps its position
   # so anchored readers of this line stay valid. Shown only when non-zero — a field that is 0 on
   # essentially every run carries no information, whereas `skipped` is routinely non-zero.
@@ -7085,7 +7770,12 @@ if (( killed > 0 || skipped > 0 || _ceiling_declined > 0 || _affected_declined >
     # per-axis tally the field and the lever read.
     _aff_field=", ${_affected_declined} not-affected (selection — diff does not reach them)"
   fi
-  echo "=== $suites suites: $((suites - failed - killed - skipped - _ceiling_declined)) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_ceiling_field}${_aff_field}${_repo_obs_field} ==="
+  # #8231: appended, never interleaved — same rule as _repo_obs_field.
+  _unacct_field=""
+  if (( ${_pj_unaccounted:-0} > 0 )); then
+    _unacct_field=", ${_pj_unaccounted} unaccounted (dispatched, never measured — coverage unresolved)"
+  fi
+  echo "=== $suites suites: $((suites - failed - killed - skipped - _ceiling_declined - ${_pj_unaccounted:-0})) passed, $failed failed, $killed killed (unresolved — coverage not obtained), $skipped skipped (declined — not relevant to this diff)${_ceiling_field}${_aff_field}${_unacct_field}${_repo_obs_field} ==="
 fi
 # THE LEVER, PRINTED ONCE, ONLY WHEN IT CAN ACTUALLY HELP. SOLEUR_TEST_FORCE_ALL appeared exactly
 # once in this runner -- inside _diff_touches's early return -- and was printed nowhere, while the
@@ -7133,7 +7823,7 @@ if (( ${_TG_AFFECTED_ALIAS:-0} == 1 )); then
     echo "      above degraded to the full battery; the banner names the reason."
   fi
 fi
-echo "=== $((suites - failed - killed - skipped - _ceiling_declined))/$suites suites passed ==="
+echo "=== $((suites - failed - killed - skipped - _ceiling_declined - ${_pj_unaccounted:-0}))/$suites suites passed ==="
 
 # Restatement of the PREAMBLE notice (#6730/#7014, re-pointed by #7103). Since the infra
 # runner is now a REGISTERED nested suite, the thing worth restating inverted: it is no
@@ -7196,7 +7886,10 @@ elif [[ -z "${CI:-}" && -s "${TEST_TIMING_LOG:-/dev/null}" ]] \
 fi
 # wd-epilogue-emit-end
 
-if [[ "$failed" -gt 0 ]]; then
+if [[ "$failed" -gt 0 || "${_pj_unaccounted:-0}" -gt 0 ]]; then
+  # UNACCOUNTED (#8231) rides the failed arm: a suite submitted but never
+  # measured is a defect of the run's own accounting, which outranks a
+  # terminated suite whose outcome at least named itself.
   exit 1
 elif (( killed > 0 )); then
   exit 3

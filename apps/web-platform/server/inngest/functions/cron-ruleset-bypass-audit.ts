@@ -28,7 +28,9 @@
 //
 // Guard-fault vs. drift routing (#6061): a corrupt/empty canonical, a redacted
 // bypass_actors (token scope), or a network/API error is an ops/infra fault —
-// it degrades the Sentry heartbeat via reportSilentFallback and does NOT file a
+// it degrades the Sentry heartbeat via reportSilentFallback (the
+// scheduled-ruleset-bypass-audit monitor itself was destroyed by the #6590
+// PR-B prune — the check-in void-posts by design, spec NG4) and does NOT file a
 // compliance/critical drift issue (that fault is the CTO's, not a legal drift).
 // Only real drift files the titled compliance issue.
 //
@@ -787,12 +789,10 @@ export const cronRulesetBypassAudit = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "13 6 * * *" },
+      { event: "cron/ruleset-bypass-audit.manual-trigger" },
+    ],
   },
-  [
-    { cron: "13 6 * * *" },
-    { event: "cron/ruleset-bypass-audit.manual-trigger" },
-  ],
-  cronRulesetBypassAuditHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronRulesetBypassAuditHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

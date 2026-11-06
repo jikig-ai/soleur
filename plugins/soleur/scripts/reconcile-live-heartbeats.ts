@@ -23,7 +23,7 @@
 //                 any other declaration failure (unbalanced block, unreadable dir), contained to its arm:
 //                 SOLEUR_HEARTBEAT_RECONCILE_ERROR surface=declarations reason=parse-error detail="<file>: <msg>"
 //   heartbeats    (a) fed-but-paused / (b) absent-live per resolved instance, plus unmanaged-live:
-//                 SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=<n> live=absent|paused reason=absent-live|fed-but-paused resource=<type.name> route=<reason>~resource.<type>.<name>[.<key>]
+//                 SOLEUR_HEARTBEAT_RECONCILE_MISMATCH name=<n> live=absent|paused reason=absent-live|fed-but-paused resource=<type.name> route=<reason>~resource.<type>.<name>[.<key>] [detail="<arming_pending lapse>"]
 //                 SOLEUR_HEARTBEAT_RECONCILE_MISMATCH surface=heartbeats reason=unmanaged-live id=<id> [dup=name] route=unmanaged-live~id.<id> name="<n>"
 //                 SOLEUR_HEARTBEAT_RECONCILE_OK surface=heartbeats checked=<n> live=<n>
 //   monitors      always runs (#7884):
@@ -521,7 +521,7 @@ function mismatchMarker(v: Violation): string {
   const P = "SOLEUR_HEARTBEAT_RECONCILE_MISMATCH";
   switch (v.kind) {
     case "heartbeat":
-      return `${P} name=${bare(v.liveName)} live=${v.live} reason=${v.reason} resource=betteruptime_heartbeat.${v.resourceName} ${route}`;
+      return `${P} name=${bare(v.liveName)} live=${v.live} reason=${v.reason} resource=betteruptime_heartbeat.${v.resourceName} ${route}${v.detail === undefined ? "" : ` detail="${quoted(v.detail)}"`}`;
     case "logs_alert":
       // Prefix through `reason=` unchanged from ADR-218 / monitor-send-failed-alert.md; `resource=`
       // and `route=` follow, and the quoted vendor text stays last.
@@ -614,7 +614,7 @@ export async function runReconcile(
   } else if (hbDecl.ok) {
     const discovered = hbDecl.declared;
     const violations: Violation[] = [
-      ...reconcileHeartbeats(manifest, discovered, result.live),
+      ...reconcileHeartbeats(manifest, discovered, result.live, now),
       ...findUnmanagedHeartbeats(discovered, result.live),
     ];
     for (const v of violations) hbMarkers.push(oneLine(mismatchMarker(v)));

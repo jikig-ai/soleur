@@ -273,8 +273,9 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
       );
       // Amber "Confirm scope" card present …
       expect(
-        container.querySelector(`[role="group"][aria-label="${gate.question}"]`),
+        container.querySelector('[role="group"][aria-label="Approval needed"]'),
       ).not.toBeNull();
+      expect(container.textContent).toContain(gate.question);
       // … and no duplicate plain ask_user box.
       expect(container.querySelector('[data-prompt-kind="ask_user"]')).toBeNull();
     }

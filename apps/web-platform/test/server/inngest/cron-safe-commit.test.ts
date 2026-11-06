@@ -43,6 +43,7 @@ vi.mock("@/server/cron-liveness-marker", () => ({
 
 import {
   DEFAULT_MAX_DELETIONS,
+  MAX_PR_BODY_CHARS,
   SYNTHETIC_CHECK_NAMES,
   enableAutoMergeSquash,
   deriveBranchName,
@@ -1935,5 +1936,56 @@ describe("safeCommitAndPr — #7122 round-1 exactPaths hardening", () => {
       expect(failedWith(result)).toBe("integrity: resume-content-mismatch");
       expect(await remoteBranches(f.remote)).toEqual(["main"]);
     });
+  });
+});
+
+// CodeQL alert #215 (js/file-access-to-http): the assembled PR body was the one
+// unbounded string reaching POST /pulls — callers embed file-derived content
+// (compound-promote's `agentsPointerNote` carries `proposed_diff_unified`) and
+// dropped-path names. The fix bounds the ASSEMBLED body at the sink with the
+// file's own loud-truncation idiom.
+describe("safeCommitAndPr — PR body bound (CodeQL alert 215)", () => {
+  it("truncates an oversize config.prBody at MAX_PR_BODY_CHARS with the ⚠️ marker and a Sentry report", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-3.md"), "updated\n");
+    let posted: string | undefined;
+    const octokit = makeOctokitStub({
+      prCreate: async (params) => {
+        posted = params.body as string;
+        return { data: { number: 42, node_id: "PR_node_42" } };
+      },
+    });
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, octokit),
+      prBody: "x".repeat(MAX_PR_BODY_CHARS + 5000),
+    });
+    expect(result.status).toBe("committed");
+    expect(posted).toBeDefined();
+    expect(posted!.length).toBeLessThanOrEqual(MAX_PR_BODY_CHARS);
+    expect(posted).toContain("⚠️ PR body truncated");
+    const calls = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-pr-body-truncated",
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a body inside the cap is sent verbatim and reports nothing (must-PASS)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-4.md"), "updated\n");
+    const body = "line one\n\n- checklist item\n";
+    let posted: string | undefined;
+    const octokit = makeOctokitStub({
+      prCreate: async (params) => {
+        posted = params.body as string;
+        return { data: { number: 42, node_id: "PR_node_42" } };
+      },
+    });
+    const result = await safeCommitAndPr({ ...baseConfig(f, octokit), prBody: body });
+    expect(result.status).toBe("committed");
+    expect(posted).toBe(body);
+    const calls = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-pr-body-truncated",
+    );
+    expect(calls).toHaveLength(0);
   });
 });

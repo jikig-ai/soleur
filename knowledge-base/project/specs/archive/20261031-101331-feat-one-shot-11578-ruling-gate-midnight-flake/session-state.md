@@ -1,0 +1,53 @@
+# Session State
+
+## Plan Phase
+- Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11578-ruling-gate-midnight-flake/knowledge-base/project/plans/2026-10-31-fix-technical-ruling-gate-midnight-flake-plan.md
+- Status: complete
+- Plan artifact: complete (selector=branch)
+
+### Errors
+- `gh` `-q` shorthand failed silently in one combined loop (worked per-invocation; all issue/PR states verified individually). No content errors.
+- Collision precheck exit 10 reported PR #11680 — verified to be this pipeline's own auto-created WIP draft on this branch (empty files list), not a foreign duplicate; reported in the plan's Premise Validation and proceeded.
+- No Task/Agent tool in the planning subagent's harness: all agent fan-outs (research, domain, functional-overlap, spec-flow, plan-review panel, deepen-plan research seats) were performed inline and disclosed in the plan. The technical ruling fork is recorded as `pending - assumed:` for the parent's post-plan batched CTO spawn.
+
+### Decisions
+- Fix mechanism (technical fork, pending ruling): Option C — argv-strict `date` stub in the suite's existing `$DBIN` pinned to `DNOON="${DTODAY}T12:00:00Z"` via `dclock_at`, reusing the established fake-clock idiom (`ship-battery-refusal-wait.test.sh:68-93`). Rejected: A (per-case `DTODAY` recompute), B (`TRG_NOW` env seam — mutates the ship-time security gate), D (`dts 1`→`dts 2` — survives only one crossing).
+- Controls shipped with the fix: CLK bypass-detector (repin `dts -1`, assert rc 1 `delegation-invalid`), `dcalls.log` dispatch floor, argv-strict exit-64 on unknown `date` argv, `clock`/`clock.epoch` consistency assertion. Guard Contract with 6-row mutation matrix.
+- Scope: Files-to-Edit = `plugins/soleur/test/technical-ruling-gate.test.sh` only.
+- Deepen-plan corrections applied: `## Observability` block added; `lane: cross-domain` fail-closed default.
+
+### Components Invoked
+- `soleur:plan`, `soleur:deepen-plan` (both read + executed to completion inline)
+- `collision-precheck.sh 11578`, `lint-guard-contract.py`, `technical-ruling-gate.sh --branch`
+- `markdownlint-cli2` (2 MD032 findings fixed; clean)
+- Commits pushed: `2579c8b262` (plan + tasks + decision-challenges), `31d9763592` (deepen additions)
+
+## Post-Plan Re-Probe (parent)
+- #11578 linked PRs: none; body-probe merged: none; body-probe open: none
+- File-anchor probe `plugins/soleur/test/technical-ruling-gate.test.sh`: no open PRs
+- `pr-overlap-preflight.sh --files`: exit 0 after one retry (first call unmeasurable — GitHub file-list timeout)
+- agent_rounds=1 (planning subagent)
+
+## Technical-Ruling Gate
+- Exit 1 → one `unruled-technical` row (clock-seam fork)
+- CTO spawn (Rule interface): ruled C — argv-strict `date` stub in `$DBIN` pinned to `DNOON` fixture noon; ruling + dissent recorded in decision-challenges.md
+- Re-run: exit 0 (PASS, 1 row examined)
+- cto_spawns=1; agent_rounds=2
+
+## Work Phase
+- Status: complete (commit `ba21d772fc`)
+- Implemented per plan: `$DBIN/date` argv-strict stub, `DNOON`/`dclock_at` pin, CLK bypass-detector case, `clock`/`clock.epoch` consistency, `dcalls.log` dispatch floor (328), closed argv set, `print_results` floor 493→498
+- Suite: `technical-ruling-gate.test.sh` green 498/0
+- Mutation matrix verified: rows 1-6 per Guard Contract (row 3 reproduced exact flake signature `the pristine gate gives rc 0, not the pinned 2`; mut-A found + fixed a `wc -l <` abort-on-missing-log bug in the floor)
+- AC1-AC6 all satisfied; SUT `# mut:` lines byte-identical (0-line diff)
+
+## Review Phase
+- Class: code → 8-agent panel + conditional seats (test-design-reviewer on `*.test.sh`, structural-enumeration on `## Guard Contract`; pattern-recognition replaced by enum per skill guidance). 9 seats spawned. PANEL_SHA=b167c6a776.
+- Lint ratchet: not adopted (note only). merge-tree rc 0; PR MERGEABLE (BEHIND main — ship handles).
+- Synthesis: no P1 code defects; no dissent against the CTO ruling. 1 enum `[P1-uncovered]` (DPATH/`run` arms could pair a future fixture with the real clock) + 1 agent-native P2 (`dc_floor` unreachable on gtimeout-only hosts) + convergent P3s.
+- Fix round 1 (`914ee24758`): mkbin_t symlinks stub+pin files into reduced dirs (closes DPATH arm), AMBF sweep floor added, stub printf + per-arm pin-existence guards, CLKb/CLK3/CLK4 asserts, `assert_fixture_dir` parity, doc rc-0→rc-2 corrections. Suite 502/0.
+- Fix-round seats re-spawned over `b167c6a776..914ee24758` (7 seats + enum re-verification, shellcheck clean): 4 CLEAN, 4 FINDINGS (residual real holes).
+- Fix round 2 (`d01a1f1206`, ADR-267 cap reached): CLK3/CLK4 moved inside `dts -1` pin window via `$TMP/ibin` instrument copy (unforgeable on any day; floor back to SUT-only 328), `ln -sf "$(command -v timeout)"` gtimeout fallback (step-down now reachable), `print_results` 503/500 conditional, AMBF portable boundaries + `, ran` heredoc token + ambient-exec flag + def-body exclusions (72 sites, 0 flags), dc_bad missing-log sentinel, TBIN readlink wiring assert, plan/tasks DPATH doc drift fixed. Suite 503/0.
+- Residual accepted notes (P3, not fixed): AMBF is a heuristic sweep (enum's residual grammar observations recorded; no live bypass exists — every timestamp-bearing fixture verified under a pinned arm); `dc_floor`/`print_results` remain committed counts (house convention); gh stub `echo "$*"` at :484 (pre-existing, unchanged by this diff).
+- seats=9 + 8 fix-round = 17; agent_rounds=4 → update tally.
+- Lead affected-gate running: `test-all.sh --affected` selected 256 of 700 suites.

@@ -130,11 +130,11 @@ export const cronActionRequiredSla = inngest.createFunction(
     id: "cron-action-required-sla",
     concurrency: [{ scope: "fn", limit: 1 }],
     retries: 1,
+    triggers: [
+      // Weekly, aligned with the operator digest cadence (Fridays).
+      { cron: "0 12 * * 5" },
+      { event: "cron/action-required-sla.manual-trigger" },
+    ],
   },
-  [
-    // Weekly, aligned with the operator digest cadence (Fridays).
-    { cron: "0 12 * * 5" },
-    { event: "cron/action-required-sla.manual-trigger" },
-  ],
-  cronActionRequiredSlaHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronActionRequiredSlaHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

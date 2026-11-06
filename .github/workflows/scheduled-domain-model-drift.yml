@@ -151,7 +151,7 @@ jobs:
             --limit 100 \
             --json number,title \
             --jq ".[] | select(.title == \"${TITLE}\") | .number" \
-            | head -1)
+            | head -1) || { echo "::error::domain-model-drift: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             {

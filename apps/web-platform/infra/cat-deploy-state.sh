@@ -787,7 +787,7 @@ VECTOR_STATUS="$(service_status vector.service)"
 VECTOR_JOURNAL_TAIL="$(service_journal_tail vector.service)"
 # #5159 follow-up 2: surface the inngest-server's OWN journal tail (its
 # sync/registration log) so a restart's re-register behavior is diagnosable with
-# no SSH — the decisive evidence the serveHost refutation left unseen.
+# no SSH — the decisive evidence the serveOrigin refutation left unseen.
 INNGEST_JOURNAL_TAIL="$(service_journal_tail inngest-server.service)"
 INNGEST_CRONS="$(inngest_crons_json)"
 JOURNALD_STORAGE="$(journald_storage_json)"

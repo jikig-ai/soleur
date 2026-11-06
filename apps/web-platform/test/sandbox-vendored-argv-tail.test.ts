@@ -9,9 +9,13 @@
 // sandbox-proc-mask-runtime.test.ts, to the live spawn the SDK hands the shim. It does NOT read
 // the sdk-bump ack trailer or any git state (guard row at the bottom).
 //
-// Counts below were MEASURED on 2026-10-12 against the installed binaries (python3 -I mmap
+// Counts below were MEASURED on 2026-11-04 against the installed binaries (python3 -I mmap
 // reads, then re-derived by the helper); each pin names the version it was measured on. A new
 // procfs-mount site in a bump reds `PROC_SITE_COUNT`; a changed tail reds `TAIL_LITERALS`.
+// At claude-agent-sdk 0.3.311 / claude-code 2.1.311 the two platform packages ship ONE byte-identical binary
+// (sha256 86dc1fcc...), so both pin rows carry the same measured shape; the scan still examines both packages so they
+// can diverge again. That binary embeds Bun 1.4.4 (CVE-2026-111497 fix); the floor itself is asserted by
+// claude-cli-pin-knows-models.test.ts.
 
 import { beforeAll, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
@@ -22,10 +26,13 @@ import { stripComments } from "./helpers/strip-comments";
 import {
   EXPECTED_TAIL_CALLS,
   HELPER_SELECTION_NEEDLES,
+  SETTINGS_MAPPING_NEEDLES,
   assertBuilderTail,
   assertHelperSelection,
   scanHelperSelection,
   assertLiteralCensus,
+  assertMountTable,
+  type MountTablePins,
   assertTailMatchesFixture,
   BRIDGE_PINS,
   assertBridgeStructure,
@@ -55,35 +62,28 @@ const SKIP_REAL = shouldSkipRealBinaryRows(process.platform, process.arch, proce
 // A scan of a ~250 MB binary is I/O bound; the vitest default (16 s) is too tight on a cold cache.
 const REAL_BINARY_TIMEOUT_MS = 90_000;
 
-// Measured 2026-10-12. `measuredVersion` is the installed package version the numbers were taken
+// Measured 2026-11-04. `measuredVersion` is the installed package version the numbers were taken
 // on; a different installed version is reported in every failure message, never silently accepted.
+// Two proc sites (the per-command builder plus the `/run/claude-hook` sandbox), one of them in the hook
+// function; two `--unshare-pid` literals (builder and hook); one root bind, one `--cap-drop ALL`, one `--cap-add CAP_SETFCAP`.
+const MEASURED_SHAPE: LiteralPins = {
+  procSites: 2,
+  hookProcSites: 1,
+  bindProcSites: 1,
+  unsharePid: 2,
+  rootBind: 1,
+  capDropAll: 1,
+  capDropTotal: 1,
+  capAddSetfcap: 1,
+  capAddTotal: 1,
+  hookAnchors: 2,
+};
+// Mount-table raw literal counts (all callers in the binary), measured 2026-11-04 on both packages: the per-command builder's prefix is an
+// opaque spread the tail parser cannot read, so these counts are what makes a new mount site there a reviewed re-pin.
+const MEASURED_MOUNT_TABLE: MountTablePins = { tmpfs: 3, bind: 9, roBind: 15, devBind: 2 };
 const PINS: Record<"claude-agent-sdk" | "claude-code", LiteralPins & { measuredVersion: string }> = {
-  "claude-agent-sdk": {
-    measuredVersion: "0.3.284",
-    procSites: 1,
-    hookProcSites: 0,
-    bindProcSites: 1,
-    unsharePid: 1,
-    rootBind: 1,
-    capDropAll: 1,
-    capDropTotal: 1,
-    capAddSetfcap: 1,
-    capAddTotal: 1,
-    hookAnchors: 0,
-  },
-  "claude-code": {
-    measuredVersion: "2.1.293",
-    procSites: 2,
-    hookProcSites: 1,
-    bindProcSites: 1,
-    unsharePid: 2,
-    rootBind: 1,
-    capDropAll: 1,
-    capDropTotal: 1,
-    capAddSetfcap: 1,
-    capAddTotal: 1,
-    hookAnchors: 2,
-  },
+  "claude-agent-sdk": { measuredVersion: "0.3.311", ...MEASURED_SHAPE },
+  "claude-code": { measuredVersion: "2.1.311", ...MEASURED_SHAPE },
 };
 type Pkg = keyof typeof PINS;
 const PKGS = Object.keys(PINS) as Pkg[];
@@ -94,33 +94,47 @@ const PKGS = Object.keys(PINS) as Pkg[];
 
 interface SynthOpts {
   extraAfterBind?: string;
+  extraAfterUnsetenv?: string;
+  extraBeforeDev?: string;
   extraProcSite?: string;
   omitCapDrop?: boolean;
   capAddValue?: string | null;
+  /** The hook sandbox is part of the measured shape for both packages; `false` removes it. */
   withHookSite?: boolean;
   anchorCopies?: number;
   noRootBind?: boolean;
+  omitUnsetenv?: boolean;
+  omitDisableUserns?: boolean;
+  disableUsernsBeforeProc?: boolean;
 }
 const FILLER = "x".repeat(6000);
 function synth(o: SynthOpts = {}): Buffer {
+  const withHookSite = o.withHookSite ?? true;
   const anchor = `Xe.push("--dev","/dev"),Xe.push("--unshare-pid");`;
   const capFn = o.omitCapDrop
     ? `function CAP({euid:e}){let s=[];return s}`
     : `function CAP({euid:e,n}){let s=["--cap-drop","ALL"];if(e!==0)return s;${
         o.capAddValue === null ? "" : `if(n)s.push("--cap-add","${o.capAddValue ?? "CAP_SETFCAP"}");`
       }return s}`;
+  // The shape after the proc branch: `--unsetenv <identifier>` in the condition, then the host-conditional `--disable-userns`.
+  const disable = o.omitDisableUserns ? "" : `Xe.push("--disable-userns")`;
+  const tailFlags = o.omitUnsetenv
+    ? `if(Me===void 0&&X!==!0){let Ut=ee?null:Ae;if(Ut!==null&&D9(Ut))${disable || "0"};else if(!v1)v1=!0,wt("no seccomp helper in use")}`
+    : `if(Xe.push("--unsetenv",R1),Me===void 0&&X!==!0){let Ut=ee?null:Ae;if(Ut!==null&&D9(Ut))${disable || "0"};else if(!v1)v1=!0,wt("no seccomp helper in use")}`;
   const builder =
     `${o.noRootBind ? "" : `Xe.push("--ro-bind","/","/");`}let kr={start:1,end:2};` +
-    `${anchor.repeat(o.anchorCopies ?? 1)}let br=process.geteuid?.();` +
+    `${o.extraBeforeDev ?? ""}${anchor.repeat(o.anchorCopies ?? 1)}let br=process.geteuid?.();` +
+    `${o.disableUsernsBeforeProc ? `Xe.push("--disable-userns");` : ""}` +
     `if(Xe.push("--unshare-user",...CAP({euid:br,n:1})),!ee)Xe.push("--proc","/proc");` +
     `else Xe.push("--bind","/proc","/proc");${o.extraAfterBind ?? ""}` +
+    `${tailFlags}${o.extraAfterUnsetenv ?? ""}` +
     `let Tt=le||"bash";if(Xe.push("--",Ie,"-c"),s)Xe.push(Qe);`;
-  const hook = o.withHookSite
+  const hook = withHookSite
     ? `var UPe="/run/claude-hook/apply-seccomp";function hookArgs(e){return["--unshare-pid","--proc","/proc","--dev","/dev"]}`
     : "";
   const extra = o.extraProcSite ?? "";
   // The real CLI carries a second, unrelated /run/claude-hook literal far from the hook builder.
-  const hookDir = o.withHookSite ? `var HD="/run/claude-hook";` : "";
+  const hookDir = withHookSite ? `var HD="/run/claude-hook";` : "";
   return Buffer.from(`${hookDir}${FILLER}${capFn}${FILLER}${builder}${FILLER}${hook}${FILLER}${extra}${FILLER}`, "latin1");
 }
 
@@ -175,15 +189,46 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
     expect(failureOf(() => verify(synth({ withHookSite: true }), CLI_LIKE, "claude-code"))).toBe("");
   });
 
+  it("must-PASS non-canonical inputs: an unrelated push before `--dev /dev` and a hook site at another offset still pass", () => {
+    // Harness row: only a control that differs from the canonical in a way the contract permits can show the guard does not
+    // reject everything.
+    expect(failureOf(() => verify(synth({ extraBeforeDev: `Xe.push("--setenv","A","b");` }), SDK_LIKE, "claude-agent-sdk"))).toBe("");
+    const shifted = Buffer.concat([Buffer.from("y".repeat(9000), "latin1"), synth({ withHookSite: true })]);
+    expect(failureOf(() => verify(shifted, CLI_LIKE, "claude-code"))).toBe("");
+  });
+
   it("extractBuilderTail returns exactly the expected literal call sequence", () => {
     const tail = extractBuilderTail(synth());
     expect(tail.calls).toEqual(EXPECTED_TAIL_CALLS);
     expect(builderTailTokens(tail, "bind")).toEqual([
       "--dev", "/dev", "--unshare-pid", "--unshare-user", "<CAP_SEGMENT>", "--bind", "/proc", "/proc",
+      "--unsetenv", "<UNSETENV_VAR>", "--disable-userns",
     ]);
     expect(builderTailTokens(tail, "proc")).toEqual([
       "--dev", "/dev", "--unshare-pid", "--unshare-user", "<CAP_SEGMENT>", "--proc", "/proc",
+      "--unsetenv", "<UNSETENV_VAR>", "--disable-userns",
     ]);
+  });
+
+  it("a vanished `--disable-userns`, or one moved ahead of the proc branch, or a vanished `--unsetenv`, reds TAIL_LITERALS", () => {
+    // A pinned security flag cannot silently vanish or reorder. These reach the DESIGN property (the mask is the last mount
+    // and the userns hardening still follows it), not the current shape of the code.
+    for (const [name, o] of [
+      ["--disable-userns removed", { omitDisableUserns: true }],
+      ["--disable-userns before the proc branch", { disableUsernsBeforeProc: true, omitDisableUserns: true }],
+      ["--unsetenv removed", { omitUnsetenv: true }],
+    ] as const) {
+      const msg = failureOf(() => verify(synth(o), SDK_LIKE, "claude-agent-sdk"));
+      expect(msg, name).toMatch(/TAIL_LITERALS/);
+    }
+  });
+
+  it("a mount pushed AFTER `--disable-userns` (the end of the tail) also reds TAIL_LITERALS", () => {
+    const msg = failureOf(() =>
+      verify(synth({ extraAfterUnsetenv: `Xe.push("--tmpfs","/proc");` }), SDK_LIKE, "claude-agent-sdk"),
+    );
+    expect(msg).toMatch(/TAIL_LITERALS/);
+    expect(msg).toMatch(/--tmpfs/);
   });
 
   it("an extra `.push(\"--tmpfs\",\"/proc\")` after the bind push reds TAIL_LITERALS", () => {
@@ -216,7 +261,9 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
   it("a terminator `.push(\"--\",` beyond the 4 KiB window reds TAIL_LITERALS (bounded window)", () => {
     // The complete expected sequence is present, so an UNBOUNDED window would pass; only the 4 KiB bound can red it.
     const head = `Xe.push("--dev","/dev"),Xe.push("--unshare-pid");Xe.push("--unshare-user",...CAP({euid:1})),`;
-    const rest = `if(!ee)Xe.push("--proc","/proc");else Xe.push("--bind","/proc","/proc");Xe.push("--",Ie);`;
+    const rest =
+      `if(!ee)Xe.push("--proc","/proc");else Xe.push("--bind","/proc","/proc");` +
+      `if(Xe.push("--unsetenv",R1),1)Xe.push("--disable-userns");Xe.push("--",Ie);`;
     const unbounded = Buffer.from(`${head}${rest}`, "latin1");
     const far = Buffer.from(`${head}${"y".repeat(5000)}${rest}`, "latin1");
     expect(failureOf(() => assertBuilderTail(extractBuilderTail(unbounded), "synthetic"))).toBe("");
@@ -234,11 +281,11 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
     expect(msg).toMatch(/PROC_SITE_COUNT want 1 got 0/);
   });
 
-  it("a second `\"--proc\",\"/proc\"` site reds `PROC_SITE_COUNT want 1 got 2` naming inspect-and-update steps", () => {
+  it("a THIRD `\"--proc\",\"/proc\"` site (after the compliant two) reds `PROC_SITE_COUNT want 2 got 3` naming inspect-and-update steps", () => {
     const msg = failureOf(() =>
       verify(synth({ extraProcSite: `function other(){return["--proc","/proc"]}` }), SDK_LIKE, "claude-agent-sdk"),
     );
-    expect(msg).toMatch(/PROC_SITE_COUNT want 1 got 2/);
+    expect(msg).toMatch(/PROC_SITE_COUNT want 2 got 3/);
     expect(msg).toMatch(/inspect/i);
     expect(msg).toMatch(/update/i);
     expect(msg).toMatch(/PINS/);
@@ -255,6 +302,23 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
     );
     expect(msg).toMatch(/PROC_SITE_COUNT/);
     expect(msg).toMatch(/hook/i);
+  });
+
+  it("the mount-table census counts each flag exactly and an extra or missing site reds MOUNT_TABLE_COUNT naming it", () => {
+    const text = (n: Record<keyof MountTablePins, number>) =>
+      Buffer.from(
+        `${FILLER}${'"--tmpfs",'.repeat(n.tmpfs)}${'"--bind",'.repeat(n.bind)}${'"--ro-bind",'.repeat(n.roBind)}${'"--dev-bind",'.repeat(n.devBind)}${FILLER}`,
+        "latin1",
+      );
+    const census = (n: MountTablePins) => scanLiterals(bufferSource(text(n)));
+    expect(census(MEASURED_MOUNT_TABLE).mountTable).toEqual(MEASURED_MOUNT_TABLE);
+    expect(failureOf(() => assertMountTable(census(MEASURED_MOUNT_TABLE), MEASURED_MOUNT_TABLE, "x", "synthetic"))).toBe("");
+    for (const key of ["tmpfs", "bind", "roBind", "devBind"] as const) {
+      const more = { ...MEASURED_MOUNT_TABLE, [key]: MEASURED_MOUNT_TABLE[key] + 1 };
+      const fewer = { ...MEASURED_MOUNT_TABLE, [key]: MEASURED_MOUNT_TABLE[key] - 1 };
+      expect(failureOf(() => assertMountTable(census(more), MEASURED_MOUNT_TABLE, "x", "synthetic")), `${key}+1`).toMatch(/MOUNT_TABLE_COUNT want \d+ got \d+/);
+      expect(failureOf(() => assertMountTable(census(fewer), MEASURED_MOUNT_TABLE, "x", "synthetic")), `${key}-1`).toMatch(/MOUNT_TABLE_COUNT/);
+    }
   });
 
   it("a second `\"--bind\",\"/proc\",\"/proc\"` site reds PROC_SITE_COUNT", () => {
@@ -300,14 +364,14 @@ describe("sandbox-vendored-argv-tail: synthetic mutation rows (extractor + censu
     for (const chunk of [at + 3, at, at + needle.length, 4096, 997]) {
       const census = scanLiterals(bufferSource(buf), { chunkSize: chunk });
       expect(census.counts.rootBind, `chunkSize=${chunk}`).toBe(1);
-      expect(census.counts.procSites, `chunkSize=${chunk}`).toBe(1);
+      expect(census.counts.procSites, `chunkSize=${chunk}`).toBe(2);
     }
   });
 });
 
 describe("sandbox-vendored-argv-tail: helper-selection pins (#10445, synthetic)", () => {
-  const FULL = Buffer.from(Object.values(HELPER_SELECTION_NEEDLES).join(" \0 "));
-  const PINS_ONE: HelperSelectionPins = { skipLine: 1, applyLine: 1, missingLine: 1, settingsMapping: 1 };
+  const FULL = Buffer.from([...Object.values(HELPER_SELECTION_NEEDLES), ...Object.values(SETTINGS_MAPPING_NEEDLES)].join(" \0 "));
+  const PINS_ONE: HelperSelectionPins = { skipLine: 1, applyLine: 1, missingLine: 1 };
 
   it("a buffer carrying every selection literal once passes (must-PASS control)", () => {
     expect(failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(FULL)), PINS_ONE, "synthetic"))).toBe("");
@@ -320,16 +384,32 @@ describe("sandbox-vendored-argv-tail: helper-selection pins (#10445, synthetic)"
     expect(msg).toMatch(/sandbox-masked-proc-docker\.test\.sh/);
   });
 
-  it("a vanished settings->builder mapping reds even when all three log lines remain", () => {
-    const without = Buffer.from(FULL.toString().replace(HELPER_SELECTION_NEEDLES.settingsMapping, "X"));
-    const msg = failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(without)), PINS_ONE, "synthetic"));
-    expect(msg).toMatch(/HELPER_SELECTION settingsMapping want 1 got 0/);
+  it("each vanished settings-mapping anchor reds even when all three log lines remain", () => {
+    expect(Object.keys(SETTINGS_MAPPING_NEEDLES).length, "a tripwire over zero anchors cannot fire").toBeGreaterThanOrEqual(2);
+    for (const [k, needle] of Object.entries(SETTINGS_MAPPING_NEEDLES)) {
+      const without = Buffer.from(FULL.toString().replace(needle, "X"));
+      const msg = failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(without)), PINS_ONE, "synthetic"));
+      expect(msg, k).toMatch(new RegExp(`HELPER_SELECTION settingsMapping\\.${k} want >= 1 got 0`));
+    }
   });
 
-  it("a second copy of a literal reds (a new code path selects the helper elsewhere)", () => {
+  it("the mapping anchors are CONTENT, never a minified identifier or the old optional chain", () => {
+    for (const needle of Object.values(SETTINGS_MAPPING_NEEDLES)) {
+      expect(needle).toMatch(/allowAllUnixSockets/);
+      expect(needle).not.toMatch(/\?\./);
+      expect(needle).not.toMatch(/\b[A-Za-z]\$?\b[,)]/);
+    }
+  });
+
+  it("a second copy of a log literal reds (a new code path selects the helper elsewhere)", () => {
     const doubled = Buffer.concat([FULL, Buffer.from(" \0 " + HELPER_SELECTION_NEEDLES.applyLine)]);
     const msg = failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(doubled)), PINS_ONE, "synthetic"));
     expect(msg).toMatch(/HELPER_SELECTION applyLine want 1 got 2/);
+  });
+
+  it("MORE copies of a mapping anchor still pass (a short key's count is not stable across minifier runs)", () => {
+    const more = Buffer.concat([FULL, Buffer.from(" \0 allowAllUnixSockets: \0 network.allowAllUnixSockets")]);
+    expect(failureOf(() => assertHelperSelection(scanHelperSelection(bufferSource(more)), PINS_ONE, "synthetic"))).toBe("");
   });
 });
 
@@ -340,8 +420,8 @@ describe("sandbox-vendored-argv-tail: helper-selection pins (#10445, synthetic)"
 // sessions only lose a dead bridge" premise is unproven and the variant must be re-measured through the real SDK.
 
 const BRIDGE_WRAPPER_OK =
-  "function WV(e,r,n,s,h,g){let y=h||\"bash\",b=As([g??\"socat\"]),S=[`${b} TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:${e} >/dev/null 2>&1 &`," +
-  "`${b} TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:${r} >/dev/null 2>&1 &`,\"trap 'rc=$?; kill %1 %2 2>/dev/null; exit $rc' EXIT\"];" +
+  "function WV(e,r,n,s,h,g){let y=h||\"bash\",b=As([g??\"socat\"]),C=(D,M)=>`{ ${b} TCP6-LISTEN:${D},ipv6only=0,fork,reuseaddr,backlog=4096 UNIX-CONNECT:${M} || exec ${b} TCP4-LISTEN:${D},fork,reuseaddr,backlog=4096 UNIX-CONNECT:${M}; } >/dev/null 2>&1 &`," +
+  "S=[C(3128,e),\"_srt_http=$!\",C(1080,r),\"_srt_socks=$!\",\"trap 'rc=$?; kill %1 %2 2>/dev/null; exit $rc' EXIT\",...WD];" +
   "if(s){let T=s+As([y,\"-c\",n]),w=[...S,T].join(`\n`);return`${y} -c ${As([w])}`}else{let T=[...S,`eval ${As([n])}`].join(`\n`);return`${y} -c ${As([T])}`}}";
 const BRIDGE_NET_OK =
   'if(s){if(tt.push("--unshare-net"),h&&g){if(!_t.existsSync(h))throw Error(`Linux HTTP bridge socket does not exist: ${h}.`);' +
@@ -355,15 +435,34 @@ describe("sandbox-vendored-argv-tail: proxy-bridge structure (#10455 a, syntheti
   });
   it("the user command ahead of the bridges (reordered array) reds BRIDGE_ORDER", () => {
     const reordered = BRIDGE_WRAPPER_OK.replace("[...S,T]", "[T,...S]");
+    expect(reordered).not.toBe(BRIDGE_WRAPPER_OK);
     expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(reordered))), "synthetic"))).toMatch(
       /BRIDGE_ORDER/,
     );
   });
-  it("the trap line moved ahead of the bridges reds BRIDGE_ORDER", () => {
-    const moved = BRIDGE_WRAPPER_OK.replace(
-      /S=\[(`[^`]*`),(`[^`]*`),("trap[^"]*")\]/,
-      (_m, a, b, t) => `S=[${t},${a},${b}]`,
+  it("the user command ahead of the bridges in the NO-HOOK-SITE branch reds BRIDGE_ORDER too (both branches are pinned)", () => {
+    const reordered = BRIDGE_WRAPPER_OK.replace("[...S,`eval ${As([n])}`]", "[`eval ${As([n])}`,...S]");
+    expect(reordered).not.toBe(BRIDGE_WRAPPER_OK);
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(reordered))), "synthetic"))).toMatch(
+      /BRIDGE_ORDER/,
     );
+  });
+  it("the IPv4 fallback bridge missing, or a bridge no longer started in the background, reds BRIDGE_ORDER", () => {
+    const noFallback = BRIDGE_WRAPPER_OK.replace(/ \|\| exec \$\{b\} TCP4-LISTEN:\$\{D\},fork,reuseaddr,backlog=4096 UNIX-CONNECT:\$\{M\}/, "");
+    expect(noFallback).not.toBe(BRIDGE_WRAPPER_OK);
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(noFallback))), "synthetic"))).toMatch(/BRIDGE_ORDER/);
+    const foreground = BRIDGE_WRAPPER_OK.replace(" >/dev/null 2>&1 &`", " >/dev/null 2>&1`");
+    expect(foreground).not.toBe(BRIDGE_WRAPPER_OK);
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(foreground))), "synthetic"))).toMatch(/BRIDGE_ORDER/);
+  });
+  it("renamed (minified) identifiers do not matter: the same shape under other names passes (must-PASS non-canonical)", () => {
+    const renamed = BRIDGE_WRAPPER_OK.replaceAll("WV", "$Q").replaceAll("As(", "z9(").replaceAll("...WD", "...$w");
+    expect(renamed).not.toBe(BRIDGE_WRAPPER_OK);
+    expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(renamed))), "synthetic"))).toBe("");
+  });
+  it("the trap line moved ahead of the bridges reds BRIDGE_ORDER", () => {
+    const trap = "\"trap 'rc=$?; kill %1 %2 2>/dev/null; exit $rc' EXIT\"";
+    const moved = BRIDGE_WRAPPER_OK.replace(`,${trap},...WD]`, ",...WD]").replace("S=[C(3128,e)", `S=[${trap},C(3128,e)`);
     expect(moved).not.toBe(BRIDGE_WRAPPER_OK);
     expect(failureOf(() => assertBridgeStructure(scanBridgeStructure(bufferSource(bridgeBuf(moved))), "synthetic"))).toMatch(
       /BRIDGE_ORDER/,
@@ -414,6 +513,36 @@ describe("sandbox-vendored-argv-tail: spawn-tail normalization (cap segment is n
   });
 });
 
+describe("sandbox-vendored-argv-tail: trailing flags in spawn-tail normalization (--unsetenv, --disable-userns)", () => {
+  const head = ["--dev", "/dev", "--unshare-pid", "--unshare-user", "--cap-drop", "ALL", "--bind", "/proc", "/proc"];
+  it("the env var NAME is collapsed on both sides, so a literal in a spawn equals the identifier marker from the builder", () => {
+    expect(normalizeSpawnTail([...head, "--unsetenv", "SRT_ALLOW_NESTED_USERNS"])).toEqual(
+      normalizeSpawnTail([...head, "--unsetenv", "SOME_OTHER_VAR"]),
+    );
+    expect(normalizeSpawnTail([...head, "--unsetenv", "SRT_ALLOW_NESTED_USERNS"]).slice(-2)).toEqual(["--unsetenv", "<UNSETENV_VAR>"]);
+  });
+  it("`--disable-userns` is host-conditional: a tail with it equals a tail without it", () => {
+    expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns"])).toEqual(normalizeSpawnTail([...head, "--unsetenv", "A"]));
+  });
+  it("an `--unsetenv` with no operand, or one that swallowed a flag, reds UNSETENV_SHAPE", () => {
+    expect(failureOf(() => normalizeSpawnTail([...head, "--unsetenv"]))).toMatch(/UNSETENV_SHAPE/);
+    expect(failureOf(() => normalizeSpawnTail([...head, "--unsetenv", "--disable-userns"]))).toMatch(/UNSETENV_SHAPE/);
+    expect(failureOf(() => normalizeSpawnTail([...head, "--unsetenv", "bad name"]))).toMatch(/UNSETENV_SHAPE/);
+  });
+  it("a mount placed right after `--disable-userns` is still a different tail (the flag swallows nothing, whatever the mount's arity)", () => {
+    for (const mount of [["--tmpfs", "/proc"], ["--bind", "/proc", "/proc"], ["--ro-bind", "/a", "/b"]]) {
+      // Exact output: the flag is dropped and every mount token survives (a normalizer that also ate one operand would fail here).
+      expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--disable-userns", ...mount]), mount.join(" ")).toEqual([
+        ...normalizeSpawnTail([...head, "--unsetenv", "A"]),
+        ...mount,
+      ]);
+    }
+  });
+  it("a tail that gained an extra mount after `--unsetenv` is still a different tail", () => {
+    expect(normalizeSpawnTail([...head, "--unsetenv", "A", "--tmpfs", "/proc"])).not.toEqual(normalizeSpawnTail([...head, "--unsetenv", "A"]));
+  });
+});
+
 describe("sandbox-vendored-argv-tail: fixture tail equality (synthetic)", () => {
   it("the committed fixture tail equals the builder tail with the selected branch resolved", () => {
     const tail = extractBuilderTail(synth());
@@ -434,24 +563,35 @@ describe("sandbox-vendored-argv-tail: fixture tail equality (synthetic)", () => 
 
   it("a fixture that lacks the `--bind /proc /proc` tail reds TAIL_DRIFT", () => {
     const tail = extractBuilderTail(synth());
-    const noBind = fixtureTail().slice(0, -3);
+    const ft = fixtureTail();
+    const at = ft.findIndex((t, i) => t === "--bind" && ft[i + 1] === "/proc" && ft[i + 2] === "/proc");
+    expect(at, "the fixture tail has a `--bind /proc /proc`").toBeGreaterThan(0);
+    const noBind = [...ft.slice(0, at), ...ft.slice(at + 3)];
     expect(failureOf(() => assertTailMatchesFixture(builderTailTokens(tail, "bind"), noBind, "synthetic"))).toMatch(
       /TAIL_DRIFT/,
     );
   });
 
-  it("the fixture's own tail has the expected shape (--dev first, one --bind /proc /proc last)", () => {
+  it("the fixture's own tail has the expected shape (--dev first, one --bind /proc /proc, then only --unsetenv and the optional --disable-userns)", () => {
     const t = fixtureTail();
     expect(t.slice(0, 4)).toEqual(["--dev", "/dev", "--unshare-pid", "--unshare-user"]);
-    expect(t.slice(-3)).toEqual(["--bind", "/proc", "/proc"]);
+    // The mask is still the LAST mount; the only things after it are the env unset and (when bubblewrap supports it) the userns hardening.
+    const bindAt = t.findIndex((x, i) => x === "--bind" && t[i + 1] === "/proc" && t[i + 2] === "/proc");
+    expect(bindAt, "exactly one `--bind /proc /proc` in the fixture tail").toBe(t.lastIndexOf("--bind"));
+    expect(bindAt).toBeGreaterThan(0);
+    const after = t.slice(bindAt + 3);
+    expect(after[0]).toBe("--unsetenv");
+    expect(after.filter((x) => x === "--unsetenv")).toHaveLength(1);
+    expect(after.slice(2).filter((x) => x !== "--disable-userns")).toEqual([]);
   });
 });
 
-// Measured 2026-10-16 (claude-agent-sdk 0.3.284, claude-code 2.1.293 -- the versions in PINS above) with fixed-string scans (`grep -a -o -F <literal> claude | wc -l`).
-// Only the agent-sdk package reads the programmatic `sandbox` option; the CLI package never maps it.
+// Measured 2026-11-04 (claude-agent-sdk 0.3.311, claude-code 2.1.311 -- the versions in PINS above) with fixed-string scans (`grep -a -o -F <literal> claude | wc -l`).
+// The settings->builder mapping is a content-anchored tripwire (SETTINGS_MAPPING_NEEDLES, >= 1 hit each), not a count: the
+// wrapped-command arm is the proof. (Before 0.3.311 only the SDK package carried the optional-chain mapping, count 2; the CLI 0.)
 const HELPER_PINS: Record<"claude-agent-sdk" | "claude-code", HelperSelectionPins> = {
-  "claude-agent-sdk": { skipLine: 2, applyLine: 2, missingLine: 2, settingsMapping: 2 },
-  "claude-code": { skipLine: 2, applyLine: 2, missingLine: 2, settingsMapping: 0 },
+  "claude-agent-sdk": { skipLine: 2, applyLine: 2, missingLine: 2 },
+  "claude-code": { skipLine: 2, applyLine: 2, missingLine: 2 },
 };
 
 describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries", () => {
@@ -504,7 +644,11 @@ describe.skipIf(SKIP_REAL)("sandbox-vendored-argv-tail: real vendored binaries",
         expect(msg).toBe("");
       });
 
-      it("the unix-socket helper selection (skip/apply/missing lines, settings mapping) equals the measured pin (#10445)", () => {
+      it("the mount-table literal counts (--tmpfs, --bind, --ro-bind, --dev-bind) equal the measured pin (the pre-`--dev` table the tail parser cannot read)", () => {
+        expect(failureOf(() => assertMountTable(scanned.census, MEASURED_MOUNT_TABLE, `${pkg}@${scanned.version}`, `measured on ${pins.measuredVersion}`))).toBe("");
+      });
+
+      it("the unix-socket helper selection (skip/apply/missing lines exact, settings-mapping anchors >= 1) equals the measured pin (#10445)", () => {
         expect(failureOf(() => assertHelperSelection(scanned.helper, HELPER_PINS[pkg], `${pkg}@${scanned.version}`))).toBe("");
       });
 

@@ -1216,7 +1216,22 @@ done < "$class_c_out"
 # a tenth, and the #10952 scheduled-orphan-sweeps aggregator monitor an eleventh; #9304 deleted the
 # retired scheduled-gh-pages-cert-state monitor. This list names the additions
 # made since the 2026-08-19 live figure and is not a complete ledger, so the
-# declared count above (67) is the figure of record.
+# declared count above (67) is the figure of record — SUPERSEDED 2026-10-29
+# (67 → 24, #6590 PR-B destroy) by the addendum below.
+# Addendum 2026-10-29: …→ 25 `resource "sentry_cron_monitor"` blocks — the
+# #6590 silence-doctrine prune (feat-observability-vendor-eval PR-B) destroyed
+# the 43 low-catch-value monitors (67 → 24); the emitters stay (spec NG4 void-post).
+# The #4672 scheduled-approval-expiry monitor (the 5-minute approval-request sweep) is declared
+# after that prune, taking the root to 25.
+# Addendum 2026-10-30: …→ 26 `resource "sentry_cron_monitor"` blocks — the #11631
+# scheduled-deadman-heartbeat-feeder monitor (the hourly archive-reading feeder for the luks-monitor
+# host-timer and claude-cost-capture dead-man heartbeats) is declared, taking the root to 26.
+# Addendum 2026-11-02: …→ 27 `resource "sentry_cron_monitor"` blocks — the #8211 PR-B2
+# scheduled-git-data-erasure-redrive monitor (the 15-minute pending-erasure ledger re-drive) is
+# declared, taking the root to 27.
+# Addendum 2026-11-05: …→ 28 `resource "sentry_cron_monitor"` blocks — the #8839
+# scheduled-agent-spawn-stale-settle monitor (the 15-minute stale-Working sweep) is
+# declared, taking the root to 28.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather

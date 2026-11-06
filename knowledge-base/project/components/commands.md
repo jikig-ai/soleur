@@ -1,7 +1,8 @@
 ---
 component: commands
-updated: 2026-02-22
-primary_location: plugins/soleur/commands/soleur/
+updated: 2026-11-02
+primary_location: plugins/soleur/commands/
+dependencies: [skills, agents]
 ---
 
 # Commands
@@ -10,13 +11,14 @@ Slash commands that users invoke as entry points to the development workflow. Co
 
 ## Purpose
 
-Provide user-facing entry points for routing, knowledge-base sync, and help. Workflow stages (brainstorm, plan, work, review, compound, one-shot) have been migrated to skills for agent discoverability and Skill tool invocation.
+Provide user-facing entry points for routing, knowledge-base sync, help, and version reporting. Workflow stages (brainstorm, plan, work, review, compound, one-shot) have been migrated to skills for agent discoverability and Skill tool invocation.
 
 ## Responsibilities
 
 - Accept user input and route to the appropriate workflow skill
 - Manage the knowledge base (sync)
 - Provide help and orientation
+- Report the installed plugin version
 
 ## Key Interfaces
 
@@ -57,7 +59,7 @@ graph LR
 4. Skill reads/writes knowledge base files
 5. Results returned to user
 
-## Commands (3)
+## Commands (4)
 
 All commands use the `soleur:` prefix to avoid collisions with built-in commands. Workflow stages were migrated from commands to skills in v2.37.0 for agent discoverability.
 
@@ -66,6 +68,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 | `/soleur:go` | Unified entry point that routes to workflow skills |
 | `/soleur:sync` | Populate knowledge base from existing codebase |
 | `/soleur:help` | List all available Soleur commands, agents, and skills |
+| `/soleur:version` | Show the installed Soleur plugin version and whether a newer release exists |
 
 **Workflow skills** (invoked via `/soleur:go` or directly):
 
@@ -109,7 +112,7 @@ sequenceDiagram
 
 ## Dependencies
 
-- **Internal**: Skills (workflow stages), Agents (invoked by skills via Task tool)
+- **Internal**: [skills](skills.md) (workflow stages), [agents](agents.md) (invoked by skills via Task tool)
 - **External**: Claude Code CLI, GitHub CLI (for PR operations)
 
 ## Examples
@@ -134,7 +137,7 @@ sequenceDiagram
 
 ## Related Files
 
-- `plugins/soleur/commands/soleur/` - Command definitions (go, sync, help)
+- `plugins/soleur/commands/` - Command definitions (go, sync, help, version)
 - `plugins/soleur/skills/` - Workflow skill definitions
 
 ## See Also

@@ -59,3 +59,5 @@ Wait for all subagents to complete. Then:
 
 Then proceed to the remaining dependent tasks (if any) using the sequential loop,
 or skip directly to Phase 3 if all tasks are done.
+
+- **A fan-out or delegate prompt must say "run suites in the foreground; your final message is the report".** An agent that starts a suite in the background and ends its turn on "waiting for my watcher" leaves uncommitted work and no report, and nothing resumes it. Put that sentence in the SPAWN prompt, and when a delegate does stop that way, check `git status`/`git log` first and resume it with `SendMessage` asking for a foreground run. **Why:** #11542 — three delegates and review seats stopped on interim status lines; one left three files uncommitted. See `knowledge-base/project/learnings/2026-10-30-the-required-set-check-passed-review-with-no-p1-and-its-own-fixes-needed-two-more-rounds.md`.

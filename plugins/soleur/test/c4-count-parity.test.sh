@@ -61,12 +61,38 @@ derive_heartbeat_workflows() {
 }
 
 derive_cron_monitors() {
-  { grep -cF 'resource "sentry_cron_monitor"' "$MONITORS_TF" || true; } | head -1 | tr -d ' '
+  # Anchored at line start: a `# resource "sentry_cron_monitor"` comment must
+  # not inflate the declared count (sibling extractors all anchor the same way).
+  { grep -cE '^resource "sentry_cron_monitor"' "$MONITORS_TF" || true; } | head -1 | tr -d ' '
 }
 
-derive_github_slugs() {
-  { grep -rhoE 'monitor-slug:[[:space:]]*[A-Za-z0-9_-]+' "$WF_DIR" || true; } \
+# Raw `monitor-slug:` literal count across workflows — the EMITTER cohort.
+# #6590 PR-B keeps the emitters (spec NG4) while destroying 43 monitors, so
+# this count (22) no longer equals live-backed check-ins (14). It feeds ONLY
+# the `c5 -ge c1` derivation-independence invariant below, which asserts an
+# emitter property (every heartbeat file declares >= 1 slug) — do NOT "simplify"
+# this back into derive_github_slugs: the two answer different questions and the
+# split is deliberate (CTO ruling 2026-10-29).
+derive_github_emitter_slugs() {
+  { grep -rhoE '^[[:space:]]*monitor-slug:[[:space:]]*[A-Za-z0-9_-]+' "$WF_DIR" || true; } \
     | sed -E 's/.*:[[:space:]]*//' | sort -u | grep -c . || true
+}
+
+# LIVE-BACKED check-in count (#6590 PR-B): workflow `monitor-slug:` values that
+# also have a declared `name = "<slug>"` in cron-monitors.tf. Emitters posting
+# to destroyed monitors are void-posts (Sentry drops unknown slugs), so the
+# gated C5/C6/C9 prose must count only slugs a live resource answers.
+derive_github_slugs() {
+  # Both greps anchored at line start: a `# monitor-slug:` or `# name = "x"`
+  # comment must not enter either side of the intersection (the only consumer
+  # that was missing the anchor — sibling extractors all anchor or
+  # comment-strip already).
+  comm -12 \
+    <({ grep -rhoE '^[[:space:]]*monitor-slug:[[:space:]]*[A-Za-z0-9_-]+' "$WF_DIR" || true; } \
+       | sed -E 's/.*:[[:space:]]*//' | sort -u) \
+    <({ grep -oE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"[a-z0-9-]+"' "$MONITORS_TF" || true; } \
+       | sed -E 's/.*"([a-z0-9-]+)"/\1/' | sort -u) \
+    | grep -c . || true
 }
 
 derive_webapp_slugs() { echo $(( $(derive_cron_monitors) - $(derive_github_slugs) )); }
@@ -130,8 +156,8 @@ REGISTRY=(
   "C1|github -> sentry|check-ins from [0-9]+ workflows|num|derive_heartbeat_workflows|grep -rlF 'actions/sentry-heartbeat' .github/workflows/ | wc -l"
   "C2|github -> sentry|[0-9]+ GHA-.schedule:.-fired|num|derive_schedule_fired|of the heartbeat workflows, those whose parsed on: has a schedule key"
   "C3|github -> sentry|and [0-9]+ .workflow_dispatch.-only|num|derive_dispatch_only|of the heartbeat workflows, those whose parsed on: has NO schedule key"
-  "C4|github -> sentry|Of [0-9]+ cron monitors|num|derive_cron_monitors|grep -cF 'resource \"sentry_cron_monitor\"' apps/web-platform/infra/sentry/cron-monitors.tf"
-  "C5|github -> sentry|[0-9]+ check in from here|num|derive_github_slugs|distinct monitor-slug: values across .github/workflows/"
+  "C4|github -> sentry|Of [0-9]+ cron monitors|num|derive_cron_monitors|grep -cE '^resource \"sentry_cron_monitor\"' apps/web-platform/infra/sentry/cron-monitors.tf"
+  "C5|github -> sentry|[0-9]+ check in from here|num|derive_github_slugs|distinct monitor-slug: values ∩ declared name= attrs in cron-monitors.tf (live-backed, #6590 PR-B)"
   "C6|github -> sentry|and [0-9]+ from webapp|num|derive_webapp_slugs|C4 - C5 (monitors not checking in from GitHub)"
   "C7|github -> resend|one of [a-z]+ Resend emitters under [.]github/|word|derive_resend_emitters|grep -rlE 'api[.]resend[.]com|notify-ops-email' .github/workflows/ .github/actions/ | wc -l"
   "C8|plugin.agents|[0-9]+ domain agents across|num|derive_registry_agents|git ls-files ':(glob)plugins/soleur/agents/**/*.md' | wc -l"
@@ -201,12 +227,16 @@ fi
 # C1 and C5 must stay DIFFERENT derivations. If a future refactor makes them share one command
 # this silently becomes an assertion that 7 == 8, so pin the invariant rather than the values.
 c1="$(derive_heartbeat_workflows)"
-c5="$(derive_github_slugs)"
-if [[ "$c5" -ge "$c1" ]]; then
-  echo "  PASS: C1 ($c1 files) and C5 ($c5 slugs) are derived independently, slugs >= files"
+# Emitter derivation, NOT the live-backed one: the invariant asserts an
+# emitter property (every file declares >= 1 slug), so it must read the raw
+# `monitor-slug:` count — a live-backed count can legitimately drop below c1
+# when emitters keep posting to destroyed monitors (#6590 PR-B).
+c5_emitter="$(derive_github_emitter_slugs)"
+if [[ "$c5_emitter" -ge "$c1" ]]; then
+  echo "  PASS: C1 ($c1 files) and C5 ($c5_emitter emitter slugs) are derived independently, slugs >= files"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: C5 ($c5 distinct slugs) < C1 ($c1 heartbeat files) — impossible unless a" >&2
+  echo "  FAIL: C5 ($c5_emitter distinct emitter slugs) < C1 ($c1 heartbeat files) — impossible unless a" >&2
   echo "        derivation is globbing the wrong path; every file declares >= 1 slug." >&2
   FAIL=$((FAIL + 1))
 fi

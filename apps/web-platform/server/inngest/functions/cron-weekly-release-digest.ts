@@ -490,10 +490,10 @@ export const cronWeeklyReleaseDigest = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 15 * * 5" },
+      { event: "cron/weekly-release-digest.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 15 * * 5" },
-    { event: "cron/weekly-release-digest.manual-trigger" },
-  ],
-  cronWeeklyReleaseDigestHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronWeeklyReleaseDigestHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

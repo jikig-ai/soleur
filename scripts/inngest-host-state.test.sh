@@ -71,7 +71,7 @@ print(json.dumps({"dt": dt, "raw": json.dumps({"host": host, "host_name": "soleu
 ' "$1" "$2" "$3" "${4:-inngest-server-probe}"
 }
 
-DEDICATED_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active instance_id=hetzner-166317708 boot_id=abc cutover_flag=done probe_schema=8 host_role=dedicated redis_keys=442 redis_expires=431 data_mount_src=/dev/sdb data_mount_devid=scsi-0HC_Volume_106261946 data_bytes=58898716 registry_fns=7 flush_latched=true'
+DEDICATED_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active instance_id=hetzner-166317708 boot_id=abc cutover_flag=done probe_schema=9 host_role=dedicated redis_keys=442 redis_expires=431 data_mount_src=/dev/sdb data_mount_devid=scsi-0HC_Volume_106261946 data_bytes=58898716 registry_fns=7 flush_latched=true data_luks=crypto_LUKS'
 WEB1_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=inactive redis_active=active instance_id=hetzner-123931471 probe_schema=4 host_role=web redis_keys=n/a'
 DEAD_MSG='SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=activating redis_active=active instance_id=hetzner-166317708 probe_schema=8 host_role=dedicated redis_keys=442 registry_fns=__UNREADABLE__ cutover_flag=done'
 

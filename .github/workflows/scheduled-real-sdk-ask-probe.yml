@@ -1,0 +1,245 @@
+# <!-- gate-override: new-scheduled-cron-prefer-inngest -->
+# .github/workflows/scheduled-real-sdk-ask-probe.yml
+#
+# Automates the re-run of the real-SDK ask probe (apps/web-platform/scripts/dev-probe-destroy-ask.ts), the only check
+# that exercises hook-then-canUseTool precedence against the real SDK and bundled CLI (ADR-284, #10111 Part 1; the
+# synthetic hosted-ask canary, Part 2, is an operator-reserved production write and is NOT built here).
+#
+# Why GitHub Actions and not Inngest (ADR-033 prefers Inngest crons; the new-scheduled-cron-prefer-inngest hook
+# requires this justification + the marker above):
+#   (a) the work is repo-scoped test execution: checkout, npm ci, one bun script against the CI-partitioned
+#       Anthropic key (soleur-ci-eval workspace, ADR-244), the same shape as the ci.yml real-turn gates and
+#       scheduled-integration-suites.yml;
+#   (b) Inngest functions run inside the deployed web-platform container, which holds PRD credentials and has no
+#       host bubblewrap with the runner's unprivileged-userns setup; the probe needs neither and must not see them;
+#   (c) step.run replay buys nothing for a nondeterministic paid model call that must not be retried blindly.
+#
+# NON-BLOCKING by design: this workflow is not a required check and is not in the CI Required ruleset (CTO
+# 2026-10-12, reaffirmed 2026-11-01). The probe is a nondeterministic paid call; a PASS here is host-only evidence.
+#
+# Task design:
+#   trigger:        push to main on a narrow path allowlist (package-only pushes early-exit when neither SDK version moved), a weekly Monday run, workflow_dispatch, and a same-repo pull_request limited to edits of the files that execute with the key
+#   services:       reads the repo checkout and the SDK packages from npm; calls the Anthropic Messages API through the SDK on the CI-partitioned key; writes a job summary, a 90-day Actions artifact and (filer job only) GitHub issues in this repository, and creates the ci/real-sdk-ask-probe label (idempotent)
+#   next:           nothing automatic; a FAIL files the p1 regression issue and a blind run files the p2 blind issue, which a human triages; a skipped (billing/spend-cap) run and a not-run push file nothing
+#   human_reentry:  comment on the tracking issue; rerun with gh workflow run scheduled-real-sdk-ask-probe.yml (post-merge only); stop it with soleur:cron-delete or by disabling the workflow; the regression issue is closed only by a human
+#   dedupe:         the filer matches open issues by exact title (jq equality, never the fuzzy search) and comments instead of opening a second; the runner reruns the whole probe at most once on the remaining budget and never on budget-exceeded
+#   source_dedupe:  exact-title match is the ticket-source dedupe: one open issue per class, "[ci/real-sdk-ask-probe] real-SDK ask probe regression" and "[ci/real-sdk-ask-probe] real-SDK ask probe blind"
+#
+# Key scope: ANTHROPIC_API_KEY is in the env of exactly one step (id: probe) and, as a with: input, of the
+# anthropic-preflight action. No job-level or workflow-level env carries it; the filer job holds issues: write and no key.
+# The pull_request self-test runs the same-repo PR-head tree with the key in the probe step (same posture as the ci.yml
+# real-turn gates); fork pull requests and the Dependabot actor are excluded by the job condition. The key therefore
+# executes the WHOLE PR-head tree on that self-test (npm ci, node_modules, the probe, the preflight action,
+# scripts/lib/bearer-curl.sh), not only the four files named in pull_request.paths: that filter limits when the paid
+# run TRIGGERS, not what runs with the key.
+# Guards: plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh (push-filter coverage + posture) and
+# apps/web-platform/scripts/real-sdk-ask-probe.test.sh (outcome classification + issue filer).
+
+name: "Scheduled: real-SDK ask probe (host-only; production arrival not observed)"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - apps/web-platform/package.json
+      - apps/web-platform/package-lock.json
+      - apps/web-platform/server/agent-runner-sandbox-config.ts
+      - apps/web-platform/server/sandbox-hook.ts
+      - apps/web-platform/server/agent-runner-query-options.ts
+      - apps/web-platform/server/permission-callback.ts
+      - apps/web-platform/server/destroy-ask-classifier.ts
+      - apps/web-platform/server/destroy-ask-lane.ts
+      - apps/web-platform/server/agent-env.ts
+      - apps/web-platform/scripts/dev-probe-destroy-ask.ts
+      - apps/web-platform/scripts/real-sdk-ask-probe.sh
+      - apps/web-platform/scripts/lib/probe-budget.ts
+      - plugins/soleur/hooks/**
+      - .github/workflows/scheduled-real-sdk-ask-probe.yml
+  schedule:
+    - cron: '17 9 * * 1'
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - .github/workflows/scheduled-real-sdk-ask-probe.yml
+      - apps/web-platform/scripts/dev-probe-destroy-ask.ts
+      - apps/web-platform/scripts/real-sdk-ask-probe.sh
+      - apps/web-platform/scripts/lib/probe-budget.ts
+
+concurrency:
+  # One shared group for push, schedule and workflow_dispatch; each pull_request self-test gets its own per-PR group so
+  # a PR run never evicts the single pending main/cron run (GitHub keeps one pending run per group).
+  group: real-sdk-ask-probe${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe
+    # Same-repo guard: a fork pull request gets no secrets and the Dependabot actor is excluded. Push, schedule and
+    # workflow_dispatch are not pull_request events and pass the first clause.
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    # Measured 2026-11-01 (self-test run 41295302456 at head 075832071a): probe step 36 s, job about 1 min 44 s by the API timestamps. These ceilings
+    # are hang backstops, not expectations: the whole-probe rerun runs inside the same step, so the step ceiling covers
+    # two worst-case passes (2 x 8 cases x 180 s = 48 min -> 50). A run past it is a hang and the filer files it as
+    # blind/no-outcome. The job ceiling adds setup (about 1 min), the preflight and the artifact upload.
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      outcome: ${{ steps.probe.outputs.outcome || steps.skip.outputs.outcome || steps.should-run.outputs.outcome }}
+      reason: ${{ steps.probe.outputs.reason }}
+      cost: ${{ steps.probe.outputs.cost }}
+      provenance: ${{ steps.probe.outputs.provenance }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # pull_request would otherwise check out the ephemeral merge ref; run the PR head itself.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Decide whether this trigger needs a run
+        id: should-run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          WORKFLOW_FILE: scheduled-real-sdk-ask-probe.yml
+        run: |
+          set -euo pipefail
+          bash apps/web-platform/scripts/real-sdk-ask-probe.sh should-run
+
+      - name: Set up Bun
+        if: steps.should-run.outputs.run == 'true'
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: ".bun-version"
+
+      - name: Set up Node.js
+        if: steps.should-run.outputs.run == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install dependencies (no postinstall scripts)
+        if: steps.should-run.outputs.run == 'true'
+        working-directory: apps/web-platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+
+      # Copied from ci.yml (the C4 render sandbox step): ubuntu-latest defaults
+      # kernel.apparmor_restrict_unprivileged_userns=1, which makes the SDK's bubblewrap sandbox fail its uid-map setup.
+      # Ephemeral GitHub-hosted runner only; if the sandbox is still unusable the probe reports CANT-RUN, never FAIL.
+      - name: Install bubblewrap and socat (SDK sandbox startup check)
+        if: steps.should-run.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo -n apt-get update
+          sudo -n apt-get install -y --no-install-recommends bubblewrap socat
+          sudo -n sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+
+      # Exits 1 (red) for an unexpected response or a missing key; a spend-cap or transient API error is ok=false,
+      # which skips the probe with a SKIPPED summary below (never a pass). A red preflight reaches the filer as
+      # outcome=no-outcome -> the blind issue.
+      - name: Anthropic preflight
+        id: preflight
+        if: steps.should-run.outputs.run == 'true'
+        uses: ./.github/actions/anthropic-preflight
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Billing skip summary
+        id: skip
+        if: steps.should-run.outputs.run == 'true' && steps.preflight.outputs.ok == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::warning::Anthropic API unavailable (spend cap, credit balance or a transient error): the real-SDK ask probe was SKIPPED. This is not a pass."
+          {
+            echo "## Real-SDK ask probe: SKIPPED"
+            echo
+            echo "The Anthropic preflight reported the API unavailable (spend cap, credit balance or a transient error), so the probe did not run. This is NOT a pass; the next trigger retries."
+            echo
+            echo "Scope when it does run: host-only (a CI host with host bwrap, not the hosted container); production arrival not observed."
+          } >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "outcome=skipped"
+          } >> "$GITHUB_OUTPUT"
+
+      # The ONLY step that holds the key. Ceiling: see the job note. (The baseline marker is the "Record that the probe measured" step below.)
+      - name: Run the real-SDK ask probe
+        id: probe
+        if: steps.should-run.outputs.run == 'true' && steps.preflight.outputs.ok == 'true'
+        timeout-minutes: 50
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NODE_ENV: test
+          PROBE_OUT_FILE: ${{ runner.temp }}/real-sdk-ask-probe.out
+        run: |
+          set -euo pipefail
+          bash apps/web-platform/scripts/real-sdk-ask-probe.sh run
+
+      # The baseline marker. It succeeds only when the probe step reached an explicit verdict (pass or fail); a CANT-RUN, a crash, a step
+      # timeout or a budget stop leaves it skipped, so should-run never takes a run that could not measure as the baseline for a package-only
+      # push. The step name is a contract with the runner's PROBE_STEP_NAME (the workflow suite pins the two equal).
+      - name: Record that the probe measured
+        id: measured
+        if: always() && (steps.probe.outputs.outcome == 'pass' || steps.probe.outputs.outcome == 'fail')
+        shell: bash
+        env:
+          MEASURED_OUTCOME: ${{ steps.probe.outputs.outcome }}
+        run: |
+          set -euo pipefail
+          echo "real-sdk-ask-probe: the probe measured (outcome=${MEASURED_OUTCOME})"
+
+      - name: Upload the redacted probe output
+        if: always() && steps.should-run.outputs.run == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: real-sdk-ask-probe-${{ github.run_id }}
+          path: ${{ runner.temp }}/real-sdk-ask-probe.out
+          if-no-files-found: ignore
+          retention-days: 90
+
+  file-issue:
+    name: file-issue
+    needs: probe
+    # main and non-pull_request only; an empty outcome from a failed or cancelled probe job (setup failure, step
+    # timeout, preflight exit 1, a crash before classify) is filed as blind/no-outcome by the runner, so a red job is
+    # never silent. A skipped probe job (fork pull request) files nothing.
+    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.probe.result != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: File or update the deduped issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE_OUTCOME: ${{ needs.probe.outputs.outcome }}
+          PROBE_REASON: ${{ needs.probe.outputs.reason }}
+          PROBE_COST: ${{ needs.probe.outputs.cost }}
+          PROBE_JOB_RESULT: ${{ needs.probe.result }}
+          PROBE_PROVENANCE: ${{ needs.probe.outputs.provenance }}
+        run: |
+          set -euo pipefail
+          bash apps/web-platform/scripts/real-sdk-ask-probe.sh file-issue

@@ -415,7 +415,14 @@ describe("readProcCapped / readPid1 against real files", () => {
     const d = scratch();
     const fifo = join(d, "environ.fifo");
     execFileSync("mkfifo", [fifo]);
-    const writer = spawn("sh", ["-c", `{ printf 'HOME=${HOME}\\0'; sleep 0.4; printf 'TMPDIR=/t\\0'; } > "$1"`, "sh", fifo], { stdio: "ignore" });
+    // The writer is a script FILE invoked as `sh <file> <fifo> <home>` — the inline
+    // `sh -c` form made every argv element (the mkdtemp fifo path, HOME) a
+    // shell-interpreted sink (js/shell-command-injection-from-environment, alert 302).
+    // Positional params carry the same values with identical output bytes — a shape
+    // change, not a behaviour change. Precedent: PR #7566's fix for alerts 213/214.
+    const script = join(d, "writer.sh");
+    writeFileSync(script, `{ printf 'HOME=%s\\0' "$2"; sleep 0.4; printf 'TMPDIR=/t\\0'; } > "$1"\n`);
+    const writer = spawn("sh", [script, fifo, HOME], { stdio: "ignore" });
     try {
       expect(probe.readPid1(HOME, { statusPath: status(d), environPath: fifo }).env).toEqual({ homeMatches: true, divergent: true });
     } finally {
@@ -470,7 +477,11 @@ describe("readProcCapped / readPid1 against real files", () => {
     const fifo = join(d, "cap.fifo");
     execFileSync("mkfifo", [fifo]);
     // 40 + 23 + 1 bytes with a pause between writes: three separate reads, the last one a single byte.
-    const writer = spawn("sh", ["-c", `{ printf '%040d' 0; sleep 0.3; printf '%023d' 0; sleep 0.3; printf 'Z'; } > "$1"`, "sh", fifo], { stdio: "ignore" });
+    // Same script-file treatment as the environ.fifo writer above — `sh <file> <fifo>`
+    // removes the `sh -c` argv that made the fifo path a CodeQL sink (alert 303).
+    const script = join(d, "cap-writer.sh");
+    writeFileSync(script, `{ printf '%040d' 0; sleep 0.3; printf '%023d' 0; sleep 0.3; printf 'Z'; } > "$1"\n`);
+    const writer = spawn("sh", [script, fifo], { stdio: "ignore" });
     try {
       const out = probe.readProcCapped(fifo, 64);
       expect(out.length).toBe(64);

@@ -75,7 +75,7 @@ P1 findings get the current active milestone. P2/P3 findings get `Post-MVP / Lat
 Detect the active milestone:
 
 ```bash
-gh api repos/:owner/:repo/milestones --jq '[.[] | select(.state=="open") | select(.title | startswith("Phase"))] | sort_by(.due_on) | .[0].title // "Post-MVP / Later"'
+gh api --paginate repos/:owner/:repo/milestones --jq '[.[] | select(.state=="open") | select(.title | startswith("Phase"))] | sort_by(.due_on) | .[0].title // "Post-MVP / Later"'
 ```
 
 ## Duplicate Detection
@@ -152,7 +152,7 @@ For reviews with 15+ findings, create issues sequentially to avoid GitHub API ra
 
 ## Sharp Edges
 
-- `gh issue create --milestone <value>` resolves against milestone **title**, not number. `--milestone 6` fails with `could not add to milestone '6': '6' not found` even when milestone 6 exists. Retrieve the title via `gh api /repos/<owner>/<repo>/milestones --jq '.[] | {number, title}'` and pass the title. The `number` field is REST-API-only. **Why:** filing #2272 retried with `--milestone "Post-MVP / Later"` to succeed.
+- `gh issue create --milestone <value>` resolves against milestone **title**, not number. `--milestone 6` fails with `could not add to milestone '6': '6' not found` even when milestone 6 exists. Retrieve the title via `gh api --paginate /repos/<owner>/<repo>/milestones --jq '.[] | {number, title}'` and pass the title. The `number` field is REST-API-only. **Why:** filing #2272 retried with `--milestone "Post-MVP / Later"` to succeed.
 
 ## Cost-of-Filing Gate Rationale (relocated from review/SKILL.md §5)
 
@@ -163,3 +163,5 @@ against 132 merged PRs (2.04 filed per PR) and 125 closed, growing the queue
 most real findings to the queue, and the queue does not drain. Raising to
 ≤100 lines AND ≤4 files moves the crossover to where the arithmetic actually
 sits.
+
+**Filing gate exit 2 wording (`.claude/hooks/guardrails.sh`).** The `User-Impact:` line must contain, as a WHOLE singular word, a term from `.claude/hooks/lib/user-surface-taxonomy.txt` (`route`, `endpoint`, `page`, `screen`, `component`, `button`, `form`, `dashboard`, `CLI`, `command`, `email`, `notification`, `document`, `report`, `invoice`, `digest`); "documents" or "routes" fails the word boundary. `Fix-Size:` appears exactly once as `<N> lines / <M> files`, measured, and a size inside the inline threshold (<=100 lines AND <=4 files) is refused outright. **Why:** #11715 review: two refused `gh issue create` calls cost a round for a plural.

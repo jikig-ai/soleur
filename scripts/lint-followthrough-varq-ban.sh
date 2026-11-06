@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lint-followthrough-varq-ban.sh -- the follow-through PROBE lint. Five rules, one exit
+# lint-followthrough-varq-ban.sh -- the follow-through PROBE lint. Six rules, one exit
 # contract. Rule 1 (#6757): no probe may gate its exit on the banned `: "${VAR:?msg}"` /
 # colon-less `${VAR?msg}` word-expansion. Rule 2 (#7946): no file under the target dir may
 # name the retired credential. Rule 3 (#7490): every repo-relative path a probe assigns must
@@ -9,7 +9,14 @@
 # wrong mechanism was green over a probe that read `.comments[].body` with no author filter at
 # all. Rule 5 (#9818): no probe may mention the comment-author-association field (REST
 # `author_association`, GraphQL `authorAssociation`) on an executable line -- the SPELLING ban
-# that complements rule 4's obligation. (Rule 4 had a body heading and no index
+# that complements rule 4's obligation. Rule 6 (#11553): every executable-line `/events/` call
+# in a probe must carry an ordering bound on the same logical line (backslash-continuations
+# folded, so a `curl -G --data-urlencode` block is one checkable unit): `sort=`, or `start=`
+# AND `end=`; a `field=<name>()` aggregate select is exempt -- a one-row result has no ordering
+# to pin. It walks the same probe set as rules 1/3/4/5, counts `/events/` logical lines
+# examined (`scanned_rule6`, exempt included), and carries its own floor. Declared blind
+# spots: an endpoint or its params assembled across NON-continuation statements or passed by
+# indirection, and a runtime-constructed endpoint. (Rule 4 had a body heading and no index
 # entry here, which is the same defect this header already records for rule 1 -- a reader
 # looking for it found it only in the failure message.) The name is kept although the file now does more than rule 1: it is
 # cited from followthrough-convention.md, ADR-031, the Article 30 register and several
@@ -443,6 +450,69 @@ for f in ${PROBES[@]+"${PROBES[@]}"}; do
   done < <(awk -v TOPDIRS="$TOPDIRS" "$RULE3_AWK" "$f")   # rule3-census
 done
 
+# RULE 6 (#11553) -- the ORDERING BOUND on `/events/` calls. Every executable-line
+# `/events/` call in a probe must carry an explicit ordering contract on the same LOGICAL
+# line (backslash-continuations folded): `sort=`, or both `start=` AND `end=`. A
+# `field=<name>()` function-field select is exempt -- a one-row aggregate has no ordering
+# to pin, and `sort` on a field the select does not name risks a 400. `sort` is OPTIONAL
+# on this endpoint: absent it, `get_orderby` is None and there is no ORDER BY guarantee --
+# "newest-first" is observed behavior, not contract, so a coverage argument leaning on row
+# order rests on an undocumented default (CTO ruling on #11543; convention:
+# followthrough-convention.md; learning
+# 2026-10-29-sentry-events-sort-optional-pin-it-for-coverage-arguments.md).
+#
+# Detection: per probe, full-line comments are dropped BEFORE folding (a comment cannot
+# join a command's tail, and a documented `/events/` call does not fire); physical lines
+# ending `\` fold into one logical line so BOTH spellings are one checkable unit -- the
+# full-URL literal AND `curl -G --data-urlencode` blocks, where the bound param may sit on
+# a different physical line from the endpoint. The violation cites the PHYSICAL line where
+# `/events/` matched, not the fold's first line -- the same line-number fidelity rule 1's
+# header calls the whole value of the guard. The bound predicate keys on `sort=`,
+# `start=`, `end=` and `field=<name>()` with a non-identifier left edge, so `resort=`,
+# `append=` or `backend=` cannot satisfy or false-fire it.
+#
+# DECLARED BLIND SPOTS (named, not silent): an endpoint or its params assembled across
+# NON-continuation statements (string concat, `printf -v`, a helper that appends `&sort=`
+# later); a runtime-constructed endpoint; a bound passed by variable indirection. Same
+# accepted class rule 3 declares. One asymmetry is structural: this lint drops `#` lines
+# BEFORE folding, but bash ends a backslash-continuation AT a `#` line -- a comment
+# interposed inside a continued command splits it in two while the lint still reads one
+# logical line (shellcheck SC2215 catches it; the lint cannot see it). The dual is a
+# false-satisfier: an INLINE `# ... sort= ...` comment on an /events/ logical line meets
+# the bound predicate while the call carries no bound -- mid-line comment-stripping
+# needs quote-awareness the fold does not have, so the class is declared, not checked.
+scanned_rule6=0
+rule6_hits=""
+for f in ${PROBES[@]+"${PROBES[@]}"}; do
+  while IFS=$'\t' read -r lineno logical; do
+    [[ -z "$logical" ]] && continue
+    case "$logical" in */events/*) ;; *) continue ;; esac   # rule6-scan
+    scanned_rule6=$((scanned_rule6 + 1))                   # rule6-count
+    grep -qE '(^|[^A-Za-z_])sort=' <<<"$logical" && continue
+    grep -qE '(^|[^A-Za-z_])field=[A-Za-z_][A-Za-z0-9_]*\(\)' <<<"$logical" && continue
+    { grep -qE '(^|[^A-Za-z_])start=' <<<"$logical" \
+      && grep -qE '(^|[^A-Za-z_])end=' <<<"$logical"; } && continue
+    rule6_hits="${rule6_hits}${f}:${lineno}"$'\n'
+  done < <(awk '
+    /^[[:space:]]*#/ { next }
+    {
+      line = $0
+      sub(/[[:space:]]+$/, "", line)
+      if (buf == "") { buf = line } else { buf = buf " " line }
+      if (line ~ /\/events\//) { evline = FNR }
+      if (line ~ /\\$/) { sub(/\\$/, "", buf); next }
+      printf "%d\t%s\n", (evline ? evline : FNR), buf
+      buf = ""; evline = 0
+    }
+    END { if (buf != "") printf "%d\t%s\n", (evline ? evline : NR), buf }
+  ' "$f")
+done
+while IFS= read -r hit; do
+  [[ -z "$hit" ]] && continue
+  echo "$hit: rule 6: /events/ call carries no ordering bound -- pin sort= or bound the window with start= AND end= on the same logical line. A field=<name>() aggregate select is exempt (ordering is meaningless on a one-row aggregate; pinning sort there risks a 400). sort is OPTIONAL on this endpoint, so no ORDER BY is guaranteed -- a statsPeriod-only read arguing newest-N covers the window rests on an undocumented default (#11553; followthrough-convention.md)." >&2
+  violations=$((violations + 1))
+done <<<"$rule6_hits"
+
 # Rule 3's TWO floors. MIN_REF_FILES guards the GLOB (files walked); MIN_REFS guards the
 # REGEX (references extracted). A neutered regex walks every file and finds nothing, which the
 # file floor cannot see -- which is why there are two, with two messages naming which broke.
@@ -514,10 +584,21 @@ if [[ "$is_production_run" == "yes" ]] && (( scanned_rule5 < MIN_RULE5_FILES ));
   exit 2
 fi
 
+# Rule 6's own floor, on ITS counter (/events/ logical lines examined, exempt included):
+# no rule's floor vouches for another's walk. VARQ_BAN_MIN_EVENTS_LINES is a TEST-ONLY
+# override (mirroring VARQ_BAN_MIN_RULE5_FILES). MEASURED 14 /events/ logical lines on the
+# probe set (2026-10-31); floored well under it so retiring a tracker does not red the
+# tree (a floor, see "WHICH NUMBERS ARE EXACT" above).
+MIN_EVENTS_LINES="${VARQ_BAN_MIN_EVENTS_LINES:-5}"
+if [[ "$is_production_run" == "yes" ]] && (( scanned_rule6 < MIN_EVENTS_LINES )); then
+  echo "ERROR: rule 6 (ordering bound) examined only $scanned_rule6 /events/ call(s) in $TARGET_DIR -- expected at least $MIN_EVENTS_LINES; the /events/ needle or the walk is broken, and the rule is reporting clean over a corpus it cannot see" >&2
+  exit 2
+fi
+
 if (( violations > 0 )); then
-  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1), the retired credential name (rule 2), a repo-relative path absent from this checkout (rule 3), a comment-verdict or soak-marker read that bypasses scripts/lib/trusted-verdict.sh (rule 4), and/or the comment-author-association field named on an executable line (rule 5). See followthrough-convention.md §Author workflow." >&2
+  echo "FAILED: $violations violation(s) -- banned \${VAR:?}/\${VAR?} on an executable line (rule 1), the retired credential name (rule 2), a repo-relative path absent from this checkout (rule 3), a comment-verdict or soak-marker read that bypasses scripts/lib/trusted-verdict.sh (rule 4), the comment-author-association field named on an executable line (rule 5), and/or an /events/ call with no ordering bound (rule 6). See followthrough-convention.md §Author workflow." >&2
   exit 1
 fi
 
-echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (trusted-verdict obligation) checked $scanned_rule4 comment-reading probe(s); rule 5 (author-association ban) examined $scanned_rule5 probe(s); $n_tests_excluded *.test.sh file(s) outside the probe set)"
+echo "followthrough-varq-ban: clean ($scanned probe(s) scanned; retired-name rule checked $scanned_rule2 file(s) in $TARGET_DIR; rule 3 walked $scanned_rule3 file(s), extracted $refs_rule3 repo-path ref(s), $missing_rule3 missing; rule 4 (trusted-verdict obligation) checked $scanned_rule4 comment-reading probe(s); rule 5 (author-association ban) examined $scanned_rule5 probe(s); rule 6 (ordering bound) examined $scanned_rule6 /events/ call(s); $n_tests_excluded *.test.sh file(s) outside the probe set)"
 exit 0

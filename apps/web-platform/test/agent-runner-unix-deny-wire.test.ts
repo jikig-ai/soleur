@@ -146,6 +146,14 @@ vi.mock("../server/agent-prefill-guard", () => ({
 }));
 // The diagnostic's authMode resolver pulls the Supabase graph; stub it (the real resolver has its own test).
 vi.mock("../server/agent-auth-mode", () => ({ makeAuthModeResolver: mockMakeAuthModeResolver }));
+// #11591: these cases pin the subscription (oauth_token) copy and scheme, so the lease's mode resolver is
+// pinned to the managed path here; the selection itself is driven through the REAL lease and the REAL binding
+// resolver in byok-lease-auth-mode-binding.test.ts, not here.
+const mockMakeConversationAuthModeResolver = vi.hoisted(() => vi.fn((..._args: unknown[]) => async () => "managed"));
+vi.mock("../server/engine-binding-auth-mode", () => ({
+  makeConversationAuthModeResolver: mockMakeConversationAuthModeResolver,
+  readConversationBindingAuthMode: async () => null,
+}));
 
 import { startAgentSession } from "../server/agent-runner";
 import { reportSilentFallback } from "../server/observability";
@@ -276,6 +284,8 @@ describe("startAgentSession — agent auth-failure diagnostic wiring", () => {
       mockBuildAgentEnv.mockReturnValue({ CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth" });
       streamOf(authFailureStream());
       await startAgentSession(USER, "conv-oauth", "cpo", "session-s");
+      // The lease is handed the resolver for THIS user and THIS conversation, in that order (both are strings).
+      expect(mockMakeConversationAuthModeResolver).toHaveBeenCalledWith(USER, "conv-oauth");
       await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
       const opts = authEmits()[0][1] as { tags: Record<string, string> };
       // A hard-coded api_key scheme would read ANTHROPIC_API_KEY (absent here) and report auth_env_present=false.

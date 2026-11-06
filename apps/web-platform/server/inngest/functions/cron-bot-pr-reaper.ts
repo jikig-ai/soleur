@@ -740,12 +740,10 @@ export const cronBotPrReaper = inngest.createFunction(
       { scope: "account", key: '"cron-bot-pr-reaper"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "17 */2 * * *" },
+      { event: "cron/bot-pr-reaper.manual-trigger" },
+    ],
   },
-  [
-    { cron: "17 */2 * * *" },
-    { event: "cron/bot-pr-reaper.manual-trigger" },
-  ],
-  cronBotPrReaperHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronBotPrReaperHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

@@ -36,7 +36,7 @@ Soleur gives a single founder the leverage of a full organization — eight depa
 
 The founder still decides everything that matters: strategy, approvals, budget, and which model provider to trust. Soleur's AI specialists handle the execution — drafting, planning, reviewing, and documenting across every department — while the institutional memory compounds with every session.
 
-The key architectural decision is separation. Your company's knowledge and your AI team's workflows are not tied to any single model or harness. They live in your repository as plain files. You can run Soleur on Claude Code, Grok Build, Codex, Devin CLI, or OpenCode — and switch between them without losing a single past decision.
+The key architectural decision is separation. Your company's knowledge and your AI team's workflows are not tied to any single model or harness. They live in your repository as plain files. You can run Soleur on Claude Code, Grok Build, Codex, Devin CLI, OpenCode, or Google Antigravity CLI — and switch between them without losing a single past decision.
 
 ## Why Open Weights Models Change the Equation
 
@@ -78,7 +78,7 @@ Your company's memory lives in plain files inside your own Git repository. Switc
 
 ### Do I need to run my own servers to use open-weights models with my AI team?
 
-No. Soleur runs on supported harnesses — Claude Code, Grok Build, Codex, Devin CLI, and OpenCode. Each harness connects to providers it supports. OpenCode's provider documentation lists support for local models through Ollama, llama.cpp, and LM Studio, as well as hosted providers. You can use frontier APIs, bring-your-own-key providers, or self-hosted open-weights models depending on your preference and technical comfort. Soleur does not require you to operate Soleur-hosted infrastructure; self-hosted model inference has its own requirements.
+No. Soleur runs on supported harnesses — Claude Code, Grok Build, Codex, Devin CLI, OpenCode, and Google Antigravity CLI. Each harness connects to providers it supports. OpenCode's provider documentation lists support for local models through Ollama, llama.cpp, and LM Studio, as well as hosted providers. You can use frontier APIs, bring-your-own-key providers, or self-hosted open-weights models depending on your preference and technical comfort. Soleur does not require you to operate Soleur-hosted infrastructure; self-hosted model inference has its own requirements.
 
 ### How does Soleur keep my marketing, legal, and finance specialists aligned across different AI providers?
 
@@ -102,7 +102,7 @@ All specialists share the same knowledge base — your company's plain-file repo
       "name": "Do I need to run my own servers to use open-weights models with my AI team?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "No. Soleur runs on supported harnesses — Claude Code, Grok Build, Codex, Devin CLI, and OpenCode. Each harness connects to providers it supports. OpenCode's provider documentation lists support for local models through Ollama, llama.cpp, and LM Studio, as well as hosted providers. You can use frontier APIs, bring-your-own-key providers, or self-hosted open-weights models depending on your preference and technical comfort. Soleur does not require you to operate Soleur-hosted infrastructure; self-hosted model inference has its own requirements."
+        "text": "No. Soleur runs on supported harnesses — Claude Code, Grok Build, Codex, Devin CLI, OpenCode, and Google Antigravity CLI. Each harness connects to providers it supports. OpenCode's provider documentation lists support for local models through Ollama, llama.cpp, and LM Studio, as well as hosted providers. You can use frontier APIs, bring-your-own-key providers, or self-hosted open-weights models depending on your preference and technical comfort. Soleur does not require you to operate Soleur-hosted infrastructure; self-hosted model inference has its own requirements."
       }
     },
     {

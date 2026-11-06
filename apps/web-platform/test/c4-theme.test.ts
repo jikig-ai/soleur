@@ -19,12 +19,12 @@ const LIKEC4_LOGO = join(
   "diagram",
   "dist",
   "components",
-  "Logo.js",
+  "Logo.mjs",
 );
 // The person-silhouette tint is keyed on TWO library DOM hooks the descendant
 // selector depends on: `data-likec4-fill="mix-stroke"` (the silhouette tint,
-// emitted inside the `person` shape case of ElementShape.js) AND
-// `data-likec4-shape` (emitted on the node container by ElementNodeContainer.js).
+// emitted inside the `person` shape case of ElementShape.mjs) AND
+// `data-likec4-shape` (emitted on the node container by ElementNodeContainer.mjs).
 // Guard both installed components so a bump that renames or moves either hook
 // fails CI loudly instead of silently un-toning the silhouette (vendored-CSS
 // Sharp Edge, #4938).
@@ -38,21 +38,21 @@ const LIKEC4_ELEMENT_DIR = join(
   "base-primitives",
   "element",
 );
-const LIKEC4_ELEMENT_SHAPE = join(LIKEC4_ELEMENT_DIR, "ElementShape.js");
+const LIKEC4_ELEMENT_SHAPE = join(LIKEC4_ELEMENT_DIR, "ElementShape.mjs");
 const LIKEC4_ELEMENT_CONTAINER = join(
   LIKEC4_ELEMENT_DIR,
-  "ElementNodeContainer.js",
+  "ElementNodeContainer.mjs",
 );
 // Light-theme readability (§4) depends on the library's own light-scheme branch
 // firing in phase with Soleur's theme. Two installed-library files are the
 // load-bearing hooks the §4 CSS + the c4-shared.tsx seam fix ride on:
-//   - styles.css2.js: gates light-branch edge-label vars on
+//   - styles.css: gates light-branch edge-label vars on
 //     `[data-mantine-color-scheme=light]` and consumes `--xy-edge-label-*`.
-//   - EnsureMantine.js / DefaultMantineProvider.js: the seam — the library only
-//     injects its own `defaultColorScheme:"auto"` provider when NO MantineContext
-//     is in scope, so wrapping <LikeC4Diagram> in our <MantineProvider
-//     forceColorScheme> makes the diagram follow Soleur's resolvedTheme instead
-//     of the OS `prefers-color-scheme`.
+//   - context/EnsureMantine.mjs / LikeC4MantineProvider.mjs: the seam — the
+//     library only injects its own `defaultColorScheme = "auto"` provider when
+//     NO MantineContext is in scope, so wrapping <LikeC4Diagram> in our
+//     <MantineProvider forceColorScheme> makes the diagram follow Soleur's
+//     resolvedTheme instead of the OS `prefers-color-scheme`.
 const LIKEC4_CONTEXT_DIR = join(
   __dirname,
   "..",
@@ -69,12 +69,17 @@ const LIKEC4_STYLES = join(
   "@likec4",
   "diagram",
   "dist",
-  "styles.css2.js",
+  "styles.css",
 );
-const LIKEC4_ENSURE_MANTINE = join(LIKEC4_CONTEXT_DIR, "EnsureMantine.js");
+const LIKEC4_ENSURE_MANTINE = join(LIKEC4_CONTEXT_DIR, "EnsureMantine.mjs");
 const LIKEC4_DEFAULT_PROVIDER = join(
-  LIKEC4_CONTEXT_DIR,
-  "DefaultMantineProvider.js",
+  __dirname,
+  "..",
+  "node_modules",
+  "@likec4",
+  "diagram",
+  "dist",
+  "LikeC4MantineProvider.mjs",
 );
 
 describe("C4 visualizer Soleur re-theme", () => {
@@ -267,11 +272,11 @@ describe("C4 visualizer Soleur re-theme", () => {
     // diagram follows Soleur's resolvedTheme. If a bump removes either fact, the
     // forceColorScheme wrap stops being the seam and this fails loudly.
     expect(readFileSync(LIKEC4_DEFAULT_PROVIDER, "utf8")).toContain(
-      'defaultColorScheme: "auto"',
+      'defaultColorScheme = "auto"',
     );
     const ensure = readFileSync(LIKEC4_ENSURE_MANTINE, "utf8");
     expect(ensure).toContain("MantineContext");
-    expect(ensure).toContain("DefaultMantineProvider");
+    expect(ensure).toContain("LikeC4MantineProvider");
   });
 
   it("wraps <LikeC4Diagram> in a MantineProvider bound to Soleur's resolvedTheme (AC1/AC6)", () => {
@@ -288,7 +293,7 @@ describe("C4 visualizer Soleur re-theme", () => {
 
   it("preserves the library's chrome accent by passing a theme to the provider (AC1)", () => {
     const shared = read("c4-shared.tsx");
-    // Supplying our own provider displaces @likec4/diagram's DefaultMantineProvider
+    // Supplying our own provider displaces @likec4/diagram's LikeC4MantineProvider
     // and its theme; the diagram body is static-CSS-var driven, but the chrome
     // (controls / element-details / segmented control) reads Mantine's primary
     // accent. Preserve the zero-drift scalars so it keeps indigo, not default blue.

@@ -1,0 +1,25 @@
+# PR5d sweep dispositions (Ref #10861). glob-rate verdicts 2026-11-04 base=fadd34b5c061: all 3 suites `baselined`
+# (plugins/soleur duration-missing; argv-bearer-sweep rate-over-and-duration-over-30s; boundary-prefix duration-floor).
+# Columns: suite<TAB>path<TAB>disposition<TAB>reveal_rows<TAB>anchor_commits_90d<TAB>evidence
+plugins/soleur	.claude/hooks/grep-q-pipe-guard.test.sh	accept-mention	-	1	JSDoc citation only at ship-learning-probe.test.ts:215; suite never opens it (grep-verified); exact-file trial revealed 142 pairs on a 71/90d anchor AND glob AC2 real-read unmet -> JSDoc/comment accept
+plugins/soleur	apps/web-platform/infra/arm-heartbeats.sh	edge	0	-	verdict-input: expect(armBody).toContain pin on real workflow arm text, terraform-target-parity.test.ts:8353
+plugins/soleur	apps/web-platform/infra/cron-egress-nftables.sh	edge	0	-	verdict-input: expected trigger-set member, ship-deploy-pipeline-fix-gate.test.ts:586
+plugins/soleur	apps/web-platform/infra/cron-egress-postapply-assert.sh	edge	0	-	verdict-input: expected trigger-set member, ship-deploy-pipeline-fix-gate.test.ts:581
+plugins/soleur	apps/web-platform/infra/cron-egress-resolve.sh	glob-narrow	2	11	same wiring-pin class (ship-deploy-pipeline-fix-gate.test.ts:580); exact-file refused: reveal cron-egress-allowlist.txt x2 anchored on cron-egress-resolve.sh itself at 11/90d -> glob:apps/web-platform/infra/*cron-egress-resolve.sh
+plugins/soleur	apps/web-platform/infra/git-data-flag-precheck.sh	edge	0	-	verdict-input: FLAG_WRITERS_ALLOWED member checked against real workflow text, terraform-target-parity.test.ts:9302
+plugins/soleur	apps/web-platform/scripts/plugin-root-sandbox-propagation-probe.mjs	accept-mention	-	7	fixture literals: SDK_CARVEOUT_PATHS + stale-map label (model-launch-review.test.ts:706,837) written to mkdtemp roots; real file never opened
+plugins/soleur	apps/web-platform/scripts/sandbox-canary.mjs	accept-mention	-	7	6 fixture literals (rootWith/writeFileSync into mkdtemp roots + carveout + stale labels) model-launch-review.test.ts:705,807,832,834,841,853
+plugins/soleur	apps/web-platform/server/inngest/leader-prompts/constants.ts	accept-mention	-	7	fixture literals: rootWith write + readFileSync of the FIXTURE copy (model-launch-review.test.ts:725,733); real file never opened
+plugins/soleur	scripts/betterstack-query.sh	accept-mention	-	111/3	parseCommand fixture literals preflight-discoverability-test.test.ts:1231,1236,1757 + KR_BS_QUERY exec-seam default inngest-key-rotate.sh:135 (suite runs the gate-table arm only, never opens it)
+plugins/soleur	scripts/check-web-host-escrow-config.sh	accept-mention	-	4	M4 classifier mutant inputs web-host-escrow-preflight-census.test.ts:401,403
+plugins/soleur	scripts/ensure-kb-index.sh	edge	0	-	verdict-input: devinBaseline Invocation checked against REAL hook command extraction, repo-hook-launchers.test.ts:31
+plugins/soleur	scripts/lint-agents-rule-budget.py	accept-mention	-	111	rejectReason/ALLOWLISTED classifier inputs preflight-discoverability-test.test.ts:1619,1727
+plugins/soleur	scripts/lint-workflows.sh	accept-mention	-	111	rejectReason classifier inputs preflight-discoverability-test.test.ts:1615,1726,1734
+plugins/soleur	scripts/prod-version-drift-b9-probe.sh	accept-mention	-	111	parseCommand fixture literals preflight-discoverability-test.test.ts:219,220
+plugins/soleur	scripts/web-host-escrow-preflight.sh	edge	0	-	verdict-input: PREFLIGHT_RUN compared to REAL workflow step text, web-host-escrow-preflight-census.test.ts:50,203
+tests/scripts/argv-bearer-sweep	scripts/betterstack-ingest-probe.sh	edge	0	-	real read: HMAC/Rule-E census content-greps git ls-files scripts/*.sh (test-argv-bearer-sweep.sh:3288,4264)
+tests/scripts/argv-bearer-sweep	scripts/ensure-doppler.sh	edge	0	-	real read: census content-grep of scripts/*.sh; docstring refs betterstack-query.sh:109,110 inngest-host-state.sh:129 are the naming lines
+tests/scripts/argv-bearer-sweep	scripts/kb-drift-walker.sh	edge	2	0	real read (census grep) + S3 negative-assert literal :3821; reveals AGENTS.md+AGENTS.rules.md at kb-drift-walker.sh:30,31 -> accepts same commit
+tests/scripts/argv-bearer-sweep	scripts/supabase-advisor-scan.sh	edge	0	-	real read: census content-grep of scripts/*.sh
+tests/scripts/argv-bearer-sweep	scripts/supabase-logs-query.sh	edge	0	-	real read: census content-grep of scripts/*.sh
+tests/scripts/git-data-birth-readiness-gate	.claude/hooks/grep-q-pipe-guard.test.sh	glob-narrow	142	71	real read sed-extracts PATTERN test-git-data-birth-readiness-gate.sh:2970; exact-file refused doubly -> glob:.claude/hooks/*grep-q-pipe-guard.test.sh (dir class)

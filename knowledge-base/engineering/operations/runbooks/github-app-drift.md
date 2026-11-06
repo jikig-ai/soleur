@@ -15,8 +15,8 @@ brand_survival_threshold: single-user incident
 **Before debugging the drift-guard code path, check Better Stack
 `inngest-heartbeat` last_alive_at** — if >2 min ago, this issue is likely
 a substrate-down false-positive (cross-check sibling
-`scheduled-daily-triage` / `scheduled-follow-through` /
-`scheduled-oauth-probe` monitors). When the Inngest substrate is healthy
+`scheduled-daily-triage` / `scheduled-follow-through` monitors — both
+destroyed by the #6590 PR-B prune — leaving `scheduled-oauth-probe`). When the Inngest substrate is healthy
 but this monitor pages alone, the cause is in the handler logic below.
 
 Triage and rotation procedures for the hourly drift-guard at
@@ -57,7 +57,7 @@ Both are needed; they are distinct values.
 
 ```bash
 # When authenticated as a user with org-admin scope:
-gh api /orgs/jikig-ai/installations \
+gh api --paginate /orgs/jikig-ai/installations \
   --jq '.installations[] | {id: .app_id, slug: .app_slug, app_db_id: .app_id}'
 
 # Or, when already authenticated AS the App (chicken-and-egg avoided

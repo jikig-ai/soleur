@@ -263,9 +263,7 @@ export const eventCfTokenExpiryCheck = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: { event: "cf-token-expiry-check.manual-trigger" },
   },
-  { event: "cf-token-expiry-check.manual-trigger" },
-  eventCfTokenExpiryCheckHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  eventCfTokenExpiryCheckHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

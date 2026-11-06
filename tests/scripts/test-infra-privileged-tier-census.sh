@@ -21,7 +21,7 @@
 #            `--preserve-env` makes a planted value inert BY CONSTRUCTION rather than by trusting
 #            that nobody plants one.
 #   Guard 4  THE HIGHEST-SEVERITY GUARD IN THIS FILE. Every `removed { from = … }` block in
-#            `apps/web-platform/infra/*.tf` and `apps/web-platform/infra/git-data-root-key/*.tf`
+#            `apps/web-platform/infra/*.tf`, `.../git-data-root-key/*.tf` and `.../lb-staging/*.tf`
 #            carries `lifecycle { destroy = false }` and is reached by the apply that owns its
 #            root. `doppler_secret.github_app_id` and `doppler_secret.github_app_private_key` pin
 #            `config = "prd"` — they are the soleur-ai App's LIVE RUNTIME IDENTITY, the key the web
@@ -202,7 +202,7 @@ TIER_B_NAMES = ["DOPPLER_TOKEN_TF", "HCLOUD_TOKEN", "CF_API_TOKEN_R2",
 TIER_B_ENVIRONMENTS = {"infra-privileged", "web-platform-infra-apply", "inngest-cutover", "workspaces-luks-cutover"}
 PRIV_STATE_BUCKET = "soleur-terraform-state"
 LOADER_REL = os.path.join("actions", "infra-credentials", "action.yml")
-GUARD4_ROOTS = ["apps/web-platform/infra", "apps/web-platform/infra/git-data-root-key"]
+GUARD4_ROOTS = ["apps/web-platform/infra", "apps/web-platform/infra/git-data-root-key", "apps/web-platform/infra/lb-staging"]
 
 out = []
 def check(name, cond, detail=""):
@@ -385,11 +385,40 @@ def env_arms(raw):
             return [""]
     s = str(raw)
     if "${{" in s:
+        # (#9755) `==`/`!=` comparison operands are predicate literals, never environment names
+        # the value can resolve to: `inputs.op == 'backup'` names an OP, `github.ref ==
+        # 'refs/heads/main'` names a REF. The cutover job's environment ternary carries one such
+        # comparison per gated op; reading them as arms would red G1c/G1j on 'arm', 'backup', ...
+        # which are not environments. Strip each comparison's quoted operand on either side
+        # before collecting RESULT literals — a result literal (the `&&`/`||` side) is still an
+        # arm, which is what g1-2 pins.
+        s = re.sub(r"'[^']*'\s*(?:==|!=)", "", s)
+        s = re.sub(r'"[^"]*"\s*(?:==|!=)', "", s)
+        s = re.sub(r"(?:==|!=)\s*'[^']*'", "", s)
+        s = re.sub(r'(?:==|!=)\s*"[^"]*"', "", s)
+        # The `|| ''` / `|| ""` false arm needs no extra collection: the findall below already
+        # captures the empty quoted literal (the earlier `\|\|\s*''` append only duplicated it).
+        # Residual blind spots, named with the direction EACH fails — an earlier version of
+        # this comment claimed all of them fail LOUD, and it was wrong in both directions:
+        #   * a FUNCTION predicate keeps its argument literal as a collected arm — and when
+        #     that literal is IN the set it fails GREEN: `contains(x, 'inngest-cutover')` reads
+        #     as an in-set arm while binding nothing as an environment name (only an
+        #     out-of-set function literal still reds G1c — the in-set case blinds);
+        #   * `cond && 'env'` with NO `||` arm yields a single in-set literal and fails GREEN
+        #     the same way, even though a falsy `cond` resolves to NO environment on that
+        #     dispatch — an unbound dispatch the `''`-arm clauses below cannot see either;
+        #   * `'a' == 'b'` strips 'a' but leaves 'b' collectible — that one DOES surface as a
+        #     NON-TIER-B arm, never a missed gate.
         arms = re.findall(r"'([^']*)'", s) + re.findall(r'"([^"]*)"', s)
-        # an expression with a `||` fallback and no literal on that side falls through to empty
-        if re.search(r"\|\|\s*''", s) or re.search(r'\|\|\s*""', s):
-            arms.append("")
-        return arms if arms else [""]
+        # An expression yielding NO quoted literal is UNPARSEABLE, not an empty arm: the `[""]`
+        # fallback used to land here, and G1c's `''` exemption would read a fully-dynamic or
+        # literal-free `environment:` GREEN where the pre-#9755 code went red. The sentinel is
+        # outside TIER_B_ENVIRONMENTS, so it stays red wherever arms are membership-checked —
+        # G1c owns the red, and G1h/G1j/G6a refuse it through their own `all(a in
+        # TIER_B_ENVIRONMENTS)` gates (G1d deliberately EXCLUDES it from the declared set —
+        # demanding a deployment policy for a sentinel would only duplicate the red);
+        # arms_maybe_tier_b maps it onto `''`, the refusing direction for ITS ban.
+        return arms if arms else ["__UNPARSEABLE__"]
     return [s]
 
 class Job(object):
@@ -580,11 +609,30 @@ check("G1b: every Tier-B job declares an `environment:` key (AC2b; a Tier-B job 
       "environment secret and fails closed the moment the legacy fallback goes) [%d Tier-B jobs]" % len(tierb),
       not no_env, no_env[:8])
 
-bad_arm = sorted({"%s -> %r" % (j.id, a) for j in tierb if j.arms for a in j.arms if a not in TIER_B_ENVIRONMENTS})
-check("G1c: every arm of every Tier-B job's `environment:` is in tier_b_environments (scalar and "
-      "mapping forms both accepted; an empty `||` arm is an arm)", not bad_arm, bad_arm[:8])
+# (#9755) An EMPTY arm (`|| ''` / `|| ""`) is a resolvable outcome but not an environment NAME:
+# it binds no environment, so no ENV-scoped secret resolves on it — a Tier-B job that lands on
+# it gets empty environment inputs. REPO-scoped secrets still resolve on that dispatch, so `''`
+# is safe ONLY because every path that could still deliver privileged credentials on the
+# unbound dispatch is separately banned: a prd_terraform read of a tier_b_names entry (G1g), a
+# state write against the privileged bucket (G1h), a loader call carrying a
+# `doppler-token-legacy` fallback (the first G1j `''`-arm clause), and an unconditional
+# step-level or job-level reference to the repo-scoped privileged names DOPPLER_TOKEN_WRITE /
+# DOPPLER_TOKEN_GIT_DATA_ROOT / DOPPLER_TOKEN_INNGEST_ARM (the sibling clauses). The bad arms
+# this row collects are the NON-EMPTY
+# result literals outside the set — comparison operands have already been stripped by
+# env_arms. G1h and G6a keep `all(a in TIER_B_ENVIRONMENTS)` with NO `''` exemption —
+# intentional divergence: a state writer or a read-token job stays red on an unbound `''`
+# dispatch, where a loader job's `''` is instead policed by the G1j clauses.
+bad_arm = sorted({"%s -> %r" % (j.id, a) for j in tierb if j.arms for a in j.arms if a and a not in TIER_B_ENVIRONMENTS})
+check("G1c: every non-empty arm of every Tier-B job's `environment:` is in tier_b_environments "
+      "(scalar, mapping and ${{ }} forms; ${{ }} ==/!= predicate operands are not environment "
+      "names; an empty `||` arm resolves to no environment — env-scoped secrets are unreachable "
+      "on it, and the repo-scoped paths that still resolve are banned by G1g/G1h and the "
+      "G1j `''`-arm clauses)", not bad_arm, bad_arm[:8])
 
-declared = {a for j in tierb if j.arms for a in j.arms if a}
+# __UNPARSEABLE__ is a sentinel, not a declared environment — G1c owns it; demanding a
+# deployment policy for it here would only duplicate the red under a second row.
+declared = {a for j in tierb if j.arms for a in j.arms if a and a != "__UNPARSEABLE__"}
 want_policy = sorted(TIER_B_ENVIRONMENTS | declared)
 no_policy = [e for e in want_policy if e not in main_policy_envs]
 check("G1d: every tier_b_environment, and every environment a Tier-B job declares, has a Terraform "
@@ -656,13 +704,55 @@ check("G1g: no workflow step reads a tier_b_names entry from `prd_terraform` (`-
 # workflow cannot shrink the population quietly, and a tree with ZERO loader jobs is a RED, not a
 # vacuous green.
 G1J_USES = re.compile(r"^[ \t]*-?[ \t]*uses:[ \t]*\./\.github/actions/infra-credentials/?[ \t]*(?:#.*)?$", re.M)
+# (#9755 review, fix round 2) REPO-scoped privileged names resolve on EVERY dispatch —
+# including the unbound `|| ''` one that binds no environment, where ENV-scoped secrets are
+# unreachable but these three are not. The name set: DOPPLER_TOKEN_WRITE and
+# DOPPLER_TOKEN_GIT_DATA_ROOT, plus DOPPLER_TOKEN_INNGEST_ARM — a third repo-scoped read/write
+# Doppler token (github_actions_secret, inngest-arm-write-token.tf) — and DOPPLER_TOKEN_INNGEST_FLIP_READ,
+# the repo-scoped READ-ONLY flip-flag token (#9927): read-only, but repo-scoped, so an unbound `|| ''` consumer still resolves it. Case-insensitive: the
+# secrets context resolves `secrets.doppler_token_write` as happily as the canonical spelling.
+REPO_SCOPED_PRIV = re.compile(
+    r"(?<![A-Za-z0-9_])(?:DOPPLER_TOKEN_WRITE|DOPPLER_TOKEN_GIT_DATA_ROOT|DOPPLER_TOKEN_INNGEST_ARM|DOPPLER_TOKEN_INNGEST_FLIP_READ)(?![A-Za-z0-9_])",
+    re.I)
 g1j_jobs, g1j_bad = [], []
 for j in jobs:
-    if any(isinstance(st.get("uses"), str) and re.match(r"^\./\.github/actions/infra-credentials/?$", st["uses"].strip())
-           for st in j.steps):
+    lsteps = [st for st in j.steps
+              if isinstance(st.get("uses"), str) and re.match(r"^\./\.github/actions/infra-credentials/?$", st["uses"].strip())]
+    if lsteps:
         g1j_jobs.append(j.id)
-        if not (j.has_env_key and j.arms and all(a in TIER_B_ENVIRONMENTS for a in j.arms)):
+        if not (j.has_env_key and j.arms and all(a == "" or a in TIER_B_ENVIRONMENTS for a in j.arms)):
             g1j_bad.append("%s -> %r" % (j.id, j.arms))
+        # (#9755) The empty `||` arm is safe ONLY while the loader call carries no Tier-A
+        # fallback: on an unbound dispatch the Tier-B input resolves empty and the loader fails
+        # closed — unless a `doppler-token-legacy` is passed, in which case the legacy arm
+        # supplies credentials UNGATED on that dispatch.
+        elif "" in j.arms and any(str((st.get("with") or {}).get("doppler-token-legacy") or "") != ""
+                                  for st in lsteps):
+            g1j_bad.append("%s -> empty `||` arm while a doppler-token-legacy fallback is passed" % j.id)
+    # (#9755 review, fix round 2) The sibling `''`-arm clause, for EVERY `''`-armed job (loader
+    # or not — the exposure is the unbound dispatch, not the loader call): an UNCONDITIONAL
+    # reference to a repo-scoped privileged name re-arms the ungated run, wherever it sits.
+    #   STEP level — the WHOLE step dump, not only env:/with:: a `run:`-inline
+    #     `${{ secrets.* }}` interpolates the same secret at step start, and a step `name:`
+    #     carrying the token name is flagged with it (fail-loud either way). A step `if:`
+    #     scopes its own reference to a condition this census cannot evaluate, so only the
+    #     unconditional form is banned — the named blind spot stands (an `if:` that does not
+    #     actually confine to a gated arm reads green).
+    #   JOB level — the job's merged env: (j.env, the G6a jdump approach — a workflow-level
+    #     env: reaches the job the same way) and a caller job's with:/secrets: blocks, where
+    #     `secrets: inherit` hands EVERY repo secret — the privileged names included — to the
+    #     reusable workflow. Job-level blocks carry NO `if:` exemption: a job `if:` can confine
+    #     dispatches, but the live cutover job's own `if: github.event_name ==
+    #     'workflow_dispatch'` shows it usually gates the EVENT, not the arm — the fail-loud
+    #     direction wins, and the confined path that stays green is delivery through
+    #     `if:`-gated steps.
+    if j.arms and "" in j.arms:
+        if any(not st.get("if") and REPO_SCOPED_PRIV.search(jdump(st)) for st in j.steps):
+            g1j_bad.append("%s -> empty `||` arm while an unconditional step names a repo-scoped privileged secret" % j.id)
+        if (REPO_SCOPED_PRIV.search(jdump({"env": j.env, "with": j.body.get("with"),
+                                          "secrets": j.body.get("secrets")}))
+                or str(j.body.get("secrets") or "").strip() == "inherit"):
+            g1j_bad.append("%s -> empty `||` arm while job-level env:/with:/secrets: names a repo-scoped privileged secret (or inherits them all)" % j.id)
 g1j_raw = sum(len(G1J_USES.findall(text)) for rel, (doc, text) in docs.items()
               if rel.startswith("workflows" + os.sep))
 g1j_steps = sum(1 for j in jobs for st in j.steps
@@ -1148,22 +1238,6 @@ INTENDED_DESTROYS = {
         "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
     },
 }
-# DISPATCH-GATED DESTROYS (#8211 Option B, ADR-239 Amendment 2026-10-26). A resource block deleted ON PURPOSE whose
-# destroy is performed NOT by a per-merge apply but by ONE named, dispatch-only, reviewer-environment workflow that
-# plans the address on a `terraform plan -out=` step (with `-target`) and applies the SAVED plan. `INTENDED_DESTROYS`
-# cannot express that: its allowance reads only bare `-target=` operands on `terraform apply` steps (`root_targets`),
-# and Terraform rejects `-target` together with a saved plan, so a graded-then-applied destroy can never be seen
-# there. Widening `root_targets` was ruled out (CTO 2026-10-26): it would loosen G4b for every saved-plan job.
-# An entry is honoured only while `dispatch_gated_ok` holds for the named workflow file (so deleting that file
-# expires the allowance mechanically), never for G4_PROTECTED addresses (G4f), and never when the address is also
-# bare-targeted by an apply step. Each entry: (evidence, workflow path under .github/, gate function the apply step must
-# call before `terraform apply`). The two entries leave in the post-destroy record PR, together with the workflow.
-DISPATCH_GATED_DESTROYS = {
-    "apps/web-platform/infra": {
-        "hcloud_volume.git_data": ("#8211 Option B / ADR-239 Amendment 2026-10-26", "workflows/git-data-plaintext-volume-destroy.yml", "git_data_plaintext_destroy_gate"),
-        "hcloud_volume_attachment.git_data": ("#8211 Option B / ADR-239 Amendment 2026-10-26", "workflows/git-data-plaintext-volume-destroy.yml", "git_data_plaintext_destroy_gate"),
-    },
-}
 # RETIRED, STATE-ABSENT. A resource block deleted because its resource was already gone: a count-gated throwaway
 # whose own teardown destroyed it, so state holds no entry and there is nothing for a `-target` to destroy or a
 # `removed` block to forget. Honoured only when NO job still targets the address (a leftover target would be a
@@ -1180,7 +1254,7 @@ RETIRED_STATE_ABSENT = {
 # Never destroyable and never "retired": the App identity (forget-only) and the SOLE-COPY live stores (the Inngest LUKS
 # volume, its attachment, passphrase and key secret, web-1's workspaces LUKS volume and its attachment, and the two
 # Inngest Doppler parents doppler_project.inngest and doppler_environment.inngest_prd, #9879). A later PR that lists one of these
-# in INTENDED_DESTROYS, RETIRED_STATE_ABSENT or DISPATCH_GATED_DESTROYS trips G4f instead of silently masking its destroy (#8285 PR B review).
+# in INTENDED_DESTROYS or RETIRED_STATE_ABSENT trips G4f instead of silently masking its destroy (#8285 PR B review).
 G4_PROTECTED = {
     "doppler_secret.github_app_id", "doppler_secret.github_app_private_key",
     "hcloud_volume.inngest_redis_luks", "hcloud_volume_attachment.inngest_redis_luks",
@@ -1195,70 +1269,6 @@ G4_PROTECTED = {
 # github-app.tf). G4H_SOLE_COPY is DERIVED from the single list above, never a second hand-written list.
 G4_APP_IDENTITY = frozenset({"doppler_secret.github_app_id", "doppler_secret.github_app_private_key"})
 G4H_SOLE_COPY = frozenset(G4_PROTECTED) - G4_APP_IDENTITY
-def step_code(st):
-    """A step's run body as COMMANDS: continuation lines joined; blank, comment, echo and printf lines dropped, so a
-    mention of `terraform apply` in prose or an echo is not a command."""
-    out = []
-    for ln in CONT.sub(" ", str(st.get("run") or "")).split("\n"):
-        s = ln.strip()
-        if not s or s.startswith("#") or re.match(r"(?:echo|printf)\b", s):
-            continue
-        out.append(s)
-    return "\n".join(out)
-def step_obeys(st):
-    """True iff nothing about the step lets a refusal upstream be ignored: no continue-on-error and no status
-    function (always/failure/cancelled) in its `if:`."""
-    if st.get("continue-on-error") not in (None, False):
-        return False
-    return not re.search(r"\b(?:always|failure|cancelled)\s*\(", str(st.get("if") or ""))
-def dispatch_gated_ok(r, a):
-    """True only while the named workflow still has every property that makes its saved-plan destroy safe to
-    allow: dispatch-ONLY trigger; a job with a tier-B `environment:` and no job-level continue-on-error; a
-    `terraform plan -out=F` COMMAND (not a comment or echo) whose `-target` set is EXACTLY the addresses this
-    workflow is allowed to destroy; and a LATER step that, as a command, calls the entry's gate function and
-    only then applies the positional plan file F (no `-target`/`-replace`), with neither step able to ignore a
-    refusal. The address must not also be bare-targeted by an apply step, and must not be protected."""
-    ent = DISPATCH_GATED_DESTROYS.get(r, {}).get(a)
-    if not ent or a in G4_PROTECTED or a in root_targets.get(r, set()):
-        return False
-    want = {x for x, e in DISPATCH_GATED_DESTROYS.get(r, {}).items() if e[1] == ent[1]}
-    q = re.compile(r"-target=([\"']?)" + re.escape(a) + r"\1(?=[\s\\]|$)")
-    tq = re.compile(r"-target=([\"']?)([^\s\\\"']+)\1(?=[\s\\]|$)")
-    for j in jobs:
-        if j.rel != ent[1]:
-            continue
-        doc = docs[j.rel][0]
-        on = doc.get("on") if doc.get("on") is not None else doc.get(True)
-        if not (isinstance(on, dict) and list(on.keys()) == ["workflow_dispatch"]):
-            continue
-        if not (j.has_env_key and j.arms and all(x in TIER_B_ENVIRONMENTS for x in j.arms)):
-            continue
-        if j.body.get("continue-on-error") not in (None, False):
-            continue
-        plan_i = None
-        plan_out = None
-        for i, st in enumerate(j.steps):
-            body = step_code(st)
-            mo = re.search(r"\s-out=(\S+)", body)
-            strict = [m.group(2) for m in tq.finditer(body)]
-            loose = re.findall(r"(?<![\w])-{1,2}target\b", body)
-            if (re.search(r"(?<![-\w])terraform\s+plan(?![-\w])", body) and mo and q.search(body)
-                    and set(strict) == want and len(strict) == len(loose) and step_obeys(st)):
-                plan_i, plan_out = i, mo.group(1)
-                break
-        if plan_i is None:
-            continue
-        for st in j.steps[plan_i + 1:]:
-            body = step_code(st)
-            m = re.search(r"(?<![-\w])terraform\s+apply((?:\s+-\S+)*)\s+([A-Za-z0-9_./][A-Za-z0-9_./-]*)(?=\s*(?:;|&&|\|\||$))", body)
-            if not (m and m.group(2) == plan_out and not re.search(r"-(?:target|replace)\b", m.group(1)) and step_obeys(st)):
-                continue
-            gm = re.search(r"(?m)^if\s+!\s+" + re.escape(ent[2]) + r"\s+" + re.escape(plan_out) + r"\.json\s", body)
-            if (gm and gm.start() < m.start()
-                    and not re.search(re.escape(ent[2]) + r"\s*\(\)", body)
-                    and not re.search(r"\|\|\s*(?:true|:)\b", body)):
-                return True
-    return False
 orphans = []
 for r in GUARD4_ROOTS:
     for a in sorted(base_declared.get(r, set())):
@@ -1269,16 +1279,14 @@ for r in GUARD4_ROOTS:
             if (a in RETIRED_STATE_ABSENT.get(r, {}) and a not in G4_PROTECTED
                     and a not in any_targeted):
                 continue
-            if a in DISPATCH_GATED_DESTROYS.get(r, {}) and dispatch_gated_ok(r, a):
-                continue
             orphans.append("%s %s" % (r, a))
 check("G4c: every `resource` block the base ref declares and HEAD no longer declares is claimed by a "
       "`removed` block — a deleted resource block with none leaves the resource managed with no HCL, "
       "and the next apply plans a plain DESTROY [base .tf files: %d]" % n_base,
       bool(BASE_ROOT) and n_base >= 1 and g4c_probe_ok and not orphans,
       ("base unavailable" if not BASE_ROOT else "declared-reader probe failed (a commented-out resource read as declared, or a real one did not)" if not g4c_probe_ok else "orphans=%s" % orphans[:8]))
-bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) + list(DISPATCH_GATED_DESTROYS.items()) for a in d if a in G4_PROTECTED})
-check("G4f: no INTENDED_DESTROYS, RETIRED_STATE_ABSENT or DISPATCH_GATED_DESTROYS entry names a protected address (the App identity, which "
+bad_intended = sorted({a for _r, d in list(INTENDED_DESTROYS.items()) + list(RETIRED_STATE_ABSENT.items()) for a in d if a in G4_PROTECTED})
+check("G4f: no INTENDED_DESTROYS or RETIRED_STATE_ABSENT entry names a protected address (the App identity, which "
       "may only ever be FORGOTTEN, or a sole-copy live store: %s)" % ", ".join(sorted(G4_PROTECTED)), not bad_intended, bad_intended)
 # G4g: a RETIRED_STATE_ABSENT entry is a claim that the address is GONE. If HEAD declares it again the claim is
 # false and a later deletion of that new block would ride the allowance with no `removed` block (re-declare, apply,
@@ -1421,13 +1429,14 @@ else:
 def arms_maybe_tier_b(raw):
     """True when an `environment:` value can resolve to a Tier-B environment. Names compare
     case-insensitively (GitHub environment names do), and an arm env_arms cannot resolve to
-    a literal ("" -- an expression with no literal, a mapping with no name) counts as maybe
-    Tier B: this is a ban, so the unknown direction is the refusing one."""
+    a literal ("" -- a mapping with no name -- or the __UNPARSEABLE__ sentinel an expression
+    with no quoted literal now yields, #9755 review) counts as maybe Tier B: this is a ban,
+    so the unknown direction is the refusing one."""
     arms = env_arms(raw)
     if arms is None:
         return False
     tier_b = {e.lower() for e in TIER_B_ENVIRONMENTS}
-    return any(a == "" or a.lower() in tier_b for a in arms)
+    return any(a in ("", "__UNPARSEABLE__") or a.lower() in tier_b for a in arms)
 
 # A composite runs in each CALLER's job, so its Tier-B status is its callers'. Resolve
 # `uses: ./.github/actions/<dir>` to the composite's file.
@@ -2278,9 +2287,9 @@ materialize_base_dir() {
   local _rd="$1" _ref="$2" _dest="$3" _rc=0 _lst _f _r="" _n _why=""
   assert_fixture_dir "$_rd"
   assert_fixture_dir "$_dest"
-  mkdir -p "$_dest/apps/web-platform/infra/git-data-root-key" || { _rc=1; _why="mkdir"; }
+  mkdir -p "$_dest/apps/web-platform/infra/git-data-root-key" "$_dest/apps/web-platform/infra/lb-staging" || { _rc=1; _why="mkdir"; }
   if [ "$_rc" -eq 0 ]; then
-    for _r in apps/web-platform/infra apps/web-platform/infra/git-data-root-key; do
+    for _r in apps/web-platform/infra apps/web-platform/infra/git-data-root-key apps/web-platform/infra/lb-staging; do
       _lst="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE \
         git -C "$_rd" ls-tree -r --name-only "$_ref" -- "$_r" 2>/dev/null)" || { _why="ls-tree"; _rc=1; break; }
       [ -n "$_lst" ] || { _why="empty-listing"; _rc=1; break; }
@@ -2420,6 +2429,35 @@ jobs:
         run: |
           set -euo pipefail
           doppler run --preserve-env -p soleur -c prd_terraform -- echo sync
+EOF
+
+# (#9755) The `${{ }}` environment form the live cutover job carries: a disjunction of
+# `inputs.op == '<name>'` PREDICATE literals guarding the gated ops, an `&&` result literal that
+# is a Tier-B environment, and a `|| ''` false arm resolving to NO environment for the ungated
+# ops. env_arms must read the predicate literals as comparisons (never environment names) and
+# the empty arm as "no environment" — on it no env-scoped secret resolves, the loader call is
+# if:-gated and, with no doppler-token-legacy, would fail closed even ungated. The whole shape
+# must stay GREEN: reading 'a'/'b' as environment names would red G1c/G1j, and it is the
+# control-side proof that the comparison-operand strip is in place.
+cat > "$FIX/tree/.github/workflows/tierb-conditional.yml" <<'EOF'
+name: fixture tier-b conditional env
+on:
+  workflow_dispatch:
+    inputs:
+      op:
+        type: choice
+        options: [a, b, c]
+jobs:
+  run:
+    runs-on: ubuntu-24.04
+    environment: ${{ (inputs.op == 'a' || inputs.op == 'b') && 'infra-privileged' || '' }}
+    steps:
+      - name: Load Tier-B credentials (fixture)
+        if: inputs.op == 'a'
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ (inputs.op == 'a') && secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED || '' }}
+      - run: echo done
 EOF
 
 cat > "$FIX/tree/.github/workflows/apply-git-data-root-key.yml" <<'EOF'
@@ -3121,11 +3159,101 @@ if fixture_written g1-1-lowercase-no-environment "$MUTDIR/tree/.github/workflows
   mutant_red g1-1-lowercase-no-environment wf_row "$T/mut/g1-1.tsv" "G1b:"
 fi
 # Row 2 — REORDER: a compliant first job, then a SECOND job in the same workflow whose
-# `environment:` expression carries an EMPTY arm. The scan must not stop at the compliant one.
+# `environment:` expression resolves a NON-TIER-B result literal. The predicate operand
+# (`github.ref == 'refs/heads/main'`) is not an environment name — env_arms strips it — but
+# `not-a-tier-b-env` is a RESULT literal the expression can resolve to, and it is outside the
+# set. The scan must not stop at the compliant job, and the operand strip must not degenerate
+# into ignoring every quoted literal. (#9755: the empty `||` arm alone is no longer this row's
+# bad arm — it resolves to no environment, where env-scoped secrets are unreachable and the
+# remaining ungated paths are policed by G1g, G1h and the G1j clauses pinned by rows g1-2b and
+# g1-2c below — so the literal this row pins is the non-Tier-B RESULT.)
 MUTDIR="$(fixcopy g1-2)"; assert_fixture_dir "$MUTDIR"
-if mutate g1-2-second-job-empty-arm "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 7 '$a\  second:\n    runs-on: ubuntu-24.04\n    environment: ${{ github.ref == '"'"'refs/heads/main'"'"' \&\& '"'"'infra-privileged'"'"' || '"''"' }}\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'; then
+if mutate g1-2-second-job-non-tierb-arm "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 7 '$a\  second:\n    runs-on: ubuntu-24.04\n    environment: ${{ github.ref == '"'"'refs/heads/main'"'"' \&\& '"'"'not-a-tier-b-env'"'"' || '"''"' }}\n    steps:\n      - run: echo x\n        env:\n          T: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}'; then
   fixcensus "$MUTDIR" "$T/mut/g1-2.tsv" ""
-  mutant_red g1-2-second-job-empty-arm wf_row "$T/mut/g1-2.tsv" "G1c:"
+  mutant_red g1-2-second-job-non-tierb-arm wf_row "$T/mut/g1-2.tsv" "G1c:"
+fi
+# Row 2b — the empty `||` arm PLUS a legacy fallback is the ungated-Tier-A combination: on a
+# dispatch that resolves to no environment the loader's Tier-B input is empty and it would take
+# the legacy arm. Omitting `doppler-token-legacy` (the tierb-conditional fixture's shape, and the
+# live cutover job's #9755 shape) is what makes the empty arm fail-closed.
+MUTDIR="$(fixcopy g1-2b)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2b-empty-arm-legacy-fallback "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 1 '/doppler-token-infra-privileged:/a\          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2b.tsv" ""
+  mutant_red g1-2b-empty-arm-legacy-fallback wf_row "$T/mut/g1-2b.tsv" "G1j:"
+fi
+# Row 2c (#9755 review) — the empty `||` arm PLUS an UNCONDITIONAL step env: naming a
+# REPO-scoped privileged secret. GitHub resolves `secrets.DOPPLER_TOKEN_WRITE` on every
+# dispatch — the unbound `''` one included — so this job is credentialed with no gate; the
+# second `''`-arm G1j clause is the row that must red it.
+MUTDIR="$(fixcopy g1-2c)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2c-empty-arm-repo-scoped-secret "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 4 '/- run: echo done/a\      - name: Privileged noop\n        env:\n          X: ${{ secrets.DOPPLER_TOKEN_WRITE }}\n        run: echo x'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2c.tsv" ""
+  mutant_red g1-2c-empty-arm-repo-scoped-secret wf_row "$T/mut/g1-2c.tsv" "G1j:"
+fi
+# Row 2d (#9755 review round 2, NEW-F1) — a literal-FREE `environment:` expression
+# (`${{ inputs.target }}`, no quoted literal anywhere) must stay RED. env_arms yields the
+# __UNPARSEABLE__ sentinel, which G1c reads as a non-empty arm outside the set; a `[""]`
+# fallback revert would read the same job as the exempt empty arm and this row would go
+# green. The same job also reds G1j (it is a loader job whose arms fail the `all(...)`
+# gate) — asserted on G1c because one mutant pins one named row.
+MUTDIR="$(fixcopy g1-2d)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2d-unparseable-environment "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 2 's|^    environment: .*$|    environment: ${{ inputs.target }}|'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2d.tsv" ""
+  mutant_red g1-2d-unparseable-environment wf_row "$T/mut/g1-2d.tsv" "G1c:"
+fi
+# Row 2e (#9755 review round 2) — the `''`-arm ban scans the WHOLE step dump, so a
+# `run:`-inline `${{ secrets.* }}` interpolation reds exactly like an env: reference: the
+# secret resolves at step start on every dispatch, the unbound one included.
+MUTDIR="$(fixcopy g1-2e)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2e-empty-arm-run-interpolation "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 1 '/- run: echo done/a\      - run: echo "${{ secrets.DOPPLER_TOKEN_WRITE }}"'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2e.tsv" ""
+  mutant_red g1-2e-empty-arm-run-interpolation wf_row "$T/mut/g1-2e.tsv" "G1j:"
+fi
+# Row 2f — JOB-level `env:` on the `''`-armed job: a workflow/job env: value naming the
+# repo-scoped secret delivers it to every step on every dispatch — the jdump(j.env) limb
+# (the G6a approach) is the one that sees it; a step-only scan reads green.
+MUTDIR="$(fixcopy g1-2f)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2f-empty-arm-job-env "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 2 '/^    environment:/a\    env:\n      X: ${{ secrets.DOPPLER_TOKEN_WRITE }}'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2f.tsv" ""
+  mutant_red g1-2f-empty-arm-job-env wf_row "$T/mut/g1-2f.tsv" "G1j:"
+fi
+# Row 2g — a reusable-workflow CALLER job (`uses:` at job level) that passes a named
+# repo-scoped secret through its `secrets:` block: there are no steps to scan, so only the
+# j.body secrets:/with: limb can red it.
+MUTDIR="$(fixcopy g1-2g)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2g-empty-arm-uses-secrets "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 5 '$a\  callee:\n    uses: ./.github/workflows/tierb-apply.yml\n    environment: ${{ (inputs.op == '"'"'a'"'"') \&\& '"'"'infra-privileged'"'"' || '"''"' }}\n    secrets:\n      T: ${{ secrets.DOPPLER_TOKEN_GIT_DATA_ROOT }}'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2g.tsv" ""
+  mutant_red g1-2g-empty-arm-uses-secrets wf_row "$T/mut/g1-2g.tsv" "G1j:"
+fi
+# Row 2h — `secrets: inherit` on a `''`-armed caller job: no name is spelled, so the regex
+# cannot see it — it hands EVERY repo secret, the privileged names included, to the called
+# workflow on the unbound dispatch. The explicit `inherit` check is the limb that reds it.
+MUTDIR="$(fixcopy g1-2h)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2h-empty-arm-uses-secrets-inherit "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 4 '$a\  callee:\n    uses: ./.github/workflows/tierb-apply.yml\n    environment: ${{ (inputs.op == '"'"'a'"'"') \&\& '"'"'infra-privileged'"'"' || '"''"' }}\n    secrets: inherit'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2h.tsv" ""
+  mutant_red g1-2h-empty-arm-uses-secrets-inherit wf_row "$T/mut/g1-2h.tsv" "G1j:"
+fi
+# Row 2i — the secrets context is CASE-INSENSITIVE (`secrets.doppler_token_write` resolves),
+# so the ban's name match must be too; a lowercase-only spelling of the same escape reds it.
+MUTDIR="$(fixcopy g1-2i)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2i-empty-arm-lowercase-secret "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 4 '/- run: echo done/a\      - name: Privileged noop\n        env:\n          X: ${{ secrets.doppler_token_write }}\n        run: echo x'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2i.tsv" ""
+  mutant_red g1-2i-empty-arm-lowercase-secret wf_row "$T/mut/g1-2i.tsv" "G1j:"
+fi
+# Row 2j — DOPPLER_TOKEN_INNGEST_ARM is the third repo-scoped read/write Doppler token
+# (github_actions_secret, inngest-arm-write-token.tf): it belongs to the same ban set, and a
+# name set that forgot it would read this job green.
+MUTDIR="$(fixcopy g1-2j)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2j-empty-arm-inngest-arm-token "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 4 '/- run: echo done/a\      - name: Privileged noop\n        env:\n          X: ${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}\n        run: echo x'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2j.tsv" ""
+  mutant_red g1-2j-empty-arm-inngest-arm-token wf_row "$T/mut/g1-2j.tsv" "G1j:"
+fi
+# Row 2k — DOPPLER_TOKEN_INNGEST_FLIP_READ (the repo-scoped read-only flip-flag token, #9927) is in the
+# same ban set: a job OUTSIDE the one that binds it, running on an unbound `|| ''` dispatch, must not consume it.
+MUTDIR="$(fixcopy g1-2k)"; assert_fixture_dir "$MUTDIR"
+if mutate g1-2k-empty-arm-inngest-flip-read-token "$MUTDIR/tree/.github/workflows/tierb-conditional.yml" 4 '/- run: echo done/a\      - name: Privileged noop\n        env:\n          X: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}\n        run: echo x'; then
+  fixcensus "$MUTDIR" "$T/mut/g1-2k.tsv" ""
+  mutant_red g1-2k-empty-arm-inngest-flip-read-token wf_row "$T/mut/g1-2k.tsv" "G1j:"
 fi
 # Row 3 — delete the `workspaces_luks_cutover_main` policy while the environment stays in the set.
 MUTDIR="$(fixcopy g1-3)"; assert_fixture_dir "$MUTDIR"
@@ -3642,150 +3770,6 @@ if mutate g4-11-redeclared "$MUTDIR/tree/apps/web-platform/infra/github-app.tf" 
   mutant_red g4-11-allowance-entry-redeclared wf_row "$T/mut/g4-11.tsv" "G4g:"
 fi
 
-# Rows 15-22 — DISPATCH_GATED_DESTROYS (#8211 Option B, CTO 2026-10-26). The allowance for a deleted resource block
-# whose destroy is a dispatch-only, reviewer-environment workflow that `-target`s the address on a `terraform plan
-# -out=` step and applies the SAVED plan. Row 15 is the positive control (without it every RED row below could be RED
-# for an unrelated reason and the allowance could be unusable); rows 16-21 each remove ONE property of the allowance.
-g4dg_base() { # <name> <MUTDIR> — the base declares both retired resources; HEAD no longer does
-  assert_fixture_dir "$2"
-  mutate "$1-base" "$2/base/apps/web-platform/infra/github-app.tf" 6 '$a\resource "hcloud_volume" "git_data" {\n  name = "x"\n}\nresource "hcloud_volume_attachment" "git_data" {\n  volume_id = 1\n}'
-}
-g4dg_wf() { # <name> <MUTDIR> — HEAD ships the compliant dispatch-only workflow
-  assert_fixture_dir "$2"
-  cat > "$2/tree/.github/workflows/git-data-plaintext-volume-destroy.yml" <<'G4DGEOF'
-name: dg
-on:
-  workflow_dispatch:
-jobs:
-  destroy:
-    runs-on: ubuntu-24.04
-    environment: web-platform-infra-apply
-    steps:
-      - name: Terraform plan
-        working-directory: apps/web-platform/infra
-        run: |
-          terraform plan -input=false -out=tfplan \
-            -target='hcloud_volume_attachment.git_data' \
-            -target='hcloud_volume.git_data'
-      - name: Terraform apply
-        working-directory: apps/web-platform/infra
-        run: |
-          set -euo pipefail
-          if ! git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID"; then exit 1; fi
-          terraform apply -no-color -input=false tfplan
-G4DGEOF
-  fixture_written "$1-workflow" "$2/tree/.github/workflows/git-data-plaintext-volume-destroy.yml"
-}
-G4DG_WF="tree/.github/workflows/git-data-plaintext-volume-destroy.yml"
-MUTDIR="$(fixcopy g4-15)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-15 "$MUTDIR" && g4dg_wf g4-15 "$MUTDIR"; then
-  fixcensus "$MUTDIR" "$T/mut/g4-15.tsv" ""
-  if wf_row "$T/mut/g4-15.tsv" "G4c:"; then pass "M-g4-15-dispatch-gated-destroy: a deleted resource pair planned with -target on a plan step of the named dispatch-only workflow and applied as a saved plan is ACCEPTED by G4c"
-  else fail "M-g4-15-dispatch-gated-destroy: G4c refused the compliant dispatch-gated destroy" "$(grep G4c "$T/mut/g4-15.tsv" | cut -c1-240)"; fi
-fi
-MUTDIR="$(fixcopy g4-16)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-16 "$MUTDIR"; then
-  fixcensus "$MUTDIR" "$T/mut/g4-16.tsv" ""
-  mutant_red g4-16-dispatch-gated-workflow-absent wf_row "$T/mut/g4-16.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-17)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-17 "$MUTDIR" && g4dg_wf g4-17 "$MUTDIR" \
-   && mutate g4-17-push-trigger "$MUTDIR/$G4DG_WF" 2 's/^  workflow_dispatch:$/  push:/'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-17.tsv" ""
-  mutant_red g4-17-dispatch-gated-push-trigger wf_row "$T/mut/g4-17.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-18)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-18 "$MUTDIR" && g4dg_wf g4-18 "$MUTDIR" \
-   && mutate g4-18-no-environment "$MUTDIR/$G4DG_WF" 1 '/^    environment: web-platform-infra-apply$/d'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-18.tsv" ""
-  mutant_red g4-18-dispatch-gated-no-environment wf_row "$T/mut/g4-18.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-19)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-19 "$MUTDIR" && g4dg_wf g4-19 "$MUTDIR" \
-   && mutate g4-19-volume-target-dropped "$MUTDIR/$G4DG_WF" 1 "/^            -target='hcloud_volume\\.git_data'\$/d"; then
-  fixcensus "$MUTDIR" "$T/mut/g4-19.tsv" ""
-  mutant_red g4-19-dispatch-gated-target-dropped wf_row "$T/mut/g4-19.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-20)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-20 "$MUTDIR" && g4dg_wf g4-20 "$MUTDIR" \
-   && mutate g4-20-apply-without-plan-file "$MUTDIR/$G4DG_WF" 2 's/terraform apply -no-color -input=false tfplan$/terraform apply -auto-approve -input=false/'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-20.tsv" ""
-  mutant_red g4-20-dispatch-gated-apply-without-plan-file wf_row "$T/mut/g4-20.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-21)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-21 "$MUTDIR" && g4dg_wf g4-21 "$MUTDIR" \
-   && mutate g4-21-also-bare-targeted "$MUTDIR/tree/.github/workflows/tierb-apply.yml" 1 '/^              -target=doppler_secret\.github_app_private_key \\$/a\              -target=hcloud_volume.git_data \\'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-21.tsv" ""
-  mutant_red g4-21-dispatch-gated-also-bare-targeted wf_row "$T/mut/g4-21.tsv" "G4c:"
-fi
-# Row 22 — a PROTECTED address placed in DISPATCH_GATED_DESTROYS trips G4f (the allowance lives in the checker).
-MUTDIR="$(fixcopy g4-22)"; assert_fixture_dir "$MUTDIR"
-cp "$T/ipt.py" "$T/ipt-g4-22.py" || { printf 'FAIL SETUP: g4-22 checker copy\n' >&2; exit 1; }
-if mutate g4-22-protected-in-dispatch-gated "$T/ipt-g4-22.py" 1 's/^(        )("hcloud_volume\.git_data": \("#8211 Option B.*)$/\1"doppler_secret.github_app_id": ("x", "workflows\/x.yml"),\n\1\2/'; then
-  python3 "$T/ipt-g4-22.py" "$MUTDIR/tree/.github" "$MUTDIR/tree" "" "$MUTDIR/base" > "$T/mut/g4-22.tsv" 2> "$T/mut/g4-22.tsv.err"
-  mutant_red g4-22-protected-in-dispatch-gated wf_row "$T/mut/g4-22.tsv" "G4f:"
-fi
-
-# Rows 23-29 — the allowance must not be satisfied by a LEXICAL decoy (test-design review of #11179): an echoed apply,
-# an extra -target on the plan, an apply of a DIFFERENT plan file, status-function and continue-on-error overrides, a
-# missing gate call, and an environment that is not a tier-B reviewer environment. Each starts from the compliant
-# fixture of row 15 and changes ONE thing.
-MUTDIR="$(fixcopy g4-23)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-23 "$MUTDIR" && g4dg_wf g4-23 "$MUTDIR" \
-   && mutate g4-23-echoed-apply "$MUTDIR/$G4DG_WF" 2 's/^          terraform apply -no-color -input=false tfplan$/          echo terraform apply -no-color -input=false tfplan/'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-23.tsv" ""
-  mutant_red g4-23-dispatch-gated-echoed-apply wf_row "$T/mut/g4-23.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-24)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-24 "$MUTDIR" && g4dg_wf g4-24 "$MUTDIR" \
-   && mutate g4-24-extra-target "$MUTDIR/$G4DG_WF" 2 "s/^            -target='hcloud_volume\\.git_data'\$/            -target='hcloud_volume.git_data' -target=hcloud_server.git_data/"; then
-  fixcensus "$MUTDIR" "$T/mut/g4-24.tsv" ""
-  mutant_red g4-24-dispatch-gated-extra-target wf_row "$T/mut/g4-24.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-25)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-25 "$MUTDIR" && g4dg_wf g4-25 "$MUTDIR" \
-   && mutate g4-25-other-plan-file "$MUTDIR/$G4DG_WF" 2 's/terraform apply -no-color -input=false tfplan$/terraform apply -no-color -input=false other.tfplan/'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-25.tsv" ""
-  mutant_red g4-25-dispatch-gated-other-plan-file wf_row "$T/mut/g4-25.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-26)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-26 "$MUTDIR" && g4dg_wf g4-26 "$MUTDIR" \
-   && mutate g4-26-apply-if-always "$MUTDIR/$G4DG_WF" 1 '/^      - name: Terraform apply$/a\        if: always()'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-26.tsv" ""
-  mutant_red g4-26-dispatch-gated-apply-if-always wf_row "$T/mut/g4-26.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-27)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-27 "$MUTDIR" && g4dg_wf g4-27 "$MUTDIR" \
-   && mutate g4-27-plan-continue-on-error "$MUTDIR/$G4DG_WF" 1 '/^      - name: Terraform plan$/a\        continue-on-error: true'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-27.tsv" ""
-  mutant_red g4-27-dispatch-gated-plan-continue-on-error wf_row "$T/mut/g4-27.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-28)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-28 "$MUTDIR" && g4dg_wf g4-28 "$MUTDIR" \
-   && mutate g4-28-gate-call-removed "$MUTDIR/$G4DG_WF" 1 '/git_data_plaintext_destroy_gate tfplan\.json/d'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-28.tsv" ""
-  mutant_red g4-28-dispatch-gated-gate-call-removed wf_row "$T/mut/g4-28.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-29)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-29 "$MUTDIR" && g4dg_wf g4-29 "$MUTDIR" \
-   && mutate g4-29-unprotected-environment "$MUTDIR/$G4DG_WF" 2 's/^    environment: web-platform-infra-apply$/    environment: unprotected-env/'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-29.tsv" ""
-  mutant_red g4-29-dispatch-gated-unprotected-environment wf_row "$T/mut/g4-29.tsv" "G4c:"
-fi
-
-MUTDIR="$(fixcopy g4-30)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-30 "$MUTDIR" && g4dg_wf g4-30 "$MUTDIR" \
-   && mutate g4-30-whole-token-quoted-target "$MUTDIR/$G4DG_WF" 2 "s/^            -target='hcloud_volume\\.git_data'\$/            -target='hcloud_volume.git_data' \"-target=hcloud_server.git_data\"/"; then
-  fixcensus "$MUTDIR" "$T/mut/g4-30.tsv" ""
-  mutant_red g4-30-dispatch-gated-whole-token-quoted-target wf_row "$T/mut/g4-30.tsv" "G4c:"
-fi
-MUTDIR="$(fixcopy g4-31)"; assert_fixture_dir "$MUTDIR"
-if g4dg_base g4-31 "$MUTDIR" && g4dg_wf g4-31 "$MUTDIR" \
-   && mutate g4-31-gate-call-unenforced "$MUTDIR/$G4DG_WF" 2 's/^          if ! git_data_plaintext_destroy_gate tfplan\.json "\$EXPECTED_VOLUME_ID" "\$SERVER_ID"; then exit 1; fi$/          git_data_plaintext_destroy_gate tfplan.json "$EXPECTED_VOLUME_ID" "$SERVER_ID" || true/'; then
-  fixcensus "$MUTDIR" "$T/mut/g4-31.tsv" ""
-  mutant_red g4-31-dispatch-gated-gate-call-unenforced wf_row "$T/mut/g4-31.tsv" "G4c:"
-fi
-
 # ── G4h (#9879): no `removed` / `moved` block over a sole-copy address ───────────────────────────────────────────────
 # MUST-PASS arm first: the compliant fixture carries the two App-identity forget-only `removed` blocks (github-app.tf)
 # and a benign `moved` block (placement-group.tf), and G4h and G4h2 stay green on all of them.
@@ -3949,7 +3933,7 @@ fi
 # except b8's orphan HEAD (which exercises the fallback arm). Only the
 # G4c TSV row is read — unrelated fixture-row verdicts are out of scope by convention.
 G4GIT="$T/g4git"; assert_fixture_dir "$G4GIT"
-mkdir -p "$G4GIT/repo/apps/web-platform/infra/git-data-root-key" "$G4GIT/repo/.github" \
+mkdir -p "$G4GIT/repo/apps/web-platform/infra/git-data-root-key" "$G4GIT/repo/apps/web-platform/infra/lb-staging" "$G4GIT/repo/.github" \
   || { printf 'FAIL SETUP: g4git mkdir\n' >&2; exit 1; }
 cp -r "$FIX/tree/.github/." "$G4GIT/repo/.github/" \
   || { printf 'FAIL SETUP: g4git .github copy\n' >&2; exit 1; }
@@ -3960,6 +3944,11 @@ resource "terraform_data" "base_b2" {}
 EOF
 cat > "$G4GIT/repo/apps/web-platform/infra/git-data-root-key/main.tf" <<'EOF'
 resource "terraform_data" "base_rk" {}
+EOF
+# The third GUARD4_ROOTS member (#11652): every fixture ref must carry lb-staging, or the materializer's empty-listing
+# arm reds each leg 'base unavailable' (fail-closed by design; the fixture models a repo where all three roots exist).
+cat > "$G4GIT/repo/apps/web-platform/infra/lb-staging/main.tf" <<'EOF'
+resource "terraform_data" "base_lb" {}
 EOF
 # _g4git — git against the fixture repo under the env -u scrub convention (hook-reachable code).
 _g4git() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "$G4GIT/repo" "$@"; }
@@ -4863,16 +4852,21 @@ fi
 # 142 -> 145 (#9927 8b): g1-g2 inverted (the read-only-first allowance is deleted; still 1 landing, same fixture), g1-g3 (a step
 #   `env:` DOPPLER_CONFIG read, 1 landing), g1-j1 (drop a loader job's environment key, 1 landing) and g1-j2 (zero loader jobs,
 #   one landing per removed call, counted once). Measured: 145 ran.
-# 154 -> 173 (#8211 Option B, DISPATCH_GATED_DESTROYS): g4-15 (base + fixture, 2 landings + 1 must-pass verdict), g4-16 (1), g4-17..g4-21
-#   (base + fixture + one mutation = 3 landings each), g4-22 (checker copy, 1). Measured: 173 ran.
 # 151 -> 154 (#10990 review): g1-k8 (destroy-verb fixture writer, 1), g1-k9 (doppler-run env
 #   injection fixture, 1), g1-k10 (secrets-download fixture, 1). Measured: 154 ran.
 # 145 -> 151 (#10990, AC7b limb 3): g1-k1 (fixture .sh writer, 1), g1-k2 (checker write-token set, 1),
 #   g1-k3 (second-member fixture .sh writer, 1), g1-k4 (half-set pair, 1), g1-k5 (checker
 #   classification key, 1), g1-k6 (read-only fixture .sh, 1). Measured: 151 ran.
-# 173 -> 194 (#11179 review): g4-23..g4-29 (lexical-decoy rows, base + fixture + one mutation = 3 landings each). Measured: 194 ran.
-# 194 -> 200 (#11179 verification pass): g4-30 (whole-token quoted extra target), g4-31 (unenforced gate call), 3 landings each. Measured: 200 ran.
-MUTANT_FLOOR=200
+# 154 -> 155 (#9755): g1-2b (empty `||` arm plus a doppler-token-legacy loader input on the
+#   conditional fixture, 1 landing). Measured: 155 ran.
+# 155 -> 156 (#9755 review): g1-2c (empty `||` arm plus an unconditional step env: naming a
+#   repo-scoped privileged secret, 1 landing). Measured: 156 ran.
+# 156 -> 163 (#9755 review round 2): g1-2d (literal-free environment: -> __UNPARSEABLE__
+#   sentinel), g1-2e (run:-inline secrets interpolation), g1-2f (job-level env:), g1-2g
+#   (caller-job secrets: block), g1-2h (secrets: inherit), g1-2i (lowercase spelling),
+#   g1-2j (DOPPLER_TOKEN_INNGEST_ARM name); 1 landing each. Measured: 163 ran.
+# 163 -> 164 (#9927 review): g1-2k (DOPPLER_TOKEN_INNGEST_FLIP_READ name in REPO_SCOPED_PRIV); 1 landing.
+MUTANT_FLOOR=164
 if [ "$MUTANTS_RUN" -lt "$MUTANT_FLOOR" ]; then
   printf 'FAIL MUTANT FLOOR: only %s mutants executed, floor is %s — a matrix row did not land or was deleted.\n' "$MUTANTS_RUN" "$MUTANT_FLOOR" >&2
   exit 1
@@ -4924,10 +4918,11 @@ _ran=$((passes + fails))
 #   named-cause checks on k1/k3/k4 (3), the read-only and compliant controls (2). The pre-change
 #   suite measured 376 on this branch — the recorded 369 above is stale by 7 (the floor asserts
 #   only `-lt`, so upward drift never trips it). Measured: 393 ran.
-# 402 -> 429 (#8211 Option B, DISPATCH_GATED_DESTROYS): g4-15..g4-22 (19 landings/fixtures + 8 verdicts). Measured: 429 ran.
-# 429 -> 457 (#11179 review): g4-23..g4-29 (21 landings/fixtures + 7 verdicts). Measured: 457 ran.
-# 457 -> 465 (#11179 verification pass): g4-30/g4-31 (6 landings/fixtures + 2 verdicts). Measured: 465 ran.
-FLOOR=465
+# 402 -> 404 (#9755): g1-2b (1 landing + 1 verdict). Measured: 404 ran.
+# 404 -> 406 (#9755 review): g1-2c (1 landing + 1 verdict). Measured: 406 ran.
+# 406 -> 420 (#9755 review round 2): g1-2d..g1-2j (7 landings + 7 verdicts). Measured: 420 ran.
+# 420 -> 422 (#9927 review): g1-2k (1 landing + 1 verdict). Measured: 422 ran.
+FLOOR=422
 if [ "$_ran" -lt "$FLOOR" ]; then
   printf 'FAIL ANTI-VACUITY: only %s assertions ran, floor is %s — cases were deleted or the suite exited early.\n' "$_ran" "$FLOOR" >&2
   exit 1

@@ -160,7 +160,7 @@ try {
         prompt:
           "Run the Bash command `true` exactly once and then stop. Do not explain, do not run anything else.",
         options: {
-          model: "claude-haiku-4-5",
+          model: "claude-haiku-5-5",
           maxTurns: 2,
           permissionMode: "default",
           cwd: resolvedOwn,

@@ -710,12 +710,10 @@ export const cronWorkspaceSyncHealth = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "23 6 * * *" },
+      { event: "cron/workspace-sync-health.manual-trigger" },
+    ],
   },
-  [
-    { cron: "23 6 * * *" },
-    { event: "cron/workspace-sync-health.manual-trigger" },
-  ],
-  cronWorkspaceSyncHealthHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronWorkspaceSyncHealthHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

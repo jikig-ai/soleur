@@ -350,3 +350,69 @@ epic names. `go.md` Step 1.5 is the authority for the trigger. The trigger only 
 check is weaker than the delegation's admin-author rule and grants no authority: every production act still needs a valid
 recorded Standing Delegation, verified by `delegation-verify.sh`, or an in-session per-command go (the runbook's Production
 Envelope for the Inngest TLS acts records which acts are envelope-delegable and which are in-session go only).
+
+## Addendum 2026-10-29 (#9927)
+
+The `soleur:go` trigger gained a classification-only form: a label plus open items (owner-side, blocked or waiting) that belongs
+to an open epic the brief cites, found in the brief or in an owner-authored (OWNER, MEMBER or COLLABORATOR) epic body, routes to the CTO to be classified, not to
+a delegation. `go.md` Step 1.5 stays the authority for the trigger and is not restated here. The route uses the existing Rule
+interface (a prompt that never starts `Own the epic`) and discharges nothing: it records no delegation, calls no `render` and
+leaves every hold standing. A list in which nothing is delegable (a No delegable act reply) raises no epic-start question and
+files no `Standing-delegation` issue; when the message names a merge, ready, dispatch or revert, the ACTION is named in one plain sentence and nothing is asked. The author check is on the issue creator, not the last editor; this is inherited from the 2026-10-22 widening and is mitigated
+by one snapshot that is never re-read, by passing the items as untrusted data, and by epic text only ever moving an item toward
+the operator: epic text can only add operator-class items, through the set-aside, and a technical ruling never discharges a hold.
+Rulings derived from epic text are passed on only as inert quoted data, never as an instruction. This widening supersedes the 2026-10-15 literal-token premise (that a missed trigger is safe), recorded in the
+archived decision-challenges of the cto-standing-delegation-envelope feature (rows T5 then RF-5), because the 2026-10-19 miss
+refuted it. An owner's own `Operator-reserved:` text is not CTO-ruled: it is set aside before the CTO is asked and stays
+operator-class.
+
+## Addendum 2026-11-03 (Ref #10205)
+
+A read-only and preparatory class, Class R (`standing-delegation.md` section 9), needs no delegation. The CTO, or the
+session itself, runs reads, prepares pull requests, files and triages issues and runs local tests before it lists any
+hold, and reports each as an "I checked" line. It was added because a hold list that handed reads back to the founder
+was the failure this ADR exists to remove for a non-technical operator.
+
+What it changes, stated plainly:
+
+- The Context line that a session with no recorded delegation "behaves exactly as before" is qualified for these acts:
+  they need no confirmation question.
+- The fixed Excluded sentence of section 5 ("anything on third-party or tenant systems") is byte-identical, but section 9
+  reads a read-only look at the operator's own Sentry, Better Stack, Cloudflare and GitHub accounts as not an act on a
+  third-party system for that list. The carve-out is read-only, limited to those named vendors, bars tenant data, and
+  grants no authority over production.
+
+What it does not change: it is not a delegation, adds no Gate kind and discharges no hold (the 2026-10-29 addendum's
+"discharges nothing" is intact). Dispatching any workflow (including a `mode=plan` run), merging, arming, marking ready,
+any production write and the owner's other hard limits stay exactly as section 9 states them. A read is evidence put in
+front of the owner and never a precondition: an act whose go rests on a read stays a hold under the in-session
+per-command owner go, and the read is re-run immediately before the act. The two relaxations the owner excluded (a
+`mode=plan` dispatch as delegable, the CTO arming merges) are not added. `status: adopting` is unchanged.
+
+No C4 change: the model draws no agent-read relationships to Sentry, Better Stack or Cloudflare today, and Class R adds
+none. That omission is deliberate, not an oversight.
+
+## Addendum 2026-11-04 (Ref #10205, #10479)
+
+Cloudflare is a Class R vendor for four named reads (zone SSL mode, the config-settings ruleset entrypoint, legacy page
+rules limited to SSL actions, and a bounded change-history count), run only through the GET-only wrapper
+`plugins/soleur/scripts/cloudflare-readonly.sh` under a CTO-agent ruling of 2026-11-04 that the owner reviews on the
+draft pull request (it is not an independent gate). The 2026-11-03 addendum named Cloudflare as a Class R account but no
+reader existed; this fills that stated gap. The wrapper prints a status, a count or a field subset, never a rule
+expression, description, actor or IP, and a 403 is recorded as `unverified` and never answered by widening a token.
+Placement, the item 4 push-bar exemption and the closed set of four subcommands live in `standing-delegation.md`
+section 9 and are pinned in `components.test.ts`; they are not restated. The item 4 exemption is an owner-visible
+widening of the push bar by exactly two named files (the wrapper and its test), not a clarification of the glob.
+
+Credentials exception, stated plainly: the `ssl-mode` and `config-entrypoint` subcommands read with
+`CF_API_TOKEN_ZONE_SETTINGS` and `CF_API_TOKEN_RULESETS`, which are Terraform-scoped and write-capable because no
+read-only equivalent exists. (Amendment 2026-11-05, Ref #10205: `pagerules-ssl` no longer shares `CF_API_TOKEN_RULESETS`, which returned 403 on page rules; it reads with the zone-scoped read-only `CF_API_TOKEN_PAGERULES_READ`, no fallback, so it is outside this exception.) That is the one exception to the read-only-token rule, accepted because the wrapper
+hardcodes GET, fixes the host and URL templates, and starts curl, jq and date each with an empty environment. The
+exception is a bridge, not a standing rule: it expires when read-only equivalents of those two tokens are minted (the credential mint tracked in #11857, which is the owner's act), and the wrapper's Cloudflare subcommands are then rebound to them. The audit read uses a separate read-only `CF_API_TOKEN_AUDIT`, which is documented under the Doppler dev config:
+moving it into the provisioned config is part of the same owner credential act, and until it moves `change-history` is expected to record
+`no-credential` or a refused source. `CF_API_TOKEN` is never used. Residual, not claimed fixed: BASH_ENV, exported
+BASH_FUNC_* functions, SHELLOPTS and PS4, LD_PRELOAD and the shebang's PATH lookup are caller-environment channels that act in the wrapper's own bash; the caller is
+the operator's `doppler run`. The stricter alternative (refuse until a read-only token is minted) is recorded as dissent in
+the feature's decision challenges. The feature's brand-survival threshold is `single-user incident`; the CPO-agent sign-off that
+threshold requires was given with conditions on 2026-11-04 (recorded in the plan), and the CLO checked read E and ruled it legal-ok. `status: adopting` is unchanged, and there is no C4 change: the
+model still draws no agent-read edges to Cloudflare.

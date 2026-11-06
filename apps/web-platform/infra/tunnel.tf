@@ -76,8 +76,12 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "web" {
     # (zot). First-match; MUST stay above the 404.
     #
     # (#6416) "A web-host cloudflared connector", NOT "THE web host's" — this is ONE tunnel with
-    # MULTIPLE connector replicas, and CF load-balances across them. So this rule is correct only
-    # while EVERY connector host is a 10.0.1.0/24 member (ADR-114 invariant I1); web-2 was not.
+    # connector replicas CF selects per edge colo, and it load-balances across them. So this
+    # rule is correct only while EVERY connector host is a 10.0.1.0/24 member (ADR-114
+    # invariant I1). That holds today: the single live connector is web-2
+    # (server.tf `web_tunnel_connector = each.key == "web-2"`, 10.0.1.11 — moved off the
+    # LUKS-pinned, non-replaceable web-1 for the cloudflared >= 2026.10.2 eMudhra fix), and
+    # web-1 is 10.0.1.10 regardless.
     # It is nonetheless the RIGHT pattern and the one to generalize — its service is
     # private-net-RELATIVE, so whichever replica answers proxies to the correct origin.
     #

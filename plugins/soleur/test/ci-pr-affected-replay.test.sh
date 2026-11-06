@@ -50,14 +50,45 @@ fail() { fails=$((fails + 1)); FAILED+=("$1"); echo "  FAIL: $1" >&2; }
 _iv_p="$passes"; _iv_f="$fails"; _iv_n="${#FAILED[@]}"
 { pass "self-test"; fail "self-test"; } >/dev/null 2>&1
 if [[ "$passes" -ne $((_iv_p + 1)) || "$fails" -ne $((_iv_f + 1)) || "${#FAILED[@]}" -ne $((_iv_n + 1)) ]]; then
-  printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 1
+  printf '[FATAL] instrument self-test: the verdict helpers did not both record\n' >&2; exit 2
 fi
 passes=0; fails=0; FAILED=()
 
-[[ -f "$REAL_SUT" ]] || { echo "[FATAL] SUT not found at $REAL_SUT" >&2; exit 1; }
+[[ -f "$REAL_SUT" ]] || { echo "[FATAL] SUT not found at $REAL_SUT" >&2; exit 2; }
 for tool in python3 git jq; do
-  command -v "$tool" >/dev/null || { echo "[FATAL] $tool required" >&2; exit 1; }
+  command -v "$tool" >/dev/null || { echo "[FATAL] $tool required" >&2; exit 2; }
 done
+
+# --- Row-range selection (--rows A-B) ------------------------------------------------------
+# ROWS-SPLIT (#11562): as one ~25-minute atomic suite this file was the test-scripts shard's
+# worst leg, so scripts/test-all.sh registers it THREE times — the `-a`/`-b`/`-c` arms of
+# plugins/soleur/test/ci-pr-affected-replay — each carrying a `--rows A-B` range over the
+# DECLARED_TOTAL gated sites below. The gated sites are the top-level `mutate`/`ow_mutate`
+# calls: both drivers route through in_range, which sequences every call site in file order
+# (an added or deleted call shifts _site_seq against DECLARED_TOTAL at the end). All other
+# content — fixture builds, row_*/chk assertions and the ctl-* harness controls — is
+# unconditional per arm (the C0/R1/R1b shape of scripts/lint-orphan-test-suites.test.sh's
+# contract); the ctl-* controls that drive `mutate` do so through `mutate_ungated` so they
+# never consume an ordinal. The union of the registered ranges tiling 1..DECLARED_TOTAL is
+# asserted by plugins/soleur/test/scripts-shard-totality.test.sh. A DECLARED_TOTAL bump and
+# the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
+# refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
+# cheap way to iterate on a single site locally.
+DECLARED_TOTAL=599   # top-level `^mutate ` (473) + `^ow_mutate ` (126) call sites; ctl-* controls run ungated
+ROWS_UNIT=sites
+# shellcheck source=scripts/lib/rows-range.sh
+source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
+rows_parse_args "$@"
+
+# in_range (from the lib): called once per gated site from inside the mutate/ow_mutate drivers,
+# in file order. _site_seq counts gated sites (never the unconditional content); EXECUTED counts
+# dispatched sites. Unlike lint-orphan's dispatch-site gate there is no per-site ordinal
+# argument — the call order IS the declared order, and the end-of-file _site_seq ==
+# DECLARED_TOTAL check is the add/delete guard (a reorder keeps coverage total but silently re-maps the registered ranges — a balance skew, not a gap).
+# Control paths drive mutate() for harness self-verification; they are not gated sites and
+# must not consume a _site_seq ordinal.
+_MUT_UNGATED=0
+mutate_ungated() { local _MUT_UNGATED=1; mutate "$@"; }
 
 assert_fixture_dir() {
   case "${1-}" in
@@ -70,12 +101,12 @@ assert_fixture_dir() {
   esac
 }
 
-SANDBOX="$(mktemp -d "$TMPDIR/ci-pr-affected-replay.XXXXXXXX")" || { echo "[FATAL] mktemp failed" >&2; exit 1; }
-case "$SANDBOX" in /*) : ;; *) echo "[FATAL] sandbox is not absolute" >&2; exit 1 ;; esac
+SANDBOX="$(mktemp -d "$TMPDIR/ci-pr-affected-replay.XXXXXXXX")" || { echo "[FATAL] mktemp failed" >&2; exit 2; }
+case "$SANDBOX" in /*) : ;; *) echo "[FATAL] sandbox is not absolute" >&2; exit 2 ;; esac
 trap 'rm -rf "$SANDBOX"' EXIT
 export TMPDIR="$SANDBOX"
 
-git_fixture_env "$SANDBOX/repo" || { echo "[FATAL] git_fixture_env refused the sandbox" >&2; exit 1; }   # ceiling, identity, hermetic config: ONE builder
+git_fixture_env "$SANDBOX/repo" || { echo "[FATAL] git_fixture_env refused the sandbox" >&2; exit 2; }   # ceiling, identity, hermetic config: ONE builder
 gitq() { git -c commit.gpgsign=false -c maintenance.auto=false -c gc.auto=0 -c init.defaultBranch=main "$@"; }
 
 REPO="$SANDBOX/repo"
@@ -106,10 +137,10 @@ build_repo() {
     gitq update-ref refs/remotes/origin/main HEAD
   ) || return 1
 }
-build_repo || { echo "[FATAL] could not build the fixture repo" >&2; exit 1; }
+build_repo || { echo "[FATAL] could not build the fixture repo" >&2; exit 2; }
 C=()   # C[1]..C[7], oldest first
 while read -r sha; do C+=("$sha"); done < <(gitq -C "$REPO" rev-list --first-parent --reverse -n 7 origin/main)
-[[ "${#C[@]}" -eq 7 ]] || { echo "[FATAL] expected 7 commits, got ${#C[@]}" >&2; exit 1; }
+[[ "${#C[@]}" -eq 7 ]] || { echo "[FATAL] expected 7 commits, got ${#C[@]}" >&2; exit 2; }
 
 
 # ---- the selector stub ----------------------------------------------------------------------------------------------
@@ -150,14 +181,27 @@ key="$(printf '%s' "$path" | sed -E 's/created=[^&]*/created=X/' | tr -c 'A-Za-z
 printf 'REQ %s\n' "$key" >> "$GH_LOG"
 # a job log is fetched with --allow-escape-sequences or gh refuses it: the stub refuses it too
 case "$path" in */logs) [ "$esc" = 1 ] || { echo "STUB-MISS no --allow-escape-sequences on $key" >> "$GH_LOG"; echo "gh: refusing escape sequences" >&2; exit 1; } ;; esac
+# SLOW_<key>: wait SLOW_S seconds BEFORE answering (the real fixture, or an ERR_ failure: a slow failing read keeps two workers in flight at once). HANG_ answers an empty run
+# list, so a delayed unit would vanish. The probe's budget clock is SECONDS (one-second granularity), so a budget row needs a read longer than the budget; the pid is recorded
+# for the trap row and S/E lines for the concurrency row.
+if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; echo "S $$" >> "$GH_LOG.conc"; command -p sleep "${SLOW_S:-1}"; echo "E $$" >> "$GH_LOG.conc"; fi
+if [ -f "$GH_FIX/ERR_ONCE_$key" ]; then rm -f "$GH_FIX/ERR_ONCE_$key"; echo "gh: HTTP 502" >&2; exit 1; fi   # the first call fails, later calls fall through to the fixture (or to a later ERR_ handler)
+if [ -f "$GH_FIX/ERRONCEMSG_$key" ]; then m="$(cat "$GH_FIX/ERRONCEMSG_$key")"; rm -f "$GH_FIX/ERRONCEMSG_$key"; echo "gh: $m" >&2; exit 1; fi   # the first call fails with the fixture's text as stderr
+if [ -f "$GH_FIX/ERRONCE124_$key" ]; then rm -f "$GH_FIX/ERRONCE124_$key"; exit 124; fi   # the first call is killed by `timeout` (rc 124)
 if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
+if [ -f "$GH_FIX/ERR422_$key" ]; then echo "gh: No commit found for SHA (HTTP 422)" >&2; exit 1; fi
+if [ -f "$GH_FIX/ERR401EXIT4_$key" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 4; fi   # gh exits 4 itself on an authentication failure
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
-if [ -f "$GH_FIX/HANG_$key" ]; then sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
+if [ -f "$GH_FIX/ERR429RL_$key" ]; then echo "gh: Too Many Requests (HTTP 429)" >&2; exit 1; fi
+if [ -f "$GH_FIX/HANG_$key" ]; then command -p sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
 GHSTUB
 chmod +x "$BIN/gh"
+# a no-op `sleep` that only logs its argv: the probe retries once after a fixed `sleep 2`; ow_probe and ow_probe_split put this directory first on PATH (the gh stub above uses `command -p sleep`)
+mkdir -p "$BIN/nosleep"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$GH_LOG.sleeps"\n' > "$BIN/nosleep/sleep"; chmod +x "$BIN/nosleep/sleep"
 export GH_LOG="$GHLOG" GH_FIX="$GHFIX"
 
 R=jikig-ai/soleur
@@ -168,6 +212,7 @@ fx_err() { : > "$GHFIX/ERR_$(keyof "$1")"; }
 fx_err404() { : > "$GHFIX/ERR404_$(keyof "$1")"; }
 fx_hang() { : > "$GHFIX/HANG_$(keyof "$1")"; }
 fx_err403rl() { : > "$GHFIX/ERR403RL_$(keyof "$1")"; }
+fx_err429rl() { : > "$GHFIX/ERR429RL_$(keyof "$1")"; }
 runs_path() { printf 'repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100' "${REPO_NAME:-$R}" "$1"; }
 jobs_path() { printf 'repos/%s/actions/runs/%s/jobs?per_page=100&filter=latest' "${REPO_NAME:-$R}" "$1"; }
 jobs1_path() { printf 'repos/%s/actions/runs/%s/attempts/1/jobs?per_page=100' "${REPO_NAME:-$R}" "$1"; }
@@ -627,7 +672,7 @@ PY
 [[ -n "$gate_git" && "$gate_git" = "$lib_git" && "$py_git" = "$lib_git" ]] && pass "the replay tool's GIT_LOCATION_VARS, the gate's git_ro and the fixture lib's list are the same nine names" || fail "git location list parity: gate='${gate_git//$'\n'/ }' lib='${lib_git//$'\n'/ }' py='${py_git//$'\n'/ }'"
 echo "== git: a non-ASCII path is read raw, not as a quoted ASCII string"
 NREPO="$SANDBOX/nrepo"; assert_fixture_dir "$NREPO"; mkdir -p "$NREPO"
-( cd "$NREPO" && gitq init -q -b main . && printf 'x\n' > seed && gitq add -A && gitq commit -qm seed && printf 'y\n' > "caf$(printf '\303\251').txt" && gitq add -A && gitq commit -qm accent ) || { echo "[FATAL] nrepo" >&2; exit 1; }
+( cd "$NREPO" && gitq init -q -b main . && printf 'x\n' > seed && gitq add -A && gitq commit -qm seed && printf 'y\n' > "caf$(printf '\303\251').txt" && gitq add -A && gitq commit -qm accent ) || { echo "[FATAL] nrepo" >&2; exit 2; }
 NSHA="$(gitq -C "$NREPO" rev-parse HEAD)"
 row_nonascii() { [[ "$(python3 -c "
 import importlib.util as u, sys
@@ -656,7 +701,7 @@ printf '#!/usr/bin/env bash\ncat "apps/(auth)/page.tsx"\n' > "$AREPO/scripts/par
 printf '#!/usr/bin/env bash\ncat scripts/x.sh.bak\n' > "$AREPO/scripts/exact.test.sh"
 printf '#!/usr/bin/env bash\ncat data/f1.txt data/f2.txt data/f3.txt data/f4.txt data/f5.txt data/f6.txt data/f7.txt data/f8.txt\n' > "$AREPO/scripts/many.test.sh"
 printf '#!/usr/bin/env bash\n' > "$AREPO/scripts/test-all.sh"
-(cd "$AREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] audit fixture" >&2; exit 1; }
+(cd "$AREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] audit fixture" >&2; exit 2; }
 printf 'AFFECTED_SELECTED\tscripts/lint-orphan-mutations\t0\tedge:declared\t^scripts/lint-orphan-mutations.test.sh\n' > "$SANDBOX/audit-bad.rows"
 printf 'AFFECTED_SELECTED\tscripts/declared-complete\t0\tedge:declared\t^scripts/declared-complete.test.sh|^.github/workflows/ci.yml\n' > "$SANDBOX/audit-good.rows"
 printf 'AFFECTED_SELECTED\tscripts/comment-only\t0\tedge:derived\t^scripts/comment-only.test.sh\n' > "$SANDBOX/audit-comment.rows"
@@ -869,7 +914,7 @@ ln -s ../../srepo-evil/secret.txt "$SREPO/dsym/sib.test.ts"; ln -s loop.test.ts 
 ln -s ok.test.ts "$SREPO/dsym/inner.test.ts"; ln -s /dev/zero "$SREPO/dsym/zero.test.ts"; ln -s "$SANDBOX/outside.txt" "$SREPO/dsym/out.test.ts"
 PC_LINES=("pc/k01.txt"); PC_PATHS=("pc/k01.txt"); n=1
 for pre in "${PC_KEEP_PRE[@]}"; do n=$((n + 1)); PC_LINES+=("cat ${pre}pc/k$(printf '%02d' "$n").txt"); PC_PATHS+=("pc/k$(printf '%02d' "$n").txt"); done
-(cd "$SREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] scan fixture" >&2; exit 1; }
+(cd "$SREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed) || { echo "[FATAL] scan fixture" >&2; exit 2; }
 rm -f "$SREPO/lib3/gone.sh" "$SREPO/scripts/stdel.test.sh"   # tracked, deleted from the work tree
 printf 'cat data/untr.txt\n' > "$SREPO/lib1/untracked.sh"   # present, NOT tracked
 mkfifo "$SREPO/dsym/fifo.pipe"   # a FIFO inside the tree, reached through a tracked symlink (untracked itself)
@@ -1651,7 +1696,7 @@ rmk cm/x.test.ts $'// data/cm_own.txt\ncat data/cm_live.txt\n'; rmk cm/x.ts.snap
 ln -s c.sh "$RREPO/cm/link.txt"
 rmk cm/tab.py $'\t# data/cm_own.txt\ncat data/cm_live.txt\n'; rmk cm/crlf.ts $'// data/cm_own.txt\r\ncat data/cm_live.txt\r\n'
 rmk cm/nbsp.sh $'\xc2\xa0# data/cm_nbsp.txt\n'; rmk cm/q.sh $'echo "# data/cm_quote.txt"\necho ${#x} $# data/cm_dollar.txt\n'; rmk cm/ln.sh $'# one\n# two\ncat data/cm_live.txt\n'
-( cd "$RREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed ) || { echo "[FATAL] reach fixture" >&2; exit 1; }
+( cd "$RREPO" && gitq init -q -b main . && gitq add -A && gitq commit -qm seed ) || { echo "[FATAL] reach fixture" >&2; exit 2; }
 printf 'cat data/untr.txt\n' > "$RREPO/libN/untracked.sh"   # present, NOT tracked
 printf 'cat data/untrk.txt\n' > "$RREPO/walk/untracked.sh"   # present, NOT tracked
 rfix_ok=1
@@ -1670,7 +1715,7 @@ chk() { local name="$1"; shift; if "$@"; then pass "$name"; else fail "$name"; f
 _c_p=$passes; _c_f=$fails; _c_n=${#FAILED[@]}
 { chk "instrument: a true predicate" true; chk "instrument: a false predicate" false; } >/dev/null 2>&1
 if [[ "$passes" -ne $((_c_p + 1)) || "$fails" -ne $((_c_f + 1)) || "${#FAILED[@]}" -ne $((_c_n + 1)) ]]; then
-  printf '[FATAL] instrument self-test: chk did not record both a pass and a failure\n' >&2; exit 1
+  printf '[FATAL] instrument self-test: chk did not record both a pass and a failure\n' >&2; exit 2
 fi
 passes=$_c_p; fails=$_c_f; if (( _c_n == 0 )); then FAILED=(); else FAILED=("${FAILED[@]:0:_c_n}"); fi
 
@@ -2169,7 +2214,7 @@ echo "== ratchet (PR3a): the baseline compare, the floors, the growth rule, the 
 RT="$SANDBOX/rt"; mkdir -p "$RT"
 GT='>'   # a redirect character spelled in the quoted program text of the workflow and probe rows (the fixture-relative scanner reads a bare one inside a string as a redirect)
 RT_LINT="$SCRIPT_DIR/../scripts/lint-ratchet.py"
-[[ -s "$RT_LINT" ]] || { echo "[FATAL] $RT_LINT missing" >&2; exit 1; }
+[[ -s "$RT_LINT" ]] || { echo "[FATAL] $RT_LINT missing" >&2; exit 2; }
 cat > "$BIN/sel-rt.sh" <<'SEL'
 #!/usr/bin/env bash
 # the STRICT selector stub of the ratchet rows: any argv but the exact pair exits 64, so a mutant that changes the argument is killed
@@ -2210,7 +2255,7 @@ rt_mk() {   # rt_mk <name> <base_fn> [pr_fn]: a base commit on main (the tree pl
   local d="$RT/$1"; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"
   ( cd "$d" && gitq init -q -b main . && rt_tree && "$2" && gitq add -A && gitq commit -qm base \
     && { [[ -z "${3:-}" ]] || { gitq checkout -q -b pr && "$3" && gitq add -A && gitq commit -qm pr --allow-empty && gitq checkout -q main && gitq merge -q --no-ff pr -m merge; }; } ) \
-    || { echo "[FATAL] ratchet fixture $1" >&2; exit 1; }
+    || { echo "[FATAL] ratchet fixture $1" >&2; exit 2; }
 }
 rt_none() { :; }
 rt_touch() { printf 'v-%s\n' "$RANDOM" >> README.md; }
@@ -2237,7 +2282,7 @@ rt_b_oracle() { :; }; rt_p_oracle() { printf 'ci2\n' >> .github/workflows/ci.yml
 rt_b_renamed() { rt_variants; printf '\ndel baseline_at\n' >> plugins/soleur/scripts/lint-ratchet.py; }
 rt_b_raises() { rt_variants; printf '\ndef baseline_at(root, sha, path, env=None):\n    raise RuntimeError("boom")\n' >> plugins/soleur/scripts/lint-ratchet.py; }
 rt_b_weak() { rt_b_grow; }
-rt_p_weak() { rt_p_grow; printf '\ndef baseline_at(root, sha, path, env=None):\n    return None\n\ndef resolve_base(root, ref, env=None):\n    return "HEAD"\n' >> plugins/soleur/scripts/lint-ratchet.py; }   # a PR-tree helper that always reports "adoption"
+rt_p_weak() { rt_p_grow; printf '\ndef baseline_at(root, sha, path, env=None):\n    return None\n\ndef resolve_base(root, ref, env=None):\n    return "HEAD"\n' >> plugins/soleur/scripts/lint-ratchet.py; }   # a PR-tree helper that always reports "baseline-reintroduced"
 rt_b_nolint() { rt_variants; rm -f plugins/soleur/scripts/lint-ratchet.py; }; rt_p_nolint() { cp "$RT_LINT" plugins/soleur/scripts/lint-ratchet.py; }   # the base has no helper; the PR adds it
 rt_b_badlint() { rt_variants; printf '\ndef (\n' >> plugins/soleur/scripts/lint-ratchet.py; }; rt_p_badlint() { cp "$RT_LINT" plugins/soleur/scripts/lint-ratchet.py; }   # the base copy does not compile; the PR repairs it
 rt_b_noclass() { rt_variants; printf '#!/bin/sh\n' > scripts/test-all.sh; }
@@ -2263,12 +2308,12 @@ rt_mk weak rt_b_weak rt_p_weak; rt_mk nolint rt_b_nolint rt_p_nolint; rt_mk badl
 rt_mk notestall rt_b_notestall rt_touch; rt_mk untrk rt_b_untrk rt_touch; rt_mk lnkall rt_b_lnkall rt_touch; rt_mk um rt_b_um rt_touch; rt_mk tsx rt_b_tsx rt_touch; rt_mk cs4 rt_b_cs1 rt_p_cs4; rt_mk cs5 rt_b_cs1 rt_p_cs5; rt_mk cs6 rt_b_cs6 rt_p_cs6; rt_mk accln rt_b_accln rt_touch
 for ot in "${RT_OTOUCH[@]}"; do rt_mk "ot_${ot%%:*}" rt_variants "rt_p_ot_${ot%%:*}"; done
 printf 'scripts/not\tdata/in-the-baseline\n' > "$RT/outside.tsv"
-( cd "$RT/single" && rt_touch && gitq add -A && gitq commit -qm head ) || { echo "[FATAL] ratchet fixture single" >&2; exit 1; }   # a linear history: HEAD has ONE parent (the squash-shaped merge_group commit)
+( cd "$RT/single" && rt_touch && gitq add -A && gitq commit -qm head ) || { echo "[FATAL] ratchet fixture single" >&2; exit 2; }   # a linear history: HEAD has ONE parent (the squash-shaped merge_group commit)
 ( d="$RT/stack"; assert_fixture_dir "$d"; rm -rf "$d"; mkdir -p "$d"; cd "$d" && gitq init -q -b main . && rt_tree && bl scripts/bl-st.tsv "$B_BAD$B_SWP" && gitq add -A && gitq commit -qm c0 \
   && gitq update-ref refs/remotes/origin/main HEAD && bl scripts/bl-st.tsv "$B_BAD" && gitq add -A && gitq commit -qm c1 \
   && gitq checkout -q -b pr && bl scripts/bl-st.tsv "$B_SWP" && gitq add -A && gitq commit -qm pr && gitq checkout -q main && gitq merge -q --no-ff pr -m merge ) \
-  || { echo "[FATAL] ratchet fixture stack" >&2; exit 1; }   # entry 1 drained (c1), entry 2 swaps a pair: HEAD^1 = c1, while origin/main is the OLDER c0
-gitq clone -q --depth 1 "file://$RT/ok" "$RT/shallow" 2>/dev/null || { echo "[FATAL] ratchet shallow clone" >&2; exit 1; }
+  || { echo "[FATAL] ratchet fixture stack" >&2; exit 2; }   # entry 1 drained (c1), entry 2 swaps a pair: HEAD^1 = c1, while origin/main is the OLDER c0
+gitq clone -q --depth 1 "file://$RT/ok" "$RT/shallow" 2>/dev/null || { echo "[FATAL] ratchet shallow clone" >&2; exit 2; }
 RT_FIX_OK=1; for d in acc ok adopt del none grow cs1 cs2 cs3 cs4 cs5 cs6 oracle renamed raises single noparent stack shallow weak nolint badlint noclass noalways notestall accln untrk lnkall um tsx ot_ci ot_replay ot_lint ot_tpaths ot_tall; do [[ -d "$RT/$d/.git" ]] || RT_FIX_OK=0; done
 [[ "$RT_FIX_OK" -eq 1 && "$(gitq -C "$RT/ok" rev-list --parents -n1 HEAD | wc -w)" -eq 3 && "$(gitq -C "$RT/single" rev-list --parents -n1 HEAD | wc -w)" -eq 2 \
   && "$(gitq -C "$RT/noparent" rev-list --parents -n1 HEAD | wc -w)" -eq 1 && "$(gitq -C "$RT/stack" rev-parse origin/main)" != "$(gitq -C "$RT/stack" rev-parse HEAD^1)" ]] \
@@ -2286,7 +2331,7 @@ rt_list "$RT/L-odd" "$GOODX" odd; rt_list "$RT/L-mix" "$GOODX" mix; rt_list "$RT
 rt_list "$RT/L-dup" "$GOODX" bad bad; rt_list "$RT/L-glob" "$GOODX" 'bad=^glob:data/*.txt'
 rt_list "$RT/L-refs4" "$GOODX" refs4; rt_list "$RT/L-ghostbad" "$GOODX" ghost bad; rt_list "$RT/L-um" "$GOODX" um; rt_list "$RT/L-tsx" "$GOODX" tsx
 printf 'AFFECTED_SELECTED\tscripts/e\033x\t0\tedge:derived\t^scripts/e\033x.test.sh\nAFFECTED_SELECTED\tscripts/good\t0\tedge:declared\t^scripts/good.test.sh|^data/ok.txt\nAFFECTED_SUMMARY selected=0 of=2 always_on=0 edge=1 fallback=none\n' > "$RT/L-esclabel"
-( cd "$RT/tsx" && rm scripts/tsx.test.sh ) || { echo "[FATAL] ratchet fixture tsx" >&2; exit 1; }   # a tracked suite deleted from the work tree
+( cd "$RT/tsx" && rm scripts/tsx.test.sh ) || { echo "[FATAL] ratchet fixture tsx" >&2; exit 2; }   # a tracked suite deleted from the work tree
 printf 'AFFECTED_SELECTED\t::lbl\t0\tedge:derived\t^::lbl.test.sh\nAFFECTED_SELECTED\tscripts/good\t0\tedge:declared\t^scripts/good.test.sh|^data/ok.txt\nAFFECTED_SUMMARY selected=0 of=2 always_on=0 edge=1 fallback=none\n' > "$RT/L-lbl"
 { srow good '^data/ok.txt'; printf 'AFFECTED_SELECTED\tscripts/bad\t1\talways_on\t^scripts/bad.test.sh\n'; printf 'AFFECTED_SUMMARY selected=1 of=2 always_on=1 edge=1 fallback=none\n'; } > "$RT/L-always"
 { srow good '^data/ok.txt' | sed 's/$/\r/'; srow bad | sed 's/$/\r/'; printf 'AFFECTED_SUMMARY selected=0 of=2 always_on=0 edge=1 fallback=none\r\n\n\n'; } > "$RT/L-crlf"
@@ -2425,8 +2470,8 @@ row_rt_floors_census() {   # every shape the generator knows is listed once, and
 }
 
 # ---- the baseline-state table and the growth rule (HEAD^1 is the base) -----------------------------------------
-row_rt_adopt() { rt_in std adopt 0 pass --baseline scripts/bl-ok.tsv && rt_in good adopt 0 pass --baseline scripts/bl-empty.tsv; }   # base absent, HEAD present, live equals it
-row_rt_adopt_unequal() { rt_in std adopt 1 new-pair --baseline scripts/bl-empty.tsv; }
+row_rt_reintroduced() { rt_in std adopt 1 baseline-reintroduced --baseline scripts/bl-ok.tsv && ! grep -q '^grown' <<<"$ROUT" && grep -qxF -- $'baseline-reintroduced\tscripts/bl-ok.tsv\ta baseline file absent at the base cannot be adopted: strict zero retired it' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL" && rt_in good adopt 1 baseline-reintroduced --baseline scripts/bl-empty.tsv; }   # base absent, HEAD present: exit 1 unconditionally — strict zero retired the file, even an empty re-add; the !grown assertion keeps the reintroduced marker from masking a co-firing grown; the detail text and the absent regenerate-remedy pin the arm's output
+row_rt_reintroduced_newpair() { rt_in std adopt 1 baseline-reintroduced --baseline scripts/bl-empty.tsv && grep -qxF -- $'new-pair\tscripts/bad\tdata/gap.txt\tscripts/bad.test.sh:1' <<<"$ROUT"; }   # live-pair detail co-fires under the reintroduced marker
 row_rt_deleted() { rt_in std del 1 baseline-deleted --baseline scripts/bl-ok.tsv && grep -qxF -- 'remedy: restore it from main: git checkout origin/main -- scripts/bl-ok.tsv' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL"; }   # the deleted baseline is restored, never regenerated   # base present, HEAD absent, pairs still live
 row_rt_deleted_end() { rt_in good del 0 pass --baseline scripts/bl-ok.tsv; }   # the PR5 end state: nothing live
 row_rt_absent_both() { rt_in std none 1 new-pair --baseline scripts/bl-ok.tsv; }   # strict zero
@@ -2455,7 +2500,7 @@ row_rt_fault_enoent() { rt_fault ENOENT scripts/bad.test.sh --root "$RT/ok" --li
 row_rt_fault_census() { rt_fault EIO @census --root "$RT/ok" --list "$RT/L-std" --baseline scripts/bl-ok.tsv; [[ "$RC" -eq 2 ]] && rt_marker 2 floor-unreadable; }   # a raw OSError out of the census
 row_rt_baseline_symlink() {   # a symlinked baseline that leaves the tree is refused (its text never printed); one inside the tree is read
   ln -sf "$RT/outside.tsv" "$RT/ok/scripts/bl-link-out.tsv"; ln -sf bl-ok.tsv "$RT/ok/scripts/bl-link-in.tsv"
-  rt_in std ok 2 baseline-unreadable --baseline scripts/bl-link-out.tsv && ! grep -q 'in-the-baseline' <<<"$ROUTALL" && rt_in std ok 0 pass --baseline scripts/bl-link-in.tsv
+  rt_in std ok 2 baseline-unreadable --baseline scripts/bl-link-out.tsv && ! grep -q 'in-the-baseline' <<<"$ROUTALL" && rt_in std ok 1 baseline-reintroduced --baseline scripts/bl-link-in.tsv   # the in-tree symlink resolves — then the uncommitted path is a re-add: baseline-reintroduced, never adopted
 }
 row_rt_big_baseline() {   # a 150000-line baseline with a duplicate: the duplicate check is linear (list.count was quadratic and outlived the 30 s the harness allows on any runner: 60000 lines took under 25 s on a fast CI runner and the quadratic mutant survived there)
   python3 - > "$RT/ok/scripts/bl-big.tsv" <<'PY'
@@ -2463,11 +2508,11 @@ lines = sorted("scripts/s%06d\tdata/f%06d" % (i, i) for i in range(150000))
 lines.append(lines[0])
 print("\n".join(lines))
 PY
-  local t0=$SECONDS r; rt_is 1 stale-line --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && return "$r"; return 1
+  local t0=$SECONDS r; rt_is 1 baseline-reintroduced --root "$RT/ok" --list "$RT/L-good" --baseline scripts/bl-big.tsv; r=$?; (( SECONDS - t0 < 25 )) && [[ "$r" -eq 0 ]] && grep -q '^baseline-dup'$'\t' <<<"$ROUT" && ! grep -q -- '--print-baseline' <<<"$ROUTALL" && return 0; return 1   # uncommitted-at-base: reintroduced is the marker; the dup/stale checks still run (and the restore/regenerate remedy stays out) inside the budget
 }
 row_rt_baseline_dir() { rt_in std ok 2 baseline-unreadable --baseline scripts; }
 row_rt_helper_renamed() { rt_in std renamed 2 internal --baseline scripts/bl-ok.tsv && grep -q 'lint-ratchet.py has no baseline_at' <<<"$RERR"; }
-row_rt_helper_pr_tree_ignored() { rt_in swp grow 1 grown --baseline scripts/g-swap.tsv && rt_in swp weak 1 grown --baseline scripts/g-swap.tsv; }   # the control, then a PR whose helper always reports "adoption" and whose baseline swaps a pair
+row_rt_helper_pr_tree_ignored() { rt_in swp grow 1 grown --baseline scripts/g-swap.tsv && rt_in swp weak 1 grown --baseline scripts/g-swap.tsv; }   # the control, then a PR whose helper always reports "baseline-reintroduced" and whose baseline swaps a pair
 row_rt_helper_base_missing() { rt_in std nolint 2 internal --baseline scripts/bl-ok.tsv && grep -q 'the merge base has no plugins/soleur/scripts/lint-ratchet.py: a PR that moves that helper must land the move first' <<<"$RERR"; }
 row_rt_helper_base_uncompilable() { rt_in std badlint 2 internal --baseline scripts/bl-ok.tsv && grep -q 'does not load (SyntaxError): a PR that moves that helper must land the move first' <<<"$RERR"; }
 row_rt_precedence() {   # unaudited, then a new pair, then a stale line: the marker names the first, the text keeps the order
@@ -2501,10 +2546,10 @@ row_rt_generic() { rt_in std raises 2 internal --baseline scripts/bl-ok.tsv; }
 
 # ---- the failure text: golden templates per cause --------------------------------------------------------------
 rt_remedy_new() {   # the five remedy lines of a new pair (an independent copy of the golden text)
-  printf '%s\n' 'remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file (that is what the selector must know); editing that file runs the full battery once' \
+  printf '%s\n' 'remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file, or the file'"'"'s state feeds its verdict (that is what the selector must know); editing that file runs the full battery once' \
     'remedy: or add an anchor-keyed accept row to scripts/ci-pr-affected-audit.accept.tsv only when the suite merely names the file (a message, a fixture it writes into a scratch tree, a negative-test string); the reason names the line kind' \
     'remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)' \
-    'remedy: an accept row on a file the suite really reads is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository'"'"'s ruleset' \
+    'remedy: an accept row on a file the suite really reads or whose state feeds its verdict is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository'"'"'s ruleset' \
     'remedy: a baseline row cannot be added'
 }
 rt_golden() {   # rt_golden <repo> <list> <cause line> <suite> <path> <ref text> <live> <baseline> [ref line]: compare the WHOLE stdout
@@ -2633,9 +2678,9 @@ row_rt_marker_fields() {   # exactly the pinned field list, on a pass, a verdict
   rt_sel_is "$RT/fl-below.txt" 2 floor-rows-vs-of && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=2\ reason=floor-rows-vs-of\ live=[0-9]+\ baseline=[0-9]+$ ]]
 }
 row_rt_usage() { rt_in std ok 0 pass --baseline scripts/bl-ok.tsv || return 1; rt_go --root "$RT/ok" --no-such-flag; [[ "$RC" -eq 2 ]] && ! grep -q SOLEUR_PR_AFFECTED_RATCHET <<<"$ROUTALL"; }   # a usage error prints no marker (the control: a run does)
-row_rt_oracle() {
+row_rt_oracle() {   # the oracle fixture writes a baseline at the canonical path absent at base: baseline-reintroduced since strict zero, and the notice still names all three oracle inputs
   rt_go --root "$RT/oracle" --list "$RT/L-std" --baseline scripts/ci-pr-affected-audit.baseline.tsv
-  [[ "$RC" -eq 0 ]] && grep -qxF -- 'oracle-inputs-changed: .github/workflows/ci.yml scripts/ci-pr-affected-replay.py scripts/ci-pr-affected-audit.baseline.tsv' <<<"$ROUT" && rt_marker 0 pass
+  [[ "$RC" -eq 1 ]] && grep -qxF -- 'oracle-inputs-changed: .github/workflows/ci.yml scripts/ci-pr-affected-replay.py scripts/ci-pr-affected-audit.baseline.tsv' <<<"$ROUT" && rt_marker 1 baseline-reintroduced
 }
 row_rt_oracle_each() {   # each oracle input alone, in a diff, is named (the PR-tree helper, the path library, the runner, ci.yml, the replay script)
   local ot; for ot in "${RT_OTOUCH[@]}"; do rt_in std "ot_${ot%%:*}" 0 pass --baseline scripts/bl-ok.tsv && grep -qxF -- "oracle-inputs-changed: ${ot#*:}" <<<"$ROUT" || return 1; done
@@ -2851,8 +2896,8 @@ chk "ratchet floor: a selector exit code other than 0 is selector-failed (exit 2
 chk "ratchet floor: a selector that outlives PR_AFFECTED_REPLAY_SELECT_TIMEOUT is selector-timeout (exit 2)" row_rt_sel_hang
 chk "ratchet floor: an unreadable --list file is selector-failed (exit 2)" row_rt_list_missing
 chk "ratchet floor: the selector stub is strict (exit 64 on any argv but the exact pair), so a mutant that changes the argument is killed" row_rt_argv_strict
-chk "ratchet state table: base absent / HEAD present is adoption (passes when live equals the baseline, live empty or not)" row_rt_adopt
-chk "ratchet state table: adoption with a baseline that is not live is a new pair (exit 1)" row_rt_adopt_unequal
+chk "ratchet state table: base absent / HEAD present is baseline-reintroduced (exit 1 unconditionally — a re-added baseline never adopts, even an empty file)" row_rt_reintroduced
+chk "ratchet state table: a re-introduced baseline still prints each live pair as new-pair detail under the reintroduced marker" row_rt_reintroduced_newpair
 chk "ratchet state table: base present / HEAD absent with pairs still live is baseline-deleted (exit 1)" row_rt_deleted
 chk "ratchet state table: base present / HEAD absent with nothing live passes (the PR5 end state)" row_rt_deleted_end
 chk "ratchet state table: absent at both is strict zero (a live pair is exit 1)" row_rt_absent_both
@@ -2922,7 +2967,7 @@ chk "ratchet oracle: each of the helper, the path library, the runner, ci.yml an
 chk "ratchet oracle: a diff that only adds the accept file (and so exempts a new pair) is named" row_rt_oracle_accept_only
 chk "ratchet oracle: every RATCHET_* path constant of the SUT is in RATCHET_ORACLE" row_rt_oracle_constants
 chk "ratchet oracle: in --print-baseline mode the notice goes to stderr" row_rt_oracle_stderr
-chk "ratchet helpers: the MERGE-BASE copy of lint-ratchet.py is the one that runs (a PR-tree helper that always reports adoption changes no verdict)" row_rt_helper_pr_tree_ignored
+chk "ratchet helpers: the MERGE-BASE copy of lint-ratchet.py is the one that runs (a PR-tree helper that always reports baseline-reintroduced changes no verdict)" row_rt_helper_pr_tree_ignored
 chk "ratchet helpers: a merge base without lint-ratchet.py is exit 2 internal, naming the remedy" row_rt_helper_base_missing
 chk "ratchet helpers: a merge-base copy that does not compile is exit 2 internal, though the PR tree repairs it" row_rt_helper_base_uncompilable
 
@@ -2949,8 +2994,8 @@ chk "job wiring mutant: a trailing comment on timeout-minutes reds the alone-on-
 chk "job wiring mutant: timeout-minutes above 5 reds the timeout row" wf_mut timeout-six $'\n    timeout-minutes: 5\n' $'\n    timeout-minutes: 6\n' row_wf_timeout
 chk "job wiring mutant: fetch-depth: 1 reds the checkout row" wf_mut depth-one $'\n          fetch-depth: 2\n' $'\n          fetch-depth: 1\n' row_wf_checkout
 chk "job wiring mutant: persist-credentials removed reds the checkout row" wf_mut creds-gone $'\n          persist-credentials: false\n' $'\n' row_wf_checkout
-chk "job wiring mutant: the selector timeout removed reds the comparison row" wf_mut seltimeout-gone $'\n          PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "200"\n' $'\n' row_wf_select_timeout
-chk "job wiring mutant: a selector timeout equal to the job timeout (300) reds the comparison row" wf_mut seltimeout-300 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "200"' 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "300"' row_wf_select_timeout
+chk "job wiring mutant: the selector timeout removed reds the comparison row" wf_mut seltimeout-gone $'\n          PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "290"\n' $'\n' row_wf_select_timeout
+chk "job wiring mutant: a selector timeout equal to the job timeout (300) reds the comparison row" wf_mut seltimeout-300 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "290"' 'PR_AFFECTED_REPLAY_SELECT_TIMEOUT: "300"' row_wf_select_timeout
 chk "job wiring: the step's run: script, executed with a stub python3 as GitHub runs it, passes the exit code through and prints the marker, the summary and no annotation on a pass" row_wf_run_pass
 chk "job wiring: the step's exit code IS the ratchet's (1 a verdict, 2 infrastructure) and each is annotated with its reason" row_wf_run_exit_code
 chk "job wiring: python3 dying (rc 1, 127) or exiting 0 with no marker is exit 2 reason=no-marker" row_wf_run_no_marker
@@ -2980,7 +3025,7 @@ OW_MSHA=0123456789abcdef0123456789abcdef01234567
 OW_STEP="$(wf_block "$WF_REAL" $RJOB | sed -n 's/^      - name: \(.*\)$/\1/p')"   # read from the workflow; row_ow_parity ties it to the probe's STEP
 OW_KBD="knowledge-""base"   # assembled: the dropped-consumer census must not read this suite as a knowledge-base reader
 OW_BL_PATH="repos/$R/contents/scripts/ci-pr-affected-audit.baseline.tsv"
-OW_UNITS=()
+OW_UNITS=(); OW_MUT_RUN=0; OW_MUT_KILLED=0
 OW_RCS=()   # every exit code the probe returned in this section: none may be 1 (exit 1 is not used by the probe)
 ow_base_units() {
   OW_UNITS=("5001 pull_request shaA feat/a 2031-02-02T01:00:00Z 1 11 0 150" "5002 pull_request shaB docs/b 2031-02-02T02:00:00Z 1 12 0 140"
@@ -3000,17 +3045,22 @@ ow_jobs_json() {   # ow_jobs_json <job id> <exit> <wall> [cancelled]
   printf '{"total_count":2,"jobs":[{"id":1,"name":"test","conclusion":"success"},{"id":%s,"name":"affected-index-ratchet","conclusion":"%s","started_at":"2031-02-02T00:00:00Z","completed_at":"%s","runner_id":9,"steps":[{"name":"%s","conclusion":"%s"}]}]}' \
     "$1" "$concl" "$(date -u -d "2031-02-02T00:00:00Z + $3 seconds" +%Y-%m-%dT%H:%M:%SZ)" "$OW_STEP" "$step"
 }
-ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> <conclusion> <pr number> [fork 0|1]
-  printf '{"id":%s,"head_sha":"%s","head_branch":"%s","created_at":"%s","run_attempt":%s,"event":"%s","conclusion":"%s","pull_requests":[%s],"repository":{"full_name":"jikig-ai/soleur"},"head_repository":{"full_name":"%s"}}' \
-    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$([[ "$8" != 0 ]] && printf '{"number":%s}' "$8")" "$([[ "${9:-0}" == 1 ]] && echo someone/soleur || echo jikig-ai/soleur)"
+ow_run_item() {   # ow_run_item <id> <sha> <branch> <created> <attempt> <event> <conclusion> <pr number> [fork 0|1|gone]
+  printf '{"id":%s,"head_sha":"%s","head_branch":"%s","created_at":"%s","run_attempt":%s,"event":"%s","conclusion":"%s","pull_requests":[%s],"repository":{"full_name":"jikig-ai/soleur"},"head_repository":%s}' \
+    "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$([[ "$8" != 0 ]] && printf '{"number":%s}' "$8")" "$(case "${9:-0}" in 1) echo '{"full_name":"someone/soleur"}' ;; gone) echo null ;; *) echo '{"full_name":"jikig-ai/soleur"}' ;; esac)"
+}
+ow_sha() { printf '%040d' "$1"; }   # a 40-hex head sha for a synthetic run (digits are hex); never a tracked path
+ow_pr_obj() {   # ow_pr_obj <n> <branch> [head repo] [base repo]: one element of GET commits/<sha>/pulls
+  printf '{"number":%s,"state":"closed","head":{"ref":"%s","repo":{"full_name":"%s"}},"base":{"repo":{"full_name":"%s"}}}' "$1" "$2" "${3:-jikig-ai/soleur}" "${4:-jikig-ai/soleur}"
 }
 ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a merge and the baseline at the merge commit and at main) under the stub
   local u id ev sha br created att prn ex wall pr_list="" mg_list="" item f1 i dummy="" runconc fork
-  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* 2>/dev/null
+  rm -f "$GHFIX"/*actions_runs_[56][0-9][0-9][0-9]_* "$GHFIX"/*actions_jobs_[78][0-9][0-9][0-9]_logs* "$GHFIX"/*_pulls_1[0-9]* "$GHFIX"/*_issues_1[0-9]_timeline* "$GHFIX"/*ci_yml_runs_event_*status_completed* "$GHFIX"/ERR*_*contents* "$GHFIX"/*_commits_00000000*_pulls_per_page_2 "$GHFIX"/*_issues_labels_s4_drain* "$GHFIX"/*rate_limit* "$GHFIX"/SLOW_* 2>/dev/null
+  printf '{"resources":{"core":{"limit":5000,"remaining":%s,"used":100,"reset":1900000000}}}' "${OW_RL_REMAINING:-4900}" | fx "rate_limit"   # the probe reads the API quota before it reads any run
   for u in "${OW_UNITS[@]}"; do
     read -r id ev sha br created att prn ex wall <<<"$u"
     runconc=success; [[ "$ex" != cancelrun ]] || runconc=cancelled
-    fork=0; [[ " ${OW_RUNFORK:-} " != *" $id "* ]] || fork=1
+    fork=0; [[ " ${OW_RUNFORK:-} " != *" $id "* ]] || fork=1; [[ " ${OW_RUNGONE:-} " != *" $id "* ]] || fork=gone
     item="$(ow_run_item "$id" "$sha" "$br" "$created" "$att" "$ev" "$runconc" "$prn" "$fork")"
     if [[ "$ev" == pull_request ]]; then pr_list="${pr_list:+$pr_list,}$item"; else mg_list="${mg_list:+$mg_list,}$item"; fi
     [[ "$ex" != cancelrun ]] || continue   # a cancelled run: no jobs fixture, so a read of it is a STUB-MISS
@@ -3051,16 +3101,70 @@ ow_write() {   # write every fixture for OW_UNITS (and the PR facts, the PR3a me
   [[ "${OW_BL_TIP_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=main")"
   [[ "${OW_BL_MERGE_ABSENT:-}" != 1 ]] || : > "$GHFIX/ERR404_$(keyof "$OW_BL_PATH?ref=$OW_MSHA")"
   [[ "${OW_BL_TIP_FAIL:-}" != 1 ]] || fx_err "$OW_BL_PATH?ref=main"
+  local dm di="" n=0   # the s4-drain label list: OW_DRAIN is a space-separated list of merged_at values ("null" = closed without merging)
+  for dm in ${OW_DRAIN:-}; do n=$((n + 1)); di="${di:+$di,}{\"number\":$((900 + n)),\"pull_request\":{\"merged_at\":$([[ "$dm" == null ]] && echo null || echo "\"$dm\"")}}"; done
+  printf '[%s]' "$di" | fx "repos/$R/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100"
+  local sk="repos/$R/pulls/11226"   # the floor sentinel (PR5): OW_SENTINEL is a merged_at value for a merged PR, empty for an unmerged one, or fail / object / junk
+  case "${OW_SENTINEL:-}" in
+    "") printf '{"number":11226,"merged_at":null}' | fx "$sk" ;;
+    fail) fx_err "$sk" ;;
+    object) printf '[]' | fx "$sk" ;;
+    null) printf 'null' | fx "$sk" ;;
+    nonumber) printf '{"merged_at":"2031-02-02T03:30:00Z"}' | fx "$sk" ;;
+    wrongnum) printf '{"number":99999,"merged_at":"2031-02-02T03:30:00Z"}' | fx "$sk" ;;
+    *) printf '{"number":11226,"merged_at":"%s"}' "$OW_SENTINEL" | fx "$sk" ;;
+  esac
+  local r rid rprn rbr rmode rkey   # the commit lookups of the runs whose own pull_requests is empty: "<run id> <pr> <branch> [mode]"
+  for r in "${OW_RESOLVE[@]}"; do
+    read -r rid rprn rbr rmode <<<"$r"
+    rkey="repos/$R/commits/$(ow_sha "$rid")/pulls?per_page=2"
+    case "${rmode:-ok}" in
+      ok) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr")" | fx "$rkey" ;;
+      once) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr")" | fx "$rkey"; : > "$GHFIX/ERR_ONCE_$(keyof "$rkey")" ;;
+      empty) printf '[]' | fx "$rkey" ;;
+      two) printf '[%s,%s]' "$(ow_pr_obj "$rprn" "$rbr")" "$(ow_pr_obj 99 "$rbr")" | fx "$rkey" ;;
+      headrepo) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr" someone/soleur)" | fx "$rkey" ;;
+      baserepo) printf '[%s]' "$(ow_pr_obj "$rprn" "$rbr" jikig-ai/soleur jikig-ai/other)" | fx "$rkey" ;;
+      ref) printf '[%s]' "$(ow_pr_obj "$rprn" other/ref)" | fx "$rkey" ;;
+      object) printf '{"message":"Not a list"}' | fx "$rkey" ;;
+      e404) fx_err404 "$rkey" ;;
+      e422) : > "$GHFIX/ERR422_$(keyof "$rkey")" ;;
+      e502) fx_err "$rkey" ;;
+      e403) fx_err403rl "$rkey" ;;
+      e429) fx_err429rl "$rkey" ;;
+      exit4) : > "$GHFIX/ERR401EXIT4_$(keyof "$rkey")" ;;
+    esac
+  done
 }
 ow_json_files() {   # ow_json_files <n> <prefix>: a files array of n entries
   local i out=""; for i in $(seq 1 "$1"); do out="${out:+$out,}{\"filename\":\"$2$i.ts\"}"; done; printf '[%s]' "$out"
 }
-OW_ATT1=""; OW_ENV=()
-ow_probe() {   # ow_probe [now epoch]: RC, OWOUT
-  RC=0; OWOUT="$(env PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
+ow_big_files() {   # ow_big_files <n> <prefix> <patch bytes> [name pad bytes] [patch text]: a files page the way GitHub serves one (a patch body per file makes a page of 100 entries 400 KB)
+  python3 -c '
+import json, sys
+n, prefix, patch, pad = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+text = sys.argv[5] if len(sys.argv) > 5 else ""
+out = []
+for i in range(1, n + 1):
+    body = ("x" * patch) if not (text and i == 1) else (text + "x" * max(0, patch - len(text)))
+    e = {"filename": "%s%d-%s.ts" % (prefix, i, "n" * pad)}
+    if patch: e["patch"] = body
+    out.append(e)
+sys.stdout.write(json.dumps(out, separators=(",", ":")))' "$1" "$2" "$3" "${4:-0}" "${5:-}"
+}
+ow_bytes_over() {   # ow_bytes_over <limit> <request path>: the fixture the STUB serves is bigger than <limit> bytes (a trimmed fixture must fail its row, not become a copy of the small one)
+  [[ "$(wc -c < "$GHFIX/$(keyof "$2")")" -gt "$1" ]]
+}
+OW_ATT1=""; OW_ENV=(); OWERR="$SANDBOX/ow.err"
+ow_probe() {   # ow_probe [now epoch]: RC, OWOUT (stdout and stderr merged). The SOAK_ seams of a developer's shell never reach the probe.
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN/nosleep:$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="${1:-$(date -u -d 2031-02-05T00:00:00Z +%s)}" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>&1)" || RC=$?
   OW_RCS+=("$RC")
 }
-ow_case() { : > "$GHLOG"; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=()
+ow_probe_split() {   # ow_probe_split: RC, OWOUT (stdout only), OWERR (the stderr file)
+  RC=0; OWOUT="$(env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN/nosleep:$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" "${OW_ENV[@]}" bash "$OW_SCRIPT" 2>"$OWERR")" || RC=$?
+  OW_RCS+=("$RC")
+}
+ow_case() { : > "$GHLOG"; OW_SENTINEL=""; OW_ATT1=""; OW_PR_MERGED=""; unset OW_PR_MERGED; OW_P13_REF=""; OW_RUNFORK=""; OW_P16_FORK=0; OW_P16_FILES=""; OW_P16_PAGE2=""; OW_P16_PAGE3=""; OW_PAGED=""; OW_ENV=(); OW_RL_REMAINING=""; OW_RESOLVE=(); OW_DRAIN=""; OW_RUNGONE=""; rm -f "$GHLOG.slowpids" "$GHLOG.conc" "$GHLOG.sleeps" "$OWERR"
   unset OW_BL_TIP; OW_BL_TIP_ABSENT=""; OW_BL_MERGE_ABSENT=""; OW_BL_TIP_FAIL=""; ow_base_units; }
 ow_variant() {   # ow_variant <fn that edits OW_UNITS or globals>: rebuild the fixtures and run the probe
   ow_case; "$1"; ow_write; ow_probe "${OW_NOW:-}"
@@ -3069,7 +3173,7 @@ ow_u_base() { :; }
 ow_u_notmerged() { OW_PR_MERGED=null; }
 ow_drop() { local keep=() u; for u in "${OW_UNITS[@]}"; do [[ "$u" == "$1 "* ]] || keep+=("$u"); done; OW_UNITS=("${keep[@]}"); }
 ow_u_few() { ow_drop 5004; ow_drop 5003; }
-ow_u_slow() { local i; for i in "${!OW_UNITS[@]}"; do OW_UNITS[i]="${OW_UNITS[$i]% *} 220"; done; }
+ow_u_slow() { local i; for i in "${!OW_UNITS[@]}"; do OW_UNITS[i]="${OW_UNITS[$i]% *} 241"; done; }
 ow_u_exit1() { OW_UNITS[0]="5001 pull_request shaA feat/a 2031-02-02T01:00:00Z 1 11 1 150"; }
 ow_u_botexit1() { OW_UNITS[3]="5004 pull_request shaD bot/d 2031-02-02T04:00:00Z 1 14 1 155"; }
 ow_u_defect() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 2 16 2 150"); }
@@ -3083,7 +3187,11 @@ ow_u_paused() { OW_UNITS[7]="6003 merge_group sha3 gh-readonly-queue/main/pr-13-
 ow_u_nobot() { ow_drop 5004; }
 ow_u_canary_draft() { OW_P13_REF=canary-draft; }
 ow_u_skipped() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 1 16 none 0"); }
-ow_u_bigmax() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 280"); }
+ow_u_bigmax() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 286"); }
+ow_u_wall_all() { local i; for i in "${!OW_UNITS[@]}"; do OW_UNITS[i]="${OW_UNITS[$i]% *} $1"; done; }   # every unit takes the wall time $1
+ow_u_p95_240() { ow_u_wall_all 240; }
+ow_u_max_at() { local i; for i in $(seq 1 40); do OW_UNITS+=("52$(printf '%02d' "$i") pull_request shaF$i feat/a 2031-02-02T08:$(printf '%02d' "$i"):00Z 1 11 0 150"); done; OW_UNITS+=("5300 pull_request shaZ feat/a 2031-02-02T09:00:00Z 1 11 0 $1"); }
+ow_u_max_285() { ow_u_max_at 285; }
 ow_u_nomarker() { OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 1 16 nomark 150"); }
 ow_u_few16() { ow_u_few; OW_UNITS+=("5006 pull_request shaF feat/f 2031-02-02T07:00:00Z 1 16 0 150"); }   # PR 16 would be the third distinct PR
 ow_u_fork() { ow_u_few16; OW_P16_FORK=1; }
@@ -3107,16 +3215,20 @@ row_ow_notmerged() { ow_variant ow_u_notmerged; [[ "$RC" -eq 2 ]] && grep -q '^N
 row_ow_no_token() { ow_case; ow_write; RC=0; OWOUT="$(env -u GH_TOKEN PATH="$BIN:$PATH" bash "$OW_SCRIPT" 2>&1)" || RC=$?; OW_RCS+=("$RC"); [[ "$RC" -eq 3 ]] && grep -q 'GH_TOKEN is not set' <<<"$OWOUT"; }
 row_ow_api_failure() { ow_case; ow_write; fx_err "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"; ow_probe; rm -f "$GHFIX/ERR_$(keyof "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX")"; [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"; }
 row_ow_few_prs() { ow_variant ow_u_few; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: only 2 distinct green pull_request PR' <<<"$OWOUT"; }
-row_ow_slow() { ow_variant ow_u_slow; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall p95 220s is over 210 s (PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)' <<<"$OWOUT"; }
-row_ow_max() { ow_variant ow_u_bigmax; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall max 280s is over 270 s (PROVISIONAL ceiling; ceiling re-rule owed' <<<"$OWOUT" && ! grep -q 'wall p95' <<<"$OWOUT"; }
-row_ow_30day_ceiling() { OW_NOW="$(date -u -d 2031-03-05T00:00:00Z +%s)"; ow_variant ow_u_slow; OW_NOW=""; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: the 30-day trigger has passed and (d) is the only unmet criterion' <<<"$OWOUT"; }
+row_ow_slow() { ow_variant ow_u_slow; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall p95 241s is over 240 s (ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)' <<<"$OWOUT"; }
+row_ow_max() { ow_variant ow_u_bigmax; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: wall max 286s is over 285 s (ruled ceiling; a confirmed breach is a CI cost regression' <<<"$OWOUT" && ! grep -q 'wall p95' <<<"$OWOUT"; }
+row_ow_edge_pass() {   # a p95 of exactly 240 s and a maximum of exactly 285 s are AT the ceilings, so they pass
+  ow_variant ow_u_p95_240; [[ "$RC" -eq 0 ]] && grep -q '^PASS: the window held' <<<"$OWOUT" && ! grep -q 'is over 240 s' <<<"$OWOUT" || return 1
+  ow_variant ow_u_max_285; [[ "$RC" -eq 0 ]] && grep -q '^PASS: the window held' <<<"$OWOUT" && ! grep -q 'is over 285 s' <<<"$OWOUT"
+}
+row_ow_30day_ceiling() { OW_NOW="$(date -u -d 2031-03-05T00:00:00Z +%s)"; ow_variant ow_u_slow; OW_NOW=""; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: the 30-day trigger has passed and (d) is the only unmet criterion: the ceilings are ruled (2026-11-03) and a breach now is a CI cost regression for the budget owner, not a re-rule' <<<"$OWOUT"; }
 row_ow_exit1() { ow_variant ow_u_exit1; [[ "$RC" -eq 2 ]] && grep -q 'no green pull_request unit is from a PR touching scripts' <<<"$OWOUT" && ! grep -q 'restarted' <<<"$OWOUT"; }   # a genuine drift is not green and restarts nothing
 row_ow_bot_exit1() { ow_variant ow_u_botexit1; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: no bot PR in the window yet' <<<"$OWOUT" && ! grep -q 'restarted\|bot PR unit was red' <<<"$OWOUT"; }   # nor does one on a bot PR
 row_ow_defect() { ow_variant ow_u_defect; [[ "$RC" -eq 2 ]] && grep -q 'window restarted at 2031-02-02T07:00:00Z' <<<"$OWOUT" && grep -q 'only 0 distinct green' <<<"$OWOUT"; }
 row_ow_defect_first_ok() { ow_variant ow_u_defect_first_ok; [[ "$RC" -eq 2 ]] && ! grep -q 'restarted' <<<"$OWOUT" && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT"; }   # an exit 2 that first appears on the rerun was never reproduced
 row_ow_incident() { ow_variant ow_u_incident; [[ "$RC" -eq 0 ]] && ! grep -q 'restarted' <<<"$OWOUT" && grep -q 'units=8' <<<"$OWOUT"; }   # excluded, not counted, not a restart
 row_ow_unclassified() { ow_variant ow_u_unclassified; [[ "$RC" -eq 2 ]] && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT"; }
-row_ow_timeout() { ow_variant ow_u_timeout; [[ "$RC" -eq 2 ]] && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT" && grep -q 'wall max 300s is over 270' <<<"$OWOUT"; }   # a job killed at the timeout is an exit 2 unit and the ceiling sees its wall time
+row_ow_timeout() { ow_variant ow_u_timeout; [[ "$RC" -eq 2 ]] && grep -q 'exit 2 never rerun on run(s) 5006' <<<"$OWOUT" && grep -q 'wall max 300s is over 285' <<<"$OWOUT"; }   # a job killed at the timeout is an exit 2 unit and the ceiling sees its wall time
 row_ow_cancel_short() { ow_variant ow_u_cancelshort; [[ "$RC" -eq 0 ]] && grep -q 'units=8 ' <<<"$OWOUT"; }   # a cancellation that never ran the check to its end is not a unit
 row_ow_cancel_run() { ow_variant ow_u_cancelrun; [[ "$RC" -eq 0 ]] && grep -q 'runs_listed=9 units_read=8' <<<"$OWOUT" && ! grep -q 'actions_runs_5006_' "$GHLOG"; }   # a cancelled run spends no jobs read
 row_ow_paused() { ow_variant ow_u_paused; [[ "$RC" -eq 2 ]] && grep -q 'paused: the latest merge_group unit (run 6003) is red' <<<"$OWOUT"; }
@@ -3134,11 +3246,14 @@ row_ow_one_page() { ow_variant ow_u_onepage; [[ "$RC" -eq 2 ]] && grep -q 'trunc
 row_ow_unit_cap() { ow_variant ow_u_cap; grep -q 'units_read=5 truncated=1' <<<"$OWOUT" && ! grep -q 'actions_runs_5003_jobs' "$GHLOG" && grep -q 'actions_runs_6003_jobs' "$GHLOG"; }   # the 2 oldest runs plus the newest merge_group runs; the middle ones wait for the next sweep
 row_ow_baseline_grew() { ow_variant ow_u_grew; [[ "$RC" -eq 2 ]] && grep -q '^NOT YET: baseline grew by 1 line(s) since the PR3a merge ("scripts/^\[\[31mnew^Idata/9")' <<<"$OWOUT" && ! grep -q $'\033' <<<"$OWOUT"; }
 row_ow_baseline_set() { ow_variant ow_u_moved; [[ "$RC" -eq 0 ]] || return 1; ow_variant ow_u_shrunk; [[ "$RC" -eq 0 ]] || return 1; ow_variant ow_u_tipabsent; [[ "$RC" -eq 0 ]]; }   # a moved line, a shrink and an absent tip are not growth
-row_ow_baseline_reads() { ow_variant ow_u_mergeabsent; [[ "$RC" -eq 3 ]] || return 1; ow_variant ow_u_tipfail; [[ "$RC" -eq 3 ]]; }
+row_ow_baseline_reads() { ow_variant ow_u_mergeabsent; [[ "$RC" -eq 3 ]] && grep -q 'the baseline is absent at the PR3a merge commit' <<<"$OWOUT" || return 1; ow_variant ow_u_tipfail; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; : > "$GHFIX/ERR422_$(keyof "$OW_BL_PATH?ref=main")"; ow_probe; [[ "$RC" -eq 3 ]]; }   # an HTTP 422 on the baseline is a failed read, never "absent at the tip"
 row_ow_xtrace() { RC=0; OWOUT="$(env GH_TOKEN=fake PATH="$BIN:$PATH" bash -x "$OW_SCRIPT" 2>&1)" || RC=$?; [[ "$RC" -eq 78 ]]; }
 row_ow_read_only() { ow_case; ow_write; : > "$GHLOG"; ow_probe; ! grep -qE 'STUB-MISS' "$GHLOG" && [[ "$(grep -c '^REQ' "$GHLOG")" -gt 10 ]]; }
-row_ow_static() {   # the header states the exit contract and the provisional ceilings; no jq program splices a shell variable; the oracle list is the SUT's
-  grep -q 'Exit 1 is NOT USED' "$OW_SCRIPT" && grep -q 'ceilings are PROVISIONAL' "$OW_SCRIPT" && grep -q '^P95_MAX=210 ' "$OW_SCRIPT" && grep -q '^MAX_MAX=270 ' "$OW_SCRIPT" || return 1
+row_ow_static() {   # the header states the exit contract and the ruled ceilings; no jq program splices a shell variable; the oracle list is the SUT's
+  grep -q 'Exit 1 is NOT USED' "$OW_SCRIPT" && grep -q 'ceilings are RULED' "$OW_SCRIPT" && grep -q '^P95_MAX=240 ' "$OW_SCRIPT" && grep -q '^MAX_MAX=285 ' "$OW_SCRIPT" || return 1
+  grep -q '^DRAIN_SENTINEL=11226 ' "$OW_SCRIPT" && grep -q '^TIMEOUT_WALL=290$' "$OW_SCRIPT" && [[ "$(sed -n 's/^MAX_MAX=\([0-9]*\) .*/\1/p' "$OW_SCRIPT")" -lt "$(sed -n 's/^TIMEOUT_WALL=\([0-9]*\)$/\1/p' "$OW_SCRIPT")" ]] || return 1   # the sentinel PR is pinned, and the max ceiling stays under the timeout class
+  grep -q 'SOAK_FACTS_BUDGET_S:-180' "$OW_SCRIPT" && ! grep -qF '${#PR_EXCLUDED' "$OW_SCRIPT" && grep -q '1,000-result' "$OW_SCRIPT" && ! grep -qE 'evidence latches|oldest runs never change|names no PR' "$OW_SCRIPT" || return 1
   ! grep -qF "\"'\"\$merged_at\"'\"" "$OW_SCRIPT" && grep -qF -- '--arg m "$merged_at"' "$OW_SCRIPT" || return 1
   local line list; line="$(sed -n 's/^ORACLE=(\(.*\))$/\1/p' "$OW_SCRIPT")"; [[ -n "$line" ]] || return 1
   list="$(BASELINE=scripts/ci-pr-affected-audit.baseline.tsv; eval "o=($line)"; printf '%s\n' "${o[@]}")"
@@ -3149,14 +3264,440 @@ print("\n".join(m.RATCHET_ORACLE))
 PY
 )" ]]
 }
+# ---- the E2BIG fix and the speed work (#10865 follow-up): a files page over the 128 KiB per-argument limit, parallel reads, a budget, a quota guard, progress ----
+OW_PATH16F="repos/$R/pulls/16/files?per_page=100"
+ow_u_big_patch() {   # three pages of 100, 100 and 50 entries with 4 KB patches (page 1 about 410 KB); one patch body names an oracle path: only filenames decide
+  ow_u_few16; OW_P16_FILES="$(ow_big_files 100 a 4000 0 'scripts/test-all.sh')"; OW_P16_PAGE2="$(ow_big_files 100 b 4000)"; OW_P16_PAGE3="$(ow_big_files 50 c 4000)"
+}
+ow_u_big_long() { ow_u_few16; OW_P16_FILES="$(ow_big_files 100 a 4000)"; OW_P16_PAGE2="$(ow_big_files 100 b 4000)"; OW_P16_PAGE3="$(ow_big_files 100 c 4000)"; }   # the PR 9051 shape: three full pages, the sentinel path
+ow_u_long_names() { ow_u_few16; OW_P16_FILES="$(ow_big_files 100 a 0 600)"; OW_P16_PAGE2="$(ow_big_files 100 b 0 600)"; OW_P16_PAGE3="$(ow_big_files 50 c 0 600)"; }
+row_ow_big_patch() {
+  ow_case; ow_u_big_patch; ow_write; ow_bytes_over 131072 "$OW_PATH16F" || return 1; ow_probe "${OW_NOW:-}"
+  grep -q 'green_pr_units_distinct_prs=3 ' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_big_long() {
+  ow_case; ow_u_big_long; ow_write; ow_bytes_over 131072 "$OW_PATH16F" || return 1; ow_probe "${OW_NOW:-}"
+  [[ "$RC" -eq 2 ]] && grep -q 'green_pr_units_distinct_prs=2 ' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_long_names() {   # each served page stays under the limit; the accumulated list handed to the exclusion program does not
+  ow_case; ow_u_long_names; ow_write
+  local k; for k in "$OW_PATH16F" "$OW_PATH16F&page=2" "$OW_PATH16F&page=3"; do [[ "$(wc -c < "$GHFIX/$(keyof "$k")")" -lt 131072 ]] || return 1; done
+  [[ $(( $(wc -c < "$GHFIX/$(keyof "$OW_PATH16F")") + $(wc -c < "$GHFIX/$(keyof "$OW_PATH16F&page=2")") + $(wc -c < "$GHFIX/$(keyof "$OW_PATH16F&page=3")") )) -gt 131072 ]] || return 1
+  ow_probe "${OW_NOW:-}"
+  grep -q 'green_pr_units_distinct_prs=3 ' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+ow_u_two_units_pr11() { OW_UNITS+=("5007 pull_request shaG feat/a 2031-02-02T01:30:00Z 1 11 0 150"); }
+row_ow_pr_facts_cached() {   # PR 11 has two green units: its timeline and its pull are each read once
+  ow_variant ow_u_two_units_pr11
+  [[ "$(grep -c '^REQ .*issues_11_timeline_per_page_100$' "$GHLOG")" -eq 1 && "$(grep -c '^REQ .*soleur_pulls_11$' "$GHLOG")" -eq 1 ]]
+}
+ow_scan_argv() {   # ow_scan_argv <file>: print every jq option that takes an operand as name=operand (quotes stripped); the operand is what travels on argv
+  python3 - "$1" <<'PY'
+import re, sys
+text = re.sub(r"\\\n[ \t]*", " ", open(sys.argv[1]).read())   # a continuation line is one logical line
+for line in text.splitlines():
+    if line.lstrip().startswith("#"): continue
+    for m in re.finditer(r'--(?:arg|argjson|slurpfile|rawfile)\s+([A-Za-z_][A-Za-z0-9_]*)\s+("[^"]*"(?:"[^"]*")*|[^\s]+)', line):
+        print("%s=%s" % (m.group(1), m.group(2).replace('"', "")))
+    if re.search(r'--(?:args|jsonargs)\b', line): print("ARGS-OPTION")
+PY
+}
+row_ow_argv() {   # only small scalars may ride on a jq argv: an API payload on one raises E2BIG at 128 KiB (MAX_ARG_STRLEN)
+  local ctl got allowed="m=\$merged_at ev=\$ev n=\$JOB s=\$STEP oracle=\$ORACLE_JSON kb=knowledge-base t=\$t cur=\${PR_CURDRAFT[\$n]} repo=\$REPO branch=\$branch n=\$DRAIN_SENTINEL" pair found=0
+  ctl="$SANDBOX/ow-argv-control.sh"; printf '%s\n' '  files="$(jq -c -n --argjson b "$page" "$b")"' > "$ctl"
+  [[ "$(ow_scan_argv "$ctl")" == 'b=$page' ]] || return 1   # instrument control: the scan must flag a payload on argv
+  printf '%s\n' '  jq -n --argjson c \' '      "$payload" x' > "$ctl"
+  [[ "$(ow_scan_argv "$ctl")" == 'c=$payload' ]] || return 1   # ... and one whose operand sits on a continuation line
+  got="$(ow_scan_argv "$OW_SCRIPT")"
+  while IFS= read -r pair; do
+    [[ -n "$pair" ]] || continue; found=$((found + 1))
+    [[ " $allowed " == *" $pair "* ]] || return 1
+  done <<<"$got"
+  [[ "$found" -eq 11 ]] && grep -qF '{filename}' "$OW_SCRIPT"
+}
+row_ow_progress() {
+  ow_case; ow_write; ow_probe_split
+  [[ "$RC" -eq 0 ]] || return 1
+  ! grep -q '^soak-progress:' <<<"$OWOUT" || return 1
+  local p1 p2 p3
+  p1="$(grep -n '^soak-progress: phase=listed ' "$OWERR" | head -n 1 | cut -d: -f1)"; p2="$(grep -n '^soak-progress: phase=read-done ' "$OWERR" | head -n 1 | cut -d: -f1)"; p3="$(grep -n '^soak-progress: phase=facts-done ' "$OWERR" | head -n 1 | cut -d: -f1)"
+  [[ -n "$p1" && -n "$p2" && -n "$p3" && "$p1" -lt "$p2" && "$p2" -lt "$p3" ]] || return 1
+  [[ "$(wc -c < "$OWERR")" -lt 500 ]] || return 1
+  grep -q 'parallel=8 budget_s=270' "$OWERR" || return 1
+  ! grep -qE 'runs_listed|units_read|units=|truncated' "$OWERR"
+}
+row_ow_heartbeat() {   # 49 readable runs (a beat at 25; the exact-count assertion holds below 50): a beat per 25 completions, only when asked for (stderr here is a file, not a TTY)
+  ow_case; ow_u_bigmax; ow_write; OW_ENV=(SOAK_PARALLEL=1 SOAK_PROGRESS=1); ow_probe_split
+  grep -q '^soak-progress: heartbeat read=25/' "$OWERR" && [[ "$(grep -c 'heartbeat' "$OWERR")" -eq 1 ]] || return 1
+  OW_ENV=(SOAK_PARALLEL=1); ow_probe_split
+  ! grep -q 'heartbeat' "$OWERR"
+}
+ow_u_eleven_mg() {   # eleven merge_group units; the NEWEST one is red; the base fixture's 6001..6003 are replaced
+  local i; for i in 6001 6002 6003; do ow_drop $i; done
+  for i in $(seq 1 11); do OW_UNITS+=("$((6000 + i)) merge_group shaM$i gh-readonly-queue/main/pr-$i-k $(printf '2031-02-03T%02d:00:00Z' "$i") 1 0 $([[ $i -eq 11 ]] && echo 1 || echo 0) 150"); done
+}
+row_ow_parallel_same() {
+  local o1 o4
+  ow_case; ow_u_eleven_mg; ow_write; : > "$(printf '%s/SLOW_%s' "$GHFIX" "$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")")"; OW_ENV=(SOAK_PARALLEL=1 SLOW_S=2); ow_probe_split; o1="$OWOUT"
+  OW_ENV=(SOAK_PARALLEL=4 SLOW_S=2); ow_probe_split; o4="$OWOUT"
+  [[ "$o1" == "$o4" ]] && grep -q 'paused: the latest merge_group unit (run 6011) is red' <<<"$o4"
+}
+ow_u_fail_two() { OW_UNITS[7]="6003 merge_group x@a#1<b> gh-readonly-queue/main/pr-13-c 2031-02-03T03:00:00Z 1 0 0 150"; }
+row_ow_worker_fail() {   # the jobs reads of an extra (6003, dispatched 3rd) and of the oldest run (5001, dispatched 4th, LOWEST id) both fail slowly, so both are launched; the first in DISPATCH order is named
+  ow_case; ow_u_fail_two; ow_write
+  local id; for id in 6003 5001; do fx_err "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest"; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+  OW_ENV=(SOAK_PARALLEL=4 SLOW_S=1); ow_probe
+  [[ "$RC" -eq 3 ]] && [[ "$(grep -c '^CANNOT ESTABLISH' <<<"$OWOUT")" -eq 1 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (run 6003 jobs)' <<<"$OWOUT" && ! grep -q '5001\|x@a' <<<"$OWOUT"
+}
+row_ow_stop_after_fail() {   # one failed read stops further launches (the first run fails; sequentially, no later run is requested)
+  ow_case; ow_write; fx_err "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'run 6001 jobs' <<<"$OWOUT" && ! grep -q 'actions_runs_6002_jobs\|actions_runs_5001_jobs' "$GHLOG"
+}
+row_ow_parallelism() {   # eight 1 s reads: the stub counts how many are in flight at once; the probe must hold exactly SOAK_PARALLEL
+  local id p conc
+  for p in 4 1; do
+    ow_case; ow_write
+    for id in 5001 5002 5003 5004 5005 6001 6002 6003; do : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+    OW_ENV=("SOAK_PARALLEL=$p" SLOW_S=1); ow_probe
+    conc="$(awk '$1 == "S" { c++; if (c > m) m = c } $1 == "E" { c-- } END { print m + 0 }' "$GHLOG.conc")"
+    [[ "$conc" -eq "$p" ]] || return 1
+  done
+}
+row_ow_run_id() {   # a run id, attempt or PR number from the API is validated at list time (trailing garbage, leading garbage, an embedded space, a non-numeric PR number, a non-numeric attempt)
+  local v id att prn item
+  for v in '"6001x"' '"x6001"' '"60 01"' prn att; do
+    ow_case; ow_write; id=6001; att=1; prn=0
+    case "$v" in prn) prn='"x"' ;; att) att='"x"' ;; *) id="$v" ;; esac
+    item="$(ow_run_item "$id" shaZ feat/z 2031-02-03T05:00:00Z "$att" merge_group success "$prn")"
+    printf '{"total_count":1,"workflow_runs":[%s]}' "$item" | fx "repos/$R/actions/workflows/ci.yml/runs?event=merge_group&status=completed&per_page=100&created=%3EX"
+    ow_probe
+    [[ "$RC" -eq 3 ]] && grep -q 'non-numeric run id' <<<"$OWOUT" || return 1
+  done
+}
+row_ow_empty_branch() {   # an empty head_branch must not collapse under the tab IFS and shift every later field
+  ow_case; ow_write
+  local f; f="$GHFIX/$(keyof "repos/$R/actions/workflows/ci.yml/runs?event=pull_request&status=completed&per_page=100&created=%3EX")"
+  sed -i 's/"head_branch":"feat\/a"/"head_branch":""/' "$f" && grep -q '"head_branch":""' "$f" || return 1
+  ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
+  ow_case; ow_write   # the same, with a JSON null (the API schema allows it)
+  sed -i 's/"head_branch":"feat\/a"/"head_branch":null/' "$f" && grep -q '"head_branch":null' "$f" || return 1
+  ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT"
+}
+row_ow_trunc_baseline() {   # the unit-cap cut marks the sweep truncated, but the baseline reads are attempted whenever wall remains: baseline_grown is a MEASURED 0, never the unmeasured 0 the old TRUNC gate printed
+  ow_variant ow_u_cap
+  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'baseline_grown=0' <<<"$OWOUT" \
+    && [[ "$(ow_req_count "$OW_BL_PATH?ref=main")" -eq 1 && "$(ow_req_count "$OW_BL_PATH?ref=$OW_MSHA")" -eq 1 ]]
+}
+row_ow_baseline_deadline() {   # a baseline read the wall deadline cuts is a budget event: baseline_grown=unread and NOT YET, never a fabricated 0 and never CANNOT ESTABLISH
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "$OW_BL_PATH?ref=$OW_MSHA")"
+  OW_ENV=(SOAK_BUDGET_S=14 SLOW_S=10); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'baseline_grown=unread' <<<"$OWOUT" && grep -q 'read budget ended during the baseline reads' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_dispatch_trunc() {   # a read run whose job did not run emits no row but counts as READ: units_read stays the produced count while truncated=0 certifies the complete dispatch (the old units_read < readable_n predicate read this complete sweep as truncated)
+  ow_variant ow_u_cancelshort
+  [[ "$RC" -eq 0 ]] && grep -q 'units_read=8 truncated=0 baseline_grown=0' <<<"$OWOUT"
+}
+row_ow_interior_hole() {   # the first-dispatched oldest-first worker is cut on its FIRST read while every later-dispatched worker completes: an interior hole that could hide a defect — NOT YET naming the run, never a silent prefix claim
+  ow_case; ow_u_no_mg; ow_write
+  : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  OW_ENV=(SOAK_PARALLEL=2 SOAK_BUDGET_S=14 SLOW_S=10); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'interior hole' <<<"$OWOUT" && grep -q 'run 5001' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_retry_deadline() {   # a retried read recomputes its deadline cap: the retry is killed by the FRESH cap (a budget cut, rc 46), never a stale-cap overrun that fails the read into CANNOT ESTABLISH
+  local jp1="repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp1")"; : > "$GHFIX/SLOW_$(keyof "$jp1")"
+  OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=20 SLOW_S=10); ow_probe
+  [[ "$RC" -eq 2 ]] && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" && [[ "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] && grep -q 'truncated=1' <<<"$OWOUT"
+}
+row_ow_e_cut() {   # the newest merge_group extras the deadline leaves unread: the pause check then lacks data, so it is an unmet criterion — never a silent stale-queue certification
+  ow_case; ow_write
+  local id; for id in 6001 6002 6003; do : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+  OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=18 SLOW_S=4); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'the newest merge_group queue state was not read this sweep' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT"
+}
+row_ow_budget() {   # the ONE wall deadline END=T0+SOAK_BUDGET_S bounds the read phase: the newest merge_group runs are dispatched FIRST, the first oldest-first read is unconditional, and every later launch needs LAUNCH_RSVD seconds of headroom — a cut is NOT YET (truncated=1), never CANNOT ESTABLISH
+  ow_case; ow_write
+  local id; for id in 6001 6002 6003; do : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/$id/jobs?per_page=100&filter=latest")"; done
+  OW_ENV=(SOAK_BUDGET_S=24 SOAK_PARALLEL=1 SLOW_S=4); ow_probe
+  [[ "$RC" -eq 2 ]] && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" && grep -q 'units_read=4 truncated=1' <<<"$OWOUT" || return 1
+  grep -q 'read budget ended after 4 of 8 runs' <<<"$OWOUT" || return 1
+  [[ "$(grep -m1 'actions_runs_[0-9]*_jobs' "$GHLOG")" == *actions_runs_6001_jobs* ]]   # the newest queue state is read first
+}
+ow_u_no_mg() { local u keep=(); for u in "${OW_UNITS[@]}"; do [[ "$u" != *" merge_group "* ]] && keep+=("$u"); done; OW_UNITS=("${keep[@]}"); }
+row_ow_deadline_cap() {   # a read killed by the probe's own deadline cap (the per-read timeout is min(60 s, END-SECONDS-5)) is a budget CUT, never a failed read: the worker's rc-46 sentinel leaves the unit unread, sets BUDGET_CUT, and the verdict stays NOT YET with truncated=1 — never CANNOT ESTABLISH and never an external kill
+  ow_case; ow_u_no_mg; ow_write
+  : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=14 SLOW_S=10); ow_probe   # the first oldest-first read launches unconditionally with a ~9 s cap; the stub sleeps 10
+  [[ "$RC" -eq 2 ]] && grep -q 'units_read=0 truncated=1' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" || return 1
+  [[ "$(ow_req_count "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")" -eq 1 && "$(ow_sleeps)" -eq 0 ]]   # asked once, killed by the cap, never retried
+}
+row_ow_facts_wall() {   # the facts loop is bounded by its own allowance AND by the wall deadline minus the TAIL verdict reserve: a 300 s facts allowance cannot overrun a 30 s deadline
+  ow_case; ow_write
+  local n; for n in 11 12 13 14 15; do : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/$n")"; done
+  OW_ENV=(SOAK_BUDGET_S=30 SOAK_FACTS_BUDGET_S=300 SLOW_S=5); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT" || return 1
+  [[ "$(ow_req_count "repos/$R/pulls/13")" -eq 0 ]]   # the TAIL arm cuts the loop BEFORE a third pull; a mutant dropping it reaches pulls/13 and /14 on the gh_get deadline cap (rc 46 -> the same FACTS_CUT verdict, so only the fetch depth discriminates)
+}
+row_ow_budget_facts() {   # the reads finish inside their budget; the first pull read (PR 11, 3 s) overruns the 2 s facts allowance; the facts loop stops
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/pulls/11")"
+  OW_ENV=(SOAK_FACTS_BUDGET_S=2 SOAK_PARALLEL=4 SLOW_S=3); ow_probe
+  [[ "$RC" -eq 2 ]] && grep -q 'truncated=1' <<<"$OWOUT" && grep -q 'NOT YET: read budget ended in the PR-facts phase' <<<"$OWOUT" && ! grep -q '^PASS' <<<"$OWOUT"
+}
+row_ow_facts_clock() {   # the facts allowance starts at the facts phase: a 5 s jobs read must not eat a 4 s allowance that the facts then need under 2 s
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  OW_ENV=(SOAK_FACTS_BUDGET_S=4 SOAK_PARALLEL=4 SLOW_S=5); ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q 'truncated=0' <<<"$OWOUT" && ! grep -q 'PR-facts phase' <<<"$OWOUT" && grep -q 'soleur_pulls_11$' "$GHLOG"
+}
+row_ow_quota() {   # need = ceil(1.5 * runs to read) + ceil(lookup candidates / 2) + 3 * PRs + 100; the base fixture reads 8 runs of 5 PRs (12 + 0 + 15 + 100), the resolved one 9 runs, 5 candidates, 4 PRs (14 + 3 + 12 + 100)
+  ow_case; OW_RL_REMAINING=100; ow_write; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: API quota (remaining=100, need=127, resets at 20[0-9][0-9]-' <<<"$OWOUT" && ! grep -q 'actions_runs_[0-9]' "$GHLOG" || return 1
+  ow_case; ow_write; fx_err "rate_limit"; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'CANNOT ESTABLISH: GitHub API read failed (rate_limit' <<<"$OWOUT" || return 1
+  ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'HTTP 403' <<<"$OWOUT" && ! grep -q 'actions_runs_6002_jobs\|actions_runs_5001_jobs' "$GHLOG" || return 1
+  ow_case; ow_write; fx_err429rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'HTTP 429' <<<"$OWOUT" || return 1
+  ow_case; OW_RL_REMAINING=129; ow_write; ow_probe   # need 127 + the 2 listing calls: exactly enough
+  [[ "$RC" -eq 0 ]] || return 1
+  ow_case; OW_RL_REMAINING=128; ow_write; ow_probe   # one request short
+  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=128, need=127' <<<"$OWOUT" || return 1
+  ow_case; OW_RL_REMAINING=131; ow_u_resolved; ow_write; ow_probe   # the resolved fixture: need 129 + 2 listing calls
+  [[ "$RC" -eq 0 ]] || return 1
+  ow_case; OW_RL_REMAINING=130; ow_u_resolved; ow_write; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=130, need=129' <<<"$OWOUT" || return 1
+  ow_case; ow_write; ow_probe
+  [[ "$RC" -eq 0 ]] && grep -q '^quota: used_delta=0 limit=5000 remaining=4900 planned=127$' <<<"$OWOUT"
+}
+row_ow_seam_caps() {
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=9); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=301); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=abc); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_BUDGET_S=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=301); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=0); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_FACTS_BUDGET_S=abc); ow_probe; [[ "$RC" -eq 3 ]] || return 1
+  ow_case; ow_write; OW_ENV=(SOAK_PARALLEL=8 SOAK_BUDGET_S=300 SOAK_FACTS_BUDGET_S=300); ow_probe; [[ "$RC" -eq 0 ]]
+}
+ow_u_json_error() { ow_u_few16; OW_P16_FILES="{\"message\":\"@octocat </details> [x](http://e) #1 www.attacker.example `x` \\u001b$(printf 'A%.0s' $(seq 1 300))\"}"; }
+row_ow_jq_error_text() {
+  ow_variant ow_u_json_error
+  [[ "$RC" -eq 3 ]] || return 1
+  local line detail; line="$(grep '^CANNOT ESTABLISH' <<<"$OWOUT" | head -n 1)"
+  [[ "$line" == *'pull 16 files (parse): '* ]] || return 1
+  detail="${line#*pull 16 files (parse): }"; detail="${detail%)}"
+  [[ ${#detail} -ge 20 && ${#detail} -le 160 ]] && [[ "$detail" != *[@\<\>\[\]\#\`./]* ]] && ! grep -q $'\033' <<<"$line"
+}
+row_ow_trap() {   # SIGTERM while a slow read is in flight: exit 143, no worker survives, the work directory is gone
+  ow_case; ow_write; : > "$GHFIX/SLOW_$(keyof "repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest")"
+  local before after pid i spid alive=0 t_kill
+  before="$(ls -d "$SANDBOX"/tmp.* 2>/dev/null | wc -l)"
+  env -u SOAK_PARALLEL -u SOAK_BUDGET_S -u SOAK_FACTS_BUDGET_S -u SOAK_PROGRESS -u SOAK_MAX_PAGES -u SOAK_MAX_UNITS PATH="$BIN:$PATH" GH_TOKEN=fake SOAK_NOW_EPOCH="$(date -u -d 2031-02-05T00:00:00Z +%s)" SLOW_S=30 SOAK_PARALLEL=2 bash "$OW_SCRIPT" > /dev/null 2>&1 & pid=$!
+  for i in $(seq 1 100); do [[ -s "$GHLOG.slowpids" ]] && break; sleep 0.2; done
+  [[ -s "$GHLOG.slowpids" ]] || { kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 1; }
+  t_kill=$SECONDS; kill -TERM "$pid"; RC=0; wait "$pid" || RC=$?; OW_RCS+=("$RC")   # a probe that waits for its 30 s read instead of stopping it would also leave no worker behind: the exit must be quick
+  while read -r spid; do kill -0 "$spid" 2>/dev/null && alive=1; done < "$GHLOG.slowpids"
+  after="$(ls -d "$SANDBOX"/tmp.* 2>/dev/null | wc -l)"
+  [[ "$RC" -eq 143 && "$alive" -eq 0 && "$before" -eq "$after" && $((SECONDS - t_kill)) -lt 10 ]]
+}
 row_ow_never_one() { local n=0 rc; for rc in "${OW_RCS[@]}"; do n=$((n + 1)); [[ "$rc" -ne 1 ]] || return 1; done; [[ "$n" -ge 30 ]]; }   # exit 1 is unreachable by design: no stub scenario of this section returned it
+# ---- the merged-PR resolution (a run whose own pull_requests is empty), the bounded retry and the zero-PR-unit abort ---------------------------------------------
+OW_RM=ok
+ow_u_resolved() {   # the five base pull_request units become prn-0 runs with 40-hex shas; a sixth run on PR 11's branch carries a second sha (it must not raise the distinct count)
+  OW_UNITS[0]="5001 pull_request $(ow_sha 5001) feat/a 2031-02-02T01:00:00Z 1 0 0 150"; OW_UNITS[1]="5002 pull_request $(ow_sha 5002) docs/b 2031-02-02T02:00:00Z 1 0 0 140"
+  OW_UNITS[2]="5003 pull_request $(ow_sha 5003) feat/c 2031-02-02T03:00:00Z 1 0 0 160"; OW_UNITS[3]="5004 pull_request $(ow_sha 5004) bot/d 2031-02-02T04:00:00Z 1 0 0 155"
+  OW_UNITS[4]="5005 pull_request $(ow_sha 5005) canary-x 2031-02-02T05:00:00Z 1 0 0 150"; OW_UNITS+=("5007 pull_request $(ow_sha 5007) feat/a 2031-02-02T01:30:00Z 1 0 0 150")
+  OW_RESOLVE=("5001 11 feat/a" "5002 12 docs/b" "5003 13 feat/c" "5004 14 bot/d" "5007 11 feat/a")
+}
+ow_u_unres() { ow_u_resolved; OW_RESOLVE[2]="5003 13 feat/c $OW_RM"; }   # the run of PR 13 (the only DRAFT PR) resolves in the mode $OW_RM
+ow_req_count() { grep -c "^REQ $(keyof "$1")$" "$GHLOG"; }   # how many times the stub saw this exact request path
+ow_sleeps() { if [[ -s "$GHLOG.sleeps" ]]; then wc -l < "$GHLOG.sleeps"; else echo 0; fi; }
+ow_cpath() { printf 'repos/%s/commits/%s/pulls?per_page=2' "$R" "$(ow_sha "$1")"; }
+row_ow_resolve_merged() {
+  ow_variant ow_u_resolved
+  [[ "$RC" -eq 0 ]] && grep -q '^PASS: ' <<<"$OWOUT" && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=0$' <<<"$OWOUT" || return 1
+  local id; for id in 5001 5002 5003 5004 5007; do [[ "$(ow_req_count "$(ow_cpath $id)")" -eq 1 ]] || return 1; done   # one lookup per unit
+  [[ "$(ow_req_count "$(ow_cpath 5005)")" -eq 0 ]]   # the canary branch spends no request
+}
+row_ow_resolve_unresolvable() {
+  local m
+  for m in empty two headrepo baserepo ref e404 e422; do
+    OW_RM=$m; ow_variant ow_u_unres
+    [[ "$RC" -eq 2 ]] && grep -q 'no green DRAFT PR run' <<<"$OWOUT" && grep -q 'green_pr_units_distinct_prs=3 ' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=1$' <<<"$OWOUT" || return 1
+    [[ "$(ow_req_count "$(ow_cpath 5003)")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1   # an answered 404 or 422 is unresolved: asked once, never retried, never an abort
+  done
+  OW_RM=ok
+}
+row_ow_resolve_errors() {
+  local m want n
+  for m in e502 e403 e429 object exit4; do
+    OW_RM=$m; ow_variant ow_u_unres
+    [[ "$RC" -eq 3 ]] || return 1
+    case "$m" in
+      object) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls (parse))'; n=1 ;;
+      e403) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls; HTTP 403)'; n=1 ;;
+      e429) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls; HTTP 429)'; n=1 ;;
+      e502) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls)'; n=2 ;;
+      exit4) want='CANNOT ESTABLISH: GitHub API read failed (run 5003 commit pulls)'; n=1 ;;
+    esac
+    grep -qxF "$want" <<<"$OWOUT" && [[ "$(grep -c '^CANNOT ESTABLISH' <<<"$OWOUT")" -eq 1 ]] && ! grep -q 'feat/c' <<<"$OWOUT" || return 1
+    [[ "$(ow_req_count "$(ow_cpath 5003)")" -eq "$n" ]] || return 1   # gh's own exit 4 (an authentication failure) is NOT an unresolved answer
+  done
+  OW_RM=ok
+}
+ow_u_scope() {   # prn-0 runs that must NOT spend a lookup: not green, an incident, a fork run, a run with its own PR, a non-hex sha, a merge_group run, a deleted fork
+  ow_u_resolved
+  OW_UNITS+=("5101 pull_request $(ow_sha 5101) feat/a 2031-02-02T08:01:00Z 1 0 1 150" "5102 pull_request $(ow_sha 5102) feat/a 2031-02-02T08:02:00Z 2 0 0 150"
+    "5103 pull_request $(ow_sha 5103) feat/a 2031-02-02T08:03:00Z 1 0 0 150" "5104 pull_request $(ow_sha 5104) feat/a 2031-02-02T08:04:00Z 1 11 0 150"
+    "5105 pull_request nothex5105 feat/a 2031-02-02T08:05:00Z 1 0 0 150" "6101 merge_group $(ow_sha 6101) gh-readonly-queue/main/pr-14-z 2031-02-03T04:00:00Z 1 0 0 150" "5106 pull_request $(ow_sha 5106) feat/a 2031-02-02T08:06:00Z 1 0 0 150")
+  OW_RUNFORK=5103; OW_RUNGONE=5106   # 5106: the head repository is gone (a deleted fork): a fork, not an unattributed run
+}
+row_ow_resolve_scope() {
+  ow_variant ow_u_scope
+  [[ "$RC" -eq 0 ]] && grep -q 'green_pr_units_distinct_prs=4 ' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=1$' <<<"$OWOUT" || return 1   # only 5105 (a non-hex sha) is unattributed; the two fork runs are not
+  local id; for id in 5101 5102 5103 5104 5105 5106 6101 5005; do [[ "$(ow_req_count "$(ow_cpath $id)")" -eq 0 ]] || return 1; done
+  [[ "$(ow_req_count "$(ow_cpath 5001)")" -eq 1 ]]   # the control: a compliant run does call
+}
+ow_u_mg_only() { local u keep=(); for u in "${OW_UNITS[@]}"; do [[ "$u" != *" pull_request "* ]] && keep+=("$u"); done; OW_UNITS=("${keep[@]}"); }
+row_ow_zero_pr_units() {   # no PR unit at all: the phase line still prints and the verdict is NOT YET (bash 5.3 aborted on ${#PR_EXCLUDED[@]} of an empty associative array)
+  local m
+  ow_case; ow_u_mg_only; ow_write; ow_probe_split
+  [[ "$RC" -eq 2 ]] && grep -q 'only 0 distinct green pull_request PR' <<<"$OWOUT" && ! grep -q 'could not be attributed' <<<"$OWOUT" && ! grep -q 'unbound variable' "$OWERR" && grep -q 'phase=facts-done prs=0 ' "$OWERR" || return 1
+  ow_case; ow_u_resolved; for m in 0 1 2 3 4; do OW_RESOLVE[m]="${OW_RESOLVE[m]} empty"; done; ow_write; ow_probe_split   # every PR run unresolved
+  OW_RESOLVE=()
+  [[ "$RC" -eq 2 ]] && grep -q 'only 0 distinct green pull_request PR(s) (need 3) (5 runs could not be attributed to a PR)' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=5$' <<<"$OWOUT" && ! grep -q 'unbound variable' "$OWERR" || return 1
+  ow_case; ow_u_resolved; OW_RESOLVE[2]="${OW_RESOLVE[2]} empty"; OW_RESOLVE[3]="${OW_RESOLVE[3]} empty"; ow_write; ow_probe_split   # two PRs resolve, two runs do not: the suffix is for ZERO distinct PRs only
+  [[ "$RC" -eq 2 ]] && grep -q 'only 2 distinct green pull_request PR(s) (need 3)$' <<<"$OWOUT" && ! grep -q 'could not be attributed' <<<"$OWOUT" && grep -q ' pr_unattributed_runs=2$' <<<"$OWOUT" || return 1
+  ow_case; ow_write; ow_probe_split   # the base fixture: five PRs read, four non-canary green PR rows
+  [[ "$RC" -eq 0 ]] && grep -q 'phase=facts-done prs=5 green_pr_rows=4 ' "$OWERR"
+}
+row_ow_retry() {
+  local jp1="repos/$R/actions/runs/5001/jobs?per_page=100&filter=latest" jp2="repos/$R/actions/runs/6002/jobs?per_page=100&filter=latest" jp3="repos/$R/actions/runs/6003/jobs?per_page=100&filter=latest" m
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp1")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # fail once: the normal verdict, the path asked twice, one fixed sleep
+  [[ "$RC" -eq 0 ]] && grep -q '^PASS: ' <<<"$OWOUT" && [[ "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] && grep -qx 2 "$GHLOG.sleeps" || return 1
+  ow_case; ow_write; fx_err "$jp3"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # persistent 502: exactly one retry, then exit 3
+  [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp3")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  for m in 403 429 404; do   # never retried
+    ow_case; ow_write; "fx_err${m}$([[ $m == 404 ]] || echo rl)" "$jp3"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+    [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp3")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
+  done
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp3")"; fx_err403rl "$jp3"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # 502 then 403: two requests, the flag set, exit 3
+  [[ "$RC" -eq 3 ]] && grep -q 'HTTP 403' <<<"$OWOUT" && [[ "$(ow_req_count "$jp3")" -eq 2 ]] || return 1
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$OW_BL_PATH?ref=main")"; ow_probe   # the baseline contents read goes through the same retry
+  [[ "$RC" -eq 0 && "$(ow_req_count "$OW_BL_PATH?ref=main")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  for m in 'EOF' 'connection reset by peer' 'TLS handshake timeout' 'read: i/o timeout' 'dial tcp 192.0.2.1:443: connect: connection refused' 'Client.Timeout exceeded while awaiting headers'; do   # every network-class stderr is retried once
+    ow_case; ow_write; printf '%s' "$m" > "$GHFIX/ERRONCEMSG_$(keyof "$jp1")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+    [[ "$RC" -eq 0 && "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  done
+  ow_case; ow_write; : > "$GHFIX/ERRONCE124_$(keyof "$jp1")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe   # a read killed by `timeout` (rc 124) is retried once
+  [[ "$RC" -eq 0 && "$(ow_req_count "$jp1")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  for m in 'HTTP 400 Bad Request' 'HTTP 401 Bad credentials'; do   # other 4xx are never retried
+    ow_case; ow_write; printf '%s' "$m" > "$GHFIX/ERRONCEMSG_$(keyof "$jp3")"; OW_ENV=(SOAK_PARALLEL=1); ow_probe
+    [[ "$RC" -eq 3 && "$(ow_req_count "$jp3")" -eq 1 && "$(ow_sleeps)" -eq 0 ]] || return 1
+  done
+  # the deadline is the ONE wall budget: a SOAK_BUDGET_S under the LAUNCH_RSVD launch floor leaves no dispatch window at all,
+  # so the failed path is never even asked and the facts allowance cannot buy a retry back; with the wall budget ample a 5xx IS
+  # retried though the facts allowance is spent — only the wall deadline bounds the read phase
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp2")"; OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=10 SOAK_FACTS_BUDGET_S=300); ow_probe
+  [[ "$RC" -eq 2 && "$(ow_req_count "$jp2")" -eq 0 && "$(ow_sleeps)" -eq 0 ]] && grep -q 'truncated=1' <<<"$OWOUT" && ! grep -q 'CANNOT ESTABLISH' <<<"$OWOUT" || return 1
+  ow_case; ow_write; : > "$GHFIX/ERR_ONCE_$(keyof "$jp2")"; OW_ENV=(SOAK_PARALLEL=1 SOAK_BUDGET_S=300 SOAK_FACTS_BUDGET_S=1); ow_probe
+  [[ "$RC" -ne 3 && "$(ow_req_count "$jp2")" -eq 2 && "$(ow_sleeps)" -eq 1 ]] || return 1
+  ow_case; ow_write; fx_err403rl "repos/$R/actions/runs/6001/jobs?per_page=100&filter=latest"; fx_err "$jp2"; : > "$GHFIX/SLOW_$(keyof "$jp2")"   # a flagged run: the 403 lands while the 502 read sleeps
+  OW_ENV=(SOAK_PARALLEL=2 SLOW_S=1); ow_probe
+  [[ "$RC" -eq 3 ]] && [[ "$(ow_req_count "$jp2")" -eq 1 && "$(ow_sleeps)" -eq 0 ]]   # the retry is skipped while the rate flag is set
+}
+ow_u_drain_later() { OW_DRAIN="2031-02-02T03:30:00Z"; }   # a drain PR merged after PR3a: only runs created after it count (5004 at 04:00 and the canary 5005 are the PR units left)
+row_ow_drain_floor() {
+  local d
+  ow_variant ow_u_drain_later
+  [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z age_days=4 floor=s4-drain green_pr_units_distinct_prs=1 ' <<<"$OWOUT" || return 1   # the floor counts, the 30-day clock stays on PR3a
+  for d in "2031-02-02T01:30:00Z 2031-02-02T03:30:00Z" "2031-02-02T03:30:00Z 2031-02-02T01:30:00Z"; do   # the LATEST drain merge wins, whatever the listing order
+    ow_case; OW_DRAIN="$d"; ow_write; ow_probe
+    [[ "$RC" -eq 2 ]] && grep -q 'window opened=2031-02-02T03:30:00Z ' <<<"$OWOUT" || return 1
+  done
+  ow_case; OW_DRAIN="$(for _i in $(seq 1 99); do printf '2031-01-1%sT00:00:00Z ' $((_i % 10)); done)"; ow_write; ow_probe   # 99 labelled items still fit one page: accepted, the PR3a merge stays the floor
+  [[ "$RC" -eq 0 ]] && grep -q 'floor=pr3a ' <<<"$OWOUT" || return 1
+  for d in "2031-01-15T00:00:00Z" "null" "null 2031-01-20T00:00:00Z" ""; do   # a drain merge before PR3a, a drain PR closed unmerged, or none: the PR3a merge stays the floor
+    ow_case; OW_DRAIN="$d"; ow_write; ow_probe
+    [[ "$RC" -eq 0 ]] && grep -q 'window opened=2031-02-01T00:00:00Z age_days=4 floor=pr3a green_pr_units_distinct_prs=4 ' <<<"$OWOUT" || return 1
+  done
+}
+row_ow_drain_errors() {
+  local k="repos/$R/issues?labels=s4-drain&state=closed&sort=updated&direction=desc&per_page=100"
+  ow_case; ow_write; fx_err "$k"; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls)' <<<"$OWOUT" || return 1
+  ow_case; ow_write; printf '{"message":"nope"}' | fx "$k"; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT" || return 1
+  local bad
+  for bad in yesterday 2031-13-45T99:99:99Z 2031-02-02T03:30:00+01:00 2031-02-02T03:30:00 20310-2-2T03:30:00Z 2031-02-02T3:30:0Z; do   # a malformed or impossible timestamp never becomes a floor (the regex and `date -d` are separate layers)
+    ow_case; ow_write; printf '[{"number":901,"pull_request":{"merged_at":"%s"}}]' "$bad" | fx "$k"; ow_probe
+    [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT" || return 1
+  done
+  ow_case; ow_write; printf '{}' | fx "$k"; ow_probe   # an object is not a list (jq would otherwise iterate nothing and ignore the floor)
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT" || return 1
+  ow_case; ow_write; OW_DRAIN="$(for _i in $(seq 1 100); do printf '2031-01-1%sT00:00:00Z ' $((_i % 10)); done)"; ow_write; ow_probe   # a full page cannot be trusted to hold the latest drain merge
+  [[ "$RC" -eq 3 ]] && grep -qxF 'CANNOT ESTABLISH: GitHub API read failed (s4-drain pulls (parse))' <<<"$OWOUT"
+}
+SENT_LINE='CANNOT ESTABLISH: s4-drain floor not applied: the label list does not carry sentinel PR 11226 (check the sweeper token'"'"'s pull-requests scope and that the sentinel still carries the s4-drain label)'
+row_ow_sentinel_trips() {   # the sentinel PR is merged and the label list is empty: the floor was not applied, so the probe refuses before it lists a single run
+  ow_case; OW_SENTINEL="2031-02-02T03:30:00Z"; OW_DRAIN=""; ow_write; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -qxF "$SENT_LINE" <<<"$OWOUT" || return 1
+  local sl rl; sl="$(grep -n '^REQ .*soleur_pulls_11226$' "$GHLOG" | head -n 1 | cut -d: -f1)"; rl="$(grep -n '^REQ .*ci_yml_runs' "$GHLOG" | head -n 1 | cut -d: -f1)"
+  [[ -n "$sl" && -z "$rl" ]]   # the sentinel was read, and no run listing happened after the refusal
+}
+row_ow_sentinel_older_list() {   # a non-empty list that lacks the newest drain is the same defect
+  ow_case; OW_SENTINEL="2031-02-02T03:30:00Z"; OW_DRAIN="2031-02-02T01:30:00Z"; ow_write; ow_probe
+  [[ "$RC" -eq 3 ]] && grep -qxF "$SENT_LINE" <<<"$OWOUT"
+}
+row_ow_sentinel_applied() {   # a list whose newest drain equals, or is later than, the sentinel is applied, never refused
+  local d
+  for d in "2031-02-02T03:30:00Z" "2031-02-02T05:00:00Z"; do
+    ow_case; OW_SENTINEL="2031-02-02T03:30:00Z"; OW_DRAIN="$d"; ow_write; ow_probe
+    [[ "$RC" -eq 2 ]] && grep -q 'floor=s4-drain ' <<<"$OWOUT" && ! grep -qF 'sentinel PR' <<<"$OWOUT" || return 1
+  done
+}
+row_ow_sentinel_errors() {   # a failed, non-object or malformed sentinel read is CANNOT ESTABLISH with one fixed line, never a pass
+  local m want
+  for m in fail object null nonumber wrongnum 2031-02-02T03:30:00+01:00 2031-13-45T25:61:61Z; do
+    ow_case; OW_SENTINEL="$m"; ow_write; ow_probe
+    case "$m" in fail) want='CANNOT ESTABLISH: GitHub API read failed (s4-drain sentinel 11226)' ;; *) want='CANNOT ESTABLISH: GitHub API read failed (s4-drain sentinel (parse))' ;; esac
+    [[ "$RC" -eq 3 ]] && grep -qxF "$want" <<<"$OWOUT" || return 1
+  done
+}
+ow_u_quota_shape() {   # the resolved fixture plus a second lookup on feat/c and a fork run on its own branch: 6 lookup candidates (3), 4 branches (12), 11 reads (17)
+  ow_u_resolved
+  OW_UNITS+=("5008 pull_request $(ow_sha 5008) feat/c 2031-02-02T03:30:00Z 1 0 0 150" "5009 pull_request $(ow_sha 5009) fork/x 2031-02-02T09:00:00Z 1 0 0 150")
+  OW_RESOLVE+=("5008 13 feat/c"); OW_RUNFORK=5009
+}
+row_ow_quota_shape() {
+  ow_case; OW_RL_REMAINING=134; ow_u_quota_shape; ow_write; ow_probe   # need 17 + 3 + 12 + 100 = 132, plus the 2 listing calls
+  [[ "$RC" -ne 3 ]] && grep -q ' planned=132$' <<<"$OWOUT" || return 1
+  ow_case; OW_RL_REMAINING=133; ow_u_quota_shape; ow_write; ow_probe   # one request short: a fork run or a canary counted as a lookup candidate moves it by exactly one
+  [[ "$RC" -eq 3 ]] && grep -q 'API quota (remaining=133, need=132' <<<"$OWOUT"
+}
+chk "window probe: the window counts from the later of the PR3a merge and the latest merged s4-drain PR (the recorded drain restart); an earlier, unmerged or absent drain changes nothing" row_ow_drain_floor
+chk "window probe: a failed or malformed s4-drain read is CANNOT ESTABLISH with one fixed line, never a floor" row_ow_drain_errors
+chk "window probe: a merged sentinel PR missing from an empty s4-drain label list is CANNOT ESTABLISH (exit 3, one fixed line) before any run is listed" row_ow_sentinel_trips
+chk "window probe: a label list that lacks the newest drain (the sentinel) is CANNOT ESTABLISH too, not a floor" row_ow_sentinel_older_list
+chk "window probe: a label list whose newest drain equals or is later than the sentinel is applied (floor=s4-drain), never refused" row_ow_sentinel_applied
+chk "window probe: a failed, non-object or malformed sentinel read is CANNOT ESTABLISH with one fixed line" row_ow_sentinel_errors
+chk "window probe: the quota estimate excludes fork runs and canary branches from the lookup candidates and from the PR estimate" row_ow_quota_shape
+chk "window probe: a run whose own pull_requests is empty (a merged PR) is attributed by its head commit, counted once per PR, and the canary run spends no lookup" row_ow_resolve_merged
+chk "window probe: an unresolvable run (empty, two PRs, a foreign head or base repository, another head ref, HTTP 404 or 422) is excluded and counted, never an abort and never retried" row_ow_resolve_unresolvable
+chk "window probe: a failed lookup (502 after one retry, 403, 429, a non-array payload, gh's own exit 4) is CANNOT ESTABLISH with one fixed line" row_ow_resolve_errors
+chk "window probe: a non-green, incident, fork, own-PR, non-hex-sha or merge_group run spends no lookup" row_ow_resolve_scope
+chk "window probe: a sweep with no pull_request unit prints its facts line and exits 2 (bash 5.3 aborted on the empty PR_EXCLUDED); unresolved runs are counted in the NOT YET text" row_ow_zero_pr_units
+chk "window probe: one retry after a fixed sleep on a 5xx or timeout; never on 403, 429 or 404; never while the rate flag is set; the baseline read is covered" row_ow_retry
 chk "window probe: a healthy window passes (the canary is excluded from the 4 distinct PRs, the echoed run: source in the logs is not read as a marker)" row_ow_pass
 chk "window probe: PR3a not merged is NOT YET (exit 2)" row_ow_notmerged
 chk "window probe: a missing GH_TOKEN is CANNOT ESTABLISH (exit 3), never a pass" row_ow_no_token
 chk "window probe: a failed API read is CANNOT ESTABLISH (exit 3)" row_ow_api_failure
 chk "window probe: two distinct PRs are NOT YET (exit 2)" row_ow_few_prs
-chk "window probe: a p95 over 210 s is NOT YET and says the ceiling is provisional and owed a re-rule" row_ow_slow
-chk "window probe: a maximum over 270 s fails by itself, though the p95 is under 210 s" row_ow_max
+chk "window probe: a p95 one second over 240 s is NOT YET and says the ceiling is ruled and a breach is a budget-owner cost regression" row_ow_slow
+chk "window probe: a maximum one second over 285 s fails by itself, though the p95 is under 240 s" row_ow_max
+chk "window probe: a p95 of exactly 240 s and a maximum of exactly 285 s are at the ceilings and pass" row_ow_edge_pass
 chk "window probe: at 30 days with the wall ceilings the only unmet criterion the probe says so" row_ow_30day_ceiling
 chk "window probe: a genuine exit 1 is not green and does not restart the window" row_ow_exit1
 chk "window probe: a genuine exit 1 on a bot PR is not green, not a restart and not 'a bot PR unit was red'" row_ow_bot_exit1
@@ -3184,10 +3725,40 @@ chk "window probe: a moved line, a shrink and a baseline absent at the tip are n
 chk "window probe: a baseline absent at the merge commit, or a failed read of it, is CANNOT ESTABLISH (exit 3)" row_ow_baseline_reads
 chk "window probe: it refuses to run under xtrace with GH_TOKEN set (exit 78)" row_ow_xtrace
 chk "window probe: it only reads (every request hit a fixture; none missed)" row_ow_read_only
-chk "window probe: the header states the exit contract and the provisional ceilings, merged_at goes to jq by --arg, and the oracle list is the SUT's" row_ow_static
+chk "window probe: the header states the exit contract and the ruled ceilings, merged_at goes to jq by --arg, and the oracle list is the SUT's" row_ow_static
 chk "window probe: no stub scenario of this section returned exit 1 (exit 1 is not used)" row_ow_never_one
+chk "window probe: a files page over the 128 KiB argv limit (patch bodies) is read, and a patch text that names an oracle path decides nothing" row_ow_big_patch
+chk "window probe: three full big pages (the 300-file sentinel path) exclude the PR as oracle-touching without an error" row_ow_big_long
+chk "window probe: 250 long file names (the accumulated list over 128 KiB) reach the exclusion program" row_ow_long_names
+chk "window probe: a PR with two green units has its timeline and its pull read once each" row_ow_pr_facts_cached
+chk "window probe: only small scalars ride on a jq argv (an instrument control proves the scan flags a payload)" row_ow_argv
+chk "window probe: progress is three ordered phase lines on stderr, under 500 bytes, with no stdout line and none of the status tokens" row_ow_progress
+chk "window probe: the heartbeat prints a beat per 25 completions only when asked for" row_ow_heartbeat
+chk "window probe: SOAK_PARALLEL=1 and =4 give byte-identical stdout, and the newest red queue run still pauses the window" row_ow_parallel_same
+chk "window probe: a failed worker read exits 3 naming the first failure in dispatch order, with one line and no branch name" row_ow_worker_fail
+chk "window probe: the wall deadline cuts the read phase after the newest queue state and the unconditional first oldest-first read, and exits 2, never 3" row_ow_budget
+chk "window probe: a read killed by the probe's own deadline cap is a budget cut (NOT YET, truncated=1, asked once, never retried), never CANNOT ESTABLISH and never an external kill" row_ow_deadline_cap
+chk "window probe: the facts loop also stops TAIL seconds before the wall deadline — its own allowance cannot overrun it" row_ow_facts_wall
+chk "window probe: the budget also bounds the PR-facts loop, and never ends in a PASS" row_ow_budget_facts
+chk "window probe: a quota shortfall, a failed rate_limit read and a 403 exit 3 before further reads; the quota line is printed" row_ow_quota
+chk "window probe: SOAK_PARALLEL above 8 and SOAK_BUDGET_S above 300 are CANNOT ESTABLISH; the caps themselves are allowed" row_ow_seam_caps
+chk "window probe: jq's error text reaches the failure message, allow-listed and at most 160 bytes" row_ow_jq_error_text
+chk "window probe: SIGTERM while a read is in flight leaves no worker and no work directory (exit 143)" row_ow_trap
+chk "window probe: the facts allowance starts at the facts phase, not at the probe start" row_ow_facts_clock
+chk "window probe: a failed read stops further launches" row_ow_stop_after_fail
+chk "window probe: exactly SOAK_PARALLEL reads are in flight at once (4 and 1), counted by the stub" row_ow_parallelism
+chk "window probe: a non-numeric run id from the API is CANNOT ESTABLISH at list time" row_ow_run_id
+chk "window probe: an empty head_branch does not shift the tab-separated run fields" row_ow_empty_branch
+chk "window probe: a unit-cap-truncated sweep still reads the baseline — baseline_grown is a measured 0, never the unmeasured 0 of the old TRUNC gate" row_ow_trunc_baseline
+chk "window probe: a baseline read cut by the wall deadline is a budget cut (baseline_grown=unread, NOT YET), never CANNOT ESTABLISH" row_ow_baseline_deadline
+chk "window probe: a read run whose job did not run emits no row yet counts as read — truncated stays 0 on a complete dispatch" row_ow_dispatch_trunc
+chk "window probe: a worker cut on its first read while later-dispatched workers completed is an interior hole, named in NOT YET" row_ow_interior_hole
+chk "window probe: a retried read recomputes the deadline cap — the retry cannot run the stale 60 s cap past END" row_ow_retry_deadline
+chk "window probe: the newest merge_group extras left unread by the deadline are an unmet criterion (the pause check lacks data)" row_ow_e_cut
 ow_mutate() {   # ow_mutate <name> <old> <new> <row>: one edit of the PROBE (it must land once and parse); the row is GREEN on the real probe and must be RED on the mutant
   local m="$SANDBOX/owmut-$1.sh" real="$OW_SCRIPT" red=0
+  in_range || return 0   # ROWS-SPLIT: every top-level call site reaches the gate; out-of-range sites dispatch nothing
+  OW_MUT_RUN=$((OW_MUT_RUN + 1))   # the section's own floor counts every call (ow_mutate does not feed MUT_RUN, so FLOOR_MUTANTS is not the guard for these)
   cp "$real" "$m"
   python3 - "$m" "$2" "$3" 2>/dev/null <<'PY' || { fail "probe mutant $1: the edit did not land exactly once"; return 0; }
 import sys
@@ -3199,14 +3770,14 @@ PY
   bash -n "$m" 2>/dev/null || { fail "probe mutant $1 does not parse"; return 0; }
   "$4" >/dev/null 2>&1 || { fail "probe mutant $1: row $4 is red on the real probe"; return 0; }
   OW_SCRIPT="$m"; "$4" >/dev/null 2>&1 || red=1; OW_SCRIPT="$real"
-  if [[ "$red" -eq 1 ]]; then pass "probe mutant $1 is killed by $4"; else fail "probe mutant $1 SURVIVED row $4"; fi
+  if [[ "$red" -eq 1 ]]; then OW_MUT_KILLED=$((OW_MUT_KILLED + 1)); pass "probe mutant $1 is killed by $4"; else fail "probe mutant $1 SURVIVED row $4"; fi
 }
 ow_mutate not-yet-is-exit-1 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
   exit 2' 'printf '"'"'NOT YET: %s\n'"'"' "${nots[@]}"
   exit 1' row_ow_few_prs
 ow_mutate unmerged-is-exit-1 'the window has not opened"; exit 2' 'the window has not opened"; exit 1' row_ow_notmerged
-ow_mutate units-read-newest-first 'head -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/read.tsv"' 'tail -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/read.tsv"' row_ow_unit_cap
-ow_mutate newest-merge-group-not-forced 'tail -n "$NEWEST_MG" '"$GT$GT"' "$WORK/read.tsv"' 'tail -n 0 '"$GT$GT"' "$WORK/read.tsv"' row_ow_unit_cap
+ow_mutate units-read-newest-first 'head -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/oldest.tsv"' 'tail -n "$MAX_UNITS" "$WORK/readable.tsv" '"$GT"' "$WORK/oldest.tsv"' row_ow_unit_cap
+ow_mutate newest-merge-group-not-forced 'tail -n "$NEWEST_MG" '"$GT"' "$WORK/extras.tsv"' 'tail -n 0 '"$GT"' "$WORK/extras.tsv"' row_ow_unit_cap
 ow_mutate cancelled-run-read 'awk -F'"'"'\t'"'"' '"'"'$8 != "cancelled"'"'"' "$RUNS"' 'awk -F'"'"'\t'"'"' '"'"'1'"'"' "$RUNS"' row_ow_cancel_run
 ow_mutate one-page-only '    [ "$n" -ge 100 ] || break' '    break' row_ow_pages
 ow_mutate page-cap-ignored '    if [ "$page" -ge "$MAX_PAGES" ]; then TRUNC=1; break; fi' '    :' row_ow_one_page
@@ -3225,10 +3796,114 @@ OW_COMM=comm
 ow_mutate baseline-growth-ignored "added=\"\$($OW_COMM -13 \"\$WORK/bl.merge.s\" \"\$WORK/bl.tip.s\")\"" 'added=""' row_ow_baseline_grew
 ow_mutate baseline-absent-at-merge-tolerated '[ "$rc" -ne 4 ] || fail_api "the baseline is absent at the PR3a merge commit"' ':' row_ow_baseline_reads
 ow_mutate thirty-day-note-dropped 'if (( nwall > 0 && ${#nots[@]} == nwall && age_days >= REVIEW_DAYS )); then' 'if false; then' row_ow_30day_ceiling
-ow_mutate ceiling-owed-note-dropped '(PROVISIONAL ceiling; ceiling re-rule owed: bring the measured series to the CTO agent)"); nwall=$((nwall + 1)); }
-  (( max <= MAX_MAX ))' '(PROVISIONAL ceiling)"); nwall=$((nwall + 1)); }
+ow_mutate ceiling-regression-note-dropped '(ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)"); nwall=$((nwall + 1)); }
+  (( max <= MAX_MAX ))' '(ruled ceiling)"); nwall=$((nwall + 1)); }
   (( max <= MAX_MAX ))' row_ow_slow
 ow_mutate merged-at-spliced 'jq -r --arg m "$merged_at" --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > $m)' 'jq -r --arg ev "$ev" '"'"'.workflow_runs[]? | select(.created_at > "'"'"'"$merged_at"'"'"'")' row_ow_static
+ow_mutate args-accumulator $'files="$(printf \'%s\\n%s\\n\' "$files" "$proj" | jq -s -c \'add\' 2>/dev/null)" || fail_api "pull $n files (parse)"' $'files="$(jq -c -n --argjson a "$files" --argjson b "$page_files" \'$a + $b\' 2>/dev/null)" || fail_api "pull $n files (parse)"' row_ow_big_patch
+ow_mutate oracle-argv $'jq -s -r --argjson oracle "$ORACLE_JSON" \'.[0] as $p | .[1] as $files | $p | if' $'jq -s -r --argjson oracle "$ORACLE_JSON" --argjson files "$files" \'.[0] as $p | $p | if' row_ow_long_names
+ow_mutate progress-to-stdout $'printf \'soak-progress: %s\\n\' "$*" >&2;' $'printf \'soak-progress: %s\\n\' "$*";' row_ow_progress
+ow_mutate heartbeat-always-on $'{ [ "${SOAK_PROGRESS:-}" = 1 ] || [ -t 2 ]; } && HB=1' $'HB=1' row_ow_heartbeat
+ow_mutate heartbeat-never $'if [ "$HB" = 1 ] && (( done_n % 25 == 0 )); then' $'if false; then' row_ow_heartbeat
+ow_mutate parallel-rc-ignored $'if [ "$wrc_v" != 0 ]; then' $'if false; then' row_ow_worker_fail
+ow_mutate budget-ignored $'if (( SECONDS - T0 >= BUDGET - LAUNCH_RSVD )) && ! { [ "$kind" = O ] && [ "$o_launched" -eq 0 ]; }; then BUDGET_CUT=1; break; fi' $'  :' row_ow_budget
+ow_mutate deadline-gates-first-oldest-first $' )) && ! { [ "$kind" = O ] && [ "$o_launched" -eq 0 ]; }; then' $' )); then' row_ow_budget
+ow_mutate deadline-gates-extras $'[ "$kind" = O ] && o_launched=$((o_launched + 1))' $'o_launched=$((o_launched + 1))' row_ow_budget
+ow_mutate dispatch-horizon-unbounded $'SECONDS - T0 >= BUDGET - LAUNCH_RSVD' $'SECONDS - T0 >= BUDGET' row_ow_budget
+ow_mutate read-cap-unbounded $'rem=$((END - SECONDS - 5)); cap=60; (( rem < cap )) && cap=$rem' $'cap=60' row_ow_deadline_cap
+ow_mutate budget-sentinel-unread $'if [ "$wrc_v" = 46 ]; then' $'if [ "$wrc_v" = 99 ]; then' row_ow_deadline_cap
+ow_mutate empty-extras-anti-join $'if [ -s "$WORK/extras.tsv" ]; then' $'if true; then' row_ow_deadline_cap
+ow_mutate extras-last $'{ sed \'s/^/E\\t/\' "$WORK/extras.tsv"; sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; }' $'{ sed \'s/^/O\\t/\' "$WORK/oldest-rest.tsv"; sed \'s/^/E\\t/\' "$WORK/extras.tsv"; }' row_ow_budget
+ow_mutate unit-sort-dropped $'sort -t$\'\\t\' -k5,5 -k1,1n -s -o "$UNITS" "$UNITS" || fail_api "unit sort"' $':' row_ow_parallel_same
+ow_mutate draft-cache-dropped $'[ -n "${PR_TL[$n]+x}" ] || { PR_TL' $'{ PR_TL' row_ow_pr_facts_cached
+ow_mutate jq-detail-unbounded $'| LC_ALL=C cut -c1-160; }' $'| cat; }' row_ow_jq_error_text
+ow_mutate jq-detail-unfiltered $'LC_ALL=C tr -c \'A-Za-z0-9 _:,()-\' \'?\' | ' $'' row_ow_jq_error_text
+ow_mutate quota-guard-dropped $'if (( RL_REM - LISTCALLS < need )); then' $'if false; then' row_ow_quota
+ow_mutate rate-limit-403-continues $'if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; then break; fi' $'if false; then break; fi' row_ow_quota
+ow_mutate trap-kill-dropped $'for p in $(jobs -p 2>/dev/null); do kill_tree "$p"; done; wait' $'wait' row_ow_trap
+ow_mutate facts-budget-ignored $'if [ -z "${PR_DOCS[$prn]+x}" ] && { (( SECONDS - TF0 >= FACTS_BUDGET )) || (( SECONDS - T0 >= BUDGET - TAIL )); }; then FACTS_CUT=1; TRUNC=1; break; fi' $'  :' row_ow_budget_facts
+ow_mutate facts-wall-tail-dropped $' || (( SECONDS - T0 >= BUDGET - TAIL ))' $'' row_ow_facts_wall
+ow_mutate budget-cap-600 $'[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 300 ]]' $'[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 600 ]]' row_ow_seam_caps
+ow_mutate seam-cap-parallel-dropped $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[1-9][0-9]*$ ]]' row_ow_seam_caps
+ow_mutate par-serial $'while (( inflight >= PAR )); do wait -n' $'while (( inflight >= 1 )); do wait -n' row_ow_parallelism
+ow_mutate par-uncapped $'while (( inflight >= PAR )); do wait -n' $'while (( inflight >= 99 )); do wait -n' row_ow_parallelism
+ow_mutate failed-flag-ignored $'if [ -e "$FAILED_FLAG" ] || [ -e "$RL_FLAG" ]; then break; fi' $'if [ -e "$RL_FLAG" ]; then break; fi' row_ow_stop_after_fail
+ow_mutate worker-order-reversed $'for wrc_file in "$UD"/*.rc; do' $'for wrc_file in $(ls -r "$UD"/*.rc); do' row_ow_worker_fail
+ow_mutate 429-ignored $'grep -oE \'HTTP (403|429)\'' $'grep -oE \'HTTP 403\'' row_ow_quota
+ow_mutate listcalls-dropped $'if (( RL_REM - LISTCALLS < need )); then' $'if (( RL_REM < need )); then' row_ow_quota
+ow_mutate run-id-unvalidated $'awk -F\'\\t\' \'$1 !~ /^[0-9]+$/ || $6 !~ /^[0-9]+$/ || $7 !~ /^[0-9]+$/ { bad = 1 } END { exit bad }\' "$RUNS" || fail_api "ci.yml runs (non-numeric run id, attempt or PR number)"' $':' row_ow_run_id
+ow_mutate hb-modulus $'(( done_n % 25 == 0 ))' $'(( done_n % 5 == 0 ))' row_ow_heartbeat
+ow_mutate jq-detail-allows-at $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 _:,()@#-\' \'?\'' row_ow_jq_error_text
+ow_mutate par-regex-zero $'[[ "$PAR" =~ ^[1-9][0-9]*$ && "$PAR" -le 8 ]]' $'[[ "$PAR" =~ ^[0-9]+$ && "$PAR" -le 8 ]]' row_ow_seam_caps
+ow_mutate branch-field-unguarded $'((.head_branch // "") | if . == "" then "-" else . end)' $'(.head_branch // "")' row_ow_empty_branch
+ow_mutate facts-clock-from-probe-start $'FACTS_CUT=0; facts_prs=0; TF0=$SECONDS;' $'FACTS_CUT=0; facts_prs=0; TF0=$T0;' row_ow_facts_clock
+ow_mutate facts-regex-dropped $'[[ "$FACTS_BUDGET" =~ ^[1-9][0-9]*$ && "$FACTS_BUDGET" -le 300 ]]' $'[[ "$FACTS_BUDGET" -le 300 ]]' row_ow_seam_caps
+ow_mutate jq-detail-allows-dot $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 ._:,()-\' \'?\'' row_ow_jq_error_text
+ow_mutate jq-detail-allows-slash $'tr -c \'A-Za-z0-9 _:,()-\' \'?\'' $'tr -c \'A-Za-z0-9 /_:,()-\' \'?\'' row_ow_jq_error_text
+ow_mutate branch-guard-empty-only $'((.head_branch // "") | if . == "" then "-" else . end)' $'(if .head_branch == "" then "-" else (.head_branch // "") end)' row_ow_empty_branch
+ow_mutate run-id-anchor-loose $'$1 !~ /^[0-9]+$/ || $6' $'$1 !~ /[0-9]+$/ || $6' row_ow_run_id
+ow_mutate prn-unvalidated $' || $7 !~ /^[0-9]+$/ { bad = 1 }' $' { bad = 1 }' row_ow_run_id
+ow_mutate attempt-unvalidated $' || $6 !~ /^[0-9]+$/' $'' row_ow_run_id
+ow_mutate resolve-length-loosened $'elif length == 1 and ' $'elif length >= 1 and ' row_ow_resolve_unresolvable
+ow_mutate resolve-head-ref-dropped $'and (.[0].head.ref // "") == $branch' $'and true' row_ow_resolve_unresolvable
+ow_mutate resolve-head-repo-dropped $'(.[0].head.repo.full_name // "") == $repo' $'true' row_ow_resolve_unresolvable
+ow_mutate resolve-base-repo-dropped $'(.[0].base.repo.full_name // "") == $repo' $'true' row_ow_resolve_unresolvable
+ow_mutate resolver-never-called $'if [ "$ev" = pull_request ] && [ "$prn" = 0 ]' $'if false && [ "$prn" = 0 ]' row_ow_resolve_merged
+ow_mutate resolver-event-unscoped $'if [ "$ev" = pull_request ] && [ "$prn" = 0 ]' $'if [ "$prn" = 0 ]' row_ow_resolve_scope
+ow_mutate resolver-own-pr-unscoped $' && [ "$prn" = 0 ] && [ "$fork" != 1 ]' $' && [ "$fork" != 1 ]' row_ow_resolve_scope
+ow_mutate resolver-fork-unscoped $' && [ "$fork" != 1 ] && [ "$ex" = 0 ]' $' && [ "$ex" = 0 ]' row_ow_resolve_scope
+ow_mutate resolver-green-unscoped $' && [ "$ex" = 0 ] && [ "$cls" = plain ]' $' && [ "$cls" = plain ]' row_ow_resolve_scope
+ow_mutate resolver-class-unscoped $' && [ "$cls" = plain ] && [[ "$branch" != canary-* ]]' $' && [[ "$branch" != canary-* ]]' row_ow_resolve_scope
+ow_mutate resolver-canary-unscoped $' && [[ "$branch" != canary-* ]] && [[ "$sha"' $' && [[ "$sha"' row_ow_resolve_merged
+ow_mutate resolver-sha-shape-unscoped $' && [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then' $'; then' row_ow_resolve_scope
+ow_mutate resolve-404-aborts $'44|45) return 0 ;;' $'44|45) fail_api "run $id commit pulls" ;;' row_ow_resolve_unresolvable
+ow_mutate resolve-gh-exit-4-is-unresolved $'case "$rc" in 0) ;; 44|45) return 0 ;;' $'case "$rc" in 0) ;; 4|44|45) return 0 ;;' row_ow_resolve_errors
+ow_mutate distinct-per-run-not-per-pr $'  [ -z "${SEEN_KEY[$prn]+x}" ] || continue' $'  :' row_ow_resolve_merged
+ow_mutate facts-prs-not-counted $'  facts_prs=$((facts_prs + 1))\n' $'  :\n' row_ow_zero_pr_units
+ow_mutate unattributed-not-counted $'$2 == "pull_request" && $6 == 0 && $11 != 1' $'$2 == "pull_request" && $6 == 99 && $11 != 1' row_ow_zero_pr_units
+ow_mutate unattributed-note-dropped $'(( distinct == 0 && unattr > 0 )) && unattr_note=' $'false && unattr_note=' row_ow_zero_pr_units
+ow_mutate quota-lookups-unplanned $'(res_cands + 1) / 2 + ' $'' row_ow_quota
+ow_mutate quota-prs-unplanned $'3 * pr_est + ' $'' row_ow_quota
+ow_mutate retry-5xx-unrecognised $'HTTP 5[0-9][0-9]|EOF' $'EOF' row_ow_retry
+ow_mutate retry-404-recognised $'HTTP 5[0-9][0-9]|EOF' $'HTTP 5[0-9][0-9]|HTTP 404|EOF' row_ow_retry
+ow_mutate drain-floor-ignored $'if (( drain_epoch > merged_epoch )); then merged_at="$drain_at"; floor_src="s4-drain"; fi' $'if false; then merged_at="$drain_at"; floor_src="s4-drain"; fi' row_ow_drain_floor
+ow_mutate drain-earliest-not-latest $'[.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | max // ""' $'[.[] | select(.pull_request.merged_at != null) | .pull_request.merged_at] | min // ""' row_ow_drain_floor
+ow_mutate drain-before-pr3a-wins $'if (( drain_epoch > merged_epoch )); then' $'if true; then' row_ow_drain_floor
+ow_mutate drain-read-failure-ignored $'|| fail_api "s4-drain pulls"\n' $'|| drain_json="[]"\n' row_ow_drain_errors
+ow_mutate drain-timestamp-unvalidated $'[[ -z "$drain_at" || "$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain pulls (parse)"' $'true' row_ow_drain_errors
+ow_mutate fork-null-head-repository-is-same-repo $'(.head_repository.full_name // "") != (.repository.full_name // "")' $'(.head_repository.full_name // .repository.full_name // "") != (.repository.full_name // "")' row_ow_resolve_scope
+ow_mutate unattributed-counts-fork-rows $'$2 == "pull_request" && $6 == 0 && $11 != 1' $'$2 == "pull_request" && $6 == 0' row_ow_resolve_scope
+ow_mutate green-pr-rows-zero $'green_pr_rows="$(awk -F\'\\t\' \'$2 == "pull_request" && $11 != 1 && $4 !~ /^canary-/\' "$GREEN" | grep -c .)"' $'green_pr_rows=0' row_ow_zero_pr_units
+ow_mutate unattributed-note-needs-no-zero-distinct $'(( distinct == 0 && unattr > 0 ))' $'(( distinct >= 0 && unattr > 0 ))' row_ow_zero_pr_units
+ow_mutate unattributed-note-needs-unattributed $'(( distinct == 0 && unattr > 0 ))' $'(( distinct == 0 ))' row_ow_zero_pr_units
+ow_mutate transient-network-class-dropped $'HTTP 5[0-9][0-9]|EOF|connection reset|TLS handshake timeout|i/o timeout|dial tcp|Client.Timeout' $'HTTP 5[0-9][0-9]' row_ow_retry
+ow_mutate transient-timeout-rc-dropped $'[ "$1" -eq 124 ] ||' $'false ||' row_ow_retry
+ow_mutate baseline-422-is-absent $'[ "$rc" -eq 44 ] && return 4' $'{ [ "$rc" -eq 44 ] || [ "$rc" -eq 45 ]; } && return 4' row_ow_baseline_reads
+ow_mutate quota-lookup-candidates-count-forks $'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'$3 == "pull_request" && $8 == 0 && $5 !~ /^canary-/\'' row_ow_quota_shape
+ow_mutate quota-lookup-candidates-count-canaries $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/\'' $'res_cands="$(awk -F\'\\t\' \'$3 == "pull_request" && $8 == 0 && $10 == 0\'' row_ow_quota_shape
+ow_mutate quota-pr-estimate-counts-forks $'$3 == "pull_request" && $8 == 0 && $10 == 0 && $5 !~ /^canary-/ { print "b" $5 }' $'$3 == "pull_request" && $8 == 0 && $5 !~ /^canary-/ { print "b" $5 }' row_ow_quota_shape
+ow_mutate drain-epoch-failure-ignored $'drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || fail_api "s4-drain pulls (parse)"' $'drain_epoch="$(date -u -d "$drain_at" +%s 2>/dev/null)" || drain_epoch=0' row_ow_drain_errors
+ow_mutate drain-array-guard-dropped $'if type != "array" then error("not an array") elif' $'if false then error("not an array") elif' row_ow_drain_errors
+ow_mutate drain-full-page-guard-dropped $'elif length >= 100 then error("full page")' $'elif false then error("full page")' row_ow_drain_errors
+ow_mutate drain-timestamp-regex-broad $'"$drain_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]' $'"$drain_at" =~ .* ]]' row_ow_drain_errors
+ow_mutate sentinel-disarmed $'  if [[ -z "$drain_at" ]] || (( drain_epoch < s_epoch )); then' $'  if false; then' row_ow_sentinel_trips
+ow_mutate sentinel-read-removed $'  s_json="$(api "repos/$REPO/pulls/$DRAIN_SENTINEL")" || fail_api "s4-drain sentinel $DRAIN_SENTINEL"' $'  s_json=\'{"number":11226,"merged_at":null}\'' row_ow_sentinel_trips
+ow_mutate sentinel-empty-list-only $'  if [[ -z "$drain_at" ]] || (( drain_epoch < s_epoch )); then' $'  if [[ -z "$drain_at" ]]; then' row_ow_sentinel_older_list
+ow_mutate sentinel-after-listing $'\ndrain_sentinel_check\n' $'\ntrap \'drain_sentinel_check\' EXIT\n' row_ow_sentinel_trips
+ow_mutate sentinel-error-ignored $'|| fail_api "s4-drain sentinel $DRAIN_SENTINEL"' $'|| s_json=\'{"number":11226,"merged_at":null}\'' row_ow_sentinel_errors
+ow_mutate sentinel-timestamp-unvalidated $'  [[ -z "$s_at" || "$s_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail_api "s4-drain sentinel (parse)"' $'  true' row_ow_sentinel_errors
+ow_mutate sentinel-equal-trips $'(( drain_epoch < s_epoch ))' $'(( drain_epoch <= s_epoch ))' row_ow_sentinel_applied
+ow_mutate ceiling-p95-raised $'P95_MAX=240 ' $'P95_MAX=250 ' row_ow_slow
+ow_mutate ceiling-max-raised $'MAX_MAX=285 ' $'MAX_MAX=290 ' row_ow_max
+ow_mutate sentinel-epoch-failure-ignored $'  s_epoch="$(date -u -d "$s_at" +%s 2>/dev/null)" || fail_api "s4-drain sentinel (parse)"' $'  s_epoch="$(date -u -d "$s_at" +%s 2>/dev/null)" || s_epoch=0' row_ow_sentinel_errors
+ow_mutate sentinel-number-weakened $'if .number != $n then error("not the sentinel PR")' $'if .number == null then error("not the sentinel PR")' row_ow_sentinel_errors
+ow_mutate sentinel-number-unchecked $'if .number != $n then error("not the sentinel PR")' $'if false then error("not the sentinel PR")' row_ow_sentinel_errors
+ow_mutate ceiling-p95-lt $'(( p95 <= P95_MAX ))' $'(( p95 < P95_MAX ))' row_ow_edge_pass
+ow_mutate ceiling-max-lt $'(( max <= MAX_MAX ))' $'(( max < MAX_MAX ))' row_ow_edge_pass
+ow_mutate retry-deadline-never $'(( SECONDS - T0 < BUDGET ))' $'(( SECONDS - T0 < 0 ))' row_ow_retry
+ow_mutate retry-twice $'if [ "$tries" -eq 0 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET )) && transient_err "$rc" "$errf"; then tries=1; sleep 2; continue; fi' $'if [ "$tries" -le 1 ] && [ ! -e "$RL_FLAG" ] && (( SECONDS - T0 < BUDGET )) && transient_err "$rc" "$errf"; then tries=$((tries + 1)); sleep 2; continue; fi' row_ow_retry
+ow_mutate retry-ignores-rate-flag $'[ ! -e "$RL_FLAG" ] && (( SECONDS - T0' $'(( SECONDS - T0' row_ow_retry
+ow_mutate baseline-read-unretried $'gh_get -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" || rc=$?' $'timeout 60 gh api -H \'Accept: application/vnd.github.raw\' "repos/$REPO/contents/$BASELINE?ref=$1" > "$2" 2>/dev/null || rc=$?' row_ow_retry
 chk "probe parity: the probe's JOB, STEP and MARKER_RE match the workflow and the SUT's own marker, every reason token fits the step's sed class, and the SUT's oracle notice is the one the step greps" row_ow_parity
 chk "job wiring mutant: the step renamed reds the probe parity row" wf_mut renamed 'name: Ratchet the audit against the committed baseline' 'name: Ratchet' row_ow_parity
 # ---------------------------------------------------------------------------------------------------------------------
@@ -3266,14 +3941,14 @@ build_gr_repo() {
     gitq update-ref refs/remotes/origin/main HEAD
   ) || return 1
 }
-build_gr_repo || { echo "[FATAL] could not build the glob-rate fixture repo" >&2; exit 1; }
+build_gr_repo || { echo "[FATAL] could not build the glob-rate fixture repo" >&2; exit 2; }
 GR_BASE="$(gitq -C "$GR" rev-parse HEAD)"
 GR_N=43
-[[ "$(gitq -C "$GR" rev-list --first-parent --count HEAD)" -eq $((GR_N + 1)) ]] || { echo "[FATAL] glob-rate fixture: expected $((GR_N + 1)) commits" >&2; exit 1; }
+[[ "$(gitq -C "$GR" rev-list --first-parent --count HEAD)" -eq $((GR_N + 1)) ]] || { echo "[FATAL] glob-rate fixture: expected $((GR_N + 1)) commits" >&2; exit 2; }
 # one commit AFTER the base: the measurement is taken at a recorded SHA that is not HEAD (the production shape)
-printf 'post\n' > "$GR/gr-fx/m/post.txt" && gitq -C "$GR" add -A && gitq -C "$GR" commit -qm "post-base" || { echo "[FATAL] glob-rate fixture: post-base commit failed" >&2; exit 1; }
+printf 'post\n' > "$GR/gr-fx/m/post.txt" && gitq -C "$GR" add -A && gitq -C "$GR" commit -qm "post-base" || { echo "[FATAL] glob-rate fixture: post-base commit failed" >&2; exit 2; }
 GR_HEAD="$(gitq -C "$GR" rev-parse HEAD)"
-[[ "$GR_HEAD" != "$GR_BASE" ]] || { echo "[FATAL] glob-rate fixture: HEAD must differ from the base" >&2; exit 1; }
+[[ "$GR_HEAD" != "$GR_BASE" ]] || { echo "[FATAL] glob-rate fixture: HEAD must differ from the base" >&2; exit 2; }
 cat > "$BIN/selgr.sh" <<'SEL'
 #!/usr/bin/env bash
 # the real selector, stood in for: the bit of each row is decided from the path list by plain case patterns, NOT by the model under test.
@@ -3631,6 +4306,7 @@ PY
 declare -A MUT_SIGS=()
 mutate() {  # mutate <name> <old> <new> <row>
   local sig
+  if [[ "$_MUT_UNGATED" != 1 ]] && ! in_range; then return 0; fi   # ROWS-SPLIT: ctl paths arrive via mutate_ungated
   mutant_outcome "$@"
   MUT_RUN=$((MUT_RUN + 1))
   if [[ "$MUT_RESULT" = killed || "$MUT_RESULT" = survived ]]; then   # the identity of a mutant is the MUTATED FILE it produced (and the row), not the spelling of its edit
@@ -4210,7 +4886,10 @@ mutate ratchet-growth-dropped '    if base_text is not None and head_text is not
 # Guard 1 M7: the baseline-state table
 mutate ratchet-deleted-baseline-tolerated '    if new and head_text is None and base_text is not None:' '    if False:' row_rt_deleted
 mutate ratchet-deleted-baseline-always-refused '    if new and head_text is None and base_text is not None:' '    if head_text is None and base_text is not None:' row_rt_deleted_end
-mutate ratchet-adoption-refused '    if base_text is not None and head_text is not None:' '    if head_text is not None:' row_rt_adopt
+mutate ratchet-adoption-refused '    if base_text is not None and head_text is not None:' '    if head_text is not None:' row_rt_reintroduced
+mutate ratchet-reintroduced-tolerated '    if head_text is not None and base_text is None:' '    if False:' row_rt_reintroduced
+mutate ratchet-reintroduced-live-gated '    if head_text is not None and base_text is None:' '    if new and head_text is not None and base_text is None:' row_rt_reintroduced
+mutate ratchet-reintroduced-content-weakened '    if head_text is not None and base_text is None:' '    if head_text and base_text is None:' row_rt_reintroduced
 # Guard 1 M8: the base
 mutate ratchet-base-is-merge-base-with-origin-main '"rev-parse", "--verify", "--end-of-options", ref + "^{commit}"]' '"merge-base", "origin/main", "HEAD"]' row_rt_grow_stack
 mutate ratchet-unresolved-base-is-an-adoption '    if not sha:
@@ -4243,8 +4922,8 @@ mutate ratchet-cause-edited-suite-ignored '    elif edited:' '    elif False:' r
 # Guard 1 M12: nothing attacker-controlled starts a line or carries a control character
 mutate ratchet-ref-text-unquoted '        entry.append("  ref\t%s:%d\t%s/%d\t%s" % (q(rel), no, anchor, ordinal, q(text)))' '        entry.append("  ref\t%s:%d\t%s/%d\t%s" % (q(rel), no, anchor, ordinal, text))' row_rt_text_inject
 mutate ratchet-baseline-line-shown-raw '    return quote_field(line) if QUOTE_CTL.search(line) or QUOTE_U.search(line) else line' '    return line' row_rt_text_inject_shown
-mutate ratchet-baseline-line-shown-without-c0 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")' 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x0c\x0e-\x1f\x7f]")' row_rt_text_inject_shown
-mutate ratchet-baseline-line-shown-without-del 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f\x7f]")' 'QUOTE_CTL = re.compile("[\x00-\x08\x0a-\x1f]")' row_rt_text_inject_shown
+mutate ratchet-baseline-line-shown-without-c0 '_C0_SANS_TAB = "".join(chr(c) for c in range(0x20) if c != 0x09)' '_C0_SANS_TAB = "".join(chr(c) for c in range(0x20) if c not in (0x09, 0x0d))' row_rt_text_inject_shown
+mutate ratchet-baseline-line-shown-without-del 'QUOTE_CTL = re.compile("[" + _C0_SANS_TAB + "\x7f]")' 'QUOTE_CTL = re.compile("[" + _C0_SANS_TAB + "]")' row_rt_text_inject_shown
 mutate ratchet-baseline-line-shown-without-bidi 'or QUOTE_U.search(line) else line' 'else line' row_rt_text_inject_shown
 mutate ratchet-new-pair-path-raw '    entry = ["new-pair\t%s\t%s\t%s" % (q(s), q(p), ' '    entry = ["new-pair\t%s\t%s\t%s" % (q(s), p, ' row_rt_text_inject
 mutate ratchet-cause-neither-path-raw '"edge or add an accept row" % (q(refs[0][2]) if refs else "the suite", q(p)))' '"edge or add an accept row" % (q(refs[0][2]) if refs else "the suite", p))' row_rt_text_inject
@@ -4269,8 +4948,8 @@ mutate ratchet-oracle-misses-the-workflow 'RATCHET_ORACLE = (".github/workflows/
 mutate ratchet-oracle-misses-the-helper '"scripts/ci-pr-affected-replay.py", RATCHET_LINT, RATCHET_ACCEPT' '"scripts/ci-pr-affected-replay.py", RATCHET_ACCEPT' row_rt_oracle_each
 mutate ratchet-oracle-misses-the-accept-file 'RATCHET_LINT, RATCHET_ACCEPT, RATCHET_PATHS_LIB' 'RATCHET_LINT, RATCHET_PATHS_LIB' row_rt_oracle_accept_only
 mutate ratchet-oracle-misses-the-path-library 'RATCHET_ACCEPT, RATCHET_PATHS_LIB, RATCHET_TEST_ALL' 'RATCHET_ACCEPT, RATCHET_TEST_ALL' row_rt_oracle_each
-mutate ratchet-oracle-misses-the-runner 'RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE)' 'RATCHET_PATHS_LIB, RATCHET_BASELINE)' row_rt_oracle_each
-mutate ratchet-oracle-misses-the-baseline-constant 'RATCHET_TEST_ALL, RATCHET_BASELINE)' 'RATCHET_TEST_ALL)' row_rt_oracle_constants
+mutate ratchet-oracle-misses-the-runner 'RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE,' 'RATCHET_PATHS_LIB, RATCHET_BASELINE,' row_rt_oracle_each
+mutate ratchet-oracle-misses-the-baseline-constant 'RATCHET_TEST_ALL, RATCHET_BASELINE,' 'RATCHET_TEST_ALL,' row_rt_oracle_constants
 mutate ratchet-oracle-lists-a-file-twice '    return [p for p in dict.fromkeys(RATCHET_ORACLE + (rel,)) if p in touched]' '    return [p for p in RATCHET_ORACLE + (rel,) if p in touched]' row_rt_oracle
 mutate ratchet-oracle-ignores-the-diff '    return [p for p in dict.fromkeys(RATCHET_ORACLE + (rel,)) if p in touched]' '    return list(dict.fromkeys(RATCHET_ORACLE + (rel,)))' row_rt_oracle_absent
 mutate ratchet-helper-from-the-pr-tree '    p = run(["git", "show", "%s:%s" % (sha, RATCHET_LINT)], cwd=root,' '    p = run(["cat", os.path.join(root, RATCHET_LINT)], cwd=root,' row_rt_helper_pr_tree_ignored
@@ -4491,7 +5170,7 @@ mutant_outcome ctl-real-kill 'r = index.refs[got[0]] = scan_views(index, got[1],
 [[ "$MUT_RESULT" = killed ]] && pass "control: a mutant that still runs and returns the wrong answer is KILLED" || fail "control: a real kill scored as '$MUT_RESULT'"
 ctl_mutate_records() {  # drive mutate() with a survivor: it must record a FAILURE, then unwind
   local p0=$passes f0=$fails n0=${#FAILED[@]} m0=$MUT_RUN k0=$MUT_KILLED f1
-  mutate ctl-survive-through-mutate 'READ-ONLY. It never writes' 'READ-ONLY (edited). It never writes' row_verdict_fail >/dev/null 2>&1
+  mutate_ungated ctl-survive-through-mutate 'READ-ONLY. It never writes' 'READ-ONLY (edited). It never writes' row_verdict_fail >/dev/null 2>&1
   f1=$fails
   passes=$p0; fails=$f0; MUT_RUN=$m0; MUT_KILLED=$k0
   if (( n0 == 0 )); then FAILED=(); else FAILED=("${FAILED[@]:0:n0}"); fi
@@ -4500,8 +5179,8 @@ ctl_mutate_records() {  # drive mutate() with a survivor: it must record a FAILU
 ctl_mutate_records && pass "control: mutate() records a survivor as a failure" || fail "control: mutate() did not record a survivor as a failure"
 ctl_duplicate_refused() {  # a renamed duplicate of an earlier mutant (same edit, same row) must be REFUSED, not counted as one more kill
   local p0=$passes f0=$fails n0=${#FAILED[@]} m0=$MUT_RUN k0=$MUT_KILLED last
-  mutate ctl-dup-a 'import argparse' 'import argparse  # dup' row_verdict_fail >/dev/null 2>&1
-  mutate ctl-dup-b 'import argparse
+  mutate_ungated ctl-dup-a 'import argparse' 'import argparse  # dup' row_verdict_fail >/dev/null 2>&1
+  mutate_ungated ctl-dup-b 'import argparse
 import errno
 import fnmatch' 'import argparse  # dup
 import errno
@@ -4514,24 +5193,33 @@ import fnmatch' row_verdict_fail >/dev/null 2>&1   # spelled differently, the sa
 ctl_duplicate_refused && pass "control: a mutant that repeats an earlier one (same edit, same row) is refused by name, so a renamed duplicate cannot hold a floor" || fail "control: a renamed duplicate mutant was not refused"
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
-# Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard. Each floor is a literal (raised IN THE
-# SAME EDIT that adds rows: base + added, so a deleted row cannot hide behind a new one) AND a count taken from this file (every `mutate`
-# line and every `pass "` call site must have run at least once, whatever else changes). mutate() itself refuses a mutant that repeats an
-# earlier one (same edit, same row), so a renamed duplicate adds no kill.
+# Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard. Ranged form
+# (ROWS-SPLIT, #11562): the unconditional share is FLOOR_ASSERTIONS - DECLARED_TOTAL (700 measured passes:
+# fixture builds, row_*/chk assertions, the ctl-* controls and the kill summaries above — all run on every arm);
+# the ranged share is exactly the EXECUTED in-range sites. A full run (no flag) reproduces the old 1282 floor.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1152   # base 483 (PR1) + 229 added by PR1b incl. review rounds 1 and 2 + 186 added by the S4 ratchet PR3a + 168 added by its review fix round A + 3 mutant-killed passes for the collection-materialization spellings (#10724) + 83 added by S4 PR5 glob-rate (32 rows, 2 harness rows, 49 mutant kills) (measured below)
+OW_SITES="$(grep -c '^ow_mutate ' "$SELF")"
+FLOOR_ASSERTIONS=1307   # base 483 (PR1) + 229 PR1b + 186 PR3a + 168 review fix A + 3 (#10724) + 83 PR5 glob-rate + 57 observation-window fix + merged-PR resolution rounds + 6 observation-window deadline-model (#10865) + 6 observation-window review-round rows; kept equal to the measured full-run pass count
+EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
-if [[ "$total" -lt "$FLOOR_ASSERTIONS" ]]; then
-  printf '[FATAL] anti-vacuity floor: only %s assertions ran, floor is %s\n' "$total" "$FLOOR_ASSERTIONS" >&2; exit 1
+_expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
+if [[ "$total" -lt "$_expected_total" ]]; then
+  printf '[FATAL] anti-vacuity floor: only %s assertions ran, expected at least %s for --rows %s-%s (unconditional %s + dispatched %s)\n' "$total" "$_expected_total" "$ROWS_LO" "$ROWS_HI" "$((FLOOR_ASSERTIONS - DECLARED_TOTAL))" "$EXPECTED_EXECUTED" >&2; exit 2
 fi
-FLOOR_MUTANTS=469   # base 225 (PR1) - 1 (sourced-alias-is-read-twice, equivalent since PR1b) + 74 added by PR1b incl. review rounds 1 and 2 + 56 added by the S4 ratchet PR3a + 63 added by its review fix round A + 3 scan-hidden collection-materialization spellings (#10724) + 49 added by S4 PR5 glob-rate
-if [[ "$MUT_RUN" -lt "$FLOOR_MUTANTS" ]]; then
-  printf '[FATAL] mutation floor: only %s mutants ran, floor is %s\n' "$MUT_RUN" "$FLOOR_MUTANTS" >&2; exit 1
+# Ranged-sum reconciliation (replaces FLOOR_MUTANTS/MUT_RUN>=SITES_MUTATE/OW_MUT_RUN>=OW_SITES):
+# every declared site reached the gate, the gate dispatched exactly the range, and every dispatched
+# site was a mutant run — a skipped or doubly-counted site cannot hide behind the kill floors.
+rows_gate_floor   # shared lib: _site_seq == declared total, EXECUTED == EXPECTED_EXECUTED, >= 1
+if (( MUT_RUN + OW_MUT_RUN != EXECUTED )); then
+  printf '[FATAL] range gate: %s mutants ran but %s sites dispatched — a gated site bypassed the mutant drivers\n' "$((MUT_RUN + OW_MUT_RUN))" "$EXECUTED" >&2; exit 2
 fi
-# the counted floors (not `if` openers: they need the grep counts above, which a mutant of the literal floors above cannot carry)
-# every `mutate` line must have run (an exact reconciliation: a skipped or conditional line is a missing mutant)
-[[ "$MUT_RUN" -ge "$SITES_MUTATE" ]] || { printf '[FATAL] mutation floor: %s mutants ran but this file has %s mutate lines\n' "$MUT_RUN" "$SITES_MUTATE" >&2; exit 1; }
+if (( SITES_MUTATE + OW_SITES != DECLARED_TOTAL )); then
+  printf '[FATAL] census: %s top-level mutate + %s ow_mutate lines != DECLARED_TOTAL %s — bump DECLARED_TOTAL and re-split the registered --rows ranges in the same commit\n' "$SITES_MUTATE" "$OW_SITES" "$DECLARED_TOTAL" >&2; exit 2
+fi
+if (( OW_SITES < 126 || OW_MUT_KILLED != OW_MUT_RUN )); then
+  printf '[FATAL] observation-window floor: %s ow_mutate lines in file (>=126 required), %s ran this range, %s killed\n' "$OW_SITES" "$OW_MUT_RUN" "$OW_MUT_KILLED" >&2; exit 2
+fi
 echo "ci-pr-affected-replay.test.sh: $passes passed, $fails failed, $total assertions, $MUT_RUN mutants"
 [[ "$fails" -eq 0 ]] && exit 0
 printf 'FAILED: %s\n' "${FAILED[@]}" >&2

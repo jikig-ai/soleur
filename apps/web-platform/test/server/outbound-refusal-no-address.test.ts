@@ -298,10 +298,12 @@ describe("stores outside the log sinks (#8532 review)", () => {
   });
 
   it("other tools keep their full gate text offline", () => {
-    const i = { title: "T" };
-    expect(buildOfflineGateMessage("mcp__soleur_platform__create_issue", i)).toBe(
-      buildGateMessage("mcp__soleur_platform__create_issue", i),
-    );
+    // #11303: every gated tool is content-free offline (a fixed per-tool label, never a tool-input value).
+    const i = { title: "CANARY-TITLE" };
+    const offline = buildOfflineGateMessage("mcp__soleur_platform__create_issue", i);
+    expect(offline).toBe("An agent is waiting for your approval on a GitHub issue. Open the conversation to review it.");
+    expect(offline).not.toContain("CANARY-TITLE");
+    expect(buildGateMessage("mcp__soleur_platform__create_issue", i)).toContain("CANARY-TITLE");
   });
 
   it("an aborted turn's summary of an outbound-email call names fields only", () => {
