@@ -54,7 +54,7 @@ Copy the block, fill every `[...]` field, remove any line the fill table marks c
 > What to do:
 >
 > - Think back over what you expected around [DATE] — a draft, a reminder, a follow-up — and re-run the action that would have created it where you can.
-> - If you approved an action around [DATE] that never ran, approve it again[IF-WITHIN-23H: — a re-click within 23 hours of the original approval re-sends it][IF-PAST-23H: — that replays the request for us].
+> - If you approved an action around [DATE] that never ran, approve it again[IF-WITHIN-23H: — a re-click within 23 hours of the original approval re-sends it] / [IF-PAST-23H: — it re-requests the action for us].
 > - If a reminder that mattered did not fire, re-create it.
 > - If something you lost is not covered above, reach us at [SUPPORT ROUTE].
 >
