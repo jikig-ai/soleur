@@ -125,3 +125,11 @@
 - All fixed in one commit; every named suite re-run green locally (142/82/621/62/3/10 + tsc + eslint + env-refs 0).
 - Lesson recorded: never ship with the affected gate still queued on the advisory lock — wait for the ticket.
 - Remaining: merge poll -> postmerge verification -> epic status. Operator step: #10136 zot confirmation. Residual #12092.
+
+## MERGED + Post-Merge Verification (2026-11-06 ~04:31 UTC)
+- PR #12064 MERGED via merge queue, squash 7e5c496ceb onto main.
+- Closes fired for #8780 only (GitHub needs the keyword per-issue); the other 9 closed manually with merge references: #9659 #10078 #8525 #8013 #8080 #8839 #9943 #9074 #8624. #10136 stays OPEN (Ref-only; zot accepted-risk owner confirmation is the remaining operator step).
+- Post-merge readbacks: release-publish env live on GitHub with branch_policy protection; inngest-config-signing dbp admits main only; dedupe lint on merged state unclassified:0; legal SHA pins match canonical doc digests on main.
+- Epic #10390 stays open — remaining buckets + operator-reserved holds (#10382, carrier bake #10290, #9294 live-race).
+- Residual follow-up: #12092 (quoted dedupe-capture census surfaces).
+- Merge-queue history: 5 rebases + 4 merge-in syncs (TSV/floor/ADR-241/target-parity conflicts), byte-gate fix (job-rationale relocation), markdown-lint fix, shard-failure sweep commit. Lesson recorded: never ship while the local affected gate is still queued on the advisory lock.
