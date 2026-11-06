@@ -557,6 +557,7 @@ const errorSchema = z.strictObject({
   type: z.literal("error"),
   message: z.string(),
   conversationId: conversationIdSchema.optional(),
+  clientTurnId: z.string().uuid().optional(),
   errorCode: z
     .enum([
       "key_invalid",
@@ -580,6 +581,7 @@ const errorSchema = z.strictObject({
       "image_paste_lost",
       "codex_history_transfer_acknowledgment_failed",
       "codex_history_transfer_acknowledgment_rejected",
+      "codex_dispatch_unavailable",
       // #5394 — Concierge dispatch blocked because the active workspace repo
       // setup errored (repo_status === "error"). Client renders the reconnect
       // CTA. The cloning block carries no errorCode.

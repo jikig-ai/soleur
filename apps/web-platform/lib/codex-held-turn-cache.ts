@@ -72,16 +72,31 @@ export const codexHeldTurnCache = {
     if (!scope || scope !== activeScope) return false;
     prune();
     const key = JSON.stringify([turn.conversationId, turn.clientTurnId]);
-    const bytes = new TextEncoder().encode(JSON.stringify(turn)).length;
+    const snapshot = structuredClone({ ...turn, message: { ...turn.message, delivery: "unsent" as const } });
+    const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).length;
     const used = [...turns.values()].reduce((total, entry) => total + entry.bytes, 0) - (turns.get(key)?.bytes ?? 0);
+    if (turns.get(key)?.turn.message.delivery === "unresolved") return false;
     if ((!turns.has(key) && turns.size >= MAX_TURNS) || used + bytes > MAX_BYTES) return false;
-    turns.set(key, { turn: { ...turn, message: { ...turn.message, delivery: "unsent" } }, bytes, expiresAt: Date.now() + TTL_MS });
+    turns.set(key, { turn: snapshot, bytes, expiresAt: Date.now() + TTL_MS });
     return true;
   },
   get(scope: string | null, conversationId: string): HeldCodexTurn[] {
     if (!scope || scope !== activeScope) return [];
     prune();
-    return [...turns.values()].filter(({ turn }) => turn.conversationId === conversationId).map(({ turn }) => ({ ...turn, message: { ...turn.message, delivery: "unsent" } }));
+    return [...turns.values()].filter(({ turn }) => turn.conversationId === conversationId).map(({ turn }) => structuredClone(turn));
+  },
+  markUnresolved(scope: string | null, conversationId: string, clientTurnId: string): HeldCodexTurn | null {
+    if (!scope || scope !== activeScope) return null;
+    prune();
+    const key = JSON.stringify([conversationId, clientTurnId]);
+    const entry = turns.get(key);
+    if (!entry || entry.turn.message.delivery === "unresolved") return null;
+    const turn = structuredClone({ ...entry.turn, message: { ...entry.turn.message, delivery: "unresolved" as const } });
+    const bytes = new TextEncoder().encode(JSON.stringify(turn)).length;
+    const used = [...turns.values()].reduce((total, item) => total + item.bytes, 0) - entry.bytes;
+    if (used + bytes > MAX_BYTES) return null;
+    turns.set(key, { ...entry, turn, bytes });
+    return structuredClone(turn);
   },
   setNoticeNonce(scope: string | null, conversationId: string, authModeGeneration: number, noticeNonce: string) {
     if (!scope || scope !== activeScope) return;

@@ -169,6 +169,7 @@ export type WSErrorCode =
   | "image_paste_lost"
   | "codex_history_transfer_acknowledgment_failed"
   | "codex_history_transfer_acknowledgment_rejected"
+  | "codex_dispatch_unavailable"
   // #5394 — Concierge dispatch blocked because the active workspace's repo
   // setup `error`'d (repo_status === "error"). Client renders the reconnect
   // CTA to Settings → Repository. The `cloning` block carries NO errorCode
@@ -632,6 +633,7 @@ export type WSMessage =
       runnerRunawayLastBlockToolName?: string | null;
       /** Conversation scoping for provider errors emitted after async dispatch. */
       conversationId?: string;
+      clientTurnId?: string;
       // ADR-044 PR-1 — set with `errorCode: "workspace_switch_required"`: the
       // workspace id (the discarded non-member claim) the client offers to
       // switch to. The client opens the workspace switcher (NOT a direct

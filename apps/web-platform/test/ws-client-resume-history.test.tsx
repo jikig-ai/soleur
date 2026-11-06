@@ -127,6 +127,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
   }
 
   async function acknowledgeHeldDraft() {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
     const { useWebSocket } = await import("@/lib/ws-client");
     const { result } = renderHook(() => useWebSocket("new"));
     await connectAndAuth(result);
@@ -150,6 +151,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
   }
 
   async function holdUnacknowledgedDraft() {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
     const { useWebSocket } = await import("@/lib/ws-client");
     const { result } = renderHook(() => useWebSocket("new"));
     await connectAndAuth(result);
@@ -170,22 +172,130 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     return { result, ws, chat, retainedMessage };
   }
 
+  it("refuses a direct resend callback and retains its copyable draft while the hold is active", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    act(() => result.current.sendMessage("Copyable draft"));
+    const retainedMessage = result.current.messages[0];
+    if (retainedMessage.type !== "text") throw new Error("expected draft");
+    const ws = wsInstance!;
+    ws.send.mockClear();
+    act(() => result.current.resendMessage({ ...retainedMessage, delivery: "retryable" }));
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(result.current.messages[0]).toEqual(retainedMessage);
+    expect(result.current.lastError?.message).toContain("Resending is temporarily unavailable");
+  });
+
+  it("marks only the matching held-off Codex turn unresolved", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    act(() => result.current.sendMessage("First draft"));
+    act(() => result.current.sendMessage("Second draft"));
+    const chats = wsInstance!.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat");
+    serverSend({ type: "error", errorCode: "codex_dispatch_unavailable", message: "stale", conversationId: "other-conversation", clientTurnId: chats[0].clientTurnId });
+    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+    expect(result.current.lastError).toBeNull();
+    serverSend({ type: "error", errorCode: "codex_dispatch_unavailable", message: "Codex sending is temporarily unavailable. Keep or copy your draft.", conversationId: "conv-history-ack", clientTurnId: chats[0].clientTurnId });
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "First draft", delivery: "unresolved" }));
+    expect(result.current.messages[1]).not.toHaveProperty("delivery");
+    expect(result.current.lastError?.message).toContain("Keep or copy your draft");
+    serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2, authMode: "api-key", clientTurnId: chats[0].clientTurnId });
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
+  });
+
+  it("restores a cached draft as unresolved while the hold is active", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const scope = codexHeldTurnCache.acceptToken(token);
+    expect(codexHeldTurnCache.put(scope, { clientTurnId: "a0000000-0000-4000-8000-000000000001", conversationId: "conv-history-ack", authModeGeneration: 2, noticeNonce: "A".repeat(43), message: { id: "user-a0000000-0000-4000-8000-000000000001", type: "text", role: "user", content: "Cached synthetic draft" } })).toBe(true);
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Cached synthetic draft", delivery: "unresolved" }));
+    expect(result.current.lastError?.code).not.toBe("codex_history_transfer_required");
+  });
+
+  it("keeps a full-cache draft unresolved across repeated remounts and delayed frames", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const scope = codexHeldTurnCache.acceptToken(token);
+    const clientTurnId = "a0000000-0000-4000-8000-000000000001";
+    const held = { clientTurnId, conversationId: "conv-history-ack", authModeGeneration: 2, noticeNonce: "A".repeat(43), message: { id: `user-${clientTurnId}`, type: "text" as const, role: "user" as const, content: "", delivery: "unsent" as const } };
+    held.message.content = "x".repeat(256 * 1024 - new TextEncoder().encode(JSON.stringify(held)).length);
+    expect(codexHeldTurnCache.put(scope, held)).toBe(true);
+    expect(codexHeldTurnCache.markUnresolved(scope, held.conversationId, clientTurnId)).toBeNull();
+    const { useWebSocket } = await import("@/lib/ws-client");
+    for (let index = 0; index < 2; index++) {
+      const mounted = renderHook(() => useWebSocket("new"));
+      await connectAndAuth(mounted.result);
+      serverSend({ type: "session_started", conversationId: held.conversationId });
+      serverSend({ type: "codex_history_transfer_required", conversationId: held.conversationId, authModeGeneration: 2, authMode: "api-key", clientTurnId });
+      serverSend({ type: "codex_history_transfer_acknowledged", conversationId: held.conversationId, authModeGeneration: 2 });
+      const recovered = mounted.result.current.messages[0];
+      expect(recovered).toEqual(expect.objectContaining({ delivery: "unresolved", content: held.message.content }));
+      if (recovered.type !== "text") throw new Error("expected recovered draft");
+      wsInstance!.send.mockClear();
+      act(() => mounted.result.current.resendMessage({ ...recovered, delivery: "retryable" }));
+      expect(wsInstance!.send).not.toHaveBeenCalled();
+      mounted.unmount();
+    }
+  });
+
   it("retains a resent held draft when a credential error follows socket handoff", async () => {
     mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
     const { result, ws, chat, retainedMessage } = await acknowledgeHeldDraft();
     const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
     const scope = codexHeldTurnCache.acceptToken(syntheticScopeToken());
     act(() => result.current.resendMessage(retainedMessage));
+    act(() => result.current.resendMessage(retainedMessage));
     expect(ws.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([chat]);
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
     serverSend({ type: "error", errorCode: "key_invalid", message: "Synthetic credential failure" });
     expect(result.current.messages[0]).toEqual(expect.objectContaining({
       content: "Keep this original draft",
       attachments: chat.attachments,
     }));
     expect(codexHeldTurnCache.get(scope, "conv-history-ack")).toEqual([
-      expect.objectContaining({ clientTurnId: chat.clientTurnId, message: expect.objectContaining({ content: chat.content, attachments: chat.attachments }) }),
+      expect.objectContaining({ clientTurnId: chat.clientTurnId, message: expect.objectContaining({ content: chat.content, attachments: chat.attachments, delivery: "unresolved" }) }),
     ]);
     expect(ws.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an unresolved resend blocked after unmount, remount and a repeated acknowledgment", async () => {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const mounted = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(mounted.result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    act(() => mounted.result.current.sendMessage("Pending exact draft"));
+    const chat = wsInstance!.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).find((frame) => frame.type === "chat");
+    serverSend({ type: "codex_history_transfer_required", conversationId: "conv-history-ack", authModeGeneration: 2, authMode: "api-key", clientTurnId: chat.clientTurnId });
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    const held = mounted.result.current.messages[0];
+    if (held.type !== "text") throw new Error("expected held draft");
+    act(() => mounted.result.current.resendMessage(held));
+    mounted.unmount();
+    const reopened = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(reopened.result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    expect(reopened.result.current.messages[0]).toEqual(expect.objectContaining({ content: chat.content, delivery: "unresolved" }));
+    serverSend({ type: "codex_history_transfer_acknowledged", conversationId: "conv-history-ack", authModeGeneration: 2 });
+    const recovered = reopened.result.current.messages[0];
+    expect(recovered).toEqual(expect.objectContaining({ delivery: "unresolved" }));
+    if (recovered.type !== "text") throw new Error("expected recovered draft");
+    const socket = wsInstance!;
+    socket.send.mockClear();
+    act(() => reopened.result.current.resendMessage({ ...recovered, delivery: "retryable" }));
+    expect(socket.send).not.toHaveBeenCalled();
   });
 
   async function cacheTwoHeldTurns() {
@@ -233,7 +343,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     const reopened = renderHook(() => useWebSocket("new"));
     await connectAndAuth(reopened.result);
     serverSend({ type: "session_started", conversationId: "conv-held-remount" });
-    expect(reopened.result.current.messages.some((message) => message.type === "text" && message.delivery !== undefined)).toBe(false);
+    expect(reopened.result.current.messages.filter((message) => message.type === "text" && message.delivery === "unresolved")).toHaveLength(2);
   });
 
   it.each(["user", "workspace", "unverified", "logout", "revocation"])("does not restore held turns after %s scope invalidation", async (change) => {
@@ -272,14 +382,14 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.messages[0]).toEqual(expect.objectContaining({
       id: retainedMessage.id, content: retainedMessage.content, attachments: retainedMessage.attachments,
     }));
-    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
   });
 
   it("retains the acknowledged draft after a synchronous socket send failure", async () => {
-    const { result, ws, chat, retainedMessage } = await acknowledgeHeldDraft();
+    const { result, ws, retainedMessage } = await acknowledgeHeldDraft();
     ws.send.mockImplementationOnce(() => { throw new DOMException("Socket is closing", "InvalidStateError"); });
     expect(() => act(() => result.current.resendMessage(retainedMessage))).not.toThrow();
-    expect(result.current.messages).toEqual([retainedMessage]);
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: retainedMessage.content, delivery: "unresolved" }));
     expect(mockReportSilentFallback).toHaveBeenCalledWith(expect.any(DOMException), expect.objectContaining({
       feature: "codex-history-transfer", op: "send-resend-throw",
     }));
@@ -287,9 +397,9 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     ws.send.mockClear();
     act(() => result.current.resendMessage(retainedMessage));
     act(() => result.current.resendMessage(retainedMessage));
-    expect(ws.send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toEqual([chat]);
+    expect(ws.send).not.toHaveBeenCalled();
     expect(result.current.messages).toHaveLength(1);
-    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
   });
 
   it("waits for same-conversation session confirmation after reconnect auth before explicitly resending the original draft once", async () => {
@@ -347,7 +457,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.messages[0]).toEqual(expect.objectContaining({
       id: retainedMessage.id, content: retainedMessage.content, attachments: retainedMessage.attachments,
     }));
-    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
   });
 
   it("preserves an unacknowledged transfer through explicit same-conversation recovery", async () => {
@@ -390,7 +500,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     const frames = recoveryWs.send.mock.calls.map(([frame]) => JSON.parse(frame as string));
     expect(frames.filter((frame) => frame.type === "chat")).toEqual([chat]);
     expect(result.current.messages).toHaveLength(1);
-    expect(result.current.hasPendingCodexHistoryTransfer).toBe(false);
+    expect(result.current.hasPendingCodexHistoryTransfer).toBe(true);
   });
 
   it("keeps a held draft awaiting explicit session recovery even when stamped replay frames arrive", async () => {
@@ -449,6 +559,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     { authMode: "api-key", billing: "your own credential", account: "your provider account" },
     { authMode: "managed", billing: "your own connected ChatGPT account", account: "confirm applicable billing" },
   ])("correlates an unsent turn and explains history transfer for $authMode without resending on acknowledgment", async ({ authMode, billing, account }) => {
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: syntheticScopeToken() } } });
     const { useWebSocket } = await import("@/lib/ws-client");
     const { result } = renderHook(() => useWebSocket("new"));
     await connectAndAuth(result);
@@ -473,7 +584,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.lastError?.message).toContain("message you resend and any later messages");
     expect(result.current.lastError?.message).toContain(billing);
     expect(result.current.lastError?.message).toContain(account);
-    expect(result.current.lastError?.message).toContain("then resend");
+    expect(result.current.lastError?.message).toContain("Resending is temporarily unavailable");
 
     serverSend({
       type: "codex_history_transfer_required", conversationId: "conv-history-ack",
@@ -500,7 +611,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       type: "chat", content: "Keep this original draft", attachments, clientTurnId: chats[0].clientTurnId,
     });
     expect(result.current.messages).toHaveLength(2);
-    expect(result.current.messages[0]).not.toHaveProperty("delivery");
+    expect(result.current.messages[0]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
     expect(result.current.messages[1]).toEqual(expect.objectContaining({ content: "A separate turn", delivery: "retryable" }));
     act(() => result.current.resendMessage(result.current.messages[1] as Extract<typeof result.current.messages[number], { type: "text" }>));
     const allExplicitRetries = (wsInstance?.send.mock.calls ?? []).map(([frame]) => JSON.parse(frame as string)).filter((frame) => frame.type === "chat");
@@ -509,7 +620,7 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
       type: "chat", content: "A separate turn", attachments: undefined, clientTurnId: chats[1].clientTurnId,
     });
     expect(result.current.messages).toHaveLength(2);
-    expect(result.current.messages[1]).not.toHaveProperty("delivery");
+    expect(result.current.messages[1]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
   });
 
   it("ignores another conversation's required notice even when its turn ID matches a local message", async () => {

@@ -156,6 +156,37 @@ describe("Codex real production handler boundary", () => {
     expect(fixture.dispatchSoleurGo).not.toHaveBeenCalled();
   }
 
+  it("holds Codex dispatch before constructing a runtime or claiming a turn", async () => {
+    const runtime = vi.spyOn(codexRuntimeModule, "codexConversationRuntime");
+    const frames = await chat();
+    expect(frames).toEqual([expect.objectContaining({ type: "error" })]);
+    expect(runtime).not.toHaveBeenCalled();
+    expect(fixture.rpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
+    expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
+  it("holds switched-conversation notice writes while Codex is unqualified", async () => {
+    fixture.generation = 1;
+    fixture.rpc.mockResolvedValue({ data: false, error: null });
+    const frames = await chat();
+    expect(frames).toEqual([expect.objectContaining({ type: "error" })]);
+    expect(fixture.rpc).not.toHaveBeenCalled();
+    expect(fixture.spawn).not.toHaveBeenCalled();
+  });
+
+  it("holds a direct acknowledgment without issuing or consuming a notice", async () => {
+    const send = vi.fn();
+    sessions.set(fixture.userId, {
+      ws: { readyState: 1, send, close: vi.fn() }, conversationId: fixture.conversationId,
+      lastActivity: Date.now(), tcVersionAtHandshake: TC_VERSION,
+      tcRecheckCacheUntil: Date.now() + 1_000_000,
+    } as unknown as ClientSession);
+    await handleMessage(fixture.userId, JSON.stringify({ type: "codex_history_transfer_acknowledge",
+      conversationId: fixture.conversationId, authModeGeneration: 1, noticeNonce: "A".repeat(43) }));
+    expect(fixture.rpc).not.toHaveBeenCalled();
+    expect(send.mock.calls.map(([frame]) => JSON.parse(frame as string))).toContainEqual(expect.objectContaining({ type: "error" }));
+  });
+
   it.each(["api-key", "managed"] as const)("rejects %s before credentials, attempts or provider calls", async (mode) => {
     fixture.mode = mode;
     fixture.generation = 0;

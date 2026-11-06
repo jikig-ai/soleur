@@ -121,7 +121,7 @@ export const MessageBubble = memo(function MessageBubble({
 }: {
   role: "user" | "assistant";
   content: string;
-  delivery?: "unsent" | "retryable";
+  delivery?: "unsent" | "retryable" | "unresolved";
   onResend?: () => void;
   resendDisabled?: boolean;
   leaderId?: DomainLeaderId;
@@ -316,7 +316,16 @@ export const MessageBubble = memo(function MessageBubble({
               Message not sent
             </p>
           )}
+          {isUser && delivery === "unresolved" && (
+            <p role="status" aria-live="polite" className="mt-2 text-xs text-amber-400">
+              Delivery could not be confirmed. Copy this draft before leaving; do not resend it yet.
+            </p>
+          )}
           {isUser && delivery === "retryable" && onResend && (
+            <>
+            {resendDisabled && <p role="status" className="mt-2 text-xs text-amber-400">
+              Resending is temporarily unavailable. Keep or copy this draft.
+            </p>}
             <Button
               type="button"
               onClick={onResend}
@@ -326,6 +335,7 @@ export const MessageBubble = memo(function MessageBubble({
             >
               Resend
             </Button>
+            </>
           )}
 
           {isUser && unanswered && (

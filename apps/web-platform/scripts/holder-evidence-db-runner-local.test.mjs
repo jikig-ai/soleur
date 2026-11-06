@@ -6,6 +6,7 @@ import { readLocalRoleBindings, inspectBoundRoles } from './holder-evidence-db-r
 import { readLocalRosterBindings, inspectBoundRoster } from './holder-evidence-db-roster.mjs';
 import { buildQueryBundle } from './holder-evidence-bundle.mjs';
 import { createFixtureSocket } from './holder-evidence-test-docker-socket.mjs';
+import { trackInspectionTransaction } from './holder-evidence-transaction-tracker.mjs';
 
 const databaseName = process.env.SYNTHETIC_DB;
 assert.match(databaseName ?? '', /^holder_evidence_test_[0-9]+$/);
@@ -316,7 +317,8 @@ try {
     return transaction;
   } };
   try {
-    const pending = bundled.inspectBundledRoster(stalled, bundle.queries, { timeoutMs: 1000 });
+    const tracked = trackInspectionTransaction(stalled, db => bundled.inspectBundledRoster(db, bundle.queries, { timeoutMs: 1000 }));
+    const pending = tracked.inspection;
     let active = false;
     for (let attempt = 0; attempt < 100; attempt++) {
       if (identity && arms === 1) {
@@ -337,10 +339,18 @@ try {
     assert.equal(timedOut.roles.state, 'failed');
     assert.equal(timedOut.backend_stop, 'unknown');
     assert.equal(timedOut.writer_clearance, false);
+    let trackerSettled = false;
+    tracked.settlement.then(() => { trackerSettled = true; });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(trackerSettled, false);
     const stillActive = await database.unsafe("SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid=$1 AND to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')=$2 AND state='active' AND query='SELECT pg_sleep(10)'", [identity.pid, identity.started]);
     assert.equal(stillActive[0].count, 1);
     await dedicated.end({ timeout: 0 });
     await transaction.then(() => undefined, () => undefined);
+    const trackerResult = await tracked.settlement;
+    assert.ok(['fulfilled', 'rejected'].includes(trackerResult.state));
+    assert.equal(trackerResult.backend_stop, 'unknown');
+    assert.equal(trackerResult.writer_clearance, false);
     let gone = false;
     for (let attempt = 0; attempt < 100; attempt++) {
       const rows = await database.unsafe("SELECT count(*)::int AS count FROM pg_stat_activity WHERE pid=$1 AND to_char(backend_start AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS.US')=$2", [identity.pid, identity.started]);

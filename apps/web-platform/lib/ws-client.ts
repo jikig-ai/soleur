@@ -42,6 +42,11 @@ import { codexHeldTurnCache } from "@/lib/codex-held-turn-cache";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
+function codexResendQualified(): boolean {
+  // Re-enable only with durable, scope-bound claim/status and cross-socket fencing.
+  return false;
+}
+
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 /**
@@ -334,7 +339,8 @@ export type ChatAction =
   | { type: "set_live_narration"; message: string }
   | { type: "ack_timer_action" }
   | { type: "add_message"; message: ChatMessage }
-  | { type: "set_message_delivery"; clientTurnId: string; delivery: "unsent" | "retryable" | undefined }
+  | { type: "set_message_delivery"; clientTurnId: string; delivery: "unsent" | "retryable" | "unresolved" | undefined }
+  | { type: "codex_dispatch_held"; clientTurnId: string }
   | { type: "remove_held_messages"; clientTurnIds: string[] }
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
@@ -616,6 +622,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const ids = new Set(action.clientTurnIds.map((id) => `user-${id}`));
       return { ...state, messages: state.messages.filter((message) => !ids.has(message.id)) };
     }
+    case "codex_dispatch_held":
+      return { ...state, messages: state.messages.map((message) =>
+        message.type === "text" && message.role === "user" && message.id === `user-${action.clientTurnId}`
+          ? { ...message, delivery: "unresolved" as const } : message) };
     case "set_message_delivery":
       return {
         ...state,
@@ -773,6 +783,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     conversationId: string;
     authModeGeneration: number;
     acknowledged: boolean;
+    unresolved?: boolean;
   }>());
   const explicitCodexResumeRef = useRef<string | null>(null);
   const codexDraftScopeRef = useRef<string | null>(null);
@@ -804,7 +815,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       message: "OpenAI will receive the message you resend and any later messages. Saved conversation history is not transferred to the selected account."
         + billingNotice
         + (draftRetentionFailed ? " This draft could not be saved in this tab; copy this draft before leaving or reloading." : "")
-        + " Acknowledge, then resend your message. Your original message was not sent.",
+        + " Resending is temporarily unavailable. Keep or copy your draft while its delivery status is unresolved.",
       conversationId: targetConversationId,
       authModeGeneration: generation,
       noticeNonce,
@@ -814,17 +825,26 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   function restoreHeldCodexTurns(targetConversationId: string) {
     // Only a server-confirmed conversation may select drafts from the cache.
     const restored = codexHeldTurnCache.get(codexDraftScopeRef.current, targetConversationId)
-      .filter((turn) => !pendingCodexHistoryTurnsRef.current.has(turn.clientTurnId));
+      .filter((turn) => !pendingCodexHistoryTurnsRef.current.has(turn.clientTurnId))
+      .map((turn) => {
+        if (codexResendQualified() || turn.message.delivery === "unresolved") return turn;
+        return codexHeldTurnCache.markUnresolved(codexDraftScopeRef.current, turn.conversationId, turn.clientTurnId)
+          ?? { ...turn, message: { ...turn.message, delivery: "unresolved" as const } };
+      });
     for (const turn of restored) {
       pendingCodexHistoryTurnsRef.current.set(turn.clientTurnId, {
         conversationId: turn.conversationId, authModeGeneration: turn.authModeGeneration, acknowledged: false,
+        unresolved: turn.message.delivery === "unresolved",
       });
-      dispatch({ type: "set_message_delivery", clientTurnId: turn.clientTurnId, delivery: "unsent" });
+      dispatch({ type: "set_message_delivery", clientTurnId: turn.clientTurnId, delivery: turn.message.delivery === "unresolved" ? "unresolved" : "unsent" });
     }
     if (restored.length > 0) {
       dispatch({ type: "filter_prepend", messages: restored.map((turn) => turn.message) });
-      const latest = restored.reduce((current, turn) => turn.authModeGeneration > current.authModeGeneration ? turn : current);
-      setLastError(historyTransferNotice(targetConversationId, latest.authModeGeneration, latest.authMode, false, latest.noticeNonce));
+      const awaitingNotice = restored.filter((turn) => turn.message.delivery !== "unresolved");
+      if (awaitingNotice.length > 0) {
+        const latest = awaitingNotice.reduce((current, turn) => turn.authModeGeneration > current.authModeGeneration ? turn : current);
+        setLastError(historyTransferNotice(targetConversationId, latest.authModeGeneration, latest.authMode, false, latest.noticeNonce));
+      }
     }
   }
   // #5290 false-positive fix — mirror of `sessionKind` for the `auth_ok`
@@ -1358,9 +1378,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "codex_history_transfer_required": {
+          if (!codexResendQualified()) break;
           if (msg.conversationId !== realConversationIdRef.current) break;
           let draftRetentionFailed = false;
           if (msg.clientTurnId) {
+            const existing = pendingCodexHistoryTurnsRef.current.get(msg.clientTurnId);
+            const cached = codexHeldTurnCache.get(codexDraftScopeRef.current, msg.conversationId)
+              .find((turn) => turn.clientTurnId === msg.clientTurnId);
+            if (existing?.unresolved || cached?.message.delivery === "unresolved") break;
             pendingCodexHistoryTurnsRef.current.set(msg.clientTurnId, {
               conversationId: msg.conversationId,
               authModeGeneration: msg.authModeGeneration,
@@ -1395,10 +1420,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "codex_history_transfer_acknowledged": {
+          if (!codexResendQualified()) break;
           if (msg.conversationId !== realConversationIdRef.current) break;
           for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
             if (heldTurn.conversationId === msg.conversationId
-              && heldTurn.authModeGeneration === msg.authModeGeneration) {
+              && heldTurn.authModeGeneration === msg.authModeGeneration && !heldTurn.unresolved) {
               heldTurn.acknowledged = true;
               dispatch({ type: "set_message_delivery", clientTurnId, delivery: "retryable" });
             }
@@ -1437,6 +1463,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "error": {
+          if (msg.errorCode === "codex_dispatch_unavailable") {
+            if (msg.conversationId !== realConversationIdRef.current || !msg.clientTurnId) break;
+            dispatch({ type: "codex_dispatch_held", clientTurnId: msg.clientTurnId });
+            setLastError({ code: msg.errorCode, message: msg.message });
+            break;
+          }
           // `clear_streams` resets streamState to "idle" atomically.
           dispatch({ type: "clear_streams" });
           clearAllTimeouts();
@@ -1691,7 +1723,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           if (msg.conversationId) {
             for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
               if (heldTurn.conversationId !== msg.conversationId) {
-                dispatch({ type: "set_message_delivery", clientTurnId, delivery: "unsent" });
+                dispatch({ type: "set_message_delivery", clientTurnId, delivery: heldTurn.unresolved ? "unresolved" : "unsent" });
                 pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
               }
             }
@@ -1739,7 +1771,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           explicitCodexResumeRef.current = null;
           for (const [clientTurnId, heldTurn] of pendingCodexHistoryTurnsRef.current) {
             if (heldTurn.conversationId !== msg.conversationId) {
-              dispatch({ type: "set_message_delivery", clientTurnId, delivery: "unsent" });
+              dispatch({ type: "set_message_delivery", clientTurnId, delivery: heldTurn.unresolved ? "unresolved" : "unsent" });
               pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
             }
           }
@@ -2443,19 +2475,33 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const resendMessage = useCallback(
     (message: Extract<ChatMessage, { type: "text" }>) => {
+      if (!codexResendQualified()) {
+        setLastError({ code: "codex_resend_unavailable", message: "Resending is temporarily unavailable. Keep or copy this draft." });
+        return;
+      }
       const clientTurnId = message.id.startsWith("user-") ? message.id.slice("user-".length) : "";
       const heldTurn = pendingCodexHistoryTurnsRef.current.get(clientTurnId);
       if (status !== "connected" || !sessionConfirmed || message.role !== "user" || message.delivery !== "retryable"
-        || !heldTurn?.acknowledged || heldTurn.conversationId !== realConversationIdRef.current
+        || !heldTurn?.acknowledged || heldTurn.unresolved || heldTurn.conversationId !== realConversationIdRef.current
         || !clientTurnId) return;
 
       const ws = wsRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const retained = codexHeldTurnCache.markUnresolved(codexDraftScopeRef.current, heldTurn.conversationId, clientTurnId);
+      if (!retained) {
+        reportSilentFallback(new Error("Held Codex draft could not be retained"), {
+          feature: "codex-history-transfer", op: "resend-retention-unavailable",
+        });
+        return;
+      }
+      heldTurn.unresolved = true;
+      heldTurn.acknowledged = false;
+      dispatch({ type: "set_message_delivery", clientTurnId, delivery: "unresolved" });
       try {
         ws.send(JSON.stringify({
           type: "chat",
-          content: message.content,
-          attachments: message.attachments,
+          content: retained.message.content,
+          attachments: retained.message.attachments,
           clientTurnId,
         }));
       } catch (err) {
@@ -2465,10 +2511,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         });
         return;
       }
-      pendingCodexHistoryTurnsRef.current.delete(clientTurnId);
-      codexHeldTurnCache.remove(codexDraftScopeRef.current, heldTurn.conversationId, clientTurnId);
       dispatch({ type: "reset_connection" });
-      dispatch({ type: "set_message_delivery", clientTurnId, delivery: undefined });
     },
     [sessionConfirmed, status],
   );

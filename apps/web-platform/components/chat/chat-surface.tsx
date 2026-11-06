@@ -1160,7 +1160,7 @@ export function ChatSurface({
                 onRetry={
                   credentialBlocked
                     ? onSessionReconnect
-                    : lastError.code !== "subscription_limit" && lastError.code !== "codex_history_transfer_required" &&
+                    : lastError.code !== "subscription_limit" && lastError.code !== "codex_history_transfer_required" && lastError.code !== "codex_dispatch_unavailable" && lastError.code !== "codex_resend_unavailable" &&
                         // #11599 — Reconnect does not resend and the socket stays up: no retry on either card.
                         !isAuthModeErrorCode(lastError.code)
                       ? reconnect
@@ -1243,7 +1243,7 @@ export function ChatSurface({
                       attachments={msg.attachments}
                       delivery={msg.delivery}
                       onResend={msg.delivery === "retryable" ? () => resendMessage(msg) : undefined}
-                      resendDisabled={status !== "connected" || !sessionConfirmed}
+                      resendDisabled
                       variant={variant}
                       status={msg.status}
                       usage={msg.usage}

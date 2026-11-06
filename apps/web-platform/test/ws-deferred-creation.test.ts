@@ -12,6 +12,7 @@ const mockSelectSingle = vi.fn().mockResolvedValue({
 // Lazy-evaluated `users.repo_url` lets individual tests simulate a
 // disconnected user (repo_url=null) to exercise the abort path.
 let mockUserRepoUrl: string | null = "https://github.com/acme/repo";
+let mockResolvedEngineConversationId: string | null = null;
 
 const { mockRpc, mockEngine, mockStartAttemptError, mockDispatchSoleurGo } = vi.hoisted(() => ({
   mockEngine: { id: "claude-code" },
@@ -99,7 +100,7 @@ vi.mock("@/lib/supabase/service", () => ({
               id: "run-codex-1",
               workspace_id: "ws-mock-workspace-1",
               execution_kind: "conversation",
-              conversation_id: String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
+              conversation_id: mockResolvedEngineConversationId ?? String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
               engine_id: mockEngine.id,
               auth_mode: "api-key",
               auth_mode_generation: 7,
@@ -117,6 +118,10 @@ vi.mock("@/lib/supabase/service", () => ({
       };
       const eqChain: Record<string, unknown> = {};
       eqChain.eq = vi.fn(() => eqChain);
+      eqChain.is = vi.fn(() => eqChain);
+      eqChain.order = vi.fn(() => eqChain);
+      eqChain.limit = vi.fn(() => eqChain);
+      eqChain.maybeSingle = mockSelectSingle;
       eqChain.single = mockSelectSingle;
       convChain.select = vi.fn(() => eqChain);
       return convChain;
@@ -182,7 +187,7 @@ vi.mock("@/lib/supabase/tenant", () => ({
               id: "run-codex-1",
               workspace_id: "ws-mock-workspace-1",
               execution_kind: "conversation",
-              conversation_id: String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
+              conversation_id: mockResolvedEngineConversationId ?? String(mockInsert.mock.calls.at(-1)?.[0]?.id ?? "conv-1"),
               engine_id: mockEngine.id,
               auth_mode: "api-key",
               auth_mode_generation: 7,
@@ -200,6 +205,10 @@ vi.mock("@/lib/supabase/tenant", () => ({
       };
       const eqChain: Record<string, unknown> = {};
       eqChain.eq = vi.fn(() => eqChain);
+      eqChain.is = vi.fn(() => eqChain);
+      eqChain.order = vi.fn(() => eqChain);
+      eqChain.limit = vi.fn(() => eqChain);
+      eqChain.maybeSingle = mockSelectSingle;
       eqChain.single = mockSelectSingle;
       convChain.select = vi.fn(() => eqChain);
       return convChain;
@@ -319,6 +328,7 @@ describe("deferred conversation creation", () => {
     sessions.clear();
     mockStartAttemptError.message = null;
     mockUserRepoUrl = "https://github.com/acme/repo";
+    mockResolvedEngineConversationId = null;
     mockEngine.id = "claude-code";
     mockSelectSingle.mockImplementation(async () => ({
       data: {
@@ -405,6 +415,22 @@ describe("deferred conversation creation", () => {
       p_expected_generation: 7,
     }));
     expect(sent.some((message: any) => message.type === "stream")).toBe(true);
+  });
+
+  it("addresses a held Codex response to the pending ID after a context collision", async () => {
+    mockEngine.id = "codex";
+    const { session, sent } = createMockSession();
+    const pendingId = "pending-synthetic-conversation";
+    mockResolvedEngineConversationId = "existing-synthetic-conversation";
+    session.pending = { id: pendingId, contextPath: "synthetic.md" };
+    sessions.set("user-1", session);
+    mockInsert.mockResolvedValueOnce({ error: { code: "23505", constraint: "conversations_context_path_user_uniq" } });
+    mockSelectSingle.mockResolvedValue({ data: { id: "existing-synthetic-conversation", workspace_id: "ws-mock-workspace-1", context_path: "synthetic.md", active_workflow: null, engine_binding_state: "bound" }, error: null });
+    const clientTurnId = "c5aefeb4-6362-448c-90eb-7989df852f1a";
+    await handleMessage("user-1", JSON.stringify({ type: "chat", content: "Copyable synthetic draft", clientTurnId }));
+    expect(sent).toContainEqual(expect.objectContaining({ type: "error", errorCode: "codex_dispatch_unavailable", conversationId: pendingId, clientTurnId }));
+    expect(mockRpc).not.toHaveBeenCalledWith("start_agent_engine_attempt", expect.anything());
+    expect((await import("@/server/agent-runner")).sendUserMessage).not.toHaveBeenCalled();
   });
 
   it("does not bind or dispatch a first-turn Codex message when conversation creation resolves after close", async () => {

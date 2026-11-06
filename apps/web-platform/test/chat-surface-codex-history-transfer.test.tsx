@@ -35,6 +35,26 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     });
   });
 
+  it("keeps a held draft copyable while resend is held", async () => {
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    wsReturn.messages = [{ id: "user-held-turn", type: "text", role: "user", content: "Copyable synthetic draft", delivery: "retryable" }];
+    render(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(screen.getByText("Copyable synthetic draft")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Resend message" })).toBeDisabled();
+    expect(screen.getByText(/Resending is temporarily unavailable/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Resend message" }));
+    expect(wsReturn.resendMessage).not.toHaveBeenCalled();
+  });
+
+  it("warns that an unresolved draft must be copied before leaving", async () => {
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    wsReturn.messages = [{ id: "user-held-turn", type: "text", role: "user", content: "Unresolved synthetic draft", delivery: "unresolved" }];
+    render(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(screen.getByText("Unresolved synthetic draft")).toBeVisible();
+    expect(screen.getByText(/Copy this draft before leaving/)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Resend message" })).toBeNull();
+  });
+
   it("sends the explicit acknowledgment for the displayed conversation generation", async () => {
     const { ChatSurface } = await import("@/components/chat/chat-surface");
     const view = render(<ChatSurface variant="full" conversationId="test-id" />);
@@ -58,7 +78,7 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     heldMessage.delivery = "retryable";
     view.rerender(<ChatSurface variant="full" conversationId="test-id" />);
     fireEvent.click(screen.getByRole("button", { name: "Resend message" }));
-    expect(wsReturn.resendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: "Please continue this draft", delivery: "retryable" }));
+    expect(wsReturn.resendMessage).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -89,10 +109,9 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     view.rerender(<ChatSurface variant="full" conversationId="test-id" />);
     expect(wsReturn.startSession).not.toHaveBeenCalled();
     expect(wsReturn.resumeSession).not.toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Resend message" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Resend message" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Resend message" }));
-    expect(wsReturn.resendMessage).toHaveBeenCalledOnce();
-    expect(wsReturn.resendMessage).toHaveBeenCalledWith(wsReturn.messages[0]);
+    expect(wsReturn.resendMessage).not.toHaveBeenCalled();
   });
 
   it("keeps a new chat from bootstrapping a different session while an acknowledged draft needs recovery", async () => {

@@ -145,7 +145,7 @@ export interface CommandBlock {
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
   /** Local delivery feedback; held turns retain content and attachments for explicit resend. */
-  delivery?: "unsent" | "retryable";
+  delivery?: "unsent" | "retryable" | "unresolved";
   /**
    * feat-concierge-stream-commands — retained for the command_stream arm's
    * chip-prune + liveness; nothing renders these. Append-only; `undefined`/empty on bubbles

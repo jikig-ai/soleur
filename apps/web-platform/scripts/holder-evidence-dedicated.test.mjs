@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { observeDedicatedLifecycle } from './holder-evidence-dedicated.mjs';
+import { trackInspectionTransaction } from './holder-evidence-transaction-tracker.mjs';
+import { inspectBoundRoles, readLocalRoleBindings } from './holder-evidence-db-runner.mjs';
 
 const limits = { workMs: 15, cleanupMs: 80 };
 const report = (phase) => ({ status: 'stopped', phase, scope: 'owned_operation' });
@@ -11,6 +13,28 @@ const adapter = (overrides = {}) => ({
   close: async () => undefined,
   verify: async (_connection, phase) => report(phase),
   ...overrides,
+});
+
+test('public collector timeout alone does not let the lifecycle observer close or report stop', async () => {
+  let release, verifyCalls = 0, closeCalls = 0, inspection;
+  const pending = new Promise(resolve => { release = resolve; });
+  const pins = await readLocalRoleBindings();
+  const result = await observeDedicatedLifecycle(adapter({
+    start: () => {
+      const tracked = trackInspectionTransaction({ begin: () => pending }, db => inspectBoundRoles(db, pins, { timeoutMs: 5 }));
+      inspection = tracked.inspection;
+      return tracked.settlement;
+    },
+    cancel: async () => undefined,
+    verify: async (_connection, phase) => { verifyCalls++; return report(phase); },
+    close: async () => { closeCalls++; },
+  }), { workMs: 20, cleanupMs: 20 });
+  assert.equal((await inspection).state, 'failed');
+  assert.equal(result.stop, 'unknown');
+  assert.equal(result.writer_clearance, false);
+  assert.equal(verifyCalls, 0);
+  assert.equal(closeCalls, 0);
+  release();
 });
 
 test('normal completion reports only adapter assertions, never raw result or clearance', async () => {

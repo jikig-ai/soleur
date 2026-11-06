@@ -4076,6 +4076,16 @@
   authority, vault and writer fencing are not established by a public Promise
   settling or an injected observer reporting success. The synthetic dedicated
   lifecycle and catalog unit tests passed; they do not prove live stop.
+- Ruled by CTO agent, 2026-11-06: a future owned collector must expose separate
+  inspection and actual transaction-settlement channels, durably quarantine
+  an expired generation, and prevent late vault writes independently of the
+  worker. Settlement, cancellation, closing a client or a single absence query
+  cannot clear the fence. A single-use owned worker must be unable to reconnect
+  before an independent, visible, identity-bound observer verifies backend
+  disappearance. Unknown startup, teardown, observer or authority state keeps
+  quarantine. The separate authority and vault must fence in-flight mutations;
+  this ruling does not establish that any of those mechanisms is implemented.
+  Dissent: loss of identity or observation can leave quarantine indefinite.
 - Independent integration review found a held Codex draft can lose its recovery
   cache after socket handoff followed by a credential error. A focused
   regression in `test/ws-client-resume-history.test.tsx` fails on the current
@@ -4113,6 +4123,33 @@
   shared ledger or proof of equivalent applied schemas. Existing main already
   contains multiple same-prefix filenames; the frozen `174` and `175` branch
   migrations still need the exact ledger/hash and ordering investigation.
+- Ruled by CTO agent, 2026-11-06: the interim WebSocket Codex path and resend
+  controls must stay hard-held until the durable correlated claim/status/fence
+  protocol is independently verified; a tab-local marker cannot cover other
+  tabs, reload or stale acknowledgment. The local candidate holds dispatch
+  before notice, claim and provider work, refuses direct acknowledgments, and
+  labels correlated blocked turns unresolved. It gives deferred collision
+  replies the pending conversation ID. Independent source review confirms the
+  narrow guard paths but not a database-wide fence; direct service-role holders
+  remain unbounded. Newly blocked drafts are not retained across remount and
+  are explicitly shown a copy-before-leaving warning. The full client suite
+  remains red: 24 of 41 tests in one run expected the now-held notice/resend
+  behavior. Do not mark this candidate qualified, push or ship it.
+- An offline transaction tracker now keeps separate inspection and underlying
+  native-Promise settlement observations for the bundled collector. It returns
+  only bounded state, unknown backend stop and false writer clearance. Tests
+  include public timeout before settlement, late starts, redaction/reentrancy,
+  untrusted thenables and a dedicated synthetic lifecycle. A disposable local
+  PostgreSQL fixture additionally observed the exact synthetic backend active
+  after public timeout and absent after client close and tracked settlement.
+  The tracker closes its start gate only when it observes an asynchronous
+  inspection finish; it is not an independent fence. No authority, quarantine,
+  vault isolation, live endpoint ownership, retention or writer exclusion has
+  been established by these tests.
+- The GDPR advisory path scanner examined three current implementation paths
+  and matched none under its filename regex. The paths still handle potentially
+  personal message and identity metadata; this scan is not a GDPR review or
+  clearance. Final GDPR and CLO review remain open.
 - No collection, writer-window, provider, GDPR/CLO, final review, QA, preflight
   or ship gate is cleared. Live Firestore writes remain hard-disabled. Separate
   authorization is still required for independently reviewed exact collection

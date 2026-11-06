@@ -1382,6 +1382,7 @@ async function dispatchCodexChatTurn(
   controller: AbortController,
   sourceSession: ClientSession,
   leaderId?: DomainLeaderId,
+  responseConversationId: string = conversationId,
 ): Promise<void> {
   const key = codexTurnKey(userId, conversationId);
   const assertCurrent = () => {
@@ -1394,6 +1395,14 @@ async function dispatchCodexChatTurn(
     }
   };
   assertCurrent();
+  // The current wire protocol cannot reconcile lost claim responses or fence
+  // retries across tabs. Do not issue notices, claim turns or call providers
+  // until the durable protocol is independently verified.
+  if (!codexDispatchQualified()) {
+    sendToClient(userId, { type: "error", errorCode: "codex_dispatch_unavailable", conversationId: responseConversationId, clientTurnId,
+      message: "Codex sending is temporarily unavailable. Keep or copy your draft." });
+    return;
+  }
   // An active WS session is not ownership evidence. Recheck the row with the
   // user's tenant JWT before constructing a service-role repository or writing
   // an attempt. This also covers the context-path unique-index collision.
@@ -1536,6 +1545,11 @@ async function dispatchCodexChatTurn(
     if (codexTurnAbortControllers.get(key) === controller) codexTurnAbortControllers.delete(key);
     if (codexTurnClientTurnIds.get(key) === clientTurnId) codexTurnClientTurnIds.delete(key);
   }
+}
+
+function codexDispatchQualified(): boolean {
+  // The WS hold remains unconditional until durable claim/status fencing is verified.
+  return false;
 }
 
 /**
@@ -3049,6 +3063,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               pendingController,
               session,
               pendingLeader,
+              pendingId,
             );
             break;
           }
@@ -3323,6 +3338,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // member's explicit acknowledgment through the tenant-scoped RPC.
     // ------------------------------------------------------------------
     case "codex_history_transfer_acknowledge": {
+      if (!codexDispatchQualified()) {
+        sendToClient(userId, { type: "error", errorCode: "codex_history_transfer_acknowledgment_failed", message: "Codex sending is temporarily unavailable. Keep or copy your draft." });
+        break;
+      }
       if (
         session.conversationId !== msg.conversationId
         || !Number.isSafeInteger(msg.authModeGeneration)
