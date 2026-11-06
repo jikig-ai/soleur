@@ -1178,6 +1178,7 @@ jobs:
           done
           echo "Verified migrations: ${verified_names[*]}"
 
+          # dedupe: benign — close-path read: a gh fault aborts this step (the job goes red = loud) with every follow-through issue left open; the next verified release retries the closes.
           issue_numbers=$(gh issue list \
             --label follow-through --state open \
             --limit 200 --json number --jq '.[].number')

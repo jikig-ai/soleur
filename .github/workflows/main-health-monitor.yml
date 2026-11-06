@@ -815,6 +815,7 @@ jobs:
           # hypothetical: #1357 was "main branch tests failing due to GitHub API
           # rate limiting" — this query's own failure condition, on this repo.
           rc=0
+          # dedupe: fail-closed — deliberate rc: an unreadable list declines to file rather than risk a duplicate ci/main-broken tracker (the #1357 rate-limit failure mode, documented above).
           OPEN_JSON=$(gh issue list --label "ci/main-broken" --state open \
             --json number,body --limit 100) || rc=$?
           if [[ "$rc" -ne 0 ]]; then
@@ -1307,6 +1308,7 @@ jobs:
           # permanent orphan.
           SENTINEL='<!-- soleur:main-health-monitor -->'
           rc=0
+          # dedupe: fail-closed — deliberate rc: an unreadable list declines to close rather than retire a live tracker on a blind read.
           OPEN_JSON=$(gh issue list --label "ci/main-broken" --state open \
             --json number,body --limit 100) || rc=$?
           if [[ "$rc" -ne 0 ]]; then

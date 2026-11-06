@@ -254,7 +254,7 @@ jobs:
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
             --search "$ISSUE_SEARCH" \
-            --json number --jq '.[0].number // empty')
+            --json number --jq '.[0].number // empty') || { echo "::error::realtime-probe: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
 
           if [[ -n "$EXISTING" ]]; then
             echo "Existing tracking issue #$EXISTING — adding comment."
@@ -292,6 +292,7 @@ jobs:
           ISSUE_SEARCH='in:title "[ci/realtime-broken] Nightly Realtime probe failed"'
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
 
+          # dedupe: benign — close-path read: a gh fault leaves the tracking issue open; the next green probe retries the close.
           STALE=$(gh issue list --repo "$GH_REPO" --state open \
             --search "$ISSUE_SEARCH" \
             --json number --jq '.[0].number // empty')

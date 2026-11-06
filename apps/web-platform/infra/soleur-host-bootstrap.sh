@@ -929,6 +929,12 @@ cat > /usr/local/bin/soleur-vector-install <<'VINEOF'
 Description=Vector observability shipper (journald + host_metrics -> Better Stack Logs)
 After=network-online.target docker.service
 Wants=network-online.target
+# DELIBERATELY UNCONDITIONED (#10078, CTO ruling): no ConditionPathExists on
+# /etc/default/webhook-deploy — it is written unconditionally by cloud-init before
+# this unit's first start, so absence is a real fault, not benign ordering. A
+# skipped Type=simple shipper never re-evaluates the condition (no self-heal):
+# the RestartSec=10 crash-loop is the designed signal, and ingest-side darkness
+# stays the Better Stack detector either way.
 
 [Service]
 Type=simple

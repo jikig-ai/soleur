@@ -1229,6 +1229,9 @@ done < "$class_c_out"
 # Addendum 2026-11-02: …→ 27 `resource "sentry_cron_monitor"` blocks — the #8211 PR-B2
 # scheduled-git-data-erasure-redrive monitor (the 15-minute pending-erasure ledger re-drive) is
 # declared, taking the root to 27.
+# Addendum 2026-11-05: …→ 28 `resource "sentry_cron_monitor"` blocks — the #8839
+# scheduled-agent-spawn-stale-settle monitor (the 15-minute stale-Working sweep) is
+# declared, taking the root to 28.
 # This is a count of DECLARATIONS, not a re-verification against the live
 # org: the newest monitors do not exist in Sentry until apply-sentry-infra.yml
 # runs on merge, so the 2026-08-19 live figure above is left standing rather
