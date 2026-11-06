@@ -2168,7 +2168,7 @@ jobs:
         if: steps.detect.outputs.applicable != 'false'
         run: bash plugins/soleur/test/scripts-shard-totality-mutations.sh --rows "${{ matrix.rows }}"
 
-  # grok-fidelity (#6325 Phase F) is now a MEMBER STEP of the `guards-ruleset`
+  # Phase F #6325 — grok-fidelity is now a MEMBER STEP of the `guards-ruleset`
   # umbrella job above (#12089 consolidation); its pin env moved with it.
 
   # harness-discovery (ADR-245) is now a MEMBER STEP of the `guards-advisory`
