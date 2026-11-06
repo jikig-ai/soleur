@@ -37,6 +37,6 @@ Plan: `knowledge-base/project/plans/2026-11-05-fix-egress-gw-probe-silent-invert
 
 ## Post-merge (probe-verified)
 
-- Apply completion plus 25 minutes: `soleur:postmerge` runs the probe once and reads `canary=`; `canary=absent` means build the poller (file the issue at once) and keep the production alert armed.
+- Apply completion plus 25 minutes: whoever merges runs the probe once and reads `canary=` (`soleur:postmerge` is unchanged and does not run it); `canary=absent` means build the poller (file the issue at once) and keep the production alert armed.
 - Once `canary=fired`, the follow-up PR (tracker #12189) deletes the canary (RETIREMENT list in the probe header); incident 1047829421 must resolve on its own and stay clear for 4 hours (sweeper probe, `earliest` at apply completion plus 30 minutes; it exits 5 early on a blind canary, a recurrence or a missing canary alert).
 - If the evaluator proves blind or the incident does not clear: start the poller (deferral #12190), keep the production alert armed, close #12189 in favor of it. Any Better Stack write needs the user's per-command go-ahead.

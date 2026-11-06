@@ -930,13 +930,14 @@ allow/deny verification is dark.
 1047829421 on a healthy fleet. Incident 1031046761 of the same alert stayed open
 for 24 days: it began as a true positive (web-2 dark), probe rows were measured
 arriving on 2026-11-02, and nothing resolved it until we did. The vendor's incident
-object carries no evaluated value (checked 2026-11-06: no `value`/`current_value`
-key among its attributes), so the mechanism is **an inference, not a measurement**:
+object carries no evaluated value (checked 2026-11-06: no key beyond the alert's
+own threshold `value`), so the mechanism is **an inference, not a measurement**:
 an evaluator step that cannot be evaluated is read as 0, and 0 against `lower_than 2`
 is a false page while 0 against `higher_than 0` reads healthy. Two alternatives are
 NOT excluded and the canary cannot separate them: partial visibility of one host's
-rows in the evaluator's window (hot window about an hour, archive lag about 66
-minutes) reads 1 under either operator, and a vendor that never auto-resolves
+rows in the evaluator's window (the hot window is about 40 minutes per
+`betterstack-log-query.md`; the archive lag was measured at about 66 minutes) reads 1
+under either operator, and a vendor that never auto-resolves
 incidents is not fixed by inverting the metric. What IS proven (read-only, counts
 only) is the query: it returned 0 on healthy data, 1 with one host excluded and 2 for
 an identifier no host emits. The vendor evaluator is not proven. `treat_as_zero` is
@@ -964,27 +965,33 @@ it reads the roster size and MUST open an incident that never recovers. That
 incident, its mirrored P1 `action-required` issue and one email are expected until
 the follow-up PR (tracker #12189) deletes the canary pair. The mirror also posts a
 "Still open" comment on that issue every 15 minutes (about 96 a day), and files a
-fresh issue if you close it: do NOT close the canary's mirror issue, delete the pair
+fresh issue at the next 15-minute run if you close it: do NOT close the canary's mirror issue, delete the pair
 instead. Read the verdict, not the dashboard:
-`doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/egress-gw-probe-silent-12180.sh`
-(the probe wants `BETTERSTACK_API_TOKEN`; Doppler holds it as
-`BETTERSTACK_API_TOKEN_READONLY`, so map it in, together with the three
-`BETTERSTACK_QUERY_*` names that `rows_in_window` reads) prints one
+`doppler run -p soleur -c prd_terraform -- bash -c 'BETTERSTACK_API_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" bash scripts/followthroughs/egress-gw-probe-silent-12180.sh'`
+(the probe reads `BETTERSTACK_API_TOKEN`; `prd_terraform` also holds the account-wide
+read/write token under that exact name, so without the remap the probe would run with
+it, and the remap keeps the run on the read-only token. The `BETTERSTACK_QUERY_*` names
+that `rows_in_window` reads are in the same config and need no mapping) prints one
 `SOLEUR_EGRESS_GW_SILENT_SOAK` line with `canary=`, `canary_alert_live=`,
 `prod_incident=`, `prod_alert=`, `anchor_resolved_by=` and `rows_in_window=` (the
 trailing 15 minutes of rows per host). Whoever merges the change runs it once at
-apply completion + 25 minutes; the daily sweeper (tracker #12189, `earliest` set after
-the apply) is the backstop, so an evaluator-blind finding waits up to a day without
-that run. The canary shares the production query shape, so it proves non-zero
+apply completion + 25 minutes; once tracker #12189 is enrolled (its follow-through
+directive, `earliest` set after the apply) the daily sweeper is the backstop, so an
+evaluator-blind finding waits up to a day without that run. The canary shares the production query shape, so it proves non-zero
 delivery on an empty count, not general evaluator health.
+
+Read the table against `verdict=` and the one `ACTION REQUIRED:` or `TRANSIENT:` line the probe
+prints beside it; several rows share the same `canary=` and `canary_alert_live=` values.
 
 | Observation | Reading | Response |
 |---|---|---|
-| `canary=fired` and 1047829421 resolved by the alert (`anchor_resolved_by=none`) | the evaluator delivers a non-zero value for this shape | wait out the 4 h soak, then delete the canary pair (tracker #12189) |
-| `canary=absent`, `canary_alert_live=1`, alert older than 20 minutes | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
-| `canary=absent`, `canary_alert_live=1` but paused | someone paused it | not an evaluator finding; unpausing is a Better Stack write |
-| `canary=absent`, `canary_alert_live=0` | the apply has not created it yet, or never did (alert-count cap, failed create) | hotfix PR using the "Deleting the canary" recipe below, then the poller; not an evaluator finding |
-| `prod_alert` is `absent`, `paused` or `shape` | the production alert is not running as designed | restore it by apply; do not read anything else until it is |
+| `canary=fired` and 1047829421 resolved with `anchor_resolved_by=none` (ASSUMED to mean the alert recovered it: `resolved_by` null; never observed, because no incident of this alert has auto-resolved yet) | the evaluator delivers a non-zero value for this shape | wait out the 4 h soak, then delete the canary pair (tracker #12189) |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says the evaluator is blind | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
+| `verdict=not_yet`, `canary=absent`, `canary_alert_live=1`, message says the canary alert was created N s ago | one evaluation cycle (20 minutes) has not passed | rerun later; not a finding |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says PAUSED | someone paused the canary | not an evaluator finding; unpausing is a Better Stack write needing the owner's per-command go-ahead |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=0` | the canary alert was deleted or never created (the apply has not run, alert-count cap, failed create) | hotfix PR using the "Deleting the canary" recipe below, then the poller; not an evaluator finding |
+| `prod_alert=absent` or `prod_alert=shape` | the production alert is not running as designed | restore it by apply; do not read anything else until it is |
+| `prod_alert=paused` | the page is off | unpausing is a Better Stack write needing the owner's per-command go-ahead; do not leave it paused |
 | 1047829421 still open and `rows_in_window` shows rows on both hosts now | evaluator, partial visibility, or a vendor that never auto-resolves | the poller (#12190); any pause or manual resolve is a Better Stack write needing the owner's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
 | 1047829421 still open and one host has no rows now | real silence | the decode ladder below; the alert is right |
 

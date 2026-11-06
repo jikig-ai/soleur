@@ -75,6 +75,7 @@ RB="${EGW_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/cron-eg
 CR="${EGW_GUARD_CR:-$REPO/apps/web-platform/infra/cron-egress-resolve.sh}"
 IV="${EGW_GUARD_IV:-$REPO/.github/workflows/infra-validation.yml}"
 PR="${EGW_GUARD_PR:-$REPO/scripts/followthroughs/egress-gw-probe-silent-12180.sh}"
+INFRA="${EGW_GUARD_INFRA:-$(dirname "$TF")}"   # the tree scanned for emitters of the canary identifier, and the .tf files counted
 
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -255,10 +256,20 @@ param "$SILENT_ALERT" 'alert_type' '"threshold"' \
   && param "$SILENT_ALERT" 'critical_alert' 'false' \
   && ok "G2: the production alert's windows (300/900/0/900) and channels (email only) are pinned" \
   || no "G2: the production silent alert's windows or channels drifted (a changed confirmation_period delays or swallows the page)"
-[ "$(grep -cE '^[[:space:]]*exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.egress_gw_probe_silent\.id' "$TF")" -eq 1 ] \
-  && [ "$(grep -vE '^[[:space:]]*#' "$TF" | grep -c 'local\.egress_gw_probe_silent_sql')" -eq 2 ] \
+# Every .tf under the infra dir, comments dropped: a consumer in a SECOND file counts the same as one in the first.
+ALL_TF="$(cat "$(dirname "$TF")"/*.tf 2>/dev/null | grep -vE '^[[:space:]]*(#|//)' || true)"
+[ "$(grep -cE '^[[:space:]]*exploration_id[[:space:]]*=[[:space:]]*logtail_exploration\.egress_gw_probe_silent\.id' <<< "$ALL_TF")" -eq 1 ] \
+  && [ "$(grep -c 'local\.egress_gw_probe_silent_sql' <<< "$ALL_TF")" -eq 2 ] \
   && ok "G2: exactly one alert watches the production exploration, and the production SQL local has exactly two consumers (that exploration and the canary derivation)" \
-  || no "G2: a second alert watches the production exploration, or a third consumer reads the production SQL local"
+  || no "G2: a second alert watches the production exploration, or a third consumer reads the production SQL local (any .tf under the infra dir)"
+param "$SILENT_EXPL" 'team_name' '"Your team"' \
+  && param "$SILENT_EXPL" 'chart_type' '"line_chart"' \
+  && param "$SILENT_EXPL" 'query_type' '"sql_expression"' \
+  && param "$SILENT_EXPL" 'source_variable' '"source"' \
+  && param "$SILENT_EXPL" 'variable_type' '"source"' \
+  && [ "$(printf '%s\n' "$SILENT_EXPL" | grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"source"[[:space:]]*$')" -eq 1 ] \
+  && ok "G2: the production exploration's remaining attributes (team, chart, query type, source variable) are pinned" \
+  || no "G2: the production exploration's team_name, chart_type, query_type, source_variable or variable block drifted"
 grep -qE '^[[:space:]]*-target=logtail_exploration\.egress_gw_probe_silent \\$' <<< "$APPLY_JOB" \
   && grep -qE '^[[:space:]]*-target=logtail_exploration_alert\.egress_gw_probe_silent \\$' <<< "$APPLY_JOB" \
   && ok "G2: both silent -target lines in the apply allowlist" \
@@ -341,24 +352,43 @@ strip_diff_lines() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | grep -vE '^[[:spac
 [ -n "$CANARY_ALERT" ] && [ -n "$SILENT_ALERT" ] && [ "$(strip_diff_lines "$CANARY_ALERT")" = "$(strip_diff_lines "$SILENT_ALERT")" ] \
   && ok "G2b: the canary alert block equals the production alert block except name / exploration_id / incident_cause" \
   || no "G2b: the canary alert block differs from the production alert block beyond name / exploration_id / incident_cause — it no longer exercises the same evaluation"
+# The two EXPLORATIONS must also be the same chart, query shape and source: only name and the SQL local reference differ.
+strip_expl_lines() { grep -vE '^[[:space:]]*(#|$)' <<< "$1" | grep -vE '^[[:space:]]*(name|sql_query)[[:space:]]*=[[:space:]]*(replace\(|"soleur-egress-gw-probe-silent)' | sed -E 's/^resource .*\{$/resource {/'; }
+[ -n "$CANARY_EXPL" ] && [ -n "$SILENT_EXPL" ] && [ "$(strip_expl_lines "$CANARY_EXPL")" = "$(strip_expl_lines "$SILENT_EXPL")" ] \
+  && ok "G2b: the canary exploration equals the production exploration except name / sql_query" \
+  || no "G2b: the canary exploration differs from the production exploration beyond name / sql_query — it no longer exercises the same chart and source"
 # The canary identifier must be emitted by NOTHING in the infra tree (the resolver row is checked above through the CR seam).
-CANARY_EMITTERS="$(grep -rlF --include='*.sh' --include='*.toml' --include='*.yml' --include='*.yaml' 'egress-gw-probe-canary-absent' "$(dirname "$TF")" 2>/dev/null | grep -vE '\.test\.sh$' || true)"
+# Every file type, not an extension list: a .tftpl, .service, .conf or a second .tf counts. The one file allowed to
+# NAME the identifier is the alerts .tf itself (its derivation line) and this guard's own siblings.
+CANARY_EMITTERS="$(grep -rIlF 'egress-gw-probe-canary-absent' "$INFRA" 2>/dev/null | grep -vE '\.test\.sh$' | grep -vxF "$TF" || true)"
 [ -z "$CANARY_EMITTERS" ] \
-  && ok "G2b: no script, Vector config or cloud-init under the infra tree contains the canary identifier" \
+  && ok "G2b: no file under the infra tree (any type) contains the canary identifier" \
   || no "G2b: a non-test file under the infra tree contains the canary identifier: $(printf '%s' "$CANARY_EMITTERS" | tr '\n' ' ')"
-# The soak probe matches incidents on exact alert names: its literals must equal the .tf names.
-probe_lit() { sed -nE "s/^$1=\"([^\"]*)\".*/\1/p" "$PR" | head -1; }
+# Anti-vacuity: the scan must have looked at a real tree (skipped when a mutation row points it at a scratch dir).
+if [ -n "${EGW_GUARD_INFRA:-}" ] || [ -n "${EGW_GUARD_TF:-}" ]; then
+  ok "G2b: the emitter scan runs on a scratch root here (the real-tree coverage row runs on the unmutated tree)"
+elif [ "$(find "$INFRA" -type f 2>/dev/null | wc -l)" -ge 50 ] && [ "$(grep -rIlF 'egress-gw-probe' "$INFRA" 2>/dev/null | wc -l)" -ge 3 ]; then
+  ok "G2b: the emitter scan covered a real infra tree (>= 50 files, >= 3 naming the real tag)"
+else
+  no "G2b: the emitter scan saw an empty or tiny tree — it would pass over a planted emitter"
+fi
+# The soak probe matches incidents on exact alert names and reads the emitter tag: each literal is assigned EXACTLY ONCE at
+# column 0 and equals the Terraform value (a later re-assignment would otherwise win at run time).
+probe_lit() { [ "$(grep -cE "^$1=" "$PR")" -eq 1 ] && sed -nE "s/^$1=\"([^\"]*)\".*/\1/p" "$PR"; }
 [ "$(probe_lit PROD_NAME)" = "soleur-egress-gw-probe-silent-prd" ] \
   && [ "$(probe_lit CANARY_NAME)" = "soleur-egress-gw-probe-silent-canary-prd" ] \
   && [ "$(probe_lit CANARY_RESOURCE)" = "egress_gw_probe_silent_canary" ] \
-  && ok "G2b: the soak probe's PROD_NAME / CANARY_NAME / CANARY_RESOURCE literals equal the Terraform names" \
-  || no "G2b: the soak probe's alert-name literals drifted from the Terraform names — it would match no incident and close its tracker over a live recurrence"
+  && [ "$(probe_lit EMITTER_TAG)" = "egress-gw-probe" ] \
+  && sql_has "$SILENT_SQL" "JSONExtractString\(raw, 'SYSLOG_IDENTIFIER'\) = '$(probe_lit EMITTER_TAG)'" \
+  && ok "G2b: the soak probe's PROD_NAME / CANARY_NAME / CANARY_RESOURCE / EMITTER_TAG are each assigned once and equal the Terraform values" \
+  || no "G2b: the soak probe's alert-name or emitter-tag literals drifted (or are assigned more than once) — it would match no incident and close its tracker over a live recurrence"
 
 # Exact count: the structure suite's resource-count rows are FLOORS and rows 9-10 pass for a second
 # canary that brings its own exploration, so a stray extra pair is only visible here.
-[ "$(grep -cE '^resource "logtail_exploration(_alert)?" "egress_gw_probe_silent[A-Za-z0-9_]*" \{' "$TF")" -eq 4 ] \
+[ "$(grep -cE '^resource "logtail_exploration(_alert)?" "egress_gw_probe_silent[A-Za-z0-9_]*" \{' <<< "$ALL_TF")" -eq 4 ] \
+  && [ "$(grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"soleur-egress-gw-probe-silent' <<< "$ALL_TF")" -eq 4 ] \
   && ok "G2b: exactly four egress_gw_probe_silent* resources (production pair + one canary pair)" \
-  || no "G2b: the egress_gw_probe_silent* resource count is not 4 — a second canary-like pair exists (or one is missing)"
+  || no "G2b: the egress_gw_probe_silent* resource count is not 4, or the name literal count is not 4 — a second canary-like pair (under any resource label, in any .tf) exists, or one is missing"
 
 # ── G3: egress_gw_probe_fail — the previously-Sentry-only verdict failure ────────────────
 FAIL_SQL="$(sql_local egress_gw_probe_fail_sql)"
@@ -569,6 +599,9 @@ if [ -z "${MUT_SKIP:-}" ]; then
   MUT_DIR="$(mktemp -d -t egressgwalert.XXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 2; }
   assert_fixture_dir "$MUT_DIR"
   trap 'rm -rf "$MUT_DIR"' EXIT
+  # The emitter scan root for every single-file mutation row: an EMPTY dir, because MUT_DIR also holds logs and other
+  # rows' mutated copies that legitimately name the canary identifier. The scan itself is exercised by the planted rows.
+  mkdir -p "$MUT_DIR/scan-empty"
 
   # INSTRUMENT CONTROL — the inner run against the PRISTINE tree must exit 0, or every row below
   # would grade a broken invocation as "mutation RED".
@@ -596,6 +629,8 @@ SQLEND = "\n  SQL\n"
 FAILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_fail\" {"
 SILRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_silent\" {"
 CANRES = "resource \"logtail_exploration_alert\" \"egress_gw_probe_silent_canary\" {"
+SILEXPL = "resource \"logtail_exploration\" \"egress_gw_probe_silent\" {"
+CANEXPL = "resource \"logtail_exploration\" \"egress_gw_probe_silent_canary\" {"
 CANLINE = "  egress_gw_probe_silent_canary_sql = replace(local.egress_gw_probe_silent_sql, \"\x27egress-gw-probe\x27\", \"\x27egress-gw-probe-canary-absent\x27\")\n"'
 
   _red_verdict() {
@@ -629,7 +664,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    env "EGW_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$?
+    env "EGW_GUARD_${which}=$copy" "EGW_GUARD_INFRA=$MUT_DIR/scan-empty" MUT_SKIP=1 bash "$SELF" >"$olog" 2>&1 || rc=$?
     case "$(_red_verdict "$rc" "$olog" "$tag"):$want" in
       red:red) ok "mutation RED: $label" ;;
       wrong:wrong) ok "scorer control: graded WRONG reason as required: $label" ;;
@@ -658,7 +693,7 @@ $prog
 assert s != orig, "mutation produced no change"
 open(p, 'w', encoding="utf-8").write(s)
 PY
-    env "EGW_GUARD_${which}=$copy" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
+    env "EGW_GUARD_${which}=$copy" "EGW_GUARD_INFRA=$MUT_DIR/scan-empty" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/green.log" 2>&1 || rc=$?
     case "$rc" in
       0) ok "must-PASS stays green: $label" ;;
       1) no "legitimate edit went RED: $label" ;;
@@ -771,7 +806,7 @@ s = s.replace(old, "      AND JSONExtractString(raw, \x27SYSLOG_IDENTIFIER\x27) 
     "windows or channels drifted"
   mutate_red "probe: the PROD_NAME literal no longer equals the Terraform name" PR \
     's = s.replace("PROD_NAME=\"soleur-egress-gw-probe-silent-prd\"", "PROD_NAME=\"soleur-egress-gw-probe-silent-v2-prd\"")' \
-    "alert-name literals drifted"
+    "alert-name or emitter-tag literals drifted"
 
   # ── Canary rows (G2b, #12180) ──────────────────────────────────────────────────────────────
   mutate_red "canary: the derivation line deleted (the resource would point at the production local)" TF \
@@ -813,6 +848,47 @@ s = s.replace(old, "")' \
   mutate_red "canary: a SECOND canary-like pair is added after the compliant first (exact count)" TF \
     's = s + "\nresource \"logtail_exploration\" \"egress_gw_probe_silent_canary2\" {\n}\n\nresource \"logtail_exploration_alert\" \"egress_gw_probe_silent_canary2\" {\n}\n"' \
     "resource count is not 4"
+
+  mutate_red "canary: a second alert carrying the canary's name under a different label (name-literal count)" TF \
+    's = s + "\nresource \"logtail_exploration_alert\" \"zz_other\" {\n  name = \"soleur-egress-gw-probe-silent-canary-prd\"\n}\n"' \
+    "name literal count is not 4"
+  mutate_red "canary: the canary exploration's chart type drifts (the pair no longer shares a chart)" TF \
+    's = edit(s, CANEXPL, "chart_type = \"line_chart\"", "chart_type = \"bar_chart\"")' \
+    "canary exploration differs from the production exploration"
+  mutate_red "silent: the production exploration's variable type drifts" TF \
+    's = edit(s, SILEXPL, "variable_type = \"source\"", "variable_type = \"text\"")' \
+    "production exploration's team_name, chart_type"
+  mutate_red "silent: the production exploration's team drifts" TF \
+    's = edit(s, SILEXPL, "team_name = \"Your team\"", "team_name = \"Other team\"")' \
+    "production exploration's team_name, chart_type"
+  mutate_red "canary: an extra attribute on the canary alert alone (canary-equals-production comparison)" TF \
+    's = edit(s, CANRES, "  paused = false\n", "  paused = false\n  sms_extra = 1\n")' \
+    "differs from the production alert block"
+  mutate_red "silent: a third consumer of the production SQL local appears in a locals block" TF \
+    's = s + "\nlocals {\n  zz_third = local.egress_gw_probe_silent_sql\n}\n"' \
+    "third consumer reads the production SQL local"
+  mutate_red "probe: a later PROD_NAME re-assignment wins at run time (assigned more than once)" PR \
+    's = s + "\nPROD_NAME=\"decoy\"\n"' \
+    "alert-name or emitter-tag literals drifted"
+  mutate_red "probe: the EMITTER_TAG literal no longer equals the tag the alert reads" PR \
+    's = s.replace("EMITTER_TAG=\"egress-gw-probe\"", "EMITTER_TAG=\"egress-gw-probe-v2\"")' \
+    "alert-name or emitter-tag literals drifted"
+
+  # The emitter scan covers every file TYPE under the infra tree: plant the canary identifier in types the old
+  # extension list skipped (a .service unit, a .conf drop-in, a .tftpl, a second .tf) and each must red.
+  for ext in service conf tftpl tf; do
+    mkdir -p "$MUT_DIR/infra-$ext" && printf 'logger -t egress-gw-probe-canary-absent x\n' > "$MUT_DIR/infra-$ext/planted.$ext"
+    cp "$TF" "$MUT_DIR/infra-$ext/betterstack-logs-alerts.tf"
+    rc=0; env "EGW_GUARD_TF=$MUT_DIR/infra-$ext/betterstack-logs-alerts.tf" "EGW_GUARD_INFRA=$MUT_DIR/infra-$ext" MUT_SKIP=1 bash "$SELF" >"$MUT_DIR/inner.log" 2>&1 || rc=$?
+    case "$(_red_verdict "$rc" "$MUT_DIR/inner.log" "contains the canary identifier")" in
+      red) ok "mutation RED: the canary identifier planted in a .$ext file under the infra tree" ;;
+      wrong) no "mutation went red for the WRONG reason: the canary identifier planted in a .$ext file" ;;
+      survived) no "mutation SURVIVED: the canary identifier planted in a .$ext file — the emitter scan skips that file type" ;;
+      *) no "mutation UNRESOLVED (inner rc=$rc): the canary identifier planted in a .$ext file" ;;
+    esac
+    # The scratch tree lives under MUT_DIR, which the later rows scan recursively: drop it before they run.
+    rm -rf "${MUT_DIR:?}/infra-$ext"
+  done
 
   # ── Fail-alert rows ────────────────────────────────────────────────────────────────────────
   mutate_red "fail: the tag conjunct dropped (any row would page)" TF \
@@ -983,8 +1059,8 @@ fi
 # ── Assertion floor + ledger (constructible: pure assignments only inside the window) ────────
 # Floor self-reference (accepted residual, #11899): a row-count decrement landing alongside a
 # row deletion stays green — each constant is two-write-site (here + the floor row's sed anchor).
-PRESENCE_ROWS=82
-MUT_ROWS=66
+PRESENCE_ROWS=85
+MUT_ROWS=78
 _eff=${MUT_SKIP:+0}
 _eff=${_eff:-$MUT_ROWS}
 _floor=$((PRESENCE_ROWS + _eff))

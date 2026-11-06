@@ -40,8 +40,8 @@ lane: cross-domain
 
 The Better Stack Logs alert `soleur-egress-gw-probe-silent-prd` opened incident 1047829421 at
 2026-11-05T17:15:00Z while both web hosts were shipping their `egress-gw-probe` rows. An earlier incident from
-the same alert (1031046761, open since 2026-10-12) was resolved with owner authorization on the diagnosis "stale
-incident, data returned". The fresh incident shows that diagnosis was incomplete: a new false positive opened on a
+the same alert (1031046761, open since 2026-10-12) was resolved by us with the owner's approval in the session (no
+GitHub comment records it) on the diagnosis "stale incident, data returned". The fresh incident shows that diagnosis was incomplete: a new false positive opened on a
 healthy fleet.
 
 The binding CTO ruling (already made; not re-asked) keeps the same two Terraform resources and changes what they
@@ -50,7 +50,9 @@ measure:
 1. The query returns the **number of roster hosts that did not emit**, floored at 0 (healthy 0, one dark host 1,
    fully dark 2), and the alert fires on `higher_than 0`. A zero-filled or missing evaluator step now reads
    healthy instead of paging.
-2. `on_missing_data = "treat_as_zero"` stays (a fully dark window must remain detectable).
+2. `on_missing_data = "treat_as_zero"` stays per the CTO ruling. (Corrected in review: it is NOT what detects a fully
+   dark window, because the whole-window aggregate always returns one row, the roster size; the CTO rejected dropping
+   it because an empty evaluator result would then carry no value at all.)
 3. A throwaway **canary** alert pair runs the identical query against an identifier no host emits, so it must
    read 2 and fire. If it never fires, the evaluator is blind for this query shape and the production alert
    cannot be trusted.
@@ -163,7 +165,8 @@ gating), #11312, #10464, #10463, #10462, #8435 (touch other probes under `script
 ## Problem Statement
 
 Observed facts (read-only): the production alert's incident 1047829421 is open while both hosts ship probe rows;
-a prior incident from the same alert stayed open for 24 days with data present. The sibling
+a prior incident from the same alert stayed open for 24 days (it began as a true positive; rows were measured
+arriving on 2026-11-02). The sibling
 `inngest_cutover_flip_silent` showed the same "stuck at `Current value: 0`" and was paused (#11869). The common
 shape is a `lower_than N` silence alert over `treat_as_zero`: any evaluator step that reads 0 pages it, and the
 alert cannot distinguish "no rows" from "evaluator produced no value".
@@ -249,8 +252,9 @@ Incidents are matched on `.attributes.name ==` the exact alert name for both the
 The verdict line carries one field per condition so a caller can read any of them regardless of the overall
 verdict: `SOLEUR_EGRESS_GW_SILENT_SOAK verdict=<v> prod_incident=<open|resolved|unknown> resolved_age_s=<n>
 newer_prod_incident=<0|1> canary=<fired|absent|unknown> canary_alert_live=<1|0|unknown> canary_declared=<0|1>
-rows_in_window=<host:n,...>`. `rows_in_window` is read only when a production incident is open or newer: per-host
-counts (never row content) of `egress-gw-probe` rows over that incident's `started_at` to `resolved_at` (or now),
+prod_alert=<ok|absent|paused|shape|unknown> anchor_resolved_by=<none|actor|unknown> rows_in_window=<host:n,...|na|unknown>`
+(10 fields). `rows_in_window` is read only when a production incident is open or newer: per-host
+counts (never row content) of `egress-gw-probe` rows over the TRAILING 15 MINUTES (the alert's own query window),
 the one field that separates an evaluator fault (rows present on both hosts) from an emitter or ingest fault (a
 host with none). The `canary=` field is what the post-merge step reads at apply completion plus 25 minutes
 (AC12). On any read failure the probe prints the HTTP status and the byte length only, never a response body.
@@ -431,10 +435,10 @@ output, or take a read-only plan from a session with backend access, before merg
 Two consequences if the exploration is replaced: (1) the push apply's destroy-guard counts it (`resource_deletes`)
 and demands `[ack-destroy]` on its own line in the merge commit, so a plan showing a destroy needs that line or the
 merge is refused; (2) `exploration_id` parents the alert, so the alert is replaced too, and deleting the old alert
-closes incident 1047829421 for a reason unrelated to the evaluator, which confounds the 4-hour soak (P5). The
-postmerge step therefore reads the alert id before and after (Telemetry alert listing, names and ids only) and the
-soak counts the resolution only if the id is unchanged; on a replacement the 4-hour clock restarts from the new
-alert's first healthy evaluation. No downtime.
+closes incident 1047829421 for a reason unrelated to the evaluator, which confounds the 4-hour soak (P5). Resolved from the provider source
+(v11.2.0): the only ForceNew on the alert is `exploration_id`, which this change does not touch, so the alert is
+updated in place and no replacement occurs. The probe's `anchor_resolved_by` field covers the confound that remains
+(a hand resolve by a user or token). No downtime.
 
 ### Host fan-out
 
@@ -456,7 +460,7 @@ fallback pre-decided above.
 ```yaml
 liveness_signal:
   what: the production alert value (missing roster hosts, 0 when healthy) and the canary incident, both read through the Better Stack incidents API by the soak probe
-  cadence: alert checked every 300 s over a 900 s window; probe run once by the postmerge step at apply completion plus 25 minutes, then by the daily 18:00 UTC follow-through sweeper from earliest (apply completion plus 30 minutes)
+  cadence: alert checked every 300 s over a 900 s window; probe run once by whoever merges at apply completion plus 25 minutes (`soleur:postmerge` is unchanged and does not run it), then by the daily 18:00 UTC follow-through sweeper from earliest (apply completion plus 30 minutes)
   alert_target: team email plus a mirrored GitHub issue (ci/betterstack-incident, action-required, priority/p1-high)
   configured_in: apps/web-platform/infra/betterstack-logs-alerts.tf (egress_gw_probe_silent, egress_gw_probe_silent_canary)
 
@@ -472,13 +476,13 @@ failure_modes:
     detection: layer 3 (vector): production alert value 2 (the aggregate always returns a row)
     alert_route: email plus the mirrored issue
   - mode: evaluator reads 0 regardless of data (blind for this query shape) while the canary alert exists live
-    detection: layer 6 (workflow run log of the sweeper and the postmerge probe run): canary=absent with canary_alert_live=1, 25 minutes after apply completion
-    alert_route: tracker comment (exit 5) and the postmerge report; response is the poller (#12190), production alert stays armed
+    detection: layer 6 (workflow run log of the sweeper and the merger's probe run): canary=absent with canary_alert_live=1, 25 minutes after apply completion
+    alert_route: tracker comment (exit 5) and the merger's report; response is the poller (#12190), production alert stays armed
   - mode: canary alert never created (apply refused on the free-tier alert cap, or the create failed)
     detection: layer 6 (workflow run log of the apply, and the probe's canary_alert_live=0)
     alert_route: apply run failure; response is a hotfix PR removing the canary and then the poller, not a blindness finding
   - mode: production incident on a healthy fleet, or incident 1047829421 not clearing (empty-window read, vendor never auto-resolving, or real silence)
-    detection: layer 6 (probe verdict line) with the discriminating field rows_in_window=<host:n,...> over that incident's started_at to resolved_at (rows present on both hosts means evaluator fault; absent means emitter or ingest fault)
+    detection: layer 6 (probe verdict line) with the discriminating field rows_in_window=<host:n,...> over the trailing 15 minutes (rows present on both hosts means evaluator fault; absent means emitter or ingest fault)
     alert_route: tracker comment (exit 5); response is the poller (#12190) or a pause, each needing the user's per-command go-ahead for any Better Stack write
   - mode: evaluator error or timeout reads 0 under treat_as_zero (false silence)
     detection: no layer covers this; accepted residual of the CTO ruling, the failure direction moved from false page to false silence
@@ -671,7 +675,7 @@ sweeper comment (run with `dry_run=true` before enrolling, per the follow-throug
   secrets=BETTERSTACK_API_TOKEN,BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -->`; the sweeper is dry-run once
   (`dry_run=true`) and its `exit=` line read.
 
-### Post-merge (verified by the probe and `soleur:postmerge`; no manual step)
+### Post-merge (verified by the probe, run by whoever merges, and the daily sweeper; `soleur:postmerge` is unchanged and does not run it)
 
 - [ ] AC11. The per-merge apply succeeds and its plan matches the expected counts.
 - [ ] AC12. A canary incident exists within 20 minutes of apply completion. The executor is whoever merges (the

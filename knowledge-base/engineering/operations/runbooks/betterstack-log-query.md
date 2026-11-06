@@ -338,8 +338,8 @@ Live standing alarms over this source:
   table:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
   An open incident does not by itself mean a host is silent: read `rows_in_window` from
-  `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (via `doppler run -p soleur -c prd_terraform`,
-  see the runbook), or run `betterstack-query.sh`, and check that every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of
+  `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (the exact `doppler run` form, which
+  remaps `BETTERSTACK_API_TOKEN_READONLY` onto the name the probe reads, is in the runbook), or run `betterstack-query.sh`, and check that every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of
   `var.web_hosts`) shows an `egress-gw-probe` row. Rows on both hosts point at the evaluator, not the
   fleet. Resolving a Better Stack incident by hand is a vendor write that needs the owner's explicit
   per-command go-ahead.

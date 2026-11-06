@@ -1571,8 +1571,9 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   # 2026-11-02; nothing resolved it until we did). The INFERRED mechanism is that
   # an evaluator step it cannot evaluate is read as 0 and compared against the
   # threshold; under higher_than 0 that zero reads healthy. Not excluded:
-  # partial visibility of one host's rows in the evaluator's window (hot window
-  # about an hour, archive lag about 66 minutes) reads 1 under either operator,
+  # partial visibility of one host's rows in the evaluator's window (the hot
+  # window is about 40 minutes per betterstack-log-query.md, the archive lag was
+  # measured at about 66 minutes) reads 1 under either operator,
   # and a vendor that never auto-resolves incidents cannot be fixed by inverting
   # the metric. The query is proven (healthy 0, one host 1, unknown identifier 2);
   # the evaluator is not, which is what the canary below is for. A green alert is
@@ -1667,7 +1668,7 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent_canary" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "THROWAWAY CANARY (#12180): expected to fire and NOT an outage. It runs the egress_gw_probe_silent query against an identifier no host emits, so the value is the roster size. Fires = the evaluator delivers a non-zero value for this query shape (good). Never firing = the evaluator is blind for this shape; keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired; do NOT close its mirror issue (the mirror files a new one every 15 minutes). Runbook: ${local.egress_gw_runbook_url}"
+  incident_cause = "THROWAWAY CANARY (#12180), NOT an outage. Do NOT close its mirror issue: closing it files a fresh P1 at the next 15-minute run. Expected to fire; it proves the evaluator delivers a non-zero value for this query shape. Never firing = the evaluator is blind for this shape: keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired. Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }

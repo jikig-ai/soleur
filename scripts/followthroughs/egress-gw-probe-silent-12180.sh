@@ -61,6 +61,12 @@
 #   exit 1 is NEVER used: to the sweeper 1 is FAIL, which can reopen a human-closed tracker. An EXIT trap remaps
 #   a stray 1 (and any path that exits without a verdict) to verdict=unknown / 3.
 #
+# WHAT THE PRODUCTION-ALERT CHECK DOES NOT READ. It reads present-once, `paused` (must be a boolean), operator and value.
+# on_missing_data, query_period, the channels and the exploration SQL are pinned by the Terraform guards
+# (egress-gw-alert.test.sh) and the apply, not here: their live attribute names are unverified, and a guessed name
+# would turn a healthy alert into a permanent `shape` finding. The soak is timed from the canary incident and the
+# anchor resolve, which both follow the apply that put the alert in its current shape.
+#
 # "EARLIEST". The sweeper forwards the tracker's `earliest` (apply completion + 30 min) as SOLEUR_FT_EARLIEST. When it
 # is set and parses, the anchor is STALE when it is still open more than SOAK_S (4 h) after it. For a manual run
 # without it, the canary incident's started_at stands in (the canary alert opens its incident one evaluation after
@@ -218,8 +224,10 @@ http_get() { # <url> <outfile>
     -H 'Accept: application/json' --config - "$url" \
     < <(printf 'header = "Authorization: Bearer %s"\n' "$BETTERSTACK_API_TOKEN") 2>/dev/null)" || rc=$?
   bytes="$(wc -c < "$body" 2>/dev/null || echo 0)"; bytes="${bytes//[[:space:]]/}"
-  if [[ "$rc" -ne 0 ]]; then printf 'curl exited %s on GET %s (bytes=%s)\n' "$rc" "${url%%\?*}" "$bytes" >&2; return 1; fi
-  case "$code" in 2*) ;; *) printf 'HTTP %s on GET %s (bytes=%s)\n' "$code" "${url%%\?*}" "$bytes" >&2; return 1 ;; esac
+  # The error lines name the HOST only: a pagination.next path is vendor-controlled text that this stdout publishes.
+  local h="${url#https://}"; h="${h%%/*}"
+  if [[ "$rc" -ne 0 ]]; then printf 'curl exited %s on GET https://%s (bytes=%s)\n' "$rc" "$h" "$bytes" >&2; return 1; fi
+  case "$code" in 2*) ;; *) printf 'HTTP %s on GET https://%s (bytes=%s)\n' "$code" "$h" "$bytes" >&2; return 1 ;; esac
   return 0
 }
 
@@ -241,7 +249,7 @@ paged_get() { # <host> <path> [stop-epoch]
     esac
     http_get "$url" "$body" || return 1
     if ! jq -e '.data | type == "array"' "$body" >/dev/null 2>&1; then
-      printf 'no data array in GET %s (bytes=%s)\n' "${url%%\?*}" "$(wc -c < "$body" | tr -d '[:space:]')" >&2; return 1
+      printf 'no data array in GET https://%s (bytes=%s)\n' "$host" "$(wc -c < "$body" | tr -d '[:space:]')" >&2; return 1
     fi
     jq -c '.data[]' "$body" >> "$WORK/pages.ndjson"
     if [[ -n "$stop" ]]; then
@@ -260,7 +268,7 @@ if ! anchor="$(jq -c '
   def ep: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
   .data | select(type == "object")
   | {id: (.id|tostring), name: .attributes.name, started_at: .attributes.started_at, resolved_at: .attributes.resolved_at,
-     by_actor: (.attributes.resolved_by != null)}
+     by_actor: (if (.attributes | has("resolved_by")) then (.attributes.resolved_by != null) else null end)}
   | . + {epoch: (.started_at | ep), resolved_epoch: (if .resolved_at == null then null else (.resolved_at | ep) end)}' "$WORK/single.json" 2>/dev/null)" \
   || [[ -z "$anchor" ]]; then
   unknown "anchor incident payload unparseable (bytes=$(wc -c < "$WORK/single.json" | tr -d '[:space:]'))"
@@ -277,7 +285,13 @@ else
   [[ "$A_RES_EPOCH" =~ ^[0-9]+$ ]] || unknown "anchor resolved_at is not a time"
   V_PROD=resolved; V_AGE=$((NOW - A_RES_EPOCH))
   # Whether an ACTOR resolved it (never who): a hand resolve proves nothing about the inverted shape.
-  if [[ "$(printf '%s' "$anchor" | jq -r '.by_actor')" == true ]]; then V_RBY=actor; else V_RBY=none; fi
+  # ASSUMED, never observed: ADR-218 records that no incident of this alert has auto-resolved, so `resolved_by == null`
+  # as "the alert recovered" is the expected shape, not a measured one. A response without the key is `unknown`.
+  case "$(printf '%s' "$anchor" | jq -r '.by_actor')" in
+    true) V_RBY=actor ;;
+    false) V_RBY=none ;;
+    *) V_RBY=unknown ;;
+  esac
 fi
 
 # ── (2) The incident list, walked back to the anchor ─────────────────────────────────────────
@@ -291,7 +305,7 @@ if ! projected="$(jq -c --arg p "$PROD_NAME" --arg c "$CANARY_NAME" '
           is_prod: (.attributes.name == $p), is_canary: (.attributes.name == $c)}
        | . + {epoch: (.started_at | (try ep catch null)),
               resolved_epoch: (if .resolved_at == null then null else (.resolved_at | (try ep catch null)) end)}]
-  | if any(.[]; .epoch == null) then error("unparseable started_at") else . end' "$WORK/incidents.json" 2>/dev/null)"; then
+  | if any(.[]; .epoch == null or (([.id | match("\\A[0-9]+\\z")] | length) == 0)) then error("unparseable started_at or id") else . end' "$WORK/incidents.json" 2>/dev/null)"; then
   unknown "incident list unparseable (bytes=$(wc -c < "$WORK/incidents.json" | tr -d '[:space:]'))"
 fi
 # The anchor MUST be on the list we walked: its absence means the list is truncated, stale or a different view than the
@@ -309,7 +323,7 @@ fi
 # Exact-equality matches (is_prod / is_canary are `.attributes.name ==` booleans computed above; never a prefix,
 # substring or cause match).
 newer="$(printf '%s' "$projected" | jq -c --arg id "$ANCHOR_ID" --argjson a "$A_EPOCH" \
-  '[.[] | select(.is_prod and .id != $id and .epoch > $a)] | sort_by(.epoch)')"
+  '[.[] | select(.is_prod and .id != $id and .epoch >= $a)] | sort_by(.epoch)')"
 canary_inc="$(printf '%s' "$projected" | jq -c '[.[] | select(.is_canary)] | sort_by(.epoch)')"
 if [[ "$(printf '%s' "$newer" | jq 'length')" -gt 0 ]]; then V_NEWER=1; else V_NEWER=0; fi
 CANARY_EPOCH=""
@@ -325,7 +339,7 @@ paged_get "$ALERTS_HOST" "/api/v2/alerts" > "$WORK/alerts.json" 2>"$WORK/err" \
 if ! alerts_proj="$(jq -c --arg p "$PROD_NAME" --arg c "$CANARY_NAME" '
   def ep: sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z") | fromdateiso8601;
   def pick($n): [.[] | select(.attributes.name == $n)
-        | {paused: (.attributes.paused == true), operator: .attributes.operator, value: .attributes.value,
+        | {paused: (.attributes.paused), operator: .attributes.operator, value: .attributes.value,
            created_epoch: (.attributes.created_at | (try ep catch null))}];
   {prod: pick($p), canary: pick($c)}' "$WORK/alerts.json" 2>/dev/null)"; then
   unknown "alert listing unparseable (bytes=$(wc -c < "$WORK/alerts.json" | tr -d '[:space:]'))"
@@ -333,6 +347,10 @@ fi
 live="$(printf '%s' "$alerts_proj" | jq -r '.canary | length')"
 [[ "$live" =~ ^[0-9]+$ ]] || unknown "alert listing unparseable (canary count)"
 if [[ "$live" -gt 0 ]]; then V_ALIVE=1; else V_ALIVE=0; fi
+# `paused` must be a BOOLEAN on every alert we read: a missing, null or renamed key would otherwise read as "not paused".
+if [[ "$(printf '%s' "$alerts_proj" | jq -r '[.prod[], .canary[] | .paused | type == "boolean"] | all')" != true ]]; then
+  unknown "alert listing carries no boolean paused flag for ${PROD_NAME} or the canary: the schema is not what this probe reads"
+fi
 CANARY_PAUSED="$(printf '%s' "$alerts_proj" | jq -r '[.canary[] | .paused] | any')"
 CANARY_CREATED="$(printf '%s' "$alerts_proj" | jq -r '[.canary[] | .created_epoch | select(. != null)] | min // empty')"
 # The production alert must be in the listing exactly once, unpaused and in the inverted shape. A listing that does
@@ -348,12 +366,15 @@ esac
 
 # ── (4) Is the canary still declared? (comment lines dropped first) ──────────────────────────
 [[ -r "$TF" ]] || unknown "betterstack-logs-alerts.tf is not readable at ${TF}"
-tf_stripped="$(grep -vE '^[[:space:]]*#' "$TF")"
-if printf '%s\n' "$tf_stripped" | grep -qE "^[[:space:]]*resource[[:space:]]+\"logtail_exploration_alert\"[[:space:]]+\"${CANARY_RESOURCE}\"[[:space:]]*\{"; then
-  V_DECL=1
-else
-  V_DECL=0
-fi
+tf_stripped="$(grep -vE '^[[:space:]]*(#|//)' "$TF")"
+V_DECL=0
+# Any of the three pieces keeps the canary declared: a half-deleted canary (alert gone, exploration or SQL local left)
+# must not read as retired. A block comment reads as declared: a safe deadlock, not a false pass.
+for decl in "resource[[:space:]]+\"logtail_exploration_alert\"[[:space:]]+\"${CANARY_RESOURCE}\"[[:space:]]*\{" \
+            "resource[[:space:]]+\"logtail_exploration\"[[:space:]]+\"${CANARY_RESOURCE}\"[[:space:]]*\{" \
+            "${CANARY_RESOURCE}_sql[[:space:]]*="; do
+  if grep -qE "^[[:space:]]*${decl}" <<<"$tf_stripped"; then V_DECL=1; break; fi
+done
 
 # ── (5) rows_in_window (diagnostic only; a failure here never changes the verdict) ───────────
 # The trailing 15 minutes (the alert's own query window), NOT the incident's whole life: rows from before a host died
@@ -387,10 +408,15 @@ if [[ "$V_PROD" == open || "$V_NEWER" == 1 ]]; then
     if [[ "$answered" == 1 ]]; then
       # Host names come from log rows, so they are untrusted text that this stdout publishes: anything outside a plain
       # hostname shape is folded into `other` and the list is capped.
+      # \A...\z, never ^...$: Oniguruma's $ matches before a trailing newline, which would split the verdict line.
+      # Roster hosts come first, at most 10 other hosts follow, and everything else is folded into `other`.
       if rows="$(printf '%s\n' "$bq_out" | jq -r -s --arg roster "$ROSTER" '
-          ([.[] | {host: ((.host // "") | if ([match("^[A-Za-z0-9._-]{1,63}$")] | length) > 0 then . else "other" end), n: ((.n // 0) | tonumber)}]) as $r
-          | ($roster | split(" ") | map(select(length > 0))) as $ro
-          | (($ro + ($r | map(.host))) | unique | .[:12]) as $hosts
+          ($roster | split(" ") | map(select(length > 0)) | sort) as $ro
+          | ([.[] | {host: ((.host // "") | if ([match("\\A[A-Za-z0-9._-]{1,63}\\z")] | length) > 0 then . else "other" end), n: ((.n // 0) | tonumber)}]) as $r0
+          | ([$r0[].host] | unique | map(select(. != "other" and (. as $h | $ro | any(. == $h) | not)))) as $extra
+          | ($extra[:10]) as $keep
+          | ($r0 | map(.host as $h | if $h != "other" and ($ro | any(. == $h) | not) and ($keep | any(. == $h) | not) then .host = "other" else . end)) as $r
+          | ($ro + $keep + (if any($r[]; .host == "other") then ["other"] else [] end)) as $hosts
           | $hosts | map(. as $h | "\($h):\(([$r[] | select(.host == $h) | .n] | add) // 0)") | join(",")' 2>/dev/null)" && [[ -n "$rows" ]]; then
         V_ROWS="$rows"
       fi
@@ -401,7 +427,9 @@ if [[ "$V_PROD" == open || "$V_NEWER" == 1 ]]; then
 fi
 
 # ── Verdict ──────────────────────────────────────────────────────────────────────────────────
-proj_newer="$(printf '%s' "$newer" | jq -c '[.[] | {id, name, started_at, resolved_at}]')"
+# Built from VALIDATED values (a numeric id and canonical timestamps re-rendered from the parsed epochs), never from the
+# raw vendor strings: fromdateiso8601 accepts trailing text, and this stdout is a public comment.
+proj_newer="$(printf '%s' "$newer" | jq -c '[.[] | {id, name, started_at: (.epoch | todate), resolved_at: (if .resolved_epoch == null then null else (.resolved_epoch | todate) end)}]')"
 # The production alert's own state comes first: every other conclusion assumes it is the thing being soaked.
 case "$V_PALERT" in
   absent)
@@ -414,6 +442,10 @@ case "$V_PALERT" in
     action "${PROD_NAME} is live but is not 'higher_than 0' (operator/value differ): the inverted shape is not what is running (the apply has not landed, or it was reverted). A revert restores the shape that misfired."
     verdict action_required 5 ;;
 esac
+if [[ "$V_NEWER" == 1 ]]; then
+  action "a ${PROD_NAME} incident started after the anchor ${ANCHOR_ID} (recurrence; projected): ${proj_newer}. rows_in_window=${V_ROWS} (the trailing 15 minutes) separates an evaluator fault (rows on both hosts now) from an emitter or ingest fault (a host with none). Response: the poller (#12190); any Better Stack write needs the owner's per-command go-ahead; never a revert."
+  verdict action_required 5
+fi
 if [[ "$V_CANARY" == absent && "$V_ALIVE" == 1 ]]; then
   if [[ "$CANARY_PAUSED" == true ]]; then
     action "the canary alert ${CANARY_NAME} is live but PAUSED, so no canary incident can exist. This is not an evaluator finding: unpause it (a Better Stack write needing the owner's per-command go-ahead) or let the apply re-arm it."
@@ -427,17 +459,16 @@ if [[ "$V_CANARY" == absent && "$V_ALIVE" == 1 ]]; then
   verdict action_required 5
 fi
 if [[ "$V_CANARY" == absent ]]; then
-  action "no canary incident exists and ${CANARY_NAME} is not in the live alert listing: either the apply has not created it yet, or it never did (alert-count cap refusal or a failed create). Check the merge run's Terraform apply step for logtail_exploration_alert.${CANARY_RESOURCE}; this is not an evaluator finding."
-  verdict action_required 5
-fi
-if [[ "$V_NEWER" == 1 ]]; then
-  action "a ${PROD_NAME} incident started after the anchor ${ANCHOR_ID} (recurrence; projected): ${proj_newer}. rows_in_window=${V_ROWS} (the trailing 15 minutes) separates an evaluator fault (rows on both hosts now) from an emitter or ingest fault (a host with none). Response: the poller (#12190); any Better Stack write needs the owner's per-command go-ahead; never a revert."
+  action "no canary incident exists and ${CANARY_NAME} is not in the live alert listing: it was DELETED or NEVER CREATED (the apply has not run yet, an alert-count cap refusal or a failed create; or the vendor drops the incident with its alert). Check the merge run's Terraform apply step for logtail_exploration_alert.${CANARY_RESOURCE}; this is not an evaluator finding."
   verdict action_required 5
 fi
 if [[ "$V_PROD" == open ]]; then
   stale=0
   EARL_EPOCH=""
-  if [[ -n "${SOLEUR_FT_EARLIEST:-}" ]]; then EARL_EPOCH="$(date -u -d "${SOLEUR_FT_EARLIEST}" +%s 2>/dev/null || true)"; fi
+  # ISO-8601 shapes only: GNU date also parses "now" and "1 day ago" against the live clock, and "now" is never stale.
+  if [[ "${SOLEUR_FT_EARLIEST:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[T\ ][0-9]{2}:[0-9]{2}(:[0-9]{2})?(\.[0-9]+)?(Z|[+-][0-9]{2}:?[0-9]{2})?$ ]]; then
+    EARL_EPOCH="$(date -u -d "${SOLEUR_FT_EARLIEST}" +%s 2>/dev/null || true)"
+  fi
   if [[ "$EARL_EPOCH" =~ ^[0-9]+$ ]]; then
     [[ $((NOW - EARL_EPOCH)) -gt "$SOAK_S" ]] && stale=1
   elif [[ "$CANARY_EPOCH" =~ ^[0-9]+$ ]] && [[ $((NOW - CANARY_EPOCH)) -gt "$STALE_S" ]]; then
@@ -453,6 +484,9 @@ fi
 if [[ "$V_RBY" == actor ]]; then
   action "anchor incident ${ANCHOR_ID} was resolved by an actor (a user or API token), not by the alert recovering: the soak proves nothing about the inverted shape. Verify by hand that the alert stays quiet on a healthy fleet before closing this tracker."
   verdict action_required 5
+fi
+if [[ "$V_RBY" != none ]]; then
+  unknown "anchor incident ${ANCHOR_ID} is resolved but the response carries no resolved_by key: who resolved it is unknown, so the soak proves nothing"
 fi
 if [[ "$V_AGE" -lt "$SOAK_S" ]]; then
   transient "anchor incident ${ANCHOR_ID} resolved ${V_AGE}s ago; the soak needs ${SOAK_S}s"
