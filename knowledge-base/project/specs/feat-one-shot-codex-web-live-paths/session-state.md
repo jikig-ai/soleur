@@ -4150,6 +4150,11 @@
   and matched none under its filename regex. The paths still handle potentially
   personal message and identity metadata; this scan is not a GDPR review or
   clearance. Final GDPR and CLO review remain open.
+- A later local merge incorporated main through
+  `bd89194eed94ec797f776d0cc9786feed1669035`; this does not qualify the
+  integrated head. At that head the focused offline tracker/transport tests,
+  synthetic guard tests and selected UI tests passed. Those checks do not
+  supersede the red client suite or the missing authority and fencing work.
 - No collection, writer-window, provider, GDPR/CLO, final review, QA, preflight
   or ship gate is cleared. Live Firestore writes remain hard-disabled. Separate
   authorization is still required for independently reviewed exact collection
