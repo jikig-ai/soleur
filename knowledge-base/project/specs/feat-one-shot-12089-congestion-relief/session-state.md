@@ -26,3 +26,14 @@
 - cto_spawns=1 — one batched `soleur:engineering:cto` Rule-interface spawn ratified all five plan rulings (lever-1 no-change, keep ALLGREEN, defer max_build, fold+rename lever-3 shape, lever-2 separate PR), confirmed `single-user incident` threshold, and ruled CPO sign-off binds at plan time. technical-ruling-gate.sh: PASS (7 rows).
 - `soleur:product:cpo` sign-off: **SIGNED-OFF-WITH-CONDITIONS** — sole condition (explicit revert path in plan) satisfied: full-revert recipe added to plan Phase 3 + ADR-032 amendment scope.
 - `CI_ORACLE_LANE=on` armed 2026-11-06 14:30:42Z (operator-authorized, row O2); two post-arm pull_request SOLEUR_ORACLE_LANE notices observed (runs 42234955850, 42236806402, locked=true) — audit evidence accumulating for the separate activation PR.
+
+## Work Phase
+- Status: implementation complete (tasks 1.x, 2.x, 3.1-3.2, 4.1 done; 3.3-3.5 merge/post-merge items pending by design)
+- Umbrellas: guards-ruleset (8 members, ci.yml), quality-guards (3, pr-quality-guards.yml), secret-guards (5, secret-scan.yml) — required; guards-advisory + quality-advisory advisory.
+- Design resolution: AC7 pins 23→10 CI contexts → 3 required umbrellas; plan's candidate guards-env merged into guards-ruleset (8 members, shared job setup).
+- Context swap atomic: ruleset.tf + canonical JSON + required-checks.txt + bounds TSV + README/skeleton comments in the same diff; merge_queue byte-identical (T-mq-1 green).
+- Live CI fixes: lint-skill-body-budget (ship SKILL.md trim), lint-infra-no-human-steps (plan prose), markdown-lint.test.sh W1c anchor → all green locally, pushed 7bd4a0f7cf.
+- Terraform plan (PR CI): 0 add / 1 change / 0 destroy — in-place update confirmed.
+- Deferred filed: #12269 (max_entries_to_build experiment, epic #11556). Oracle-lane activation stays a separate authorized PR per runbook (audit evidence accumulating under CI_ORACLE_LANE=on).
+- Census baseline (task 3.5): `scripts/ci-demand-census.sh` window 2026-11-05T12:00Z→2026-11-06T00:00Z running in background; result attaches to #12089 before merge.
+- Tier: C sequential (single-agent implementation for ABI coherence — atomic context rename, single-user-incident threshold).
