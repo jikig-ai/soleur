@@ -115,7 +115,7 @@ Delete protection is a guard against accidental deletion by the project's own us
 
 The 2026-11-06 API read shows only the volume, its delete-protection flag and the server list as of its UTC time. It does not show members, two-factor status or tokens, and it is not a substitute for the console re-read.
 
-This statement does not establish A5, the TLS posture or the Hetzner support answer. No console re-read is recorded
+This record does not establish A5, the TLS posture or the Hetzner support answer. No console re-read is recorded
 between the 2026-10-29 read and the drafting of this record (a re-read before signing needs its own dated
 evidence section), and two-factor on the account says nothing about account recovery.
 

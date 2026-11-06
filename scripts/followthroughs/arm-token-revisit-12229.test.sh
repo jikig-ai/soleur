@@ -73,8 +73,9 @@ _p=$pass; _f=$fail
 mkfix ctrl "" ""
 expect "ctrl-positive" "$PROBE" ctrl 2 >/dev/null
 expect "ctrl-negative (deliberately wrong want)" "$PROBE" ctrl 5 >/dev/null
-if [ "$pass" -ne $((_p + 1)) ] || [ "$fail" -ne $((_f + 1)) ]; then
-  printf '[FATAL] instrument self-test: expect() did not both accept and reject (pass %s->%s fail %s->%s)\n' "$_p" "$pass" "$_f" "$fail" >&2
+expect "ctrl-wrong-word (rc right, wording wrong)" "$PROBE" ctrl 2 "NOPE-NOT-IN-OUTPUT" >/dev/null
+if [ "$pass" -ne $((_p + 1)) ] || [ "$fail" -ne $((_f + 2)) ]; then
+  printf '[FATAL] instrument self-test: expect() did not accept, reject on rc and reject on wording (pass %s->%s fail %s->%s)\n' "$_p" "$pass" "$_f" "$fail" >&2
   exit 1
 fi
 pass=$_p; fail=$_f; FAILURES=()
@@ -105,18 +106,25 @@ case_none() {
 }
 case_shapes() {
   CASES=$((CASES + 1))
-  mkfix order "$TGT2  # note$NL$TGT1" ""; expect "reordered targets with a trailing comment" "$PROBE" order 5
+  mkfix order "$TGT2  # note" ""; expect "a target line with a trailing comment still counts" "$PROBE" order 5
   mkfix crlf "" ""; printf '%s\r\n' "$TGT1" >> "$D/crlf/wf.yml"; expect "CRLF line endings" "$PROBE" crlf 5
   mkfix noslash "              -target=doppler_service_token.inngest_arm_write" ""; expect "line ending without a backslash" "$PROBE" noslash 5
   mkfix inline "terraform apply -target=doppler_service_token.inngest_arm_write -target=other.x" ""; expect "target inline on one command line" "$PROBE" inline 5
   mkfix quoted "              -target=\"github_actions_secret.doppler_token_inngest_arm\" \\" ""; expect "quoted target form" "$PROBE" quoted 5
   mkfix spaced "              -target github_actions_secret.doppler_token_inngest_arm \\" ""; expect "space-separated target form" "$PROBE" spaced 5
+  mkfix dspace "              -target  github_actions_secret.doppler_token_inngest_arm \\" ""; expect "two spaces after -target" "$PROBE" dspace 5
+  mkfix tabsep "              -target"$'\t'"github_actions_secret.doppler_token_inngest_arm \\" ""; expect "tab after -target" "$PROBE" tabsep 5
+  mkfix cont "              -target \\$NL                doppler_service_token.inngest_arm_write \\" ""; expect "-target and its name on separate continued lines" "$PROBE" cont 5
+  mkfix arr "ARGS=(-target=doppler_service_token.inngest_arm_write)" ""; expect "bash array form" "$PROBE" arr 5
+  mkfix semi "terraform apply -target=github_actions_secret.doppler_token_inngest_arm; true" ""; expect "target ended by a semicolon" "$PROBE" semi 5
+  mkfix sq "terraform apply -target='github_actions_secret.doppler_token_inngest_arm'" ""; expect "single-quoted target" "$PROBE" sq 5
 }
 case_unreadable() {
   CASES=$((CASES + 1))
   mkfix unr_wf "" ""; rm -f "$D/unr_wf/wf.yml"; expect "missing workflow file" "$PROBE" unr_wf 3 "CANNOT ESTABLISH"
   mkfix unr_tf "" ""; rm -f "$D/unr_tf/arm.tf"; expect "missing tf file" "$PROBE" unr_tf 3 "CANNOT ESTABLISH"
   mkfix empty_wf "" ""; : > "$D/empty_wf/wf.yml"; expect "empty workflow file is not 'targets gone'" "$PROBE" empty_wf 3
+  mkfix empty_tf "" ""; : > "$D/empty_tf/arm.tf"; expect "empty tf file is not 'targets gone'" "$PROBE" empty_tf 3
   mkfix dir_tf "" ""; rm -f "$D/dir_tf/arm.tf"; mkdir "$D/dir_tf/arm.tf"; expect "tf path is a directory" "$PROBE" dir_tf 3
   if [ "$(id -u)" -ne 0 ]; then
     mkfix perm_wf "" ""; chmod 000 "$D/perm_wf/wf.yml"; expect "unreadable (mode 000) workflow file" "$PROBE" perm_wf 3
@@ -129,15 +137,22 @@ case_real_tree() {
   # The probe against the real tracked files. Valid only while the token is in config; the whole
   # suite is retired with the token (see the RETIREMENT note in the probe).
   expect "real tree: token still in config" "$PROBE" REAL 5 "ACTION REQUIRED"
+  grep -qF 'token -target line: 1, secret -target line: 1, resource declaration: 1' <<<"$OUT" \
+    && ok "real tree: each of the three members matched on its real line" || bad "real tree: member counts differ: $OUT"
 }
 case_exit_set() {
   CASES=$((CASES + 1))
   local n bad_rc=""
-  for n in all only_t1 only_t2 only_decl none commented decoy order crlf noslash inline quoted spaced unr_wf unr_tf empty_wf dir_tf REAL; do
+  for n in all only_t1 only_t2 only_decl none commented decoy order crlf noslash inline quoted spaced dspace tabsep cont arr semi sq unr_wf unr_tf empty_wf empty_tf dir_tf REAL; do
     run_probe "$PROBE" "$n"
     case "$RC" in 2|3|5) : ;; *) bad_rc="$bad_rc $n=$RC" ;; esac
   done
   [ -z "$bad_rc" ] && ok "exit set over the fixture matrix is within {2,3,5}" || bad "probe exited outside {2,3,5}:$bad_rc"
+}
+case_xtrace() {
+  CASES=$((CASES + 1))
+  OUT="$(env -i PATH="$PATH" TMPDIR="$D" bash -x "$PROBE" 2>&1)"; RC=$?
+  [ "$RC" -eq 78 ] && ok "xtrace refusal exits 78" || bad "xtrace run exited $RC (want 78)"
 }
 case_mode() {
   CASES=$((CASES + 1))
@@ -154,15 +169,12 @@ if [ ! -f "$PROBE" ]; then
   bad "probe missing: $PROBE"
 else
   case_all; case_only_target; case_only_decl; case_none; case_shapes
-  case_unreadable; case_real_tree; case_exit_set; case_mode
+  case_unreadable; case_real_tree; case_xtrace; case_exit_set; case_mode
 fi
 
 # --- mutants: each is a copy of the probe with one edit; the discriminating cases must go RED ----
-mutate() { # name sed-expression
-  local name="$1" expr="$2" mp="$D/mut-$1.sh"
-  cp "$PROBE" "$mp"; sed -E -i "$expr" "$mp"
-  if cmp -s "$PROBE" "$mp"; then bad "mutation $name did not land"; return; fi
-  local killed=0 n
+grade() { # probe-copy -> prints 1 when ANY discriminating case misbehaves (killed), else 0
+  local mp="$1" killed=0 n
   for n in all only_t1 only_t2 only_decl none unr_wf; do
     run_probe "$mp" "$n"
     case "$n" in
@@ -172,11 +184,24 @@ mutate() { # name sed-expression
     esac
     case "$RC" in 2|3|5) : ;; *) killed=1 ;; esac
   done
-  [ "$killed" -eq 1 ] && ok "mutant $name is killed" || bad "mutant $name SURVIVED"
+  printf '%s' "$killed"
+}
+mutate() { # name sed-expression
+  local name="$1" expr="$2" mp="$D/mut-$1.sh"
+  cp "$PROBE" "$mp"; sed -E -i "$expr" "$mp"
+  if cmp -s "$PROBE" "$mp"; then bad "mutation $name did not land"; return; fi
+  [ "$(grade "$mp")" = 1 ] && ok "mutant $name is killed" || bad "mutant $name SURVIVED"
 }
 
 MUTANTS=0
 if [ -f "$PROBE" ]; then
+  # Grader controls: an unmutated copy must NOT be killed, and a copy that always exits outside the
+  # contract set must be.
+  cp "$PROBE" "$D/mut-ctrl.sh"
+  [ "$(grade "$D/mut-ctrl.sh")" = 0 ] && ok "grader control: the unmutated probe survives the mutant loop" || bad "grader control: the unmutated probe was graded killed"
+  cp "$PROBE" "$D/mut-ctrl99.sh"; printf '\nexit 99\n' | sed -i '/^exit 5$/r /dev/stdin' "$D/mut-ctrl99.sh" 2>/dev/null
+  sed -E -i 's/^exit 5$/exit 99/' "$D/mut-ctrl99.sh"
+  [ "$(grade "$D/mut-ctrl99.sh")" = 1 ] && ok "grader control: a probe exiting 99 is graded killed" || bad "grader control: a probe exiting 99 was not graded killed"
   mutate M1 's/^([[:space:]]*)exit 5$/\1exit 2/';        MUTANTS=$((MUTANTS + 1))
   mutate M2 's/m2=1/m2=0/; s/m3=1/m3=0/';                 MUTANTS=$((MUTANTS + 1))
   mutate M3 's/m3=1/m3=0/';                               MUTANTS=$((MUTANTS + 1))
@@ -186,7 +211,7 @@ if [ -f "$PROBE" ]; then
 fi
 
 # --- anti-vacuity floors (reported with printf + exit, not through the helpers) ------------------
-EXPECTED_CASES=9
+EXPECTED_CASES=10
 if [ "$CASES" -lt "$EXPECTED_CASES" ]; then
   printf '[FATAL] case-count floor: ran %s cases, want >= %s (a case was deleted or the list was emptied)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
@@ -196,7 +221,7 @@ if [ "$MUTANTS" -lt "$EXPECTED_MUTANTS" ]; then
   printf '[FATAL] mutant-count floor: ran %s mutants, want >= %s\n' "$MUTANTS" "$EXPECTED_MUTANTS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=28
+MIN_ASSERTIONS=39
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: %s passed, want >= %s (an assertion was deleted)\n' "$pass" "$MIN_ASSERTIONS" >&2
   exit 1

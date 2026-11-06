@@ -18,11 +18,14 @@
 # does not revoke, so the declaration counts too):
 #   1. a non-comment line carrying  -target=doppler_service_token.inngest_arm_write
 #   2. a non-comment line carrying  -target=github_actions_secret.doppler_token_inngest_arm
-#      (both in .github/workflows/apply-web-platform-infra.yml; the name must end at a boundary, so
-#      a longer name such as ..._v2 is not a member; quoted and space forms count)
+#      (both in .github/workflows/apply-web-platform-infra.yml; shell line continuations are joined
+#      first; the name must end at any character outside [A-Za-z0-9_-], so a longer name such as
+#      ..._v2 is not a member; inline, quoted, tab/space-separated and array forms count)
 #   3. the declaration  resource "doppler_service_token" "inngest_arm_write"
 #      (in apps/web-platform/infra/inngest-arm-write-token.tf)
-# Comment lines are not members.
+# Comment lines are not members. Known and accepted: a non-comment mention of a -target string (an
+# echo, a YAML description) still counts, and an HCL block comment around the declaration still
+# counts; both fail toward "notify", the safe direction.
 #
 # Credential posture: none. It reads two tracked files; there is no secrets= clause, no network
 # and no gh call.
@@ -64,7 +67,7 @@ if [ ! -f "$TF" ] || [ ! -r "$TF" ] || [ ! -s "$TF" ]; then
   exit 3
 fi
 
-wf_text="$(tr -d '\r' < "$WF")" || { echo "CANNOT ESTABLISH: the apply workflow could not be read"; exit 3; }
+wf_text="$(tr -d '\r' < "$WF" | { grep -vE '^[[:space:]]*#' || true; } | sed -e ':a;/\\$/{N;s/\\\n[[:space:]]*/ /;ba}')" || { echo "CANNOT ESTABLISH: the apply workflow could not be read"; exit 3; }
 tf_text="$(tr -d '\r' < "$TF")" || { echo "CANNOT ESTABLISH: the arm-token Terraform file could not be read"; exit 3; }
 
 has() { # text regex -> 0 present, 1 absent (comment lines are not members)
@@ -73,10 +76,12 @@ has() { # text regex -> 0 present, 1 absent (comment lines are not members)
   grep -qE -- "$2" <<<"$body"
 }
 
-has "$wf_text" '-target[= ]["'"'"']?doppler_service_token\.inngest_arm_write(["'"'"'[:space:]\\;]|$)'; rc=$?
+T1=$'-target[=[:space:]]+[\\"\']?doppler_service_token\\.inngest_arm_write([^[:alnum:]_-]|$)'
+has "$wf_text" "$T1"; rc=$?
 if [ "$rc" -eq 0 ]; then m1=1; elif [ "$rc" -ne 1 ]; then echo "CANNOT ESTABLISH: member 1 could not be searched"; exit 3; fi
 
-has "$wf_text" '-target[= ]["'"'"']?github_actions_secret\.doppler_token_inngest_arm(["'"'"'[:space:]\\;]|$)'; rc=$?
+T2=$'-target[=[:space:]]+[\\"\']?github_actions_secret\\.doppler_token_inngest_arm([^[:alnum:]_-]|$)'
+has "$wf_text" "$T2"; rc=$?
 if [ "$rc" -eq 0 ]; then m2=1; elif [ "$rc" -ne 1 ]; then echo "CANNOT ESTABLISH: member 2 could not be searched"; exit 3; fi
 
 has "$tf_text" '^[[:space:]]*resource[[:space:]]+"doppler_service_token"[[:space:]]+"inngest_arm_write"'; rc=$?
@@ -87,5 +92,5 @@ if [ $((m1 + m2 + m3)) -eq 0 ]; then
   exit 2
 fi
 
-echo "ACTION REQUIRED: the arm-token revisit is due and the token is still in config (token -target line: $m1, secret -target line: $m2, resource declaration: $m3). Record the decision on #12158: revoke with its change linked, or keep with a new date at most 90 days out and a freshly enrolled tracker. Revoke only if the four preconditions in arm-token-replacement-design-12158.md (The revisit question) hold; otherwise keep with a new date."
+echo "ACTION REQUIRED: the arm-token revisit is due and the token is still in config (token -target line: $m1, secret -target line: $m2, resource declaration: $m3). Record the decision on #12158: revoke with its change linked, or keep with a new date at most 90 days out and a freshly enrolled tracker. Revoke only if the four preconditions in the design doc named arm-token-replacement-design-12158 hold (the ADR-282 addendum of 2026-11-06 states the standing exposure); otherwise keep with a new date."
 exit 5
