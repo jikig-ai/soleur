@@ -615,7 +615,7 @@ describe("pushBranch hardened", () => {
       expect(leftovers()).toEqual([]);
     });
 
-    test("removed after a creator refusal and after a cat-file refusal (asserted by path non-existence)", async () => {
+    test("removed after a creator refusal and after a commit-check refusal (asserted by path non-existence)", async () => {
       await expect(pushBranch(hardenedOpts({ commitSha: "e".repeat(40) }))).rejects.toBeInstanceOf(ApprovedCommitUnavailableError);
       expect(h.handles).toHaveLength(1);
       expect(existsSync(h.handles[0])).toBe(false);

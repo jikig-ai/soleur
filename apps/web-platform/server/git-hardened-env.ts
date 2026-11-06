@@ -6,9 +6,10 @@
  * Why: the cc push runs `git` in the dispatch process, outside the sandbox, with an installation token in the child's
  * environment, for a workspace directory the agent can write. Everything git reads from `<workspace>/.git` (config, hooks,
  * refs, `commondir`, grafts, ...) is therefore agent-controlled. Layering `-c` resets on top of that directory can never close
- * it (git picks the MOST specific `http.<url>.*` key, so a more specific key in the repo config beats a broader `-c` reset,
- * and `http.sslVerify`, `http.<url>.sslVerify`, `http.sslCAInfo`, `http.curloptResolve` and `url.<base>.insteadOf` have no
- * `-c` reset at all). The 9b closure is structural: the hardened child never runs against the workspace `.git`.
+ * it (git picks the MOST specific `http.<url>.*` key, so a URL-scoped key in the repo config such as `http.<url>.sslVerify`,
+ * `http.<url>.sslCAInfo` or `http.<url>.proxy` beats any broader `-c` reset; an unscoped `-c http.sslVerify=true` DOES override
+ * the repo's unscoped key, but no `-c` list can cover every URL-scoped spelling, and `http.curloptResolve` and `url.<base>.insteadOf`
+ * are not reset by the shared list at all). The 9b closure is structural: the hardened child never runs against the workspace `.git`.
  *
  * The hardened child runs with
  *   - `GIT_DIR` = a bare directory the SERVER created and whose `config` it wrote (`createIsolatedPushDir`), so the only

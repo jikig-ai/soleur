@@ -10,7 +10,7 @@
  *
  * What this does NOT claim: that the displayed sha cannot be falsified. The agent writes HEAD, the refs and the objects
  * anyway. The control that matters is that the sha the Owner approved is the sha the push sends, and the push's own local
- * `cat-file` check. What this removes is git running here under agent-controlled configuration.
+ * `rev-parse --verify --quiet <sha>^{commit}` check. What this removes is git running here under agent-controlled configuration.
  *
  * Every refusal throws `WorkspaceHeadUnreadable` with a closed `reason`; no path or file content leaves in the message.
  */
