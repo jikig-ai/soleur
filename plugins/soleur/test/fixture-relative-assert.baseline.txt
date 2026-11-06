@@ -416,6 +416,7 @@
 1	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
 1	plugins/soleur/test/lint-distribution-content.test.sh
 11	plugins/soleur/test/lint-questionnaire-identity.test.sh
+22	plugins/soleur/test/mint-origin-ca-cert.test.sh
 1	plugins/soleur/test/notice-frontmatter.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
 1	plugins/soleur/test/operator-script.test.sh
@@ -517,6 +518,7 @@
 1	scripts/lint-workflow-install-sites.test.sh
 1	scripts/machinery-backfill-propose.sh
 8	scripts/markdown-lint.test.sh
+8	scripts/mint-origin-ca-cert.sh
 8	scripts/orphan-process-reaper-mutation.test.sh
 4	scripts/orphan-process-reaper.sh
 2	scripts/orphan-process-reaper.test.sh
