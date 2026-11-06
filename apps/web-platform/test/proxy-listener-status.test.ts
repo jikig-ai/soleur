@@ -416,4 +416,16 @@ describe("bind address validation (fail closed: 0.0.0.0 or IPv4 10.0.1.x only)",
     expect(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "localhost", port: 0 })).toBeNull();
     expect(getProxyStatus().state).toBe("no_bind");
   });
+
+  it("outside the test runner the prefix override is ignored: 127.0.0.1 stays refused", () => {
+    const saved = process.env.VITEST;
+    delete process.env.VITEST;
+    try {
+      expect(createProxyServer({ onProxiedSession, ...TEST_BIND_ANY, bindAddress: "127.0.0.1", port: 0 })).toBeNull();
+      expect(getProxyStatus().state).toBe("no_bind");
+      expect(mockReportSilentFallback.mock.calls.some((c) => c[1]?.op === "createProxyServer.bad-bind")).toBe(true);
+    } finally {
+      if (saved !== undefined) process.env.VITEST = saved;
+    }
+  });
 });

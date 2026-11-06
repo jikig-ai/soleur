@@ -218,7 +218,10 @@ export function createProxyServer(params: {
     );
     return null;
   }
-  const bindPrefix = params.privateBindPrefix ?? PROXY_PRIVATE_BIND_PREFIX;
+  // The prefix override is a TEST seam only: honoured solely under vitest (VITEST is set by the
+  // runner and never in a production container), so no production call site can lift the
+  // private-net restriction on this token-less pre-authenticated port by passing "".
+  const bindPrefix = process.env.VITEST ? (params.privateBindPrefix ?? PROXY_PRIVATE_BIND_PREFIX) : PROXY_PRIVATE_BIND_PREFIX;
   if (!isAllowedProxyBind(bindAddress, bindPrefix)) {
     recordProxyNotStarted("no_bind");
     // Fail-closed on a wildcard IPv6 (`::`), a hostname, a public or other-subnet IP.
@@ -264,7 +267,12 @@ export function createProxyServer(params: {
   let wss: WebSocketServer;
   try {
     httpsServer = createServer({ key: tls.key, cert: tls.cert });
-    wss = new WebSocketServer({ server: httpsServer, path: "/ws-proxy" });
+    try {
+      wss = new WebSocketServer({ server: httpsServer, path: "/ws-proxy" });
+    } catch (wssErr) {
+      httpsServer.close(); // never listened; releases the parsed key/cert context
+      throw wssErr;
+    }
   } catch (err) {
     const rawCode = (err as NodeJS.ErrnoException | undefined)?.code;
     const code = typeof rawCode === "string" && /^[A-Z0-9_]{1,64}$/.test(rawCode) ? rawCode : undefined;
