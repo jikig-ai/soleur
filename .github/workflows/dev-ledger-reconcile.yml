@@ -341,6 +341,8 @@ jobs:
           gh api -X POST "repos/$GITHUB_REPOSITORY/labels" -f name="$label" -f color=B60205 \
             -f description="A dev ledger reconcile needs a human (dev-ledger-reconcile.yml)" >/dev/null 2>&1 || true
           lrc=0
+          # dedupe: fail-closed — deliberate lrc: an unreadable list declines to file
+          # rather than duplicate the action-required ledger
           existing=$(gh api -X GET "repos/$GITHUB_REPOSITORY/issues" -f state=open -f labels="$label,action-required" -f per_page=100 --paginate \
             --jq '.[] | select(.pull_request == null) | [(.number | tostring), .title] | @tsv' 2>/dev/null) || lrc=$?
           if [[ "$lrc" != "0" ]]; then

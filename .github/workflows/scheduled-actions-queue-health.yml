@@ -225,6 +225,7 @@ jobs:
           # cap-hit audible; any remainder drains on subsequent sweeps.
           # Label-scoped primary list (the search index lags minutes; every
           # issue this file files carries the ci/actions-queue-health label).
+          # dedupe: benign — || true inside on a close-path read: a failed lookup leaves the action-required issues open, keeping the alarm visible
           matches="$(gh issue list --repo "$GH_REPO" --state open -L 100 \
               --label 'ci/actions-queue-health' \
               --json number --jq '.[].number' 2>/dev/null || true)"

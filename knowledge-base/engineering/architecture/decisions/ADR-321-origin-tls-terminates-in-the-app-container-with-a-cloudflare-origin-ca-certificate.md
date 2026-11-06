@@ -100,9 +100,13 @@ here and this change must not touch it.
   balancer monitor move to HTTPS/443 (R7) has been gated on **both** pool members reporting healthy and on the monitor
   trusting an Origin CA certificate. A previous `https` monitor reported every origin down and the B1 self-fallback hid
   it (`cloudflare-lb.tf`), so a healthy-looking pool is not enough on its own.
-- Expiry is watched from inside: a startup warning, a Sentry warning below 90 days, and a Better Stack alert. **The
-  Better Stack alert does not exist yet** (a forward reference, added with the mint workflow in PR-2); until then the
-  Sentry warning at container start is the only signal. Mid-life expiry under `ORIGIN_TLS_REQUIRED=1` crash-loops on
+- Expiry is watched from inside: a startup warning and a Sentry warning below 90 days. **There is no Better Stack
+  alert and none is planned in the mint slice** (the earlier forward reference to one is withdrawn). The certificate is
+  15 years old at expiry, so the first possible expiry event is in 2041; a Better Stack Logs alert built now would be
+  untestable against a real event for 15 years and would add a Terraform apply to a slice that touches no Terraform.
+  Until a trigger exists (see "Amendment, slice 2" below) the signals are the Sentry warning at container start and the
+  mint workflow's `mode=plan`, which prints `existing state=... days_left=...` on any date and reports `near_expiry`
+  at 90 days or less. Mid-life expiry under `ORIGIN_TLS_REQUIRED=1` crash-loops on
   restart, which is acceptable because under `strict` users would already be getting 525/526 and the canary rolls the
   deploy back.
 - Rotation is a re-mint plus a container restart, never an apply side effect.
@@ -146,3 +150,41 @@ listener is inert until a certificate exists.
   from the process environment after boot and listed in `SENSITIVE_KEY_NAMES`.
 - AP-021 (Diagnostic honesty in operator-facing messages): Aligned. The probe and the proof wording name only what was
   measured (TLS on the hop, certificate acceptance only in `strict`).
+
+## Amendment, slice 2 (2026-11-06): the mint workflow
+
+Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Terraform and delivered through Doppler `prd`".
+
+1. **Where it runs.** `.github/workflows/mint-origin-ca-cert.yml`, dispatch-only, body `scripts/mint-origin-ca-cert.sh`, offline suite
+   `plugins/soleur/test/mint-origin-ca-cert.test.sh`. A `guard` job with no environment and no secret (event, first attempt, ref
+   `main`, owner allowlist, inputs, typed confirm) and a `mint` job on a Tier-B environment: `infra-privileged` for `mode=plan`
+   (no reviewer, read-only) and the reviewer-gated `web-platform-infra-apply` for `mode=apply`. `infra-privileged` has zero
+   required reviewers (#11923), so the typed confirm alone is a fat-finger guard; running the write on the reviewer-gated
+   environment adds a human approval as a second key. Both environments are main-only and carry
+   `DOPPLER_TOKEN_INFRA_PRIVILEGED`.
+2. **Credentials.** The Cloudflare token `CF_API_TOKEN_ORIGIN_CA` and `CF_ZONE_ID` are read from `soleur/prd_terraform`; the write to
+   `soleur/prd` uses the workplace provider token the Tier-B loader exports (`TF_VAR_doppler_token_tf`), the only credential that
+   writes the `soleur/prd` root (ADR-307 fact 3: no CI token writes it generically, and a new narrow write token would be an
+   operator credential mint for no gain). The script runs in a deny-by-default child environment so the loader's other exports
+   (Hetzner, R2, GitHub App material) never reach it. **Residual:** `prd_terraform` is Tier-A readable (ADR-241), so a branch actor
+   can read `CF_API_TOKEN_ORIGIN_CA` there. Its blast radius is bounded: it can mint Origin CA certificates for `soleur.ai` hostnames,
+   which only Cloudflare trusts (not a browser-trusted certificate), and cannot change any rule or record. Moving the token into
+   `soleur-infra-privileged` is the clean fix and is an operator credential move; it is not done here.
+3. **Policy.** Nothing in `prd`, or a half-set, unparseable, wrong-host, expired or at most 90 days to expiry pair: mint. A valid pair
+   with more than 90 days left: refused (`already_minted_not_expiring`) unless `replace=true`, which also changes the typed confirm to
+   `MINT-ORIGIN-CA-REPLACE-<date>`. A replace never revokes the old certificate (a running container may still hold it until the
+   next restart); the verdict names its serial. Revocation is a separate owner act.
+4. **Atomicity.** Doppler has no two-secret transaction through the CLI that keeps values out of argv, so the certificate and the key are
+   written by two stdin writes, read back and compared by digest, and `prd` is restored to its captured previous state on any failure
+   (verdict `*_unrestored` if even the restore cannot be confirmed). Nothing restarts a container: the new value is read at the next
+   start, and with `ORIGIN_TLS_REQUIRED` unset a mismatch is inert (decision 6 applies only after the flip).
+5. **No secret in output.** Every response stays in a 0600 file under a private temp dir that is shredded on every exit path; the bearer
+   token reaches `curl` through a config file and every Doppler value through stdin; an `::add-mask::` is registered for each
+   secret-bearing string before it is used; only parsed numbers, ids, dates, digests of public material and fixed verdict tokens are
+   printed. The suite scans every stream and every argv of every scenario.
+6. **Unverified, carried forward.** (a) That the Cloudflare token's *create* permission is present: `mode=plan` proves the token and
+   a certificate LIST for the zone, and the create can only be proven by creating. An apply that gets a 403 fails closed with nothing
+   written. (b) That `DOPPLER_TOKEN_TF` is present in `soleur-infra-privileged/prd` (the loader exports it from there); a missing one
+   fails closed as `no_provider_token`. (c) Cloudflare's exact response shape was read from current documentation, not from a live call.
+7. **Expiry alert: deferred, documented here, not filed.** See Consequences. Trigger to build it: the strict flip landing (PR-5) plus a
+   decision that 15-year expiry needs an external signal; or Cloudflare shortening Origin CA validity.

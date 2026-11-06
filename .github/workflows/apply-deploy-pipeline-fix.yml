@@ -2445,6 +2445,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          # dedupe: benign — deliberate MISSING sentinel: a failed read produces a non-empty
+          # state the downstream branches on explicitly (a blind read skips the close-out).
           STATE=$(gh issue view 4804 --json state --jq '.state' 2>/dev/null || echo "MISSING")
           if [[ "$STATE" == "OPEN" ]]; then
             echo "open=true" >> "$GITHUB_OUTPUT"
@@ -2535,6 +2537,8 @@ jobs:
           MERGE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # dedupe: benign — deliberate MISSING sentinel: a failed read produces a non-empty
+          # state the downstream branches on explicitly (a blind read skips the close).
           STATE=$(gh issue view 4804 --json state --jq '.state' 2>/dev/null || echo "MISSING")
           if [[ "$STATE" == "OPEN" ]]; then
             gh issue comment 4804 --body "Auto-closed by \`apply-deploy-pipeline-fix.yml\` after merge ${MERGE_SHA}: infra-config files landed (files_written == files_total, files_failed == 0) and \`/hooks/deploy-status\` confirms \`journald_storage.persistent == true\`. The deploy-pipeline-fix false-success freeze is resolved."

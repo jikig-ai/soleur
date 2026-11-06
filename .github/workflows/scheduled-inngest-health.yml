@@ -696,8 +696,15 @@ jobs:
                   gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. (Restart-dispatch status unavailable this cycle — see the run log; the Sentry heartbeat continues to page.) Run: ${RUN_URL}"
                 fi
               elif [[ "$RESTART_OK" == "false" ]]; then
-                HAS_ESCALATION=$(gh issue view "$EXISTING" --repo "$GH_REPO" --json labels --jq '[.labels[].name] | index("ci/inngest-restart-exhausted") // empty')
-                if [[ -z "$HAS_ESCALATION" ]]; then
+                # Fail-closed like the supabase-watchdog read: a failed labels
+                # lookup must NOT produce an empty HAS_ESCALATION — || true
+                # would re-post the escalation comment every tick while the
+                # API flakes.
+                HAS_ESCALATION_RC=0
+                HAS_ESCALATION=$(gh issue view "$EXISTING" --repo "$GH_REPO" --json labels --jq '[.labels[].name] | index("ci/inngest-restart-exhausted") // empty' 2>/dev/null) || HAS_ESCALATION_RC=$?
+                if [[ "$HAS_ESCALATION_RC" != "0" ]]; then
+                  echo "::warning::could not read issue labels — deferring escalation to the next tick"
+                elif [[ -z "$HAS_ESCALATION" ]]; then
                   gh label create "ci/inngest-restart-exhausted" --repo "$GH_REPO" \
                     --description "External watchdog gave up auto-restarting inngest (>= give-up window) — human root-cause needed" --color "B60205" 2>/dev/null || true
                   gh issue edit "$EXISTING" --repo "$GH_REPO" --add-label "ci/inngest-restart-exhausted" 2>/dev/null || true

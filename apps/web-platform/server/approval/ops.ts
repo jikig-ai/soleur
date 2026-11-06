@@ -162,6 +162,16 @@ export const APPROVAL_OPS = {
     message: "Approval gate: the approval hash key is unavailable (SENTRY_USERID_PEPPER unset or empty); gated actions are denied",
     level: "error",
   },
+  /**
+   * The gate's no-git read of the workspace HEAD (`readWorkspaceHeadSha`) refused for a `github_push_branch` card (ADR-309 9b):
+   * no card was created and the gate denies. `tags.reason` / `extra.reason` is the reader's closed `WorkspaceHeadReason`, never
+   * the Error, a path or file content. The gate's `approval-bind-failed` report still fires after it.
+   */
+  headReadFailed: {
+    op: "approval-head-read-failed",
+    message: "Approval gate: the workspace HEAD could not be read safely for the push; no approval card was created",
+    level: "error",
+  },
   /** Fired by the expiry cron (15 minutes pending): issue-alerts registers THIS op only. */
   gateUnanswered: {
     op: "gate_unanswered",

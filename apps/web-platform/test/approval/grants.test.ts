@@ -121,7 +121,7 @@ describe("the terminal refusal texts say what actually happened (one per cause, 
       "The active workspace changed after the approval was granted, so the action was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation in the intended workspace if they still want it done.",
     );
     expect(APPROVED_COMMIT_UNAVAILABLE_MESSAGE).toBe(
-      "The commit the Owner approved is not available in the workspace, so the push was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation if they still want it pushed.",
+      "The commit the Owner approved is not available in the workspace, so the push was NOT performed, and the Owner's approval is spent. Do not retry in this conversation. Tell the user, and ask them to start a new conversation if they still want it pushed.",
     );
     expect(WORKSPACE_CHANGED_MESSAGE).not.toBe(GRANT_MISSING_MESSAGE);
     expect(APPROVED_COMMIT_UNAVAILABLE_MESSAGE).not.toBe(GRANT_MISSING_MESSAGE);

@@ -1639,6 +1639,7 @@ jobs:
             # no route= token escalates, and a monitor-config-drift row ALWAYS escalates (an alarm
             # disarm is never silent). A failed history read leaves PRIOR empty, which escalates
             # every key: too loud, never silent.
+            # dedupe: benign — deliberate in-capture || true: a failed history read leaves PRIOR empty, which escalates every key — too loud, never silent.
             PRIOR=$(gh issue view "$EXISTING" --json author,body,comments --jq "$RECONCILE_LATEST_POST_JQ" || true)
             PRIOR_KEYS=""
             while IFS= read -r line; do
@@ -1743,6 +1744,7 @@ jobs:
             echo "No open reconcile issue; nothing to clear."
             exit 0
           fi
+          # dedupe: fail-closed — deliberate bare capture: a failed read fails the step, which the Sentry check-in reads.
           LATEST=$(gh issue view "$EXISTING" --json author,body,comments --jq "$RECONCILE_LATEST_POST_JQ")
           if ! grep -qE '^SOLEUR_HEARTBEAT_RECONCILE_MISMATCH ' <<< "$LATEST"; then
             echo "The latest reconcile post on #$EXISTING lists no rows; the clear is already recorded."

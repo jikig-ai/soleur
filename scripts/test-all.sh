@@ -5602,6 +5602,31 @@ fi
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
+  # START-FIRST (#12013): these arms are registered first on purpose. In the pooled
+  # local gate a suite starts as the registration stream reaches it, and a queued `*`
+  # (drain barrier) suite blocks every later launch; with no `*` suite live or queued
+  # ahead of it, an empty-token suite such as an arm starts as soon as a slot is
+  # free. The arms include the longest suite of the gate (-a), so registered late
+  # they ended the run. The three move together: hoisting
+  # only -a leaves -b and -c behind the barrier. Applies to a pooled run only (the
+  # local --affected gate); serial runs and CI shard legs get the same order but no
+  # wall-time change. Pinned by scripts/lib/test-suite-lanes.test.sh section 7;
+  # numbers and rationale: ADR-242, decision 29.
+  #
+  # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
+  # battery was the test-scripts shard's worst leg, so it registers THREE times —
+  # the -a/-b/-c arms that follow carrying complementary --rows ranges over its
+  # DECLARED_TOTAL gated sites. Unconditional (no relevance gate,
+  # so no skip_suite pairing — the suite is never declined). The boundary lives in
+  # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
+  # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
+  # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
+  # the battery must land in the same commit as a re-split of these ranges.
+  # Literal path in argv, never "$f": the totality checker resolves each arm's
+  # battery from the run_suite command token and dies on <unresolved>.
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-599
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
@@ -7494,21 +7519,11 @@ if want_scripts; then
         continue
       fi
     fi
-    # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
-    # battery was the test-scripts shard's worst leg, so it registers THREE times —
-    # the -a/-b/-c arms below carrying complementary --rows ranges over its
-    # DECLARED_TOTAL gated sites. Unconditional like its siblings (no relevance gate,
-    # so no skip_suite pairing — the suite is never declined). The boundary lives in
-    # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
-    # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
-    # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
-    # the battery must land in the same commit as a re-split of these ranges.
+    # The replay arms register at the top of this shard (start-first block); this arm
+    # keeps the bare suite file out of the plain registration below. The test on the
+    # next line is read by lint-orphan-test-suites.sh and scripts-shard-totality, so
+    # the `if` stays.
     if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
-      # Literal path in argv, never "$f": the totality checker resolves each
-      # arm's battery from the run_suite command token and dies on <unresolved>.
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-599
       continue
     fi
     run_suite "$f" bash "$f"

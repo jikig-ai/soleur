@@ -124,7 +124,7 @@ export const GRANT_MISSING_MESSAGE =
 export const WORKSPACE_CHANGED_MESSAGE =
   "The active workspace changed after the approval was granted, so the action was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation in the intended workspace if they still want it done.";
 export const APPROVED_COMMIT_UNAVAILABLE_MESSAGE =
-  "The commit the Owner approved is not available in the workspace, so the push was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation if they still want it pushed.";
+  "The commit the Owner approved is not available in the workspace, so the push was NOT performed, and the Owner's approval is spent. Do not retry in this conversation. Tell the user, and ask them to start a new conversation if they still want it pushed.";
 
 const REFUSAL_BY_REASON: Record<GrantRefusedReason, { error: string; code: string; status: number }> = {
   grant_missing: { error: GRANT_MISSING_MESSAGE, code: "approval_grant_missing", status: 403 },

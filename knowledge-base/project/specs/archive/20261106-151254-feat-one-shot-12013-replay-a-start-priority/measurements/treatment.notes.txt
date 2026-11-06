@@ -1,0 +1,24 @@
+name=treatment commit=da5462990e head=85864583d3 origin_main=da5462990e
+enum first rows:
+1:SUITE_COMMAND	plugins/soleur/test/ci-pr-affected-replay-a	bash	plugins/soleur/test/ci-pr-affected-replay.test.sh	--row
+2:SUITE_COMMAND	plugins/soleur/test/ci-pr-affected-replay-b	bash	plugins/soleur/test/ci-pr-affected-replay.test.sh	--row
+3:SUITE_COMMAND	plugins/soleur/test/ci-pr-affected-replay-c	bash	plugins/soleur/test/ci-pr-affected-replay.test.sh	--row
+4:SUITE_COMMAND	tests/hooks/incidents	bash	tests/hooks/test_incidents.sh
+loadavg_start=5.71 6.69 9.45
+2026-11-06T12:32:45Z
+heavy_start:
+%CPU ELAPSED COMMAND
+25.1       4 bash /var/tmp/soleur-run.433429.M4C4L5sq/tmp.OWJYyJgfSZ/test-all-bun-1-1.sh
+19.2      70 bash /data/git-repositories/jikig-ai/soleur/scripts/tmpfs-guard.sh
+11.4   11723 /opt/zen-browser-bin/zen-bin
+10.8   17010 /home/jean/.local/share/mise/installs/codex/latest/bin/codex --no-daemon
+ 7.8   11071 /opt/zen-browser-bin/zen-bin -contentproc -isForBrowser -prefsHandle 0:53917 -prefMapHandle 1:309182 -jsInitHandle 2:161360 -parentBuildI
+loadavg_end=8.67 9.68 10.81
+2026-11-06T13:08:20Z
+heavy_end:
+%CPU ELAPSED COMMAND
+20.4     103 bash /data/git-repositories/jikig-ai/soleur/scripts/tmpfs-guard.sh
+10.4   19145 /home/jean/.local/share/mise/installs/codex/latest/bin/codex --no-daemon
+10.1   13858 /opt/zen-browser-bin/zen-bin
+ 8.2       5 bash /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-10390-residual-chores/scripts/apply-delivery-gap.sh --fixture-dir /v
+ 6.9   13206 /opt/zen-browser-bin/zen-bin -contentproc -isForBrowser -prefsHandle 0:53917 -prefMapHandle 1:309182 -jsInitHandle 2:161360 -parentBuildI

@@ -184,12 +184,14 @@ jobs:
           # while the search/issues API reports `github-actions[bot]` — accept
           # either shape (a bot-authored issue from the Actions app), never a
           # human-authored same-titled issue.
+          # dedupe: fail-closed — deliberate || arm on the continued line: an unreadable keep-open read exits 1 rather than file a duplicate standing issue (the $( spans the jq program's literal newlines — no backslash joins — so the arm sits outside the lint's logical-line model)
           matches="$(gh issue list --state open --label keep-open --limit 200 \
             --json number,title,author,labels \
             --jq "[.[] | select(.title == \"$TITLE\"
                     and .author.is_bot == true
                     and (.author.login | test(\"github-actions\"))
-                    and ([.labels[].name] | index(\"meta/machinery\") != null)) | .number]")"
+                    and ([.labels[].name] | index(\"meta/machinery\") != null)) | .number]")" \
+            || { echo "::error::scheduled-machinery-drain: keep-open dedupe query failed — refusing to touch the standing issue (a blind read could file a duplicate)"; exit 1; }
           # `matches` is a JSON array of numbers sorted newest-first — keep it
           # JSON (bare `.[].number` lines would break the `.[0]` reads below).
           # Label membership uses index(), NEVER contains(): jq `contains` on an

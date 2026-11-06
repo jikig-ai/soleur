@@ -14,6 +14,7 @@ amended_by:
   - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
   - "#10117 (2026-10-13) — decision 27: the root-anchored `glob:` grammar residual is detected, not extended; the extension triggers only on a live dir-less corpus file (#10198); see ## Amendment — 2026-10-13 (#10117)"
   - "#10198 (2026-10-23) — decision 28: the root-anchored `glob:` grammar lands — a `/`-free head mints a real narrow edge over dir-less diff lines, the bash classifier is shared (`_affected_glob_split`), and the th8 row becomes a per-member coverage census; see ## Amendment — 2026-10-23 (#10198)"
+  - "#12013 (2026-11-06) — decision 29: the three replay arms register first so they start with the pool; measured pool phase 2703 s -> 1882 s on one pinned diff, cold gate 2134 s, the 600 s bar is not met; see ## Amendment — 2026-11-06 (#12013)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -966,3 +967,38 @@ What it shows, and its limits:
 ### Alternatives considered
 
 Unconditional skip-ahead (breaks the `*` barrier); a stderr tee instead of a sidecar (parses display text, process-substitution status hazard); a suite-result memo (rejected twice before); narrowing the token derivation to exec-shaped references (a rough 32 versus 144 classification, deadlock cost); a default-off backfill knob (no measured gain without it); mirroring the signal-name predicate in the gate reader (two copies drift; the writer owns it).
+
+## Amendment — 2026-11-06 (#12013)
+
+Raw rows: `knowledge-base/project/specs/archive/20261106-151254-feat-one-shot-12013-replay-a-start-priority/measurements/` (`summary.txt` holds the method and every derived figure below). Ruled by CTO agent, 2026-11-06: static start-first registration over a scheduler priority; the `*`-last lever is a separate change; cold readings of one pinned diff in a private clone decide the claim (full text in `decision-challenges.md` beside the measurements).
+
+**Outcome.** The 10-minute bar of #12013 is still not met. One control and one treatment of the same replayed diff (162 of 740 runnable registrations) took 2992 s and 2134 s of wall; the pool phase fell from 2703 s to 1882 s (-821 s). This change is `Ref #12013`; the issue stays open.
+
+### Decision 29: register the replay arms first
+
+In a pooled run, registration order decides the start order of any suite that no token conflict or `*` holds back. `_pj_submit` queues a suite as the registration stream reaches it and `_pj_fill` only chooses among suites already queued; a queued `*` (drain barrier) suite blocks every later launch. The three `ci-pr-affected-replay-{a,b,c}` arms, the longest suites of the gate, were registered at rows 113 to 115 of the 160 suites one pinned diff selected, behind one `*` suite and a long `lock:test-all` chain, and started 1296 s into the pool phase. They now register first, in the first `if want_scripts` block of `scripts/test-all.sh`; labels, argv, gating and verdict order are unchanged and the scheduler is untouched. `scripts/lib/test-suite-lanes.test.sh` section 7 pins the position over the real raw registration stream: each arm exactly once, the whole battery never registered as a plain suite (by label, or by argv without `--rows`), each arm's row at most the pool width, and no `*` row before the last arm. Nothing is asserted about any other suite's order.
+
+### Measurement
+
+| Reading | Wall | Cold derive | Pool phase | `replay-a` start (pool offset) | At most one suite live | Load average (start to end) |
+|---|---|---|---|---|---|---|
+| control (before the edit) | 2992 s | 278 s | 2703 s | +1296 s | 1098 s | 8.4 to 5.7 |
+| treatment (arms first) | 2134 s | 244 s | 1882 s | 0 s | 112 s | 5.7 to 8.7 |
+
+Landed by the criteria recorded before the readings in `decision-challenges.md` (rows Q3 to Q5 and D2): `replay-a` started within 120 s of pool start (0 s); the pool phase is at least 300 s below the control (821 s); no failure the control does not share (both readings fail only `apps/web-platform [repo-wide+component]`, the known clone artifact). Per that protocol the second control was conditional (only if the gain was within 150 s of the bar or the readings looked disturbed) and was not run. Caveats one control cannot remove: the control ran first, so OS caches were warmer for the treatment (cold derive 278 s to 244 s with no code difference); the summed suite walls were 6593 s and 6183 s (about 100 s of pool phase from lower contention alone); the starting load averages were 8.4 and 5.7. The planning-time model predicted -480 to -600 s, and the measured -821 s is one reading above that. Read it as: at least the 300 s bar (the three earlier pool readings of a similar selection were 2728, 2942 and 2964 s), probably 500 to 800 s, not a point estimate. `replay-a` start offsets are from pool start; the end offsets quoted below are from run start. Per-suite start and end rows are in `control1.suites.tsv` and `treatment.suites.tsv`, derived by `derive.sh`, beside `summary.txt`.
+
+### What this does not claim, and what it costs
+
+- The cold gate is about 2.1 ks, still about 3.5 times the 600 s bar. Not claimed: a result for diffs that select a different suite mix, or a two-control confidence band. The model used at planning time predicted -516 to -653 s of pool phase; the measured -821 s is larger and the model-versus-measured start was not re-run for this control.
+- The cold gate can still end in a budget kill: the 2400 s budget includes the derive and the queue wait, and these readings run `test-all.sh` directly, so they never exercised it. The kill now lands on suites queued behind the `*` barrier, and only reaped reds reach the sidecar. The treatment's 2134 s clears the 2400 s budget by 266 s on the lightest sum of suite walls of any reading; the control (2992 s) would have been killed, and applying the planning-time model to the earlier readings gives about 2260 to 2550 s, so a kill stays plausible. `budget_seconds` is not raised.
+- A serial fallback (`lock-not-held`, width 1, `bash<5.1`) now spends the first part of the budget on the three arms (about 2.2 ks standalone) before the roughly 110 cheap suites, so a budget kill in a serial fallback leaves most cheap suites unrun. The hoist is not conditional on pool mode by choice: the enumerate walk resolves its mode silently to serial, so a dispatch-only conditional would put the two walks out of step (`AFFECTED_DIVERGENT`), and passing the mode to the child would add env coupling the CTO ruling avoided. CI shard legs run serially with one arm per leg and no budget, so their total is unchanged; no workflow invokes `--affected`.
+- Serial and pooled runs print verdict blocks in registration order, so the arms' blocks and their `TEST_TIMING_LOG` rows now come first (no consumer is order-sensitive). In positional shard mode (manifest absent or mismatched, `SOLEUR_SHARD_MANIFEST=off`, a local `SCRIPTS_SHARD`) the registrations between the arms' new and old position shift by three ordinals; that affects balance only, and CI uses manifest mode.
+- Every `*` suite now waits for the arms to drain (it runs alone either way). Running the `*` suites last is the next lever, modelled at about a further 300 s and tracked as #12231; it was kept out of this change so the measurement is not confounded.
+
+### Alternatives considered
+
+A scheduler-level priority or weight-ordered buffering (a priority cannot start a suite that is not registered yet; buffering changes streaming and lock-holder stamping, and the committed weights are CI-shard measurements, not pooled walls); a full reorder by measured wall (an oracle, modelled only 70 to 250 s better than hoisting the three arms); hoisting `replay-a` alone (the model shows `-b` and `-c` then start behind the barrier and the gain shrinks by 70 to 490 s); moving the `*` suites last in the same change (confounds the measurement, #12231).
+
+### Known limits and next levers (unchanged by this decision)
+
+Finished workers are reaped only when the pool saturates or at drain (evidence bar on #12013); edge narrowing for the replay arms is #12151 and narrowing the `lock:test-all` derivation is #12152. Both are still deferred. New from the treatment reading: `replay-a` ends at +1765 s but the run ends at +2134 s, and the last suites to finish (`operator-script`, `ship-phase-7-poll-fixtures`, `dev-ledger-parity`) register after the `*` barrier at `test-all-capacity-signal`, so the arms are no longer the tail and #12231 is now the larger lever. The arms are also unbalanced (pooled 1513 s, 570 s and 530 s for 193, 193 and 213 rows), so a pooled run cannot finish before about 252 + 1513 s; rebalancing the `--rows` split by weight is the next lever after that and needs a re-split and a manifest re-pin. The pool-phase floor (sum of walls / 4) is about 1546 s here, so the 600 s bar needs roughly 2.5 times less work, not only better ordering.

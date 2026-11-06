@@ -445,8 +445,8 @@ vi.mock("@/server/github-api", async (importOriginal) => ({
   githubApiGet: mockGithubApiGet,
 }));
 
-// #11636: forwards to the REAL gate-deps factory but injects a `headSha` seam (the real `gitHeadSha` would run git in the
-// fixture's nonexistent workspace). The wrapper is a spy, so the args the dispatcher passes (workspaceId, repoSlug,
+// #11636: forwards to the REAL gate-deps factory but injects a `headSha` seam (the real `gitHeadSha` runs no git any more; it
+// reads `<workspace>/.git/HEAD` as data and would refuse the fixture's nonexistent workspace with `git_dir_not_plain`). The wrapper is a spy, so the args the dispatcher passes (workspaceId, repoSlug,
 // workspacePath, grants) are inspectable.
 vi.mock("@/server/approval/gate", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/approval/gate")>();
