@@ -35,3 +35,27 @@
 - architecture-strategist: collect() chokepoint + two-PR route + ceiling ruling all endorsed, no contradictions; 3×P3 all previously fixed.
 - Panel verdict: ZERO P1/P2 blocking findings remain unfixed. Findings fixed: H6 `<=`→`-eq` equality pin (P2), codeql double-warning → `exit 0` in arm (P2), symlinked action-dir guard, stale message wording, H6 comment conflation, marker relabels, plan AC10 fix.
 - Remaining pipeline: ADR-267 fix-round (--since 112dc18c7c), QA (Test Scenarios largely executed: lint suite green, parity vitest 51/51, cherry-pick verified), compound, ship → **`gh pr ready`/`gh pr merge` REQUIRE fresh operator go-ahead** (epic delegation = drift dispatch + revert-PR only, expires 2026-11-20). Post-merge: apply-sentry-infra read-back (detectorIds ∋ 2607514), delete remote feat-one-shot-10390-ci-hygiene-batch, verify #12092 closed.
+
+## Fix-round 1 (ADR-267, --since 112dc18c7c → 53d274bda8) — 2026-11-06
+
+Seat resolution: `fix-round-seats.sh --files <fix-diff> --finding-seats security-sentinel,code-quality-analyst,git-history-analyzer,agent-native-reviewer,pattern-recognition-specialist,architecture-strategist` (reconstructed from this file's Review-Phase narrative — the prior session persisted no formal dedup ledger; disclosed as the degraded-but-fail-safe path). Path map added test-design-reviewer + semgrep-sast + shellcheck; `unmapped-paths: scripts/lint-gh-dedupe-shape.py` → code-quality floor applied. seats=9 (+1 verifier pending).
+
+### Dedup ledger — round 1 findings → reporting seats (defect-class keyed, not file-scoped)
+
+- **D1 (P2)** symlink guard zero fixture coverage; deleting py:570-577 regressed green (test-design F1-P2; agent-native F2; code-quality F3; pattern F4). → reporting seats: test-design-reviewer, agent-native-reviewer, code-quality-analyst, pattern-recognition-specialist.
+- **D2 (P2)** H6 comment rewrite reintroduced the `(:31)` stale-line-cite class — 7 of 15 cites wrong (pattern F1-P2; agent-native F3; code-quality F1; architecture P3; git-history F3). → seats: pattern-recognition-specialist, agent-native-reviewer, code-quality-analyst, architecture-strategist, git-history-analyzer.
+- **D3 (P3)** ancestor-level symlink escape: `.github`/`.github/workflows`/`.github/actions` as links still scanned outside content under in-root relpaths (security F1; agent-native F1; pattern F2; git-history F4). → seats: security-sentinel, agent-native-reviewer, pattern-recognition-specialist, git-history-analyzer.
+- **D4 (P3)** H6 pass/fail labels still printed `<=` under the new `-eq` predicate (code-quality F2; git-history F2; pattern F3; test-design F4; architecture nit). → seats: code-quality-analyst, git-history-analyzer, pattern-recognition-specialist, test-design-reviewer.
+- **D5 (P3)** plan.md AC10 rationale false — "`git log --oneline` shows subjects only" (code-quality F4; git-history F1). → seats: code-quality-analyst, git-history-analyzer.
+- **D6 (P3)** H6 count parse vacuous under advisory-summary format drift (test-design F2). → seat: test-design-reviewer.
+- **D7 (P3)** `zero scan targets` branch unreachable + both renamed refusal messages unasserted (test-design F3). → seat: test-design-reviewer.
+- **D8 (P3, pre-existing — flagged for record)** codeql-1537-revisit-watch.yml blind `gh issue view | grep -cF` read → duplicate sentinel comment on transient gh failure (agent-native F4). → seat: agent-native-reviewer.
+- Nit: duplicated 4-line advisory print between `_add` and the dir guard (code-quality) — folded into the `_skip_link` helper extraction.
+
+### Round-1 disposition (commit 59722ca50b)
+
+All dedup'd findings fixed inline: D3 → `_skip_link` helper + `islink` guards on `gh_dir`/`wf_dir`/`act_dir` ancestors; D1 → new fixtures H10 (linked action subdir skips + advisory), H11 (linked `.github`/`.github/workflows` → rc=2 zero-targets refusal), H12 (linked `.github/actions` skips actions census only) — mutation-verified (guard-strip mutant reds H11×2+H12); D2 → line cites replaced with `file › ident` content anchors; D4 → `<=`→`==` labels; D5 → AC10 rationale corrected (source hash unreachable, not "subjects only"); D6 → G9d pins `advisory: 1 quoted-capture` summary shape; D7 → H1/H2 message greps + H11's `zero scan targets` assert; D8 → captured-arm shape `comments_body="$(gh issue view …)" || { warn; exit 0; }` replacing the `| grep -cF` blind read. Suite 70/70 green (was 65; +G9d, H10, H11×2, H12). Live lint unclassified:0 / advisory:0.
+
+**Round-1 anomaly:** the main 8-seat panel ran (§Review Phase above + tally agent_rounds) but its `Reviewed-By-Soleur`/`Reviewed-Coverage` branch trailer was never emitted — the PR body's `Reviewed-Coverage: sequential-fallback` line is the PLAN-phase placeholder ("review seats to follow per pipeline"), not panel evidence. A late accurate main-panel attestation is owed at trailer time; the fix round attests `--fix-round` keys only.
+
+Seat reports: `/var/tmp/review-12235-{security-sentinel,code-quality-analyst,git-history-analyzer,pattern-recognition-specialist,architecture-strategist,agent-native-reviewer,test-design-reviewer,semgrep-sast}-fixround1.md`
