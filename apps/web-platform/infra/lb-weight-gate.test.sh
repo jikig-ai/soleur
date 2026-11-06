@@ -686,7 +686,7 @@ c4_assert "C.4-G11b: …but WITHOUT requires_runtime_bind_probe=true (the serve 
 # pool-health read proves origin HEALTH, not that the relay listens on web-2's private address. This step
 # closes that: it reads web-2's OWN relay report from Better Stack (scripts/lib/web2-relay-rows.sh, the
 # credentials ride the environment, never argv) and refuses unless >= 2 rows in the last 180 s, newest <= 120 s,
-# every row proxy_state=listening on the address Terraform STATE holds for web-2, port 8443, workspaces_populated=1.
+# every row proxy_state=listening on the address Terraform STATE holds for web-2, port 8443 (workspaces_populated is recorded, not judged: owner ruling 2026-11-06).
 # R1-R8 pin the step's position and form; E1-E24 EXECUTE the step's own run body against stubbed `terraform` and
 # `curl` (the real helper and the real scripts/betterstack-query.sh in between), one refusal per fixture.
 PROBE_STEP="$(step_of 'relay bind probe \(serve only\)' || true)"
@@ -789,7 +789,9 @@ e_reset; { r_row 20 "$(r_line listening ::)"; r_row 80 "$(r_line listening ::)";
 e_reset; { r_row 20 "$(r_line listening 0.0.0.0)"; r_row 80 "$(r_line listening 0.0.0.0)"; } > "$R_FX/rows"; e_refuse "C.4-E9b: addr=0.0.0.0 (wildcard)" "reason=addr_wildcard"
 e_reset; r_state 10.0.1.12; e_refuse "C.4-E10: rows say 10.0.1.11 but STATE says 10.0.1.12 (address compared against state, not a literal)" "reason=addr_mismatch"
 e_reset; { r_row 20 "$(r_line listening 10.0.1.11 8444)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E11: port 8444" "reason=port_mismatch"
-e_reset; { r_row 20 "$(r_line listening 10.0.1.11 8443 0)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E12: workspaces_populated=0" "reason=workspaces_unpopulated"
+e_reset; { r_row 20 "$(r_line listening 10.0.1.11 8443 0)"; r_row 80 "$(r_line listening 10.0.1.11 8443 0)"; } > "$R_FX/rows"; r_exec
+c4_assert "C.4-E12: workspaces_populated=0 is RECORDED, not judged (owner ruling 2026-11-06) → exit 0 and a GREEN line" \
+  "$([[ "$R_RC" -eq 0 && "$(cat "$R_WORK/summary")" == *GREEN* ]] && echo 1 || echo 0)"
 e_reset; { r_row 20 "$(r_line) extra=1"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E13: trailing text after the grammar (substring match must not pass)" "reason=row_malformed"
 e_reset; { r_row 20 "x$(r_line)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E13b: leading text before the grammar" "reason=row_malformed"
 e_reset; { r_row 20 "$(r_line)" soleur-web-platform; r_row 80 "$(r_line)" soleur-web-platform; } > "$R_FX/rows"; e_refuse "C.4-E14: rows from another host do not count" "reason=rows_below_floor"

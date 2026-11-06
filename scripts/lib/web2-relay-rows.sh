@@ -20,8 +20,11 @@
 #   GREEN rows=<n> newest_age_s=<s> addr=<ip>
 #   RED reason=<token>
 # GREEN needs ALL of: >= 2 rows in the last 180 s; the newest row <= 120 s old; every in-window row well-formed,
-# proxy_state=listening, addr == expected (the IP in Terraform state; a wildcard / none never matches), port 8443,
-# workspaces_populated=1. An empty body is zero rows (RED), never a pass. A QUERY FAILURE is neither: wrr_fetch
+# proxy_state=listening, addr == expected (the IP in Terraform state; a wildcard / none never matches), port 8443.
+# workspaces_populated is parsed (it must be 0 or 1 or the row is malformed) and RECORDED, never judged: owner ruling
+# 2026-11-06 on #8211, CTO ruling same day. web-2 holds no workspace directories until it serves (ADR-143 D3), so a
+# populated=1 requirement before serving was circular. Volume identity is proven by the WORKSPACES_LUKS_CUTOVER_AT
+# and GIT_DATA_LUKS_CUTOVER_AT markers, which the gate chain checks before this step. An empty body is zero rows (RED), never a pass. A QUERY FAILURE is neither: wrr_fetch
 # returns non-zero and the caller refuses without judging. The judge echoes only its closed vocabulary, never row text.
 #
 # Sourceable under `set -u`/`set -e`; sets no shell options.
@@ -93,7 +96,6 @@ wrr_judge() {
                   elif ($rows | any(.p.addr == "none" or .p.addr == "::" or .p.addr == "0.0.0.0")) then "RED reason=addr_wildcard"
                   elif ($rows | any(.p.addr != $exp)) then "RED reason=addr_mismatch"
                   elif ($rows | any(.p.port != $port)) then "RED reason=port_mismatch"
-                  elif ($rows | any(.p.wp != "1")) then "RED reason=workspaces_unpopulated"
                   else "GREEN rows=\($in | length) newest_age_s=\($newest) addr=\($exp)" end
               end
           end

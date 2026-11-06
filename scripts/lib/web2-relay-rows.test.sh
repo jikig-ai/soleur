@@ -60,7 +60,9 @@ done
 { row 20 "$(line listening 10.0.1.12)"; row 80 "$(line listening 10.0.1.12)"; } | jv "J11 addr differs from the state address -> refused" "RED reason=addr_mismatch" "$EXP"
 { row 20 "$(line listening "$EXP" 8444)"; row 80 "$(line listening "$EXP" 8443)"; } | jv "J12 port 8444 -> refused" "RED reason=port_mismatch" "$EXP"
 { row 20 "$(line listening "$EXP" 80)"; row 80 "$(line listening "$EXP" 80)"; } | jv "J12b port 80 -> refused" "RED reason=port_mismatch" "$EXP"
-{ row 20 "$(line listening "$EXP" 8443 0)"; row 80 "$(line listening "$EXP" 8443 1)"; } | jv "J13 workspaces_populated=0 -> refused" "RED reason=workspaces_unpopulated" "$EXP"
+{ row 20 "$(line listening "$EXP" 8443 0)"; row 80 "$(line listening "$EXP" 8443 1)"; } | jv "J13 workspaces_populated=0 on one row -> still GREEN (owner ruling 2026-11-06: web-2 holds no workspaces until it serves; the requirement was circular, volume identity rests on the LUKS markers)" "GREEN" "$EXP"
+{ row 20 "$(line listening "$EXP" 8443 0)"; row 80 "$(line listening "$EXP" 8443 0)"; } | jv "J13b workspaces_populated=0 on every row -> GREEN (the field is recorded, not judged)" "GREEN" "$EXP"
+{ row 20 "$(line disabled none 0 0)"; row 80 "$(line listening "$EXP" 8443 0)"; } | jv "J13c populated=0 does not rescue a non-listening row -> refused" "RED reason=proxy_state_not_listening" "$EXP"
 { row 20 "$(line)"; row 80 "$(line)" "soleur-web-platform"; } | jv "J14 a row from another host is not counted: 1 row" "RED reason=rows_below_floor" "$EXP"
 # the grammar is the WHOLE line: a prefix, a suffix, an unknown state or a wrong field order is malformed
 { row 20 "$(line)"; row 80 "x$(line)"; } | jv "J15 leading junk -> malformed" "RED reason=row_malformed" "$EXP"
