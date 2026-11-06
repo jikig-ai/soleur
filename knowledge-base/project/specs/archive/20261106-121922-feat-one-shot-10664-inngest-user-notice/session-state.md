@@ -19,3 +19,8 @@
 - `soleur:plan` (full lifecycle), `soleur:deepen-plan` (all halt gates evaluated: 4.6/4.8/4.12 PASS; rest correctly skipped)
 - Gates: `scripts/lint-infra-no-human-steps.py --changed --base origin/main`, `scripts/markdown-lint.sh`, `technical-ruling-gate.sh --branch`, gh issue/PR probes
 - 2 commits pushed (`04d6d7c6c5`, `e3735cc360`); no product code touched.
+
+## Ship Phase (2026-11-06)
+- Review: 3-seat panel (user-impact BLOCK→fixed F1-F7; copywriter CONCUR; factual-accuracy CONCUR 8/8) + ADR-267 fix round (re-anchored history conditional Hetzner→Supabase).
+- KB artifacts archived (`20261106-121922-*`), `gh pr ready` + `gh pr merge --squash --auto` authorized by operator and armed 11:19Z; merge-queue repo.
+- cto_spawns=0; agent_rounds: planning subagent, work, 3 review seats, fix-round seat.
