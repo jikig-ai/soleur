@@ -176,7 +176,8 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # ── #6894 / ADR-142: the store is not on the encrypted volume ───────────────────────────────────
 #
 # WHAT IT DETECTS. After the LUKS cutover, the dedicated host's own probe row resolves the device
-# backing /mnt/data all the way to a Hetzner by-id alias (`data_mount_devid`, probe_schema=8). Post
+# backing /mnt/data all the way to a Hetzner by-id alias (`data_mount_devid`, added at
+# probe_schema=8; probe_schema=9's `data_luks` then reads the container TYPE directly, #8525). Post
 # cutover that alias must be the ADDITIVE volume's. Anything else is the store having moved back —
 # an on-host rollback, or any boot that mounted a device other than the additive volume (the
 # plaintext volume is destroyed and the template no longer has an arm for it, #9786, so this is now
@@ -216,7 +217,7 @@ locals {
   # The probe row is a space-separated key=value message, so the field is matched WITH its key and
   # WITH a trailing space — `data_mount_devid=scsi-0HC_Volume_1234` is a prefix of
   # `…_12345`, and the row has a field after this one on every emitted path (the emitted row ends
-  # `data_mount_devid=… registry_fns=…`, true in `message` and in the fallback's `detail`). The negation is over
+  # `data_mount_devid=… registry_fns=… data_luks=…`, true in `message` and in the fallback's `detail`). The negation is over
   # the whole predicate, so a row that cannot be matched at all (a schema change that drops or
   # renames the field) FIRES rather than going quiet: an unreadable answer is not a clean one.
   # The row set is also pinned to the probe's OWN EMITTER (the first conjunct below, #8874):
@@ -392,7 +393,7 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "The dedicated Inngest host reports /mnt/data backed by a volume that is NOT the encrypted one (probe_schema=8 data_mount_devid). Redis writes are landing unencrypted. If Vector was down, the evidence row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=inngest-server-probe-vector-down) — decode its .detail, not the message. Runbook: ${local.inngest_luks_wrong_volume_runbook_url}"
+  incident_cause = "The dedicated Inngest host reports /mnt/data backed by a volume that is NOT the encrypted one (data_mount_devid, probe_schema>=8; the probe_schema=9 row's data_luks field names the backing device's blkid TYPE for the same verdict). Redis writes are landing unencrypted. If Vector was down, the evidence row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=inngest-server-probe-vector-down) — decode its .detail, not the message. Runbook: ${local.inngest_luks_wrong_volume_runbook_url}"
   metadata = {
     runbook = local.inngest_luks_wrong_volume_runbook_url
   }

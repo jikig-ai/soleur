@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1261
-# generated-at=2026-11-05T22:36:36Z
+# default-weight-ms=1251
+# generated-at=2026-11-06T07:45:07Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -123,6 +123,7 @@ plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	2180	measured
 plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	412	measured
 plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	97	measured
 plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	147	measured
+plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh	1261	floor
 plugins/soleur/skills/drain-prs/test/argv-ceiling.test.sh	82	measured
 plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	886	measured
 plugins/soleur/skills/eval-harness/test/extract-block.test.sh	217	measured
@@ -173,7 +174,7 @@ plugins/soleur/test/approval-card-wording.test.sh	150	measured
 plugins/soleur/test/audit-flag-flip.test.sh	152	measured
 plugins/soleur/test/auto-close-scanner.test.sh	271	measured
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1222	floor
-plugins/soleur/test/boundary-prefix.test.sh	1222	floor
+plugins/soleur/test/boundary-prefix.test.sh	718	measured
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	13	measured
 plugins/soleur/test/c4-count-parity.test.sh	1120	measured
 plugins/soleur/test/c4-from-components.test.sh	14478	measured
@@ -386,6 +387,7 @@ scripts/ci-deploy-sentry-post-fail-6475	122	measured
 scripts/ci-draft-light	87009	measured
 scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
+scripts/ci-oracle-lane	45000	floor
 scripts/ci-pr-selection	1222	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
@@ -407,7 +409,7 @@ scripts/dogfood/grok-gpu-bootstrap	54	measured
 scripts/dogfood/grok-measure	36	measured
 scripts/domain-model-drift	1066	measured
 scripts/egress-audit-retention-check	1222	floor
-scripts/egress-gw-probe-silent-12180	1261	floor
+scripts/egress-gw-probe-silent-12180	1251	floor
 scripts/ensure-doppler	103	measured
 scripts/ensure-kb-index	1753	measured
 scripts/expenses-verify-by-check	257	measured
@@ -457,6 +459,7 @@ scripts/inngest-cutover-flip-rollout-7761	8455	measured
 scripts/inngest-host-not-serving-7674	297	measured
 scripts/inngest-host-state	1982	measured
 scripts/inngest-liveness-classify	208	measured
+scripts/inngest-luks-field-8525	1251	floor
 scripts/inngest-probe-heartbeat-feeder	1222	floor
 scripts/inngest-provision-unit-8562	1061	measured
 scripts/inngest-restart-age-gate	75	measured
@@ -506,6 +509,8 @@ scripts/lint-feature-map-coverage-battery	1222	floor
 scripts/lint-feature-map-coverage-live	1222	floor
 scripts/lint-gh-argv-arg	11549	measured
 scripts/lint-gh-argv-arg-live	7092	measured
+scripts/lint-gh-dedupe-shape	1251	floor
+scripts/lint-gh-dedupe-shape-live	1251	floor
 scripts/lint-guard-contract	1221	measured
 scripts/lint-guard-contract-live	696	measured
 scripts/lint-infra-no-human-steps	2870	measured

@@ -411,3 +411,13 @@ apps/web-platform/server/inngest/functions/cron-approval-expiry.ts
 # (service-only RPCs that write, no user in scope); it holds no per-tenant data beyond the workspace ids
 # the RPCs return, which it never logs.
 apps/web-platform/server/inngest/functions/cron-git-data-erasure-redrive.ts
+
+# #8839 — cron-agent-spawn-stale-settle.ts is the stale-"Working" spawn backstop
+# sweep: it enumerates `action_sends` spawn rows still on Working whose
+# current_turn_started_at is older than finish-timeout + margin — a
+# platform-wide sweep with no per-tenant key, running in a scheduled Inngest
+# function where no user JWT exists to mint a tenant client from. Same cron
+# posture as cron-workspace-sync-health / event-scheduled-reminder. Its writes
+# go through the shared agent-on-spawn-settle settle path (terminal
+# failure_reason) and the spawn-dead-letter reporter — no PII egress.
+apps/web-platform/server/inngest/functions/cron-agent-spawn-stale-settle.ts

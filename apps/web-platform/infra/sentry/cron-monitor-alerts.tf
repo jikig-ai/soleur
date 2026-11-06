@@ -61,6 +61,9 @@ locals {
     # heartbeats (soleur-luks-monitor-host-timer-prd, soleur-claude-cost-capture-prd) are the paging surface and
     # time out when the feeder goes dark; route this after three measured check-ins (tracked on #11672).
     scheduled_deadman_heartbeat_feeder = "the Better Stack heartbeats are the paging surface; route after three measured check-ins (tracked on #11672)"
+    # #8839 — the stale-Working settle sweep's liveness monitor, added under the two-PR rule:
+    # the sweep's own spawn dead-letter report is the primary channel; route after measured check-ins.
+    scheduled_agent_spawn_stale_settle = "the sweep's own spawn dead-letter report is the primary channel; route after measured check-ins (#8839)"
   }
 }
 

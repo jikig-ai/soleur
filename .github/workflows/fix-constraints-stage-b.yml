@@ -234,7 +234,7 @@ jobs:
             "${file_list}" )
 
           # Open the PR only if one isn't already open for this branch.
-          existing=$(gh pr list --repo "$REPO" --head "$branch" --state open --json url --jq '.[0].url // ""')
+          existing=$(gh pr list --repo "$REPO" --head "$branch" --state open --json url --jq '.[0].url // ""') || { echo "::error::constraint-gate-stage-b: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; existing=""; }
           if [ -n "$existing" ]; then
             pr_url="$existing"
           else

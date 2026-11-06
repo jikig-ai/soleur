@@ -2,8 +2,8 @@
 # n=8
 # generated-from-run=incremental
 # generated-from-runs=incremental
-# default-weight-ms=1261
-# generated-at=2026-11-05T22:36:36Z
+# default-weight-ms=1251
+# generated-at=2026-11-06T07:45:07Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -125,6 +125,7 @@ plugins/soleur/skills/constraint-scaffold/test/boundary.test.sh	1
 plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	2
 plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	7
 plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	2
+plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh	5
 plugins/soleur/skills/drain-prs/test/argv-ceiling.test.sh	4
 plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	5
 plugins/soleur/skills/eval-harness/test/extract-block.test.sh	1
@@ -388,6 +389,7 @@ scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-draft-light	6
 scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
+scripts/ci-oracle-lane	4
 scripts/ci-pr-selection	2
 scripts/ci-push-dedupe	1
 scripts/classify-workflow-transitions	5
@@ -409,7 +411,7 @@ scripts/dogfood/grok-gpu-bootstrap	4
 scripts/dogfood/grok-measure	7
 scripts/domain-model-drift	4
 scripts/egress-audit-retention-check	1
-scripts/egress-gw-probe-silent-12180	4
+scripts/egress-gw-probe-silent-12180	5
 scripts/ensure-doppler	8
 scripts/ensure-kb-index	4
 scripts/expenses-verify-by-check	3
@@ -459,6 +461,7 @@ scripts/inngest-cutover-flip-rollout-7761	7
 scripts/inngest-host-not-serving-7674	4
 scripts/inngest-host-state	2
 scripts/inngest-liveness-classify	3
+scripts/inngest-luks-field-8525	4
 scripts/inngest-probe-heartbeat-feeder	6
 scripts/inngest-provision-unit-8562	5
 scripts/inngest-restart-age-gate	1
@@ -508,6 +511,8 @@ scripts/lint-feature-map-coverage-battery	1
 scripts/lint-feature-map-coverage-live	1
 scripts/lint-gh-argv-arg	1
 scripts/lint-gh-argv-arg-live	7
+scripts/lint-gh-dedupe-shape	4
+scripts/lint-gh-dedupe-shape-live	5
 scripts/lint-guard-contract	7
 scripts/lint-guard-contract-live	6
 scripts/lint-infra-no-human-steps	8

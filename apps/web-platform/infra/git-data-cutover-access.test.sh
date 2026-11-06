@@ -2577,7 +2577,10 @@ PSBAD
   ps_mut ps-zero-after-age 2 's#^( +)\$3 == "0" \{ z\[\$1\]\+\+ \}#\1$3 == "0" \&\& $2 ~ /^[0-9]+$/ { z[$1]++ }#' case_ps_negzero
   ps_mut ps-refused-hidden 2 's#^( +)grep -m1 .\^SOLEUR_CREDENTIAL_REFUSED. "\$BS_ERR" >&2 \|\| true#\1true#' case_ps_refused
   ps_mut ps-err-kept 2 '/^ +pause_sql=/,/^ +if \[ "\$pause_zero" -gt 0 \]; then fail pause_not_on/s#rm -f "\$BS_ERR" "\$BS_ERR\.rows"#: keep#' case_ps1
-  ps_mut ps-secrets-unscoped 2 's# --only-secrets [A-Z_,]+##' case_ps1
+  # 6 diff lines, not 2: #9943's liveness block adds two more `--only-secrets` doppler reads
+  # (BETTERSTACK_API_TOKEN_READONLY for the heartbeat, BETTERSTACK_QUERY_* for the post-boot
+  # state=ok read) — the mutation strips all three, so the diff is 3 lines x 2.
+  ps_mut ps-secrets-unscoped 6 's# --only-secrets [A-Z_,]+##' case_ps1
   if mutate ps-token-step-level "$WF" 2 's#^( +)BS_DOPPLER_TOKEN: \$\{\{ secrets\.DOPPLER_TOKEN \}\}$#\1DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}#'; then
     python3 "$T/wf.py" "$MUTANT" "$IV" "$APPLY_WF" "$T/mut" > "$T/mut/wf-ps-token.tsv" 2>&1
     mutant_red ps-token-step-level wf_row "$T/mut/wf-ps-token.tsv" "WF-pausegate:"

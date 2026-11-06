@@ -151,6 +151,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-anthropic-content-position-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
+  "scripts/lint-gh-dedupe-shape-live"
   "scripts/lint-guard-contract-live"
   "scripts/lint-feature-map-coverage-live"
   "scripts/lint-integration-env-gates-live"
@@ -210,6 +211,12 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-errexit-capture"
   "scripts/lint-workflow-issue-write-scope"
   "scripts/lint-workflow-step-env-refs"
+  # #10448 boundary-prefix sweeps .claude/hooks{,/lib} and plugins/soleur/scripts{,/lib}
+  # wholesale (4 dir globs, ~170 files) — a file class scanned wholesale like the ratchets
+  # above. Measured-verdict install (CTO ruling 2026-11-05): 718 ms measured,
+  # selection over the 25% bar on both PR5d readings (97/200 conservative,
+  # 48/151 excluded) — the policy's own >25% answer, never an amended bar.
+  "plugins/soleur/test/boundary-prefix.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-statuses.test.sh"
   "plugins/soleur/test/lint-distribution-content.test.sh"
@@ -498,6 +505,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_PREACTIVATION_TEST_SH_PATHS=(
   ".github/workflows/ci.yml"  # plugins/soleur/test/ci-pr-affected-preactivation.test.sh:434
   "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
+  "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
+  "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
+  "plugins/soleur/test/cloudflare-readonly.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUD_INIT_STRIP_HELPERS_MUTATION_TEST_SH_PATHS=(
@@ -2007,6 +2020,20 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/ci-oracle-lane (#12156, ADR-276 amendment) — the suite EXECUTES the oracle-lane driver against throwaway git
+# fixtures (surface members, every exclusion, the hunk-extent arms, output grammar, the activation lock and the
+# fail-closed defaults) and asserts manifest↔registration parity for scripts/ci-oracle-lane-suites.txt. ci.yml is an
+# edge because the suite pins the oracle-selection/oracle-index-check wiring and the ORACLE-ONLY-SKIP arm. Declared
+# edge set, not always-on; self-includes this file per the SELF-INCLUSION rule.
+AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-oracle-lane-suites.txt"
+  "scripts/ci-oracle-lane.sh"
+  "scripts/ci-oracle-lane.test.sh"
+  "scripts/ci-pr-selection.sh"  # ci-oracle-lane.test.sh:1050 reads is_doc_path live for the O-DOCPARITY byte-equality check
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
@@ -4170,6 +4197,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# Retained per deferred-item AC 6 while the suite is ALWAYS_ON (dead for selection — rung 1
+# short-circuits — and moot to the audit census; the #11648 demotion precedent keeps the edge
+# set for a future re-pricing). KNOWN under-declaration by design: the suite sweeps
+# .claude/hooks{,/lib} + plugins/soleur/scripts{,/lib} wholesale (the always_on install's
+# reason) but this block only declares the named hooks edges — if the suite is ever withdrawn
+# to edge-selection, plugins/soleur/scripts/ diffs would silently under-select until widened.
 AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   ".claude/hooks/brand-hex-commit-gate.sh"

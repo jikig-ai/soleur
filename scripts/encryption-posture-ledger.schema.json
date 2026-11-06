@@ -54,6 +54,11 @@
           "description": "Resource address (hcloud_volume.x / cloudflare_r2_bucket.y) or logical name for a non-IaC store (supabase.prd)."
         },
         "kind": { "enum": ["guest-luks-volume", "provider-bucket", "provider-db", "log-sink", "secret-store"] },
+        "records": {
+          "description": "#8624: optional register-entry citations — the Article 30 register amendment(s) that record this store as a store of a processing activity (the register-side counterpart of the '(encryption-posture ledger: …)' clause each amendment carries per store).",
+          "type": "array",
+          "items": { "type": "string", "minLength": 8 }
+        },
         "device_binding": {
           "description": "R1: REQUIRED for guest-luks-volume. Names the volume resource address AND its hcloud_volume_attachment, so the LUKS apparatus is reached from the attachment, NEVER from a name-similarity match against a sibling volume. Prevents a mechanism:luks row on the plaintext hcloud_volume.workspaces false-PASSing on hcloud_volume.workspaces_luks's apparatus.",
           "type": "object",

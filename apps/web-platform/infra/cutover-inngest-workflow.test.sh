@@ -2537,7 +2537,7 @@ assert "#8054 2.0 region extraction is non-vacuous (>60 non-comment lines, got $
 H5_BOOT="a1b2c3d4-0000-4000-8000-00000000cafe"; H5_BID="${H5_BOOT//-/}"
 H5_PROBE_DT="$(date -u -d '-7 min' '+%Y-%m-%d %H:%M:%S')"
 H5_HB_DT="$(date -u -d '-1 min' '+%Y-%m-%d %H:%M:%S')"
-H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=8 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ zz_trailing=1"
+H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=9 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ data_luks=crypto_LUKS zz_trailing=1"
 H5_PROBE_ROW=$(jq -cn --arg dt "$H5_PROBE_DT" --arg m "$H5_MSG" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-server-probe", _BOOT_ID:$b, message:$m} | tojson)}')
 H5_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{flag:"rolled-back", reason:"noop-rolled-back", guard:"7761", exit_code:0}} | tojson)}')
 # #8079 D8 — the flag_armed 2x2 needs the probe row and the heartbeat each sampled at `done`
@@ -2562,13 +2562,13 @@ _h5_hb_row() {  # $1 flag
 SERVING_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/http_code=000 server_active=failed/http_code=200 server_active=active}" soleur-inngest)
 WRONGHOST_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "$H5_MSG" web-1)
 STALE_PROBE_ROW=$(_h5_probe_row "$(date -u -d '-3 hour' '+%Y-%m-%d %H:%M:%S')" "$H5_MSG" soleur-inngest)
-SCHEMA7_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/probe_schema=8/probe_schema=7}" soleur-inngest)
+SCHEMA8_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/probe_schema=9/probe_schema=8}" soleur-inngest)
 UNKNOWNFLAG_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/cutover_flag=rolled-back/cutover_flag=unknown}" soleur-inngest)
 ABORTED_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/cutover_flag=rolled-back/cutover_flag=aborted}" soleur-inngest)
 ROLLBACKFLAG_HB_ROW=$(_h5_hb_row rollback)
 ABORTED_HB_ROW=$(_h5_hb_row aborted)
-assert "#8079 per-token fixtures are each ONE substitution from H5 (serving/schema7/unknownflag/aborted differ in 2 tokens; wronghost only in host; stale only in dt)" \
-  "[[ \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\${H5_MSG/probe_schema=8/probe_schema=7}\") | grep -c '^[<>]') -eq 2 && \$(jq -r '.raw|fromjson|.host' <<<\"\$WRONGHOST_PROBE_ROW\") == web-1 && \$(jq -r '.raw|fromjson|.host' <<<\"\$H5_PROBE_ROW\") == soleur-inngest && \$(jq -r .dt <<<\"\$STALE_PROBE_ROW\") != \$(jq -r .dt <<<\"\$H5_PROBE_ROW\") ]]"
+assert "#8079 per-token fixtures are each ONE substitution from H5 (serving/schema8/unknownflag/aborted differ in 2 tokens; wronghost only in host; stale only in dt)" \
+  "[[ \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\${H5_MSG/probe_schema=9/probe_schema=8}\") | grep -c '^[<>]') -eq 2 && \$(jq -r '.raw|fromjson|.host' <<<\"\$WRONGHOST_PROBE_ROW\") == web-1 && \$(jq -r '.raw|fromjson|.host' <<<\"\$H5_PROBE_ROW\") == soleur-inngest && \$(jq -r .dt <<<\"\$STALE_PROBE_ROW\") != \$(jq -r .dt <<<\"\$H5_PROBE_ROW\") ]]"
 assert "#8079 2x2 fixtures differ from H5 in the flag ONLY (done/armed probe rows; done/armed heartbeats)" \
   "[[ \"\$DONE_MSG\" != \"\$H5_MSG\" && \"\$ARMED_MSG\" != \"\$H5_MSG\" && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$DONE_MSG\") | grep -c '^[<>]') -eq 2 && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$ARMED_MSG\") | grep -c '^[<>]') -eq 2 ]]"
 # render_2_0 <region-file> <webhook-code> <webhook-body> <probe-mode> <hb-mode>  — echoes stdout+stderr, returns rc
@@ -2623,8 +2623,8 @@ render_2_0() {
     printf 'STUB_CODE=%q; STUB_BODY=%q; PMODE=%q; HMODE=%q; TMPD=%q\n' "$code" "$body" "$pmode" "$hmode" "$tmpd"
     printf 'H5_PROBE_ROW=%q; H5_HB_ROW=%q\n' "$H5_PROBE_ROW" "$H5_HB_ROW"
     printf 'DONE_PROBE_ROW=%q; ARMED_PROBE_ROW=%q; DONE_HB_ROW=%q; ARMED_HB_ROW=%q\n' "$DONE_PROBE_ROW" "$ARMED_PROBE_ROW" "$DONE_HB_ROW" "$ARMED_HB_ROW"
-    printf 'SERVING_PROBE_ROW=%q; WRONGHOST_PROBE_ROW=%q; STALE_PROBE_ROW=%q; SCHEMA7_PROBE_ROW=%q; UNKNOWNFLAG_PROBE_ROW=%q; ABORTED_PROBE_ROW=%q\n' \
-      "$SERVING_PROBE_ROW" "$WRONGHOST_PROBE_ROW" "$STALE_PROBE_ROW" "$SCHEMA7_PROBE_ROW" "$UNKNOWNFLAG_PROBE_ROW" "$ABORTED_PROBE_ROW"
+    printf 'SERVING_PROBE_ROW=%q; WRONGHOST_PROBE_ROW=%q; STALE_PROBE_ROW=%q; SCHEMA8_PROBE_ROW=%q; UNKNOWNFLAG_PROBE_ROW=%q; ABORTED_PROBE_ROW=%q\n' \
+      "$SERVING_PROBE_ROW" "$WRONGHOST_PROBE_ROW" "$STALE_PROBE_ROW" "$SCHEMA8_PROBE_ROW" "$UNKNOWNFLAG_PROBE_ROW" "$ABORTED_PROBE_ROW"
     printf 'ROLLBACKFLAG_HB_ROW=%q; ABORTED_HB_ROW=%q\n' "$ROLLBACKFLAG_HB_ROW" "$ABORTED_HB_ROW"
     printf '%s\n' "$BS_CLASSIFY_FN"
     printf '%s\n' "$BS_READER_FN"
@@ -2648,7 +2648,7 @@ doppler() {
         serving)     printf '%s\n' "$SERVING_PROBE_ROW"; return 0 ;;
         wronghost)   printf '%s\n' "$WRONGHOST_PROBE_ROW"; return 0 ;;
         stale)       printf '%s\n' "$STALE_PROBE_ROW"; return 0 ;;
-        schema7)     printf '%s\n' "$SCHEMA7_PROBE_ROW"; return 0 ;;
+        schema8)     printf '%s\n' "$SCHEMA8_PROBE_ROW"; return 0 ;;
         unknownflag) printf '%s\n' "$UNKNOWNFLAG_PROBE_ROW"; return 0 ;;
         aborted)     printf '%s\n' "$ABORTED_PROBE_ROW"; return 0 ;;
         badjson)     printf 'not json\n'; return 0 ;;
@@ -2934,7 +2934,7 @@ _rpg_refusal() {  # $1 label  $2 pmode  $3 hmode  $4 token  $5 headline ERE
 _rpg_refusal 'host_serving' serving h5 host_serving 'row \([0-9]+s old — hourly.*90 minutes\).*WAS serving.*hook just failed to reach 10\.0\.1\.40:8288.*inngest-host-state\.sh.*op=inventory reads the WEB host'
 _rpg_refusal 'wrong_host' wronghost h5 wrong_host 'Two causes with opposite remedies.*dead host, not a mislabel.*inngest-host-state\.sh.*treat this as silent'
 _rpg_refusal 'stale_row' stale h5 stale_row '90-minute bound.*FSM transition.*Wait for the next hourly probe'
-_rpg_refusal 'stale_schema' schema7 h5 stale_schema 'not probe_schema=8.*unbumped pin re-delivers the same bytes'
+_rpg_refusal 'stale_schema' schema8 h5 stale_schema 'not probe_schema=9.*unbumped pin re-delivers the same bytes'
 _rpg_refusal 'flag_unreadable E11' unknownflag h5 flag_unreadable 'HOURLY probe row \([0-9]+s old\).*Do NOT write the flag by hand'
 _rpg_refusal 'flag_unreadable E13' h5 rollbackflag flag_unreadable 'same-boot heartbeat \([0-9]+s old\).*reports it as __UNREADABLE__'
 _rpg_refusal 'unreadable rc=0' badjson h5 unreadable 'answered \(rc=0\).*Nothing about the host was measured'
