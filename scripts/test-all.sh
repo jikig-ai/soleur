@@ -6175,6 +6175,10 @@ if want_scripts; then
   # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
   # returning the right codes is not optional coverage.
   run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
+  # #12229: exit-code harness for the arm-token revisit probe (notify-only; exits 2, 3 or 5, never 0 or 1).
+  # Registered explicitly (orphan-suite class above); a probe that stops at its first member would go quiet
+  # while the token is still in config.
+  run_suite "scripts/arm-token-revisit-12229" bash scripts/followthroughs/arm-token-revisit-12229.test.sh
   # #6616: exit-code harness for the host_name-mislabel follow-through's decision tree (identity,
   # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
   # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.
