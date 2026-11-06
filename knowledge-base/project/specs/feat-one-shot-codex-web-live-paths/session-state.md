@@ -4155,6 +4155,10 @@
   integrated head. At that head the focused offline tracker/transport tests,
   synthetic guard tests and selected UI tests passed. Those checks do not
   supersede the red client suite or the missing authority and fencing work.
+- Main advanced again during this continuation. A local merge incorporated
+  `1ee0d6af49ad7039e9af9fb7569f07f53b49064e` without textual conflicts; its
+  deployment-infrastructure changes have not been qualified on this recovery
+  head. Refresh and reconcile main again at any later final review.
 - Independent local review found the injected Firestore v2 authority adapter
   accepted another command while an earlier POST remained unresolved. A
   process-local latch now refuses concurrent and changed commands and clears
