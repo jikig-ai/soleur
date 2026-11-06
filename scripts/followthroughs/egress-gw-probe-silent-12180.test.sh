@@ -8,7 +8,7 @@
 # canary still declared, or a recurrence), an exit 1, and a public comment that echoes a response
 # body or a credential.
 #
-# Guard 2 of knowledge-base/project/plans/2026-11-05-fix-egress-gw-probe-silent-invert-metric-plan.md
+# Guard 2 of knowledge-base/project/plans/archive/20261106-090533-2026-11-05-fix-egress-gw-probe-silent-invert-metric-plan.md
 # (verdict matrix, 11 rows + harness rows). The SUT runs under `env -i` exactly as the sweeper runs
 # it, with a PATH-shimmed `curl` that dispatches on the URL (single incident, incident list per
 # page, alert list) and records argv + the stdin config channel, and an
