@@ -560,7 +560,9 @@ def collect(root: str, quiet: bool = False):
             if name.endswith((".yml", ".yaml")):
                 _add(os.path.join(wf_dir, name))
     # Composite actions carry the same `run:`-block capture surface; each
-    # lives in its own directory under .github/actions/.
+    # lives in its own directory under .github/actions/. BOUND (recorded,
+    # like the head's bounds above): exactly one level — a composite action
+    # nested deeper (uses: ./.github/actions/a/b) is not enumerated.
     act_dir = os.path.join(root, ".github", "actions")
     if os.path.isdir(act_dir):
         for sub in sorted(os.listdir(act_dir)):
