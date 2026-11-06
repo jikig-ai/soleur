@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import postgres from "postgres";
+import { UTC_ISO_RE, isUtcIsoTimestamp } from "@/server/legal-acceptance/service";
 
 // Behavioural proof of migration 184 against a REAL database (#12011 PR-B, ADR-319): every Guard 3 mutation row,
 // the server-issued intent that backs EVERY decision, the single-use email-code challenge behind a Yes, the write-once
@@ -256,6 +257,8 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
   for (const [col, kind, setClause, pre] of tamperCases) {
     test(`Guard 3 row 4: the checksum covers ${col} (a changed value reads as invalid, never accepted)`, async () => {
       await scenario(async (t, c) => {
+        // First statement: concurrent runs of the trigger-disabling tests serialise here instead of deadlocking on the lock upgrade.
+        await t`lock table public.legal_acceptance in share row exclusive mode`;
         if (kind === "yes") {
           await verifiedIntent(t, c.userA, c.sessionA);
           await record(t, web(c));
@@ -266,6 +269,10 @@ describe.skipIf(!ENABLED)("migration 184 behaviour (rolled-back real rows)", () 
         const before = await verifyFn(t, c.userA);
         expect(before).toMatchObject({ row_ok: true });
         expect(before.status).toBe(kind === "yes" ? "accepted" : "changes_requested");
+        // The real database renders decided_at in a form the endpoint's strict check (service.ts) accepts.
+        expect(typeof before.decided_at).toBe("string");
+        expect(before.decided_at, before.decided_at).toMatch(UTC_ISO_RE);
+        expect(isUtcIsoTimestamp(before.decided_at)).toBe(true);
         await t.unsafe("alter table public.legal_acceptance disable trigger legal_acceptance_guard");
         if (pre) await t.unsafe(pre);
         const upd = await t.unsafe(`update public.legal_acceptance set ${setClause} where founder_id = '${c.userA}' returning founder_id, key, text_hash`);
@@ -629,6 +636,8 @@ describe.skipIf(!ENABLED)("migration 185 behaviour (rolled-back real rows)", () 
 
   test("age is computed in the database, in whole seconds, from the decision row's own created_at (a row backdated 200 s reads 199..201)", async () => {
     await scenario(async (t, c) => {
+      // First statement: concurrent runs of the trigger-disabling tests serialise here instead of deadlocking on the lock upgrade.
+      await t`lock table public.legal_acceptance in share row exclusive mode`;
       await verifiedIntent(t, c.userA, c.sessionA);
       await record(t, web(c));
       // now() is frozen inside one transaction, so a row written here is 0 s old. The write-once guard refuses UPDATE for
@@ -643,6 +652,9 @@ describe.skipIf(!ENABLED)("migration 185 behaviour (rolled-back real rows)", () 
       expect(Number.isInteger(s.age_seconds)).toBe(true);
       expect(s.age_seconds).toBeGreaterThanOrEqual(199);
       expect(s.age_seconds).toBeLessThanOrEqual(201);
+      // Floor, not round: 200.6 s old reads 200 (a rounding implementation would say 201).
+      await t`update public.legal_acceptance set created_at = now() - interval '200.6 seconds' where founder_id = ${c.userA}`;
+      expect((await ackState(t, c.userA)).age_seconds).toBe(200);
       // Units and offset: an hour is 3600 (not 60 or 3600000), and a row stamped in the future floors at 0.
       await t`update public.legal_acceptance set created_at = now() - interval '1 hour' where founder_id = ${c.userA}`;
       expect((await ackState(t, c.userA)).age_seconds).toBe(3600);

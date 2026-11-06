@@ -190,12 +190,14 @@ export interface VerifyResult {
 
 /**
  * A UTC ISO timestamp as Postgres renders a timestamptz in JSON: date, `T`, time, optional fraction, then `Z` or a zero
- * offset. The same pattern as WA_TS_RE in the shell gate (hold-gate-eval.sh), so the two layers cannot disagree about which
- * forms count: `Date.parse` alone accepts many more (RFC 2822 dates, "2026", other offsets, a missing time) and rejects some
- * of these (V8 refuses `+00` and, on some versions, `+0000`), so it is not used. The calendar fields are checked by hand.
+ * offset, with the calendar fields checked by hand. `Date.parse` is not used: it accepts many more forms (RFC 2822 dates,
+ * "2026", other offsets, a missing time) and rejects some of these (V8 refuses `+00` and, on some versions, `+0000`).
+ * The shell gate (`okts` in WA_JQ_DEFS, hold-gate-eval.sh) uses the same shape and ADDITIONALLY requires the year to be
+ * 2000..2099 plus a calendar round trip, so a date outside that range passes this endpoint but is refused by the gate
+ * (the gate fails closed). The two layers are therefore not identical; this one is the looser of the two on purpose.
  */
-const UTC_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|\+00(:?00)?)$/;
-function isTimestamp(v: unknown): v is string {
+export const UTC_ISO_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d+)?(Z|\+00(:?00)?)$/;
+export function isUtcIsoTimestamp(v: unknown): v is string {
   if (typeof v !== "string") return false;
   const m = UTC_ISO_RE.exec(v);
   if (!m) return false;
@@ -229,7 +231,7 @@ export async function verifyAcceptance(
     if (out.decided_at !== null || out.row_ok !== null) throw bad();
     return { status, text_hash: a.textHash, decided_at: null, row_ok: null };
   }
-  if (!isTimestamp(out.decided_at)) throw bad();
+  if (!isUtcIsoTimestamp(out.decided_at)) throw bad();
   if (status === "invalid") {
     if (out.row_ok !== false) throw bad();
     return { status, text_hash: a.textHash, decided_at: out.decided_at, row_ok: false };

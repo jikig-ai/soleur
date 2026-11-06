@@ -196,6 +196,12 @@ describe("migration 185 files", () => {
     expect(d.match(/\bBEGIN;/g)).toHaveLength(1); // the plpgsql BEGIN has no semicolon directly after it
   });
 
+  it("the down file's header says to apply it with psql -v ON_ERROR_STOP=1 -f (a refusal must exit nonzero)", () => {
+    const header = read(DOWN).split("\n").filter((l) => l.startsWith("--")).join(" ");
+    expect(header).toMatch(/psql -v ON_ERROR_STOP=1 -f/);
+    expect(header).toMatch(/one at a time/);
+  });
+
   it("the down file drops the CURRENT signatures and never touches the 184 objects", () => {
     const d = norm(stripSql(read(DOWN)));
     for (const sig of ["ack_legal_acceptance(uuid, text, text)", "legal_acceptance_ack_state(uuid, text, text)"]) {

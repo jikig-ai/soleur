@@ -21,8 +21,8 @@ import { reportLegalOp, type StoreFailedStage } from "@/server/approval/ops";
  * Answers, for the ONE founder named in configuration, what they decided on the text `hash` of `key`:
  * exactly `{status, text_hash, decided_at, row_ok}` and nothing else (never the note). Check order:
  *   503 token or founder id unset/malformed · 401 wrong token · 400 malformed key or hash · 404 key not in the registry ·
- *   503 the registry could not be read (a read error that is not a missing file; this is step 4, after 401 and 400, never
- *   first) · lookup. 502: the database answered something that is not a documented shape. 503 also covers a failed
+ *   503 the registry could not be read (a read error or a malformed committed text, anything but a missing file; this is
+ *   step 4, after 401 and 400, never first) · lookup. 502: the database answered something that is not a documented shape. 503 also covers a failed
  *   database call. The statuses are the closed set VERIFY_ENDPOINT_STATUSES.
  * `invalid` (the stored row failed its checksum) passes through as `invalid` with `row_ok:false` and emits `record_invalid`;
  * it is never collapsed into `none`. When a row exists and is unacknowledged and at least ROW_WITHOUT_EVENT_GRACE_SECONDS
@@ -30,7 +30,8 @@ import { reportLegalOp, type StoreFailedStage } from "@/server/approval/ops";
  * disagrees with the verify read, the endpoint answers 503 or 502 and never a partial 200.
  *
  * Observability: a registry read failure, a failed verify or ack_state call and a set-but-malformed configuration value
- * each emit ONE `store_failed` (tags.stage registry | verify | ack_state | config). An unset value stays silent: that is
+ * each emit ONE `store_failed` (tags.stage registry | verify | ack_state | config; for `registry`, extra.code says which: read_failed,
+ * or a malformed text such as bad_bytes, no_front_matter, bad_version, bad_valid_until). An unset value stays silent: that is
  * the dark state. The configuration report is once per process and names only the variable, never a value or a length.
  *
  * Auth: a bearer token separate from the Inngest one (LEGAL_ACCEPTANCE_VERIFY_TOKEN, read through
@@ -91,7 +92,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ key: string }> 
   }
   const textHash = hashes[0];
 
-  // 4. The key must be in the registry. Only a missing file is 404; a registry that cannot be read is reported
+  // 4. The key must be in the registry. Only a missing file is 404; a registry that cannot be read, or whose committed text
+  // is malformed (extra.code: read_failed, bad_bytes, no_front_matter, bad_version, bad_valid_until), is reported
   // (store_failed, stage registry) and answered 503. This is after 401 and 400: an unauthenticated caller learns nothing.
   try {
     getLegalText(key);

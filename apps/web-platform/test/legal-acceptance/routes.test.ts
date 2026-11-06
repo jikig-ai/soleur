@@ -120,9 +120,11 @@ const webToken = () => jwt({ sub: USER, aud: "authenticated", session_id: SESSIO
 const dir = mkdtempSync(path.join(tmpdir(), "legal-routes-"));
 mkdirSync(dir, { recursive: true });
 writeFileSync(path.join(dir, "fixture-terms.md"), "---\nversion: fx-1\n---\nSynthesized fixture text.\n");
+writeFileSync(path.join(dir, "fixture-other.md"), "---\nversion: fx-2\n---\nA different synthesized fixture text.\n");
 h.texts.dir = dir;
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 const HASH = getLegalText("fixture-terms").textHash;
+const HASH_OTHER = getLegalText("fixture-other").textHash;
 
 function req(action: "reauth" | "decide", body: unknown, o: { key?: string; origin?: string | null; ct?: string | null; raw?: string } = {}) {
   const headers: Record<string, string> = {};
@@ -354,12 +356,30 @@ describe("decide", () => {
     expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
     expect(h.after).toHaveBeenCalledTimes(1);
     expect(typeof h.after.mock.calls[0][0]).toBe("function");
-    await vi.waitFor(() => expect(h.serviceRpc).toHaveBeenCalledWith("ack_legal_acceptance", expect.anything()));
+    await vi.waitFor(() =>
+      expect(h.serviceRpc).toHaveBeenCalledWith("ack_legal_acceptance", { p_founder_id: USER, p_key: "fixture-terms", p_text_hash: HASH }),
+    );
     // already_recorded schedules nothing
     h.after.mockReset();
     h.userRpc.mockResolvedValue({ data: { outcome: "already_recorded", choice: "accept" }, error: null });
     await json(await decide(req("decide", { choice: "accept", textHash: HASH })));
     expect(h.after).not.toHaveBeenCalled();
+  });
+
+  it("PR-D ack: the ack carries the key and hash of the decision it follows (two keys: a hard-coded key or hash fails)", async () => {
+    h.flush.mockResolvedValue(true);
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    for (const [key, hash] of [["fixture-terms", HASH], ["fixture-other", HASH_OTHER]] as const) {
+      h.serviceRpc.mockClear();
+      h.userRpc.mockResolvedValue({
+        data: { outcome: "recorded", choice: "accept", text_hash: hash, decided_at: "2026-11-05T10:00:00Z", reauth_at: "2026-11-05T09:58:00Z" },
+        error: null,
+      });
+      expect((await json(await decide(req("decide", { choice: "accept", textHash: hash }, { key })))).body.outcome).toBe("recorded");
+      expect(h.userRpc).toHaveBeenLastCalledWith("record_legal_acceptance", { p_key: key, p_text_hash: hash, p_choice: "accept", p_requested_edit: null });
+      await vi.waitFor(() => expect(h.serviceRpc).toHaveBeenCalledTimes(1));
+      expect(h.serviceRpc.mock.calls).toEqual([["ack_legal_acceptance", { p_founder_id: USER, p_key: key, p_text_hash: hash }]]);
+    }
   });
 
   it("PR-D ack: a flush that returns false writes no ack; a flush that never resolves does not delay the response", async () => {

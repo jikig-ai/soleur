@@ -284,7 +284,7 @@ export const LEGAL_OPS = {
   /**
    * A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is one of
    * STORE_FAILED_STAGES: `verify` (the verify RPC), `ack_state` (the reconciliation RPC), `ack` (the decide path's flush or
-   * ack write), `registry` (the legal text could not be read, verify endpoint step 4) or `config` (a token or founder id
+   * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; verify endpoint step 4) or `config` (a token or founder id
    * that is SET but malformed; once per process, names only the variable). No paging rule yet (#12195).
    */
   storeFailed: {

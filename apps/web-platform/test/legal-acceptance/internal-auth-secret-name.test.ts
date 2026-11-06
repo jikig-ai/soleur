@@ -47,23 +47,30 @@ describe("readInternalBearerSecret (unchanged by this PR)", () => {
   });
 });
 
+/** Is the CLO-discharged commit in this checkout? (A shallow clone does not have it.) */
+const DISCHARGED_REACHABLE = ((): boolean => {
+  try {
+    execFileSync("git", ["cat-file", "-e", "8c77db1^{commit}"], { cwd: REPO, stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
 describe("the CLO-bound census path lib/internal-auth.ts", () => {
   const SRC = readFileSync(path.join(WEB, "lib/internal-auth.ts"), "utf8");
   it("does not know the status token (it lives in internal-auth-named.ts)", () => {
     expect(SRC).not.toMatch(/LEGAL_ACCEPTANCE/);
     expect(SRC).not.toMatch(/InternalBearerSecretName/);
   });
-  it("is byte-identical to the CLO-discharged sha (8c77db1) when that commit is reachable", () => {
-    let discharged: string;
-    try {
-      discharged = execFileSync("git", ["show", "8c77db1:apps/web-platform/lib/internal-auth.ts"], {
-        cwd: REPO,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-    } catch {
-      return; // shallow clone: the CI gate is `git diff --quiet 8c77db1 HEAD -- CENSUS_PATHS` in home-census-trigger.sh
-    }
+  // A visible skip, never a silent pass: commit 8c77db1 is missing from a shallow clone, where the real gate is
+  // `git diff --quiet 8c77db1 HEAD -- CENSUS_PATHS` in home-census-trigger.sh.
+  it.skipIf(!DISCHARGED_REACHABLE)("is byte-identical to the CLO-discharged sha (8c77db1); skipped, visibly, when that commit is not in this checkout", () => {
+    const discharged = execFileSync("git", ["show", "8c77db1:apps/web-platform/lib/internal-auth.ts"], {
+      cwd: REPO,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     expect(SRC).toBe(discharged);
   });
 });

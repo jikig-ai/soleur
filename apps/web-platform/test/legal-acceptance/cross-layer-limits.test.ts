@@ -35,6 +35,26 @@ const nonEmpty = <T,>(what: string, xs: T[]): T[] => {
   return xs;
 };
 
+/** Bash with comments removed: a `#` that starts a word outside quotes ends the line. Quoted `#` (in a pattern or a string) is kept. */
+export function stripBashComments(src: string): string {
+  return src
+    .split("\n")
+    .map((line) => {
+      let quote = "";
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (quote) {
+          if (c === quote) quote = "";
+          else if (c === "\\" && quote === '"') i++;
+        } else if (c === "'" || c === '"') quote = c;
+        else if (c === "\\") i++;
+        else if (c === "#" && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 /** `export const NAME = /.../;` from a TypeScript source: the regex SOURCE text. */
 export function extractTsRegex(src: string, name: string): string {
   const m = new RegExp(`export const ${name} = /(.+)/;`).exec(src);
@@ -62,7 +82,7 @@ export function extractBashPatterns(src: string): { key: string[]; hash: string[
   if (start < 0) throw new Error("extraction found nothing: gate_web_acceptance is not in the script");
   const rest = src.slice(start);
   const end = rest.search(/^\}/m);
-  const body = rest.slice(0, end < 0 ? rest.length : end);
+  const body = stripBashComments(rest.slice(0, end < 0 ? rest.length : end)); // a comment that names `=~ $WA_KEY_RE` is not an application
   const assigned = (name: string): string[] => [...src.matchAll(new RegExp(`^${name}='([^']+)'$`, "gm"))].map((m) => m[1]);
   const key = nonEmpty("bash WA_KEY_RE assignment", assigned("WA_KEY_RE"));
   const hash = nonEmpty("bash WA_HASH_RE assignment", assigned("WA_HASH_RE"));
@@ -138,6 +158,12 @@ describe("extractors fail loudly on an empty extraction", () => {
     expect(() => extractBashPatterns("nothing here")).toThrow(/found nothing/);
     expect(() => extractBashPatterns("gate_web_acceptance() {\n  :\n}\n")).toThrow(/found nothing/);
     expect(() => extractBashPatterns("WA_KEY_RE='^a$'\nWA_HASH_RE='^b$'\ngate_web_acceptance() {\n  :\n}\n")).toThrow(/found nothing/);
+    expect(() =>
+      extractBashPatterns("WA_KEY_RE='^a$'\nWA_HASH_RE='^b$'\ngate_web_acceptance() {\n  # [[ $k =~ $WA_KEY_RE ]] && [[ $h =~ $WA_HASH_RE ]]\n  : # =~ $WA_KEY_RE =~ $WA_HASH_RE\n}\n"),
+    ).toThrow(/found nothing/);
+    expect(
+      extractBashPatterns("WA_KEY_RE='^a#$'\nWA_HASH_RE='^b$'\ngate_web_acceptance() {\n  [[ $k =~ $WA_KEY_RE ]] && [[ $h =~ $WA_HASH_RE ]] # ok\n}\n"),
+    ).toEqual({ key: ["^a#$"], hash: ["^b$"] });
     expect(() => extractRouteTokenBounds("const TOKEN_RE = /^[a-z]+$/;")).toThrow(/found nothing/);
     expect(() => extractHelperTokenBounds("nothing here")).toThrow(/bc_shape_ok is not in the helper/);
     expect(() => extractHelperTokenBounds("bc_shape_ok() {\n  :\n}\n")).toThrow(/found nothing/);

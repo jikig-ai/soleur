@@ -50,11 +50,15 @@ describe("verifyAcceptance", () => {
     }
   });
 
-  it("decided_at must be a strict UTC ISO timestamp (the same forms as the shell gate): other date strings are bad_payload", async () => {
+  it("decided_at must be a strict UTC ISO timestamp (the shell gate's okts shape; the gate also requires years 2000..2099, so it is the stricter layer): other date strings are bad_payload", async () => {
     const ok = { status: "accepted", text_hash: HASH, decided_at: WHEN, row_ok: true };
-    // Forms Postgres renders for a timestamptz in UTC, and forms the shell gate (WA_TS_RE) accepts.
+    // Forms Postgres renders for a timestamptz in UTC, and forms the shell gate's okts shape accepts.
     for (const good of ["2026-11-05T10:00:00Z", "2026-11-05T10:00:00.123456+00:00", "2026-11-05T10:00:00+0000", "2026-11-05T10:00:00.5+00", "2026-11-05T10:00:00.000Z", "2028-02-29T23:59:59Z"]) {
       expect((await verifyAcceptance(client({ data: { ...ok, decided_at: good } }).c, a)).decided_at, good).toBe(good);
+    }
+    // The gate additionally refuses years outside 2000..2099 (fail closed); this layer is looser, by design, and says so.
+    for (const outOfGateRange of ["1999-12-31T23:59:59Z", "2100-01-01T00:00:00Z"]) {
+      expect((await verifyAcceptance(client({ data: { ...ok, decided_at: outOfGateRange } }).c, a)).decided_at).toBe(outOfGateRange);
     }
     // Everything Date.parse alone would let through, and the forms a gate would refuse.
     for (const bad of [

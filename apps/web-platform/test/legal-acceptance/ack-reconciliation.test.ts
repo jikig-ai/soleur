@@ -53,6 +53,7 @@ import {
 const USER = FOUNDER;
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const ENTRY = parseLegalText("fixture-terms", "---\nversion: fx-1\n---\nSynthesized fixture text.\n");
+const ENTRY_B = parseLegalText("fixture-other", "---\nversion: fx-2\n---\nA different synthesized fixture text.\n");
 const WHEN = "2026-11-05T10:00:00.000Z";
 
 const events = () => [
@@ -89,9 +90,9 @@ function rig(o: {
     },
   };
   const user: LegalRpcClient = {
-    async rpc(fn) {
+    async rpc(fn, args = {}) {
       log.push(`user:${fn}`);
-      const r = o.record ?? { data: { outcome: "recorded", choice: "accept", decided_at: WHEN, text_hash: ENTRY.textHash, reauth_at: WHEN } };
+      const r = o.record ?? { data: { outcome: "recorded", choice: "accept", decided_at: WHEN, text_hash: args.p_text_hash, reauth_at: WHEN } };
       return { data: r.data ?? null, error: r.error ?? null };
     },
   };
@@ -102,8 +103,8 @@ function rig(o: {
     ...(o.noFlush ? {} : { flushEvents: async () => { log.push("flush"); return flush(); } }),
     runOffPath: o.schedule ?? ((t) => { tasks.push(t); }),
   };
-  const decide = (choice: "accept" | "decline" | "request_changes" = "accept") =>
-    decideLegal(deps, { userId: USER, sessionId: SESSION, entry: ENTRY, choice, textHash: ENTRY.textHash, note: choice === "request_changes" ? "n" : null });
+  const decide = (choice: "accept" | "decline" | "request_changes" = "accept", entry = ENTRY) =>
+    decideLegal(deps, { userId: USER, sessionId: SESSION, entry, choice, textHash: entry.textHash, note: choice === "request_changes" ? "n" : null });
   return { decide, tasks, log, flush, serviceCalls, run: async () => { for (const t of tasks.splice(0)) await t(); } };
 }
 const recordedResult = { kind: "result", result: { outcome: "recorded", choice: "accept", decidedAt: WHEN, reauthAt: WHEN } };
@@ -128,6 +129,15 @@ describe("decide path: ack only after a flush that returned true (Guard 3 rows 1
     expect(r.log.slice(-2)).toEqual(["flush", "service:ack_legal_acceptance"]);
     expect(ackCalls(r)).toEqual([{ fn: "ack_legal_acceptance", args: { p_founder_id: USER, p_key: "fixture-terms", p_text_hash: ENTRY.textHash } }]);
     expect(storeFailed()).toEqual([]);
+  });
+  it("two keys: each decision is acked with ITS OWN key and hash (a hard-coded key or hash fails)", async () => {
+    for (const entry of [ENTRY, ENTRY_B]) {
+      const r = rig();
+      await r.decide("accept", entry);
+      await r.run();
+      expect(ackCalls(r), entry.key).toEqual([{ fn: "ack_legal_acceptance", args: { p_founder_id: USER, p_key: entry.key, p_text_hash: entry.textHash } }]);
+    }
+    expect(ENTRY.textHash).not.toBe(ENTRY_B.textHash);
   });
   it("the accepted event is emitted before the flush is started (the flush covers the event)", async () => {
     const r = rig({ flush: async () => { expect(ops()).toContain("accepted"); return true; } });

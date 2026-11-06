@@ -36,7 +36,7 @@ Registered in `server/approval/ops.ts` with `feature: "legal-acceptance"`: `acce
 `decide_rejected` (tag `reason`), `reauth_failed` (extra `errorClass`, never the address), `page_read_failed` (a founder page
 could not read its rows; not paged) and `row_without_event` (reconciliation, reported by the check endpoint, see Ack and
 reconciliation). PR-D adds `record_invalid` (a row failed its checksum; error) and `store_failed` (a verify, ack-state or ack
-call failed; error; tag `stage` is `verify`, `ack_state`, `ack`, `registry` (the legal text could not be read) or `config` (a token or
+call failed; error; tag `stage` is `verify`, `ack_state`, `ack`, `registry` (the legal text could not be read, or the committed text is malformed; the on-call reads `extra.code`) or `config` (a token or
 founder id that is set but malformed; once per process, names only the variable)). `record_invalid` and `store_failed` have no paging rule yet
 (#12195). Nothing logs the note, the code, the address or the text.
 
@@ -76,8 +76,9 @@ before the deploy, so the functions exist when the code that calls them runs.
 
 - Request changes note: pull-only, read by the operator personally; see
   `knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md`. Nothing pushes it, and no card copy changed.
-  The note is not readable through the endpoint or any `service_role` path; a database-owner credential could read it and is held
-  only by the operator, so "not shown to an agent" is a policy, not a control.
+  The note is not readable through the endpoint or any `service_role` path; a database-owner credential could read it; it is held by
+  the operator and by the production migration pipeline (a CI secret), and no agent session is meant to use either, so "not shown to an
+  agent" is a policy, not a control.
 - A row whose ack was lost is reconciled through the same runbook after confirming with the founder. Before the `approval-queue`
   flag is on in the production project, the runbook's pre-flip count check must pass.
 - Hard limits, the token, the accepted residuals and the open items: ADR-319 (PR-D amendment).

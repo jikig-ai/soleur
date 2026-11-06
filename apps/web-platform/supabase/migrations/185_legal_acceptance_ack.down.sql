@@ -8,6 +8,8 @@
 -- COMMIT, i.e. through the DROPs, so no acknowledgement can be inserted between the check and the drop. Outside a
 -- transaction the lock would be released when the DO block ends. (The migration runner never runs down files; this is
 -- applied by hand.)
+-- APPLY WITH: psql -v ON_ERROR_STOP=1 -f 185_legal_acceptance_ack.down.sql -- so a guard refusal exits nonzero and
+-- nothing changes. Pasting the statements one at a time leaves the lock held, and the transaction open, until ROLLBACK.
 
 BEGIN;
 

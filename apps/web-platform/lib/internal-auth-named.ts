@@ -13,6 +13,8 @@
 // use the status endpoint, and a holder of the status token cannot trigger anything.
 //
 // The name is a CLOSED union (never a free string): adding a secret is a reviewed edit to this type.
+//
+// SOLEUR-DEBT: a second module only to keep internal-auth.ts byte-identical to the discharged census sha; fold the named-secret parameter into internal-auth.ts and delete this module when the home-census route is retired (#11714; census SUNSET_UTC 2026-11-30)
 
 export type NamedBearerSecretName = "LEGAL_ACCEPTANCE_VERIFY_TOKEN";
 

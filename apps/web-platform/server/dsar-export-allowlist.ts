@@ -629,8 +629,9 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "Kept with that row (Art. 17(3)(e) carve-out, same LIA and PA-40); no erasure scrub " +
     "touches it. Excluded from the self-serve export for one reason: service_role holds no " +
     "table privilege on it (RPC-only), so a worker read would fail every export. Art. 15 " +
-    "access is answered through legal@jikigai.com, and the matching ack rows are returned " +
-    "with the legal_acceptance rows.",
+    "access is answered through legal@jikigai.com, and the matching ack rows can be produced " +
+    "on request with the legal_acceptance rows (procedure: the DSAR and notice note, " +
+    "Addendum 2026-11-06).",
 };
 
 /**
