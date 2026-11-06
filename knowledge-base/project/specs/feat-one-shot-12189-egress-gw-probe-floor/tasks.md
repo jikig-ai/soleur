@@ -5,12 +5,13 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12189-egress-gw-probe-floor
 
 ## Phase 1: Suite (RED first)
 
-- 1.1 Harness: add `EGRESS_GW_SILENT_FLOOR_EPOCH` to `run_case`; `FLOOR_AGE` default in `reset_defaults`; default `ROSTER_BQ` with both roster hosts non-zero; add a 1048111600-shaped decoy to `build_fixtures`.
+- 1.1 Harness: add `EGRESS_GW_SILENT_FLOOR_EPOCH` to `run_case`; `FLOOR_AGE` default 20000 (3000 for `A_RES=open` rows); `A_RES` default earlier than the floor; `CANARY_ALERT_AGE` stays an independent knob; default `ROSTER_BQ` with both roster hosts non-zero; default fixture is the post-deletion exit-0 shape; add a 1048111600-shaped decoy and keep the anchor on page 2 of the `PAGES=2` split; alert fixtures carry `updated_at` = NOW
 - 1.2 Rewrite the rows that encode the old contract
   - 1.2.1 age-boundary rows -> floor-age boundaries on non-collinear points
   - 1.2.2 open-anchor staleness and `SOLEUR_FT_EARLIEST` rows -> `quiet_since` rows and "EARLIEST ignored" rows
   - 1.2.3 `actor -> 5` and key-missing `-> 3` rows -> informational (pass, field printed)
-  - 1.2.4 "no warehouse read when resolved" row flips (pass now reads rows)
+  - 1.2.4 "no warehouse read when resolved" row and the PASS regex row (`rows_in_window=na`, `anchor_resolved_by=none`) flip
+  - 1.2.5 anchor-own-second recurrence row -> slack-boundary pair; `DECLARED=0` absent-canary text rows -> `DECLARED=1`; rows using `STALE_S` / `CANARY_AGE` as a soak input; "resolved 10 s / 7200 s ago" rows -> `quiet_since`
 - 1.3 New rows
   - 1.3.1 pre-floor resolved decoy ignored; slack boundary pair (floor-300 counts, floor-301 does not); second post-floor incident after a compliant pre-floor one
   - 1.3.2 pre-floor open incident: exit 2 inside `quiet_since + 15300`, exit 5 past it; pre-floor incident resolved after the floor moves `quiet_since`
@@ -23,8 +24,8 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12189-egress-gw-probe-floor
 ## Phase 2: Probe (GREEN)
 
 - 2.1 Add `APPLY_FLOOR_EPOCH=1793967363`, `FLOOR` seam, `SLACK_S=300`, `QUIET_STALE_S=15300`; delete the `SOLEUR_FT_EARLIEST` block
-- 2.2 Setup checks -> exit 3 (floor sanity, canary alert count and `created_at`, canary incident bound, anchor state agreement)
-- 2.3 Recurrence set (`epoch >= FLOOR - SLACK_S`, id != anchor), `quiet_since`, pre-floor open set
+- 2.2 Setup checks -> exit 3 (`FLOOR=$((10#$FLOOR))` canonical and digit-capped, floor sanity, canary alert count and `created_at`, canary incident bound, anchor state agreement)
+- 2.3 Validate every new derived `$( )` value (`^[0-9]+$` or `0|1`) else `unknown`; error on unparseable `resolved_at`; `quiet_since` max over non-null resolves with `// empty`; recurrence set (`epoch >= FLOOR - SLACK_S`, id != anchor), `quiet_since`, pre-floor open set
 - 2.4 Verdict ladder in the CTO order; delete the actor gates, the `V_AGE` gate and the canary-age gate
 - 2.5 `read_rows` function in the main shell (no `$( )` verdict), `ROWS_OK` from the same jq; rows verdict-bearing before the declared-or-live step
 - 2.6 `emit_line` +2 fields; update header (contract, EARLIEST, blind spot, pin, RETIREMENT sites)

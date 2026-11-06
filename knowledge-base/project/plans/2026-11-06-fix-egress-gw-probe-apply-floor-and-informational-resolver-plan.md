@@ -10,6 +10,29 @@ lane: cross-domain
 
 <!-- Spec lacks a lane: key (no spec.md for this branch); defaulted to cross-domain (fail-closed). -->
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06
+**Sections enhanced:** Phase 1 (harness and rewrite list), Phase 2 (validation of derived values), Observability, Risks
+**Research agents used:** CTO (two consults, the second after a live measurement), learnings-researcher, an adversarial
+ladder reviewer read against the probe source, code-simplicity-reviewer. Gates run: User-Brand Impact, Observability (block
+declared, command verified to print the literal in 16 ms with no credential), PAT scan (none), Guard Contract lint (green),
+Scope Check (one live section), technical-ruling gate (14 rows). UI, encryption, network-outage, downtime and task-design gates
+do not fire (no UI file, no store or `.tf`, no new autonomous task).
+
+### Key Improvements
+1. The CTO's first soak origin (alert `updated_at`) was falsified by two live reads (vendor churn every ~5 min) and withdrawn
+   before it reached the plan; the earliest pass stays about 16:16Z.
+2. The adversarial pass found suite rows the first draft did not list (anchor-own-second recurrence, `DECLARED=0` absent-canary
+   text rows, `rows_in_window=na` on PASS, `A_RES` default later than the floor, `PAGES=2` split shifting) and fail-open spots in
+   derived jq values (empty `max`, leading-zero floor, unparseable `resolved_at` read as open); all are now plan steps.
+3. Pin provenance recorded: the apply run window (12:14:26Z to 12:17:27Z) is why the 300 s slack exists.
+
+### New Considerations Discovered
+- A re-created canary, or any canary incident older than the bound, is exit 3 by design and needs a re-pin.
+- The slack window `[12:11:03Z, 12:16:03Z)` holds no production incident today (measured), so the asymmetry costs nothing now.
+- The walk's blind spot also covers an older incident that resolves after the floor, not only an open one.
+
 ## Overview
 
 Tracker #12189 (Ref #12180; #12180 is closed and contextual; this change never closes either) is closed by the daily
@@ -128,11 +151,37 @@ The amendment describes the target state now; it is not a follow-up issue.
 ## Observability
 
 The change is itself an observability surface: the probe's verdict line is what the sweeper publishes on the tracker.
-`scripts/followthroughs/` is outside the code-class paths the observability gate scopes (`apps/*/server`, `apps/*/src`,
-`apps/*/infra`, `plugins/*/scripts`), so no `discoverability_test` block is declared (a probe that reads Better Stack needs
-credentials and would raise the repo-wide credentialed-probe baseline for no benefit). Failure modes and their routes:
-unreadable inputs -> exit 3 (sweeper comment CANNOT ESTABLISH); a silent roster host -> exit 5 (comment ACTION REQUIRED);
-the probe itself broken -> the EXIT trap prints `verdict=unknown` and exits 3.
+`scripts/followthroughs/` is outside the code-class paths plan Phase 2.9 scopes, but deepen-plan Phase 4.7 reads any
+non-docs path, so the five-field block is declared. No credential-gated probe is declared (it would raise the repo-wide
+credentialed-probe baseline for no benefit): the discoverability command runs the probe with no credential bound, which
+exercises the verdict-line chokepoint and prints the line in well under a second.
+
+```yaml
+liveness_signal:
+  what: one SOLEUR_EGRESS_GW_SILENT_SOAK verdict line per sweeper run, posted on tracker #12189 (verdict=, quiet_age_s=, rows_in_window=)
+  cadence: daily (scheduled-followthrough-sweeper.yml), first run after the tracker's earliest=2026-11-07T00:00:00Z
+  alert_target: the tracker issue comment (NOT YET, CANNOT ESTABLISH, ACTION REQUIRED headings) and the sweeper's red-run annotation
+  configured_in: scripts/followthroughs/egress-gw-probe-silent-12180.sh and .github/workflows/scheduled-followthrough-sweeper.yml
+error_reporting:
+  destination: stderr TRANSIENT and ACTION REQUIRED lines in the same sweeper comment (observability layer 6)
+  fail_loud: every unreadable or inconsistent input exits 3 with verdict=unknown; the EXIT trap remaps any stray exit 1 to 3
+failure_modes:
+  - mode: warehouse unreadable or credentials absent on the pass path
+    detection: exit 3, rows_in_window=unknown, TRANSIENT line names the exit code and byte length only
+    alert_route: sweeper comment CANNOT ESTABLISH
+  - mode: a roster host has no rows in the trailing 15 minutes while the alert is green
+    detection: exit 5, rows_in_window shows the zero host
+    alert_route: sweeper comment ACTION REQUIRED
+  - mode: the pin or a live cross-check disagrees (canary created_at, canary incident start, floor outside anchor..now)
+    detection: exit 3 naming the disagreeing input
+    alert_route: sweeper comment CANNOT ESTABLISH
+logs:
+  where: the sweeper job log and the tracker comment (last 4000 bytes of stdout and stderr)
+  retention: GitHub Actions log retention; the tracker comment is permanent
+discoverability_test:
+  command: bash scripts/followthroughs/egress-gw-probe-silent-12180.sh 2>&1 | grep -o SOLEUR_EGRESS_GW_SILENT_SOAK | head -1
+  expected_output: SOLEUR_EGRESS_GW_SILENT_SOAK
+```
 
 ## Implementation Phases
 
@@ -142,30 +191,47 @@ turns it GREEN.
 ### Phase 1 — Suite (RED)
 Edit `egress-gw-probe-silent-12180.test.sh`.
 1.1 Harness: add `EGRESS_GW_SILENT_FLOOR_EPOCH` to `run_case`'s env and a `FLOOR_AGE` default in `reset_defaults` (floor =
-`NOW - FLOOR_AGE`, 20000 by default; anchor start earlier than the floor; canary incident start = floor minus 64 s; canary
-alert `created_at` = floor plus 0..60 s). Default `ROSTER_BQ` becomes both roster hosts with non-zero counts so the
-compliant fixture passes. Add a 1048111600-shaped decoy (production name, started before the floor, resolved before the
-floor, `resolved_by` null) to `build_fixtures`.
+`NOW - FLOOR_AGE`, 20000 by default; anchor start AND anchor resolve both earlier than the floor, so `A_RES` must be set
+before the floor in the default, not `NOW - H4 - 3601`; canary incident start = floor minus 64 s). Keep `CANARY_ALERT_AGE`
+an INDEPENDENT knob (the young-canary rows need 300 to 1201 s; the new check only requires `created_at >= floor - 300`, so
+the old default of 100000 would now be exit 3 and must become a value at or after the floor minus slack). Open-incident rows
+(`A_RES=open`) use `FLOOR_AGE=3000` by default so they stay inside `QUIET_STALE_S`; the stale rows set it past 15300. Default
+`ROSTER_BQ` becomes both roster hosts with non-zero counts. The default compliant fixture is the real exit-0 shape: canary
+alert deleted (`ALERT_LIVE=0`), canary incident listed, `DECLARED=0`, anchor resolved by an actor. Add a 1048111600-shaped
+decoy (production name, started before the floor, resolved before the floor, `resolved_by` null) to `build_fixtures`, and
+pin that the anchor still lands on page 2 of the `PAGES=2` split (`$d[:3]`), since the added decoy shifts it. Give every alert
+fixture an `updated_at` of `NOW` (vendor churn) so a behavioral row proves it never changes a verdict.
 1.2 Rewrite the rows that encode the old contract (list from the current suite, by line group): the age-boundary rows
 (resolved 4 h minus 1 s / exactly / plus 1 s) become floor-age boundaries on non-collinear points; the "canary incident
 younger than 4 h" row becomes the floor-age row; the open-anchor staleness and `SOLEUR_FT_EARLIEST` rows become
 `quiet_since`-based and "EARLIEST is ignored" rows (a fresh and an ancient EARLIEST each leave the verdict unchanged);
 the `actor -> 5` rows and the `resolved_by` key-missing `-> 3` row become "informational: PASS with the field printed
-`actor` / `unknown`"; the row that asserts no warehouse read on a resolved incident flips (a pass now reads rows).
+`actor` / `unknown`"; the row that asserts no warehouse read on a resolved incident flips (a pass now reads rows), as does
+the PASS verdict-line row that pins `rows_in_window=na` and `anchor_resolved_by=none`. Also rewrite, found by reading the
+suite: the "second production incident in the anchor's own second" row (now pre-floor, so it is not a recurrence: rewrite
+as the slack-boundary pair); the `DECLARED=0` rows with canary alert AND incident absent that expect "DELETED or NEVER
+CREATED" or "apply|create" text (that shape is now the retired exit 5; they need `DECLARED=1`); the rows that use
+`STALE_S` or `CANARY_AGE` as a soak input; the rows at "resolved 10 s ago" and "resolved 7200 s ago" (they hinge on the
+anchor's `resolved_at` and now hinge on `quiet_since`).
 1.3 New rows (each with an exit and a field/message assertion): pre-floor resolved decoy never counts (PASS,
 `newer_prod_incident=0`); recurrence at exactly floor minus 300 counts, at floor minus 301 does not (two non-collinear
 fixtures); a second post-floor incident after a compliant pre-floor one counts; pre-floor OPEN non-anchor incident -> 2
 inside `quiet_since + 15300`, 5 past it; a pre-floor incident resolved after the floor moves `quiet_since` (boundary pair);
-rows on the pass path: warehouse rc non-zero -> 3, credentials unbound -> 3, non-row answer -> 3, one roster host at zero
--> 5, an extra non-roster host cannot cover a missing roster host, empty `EGRESS_GW_SILENT_ROSTER` -> 3; floor checks:
-floor after now -> 3, floor before the anchor's start -> 3, listed canary alert with `created_at` missing / unparseable /
-before floor minus slack -> 3, duplicate canary alerts -> 3, listed canary incident before floor minus slack -> 3; retired
+rows on the pass path (one row per distinct code path; the unreadable-warehouse modes run as one loop over mock modes):
+warehouse rc non-zero / non-row answer -> 3, credentials unbound -> 3, empty `EGRESS_GW_SILENT_ROSTER` -> 3, one roster
+host at zero -> 5, an extra non-roster host cannot cover a missing roster host; floor checks: floor after now -> 3, floor
+before the anchor's start -> 3, listed canary alert with `created_at` missing / unparseable / before floor minus slack -> 3
+(one loop of three fixtures; these rows run only while the alert is listed, the post-deletion shape is the default fixture),
+duplicate canary alerts -> 3, a listed canary incident before floor minus slack -> 3 and a second fixture with two canary
+incidents where the earlier one predates the bound (still 3: a re-created canary needs a re-pin); an unparseable
+`resolved_at` on any listed production incident -> 3 (never read as open); retired
 canary (alert absent, incident absent, not declared) -> distinct 5 whose text is not "DELETED or NEVER CREATED", and the
 declared variant keeps the old text; anchor single read vs list disagree on resolved state -> 3.
 1.4 Pins and floor: the 12-field verdict-line order regex (the first ten unchanged, then `quiet_age_s`,
-`pre_floor_open_prod_incident`); source pins: `APPLY_FLOOR_EPOCH=` is assigned once at column 0 as digits, the SUT code
-does not read `SOLEUR_FT_EARLIEST` or `updated_at`, the RETIREMENT block lists `APPLY_FLOOR_EPOCH`; negative controls for any
-new helper; re-pin `MIN_ASSERTIONS` from a green run (never hand-edit; `grep -n '^MIN_ASSERTIONS='` after).
+`pre_floor_open_prod_incident`) with anchored character classes so the two appended values can only be digits, `-1`, or a
+fixed token (they are posted publicly); source pins: `APPLY_FLOOR_EPOCH=` is assigned once at column 0 as digits and the
+RETIREMENT block lists `APPLY_FLOOR_EPOCH` (no source-grep pin for `SOLEUR_FT_EARLIEST` / `updated_at`: behavioral rows
+only, per simplicity review); negative controls for any new helper; re-pin `MIN_ASSERTIONS` from a green run (never hand-edit; `grep -n '^MIN_ASSERTIONS='` after).
 Exit: `bash scripts/followthroughs/egress-gw-probe-silent-12180.test.sh` fails against the unmodified probe on the new rows.
 
 ### Phase 2 — Probe (GREEN)
@@ -174,10 +240,15 @@ Edit `egress-gw-probe-silent-12180.sh` to the CTO ladder:
 42216140017, canary alert `created_at` 12:16:03.768Z, "re-pin by hand in the PR that changes the production alert's
 evaluated query, `on_missing_data` or `query_period`"), `FLOOR="${EGRESS_GW_SILENT_FLOOR_EPOCH:-$APPLY_FLOOR_EPOCH}"`,
 `SLACK_S=300`; `QUIET_STALE_S=15300` replaces `STALE_S`. Delete the `SOLEUR_FT_EARLIEST` parsing block.
-2.2 Setup checks (all `unknown`, exit 3): `FLOOR` numeric and `anchor_start <= FLOOR <= NOW`; more than one canary alert;
+2.2 Setup checks (all `unknown`, exit 3): `FLOOR` numeric, canonicalized with `FLOOR=$((10#$FLOOR))` and digit-capped (a
+leading-zero value passes `^[0-9]+$` but breaks `--argjson`), and `anchor_start <= FLOOR <= NOW`; more than one canary alert;
 a listed canary alert whose `created_at` is not an epoch or is earlier than `FLOOR - SLACK_S`; a listed canary incident
 earlier than `FLOOR - SLACK_S`; the anchor's open/resolved state differing between the single read and the list.
-2.3 Replace the `newer` filter: exact-name production incidents with `id != anchor` and `epoch >= FLOOR - SLACK_S` are the
+2.3 After EVERY new `$( )` derived value (recurrence set, canary incident list, `quiet_since`, pre-floor open set, flags)
+assert the shape (`=~ ^[0-9]+$`, or `0|1`) and call `unknown` otherwise; the existing `newer=` / `canary_inc=` jq calls are
+unchecked today and a jq failure there reads as zero. In the projection, error when `resolved_at != null` and
+`resolved_epoch == null` (an unparseable resolve must be exit 3, not "open"). `quiet_since` takes the max over
+`select(.resolved_epoch != null)` with `// empty` (jq `max` of an empty list is null). Replace the `newer` filter: exact-name production incidents with `id != anchor` and `epoch >= FLOOR - SLACK_S` are the
 recurrence set (`V_NEWER`). Compute `quiet_since = max(FLOOR, max resolved_epoch over listed exact-name production
 incidents)`, `V_QUIET = NOW - quiet_since`, and the pre-floor open set (exact-name, unresolved, not in the recurrence set,
 anchor included).
@@ -186,13 +257,14 @@ anchor included).
 open 2 until `V_QUIET > QUIET_STALE_S` then 5; `V_QUIET < SOAK_S` -> 2; rows check; canary declared or live -> 5; pass.
 Delete the `V_RBY == actor` exit 5, the `V_RBY != none` exit 3, the `V_AGE` gate and the canary-age gate. Keep `V_RBY`,
 `V_AGE`, `V_PROD` as informational fields.
-2.5 Rows: refactor the warehouse read into a function `read_rows` (called from the main shell, never inside `$( )`, per the
+2.5 Rows (diagnostic trigger now also fires for a pre-floor open incident, not only `V_PROD == open` or a recurrence): refactor the warehouse read into a function `read_rows` (called from the main shell, never inside `$( )`, per the
 2026-10-22 learning) that sets `V_ROWS` and `ROWS_OK` (1 only when every roster host has `n > 0`, computed in the same jq
 that builds the field); it keeps running diagnostically for an open / recurrence verdict and is now also called before the
 rows step; unknown on the pass path -> `unknown ... ; exit 3`, a zero roster host -> `action ...; verdict action_required 5`.
 2.6 `emit_line` appends `quiet_age_s` and `pre_floor_open_prod_incident`; update the header's verdict-line, EXIT CONTRACT,
 EARLIEST paragraph (now: the probe does not read it, and why), the soak-origin text, a "BLIND SPOT" note (the walk stops at the
-anchor, so an open production incident older than the anchor is invisible), a "PIN" note, and the RETIREMENT list (add the
+anchor, so a production incident older than the anchor is invisible, whether it is open or resolves after the floor), rewrite the
+step-5 and `na` sentences (rows are no longer diagnostic-only), a "PIN" note, and the RETIREMENT list (add the
 pin and the ADR note as sites; the suite derives referrers from the header). Exit 1 stays absent.
 Exit: the suite is green; `bash -n`; no `exit 1` in non-comment code.
 
@@ -373,6 +445,14 @@ Product, Legal, Marketing, Finance, Operations, Sales, Support: no implications 
   amendment and RETIREMENT list say so).
 - **Alert `updated_at` is vendor churn (about every 5 minutes), inferred not measured.** Never use it as a change marker; a
   suite row pins that the SUT does not read it.
+- **The slack is asymmetric.** An old-shape incident that started in `[floor - 300, floor)` would count as a recurrence
+  forever. Measured against the incident list read at 14:20Z on 2026-11-06: no production incident started in
+  `[12:11:03Z, 12:16:03Z)` (1048111600 started 07:45Z and resolved 12:10:00Z), so the window is empty today.
+- **Pin provenance.** Apply run 42216140017 ran 12:14:26Z to 12:17:27Z; the canary incident started 12:14:59Z, 64 s before
+  the alert's `created_at` 12:16:03.768Z, so the production alert's shape change landed somewhere inside that run, possibly
+  before 12:16:03Z. The pin may therefore be later than the true change by up to about 1.6 minutes; the 300 s slack covers
+  it. The probe header must say so and cite the run window, not only the single timestamp.
+- **A re-created canary needs a re-pin.** Any listed canary incident or alert older than the bound is exit 3, by design.
 - **Canary incident survival after alert deletion is still unverified.** The pass depends on it; if the vendor drops it, the
   distinct exit 5 asks for a hand close citing the last `canary=fired` comment.
 - **Recurrence is permanent by design.** One production incident at or after the floor keeps returning exit 5 daily until a
