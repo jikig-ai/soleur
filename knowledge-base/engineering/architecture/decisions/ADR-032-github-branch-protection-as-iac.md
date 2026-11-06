@@ -959,6 +959,18 @@ synthetic-check SSOT (`scripts/required-checks.txt`, with per-member compound
 no commit does a required name lack a `merge_group` producer — the
 pend-forever deadlock class the 2026-06-30 amendment records.
 
+**Self-merge path (this PR's own landing).** While this PR is open the live
+ruleset still requires the 16 old context names — which this branch's
+workflows no longer produce — so the PR's head reports only the new umbrella
+names and the old names stay Expected-forever. `gh pr merge --auto` would arm
+an entry that can never dequeue (its merge_group candidate contains the new
+workflows and produces only the new names; the entry ejects at the 120-min
+timeout). The landing path is therefore `gh pr merge --admin` once the 10
+reporting contexts (3 umbrellas + 7 unrenamed) are green — the old-name
+pending rows are expected-by-design, not a broken run. Post-merge,
+`apply-github-infra.yml` applies the renamed set (~minutes) and the
+transition-hazard recipe below covers in-flight queue entries.
+
 **Transition hazard and re-queue recipe.** Entries already inside the merge
 queue when this apply lands carry a stale required-context set: their
 `merge_group` runs post `guards-ruleset`/`quality-guards`/`secret-guards`,

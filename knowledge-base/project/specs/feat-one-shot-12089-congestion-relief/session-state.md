@@ -37,3 +37,12 @@
 - Deferred filed: #12269 (max_entries_to_build experiment, epic #11556). Oracle-lane activation stays a separate authorized PR per runbook (audit evidence accumulating under CI_ORACLE_LANE=on).
 - Census baseline (task 3.5): `scripts/ci-demand-census.sh` window 2026-11-05T12:00Z→2026-11-06T00:00Z running in background; result attaches to #12089 before merge.
 - Tier: C sequential (single-agent implementation for ABI coherence — atomic context rename, single-user-incident threshold).
+
+## Review Phase (in progress)
+- PANEL_SHA=5df484e5aa (pre-fix heads include review-fix commits after it).
+- Class: code → 8-agent panel. design-risk: YES → design-validity pass ran first (code-simplicity: MECHANISM JUSTIFIED; architecture-strategist: SOUND w/ P1 ubuntu-latest pin + P2 admin-merge-path doc gap; performance-oracle: CLAIM VERIFIED ~24 slots/PR-run).
+- Fixed pre-panel: secret-guards runs-on → ubuntu-24.04; self-merge admin path documented in ADR-032 amendment + plan Phase 3 + PR body.
+- Remaining panel (deduped arch+perf): git-history-analyzer, pattern-recognition, security-sentinel, data-integrity-guardian, agent-native-reviewer, code-quality-analyst + conditional user-impact-reviewer (single-user incident) — 7 seats.
+- Open findings to synthesize post-panel: P3 member() dedup/parity-sentinel, P4 if:-spelling drift, P4 quality-advisory permissions-union note, P2 perf expectations for post-merge #12089 comment (quality-guards MQ thin margin ~9%; umbrella-row p90 may exceed old member maxima ~350s), P3 shared-runner contamination watch.
+- After panel: resolve findings → fix-commit targeted round (ADR-267, review --fix-round --since <panel-sha>) → soleur:qa → soleur:compound → soleur:ship. Merge path: gh pr merge --admin (operator-authorized — REQUIRED, auto-merge deadlocks; ask operator at ship time).
+- Census baseline still running (shell 3d50b2): attach result to #12089 before merge.
