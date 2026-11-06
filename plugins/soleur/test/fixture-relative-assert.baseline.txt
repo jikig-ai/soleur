@@ -167,7 +167,7 @@
 1	apps/web-platform/infra/arm-heartbeats.test.sh
 4	apps/web-platform/infra/canary-bundle-claim-check.test.sh
 21	apps/web-platform/infra/ci-deploy.sh
-12	apps/web-platform/infra/ci-deploy.test.sh
+13	apps/web-platform/infra/ci-deploy.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-bootstrap.test.sh
 1	apps/web-platform/infra/cloud-init-inngest-zot-pull-mutation.test.sh
 7	apps/web-platform/infra/container-restart-monitor.sh
@@ -452,6 +452,8 @@
 1	scripts/check-cloudflare-token-drift.test.sh
 8	scripts/ci-draft-push-census.sh
 5	scripts/ci-draft-push-census.test.sh
+8	scripts/ci-oracle-lane.sh
+2	scripts/ci-oracle-lane.test.sh
 8	scripts/ci-pr-selection.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh
@@ -545,7 +547,7 @@
 3	scripts/test-all-orphan-log-retention.test.sh
 7	scripts/test-all-parallel-benchmark.test.sh
 8	scripts/test-all-parallel-contention.test.sh
-8	scripts/test-all-parallel-scheduler.test.sh
+6	scripts/test-all-parallel-scheduler.test.sh
 1	scripts/test-all-runtime-ceiling.test.sh
 9	scripts/test-all.sh
 2	scripts/test-all-weight-drift.test.sh

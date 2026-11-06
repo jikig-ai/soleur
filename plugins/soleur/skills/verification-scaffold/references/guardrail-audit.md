@@ -112,6 +112,7 @@ template rather than shipping the monolith.
 | `lint-feature-map-coverage.sh` | soleur-coupled | `apps/web-platform/app/**` page set + `feature-map.md`. |
 | `lint-followthrough-varq-ban.sh` | soleur-coupled | Soleur probe-set/varq conventions. |
 | `lint-gh-argv-arg.py` | generic | Repo-wide `gh` argv vs jq-flag-token lint over workflows + `*.sh`; no Soleur coupling. |
+| `lint-gh-dedupe-shape.py` | generic | Repo-wide `gh issue|pr list/search` capture-shape census over `.github/workflows/` — typed `dedupe:` markers (fail-closed/benign), vacuous-arm + condition-list detection; workflow-only producer, no Soleur coupling. |
 | `lint-guard-contract.py` | soleur-coupled | Soleur plan/SKILL.md guard-contract shape (deepen-plan §4.11). |
 | `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store. Zero-tolerance — #9755 retired the `op=backup` allowlist entry. |
 | `lint-infra-no-human-steps.py` | soleur-coupled | `hr-no-ssh-fallback-in-runbooks` on `knowledge-base` docs. |

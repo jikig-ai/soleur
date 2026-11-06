@@ -1507,6 +1507,19 @@ def _validate_store(s: dict, i: int) -> list[str]:
             errs.append(f"{prefix} missing '{f}'")
     if "kind" in s and s["kind"] not in STORE_KIND_ENUM:
         errs.append(f"{prefix}.kind invalid: {s.get('kind')!r}")
+    # #8624: `records` is the optional register-citation field the JSON schema
+    # declares on the store object. The hand-rolled validator does not enforce
+    # store-level additionalProperties, so without this arm a malformed
+    # `records` would pass the sweep silently; a non-list or a placeholder
+    # string fails here instead.
+    if "records" in s:
+        recs = s["records"]
+        if not isinstance(recs, list) or any(
+            not isinstance(r, str) or len(r) < 8 for r in recs
+        ):
+            errs.append(
+                f"{prefix}.records must be a list of citation strings (>=8 chars each)"
+            )
     if "at_rest" in s and isinstance(s["at_rest"], dict):
         ar = s["at_rest"]
         for f in ("mechanism", "defends_against", "does_not_defend", "disclosed_as", "live_verification"):

@@ -930,3 +930,24 @@ resource "sentry_cron_monitor" "scheduled_git_data_erasure_redrive" {
   recovery_threshold      = 1
   timezone                = "UTC"
 }
+
+# 2026-11-05 (#8839): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-agent-spawn-stale-settle.ts`.
+# The stale-Working backstop itself is a monitored cron — if the scheduler stops
+# firing it, a lost run sits on "Working" undetected exactly when the sweep is
+# needed. Posts ok=false only when the select step failed. No in_progress
+# check-in, so max_runtime_minutes is inert. 15-min crontab matches the handler;
+# the 30-min margin and 10-min runtime mirror the Inngest small-cron cohort
+# (scheduled-approval-expiry, scheduled-git-data-erasure-redrive). Slug MUST
+# match SENTRY_MONITOR_SLUG in the handler.
+resource "sentry_cron_monitor" "scheduled_agent_spawn_stale_settle" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-agent-spawn-stale-settle"
+  schedule                = { crontab = "*/15 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}

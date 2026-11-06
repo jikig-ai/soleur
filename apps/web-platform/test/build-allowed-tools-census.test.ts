@@ -384,11 +384,13 @@ describe("buildAllowedTools: unit census", () => {
       expect(missing).toEqual([]);
     });
 
-    test("the cc-soleur-go registry names (narrate/summarize, edit_c4_diagram, the crm-lead set) are decided in the table too", async () => {
+    test("the cc-soleur-go registry names (narrate/summarize, edit_c4_diagram, the crm-lead set, the gated push tool) are decided in the table too", async () => {
       const { CC_REGISTERED_PLATFORM_TOOL_NAMES, crmLeadPermissionToolNames } = await import("../server/cc-dispatcher");
       const { C4_TOOL_FQN } = await import("../server/c4-concierge-tools");
-      const ccNames = [...CC_REGISTERED_PLATFORM_TOOL_NAMES, C4_TOOL_FQN, ...crmLeadPermissionToolNames(true)];
-      expect(ccNames.length).toBeGreaterThan(5); // not vacuous: narrate, summarize, c4 and the crm tools
+      const { CC_GRANT_WIRED_APPROVAL_TOOLS } = await import("../server/cc-github-push");
+      const ccNames = [...CC_REGISTERED_PLATFORM_TOOL_NAMES, C4_TOOL_FQN, ...crmLeadPermissionToolNames(true), ...CC_GRANT_WIRED_APPROVAL_TOOLS];
+      expect(ccNames.length).toBeGreaterThan(5); // not vacuous: narrate, summarize, c4, the crm tools and the push tool
+      expect(ccNames).toContain(`${PREFIX}github_push_branch`);
       for (const n of ccNames) {
         expect(Object.hasOwn(TOOL_TIER_MAP, n), `no explicit tier for cc-registered tool ${n}`).toBe(true);
         expect(TOOL_TIER_MAP[n]).toBe(EXPECTED_TOOL_TIERS[n]);

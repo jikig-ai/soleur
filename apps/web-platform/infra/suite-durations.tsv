@@ -2,7 +2,7 @@
 # group=infra
 # generated-from-runs=40936377720,40883248903,40875701895,40836579393,40796005155,40944524196,40952456472,40964559289
 # default-weight-ms=4000
-# generated-at=2026-11-02T23:31:43Z
+# generated-at=2026-11-05T14:23:52Z
 # generator=regenerate-shard-manifest.py v3
 apps/web-platform/infra/apex-single-node-replace-mutation.test.sh	15000	measured
 apps/web-platform/infra/apex-single-node-replace.test.sh	500	measured
@@ -93,6 +93,7 @@ apps/web-platform/infra/inngest-doublefire-probe.test.sh	4000	measured
 apps/web-platform/infra/inngest-enumerate-reminders.test.sh	1500	measured
 apps/web-platform/infra/inngest-flip-token.test.sh	10000	measured
 apps/web-platform/infra/inngest-gate-witness-classify.test.sh	1000	measured
+apps/web-platform/infra/inngest-host-replace-preflight.test.sh	4000	floor
 apps/web-platform/infra/inngest-host-state-workflow-guard.test.sh	8000	measured
 apps/web-platform/infra/inngest-host.test.sh	7000	measured
 apps/web-platform/infra/inngest-inventory.test.sh	8000	measured
@@ -127,6 +128,7 @@ apps/web-platform/infra/luks-monitor-install.test.sh	234000	measured
 apps/web-platform/infra/luks-monitor.test.sh	8500	measured
 apps/web-platform/infra/mu1-runbook-cleanup.test.sh	500	measured
 apps/web-platform/infra/nic-wait-gate.test.sh	1000	measured
+apps/web-platform/infra/origin-tls-probe.test.sh	4000	floor
 apps/web-platform/infra/orphan-reaper.test.sh	0	measured
 apps/web-platform/infra/pages-build-identity-probe.test.sh	1000	measured
 apps/web-platform/infra/pr5-anchor-integrity.test.sh	0	measured

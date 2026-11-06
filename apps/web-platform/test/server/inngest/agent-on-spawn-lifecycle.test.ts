@@ -740,7 +740,7 @@ describe("registration (T15, T16)", () => {
       `${inngest.id}-agent-on-spawn-requested-failure`,
     ]);
     expect(FINISH_TIMEOUT_MS).toBe(10 * 60_000);
-    expect((fn.getConfig(BASE)[0] as unknown as { timeouts: unknown }).timeouts).toEqual({ finish: "10m" });
+    expect((fn.getConfig(BASE)[0] as unknown as { timeouts: unknown }).timeouts).toEqual({ start: "10m", finish: "10m" });
   });
 
   it("T16: agentOnSpawnSettle has exactly the two triggers, the cancel filter equal to the SDK's own failure filter", () => {

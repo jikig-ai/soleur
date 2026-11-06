@@ -406,9 +406,9 @@ Placement, the item 4 push-bar exemption and the closed set of four subcommands 
 section 9 and are pinned in `components.test.ts`; they are not restated. The item 4 exemption is an owner-visible
 widening of the push bar by exactly two named files (the wrapper and its test), not a clarification of the glob.
 
-Credentials exception, stated plainly: the `ssl-mode`, `config-entrypoint` and `pagerules-ssl` subcommands read with
+Credentials exception, stated plainly: the `ssl-mode` and `config-entrypoint` subcommands read with
 `CF_API_TOKEN_ZONE_SETTINGS` and `CF_API_TOKEN_RULESETS`, which are Terraform-scoped and write-capable because no
-read-only equivalent exists. That is the one exception to the read-only-token rule, accepted because the wrapper
+read-only equivalent exists. (Amendment 2026-11-05, Ref #10205: `pagerules-ssl` no longer shares `CF_API_TOKEN_RULESETS`, which returned 403 on page rules; it reads with the zone-scoped read-only `CF_API_TOKEN_PAGERULES_READ`, no fallback, so it is outside this exception.) That is the one exception to the read-only-token rule, accepted because the wrapper
 hardcodes GET, fixes the host and URL templates, and starts curl, jq and date each with an empty environment. The
 exception is a bridge, not a standing rule: it expires when read-only equivalents of those two tokens are minted (the credential mint tracked in #11857, which is the owner's act), and the wrapper's Cloudflare subcommands are then rebound to them. The audit read uses a separate read-only `CF_API_TOKEN_AUDIT`, which is documented under the Doppler dev config:
 moving it into the provisioned config is part of the same owner credential act, and until it moves `change-history` is expected to record

@@ -82,11 +82,9 @@ plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowled
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/brainstorms/archive
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/plans
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/specs
+plugins/soleur/skills/incident/test/pull-card.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	knowledge-base/engineering/security/skill-overrides
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
-plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/engineering/architecture/diagrams
-plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/marketing/brand-guide.md
-plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/product/roadmap.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
 plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
@@ -146,6 +144,11 @@ plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/poli
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/ci-draft-light	knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md
+scripts/ci-oracle-lane	knowledge-base
+scripts/ci-oracle-lane	knowledge-base/engineering/architecture/diagrams
+scripts/ci-oracle-lane	knowledge-base/project
+scripts/ci-oracle-lane	knowledge-base/project/learnings
+scripts/ci-oracle-lane	knowledge-base/project/specs
 scripts/ci-pr-selection	knowledge-base
 scripts/ci-pr-selection	knowledge-base/engineering/architecture/diagrams
 scripts/ci-pr-selection	knowledge-base/project
@@ -154,6 +157,7 @@ scripts/ci-pr-selection	knowledge-base/project/specs
 scripts/ci-pr-selection	knowledge-base/project/specs/archive
 scripts/ci-pr-selection	knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 scripts/ci-push-dedupe	knowledge-base
+scripts/ci-push-dedupe	knowledge-base/engineering/architecture/diagrams
 scripts/ci-push-dedupe	knowledge-base/project/specs
 scripts/compound-promote	knowledge-base
 scripts/compound-promote	knowledge-base/project

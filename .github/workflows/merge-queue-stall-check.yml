@@ -236,9 +236,9 @@ jobs:
             # for PR #1 ("…PR #1") would startswith-match PR #12's title
             # ("…PR #12 pending …") and suppress a genuine stall for #1.
             match_anchor="merge-queue stall: PR #${pr} pending"
-            existing="$(gh issue list --repo "$GH_REPO" --state open --limit 100 \
+            existing=$(gh issue list --repo "$GH_REPO" --state open --limit 100 \
               --label merge-queue-stall --json number,title --jq '.[] | [.number, .title] | @tsv' \
-              | awk -F'\t' -v p="$match_anchor" 'index($2, p) == 1 { print $1; exit }')"
+              | awk -F'\t' -v p="$match_anchor" 'index($2, p) == 1 { print $1; exit }') || { echo "::error::merge-queue-stall: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; existing=""; }
             if [[ -n "$existing" ]]; then
               echo "Open stall issue #${existing} already tracks PR #${pr}; skipping create."
               continue

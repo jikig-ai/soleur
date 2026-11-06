@@ -25,6 +25,7 @@ import { cfoOnPaymentFailed } from "@/server/inngest/functions/cfo-on-payment-fa
 import { cronActionRequiredSla } from "@/server/inngest/functions/cron-action-required-sla";
 import { cronActionsQueueHealthDispatch } from "@/server/inngest/functions/cron-actions-queue-health-dispatch";
 import { cronAgentNativeAudit } from "@/server/inngest/functions/cron-agent-native-audit";
+import { cronAgentSpawnStaleSettle } from "@/server/inngest/functions/cron-agent-spawn-stale-settle";
 import { slaIssueProcess } from "@/server/inngest/functions/sla-issue-process";
 import { cronAnthropicCostReport } from "@/server/inngest/functions/cron-anthropic-cost-report";
 import { cronAnthropicCreditProbe } from "@/server/inngest/functions/cron-anthropic-credit-probe";
@@ -134,6 +135,7 @@ const handlers = serve({
     cronActionsQueueHealthDispatch,
     slaIssueProcess,
     cronAgentNativeAudit,
+    cronAgentSpawnStaleSettle,
     cronAnthropicCostReport,
     cronAnthropicCreditProbe,
     cronApprovalExpiry,

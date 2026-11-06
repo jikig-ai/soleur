@@ -129,16 +129,19 @@ def cf_list_item_count($side):
 #
 # proxy-TLS is DELIBERATELY ABSENT (ADR-118 premise falsified, measured 2026-07-17).
 # tls_private_key.proxy_server / tls_self_signed_cert.proxy_server /
-# doppler_secret.proxy_tls_{cert,key} are absent from BOTH state and Doppler prd —
-# `proxy-tls.tf` is "contract before consumer" config that was never applied — so
-# they plan as CREATE, not the replace/update ADR-118 assumed. Excluding them means
-# any attempt to birth them inside a host retirement trips
-# web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to B6.2's
-# -target list: targeting doppler_secret.proxy_tls_cert without
+# doppler_secret.proxy_tls_{cert,key} were absent from BOTH state and Doppler prd at
+# the #6538 retirement — `proxy-tls.tf` was "contract before consumer" config that had
+# never been applied — so they planned as CREATE, not the replace/update ADR-118
+# assumed. Excluding them means any attempt to birth them inside a host retirement
+# trips web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to a
+# retire -target list: targeting doppler_secret.proxy_tls_cert without
 # doppler_secret.proxy_tls_key writes a cert to prd with NO matching key.
-# (#8754) They are now count-gated on host_proxy_tls_enabled (default false), so a
-# retirement plan contains none of them unless the flip set the variable; when present
-# they carry `[0]` and still fall outside web2_retire_allow.
+# (#8754, #12167) They are count-gated on host_proxy_tls_enabled, which the multi-host
+# flip (#12167) defaulted to true, so the per-merge saved plan now CREATES all four
+# (addresses carry `[0]`). That create is not a retirement: it trips no counter in this
+# file (T47b), and a later roster change plans the cert as an ordinary ackable
+# delete+create (T47c), never a host_creates halt. They stay outside web2_retire_allow
+# because that set is one operation's contract (retire web-2), not a fleet allow-list.
 def web2_retire_allow: [
   "hcloud_server.web[\"web-2\"]",
   "hcloud_server_network.web[\"web-2\"]",

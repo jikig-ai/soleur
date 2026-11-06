@@ -41,24 +41,6 @@ on:
         description: "Why are you applying? (e.g. transient retry, or the dispatch reason)"
         required: true
         type: string
-      # NOTE: 25-input cap since 2025-12-04; 9 used (5 inngest-backstop-retire inputs retired).
-      # Prefer a DEDICATED workflow for the next per-target group (precedent: workspaces-luks-cutover.yml;
-      # the concurrency group is a shared literal and survives the split). Re-derive the count:
-      #   awk '/^  workflow_dispatch:/,/^concurrency:/' .github/workflows/apply-web-platform-infra.yml \
-      #     | grep -cE '^      [a-z_]+:$'
-      # A literal copied from a sibling PR's base is stale the moment either lands.
-      #
-      # Typo-guard for the two destructive recut paths (ignored by every other target). It is NOT
-      # the authorization:
-      #   * workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
-      #     that job is the sole human authorization (DP-11 F8). HARD-RETIRED by #6604 step 7 (PR B):
-      #     the job's first step exits 1 on every dispatch, before any credential or plan.
-      #   * registry-luks-recut (#6929) — still NOT reviewer-gated: its authorization is the
-      #     menu-ack dispatch itself (hr-menu-option-ack-not-prod-write-auth) and this token
-      #     only guards a mis-dispatch. Since #8209 it DOES carry `environment: infra-privileged`
-      #     — no reviewer, but main-only, so a non-`main` dispatch is refused first.
-      # Each job accepts only its OWN literal, so a token typed for one target cannot authorize
-      # the other.
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §confirm and the gate model
       # Rationale: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md §plan_only
       plan_only:
@@ -543,6 +525,7 @@ jobs:
               -target=doppler_service_account_token.token_drift \
               -target=github_actions_secret.doppler_token_drift \
               -target=doppler_service_token.inngest_arm_write \
+              -target=doppler_service_token.inngest_flip_read \
               -target=github_repository_environment.inngest_cutover \
               -target=github_repository_environment.inngest_config_signing \
               -target=github_repository_environment.workspaces_luks_cutover \
@@ -551,8 +534,11 @@ jobs:
               -target=github_repository_environment_deployment_policy.web_platform_infra_apply_main_adopted \
               -target=github_repository_environment_deployment_policy.inngest_cutover_main \
               -target=github_repository_environment.infra_privileged \
+              -target=github_repository_environment.release_publish \
               -target=github_repository_environment_deployment_policy.infra_privileged_main \
               -target=github_repository_environment_deployment_policy.workspaces_luks_cutover_main \
+              -target=github_repository_environment_deployment_policy.release_publish_main \
+              -target=github_repository_environment_deployment_policy.inngest_config_signing_main \
               -target=doppler_project.infra_privileged \
               -target=doppler_environment.infra_privileged_prd \
               -target=doppler_project.github_app_runtime \
@@ -578,6 +564,7 @@ jobs:
               -target=doppler_service_token.workspaces_luks_marker_write \
               -target=github_actions_secret.doppler_token_workspaces_luks_marker \
               -target=github_actions_secret.doppler_token_inngest_arm \
+              -target=github_actions_secret.doppler_token_inngest_flip_read \
               -target=tls_private_key.ci_ssh \
               -target=doppler_secret.deploy_ssh_private_key \
               -target=doppler_secret.ghcr_read_user \
@@ -674,6 +661,10 @@ jobs:
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
               -target=logtail_exploration.inngest_cutover_flip_silent \
               -target=logtail_exploration_alert.inngest_cutover_flip_silent \
+              -target=tls_private_key.proxy_server \
+              -target=tls_self_signed_cert.proxy_server \
+              -target=doppler_secret.proxy_tls_key \
+              -target=doppler_secret.proxy_tls_cert \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=tls_private_key.inngest_link \
@@ -1926,66 +1917,62 @@ jobs:
             exit 1
           fi
 
-      # INHERITED-`done` PREFLIGHT (2026-09-17 incident). A replace of this host leaves its
-      # scheduler REFUSING TO START, every time, and nothing said so before this step existed.
-      #
-      # `INNGEST_CUTOVER_FLIP` lives in Doppler and OUTLIVES the host. The matching
-      # `done-owner` marker lives on the host ROOT DISK, which a replace destroys. So the new
-      # machine inherits a `done` it never earned, and inngest-server-flip-guard.sh correctly
-      # refuses a prod start on it (#7228 -- the guard is preventing a SECOND prod scheduler,
-      # not malfunctioning). Measured: two replaces, 76 minutes with no live scheduler, and the
-      # cause stayed invisible until the host journal was read.
-      #
-      # This step does NOT block. The replace is often exactly what the operator wants and the
-      # recovery is one dispatch; it exists so the recovery is known BEFORE the outage rather
-      # than after. It degrades open -- an unreadable flag warns and proceeds, because failing
-      # a replace over an advisory read would be worse than the condition it advises about.
-      - name: 'Preflight - warn if this replace will strand the scheduler (#7228)'
-        continue-on-error: true
+      # INHERITED-`done` PREFLIGHT (#8252, 2026-09-17). A replace of this host strands the scheduler when
+      # INNGEST_CUTOVER_FLIP is `done` (the root-disk marker is destroyed, the Doppler flag is not). This step
+      # does not block that; it makes the recovery known BEFORE the outage. It does FAIL CLOSED when it cannot
+      # measure (empty token, blind instrument, failed read of a present key): a skipped guard is not a cleared
+      # one (#9927). Rationale, the rc-capture reasoning and the non-`done` stranding values live in the runbook
+      # inngest-server.md, inherited-done section; the token is inngest-flip-read-token.tf.
+      - name: 'Preflight - inherited-done check, fails closed on a blind instrument (#8252, #9927)'
         env:
-          DOPPLER_TOKEN_INNGEST_ARM: ${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}
+          DOPPLER_TOKEN_INNGEST_FLIP_READ: ${{ secrets.DOPPLER_TOKEN_INNGEST_FLIP_READ }}
         run: |
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
           set -uo pipefail
           RECOVER="gh workflow run cutover-inngest.yml -f op=resume  (then APPROVE the inngest-cutover environment gate in the Actions UI -- the run holds in Waiting and executes no step until someone does; verify with: gh run list -w cutover-inngest.yml -L 1)"
-          if [[ -z "${DOPPLER_TOKEN_INNGEST_ARM:-}" ]]; then
-            echo "::warning::inherited-done preflight SKIPPED (no DOPPLER_TOKEN_INNGEST_ARM). If INNGEST_CUTOVER_FLIP is 'done', this replace leaves inngest-server refusing to start (#7228); recover with: ${RECOVER}"
-            exit 0
+          if [[ -z "${DOPPLER_TOKEN_INNGEST_FLIP_READ:-}" ]]; then
+            echo "::error::inherited-done preflight cannot run: DOPPLER_TOKEN_INNGEST_FLIP_READ is empty. Repair: re-run the apply-web-platform-infra push run if one failed, otherwise dispatch it with its default target, then re-dispatch the replace (never -replace on a partial apply). Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."
+            exit 1
           fi
-          # rc CAPTURED, not discarded. `2>/dev/null || true` collapsed seven conditions into
-          # one "unreadable" message: secret absent (the NORMAL pre-cutover state), token
-          # revoked, wrong project/config, doppler missing, network fault, typo — and the
-          # secret genuinely holding "". That last one is a SAFE read, and it was being
-          # reported with the same alarm as a dead instrument. A revoked token additionally
-          # makes this step permanently blind, and because it degrades open on every run
-          # nobody would ever notice.
+          blind() { local t=""; case "$1" in *"exit 124") t=" - timed out after 30s" ;; esac; echo "::error::inherited-done preflight: no verdict could be formed (${1}${t}); replace not cleared. Runbook: knowledge-base/engineering/operations/runbooks/inngest-server.md, section 'The inherited-done preflight'."; exit 1; }
+          warn_unset() { echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET or empty. No inherited-done hazard, but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until it is set (#9927 retired the verbs that could re-arm it; runbook: Retired cutover verbs)."; }
+          command -v doppler >/dev/null 2>&1 || blind "doppler missing"
+          command -v jq >/dev/null 2>&1 || blind "jq missing"
+          NAMES_RC=0
+          NAMES="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_FLIP_READ" timeout 30 doppler secrets --only-names --json -p soleur-inngest -c prd 2>/dev/null)" || NAMES_RC=$?
+          [[ "$NAMES_RC" -eq 0 ]] || blind "names list exit ${NAMES_RC}"
+          [[ -n "$NAMES" ]] || blind "names list empty"
+          printf '%s' "$NAMES" | jq -e 'type=="object" and length>0' >/dev/null 2>&1 || blind "names list is not a non-empty JSON object"
+          HAS_RC=0
+          printf '%s' "$NAMES" | jq -e 'has("INNGEST_CUTOVER_FLIP")' >/dev/null 2>&1 || HAS_RC=$?
+          case "$HAS_RC" in
+            0) ;;
+            1)
+              echo "INNGEST_CUTOVER_FLIP is not in the config's names (the list was read)."
+              warn_unset
+              exit 0 ;;
+            *) blind "jq exit ${HAS_RC}" ;;
+          esac
           FLAG_RC=0
-          FLAG="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_ARM" doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null)" || FLAG_RC=$?
-          # Whitespace-trim to match the on-host readers EXACTLY. inngest-server-flip-guard.sh
-          # and inngest-cutover-flip.sh both `tr -d '[:space:]'` before comparing, so a single
-          # stray space made this step print "no hazard" at the one value where the guard is
-          # guaranteed to refuse the start.
+          FLAG="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_INNGEST_FLIP_READ" timeout 30 doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain 2>/dev/null)" || FLAG_RC=$?
+          [[ "$FLAG_RC" -eq 0 ]] || blind "read of INNGEST_CUTOVER_FLIP exit ${FLAG_RC}"
+          # tr -d matches the on-host readers (inngest-server-flip-guard.sh, inngest-cutover-flip.sh).
           FLAG="$(printf '%s' "$FLAG" | tr -d '[:space:]')"
-          if [[ "$FLAG_RC" -ne 0 ]]; then
-            echo "::warning::inherited-done preflight: the READ FAILED (doppler exit ${FLAG_RC}) — nothing was measured. This is not evidence the flag is safe. If it is 'done', recover after the replace with: ${RECOVER}"
+          if [[ -z "$FLAG" ]]; then
+            echo "INNGEST_CUTOVER_FLIP is empty (the read succeeded)."
+            warn_unset
             exit 0
           fi
-          if [[ -z "$FLAG" ]]; then
-            echo "INNGEST_CUTOVER_FLIP is unset/empty (the read succeeded)."
-            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP is UNSET. No inherited-done hazard — but an unset flag is outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse a prod start until a cutover sets it."
+          if ! [[ "$FLAG" =~ ^[a-z-]{1,24}$ ]]; then
+            echo "::warning::inherited-done preflight: INNGEST_CUTOVER_FLIP has an unexpected shape (${#FLAG} chars, value withheld). It is outside inngest-server-flip-guard.sh's allowlist, so the replaced host refuses every prod start; fix the flag in Doppler first."
             exit 0
           fi
           echo "INNGEST_CUTOVER_FLIP=${FLAG}"
-          # `done` IS NOT THE ONLY STRANDING VALUE, and the else-branch used to print a
-          # reassuring "no inherited-done hazard" for every other one. inngest-server-flip-guard.sh
-          # allowlists {armed, flipping, flushed, done}; everything outside it refuses a prod
-          # start outright, and of the four inside it only `flushed` self-heals after a replace
-          # (the /mnt/data flush latch survives the replace, so `armed` and `flipping` drive the
-          # FSM to `aborted`, which is itself outside the allowlist — and op=resume's G1 accepts
-          # `done` only, so those two have no one-dispatch recovery at all).
+          # `done` is not the only stranding value (details in the runbook).
           if [[ "$FLAG" == "armed" || "$FLAG" == "flipping" ]]; then
             echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- this replace WILL strand the scheduler, and NOT via the inherited-done path. The /mnt/data flush latch survives the replace, so the FSM takes flush_already_performed -> refuse_rearm_after_done and writes flag=aborted, which is outside inngest-server-flip-guard.sh's allowlist. op=resume accepts 'done' only, so there is NO one-dispatch recovery from this state -- resolve the flag with the operator BEFORE replacing."
           elif [[ "$FLAG" != "done" && "$FLAG" != "flushed" ]]; then
-            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it."
+            echo "::warning::INNGEST_CUTOVER_FLIP=${FLAG} -- outside inngest-server-flip-guard.sh's {armed,flipping,flushed,done} allowlist, so the replaced host will refuse EVERY prod-URI start. That may be intended (a standing rollback), but it is not an inherited-done hazard and ${RECOVER} does not clear it (#9927 retired the verbs that could re-arm it; runbook: Retired cutover verbs)."
           fi
           if [[ "$FLAG" == "done" ]]; then
             {
@@ -1994,7 +1981,7 @@ jobs:
               echo "\`INNGEST_CUTOVER_FLIP=done\`, and the \`done-owner\` marker lives on the root disk this replace destroys."
               echo "The new host inherits a \`done\` it never earned, so \`inngest-server\` will **refuse to start** (#7228)."
               echo ""
-              echo "**Recovery, after the replace completes:**"
+              echo "**Recovery, after the replace completes** (\`op=resume\` accepts \`done\` only):"
               echo ""
               echo '```'
               echo "${RECOVER}"
@@ -2003,15 +1990,10 @@ jobs:
               echo "\`op=resume\` writes \`INNGEST_CUTOVER_FLIP=flushed\`; the on-host 30s timer starts, verifies, re-records the marker and completes to \`done\` **with no re-FLUSHALL**, so the queue survives."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::warning::INNGEST_CUTOVER_FLIP=done -- this replace WILL leave inngest-server refusing to start (#7228). Recover with: ${RECOVER} (no re-FLUSHALL; the queue survives)"
+          elif [[ "$FLAG" == "flushed" ]]; then
+            echo "flag is 'flushed' -- no inherited-done hazard, and the FSM self-heals after the replace."
           else
-            # Scoped to the one value this is actually true of. `flushed` is the state
-            # op=resume writes and the only allowlisted value whose FSM self-heals after a
-            # replace (record_flush_latch -> start_server -> verify -> done).
-            if [[ "$FLAG" == "flushed" ]]; then
-              echo "flag is 'flushed' -- no inherited-done hazard, and the FSM self-heals after the replace."
-            else
-              echo "flag is '${FLAG}', not 'done' -- no INHERITED-DONE hazard specifically; see the warning above for what this value does mean."
-            fi
+            echo "flag is '${FLAG}', not 'done' -- no INHERITED-DONE hazard specifically; see the warning above for what this value does mean."
           fi
 
       - name: Extract backend credentials
