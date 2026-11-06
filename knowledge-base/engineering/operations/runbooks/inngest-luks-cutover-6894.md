@@ -596,7 +596,7 @@ If any limb is a personal-data breach, the 72-hour clock of Art. 33 runs from aw
 empty store, the app's behaviour is that functions re-register and new reminders arm normally; do not tell users their
 reminders will be restored. **Restoring an empty store has no automated route:** the recut dispatch is retired (#8285), the
 per-merge create HALT refuses a new passphrase, and the inngest-host shape gate refuses the volume and passphrase pair, so
-the owner designs the restoration in a reviewed change (#9927).
+the owner designs the restoration in a reviewed change (#9927). The ready notice text lives in [`inngest-store-total-loss-user-notice.md`](./inngest-store-total-loss-user-notice.md); the constraints in this section bind it (#10664).
 
 #### Which Inngest events carry a user reference (code read, 2026-10-20, #9927 item C1)
 
