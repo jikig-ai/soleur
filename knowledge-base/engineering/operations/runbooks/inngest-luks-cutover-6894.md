@@ -823,9 +823,9 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
   An unpointed boot-reopen of a non-LUKS volume now FAILS `reopen_not_luks` (it used to skip with exit 0), and the
   first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume is
   formatted only on a `rehearsal_*` config; on any other config the stage fails with `stage=unpointed_raw_refused`
-  (`inngest-luks-FAILED` phone-home carries the same stage), and there is no automated bring-up for a brand-new blank
-  `prd` volume, so that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum
-  2026-10-12). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
+  (`inngest-luks-FAILED` phone-home carries the same stage), and a brand-new blank `prd` volume has no automated
+  bring-up — the written disaster-recovery procedure is the 2026-11-06 section below (#10112, ADR-142 addendum
+  2026-11-06). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
   `pointer=absent` on the `stage=resolve` row.
 
 ---
@@ -844,3 +844,58 @@ Since this change, a boot where the LUKS stage lost the volume-attach race is no
 Failure surface: `reopen_fstab` (fstab write/install), `reopen_mount` (umount/mkdir/mount, and the new stacked-mountpoint refusal), `reopen_backing` (an already-open mapper not backed by the arm's verified device — the noop path now refuses this rather than entrenching it), and `reopen_pointer_lost` (empty pointer plus post-cutover evidence — the ext4-skip arm refuses rather than mounting the plaintext backstop). All leave the unit `failed`. **Phone-home scope:** `inngest-luks-reopen-ARM-FAILED` fires only from the first-boot runcmd arm — on boot ≥2 there is no `OnFailure=` reporter, so the detection path is the journald row itself → the hourly probe (`data_mount_devid=__UNREADABLE__` / `redis_active=inactive`) → the wrong-volume alarm. Conversely, the emit signature differs by boot number: on the FIRST boot (`enable --now` arm) a healthy run emits `reopen_noop` and NO `reopen_mount` (the stage already mounted). On boot ≥2 the mapper starts closed and this unit runs `Before=local-fs.target`, so a healthy boot shows `reopen_ok` then a `reopen_mount` completion row — it performs the mount itself (the fstab-generated unit cannot precede it: the mapper device does not exist until this unit's cryptsetup). A boot ≥2 with `reopen_ok` and NO `reopen_mount` is fine iff `/mnt/data` was already mounted from the mapper — the silent fast path.
 
 Incident that motivated it: iid 170091264 (first replace of the day) — `pointer_device_wait` FATAL at the 30 s bound while the attachment took ~80 s; reopen opened the mapper but could not mount; Redis refused (`not a mountpoint`); `bootstrap-done-DEGRADED`; `op=resume` G4 refused; healed only by a second replace (iid 170097260). Both readers now carry a counted 300 s bound (timeout-wrapped probe, one post-loop `udevadm settle`, post-settle re-probe) and the reopen self-heals the mount, so a lost race converges on the same boot — and any later boot heals the 170091264 shape outright.
+
+## 2026-11-06 — blank `prd` volume bring-up: the disaster-recovery procedure (#10112)
+
+The `unpointed_raw_refused` arm formats a blank canonical volume only on a `rehearsal_*` config — the
+`case '${inngest_doppler_config}' in rehearsal_*)` allowlist in `cloud-init-inngest.yml` refuses every
+other config, and `inngest_doppler_config = "prd"` is a rendered literal (`inngest-host.tf`). So a
+brand-new blank production volume — the store intentionally re-created, the sole-copy AOF gone or
+deliberately abandoned — has no bring-up path on the shipped template. This is the procedure. **It is
+verified statically, not drilled**: every mechanism it names is pinned on main today (the refusal arm,
+the pointer resolver, the dispatch target, the emitted stage rows), but no run has ever exercised the
+sequence end to end.
+
+### Preconditions
+
+1. **Establish the volume is intentionally blank.** The refusal exists because a blank device is
+   otherwise indistinguishable from a damaged header on the sole copy of the AOF — running this
+   procedure against a volume that was *not* meant to be blank is the format-the-sole-copy event the
+   control was built to prevent. The operator states, in the window PR, why the prior store is gone or
+   abandoned.
+2. If the blank volume **replaces** `hcloud_volume.inngest_redis_luks` in place, the ADR-282
+   protection lift runs first in its own reviewed change(s) — Hetzner `delete_protection` off, let the
+   per-merge apply land it, then `prevent_destroy` off in a second PR — the §5c "Deliberate unprotect"
+   two-step, never one change and never an out-of-band lift. A *new* volume resource created alongside
+   the old one needs no lift.
+
+### Procedure
+
+1. **Delete `INNGEST_LUKS_ACTIVE_VOLUME_ID` in the `soleur-inngest` `prd` Doppler config.** A stale or
+   foreign pointer refuses at `STAGE=resolve` ("the pointer names volume N, which is not this host's
+   volume") — and on boot ≥2 at `reopen_pointer` — *before* the unpointed arm and its format allowlist
+   are ever reached. The pointer must be absent for the resolver to take `mode=unpointed` at all.
+2. **A reviewed PR widens the allowlist for the window**: `case '${inngest_doppler_config}' in
+   rehearsal_*)` → `rehearsal_*|prd)` in `cloud-init-inngest.yml`, and in the SAME diff the literal pins
+   that fail closed on an incomplete change — the `_D6_HEAD` pin and the D6-case literal in
+   `inngest-redis-luks.test.sh`, and the UNP5/UNP5b expectations in
+   `inngest-redis-luks-loopback.test.sh` (under the widened glob a `prd` config formats, so UNP5's
+   refuse-expectation moves to a config still outside the glob). The PR opens a dated revert
+   follow-through before it merges: once `prd` satisfies the glob, nothing alerts if it stays.
+3. **Dispatch `apply_target=inngest-host-replace`** on `apply-web-platform-infra.yml`. The host is
+   born with the new blank volume attached; `STAGE=resolve` takes `mode=unpointed`, the widened
+   allowlist admits `prd`, and the unpointed arm runs its format path.
+4. **Verify the stage rows** (Better Stack, `inngest-luks-stage` source): `luks_format` →
+   `luks_open_fresh` → `mkfs` → `mount_luks`, never `stage=unpointed_raw_refused`. Redis starts on the
+   empty store; then `op=resume` per #7228 — every replace strands the scheduler.
+5. **A second reviewed PR reverts the allowlist** and restores the pins — the widen/revert diff-pair
+   §5c uses for protection lifts. The suites fail closed on an incomplete revert.
+6. **Optionally re-write `INNGEST_LUKS_ACTIVE_VOLUME_ID`** to the new volume id in `prd`, restoring the
+   pinned-canonical invariant: the pointer arm is strictly stronger than the unpointed arm — a damaged
+   header under a pointer is a refusal, not a blank-reading that depends on the allowlist.
+
+What this deliberately is NOT: no standing flag, no variable, no apply target, no permanent `prd`
+blank-format path. A shipped mechanism that formats a blank `prd` volume on demand re-opens the
+format-the-sole-copy hole `unpointed_raw_refused` exists to close — the two reviewed PRs and the suite
+pins that fail closed on an incomplete revert are the whole control, and that is the cost of the
+route.
