@@ -13196,13 +13196,13 @@ fi
 pe_row "PE-10" "$PE_OK" "the in-container node probe maps a peer to ok / denied / refused (non-101, closed port) / tls (untrusted cert, no pinned cert) / timeout against local TLS fixtures" "$PE_MSG"
 
 # PE-11: the publish and bind lines in the script text itself (comment-stripped), beside the closed-world gate that parses them.
-PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
+PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" || true)"
 PE_OK=1; PE_MSG=""
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod publish line count != 1]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-p [^ ]*8443')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [an other 8443 publish exists]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cF -- '-e SOLEUR_PROXY_BIND=0.0.0.0 \')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [prod bind line count != 1]"; }
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -cE -- '-e SOLEUR_PROXY_BIND= \\$')" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [canary empty-bind line count != 1]"; }
-! printf '%s\n' "$PE_SRC" | /usr/bin/grep -qF -- '-e SOLEUR_PROXY_BIND="$PROXY_BIND"' || { PE_OK=0; PE_MSG+=" [the host IP still reaches the container as the bind]"; }
+! /usr/bin/grep -qF -- '-e SOLEUR_PROXY_BIND="$PROXY_BIND"' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [the host IP still reaches the container as the bind]"; }
 pe_row "PE-11" "$PE_OK" "comment-stripped script: one loopback-fallback publish, one literal 0.0.0.0 bind (prod), one literal empty bind (canary), the host IP never handed to the container as its bind" "$PE_MSG"
 
 # PE-12: the reboot-race gate. A publish on an IP that is not configured yet fails the whole container start, and docker-proxy can bind a
@@ -13228,7 +13228,7 @@ pe_deploy pe12 MOCK_IP_ADDR_OUT="$PE_IP_LO" MOCK_SYSCTL_OUT=0
 PE_PROD="$(pe_line pe12 soleur-web-platform)"
 [[ "$PE_PROD" == *" -p 127.0.0.1:8443:8443 "* && "$(/usr/bin/grep -cF -- 'relay_publish' "$PE_DIR/pe12.log" || true)" == 0 ]] || { PE_OK=0; PE_MSG+=" [no private address + sysctl 0 logged a degrade line or did not publish on loopback]"; }
 # static pins: ONE warning line in the closed grammar, no other relay_publish text, the read is `sysctl -n net.ipv4.ip_nonlocal_bind`
-PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT")"
+PE_SRC="$(/usr/bin/grep -vE '^[[:space:]]*#' "$DEPLOY_SCRIPT" || true)"
 [[ "$(printf '%s\n' "$PE_SRC" | /usr/bin/grep -c 'relay_publish' || true)" -eq 1 ]] || { PE_OK=0; PE_MSG+=" [relay_publish text count != 1 in comment-stripped source]"; }
 /usr/bin/grep -qF -- 'logger -t "$LOG_TAG" "relay_publish degraded=nonlocal_bind_unset"' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [warning line is not the closed-grammar one]"; }
 /usr/bin/grep -qF -- 'sysctl -n net.ipv4.ip_nonlocal_bind' <<<"$PE_SRC" || { PE_OK=0; PE_MSG+=" [the sysctl read is missing]"; }
