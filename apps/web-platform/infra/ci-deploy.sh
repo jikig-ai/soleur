@@ -330,13 +330,18 @@ readonly HOST_ID
 # host's OWN private-net IP; it cannot be a fleet-wide Doppler value (two hosts
 # would bind each other's address). Resolve from the 10.0.1.0/24 interface.
 # Best-effort: empty value keeps the listener fail-closed (createProxyServer.no-bind).
+# PROXY_BIND is HOST-ONLY (#12167 PR-E): it is the address the prod container's relay port is PUBLISHED on
+# (`-p "${PROXY_BIND:-127.0.0.1}:8443:8443"`). The container itself binds 0.0.0.0 (a literal): the host's 10.0.1.x does not exist
+# inside the default bridge netns, so handing it to the container as SOLEUR_PROXY_BIND failed listen with EADDRNOTAVAIL.
+# The match is anchored on `inet 10.0.1.x/` (as `ip -o` prints it): an unanchored grep read 10.0.1.5 out of an interface
+# at 210.0.1.5 (or 110.0.1.5) listed before the real address.
 resolve_proxy_bind() {
   if [[ -n "${SOLEUR_PROXY_BIND_OVERRIDE:-}" ]]; then
     printf '%s' "$SOLEUR_PROXY_BIND_OVERRIDE"
     return 0
   fi
   local ip
-  ip=$(ip -4 -o addr show 2>/dev/null | grep -oE '10\.0\.1\.[0-9]+' | head -1 || true)
+  ip=$(ip -4 -o addr show 2>/dev/null | sed -n 's/.*inet \(10\.0\.1\.[0-9]\{1,3\}\)\/.*/\1/p' | head -1 || true)
   if [[ -n "$ip" ]]; then
     printf '%s' "$ip"
     return 0
@@ -415,6 +420,80 @@ fan_out_to_peers() {
     fi
   done
   return "$rc"
+}
+
+# Session-relay peer probe (#12167 PR-E). After THIS host's prod swap, dial every OTHER roster peer's relay port from INSIDE the app
+# container (the path a real proxied session takes: bridge -> host SNAT -> private net -> the peer's published :8443 -> its
+# source-address allowlist) and print one closed-grammar journal line per peer (journald -> Vector -> Better Stack):
+#   relay_peer_probe peer=<10.0.1.x> result=ok|refused|timeout|tls|denied
+#   relay_peer_probe peer=<10.0.1.x> skipped=exec_failed        (the exec failed, was killed, or printed anything else)
+#   relay_peer_probe skipped=no_bind|no_roster|no_peers         (nothing to dial, said once)
+# ok = TLS verified against the pinned PROXY_TLS_CERT and the peer held the WebSocket upgrade open; denied = it closed right after the
+# upgrade (its SOLEUR_PROXY_PEER_ALLOWLIST does not carry this host's source address); refused = nothing listening / unreachable / not
+# a relay; tls = the handshake or the certificate pin failed; timeout = no answer in time. Peers come from SOLEUR_HOST_ROSTER in the
+# prd env file (the same roster the app dials with, present on a peer-received deploy too, unlike SOLEUR_DEPLOY_PEERS), only values
+# shaped 10.0.1.x, never this host. BEST-EFFORT: bounded by `timeout`, never fails the deploy (the call site ends in `|| true`), and
+# carries no secret (no token, no cert bytes: the cert is read from the container's own env by the script, never put on an argv or a
+# log line) and none of the probe's output (only the validated enum token is logged).
+# The script is plain `node -e` source (the image is node; single quotes inside it are forbidden, it lives in a '...' literal).
+readonly RELAY_PROBE_JS='
+const tls=require("node:tls"),crypto=require("node:crypto");
+const host=process.env.RELAY_PROBE_PEER,port=Number(process.env.RELAY_PROBE_PORT);
+const ca=(process.env.PROXY_TLS_CERT||"").trim();
+let done=false,up=false,sock=null,buf=Buffer.alloc(0),hdr=-1;
+const fin=(r)=>{if(done)return;done=true;process.stdout.write(r);process.exit(0)};
+const verdict=()=>fin(buf.length>hdr+4&&buf[hdr+4]===0x88?"denied":"ok");
+setTimeout(()=>fin("timeout"),Number(process.env.RELAY_PROBE_TIMEOUT_MS)||4000);
+if(!ca)fin("tls");
+else{
+sock=tls.connect({host,port,ca,rejectUnauthorized:true});
+sock.on("secureConnect",()=>{up=true;sock.write("GET /ws-proxy HTTP/1.1\r\nHost: "+host+"\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: "+crypto.randomBytes(16).toString("base64")+"\r\n\r\n")});
+sock.on("data",(d)=>{buf=Buffer.concat([buf,d]);if(hdr>=0)return;hdr=buf.indexOf("\r\n\r\n");if(hdr<0)return;if(!/^HTTP\/1\.1 101 /.test(buf.subarray(0,hdr).toString("latin1")))return fin("refused");setTimeout(verdict,700)});
+sock.on("close",()=>{if(hdr>=0)verdict();else fin(up?"refused":"tls")});
+sock.on("error",(e)=>{const c=e&&e.code;fin(up||c==="ECONNREFUSED"||c==="EHOSTUNREACH"||c==="ENETUNREACH"?"refused":c==="ETIMEDOUT"?"timeout":"tls")});
+}
+'
+relay_peer_probe() {
+  local roster peer out res
+  local -a peers=()
+  local -A seen=()
+  if [[ -z "$PROXY_BIND" ]]; then
+    logger -t "$LOG_TAG" "relay_peer_probe skipped=no_bind"
+    return 0
+  fi
+  roster=$(sed -n 's/^SOLEUR_HOST_ROSTER=//p' "${ENV_FILE:-/dev/null}" 2>/dev/null | tail -n 1 || true)
+  if [[ -z "$roster" ]]; then
+    logger -t "$LOG_TAG" "relay_peer_probe skipped=no_roster"
+    return 0
+  fi
+  while IFS= read -r peer; do
+    [[ "$peer" =~ ^10\.0\.1\.[0-9]{1,3}$ ]] || continue
+    [[ "$peer" == "$PROXY_BIND" ]] && continue
+    [[ -n "${seen[$peer]-}" ]] && continue
+    seen["$peer"]=1
+    peers+=("$peer")
+  done < <(jq -r 'if type == "object" then .[] | strings else empty end' <<<"$roster" 2>/dev/null || true)
+  if [[ "${#peers[@]}" -eq 0 ]]; then
+    logger -t "$LOG_TAG" "relay_peer_probe skipped=no_peers"
+    return 0
+  fi
+  for peer in "${peers[@]}"; do
+    out=$(timeout 8 docker exec -e RELAY_PROBE_PEER="$peer" -e RELAY_PROBE_PORT=8443 soleur-web-platform node -e "$RELAY_PROBE_JS" 2>/dev/null) || out=""
+    res=""
+    case "$out" in
+      ok) res=ok ;;
+      refused) res=refused ;;
+      timeout) res=timeout ;;
+      tls) res=tls ;;
+      denied) res=denied ;;
+    esac
+    if [[ -n "$res" ]]; then
+      logger -t "$LOG_TAG" "relay_peer_probe peer=$peer result=$res"
+    else
+      logger -t "$LOG_TAG" "relay_peer_probe peer=$peer skipped=exec_failed"
+    fi
+  done
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -5201,6 +5280,11 @@ case "$COMPONENT" in
     PROD_NODE_OPTIONS="--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
     CANARY_NODE_OPTIONS="--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
 
+    # Session relay (#12167 PR-E): the app container is on the default docker bridge, so the relay cannot bind the host's private
+    # IP. Prod PUBLISHES 8443 on that IP (-p "${PROXY_BIND:-127.0.0.1}:8443:8443": an empty PROXY_BIND is a loopback publish, unreachable
+    # by peers) and binds 0.0.0.0 inside (-e SOLEUR_PROXY_BIND=0.0.0.0, SOLEUR_PROXY_PORT=8443). The canary publishes NO 8443 and gets a
+    # literal EMPTY bind (the app reports no_bind), so blue/green never collides on the port; it is removed before prod starts.
+    # lib/docker-run-tuple.py pins all of it. Reboot caveat: a publish on an IP not yet configured fails the container start.
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
     # while maintaining Docker's other security restrictions (#1570).
@@ -5224,7 +5308,7 @@ case "$COMPONENT" in
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
-      -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
+      -e SOLEUR_PROXY_BIND= \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -5606,7 +5690,8 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
-        -e SOLEUR_PROXY_BIND="$PROXY_BIND" \
+        -e SOLEUR_PROXY_BIND=0.0.0.0 \
+        -e SOLEUR_PROXY_PORT=8443 \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -e SOLEUR_EGRESS_REAPER=1 \
         -v /mnt/data/workspaces:/workspaces \
@@ -5616,6 +5701,7 @@ case "$COMPONENT" in
         -p 0.0.0.0:80:3000 \
         -p 0.0.0.0:443:3443 \
         -p 0.0.0.0:3000:3000 \
+        -p "${PROXY_BIND:-127.0.0.1}:8443:8443" \
         "$VERIFIED_REF"; then
         # Canary was already stopped+removed before the cron drain gate above
         # (memory-dwell fix), so no teardown is needed here on the success path.
@@ -5678,6 +5764,9 @@ case "$COMPONENT" in
         else
           logger -t "$LOG_TAG" "BWRAP_USERNS_SYSCTL_DRIFT: apparmor_restrict_unprivileged_userns=${userns_restrict} (expected 0) — cron Bash sandbox will fail silently; restart bwrap-userns-sysctl.service"
         fi
+
+        # Session-relay peer probe (#12167 PR-E): best-effort, bounded, journal-only; `|| true` is LOAD-BEARING (set -e).
+        relay_peer_probe || true
 
         echo "Deploy succeeded"
         # Local prod swap succeeded — now fan out to peer hosts (dormant/no-op at
