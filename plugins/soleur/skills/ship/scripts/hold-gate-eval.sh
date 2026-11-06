@@ -92,7 +92,9 @@ trap cleanup EXIT
 die2() { printf '%s\n' "$1" >&2; exit 2; }
 trim() { local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 # Control characters, C1 controls, zero-width and bidi marks and the line/paragraph separators are dropped (byte-wise: LC_ALL=C).
-clean_text() { printf '%s' "$1" | tr -d '[:cntrl:]' | sed -e $'s/\xc2[\x80-\x9f]//g' -e $'s/\xe2\x80[\x8b-\x8f\xa8-\xae]//g' -e $'s/\xe2\x81[\xa6-\xa9]//g' -e $'s/\xef\xbb\xbf//g' | cut -c1-160; } # mut:clean-text
+# clean_uncut is what the operator reads before the 160-character cut; clean_text is the printed form.
+clean_uncut() { printf '%s' "$1" | tr -d '[:cntrl:]' | sed -e $'s/\xc2[\x80-\x9f]//g' -e $'s/\xe2\x80[\x8b-\x8f\xa8-\xae]//g' -e $'s/\xe2\x81[\xa6-\xa9]//g' -e $'s/\xef\xbb\xbf//g'; } # mut:clean-uncut
+clean_text() { clean_uncut "$1" | cut -c1-160; } # mut:clean-text
 
 VT=60
 case "${HGE_VERIFY_TIMEOUT:-}" in ''|*[!0-9]*) ;; *) [ "$HGE_VERIFY_TIMEOUT" -ge 1 ] && [ "$HGE_VERIFY_TIMEOUT" -lt 60 ] && VT="$HGE_VERIFY_TIMEOUT" ;; esac
@@ -139,6 +141,7 @@ WA_BASE='https://app.soleur.ai/api/internal/legal-acceptance' # mut:base-url
 WA_TOKEN_NAME='LEGAL_ACCEPTANCE_VERIFY_TOKEN'
 WA_RUNBOOK='knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md'
 WA_CANT='the saved text is not in the project'
+WA_DMG='the saved text is damaged'
 BEARER_LIB="$SCRIPT_DIR/../../../scripts/lib/bearer-curl.sh"
 WA_HASH=""
 
@@ -197,14 +200,15 @@ WA_JQ_ONCE='[inputs | select(length == 2)] as $l | ($l | length) == 4 and all($l
 
 # gate_web_acceptance <key> <hash>: TRUE only for an `accepted` answer with row_ok true whose echoed hash equals the gate hash, which
 # in turn equals the sha256 of the committed text. Every verdict and reason is a row of the closed table in
-# skills/ship/references/operator-holds.md (section 3, web-acceptance).
+# skills/ship/references/operator-holds.md (section 1, web-acceptance).
 gate_web_acceptance() {
   local rest="$1" key hash path ent top lh="" st d ok vu today
   WA_HASH=""
   key="${rest%% *}"; hash="${rest#* }"
   if [[ "$rest" != *" "* ]] || ! [[ "$key" =~ $WA_KEY_RE ]] || ! [[ "$hash" =~ $WA_HASH_RE ]]; then GRES=UNEVAL; GWHY="the web acceptance is not written as a plain text name and fingerprint"; return; fi # mut:wa-shape
-  # CTO ruling D1: the hold's own words must name this text's key as a whole token, so a decision about one text cannot clear a wait about another thing.
-  printf '%s' "$WA_HOLD_TEXT" | tr 'A-Z' 'a-z' | grep -Eq "(^|[^a-z0-9-])${key}([^a-z0-9-]|\$)" || { GRES=UNEVAL; GWHY="this wait does not name the legal text it is about, so a recorded decision cannot clear it"; return; } # mut:wa-bind
+  # CTO ruling D1: the hold's own words (as the operator reads them: cleaned, before the 160-character cut) must name this text's key as a whole
+  # token, so a decision about one text cannot clear a wait about another thing. A letter, digit, hyphen or underscore beside the key makes it part of a longer word.
+  clean_uncut "$WA_HOLD_TEXT" | tr 'A-Z' 'a-z' | grep -Eq "(^|[^a-z0-9_-])${key}([^a-z0-9_-]|\$)" || { GRES=UNEVAL; GWHY="this wait does not name the legal text it is about; ask the plan's author to put the text name $key in the hold's words"; return; } # mut:wa-bind
   WA_HASH="$hash"
   path="$WA_TEXTS/$key.md"
   top="$(git rev-parse --show-toplevel </dev/null 2>/dev/null)" || top="" # a pathspec is relative to the working directory, so list from the top
@@ -212,31 +216,46 @@ gate_web_acceptance() {
   ent="$(GIT_LITERAL_PATHSPECS=1 git -C "$top" ls-tree --full-tree HEAD -- "$path" </dev/null 2>/dev/null | head -1)"
   case "$ent" in "100644 blob "*) ;; *) GRES=UNEVAL; GWHY="$WA_CANT"; return ;; esac # mut:wa-blob
   git -C "$top" cat-file blob "HEAD:$path" > "$WORK/wa.txt" 2>/dev/null </dev/null || { GRES=UNEVAL; GWHY="$WA_CANT"; return; }
-  [ "$(tr -cd '\r' < "$WORK/wa.txt" | wc -c | tr -d ' ')" = 0 ] || { GRES=UNEVAL; GWHY="$WA_CANT"; return; } # mut:wa-cr
+  [ "$(tr -cd '\r' < "$WORK/wa.txt" | wc -c | tr -d ' ')" = 0 ] || { GRES=UNEVAL; GWHY="$WA_DMG"; return; } # mut:wa-cr
   if command -v sha256sum >/dev/null 2>&1; then lh="$(sha256sum < "$WORK/wa.txt" 2>/dev/null | cut -c1-64)"
   elif command -v shasum >/dev/null 2>&1; then lh="$(shasum -a 256 < "$WORK/wa.txt" 2>/dev/null | cut -c1-64)"; fi
   [[ "$lh" =~ $WA_HASH_RE ]] || { GRES=UNEVAL; GWHY="I have no tool here to check that the text is unchanged"; return; }
   [ "$lh" = "$hash" ] || { GRES=FALSE; GWHY="the text was changed after this check was written"; return; } # mut:local-hash
   # CTO ruling D6: a text whose front matter names a last day (valid_until: YYYY-MM-DD) that is past needs a revised text. Absent = no expiry.
-  vu="$(awk 'NR == 1 { if ($0 == "---") { f = 1; next } else exit } f && $0 == "---" { exit } f && /^valid_until:/ { sub(/^valid_until:[ \t]*/, ""); sub(/[ \t]+$/, ""); print; exit }' "$WORK/wa.txt" 2>/dev/null)"
+  # Only the front matter (the block from line 1 to the next `---`) is read, and a repeated line keeps the LAST value, as parseLegalText does.
+  # The day must be a real calendar day (a round trip through the clock: 2026-02-30 and 2099-99-99 are damaged), compared in UTC.
+  vu="$(awk 'NR == 1 { if ($0 == "---") { f = 1; next } else exit } f && $0 == "---" { exit } f && /^valid_until:/ { v = $0; sub(/^valid_until:[ \t]*/, "", v); sub(/[ \t]+$/, "", v); got = 1; last = v } END { if (got) print "V:" last }' "$WORK/wa.txt" 2>/dev/null)"
   if [ -n "$vu" ]; then
-    [[ "$vu" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { GRES=UNEVAL; GWHY="$WA_CANT"; return; } # mut:wa-valid-shape
-    today="$(date -u +%F 2>/dev/null)"
+    vu="${vu#V:}" # a valid_until line with no value is damaged (the shape check below refuses it), never "no expiry"
+    [[ "$vu" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { GRES=UNEVAL; GWHY="$WA_DMG"; return; } # mut:wa-valid-shape
+    [ "$(jq -n -r --arg d "$vu" '($d + "T00:00:00Z") | try (fromdateiso8601 | todateiso8601 | .[0:10]) catch ""' </dev/null 2>/dev/null)" = "$vu" ] || { GRES=UNEVAL; GWHY="$WA_DMG"; return; } # mut:wa-valid-day
+    today="$(date -u +%F 2>/dev/null)" # mut:wa-today-utc
     [[ "$today" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { GRES=UNEVAL; GWHY="I could not read today's date"; return; }
-    if [[ "$vu" < "$today" ]]; then GRES=PERSON; GWHY="this text has expired; a revised text is needed"; return; fi # mut:wa-expired
+    if [[ "$vu" < "$today" ]]; then GRES=PERSON; GWHY="the accepted text has passed its last valid day; a revised text is needed"; return; fi # mut:wa-expired
   fi
   # shellcheck source=/dev/null
-  { [ -r "$BEARER_LIB" ] && . "$BEARER_LIB" 2>/dev/null && bc_read_token "$WA_TOKEN_NAME"; } || { GRES=UNEVAL; GWHY="I could not sign in to the check"; return; }
+  BC_ERR=""
+  case "$-" in *x*) GRES=UNEVAL; GWHY="I will not read the sign-in value while commands are being traced"; return ;; esac
+  [ -r "$BEARER_LIB" ] && . "$BEARER_LIB" 2>/dev/null || { GRES=UNEVAL; GWHY="I could not load the sign-in helper"; return; }
+  if ! bc_read_token "$WA_TOKEN_NAME"; then
+    GRES=UNEVAL
+    case "${BC_ERR:-}" in
+      shape) GWHY="the saved sign-in value looks wrong (too short or odd characters)" ;; # mut:err-shape
+      xtrace) GWHY="I will not read the sign-in value while commands are being traced" ;;
+      *) GWHY="no saved sign-in value was found" ;;
+    esac
+    return
+  fi
   bc_get "$WORK" "$WA_BASE/$key?hash=$hash"; ok=$?
   bc_clear
-  [ "$ok" -eq 0 ] || { GRES=UNEVAL; GWHY="unreachable (HTTP $BC_STATUS, curl rc $BC_RC)"; return; } # mut:curl-fail
+  [ "$ok" -eq 0 ] || { GRES=UNEVAL; GWHY="I could not reach the check (HTTP $BC_STATUS, curl rc $BC_RC)"; return; } # mut:curl-fail
   case "$BC_STATUS" in
     200) ;;
     503) GRES=UNEVAL; GWHY="the check is not available right now (not switched on, or temporarily down)"; return ;;
     401) GRES=UNEVAL; GWHY="the check did not accept my sign-in"; return ;;
     404) GRES=UNEVAL; GWHY="the live app does not know this text yet"; return ;;
     400|502) wa_notu; return ;;
-    *) GRES=UNEVAL; GWHY="unreachable (HTTP $BC_STATUS, curl rc $BC_RC)"; return ;; # mut:status-default
+    *) GRES=UNEVAL; GWHY="I could not reach the check (HTTP $BC_STATUS, curl rc $BC_RC)"; return ;; # mut:status-default
   esac
   wa_jq 'type == "object" and (keys == ["decided_at","row_ok","status","text_hash"])' || { wa_notu; return; } # mut:body-keys
   jq -e -n --stream "$WA_JQ_ONCE" "$BC_BODY" >/dev/null 2>&1 </dev/null || { wa_notu; return; } # mut:body-dupkeys
@@ -255,7 +274,7 @@ gate_web_acceptance() {
       [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { wa_notu; return; }
       GRES=TRUE; GWHY=""; GNOTE="decided $d" ;;
     declined) GRES=PERSON; GWHY="declined; a revised text is needed" ;; # mut:st-declined
-    changes_requested) GRES=PERSON; GWHY=""; GLINE="Needs you: the founder asked for changes. Read the note yourself, not in an agent session: $WA_RUNBOOK" ;; # mut:st-changes
+    changes_requested) GRES=PERSON; GWHY=""; GLINE="Needs you: the founder asked for changes. You read the note yourself, not an agent session: $WA_RUNBOOK" ;; # mut:st-changes
     none) GRES=FALSE; GWHY="no decision recorded for this text version" ;; # mut:st-none
     invalid) GRES=UNEVAL; GWHY="the saved decision looks damaged" ;; # mut:st-invalid
   esac
@@ -471,6 +490,10 @@ read_head_blob() {
 }
 if [ "$MODE" = file ]; then read_head_blob "$FILE"; SRC="$WORK/head.md"; fi # mut:file-head
 
+# A NUL, or any other C0 control byte except TAB, CR and LF, anywhere in the file: some awk implementations stop reading a line at a NUL, which would let a
+# Gate line be cut short, so nothing is read from such a file. Decided before the sections are split (and before the no-delegation exit).
+if ! tr -d '\000-\010\013\014\016-\037' < "$SRC" | cmp -s - "$SRC"; then echo "The file holds a control character I cannot read safely, so I am treating every hold as still on hold."; exit 2; fi # mut:ctl-bytes
+
 need_tools() { # after the no-delegation exit: nothing below can run without these
   command -v jq >/dev/null 2>&1 || die2 "jq is not installed, so no hold can be checked"
   command -v gh >/dev/null 2>&1 || die2 "the GitHub command line tool is not installed, so no hold can be checked"
@@ -551,10 +574,11 @@ while IFS=$'\t' read -r _ i text; do
     eval_gate "$gate"
     GTXT="${GTXT:+$GTXT; }$gate"
     [ -z "$GNOTE" ] || GNOTES="${GNOTES:+$GNOTES; }$GNOTE"
-    case "$GRES" in TRUE) ;; FALSE) [ "$HV" = OK ] && { HV=WAIT; WHY="$GWHY"; } ;; PERSON) [ "$HV" = OK ] && { HV=NEEDS; WHY="$GWHY"; HLINE="$GLINE"; } ;; *) HV=UNEVAL; WHY="$GWHY"; HLINE=""; ANY_UNEVAL=1 ;; esac # mut:all-gates
+    [ -z "$GLINE" ] || HLINE="$GLINE" # mut:hline-any
+    case "$GRES" in TRUE) ;; FALSE) [ "$HV" = OK ] && { HV=WAIT; WHY="$GWHY"; } ;; PERSON) [ "$HV" = OK ] && { HV=NEEDS; WHY="$GWHY"; } ;; *) HV=UNEVAL; WHY="$GWHY"; ANY_UNEVAL=1 ;; esac # mut:all-gates
   done < "$WORK/g.$i"
   print_result_line "$HV" "$text" "$WHY" "$GTXT" "$GNOTES"
-  [ "$HV" != NEEDS ] || [ -z "$HLINE" ] || printf '%s\n' "$HLINE"
+  [ "$HV" = OK ] || [ -z "$HLINE" ] || printf '%s\n' "$HLINE"
   if [ "$HV" = OK ]; then DISCHARGED=$((DISCHARGED + 1)); else STANDING=$((STANDING + 1)); fi
 done < <(grep '^HOLD' "$WORK/items")
 

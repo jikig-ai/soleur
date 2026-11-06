@@ -24,6 +24,9 @@
 #                                 succeeded and produced a status; the HTTP status is the CALLER's to interpret (this
 #                                 function never reads a 4xx or 5xx as success or failure).
 #   bc_clear                      forgets the token.
+#   BC_ERR                        why bc_read_token returned non-zero, for the caller's wording (never the value): `missing` (no
+#                                 secret-store tool, a bad name, the read failed or was empty), `shape` (a value was read but
+#                                 failed the 48 to 256 character guard) or `xtrace`. Empty after a success. Set silently.
 #
 # Hardening, in one place: refuse under xtrace (a traced run would print the credential), a token-shape guard (48 to 256
 # characters of [A-Za-z0-9._~+/=-], the same bounds as TOKEN_RE in the verify route; the token is written into a curl config
@@ -35,7 +38,7 @@
 # Refuse to be loaded under xtrace. `return` ends a `source`; `exit` covers a direct execution.
 case "$-" in *x*) printf 'bearer-curl: refusing to run under xtrace: this helper handles a live credential and -x would print it. No secret has been read.\n' >&2; return 78 2>/dev/null || exit 78 ;; esac # mut:xtrace-source
 
-BC_TOKEN=""; BC_STATUS="000"; BC_RC=1; BC_BODY=""
+BC_TOKEN=""; BC_STATUS="000"; BC_RC=1; BC_BODY=""; BC_ERR=""
 
 bc_shape_ok() { # <value>: 0 only for a plausible bearer token (never echoes it)
   local LC_ALL=C
@@ -49,14 +52,15 @@ bc_clear() { BC_TOKEN=""; }
 
 bc_read_token() { # <SECRET_NAME>
   local name="${1:-}" tok="" to=()
-  BC_TOKEN=""
-  case "$-" in *x*) return 1 ;; esac # mut:xtrace-read
+  BC_TOKEN=""; BC_ERR="missing"
+  case "$-" in *x*) BC_ERR="xtrace"; return 1 ;; esac # mut:xtrace-read
   case "$name" in ''|*[!A-Z0-9_]*) return 1 ;; esac
   command -v doppler >/dev/null 2>&1 || return 1
   if command -v timeout >/dev/null 2>&1; then to=(timeout 10); elif command -v gtimeout >/dev/null 2>&1; then to=(gtimeout 10); fi
   tok="$(${to[@]+"${to[@]}"} doppler secrets get "$name" --plain --project soleur --config prd 2>/dev/null </dev/null)" || return 1
+  if [ -n "$tok" ] && ! bc_shape_ok "$tok"; then BC_ERR="shape"; fi # mut:err-shape
   bc_shape_ok "$tok" || return 1 # mut:shape
-  BC_TOKEN="$tok"
+  BC_TOKEN="$tok"; BC_ERR=""
   return 0
 }
 

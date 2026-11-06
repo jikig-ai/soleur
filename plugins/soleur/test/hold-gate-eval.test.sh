@@ -51,7 +51,20 @@ for f in plan-three-holds.md plan-web-acceptance-only.md plan-web-acceptance-mix
 done
 
 addd() { jq -rn --arg d "$1" --argjson n "$2" '($d + "T00:00:00Z" | fromdateiso8601) + ($n * 86400) | strftime("%Y-%m-%d")'; }
-TODAY="$(date -u +%Y-%m-%d)"; NOW_ISO="${TODAY}T00:00:00Z"; EXP10="$(addd "$TODAY" 10)"
+TODAY="$(date -u +%Y-%m-%d)"; NOW_ISO="${TODAY}T00:00:00Z"; EXP10="$(addd "$TODAY" 10)"; YEST="$(addd "$TODAY" -1)"
+[[ "$YEST" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ && "$YEST" < "$TODAY" ]] || { echo "FATAL: yesterday not computed" >&2; exit 2; }
+# TODAY is fixed here and the suite runs for minutes: a valid_until row that depends on it is skipped, with a visible note, when UTC midnight has passed.
+day_stable() { [[ "$(date -u +%Y-%m-%d)" == "$TODAY" ]]; }
+day_skip() { echo "  SKIP: $1: UTC midnight passed during the suite, so the rows that depend on today's date are not trusted"; SKIPPED=$((SKIPPED + 1)); }
+# Per-arm assertion counts: deleting one arm of rows must trip its own minimum even when the total floor still holds.
+arm_begin() { eval "ARM_S_$1=$((PASS + FAIL + SKIPPED))"; }
+arm_end() { local st; eval "st=\${ARM_S_$1:-}"; if [[ -n "$st" ]]; then eval "ARM_N_$1=$((PASS + FAIL + SKIPPED - st))"; else eval "ARM_N_$1=0"; fi; }
+arm_floor() { # <id> <minimum> <what>
+  local v; eval "v=\${ARM_N_$1:-0}"
+  # Written without a leading `if (( .. ))` on a counter line: scripts/guard-vacuity-floor.test.sh would read that as a whole-suite floor it cannot rebuild.
+  (( v >= $2 )) && { echo "  PASS: arm $1 ($3): $v assertions >= $2"; PASS=$((PASS + 1)); return 0; }
+  echo "  FAIL: arm $1 ($3): $v assertions < $2 -- a block of rows is missing"; FAIL=$((FAIL + 1))
+}
 
 # --- the gh stub ----------------------------------------------------------------------------------
 BIN="$TMP/bin"; mkdir -p "$BIN"
@@ -128,6 +141,14 @@ O3="$TMP/origin3.git"; W6="$TMP/work6"
   sed 's/^valid_until: .*/valid_until: soon/' "$FXH/web-acceptance-text.md" > "$WAT/wa-badvu.md"
   sed 's/^valid_until: .*/valid_until: 2099-1-1/' "$FXH/web-acceptance-text.md" > "$WAT/wa-badvu2.md"
   sed '/^valid_until: /d' "$FXH/web-acceptance-text.md" > "$WAT/wa-novu.md"
+  sed "s/^valid_until: .*/valid_until: $YEST/" "$FXH/web-acceptance-text.md" > "$WAT/wa-yest.md"
+  sed 's/^valid_until: .*/valid_until: 2000-01-01\nvalid_until: 2099-12-31/' "$FXH/web-acceptance-text.md" > "$WAT/wa-dup.md"
+  sed 's/^valid_until: .*/valid_until: 2099-12-31\nvalid_until: 2000-01-01/' "$FXH/web-acceptance-text.md" > "$WAT/wa-dup2.md"
+  sed -e '/^valid_until: /d' -e '$a valid_until: 2000-01-01' "$FXH/web-acceptance-text.md" > "$WAT/wa-bodyvu.md"
+  sed 's/^valid_until: .*/valid_until: 2026-13-01/' "$FXH/web-acceptance-text.md" > "$WAT/wa-badvu3.md"
+  sed 's/^valid_until: .*/valid_until: 2099-99-99/' "$FXH/web-acceptance-text.md" > "$WAT/wa-badvu4.md"
+  sed 's/^valid_until: .*/valid_until: 2026-02-30/' "$FXH/web-acceptance-text.md" > "$WAT/wa-badvu5.md"
+  sed 's/^valid_until: .*/valid_until:/' "$FXH/web-acceptance-text.md" > "$WAT/wa-badvu6.md"
   sed '1,4d' "$FXH/web-acceptance-text.md" > "$WAT/wa-nofm.md"
   printf '# Example envelope (synthesized fixture)\n\n## Production Envelope - web\n\nPreconditions:\n- Gate: web-acceptance wa-key %s\n' "$(sha256sum < "$FXH/web-acceptance-text.md" | cut -c1-64)" > "$W/env-wa.md"
   ln -s wa-key.md "$WAT/wa-link.md"
@@ -200,6 +221,7 @@ run_h() { # <args...> ; runs in $RUN_REPO (default: the main clone) with $RUN_PA
   echo "$rc" > "$TMP/rc"
 }
 last_rc() { cat "$TMP/rc"; }
+has_line() { grep -cF -- "$1" "$TMP/o"; }
 machine() { grep '^holds: ' "$TMP/o" | tail -1; }
 no_stub_miss() { ! grep -q 'STUB-MISS' "$STUB_DIR/calls.log" 2>/dev/null; }
 expect() { # <name> <rc> <machine line>
@@ -705,13 +727,25 @@ assert_eq "0" "$(( $(jargon_hits "$TMP/jargon-control-m.txt") + $(jargon_hits_ci
 
 echo "=== Arm 11b: control characters and bidi marks in a hold's words do not reach the output ==="
 scn; mkdir -p "$TMP/plans"
-{ printf '# Plan\n\n## Operator Holds\n\nDelegation: %s\nEnvelope: env-valid.md\n\n' "$URL"; printf -- '- Hold: do not ship \033[31mred\007 text \342\200\256evil\342\200\250 here\n  Gate: no-inflight-run example-release.yml\n' ; } > "$TMP/plans/ctl.md"
+{ printf '# Plan\n\n## Operator Holds\n\nDelegation: %s\nEnvelope: env-valid.md\n\n' "$URL"; printf -- '- Hold: do not ship \302\205red text \342\200\256evil\342\200\250 here\n  Gate: no-inflight-run example-release.yml\n' ; } > "$TMP/plans/ctl.md"
 run_h --plan "$TMP/plans/ctl.md"
-expect "HX6: a hold with control characters still evaluates" 0 "holds: 1 discharged: 1 standing: 0"
-assert_eq "0" "$(LC_ALL=C grep -c "$(printf '\033')" "$TMP/o")" "HX6b: no escape character reaches the output"
-assert_eq "0" "$(LC_ALL=C grep -c "$(printf '\007')" "$TMP/o")" "HX6c: no bell character reaches the output"
+expect "HX6: a hold with C1 controls and bidi marks still evaluates" 0 "holds: 1 discharged: 1 standing: 0"
+assert_eq "0" "$(LC_ALL=C grep -c "$(printf '\302\205')" "$TMP/o")" "HX6b: no C1 control character reaches the output"
 assert_eq "0" "$(LC_ALL=C grep -c "$(printf '\342\200\256')" "$TMP/o")" "HX6d: no bidi override reaches the output"
 assert_eq "0" "$(LC_ALL=C grep -c "$(printf '\342\200\250')" "$TMP/o")" "HX6e: no line-separator mark reaches the output"
+echo "--- a NUL, or any C0 control byte but tab, CR and LF, anywhere in the file is exit 2 before anything is read (FR-SEC) ---"
+for cb in '\033' '\007' '\000' '\001' '\010' '\013' '\014' '\016' '\037'; do
+  scn; { printf '# Plan\n\n## Operator Holds\n\nDelegation: %s\nEnvelope: env-valid.md\n\n' "$URL"; printf -- "- Hold: do not ship while a release is running.$cb\n  Gate: no-inflight-run example-release.yml\n"; } > "$TMP/plans/cb.md"; run_h --plan "$TMP/plans/cb.md"
+  assert_eq "2" "$(last_rc)" "HX6f: the control byte $cb in the plan is exit 2"
+  assert_eq "1" "$(has_line "The file holds a control character I cannot read safely")" "HX6g: and says so in plain words ($cb)"
+  assert_eq "0" "$(grep -c '^Done: ' "$TMP/o")" "HX6h: nothing is discharged ($cb)"
+  assert_eq "0" "$(probed)" "HX6i: nothing was probed ($cb)"
+done
+scn; { printf '# Plan\n\n## Operator Holds\n\nDelegation: %s\nEnvelope: env-valid.md\n\n' "$URL"; printf -- "- Hold: do not ship while a release is running.\n  Gate: no-inflight-run example-release.yml\t\r\n"; } > "$TMP/plans/cb2.md"; run_h --plan "$TMP/plans/cb2.md"
+expect "HX6j: instrument: a tab and a carriage return are fine" 0 "holds: 1 discharged: 1 standing: 0"
+scn; { printf '# Plan\n\n## Operator Holds\n\n- Wait for the earlier change.\n  Gate: pr-merged 55 \000\n'; } > "$TMP/plans/cb3.md"; run_h --plan "$TMP/plans/cb3.md"
+assert_eq "2" "$(last_rc)" "HX6k: a NUL in a legacy prose plan is exit 2 too (fail closed, before the no-delegation exit)"
+scn; run_h --file env-valid.md --section "Production Envelope"; assert_eq "0" "$(last_rc)" "HX6l: instrument: the envelope file itself has no control byte"
 
 echo "=== Arm 12: every gh call was a read ==="
 bad=0
@@ -723,6 +757,7 @@ done
 assert_eq "0" "$bad" "no gh call outside the read-only shapes across all scenarios"
 assert_eq "0" "$(cat "$TMP"/scn*/calls.log | grep -cE ' (-X|--method|-f|-F|--field|--input) |^(issue|pr) (comment|edit|close|merge)|^workflow run')" "no write verb reached gh"
 
+arm_begin wa
 echo "=== Arm 14: web-acceptance (the hold backed by a founder's recorded decision) ==="
 # THE SEAM: `doppler` and `curl` are PATH stubs that answer only the exact argv shapes the evaluator is expected to use and
 # refuse every other argv with exit 64. The PATH for these runs is a hermetic directory of symlinks that holds NEITHER a real
@@ -828,7 +863,13 @@ wa_init() { # after scn: the stubs, the token, a strict URL check and an accepte
 }
 wa_calls() { { cat "$STUB_DIR/$1" 2>/dev/null || true; } | grep -c "^$2" || true; }
 no_wa_miss() { ! { cat "$STUB_DIR/curl-argv.log" "$STUB_DIR/doppler-argv.log" 2>/dev/null || true; } | grep -q 'STUB-MISS'; }
-no_secret_out() { ! { cat "$TMP/o" "$TMP/e" "$STUB_DIR/curl-argv.log" "$STUB_DIR/curl-url.log" "$STUB_DIR/doppler-argv.log" 2>/dev/null || true; } | grep -qF -- "$WA_TOK"; }
+no_secret_out() { # the canonical token AND the one this scenario put in the secret store (a refused token must not be printed either)
+  local h="$TMP/.hay" t2=""
+  { cat "$TMP/o" "$TMP/e" "$STUB_DIR/curl-argv.log" "$STUB_DIR/curl-url.log" "$STUB_DIR/doppler-argv.log" 2>/dev/null || true; } > "$h"
+  ! grep -qF -- "$WA_TOK" "$h" || return 1
+  t2="$(head -1 "$STUB_DIR/doppler-token" 2>/dev/null)"
+  [ "${#t2}" -lt 8 ] || ! grep -qF -- "$t2" "$h"
+}
 # T2: the two detectors are under controls. A known leak must be FLAGGED, or every "the token is in no output" row below proves nothing.
 mkdir -p "$TMP/ctl-leak"
 ( TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; : > "$TMP/o"; : > "$TMP/e"; no_secret_out && no_wa_miss ) \
@@ -848,13 +889,30 @@ wexpect() { # <name> <rc> <machine line>: expect + no doppler/curl stub miss + t
   no_wa_miss && { echo "  PASS: $1: no doppler or curl stub miss"; PASS=$((PASS + 1)); } || { echo "  FAIL: $1: a doppler or curl stub refused an argv"; FAIL=$((FAIL + 1)); }
   no_secret_out && { echo "  PASS: $1: the token is in no output and no argv log"; PASS=$((PASS + 1)); } || { echo "  FAIL: $1: the token leaked"; FAIL=$((FAIL + 1)); }
 }
+
+( TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; : > "$TMP/o"; : > "$TMP/e"; rm -f "$STUB_DIR"/*.log; printf '%s\n' 'SYNTHrefused0123456789abcdef"x' > "$STUB_DIR/doppler-token"; printf 'x SYNTHrefused0123456789abcdef"x y\n' > "$TMP/e"; ! no_secret_out ) \
+  || { printf 'FATAL: no_secret_out cannot see a refused (non-canonical) token the scenario configured\n' >&2; exit 2; }
+( TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; : > "$TMP/o"; : > "$TMP/e"; rm -f "$STUB_DIR"/*.log; printf '%s\n' 'SYNTHrefused0123456789abcdef"x' > "$STUB_DIR/doppler-token"; no_secret_out ) \
+  || { printf 'FATAL: no_secret_out flags a clean run that has a non-canonical token configured\n' >&2; exit 2; }
+# T2: wexpect, has_line and wa_calls are under controls as well (a known leak and a known stub miss must raise FAIL; the counters must count).
+( b=$FAIL; TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; rm -f "$STUB_DIR"/*.log; echo 0 > "$TMP/rc"; printf 'holds: 1 discharged: 1 standing: 0\n%s\n' "$WA_TOK" > "$TMP/o"; : > "$TMP/e"; wexpect ctl 0 "holds: 1 discharged: 1 standing: 0" >/dev/null; [[ $FAIL -eq $((b + 1)) ]] ) \
+  || { printf 'FATAL: wexpect does not fail on a run that printed the token\n' >&2; exit 2; }
+( b=$FAIL; TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; rm -f "$STUB_DIR"/*.log; echo 0 > "$TMP/rc"; printf 'holds: 1 discharged: 1 standing: 0\n' > "$TMP/o"; : > "$TMP/e"; printf 'STUB-MISS x\n' > "$STUB_DIR/curl-argv.log"; wexpect ctl 0 "holds: 1 discharged: 1 standing: 0" >/dev/null; [[ $FAIL -eq $((b + 1)) ]] ) \
+  || { printf 'FATAL: wexpect does not fail on a run in which a stub refused an argv\n' >&2; exit 2; }
+( b=$FAIL; TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; rm -f "$STUB_DIR"/*.log; echo 0 > "$TMP/rc"; printf 'holds: 1 discharged: 1 standing: 0\n' > "$TMP/o"; : > "$TMP/e"; wexpect ctl 0 "holds: 1 discharged: 1 standing: 0" >/dev/null; [[ $FAIL -eq $b ]] ) \
+  || { printf 'FATAL: wexpect fails on a clean run\n' >&2; exit 2; }
+( b=$FAIL; TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; rm -f "$STUB_DIR"/*.log; echo 2 > "$TMP/rc"; printf 'holds: 1 discharged: 1 standing: 0\n' > "$TMP/o"; : > "$TMP/e"; wexpect ctl 0 "holds: 1 discharged: 1 standing: 0" >/dev/null; [[ $FAIL -gt $b ]] ) \
+  || { printf 'FATAL: wexpect does not fail on a wrong exit code\n' >&2; exit 2; }
+( TMP="$TMP/ctl-leak"; printf 'a line\nsecond line\na line again\n' > "$TMP/o"; [[ "$(has_line 'a line')" == 2 && "$(has_line 'second')" == 1 && "$(has_line 'nothing like it')" == 0 ]] ) \
+  || { printf 'FATAL: has_line does not count the lines that contain its text\n' >&2; exit 2; }
+( TMP="$TMP/ctl-leak"; STUB_DIR="$TMP"; printf 'curl [a]\ncurl [b]\ndoppler x\n' > "$STUB_DIR/c.log"; rm -f "$STUB_DIR/none.log"; [[ "$(wa_calls c.log curl)" == 2 && "$(wa_calls c.log doppler)" == 1 && "$(wa_calls c.log zzz)" == 0 && "$(wa_calls none.log curl)" == 0 ]] ) \
+  || { printf 'FATAL: wa_calls does not count what it matches\n' >&2; exit 2; }
 why_of() { grep -E '^(Done|Still waiting|Needs a person|Could not check|Reserved for you):' "$TMP/o" | head -1 | sed -e 's/.* - //' -e 's/[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}/DATE/' | cut -c1-220; }
-has_line() { grep -cF -- "$1" "$TMP/o"; }
 CARD="Needs a person: do not ship the feature until the founder has accepted the synthetic text wa-key. - only a person can settle this"
 WAIT="Still waiting: do not ship the feature until the founder has accepted the synthetic text wa-key. - "
 COULD="Could not check: do not ship the feature until the founder has accepted the synthetic text wa-key. - "
 RUNBOOK="knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md"
-NEEDSYOU="Needs you: the founder asked for changes. Read the note yourself, not in an agent session: $RUNBOOK"
+NEEDSYOU="Needs you: the founder asked for changes. You read the note yourself, not an agent session: $RUNBOOK"
 wa_case() { # <name> <rc> <machine> <reason line prefix+text>: run the canonical plan; expect rc, machine line and ONE printed line
   run_h --plan "$PLAN"
   wexpect "$1" "$2" "$3"
@@ -889,24 +947,27 @@ assert_eq "1" "$(has_line "$NEEDSYOU")" "T4b: and the founder-asked-for-changes 
 assert_eq "1" "$(grep -c '^Needs you: ' "$TMP/o")" "T4c: exactly one such line"
 scn; wa_init; wabody invalid "$WA_H" "$WA_DATE_JSON" false; wa_case "T5: invalid (the checksum failed)" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}the saved decision looks damaged"
 scn; wa_init; wabody invalid "$WA_H" null false; wa_case "T5b: invalid with no timestamp" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}the saved decision looks damaged"
-for pair in "503|the check is not available right now (not switched on, or temporarily down)" "401|the check did not accept my sign-in" "404|the live app does not know this text yet" "400|answer not understood" "502|answer not understood" "500|unreachable (HTTP 500, curl rc 0)" "429|unreachable (HTTP 429, curl rc 0)" "302|unreachable (HTTP 302, curl rc 0)" "307|unreachable (HTTP 307, curl rc 0)" "204|unreachable (HTTP 204, curl rc 0)" "000|unreachable (HTTP 000, curl rc 0)"; do
+for pair in "503|the check is not available right now (not switched on, or temporarily down)" "401|the check did not accept my sign-in" "404|the live app does not know this text yet" "400|answer not understood" "502|answer not understood" "500|I could not reach the check (HTTP 500, curl rc 0)" "429|I could not reach the check (HTTP 429, curl rc 0)" "302|I could not reach the check (HTTP 302, curl rc 0)" "307|I could not reach the check (HTTP 307, curl rc 0)" "204|I could not reach the check (HTTP 204, curl rc 0)" "000|I could not reach the check (HTTP 000, curl rc 0)"; do
   st="${pair%%|*}"; why="${pair#*|}"
   scn; wa_init; echo "$st" > "$STUB_DIR/curl-status"; wa_case "T6: HTTP $st" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}$why"
 done
-scn; wa_init; echo 307 > "$STUB_DIR/curl-status"; wa_case "T6b: a redirect that carries an accepted body is still not an answer" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}unreachable (HTTP 307, curl rc 0)"
-scn; wa_init; echo 200 > "$STUB_DIR/curl-status"; : > "$STUB_DIR/doppler-fail"; wa_case "T7: the secret store fails" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}I could not sign in to the check"
+scn; wa_init; echo 307 > "$STUB_DIR/curl-status"; wa_case "T6b: a redirect that carries an accepted body is still not an answer" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}I could not reach the check (HTTP 307, curl rc 0)"
+scn; wa_init; echo 200 > "$STUB_DIR/curl-status"; : > "$STUB_DIR/doppler-fail"; wa_case "T7: the secret store fails" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}no saved sign-in value was found"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "T7b: no request without a token"
-scn; wa_init; printf 'bad"tok\n' > "$STUB_DIR/doppler-token"; wa_case "T7c: a token that fails the shape guard" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}I could not sign in to the check"
+scn; wa_init; printf '%s\n' 'SYNTHbad0123456789abcdefghijklmnopqrstuvwx"yz9' > "$STUB_DIR/doppler-token"; wa_case "T7c: a token that fails the shape guard (a quote in it)" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}the saved sign-in value looks wrong (too short or odd characters)"
+scn; wa_init; printf '%s\n' 'SYNTHshort0123' > "$STUB_DIR/doppler-token"; wa_case "T7e: a token that is too short" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}the saved sign-in value looks wrong (too short or odd characters)"
+scn; wa_init; : > "$STUB_DIR/doppler-token"; wa_case "T7f: an empty secret is missing, not malformed" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}no saved sign-in value was found"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "T7d: a refused token makes zero requests"
-scn; wa_init; RUN_PATH="$TMP/wabin-nodoppler"; wa_case "T8: no doppler on this machine" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}I could not sign in to the check"
+scn; wa_init; RUN_PATH="$TMP/wabin-nodoppler"; wa_case "T8: no doppler on this machine" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}no saved sign-in value was found"
 scn; wa_init; RUN_PATH="$TMP/wabin-nohash"; wa_case "T9: neither sha256sum nor shasum" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}I have no tool here to check that the text is unchanged"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "T9b: and no request"
 scn; wa_init; RUN_PATH="$TMP/wabin-shaonly"; wa_case "T9c: only shasum -a 256 is available: it is used" 0 "holds: 1 discharged: 1 standing: 0" "Done: do not ship the feature until the founder has accepted the synthetic text wa-key. - checked: web-acceptance wa-key $WA_H (decided 2026-11-05)"
 for crc in 28 6 7 35 63; do
-  scn; wa_init; echo "$crc" > "$STUB_DIR/curl-rc"; wa_case "T10: curl exit $crc (timeout, DNS, connect, TLS, oversize)" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}unreachable (HTTP 000, curl rc $crc)"
+  scn; wa_init; echo "$crc" > "$STUB_DIR/curl-rc"; wa_case "T10: curl exit $crc (timeout, DNS, connect, TLS, oversize)" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}I could not reach the check (HTTP 000, curl rc $crc)"
 done
-scn; wa_init; RUN_PATH="$TMP/wabin-nocurl"; wa_case "T10b: no curl on this machine" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}unreachable (HTTP 000, curl rc 127)"
+scn; wa_init; RUN_PATH="$TMP/wabin-nocurl"; wa_case "T10b: no curl on this machine" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}I could not reach the check (HTTP 000, curl rc 127)"
 
+arm_begin nser
 echo "--- Answers that cannot be understood are exit 2, never a pass ---"
 scn; wa_init; : > "$STUB_DIR/curl-body"; wa_case "N1: an empty body" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}answer not understood"
 scn; wa_init; echo 'not json at all' > "$STUB_DIR/curl-body"; wa_case "N2: a non-JSON body" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}answer not understood"
@@ -956,6 +1017,7 @@ scn; wa_init; jbody '"accepted"' '"\n2026-11-05T10:15:30Z"' true; wa_case "N21c:
 scn; wa_init; jbody '"declined"' '"2026-13-99T99:99:99Z"' true; wa_case "N22: a declined answer with an impossible date is not understood either" 2 "holds: 1 discharged: 0 standing: 1" "${COULD}$NU"
 scn; wa_init; jbody '"accepted"' '"2028-02-29T10:15:30Z"' true; wa_case "N23: instrument: a real leap day is understood" 0 "holds: 1 discharged: 1 standing: 0" "Done: do not ship the feature until the founder has accepted the synthetic text wa-key. - checked: web-acceptance wa-key $WA_H (decided 2028-02-29)"
 
+arm_end nser
 echo "--- The gate is validated before any request: every malformed spelling is exit 2 with zero requests ---"
 SHAPE="the web acceptance is not written as a plain text name and fingerprint"
 bad_gate() { # <name> <key token(s) text after the kind> 
@@ -994,10 +1056,11 @@ assert_eq "0" "$(wa_calls curl-argv.log curl)" "G19b: and nothing was requested"
 echo "--- The committed text: a missing, symlinked or CR-bearing blob is exit 2 ---"
 CANT="${COULD}the saved text is not in the project"
 cant_for() { printf '%s' "${COULD/synthetic text wa-key./synthetic text $1.}the saved text is not in the project"; }
+dmg_for() { printf '%s' "${COULD/synthetic text wa-key./synthetic text $1.}the saved text is damaged"; }
 scn; wa_init; WA_KEY=nowhere mkwa nowhere; wa_case "B1: no committed text for the key" 2 "holds: 1 discharged: 0 standing: 1" "$(cant_for nowhere)"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "B1b: no request"
 scn; wa_init; WA_KEY=wa-cr WA_HASH="$(git -C "$W" cat-file blob HEAD:apps/web-platform/server/legal-acceptance/texts/wa-cr.md | sha256sum | cut -c1-64)" mkwa cr; wabody accepted "$(git -C "$W" cat-file blob HEAD:apps/web-platform/server/legal-acceptance/texts/wa-cr.md | sha256sum | cut -c1-64)" "$WA_DATE_JSON" true
-wa_case "B2: a committed text with a CR byte (the web app refuses it too)" 2 "holds: 1 discharged: 0 standing: 1" "$(cant_for wa-cr)"
+wa_case "B2: a committed text with a CR byte (the web app refuses it too)" 2 "holds: 1 discharged: 0 standing: 1" "$(dmg_for wa-cr)"
 scn; wa_init; WA_KEY=wa-link WA_HASH="$(printf 'wa-key.md' | sha256sum | cut -c1-64)" mkwa link; wabody accepted "$(printf 'wa-key.md' | sha256sum | cut -c1-64)" "$WA_DATE_JSON" true
 wa_case "B3: a committed symlink is not a regular text" 2 "holds: 1 discharged: 0 standing: 1" "$(cant_for wa-link)"
 scn; wa_init; RUN_REPO="$W6"; wa_case "B4: a repository that has no texts folder at all" 2 "holds: 1 discharged: 0 standing: 1" "$CANT"
@@ -1021,7 +1084,7 @@ assert_eq "2" "$(last_rc)" "Q2: run under xtrace the gate refuses to read the to
 assert_eq "0" "$(wa_calls doppler-argv.log doppler)" "Q2b: the secret was never read"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "Q2c: and nothing was requested"
 no_secret_out && { echo "  PASS: Q2d: the traced run carries no token"; PASS=$((PASS + 1)); } || { echo "  FAIL: Q2d: the token leaked under xtrace"; FAIL=$((FAIL + 1)); }
-assert_eq "1" "$(has_line "${COULD}I could not sign in to the check")" "Q2e: and says so"
+assert_eq "1" "$(has_line "${COULD}I will not read the sign-in value while commands are being traced")" "Q2e: and says so"
 scn; wa_init
 ( cd "$W" && git_fixture_env "$W" && SSLKEYLOGFILE=/x CURL_CA_BUNDLE=/x SSL_CERT_FILE=/x SSL_CERT_DIR=/x CURL_HOME=/x HOSTALIASES=/x LOCALDOMAIN=x RES_OPTIONS=x OPENSSL_CONF=/x OPENSSL_MODULES=/x LD_PRELOAD=/nonexistent/x.so LD_AUDIT=/nonexistent/x.so LD_LIBRARY_PATH=/nonexistent PATH="$RUN_PATH" "$BASH_BIN" "$SUT" --plan "$PLAN" ) </dev/null >"$TMP/o" 2>"$TMP/e"; echo $? > "$TMP/rc"
 wexpect "Q3: TLS and resolver variables in the environment are hidden from curl (the stub refuses if it sees one)" 0 "holds: 1 discharged: 1 standing: 0"
@@ -1124,8 +1187,10 @@ scn; wa_init; { printf '# Plan\n\n## Operator Holds\n\n  Gate: web-acceptance wa
 assert_eq "2" "$(last_rc)" "ND11: a web-acceptance gate written outside any hold (an orphan) is exit 2"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "ND11b: nothing was requested"
 
+arm_begin bind
 echo "--- The hold must name the text its gate decides (CTO ruling D1) ---"
-BINDWHY="this wait does not name the legal text it is about, so a recorded decision cannot clear it"
+bindwhy_for() { printf '%s' "this wait does not name the legal text it is about; ask the plan's author to put the text name $1 in the hold's words"; }
+BINDWHY="$(bindwhy_for wa-key)"
 scn; wa_init; mkhold1 bind1 "Deploy the payments migration to production"; run_h --plan "$PLAN"
 wexpect "BIND1: an accepted text cannot clear a wait about something else (the payments migration case)" 2 "holds: 1 discharged: 0 standing: 1"
 assert_eq "1" "$(has_line "Could not check: Deploy the payments migration to production - $BINDWHY")" "BIND1b: and says why in plain words"
@@ -1140,7 +1205,7 @@ for words in "wa-key must be accepted" "accepted: wa-key" "The founder accepts \
   scn; wa_init; mkhold1 bind3 "$words"; run_h --plan "$PLAN"
   wexpect "BIND3: a hold that names the key as a whole word ($words) is cleared by its decision" 0 "holds: 1 discharged: 1 standing: 0"
 done
-for words in "Wait for wa-key-two" "Wait for xwa-key" "Wait for wa-keys" "Wait for 2wa-key" "Wait for wa-key2" "Wait for wa key" "Wait for wa-ke" "Wait for the legal text" "Wait for a-key"; do
+for words in "Wait for wa-key-two" "Wait for xwa-key" "Wait for wa-keys" "Wait for 2wa-key" "Wait for wa-key2" "Wait for wa key" "Wait for wa-ke" "Wait for the legal text" "Wait for a-key" "Wait for wa-key_x" "Wait for _wa-key" "Wait for x_wa-key_"; do
   scn; wa_init; mkhold1 bind4 "$words"; run_h --plan "$PLAN"
   wexpect "BIND4: a hold that only contains part of the key ($words) is not cleared" 2 "holds: 1 discharged: 0 standing: 1"
   assert_eq "1" "$(has_line "Could not check: $words - $BINDWHY")" "BIND4b: says why ($words)"
@@ -1151,13 +1216,15 @@ wexpect "BIND5: the hold names one key and the gate decides another: not cleared
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "BIND5b: nothing was requested"
 scn; wa_init; mkdir -p "$TMP/plans"; PLAN="$TMP/plans/bind6.md"; printf '# Plan\n\n## Operator Holds\n\n- Hold: Wait for wa-key to be accepted\n  Gate: web-acceptance wa-key %s\n  Gate: web-acceptance %s %s\n\n## Next\n' "$WA_H" "$K63" "$WA_H" > "$PLAN"; run_h --plan "$PLAN"
 assert_eq "2" "$(last_rc)" "BIND6: every web-acceptance gate on a hold needs its own key named: the second does not, so exit 2"
-assert_eq "1" "$(has_line "Could not check: Wait for wa-key to be accepted - $BINDWHY")" "BIND6b: says why"
+assert_eq "1" "$(has_line "Could not check: Wait for wa-key to be accepted - $(bindwhy_for "$K63")")" "BIND6b: says why (it names the key that is missing)"
 scn; wa_init; run_h --file env-wa.md --section "Production Envelope"
 wexpect "BIND7: a web acceptance in an envelope (--file mode) is never evaluated" 2 "holds: 1 discharged: 0 standing: 1"
 assert_eq "1" "$(has_line "a recorded decision on a legal text cannot back a production step")" "BIND7b: and says why"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "BIND7c: nothing was requested"
 assert_eq "0" "$(wa_calls doppler-argv.log doppler)" "BIND7d: and no token was read"
 
+arm_end bind
+arm_begin tab
 echo "--- A tab inside a Gate line cannot split the record (E3) ---"
 TABGATE="wa-key $WA_H"$'\t'"AND pr-merged 999999"
 scn; wa_init; mkholdg tab1 "Wait for wa-key to be accepted" "$TABGATE"; run_h --plan "$PLAN"
@@ -1173,20 +1240,22 @@ assert_eq "0" "$(last_rc)" "TAB3: a tab between the key and the hash is read as 
 scn; wa_init; mkhold1 tab4 "Wait"$'\t'"for wa-key"; run_h --plan "$PLAN"
 assert_eq "0" "$(last_rc)" "TAB4: a tab inside the hold's words is read as a space too (the key is still named)"
 
+arm_end tab
+arm_begin vu
 echo "--- valid_until (CTO ruling D6) ---"
 wa_vu() { # <key> <name>: a no-delegation plan on the committed text <key>, and an accepted answer for ITS hash
   scn; wa_init; local h; h="$(blobhash "$1")"; WA_KEY="$1" WA_HASH="$h" mkwa "$2"; wabody accepted "$h" "$WA_DATE_JSON" true; run_h --plan "$PLAN"
 }
 wa_vu wa-exp vu1
 wexpect "VU1: a text whose last day is past stands as a person's matter (exit 1), whatever the founder recorded" 1 "holds: 1 discharged: 0 standing: 1"
-assert_eq "1" "$(has_line "Needs a person: do not ship the feature until the founder has accepted the synthetic text wa-exp. - only a person can settle this (this text has expired; a revised text is needed)")" "VU1b: with its reason"
+assert_eq "1" "$(has_line "Needs a person: do not ship the feature until the founder has accepted the synthetic text wa-exp. - only a person can settle this (the accepted text has passed its last valid day; a revised text is needed)")" "VU1b: with its reason"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "VU1c: nothing was requested"
 assert_eq "0" "$(wa_calls doppler-argv.log doppler)" "VU1d: and no token was read"
 wa_vu wa-today vu2
-wexpect "VU2: a text whose last day is today is still valid" 0 "holds: 1 discharged: 1 standing: 0"
+if day_stable; then wexpect "VU2: a text whose last day is today is still valid" 0 "holds: 1 discharged: 1 standing: 0"; else day_skip VU2; fi
 wa_vu wa-badvu vu3
 wexpect "VU3: a last day that is not a date (soon) cannot be used: exit 2" 2 "holds: 1 discharged: 0 standing: 1"
-assert_eq "1" "$(has_line "${COULD/synthetic text wa-key./synthetic text wa-badvu.}the saved text is not in the project")" "VU3b: with the closed wording"
+assert_eq "1" "$(has_line "${COULD/synthetic text wa-key./synthetic text wa-badvu.}the saved text is damaged")" "VU3b: with the closed wording"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "VU3c: nothing was requested"
 wa_vu wa-badvu2 vu4
 wexpect "VU4: a last day written without leading zeros (2099-1-1) cannot be used: exit 2" 2 "holds: 1 discharged: 0 standing: 1"
@@ -1197,13 +1266,80 @@ wexpect "VU6: a text with no front matter at all is no expiry" 0 "holds: 1 disch
 scn; wa_init; run_h --plan "$PLAN"
 wexpect "VU7: instrument: the canonical text (valid_until 2099-12-31) is valid" 0 "holds: 1 discharged: 1 standing: 0"
 
+arm_end vu
+arm_begin bind2
+echo "--- The binding reads the words the operator reads, and nothing accumulates between holds (FR-SEC, FR-PAT) ---"
+scn; wa_init; mkhold1 bindlong "$(printf 'x%.0s' $(seq 1 200)) wa-key"; run_h --plan "$PLAN"
+wexpect "BIND9: a key named after the 160th character is still named (the words are matched whole, only the printed line is cut)" 0 "holds: 1 discharged: 1 standing: 0"
+scn; wa_init; mkhold1 bindc1 "Wait for wa-ke"$'\xc2\x85'"y to be accepted"; run_h --plan "$PLAN"
+wexpect "BIND10: a control character inside the key is removed before the match, as it is before the operator sees it" 0 "holds: 1 discharged: 1 standing: 0"
+scn; wa_init; mkdir -p "$TMP/plans"; PLAN="$TMP/plans/bind11.md"
+printf '# Plan\n\n## Operator Holds\n\n- Hold: Wait for wa-key to be accepted\n  Gate: web-acceptance wa-key %s\n- Hold: Deploy the payments migration to production\n  Gate: web-acceptance wa-key %s\n\n## Next\n' "$WA_H" "$WA_H" > "$PLAN"; run_h --plan "$PLAN"
+assert_eq "2" "$(last_rc)" "BIND11: a second hold that omits the key beside a first that names it is not cleared (the first hold's words do not carry over)"
+assert_eq "1" "$(machine | grep -c '^holds: 2 discharged: 1 standing: 1$')" "BIND11b: one discharged, one standing"
+assert_eq "1" "$(has_line "Could not check: Deploy the payments migration to production - $BINDWHY")" "BIND11c: and the second says why"
+
+arm_end bind2
+arm_begin chg
+echo "--- Whoever reads the note is told, whatever order the gates come in (FR-UI) ---"
+chg_setup() { # <name> <gate lines...>: a plan with a valid delegation, an open earlier change and ONE hold whose gates are given
+  scn; wa_init; wabody changes_requested "$WA_H" "$WA_DATE_JSON" true; echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-55.json"
+  mkplan2 "$1" "- Hold: ship only when both are true (wa-key).
+$2"; RUN_PATH="$WABIN"
+}
+chg() { chg_setup "$@"; run_h --plan "$PLAN"; }
+chg chg1 "  Gate: pr-merged 55
+  Gate: web-acceptance wa-key $WA_H"
+wexpect "CHG1: an open earlier change first, changes requested second: the hold waits" 1 "holds: 1 discharged: 0 standing: 1"
+assert_eq "1" "$(has_line "$NEEDSYOU")" "CHG1b: and the founder's request for changes is still said, with who reads the note"
+assert_eq "1" "$(grep -c '^Still waiting: ' "$TMP/o")" "CHG1c: the waiting line is the hold's own line"
+chg chg2 "  Gate: web-acceptance wa-key $WA_H
+  Gate: pr-merged 55"
+wexpect "CHG2: changes requested first, an open earlier change second" 1 "holds: 1 discharged: 0 standing: 1"
+assert_eq "1" "$(has_line "$NEEDSYOU")" "CHG2b: the line is said"
+chg chg3 "  Gate: web-acceptance wa-key $WA_H"
+wexpect "CHG3: changes requested alone" 1 "holds: 1 discharged: 0 standing: 1"
+assert_eq "1" "$(has_line "$NEEDSYOU")" "CHG3b: the line is said once"
+assert_eq "1" "$(grep -c '^Needs you: ' "$TMP/o")" "CHG3c: exactly once"
+scn; wa_init; run_h --plan "$PLAN"
+wexpect "CHG4: instrument: the canonical accepted answer says nothing about changes" 0 "holds: 1 discharged: 1 standing: 0"
+assert_eq "0" "$(grep -c '^Needs you: ' "$TMP/o")" "CHG4b: no such line"
+
+arm_end chg
+w_tz() { wa_init; local h; h="$(blobhash wa-today)"; WA_KEY=wa-yest WA_HASH="$(blobhash wa-yest)" mkwa mtzB; PLANB="$PLAN"; WA_KEY=wa-today WA_HASH="$h" mkwa mtzA; PLANA="$PLAN"; wabody accepted "$h" "$WA_DATE_JSON" true; }
+r_tz() { # a text valid through today (UTC) under the zone furthest AHEAD of UTC, a text that ended yesterday under the zone furthest BEHIND: a gate reading the local date fails one of them at every hour
+  local rcs=""; TZ=Pacific/Kiritimati run_h --plan "$PLANA"; rcs="$(last_rc)"; TZ=Etc/GMT+12 run_h --plan "$PLANB"; rcs="$rcs $(last_rc)"; echo "holds: x rcs=$rcs" >> "$TMP/o"; echo 0 > "$TMP/rc"; }
+arm_begin vu2
+echo "--- valid_until: the day before today, the front matter only, the last repeated line, a real calendar day, UTC (FR-SEC, test design) ---"
+wa_vu wa-yest vu8
+if day_stable; then
+  wexpect "VU8: a text whose last day was yesterday is expired" 1 "holds: 1 discharged: 0 standing: 1"
+  assert_eq "1" "$(has_line "(the accepted text has passed its last valid day; a revised text is needed)")" "VU8b: with its reason"
+  assert_eq "0" "$(wa_calls curl-argv.log curl)" "VU8c: nothing was requested"
+else day_skip VU8; fi
+wa_vu wa-dup vu9
+wexpect "VU9: a repeated valid_until keeps the LAST value (old first, far future last): still valid" 0 "holds: 1 discharged: 1 standing: 0"
+wa_vu wa-dup2 vu10
+wexpect "VU10: a repeated valid_until keeps the LAST value (far future first, old last): expired" 1 "holds: 1 discharged: 0 standing: 1"
+wa_vu wa-bodyvu vu11
+wexpect "VU11: a valid_until line in the body, outside the front matter, is ignored" 0 "holds: 1 discharged: 1 standing: 0"
+for vk in wa-badvu3 wa-badvu4 wa-badvu5 wa-badvu6; do
+  wa_vu "$vk" vu12
+  wexpect "VU12: $vk: a valid_until that is not a real calendar day is damaged" 2 "holds: 1 discharged: 0 standing: 1"
+  assert_eq "1" "$(has_line "${COULD/synthetic text wa-key./synthetic text $vk.}the saved text is damaged")" "VU12b: $vk: with the closed wording"
+  assert_eq "0" "$(wa_calls curl-argv.log curl)" "VU12c: $vk: nothing was requested"
+done
+scn; w_tz; r_tz
+if day_stable; then assert_eq "rcs=0 1" "$(grep -o 'rcs=.*' "$TMP/o")" "VU13: a text valid through today (UTC) is valid under the zone furthest ahead of UTC, and one that ended yesterday is expired under the zone furthest behind (the date is read in UTC)"; else day_skip VU13; fi
+
+arm_end vu2
 echo "--- Harness rows: the stubs are load-bearing (removing one must fail the discharge rows, not pass them as held) ---"
 scn; wa_init; RUN_PATH="$TMP/wabin-nocurl"; run_h --plan "$PLAN"
 assert_eq "2" "$(last_rc)" "HR1: with the curl stub removed the canonical discharge is NOT a discharge (the discharge rows above would fail)"
-assert_eq "1" "$(has_line "${COULD}unreachable (HTTP 000, curl rc 127)")" "HR1b: it reads as unreachable, with the numbers only"
+assert_eq "1" "$(has_line "${COULD}I could not reach the check (HTTP 000, curl rc 127)")" "HR1b: it reads as unreachable, with the numbers only"
 scn; wa_init; RUN_PATH="$TMP/wabin-nodoppler"; run_h --plan "$PLAN"
 assert_eq "2" "$(last_rc)" "HR2: with the doppler stub removed the canonical discharge is NOT a discharge"
-assert_eq "1" "$(has_line "${COULD}I could not sign in to the check")" "HR2b: it reads as no access to the token"
+assert_eq "1" "$(has_line "${COULD}no saved sign-in value was found")" "HR2b: it reads as no saved sign-in value"
 echo "--- Human lines carry no jargon (web-acceptance outputs) ---"
 for variant in "done" declined changes none invalid unreachable mismatch expired nobind notavail refused unknown badanswer badgate; do
   scn; wa_init
@@ -1231,6 +1367,7 @@ echo "--- No stub refused an argv anywhere in the web-acceptance scenarios so fa
 miss_n=0; for f in "$TMP"/scn*/curl-argv.log "$TMP"/scn*/doppler-argv.log; do [[ -f "$f" ]] && miss_n=$((miss_n + $(grep -c 'STUB-MISS' "$f" || true))); done
 assert_eq "0" "$miss_n" "no curl or doppler stub miss across all web-acceptance scenarios (the rows that expected a miss, T7/T8, never reach a stub with a wrong argv)"
 
+arm_end wa
 echo "=== Arm 13: mutations (the pristine control first) ==="
 MUT="$TMP/mut"; mkdir -p "$MUT"; PRISTINE_DIR="$TMP/pristine/skills/ship/scripts"; mkdir -p "$PRISTINE_DIR"
 # The evaluator resolves the verifier relative to itself, so mutants live in a tree that mirrors the plugin layout.
@@ -1293,8 +1430,9 @@ s_zerohold() { printf '# Plan\n\n## Operator Holds\n\nDelegation: %s\nEnvelope: 
 s_lcgate() { mkholds mlc $'- Hold: ship only when both are true.\n  Gate: no-inflight-run example-release.yml\n  gate: pr-merged 9999'; echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-9999.json"; }
 s_notimeout() { mkplan mnt; RUN_PATH="$TMP/nobin-timeout"; }
 s_nojq3() { RUN_PATH="$TMP/nobin-jq"; PLAN="$FX/holds-prose.md"; }
-s_ctl() { mkholds mctl "$(printf -- '- Hold: do not ship \033[31mred\007 text\n  Gate: no-inflight-run example-release.yml')"; }
-r_ctl() { run_h --plan "$PLAN"; echo "holds: x esc=$(grep -c "$(printf '\033')" "$TMP/o")" >> "$TMP/o"; }
+s_ctl() { mkholds mctl "$(printf -- '- Hold: do not ship \302\205red text\n  Gate: no-inflight-run example-release.yml')"; }
+r_ctl() { run_h --plan "$PLAN"; echo "holds: x esc=$(LC_ALL=C grep -c "$(printf '\302\205')" "$TMP/o")" >> "$TMP/o"; }
+s_cb() { { printf '# Plan\n\n## Operator Holds\n\nDelegation: %s\nEnvelope: env-valid.md\n\n' "$URL"; printf -- '- Hold: do not ship while a release is running.\033\n  Gate: no-inflight-run example-release.yml\n'; } > "$TMP/plans/mcb.md"; PLAN="$TMP/plans/mcb.md"; }
 s_filepath() { :; }
 r_file_title() { run_h --file "env-two.md#beta dispatch"; }
 s_unkstatus() { echo '[{"status":"frobnicated"}]' > "$STUB_DIR/runs-example-release.yml.json"; mkplan munk; }
@@ -1377,6 +1515,8 @@ mutate done-gates "$(noop done-gates)" && killed done-gates "0|holds: x checked=
 # 12 tools, sanitising, the --file address
 mutate need-timeout "$(noop need-timeout)" && killed need-timeout "2|" s_notimeout r_plan
 mutate clean-text "s/^clean_text\\(\\) .*# mut:clean-text\$/clean_text() { printf '%s' \"\\\$1\"; } # mut:clean-text/" && killed clean-text "0|holds: x esc=0" s_ctl r_ctl
+mutate clean-uncut "s/^clean_uncut\\(\\) .*# mut:clean-uncut\$/clean_uncut() { printf '%s' \"\\\$1\"; } # mut:clean-uncut/" && killed clean-uncut "0|holds: x esc=0" s_ctl r_ctl
+mutate ctl-bytes "$(noop ctl-bytes)" && killed ctl-bytes "2|" s_cb r_plan
 mutate file-title "$(noop file-title)" && killed file-title "0|holds: 1 discharged: 1 standing: 0" s_filepath r_file_title
 
 # --- web-acceptance (Guard 1 mutation rows 1 to 11 and the harness rows) ------------------------------------------------
@@ -1387,13 +1527,14 @@ r_wa_needs() { run_h --plan "$PLAN"; echo "holds: x $(machine | sed 's/^holds: /
 r_wafile() { run_h --file env-wa.md --section "Production Envelope"; echo "holds: x $(machine | sed 's/^holds: //') why=$(why_of)" >> "$TMP/o"; }
 r_wa_in() { run_h --plan "$PLAN"; echo "holds: x $(machine | sed 's/^holds: //') stdin-calls=$(grep -vcx 0 "$STUB_DIR/stdin-bytes" 2>/dev/null)" >> "$TMP/o"; }
 r_envbase() { HGE_WA_BASE='https://evil.example.test/api' r_wa; }
-PU="2|holds: x 1 discharged: 0 standing: 1 why=unreachable (HTTP 000, curl rc 28)"
-PU500="2|holds: x 1 discharged: 0 standing: 1 why=unreachable (HTTP 500, curl rc 0)"
-PU307="2|holds: x 1 discharged: 0 standing: 1 why=unreachable (HTTP 307, curl rc 0)"
+PU="2|holds: x 1 discharged: 0 standing: 1 why=I could not reach the check (HTTP 000, curl rc 28)"
+PU500="2|holds: x 1 discharged: 0 standing: 1 why=I could not reach the check (HTTP 500, curl rc 0)"
+PU307="2|holds: x 1 discharged: 0 standing: 1 why=I could not reach the check (HTTP 307, curl rc 0)"
 PNU="2|holds: x 1 discharged: 0 standing: 1 why=answer not understood"
 P_OK="0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance wa-key $WA_H (decided DATE)"
 PSHAPE="2|holds: x 1 discharged: 0 standing: 1 why=the web acceptance is not written as a plain text name and fingerprint"
-PCANT="2|holds: x 1 discharged: 0 standing: 1 why=the saved text is not in the project"
+PCANT="2|holds: x 1 discharged: 0 standing: 1 why=the saved text is damaged"
+PNOTIN="2|holds: x 1 discharged: 0 standing: 1 why=the saved text is not in the project"
 PBIND="2|holds: x 1 discharged: 0 standing: 1 why=$BINDWHY"
 w_ok() { wa_init; }
 w_declined() { wa_init; wabody declined "$WA_H" "$WA_DATE_JSON" true; }
@@ -1419,6 +1560,20 @@ w_bindcase() { wa_init; mkhold1 mbc "Wait for WA-KEY"; }
 w_tab() { wa_init; mkholdg mtab "Wait for wa-key to be accepted" "$TABGATE"; }
 w_expired() { wa_init; local h; h="$(blobhash wa-exp)"; WA_KEY=wa-exp WA_HASH="$h" mkwa mexp; wabody accepted "$h" "$WA_DATE_JSON" true; }
 w_badvu() { wa_init; local h; h="$(blobhash wa-badvu)"; WA_KEY=wa-badvu WA_HASH="$h" mkwa mbvu; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_dup() { wa_init; local h; h="$(blobhash wa-dup)"; WA_KEY=wa-dup WA_HASH="$h" mkwa mdup; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_dup2() { wa_init; local h; h="$(blobhash wa-dup2)"; WA_KEY=wa-dup2 WA_HASH="$h" mkwa mdup2; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_bodyvu() { wa_init; local h; h="$(blobhash wa-bodyvu)"; WA_KEY=wa-bodyvu WA_HASH="$h" mkwa mbodyvu; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_badvu3() { wa_init; local h; h="$(blobhash wa-badvu3)"; WA_KEY=wa-badvu3 WA_HASH="$h" mkwa mbvu3; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_badvu4() { wa_init; local h; h="$(blobhash wa-badvu4)"; WA_KEY=wa-badvu4 WA_HASH="$h" mkwa mbvu4; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_badvu5() { wa_init; local h; h="$(blobhash wa-badvu5)"; WA_KEY=wa-badvu5 WA_HASH="$h" mkwa mbvu5; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_badvu6() { wa_init; local h; h="$(blobhash wa-badvu6)"; WA_KEY=wa-badvu6 WA_HASH="$h" mkwa mbvu6; wabody accepted "$h" "$WA_DATE_JSON" true; }
+w_bindus() { wa_init; mkhold1 mbus "Wait for wa-key_x"; }
+w_bindc1() { wa_init; mkhold1 mbc1 "Wait for wa-ke"$'\xc2\x85'"y to be accepted"; }
+w_bind200() { wa_init; mkhold1 mb200 "$(printf 'x%.0s' $(seq 1 200)) wa-key"; }
+w_bind2() { wa_init; PLAN="$TMP/plans/mb2.md"; mkdir -p "$TMP/plans"; printf '# Plan\n\n## Operator Holds\n\n- Hold: Wait for wa-key to be accepted\n  Gate: web-acceptance wa-key %s\n- Hold: Deploy the payments migration to production\n  Gate: web-acceptance wa-key %s\n\n## Next\n' "$WA_H" "$WA_H" > "$PLAN"; }
+w_chg1() { chg_setup mchg1 "  Gate: pr-merged 55
+  Gate: web-acceptance wa-key $WA_H"; }
+w_shapetok() { wa_init; printf '%s\n' 'SYNTHshort0123' > "$STUB_DIR/doppler-token"; }
 w_badvu2() { wa_init; local h; h="$(blobhash wa-badvu2)"; WA_KEY=wa-badvu2 WA_HASH="$h" mkwa mbvu2; wabody accepted "$h" "$WA_DATE_JSON" true; }
 w_statusnl() { wa_init; jbody '"accepted\n"' '"2026-11-05T10:15:30Z"' true; }
 w_statusnul() { wa_init; jbody '"accepted\u0000"' '"2026-11-05T10:15:30Z"' true; }
@@ -1453,7 +1608,7 @@ mutate local-hash "$(noop local-hash)" && killed local-hash "1|holds: x 1 discha
 mutate echo-hash "$(noop echo-hash)" && killed echo-hash "$PNU" w_echo r_wa
 mutate wa-case 's/gate_web_acceptance "\$rest" ;; # mut:wa-case/: ;; # mut:wa-case/' && killed wa-case "$P_OK" w_ok r_wa
 mutate body-keys "$(noop body-keys)" && killed body-keys "$PNU" w_renamed r_wa
-mutate wa-blob "$(noop wa-blob)" && killed wa-blob "$PCANT" w_link r_wa
+mutate wa-blob "$(noop wa-blob)" && killed wa-blob "$PNOTIN" w_link r_wa
 mutate wa-cr "$(noop wa-cr)" && killed wa-cr "$PCANT" w_cr r_wa
 # 6 a malformed gate is refused before any request (every spelling, against the neutered check and each narrowed regex)
 mutate wa-shape 's/if \[\[ "\$rest" != \*" "\* \]\] \|\| ! \[\[ "\$key" =~ \$WA_KEY_RE \]\] \|\| ! \[\[ "\$hash" =~ \$WA_HASH_RE \]\]; then/if false; then/' && {
@@ -1481,12 +1636,23 @@ mutate_lib argv-token 's/--config "\$cfg"/-H "Authorization: Bearer $BC_TOKEN"/'
 mutate_lib cfg-mode 's/umask 077/umask 022/' && killed cfg-mode "$P_OK" w_ok r_wa
 # the hold names its text (D1), a tab cannot split a gate (E3), valid_until (D6), the answer parser (F5)
 mutate wa-bind "$(noop wa-bind)" && { killed wa-bind "$PBIND" w_payments r_wa; }
-mutate wa-bind-edge '/mut:wa-bind$/ s/\[\^a-z0-9-\]/[^a-z0-9]/g' && killed wa-bind-edge "$PBIND" w_bindlong r_wa
+mutate wa-bind-edge '/mut:wa-bind$/ s/\[\^a-z0-9_-\]/[^a-z0-9_]/g' && killed wa-bind-edge "$PBIND" w_bindlong r_wa
+mutate wa-bind-underscore '/mut:wa-bind$/ s/\[\^a-z0-9_-\]/[^a-z0-9-]/g' && killed wa-bind-underscore "$PBIND" w_bindus r_wa
+mutate wa-bind-raw '/mut:wa-bind$/ s/clean_uncut "\$WA_HOLD_TEXT"/printf "%s" "$WA_HOLD_TEXT"/' && killed wa-bind-raw "$P_OK" w_bindc1 r_wa
+mutate wa-bind-cut '/mut:wa-bind$/ s/clean_uncut "\$WA_HOLD_TEXT"/clean_text "$WA_HOLD_TEXT"/' && killed wa-bind-cut "$P_OK" w_bind200 r_wa
+mutate wa-bind-accum 's/^  WA_HOLD_TEXT="\$text"$/  WA_HOLD_TEXT="$WA_HOLD_TEXT $text"/' && killed wa-bind-accum "2|holds: 2 discharged: 1 standing: 1" w_bind2 r_plan
+mutate hline-any "$(noop hline-any)" && killed hline-any "1|holds: x 1 discharged: 0 standing: 1 needs=1" w_chg1 r_wa_needs
+mutate wa-err-shape 's/^      shape\) GWHY=/      nomatch) GWHY=/' && killed wa-err-shape "2|holds: x 1 discharged: 0 standing: 1 why=the saved sign-in value looks wrong (too short or odd characters)" w_shapetok r_wa
+mutate_lib err-shape "$(noop err-shape)" && killed err-shape "2|holds: x 1 discharged: 0 standing: 1 why=the saved sign-in value looks wrong (too short or odd characters)" w_shapetok r_wa
+mutate wa-valid-day "$(noop wa-valid-day)" && { killed wa-valid-day "$PCANT" w_badvu3 r_wa; killed wa-valid-day "$PCANT" w_badvu4 r_wa; killed wa-valid-day "$PCANT" w_badvu5 r_wa; }
+mutate wa-valid-last 's/got = 1; last = v/last = (got ? last : v); got = 1/' && { killed wa-valid-last "0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance wa-dup $(blobhash wa-dup) (decided DATE)" w_dup r_wa; killed wa-valid-last "1|holds: x 1 discharged: 0 standing: 1 why=only a person can settle this (the accepted text has passed its last valid day; a revised text is needed)" w_dup2 r_wa; }
+mutate wa-valid-fm 's/NR == 1 \{ if \(\$0 == "---"\) \{ f = 1; next \} else exit \} f && \$0 == "---" \{ exit \} f && //' && killed wa-valid-fm "0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance wa-bodyvu $(blobhash wa-bodyvu) (decided DATE)" w_bodyvu r_wa
+if day_stable; then mutate wa-today-utc 's/date -u \+%F/date +%F/' && killed wa-today-utc "0|holds: x rcs=0 1" w_tz r_tz; else day_skip wa-today-utc; fi
 mutate wa-bind-case 's/tr .A-Z. .a-z. \| grep -Eq "\(\^/grep -Eq "(^/' && killed wa-bind-case "$P_OK" w_bindcase r_wa
 mutate wa-file "$(noop wa-file)" && killed wa-file "2|holds: x 1 discharged: 0 standing: 1 why=a recorded decision on a legal text cannot back a production step" s_filepath r_wafile
 mutate tab-val 's~gsub\(/\\t/, " ", s\); ~~' && killed tab-val "$PSHAPE" w_tab r_wa
-mutate wa-expired "$(noop wa-expired)" && killed wa-expired "1|holds: x 1 discharged: 0 standing: 1 why=only a person can settle this (this text has expired; a revised text is needed)" w_expired r_wa
-mutate wa-valid-shape "$(noop wa-valid-shape)" && { killed wa-valid-shape "$PCANT" w_badvu r_wa; killed wa-valid-shape "$PCANT" w_badvu2 r_wa; }
+mutate wa-expired "$(noop wa-expired)" && killed wa-expired "1|holds: x 1 discharged: 0 standing: 1 why=only a person can settle this (the accepted text has passed its last valid day; a revised text is needed)" w_expired r_wa
+mutate wa-valid-shape "$(noop wa-valid-shape)" && { killed wa-valid-shape "$PCANT" w_badvu6 r_wa; }
 mutate st-allow 's~\.status as \$s [^'"'"']*~.status | if type == "string" then . else "-" end~' && { killed st-allow "$PNU" w_statusnl r_wa; killed st-allow "$PNU" w_statusnul r_wa; }
 mutate body-dupkeys "$(noop body-dupkeys)" && { killed body-dupkeys "$PNU" w_dupstatus r_wa; killed body-dupkeys "$PNU" w_duprowok r_wa; killed body-dupkeys "$PNU" w_duprowok2 r_wa; }
 mutate ts-wired 's~\(\.decided_at \| okts\)~(.decided_at | type) == "string"~' && { DATEPROBE=2026-13-99T99:99:99Z; killed ts-wired "$PNU" w_date r_wa; }
@@ -1506,5 +1672,9 @@ if (( n_calls >= 935 )); then
 else
   echo "  FAIL: gh stub calls $n_calls < 935 -- the rows did not drive the script"; FAIL=$((FAIL + 1))
 fi
+
+for armrow in "wa:1:the whole of Arm 14" "nser:1:answers that cannot be understood, escapes, repeats and dates" "bind:1:the hold must name its text" "tab:1:a tab cannot split a gate" "vu:1:valid_until" "bind2:1:what the binding reads" "chg:1:who reads the note" "vu2:1:valid_until, the day before, zones, calendar"; do
+  arm_floor "${armrow%%:*}" "$(printf '%s' "$armrow" | cut -d: -f2)" "${armrow#*:*:}"
+done
 
 print_results 1770

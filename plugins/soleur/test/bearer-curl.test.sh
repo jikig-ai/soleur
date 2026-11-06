@@ -102,8 +102,15 @@ drive() {
   DRC=$?
 }
 outs() { cat "$TMP/drv.out" "$TMP/drv.err" 2>/dev/null; }
-# the group ends in `|| true`: under pipefail a log that does not exist (curl never ran) would otherwise make the whole pipeline "fail" and the leak check "pass"
-no_token_anywhere() { ! { outs; cat "$STUB_DIR"/curl-argv.log "$STUB_DIR"/curl-url.log "$STUB_DIR"/doppler-argv.log 2>/dev/null || true; } | grep -qF -- "$TOKEN"; }
+# the group ends in `|| true`: under pipefail a log that does not exist (curl never ran) would otherwise make the whole pipeline "fail" and the leak check "pass".
+# It looks for the canonical token AND for the first line of whatever this scenario put in the secret store (a refused token must not be printed either).
+no_token_anywhere() {
+  local h="$TMP/.hay" t2=""
+  { outs; cat "$STUB_DIR"/curl-argv.log "$STUB_DIR"/curl-url.log "$STUB_DIR"/doppler-argv.log 2>/dev/null || true; } > "$h"
+  ! grep -qF -- "$TOKEN" "$h" || return 1
+  t2="$(head -1 "$STUB_DIR/doppler-token" 2>/dev/null)"
+  [ "${#t2}" -lt 8 ] || ! grep -qF -- "$t2" "$h"
+}
 have() { [[ -s "$STUB_DIR/$1" ]]; }
 # T2: the leak detector is under a control. A token placed in each place it reads MUST be flagged, or every "the token is in no output" row proves nothing.
 mkdir -p "$TMP/ctl-leak"
@@ -113,6 +120,10 @@ for leak in drv.out drv.err curl-argv.log curl-url.log doppler-argv.log; do
   ( STUB_DIR="$TMP/ctl-leak"; TMP="$TMP/ctl-leak"; rm -f "$TMP"/* ; : > "$TMP/drv.out"; : > "$TMP/drv.err"; printf 'x %s y\n' "$TOKEN" > "$TMP/$leak"; ! no_token_anywhere ) \
     || { printf 'FATAL: no_token_anywhere cannot see a token in %s\n' "$leak" >&2; exit 2; }
 done
+( STUB_DIR="$TMP/ctl-leak"; TMP="$TMP/ctl-leak"; rm -f "$TMP"/* ; : > "$TMP/drv.out"; : > "$TMP/drv.err"; printf '%s\n' 'REFUSEDtok0123456789abcdefghijklmnopqrstuvwx"yz9' > "$TMP/doppler-token"; printf 'x REFUSEDtok0123456789abcdefghijklmnopqrstuvwx"yz9 y\n' > "$TMP/drv.err"; ! no_token_anywhere ) \
+  || { printf 'FATAL: no_token_anywhere cannot see a refused (non-canonical) token the scenario configured\n' >&2; exit 2; }
+( STUB_DIR="$TMP/ctl-leak"; TMP="$TMP/ctl-leak"; rm -f "$TMP"/* ; : > "$TMP/drv.out"; : > "$TMP/drv.err"; printf '%s\n' 'REFUSEDtok0123456789abcdefghijklmnopqrstuvwx"yz9' > "$TMP/doppler-token"; no_token_anywhere ) \
+  || { printf 'FATAL: no_token_anywhere flags a clean run that has a refused token configured\n' >&2; exit 2; }
 calls_of() { { cat "$STUB_DIR/$1" 2>/dev/null || true; } | grep -c -e "$2" || true; }
 
 ( DRV_PATH="$BIN"; assert_fixture_dir "$TMP"; ( cd "$TMP" && env -i PATH="$BIN" STUB_DIR="$TMP" "$BASH_BIN" -c 'doppler bogus' ) >/dev/null 2>&1; [[ $? -eq 64 ]] ) \
@@ -160,16 +171,33 @@ assert_eq "1" "$(grep -c '^rc=0$' "$TMP/drv.out")" "T7: the explicit --project s
 scn; : > "$STUB_DIR/eat-stdin"; drive "$LIB_REAL" 'echo drained-by-nobody | bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 assert_eq "0" "$(grep -vcx 0 "$STUB_DIR/stdin-bytes")" "T8: the doppler call sees an empty stdin"
 
+echo "--- BC_ERR says why a read failed (for the caller's wording), and stays silent ---"
+scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=[$BC_ERR]"'
+assert_eq "1" "$(grep -c '^rc=0 err=\[\]$' "$TMP/drv.out")" "E4: a good read leaves BC_ERR empty"
+scn; : > "$STUB_DIR/doppler-fail"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=[$BC_ERR]"'
+assert_eq "1" "$(grep -c '^rc=1 err=\[missing\]$' "$TMP/drv.out")" "E4b: a failing secret read is 'missing'"
+scn; DRV_PATH="$BASE" drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=[$BC_ERR]"'
+assert_eq "1" "$(grep -c '^rc=1 err=\[missing\]$' "$TMP/drv.out")" "E4c: no secret-store tool is 'missing'"
+scn; printf '' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=[$BC_ERR]"'
+assert_eq "1" "$(grep -c '^rc=1 err=\[missing\]$' "$TMP/drv.out")" "E4d: an empty secret is 'missing', not a wrong shape"
+scn; printf 'SYNTHshort0123\n' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=[$BC_ERR]"'
+assert_eq "1" "$(grep -c '^rc=1 err=\[shape\]$' "$TMP/drv.out")" "E4e: a value that fails the guard is 'shape'"
+scn; ( cd "$TMP" && env -i HOME="$TMP" PATH="$BIN" STUB_DIR="$STUB_DIR" "$BASH_BIN" -c ". \"$LIB_REAL\"; set -x; bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo \"err=[\$BC_ERR]\"; set +x" ) >"$TMP/drv.out" 2>"$TMP/drv.err"
+assert_eq "1" "$(grep -c '^err=\[xtrace\]$' "$TMP/drv.out")" "E4f: a read refused under xtrace is 'xtrace'"
+
 echo "=== Arm 2: the token-shape guard (a quote or newline would inject a curl config directive) ==="
 for bad in 'a"b' 'a b' 'a;b' 'a$b' 'a`b' "a'b" 'a\b' 'a#b' 'a,b'; do
-  scn; printf '%s\n' "$bad" > "$STUB_DIR/doppler-token"
-  drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
-  assert_eq "1" "$(grep -c '^rc=1$' "$TMP/drv.out")" "S: the token shape '$bad' is refused"
+  scn; printf '%s\n' "SYNTHbad0123456789abcdefghijklmnopq${bad}rstuvwxyz9" > "$STUB_DIR/doppler-token"
+  drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=$BC_ERR"'
+  assert_eq "1" "$(grep -c '^rc=1 err=shape$' "$TMP/drv.out")" "S: the token shape '$bad' (inside a 48+ character value) is refused as a wrong shape"
+  no_token_anywhere && { echo "  PASS: S-leak: the refused token '$bad' is in no output and no log"; PASS=$((PASS + 1)); } || { echo "  FAIL: S-leak: the refused token '$bad' was printed"; FAIL=$((FAIL + 1)); }
 done
-scn; printf 'abc\ndef\n' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
+scn; printf 'SYNTHlineone0123456789abcdefghijklmnopqrstuvwxyz\nSYNTHlinetwo0123456789abcdefghijklmnopqrstuvwxyz\n' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 assert_eq "1" "$(grep -c '^rc=1$' "$TMP/drv.out")" "S2: a two-line token is refused"
+no_token_anywhere && { echo "  PASS: S2-leak: the first line of the refused token is in no output"; PASS=$((PASS + 1)); } || { echo "  FAIL: S2-leak: the refused token was printed"; FAIL=$((FAIL + 1)); }
 scn; printf '%0600d\n' 0 > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 assert_eq "1" "$(grep -c '^rc=1$' "$TMP/drv.out")" "S3: an over-long token is refused"
+no_token_anywhere && { echo "  PASS: S3-leak: the over-long token is in no output"; PASS=$((PASS + 1)); } || { echo "  FAIL: S3-leak: the over-long token was printed"; FAIL=$((FAIL + 1)); }
 scn; printf 'Ab9._~+/=-xyzAb9._~+/=-xyzAb9._~+/=-xyzAb9._~+/=-xyz\n' > "$STUB_DIR/doppler-token"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 assert_eq "1" "$(grep -c '^rc=0$' "$TMP/drv.out")" "S4: every allowed character is accepted"
 echo "--- the length bounds are 48 to 256 (CTO ruling D3): both edges, one step either side ---"
@@ -178,6 +206,7 @@ for n in 1 32 47 48 49 255 256 257 512 513; do
   drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
   if [[ "$n" -ge 48 && "$n" -le 256 ]]; then want=0; else want=1; fi
   assert_eq "1" "$(grep -c "^rc=$want\$" "$TMP/drv.out")" "S6: a token of $n characters is $([[ $want = 0 ]] && echo accepted || echo refused)"
+  no_token_anywhere && { echo "  PASS: S6-leak: the $n-character token is in no output"; PASS=$((PASS + 1)); } || { echo "  FAIL: S6-leak: the $n-character token was printed"; FAIL=$((FAIL + 1)); }
 done
 scn; printf 'bad"tok\n' > "$STUB_DIR/doppler-token"
 drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$?"'
@@ -219,6 +248,11 @@ for crc in 28 6 7 63 35; do
   assert_eq "1" "$(grep -c "^rc=1 status=000 curlrc=$crc\$" "$TMP/drv.out")" "R5: curl exit $crc is a failed call with status 000"
   no_token_anywhere && { echo "  PASS: R5b: curl exit $crc: the token is in no output and no log"; PASS=$((PASS + 1)); } || { echo "  FAIL: R5b: curl exit $crc: the token leaked"; FAIL=$((FAIL + 1)); }
 done
+# the R4b/R5b checks are wired to the real output files: a snippet that prints the token to stdout, and one that prints it to stderr, must be flagged
+scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; printf "%s\n" "$BC_TOKEN"'
+no_token_anywhere && { echo "  FAIL: R4c: a snippet that printed the token on stdout was not flagged"; FAIL=$((FAIL + 1)); } || { echo "  PASS: R4c: the leak check sees a token on stdout"; PASS=$((PASS + 1)); }
+scn; echo 28 > "$STUB_DIR/curl-rc"; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; printf "%s\n" "$BC_TOKEN" >&2'
+no_token_anywhere && { echo "  FAIL: R5g: a failure arm that printed the token on stderr was not flagged"; FAIL=$((FAIL + 1)); } || { echo "  PASS: R5g: the leak check sees a token on stderr after a failed call"; PASS=$((PASS + 1)); }
 scn; drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"'
 assert_eq "0" "$(wc -c < "$TMP/drv.out" | tr -d ' ')" "R5c: bc_get prints nothing on stdout (the helper's functions are silent)"
 assert_eq "0" "$(wc -c < "$TMP/drv.err" | tr -d ' ')" "R5d: and nothing on stderr"
@@ -254,6 +288,16 @@ done
 scn; DRV_ENV="SSLKEYLOGFILE=/x" drive "$LIB_REAL" 'bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "caller-still-has=${SSLKEYLOGFILE-unset}"'
 assert_eq "1" "$(grep -c '^caller-still-has=/x$' "$TMP/drv.out")" "E2: the caller's own environment is not mutated (the variables are hidden from curl only)"
 
+echo "--- the variables hidden from curl are the same set as the repository-root helper's (the helper header says they are kept equal) ---"
+ROOT_LIB="$REPO_ROOT/scripts/lib/bearer-curl.sh"
+env_set() { grep -o -e '-u [A-Z][A-Z_0-9]*' | sort -u | tr '\n' ' '; }
+plugin_set="$(grep 'env -u' "$LIB_REAL" | env_set)"
+root_set="$(awk '/env -u SSLKEYLOGFILE/ { p = 1 } p { print } p && !/\\$/ { exit }' "$ROOT_LIB" | env_set)"
+assert_eq "1" "$([[ "$(printf '%s' "$plugin_set" | wc -w | tr -d ' ')" -ge 26 ]] && echo 1 || echo 0)" "H3: instrument: the plugin helper's list was read (13 names, 26 words)"
+assert_eq "1" "$([[ "$(printf '%s' "$root_set" | wc -w | tr -d ' ')" -ge 26 ]] && echo 1 || echo 0)" "H3b: instrument: the root helper's list was read"
+assert_eq "$root_set" "$plugin_set" "H4: the two helpers hide exactly the same environment variables from curl"
+assert_eq "1" "$([[ "$(printf '%s\n' "$plugin_set" | sed 's/-u LD_AUDIT //')" != "$root_set" ]] && echo 1 || echo 0)" "H4b: instrument: a list missing one name would differ"
+
 echo "=== Arm 6: mutations (each marked line is edited; the targeted check must go RED) ==="
 LIBP="$TMP/pristine/bearer-curl.sh"; mkdir -p "$TMP/pristine" "$TMP/mutants"; cp "$LIB_REAL" "$LIBP"
 mlib() { # <name> <sed -E expr>: a mutant copy of the helper; prove the mutation LANDED and the mutant still parses
@@ -279,6 +323,7 @@ S_bad() { scn; printf 'bad"tok\n' > "$STUB_DIR/doppler-token"; }
 Q_get='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "'"$URL1"'"; echo "rc=$? status=$BC_STATUS"'
 Q_read='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"'
 Q_http='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; bc_get "$STUB_DIR" "http://app.soleur.ai/x"; echo "rc=$?"'
+Q_err='bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$? err=[$BC_ERR]"'
 Q_xt='set -x; bc_read_token LEGAL_ACCEPTANCE_VERIFY_TOKEN; echo "rc=$?"; set +x'
 mkdir -p "$TMP/mutants/ctrl"; cp "$LIBP" "$TMP/mutants/ctrl/bearer-curl.sh"
 ( b=$FAIL; kill_mut ctrl S_ok "$Q_get" "never " >/dev/null; [[ $FAIL -gt $b ]] ) || { printf 'FATAL: kill cannot report a pristine that differs from its pin\n' >&2; exit 2; }
@@ -306,6 +351,7 @@ for hv in OPENSSL_CONF OPENSSL_MODULES LD_PRELOAD LD_AUDIT LD_LIBRARY_PATH; do
 done
 mlib shape-min 's/\[ "\$\{#1\}" -ge 48 \] \|\| return 1/ : /' && kill_mut shape-min S_short "$Q_read" "rc=1 "
 mlib shape-max 's/\[ "\$\{#1\}" -le 256 \] \|\| return 1/ : /' && kill_mut shape-max S_long "$Q_read" "rc=1 "
+mlib err-shape 's/^(.*)# mut:err-shape$/ : # mut:err-shape/' && kill_mut err-shape S_short "$Q_err" "rc=1 err=[shape] "
 mlib argv-token 's/--config "\$cfg"/-H "Authorization: Bearer $BC_TOKEN"/' && kill_mut argv-token S_ok "$Q_get" "rc=0 status=200 "
 
-print_results 145
+print_results 182

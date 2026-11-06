@@ -26,7 +26,7 @@ Envelope: <path>[#<title>]
   Gate: pr-merged <N>
   Gate: no-inflight-run <workflow-file>
 - Hold: Operator-reserved: <a decision only the operator may make, in their words>
-- Hold: <the operator's words: wait for the founder to accept the legal text <key>>
+- Hold: <the operator's words> [Text name (added by the plan's author): <key>]
   Gate: web-acceptance <key> <64 lowercase hex>
 ```
 
@@ -57,17 +57,26 @@ the line. A hold is discharged only for an `accepted` answer whose record passed
 gate's hash, and whose hash equals the committed text's hash.
 
 **Name the text key in the `Hold:` line.** The `Hold:` line (the one line, not the lines under it) must contain the gate's key
-as a whole word, in any case: `wa-key` is named by `Wait for wa-key` or `(WA-KEY)` but not by `wa-key-two`, `xwa-key` or
-`wa-keys`. A hold that does not name the key is `Could not check` ("this wait does not name the legal text it is about, so a
-recorded decision cannot clear it") and nothing is requested, with or without a `Delegation:` line. Every `web-acceptance` gate
-on the hold needs its own key named. This stops a decision about one text from clearing a wait about something else. It is a
-lexical check: it proves the words and the gate point at the same key, not that the words faithfully describe the text, so
-reviewing the pairing stays the author's and the CTO's job. A `web-acceptance` gate is never evaluated in `--file` mode (an
-envelope backs a production step; a recorded decision on a legal text cannot): it is `Could not check` there.
+as a whole word, in any case, as the operator reads it (control characters and invisible marks removed, before the 160-character
+cut). A letter, digit, hyphen or underscore directly beside the key makes it part of a longer word: `wa-key` is named by
+`Wait for wa-key` or `(WA-KEY)` but not by `wa-key-two`, `xwa-key`, `wa-keys` or `wa-key_x`. The operator's quoted words are
+never rewritten to add it: the plan's author adds the key in a **separate clause marked as the author's**, after the operator's
+words, for example `- Hold: "do not ship until the founder accepts the terms update" [Text name (added by the plan's author): terms-update]`.
+A hold that does not name the key is `Could not check` ("this wait does not name the legal text it is about; ask the plan's
+author to put the text name <key> in the hold's words") and nothing is requested, with or without a `Delegation:` line. Every
+`web-acceptance` gate on the hold needs its own key named. This stops a decision about one text from clearing a wait about
+something else. It is a lexical check: it proves the words and the gate point at the same key, not that the words faithfully
+describe the text, so reviewing the pairing stays the author's and the CTO's job. A `web-acceptance` gate is never evaluated in
+`--file` mode (an envelope backs a production step; a recorded decision on a legal text cannot): it is `Could not check` there.
+A plan file that contains a NUL byte or any other control byte except tab, carriage return and line feed is `Could not check`
+before anything is read (exit 2).
 
-If the text's front matter (the first `---` block) carries `valid_until: YYYY-MM-DD` and that day is before today (UTC), the
-hold stands as a person's matter and nothing is requested; a `valid_until` that is not written `YYYY-MM-DD` cannot be used
-(`Could not check`); no `valid_until` means no expiry.
+If the text's front matter (the first `---` block, from the first line of the file) carries `valid_until: YYYY-MM-DD` and that day
+is before today (UTC), the hold stands as a person's matter and nothing is requested. A repeated `valid_until:` line keeps the last
+value, as the web application's reader does; a `valid_until:` line outside the front matter is ignored. A `valid_until` that is not
+a real calendar day written `YYYY-MM-DD` (`soon`, `2099-1-1`, `2026-13-01`, `2099-99-99`, `2026-02-30`) is `Could not check`
+("the saved text is damaged"), and so is a `valid_until:` line with no value; no `valid_until` line at all means no expiry. The recorded decision date is informational: it is read from the
+answer, which the database's checksum protects, and a date in the future is not used as evidence of anything.
 
 What each reason means (the evaluator prints these words, and only these):
 
@@ -76,23 +85,28 @@ What each reason means (the evaluator prints these words, and only these):
 | `the text was changed after this check was written` | the text was revised after the gate was written; the gate names an old text | 1 |
 | `no decision recorded for this text version` | the founder has not decided this text yet | 1 |
 | `declined; a revised text is needed` | the founder said No: a person decides, and this exact text can never be accepted later | 1 |
-| `this text has expired; a revised text is needed` | the text's `valid_until` day is past | 1 |
-| second line `Needs you: the founder asked for changes. Read the note yourself, not in an agent session: <runbook path>` | the founder asked for changes: the operator reads the note by the runbook, the agent never does | 1 |
+| `the accepted text has passed its last valid day; a revised text is needed` | the text's `valid_until` day is past | 1 |
+| second line `Needs you: the founder asked for changes. You read the note yourself, not an agent session: <runbook path>` | the founder asked for changes: the operator reads the note by the runbook, the agent never does; printed whenever any web-acceptance gate on the hold says so, whatever the other gates say | 1 |
 | `the saved decision looks damaged` | the stored decision no longer matches its checksum; never read as "no decision" | 2 |
 | `the check is not available right now (not switched on, or temporarily down)` | the check answers 503: its token and founder id are not set yet, the saved texts could not be read, or the database failed | 2 |
 | `the check did not accept my sign-in` | the token read from the secret store was refused (401) | 2 |
 | `the live app does not know this text yet` | the text is committed but not deployed yet (a text added in the same change is a post-merge hold) | 2 |
 | `answer not understood` | a 400 or 502, or a body that is not exactly the four expected fields once each, in the expected types, with a plain UTC date | 2 |
-| `unreachable (HTTP <status>, curl rc <n>)` | timeout, name or connection failure, a body over the size limit, a redirect, any other status; numbers only, never the body or the credential | 2 |
-| `I could not sign in to the check` / `I have no tool here to check that the text is unchanged` | no secret-store tool, no token, a token of the wrong shape (48 to 256 characters), or no sha256 tool on this machine | 2 |
-| `the saved text is not in the project` | no committed regular file for the key, a carriage return in it, or a `valid_until` that is not a date | 2 |
-| `this wait does not name the legal text it is about, so a recorded decision cannot clear it` | the `Hold:` line does not contain the gate's key as a whole word | 2 |
+| `I could not reach the check (HTTP <status>, curl rc <n>)` | timeout, name or connection failure, a body over the size limit, a redirect, any other status; numbers only, never the body or the credential | 2 |
+| `no saved sign-in value was found` | no secret-store tool, the read failed, or the value is empty | 2 |
+| `the saved sign-in value looks wrong (too short or odd characters)` | a value was read but is not 48 to 256 characters of the allowed set | 2 |
+| `I could not load the sign-in helper` / `I will not read the sign-in value while commands are being traced` | the helper file is missing, or the run is being traced (a trace would print the credential) | 2 |
+| `I have no tool here to check that the text is unchanged` | no sha256 tool on this machine | 2 |
+| `the saved text is not in the project` | no committed regular file for the key | 2 |
+| `the saved text is damaged` | a carriage return in it, or a `valid_until` that is not a real calendar day | 2 |
+| `this wait does not name the legal text it is about; ask the plan's author to put the text name <key> in the hold's words` | the `Hold:` line does not contain the gate's key as a whole word | 2 |
+| `The file holds a control character I cannot read safely…` (no per-hold line) | a NUL or other control byte in the plan or envelope file | 2 |
 | `a recorded decision on a legal text cannot back a production step` | a `web-acceptance` gate in an envelope (`--file` mode) | 2 |
 
 **What ship does with each.** Exit 0 for a web-acceptance hold: record the `Done:` line (it carries the decision date) in the PR
 body. Exit 1 with `no decision recorded`: print the full card link `https://app.soleur.ai/dashboard/approvals/legal/<key>` (not a
 relative path: the founder opens it from a message) so the founder can decide, and offer to defer with an issue (the hold stays).
-Exit 1 with `declined`, `expired` or `Needs you`: the answer for that text is terminal, so say that a revised text (a new hash,
+Exit 1 with `declined`, `passed its last valid day` or `Needs you`: the answer for that text is terminal, so say that a revised text (a new hash,
 a new gate) is needed; never retry, never re-ask for the same text. For `Needs you` say that the founder asked for changes and
 that the operator, not an agent session, reads the note by the path on the line. Exit 1 with `the text was changed after this
 check was written`: the plan's gate must be rewritten for the committed text (compute the new hash with the one-liner above),
@@ -238,7 +252,7 @@ required checks green, the review evidence (the `Reviewed-By-Soleur` trailer, an
 ## 4. Timing: twice, and the receipt after a delegated act
 
 Evaluate at the draft exit AND again at the start of Phase 6.45, before the plan is archived, through the same command
-(`hold-gate-eval.sh --plan <plan file>`; any exit other than 0 stops the arming). It runs there, not at the arming call itself,
+(`hold-gate-eval.sh --plan <plan file>`; exit 1, exit 2 and any status that is not a result (127, 124, 137) stop the arming, **exit 3 does not**: it means no gate here can be evaluated by this command, so the hand check done at the draft exit stands and nothing evaluable changed since). It runs there, not at the arming call itself,
 because once Phase 6.45 archives the plan its live path is gone and the evaluator would answer 2. The second evaluation is for any plan whose `## Operator Holds` carries a hold with a `Gate:` or a `Delegation:` line (a web-acceptance-only plan has no `Delegation:` line): a review fix that edits the committed text after the first look changes its hash, and only this second look sees the stale gate. Be honest about the gap: a
 predicate such as `no-inflight-run` is true only at the instant it is read, so a run that starts between that look and the
 arming is not seen. The repository's required checks, not this look, are the final authority at the merge.

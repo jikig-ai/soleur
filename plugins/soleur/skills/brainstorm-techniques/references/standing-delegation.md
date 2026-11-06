@@ -225,7 +225,7 @@ committed under `apps/web-platform/server/legal-acceptance/texts/`, `<hash>` is 
 evaluator checks the hash against the committed file itself, then asks the web application (read-only token, fixed address).
 `none` or a changed text keeps the hold (exit 1); `declined`, `changes_requested` and an expired text (its `valid_until` day is past)
 need a person and a revised text (exit 1); `invalid`, a check that is not available or unreachable, and any answer that is not exactly the
-expected shape leave the hold standing as unevaluable (exit 2). The hold's own `Hold:` line must name the gate's key as a whole word, or the
+expected shape leave the hold standing as unevaluable (exit 2). The hold's own `Hold:` line must name the gate's key as a whole word (a letter, digit, hyphen or underscore beside it makes it a longer word), or the
 gate is unevaluable (exit 2); a `web-acceptance` gate is never evaluated in an envelope (`--file` mode). The web-acceptance exception to
 "a delegation is cited": it is its own evidence and needs no `Delegation:` line. With no `Delegation:` line, a plan whose every
 non-reserved hold carries only web acceptances is evaluated here (exit 0, 1 or 2, never 3); a plan that mixes a web acceptance with another
