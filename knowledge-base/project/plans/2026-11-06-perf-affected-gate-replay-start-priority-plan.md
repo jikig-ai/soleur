@@ -8,6 +8,25 @@ lane: single-domain
 type: perf
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06
+**Research agents used:** architecture-strategist, test-design-reviewer (performance and pyramid), CTO (two rounds), sharp-edges
+verification pass, plus the plan-review panel (DHH, Kieran, code-simplicity) that ran before it.
+
+### Key improvements
+1. The order guard no longer pins a hidden position or resolves tokens for 750 rows: arms exactly once, bare path zero, arm index at
+   most the pool width, no `*` row before the last arm; synthetic rows carry literal tokens (the section would otherwise have
+   cost about 11 s more on a suite that already takes 13 to 14 s).
+2. The measurement protocol is a control, a treatment and a control, with the `replay-a` start offset as the only hard gate.
+3. The architecture review found no consumer of the arms' registration position and no ADR contradiction; the Phase 3
+   verification list now covers every suite that copies or splices the runner.
+
+### New considerations discovered
+- The cold gate can still end in a budget kill after this change; the kill now lands on suites queued behind the `*` barrier.
+- A serial fallback now spends the first part of the budget on the three arms (about 2.2 ks standalone).
+- Hoisting delays every `*` suite until the arms drain; it cannot break them (they assert against an idle pool).
+
 ## Overview
 
 The local affected gate (`scripts/test-all.sh --affected`, run by `soleur:ship`, `soleur:work` and `soleur:review`)
@@ -172,7 +191,7 @@ empty token set and drive their own `mktemp -d` sandbox.
 ### Phase 0 - Pre-edit baseline and splice audit (no behaviour change)
 
 - 0.1 Save the full pre-change `bash scripts/test-all.sh --enumerate-commands all` output to `measurements/before.enum.tsv`, and record the replay-arm rows and the first five registrations from it (`grep -n '^SUITE_COMMAND'`), and `--print-selection`'s `selected=` for the
-  pinned diff's paths, into the measurement notes. These are the frozen "before" values of Guard 1.
+  pinned diff's paths, into the measurement notes. The saved enumeration is the input of the AC4 diff.
 - 0.1b Run `bash scripts/test-all.sh --enumerate-commands --affected scripts` once before and after on the pinned diff and record whether the arms appear as `SUITE_COMMAND` rows (declined rows are emitted separately, so the `all` stream is the guard's source and the affected stream is checked once, not assumed).
 - 0.2 `grep -n 'build_sandbox\|cp .*test-all.sh' scripts/*.test.sh tests/scripts/*.sh plugins/soleur/test/*.sh` and read each sandbox builder's splice
   anchors; confirm the moved lines stay inside the `tc_acquire "test-all"` .. `tc_epilogue` window.
@@ -200,7 +219,11 @@ In `scripts/test-all.sh`:
    the three `run_suite` lines removed and only `continue` left (with a comment pointing at the start-first block). The
    `"$f" == "..."` text is what `scripts/lint-orphan-test-suites.sh` and `plugins/soleur/test/scripts-shard-totality.test.sh`
    read to subtract the glob member; removing the `if` would register the suite file as a plain suite as well.
-3. Literal path in each arm's argv, never `"$f"` (the totality checker resolves the battery from the `run_suite` command token).
+3. Comment hygiene in the new block: no comment line starts with `run_suite ` (`scripts/lib/repo-write-boundary.test.sh` finds the first
+   `^\s*run_suite ` line and asserts the start snapshot precedes it) and none quotes `"$f" == "..."` (the orphan linter and the
+   totality suite grep that literal). Keep the two-space `  run_suite "` literal convention the parsers rely on; do not nest the lines
+   under an extra guard (the arms used to register only when the suite file existed; in the real repo it always does).
+4. Literal path in each arm's argv, never `"$f"` (the totality checker resolves the battery from the `run_suite` command token).
 
 No change to `_pj_fill`, `_pj_submit`, `_shard_selects`, `run_suite`, the lane table values, `scripts/suite-shard-legs.tsv`,
 `scripts/suite-durations*.tsv`, or `budget_seconds`.
@@ -209,10 +232,10 @@ No change to `_pj_fill`, `_pj_submit`, `_shard_selects`, `run_suite`, the lane t
 
 `bash scripts/lib/test-suite-lanes.test.sh`, `bash scripts/lint-orphan-test-suites.sh`,
 `bash plugins/soleur/test/scripts-shard-totality.test.sh`, `bash scripts/test-all-parallel-scheduler.test.sh`,
-`bash scripts/ci-oracle-lane.test.sh` (the `MEMBER-ARGV-DRIFT` check compares argv with the registration), `bash scripts/guard-vacuity-floor.test.sh` (the new floor is written as a statement, like section 6's `arm_gate`, not as a counter `if`), and
+`bash scripts/ci-oracle-lane.test.sh` (the `MEMBER-ARGV-DRIFT` check compares argv with the registration), `bash scripts/lint-orphan-test-suites.test.sh`, `bash scripts/lib/repo-write-boundary.test.sh`, `bash scripts/test-all-group-affected.test.sh`, `bash scripts/test-all-capacity-signal.test.sh`, `bash scripts/test-all-orphan-log-retention.test.sh`, `bash plugins/soleur/test/fanout-suite-scope.test.sh`, `bash plugins/soleur/test/collision-precheck.test.sh` and the `scripts/test-all-affected*.test.sh` and `scripts/test-all-pr-battery-gate.test.sh` family (they copy or splice the runner or read the ordinal map; the PR's full-battery CI run is the cover for any not run locally), `bash scripts/guard-vacuity-floor.test.sh` (the new floor is written as a statement, like section 6's `arm_gate`, not as a counter `if`), and
 `bash scripts/test-all.sh --enumerate-commands` for the first rows. Each is run once as a control before the edit.
 
-### Phase 4 - Measurement in a private clone (CTO R3, amended Q3 to Q5)
+### Phase 4 - Measurement in a private clone (CTO R3, amended Q3 to Q5 and D2)
 
 Never in a ship path, in a private clone with its own git-common-dir (`git clone <worktree> /data/git-repositories/jikig-ai/measure-clone-<name>`;
 the clone is the only way the pool engages, because it has its own advisory lock; the previous clone `measure-clone-r1` is an operator-only leftover and is not touched).
@@ -220,8 +243,8 @@ Method as in the archived `summary.txt` of the previous PR, with these specifics
 
 - Pinned diff: the previous PR's pick `7af192071d` (web-platform, 8 files; added files removed and modified files restored to
   the parent's content, committed), so the selection is 160 of about 733 as in the three prior readings. Not this PR's own diff.
-- Control: a checkout at the same base without the Phase 2 edit, `SOLEUR_PJ_FIFO` unset. Treatments: the Phase 2 tree.
-- Order in one session, back to back on the same host: control, treatment 1 (treatment 2 under the conditions below). `origin/main` in the clone is set
+- Control: a checkout at the same base without the Phase 2 edit, `SOLEUR_PJ_FIFO` unset. Treatment: the Phase 2 tree.
+- Order in one session, back to back on the same host: control, treatment, control (the second control under the conditions below). `origin/main` in the clone is set
   to the tree under test so the runner edit does not degrade the gate to full.
 - Command: `env -u CI SOLEUR_TEST_JOBS=4 TEST_TIMING_LOG=<file> bash scripts/test-all.sh --affected`, output stamped per line,
   run detached with an rc file. Record loadavg and heavy concurrent processes at each start and end.
@@ -230,16 +253,20 @@ Method as in the archived `summary.txt` of the previous PR, with these specifics
 - Per reading derive: wall, cold derive, suite phase, `replay-a` start and wall, share of the pool phase with at most one
   suite live, pass and fail counts, failed suite names; compare the measured `replay-a` start with the model's prediction (the
   model is re-run on the control reading's walls).
-- Readings (CTO Q4, 2026-11-06, adaptive): one control and one treatment; report the `replay-a` start offset (read from the
-  `[run] ... started` lines) as the primary evidence. Run a second treatment if the first treatment's pool-phase gain is within
-  150 s of the 300 s bar on either side, if any criterion fails, or if a reading is disturbed or the two loadavg records differ
-  materially. The PR states how many readings were completed.
-- Landed means all of: `replay-a` starts within 120 s of pool start in every treatment; pool-phase wall at least 300 s below
-  the control in every treatment; no failure that the control does not share (the known clone artifact
-  `apps/web-platform [repo-wide+component]` and anything classified in the previous amendment are expected). Recorded, not
-  gated (CTO Q3): the model's `replay-a` start versus measured for the control reading (5 percent) and the measured treatment start.
-- If a treatment misses the bar (CTO Q5): keep the move, record the measurement as informational, say "not landed" in the PR body
-  and the ADR and claim no saving; revert only if a treatment shows a failure the control does not share.
+- Readings (CTO Q4 as amended): order control, treatment, control. The second control is run only if the treatment's pool-phase gain
+  is within 150 s of the 300 s bar, or if the readings look disturbed (loadavg records differ materially).
+  Clear the per-worktree derive cache before each reading and record its state; define pool start as the `[parallel] mode engaged`
+  line; record the run order, cache state and raw readings in the PR body. The `replay-a` start offset (from the `[run] ... started`
+  lines) is the only hard gate; the pool-phase delta is gated against the mean of the controls, and becomes advisory only if the
+  two controls differ by more than 100 s (the start offset alone then decides). The 150 s and 100 s thresholds are judgement calls:
+  re-tune them if the first real controls spread by more than 100 s. The PR states how many readings were completed.
+- Landed means all of: `replay-a` starts within 120 s of pool start in the treatment; pool-phase wall at least 300 s below the mean
+  of the controls (advisory when the controls disagree by more than 100 s); no failure that the controls do not share (the known
+  clone artifact `apps/web-platform [repo-wide+component]` and anything classified in the previous amendment are expected).
+  Recorded, not gated (CTO Q3): the model's `replay-a` start versus measured for the control reading (5 percent) and the measured
+  treatment start.
+- If the treatment misses the bar (CTO Q5): keep the move, record the measurement as informational, say "not landed" in the PR body
+  and the ADR and claim no saving; revert only if the treatment shows a failure the controls do not share.
 - Raw rows are committed under `knowledge-base/project/specs/feat-one-shot-12013-replay-a-start-priority/measurements/`
   (timing TSV, start/end notes, `summary.txt`); the 18k-line stamped logs are not committed.
 
@@ -249,7 +276,15 @@ Method as in the archived `summary.txt` of the previous PR, with these specifics
   order; the arms sat behind a `*` barrier and a 57-suite `lock:test-all` chain), the decision (static start-first
   registration), the measured table (three readings, model validation, loadavg), what it does not claim (600 s), alternatives
   considered (scheduler priority/buffering, weight-ordered reorder, hoist replay-a only, `*`-last in the same PR), the
-  deferral pointer to #12231, and the unchanged limits (reap timing, #12151, #12152).
+  deferral pointer to #12231, and the unchanged limits (reap timing, #12151, #12152). Also stated there: (a) the cold gate can still be
+  budget-killed (the 2400 s budget includes the derive and queue wait; Phase 4's readings run `test-all.sh` directly and never
+  exercise the budget; the kill now lands on suites queued behind the `*` barrier, and only reaped reds reach the sidecar); do not
+  raise `budget_seconds`; (b) a serial fallback (`lock-not-held`, width 1, `bash<5.1`, `CI`) now runs the three arms (about 2.2 ks
+  standalone) before the roughly 110 cheap suites, so a budget kill in a serial fallback leaves most cheap suites unrun; the hoist
+  is deliberately not conditional on pool mode, because the enumerate walk (always serial) and the dispatch walk must agree on order
+  for `AFFECTED_DIVERGENT`; (c) every `*` suite now waits for the arms to drain (it runs alone either way; this barrier trade-off is
+  what #12231 addresses); (d) the amendment takes the next decision number under ADR-242's "numbers follow landing order"
+  convention, not only a dated heading.
 - Comment on #12013 after merge (agent-run): the measured result, the remaining gap, the pointers to #12231, #12151, #12152
   and the reap evidence bar. #12013 stays open.
 
@@ -279,8 +314,8 @@ Not edited, and verified by `git diff --stat origin/main...HEAD` in the PR: `scr
 **Assessment:** Ruled by CTO agent, 2026-11-06 (full text in `knowledge-base/project/specs/feat-one-shot-12013-replay-a-start-priority/decision-challenges.md`): R1 static
 start-first registration over a scheduler priority; R2 the `*`-last lever is a follow-up (#12231); R3 cold readings of
 one pinned diff in a private clone, same-base control, landed = start within 120 s, at least 300 s lower, no new failures
-(amended the same day: adaptive one control plus one treatment, model agreement recorded not gated, keep the move on a miss);
-R4 the guard reads the real enumeration and asserts exactly-once, bare-path-zero and arms-before-the-first-`*`-and-`lock:test-all`-row (amended: no argv literals, no position pin), nothing about other suites.
+(amended the same day: control, treatment, control with the start offset as the hard gate, model agreement recorded not gated, keep the move on a miss);
+R4 the guard reads the real enumeration and asserts exactly-once, bare-path-zero, arm index at most the pool width and no `*` row before the last arm (amended twice the same day: no argv literals, no first-`lock:test-all` clause), nothing about other suites.
 
 No Product/UX surface: no new page, component, flow or copy. Product, Marketing, Legal, Finance, Operations, Sales and
 Support: no implications (developer tooling).
@@ -319,9 +354,13 @@ logs:
   where: the runner's durable per-suite logs under ${SOLEUR_SCRATCH_BASE:-/var/tmp}/soleur-test-all-logs and TEST_TIMING_LOG
   retention: 14 days (SOLEUR_TEST_ALL_LOG_GC_DAYS default, existing)
 discoverability_test:
-  command: bash scripts/lib/test-suite-lanes.test.sh
-  expected_output: "[pass] replay arms start first"
+  command: bash scripts/test-all.sh --enumerate-commands all
+  expected_output: ci-pr-affected-replay-a
 ```
+
+Probe choice: the probe prints the registration stream (about 0.7 s measured), so it fits Check 10's 15-second cap. The order itself is
+asserted by the guard in `scripts/lib/test-suite-lanes.test.sh`, which is NOT used as the probe because that suite takes about 14 s
+unmodified (measured 13.9 s on `HEAD`) and would sit on the cap once section 7 adds an enumeration.
 
 ## Architecture Decision (ADR/C4)
 
@@ -351,39 +390,51 @@ separate issue except the explicitly ruled-out #12231 lever, which has its own t
 
 ### Guard 1 - Start-first order of the replay arms (`scripts/lib/test-suite-lanes.test.sh` section 7)
 
-**Property.** In the runner's real registration stream (`bash scripts/test-all.sh --enumerate-commands all`), each of
-`plugins/soleur/test/ci-pr-affected-replay-a`, `-b` and `-c` appears exactly once, the bare suite path
-`plugins/soleur/test/ci-pr-affected-replay.test.sh` appears zero times, and each arm's row index is lower than the index of the
-first row whose lane tokens contain `*` and of the first row whose lane tokens contain `lock:test-all` (the two things the arms
-used to sit behind). Nothing is asserted about the relative order of any other suite, the total count, or the `--rows` ranges:
+**Property.** In the runner's real registration stream (`bash scripts/test-all.sh --enumerate-commands all`, raw `SUITE_COMMAND`
+rows, NOT the label-deduplicated map the earlier sections build), each of `plugins/soleur/test/ci-pr-affected-replay-a`, `-b` and
+`-c` appears exactly once; the bare suite path `plugins/soleur/test/ci-pr-affected-replay.test.sh` appears zero times; every
+arm's 1-based row index is at most `W`, the gate's pool width (a named constant in the guard, set to 4, with a comment that it must
+track the gate's `SOLEUR_TEST_JOBS`; the guard cannot detect a width change, which is accepted), so all three arms start with the
+pool; and no row that precedes the last arm carries a `*` lane token (tokens are resolved only for those at most `W-1` rows, so no
+extra forks). Nothing is asserted about the relative order of any other suite, the total count, or the `--rows` ranges:
 `plugins/soleur/test/scripts-shard-totality.test.sh` already proves the three ranges tile 1..DECLARED_TOTAL and
-`scripts/ci-oracle-lane.test.sh` (`MEMBER-ARGV-DRIFT`) compares each arm's argv with the registration (CTO Q1, 2026-11-06; if
-either check is found not to cover argv at work time, put the argv literals back into this guard).
+`scripts/ci-oracle-lane.test.sh` (`MEMBER-ARGV-DRIFT`, reading `scripts/ci-oracle-lane-suites.txt`) compares each arm's argv with
+the registration (CTO Q1 as amended the same day; verified by the test-design review).
 
 **Assembly.** The registration stream is the SAME channel the scheduler's input flows through: every registration passes the
 `run_suite` chokepoint and is emitted as a `SUITE_COMMAND` row. The sites that can register an arm: the start-first block, the
 glob loop (the literal arms if they are moved back, and `run_suite "$f" bash "$f"` for the bare suite file if the special-case
 `if` is removed), and a second `if want_scripts` block. One enumeration is checked (`all`; the affected-mode stream is the same
-code path, filtered at the chokepoint). The guard quantifies over EVERY `SUITE_COMMAND` row (counts of exact label matches and
-a first-index scan), not over the rows it expects. The pure function `start_first_ok <rows>` takes the rows as input so the
-live check and the synthetic cases run the SAME code.
+code path, filtered at the chokepoint). The guard quantifies over EVERY raw `SUITE_COMMAND` row (counts of exact label matches and
+a bounded index scan). The pure function `start_first_ok` takes rows as `label<TAB>tokens` DATA, so the live check and the
+synthetic cases run the SAME code; the live caller resolves tokens only for the rows before the last arm, and synthetic rows carry
+literal tokens (a synthetic label has no suite file, and `lane_tokens_for` would resolve it to `*`).
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Runner-copy mutant: move the three `run_suite` lines back into the glob loop (the pre-change layout). The copy lives under the section's existing temp dir (`_h_dir`, covered by the file's `EXIT` trap), written to `$sb/scripts/test-all.sh` with `$sb/scripts/lib` symlinked to the repo's `scripts/lib` and the shard-manifest tsv files copied beside it (the runner resolves them through `dirname "${BASH_SOURCE[0]}"`, precedent: `build_sandbox` in `scripts/test-all-parallel-scheduler.test.sh`), never placed inside the tracked tree, and enumerated with `(cd "$REPO_ROOT" && bash "$sb/scripts/test-all.sh" --enumerate-commands all)`; the edit is a regex over the runner text keyed on the label pattern, not a literal naming the suite path. Cost: one extra enumeration of about 1 s | RED (arms behind the first `*` and `lock:test-all` rows) |
+| 1 | Runner-copy mutant: move the three `run_suite` lines from the start-first block into the glob loop's special-case `if` (the pre-change layout). The copy is written to `$sb/scripts/test-all.sh` with `$sb/scripts/lib` symlinked to the repo's `scripts/lib` and the shard-manifest tsv files copied beside it (the runner resolves them through `dirname "${BASH_SOURCE[0]}"`; precedent: `build_sandbox` in `scripts/test-all-parallel-scheduler.test.sh`), never inside the tracked tree, under the section's existing temp dir (`_h_dir`, covered by the file's `EXIT` trap). The edit is a regex over the runner text keyed on the label pattern, asserted to have extracted exactly 3 lines and to have changed the mutant's enumeration; enumerated with `(cd "$REPO_ROOT" && TEST_TIMING_LOG=/dev/null timeout 300 bash "$sb/scripts/test-all.sh" --enumerate-commands all)`, the same prefix as `ENUM_OUT`. It cannot be proven to land until Phase 2 (the post-change layout does not exist before it); in Phase 1 the live check is the RED proof | RED (arm index above `W`) |
 | 2 | Synthetic rows: arms last | RED |
-| 3 | Synthetic rows: `-a` and `-b` first, `-c` after a `lock:test-all` row (second member after a compliant first) | RED |
-| 4 | Synthetic rows: `-a` registered twice | RED (exactly once) |
+| 3 | Synthetic rows: `-a` and `-b` first, `-c` at index `W+1` | RED |
+| 4 | Synthetic rows: `-a` registered twice, counted on RAW rows | RED (exactly once) |
 | 5 | Synthetic rows: the bare suite path registered as a plain suite as well | RED (zero occurrences) |
-| 6 | Synthetic rows: empty input, or labels matching nothing (the guard's own dispatch) | RED (`n_arms == 3`, written as a statement like section 6's `arm_gate`, so `scripts/guard-vacuity-floor.test.sh` does not read it as a counter floor) |
-| 7 | Live check on the real enumeration | GREEN after Phase 2, RED before (the RED-before proof of cq-write-failing-tests-before) |
+| 6 | Synthetic rows: a row with a literal `*` token before the last arm, arms still at index <= `W` | RED (the `*` clause, discriminated separately) |
+| 7 | Synthetic rows: empty input, or labels matching nothing (the guard's own dispatch) | RED (`n_arms == 3`, written as a statement like section 6's `arm_gate`, so `scripts/guard-vacuity-floor.test.sh` does not read it as a counter floor) |
+| 8 | Live check on the real enumeration | GREEN after Phase 2, RED before (the RED-before proof of cq-write-failing-tests-before) |
 
-**Harness rows.** (H1) The same function decides the live enumeration and the synthetic rows 2 to 6, so a function that rejects
-everything fails the must-PASS row. (H2) Must-PASS inputs that are NOT the canonical order: the arms in order `c a b`; the arms
-first followed by an arbitrary non-arm list of a different length including a non-arm label that merely contains `replay`;
-a `*` row and a `lock:test-all` row placed after the arms.
+**Harness rows.** (H1) The same function decides the live enumeration and the synthetic rows 2 to 7, so a function that rejects
+everything fails the must-PASS rows. (H2) Must-PASS inputs that are NOT the canonical order: the arms in order `c a b`; a
+token-free suite above the arms with every arm still at index <= `W` (documents that this is intended); the arms first followed by
+an arbitrary non-arm list of a different length including a label that merely contains `replay`; a `lock:test-all` row and a `*`
+row placed after the arms. (H3) The file's dispatch floor `(( PASSES < 12 ))` is raised by the number of section 7 passes in the
+same diff, so deleting section 7 is noticed.
+
+**Runtime.** Measured on `HEAD` under loadavg 27 to 31: the file takes about 13 to 14 s unmodified, of which the section 1 per-label
+`lane_tokens_for` loop is about 11 s (forks). Section 7 adds one enumeration of the mutant copy (about 1.1 s) and at most `W-1`
+token lookups. Section 1 already computes and discards each label's tokens; keeping them in a map (`tok_of[$label]`) lets section
+7 reuse them at no extra fork cost. The file is edge-selected, not in `ALWAYS_ON_SUITES`, so the fast-tier cap does not apply; its
+`suite-durations.tsv` row is a floor, and AC5 forbids touching the tsv.
 
 **Anchor.** No stored value is compared; the guard reads the live stream and the lane table (`lane_tokens_for`).
 
@@ -412,7 +463,8 @@ a `*` row and a `lock:test-all` row placed after the arms.
 
 ### Split Assessment
 
-One PR. The edit is three lines moved plus a guard; the measurement is a record, not a second change. The `*`-last lever is split
+- Recommendation: one PR (counts derived from `## Files to Edit` and `## Files to Create`: 3 edited files, 1 created directory of readings, 1 guard section).
+- One PR. The edit is three lines moved plus a guard; the measurement is a record, not a second change. The `*`-last lever is split
 out on purpose (a confounded measurement). No further split.
 
 ## Acceptance Criteria
@@ -422,8 +474,8 @@ Gates (deterministic, no dependence on machine load): AC1 to AC7, AC9. Recorded 
 ### Pre-merge (PR)
 
 - [ ] AC1. `scripts/lib/test-suite-lanes.test.sh` section 7 is RED on the unmodified runner (control run first) and GREEN after
-  Phase 2; the runner-copy mutant (row 1) and each synthetic RED row (2 to 6) turn it RED and the H2 must-PASS rows stay green;
-  the header comment of the file lists sections 6 and 7.
+  Phase 2; the runner-copy mutant (row 1) and each synthetic RED row (2 to 7) turn it RED and the H2 must-PASS rows stay green;
+  the dispatch floor is raised (H3); the header comment of the file lists sections 6 and 7.
 - [ ] AC2. `bash scripts/test-all.sh --enumerate-commands all` lists `ci-pr-affected-replay-a`, `-b`, `-c` as the first three
   `SUITE_COMMAND` rows and each exactly once; argv byte-identical to before (`diff` of the three rows vs the Phase 0.1 record).
 - [ ] AC3. `bash scripts/lint-orphan-test-suites.sh`, `bash plugins/soleur/test/scripts-shard-totality.test.sh`,
@@ -439,11 +491,12 @@ Gates (deterministic, no dependence on machine load): AC1 to AC7, AC9. Recorded 
 - [ ] AC7. The PR's required CI `test` check is green on the PR head (the PR edits the runner, so CI runs the full battery);
   the PR body says that this run is not the measurement; `bash plugins/soleur/test/c4-count-parity.test.sh` is green; the PR
   body says `Ref #12013`, no `Closes`.
-- [ ] AC8. (Recorded observation, CTO R3 as amended by Q3 to Q5.) One control and one treatment (a second treatment under the Phase 4
-  conditions) of the pinned diff in a private clone with its own git-common-dir, each with loadavg and heavy processes at start
-  and end, committed under `measurements/`. Landed = `replay-a` starts within 120 s of pool start; pool-phase wall at least 300 s
-  below the control; no failure the control does not share. The model-versus-measured start for the control (5 percent) is a
-  recorded note. The PR states the number of completed readings and says "not landed" if a criterion is missed.
+- [ ] AC8. (Recorded observation, CTO R3 as amended by Q3 to Q5 and D2.) A control, a treatment and, under the Phase 4 conditions, a
+  second control of the pinned diff in a private clone with its own git-common-dir, each with loadavg, heavy processes and the
+  derive-cache state at start and end, committed under `measurements/`. Landed = the `replay-a` start offset within 120 s of the
+  `[parallel] mode engaged` line; pool-phase wall at least 300 s below the mean of the controls (advisory if the controls differ by
+  more than 100 s); no failure the controls do not share. The model-versus-measured start for the control (5 percent) is a recorded
+  note. The PR states the number of completed readings and says "not landed" if a criterion is missed.
 - [ ] AC9. #12231 exists (filed during planning) with re-evaluation criteria and the milestone; the deferral section of the PR
   body names #12231, #12151, #12152 and the reap evidence bar.
 
@@ -472,7 +525,9 @@ Gates (deterministic, no dependence on machine load): AC1 to AC7, AC9. Recorded 
   unchanged (4); the arms already ran concurrently with each other and with other suites in the measured readings. The
   measurement records loadavg.
 - Risk: in serial mode and CI shards the roughly 25-minute arms now run before the cheap suites, so a cheap red surfaces later in a
-  serial run. Accepted: CI shards run in parallel legs, and the pool gate prints a provisional red at reap.
+  serial run, and a budget kill in a serial fallback leaves most cheap suites unrun. Accepted: CI shards run in parallel legs, the
+  pool gate prints a provisional red at reap, and the hoist cannot be pool-conditional (enumerate and dispatch walks must agree on
+  order). Recorded in the ADR amendment; `budget_seconds` is not raised.
 - Risk: serial-mode and CI-shard report order changes (arms first). Mitigation: CI sets `CI` and runs serial per shard with the
   shard manifest, order-independent; the verdict lines are keyed by label; `TEST_TIMING_LOG` rows are label-keyed.
 - Risk: the positional shard fallback (used only if a manifest is absent or mismatched) assigns by registration ordinal, so

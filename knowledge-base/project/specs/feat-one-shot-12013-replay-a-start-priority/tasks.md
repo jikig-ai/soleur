@@ -13,7 +13,7 @@ Rulings: `decision-challenges.md` in this directory.
 
 ## Phase 1: Failing guard first
 
-- 1.1 Add section 7 to `scripts/lib/test-suite-lanes.test.sh`: pure `start_first_ok <rows>` (each arm exactly once; bare suite path zero times; each arm's index below the first `*` row and the first `lock:test-all` row; `n_arms == 3` written as a statement), the live check on `--enumerate-commands all`, synthetic rows 2 to 6, must-PASS rows (`c a b`, longer non-arm list, a `*` and a `lock:test-all` row after the arms), and the runner-copy mutant (row 1) under the file's existing `_h_dir`. Update the header comment (sections 6 and 7).
+- 1.1 Add section 7 to `scripts/lib/test-suite-lanes.test.sh`: pure `start_first_ok` over `label<TAB>tokens` rows (raw rows, not the deduplicated map): each arm exactly once; bare suite path zero times; each arm's 1-based index at most `W` (named constant 4, tracking the gate's `SOLEUR_TEST_JOBS`); no `*` token before the last arm (tokens resolved only for those rows, literal tokens in synthetic rows); `n_arms == 3` written as a statement. Live check on `--enumerate-commands all`; synthetic rows 2 to 7; must-PASS rows (`c a b`, a token-free suite above the arms, longer non-arm list, a `*` and a `lock:test-all` row after the arms); the runner-copy mutant (row 1: `$sb/scripts/test-all.sh`, `lib` symlinked, shard tsv copied, under the file's existing `_h_dir`, regex asserted to extract 3 lines). Store section 1's tokens in `tok_of[$label]` for reuse. Raise the `(( PASSES < 12 ))` floor by the number of section 7 passes. Update the header comment (sections 6 and 7).
 - 1.2 Confirm section 7 is RED on the unmodified runner.
 
 ## Phase 2: Move the registrations
@@ -24,17 +24,17 @@ Rulings: `decision-challenges.md` in this directory.
 
 ## Phase 3: Structural gates
 
-- 3.1 Re-run the Phase 0.4 suites: all green; registration count and label set identical to the Phase 0.1 record.
+- 3.1 Re-run the Phase 0.4 suites plus `scripts/lint-orphan-test-suites.test.sh`, `scripts/lib/repo-write-boundary.test.sh`, `scripts/test-all-group-affected.test.sh`, `scripts/test-all-capacity-signal.test.sh`, `scripts/test-all-orphan-log-retention.test.sh`, `plugins/soleur/test/fanout-suite-scope.test.sh`, `plugins/soleur/test/collision-precheck.test.sh`, the `scripts/test-all-affected*.test.sh` family and `scripts/test-all-pr-battery-gate.test.sh`: all green; label set and argv identical to `measurements/before.enum.tsv` (sorted diff empty). Block comment hygiene: no comment line starts with `run_suite ` or quotes `"$f" == `.
 
 ## Phase 4: Measurement (private clone, never a ship path)
 
 - 4.1 Clone with its own git-common-dir; pin the diff pick `7af192071d`; set `origin/main` in the clone to the tree under test.
-- 4.2 Control (same base, no edit), treatment 1; second treatment per the adaptive conditions. Detached, rc file, loadavg and heavy processes at start and end.
+- 4.2 Control, treatment, control (second control if the treatment gain is within 150 s of the bar or the readings look disturbed). Clear the derive cache before each reading and record its state; pool start = the `[parallel] mode engaged` line. Detached, rc file, loadavg and heavy processes at start and end. The `replay-a` start offset is the only hard gate; the pool-phase delta is gated against the mean of the controls (advisory if the controls differ by more than 100 s).
 - 4.3 Before treatment: confirm `--enumerate-commands all` in the clone lists the arms ahead of the first `*` row.
 - 4.4 Commit the raw rows and `summary.txt` under `measurements/`; record the model-versus-measured start for the control; state the number of readings.
 
 ## Phase 5: Record
 
-- 5.1 ADR-242 amendment `## Amendment — 2026-11-06 (#12013)` via `soleur:architecture` (decision, headline numbers, does not claim 600 s, alternatives, pointers).
+- 5.1 ADR-242 amendment `## Amendment — 2026-11-06 (#12013)` (next decision number per ADR-242's convention) via `soleur:architecture`: decision, headline numbers, does not claim 600 s, alternatives, pointers, plus the budget-kill note, the serial-fallback note, the `*`-barrier trade-off (#12231).
 - 5.2 PR body: `Ref #12013`; the CI run is not the measurement; deferral section naming #12231, #12151, #12152 and the reap evidence bar.
 - 5.3 After merge (agent-run): comment on #12013 with the result and the remaining gap; it stays open.
