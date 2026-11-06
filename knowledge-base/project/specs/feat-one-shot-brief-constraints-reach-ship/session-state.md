@@ -25,4 +25,4 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, CTO x3, review panel x3, de
 
 - constraint: Rely on CI's required test check. Required checks: test, lockfile-sync, markdown-lint, tenant-integration-required. Read infra-validation and sandbox-canary-capture-gate by hand. Do not run the local affected battery to completion.
 - constraint: Never push to a PR that is in the merge queue. Never --admin merge. Never touch the ruleset.
-- ci-is-the-gate: Rely on CI's required test check; do not run the local affected battery to completion.
+- ci-is-the-gate: Rely on CI required test check, do not run the local affected battery to completion.

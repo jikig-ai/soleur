@@ -49,8 +49,9 @@
 # TRUST: the token is a hint the same commit can write. What bounds a planted or wrong token is outside the commit: the live
 # branch ruleset (required `test` context, merge queue) still gates every merge, the arm's infra refusal, and the verdict
 # line printing the words, so a planted token is visible in the transcript and the PR Test plan. The words are untrusted
-# text: cut at 200 bytes, then only [A-Za-z0-9 ,.;'-] survive. Fenced or commented text is ignored, the file must hold
-# exactly ONE `## Operator Constraints` section, and a symlinked file reads no token. A branch name holding `/` reads the
+# text: cut at 200 bytes, then only [A-Za-z0-9 ,.-] survive. Any HTML comment marker or unrecognised fence line in the
+# file voids the token (fail closed), fenced code is skipped, the file must hold exactly ONE `## Operator Constraints`
+# section, and a symlinked file or directory reads no token. A branch name holding `/` reads the
 # nested path specs/<a>/<b>/session-state.md. The committed diff is the gate; the working-tree sources are defence in depth,
 # and per-file index flags (assume-unchanged, skip-worktree) are operator-local state, bounded by the merge queue.
 # Writer contract: skills/one-shot/references/operator-constraints.md. Work Phase 2 and review do not read it (#12247).
@@ -85,33 +86,40 @@ skippable()   { say "SKIPPABLE — $1";   exit "$VERDICT_SKIPPABLE"; }
 undecidable() { say "UNDECIDABLE — $1 (caller must treat as OWED)"; exit "$VERDICT_UNDECIDABLE"; }
 
 command -v git >/dev/null 2>&1 || undecidable "git not on PATH"
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || undecidable "not inside a work tree"
 # An inherited git-location variable (a hook's GIT_DIR / GIT_INDEX_FILE) would redirect every read below.
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE \
-  GIT_TEMPLATE_DIR GIT_EXEC_PATH GIT_CONFIG GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_EXTERNAL_DIFF
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || undecidable "not inside a work tree"
 
 # --- operator token (see OPERATOR INTENT in the header) -------------------------------------------------------------
-# Bytes, not locale characters (LC_ALL=C). Fenced code and HTML comments are skipped. The section ends at the first
-# non-bullet line, at a blank line after a bullet, and at any `#` heading; a SECOND `## Operator Constraints` section
-# anywhere in the file voids the token (n must be 1), so text appended later cannot become one. The filter runs BEFORE the
-# emptiness test, so whitespace-only, control-only or non-ASCII-only words are no token. The reader prints only the matching
-# line, and a symlinked session-state.md is not read at all.
+# Bytes, not locale characters (LC_ALL=C). Fenced code is skipped (CommonMark rules: an opener is 3+ backticks or tildes
+# indented at most 3 spaces, a closer is the same character, at least as long, nothing else on the line); a fence-looking
+# line the rule does not recognise (blockquoted, indented 4+) and ANY `<!--` or `-->` voids the token, so a quoted or
+# hidden copy of the section fails closed. The section ends at the first non-bullet line, at a blank line after a bullet,
+# and at any `#` heading; a SECOND `## Operator Constraints` section voids the token (n must be 1), so text appended later
+# cannot become one. The filter runs BEFORE the emptiness test, so whitespace-only, control-only or non-ASCII-only words
+# are no token. The reader prints only the matching line; a symlinked file or directory is not read at all.
 OPERATOR_CI_WORDS=""
 _br="$(git branch --show-current 2>/dev/null)"
-_ss="$(git rev-parse --show-toplevel 2>/dev/null)/knowledge-base/project/specs/${_br}/session-state.md"
-if [[ -n "$_br" && -f "$_ss" && ! -L "$_ss" ]]; then
+_tp="$(cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null && pwd -P)"
+_ss="${_tp}/knowledge-base/project/specs/${_br}/session-state.md"
+_sd="$(cd "${_ss%/*}" 2>/dev/null && pwd -P)"
+if [[ -n "$_br" && -n "$_tp" && "$_sd" == "$_tp"/* && -f "$_ss" && ! -L "$_ss" ]]; then
   OPERATOR_CI_WORDS="$(LC_ALL=C awk '
-    /^(```|~~~)/ { if (!c) f = !f; next }
-    f { next }
-    c { if (index($0, "-->")) c = 0; next }
-    /<!--/ { if (!index($0, "-->")) c = 1; next }
+    function runlen(t, c,   i) { for (i = 1; substr(t, i, 1) == c; i++); return i - 1 }
+    /<!--|-->/ { bad = 1; next }
+    f { t = $0; if (t ~ /^    /) next; sub(/^ */, "", t); sub(/[ \t]+$/, "", t)
+        if (length(t) >= fl && runlen(t, fc) == length(t)) f = 0; next }
+    { t = $0
+      if (t !~ /^    /) { u = t; sub(/^ */, "", u); c = substr(u, 1, 1)
+        if ((c == "`" || c == "~") && runlen(u, c) >= 3) { f = 1; fc = c; fl = runlen(u, c); next } } }
+    /^[ \t>]*(```|~~~)/ { bad = 1; next }
     /^#+[[:space:]]/ { s = ($0 == "## Operator Constraints"); b = 0; if (s) n++; next }
     s && /^[[:space:]]*$/ { if (b) s = 0; next }
     s && !/^- / { s = 0; next }
     s { b = 1 }
     s && !w && /^- ci-is-the-gate:[[:space:]]+[^[:space:]]/ { w = $0; sub(/^- ci-is-the-gate:[[:space:]]+/, "", w); w = substr(w, 1, 200) }
-    END { if (n == 1 && w != "") print w }' "$_ss" 2>/dev/null \
-    | LC_ALL=C tr -cd "A-Za-z0-9 ,.;'-")"
+    END { if (n == 1 && !bad && w != "") print w }' "$_ss" 2>/dev/null \
+    | LC_ALL=C tr -cd "A-Za-z0-9 ,.-")"
   [[ -n "${OPERATOR_CI_WORDS//[[:space:]]/}" ]] || OPERATOR_CI_WORDS=""
 fi
 
@@ -263,8 +271,8 @@ INFRA_RE='^(apps/web-platform/infra/|\.github/workflows/apply-web-platform-infra
 # deleted from disk shows only here), and untracked files. NUL-delimited because git C-quotes a path holding a non-ASCII
 # byte, a tab, `"` or `\` (`"apps/web-platform/infra/\303\251.tf"`), which the `^`-anchored INFRA_RE then misses;
 # `--no-renames` lists both the old and the new path of a rename; `git -C "$_top"` makes the untracked listing repo-wide
-# whatever the cwd; `refs/remotes/origin/main` cannot be shadowed by a tag or branch of the same short name. Each source has
-# its own failure exit. The grep runs on the paths PLUS one sentinel infra path, so a here-string or pipe that silently
+# whatever the cwd; `refs/remotes/origin/main` cannot be shadowed by a tag or branch of the same short name. The sources share
+# one failure exit. The grep runs on the paths PLUS one sentinel infra path, so a here-string or pipe that silently
 # fails (count 0) cannot read as "no infra match". It runs its OWN INFRA_RE grep: the existing refusal sits after condition
 # 4 and needs REQUIRED_JSON, which this exit skips. Its infra refusal does not self-retire like condition 4's. A merge in
 # progress or an unmerged path is refused: the tree is not a state anyone reviewed. The existing non-token check above

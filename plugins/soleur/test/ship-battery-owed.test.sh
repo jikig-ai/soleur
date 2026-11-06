@@ -854,7 +854,7 @@ mut17 M17c 'elif ($rows | any(.status != "completed")) then "NOT-GREEN"' 'elif f
 # return 42 without CI evidence: conditions 1 (dirty tree), 2 (behind main) and 4 (CI state) do not apply to it. It never
 # overrides the infra surface (committed, staged or untracked) or an unresolved diff. T18a-c isolate ONE outranked condition
 # each and carry a same-fixture no-token CONTROL (the branch is renamed so the token is invisible while tree and HEAD are
-# unchanged), T18d is the incident shape, T18e-i the infra refusals, T18j-n the reject side, T18o the printed words, T18p the
+# unchanged), T18d is the incident shape, T18e-i the infra refusals (rename, staged, quoted paths, tag, merge, git-failure shims), T18j-n the reject side, T18o the printed words, T18p the
 # writer/reader parity.
 # =============================================================================
 TOK18='## Operator Constraints\n- constraint: Rely on CI required test check\n- ci-is-the-gate: Rely on CI required test check\n'
@@ -1080,6 +1080,109 @@ ss18_write "$W18r" '## Operator Constraints\n- constraint: a\n\n## Operator Cons
 reject18 "T18n two sections of the same name void the token" "$W18r" "$S18r"
 in_fixture "$W18r" bash -c 'mkdir -p knowledge-base/project/specs/real && printf "## Operator Constraints\n\n- ci-is-the-gate: via link\n" > knowledge-base/project/specs/real/session-state.md && rm -f knowledge-base/project/specs/feat-fixture/session-state.md && ln -s ../real/session-state.md knowledge-base/project/specs/feat-fixture/session-state.md && git add -A && git commit --quiet -m link' || true
 reject18 "T18m a symlinked session-state.md" "$W18r" "$S18r"
+in_fixture "$W18r" bash -c 'git rm -q -r knowledge-base/project/specs/feat-fixture knowledge-base/project/specs/real && git commit --quiet -m unlink' || true
+for body18 in \
+  '## Operator Constraints Extra\n\n- ci-is-the-gate: x\n' \
+  '### Operator Constraints\n\n- ci-is-the-gate: x\n' \
+  '## Operator Constraints\n- ci-is-the-gate:x\n' \
+  '## Operator Constraints\n- CI-IS-THE-GATE: x\n' \
+  '## Operator Constraints\n- ci-is-the-gate-not: x\n' \
+  '~~~\n## Operator Constraints\n- ci-is-the-gate: x\n~~~\n' \
+  '````\n```\n## Operator Constraints\n- ci-is-the-gate: x\n```\n````\n' \
+  '   ```\n## Operator Constraints\n- ci-is-the-gate: x\n   ```\n' \
+  '> ```\n## Operator Constraints\n- ci-is-the-gate: x\n> ```\n' \
+  '<!-- x --> <!--\n## Operator Constraints\n- ci-is-the-gate: x\n-->\n' \
+  '## Operator Constraints\n- constraint: no <!-- markers\n- ci-is-the-gate: x\n'
+do
+  ss18_write "$W18r" "$body18" commit
+  reject18 "T18m look-alike or quoted section (${body18:0:34})" "$W18r" "$S18r"
+done
+
+# --- T18x: the arm stays LIVE in the real repo shape, and each remaining guard has its own row ---------------------
+# (a) a tracked, UNCHANGED infra file inherited from main plus a gitignored infra cache must not force OWED (liveness);
+new_fixture_root R18x; W18x="$(build_fixture "$R18x")"; S18x="$R18x/stub"
+mk18_tf "$W18x"
+in_fixture "$W18x" bash -c 'printf "apps/web-platform/infra/.terraform/\n" > .gitignore && git add -A && git commit --quiet -m ignore' || true
+ss18_write "$W18x" "$TOK18" commit
+in_fixture "$W18x" bash -c 'mkdir -p apps/web-platform/infra/.terraform && printf x > apps/web-platform/infra/.terraform/cache' || true
+make_stub "$S18x" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$SKIPPABLE" "$(run_gate "$W18x" "$S18x")" "T18x token + a tracked unchanged infra file + an ignored infra cache -> SKIPPABLE (the arm stays live)"
+assert_eq "$SKIPPABLE" "$(run_gate_sub "$W18x" "$S18x" plugins)" "T18x the same verdict from a SUBDIRECTORY (token path is repo-root based)"
+# (b) the newline joins between the path sources: a path glued to its neighbour would miss the ^ anchor;
+new_fixture_root R18j; W18j="$(build_fixture "$R18j")"; S18j="$R18j/stub"
+ss18_write "$W18j" "$TOK18" commit
+in_fixture "$W18j" bash -c 'printf q >> README.md && mkdir -p apps/web-platform/infra && printf x > apps/web-platform/infra/a.tf' || true
+make_stub "$S18j" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18j" "$S18j")" "T18x a modified tracked file followed by an untracked infra file (w2|w3 join) -> OWED"
+new_fixture_root R18k; W18k="$(build_fixture "$R18k")"; S18k="$R18k/stub"
+ss18_write "$W18k" "$TOK18" commit
+in_fixture "$W18k" bash -c 'printf z > zzz.txt && mkdir -p apps/web-platform/infra && printf x > apps/web-platform/infra/ad2.tf && git add apps/web-platform/infra/ad2.tf && rm apps/web-platform/infra/ad2.tf' || true
+make_stub "$S18k" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18k" "$S18k")" "T18x an untracked file followed by a staged-then-deleted infra path (w3|w4 join) -> OWED"
+# (c) an empty branch diff whose HEAD is not an ancestor of origin/main stays UNDECIDABLE even with a token;
+new_fixture_root R18g3; W18g3="$(build_fixture "$R18g3")"; S18g3="$R18g3/stub"
+in_fixture "$W18g3" bash -c 'git rm -q plugins/soleur/thing.md && git commit --quiet -m undo && git checkout --quiet main && mkdir -p plugins/soleur && printf n > plugins/soleur/other.md && git add -A && git commit --quiet -m adv && git push --quiet origin main && git checkout --quiet feat-fixture' || true
+ss18_write "$W18g3" "$TOK18"
+make_stub "$S18g3" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$UNDECIDABLE" "$(run_gate "$W18g3" "$S18g3")" "T18x token + an empty branch diff whose HEAD is not an ancestor of origin/main -> UNDECIDABLE"
+assert_reason "$W18g3" "$S18g3" "operator ci-is-the-gate set but the branch diff is empty" "T18x the undecidable names the token"
+# (d) each half of the merge refusal alone: MERGE_HEAD without unmerged paths, unmerged paths without MERGE_HEAD;
+new_fixture_root R18ma; W18ma="$(build_fixture "$R18ma")"; S18ma="$R18ma/stub"
+in_fixture "$W18ma" bash -c 'git checkout --quiet main && printf n > on-main.md && git add -A && git commit --quiet -m adv && git push --quiet origin main && git checkout --quiet feat-fixture && git merge --no-commit --no-ff origin/main' || true
+ss18_write "$W18ma" "$TOK18"
+make_stub "$S18ma" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18ma" "$S18ma")" "T18x MERGE_HEAD alone (clean --no-commit merge) -> OWED"
+assert_reason "$W18ma" "$S18ma" "a merge is in progress or paths are unmerged" "T18x (MERGE_HEAD alone) the refusal names itself"
+new_fixture_root R18mb; W18mb="$(build_fixture "$R18mb")"; S18mb="$R18mb/stub"
+in_fixture "$W18mb" bash -c 'git checkout --quiet main && mkdir -p plugins/soleur && printf other > plugins/soleur/thing.md && git add -A && git commit --quiet -m adv && git push --quiet origin main && git checkout --quiet feat-fixture && git cherry-pick origin/main' || true
+ss18_write "$W18mb" "$TOK18"
+make_stub "$S18mb" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate "$W18mb" "$S18mb")" "T18x unmerged paths alone (cherry-pick conflict, no MERGE_HEAD) -> OWED"
+assert_reason "$W18mb" "$S18mb" "a merge is in progress or paths are unmerged" "T18x (unmerged alone) the refusal names itself"
+# (e) a grep that prints 0 / fails must not read as 'no infra match';
+shimgrep18() { # <label> <script-body>
+  new_fixture_root SHIMGROOT18
+  local w s
+  w="$(build_fixture "$SHIMGROOT18")"; s="$SHIMGROOT18/stub"
+  ss18_write "$w" "$TOK18" commit
+  make_stub "$s" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+  ( cd "$s" && printf '#!/usr/bin/env bash\n%s\n' "$2" > grep && chmod +x grep )
+  assert_eq "$UNDECIDABLE" "$(run_gate "$w" "$s")" "$1 -> UNDECIDABLE (never SKIPPABLE)"
+  assert_reason "$w" "$s" "infra scope check did not run" "$1: the failure names itself"
+}
+shimgrep18 "T18x a grep that prints 0 and exits 1" 'echo 0; exit 1'
+shimgrep18 "T18x a grep that exits 2 with no output" 'exit 2'
+shim18 "T18x the unmerged-path probe fails" "ls-files -u"
+# (f) a symlinked PARENT directory reads no token; a slash branch reads its nested path; first-wins; allowed characters survive.
+new_fixture_root R18sd; W18sd="$(build_fixture "$R18sd")"; S18sd="$R18sd/stub"
+make_stub "$S18sd" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+in_fixture "$W18sd" bash -c 'mkdir -p ../outside-specs/feat-fixture && printf "## Operator Constraints\n\n- ci-is-the-gate: via parent link\n" > ../outside-specs/feat-fixture/session-state.md && mkdir -p knowledge-base/project && ln -s ../../../outside-specs knowledge-base/project/specs && git add -A && git commit --quiet -m parentlink' || true
+reject18 "T18x a symlinked parent directory" "$W18sd" "$S18sd"
+new_fixture_root R18sl; W18sl="$(build_fixture "$R18sl")"; S18sl="$R18sl/stub"
+in_fixture "$W18sl" git branch -m feat-fixture feat/slash || true
+ss18_write "$W18sl" "$TOK18" commit "feat/slash"
+make_stub "$S18sl" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W18sl")"
+assert_eq "$SKIPPABLE" "$(run_gate "$W18sl" "$S18sl")" "T18x a branch name holding / reads specs/<a>/<b>/session-state.md -> SKIPPABLE"
+new_fixture_root R18fw; W18fw="$(build_fixture "$R18fw")"; S18fw="$R18fw/stub"
+ss18_write "$W18fw" '## Operator Constraints\n- ci-is-the-gate: first, v1.2 ok 3-4 days\n- ci-is-the-gate: second\n' commit
+make_stub "$S18fw" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$SKIPPABLE" "$(run_gate "$W18fw" "$S18fw")" "T18x two token lines in one section -> SKIPPABLE"
+assert_reason "$W18fw" "$S18fw" "first, v1.2 ok 3-4 days" "T18x the first line wins and its allowed characters survive"
+assert_not_reason "$W18fw" "$S18fw" "second" "T18x the second token line is not printed"
+
+# (g) the allow-list drops shell metacharacters, and an inherited git-location variable cannot redirect the reads.
+new_fixture_root R18al; W18al="$(build_fixture "$R18al")"; S18al="$R18al/stub"
+ss18_write "$W18al" '## Operator Constraints\n- ci-is-the-gate: alpha;beta\n' commit
+make_stub "$S18al" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_reason "$W18al" "$S18al" "alphabeta" "T18x a semicolon in the words is dropped, its neighbours kept"
+assert_not_reason "$W18al" "$S18al" "alpha;beta" "T18x the semicolon is not printed"
+new_fixture_root R18gv; W18gv="$(build_fixture "$R18gv")"; S18gv="$R18gv/stub"
+ss18_write "$W18gv" "$TOK18" commit
+make_stub "$S18gv" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$SKIPPABLE" "$( ( cd "$W18gv" || exit 9
+    git_fixture_env "$W18gv" >/dev/null 2>&1 || exit 9
+    GIT_DIR="$R18gv/no-such-gitdir" GIT_INDEX_FILE="$R18gv/no-such-index" PATH="$S18gv:$PATH" bash "$GATE" >/dev/null 2>&1
+    printf '%s' "$?" ) )" "T18x an inherited GIT_DIR / GIT_INDEX_FILE cannot redirect the gate's reads -> SKIPPABLE"
 
 # --- T18o: the words are printed as untrusted ASCII, cut at 200 bytes --------
 new_fixture_root R18o; W18o="$(build_fixture "$R18o")"; S18o="$R18o/stub"
@@ -1095,10 +1198,10 @@ else
   assert_eq "$OUT18o" "QRS present, QRSZ absent" "T18o the 200-byte cut keeps bytes 198-200 and drops byte 201"
 fi
 WORDS18o="$(printf '%s' "$OUT18o" | sed -n 's/.*session-state.md: \(.*\)): local battery.*/\1/p')"
-if [[ -n "$WORDS18o" ]] && ! grep -qE "[^A-Za-z0-9 ,.;'-]" <<<"$WORDS18o"; then
-  assert_eq "ok" "ok" "T18o only [A-Za-z0-9 ,.;'-] survive in the printed words"
+if [[ -n "$WORDS18o" ]] && ! grep -qE "[^A-Za-z0-9 ,.-]" <<<"$WORDS18o"; then
+  assert_eq "ok" "ok" "T18o only [A-Za-z0-9 ,.-] survive in the printed words"
 else
-  assert_eq "$WORDS18o" "only [A-Za-z0-9 ,.;'-]" "T18o only [A-Za-z0-9 ,.;'-] survive in the printed words"
+  assert_eq "$WORDS18o" "only [A-Za-z0-9 ,.-]" "T18o only [A-Za-z0-9 ,.-] survive in the printed words"
 fi
 assert_reason "$W18o" "$S18o" "untrusted text from session-state.md" "T18o the words are labelled untrusted"
 assert_reason "$W18d" "$S18d" "this script read no CI state" "T18d the verdict claims no CI state it did not read"
@@ -1123,4 +1226,4 @@ assert_eq "$OWED" "$(parity_rc "$R18p/ref-renamed.md" "$W18p" "$S18p")" "T18p a 
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 154
+print_results 213
