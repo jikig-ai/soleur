@@ -850,13 +850,13 @@ A literal copied from a sibling PR's base is stale the moment either lands.
 Typo-guard for the two destructive recut paths (ignored by every other target). It is NOT
 the authorization:
 
-  * workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
-    that job is the sole human authorization (DP-11 F8). HARD-RETIRED by #6604 step 7 (PR B):
-    the job's first step exits 1 on every dispatch, before any credential or plan.
-  * registry-luks-recut (#6929) — still NOT reviewer-gated: its authorization is the
-    menu-ack dispatch itself (hr-menu-option-ack-not-prod-write-auth) and this token
-    only guards a mis-dispatch. Since #8209 it DOES carry `environment: infra-privileged`
-    — no reviewer, but main-only, so a non-`main` dispatch is refused first.
+- workspaces-luks-recut — the `environment: workspaces-luks-cutover` reviewer gate on
+  that job is the sole human authorization (DP-11 F8). HARD-RETIRED by #6604 step 7 (PR B):
+  the job's first step exits 1 on every dispatch, before any credential or plan.
+- registry-luks-recut (#6929) — still NOT reviewer-gated: its authorization is the
+  menu-ack dispatch itself (hr-menu-option-ack-not-prod-write-auth) and this token
+  only guards a mis-dispatch. Since #8209 it DOES carry `environment: infra-privileged`
+  — no reviewer, but main-only, so a non-`main` dispatch is refused first.
 
 Each job accepts only its OWN literal, so a token typed for one target cannot authorize
 the other.
