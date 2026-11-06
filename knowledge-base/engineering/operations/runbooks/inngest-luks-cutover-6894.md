@@ -899,3 +899,30 @@ blank-format path. A shipped mechanism that formats a blank `prd` volume on dema
 format-the-sole-copy hole `unpointed_raw_refused` exists to close — the two reviewed PRs and the suite
 pins that fail closed on an incomplete revert are the whole control, and that is the cost of the
 route.
+
+## 2026-11-06 — the two-copy resolver decision is deliberate (#10112)
+
+`/usr/local/bin/inngest-luks-open.sh` (a `write_files` entry in `cloud-init-inngest.yml`, run by
+`inngest-luks-open.service` on every boot after the first) and the first-boot runcmd `STAGE=resolve`
+block each carry their own copy of the resolver decision — pointer absent → the one rendered volume;
+pointer `== LUKS_ID` → the pointer arm; anything else → refuse. The duplication is **accepted in
+writing** (this section is that acceptance; ADR-142 addendum 2026-11-06 records the same disposition),
+not an accident awaiting a shared helper. The named asymmetries are deliberate, not drift:
+
+- **The reopen never formats.** A blank unpointed volume there is `reopen_not_luks`, a refusal — only
+  the first-boot stage carries a format arm, and only behind the `rehearsal_*` allowlist above.
+- **Reporting differs by necessity.** The reopen runs pre-network and reports via `logger`
+  (`SOLEUR_INNGEST_LUKS_STAGE` on journald → Vector → Better Stack); the stage tees its detail to
+  `$INNGEST_LUKS_DETAIL` for the `inngest-luks-FAILED` phone-home.
+- **Pointer refusal granularity differs.** The stage distinguishes a non-numeric pointer first
+  (`*[!0-9]*` → its own FATAL, refusing to derive a device path from it); the reopen folds every
+  non-matching pointer into the single `reopen_pointer` refusal ("not this host's volume").
+
+The drift bound is mechanical, not aspirational: `inngest-redis-luks-loopback.test.sh` extracts and
+executes BOTH copies verbatim on every run — a behavioural divergence reds the suite — and
+`inngest-redis-luks.test.sh` pins the arm literals (`_D6_HEAD`, the D6-case line, T1.16j). ADR-142's
+2026-10-13 addendum (CTO ruling D5) already chose pinned duplication over a shared helper for the same
+two readers' `wait_dev` bound; this is that precedent applied to the resolver decision itself, which
+is frozen post-cutover. A future change that flips the fork to a shared `/usr/local/lib/` `write_files`
+helper edits `cloud-init-inngest.yml` and must re-run the open-PR overlap check on that file first —
+this plan's dated check is not inherited.
