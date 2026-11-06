@@ -632,7 +632,7 @@ jobs:
           BODY="${BODY}"$'\n\n'"If the SOURCE is what is wrong:"
           BODY="${BODY}"$'\n'"1. Read what is actually published:"
           BODY="${BODY}"$'\n'"   \`curl -fsS -H 'Cache-Control: no-cache' https://raw.githubusercontent.com/jikig-ai/soleur-marketplace/main/.claude-plugin/marketplace.json | jq .\`"
-          BODY="${BODY}"$'\n'"2. Edit \`infra/github/soleur-marketplace-manifest.json\` in this repo and open a PR. The \`marketplace-manifest-guard\` check validates it before merge; merging publishes it."
+          BODY="${BODY}"$'\n'"2. Edit \`infra/github/soleur-marketplace-manifest.json\` in this repo and open a PR. The \`guards-ruleset\` required check (its \`marketplace-manifest-guard\` member step) validates it before merge; merging publishes it."
           BODY="${BODY}"$'\n'"3. \`.plugins[0]\` must have NO \`version\` key. \`claude plugin update\` compares version strings: with no key the CLI records the commit SHA so it changes every commit, but a constant version always compares equal and the update short-circuits, reporting success while delivering nothing (#7471). This is the failure with no visible symptom."
           BODY="${BODY}"$'\n'"4. \`.plugins[0].source\` must stay \`git-subdir\` on \`https://github.com/jikig-ai/soleur.git\` with \`path: plugins/soleur\`, unpinned (no \`ref\`, no \`sha\`), and \`.plugins\` must hold exactly one entry."
           BODY="${BODY}"$'\n'"5. If a \`plugin_manifest_*\` finding fired, the marketplace manifest is CORRECT and \`plugins/soleur/.claude-plugin/plugin.json\` moved or broke in THIS repo. No reconcile is dispatched for that case, deliberately — republishing a correct file would not fix it. Restore the path here."

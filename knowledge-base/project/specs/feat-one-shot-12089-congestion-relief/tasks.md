@@ -11,7 +11,7 @@ Issue: #12089 (tracker; the PR relieves the breaches it reports) | Draft PR: #12
 
 ## Phase 2 — Required-context ABI swap (atomic)
 
-- [x] 2.1 `.github/workflows/ci.yml`: fold 6 docs/ruleset guards → `guards-ruleset`; lockfile-sync + grok-fidelity → `guards-env`; advisory folds per plan.
+- [x] 2.1 `.github/workflows/ci.yml`: fold 8 docs/ruleset guards → `guards-ruleset` (the planned `guards-env` umbrella for lockfile-sync + grok-fidelity was merged into `guards-ruleset`, 8 members, per the session-state design resolution); advisory folds per plan.
 - [x] 2.2 `.github/workflows/pr-quality-guards.yml`: fold enforce + markdown-lint + Bash-fixture-tests → `quality-guards`; advisory Block family → `quality-advisory`.
 - [x] 2.3 `.github/workflows/secret-scan.yml`: fold gitleaks + lint-fixture + waiver + rename-guard + allowlist-diff → `secret-guards`.
 - [x] 2.4 `infra/github/ruleset-ci-required.tf`: remove 16 context names, add umbrella names (merge_queue block untouched).

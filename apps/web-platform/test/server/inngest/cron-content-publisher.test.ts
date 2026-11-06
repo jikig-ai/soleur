@@ -116,8 +116,8 @@ describe("exported constants", () => {
     expect(MAX_RUN_DURATION_MS).toBe(10 * 60 * 1000);
   });
 
-  it("SYNTHETIC_CHECK_NAMES has exactly 7 entries", () => {
-    expect(SYNTHETIC_CHECK_NAMES.length).toBe(7);
+  it("SYNTHETIC_CHECK_NAMES has exactly 6 entries", () => {
+    expect(SYNTHETIC_CHECK_NAMES.length).toBe(6);
   });
 
   it("SYNTHETIC_CHECK_NAMES matches the verbatim list", () => {
@@ -126,7 +126,6 @@ describe("exported constants", () => {
       "dependency-review",
       "e2e",
       "skill-security-scan PR gate",
-      "enforce",
       "cla-check",
       "cla-evidence",
     ]);

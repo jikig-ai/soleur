@@ -413,8 +413,11 @@ dispatch_ok() {
   done < "$f"
   # Post-#12089 the enforce members are steps of `quality-guards`; the folded
   # `!cancelled()` guard is the allowed always-run form, any other step-level
-  # event if: is not.
-  [[ "$job_has_if" == 0 && "$gate_step" -gt "$backstop_step" && "$backstop_step" -gt 0 &&      ( "$gate_if" == 0 || "$gate_if_text" == *"!cancelled()"* ) &&      "$gate_event" == 1 && "$gate_sha" == 1 ]]
+  # event if: is not. Exact-form match: `if: ${{ !cancelled() }}` or
+  # `if: '!cancelled()'` — a substring match would admit extra `&&`/`||`
+  # tokens (e.g. a `github.event` conjunct) that re-gate the member.
+  local cancelled_only_re='^[[:space:]]*if:[[:space:]]*(\$\{\{[[:space:]]*!cancelled\(\)[[:space:]]*\}\}|'"'"'!cancelled\(\)'"'"')[[:space:]]*$'
+  [[ "$job_has_if" == 0 && "$gate_step" -gt "$backstop_step" && "$backstop_step" -gt 0 &&      ( "$gate_if" == 0 || "$gate_if_text" =~ $cancelled_only_re ) &&      "$gate_event" == 1 && "$gate_sha" == 1 ]]
 }
 
 # --- rows -------------------------------------------------------------------

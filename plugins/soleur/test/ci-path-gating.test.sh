@@ -92,11 +92,19 @@ declare -A GATE=( [settings-json-integrity]=settings_json [stray-worktree-marker
 ADV=$(awk -v j="  quality-advisory:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j{exit} f' "$PQG")
 if printf '%s' "$ADV" | grep -c >/dev/null 'needs: detect'; then pass; else
   fail "B2: quality-advisory missing needs: detect"; fi
+# Per-member slice: the member's `- id:` line up to the next `- id:`. A
+# block-wide grep would pass a member whose outputs.<flag> condition drifted
+# onto a sibling step's `if:` — the binding must be step-local.
+member_slice() {
+  printf '%s\n' "$ADV" | awk -v id="      - id: $1" '
+    $0 == id {f=1; print; next}
+    f && /^[[:space:]]+- id:/ {exit}
+    f {print}'
+}
 for job in "${!GATE[@]}"; do
   out="${GATE[$job]}"
-  if printf '%s' "$ADV" | grep -c >/dev/null "outputs.$out" \
-     && printf '%s' "$ADV" | grep -c >/dev/null "id: $job"; then pass; else
-    fail "B2: $job missing member step / outputs.$out condition"; fi
+  if member_slice "$job" | grep -c >/dev/null "outputs.$out"; then pass; else
+    fail "B2: $job member step if: missing its own outputs.$out condition"; fi
 done
 
 # B3 — the required umbrella carries no `needs: detect` edge (required contexts
@@ -106,12 +114,14 @@ block=$(awk -v j="  quality-guards:" 'BEGIN{f=0} $0==j{f=1} f&&/^  [a-z]/&&$0!=j
 if printf '%s' "$block" | grep -c >/dev/null '^    needs: detect'; then
   fail "B3: required job quality-guards reads needs: detect"; else pass; fi
 
-# B4a — gated jobs run even when detect FAILS (needs.detect.result escape) —
-# skip on proof, never on uncertainty.
+# B4a — gated members run even when detect FAILS (needs.detect.result escape)
+# — skip on proof, never on uncertainty. Bound per member step slice: each
+# member's own `if:` must pair its flag with the result-escape disjunct.
 for job in "${!GATE[@]}"; do
   out="${GATE[$job]}"
-  if printf '%s' "$ADV" | grep -c >/dev/null "outputs.$out"; then pass; else
-    fail "B4a: $job output condition missing in quality-advisory"; fi
+  if member_slice "$job" | grep -c >/dev/null "needs.detect.result != 'success'" \
+     && member_slice "$job" | grep -c >/dev/null "outputs.$out"; then pass; else
+    fail "B4a: $job member step if: lacks detect-failure escape + outputs.$out"; fi
 done
 if printf '%s' "$ADV" | grep -c >/dev/null 'always()' \
    && printf '%s' "$ADV" | grep -c >/dev/null "needs.detect.result != 'success'"; then pass; else

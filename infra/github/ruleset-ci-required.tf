@@ -215,7 +215,7 @@ resource "github_repository_ruleset" "ci_required" {
     #
     # HARD PRECONDITION: every context required by ANY ruleset on `main` must be
     # produced on `merge_group` (a missing producer leaves the entry pending
-    # FOREVER). The 23 CI Required contexts have a `merge_group` producer; the two
+    # FOREVER). The 10 CI Required contexts have a `merge_group` producer; the two
     # CLA Required contexts are covered by merge-queue-cla-synthetics.yml, which
     # verifies the PR head's real results first. Re-tighten recipe if upstream ever
     # ships `merge_group` status reporting: re-add the `CodeQL` required_check with
@@ -233,7 +233,7 @@ resource "github_repository_ruleset" "ci_required" {
     # (tests/scripts/test-audit-ruleset-bypass.sh, T-mq-1) holds this block equal to
     # the DR skeleton in scripts/create-ci-required-ruleset.sh and the README table.
     # `max_entries_to_build = 2` bounds hosted-runner contention (each candidate
-    # runs all 25 contexts); raise only after the canary measures it.
+    # runs all 12 contexts); raise only after the canary measures it.
     # `check_response_timeout_minutes` (120) must exceed the slowest required check on
     # `merge_group` INCLUDING runner start spread, else a green PR is dequeued. Raised
     # from 60 on 2026-10-11 (#9454 canary item 5): 240 `merge_group` CI runs measured

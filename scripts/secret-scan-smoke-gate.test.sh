@@ -243,7 +243,10 @@ try:
         if line.strip() and not line.lstrip().startswith("#"):
             names.add(line)
     req_jobs = [n for n, j in jobs.items() if (j or {}).get("name") in names]
-    if len(req_jobs) < 1:
+    # Count-tight to the singleton: post-#12089 the only required context this
+    # workflow produces is `secret-guards`. `< 1` would wave through a second
+    # required job (e.g. smoke promoted by mistake).
+    if len(req_jobs) != 1:
         tags.append("W-REQUIRED-COUNT")
     for n in req_jobs:
         if "smoke-relevance" in needs(jobs[n]) or "smoke-tests" in needs(jobs[n]):

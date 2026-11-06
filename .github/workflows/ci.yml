@@ -1310,7 +1310,7 @@ jobs:
         # half. The two harnesses are independent subjects: one vendor's npm
         # outage should not cost us the other vendor's discovery signal, and the
         # check row gives no hint that half the job never ran.
-        if: '!cancelled()'
+        if: ${{ !cancelled() }}
         name: Install Devin CLI (versioned setup script)
         continue-on-error: true
         run: |
@@ -1349,7 +1349,7 @@ jobs:
             exit 3
           }
       - id: harness-discovery-devin
-        if: '!cancelled()'
+        if: ${{ !cancelled() }}
         name: Devin discovers every declared skill
         continue-on-error: true
         run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness devin --pin "$DEVIN_PIN"
@@ -1358,7 +1358,7 @@ jobs:
         # vendors drive this job and one outage must not cost the other two their
         # signal. The npm package is `@opencode/cli`, not `opencode-ai` — see the
         # pin comment above.
-        if: '!cancelled()'
+        if: ${{ !cancelled() }}
         name: Install OpenCode CLI (exact pin)
         continue-on-error: true
         run: |
@@ -1375,7 +1375,7 @@ jobs:
             exit 3
           }
       - id: harness-discovery-opencode
-        if: '!cancelled()'
+        if: ${{ !cancelled() }}
         name: OpenCode discovers every declared skill
         continue-on-error: true
         run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness opencode --pin "$OPENCODE_PIN"

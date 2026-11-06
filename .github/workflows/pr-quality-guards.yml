@@ -3,12 +3,13 @@ name: PR quality guards (#2905)
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  # Merge queue (#5780; five required contexts live here post-#8902 fold).
-  # FIVE jobs are required contexts on ruleset 14145388 —
-  # `guard-script-fixture-tests`, `markdown-lint`, and the folded
-  # `dependency-review`, `enforce`, `skill-security-scan` — and NONE has a
-  # PR-event-only dependency (the folded required jobs keep their merge_group
-  # step arms), so all five run cleanly on the gh-readonly-queue/main/* temp
+  # Merge queue (#5780; three required contexts live here post-#12089
+  # umbrella). THREE job-names are required contexts on ruleset 14145388 —
+  # `quality-guards` (umbrella over the folded `enforce`, `markdown-lint`,
+  # and `guard-script-fixture-tests` member steps), `dependency-review`, and
+  # `skill-security-scan PR gate` — and NONE has a PR-event-only dependency
+  # (the folded required jobs keep their merge_group step arms as member
+  # steps), so all three report cleanly on the gh-readonly-queue/main/* temp
   # ref. Every OTHER job is a PR-quality gate keyed on
   # `github.event.pull_request.*` (PR number, diff, opt-out label) that has no
   # meaning on a merge candidate — each is gated to `pull_request` below so it
@@ -37,10 +38,12 @@ concurrency:
 
 jobs:
   # Cheap per-PR file-list probe (~8s, no checkout) gating the five file-scoped
-  # advisory jobs below — a push that cannot touch a surface skips its guard.
+  # advisory member steps in `quality-advisory` below — a push that cannot
+  # touch a surface skips its guard.
   # FAIL-OPEN: every error path emits 'true' for all surfaces (a gate may skip
-  # on PROOF, never on uncertainty). Advisory-only — the two required jobs keep
-  # no `needs: detect` edge and never read it.
+  # on PROOF, never on uncertainty). Advisory-only — the three required jobs
+  # (quality-guards, dependency-review, skill-security-scan) keep no
+  # `needs: detect` edge and never read it.
   detect:
     name: Detect gated-guard file changes
     runs-on: ubuntu-latest
@@ -371,6 +374,12 @@ jobs:
           # base/head diff and auto-commit-message-density's full-range commit
           # scan both read history.
           fetch-depth: 0
+          # The umbrella's token grants pull-requests: write (auto-close-scan
+          # member) — stripping the persisted credential keeps a write-capable
+          # token out of .git/config for the member steps. Members carrying gh
+          # calls pass GH_TOKEN explicitly; git fetches use the already-fetched
+          # full history (secret-scan.yml:163 pattern).
+          persist-credentials: false
 
       # ── member: settings-json-integrity (detect: settings_json) ──
       - id: sji-opt-out
@@ -838,8 +847,12 @@ jobs:
   #   dependency-review.yml, legal-doc-cross-document-gate.yml,
   #   skill-security-scan-pr-trailer.yml, constraint-gates.yml,
   #   pr-auto-close-scanner.yml.
-  # The three required jobs keep NO job-level `if:` (merge_group semantics
-  # preserved); the two advisory PR-only jobs are gated to pull_request.
+  # The two surviving required jobs (dependency-review, skill-security-scan)
+  # keep NO job-level `if:` (merge_group semantics preserved); the folded
+  # three (enforce, markdown-lint, guard-script-fixture-tests) are member
+  # steps of `quality-guards` above (#12089). The advisory PR-only members
+  # (constraint-gates, auto-close-scan, the detect-gated Block-* guards) are
+  # gated inside `quality-advisory`.
 
   dependency-review:
     # Job-level permissions REPLACE the workflow default (contents/pull-requests

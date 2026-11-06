@@ -743,13 +743,15 @@ else
   fail "W1e -- no CI step runs 'bash scripts/markdown-lint.test.sh'; these rows gate nothing in CI"
 fi
 
-# W1d: the job must carry no `if:`. A required context that does not report on
-# merge_group leaves the queue entry pending forever.
-if awk '/^  markdown-lint:/{f=1;next} /^  [a-z]/{f=0} f' \
-     "$REPO_ROOT/.github/workflows/pr-quality-guards.yml" | grep -cE >/dev/null '^[[:space:]]*if:'; then
-  fail "W1d -- the markdown-lint job carries an 'if:'; a required context that skips on merge_group wedges the queue"
+# W1d: the umbrella job must carry no JOB-LEVEL `if:`. A required context that
+# does not report on merge_group leaves the queue entry pending forever.
+# Member-step `if: ${{ !cancelled() }}` lines are the always-run fold form, not
+# a gate — the pattern anchors on exactly-4-space job keys only (#12089).
+if awk '/^  quality-guards:/{f=1;next} /^  [a-z]/{f=0} f' \
+     "$REPO_ROOT/.github/workflows/pr-quality-guards.yml" | grep -cE >/dev/null '^    if:'; then
+  fail "W1d -- the quality-guards umbrella job carries a job-level 'if:'; a required context that skips on merge_group wedges the queue"
 else
-  pass "W1d -- the markdown-lint job carries no 'if:' gate"
+  pass "W1d -- the quality-guards umbrella job carries no job-level 'if:' gate"
 fi
 
 # --- M9: the producer must reach depth 1 -----------------------------------------

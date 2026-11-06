@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1251
-# generated-at=2026-11-06T08:31:32Z
+# generated-at=2026-11-06T21:58:33Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -542,6 +542,7 @@ scripts/lint-shell-trace-credential-refusal-repo	2
 scripts/lint-skill-body-budget	4
 scripts/lint-supabase-deprecated-endpoints-unit	6
 scripts/lint-trap-tempfile-ownership	1
+scripts/lint-umbrella-aggregate	5
 scripts/lint-window-closure-assertion	5
 scripts/lint-window-closure-assertion-live	6
 scripts/lint-workflow-errexit-capture	2

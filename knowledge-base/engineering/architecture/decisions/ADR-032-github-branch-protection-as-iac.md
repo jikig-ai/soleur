@@ -942,8 +942,9 @@ diff: `guards-advisory` (ci.yml) covers `sandbox-canary-capture-gate`,
 `plugin-root-propagation-gate` and `harness-discovery` (the folded job's
 `continue-on-error` moved to per-step `continue-on-error`, preserving the
 run-conclusion guarantee `web-platform-release.yml` relies on);
-`quality-advisory` (pr-quality-guards.yml) covers the eight detect-gated
-Block-* members plus `constraint-gates` and `auto-close-scan`.
+`quality-advisory` (pr-quality-guards.yml) covers the eight advisory
+Block-* members (five of them detect-gated) plus `constraint-gates` and
+`auto-close-scan`.
 
 **Paired-edit contract satisfied.** This ADR's Sharp Edge 1 requires that a
 required-context rename and its producer land in the same PR. The rename was
@@ -967,7 +968,11 @@ an entry that can never dequeue (its merge_group candidate contains the new
 workflows and produces only the new names; the entry ejects at the 120-min
 timeout). The landing path is therefore `gh pr merge --admin` once the 10
 reporting contexts (3 umbrellas + 7 unrenamed) are green — the old-name
-pending rows are expected-by-design, not a broken run. Post-merge,
+pending rows are expected-by-design, not a broken run. Note that
+`plugins/soleur/scripts/admin-merge-ready.sh` exits not-ready on the ABSENT
+old context names (it waits on required names that will never report), so the
+self-merge runs as a raw `gh pr merge --admin` operator command outside the
+skill gate. Post-merge,
 `apply-github-infra.yml` applies the renamed set (~minutes) and the
 transition-hazard recipe below covers in-flight queue entries.
 
@@ -975,12 +980,20 @@ transition-hazard recipe below covers in-flight queue entries.
 queue when this apply lands carry a stale required-context set: their
 `merge_group` runs post `guards-ruleset`/`quality-guards`/`secret-guards`,
 not the old names, so a queued entry evaluated against the OLD required list
-pends on names that will never report. The recipe is symmetric for both
-directions: dequeue and re-enqueue the affected entries — remove each entry
-from the queue and re-add it (`gh pr merge --auto` re-arm), so its queue
-evaluation starts against the new context set. Entries whose `merge_group`
-run was already green under the old set are unaffected; only in-flight or
-freshly-enqueued candidates need the re-arm.
+pends on names that will never report. The hazard window is wider than the
+queue snapshot at apply time: entries ENQUEUED between this PR's merge and
+the `apply-github-infra.yml` run land under the OLD ruleset (still live until
+the apply) while their `merge_group` candidate already contains the new
+workflows — the same pend-forever shape, created post-merge. Re-check the
+queue after the apply completes, not just before merging. The recipe is
+symmetric for both directions: dequeue and re-enqueue the affected entries —
+remove each entry from the queue and re-add it (`gh pr merge --auto` re-arm),
+so its queue evaluation starts against the new context set. Entries whose
+`merge_group` run was already green under the old set are unaffected; only
+in-flight or freshly-enqueued candidates need the re-arm. Open PRs NOT in
+the queue also report the old-name pending rows: they produce the new names
+only after a re-run or an update-branch (their last check-suite predates the
+rename), which is expected and clears on their next push.
 
 **Full-revert recipe.** Revert the merge commit of this PR on `main`. The
 `apply-github-infra.yml` path then restores the 16 old required contexts from

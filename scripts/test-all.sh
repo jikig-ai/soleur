@@ -7122,6 +7122,14 @@ if want_scripts; then
   # manifest↔registration parity assertion). Same explicit-registration and LAST-in-block reasons as above.
   # Declared edge set, not always-on.
   run_suite "scripts/ci-oracle-lane" bash scripts/ci-oracle-lane.test.sh
+  # #12089 review: the umbrella-aggregate parity lint — for each umbrella job
+  # (guards-ruleset, guards-advisory in ci.yml; quality-guards, quality-advisory
+  # in pr-quality-guards.yml; secret-guards in secret-scan.yml) asserts every
+  # `- id:` member step appears in exactly one `member(...)` call in the
+  # aggregate run block, every member `if:` carries `!cancelled()`, and an
+  # `aggregate` step exists. Live lint (no .test.sh wrapper); appended LAST in
+  # the block so no earlier registration's positional-shard ordinal moves.
+  run_suite "scripts/lint-umbrella-aggregate" bash scripts/lint-umbrella-aggregate.sh
 fi
 
 # Named bun-test entries — bun shard.
