@@ -1,12 +1,13 @@
 /**
- * #11636: the HARDENED form of `gitWithInstallationAuth` (opt-in via `hardened: true`), with REAL git and real temp
- * repositories. Only the installation-token mint is replaced. The planted-hook tests prove the property that matters: a
- * `pre-push` hook (or a repo-config `core.hooksPath`) the agent planted in its writable workspace does not run on the
- * server-side push. A control with the legacy (unhardened) form proves the hook WOULD have run, so the absence is not vacuous.
+ * #11636 / ADR-309 9b: the HARDENED form of `gitWithInstallationAuth` (opt-in via `hardened: <isolated push directory>`), with
+ * REAL git and real temp repositories. Only the installation-token mint is replaced. The planted-hook tests prove the property
+ * that matters: a `pre-push` hook (or a repo-config `core.hooksPath`) the agent planted in its writable workspace does not run
+ * on the server-side push. A control with the legacy (unhardened) form proves the hook WOULD have run, so the absence is not
+ * vacuous.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
@@ -21,12 +22,14 @@ vi.mock("../server/git-hardened-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../server/git-hardened-env")>();
   return {
     ...actual,
-    buildHardenedGitEnv: (workspacePath: string, extra: Readonly<Record<string, string>> = {}) =>
-      actual.buildHardenedGitEnv(workspacePath, h.allowFile ? { ...extra, GIT_ALLOW_PROTOCOL: "https:file" } : extra),
+    buildIsolatedGitEnv: (dir: import("../server/git-hardened-env").IsolatedPushDir, extra: Readonly<Record<string, string>> = {}) =>
+      // `extra` can no longer override the pinned protocol (A2), so the test-only widening is applied to the RESULT.
+      ({ ...actual.buildIsolatedGitEnv(dir, extra), ...(h.allowFile ? { GIT_ALLOW_PROTOCOL: "https:file" } : {}) }),
   };
 });
 
 import { gitWithInstallationAuth } from "../server/git-auth";
+import { createIsolatedPushDir, type IsolatedPushDirHandle } from "../server/git-isolated-push-dir";
 
 const git = (cwd: string, ...args: string[]): string =>
   execFileSync("git", args, { cwd, stdio: "pipe", encoding: "utf8", env: gitFixtureEnv(cwd) }).trim();
@@ -49,6 +52,12 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
   // "legacy runs the hook" control red in CI only. Strip the count-indexed env config for the file so the controls measure git,
   // not the runner; the hardened form builds its own environment and never sees it either way.
   const savedGitConfigEnv: Record<string, string | undefined> = {};
+  const savedEnv: Record<string, string | undefined> = {};
+  let sha: string;
+  let iso: IsolatedPushDirHandle | undefined;
+  /** The hardened option for `work`: a fresh isolated directory (disposed in afterEach). */
+  const isolate = (): IsolatedPushDirHandle => (iso = createIsolatedPushDir(work));
+  const ref = (): string => `${sha}:refs/heads/feat-x`;
 
   beforeEach(() => {
     for (const k of Object.keys(process.env)) {
@@ -59,7 +68,13 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     }
     h.allowFile = true;
     h.mint.mockClear();
-    root = mkdtempSync(join(tmpdir(), "git-hardened-"));
+    for (const k of ["HOME", "TMPDIR"]) savedEnv[k] = process.env[k];
+    root = realpathSync(mkdtempSync(join(tmpdir(), "git-hardened-")));
+    // The isolated directory lives under HOME (never TMPDIR); both are private to this test.
+    mkdirSync(join(root, "home"));
+    mkdirSync(join(root, "tmp"));
+    process.env.HOME = join(root, "home");
+    process.env.TMPDIR = join(root, "tmp");
     remote = join(root, "remote.git");
     work = join(root, "work");
     marker = join(root, "marker");
@@ -71,9 +86,16 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     writeFileSync(join(work, "a.txt"), "a\n");
     git(work, "add", ".");
     git(work, "commit", "-q", "-m", "A");
+    sha = git(work, "rev-parse", "HEAD");
   });
 
   afterEach(() => {
+    iso?.dispose();
+    iso = undefined;
+    for (const [k, v] of Object.entries(savedEnv)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
     rmSync(root, { recursive: true, force: true });
     for (const [k, v] of Object.entries(savedGitConfigEnv)) {
       if (v !== undefined) process.env[k] = v;
@@ -89,7 +111,7 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
 
   test("hardened: the push succeeds and a planted .git/hooks/pre-push does NOT run", async () => {
     plantHook(join(work, ".git", "hooks"), marker);
-    await gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true });
+    await gitWithInstallationAuth(["push", remote, ref()], 1, { hardened: isolate() });
     expect(git(remote, "rev-parse", "refs/heads/feat-x")).toBe(git(work, "rev-parse", "HEAD"));
     expect(existsSync(marker)).toBe(false);
   });
@@ -98,7 +120,7 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     const evil = join(root, "evil-hooks");
     plantHook(evil, marker);
     git(work, "config", "core.hooksPath", evil);
-    await gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true });
+    await gitWithInstallationAuth(["push", remote, ref()], 1, { hardened: isolate() });
     expect(existsSync(marker)).toBe(false);
   });
 
@@ -119,14 +141,14 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
   test("hardened: pushing to a remote that REJECTS the push fails and the planted pre-push hook does NOT run", async () => {
     rejectingRemote();
     plantHook(join(work, ".git", "hooks"), marker);
-    await expect(gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true })).rejects.toBeTruthy();
+    await expect(gitWithInstallationAuth(["push", remote, ref()], 1, { hardened: isolate() })).rejects.toBeTruthy();
     expect(existsSync(marker)).toBe(false);
     expect(() => git(remote, "rev-parse", "refs/heads/feat-x")).toThrow();
   });
 
   test("hardened: with the production clamp (GIT_ALLOW_PROTOCOL=https) a local-path push is refused, not performed", async () => {
     h.allowFile = false;
-    await expect(gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true })).rejects.toBeTruthy();
+    await expect(gitWithInstallationAuth(["push", remote, ref()], 1, { hardened: isolate() })).rejects.toBeTruthy();
     expect(() => git(remote, "rev-parse", "refs/heads/feat-x")).toThrow();
   });
 
@@ -138,7 +160,7 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
     h.allowFile = false;
-    await expect(gitWithInstallationAuth(["push", url, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true })).rejects.toBeTruthy();
+    await expect(gitWithInstallationAuth(["push", url, ref()], 1, { hardened: isolate() })).rejects.toBeTruthy();
     expect(existsSync(marker)).toBe(false);
   });
 
@@ -149,13 +171,22 @@ describe("gitWithInstallationAuth hardened (real git)", () => {
     expect(git(remote, "tag", "--list")).toBe("v1");
     git(remote, "tag", "-d", "v1");
     git(remote, "branch", "-D", "feat-x");
-    await gitWithInstallationAuth(["push", remote, "HEAD:refs/heads/feat-x"], 1, { cwd: work, hardened: true });
+    await gitWithInstallationAuth(["push", remote, ref()], 1, { hardened: isolate() });
     expect(git(remote, "rev-parse", "refs/heads/feat-x")).toBe(git(work, "rev-parse", "HEAD"));
     expect(git(remote, "tag", "--list")).toBe("");
   });
 
-  test("hardened without a cwd refuses BEFORE minting a token or running git", async () => {
-    await expect(gitWithInstallationAuth(["push"], 1, { hardened: true })).rejects.toThrow(/requires the workspace cwd/);
+  test("hardened with a stray true, or with a caller cwd, refuses BEFORE minting a token or running git", async () => {
+    await expect(gitWithInstallationAuth(["push"], 1, { hardened: true } as never)).rejects.toThrow(/isolated push directory/);
     expect(h.mint).not.toHaveBeenCalled();
+    await expect(gitWithInstallationAuth(["push"], 1, { hardened: isolate(), cwd: work })).rejects.toThrow(/no cwd/);
+    expect(h.mint).not.toHaveBeenCalled();
+  });
+
+  test("hardened: the push runs from the isolated directory with the workspace objects only as an alternate (the commit is not in the isolated objects)", async () => {
+    const dir = isolate();
+    expect(() => execFileSync("git", ["cat-file", "-e", `${sha}^{commit}`], { env: { ...gitFixtureEnv(root), GIT_DIR: dir.gitDir }, stdio: "pipe" })).toThrow();
+    await gitWithInstallationAuth(["push", remote, ref()], 1, { hardened: dir });
+    expect(git(remote, "rev-parse", "refs/heads/feat-x")).toBe(sha);
   });
 });

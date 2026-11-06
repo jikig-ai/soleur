@@ -8,24 +8,34 @@
  * test/approval/decide-boundary.test.ts walks the import graph to hold that line.
  */
 
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { COMMIT_SHA_RE, type ServerDerived } from "./canonical";
 import { isApprovalQueueEnabled } from "./flag";
 import { notifyApprovalRequested } from "./notify";
+import { reportApprovalOp } from "./ops";
 import type { ApprovalGateDeps } from "./gate-types";
 import type { ExecutionGrants } from "./grants";
 import { consumeApproval, getApprovalStatus, submitApprovalRequest, type ApprovalRpcClient } from "./service";
 import type { WaitStatus } from "./waiters";
+import { readWorkspaceHeadSha, WorkspaceHeadUnreadable } from "./workspace-head";
 
-const execFileAsync = promisify(execFile);
-
-/** The workspace HEAD that `pushBranch` pushes (`HEAD:refs/heads/<branch>`): binding it content-addresses the pushed commits. */
+/**
+ * The workspace HEAD that `pushBranch` pushes (the pinned approved sha): binding it content-addresses the pushed commits.
+ * ADR-309 flip item 9b: read as data by `readWorkspaceHeadSha` (no git child, no environment, no repo config), not with
+ * `git rev-parse HEAD` run in the server process under agent-controlled configuration. A refusal is reported with its closed
+ * reason (the registered `approval-head-read-failed` op; never the Error, never a path) and rethrown, so the existing `approval-bind-failed` report from the gate flow
+ * still fires and the gate still denies; no card is created.
+ */
 async function gitHeadSha(workspacePath: string): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspacePath, timeout: 10_000 });
-  const sha = stdout.trim();
+  let sha: string;
+  try {
+    sha = readWorkspaceHeadSha(workspacePath);
+  } catch (err) {
+    const reason = err instanceof WorkspaceHeadUnreadable ? err.reason : "head_unreadable";
+    reportApprovalOp("headReadFailed", null, { tags: { reason }, extra: { reason } });
+    throw err;
+  }
   if (!COMMIT_SHA_RE.test(sha)) throw new Error("workspace HEAD is not a commit sha");
   return sha;
 }

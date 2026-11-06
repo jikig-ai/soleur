@@ -82,15 +82,21 @@ jobs:
           # Locate the standing tracking issue by label (number is not hardcoded
           # so this survives issue re-creation).
           track_num="$(gh issue list --repo "$GH_REPO" --state open --limit 20 \
-            --label "$TRACK_LABEL" --json number --jq '.[0].number // empty')"
+            --label "$TRACK_LABEL" --json number --jq '.[0].number // empty')" \
+            || { echo "::warning::codeql-1537-watch: tracking-issue lookup failed (transient?) — no-op this run"; exit 0; }
           if [[ -z "$track_num" ]]; then
             echo "::warning::No open issue labelled '${TRACK_LABEL}' found — cannot ping. Create the tracking issue (see the ADR-270 re-tighten recipe)."
             exit 0
           fi
 
-          # Idempotency: only comment once per closure.
-          if gh issue view "$track_num" --repo "$GH_REPO" --json comments \
-              --jq '.comments[].body' 2>/dev/null | grep -cF "$SENTINEL" >/dev/null; then
+          # Idempotency: only comment once per closure. The read must
+          # distinguish a transient gh failure from a clean "not yet pinged"
+          # — piping `gh` into `grep -c` reads failure as empty and would
+          # re-post the sentinel comment on every API blip.
+          comments_body="$(gh issue view "$track_num" --repo "$GH_REPO" \
+            --json comments --jq '.comments[].body' 2>/dev/null)" \
+            || { echo "::warning::codeql-1537-watch: tracking-issue read failed (transient?) — no-op this run"; exit 0; }
+          if grep -qF "$SENTINEL" <<<"$comments_body"; then
             echo "Tracking issue #${track_num} already pinged for this closure; nothing to do."
             exit 0
           fi
@@ -106,6 +112,9 @@ jobs:
 
           gh label create needs-attention --repo "$GH_REPO" \
             --color D93F0B --description "Requires operator action" 2>/dev/null || true
-          gh issue edit "$track_num" --repo "$GH_REPO" --add-label needs-attention 2>/dev/null || true
+          # A swallowed label-edit failure would post the sentinel comment and
+          # no-op every future run while the flag is silently missing — warn.
+          gh issue edit "$track_num" --repo "$GH_REPO" --add-label needs-attention 2>/dev/null \
+            || echo "::warning::needs-attention label apply failed on #${track_num} (transient?) — flag may be missing"
           printf '%s' "$body" | gh issue comment "$track_num" --repo "$GH_REPO" --body-file -
           echo "Pinged tracking issue #${track_num} — ${UPSTREAM}#${UPSTREAM_ISSUE} closed."
