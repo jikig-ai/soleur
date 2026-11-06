@@ -1116,6 +1116,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_WEB_HOST_ESCROW_DIAGNOSE_WORKFLOW_TEST_SH_PATHS=(
   "plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                              # THIS FILE
 )
+# plugins/soleur/test/mint-origin-ca-cert (#10479, ADR-321 slice 2) - parses the workflow and drives the body script through
+# $REPO-built paths no derivation channel reaches, so a later edit to either must still select this guard.
+AFFECTED_PLUGINS_SOLEUR_TEST_MINT_ORIGIN_CA_CERT_TEST_SH_PATHS=(
+  ".github/workflows/mint-origin-ca-cert.yml"
+  "scripts/mint-origin-ca-cert.sh"
+  "plugins/soleur/test/mint-origin-ca-cert.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
   "scripts/apply-delivery-gap.sh"
   ".github/workflows/apply-delivery-gap-follower.yml"

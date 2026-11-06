@@ -28,7 +28,7 @@ import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
-import { HARDENED_GIT_ARGS, buildHardenedGitEnv } from "./git-hardened-env";
+import { HARDENED_GIT_ARGS, assertIsolatedPushDir, buildIsolatedGitEnv, type IsolatedPushDir } from "./git-hardened-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -132,13 +132,15 @@ export interface GitExecOptions {
   cwd?: string;
   timeout?: number;
   /**
-   * Opt-in hardened form (#11636, the cc push only): the shared git hardening args, the unscoped proxy / extra-header resets
-   * (a more specific `http.<url>.*` repo key still wins), a `https`-only transport clamp, an ALLOWLISTED child environment (never
-   * `process.env`) and pinned `GIT_DIR` / `GIT_COMMON_DIR` / `GIT_OBJECT_DIRECTORY`. Requires `cwd` (the workspace), checked before
-   * any token is minted. Unset keeps
-   * the exact legacy argv and environment.
+   * Opt-in hardened form (#11636, ADR-309 9b, the cc push only): run from a server-created isolated bare GIT_DIR (the branded
+   * `IsolatedPushDir` from `createIsolatedPushDir`), never against the workspace `.git`. The child gets the shared git
+   * hardening args, the unscoped proxy / extra-header resets, a `https`-only transport clamp, an ALLOWLISTED environment
+   * (never `process.env`), `GIT_DIR` = the isolated directory, the workspace object store as the only alternate, and
+   * `HOME` = the isolated directory (the askpass script is written inside it). The value is validated at runtime BEFORE any
+   * token is minted (a stray `true`, an unbranded object or an unsafe path refuses), and a caller-supplied `cwd` is refused:
+   * the child's cwd is the isolated directory. Unset keeps the exact legacy argv and environment.
    */
-  hardened?: true;
+  hardened?: IsolatedPushDir;
 }
 
 /**
@@ -290,9 +292,11 @@ export async function gitWithInstallationAuth(
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
   const { hardened, ...execOpts } = opts;
-  // Checked BEFORE the mint: a hardened call without the workspace cwd refuses without minting a token or running git.
-  if (hardened && !execOpts.cwd) {
-    throw new Error("hardened git invocation requires the workspace cwd");
+  // Checked BEFORE the mint: a malformed isolated directory (a stray `true`, an unbranded object, an unsafe path) or a caller
+  // cwd refuses without minting a token or running git. `undefined` is the only legacy value.
+  if (hardened !== undefined) {
+    assertIsolatedPushDir(hardened);
+    if (execOpts.cwd !== undefined) throw new Error("hardened git invocation takes no cwd of its own");
   }
 
   const token = await generateInstallationToken(installationId);
@@ -305,7 +309,7 @@ export async function gitWithInstallationAuth(
     );
   }
 
-  const scriptPath = writeAskpassScript();
+  const scriptPath = hardened ? writeAskpassScriptTo(hardened.gitDir) : writeAskpassScript();
 
   try {
     const fullArgs = [...HELPER_RESET, ...(hardened ? HARDENED_GIT_ARGS : []), ...args];
@@ -323,7 +327,7 @@ export async function gitWithInstallationAuth(
     };
     // Hardened: an allowlisted environment, never the server's. Legacy: unchanged.
     const env: NodeJS.ProcessEnv = hardened
-      ? buildHardenedGitEnv(execOpts.cwd as string, authEnv)
+      ? buildIsolatedGitEnv(hardened, authEnv)
       : { ...process.env, ...authEnv };
 
     // Async exec (non-blocking) — critical for Next.js route handlers
@@ -333,6 +337,8 @@ export async function gitWithInstallationAuth(
     // git RTT, queueing all other requests on the instance.
     const { stdout } = await execFileAsync("git", fullArgs, {
       ...execOpts,
+      // Hardened: the isolated directory, AFTER the spread so nothing the caller passed can place the child elsewhere.
+      ...(hardened ? { cwd: hardened.gitDir } : {}),
       env,
       // Cap stdout to prevent memory spikes on verbose git output.
       maxBuffer: 10 * 1024 * 1024,
