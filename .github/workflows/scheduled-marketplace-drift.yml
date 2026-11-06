@@ -609,6 +609,8 @@ jobs:
           # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure into ""
           # routes to the create branch, so an API blip files a DUPLICATE issue on every
           # subsequent day the drift persists.
+          # dedupe: fail-closed — deliberate list_rc: an unreadable list declines to file
+          # rather than duplicate
           EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
           list_rc=$?
@@ -808,6 +810,7 @@ jobs:
             # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure into ""
             # routes to the create branch, so an API blip files a DUPLICATE issue on every
             # subsequent day the condition persists.
+            # dedupe: fail-closed — deliberate list_rc
             EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
               --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
             list_rc=$?
@@ -898,6 +901,7 @@ jobs:
           close_class() {
             # $1 = title, $2 = the sentence naming what holds again
             local TITLE="$1" REASON="$2" OPEN_NUMS list_rc n
+            # dedupe: fail-closed — deliberate list_rc: declines to close on a blind read
             OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/marketplace-drift" -L 100 \
               --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
             list_rc=$?
