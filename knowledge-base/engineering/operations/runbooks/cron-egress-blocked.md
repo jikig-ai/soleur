@@ -979,14 +979,13 @@ that `rows_in_window` reads are in the same config and need no mapping) prints o
 2026-11-06T12:16:03Z, and the latest resolve of any production incident) and
 `pre_floor_open_prod_incident=`. The daily sweeper reads it while tracker #12189 is enrolled
 (its follow-through directive), so a finding waits up to a day unless the probe is run by hand after the
-retirement apply. The canary shared the production query shape, so it proved non-zero
-delivery on an empty count, not general evaluator health.
+retirement apply.
 
 Read the table against `verdict=` and the one `ACTION REQUIRED:` or `TRANSIENT:` line the probe
 prints beside it; several rows share the same `canary=` and `canary_alert_live=` values. The probe code is
-unchanged by the retirement, so every row still matches a verdict it can print; the rows that name a live
-canary (`canary_alert_live=1`, or the exit 5 asking for the deletion) are reachable only until the retirement
-apply lands.
+unchanged by the retirement, so every row still matches a verdict it can print; the rows that name a declared or
+live canary (`canary_declared=1`, `canary_alert_live=1`, the exit 5 asking for the deletion) or that prescribe
+creating or re-creating one are reachable only until the retirement apply lands, and are historical after it.
 
 | Observation | Reading | Response |
 |---|---|---|
@@ -1015,7 +1014,7 @@ another vendor path (the "auto-resolved" reading of 1048111600 is an inference f
 deletion of its alert, why the canary incident started 64 s before its alert's `created_at`, and what bumps
 alert `updated_at` (inferred vendor churn about every five minutes; the probe never reads it). The earlier
 wording that a null `resolved_by` was ASSUMED to mean "the alert recovered it" is superseded by this paragraph
-and the ADR-218 amendment of 2026-11-06.
+and the ADR-218 soak-floor amendment of 2026-11-06 (#12189).
 
 A Better Stack write (resolving or pausing an incident by hand) needs the owner's
 explicit per-command go-ahead, and so did deleting the canary (a Better Stack
@@ -1030,8 +1029,15 @@ suite accepts the bare targets, and the merge commit carries `[ack-destroy]` on 
 19 to 18 in `logs-alert-query-period-ceiling.test.sh` (`EXPECT_BLOCKS`), in the `== 19` anchor of
 `betterstack-send-failed-alert-mutation.test.sh` and in both census floors of `betterstack-alert-structure.test.sh`;
 `egress-gw-alert.test.sh` dropped its canary block and now pins exactly two `egress_gw_probe_silent*` resources.
-Removing the two `-target` lines and the two census entries is the follow-up #12270 (after the apply), and the
-probe's transport extraction is #12271. The full site list is the `RETIREMENT:` line in the probe header, with its
+Merge when no other infra-path merge is queued behind it: the destroy is authorized by the `[ack-destroy]` line in
+this one merge commit, and the apply workflow keeps one running and one pending run per concurrency group, so a
+newer run can supersede this merge's run. A superseding run has no ack, sees the 2 pending destroys and fails
+the guard closed (nothing is destroyed), and because the bare targets stay, every later infra-path merge then
+fails the same way until a merge commit carries a standalone `[ack-destroy]` line. Read the apply log for
+`Plan: 0 to add, 0 to change, 2 to destroy`; the ack covers a count, not these two addresses, so any other number
+is reported, not acked. Do not start #12270 until the apply log shows `2 destroyed`. Removing the two `-target`
+lines and the two census entries is #12270 (after the apply; it also flips the present-tense lines of this
+record), and the probe's transport extraction is #12271. The full site list is the `RETIREMENT:` line in the probe header, with its
 STATUS line. This was a deletion, not a revert of the inverted shape.
 
 **Unverified after the canary's deletion.** Both facts depend on vendor behavior nothing in this repository

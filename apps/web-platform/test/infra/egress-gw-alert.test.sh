@@ -282,16 +282,16 @@ probe_lit() { [ "$(grep -cE "^$1=" "$PR")" -eq 1 ] && sed -nE "s/^$1=\"([^\"]*)\
 [ "$(probe_lit PROD_NAME)" = "soleur-egress-gw-probe-silent-prd" ] \
   && [ "$(probe_lit EMITTER_TAG)" = "egress-gw-probe" ] \
   && sql_has "$SILENT_SQL" "JSONExtractString\(raw, 'SYSLOG_IDENTIFIER'\) = '$(probe_lit EMITTER_TAG)'" \
-  && ok "G2c: the soak probe's PROD_NAME / EMITTER_TAG are each assigned once and equal the Terraform values" \
-  || no "G2c: the soak probe's alert-name or emitter-tag literals drifted (or are assigned more than once) — it would match no incident and close its tracker over a live recurrence"
+  && ok "G2b: the soak probe's PROD_NAME / EMITTER_TAG are each assigned once and equal the Terraform values" \
+  || no "G2b: the soak probe's alert-name or emitter-tag literals drifted (or are assigned more than once) — it would match no incident and close its tracker over a live recurrence"
 
 # Exact count: the structure suite's resource-count rows are FLOORS and rows 9-10 pass for an extra pair that
 # brings its own exploration, so a stray second egress_gw_probe_silent* pair (the retired #12180 canary re-added
-# under any label) is only visible here.
+# under that label prefix) is only visible here; the label-agnostic block count is EXPECT_BLOCKS in the ceiling suite.
 [ "$(grep -cE '^resource "logtail_exploration(_alert)?" "egress_gw_probe_silent[A-Za-z0-9_]*" \{' <<< "$ALL_TF")" -eq 2 ] \
   && [ "$(grep -cE '^[[:space:]]*name[[:space:]]*=[[:space:]]*"soleur-egress-gw-probe-silent' <<< "$ALL_TF")" -eq 2 ] \
   && ok "G2c: exactly two egress_gw_probe_silent* resources (the production pair; the #12180 canary pair is retired)" \
-  || no "G2c: the egress_gw_probe_silent* resource count is not 2, or the name literal count is not 2 — a second pair (the retired canary, under any resource label, in any .tf) exists, or one is missing"
+  || no "G2c: the egress_gw_probe_silent* resource count is not 2, or the name literal count is not 2 — a second egress_gw_probe_silent* pair (the retired canary re-added under that label prefix, in any .tf) exists, or one is missing; a pair under a different label is caught by the label-agnostic EXPECT_BLOCKS=18 in logs-alert-query-period-ceiling.test.sh"
 
 # ── G3: egress_gw_probe_fail — the previously-Sentry-only verdict failure ────────────────
 FAIL_SQL="$(sql_local egress_gw_probe_fail_sql)"

@@ -588,8 +588,8 @@ _untg="$(comm -23 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt
 # #11631: the two once-a-day dead-man alerts were retired (replaced by archive-fed heartbeats). Their four bare
 # -target= lines were kept in the apply workflow until the first verified apply (a bare -target on an address with no
 # configuration plans its DELETE) and were removed with their census rows after it (#11672). The list below is
-# read from the census's INTENDED_DESTROYS, which holds only the two egress_gw_probe_silent_canary addresses (#12189)
-# until the follow-up that removes their kept targets (#12270): any other bare -target=logtail_* line naming no
+# read from the census's INTENDED_DESTROYS, whose only logtail_* entries are the two egress_gw_probe_silent_canary
+# addresses (#12189) until the follow-up that removes their kept targets (#12270): any other bare -target=logtail_* line naming no
 # declared resource is a stray and fails the check, so a re-added retired line goes red here too.
 # ONE source of truth (#11631 review): the list is READ from the census's INTENDED_DESTROYS, never retyped here, so the
 # two cannot drift. Only the logtail_* addresses count (the other entries are not this suite's business). A missing or

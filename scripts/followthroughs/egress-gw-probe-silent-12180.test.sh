@@ -927,8 +927,8 @@ while IFS= read -r ref; do
   if grep -qF -- "$key" <<<"$retire_block"; then pass "RETIREMENT header names the referrer ${key}"; else fail "RETIREMENT header lacks the referrer ${ref}"; fi
 done < <(git -C "$HERE" grep -lE 'silent_canary|probe-silent-canary' -- ':(top)' ':(top,exclude)knowledge-base/project' ':(top,exclude)scripts/followthroughs' 2>/dev/null)
 # Anti-vacuity: the derivation must have found EXACTLY the files that still name the canary (the set below). This is
-# an explicit set, not a floor: a vacuous derivation and an extra or a dropped referrer both fail. It is a count derived
-# from live repo state after the #12189 retirement removed the .tf and the send-failed suite from the set and the census
+# an explicit set, not a floor: a vacuous derivation and an extra or a dropped referrer both fail. The set was derived
+# from live repo state after #12189: the retirement removed the .tf and the send-failed suite from it and the census
 # joined it (the two INTENDED_DESTROYS entries); it shrinks again when #12270 removes the kept targets and entries.
 # Each referrer is named by the key the RETIREMENT header must carry: its basename, or its number for an ADR.
 EXPECTED_REFERRERS="apply-web-platform-infra.yml
@@ -938,13 +938,16 @@ ADR-218
 betterstack-log-query.md
 cron-egress-blocked.md
 test-infra-privileged-tier-census.sh"
-if [[ "$in_git" -eq 0 ]]; then pass "the referrer derivation is skipped outside a git checkout (nothing to enumerate)"; elif [[ "$(printf '%s\n' "${refs_seen[@]}" | LC_ALL=C sort)" == "$(printf '%s\n' "$EXPECTED_REFERRERS" | LC_ALL=C sort)" ]]; then pass "the referrer derivation found exactly the $ref_n expected files"; else fail "the referrer derivation found a different set than the expected $(printf '%s\n' "$EXPECTED_REFERRERS" | wc -l) files (found $ref_n): git grep did not run, the tree moved, or a file now names the canary"; fi
+refs_seen_s="$(printf '%s\n' ${refs_seen[@]+"${refs_seen[@]}"} | LC_ALL=C sort)"
+refs_want_s="$(printf '%s\n' "$EXPECTED_REFERRERS" | LC_ALL=C sort)"
+if [[ "$in_git" -eq 0 ]]; then pass "the referrer derivation is skipped outside a git checkout (nothing to enumerate)"; elif [[ "$refs_seen_s" == "$refs_want_s" ]]; then pass "the referrer derivation found exactly the $ref_n expected files"; else fail "the referrer derivation found a different set than the expected $(printf '%s\n' "$EXPECTED_REFERRERS" | wc -l) files (found $ref_n): git grep did not run, the tree moved, or a file now names the canary. Only in expected: $(comm -23 <(printf '%s\n' "$refs_want_s") <(printf '%s\n' "$refs_seen_s") | tr '\n' ' ')| only found: $(comm -13 <(printf '%s\n' "$refs_want_s") <(printf '%s\n' "$refs_seen_s") | tr '\n' ' ')"; fi
 if grep -qE 'attributes\.name[[:space:]]*==' <<<"$sut_code"; then pass "incident matching is exact .attributes.name equality"; else fail "incident matching is not exact .attributes.name equality"; fi
 if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then fail "the SUT uses a fuzzy string match (startswith/test/contains)"; else pass "the SUT uses no fuzzy string match"; fi
 
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
-# Re-pin deliberately when rows are added; never lower it to fit a deletion.
+# Re-pin deliberately when rows are added; never lower it to fit a deletion. #12189 lowered it 430 -> 429 because the
+# derived referrer rows went 8 -> 7 (a removed row, not a fitted floor); #12270 lowers it again by the same rule.
 MIN_ASSERTIONS=429
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2

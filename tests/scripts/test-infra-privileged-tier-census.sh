@@ -1236,6 +1236,8 @@ INTENDED_DESTROYS = {
         "doppler_secret.ghcr_read_token": "#8714 ADR-096 5.4",
         "doppler_service_token.ghcr_minter": "#8714 ADR-096 5.4",
         "doppler_secret.ghcr_minter_doppler_token": "#8714 ADR-096 5.4",
+        # #12189: the bare -target lines for these two stay in apply-web-platform-infra.yml for ONE apply (a bare target on
+        # an address with no configuration plans its delete); #12270 removes the targets and these entries together.
         "logtail_exploration_alert.egress_gw_probe_silent_canary": "#12189 retire the #12180 canary pair",
         "logtail_exploration.egress_gw_probe_silent_canary": "#12189 retire the #12180 canary pair",
     },
