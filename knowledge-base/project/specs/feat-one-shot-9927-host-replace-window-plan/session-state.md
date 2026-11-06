@@ -3,7 +3,7 @@
 ## Plan Phase
 - Plan file: knowledge-base/project/plans/2026-11-06-docs-inngest-host-replace-window-plan.md
 - Status: complete
-- cto_spawns=3 (batched ruling spawn T1-T5; R-orphan ruling spawn; at review a third, batched spawn on panel dissents RV-Q1 to RV-Q3, required by the review procedure)
+- cto_spawns=4 (planning cap 2: batched ruling spawn T1-T5 and R-orphan; at review, two batched spawns on panel dissents, RV-Q1 to RV-Q3 and RV-Q4 to RV-Q8, as the review procedure requires)
 - Plan artifact: complete (selector=branch)
 
 ### Errors
@@ -22,3 +22,4 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; cto x2, learnings-researche
 - Panel (report-only, from 1cc02fff31, class non-code, tier single-user incident): git-history-analyzer, pattern-recognition-specialist, security-sentinel, code-quality-analyst, user-impact-reviewer (5 seats).
 - Result: 0 P1 except one from user-impact-reviewer (User-Brand Impact lacked coverage; fixed), P2 and P3 findings fixed inline; see decision-challenges.md rows RV-Q1 to RV-Q3 and RV-fix.
 - structural-cause roll-up: the ledger's clearing rules each named a command that could print a false green (a2 path list, a1 and b without binding to the dispatch SHA, b's SKIP exit 0, c1 with no positive command); one gap, fixed together.
+- Fix round 1 (ADR-267 targeted round, report-only, six seats on the fix diff 1cc02fff31..67f3b43796): 0 P1 from seats except one P1 from the history seat (stale tip: main had moved to 1ee0d6af49); P2 and P3 fixed in this PR's second fix commit; the CTO ruled RV-Q4 to RV-Q8 on the invalidation-rule inconsistencies. Remaining accepted gaps are listed in the plan (Stripe retry window, dead-man window).
