@@ -23,6 +23,7 @@
 
 import { WebSocket, WebSocketServer } from "ws";
 import { createServer, type Server as HttpsServer } from "node:https";
+import { isIPv4 } from "node:net";
 import type { IncomingMessage } from "node:http";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -173,17 +174,29 @@ export function parseProxyPeerAllowlist(csv: string | undefined | null): Set<str
   );
 }
 
+/** Private-net prefix a non-wildcard proxy bind must carry (the web hosts' 10.0.1.0/24). */
+export const PROXY_PRIVATE_BIND_PREFIX = "10.0.1.";
+
+/** Accept only an IPv4 literal that is exactly `0.0.0.0` or starts with the private prefix. */
+export function isAllowedProxyBind(addr: string, prefix: string = PROXY_PRIVATE_BIND_PREFIX): boolean {
+  return isIPv4(addr) && (addr === "0.0.0.0" || addr.startsWith(prefix));
+}
+
 export function createProxyServer(params: {
   onProxiedSession: (ws: WebSocket, ctx: ProxiedSessionContext) => void;
   port?: number;
-  /** The interface to bind. MUST be the host's PRIVATE-net address (e.g.
-   *  10.0.1.x) so the proxy listener is not reachable from the public internet —
-   *  this port carries a token-less pre-authenticated session (AP-2 verifies only
-   *  a valid member PAIR, not the caller's right to act as that user), so binding
-   *  it publicly would make network reachability the only control. Defaults to
-   *  `SOLEUR_PROXY_BIND`; when unset the listener refuses to start (fail-closed —
-   *  never fall back to 0.0.0.0). 3.D supplies the host's reserved private IP. */
+  /** The bind address INSIDE the container's network namespace: an IPv4 literal that
+   *  is exactly `0.0.0.0` (prod: the host's private IP is applied by
+   *  `docker -p <private-ip>:8443:8443`, not by the app) or `10.0.1.x`. Anything else
+   *  (unset, `::`, hostnames, IPv6, public IPs) refuses to start — this port carries a
+   *  token-less pre-authenticated session (AP-2 verifies only a valid member PAIR, not
+   *  the caller's right to act as that user), so a wrong bind would make network
+   *  reachability the only control. Defaults to `SOLEUR_PROXY_BIND`. */
   bindAddress?: string;
+  /** TEST-ONLY seam (a param, deliberately not an env var so a deployed container cannot
+   *  set it): replaces the `10.0.1.` prefix so tests can bind loopback / TEST-NET.
+   *  `net.isIPv4` is still enforced. index.ts never passes it. */
+  privateBindPrefix?: string;
 }): HttpsServer | null {
   const tls = loadProxyTlsServerOptions();
   if (!tls) {
@@ -202,6 +215,23 @@ export function createProxyServer(params: {
           "interfaces (a token-less pre-authenticated session port must bind the private net only)",
       ),
       { feature: "control_plane_route", op: "createProxyServer.no-bind" },
+    );
+    return null;
+  }
+  // The prefix override is a TEST seam only: honoured solely under vitest (VITEST is set by the
+  // runner and never in a production container), so no production call site can lift the
+  // private-net restriction on this token-less pre-authenticated port by passing "".
+  const bindPrefix = process.env.VITEST ? (params.privateBindPrefix ?? PROXY_PRIVATE_BIND_PREFIX) : PROXY_PRIVATE_BIND_PREFIX;
+  if (!isAllowedProxyBind(bindAddress, bindPrefix)) {
+    recordProxyNotStarted("no_bind");
+    // Fail-closed on a wildcard IPv6 (`::`), a hostname, a public or other-subnet IP.
+    // The value is operator config (not secret) but is kept out of the message anyway.
+    reportSilentFallback(
+      new Error(
+        `SOLEUR_PROXY_BIND is not an IPv4 literal of 0.0.0.0 or ${bindPrefix}x — refusing to start ` +
+          "the owner proxy listener (a token-less pre-authenticated session port)",
+      ),
+      { feature: "control_plane_route", op: "createProxyServer.bad-bind" },
     );
     return null;
   }
@@ -228,8 +258,33 @@ export function createProxyServer(params: {
   }
 
   const port = params.port ?? PROXY_LISTEN_PORT;
-  const httpsServer = createServer({ key: tls.key, cert: tls.cert });
-  const wss = new WebSocketServer({ server: httpsServer, path: "/ws-proxy" });
+  // Everything that can throw synchronously on bad TLS material (an unparseable or
+  // mismatched PEM throws ERR_OSSL_* out of https.createServer) is fenced: an unhandled
+  // throw here would reach index.ts un-caught and restart-loop the WHOLE app for a
+  // relay-only fault. Only the error CODE is reported, never the message (which can echo
+  // OpenSSL detail) or any PEM byte.
+  let httpsServer: HttpsServer;
+  let wss: WebSocketServer;
+  try {
+    httpsServer = createServer({ key: tls.key, cert: tls.cert });
+    try {
+      wss = new WebSocketServer({ server: httpsServer, path: "/ws-proxy" });
+    } catch (wssErr) {
+      httpsServer.close(); // never listened; releases the parsed key/cert context
+      throw wssErr;
+    }
+  } catch (err) {
+    const rawCode = (err as NodeJS.ErrnoException | undefined)?.code;
+    const code = typeof rawCode === "string" && /^[A-Z0-9_]{1,64}$/.test(rawCode) ? rawCode : undefined;
+    recordProxyNotStarted("error");
+    reportSilentFallback(new Error(`proxy TLS server setup failed (${code ?? "unknown"})`), {
+      feature: "control_plane_route",
+      op: "createProxyServer.tls-setup",
+      message: "owner proxy listener TLS setup failed; relay not serving on this host",
+      extra: { code },
+    });
+    return null;
+  }
 
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
     // Reject any connection whose private-net source is not a known web-host peer
