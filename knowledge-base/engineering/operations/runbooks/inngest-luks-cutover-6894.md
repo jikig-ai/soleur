@@ -910,8 +910,8 @@ route.
 ## 2026-11-06 — the two-copy resolver decision is deliberate (#10112)
 
 `/usr/local/bin/inngest-luks-open.sh` (a `write_files` entry in `cloud-init-inngest.yml`, run by
-`inngest-luks-open.service`, `WantedBy=multi-user.target` so it runs from boot 1 onward — as
-`reopen_noop` until boot ≥2) and the first-boot runcmd `STAGE=resolve`
+`inngest-luks-open.service`, started on boot 1 by `enable --now` and on boots ≥2 by its
+`WantedBy=multi-user.target` — as `reopen_noop` until boot ≥2) and the first-boot runcmd `STAGE=resolve`
 block each carry their own copy of the resolver decision — pointer absent → the one rendered volume;
 pointer `== LUKS_ID` → the pointer arm; anything else → refuse. The duplication is **accepted in
 writing** (this section is that acceptance; ADR-142 addendum 2026-11-06 records the same disposition),

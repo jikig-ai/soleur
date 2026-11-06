@@ -17,7 +17,7 @@ body. All premises re-verified against `origin/main` (`4e0f90b`) on 2026-11-06.
 returns zero hits. The image-baked executor trio
 (`inngest-luks-cutover.sh`, `inngest-luks-cutover.service`,
 `inngest-luks-cutover.timer`) does not exist on `origin/main` — retired by the
-late-October host-replace prework (2026-10-24), which subsumes the issue's
+late-October host-replace prework (2026-10-26), which subsumes the issue's
 "strip plaintext vocabulary + new image + pin bump" ask: there is nothing left
 to strip. Item 1 is closed upstream.
 
