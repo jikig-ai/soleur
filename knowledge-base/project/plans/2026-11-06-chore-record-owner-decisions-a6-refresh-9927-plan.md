@@ -19,6 +19,29 @@ requires_cpo_signoff: true
 Ref #9927 and Ref #12158. This PR never uses a closing keyword for either issue (the epic stays open).
 Spec lacks a valid `lane:` (no spec.md exists for this branch) - defaulted to `cross-domain` (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06
+**Research agents used (plan and deepen passes):** repo-research-analyst, learnings-researcher, CTO (three calls), CLO (two calls), CPO, the five-seat plan-review panel (code-simplicity, DHH lens, Kieran, architecture-strategist, spec-flow), and a sharp-edges verification agent that read the whole catalogue. The deepen pass did not fan out a second 40-agent sweep: this is a docs-and-evidence plan with one small probe script, every axis was already ruled by a domain leader, and no framework or library documentation is involved (Context7 and web research skipped on purpose).
+
+### Key improvements
+
+1. The write-token delivery was corrected twice by repo evidence (shared Tier-B loader exposure -> `inngest-cutover` environment secret, D1b; Terraform-declared token, D1c).
+2. The revisit probe was simplified to a date-only config check after two reviewers showed its comment read could never fire (trusted-verdict marker shape, missing `GH_TOKEN`) and the CTO amended D3 (D3-r1).
+3. The A6 draft's old agent-written statement block is deleted rather than kept next to the empty owner field (CLO L1-r); the file keeps its name until the signing event (CLO L1 dissent, row O8).
+4. Acceptance Criteria now carry runnable commands, a pre-merge and a post-merge split, and a wording gate whose regex cannot match `unsigned`.
+
+### New considerations discovered
+
+- #10136 was closed today; links go to #10382 plus a SHA-based permalink comment on #10136.
+- A queued or ejected merge must post no comment; every comment carries an idempotency marker.
+- The sweeper refuses a non-executable probe before it checks `earliest=`.
+- The registration surface of a new suite includes `scripts/lib/test-affected-paths.sh` (a suite-path entry beside the `zot-soak-6122.test.sh` line and a `glob:` anchor row), or the PR falls back to the full battery.
+
+### Deepen-pass verification (live, 2026-11-06)
+
+Gates 4.6 (User-Brand Impact present, threshold valid), 4.7 (Observability 5-field block added; the scripts and knowledge-base paths make the gate apply; probe command `git ls-files -s scripts/followthroughs/arm-token-revisit-*.sh` expects `100755`), 4.8 (no PAT-shaped match), 4.9 (no UI surface), 4.10 (no store or connection introduced), 4.11 (`lint-guard-contract.py` exit 0), 4.12 (one unfenced `## Scope Check`), 4.13 (not triggered) pass. Live checks: labels `follow-through`, `priority/p3-low`, `type/chore`, `domain/engineering`, `deferred-scope-out` and milestone `Post-MVP / Later` exist; PR 12210 MERGED; #12158, #12218, #8881, #7942, PR 12219 OPEN; commit `b959fe4b84` exists (the last edit of the A6 draft, a SHA candidate for the replacement note; step 2.4 re-derives it from `git log --follow`); rule ids `cq-write-failing-tests-before`, `wg-when-deferring-a-capability-create-a`, `hr-weigh-every-decision-against-target-user-impact` are active in `AGENTS.md`; `scripts/lint-orphan-test-suites.sh`, `scripts/lib/test-affected-paths.sh`, `scripts/suite-shard-legs.tsv` and `scripts/ci-pr-affected-audit.accept.tsv` exist; `bun test plugins/soleur/test/terraform-target-parity.test.ts` printed 365 pass, 0 fail.
+
 ## Overview
 
 A docs-and-evidence run for the Inngest sole-copy volume epic (volume `106903269`, ADR-282). Four things, nothing else:
@@ -251,7 +274,7 @@ Status words are the CPO set: `decided`, `funded in principle, no spend committe
 5.1 The tracker (filed in step 0.1 without the label and the directive, to get `<N>`): title "follow-through: arm-token revisit (next host replace or 2027-01-08), Ref #9927 Ref #12158", labels `priority/p3-low`, `type/chore`, `domain/engineering`, milestone `Post-MVP / Later` (the same as #12158). Body: the revisit question, the exposure in one line (link to the ADR addendum), the probe's limits (measures config not Doppler; "next host replace" half is carried by #12158 step 4 and prose), the recorded decision (the appended #12158 comment, then close this tracker and remove its label; a keep decision files the next tracker with a new date at most 90 days out), and the line "not enrolled until the probe is on main". If this PR is abandoned, close the tracker.
 5.2 Write the suite first (cq-write-failing-tests-before): `scripts/followthroughs/arm-token-revisit-<N>.test.sh` - the seven mutants of the Guard Contract as mutants, about five cases (exit 5 with all three present, only the target line, only the declaration; exit 2 with none; exit 3 unreadable), the exit-set assertion {2,3,5}, the 100755 mode assertion, synthesized fixtures and a test-only env override for the two file paths (the sweeper runs probes under `env -i`).
 5.3 Write the probe from `plugins/soleur/skills/ship/references/followthrough-stub-template.sh`: header with notify-only, credential posture ("none: reads two tracked files; no `secrets=`"), the residuals from the Guard Contract Anchor and a `RETIREMENT:` line listing every site (probe, suite, the three registration files, the directive). `chmod 755`.
-5.4 Register once: a `run_suite` line in `scripts/test-all.sh` beside the zot-soak registrations (about line 6067), away from Guard 1's line; one `scripts/suite-shard-legs.tsv` row on a light leg (check the manifest tests); the `AFFECTED_*_PATHS` block and `ALWAYS_ON_SUITES` entry in `scripts/lib/test-affected-paths.sh` (otherwise the PR falls back to the full battery). `scripts/ci-pr-affected-audit.accept.tsv` only if the audit demands rows. Run `bash scripts/lint-orphan-test-suites.sh`.
+5.4 Register once: a `run_suite` line in `scripts/test-all.sh` beside the zot-soak registrations (about line 6067), away from Guard 1's line; one `scripts/suite-shard-legs.tsv` row on a light leg (check the manifest tests); the `AFFECTED_*_PATHS` block and `ALWAYS_ON_SUITES` entry in `scripts/lib/test-affected-paths.sh`, copying the two `zot-soak-6122` entries (the suite path near `scripts/followthroughs/zot-soak-6122.test.sh` and the `glob:scripts/followthroughs/*zot-soak-6122*.sh` anchor row) - otherwise the PR falls back to the full battery. `scripts/ci-pr-affected-audit.accept.tsv` only if the audit demands rows. Run `bash scripts/lint-orphan-test-suites.sh`.
 5.5 After the merge shows the probe on main: edit the tracker's own body to add the unfenced column-0 directive and add the label (AC 12); the first sweep logging "earliest=... not yet reached -- skipping" is the enrollment evidence. This step is an owned item of the post-merge phase, not prose.
 
 ### Phase 6 - GitHub comments (none of them a closing action)
@@ -298,7 +321,38 @@ Acknowledged: #8881 (`scripts/suite-shard-legs.tsv`) and #7942 (`scripts/test-al
 
 ## Observability
 
-The only executed code is the notify-only probe under the existing follow-through sweeper (not a new autonomous-task surface: no workflow, Inngest function, timer or daemon). Its signal is the sweeper's own issue comment with the exit word (`NOT YET`, `ACTION REQUIRED`, `CANNOT ESTABLISH`), read with `gh issue view <tracker> --comments`, no SSH. The Hetzner API read runs once in the work session and its failure classes are written into the record. Not a post-deploy soak: the 2027-01-08 date is a decision date.
+The only executed code is the notify-only probe under the existing follow-through sweeper (not a new autonomous-task surface: no workflow, Inngest function, timer or daemon; Task-Design gate not triggered). The Hetzner API read runs once in the work session and its failure classes are written into the record. Not a post-deploy soak: the 2027-01-08 date is a decision date, enrolled through the sweeper's `earliest=` gate.
+
+```yaml
+liveness_signal:
+  what: the daily follow-through sweeper comment on the revisit tracker, carrying the probe's exit word (NOT YET, ACTION REQUIRED, CANNOT ESTABLISH)
+  cadence: daily from 2027-01-08T00:00:00Z (the sweeper skips the tracker before its earliest= date)
+  alert_target: the open revisit tracker issue (domain/engineering) and the sweeper's own run summary
+  configured_in: the unfenced column-0 directive in the tracker body, scripts/sweep-followthroughs.sh, scripts/followthroughs/arm-token-revisit-<N>.sh
+
+error_reporting:
+  destination: the sweeper comment on the tracker (no Sentry project; the probe holds no credential and calls no network)
+  fail_loud: probe exit 3 renders CANNOT ESTABLISH in the comment heading when either tracked file is unreadable; exit 5 renders ACTION REQUIRED while any arm-token member is still in config
+
+failure_modes:
+  - mode: tracker never enrolled (label or directive missing, or the probe committed non-executable)
+    detection: the post-merge predicate in Acceptance Criteria 12 and the sweeper's own "not executable" or "script missing" log line
+    alert_route: the sweeper run summary and the PR's post-merge phase
+  - mode: probe silenced by a revoke change that removes the target lines but leaves the token resource
+    detection: the resource declaration is the third member the probe checks
+    alert_route: exit 5 ACTION REQUIRED comment on the tracker
+  - mode: the probe measures config and not Doppler (a destroy never applied)
+    detection: stated residual, carried by the #12158 comment and the owner-gated destroy step
+    alert_route: the #12158 tracker
+
+logs:
+  where: the tracker issue comments (gh issue view <N> --comments) and the sweeper workflow run log
+  retention: GitHub issue history, indefinite; workflow run logs per repository retention
+
+discoverability_test:
+  command: git ls-files -s scripts/followthroughs/arm-token-revisit-*.sh
+  expected_output: 100755
+```
 
 ## Infrastructure and Encryption
 
