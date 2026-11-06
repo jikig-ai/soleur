@@ -40,7 +40,8 @@
 # THE PIN IS A STORED VALUE. It is the canary alert's `created_at` (2026-11-06T12:16:03.768Z) from apply run
 # 42216140017, which ran 12:14:26Z to 12:17:27Z, so the production alert's shape change landed somewhere inside that
 # run and the pin may be later than the true change by up to about 1.6 minutes (the slack covers it) and earlier than it by up to
-# about 83 s (an old-shape incident opening in that gap would read as a recurrence: a false exit 5, cleared by a hand close or a re-pin). It is a literal
+# about 83 s (an old-shape incident opening up to about 383 s before the change, the slack plus that gap, would read as a recurrence:
+# a false exit 5, cleared by a hand close or a re-pin). It is a literal
 # because the exit-0 read happens AFTER the canary alert is deleted, when no alert exists to read. A reshape of the
 # production alert's evaluated query, `on_missing_data` or `query_period` that keeps `higher_than 0` is invisible to the
 # shape check, so a follow-up commit measured from that apply run (the reshape PR itself cannot know the apply time) must
