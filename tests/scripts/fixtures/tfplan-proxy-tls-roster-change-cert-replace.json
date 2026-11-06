@@ -1,0 +1,20 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.10.5",
+  "resource_changes": [
+    {
+      "address": "tls_self_signed_cert.proxy_server[0]",
+      "type": "tls_self_signed_cert",
+      "name": "proxy_server",
+      "index": 0,
+      "change": { "actions": ["delete", "create"], "before": {}, "after": {} }
+    },
+    {
+      "address": "doppler_secret.proxy_tls_cert[0]",
+      "type": "doppler_secret",
+      "name": "proxy_tls_cert",
+      "index": 0,
+      "change": { "actions": ["update"], "before": {}, "after": {} }
+    }
+  ]
+}

@@ -94,7 +94,7 @@ vi.mock("../server/readiness", () => ({
   handleReadyzRequest: vi.fn(),
   verifyWorkspacesMountOnce: vi.fn(),
 }));
-vi.mock("../server/loopback", () => ({ isLoopbackHost: vi.fn() }));
+vi.mock("../server/loopback", () => ({ isLoopbackHost: vi.fn(), hasProxyMarkers: vi.fn() }));
 vi.mock("@/server/inngest/send-with-retry", () => ({ sendInngestWithRetry: vi.fn() }));
 vi.mock("@/server/observability", () => ({ reportSilentFallback: vi.fn() }));
 // #8495: the watchdog dispatch clock is armed at boot and stopped on SIGTERM.

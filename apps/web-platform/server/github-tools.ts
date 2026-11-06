@@ -39,6 +39,33 @@ interface BuildGithubToolsOpts {
   grants: ExecutionGrants;
 }
 
+/**
+ * Options of the exported push builder (#11636). Everything but `branch`/`force` is CLOSED OVER here, never model input.
+ * `grants` is REQUIRED (a forgotten wiring is a compile error) and `requireGrant` is a REQUIRED boolean: the cc dispatcher
+ * passes `true`, so a call that reaches the handler without a gate-written grant is refused even when the sticky
+ * `enforcing` bit never turned on; the legacy runner (`buildGithubTools`) passes `false` and keeps its legacy parity.
+ */
+export interface BuildGithubPushBranchToolOpts {
+  installationId: number;
+  owner: string;
+  repo: string;
+  defaultBranch: string;
+  workspacePath: string;
+  readonly grants: ExecutionGrants;
+  requireGrant: boolean;
+}
+
+/**
+ * Appended (strict cc path only) to a push failure that happened AFTER the Owner's approval was consumed. Static: no input,
+ * path or git output. Without it the model retries the identical call, which opens a fresh Owner approval for nothing. Worded
+ * "may not have been pushed": a timeout or a killed child can fail the call after the remote already accepted the ref.
+ */
+export const PUSH_FAILED_APPROVAL_SPENT =
+  "The Owner's approval for this push is spent. A retry needs a new Owner approval. The branch may not have been pushed: tell the user the push failed and why, and that it may not have landed, before you try again.";
+
+/** The soleur_platform FQN of the approval-gated push tool (the gate, the tier map and the cc registrar key on it). */
+export const GITHUB_PUSH_BRANCH_TOOL_FQN = "mcp__soleur_platform__github_push_branch";
+
 type ToolTextResponse = {
   content: Array<{ type: "text"; text: string }>;
   isError?: true;
@@ -91,6 +118,77 @@ async function wrapToolHandler<T>(
 /** Read-tool variant: results carry third-party text, so frame them as untrusted data. */
 const wrapGithubRead = <T>(errorPrefix: string, fn: () => Promise<T>): Promise<ToolTextResponse> =>
   wrapToolHandler(errorPrefix, fn, true, "github");
+
+/**
+ * The approval-gated `github_push_branch` tool (#1929, #4672, #11636). Exported so the cc dispatcher can register exactly this
+ * tool (through `cc-github-push.ts`) without taking the rest of the GitHub family. `buildGithubTools` builds it with
+ * `requireGrant: false`, so the legacy runner's tool list and behaviour are unchanged.
+ */
+export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): GithubTool {
+  const { installationId, owner, repo, defaultBranch, workspacePath, grants, requireGrant } = opts;
+  return tool(
+    "github_push_branch",
+    "Push the current workspace HEAD to a feature branch on the remote. " +
+      "Requires founder approval via review gate. Force-push and push to " +
+      "main/master are blocked unconditionally.",
+    {
+      branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
+      force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
+    },
+    async (args): Promise<ToolTextResponse> => {
+      const toolName = GITHUB_PUSH_BRANCH_TOOL_FQN;
+      const grant = checkGrant(grants, toolName, args);
+      if (grant.kind === "refuse") return grantRefusalResponse("grant_missing");
+      // cc (#11636): a `legacy` outcome means no gate-written grant exists for this call (the gate never ran, or another allow
+      // source handed the call to the handler): refuse and report, never the legacy HEAD push. A separate statement so the
+      // refuse line above stays intact.
+      if (grant.kind === "legacy" && requireGrant) {
+        reportGrantRefused(toolName, "grant_missing");
+        return grantRefusalResponse("grant_missing");
+      }
+      // A grant that does not carry the approved commit cannot say WHAT was approved: refuse, never fall back to HEAD.
+      if (grant.kind === "granted" && !grant.binding.headSha) {
+        reportGrantRefused(toolName, "commit_mismatch");
+        return grantRefusalResponse("commit_mismatch");
+      }
+      let commitUnavailable = false;
+      const result = await wrapToolHandler("Error pushing branch", async () => {
+        try {
+          const pushed = await pushBranch({
+            installationId,
+            owner,
+            repo,
+            workspacePath,
+            branch: args.branch,
+            force: args.force,
+            defaultBranch,
+            // The exact commit the Owner approved (not whatever HEAD is now); undefined on the legacy path.
+            commitSha: grant.kind === "granted" ? grant.binding.headSha : undefined,
+            // The strict (cc) builder pushes in the hardened form; the legacy runner's call is unchanged (key absent).
+            ...(requireGrant ? { hardened: true as const } : {}),
+          });
+          // With a grant the result names the commit that landed (the one the Owner approved), so the model reports THAT commit
+          // and not whatever HEAD is by now; without one (the legacy path) the shape is unchanged.
+          return grant.kind === "granted" ? { ...pushed, commit: grant.binding.headSha } : pushed;
+        } catch (err) {
+          // By name, not instanceof: the class lives in push-branch.ts and a module double of it must not break the refusal.
+          if (err instanceof Error && err.name === "ApprovedCommitUnavailableError") commitUnavailable = true;
+          throw err;
+        }
+      }, /* pretty */ false);
+      if (commitUnavailable) {
+        reportGrantRefused(toolName, "commit_unavailable");
+        return grantRefusalResponse("commit_unavailable");
+      }
+      // The approval was consumed before the handler ran: say so on a failure, strict (cc) path only.
+      if (requireGrant && result.isError) {
+        const original = result.content.find((b) => b.type === "text")?.text ?? "";
+        return { ...result, content: [{ type: "text", text: `${original}\n${PUSH_FAILED_APPROVAL_SPENT}` }] };
+      }
+      return result;
+    },
+  );
+}
 
 export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsResult {
   const { installationId, owner, repo, defaultBranch, workspacePath, workflowRateLimiter, grants } = opts;
@@ -181,51 +279,15 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     ),
   );
 
-  const pushBr = tool(
-    "github_push_branch",
-    "Push the current workspace HEAD to a feature branch on the remote. " +
-      "Requires founder approval via review gate. Force-push and push to " +
-      "main/master are blocked unconditionally.",
-    {
-      branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
-      force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
-    },
-    async (args): Promise<ToolTextResponse> => {
-      const toolName = "mcp__soleur_platform__github_push_branch";
-      const grant = checkGrant(grants, toolName, args);
-      if (grant.kind === "refuse") return grantRefusalResponse("grant_missing");
-      // A grant that does not carry the approved commit cannot say WHAT was approved: refuse, never fall back to HEAD.
-      if (grant.kind === "granted" && !grant.binding.headSha) {
-        reportGrantRefused(toolName, "commit_mismatch");
-        return grantRefusalResponse("commit_mismatch");
-      }
-      let commitUnavailable = false;
-      const result = await wrapToolHandler("Error pushing branch", async () => {
-        try {
-          return await pushBranch({
-            installationId,
-            owner,
-            repo,
-            workspacePath,
-            branch: args.branch,
-            force: args.force,
-            defaultBranch,
-            // The exact commit the Owner approved (not whatever HEAD is now); undefined on the legacy path.
-            commitSha: grant.kind === "granted" ? grant.binding.headSha : undefined,
-          });
-        } catch (err) {
-          // By name, not instanceof: the class lives in push-branch.ts and a module double of it must not break the refusal.
-          if (err instanceof Error && err.name === "ApprovedCommitUnavailableError") commitUnavailable = true;
-          throw err;
-        }
-      }, /* pretty */ false);
-      if (commitUnavailable) {
-        reportGrantRefused(toolName, "commit_unavailable");
-        return grantRefusalResponse("commit_unavailable");
-      }
-      return result;
-    },
-  );
+  const pushBr = buildGithubPushBranchTool({
+    installationId,
+    owner,
+    repo,
+    defaultBranch,
+    workspacePath,
+    grants,
+    requireGrant: false,
+  });
 
   // ---------------------------------------------------------------------------
   // Read-only issue/PR tools (#2843). Matching pattern: readCi/readLogs —
@@ -304,7 +366,7 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       "mcp__soleur_platform__github_read_ci_status",
       "mcp__soleur_platform__github_read_workflow_logs",
       "mcp__soleur_platform__github_trigger_workflow",
-      "mcp__soleur_platform__github_push_branch",
+      GITHUB_PUSH_BRANCH_TOOL_FQN,
       "mcp__soleur_platform__github_read_issue",
       "mcp__soleur_platform__github_read_issue_comments",
       "mcp__soleur_platform__github_read_pr",

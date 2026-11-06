@@ -1331,18 +1331,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   - the spread placement group attaches to the RUNNING hcloud_server.web and
   //     forces a power-off reboot — a maintenance-window apply, same class as the
   //     host it groups;
-  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets are
-  //     count-gated on var.host_proxy_tls_enabled (default false, #8754 / ADR-118
-  //     amendment) and exist only after the multi-host flip, which must move all
-  //     four to a -target list in the same change (doppler_secret, not the
-  //     CI-published token types the test forces).
+  //   - the host↔host proxy TLS quartet (tls_private_key.proxy_server,
+  //     tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key,
+  //     doppler_secret.proxy_tls_cert) LEFT this set at the multi-host flip (#12167 /
+  //     ADR-118 amendment 2026-09-27): host_proxy_tls_enabled now defaults true and all
+  //     four ride the per-merge saved plan, key and cert together. Pinned by the
+  //     "#8754 PR-B" describe below.
   "tls_private_key.git_remove",
   "doppler_secret.git_remove_ssh_private_key",
   "hcloud_placement_group.web_spread",
-  "tls_private_key.proxy_server",
-  "tls_self_signed_cert.proxy_server",
-  "doppler_secret.proxy_tls_key",
-  "doppler_secret.proxy_tls_cert",
   // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
   // (monitor, web-1 pool, LB on app.soleur.ai). Stays deliberately excluded after
   // the 2026-10-30 CF_API_TOKEN widen (the 2026-10-27 code-10000 premise below is
@@ -6457,7 +6454,7 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(res).not.toMatch(/ignore_changes/);
   });
 
-  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default false", () => {
+  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default true after the multi-host flip (#12167)", () => {
     const src = tf("proxy-tls.tf");
     const quartet: Array<[string, string]> = [
       ["tls_private_key", "proxy_server"],
@@ -6473,7 +6470,8 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(ungated).toEqual([]);
     const v = block(tf("variables.tf"), /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
     expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
-    expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*true\s*$/m);
+    expect(v).not.toMatch(/^\s*default\s*=\s*false\s*$/m);
   });
 
   test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
@@ -6483,16 +6481,33 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
   });
 
-  test("no workflow targets the gated resources or overrides their gate variables", () => {
-    const gated = [
+  test("the proxy-TLS quartet rides the per-merge saved plan (key and cert together), out of the exclusion set (#12167)", () => {
+    // Inverted from "no workflow targets the gated resources" at the multi-host flip (ADR-118
+    // amendment 2026-09-27). Targeting the cert alone writes a cert to prd with no matching key,
+    // so the four are asserted as a unit: all in, or the row is red.
+    const quartet = [
       "tls_private_key.proxy_server",
       "tls_self_signed_cert.proxy_server",
       "doppler_secret.proxy_tls_key",
       "doppler_secret.proxy_tls_cert",
-      "doppler_secret.inngest_config_digest",
     ];
+    expect(missingFrom(quartet, planTargets)).toEqual([]);
+    expect(presentIn(quartet, OPERATOR_APPLIED_EXCLUSIONS)).toEqual([]);
+    // The saved plan is the ONLY route: the dispatch jobs must not carry any of the four. The
+    // birth gate demands zero destroys, so it cannot grade a SAN-driven cert replace.
+    const dispatchJobs = ["web_host_create", "web_host_replace"];
+    const dispatchTargets = extractAllTargets(dispatchJobs.map((j) => extractJobBlock(wf, j)).join("\n"));
+    expect(dispatchTargets.has("hcloud_server.web")).toBe(true); // non-vacuity
+    expect(presentIn(quartet, dispatchTargets)).toEqual([]);
+  });
+
+  test("no workflow targets the still-gated resources or overrides any gate variable", () => {
+    const gated = ["doppler_secret.inngest_config_digest"];
     expect(presentIn(gated, anyFormTargets)).toEqual([]);
     expect(gated.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    // host_proxy_tls_enabled is flipped by its variables.tf default, never by a workflow
+    // input, -var or TF_VAR route (the "no TF_VAR route" ruling for #12167).
+    expect(writeSurface).not.toMatch(/TF_VAR_host_proxy_tls_enabled/i);
     // A `-var`/TF_VAR_ override in a workflow would flip the gate without touching variables.tf.
     expect(writeSurface).not.toMatch(/\bhost_proxy_tls_enabled\b/);
     expect(writeSurface).not.toMatch(/-var[= ]+['"]?inngest_config_digest=|TF_VAR_inngest_config_digest/);
