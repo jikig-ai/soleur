@@ -100,6 +100,9 @@ import {
 } from "../server/git-isolated-push-dir";
 import { isSafeGitPath } from "../server/git-hardened-env";
 
+// A spawn of a non-git program (mkfifo, openssl) reads no git configuration; it still gets an explicit, minimal env.
+const NON_GIT_ENV = { PATH: process.env.PATH ?? "" } as unknown as NodeJS.ProcessEnv;
+
 // The chmod-based fixtures cannot make a path unreadable for uid 0 (root bypasses the mode bits), so those tests skip as root.
 const isRoot = process.getuid?.() === 0;
 
@@ -418,7 +421,7 @@ describe("createIsolatedPushDir", () => {
       test("a FIFO entry that vanishes before its lstat is skipped (ENOENT), the creation succeeds; present, it is still a redirect", { timeout: 10_000 }, () => {
         const dir = join(ws, ".git", "objects", fanOut());
         const fifo = join(dir, "f".repeat(38));
-        execFileSync("mkfifo", [fifo]);
+        execFileSync("mkfifo", [fifo], { env: NON_GIT_ENV });
         expect(reasonOf()).toBe("object_store_redirect"); // control: the same entry, not vanished
         h.lstatFault = { suffix: `/${"f".repeat(38)}`, code: "ENOENT" };
         createIsolatedPushDir(ws).dispose();
@@ -476,20 +479,20 @@ describe("createIsolatedPushDir", () => {
       const dir = join(ws, ".git", "objects", sha.slice(0, 2));
       const name = readdirSync(dir)[0];
       rmSync(join(dir, name));
-      execFileSync("mkfifo", [join(dir, name)]);
+      execFileSync("mkfifo", [join(dir, name)], { env: NON_GIT_ENV });
       expect(reasonOf()).toBe("object_store_redirect");
     });
 
     test("a FIFO named pack-<40hex>.idx is refused (object_store_redirect)", { timeout: 10_000 }, () => {
       git(ws, "gc", "-q");
-      execFileSync("mkfifo", [join(ws, ".git", "objects", "pack", `pack-${"a".repeat(40)}.idx`)]);
+      execFileSync("mkfifo", [join(ws, ".git", "objects", "pack", `pack-${"a".repeat(40)}.idx`)], { env: NON_GIT_ENV });
       expect(reasonOf()).toBe("object_store_redirect");
     });
 
     test("a FIFO as the objects/info entry and a unix socket under objects/pack are refused", { timeout: 10_000 }, async () => {
       mkdirSync(join(ws, ".git", "objects", "info"), { recursive: true });
       const fifo = join(ws, ".git", "objects", "info", "commit-graph");
-      execFileSync("mkfifo", [fifo]);
+      execFileSync("mkfifo", [fifo], { env: NON_GIT_ENV });
       expect(reasonOf()).toBe("object_store_redirect");
       rmSync(fifo);
       mkdirSync(join(ws, ".git", "objects", "pack"), { recursive: true });
@@ -569,7 +572,7 @@ describe("createIsolatedPushDir", () => {
     });
 
     test("a FIFO shallow is refused instead of blocking", { timeout: 10_000 }, () => {
-      execFileSync("mkfifo", [join(ws, ".git", "shallow")]);
+      execFileSync("mkfifo", [join(ws, ".git", "shallow")], { env: NON_GIT_ENV });
       expect(reasonOf()).toBe("shallow_invalid");
     });
 
@@ -828,7 +831,7 @@ describe("createIsolatedPushDir", () => {
     test("the chmod'd and FIFO-planted workspace entries the creator never opens do not matter (index, config, HEAD, hooks)", { timeout: 10_000 }, () => {
       for (const f of ["index", "config", "HEAD"]) {
         rmSync(join(ws, ".git", f), { force: true });
-        execFileSync("mkfifo", [join(ws, ".git", f)]);
+        execFileSync("mkfifo", [join(ws, ".git", f)], { env: NON_GIT_ENV });
       }
       createIsolatedPushDir(ws).dispose();
       expect(lstatSync(join(ws, ".git", "config")).isFIFO()).toBe(true);

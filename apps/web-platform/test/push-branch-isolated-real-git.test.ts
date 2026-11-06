@@ -43,6 +43,9 @@ import { HARDENED_ENV_ALLOWLIST, HARDENED_GIT_ARGS, buildIsolatedGitEnv } from "
 import { createIsolatedPushDir, IsolatedPushDirRefusal } from "../server/git-isolated-push-dir";
 import { GIT_HARDENING_ENV } from "../server/inngest/functions/_git-hardening";
 
+// A spawn of a non-git program (mkfifo, openssl) reads no git configuration; it still gets an explicit, minimal env.
+const NON_GIT_ENV = { PATH: process.env.PATH ?? "" } as unknown as NodeJS.ProcessEnv;
+
 const git = (cwd: string, ...args: string[]): string =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.test", ...args], {
     cwd,
@@ -194,7 +197,7 @@ let proxy: Awaited<ReturnType<typeof startProxy>>;
 
 describe("preconditions (fail loudly, never skip)", () => {
   test("the openssl CLI is installed (a declared dependency of this suite)", () => {
-    expect(() => execFileSync("openssl", ["version"], { stdio: "pipe" })).not.toThrow();
+    expect(() => execFileSync("openssl", ["version"], { stdio: "pipe", env: NON_GIT_ENV })).not.toThrow();
   });
 });
 
@@ -209,7 +212,7 @@ beforeAll(async () => {
       "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", keyFile, "-out", certFile,
       "-days", "2", "-subj", "/CN=localhost", "-addext", "subjectAltName=IP:127.0.0.1,DNS:localhost,DNS:evil.test",
     ],
-    { stdio: "pipe" },
+    { stdio: "pipe", env: NON_GIT_ENV },
   );
   tls = await startTls(readFileSync(keyFile, "utf8"), readFileSync(certFile, "utf8"));
   proxy = await startProxy();
@@ -593,7 +596,7 @@ describe("push from an isolated GIT_DIR (real git)", () => {
     test("config, HEAD, hooks, index and refs replaced by FIFOs: the push still succeeds (any read would hang or fail)", async () => {
       for (const entry of ["config", "HEAD", "hooks", "index", "refs"]) {
         rmSync(join(ws, ".git", entry), { recursive: true, force: true });
-        execFileSync("mkfifo", [join(ws, ".git", entry)]);
+        execFileSync("mkfifo", [join(ws, ".git", entry)], { env: NON_GIT_ENV });
       }
       h.protocol = "https:file";
       const r = await runIsolated(ws, ["push", remote, refspec()]);

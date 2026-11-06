@@ -49,6 +49,9 @@ vi.mock("node:child_process", async () => {
 
 import { WorkspaceHeadUnreadable, readSmallRegularFile, readWorkspaceHeadSha } from "../../server/approval/workspace-head";
 
+// A spawn of a non-git program (mkfifo, openssl) reads no git configuration; it still gets an explicit, minimal env.
+const NON_GIT_ENV = { PATH: process.env.PATH ?? "" } as unknown as NodeJS.ProcessEnv;
+
 const roots: string[] = [];
 afterAll(() => {
   for (const r of roots) rmSync(r, { recursive: true, force: true });
@@ -81,7 +84,7 @@ function mkRepo(commits = 1): { dir: string; head: string } {
 }
 
 function mkFifo(path: string): void {
-  execFileSync("mkfifo", [path]);
+  execFileSync("mkfifo", [path], { env: NON_GIT_ENV });
 }
 
 /** The reader refused, with a typed error carrying a closed reason. */
