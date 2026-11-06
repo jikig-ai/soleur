@@ -29,3 +29,9 @@ soleur:plan (full run, sequential-fallback fan-out), soleur:deepen-plan (halt-ga
 - Affected gate: `bash scripts/test-all.sh --affected` launched bg, log /tmp/affected-10112.log — was queued on sibling lock (contention from .worktrees/feat-one-shot-bun-pair-ratchet-accept-cleanup).
 - Review panel: 10 seats spawned bg (git-history-analyzer 001c9ab4, pattern-recognition a620dbf5, architecture-strategist e748dc40, security-sentinel 38e58fa2, performance-oracle 1eb06757, data-integrity-guardian 6873423d, agent-native-reviewer 1cfdc7fa, code-quality-analyst 73ccb82a, test-design-reviewer b0c8d886, semgrep-sast 99776270). PANEL_SHA=49d8852968. seats=10 tally.
 - Next: collect seats → resolve findings (fix-round per ADR-267 if any) → qa → compound → ship (Closes #10112, annotate epic #10390) → DONE.
+
+## Review Phase (2026-11-06)
+- 10-seat panel on PANEL_SHA=49d8852968: P1 none; P2 = DR pin list missed T1.16i/T1.16k; P3 cluster = stranded-state ordering (4 seats), inngest_luks_volume_id repoint clause (2 seats), plural comment, date 2026-10-26, boot-1 wording, main.tf→inngest-host.tf cites. Skipped: D5-label nit (ADR-142 itself records (D5)); test-design P3 pre-existing mutant gap.
+- Fix commit 9bbc8a971a pushed — all P2/P3 addressed. Fix-round: security-sentinel cf51d69f CLEAN/approve; code-quality 131505ea pending.
+- Affected gate still QUEUED on advisory lock (sibling feat-one-shot-bun-pair-ratchet-accept-cleanup run) — log /tmp/affected-10112.log. Do NOT ship until it completes green (learned: shard-failure sweep cost a CI cycle).
+- Remaining: qa (plan has no Test Scenarios → skip gracefully per skill), compound, ship (Closes #10112; annotate epic #10390 line for inngest-verify-clean-10390.sh + tick #10112), DONE.
