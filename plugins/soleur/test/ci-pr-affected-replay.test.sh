@@ -4948,8 +4948,8 @@ mutate ratchet-oracle-misses-the-workflow 'RATCHET_ORACLE = (".github/workflows/
 mutate ratchet-oracle-misses-the-helper '"scripts/ci-pr-affected-replay.py", RATCHET_LINT, RATCHET_ACCEPT' '"scripts/ci-pr-affected-replay.py", RATCHET_ACCEPT' row_rt_oracle_each
 mutate ratchet-oracle-misses-the-accept-file 'RATCHET_LINT, RATCHET_ACCEPT, RATCHET_PATHS_LIB' 'RATCHET_LINT, RATCHET_PATHS_LIB' row_rt_oracle_accept_only
 mutate ratchet-oracle-misses-the-path-library 'RATCHET_ACCEPT, RATCHET_PATHS_LIB, RATCHET_TEST_ALL' 'RATCHET_ACCEPT, RATCHET_TEST_ALL' row_rt_oracle_each
-mutate ratchet-oracle-misses-the-runner 'RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE)' 'RATCHET_PATHS_LIB, RATCHET_BASELINE)' row_rt_oracle_each
-mutate ratchet-oracle-misses-the-baseline-constant 'RATCHET_TEST_ALL, RATCHET_BASELINE)' 'RATCHET_TEST_ALL)' row_rt_oracle_constants
+mutate ratchet-oracle-misses-the-runner 'RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE,' 'RATCHET_PATHS_LIB, RATCHET_BASELINE,' row_rt_oracle_each
+mutate ratchet-oracle-misses-the-baseline-constant 'RATCHET_TEST_ALL, RATCHET_BASELINE,' 'RATCHET_TEST_ALL,' row_rt_oracle_constants
 mutate ratchet-oracle-lists-a-file-twice '    return [p for p in dict.fromkeys(RATCHET_ORACLE + (rel,)) if p in touched]' '    return [p for p in RATCHET_ORACLE + (rel,) if p in touched]' row_rt_oracle
 mutate ratchet-oracle-ignores-the-diff '    return [p for p in dict.fromkeys(RATCHET_ORACLE + (rel,)) if p in touched]' '    return list(dict.fromkeys(RATCHET_ORACLE + (rel,)))' row_rt_oracle_absent
 mutate ratchet-helper-from-the-pr-tree '    p = run(["git", "show", "%s:%s" % (sha, RATCHET_LINT)], cwd=root,' '    p = run(["cat", os.path.join(root, RATCHET_LINT)], cwd=root,' row_rt_helper_pr_tree_ignored

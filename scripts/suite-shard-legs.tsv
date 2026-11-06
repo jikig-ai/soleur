@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1251
-# generated-at=2026-11-06T02:40:05Z
+# generated-at=2026-11-06T04:41:28Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -389,6 +389,7 @@ scripts/ci-deploy-sentry-post-fail-6475	6
 scripts/ci-draft-light	6
 scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
+scripts/ci-oracle-lane	4
 scripts/ci-pr-selection	2
 scripts/ci-push-dedupe	1
 scripts/classify-workflow-transitions	5

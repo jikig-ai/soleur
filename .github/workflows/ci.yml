@@ -216,11 +216,34 @@ jobs:
           reason=proof_error
           [[ "$id" =~ ^[0-9]+$ ]] || finish
           mg="$id"
+          # per_page=100 with no pagination: today ~45 job entries. Truncation is NOT automatically fail-closed — a
+          # matrix group can split across the page boundary and still read all-green, so assert the page covers the
+          # whole run (total_count <= 100) or decline to elide.
           jobs=$(timeout 20 gh api "repos/${GH_REPO}/actions/runs/${mg}/jobs?per_page=100&filter=latest" 2>/dev/null) || finish
+          tc=$(printf '%s' "$jobs" | jq -r '.total_count' 2>/dev/null) || finish
+          reason=page_truncated
+          [[ "$tc" =~ ^[0-9]+$ && "$tc" -le 100 ]] || finish
           n=$(printf '%s' "$jobs" | jq -r '[.jobs[] | select(.name == "test" and .conclusion == "success")] | length' 2>/dev/null) || finish
           [[ "$n" =~ ^[0-9]+$ ]] || finish
           reason=no_test_job
           [ "$n" -ge 1 ] || finish
+          # Guard 3 (#12156, ADR-276 amendment): a merge_group `test` green built on ORACLE-ONLY-SKIP tolerated legs is NOT a
+          # full battery — eliding the push run here would leave main with no post-merge full-battery run for that SHA, which
+          # is the oracle's backstop. Every leg the lane can skip must have concluded `success` in that merge_group run: the
+          # five heavy legs PLUS shard-totality-mutations. A `skipped`, absent, running or malformed entry fails closed.
+          # Matrix children are grouped by their base name (`test-scripts (1/8)` -> `test-scripts`), so the set check is over
+          # the SIX lane-skippable legs and every one of their child jobs. The leg-name set is pinned bi-directionally with
+          # the driver's allowlist and the aggregator's five-name regex by the sentinel: a new skippable leg requires editing
+          # all three in the same diff.
+          reason=legs_incomplete
+          legs_ok=$(printf '%s' "$jobs" | jq -r '
+            [.jobs[] | select(type == "object") | select(.name | type == "string")
+             | {b: (.name | sub(" \\(.*$"; "")), c: .conclusion}
+             | select(.b as $x | ["test-webplat","test-bun","test-scripts","test-scripts-heavy","web-platform-build","shard-totality-mutations"] | index($x))]
+            | group_by(.b)
+            | map(all(.[]; .c == "success"))
+            | (length == 6) and all(.[]; .)' 2>/dev/null) || finish
+          [ "$legs_ok" = "true" ] || finish
           would=true
           emit "would_elide=true"
           reason=switch_off
@@ -396,6 +419,82 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
           PR_SELECTION_STAGE2_TIMEOUT: "90"
         run: bash scripts/ci-pr-selection.sh
+
+  # oracle-selection (#12156, ADR-276 amendment): decide ONCE per pull_request or merge_group run whether EVERY changed
+  # path is inside the oracle surface — the ratchet's data files, AFFECTED_*_PATHS array extents in
+  # scripts/lib/test-affected-paths.sh, or a doc path. A COST lever, allowed to fail in one direction only: every unknown
+  # runs the full battery. The decision lives in scripts/ci-oracle-lane.sh (this YAML stays thin; the driver holds the
+  # surface, the exclusion list, the hunk-extent check and the activation lock). It emits ONLY literal outputs:
+  # oracle_only, active, skip_legs (a comma list over the five heavy legs, EMPTY unless active), head_sha and base_sha.
+  #
+  # SWITCHED OFF, THEN DARK AND LOCKED — the same staging shape as pr-selection above. While the repository variable
+  # CI_ORACLE_LANE is unset or empty the job is SKIPPED (no runner, no checkout, no dark cost). The `if:` only tests
+  # "non-empty" on purpose: Actions compares strings WITHOUT regard to case, so the exact `on` compare lives in the
+  # driver's bash. While ORACLE_LANE_LOCKED=1 stands in the driver, `active` never becomes `true` and the job annotates
+  # `would_skip` telemetry only (dark launch; activation is a separate authorized step after observation on a real
+  # oracle-repair merge — see the ADR-276 amendment).
+  #
+  # `timeout-minutes` is written alone on its line and there is NO `needs:` on purpose: the release workflow's CI budget
+  # awk sums the longest declared `needs:` path, so a 3-minute parallel root does not lengthen it (the pr-selection job
+  # above documents the constraint in full). A skipped, failed or timed-out job leaves EMPTY outputs, which every
+  # consumer reads as the full battery: the five heavy legs negate a term that needs `active == 'true'`,
+  # shard-totality-mutations keeps `active != 'true'`, and the `test` aggregator tolerates a skip only on
+  # ORACLE_ACTIVE == "true". Least-privilege (contents: read), no secrets, every input through env:, and nothing an API
+  # or a path returns is ever echoed into an output or an annotation.
+  oracle-selection:
+    if: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && vars.CI_ORACLE_LANE != '' }}
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      oracle_only: ${{ steps.select.outputs.oracle_only }}
+      active: ${{ steps.select.outputs.active }}
+      skip_legs: ${{ steps.select.outputs.skip_legs }}
+      head_sha: ${{ steps.select.outputs.head_sha }}
+      base_sha: ${{ steps.select.outputs.base_sha }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Full history so the merge-ref parents (pull_request) and the batch diff base..head (merge_group) resolve.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Classify the diff against the oracle surface
+        id: select
+        shell: bash
+        continue-on-error: true
+        timeout-minutes: 2
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SWITCH: ${{ vars.CI_ORACLE_LANE }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -uo pipefail
+          # The classifier is sourced from the BASE image, never the candidate tree: a PR (or queue batch member) must
+          # not rewrite the oracle that judges it — the same shape as shard-totality-mutations' base-sourced classifier.
+          # A base that lacks the driver (this PR's own introduction, any pre-#12156 tree) emits the fail-closed
+          # defaults itself; an honest classifier then reads every driver edit as outside-surface anyway.
+          drv="$RUNNER_TEMP/ci-oracle-lane-base.sh"
+          case "${EVENT_NAME:-}" in
+            pull_request) base="HEAD^1" ;;
+            merge_group)  base="${MERGE_GROUP_BASE_SHA:-}" ;;
+            *)            base="" ;;
+          esac
+          if [ -n "$base" ] && git show "${base}:scripts/ci-oracle-lane.sh" > "$drv" 2>/dev/null && [ -s "$drv" ]; then
+            bash "$drv"
+          else
+            printf 'oracle_only=false\nactive=false\nskip_legs=\nhead_sha=\nbase_sha=\n' >> "$GITHUB_OUTPUT"
+            printf '::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE event=%s switch=unreadable locked=na attempt=%s files=0 reason=no_base_driver oracle_only=false would_skip=none active=false\n' \
+              "${EVENT_NAME:-unknown}" "${RUN_ATTEMPT:-0}"
+            printf 'oracle-lane: switch=unreadable locked=na reason=no_base_driver files=0 oracle_only=false would_skip=none active=false\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   # ADVISORY (S4 index completion PR3a, #10448; ADR-276 amendment): the affected-index audit as a ratchet. Since PR5z (#10861) the check is
   # strict zero: no committed baseline exists — `ratchet` is green exactly when the audit is (the live set of (suite, undeclared
@@ -1192,8 +1291,8 @@ jobs:
   # (measured on this job's first run, 34774037658: zero CACHED steps).
   # Every run is cold by construction.
   web-platform-build:
-    needs: [push-dedupe]
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
+    needs: [push-dedupe, oracle-selection]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',web-platform-build,')) }}
     # 10m — measured 1m52s cold for the builder step alone on the first run of this shape
     # (run 34774037658: buildkit 9s, `npm ci` 33s, `next build` 44s), against 1m53s-2m00s
     # for the full-checkout form it replaced (#8020 measured max 2.2m). The `cli-tools` step
@@ -1295,8 +1394,8 @@ jobs:
   # aggregator (below) reads `needs.test-webplat.result` which rolls up
   # the matrix outcome — failure on any shard fails the whole job.
   test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection]
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-webplat,')) }}
+    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-webplat,')) && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-webplat,')) }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). Sized ~5x the measured p90 (4.37 min) for this job's slowest
     # leg, and no suite on this path declares a per-suite budget, so it cannot fire before a
@@ -1394,8 +1493,8 @@ jobs:
         run: bash scripts/test-all.sh webplat
 
   test-bun:
-    needs: [push-dedupe, pr-selection]
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-bun,')) }}
+    needs: [push-dedupe, pr-selection, oracle-selection]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-bun,')) && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-bun,')) }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). Measured p90 under 2 min; 20 is deliberate slack for a cold
     # runner. No suite on this path declares a per-suite budget.
@@ -1432,8 +1531,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   test-scripts:
-    needs: [push-dedupe, draft-light]
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' }}
+    needs: [push-dedupe, draft-light, oracle-selection]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-scripts,')) }}
     runs-on: ubuntu-latest
     # MATRIX SHARDED (#7902), K=8 after the heavy carve-out (#8006 phase 2) and
     # the K=6 -> K=7 -> K=8 rebalances (history and measurements: the runbook
@@ -1671,8 +1770,8 @@ jobs:
   # exact shape), so the install steps below mirror test-scripts, except for likec4 (this job
   # runs no likec4 suite and every consumer falls back to `npx`).
   test-scripts-heavy:
-    needs: [push-dedupe, draft-light, pr-selection]
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-scripts-heavy,')) }}
+    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-scripts-heavy,')) && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-scripts-heavy,')) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -1764,8 +1863,8 @@ jobs:
   # this context is a ruleset + canonical-JSON + synthetic-check-fabrication change and is
   # tracked separately rather than folded into a production unblock.
   shard-totality-mutations:
-    needs: [push-dedupe, draft-light]
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' }}
+    needs: [push-dedupe, draft-light, oracle-selection]
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha)) }}
     runs-on: ubuntu-latest
     # THREE-LEG ROW SPLIT (#9035). The battery declares 42 numbered row
     # sites and takes `--rows A-B`; each leg runs its third plus the
@@ -2064,6 +2163,82 @@ jobs:
         if: '!cancelled()'
         run: bun plugins/soleur/scripts/harness-discovery-smoke.ts --harness opencode --pin "$OPENCODE_PIN"
 
+  # oracle-index-check (#12156, ADR-276 amendment): the oracle-only lane's validation leg. When the oracle-selection
+  # job classifies a pull_request or merge_group diff as `oracle_only` — every changed path is oracle data — the five
+  # heavy `test` legs may skip, and THIS leg is what keeps the oracle's own edit gated: it runs the committed
+  # oracle-validation manifest (scripts/ci-oracle-lane-suites.txt — the AFFECTED_*_PATHS census authority, the
+  # affected-index derive/replay batteries and the selection-lever sentinels) serially, propagating exit codes. On a
+  # merge_group it is the check that blocks a malformed oracle edit from reaching main under the reduced battery.
+  # Off the lane it prints not-oracle-only and exits 0 inside a minute.
+  #
+  # `always() && !cancelled()` is a CPO sign-off condition (O1): the oracle-selection job is var-gated, so a plain
+  # `pull_request || merge_group` `if:` here would be needs-skip-propagated while CI_ORACLE_LANE is unset and would
+  # wedge `test`'s needs:/entries[] loudly; `always()` defeats the propagation and a skipped or empty `oracle_only`
+  # output reads as not-oracle-only. The event conjunct keeps the leg absent on push/workflow_dispatch — the `test`
+  # aggregator tolerates that one structural absence only (a skipped oracle-index-check on pull_request or
+  # merge_group is NEVER tolerated; Guard 2). `timeout-minutes` is alone on its line for the release-workflow budget
+  # awk; 30 bounds the serial manifest with headroom over the ~10-20 min the oracle/selector batteries measure
+  # together. Least-privilege (contents: read); the manifest itself is not in the oracle surface, so a lane-eligible
+  # diff can never weaken its own validation.
+  oracle-index-check:
+    if: ${{ always() && !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
+    needs: [oracle-selection]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        # The manifest step self-gates on oracle_only, so the checkout does too: on every non-oracle run this job
+        # collapses to the manifest step's not-oracle-only no-op instead of paying a full clone.
+        if: needs.oracle-selection.outputs.oracle_only == 'true'
+        with:
+          persist-credentials: false
+
+      - name: Run the oracle-validation manifest
+        shell: bash
+        env:
+          ORACLE_ONLY: ${{ needs.oracle-selection.outputs.oracle_only }}
+          # Same shape as the test-scripts legs: several manifest suites read PR/run metadata via gh when it is present.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -uo pipefail
+          if [ "$ORACLE_ONLY" != "true" ]; then
+            printf 'oracle-index-check: not-oracle-only (oracle_only=%s) — the validation manifest does not run on this diff\n' "${ORACLE_ONLY:-empty}"
+            exit 0
+          fi
+          manifest="scripts/ci-oracle-lane-suites.txt"
+          ran=0
+          rc=0
+          # label<TAB>argv per line; `#` and blank lines are the committed exclusion-list header. Every member is run
+          # serially from the checkout root; the first non-zero exit propagates into the leg verdict (Guard 4).
+          while IFS=$'\t' read -r label argv || [ -n "$label" ]; do
+            case "$label" in ''|'#'*) continue ;; esac
+            ran=$((ran + 1))
+            printf -- '── oracle-index-check: %s\n' "$label"
+            read -r -a cmd <<< "$argv"
+            # A label with no argv would expand to a null command and read green — fail closed instead.
+            if [ "${#cmd[@]}" -eq 0 ]; then
+              printf '::error title=oracle-index-check::manifest line for %s carried no argv\n' "$label"
+              exit 1
+            fi
+            if "${cmd[@]}"; then
+              :
+            else
+              rc=$?
+              printf '::error title=oracle-index-check::manifest suite %s exited %d\n' "$label" "$rc"
+              break
+            fi
+          done < "$manifest"
+          if [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+          if [ "$ran" -eq 0 ]; then
+            printf '::error title=oracle-index-check::manifest %s carried no suites — a vacuous leg cannot gate an oracle edit\n' "$manifest"
+            exit 1
+          fi
+          printf 'oracle-index-check: %d manifest suites green\n' "$ran"
+
   # Synthetic aggregator.
   #
   # LOAD-BEARING SUB-VALUE — this job is NOT redundant with
@@ -2094,7 +2269,7 @@ jobs:
     # this needs: list), so a red build could not stop auto-merge — release
     # 34773058045 broke production past a green `test`. Adding it here is the
     # one-line-per-site edit the loop below documents; no ruleset change.
-    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection]
+    needs: [test-webplat, test-bun, test-scripts, test-scripts-heavy, web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection, oracle-selection, oracle-index-check]
     if: ${{ always() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') }}
     runs-on: ubuntu-latest
     # Bounds a HUNG job (#7902). This job only reads six leg `needs.*.result` strings (push-dedupe is a seventh,
@@ -2137,6 +2312,15 @@ jobs:
           SKIP_LEGS: ${{ needs.pr-selection.outputs.skip_legs }}
           ACTIVE: ${{ needs.pr-selection.outputs.active }}
           HEAD_SHA_OK: ${{ needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha }}
+          # ADR-276 amendment (#12156): the `oracle-selection` outputs, read ONLY by the named ORACLE-ONLY-SKIP tolerance
+          # below — the same intra-run-string shape as the S4 inputs above. ORACLE_HEAD_OK binds the head event-agnostically:
+          # `github.event.pull_request.head.sha` is empty on a merge_group payload, so the `||` yields the event's own head
+          # SHA on either event. While ORACLE_LANE_LOCKED=1 stands in the driver, `active` is always `false` and nothing is
+          # tolerated. ORACLE_INDEX_RESULT is the validation leg's own result — a member of entries[], read like every leg.
+          ORACLE_SKIP_LEGS: ${{ needs.oracle-selection.outputs.skip_legs }}
+          ORACLE_ACTIVE: ${{ needs.oracle-selection.outputs.active }}
+          ORACLE_HEAD_OK: ${{ needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) }}
+          ORACLE_INDEX_RESULT: ${{ needs.oracle-index-check.result }}
           ATTEMPT: ${{ github.run_attempt }}
         run: |
           # NAME THE MEASURED CAUSE, NEVER A GUESSED ONE (#7931 part 2).
@@ -2170,7 +2354,7 @@ jobs:
           # once (inner) to read that leg's siblings. Adding a leg is still a
           # one-line edit here, plus needs: + env: — test-scripts-heavy (#8006)
           # and encryption-posture (#6907) are the worked examples.
-          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" )
+          entries=( "test-webplat:$WEBPLAT_RESULT" "test-bun:$BUN_RESULT" "test-scripts:$SCRIPTS_RESULT" "test-scripts-heavy:$SCRIPTS_HEAVY_RESULT" "web-platform-build:$BUILD_RESULT" "encryption-posture:$POSTURE_RESULT" "oracle-index-check:$ORACLE_INDEX_RESULT" )
           # PR-AFFECTED-SKIP (ADR-276 S4, #9729): the ONE named reason a `skipped` leg is not a failure. Decided BEFORE the loop so the
           # sibling inference below can count a tolerated skip as concluded. Every condition is exact and none is trimmed: a pull_request
           # run, `ACTIVE` exactly `true`, the head bound (`HEAD_SHA_OK` exactly `true`), attempt 1, a `SKIP_LEGS` that is a well-formed
@@ -2187,6 +2371,24 @@ jobs:
               fi
             done
           fi
+          # ORACLE-ONLY-SKIP (#12156, ADR-276 amendment): the SECOND named reason a `skipped` leg is not a failure, decided
+          # alongside the S4 arm so the sibling inference below can count a tolerated skip as concluded. Same conjunct set,
+          # extended to merge_group: event ∈ {pull_request, merge_group}, `ORACLE_ACTIVE` exactly `true`, the head bound
+          # (`ORACLE_HEAD_OK` exactly `true`), attempt 1, an `ORACLE_SKIP_LEGS` that is a well-formed comma list over the FIVE
+          # lane-skippable legs, and the leg itself named in it by a delimited match. The five-name literal is the allowlist:
+          # `encryption-posture`, `e2e` and `oracle-index-check` can never be tolerated whatever the driver emits (a list
+          # naming any other leg is invalid as a whole).
+          oracle_tolerated=","
+          oracle_re='^(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build)(,(test-webplat|test-bun|test-scripts|test-scripts-heavy|web-platform-build))*$'
+          if [[ ( "$EVENT_NAME" == "pull_request" || "$EVENT_NAME" == "merge_group" ) && "$ORACLE_ACTIVE" == "true" && "$ORACLE_HEAD_OK" == "true" && "$ATTEMPT" == "1" && "$ORACLE_SKIP_LEGS" =~ $oracle_re ]]; then
+            for entry in "${entries[@]}"; do
+              if [[ "${entry#*:}" == "skipped" ]]; then
+                case ",$ORACLE_SKIP_LEGS," in
+                  *",${entry%%:*},"*) oracle_tolerated="${oracle_tolerated}${entry%%:*}," ;;
+                esac
+              fi
+            done
+          fi
           for entry in "${entries[@]}"; do
             shard="${entry%%:*}"
             result="${entry#*:}"
@@ -2195,6 +2397,18 @@ jobs:
             fi
             if [[ "$tolerated" == *",$shard,"* ]]; then
               echo "$shard: PR-AFFECTED-SKIP — skipped by pr-selection (active, attempt 1, head bound); not a failure" >&2
+              continue
+            fi
+            if [[ "$oracle_tolerated" == *",$shard,"* ]]; then
+              echo "$shard: ORACLE-ONLY-SKIP — skipped by oracle-selection (active, attempt 1, head bound); not a failure" >&2
+              continue
+            fi
+            # OFF-EVENT (#12156): oracle-index-check's `if:` gates it to pull_request and merge_group, so on push or
+            # workflow_dispatch its result is `skipped` BY DESIGN — there is no lane to validate and no skip to tolerate.
+            # That is a structural absence, not a tolerated lane skip: on pull_request/merge_group a skipped
+            # oracle-index-check is NEVER tolerated (the five-name regex cannot name it) and still fails the run.
+            if [[ "$shard" == "oracle-index-check" && "$result" == "skipped" && "$EVENT_NAME" != "pull_request" && "$EVENT_NAME" != "merge_group" ]]; then
+              echo "$shard: OFF-EVENT — the oracle-validation leg is gated to pull_request/merge_group; absent by design on '$EVENT_NAME'" >&2
               continue
             fi
             # SET BEFORE CLASSIFYING. The classification is a diagnostic; the
@@ -2227,6 +2441,11 @@ jobs:
                 if [[ "$ATTEMPT" != "1" && ",$SKIP_LEGS," == *",$shard,"* ]]; then
                   echo "$shard: SKIPPED — the pr-selection skip decision is cached from attempt 1; use \"Re-run all jobs\" (or push) to get a full run" >&2
                 fi
+                # Same re-run remedy for the oracle lane (#12156): a leg the cached oracle decision NAMED reds the check on
+                # attempt > 1 too, and the remedy is identical.
+                if [[ "$ATTEMPT" != "1" && ",$ORACLE_SKIP_LEGS," == *",$shard,"* ]]; then
+                  echo "$shard: SKIPPED — the oracle-lane skip decision is cached from attempt 1; use \"Re-run all jobs\" (or push) to get a full run" >&2
+                fi
                 ;;
               cancelled)
                 cancelled_siblings=0
@@ -2241,7 +2460,7 @@ jobs:
                     cancelled) cancelled_siblings=$((cancelled_siblings + 1)) ;;
                     success|failure) concluded_siblings=$((concluded_siblings + 1)) ;;
                     skipped)
-                      if [[ "$tolerated" == *",${other%%:*},"* ]]; then
+                      if [[ "$tolerated" == *",${other%%:*},"* || "$oracle_tolerated" == *",${other%%:*},"* ]]; then
                         concluded_siblings=$((concluded_siblings + 1))
                       fi
                       ;;
@@ -2284,12 +2503,14 @@ jobs:
           if [[ $fail -ne 0 ]]; then
             exit 1
           fi
-          if [[ "$tolerated" != "," ]]; then
+          if [[ "$tolerated" != "," || "$oracle_tolerated" != "," ]]; then
             tol_list="${tolerated#,}"
             tol_list="${tol_list%,}"
-            echo "All legs green or PR-AFFECTED-SKIP tolerated (${tol_list}); skip_legs=${SKIP_LEGS}"
+            otol_list="${oracle_tolerated#,}"
+            otol_list="${otol_list%,}"
+            echo "All legs green or skip tolerated (pr-affected: ${tol_list:-none} skip_legs=${SKIP_LEGS:-none}; oracle-only: ${otol_list:-none} oracle_skip_legs=${ORACLE_SKIP_LEGS:-none})"
           else
-            echo "All six legs green (four shards + web-platform-build + encryption-posture)."
+            echo "All legs green (six battery legs + oracle-index-check)."
           fi
 
   # E2E job runs inside the official Playwright container so Chromium + OS deps

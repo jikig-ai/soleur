@@ -6997,6 +6997,11 @@ if want_scripts; then
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
   run_suite "scripts/watch-shard-balance-11564" bash scripts/watch-shard-balance-11564.test.sh
   run_suite "scripts/watch-wallclock-p90-11774" bash scripts/watch-wallclock-p90-11774.test.sh
+  # #12156 (ADR-276 amendment): the oracle-lane driver EXECUTED (fixture-diff battery over the real driver, the
+  # surface/exclusion/extent mutation rows, output-grammar pins, the lock and fail-closed defaults, and the
+  # manifest↔registration parity assertion). Same explicit-registration and LAST-in-block reasons as above.
+  # Declared edge set, not always-on.
+  run_suite "scripts/ci-oracle-lane" bash scripts/ci-oracle-lane.test.sh
 fi
 
 # Named bun-test entries — bun shard.
