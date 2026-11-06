@@ -10,6 +10,31 @@ lane: cross-domain
 
 # fix(ci): declare refresh-stage-a.test.sh's real-read edges in the affected index (Ref #10865)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-06
+**Sections enhanced:** 1 (`## Observability` added — deepen-plan Phase 4.7 halt condition resolved; its trigger fires on any non-doc `## Files to Edit` entry, broader than plan Phase 2.9's detection list)
+**Research agents used:** none — this seat has no Task/spawn tool; deepen-plan ran as gate-verification only (Phases 4.4-4.13 + Quality Checks executed inline; skill/agent fan-outs 2-6 not run — proportional to a one-file index repair per the one-shot brief)
+
+### Key Improvements
+
+1. `## Observability` emitted: the ratchet's `SOLEUR_PR_AFFECTED_RATCHET` line is the liveness/fail-loud signal; discoverability probe is `git grep -l` (allowlisted verb, <15s, and the command string avoids the suite-shape proxy that a `test-affected` path literal would trip).
+2. Premise correction folded in at plan time: sibling #12212 was MERGED (not open) — rebase Phase 1 clears the two foreign live pairs without work in this diff.
+3. Precedent conformance verified inline (deepen Phase 4.4): block shape, header comment, dir-honest entries, and self+index+`test-all.sh` tail all match the five sibling `CONSTRAINT_SCAFFOLD_TEST_*` blocks at scripts/lib/test-affected-paths.sh:2378-2422.
+
+### Gate Verdicts (deepen-plan inline run)
+
+- 4.6 User-Brand Impact: PASS (section present, threshold `none`, no sensitive-path diff).
+- 4.7 Observability: HALT→resolved (section added this pass).
+- 4.8 PAT-shaped variables: PASS (no match).
+- 4.9 UI wireframe: PASS (no UI-surface files).
+- 4.10 Encryption posture: PASS (no store/connection).
+- 4.11 Guard Contract: PASS (deliverable is index data feeding an existing guard, not a new guard — detection evaluated, no fire).
+- 4.12 Scope Check: PASS (one unfenced section, all rows mapped or justified).
+- 4.13 Task-Design: PASS (no new autonomous-task surface).
+- 4.5 network-outage / 4.55 downtime-cutover: not triggered.
+- Quality checks: cited PR/issue states verified live via `gh`; attribution claims verified via `git merge-base`/`git show`/`grep` (04fc68d782=#12177, cffdf2705a in base, #12212=511db9f84f +11 lines single-file, accept rows ~609-654); no rule-id, label, ADR-ordinal, or SHA citations requiring verification.
+
 ## Overview
 
 The advisory affected-index ratchet paused the #10865 observation window when #12177
@@ -40,6 +65,36 @@ Spec lacks valid `lane:` (no spec.md on this branch) — defaulted to cross-doma
 - **If this leaks, the user's [data / workflow / money] is exposed via:** no exposure vector — the diff is test-index metadata (edge declarations + accept rows); no user data, secrets, or runtime surface is read or written.
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** the change is CI-selection metadata whose worst case is a wrong suite-selection set on a still-advisory check; no user-facing surface is reachable.
+
+## Observability
+
+```yaml
+liveness_signal:
+  what:            "refresh-stage-a.test.sh reports selected with edge:declared under the affected gate; ratchet prints exit=0 live=0 for this suite"
+  cadence:         "per affected-gate run (local scripts/test-all.sh --print-selection; advisory affected-index-ratchet CI job)"
+  alert_target:    "CI job log + #10865 soak tracker (advisory; flips to required under #10859)"
+  configured_in:   "scripts/lib/test-affected-paths.sh (AFFECTED_*_PATHS block); scripts/ci-pr-affected-replay.py (ratchet)"
+
+error_reporting:
+  destination:     "ratchet stdout (SOLEUR_PR_AFFECTED_RATCHET line) in the CI job log — advisory channel, no Sentry"
+  fail_loud:       "SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair naming the refresh-stage-a suite"
+
+failure_modes:
+  - mode:          "real input missing from the declared block → suite silently un-selected on a SUT/template/fixture change"
+    detection:     "bash scripts/test-all.sh --print-selection --paths=<input> row shows 0 or edge:derived for refresh-stage-a.test.sh"
+    alert_route:   "ratchet new-pair output; AC2"
+  - mode:          "fixture-name mention declared as an edge → suite over-selected (battery churn, not a missed test)"
+    detection:     "--print-selection --paths=apps/web-platform/scripts/constraint-gates.sh selects refresh-stage-a.test.sh"
+    alert_route:   "AC4"
+
+logs:
+  where:           "ratchet stdout (SOLEUR_PR_AFFECTED_RATCHET); test-all.sh --print-selection table (AFFECTED_SELECTED rows)"
+  retention:       "CI run-log retention; local run is ephemeral"
+
+discoverability_test:
+  command:         "git grep -l 'AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_REFRESH_STAGE_A_TEST_SH_PATHS' -- scripts/lib/"
+  expected_output: "scripts/lib/test-affected-paths.sh"
+```
 
 ## Research Insights
 
