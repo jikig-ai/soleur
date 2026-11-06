@@ -281,7 +281,7 @@ The deliverable modifies guarded surfaces and relies on existing guards; the **o
 ### Terraform changes
 
 - `infra/github/ruleset-ci-required.tf` — `required_status_checks` context list only (remove 16, add umbrella names). No new resources, no provider changes, no variables. `github` provider `~> 6.10` pin unchanged.
-- Apply path: existing `.github/workflows/apply-github-infra.yml` post-merge apply (app_auth, soleur-ai App) — no operator `terraform apply`. The diff is an in-place update of the ruleset resource (`update`, not `destroy`) — the destroy-guard's `[ack-destroy]` requirement does not fire on a context-list change, but the plan output is read pre-merge to confirm `0 destroy`.
+- Apply path: existing `.github/workflows/apply-github-infra.yml` post-merge apply (app_auth, soleur-ai App) — fully CI-driven, no human apply step. The diff is an in-place update of the ruleset resource (`update`, not `destroy`) — the destroy-guard's `[ack-destroy]` requirement does not fire on a context-list change, and the workflow's plan output must show `0 destroy` before merge.
 - Distinctness/drift: `scheduled-terraform-drift.yml` already covers `infra/github`; no new state surface.
 
 ## Scope Check

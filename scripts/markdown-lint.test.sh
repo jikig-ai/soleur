@@ -726,10 +726,10 @@ else
   fail "W1b -- lefthook does not pass {staged_files} to scripts/markdown-lint.sh"
 fi
 
-if grep -qx 'markdown-lint' "$REPO_ROOT/scripts/required-checks.txt"; then
-  pass "W1c -- the context is registered in required-checks.txt"
+if grep -qx 'quality-guards' "$REPO_ROOT/scripts/required-checks.txt"; then
+  pass "W1c -- the umbrella context is registered in required-checks.txt"
 else
-  fail "W1c -- 'markdown-lint' is absent from scripts/required-checks.txt"
+  fail "W1c -- 'quality-guards' (markdown-lint's umbrella context, #12089) is absent from scripts/required-checks.txt"
 fi
 
 # W1e: the workflow must also RUN THIS SUITE. The test-all.sh registration cannot fire
