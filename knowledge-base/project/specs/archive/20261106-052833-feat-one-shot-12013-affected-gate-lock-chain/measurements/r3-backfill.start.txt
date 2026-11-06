@@ -1,0 +1,11 @@
+label=r3-backfill fifo=0 sha=3010ff00caecb578ceb1fcd8dbf80dc3bb55b8af pick=7af192071d start=1793888615
+loadavg_start=9.47 14.03 14.50 nproc=16
+heavy_processes_start:
+4140718      19 bash /var/tmp/soleur-run.3481705.VkfdDAzf/tmp.BESTVgsgbk/r2/scripts/test-all.sh --affected --print-affected-set
+3481705    2053 bash scripts/test-all.sh
+3816359    1800 bash scripts/test-all.sh
+4140755      19 bash /var/tmp/soleur-run.3481705.VkfdDAzf/tmp.BESTVgsgbk/r2/scripts/test-all.sh --affected --print-affected-set
+3481701    2053 bash -c cd /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-11923-11920-rotation-gates && bash scripts/test-all.sh > /tmp/affecte
+end=1793891789 wall_s=3174
+loadavg_end=38.24 26.04 19.47
+rc=1
