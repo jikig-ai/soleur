@@ -35,3 +35,8 @@ soleur:plan (full run, sequential-fallback fan-out), soleur:deepen-plan (halt-ga
 - Fix commit 9bbc8a971a pushed — all P2/P3 addressed. Fix-round: security-sentinel cf51d69f CLEAN/approve; code-quality 131505ea pending.
 - Affected gate still QUEUED on advisory lock (sibling feat-one-shot-bun-pair-ratchet-accept-cleanup run) — log /tmp/affected-10112.log. Do NOT ship until it completes green (learned: shard-failure sweep cost a CI cycle).
 - Remaining: qa (plan has no Test Scenarios → skip gracefully per skill), compound, ship (Closes #10112; annotate epic #10390 line for inngest-verify-clean-10390.sh + tick #10112), DONE.
+
+## QA + Fix-round done (2026-11-06)
+- Fix-round round 2: code-quality seat found verification-notes:20 stale date (fixed) + boot-1 attribution nit (fixed) — commit 23f7f95662 pushed.
+- QA: plan Test Scenarios all satisfied by executed gates (rehearsal 91/91, plan-shape 28/28+4mutants, ledger lint PASS, terraform validate, markdownlint clean).
+- REMAINING: wait for /tmp/affected-10112.log affected-gate result (queued on advisory lock), then compound → ship (Closes #10112, annotate epic #10390) → DONE.
