@@ -18,8 +18,9 @@
 #       time — proven against a REAL shared resource (a flock'd file), not a
 #       timing proxy, so the assertion fails if the mechanism regresses even
 #       when the schedule would coincidentally serialize.
-#   C3  The `*` drain barrier holds under genuine pool pressure — a barrier
-#       fixture queued mid-walk still runs alone.
+#   C3  A `*` suite still runs alone under genuine pool pressure — one
+#       registered mid-walk is parked by the scheduler and runs at the drain
+#       (#12231), after every non-`*` suite, with nothing else live.
 #
 # Sandbox convention identical to test-all-parallel-scheduler.test.sh.
 
@@ -182,7 +183,7 @@ else
   fail "C2 — shared-resource fixtures overlapped"; dump "$(cat "$FIXTURES/flock-timeline.log" 2>/dev/null)"
 fi
 
-# --- C3: the drain barrier holds mid-walk -------------------------------------
+# --- C3: a mid-walk `*` suite runs alone, at the drain -------------------------
 cat > "$TMP/body-bar.sh" <<EOF
 declare -gA _SESSION_LOCK_ACQUIRED 2>/dev/null || true
 _SESSION_LOCK_ACQUIRED[test-all]=1
@@ -233,9 +234,17 @@ for label, ev in events:
 sys.exit(1 if (live_at_bar_start or live_at_bar_end) else 0)
 PY
 then
-  pass "C3 — the * barrier ran with a drained pool under genuine width-4 pressure"
+  pass "C3 — the * suite ran with a drained pool under genuine width-4 pressure"
 else
-  fail "C3 — the * barrier overlapped a live worker"; dump "$BAR_OUT"
+  fail "C3 — the * suite overlapped a live worker"; dump "$BAR_OUT"
+fi
+# The checker above passes vacuously when bar never starts: require both [run] lines, and that bar is the LAST to start
+# (it is parked until the drain, so it starts after indB and indC, which were registered behind it).
+if grep -qE '^\[run\] bar started' <<<"$BAR_OUT" && grep -qE '^\[run\] bar done' <<<"$BAR_OUT" \
+   && [[ "$(grep -oE '^\[run\] [^ ]+ started' <<<"$BAR_OUT" | awk '{print $2}' | tail -1)" == "bar" ]]; then
+  pass "C3 — the * suite started and finished, and started last (parked until the drain)"
+else
+  fail "C3 — bar did not start/finish, or did not start last"; dump "$BAR_OUT"
 fi
 
 echo ""
