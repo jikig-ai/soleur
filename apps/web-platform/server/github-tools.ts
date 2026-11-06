@@ -182,7 +182,8 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
       }
       // The approval was consumed before the handler ran: say so on a failure, strict (cc) path only.
       if (requireGrant && result.isError) {
-        return { ...result, content: [{ type: "text", text: `${result.content[0].text}\n${PUSH_FAILED_APPROVAL_SPENT}` }] };
+        const original = result.content.find((b) => b.type === "text")?.text ?? "";
+        return { ...result, content: [{ type: "text", text: `${original}\n${PUSH_FAILED_APPROVAL_SPENT}` }] };
       }
       return result;
     },
