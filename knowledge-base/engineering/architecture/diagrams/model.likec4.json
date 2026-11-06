@@ -1802,17 +1802,6 @@
 "id": "1mdu5fywiy7vj",
 "title": "Auth and data. Includes the member egress-audit read path (#9545 PR2, ADR-288 amendment 2026-10-26): the server-rendered Scope Grants audit page calls the get_egress_audit_window_summary RPC and the card hint calls the get_egress_audit_summary RPC, through the signed-in member's cookie client over workspace_egress_audit_rollup. Authenticated workspace members only (membership and jti-denylist checks in the function body); no member SELECT policy, no table grant, no HTTP route; best-effort minimum counts over a 24-hour, 7-day or 30-day window (default 30 days)"
 },
-"1minwcllbkdht": {
-"technology": "HTTPS (Hetzner Cloud API)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "platform.infra.hetzner"
-},
-"id": "1minwcllbkdht",
-"title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3, op=arm G3.7 H and op=luks-* G3 do not count a liveness row (ADR-225 section 4 amendment, AP-027), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY alone, with no fall-back to the write token (ADR-241 D4, #9927 item 8b, #10664). During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. Since #10138 git-data-cutover.yml's environment-gated `wipe` job (ADR-239 DL-2) READS through this edge (the server and volume identity, the volume's action history and the read-back, all with HCLOUD_TOKEN_READONLY and never a fall-back to the write token) and WRITES through it in two modes only: mode=wipe makes one detach and one DELETE, and mode=wipe_finish makes no detach call and at most one DELETE (none when the volume is already absent), each of the allow-listed plaintext volume soleur-git-data-store, named by the owner by id and checked against the API, with the Tier-B token from the infra-credentials loader reaching only those two steps; owner-named, environment-approved, and the only claim it makes about the end state is that the device was deleted at the provider API (a wipe_finish that finds the volume already absent claims only that it is absent, with the delete outcome in the origin run). From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Since #10540 inngest-key-rotate.yml (ADR-307) is a dispatch-only owner-authorised caller: its `guard` job resolves the ONE server named soleur-inngest at 10.0.1.40 and reads its action list with HCLOUD_TOKEN_READONLY alone, and its environment-gated `reboot` job WRITES through this edge exactly once per run, a soft-reboot request (POST /servers/{id}/actions/reboot) for that server only, with the Tier-B token from the infra-credentials loader reaching only that POST step (every later step runs under an exec env -i allow-list); the action status only means the ACPI request reached the guest, so the evidence of a restart is a new boot_id read from Better Stack, never this edge; no retry and never a hard reset (the earlier restart lever, restart-inngest-server.yml, terminates on web-1 and cannot reach this host). Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider."
-},
 "1mm6t1krgeqjk": {
 "technology": "ACME",
 "source": {
@@ -2280,6 +2269,17 @@
 "id": "2e0lg9cd4ztb4",
 "title": "Publishes the zot restart-loop alarm verdict, and since #8038 the weekly issue-flow measurement, which updates one standing public issue with aggregate counts (find-or-update, never re-filed) into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard)."
 },
+"2eeaw1pytdwjh": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.engine"
+},
+"target": {
+"model": "platform.infra.approvalStore"
+},
+"id": "2eeaw1pytdwjh",
+"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher registers github_push_branch through the same gate, ADR-309 addendum, #11636); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
+},
 "2g0w538bran25": {
 "technology": "HTTPS (Git Data API)",
 "source": {
@@ -2519,6 +2519,17 @@
 },
 "id": "2y0vw08qdazzk",
 "title": "Hosts (dedicated single-host node, private-net 10.0.1.40; removed from web cloud-init — ADR-100, #6178)"
+},
+"2yr82vu9vvbf7": {
+"technology": "HTTPS (Hetzner Cloud API)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "platform.infra.hetzner"
+},
+"id": "2yr82vu9vvbf7",
+"title": "Hetzner Cloud control-plane API (api.hetzner.cloud), never the hosts themselves. Named here: cutover-inngest.yml resolves the created time of the ONE server named soleur-inngest, the generation anchor below which op=resume G3 does not count a liveness row (ADR-225 section 4 amendment, AP-027; op=arm G3.7 H and op=luks-* G3 shared it until #9927 item 8 retired those verbs), and workspaces-luks-cutover.yml looks up its volume id; both read HCLOUD_TOKEN_READONLY alone, with no fall-back to the write token (ADR-241 D4, #9927 item 8b, #10664). During #6604 step 7 (2026-10-08) workspaces-luks-cutover.yml ALSO WRITES through this edge, once: its environment-gated `wipe` job, holding the Tier-B token from the infra-credentials loader, proves write capability with an idempotent labels PUT, then DETACHES and DELETES the retired plaintext volume (105149570) — only after the host zeroed and read it back, and only for the pinned id — while its preflight and the single-use workspaces-plaintext-forget.yml read the volume and web-1 (a presence proof: a 404 counted as gone only from a token that could see web-1 holding the LUKS volume 106443278). The `wipe` job and the forget workflow run from main, where they exist until PR #9348 merges (only after both have run), and that PR deletes them; the cutover workflow's remaining Hetzner calls through this edge are reads. Since #10138 git-data-cutover.yml's environment-gated `wipe` job (ADR-239 DL-2) READS through this edge (the server and volume identity, the volume's action history and the read-back, all with HCLOUD_TOKEN_READONLY and never a fall-back to the write token) and WRITES through it in two modes only: mode=wipe makes one detach and one DELETE, and mode=wipe_finish makes no detach call and at most one DELETE (none when the volume is already absent), each of the allow-listed plaintext volume soleur-git-data-store, named by the owner by id and checked against the API, with the Tier-B token from the infra-credentials loader reaching only those two steps; owner-named, environment-approved, and the only claim it makes about the end state is that the device was deleted at the provider API (a wipe_finish that finds the volume already absent claims only that it is absent, with the delete outcome in the origin run). From 2026-10-07 until its retirement on 2026-10-12 (#9372) web-host-reboot.yml's environment-gated `reboot` job also WROTE through this edge: one soft-reboot request (POST /servers/{id}/actions/reboot) for the allow-listed web-2 server only, never web-1, with the Tier-B token from the loader, dispatch-only; the workflow is deleted. Since #10540 inngest-key-rotate.yml (ADR-307) is a dispatch-only owner-authorised caller: its `guard` job resolves the ONE server named soleur-inngest at 10.0.1.40 and reads its action list with HCLOUD_TOKEN_READONLY alone, and its environment-gated `reboot` job WRITES through this edge exactly once per run, a soft-reboot request (POST /servers/{id}/actions/reboot) for that server only, with the Tier-B token from the infra-credentials loader reaching only that POST step (every later step runs under an exec env -i allow-list); the action status only means the ACPI request reached the guest, so the evidence of a restart is a new boot_id read from Better Stack, never this edge; no retry and never a hard reset (the earlier restart lever, restart-inngest-server.yml, terminates on web-1 and cannot reach this host). Other CI callers include op=backup create_image, the git-data rung-2 rehearsal (including a server reset), the #9175 inngest-provision forced-race rehearsal (Phase A births a NIC-less throwaway host, Phase B attaches it to the prod private net at 10.0.1.60, and a soft-reboot action proves the provisioning latch), drift and apply workflows, and every Terraform apply through the hcloud provider."
 },
 "30pbbiwriec5y": {
 "technology": "HTTPS",
@@ -3148,17 +3159,6 @@
 "id": "8p9oloc4osac",
 "title": "Phase 0.5 assessment"
 },
-"afhnkmz4ncnt": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.engine"
-},
-"target": {
-"model": "platform.infra.approvalStore"
-},
-"id": "afhnkmz4ncnt",
-"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal; no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
-},
 "ajv7s70947f": {
 "technology": "Slack push",
 "source": {
@@ -3190,6 +3190,17 @@
 },
 "id": "b1d11dyhd4e8",
 "title": "ACME HTTP-01 validation of the soleur.ai/www Pages custom domain — reaches GitHub's origin ONLY while apex+www are DNS-only (proxied=false)"
+},
+"b5wqsiskal5e": {
+"technology": "doppler CLI (config-scoped service tokens: one read/write, one read-only; repo Actions secrets)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "b5wqsiskal5e",
+"title": "CI credentials into the ISOLATED soleur-inngest/prd project (ADR-282 addendum 2026-11-05, #9927 item 8; ADR-100 Decision 6b). TWO repo-level Actions secrets, both minted by Terraform in the per-merge apply. DOPPLER_TOKEN_INNGEST_ARM (doppler_service_token.inngest_arm_write, READ/WRITE) is consumed only by cutover-inngest.yml's op=rollback and op=resume, both held behind the inngest-cutover required-reviewer environment, since op=arm, op=reflush and op=luks-cutover were retired by deletion; its revoke is owner-reserved, undelegated, not done and blocked on those two verbs. DOPPLER_TOKEN_INNGEST_FLIP_READ (doppler_service_token.inngest_flip_read, READ-ONLY) is consumed only by apply-web-platform-infra.yml's inngest_host_replace inherited-done preflight, which reads INNGEST_CUTOVER_FLIP and FAILS CLOSED when the token is empty or the read cannot be trusted. Neither token is a read boundary: a config token reads the WHOLE config, including INNGEST_REDIS_LUKS_KEY and INNGEST_TLS_KEY, so the read-only token bounds writes only. Both are repo-scoped rather than environment secrets because the Terraform GitHub App cannot write environment secrets (an advisory deviation from ADR-241 D2); a repo secret resolves in any workflow on any pushed branch"
 },
 "bhqehbyrdsul": {
 "technology": "stdio JSON-RPC (claude -p child)",
@@ -7762,11 +7773,11 @@
 "relations": [
 "11l15c18hxs15",
 "1h201sq0dwd47",
-"1minwcllbkdht",
 "1ofrp838pka8h",
 "1p9p2q3cf0u6q",
 "2g0w538bran25",
 "2tj8f33jl4xt5",
+"2yr82vu9vvbf7",
 "3uqa0opk3z597",
 "5m2fl0vsjyf8",
 "7lwv9h6xngcj"
@@ -8494,7 +8505,8 @@
 "relations": [
 "18qch4lqc3jab",
 "32q0mefae0wq7",
-"3j05altb1wez"
+"3j05altb1wez",
+"b5wqsiskal5e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13886,7 +13898,8 @@
 "relations": [
 "18qch4lqc3jab",
 "32q0mefae0wq7",
-"3j05altb1wez"
+"3j05altb1wez",
+"b5wqsiskal5e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22024,7 +22037,7 @@
 },
 "parent": null,
 "relations": [
-"1minwcllbkdht"
+"2yr82vu9vvbf7"
 ],
 "color": "gray",
 "line": "dashed",
@@ -22714,7 +22727,8 @@
 "relations": [
 "18qch4lqc3jab",
 "32q0mefae0wq7",
-"3j05altb1wez"
+"3j05altb1wez",
+"b5wqsiskal5e"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26407,7 +26421,7 @@
 "id": "s955hc",
 "source": "platform.engine",
 "target": "platform.infra.approvalStore",
-"label": "Hosted agent sessions run the same gated \nbranch of canUseTool in-process and \nconsume an approved request once for a \nbyte-identical re-proposal; no decide \npath is imported by the agent tool ",
+"label": "Hosted agent sessions run the same gated \nbranch of canUseTool in-process and \nconsume an approved request once for a \nbyte-identical re-proposal (the \nConcierge cc dispatcher registers ",
 "points": [
 [
 2084,
@@ -26458,7 +26472,7 @@
 },
 "parent": null,
 "relations": [
-"afhnkmz4ncnt"
+"2eeaw1pytdwjh"
 ],
 "color": "gray",
 "line": "dashed",

@@ -244,8 +244,53 @@ its qualified ID (`soleur:engineering:review:security-sentinel` maps to
 Read the definition before delegation. Spawn using the available tool's
 actual schema, passing its absolute definition path, this instruction file,
 the task, and the current worktree path. Do not pass a Claude registry ID as
-a Devin agent type. Inherit the session model and permission policy; Claude
-model aliases are not Devin model identifiers.
+a Devin agent type — `run_subagent` takes a **profile**, not a model and not
+a Soleur agent id; the Soleur id travels in the prompt's definition path.
+
+**Choose the profile by tool surface, not by task description:**
+
+- `subagent_explore` — the task needs read/grep/glob/web_search and nothing
+  else (research, read-only rulings, codebase Q&A). It has NO exec/git tool
+  and cannot fetch arbitrary URLs — anything running `exec`, `git diff`,
+  `gh`, test suites, writes, or a webfetch (including the exit-coded poll
+  loops of **Polling / watches**) spawns `subagent_general`. Mixed or
+  uncertain → `subagent_general`. This composes with the `#8471` review-seat
+  carve-out in **Devin-specific considerations**.
+- `subagent_general` — full tool access; always runs on the parent's model.
+
+Model semantics (docs.devin.ai/cli/subagents): `subagent_explore` lands on
+the router's *default subagent model* — operator- or admin-pinnable, never
+the parent picker's selection; `subagent_general` always inherits the parent
+model (write-capable fan-out multiplies the parent's rate — prefer explore
+for read-only work — on a Free plan the explore lane is a capability choice,
+not a saving — which is also why a spawn tool's `profile` argument can
+never express "cheaper": pick the profile, not a model). An explore-routed
+report comes from the router's default model, not the session model — weigh
+it accordingly.
+
+**Operator opt-in (documented, not required):** `agent.subagent_model` in
+`~/.config/devin/config.json` sets the router default — e.g.
+`"swe-2-flash-medium"` (Cognition's cheap/fast tier; verified in
+`devin models` 2026-11-05). Caveats: user-scope only — it cannot be committed
+to project `.devin/config.json` and takes effect on NEW sessions; it reaches
+`subagent_explore` and custom subagents without `model:`, never
+`subagent_general`; the model must be org-allowed or the setting is ignored
+and the team default applies; the CLI labels no running subagent's model, so
+the pin's effect is not verifiable in-session (verify via `devin models`
+allowlist, org policy, or observable spend). SWE-2 Flash is free in Devin
+through 2026-11-30 with no published post-promo rate card — re-verify the
+rate before relying on the saving; Free-plan accounts get SWE-1.6 only.
+Free-tier subagent models die at rate limits rather than retrying (measured
+2026-11-02) — verify a dead seat's on-disk work before respawning it.
+Local CLI/Desktop only — cloud sessions are unaffected either way.
+
+Model aliases (`opus`, `sonnet`, `swe`, `codex`, `gemini`, `gpt`) DO resolve
+on Devin — on model-SELECTION surfaces (`--model`, `/model`, config `model:`
+fields, custom-subagent `model:`), resolving to latest-in-family. They are
+not `run_subagent` arguments. Permission policy is inherited by every spawn.
+
+This guidance is for the parent agent: subagents cannot nest, and this file
+is itself injected into spawned subagents' prompts.
 
 If subagents are unavailable, execute the requested role sequentially with
 the same definition and disclose the lack of parallel execution. Never
@@ -308,8 +353,8 @@ warranty for runtime cost.
 
 For asynchronous CI and merge work, own the wait, report changes, resolve
 `BEHIND` (not when `main` has a merge queue and the PR is armed (the Phase 7 poll prints `[ship.phase7.queue_wait]`): GitHub then enqueues it), and finish the prescribed postmerge checks before claiming success.
-Arm the watch as a background `run_subagent` exit-coded loop (see **Polling /
-watches** below) rather than burning foreground turns on `sleep`-and-poll
+Arm the watch as a background `run_subagent` (profile `subagent_general`)
+exit-coded loop (see **Polling / watches** below) rather than burning foreground turns on `sleep`-and-poll
 cycles.
 If a required capability cannot be mapped, report the exact unsupported gate
 and retain incomplete status instead of silently skipping it.
@@ -317,8 +362,8 @@ and retain incomplete status instead of silently skipping it.
 ## Devin-specific considerations
 
 - **Skill invocation**: Devin exposes Soleur skills as slash commands (`/soleur:<skill>`). The `/soleur:go`, `/soleur:sync`, and `/soleur:help` commands are also slash commands.
-- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool. `subagent_explore` has NO exec/git tool — review-panel agents that must run `git diff` or execute test suites spawn as `subagent_general` with an explicit report-only contract (no worktree writes; scratch in `mktemp -d -t soleur-run.$$.XXXXXXXX`), or they reconstruct diffs by file comparison at degraded fidelity (#8471).
-- **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. Give it bounded exits too — a deadline exit and a probe-error exit — because an unbounded loop can never report. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
+- **Agent spawning**: Devin uses `run_subagent` tool instead of Claude's `Task` tool. `subagent_explore` has NO exec/git tool — review-panel agents that must run `git diff` or execute test suites spawn as `subagent_general` with an explicit report-only contract (no worktree writes; scratch in `mktemp -d -t soleur-run.$$.XXXXXXXX`), or they reconstruct diffs by file comparison at degraded fidelity (#8471). The same tool-surface rule in **Domain agents** governs the choice; cost differs too — explore runs on the router's pinnable default, general on the parent's model.
+- **Polling / watches**: Devin has no Monitor tool (measured absent — envelope-capture §7). `get_output` only *reads* a backgrounded shell; nothing wakes the agent on output. For wait-until-actionable watches — CI settling, a PR reaching merged/`BEHIND`/`DIRTY`, a check failure — spawn a background `run_subagent` (profile `subagent_general`: the loop needs `exec`) running an exit-coded poll loop: one distinct exit code per actionable transition, observe-and-report only. Give it bounded exits too — a deadline exit and a probe-error exit — because an unbounded loop can never report. The subagent-completion notification is the only wake primitive, so the loop must exit to report; mutations (`gh pr update-branch`, merge) stay with the parent in the foreground where they are visible and approvable.
 
   **How much of this is measured, stated exactly.** Measured 2026-09-23 on Devin CLI 3000.11.1, authenticated, `devin -p` in a scratch repo: `run_subagent` DOES arm a background subagent and the parent continues ("Subagent `<id>` is running in the background"). What is NOT yet measured end to end is the parent being WOKEN by that subagent's completion — the probe's foreground step hit headless mode's confirmation gate, and finishing it needs `--permission-mode dangerous`, which auto-approves every tool on the operator's account and is theirs to authorise. The claim this replaced — that `get_output` cannot wait on an event — is fully measured (§Polling, envelope-capture §7) and is not in doubt. **Consequence for a session:** set a deadline when you arm the watch. If no completion notification has arrived by it, do not keep waiting — fall back to foreground `exec` `gh` probes on your own cadence and disclose in the deliverable that the wait ran foreground. Never report a merge or deploy you did not observe.
 - **Permissions**: Devin's permission system differs from Claude's; use permissive defaults initially

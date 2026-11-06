@@ -28,8 +28,9 @@ import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGra
 // MCP tools to the cc-router via CC_MCP_ALLOWLIST). The READ tool can join that
 // promotion (closure-bound to `userId`; the Tier-3 cross-tenant-credential
 // rationale does not apply). The SET tool CANNOT be promoted that way: it is
-// approval-required (ADR-309), no cc tool builder is wired to the execution
-// grants, and `readCcMcpAllowlist` throws on any approval-required name.
+// approval-required (ADR-309), no cc builder for THIS tool is wired to the execution
+// grants (only `github_push_branch` is, through its gated registrar), and
+// `readCcMcpAllowlist` throws on any approval-required name.
 // Promoting it needs a grant-reading builder in the cc runner first. Until that promotion lands, the HTTP
 // route + UI is the user's path and these tools are the leader-surface agent
 // equivalent.

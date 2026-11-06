@@ -30,6 +30,7 @@ import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 import { loadProxyTlsClientCa, loadProxyTlsServerOptions } from "./proxy-tls";
 import { verifyProxiedSessionMembership } from "./session-router";
+import { recordProxyNotStarted, recordProxyServer } from "./proxy-listener-status";
 
 const log = createChildLogger("session-proxy");
 
@@ -186,11 +187,13 @@ export function createProxyServer(params: {
 }): HttpsServer | null {
   const tls = loadProxyTlsServerOptions();
   if (!tls) {
+    recordProxyNotStarted("disabled");
     log.info("session-proxy: no PROXY_TLS material — owner proxy listener disabled (single-host/dev)");
     return null;
   }
   const bindAddress = params.bindAddress ?? process.env.SOLEUR_PROXY_BIND?.trim();
   if (!bindAddress) {
+    recordProxyNotStarted("no_bind");
     // Fail-closed: without an explicit private-net bind we would default to
     // 0.0.0.0 and expose a token-less session port behind only the firewall.
     reportSilentFallback(
@@ -212,6 +215,7 @@ export function createProxyServer(params: {
   // no allowlist ⇒ refuse to start (never serve an unrestricted takeover port).
   const peerAllowlist = parseProxyPeerAllowlist(process.env.SOLEUR_PROXY_PEER_ALLOWLIST);
   if (peerAllowlist.size === 0) {
+    recordProxyNotStarted("no_allowlist");
     reportSilentFallback(
       new Error(
         "SOLEUR_PROXY_PEER_ALLOWLIST unset/empty — refusing to start the owner proxy " +
@@ -269,7 +273,30 @@ export function createProxyServer(params: {
     });
   });
 
-  httpsServer.listen(port, () => log.info({ port }, "session-proxy: owner proxy listener started (one-way TLS)"));
+  // A listen failure (EADDRNOTAVAIL when the private IP is not on this host yet,
+  // EADDRINUSE on a stale listener) is emitted as 'error' on the https server, and
+  // `ws` re-emits the server's 'error' on the WebSocketServer — which throws if the
+  // wss has no listener. Either would reach installCrashHandlers -> process.exit(1)
+  // -> a restart loop of the WHOLE app for a relay-only fault. Handle both here: the
+  // relay is then simply not bound (proxy-listener-status derives `error` from
+  // `server.listening`), the fault is mirrored, and the host keeps serving locally.
+  const onListenError = (err: NodeJS.ErrnoException) => {
+    reportSilentFallback(err, {
+      feature: "control_plane_route",
+      op: "createProxyServer.listen-error",
+      message: "owner proxy listener failed to bind; relay not serving on this host",
+      extra: { code: err.code, bindAddress, port },
+    });
+  };
+  httpsServer.on("error", onListenError);
+  wss.on("error", onListenError);
+  recordProxyServer(httpsServer);
+
+  // Bind the PRIVATE address only: `listen(port, cb)` would bind the wildcard (`::`),
+  // exposing a token-less pre-authenticated session port beyond the private net.
+  httpsServer.listen(port, bindAddress, () =>
+    log.info({ port, bindAddress }, "session-proxy: owner proxy listener started (one-way TLS)"),
+  );
   return httpsServer;
 }
 
