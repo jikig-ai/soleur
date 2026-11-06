@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1251
-# generated-at=2026-11-06T02:40:05Z
+# generated-at=2026-11-06T07:45:07Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -409,6 +409,7 @@ scripts/dogfood/grok-gpu-bootstrap	54	measured
 scripts/dogfood/grok-measure	36	measured
 scripts/domain-model-drift	1066	measured
 scripts/egress-audit-retention-check	1222	floor
+scripts/egress-gw-probe-silent-12180	1251	floor
 scripts/ensure-doppler	103	measured
 scripts/ensure-kb-index	1753	measured
 scripts/expenses-verify-by-check	257	measured
