@@ -11,12 +11,13 @@
  */
 import { execFileSync } from "node:child_process";
 import { gitFixtureEnv } from "../../../../plugins/soleur/test/lib/git-fixture-env";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const m = vi.hoisted(() => ({
+  spawns: 0,
   getRuntimeFlag: vi.fn(),
   createShare: vi.fn(),
   currentWorkspace: { value: "00000000-0000-4000-8000-000000000001" },
@@ -28,6 +29,23 @@ const m = vi.hoisted(() => ({
   notifyApprovalRequested: vi.fn(async (_id: string, _ws: string, _exp: string | null) => true),
 }));
 
+// A spawn counter over child_process (delegating to the real one): the gate's HEAD read must execute no process at all.
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const count =
+    <T extends (...a: never[]) => unknown>(fn: T) =>
+    (...a: Parameters<T>) => {
+      m.spawns++;
+      return fn(...a);
+    };
+  return {
+    ...actual,
+    execFile: count(actual.execFile as (...a: never[]) => unknown),
+    execFileSync: count(actual.execFileSync as (...a: never[]) => unknown),
+    spawn: count(actual.spawn as (...a: never[]) => unknown),
+    spawnSync: count(actual.spawnSync as (...a: never[]) => unknown),
+  };
+});
 vi.mock("@/lib/supabase/service", () => ({ createServiceClient: (...a: unknown[]) => m.createServiceClient(...a) }));
 vi.mock("@/lib/supabase/tenant", () => ({ getFreshTenantClient: (...a: unknown[]) => m.getFreshTenantClient(...a) }));
 vi.mock("@/server/approval/notify", () => ({ notifyApprovalRequested: (...a: unknown[]) => (m.notifyApprovalRequested as (...x: unknown[]) => Promise<boolean>)(...a) }));
@@ -55,6 +73,7 @@ import { canonicalizeAction, computeActionHash } from "@/server/approval/canonic
 import { buildKbShareTools } from "@/server/kb-share-tools";
 import type { ApprovalRpcClient, RpcResult } from "@/server/approval/service";
 import { clearAllWaiters } from "@/server/approval/waiters";
+import { reportSilentFallback } from "@/server/observability";
 import { CONVERSATION_ID, MESSAGE_ID, OTHER_WORKSPACE_ID, SAMPLES, TOOLS, USER_ID, WORKSPACE_ID } from "./fixtures";
 
 const HEAD = "d".repeat(40);
@@ -332,6 +351,83 @@ describe("createApprovalGateDeps: the DEFAULT workspace HEAD reader (real git, n
     roots.push(empty);
     const d = createApprovalGateDeps({ userId: USER_ID, workspaceId: WORKSPACE_ID, repoSlug: REPO, workspacePath: empty, grants: new ExecutionGrants(), tenantClient: tenantFake().client });
     await expect(d.resolveServerDerived(TOOLS.pushBranch, {})).rejects.toThrow();
+  });
+
+  const depsFor = (dir: string) =>
+    createApprovalGateDeps({ userId: USER_ID, workspaceId: WORKSPACE_ID, repoSlug: REPO, workspacePath: dir, grants: new ExecutionGrants(), tenantClient: tenantFake().client });
+  const bindingFor = (dir: string) => depsFor(dir).resolveServerDerived(TOOLS.pushBranch, { branch: "feat-x" });
+
+  it("ADR-309 9b: a planted .git/commondir naming another repository does not redirect the bound sha (control: git itself is redirected)", async () => {
+    const a = repo(1);
+    const b = repo(2);
+    writeFileSync(join(a.dir, ".git", "commondir"), `${join(b.dir, ".git")}\n`);
+    // Control: the pre-9b read (git run in the workspace with the server's environment) returns the OTHER repository's HEAD.
+    expect(git(a.dir, "rev-parse", "HEAD")).toBe(b.head);
+    const before = m.spawns;
+    expect(await bindingFor(a.dir)).toEqual({ repo: REPO, headSha: a.head });
+    expect(m.spawns).toBe(before);
+  });
+
+  it("ADR-309 9b: an inherited server GIT_DIR naming another repository does not redirect the bound sha", async () => {
+    const a = repo(1);
+    const b = repo(2);
+    const saved = process.env.GIT_DIR;
+    process.env.GIT_DIR = join(b.dir, ".git");
+    try {
+      expect(await bindingFor(a.dir)).toEqual({ repo: REPO, headSha: a.head });
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+    }
+  });
+
+  it("ADR-309 9b: the read spawns no process", async () => {
+    const a = repo(1);
+    const before = m.spawns;
+    await bindingFor(a.dir);
+    expect(m.spawns).toBe(before);
+  });
+
+  it("ADR-309 9b: a worktree-style .git FILE and a symlinked .git are not approvable, and each refusal is reported with a closed reason", async () => {
+    const file = repo(1);
+    const moved = join(mkdtempSync(join(tmpdir(), "gate-deps-moved-")), "git");
+    roots.push(moved);
+    renameSync(join(file.dir, ".git"), moved);
+    writeFileSync(join(file.dir, ".git"), `gitdir: ${moved}\n`);
+    await expect(bindingFor(file.dir)).rejects.toThrow();
+    expect(reportSilentFallback).toHaveBeenLastCalledWith(null, { feature: "approval", op: "head-read-failed", extra: { reason: "git_dir_not_plain" } });
+
+    const link = repo(1);
+    const copy = join(mkdtempSync(join(tmpdir(), "gate-deps-copy-")), "git");
+    roots.push(copy);
+    renameSync(join(link.dir, ".git"), copy);
+    symlinkSync(copy, join(link.dir, ".git"));
+    await expect(bindingFor(link.dir)).rejects.toThrow();
+    expect(reportSilentFallback).toHaveBeenLastCalledWith(null, { feature: "approval", op: "head-read-failed", extra: { reason: "git_dir_not_plain" } });
+  });
+
+  it("ADR-309 9b: an unborn HEAD is reported as ref_unresolvable and never passes a path or the Error to the reporter", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "gate-deps-unborn-"));
+    roots.push(dir);
+    git(dir, "init", "-q", "-b", "main");
+    mkdirSync(join(dir, "x"));
+    vi.mocked(reportSilentFallback).mockClear();
+    await expect(bindingFor(dir)).rejects.toThrow();
+    expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+    const [err, opts] = vi.mocked(reportSilentFallback).mock.calls[0];
+    expect(err).toBeNull();
+    expect(opts).toEqual({ feature: "approval", op: "head-read-failed", extra: { reason: "ref_unresolvable" } });
+    expect(JSON.stringify(opts)).not.toContain(dir);
+  });
+
+  it("ADR-309 9b: a 64-hex HEAD is refused by the reader (never displayed), a normal read reports nothing", async () => {
+    const a = repo(1);
+    vi.mocked(reportSilentFallback).mockClear();
+    await bindingFor(a.dir);
+    expect(reportSilentFallback).not.toHaveBeenCalled();
+    writeFileSync(join(a.dir, ".git", "HEAD"), `${"a".repeat(64)}\n`);
+    await expect(bindingFor(a.dir)).rejects.toThrow();
+    expect(reportSilentFallback).toHaveBeenLastCalledWith(null, { feature: "approval", op: "head-read-failed", extra: { reason: "not_hex40" } });
   });
 });
 
