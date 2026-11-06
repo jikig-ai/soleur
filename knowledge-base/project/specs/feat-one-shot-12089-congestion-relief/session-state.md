@@ -53,3 +53,10 @@
 - Follow-up issue filed: #12276 (umbrella-consolidation deferred nits).
 - Next: fix-commit targeted round (review --fix-round --since 5df484e5aa) → soleur:qa → soleur:compound → soleur:ship. Merge via operator `gh pr merge --admin` (auto-merge deadlocks by design — old context names pend forever; admin-merge-ready.sh will refuse on ABSENT old names → raw operator command per ADR-032 note).
 - PR body already documents landing path. Census baseline (task 3.5) attach to #12089 before merge.
+
+## Review Phase Complete
+- Main panel: 10/10 seats (3 design + 7 panel). Fix-round: 12/12 seats (9 agents + shellcheck + anti-slop + semgrep-sast). Trailers: 67c610a685 (Reviewed-By-Soleur, single-user incident) + db09c6f80a (Reviewed-Fix-Round 5df484e5aa..).
+- Test-design catch: lint-umbrella-aggregate certified wiring not verdict-flow → hardened with (d) verdict-flow tokens + (e) census-discovery assertions (commit 0418e648d7).
+- Deferred nits: #12276 (+ fix-round residual comment). Deferred issue #12269 (max_entries_to_build experiment).
+- Next: soleur:qa → soleur:compound → soleur:ship. Merge via operator raw `gh pr merge --admin` (documented; admin-merge-ready.sh refuses by design on ABSENT old names).
+- Census baseline (task 3.5): shell 3d50b2 census run — check result, attach to #12089 before merge.
