@@ -422,7 +422,7 @@ reset_defaults; ANCHOR_ID=1047828888; A_START=$((NOW - 33333)); FLOOR_AGE=22000;
 run_case "incident started floor minus 299 s (third fixture) -> action_required" 5
 # a second incident in the anchor's own second is pre-floor now: it is judged by the floor, not by the anchor's start
 reset_defaults; build_fixtures
-patch "$WORK/incidents.json" --argjson s "$(iso "$A_START" | jq -R .)" '.data += [{id:"9191",type:"incident",attributes:{name:"soleur-egress-gw-probe-silent-prd",started_at:$s,resolved_at:"'"$(iso $((A_START + 60)))"'",cause:"x"}}]'
+patch "$WORK/incidents.json" '.data += [{id:"9191",type:"incident",attributes:{name:"soleur-egress-gw-probe-silent-prd",started_at:$s,resolved_at:$r,cause:"x"}}]' --arg s "$(iso "$A_START")" --arg r "$(iso $((A_START + 60)))"
 run_case "a second RESOLVED production incident in the anchor's own second (before the floor) -> PASS, not a recurrence" 0
 field_is "newer_prod_incident=0"
 reset_defaults; build_fixtures
@@ -544,7 +544,7 @@ reset_defaults; build_fixtures
 patch "$WORK/incidents.json" '.data |= map(if .id == "1048111600" then .attributes.resolved_at = "garbage" else . end)'
 run_case "an unparseable resolved_at on a listed production incident -> unknown, never read as open" 3
 reset_defaults; build_fixtures
-patch "$WORK/incidents.json" --arg f "$(iso $((NOW + 500)))" '.data |= map(if .id == "1048111600" then .attributes.resolved_at = $f else . end)'
+patch "$WORK/incidents.json" '.data |= map(if .id == "1048111600" then .attributes.resolved_at = $f else . end)' --arg f "$(iso $((NOW + 500)))"
 run_case "a production incident resolved in the future -> unknown" 3
 
 # ── row 2: truncation / paging ───────────────────────────────────────────────────────────────
@@ -795,7 +795,7 @@ if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then f
 # ── floor ────────────────────────────────────────────────────────────────────────────────────
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
 # Re-pin deliberately when rows are added; never lower it to fit a deletion.
-MIN_ASSERTIONS=1
+MIN_ASSERTIONS=364
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2
   exit 1

@@ -973,9 +973,12 @@ instead. Read the verdict, not the dashboard:
 read/write token under that exact name, so without the remap the probe would run with
 it, and the remap keeps the run on the read-only token. The `BETTERSTACK_QUERY_*` names
 that `rows_in_window` reads are in the same config and need no mapping) prints one
-`SOLEUR_EGRESS_GW_SILENT_SOAK` line with `canary=`, `canary_alert_live=`,
-`prod_incident=`, `prod_alert=`, `anchor_resolved_by=` and `rows_in_window=` (the
-trailing 15 minutes of rows per host). Whoever merges the change runs it once at
+`SOLEUR_EGRESS_GW_SILENT_SOAK` line with twelve fields, among them `canary=`,
+`canary_alert_live=`, `prod_incident=`, `prod_alert=`, `anchor_resolved_by=`,
+`rows_in_window=` (the trailing 15 minutes of rows per host), `newer_prod_incident=`,
+`quiet_age_s=` (seconds since the soak origin: the later of the pinned apply floor,
+2026-11-06T12:16:03Z, and the latest resolve of any production incident) and
+`pre_floor_open_prod_incident=`. Whoever merges the change runs it once at
 apply completion + 25 minutes; once tracker #12189 is enrolled (its follow-through
 directive, `earliest` set after the apply) the daily sweeper is the backstop, so an
 evaluator-blind finding waits up to a day without that run. The canary shares the production query shape, so it proves non-zero
@@ -986,15 +989,32 @@ prints beside it; several rows share the same `canary=` and `canary_alert_live=`
 
 | Observation | Reading | Response |
 |---|---|---|
-| `canary=fired` and 1047829421 resolved with `anchor_resolved_by=none` (ASSUMED to mean the alert recovered it: `resolved_by` null; never observed, because no incident of this alert has auto-resolved yet) | the evaluator delivers a non-zero value for this shape | wait out the 4 h soak, then delete the canary pair (tracker #12189) |
+| `verdict=not_yet`, `canary=fired`, `prod_alert=ok`, `newer_prod_incident=0` and `quiet_age_s` below 14400 | the production alert has been quiet for less than the 4 h soak counted from the apply floor (earliest pass about 16:16Z on 2026-11-06) | rerun later; not a finding |
+| `verdict=action_required`, `canary=fired`, `prod_alert=ok`, `newer_prod_incident=0`, `quiet_age_s` at least 14400, rows on both hosts, message says delete the canary | the evaluator delivers a non-zero value for this shape and the production alert stayed quiet for 4 h after the apply | delete the canary pair (tracker #12189; needs the owner's go-ahead and the standalone `[ack-destroy]` line); the sweep after the deletion returns exit 0 and closes the tracker |
+| `newer_prod_incident=1` (a production incident other than the anchor started at or after the apply floor minus 300 s) | a recurrence on the inverted shape | the poller (#12190); `rows_in_window` separates an evaluator fault (rows on both hosts) from an emitter or ingest fault (a host with none); never a revert; any Better Stack write needs the owner's per-command go-ahead |
+| `pre_floor_open_prod_incident=1` with `verdict=not_yet` or `action_required` | an exact-name production incident that started before the apply is still open (one that already auto-resolved, like 1048111600, never counts) | `not_yet` until 15300 s past the soak origin, then the poller (#12190); a manual resolve is a Better Stack write needing the owner's per-command go-ahead |
+| `verdict=action_required`, message says a roster host has no rows | the production alert is green but a roster host emits nothing in the trailing 15 minutes | the decode ladder below; the host is the finding, not the alert |
+| `verdict=unknown` with `rows_in_window=unknown` after the soak held | the warehouse read did not answer on the pass path (or `BETTERSTACK_QUERY_*` is unbound), so a pass cannot be granted | rerun with the `prd_terraform` config; never read as healthy |
+| `verdict=unknown` and the message names the apply floor, the canary alert's `created_at` or the canary incident | the pinned floor and a live cross-check disagree (a re-created canary, or the pin is later than the canary) | re-pin `APPLY_FLOOR_EPOCH` by hand in the PR that changes the production alert's evaluated query, `on_missing_data` or `query_period` |
 | `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says the evaluator is blind | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
 | `verdict=not_yet`, `canary=absent`, `canary_alert_live=1`, message says the canary alert was created N s ago | one evaluation cycle (20 minutes) has not passed | rerun later; not a finding |
 | `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says PAUSED | someone paused the canary | not an evaluator finding; unpausing is a Better Stack write needing the owner's per-command go-ahead |
-| `verdict=action_required`, `canary=absent`, `canary_alert_live=0` | the canary alert was deleted or never created (the apply has not run, alert-count cap, failed create) | hotfix PR using the "Deleting the canary" recipe below, then the poller; not an evaluator finding |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=1` | the canary alert was deleted or never created (the apply has not run, alert-count cap, failed create) | hotfix PR using the "Deleting the canary" recipe below, then the poller; not an evaluator finding |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=0`, message says retired | the canary was deleted and its incident is no longer listed, so `canary=fired` cannot be re-read | close tracker #12189 by hand citing the last sweep comment that read `canary=fired`; do NOT build the poller on this (whether the vendor keeps a canary incident after its alert is deleted is unverified) |
 | `prod_alert=absent` or `prod_alert=shape` | the production alert is not running as designed | restore it by apply; do not read anything else until it is |
 | `prod_alert=paused` | the page is off | unpausing is a Better Stack write needing the owner's per-command go-ahead; do not leave it paused |
-| 1047829421 still open and `rows_in_window` shows rows on both hosts now | evaluator, partial visibility, or a vendor that never auto-resolves | the poller (#12190); any pause or manual resolve is a Better Stack write needing the owner's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
-| 1047829421 still open and one host has no rows now | real silence | the decode ladder below; the alert is right |
+| a production incident still open (`prod_incident=open` for 1047829421, or `pre_floor_open_prod_incident=1`) and `rows_in_window` shows rows on both hosts now | evaluator, partial visibility, or a vendor that never auto-resolves | the poller (#12190); any pause or manual resolve is a Better Stack write needing the owner's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
+| a production incident still open and one host has no rows now | real silence | the decode ladder below; the alert is right |
+
+**`anchor_resolved_by` is informational; no verdict depends on it.** OBSERVED on 2026-11-06 (read-only
+incident API): `resolved_by` is null on production-alert incident 1048111600 (the old alert shape, started
+07:45Z, auto-resolved 12:10Z, before the apply), and is "API" on 1047829421 (resolved through the API at
+07:47:00.612Z, not by the alert). Still NOT measured: that the null is the evaluator's own recovery rather than
+another vendor path, that incidents of the new shape auto-resolve, whether the canary incident survives the
+deletion of its alert, why the canary incident started 64 s before its alert's `created_at`, and what bumps
+alert `updated_at` (inferred vendor churn about every five minutes; the probe never reads it). The earlier
+wording that a null `resolved_by` was ASSUMED to mean "the alert recovered it" is superseded by this paragraph
+and the ADR-218 amendment of 2026-11-06.
 
 A Better Stack write (resolving or pausing an incident by hand) needs the owner's
 explicit per-command go-ahead, and so does deleting the canary (a Better Stack
