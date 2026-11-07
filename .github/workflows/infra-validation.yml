@@ -381,10 +381,15 @@ jobs:
           # under any future `set -o pipefail`. Downstream `sort -u | jq`
           # collapses empty input to `[]`. Mirror unit test:
           # plugins/soleur/test/infra-validation-detect.test.sh. See #4012.
+          # Every infra root, as the JSON array the matrix consumes: the workflow_dispatch answer and the
+          # fail-safe answer of every arm below that cannot resolve its diff.
+          all_infra_roots() {
+            { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
+              find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
+              | jq -R -s -c 'split("\n") | map(select(. != ""))'
+          }
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
-                       find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
-                    | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            DIRS=$(all_infra_roots)
           elif [[ "$EVENT_NAME" == "push" ]]; then
             # (#7299) BASE_REF is EMPTY on push events, so the PR-diff branch below would
             # expand to the malformed `origin/...HEAD`. git resolves that to nothing, DIRS
@@ -408,23 +413,39 @@ jobs:
             # push-side job here touches a production credential (`plan` is pull_request-only),
             # so the blast radius of over-validating is zero.
             if [ -n "$BEFORE_SHA" ] && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" >/dev/null; then
-              DIRS=$(git diff --name-only "$BEFORE_SHA" HEAD \
+              # (#12332) The list is captured FIRST, NUL-delimited, so (1) a name git would C-quote (a
+              # non-ASCII byte, tab, `"` or `\`) still starts with the anchored prefix, (2) `--no-renames`
+              # lists a rename's OLD path (a rename away from an infra root is a change to that root),
+              # (3) `--ignore-submodules=none` lists a gitlink that configuration hides, and (4) a git
+              # failure is a failure: the pipefail is scoped to the substitution (this step carries no
+              # step-level pipefail), and the fail arm validates every root, never an empty list.
+              if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "$BEFORE_SHA" HEAD | tr '\0' '\n'); then
+                echo "::notice::git diff $BEFORE_SHA..HEAD failed; validating all infra roots (fail-safe)"
+                DIRS=$(all_infra_roots)
+              else
+                DIRS=$(printf '%s\n' "$CHANGED" \
+                  | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
+                  | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
+                  | sort -u \
+                  | jq -R -s -c 'split("\n") | map(select(. != ""))')
+              fi
+            else
+              echo "::notice::push base '$BEFORE_SHA' is unresolvable; validating all infra roots (fail-safe)"
+              DIRS=$(all_infra_roots)
+            fi
+          else
+            # (#12332) Same capture-first construction as the push arm above. A failed diff validates
+            # every root: running too much costs CI minutes, running nothing costs the guarantee.
+            if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "origin/${BASE_REF}...HEAD" | tr '\0' '\n'); then
+              echo "::notice::git diff against origin/${BASE_REF} failed; validating all infra roots (fail-safe)"
+              DIRS=$(all_infra_roots)
+            else
+              DIRS=$(printf '%s\n' "$CHANGED" \
                 | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
                 | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
                 | sort -u \
                 | jq -R -s -c 'split("\n") | map(select(. != ""))')
-            else
-              echo "::notice::push base '$BEFORE_SHA' is unresolvable; validating all infra roots (fail-safe)"
-              DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
-                         find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
-                      | jq -R -s -c 'split("\n") | map(select(. != ""))')
             fi
-          else
-            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" \
-              | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
-              | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
-              | sort -u \
-              | jq -R -s -c 'split("\n") | map(select(. != ""))')
           fi
           printf 'directories=%s\n' "$DIRS" >> "$GITHUB_OUTPUT"
 

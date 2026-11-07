@@ -206,13 +206,20 @@ jobs:
             git fetch --quiet origin "$BASE_REF"
             diff_base="origin/${BASE_REF}"
           fi
-          changed_files=$(git diff --name-only "${diff_base}"...HEAD)
+          # (#12332) Two reads, because the two matchers want opposite things from a rename. The SURFACE
+          # scan wants rename-free: a rename AWAY from a DSAR surface file is a change to that surface, and
+          # default rename detection lists only the new path. The REQUIRED-DOCS check below is an exact-line
+          # match on a legal document and stays destination-only: with `--no-renames` a rename away from a
+          # legal document would list its old path and count as "updated", weakening the gate. Both are
+          # NUL-delimited (a C-quoted name never matches) and pipefail is on (`set -euo pipefail` above).
+          surface_files=$(git diff -z --no-renames --ignore-submodules=none --name-only "${diff_base}"...HEAD | tr '\0' '\n')
+          changed_files=$(git diff -z --name-only "${diff_base}"...HEAD | tr '\0' '\n')
           echo "Changed files in PR:"
           echo "$changed_files" | sed 's/^/  /'
 
           surface_hit=false
           for pat in "${surface_patterns[@]}"; do
-            if echo "$changed_files" | grep -Ec "$pat" >/dev/null; then
+            if echo "$surface_files" | grep -Ec "$pat" >/dev/null; then
               surface_hit=true
               break
             fi
@@ -646,7 +653,10 @@ jobs:
           # making the three-dot diff fail under `set -e` and redden every
           # non-target PR. checkout already used fetch-depth: 0 (full history).
           git fetch --no-tags origin "$BASE_REF"
-          changed_files=$(git -c core.quotePath=false diff --name-only "origin/${BASE_REF}...HEAD")
+          # (#12332) NUL-delimited and rename-free: a tab, `"` or `\` name stays under the anchor
+          # (core.quotePath=false never covered those), a rename away from apps/web-platform/ lists its
+          # old path, and `set -o pipefail` above makes a failed diff fail the step, not read as "no change".
+          changed_files=$(git diff -z --no-renames --ignore-submodules=none --name-only "origin/${BASE_REF}...HEAD" | tr '\0' '\n')
           if grep -qE '^apps/web-platform/' <<<"$changed_files"; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else

@@ -202,7 +202,7 @@ jobs:
           # A git/checkout error must FAIL the job — never silently emit
           # sentry=false. The aggregator treats a detect-changes failure as
           # fail-closed, so this cannot degrade to a green.
-          if ! CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD"); then
+          if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "origin/${BASE_REF}...HEAD" | tr '\0' '\n'); then
             echo "::error::git diff against origin/${BASE_REF} failed; failing detect-changes closed." >&2
             exit 1
           fi
