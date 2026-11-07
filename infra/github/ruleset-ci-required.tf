@@ -260,3 +260,7 @@ resource "github_repository_ruleset" "ci_required" {
     }
   }
 }
+
+# #12089 apply ack — the required_status_checks swap from the 16 folded guard
+# contexts to the 3 umbrella contexts is an intentional nested-block rewrite;
+# the apply-side destroy-guard ack rides the merge commit message ([ack-destroy]).
