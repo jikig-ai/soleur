@@ -24,6 +24,14 @@ export const AGENT_WAIT_MINUTES = 5;
  */
 export const APPROVAL_RETENTION_DAYS = 30;
 
+/**
+ * Requester labels (#9601). `REQUESTER_SELF` is the literal the server sends to the verified requester; `REQUESTER_FALLBACK`
+ * is what an Owner sees when the requester is unknown (erased account), no longer a member, or the stored address is
+ * unusable. The labeler only ever returns an address of one `@` and no whitespace, so a real label never equals either.
+ */
+export const REQUESTER_SELF = "you";
+export const REQUESTER_FALLBACK = "a workspace member";
+
 /** Card, state and landing-page strings (in-app, behind sign-in). */
 export const APPROVAL_COPY = {
   releasedBadge: "Released to your agent",
@@ -47,6 +55,14 @@ export const APPROVAL_COPY = {
   newerRequestBanner: "A newer request from your agent exists",
   newerRequestBannerDetail: "Check which one you mean to approve.",
   nonOwnerWaiting: "Waiting for the workspace Owner",
+  /** The requester line on an Owner's card. */
+  requestedBy: (label: string) => `Requested by ${label}`,
+  /** A member who may not see the action (neither an Owner nor the requester): waiting, with no action text. */
+  memberWaitingRedacted: "An action in this conversation is waiting for an Owner's approval.",
+  /** The verified requester's own card. */
+  memberWaitingOwn: "You requested this. Waiting for an Owner's approval.",
+  /** Defensive only: a card whose action is withheld from the viewer and whose status is no longer pending. */
+  withheldSettledTitle: "This request is no longer waiting",
   conversationClosed: "This conversation is closed",
   detailsRemoved: "Details removed per retention policy",
   pendingSubline: (minutes: number) => `Your agent stopped waiting after ${minutes} minutes`,
@@ -70,6 +86,8 @@ export const APPROVAL_STATE_COPY = {
     alreadyDecided: "Already decided",
     notRecorded: "Not recorded",
     detailsRemoved: "Details removed",
+    /** Defensive only: a withheld card whose status moved on. */
+    withheldSettled: "Not waiting",
   },
   deniedTitle: (noun: string) => `You denied this ${noun}`,
   expiredTitle: "Nobody decided in time",

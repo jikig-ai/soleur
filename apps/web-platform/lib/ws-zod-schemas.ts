@@ -421,12 +421,14 @@ const approvalRequestSchema = z.strictObject({
   approvalId: z.uuid(),
   conversationId: z.string(),
   toolName: z.string(),
-  view: approvalCardViewSchema,
+  view: approvalCardViewSchema.nullable(),
   status: z.enum(["pending", "approved"]),
   expiresAt: z.string(),
   requestCount: z.number().int().nonnegative(),
   viewerRole: z.enum(["owner", "member"]),
   agentWaiting: z.boolean().optional(),
+  // 320 = the RFC 5321 path bound: the longest address the labeler will send.
+  requester: z.string().min(1).max(320).optional(),
 });
 const approvalStatusSchema = z.strictObject({
   type: z.literal("approval_status"),
