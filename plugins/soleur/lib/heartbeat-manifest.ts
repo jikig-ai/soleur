@@ -394,6 +394,27 @@ export const MANIFEST: ManifestEntry[] = [
       "archive-reading repo-side feeder (scheduled-deadman-heartbeat-feeder.yml, hourly, dispatched by the web-server watchdog clock): it queries the Better Stack Logs archive for web-1's passing luks-monitor row and beats only when one exists, so no host change and no host replace applies (a host-side ping would need a user_data change = a web-1 replace, which web-1 cannot take). Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
   {
+    name: "inngest_luks_key_probe_deadman",
+    // #12230 (c1, CTO ruling 2026-11-07) — the LUKS key-continuity probe's dead-man. Heartbeat form
+    // chosen after the measured 422s killed every query_period rung; fed archive-side over the
+    // 93600 s measured-rows window, born paused, owner-armed after two consecutive
+    // qualifying_row_heartbeat_paused runs (same #11631 discipline).
+    arming: "external-probe",
+    paused: true,
+    feeder: {
+      kind: "cron",
+      evidence: {
+        file: ".github/workflows/scheduled-deadman-heartbeat-feeder.yml",
+        pattern: "bash scripts/deadman-heartbeat-feeder.sh",
+      },
+    },
+    // Fed but paused until the owner arms post-#11266 promotion + two qualifying runs: without this,
+    // heartbeat-live-reconcile reports fed-but-paused on every twice-daily drift run (seat P2, PR #12331).
+    arming_pending: { tracking_issue: 12230 },
+    exempt_reason:
+      "archive-reading repo-side feeder over the probe's measured rows (verdict=ok|fail_ on either channel); no host change applies — the probe rows ship off the dedicated host already. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
+  },
+  {
     name: "claude_cost_capture",
     // #11631 — the archive-fed dead-man that replaced logtail_exploration_alert.claude_cost_capture_dark.
     // Same feeder and workflow as luks_monitor_host_timer above, over the 86400 s window and the cost-marker

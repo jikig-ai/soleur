@@ -146,13 +146,14 @@ TLS_NAMES="SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOS
 # The independent expected target set, frozen HERE (set identity, never a `>= N` floor). An edit that changes
 # the script and this table in one diff proves consistency only; integrity comes from the emitter pins below, the
 # Phase 0.1 live capture and the Phase 0.5 verbatim-move check.
-T_LUKS="luks-monitor-host-timer"; T_COST="claude-cost-capture"
-EXPECT_TARGETS="$T_LUKS $T_COST"
-declare -A E_WINDOW=([$T_LUKS]=97200 [$T_COST]=86400)
-declare -A E_NAME=([$T_LUKS]="soleur-luks-monitor-host-timer-prd" [$T_COST]="soleur-claude-cost-capture-prd")
+T_LUKS="luks-monitor-host-timer"; T_COST="claude-cost-capture"; T_KEYP="inngest-luks-key-probe"
+EXPECT_TARGETS="$T_LUKS $T_COST $T_KEYP"
+declare -A E_WINDOW=([$T_LUKS]=97200 [$T_COST]=86400 [$T_KEYP]=93600)
+declare -A E_NAME=([$T_LUKS]="soleur-luks-monitor-host-timer-prd" [$T_COST]="soleur-claude-cost-capture-prd" [$T_KEYP]="soleur-inngest-luks-key-probe-deadman-prd")
 declare -A E_PRED=(
   [$T_LUKS]="JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'"
   [$T_COST]="((raw LIKE '%\"SOLEUR_CLAUDE_COST\":true%' AND JSONExtractString(raw, 'message', 'component') = 'claude-cost' AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%' AND JSONExtract(raw, 'message', 'cost_usd', 'Nullable(Float64)') IS NOT NULL) OR (JSONExtractString(raw, 'message', 'feature') = 'cron-anthropic-credit-probe' AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid')))"
+  [$T_KEYP]="(JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip' AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1 AND (position(JSONExtractString(raw, 'message'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'message'), 'verdict=fail_') > 0)) OR (JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home' AND JSONExtractString(raw, 'stage') = 'luks-key-probe' AND (position(JSONExtractString(raw, 'detail'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'detail'), 'verdict=fail_') > 0))"
 )
 expect_sql() { # <target> <predicate> -> the SQL the feeder must send (frozen shape)
   local w="${E_WINDOW[$1]}" win
@@ -1778,14 +1779,15 @@ wfmut_drv_wrongreason() { printf 'if\n' > "$WORK/wf.mut.broken.sh"; WF_RUN_OVERR
 GOOD='case "$1" in
   luks-monitor-host-timer) printf "deadman-feeder: target=luks-monitor-host-timer verdict=beat n=1 newest_dt=2026-10-30_00:04:56.747448\n"; echo "fed: noise line"; exit 0 ;;
   claude-cost-capture) printf "deadman-feeder: target=claude-cost-capture verdict=beat n=4\n"; exit 0 ;;
+  inngest-luks-key-probe) printf "deadman-feeder: target=inngest-luks-key-probe verdict=beat n=2\n"; exit 0 ;;
 esac'
 wf_run "$GOOD"
 wf_check "workflow step, both beat" "exits 0, all_decided=true, only marker lines echoed, no UNARMED warning" "$([[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=true' "$WORK/wf/out.txt" && grep -q 'verdict=beat n=1' "$WORK/wf/log.txt" && grep -q 'verdict=beat n=4' "$WORK/wf/log.txt" && ! grep -q 'fed: noise' "$WORK/wf/log.txt" && ! grep -q 'UNARMED' "$WORK/wf/log.txt"; echo $?)"
 # Predicates over the last wf_run, shared by the real rows and the behaviour mutants below.
 p_unarmed() { [[ "$WF_RC" == 0 ]] && grep -qx 'all_decided=true' "$WORK/wf/out.txt" \
-  && [[ "$(grep -c '^::warning::deadman heartbeat .* is UNARMED (paused)$' "$WORK/wf/log.txt")" == 2 ]] \
+  && [[ "$(grep -c '^::warning::deadman heartbeat .* is UNARMED (paused)$' "$WORK/wf/log.txt")" == 3 ]] \
   && ! grep -q 'no page can fire' "$WORK/wf/log.txt" \
-  && [[ "$(grep -c 'UNARMED (paused)' "$WORK/wf/summary.txt" 2>/dev/null)" == 2 ]]; }
+  && [[ "$(grep -c 'UNARMED (paused)' "$WORK/wf/summary.txt" 2>/dev/null)" == 3 ]]; }
 p_luks_dark() { [[ "$WF_RC" == 0 ]] && grep -qx '::error::deadman luks-monitor-host-timer: HOST/SOURCE DARK (no_qualifying_row)' "$WORK/wf/log.txt" && ! grep -q 'FEEDER FAULT' "$WORK/wf/log.txt"; }
 p_cost_dark() { [[ "$WF_RC" == 0 ]] && grep -qx '::error::deadman claude-cost-capture: SOURCE DARK (no_qualifying_row); the cause is not established' "$WORK/wf/log.txt" \
   && ! grep -q 'HOST/SOURCE DARK' "$WORK/wf/log.txt" && ! grep -q 'FEEDER FAULT' "$WORK/wf/log.txt"; }
@@ -1930,7 +1932,7 @@ for t in tl:
     need(names[t] is not None, "script-name-missing-" + t)
 blocks = dict((m.group(1), m.group(2)) for m in re.finditer(r'^resource "betteruptime_heartbeat" "([a-z0-9_]+)" \{\n(.*?)^\}', tf, re.S | re.M))
 need(len(blocks) >= 1, "no-heartbeat-blocks-discovered")
-want_res = {"luks-monitor-host-timer": "luks_monitor_host_timer", "claude-cost-capture": "claude_cost_capture"}
+want_res = {"luks-monitor-host-timer": "luks_monitor_host_timer", "claude-cost-capture": "claude_cost_capture", "inngest-luks-key-probe": "inngest_luks_key_probe_deadman"}
 for t in tl:
     res = want_res[t]
     b = blocks.get(res, "")
@@ -2160,7 +2162,7 @@ expect_red G1-7 "paused ignored: the beat is sent to a paused heartbeat" 0 quali
 cases=$((cases + 1))
 if [[ "$(count_calls '^beat$')" == 1 ]]; then pass "G1-7: the stub observed the beat to the paused heartbeat"; else fail "G1-7: no beat observed"; fi
 # G1-8: anti-vacuity — an empty target table is a failure of the discovery, not a pass
-land g1-8 "TARGETS=\"$T_LUKS $T_COST\"" 'TARGETS=""'; _m="$M"
+land g1-8 "TARGETS=\"$T_LUKS $T_COST $T_KEYP\"" 'TARGETS=""'; _m="$M"
 cases=$((cases + 1))
 if [[ -z "$(discover_targets "$_m")" ]]; then pass "mutation row G1-8 is RED: an empty target table discovers 0 targets (the anti-vacuity case above would fail)"
 else fail "mutation row G1-8: the emptied table still discovered targets"; fi
@@ -2345,7 +2347,7 @@ else fail "mutation row G4-6: discovery of zero heartbeats was not noticed"; fi
 "$PY" -I - "$WORKFLOW" "$WORK/mut/wf-droploop.yml" <<'PYL'
 import sys
 s = open(sys.argv[1]).read()
-old = "for t in luks-monitor-host-timer claude-cost-capture; do"
+old = "for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do"
 assert s.count(old) == 1
 open(sys.argv[2], "w").write(s.replace(old, "for t in luks-monitor-host-timer; do"))
 PYL
@@ -2355,8 +2357,8 @@ else fail "mutation row G4-3: the dropped loop target was not noticed (or did no
 "$PY" -I - "$WORKFLOW" "$WORK/mut/wf-reorder.yml" <<'PYL'
 import sys
 s = open(sys.argv[1]).read()
-old = "for t in luks-monitor-host-timer claude-cost-capture; do"
-open(sys.argv[2], "w").write(s.replace(old, "for t in claude-cost-capture luks-monitor-host-timer; do"))
+old = "for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do"
+open(sys.argv[2], "w").write(s.replace(old, "for t in claude-cost-capture inngest-luks-key-probe luks-monitor-host-timer; do"))
 PYL
 cases=$((cases + 1))
 if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-reorder.yml" && ! grep -q 'loop-targets' < <(workflow_violations "$WORK/mut/wf-reorder.yml" 2>&1); then pass "must-PASS (non-canonical): reordering the loop targets stays green"
@@ -2663,7 +2665,7 @@ fi
 # case AND adding one both trip it (a `<` floor lets a suite grow, or swap a deleted case for an unrelated one,
 # unnoticed). A runtime-derived floor falls with the case. Changing a case means setting them to the counts printed
 # on the "=== N passed ... M beat-call assertions ===" line above.
-MIN_PASSES=514
+MIN_PASSES=518
 MIN_BEAT_ASSERTS=117
 if (( passes != MIN_PASSES )); then
   printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; a 0-failure tally proves nothing until the floor is re-derived.\n' "$passes" "$MIN_PASSES" >&2
