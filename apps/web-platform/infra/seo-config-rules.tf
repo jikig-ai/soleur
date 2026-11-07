@@ -260,9 +260,10 @@ resource "cloudflare_ruleset" "seo_config_settings" {
   # mode. test/seo-config-rules.test.ts pins this block for exactly that reason
   # — the regression it guards is a future edit quietly dropping it.
   #
-  # Ordered first to match its live position. Order is not semantically
-  # load-bearing here (both rules are set_config over disjoint host sets), but
-  # matching live keeps the import diff empty.
+  # Ordered first to match its live position, which keeps the import diff empty.
+  # Order IS load-bearing for the origin-TLS rules at the end of this list: they
+  # also match app.soleur.ai, `set_config` is non-terminating and the LAST match
+  # wins, so they must stay AFTER this rule to override it (see their comments).
   # `ref` is pinned to the live rule's existing ref, not omitted. The v4 provider
   # preserves rule IDs across a whole-list PUT by matching on `ref` — without it
   # the original ref is lost on first apply and BOTH rules re-randomise their IDs
@@ -419,42 +420,72 @@ resource "cloudflare_ruleset" "seo_config_settings" {
     }
   }
 
-  # ── ORIGIN-TLS CANARY (ADR-321 decision 3, #10479) — OFF unless var.enable_origin_tls_canary_rule ──
+  # ── ORIGIN-TLS CANARY (ADR-321 decision 3 step 4, #10479) — present always; ENABLED only while var.enable_origin_tls_canary_rule ──
   #
   # PURPOSE. Measure the REAL Cloudflare-to-origin TLS handshake against the Origin CA certificate with edge traffic
   # BEFORE the host-wide strict flip. For a request to /health on app.soleur.ai that carries the header
   # `x-origin-tls-probe: 1`, the edge dials the origin in `strict` (validating the Origin CA certificate and the
   # hostname) instead of `flexible`. Every other request to the host stays `flexible`; nothing else changes.
   #
-  # ORDER. `set_config` is non-terminating and the LAST matching rule in the phase wins, so this rule sits AFTER the
-  # adopted `flexible` rule (it is appended at the end of the list, which also leaves every existing rule's position
-  # untouched). The disjoint-host rules above and below it are unaffected.
+  # WHY THE RULE IS ALWAYS PRESENT AND ONLY `enabled` TOGGLES (CTO ruling, ADR-321 item 10). The first shape of this rule was
+  # a `dynamic "rules"` block that came and went with the switch. Removing a rule shrinks `.rules`, the destroy guard
+  # (tests/scripts/lib/destroy-guard-filter-web-platform.jq) counts that as `nested_deletes`, and the apply job refuses it
+  # unless the HEAD commit message of a PUSH carries `[ack-destroy]` (`github.event.head_commit.message` is EMPTY on
+  # workflow_dispatch): so "switch off + re-dispatch" could not roll anything back. A rule that stays in the list and flips
+  # `enabled` is an in-place attribute update with the rule count constant (nested_deletes 0, measured by replaying real
+  # plans through the real filter: tests/scripts/test-destroy-guard-counter-web-platform.sh).
   #
-  # BLAST RADIUS. The header is not secret: anyone may send it, and the only effect is that THEIR GET /health is
+  # ORDER. `set_config` is non-terminating and the LAST matching rule in the phase wins, so this rule sits AFTER the
+  # adopted `flexible` rule. A disabled rule matches nothing, so with the switch off it has no effect.
+  #
+  # BLAST RADIUS. The header is not secret: anyone may send it, and the only effect is that THEIR /health is
   # fetched over strict TLS (a 200 carrying `x-origin-transport: TLSv1.x`, or a 525/526 if the handshake fails). No
   # other path, host or user session is touched, and /health serves no user data.
   #
-  # OFF BY DEFAULT, AND WHY. The per-merge apply targets this whole resource, so a rule written here unconditionally
-  # would reach production at merge. `for_each` is empty unless the owner sets ENABLE_ORIGIN_TLS_CANARY_RULE=true
-  # in Doppler prd_terraform, so merging this code is a verified no-op for the live ruleset (the rule list is
-  # identical), and turning the canary on or off is a separate, owner-authorised apply. Turning it off again
-  # removes this one rule IN PLACE; it is not a destroy of the entrypoint (compare "ROLL FORWARD, NEVER REVERT"
-  # in the header, which is about deleting the resource itself).
+  # `enabled = var.enable_origin_tls_canary_rule` accepts only a lowercase `true`/`false` in Doppler: any other value
+  # (`True`, `1`, `yes`) fails Terraform's variable conversion and aborts the WHOLE root's plan, not just this rule.
   #
-  # UNVERIFIED (Cloudflare's docs do not say): that the http_config_settings phase accepts a request-header field in
-  # a rule expression. If it does not, the apply fails at the Cloudflare API with nothing written, and the
-  # in-repo probe (`origin-tls-probe.sh --canary --require-tls`) would stay at exit 3, which is the honest answer.
-  dynamic "rules" {
-    for_each = var.enable_origin_tls_canary_rule ? toset(["canary"]) : toset([])
-    content {
-      action      = "set_config"
-      description = "ORIGIN-TLS CANARY (ADR-321): strict only for /health with x-origin-tls-probe: 1 on app.soleur.ai - remove with the strict flip"
-      enabled     = true
-      expression  = "(http.host eq \"app.soleur.ai\" and http.request.uri.path eq \"/health\" and any(http.request.headers[\"x-origin-tls-probe\"][*] eq \"1\"))"
-      action_parameters {
-        ssl = "strict"
-      }
+  # UNVERIFIED before the first apply (Cloudflare's docs do not say): that the http_config_settings phase accepts a
+  # request-header field in an expression. It did: the canary was applied and `origin-tls-probe.sh --canary` exited 0.
+  rules {
+    action      = "set_config"
+    description = "ORIGIN-TLS CANARY (ADR-321): strict only for /health with x-origin-tls-probe: 1 on app.soleur.ai - remove with the strict flip"
+    enabled     = var.enable_origin_tls_canary_rule
+    expression  = "(http.host eq \"app.soleur.ai\" and http.request.uri.path eq \"/health\" and any(http.request.headers[\"x-origin-tls-probe\"][*] eq \"1\"))"
+    action_parameters {
+      ssl = "strict"
     }
   }
 
+  # ── ORIGIN-TLS STRICT FLIP (ADR-321 decision 3 step 6, #10479) — present always; ENABLED only while var.enable_origin_tls_strict ──
+  #
+  # PURPOSE. The host-wide flip: while enabled, every request to app.soleur.ai is fetched from the origin in `strict`
+  # (the Origin CA certificate and hostname are VALIDATED). Appended AFTER the adopted `flexible` rule and the canary:
+  # `set_config` is non-terminating and the LAST match wins, so it overrides `flexible` for the host without editing it.
+  #
+  # WHY ADDITIVE AND GATED, NOT AN EDIT OF THE FLEXIBLE RULE. The per-merge apply targets this whole resource, so an
+  # in-place `flexible` -> `strict` edit would flip production at MERGE, before ORIGIN_TLS_REQUIRED=1 is proven live
+  # on both hosts. With this rule DISABLED (the default) merge adds one inert rule and changes no edge behaviour; the flip
+  # is the owner's separate Doppler switch plus an apply dispatch. ADR-321 R6(6) describes the end state (flexible edited,
+  # canary removed); that edit is the CLEANUP change after the flip has baked, which also deletes both gates.
+  #
+  # WHY ALWAYS PRESENT. See the canary above: rollback must be an in-place update the destroy guard accepts on a
+  # dispatch. The cleanup change, by contrast, REMOVES rules and therefore needs a PUSH apply whose merge commit carries
+  # an `[ack-destroy]` line (nested_deletes 2), which is correct for a deliberate, reviewed removal.
+  #
+  # ROLLBACK. Set ENABLE_ORIGIN_TLS_STRICT=false in Doppler prd_terraform (or delete it: the default is false) and
+  # re-dispatch the apply: one in-place change (`enabled` true -> false), rule count constant, the entrypoint is never
+  # destroyed. Only a lowercase `true`/`false` is a valid value; anything else aborts the whole root's plan.
+  #
+  # NOT TOUCHED. The apex/www `full` rule (ADR-194), the lb-staging host (it no longer resolves) and port 80 (stays open
+  # until the post-flip probe passes, CLO condition 3).
+  rules {
+    action      = "set_config"
+    description = "ORIGIN-TLS STRICT (ADR-321 flip): strict SSL for app.soleur.ai, overrides the adopted flexible rule - remove with the cleanup that makes strict the baseline"
+    enabled     = var.enable_origin_tls_strict
+    expression  = "(http.host eq \"app.soleur.ai\")"
+    action_parameters {
+      ssl = "strict"
+    }
+  }
 }
