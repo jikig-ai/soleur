@@ -664,6 +664,12 @@ jobs:
               -target=logtail_exploration_alert.web_nic_guard_unpinned_url \
               -target=logtail_exploration.inngest_cutover_flip_silent \
               -target=logtail_exploration_alert.inngest_cutover_flip_silent \
+              -target=logtail_exploration.relay_listener_down \
+              -target=logtail_exploration_alert.relay_listener_down \
+              -target=logtail_exploration.relay_probe_silent \
+              -target=logtail_exploration_alert.relay_probe_silent \
+              -target=logtail_exploration.relay_peer_probe_failed \
+              -target=logtail_exploration_alert.relay_peer_probe_failed \
               -target=tls_private_key.proxy_server \
               -target=tls_self_signed_cert.proxy_server \
               -target=doppler_secret.proxy_tls_key \

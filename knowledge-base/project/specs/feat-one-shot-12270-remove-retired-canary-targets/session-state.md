@@ -13,7 +13,7 @@ None blocking. Planner disclosures: the sharp-edges catalogue was read by keywor
 - The removal plans 0 destroys, so no [ack-destroy] line is needed (apply run 42369320061 ended "2 destroyed"; the probe read afterwards printed `canary_alert_live=0 canary_declared=0`).
 - Edit set: workflow lines 659-660, the two census INTENDED_DESTROYS entries plus comment, a comment-only rewrite in the structure suite, EXPECTED_REFERRERS 7 -> 5 and a lower MIN_ASSERTIONS in the probe test, the probe's STATUS comment, an appended runbook update and a new ADR-218 amendment (dated records are appended to, never rewritten).
 - Unchanged by decision: the egress suite canary rows, the ceiling and send-failed suites, betterstack-log-query.md, infra-validation.yml, APPLY_FLOOR_EPOCH.
-- Open PR #12292 edits the same files (its base already contains the retirement merge; the review found the earlier "pre-retirement base" reading was stale); whichever merges second re-syncs and re-derives shared counts. This change moves no alert or exploration counts.
+- Open PR #12292 edits the same files (its base already contains the retirement merge; the review found the earlier "pre-retirement base" reading was stale); whichever merges second re-syncs and re-derives shared counts. This change moves no alert or exploration counts. Update 2026-11-07: #12292 MERGED at 2026-11-07T15:24:34Z (f6c3a0bf57); branch re-synced, ADR-218 tail conflict resolved keeping both amendments, merged-tree suites green with unchanged counts.
 
 ### Components Invoked
 soleur:plan, soleur:plan-review, soleur:deepen-plan; agents: learnings-researcher, cto (six rulings), dhh-rails-reviewer, kieran-rails-reviewer, code-simplicity-reviewer.

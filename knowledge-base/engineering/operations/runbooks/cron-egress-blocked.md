@@ -1043,7 +1043,7 @@ lines and the two census entries is #12270 (after the apply; it also flips the p
 record), and the probe's transport extraction is #12271. The full site list is the `RETIREMENT:` line in the probe header, with its
 STATUS line. This was a deletion, not a revert of the inverted shape.
 
-[Update 2026-11-07 (#12270): the present-tense statements in this subsection that the apply "destroys the pair", that the two bare targets and census entries stay, that the merge must be timed and carry `[ack-destroy]`, and "Do not start #12270 until the apply log shows `2 destroyed`", and the decision-table rows that cite "Unverified A", are superseded by the update paragraph below, which also supersedes both "Unverified after the canary's deletion" bullets (A and B) with what was observed]
+[Update 2026-11-07 (#12270): in this subsection, the sentence "edit destroys the pair" in the paragraph "Canary (retired by #12189; throwaway, #12180)", the "whether the canary incident survives the deletion of its alert" clause in the paragraph about `anchor_resolved_by`, the decision-table rows that cite "Unverified A", and the statements that the two bare targets and census entries stay, that the merge must be timed and carry `[ack-destroy]`, and "Do not start #12270 until the apply log shows `2 destroyed`", are superseded by the update paragraph below, which also supersedes both "Unverified after the canary's deletion" bullets (A and B) with what was observed]
 
 **Unverified after the canary's deletion.** Both facts depend on vendor behavior nothing in this repository
 measures.
@@ -1065,12 +1065,12 @@ destroying `logtail_exploration_alert.egress_gw_probe_silent_canary` and
 `logtail_exploration.egress_gw_probe_silent_canary`. The window the record above describes is closed: #12270 removed
 the two bare `-target` lines from `apply-web-platform-infra.yml` and the two `INTENDED_DESTROYS` entries from
 `tests/scripts/test-infra-privileged-tier-census.sh` in one change, and the condition for starting it (the apply log
-showing `2 destroyed`) was met. With the destroys applied, the removal plans no destroy and carries no
-`[ack-destroy]` line. The #11785 precedent is the same removal of retained targets after their destroys applied
+showing `2 destroyed`) was met. With the destroys applied, the removal is expected to plan no destroy and
+carries no `[ack-destroy]` line. The #11785 precedent is the same removal of retained targets after their destroys applied
 (apply run 41306010098: `No changes`, then `Apply complete! Resources: 0 added, 0 changed, 0 destroyed.`); it is one
 precedent, so the post-merge apply is the check, and a destroy there is reported, never acked. What was observed for
-the two unverified bullets above: (A) the vendor kept listing the canary incident (it is no longer open) after its
-alert was deleted. The read recorded on tracker #12189
+the two unverified bullets above: (A) the vendor kept listing the canary incident after its alert was deleted (it
+left the open list by 12:02Z, see B). The read recorded on tracker #12189
 (`https://github.com/jikig-ai/soleur/issues/12189#issuecomment-6707181573`) shows `verdict=pass`, `canary=fired`,
 `canary_alert_live=0` and `prod_alert=ok`; the exit contract maps `verdict=pass` to exit 0, and no later sweep is
 recorded here. (B) Mirror issue #12242 closed itself at 2026-11-07T12:02Z ("incident `1048213461` is no longer in
