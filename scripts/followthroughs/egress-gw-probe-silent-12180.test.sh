@@ -928,9 +928,9 @@ while IFS= read -r ref; do
 done < <(git -C "$HERE" grep -lE 'silent_canary|probe-silent-canary' -- ':(top)' ':(top,exclude)knowledge-base/project' ':(top,exclude)scripts/followthroughs' 2>/dev/null)
 # Anti-vacuity: the derivation must have found EXACTLY the files that still name the canary (the set below). This is
 # an explicit set, not a floor: a vacuous derivation and an extra or a dropped referrer both fail. The set was derived
-# from live repo state after #12189: the retirement removed the .tf and the send-failed suite from it and the census
-# joined it (the two INTENDED_DESTROYS entries); #12270 then removed the kept targets and entries, so the apply
-# workflow and the census left it again (7 files to 5, read from the printed derivation, not fitted).
+# from live repo state after #12270 (7 files to 5): the retirement (#12189) removed the .tf and the send-failed suite
+# from it and the census joined it; #12270 removed the kept targets and entries, so the apply workflow and the census
+# left it again.
 # Each referrer is named by the key the RETIREMENT header must carry: its basename, or its number for an ADR.
 EXPECTED_REFERRERS="betterstack-alert-structure.test.sh
 egress-gw-alert.test.sh
@@ -947,8 +947,7 @@ if grep -qE 'startswith|test\(|contains\(|ascii_downcase' <<<"$sut_code"; then f
 # Exact baseline, reported via printf+exit: a block of rows that stopped executing must not read as green.
 # Re-pin deliberately when rows are added; never lower it to fit a deletion. #12189 lowered it 430 -> 429 because the
 # derived referrer rows went 8 -> 7 (a removed row, not a fitted floor); #12270 lowered it 429 -> 427 by the same rule
-# (the workflow and the census left the derived set: two "RETIREMENT header names the referrer" rows removed, the
-# printed total confirmed it, nothing was fitted to a baseline).
+# (two "RETIREMENT header names the referrer" rows removed, confirmed by the printed total).
 MIN_ASSERTIONS=427
 if [[ "$total" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: only %s assertions ran (floor %s) -- a block of rows stopped executing\n' "$total" "$MIN_ASSERTIONS" >&2

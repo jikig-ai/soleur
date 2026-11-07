@@ -594,7 +594,7 @@ _untg="$(comm -23 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt
 # retired line goes red here too.
 # ONE source of truth (#11631 review): the list is READ from the census's INTENDED_DESTROYS, never retyped here, so the
 # two cannot drift. Only the logtail_* addresses count (the other entries are not this suite's business). A missing or
-# unreadable census is fatal; an empty result is a legitimate end state (the follow-up removed the entries) and then the
+# unreadable census is fatal; an empty result is a legitimate end state (the state after #12270, as after #11672) and then the
 # stray check below turns red on any leftover bare -target line, so a broken extraction fails loud, never green.
 CENSUS_SH="$REPO/tests/scripts/test-infra-privileged-tier-census.sh"
 [ -r "$CENSUS_SH" ] || { printf 'FATAL: census %s unreadable (the retired-destroy-target list is read from it)\n' "$CENSUS_SH" >&2; exit 2; }
