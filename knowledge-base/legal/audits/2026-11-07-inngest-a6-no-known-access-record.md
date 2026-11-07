@@ -128,7 +128,9 @@ refusal (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-670953637
   material" is a bounded knowledge claim; the claim limits keep Hetzner staff access, retention
   and post-closure outcomes outside what this record establishes.
 - Condition 3 — holds at its fallback. The console re-read cell remains PENDING, so this
-  attestation is anchored only to the dated 2026-10-29 console figures.
+  attestation is anchored only to the dated 2026-10-29 console figures. Under the fallback the
+  two API tokens are also not reconciled to known purposes — this record does not establish
+  what either token is for.
 - Condition 4 — holds. The measured-re-read cell reads `n/a (owner, in session 2026-11-07)`.
 - Conditions 5–7 — hold. The claim-limit paragraphs are present; no "signed" or "attested"
   wording predates this attestation; the 2026-11-12 re-review, A5 and the TLS rows are not
