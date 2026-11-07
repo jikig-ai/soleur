@@ -1043,6 +1043,8 @@ lines and the two census entries is #12270 (after the apply; it also flips the p
 record), and the probe's transport extraction is #12271. The full site list is the `RETIREMENT:` line in the probe header, with its
 STATUS line. This was a deletion, not a revert of the inverted shape.
 
+[Update 2026-11-07 (#12270): the present-tense statements above that the two bare targets and census entries stay, and "Do not start #12270 until the apply log shows `2 destroyed`", are superseded by the update paragraph below, which also supersedes both "Unverified after the canary's deletion" bullets (A and B) with what was observed]
+
 **Unverified after the canary's deletion.** Both facts depend on vendor behavior nothing in this repository
 measures.
 
@@ -1056,6 +1058,22 @@ measures.
   "Still open" every 15 minutes (about 96 a day), and closing the issue by hand files a fresh P1 at the next
   run. Resolving the incident is a Better Stack write that needs the owner's per-command go-ahead; the state is
   reported on tracker #12189 rather than closed by hand.
+
+**Update 2026-11-07 (#12270).** Apply run 42369320061 (head `d8758629231f84feb18400915bb3b6715cd6642f`) logged
+`Plan: 0 to add, 0 to change, 2 to destroy` and `Apply complete! Resources: 0 added, 0 changed, 2 destroyed.`,
+destroying `logtail_exploration_alert.egress_gw_probe_silent_canary` and
+`logtail_exploration.egress_gw_probe_silent_canary`. The window the record above describes is closed: #12270 removed
+the two bare `-target` lines from `apply-web-platform-infra.yml` and the two `INTENDED_DESTROYS` entries from
+`tests/scripts/test-infra-privileged-tier-census.sh` in one change, and the condition for starting it (the apply log
+showing `2 destroyed`) was met. A bare `-target` on an address with neither configuration nor state plans
+`No changes` (the #11785 precedent: apply run 41306010098, `Apply complete! Resources: 0 added, 0 changed, 0
+destroyed.`), so the removal plans no destroy and carries no `[ack-destroy]` line; the post-merge apply is the
+check, and a destroy there is reported, never acked. What was observed for the two unverified bullets above: (A) the
+vendor kept listing the canary incident after its alert was deleted. The read recorded on tracker #12189
+(`https://github.com/jikig-ai/soleur/issues/12189#issuecomment-6707181573`) shows `verdict=pass`, `canary=fired`,
+`canary_alert_live=0` and `prod_alert=ok`, so the next sweep returns exit 0 and not the retired exit 5. (B) mirror
+issue #12242 closed itself at 2026-11-07T12:02Z ("incident `1048213461` is no longer in Better Stack's open list"),
+with no hand close and no Better Stack write. The probe's transport extraction remains #12271.
 
 **Decode ladder:**
 
