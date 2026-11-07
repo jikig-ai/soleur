@@ -43,16 +43,16 @@ SBX="$(mktemp -d)"; trap 'rm -rf "$SBX"' EXIT
 
 # ── source predicates over the EFFECTIVE text of a tunnel.tf copy (arg 1) ─────────────────────────────────────────────
 eff() { strip_comments "$1"; }
-p_no_resource()   { ! eff "$1" | grep -qE '^resource[[:space:]]+"cloudflare_zero_trust_access_service_token"[[:space:]]+"deploy"'; }
-p_removed()       { eff "$1" | tr -d '\n' | grep -qE 'removed[[:space:]]*\{[[:space:]]*from[[:space:]]*=[[:space:]]*cloudflare_zero_trust_access_service_token\.deploy[[:space:]]*lifecycle[[:space:]]*\{[[:space:]]*destroy[[:space:]]*=[[:space:]]*false[[:space:]]*\}'; }
-p_policy_local()  { block_of "$1" cloudflare_zero_trust_access_policy deploy_service_token | tr -d '\n' | grep -qE 'include[[:space:]]*\{[[:space:]]*service_token[[:space:]]*=[[:space:]]*local\.deploy_service_token_ids[[:space:]]*\}'; }
+p_no_resource()   { ! grep -qE '^resource[[:space:]]+"cloudflare_zero_trust_access_service_token"[[:space:]]+"deploy"' <<<"$(eff "$1")"; }
+p_removed()       { grep -qE 'removed[[:space:]]*\{[[:space:]]*from[[:space:]]*=[[:space:]]*cloudflare_zero_trust_access_service_token\.deploy[[:space:]]*lifecycle[[:space:]]*\{[[:space:]]*destroy[[:space:]]*=[[:space:]]*false[[:space:]]*\}' <<<"$(eff "$1" | tr -d '\n')"; }
+p_policy_local()  { grep -qE 'include[[:space:]]*\{[[:space:]]*service_token[[:space:]]*=[[:space:]]*local\.deploy_service_token_ids[[:space:]]*\}' <<<"$(block_of "$1" cloudflare_zero_trust_access_policy deploy_service_token | tr -d '\n')"; }
 p_precondition()  { local b; b="$(block_of "$1" cloudflare_zero_trust_access_policy deploy_service_token)"; grep -qE '^[[:space:]]+precondition[[:space:]]*\{' <<<"$b" && grep -qF 'length(local.deploy_service_token_ids) > 0' <<<"$b" && grep -qF '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <<<"$b"; }
-p_no_outputs()    { ! eff "$1" | grep -qE '^output[[:space:]]+"access_service_token_client_(id|secret)"'; }
-p_no_client_ref() { ! eff "$1" | grep -qE 'access_service_token\.deploy\.client_'; }
-p_locals_uuid()   { eff "$1" | tr -d '\n' | grep -oE 'locals[[:space:]]*\{[[:space:]]*deploy_service_token_ids[[:space:]]*=[[:space:]]*\[[^]]*\]' | grep -qE "$UUID_RE"; }
+p_no_outputs()    { ! grep -qE '^output[[:space:]]+"access_service_token_client_(id|secret)"' <<<"$(eff "$1")"; }
+p_no_client_ref() { ! grep -qE 'access_service_token\.deploy\.client_' <<<"$(eff "$1")"; }
+p_locals_uuid()   { grep -qE "$UUID_RE" <<<"$(eff "$1" | tr -d '\n' | grep -oE 'locals[[:space:]]*\{[[:space:]]*deploy_service_token_ids[[:space:]]*=[[:space:]]*\[[^]]*\]')"; }
 p_locals_once()   { [[ "$(eff "$1" | grep -cE '^[[:space:]]*deploy_service_token_ids[[:space:]]*=')" == "1" ]]; }
 # no `variable "deploy_service_token_ids"` in ANY .tf of the root dir (arg 1), and no override/JSON config that could re-add one
-p_no_variable()   { local f; for f in "$1"/*.tf; do if eff "$f" | grep -qE '^variable[[:space:]]+"deploy_service_token_ids"'; then return 1; fi; done; [[ "$(p_b4_no_override_files "$1")" == "1" ]]; }
+p_no_variable()   { local f; for f in "$1"/*.tf; do if grep -qE '^variable[[:space:]]+"deploy_service_token_ids"' <<<"$(eff "$f")"; then return 1; fi; done; [[ "$(p_b4_no_override_files "$1")" == "1" ]]; }
 
 echo "=== deploy Access token forget (G1, PR-2; #9294) ==="
 
