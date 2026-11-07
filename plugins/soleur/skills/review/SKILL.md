@@ -110,11 +110,11 @@ Proceed once the tree is ready (worktree or current branch).
 
 Before spawning review agents, classify the PR to right-size the panel.
 
-1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
+1. Run `changed-paths.sh origin/main...HEAD | head -n 200` (NUL-safe `git diff --name-only`) to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
 
    ```bash
    REVIEW_TMP="$(git rev-parse --git-dir)"
-   git diff --name-only origin/main...HEAD > "$REVIEW_TMP/review-changed.txt"
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt"
    git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
    git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```
@@ -380,7 +380,7 @@ Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](refer
 
 **When to run gdpr-gate at review time:**
 
-- `git diff main...HEAD --name-only | grep -E "$CANONICAL_REGEX"` returns at least one match (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
+- `changed-paths.sh --match "$CANONICAL_REGEX" main...HEAD` returns at least one match (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
 
 **What this agent checks:**
 

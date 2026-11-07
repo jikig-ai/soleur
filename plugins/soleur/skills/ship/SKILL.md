@@ -936,7 +936,7 @@ SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
 **Detection:**
 
 ```bash
-gdpr_gate_touch=$(git diff main...HEAD --name-only | grep -E '^plugins/soleur/skills/gdpr-gate/' | head -n 1)
+gdpr_gate_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^plugins/soleur/skills/gdpr-gate/' main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }
 sui_plan=$(gh pr view --json body --jq .body \
   | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])]+' | head -n 1 || true)
 sui_threshold=""
@@ -950,7 +950,7 @@ fi
 1. Apply the label: `gh pr edit <N> --add-label compliance/critical` (idempotent — `gh` silently no-ops if already applied).
 2. Announce: "Auto-applied `compliance/critical` to PR #<N> (gdpr-gate diff match) — `soleur:engineering:review:user-impact-reviewer` will be invoked at PR-review time per `review/SKILL.md` conditional-agent block."
 
-**Why:** AC10 of any `single-user incident` plan requires PR co-label. Operator-attested labels are a workflow-gap class (see #3521 review user-impact #7) — auto-application closes the gap. Idempotent + reversible (operator can remove if false-positive).
+**Why:** AC10 of any `single-user incident` plan requires PR co-label. Operator-attested labels are a workflow-gap class (see #3521 review user-impact #7) — auto-application closes the gap.
 
 ### gdpr-gate Critical-Finding Acknowledgment Gate
 
@@ -960,7 +960,7 @@ fi
 
 ```bash
 CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
-diff_match=$(git diff main...HEAD --name-only | grep -E "$CANONICAL_REGEX" | head -n 1)
+diff_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }
 crit_refs=$(gh pr view --json body --jq .body | grep -oE '(Closes|Ref) #[0-9]+' | head -n 5)
 ```
 
@@ -1044,7 +1044,7 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
 )
 DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
-git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$DPF_REGEX" origin/main...HEAD
 ```
 
 If the grep matches at least one path, the gate fires. Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
@@ -2176,7 +2176,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
 
 Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
-If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+If `changed-paths.shchanged-paths.sh --match '^\.github/(workflows|actions)/' origin/main...HEAD` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
 Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 
