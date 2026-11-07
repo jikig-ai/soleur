@@ -29,7 +29,9 @@
 #
 # WHAT IT DOES NOT PROVE: that a real relay_probe row has the assumed nested shape (the first live row is the positive control,
 # the runbook carries the query), or that the evaluator delivers a value for the silence shape (egress_gw_probe_silent's
-# open question, #12190). It compares values one diff can edit together: consistency, not integrity.
+# open question, #12190), or that the listener count's {{time}} buckets are aligned so a 4-minute single-host outage lands in one
+# bucket (a steady outage exceeds the threshold in every later bucket either way). It compares values one diff can edit together:
+# consistency, not integrity.
 #
 # Mutation rows live at the bottom: each COPIES the sources into a scratch dir, mutates the COPY, re-runs this guard against
 # it through the RPA_GUARD_* overrides and requires rc 1 with the named fragment. No tracked file is written.
@@ -47,6 +49,7 @@ RB="${RPA_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/betters
 IV="${RPA_GUARD_IV:-$REPO/.github/workflows/infra-validation.yml}"
 GUARD_PATH="apps/web-platform/test/infra/relay-probe-alerts.test.sh"
 
+NOBATTERY=0; [ "${1:-}" = "--no-battery" ] && NOBATTERY=1   # argv only: an exported env value cannot skip the battery
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
 no() { fail=$((fail + 1)); FAILED+=("$1"); printf '[FAIL] %s\n' "$1"; }
@@ -78,27 +81,41 @@ param() {  # param <block> <attr> <value-ERE>: whole-line attribute assertion in
 }
 
 # ── Needles, READ FROM THE EMITTERS ─────────────────────────────────────────────────────────
-# Listener: the template inside formatRelayProbeLine, up to the first `${`.
-LISTEN_PREFIX="$(sed -nE 's/.*return `(relay_probe proxy_state=)\$\{status\.state\}.*/\1/p' "$TS" | head -n 1)"
+# Every emitter read is over the file with whole-line comments removed: a comment quoting the old line must not satisfy a needle.
+ts_code() { grep -vE '^[[:space:]]*//' "$TS"; }
+ci_code() { grep -vE '^[[:space:]]*#' "$CI"; }
+# Listener: the template inside formatRelayProbeLine, up to the first `${`, and the ONE separator character after the state.
+LISTEN_PREFIX="$(ts_code | sed -nE 's/.*return `(relay_probe proxy_state=)\$\{status\.state\}.*/\1/p' | head -n 1)"
+LISTEN_SEP="$(ts_code | sed -nE 's/.*return `relay_probe proxy_state=\$\{status\.state\}(.)addr=.*/\1/p' | head -n 1)"
 # The healthy state is the `listening` member of the ProxyState union.
-LISTEN_OK="$(sed -nE 's/^[[:space:]]*\| "(listening)"[[:space:]]*$/\1/p' "$TS" | head -n 1)"
+LISTEN_OK="$(ts_code | sed -nE 's/^[[:space:]]*\| "(listening)"[[:space:]]*$/\1/p' | head -n 1)"
 # The line is emitted at warn (the level that reaches Better Stack) from the proxy-listener child logger.
-WARN_EMIT="$(grep -cE 'createChildLogger\("proxy-listener"\)\.warn\(' "$TS" || true)"
+WARN_EMIT="$(ts_code | grep -cE '^[[:space:]]*createChildLogger\("proxy-listener"\)\.warn\($' || true)"
+# ... and the message passed to that warn call is formatRelayProbeLine(...), the template the needles are read from.
+WARN_FMT="$(ts_code | awk '/createChildLogger\("proxy-listener"\)\.warn\(/ {f=1} f && /^[[:space:]]+formatRelayProbeLine\(status, populated\),$/ {print "yes"; exit} f && /^[[:space:]]*\);$/ {exit}')"
 # Peer: the journal line's literal prefix and the result enum (case labels in relay_peer_probe, minus ok).
-PEER_PREFIX="$(sed -nE 's/.*logger -t "\$LOG_TAG" "(relay_peer_probe peer=)\$peer result=\$res".*/\1/p' "$CI" | head -n 1)"
-LOG_TAG_VAL="$(sed -nE 's/^(readonly )?LOG_TAG="([^"]+)".*/\2/p' "$CI" | head -n 1)"
-PEER_RESULTS="$(awk '/^relay_peer_probe\(\) \{$/ {f=1} f && /^[[:space:]]+[a-z]+\) res=[a-z]+ ;;$/ {sub(/\).*/, "", $1); print $1} f && /^}$/ {exit}' "$CI")"
+PEER_PREFIX="$(ci_code | sed -nE 's/.*logger -t "\$LOG_TAG" "(relay_peer_probe peer=)\$peer result=\$res".*/\1/p' | head -n 1)"
+LOG_TAG_VAL="$(ci_code | sed -nE 's/^(readonly )?LOG_TAG="([^"]+)".*/\2/p' | head -n 1)"
+# Each case label must EQUAL the value it assigns (`denied) res=ok` would journal a denied dial as ok): a mismatch is listed as
+# MISMATCH:<label>=<value>, which breaks the enum assertion below.
+PEER_RESULTS="$(ci_code | awk '/^relay_peer_probe\(\) \{$/ {f=1} f && /^[[:space:]]+[a-z]+\) res=[a-z]+ ;;$/ {l=$1; sub(/\).*/, "", l); v=$2; sub(/^res=/, "", v); print (l == v ? l : "MISMATCH:" l "=" v)} f && /^}$/ {exit}')"
 PEER_BAD="$(grep -vx 'ok' <<<"$PEER_RESULTS")"
 
 [ "$LISTEN_PREFIX" = "relay_probe proxy_state=" ] \
   && ok "emitter: formatRelayProbeLine opens with 'relay_probe proxy_state='" \
   || no "emitter: formatRelayProbeLine template not found or reworded (got '$LISTEN_PREFIX'): the listener and silence alerts read this prefix"
+[ "$LISTEN_SEP" = " " ] \
+  && ok "emitter: the separator after the state is one space (the canon's 'listening ' needle)" \
+  || no "emitter: the character after \${status.state} is '$LISTEN_SEP', not a space: the listener alert's NOT-listening exclusion would match no healthy row"
 [ "$LISTEN_OK" = "listening" ] \
   && ok "emitter: the healthy ProxyState member is 'listening'" \
   || no "emitter: the ProxyState union has no 'listening' member (got '$LISTEN_OK')"
 [ "$WARN_EMIT" -eq 1 ] \
   && ok "emitter: the relay_probe line is logged at warn (the level that ships to Better Stack)" \
   || no "emitter: emitProxyListenerStatusOnce no longer logs through createChildLogger(\"proxy-listener\").warn: a non-warn line never reaches the source"
+[ "$WARN_FMT" = "yes" ] \
+  && ok "emitter: the warn call passes formatRelayProbeLine(status, populated) as its message" \
+  || no "emitter: the warn call no longer logs formatRelayProbeLine(status, populated): the needles are read from a template the log no longer uses"
 [ "$PEER_PREFIX" = "relay_peer_probe peer=" ] \
   && ok "emitter: ci-deploy.sh logs 'relay_peer_probe peer=<ip> result=<r>' under \$LOG_TAG" \
   || no "emitter: ci-deploy.sh relay_peer_probe logger line not found or reworded (got '$PEER_PREFIX')"
@@ -112,7 +129,7 @@ PEER_BAD="$(grep -vx 'ok' <<<"$PEER_RESULTS")"
 # ── Predicates ──────────────────────────────────────────────────────────────────────────────
 WHERE_TIME="FROM {{source}} WHERE time BETWEEN {{start_time}} AND {{end_time}}"
 MSG="JSONExtractString(raw, 'message', 'msg')"
-CANON_LISTENER="SELECT {{time}} AS time, count(*) AS value $WHERE_TIME AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform' AND startsWith($MSG, '${LISTEN_PREFIX}') AND NOT startsWith($MSG, '${LISTEN_PREFIX}${LISTEN_OK} ') GROUP BY time"
+CANON_LISTENER="SELECT {{time}} AS time, count(*) AS value $WHERE_TIME AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform' AND startsWith($MSG, '${LISTEN_PREFIX}') AND NOT startsWith($MSG, '${LISTEN_PREFIX}${LISTEN_OK}${LISTEN_SEP}') GROUP BY time"
 CANON_SILENT="SELECT toDateTime({{end_time}}) AS time, toInt64(\${length(var.web_hosts)}) - least(toInt64(\${length(var.web_hosts)}), toInt64(uniqExact(JSONExtractString(raw, 'host_name')))) AS value FROM {{source}} WHERE dt BETWEEN {{start_time}} AND {{end_time}} AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform' AND startsWith($MSG, '${LISTEN_PREFIX}')"
 NEEDLES=""
 while IFS= read -r r; do [ -n "$r" ] && NEEDLES+="${NEEDLES:+, }' result=$r'"; done <<<"$PEER_BAD"
@@ -155,7 +172,7 @@ check_pair() {  # check_pair <name> <alert-name> <sql-local> <check> <query> <va
   param "$e" sql_query "replace\(trimspace\(local\.$sl\), \"/\\\\\\\\s\+/\", \" \"\)" \
     && ok "$n: the exploration reads local.$sl through the single-line collapse" \
     || no "$n: the exploration sql_query is not the collapsed local.$sl"
-  [ "$(printf '%s\n' "$e" | grep -cF 'values        = [local.vector_prd_source_id]')" -eq 1 ] \
+  [ "$(printf '%s\n' "$e" | grep -vE '^[[:space:]]*#' | grep -cF 'values        = [local.vector_prd_source_id]')" -eq 1 ] \
     && ok "$n: the exploration source is the pinned local.vector_prd_source_id" || no "$n: exploration source not pinned to local.vector_prd_source_id"
   param "$a" exploration_id "logtail_exploration\.$n\.id" \
     && ok "$n: the alert is bound to its own exploration" || no "$n: the alert's exploration_id is not logtail_exploration.$n.id"
@@ -167,8 +184,8 @@ check_pair() {  # check_pair <name> <alert-name> <sql-local> <check> <query> <va
   param "$a" paused false && ok "$n: declared armed (paused = false)" || no "$n: paused is not the literal false"
   param "$a" email true && param "$a" push false && param "$a" call false && param "$a" sms false && param "$a" critical_alert false \
     && ok "$n: email-only channels, critical_alert false" || no "$n: channels are not email-only with critical_alert false"
-  [ "$(printf '%s\n' "$a" | grep -cF 'policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null')" -eq 1 ] \
-    && [ "$(printf '%s\n' "$a" | grep -cF 'team_name = var.betterstack_paid_tier ? null : "Your team"')" -eq 1 ] \
+  [ "$(printf '%s\n' "$a" | grep -vE '^[[:space:]]*#' | grep -cF 'policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null')" -eq 1 ] \
+    && [ "$(printf '%s\n' "$a" | grep -vE '^[[:space:]]*#' | grep -cF 'team_name = var.betterstack_paid_tier ? null : "Your team"')" -eq 1 ] \
     && ok "$n: the free/paid escalation ternary" || no "$n: escalation_target is not the free/paid ternary"
   [ "$(printf '%s\n' "$a" | grep -cF "Runbook: \${local.$rbl}")" -eq 1 ] && param "$a" runbook "local\.$rbl" \
     && ok "$n: incident_cause and metadata carry the runbook URL local" || no "$n: runbook URL not wired in incident_cause + metadata"
@@ -190,15 +207,17 @@ while IFS= read -r h; do
 done < <(grep -E '^## ' "$RB")
 [ "$slug_hit" -eq 1 ] && ok "the runbook anchor resolves to a real '## ' heading" || no "the runbook anchor '$ANCHOR' matches no '## ' heading in betterstack-log-query.md"
 for n in relay_listener_down relay_probe_silent relay_peer_probe_failed; do
-  [ "$(grep -cF "logtail_exploration_alert.$n" "$RB")" -ge 1 ] \
+  [ "$(grep -cE "^- \*\*\`logtail_exploration_alert\.$n\`\*\*" "$RB")" -eq 1 ] \
     && ok "runbook: standing-alarms row for $n" || no "runbook: no standing-alarms row for logtail_exploration_alert.$n"
 done
 
 # ── CI registration: exactly one plain `bash <path>` step ───────────────────────────────────
+IV_STEP="$(grep -vE '^[[:space:]]*#' "$IV" | awk -v g="$GUARD_PATH" '/^      - / {blk=""} {blk = blk $0 "\n"} index($0, "run: bash " g) {printf "%s", blk; exit}')"
 [ "$(grep -cE "^[[:space:]]+run:[[:space:]]+bash[[:space:]]+$GUARD_PATH[[:space:]]*$" "$IV")" -eq 1 ] \
   && [ "$(grep -v '^[[:space:]]*#' "$IV" | grep -cF "$GUARD_PATH")" -eq 1 ] \
+  && [ -n "$IV_STEP" ] && ! grep -qE '^[[:space:]]+(if|continue-on-error):' <<<"$IV_STEP" \
   && ok "infra-validation.yml registers this guard exactly once as a plain 'bash <path>' step" \
-  || no "infra-validation.yml: this guard is unregistered, double-registered or not a plain 'bash <path>' run line"
+  || no "infra-validation.yml: this guard is unregistered, double-registered, conditional (if:/continue-on-error:) or not a plain 'bash <path>' run line"
 
 # ── Mutation battery ────────────────────────────────────────────────────────────────────────
 mutate() {  # mutate <red|green> <label> <VAR> <python body> [fragment]
@@ -211,7 +230,7 @@ p = sys.argv[1]
 s = open(p).read()
 exec(os.environ["MUT_BODY"])
 open(p, "w").write(s)' "$d/$var" || { no "mutation '$label': the python body failed (anchor drifted?)"; rm -rf "$d"; return; }
-  out="$(MUT_SKIP=1 RPA_GUARD_TF="$d/TF" RPA_GUARD_WF="$d/WF" RPA_GUARD_TS="$d/TS" RPA_GUARD_CI="$d/CI" RPA_GUARD_RB="$d/RB" RPA_GUARD_IV="$d/IV" bash "$SELF" 2>&1)"; rc=$?
+  out="$(RPA_GUARD_TF="$d/TF" RPA_GUARD_WF="$d/WF" RPA_GUARD_TS="$d/TS" RPA_GUARD_CI="$d/CI" RPA_GUARD_RB="$d/RB" RPA_GUARD_IV="$d/IV" bash "$SELF" --no-battery 2>&1)"; rc=$?
   rm -rf "$d"
   if [ "$want" = "red" ]; then
     if [ "$rc" -eq 1 ] && grep -qF -- "$frag" <<<"$out"; then ok "mutation caught: $label"
@@ -222,7 +241,7 @@ open(p, "w").write(s)' "$d/$var" || { no "mutation '$label': the python body fai
   fi
 }
 
-if [ -z "${MUT_SKIP:-}" ]; then
+if [ "$NOBATTERY" -eq 0 ]; then
   mutate red "listener predicate loses its NOT-listening negation" TF \
     'old = "      AND NOT startsWith(JSONExtractString(raw, \x27message\x27, \x27msg\x27), \x27relay_probe proxy_state=listening \x27)\n"
 assert s.count(old) == 1
@@ -287,6 +306,27 @@ s = s.replace(old, "## Relay stuff")' "matches no '## ' heading"
     'old = "        run: bash apps/web-platform/test/infra/relay-probe-alerts.test.sh\n"
 assert s.count(old) == 1
 s = s.replace(old, "")' "unregistered, double-registered"
+  mutate red "the emitter separator after the state changes (the NOT-listening exclusion would match no healthy row)" TS \
+    'old = "${status.state} addr="
+assert s.count(old) == 1
+s = s.replace(old, "${status.state}, addr=")' "the character after"
+  mutate red "the warn call is commented out and an info call takes its place (old text kept in a comment)" TS \
+    'old = "createChildLogger(\"proxy-listener\").warn("
+assert s.count(old) == 1
+s = s.replace(old, "// createChildLogger(\"proxy-listener\").warn(\n  createChildLogger(\"proxy-listener\").info(")' "no longer logs through createChildLogger"
+  mutate red "a denied dial is journalled as result=ok (case label != value)" CI \
+    'old = "      denied) res=denied ;;\n"
+assert s.count(old) == 1
+s = s.replace(old, "      denied) res=ok ;;\n")' "relay_peer_probe result enum changed"
+  mutate red "the exploration source is swapped to the dev source with the prd line left in a comment" TF \
+    'old = "    values        = [local.vector_prd_source_id]\n"
+i = s.index("resource \"logtail_exploration\" \"relay_listener_down\" {")
+j = s.index(old, i)
+s = s[:j] + "    values        = [local.vector_dev_source_id]\n    # values        = [local.vector_prd_source_id]\n" + s[j + len(old):]' "exploration source not pinned"
+  mutate red "the CI step is made conditional (if: false) while still present" IV \
+    'old = "        run: bash apps/web-platform/test/infra/relay-probe-alerts.test.sh\n"
+assert s.count(old) == 1
+s = s.replace(old, "        if: false\n" + old)' "conditional"
   mutate green "a comment-only edit to the .tf" TF 's = s + "\n# control comment\n"'
   mutate green "the listener conjuncts are re-indented (whitespace inside the heredoc is legal)" TF \
     'i = s.index("relay_listener_down_sql = <<-SQL"); j = s.index("\n  SQL\n", i)
@@ -294,10 +334,10 @@ s = s[:i] + s[i:j].replace("\n      AND ", "\n          AND ") + s[j:]'
 fi
 
 # ── Assertion floor + ledger ────────────────────────────────────────────────────────────────
-PRESENCE_ROWS=54
-MUT_ROWS=18
-_eff=${MUT_SKIP:+0}
-_eff=${_eff:-$MUT_ROWS}
+PRESENCE_ROWS=56
+MUT_ROWS=23
+_eff=$MUT_ROWS
+[ "$NOBATTERY" -eq 1 ] && _eff=0
 _floor=$((PRESENCE_ROWS + _eff))
 _ran=$((pass + fail))
 if [ "$_ran" -lt "$_floor" ]; then

@@ -465,8 +465,9 @@ Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts
   The same query with `JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'` and `startsWith(JSONExtractString(raw,'message'),
   'relay_peer_probe peer=')` over a day reads the peer dials. A host with ~60 rows an hour and only `proxy_state=listening` is healthy.
 - **`relay_listener_down` fired.** Read the host and the state. `disabled` / `no_bind` / `no_allowlist` mean the relay was never
-  configured on that host (check the host's env for `SOLEUR_PROXY_BIND` and `SOLEUR_PROXY_PEER_ALLOWLIST` through the deploy-status
-  field, not SSH); `error` means the listener failed or closed after boot. It sums rows across BOTH hosts, so confirm one host carries
+  configured on that host: `disabled` is no TLS material (`PROXY_TLS_CERT` / `PROXY_TLS_KEY` absent or unparseable), `no_bind` is no
+  `SOLEUR_PROXY_BIND`, `no_allowlist` is no `SOLEUR_PROXY_PEER_ALLOWLIST`; read the host's `ci-deploy` lines for the same deploy
+  (`relay_publish degraded=...`), not SSH; `error` means the listener failed or closed after boot. It sums rows across BOTH hosts, so confirm one host carries
   the four rows. It auto-resolves after 10 quiet minutes, which does not mean the relay was fixed.
 - **`relay_probe_silent` fired.** The value is the count of silent hosts. Read the query above: no row for a host means its app
   container is down, runs a build older than #12167 (no reporter yet), or its app-container log path is broken (Vector or journald
@@ -475,8 +476,12 @@ Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts
 - **`relay_peer_probe_failed` fired.** Read `peer` and `result`. A `refused` or `timeout` seconds after the peer's own deploy can be
   its container mid-swap: re-read the peer's `relay_probe` line (it must say `listening`) and the next deploy's peer line before
   treating it as a defect. A `denied` is an allowlist that lacks this host's source address; `tls` is the pinned certificate.
-- **Not verified when this shipped.** The nested `message.msg` row shape of the relay line was NOT live-probed before merge; the
-  first real row is the positive control, so run the query above after the merge's apply and expect rows for both hosts.
+- **Verified when this shipped.** The nested `message.msg` row shape of the relay line and the plain-string peer row were
+  live-probed 2026-11-07 (rows from both hosts, `CONTAINER_NAME` = `soleur-web-platform`).
+- **Not verified when this shipped (REQUIRED post-merge check).** That the evaluator delivers a value for the silence shape
+  (`relay_probe_silent`, the `egress_gw_probe_silent` open question #12190) was not measured, and this change ships no canary for
+  it. After the merge's apply, read the alert in Better Stack: with both hosts reporting its value must be 0 and it must not be
+  open. If it is open while the query above shows rows from every host, the evaluator is the suspect (#12190), not the fleet.
 
 ## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
 

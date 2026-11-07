@@ -2304,8 +2304,10 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
 #
 # ROW SHAPE (app-container pino rows, runbook "App container pino lines" + the sandbox alert above): `raw.CONTAINER_NAME` is
 # `soleur-web-platform` on web-1 and web-2 alike and the pino fields nest under `raw.message`, so the sentence is
-# `JSONExtractString(raw, 'message', 'msg')`. NOT live-probed before merge (this change touches no live Better Stack state): the
-# first real relay_probe row is the positive control, and the runbook section below carries the query that reads it.
+# `JSONExtractString(raw, 'message', 'msg')`. LIVE-PROBED 2026-11-07 (read-only Better Stack query, after release run
+# 42357001048): both hosts' relay_probe rows carry `raw.CONTAINER_NAME` = `soleur-web-platform` and `raw.message.msg` =
+# `relay_probe proxy_state=listening addr=0.0.0.0 port=8443 workspaces_populated=<0|1>`; the ci-deploy peer rows carry
+# `raw.message` as the plain string `relay_peer_probe peer=<ip> result=<r>`.
 #
 # (1) WINDOW. The line is per minute, so a 300 s bucket holds about five rows per host. `higher_than 3` pages at four or more
 # non-listening rows in the bucket: a restart blip or one transient row never pages, a relay that stays down for about four
