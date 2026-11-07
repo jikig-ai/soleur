@@ -212,8 +212,8 @@ logs:
   where: GitHub Actions logs of the apply workflow run (gh run view <id> --log) and of the CI checks
   retention: GitHub default run-log retention (90 days)
 discoverability_test:
-  command: bash -c 'n=$(git grep -lE "probe_silent_canary" -- .github/workflows/apply-web-platform-infra.yml | wc -l); echo "canary_target_files=$n"'
-  expected_output: canary_target_files=0
+  command: git grep -L probe_silent_canary -- .github/workflows/apply-web-platform-infra.yml
+  expected_output: .github/workflows/apply-web-platform-infra.yml
 ```
 
 ## Infrastructure (IaC)
