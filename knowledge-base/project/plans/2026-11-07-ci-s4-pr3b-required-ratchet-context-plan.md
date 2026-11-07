@@ -1,677 +1,410 @@
 ---
-title: "ci: S4 PR3b, make the affected-index ratchet a required context"
-type: ci
+title: "ci: S4 PR3b — make affected-index-ratchet required, ship oracle-review-required, and bound accept-row growth"
+type: feat
 date: 2026-11-07
 slug: ci-s4-pr3b-required-ratchet-context
 branch: feat-one-shot-10859-pr3b-required-context
 issue: 10859
-closes: 10859
 lane: cross-domain
 brand_survival_threshold: none
-requires_cpo_signoff: false
 ---
 
-# ci: S4 PR3b, make the affected-index ratchet a required context
+# ci: S4 PR3b — required ratchet, oracle review, accept-row growth bound
+
+Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). There is no spec.md for this branch.
 
 ## Overview
 
-Promote the `affected-index-ratchet` CI job from advisory to a required merge-gate
-context, exactly as scoped by issue #10859 and the archived PR3 plan's
-"PR3b - make the context required" section
-(`knowledge-base/project/plans/archive/20261023-144502-2026-10-22-feat-s4-affected-index-pr3-required-ratchet-plan.md`).
+Issue #10859 (OPEN, labels `priority/p3-low`, `type/chore`, `domain/engineering`, `meta/machinery`) is the PR3b stage of the S4 affected-index series (#10448, #9729, ADR-276). All entry conditions are discharged: the #10865 observation window certified PASS on 2026-11-07 (probe retired by PR #12296), the canary and ceilings were ruled satisfied, the rename-carry design dissolved under strict zero, the cumulative baseline check reads 0 added lines (re-verified today; the file is deleted on `origin/main`), and the budget owner's go-ahead was recorded on the issue 2026-11-07 — the merge cite is that comment, which is the go-ahead receipt.
 
-In **one commit**: delete the job-level `continue-on-error: true` in
-`.github/workflows/ci.yml` AND enroll the name `affected-index-ratchet` in every
-required-context registry — `scripts/required-checks.txt`,
-`scripts/ci-required-ruleset-canonical-required-status-checks.json`,
-`infra/github/ruleset-ci-required.tf`, the count pin in
-`plugins/soleur/test/required-checks-canonical-parity.test.sh`, the
-`admin-merge-ready` fixtures, `tests/scripts/test-audit-ruleset-bypass.sh`, and
-`scripts/pr-fanout-ledger.txt` — plus a committed bot-synthetic unreachability
-assertion. Run `scripts/probe-merge-group-coverage.sh` before merging. Re-examine
-draft-light participation with the measured draft-push minutes.
+One commit ships three deliverables the batched CTO rulings of 2026-11-06 bound together:
 
-The merge auto-applies the ruleset via `apply-github-infra.yml`; the PR body must
-state that and cite the budget-owner go-ahead comment
-(https://github.com/jikig-ai/soleur/issues/10859#issuecomment-6710852889,
-recorded 2026-11-07T17:45:10Z by deruelle, verbatim: "go ahead for 10859 and
-10862").
+1. **Required-context flip** — delete the job-level `continue-on-error` on `affected-index-ratchet` in `.github/workflows/ci.yml` and enroll the name in every required-context registry: `scripts/required-checks.txt`, `scripts/ci-required-ruleset-canonical-required-status-checks.json`, `infra/github/ruleset-ci-required.tf`, the count pin in `tests/scripts/test-audit-ruleset-bypass.sh` (T-rsc-7 literal 10→12), the `admin-merge-ready` fixtures, and `scripts/pr-fanout-ledger.txt`, with the committed bot-synthetic unreachability assertion. `scripts/probe-merge-group-coverage.sh` runs green before merge.
+2. **`oracle-review-required`** — a new required context in the same commit (ruling (a)). New ci.yml job driven by `scripts/ci-oracle-review.sh`: on `pull_request`, a diff touching the oracle surface requires an APPROVED review by `deruelle` bound to the head SHA, or PR author `deruelle` (GitHub bars self-approval); on `merge_group`, per-member context success via the cla-verify enumeration machinery. Fail-closed on API failure.
+3. **Accept-row growth bound** — ruling (b): the ratchet marker gains `accept=<n>`; new diff-scoped verdicts `accept-unattributed` and `accept-bad-kind` — every pair whose accept row-set differs base→HEAD must attribute to the diff (path touched, ref file touched, or oracle touched), and every added row must carry one of the six typed reason kinds.
 
-## Premise Validation
+## Problem Statement / Motivation
 
-Checked 2026-11-07:
+Today the `affected-index-ratchet` job is advisory: `continue-on-error: true`, absent from every required set. A red ratchet on a PR changes nothing — the merge gate does not read it — so a suite that names an undeclared tracked path can merge, and the audit's strict-zero property erodes one unreviewed PR at a time. PR3a deliberately shipped dark to observe; the window has now certified the job (1,197 units measured, p95 237 s under the final 240/285 ceilings, mean billed 3.47 min/unit) and the owner authorized the flip.
 
-- #10859 OPEN, not closed by any PR; last comment is the go-ahead receipt (above).
-- #10865 (PR3a observation-window tracker) CLOSED 2026-11-07T10:12:25Z — entry
-  condition (1) met. Entry conditions (2) rename-carry design and (3) the
-  continue-on-error canary (PR #10899, run 39937846319) are recorded as met in
-  the runbook observation log (`ci-pr-affected-activation.md` §The dark phase).
-- All seven named registry files exist on the branch; so do
-  `scripts/probe-merge-group-coverage.sh`,
-  `.github/actions/bot-pr-with-synthetic-checks/action.yml`, and
-  `scripts/required-check-wallclock-bounds.tsv`.
-- Collision precheck: PR #12329 names #10859 — it is THIS branch's own pipeline
-  draft PR (created 17:47Z, body "WIP"), not a duplicate. One foreign
-  `test-all.sh` run in an unrelated worktree (pid 3651465) — unrelated to #10859.
-- Corrected premise: the archived plan says the audit's read set is "exposed
-  under `--all-refs`". It is NOT — `--all-refs` prints `ref` lines only for GAP
-  pairs (files containing undeclared boundary lines), an under-approximation of
-  `files_read` (a file read that names only declared paths prints nothing, yet a
-  bot edit could add a boundary line to it). The disjointness assertion therefore
-  requires a small read-set exposure added to `scripts/ci-pr-affected-replay.py`
-  (`audit --print-files-read`), which this plan carries as a justified inferred
-  item (see Scope Check).
+Two residuals the rulings bound to the same commit: (a) no required human review exists for the check's own oracle — a CODEOWNERS entry routes review but enforces nothing, and an accept row on a file the suite really reads is a false negative no automated control can see; (b) accept-file growth was notice-only — nothing stops a mid-window PR from adding rows that exempt real reads.
 
-## Property List (Phase 0.6b)
+## Proposed Solution
 
-- P1: `affected-index-ratchet` blocks merge/queue when red — required context in
-  the live ruleset after the auto-apply.
-- P2: the job can no longer be run-conclusion-green while failing —
-  `continue-on-error` deleted.
-- P3: every registry that mirrors the required set carries the name in the same
-  commit (parity guards stay green).
-- P4: a bot-PR synthetic green for the new context is sound by UNREACHABILITY —
-  proven by a committed test, not argued.
-- P5: every committed consumer that pins the advisory state or the context count
-  is updated in the same commit (no suite reds on merge).
+One PR, one atomic edit set. The paired-edit contract (ADR-032) forbids staging: at no commit may a required name lack a producing job or any registry disagree with another, so the job changes, the registries, the pins, the fixtures, the driver, the verdicts and the docs land together.
 
-## Cut List (Phase 0.6b)
+## Technical Approach
 
-- Draft-light gating of the ratchet (needs: draft-light + if:/step clause) → P? →
-  CUT. See "Draft-light re-examination" below: it introduces either a needs edge
-  on a required context (a failed/skipped need class the context never had) or a
-  fabricated green on drafts — the class P4 exists to police.
-- A new standalone `.test.sh` suite for the disjointness check → P4 → cut in
-  favor of rows inside already-registered suites (no `scripts/test-all.sh`
-  runner-trigger edit needed).
-- Editing `apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`
-  `SYNTHETIC_CHECK_NAMES` → P4 → deliberately absent, same disposition as the
-  umbrella contexts it already excludes: the Inngest crons push with an App token
-  that triggers real CI (#8166), so the ratchet check there is EARNED, never
-  fabricated.
+### Workstream A — required-context flip and enrollment
+
+- `.github/workflows/ci.yml`: delete `continue-on-error: true` from `affected-index-ratchet` (line ~521); update the header comment at line ~22 that names it "the one ADVISORY job". The job's `if: github.event_name == 'pull_request' || github.event_name == 'merge_group'` stays — it is the merge_group producer the coverage probe requires. `continue-on-error` and `required` are mutually destructive (a required job that cannot fail the run is decorative), so the deletion rides the same commit as the enrollment — never staged.
+- `scripts/required-checks.txt`: add `affected-index-ratchet` and `oracle-review-required`, each with a #6049-convention disposition comment: both are CONTENT-SCOPED, sound-by-UNREACHABILITY — the composite action's `ALLOWED_PATHS = {knowledge-base/project/weakness-digest.md}` intersects neither the oracle path set nor the audit's read surface, so no bot PR can reach either gate's guarded surface. The unreachability is pinned by the new committed assertion below, not by prose.
+- `scripts/ci-required-ruleset-canonical-required-status-checks.json`: two `{context, integration_id: 15368}` rows.
+- `infra/github/ruleset-ci-required.tf`: two `required_check` blocks with dated history comments naming this issue and the disposition; the merge triggers `apply-github-infra.yml`, a whole-payload replace — verify `bypass_actors` and `conditions` unchanged by a read before and after (learning `2026-04-03-github-ruleset-put-replaces-entire-payload.md`).
+- `tests/scripts/test-audit-ruleset-bypass.sh`: T-rsc-7 literal `10` → `12` plus the dated count-history comment (kept a literal deliberately — deriving it would make the assertion tautological).
+- `plugins/soleur/test/fixtures/admin-merge-ready/`: `rules-branches-main.json` gains both contexts (15368); `check-runs.json` gains a completed/success run per new name on the fixture head SHA; `README.md` gains the dated recapture note; `admin-merge-ready.test.sh`'s "13 required contexts … 66 check runs" header comment is updated.
+- `scripts/pr-fanout-ledger.txt`: ci.yml row — dated `+1` clause for `oracle-review-required` (`yaml.safe_load(ci.yml)['jobs']` 21 → 22) naming its consequence (a required context is not a foldable advisory lint; it cannot ride `lint-bot-statuses` because it must report independently, and it cannot fold into `oracle-index-check` because that leg exists only to validate the lane's manifest on oracle-only diffs while the review gate must fire on every PR and enumerate queue members on merge_group) — plus a wording touch-up where the ratchet clause still says "advisory until PR3b".
+- `scripts/ci-push-dedupe.test.sh` `UNGATED_PINNED` and `scripts/ci-draft-light.test.sh` `LIGHT_PINNED`: add `oracle-review-required` in the hand-sorted positions (after `oracle-selection`, before `pr-selection`). `affected-index-ratchet` is already in both.
+- `scripts/ci-pr-affected-replay.py` `ALWAYS_RUN_JOBS`: add `oracle-review-required` — it runs on every pull_request/merge_group like the ratchet, and the replay's historical-run classification must not read a red from it as `unclassified-job`.
+- `scripts/ci-oracle-lane-suites.txt`: register `scripts/ci-oracle-review` in the oracle-validation manifest — the declared T3 membership criterion ("every registration whose SUT is the oracle/selector machinery") covers the review-gate driver once PR3b makes it part of the oracle control surface; the alternative, a committed exclusion note with reason, is rejected because the lane must validate the gate that guards the oracle on exactly the diffs the lane admits.
+
+**Draft-light participation — re-examined as the issue requires.** Measured: ~3.4 billed min/run, ~2,250 min/week on draft pushes (+11% per draft push), inside the spend the owner accepted in #12129. Ruled (technical, recorded in `decision-challenges.md`): `affected-index-ratchet` and `oracle-review-required` stay OUT of the draft-light gated set — a required context must still report on drafts (the ready_for_review arm re-runs regardless, but a gated required job shows `Expected` on every draft push and the observation record shows drafts are the population where oracle diffs actually occur — oracle-repair drafts are the lane's stated workload). The lever exists for the four heavy families; a 3.4-min job does not meet its complexity price (a `needs:` edge plus an `if:` term on a required gate, where a gate that skips is a gate that does not report).
+
+### Workstream B — `oracle-review-required` context and driver `scripts/ci-oracle-review.sh`
+
+Job shape (ci.yml): `if: github.event_name == 'pull_request' || github.event_name == 'merge_group'`, `timeout-minutes: 5`, `permissions: contents: read, pull-requests: read`, `fetch-depth: 2`, env-only inputs, no `needs:` (parallel root; a required context adds no declared-path length).
+
+Driver contract:
+
+- **pull_request arm.** Classify the diff against the oracle surface: `git diff --name-only <merge-ref>^1 <merge-ref>` intersected with `RATCHET_ORACLE` — extracted at runtime from the **base** copy of `scripts/ci-pr-affected-replay.py` (`git show <base>:scripts/ci-pr-affected-replay.py` imported by a pinned python one-liner that prints the tuple), so the list has one source of truth and a PR cannot shrink the list that judges it ("parity-pinned" by construction; the suite pins the extraction against `RATCHET_ORACLE` in both directions). The driver itself is base-sourced on pull_request (`git show <base>:scripts/ci-oracle-review.sh` into `$RUNNER_TEMP`; when the base lacks the file — every pre-PR3b base — the check runs the HEAD copy but classification still uses the base `RATCHET_ORACLE`, and the base-missing case is covered by the author/approval arms, never a silent pass).
+  - Oracle diff ∧ author==`deruelle` → PASS (self-approval is barred by GitHub; without this arm owner-authored oracle PRs deadlock).
+  - Oracle diff ∧ ≥1 APPROVED review by `deruelle` whose `commit_id` equals the PR head SHA → PASS. Reviews are read via `gh api repos/{repo}/pulls/{n}/reviews` (paginate, fail-closed over the read bound); a review on any earlier SHA does not bind the head.
+  - Otherwise → FAIL with the verdict line naming the missing control.
+  - No oracle diff → PASS (a required context must report success when its gate is untriggered).
+- **merge_group arm.** No diff classification — the batch's diff is not the review surface. Enumerate queue members via the cla-verify machinery (the `MQ_QUERY` entries(first:100) enumeration + anchor binding of `merge-queue-cla-verify.sh:89-181`, copied with a byte-equality parity pin in the suite — the O-DOCPARITY precedent), then for each member require the latest `oracle-review-required` check-run on the member's queued head (`headRefOid`) — github-actions app id 15368, highest check-run `id` wins — to be `completed/success`. Zero members, truncation, an unbindable anchor, or a missing/red member context is a failure, never a pass.
+- **Fail-closed on API failure** per the ruling: any `gh api` non-zero, unpaginated page bound hit, or unparseable shape is a FAIL verdict naming the class — never a green.
+- Output: one `SOLEUR_ORACLE_REVIEW event=<e> oracle_diff=<0|1> author=<login> approved=<0|1> members=<n> verdict=<pass|fail> reason=<token>` line, literals only (no paths, SHAs or review URLs in annotations — the ci-oracle-lane annotation contract).
+
+RATCHET_ORACLE gains `scripts/ci-oracle-review.sh` and `scripts/ci-oracle-review.test.sh` — the check's own machinery is itself oracle surface, so a diff weakening the review gate cannot self-approve quietly.
+
+### Workstream C — accept-row growth bound (ruling b)
+
+- `scripts/ci-pr-affected-replay.py`:
+  - `ratchet_marker` gains ` accept=<n>` — `n` = the count of parsed accept data rows (non-comment, non-blank lines, `*` rows included) — after `baseline=<n>`. Docstring grammar at :162 updated in the same edit.
+  - In `ratchet_run`, after `ratchet_base` resolves the base SHA, read the **base** accept file through the same confined reader; diff each pair's row-set base→HEAD. Every pair whose row-set differs must attribute to the diff — `path ∈ touched` OR `ref_files(pair) ∩ touched ≠ ∅` OR oracle touched — else finding `accept-unattributed` (exit 1). Every row present on the head side whose (suite,path,anchor,ordinal) key is absent from base OR whose reason differs must carry one of the six typed kinds — `message`, `JSDoc/comment`, `PR-body string`, `help/menu text`, `data row not fed to a read loop`, `code line in a file read only as text` (canonical list at runbook `ci-pr-affected-activation.md` line ~244) — else finding `accept-bad-kind` (exit 1). Diff-scoped by design: legacy non-conforming rows (`fixture:`-prefixed and free-form reasons in today's 3,000+ rows) are never re-litigated; only the delta is judged.
+  - `RATCHET_REMEDY_NEW`'s line "no required review exists in this repository's ruleset" is rewritten — `oracle-review-required` is that required review now.
+- Consumers of the marker grammar, same commit: `plugins/soleur/test/ci-pr-affected-replay.test.sh` `rt_marker` (grammar pin extended to ` accept=[0-9]+`), the docstring, and the runbook's marker documentation. The ci.yml reason extractor (`sed 's/^SOLEUR_PR_AFFECTED_RATCHET exit=[0-9]* reason=\([a-z0-9-]*\) .*/\1/p'`) tolerates the trailing field already (`.*` tail); the step comment is updated to name the field. The ruling's cited consumer `scripts/followthroughs/ratchet-observation-window-10865.sh` `MARKER_RE` is gone — the probe was retired 2026-11-07 (PR #12296); the surviving grammar consumers are the three above.
+- New suite `scripts/ci-oracle-review.test.sh` covering the driver (stub `gh`: oracle-diff arms, author arm, approved-SHA binding including stale-SHA rejection, merge_group member enumeration incl. hasNextPage die, missing-context fail, API-failure fail-closed, annotation-literal grammar). Registered per the machinery below.
+
+### Registration and the recursive ratchet tax
+
+The new suite names repo paths; every registered suite's named paths become audit pairs. In the same commit:
+
+- `scripts/test-all.sh`: `run_suite "scripts/ci-oracle-review" bash scripts/ci-oracle-review.test.sh` (the `--enumerate` label `scripts/ci-oracle-review`).
+- `scripts/suite-shard-legs.tsv`: regenerated via `scripts/regenerate-shard-manifest.py`, never hand-edited.
+- `scripts/lib/test-affected-paths.sh`: `AFFECTED_*_PATHS` edges for the paths the suite executes/reads (`scripts/ci-oracle-review.sh`, `.test.sh`, `merge-queue-cla-verify.sh` as parity source, `ci-pr-affected-replay.py`); named-but-unread paths get anchor-keyed accept rows in `scripts/ci-pr-affected-audit.accept.tsv` with one of the six typed kinds (the same kinds this PR begins enforcing — eating our own cooking).
+- The PR must keep the advisory ratchet green on its own diff — the merge_group run of this very PR is the first run where a red ratchet is a gate failure.
 
 ## Research Insights
 
-- The job (`ci.yml:519-571`): `if: github.event_name == 'pull_request' ||
-  github.event_name == 'merge_group'` at 520, `continue-on-error: true` at 521 —
-  the single line to delete — plus its advisory comment block at ~505-518 to
-  rewrite. The `if:` is already the positive `pull_request || merge_group` form
-  `probe-merge-group-coverage.sh` accepts (its own test row 16 proves it).
-- `scripts/required-checks.txt` (232 lines): names are parsed as non-comment
-  lines before the `# CLA Required ruleset` header; every content-scoped gate
-  carries a per-gate justification block (#6049/ADR-139 rule). The new entry
-  goes immediately before `# CLA Required ruleset` with an
-  `affected-index-ratchet` block modeled on `rule-body-lint` /
-  `sentry-destroy-required`: CONTENT-SCOPED, sound by UNREACHABILITY, asserted by
-  the new committed test — NOT merely argued (the digest IS named by pairs, but
-  as a target, not a reader).
-- `scripts/ci-required-ruleset-canonical-required-status-checks.json`: 10
-  all-15368 rows → append an 11th `{"context": "affected-index-ratchet",
-  "integration_id": 15368}`.
-- `infra/github/ruleset-ci-required.tf`: 10 `required_check` blocks (grep -c
-  `context *=` = 10) → append an 11th inside `required_status_checks`, with a
-  dated #10859 comment; fix the stale header line "the 10 `context` strings
-  below" → 11.
-- Count pins that will RED if not edited in the same commit:
-  - `tests/scripts/test-audit-ruleset-bypass.sh` T-rsc-7: `n == "10"` → `"11"`
-    (deliberate literal; comment block above it already records the bump chain).
-  - `plugins/soleur/test/required-checks-canonical-parity.test.sh` line ~180:
-    `n_ci -ge 10 && n_canon -ge 10` non-vacuity floors → `-ge 11` (this is "the
-    count pin" the issue names).
-  - `plugins/soleur/test/required-checks-merge-group-coverage.test.sh`: 9
-    literal `contexts=12 producers=11` expectations → `contexts=13 producers=12`
-    (real-repo rows run against a sandbox copy of the live tree). Its
-    `engine_green 12` floors stay ≥ — optionally bump to 13 for consistency.
-  - `scripts/probe-merge-group-coverage.sh` `MIN_CONTEXTS_DEFAULT = 12` and its
-    "12 = 10 CI + 2 CLA" comment → 13 / "13 = 11 CI + 2 CLA" (deliberate literal
-    tracking the real count, same philosophy as T-rsc-7). The issue lists only
-    "run before merging" for this file; the floor is a ≥ so it still passes —
-    the bump keeps the anti-vacuity floor honest (justified inferred item).
-- Advisory-state pins inside `plugins/soleur/test/ci-pr-affected-replay.test.sh`
-  that MUST be rewritten (inferred — the issue does not name this file but the
-  suite fails otherwise):
-  - chk ~2944 `row_wf_coe`: asserts coe present → invert/remove (the biconditional
-    `row_wf_bicond` at ~2717 already encodes "coe IFF not required" and stays
-    green once both arms land).
-  - chk ~2949 `row_wf_dark`: asserts the name absent from required-checks.txt →
-    rewrite as a `row_wf_required` (name present, coe absent) or fold into the
-    biconditional.
-  - chk ~2954 `row_wf_dark_mutant` and ~2955 `coe-gone` wf_mut rows reference the
-    deleted line/advisory shape → rewrite mutants against the required-state
-    baseline (e.g., a mutant that re-adds coe while the name IS required must
-    red the biconditional).
-  - `row_wf_required_not_coe` floor `mapped >= 3` → the ratchet becomes the 4th
-    mapped required ci.yml job (test, e2e, guards-ruleset + it) — keep or bump
-    to 4.
-- `admin-merge-ready` fixtures (`plugins/soleur/test/fixtures/admin-merge-ready/`):
-  `rules-branches-main.json` ruleset 14145388 holds 11 contexts today
-  (deliberately the PRE-adoption capture including `CodeQL`; README documents
-  this) → append `affected-index-ratchet` to its `required_status_checks`;
-  `check-runs.json` → append one green run `{name: affected-index-ratchet,
-  head_sha: <fixture SHA 319c22bf…>, status: completed, conclusion: success,
-  app: {id: 15368}, check_suite: {id: <consistent>}}`; README gets a dated
-  2026-11-07 (#10859) note line like the #12276 one.
-- `scripts/required-check-wallclock-bounds.tsv`: REQUIRED row — the TSV header
-  itself states "a required context with no row here is itself a ratchet
-  finding", and `scripts/watch-wallclock-p90-11774.sh` emits an `unbound`
-  finding per missing row. Seed bounds from the job's measured wall clock
-  (p95 240 s / max 285 s execution + acquisition): `affected-index-ratchet`
-  420 / 420 / 0.30 is the conservative seed — the implementer should verify with
-  `watch-wallclock-p90-11774.sh --dry-run` and round UP to the next minute per
-  the file's seeding method (inferred item — the issue does not name it, the
-  probe's own contract does).
-- `scripts/pr-fanout-ledger.txt` ci.yml row: append a dated clause —
-  "2026-11-07 PR3b (#10859): affected-index-ratchet's context became required
-  (continue-on-error removed; job count unchanged at 21)". The jobs column is a
-  declared-count ceiling and does not move.
-- The audit read set: `files_read` = distinct real files in `index.raws` —
-  suite input files (`suite_inputs`/`reach_texts`) plus their `source` closure
-  to HOP_DEPTH. `knowledge-base/project/weakness-digest.md` is named BY 2 gap
-  pairs and a data file as a *target* string; it is not a suite input and
-  cannot be a `source` operand, so it is essentially certain NOT to be read —
-  but "essentially" is what the committed test exists to prove, because reach
-  widens silently.
-- Draft-light facts (for the re-examination): `CI_DRAFT_LIGHT` repo variable is
-  `on` (set 2026-10-11); `draft-light` job `if:` is pull_request-only, so it is
-  skipped on merge_group; the gated-set shape is `needs: [push-dedupe,
-  draft-light]` + `&& needs.draft-light.outputs.light != 'true'` enforced both
-  directions by `scripts/ci-draft-light.test.sh` (`LIGHT_PINNED` already
-  contains `affected-index-ratchet` in the ungated/light set). Runbook measured:
-  ~3.4 billed min/run, ~4,400 min/wk total, ~2,250 min/wk on draft pushes
-  (~+11% per draft push); p95 240 s / max 285 s wall (re-ruled final
-  2026-11-03).
-- Institutional learnings applied:
-  - `2026-03-20-github-required-checks-skip-ci-synthetic-status.md` and
-    `2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md`: a required
-    context needs the `merge_group` producer (present) and a synthetic for bot
-    PRs (the composite action derives CHECK_NAMES from required-checks.txt —
-    enrollment auto-covers it, and the unreachability test proves the green is
-    sound).
-  - ADR-032 paired-edit contract: the context name and the ruleset row land in
-    the same commit — satisfied by the one-commit rule.
-  - `2026-09-23-non-required-did-not-mean-decoupled-…`: "non-required" only
-    governs the merge gate — the registries being enrolled are exactly the gate.
+- **Relevant files** (verified on this branch): `.github/workflows/ci.yml` (`affected-index-ratchet` job ~519-569, `continue-on-error` :521, header :22, reason extractor :547); `scripts/required-checks.txt` (#6049 disposition convention, 10 CI names); `scripts/ci-required-ruleset-canonical-required-status-checks.json` (10 rows, all 15368); `infra/github/ruleset-ci-required.tf` (10 `required_check` blocks + merge_queue block + hard precondition note); `tests/scripts/test-audit-ruleset-bypass.sh` (T-rsc-7 literal `10` :718, T-rsc-9 canonical↔TF parity, CANONICAL_RSC fixture :525); `plugins/soleur/test/fixtures/admin-merge-ready/` (rules-branches-main.json 11 CI+2 CLA, check-runs.json 66 runs, README); `scripts/pr-fanout-ledger.txt` (ci.yml row jobs=21); `scripts/ci-push-dedupe.test.sh` `UNGATED_PINNED` :144; `scripts/ci-draft-light.test.sh` `LIGHT_PINNED` :110; `scripts/ci-pr-affected-replay.py` (`RATCHET_ORACLE` :1757, `ALWAYS_RUN_JOBS` :199, `ratchet_marker` :1951, `ratchet_run` :1994, `judge_rules` :1590, `RATCHET_REMEDY_NEW` :1763); `plugins/soleur/test/ci-pr-affected-replay.test.sh` (`rt_marker` :2332); `scripts/merge-queue-cla-verify.sh` (enumeration :89-181); `scripts/probe-merge-group-coverage.sh` (offline producer probe); `.github/actions/bot-pr-with-synthetic-checks/action.yml` (`ALLOWED_PATHS` :230 = `{knowledge-base/project/weakness-digest.md}`); `scripts/ci-oracle-lane-suites.txt` (manifest + sentinel); `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` (advisory wording :163-179, observation log :269-284, six kinds :244); `ADR-276` (`### Stage status`, amendment convention).
+- **Institutional learnings:** `2026-03-20-github-required-checks-skip-ci-synthetic-status.md` and `2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md` (required name ⇒ synthetic pair); `2026-04-03-github-ruleset-put-replaces-entire-payload.md` (verify bypass_actors/conditions pre+post apply); `2026-06-30-github-merge-queue-adoption-wire-all-ruleset-producers.md` (every required context needs a merge_group producer — the probe is the gate); `2026-03-19-github-ruleset-stale-bypass-actors.md`; `2026-05-11-plan-review-caught-git-log-union-trap-and-cross-module-field-assumption.md`; sharp edges — "non-required did not mean decoupled" (`continue-on-error` is what decouples, and it is mutually destructive with `required` — delete in the same change) and "a fail-closed change is not done until its most natural repair is also refused" (the driver must not pass on `gh` misuse flags, missing env, or empty enumerations).
+- **Premise Validation (Phase 0.6):** #10859 OPEN with the 2026-11-07 go-ahead comment as the last comment — held. #10865 closed; probe retired — the ruling's cited `MARKER_RE` consumer no longer exists (substituted per Workstream C). `scripts/ci-pr-affected-audit.baseline.tsv` absent on `origin/main`; cumulative check re-verified today = 0 added lines. Cited machinery all present: `RATCHET_ORACLE`, `judge_rules`, `merge-queue-cla-verify.sh:89-181` enumeration, `ALLOWED_PATHS`, `probe-merge-group-coverage.sh`, `rt_marker` pin. Collision precheck: only own draft PR #12329; foreign `test-all.sh` runs on a sibling worktree noted. ADR-corpus mechanism check: the review-gate mechanism was itself ruled in the 2026-11-06 comment (literal ruleset arm inexpressible — `require_code_owner_review` is not path-scoped — and written acceptance leaves the residual uncontrolled).
+- **Property List (Phase 0.6b):** (P1) a suite naming an undeclared tracked path cannot merge; (P2) an oracle-surface diff cannot merge without a bound owner-review act or owner authorship; (P3) accept-row growth must attribute provenance and carry a typed kind; (P4) every required name exists in all registries with a merge_group producer, mechanically pinned; (P5) a bot PR's synthetic green is provably unreachable by the surfaces both gates read.
+- **Cut List (Phase 0.6b):** (a) literal ruleset `require_code_owner_review` — property P2, already rejected by the ruling (not path-scoped); (b) a separate `oracle-review` workflow — P2 covered by the ci.yml job the ruling names, and a second producer would trip the coverage probe's exactly-one-producer rule; (c) a new shared enumeration lib extracted from `merge-queue-cla-verify.sh` — property "member enumeration correctness" is already covered by a parity-pinned copy (O-DOCPARITY precedent) at lower blast radius; (d) `WALL_DISCHARGE_ISSUE=12129` probe amendment — already landed (#12258) and then retired with the probe.
+- **Value-proposition measurement (0.6c):** this PR claims no saving; it adds cost (~3.4 billed min/run for the ratchet, seconds for the review job) — the spend was measured and owner-accepted in #12129 and the 2026-11-06 comment. Numbers carried: p95 237 s / max 317 s over 1,197 units; ~4,400 min/week, ~2,250 on drafts.
 
-## Draft-light re-examination (recorded decision)
+## Research Reconciliation — Spec vs. Codebase
 
-Measured inputs: `CI_DRAFT_LIGHT` is `on`; the job costs ~3.4 billed min/run;
-runbook attributes ~2,250 billed min/week to draft pushes (~51% of the job's
-~4,400).
+| Claim | Reality | Plan response |
+|---|---|---|
+| "the probe `MARKER_RE` (`ratchet-observation-window-10865.sh:161`)" (ruling b) | file deleted on main by PR #12296 after the window certified PASS | marker consumers reduced to replay docstring, `rt_marker` pin, ci.yml extractor (tolerant), runbook — updated in Workstream C |
+| "PR 12300 touches adjacent ci.yml/ruleset surface" (scope context) | its files are `ci-oracle-lane.sh`, `ci-oracle-lane.test.sh`, ADR-276 — not ci.yml or the ruleset | overlap is ADR-276 append + RATCHET_ORACLE membership (lane files already inside it); rebase-order note in Sibling PR Overlap |
+| "canonical JSON, count pin" | T-rsc-7 is a hand-maintained literal (`10`), not a derived count | literal → `12` with the dated history comment, per the file's own convention |
+| "admin-merge-ready fixtures" | fixture keeps a deliberate CodeQL/57789 negative row; "13 contexts" comment | add both names at 15368 + green runs; do not disturb the CodeQL negative row |
 
-Options weighed:
+## Implementation Phases
 
-- **A — stay ungated (LIGHT_PINNED), run on every draft push.** Cost: ~2,250
-  min/wk. The required context posts a real verdict on every push.
-- **B — join the gated set** (`needs: [draft-light]` + `&&
-  needs.draft-light.outputs.light != 'true'` on the job `if:`): skips the check
-  on light draft runs. Defects: (i) a needs edge on a REQUIRED context adds a
-  skipped/failed-need class it has never had — a draft-light failure on a
-  pull_request run skips the ratchet → required context pending → merge blocked
-  until re-run (the #5780 stall class, just smaller); (ii) breaks the
-  `row_wf_no_needs` pin and puts the lever's liveness on the merge critical path.
-- **C — step-level gate** (`needs: draft-light` + step `if:`): the job still
-  starts, skips the audit, posts GREEN on a light draft run — a fabricated
-  green from a required context, the exact class the unreachability assertion
-  exists to police; dishonest telemetry on ~2,250 min/wk of runs.
-- **D — event-payload draft flag in the job `if:`**: rejected by the draft-light
-  design itself (re-runs reuse stale payloads; a stale `draft=true` on a
-  now-ready PR would leave the required context unreported).
+### Phase 1 — driver + verdicts (the check that must exist before it is required)
 
-Ruled by planning agent, 2026-11-07 (no Task tool in this environment — could
-not spawn soleur:engineering:cto; recorded for pipeline review): **Option A —
-the job stays in `LIGHT_PINNED`, ungated.** The ratchet is not one of the "four
-heavy families" the lever exists to skip; options B–D each buy ~2,250 min/wk at
-the price of a merge-gate or telemetry defect. Revisit path: a dedicated issue
-if the budget owner wants the ~2,250 min/wk back (the change is mechanical but
-touches a required context's needs graph).
+- `scripts/ci-oracle-review.sh` + `scripts/ci-oracle-review.test.sh`; replay `ratchet_run` accept-diff + `accept=` marker + `accept-unattributed`/`accept-bad-kind` findings; replay suite rows (`rt_marker` grammar, verdict mutation rows); registration (test-all.sh, suite-shard-legs via generator, edges + accept rows, manifest membership).
+- Success: `bash scripts/ci-oracle-review.test.sh` green; `python3 -I scripts/ci-pr-affected-replay.py ratchet` green on this branch; suite census/arm re-tiles pass.
+
+### Phase 2 — enrollment (the paired-edit commit)
+
+- ci.yml (`continue-on-error` deletion + `oracle-review-required` job + header comment), required-checks.txt, canonical JSON, ruleset TF, T-rsc-7, fixtures, ledger, UNGATED/LIGHT pins, ALWAYS_RUN_JOBS, unreachability assertion test.
+- Success: `bash tests/scripts/test-audit-ruleset-bypass.sh`, `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`, `bash plugins/soleur/scripts/admin-merge-ready.test.sh`, `bash plugins/soleur/test/pr-fanout-ledger.test.sh`, `bash scripts/ci-push-dedupe.test.sh`, `bash scripts/ci-draft-light.test.sh`, `bash plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh`, `bash scripts/probe-merge-group-coverage.sh` all green.
+
+### Phase 3 — docs + ADR + observation
+
+- Runbook rewrite (advisory→required, oracle-review section, marker grammar, observation-log line for the first required run's check-list rendering), ADR-276 dated amendment, `RATCHET_REMEDY_NEW` text, ledger wording.
+- Success: runbook's "Until PR3b the job is advisory" gone; ADR Stage-status line appended; `grep -c 'no required review exists' scripts/ci-pr-affected-replay.py knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` = 0 outside history quotes.
+
+### Phase 4 — pre-ready verification
+
+- Full relevant battery (`test-all.sh --affected` resolves to the full battery here — `test-affected-paths.sh` is a runner trigger); `git diff 45f0b096ffabf94d1b9abc49ef9a039648f4b758 origin/main -- scripts/ci-pr-affected-audit.baseline.tsv` re-run = 0 added lines; `scripts/probe-merge-group-coverage.sh` output quoted in the PR body; first real `pull_request` run's check-list rendering (both contexts present, `affected-index-ratchet` required and green, `oracle-review-required` green via author/approval arm) recorded in the runbook observation log in the same PR or the immediate follow-up comment.
+
+## Alternative Approaches Considered
+
+| Alternative | Why rejected |
+|---|---|
+| Ruleset `require_code_owner_review` | Ruled inexpressible 2026-11-06: not path-scoped; `* @deruelle` would force review on every PR |
+| Written owner acceptance of the review residual | Leaves residual 5(a) permanently uncontrolled — ruled against |
+| Two PRs (flip, then oracle-review) | The owner named one PR3b commit; splitting also violates the paired-edit contract's spirit (a required ratchet with no oracle control is the hole the rulings closed) |
+| Extract the member enumeration into `scripts/lib/` shared by both drivers | Higher blast radius on a live production script; parity-pinned copy is the repo's own O-DOCPARITY precedent |
+| Gate the two checks on draft pushes | A required context that skips does not report; cost (~3.4 min) inside accepted spend — ruled in decision-challenges.md |
 
 ## User-Brand Impact
 
-- **If this lands broken, the user experiences:** every open PR's merge gate
-  stalls or reds — a required context that never reports (if the merge_group
-  producer broke) or blocks everything (if the ratchet reds spuriously). For the
-  plugin's end users, nothing directly — this is the repo's own merge gate.
-- **If this leaks, the user's [data / workflow / money] is exposed via:** no
-  user data path — the change is repo-internal CI/ruleset configuration. Hosted
-  runner spend is the money vector (a required job runs on every PR + queue
-  entry, ~3.4 billed min each — the budget-owner go-ahead covers it).
+- **If this lands broken, the user experiences:** a merge-queue or PR check wedge — a required context that never reports leaves every entry pending (the 2026-06-30 deadlock class), or a false-failing `oracle-review-required` blocks owner-authored oracle repairs; blast radius is this repository's engineering flow, not product end-users.
+- **If this leaks, the user's [data / workflow / money] is exposed via:** no data exposure surface — the driver reads PR review/file metadata (already repo-internal) and writes a check-run conclusion; a mis-scoped permission (`checks: write`) is deliberately NOT granted.
 - **Brand-survival threshold:** `none`
-- **Threshold decision (challengeable):** internal merge-gate configuration with
-  no user-facing surface; a defect costs developer throughput and runner
-  minutes, not user trust.
-- `threshold: none, reason: the diff touches .github/workflows/, infra/github/,
-  scripts/ and test files — repo-internal CI infrastructure only, no
-  user-facing or regulated-data surface.`
-
-## Domain Review
-
-**Domains relevant:** none
-
-No cross-domain implications detected — infrastructure/tooling change (CI
-required-context enrollment). The mechanical UI-surface scan over Files to
-Create/Edit finds no `components/**/*.tsx`, `app/**/page.tsx`, or UI-surface
-path, so the Product/UX gate does not fire.
-
-## Infrastructure (IaC)
-
-The change to `infra/github/ruleset-ci-required.tf` is an amendment to an
-EXISTING Terraform root — no new resource, server, secret, or vendor.
-
-### Terraform changes
-
-- `infra/github/ruleset-ci-required.tf`: one new `required_check` block
-  (`context = "affected-index-ratchet"`, `integration_id =
-  var.actions_integration_id`) inside the existing
-  `required_status_checks` rule of `github_repository_ruleset.ci_required`, plus
-  a dated comment and the stale "10 `context` strings" header fix → 11.
-
-### Apply path
-
-- Automatic: `apply-github-infra.yml` fires on merge (paths:
-  `infra/github/*.tf`) — a whole-payload ruleset replace that ADDS one
-  `required_check` (no destroy; the `[ack-destroy]` merge-message ack is NOT
-  required — it guards nested-block removals).
-- Verification: the workflow's pre-apply by-value gate compares planned
-  bindings with the committed canonical JSON; post-apply it re-reads the live
-  ruleset. Operator-visible drift check before merge: read the live ruleset's
-  `bypass_actors` and `conditions` before and after apply (the parent plan's
-  instruction — folded into the ship checklist, not an operator step).
-- Kill switch: `[skip-github-apply]` on its own line in the merge commit
-  message skips the auto-apply (use only for a deliberately deferred apply).
-
-### Distinctness / drift safeguards
-
-- Canonical JSON ↔ tf parity is CI-enforced (T-rsc-9 in
-  `tests/scripts/test-audit-ruleset-bypass.sh`), so both must land in this
-  commit — an apply with mismatched canonical would flag `removed` drift in the
-  daily ruleset audit.
+- **Threshold decision (challengeable):** the harm class is a wedged internal merge gate with a committed break-glass runbook (admin merge + revert recipe), not a user-facing incident; a `threshold: none` matches the PR3a ruling for the same machinery.
 
 ## Observability
 
 ```yaml
 liveness_signal:
-  what: the `affected-index-ratchet` check itself — required context green/red per PR and merge_group run; the daily `scheduled-ruleset-bypass-audit.yml` verifies live ruleset == canonical JSON
-  cadence: per-PR/per-queue-entry (the check); daily (the audit)
-  alert_target: the PR's check list + queue entry state (check); `ci/auth-broken` issue label from the audit (audit)
-  configured_in: .github/workflows/ci.yml (job), infra/github/ruleset-ci-required.tf (requirement), .github/workflows/scheduled-ruleset-bypass-audit.yml (drift audit)
-
+  what:            the two required contexts themselves — `affected-index-ratchet` and `oracle-review-required` report on every pull_request and merge_group run; an absent context pends the queue entry (self-signaling, the opposite of a silent dark surface)
+  cadence:         per CI run
+  alert_target:    merge-queue stall surface — `merge-queue-stall-check.yml` already names the workflow whose merge_group run never reported
+  configured_in:   .github/workflows/ci.yml + infra/github/ruleset-ci-required.tf
 error_reporting:
-  destination: the check's ::error annotation `exit=<1|2> reason=<token>` in the job log + `### affected-index-ratchet` step summary
-  fail_loud: a required-context red blocks merge — the failure IS the loud signal; a context that never reports surfaces as `Expected — Waiting` (queue stall) caught by merge-queue-stall-check.yml
-
+  destination:     the check-run conclusion + `::error title=...::` annotation on the run; fail-closed by construction
+  fail_loud:       a red required context on the PR check list / queue ejection with the driver's `reason=<token>` line
 failure_modes:
-  - mode: context required in files but absent from live ruleset (apply failed or skipped)
-    detection: daily ruleset-bypass audit + apply-github-infra.yml post-apply verify step
-    alert_route: ci/auth-broken issue via the audit
-  - mode: bot PR fabricates a green over a reachable surface (ALLOWED_PATHS widened to an audit-read file)
-    detection: the new committed unreachability test (files-read disjointness)
-    alert_route: CI red on the widening PR — before merge
-  - mode: required context with no merge_group producer (queue pends forever)
-    detection: scripts/probe-merge-group-coverage.sh run pre-merge + its committed suite
-    alert_route: pre-merge probe + required-checks-merge-group-coverage.test.sh
-
+  - mode:          oracle-review API/enumeration failure (gh api error, pagination bound, unbindable anchor)
+    detection:     check-run FAIL with `reason=<api|pagination|anchor|member-context>` token
+    alert_route:   PR check list + queue ejection — the author sees it on the merge path
+  - mode:          ratchet red after the flip (new pair, stale-accept, accept-unattributed, accept-bad-kind)
+    detection:     required-context failure + `::error title=affected-index-ratchet::exit=<1|2> reason=<token>`
+    alert_route:   PR check list — blocks merge by design; break-glass = admin merge + the runbook's revert recipe
 logs:
-  where: the job log + step summary on each ci.yml run; apply log inside apply-github-infra.yml runs
-  retention: GitHub Actions retention (org default)
-
+  where:           job log + `GITHUB_STEP_SUMMARY` marker/summary blocks (SOLEUR_PR_AFFECTED_RATCHET, SOLEUR_ORACLE_REVIEW)
+  retention:       GitHub run-log retention (90 days)
 discoverability_test:
-  command: bash scripts/probe-merge-group-coverage.sh
+  command:         bash scripts/probe-merge-group-coverage.sh
   expected_output: merge-group-coverage=OK
 ```
 
 ## Encryption Posture
 
 ```yaml
-at_rest:
-  mechanism: none — the diff introduces no persistent data store (a GitHub ruleset amendment is configuration, not storage); the Terraform state for this resource already lives in the established backend per infra/github/
-  evidence: infra/github/ruleset-ci-required.tf contains no store resource
-  defends_against: n/a
-  does_not_defend: n/a — no new store
-  disclosed_as: n/a
-  live_verification: n/a
+at_rest: []   # no new persistent store — the ruleset resource is config; state stays in the existing encrypted backend this root already uses
 in_transit:
-  mechanism: the ruleset change reaches GitHub via the Terraform provider's authenticated HTTPS API under apply-github-infra.yml — TLS with cert verification on (provider default); no new cross-component connection is created
-  cert_verification: on
-  does_not_defend: a compromised runner/App token could apply a different payload — bounded by the pre-apply by-value gate and the post-apply verify step
-  disclosed_as: n/a
-exception: absent — no plaintext mechanism, cert verification on
+  - connection:        oracle-review driver (GH runner) -> api.github.com (PR reviews, files, queue enumeration, check-runs)
+    enforced_at:       scripts/ci-oracle-review.sh gh api calls
+    tls:               https (TLS 1.2+ via gh CLI)
+    cert_verification: on
+    does_not_defend:   a compromised GITHUB_TOKEN itself (token scope is the bound: contents:read + pull-requests:read)
+    disclosed_as:      not-publicly-claimed
 ```
 
 ## Task Design
 
-Not applicable — no new autonomous-task surface (no new workflow, cron, timer,
-or registered check beyond an enrollment in an existing one).
-
-## Architecture Decision (ADR/C4)
-
-The promotion decision was already made and recorded (ADR-276 amendment
-2026-10-22, S4 PR3a → PR3b staging; the staged ratchet shape ruled by the CTO).
-This plan EXECUTES a recorded decision; it makes no new architectural decision.
-
-- `### ADR` — amend, not create: append a dated line under ADR-276 `### Stage
-  status` — "2026-11-07 PR3b (#10859): `affected-index-ratchet` became a
-  required context (continue-on-error removed; ruleset applied via
-  apply-github-infra.yml)". Consistent with the series' dated-line convention.
-- `### C4 views` — **no C4 impact.** Enumerated per the completeness mandate:
-  (a) external human actors: none new — the actors are PR authors and the merge
-  queue, both already modeled; (b) external systems: GitHub Actions/rulesets
-  API — already modeled as the CI infrastructure this series documents; (c)
-  containers/data stores: none touched (no new store — see Encryption
-  Posture); (d) access relationships: none change (the merge gate's shape is
-  recorded in ADR prose, not C4 edges). model.c4, views.c4, spec.c4 all checked:
-  no element names `affected-index-ratchet`, `required-checks`, or
-  `ruleset-ci-required` — the C4 model does not render per-context CI detail.
-- `### Sequencing` — n/a (the stage-status line is the record).
+```yaml
+tasks:
+  - task:            oracle-review-required (required check context)
+    trigger:         pull_request and merge_group events on ci.yml
+    services:        reads GitHub REST (PR reviews, files, merge-queue entries, check-runs); writes its own check-run conclusion via job exit status
+    next:            nothing — a terminal verdict; a red blocks the merge path only
+    human_reentry:   approve the PR as deruelle / re-push (new head SHA re-binds review) / admin-merge break-glass per runbook
+    dedupe:          verdict is bound to the exact head SHA (commit_id match) and, on merge_group, to queue position + headCommit.oid — a stale approval or stale member context cannot satisfy it
+    source_dedupe:   not a ticket source
+```
 
 ## Guard Contract
 
-The deliverable includes one new assertion-based check (the bot-synthetic
-unreachability assertion) plus the enrollment of an existing check as required.
+### Guard 1 — required-context enrollment parity
 
-### Guard 1 — bot-synthetic read-set disjointness (`affected-index-ratchet` green is sound by unreachability)
+**Property.** Every name in the CI Required ruleset's required-status-check set exists in all five registries and has exactly one merge_group producer. **Assembly.** The four file registries (required-checks.txt, canonical JSON, ruleset TF, fixture set) plus live apply — chokepoints: `required-checks-canonical-parity.test.sh` Test 1 (file↔canonical both directions), T-rsc-7 literal + T-rsc-9 (canonical↔TF), `probe-merge-group-coverage.sh` (producer existence, event-`if:` grammar), the daily live↔canonical audit.
 
-**Property.** No path the bot composite action may stage (`ALLOWED_PATHS` in
-`.github/actions/bot-pr-with-synthetic-checks/action.yml`) is a file whose
-content the audit reads, so a bot PR cannot change the ratchet's verdict and a
-synthetic green asserts something true.
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Add the context to the JSON but not required-checks.txt | RED (parity Test 1 ⊇ arm) |
+| 2 | Enroll a name with no merge_group producer (job `if:` excludes merge_group) | RED (probe-merge-group-coverage) |
+| 3 | Enroll both names in JSON/TF but leave T-rsc-7 literal at 10 | RED (count literal is the acknowledgement) |
+| 4 | Harness: drop the new `oracle-review-required` row from canonical AND the TF in the same fixture — suite must still fail (anti-vacuity: the guard reads the files, not a hand list) | RED |
+| 5 | Must-PASS non-canonical: the 12-context set with CodeQL still absent and all 15368 | PASS |
 
-**Assembly.** Two inputs, both derived not enumerated: (a) `ALLOWED_PATHS`
-parsed out of action.yml's array literal (the chokepoint every bot-staged path
-must pass — the action exits 1 on any path outside it); (b) the audit's
-files-read set = `index.raws` keys after `audit_census` — suite inputs plus
-their `source` closure to HOP_DEPTH — exposed by the new
-`audit --print-files-read` flag in `scripts/ci-pr-affected-replay.py` (added in
-this PR because `--all-refs` exposes only gap-pair ref lines, an
-under-approximation of files read: a file read that names only declared paths
-prints nothing yet can gain a boundary line by edit).
+**Anchor.** `probe-merge-group-coverage.sh` reads the canonical JSON + workflow files, and `apply-github-infra.yml` re-verifies the live ruleset against the TF — a diff weakening both in one PR would still fail the live audit's `removed` arm; the count literal requires a deliberate human bump.
 
-**Mutation matrix** (each must drive the guard RED):
+### Guard 2 — oracle-review-required
 
-| # | Mutation | Why it must red |
-|---|----------|-----------------|
-| 1 | Append a suite input file (e.g. `scripts/ci-pr-affected-replay.py` or any file the census reads) to the ALLOWED_PATHS array | a member of the read set becomes bot-writeable → fabricated green over reachable surface |
-| 2 | `--print-files-read` prints an empty/degenerate set (exposure broken: flag wired to a stub) | anti-vacuity floor on read-set size fails (read set is ~950 files today; floor ≥ 500) |
-| 3 | required-checks.txt gains the name while canonical JSON does not (or vice versa) | the existing parity guard (Test 1, required-checks-canonical-parity.test.sh) reds — the enrollment's set-equality chokepoint |
-| 4 | The unreachability justification block deleted from required-checks.txt while the name remains | the justification-presence anchor in the test's required-checks section must red (mention alone is not the assertion — the test also re-derives the disjointness live) |
+**Property.** An oracle-surface diff merges only after a bound owner-review act (APPROVED review by deruelle on the head SHA) or owner authorship; never on an unverifiable read. **Assembly.** `scripts/ci-oracle-review.sh` (both event arms) + its base-sourced RATCHET_ORACLE extraction + the member enumeration copy; chokepoint is the single driver — both events route through it.
 
-**Harness rows.**
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Oracle-path diff, no deruelle approval, author != deruelle | RED |
+| 2 | Approval present but bound to a stale head SHA | RED |
+| 3 | Merge_group member enumeration returns zero members / hasNextPage / member context missing | RED (no vacuous pass) |
+| 4 | `gh api` exits non-zero on any read | RED (fail-closed) |
+| 5 | Driver skips itself: PR edits `scripts/ci-oracle-review.sh` to shrink the oracle list — base-sourced list still classifies the diff oracle-touching | RED-without-review |
+| 6 | Must-PASS: non-oracle diff; oracle diff + deruelle approval on head SHA; oracle diff + author=deruelle | PASS |
+| 7 | Harness: stub `gh` emits a malformed reviews payload | RED |
 
-- RED-on-suite: a harness mutation that strips the `!= 'true'` … no —
-  concretely: a mutant `audit --print-files-read` printing the literal string
-  `ALLOWED_PATHS` member among its lines MUST red (the test greps intersection,
-  not exit code).
-- Must-PASS non-canonical: ALLOWED_PATHS = `{weakness-digest.md,
-  knowledge-base/project/learnings/some-new-file.md}` where the added file is
-  also outside the read set → still GREEN (the contract permits widening to any
-  non-read path).
-- Must-PASS canonical: today's real tree — digest not read → GREEN.
+**Anchor.** The classification list is read from the base commit's replay file at runtime — a PR editing the list cannot shrink the surface that judges it.
 
-**Anchor.** The guard compares a live census output to the action's array —
-both in this commit's tree; the weakening that escapes one diff (ALLOWED_PATHS
-gains a read file) is caught because the read set is re-derived per run, never
-pinned to a stored list. The `files_read ≥ 500` floor is set-identity-backed by
-the census's own `files_read` count (the test asserts the printed list length
-≥ floor AND each member is a tracked path under the root).
+### Guard 3 — accept-row growth verdicts
 
-### Guard 2 — required-context registry parity (pre-existing, exercised)
+**Property.** Every accept row-set change attributes to the diff and every added row carries a typed kind. **Assembly.** `ratchet_run`'s base→HEAD accept row-set comparison — chokepoint is the one code path that already loads both images (ratchet_base + load_accept); kinds pinned to the runbook's canonical six.
 
-Not new — asserted via ACs: canonical JSON ↔ required-checks.txt ↔
-ruleset-ci-required.tf ↔ merge_group producer ↔ wallclock bounds row ↔
-admin-merge-ready fixtures all carry the name in this commit (the parity guards
-above are the enforcement).
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Add an accept row with no touched path/ref/oracle | RED (accept-unattributed) |
+| 2 | Add a row attributing correctly but reason `false-positive: vibes` | RED (accept-bad-kind) |
+| 3 | Add a second unattributed row after a compliant first | RED (second-member — a loop that stops at the first is the defect) |
+| 4 | Marker emitted without ` accept=` field | RED (rt_marker grammar pin) |
+| 5 | Harness: base accept file unreadable mid-comparison | exit 2 (infra), never a pass |
+| 6 | Must-PASS: a row added with a typed kind whose ref file the diff also touched | PASS |
+
+**Anchor.** The verdict reads the base image through `ratchet_base` on the confined reader — the same trusted path the baseline reads, not the PR's tree copy.
+
+### Guard 4 — bot-synthetic unreachability
+
+**Property.** No bot-PR-writable path intersects the surfaces either new required context reads. **Assembly.** `.github/actions/bot-pr-with-synthetic-checks/action.yml` `ALLOWED_PATHS` (the chokepoint every bot write flows through) vs `RATCHET_ORACLE` (for oracle-review-required) and the audit's read surface — the files whose content the audit reads, exposed under `--all-refs` (for affected-index-ratchet; `knowledge-base/project/weakness-digest.md` is named by gap pairs and a data file, so disjointness is re-derived, not assumed — if the assertion fails, the remedy is reproducing the gate in the action's Phase-4 preflight, per the #6049 convention, never widening ALLOWED_PATHS to overlap).
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Add a RATCHET_ORACLE member to ALLOWED_PATHS in the fixture | RED |
+| 2 | Point the assertion at a synthetic ALL_PATHS list disjoint by construction | RED (harness — the test parses the real action.yml + real oracle list) |
+| 3 | Add a second ALLOWED_PATHS member that lands inside the audit read surface | RED |
+| 4 | Must-PASS: current real ALLOWED_PATHS vs current surfaces | PASS |
+
+**Anchor.** The assertion reads the action's own file and the replay's own tuple — two artifacts a weakening PR would have to edit together, and editing either is an oracle diff requiring review (Guard 2 — the layers hold each other).
 
 ## Scope Check
 
 ### Ask Mapping
 
-| Issue-asked item | Plan item |
-|---|---|
-| delete job-level `continue-on-error` in ci.yml | Phase 1, Files to Edit #1 |
-| add name to `scripts/required-checks.txt` | Phase 1, #2 (with justification block) |
-| add name to canonical JSON | Phase 1, #3 |
-| add name to `infra/github/ruleset-ci-required.tf` | Phase 1, #4 |
-| count pin in `required-checks-canonical-parity.test.sh` | Phase 1, #5 (`-ge 10` → `-ge 11`) |
-| admin-merge-ready fixtures | Phase 1, #6 (rules + check-runs + README note) |
-| `tests/scripts/test-audit-ruleset-bypass.sh` | Phase 1, #7 (T-rsc-7 `10` → `11`) |
-| `scripts/pr-fanout-ledger.txt` | Phase 1, #8 (dated clause; count unchanged) |
-| bot-synthetic unreachability assertion | Phase 2 (flag + committed test) |
-| run `probe-merge-group-coverage.sh` before merging | Phase 4 (pre-merge gate + AC) |
-| re-examine draft-light participation | Draft-light re-examination (ruled: stay ungated) |
-| PR body states auto-apply + cites go-ahead | Phase 4 / AC |
+| # | User ask (verbatim) | Plan item | Status |
+|---|---------------------|-----------|--------|
+| 1 | "delete the job-level continue-on-error of affected-index-ratchet" | Phase 2 ci.yml edit | mapped |
+| 2 | "add the name to scripts/required-checks.txt, the canonical JSON, infra/github/ruleset-ci-required.tf, the count pin, the admin-merge-ready fixtures, tests/scripts/test-audit-ruleset-bypass.sh and scripts/pr-fanout-ledger.txt" | Phase 2 edit set | mapped |
+| 3 | "with the bot-synthetic unreachability assertion" | Guard 4 + Phase 2 assertion test | mapped |
+| 4 | "run scripts/probe-merge-group-coverage.sh before merging" | Phase 4 + AC | mapped |
+| 5 | "re-examine draft-light participation with the measured draft-push minutes" | Workstream A ruling + decision-challenges.md | mapped |
+| 6 | "a new required context oracle-review-required ships in the PR3b commit (ci.yml + scripts/required-checks.txt + canonical JSON + infra/github/ruleset-ci-required.tf). Driver scripts/ci-oracle-review.sh" | Workstream B | mapped |
+| 7 | "on merge_group, per-member context success via the cla-verify enumeration machinery" | merge_group arm | mapped |
+| 8 | "marker gains accept=<n> … new diff-scoped verdicts accept-unattributed/accept-bad-kind" | Workstream C | mapped |
+| 9 | "record the first real PR3b run's check-list rendering in the runbook observation log" | Phase 3/4 + AC | mapped |
 
 ### Plan-Item Provenance
 
-| Item | Provenance | Justification |
+| Plan item | User words cited | Verdict |
 |---|---|---|
-| Files #1-#8, #11 (assertion), pre-merge probe, draft-light re-exam, PR-body requirements | asked | direct map from issue #10859 + archived plan PR3b section |
-| `plugins/soleur/test/ci-pr-affected-replay.test.sh` advisory pins | inferred | chks `row_wf_coe` (~2944), `row_wf_dark` (~2949), `row_wf_dark_mutant` (~2954), `coe-gone` (~2955) assert the advisory state — suite reds otherwise |
-| `plugins/soleur/test/required-checks-merge-group-coverage.test.sh` | inferred | 9 literal `contexts=12 producers=11` assertions break at 13/12 |
-| `scripts/probe-merge-group-coverage.sh` MIN_CONTEXTS bump | inferred | deliberate literal floor tracking the count (T-rsc-7 philosophy); ≥ floor still passes — the bump keeps anti-vacuity honest |
-| `scripts/required-check-wallclock-bounds.tsv` row | inferred | the TSV header: "a required context with no row here is itself a ratchet finding"; the probe emits `unbound` per missing row |
-| `scripts/ci-pr-affected-replay.py` `--print-files-read` | inferred | the read set is NOT exposed today (Premise Validation correction); the parent plan's assertion needs it |
-| `ci-pr-affected-activation.md` runbook "dark phase" rewrite | inferred | the section will actively lie post-merge ("Until PR3b … is advisory") |
-| ADR-276 `### Stage status` dated line | inferred | series convention; the recorded decision's execution note |
-| `infra/github/README.md` count mentions (10→11) | inferred | doc drift in the same directory as the edited tf |
+| New suite `scripts/ci-oracle-review.test.sh` + registration chain (test-all.sh, shard-legs, edges, accept rows, manifest) | — | inferred — justification: every driver in this repo ships a registered suite, and registering is what feeds the audit the pairs this PR's own ratchet must drain |
+| `ALWAYS_RUN_JOBS`/`UNGATED_PINNED`/`LIGHT_PINNED` membership | — | inferred — justification: the classification suites redden on an unpinned new job (G-UNCLASSIFIED); the pins are the enrollment's mechanical consequence |
+| admin-merge-ready `check-runs.json` + README edits | "the admin-merge-ready fixtures" | asked |
+| base-sourced driver + base RATCHET_ORACLE extraction | — | inferred — justification: oracle-lane precedent — a PR must never rewrite the classifier that judges it |
+| RATCHET_ORACLE gaining the two new files | — | inferred — justification: the review gate is part of the oracle surface it guards |
+| `RATCHET_REMEDY_NEW` + runbook advisory-text rewrite | — | inferred — justification: both texts assert "no required review exists", which this PR falsifies |
 
 ### Split Assessment
 
-No split — the issue prescribes one commit (name + coe deletion atomically, the
-ADR-032 paired-edit contract). Splitting the ci.yml edit from the registry
-edits would leave an interval where either an advisory job is named required
-(probe red) or a required context still carries coe (biconditional red).
+- Subsystems touched: 5 — `.github`, `scripts`, `infra`, `plugins/soleur`, `tests` (+ `knowledge-base` docs)
+- Planned files: ~24 | Estimated changed lines: ~1,400 (dominated by the new driver + suite)
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR — over two thresholds, but the paired-edit contract (ADR-032) requires atomicity: at no commit may a required name lack a producer or a registry disagree; the owner named one commit. The alternative split lands the required flip without its oracle control, re-opening the residual the rulings closed.
 
-## Open Code-Review Overlap
+## Domain Review
 
-None — queried 2026-11-07 (`gh issue list --label code-review --state open`);
-no open issue body names any file in the plan's edit set.
+**Domains relevant:** engineering
 
-## Implementation Phases
+### Engineering
 
-### Phase 1 — the one-commit registry enrollment
+**Status:** reviewed
+**Assessment:** Merge-governance architecture change: two new required contexts, a new fail-closed gate over the oracle surface, and a trust-boundary edit (the merge gate's composition). Blast radius is the repo's merge path — a missing producer wedges the queue (committed probe is the guard); a false-positive review gate blocks owner repairs (author arm is the release valve); a whole-payload ruleset apply is the irreversible step (pre/post verification is the receipt). (Leader-spawn fan-out unavailable in this harness — inline assessment against the same checklist.)
 
-All in ONE commit (ADR-032 paired-edit contract):
+No other domain's assessment question matches: no UI surface (Product/UX override: zero `components/**/*.tsx`/`app/**/page.tsx`/`layout.tsx` in Files to Create/Edit → NONE), no regulated-data surface (Legal/GDPR skip — the driver reads PR review metadata, not session-derived data; no LLM; no new distribution surface), no vendor/procurement (Operations), no marketing/sales/finance/support surface.
 
-1. `.github/workflows/ci.yml`: delete `continue-on-error: true` (line ~521);
-   rewrite the advisory comment block (~505-518) to state the context is
-   required as of this commit (#10859) — keep the measured canary note and the
-   `if:` rationale; keep `if:` exactly `pull_request || merge_group`.
-2. `scripts/required-checks.txt`: append (before `# CLA Required ruleset`) the
-   name plus a `# #10859` justification block — CONTENT-SCOPED, UNREACHABLE:
-   the guarded surface (the audit's files-read set) is disjoint from
-   ALLOWED_PATHS, asserted live by the new test (Guard 1), not argued; name the
-   residual trigger (any ALLOWED_PATHS member entering files-read → reproduce
-   the check in the action's Phase-4 preflight before it lands).
-3. `scripts/ci-required-ruleset-canonical-required-status-checks.json`: append
-   `{"context": "affected-index-ratchet", "integration_id": 15368}`.
-4. `infra/github/ruleset-ci-required.tf`: append the `required_check` block
-   with a dated #10859 comment; fix the "the 10 `context` strings below"
-   header → 11.
-5. `plugins/soleur/test/required-checks-canonical-parity.test.sh`: bump the
-   Test-1c non-vacuity floors `-ge 10` → `-ge 11` (the count pin).
-6. `plugins/soleur/test/fixtures/admin-merge-ready/`: append the context to
-   ruleset 14145388 in `rules-branches-main.json`; append a green
-   `affected-index-ratchet` run (app.id 15368, fixture head_sha) to
-   `check-runs.json`; dated note line in the fixture README (11 → 12 contexts
-   on the CI Required fixture, PRE-adoption base note stands).
-7. `tests/scripts/test-audit-ruleset-bypass.sh`: T-rsc-7 `n == "10"` → `"11"`
-   plus the bump-chain comment line (10 → 11 by #10859).
-8. `scripts/pr-fanout-ledger.txt`: dated clause on the ci.yml row —
-   "context became required; declared job count unchanged at 21".
+## Architecture Decision (ADR/C4)
 
-### Phase 2 — the unreachability assertion
+### ADR
 
-1. `scripts/ci-pr-affected-replay.py`: `audit` gains `--print-files-read` —
-   prints the sorted repo-relative real paths of `index.raws` after
-   `audit_census`, one per line, exits 0 when the census ran (and 2 on
-   census-degraded per the existing floor semantics). `--help`/docstring line
-   in the audit epilog.
-2. `plugins/soleur/test/ci-pr-affected-replay.test.sh`:
-   - rewrite the advisory pins: `row_wf_coe` chk → remove or invert;
-     `row_wf_dark` → `row_wf_required` (name present in required-checks.txt AND
-     coe absent); `row_wf_dark_mutant`/`coe-gone` mutants → re-baseline on the
-     required state (e.g., re-added coe while name is required reds the
-     biconditional; name dropped from required-checks reds the required pin);
-   - unit rows for `--print-files-read` on a synthetic fixture tree;
-   - the disjointness row: parse `ALLOWED_PATHS=(...)` out of the real
-     action.yml, run `audit --print-files-read` on the real repo root, assert
-     intersection empty + read-set size ≥ 500 + every member tracked under
-     root; a mutant injecting a read file into the parsed set must red.
-   - suite-duration note: the real-census row adds roughly the audit's runtime
-     (~200-300 s) to the c leg; place it last in the file (rows are sharded
-     a/b/c by count — the leg assignments in test-all.sh need no edit since
-     legs are row-count ranges; if the row count crosses a shard boundary the
-     shard lines may need a bump — check `run_suite ".../ci-pr-affected-replay-c" ... --rows` lines).
-3. `plugins/soleur/test/required-checks-merge-group-coverage.test.sh`:
-   `contexts=12 producers=11` → `contexts=13 producers=12` (all 9 literals);
-   `engine_green 12` floors → 13 (optional consistency bump).
-4. `scripts/probe-merge-group-coverage.sh`: `MIN_CONTEXTS_DEFAULT = 12` → 13,
-   comment "12 = 10 CI + 2 CLA" → "13 = 11 CI + 2 CLA".
-5. `scripts/required-check-wallclock-bounds.tsv`: seed
-   `affected-index-ratchet` row — bound = measured p90 of recent runs rounded
-   UP to the next minute (verify via `watch-wallclock-p90-11774.sh --dry-run`;
-   p95 240 s wall suggests pr/mq bounds ~420 s each; margin 0.30).
+- Amend `knowledge-base/engineering/architecture/decisions/ADR-276-demand-first-hosted-runner-budget-merge-group-is-the-full-battery-authority.md` — append a dated amendment recording: PR3b landed (ratchet required; `continue-on-error` removed), item-9 dispositions ((a) oracle control shipped as `oracle-review-required`; (b) accept-growth bound shipped — `accept=<n>` + two verdicts; (c) verified clean at merge; (d) rename-carry dissolved; (e) canary+ceilings satisfied; window leg discharged via #12129; (f) go-ahead receipt comment), and the `### Stage status` line update. Append-only, dated, no edit of earlier text — the same-file sibling is open PR #12300's lane-activation amendment; keep both.
 
-### Phase 3 — records and docs
+### C4 views
 
-1. `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`:
-   rewrite §The dark phase → the required state (context required since
-   2026-11-07 #10859; how a red reads as a required-check failure now — the
-   marker/annotation reading stays), update §2 status line and line ~214
-   ("While the job is advisory…"), keep the observation log.
-2. ADR-276 `### Stage status`: dated line (see Architecture Decision).
-3. `infra/github/README.md`: "10 contexts" → 11 in the two spots naming the CI
-   count (pre-existing "23"/"12" staleness elsewhere may be corrected in the
-   same edit where the same figure is named).
-4. `knowledge-base/project/specs/<branch>/{tasks.md,decision-challenges.md}`:
-   pipeline artifacts.
+Enumerated against all three model files (`model.c4`, `views.c4`, `spec.c4`): (a) external human actors — `deruelle` as PR reviewer is already covered by the `founder` actor's approval edges (e.g. `founder -> github` approval relationships at model.c4:583-584); the new check consumes the SAME approval act, it adds no actor; (b) external systems — GitHub Actions/API is the existing `github` element; no new vendor; (c) containers/data-stores — none added (a check-run is GitHub-side state, already modeled by the CI edges); (d) access relationships — the review-requirement is a property of an existing edge, not a new edge. **No C4 edit required** — the enumeration, not a keyword grep, is the basis.
 
-### Phase 4 — verify, ship
+### Sequencing
 
-1. Run the touched suites locally: `required-checks-canonical-parity`,
-   `required-checks-merge-group-coverage`, `tests/scripts/test-audit-ruleset-bypass.sh`,
-   `plugins/soleur/scripts/admin-merge-ready.test.sh`,
-   `ci-pr-affected-replay` (all legs), `ci-draft-light`, `ci-push-dedupe`.
-2. `bash scripts/probe-merge-group-coverage.sh` → `merge-group-coverage=OK
-   contexts=13 producers=12` before merging (issue-asked pre-merge gate).
-3. Read live ruleset `bypass_actors` + `conditions` before merge (evidence for
-   the post-apply comparison the parent plan requires).
-4. PR body: `Closes #10859`, states the merge auto-applies the ruleset via
-   apply-github-infra.yml (whole-payload replace; bypass_actors and conditions
-   verified unchanged by read before/after), and cites the go-ahead comment
-   URL (issuecomment-6710852889). No `[ack-destroy]` needed (addition only).
-5. After the apply runs: verify the live ruleset shows 11 required contexts
-   and `bypass_actors`/`conditions` unchanged; comment on #10448 (series
-   tracker) and #10859.
-
-## Acceptance Criteria
-
-- [ ] `grep -n 'continue-on-error' .github/workflows/ci.yml` shows no
-  job-level coe on `affected-index-ratchet` (the draft-light/harness-member
-  spellings elsewhere stay).
-- [ ] `grep -qxF affected-index-ratchet` matches a non-comment row in
-  `scripts/required-checks.txt` (before the CLA section) WITH its justification
-  block.
-- [ ] `jq '[.[] | select(.context=="affected-index-ratchet")] | length == 1'`
-  on the canonical JSON; all rows `integration_id == 15368`.
-- [ ] `grep -c 'context *= *"' infra/github/ruleset-ci-required.tf` == 11 and
-  includes `affected-index-ratchet` with `var.actions_integration_id`.
-- [ ] `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`,
-  `bash tests/scripts/test-audit-ruleset-bypass.sh`,
-  `bash plugins/soleur/scripts/admin-merge-ready.test.sh`,
-  `bash plugins/soleur/test/required-checks-merge-group-coverage.test.sh`,
-  `bash plugins/soleur/test/ci-pr-affected-replay.test.sh` (all legs),
-  `bash scripts/ci-draft-light.test.sh`, `bash scripts/ci-push-dedupe.test.sh`
-  all exit 0.
-- [ ] `bash scripts/probe-merge-group-coverage.sh` prints
-  `merge-group-coverage=OK contexts=13 producers=12`.
-- [ ] `scripts/required-check-wallclock-bounds.tsv` has an
-  `affected-index-ratchet` row (the probe emits no `unbound` finding for it).
-- [ ] `python3 -I scripts/ci-pr-affected-replay.py audit --print-files-read`
-  prints a non-empty sorted read set; the committed test asserts
-  ALLOWED_PATHS ∩ read-set == ∅ and stays green on today's tree.
-- [ ] The commit containing the ci.yml edit also contains every registry edit
-  (single-commit atomicity — `git show --stat` of the merge commit lists them
-  all).
-- [ ] PR body cites the go-ahead comment URL and states the merge auto-applies
-  the ruleset via apply-github-infra.yml.
-- [ ] Post-merge: `gh api repos/jikig-ai/soleur/rulesets/14145388` shows
-  `affected-index-ratchet` among required contexts with `bypass_actors` and
-  `conditions` unchanged from the pre-merge read.
-
-## Test Scenarios
-
-- Mutant: re-added `continue-on-error` while the name is required →
-  `row_wf_bicond` (and `row_wf_required_not_coe`) red.
-- Mutant: name in required-checks.txt but not canonical JSON → parity Test 1
-  red (and T-rsc-7 stays green — it is count-only).
-- Mutant: canonical at 10 entries → T-rsc-7 red (`n==11`).
-- Disjointness: inject a files-read member into the parsed ALLOWED_PATHS set →
-  the new row red; add a non-read path → stays green.
-- `--print-files-read` broken (empty output) → the ≥500 floor row red.
-- Queue coverage: probe prints `contexts=13 producers=12` — no `::error` lines.
-
-## Alternative Approaches Considered
-
-| Option | Rejected because |
-|---|---|
-| Two PRs (delete coe, then enroll) | a required-but-coe job or a required-name-without-producer interval; the issue prescribes one commit (ADR-032 paired-edit) |
-| Draft-light gating of the ratchet | see re-examination: needs-edge stall class or fabricated green; ruled Option A |
-| Ref-line set as the read set (`--all-refs` as-is) | under-approximation: read-but-refless files invisible while still verdict-reachable |
-| Adding the name to `_cron-safe-commit.ts` SYNTHETIC_CHECK_NAMES | Inngest PRs push with an App token → real CI runs → the check is EARNED; fabricating it is the #8203 defect class |
-
-## Dependencies & Risks
-
-- **Apply race**: between merge and the apply-github-infra.yml run completing,
-  the file-level registries are ahead of the live ruleset — no stall (the live
-  gate lags, never leads). The post-apply verify step + daily audit bound the
-  window; the AC reads the live ruleset after apply.
-- **A red ratchet post-promotion blocks everything**: that is the intended
-  behavior; the runbook's exit/token table (already updated in Phase 3) is the
-  operator's remedy path. Break-glass: ruleset bypass via admin merge or the DR
-  script (`create-ci-required-ruleset.sh`) — documented in the tf header.
-- **`oracle-inputs-changed:` warning on THIS PR**: expected — the PR edits
-  ci.yml and the replay script (both oracle files); reviewers treat it as the
-  oracle-review step the runbook names.
-- **Fixture recapture note**: admin-merge-ready fixtures stay the
-  PRE-adoption-shape base (CodeQL present); we append, not recapture (README's
-  own convention).
-- **Suite-duration drift**: the new real-census row lengthens
-  `required-checks-canonical-parity.test.sh` (or the replay suite wherever the
-  row lands) by ~200-300 s — acceptable; `suite-durations.tsv` rows are
-  refreshed by the duration machinery, no hand edit.
+The ADR text describes the post-merge state (required set = 12) and lands in the same commit as the flip — no `adopting` lag.
 
 ## Files to Edit
 
-1. `.github/workflows/ci.yml` (delete coe line ~521; rewrite advisory comment ~505-518)
-2. `scripts/required-checks.txt` (name + justification block, before CLA section)
-3. `scripts/ci-required-ruleset-canonical-required-status-checks.json` (11th row)
-4. `infra/github/ruleset-ci-required.tf` (required_check block + header count)
-5. `plugins/soleur/test/required-checks-canonical-parity.test.sh` (`-ge 10` → `-ge 11`)
-6. `plugins/soleur/test/fixtures/admin-merge-ready/rules-branches-main.json` (add context to 14145388)
-7. `plugins/soleur/test/fixtures/admin-merge-ready/check-runs.json` (add green run)
-8. `plugins/soleur/test/fixtures/admin-merge-ready/README.md` (dated note)
-9. `tests/scripts/test-audit-ruleset-bypass.sh` (T-rsc-7 `10` → `11` + comment)
-10. `scripts/pr-fanout-ledger.txt` (dated clause on ci.yml row)
-11. `scripts/ci-pr-affected-replay.py` (`audit --print-files-read` flag)
-12. `plugins/soleur/test/ci-pr-affected-replay.test.sh` (advisory pin rewrites + new rows)
-13. `plugins/soleur/test/required-checks-merge-group-coverage.test.sh` (12/11 → 13/12 literals)
-14. `scripts/probe-merge-group-coverage.sh` (MIN_CONTEXTS 12 → 13 + comment)
-15. `scripts/required-check-wallclock-bounds.tsv` (new bound row)
-16. `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` (dark-phase rewrite)
-17. `knowledge-base/engineering/architecture/decisions/ADR-276-*.md` (Stage-status dated line)
-18. `infra/github/README.md` (context-count mentions 10 → 11)
+- `.github/workflows/ci.yml` (drop `continue-on-error`; add `oracle-review-required` job; header comment; extractor comment)
+- `scripts/required-checks.txt` (two names + per-name #6049 dispositions)
+- `scripts/ci-required-ruleset-canonical-required-status-checks.json` (two rows, 15368)
+- `infra/github/ruleset-ci-required.tf` (two `required_check` blocks + dated comments)
+- `tests/scripts/test-audit-ruleset-bypass.sh` (T-rsc-7 literal 10→12 + history comment)
+- `plugins/soleur/test/fixtures/admin-merge-ready/rules-branches-main.json`, `check-runs.json`, `README.md`
+- `plugins/soleur/scripts/admin-merge-ready.test.sh` (header counts comment)
+- `scripts/pr-fanout-ledger.txt` (ci.yml row 21→22 dated clause + advisory-wording touch-up)
+- `scripts/ci-push-dedupe.test.sh` (`UNGATED_PINNED`), `scripts/ci-draft-light.test.sh` (`LIGHT_PINNED`)
+- `scripts/ci-pr-affected-replay.py` (marker `accept=`, accept-diff verdicts, docstring, RATCHET_REMEDY_NEW, RATCHET_ORACLE +2, ALWAYS_RUN_JOBS +1)
+- `plugins/soleur/test/ci-pr-affected-replay.test.sh` (`rt_marker` grammar, verdict rows, census re-pins/arm re-tile)
+- `scripts/lib/test-affected-paths.sh` (edges for the new suite/driver)
+- `scripts/ci-pr-affected-audit.accept.tsv` (anchor-keyed rows for the new suite's named-but-unread paths — as the ratchet demands; every row carries one of the six typed kinds)
+- `scripts/test-all.sh` (`run_suite` line)
+- `scripts/suite-shard-legs.tsv` (via `scripts/regenerate-shard-manifest.py` only)
+- `scripts/ci-oracle-lane-suites.txt` (manifest membership row)
+- `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`
+- `knowledge-base/engineering/architecture/decisions/ADR-276-demand-first-hosted-runner-budget-merge-group-is-the-full-battery-authority.md` (append-only)
+
+Glob check: every path above verified with `git ls-files` on this branch (all exist; the two Create paths below are new).
 
 ## Files to Create
 
-- `knowledge-base/project/specs/feat-one-shot-10859-pr3b-required-context/tasks.md`
-- `knowledge-base/project/specs/feat-one-shot-10859-pr3b-required-context/decision-challenges.md`
+- `scripts/ci-oracle-review.sh` (the driver)
+- `scripts/ci-oracle-review.test.sh` (its suite)
+- `knowledge-base/project/specs/feat-one-shot-10859-pr3b-required-context/{tasks.md,decision-challenges.md}` (pipeline artifacts)
 
-## Explicitly NOT edited (pinned by AC/test)
+Explicitly NOT edited (pinned by AC): `scripts/merge-queue-cla-verify.sh` (copied-by-parity, not modified), `.github/actions/bot-pr-with-synthetic-checks/action.yml` (unless the Guard-4 assertion fails — then Phase-4 preflight work enters via the recorded branch, still no ALLOWED_PATHS widening), `apps/web-platform/server/inngest/functions/_cron-safe-commit.ts` (`SYNTHETIC_CHECK_NAMES` verbatim-pinned at 6 — the re-vendor path runs real CI and must never gain these names), `scripts/ci-required-ruleset-canonical-bypass-actors.json`, `CI_PR_AFFECTED`, the activation lock, PR D (#10414).
 
-- `scripts/test-all.sh`, `scripts/lib/test-affected-paths.sh`,
-  `scripts/ci-pr-selection.sh`, `CI_PR_AFFECTED`, PR D (#10414) — the issue's
-  hold boundary.
-- `apps/web-platform/server/inngest/functions/_cron-safe-commit.ts`
-  SYNTHETIC_CHECK_NAMES — earned-by-real-CI disposition (see Cut List).
-- The job's `if:`, `timeout-minutes: 5`, `fetch-depth: 2`, permissions — all
-  pinned by existing `row_wf_*` chks and unchanged by this PR.
+## Sibling PR Overlap
+
+Verified `gh pr list --state open` × files on 2026-11-07 (46 PRs): **#12300** (oracle fast-lane activation) — ADR-276 append collision + it edits `ci-oracle-lane.*` (already inside RATCHET_ORACLE, so post-merge those diffs need owner review — intended). **#12295** (duplicate-YAML-key guard) — edits `required-checks.txt` (comment + members line), `pr-fanout-ledger.txt` (pr-quality-guards row), `ci-pr-affected-audit.accept.tsv`, CODEOWNERS: textual-merge risk on the two shared files; whichever lands second rebases. **#7390** (WIP) — ci.yml + test-affected-paths.sh + suite-shard-legs.tsv + test-all.sh: regenerate shard-legs on the rebased tree if it lands first. **#9640, #6778** (WIP) — test-all.sh run_suite region. Re-run this sweep at Phase 4.
+
+## Open Code-Review Overlap
+
+None. `gh issue list --label code-review --state open` (≤200) searched with `jq --arg path` over every file in `## Files to Edit`/`## Files to Create`: no open issue names any of them (ran 2026-11-07).
+
+## Acceptance Criteria
+
+### Pre-merge (PR)
+
+- [ ] `git grep -n 'continue-on-error' -- .github/workflows/ci.yml` shows no occurrence inside the `affected-index-ratchet` job extent; the `oracle-review-required` job exists with `if:` covering pull_request and merge_group and `permissions:` limited to `contents: read, pull-requests: read`.
+- [ ] `jq 'length'` of the canonical JSON = 12; `jq -r '.[].context'` sorted equals the `context` set grepped from `infra/github/ruleset-ci-required.tf` and the CI-subset of `scripts/required-checks.txt` (T-rsc-9 + parity Test 1 pass locally).
+- [ ] `bash tests/scripts/test-audit-ruleset-bypass.sh` green with the T-rsc-7 literal at 12.
+- [ ] `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`, `plugins/soleur/scripts/admin-merge-ready.test.sh`, `plugins/soleur/test/pr-fanout-ledger.test.sh`, `scripts/ci-push-dedupe.test.sh`, `scripts/ci-draft-light.test.sh`, `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` all green.
+- [ ] `bash scripts/probe-merge-group-coverage.sh` prints `merge-group-coverage=OK contexts=12` and exit 0; the output is quoted in the PR body.
+- [ ] `python3 -I scripts/ci-pr-affected-replay.py ratchet` exits 0 on this branch with marker `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=<n> baseline=0 accept=<n>` — every pair the new suite names is drained (edge or accept row) in this commit.
+- [ ] `bash scripts/ci-oracle-review.test.sh` green — mutation rows: oracle-diff-no-approval RED; stale-SHA approval RED; member-enumeration zero/hasNextPage/missing-context RED; `gh` failure RED; non-oracle diff PASS; deruelle-author and bound-approval PASS.
+- [ ] The unreachability assertion test parses ALLOWED_PATHS from the real `action.yml` and `RATCHET_ORACLE` from the real replay file; both intersections are empty on this tree (or the action Phase-4 preflight reproduction shipped instead, per Guard 4's recorded branch).
+- [ ] `grep -c 'no required review exists' scripts/ci-pr-affected-replay.py` = 0 (the stale remedy line is rewritten); runbook contains no present-tense "advisory" claim about `affected-index-ratchet` outside dated history.
+- [ ] `SYNTHETIC_CHECK_NAMES` in `_cron-safe-commit.ts` unchanged (the verbatim-list test stays green without edit).
+- [ ] ADR-276 carries a dated amendment + Stage-status line; the diff to the file is append-only.
+- [ ] `git diff 45f0b096ffabf94d1b9abc49ef9a039648f4b758 origin/main -- scripts/ci-pr-affected-audit.baseline.tsv` re-run immediately before merge: `grep -c '^+[^+]'` = 0.
+
+### Post-merge (operator)
+
+- [ ] `apply-github-infra.yml` ran and its verify step shows the live ruleset's required_status_checks = the 12 names; `bypass_actors` and `conditions` read unchanged before and after (whole-payload replace receipt, recorded as a PR comment).
+- [ ] First real `pull_request` run post-flip: both contexts present on the check list; `affected-index-ratchet` concluded `success` as a required check; `oracle-review-required` green via the author/approval arm; rendering recorded in the runbook observation log.
+- [ ] `gh issue close 10859` with a comment citing this PR and the go-ahead receipt comment of 2026-11-07. (PR body uses `Closes #10859` — the merge IS the remediation; no post-merge step remains once the apply verifies.)
+- [ ] Automation: not feasible for the ruleset post-apply read only in the sense that it is already automated — `apply-github-infra.yml`'s own verify step performs it; the operator step is reading its output, which `gh run view` covers.
+
+## Test Scenarios
+
+- Given a PR whose diff touches `scripts/ci-pr-affected-audit.accept.tsv` and no other oracle input, when `ci-oracle-review.sh` runs on pull_request with no deruelle approval and author `alice`, then exit non-zero with `reason=review-required` (unit, stub `gh`).
+- Given the same diff with an APPROVED review by `deruelle` whose `commit_id` is an earlier head SHA, then exit non-zero `reason=stale-approval` (unit).
+- Given a merge_group event whose enumeration returns a member missing the `oracle-review-required` context, then exit non-zero `reason=member-context` (unit).
+- Given an accept file whose base→HEAD diff adds a row for a pair whose path and refs are untouched and no oracle file moved, then `ratchet` exits 1 `reason=accept-unattributed` (unit, replay suite).
+- Given an added row with reason `false-positive: whatever`, then `reason=accept-bad-kind` (unit).
+- Given `ALLOWED_PATHS` mutated to include an oracle path in the fixture, then the unreachability assertion fails (unit).
+- Given the real tree, when `bash scripts/probe-merge-group-coverage.sh`, then `merge-group-coverage=OK` with both new producers found exactly once each (integration).
+- Given a `gh` stub emitting truncated JSON, then the driver fails closed `reason=api` (unit).
+
+## Success Metrics
+
+- 12 required contexts enrolled, each with exactly one merge_group producer (probe output).
+- Zero PRs merge an oracle diff without a bound review act or owner authorship after flip.
+- Accept rows added without attribution/kind: zero — the two verdicts fire, measurable because the marker carries `accept=<n>` on every run.
+
+## Dependencies & Risks
+
+- **R1 — transitional queue membership:** a PR queued before this merge whose head lacks `oracle-review-required` makes the merge_group arm fail that batch. Mitigation: merge when the queue is shallow; break-glass = re-push the member (new head produces the context) or admin merge + runbook entry. Low likelihood — the queue drains fast and this PR is likely the only entry.
+- **R2 — whole-payload ruleset replace:** the apply replaces the full ruleset. Mitigation: canonical↔TF parity is enforced pre-merge (T-rsc-9); pre/post `bypass_actors`+`conditions` read is the post-merge AC.
+- **R3 — self-reference:** this PR is itself an oracle diff (ci.yml, replay.py, accept file). It needs `deruelle` approval or `deruelle` authorship to satisfy its own new gate — the author arm exists for exactly this; recorded.
+- **R4 — new suite named-path pairs:** the suite's strings become audit pairs; any undrained pair reds the ratchet on this PR's own merge run. Mitigation: Phase 1 drains in the same commit; AC requires `ratchet` exit 0 on this branch.
+- **R5 — driver base-sourcing gap:** a pre-PR3b base lacks the driver; the HEAD copy runs with the BASE oracle list — a PR editing the driver still classifies oracle-touching under the base list. The remaining hole (a malicious driver hiding a NON-oracle-path review requirement) is bounded by Guard 2 row 5 + the fact that editing the driver is itself oracle-touching.
+- **R6 — `fixture:`-kind legacy rows:** the six-kind set excludes `fixture` as a kind even though 100+ legacy rows use it. Only added rows are judged; if implementation finds `fixture` is genuinely needed as a new kind, the kind set is the amendment surface (recorded — the ruling says "six", matching the runbook list verbatim).
+
+## References & Research
+
+- Issue: #10859 (body + comments through the 2026-11-07 go-ahead); rulings comment 2026-11-06; addendum 2026-10-23.
+- Archived plan: `knowledge-base/project/plans/archive/20261023-144502-2026-10-22-feat-s4-affected-index-pr3-required-ratchet-plan.md` §PR3b; retire plan `archive/20261107-124733-…-retire-ratchet-observation-window-probe-plan.md`.
+- Runbook: `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`; followthrough-convention.md.
+- ADR-276 (amendments: PR3a, oracle lane, items 5-9); ADR-032 (paired-edit ABI); ADR-270 (queue machinery); ADR-139/#6882 (ALLOWED_PATHS ∩ SCAN_DIRS re-derivation rule); ADR-276 Option R (draft-light `test` red by design).
+- Machinery: `scripts/ci-pr-affected-replay.py` (:1590, :1752-1768, :1951, :1994); `scripts/merge-queue-cla-verify.sh` :89-181; `scripts/probe-merge-group-coverage.sh`; `.github/workflows/merge-queue-cla-synthetics.yml` (verified-synthetic precedent); `scripts/ci-oracle-lane.sh` (base-sourced driver + output grammar precedent).
