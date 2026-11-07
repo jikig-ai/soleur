@@ -22,7 +22,7 @@ Measurements dir (M): knowledge-base/project/specs/feat-one-shot-12013-site-cost
 ## Phase 4: Table, validation, paper checks
 - [x] 4.1 Build M/site_costs.tsv
 - [x] 4.2 Validation (scale fit on b and c; a within 15%; flagged-site 20% rule)
-- [x] 4.3 site_cost_whatif.py: baseline reproduction on t1, split search with/without pristine charge, 27-combination paired robustness, GATE line
+- [x] 4.3 site_cost_whatif.py: baseline reproduction on t1, split search with/without pristine charge, 81-combination paired robustness, GATE line
 - [x] 4.4 Price #12263 levers on paper; name the run-ending suite and its registration position; reap latency paragraph
 - [x] 4.5 Write M/summary.txt
 

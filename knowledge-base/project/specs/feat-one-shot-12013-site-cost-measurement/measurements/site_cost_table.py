@@ -14,21 +14,27 @@ Raw files per rep R and arm A (copied by the operator from the reading's output 
   sites.tsv       "<ordinal>\\t<kind>\\t<row>" (from --sites), one line per gated site
 
 Per rep and site k (owner = the arm whose range holds k):
-  interval(arm, k) = stamp[k+1] - stamp[k]            (stamp[TOTAL+1] is EOF); the head 0->1 and the tail never enter a site
+  interval(arm, k) = stamp[k+1] - stamp[k]            (stamp[TOTAL+1] is EOF); the head 0->1 never enters a site. The tail (site TOTAL to EOF)
+  is part of site TOTAL's interval in EVERY arm and cancels in raw_cost only up to the arms' tail differences (a few seconds in the real readings).
+  Equal consecutive stamps are accepted (microsecond clock, skipped sites); only a decrease is refused.
   raw_cost = interval(owner, k) - median(interval of the two non-owning arms)      (unclamped)
   noise_s  = |difference of the two non-owner intervals|
-Across reps the per-site value is the MEDIAN (a mean would follow one disturbed outlier). cost = max(0, raw_cost).
+Across reps the per-site value is the MEDIAN (a mean would follow one disturbed outlier; with the two reps shipped the median of two IS their mean,
+so the outlier protection exists from three reps on). others_live is the median of per-rep counts, rounded half up. cost = max(0, raw_cost).
+noise_s is the spread of the two non-owner skip intervals (milliseconds); it is NOT a between-rep noise measure, which site_cost_whatif.py's rep-disagreement test carries.
 unconditional_s(arm) = arm wall - sum of its owned raw_cost, so the predicted wall of an arm closes by construction.
 """
 import glob
+import contextlib
+import io
 import os
 import re
+import shutil
 import sys
 import tempfile
-from decimal import Decimal, getcontext
+from decimal import Decimal, InvalidOperation
 from statistics import median
 
-getcontext().prec = 28
 TOTAL = 602  # DECLARED_TOTAL of plugins/soleur/test/ci-pr-affected-replay.test.sh on the tree under test
 ARMS = ("a", "b", "c")
 FLAG_NONOWNER_S = Decimal("5")
@@ -99,11 +105,16 @@ def load_rep(raw, rep, total):
         passed = read_text(base + ".passed").strip()
         if not re.search(r", 0 failed,", passed) or " passed" not in passed:
             raise Refusal(f"rep {rep} arm {arm}: final line is not a clean pass: {passed[:80]!r}")
-        s, e = read_text(base + ".wall").split()
+        try:
+            s, e = read_text(base + ".wall").split()
+            wall_s, wall_e = Decimal(s), Decimal(e)
+        except (ValueError, InvalidOperation):
+            raise Refusal(f"rep {rep} arm {arm}: malformed .wall file")
         arms[arm] = {
             "times": parse_stamps(base + ".stamps.tsv", total),
             "range": parse_range(read_text(base + ".range")),
-            "wall": Decimal(e) - Decimal(s),
+            "wall": wall_e - wall_s,
+            "span": (wall_s, wall_e),
             "passed": passed,
         }
     # the three ranges must tile 1..total
@@ -179,6 +190,11 @@ def build(raw, total=TOTAL, opts=None):
     for r, rp in loaded:
         if {a: rp["arms"][a]["range"] for a in ARMS} != ranges0:
             raise Refusal(f"rep {r} used different arm ranges")
+    # Two readings whose time spans intersect disturbed each other, whatever their guard files say (reps r2 and r3 of the first attempt did).
+    spans = sorted((min(a["span"][0] for a in rp["arms"].values()), max(a["span"][1] for a in rp["arms"].values()), r) for r, rp in loaded)
+    for (s0, e0, r0), (s1, e1, r1) in zip(spans, spans[1:]):
+        if s1 < e0:
+            raise Refusal(f"reps {r0} and {r1} overlap in time: they disturbed each other whatever their guard files say")
     comp = [(r, compute_rep(rp, total, opts)) for r, rp in loaded]
     rowmap = {}
     sites_path = os.path.join(raw, "sites.tsv")
@@ -186,6 +202,8 @@ def build(raw, total=TOTAL, opts=None):
         for line in read_text(sites_path).splitlines():
             o, _kind, row = line.split("\t")
             rowmap[int(o)] = row
+        if len(rowmap) != total:
+            raise Refusal(f"sites.tsv maps {len(rowmap)} sites, expected {total} (regenerate it from the test file of the tree that was measured)")
     final = {}
     for k in range(1, total + 1):
         raws = [c["sites"][k]["raw"] for _, c in comp]
@@ -200,7 +218,7 @@ def build(raw, total=TOTAL, opts=None):
             "cost": max(Decimal(0), raw),
             "noise": agg(noises, opts.use_mean),
             "nonowner": agg(nonown, opts.use_mean),
-            "live": int(Decimal(str(median(lives))) + Decimal("0.5")) if not opts.use_mean else int(agg(lives, True)),
+            "live": round_half_up_median(lives) if not opts.use_mean else int(agg(lives, True)),
             "by_rep": raws,
         }
         final[k]["flag"] = "flag" if (final[k]["cost"] < final[k]["noise"] or final[k]["nonowner"] > FLAG_NONOWNER_S) else "-"
@@ -236,28 +254,47 @@ def render_by_rep(t):
 
 
 def sites_of(test_file):
-    n = 0
+    """(ordinal, kind, row) per gated call. A call whose quoted arguments span several lines closes on a later line, so the row label is the
+    last token of the first line at or after the call that ends in a bare row_* token (the statement is continuous, so no other call can
+    start before it closes)."""
     out = []
-    for line in read_text(test_file).splitlines():
+    lines = read_text(test_file).splitlines()
+    n = 0
+    for i, line in enumerate(lines):
         m = re.match(r"(mutate|ow_mutate) ", line)
         if not m:
             continue
         n += 1
-        last = line.split()[-1]
-        out.append(f"{n}\t{m.group(1)}\t{last if re.fullmatch(r'row_[A-Za-z0-9_]+', last) else '?'}")
+        row = "?"
+        for j in range(i, min(i + 60, len(lines))):
+            if j > i and re.match(r"(mutate|ow_mutate) ", lines[j]):
+                break  # the next call starts: this one had no row label
+            mm = re.search(r"\s(row_[A-Za-z0-9_]+)\s*$", lines[j])
+            if mm:
+                row = mm.group(1)
+                break
+        out.append(f"{n}\t{m.group(1)}\t{row}")
     return "\n".join(out) + "\n"
 
 
-# ---------------------------------------------------------------- selftest
 def _write(path, text):
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
 
 
-def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False):
+def round_half_up_median(values):
+    """Median of integer counts, rounded half up (two reps give half-integers)."""
+    return int(Decimal(str(median(values))) + Decimal("0.5"))
+
+
+def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False, base=0, tree="deadbeef", rc="0",
+             passed="ci-pr-affected-replay.test.sh: 10 passed, 0 failed, 10 assertions, 3 mutants", range_a="1-193", wall_text=None, chunks=None):
     """Synthetic rep. Every site: owner interval = true cost + 0.025, non-owners 0.020 and 0.030 (median 0.025).
-    Head 0->1 is 4.0 s in arm a and 1.0 s elsewhere; the tail (site TOTAL->EOF) is 0.5 s for the two non-owners of site TOTAL."""
-    starts = {"a": Decimal("1000.0"), "b": Decimal("1000.2"), "c": Decimal("1000.4")}
+    Head 0->1 is 4.0 s in arm a and 1.0 s elsewhere. Site TOTAL carries the tail: owner c 0.5 s + cost, non-owners a 0.4 s and b 0.6 s
+    (median 0.5, so raw_cost is the cost and noise_s is 0.2). `chunks` adds an unconditional chunk (seconds) to site k in every arm."""
+    chunks = chunks or {}
+    b0 = Decimal(base)
+    starts = {"a": Decimal("1000.0") + b0, "b": Decimal("1030.2") + b0, "c": Decimal("1100.4") + b0}  # staggered so others_live varies per site
     ranges = {"a": (1, 193), "b": (194, 386), "c": (387, 602)}
     walls = {"a": Decimal("1000.0"), "b": Decimal("500.0"), "c": Decimal("400.0")}
     for arm in ARMS:
@@ -266,16 +303,15 @@ def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False):
         t += Decimal("4.0") if arm == "a" else Decimal("1.0")
         for k in range(1, TOTAL + 1):
             stamps.append((str(k), t))
-            own = ranges[arm][0] <= k <= ranges[arm][1]
-            others = [x for x in ARMS if x != arm]
-            if own:
-                c = costs.get(k, Decimal(0))
-                step = c + (Decimal("0.5") if k == TOTAL else Decimal("0.025"))
+            owner = [x for x in ARMS if ranges[x][0] <= k <= ranges[x][1]][0]
+            if arm == owner:
+                step = costs.get(k, Decimal(0)) + (Decimal("0.5") if k == TOTAL else Decimal("0.025"))
+            elif k == TOTAL:
+                step = Decimal("0.4") if arm == "a" else Decimal("0.6")
             else:
-                owner = [x for x in ARMS if ranges[x][0] <= k <= ranges[x][1]][0]
                 rank = [x for x in ARMS if x != owner].index(arm)
-                step = Decimal("0.5") if k == TOTAL else (Decimal("0.020") if rank == 0 else Decimal("0.030"))
-            t += step
+                step = Decimal("0.020") if rank == 0 else Decimal("0.030")
+            t += step + Decimal(str(chunks.get(k, 0)))
         stamps.append(("EOF", t))
         text = "\n".join(f"{g}\t{v}" for g, v in stamps) + "\n"
         if extra_line:
@@ -284,55 +320,89 @@ def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False):
             lines = text.splitlines()
             lines[10] = lines[10].split("\t")[0] + "\t1.0"
             text = "\n".join(lines) + "\n"
-        base = os.path.join(raw, f"{rep}.{arm}")
-        _write(base + ".stamps.tsv", text)
-        _write(base + ".rc", "0\n")
-        _write(base + ".wall", f"{starts[arm]}\t{starts[arm] + walls[arm]}\n")
-        _write(base + ".passed", "ci-pr-affected-replay.test.sh: 10 passed, 0 failed, 10 assertions, 3 mutants\n")
-        _write(base + ".range", f"{ranges[arm][0]}-{ranges[arm][1]}\n")
-    _write(os.path.join(raw, f"{rep}.guard.txt"), f"rep={rep} tree=deadbeef\nloadavg_start=1 1 1\n{'CLEAN' if clean else 'DISTURBED'}\n")
+        file_base = os.path.join(raw, f"{rep}.{arm}")
+        _write(file_base + ".stamps.tsv", text)
+        _write(file_base + ".rc", rc + "\n")
+        _write(file_base + ".wall", wall_text if (wall_text is not None and arm == "a") else f"{starts[arm]}\t{starts[arm] + walls[arm]}\n")
+        _write(file_base + ".passed", passed + "\n")
+        _write(file_base + ".range", (range_a if arm == "a" else f"{ranges[arm][0]}-{ranges[arm][1]}") + "\n")
+    _write(os.path.join(raw, f"{rep}.guard.txt"), f"rep={rep} tree={tree}\nloadavg_start=1 1 1\n{'CLEAN' if clean else 'DISTURBED'}\n")
+
+
+MIN_CHECKS = 33  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
 
 
 def selftest():
     fails = []
+    ran = [0]
 
     def check(name, cond):
+        ran[0] += 1
         if not cond:
             fails.append(name)
 
+    # positive control: the recorder must record a false condition (reported without routing through it)
+    check("control (deliberately false, removed below)", False)
+    if not fails:
+        print("SELFTEST FAIL: the check recorder does not record a failure")
+        return 1
+    fails.clear()
+
     D = Decimal
-    base_costs = {1: D(5), 100: D("-0.010"), 193: D(7), 194: D(3), 386: D(11), 387: D("2.5"), 602: D(9)}
-    # make site 100's owner interval 0.015 (raw -0.010): cost -0.010 + 0.025 = 0.015 — handled by costs[100] = -0.010
+    base_costs = {1: D(5), 100: D("-0.010"), 150: D(1), 193: D(7), 194: D(3), 386: D(11), 387: D("2.5"), 602: D(9)}
+    chunks = {150: 6}
     tmp = tempfile.mkdtemp(prefix="sct-", dir=os.environ.get("TMPDIR") or "/var/tmp")
+    try:
+        return _selftest_body(tmp, check, fails, ran, D, base_costs, chunks)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
     raw = os.path.join(tmp, "raw")
     os.makedirs(raw)
-    for rep, c1 in (("r1", D(5)), ("r2", D(5)), ("r3", D(50))):
-        make_rep(raw, rep, {**base_costs, 1: c1})
+    for idx, (rep, c1) in enumerate((("r1", D(5)), ("r2", D(5)), ("r3", D(50)))):
+        make_rep(raw, rep, {**base_costs, 1: c1}, base=idx * 10000, chunks=chunks)
     _write(os.path.join(raw, "sites.tsv"), "".join(f"{k}\tmutate\trow_{k}\n" for k in range(1, TOTAL + 1)))
 
     def golden(t):
         """Literal expectations (hand-computed, not generator-derived). Returns a list of violated items."""
         bad = []
-        want_cost = {1: "5.000", 100: "0.000", 193: "7.000", 194: "3.000", 386: "11.000", 387: "2.500", 602: "9.000", 2: "0.000", 300: "0.000"}
+        want_cost = {1: "5.000", 100: "0.000", 150: "1.000", 193: "7.000", 194: "3.000", 386: "11.000", 387: "2.500", 602: "9.000", 2: "0.000", 300: "0.000"}
         for k, v in want_cost.items():
             if f3(t["final"][k]["cost"]) != v:
                 bad.append(f"cost[{k}]={f3(t['final'][k]['cost'])} want {v}")
         if f3(t["final"][100]["raw"]) != "-0.010":
             bad.append(f"raw[100]={f3(t['final'][100]['raw'])} want -0.010")
-        for a, v in (("a", "988.010"), ("b", "486.000"), ("c", "388.500")):
+        for a, v in (("a", "987.010"), ("b", "486.000"), ("c", "388.500")):
             if f3(t["uncond"][a]) != v:
                 bad.append(f"unconditional[{a}]={f3(t['uncond'][a])} want {v}")
-        if t["final"][1]["live"] != 2:
-            bad.append(f"others_live[1]={t['final'][1]['live']} want 2")
+        for k, v in ((1, 2), (386, 1), (602, 0)):
+            if t["final"][k]["live"] != v:
+                bad.append(f"others_live[{k}]={t['final'][k]['live']} want {v}")
         if t["final"][1]["row"] != "row_1" or t["final"][602]["arm"] != "c" or t["final"][193]["arm"] != "a" or t["final"][194]["arm"] != "b":
             bad.append("row/arm mapping")
+        for k, v in ((602, "0.200"), (2, "0.010"), (1, "0.010")):
+            if f3(t["final"][k]["noise"]) != v:
+                bad.append(f"noise[{k}]={f3(t['final'][k]['noise'])} want {v}")
+        if f3(t["final"][150]["nonowner"]) != "6.025":
+            bad.append(f"nonowner[150]={f3(t['final'][150]['nonowner'])} want 6.025")
+        for k, v in ((1, "-"), (100, "flag"), (150, "flag"), (602, "-")):
+            if t["final"][k]["flag"] != v:
+                bad.append(f"flag[{k}]={t['final'][k]['flag']} want {v}")
         return bad
 
     good = build(raw)
     gb = golden(good)
     check("golden on the real estimator: " + "; ".join(gb), not gb)
     text = render(good)
-    check("render has 602 data rows", len([l for l in text.splitlines() if re.match(r"\d+\t", l)]) == TOTAL)
+    lines = text.splitlines()
+    check("render has 602 data rows", len([l for l in lines if re.match(r"\d+\t", l)]) == TOTAL)
+    check("render header carries the unconditional shares", "# unconditional_s a=987.010 b=486.000 c=388.500" in lines)
+    check("render row of site 1", "1\ta\trow_1\t5.000\t5.000\t0.010\t-\t2" in lines)
+    check("render row of site 100 (negative raw kept, cost clamped)", "100\ta\trow_100\t0.000\t-0.010\t0.010\tflag\t2" in lines)
+    by = render_by_rep(good).splitlines()
+    check("by-rep row of site 1 shows each rep, outlier included", "1\ta\t5.000\t5.000\t50.000" in by)
     mutants = {
         "owner range shifted by 1": Opts(shift_owner=1),
         "stamp mapping k to k-1": Opts(off_by_one_stamp=True),
@@ -347,32 +417,93 @@ def selftest():
         except Refusal as e:
             bad = [str(e)]
         check(f"mutant must go RED: {name}", bool(bad))
-    # two reps (the shipped case): the median of integer counts is a half-integer and must round, not crash
+    # rounding of half-integer medians (two reps are the shipped case)
+    for vals, want in (([1, 2], 2), ([0, 1], 1), ([2, 2], 2), ([0, 1, 1], 1), ([0, 0], 0)):
+        check(f"round_half_up_median({vals}) == {want}", round_half_up_median(vals) == want)
     two = os.path.join(tmp, "two")
     os.makedirs(two)
-    for rep in ("r1", "r2"):
-        make_rep(two, rep, base_costs)
+    for idx, rep in enumerate(("r1", "r2")):
+        make_rep(two, rep, base_costs, base=idx * 10000, chunks=chunks)
     t2 = build(two)
-    check("two-rep build: others_live of site 1 is 2 and cost of site 193 is 7", t2["final"][1]["live"] == 2 and f3(t2["final"][193]["cost"]) == "7.000")
-    # refusals
-    for label, kw in (("DISTURBED guard", {"clean": False}), ("extra stamp line", {"extra_line": True}), ("time goes backwards", {"backwards": True})):
-        d = os.path.join(tmp, "bad-" + label.split()[0])
+    check("two-rep build: cost of site 193 is 7 and others_live of site 1 is 2", t2["final"][193]["cost"] == D(7) and t2["final"][1]["live"] == 2)
+    # refusals: each must refuse FOR ITS REASON (the message is matched)
+    cases = (
+        ("DISTURBED guard", {"clean": False}, "does not end in CLEAN"),
+        ("extra stamp line", {"extra_line": True}, "stamp lines"),
+        ("time goes backwards", {"backwards": True}, "goes backwards"),
+        ("arm exit status", {"rc": "1"}, "exit status is not 0"),
+        ("unclean passed line", {"passed": "x: 9 passed, 1 failed, 10 assertions"}, "not a clean pass"),
+        ("ranges that do not tile", {"range_a": "1-190"}, "do not tile"),
+        ("malformed wall file", {"wall_text": "garbage\n"}, "malformed .wall"),
+    )
+    for label, kw, want in cases:
+        d = os.path.join(tmp, "bad-" + label.replace(" ", "-"))
         os.makedirs(d)
         make_rep(d, "r1", base_costs, **kw)
+        _write(os.path.join(d, "sites.tsv"), "")
         try:
             build(d)
             check(f"refusal expected: {label}", False)
-        except Refusal:
-            pass
+        except Refusal as e:
+            check(f"refusal for {label} names its reason ({want!r}): {e}", want in str(e))
+    d = os.path.join(tmp, "bad-tree")
+    os.makedirs(d)
+    make_rep(d, "r1", base_costs, base=0)
+    make_rep(d, "r2", base_costs, base=10000, tree="other")
+    try:
+        build(d)
+        check("refusal expected: reps on different trees", False)
+    except Refusal as e:
+        check(f"refusal for different trees: {e}", "different trees" in str(e))
+    d = os.path.join(tmp, "bad-overlap")
+    os.makedirs(d)
+    make_rep(d, "r1", base_costs, base=0)
+    make_rep(d, "r2", base_costs, base=100)
+    try:
+        build(d)
+        check("refusal expected: reps overlapping in time", False)
+    except Refusal as e:
+        check(f"refusal for overlapping reps: {e}", "overlap in time" in str(e))
+    d = os.path.join(tmp, "bad-empty")
+    os.makedirs(d)
+    try:
+        build(d)
+        check("refusal expected: no reps", False)
+    except Refusal as e:
+        check(f"refusal for no reps: {e}", "no *.guard.txt" in str(e))
+    d = os.path.join(tmp, "bad-sites")
+    os.makedirs(d)
+    make_rep(d, "r1", base_costs)
+    _write(os.path.join(d, "sites.tsv"), "1\tmutate\trow_1\n2\tmutate\trow_2\n3\tmutate\trow_3\n")
+    try:
+        build(d)
+        check("refusal expected: sites map of the wrong size", False)
+    except Refusal as e:
+        check(f"refusal for a sites map of the wrong size: {e}", "maps 3 sites" in str(e))
+    # the sites extractor: single-line call, multi-line call (row on the closing line), call without a row
+    tf = os.path.join(tmp, "t.sh")
+    _write(tf, "mutate m1 'old' 'new' row_alpha\now_mutate m2 $'a\nb' $'c\nd' row_beta\nmutate m3 'x' 'y'\nchk something\nmutate m4 'p' 'q' row_gamma\n")
+    check("sites_of reads single-line, multi-line and unlabelled calls", sites_of(tf) ==
+          "1\tmutate\trow_alpha\n2\tow_mutate\trow_beta\n3\tmutate\t?\n4\tmutate\trow_gamma\n")
     # exit status of a refusal through main()
     d = os.path.join(tmp, "bad-rc")
     os.makedirs(d)
     make_rep(d, "r1", base_costs, clean=False)
-    check("main() exits 2 on a DISTURBED rep", main(["x", d, os.path.join(tmp, "o.tsv")]) == 2)
+    quiet = io.StringIO()
+    with contextlib.redirect_stdout(quiet), contextlib.redirect_stderr(quiet):
+        rc_bad = main(["x", d, os.path.join(tmp, "o.tsv")])
+        rc_good = main(["x", raw, os.path.join(tmp, "o.tsv")])
+    check("main() exits 2 on a DISTURBED rep", rc_bad == 2)
+    check("main() exits 0 and writes both files on a good build", rc_good == 0
+          and os.path.exists(os.path.join(tmp, "o.tsv")) and os.path.exists(os.path.join(tmp, "o.by_rep.tsv")))
     if fails:
         print("SELFTEST FAIL:\n  " + "\n  ".join(fails))
         return 1
-    print(f"site_cost_table.py selftest: golden ok, {len(mutants)} mutants red, 3 refusals, rc 2 on DISTURBED")
+    # floor: a check recorder that stops running is not a pass
+    if ran[0] < MIN_CHECKS:
+        print(f"SELFTEST FAIL: only {ran[0]} checks ran, floor is {MIN_CHECKS}")
+        return 1
+    print(f"site_cost_table.py selftest: {ran[0]} checks, golden ok, {len(mutants)} mutants red, {len(cases) + 4} refusals matched by reason, rc 2 on DISTURBED")
     return 0
 
 
