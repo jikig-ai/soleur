@@ -13,13 +13,12 @@
 #
 # State exposure: both random_password.result and doppler_secret.value are written to terraform.tfstate in the R2 state
 # bucket, which the Tier-A read pair can read (ADR-241 residual R2); the bucket has no versioning and no lock (ADR-006). The
-# Doppler prd config is readable by the agent by design (the hold evaluator reads it), and the prd_terraform branch config
-# inherits prd (ADR-241), so a Tier-A Doppler token can read the value without touching state. The apply job also writes
-# terraform show -json of the whole state to its runner temp dir. Dev and prd are independent only against readers scoped to one
-# config: a state reader gets both. Rotating the value does not repair a leak, because the next run writes the new value to the
-# same readable state; a leak is handled by treating the token as public and keeping its reach at four read-only fields. If the
-# token ever gains write reach it must leave Terraform: mint it outside, remove both secrets from state, delete this file, and
-# shadow the inherited prd value in prd_terraform (the ADR-241 sentinel pattern), or the Tier-A reach stays.
+# Doppler prd config is readable by the agent by design (the hold evaluator reads it). prd_terraform is a standalone config that
+# inherits nothing from prd (measured 2026-11-07), so the Tier-A reach is the state read, not a Doppler read. The apply job also
+# writes terraform show -json of the whole state to its runner temp dir. Dev and prd are independent only against readers scoped
+# to one config: a state reader gets both. Rotating the value does not repair a leak, because the next run writes the new value
+# to the same readable state; a leak is handled by treating the token as public and keeping its reach at four read-only fields.
+# If the token ever gains write reach it must leave Terraform: mint it outside, remove both secrets from state, delete this file.
 #
 # Rotation: replace the random_password (-replace=random_password.legal_acceptance_verify_token_prd or _dev) with the plan NOT
 # narrowed to the generator alone (target the dependent doppler_secret too, or run the full root), then redeploy the web app:
@@ -30,9 +29,8 @@
 #
 # special = false is written explicitly: the provider default is true, and a symbol outside the route's class would make the
 # endpoint refuse the token and break the shell helper's handling of it. The two configs use two independent generators, so
-# dev and prd never share a value (apps/web-platform/test/legal-acceptance/cross-layer-limits.test.ts holds the length, the
-# alphabet flag, the names, the masking, the absence of lifecycle blocks and the independence of the two generators against the
-# route's bound).
+# dev and prd never share a value (apps/web-platform/test/legal-acceptance/cross-layer-limits.test.ts holds this file against
+# the route's bound).
 resource "random_password" "legal_acceptance_verify_token_prd" {
   length  = 48
   special = false
