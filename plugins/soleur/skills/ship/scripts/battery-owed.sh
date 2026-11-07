@@ -54,7 +54,11 @@
 # section, and a symlinked file or directory reads no token. A branch name holding `/` reads the
 # nested path specs/<a>/<b>/session-state.md. The committed diff is the gate; the working-tree sources are defence in depth,
 # and per-file index flags (assume-unchanged, skip-worktree) are operator-local state, bounded by the merge queue.
-# Writer contract: skills/one-shot/references/operator-constraints.md. Work Phase 2 and review do not read it (#12247).
+# Writer contract: skills/one-shot/references/operator-constraints.md.
+# CONSUMERS (#12247): ship Phase 4 calls this with NO argument (token, then CI evidence). Work Phase 2, review's lead gate and the
+# Grok pre-push gate call `--token-only`: no valid token is OWED at once with no CI state read; a valid token runs the arm above
+# unchanged. Any other argument is UNDECIDABLE. Work and review reach it through scripts/gate-or-skip.sh; test-fix-loop and the
+# lefthook bun-test hook never read it (a fix loop must run tests; the hook is tracked in #12297).
 set -uo pipefail
 
 VERDICT_OWED=0
@@ -84,6 +88,11 @@ say() { printf 'battery-owed: %s\n' "$(_sanitize "$*")"; }
 owed()        { say "OWED — $1";        exit "$VERDICT_OWED"; }
 skippable()   { say "SKIPPABLE — $1";   exit "$VERDICT_SKIPPABLE"; }
 undecidable() { say "UNDECIDABLE — $1 (caller must treat as OWED)"; exit "$VERDICT_UNDECIDABLE"; }
+
+# The one accepted argument is `--token-only` (#12247); anything else, including a second argument, is UNDECIDABLE.
+TOKEN_ONLY=0
+if (( $# == 1 )) && [[ "$1" == "--token-only" ]]; then TOKEN_ONLY=1
+elif (( $# > 0 )); then undecidable "unknown argument"; fi
 
 command -v git >/dev/null 2>&1 || undecidable "git not on PATH"
 # An inherited git-location variable (a hook's GIT_DIR / GIT_INDEX_FILE) would redirect every read below.
@@ -123,6 +132,8 @@ if [[ -n "$_br" && -n "$_tp" && "$_sd" == "${_ss%/*}" && -f "$_ss" && ! -L "$_ss
     | LC_ALL=C tr -cd "A-Za-z0-9 ,.-")"
   [[ -n "${OPERATOR_CI_WORDS//[[:space:]]/}" ]] || OPERATOR_CI_WORDS=""
 fi
+# `--token-only`: no valid token is OWED right here, before any CI state, ruleset or origin/main read (#12247).
+(( TOKEN_ONLY )) && [[ -z "$OPERATOR_CI_WORDS" ]] && owed "--token-only: no operator ci-is-the-gate token (CI state is not consulted at this site)"
 
 # ---------------------------------------------------------------------------
 # NO GROK-SPECIFIC ARM, and the reason is measured rather than argued.

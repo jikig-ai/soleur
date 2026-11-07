@@ -384,9 +384,9 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    concurrent full-gate runs inflate each other's timings and corrupt the measurement. Measured
    2026-08-11 — three agents running lints and suites at once turned an 860 s battery into 1675 s,
    and that 1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate
-   ONCE, after collecting fan-out work — the bounded default `bash scripts/test-all.sh` (bare
-   resolves `--affected`), previewed by `bash scripts/test-all.sh --print-selection` and
-   reported with the `selected N of M`. Two mechanical backstops exist, and neither depends on an
+   ONCE, after collecting fan-out work — step 9's `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"`
+   (the same `--affected` run; rc table: [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)),
+   previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`. Two mechanical backstops exist, and neither depends on an
    agent volunteering anything: a `--full` or degraded-full [scripts/test-all.sh](../../../../scripts/test-all.sh)
    exits 4 when it MEASURES a sibling full-gate run already in flight (#7553), and `tc_acquire`'s
    advisory lock (ADR-133) serialises whatever gets past that. **`SOLEUR_SUBAGENT=1` is a convention
@@ -1037,12 +1037,11 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    Before entering Phase 3, run the affected gate — **once, and not the whole battery**:
 
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"
+   # wraps affected-tests.sh; skips only on a brief's ci-is-the-gate token
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"
    ```
 
    The gate's rc contract (0/1/4/6/7), the `.soleur-test-gate.json` override schema, and per-rc actions live in [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md). In THIS repo it capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh) --affected — selection fails toward coverage (`AFFECTED_FALLBACK reason=…` on an undecidable diff or a touched runner/index); preview it via `bash scripts/test-all.sh --print-selection` (repo-local). A green affected run is the diff's coverage, not a full-coverage claim; CI's sharded battery is the backstop. A refusal (rc 4) names its cause and prints a `remedy:` line — never retry it blindly.
-
-   A deprecated compat spelling also exists (#8621): `TEST_GROUP=affected bash scripts/test-all.sh` is an alias of `--affected` — the #8591 heuristic it replaces was folded into the declared-edge axis after the decline-set measurement found misses on every corpus diff. It remains the substitute both rc=4 refusals prescribe; `TEST_GROUP=affected --affected` refuses rc=2. Either spelling is scoped evidence, not the ship gate.
 
    **`TEST_GROUP=<g>` remains as an explicit cross-cut, not the default.** `TEST_GROUP=bun|scripts|scripts-heavy|webplat|infra bash scripts/test-all.sh` restricts the run to that group's registrations under the same affected-selection rules — a non-`all` ask force-selects its group. Use it to re-run one shard in isolation; it is no longer how the Phase 2 exit picks coverage — the affected index derives a finer set.
 

@@ -201,17 +201,15 @@ proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
-panel returns — the bounded default `bash scripts/test-all.sh` (bare resolves `--affected`;
-plugin-portable: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"`, sole scope absent a
-[runner](../../../../scripts/test-all.sh) — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)),
+panel returns — the bounded default `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"` (token-aware
+`affected-tests.sh`: here it delegates `--affected` to the [runner](../../../../scripts/test-all.sh), its sole scope
+absent one — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md); rc 6 and 7 are not a pass),
 previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`:
 "every covering suite ran" is the printed selection vs the run's per-suite results, not memory
 (#10333). Two backstops:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
 (#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
-serialises whatever gets past that. The
-`SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the
-paragraph above is instruction for the non-concurrent case, not claim.
+serialises whatever gets past that.
 
 **A mutating seat gets an ALLOCATED sandbox, never a hand-copied tree.** Brief it with this, anchored to the live root (the script exists only in this repo): `ROOT=$(git rev-parse --show-toplevel); SBX=$(bash "$ROOT/scripts/soleur-sandbox.sh" new <seat>) && [ -d "$SBX" ] || { echo ALLOC-FAILED; exit 2; }`. One copy, restored per row, then `bash "$ROOT/scripts/soleur-sandbox.sh" rm "$SBX"` before returning. On ALLOC-FAILED it stops: never mutate the live tree, never fall back to `/tmp` or the scratchpad. The owner is the SESSION, so the lead `rm`s the path after any seat returns or fails. No script in the repo: use the fallback in [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md). A helper that signals or removes files: run each mutant via `run-isolated "$SBX" -- <cmd>` under `timeout -k 5 120`; one that cannot start there (125 with `RUN_IN_PID_NAMESPACE_REFUSED`, a missing script or verb) is `UNVERIFIED-NO-NAMESPACE`, never run on the host (same file, mutating-helper section).
 

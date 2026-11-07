@@ -126,12 +126,14 @@ function invocationLines(region: string): string[] {
  * Every non-comment line inside a fenced block that invokes the plugin gate —
  * the dispatch the skills now prescribe (#9307 PR 2). Spelling-agnostic for the
  * same reason invocationLines is: `bash`, env prefixes and indentation all
- * count.
+ * count. Since #12247 work §9 and review dispatch through `gate-or-skip.sh`,
+ * the token-aware wrapper that `exec`s `affected-tests.sh` for every status but
+ * the reader's 42, so the wrapper spelling is the same dispatch.
  */
 function gateLines(region: string): string[] {
   return fencedBodies(region)
     .split("\n")
-    .filter((l) => /affected-tests\.sh/.test(l) && !/^\s*#/.test(l));
+    .filter((l) => /(affected-tests|gate-or-skip)\.sh/.test(l) && !/^\s*#/.test(l));
 }
 
 /**

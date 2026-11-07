@@ -6,7 +6,9 @@
 #   Phase 2 — affected-tests.sh (the plugin gate; in this repo it delegates
 #             scripts/test-all.sh --affected — diff-selected suites + always-on
 #             ratchets; the FULL battery is the CI `test` aggregator's job, and
-#             is opt-in locally via `affected-tests.sh --full`)
+#             is opt-in locally via `affected-tests.sh --full`); waived ONLY by
+#             exit 42 of `battery-owed.sh --token-only` (the brief's ci-is-the-gate
+#             token, #12247): the other steps still run and the banner says so
 #   Phase 3 — web-platform next build (route-file validator; CI web-platform-build)
 #   Phase 4 — plugins/soleur/scripts/grok-fidelity-gate.sh (CI grok-fidelity)
 #
@@ -38,6 +40,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 # (dirname $0), never through CLAUDE_PLUGIN_ROOT (ADR-179: env-directed roots
 # are a trust class; a sibling path cannot point anywhere else).
 GATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/affected-tests.sh"
+# The token reader is a sibling too (same rule); only its exit 42 waives the affected-tests step.
+BATTERY_OWED="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../skills/ship/scripts/battery-owed.sh"
 cd "$REPO_ROOT"
 
 SKIP_BUILD=0
@@ -205,7 +209,18 @@ fi
 # `affected-tests.sh --full` locally). An undecidable diff degrades the
 # delegated run to the full battery on its own — the runner's
 # AFFECTED_FALLBACK line says so.
-run_step "affected-tests gate" bash "$GATE"
+# (sliced by plugins/soleur/test/ship-battery-owed.test.sh T19: keep both sentinel lines)
+# grok-token-dispatch:start
+AFFECTED_GATE_WAIVED=0
+_tok_rc=0
+"$BASH" "$BATTERY_OWED" --token-only || _tok_rc=$?
+if (( _tok_rc == 42 )); then
+  AFFECTED_GATE_WAIVED=1
+  echo "[note] affected-tests gate SKIPPED (NOT run, NOT passed): the brief declared CI the gate; only this step is waived, CI test still gates the merge" >&2
+else
+  run_step "affected-tests gate" bash "$GATE"
+fi
+# grok-token-dispatch:end
 
 # --- Phase 3: next build / route validator (CI web-platform-build) ---
 # Local APPROXIMATION of the CI job: since #8136 `web-platform-build` builds the Dockerfile's
@@ -229,4 +244,11 @@ export GROK_FIDELITY_SKIP_BUDGET=1
 run_step "grok-fidelity-gate" bash plugins/soleur/scripts/grok-fidelity-gate.sh
 
 echo ""
-echo "grok-pre-push-gate: PASS — safe to git push"
+# (sliced by plugins/soleur/test/ship-battery-owed.test.sh T19: keep both sentinel lines)
+# grok-token-banner:start
+if (( AFFECTED_GATE_WAIVED )); then
+  echo "grok-pre-push-gate: PASS WITH SKIPPED GATE — the affected-tests gate was NOT run (operator declared CI the gate); the other steps passed"
+else
+  echo "grok-pre-push-gate: PASS — safe to git push"
+fi
+# grok-token-banner:end
