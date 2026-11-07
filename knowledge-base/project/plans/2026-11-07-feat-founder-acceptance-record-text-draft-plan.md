@@ -77,7 +77,7 @@ Nothing in this plan records an acceptance, touches the `approval-queue` flag, o
 
 ## Exact file content (what the work phase writes)
 
-Target path: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`. The block between the fences is a SNAPSHOT of the whole file (the brief asks for the exact content in the plan; the operator's scope governs over the CTO's preference to link only, so it is embedded and the drift risk is closed by `cmp`, below). Authority: until the copy, this snapshot was the source (the separate `.proposed.md` copy was deleted at review); at copy time `cmp` between it and the committed file must exit 0; from then on the COMMITTED file is the only authority, counsel edits only it, and the `.proposed.md` is marked superseded (first line of that file, ASCII note) in the same commit. The plan snapshot and hash are not updated afterwards. the card renders only the part after the closing front-matter line, in a `whitespace-pre-wrap` block with no markdown rendering, so each paragraph is one line and lists are plain dashes.
+Target path: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`. The block between the fences is a SNAPSHOT of the whole file (the brief asks for the exact content in the plan; the operator's scope governs over the CTO's preference to link only, so it is embedded and the drift risk is closed by `cmp`, below). Authority: until the copy, this snapshot was the source (the separate `.proposed.md` copy was deleted at review); at copy time `cmp` between it and the committed file must exit 0; from then on the COMMITTED file is the only authority and counsel edits only it. (The separate `.proposed.md` was deleted at review, so it is not marked superseded; it no longer exists.) The plan snapshot and hash are not updated afterwards. the card renders only the part after the closing front-matter line, in a `whitespace-pre-wrap` block with no markdown rendering, so each paragraph is one line and lists are plain dashes.
 
 ```text
 ---
@@ -191,7 +191,7 @@ No change to: `Dockerfile`, `.dockerignore`, `canonical.ts`, `legal-acceptance-c
 
 ### Guard 1 — founder-acceptance-record text test and merge guard
 
-**Property.** The committed `founder-acceptance-record.md` reads through the production loader, holds only LF and ASCII bytes with no BOM, claims none of the forbidden words, states the same note limit the code enforces, and cannot reach a full-CI or merge-group run while a bracketed counsel placeholder remains in its body.
+**Property.** The committed `founder-acceptance-record.md` reads through the production loader, holds only LF and ASCII bytes with no BOM, claims none of the forbidden words, states the same note limit the code enforces, and cannot reach a full-CI or merge-group run while an open item (any placeholder-shaped token: bracket, TBD/TODO/XX/___, "to be confirmed", "counsel") remains in its body or in the card notice and request-changes notice that state the same retention period. The guard is a detector of the DRAFT STATE, not proof of counsel's sign-off: an admin or UI merge bypasses it, and a numeric period written by anyone passes it.
 
 **Assembly.** One chokepoint per leg. Format: an `auditDir(dir)` helper that reads the raw bytes of EVERY `<key>.md` in a registry directory (keys derived by `KEY_RE`, README skipped), called on the real `texts/` directory and on temp directories. Content: `getLegalText("founder-acceptance-record")` from `server/legal-acceptance/canonical.ts` (the production loader) and a shared `FORBIDDEN` regex. Limit: the single `up to (\d+) characters` match in the body against `REQUEST_CHANGES_MAX` in `lib/legal-acceptance-wire.ts`, and (in `cross-layer-limits.test.ts`) that constant against BOTH 1000 literals in migration 184. Merge guard: one `it.skipIf(!process.env.CI)` over the same body asserting no `\[[^\]\n]*\]` token remains.
 
@@ -345,7 +345,7 @@ None. Checked open `code-review` issues for `legal-acceptance/texts`, `legal-acc
 2. Forbidden words: the shared `FORBIDDEN` regex finds none in the text; a planted string is caught.
 3. Limit: the body contains exactly one `up to (\d+) characters`, equal to `REQUEST_CHANGES_MAX`; in `cross-layer-limits.test.ts` both SQL literals equal the constant.
 4. Loader: `getLegalText("founder-acceptance-record")` gives a version matching `^\d{4}-\d{2}-\d{2}$` and a null `validUntil`.
-5. Merge guard (`it.skipIf(!process.env.CI)`): no `\[[^\]\n]*\]` token remains in the body; RED with `CI=1` while the placeholder stands.
+5. Merge guard (`it.skipIf(!process.env.CI)`): `heldFindings()` (text body, card notice, request-changes notice) finds no placeholder-shaped token; RED with `CI=1` while the placeholder stands. A non-CI control proves the detector finds the open items in the real data; a second text in the registry fails a tripwire until the guard is extended.
 
 ## Operator Holds
 
@@ -358,7 +358,7 @@ These are Operator-reserved by category: legal-risk (the wording of a legal text
 ## HOLD procedure
 
 1. The draft PR #12342 stays DRAFT for its whole life in this pipeline. Do not run `gh pr ready`, `gh pr merge`, `gh pr merge --auto`, or enqueue it.
-2. On sign-off (a separate, later change, by counsel's text): replace the placeholder with the confirmed period (the merge guard turns green by itself), pin a published `{version: sha256}` entry and the exact key set in the test, run the full CI battery on that PR, then decide the flag state (CPO condition B) before merge. After the first merge to main any byte change bumps `version` (CTO ruling); before it, bytes may change freely because the first merge is the sign-off version.
+2. On sign-off (a separate, later change, by counsel's text): replace the placeholder with the confirmed period in the text AND in `LEGAL_COPY.cardNotice` (the guard stays red until both are done), delete the merge guard and its real-data control in that same PR (counsel's sign-off PR is the only change that may), pin a published `{version: sha256}` entry and the exact key set in the test, run the full CI battery on that PR, then decide the flag state (CPO condition B) before merge. After the first merge to main any byte change bumps `version` (CTO ruling); before it, bytes may change freely because the first merge is the sign-off version.
 3. Do not touch the `approval-queue` flag or record any decision at any step.
 
 ## Non-goals

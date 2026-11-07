@@ -18,6 +18,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { KEY_RE, LegalTextError, TEXT_HASH_RE, parseLegalText } from "@/server/legal-acceptance/canonical";
 import { stripHclComments } from "../lib/terraform-hcl-blocks";
+import { lexSql } from "../helpers/sql-lex";
 import { REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
 
 const WEB = path.join(__dirname, "../..");
@@ -607,17 +608,13 @@ describe("the minted token (legal-acceptance-secrets.tf) against the route bound
 
 // ── the note limit (founder-acceptance-record states it; #12197) ─────────────────────────────────────────────────
 
-/** Both note-limit literals of one migration, comments (line and block) stripped, duplicates collapsed. Empty arrays when it states none. */
+/** Both note-limit literals of one migration, comments (line, nested block) and string literals blanked by the SQL lexer, case-insensitive, duplicates collapsed. Empty arrays when it states none. */
 export function noteLimitsIn(sql: string): { check: number[]; rpc: number[] } {
-  const code = sql
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .split("\n")
-    .map((l) => l.replace(/--.*$/, ""))
-    .join("\n");
+  const code = lexSql(sql).map((t) => (t.kind === "code" ? t.text : " ")).join(""); // code only: comments and string literals are blanked
   const nums = (re: RegExp): number[] => [...new Set([...code.matchAll(re)].map((m) => Number(m[1])))];
   return {
-    check: nums(/char_length\(requested_edit\)\s+BETWEEN\s+1\s+AND\s+(\d+)/g),
-    rpc: nums(/char_length\(p_requested_edit\)\s*>\s*(\d+)/g),
+    check: nums(/char_length\(\s*requested_edit\s*\)\s+BETWEEN\s+1\s+AND\s+(\d+)/gi),
+    rpc: nums(/char_length\(\s*p_requested_edit\s*\)\s*>\s*(\d+)/gi),
   };
 }
 
@@ -638,12 +635,25 @@ describe("note limit (REQUEST_CHANGES_MAX against the migrations)", () => {
   it("no migration restates the note limit with another value (a later CREATE OR REPLACE or ALTER is read too)", () => {
     expect.hasAssertions();
     const dir = path.join(WEB, "supabase/migrations");
-    const mentioning = readdirSync(dir).filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql") && read(path.join(dir, f)).includes("requested_edit"));
+    const mentioning = readdirSync(dir).filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql") && /requested_edit/i.test(read(path.join(dir, f))));
     expect(mentioning).toContain("184_legal_acceptance.sql");
+    let checked = 0;
     for (const f of mentioning) {
       const { check, rpc } = noteLimitsIn(read(path.join(dir, f)));
-      for (const n of [...check, ...rpc]) expect(n, `${f} states a note limit other than REQUEST_CHANGES_MAX`).toBe(REQUEST_CHANGES_MAX);
+      for (const n of [...check, ...rpc]) {
+        checked++;
+        expect(n, `${f} states a note limit other than REQUEST_CHANGES_MAX`).toBe(REQUEST_CHANGES_MAX);
+      }
     }
+    expect(checked, "the loop must have read at least migration 184's two literals").toBeGreaterThanOrEqual(2);
+  });
+
+  it("the migration scan bites: a later migration with another value, upper-case spelling and a string-literal decoy", () => {
+    expect.hasAssertions();
+    const bad = "CREATE OR REPLACE FUNCTION f() ... IF CHAR_LENGTH( p_requested_edit ) > 2000 THEN";
+    expect(noteLimitsIn(bad).rpc).toEqual([2000]);
+    expect(noteLimitsIn("select 'char_length(p_requested_edit) > 2000 -- x', 1;").rpc).toEqual([]);
+    expect(noteLimitsIn("/* a /* nested */ char_length(p_requested_edit) > 7 */ select 1;").rpc).toEqual([]);
   });
 
   it("the extractor sees a drift in either literal, a block-comment decoy and a repeated guard are not misread, an empty extraction throws", () => {

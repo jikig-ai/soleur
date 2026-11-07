@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testi
 import userEvent from "@testing-library/user-event";
 import { LegalAcceptanceCard, type LegalAcceptanceCardProps, type LegalRowFacts } from "@/components/approvals/legal-acceptance-card";
 import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
+import { FORBIDDEN_CLAIMS } from "./forbidden-claims";
 import { OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
 import type { LegalChoiceWire, LegalDecideResult, LegalReauthSendResult, LegalReauthVerifyResult } from "@/lib/legal-acceptance-wire";
 
@@ -162,7 +163,7 @@ describe("the six card states (AC14, wireframe 16)", () => {
       ["expired", null],
     ] as const) {
       const { container, unmount } = renderCard({ state, row: r });
-      expect(container.textContent ?? "").not.toMatch(/verified|reviewed|legally binding|audit-ready|compliant/i);
+      expect(container.textContent ?? "").not.toMatch(FORBIDDEN_CLAIMS);
       unmount();
     }
   });

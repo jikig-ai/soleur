@@ -4,4 +4,4 @@
  * anything was verified, reviewed, certified, compliant or legally binding. ONE list so the two suites cannot drift.
  */
 export const FORBIDDEN_CLAIMS =
-  /verif(?:ied|ies|y)\b|reviewed|certified|enforceable|legally[\s-]+binding|audit[\s-]*ready|complian(?:t|ce)/i;
+  /verif(?:ied|ies|y)\b|reviewed|certified|enforceable|legally[\s-]+binding|audit[\s-]*ready|complian(?:t|ce)|guarantee[ds]?\b|tamper[\s-]*(?:proof|evident)|attest(?:ed|s|ation)?\b/i;

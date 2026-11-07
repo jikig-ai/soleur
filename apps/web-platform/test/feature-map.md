@@ -103,7 +103,7 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - selectors: the list of linked text names with their version and answered state; with no rows the page ends in the not-found view
 - expects: a signed-in founder sees one link per text they have a recorded answer for (with the `approval-queue` flag on, every released text); a signed-out visitor is redirected to `/login?redirectTo=...`
 - auth: bot
-- gotchas: reads registry texts from the server texts directory (whichever texts are committed and deployed; none is answerable before counsel's sign-off); with the flag off only texts the founder already answered are listed, and a not-found view when there are none
+- gotchas: reads registry texts from the server texts directory (whichever texts are committed and deployed; a deployed text is answerable at once, so a text is merged only after counsel's sign-off); with the flag off only texts the founder already answered are listed, and a not-found view when there are none
 
 ## `/dashboard/approvals/legal/[key]`
 

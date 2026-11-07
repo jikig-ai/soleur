@@ -20,16 +20,62 @@ import { afterAll, describe, expect, it } from "vitest";
 import { KEY_RE, TEXTS_DIR, getLegalText, loadLegalTexts } from "@/server/legal-acceptance/canonical";
 import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
 import { REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
+import { stripSqlComments } from "../helpers/sql-lex";
 import { FORBIDDEN_CLAIMS } from "./forbidden-claims";
 
 const KEY = "founder-acceptance-record";
-const M184 = readFileSync(path.join(__dirname, "../../supabase/migrations/184_legal_acceptance.sql"), "utf8");
+const MIGRATIONS = path.join(__dirname, "../../supabase/migrations");
+const migrationFiles = (): string[] => readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql")).sort();
+const M184 = readFileSync(path.join(MIGRATIONS, "184_legal_acceptance.sql"), "utf8");
+const M185 = readFileSync(path.join(MIGRATIONS, "185_legal_acceptance_ack.sql"), "utf8");
+
+/** Column names of `CREATE TABLE ... <table> (...)`: comments stripped, balanced-paren body, first word of each top-level item, constraints skipped. */
+function tableColumns(sql: string, table: string): string[] {
+  const code = stripSqlComments(sql);
+  const m = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:public\\.)?${table}\\s*\\(`, "i").exec(code);
+  if (!m) return [];
+  let depth = 1;
+  let i = m.index + m[0].length;
+  const items: string[] = [];
+  let cur = "";
+  for (; i < code.length && depth > 0; i++) {
+    const c = code[i];
+    if (c === "(") depth++;
+    else if (c === ")") {
+      depth--;
+      if (depth === 0) break;
+    }
+    if (c === "," && depth === 1) (items.push(cur), (cur = ""));
+    else cur += c;
+  }
+  items.push(cur);
+  return items
+    .map((x) => x.trim().split(/\s+/)[0]?.replace(/"/g, "") ?? "")
+    .filter((w) => w !== "" && !/^(constraint|unique|primary|foreign|check|exclude|like)$/i.test(w))
+    .sort();
+}
+
+/** Migrations whose ALTER TABLE changes a column of either table (add, drop, rename, alter column): any such change forces a review of the stored-fields list. RLS and trigger ALTERs are not column changes. */
+function alteringMigrations(files: Record<string, string>): string[] {
+  return Object.entries(files)
+    .filter(([, sql]) =>
+      /alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:public\.)?"?legal_acceptance(?:_ack)?"?\s+(?:add|drop|rename|alter)\b/i.test(stripSqlComments(sql)),
+    )
+    .map(([f]) => f)
+    .sort();
+}
 
 /** Anything that reads as an unfinished retention period or other open item. Not a wording check: a draft-state detector. */
 const PLACEHOLDER =
   /\[[^\]]*\]|\b(?:TBD|TBC|TODO)\b|\bX{2,}\b|_{3,}|to be (?:confirmed|decided|determined)|\bcounsel\b/gi;
 /** Every placeholder-shaped token in a text (empty when finished). */
 const placeholdersIn = (text: string): string[] => [...text.matchAll(PLACEHOLDER)].map((m) => m[0]);
+/** Every open item across the surfaces that state the retention period: the text body, the card notice and the request-changes notice. */
+const heldFindings = (): string[] => [
+  ...placeholdersIn(getLegalText(KEY).body).map((t) => `text body: ${t}`),
+  ...placeholdersIn(LEGAL_COPY.cardNotice).map((t) => `card notice: ${t}`),
+  ...placeholdersIn(LEGAL_COPY.requestChangesNotice).map((t) => `request-changes notice: ${t}`),
+];
 
 const scratch: string[] = [];
 afterAll(() => {
@@ -67,6 +113,8 @@ describe("founder-acceptance-record: the committed bytes", () => {
     writeFileSync(path.join(d, "c.md"), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("x\n")]));
     writeFileSync(path.join(d, "d.md"), "x\x7f\n");
     writeFileSync(path.join(d, "e.md"), "x\x00y\n");
+    writeFileSync(path.join(d, "f.md"), "x\ty\n");
+    writeFileSync(path.join(d, "g.md"), "x\x1by\n");
     writeFileSync(path.join(d, "NOTES.md"), "not a key: café\n"); // uppercase: the loader skips it, so the audit does too
     const found = auditDir(d).join("\n");
     expect(found).toContain("a.md: carries a CR");
@@ -74,6 +122,8 @@ describe("founder-acceptance-record: the committed bytes", () => {
     expect(found).toContain("c.md: starts with a BOM");
     expect(found).toMatch(/d\.md: control or non-ASCII byte 0x7f/);
     expect(found).toMatch(/e\.md: control or non-ASCII byte 0x0 at offset 1/);
+    expect(found).toMatch(/f\.md: control or non-ASCII byte 0x9 at offset 1/);
+    expect(found).toMatch(/g\.md: control or non-ASCII byte 0x1b at offset 1/);
     expect(found).not.toContain("NOTES.md");
     const clean = path.join(d, "clean");
     mkdirSync(clean);
@@ -88,7 +138,7 @@ describe("founder-acceptance-record: what the loader sees", () => {
     const entry = getLegalText(KEY);
     expect(entry.key).toBe(KEY);
     expect(entry.version).toMatch(/^\d{4}-\d{2}-\d{2}$/); // the shape, not the date: counsel's edit bumps it
-    expect(Number.isNaN(Date.parse(entry.version))).toBe(false);
+    expect(new Date(`${entry.version}T00:00:00Z`).toISOString().slice(0, 10), "version must be a real calendar date").toBe(entry.version);
     expect(entry.validUntil).toBeNull();
     expect(entry.textHash).toMatch(/^[0-9a-f]{64}$/);
     expect(loadLegalTexts().has(KEY)).toBe(true);
@@ -111,30 +161,41 @@ describe("founder-acceptance-record: what the text says", () => {
     expect(FORBIDDEN_CLAIMS.test("Confirmed with an email code")).toBe(false);
   });
 
-  it("every character quantity the text states is the product's note limit, and the card notice states the same one", () => {
+  const quantities = (t: string): number[] => [...t.matchAll(/\b(\d[\d,]*)\s*(?:characters|chars)\b/gi)].map((m) => Number(m[1].replaceAll(",", "")));
+
+  it("every character quantity the text states is the product's note limit, and the card's request-changes notice states the same one", () => {
     expect.hasAssertions();
-    const stated = [...body().matchAll(/\b(\d[\d,]*)\s*(?:characters|chars)\b/gi)].map((m) => Number(m[1].replaceAll(",", "")));
-    expect([...new Set(stated)], "the text must state the note limit, and only that quantity").toEqual([REQUEST_CHANGES_MAX]);
-    expect(LEGAL_COPY.requestChangesNotice).toContain(String(REQUEST_CHANGES_MAX));
+    expect([...new Set(quantities(body()))], "the text must state the note limit, and only that quantity").toEqual([REQUEST_CHANGES_MAX]);
+    expect([...new Set(quantities(LEGAL_COPY.requestChangesNotice))], "the card's request-changes notice must state the same quantity").toEqual([REQUEST_CHANGES_MAX]);
+    expect(quantities("up to 1,000 characters and 20 chars")).toEqual([1000, 20]);
   });
 
-  it("the stored-fields list is reviewed whenever the table changes: the legal_acceptance column set is pinned", () => {
+  it("the stored-fields list is reviewed whenever the tables change: both column sets are pinned and no later migration alters either table", () => {
     expect.hasAssertions();
-    const code = M184.split("\n")
-      .map((l) => l.replace(/--.*$/, ""))
-      .join("\n");
-    const start = code.indexOf("CREATE TABLE IF NOT EXISTS public.legal_acceptance (");
-    expect(start, "the legal_acceptance table is not in migration 184").toBeGreaterThanOrEqual(0);
-    const block = code.slice(start, code.indexOf("UNIQUE (founder_id, key, text_hash)", start));
-    const columns = [...block.matchAll(/^\s{2}([a-z_]+)\s+(?:uuid|text|timestamptz)\b/gm)].map((m) => m[1]).sort();
     // Each column below is described (or deliberately omitted) in the text's "What is stored for each decision"; a new or
-    // removed column fails here so the text is reviewed with it. Update this list AND the text together.
-    expect(columns, "a legal_acceptance column was added or removed: review the text's list of what is stored").toEqual(
+    // removed column fails here so the text is reviewed with it. Update these lists AND the text together.
+    expect(tableColumns(M184, "legal_acceptance"), "a legal_acceptance column was added or removed: review the text's list of what is stored").toEqual(
       [
         "id", "founder_id", "key", "text_hash", "version", "choice", "requested_edit", "method", "reauth_method",
         "reauth_at", "session_id", "event_id", "surface", "row_hash", "created_at",
       ].sort(),
     );
+    expect(tableColumns(M185, "legal_acceptance_ack"), "the ack table changed: review the text's sentence about the monitoring marker").toEqual(["acceptance_id", "acked_at"]);
+    const files = Object.fromEntries(migrationFiles().map((f) => [f, readFileSync(path.join(MIGRATIONS, f), "utf8")]));
+    expect(alteringMigrations(files), "a migration alters legal_acceptance or its ack table: review the text's list of what is stored").toEqual([]);
+  });
+
+  it("the column pin bites: a multi-word type, a trailing constraint, a comment decoy, a later ALTER and a missing table", () => {
+    expect.hasAssertions();
+    const sql = "CREATE TABLE IF NOT EXISTS public.t (\n  id uuid PRIMARY KEY,\n  amount numeric(10, 2) NOT NULL, -- other_col text\n  at timestamp with time zone,\n  CONSTRAINT c CHECK (amount > 0),\n  UNIQUE (id, at)\n);";
+    expect(tableColumns(sql, "t")).toEqual(["amount", "at", "id"]);
+    expect(tableColumns(sql, "missing")).toEqual([]);
+    expect(alteringMigrations({ "190_x.sql": "ALTER TABLE public.legal_acceptance ADD COLUMN extra text;", "191_y.sql": "alter table legal_acceptance_ack drop column acked_at;", "192_z.sql": "ALTER TABLE other ADD COLUMN a int; -- ALTER TABLE legal_acceptance ADD x", "193_w.sql": "ALTER TABLE public.legal_acceptance ENABLE ROW LEVEL SECURITY;" })).toEqual(["190_x.sql", "191_y.sql"]);
+  });
+
+  it("the committed registry holds only the keys this file guards (a second text must extend the merge guard below first)", () => {
+    expect.hasAssertions();
+    expect([...loadLegalTexts().keys()], "a second text was added: the CI-only placeholder guard below covers only founder-acceptance-record; extend it before adding another").toEqual([KEY]);
   });
 });
 
@@ -162,24 +223,28 @@ describe("founder-acceptance-record: merge guard (counsel sign-off)", () => {
     expect(!process.env.GITHUB_ACTIONS || Boolean(process.env.CI), "GITHUB_ACTIONS is set but CI is not: the merge guard below would be skipped").toBe(true);
   });
 
-  it.skipIf(!process.env.CI)(
-    "CI only, RED BY DESIGN while the draft is held: no placeholder-shaped token is left in the text body",
-    () => {
-      expect.hasAssertions();
-      expect(
-        placeholdersIn(getLegalText(KEY).body),
-        "HELD for counsel (PR #12342): the text still has an open item. Do not edit the text, the pattern or this check to turn CI green: escalate to the operator.",
-      ).toEqual([]);
-    },
-  );
+  it("while the draft is held the detector sees its open items in the real data (a guard that finds nothing here is not guarding)", () => {
+    expect.hasAssertions();
+    // Deleted together with the guard in counsel's sign-off PR: once the retention period is written, nothing is left to find.
+    const found = heldFindings();
+    expect(found.some((f) => f.startsWith("text body: ")), "the retention placeholder is gone from the text body: this draft is no longer held, remove the guard in the sign-off PR").toBe(true);
+    expect(found.some((f) => f.startsWith("card notice: ")), "the card notice no longer carries the retention placeholder: update it in the same PR as the text").toBe(true);
+  });
+
+  it("the retention clause is the placeholder sentence and nothing else states a period", () => {
+    expect.hasAssertions();
+    const b = getLegalText(KEY).body;
+    expect(b).toMatch(/How long the record is kept:\s*\[[^\]]+\]\./);
+    expect([...b.matchAll(/\b\d+\s*(?:years?|months?|days?)\b/gi)].map((m) => m[0]), "the text states a numeric retention period before counsel confirmed it").toEqual([]);
+  });
 
   it.skipIf(!process.env.CI)(
-    "CI only, RED BY DESIGN while the draft is held: the card notice that states the same retention period has no placeholder either",
+    "CI only, RED BY DESIGN while the draft is held: no open item is left in the text body, the card notice or the request-changes notice",
     () => {
       expect.hasAssertions();
       expect(
-        [...placeholdersIn(LEGAL_COPY.cardNotice), ...placeholdersIn(LEGAL_COPY.requestChangesNotice)],
-        "HELD for counsel (PR #12342): the card notice (lib/legal-acceptance-copy.ts, pinned to the DSAR note) still has the open retention period. It is replaced in the sign-off PR together with the text; do not edit it to turn CI green.",
+        heldFindings(),
+        "HELD for counsel (PR #12342): the text or the card notice that states the same retention period still has an open item. Both are replaced in counsel's sign-off PR; do not edit the text, the card notice, the pattern or this check to turn CI green: escalate to the operator.",
       ).toEqual([]);
     },
   );
