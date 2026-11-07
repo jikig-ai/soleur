@@ -78,3 +78,11 @@
 - leg-1 root cause: `plugins/soleur/skills/verification-scaffold/test/manifest.test.sh` — new `scripts/lint-umbrella-aggregate.sh` lacked a guardrail-audit row. FIXED: added soleur-coupled row to `plugins/soleur/skills/verification-scaffold/references/guardrail-audit.md` (counts 47→48, 30→31). Local 10/10.
 - SUSPECTED: legs 2,3,4,8 likely other census-style suites flagging the new lint (verification-scaffold is leg-specific; other census suites: guard-vacuity-floor (32/32 local OK), follow-through-closure (15/15 OK), test-all-affected (running), lint-orphan-test-suites, scripts-shard-totality (51/51 OK earlier), secret-scan-smoke-gate (285/285 OK earlier).
 - Still to do: commit+push audit fix; re-check failing legs' distinct suites if more fail; once all green → `gh pr merge --admin`; then apply-github-infra watch + queue inspect + merge_group canary + census delta on #12089 + postmerge + DONE.
+
+## Ship CI fix round 2 — full leg diagnosis (run 42313516305)
+- leg1: verification-scaffold manifest — FIXED (guardrail-audit row, pushed a1d422ad5a)
+- leg2 (87/91): FAIL ci-pr-affected-replay-a (1269s), apply-github-infra-mint-shape, pr-battery-gate-saving-9323, constraint-scaffold parity — pins for surfaces this diff changed (edge decls, ruleset mint shape, battery job count, scaffold parity)
+- leg3 (93/95): test-all-corpus-weight-budget, regenerate-shard-manifest.test.sh — my registration + manifest regen drifted their pins
+- leg8 (90/91): test-all-fast-tier-budget — weight budget pin
+- leg4 (92/93): ci-pr-affected-replay-c (374s) — edge/replay pin
+- Pattern: mechanical pin updates for the new ABI. Next: fix each pin (run each suite locally to see expected-vs-actual), commit, push, wait CI green, then admin-merge.
