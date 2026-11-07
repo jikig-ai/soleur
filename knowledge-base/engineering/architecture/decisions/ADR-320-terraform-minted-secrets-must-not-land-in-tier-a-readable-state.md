@@ -25,3 +25,5 @@ The git-data root key already shows the alternative: its state moved to `soleur-
 - R2 in ADR-241 stays accepted for what already sits in that state; this ADR stops it from growing.
 - Rotating a secret that sits in readable state does not repair the exposure by itself: the next apply writes the new value to the same readable state. The rotation has to come with the move out.
 - Status is `proposed` because decision 4's gate does not exist and #10582 is open. It becomes `adopting` when a gate is filed and wired, and `accepted` when `tls_private_key.ci_ssh` has left Tier-A-readable state.
+
+Scope note 2026-11-05 (legal-acceptance verify token, see the PR-D amendment in ADR-319): Outside ADR-320 decision 1: read-only status token; the design was reviewed under decision 4 on 2026-11-05 and the review applies to the Terraform change (#12196) when it is proposed; no such `.tf` exists yet. Rotating it does not repair a leak, and it would move out of Terraform if it ever gains write reach.

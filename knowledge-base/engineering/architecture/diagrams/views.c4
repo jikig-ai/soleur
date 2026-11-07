@@ -141,7 +141,10 @@ views {
       // `containers` alone (where neither endpoint is present) produced a
       // disconnected box — the exact artifact ADR-171 warns about, shipped by the
       // PR that warns about it.
-      connectedRepoKb
+      connectedRepoKb,
+      // PR-D (ADR-319 amendment 2026-11-05): both endpoints of ship -> webapp (the check endpoint) and
+      // ship -> doppler (the one token) are listed so the edges render (#7332).
+      platform.webapp, doppler
 
     autoLayout LeftRight
   }

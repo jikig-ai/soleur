@@ -121,6 +121,16 @@ describe("middleware path routing", () => {
       expect(isPublicPath("/api/internal")).toBe(false);
     });
 
+    test("/api/internal/legal-acceptance/<key> is public and no sibling is (Bearer-gated by route, #12011 PR-D)", () => {
+      // The ship hold evaluator carries no session cookie. Without PUBLIC_PATHS membership the middleware 307s it to
+      // /login before the route's own token gate runs (learning 2026-06-01). A prefix entry (dynamic [key] segment); every
+      // handler under it must check the bearer first (verify-route-census.test.ts). A look-alike sibling is not covered.
+      expect(PUBLIC_PATHS).toContain("/api/internal/legal-acceptance");
+      expect(isPublicPath("/api/internal/legal-acceptance/terms-update")).toBe(true);
+      expect(isPublicPath("/api/internal/legal-acceptance-foo")).toBe(false);
+      expect(isPublicPath("/api/internal")).toBe(false);
+    });
+
     test("public path sub-routes are allowed", () => {
       expect(isPublicPath("/api/webhooks/stripe")).toBe(true);
       expect(isPublicPath("/callback/")).toBe(true);
