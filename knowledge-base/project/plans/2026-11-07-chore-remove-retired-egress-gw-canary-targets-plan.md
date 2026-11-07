@@ -11,6 +11,18 @@ lane: cross-domain
 brand_survival_threshold: none
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-07. **Method:** the plan was already CTO-ruled (six forks), panel-reviewed (DHH, Kieran, code-simplicity; all mechanical findings applied, see decision-challenges rows R1 and R2) and rehearsed on a scratch copy of the tree before this pass, so deepen-plan ran its halt gates and a verification sweep rather than a broad agent fan-out: the change is delete-only and every claim is checkable against the repo.
+
+**Key improvements carried in:** (1) the discoverability command was narrowed to the workflow file alone, because the first draft named the census path and tripped Phase 4.7's over-inclusive suite-shape detector (`tests/`, `test-`) although it only runs a one-second `git grep`; (2) the pointer mechanism in Phase 2 became one standalone inserted line per document so the append-only AC (no `-` line in a dated record) is satisfiable against hard-wrapped runbook paragraphs and single-line ADR paragraphs; (3) the Guard Contract rows state per-suite expected results and the exact `-lt` / `-ne` fragments, and Guard 1 rows 1-3 were already driven RED on a scratch copy.
+
+**Gate dispositions.** 4.4 precedent: sibling sequence #11653 then #11785 cited (apply run 41306010098 ended `0 destroyed`). 4.5 network: not triggered (keyword hits are negations and a learning's file name; the change drives no SSH-provisioned resource). 4.55 downtime: not triggered (no host, no database, no router). 4.6 user-brand: present, threshold `none`, with the sensitive-path scope-out line. 4.7 observability: present with the 5-field block; the command is a one-second `git grep` over one tracked file, allowlisted verb `bash`, credential-free, literal `expected_output`. 4.8 PAT: no match. 4.9 UI: no UI file. 4.10 encryption posture: not triggered (no `.tf`, migration, cloud-init or store). 4.11 guard contract: lint green (2 entries); assemblies name the distinct readers and the shared dict rather than a member list; matrices derived from the design. 4.12 scope check: one unfenced section, every row mapped, the single `inferred` row justified. 4.13 task design: not triggered (no new autonomous task).
+
+**Verification sweep (live).** Cited rule IDs: none in the plan body. Cited paths all exist (11 checked). The merge commit `d875862923` is an ancestor of `origin/main`; apply run 42369320061 head sha `d8758629231f84feb18400915bb3b6715cd6642f` (40 chars) and conclusion `success`; `32b7ee7d78` is the #11785 commit. Line anchors cited in the site table (workflow 659-660, census 1239-1242, structure suite 588-597 and 14 and 98-99, egress G2c ~290-294, runbook ~1023-1058, ADR-218 ~745-757, probe STATUS ~174) were each read in this session. No negative security claim, no SDK or library semantics and no new label or ADR ordinal is prescribed.
+
+**New considerations discovered.** The live soak probe read `verdict=pass` about eight minutes after the destroy, so the sweeper may close tracker #12189 before this PR merges; the plan treats that as expected, not as a conflict. The mirror issue #12242 had not posted after the destroy at 12:01Z, so its behaviour is read at work time, not assumed.
+
 ## Overview
 
 The throwaway canary alert pair (`logtail_exploration.egress_gw_probe_silent_canary` and `logtail_exploration_alert.egress_gw_probe_silent_canary`) was destroyed by the push-triggered apply of the retirement merge (#12268, merge `d8758629231f84feb18400915bb3b6715cd6642f`, apply run 42369320061: `Plan: 0 to add, 0 to change, 2 to destroy`, then `Apply complete! Resources: 0 added, 0 changed, 2 destroyed.`). Two bare `-target` lines in `.github/workflows/apply-web-platform-infra.yml` and two `INTENDED_DESTROYS` entries in `tests/scripts/test-infra-privileged-tier-census.sh` were kept for exactly that one apply and are now dead. This change removes them together (the suites cannot be split green), re-derives every pinned number the removal moves from real runs, and brings the runbook, ADR-218 and the probe's RETIREMENT status line to the end state by appending, never rewriting dated records.
@@ -200,7 +212,7 @@ logs:
   where: GitHub Actions logs of the apply workflow run (gh run view <id> --log) and of the CI checks
   retention: GitHub default run-log retention (90 days)
 discoverability_test:
-  command: bash -c 'n=$(git grep -lE "probe_silent_canary" -- .github/workflows/apply-web-platform-infra.yml tests/scripts/test-infra-privileged-tier-census.sh | wc -l); echo "canary_target_files=$n"'
+  command: bash -c 'n=$(git grep -lE "probe_silent_canary" -- .github/workflows/apply-web-platform-infra.yml | wc -l); echo "canary_target_files=$n"'
   expected_output: canary_target_files=0
 ```
 
