@@ -50,3 +50,13 @@ Landed on branch `feat-one-shot-10859-pr3b-required-context` (4 commits ahead of
 - Baseline re-check: `git diff 45f0b09..origin/main -- scripts/ci-pr-affected-audit.baseline.tsv` = 0 added lines (file deleted at strict zero)
 - Fixed post-subagent: 2 accept mutants edit-failed (anchors ambiguous after accept_rows added) — multi-line anchors; DECLARED_TOTAL 473->476 + leg -c 317-473->317-476 + oracle-lane manifest + runbook pin; FLOOR_ASSERTIONS 1104->1110 measured; trailing blank line removed from accept.tsv; 3 uncommitted impl files committed (draft-light anchors, accept rows, fanout-ledger)
 - Post-flip follow-up (verification subagent): full `ratchet --base <merge-base>` on committed HEAD was exit=1 (stale-accept, live=25) — 6 duplicate accept tuples landed twice in f5703a06 (dropped, c201432531); 12 anchor-not-live rows re-keyed after the RATCHET_ORACLE tuple moved; 3 bot->ci-oracle-review.* rows were not-a-gap (dropped); 38 missing boundary rows added (bot x19, arms x18, oracle-review x1) — 10094f5581. Marker now `exit=0 reason=pass live=0 baseline=0 accept=3136`; replay suite re-confirmed 1110/0 by independent subagent run.
+
+## Review Phase Complete (2026-11-07)
+
+- Panel: 9/9 seats (design pass: simplicity+arch; panel: git-history, security, code-quality, test-design, structural-enum + shellcheck/semgrep). Tier none, class code, design-risk yes.
+- Findings all resolved inline: P1 checks:read / coverage literals / job-if: pins; P2 vacuous edge check, driver circularity (step-level HEAD^1 extraction), member-staleness recorded as accepted residual in decision-challenges.md; P2 chk() vacuity + PR_BASE_SHA race fixed in fix-round.
+- 2 fix rounds + verification pass: VERIFICATION-CLEAN. Suites: oracle 24/0, bot 10/0, mgc 73/0, replay 476/476.
+- Trailers: Reviewed-By-Soleur aa42b4b119 (full 9/9); Reviewed-Fix-Round 8144e7bdea (full 3/3). Evidence comment posted on PR #12329.
+- Compound: learning file knowledge-base/project/learnings/2026-11-07-a-pin-whose-harness-runs-only-arg-two-passes-vacuously.md (9106fa9c30).
+- NEXT: soleur:ship — gates, CI polling, merge, release polling, postmerge verify.
+- Note: script-error in ship env: none. PR_BASE_SHA env was added then removed (superseded by HEAD^1).
