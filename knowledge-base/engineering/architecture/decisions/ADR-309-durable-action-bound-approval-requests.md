@@ -214,8 +214,12 @@ The same list is copied verbatim into `knowledge-base/project/specs/archive/2026
    every member invite**: inviting a second member to an enabled workspace takes it out of the cohort, so its override is removed first or in the same change.
 2. **`SENTRY_USERID_PEPPER` is non-empty in the running container** (not only set in Doppler `prd`; invariant 1 fails closed without it, and `approval-key-unavailable` pages). Verify read-only after the deploy that
    the container has it and that the `approval-key-unavailable` alert has no events. **Never rotate the pepper while any approval is live**: a rotation invalidates every pending and approved row (and changes ADR-029 pseudonyms).
-3. **Route the cron monitor** (accepted deviation, below): `scheduled_approval_expiry` is declared-unrouted under the two-PR rule and has no independent cover (the unanswered alert is emitted by the sweep itself, and no Better Stack
-   missing-`SOLEUR_APPROVAL_SWEEP` monitor exists). After its first measured check-in, route it into `cron_monitor_failure` (add its id to the sorted `monitor_ids`, delete the unrouted entry) in a follow-up PR before the flip.
+3. **Route the cron monitor** (accepted deviation, below): a dead `scheduled_approval_expiry` sweep has no independent cover other than its own Sentry cron monitor (the unanswered alert is emitted by the sweep itself, and no Better Stack
+   missing-`SOLEUR_APPROVAL_SWEEP` monitor is declared in `apps/web-platform/infra/`). Routing is **declared, not yet confirmed**: Ref #9601 (PR #12293) adds the monitor's id to the sorted `monitor_ids` of `cron_monitor_failure` and deletes its
+   unrouted entry in `cron-monitor-alerts.tf`. Once applied, a failed or missed check-in emails the issue owners, falling through to the org's active members, at the start of the failure and at most once per 24 hours per monitor (a failure inside that
+   window is not re-emailed, and there is no re-page). A read-only Sentry GET on 2026-11-07 showed the monitor `ok` with no active incident. Whoever runs the flip keeps this item open until three read-only checks hold: `apply-sentry-infra.yml` is green for
+   PR #12293's merge commit; the `cron-monitor-failure` workflow (workflows endpoint, query `cron-monitor-failure`) lists in `detectorIds` the id that the detectors endpoint (query `scheduled-approval-expiry`) returns for this monitor, checked as
+   `index("<id>")` non-null, not as a count; and no unresolved or archived Sentry issue exists for the monitor (an existing issue group would not raise a first-seen email). Re-read all three at flip time.
 4. **Real-SDK probe and post-deploy verification**: re-run the probe (`dev-probe-approval-gate.ts`, ADR-305 checklist) and confirm the post-deploy verification below is green.
 5. **Erasure and fingerprint conformance** (compliance-posture row, item (i)): after a real-database erasure of a personal workspace, `select count(*) from approval_request where workspace_id = :erased_user_id` is 0 and the
    fingerprint is keyed (pepper set, known-answer vector green); both recorded in `knowledge-base/legal/audits/`. The integration test `approval-request.tenant-isolation.test.ts` is the falsifier; `verify/180` deliberately has no row-level check (invariant 3).
@@ -237,6 +241,8 @@ The CTO review asked that the cron monitor's cover be real: name an independent 
 exists to cite, and a `sentry_cron_monitor` cannot be routed in the PR that creates it (the two-PR rule: the monitor must exist and report a measured check-in before it joins `cron_monitor_failure`'s `monitor_ids`). The monitor is therefore declared
 unrouted with its cover sentence corrected to say that no independent cover exists, and routing it is item 3 of the checklist above. Until then a dead sweep is not paged; the flag is off, so nothing depends on the sweep
 yet. The approval alerts that DO exist and are routed in this PR: `approval-gate-unanswered`, `approval-key-unavailable` and `art17-approval-anonymise-failed`.
+
+*Updated 2026-11-07 (Ref #9601, PR #12293): this change routes the monitor, so "declared unrouted" and "Until then" above describe the period before it; routing is declared and takes effect when the change is applied, and checklist item 3 holds the confirmation still owed.*
 
 ## Rollback and post-deploy verification
 

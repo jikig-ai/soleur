@@ -2219,3 +2219,246 @@ resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
     team_name = var.betterstack_paid_tier ? null : "Your team"
   }
 }
+
+# ── #12167 / epic #8211: the session relay's own bind, its silence, and the deploy-time peer dial ──
+#
+# WHAT THEY DETECT. The relay (server/proxy-listener-status.ts) reports its OWN bind from inside the app container: ONE
+# warn-level pino line per minute per web host,
+#   relay_probe proxy_state=<listening|disabled|no_bind|no_allowlist|error> addr=<ip|none> port=<n> workspaces_populated=<0|1>
+# (`addr=0.0.0.0` is the expected bound value now). warn is the level that ships (the app-container Vector filter keeps pino
+# level >= 40; info lines never reach this source). ci-deploy.sh `relay_peer_probe` dials every OTHER roster peer's relay port
+# from inside the app container after this host's prod swap and journals, under `logger -t ci-deploy`,
+#   relay_peer_probe peer=<10.0.1.x> result=<ok|refused|timeout|tls|denied>      (or `skipped=<reason>`, never an alert)
+# Three alerts, one per question:
+#   (1) relay_listener_down      - a relay NOT bound for about 5 minutes: any proxy_state other than `listening`, on either host.
+#   (2) relay_probe_silent       - a roster host stopped reporting relay_probe for 10 minutes (the relay line is the only
+#                                  off-host bind evidence, web-2 has no SSH ingress).
+#   (3) relay_peer_probe_failed  - a deploy-time peer dial came back refused|timeout|tls|denied. It fires at deploy time only,
+#                                  so the FIRST row pages (no sustained window).
+#
+# ROW SHAPE (app-container pino rows, runbook "App container pino lines" + the sandbox alert above): `raw.CONTAINER_NAME` is
+# `soleur-web-platform` on web-1 and web-2 alike and the pino fields nest under `raw.message`, so the sentence is
+# `JSONExtractString(raw, 'message', 'msg')`. LIVE-PROBED 2026-11-07 (read-only Better Stack query, after release run
+# 42357001048): both hosts' relay_probe rows carry `raw.CONTAINER_NAME` = `soleur-web-platform` and `raw.message.msg` =
+# `relay_probe proxy_state=listening addr=0.0.0.0 port=8443 workspaces_populated=<0|1>`; the ci-deploy peer rows carry
+# `raw.message` as the plain string `relay_peer_probe peer=<ip> result=<r>`.
+#
+# (1) WINDOW. The line is per minute, so a 300 s bucket holds about five rows per host. `higher_than 3` pages at four or more
+# non-listening rows in the bucket: a restart blip or one transient row never pages, a relay that stays down for about four
+# minutes does. The count is a SUM across both hosts (no GROUP BY host), so two hosts with two transient rows each also reach it;
+# accepted, because both relays not listening at once is itself page-worthy. The incident's host is read from the row's host_name
+# (soleur-web-platform = web-1, soleur-web-2 = web-2). NO host_name conjunct on purpose: the signal belongs to every web host.
+# (2) SHAPE. The host-distinct missing-host scalar of egress_gw_probe_silent (ADR-218's 2026-10-12 host-mask amendment, inverted in
+# #12180): the value is `length(var.web_hosts)` minus the DISTINCT emitting hosts (uniqExact, ClickHouse's count(DISTINCT); `least`
+# caps the subtrahend at the roster size so a surplus emitter floors the value at 0 without a signed wrap), so a fully dark window
+# reads the roster size, not "no data", and the page is `higher_than 0` (a `lower_than` incident was observed to stay open after the data
+# returned). The same open question rides with it (#12190): the evaluator is proven for the query, not for this shape, and there is
+# no canary pair here. A relay that is DISABLED still emits (proxy_state=disabled), so a host with no relay counts as alive.
+# (3) By construction `result=ok` and the whole `skipped=` class never match: literal needles with a leading space, no LIKE.
+# `skipped=exec_failed` is the probe failing to run, not a failed dial, and is deliberately not paged here.
+#
+# ALL THREE PAGE BY EMAIL ONLY (the free tier has no escalation policy; paid tier: betteruptime_policy.uptime). The deploy-time
+# alert can fire on a rolling deploy when the peer's container is mid-swap (refused) - the runbook says to re-read the row after the
+# peer's own deploy before treating it as a defect. The drift guard (test/infra/relay-probe-alerts.test.sh) reads the needles FROM
+# the emitters and pins every -target= line; terraform-target-parity.test.ts checks terraform_data only.
+locals {
+  relay_listener_down_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
+      AND startsWith(JSONExtractString(raw, 'message', 'msg'), 'relay_probe proxy_state=')
+      AND NOT startsWith(JSONExtractString(raw, 'message', 'msg'), 'relay_probe proxy_state=listening ')
+    GROUP BY time
+  SQL
+
+  relay_probe_silent_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, toInt64(${length(var.web_hosts)}) - least(toInt64(${length(var.web_hosts)}), toInt64(uniqExact(JSONExtractString(raw, 'host_name')))) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'CONTAINER_NAME') = 'soleur-web-platform'
+      AND startsWith(JSONExtractString(raw, 'message', 'msg'), 'relay_probe proxy_state=')
+  SQL
+
+  relay_peer_probe_failed_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'ci-deploy'
+      AND startsWith(JSONExtractString(raw, 'message'), 'relay_peer_probe peer=')
+      AND multiSearchAny(JSONExtractString(raw, 'message'), [' result=refused', ' result=timeout', ' result=tls', ' result=denied'])
+    GROUP BY time
+  SQL
+
+  relay_probe_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md#session-relay-probe-alerts-12167"
+}
+
+resource "logtail_exploration" "relay_listener_down" {
+  name      = "soleur-relay-listener-down-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.relay_listener_down_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "relay_listener_down" {
+  exploration_id = logtail_exploration.relay_listener_down.id
+  name           = "soleur-relay-listener-down-prd"
+
+  # About five per-minute rows per host fit one 300 s bucket; `higher_than 3` is four or more non-listening rows (sustained,
+  # see "(1) WINDOW" above). treat_as_zero: no non-listening row returns NO bucket, which must read as healthy so an open
+  # incident can observe recovery (silence is relay_probe_silent's job, not this alert's).
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 3
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A session relay reports it is NOT bound: relay_probe proxy_state is disabled, no_bind, no_allowlist or error (not listening) on at least four of the last five minutes. Peer hosts cannot proxy sessions to it. The email has no row body: read host_name (soleur-web-platform = web-1, soleur-web-2 = web-2) and the state from the runbook query. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the relay was fixed. Runbook: ${local.relay_probe_runbook_url}"
+  metadata = {
+    runbook = local.relay_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "relay_probe_silent" {
+  name      = "soleur-relay-probe-silent-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.relay_probe_silent_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "relay_probe_silent" {
+  exploration_id = logtail_exploration.relay_probe_silent.id
+  name           = "soleur-relay-probe-silent-prd"
+
+  # Value = roster hosts NOT emitting a relay_probe row in 10+ min (one row per minute per host; 1 = one dark, all dark = the
+  # roster size). 600 s is within the 900 s ceiling every alert created since 2026-10-01 stays under.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 600
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "Value = roster hosts NOT emitting a relay_probe row in 10+ min (1 = one dark, ${length(var.web_hosts)} = all dark). The relay's bind is unprovable off-host while a host is silent: the app container is down or not yet running the reporter, the app-container log path (Vector, journald) is broken on that host, or the reporter stopped. Rows on every host in the window => suspect the evaluator, not the fleet (the egress_gw_probe_silent open question, #12190). Runbook: ${local.relay_probe_runbook_url}"
+  metadata = {
+    runbook = local.relay_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+resource "logtail_exploration" "relay_peer_probe_failed" {
+  name      = "soleur-relay-peer-probe-failed-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.relay_peer_probe_failed_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "relay_peer_probe_failed" {
+  exploration_id = logtail_exploration.relay_peer_probe_failed.id
+  name           = "soleur-relay-peer-probe-failed-prd"
+
+  # The row exists only at deploy time, one per peer per deploy, so the FIRST row pages (value 0) and there is no sustained window.
+  # bwrap_probe_rollback's windows: the 5-min bucket holds ONE incident across a CI retry's repeated rows, 10 quiet minutes
+  # auto-resolve it.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A deploy-time session-relay peer dial failed: relay_peer_probe result is refused (nothing listening or unreachable), timeout, tls (handshake or certificate pin failed) or denied (the peer closed after the upgrade: its source-address allowlist does not carry this host). Sessions proxied between these hosts would fail the same way. A refused/timeout right after the peer's own deploy can be the peer container mid-swap: re-read the row after that deploy before treating it as a defect. The email has no row body: read the peer and result from the runbook query. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the dial was fixed. Runbook: ${local.relay_probe_runbook_url}"
+  metadata = {
+    runbook = local.relay_probe_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
