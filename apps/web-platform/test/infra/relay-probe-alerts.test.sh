@@ -49,6 +49,8 @@ RB="${RPA_GUARD_RB:-$REPO/knowledge-base/engineering/operations/runbooks/betters
 IV="${RPA_GUARD_IV:-$REPO/.github/workflows/infra-validation.yml}"
 GUARD_PATH="apps/web-platform/test/infra/relay-probe-alerts.test.sh"
 
+SCRATCH=()
+trap 'rm -rf ${SCRATCH[@]+"${SCRATCH[@]}"}' EXIT   # the single owning trap for every mutation scratch dir
 NOBATTERY=0; [ "${1:-}" = "--no-battery" ] && NOBATTERY=1   # argv only: an exported env value cannot skip the battery
 pass=0; fail=0; FAILED=()
 ok() { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
@@ -223,6 +225,7 @@ IV_STEP="$(grep -vE '^[[:space:]]*#' "$IV" | awk -v g="$GUARD_PATH" '/^      - /
 mutate() {  # mutate <red|green> <label> <VAR> <python body> [fragment]
   local want="$1" label="$2" var="$3" body="$4" frag="${5:-}" d out rc v
   d="$(mktemp -d)" || { no "mutation '$label': mktemp failed"; return; }
+  SCRATCH+=("$d")
   for v in TF WF TS CI RB IV; do cp "${!v}" "$d/$v"; done
   MUT_BODY="$body" python3 -c '
 import os, sys
