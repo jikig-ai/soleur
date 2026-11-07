@@ -140,6 +140,7 @@ fi
 ARM_ORDER="$(printf '%s\n' "${!ROWS[@]}" | sort)"
 for arm in $ARM_ORDER; do mkdir -p "$O/tmp-$arm"; echo "${ROWS[$arm]}" >"$O/$arm.range"; done
 MAIN=$$
+SAMPLER_T0=$SECONDS
 (  # sampler: maximum load1 and any foreign run seen while the arms run; it stops when the arms are done or this script is gone
   mx=0; ticks=0
   while kill -0 "$MAIN" 2>/dev/null && [[ ! -e "$O/.arms-done" ]]; do
@@ -177,6 +178,10 @@ verdict=CLEAN
 [[ -n "$fr_end" || -n "$fr_during" ]] && verdict=DISTURBED
 # a sampler that never ran (or died) observed nothing: that is not a clean reading
 [[ -s "$O/.sampler-ticks" && -s "$O/.max-load1" ]] || verdict=DISTURBED
+# ... and one that stopped early saw only the start: it must have ticked about once per 15 s of the arms' run (2 ticks of slack)
+sampler_ticks="$(cat "$O/.sampler-ticks" 2>/dev/null || echo 0)"
+[[ "$sampler_ticks" =~ ^[0-9]+$ ]] || sampler_ticks=0
+(( sampler_ticks >= (SECONDS - SAMPLER_T0) / 15 - 2 )) || verdict=DISTURBED
 {
   echo "loadavg_end=$(cut -d' ' -f1-3 /proc/loadavg)"
   echo "max_load1_during=$(cat "$O/.max-load1" 2>/dev/null || echo unknown)"
