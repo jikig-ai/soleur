@@ -1,8 +1,8 @@
 ---
 title: "A6 \"no known access\" record — Hetzner project holding the Inngest sole-copy volume"
-status: draft-unsigned
-date: 2026-10-30
-refreshed: 2026-11-06
+status: owner-relayed-awaiting-clo-attestation
+date: 2026-11-07
+refreshed: 2026-11-07
 related: [9927, 10382, 10136, 11218]
 related_adrs: [ADR-282]
 brand_survival_threshold: single-user incident
@@ -10,12 +10,14 @@ brand_survival_threshold: single-user incident
 
 # A6 "no known access" record — Hetzner project holding the Inngest sole-copy volume
 
-unsigned, owner sentence pending
+owner sentence relayed 2026-11-07 on #10136 (S6-A6-RELAYED); CLO attestation pending
 
-> **DRAFT, NOT SIGNED, NOT ATTESTED.** This file is prepared for the owner. It is not a record until the
-> owner signs it and `soleur:legal:clo` attests it separately. No agent signs it or sends it. The file name
-> carries the UTC date of signing; if signing happens on another day, rename the file to that date before
-> filing. Counts and roles only: no names, no email addresses, no token values.
+> **SIGNED BY RELAY, NOT YET ATTESTED.** The owner's sentence was relayed on #10136 at
+> 2026-11-07T13:31:17Z under the 2026-11-02 signing route (`S6-A6-RELAYED`, honest provenance: agent
+> drafted the example, the owner replied with it as quoted, not typed by the owner into the thread).
+> It is a record only once `soleur:legal:clo` attests it separately. No agent signs it or sends it.
+> The file name carries the UTC date of signing. Counts and roles only: no names, no email addresses,
+> no token values.
 
 > **Superseded 2026-11-02 (CLO and CTO rulings; ruled in session, recorded in
 > `plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md`, section 9, and in the A5/A6/A7 rows of
@@ -78,13 +80,17 @@ Superseded 2026-11-06: the three cells above read as follows on 2026-10-31, kept
 
 ## Owner's own sentence
 
-[EMPTY: only the owner's words, with a provenance block, per the 2026-11-02 route]
+Posted by Devin (agent) at 2026-11-07T13:31:17Z on the owner's instruction given in session at 2026-11-07T13:30:00Z. Owner's words, verbatim:
+
+> I am not aware of any person or system outside the sanctioned paths that holds usable access to the Inngest host's LUKS key material
+
+Agent-drafted text: yes (the sentence was proposed by the agent as an example; the owner replied with it as quoted). Not typed by the owner into this thread. Relayed on #10136 as `S6-A6-RELAYED`: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6707582642>.
 
 An agent-written evidence-framing block stood here from 2026-10-30 until 2026-11-06. It was removed because an agent never drafts the owner's knowledge sentence. It is recoverable from git history (commit b959fe4b84).
 
 ## Signature block
 
-- Signed by the owner (human, not an agent), by their own GitHub comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: ____________________ (comment URL)   UTC date and time: ____________Z
+- Signed by the owner (human, not an agent) through the 2026-11-02 agent-relay route, by the `S6-A6-RELAYED` comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6707582642>   UTC date and time: 2026-11-07T13:31:17Z
 - Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the owner's own sentence and the claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
 
 Superseded 2026-11-06: the two lines above used to refer to a "statement above"; that block was removed. They now point at the owner's own sentence field, which stays empty until the owner gives it in their own words.
