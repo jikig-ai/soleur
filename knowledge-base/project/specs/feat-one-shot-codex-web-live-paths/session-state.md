@@ -4218,6 +4218,23 @@
   per-hook issued-ID set grows until scope invalidation or unmount and is not
   a bounded or durable fence. The interim hard hold stays active; do not claim
   these tests qualify it.
+- Independent technical review and a synthetic event-emitter test reproduced
+  a same-user socket-confusion path: after token validation but before tenant
+  and terms bootstrap completed, a second frame from the new socket could act
+  on the old registered session. A local candidate now waits for the current
+  socket's bootstrap before routing commands, rejects concurrent first auth
+  frames, and checks socket/session identity on native and proxied dispatch.
+  It also rechecks identity after workspace/routing awaits and clears only the
+  stale socket's timers. Synthetic tests cover early frames, duplicate auth,
+  normal admission, close/supersession during workspace lookup, mocked proxy
+  handoff, and delayed close during routing. Mutation checks caught removal of
+  the proxied dispatch guard and owned-timer cleanup. This is an admission
+  improvement only: durable ordering of delayed handshakes, actions already in
+  flight, bounded bootstrap and real proxy transport are not fenced or
+  qualified. Sixteen focused socket tests and typecheck passed; the tests
+  emitted Node DEP0205 and the synthetic environment's missing Sentry pepper
+  warning. Independent review found no further concrete issue in this admission
+  slice, but did not run tests. No shared system or provider was contacted.
 - Independent local review found the injected Firestore v2 authority adapter
   accepted another command while an earlier POST remained unresolved. A
   process-local latch now refuses concurrent and changed commands and clears

@@ -184,6 +184,22 @@ describe("attachProxiedSession — owner-side pre-authed relay (#5274 Phase 3 3.
     );
   });
 
+  it("does not route a superseded proxied socket's frames to its successor", async () => {
+    const old = new FakeWs();
+    const current = new FakeWs();
+    await attachProxiedSession(old as never, { userId: USER, workspaceId: WS_ID });
+    await attachProxiedSession(current as never, { userId: USER, workspaceId: WS_ID });
+    current.sent.length = 0;
+    // Simulate a queued frame delivered during close, with an otherwise open socket.
+    old.readyState = WebSocket.OPEN;
+    old.emit("message", "not-json");
+    await new Promise((r) => setImmediate(r));
+    expect(current.sent).toEqual([]);
+    current.emit("message", "not-json");
+    await new Promise((r) => setImmediate(r));
+    expect(current.sent.map((frame) => JSON.parse(frame))).toContainEqual(expect.objectContaining({ type: "error", message: "Invalid JSON" }));
+  });
+
   it("(e) does NOT invoke the placement/routing path (already on owner)", async () => {
     const ws = new FakeWs();
     await attachProxiedSession(ws as never, { userId: USER, workspaceId: WS_ID });

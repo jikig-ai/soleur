@@ -3913,6 +3913,8 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
   // New connection — auth moves to first message
   wss.on("connection", (ws: WebSocket, _req: unknown, clientIp: string) => {
     let authenticated = false;
+    let authStarted = false;
+    let commandsReady = false;
     let userId: string | null = null;
 
     // ---- Auth timeout: close if no auth message within 5 seconds ----
@@ -3928,6 +3930,11 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
     // ---- Message handling ----
     ws.on("message", async (data) => {
       if (!authenticated) {
+        if (authStarted) {
+          ws.close(WS_CLOSE_CODES.AUTH_REQUIRED, "Auth already in progress");
+          return;
+        }
+        authStarted = true;
         // First message MUST be { type: "auth", token: "..." }
         let msg: { type: string; token?: string };
         try {
@@ -4031,6 +4038,14 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);
+        const stillRegistered = () => {
+          if (ws.readyState === WebSocket.OPEN && sessions.get(user.id) === newSession) return true;
+          if (newSession.subscriptionRefreshTimer) clearInterval(newSession.subscriptionRefreshTimer);
+          if (newSession.idleTimer) clearTimeout(newSession.idleTimer);
+          if (pingInterval) { clearInterval(pingInterval); pingInterval = undefined; }
+          if (ws.readyState === WebSocket.OPEN) ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
+          return false;
+        };
 
         // Phase 5.5 / Kieran C5: bind userId → current workspace_id so
         // workspace-membership.ts:removeWorkspaceMember can SIGTERM only the
@@ -4045,6 +4060,7 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
             user.id,
             tenantBootstrap as never,
           );
+          if (!stillRegistered()) return;
           let workspaceId: string | null = null;
           if (orgId) {
             workspaceId = await getWorkspaceForUserInOrganization(
@@ -4052,6 +4068,7 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
               orgId,
               tenantBootstrap as never,
             );
+            if (!stillRegistered()) return;
           }
           // Fallback to default workspace (oldest by created_at — collapses
           // to N2 invariant `workspace_id === user_id` for solo users).
@@ -4061,7 +4078,9 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
                 user.id,
                 tenantBootstrap as never,
               );
+              if (!stillRegistered()) return;
             } catch {
+              if (!stillRegistered()) return;
               // Pre-Phase-1 migration users (no workspace_members row yet)
               // fall through with no binding — abortAllWorkspaceMemberSessions
               // becomes a no-op for them which is the safe pre-multi-tenant
@@ -4081,6 +4100,8 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
             extra: { userId: user.id },
           });
         }
+
+        if (!stillRegistered()) return;
 
         for (const [key, timer] of pendingDisconnects) {
           if (key.startsWith(`${userId}:`)) {
@@ -4142,7 +4163,7 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
             });
             route = { decision: "local" as const, reason: "cold" as const };
           }
-          if (ws.readyState !== WebSocket.OPEN) return; // closed during the await
+          if (!stillRegistered()) return;
           if (route.decision === "owner-unresolved") {
             // A peer owns the lease but its address is not resolvable — fail loud
             // (already Sentry'd in the router). Non-transient close → the client
@@ -4170,18 +4191,21 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
           // decision === "local" → fall through and serve here.
         }
 
+        if (!stillRegistered()) return;
         ws.send(JSON.stringify({ type: "auth_ok" }));
+        commandsReady = true;
         return;
       }
 
       // Authenticated — route to handleMessage
+      // A token alone is not proof this socket owns the registered session.
+      if (!commandsReady || !userId || ws.readyState !== WebSocket.OPEN || sessions.get(userId)?.ws !== ws) return;
       handleMessage(userId!, data.toString()).catch((err) => {
         Sentry.captureException(err);
         log.error({ userId, err }, "Unhandled message error");
-        sendToClient(userId!, {
-          type: "error",
-          message: "Internal server error",
-        });
+        if (sessions.get(userId!)?.ws === ws) {
+          sendToClient(userId!, { type: "error", message: "Internal server error" });
+        }
       });
     });
 
@@ -4364,7 +4388,7 @@ export async function attachProxiedSession(
 
   // Socket may have closed during the read — tear down the registration we made
   // above (grace-abort is a no-op: no conversation is active on a fresh attach).
-  if (ws.readyState !== WebSocket.OPEN) {
+  if (ws.readyState !== WebSocket.OPEN || sessions.get(userId) !== session) {
     teardownAuthedSessionOnClose(userId, ws);
     return;
   }
@@ -4402,10 +4426,11 @@ export async function attachProxiedSession(
   // Authenticated frames route straight to handleMessage — no auth branch (the
   // socket arrived pre-authed).
   ws.on("message", (data: unknown) => {
+    if (ws.readyState !== WebSocket.OPEN || sessions.get(userId) !== session) return;
     handleMessage(userId, String(data)).catch((err) => {
       Sentry.captureException(err); // Sentry carries the error; local breadcrumb omits raw userId (#3698)
       log.error({ err }, "Unhandled message error (proxied)");
-      sendToClient(userId, { type: "error", message: "Internal server error" });
+      if (sessions.get(userId) === session) sendToClient(userId, { type: "error", message: "Internal server error" });
     });
   });
 
