@@ -4281,12 +4281,12 @@ ctl_duplicate_refused && pass "control: a mutant that repeats an earlier one (sa
 if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_KILLED of $MUT_RUN)"; else fail "mutants killed $MUT_KILLED of $MUT_RUN"; fi
 
 # Anti-vacuity floors, reported through printf + exit so they never ride on the helpers they guard. Ranged form
-# (ROWS-SPLIT, #11562): the unconditional share is FLOOR_ASSERTIONS - DECLARED_TOTAL (700 measured passes:
+# (ROWS-SPLIT, #11562): the unconditional share is FLOOR_ASSERTIONS - DECLARED_TOTAL (631 measured passes:
 # fixture builds, row_*/chk assertions, the ctl-* controls and the kill summaries above — all run on every arm);
-# the ranged share is exactly the EXECUTED in-range sites. A full run (no flag) reproduces the old 1282 floor.
+# the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1104   # 1313 minus the retired observation-window section's 209 unconditional assertions (probe retired 2026-11-07 with #10865 closed); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1104   # 1313 minus the retired observation-window section's 209 assertions (129 gated ow_mutate sites + 80 unconditional; probe retired 2026-11-07 with #10865 closed); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
