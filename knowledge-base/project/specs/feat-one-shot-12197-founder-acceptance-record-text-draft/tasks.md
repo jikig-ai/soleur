@@ -7,13 +7,13 @@ DRAFT, HOLD: the PR (#12342) stays draft. Never `gh pr ready`, never merge, neve
 ## Phase 1: Setup
 
 - 1.1 Confirm the worktree and branch (`pwd`, `git branch --show-current`) and that PR #12342 is still a draft.
-- 1.2 Re-read `apps/web-platform/server/legal-acceptance/texts/README.md` and `canonical.ts`; confirm nothing changed since the plan. If counsel has edited `founder-acceptance-record.proposed.md` since the plan, take the file as it is and recompute the hash.
+- 1.2 Re-read `apps/web-platform/server/legal-acceptance/texts/README.md` and `canonical.ts`; confirm nothing changed since the plan. If counsel has edited the committed text since the plan, take the file as it is and recompute the hash (the `.proposed.md` copy was deleted at review).
 
 ## Phase 2: Core Implementation (RED first)
 
 - 2.1 Write `apps/web-platform/test/legal-acceptance/founder-acceptance-record.test.ts`: `auditDir(dir)` raw-byte loop (no 0x0D, nothing above 0x7F, no BOM, at least one key) with a temp-dir negative control; shared `FORBIDDEN` regex with a planted-string control; the body's single `up to (\d+) characters` equals `REQUEST_CHANGES_MAX`; loader version matches `^\d{4}-\d{2}-\d{2}$` and `validUntil` is null; `it.skipIf(!process.env.CI)` merge guard (no `\[[^\]\n]*\]` token in the body). Run it and cite the RED output (the text does not exist yet).
 - 2.2 Extend `apps/web-platform/test/legal-acceptance/cross-layer-limits.test.ts`: extract both note-limit literals from migration 184 (the `requested_edit` CHECK and the RPC `char_length(p_requested_edit) > 1000` guard) using the file's existing comment-stripping helpers; each equals `REQUEST_CHANGES_MAX`; an empty extraction fails.
-- 2.3 Copy the proposal byte for byte: `cp knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/founder-acceptance-record.proposed.md apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`, then `cmp` (exit 0). Do not run any formatter or `--fix` on it. Add a one-line superseded note to the `.proposed.md`.
+- 2.3 Copy the proposal byte for byte: `cp knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/founder-acceptance-record.proposed.md apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`, then `cmp` (exit 0). Do not run any formatter or `--fix` on it. (Done; the `.proposed.md` was later deleted at review so there is one authority.)
 - 2.4 Rename the stale `canonical.test.ts` title only; refresh the `routes.test.ts` comment and the `server/legal-acceptance/README.md` sentence.
 
 ## Phase 3: Verification

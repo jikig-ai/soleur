@@ -8,9 +8,10 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as copy from "@/lib/legal-acceptance-copy";
+import { FORBIDDEN_CLAIMS } from "./forbidden-claims";
 
 const NOTE = join(__dirname, "..", "..", "..", "..", "knowledge-base", "legal", "audits", "2026-11-founder-legal-acceptance-dsar-and-notice-note.md");
-const FORBIDDEN = /verified|reviewed|legally binding|audit-ready|compliant/i;
+const FORBIDDEN = FORBIDDEN_CLAIMS; // one list for the deck and the committed texts (forbidden-claims.ts)
 
 /** Every string reachable from an export, calling function-valued entries with representative arguments. */
 function collect(v: unknown, out: string[] = []): string[] {

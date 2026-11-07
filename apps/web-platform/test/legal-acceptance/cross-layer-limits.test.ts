@@ -607,18 +607,27 @@ describe("the minted token (legal-acceptance-secrets.tf) against the route bound
 
 // ── the note limit (founder-acceptance-record states it; #12197) ─────────────────────────────────────────────────
 
-/** Both note-limit literals of migration 184, comments stripped: the `requested_edit` CHECK upper bound and the RPC argument guard. */
-export function extractSqlNoteLimits(sql: string): { check: number[]; rpc: number[] } {
+/** Both note-limit literals of one migration, comments (line and block) stripped, duplicates collapsed. Empty arrays when it states none. */
+export function noteLimitsIn(sql: string): { check: number[]; rpc: number[] } {
   const code = sql
+    .replace(/\/\*[\s\S]*?\*\//g, "")
     .split("\n")
     .map((l) => l.replace(/--.*$/, ""))
     .join("\n");
-  const check = [...code.matchAll(/char_length\(requested_edit\)\s+BETWEEN\s+1\s+AND\s+(\d+)/g)].map((m) => Number(m[1]));
-  const rpc = [...code.matchAll(/char_length\(p_requested_edit\)\s*>\s*(\d+)/g)].map((m) => Number(m[1]));
+  const nums = (re: RegExp): number[] => [...new Set([...code.matchAll(re)].map((m) => Number(m[1])))];
+  return {
+    check: nums(/char_length\(requested_edit\)\s+BETWEEN\s+1\s+AND\s+(\d+)/g),
+    rpc: nums(/char_length\(p_requested_edit\)\s*>\s*(\d+)/g),
+  };
+}
+
+/** Migration 184's two note-limit literals (the CHECK upper bound and the RPC argument guard); throws when either is missing. */
+export function extractSqlNoteLimits(sql: string): { check: number[]; rpc: number[] } {
+  const { check, rpc } = noteLimitsIn(sql);
   return { check: nonEmpty("SQL requested_edit CHECK upper bound", check), rpc: nonEmpty("SQL p_requested_edit RPC guard", rpc) };
 }
 
-describe("note limit (REQUEST_CHANGES_MAX against migration 184)", () => {
+describe("note limit (REQUEST_CHANGES_MAX against the migrations)", () => {
   it("the CHECK upper bound and the RPC guard are both the TypeScript limit", () => {
     expect.hasAssertions();
     const { check, rpc } = extractSqlNoteLimits(M184);
@@ -626,10 +635,24 @@ describe("note limit (REQUEST_CHANGES_MAX against migration 184)", () => {
     expect(rpc).toEqual([REQUEST_CHANGES_MAX]);
   });
 
-  it("the extractor sees a drift in either literal, and an empty extraction throws", () => {
+  it("no migration restates the note limit with another value (a later CREATE OR REPLACE or ALTER is read too)", () => {
+    expect.hasAssertions();
+    const dir = path.join(WEB, "supabase/migrations");
+    const mentioning = readdirSync(dir).filter((f) => f.endsWith(".sql") && !f.endsWith(".down.sql") && read(path.join(dir, f)).includes("requested_edit"));
+    expect(mentioning).toContain("184_legal_acceptance.sql");
+    for (const f of mentioning) {
+      const { check, rpc } = noteLimitsIn(read(path.join(dir, f)));
+      for (const n of [...check, ...rpc]) expect(n, `${f} states a note limit other than REQUEST_CHANGES_MAX`).toBe(REQUEST_CHANGES_MAX);
+    }
+  });
+
+  it("the extractor sees a drift in either literal, a block-comment decoy and a repeated guard are not misread, an empty extraction throws", () => {
     expect.hasAssertions();
     expect(extractSqlNoteLimits(M184.replace("AND 1000)", "AND 1001)")).check).not.toEqual([REQUEST_CHANGES_MAX]);
     expect(extractSqlNoteLimits(M184.replace("p_requested_edit) > 1000", "p_requested_edit) > 999")).rpc).not.toEqual([REQUEST_CHANGES_MAX]);
+    expect(extractSqlNoteLimits(`${M184}\n/* char_length(p_requested_edit) > 2000 */`).rpc).toEqual([REQUEST_CHANGES_MAX]);
+    expect(extractSqlNoteLimits(`${M184}\n  OR char_length(p_requested_edit) > 1000`).rpc).toEqual([REQUEST_CHANGES_MAX]);
+    expect(extractSqlNoteLimits(`${M184}\n  OR char_length(p_requested_edit) > 5000`).rpc).toEqual([REQUEST_CHANGES_MAX, 5000]);
     expect(() => extractSqlNoteLimits("-- char_length(requested_edit) BETWEEN 1 AND 1000 only in a comment\nselect 1;")).toThrow(/found nothing/);
   });
 });

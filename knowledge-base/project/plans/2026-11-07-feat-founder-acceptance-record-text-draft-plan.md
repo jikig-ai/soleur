@@ -37,7 +37,7 @@ status: DRAFT pending counsel sign-off
 
 Add the first committed text to the legal-acceptance registry (ADR-319, #12011): key `founder-acceptance-record`, file `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`, front-matter `version: 2026-11-07`, no `valid_until`, LF only, ASCII only. The subject, chosen by the operator, is an acknowledgement of how the founder's decisions are recorded and kept. It says only what the shipped system does and binds the founder to nothing beyond the record itself.
 
-The byte-exact proposal lives at `knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/founder-acceptance-record.proposed.md` and is reproduced under "Exact file content" below. The work phase copies it to the registry path unchanged.
+The proposal is reproduced under "Exact file content" below as a labelled SNAPSHOT. The work phase copied it to the registry path unchanged; the committed file is the only authority afterwards (review deleted the separate `.proposed.md` copy, so there is one text file and one snapshot).
 
 Nothing in this plan records an acceptance, touches the `approval-queue` flag, or acts on production.
 
@@ -77,7 +77,7 @@ Nothing in this plan records an acceptance, touches the `approval-queue` flag, o
 
 ## Exact file content (what the work phase writes)
 
-Target path: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`. The block between the fences is a SNAPSHOT of the whole file (the brief asks for the exact content in the plan; the operator's scope governs over the CTO's preference to link only, so it is embedded and the drift risk is closed by `cmp`, below). Authority: until the copy, `founder-acceptance-record.proposed.md` is the source; at copy time `cmp` between it and the committed file must exit 0; from then on the COMMITTED file is the only authority, counsel edits only it, and the `.proposed.md` is marked superseded (first line of that file, ASCII note) in the same commit. The plan snapshot and hash are not updated afterwards. the card renders only the part after the closing front-matter line, in a `whitespace-pre-wrap` block with no markdown rendering, so each paragraph is one line and lists are plain dashes.
+Target path: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`. The block between the fences is a SNAPSHOT of the whole file (the brief asks for the exact content in the plan; the operator's scope governs over the CTO's preference to link only, so it is embedded and the drift risk is closed by `cmp`, below). Authority: until the copy, this snapshot was the source (the separate `.proposed.md` copy was deleted at review); at copy time `cmp` between it and the committed file must exit 0; from then on the COMMITTED file is the only authority, counsel edits only it, and the `.proposed.md` is marked superseded (first line of that file, ASCII note) in the same commit. The plan snapshot and hash are not updated afterwards. the card renders only the part after the closing front-matter line, in a `whitespace-pre-wrap` block with no markdown rendering, so each paragraph is one line and lists are plain dashes.
 
 ```text
 ---
@@ -164,7 +164,7 @@ Deliberate omissions (not in the text, listed for counsel): the short-lived code
 
 - `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` (copy of the proposal, byte for byte, `cmp` exit 0)
 - `apps/web-platform/test/legal-acceptance/founder-acceptance-record.test.ts` (text-specific checks, about five `it` blocks; see Guard Contract). It lives in its own file because counsel's edit rewrites exactly these checks.
-- Already created by planning: `knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/{founder-acceptance-record.proposed.md,decision-challenges.md,tasks.md}`
+- Already created by planning: `knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/{decision-challenges.md,tasks.md}` (the `.proposed.md` copy was deleted at review)
 
 ## Files to Edit
 
@@ -327,7 +327,7 @@ None. Checked open `code-review` issues for `legal-acceptance/texts`, `legal-acc
 
 <!-- founder-stated check: see plan-founder-check.md -->
 
-- [ ] AC1: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` is byte-identical to the proposal (`cmp` against `founder-acceptance-record.proposed.md` exits 0, re-run after the final commit), starts with `---`, `version: 2026-11-07`, `---`, has no `valid_until`, ends with one LF. After the copy the `.proposed.md` gets a one-line superseded note and the committed file is the only authority.
+- [ ] AC1: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` was byte-identical to the proposal at copy time (`cmp` exit 0; the `.proposed.md` was deleted at review, and review corrected the ack-marker sentence in the committed file, so the plan snapshot is history), starts with `---`, `version: 2026-11-07`, `---`, has no `valid_until`, ends with one LF. The committed file is the only authority.
 - [ ] AC2: `LC_ALL=C grep -c -P '[^\x00-\x7F]'` and `grep -c $'\r'` on the committed file both print 0; `git check-attr eol` for the path reports `lf`; `cmp` (AC1) after the commit proves no hook rewrote it.
 - [ ] AC3: `markdownlint` with the repo `.markdownlint.json` run on the committed path (not only on a copy) exits 0, and the same run is repeated on the changed `server/legal-acceptance/README.md`.
 - [ ] AC4: `sha256sum` of the committed file equals `textHash` from `loadLegalTexts()` and the value printed in the PR body. The plan's value `acd38414...c9db` is a snapshot of the draft bytes; the PR body states the value of the bytes actually committed (they are identical unless counsel edited before the work phase).
@@ -381,4 +381,4 @@ No change to the card, copy deck, routes, migrations, Dockerfile, flag, publishe
 - The file name is the key and the card title (`legalTextLabel`): renaming it later is a new key and a new row set.
 - Do not cite the `1000` limit from memory in any future edit: it is asserted against the code (text vs constant vs both SQL literals).
 - With `CI_DRAFT_LIGHT=on` the new vitest file does not run in CI on the draft, so the PR body must carry the local output, including the `CI=1` run.
-- The three copies of the text (plan snapshot, `.proposed.md`, committed file) are reconciled by `cmp` at copy time only; afterwards the committed file wins and the plan snapshot is never edited.
+- The plan snapshot and the committed file were reconciled by `cmp` at copy time only; afterwards the committed file wins and the plan snapshot is never edited (so it is history, not the text counsel signs; review corrected the ack-marker sentence in the committed file only).

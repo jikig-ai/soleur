@@ -17,7 +17,7 @@ What is stored for each decision
 - A checksum of the record.
 - If you chose Request changes, the note you wrote, up to 1000 characters.
 
-The record also holds fixed technical labels (a web session, and for a Yes the email code method) and the identifier of the request the decision answers. A separate marker, linked to the record's identifier, notes the time the web service finished recording the decision.
+The record also holds fixed technical labels (a web session, and for a Yes the email code method) and the identifier of the request the decision answers. A separate marker, linked to the record's identifier, may note when the web service reported the decision to Jikigai's monitoring; it can be missing.
 
 How a decision is given
 

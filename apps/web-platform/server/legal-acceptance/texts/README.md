@@ -4,8 +4,14 @@ One committed file per key: `<key>.md`, LF line endings, a front-matter block wi
 `valid_until`), then the text the founder reads. The file name is the key. The hash recorded against a decision is the
 sha256 of the file's raw bytes (`sha256sum <file>` gives the same value). See `../canonical.ts` and ADR-319.
 
-Do not add a text here without counsel's sign-off on its wording. A change to a published file is a new version:
-the old hash stays valid for the decisions already recorded against it.
+Do not add a text here without counsel's sign-off on its wording. The one exception is a HELD DRAFT on a draft PR whose
+CI-only merge guard (`test/legal-acceptance/founder-acceptance-record.test.ts`) stays red while any placeholder is left, as
+`founder-acceptance-record` is until counsel's sign-off PR replaces the placeholder, bumps `version` and adds the published
+`{version: sha256}` pin. A change to a published file is a new version: the old hash stays valid for the decisions already
+recorded against it.
+
+The committed texts are LF-only printable ASCII with no BOM (the byte audit in that test file); a text that needs other
+characters needs that rule revisited first.
 
 ## How the texts reach the production image
 

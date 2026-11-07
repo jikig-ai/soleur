@@ -28,7 +28,7 @@ it does not drop this directory today; the `!server/legal-acceptance/texts/*.md`
 the image (bundle at `dist/server`, texts under `server/legal-acceptance/texts`, cwd at the app root), runs it with
 node and compares the hash with `sha256sum`. It also asserts the Dockerfile COPY and the `.dockerignore` re-include. That
 covers the esbuild bundle layout; the Next-compiled routes and pages rely on the same cwd convention (`WORKDIR /app`,
-`node dist/server/index.cjs`). The post-deploy registry smoke (a key loaded from inside the container) stays open (#12197): a key can only be loaded from inside the container once a text is committed and deployed (the first one, `founder-acceptance-record`, waits for counsel's sign-off); until then every key answers 404.
+`node dist/server/index.cjs`). The post-deploy registry smoke (a key loaded from inside the container) stays open (#12197): a key can only be loaded from inside the container once a text is committed and deployed. The first one, `founder-acceptance-record`, is a draft held for counsel's sign-off; the smoke stays open until a text is published and answered.
 
 ## Sentry ops
 
