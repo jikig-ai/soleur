@@ -413,7 +413,7 @@
 1	plugins/soleur/test/lint-bot-synthetic-statuses.test.sh
 1	plugins/soleur/test/lint-distribution-content.test.sh
 11	plugins/soleur/test/lint-questionnaire-identity.test.sh
-22	plugins/soleur/test/mint-origin-ca-cert.test.sh
+23	plugins/soleur/test/mint-origin-ca-cert.test.sh
 1	plugins/soleur/test/notice-frontmatter.test.sh
 2	plugins/soleur/test/operator-digest-provision.test.sh
 1	plugins/soleur/test/operator-script.test.sh
