@@ -1,4 +1,4 @@
-# reading=control2 source=run.log [run] stamps; engaged_at_s=244.642; columns: suite, start_s (log-relative), done_s, wall_ms, rc
+# reading=control2 source=run.log [run] stamps; engaged_at_s=244.642; columns: suite, start_s (log-relative), done_s, wall_ms, rc; rows whose done line reads "verdict at drain" carry wall_ms = (done_s - start_s)*1000
 scripts/lint-rule-ids-live	245.140	245.215	66	0
 scripts/lint-rule-bodies-live	245.237	245.334	86	0
 scripts/lint-agents-rule-budget-live	245.355	245.407	42	0
@@ -93,7 +93,7 @@ scripts/followthrough-predicate-parity	900.506	902.875	2355	0
 scripts/follow-through-closure-guard	902.887	903.744	843	0
 scripts/infra-credentials-loader	903.758	907.122	3353	0
 scripts/lint-workflow-issue-write-scope-live	907.135	907.689	539	0
-apps/web-platform [repo-wide+component]	819.715	909.442	verdict at drain	1
+apps/web-platform [repo-wide+component]	819.715	909.442	89727	1
 scripts/lint-diagnosis-claims	907.704	909.973	2255	0
 scripts/generate-kb-index-live	909.987	912.053	2053	0
 apps/web-platform [unit]	909.468	955.680	46201	0

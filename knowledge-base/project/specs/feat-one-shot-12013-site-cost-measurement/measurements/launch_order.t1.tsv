@@ -1,4 +1,4 @@
-# reading=t1 source=run.log [run] stamps; engaged_at_s=227.313; columns: suite, start_s (log-relative), done_s, wall_ms, rc
+# reading=t1 source=run.log [run] stamps; engaged_at_s=227.313; columns: suite, start_s (log-relative), done_s, wall_ms, rc; rows whose done line reads "verdict at drain" carry wall_ms = (done_s - start_s)*1000
 scripts/lint-rule-ids-live	227.719	227.783	53	0
 scripts/lint-rule-bodies-live	227.819	227.930	97	0
 scripts/lint-agents-rule-budget-live	227.952	228.013	54	0
@@ -95,7 +95,7 @@ scripts/infra-credentials-loader	888.623	892.248	3609	0
 scripts/lint-workflow-issue-write-scope-live	892.263	892.617	341	0
 scripts/lint-diagnosis-claims	892.632	895.279	2631	0
 scripts/generate-kb-index-live	895.294	897.179	1871	0
-apps/web-platform [repo-wide+component]	809.587	898.494	verdict at drain	1
+apps/web-platform [repo-wide+component]	809.587	898.494	88907	1
 apps/web-platform [unit]	898.514	930.956	32421	0
 tests/scripts/infra-privileged-tier-census	897.195	946.614	49408	0
 apps/web-platform/infra/inngest-luks-sole-copy	946.627	992.666	46025	0
@@ -144,7 +144,7 @@ plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	1419
 plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	1420.675	1420.900	212	0
 plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	1420.946	1421.293	327	0
 plugins/soleur/skills/eval-harness/test/registry-completeness.test.sh	1421.346	1422.419	1058	0
-.claude/hooks/grep-q-pipe-guard.test.sh	1422.485	1454.708	verdict at drain	1
+.claude/hooks/grep-q-pipe-guard.test.sh	1422.485	1454.708	32223	1
 .claude/hooks/hookeventname-coverage.test.sh	1454.744	1456.788	2033	0
 .claude/hooks/incident-sandbox-coverage.test.sh	1456.823	1458.815	1976	0
 .claude/hooks/kb-domain-allowlist-guard.test.sh	1458.852	1460.826	1948	0
