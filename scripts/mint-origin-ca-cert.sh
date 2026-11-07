@@ -46,7 +46,9 @@ umask 077
 readonly MC_HOST="app.soleur.ai"
 readonly MC_DOPPLER_PROJECT="soleur"
 readonly MC_PRD_CONFIG="prd"
-readonly MC_TF_CONFIG="prd_terraform"
+readonly MC_TF_CONFIG="prd_terraform"   # CF_ZONE_ID (an identifier, not a credential) still lives here
+readonly MC_TIERB_PROJECT="soleur-infra-privileged"   # the Cloudflare credential lives in the Tier-B project (ADR-241)
+readonly MC_TIERB_CONFIG="prd"
 readonly MC_KEY_NAME="ORIGIN_TLS_KEY_B64"
 readonly MC_CERT_NAME="ORIGIN_TLS_CERT_B64"
 readonly MC_CF_TOKEN_NAME="CF_API_TOKEN_ORIGIN_CA"
@@ -259,9 +261,10 @@ mc_run() {
   trap mc_cleanup EXIT
   trap 'mc_cleanup; exit 130' INT TERM
 
-  # 1. The Cloudflare credential and the zone, read value-silently from prd_terraform.
-  cf_token="$(mc_get "$MC_DOPPLER_PROJECT" "$MC_TF_CONFIG" "$MC_CF_TOKEN_NAME")" || cf_token=""
-  [[ -n "$cf_token" ]] || { mc_refuse cf_token_unreadable "CF_API_TOKEN_ORIGIN_CA could not be read from soleur/prd_terraform; nothing was written"; return 1; }
+  # 1. The Cloudflare credential (Tier-B project soleur-infra-privileged/prd, main-only) and the zone id (soleur/prd_terraform),
+  #    read value-silently. The credential is NOT read from prd_terraform: that config is Tier-A readable by any branch workflow.
+  cf_token="$(mc_get "$MC_TIERB_PROJECT" "$MC_TIERB_CONFIG" "$MC_CF_TOKEN_NAME")" || cf_token=""
+  [[ -n "$cf_token" ]] || { mc_refuse cf_token_unreadable "CF_API_TOKEN_ORIGIN_CA could not be read from soleur-infra-privileged/prd; nothing was written"; return 1; }
   mc_mask "$cf_token"
   if [[ ! "$cf_token" =~ ^[A-Za-z0-9._~+/=-]+$ ]]; then mc_refuse cf_token_shape "CF_API_TOKEN_ORIGIN_CA is not a one-line bearer token; nothing was written"; return 1; fi
   zone="$(mc_get "$MC_DOPPLER_PROJECT" "$MC_TF_CONFIG" "$MC_ZONE_NAME")" || zone=""

@@ -162,14 +162,17 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    required reviewers (#11923), so the typed confirm alone is a fat-finger guard; running the write on the reviewer-gated
    environment adds a human approval as a second key. Both environments are main-only and carry
    `DOPPLER_TOKEN_INFRA_PRIVILEGED`.
-2. **Credentials.** The Cloudflare token `CF_API_TOKEN_ORIGIN_CA` and `CF_ZONE_ID` are read from `soleur/prd_terraform`; the write to
-   `soleur/prd` uses the workplace provider token the Tier-B loader exports (`TF_VAR_doppler_token_tf`), the only credential that
-   writes the `soleur/prd` root (ADR-307 fact 3: no CI token writes it generically, and a new narrow write token would be an
-   operator credential mint for no gain). The script runs in a deny-by-default child environment so the loader's other exports
-   (Hetzner, R2, GitHub App material) never reach it. **Residual:** `prd_terraform` is Tier-A readable (ADR-241), so a branch actor
-   can read `CF_API_TOKEN_ORIGIN_CA` there. Its blast radius is bounded: it can mint Origin CA certificates for `soleur.ai` hostnames,
-   which only Cloudflare trusts (not a browser-trusted certificate), and cannot change any rule or record. Moving the token into
-   `soleur-infra-privileged` is the clean fix and is an operator credential move; it is not done here.
+2. **Credentials.** The Cloudflare token `CF_API_TOKEN_ORIGIN_CA` is read from the Tier-B project `soleur-infra-privileged/prd` (main-only
+   environments, ADR-241); `CF_ZONE_ID` (an identifier, not a credential) from `soleur/prd_terraform`. The write to `soleur/prd` uses
+   the workplace provider token the Tier-B loader exports (`TF_VAR_doppler_token_tf`), the only credential that writes the
+   `soleur/prd` root (ADR-307 fact 3: no CI token writes it generically, and a new narrow write token would be an operator credential
+   mint for no gain). The script runs in a deny-by-default child environment so the loader's other exports (Hetzner, R2, GitHub App
+   material) never reach it. **History:** slice 2 first shipped reading the token from `soleur/prd_terraform`, which is Tier-A readable
+   (ADR-241), so any branch workflow could read it; a follow-up moved it to the Tier-B project and the script no longer falls back
+   to `prd_terraform` (a suite row pins that a token present only there is refused). **Residual until the owner deletes the old copy:**
+   the original value still sits in `soleur/prd_terraform`. Its blast radius is bounded (it can mint Origin CA certificates for
+   `soleur.ai` hostnames, which only Cloudflare trusts, and cannot change any rule or record), and deleting it from `prd_terraform`
+   is an owner act in Doppler, not done by this change.
 3. **Policy.** Nothing in `prd`, or a half-set, unparseable, wrong-host, expired or at most 90 days to expiry pair: mint. A valid pair
    with more than 90 days left: refused (`already_minted_not_expiring`) unless `replace=true`, which also changes the typed confirm to
    `MINT-ORIGIN-CA-REPLACE-<date>`. A replace never revokes the old certificate (a running container may still hold it until the
