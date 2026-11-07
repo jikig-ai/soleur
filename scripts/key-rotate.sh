@@ -14,7 +14,8 @@
 #   key-rotate.sh apply               re-checks, value-silent pre-state, plan, five-field projection, gate, apply, post-state
 #                                     (EFF_MODE=plan: everything up to and including the gate, writes nothing). Egress apply-A
 #                                     also feeds the old CURRENT into TF_VAR_egress_audit_ingest_token_previous (env only).
-#   key-rotate.sh redeploy recheck|track|vector|verdict   the steps of the redeploy job; `vector` runs for egress only and
+#   key-rotate.sh redeploy recheck|track|vector|verdict   the steps of the redeploy job; `vector` runs for egress only and,
+#                                     after a settle gate confirms every roster host's deploy slot is terminal,
 #                                     dispatches `restart vector _ _` over the deploy webhook, then polls the merged
 #                                     deploy-status until EVERY host reports a fresh component=vector success frame
 #   key-rotate.sh clear               egress only: plan+apply -replace of doppler_secret.egress_audit_ingest_token_previous
@@ -155,6 +156,12 @@ KK_APPROVE_JOB_S=$((KK_APPROVE_STEP_S + KR_JOB_SLACK_S))
 # propagation across the fan-out (the per-peer read itself is bounded at 3 s by cat-deploy-state.sh).
 KK_VECTOR_S=600
 KK_VECTOR_POLL_S=15
+# The pre-dispatch settle gate (#12299): the merged status can still show a peer's slot running (its own deploy holds
+# /var/lock/ci-deploy.lock) or a transient lock_contention when track declares green; a restart dispatched into that
+# window is silently lost (see kk_redeploy_vector). The 90 s gate plus the 600 s green poll stays under the 15-minute
+# vector step bound.
+KK_SETTLE_S=90
+KK_SETTLE_POLL_S=10
 KK_VECTOR_STEP_S=$((KK_VECTOR_S + KR_STEP_SLACK_S))
 # The redeploy JOB holds five steps (checkout 2 + Re-checks 10 + track 85 + vector 15 + Verdict 5 = 117 min), so its bound
 # is the track step plus the sourced slack plus the Re-checks step plus the vector step: 120 min.
@@ -372,10 +379,12 @@ kr_post_write_stop() {
   return 1
 }
 
-# kr_file_issue <token> <sentence>: the ONLY issue filer. De-duplicated on (key, token, run); re-lists after the create call and fails
-# loudly when the issue is not there (a swallowed `gh` error would leave a written rotation with no owner).
+# kr_file_issue <token> <sentence>: the ONLY issue filer. De-duplicated on (key, token, run). The create call's own URL is
+# the filing proof (GitHub's issue index lags a fresh create — the immediate re-list reported issue_unfiled while the
+# issue existed, #12299); a create that returns no URL is verified by a bounded re-list on the retry cadence, and fails
+# loudly when the issue is still not there (a swallowed `gh` error would leave a written rotation with no owner).
 kr_file_issue() {
-  local repo="${GITHUB_REPOSITORY:-}" key="${EFF_KEY:-}" run="${GITHUB_RUN_ID:-0}" title body list n num att="${GITHUB_RUN_ATTEMPT:-1}"
+  local repo="${GITHUB_REPOSITORY:-}" key="${EFF_KEY:-}" run="${GITHUB_RUN_ID:-0}" title body list n num att="${GITHUB_RUN_ATTEMPT:-1}" url try
   local -a labels=(--label action-required)
   kr_token_known "$1" || { kr_refuse issue_unfiled "the verdict token is unknown"; return 1; }
   if [[ -z "${GH_TOKEN:-}" || -z "$repo" ]]; then kr_refuse issue_unfiled "no GH_TOKEN or repository; the action-required issue was not filed"; return 1; fi
@@ -394,13 +403,21 @@ kr_file_issue() {
     gh issue comment "$num" --repo "$repo" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || { kr_refuse issue_unfiled "the follow-up comment could not be posted"; return 1; }
     return 0
   fi
-  gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || true
-  list="$(gh issue list --repo "$repo" --label action-required --state open --limit "$KK_ISSUE_LIMIT" --json number,title 2>/dev/null)" || list="[]"
-  if ! jq -e --arg t "$title" 'any(.[]; .title == $t)' <<<"$list" >/dev/null 2>&1; then
-    kr_refuse issue_unfiled "the action-required issue was not created (or is missing its label); the red run is the only record"
-    return 1
+  url="$(gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" 2>/dev/null)" || url=""
+  if [[ "$url" == */issues/[0-9]* ]]; then
+    kk_say "key-rotate: the action-required issue was filed (${url})"
+    return 0
   fi
-  return 0
+  # no URL: the create call failed, or its response was lost after the issue landed — a bounded re-list on the retry
+  # cadence covers both without racing the index (the old single immediate re-list is what produced the false
+  # issue_unfiled verdicts of #12299)
+  for ((try = 1; try <= KK_RETRIES; try++)); do
+    list="$(gh issue list --repo "$repo" --label action-required --state open --limit "$KK_ISSUE_LIMIT" --json number,title 2>/dev/null)" || list="[]"
+    if jq -e --arg t "$title" 'any(.[]; .title == $t)' <<<"$list" >/dev/null 2>&1; then return 0; fi
+    (( try < KK_RETRIES )) && kr_sleep "$KK_RETRY_SLEEP_S"
+  done
+  kr_refuse issue_unfiled "the action-required issue was not created (or is missing its label); the red run is the only record"
+  return 1
 }
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -1070,6 +1087,16 @@ kk_redeploy_verdict() { # the last step: exports a verdict on EVERY path
 # host that does not report makes the leg non-green: the clear job never runs and PREVIOUS stays set (FR9 - the old
 # token remains accepted, the lossless direction). The per-peer slots of the merged read are the peers' whole status
 # JSON (cat-deploy-state.sh), so a peer error slot is a failure, never a pass.
+#
+# #12299: the dispatch additionally runs AFTER a settle gate. track green does not mean a peer's deploy has released
+# /var/lock/ci-deploy.lock — a `restart vector` fanned out while a peer is mid-deploy loses that host's flock -n; the
+# loser's transient vector/lock_contention frame is then OVERWRITTEN by the still-running deploy's terminal frame, so
+# kk_vector_green can never see a fresh vector/success for it and the leg times out into rotated_redeploy_failed with
+# nothing actually wrong. The gate polls the merged status until EVERY roster slot is terminal (a numeric exit_code
+# >= 0 whose reason is neither running nor lock_contention — a lock_contention frame is terminal for the loser but
+# proves the lock is still held by another invocation), then the settled read doubles as the per-host baseline and the
+# restart is dispatched. One mid-window re-dispatch is kept as a residual: a peer that still lost the first fan-out is
+# caught by the second (the peer arm is an idempotent try-restart).
 KK_DEPLOY_BASE="deploy.soleur.ai"
 declare -A KK_VBASE_PEERS=()
 KK_VBASE_SELF=0
@@ -1102,6 +1129,47 @@ kk_vector_green() {
   return 0
 }
 
+# kk_vector_slot_rows <status-file>: one "ip component/reason/start_ts/exit_code" line per roster host — the .peers[ip]
+# slot when present, the base frame for an absent slot (the responder itself, the kk_vector_green convention). A peer
+# error object prints its error word in place of the reason.
+kk_vector_slot_rows() {
+  local f="$1" ip
+  for ip in ${WEB_HOST_PRIVATE_IPS//,/ }; do
+    jq -r --arg ip "$ip" '
+      (if (.peers // {} | has($ip)) then .peers[$ip] else . end) as $s
+      | "\($ip) \($s.component // "-")/\($s.reason // ($s.error // "-"))/\($s.start_ts // "-")/\($s.exit_code // "-")"' \
+      "$f" 2>/dev/null
+  done
+}
+
+# kk_vector_settled <status-file>: every roster ip's slot is terminal — a numeric exit_code >= 0 with a reason that is
+# neither running nor lock_contention. A peer error slot ({"error":...}) has no exit_code and is not settled.
+kk_vector_settled() {
+  local f="$1" ip
+  for ip in ${WEB_HOST_PRIVATE_IPS//,/ }; do
+    jq -e --arg ip "$ip" '
+      (if (.peers // {} | has($ip)) then .peers[$ip] else . end) as $s
+      | (($s.exit_code | type) == "number" and $s.exit_code >= 0)
+        and (($s.reason // "") != "running" and ($s.reason // "") != "lock_contention")' \
+      "$f" >/dev/null 2>&1 || return 1
+  done
+  return 0
+}
+
+# kk_vector_dispatch: POST the restart-vector command over the deploy webhook; prints the http code. Idempotent by
+# contract (the peer arm is systemctl try-restart), which is what licenses the mid-window re-dispatch.
+kk_vector_dispatch() {
+  local payload post_sig
+  payload="$(jq -cn --arg cmd "restart vector _ _" --arg peers "$WEB_HOST_PRIVATE_IPS" '{command:$cmd, peers:$peers}')"
+  post_sig="$(printf '%s' "$payload" | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || post_sig=""
+  if [[ -z "$post_sig" ]]; then kk_say "key-rotate: the dispatch signature could not be computed; nothing was sent"; printf '000'; return; fi
+  KK_POST_SIG="$post_sig"
+  bc_curl key-rotate 'X-Signature-256:sha256=:KK_POST_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+    'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+    -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H "Content-Type: application/json" \
+    -d "$payload" "https://${KK_DEPLOY_BASE}/hooks/deploy" || echo 000
+}
+
 kk_redeploy_vector() {
   [[ "${EFF_MODE:-}" == rotate && "${EFF_KEY:-}" == egress_audit_ingest_token ]] || { kr_refuse internal_error "the vector leg runs for egress rotate only"; return 1; }
   kr_init || return 1
@@ -1112,12 +1180,32 @@ kk_redeploy_vector() {
     || { kk_say "WEB_HOST_PRIVATE_IPS is unset or malformed; a partial vector restart would leave the fleet mixed. Nothing was dispatched."; return 1; }
   # shellcheck source=/dev/null
   source "$KK_ROOT/scripts/lib/bearer-curl.sh" || { kk_say "key-rotate: bearer-curl.sh could not be loaded; the vector restart was not dispatched"; return 1; }
-  local ip b payload post_sig post_code http start now
+  local ip b post_code http start now retried="" row
   KK_GET_SIG="$(bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET < /dev/null)" || KK_GET_SIG=""
   if [[ -z "$KK_GET_SIG" ]]; then kk_say "key-rotate: the status-read signature could not be computed; the vector restart was not dispatched"; return 1; fi
+  # the settle gate (#12299): poll the merged status until every roster slot is terminal (per-poll slot rows in the
+  # log, the full table on timeout), bounded by KK_SETTLE_S; the settled read doubles as the per-host baseline
+  start="$(kr_now)"
+  while :; do
+    http="$(kk_vector_status "$KR_TMP/vbase.json")"
+    if [[ "$http" == 200 ]] && kk_vector_settled "$KR_TMP/vbase.json"; then
+      kk_say "key-rotate: settle gate - every host slot is terminal; taking the read as the per-host baseline"
+      break
+    fi
+    now="$(kr_now)"
+    if (( now - start + KK_SETTLE_POLL_S > KK_SETTLE_S )); then
+      kk_say "key-rotate: settle gate - not every host reported a terminal frame within ${KK_SETTLE_S}s (last read HTTP ${http}); the vector restart was not dispatched. Per-host table:"
+      while IFS= read -r row; do kk_say "  ${row}"; done < <(kk_vector_slot_rows "$KR_TMP/vbase.json")
+      return 1
+    fi
+    if [[ "$http" == 200 ]]; then
+      while IFS= read -r row; do kk_say "  ${row}"; done < <(kk_vector_slot_rows "$KR_TMP/vbase.json")
+    else
+      kk_say "key-rotate: settle gate - /hooks/deploy-status unreadable (HTTP ${http}); retrying"
+    fi
+    kr_sleep "$KK_SETTLE_POLL_S"
+  done
   # the per-host baseline (fail closed, like track.sh): a frame is fresh only when start_ts exceeds it
-  http="$(kk_vector_status "$KR_TMP/vbase.json")"
-  if [[ "$http" != 200 ]]; then kk_say "key-rotate: cannot read /hooks/deploy-status (HTTP ${http}); refusing to assert a vector restart blind"; return 1; fi
   KK_VBASE_SELF="$(jq -r '.start_ts // 0' "$KR_TMP/vbase.json" 2>/dev/null)"
   KK_VBASE_EPOCH="$(kr_now)"
   if [[ ! "$KK_VBASE_SELF" =~ ^[0-9]+$ || "$KK_VBASE_SELF" == 0 ]]; then kk_say "key-rotate: /hooks/deploy-status returned no numeric start_ts baseline; refusing to assert a vector restart blind"; return 1; fi
@@ -1127,14 +1215,7 @@ kk_redeploy_vector() {
     [[ "$b" =~ ^[0-9]+$ ]] || b="$KK_VBASE_EPOCH"
     KK_VBASE_PEERS[$ip]="$b"
   done
-  payload="$(jq -cn --arg cmd "restart vector _ _" --arg peers "$WEB_HOST_PRIVATE_IPS" '{command:$cmd, peers:$peers}')"
-  post_sig="$(printf '%s' "$payload" | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || post_sig=""
-  if [[ -z "$post_sig" ]]; then kk_say "key-rotate: the dispatch signature could not be computed; nothing was sent"; return 1; fi
-  KK_POST_SIG="$post_sig"
-  post_code="$(bc_curl key-rotate 'X-Signature-256:sha256=:KK_POST_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
-    'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
-    -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H "Content-Type: application/json" \
-    -d "$payload" "https://${KK_DEPLOY_BASE}/hooks/deploy" || echo 000)"
+  post_code="$(kk_vector_dispatch)"
   if [[ "$post_code" != 202 ]]; then kk_say "key-rotate: POST /hooks/deploy rejected (HTTP ${post_code}); the vector restart was not dispatched"; return 1; fi
   kk_say "key-rotate: restart vector dispatched (HTTP 202, peers=${WEB_HOST_PRIVATE_IPS}); polling for a fresh component=vector success frame on every host"
   start="$(kr_now)"
@@ -1145,6 +1226,15 @@ kk_redeploy_vector() {
       return 0
     fi
     now="$(kr_now)"
+    if [[ -z "$retried" ]] && (( now - start >= KK_VECTOR_S / 2 )); then
+      retried=1
+      post_code="$(kk_vector_dispatch)"
+      if [[ "$post_code" == 202 ]]; then
+        kk_say "key-rotate: mid-window re-dispatch of restart vector accepted (HTTP 202; idempotent try-restart - covers a peer that lost the first fan-out to its own deploy lock)"
+      else
+        kk_say "key-rotate: mid-window re-dispatch rejected (HTTP ${post_code}); the first dispatch's frames still govern"
+      fi
+    fi
     if (( now - start + KK_VECTOR_POLL_S > KK_VECTOR_S )); then
       kk_say "key-rotate: not every host reported a fresh component=vector success frame within ${KK_VECTOR_S}s; PREVIOUS stays set"
       return 1
