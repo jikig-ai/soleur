@@ -30,7 +30,7 @@
 #   HEAD_REF      github.event.merge_group.head_ref          (merge_group)
 #   HEAD_SHA      github.event.merge_group.head_sha          (merge_group)
 #   BASE_REF      github.event.merge_group.base_ref          (merge_group; refs/heads/main)
-#   GH_TOKEN      the job's GITHUB_TOKEN (contents: read, pull-requests: read)
+#   GH_TOKEN      the job's GITHUB_TOKEN (contents: read, pull-requests: read, checks: read)
 #   GITHUB_OUTPUT, GITHUB_STEP_SUMMARY, RUNNER_TEMP          (optional; RUNNER_TEMP falls back to $TMPDIR, then /tmp)
 # CWD must be the repo checkout (actions/checkout; pull_request is at the MERGE ref, fetch-depth 2 suffices).
 #
