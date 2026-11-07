@@ -1242,7 +1242,356 @@ assert_eq "$SKIPPABLE" "$(parity_rc "$REF18" "$W18p" "$S18p")" "T18p the referen
 ( cd "$R18p" && sed 's/^## Operator Constraints$/## Op Constraints/' "$REF18" > ref-renamed.md )
 assert_eq "$OWED" "$(parity_rc "$R18p/ref-renamed.md" "$W18p" "$S18p")" "T18p a reference whose heading is renamed does NOT parse as a token -> OWED (the row can fail)"
 
+# =============================================================================
+# T19 — `--token-only` and its consumers (#12247). Work Phase 2 and review's lead gate reach the reader through
+# plugins/soleur/scripts/gate-or-skip.sh; the Grok pre-push gate calls it inline. Only exit 42 skips, only a bare
+# invocation consults the token, and ship Phase 4 (T16) keeps calling the reader with no argument. T18 already pins the
+# shared token arm, so these rows pin only what the flag, the wrapper and the call sites add.
+# =============================================================================
+GOS="$HERE/../scripts/gate-or-skip.sh"
+GROKS="$HERE/../scripts/grok-pre-push-gate.sh"
+WORK_SKILL="$HERE/../skills/work/SKILL.md"
+REVIEW_SKILL="$HERE/../skills/review/SKILL.md"
+TOKFLAG='--token-only'
+
+# gate run with arguments; rc only / output. Both end on a success so the suite's errexit cannot kill a refusal row.
+run_gate_args() { # <work> <stub> [args...]
+  local work="$1" stub="$2"; shift 2
+  ( cd "$work" || exit 9
+    git_fixture_env "$work" || exit 9
+    PATH="$stub:$PATH" bash "$GATE" "$@" >/dev/null 2>&1 )
+  printf '%s' "$?"
+  return 0
+}
+run_gate_args_out() { # <work> <stub> [args...]
+  local work="$1" stub="$2" out; shift 2
+  out="$( ( cd "$work" || exit 9
+            git_fixture_env "$work" >/dev/null 2>&1 || exit 9
+            PATH="$stub:$PATH" bash "$GATE" "$@" 2>&1 ) || true )"
+  printf '%s' "$out"
+  return 0
+}
+reason_args() { # <work> <stub> <needle> <label> [args...]
+  local w="$1" s="$2" n="$3" l="$4" out; shift 4
+  out="$(run_gate_args_out "$w" "$s" "$@")"
+  if grep -qF -- "$n" <<<"$out"; then assert_eq "ok" "ok" "$l"; else assert_eq "$out" "reason containing: $n" "$l"; fi
+  return 0
+}
+assert_has() { # <haystack> <needle> <label>
+  if grep -qF -- "$2" <<<"$1"; then assert_eq "ok" "ok" "$3"; else assert_eq "missing: $2" "present" "$3"; fi
+  return 0
+}
+assert_lacks() { # <haystack> <needle> <label>
+  if grep -qF -- "$2" <<<"$1"; then assert_eq "present: $2" "absent" "$3"; else assert_eq "ok" "ok" "$3"; fi
+  return 0
+}
+# A gh shim that LOGS its argv and then runs the stub, so "no CI state was read" is observable (the bare control proves the shim fires).
+shim19() { # <shim-dir> <real-stub-dir>
+  assert_fixture_dir "$1"
+  mkdir -p "$1"
+  : > "$1/calls.log"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/calls.log"\nexec "%s/gh" "$@"\n' "$1" "$2" > "$1/gh"
+  chmod +x "$1/gh"
+  return 0
+}
+
+# --- T19a: no token -> OWED without reading CI state -------------------------
+new_fixture_root R19a; W19a="$(build_fixture "$R19a")"; S19a="$R19a/stub"; H19a="$R19a/shim"
+make_stub "$S19a" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W19a")"
+shim19 "$H19a" "$S19a"
+assert_eq "$SKIPPABLE" "$(run_gate "$W19a" "$H19a")" "T19a (control) the bare run on a green-CI tree with no token -> SKIPPABLE"
+assert_eq "nonempty" "$([[ -s "$H19a/calls.log" ]] && echo nonempty || echo empty)" "T19a (control) the bare run reads CI state, so the call log is non-empty and the shim fires"
+assert_fixture_dir "$H19a"
+: > "$H19a/calls.log"
+assert_eq "$OWED" "$(run_gate_args "$W19a" "$H19a" "$TOKFLAG")" "T19a --token-only with no token on the same tree -> OWED"
+reason_args "$W19a" "$H19a" "no operator ci-is-the-gate token" "T19a the reason names the missing token" "$TOKFLAG"
+assert_eq "empty" "$([[ -s "$H19a/calls.log" ]] && echo nonempty || echo empty)" "T19a --token-only with no token read no CI state (empty gh call log)"
+
+# --- T19b: token -> the existing token arm, nothing else ---------------------
+new_fixture_root R19b; W19b="$(build_fixture "$R19b")"; S19b="$R19b/stub"
+in_fixture "$W19b" bash -c 'git checkout --quiet main && printf "newer\n" > on-main.md && git add -A && git commit --quiet -m "main advances" && git push --quiet origin main && git checkout --quiet feat-fixture' || true
+ss18_write "$W19b" '## Operator Constraints\n- constraint: one\n- constraint: two\n- ci-is-the-gate: Rely on CI required test check\n'
+in_fixture "$W19b" git merge-base --is-ancestor refs/remotes/origin/main HEAD && B19="in-sync" || B19="behind"
+assert_eq "behind" "$B19" "T19b (precondition) the fixture really is behind origin/main"
+make_stub "$S19b" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$SKIPPABLE" "$(run_gate_args "$W19b" "$S19b" "$TOKFLAG")" "T19b --token-only + token + dirty + behind main + no CI evidence -> SKIPPABLE (incident shape)"
+reason_args "$W19b" "$S19b" "local battery NOT executed per operator constraint" "T19b the verdict tells the author what to record" "$TOKFLAG"
+new_fixture_root R19b2; W19b2="$(build_fixture "$R19b2")"; S19b2="$R19b2/stub"
+ss18_write "$W19b2" "$TOK18" commit
+make_stub "$S19b2" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W19b2")"
+assert_eq "$SKIPPABLE" "$(run_gate_args "$W19b2" "$S19b2" "$TOKFLAG")" "T19b --token-only + token + green CI -> SKIPPABLE"
+reason_args "$W19b2" "$S19b2" "operator declared CI the gate" "T19b on green CI the reason is the operator token, not the CI-evidence verdict" "$TOKFLAG"
+assert_lacks "$(run_gate_args_out "$W19b2" "$S19b2" "$TOKFLAG")" "required contexts present and green" "T19b the CI-evidence verdict never appears under --token-only"
+
+# --- T19c: the infra surface still wins --------------------------------------
+new_fixture_root R19c; W19c="$(build_fixture "$R19c")"; S19c="$R19c/stub"
+in_fixture "$W19c" bash -c 'mkdir -p apps/web-platform/infra && printf x > apps/web-platform/infra/deploy.sh && git add -A && git commit --quiet -m infra' || true
+ss18_write "$W19c" "$TOK18" commit
+make_stub "$S19c" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+assert_eq "$OWED" "$(run_gate_args "$W19c" "$S19c" "$TOKFLAG")" "T19c --token-only + token + infra path -> OWED"
+reason_args "$W19c" "$S19c" "$INFRA_REASON" "T19c the infra refusal names itself" "$TOKFLAG"
+
+# --- T19d: the argument parser is closed -------------------------------------
+assert_eq "$SKIPPABLE" "$(run_gate "$W19b2" "$S19b2")" "T19d (control) the bare run with a token -> SKIPPABLE"
+assert_eq "$SKIPPABLE" "$(run_gate_args "$W19b2" "$S19b2" --token-only)" "T19d (control) a lone --token-only with a token -> SKIPPABLE"
+assert_eq "$UNDECIDABLE" "$(run_gate_args "$W19b2" "$S19b2" --bogus)" "T19d an unknown flag -> UNDECIDABLE even with a token"
+reason_args "$W19b2" "$S19b2" "unknown argument" "T19d the unknown flag names itself" --bogus
+assert_eq "$UNDECIDABLE" "$(run_gate_args "$W19b2" "$S19b2" --token-only extra)" "T19d a second argument -> UNDECIDABLE"
+reason_args "$W19b2" "$S19b2" "unknown argument" "T19d the second argument names itself" --token-only extra
+assert_eq "$UNDECIDABLE" "$(run_gate_args "$W19b2" "$S19b2" "")" "T19d an empty-string argument -> UNDECIDABLE"
+assert_lacks "$(run_gate_args_out "$W19b2" "$S19b2" --bogus-VALUE-19)" "bogus-VALUE-19" "T19d the rejected argument is not echoed"
+
+# A plain repository with no knowledge-base and no origin/main: the short-circuit precedes the origin/main check.
+new_fixture_root R19e
+( cd "$R19e" && git_fixture_env "$R19e" && git init --quiet plain && cd plain && printf x > f && git add -A && git commit --quiet -m s ) >/dev/null 2>&1 || true
+reason_args "$R19e/plain" "$S19a" "is not an ancestor of HEAD" "T19e (control) the bare run in a plain repo reaches the origin/main condition"
+assert_eq "$OWED" "$(run_gate_args "$R19e/plain" "$S19a" "$TOKFLAG")" "T19e --token-only in a plain repo without origin/main -> OWED"
+reason_args "$R19e/plain" "$S19a" "no operator ci-is-the-gate token" "T19e --token-only answers before any origin/main check" "$TOKFLAG"
+
+# CONTROL: assert_has / assert_lacks / reason_args each OWN their verdict, so the dispatch floor and the assert_eq self-test above
+# cannot see one of them being neutered. Drive each in the pass AND the fail direction; the three deliberate FAILs are unwound.
+_p19=$PASS; _f19=$FAIL
+assert_has "abc" "b" "T19 control: assert_has accepts a present needle"
+assert_lacks "abc" "z" "T19 control: assert_lacks accepts an absent needle"
+reason_args "$R19e/plain" "$S19a" "no operator ci-is-the-gate token" "T19 control: reason_args accepts a present reason" "$TOKFLAG"
+_p19b=$PASS; _f19b=$FAIL
+assert_has "abc" "zzz" "T19 control: assert_has rejects an absent needle (EXPECTED FAIL, subtracted)"
+assert_lacks "abc" "abc" "T19 control: assert_lacks rejects a present needle (EXPECTED FAIL, subtracted)"
+reason_args "$R19e/plain" "$S19a" "this reason does not exist" "T19 control: reason_args rejects a missing reason (EXPECTED FAIL, subtracted)" "$TOKFLAG"
+if (( _p19b - _p19 != 3 || FAIL - _f19b != 3 || _f19b != _f19 )); then
+  printf 'FATAL: T19 helper controls did not move the counters as expected (pass %s->%s, fail %s->%s->%s).\n' "$_p19" "$_p19b" "$_f19" "$_f19b" "$FAIL" >&2
+  exit 1
+fi
+FAIL=$(( FAIL - 3 ))
+
+# --- T19f: the wrapper, against a FAKE plugin tree ---------------------------
+# Stub reader (prints SKIPPABLE-shaped text whatever it exits) and stub gate log their argv; the wrapper resolves its siblings
+# from its own directory, so the fake tree is the only thing it can see.
+mk_gos_tree() { # <root> <reader-rc|MISSING> <gate-rc>
+  local r="$1" rrc="$2" grc="$3"
+  assert_fixture_dir "$r"
+  mkdir -p "$r/plugins/soleur/scripts" "$r/plugins/soleur/skills/ship/scripts"
+  cp "$GOS" "$r/plugins/soleur/scripts/gate-or-skip.sh" 2>/dev/null || true
+  : > "$r/reader.args"; : > "$r/gate.args"
+  if [[ "$rrc" != MISSING ]]; then
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/reader.args"\nprintf "battery-owed: SKIPPABLE - stub verdict (no trailing newline)"\nexit %s\n' "$r" "$rrc" > "$r/plugins/soleur/skills/ship/scripts/battery-owed.sh"
+  fi
+  printf '#!/usr/bin/env bash\nprintf "RUN\\n" >> "%s/gate.args"\nfor a in "$@"; do printf "<%%s>\\n" "$a" >> "%s/gate.args"; done\nexit %s\n' "$r" "$r" "$grc" > "$r/plugins/soleur/scripts/affected-tests.sh"
+  return 0
+}
+run_gos() { # <root> [args...] -> GOS_RC, GOS_OUT
+  local r="$1"; shift
+  GOS_RC=0
+  GOS_OUT="$(bash "$r/plugins/soleur/scripts/gate-or-skip.sh" "$@" 2>&1)" || GOS_RC=$?
+  return 0
+}
+gate_calls() { grep -c '^RUN$' "$1/gate.args" 2>/dev/null || true; return 0; }
+gate_argv() { grep -v '^RUN$' "$1/gate.args" 2>/dev/null | tr '\n' ' ' | sed 's/ $//' || true; return 0; }
+
+new_fixture_root G42; mk_gos_tree "$G42" 42 0; run_gos "$G42"
+assert_eq "0" "$GOS_RC" "T19f reader 42 on a bare invocation -> the wrapper exits 0"
+assert_has "$GOS_OUT" "SKIPPED (NOT run, NOT passed)" "T19f the skip says it was NOT run and NOT passed"
+assert_has "$GOS_OUT" "AFFECTED_GATE_SKIPPED reason=operator-ci-is-the-gate" "T19f the skip prints its machine line"
+assert_has "$GOS_OUT" "battery-owed: SKIPPABLE - stub verdict" "T19f the reader's own verdict line is printed"
+assert_eq "0" "$(gate_calls "$G42")" "T19f reader 42 -> the gate is NOT invoked"
+assert_eq "--token-only" "$(cat "$G42/reader.args")" "T19f the reader saw exactly --token-only"
+G42_STDOUT="$(bash "$G42/plugins/soleur/scripts/gate-or-skip.sh" 2>/dev/null || true)"
+assert_has "$G42_STDOUT" "SKIPPED (NOT run, NOT passed)" "T19f the SKIPPED wording is on STDOUT (a lead capturing only stdout still sees it)"
+assert_has "$G42_STDOUT" "AFFECTED_GATE_SKIPPED reason=operator-ci-is-the-gate" "T19f the machine line is on STDOUT"
+
+for rrc in 0 1 2 41 43 137; do
+  new_fixture_root GR; mk_gos_tree "$GR" "$rrc" 0; run_gos "$GR"
+  assert_eq "1" "$(gate_calls "$GR")" "T19f reader $rrc -> the gate runs once"
+  assert_eq "" "$(gate_argv "$GR")" "T19f reader $rrc -> the gate gets no arguments"
+  assert_eq "0" "$GOS_RC" "T19f reader $rrc -> the gate's rc 0 is returned"
+done
+new_fixture_root GM; mk_gos_tree "$GM" MISSING 0; run_gos "$GM"
+assert_eq "1" "$(gate_calls "$GM")" "T19f a missing reader -> the gate runs"
+for grc in 6 1; do
+  new_fixture_root GP; mk_gos_tree "$GP" 0 "$grc"; run_gos "$GP"
+  assert_eq "$grc" "$GOS_RC" "T19f the gate's rc $grc passes through unchanged"
+done
+
+# Any argument bypasses the token: the reader (configured to say 42) is not consulted and the gate gets the arguments verbatim.
+new_fixture_root GA; mk_gos_tree "$GA" 42 0; run_gos "$GA" --full
+assert_eq "<--full>" "$(gate_argv "$GA")" "T19f --full reaches the gate verbatim"
+assert_eq "" "$(cat "$GA/reader.args")" "T19f --full does not consult the reader"
+new_fixture_root GB; mk_gos_tree "$GB" 42 0; run_gos "$GB" --base "a b" --explain
+assert_eq "<--base> <a b> <--explain>" "$(gate_argv "$GB")" "T19f a preview with a spaced argument reaches the gate as the same argv (no word splitting)"
+assert_eq "" "$(cat "$GB/reader.args")" "T19f a preview does not consult the reader"
+new_fixture_root GE; mk_gos_tree "$GE" 42 0; run_gos "$GE" ""
+assert_eq "1" "$(gate_calls "$GE")" "T19f an empty-string argument runs the gate"
+assert_eq "<>" "$(gate_argv "$GE")" "T19f the empty-string argument reaches the gate as one empty argument"
+assert_eq "" "$(cat "$GE/reader.args")" "T19f an empty-string argument does not consult the reader"
+
+# A decoy CLAUDE_PLUGIN_ROOT whose reader says 42 must not skip (siblings resolve from the wrapper's own directory).
+new_fixture_root GD1; mk_gos_tree "$GD1" 0 0
+new_fixture_root GD2; mk_gos_tree "$GD2" 42 0
+GOS_RC=0; GOS_OUT="$(CLAUDE_PLUGIN_ROOT="$GD2/plugins/soleur" bash "$GD1/plugins/soleur/scripts/gate-or-skip.sh" 2>&1)" || GOS_RC=$?
+assert_eq "1" "$(gate_calls "$GD1")" "T19f a decoy CLAUDE_PLUGIN_ROOT does not skip: the gate runs"
+assert_eq "" "$(cat "$GD2/reader.args")" "T19f the decoy tree's reader is never consulted"
+
+# Live repo: the sibling reader the wrapper resolves exists and answers the flag.
+GOS_DIR="$(cd -P "$(dirname "$GOS")" 2>/dev/null && pwd -P)"
+LIVE_READER="$GOS_DIR/../skills/ship/scripts/battery-owed.sh"
+assert_eq "readable" "$([[ -r "$LIVE_READER" ]] && echo readable || echo unreadable)" "T19f the reader beside the wrapper is readable"
+assert_eq "$UNDECIDABLE" "$( ( bash "$LIVE_READER" --token-only --bogus >/dev/null 2>&1 ); printf '%s' "$?" )" "T19f the live reader answers --token-only --bogus with UNDECIDABLE"
+
+# Flag parity: the string the wrapper passes and the string the Grok block passes are the string the reader accepts.
+flag_of() { # <file> <invocation-var>
+  grep -v '^[[:space:]]*#' "$1" 2>/dev/null | grep -F -- "\"\$$2\"" | grep -oE -- '--[a-z][a-z-]*' | head -n1
+}
+FLAG_W="$(flag_of "$GOS" READER || true)"
+FLAG_G="$(flag_of "$GROKS" BATTERY_OWED || true)"
+new_fixture_root R19p; W19p="$(build_fixture "$R19p")"; S19p="$R19p/stub"
+make_stub "$S19p" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
+for pair in "wrapper:$FLAG_W" "grok:$FLAG_G"; do
+  nm="${pair%%:*}"; fl="${pair#*:}"
+  assert_eq "nonempty" "$([[ -n "$fl" ]] && echo nonempty || echo empty)" "T19f the $nm flag string was extracted"
+  if [[ -n "$fl" ]]; then
+    reason_args "$W19p" "$S19p" "no operator ci-is-the-gate token" "T19f the real reader accepts the $nm flag ($fl)" "$fl"
+  else
+    assert_eq "extracted" "empty" "T19f the real reader accepts the $nm flag (nothing to run)"
+  fi
+done
+reason_args "$W19p" "$S19p" "unknown argument" "T19f (control) the same fixture rejects --bogus" --bogus
+
+# --- T19g: the Grok gate's two sentinel blocks -------------------------------
+block_of() { awk -v s="# $2:start" -v e="# $2:end" '$0 == s {f=1; next} $0 == e {f=0} f' "$1" 2>/dev/null; }
+G19_DISPATCH="$(block_of "$GROKS" grok-token-dispatch)"
+G19_BANNER="$(block_of "$GROKS" grok-token-banner)"
+assert_eq "nonempty" "$([[ -n "$G19_DISPATCH" ]] && echo nonempty || echo empty)" "T19g the dispatch block was extracted"
+assert_eq "nonempty" "$([[ -n "$G19_BANNER" ]] && echo nonempty || echo empty)" "T19g the banner block was extracted"
+run_grok19() { # <reader-rc> -> G19_RC G19_OUT G19_CALLS G19_RARGS
+  local rrc="$1" gd
+  new_fixture_root gd
+  assert_fixture_dir "$gd"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/reader.args"\n[ "$*" = "--token-only" ] || exit 64\nexit %s\n' "$gd" "$rrc" > "$gd/reader.sh"
+  : > "$gd/calls.log"
+  {
+    printf 'set -euo pipefail\nBATTERY_OWED=%q\nGATE=/nonexistent/gate.sh\n' "$gd/reader.sh"
+    printf 'run_step() { printf "%%s\\n" "$1" >> %q; }\n' "$gd/calls.log"
+    printf '%s\n' "$G19_DISPATCH"
+    printf 'echo "FSB=${FIDELITY_SKIP_BUDGET:-unset}"\n'
+    printf 'echo TRAILING-STEP\n'
+    printf '%s\n' "$G19_BANNER"
+  } > "$gd/harness.sh"
+  G19_RC=0
+  G19_OUT="$(bash "$gd/harness.sh" 2>&1)" || G19_RC=$?
+  G19_CALLS="$(cat "$gd/calls.log")"
+  G19_RARGS="$(cat "$gd/reader.args" 2>/dev/null || true)"
+  return 0
+}
+run_grok19 42
+assert_eq "0" "$G19_RC" "T19g reader 42 -> the block runs to the end with exit 0"
+assert_eq "" "$G19_CALLS" "T19g reader 42 -> run_step is never called"
+assert_eq "--token-only" "$G19_RARGS" "T19g the reader saw exactly --token-only"
+assert_has "$G19_OUT" "PASS WITH SKIPPED GATE" "T19g a skip ends in the distinct banner"
+assert_lacks "$G19_OUT" "safe to git push" "T19g a skip never prints the plain PASS banner"
+assert_has "$G19_OUT" "TRAILING-STEP" "T19g the later steps still run after a skip"
+assert_has "$G19_OUT" "[note] affected-tests gate SKIPPED (NOT run, NOT passed)" "T19g the skip note is printed"
+assert_has "$G19_OUT" "FSB=0" "T19g a waived affected step makes grok-fidelity RUN its rule-budget lint (nothing else ran test-all)"
+for rrc in 0 1 2 41 43 137; do
+  run_grok19 "$rrc"
+  assert_eq "0" "$G19_RC" "T19g reader $rrc -> the block runs to the end with exit 0 (no errexit abort)"
+  assert_eq "affected-tests gate" "$G19_CALLS" "T19g reader $rrc -> run_step runs the affected-tests gate once"
+  assert_has "$G19_OUT" "safe to git push" "T19g reader $rrc -> the plain PASS banner"
+  assert_lacks "$G19_OUT" "PASS WITH SKIPPED GATE" "T19g reader $rrc -> no skip banner"
+  assert_has "$G19_OUT" "FSB=1" "T19g reader $rrc -> grok-fidelity may skip its rule-budget lint (the affected gate ran test-all)"
+done
+GROK_CODE="$(grep -v '^[[:space:]]*#' "$GROKS" 2>/dev/null || true)"
+assert_eq "1" "$(grep -cF -- '"$BATTERY_OWED"' <<<"$GROK_CODE" || true)" "T19g the Grok script invokes the reader exactly once"
+assert_eq "1" "$(grep -cF -- "$TOKFLAG" <<<"$GROK_CODE" || true)" "T19g the Grok script carries the flag exactly once"
+assert_eq "1" "$(grep -cF -- 'run_step "affected-tests gate" bash "$GATE"' <<<"$GROK_CODE" || true)" "T19g the bare affected-tests gate line is kept, exactly once (a second unconditional call would defeat the waiver)"
+assert_has "$(grep -E '^GATE=' "$GROKS" || true)" "affected-tests.sh" "T19g GATE= still names affected-tests.sh"
+
+# The script's REAL sibling-path assignment (the harness above supplies its own): it resolves, is sibling-relative, answers the flag.
+BO_LINE="$(grep -E '^BATTERY_OWED=' "$GROKS" || true)"
+BO_PATH="$(bash -c 'line=${2//\$\{BASH_SOURCE\[0\]\}/$1}; eval "$line"; printf %s "$BATTERY_OWED"' _ "$GROKS" "$BO_LINE" 2>/dev/null || true)"
+assert_eq "readable" "$([[ -n "$BO_PATH" && -r "$BO_PATH" ]] && echo readable || echo unreadable)" "T19g the Grok script's real BATTERY_OWED path resolves to a readable reader"
+assert_lacks "$BO_LINE" "CLAUDE_PLUGIN_ROOT" "T19g the Grok reader path is sibling-relative, never env-directed"
+assert_eq "$UNDECIDABLE" "$( ( bash "$BO_PATH" --token-only --bogus >/dev/null 2>&1 ); printf '%s' "$?" )" "T19g the resolved Grok reader answers --token-only --bogus with UNDECIDABLE"
+# The waiver's footprint: every non-comment reference to AFFECTED_GATE_WAIVED sits inside the two sentinel blocks.
+WAIVED_ALL="$(grep -v '^[[:space:]]*#' "$GROKS" | grep -c 'AFFECTED_GATE_WAIVED' || true)"
+WAIVED_IN="$( { printf '%s\n' "$G19_DISPATCH"; printf '%s\n' "$G19_BANNER"; } | grep -v '^[[:space:]]*#' | grep -c 'AFFECTED_GATE_WAIVED' || true)"
+assert_eq "$WAIVED_IN" "$WAIVED_ALL" "T19g no reference to the waiver flag exists outside the two sentinel blocks (a widened waiver would add one)"
+assert_eq "ok" "$([[ "$WAIVED_IN" -ge 3 ]] && echo ok || echo "only $WAIVED_IN")" "T19g the waiver flag is initialised, set and read inside the blocks"
+
+GROK_EXPORT_LINE="$(grep -E '^export GROK_FIDELITY_SKIP_BUDGET=' "$GROKS" || true)"
+assert_eq 'export GROK_FIDELITY_SKIP_BUDGET="$FIDELITY_SKIP_BUDGET"' "$GROK_EXPORT_LINE" "T19g the fidelity-budget export is derived from the waiver-aware variable (a literal 1 would hide the rule-budget lint on a waived push)"
+
+# The waiver's other names: _tok_rc must not exist outside the blocks, and FIDELITY_SKIP_BUDGET exactly once (the export line).
+for nm in _tok_rc FIDELITY_SKIP_BUDGET; do
+  OUT_N="$(grep -v '^[[:space:]]*#' "$GROKS" | grep -c "$nm" || true)"
+  IN_N="$( { printf '%s\n' "$G19_DISPATCH"; printf '%s\n' "$G19_BANNER"; } | grep -v '^[[:space:]]*#' | grep -c "$nm" || true)"
+  WANT_OUT=0; [[ "$nm" == FIDELITY_SKIP_BUDGET ]] && WANT_OUT=1
+  assert_eq "$WANT_OUT" "$(( OUT_N - IN_N ))" "T19g $nm is referenced outside the sentinel blocks exactly $WANT_OUT time(s)"
+done
+# Executable: the REAL script from the dispatch block through the export line, stubs for the reader and run_step.
+run_grok_export() { # <reader-rc>
+  # The variable names ride in variables: hook-suite-dep-unresolved's static sweep reads a quoted literal carrying the skip token followed by an exit as a skip that exits 0.
+  local rrc="$1" gd va=GROK_FIDELITY_SKIP_BUDGET vb=FIDELITY_SKIP_BUDGET
+  new_fixture_root gd
+  assert_fixture_dir "$gd"
+  printf '#!/usr/bin/env bash\nexit %s\n' "$rrc" > "$gd/reader.sh"
+  {
+    printf 'set -euo pipefail\ncd %q\nBATTERY_OWED=%q\nGATE=/nonexistent/gate.sh\nSKIP_BUILD=1\nrun_step() { :; }\nstep() { :; }\nnpm() { echo NPM-CALLED >&2; exit 99; }\n' "$gd" "$gd/reader.sh"
+    awk -v endpat="^export ${va}=" '/^# grok-token-dispatch:start$/ {f=1} f {print} $0 ~ endpat {exit}' "$GROKS"
+    printf 'echo "EXPORTED=${GROK_FIDELITY_SKIP_BUDGET:-unset}"\n'
+  } > "$gd/harness.sh"
+  GX_OUT="$(env -u "$va" -u "$vb" bash "$gd/harness.sh" 2>&1)" || GX_OUT="rc!=0: $GX_OUT"
+  return 0
+}
+run_grok_export 42
+assert_has "$GX_OUT" "EXPORTED=0" "T19g the REAL script exports 0 after a waive (the value grok-fidelity sees, with anything between the block and the export included)"
+for rrc in 0 2 43; do
+  run_grok_export "$rrc"
+  assert_has "$GX_OUT" "EXPORTED=1" "T19g the REAL script exports 1 when the affected step runs (reader $rrc)"
+done
+FIDELITY_GATE="$HERE/../scripts/grok-fidelity-gate.sh"
+assert_has "$(grep -F 'GROK_FIDELITY_SKIP_BUDGET' "$FIDELITY_GATE" || true)" '!= "1"' "T19g grok-fidelity skips its rule-budget lint ONLY on the literal 1, so 0 runs it"
+GATE_LINE="$(grep -E '^GATE=' "$GROKS" || true)"
+GATE_PATH="$(bash -c 'line=${2//\$\{BASH_SOURCE\[0\]\}/$1}; eval "$line"; printf %s "$GATE"' _ "$GROKS" "$GATE_LINE" 2>/dev/null || true)"
+assert_eq "readable" "$([[ -n "$GATE_PATH" && -r "$GATE_PATH" ]] && echo readable || echo unreadable)" "T19g the Grok script's real GATE path resolves to a readable affected-tests.sh"
+
+# --- T19h: the call sites ----------------------------------------------------
+FENCE19="$(awk '/Affected-Test Exit Gate/ {h=1} h && /^ *```bash/ {o=1; next} o && /^ *```/ {exit} o' "$WORK_SKILL" 2>/dev/null || true)"
+FENCE19_CODE="$(grep -v '^[[:space:]]*#' <<<"$FENCE19" || true)"
+FENCE19_SENT="$(awk '/Affected-Test Exit Gate/ {h=1} h' "$WORK_SKILL" 2>/dev/null | head -n 20 || true)"
+assert_eq "nonempty" "$([[ -n "$FENCE19" ]] && echo nonempty || echo empty)" "T19h work step 9's fence was extracted"
+assert_has "$FENCE19_CODE" 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"' "T19h work step 9 runs the wrapper"
+FENCE19_CMDS="$(grep -v '^[[:space:]]*#' <<<"$FENCE19" | sed 's/^[[:space:]]*//; /^$/d' || true)"
+assert_eq 'bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"' "$FENCE19_CMDS" "T19h work step 9's fence holds EXACTLY the wrapper command (no echo prefix, no || true, no extra line)"
+assert_lacks "$FENCE19_CODE" "affected-tests.sh" "T19h work step 9's command lines no longer name affected-tests.sh"
+assert_has "$FENCE19" "affected-tests.sh" "T19h the fence keeps the affected-tests.sh literal in a comment (fullsuite-merge-gate pin)"
+WORK_LEAD="$(awk -v RS= '/The lead runs the gate/' "$WORK_SKILL" 2>/dev/null || true)"
+REVIEW_LEAD="$(awk -v RS= '/The lead runs the gate/' "$REVIEW_SKILL" 2>/dev/null || true)"
+assert_eq "nonempty" "$([[ -n "$WORK_LEAD" ]] && echo nonempty || echo empty)" "T19h work's fan-out lead paragraph was extracted"
+assert_eq "nonempty" "$([[ -n "$REVIEW_LEAD" ]] && echo nonempty || echo empty)" "T19h review's lead paragraph was extracted"
+assert_has "$WORK_LEAD" '${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh' "T19h work's fan-out lead gate uses the wrapper"
+assert_has "$REVIEW_LEAD" '${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh' "T19h review's lead gate uses the wrapper"
+assert_has "$WORK_LEAD" 'AFFECTED_GATE_SKIPPED' "T19h work's fan-out lead names the unique skip token"
+assert_has "$REVIEW_LEAD" 'AFFECTED_GATE_SKIPPED' "T19h review's lead gate names the unique skip token"
+assert_has "$FENCE19_SENT" 'AFFECTED_GATE_SKIPPED' "T19h work step 9 names the unique skip token"
+assert_has "$FENCE19_SENT" 'was NOT run' "T19h work step 9 says the gate was NOT run (not just that the token exists)"
+# The gates that must stay token-blind: a fix loop and the commit hook run tests, and the executables never read the token.
+for f in "$HERE/../skills/test-fix-loop/SKILL.md" "$HERE/../../../lefthook.yml"; do
+  assert_eq "readable" "$([[ -s "$f" ]] && echo readable || echo unreadable)" "T19h negative: $(basename "$f") is readable"
+  assert_eq "0" "$(grep -cE 'gate-or-skip|--token-only|ci-is-the-gate' "$f" 2>/dev/null || true)" "T19h negative: $(basename "$f") does not reference the wrapper, the flag or the token"
+done
+LIBS19="$(ls "$HERE"/../scripts/lib/affected-tests/*.sh 2>/dev/null || true)"
+for f in "$HERE/../scripts/affected-tests.sh" "$HERE/../skills/ship/scripts/battery-refusal-wait.sh" "$HERE/../../../scripts/test-all.sh" "$HERE/../../../scripts/hooks/pre-push" $LIBS19; do
+  assert_eq "readable" "$([[ -s "$f" ]] && echo readable || echo unreadable)" "T19h negative: $(basename "$f") is readable"
+  assert_eq "0" "$(grep -cE 'gate-or-skip|--token-only|ci-is-the-gate' "$f" 2>/dev/null || true)" "T19h negative: $(basename "$f") never reads the token"
+done
+CALLERS19="$(cd "$HERE/../../.." && grep -rlE 'gate-or-skip|--token-only' plugins/soleur/skills plugins/soleur/scripts .github/workflows 2>/dev/null | sort | tr '\n' ' ' || true)"
+WANT_CALLERS19="plugins/soleur/scripts/gate-or-skip.sh plugins/soleur/scripts/grok-pre-push-gate.sh plugins/soleur/skills/one-shot/references/operator-constraints.md plugins/soleur/skills/review/SKILL.md plugins/soleur/skills/ship/references/affected-gate-contract.md plugins/soleur/skills/ship/scripts/battery-owed.sh plugins/soleur/skills/work/SKILL.md "
+assert_eq "$WANT_CALLERS19" "$CALLERS19" "T19h the set of files naming the wrapper or the flag is CLOSED (a new caller must be added here on purpose)"
+OC_ITEM4="$(grep -E '^4\. ' "$REF18" 2>/dev/null || true)"
+assert_has "$OC_ITEM4" "--token-only" "T19h the writer reference's item 4 names the --token-only readers"
+assert_has "$OC_ITEM4" "gate-or-skip.sh" "T19h the writer reference's item 4 names the wrapper"
+
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 221
+print_results 391
