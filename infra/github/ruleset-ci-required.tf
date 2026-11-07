@@ -15,7 +15,7 @@
 #
 # Strict policy preserved (strict_required_status_checks_policy = true).
 #
-# Job-name contract: the 23 `context` strings below are public ABI for the
+# Job-name contract: the 10 `context` strings below are public ABI for the
 # branch-protection gate. A workflow job rename (`lint fixture content` ->
 # `lint-fixture-content`) silently un-requires the check until this resource
 # is updated in the same PR. See ADR-032 Sharp Edges.
@@ -108,78 +108,39 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
 
-      # --- Tier 1: secret-scan + guard-script-fixture jobs ---
-      # All 6 jobs run under GitHub Actions (integration_id 15368) on every
-      # PR (no path filters). 5 from .github/workflows/secret-scan.yml,
-      # 1 ("Bash fixture tests for guard scripts") from
-      # .github/workflows/pr-quality-guards.yml.
+      # --- Umbrella required contexts (#12089, ADR-032 amendment 2026-11-06) ---
+      # The 16 small-guard contexts that used to occupy Tiers 1/2/3/5/6 (plus
+      # the #6882 and #7493 singletons) were folded into THREE umbrella
+      # contexts in THIS commit — the rename and the workflow producers landed
+      # together, so at no commit does a required name lack a merge_group
+      # producer (the pend-forever class; see the merge_queue precondition
+      # note below). Each folded guard now runs as a `!cancelled()`-gated
+      # MEMBER STEP inside its umbrella job, and the umbrella's `aggregate`
+      # step fails the job iff any member failed. Member inventory +
+      # per-member bot-PR synthetic justifications: scripts/required-checks.txt.
+      #
+      #   guards-ruleset  (.github/workflows/ci.yml job `guards-ruleset`):
+      #     adr-ordinals, rule-body-lint, tc-document-sha-guard,
+      #     marketplace-manifest-guard, service-role-allowlist-gate,
+      #     credential-path-guard, lockfile-sync, grok-fidelity
+      #   quality-guards  (.github/workflows/pr-quality-guards.yml job
+      #     `quality-guards`): enforce, markdown-lint,
+      #     guard-script-fixture-tests (context was "Bash fixture tests for
+      #     guard scripts")
+      #   secret-guards   (.github/workflows/secret-scan.yml job
+      #     `secret-guards`): scan ("gitleaks scan"), lint-fixture-content
+      #     ("lint fixture content"), waiver-discipline, rename-guard,
+      #     allowlist-diff
       required_check {
-        context        = "gitleaks scan"
+        context        = "guards-ruleset"
         integration_id = var.actions_integration_id
       }
       required_check {
-        context        = "lint fixture content"
+        context        = "quality-guards"
         integration_id = var.actions_integration_id
       }
       required_check {
-        context        = "allowlist-diff (.gitleaks.toml paths surface)"
-        integration_id = var.actions_integration_id
-      }
-      required_check {
-        context        = "rename-guard (allowlist destinations)"
-        integration_id = var.actions_integration_id
-      }
-      required_check {
-        context        = "waiver discipline (issue:#NNN trailer)"
-        integration_id = var.actions_integration_id
-      }
-      required_check {
-        context        = "Bash fixture tests for guard scripts"
-        integration_id = var.actions_integration_id
-      }
-      # markdownlint over the whole tracked corpus (#7927). Whole-corpus, not
-      # changed-files: none of the errors that first blocked a local `git merge`
-      # were in the PR that tripped over them, so a changed-files gate would
-      # reproduce the blind spot it exists to close.
-      required_check {
-        context        = "markdown-lint"
-        integration_id = var.actions_integration_id
-      }
-
-      # --- Tier 2: non-secret-scan correctness gates from .github/workflows/ci.yml ---
-      required_check {
-        context        = "lockfile-sync"
-        integration_id = var.actions_integration_id
-      }
-      required_check {
-        context        = "service-role-allowlist-gate"
-        integration_id = var.actions_integration_id
-      }
-      required_check {
-        context        = "tc-document-sha-guard"
-        integration_id = var.actions_integration_id
-      }
-      # adr-ordinals (#6049): always-run ADR-ordinal-collision gate job in
-      # .github/workflows/ci.yml. GitHub Actions context (integration_id 15368,
-      # NOT GHAS 57789 — using the CodeQL id would silently un-match the gate).
-      # Reconciled from live, which already required it; see the count-contract
-      # comment at the top of this file.
-      required_check {
-        context        = "adr-ordinals"
-        integration_id = var.actions_integration_id
-      }
-
-      # --- Tier 3: legal-doc cross-document lockstep gate (#4384, closes the
-      # advisory-bypass-via-auto-merge gap that produced #4333). Context
-      # string is the JOB name (`enforce`) at
-      # .github/workflows/pr-quality-guards.yml (jobs.enforce — folded from legal-doc-cross-document-gate.yml, #8902), NOT the
-      # workflow display name — per ADR-032 job-name contract. Workflow
-      # `paths:` filter removed in the same PR (#4384) so the job posts on
-      # every PR; the existing `surface_hit=false` short-circuit (lines
-      # 82-85) keeps non-DSAR PRs at O(seconds). See learning
-      # 2026-03-20-github-required-checks-skip-ci-synthetic-status.md.
-      required_check {
-        context        = "enforce"
+        context        = "secret-guards"
         integration_id = var.actions_integration_id
       }
 
@@ -197,26 +158,6 @@ resource "github_repository_ruleset" "ci_required" {
         integration_id = var.actions_integration_id
       }
 
-      # --- Tier 5: hard-rule body-weakening gate (#6103, ADR-092). Context is
-      # the JOB name `rule-body-lint` at .github/workflows/ci.yml — an always-run
-      # gate that BLOCKS any un-acked change/deletion of an hr-*/wg-* rule BODY
-      # line in AGENTS.rules.md. Runs under GitHub Actions
-      # (integration_id 15368). Content-scoped: the bot synthetic is fabricated,
-      # not earned — sound only while the bot action's ALLOWED_PATHS excludes
-      # AGENTS bodies (see scripts/required-checks.txt note + ADR-092 residual).
-      required_check {
-        context        = "rule-body-lint"
-        integration_id = var.actions_integration_id
-      }
-
-      # --- Tier 6: Grok fidelity gate (#6325 Phase F). Context is the JOB name
-      # `grok-fidelity` at .github/workflows/ci.yml — grok inspect contract +
-      # /go golden-path eval under Grok harness fixture.
-      required_check {
-        context        = "grok-fidelity"
-        integration_id = var.actions_integration_id
-      }
-
       # #6589 — apply-sentry-infra.yml's always-run aggregator. The heavy
       # full-root terraform plan is path-gated behind it; this context is what
       # makes an unacknowledged Sentry destroy unmergeable rather than merely
@@ -225,51 +166,6 @@ resource "github_repository_ruleset" "ci_required" {
       # exact #6074 end state the gate exists to prevent.
       required_check {
         context        = "sentry-destroy-required"
-        integration_id = var.actions_integration_id
-      }
-
-      # #6882 (ADR-139) adds `credential-path-guard` (21st) — the ci.yml
-      # always-run FULL-SCAN job that fails any tracked doc reintroducing a
-      # home-relative resolvable path to a real credential file (the vector that
-      # read a live Doppler token into model context via preflight/SKILL.md).
-      # Promoted advisory -> blocking after #6880 drained the grandfathered
-      # backlog to zero. Advisory would not do: the guard already ran and a red
-      # -but-mergeable check restores the leak vector on the next ignored merge.
-      #
-      # Content-scoped, and UNLIKE rule-body-lint / sentry-destroy-required its
-      # bot-PR green is EARNED, not fabricated-but-unreachable: the scanner's
-      # SCAN_DIRS intersects the composite action's ALLOWED_PATHS at
-      # weakness-digest.md, so the action reproduces the scan in its Phase-4
-      # ceiling before posting any synthetic. See ADR-139 + required-checks.txt.
-      required_check {
-        context        = "credential-path-guard"
-        integration_id = var.actions_integration_id
-      }
-
-      # #7493 adds `marketplace-manifest-guard` (22nd) — the ci.yml always-run
-      # job validating `infra/github/soleur-marketplace-manifest.json`, the
-      # SOURCE that `github_repository_file.marketplace_manifest` publishes to
-      # jikig-ai/soleur-marketplace. First apply (this PR's merge via
-      # apply-github-infra.yml) makes it LIVE-required.
-      #
-      # BORN BLOCKING, deliberately. Advisory would not do here and the reason
-      # is mechanical rather than stylistic: once Terraform owns the manifest's
-      # contents AND scheduled-marketplace-drift.yml dispatches a reconcile
-      # apply, a bad manifest that MERGES is published, detected, and then
-      # REPUBLISHED every day — while a published-vs-source byte-diff reports
-      # in-sync the whole time, because published genuinely does match source.
-      # The merge boundary is the only place that loop can be broken, so a
-      # red-but-mergeable check would hand automation a wrong state to defend.
-      #
-      # Content-scoped. Its bot-PR green is SOUND-BY-UNREACHABILITY (the
-      # rule-body-lint argument), NOT earned like credential-path-guard above:
-      # SCAN_DIRS here is the single file soleur-marketplace-manifest.json and
-      # the composite action's ALLOWED_PATHS is {weakness-digest.md,
-      # rule-metrics.json} — intersection EMPTY, re-derived per ADR-139 rather
-      # than inherited. If ALLOWED_PATHS ever gains an infra/github path, the
-      # gate must be reproduced in the action's Phase-4 ceiling BEFORE it lands.
-      required_check {
-        context        = "marketplace-manifest-guard"
         integration_id = var.actions_integration_id
       }
 
@@ -319,7 +215,7 @@ resource "github_repository_ruleset" "ci_required" {
     #
     # HARD PRECONDITION: every context required by ANY ruleset on `main` must be
     # produced on `merge_group` (a missing producer leaves the entry pending
-    # FOREVER). The 23 CI Required contexts have a `merge_group` producer; the two
+    # FOREVER). The 10 CI Required contexts have a `merge_group` producer; the two
     # CLA Required contexts are covered by merge-queue-cla-synthetics.yml, which
     # verifies the PR head's real results first. Re-tighten recipe if upstream ever
     # ships `merge_group` status reporting: re-add the `CodeQL` required_check with
@@ -337,7 +233,7 @@ resource "github_repository_ruleset" "ci_required" {
     # (tests/scripts/test-audit-ruleset-bypass.sh, T-mq-1) holds this block equal to
     # the DR skeleton in scripts/create-ci-required-ruleset.sh and the README table.
     # `max_entries_to_build = 2` bounds hosted-runner contention (each candidate
-    # runs all 25 contexts); raise only after the canary measures it.
+    # runs all 12 contexts); raise only after the canary measures it.
     # `check_response_timeout_minutes` (120) must exceed the slowest required check on
     # `merge_group` INCLUDING runner start spread, else a green PR is dequeued. Raised
     # from 60 on 2026-10-11 (#9454 canary item 5): 240 `merge_group` CI runs measured

@@ -659,7 +659,7 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 23 entries, all GitHub Actions (15368), and NO CodeQL row
+# T-rsc-7: real canonical RSC has 10 entries, all GitHub Actions (15368), and NO CodeQL row
 # (#9454: CodeQL is advisory; a merge queue and a required CodeQL context are mutually exclusive).
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
 # (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
@@ -693,7 +693,11 @@ t_rsc_order_insensitive() {
 # the Inngest SYNTHETIC_CHECK_NAMES path deliberately EXCLUDES this name so
 # re-vendor PRs earn it via real CI on App-token pushes, #8166);
 # bumped 24->23 by #9454 (the `CodeQL` row was REMOVED when the merge queue was
-# adopted — CodeQL cannot report a status on `merge_group`, codeql-action#1537).
+# adopted — CodeQL cannot report a status on `merge_group`, codeql-action#1537);
+# bumped 23->10 by #12089 (the 16 folded small-guard contexts were consolidated
+# into the three umbrella contexts guards-ruleset / quality-guards /
+# secret-guards in the same PR that produced them — ADR-032 amendment
+# 2026-11-06; per-member history above records each member's lineage).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -711,10 +715,10 @@ t_rsc_real_canonical_shape() {
   codeql_rows=$(jq '[.[] | select(.context=="CodeQL")] | length' < "$real")
   # Every check is a GitHub Actions context (15368). CodeQL (GHAS 57789) is NOT required.
   non_15368_apps=$(jq -r '[.[] | select(.integration_id != 15368) | .context] | join(",")' < "$real")
-  if [[ "$n" == "23" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
-    _report "T-rsc-7 real canonical RSC: 23 entries, no CodeQL row, all 15368" ok
+  if [[ "$n" == "10" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
+    _report "T-rsc-7 real canonical RSC: 10 entries, no CodeQL row, all 15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 23 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
+    _report "T-rsc-7 real canonical RSC: 10 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
   fi
 }
 
