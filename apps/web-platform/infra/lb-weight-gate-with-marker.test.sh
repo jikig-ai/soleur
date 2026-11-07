@@ -424,12 +424,14 @@ scn_fn_unset() { # exported functions shadowing unset/export never run (DOPPLER_
 # operand (the temp root, say) is owned by the caller too, so no behavioural case can tell it apart without root.
 wrapper_code() { grep -vE '^[[:space:]]*#' "$1"; }
 scn_owner_pin_bin() {
-  local c; c="$(wrapper_code "$1")"
-  [ "$(grep -cF -- '-O "$p"' <<<"$c")" -eq 1 ] && grep -F -- '-O "$p"' <<<"$c" | grep -qF '[[ -f "$p" &&'
+  local c l; c="$(wrapper_code "$1")"
+  l="$(grep -F -- '-O "$p"' <<<"$c" || true)"
+  [ "$(grep -cF -- '-O "$p"' <<<"$c")" -eq 1 ] && grep -qF '[[ -f "$p" &&' <<<"$l"
 }
 scn_owner_pin_dir() {
-  local c; c="$(wrapper_code "$1")"
-  [ "$(grep -cF -- '-O "$dir"' <<<"$c")" -eq 1 ] && grep -F -- '-O "$dir"' <<<"$c" | grep -qF '[[ -d "$dir" &&'
+  local c l; c="$(wrapper_code "$1")"
+  l="$(grep -F -- '-O "$dir"' <<<"$c" || true)"
+  [ "$(grep -cF -- '-O "$dir"' <<<"$c")" -eq 1 ] && grep -qF '[[ -d "$dir" &&' <<<"$l"
 }
 scn_dbin_dir_symlink() { # the doppler-cli directory is a symlink to a good directory
   dbin_neg_sb "$1"; mv "$RT/doppler-cli" "$RT/real-cli"; ln -s real-cli "$RT/doppler-cli"
