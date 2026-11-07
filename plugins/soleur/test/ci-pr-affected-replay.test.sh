@@ -2755,7 +2755,7 @@ rt_real_marker() {   # rt_real_marker <exit> <reason> [live baseline]: a marker 
   python3 - "$SUT" "$1" "$2" "${3:-3}" "${4:-2}" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sut", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(m.ratchet_marker(int(sys.argv[2]), sys.argv[3], {"live": int(sys.argv[4]), "baseline": int(sys.argv[5])}))
+print(m.ratchet_marker(int(sys.argv[2]), sys.argv[3], {"live": int(sys.argv[4]), "baseline": int(sys.argv[5]), "accept": 0}))
 PY
 }
 wf_step_run() {   # wf_step_run <workflow> <stub rc> <stub stdout> [report bytes]: runs the step's run: body as GitHub does (bash -eo pipefail) -> SRC (its exit), SOUT, SSUM (the summary file), SARGS (python3's argv)
