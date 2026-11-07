@@ -1732,7 +1732,7 @@ t_pto_7_default_is_300_and_job_ceiling_covers_it() {
 }
 
 # wf_pr_read <workflow file>: 0 when the TOP-LEVEL permissions map grants `pull-requests: read` AND no job declares its own `permissions:` (a job-level
-# block would make the top-level line decorative). Parsed, not grepped: comments, quoting, flow style and key order cannot change the answer. The probe's restart floor needs the scope (#10865).
+# block would make the top-level line decorative). Parsed, not grepped: comments, quoting, flow style and key order cannot change the answer. Live probes read /pulls and the mixed issues endpoint through this scope (ci-push-dedupe-soak-9512.sh, ci-draft-light-soak-9728.sh et al.).
 wf_pr_read() {
   python3 -I -c 'import sys, yaml; d = yaml.safe_load(open(sys.argv[1])); sys.exit(0 if (d.get("permissions") or {}).get("pull-requests") == "read" and not any("permissions" in (j or {}) for j in (d.get("jobs") or {}).values()) else 1)' "$1" 2>/dev/null
 }
