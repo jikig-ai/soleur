@@ -10,6 +10,24 @@ brand_survival_threshold: single-user incident
 requires_cpo_signoff: true
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-07
+**Sections enhanced:** Research Insights (verification record), Operator-Visible Plan Output (edge branches, second check), Reconciliation (two rows), Test Scenarios (lexing rows), Acceptance Criteria
+**Agents used:** CTO (rulings R1 to R7 and F1 to F6), CPO (plan-time sign-off), plan-review panel (DHH, Kieran, code-simplicity, architecture-strategist, spec-flow), a sharp-edges catalogue pass, and the gdpr-gate trigger (b); the deepen halts 4.6 to 4.13 were run mechanically (results below)
+
+### Key improvements
+
+1. The literal "exactly four creates" cannot be read from the PR comment (untargeted, substitute credentials, standing baseline noise); the stop rule is now address-keyed plus a baseline-header diff, and the literal line is read from the merge run log.
+2. The merge itself triggers the standard web release and deploy (`apps/web-platform/**` path filter, evidenced by merge d875862); the plan states this and sets the probe expectation accordingly.
+3. The parent criterion `verify/185 bad = 0` was not measured by the pipeline (`verify-migrations` skipped in 4 of the 5 recent runs where `migrate` succeeded, all four on the `workflow_run` arm; the fifth was a manual dispatch); reported plainly, tracking issue in the work phase.
+
+### New considerations discovered
+
+- The PR comment's `hcloud_server.inngest` replace is an artifact of substitute credentials rendering a different cloud-init, even though that server is in the allow-list closure.
+- `random_password` is invisible to key-rotate Guard 5 and to the `random_*` redaction classifier, so no parity row, ledger row or rotation-table row is needed; rotation has no automated route (ruling F4).
+- Doppler names-only read: neither `soleur/dev` nor `soleur/prd` lists `LEGAL_ACCEPTANCE_VERIFY_TOKEN`, so the create overwrites nothing.
+
 ## Overview
 
 Follow-up to merged PR #12187 (parent #12011). The check endpoint for the founder's legal acceptance (`GET /api/internal/legal-acceptance/[key]`) exists and answers 503 until its bearer token and the founder id are configured. This change adds the one Terraform file that mints the token for the Doppler `dev` and `prd` configs of project `soleur`:
@@ -68,6 +86,29 @@ The PR body says `Ref #12196` and `Ref #12011`, never `Closes`.
 - `2026-03-25-doppler-secret-audit-before-creation.md`: audit every config before declaring a secret absent (done for dev and prd, names only; the other configs are inheritance-irrelevant for a create).
 - The state-exposure convention: `egress-audit.tf` and `github-app.tf` header paragraphs; ADR-241 residual R2; ADR-320.
 - `hr-tf-variable-no-operator-mint-default`: no Terraform variable, no default, the value is minted in the resource.
+
+### Precedent diff (deepen Phase 4.4)
+
+| Attribute | `live-verify.tf` (random_password + doppler_secret) | `egress-audit.tf` (random_id + doppler_secret) | This change |
+|---|---|---|---|
+| Generator | `random_password`, `length = 40`, `special = false` | `random_id`, `byte_length = 32` | `random_password`, `length = 48`, `special = false` (the route's lower bound is 48) |
+| Secret value | `random_password.live_verify_user.result` | `"eai-${random_id....hex}"` | `random_password.<own>.result` |
+| Secret attributes | `project = "soleur"`, `config = "prd"`, `visibility = "masked"`, no `ignore_changes` | same | same, plus a `dev` twin as in `inngest.tf` |
+| Per-merge reach | No: sits in `AUDIT_PENDING_UNCOVERED` (not converged by the merge) | Yes: three `-target=` lines | Yes: four `-target=` lines (required by the approval basis) |
+
+Provider facts used: `hashicorp/random` 3.9.0 is the locked version (`apps/web-platform/infra/.terraform.lock.hcl`); `special` defaults to true in that provider, hence the explicit `special = false`; `result` is a sensitive attribute, so the plan prints `(sensitive value)`. `visibility = "masked"` is already used by sibling `doppler_secret` blocks in the pinned `DopplerHQ/doppler` provider.
+
+### Deepen-plan halts (mechanical results, 2026-11-07)
+
+- 4.6 User-Brand Impact: present, threshold `single-user incident`. Pass.
+- 4.7 Observability: all five fields present; the probe starts with `curl`, no `ssh`, finishes well inside the 15 s cap, `expected_output` is the literal pair `503 or 401`; the probe is declared an endpoint-liveness check that cannot witness this change, the apply log line and the names-only read do. Pass.
+- 4.8 PAT-shaped variables: no hit. Pass.
+- 4.9 UI wireframe: no UI-surface file in the plan. Skipped.
+- 4.10 Encryption Posture: present, `does_not_defend` non-empty on every entry, no plaintext exception. Pass.
+- 4.11 Guard Contract: `lint-guard-contract.py` green (one guard, nine mutation rows, harness rows and anchor present); the Assembly names the directory-wide population and the `value` chokepoint, not today's two members. Pass.
+- 4.12 Scope Check: one unfenced section, three sub-sections, no unmapped ask, no empty justification, `Recommendation:` line present. Pass.
+- 4.13 Task Design: no new workflow, function, check or timer is created (the allow-list edit adds targets to an existing workflow). Skipped.
+- Quality checks: rule ids `cq-write-failing-tests-before` and `hr-tf-variable-no-operator-mint-default` exist as active rules; labels `type/chore`, `domain/engineering`, `priority/p2-medium` exist; PR #12187 and #12268 merged, #12307 open, issue #12011 open; run ids 42369320061, 42368554066, 42357001048 resolved live with `gh run view`; no new ADR is created (no ordinal to derive).
 
 ## Research Reconciliation — Spec vs. Codebase
 
