@@ -544,6 +544,22 @@ describe("seo-config-rules.tf origin-TLS canary + strict-flip rules (ADR-321)", 
     expect(offenders, "a workflow must not set the origin-TLS switches; they are Doppler-only").toEqual([]);
   });
 
+  // The archived plan's "Guard 1 - strict-flip precondition test" (knowledge-base/project/plans/archive/20261105-200240-...-plan.md)
+  // asked for a tree-level property: a tree with an app-host strict rule also contains the preconditions that make strict safe.
+  // The strict rule now exists (disabled) in every tree, so the property is asserted unconditionally. The 443 publish at the
+  // prod and first-boot docker-run sites is already mutation-pinned by infra/docker-run-tuple.test.sh (K24e, K27i); what was
+  // unpinned was the LB monitor: an http/:80 monitor stays green on a broken :443 and the B1 fallback hides it.
+  test("strict-flip precondition: the LB monitor probes https/443 with certificate validation", () => {
+    const lb = stripHclComments(
+      readFileSync(path.join(REPO_ROOT, "apps/web-platform/infra/cloudflare-lb.tf"), "utf-8"),
+    );
+    const m = lb.match(/resource\s+"cloudflare_load_balancer_monitor"\s+"web"\s*\{([\s\S]*?)\n\}/);
+    expect(m, "cloudflare_load_balancer_monitor.web must exist").not.toBeNull();
+    expect(m![1]).toMatch(/^\s*type\s*=\s*"https"\s*$/m);
+    expect(m![1]).toMatch(/^\s*port\s*=\s*443\s*$/m);
+    expect(m![1]).toMatch(/^\s*allow_insecure\s*=\s*false\s*$/m);
+  });
+
   test("the probe sends the same header the canary rule matches", () => {
     const probe = readFileSync(path.join(REPO_ROOT, "apps/web-platform/infra/origin-tls-probe.sh"), "utf-8");
     expect(probe).toContain("x-origin-tls-probe: 1");

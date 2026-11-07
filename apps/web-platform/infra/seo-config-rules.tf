@@ -488,5 +488,4 @@ resource "cloudflare_ruleset" "seo_config_settings" {
       ssl = "strict"
     }
   }
-
 }
