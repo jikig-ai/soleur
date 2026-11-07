@@ -163,6 +163,28 @@ if [ "$RC" = 2 ] && [ "$(verdict)" = "redeploy_credential_absent" ] && [ ! -s "$
   pass "C4: a hostile CF_ACCESS_CLIENT_ID -> verdict=redeploy_credential_absent, marker, no request"
 else fail "C4: a hostile Access value was not refused" "$(tail -3 "$OUT")"; fi
 
+# PF — TRACK_PREFLIGHT=1 (#9294: the cutover job's fail-closed trio check before any freeze or flag write). It applies the SAME
+# credential checks as a real run and then exits 0 with NOTHING sent: no curl, no health read, no poll.
+run_case pf-ok TRACK_PREFLIGHT=1
+if [ "$RC" = 0 ] && [ ! -s "$TLF" ] && grep -q 'preflight ok' "$OUT"; then
+  pass "PF1: TRACK_PREFLIGHT=1 with a complete, well-formed trio -> exit 0, no request"
+else fail "PF1: the preflight did not pass cleanly or sent a request" "$(tail -3 "$OUT")"; fi
+for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+  run_case "pf-$v" TRACK_PREFLIGHT=1 "$v="
+  if [ "$RC" = 2 ] && [ "$(verdict)" = "redeploy_credential_absent" ] && [ ! -s "$TLF" ] && ! grep -q 'preflight ok' "$OUT"; then
+    pass "PF2: TRACK_PREFLIGHT=1 with $v unset -> verdict=redeploy_credential_absent, exit 2, no request"
+  else fail "PF2: the preflight accepted a missing $v" "$(tail -3 "$OUT")"; fi
+done
+run_case pf-hostile TRACK_PREFLIGHT=1 'CF_ACCESS_CLIENT_SECRET=bad value"x'
+if [ "$RC" = 2 ] && [ "$(verdict)" = "redeploy_credential_absent" ] && [ ! -s "$TLF" ] && ! grep -q 'preflight ok' "$OUT"; then
+  pass "PF3: TRACK_PREFLIGHT=1 with a hostile Access secret -> refused like a real run"
+else fail "PF3: the preflight accepted a hostile Access secret" "$(tail -3 "$OUT")"; fi
+# PF4 — only the exact value 1 selects the mode: any other value is a real run (a stray TRACK_PREFLIGHT=0 must not silently skip the deploy).
+run_case pf-zero TRACK_PREFLIGHT=0
+if ! grep -q 'preflight ok' "$OUT"; then
+  pass "PF4: TRACK_PREFLIGHT=0 is not the preflight (the run proceeds to its real work)"
+else fail "PF4: TRACK_PREFLIGHT=0 short-circuited the deploy" "$(tail -3 "$OUT")"; fi
+
 # T1 — curl not on PATH (bash by absolute path; the rest of PATH is empty).
 rc=0
 env -i PATH="$T/emptybin" TL=/dev/null WEBHOOK_DEPLOY_SECRET=x CF_ACCESS_CLIENT_ID=x CF_ACCESS_CLIENT_SECRET=x \
