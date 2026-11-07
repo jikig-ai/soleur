@@ -66,7 +66,8 @@ except ImportError:
 # canonical's, derived below.
 SYNTHETIC_WORKFLOW = "merge-queue-cla-synthetics.yml"
 # Floor on the number of contexts examined: an empty or relocated canonical must not read
-# as "all covered". 12 = 10 CI (post-#12089 umbrella consolidation: 23 -> 10) + 2 CLA.
+# as "all covered". 14 = 12 CI (post-#12089 umbrella consolidation 23 -> 10, +affected-index-ratchet
+# and oracle-review-required made required by PR3b, #10859) + 2 CLA.
 MIN_CONTEXTS_DEFAULT = 14
 
 root = sys.argv[1]

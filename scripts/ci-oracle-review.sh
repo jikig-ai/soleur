@@ -114,13 +114,20 @@ if [ "$event" = pull_request ] && [ "${ORACLE_REVIEW_REEXEC:-}" != 1 ]; then
   if [ -n "$_work" ] && [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ && "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
     _rl="$(git rev-list --parents -n 1 HEAD 2>/dev/null)" || _rl=""
     read -r -a _parts <<< "$_rl"
-    if [ "${#_parts[@]}" -eq 3 ] \
-      && git show "${_parts[1]}:$ORACLE_DRIVER" > "$_work/driver-base" 2>/dev/null \
-      && [ -s "$_work/driver-base" ] && bash -n "$_work/driver-base" 2>/dev/null; then
-      ORACLE_REVIEW_REEXEC=1 RUNNER_TEMP="$_work" bash "$_work/driver-base"
-      _rc=$?
+    if [ "${#_parts[@]}" -eq 3 ] && git cat-file -e "${_parts[1]}:$ORACLE_DRIVER" 2>/dev/null; then
+      # The base carries the driver: extract + re-exec it. Any failure here is a
+      # fail-closed exit, NOT a silent fall-through to the HEAD copy — only a
+      # base that genuinely lacks the file may fall back to judging with HEAD's.
+      if git show "${_parts[1]}:$ORACLE_DRIVER" > "$_work/driver-base" 2>/dev/null \
+        && [ -s "$_work/driver-base" ] && bash -n "$_work/driver-base" 2>/dev/null; then
+        ORACLE_REVIEW_REEXEC=1 RUNNER_TEMP="$_work" bash "$_work/driver-base"
+        _rc=$?
+        rm -rf "$_work"
+        exit "$_rc"
+      fi
       rm -rf "$_work"
-      exit "$_rc"
+      echo "oracle-review-required: base driver present but unreadable/unparseable — failing closed" >&2
+      exit 1
     fi
   fi
   [ -z "$_work" ] || rm -rf "$_work"
