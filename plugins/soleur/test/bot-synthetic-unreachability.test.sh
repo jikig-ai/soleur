@@ -71,8 +71,9 @@ chk "ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅ (the synthetic green is not-oracle, 
 # bot-diff-reachable path into the selector's audit surface. (It MAY appear as an accept-row TARGET —
 # accept rows exempt a named path; the named file's content never moves the live set, only suite text,
 # edges, oracle files and the accept file itself do — none of which a bot PR can touch.)
+awk '/AFFECTED_[A-Z0-9_]*_PATHS=\(/{f=1;next} f&&/^[[:space:]]*\)/{f=0} f' "$PATHSLIB" > "$SANDBOX/edge-blocks.txt"
 chk "weakness-digest.md is named by no AFFECTED_*_PATHS edge (audit surface disjoint)" \
-  bash -c '! grep -n "weakness-digest.md" "$1" | grep -q "AFFECTED_.*_PATHS="' _ "$PATHSLIB"
+  bash -c '! grep -q "weakness-digest.md" "$1"' _ "$SANDBOX/edge-blocks.txt"
 
 # The synthetic consumer pins: both names in required-checks.txt (else bot PRs stop being synthesized).
 chk "affected-index-ratchet is in required-checks.txt (the synthetic set)" \
