@@ -32,7 +32,7 @@ Rulings: `knowledge-base/project/specs/feat-one-shot-12196-legal-acceptance-veri
 ## Phase 5: Tracking and ship
 
 - 5.1 File one tracking issue for the `verify-migrations` skip on the deploy arm (what, why, re-evaluation criterion, roadmap milestone).
-- 5.2 Names-only Doppler re-check of `soleur/dev` and `soleur/prd` (no values).
+- 5.2 Names-only Doppler re-check of `soleur/dev` and `soleur/prd` (no values) for `LEGAL_ACCEPTANCE_VERIFY_TOKEN` (must be absent) and `LEGAL_ACCEPTANCE_FOUNDER_ID` (report whether present).
 - 5.3 Commit with `LEFTHOOK_EXCLUDE=bun-test`; push only after ship's `prepush-secret-scan.sh`; mark draft PR #12307 ready (`Ref #12196`, `Ref #12011`, never `Closes`).
 - 5.4 Evaluate the stop rule (literal intersection plus baseline-header diff) on the PR sticky plan comment at the current PR head SHA and on the last main run; re-run it and the Doppler names-only check immediately before merging, with no apply run in flight on `main`; never `gh pr merge --auto`; any deviation or an absent or truncated comment: return the PR to draft, do not merge, report to the operator.
 - 5.5 Merge when clean; read the merge-run log for `Plan: 4 to add, 0 to change, 0 to destroy.` and `Apply complete! Resources: 4 added, 0 changed, 0 destroyed.`; boolean-only read that the two values differ and match `^[A-Za-z0-9]{48}$`; post the results as a comment on #12196 (it stays open); report the dark probe status (503 while the founder id is unset), that the merge also triggered the standard web release and deploy, the detective-only residual, and the open `verify-migrations` item.

@@ -50,7 +50,7 @@ shape are in the route docblock (`app/api/internal/legal-acceptance/[key]/route.
 as built"). The token is `LEGAL_ACCEPTANCE_VERIFY_TOKEN` (minted at 48 alphanumeric characters per Doppler config by `infra/legal-acceptance-secrets.tf`, #12196; the guard accepts 48 to 256),
 read through `lib/internal-auth-named.ts` so that `lib/internal-auth.ts` stays byte-identical to the CLO-discharged census sha.
 `/api/internal/legal-acceptance` is a prefix `PUBLIC_PATHS` entry (dynamic `[key]` segment; every handler under it must check the
-bearer first). The code merges dark: the endpoint answers 503 until the token and the founder id exist (follow-up #12196).
+bearer first). The code merges dark: the endpoint answers 503 until the token (minted by Terraform, #12196) and the founder id (entered by the operator) exist and the web app is redeployed.
 
 The hash is answered from the database for the exact hash asked. Whether it equals the committed text is the caller's job: the
 `web-acceptance` gate in `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh` compares it with the sha256 of the committed file.

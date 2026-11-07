@@ -17,6 +17,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { KEY_RE, LegalTextError, TEXT_HASH_RE, parseLegalText } from "@/server/legal-acceptance/canonical";
+import { stripHclComments } from "../lib/terraform-hcl-blocks";
 
 const WEB = path.join(__dirname, "../..");
 const REPO = path.join(WEB, "../..");
@@ -278,48 +279,19 @@ describe("bearer token length (verify route TOKEN_RE and the helper's bc_shape_o
 // The population is every `doppler_secret` under apps/web-platform/infra/*.tf named LEGAL_ACCEPTANCE_VERIFY_TOKEN (never
 // "the two in the new file"), plus the `random_password` each one references. All reads happen inside the `it` bodies: a throw
 // at collection would break every other test in this file.
+//
+// What this proves, and what it does not: consistency inside ONE commit (the .tf and the route are both editable by one diff),
+// not integrity. Outside its population: a secret written through a module call, a subdirectory root, a non-literal name, a
+// non-Terraform writer (workflow step, Doppler dashboard) — each is a separate edit that this suite does not see. Inside it the
+// check fails closed: any attribute or nested block the minting resources do not need is itself a violation.
 
 const TOKEN_NAME = "LEGAL_ACCEPTANCE_VERIFY_TOKEN";
 const INFRA = path.join(WEB, "infra");
+/** The only attributes a minting resource may carry. Anything else (count, for_each, provider, min_special, keepers, ...) can change what is minted or whether it is. */
+const GENERATOR_ATTRS = new Set(["length", "special"]);
+const SECRET_ATTRS = new Set(["project", "config", "name", "value", "visibility"]);
 
-/** HCL with `#`, `//` and block comments removed; a comment marker inside a double-quoted string is kept. */
-export function stripHclComments(src: string): string {
-  let out = "";
-  let inStr = false;
-  let i = 0;
-  while (i < src.length) {
-    const c = src[i];
-    const n = src[i + 1];
-    if (inStr) {
-      out += c;
-      if (c === "\\") {
-        out += n ?? "";
-        i += 2;
-        continue;
-      }
-      if (c === '"') inStr = false;
-      i++;
-      continue;
-    }
-    if (c === '"') {
-      inStr = true;
-      out += c;
-      i++;
-    } else if (c === "#" || (c === "/" && n === "/")) {
-      while (i < src.length && src[i] !== "\n") i++;
-    } else if (c === "/" && n === "*") {
-      const e = src.indexOf("*/", i + 2);
-      out += " ";
-      i = e < 0 ? src.length : e + 2;
-    } else {
-      out += c;
-      i++;
-    }
-  }
-  return out;
-}
-
-/** Index of the `}` that matches the `{` at `open` (strings skipped), or -1. */
+/** Index of the `}` that matches the `{` at `open` (strings skipped; HCL quoted strings never span lines), or -1. */
 function matchBrace(src: string, open: number): number {
   let depth = 0;
   let inStr = false;
@@ -327,7 +299,7 @@ function matchBrace(src: string, open: number): number {
     const c = src[i];
     if (inStr) {
       if (c === "\\") i++;
-      else if (c === '"') inStr = false;
+      else if (c === '"' || c === "\n") inStr = false;
     } else if (c === '"') inStr = true;
     else if (c === "{") depth++;
     else if (c === "}" && --depth === 0) return i;
@@ -350,7 +322,14 @@ export function parseHclResources(files: Record<string, string>): HclResource[] 
       let top = "";
       const nested: string[] = [];
       for (let i = 0; i < body.length; i++) {
-        if (body[i] === "{") {
+        if (body[i] === '"') {
+          // a quoted string is copied through verbatim, so `${...}` inside it is not read as a nested block
+          let j = i + 1;
+          while (j < body.length && body[j] !== '"' && body[j] !== "\n") j += body[j] === "\\" ? 2 : 1;
+          const end = body[j] === '"' ? j + 1 : j;
+          top += body.slice(i, end);
+          i = end - 1;
+        } else if (body[i] === "{") {
           const end = matchBrace(body, i);
           if (end < 0) throw new Error(`unbalanced braces inside ${file} (resource ${m[1]}.${m[2]})`);
           const id = /([A-Za-z_][\w-]*)\s*(?:"[^"]*"\s*)*$/.exec(top);
@@ -398,6 +377,8 @@ export function tokenViolations(files: Record<string, string>, bounds: { min: nu
     if (unquote(s.attrs.project) !== "soleur") v.push(`${id}: project must be "soleur"`);
     if (unquote(s.attrs.visibility) !== "masked") v.push(`${id}: visibility must be "masked"`);
     if (s.nested.includes("lifecycle") || /\bignore_changes\b/.test(s.raw)) v.push(`${id}: no lifecycle or ignore_changes (a -replace must reach Doppler)`);
+    for (const k of Object.keys(s.attrs)) if (!SECRET_ATTRS.has(k)) v.push(`${id}: unexpected attribute ${k} (count, for_each and provider can stop the secret being written)`);
+    for (const n of s.nested) if (n !== "lifecycle") v.push(`${id}: unexpected nested block ${n}`);
     const ref = /^random_password\.([A-Za-z0-9_-]+)\.result$/.exec(s.attrs.value ?? "");
     if (!ref) {
       v.push(`${id}: value must be random_password.<generator>.result, found ${JSON.stringify(s.attrs.value)}`);
@@ -413,14 +394,35 @@ export function tokenViolations(files: Record<string, string>, bounds: { min: nu
     const len = /^\d+$/.test(gen.attrs.length ?? "") ? Number(gen.attrs.length) : NaN;
     if (!(len >= bounds.min && len <= bounds.max)) v.push(`random_password.${gen.name}: length ${JSON.stringify(gen.attrs.length)} is outside the route bound ${bounds.min} to ${bounds.max}`);
     if (gen.attrs.special !== "false") v.push(`random_password.${gen.name}: special must be written as false (the provider default is true), found ${JSON.stringify(gen.attrs.special)}`);
+    for (const k of Object.keys(gen.attrs)) if (!GENERATOR_ATTRS.has(k)) v.push(`random_password.${gen.name}: unexpected attribute ${k} (it can change the alphabet, the entropy or when the value regenerates)`);
+    for (const n of gen.nested) v.push(`random_password.${gen.name}: unexpected nested block ${n}`);
   }
   return v;
 }
 
+/** Files Terraform merges or reads outside the plain `*.tf` scan: an override file edits a block by attribute, a `.tf.json` is a second syntax. */
+export function mergeShadowFiles(names: string[]): string[] {
+  return names.filter((n) => /^override\.tf$|_override\.tf$|\.tf\.json$/.test(n));
+}
+
+/** The alphanumerics the route's TOKEN_RE character class refuses (the generator emits [A-Za-z0-9] when special = false). */
+export function routeRefusedAlphanumerics(routeSrc: string): string[] {
+  const m = /^const TOKEN_RE = \/\^(\[[^\]]+\])\{\d+,\d+\}\$\/;$/m.exec(routeSrc);
+  const cls = nonEmpty("route TOKEN_RE character class", m ? [m[1]] : [])[0];
+  const re = new RegExp(`^${cls}$`);
+  return [..."ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"].filter((c) => !re.test(c));
+}
+
+/** The exported members of the route module. ADR-320: the token stays in Terraform only while the route reads and never writes. */
+export function routeExports(routeSrc: string): string[] {
+  return nonEmpty("route exports", [...routeSrc.matchAll(/^export (?:async )?(?:function|const) (\w+)/gm)].map((m) => m[1])).sort();
+}
+
 describe("the minted token (legal-acceptance-secrets.tf) against the route bound", () => {
+  const infraNames = (): string[] => readdirSync(INFRA);
   const infra = (): Record<string, string> =>
     Object.fromEntries(
-      readdirSync(INFRA)
+      infraNames()
         .filter((f) => f.endsWith(".tf"))
         .map((f) => [f, read(path.join(INFRA, f))]),
     );
@@ -445,80 +447,175 @@ describe("the minted token (legal-acceptance-secrets.tf) against the route bound
   const DEV_GEN = ["random_password", "legal_acceptance_verify_token_dev"] as const;
   const PRD_SEC = ["doppler_secret", "legal_acceptance_verify_token_prd"] as const;
   const DEV_SEC = ["doppler_secret", "legal_acceptance_verify_token_dev"] as const;
+  /** Insert one line before a block's closing brace (every real block ends with a `}` on its own line). */
+  const addLine = (line: string) => (b: string) => b.replace(/\}\s*$/, () => `  ${line}\n}`);
+  const withLength = (gen: readonly [string, string], n: number) => mutate(gen, (b) => b.replace(/length\s*=\s*\d+/, () => `length = ${n}`));
+  const violations = (files: Record<string, string>, b = bounds()) => tokenViolations(files, b).join("\n");
 
-  it("the real files mint exactly two masked secrets (dev, prd) from two distinct 48-character alphanumeric generators", () => {
+  it("the real files mint exactly two masked secrets (dev, prd) from two distinct generators inside the route bound", () => {
+    expect.hasAssertions();
     const files = infra();
     expect(tokenViolations(files, bounds())).toEqual([]);
     const res = parseHclResources(files);
     expect(res.filter((r) => r.type === "doppler_secret" && unquote(r.attrs.name) === TOKEN_NAME)).toHaveLength(2);
     expect(res.filter((r) => r.type === "random_password" && r.name.startsWith("legal_acceptance_verify_token_"))).toHaveLength(2);
-    expect(bounds()).toEqual({ min: 48, max: 256 });
   });
 
-  it("an empty extraction throws instead of reading as agreement (rename both, no file, comments only)", () => {
+  it("the loader reads the whole infra directory, not one file (the population is directory-wide)", () => {
+    expect.hasAssertions();
+    const names = Object.keys(infra());
+    expect(names).toContain(FILE);
+    expect(names.length).toBeGreaterThan(10);
+    expect(names).toEqual(infraNames().filter((f) => f.endsWith(".tf")));
+  });
+
+  it("the parser sees every resource header in every infra file (a desync that swallows a file would shrink the population)", () => {
+    expect.hasAssertions();
+    for (const [file, text] of Object.entries(infra())) {
+      const headers = (stripHclComments(text).match(/^[ \t]*resource\s+"[^"]+"\s+"[^"]+"\s*\{/gm) ?? []).length;
+      expect(parseHclResources({ [file]: text }).length, file).toBe(headers);
+    }
+  });
+
+  it("an empty extraction throws instead of reading as agreement (rename both, no file, a block comment that holds a whole resource)", () => {
+    expect.hasAssertions();
     expect(() => tokenViolations({}, bounds())).toThrow(/found nothing/);
-    expect(() => tokenViolations({ [FILE]: "# resource \"doppler_secret\" \"x\" {}\n" }, bounds())).toThrow(/found nothing/);
+    const commented = `/*\nresource "doppler_secret" "x" {\n  name = "${TOKEN_NAME}"\n}\n*/\n`;
+    expect(parseHclResources({ [FILE]: commented })).toEqual([]);
+    expect(() => tokenViolations({ [FILE]: commented }, bounds())).toThrow(/found nothing/);
     const renamed = infra();
     renamed[FILE] = renamed[FILE].replaceAll(TOKEN_NAME, "SOMETHING_ELSE").replaceAll("legal_acceptance_verify_token", "other_token");
     expect(() => tokenViolations(renamed, bounds())).toThrow(/found nothing/);
   });
 
-  it("a generator below the lower bound, above the upper bound or off the exact class is detected", () => {
+  it("the length boundary: 47 and 257 are refused, 48 and 64 and 256 are accepted, for either generator", () => {
+    expect.hasAssertions();
     for (const gen of [PRD_GEN, DEV_GEN]) {
-      expect(tokenViolations(mutate(gen, (b) => b.replace(/length\s*=\s*48/, () => "length = 32")), bounds()).join("\n")).toMatch(/outside the route bound/);
-      expect(tokenViolations(mutate(gen, (b) => b.replace(/length\s*=\s*48/, () => "length = 300")), bounds()).join("\n")).toMatch(/outside the route bound/);
-      expect(tokenViolations(mutate(gen, (b) => b.replace(/special\s*=\s*false/, () => "special = true")), bounds()).join("\n")).toMatch(/special must be written as false/);
-      expect(tokenViolations(mutate(gen, (b) => b.replace(/^\s*special\s*=\s*false\n/m, () => "")), bounds()).join("\n")).toMatch(/special must be written as false/);
-      expect(tokenViolations(mutate(gen, (b) => b.replace(/special\s*=\s*false/, () => "# special = false")), bounds()).join("\n")).toMatch(/special must be written as false/);
+      for (const n of [47, 257, 300, 32]) expect(violations(withLength(gen, n)), `${gen[1]} length ${n}`).toMatch(/outside the route bound/);
+      for (const n of [48, 64, 256]) expect(tokenViolations(withLength(gen, n), bounds()), `${gen[1]} length ${n}`).toEqual([]);
+    }
+  });
+
+  it("the bound comes from the argument, not from a constant inside the guard", () => {
+    expect.hasAssertions();
+    expect(violations(infra(), { min: 64, max: 256 })).toMatch(/outside the route bound 64 to 256/);
+    expect(violations(infra(), { min: 1, max: 47 })).toMatch(/outside the route bound 1 to 47/);
+  });
+
+  it("a generator off the exact class is detected: special true, removed, commented out, or any extra attribute", () => {
+    expect.hasAssertions();
+    for (const gen of [PRD_GEN, DEV_GEN]) {
+      expect(violations(mutate(gen, (b) => b.replace(/special\s*=\s*false/, () => "special = true"))), `${gen[1]} true`).toMatch(/special must be written as false/);
+      expect(violations(mutate(gen, (b) => b.replace(/^\s*special\s*=\s*false\n/m, () => ""))), `${gen[1]} removed`).toMatch(/special must be written as false/);
+      expect(violations(mutate(gen, (b) => b.replace(/special\s*=\s*false/, () => "# special = false"))), `${gen[1]} commented`).toMatch(/special must be written as false/);
+      for (const line of ["min_special = 4", 'override_special = "!@#"', "upper = false", "count = 0", "keepers = { a = \"b\" }", "provider = doppler.alt"]) {
+        expect(violations(mutate(gen, addLine(line))), `${gen[1]} + ${line}`).toMatch(/unexpected attribute/);
+      }
+      expect(violations(mutate(gen, addLine("lifecycle {\n    prevent_destroy = true\n  }"))), `${gen[1]} lifecycle`).toMatch(/unexpected nested block lifecycle/);
+    }
+  });
+
+  it("a secret that is not written as expected is detected: name, project, visibility, count, for_each, provider", () => {
+    expect.hasAssertions();
+    for (const sec of [PRD_SEC, DEV_SEC]) {
+      expect(violations(mutate(sec, (b) => b.replace(/name\s*=\s*"[A-Z_]+"/, () => `name = "${TOKEN_NAME}_X"`))), `${sec[1]} name`).toMatch(/name is not/);
+      expect(violations(mutate(sec, (b) => b.replace(/project\s*=\s*"soleur"/, () => 'project = "other"'))), `${sec[1]} project`).toMatch(/project must be "soleur"/);
+      expect(violations(mutate(sec, (b) => b.replace(/visibility\s*=\s*"masked"/, () => 'visibility = "unmasked"'))), `${sec[1]} unmasked`).toMatch(/visibility must be "masked"/);
+      expect(violations(mutate(sec, (b) => b.replace(/^\s*visibility\s*=.*\n/m, () => ""))), `${sec[1]} no visibility`).toMatch(/visibility must be "masked"/);
+      for (const line of ["count = 0", "for_each = {}", "provider = doppler.alt", "depends_on = []"]) {
+        expect(violations(mutate(sec, addLine(line))), `${sec[1]} + ${line}`).toMatch(/unexpected attribute/);
+      }
     }
   });
 
   it("a resource written on one line is parsed, not skipped (and is judged like any other)", () => {
+    expect.hasAssertions();
     const one = mutate(PRD_GEN, () => 'resource "random_password" "legal_acceptance_verify_token_prd" { length = 48 }');
     expect(parseHclResources(one).find((r) => r.name === "legal_acceptance_verify_token_prd")?.attrs.length).toBe("48");
-    expect(tokenViolations(one, bounds()).join("\n")).toMatch(/special must be written as false/);
+    expect(violations(one)).toMatch(/special must be written as false/);
   });
 
   it("a second secret under the same name in ANOTHER file is detected (the population is directory-wide)", () => {
+    expect.hasAssertions();
     const files = infra();
-    files["zz-extra.tf"] = 'resource "doppler_secret" "extra" {\n  project = "soleur"\n  config = "stg"\n  name = "LEGAL_ACCEPTANCE_VERIFY_TOKEN"\n  value = random_password.legal_acceptance_verify_token_prd.result\n  visibility = "masked"\n}\n';
-    const v = tokenViolations(files, bounds()).join("\n");
+    files["zz-extra.tf"] = `resource "doppler_secret" "extra" {\n  project = "soleur"\n  config = "stg"\n  name = "${TOKEN_NAME}"\n  value = random_password.legal_acceptance_verify_token_prd.result\n  visibility = "masked"\n}\n`;
+    const v = violations(files);
     expect(v).toMatch(/exactly 2 doppler_secret blocks/);
     expect(v).toMatch(/configs must be exactly dev and prd/);
   });
 
-  it("dev and prd sharing a generator is detected", () => {
+  it("dev and prd sharing a generator is detected; so is a generator that is not defined", () => {
+    expect.hasAssertions();
     const shared = mutate(DEV_SEC, (b) => b.replace("legal_acceptance_verify_token_dev.result", () => "legal_acceptance_verify_token_prd.result"));
-    expect(tokenViolations(shared, bounds()).join("\n")).toMatch(/shared with the other config/);
+    expect(violations(shared)).toMatch(/shared with the other config/);
+    const missing = mutate(DEV_SEC, (b) => b.replace("legal_acceptance_verify_token_dev.result", () => "nowhere.result"));
+    expect(violations(missing)).toMatch(/generator random_password\.nowhere is not defined/);
   });
 
-  it("a value that is not a generator reference (literal, variable, hex) is detected", () => {
-    for (const value of ['"literal-value"', "var.token", "random_id.x.hex"]) {
+  it("a value that is not exactly a generator result is detected (literal, variable, hex, other attribute, suffix)", () => {
+    expect.hasAssertions();
+    for (const value of ['"literal-value"', "var.token", "random_id.x.hex", "random_password.legal_acceptance_verify_token_prd.bcrypt_hash", "random_password.legal_acceptance_verify_token_prd.result.extra"]) {
       const files = mutate(PRD_SEC, (b) => b.replace(/value\s*=\s*random_password\.[\w-]+\.result/, () => `value = ${value}`));
-      expect(tokenViolations(files, bounds()).join("\n"), value).toMatch(/value must be random_password/);
+      expect(violations(files), value).toMatch(/value must be random_password/);
     }
   });
 
-  it("ignore_changes or any lifecycle block on a secret is detected; one on a SIBLING resource is not attributed to it", () => {
+  it("ignore_changes or any lifecycle block on a secret is detected; one on a SIBLING in the same file or another file is not attributed to it", () => {
+    expect.hasAssertions();
     for (const sec of [PRD_SEC, DEV_SEC]) {
-      const ic = mutate(sec, (b) => b.replace(/\}\s*$/, () => "  lifecycle {\n    ignore_changes = [value]\n  }\n}"));
-      expect(tokenViolations(ic, bounds()).join("\n")).toMatch(/no lifecycle or ignore_changes/);
+      expect(violations(mutate(sec, addLine("lifecycle {\n    ignore_changes = [value]\n  }"))), `${sec[1]} ignore_changes`).toMatch(/no lifecycle or ignore_changes/);
+      expect(violations(mutate(sec, addLine("lifecycle {\n    prevent_destroy = true\n  }"))), `${sec[1]} prevent_destroy`).toMatch(/no lifecycle or ignore_changes/);
     }
-    const sibling = infra();
-    sibling["zz-sibling.tf"] = 'resource "doppler_secret" "unrelated" {\n  project = "soleur"\n  config = "prd"\n  name = "OTHER"\n  value = "x"\n  lifecycle {\n    ignore_changes = [value]\n  }\n}\n';
-    expect(tokenViolations(sibling, bounds())).toEqual([]);
+    const sibling = (extra: string) => `\nresource "doppler_secret" "unrelated" {\n  project = "soleur"\n  config = "prd"\n  name = "OTHER"\n  value = "x"\n${extra}}\n`;
+    const otherFile = infra();
+    otherFile["zz-sibling.tf"] = sibling("  lifecycle {\n    ignore_changes = [value]\n  }\n");
+    expect(tokenViolations(otherFile, bounds())).toEqual([]);
+    const sameFile = infra();
+    sameFile[FILE] += sibling("  lifecycle {\n    ignore_changes = [value]\n  }\n");
+    expect(tokenViolations(sameFile, bounds())).toEqual([]);
   });
 
-  it("must-PASS inputs that are not the canonical text: attributes reordered, a trailing comment, length 64", () => {
-    const reordered = mutate(PRD_GEN, (b) => b.replace(/^(\s*length\s*=\s*48\n)(\s*special\s*=\s*false\n)/m, (_m, a: string, c: string) => c + a));
+  it("must-PASS inputs that are not the canonical text: attributes reordered, a trailing comment, unaligned equals signs, CRLF", () => {
+    expect.hasAssertions();
+    const reordered = mutate(PRD_GEN, (b) => b.replace(/^(\s*length\s*=\s*\d+\n)(\s*special\s*=\s*false\n)/m, (_m, a: string, c: string) => c + a));
     expect(tokenViolations(reordered, bounds())).toEqual([]);
-    const commented = mutate(DEV_GEN, (b) => b.replace(/length\s*=\s*48/, () => "length = 48 # the route lower bound"));
+    const commented = mutate(DEV_GEN, (b) => b.replace(/length\s*=\s*\d+/, () => "length = 48 # the route lower bound").replace(/special\s*=\s*false/, () => "special=false // explicit"));
     expect(tokenViolations(commented, bounds())).toEqual([]);
-    const sixtyFour = mutate(PRD_GEN, (b) => b.replace(/length\s*=\s*48/, () => "length = 64"));
-    expect(tokenViolations(sixtyFour, bounds())).toEqual([]);
+    const crlf = mutate(PRD_GEN, (b) => b.replaceAll("\n", "\r\n"));
+    expect(tokenViolations(crlf, bounds())).toEqual([]);
   });
 
-  it("the comment stripper keeps a marker inside a string and drops the three comment forms", () => {
-    expect(stripHclComments('a = "x # y" # c\nb = 1 // d\n/* e\nf */ g = 2')).toBe('a = "x # y" \nb = 1 \n  g = 2');
+  it("a quoted `${...}` inside a value is read as part of the string, not as a nested block", () => {
+    expect.hasAssertions();
+    const res = parseHclResources({ x: 'resource "doppler_secret" "q" {\n  note = "a ${var.b} c"\n  value = "${random_password.p.result}"\n}\n' });
+    expect(res[0].nested).toEqual([]);
+    expect(res[0].attrs.value).toBe('"${random_password.p.result}"');
+  });
+
+  it("the route's character class accepts every alphanumeric the generator can emit (and the check sees a narrower class)", () => {
+    expect.hasAssertions();
+    expect(routeRefusedAlphanumerics(ROUTE_SRC)).toEqual([]);
+    expect(routeRefusedAlphanumerics(ROUTE_SRC.replace(/\[A-Za-z0-9\._~\+\/=-\]/, () => "[a-z0-9]")).length).toBeGreaterThan(0);
+  });
+
+  it("no override file or .tf.json sits in the infra root (Terraform would merge it over the block this suite reads)", () => {
+    expect.hasAssertions();
+    expect(mergeShadowFiles(infraNames())).toEqual([]);
+    expect(mergeShadowFiles(["a.tf", "override.tf", "x_override.tf", "y.tf.json", "overrides.tf"])).toEqual(["override.tf", "x_override.tf", "y.tf.json"]);
+  });
+
+  it("the token NAME is the same literal in the Terraform file, the route, the named-bearer type and the hold gate", () => {
+    expect.hasAssertions();
+    expect(ROUTE_SRC).toContain(`readNamedBearerSecret("${TOKEN_NAME}")`);
+    const named = /export type NamedBearerSecretName = "([A-Z_]+)";/.exec(read(path.join(WEB, "lib/internal-auth-named.ts")));
+    expect(named?.[1]).toBe(TOKEN_NAME);
+    const gate = /^WA_TOKEN_NAME='([A-Z_]+)'$/m.exec(GATE_SRC);
+    expect(gate?.[1]).toBe(TOKEN_NAME);
+  });
+
+  it("the route only reads: GET is its only handler (ADR-320 decision 1 and 4: a write path moves the token out of Terraform)", () => {
+    expect.hasAssertions();
+    expect(routeExports(ROUTE_SRC), "the verify route gained an export; a write path or a wider response re-triggers the ADR-320 decision-4 review and moves LEGAL_ACCEPTANCE_VERIFY_TOKEN out of Terraform").toEqual(["GET", "dynamic"]);
+    expect(routeExports(`${ROUTE_SRC}\nexport async function POST() {}`)).toContain("POST");
   });
 });
