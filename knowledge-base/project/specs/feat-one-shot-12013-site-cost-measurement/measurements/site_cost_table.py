@@ -200,7 +200,7 @@ def build(raw, total=TOTAL, opts=None):
             "cost": max(Decimal(0), raw),
             "noise": agg(noises, opts.use_mean),
             "nonowner": agg(nonown, opts.use_mean),
-            "live": int(median(lives) + Decimal("0.5")) if not opts.use_mean else int(agg(lives, True)),
+            "live": int(Decimal(str(median(lives))) + Decimal("0.5")) if not opts.use_mean else int(agg(lives, True)),
             "by_rep": raws,
         }
         final[k]["flag"] = "flag" if (final[k]["cost"] < final[k]["noise"] or final[k]["nonowner"] > FLAG_NONOWNER_S) else "-"
@@ -347,6 +347,13 @@ def selftest():
         except Refusal as e:
             bad = [str(e)]
         check(f"mutant must go RED: {name}", bool(bad))
+    # two reps (the shipped case): the median of integer counts is a half-integer and must round, not crash
+    two = os.path.join(tmp, "two")
+    os.makedirs(two)
+    for rep in ("r1", "r2"):
+        make_rep(two, rep, base_costs)
+    t2 = build(two)
+    check("two-rep build: others_live of site 1 is 2 and cost of site 193 is 7", t2["final"][1]["live"] == 2 and f3(t2["final"][193]["cost"]) == "7.000")
     # refusals
     for label, kw in (("DISTURBED guard", {"clean": False}), ("extra stamp line", {"extra_line": True}), ("time goes backwards", {"backwards": True})):
         d = os.path.join(tmp, "bad-" + label.split()[0])

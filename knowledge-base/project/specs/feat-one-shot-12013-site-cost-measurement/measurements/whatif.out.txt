@@ -1,0 +1,28 @@
+site_cost_whatif.py: check ok: 602 rows, ranges {'a': (1, 193), 'b': (194, 386), 'c': (387, 602)}, tree b21d8dd5130d878a32acdf8d05879641b302a4b0
+site_cost_whatif.py: packing floor t1: sum of walls 5975 s / 4 = 1494 s; with cold derive 216 s: 1710 s (bar 600 s)
+site_cost_whatif.py: packing floor control2: sum of walls 5562 s / 4 = 1391 s; with cold derive 234 s: 1625 s (bar 600 s)
+site_cost_whatif.py: model t1: removed drain suites ['scripts/test-all-capacity-signal']; modelled pool end 1842 s, archived 1845 s; approval-guard1-mutation start modelled 762 s archived 765 s; run ends on apps/web-platform/test/approval-guard1-mutation
+site_cost_whatif.py: model control2: removed drain suites ['scripts/test-all-capacity-signal']; modelled pool end 1656 s, archived 1891 s; approval-guard1-mutation start modelled 777 s archived 779 s; run ends on apps/web-platform/test/approval-guard1-mutation
+site_cost_whatif.py: model: t1 order with control2 walls puts approval-guard1-mutation ending at 1654 s, archived control2 1659 s
+site_cost_whatif.py: model reproduction ok (limit 15 s)
+site_cost_whatif.py: validation t1: pooled/predicted b=1.078 c=1.116 spread=3.4% (limit 10%) scale=1.097
+site_cost_whatif.py: validation t1: arm a alone_s=827.2 overlapped_s=210.1 predicted_pooled_s=1402.0 archived_s=1487.3 error=5.7% (limit 15%)
+site_cost_whatif.py: validation control2: pooled/predicted b=1.069 c=1.092 spread=2.1% (limit 10%) scale=1.080
+site_cost_whatif.py: validation control2: arm a alone_s=827.2 overlapped_s=210.1 predicted_pooled_s=1393.2 archived_s=1364.8 error=2.1% (limit 15%)
+site_cost_whatif.py: validation flagged sites arm a: 1 of 193, holding 0.3% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation flagged sites arm b: 0 of 193, holding 0.0% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation flagged sites arm c: 2 of 216, holding 1.8% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation split-half arm a: 6 material blocks, unstable blocks=[], rank order DIFFERS
+site_cost_whatif.py: validation split-half arm b: 5 material blocks, unstable blocks=[1, 4, 5, 7], rank order equal
+site_cost_whatif.py: validation split-half arm c: 9 material blocks, unstable blocks=[2, 3, 5, 6], rank order DIFFERS
+site_cost_whatif.py: validation rep-disagreement arm a: sites with r1/r2 cost differing by more than max(2 s, 25%) hold 9.0% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation rep-disagreement arm b: sites with r1/r2 cost differing by more than max(2 s, 25%) hold 4.1% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation rep-disagreement arm c: sites with r1/r2 cost differing by more than max(2 s, 25%) hold 0.0% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation FAILED: the table does not support a rebalance
+site_cost_whatif.py: main pristine_charge=off: baseline pool end 1842 s (ends on approval-guard1-mutation); best split 1-18 / 19-586 / 587-602 arm walls 387/1718/359; pool end 1727 s; nominal gain 115 s; min paired gain over 81 combinations -357 s
+site_cost_whatif.py: main pristine_charge=on: baseline pool end 1842 s (ends on approval-guard1-mutation); best split 1-555 / 556-558 / 559-602 arm walls 1725/345/385; pool end 1726 s; nominal gain 116 s; min paired gain over 81 combinations -366 s
+site_cost_whatif.py: start-first pristine_charge=off: baseline pool end 1509 s (ends on dev-ledger-parity.test.sh); best split 1-53 / 54-576 / 577-602 arm walls 807/1285/371; pool end 1493 s; nominal gain 16 s; min paired gain over 81 combinations -20 s
+site_cost_whatif.py: start-first pristine_charge=on: baseline pool end 1509 s (ends on dev-ledger-parity.test.sh); best split 1-56 / 57-599 / 600-602 arm walls 824/1283/349; pool end 1491 s; nominal gain 18 s; min paired gain over 81 combinations -18 s
+site_cost_whatif.py: cross-check: the charged-model split 1-555 / 556-558 / 559-602 gains 108 s under the uncharged model
+site_cost_whatif.py: #12263 pricing t1 (measured walls, drain suites removed): packing floor 1492 s; order as run 1842 s (ends on approval-guard1-mutation); approval-guard1-mutation first 1538 s (gap to floor 46 s, ends on dev-ledger-parity.test.sh); three long suites first 1523 s (gap to floor 31 s, ends on dev-ledger-parity.test.sh)
+GATE: NO-REBALANCE (table does not support a rebalance)

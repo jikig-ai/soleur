@@ -1,0 +1,90 @@
+Site-cost measurement of the three replay arms and the paper checks on it (Ref #12013, #12231, #12263)
+Tree under test: b21d8dd5130d878a32acdf8d05879641b302a4b0 (main 5a98235b4d plus this branch's knowledge-base files; the replay test and its libraries are main's). DECLARED_TOTAL=602, arms 1-193 / 194-386 / 387-602.
+
+METHOD
+Fresh clone per reading, detached at the tree, with the uncommitted stamp hook (rows-range-site-cost-hook.patch) applied inside the clone only. The three arms ran concurrently and standalone (nice 10, env -u CI, own TMPDIR each). A stamp is written at the end of argument parsing (0), at the gate of site k (k), and at the entry of the end-of-file gate (EOF). raw_cost of site k = the owner arm's interval k to k+1 minus the median of the two other arms' intervals over the same site (unclamped); reps are aggregated by median; unconditional_s of an arm = its wall minus its owned raw_cost. Raw files: raw/. Table: site_costs.tsv (by-rep values: site_costs.by_rep.tsv). Rebuild: python3 -I site_cost_table.py raw rebuilt.tsv.
+The table is a standalone-contention measurement scaled to the pool by a fitted factor; it is relative cost. No pooled gain is claimed from it.
+
+READINGS (rejection rule: load1 above 9.0 at start, or any other test-all.sh / replay-arm run live at start or end, makes a reading DISTURBED and not a result; budget_seconds untouched at 2400)
+rep r1 DISTURBED: a sibling worktree's test-all.sh was live at the end (guard file in disturbed/); arms ran 585 / 595 / 1411 s (c / b / a). Not used.
+rep r2 DISTURBED: its guard file says CLEAN, but it overlapped rep r3 (two readings started two seconds apart, both passing the start guard; an error of this session's driver, since fixed by an exclusive lock in site_cost_run.sh). The guard could not see it because r3 had finished when r2 looked. Not used.
+rep r3 DISTURBED: overlapped r2 (see above); a foreign run (r2's clone) was live at the end, max load1 55, arm a exited 1. Not used.
+rep r4 CLEAN: load1 at start 2.81, no foreign run at start or end, max load1 during 10.91 (a 1-minute average that includes the reading's own three arms and sibling sessions; informational), walls c 507.9 / b 514.5 / a 1403.1 s.
+rep r5 CLEAN: load1 at start 1.98, no foreign run at start or end, max load1 during 15.14 (same caveat), walls c 450.5 / b 452.6 / a 1310.0 s.
+A third clean rep was not taken: no arm's wall differs by more than 15% between r4 and r5 (largest: b, 13.7%). The two clean reps are all the table rests on.
+Hook transparency (smoke, rows 1-1): the hooked arm printed the same "718 passed, 0 failed, 718 assertions, 0 mutants" line as the unhooked arm, and wrote 604 stamp lines.
+
+WHAT THE TABLE SHOWS (script output, site_costs.tsv header and sums)
+arm unconditional share (standalone, seconds, from the header): a=313.901 b=311.848 c=313.110
+arm wall (standalone, median of r4 and r5): a=1356.512 b=483.547 c=479.196
+gated site seconds, arm a: 1042.6 s (57 sites above 5 s)
+gated site seconds, arm b: 171.7 s (8 sites above 5 s)
+gated site seconds, arm c: 166.1 s (3 sites above 5 s)
+The code before the first gated site (head) took 276 to 310 s in every arm of both clean reps (r4: 308.6 / 308.6 / 310.1 s; r5: 275.9 / 279.5 / 275.9 s for a / b / c) and the code after the last site (tail) 3 to 9 s. That is unconditional work every arm repeats: about 940 slot-seconds of the 5975 s of suite walls of the t1 reading, run three times.
+Gated work is concentrated: arm a holds about 76% of the gated site-seconds. The largest sites are listed below (cost_s, site, arm, row).
+top20 41.099	125	a	row_ow_retry
+top20 35.739	45	a	row_ow_facts_wall
+top20 34.384	100	a	row_ow_retry
+top20 31.833	43	a	row_ow_trap
+top20 31.333	479	c	row_rt_big_baseline
+top20 30.143	354	b	row_sym
+top20 29.558	99	a	row_ow_retry
+top20 26.087	36	a	row_ow_budget
+top20 25.804	29	a	row_ow_budget
+top20 25.692	32	a	row_ow_budget
+top20 25.430	30	a	row_ow_budget
+top20 25.342	31	a	row_ow_budget
+top20 24.239	126	a	row_ow_retry
+top20 23.391	124	a	row_ow_retry
+top20 23.180	88	a	row_ow_retry
+top20 21.972	48	a	row_ow_parallelism
+top20 21.713	87	a	row_ow_retry
+top20 20.257	123	a	row_ow_retry
+top20 19.612	33	a	row_ow_deadline_cap
+top20 18.989	34	a	row_ow_deadline_cap
+
+VALIDATION AND PAPER CHECKS (copied from whatif.out.txt, written by site_cost_whatif.py)
+site_cost_whatif.py: packing floor t1: sum of walls 5975 s / 4 = 1494 s; with cold derive 216 s: 1710 s (bar 600 s)
+site_cost_whatif.py: packing floor control2: sum of walls 5562 s / 4 = 1391 s; with cold derive 234 s: 1625 s (bar 600 s)
+site_cost_whatif.py: model t1: removed drain suites ['scripts/test-all-capacity-signal']; modelled pool end 1842 s, archived 1845 s; approval-guard1-mutation start modelled 762 s archived 765 s; run ends on apps/web-platform/test/approval-guard1-mutation
+site_cost_whatif.py: model control2: removed drain suites ['scripts/test-all-capacity-signal']; modelled pool end 1656 s, archived 1891 s; approval-guard1-mutation start modelled 777 s archived 779 s; run ends on apps/web-platform/test/approval-guard1-mutation
+site_cost_whatif.py: model: t1 order with control2 walls puts approval-guard1-mutation ending at 1654 s, archived control2 1659 s
+site_cost_whatif.py: model reproduction ok (limit 15 s)
+site_cost_whatif.py: validation t1: pooled/predicted b=1.078 c=1.116 spread=3.4% (limit 10%) scale=1.097
+site_cost_whatif.py: validation t1: arm a alone_s=827.2 overlapped_s=210.1 predicted_pooled_s=1402.0 archived_s=1487.3 error=5.7% (limit 15%)
+site_cost_whatif.py: validation control2: pooled/predicted b=1.069 c=1.092 spread=2.1% (limit 10%) scale=1.080
+site_cost_whatif.py: validation control2: arm a alone_s=827.2 overlapped_s=210.1 predicted_pooled_s=1393.2 archived_s=1364.8 error=2.1% (limit 15%)
+site_cost_whatif.py: validation flagged sites arm a: 1 of 193, holding 0.3% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation flagged sites arm b: 0 of 193, holding 0.0% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation flagged sites arm c: 2 of 216, holding 1.8% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation split-half arm a: 6 material blocks, unstable blocks=[], rank order DIFFERS
+site_cost_whatif.py: validation split-half arm b: 5 material blocks, unstable blocks=[1, 4, 5, 7], rank order equal
+site_cost_whatif.py: validation split-half arm c: 9 material blocks, unstable blocks=[2, 3, 5, 6], rank order DIFFERS
+site_cost_whatif.py: validation rep-disagreement arm a: sites with r1/r2 cost differing by more than max(2 s, 25%) hold 9.0% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation rep-disagreement arm b: sites with r1/r2 cost differing by more than max(2 s, 25%) hold 4.1% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation rep-disagreement arm c: sites with r1/r2 cost differing by more than max(2 s, 25%) hold 0.0% of raw site-seconds (limit 20%)
+site_cost_whatif.py: validation FAILED: the table does not support a rebalance
+site_cost_whatif.py: main pristine_charge=off: baseline pool end 1842 s (ends on approval-guard1-mutation); best split 1-18 / 19-586 / 587-602 arm walls 387/1718/359; pool end 1727 s; nominal gain 115 s; min paired gain over 81 combinations -357 s
+site_cost_whatif.py: main pristine_charge=on: baseline pool end 1842 s (ends on approval-guard1-mutation); best split 1-555 / 556-558 / 559-602 arm walls 1725/345/385; pool end 1726 s; nominal gain 116 s; min paired gain over 81 combinations -366 s
+site_cost_whatif.py: start-first pristine_charge=off: baseline pool end 1509 s (ends on dev-ledger-parity.test.sh); best split 1-53 / 54-576 / 577-602 arm walls 807/1285/371; pool end 1493 s; nominal gain 16 s; min paired gain over 81 combinations -20 s
+site_cost_whatif.py: start-first pristine_charge=on: baseline pool end 1509 s (ends on dev-ledger-parity.test.sh); best split 1-56 / 57-599 / 600-602 arm walls 824/1283/349; pool end 1491 s; nominal gain 18 s; min paired gain over 81 combinations -18 s
+site_cost_whatif.py: cross-check: the charged-model split 1-555 / 556-558 / 559-602 gains 108 s under the uncharged model
+site_cost_whatif.py: #12263 pricing t1 (measured walls, drain suites removed): packing floor 1492 s; order as run 1842 s (ends on approval-guard1-mutation); approval-guard1-mutation first 1538 s (gap to floor 46 s, ends on dev-ledger-parity.test.sh); three long suites first 1523 s (gap to floor 31 s, ends on dev-ledger-parity.test.sh)
+
+REAP LATENCY (ruling F4 pricing): unpriceable on the committed rows
+In scripts/test-all.sh the (NNNms) of the "[run] ... done" line is _pj_end minus _pj_start in _pj_fmt_done, and _pj_end is stamped when the parent reaps the worker (_pj_reap), so it already contains any reap delay. The worker-side row of TEST_TIMING_LOG carries the same figure: comparing the two for every suite of both archived readings gives a difference of 0.000 s (160 and 161 suites). The committed rows therefore cannot separate a suite's own end from its reap, and the eager-reap lever of #12263 is unpriceable on them. (A first attempt measured the parent's done stamp minus its started stamp minus the printed figure, about 13 ms median: that is print timing, not reap delay, and is not used.)
+
+REGISTRATION POSITION (bash scripts/test-all.sh --enumerate-commands order, 757 commands): argv-bearer-sweep 318, destroy-ask-mutation 363, approval-guard1-mutation 364, dev-ledger-parity 718.
+
+FLOOR ARITHMETIC (not reachable by ordering or splitting)
+site_cost_whatif.py: packing floor t1: sum of walls 5975 s / 4 = 1494 s; with cold derive 216 s: 1710 s (bar 600 s)
+site_cost_whatif.py: packing floor control2: sum of walls 5562 s / 4 = 1391 s; with cold derive 234 s: 1625 s (bar 600 s)
+site_cost_whatif.py: #12263 pricing t1 (measured walls, drain suites removed): packing floor 1492 s; order as run 1842 s (ends on approval-guard1-mutation); approval-guard1-mutation first 1538 s (gap to floor 46 s, ends on dev-ledger-parity.test.sh); three long suites first 1523 s (gap to floor 31 s, ends on dev-ledger-parity.test.sh)
+The cold gate is the packing floor plus the cold derive, about 1.6 to 1.7 ks against the 600 s bar. Ordering (#12263) recovers about 300 s of the roughly 1.1 ks gap to 600 s; a replay-arm re-split recovers nothing robust. The gap is work, not order.
+
+VERDICT
+GATE: NO-REBALANCE (table does not support a rebalance)
+Why: the table failed the split-half stability test (the rank order of the material blocks differs between r4 and r5 for arms a and c, and four blocks each of arms b and c differ by more than 20%). The splits the model rewards put nearly all gated work into one arm, which frees the other two pool slots early, and their paired gain over the 81 perturbation combinations is negative (-357 s and -366 s): arm a becomes the long pole as soon as it is a little slower. Phase 5 (cold readings) is skipped by the plan's own rule; zero cold readings were taken.
+
+NON-CLAIMS
+No pooled gain is claimed. The table is relative cost from standalone concurrent arms. Two clean reps do not make the per-site values stable enough to move a split boundary (that is what the failed stability test says). The 40 s reading of the previous change is not re-claimed.
