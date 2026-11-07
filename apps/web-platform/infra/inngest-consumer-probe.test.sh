@@ -54,6 +54,10 @@ assert() {
 }
 
 TMP="$(mktemp -d)"
+# Per-run marker stamp paths must be unique, not just fresh: a $RANDOM redraw hands a run an
+# earlier run's still-fresh stamp and the limiter silently suppresses the marker+WARN the row
+# asserts (#12355). One shared counter guarantees uniqueness across every helper below.
+STAMP_SEQ=0
 SRV_PID=""
 cleanup() { rm -rf "$TMP"; [[ -n "$SRV_PID" ]] && kill "$SRV_PID" 2>/dev/null; }
 trap cleanup EXIT
@@ -75,7 +79,7 @@ fixture_run() {  # <json body>
   pinglog="$(mktemp "$TMP/ping.XXXXXX")"; outf="$(mktemp "$TMP/out.XXXXXX")"
   INNGEST_PROBE_FUNCTIONS_FIXTURE="$fx" \
     SOLEUR_INNGEST_CONSUMER_PING_LOG="$pinglog" \
-    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/fault.$RANDOM.$$" \
+    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/fault.$((STAMP_SEQ+=1)).$$" \
     INNGEST_CONSUMER_URL_KEY=INNGEST_CONSUMER_URL \
     INNGEST_CONSUMER_URL="http://127.0.0.1:1/hb" \
     timeout 20 bash "$SUT" >"$outf" 2>&1 || ec=$?
@@ -202,7 +206,7 @@ live_run() {  # <mode> <port> -> EC / PINGED / OUT
   pinglog="$(mktemp "$TMP/lping.XXXXXX")"; outf="$(mktemp "$TMP/lout.XXXXXX")"
   INNGEST_REMOTE_GQL_URL="http://127.0.0.1:$port/v0/gql" \
     SOLEUR_INNGEST_CONSUMER_PING_LOG="$pinglog" \
-    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/lfault.$RANDOM.$$" \
+    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/lfault.$((STAMP_SEQ+=1)).$$" \
     INNGEST_CONSUMER_URL_KEY=INNGEST_CONSUMER_URL \
     INNGEST_CONSUMER_URL="http://127.0.0.1:1/hb" \
     timeout 25 bash "$SUT" >"$outf" 2>&1 || ec=$?
@@ -251,7 +255,7 @@ mut_run() {  # <script> <json>
   pl="$(mktemp "$TMP/mping.XXXXXX")"
   INNGEST_PROBE_FUNCTIONS_FIXTURE="$fx" \
     SOLEUR_INNGEST_CONSUMER_PING_LOG="$pl" \
-    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/mfault.$RANDOM.$$" \
+    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/mfault.$((STAMP_SEQ+=1)).$$" \
     INNGEST_CONSUMER_URL_KEY=INNGEST_CONSUMER_URL \
     INNGEST_CONSUMER_URL="http://127.0.0.1:1/hb" \
     timeout 20 bash "$script" >/dev/null 2>&1 || ec=$?
@@ -319,8 +323,8 @@ run_hb() {
   env -u SOLEUR_INNGEST_CONSUMER_PING_LOG \
     PATH="$HB_STUBDIR:$PATH" CURL_LOG="$CURL_LOG" \
     INNGEST_PROBE_FUNCTIONS_FIXTURE="$HB_FX" \
-    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/hbfault.$RANDOM.$$" \
-    SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER="$TMP/hbrefusal.$RANDOM.$$" \
+    SOLEUR_INNGEST_CONSUMER_FAULT_MARKER="$TMP/hbfault.$((STAMP_SEQ+=1)).$$" \
+    SOLEUR_INNGEST_CONSUMER_REFUSAL_MARKER="$TMP/hbrefusal.$((STAMP_SEQ+=1)).$$" \
     "$@" "INNGEST_CONSUMER_URL_KEY=INNGEST_CONSUMER_URL" "INNGEST_CONSUMER_URL=$url" \
     timeout 20 bash "$SUT" >"$HB_OUT" 2>&1 || ec=$?
   TEC=$ec
