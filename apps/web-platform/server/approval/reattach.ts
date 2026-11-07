@@ -10,8 +10,10 @@
  * value is never rendered (P6: the text the Owner reads cannot disagree with the action that would be consumed).
  *
  * Who sees the action (#9601, ADR-309 flip item 1): the full card goes only to a verified Owner or to the row's verified
- * requester (`canSeeAction`). Every other attaching member gets a redacted waiting frame (`view: null`, `toolName:
- * "redacted"`, no requester key, no field value). An Owner's card names the requester (`requester`). Attach is
+ * requester (`canSeeAction`). A redacted waiting frame (`view: null`, `toolName: "redacted"`, no requester key, no field
+ * value) is sent for PENDING rows only; an approved row, and a row whose viewer role could not be read, send NO frame to a
+ * viewer who cannot see the action. An Owner's card names the requester (`requester`) unless two or more live requests
+ * share the conversation and action (the one label would then be ambiguous: only the literal "you" stays). Attach is
  * conversation-creator-only today, so for a non-Owner non-requester this is a defence-in-depth invariant that becomes
  * reachable with shared conversations; test/approval/render-sink-scan.test.ts pins that this file has exactly one gate and
  * one render call.
@@ -23,7 +25,7 @@ import { ApprovalCanonicalError, CANONICAL_VERSION, computeActionHash, type Cano
 import { isApprovalQueueEnabled } from "./flag";
 import { reportApprovalOp } from "./ops";
 import { renderApprovalView } from "./render";
-import { canSeeAction, requesterKind, type RequesterLabelFn } from "./card-visibility";
+import { canSeeAction, isVerifiedRequester, type RequesterLabelFn } from "./card-visibility";
 import { hasWaiter } from "./waiters";
 import { listLiveApprovals, type ApprovalRpcClient } from "./service";
 import { isApprovalRequiredTool } from "./tools";
@@ -34,7 +36,7 @@ export interface ReemitArgs {
   send: (userId: string, payload: WSMessage) => boolean;
   /** Service-role client (list_live_approvals is service-only). */
   client: () => ApprovalRpcClient;
-  /** Role of the viewing user in the approval's workspace; failure = member (read-only). */
+  /** Role of the viewing user in the approval's workspace; failure = member (read-only). Read once per workspace per attach. */
   viewerRole: (workspaceId: string) => Promise<"owner" | "member">;
   /**
    * The workspace of the session that is attaching (REQUIRED: the flag is evaluated per workspace, so reading it with no
@@ -75,6 +77,25 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
           }
         })();
         flagByWorkspace.set(workspaceId, p);
+      }
+      return p;
+    };
+    // The viewer's role, per workspace, memoised for this attach (a conversation's rows share a workspace almost always). A
+    // failed read is memoised too, so `viewerRoleFailed` is reported once per workspace, and stays fail-closed (member).
+    const roleByWorkspace = new Map<string, Promise<{ role: "owner" | "member"; failed: boolean }>>();
+    const roleFor = (row: { id: string; tool_name: string; workspace_id: string }): Promise<{ role: "owner" | "member"; failed: boolean }> => {
+      let p = roleByWorkspace.get(row.workspace_id);
+      if (!p) {
+        p = (async () => {
+          try {
+            // Only a literal "owner" is an Owner; any other value (a runtime garbage role included) is a member.
+            return { role: (await a.viewerRole(row.workspace_id)) === "owner" ? ("owner" as const) : ("member" as const), failed: false };
+          } catch (err) {
+            reportApprovalOp("viewerRoleFailed", err, { approvalId: row.id, toolName: row.tool_name, conversationId: a.conversationId });
+            return { role: "member" as const, failed: true };
+          }
+        })();
+        roleByWorkspace.set(row.workspace_id, p);
       }
       return p;
     };
@@ -123,30 +144,23 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
         });
         continue;
       }
-      let viewerRole: "owner" | "member";
-      let roleReadFailed = false;
-      try {
-        // Only a literal "owner" is an Owner; any other value (a runtime garbage role included) is a member.
-        viewerRole = (await a.viewerRole(approval.workspace_id)) === "owner" ? "owner" : "member";
-      } catch (err) {
-        reportApprovalOp("viewerRoleFailed", err, { approvalId: approval.id, toolName: approval.tool_name, conversationId: a.conversationId });
-        viewerRole = "member";
-        roleReadFailed = true;
-      }
+      const { role: viewerRole, failed: roleReadFailed } = await roleFor(approval);
       const mayView = canSeeAction(a.userId, viewerRole === "owner", approval.requested_by_user_id);
       // A viewer who cannot see the action gets no frame for an approved request (it is not a waiting card), and none when
       // their role could not be read: a redacted "waiting" card shown to an Owner we could not identify would mislead. The
       // next attach recovers; the inbox row and the landing page remain.
       if (!mayView && (roleReadFailed || approval.status === "approved")) continue;
+      // The requester line: "you" for the verified requester (no read); an Owner viewer gets the labeler's value only while ONE
+      // live request exists (two or more make a single label ambiguous); everyone else gets no key.
       let requester: string | undefined;
-      const kind = requesterKind(a.userId, viewerRole === "owner", approval.requested_by_user_id);
-      if (kind === "self") requester = REQUESTER_SELF;
-      else if (kind === "lookup") {
-        try {
-          requester = await a.requesterLabel(approval.workspace_id, a.userId, approval.requested_by_user_id);
-        } catch {
-          requester = undefined; // a lookup never costs the card
-        }
+      try {
+        requester = isVerifiedRequester(a.userId, approval.requested_by_user_id)
+          ? REQUESTER_SELF
+          : viewerRole === "owner" && requestCount <= 1
+            ? await a.requesterLabel(approval.workspace_id, a.userId, approval.requested_by_user_id)
+            : undefined;
+      } catch {
+        requester = undefined; // a lookup never costs the card
       }
       a.send(a.userId, {
         type: "approval_request",

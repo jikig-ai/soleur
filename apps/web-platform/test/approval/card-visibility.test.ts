@@ -2,11 +2,11 @@
  * #9601: the single decision functions behind the reattach redaction and the first-send requester label.
  *
  * `canSeeAction(viewer, isOwner, requestedBy)` is true for an Owner, or for the verified requester (both ids non-empty
- * strings, strict `===`). `requesterKind` says how the card learns the requester: `self` (no read), `lookup` (an Owner
- * who is not the requester) or `none`. Synchronous truth tables, including runtime garbage: `parseApprovalRow` only casts.
+ * strings, strict `===`); `isVerifiedRequester` is that second half on its own (the first send's "you" and the reattach
+ * and landing labels use it). Synchronous truth tables, including runtime garbage: `parseApprovalRow` only casts.
  */
 import { describe, expect, it } from "vitest";
-import { canSeeAction, requesterKind } from "@/server/approval/card-visibility";
+import { canSeeAction, isVerifiedRequester } from "@/server/approval/card-visibility";
 import { MEMBER_ID, OWNER_ID, REQUESTER_ID } from "./fixtures";
 
 const asAny = (v: unknown) => v as never;
@@ -55,42 +55,41 @@ describe("canSeeAction truth table", () => {
   });
 });
 
-describe("requesterKind truth table", () => {
-  it("self: the verified requester, in any role, needs no read", () => {
-    expect(requesterKind(OWNER_ID, true, OWNER_ID)).toBe("self");
-    expect(requesterKind(MEMBER_ID, false, MEMBER_ID)).toBe("self");
+describe("isVerifiedRequester truth table", () => {
+  it("true only for two equal non-empty strings", () => {
+    expect(isVerifiedRequester(OWNER_ID, OWNER_ID)).toBe(true);
+    expect(isVerifiedRequester(MEMBER_ID, MEMBER_ID)).toBe(true);
   });
 
-  it("lookup: an Owner who is not the requester (including a NULL or empty requester)", () => {
-    expect(requesterKind(OWNER_ID, true, REQUESTER_ID)).toBe("lookup");
-    expect(requesterKind(OWNER_ID, true, null)).toBe("lookup");
-    expect(requesterKind(OWNER_ID, true, undefined)).toBe("lookup");
-    expect(requesterKind(OWNER_ID, true, "")).toBe("lookup");
+  it("false for a different id, NULL, undefined and empty (including empty equals empty)", () => {
+    expect(isVerifiedRequester(MEMBER_ID, REQUESTER_ID)).toBe(false);
+    expect(isVerifiedRequester(MEMBER_ID, null)).toBe(false);
+    expect(isVerifiedRequester(MEMBER_ID, undefined)).toBe(false);
+    expect(isVerifiedRequester(MEMBER_ID, "")).toBe(false);
+    expect(isVerifiedRequester("", "")).toBe(false);
+    expect(isVerifiedRequester(undefined, undefined)).toBe(false);
+    expect(isVerifiedRequester(null, null)).toBe(false);
   });
 
-  it("none: a member who is not the requester never gets a label, whatever the requester field holds", () => {
-    expect(requesterKind(MEMBER_ID, false, REQUESTER_ID)).toBe("none");
-    expect(requesterKind(MEMBER_ID, false, null)).toBe("none");
-    expect(requesterKind(MEMBER_ID, false, undefined)).toBe("none");
-    expect(requesterKind(MEMBER_ID, false, "")).toBe("none");
-    expect(requesterKind("", false, "")).toBe("none");
+  it("false for ids that differ only by case (no normalisation)", () => {
+    expect(isVerifiedRequester(MEMBER_ID.toUpperCase(), MEMBER_ID)).toBe(false);
   });
 
-  it("an empty attaching id equal to an empty requester is not `self`", () => {
-    expect(requesterKind("", true, "")).toBe("lookup");
-    expect(requesterKind("", false, "")).toBe("none");
+  it("false for non-string ids even when strictly equal", () => {
+    expect(isVerifiedRequester(7, 7)).toBe(false);
+    const o = {};
+    expect(isVerifiedRequester(o, o)).toBe(false);
   });
 
-  it("agrees with canSeeAction: `none` exactly when the action is hidden", () => {
-    const viewers: Array<[string, boolean]> = [
-      [OWNER_ID, true],
-      [MEMBER_ID, false],
-      ["", false],
-    ];
+  it("canSeeAction is exactly (owner === true) || isVerifiedRequester over a grid, including a truthy non-boolean owner flag", () => {
+    const viewers = [OWNER_ID, MEMBER_ID, ""];
     const requesters = [REQUESTER_ID, MEMBER_ID, OWNER_ID, null, undefined, ""];
-    for (const [v, o] of viewers) {
+    const flags = [true, false, "true", "owner", 1, {}, [], undefined, null];
+    for (const v of viewers) {
       for (const r of requesters) {
-        expect(requesterKind(v, o, r) === "none", `${v}|${o}|${String(r)}`).toBe(!canSeeAction(v, o, r));
+        for (const f of flags) {
+          expect(canSeeAction(v, asAny(f), r), `${v}|${String(f)}|${String(r)}`).toBe(f === true || isVerifiedRequester(v, r));
+        }
       }
     }
   });

@@ -31,6 +31,12 @@ export const APPROVAL_RETENTION_DAYS = 30;
  */
 export const REQUESTER_SELF = "you";
 export const REQUESTER_FALLBACK = "a workspace member";
+/**
+ * The longest requester label on the wire (64 local part + "@" + 255 domain). Shared by the wire schema and the labeler so
+ * the two cannot drift; the labeler additionally requires exactly one "@", which is what keeps a real label from ever
+ * equalling the in-band literals above (neither contains an "@").
+ */
+export const REQUESTER_LABEL_MAX_LENGTH = 320;
 
 /** Card, state and landing-page strings (in-app, behind sign-in). */
 export const APPROVAL_COPY = {

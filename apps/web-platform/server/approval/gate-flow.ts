@@ -29,7 +29,7 @@ import {
   type CanonicalAction,
   type CanonicalValue,
 } from "./canonical";
-import { requesterKind } from "./card-visibility";
+import { isVerifiedRequester } from "./card-visibility";
 import type { ApprovalGateDeps } from "./gate-types";
 import { putGrant } from "./grants";
 import { logApprovalMarker, reportApprovalOp, type ApprovalOpContext } from "./ops";
@@ -122,9 +122,6 @@ export function consumeRejectedIsUnusable(reason: string): boolean {
 
 /** The `onRequested` dispatch (a push/email) is best effort: the gate never waits on it longer than this. */
 export const ON_REQUESTED_DEADLINE_MS = 10_000;
-
-/** The requester lookup for the first send is best effort: a hung read never delays the card while the agent waits. */
-const REQUESTER_LOOKUP_DEADLINE_MS = 2_000;
 
 /** Run `fn`, but stop waiting for it when the signal aborts or the deadline passes. Resolves "ok" | "aborted" | "timeout"; a throw of `fn` rejects. */
 async function boundedByAbort(fn: () => Promise<void>, signal: AbortSignal, deadlineMs: number): Promise<"ok" | "aborted" | "timeout"> {
@@ -396,29 +393,10 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         reportApprovalOp("viewerRoleFailed", err, ctx);
         viewerRole = "member"; // read-only card is the safe default
       }
-      // The requester line (#9601): the literal "you" for the verified requester (no read); for an Owner viewer whose live
-      // row was raised by someone else, the labeler under a short deadline; otherwise no key. This first send keeps the
-      // full view for every viewer (the socket user's own agent proposed this exact action); the labeler is never asked
-      // for a viewer who is not an Owner.
-      let requester: string | undefined;
-      const kind = requesterKind(a.userId, viewerRole === "owner", submitted.approval.requested_by_user_id);
-      if (kind === "self") requester = REQUESTER_SELF;
-      else if (kind === "lookup" && a.approval.requesterLabel) {
-        const lookup = a.approval.requesterLabel;
-        let got: string | undefined;
-        try {
-          const outcome = await boundedByAbort(
-            async () => {
-              got = await lookup(submitted.approval.workspace_id, a.userId, submitted.approval.requested_by_user_id);
-            },
-            combineSignals(a.callSignal, a.controllerSignal),
-            REQUESTER_LOOKUP_DEADLINE_MS,
-          );
-          requester = outcome === "ok" ? got : undefined;
-        } catch {
-          requester = undefined; // the labeler reports its own failures; the card never waits on it
-        }
-      }
+      // The requester line (#9601): ONLY the literal "you", and only for the verified requester. This first send goes to the
+      // proposing session user (their own agent's freshly canonicalised action) and never reads another member's identity:
+      // a label for someone else is the reattach and landing surfaces' job, behind their Owner proof.
+      const isSelf = isVerifiedRequester(a.userId, submitted.approval.requested_by_user_id);
       try {
         a.sendToClient(a.userId, {
           type: "approval_request",
@@ -431,7 +409,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           requestCount: submitted.requestCount,
           viewerRole,
           agentWaiting: true,
-          ...(requester !== undefined ? { requester } : {}),
+          ...(isSelf ? { requester: REQUESTER_SELF } : {}),
         });
       } catch (err) {
         reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "ws-card" } });

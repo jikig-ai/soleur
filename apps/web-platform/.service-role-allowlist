@@ -406,9 +406,9 @@ apps/web-platform/server/inngest/functions/cron-approval-expiry.ts
 # Requester label on the Owner's approval card (#9601, ADR-309 flip item 1): ONE membership read (workspace_members) that
 # proves the viewer is an Owner of the ROW's workspace and the requester is a member of it, then the requester's email from
 # the authoritative auth record (auth.admin.getUserById; public.users.email is member-writable and is never read). It reads
-# another member's address, so it is Owner-only by construction, bounded by a 2 second deadline, never logged and never
-# stored. Who may import it is pinned by test/approval/render-sink-scan.test.ts (gate.ts, ws-handler.ts and the Owner
-# landing page only).
+# another member's address, so callers invoke it only for an Owner viewer and the Owner proof runs inside every uncached
+# lookup; it is bounded by a 2 second deadline, never logged and never stored. Who may import it is pinned by
+# test/approval/render-sink-scan.test.ts (ws-handler.ts and the Owner landing page only).
 apps/web-platform/server/approval/requester-label.ts
 
 # 2026-10-23 (#8211 PR-B2) — cron-git-data-erasure-redrive.ts re-drives the git-data pending-erasure

@@ -306,7 +306,9 @@ export function makeLabelerClient(world: FakeLabelerWorld) {
           return f.op === "eq" ? v === f.val : (f.val as unknown[]).includes(v);
         });
       }
-      return { data: rows.map((r) => ({ user_id: r.user_id, role: r.role })), error: null };
+      // Project exactly the columns the query asked for (a select that omits `role` gets rows with no role, as PostgREST would).
+      const wanted = q.columns.split(",").map((c) => c.trim());
+      return { data: rows.map((r) => Object.fromEntries(wanted.map((c) => [c, (r as Record<string, unknown>)[c]]))), error: null };
     }
     if (q.table === "users") {
       const id = q.filters.find((f) => f.col === "id")?.val as string | undefined;

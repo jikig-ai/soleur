@@ -3,7 +3,7 @@
  *
  * Properties: Owner-only (proved inside the labeler by the membership read), scoped to the ROW's workspace, the email is
  * the AUTHORITATIVE auth email (never the member-writable public.users.email), shape-checked, bounded by one deadline,
- * memoised per instance (success and failure) keyed by workspace and requester, never throws, reports ids only.
+ * memoised per instance (success and failure) keyed by viewer, workspace and requester, never throws, reports ids only.
  */
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
@@ -73,6 +73,24 @@ describe("who gets a label", () => {
     expect(authCalls).toEqual([]);
     expect(queries).toHaveLength(1);
     expect(reportCalls()).toHaveLength(0);
+  });
+
+  it("the membership select asks for exactly user_id and role (the fake projects columns, so a select without role would deny every Owner)", async () => {
+    const { label, queries } = setup();
+    expect(await label(WORKSPACE_ID, OWNER_ID, REQUESTER_ID)).toBe(REQUESTER_EMAIL);
+    expect(queries[0].columns).toBe("user_id, role");
+  });
+
+  it("the REQUESTER is an Owner but the VIEWER is a plain member: undefined and zero getUserById calls (the proof is about the viewer)", async () => {
+    const world = baseWorld({
+      members: [
+        { workspace_id: WORKSPACE_ID, user_id: REQUESTER_ID, role: "owner" },
+        { workspace_id: WORKSPACE_ID, user_id: MEMBER_ID, role: "member" },
+      ],
+    });
+    const { label, authCalls } = setup(world);
+    expect(await label(WORKSPACE_ID, MEMBER_ID, REQUESTER_ID)).toBeUndefined();
+    expect(authCalls).toEqual([]);
   });
 
   it("a viewer who is not in the workspace at all gets undefined and no email read", async () => {
@@ -199,6 +217,12 @@ describe("the shape of the stored address", () => {
     expect(await labelFor("a\nb@example.com")).toBe(FALLBACK);
   });
 
+  it("C0, DEL and C1 control characters and the Unicode line separators are unsafe", async () => {
+    for (const bad of ["a\u007fb@example.com", "a\u0085b@example.com", "a\u009fb@example.com", "a\u2028b@example.com", "a\u00a0b@example.com"]) {
+      expect(await labelFor(bad), JSON.stringify(bad)).toBe(FALLBACK);
+    }
+  });
+
   it("a quoted-local-part address that carries a space or a second @ is the fallback", async () => {
     expect(await labelFor('"jane doe"@example.com')).toBe(FALLBACK);
     expect(await labelFor('"jane@x"@example.com')).toBe(FALLBACK);
@@ -298,11 +322,21 @@ describe("the deadline", () => {
   it("an auth read that never settles is bounded by the same deadline", async () => {
     const ctl = new AbortController();
     const fake = makeLabelerClient(baseWorld());
-    const client = { from: fake.client.from, auth: { admin: { getUserById: () => new Promise(() => {}) } } };
+    let authReads = 0;
+    const client = {
+      from: fake.client.from,
+      auth: {
+        admin: {
+          getUserById: () => {
+            authReads += 1;
+            return new Promise(() => {});
+          },
+        },
+      },
+    };
     const label = createRequesterLabeler(() => client as unknown as RequesterQueryClient, { signal: () => ctl.signal });
     const p = label(WORKSPACE_ID, OWNER_ID, REQUESTER_ID);
-    await vi.waitFor(() => expect(fake.queries.length).toBe(1));
-    await new Promise((r) => setTimeout(r, 5));
+    await vi.waitFor(() => expect(authReads).toBe(1));
     ctl.abort();
     expect(await p).toBeUndefined();
     expect(reportCalls()).toHaveLength(1);
@@ -355,6 +389,18 @@ describe("memoisation", () => {
     expect(await label(OTHER_WORKSPACE_ID, OWNER_ID, REQUESTER_ID)).toBe(FALLBACK);
     expect(queries).toHaveLength(2);
     expect(queries[1].filters).toContainEqual({ op: "eq", col: "workspace_id", val: OTHER_WORKSPACE_ID });
+  });
+
+  it("the key includes the viewer: an Owner's cached answer is never served to a member viewer of the same instance", async () => {
+    const { label, queries, authCalls } = setup();
+    expect(await label(WORKSPACE_ID, OWNER_ID, REQUESTER_ID)).toBe(REQUESTER_EMAIL);
+    expect(await label(WORKSPACE_ID, MEMBER_ID, REQUESTER_ID)).toBeUndefined();
+    // The other viewer ran its own proof (a second membership read), and the member order does not matter.
+    expect(queries).toHaveLength(2);
+    expect(authCalls).toEqual([REQUESTER_ID]);
+    const fresh = setup();
+    expect(await fresh.label(WORKSPACE_ID, MEMBER_ID, REQUESTER_ID)).toBeUndefined();
+    expect(await fresh.label(WORKSPACE_ID, OWNER_ID, REQUESTER_ID)).toBe(REQUESTER_EMAIL);
   });
 
   it("nothing is cached across instances: a second labeler re-reads", async () => {

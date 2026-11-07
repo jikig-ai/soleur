@@ -16,7 +16,6 @@ import { notifyApprovalRequested } from "./notify";
 import { reportApprovalOp } from "./ops";
 import type { ApprovalGateDeps } from "./gate-types";
 import type { ExecutionGrants } from "./grants";
-import { createRequesterLabeler, type RequesterQueryClient } from "./requester-label";
 import { consumeApproval, getApprovalStatus, submitApprovalRequest, type ApprovalRpcClient } from "./service";
 import type { WaitStatus } from "./waiters";
 import { readWorkspaceHeadSha, WorkspaceHeadUnreadable } from "./workspace-head";
@@ -64,8 +63,6 @@ export interface CreateApprovalGateDepsArgs {
   isEnabled?: () => Promise<boolean>;
   serviceClient?: () => ApprovalRpcClient;
   tenantClient?: () => Promise<TenantLike>;
-  /** Test seam for the requester-label reads (the rpc-only `serviceClient` seam cannot serve `from` / `auth.admin`). */
-  requesterQueryClient?: () => RequesterQueryClient;
   headSha?: (workspacePath: string) => Promise<string>;
   /** Push/email dispatch for a newly created request; false = nothing reached the Owner. */
   notifyRequested?: (approvalId: string, workspaceId: string, expiresAt: string | null) => Promise<boolean>;
@@ -108,10 +105,6 @@ export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): Approv
           return undefined;
       }
     },
-
-    // One labeler per gate deps (per user message in agent-runner, per Query in the cc dispatcher). The service client is
-    // resolved on its first lookup. Called only for an Owner viewer who is not the requester (gate-flow.ts).
-    requesterLabel: createRequesterLabeler(args.requesterQueryClient),
 
     submit: (p) => submitApprovalRequest(svc(), p),
 

@@ -60,6 +60,8 @@ interface RowSpec {
   requestedBy?: string | null | undefined;
   status?: "pending" | "approved";
   workspaceId?: string;
+  /** The live-request count for the conversation and action (default 1: one live request, so a label may be shown). */
+  requestCount?: number;
 }
 
 function buildRow(spec: RowSpec = {}) {
@@ -89,7 +91,7 @@ function buildRow(spec: RowSpec = {}) {
     canonical_action: action,
   };
   if (spec.requestedBy === undefined && "requestedBy" in spec) delete row.requested_by_user_id;
-  return { approval: row, request_count: 2 };
+  return { approval: row, request_count: spec.requestCount ?? 1 };
 }
 
 interface RunOpts {
@@ -99,6 +101,8 @@ interface RunOpts {
   /** The labeler seam; defaults to a spy returning the requester email. */
   label?: ReemitArgs["requesterLabel"];
   sessionWorkspaceId?: string;
+  /** Overrides `role` per workspace id (the role read must be asked about the ROW's workspace). */
+  roleByWorkspace?: Record<string, "owner" | "member">;
 }
 
 async function run(o: RunOpts) {
@@ -106,8 +110,9 @@ async function run(o: RunOpts) {
   const raw = o.rows.map(buildRow);
   const client: ApprovalRpcClient = { rpc: async () => ({ data: raw, error: null }) };
   const label = vi.fn(o.label ?? (async () => REQUESTER_EMAIL));
-  const viewerRole = vi.fn(async () => {
+  const viewerRole = vi.fn(async (workspaceId: string) => {
     if (o.role === "reject") throw Object.assign(new Error("role read failed"), { code: "PGRST000" });
+    if (o.roleByWorkspace) return o.roleByWorkspace[workspaceId] ?? "member";
     return o.role as "owner" | "member";
   });
   const sent = await reemitLiveApprovals({
@@ -213,7 +218,7 @@ describe("a member who is the requester (non-canonical input that must still pas
 
 describe("a member who is not the requester gets a redacted waiting frame", () => {
   it("view null, toolName redacted, no requester key, status/time/count/waiting fields present", async () => {
-    const { cards, label } = await run({ viewer: MEMBER_ID, role: "member", rows: [{}] });
+    const { cards, label } = await run({ viewer: MEMBER_ID, role: "member", rows: [{ requestCount: 2 }] });
     expect(cards).toHaveLength(1);
     const f = cards[0];
     expect(f.view).toBeNull();
@@ -440,8 +445,12 @@ describe("with the real labeler over the strict fake", () => {
 
   it("three distinct requesters under one hung lookup cost one deadline in total (the first timeout trips the instance)", async () => {
     const ctl = new AbortController();
+    let hungReads = 0;
     const hung = {
-      from: () => ({ select: () => ({ eq: () => ({ in: () => ({ abortSignal: () => new Promise(() => {}) }) }) }) }),
+      from: () => {
+        hungReads += 1;
+        return { select: () => ({ eq: () => ({ in: () => ({ abortSignal: () => new Promise(() => {}) }) }) }) };
+      },
       auth: { admin: { getUserById: () => new Promise(() => {}) } },
     };
     const label = createRequesterLabeler(() => hung as unknown as RequesterQueryClient, { signal: () => ctl.signal });
@@ -455,11 +464,84 @@ describe("with the real labeler over the strict fake", () => {
         { id: ROW_C, requestedBy: MEMBER_ID },
       ],
     });
-    await new Promise((r) => setTimeout(r, 10));
+    await vi.waitFor(() => expect(hungReads).toBe(1));
     ctl.abort();
     const { cards } = await p;
+    expect(hungReads).toBe(1);
     expect(cards).toHaveLength(3);
     expect(cards.every((c) => !Object.hasOwn(c, "requester"))).toBe(true);
     expect(h.report.mock.calls.filter((c) => c[0] === "requesterLabelFailed")).toHaveLength(1);
+  });
+});
+
+describe("two or more live requests: the non-self label is suppressed (the one label would be ambiguous)", () => {
+  it("an Owner viewer and another member's request with count 2: no requester key and the labeler is not called", async () => {
+    const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ requestCount: 2 }] });
+    expect(cards).toHaveLength(1);
+    expect(cards[0].view).not.toBeNull();
+    expect(Object.hasOwn(cards[0], "requester")).toBe(false);
+    expect(label).not.toHaveBeenCalled();
+  });
+
+  it("a NULL requester with count 2 is suppressed too (the fallback literal is a label)", async () => {
+    const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ requestCount: 2, requestedBy: null }] });
+    expect(Object.hasOwn(cards[0], "requester")).toBe(false);
+    expect(label).not.toHaveBeenCalled();
+  });
+
+  it("the verified requester with count 2 still gets the literal you, with no lookup", async () => {
+    const own = await run({ viewer: OWNER_ID, role: "owner", rows: [{ requestCount: 2, requestedBy: OWNER_ID }] });
+    expect(own.cards[0].requester).toBe("you");
+    expect(own.label).not.toHaveBeenCalled();
+    const member = await run({ viewer: MEMBER_ID, role: "member", rows: [{ requestCount: 3, requestedBy: MEMBER_ID }] });
+    expect(member.cards[0].requester).toBe("you");
+    expect(member.label).not.toHaveBeenCalled();
+  });
+
+  it("count 1 still looks up; the count of each row decides for that row", async () => {
+    const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ id: ROW_A, requestCount: 1 }, { id: ROW_B, requestCount: 2 }] });
+    expect(cards.map((c) => c.requester)).toEqual([REQUESTER_EMAIL, undefined]);
+    expect(label).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("the viewer role read: asked about the ROW's workspace, once per workspace per attach", () => {
+  it("a role that differs by workspace is read for each row's own workspace (owner here, member there)", async () => {
+    const { cards, viewerRole } = await run({
+      viewer: OWNER_ID,
+      role: "owner",
+      roleByWorkspace: { [WORKSPACE_ID]: "owner", [OTHER_WORKSPACE_ID]: "member" },
+      sessionWorkspaceId: WORKSPACE_ID,
+      rows: [
+        { id: ROW_A, workspaceId: WORKSPACE_ID },
+        { id: ROW_B, workspaceId: OTHER_WORKSPACE_ID },
+      ],
+    });
+    expect(viewerRole.mock.calls.map((c) => c[0]).sort()).toEqual([OTHER_WORKSPACE_ID, WORKSPACE_ID].sort());
+    expect(cards.map((c) => [c.approvalId, c.viewerRole, c.view === null])).toEqual([
+      [ROW_A, "owner", false],
+      [ROW_B, "member", true],
+    ]);
+  });
+
+  it("many rows in one workspace read the role once", async () => {
+    const { viewerRole, cards } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ id: ROW_A }, { id: ROW_B }, { id: ROW_C }] });
+    expect(cards).toHaveLength(3);
+    expect(viewerRole).toHaveBeenCalledTimes(1);
+    expect(viewerRole).toHaveBeenCalledWith(WORKSPACE_ID);
+  });
+
+  it("a failed read is memoised: ONE viewerRoleFailed per workspace, and every row stays fail-closed for a non-requester", async () => {
+    const { viewerRole, cards } = await run({ viewer: OWNER_ID, role: "reject", rows: [{ id: ROW_A }, { id: ROW_B }, { id: ROW_C }] });
+    expect(cards).toHaveLength(0);
+    expect(viewerRole).toHaveBeenCalledTimes(1);
+    expect(reportKeys().filter((k) => k === "viewerRoleFailed")).toHaveLength(1);
+  });
+
+  it("the memo does not outlive the attach (a second attach reads again)", async () => {
+    const a = await run({ viewer: OWNER_ID, role: "owner", rows: [{}] });
+    const b = await run({ viewer: OWNER_ID, role: "owner", rows: [{}] });
+    expect(a.viewerRole).toHaveBeenCalledTimes(1);
+    expect(b.viewerRole).toHaveBeenCalledTimes(1);
   });
 });

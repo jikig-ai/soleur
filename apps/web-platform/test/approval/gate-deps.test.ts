@@ -75,8 +75,7 @@ import type { ApprovalRpcClient, RpcResult } from "@/server/approval/service";
 import { clearAllWaiters } from "@/server/approval/waiters";
 import { reportSilentFallback } from "@/server/observability";
 import { APPROVAL_OPS } from "@/server/approval/ops";
-import { CONVERSATION_ID, MESSAGE_ID, OTHER_WORKSPACE_ID, OWNER_ID, REQUESTER_EMAIL, REQUESTER_ID, SAMPLES, TOOLS, USER_ID, WORKSPACE_ID, makeLabelerClient } from "./fixtures";
-import type { RequesterQueryClient } from "@/server/approval/requester-label";
+import { CONVERSATION_ID, MESSAGE_ID, OTHER_WORKSPACE_ID, SAMPLES, TOOLS, USER_ID, WORKSPACE_ID } from "./fixtures";
 
 const HEAD = "d".repeat(40);
 /** The registered `approval-head-read-failed` op, exactly as `reportApprovalOp` hands it to the sink: own message, reason as tag and extra, no Error. */
@@ -646,32 +645,5 @@ describe("createApprovalGateDeps: the DEFAULT clients (no test seam injected)", 
     expect(m.notifyApprovalRequested).not.toHaveBeenCalled();
     m.notifyApprovalRequested.mockImplementationOnce(async () => false);
     await expect(deps.onRequested!({ approvalId: "x-id", created: true, notify: true, expiresAt: "2030-01-01T00:00:00.000Z" })).rejects.toThrow();
-  });
-});
-
-describe("createApprovalGateDeps: the requester label dep (#9601)", () => {
-  it("requesterLabel is a function (this pins the construction site that agent-runner and the cc dispatcher both use)", () => {
-    const { deps } = makeDeps();
-    expect(typeof deps.requesterLabel).toBe("function");
-  });
-
-  it("the label reads through the injected requester query client (not the rpc-only service seam) and scopes the membership read to the workspace it is given", async () => {
-    const fake = makeLabelerClient({
-      members: [
-        { workspace_id: WORKSPACE_ID, user_id: OWNER_ID, role: "owner" },
-        { workspace_id: WORKSPACE_ID, user_id: REQUESTER_ID, role: "member" },
-      ],
-      authEmails: { [REQUESTER_ID]: REQUESTER_EMAIL },
-    });
-    const { deps } = makeDeps({ requesterQueryClient: () => fake.client as unknown as RequesterQueryClient });
-    expect(await deps.requesterLabel!(WORKSPACE_ID, OWNER_ID, REQUESTER_ID)).toBe(REQUESTER_EMAIL);
-    expect(fake.queries).toHaveLength(1);
-    expect(fake.queries[0].filters).toContainEqual({ op: "eq", col: "workspace_id", val: WORKSPACE_ID });
-  });
-
-  it("no service client is created at construction (the labeler resolves its client on the first lookup)", () => {
-    m.createServiceClient.mockClear();
-    makeDeps();
-    expect(m.createServiceClient).not.toHaveBeenCalled();
   });
 });

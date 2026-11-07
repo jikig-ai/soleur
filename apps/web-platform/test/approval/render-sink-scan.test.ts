@@ -231,10 +231,9 @@ describe("reattach.ts: the redaction gate is structural", () => {
 });
 
 describe("requester-label.ts: who may import the service-role email read", () => {
-  it("direct value importers are exactly the gate deps, the ws handler and the Owner landing page", () => {
+  it("direct value importers are exactly the ws handler and the Owner landing page", () => {
     expect(importers(LABEL, VALUE_EDGE_ROLES)).toEqual([
       "app/(dashboard)/dashboard/approvals/[id]/page.tsx",
-      "server/approval/gate.ts",
       "server/ws-handler.ts",
     ]);
   });

@@ -1,10 +1,12 @@
 /**
  * The requester label on an Owner's approval card (#9601, ADR-309 flip item 1 limb i): who raised the request.
  *
- * CONTRACT. This module reads another member's EMAIL with the service role inside the agent-shared process. It is
- * Owner-only by construction, not by caller discipline alone: the single membership read proves the VIEWER is an Owner of
- * the ROW's workspace before any address is read, and test/approval/render-sink-scan.test.ts pins who may import it
- * (gate.ts, ws-handler.ts and the Owner landing page; the file is on the CODEOWNERS-pinned service-role allowlist).
+ * CONTRACT. This module reads another member's EMAIL with the service role inside the agent-shared process. Callers invoke
+ * it only for an Owner viewer (reattach.ts and the landing page), and the Owner proof runs inside EVERY uncached lookup:
+ * the single membership read proves the VIEWER is an Owner of the ROW's workspace before any address is read. The NULL /
+ * non-uuid requester branch returns a fixed literal and needs no proof (no address is read). test/approval/render-sink-scan
+ * .test.ts pins who may import it (ws-handler.ts and the Owner landing page; the file is on the CODEOWNERS-pinned
+ * service-role allowlist). The first send (gate-flow.ts) never uses it.
  *
  *   - ids: every id passes `isUuid` before it reaches a filter; filters are built with `.eq()` / `.in()` only, never a
  *     filter string.
@@ -14,18 +16,20 @@
  *   - source of the address: the AUTHORITATIVE auth record (`auth.admin.getUserById`), NOT `public.users.email`, which any
  *     authenticated member can overwrite (migrations 006 and 178) and so could make the Owner's card say anything.
  *   - shape: kept only when a string of 1 to 320 characters with exactly one `@` and no whitespace or control characters
- *     (320 is the wire cap; it also guarantees a real label never collides with the in-band "you" and fallback literals).
+ *     (320 is the wire cap, shared via REQUESTER_LABEL_MAX_LENGTH; the exactly-one-`@` shape is what makes a real label
+ *     collision-free with the in-band literals, since neither "you" nor "a workspace member" contains an `@`).
  *   - bounded: one deadline of 2 seconds per `label()` call covers both reads (the PostgREST read carries the abort
  *     signal; `auth.admin` has no abort support, so it is raced against the same signal). A timeout trips the instance:
  *     later lookups omit at once, so a sequential reattach loop costs at most one wait.
  *   - never throws; a failure is ONE `requesterLabelFailed` report (ids and an error code, never the address or database
  *     text) and the key is omitted, because the fallback would assert a membership fact the code could not check.
- *   - memo: success AND failure, per labeler instance (one per attach / per landing render), keyed by workspace and
- *     requester (a conversation's rows can sit in different workspaces). Nothing is cached across instances.
+ *   - memo: success AND failure, per labeler instance (one per attach / per landing render), keyed by viewer, workspace and
+ *     requester (a conversation's rows can sit in different workspaces, and the Owner proof is per viewer, so one viewer's
+ *     answer is never served to another). Nothing is cached across instances.
  */
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { REQUESTER_FALLBACK } from "@/lib/approval-copy";
+import { REQUESTER_FALLBACK, REQUESTER_LABEL_MAX_LENGTH } from "@/lib/approval-copy";
 import { isUuid } from "@/lib/is-uuid";
 import type { RequesterLabelFn } from "./card-visibility";
 import { reportApprovalOp } from "./ops";
@@ -64,25 +68,16 @@ export interface RequesterLabelerOptions {
 
 /** One lookup, both reads. */
 export const REQUESTER_LABEL_DEADLINE_MS = 2000;
-const MAX_LABEL_LENGTH = 320;
-const UNSAFE_CHARS = /[\s\u0000-\u001f\u007f]/;
+const UNSAFE_CHARS = /[\s\p{Cc}]/u;
 
-class LabelDeadlineError extends Error {
-  readonly code = "timeout";
-  constructor() {
-    super("requester label deadline");
-    this.name = "LabelDeadlineError";
-  }
-}
-
-/** Race a read against the lookup's signal; the listener is removed on settle. */
+/** Race a read against the lookup's signal (`auth.admin.getUserById` has no abort support); the listener is removed on settle. */
 function withDeadline<T>(read: PromiseLike<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     if (signal.aborted) {
-      reject(new LabelDeadlineError());
+      reject(new Error("requester label deadline"));
       return;
     }
-    const onAbort = () => reject(new LabelDeadlineError());
+    const onAbort = () => reject(new Error("requester label deadline"));
     signal.addEventListener("abort", onAbort, { once: true });
     Promise.resolve(read).then(
       (v) => {
@@ -98,7 +93,7 @@ function withDeadline<T>(read: PromiseLike<T>, signal: AbortSignal): Promise<T> 
 }
 
 function usableAddress(v: unknown): v is string {
-  if (typeof v !== "string" || v.length === 0 || v.length > MAX_LABEL_LENGTH) return false;
+  if (typeof v !== "string" || v.length === 0 || v.length > REQUESTER_LABEL_MAX_LENGTH) return false;
   if (UNSAFE_CHARS.test(v)) return false;
   return v.split("@").length === 2;
 }
@@ -116,7 +111,7 @@ export function createRequesterLabeler(getClient?: () => RequesterQueryClient, o
     const signal = newSignal();
     // Both failure paths (a read error and a deadline) go through this ONE report helper.
     const fail = (err: unknown, stage: "membership" | "auth"): undefined => {
-      if (err instanceof LabelDeadlineError || signal.aborted) tripped = true;
+      if (signal.aborted) tripped = true;
       reportApprovalOp("requesterLabelFailed", err, { workspaceId, userId: viewerUserId, extra: { stage } });
       return undefined;
     };
@@ -149,7 +144,7 @@ export function createRequesterLabeler(getClient?: () => RequesterQueryClient, o
       if (!isUuid(workspaceId) || !isUuid(viewerUserId)) return undefined;
       // NULL (erased account), empty or malformed: nothing to look up, and nothing to verify either.
       if (typeof requestedBy !== "string" || !isUuid(requestedBy)) return REQUESTER_FALLBACK;
-      const key = `${workspaceId}:${requestedBy}`;
+      const key = `${viewerUserId}:${workspaceId}:${requestedBy}`;
       const hit = memo.get(key);
       if (hit) return await hit;
       if (tripped) return undefined;
