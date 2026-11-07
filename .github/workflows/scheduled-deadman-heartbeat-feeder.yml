@@ -17,6 +17,9 @@
 # for it until the owner unpauses the heartbeat. Arming is the owner's (runbook:
 # knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md, "Arming the dead-man heartbeats
 # (#11631)").
+# EXPECTED INTERIM STATE: until the #11266 bundle promotion lands, the probe is inert and every
+# inngest-luks-key-probe run exits no_qualifying_row / SOURCE DARK — expected, not a feeder fault
+# (seat finding, PR #12331).
 # RUN CONCLUSION. The step succeeds by design whatever the feeder decided: the feeder's exit status is data, read
 # into the annotations, the marker lines and all_decided. The signals are the Sentry check-in (`ok` only when every
 # target beat or is unarmed; `error` when a target was withheld or failed; `missed` when the feeder went dark, clock
