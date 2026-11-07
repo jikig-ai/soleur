@@ -2084,6 +2084,7 @@ AFFECTED_SCRIPTS_CI_ORACLE_REVIEW_PATHS=(
   "scripts/ci-oracle-review.sh"
   "scripts/ci-oracle-review.test.sh"
   "scripts/merge-queue-cla-verify.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 
 # plugins/soleur/test/bot-synthetic-unreachability.test.sh (#10859, PR3b) — reads the composite action's
