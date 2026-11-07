@@ -893,8 +893,9 @@ resource "sentry_cron_monitor" "scheduled_supabase_watchdog" {
 # `approval-queue` flag OFF as well, so the monitor is live from the first deploy. Pure database RPC plus
 # generic push, no claude-eval spawn: the 30-min margin and 10-min runtime of the Inngest small-cron
 # cohort. Slug MUST match SENTRY_MONITOR_SLUG in the handler. Routed into cron_monitor_failure
-# (cron-monitor-alerts.tf; Ref #9601, ADR-309 flip item 3): a missed check-in is the only cover for a dead
-# sweep, because the gate_unanswered alert is emitted by the sweep itself.
+# (cron-monitor-alerts.tf, #12293): this monitor is the only cover for a dropped or dead sweep function
+# (scheduled_inngest_cron_watchdog covers only whole-scheduler death), because the gate_unanswered alert is
+# emitted by the sweep itself.
 resource "sentry_cron_monitor" "scheduled_approval_expiry" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
