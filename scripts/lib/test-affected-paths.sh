@@ -1116,6 +1116,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_WEB_HOST_ESCROW_DIAGNOSE_WORKFLOW_TEST_SH_PATHS=(
   "plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                              # THIS FILE
 )
+# plugins/soleur/test/mint-origin-ca-cert (#10479, ADR-321 slice 2) - parses the workflow and drives the body script through
+# $REPO-built paths no derivation channel reaches, so a later edit to either must still select this guard.
+AFFECTED_PLUGINS_SOLEUR_TEST_MINT_ORIGIN_CA_CERT_TEST_SH_PATHS=(
+  ".github/workflows/mint-origin-ca-cert.yml"
+  "scripts/mint-origin-ca-cert.sh"
+  "plugins/soleur/test/mint-origin-ca-cert.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
   "scripts/apply-delivery-gap.sh"
   ".github/workflows/apply-delivery-gap-follower.yml"
@@ -1173,6 +1181,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
+  "plugins/soleur/skills/one-shot/references/operator-constraints.md"  # T18p derives the writer strings from it
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -3684,6 +3693,17 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
   "test/"
   "tests/"
   "scripts/lint-trap-tempfile-ownership.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-umbrella-aggregate — text-parses the three workflow files carrying
+# umbrella jobs (the `- id:` step census, `member(` calls, `if:` lines) plus a
+# `- id: aggregate` discovery scan over .github/workflows/*.yml for the census
+# invariant. Edges cover the glob, not just today's three files: a new umbrella
+# in a fourth file feeds the verdict.
+AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
+  ".github/workflows/"
+  "scripts/lint-umbrella-aggregate.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

@@ -5647,7 +5647,7 @@ if want_scripts; then
   # battery from the run_suite command token and dies on <unresolved>.
   run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
   run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-599
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-602
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
@@ -5663,7 +5663,7 @@ if want_scripts; then
   run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md
   # Hard-rule body-weakening gate (#6103, ADR-091): hermetic fixtures + a live
   # calibration (base HEAD → zero findings on the committed corpus). The real
-  # merge-blocking gate is the standalone `rule-body-lint` ci.yml job with
+  # merge-blocking gate is the `rule-body-lint` member step of ci.yml's `guards-ruleset` umbrella with
   # --base <merge-base>; this live line is the calibration + orphan-suite guard.
   run_suite "tests/scripts/lint-rule-bodies" python3 -m unittest tests.scripts.test_lint_rule_bodies
   run_suite "scripts/lint-rule-bodies-live" python3 scripts/lint-rule-bodies.py --check --base HEAD
@@ -5723,7 +5723,7 @@ if want_scripts; then
   # check reports green", which is precisely the defect class it exists to catch, and it
   # caught this. A registration here must be unconditional or absent.
   #
-  # It runs in the `markdown-lint` job of .github/workflows/pr-quality-guards.yml, which
+  # It runs in the `markdown-lint` member of the `quality-guards` umbrella in .github/workflows/pr-quality-guards.yml, which
   # does `npm ci --ignore-scripts` first. That is a runner lint-orphan-test-suites
   # recognises, and row W1e of the suite itself asserts the workflow still carries the
   # step, so deleting it reddens the suite rather than silently ending its coverage.
@@ -6103,7 +6103,7 @@ if want_scripts; then
   # check-tc-document-sha.sh is deliberately NOT registered here, and an earlier revision of
   # this block that did register it was wrong twice over. (a) It reintroduces #5780: that
   # script's TC_VERSION-bump bypass needs the step-scoped GITHUB_BASE_REF /
-  # MERGE_GROUP_BASE_SHA that ci.yml gives the `tc-document-sha-guard` job and NOT this one
+  # MERGE_GROUP_BASE_SHA that ci.yml gives the `tc-document-sha-guard` member step of `guards-ruleset` and NOT this one
   # (`test-scripts` passes only GITHUB_TOKEN), so on the merge queue a legitimate stale-SHA +
   # TC_VERSION-bump PR would go green on its own required context and red here. (b) Its stated
   # rationale -- catching a normaliser weakening that "silently re-bases every drift
@@ -6747,7 +6747,7 @@ if want_scripts; then
   # directory, so they are registered here explicitly. This is the
   # ratchet SUITE's only registration: lint-orphan-test-suites.sh refuses double coverage,
   # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
-  # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
+  # step in the `rule-body-lint` member block of the required `guards-ruleset` job, which is the depth-0 base it needs.
   run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
   run_suite "scripts/measure-plan-sharp-edges-turns" bash scripts/measure-plan-sharp-edges-turns.test.sh
   # #8377 / ADR-235 — the regen-if-stale gate in front of the now-untracked KB index.
@@ -7168,6 +7168,14 @@ if want_scripts; then
   # manifest↔registration parity assertion). Same explicit-registration and LAST-in-block reasons as above.
   # Declared edge set, not always-on.
   run_suite "scripts/ci-oracle-lane" bash scripts/ci-oracle-lane.test.sh
+  # #12089 review: the umbrella-aggregate parity lint — for each umbrella job
+  # (guards-ruleset, guards-advisory in ci.yml; quality-guards, quality-advisory
+  # in pr-quality-guards.yml; secret-guards in secret-scan.yml) asserts every
+  # `- id:` member step appears in exactly one `member(...)` call in the
+  # aggregate run block, every member `if:` carries `!cancelled()`, and an
+  # `aggregate` step exists. Live lint (no .test.sh wrapper); appended LAST in
+  # the block so no earlier registration's positional-shard ordinal moves.
+  run_suite "scripts/lint-umbrella-aggregate" bash scripts/lint-umbrella-aggregate.sh
 fi
 
 # Named bun-test entries — bun shard.

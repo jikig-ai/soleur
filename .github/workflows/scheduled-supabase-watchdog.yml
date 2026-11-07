@@ -437,6 +437,7 @@ jobs:
           # Fail-closed like the ledger read: a failed labels lookup must NOT
           # produce an empty HAS_ESC — || true would re-post the escalation
           # comment every tick while the API flakes.
+          # dedupe: fail-closed — deliberate HAS_ESC_RC: an unreadable label read defers escalation to the next tick (handler exists)
           HAS_ESC_RC=0
           HAS_ESC=$(gh issue view "$ISSUE" --repo "$GH_REPO" --json labels \
             --jq '[.labels[].name] | index("watchdog-restarts-exhausted") // empty' 2>/dev/null) || HAS_ESC_RC=$?
@@ -509,6 +510,7 @@ jobs:
           # newest labeled issue while an older real ledger stays open would
           # strand the bounds.
           STALE=""
+          # dedupe: benign — || true inside on a close-path read: a failed lookup yields empty CANDIDATES, the COUNT!=1 ::warning:: still fires, and the audit issue stays open (visible)
           CANDIDATES="$(gh issue list --repo "$GH_REPO" --state open --limit 100 --label supabase-auto-restart \
             --json number,title --jq '[.[] | select(.title | contains("watchdog audit"))] | .[].number' 2>/dev/null || true)"
           COUNT="$(printf '%s\n' "$CANDIDATES" | grep -c . || true)"

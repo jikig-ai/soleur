@@ -75,8 +75,9 @@ The gate **fails open**: a failed or partial file-list fetch, an empty list, an 
 differs from the event's `changed_files`, a list at the API's 3000-entry cap (`CHANGED_FILES >= 3000`),
 a failed head lookup, a PR head that moved since the event, a matcher error, or a failure of the job
 itself all leave the matrix running. To force the smoke matrix on a PR, touch a subject file. The
-five required contexts (`gitleaks scan`, `lint fixture content`, `allowlist-diff`, `rename-guard`,
-`waiver discipline`) have no `needs:` edge to the gate and run on every PR as before. `smoke` must
+`secret-guards` required umbrella context (#12089) — whose five member verdicts (`scan`,
+`lint-fixture-content`, `allowlist-diff`, `rename-guard`, `waiver-discipline`) cover the retired
+per-gate contexts — has no `needs:` edge to the gate and runs on every PR as before. `smoke` must
 never become a required context: a required rollup would make `skipped` read as green and turn this
 cost optimisation into a control (ADR-032; `scripts/secret-scan-smoke-gate.test.sh` asserts neither
 `scripts/required-checks.txt` nor the canonical ruleset JSON names a `smoke` context).
@@ -118,7 +119,7 @@ and the matrix posted one skipped row, `smoke (${{ matrix.case }})`; with the st
   a directory change followed by a bare name (`cd scripts && bash lint-workflows.sh`), a path composed
   from a variable, or a bare top-level directory word (`ls scripts`). A future smoke step that reads an
   input only in one of those forms would not be flagged, so a PR editing that input could skip the
-  matrix. The five required scanners still run on every PR, and review of the new step is the check.
+  matrix. The `secret-guards` member scanners still run on every PR, and review of the new step is the check.
   These forms are recorded as decisions (shape rows expecting zero operands) in
   `scripts/secret-scan-smoke-gate.test.sh`.
 
