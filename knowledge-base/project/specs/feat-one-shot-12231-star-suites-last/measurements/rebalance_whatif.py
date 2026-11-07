@@ -12,7 +12,15 @@ wall is the sum of the per-site costs of its sites. The unconditional share of e
 rows) is NOT separated here: it is a fixed cost per arm and would make three arms cost more than the model says, so the
 predicted gain is an upper bound on what a re-split can buy.
 
-Usage: rebalance_whatif.py <treatment.suites.tsv>
+Input: the treatment reading of the PREVIOUS PR (the replay arms registered first, no park), archived at
+knowledge-base/project/specs/archive/20261106-151254-feat-one-shot-12013-replay-a-start-priority/measurements/treatment.suites.tsv.
+The baseline assertion below only holds on that file (the readings of this PR have a different suite mix and walls).
+
+Verdict (CTO ruling 2026-11-06, work phase): a re-split is worth measuring only if a split INSIDE the balance bound
+(largest arm wall / smallest at most 1.5) beats lever 1 alone by at least GATE_S seconds of predicted pool end. The unbounded
+best split is printed for information only.
+
+Usage: rebalance_whatif.py <path to the archived treatment.suites.tsv>
 """
 import csv, heapq, sys
 
@@ -95,5 +103,7 @@ if bal[1]:
           f"predicted pool end {e2} s ({base_end - e2:+d} s vs baseline)")
 else:
     print(f"no contiguous split keeps the arm walls within a {RATIO}x ratio")
-verdict = "PROCEED" if base_end - e >= GATE_S else "PAPER-NEGATIVE (not landed)"
-print(f"gate: predicted gain of at least {GATE_S} s -> {verdict}")
+bal_gain = (base_end - bal[0]) if bal[1] else None
+verdict = "PROCEED" if (bal_gain is not None and bal_gain >= GATE_S) else "PAPER-NEGATIVE (not landed)"
+print(f"gate: a split within the {RATIO}x balance bound must predict a gain of at least {GATE_S} s -> {verdict}"
+      f" (unbounded best: {base_end - e:+d} s, informational only)")

@@ -8,29 +8,33 @@
 #   - `origin/main` in the clone is set to <tree-commit>, so a runner edit is part of the base and the gate is not degraded
 #     to a full run.
 #   - Pinned diff: the files commit 7af192071d touched (web-platform, 8 files). Files it ADDED are removed; files it MODIFIED are
-#     restored to that commit's parent content. Committed on top of <tree-commit>. Expected: AFFECTED_SUMMARY selected=162 of=740.
+#     restored to that commit's parent content. Committed on top of <tree-commit>. Expected: AFFECTED_SUMMARY selected=162
+#     (of=742 at the trees measured here; 740 in the earlier PR). derive.sh prints the line; check it before trusting a reading.
 #   - Command: env -u CI SOLEUR_TEST_JOBS=4 TEST_TIMING_LOG=<f> bash scripts/test-all.sh --affected, run under nice -n 10,
 #     every output line stamped with the seconds since start. --fifo sets SOLEUR_PJ_FIFO=1 (the strict-FIFO A/B control).
 #   - Disturbance guard: the reading ABORTS before it starts when the 1-minute load average is above MAX_LOAD1 (default 9.0) or
 #     when ANY other test-all.sh run is live on the host (a foreign run shares the CPU and the advisory lock). The same two
 #     facts are recorded at the end; a reading whose end state is bad is printed as DISTURBED, not as a result.
-#   - Nothing may edit the source worktree's runner or batteries while a reading runs.
+#   - The reading runs in the clone, so editing the source worktree's scripts does not change it; only node_modules (symlinked)
+#     is shared. The readings in this directory were taken when the pinned-diff step used `git show > file` (now
+#     `git checkout`); both build the same files.
 # Output dir: /var/tmp/m12231/<name>/ (run.log stamped, rc, start.txt, end.txt, clone/). One summary line is printed per reading.
 set -uo pipefail
 
 NAME="${1:?name}"; TREE="${2:?tree commit}"; FIFO=0; [[ "${3:-}" == "--fifo" ]] && FIFO=1
+[[ "$NAME" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "ABORT: name must match [A-Za-z0-9._-]+"; exit 2; }
 SRC_WT="${SRC_WT:-/data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-12231-star-suites-last}"
 BARE="${BARE:-/data/git-repositories/jikig-ai/soleur}"
 PIN="${PIN:-7af192071d}"
 MAX_LOAD1="${MAX_LOAD1:-9.0}"
 O="/var/tmp/m12231/$NAME"
 [[ ! -e "$O" ]] || { echo "ABORT: $O exists (a clone is never reused)"; exit 2; }
-mkdir -p "$O" || exit 2
+mkdir -p "$(dirname "$O")" && mkdir -m 700 "$O" || exit 2
 
 foreign_runs() {  # one line per live test-all.sh run (pid, cwd) other than a reading's own clone
   local p cwd args
   for p in /proc/[0-9]*; do
-    args="$(tr '\0' ' ' <"$p/cmdline" 2>/dev/null)" || continue
+    args="$(tr '\0' ' ' 2>/dev/null <"$p/cmdline")" || continue
     case "$args" in
       *"bash scripts/test-all.sh"*|*"bash "*"/scripts/test-all.sh"*) ;;
       *) continue ;;
@@ -60,18 +64,19 @@ C="$O/clone"
 git clone -q --no-checkout "$BARE" "$C" || { echo "ABORT: clone failed"; exit 2; }
 cd "$C" || exit 2
 git checkout -q --detach "$TREE" || { echo "ABORT: cannot check out $TREE"; exit 2; }
-git update-ref refs/remotes/origin/main "$TREE"
-ln -s "$SRC_WT/node_modules" node_modules
-ln -s "$SRC_WT/apps/web-platform/node_modules" apps/web-platform/node_modules
+git update-ref refs/remotes/origin/main "$TREE" || { echo "ABORT: update-ref failed"; exit 2; }
+ln -s "$SRC_WT/node_modules" node_modules || { echo "ABORT: node_modules link failed"; exit 2; }
+ln -s "$SRC_WT/apps/web-platform/node_modules" apps/web-platform/node_modules || { echo "ABORT: web-platform node_modules link failed"; exit 2; }
 git config user.email measure@invalid
 git config commit.gpgsign false
 # the pinned diff: added files removed, modified files restored to the pin's parent content
 while IFS=$'\t' read -r st f; do
   case "$st" in
-    A) git rm -q -f --ignore-unmatch -- "$f" ;;
-    M) git checkout -q "$PIN^" -- "$f" ;;
+    A) git rm -q -f --ignore-unmatch -- "$f" || { echo "ABORT: cannot remove $f"; exit 2; } ;;
+    M) git checkout -q "$PIN^" -- "$f" || { echo "ABORT: cannot restore $f"; exit 2; } ;;
+    *) echo "ABORT: unexpected status $st for $f"; exit 2 ;;
   esac
-done < <(git diff --name-status "$PIN^" "$PIN" | awk '{ if ($1=="A"||$1=="M") { st=$1; $1=""; sub(/^ /,""); print st "\t" $0 } }')
+done < <(git diff --no-renames --name-status "$PIN^" "$PIN" | awk '{ if ($1=="A"||$1=="M") { st=$1; $1=""; sub(/^ /,""); print st "\t" $0 } }')
 LEFTHOOK=0 git commit -q --no-verify -m "measure: pinned diff of $PIN" || { echo "ABORT: pinned-diff commit empty"; exit 2; }
 
 T0=${EPOCHREALTIME/./}

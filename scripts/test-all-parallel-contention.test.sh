@@ -234,7 +234,7 @@ for label, ev in events:
 sys.exit(1 if (live_at_bar_start or live_at_bar_end) else 0)
 PY
 then
-  pass "C3 — the * suite ran with a drained pool under genuine width-4 pressure"
+  pass "C3 — the * suite ran with a drained pool, last (width 4, four suites registered around it)"
 else
   fail "C3 — the * suite overlapped a live worker"; dump "$BAR_OUT"
 fi

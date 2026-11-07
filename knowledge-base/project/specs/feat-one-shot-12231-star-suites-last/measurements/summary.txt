@@ -27,19 +27,28 @@ Per-suite start and end offsets: `<reading>.suites.tsv`; timing rows: `<reading>
 
 ## What the readings show
 
-- The structural property holds in the T1 log: the one selected `*` suite (`scripts/test-all-capacity-signal`, 9 s) launched with no
-  other suite live, after the last non-`*` suite ended, and the run ended on it (+2072 s, wall +2081 s). In the controls it launched when
-  the pool had drained to its longest live suite, and 36 suites (907 slot-seconds) in the first control and 35 (708) in control2 started after it
-  (none in t1).
-- The park removed about 575 idle slot-seconds against the clean control but moved the pool phase by only 40 s: the pool end is set by
-  the long suites that start late (`approval-guard1-mutation`, `argv-bearer-sweep`, `destroy-ask-mutation`), whose start is a queue-order
-  effect. That is the lever #12263 (start-first) names.
+- The structural property holds in the T1 log: the one selected `*` suite (`scripts/test-all-capacity-signal`, about 6 s) launched with
+  no other suite live, after the last non-`*` suite ended, and the run ended on it (+2072 s, wall +2081 s). In the controls it launched when
+  no other suite was live as well (the pool had drained to its longest suite), and then every later registration waited behind it: counting
+  suites whose start is later than the star's start in `<reading>.suites.tsv`, 50 suites (954 slot-seconds) in control and 50 (827) in
+  control2, none in t1.
+- Idle slot-seconds fell from 2003 (control2) to 1428 (t1), but that is a difference between two runs, not a measurement of what the park caused.
+  The stranded drain behind the star (about 235 s of pool phase in control2, 269 s in control) is gone. Seconds with at most one suite live
+  ROSE against the clean control, 305 s to 364 s: the long suites now form a single-suite tail (the decision-challenges check "seconds with at most
+  one suite live must fall against C" is met against the disturbed control, 435 s, and not against the clean one).
+- The pool end is set by `approval-guard1-mutation` alone: it is the last non-`*` suite to end in every reading (its end equals the star's
+  start). Its wall is 1049 s (control), 880 s (control2) and 1080 s (t1), and the mean number of other suites live while it ran roughly doubled in
+  t1 (about 0.8 to 1.7), because the park moved about 35 to 50 suites into its window. One reading per arm, so that is a hypothesis for why 575
+  fewer idle slot-seconds bought only 40 s of pool phase. `argv-bearer-sweep` and `destroy-ask-mutation` end well before the pool end. The
+  lever #12263 (start-first for the long suites) is the one this points at.
 - AC7 (claim criterion): T1's pool phase is 40 s below the faster control, under the 100 s bar. So the PR says `Ref #12231`, not `Closes`.
-  The park is kept on the structural evidence (AC6 and the Phase 1 fixtures), not on this delta. T1 is not worse than the control, so C2 did not
-  have to reproduce a regression.
-- Run-to-run spread is not resolved by three readings: control and control2 differ by 263 s wall (the first was disturbed), and the
-  clean pair differs by 57 s. A 40 s pool-phase difference is inside that spread. Read the T1 result as "no regression, structural
-  property confirmed, gain not resolved on this diff".
+  The park is kept on the structural evidence (AC6 and the Phase 1 fixtures), not on this delta. "No regression" holds for the POOL PHASE only,
+  against one clean control: the critical suite's own wall was 200 s longer in t1 than in control2.
+- Run-to-run spread is not resolved by three readings: control and control2 differ by 263 s wall (the first was disturbed), and the clean pair
+  differs by 57 s. The readings ran in a fixed order (control, control2, t1) and cold derive fell monotonically (255, 234, 216 s) although the
+  scheduler cannot affect it, so warm-up favouring later readings is a live confound; quote pool phase only, and an ABBA order would be needed
+  for a claim. A 40 s pool-phase difference is inside that spread. Read the T1 result as "structural property confirmed, gain not resolved on
+  this diff".
 
 ## Failures
 
@@ -47,7 +56,7 @@ Per-suite start and end offsets: `<reading>.suites.tsv`; timing rows: `<reading>
   `node_modules`). The remaining `[FAIL]` lines in the logs are the expected self-test lines of suites that fail on purpose.
 - t1 only: `.claude/hooks/grep-q-pipe-guard.test.sh`. Cause: a line added by this change to `scripts/test-all-parallel-scheduler.test.sh`
   (`grep -E '^starS<TAB>' "$TIMING_FILE" | grep -qE ...`) is the pipe-into-`grep -q` shape that guard bans. A real defect of the change, not
-  load; fixed in the next commit (`grep -qE ... < <(grep ...)`), guard re-run green. The reading stands as taken.
+  load; fixed in a later commit of this PR (`grep -qE ... < <(grep ...)`), guard re-run green. The reading stands as taken.
 
 ## Guard 1 mutants (scheduler contract), one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`
 
@@ -69,9 +78,10 @@ Control (unmutated runner): 80 passed, 0 failed. Every mutant below turned the s
 | M7 | `$tok == "*"` instead of the word-bounded match | 1 red | multi-token star |
 | M8 | release only in the normal reap path | 1 red | torn-reap star |
 
-M9 (an extra signal conjunct) is not a mutant of this implementation: `_pj_fill` has no signal check and no launch site runs after the
-interrupt flag is set (the drain's signal branch reaps without filling), so there is no behaviour to flip; the signal-while-parked arm is
-killed by M2 and M6 instead. Harness rows: H1 (flip an expected order in the star-last `tl_check` of a suite copy) -> that arm went red;
+M9 (an extra signal conjunct) is not a mutant that changes behaviour in the shipped arms: `_pj_fill` has no signal check by CTO ruling
+(plan Phase 2), and the drain's signal branch reaps without filling, so a signal that lands BEFORE the drain launches nothing (the
+signal-while-parked arm pins exactly that, and is killed by M2 and M6). A reap fill that runs after the flag is set can still release a
+parked star, which the drain's signal branch then TERMs; that edge is accepted and recorded in the `_pj_fill` comment, not pinned. Harness rows: H1 (flip an expected order in the star-last `tl_check` of a suite copy) -> that arm went red;
 H2 (a `*` registered last, and the zero-star shapes) stay green on the unmodified and on the new runner; H3 (the checker over a timeline with no
 `star` stamp) fails, not skips.
 
@@ -87,7 +97,7 @@ no per-site measurement, no re-split, no T2 reading. Per-site costs are unmeasur
 ## Not claimed
 
 - The 600 s bar (the cold gate is still about 2.0 ks; the pool-phase floor is about 1.5 ks).
-- A gain from the park on this diff: 40 s is inside the run-to-run spread. The pinned diff selects one 9 s `*` suite, so T1 measures
+- A gain from the park on this diff: 40 s is inside the run-to-run spread. The pinned diff selects one 6 s `*` suite, so T1 measures
   barrier removal only; with several `*` suites selected the effect is structural (each runs solo either way and the stranded drain disappears),
   not measured.
 - A result for diffs that select a different suite mix; a confidence band.
@@ -99,12 +109,17 @@ two attempts were refused first because a sibling session's full-gate run was in
 4 reds, 4 declined.
 - The five `*` suites it selected launched last, in registration order, each with no other suite live, and all passed:
   `orphan-process-reaper`, `orphan-process-reaper-mutations`, `md-to-mrkdwn`, `cf-tunnel-liveness-gate-mutations`, `test-all-capacity-signal`.
-  The sixth declared `*` suite, `apps/web-platform/infra/run-registered-suites.sh`, was declined (`not_in_diff`) in this run, so it is not
-  exercised here; CI runs it.
+  The sixth declared `*` suite, `apps/web-platform/infra/run-registered-suites.sh`, was declined (`not_in_diff`) in this run, so it was never
+  exercised on the parked order. CI does not cover it either: CI forces serial mode (`_pj_resolve_run_mode` returns serial when `CI` is set), where
+  registration position, not the park, decides order. The CTO's gate ("all six `*` verdicts green on the parked order") is therefore met 5 of 6;
+  the sixth is an open residual (its source was read for order dependence, none found: it uses its own `mktemp` log dir and resolves its
+  durations file from its manifest directory).
 - Red 1, `plugins/soleur/test/fixture-relative-assert.test.sh`: caused by this change, two new sites (the star arm's timing-file write in the scheduler
   suite, and a redirect in `measure.sh`). Fixed (`assert_fixture_dir "$TMP"` before the write; `git checkout <pin>^ -- <file>` instead of a redirect);
   suite re-run green (rc 0).
-- Red 2 and 3, `flag-detach-shared` and `flag-org-scoping-pr2`: fail in this worktree's environment when run alone (rc 1) and pass in a clean clone of the
-  base tree (rc 0); they exercise the flag scripts, no file of this diff is read by them (`git diff` over `plugins` and `.claude` is empty), and the
-  runner already lists both as "unverified suite fails at base under the isolated run" (`JOINED` lines of `grep-q-pipe-guard`). Environment-bound, not this change.
+- Red 2 and 3, `flag-detach-shared` and `flag-org-scoping-pr2`: fail when run alone in this worktree (rc 1) AND at the merge base (rc 1, re-run by the
+  history seat in a fresh clone of `78fbd47b9a`); they exercise the flag scripts, no file of this diff is read by them (`git diff` over `plugins` and
+  `.claude` is empty), and the runner already lists both as "unverified suite fails at base under the isolated run" (`JOINED` lines of
+  `grep-q-pipe-guard`). Pre-existing, not this change. (An earlier version of this line said they passed in a base clone; that clone carried the
+  pinned diff and a different environment, and was wrong evidence.)
 - Red 4, `community-argv` (103 s): passes alone in the worktree (rc 0) and in the base clone; load-sensitive under the pooled full run.

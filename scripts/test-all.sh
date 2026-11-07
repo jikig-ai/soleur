@@ -2167,7 +2167,7 @@ _pj_draining=0        # set once by _pj_drain; until then a parked `*` suite is 
 _pj_cap=""            # per-run capture dir for <idx>.out/.err files
 _pj_queue=()          # FIFO of unlaunched job indices
 _pj_live_pids=()      # pids currently live (kept in sync with _pj_state)
-declare -a _pj_pid=() _pj_label=() _pj_tok=() _pj_argvs=() _pj_state=()
+declare -a _pj_pid=() _pj_label=() _pj_tok=() _pj_argvs=() _pj_state=() _pj_star=()
 declare -a _pj_rc=() _pj_start=() _pj_end=() _pj_solo=() _pj_tmp0=() _pj_tmpdelta=()
 # Width inputs, overridable for host classes the measured defaults misfit.
 _PJ_MEM_PER_SUITE_MB="${SOLEUR_TEST_SUITE_MEM_MB:-512}"
@@ -2358,12 +2358,19 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
   # `*` conflicts with everything, so a `*` job must run alone. It is PARKED (#12231): a parked `*` is
   # invisible to backfill until the drain (it joins neither live_tok nor skip_tok, and sets no any_q), so its
   # registration position delays nothing, and it is released only when the pool is empty after the pass.
-  # Ordering: suites that share a token keep registration order; a `*` is exclusive but ordered LAST, in
-  # registration order among the `*` jobs. The release is one step after the pass: with _pj_draining set (by
-  # _pj_drain), an empty pool and a non-empty rest, the head of rest launches. After a pass over an empty pool
-  # the first non-`*` candidate has always launched, so rest then holds only parked `*` jobs; launching the head
-  # of a pool-empty queue is legal in any case. One `*` is released per fill; the next reap's fill releases the
-  # next. Registration, render order and verdicts are untouched (only launch timing moves).
+  # "Is a star" is decided ONCE, at submit, by lane_tokens_has_star (the tokenizer lane_tokens_conflict uses), and
+  # read here from _pj_star[idx]. Ordering: suites that share a token keep registration order; a `*` is exclusive
+  # but ordered LAST, in registration order among the `*` jobs. The release is one step after the pass: with
+  # _pj_draining set (by _pj_drain), an empty pool and a non-empty rest, the head of rest launches. Invariant: if
+  # _pj_live_n is 0 after the pass, rest holds only parked `*` jobs (a parked star joins neither live_tok nor
+  # skip_tok, so on an empty pool the first non-`*` candidate always launches); launching the head of a pool-empty
+  # queue is legal in any case. One `*` is released per fill: the next reap's fill releases the next, and after a
+  # torn reap (which never fills) the drain loop's own fill does. A fill has no _pj_sig check, so a reap fill can
+  # still release a star after the interrupt flag is set; _pj_drain's signal branch then TERMs it, as for any suite
+  # (accepted edge, CTO ruling). A star is registered before the runtime ceiling may lapse but starts at the end of
+  # the run, so the ceiling (checked at registration only) does not hold it back. Registration, render order and
+  # verdicts are untouched (only launch timing moves). With any_q now set only by non-`*` candidates, `any_q == 0`
+  # is also what skips lane_tokens_conflict when nothing is queued ahead.
   # lane_tokens_conflict stays the only comparison. A launch cannot unblock an earlier skipped candidate (it only
   # adds to the live set), so one pass is complete; the work per call is linear in the queue, not quadratic.
   (( ${#_pj_queue[@]} > 0 )) || return 0
@@ -2375,7 +2382,7 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
   for idx in "${_pj_queue[@]}"; do
     if (( _pj_live_n >= _pj_jobs )); then rest+=("$idx"); continue; fi
     tok="${_pj_tok[idx]}"; ok=1
-    if [[ " $tok " == *" * "* ]]; then
+    if (( ${_pj_star[idx]:-0} == 1 )); then
       rest+=("$idx"); continue   # parked until the drain (see the comment above)
     fi
     lane_tokens_conflict "$tok" "$live_tok" && ok=0
@@ -2472,6 +2479,9 @@ _pj_submit() {  # _pj_submit <label> <argv...> — the run_suite dispatch under 
   _pj_label[idx]="$label"
   _pj_state[idx]=queued
   _pj_tok[idx]="$(lane_tokens_for "$label" "$@" 2>/dev/null || printf '*')"
+  # Fail closed: an unavailable predicate makes the job a star (parked, then run alone), never an independent.
+  _pj_star[idx]=0
+  if ! declare -F lane_tokens_has_star >/dev/null 2>&1 || lane_tokens_has_star "${_pj_tok[idx]}"; then _pj_star[idx]=1; fi
   local enc=""
   printf -v enc '%q ' "$@"
   _pj_argvs[idx]="$enc"
@@ -5618,8 +5628,9 @@ if want_scripts; then
   # suite such as an arm starts as soon as a slot is free. (A `*` drain-barrier suite
   # no longer holds later launches back: it is parked until the drain, #12231.)
   # The arms include the longest suite of the gate (-a), so registered late
-  # they ended the run. The three move together, so none of them ends the run
-  # while the others already started. Applies to a pooled run only (the
+  # they ended the run. The three move together: -b and -c are the next-longest
+  # suites after -a, so leaving them registered late would let them end the run
+  # instead. Applies to a pooled run only (the
   # local --affected gate); serial runs and CI shard legs get the same order but no
   # wall-time change. Pinned by scripts/lib/test-suite-lanes.test.sh section 7;
   # numbers and rationale: ADR-242, decision 29.

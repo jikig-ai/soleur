@@ -1009,10 +1009,31 @@ Measurements, method and the mutant outcomes live in `knowledge-base/project/spe
 
 ### Decision 30: park the `*` (drain-barrier) suites until the drain
 
-A suite whose lane token set contains `*` is parked by the pooled scheduler. `_pj_fill` no longer launches it, adds it to the skipped set, or lets it hold anything back; `_pj_drain` sets a flag once, and from then on a fill that finds the pool empty after its pass launches the head of the parked queue. The `*` suites therefore run alone, after every non-`*` suite has been launched and reaped, in registration order among themselves. Suites that share a non-`*` token keep registration order as before.
+In the pooled backfill scheduler, a suite whose lane token set contains `*` is parked. The decision "is a star" is made once, at submit, by
+`lane_tokens_has_star` in `scripts/lib/test-suite-lanes.sh` (the tokenizer `lane_tokens_conflict` uses, so the park and the conflict rule cannot
+disagree). `_pj_fill` does not launch a parked job, add it to the skipped set, or let it hold anything back; `_pj_drain` sets a flag once, and from
+then on a fill that finds the pool empty after its pass launches the head of the parked queue. The `*` suites therefore run alone, after every
+non-`*` suite has been launched and reaped, in registration order among themselves. Suites that share a non-`*` token keep registration order as before.
 
-What does not change: registration, the rendered order, the verdict lines, the `TEST_TIMING_LOG` rows, the terminal marker and the exit code (launch timing is the only thing that moves), and `SOLEUR_PJ_FIFO=1`, which stays strict FIFO and keeps the old barrier semantics. Parking is a single-class launch deferral. It is not the scheduler-level priority or weight-ordered buffering that Decision 29 rejected: registration, streaming and the lock-holder stamping are untouched.
+What does not change: registration, the rendered order, the verdict lines, the `TEST_TIMING_LOG` rows, the terminal marker and the exit code (launch
+timing is the only thing that moves), and `SOLEUR_PJ_FIFO=1` and the serial fallbacks, which keep the old registration-position behaviour. Parking is a
+single-class launch deferral. It is not the scheduler-level priority or weight-ordered buffering that Decision 29 rejected: registration, streaming and
+the lock-holder stamping (which fires at registration, so a waiter's `holder_progress_age` climbs through the serial star tail) are untouched.
 
-Consequence, recorded: a budget kill before the drain leaves every `*` suite unrun and absent from the provisional-red sidecar, so a red `*` suite can only defer to CI and never reach `failed-before-budget`.
+Consequences, recorded:
 
-This supersedes, by name, three sentences of earlier amendments, which stay as written: the 2026-11-05 amendment's "a queued `*` still blocks everything after it" and its rejection of skip-ahead as one that "breaks the `*` barrier" (the park removes the skip-ahead conflict by making the `*` invisible to backfill), and Decision 29's "a queued `*` (drain barrier) suite blocks every later launch", its "behind the `*` barrier", and the sentence that every `*` suite now waits for the arms to drain.
+- A budget kill before the drain leaves every `*` suite unrun, so a red `*` suite that has not yet launched can only defer to CI (it never reaches the
+  provisional-red sidecar, so it cannot become `failed-before-budget`); a `*` that was released and reaped red before the kill is recorded like any suite.
+  The `*` suites include an always-on ratchet (`scripts/test-all-capacity-signal`), which a late kill now guarantees is unevaluated locally.
+- The runtime ceiling is checked at registration only, so a star registered before it lapses still starts at the end of the run.
+- A reap fill that runs after the interrupt flag is set can release a parked star; `_pj_drain`'s signal branch then TERMs it, as for any suite. No
+  `_pj_sig` conjunct was added (CTO ruling); a signal that lands before the drain launches nothing.
+- Evidence and open residuals: `knowledge-base/project/specs/feat-one-shot-12231-star-suites-last/measurements/summary.txt`. On the pinned diff (one selected `*`
+  suite) the park moved the pool phase by 40 s against the clean control, inside the run-to-run spread, where the #12013 amendment modelled about 300 s; the
+  gain is not resolved on that diff, and the property is carried by the scheduler fixtures and the mutant table. The sixth declared `*` suite,
+  `apps/web-platform/infra/run-registered-suites.sh`, was never run on the parked order (declined in the full-battery run, and CI forces serial mode).
+
+This supersedes, by name, sentences of earlier amendments, which stay as written: the 2026-11-05 amendment's "a queued `*` still blocks everything after it" and
+its rejection of skip-ahead as one that "breaks the `*` barrier" (the park removes the conflict by keeping the `*` invisible to backfill); and, in the
+2026-11-06 amendment (Decision 29), "a queued `*` (drain barrier) suite blocks every later launch" (Decision 29 text), "The kill now lands on suites queued
+behind the `*` barrier" and "Every `*` suite now waits for the arms to drain" (its "What this does not claim" bullets).

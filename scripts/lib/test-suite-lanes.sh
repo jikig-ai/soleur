@@ -8,11 +8,12 @@
 # THE MODEL. Every suite carries a set of resource TOKENS. Two suites may not be
 # in flight together when their token sets intersect; the token `*` intersects
 # EVERYTHING, which is what makes it a drain barrier (the pool must be empty
-# before a `*` suite launches and stays empty until it is reaped). The runner
-# PARKS a `*` suite and launches it at the drain, after every non-`*` suite
-# (#12231), so a `*` is exclusive but ordered last and delays nothing registered
-# behind it; suites that share a non-`*` token keep registration order. An empty
-# token set is a fully independent suite.
+# before a `*` suite launches and stays empty until it is reaped). In the pooled
+# backfill scheduler the runner PARKS a `*` suite and launches it at the drain,
+# after every non-`*` suite (#12231): exclusive but ordered last, delaying nothing
+# registered behind it. SOLEUR_PJ_FIFO=1 and the serial fallbacks keep the old
+# registration-position behaviour. Suites that share a non-`*` token keep
+# registration order. An empty token set is a fully independent suite.
 #
 # WHY TOKENS AND NOT LANES. A `parallel` / `serial` / `serial-after:<label>`
 # vocabulary cannot express what the collision inventory actually contains:
@@ -263,8 +264,9 @@ _lane_derive() {
 }
 
 # lane_tokens_conflict <setA> <setB> — exit 0 when the two token sets may not be
-# in flight together: `*` intersects everything (the drain barrier; the runner
-# launches such a suite last, at the drain), any shared token intersects pairwise. Pure — no filesystem access, safe in hot loops.
+# in flight together: `*` intersects everything (the drain barrier; the pooled
+# backfill runner launches such a suite last, at the drain), any shared token
+# intersects pairwise. Pure — no filesystem access, safe in hot loops.
 #
 # `read -ra` on a herestring, NOT `for x in $1`: word splitting alone leaves the
 # `*` token to pathname expansion, which would dissolve the drain barrier into
@@ -282,5 +284,18 @@ lane_tokens_conflict() {
     done
   done
   for b in "${_B[@]+"${_B[@]}"}"; do [[ "$b" == "*" ]] && return 0; done
+  return 1
+}
+
+# lane_tokens_has_star <set> — exit 0 when the token set contains the `*` token. The ONE predicate for "is this a
+# drain-barrier suite": it tokenizes exactly as lane_tokens_conflict does (read -ra: any whitespace, first line), so
+# the scheduler's park decision and the conflict rule cannot disagree about what a star is (#12231).
+lane_tokens_has_star() {
+  local -a _T
+  read -ra _T <<<"$1"
+  local t
+  for t in "${_T[@]+"${_T[@]}"}"; do
+    [[ "$t" == "*" ]] && return 0
+  done
   return 1
 }

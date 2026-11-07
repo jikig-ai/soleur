@@ -44,7 +44,7 @@ REPO_ROOT="$(pwd)"
 export REPO_ROOT
 
 PASSES=0; FAILURES=0
-MIN_PASSES_FLOOR=80   # the full green count; raise it in the same edit that adds an arm
+MIN_PASSES_FLOOR=84   # the full green count; raise it in the same edit that adds an arm
 pass() { PASSES=$((PASSES + 1)); printf '[pass] %s\n' "$1"; }
 fail() { FAILURES=$((FAILURES + 1)); printf '[FAIL] %s\n' "$1"; }
 dump() { sed 's/^/    /' <<<"${1:-}"; }
@@ -84,6 +84,7 @@ mk_timeline_fixture starS 0.4
 mk_timeline_fixture slowL 1.2
 mk_timeline_fixture starT 0.4
 mk_timeline_fixture starM 0.4
+mk_timeline_fixture starTab 0.4
 
 cat > "$FIXTURES/fail.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -157,7 +158,7 @@ mk_rel_fixture headT  0.2  -        none
 mk_rel_fixture headY  0.3  -        none
 mk_rel_fixture xU     0.3  -        none
 mk_rel_fixture indA2  0.4  -        start      # independent that releases holdT/holdQ when it starts
-mk_rel_fixture holdQ  0.05 rel.indA2 none 20   # barrier arm: holds T; released by indA2 starting
+mk_rel_fixture holdQ  0.05 rel.indA2 none 20   # holds T for the parked-star arms; released by indA2 starting
 mk_rel_fixture holdD  0.3  -        none       # holds T for 0.3 s without waiting on anyone (drain-order and torn star arms)
 mk_rel_fixture holdX  0.05 rel.indA2 none 20   # accumulation arm: live holder of X
 mk_rel_fixture holdY  0.05 rel.indA2 none 20   # accumulation arm: live holder of Y
@@ -244,9 +245,10 @@ lane_declare "tokB" "artifact:fixture-shared" "fixture token pair B"
 lane_declare "starS" "*" "fixture drain barrier"
 lane_declare "starT" "*" "fixture second drain barrier"
 lane_declare "starM" "* artifact:bfM" "fixture multi-token drain barrier"
+lane_declare "starTab" $'artifact:bfM\t*' "fixture drain barrier whose star is separated by a TAB (read -ra splits on any whitespace)"
 lane_declare "holdD" "artifact:bfT" "backfill fixture: holds T for a fixed 0.3 s"
 lane_declare "holdT" "artifact:bfT" "backfill fixture: holds T"
-lane_declare "holdQ" "artifact:bfT" "backfill fixture: holds T (barrier arm)"
+lane_declare "holdQ" "artifact:bfT" "backfill fixture: holds T (parked-star arms)"
 lane_declare "headT" "artifact:bfT" "backfill fixture: queued head blocked on T"
 lane_declare "headY" "artifact:bfT artifact:bfU" "backfill fixture: head on T and U"
 lane_declare "xU" "artifact:bfU" "backfill fixture: shares only U with headY"
@@ -271,6 +273,8 @@ calls = {
     "starlast":  [("indA","indA.sh"),("indB","indB.sh"),("starS","starS.sh")],
     "starsig":   [("starS","starS.sh"),("sigred","sigred.sh"),("indA","indA.sh")],
     "starm":     [("holdQ","holdQ.sh"),("starM","starM.sh"),("indA","indA2.sh")],
+    "starws":    [("holdQ","holdQ.sh"),("starTab","starTab.sh"),("indA","indA2.sh")],
+    "solostar":  [("starS","starS.sh")],
     "starorn":   [("holdD","holdD.sh"),("starS","starS.sh")],
     "order":     [("first","indC.sh"),("second","indB.sh"),("third","indA.sh")],
     "one":       [("okfixture","ok.sh")],
@@ -313,8 +317,8 @@ lane_tokens_conflict() { printf x >> "''' + fixtures + '''/conflict.count"; _ltc
 }
 extra["starsig"] = extra["sigred"]   # star arms reuse the interrupt and torn-reap shims
 extra["starorn"] = extra["torn"]
-extra = extra.get(arm, "")
-body = prelude + extra + "".join(
+extra_body = extra.get(arm, "")
+body = prelude + extra_body + "".join(
     f'run_suite "{label}" bash "{fixtures}/{script}"\n' for label, script in calls
 ) + "_pj_drain\n"
 s = s[:i] + body + s[j:]
@@ -469,7 +473,7 @@ fi
 assert_fixture_dir "$TMP"
 TIMING_FILE="$TMP/timing.star"; : > "$TIMING_FILE"
 run_arm star 4 || true
-STAR_VERDICTS="$(verdict_lines "$ARM_OUT" | tr '\n' ' ')"; STAR_RC="$ARM_RC"
+STAR_VERDICTS="$(verdict_lines "$ARM_OUT" | tr '\n' ' ')"; STAR_RC="$ARM_RC"   # also read by the FIFO star control (A10)
 if python3 - "$FIXTURES/timeline.log" <<'PY'
 import sys
 wins = {}
@@ -482,30 +486,30 @@ bad = [l for l, w in wins.items() if l != 'starS' and 'S' in w and 'E' in w
 sys.exit(1 if bad else 0)
 PY
 then
-  pass "A4 - the * suite ran alone (its window overlaps no other fixture)"
+  pass "A4 — the * suite ran alone (its window overlaps no other fixture)"
 else
-  fail "A4 - the * suite overlapped another fixture"
+  fail "A4 — the * suite overlapped another fixture"
 fi
 if tl_check "S:starS>=E:indB" "S:starS>=E:slowL" "S:starS>=E:indA"; then
-  pass "A4 - star-last: the * suite started only after the suites registered both before and after it had ended"
+  pass "A4 — star-last: the * suite started only after the suites registered both before and after it had ended"
 else
-  fail "A4 - star-last: the * started while an independent was still running (a parked * must launch at the drain)"; dump "$(cat "$FIXTURES/timeline.log")"
+  fail "A4 — star-last: the * started while an independent was still running (a parked * must launch at the drain)"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 if [[ "$STAR_RC" == "0" && "$STAR_VERDICTS" == "indA starS slowL indB " ]] && grep -qE '^=== 4/4 suites passed ===$' <<<"$ARM_OUT"; then
-  pass "A4 - a parked * leaves the verdict lines, exit code and terminal marker in registration order"
+  pass "A4 — a parked * leaves the verdict lines, exit code and terminal marker in registration order"
 else
-  fail "A4 - star arm verdicts '$STAR_VERDICTS' rc=$STAR_RC"; dump "$ARM_OUT"
+  fail "A4 — star arm verdicts '$STAR_VERDICTS' rc=$STAR_RC"; dump "$ARM_OUT"
 fi
 STAR_TIMING_ORDER="$(cut -f1 "$TIMING_FILE" | tr '\n' ' ')"
 if [[ "$STAR_TIMING_ORDER" == "indA starS slowL indB " ]]; then
-  pass "A4 - TEST_TIMING_LOG rows keep registration order under a parked *"
+  pass "A4 — TEST_TIMING_LOG rows keep registration order under a parked *"
 else
-  fail "A4 - timing rows '$STAR_TIMING_ORDER'"; dump "$(cat "$TIMING_FILE")"
+  fail "A4 — timing rows '$STAR_TIMING_ORDER'"; dump "$(cat "$TIMING_FILE")"
 fi
 if grep -qE 'tmp_delta=-?[0-9]+$' < <(grep -E '^starS	' "$TIMING_FILE"); then
-  pass "A4 - the parked * launched solo, so its tmp_delta is a number (not unattributed)"
+  pass "A4 — the parked * launched solo, so its tmp_delta is a number (not unattributed)"
 else
-  fail "A4 - starS tmp_delta is not numeric: $(grep -E '^starS' "$TIMING_FILE" | tr '\t' '>')"
+  fail "A4 — starS tmp_delta is not numeric: $(grep -E '^starS' "$TIMING_FILE" | tr '\t' '>')"
 fi
 unset TIMING_FILE
 
@@ -729,11 +733,17 @@ if tl_check --log "$GOOD_TL" "S:indA2<E:holdT" >/dev/null && ! tl_check --log "$
 else
   fail "A10 — the timeline checker is not discriminating"
 fi
+# The >= branch must discriminate too: a later start passes, an earlier one fails (an always-true >= survives otherwise).
+if tl_check --log "$GOOD_TL" "S:indA2>=S:holdT" >/dev/null && ! tl_check --log "$GOOD_TL" "S:holdT>=S:indA2" >/dev/null; then
+  pass "A10 — instrument: the >= clause passes a later start and fails an earlier one"
+else
+  fail "A10 — the >= branch of the timeline checker is not discriminating"
+fi
 # A star-last clause over a timeline that lacks the star's label must FAIL, never skip.
 if ! tl_check --log "$GOOD_TL" "S:starS>=E:holdT" >/dev/null && ! tl_check --log "$BAD_TL" "S:starS>=E:indA2" >/dev/null; then
-  pass "A10 - instrument: a star-last clause over a timeline with no star stamp fails (0 checked is not green)"
+  pass "A10 — instrument: a star-last clause over a timeline with no star stamp fails (0 checked is not green)"
 else
-  fail "A10 - the timeline checker passed a star clause that has no star stamp"
+  fail "A10 — the timeline checker passed a star clause that has no star stamp"
 fi
 
 # Canonical shape: a blocked head with independent suites behind it.
@@ -780,17 +790,17 @@ fi
 # starts while holdQ is live; the star starts only after both have ended.
 run_arm bf3 4 || true
 if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdQ" "S:starS>=E:holdQ" "S:starS>=E:indA2"; then
-  pass "A10 - a parked * does not block later token-free suites; it launches after both the holder and the independent ended"
+  pass "A10 — a parked * does not block later token-free suites; it launches after both the holder and the independent ended"
 else
-  fail "A10 - parked-star arm wrong: a queued * must not hold back a later independent"; dump "$(cat "$FIXTURES/timeline.log")"
+  fail "A10 — parked-star arm wrong: a queued * must not hold back a later independent"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 
 # A token-blocked non-star ahead of the star, then an independent after it: the star must not enter the skipped set.
 run_arm starblk 4 || true
 if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdT" "S:headT>=E:holdT" "S:starS>=E:headT" "S:starS>=E:indA2"; then
-  pass "A10 - blocked-head star: the independent behind the star does not wait for it; the star waits for the blocked head"
+  pass "A10 — blocked-head star: the independent behind the star does not wait for it; the star waits for the blocked head"
 else
-  fail "A10 - blocked-head star arm wrong"; dump "$(cat "$FIXTURES/timeline.log")"
+  fail "A10 — blocked-head star arm wrong"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 
 # Two override stars: neither overlaps the other or anything, and registration order among stars holds.
@@ -799,59 +809,92 @@ TWO_VERDICTS="$(verdict_lines "$ARM_OUT" | tr '\n' ' ')"
 TWO_RUN="$(started_order "$ARM_OUT")"
 if [[ "$ARM_RC" == "0" && "$TWO_VERDICTS" == "indA starS starT indB " && "$TWO_RUN" == "indA indB starS starT " ]] \
    && tl_check "S:starS>=E:indB" "S:starT>=E:starS"; then
-  pass "A10 - two stars run one after the other at the drain, in registration order, never beside anything"
+  pass "A10 — two stars run one after the other at the drain, in registration order, never beside anything"
 else
-  fail "A10 - two-stars arm wrong (rc=$ARM_RC launch order '$TWO_RUN' verdicts '$TWO_VERDICTS')"; dump "$(cat "$FIXTURES/timeline.log")"
+  fail "A10 — two-stars arm wrong (rc=$ARM_RC launch order '$TWO_RUN' verdicts '$TWO_VERDICTS')"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+
+# Independent of tl_check: the two stars' windows must not intersect (a release-all-parked mutant starts both together).
+if python3 - "$FIXTURES/timeline.log" <<'PY'
+import sys
+w = {}
+for line in open(sys.argv[1]):
+    k, label, ns = line.split()
+    w.setdefault(label, {})[k] = int(ns)
+a, b = w['starS'], w['starT']
+sys.exit(1 if (a['S'] < b['E'] and b['S'] < a['E']) else 0)
+PY
+then
+  pass "A10 — two stars: the windows of starS and starT never intersect (checked without tl_check)"
+else
+  fail "A10 — two stars overlapped each other"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 
 # A DERIVED `*` (unreadable suite source, no override) is parked like an override one: it starts after indB is done.
 run_arm dstar 4 || true
-DS_B="$(run_pos indB done)"; DS_S="$(run_pos dstar started)"
+DS_B="$(run_pos indB "done")"; DS_S="$(run_pos dstar started)"
 if [[ -n "$DS_B" && -n "$DS_S" ]] && (( DS_B < DS_S )) && grep -qE '^\[FAIL\] dstar ' <<<"$ARM_OUT" && [[ "$ARM_RC" != "0" ]]; then
-  pass "A10 - a derived * (unreadable source) is parked until the drain, then runs and its failure is a [FAIL]"
+  pass "A10 — a derived * (unreadable source) is parked until the drain, then runs and its failure is a [FAIL]"
 else
-  fail "A10 - derived-star arm wrong (indB done at '$DS_B', dstar started at '$DS_S', rc=$ARM_RC)"; dump "$ARM_OUT"
+  fail "A10 — derived-star arm wrong (indB done at '$DS_B', dstar started at '$DS_S', rc=$ARM_RC)"; dump "$ARM_OUT"
 fi
 
 # Drain order: the token-blocked head launches before the parked star, whatever the registration order.
 run_arm drainord 4 || true
 if [[ "$ARM_RC" == "0" ]] && tl_check "S:headT>=E:holdD" "S:starS>=E:headT"; then
-  pass "A10 - drain order: a token-blocked non-* launches before the parked * (the release comes after the pass)"
+  pass "A10 — drain order: a token-blocked non-* launches before the parked * (the release comes after the pass)"
 else
-  fail "A10 - the * was released before a queued non-* suite"; dump "$(cat "$FIXTURES/timeline.log")"
+  fail "A10 — the * was released before a queued non-* suite"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 
 # A star registered FIRST, with nothing to stamp: the ten suites behind it must all finish before it starts.
 run_arm starfirst 4 || true
-SF_LAST="$(run_pos ok9 done)"; SF_STAR="$(run_pos starS started)"
+SF_LAST="$(run_pos ok9 "done")"; SF_STAR="$(run_pos starS started)"
 if [[ "$ARM_RC" == "0" && -n "$SF_LAST" && -n "$SF_STAR" ]] && (( SF_LAST < SF_STAR )); then
-  pass "A10 - star-first: a * registered first starts only after every later suite has finished (not on the empty pool)"
+  pass "A10 — star-first: a * registered first starts only after every later suite has finished (not on the empty pool)"
 else
-  fail "A10 - star-first arm wrong (ok9 done at '$SF_LAST', starS started at '$SF_STAR', rc=$ARM_RC)"; dump "$ARM_OUT"
+  fail "A10 — star-first arm wrong (ok9 done at '$SF_LAST', starS started at '$SF_STAR', rc=$ARM_RC)"; dump "$ARM_OUT"
 fi
 
 # Must-PASS (non-canonical): a star registered LAST keeps registration-order verdicts and runs alone after the others.
 run_arm starlast 4 || true
 if [[ "$ARM_RC" == "0" && "$(verdict_lines "$ARM_OUT" | tr '\n' ' ')" == "indA indB starS " ]] && tl_check "S:starS>=E:indA" "S:starS>=E:indB"; then
-  pass "A10 - a * registered last runs alone after the others and the verdicts keep registration order"
+  pass "A10 — a * registered last runs alone after the others and the verdicts keep registration order"
 else
-  fail "A10 - star-last-registered arm wrong"; dump "$ARM_OUT"
+  fail "A10 — star-last-registered arm wrong"; dump "$ARM_OUT"
 fi
 
 # Multi-token set containing `*`: parked like any `*` (the match is word-bounded, not equality with a lone `*`).
 run_arm starm 4 || true
 if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdQ" "S:starM>=E:holdQ" "S:starM>=E:indA2"; then
-  pass "A10 - a multi-token set containing * is parked like a lone *"
+  pass "A10 — a multi-token set containing * is parked like a lone *"
 else
-  fail "A10 - multi-token star arm wrong"; dump "$(cat "$FIXTURES/timeline.log")"
+  fail "A10 — multi-token star arm wrong"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+
+# The star as a TAB-separated token: lane_tokens_conflict (read -ra) treats it as a star, so it must be parked too.
+run_arm starws 4 || true
+if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdQ" "S:starTab>=E:holdQ" "S:starTab>=E:indA2"; then
+  pass "A10 — a * separated from another token by a tab is parked like any * (one star predicate for park and conflict)"
+else
+  fail "A10 — tab-separated star arm wrong: the park and the conflict rule disagree about what a star is"; dump "$(cat "$FIXTURES/timeline.log")"
+fi
+
+# A lone star (nothing else registered) must still run: the drain releases it. Kills a release that needs a non-star
+# to have been submitted, and one that lives only in the reap paths.
+run_arm solostar 4 || true
+if [[ "$ARM_RC" == "0" ]] && grep -qE '^\[run\] starS started' <<<"$ARM_OUT" && grep -qE '^=== 1/1 suites passed ===$' <<<"$ARM_OUT"; then
+  pass "A10 — a lone * suite is released at the drain and runs (1/1)"
+else
+  fail "A10 — lone-star arm wrong (rc=$ARM_RC)"; dump "$ARM_OUT"
 fi
 
 # Signal while parked: the star is registered FIRST and parked; the interrupt arrives before the drain, so it never starts.
 run_arm starsig 4 || true
 if [[ "$ARM_RC" != "0" ]] && ! grep -qE '^\[run\] starS started' <<<"$ARM_OUT" && grep -qE '^\[UNACCOUNTED\] starS ' <<<"$ARM_OUT"; then
-  pass "A10 - an interrupt while the * is parked leaves it unlaunched and UNACCOUNTED (nothing launches after the signal)"
+  pass "A10 — an interrupt that lands before the drain leaves the parked * unlaunched and UNACCOUNTED"
 else
-  fail "A10 - signal-while-parked arm wrong (rc=$ARM_RC)"; dump "$ARM_OUT"
+  fail "A10 — signal-while-parked arm wrong (rc=$ARM_RC)"; dump "$ARM_OUT"
 fi
 
 # Several queued blockers: qC conflicts ONLY with the queued qA (token W), while qB (a different token) was skipped
@@ -876,7 +919,7 @@ fi
 # (No starvation arm: _pj_submit blocks while the pool is saturated, so the queue never holds an independent suite
 # beside a token-ready head when a slot frees - "head tried last" is observationally equivalent at the launcher.
 # Measured with an order-preserving head-last mutant on 2026-11-05: it survives, and is equivalent for that reason.
-# The head-first rule is pinned by the order-among-conflicting and barrier arms above, which a head-last
+# The head-first rule is pinned by the order-among-conflicting arms above (bf2, bf6, bf7), which a head-last
 # reordering of the queue does fail.)
 
 # Torn reap: wait -n comes back with an empty -p variable once. The torn branch never calls _pj_fill, so a
@@ -891,9 +934,9 @@ fi
 # Torn reap with a parked star: the tear hits the last non-star, and the drain's own fill must still release the star.
 run_arm starorn 4 || true
 if [[ "$ARM_RC" == "0" ]] && ! grep -q 'UNACCOUNTED' <<<"$ARM_OUT" && [[ "$(verdict_lines "$ARM_OUT" | tr '\n' ' ')" == "holdD starS " ]] && tl_check "S:starS>=E:holdD"; then
-  pass "A10 - a torn reap of the last non-* still releases the parked * (released from _pj_fill, not only the normal reap)"
+  pass "A10 — a torn reap of the last non-* still releases the parked * (released from _pj_fill, not only the normal reap)"
 else
-  fail "A10 - torn-reap star arm wrong (rc=$ARM_RC)"; dump "$ARM_OUT"
+  fail "A10 — torn-reap star arm wrong (rc=$ARM_RC)"; dump "$ARM_OUT"
 fi
 
 # The knob: SOLEUR_PJ_FIFO=1 reproduces strict FIFO exactly - independents wait behind the blocked head, and the
@@ -948,9 +991,9 @@ fi
 ARM_FIFO=1 run_arm star 4 || true
 if [[ "$(started_order "$ARM_OUT")" == "$FIFO_STAR_FROZEN_ORDER" && "$(verdict_lines "$ARM_OUT" | tr '\n' ' ')" == "$STAR_VERDICTS" && "$ARM_RC" == "$STAR_RC" ]] \
    && tl_check "S:starS>=E:indA" "S:slowL>=E:starS" "S:indB>=E:starS"; then
-  pass "A10 - SOLEUR_PJ_FIFO=1 keeps strict FIFO on the star fixture (frozen launch order) with the same verdicts and exit as backfill"
+  pass "A10 — SOLEUR_PJ_FIFO=1 keeps strict FIFO on the star fixture (frozen launch order) with the same verdicts and exit as backfill"
 else
-  fail "A10 - FIFO star control wrong (launch '$(started_order "$ARM_OUT")', want '$FIFO_STAR_FROZEN_ORDER')"; dump "$(cat "$FIXTURES/timeline.log")"
+  fail "A10 — FIFO star control wrong (launch '$(started_order "$ARM_OUT")', want '$FIFO_STAR_FROZEN_ORDER')"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 # A second, non-canonical shape (5 independents) must also backfill and replay in order.
 run_arm bf5 4 || true
@@ -964,16 +1007,16 @@ fi
 rm -f "$FIXTURES/conflict.count"
 run_arm many 4 || true
 CC="$(wc -c < "$FIXTURES/conflict.count" 2>/dev/null || echo 0)"
-MANY_LAST="$(run_pos ok59 done)"; MANY_STAR="$(run_pos starS started)"
-if [[ "$ARM_RC" == "0" ]] && (( CC > 0 )) && (( CC <= 200 )); then
-  pass "A10 - the fill pass stays bounded: $CC lane_tokens_conflict calls for 61 suites (ceiling 200; a parked * adds none per queued suite)"
+MANY_LAST="$(run_pos ok59 "done")"; MANY_STAR="$(run_pos starS started)"
+if [[ "$ARM_RC" == "0" ]] && (( CC > 0 )) && (( CC <= 90 )); then
+  pass "A10 — the fill pass stays bounded: $CC lane_tokens_conflict calls for 61 suites (ceiling 90: one per queued suite, and a parked * adds none)"
 else
-  fail "A10 - conflict-call count $CC outside (0, 200] or rc=$ARM_RC"
+  fail "A10 — conflict-call count $CC outside (0, 90] or rc=$ARM_RC"
 fi
 if [[ -n "$MANY_LAST" && -n "$MANY_STAR" ]] && (( MANY_LAST < MANY_STAR )); then
-  pass "A10 - 60 suites registered behind a * all finish before the * starts"
+  pass "A10 — 60 suites registered behind a * all finish before the * starts"
 else
-  fail "A10 - many arm: ok59 done at '$MANY_LAST', starS started at '$MANY_STAR'"; dump "$ARM_OUT"
+  fail "A10 — many arm: ok59 done at '$MANY_LAST', starS started at '$MANY_STAR'"; dump "$ARM_OUT"
 fi
 
 # --- A6: fallback arms --------------------------------------------------------
