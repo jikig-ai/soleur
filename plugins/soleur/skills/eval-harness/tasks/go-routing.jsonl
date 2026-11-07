@@ -12,6 +12,6 @@
 {"vars": {"input": "Are we affected by CVE-2026-111497 on our infra, and if so fix it.", "golden_label": "cve-exposure"}}
 {"vars": {"input": "Fix CVE-2026-111497 in the base image.", "golden_label": "fix"}}
 {"vars": {"input": "Prod is down and the logs mention CVE-2026-98432.", "golden_label": "incident"}}
-{"vars": {"input": "Is CVE-2026-98432 being exploited against us right now?", "golden_label": "incident"}}
+{"vars": {"input": "Is CVE-2026-98432 being exploited against us right now?", "golden_label": "legal-threshold"}}
 {"vars": {"input": "Does CVE-2026-1234 affect my app's dependencies?", "golden_label": "default"}}
-{"vars": {"input": "Are we affected by CVE-2026-1234?", "golden_label": "default"}}
+{"vars": {"input": "Are we affected by CVE-2026-1234?", "golden_label": "cve-exposure"}}
