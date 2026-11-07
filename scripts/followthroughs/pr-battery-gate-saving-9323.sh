@@ -84,9 +84,24 @@ for need in gh jq unzip mktemp awk sed grep sort date timeout comm paste cut cat
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
 BUDGET="${PBG_BUDGET_S:-270}"   # the ONE wall deadline END=T0+BUDGET covering listing, examine, artifacts and the escape check (default 30 s under the sweeper's 300 s per-probe kill; test seam, cap 300)
-[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 300 ]] || { echo "CANNOT ESTABLISH: PBG_BUDGET_S is not an integer from 1 to 300"; exit 3; }
 T0=$SECONDS
-END=$((T0 + BUDGET))
+# PBG_UNBOUNDED=1 is the operator-local verdict seam (#9323): the probe starves
+# inside the sweeper's 300 s kill (~20 qualifying runs x ~13 artifact reads
+# cannot fit 270 s), so a local run overrides the wall deadline with a
+# far-future bound — the bound is REPLACED, never removed (api()'s
+# rem=$((END-SECONDS-5)) would crash under `set -u` on an unset END). The
+# sweeper never sets the variable, so sweep behaviour is byte-identical: the
+# PBG_BUDGET_S<=300 contract still guards the budgeted path and stays
+# irrelevant on the unbounded one (an irrelevant PBG_BUDGET_S cannot refuse a
+# run it no longer bounds). Per-call 60 s caps still bound every read: a
+# stalled gh api call dies in place as a read failure, never hangs the
+# operator's shell.
+if [[ "${PBG_UNBOUNDED:-}" = 1 ]]; then
+  END=$((T0 + 86400))
+else
+  [[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 300 ]] || { echo "CANNOT ESTABLISH: PBG_BUDGET_S is not an integer from 1 to 300"; exit 3; }
+  END=$((T0 + BUDGET))
+fi
 
 # the gate-machinery paths, single-sourced from the lib that declares them
 # shellcheck source=scripts/lib/test-relevance-paths.sh

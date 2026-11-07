@@ -269,12 +269,22 @@ build_fx "$TMP/w1" 25 40; : > "$TMP/w1/SLOW"
 expect "the wall deadline cuts mid-sweep (1 s per call, 10 s budget): NOT YET naming the deadline" 2 "wall deadline" "$TMP/w1" PBG_BUDGET_S=10 SLOW_S=1
 out="$(env FX="$TMP/w1" PATH="$TMP/bin:$PATH" GH_TOKEN=x PBG_BUDGET_S=10 SLOW_S=1 bash "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 2 && "$out" != *"CANNOT ESTABLISH"* ]]; then pass "the deadline cut stays NOT YET, never CANNOT ESTABLISH"; else fail "deadline cut: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+# --- the PBG_UNBOUNDED operator seam (#9323): the local verdict run replaces the wall deadline ------
+build_fx "$TMP/u0" 5 40; : > "$TMP/u0/SLOW"
+expect "the budgeted path still binds: PBG_BUDGET_S=1 + slow fixture (no PBG_UNBOUNDED) is a wall-deadline NOT YET" 2 "wall deadline" "$TMP/u0" PBG_BUDGET_S=1 SLOW_S=1
+build_fx "$TMP/u1" 5 40; : > "$TMP/u1/SLOW"
+out="$(env FX="$TMP/u1" PATH="$TMP/bin:$PATH" GH_TOKEN=x PBG_UNBOUNDED=1 SLOW_S=1 bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$out" != *"wall deadline"* ]]; then pass "PBG_UNBOUNDED=1 on the slow fixture: no wall-deadline NOT YET line (the deadline cut cannot fire)"; else fail "unbounded still cut on the deadline: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+if [[ "$rc" =~ ^[0-3]$ && -n "$out" ]]; then pass "PBG_UNBOUNDED=1 runs the slow sweep to a verdict-path exit (rc=$rc)"; else fail "unbounded exit off the verdict contract: rc=$rc"; fi
+build_fx "$TMP/u2" 5 40
+expect "PBG_UNBOUNDED=1 bypasses budget validation: PBG_BUDGET_S=301 proceeds to a verdict" 2 "NOT YET: 5" "$TMP/u2" PBG_UNBOUNDED=1 PBG_BUDGET_S=301
+expect "the sweeper contract still guards: PBG_BUDGET_S=301 without PBG_UNBOUNDED is CANNOT ESTABLISH" 3 "PBG_BUDGET_S is not an integer" "$TMP/u2" PBG_UNBOUNDED= PBG_BUDGET_S=301
 if grep -q 'rate_limit' "$TMP/s1/requests.log"; then pass "the quota preflight reads rate_limit"; else fail "no rate_limit preflight issued"; fi
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
 
 printf 'pr-battery-gate-saving-9323: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
-PBGS_MIN_ASSERTIONS=44
+PBGS_MIN_ASSERTIONS=49
 if (( asserted < PBGS_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < PBGS_MIN_ASSERTIONS=%d\n' "$asserted" "$PBGS_MIN_ASSERTIONS" >&2
   exit 1
