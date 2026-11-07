@@ -8,6 +8,7 @@ signed_off_at: null
 signed_off_by: null
 disposition: "OPEN. This record must exist before the first real row; it is not a sign-off. The sign-off block in section 6 is blank and no reviewer or date is recorded."
 gates: "The first real row in `legal_acceptance`. Not the merge of PR-B (dark) or PR-C (behind the `approval-queue` flag, PROVISIONAL)."
+sign_off_stand_in: "2026-11-07 addendum at the end: the CLO agent ruling of 2026-11-07 stands in for counsel on the operator's instruction (v1 internal position, human-lawyer review owed); this block stays blank; ruling in 2026-11-07-clo-ruling-founder-acceptance-record-12197.md (fires on the merge of PR #12342)"
 open_follow_ups: ["Register Maintenance item 17 (a) to (g)", "external anchor (deferred)", "deletion path at the end of retention (not built)", "challenge-table purge on erasure (not built; opportunistic 30-day purge is built)"]
 re_evaluation_triggers: "First founder other than the Jikigai operator OR EEA-out data subject OR regulated-industry user OR any component that reads the table to enforce something OR the external anchor built OR the retention period confirmed or changed OR a first erasure request or objection from a founder whose row is kept."
 ---
@@ -105,6 +106,18 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 *Left blank deliberately. No reviewer and no date are recorded by the drafter.*
 
 *The in-repo v1 CLO-agent review of this record and its sibling artifacts is `knowledge-base/legal/audits/2026-11-counsel-review-12011.md`. It is not external counsel and does not fill this block.*
+
+## Addendum 2026-11-07 (#12197, PR #12342)
+
+> Drafted, not counsel-reviewed. Fires on the merge of PR #12342. Nothing above this addendum is edited; the sign-off block in section 6 stays blank, because it is for counsel and filling it with an agent would contradict the status `DRAFTED, NOT COUNSEL-REVIEWED`.
+
+**Stand-in.** On 2026-11-07 the operator ruled that the company has no external counsel, so the ruling of the CLO agent (`soleur:legal:clo`) stands in for counsel sign-off on the first committed text, `founder-acceptance-record`. The ruling is persisted in `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`. It is a v1 internal position, not a lawyer's opinion. No human lawyer has read the text, the period or the card.
+
+**Closed as v1 positions only (register Maintenance item 17):** (a) the retention period is 5 years from the date of the decision, extended only while a legal claim, a complaint or an official inquiry about the record is open; (b) the operator-first reading of Art. 13(4) and the Art. 17(3)(e) with Art. 6(1)(f) framing for keeping the row after erasure; (c) the note is kept for the same period as the row and deleted with it; (f) the 30-day value for request records. The re-evaluation trigger "retention period confirmed or changed" has fired and is recorded here. The text states plainly that the deletion step is not built; #12080 carries the deletion path and its trigger.
+
+**Expressly deferred (the operator's act under Condition 3 of the 2026-11-04 audit, not the CLO's):** 17(d), 17(e), 17(g), the DPIA screening and the final-form published Privacy Policy, GDPR Policy and Data Protection Disclosure (tracked in #12365). A human lawyer's review of every position above is still owed before any non-Jikigai founder.
+
+**What this addendum does not change.** Section 2 still holds: nothing was measured on a running system, and the card wording stays PROVISIONAL (`LEGAL_COPY.PROVISIONAL` is true; the CPO has not signed off the deck). The twelve residual risks of an agent standing in for counsel are listed in the ruling file.
 
 ---
 

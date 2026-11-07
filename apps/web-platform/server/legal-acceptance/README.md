@@ -28,7 +28,19 @@ it does not drop this directory today; the `!server/legal-acceptance/texts/*.md`
 the image (bundle at `dist/server`, texts under `server/legal-acceptance/texts`, cwd at the app root), runs it with
 node and compares the hash with `sha256sum`. It also asserts the Dockerfile COPY and the `.dockerignore` re-include. That
 covers the esbuild bundle layout; the Next-compiled routes and pages rely on the same cwd convention (`WORKDIR /app`,
-`node dist/server/index.cjs`). The post-deploy registry smoke (a key loaded from inside the container) stays open (#12197): a key can only be loaded from inside the container once a text is committed and deployed. The first one, `founder-acceptance-record`, is a draft held for counsel's sign-off; the smoke stays open until a text is published and answered.
+`node dist/server/index.cjs`). The post-deploy registry smoke (a key loaded from inside the container) stays open (#12197): a key can only be loaded from inside the container once a text is committed and deployed. The first one, `founder-acceptance-record`, is signed off as a v1 internal position (the CLO agent's ruling of 2026-11-07, which stands in for counsel on the operator's instruction and is not a lawyer's opinion); the smoke stays open until a text is published and answered.
+
+## Who sees the card, and what it says
+
+The `approval-queue` flag is global (`workspaceId: null`), so the card pages and the decide and reauth routes require the flag AND
+the configured founder: `isLegalSurfaceEnabled` in `surface.ts` (flag on, and the user id equals `LEGAL_ACCEPTANCE_FOUNDER_ID`; an unset or
+malformed variable disables the surface for everyone). Anyone else gets the same 404 as with the flag off. Turning the flag on is the
+operator's act.
+
+The card's wording depends on the kind declared for the text key in `LEGAL_TEXT_KIND` (`lib/legal-acceptance-copy.ts`): `terms` or
+`acknowledgement`. There is no default. A registered text with no declared kind renders no card, is a 404 on the card page, the decide route
+and the reauth route (`guardLegalRequest`), is left out of the index, and is reported once as `kind_undeclared` after the surface gate.
+`test/legal-acceptance/registry-pins.test.ts` requires the served keys, the pinned keys and the declared kinds to be the same set.
 
 ## Sentry ops
 

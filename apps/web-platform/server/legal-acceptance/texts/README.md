@@ -4,12 +4,28 @@ One committed file per key: `<key>.md`, LF line endings, a front-matter block wi
 `valid_until`), then the text the founder reads. The file name is the key. The hash recorded against a decision is the
 sha256 of the file's raw bytes (`sha256sum <file>` gives the same value). See `../canonical.ts` and ADR-319.
 
-Do not add a text here without counsel's sign-off on its wording. The one exception is a HELD DRAFT on a draft PR whose
-CI-only merge guard (`test/legal-acceptance/founder-acceptance-record.test.ts`) stays red while any open item is left in the
-text or in the card notice that states the same retention period, as `founder-acceptance-record` is until counsel's sign-off PR
-replaces the placeholder in both, bumps `version` and adds the published `{version: sha256}` pin. The guard detects the draft
-state; it is not proof of sign-off, and an admin or UI merge bypasses it, so the draft stays a DRAFT PR until counsel signs off. A change to a published file is a new version: the old hash stays valid for the decisions already
-recorded against it.
+Do not add a text here without a recorded sign-off on its wording. Today the sign-off is the CLO agent's ruling of
+2026-11-07, which stands in for counsel on the operator's instruction (a v1 internal position; a human lawyer's review is
+still owed), persisted in `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`. A text has
+three obligations before it merges: a declared card kind in `LEGAL_TEXT_KIND` (`lib/legal-acceptance-copy.ts`; a text with no
+declared kind renders no card), a row in the published pin (`PUBLISHED` in `test/legal-acceptance/registry-pins.test.ts`), and
+no unfinished marker in its body or in the notices that restate its retention period.
+
+## The pin rule
+
+`PUBLISHED` is an append-only `{version: sha256}` history per key. After a text's first merge to main, a changed byte comes with
+a new `version` and a new appended pin row; an existing row's sha is never edited, and editing one is rejected in review. The test
+requires the keys the loader serves, the keys in `PUBLISHED` and the keys in `LEGAL_TEXT_KIND` to be the same set, and checks each hash twice
+(through the loader and by an independent read of the file bytes). It proves consistency, not integrity: the text and its pin can be
+edited in one diff. The hash, not the version label, is the authority, because the database keeps `UNIQUE (founder_id, key, text_hash)`.
+If that is judged insufficient, add a base-SHA CI guard modelled on `tc-document-sha-guard` (tracked in #12366). A change to a published
+file is a new version: the old hash stays valid for the decisions already recorded against it.
+
+## What `accept` means for an acknowledgement text
+
+For a text of kind acknowledgement, the stored choice value accept means only that the founder answered Yes to an acknowledgement of
+that exact text version; it records no acceptance of terms and no consent. Anything that reads a decision row or a check result must read
+the kind pinned for that text key in the registry before it interprets accept.
 
 The committed texts are LF-only printable ASCII with no BOM (the byte audit in that test file); a text that needs other
 characters needs that rule revisited first.
