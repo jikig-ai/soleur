@@ -211,6 +211,7 @@ fi
 #   issue #5: OPEN, body carries the deferred-automation sentinel
 #   issue #6: CLOSED
 #   issue #7: OPEN, body lacks the sentinel
+#   PR #7 labels: whatever the row sets in LABELS; PR #8: the label read always fails (exit 1)
 STUB_DIR=$(mktemp -d -t soleur-run.$$.XXXXXXXX)
 # Own the stub dir, and keep the sandbox helper's cleanup in the same trap: a bare `trap ... EXIT`
 # here would replace the one lib/test-incident-sandbox.sh composed and leak the sandbox root.
@@ -218,11 +219,14 @@ trap 'rm -rf "$STUB_DIR"; _soleur_inc_sb_cleanup' EXIT
 GH_STUB_LOG="$STUB_DIR/calls.log"
 GH_STUB_BAD="$STUB_DIR/unexpected.log"
 GH_STUB_BODY="$STUB_DIR/body.md"
+GH_STUB_LABELS="$STUB_DIR/labels.txt"
 cat > "$STUB_DIR/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_STUB_LOG"
 case "$*" in
   "pr view 7 --json body --jq .body") cat "$GH_STUB_BODY" ;;
+  "pr view 7 --json labels --jq .labels[].name") cat "$GH_STUB_LABELS" ;;
+  "pr view 8 --json labels --jq .labels[].name") exit 1 ;;
   "issue view 5 --json state --jq .state") echo OPEN ;;
   "issue view 5 --json body --jq .body") echo "deferred-automation backlog item" ;;
   "issue view 6 --json state --jq .state") echo CLOSED ;;
@@ -234,6 +238,12 @@ STUB
 chmod +x "$STUB_DIR/gh"
 
 PR_BODY_CALL="pr view 7 --json body --jq .body"
+LABELS_CALL="pr view 7 --json labels --jq .labels[].name"
+# Per-row inputs for the parked barrier: LABELS is what the stub prints as PR #7's labels (one per line);
+# FORBID is a stub argv that must NOT appear in the log. Both are reset after every row.
+LABELS=""
+FORBID=""
+HOOK_ENV=""
 
 # h <label> <expected: allow|deny> <PR body (may be multi-line)> [command] [required log line ...]
 #   command defaults to `gh pr ready 7`. Required log lines default to the PR-body call;
@@ -246,11 +256,13 @@ h() {
   local required=("$@")
   [[ ${#required[@]} -gt 0 ]] || required=("$PR_BODY_CALL")
   printf '%s\n' "$body" > "$GH_STUB_BODY"
+  printf '%s' "$LABELS" > "$GH_STUB_LABELS"
   : > "$GH_STUB_LOG"; : > "$GH_STUB_BAD"
   json=$(jq -nc --arg c "$cmd" --arg d "$STUB_DIR" \
     '{tool_name: "Bash", tool_input: {command: $c}, cwd: $d}')
-  out=$(env -u SOLEUR_SKIP_OPERATOR_STEP_GATE PATH="$STUB_DIR:$PATH" \
-    GH_STUB_LOG="$GH_STUB_LOG" GH_STUB_BAD="$GH_STUB_BAD" GH_STUB_BODY="$GH_STUB_BODY" \
+  # shellcheck disable=SC2086 # HOOK_ENV is zero or one NAME=value word, deliberately unquoted
+  out=$(env -u SOLEUR_SKIP_OPERATOR_STEP_GATE $HOOK_ENV PATH="$STUB_DIR:$PATH" \
+    GH_STUB_LOG="$GH_STUB_LOG" GH_STUB_BAD="$GH_STUB_BAD" GH_STUB_BODY="$GH_STUB_BODY" GH_STUB_LABELS="$GH_STUB_LABELS" \
     bash "$HOOK" <<<"$json" 2>/dev/null || true)
   [[ "$(jq -r '.decision // empty' <<<"$out" 2>/dev/null || true)" == "deny" ]] && got="deny"
   if [[ "${required[0]}" == "--none" ]]; then
@@ -261,6 +273,8 @@ h() {
     done
   fi
   [[ ! -s "$GH_STUB_BAD" ]] || why="${why}stub saw an unexpected argv: $(head -1 "$GH_STUB_BAD"); "
+  if [[ -n "$FORBID" ]] && grep -qxF "$FORBID" "$GH_STUB_LOG"; then why="${why}stub saw '$FORBID', which this row forbids; "; fi
+  LABELS=""; FORBID=""; HOOK_ENV=""
   if [[ "$got" == "$expected" && -z "$why" ]]; then
     PASS=$((PASS + 1))
     echo "PASS: $label"
@@ -286,8 +300,9 @@ h "REAL hook: Delegated-act bullet does not shield an Operator bullet in the sam
 # and a plain `gh pr merge` (no --auto) is NOT gated even over a body the gate would deny.
 h "REAL hook: 'gh pr merge 7 --auto' with an Operator bullet is denied (merge --auto arm)" deny \
   "- Operator confirms the dashboard" "gh pr merge 7 --auto"
-h "REAL hook: 'gh pr merge 7 --squash' (no --auto) is NOT gated, even over an Operator bullet" allow \
-  "- Operator confirms the dashboard" "gh pr merge 7 --squash" --none
+FORBID="$PR_BODY_CALL"
+h "REAL hook: 'gh pr merge 7 --squash' (no --auto) on an UNLABELLED PR is NOT body-gated, even over an Operator bullet (it reads the labels, never the body)" allow \
+  "- Operator confirms the dashboard" "gh pr merge 7 --squash" "$LABELS_CALL"
 
 # Companion path: a match is cleared only by (Tracks|Refs) #N on an OPEN issue whose body
 # carries the sentinel. The control row proves the companion path ran (both issue-view calls
@@ -301,6 +316,43 @@ h "REAL hook: Operator bullet whose Tracks issue is CLOSED is denied (state call
 h "REAL hook: Operator bullet whose Tracks issue is OPEN but lacks the sentinel is denied (state and body checked)" deny \
   "- Operator runs the flip Tracks #7" "" \
   "$PR_BODY_CALL" "issue view 7 --json state --jq .state" "issue view 7 --json body --jq .body"
+
+# --- The parked barrier (#12197, CTO ruling A): no agent session merges, enqueues or un-parks a PR that carries `parked` -----
+# `parked` is the existing "reviewed draft held until an approved window; do not merge or arm auto-merge" label. Any `gh pr merge`
+# that is not `--disable-auto` (plain, --auto, --admin, chained, a `gh api` merge) is denied while the PR carries it, and so is
+# removing the label. Not overridable by SOLEUR_SKIP_OPERATOR_STEP_GATE: the operator clears it in the UI or their own terminal.
+CLEAN="A normal body, no operator steps."
+LABELS=$'parked\nbug'
+h "REAL hook: parked: plain 'gh pr merge 7 --squash' is denied (labels read)" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+LABELS=$'parked'
+h "REAL hook: parked: 'gh pr merge 7 --squash --auto' is denied" deny "$CLEAN" "gh pr merge 7 --squash --auto" "$LABELS_CALL"
+LABELS=$'parked'
+h "REAL hook: parked: chained 'gh pr ready 7 && gh pr merge 7 --auto' is denied" deny "$CLEAN" "gh pr ready 7 && gh pr merge 7 --auto" "$LABELS_CALL"
+LABELS=$'parked'
+h "REAL hook: parked: 'gh pr merge 7 --admin' is denied" deny "$CLEAN" "gh pr merge 7 --admin" "$LABELS_CALL"
+LABELS=$'parked'
+h "REAL hook: parked: a flag before the number ('gh pr merge --squash 7') is denied" deny "$CLEAN" "gh pr merge --squash 7" "$LABELS_CALL"
+LABELS=$'parked'
+h "REAL hook: parked: 'gh api -X PUT repos/o/r/pulls/7/merge' is denied" deny "$CLEAN" "gh api -X PUT repos/o/r/pulls/7/merge" "$LABELS_CALL"
+LABELS=$'parked'
+h "REAL hook: parked: a wrapper-prefixed 'rtk gh pr merge 7' is denied" deny "$CLEAN" "rtk gh pr merge 7" "$LABELS_CALL"
+LABELS=$'bug\nenhancement'
+h "REAL hook: an UNLABELLED PR (other labels only) merges past the barrier (control: the labels were read)" allow "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+LABELS=$'parked'
+h "REAL hook: parked: '--disable-auto' is allowed (it un-arms; the stub is never called)" allow "$CLEAN" "gh pr merge 7 --disable-auto" --none
+LABELS=$'parked'
+h "REAL hook: parked: 'gh pr ready 7' is NOT blocked by the barrier (ready is allowed, the label stays)" allow "$CLEAN" "gh pr ready 7" "$PR_BODY_CALL"
+h "REAL hook: parked: a label read that FAILS for a resolved PR number is denied (fail closed)" deny "$CLEAN" "gh pr merge 8 --squash" "pr view 8 --json labels --jq .labels[].name"
+h "REAL hook: parked: removing the label ('gh pr edit 7 --remove-label parked') is denied, stub never called" deny "$CLEAN" "gh pr edit 7 --remove-label parked" --none
+h "REAL hook: parked: removing it among others ('--remove-label bug,parked') is denied" deny "$CLEAN" "gh pr edit 7 --remove-label bug,parked" --none
+h "REAL hook: parked: 'gh issue edit 7 --remove-label parked' is denied" deny "$CLEAN" "gh issue edit 7 --remove-label parked" --none
+h "REAL hook: parked: 'gh api -X DELETE repos/o/r/issues/7/labels/parked' is denied" deny "$CLEAN" "gh api -X DELETE repos/o/r/issues/7/labels/parked" --none
+h "REAL hook: adding the label ('--add-label parked') or removing another one is allowed, stub never called" allow "$CLEAN" "gh pr edit 7 --add-label parked && gh pr edit 7 --remove-label bug" --none
+LABELS=$'parked'
+HOOK_ENV="SOLEUR_SKIP_OPERATOR_STEP_GATE=1"
+h "REAL hook: parked: the override env var, set in the hook's own environment, does NOT lift the barrier" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+HOOK_ENV="SOLEUR_SKIP_OPERATOR_STEP_GATE=1"
+h "REAL hook (control): the same override env var DOES lift the body gate on an unlabelled PR, so the row above tested the barrier and not an unset variable" allow "- Operator confirms the dashboard" "gh pr ready 7" --none
 rm -rf "$STUB_DIR"
 
 # --- Hook script syntax check (no real invocation; lacks gh + PR context) --
@@ -319,7 +371,7 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
 # added, derived from a green run's TOTAL (41 at the second-round review edit).
-ROW_FLOOR=41
+ROW_FLOOR=59
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1

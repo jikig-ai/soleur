@@ -29,6 +29,15 @@
 # Fail-closed conditions (deny + emit_incident):
 #   - PR body contains operator-step accretions without OPEN
 #     `deferred-automation` / `automation gap` companion issues
+#
+# The `parked` barrier (#12197, CTO ruling 2026-11-07), a SEPARATE branch that runs first: a PR carrying the existing
+# `parked` label ("Reviewed draft held until an approved window; do not merge or arm auto-merge") cannot be merged or
+# enqueued by an agent session. Any `gh pr merge` that is not `--disable-auto` (plain, --auto, --admin, chained, and a
+# `gh api` PUT on pulls/N/merge) is denied while the PR carries the label, and so is REMOVING the label (`gh pr|issue edit
+# --remove-label parked`, `gh api -X DELETE .../labels/parked`). `gh pr ready` is not blocked. The label read for a resolved
+# PR number fails CLOSED. SOLEUR_SKIP_OPERATOR_STEP_GATE does not lift it: the operator clears the label in the UI or in their
+# own terminal, then the hold line is rewritten. Limit, stated plainly: this stops accidental merges by agent sessions and by
+# drain-prs; it does not stop a human or an admin UI merge.
 
 set -eo pipefail
 
@@ -80,6 +89,52 @@ if command -v strip_command_bodies >/dev/null 2>&1; then
 else
   SCAN="$CMD"
 fi
+# ---- the parked barrier (see the header) ---------------------------------------------------------------------------------
+# Runs BEFORE the ready / merge --auto trigger below, which stays exactly as it was. A statement is one `gh ...` between the
+# chain operators; the wrapper prefix (rtk etc.) is the shared fragment the trigger uses.
+PARKED_STMT_PFX='(^|[[:space:]])('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh[[:space:]]+'
+parked_deny() {
+  local why="$1"
+  jq -nc --arg r "$why" '{decision: "deny", reason: $r}'
+  exit 0
+}
+parked_barrier() {
+  local stmt after n labels
+  while IFS= read -r stmt; do
+    [[ -n "${stmt//[[:space:]]/}" ]] || continue
+    # Removing the label: never allowed from an agent session, whatever the PR carries.
+    if grep -qE "${PARKED_STMT_PFX}(pr|issue)[[:space:]]+edit[[:space:]].*--remove-label[[:space:]=]+['\"]?([^[:space:]'\"]*,)?parked(,|['\"]|[[:space:]]|$)" <<<"$stmt" \
+       || { grep -qE "${PARKED_STMT_PFX}api[[:space:]]" <<<"$stmt" && grep -qiE '(-X|--method)[[:space:]=]*DELETE' <<<"$stmt" && grep -qE 'labels/parked([[:space:]]|$|["'"'"'])' <<<"$stmt"; }; then
+      parked_deny "Removing the 'parked' label is reserved for the operator: PR merge and enqueue are held by that label. The operator removes it in the GitHub UI or from their own terminal; then the hold line in the plan is rewritten."
+    fi
+    local -a prs=()
+    if grep -qE "${PARKED_STMT_PFX}pr[[:space:]]+merge([[:space:]]|\$)" <<<"$stmt"; then
+      # --disable-auto only un-arms an auto-merge: allowed.
+      grep -qE -- '--disable-auto' <<<"$stmt" && continue
+      after=${stmt#*merge}
+      # every number after `merge` is a candidate (a flag value can be numeric); also the current branch's PR when none is given
+      while IFS= read -r n; do [[ -n "$n" ]] && prs+=("$n"); done < <(grep -oE '(^|[[:space:]])[0-9]+([[:space:]]|$)' <<<"$after" | tr -d '[:space:]' | sort -u || true)
+      if [[ ${#prs[@]} -eq 0 ]]; then
+        n=$(gh pr view --json number --jq .number 2>/dev/null || true)
+        [[ -n "$n" ]] && prs+=("$n")
+      fi
+    elif grep -qE "${PARKED_STMT_PFX}api[[:space:]].*pulls/[0-9]+/merge" <<<"$stmt"; then
+      while IFS= read -r n; do [[ -n "$n" ]] && prs+=("$n"); done < <(grep -oE 'pulls/[0-9]+/merge' <<<"$stmt" | grep -oE '[0-9]+' || true)
+    fi
+    for n in "${prs[@]}"; do
+      if ! labels=$(gh pr view "$n" --json labels --jq '.labels[].name' 2>/dev/null); then
+        parked_deny "Could not read the labels of PR #${n}, so the 'parked' barrier fails closed: merge and enqueue of a held PR are reserved for the operator. Retry once gh answers."
+      fi
+      if grep -qxF 'parked' <<<"$labels"; then
+        parked_deny "PR #${n} carries the 'parked' label: merge and enqueue of this PR are reserved for the operator. Agent sessions and drain-prs do not merge or arm auto-merge on it. The operator removes the label (GitHub UI or their own terminal), then the hold line in the plan is rewritten. This is not overridable by SOLEUR_SKIP_OPERATOR_STEP_GATE."
+      fi
+    done
+  done < <(sed -E 's/(&&|\|\||;)/\n/g' <<<"$SCAN")
+}
+if grep -qE 'gh[[:space:]]+(pr|issue)[[:space:]]+(merge|edit)|gh[[:space:]]+api[[:space:]]' <<<"$SCAN" && [[ "$WORK_DIR" == /* && -d "$WORK_DIR" ]] && cd "$WORK_DIR" 2>/dev/null; then
+  parked_barrier
+fi
+
 if ! grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi

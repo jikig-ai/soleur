@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Enumerates open remote GitHub PRs and classifies each into one of seven drain
+# Enumerates open remote GitHub PRs and classifies each into one of eight drain
 # tiers (ready-green, ready-unarmed, needs-lockfile-fix, needs-conflict-resolution,
-# needs-review, drafts, broken), emitting a tier-grouped report.
+# needs-review, parked, drafts, broken), emitting a tier-grouped report.
 #
 # Usage:
 #   triage-prs.sh [--format text|json] [--fixture <path>]
@@ -12,6 +12,8 @@
 #
 # Classification is first-match-wins in this priority order:
 #   1. drafts                     isDraft == true            (author-owned WIP)
+#   1b. parked                    has the `parked` label     (reviewed and held for the operator: never merged,
+#                                 never armed, never "fixed" by a drain; #12197). Only a draft is classified before it.
 #   2. broken                     CONFLICTING AND >=3 failing checks
 #   3. needs-conflict-resolution  CONFLICTING
 #   4. needs-lockfile-fix         has `dependencies` label AND >0 failing checks
@@ -152,6 +154,7 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
       ci: $v,
       tier: (
         if .isDraft == true then "drafts"
+        elif ($pr | haslabel("parked")) then "parked"
         elif .mergeable == "CONFLICTING" and $f >= 3 then "broken"
         elif .mergeable == "CONFLICTING" then "needs-conflict-resolution"
         elif ($pr | haslabel("dependencies")) and $f > 0 then "needs-lockfile-fix"
@@ -167,7 +170,7 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
 
 # --- Emit -------------------------------------------------------------------
 # Stable tier order for the grouped output.
-TIER_ORDER='["ready-green","ready-unarmed","needs-lockfile-fix","needs-conflict-resolution","needs-review","broken","drafts"]'
+TIER_ORDER='["ready-green","ready-unarmed","needs-lockfile-fix","needs-conflict-resolution","needs-review","broken","parked","drafts"]'
 
 if [[ "$FORMAT" == "json" ]]; then
   jq -n --argjson prs "$CLASSIFIED" --argjson order "$TIER_ORDER" '

@@ -39,7 +39,7 @@ Use `merge-pr` for a single named PR. Use `drain-labeled-backlog` for labeled *i
 
 Optional flags (any subset):
 
-- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`, plus `ready-unarmed` (recover-only, never armed). Drafts are always excluded.
+- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`, plus `ready-unarmed` (recover-only, never armed). Drafts and `parked` PRs are always excluded.
 - `--pr <N,…>` — restrict the whole run to an explicit set of PR numbers (still triaged + still gated).
 - `--dry-run` — print the full tier table and exit with zero merges and zero delegation. More valuable here than in the sibling because this skill *merges*.
 
@@ -67,6 +67,7 @@ The helper runs `gh pr list --state open --json number,title,headRefName,isDraft
 | `needs-review` | `bot-fix/review-required` label, or a feature PR with no review | review (delegate or inline) → merge |
 | `ready-unarmed` | ready PR whose head verdict (`ci-head-verdict.sh`) is `no-run` or `stalled`: no full CI run exists, the red `test` row is the draft run's. `awaiting-approval` is not here: it lands in `needs-review` (the line shows `ci=awaiting-approval`; a maintainer must approve the fork run) | **recover, never arm**, unless another session is still inside `wait-ready-run` for it: `gh pr ready --undo <N>`, then the whole ready block ([ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md)), then re-triage |
 | `drafts` | `isDraft=true` | **skip** — author-owned WIP, never merged |
+| `parked` | has the `parked` label ("Reviewed draft held until an approved window; do not merge or arm auto-merge") | **skip** — reviewed and held for the operator; never merged, never armed, never fixed here. The operator removes the label; `.claude/hooks/ship-operator-step-gate.sh` also denies an agent's `gh pr merge` on it |
 | `broken` | `CONFLICTING` **and** many failing checks | surface; fix only if in explicit scope |
 
 Pass `--dry-run` to stop here and print the table.

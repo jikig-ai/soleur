@@ -1,0 +1,146 @@
+[
+  {
+    "number": 9301,
+    "title": "parked green ready pr",
+    "headRefName": "feat-9301",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "parked"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
+  },
+  {
+    "number": 9302,
+    "title": "unparked green ready pr",
+    "headRefName": "feat-9302",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
+  },
+  {
+    "number": 9303,
+    "title": "parked and conflicting",
+    "headRefName": "feat-9303",
+    "isDraft": false,
+    "mergeable": "CONFLICTING",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "parked"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
+  },
+  {
+    "number": 9304,
+    "title": "parked draft",
+    "headRefName": "feat-9304",
+    "isDraft": true,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "parked"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
+  },
+  {
+    "number": 9305,
+    "title": "parked and awaiting review",
+    "headRefName": "feat-9305",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "REVIEW_REQUIRED",
+    "labels": [
+      {
+        "name": "parked"
+      },
+      {
+        "name": "bot-fix/review-required"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
+  }
+]
