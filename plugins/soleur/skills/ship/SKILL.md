@@ -398,7 +398,7 @@ from a `pull_request` run — which GitHub builds against `refs/pull/N/merge`. C
 therefore verified `merge(HEAD, base)`, not the HEAD tree the local battery would
 run, and those are the same tree only when `origin/main` is already an ancestor of
 HEAD. The gate refuses when it is not, so "CI already verified this exact tree" is
-a claim it establishes rather than assumes. Re-run savings need `main` synced
+a claim it establishes rather than assumes (no-token path). Re-run savings need `main` synced
 first.
 
 Branch on the exit code, never on the prose:
@@ -413,7 +413,7 @@ else
   bash "${CLAUDE_PLUGIN_ROOT}/skills/ship/scripts/battery-owed.sh"
   rc=$?
   if [[ "$rc" -eq 42 ]]; then
-    echo "battery SKIPPED: CI already verified this exact SHA (#8247)"
+    echo "battery SKIPPED (verdict above)"
   else
     echo "battery OWED (rc=$rc) — running the affected gate"
     bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"
@@ -430,12 +430,10 @@ through to OWED. Read it strictly: a gate that saves 35 minutes is under standin
 pressure to be read generously.
 
 **At the FIRST Phase 4 run this returns OWED**, because Phase 4 precedes the
-Phase 6 push and there is no CI for `HEAD` yet. The saving is on the RE-RUN path
+Phase 6 push and there is no CI for `HEAD` yet, unless the brief set `ci-is-the-gate` (see `battery-owed.sh`). The saving is on the RE-RUN path
 this skill mandates after a review fix, a main sync, or a Phase 5.5 advisor fix —
 and it requires the re-run to happen on a **pushed** commit, since an unpushed one
-has no check-runs for its sha and returns OWED. Measured on PR #8233: two full
-batteries, ~70 minutes, the second finishing against a head whose 26/26 required
-checks were already green on the identical SHA.
+has no check-runs for its sha and returns OWED.
 
 The conditions, what makes each load-bearing, and the mutation rows that pin them
 live in the script and in
@@ -515,7 +513,7 @@ Ship Checklist for [branch name]:
 - [x/skip] Artifacts committed (brainstorm/spec/plan)
 - [x/skip] Learnings captured (soleur:compound — `skip` only on the Phase 2 probe's interactive no-artifacts path)
 - [x/skip] README counts synced (`bash scripts/sync-readme-counts.sh`)
-- [x/skip] Test gate green (Phase 4, `--affected` default / `--full` when operator opted in), re-run after any post-Phase-4 change; or recorded "CI is the gate" (battery-refusal-wait exit 42) with its PR Test plan line
+- [x/skip] Test gate green (Phase 4, `--affected` default / `--full` when operator opted in), re-run after any post-Phase-4 change; or recorded "CI is the gate" (exit 42) with its PR Test plan line
 - [ ] No removable probe in the tree (Phase 5.4 gate, ADR-230)
 - [ ] Preflight passed (Phase 5.4 gate)
 - [ ] Code review completed (Phase 5.5 gate)

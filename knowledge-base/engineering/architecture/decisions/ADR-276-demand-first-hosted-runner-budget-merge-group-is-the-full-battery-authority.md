@@ -596,6 +596,10 @@ Status stays `adopting`. This is a NEW lever beside S2 and S4, not a stage and n
 
 - **Review-driven hardening (the design pass's fixed findings).** Three additions the multi-seat review produced, all fail-closed: (1) the `oracle-selection` step sources the driver from the BASE image — `git show HEAD^1:scripts/ci-oracle-lane.sh` on pull_request, `git show $MERGE_GROUP_BASE_SHA:` on merge_group — the same candidate-tree protection `shard-totality-mutations` already carries, so a PR can never rewrite the classifier that judges it (a base lacking the file emits the defaults itself → full battery); (2) the extent check gained an element grammar: every changed line inside an `AFFECTED_*_PATHS` hunk must be an opener, `)`, a quoted literal member (with optional `# comment`), a whole-line comment, or blank — `$(`, backtick, `${`, and unquoted content disqualify the diff because the index is SOURCED bash and "data" members can carry executable payloads; (3) a `Binary files` verdict in the index diff fails the extent check (zero hunks must not pass vacuously). The lane's own three files (`ci-oracle-lane.sh`, `ci-oracle-lane.test.sh`, `ci-oracle-lane-suites.txt`) joined `is_excluded_path` and `RATCHET_ORACLE`/`CODEOWNERS` — the machinery cannot ride its own lane.
 
+## Amendment 2026-11-06 (operator ci-is-the-gate token, #12246)
+
+Pointer only. The consumer-record sentence that `battery-owed.sh` reads check conclusions and fails toward stall holds for the no-token path only; with an operator `ci-is-the-gate` token it answers 42 without CI evidence. See the ADR-242 amendment of the same date.
+
 ## Amendment 2026-11-06 (guard-umbrella consolidation, #12089)
 
 Status stays `adopting`. This amendment is non-activating: it records the classification of the #12089 rename inside this ADR's grammar, and activates nothing.

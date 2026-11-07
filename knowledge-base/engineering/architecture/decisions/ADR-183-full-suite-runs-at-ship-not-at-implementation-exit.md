@@ -7,6 +7,7 @@ amended_by:
   - "ADR-262 (2026-09-30, #9323) — CI's required `test` context no longer runs five self-test mutation batteries on a pull_request event when the diff misses their subject paths; see ## Amendment — 2026-09-30"
   - "ADR-276 S4 (2026-10-14, #9729) — once activated, CI's required `test` context on a pull_request event is no longer necessarily the full battery for the PR head; `merge_group` stays the authority; see ## Amendment — 2026-10-14"
   - "ADR-196 addendum (2026-10-28, #10924 P4d) — a local battery REFUSED for sibling contention may be recorded as \"CI is the gate\" after a bounded wait, except on the infra surface and under `--full` or a force-all log"
+  - "ADR-242 amendment (2026-11-06, #12246) — an operator `ci-is-the-gate` token in session-state.md may waive the local battery at ship Phase 4 without CI evidence, except on the infra surface and under `--full`; see ## Amendment — 2026-11-06"
 ---
 
 # ADR-183: The full suite runs at ship, not at the implementation exit
@@ -167,3 +168,7 @@ Pointer only. This record's decision (the full local battery once per PR at `/sh
 ## Amendment — 2026-10-28 (P4d, #10924, ADR-196 addendum)
 
 Pointer only. The decision (one full local battery per PR at `/ship`) is unchanged. One exit is added: when the detached battery is REFUSED because a sibling worktree runs a full-gate battery, `battery-refusal-wait.sh` waits a bounded time and then answers `CI_IS_THE_GATE` (exit 42), recorded on the PR as "local run NOT executed". Unlike an unresolved (reaped) run, a refused run is a measured, named condition and CI's required `test` context is the gate; the infra surface (no required CI check, #6480), an unresolvable diff, an operator-typed `--full` and a `force-all` log never take this exit. "CI's required `test` context is the gate" is read per the 2026-10-14 amendment above (on a pull request event the merge queue's `merge_group` run is the authority).
+
+## Amendment — 2026-11-06 (#12246, ADR-242 amendment)
+
+Pointer only. The decision (one full local battery per PR at `/ship`) is unchanged. One more waiver exists: an operator `ci-is-the-gate` token in the branch's `session-state.md` makes `battery-owed.sh` answer 42 without CI evidence, except on the infra surface and under `--full`. See the ADR-242 amendment of the same date.
