@@ -11,7 +11,7 @@
 #
 # WHAT IT ASSERTS, over every `resource "logtail_exploration"` and `resource "logtail_exploration_alert"`
 # in EVERY *.tf of the infra root (presence rows 1-24 below, each one verdict over the whole set):
-#   1-4   census: at least 19 alerts and 19 explorations (CENSUS_FLOOR_*; 18 once the canary pair is deleted), every enumerated header yields a block (a header
+#   1-4   census: at least 22 alerts and 22 explorations (CENSUS_FLOOR_*; 21 once the canary pair is deleted), every enumerated header yields a block (a header
 #         `block_of` cannot extract would otherwise be invisible to every row after it; an UNQUOTED label
 #         is enumerated and then reds here, never skipped) AND no other code line of any root *.tf names a
 #         logtail_exploration except an enumerated header or a `logtail_exploration*.<n>.id` reference (a header
@@ -95,11 +95,11 @@ done
 # ── pins (same file, same diff as what they protect: tripwires, see the header) ────────────────────
 REQUIRED_ATTRS="alert_type call check_period confirmation_period critical_alert email exploration_id incident_cause metadata name on_missing_data operator paused push query_period recovery_period sms value"
 OPTIONAL_ATTRS=""
-# 19 = the 18 permanent alerts plus the throwaway egress_gw_probe_silent_canary pair (#12180); the PR that
-# deletes the canary returns both census floors to 18 (RETIREMENT line in the egress-gw-probe-silent-12180 probe).
-CENSUS_FLOOR_ALERTS=19
-CENSUS_FLOOR_EXPLORATIONS=19
-GUARD_CENSUS_FLOOR=17
+# 22 = the 18 permanent alerts, the three session-relay probe alerts (#12167) and the throwaway egress_gw_probe_silent_canary pair (#12180); the PR that
+# deletes the canary returns both census floors to 21 (RETIREMENT line in the egress-gw-probe-silent-12180 probe).
+CENSUS_FLOOR_ALERTS=22
+CENSUS_FLOOR_EXPLORATIONS=22
+GUARD_CENSUS_FLOOR=18
 PROVIDER_LOCK_VERSION="11.2.0"
 PROVIDER_SOURCE="BetterStackHQ/logtail"
 JOB_IF_ALLOWED="needs.detect-changes.outputs.pr_duplicate != 'true'"

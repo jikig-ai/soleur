@@ -1011,6 +1011,12 @@ jobs:
       - name: Run Inngest cutover-flip silence alert drift guard (#11820)
         run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh
 
+      # (#12167) The session-relay probe Logs alerts (listener down, probe silent, deploy-time peer dial failed):
+      # the needles read from the two emitters, the predicates compared whole, the paging windows, every -target
+      # line, the runbook rows, this suite's own dispatch, and its mutation rows.
+      - name: Run session-relay probe alerts drift guard (#12167)
+        run: bash apps/web-platform/test/infra/relay-probe-alerts.test.sh
+
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and
       # its mutation rows.
