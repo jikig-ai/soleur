@@ -1,6 +1,6 @@
 ---
 title: "A6 \"no known access\" record — Hetzner project holding the Inngest sole-copy volume"
-status: owner-relayed-awaiting-clo-attestation
+status: signed-relayed-and-attested
 date: 2026-11-07
 refreshed: 2026-11-07
 related: [9927, 10382, 10136, 11218]
@@ -10,13 +10,13 @@ brand_survival_threshold: single-user incident
 
 # A6 "no known access" record — Hetzner project holding the Inngest sole-copy volume
 
-owner sentence relayed 2026-11-07T17:31Z on #10136 (S6-A6-RELAYED, own words, Agent-drafted text: no); CLO attestation pending after the 2026-11-07T13:31Z relay was refused for a disclosed drafted flag
+owner sentence relayed 2026-11-07T17:31Z on #10136 (S6-A6-RELAYED, own words, Agent-drafted text: no); attested by soleur:legal:clo 2026-11-07 (#10382 comment 6711794462)
 
-> **SIGNED BY RELAY, NOT YET ATTESTED.** The owner's sentence was relayed on #10136 at
+> **SIGNED BY RELAY AND ATTESTED.** The owner's sentence was relayed on #10136 at
 > 2026-11-07T17:31:48Z under the 2026-11-02 signing route (`S6-A6-RELAYED`, `Agent-drafted text: no`,
 > not typed by the owner into the thread; this second relay supersedes a 13:31Z relay whose disclosed
-> drafted flag the CLO refused — see "Owner's own sentence").
-> It is a record only once `soleur:legal:clo` attests it separately. No agent signs it or sends it.
+> drafted flag the CLO refused — see "Owner's own sentence"), and `soleur:legal:clo` attested it on
+> #10382 at 2026-11-07 (comment 6711794462; v1 internal attestation, not external counsel advice).
 > The file name carries the UTC date of signing. Counts and roles only: no names, no email addresses,
 > no token values.
 
@@ -94,7 +94,7 @@ An agent-written evidence-framing block stood here from 2026-10-30 until 2026-11
 ## Signature block
 
 - Signed by the owner (human, not an agent) through the 2026-11-02 agent-relay route, by the `S6-A6-RELAYED` comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6710705414>   UTC date and time: 2026-11-07T17:31:48Z
-- Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the owner's own sentence and the claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
+- Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the owner's own sentence and the claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: attested via <https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6711794462>, conditions in #10382 comment 6680610653 verified; anchored to the 2026-10-29 console figures (owner console re-read pending)   date: 2026-11-07
 
 Superseded 2026-11-06: the two lines above used to refer to a "statement above"; that block was removed. They now point at the owner's own sentence field, which stays empty until the owner gives it in their own words.
 
