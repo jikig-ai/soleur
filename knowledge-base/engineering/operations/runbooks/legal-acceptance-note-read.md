@@ -101,8 +101,15 @@ founder id), or each of them raises a false `row_without_event` when verified.
 
 When the secrets (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`, `LEGAL_ACCEPTANCE_FOUNDER_ID`) are applied (#12196): the container receives them
 through an env file that is frozen when the container is created, so a restart is not enough and a redeploy is needed. While the
-endpoint is dark the probe expects the body `{"error":"Not available"}` with `cache-control: no-store`, not just a 503. The ship
-session that merges the Terraform change arms the pulls (they are not left to memory): at +1 hour and +24 hours after the redeploy, run
+endpoint is dark the probe expects the body `{"error":"Not available"}` with `cache-control: no-store`, not just a 503.
+
+Order of the operator-owned steps (each depends on the one before): (1) enter `LEGAL_ACCEPTANCE_FOUNDER_ID` (the Supabase auth user uuid) in
+Doppler `dev` and `prd`, then check, boolean-only, that the uuid exists in that project's `auth.users`; (2) redeploy the web app; (3) the
+unauthenticated probe turns from 503 to 401; (4) an authenticated request with the Doppler token and no `hash` query answers 400, not 401,
+which proves the container holds the current token; (5) the first real acceptance is verified through the gate; (6) only then is the
+`approval-queue` flag turned on.
+
+The session that performs the redeploy arms the pulls (they are not left to memory): at +1 hour and +24 hours after the redeploy, run
 
 ```bash
 # slow or false flushes (no Sentry event; one warning log line each)
