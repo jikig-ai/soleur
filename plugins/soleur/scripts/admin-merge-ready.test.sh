@@ -394,7 +394,7 @@ row_R35() { local d; d=$(mkrow R35); assert_fixture_dir "$d"
 # the 16 folded names already swapped for the 3 umbrella contexts per #12276), so
 # these rows derive the new shape from it rather than hand-writing a required set.
 #   R36: merge_queue present + CodeQL not required -> READY with required=14 (13 CI Required minus
-#        CodeQL = 10, plus the 2 CLA contexts); a FAILED advisory CodeQL run must not block.
+#        CodeQL = 12, plus the 2 CLA contexts); a FAILED advisory CodeQL run must not block.
 #        Before the fix the script errored `unsupported-rule` on the `merge_queue` type, so every
 #        admin-merge gate would have failed closed the moment the queue went live.
 #   R37: the allowlist stayed SPECIFIC -- merge_queue present alongside an unevaluated type
