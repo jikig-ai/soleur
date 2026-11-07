@@ -170,7 +170,14 @@ discoverability_test:
 ## Encryption Posture
 
 ```yaml
-at_rest: []   # no new persistent store — the ruleset resource is config; state stays in the existing encrypted backend this root already uses
+at_rest:
+  - store:             none introduced — a GitHub ruleset amendment is configuration, not a persistent data store; Terraform state for this root already lives in the existing encrypted backend this root uses
+    mechanism:         no store to encrypt — the resource is a ruleset object at GitHub
+    evidence:          infra/github/ruleset-ci-required.tf declares no volume/bucket/table/queue/cache/sink
+    defends_against:   nothing — no new store exists whose contents could be read
+    does_not_defend:   the ruleset's required-context list — its integrity is carried by the canonical-JSON parity gates and the pre-apply by-value gate, not by encryption
+    disclosed_as:      GitHub branch-protection configuration in repo IaC — no data classification applies
+    live_verification: terraform plan diff reviewed by apply-github-infra.yml's pre-apply gate before apply
 in_transit:
   - connection:        oracle-review driver (GH runner) -> api.github.com (PR reviews, files, queue enumeration, check-runs)
     enforced_at:       scripts/ci-oracle-review.sh gh api calls
@@ -197,7 +204,11 @@ tasks:
 
 ### Guard 1 — required-context enrollment parity
 
-**Property.** Every name in the CI Required ruleset's required-status-check set exists in all five registries and has exactly one merge_group producer. **Assembly.** The four file registries (required-checks.txt, canonical JSON, ruleset TF, fixture set) plus live apply — chokepoints: `required-checks-canonical-parity.test.sh` Test 1 (file↔canonical both directions), T-rsc-7 literal + T-rsc-9 (canonical↔TF), `probe-merge-group-coverage.sh` (producer existence, event-`if:` grammar), the daily live↔canonical audit.
+**Property.** Every name in the CI Required ruleset's required-status-check set exists in all five registries and has exactly one merge_group producer.
+
+**Assembly.** The four file registries (required-checks.txt, canonical JSON, ruleset TF, fixture set) plus live apply — chokepoints: `required-checks-canonical-parity.test.sh` Test 1 (file↔canonical both directions), T-rsc-7 literal + T-rsc-9 (canonical↔TF), `probe-merge-group-coverage.sh` (producer existence, event-`if:` grammar), the daily live↔canonical audit.
+
+**Mutation matrix.**
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -211,7 +222,11 @@ tasks:
 
 ### Guard 2 — oracle-review-required
 
-**Property.** An oracle-surface diff merges only after a bound owner-review act (APPROVED review by deruelle on the head SHA) or owner authorship; never on an unverifiable read. **Assembly.** `scripts/ci-oracle-review.sh` (both event arms) + its base-sourced RATCHET_ORACLE extraction + the member enumeration copy; chokepoint is the single driver — both events route through it.
+**Property.** An oracle-surface diff merges only after a bound owner-review act (APPROVED review by deruelle on the head SHA) or owner authorship; never on an unverifiable read.
+
+**Assembly.** `scripts/ci-oracle-review.sh` (both event arms) + its base-sourced RATCHET_ORACLE extraction + the member enumeration copy; chokepoint is the single driver — both events route through it.
+
+**Mutation matrix.**
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -227,7 +242,11 @@ tasks:
 
 ### Guard 3 — accept-row growth verdicts
 
-**Property.** Every accept row-set change attributes to the diff and every added row carries a typed kind. **Assembly.** `ratchet_run`'s base→HEAD accept row-set comparison — chokepoint is the one code path that already loads both images (ratchet_base + load_accept); kinds pinned to the runbook's canonical six.
+**Property.** Every accept row-set change attributes to the diff and every added row carries a typed kind.
+
+**Assembly.** `ratchet_run`'s base→HEAD accept row-set comparison — chokepoint is the one code path that already loads both images (ratchet_base + load_accept); kinds pinned to the runbook's canonical six.
+
+**Mutation matrix.**
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -242,7 +261,11 @@ tasks:
 
 ### Guard 4 — bot-synthetic unreachability
 
-**Property.** No bot-PR-writable path intersects the surfaces either new required context reads. **Assembly.** `.github/actions/bot-pr-with-synthetic-checks/action.yml` `ALLOWED_PATHS` (the chokepoint every bot write flows through) vs `RATCHET_ORACLE` (for oracle-review-required) and the audit's read surface — the files whose content the audit reads, exposed under `--all-refs` (for affected-index-ratchet; `knowledge-base/project/weakness-digest.md` is named by gap pairs and a data file, so disjointness is re-derived, not assumed — if the assertion fails, the remedy is reproducing the gate in the action's Phase-4 preflight, per the #6049 convention, never widening ALLOWED_PATHS to overlap).
+**Property.** No bot-PR-writable path intersects the surfaces either new required context reads.
+
+**Assembly.** `.github/actions/bot-pr-with-synthetic-checks/action.yml` `ALLOWED_PATHS` (the chokepoint every bot write flows through) vs `RATCHET_ORACLE` (for oracle-review-required) and the audit's read surface — the files whose content the audit reads, exposed under `--all-refs` (for affected-index-ratchet; `knowledge-base/project/weakness-digest.md` is named by gap pairs and a data file, so disjointness is re-derived, not assumed — if the assertion fails, the remedy is reproducing the gate in the action's Phase-4 preflight, per the #6049 convention, never widening ALLOWED_PATHS to overlap).
+
+**Mutation matrix.**
 
 | # | Mutation | Expected |
 |---|---|---|
@@ -400,6 +423,28 @@ None. `gh issue list --label code-review --state open` (≤200) searched with `j
 - **R4 — new suite named-path pairs:** the suite's strings become audit pairs; any undrained pair reds the ratchet on this PR's own merge run. Mitigation: Phase 1 drains in the same commit; AC requires `ratchet` exit 0 on this branch.
 - **R5 — driver base-sourcing gap:** a pre-PR3b base lacks the driver; the HEAD copy runs with the BASE oracle list — a PR editing the driver still classifies oracle-touching under the base list. The remaining hole (a malicious driver hiding a NON-oracle-path review requirement) is bounded by Guard 2 row 5 + the fact that editing the driver is itself oracle-touching.
 - **R6 — `fixture:`-kind legacy rows:** the six-kind set excludes `fixture` as a kind even though 100+ legacy rows use it. Only added rows are judged; if implementation finds `fixture` is genuinely needed as a new kind, the kind set is the amendment surface (recorded — the ruling says "six", matching the runbook list verbatim).
+
+## Enhancement Summary
+
+Deepen-plan pass, 2026-11-07 (single-agent environment — no Task-spawn
+available; the per-section research and review-agent fan-outs were executed
+inline by the planning agent against the live tree):
+
+- **Gate verification:** all mechanical halt gates verified green —
+  `lint-guard-contract.py` RC=0 (4 guard entries; `**Assembly.**` split to its
+  own line and `**Mutation matrix.**` labels added where they were missing),
+  Encryption Posture `at_rest` given a real no-store entry instead of `[]`,
+  Scope Check unfenced-count = 1 with all three subsections and a
+  `Recommendation:` line, UBI/Observability/Task-Design/PAT scans clean.
+- **Consumer enumeration:** every file that pins the required-context set or
+  the advisory state was enumerated by grep against the live tree — the count
+  pins (T-rsc-7 literal, parity `-ge 10`, merge-group-coverage
+  `contexts=12 producers=11` literals + `MIN_CONTEXTS_DEFAULT`), the
+  wallclock-bounds `unbound`-finding contract, the fixtures, and the
+  replay-suite `row_wf_*` advisory pins are all in Files to Edit.
+- **Re-examination recorded:** draft-light participation ruled (stay ungated;
+  measured ~2,250 billed min/wk on drafts vs a needs-edge stall class or a
+  fabricated green — decision-challenges.md row 1).
 
 ## References & Research
 
