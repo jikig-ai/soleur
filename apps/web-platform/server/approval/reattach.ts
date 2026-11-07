@@ -8,14 +8,22 @@
  * Gated by the same flag seam as the gate (no `approval_request` read while the flag is off for the attaching workspace). Each card is rebuilt from the STORED
  * canonical action and re-verified against the stored hash before it is shown: a card that does not hash to the bound
  * value is never rendered (P6: the text the Owner reads cannot disagree with the action that would be consumed).
+ *
+ * Who sees the action (#9601, ADR-309 flip item 1): the full card goes only to a verified Owner or to the row's verified
+ * requester (`canSeeAction`). Every other attaching member gets a redacted waiting frame (`view: null`, `toolName:
+ * "redacted"`, no requester key, no field value). An Owner's card names the requester (`requester`). Attach is
+ * conversation-creator-only today, so for a non-Owner non-requester this is a defence-in-depth invariant that becomes
+ * reachable with shared conversations; test/approval/render-sink-scan.test.ts pins that this file has exactly one gate and
+ * one render call.
  */
 
+import { REQUESTER_SELF } from "@/lib/approval-copy";
 import type { WSMessage } from "@/lib/types";
 import { ApprovalCanonicalError, CANONICAL_VERSION, computeActionHash, type CanonicalAction } from "./canonical";
 import { isApprovalQueueEnabled } from "./flag";
 import { reportApprovalOp } from "./ops";
 import { renderApprovalView } from "./render";
-import type { RequesterLabelFn } from "./card-visibility";
+import { canSeeAction, requesterKind, type RequesterLabelFn } from "./card-visibility";
 import { hasWaiter } from "./waiters";
 import { listLiveApprovals, type ApprovalRpcClient } from "./service";
 import { isApprovalRequiredTool } from "./tools";
@@ -34,8 +42,11 @@ export interface ReemitArgs {
    * checked again against its own `workspace_id`.
    */
   workspaceId: string;
-  /** The requester label for an Owner viewer (optional until Phase 2 makes it required). */
-  requesterLabel?: RequesterLabelFn;
+  /**
+   * The requester label for an Owner viewer (REQUIRED: a call site that stops passing it fails type-check instead of
+   * silently dropping the label). Called with the ROW's workspace, never the attaching session's.
+   */
+  requesterLabel: RequesterLabelFn;
   /** Test seam; defaults to the flag read for `{userId, workspaceId}`. */
   isEnabled?: (workspaceId: string) => Promise<boolean>;
 }
@@ -113,24 +124,43 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
         continue;
       }
       let viewerRole: "owner" | "member";
+      let roleReadFailed = false;
       try {
-        viewerRole = await a.viewerRole(approval.workspace_id);
+        // Only a literal "owner" is an Owner; any other value (a runtime garbage role included) is a member.
+        viewerRole = (await a.viewerRole(approval.workspace_id)) === "owner" ? "owner" : "member";
       } catch (err) {
         reportApprovalOp("viewerRoleFailed", err, { approvalId: approval.id, toolName: approval.tool_name, conversationId: a.conversationId });
         viewerRole = "member";
+        roleReadFailed = true;
+      }
+      const mayView = canSeeAction(a.userId, viewerRole === "owner", approval.requested_by_user_id);
+      // A viewer who cannot see the action gets no frame for an approved request (it is not a waiting card), and none when
+      // their role could not be read: a redacted "waiting" card shown to an Owner we could not identify would mislead. The
+      // next attach recovers; the inbox row and the landing page remain.
+      if (!mayView && (roleReadFailed || approval.status === "approved")) continue;
+      let requester: string | undefined;
+      const kind = requesterKind(a.userId, viewerRole === "owner", approval.requested_by_user_id);
+      if (kind === "self") requester = REQUESTER_SELF;
+      else if (kind === "lookup") {
+        try {
+          requester = await a.requesterLabel(approval.workspace_id, a.userId, approval.requested_by_user_id);
+        } catch {
+          requester = undefined; // a lookup never costs the card
+        }
       }
       a.send(a.userId, {
         type: "approval_request",
         approvalId: approval.id,
         conversationId: approval.conversation_id,
-        toolName: approval.tool_name,
-        view: renderApprovalView(action),
+        toolName: mayView ? approval.tool_name : "redacted",
+        view: mayView ? renderApprovalView(action) : null,
         status: approval.status,
         expiresAt: approval.expires_at,
         requestCount,
         viewerRole,
         // True only when this process still holds the agent's live wait for the request (the session is on this host).
         agentWaiting: hasWaiter(approval.id),
+        ...(requester !== undefined ? { requester } : {}),
       });
       sent += 1;
     }

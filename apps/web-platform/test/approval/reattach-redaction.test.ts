@@ -128,6 +128,10 @@ async function run(o: RunOpts) {
 }
 
 const reportKeys = () => h.report.mock.calls.map((c) => c[0] as string);
+// The ops registry is mocked here, so the thrown value is handed over raw; the REAL helper reduces it to {code, fn, errName}
+// (asserted against the real registry in requester-label.test.ts). What this file pins is what the call SITES put in the
+// context: the key and the context object, serialized.
+const reportContexts = () => JSON.stringify(h.report.mock.calls.map((c) => [c[0], c[2]]));
 
 beforeEach(() => {
   h.report.mockReset();
@@ -302,8 +306,8 @@ describe("a failed role read", () => {
 
   it("the report carries ids only", async () => {
     await run({ viewer: OWNER_ID, role: "reject", rows: [{}] });
-    expect(JSON.stringify(h.report.mock.calls)).not.toContain(REQUESTER_EMAIL);
-    for (const c of ALL_CANARIES) expect(JSON.stringify(h.report.mock.calls)).not.toContain(c);
+    expect(reportContexts()).not.toContain(REQUESTER_EMAIL);
+    for (const c of ALL_CANARIES) expect(reportContexts()).not.toContain(c);
   });
 });
 
@@ -431,7 +435,7 @@ describe("with the real labeler over the strict fake", () => {
     expect(cards).toHaveLength(2);
     expect(cards.every((c) => !Object.hasOwn(c, "requester"))).toBe(true);
     expect(h.report.mock.calls.filter((c) => c[0] === "requesterLabelFailed")).toHaveLength(1);
-    expect(JSON.stringify(h.report.mock.calls)).not.toContain(REQUESTER_EMAIL);
+    expect(reportContexts()).not.toContain(REQUESTER_EMAIL);
   });
 
   it("three distinct requesters under one hung lookup cost one deadline in total (the first timeout trips the instance)", async () => {

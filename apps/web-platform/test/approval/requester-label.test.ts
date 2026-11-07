@@ -7,10 +7,13 @@
  */
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
+// The REAL ops registry runs; only the Sentry sink is mocked, so the assertions see exactly what Sentry would receive
+// (op, static message, `extra.code` from the thrown value; never the thrown message).
 const h = vi.hoisted(() => ({ report: vi.fn(), serviceClient: vi.fn() }));
-vi.mock("@/server/approval/ops", async (orig) => ({
-  ...(await orig<typeof import("@/server/approval/ops")>()),
-  reportApprovalOp: (...a: unknown[]) => h.report(...a),
+vi.mock("@/server/observability", async (orig) => ({
+  ...(await orig<typeof import("@/server/observability")>()),
+  warnSilentFallback: (...a: unknown[]) => h.report(...a),
+  reportSilentFallback: (...a: unknown[]) => h.report(...a),
 }));
 vi.mock("@/lib/supabase/service", () => ({ createServiceClient: (...a: unknown[]) => h.serviceClient(...a) }));
 
@@ -47,7 +50,7 @@ function setup(world: FakeLabelerWorld = baseWorld(), signal?: () => AbortSignal
   return { ...fake, label };
 }
 
-const reportCalls = () => h.report.mock.calls.filter((c) => c[0] === "requesterLabelFailed");
+const reportCalls = () => h.report.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-requester-label-failed");
 const serialized = (calls: unknown[][]) => JSON.stringify(calls);
 
 beforeEach(() => {
@@ -218,8 +221,9 @@ describe("failures omit the key and report ids only", () => {
     expect(await label(WORKSPACE_ID, OWNER_ID, REQUESTER_ID)).toBeUndefined();
     expect(queries[0].terminal).toBe("await");
     expect(reportCalls()).toHaveLength(1);
-    const [, , ctx] = reportCalls()[0];
-    expect((ctx as { extra: { code?: string } }).extra.code).toBe("57014");
+    const ctx = reportCalls()[0][1];
+    expect((ctx as { extra: { code?: string }; message: string }).extra.code).toBe("57014");
+    expect((ctx as { message: string }).message).toBe("Approval card: the requester label could not be read; the card shows no requester line");
     expect(serialized(h.report.mock.calls)).not.toContain(REQUESTER_EMAIL);
     expect(serialized(h.report.mock.calls)).not.toContain("statement timeout");
   });
@@ -228,7 +232,7 @@ describe("failures omit the key and report ids only", () => {
     const { label } = setup(baseWorld({ authError: { code: "user_not_found", message: `no ${REQUESTER_EMAIL}` } }));
     expect(await label(WORKSPACE_ID, OWNER_ID, REQUESTER_ID)).toBeUndefined();
     expect(reportCalls()).toHaveLength(1);
-    expect((reportCalls()[0][2] as { extra: { code?: string } }).extra.code).toBe("user_not_found");
+    expect((reportCalls()[0][1] as { extra: { code?: string } }).extra.code).toBe("user_not_found");
     expect(serialized(h.report.mock.calls)).not.toContain(REQUESTER_EMAIL);
   });
 

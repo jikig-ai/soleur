@@ -25,6 +25,7 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
 import { decideApproval } from "./approval/decide";
 import { reemitLiveApprovals } from "./approval/reattach";
+import { createRequesterLabeler, type RequesterQueryClient } from "./approval/requester-label";
 import { logApprovalMarker, reportApprovalOp } from "./approval/ops";
 import { hasWaiter as hasApprovalWaiter, wakeWaiter as wakeApprovalWaiter } from "./approval/waiters";
 import type { ApprovalRpcClient } from "./approval/service";
@@ -1818,9 +1819,13 @@ function reattachApprovals(
       workspaceId,
       send: sendToClient,
       client: () => supabase as unknown as ApprovalRpcClient,
+      // One labeler per attach: its memo is never shared across attaches. Reads through the lazy service proxy above.
+      requesterLabel: createRequesterLabeler(() => supabase as unknown as RequesterQueryClient),
       viewerRole: async (workspaceId) => {
         const tenant = await tenantFor(userId, "approval-reattach");
-        if (!tenant) return "member";
+        // A null tenant (a denied principal) is a failed role read: it throws into the existing viewer-role-failed report
+        // inside reattach, which stays fail-closed (a non-requester gets no frame, the requester a read-only full card).
+        if (!tenant) throw new Error("viewer role read failed");
         const { data, error } = await tenant.rpc("is_workspace_owner", { p_workspace_id: workspaceId, p_user_id: userId });
         if (error) throw new Error("viewer role read failed"); // reported by reattach; the card shows the read-only view
         return data === true ? "owner" : "member";

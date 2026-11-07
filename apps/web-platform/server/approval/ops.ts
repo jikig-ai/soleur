@@ -137,6 +137,12 @@ export const APPROVAL_OPS = {
     message: "Approval gate: the viewer role could not be read; the card shows the read-only view",
     level: "warn",
   },
+  /** The requester label (who raised the request) could not be read; the card shows no requester line. Ids only, never the address. */
+  requesterLabelFailed: {
+    op: "approval-requester-label-failed",
+    message: "Approval card: the requester label could not be read; the card shows no requester line",
+    level: "warn",
+  },
   /** The `approval-queue` flag read threw; the flag is treated as OFF. Debounced to one report per 10 minutes per process (flag.ts). */
   flagReadFailed: {
     op: "approval-flag-read-failed",
