@@ -23,3 +23,6 @@
 ## Operator Constraints
 - Scope: retire the probe script + its replay-suite rows only; reconcile stale references.
 - No issue edits needed — tracker already closed, directive removed.
+
+### Post-review note (2026-11-07)
+The review sweep verified SLOW_/.slowpids/.conc, ERR_ONCE_/ERRONCEMSG_/ERRONCE124_/ERR422_/ERR401EXIT4_/ERR429RL_ handlers and fx_err429rl were OW-section-only and deleted them (commit bdee220ac3), widening task 1.3's "keep the shared stub-gh scaffolding" to keep only the still-live fx/fx_err/fx_err404/fx_err403rl/fx_hang vocabulary.

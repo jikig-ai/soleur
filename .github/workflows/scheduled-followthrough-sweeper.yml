@@ -52,10 +52,9 @@ permissions:
   # verdict) through `gh api`; under the explicit-permissions rule (#8450) an unlisted scope is `none` and 403s.
   # Retire this line with the probe.
   checks: read
-  # Surviving probes need this scope: ci-push-dedupe-soak-9512.sh reads the mixed issues endpoint (which GitHub filters to
-  # issues when the token has no pull-requests scope), and ci-draft-light-soak-9728.sh, pr-battery-gate-saving-9323.sh,
-  # cron-machinery-soak-9272.sh, git-data-boot-poll-8178.sh and inngest-cli-apply-window-7463.sh read /pulls. Read only;
-  # the token reaches only probes declaring secrets=GH_TOKEN, and every such probe now holds this scope.
+  # Kept for the mixed issues LIST readers whose PR items are silently filtered when the token lacks this scope
+  # (ci-push-dedupe-soak-9512.sh; the same quirk the retired #10865 probe hit — both 2026-11-01 sweeps read floor=pr3a).
+  # Bare /pulls reads don't strictly need the scope on a public repo; the binding mechanism is the list filter.
   pull-requests: read
 
 jobs:

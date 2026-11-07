@@ -181,11 +181,10 @@ key="$(printf '%s' "$path" | sed -E 's/created=[^&]*/created=X/' | tr -c 'A-Za-z
 printf 'REQ %s\n' "$key" >> "$GH_LOG"
 # a job log is fetched with --allow-escape-sequences or gh refuses it: the stub refuses it too
 case "$path" in */logs) [ "$esc" = 1 ] || { echo "STUB-MISS no --allow-escape-sequences on $key" >> "$GH_LOG"; echo "gh: refusing escape sequences" >&2; exit 1; } ;; esac
-# HANG_ answers an empty run list, so a delayed unit would vanish.
 if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
-if [ -f "$GH_FIX/HANG_$key" ]; then command -p sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
+if [ -f "$GH_FIX/HANG_$key" ]; then command -p sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi   # HANG_ answers an empty run list, so a delayed unit would vanish
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
 GHSTUB
@@ -4276,7 +4275,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1104   # 1313 minus the retired observation-window section's 209 assertions (129 gated ow_mutate sites + 80 unconditional; probe retired 2026-11-07 with #10865 closed); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1104   # 1313 minus the retired observation-window section's 209 assertions (129 gated ow_mutate sites + 80 of unconditional floor share; 86 chk calls removed — the old floor carried 6 of slack; probe retired 2026-11-07 with #10865 closed); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
