@@ -71,7 +71,7 @@ chk "ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅ (the synthetic green is not-oracle, 
 # bot-diff-reachable path into the selector's audit surface. (It MAY appear as an accept-row TARGET —
 # accept rows exempt a named path; the named file's content never moves the live set, only suite text,
 # edges, oracle files and the accept file itself do — none of which a bot PR can touch.)
-awk '/AFFECTED_[A-Z0-9_]*_PATHS=\(/{f=1; sub(/.*\(/,""); print; next} f&&/^[[:space:]]*\)/{f=0} f' "$PATHSLIB" > "$SANDBOX/edge-blocks.txt"
+awk '/AFFECTED_[A-Z0-9_]*_PATHS=\(/{f=1; sub(/AFFECTED_[A-Z0-9_]*_PATHS=\(/,""); print; next} f&&/^[[:space:]]*\)/{f=0} f' "$PATHSLIB" > "$SANDBOX/edge-blocks.txt"
 chk "edge-block extraction is non-vacuous (the AFFECTED_*_PATHS convention still parses)" \
   test -s "$SANDBOX/edge-blocks.txt"
 chk "weakness-digest.md is named by no AFFECTED_*_PATHS edge (audit surface disjoint)" \

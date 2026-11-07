@@ -57,7 +57,6 @@ export GIT_OPTIONAL_LOCKS=0
 readonly ORACLE_CONTEXT="oracle-review-required"
 readonly REQUIRED_REVIEWER="deruelle"
 readonly ORACLE_REPLAY="scripts/ci-pr-affected-replay.py"
-readonly ORACLE_DRIVER="scripts/ci-oracle-review.sh"
 
 OUT="${GITHUB_OUTPUT:-/dev/null}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"

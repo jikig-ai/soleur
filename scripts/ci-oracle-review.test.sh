@@ -345,9 +345,9 @@ row_event_guard() {
   want event-guard 1 'event'
 }
 
-chk() {  # chk <label> <row fn>
-  local label="$1" fn="$2"
-  if "$fn"; then pass; else fail "$label"; fi
+chk() {  # chk <label> <cmd...> — runs the whole argv, never just $2 (fix-round P1, #12329)
+  local label="$1"; shift
+  if "$@"; then pass; else fail "$label"; fi
 }
 
 for row in row_review_required row_stale_approval row_approved row_author row_not_oracle \
@@ -425,16 +425,18 @@ unset _p_src _p_drv _p_src_n _p_drv_n
 # job-level continue-on-error, and the checks:read scope the merge_group arm requires.
 _wf="$(awk '/^  oracle-review-required:/{f=1;next} f&&/^  [a-zA-Z0-9_-]+:/{f=0} f' "$REPO_ROOT/.github/workflows/ci.yml")"
 [ -n "$_wf" ] || { echo "[FATAL] oracle-review-required job block not extractable from ci.yml" >&2; exit 2; }
+_wf_has() { grep -qF "$1" <<<"$_wf"; }
+_wf_lacks() { ! grep -qF "$1" <<<"$_wf"; }
 chk "job wiring: if: is the positive pull_request || merge_group form (PR coverage producer)" \
-  bash -c "grep -qE \"if: github.event_name == 'pull_request' \\\\|\\\\| github.event_name == 'merge_group'\" <<<\"$_wf\""
+  _wf_has "github.event_name == 'pull_request' || github.event_name == 'merge_group'"
 chk "job wiring: no needs: edge (a required context waits on nothing)" \
-  bash -c "! grep -qE '^\\s+needs:' <<<\"$_wf\""
+  _wf_lacks "needs:"
 chk "job wiring: no job-level continue-on-error (a required job that cannot red the run is decorative)" \
-  bash -c "! grep -qE '^\\s+continue-on-error:' <<<\"$_wf\""
+  _wf_lacks "continue-on-error:"
 chk "job wiring: checks: read granted (the merge_group arm reads member check-runs — P1 #12329)" \
-  bash -c "grep -qE '^\\s+checks: read' <<<\"$_wf\""
+  _wf_has "checks: read"
 chk "job wiring: timeout-minutes present (a hung gate must not hold the runner)" \
-  bash -c "grep -qE '^\\s+timeout-minutes:' <<<\"$_wf\""
+  _wf_has "timeout-minutes:"
 unset _wf
 
 # ── verdict accounting ───────────────────────────────────────────────────────

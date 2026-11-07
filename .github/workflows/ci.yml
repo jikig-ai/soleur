@@ -611,9 +611,14 @@ jobs:
           # the candidate copy is trusted because the members' verdicts were
           # rendered under their own pull_request arms.
           driver="$RUNNER_TEMP/oracle-review-driver.sh"
-          if [ "${EVENT_NAME}" = pull_request ] \
-            && git cat-file -e "${PR_BASE_SHA}:scripts/ci-oracle-review.sh" 2>/dev/null; then
-            git show "${PR_BASE_SHA}:scripts/ci-oracle-review.sh" > "$driver" || rc=$?
+          # Derive the base from the FETCHED merge ref's first parent, not the
+          # payload's base.sha — a payload SHA can go stale when the base branch
+          # advances between event and ref rebuild, and a miss would silently
+          # run the PR-controlled HEAD copy (fix-round P2, #12329).
+          base_sha="$(git rev-parse HEAD^1 2>/dev/null || true)"
+          if [ "${EVENT_NAME}" = pull_request ] && [ -n "$base_sha" ] \
+            && git cat-file -e "${base_sha}:scripts/ci-oracle-review.sh" 2>/dev/null; then
+            git show "${base_sha}:scripts/ci-oracle-review.sh" > "$driver" || rc=$?
             if [ "$rc" -eq 0 ] && [ -s "$driver" ] && bash -n "$driver"; then
               bash "$driver" > "$out" || rc=$?
             else
@@ -623,8 +628,8 @@ jobs:
           else
             bash scripts/ci-oracle-review.sh > "$out" || rc=$?
           fi
-          cat "$out"
-          reason="$(sed -n 's/^SOLEUR_ORACLE_REVIEW .*reason=\([a-z-]*\)$/\1/p' "$out" | tail -n 1)"
+          cat "$out" 2>/dev/null || :
+          reason="$(sed -n 's/^SOLEUR_ORACLE_REVIEW .*reason=\([a-z-]*\)$/\1/p' "$out" 2>/dev/null | tail -n 1)"
           if [ -z "$reason" ]; then
             rc=1
             reason=no-marker
