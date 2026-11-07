@@ -28,9 +28,10 @@ Ref: #10865 (CLOSED tracker — retirement of its probe; no `Closes` in the PR b
       `AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_{A,B,C}_PATHS` in
       `scripts/lib/test-affected-paths.sh` and rewrite the "EXECUTE the
       observation-window probe" comment above them.
-- [ ] 1.8 Run `python3 -I scripts/ci-pr-affected-replay.py --print-baseline`; delete
-      every accept row it reports stale in `scripts/ci-pr-affected-audit.accept.tsv`
-      (the 12 rows citing `ratchet-observation-window-10865.sh` at minimum).
+- [ ] 1.8 Enumerate stale accept rows via `python3 -I scripts/ci-pr-affected-replay.py audit`
+      `stale` lines (or `ratchet --report` `stale-accept` rows); delete exactly those in
+      `scripts/ci-pr-affected-audit.accept.tsv` (the 12 name-citing rows are a floor, not
+      the set); re-run to clean, `--print-baseline` exit 0 as the end-state check.
       Iterate until exit 0.
 - [ ] 1.9 In `.github/workflows/scheduled-followthrough-sweeper.yml`: keep
       `pull-requests: read` (surviving probes need it — see decision-challenges
@@ -61,6 +62,7 @@ Ref: #10865 (CLOSED tracker — retirement of its probe; no `Closes` in the PR b
       `bash scripts/sweep-followthroughs.test.sh`,
       `bash scripts/lint-followthrough-varq-ban.sh`,
       `bash scripts/lint-orphan-test-suites.sh` — all pass.
-- [ ] 3.5 `python3 -I scripts/ci-pr-affected-replay.py --print-baseline` exits 0.
+- [ ] 3.5 `python3 -I scripts/ci-pr-affected-replay.py audit` reports no `stale` rows and
+      `--print-baseline` exits 0.
 - [ ] 3.6 PR body: `## Changelog` section (chore/test-deletion → `semver:patch`);
       reference #10865 without `Closes`.

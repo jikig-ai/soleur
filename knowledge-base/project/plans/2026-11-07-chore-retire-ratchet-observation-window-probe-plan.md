@@ -65,7 +65,7 @@ One PR, one commit-class change: delete the probe, excise its test section and O
 - `bash scripts/sweep-followthroughs.test.sh` — PERM-1 still green (permission kept)
 - `bash scripts/lint-followthrough-varq-ban.sh` — repo-relative literals in `scripts/followthroughs/*.sh` still resolve (learning 2026-11-05)
 - `bash scripts/lint-orphan-test-suites.sh` — no orphan/double-coverage created
-- `python3 -I scripts/ci-pr-affected-replay.py --print-baseline` — exits 0 after accept-row pruning (a stale row exits 2 `census-degraded`)
+- `python3 -I scripts/ci-pr-affected-replay.py audit` — its `stale` lines (or `ratchet --report`'s `stale-accept` rows) enumerate the accept rows to delete; `--print-baseline` exits 0 after pruning (its `census-degraded` refusal does not enumerate — CTO ruling, item 5)
 - `rg -n 'ratchet-observation-window-10865' scripts/ plugins/soleur/test/ .claude/hooks/ .github/workflows/` → zero hits
 
 ### Gates evaluated
@@ -172,7 +172,7 @@ None.
 2. In `plugins/soleur/test/ci-pr-affected-replay.test.sh`: delete the OW section (~3020–3947, ending before the `# == glob-rate` banner), `row_ow_parity` (~2810), `nosleep` (~202–204), and the OW terms in the epilogue; set `DECLARED_TOTAL` to the new `grep -c '^mutate '` count; re-measure `FLOOR_ASSERTIONS` from a full run and rewrite both comments.
 3. Re-split `--rows` ranges in `scripts/test-all.sh` and `scripts/ci-oracle-lane-suites.txt` to tile `1..DECLARED_TOTAL` (same values in both files).
 4. Remove the probe path from the three `AFFECTED_…CI_PR_AFFECTED_REPLAY_*_PATHS` arrays in `scripts/lib/test-affected-paths.sh`; update their comment.
-5. Run `python3 -I scripts/ci-pr-affected-replay.py --print-baseline`; delete every accept row it reports stale (the 12 citing the probe's ORACLE array at minimum).
+5. Enumerate the stale accept rows via `python3 -I scripts/ci-pr-affected-replay.py audit` `stale` lines (or `ratchet --report` `stale-accept` rows) — the 12 name-citing rows are a floor, not the set; delete exactly the rows the audit names and re-run to clean (`--print-baseline` exit 0 is the end-state check, not the enumerator).
 6. Re-attribute the `pull-requests: read` comment in `.github/workflows/scheduled-followthrough-sweeper.yml`; update the PERM-1 helper comment in `scripts/sweep-followthroughs.test.sh`.
 7. Run the verification commands list; fix any residual reference the grep finds.
 
@@ -188,7 +188,7 @@ None.
 - [ ] `bash plugins/soleur/test/ci-pr-affected-replay.test.sh` (full run) passes; `bash plugins/soleur/test/scripts-shard-totality.test.sh` passes.
 - [ ] `bash scripts/sweep-followthroughs.test.sh` passes (PERM-1 pin intact; `pull-requests: read` still present in `scheduled-followthrough-sweeper.yml` with a comment naming surviving consumers).
 - [ ] `bash scripts/lint-followthrough-varq-ban.sh` and `bash scripts/lint-orphan-test-suites.sh` pass.
-- [ ] `python3 -I scripts/ci-pr-affected-replay.py --print-baseline` exits 0 (no stale accept rows; none of the remaining rows cites `ratchet-observation-window-10865.sh`).
+- [ ] `python3 -I scripts/ci-pr-affected-replay.py audit` reports no `stale` accept rows and `--print-baseline` exits 0 (none of the remaining rows cites `ratchet-observation-window-10865.sh`).
 - [ ] `scripts/lib/test-affected-paths.sh` contains no reference to the deleted path.
 - [ ] `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` carries a dated, past-tense retirement note naming this PR; ADR-276 is unedited.
 - [ ] No new files created; `scripts/pr-fanout-ledger.txt` unchanged.
