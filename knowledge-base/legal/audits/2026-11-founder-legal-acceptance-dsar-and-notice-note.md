@@ -25,6 +25,8 @@ Scope: tables `legal_acceptance` and `legal_reauth_event` (migration 184). Data 
 1. The founder id is a **pseudonymous uuid** and the row is **kept after account deletion under Art. 17(3)(e)**, so the export keyed on the account cannot be the complete route: after erasure there is no account to key it on.
 2. The export worker reads with `service_role`, which holds no privilege on either table (migration 184 revokes it). Putting a table in the allowlist without a grant or a read function would make every export fail.
 
+> **Superseded 2026-11-06 (#12187, PR-D; fires on its merge), as to "Scope: tables `legal_acceptance` and `legal_reauth_event`" and "both tables excluded":** three tables are excluded. The third, `legal_acceptance_ack`, is excluded for reason 2 only (the worker reads with `service_role`, which holds no privilege on it). Reason 1 does not apply to it: it holds no founder id and has no foreign key. It is pseudonymous personal data through its link to a `legal_acceptance` row. See the Addendum 2026-11-06 at the end.
+
 **Access remains available on request (Art. 15).** Route: email <legal@jikigai.com>. Handling, proposed:
 
 - *Account still exists.* Request is sent from the email address on the account. Jikigai reads the founder's rows through the database owner role by user id and sends them, including `requested_edit` and the time and choice of each decision. Statutory clock and handling: `knowledge-base/legal/statutory-response-catalog.md#dsar`. The founder can also see their own `legal_acceptance` rows in the product once PR-C is live (the row-level policy allows it); the email route is the fallback and the route for `legal_reauth_event`, which the founder cannot read.
@@ -81,6 +83,25 @@ Two points to settle first, because they could change the recommendation:
 2. The operator account sits in the same user table as customer accounts. The record is the controller's evidence of its own principal's decision, which is why no customer data is involved; if counsel reads the operator as a user for these documents, a qualifier is owed now.
 
 **Before any founder other than the Jikigai operator is admitted, all three documents are owed together in final form (replacing the short draft-marked disclosure)** (the GDPR Policy is the one most often missed): Privacy Policy (data collected, basis, kept after deletion, the note as a data category, rights), Data Protection Disclosure (processing activity entry and recipients), GDPR Policy (balancing test and processing register), each with its Eleventy mirror and the SHA pin refreshed, and the retention paragraph qualified. Recorded as the enabling gate on the compliance-posture row.
+
+---
+
+## Addendum 2026-11-06 (PR-D, #12011)
+
+> Drafted, not counsel-reviewed. Fires on the merge of PR #12187. The text above is unchanged except for the marker under (a).
+
+**Third table.** `legal_acceptance_ack` (migration 185) holds `acceptance_id` (the id of a `legal_acceptance` row) and `acked_at` (the time the web route recorded that its `accepted` event was flushed). It is excluded from the self-serve export (reason 2 above) and is produced on request with the record.
+
+**Procedure to produce the ack rows on request.** The person answering runs, in the database-owner SQL session of the production project, together with the read of the founder's `legal_acceptance` rows described in (a):
+
+```sql
+select a.acceptance_id, a.acked_at
+  from public.legal_acceptance_ack a
+  join public.legal_acceptance l on l.id = a.acceptance_id
+ where l.founder_id = '<user id>';
+```
+
+For a requester whose account is deleted, the same join is run for the `legal_acceptance` row(s) matched under (a) ("Account already deleted"), by `l.id`. The result is added to the copy. Statutory clock and handling are unchanged (`statutory-response-catalog.md#dsar`).
 
 ---
 

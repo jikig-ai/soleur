@@ -1413,8 +1413,8 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
 # roster hosts that did NOT emit (length(var.web_hosts) minus the distinct
 # emitting hosts, floored at 0) and pages on higher_than 0, so an evaluator
 # step that reads 0 reads healthy instead of paging (INFERRED mechanism, see
-# the alert block); a throwaway canary alert runs the same query against an
-# identifier no host emits and must fire.
+# the alert block). A throwaway canary alert (#12180) ran the same query against
+# an identifier no host emits, fired, and was retired by #12189.
 #
 # egress_gw_probe_fail is the verdict detector: result=fail rows (allow leg
 # refused, deny leg bypassed) are security-relevant on first sight, and
@@ -1474,11 +1474,6 @@ locals {
       AND (position(JSONExtractString(raw, 'message'), 'result=fail') > 0
         OR position(JSONExtractString(raw, 'message'), 'reason=gw_absent') > 0)
   SQL
-
-  # THROWAWAY positive control (#12180): the production query against an identifier no
-  # host emits, so it reads length(var.web_hosts) and must fire. Derived, never copied:
-  # the guard pins this line whole and the replace() target occurring once in the source.
-  egress_gw_probe_silent_canary_sql = replace(local.egress_gw_probe_silent_sql, "'egress-gw-probe'", "'egress-gw-probe-canary-absent'")
 
   egress_gw_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#egress-gateway-better-stack-alerts"
 }
@@ -1577,8 +1572,9 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   # measured at about 66 minutes) reads 1 under either operator,
   # and a vendor that never auto-resolves incidents cannot be fixed by inverting
   # the metric. The query is proven (healthy 0, one host 1, unknown identifier 2);
-  # the evaluator is not, which is what the canary below is for. A green alert is
-  # not evidence of health until the canary has fired.
+  # the evaluator was not, which is what the throwaway canary (#12180) was for: it
+  # fired on 2026-11-06, so the evaluator delivers a non-zero value for this query
+  # shape on an empty count, and #12189 retired it.
   # Residual: an evaluator error or timeout also reads 0 under treat_as_zero, so
   # that failure is quiet here. The sibling detectors cover only a fleet-wide dead
   # resolver timer (the Sentry cron check-in has no host dimension) and a probe
@@ -1608,68 +1604,6 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   critical_alert = false
 
   incident_cause = "Value = roster hosts NOT emitting an egress_gw_probe row in 15+ min (1 = one dark, ${length(var.web_hosts)} = all dark). Rows on both hosts in the window => suspect the evaluator, not the fleet. Cause: resolver timer, Vector (stale Source-4 allowlist is a measured failure mode) or host journal; allow/deny verification is dark on the silent host(s). Runbook: ${local.egress_gw_runbook_url}"
-  metadata = {
-    runbook = local.egress_gw_runbook_url
-  }
-
-  escalation_target {
-    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
-    team_name = var.betterstack_paid_tier ? null : "Your team"
-  }
-}
-
-# THROWAWAY CANARY (#12180). Same shape and windows as egress_gw_probe_silent, run
-# against an identifier no host emits, so it reads length(var.web_hosts) and must
-# fire. Its incident never recovers (the query is constant): that, its mirrored P1
-# issue and the email are expected and last until the follow-up PR deletes the two
-# resources (RETIREMENT line in scripts/followthroughs/egress-gw-probe-silent-12180.sh).
-# If it NEVER fires, the evaluator is blind for this query shape and the production
-# alert cannot be trusted; leave it armed and build the heartbeat poller (#12190).
-# The canary shares the production query shape, so it proves non-zero delivery on an
-# empty count, not general evaluator health.
-resource "logtail_exploration" "egress_gw_probe_silent_canary" {
-  name      = "soleur-egress-gw-probe-silent-canary-prd"
-  team_name = "Your team"
-
-  chart {
-    chart_type = "line_chart"
-  }
-
-  query {
-    query_type      = "sql_expression"
-    source_variable = "source"
-    sql_query       = replace(trimspace(local.egress_gw_probe_silent_canary_sql), "/\\s+/", " ")
-  }
-
-  variable {
-    name          = "source"
-    variable_type = "source"
-    values        = [local.vector_prd_source_id]
-  }
-}
-
-resource "logtail_exploration_alert" "egress_gw_probe_silent_canary" {
-  exploration_id = logtail_exploration.egress_gw_probe_silent_canary.id
-  name           = "soleur-egress-gw-probe-silent-canary-prd"
-
-  alert_type          = "threshold"
-  operator            = "higher_than"
-  value               = 0
-  check_period        = 300
-  query_period        = 900
-  confirmation_period = 0
-  recovery_period     = 900
-  on_missing_data     = "treat_as_zero"
-
-  paused = false
-
-  email          = true
-  push           = false
-  call           = false
-  sms            = false
-  critical_alert = false
-
-  incident_cause = "THROWAWAY CANARY (#12180), NOT an outage. Do NOT close its mirror issue: closing it files a fresh P1 at the next 15-minute run. Expected to fire; it proves the evaluator delivers a non-zero value for this query shape. Never firing = the evaluator is blind for this shape: keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired. Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }

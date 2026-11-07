@@ -2,6 +2,8 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, it, expect } from "vitest";
+import { LEGAL_OPS, STORE_FAILED_STAGES } from "@/server/approval/ops";
+import { stripSource } from "./legal-acceptance/strip-source";
 
 // Cross-artifact contract for the founder legal-acceptance alert rules (#12011, PR-C; plan Observability section).
 //
@@ -10,7 +12,7 @@ import { describe, it, expect } from "vitest";
 //   accepted           an accepted row was written (liveness signal, NOT paged)
 //   decide_rejected    the decide RPC refused (reason tag: stale hash, expired, replaced, wrong user)  burst-paged
 //   reauth_failed      the email code send or verify failed (provider error class tag)                 burst-paged
-//   row_without_event  a legal_acceptance row exists with no matching `accepted` event                 paged on every event
+//   row_without_event  a legal_acceptance row exists with no recorded acknowledgement                   paged on every event
 // Two Sentry rules route them: `legal-acceptance-failure-burst` (the two failure ops, 3 events in an hour) and
 // `legal-acceptance-row-without-event` (the reconciliation op, re-pages per event). Renaming the feature or an op on
 // either side, or widening a filter to the feature alone (which would email on every accepted row), would dark or
@@ -53,7 +55,8 @@ const stripHcl = (t: string): string => {
     .map((l) => l.replace(/\s+$/, ""))
     .join("\n");
 };
-const stripJsComments = (t: string): string => t.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|\s)\/\/.*$/gm, "$1");
+// A tokenizer, not a regex: a string holding a comment opener must not swallow the code after it. Strings are kept (the tests read literal values).
+const stripJsComments = (t: string): string => stripSource(t, { strings: "keep" });
 
 // Every .ts/.tsx file under one directory, comment-stripped, joined. Tests (*.test.*) are excluded so a test literal
 // cannot satisfy a source anchor.
@@ -171,11 +174,196 @@ describe("legal-acceptance alert op contract", () => {
     // The tag KEY and VALUE together: a bare literal elsewhere (a path, a log label) must not satisfy this.
     expect(emitter).toMatch(/\bfeature:\s*["']legal-acceptance["']/);
     // The op KEY and VALUE together (`op: "x"` in the registry), so a stray literal elsewhere cannot satisfy it.
-    for (const op of ["decide_rejected", "reauth_failed", "row_without_event", "accepted", "page_read_failed"]) {
+    for (const op of ["decide_rejected", "reauth_failed", "row_without_event", "accepted", "page_read_failed", "record_invalid", "store_failed"]) {
       expect(emitter, `op ${op} emitted`).toMatch(new RegExp(`\\bop:\\s*["']${op}["']`));
     }
     // Every emitted op is reported through the legal helper, never the gate's (which would tag feature=approval-queue).
     expect(emitter).toMatch(/\bexport function reportLegalOp\(/);
+  });
+
+  // PR-D (#12011): every emitted op is either routed by one of the two rules or named here, so a NEW op cannot ship
+  // unrouted by accident. This is a plain list, not a ratchet: nothing counts it down. `record_invalid` and
+  // `store_failed` page nobody until the paging-rule follow-up (#12195) lands; `accepted` is the liveness signal and
+  // `page_read_failed` is recorded, not paged (both stated above).
+  const UNPAGED_OPS = ["accepted", "page_read_failed", "record_invalid", "store_failed"] as const;
+
+  // ── pure analysers: fed the real sources below, and synthetic sources by the negative controls ─────────────────────
+
+  /** The op values written in the LEGAL_OPS block of a registry source (comment-stripped). */
+  const opsOf = (registrySrc: string): string[] => {
+    const block = registrySrc.slice(registrySrc.indexOf("export const LEGAL_OPS"), registrySrc.indexOf("export type LegalOpKey"));
+    return [...block.matchAll(/\bop:\s*"([A-Za-z0-9_-]+)"/g)].map((m) => m[1]).sort();
+  };
+  /** Problems with the equality between the source block and the loaded registry (empty when they are the same set, once each). */
+  const opSetProblems = (registrySrc: string, actual: string[]): string[] => {
+    const derived = opsOf(registrySrc);
+    const want = [...actual].sort();
+    const problems: string[] = [];
+    if (derived.length < 3) problems.push("LEGAL_OPS block not extracted");
+    if (JSON.stringify(derived) !== JSON.stringify(want)) problems.push(`derived ${derived.join(",")} != loaded ${want.join(",")}`);
+    return problems;
+  };
+
+  type SrcFile = { rel: string; src: string };
+  const FEATURE_EMISSION = /\bfeature:\s*["']legal-acceptance["']|\bLEGAL_FEATURE\b/;
+  /** Files other than ops.ts that emit the legal-acceptance feature tag (each is a way to emit an event outside reportLegalOp). */
+  const featureEmitters = (files: SrcFile[]): string[] =>
+    files.filter((f) => f.rel !== "server/approval/ops.ts" && FEATURE_EMISSION.test(stripJsComments(f.src))).map((f) => f.rel);
+
+  /** Every non-test .ts/.tsx under server/, lib/ and app/. */
+  const sourceFiles = (): SrcFile[] => {
+    const out: SrcFile[] = [];
+    const walk = (d: string): void => {
+      let names: string[] = [];
+      try {
+        names = readdirSync(join(root, d)).sort();
+      } catch {
+        return;
+      }
+      for (const n of names) {
+        const rel = `${d}/${n}`;
+        if (statSync(join(root, rel)).isDirectory()) walk(rel);
+        else if (/\.tsx?$/.test(n) && !/\.test\.tsx?$/.test(n)) out.push({ rel, src: read(rel) });
+      }
+    };
+    for (const d of ["server", "lib", "app"]) walk(d);
+    return out;
+  };
+
+  const balanced = (s: string, open: number): number => {
+    let depth = 0;
+    for (let i = open; i < s.length; i++) {
+      if (s[i] === "(") depth++;
+      else if (s[i] === ")" && --depth === 0) return i;
+    }
+    return -1;
+  };
+  const STAGES = STORE_FAILED_STAGES as readonly string[];
+  /**
+   * The storeFailed census: every `reportLegalOp("storeFailed", ...)` carries `tags: { stage: "<literal>" }` with the literal in
+   * the closed set, or the shorthand `tags: { stage }` where `stage` is a parameter DECLARED `stage: StoreFailedStage` by the
+   * nearest enclosing function (a mention of the type elsewhere in the file does not count). Stages reachable from code are the
+   * literals plus the literal first arguments of every call to such a function; all five must be reachable.
+   */
+  const stageCensus = (files: SrcFile[]): { sites: number; problems: string[]; reachable: string[] } => {
+    const problems: string[] = [];
+    const reachable = new Set<string>();
+    let sites = 0;
+    for (const f of files) {
+      const src = stripJsComments(f.src);
+      const typedFns = new Set<string>();
+      for (const m of src.matchAll(/reportLegalOp\(\s*"storeFailed"/g)) {
+        sites++;
+        const open = m.index! + "reportLegalOp".length;
+        const args = src.slice(open, balanced(src, open) + 1);
+        const lit = /tags:\s*\{\s*stage:\s*"([A-Za-z_]+)"\s*\}/.exec(args);
+        if (lit) {
+          if (STAGES.includes(lit[1])) reachable.add(lit[1]);
+          else problems.push(`${f.rel}: stage "${lit[1]}" is not in STORE_FAILED_STAGES`);
+        } else if (/tags:\s*\{\s*stage\s*\}/.test(args)) {
+          const before = [...src.slice(0, m.index).matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g)].pop();
+          const params = before ? src.slice(before.index! + before[0].length - 1, balanced(src, before.index! + before[0].length - 1) + 1) : "";
+          if (before && /\bstage\s*:\s*StoreFailedStage\b/.test(params)) typedFns.add(before[1]);
+          else problems.push(`${f.rel}: shorthand { stage } but the enclosing function does not declare stage: StoreFailedStage`);
+        } else problems.push(`${f.rel}: storeFailed without a tags.stage`);
+      }
+      for (const fn of typedFns) {
+        for (const c of src.matchAll(new RegExp(`\\b${fn}\\(\\s*"([A-Za-z_]+)"`, "g"))) {
+          if (STAGES.includes(c[1])) reachable.add(c[1]);
+          else problems.push(`${f.rel}: ${fn}("${c[1]}") is not in STORE_FAILED_STAGES`);
+        }
+      }
+    }
+    for (const stage of STAGES) if (!reachable.has(stage)) problems.push(`stage "${stage}" is not reachable from any storeFailed call`);
+    return { sites, problems, reachable: [...reachable].sort() };
+  };
+
+  const registrySrc = stripJsComments(read("server/approval/ops.ts"));
+  const loadedOps = Object.values(LEGAL_OPS).map((o) => o.op as string);
+
+  it("the derived op set equals LEGAL_OPS, and equals the routed ops plus the plain unpaged list (a new op must be placed in one of them)", () => {
+    expect(opSetProblems(registrySrc, loadedOps)).toEqual([]);
+    const derived = opsOf(registrySrc);
+    expect(derived).toHaveLength(Object.keys(LEGAL_OPS).length);
+    const routed = [...(filterOf(BURST, "op")?.value ?? "").split(","), filterOf(ROWEV, "op")?.value ?? ""];
+    expect([...routed, ...UNPAGED_OPS].sort()).toEqual(derived);
+    for (const op of UNPAGED_OPS) expect(routed, `${op} is not both routed and exempt`).not.toContain(op);
+  });
+
+  it("the feature tag is emitted from reportLegalOp only: no other source under server/, lib/ or app/ can emit a legal-acceptance event", () => {
+    const files = sourceFiles();
+    expect(files.length, "scanned files").toBeGreaterThan(100);
+    expect(files.map((f) => f.rel)).toContain("server/approval/ops.ts");
+    expect(files.map((f) => f.rel)).toContain("app/api/internal/legal-acceptance/[key]/route.ts");
+    expect(featureEmitters(files), "files that emit feature legal-acceptance outside reportLegalOp").toEqual([]);
+    const inOps = stripJsComments(read("server/approval/ops.ts")).match(new RegExp(FEATURE_EMISSION.source, "g")) ?? [];
+    expect(inOps, "ops.ts emits the feature exactly once, inside reportLegalOp").toHaveLength(1);
+    const fnStart = registrySrc.indexOf("export function reportLegalOp(");
+    expect(fnStart).toBeGreaterThan(registrySrc.indexOf("export type LegalOpKey"));
+    expect(registrySrc.slice(fnStart).search(FEATURE_EMISSION)).toBeGreaterThan(0);
+  });
+
+  it("every storeFailed report carries a tags.stage from the closed set, and all five stages are reachable from code", () => {
+    expect([...STORE_FAILED_STAGES]).toEqual(["verify", "ack_state", "ack", "registry", "config"]);
+    const c = stageCensus(sourceFiles());
+    expect(c.problems).toEqual([]);
+    expect(c.sites, "storeFailed call sites found").toBeGreaterThanOrEqual(3);
+    // ack and config are literals; verify, ack_state and registry come through the typed shorthand of the route's storeFailed().
+    expect(c.reachable).toEqual([...STORE_FAILED_STAGES].sort());
+  });
+
+  describe("negative controls: the three source scans fail on a synthetic bad source", () => {
+    const REG = registrySrc;
+    it("op equality: the unmutated registry has no problems; a stray op, a hyphenated stray op, a missing op and a renamed op each fail", () => {
+      expect(opSetProblems(REG, loadedOps)).toEqual([]);
+      const stray = (op: string) => REG.replace('op: "store_failed",', `op: "store_failed",\n  },\n  zz: {\n    op: "${op}",\n    message: "m",\n    level: "error",`);
+      for (const op of ["extra_op", "x-1", "Zed9"]) {
+        expect(stray(op), op).not.toBe(REG);
+        expect(opSetProblems(stray(op), loadedOps), op).not.toEqual([]);
+      }
+      expect(opSetProblems(REG.replace('op: "store_failed",', ""), loadedOps)).not.toEqual([]);
+      expect(opSetProblems(REG.replace('op: "store_failed",', 'op: "store_failed_2",'), loadedOps)).not.toEqual([]);
+      expect(opSetProblems("export const LEGAL_OPS = {};\nexport type LegalOpKey = never;", loadedOps)).not.toEqual([]);
+    });
+    it("emission scan: a stray feature emission or LEGAL_FEATURE use outside ops.ts is found; a comment or ops.ts itself is not", () => {
+      const clean: SrcFile[] = [{ rel: "server/a.ts", src: "export const a = 1;" }];
+      expect(featureEmitters(clean)).toEqual([]);
+      expect(featureEmitters([...clean, { rel: "lib/x.ts", src: 'Sentry.captureException(e, { tags: { feature: "legal-acceptance", op: "accepted" } });' }])).toEqual(["lib/x.ts"]);
+      expect(featureEmitters([...clean, { rel: "app/api/y/route.ts", src: "const t = { feature: 'legal-acceptance' };" }])).toEqual(["app/api/y/route.ts"]);
+      expect(featureEmitters([...clean, { rel: "server/z.ts", src: "use(LEGAL_FEATURE);" }])).toEqual(["server/z.ts"]);
+      expect(featureEmitters([...clean, { rel: "server/c.ts", src: '// feature: "legal-acceptance"\n/* LEGAL_FEATURE */' }])).toEqual([]);
+      expect(featureEmitters([{ rel: "server/approval/ops.ts", src: 'feature: "legal-acceptance"' }])).toEqual([]);
+    });
+    const GOOD_FILES: SrcFile[] = [
+      { rel: "server/svc.ts", src: 'function f() { reportLegalOp("storeFailed", err, { tags: { stage: "ack" }, extra: {} }); reportLegalOp("storeFailed", e, { tags: { stage: "config" } }); }' },
+      {
+        rel: "app/route.ts",
+        src: [
+          "function storeFailed(stage: StoreFailedStage, err: unknown) {",
+          '  reportLegalOp("storeFailed", err, { tags: { stage }, extra: {} });',
+          "}",
+          'storeFailed("verify", a); storeFailed("ack_state", b); storeFailed("registry", c);',
+        ].join("\n"),
+      },
+    ];
+    it("stage census: the unmutated synthetic set has no problems", () => {
+      expect(stageCensus(GOOD_FILES).problems).toEqual([]);
+      expect(stageCensus(GOOD_FILES).reachable).toEqual([...STORE_FAILED_STAGES].sort());
+    });
+    const mutate = (rel: string, from: string, to: string): SrcFile[] =>
+      GOOD_FILES.map((f) => (f.rel === rel ? { ...f, src: (expect(f.src).toContain(from), f.src.replace(from, to)) } : f));
+    it.each([
+      ["a stage outside the closed set", mutate("server/svc.ts", 'stage: "ack"', 'stage: "bogus"'), "not in STORE_FAILED_STAGES"],
+      ["a storeFailed with no stage tag", mutate("server/svc.ts", '{ tags: { stage: "config" } }', '{ tags: { reason: "x" } }'), "without a tags.stage"],
+      ["an untyped shorthand stage", mutate("app/route.ts", "stage: StoreFailedStage", "stage: string"), "does not declare stage: StoreFailedStage"],
+      ["a typed-looking mention elsewhere does not type the parameter", mutate("app/route.ts", "stage: StoreFailedStage", "stage: string /* StoreFailedStage */"), "does not declare stage: StoreFailedStage"],
+      ["the registry call deleted (a stage no longer reachable)", mutate("app/route.ts", ' storeFailed("registry", c);', ""), 'stage "registry" is not reachable'],
+      ["the ack_state call deleted", mutate("app/route.ts", ' storeFailed("ack_state", b);', ""), 'stage "ack_state" is not reachable'],
+      ["the config literal deleted", mutate("server/svc.ts", ' reportLegalOp("storeFailed", e, { tags: { stage: "config" } });', ""), 'stage "config" is not reachable'],
+      ["a shorthand call with a stage outside the set", mutate("app/route.ts", 'storeFailed("registry", c)', 'storeFailed("regsitry", c)'), "not in STORE_FAILED_STAGES"],
+    ])("stage census: %s", (_label, files, want) => {
+      expect(stageCensus(files).problems.join("|")).toContain(want);
+    });
   });
 
   it("both rules filter on exactly the emitted feature value", () => {

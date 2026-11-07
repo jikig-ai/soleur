@@ -17,7 +17,7 @@
  * line endings are LF only (a CR makes the bytes, and therefore the hash, differ between platforms, so it is
  * refused); `version` is required. `texts/.gitattributes` pins LF in the working tree.
  *
- * `sha256sum <file>` produces the same value, which is how the shell-side gate (PR-D) will compare it.
+ * `sha256sum <file>` produces the same value, which is how the shell-side gate (hold-gate-eval.sh, `web-acceptance`) compares it.
  *
  * DEPLOYED PATH: the server is bundled with esbuild into dist/server/index.cjs, so `__dirname` there is `dist/server` and has
  * no `texts/`; the route handlers run from the Next build under `.next`. The Dockerfile therefore COPIES the directory
@@ -57,7 +57,7 @@ export const TEXTS_DIR = resolveTextsDir();
 
 export class LegalTextError extends Error {
   constructor(
-    public readonly code: "bad_key" | "bad_bytes" | "no_front_matter" | "bad_version" | "bad_valid_until" | "unknown_key",
+    public readonly code: "bad_key" | "bad_bytes" | "no_front_matter" | "bad_version" | "bad_valid_until" | "unknown_key" | "read_failed",
     message: string,
   ) {
     super(message);
@@ -131,7 +131,7 @@ export function loadLegalTexts(dir: string = TEXTS_DIR): Map<string, LegalTextEn
 }
 
 /**
- * The entry for a key, or throws `unknown_key`. The only way a request for a text is created. Reads only
+ * The entry for a key, or throws `unknown_key` (no such file) or `read_failed` (any other read error). The only way a request for a text is created. Reads only
  * `<key>.md`, so one malformed sibling file cannot take every key down.
  */
 export function getLegalText(key: string, dir: string = TEXTS_DIR): LegalTextEntry {
@@ -139,8 +139,11 @@ export function getLegalText(key: string, dir: string = TEXTS_DIR): LegalTextEnt
   let bytes: Buffer;
   try {
     bytes = readFileSync(path.join(dir, `${key}.md`));
-  } catch {
-    throw new LegalTextError("unknown_key", "no such legal text");
+  } catch (err) {
+    // Only a missing file is "no such text". Any other failure (permissions, a directory where a file should be, I/O) is
+    // a broken registry and must not read as an unknown key: the verify endpoint answers 503 for it, 404 for the other.
+    if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") throw new LegalTextError("unknown_key", "no such legal text");
+    throw new LegalTextError("read_failed", "legal text could not be read");
   }
   return parseLegalText(key, bytes);
 }
