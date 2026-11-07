@@ -45,6 +45,7 @@ jv() { # jv <label> <want-prefix> <peer-ip or ""> <rows-on-stdin> — a 3rd arg 
 { row 20 "$(line)"; row 80 "$(line)"; row 140 "$(line)"; } | jv "J01 three healthy rows, newest 20 s" "GREEN" ""
 { row 119 "$(line)"; row 179 "$(line)"; } | jv "J02 boundary: newest 119 s, oldest 179 s, two rows" "GREEN" ""
 { row 120 "$(line)"; row 179 "$(line)"; } | jv "J02b boundary: newest exactly 120 s is still fresh" "GREEN" ""
+{ row 20 "$(line)"; row 180 "$(line)"; } | jv "J02c boundary: a row at EXACTLY 180 s is inside the window (>= 2 rows -> GREEN; 'a <= win' must not become 'a < win')" "GREEN" ""
 { row 121 "$(line)"; row 150 "$(line)"; } | jv "J03 newest 121 s -> stale" "RED reason=newest_stale" ""
 { row 300 "$(line)"; row 400 "$(line)"; } | jv "J03b every row older than the window -> too few rows" "RED reason=rows_below_floor" ""
 { row 20 "$(line)"; row 181 "$(line)"; } | jv "J04 a row outside the 180 s window does not count: 1 in-window row" "RED reason=rows_below_floor" ""
@@ -99,6 +100,14 @@ prow 100 "x$(pline)" | jv "JP10b leading junk -> malformed" "RED reason=peer_row
 prow 100 "$(pline "$PEERIP" result=weird)" | jv "JP10c unknown result word -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
 prow 100 "" | jv "JP10d an empty extracted line -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
 { prow 100 "$(pline)"; prow 100 "$(pline "$PEERIP" result=denied)"; } | jv "JP11 two rows tied at the newest age, one denied -> refused" "RED reason=peer_denied" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline "$PEERIP" result=denied)"; prow 100 "$(pline)"; } | jv "JP11b the same tie in the OTHER order (denied first, ok second) -> refused (a first-only or last-only check must red)" "RED reason=peer_denied dir=w1_to_w2" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline) extra=1"; prow 100 "$(pline)"; } | jv "JP11c tied: malformed row first, ok second -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline)"; prow 100 "$(pline) extra=1"; } | jv "JP11d tied: ok first, malformed row second -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline 10.0.1.12)"; prow 100 "$(pline)"; } | jv "JP11e tied: a row about ANOTHER peer first, ok second -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline)"; prow 100 "$(pline 10.0.1.12)"; } | jv "JP11f tied: ok first, a row about ANOTHER peer second -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline "$PEERIP" skipped=exec_failed)"; prow 100 "$(pline)"; } | jv "JP11g tied: skipped first, ok second -> refused" "RED reason=peer_skipped" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline)"; prow 100 "$(pline "$PEERIP" skipped=exec_failed)"; } | jv "JP11h tied: ok first, skipped second -> refused" "RED reason=peer_skipped" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline)"; prow 100 "$(pline)"; } | jv "JP11i two tied ok rows -> GREEN (the tie rule refuses only on a bad tied row)" "GREEN peer_age_s=100" "peer:$W1H:$PEERIP"
 printf '<html>502</html>\n' | jv "JP12 an HTML body -> unparseable" "RED reason=body_unparseable" "peer:$W1H:$PEERIP"
 jq -cn '{age_s:"abc",host_name:"soleur-web-platform",line:"x"}' | jv "JP13 a non-numeric age -> refused" "RED reason=peer_row_age_malformed" "peer:$W1H:$PEERIP"
 for bad in "::" "0.0.0.0" "none" "web-2" "10.0.1" "10.0.1.11 " "192.168.1.5" ""; do
@@ -126,7 +135,66 @@ out="$(printf '%s\n' "$(row 20 "relay_probe SECRET-LOOKING-TEXT")" "$(row 30 "$(
 if [[ "$out" != *SECRET* ]]; then ok "J20 a malformed row's text is not echoed in the verdict"; else no "J20 verdict echoed row text: $out"; fi
 
 while IFS=$'\t' read -r st msg; do if [[ "$st" == ok ]]; then ok "$msg"; else no "$msg"; fi; done < "$WORK/jlog"
-[[ "$(wc -l < "$WORK/jlog")" -ge 65 ]] && ok "J99 the judge fixtures all ran (>= 65 logged)" || no "J99 only $(wc -l < "$WORK/jlog") judge fixtures logged"
+J_EXPECTED=86   # recomputed from the green run: the exact number of judge fixtures logged
+J_LOGGED="$(wc -l < "$WORK/jlog")"
+if [[ "$J_LOGGED" -eq "$J_EXPECTED" ]]; then ok "J99 the judge fixtures ran exactly as many times as declared ($J_LOGGED)"; else no "J99 $J_LOGGED judge fixtures logged, $J_EXPECTED declared"; fi
+
+# --- S: the SQL text (S-P2-1: forged-evidence defence) ---------------------------------------------------------
+# Both queries filter on STRUCTURED fields, never on the whole raw row: a log line from the host that merely ECHOES a probe
+# sentence (a user-influenced message, a debug dump) carries a different SYSLOG_IDENTIFIER / CONTAINER_NAME / message prefix and
+# cannot become the newest row. The line is selected FROM the same field the prefix test anchors on. These are the shipped
+# alerts' own filters (apps/web-platform/infra/betterstack-logs-alerts.tf relay_* locals). Every guard line is checked as an
+# EXACT line of the comment-stripped SQL, and each is mutation-proved on a sandbox copy of the text (control green first, the
+# mutant verified to have LANDED against the pristine text, then the guard must go red).
+sql_clean() { sed -E 's/[[:space:]]*--.*$//' <<<"$1"; }
+sqlg_own() { # sqlg_own <sql> -> 0 iff every own-line guard line is present exactly and no whole-row matcher exists
+  local c; c="$(sql_clean "$1")"
+  grep -qxF "SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, JSONExtractString(raw,'message','msg') AS line" <<<"$c" \
+    && grep -qxF "  AND JSONExtractString(raw,'host_name') = 'soleur-web-2'" <<<"$c" \
+    && grep -qxF "  AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'" <<<"$c" \
+    && grep -qxF "  AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_probe proxy_state=')" <<<"$c" \
+    && ! grep -qE 'position[(]raw|extract[(]raw' <<<"$c"
+}
+sqlg_peer() { # sqlg_peer <sql> <dialing-host> <peer-ip>
+  local c; c="$(sql_clean "$1")"
+  grep -qxF "SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, JSONExtractString(raw,'message') AS line" <<<"$c" \
+    && grep -qxF "  AND JSONExtractString(raw,'host_name') = '$2'" <<<"$c" \
+    && grep -qxF "  AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'" <<<"$c" \
+    && grep -qxF "  AND startsWith(JSONExtractString(raw,'message'), 'relay_peer_probe peer=$3 ')" <<<"$c" \
+    && ! grep -qE 'position[(]raw|extract[(]raw' <<<"$c"
+}
+S_OWN="$(wrr_sql)"; S_PEER="$(wrr_peer_sql "$W1H" "$PEERIP")"; S_REV="$(wrr_peer_sql "$W2H" "$W1IP")"
+if sqlg_own "$S_OWN"; then ok "S01 control: the own-line SQL carries the structured filters (host_name, CONTAINER_NAME, startsWith on message.msg) and no whole-row matcher"; else no "S01 own-line SQL fails its own guard: $S_OWN"; fi
+if sqlg_peer "$S_PEER" "$W1H" "$PEERIP"; then ok "S02 control: the web-1 -> web-2 peer SQL carries SYSLOG_IDENTIFIER = 'ci-deploy' and startsWith on message, and no whole-row matcher"; else no "S02 forward peer SQL fails its own guard: $S_PEER"; fi
+if sqlg_peer "$S_REV" "$W2H" "$W1IP"; then ok "S03 control: the web-2 -> web-1 peer SQL passes the same guard under the web-2 dialer"; else no "S03 reverse peer SQL fails its own guard: $S_REV"; fi
+# a comment cannot stand in for a guard line (comment-stripped before matching)
+c_own="$(sed "s|^  AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'\$|  -- AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'|" <<<"$S_OWN")"
+if [[ "$c_own" != "$S_OWN" ]] && ! sqlg_own "$c_own"; then ok "S04 a COMMENTED-OUT CONTAINER_NAME line does not satisfy the guard"; else no "S04 commented-out guard line accepted (or the edit did not land)"; fi
+smut() { # smut <label> <which: own|peer|rev> <sed-expr> — mutate the SQL text, verify the mutation LANDED, require the guard to go red
+  local label="$1" which="$2" expr="$3" pristine mutant
+  case "$which" in own) pristine="$S_OWN" ;; peer) pristine="$S_PEER" ;; rev) pristine="$S_REV" ;; esac
+  mutant="$(sed -E "$expr" <<<"$pristine")"
+  if [[ "$mutant" == "$pristine" ]]; then no "$label: the mutation did not land (text identical to pristine)"; return; fi
+  case "$which" in
+    own) sqlg_own "$mutant" && no "$label stayed GREEN: the own-line guard cannot see this defect" || ok "$label -> RED" ;;
+    peer) sqlg_peer "$mutant" "$W1H" "$PEERIP" && no "$label stayed GREEN: the peer guard cannot see this defect" || ok "$label -> RED" ;;
+    rev) sqlg_peer "$mutant" "$W2H" "$W1IP" && no "$label stayed GREEN: the reverse peer guard cannot see this defect" || ok "$label -> RED" ;;
+  esac
+}
+smut "SM01 own: drop the CONTAINER_NAME filter" own "/CONTAINER_NAME/d"
+smut "SM02 own: drop the startsWith prefix filter" own "/startsWith[(]/d"
+smut "SM03 own: revert the prefix filter to position(raw, ...)" own "s/^  AND startsWith.*\$/  AND position(raw, 'relay_probe proxy_state=') > 0/"
+smut "SM04 own: select the line with extract(raw, ...) over the whole row" own "s/JSONExtractString[(]raw,'message','msg'[)] AS line/extract(raw, 'relay_probe [^\"]*') AS line/"
+smut "SM05 own: loosen the CONTAINER_NAME equality to a substring test" own "s/CONTAINER_NAME'[)] = 'soleur-web-platform'/CONTAINER_NAME') LIKE '%web%'/"
+smut "SM06 own: drop the host_name pin" own "/'host_name') = /d"
+smut "SM07 peer: drop the SYSLOG_IDENTIFIER filter" peer "/SYSLOG_IDENTIFIER/d"
+smut "SM08 peer: drop the startsWith prefix filter" peer "/startsWith[(]/d"
+smut "SM09 peer: revert the prefix filter to position(raw, ...)" peer "s/^  AND startsWith.*\$/  AND position(raw, 'relay_peer_probe peer=$PEERIP ') > 0/"
+smut "SM10 peer: select the line with extract(raw, ...) over the whole row" peer "s/JSONExtractString[(]raw,'message'[)] AS line/extract(raw, 'relay_peer_probe peer=[0-9.]+ [a-z_]+=[a-z_]+') AS line/"
+smut "SM11 peer: widen the identifier to another unit" peer "s/= 'ci-deploy'/= 'sshd'/"
+smut "SM12 peer: drop the peer-address anchor from the prefix" peer "s/peer=$PEERIP '/peer='/"
+smut "SM13 reverse: drop the SYSLOG_IDENTIFIER filter" rev "/SYSLOG_IDENTIFIER/d"
+smut "SM14 reverse: revert the prefix filter to position(raw, ...)" rev "s/^  AND startsWith.*\$/  AND position(raw, 'relay_peer_probe peer=$W1IP ') > 0/"
 
 # --- Q: the query function ----------------------------------------------------------------------------------
 BIN="$WORK/bin"; mkdir -p "$BIN"
@@ -202,8 +270,12 @@ QMODE=peer QPEER=$W1IP QHOST=soleur-web-9 q "QP12 an unknown dialing host is ref
 echo ""
 echo "=== web2-relay-rows.test.sh: ${pass} passed, ${fail} failed ==="
 _ran=$((pass + fail))
-if [ "$_ran" -lt 103 ]; then
-  printf 'GUARD FAIL: ran only %d assertion(s) (floor 103) — the suite did not execute fully\n' "$_ran" >&2
+if [ "$_ran" -lt 130 ]; then
+  printf 'GUARD FAIL: ran only %d assertion(s) (floor 130) — the suite did not execute fully\n' "$_ran" >&2
+  exit 2
+fi
+if [ "$_ran" -gt 130 ]; then
+  printf 'GUARD FAIL: ran %d assertion(s), more than the declared 130 — raise BOTH halves of the floor to the new exact count\n' "$_ran" >&2
   exit 2
 fi
 [[ "$fail" -eq 0 ]]

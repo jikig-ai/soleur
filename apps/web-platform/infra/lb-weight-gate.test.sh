@@ -617,6 +617,59 @@ c4_assert "C.4-F6: web2_lb_weight appears on exactly ONE non-comment line of cf-
 c4_assert "C.4-F7: no other workflow names web2_lb_weight (routine apply, drift and validation plans stay at default 0)" \
   "$([[ -z "$(cd "$REPO_ROOT" && grep -lE 'web2_lb_weight|WEB2_LB_WEIGHT' .github/workflows/*.yml | grep -v 'cf-lb-overlay.yml')" ]] && echo 1 || echo 0)"
 
+# --- W: the drain invariant by EFFECT, not by text (T-P2-1) -----------------------------------------
+# F4-F6 pin the pin step's WORDING. They cannot see a second, later writer: a `WEB2_LB_WEIGHT: "1"` in the plan step's env or a
+# step before the plan that appends WEB2_LB_WEIGHT=1 to $GITHUB_ENV leaves every wording pin green while the plan (and the gate,
+# which reads the same variable) would run at weight 1 on a DRAIN dispatch. w_guard states the invariant as effects:
+#   W-a  exactly ONE non-comment line of the ga_pool_update job assigns WEB2_LB_WEIGHT=0|1 (the mode-derived if/else);
+#   W-b  exactly ONE non-comment line of the job writes WEB2_LB_WEIGHT to $GITHUB_ENV;
+#   W-c  no `WEB2_LB_WEIGHT:` YAML key anywhere in the workflow (a step-, job- or workflow-level env would override the pin);
+#   W-d  EXECUTING the pin step body: mode=drain writes WEB2_LB_WEIGHT=0 exactly once, mode=serve writes 1 exactly once, and an
+#        unknown mode is refused with nothing written.
+# Each rule is mutation-proved on a sandbox copy of the workflow (control green first, mutant verified to have LANDED).
+W_WORK="$(mktemp -d)"
+w_guard() { # w_guard <workflow-file> -> 0 iff the invariant holds
+  local wf="$1" JOB pin run nc m rc
+  JOB="$(awk '/^  ga_pool_update:/ {on=1; print; next} on && /^  [A-Za-z0-9_-]+:/ {exit} on {print}' "$wf" 2>/dev/null || true)"
+  [[ -n "$JOB" ]] || return 1
+  nc="$(c4_nocomment <(printf '%s\n' "$JOB") || true)"
+  [[ "$(grep -cE 'WEB2_LB_WEIGHT=[01]' <<<"$nc" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -E 'WEB2_LB_WEIGHT' <<<"$nc" | grep -c 'GITHUB_ENV' || true)" -eq 1 ]] || return 1
+  [[ "$(c4_nocomment "$wf" | grep -cE '^[[:space:]]*(-[[:space:]]+)?WEB2_LB_WEIGHT[[:space:]]*:' || true)" -eq 0 ]] || return 1
+  pin="$(step_of 'Typo-guard' || true)"
+  run="$(awk '/^        run: \|[[:space:]]*$/ {on=1; next} on {print}' <<<"$pin" | sed -E 's/^          //')"
+  [[ -n "$run" ]] || return 1
+  printf '%s\n' "$run" > "$W_WORK/pin-run.sh"
+  for m in drain serve; do
+    : > "$W_WORK/env"; : > "$W_WORK/sum"
+    (cd "$W_WORK" && env -i PATH="/usr/bin:/bin" CONFIRM_RAW=UPDATE-GA-LB-POOL REASON_RAW=fixture MODE_RAW="$m" GITHUB_ENV="$W_WORK/env" GITHUB_STEP_SUMMARY="$W_WORK/sum" GITHUB_RUN_ID=1 bash "$W_WORK/pin-run.sh" >/dev/null 2>&1) || return 1
+    [[ "$(grep -c '^WEB2_LB_WEIGHT=' "$W_WORK/env" || true)" -eq 1 ]] || return 1
+    if [[ "$m" == drain ]]; then [[ "$(grep '^WEB2_LB_WEIGHT=' "$W_WORK/env")" == "WEB2_LB_WEIGHT=0" ]] || return 1
+    else [[ "$(grep '^WEB2_LB_WEIGHT=' "$W_WORK/env")" == "WEB2_LB_WEIGHT=1" ]] || return 1; fi
+  done
+  : > "$W_WORK/env"; rc=0
+  (cd "$W_WORK" && env -i PATH="/usr/bin:/bin" CONFIRM_RAW=UPDATE-GA-LB-POOL REASON_RAW=fixture MODE_RAW=bogus GITHUB_ENV="$W_WORK/env" GITHUB_STEP_SUMMARY="$W_WORK/sum" GITHUB_RUN_ID=1 bash "$W_WORK/pin-run.sh" >/dev/null 2>&1) || rc=$?
+  [[ "$rc" -ne 0 && ! -s "$W_WORK/env" ]] || return 1
+  return 0
+}
+c4_assert "C.4-W0 control: the pristine workflow satisfies the effect-level drain invariant (one assignment, one GITHUB_ENV write, no env key, pin executes drain=0 / serve=1 / bogus refused)" \
+  "$(w_guard "$WF" && echo 1 || echo 0)"
+wmut() { # wmut <label> <awk-program> — mutate a sandbox copy of the workflow; the mutation must LAND and the guard must go red
+  local label="$1" prog="$2" f="$W_WORK/wf-mut.yml"
+  awk "$prog" "$WF" > "$f"
+  if cmp -s "$WF" "$f"; then c4_bad "$label: the mutation did not land (copy identical to pristine)"; return; fi
+  if w_guard "$f"; then c4_bad "$label stayed GREEN: the effect-level drain guard cannot see this defect"; else c4_ok "$label -> RED"; fi
+}
+wmut "C.4-W2 mutant: WEB2_LB_WEIGHT: \"1\" in the plan step's env" '/^      - name: Terraform plan \(GA pool/ {inplan=1} {print} inplan && /^        env:/ {print "          WEB2_LB_WEIGHT: \"1\""; inplan=0}'
+wmut "C.4-W3 mutant: a step before the plan appends WEB2_LB_WEIGHT=1 to GITHUB_ENV" '/^      - name: Terraform plan \(GA pool/ {print "      - name: sneak"; print "        run: echo \"WEB2_LB_WEIGHT=1\" >> \"$GITHUB_ENV\""} {print}'
+wmut "C.4-W3b mutant: a step before the plan appends a COMPUTED WEB2_LB_WEIGHT to GITHUB_ENV (no literal 0|1 on the line)" '/^      - name: Terraform plan \(GA pool/ {print "      - name: sneak"; print "        run: echo \"WEB2_LB_WEIGHT=${SNEAK}\" >> \"$GITHUB_ENV\""} {print}'
+wmut "C.4-W4 mutant: a job-level env sets WEB2_LB_WEIGHT" '{print} /^  ga_pool_update:/ {inj=1} inj && /^    timeout-minutes:/ {print "    env:"; print "      WEB2_LB_WEIGHT: \"1\""; inj=0}'
+wmut "C.4-W5 mutant: a workflow-level env sets WEB2_LB_WEIGHT" '/^env:/ && !done {print; print "  WEB2_LB_WEIGHT: \"1\""; done=1; next} {print}'
+wmut "C.4-W6 mutant: the pin step assigns 1 in BOTH branches (drain would plan weight 1)" '{ if ($0 ~ /then WEB2_LB_WEIGHT=1; else WEB2_LB_WEIGHT=0; fi/) sub(/else WEB2_LB_WEIGHT=0/, "else WEB2_LB_WEIGHT=1"); print }'
+wmut "C.4-W7 mutant: the pin step writes the weight to GITHUB_ENV a second time" '{print} /^          echo "WEB2_LB_WEIGHT=\$\{WEB2_LB_WEIGHT\}" >> "\$GITHUB_ENV"/ {print "          echo \"WEB2_LB_WEIGHT=1\" >> \"$GITHUB_ENV\""}'
+wmut "C.4-W8 mutant: the mode guard no longer refuses an unknown mode" '{ if ($0 ~ /MODE_RAW" != "drain" && "\$MODE_RAW" != "serve"/) sub(/\[\[ .* \]\]; then/, "[[ -z \"$MODE_RAW\" ]]; then"); print }'
+rm -rf "$W_WORK"
+
 # --- O: ordering / fail-closed chain ---------------------------------------------------------
 GATE_AT="$(line_of '§\(c\) gate chain')"; PLAN_AT="$(line_of 'Terraform plan \(GA pool')"
 c4_assert "C.4-O1: the §(c) gate chain step precedes the plan step that carries the variable" \
@@ -726,6 +779,11 @@ c4_assert "C.4-R8: the step uses the shared helper (wrr_fetch, wrr_judge, wrr_pe
 c4_assert "C.4-R9: the step does NOT compare the app's addr to the private IP (the app binds the wildcard in its container): wrr_judge takes exactly one argument" \
   "$(grep -qE 'wrr_judge[[:space:]]+"[^"]+"\)"' <<<"$PROBE_RUN_NC" && ! grep -qE 'wrr_judge[[:space:]]+"[^"]+"[[:space:]]+"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
 
+c4_assert "C.4-R10: the step refuses when the sourced helper stopped defining WRR_PORT / WRR_BIND_ADDR / WRR_HOST_NAME / WRR_PEER_HOST_NAME (a guarded check, so lint-workflow-step-env-refs holds and a missing constant cannot blank a host pin)" \
+  "$(grep -qE '\[\[ -n "\$\{WRR_PORT:-\}" && -n "\$\{WRR_BIND_ADDR:-\}" && -n "\$\{WRR_HOST_NAME:-\}" && -n "\$\{WRR_PEER_HOST_NAME:-\}" \]\]' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+c4_assert "C.4-R11: the accepted forward-probe residual (written before web-1's fan-out, so it describes web-2's PREVIOUS container; dispatch serve right after a release deploy) is stated in the step's summary line AND its refusal message" \
+  "$([[ "$(grep -c "web-2's previous container" <<<"$PROBE_RUN_NC")" -ge 1 && "$(grep -c 'PREVIOUS container' <<<"$PROBE_RUN_NC")" -ge 1 && "$(grep -c 'right after a release deploy' <<<"$PROBE_RUN_NC")" -ge 1 ]] && echo 1 || echo 0)"
+
 # --- E: execute the step's own run body, offline ------------------------------------------------------
 R_WORK="$(mktemp -d)"; trap 'rm -rf "$R_WORK"' EXIT
 R_BIN="$R_WORK/bin"; R_FX="$R_WORK/fx"; mkdir -p "$R_BIN" "$R_FX"
@@ -753,6 +811,7 @@ if [ -n "$leak" ]; then printf '%s\n' "$leak" >> "$LEAK"; exit 64; fi
 case "$url" in "https://fixture-connect.betterstackdata.com?"*) : ;; *) exit 64 ;; esac
 [ "$user" = fixture-user:fixture-pass ] || exit 64
 printf 'q\n' >> "$CALLS"
+printf '%s\n' "$data" | tr '\n' ' ' >> "$SQLLOG"; printf '\n' >> "$SQLLOG"
 case "$(cat "$FX/mode" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; timeout) exit 28 ;; esac
 case "$data" in *relay_peer_probe*) case "$data" in *"'soleur-web-2'"*) sfx=_w2 ;; *) sfx= ;; esac; printf 'p%s\n' "$sfx" >> "$CALLS"; case "$(cat "$FX/peer_mode$sfx" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; esac; cat "$FX/peer_rows$sfx" ;; *) cat "$FX/rows" ;; esac
 STUB
@@ -764,8 +823,8 @@ r_peer() { printf 'relay_peer_probe peer=%s %s' "${1:-10.0.1.11}" "${2:-result=o
 r_prow() { jq -cn --arg a "$1" --arg l "$2" --arg h "${3:-soleur-web-platform}" '{age_s:$a,host_name:$h,line:$l}'; }
 R_OUT=""; R_RC=0
 r_exec() { # r_exec [ENV=VAL ...] — run the step body in a clean env; output -> R_OUT, rc -> R_RC
-  : > "$R_WORK/leak"; : > "$R_WORK/calls"; : > "$R_WORK/summary"
-  R_OUT="$(cd "$R_WORK" && env -i PATH="$R_BIN:/usr/bin:/bin" HOME="$R_WORK" TMPDIR="$R_WORK" FX="$R_FX" LEAK="$R_WORK/leak" CALLS="$R_WORK/calls" \
+  : > "$R_WORK/leak"; : > "$R_WORK/calls"; : > "$R_WORK/summary"; : > "$R_WORK/sqllog"
+  R_OUT="$(cd "$R_WORK" && env -i PATH="$R_BIN:/usr/bin:/bin" HOME="$R_WORK" TMPDIR="$R_WORK" FX="$R_FX" LEAK="$R_WORK/leak" CALLS="$R_WORK/calls" SQLLOG="$R_WORK/sqllog" \
     GITHUB_WORKSPACE="$REPO_ROOT" GITHUB_STEP_SUMMARY="$R_WORK/summary" GH_TOKEN=decoy-gh DOPPLER_TOKEN=decoy-doppler AWS_SECRET_ACCESS_KEY=decoy-aws \
     BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=fixture-user BETTERSTACK_QUERY_PASSWORD=fixture-pass \
     "$@" bash "$R_WORK/probe-run.sh" 2>&1)" && R_RC=0 || R_RC=$?
@@ -782,6 +841,8 @@ c4_assert "C.4-E1: two healthy own-line rows (addr=0.0.0.0) + an ok peer row for
   "$([[ "$R_RC" -eq 0 && "$(grep -c 'GREEN' "$R_WORK/summary")" -eq 3 && "$(grep -c 'dir=w1_to_w2' "$R_WORK/summary")" -eq 1 && "$(grep -c 'dir=w2_to_w1' "$R_WORK/summary")" -eq 1 ]] && echo 1 || echo 0)"
 c4_assert "C.4-E1a: …and all THREE queries were sent (own line, forward peer line, reverse peer line)" \
   "$([[ "$(grep -c '^q$' "$R_WORK/calls")" -eq 3 && "$(grep -c '^p$' "$R_WORK/calls")" -eq 1 && "$(grep -c '^p_w2$' "$R_WORK/calls")" -eq 1 ]] && echo 1 || echo 0)"
+c4_assert "C.4-E1c: the three SQL texts the step actually sent carry the structured filters (CONTAINER_NAME once, SYSLOG_IDENTIFIER twice, startsWith three times) and no whole-row position(raw / extract(raw" \
+  "$([[ "$(grep -o "JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'" "$R_WORK/sqllog" | wc -l)" -eq 1 && "$(grep -o "JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'" "$R_WORK/sqllog" | wc -l)" -eq 2 && "$(grep -o 'startsWith(JSONExtractString(raw' "$R_WORK/sqllog" | wc -l)" -eq 3 && -z "$(grep -E 'position[(]raw|extract[(]raw' "$R_WORK/sqllog" || true)" ]] && echo 1 || echo 0)"
 c4_assert "C.4-E1b: …no credential-shaped variable reached the query child, no decoy printed" \
   "$([[ ! -s "$R_WORK/leak" && "$R_OUT" != *decoy-* && "$R_OUT" != *fixture-pass* ]] && echo 1 || echo 0)"
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
@@ -841,7 +902,7 @@ else
 fi
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=231
+MIN_CASES=243
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

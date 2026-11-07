@@ -1091,6 +1091,9 @@ jobs:
             || { echo "::error::web-1's private IPv4 is absent from state or equals web-2's (hcloud_server_network.web[\"web-1\"].ip) — nothing to match web-2's peer probe against. NOTHING planned, NOTHING applied."; exit 1; }
           # shellcheck source=scripts/lib/web2-relay-rows.sh
           source "${GITHUB_WORKSPACE}/scripts/lib/web2-relay-rows.sh"
+          # The helper defines these constants; a helper that stopped defining one must refuse here, not blank a host pin.
+          [[ -n "${WRR_PORT:-}" && -n "${WRR_BIND_ADDR:-}" && -n "${WRR_HOST_NAME:-}" && -n "${WRR_PEER_HOST_NAME:-}" ]] \
+            || { echo "::error::scripts/lib/web2-relay-rows.sh did not define its host/port constants — the relay evidence cannot be read. NOTHING planned, NOTHING applied."; exit 1; }
           RELAY_TMP="$(mktemp -d)"
           trap 'rm -rf "$RELAY_TMP"' EXIT
           wrr_fetch "$RELAY_TMP/rows.jsonl" || {
@@ -1114,10 +1117,10 @@ jobs:
             exit 1
           }
           PEER_VERDICT="$(wrr_peer_judge "$RELAY_TMP/peer.jsonl" "$WRR_PEER_HOST_NAME" "$WEB2_PRIVATE")"
-          echo "- web-1 -> web-2 peer probe of ${WEB2_PRIVATE}:${WRR_PORT} (newest row in 24 h must be result=ok): ${PEER_VERDICT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- web-1 -> web-2 peer probe of ${WEB2_PRIVATE}:${WRR_PORT} (newest row in 24 h must be result=ok; accepted residual: written before web-1's fan-out, so it describes web-2's previous container): ${PEER_VERDICT}" >> "$GITHUB_STEP_SUMMARY"
           echo "relay bind probe (peer line web-1 -> web-2): ${PEER_VERDICT}"
           if [[ "$PEER_VERDICT" != GREEN\ * ]]; then
-            echo "::error::web-2's relay is not provably reachable on ${WEB2_PRIVATE}:${WRR_PORT} from web-1 (${PEER_VERDICT}). The newest relay_peer_probe row from web-1 for this peer in the last 24 h must say result=ok; redeploy web-1 to re-probe after fixing. NOTHING planned, NOTHING applied."
+            echo "::error::web-2's relay is not provably reachable on ${WEB2_PRIVATE}:${WRR_PORT} from web-1 (${PEER_VERDICT}). The newest relay_peer_probe row from web-1 for this peer in the last 24 h must say result=ok; redeploy web-1 to re-probe after fixing. Known residual: this row is written at web-1's deploy BEFORE the deploy fans out to web-2, so it exercises web-2's PREVIOUS container; the fresh evidence is web-2's own line and the reverse probe below, so dispatch serve right after a release deploy. NOTHING planned, NOTHING applied."
             exit 1
           fi
           wrr_peer_fetch "$RELAY_TMP/peer-rev.jsonl" "$WRR_HOST_NAME" "$WEB1_PRIVATE" || {

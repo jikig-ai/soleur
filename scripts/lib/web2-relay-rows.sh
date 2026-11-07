@@ -16,9 +16,11 @@
 #  (1) OWN LINE (wrr_judge). WARN level, every 60 s, from web-2's app container, one line in the message:
 #        relay_probe proxy_state=<listening|disabled|no_bind|no_allowlist|error> addr=<ip|none> port=<n> workspaces_populated=<0|1>
 #      Both hosts' rows carry CONTAINER_NAME 'soleur-web-platform'; the hosts differ by raw.host_name (soleur-web-platform =
-#      web-1, soleur-web-2 = web-2). The line sits at raw.message.msg (JSON-wrapped). The SQL pulls it out of the row
-#      (`extract(raw, 'relay_probe [^"\\]*')`, it ends at a quote or a backslash); the judge matches the WHOLE line against
-#      the closed grammar. Any other spelling (a new field, a reordered field, a new state, trailing text) is a malformed
+#      web-1, soleur-web-2 = web-2). The line sits at raw.message.msg (JSON-wrapped). The SQL filters on STRUCTURED fields
+#      (host_name, CONTAINER_NAME, startsWith(message.msg, 'relay_probe proxy_state=')) and selects the line FROM message.msg
+#      itself, never from a whole-row position()/extract() (a log line that merely echoes a probe sentence must not be able to
+#      become the newest row; the same filters as the shipped alerts in betterstack-logs-alerts.tf). The judge matches the
+#      WHOLE line against the closed grammar. Any other spelling (a new field, a reordered field, a new state, trailing text) is a malformed
 #      row, which refuses. GREEN needs ALL of: >= 2 rows in the last 180 s; the newest <= 120 s old; every in-window row
 #      well-formed, proxy_state=listening, addr=0.0.0.0 (the container wildcard; anything else, including `none`, is a
 #      mismatch), port 8443.
@@ -34,7 +36,12 @@
 #      allowlist, pinned TLS). It is emitted once per web-1 deploy, not per minute, so it is judged by the NEWEST row
 #      for web-2's state address from web-1 (host_name soleur-web-platform) within 24 h: GREEN iff that row is result=ok.
 #      No row, a malformed newest row, or any other result refuses. A refused/denied/tls/timeout newest row means: fix
-#      it, then redeploy web-1 (which re-probes) before dispatching.
+#      it, then redeploy web-1 (which re-probes) before dispatching. The peer SQL filters on SYSLOG_IDENTIFIER = 'ci-deploy' and
+#      startsWith(message, 'relay_peer_probe peer=<ip> '), and selects the line from that same field.
+#      ACCEPTED RESIDUAL (structural, not fixable here: no SSH at serve time): web-1's probe is journaled at web-1's deploy
+#      BEFORE it fans the deploy out to web-2, so it probes web-2's PREVIOUS container and cannot prove web-2's newest one.
+#      The fresh evidence is (1) web-2's own 60 s line and (3) the reverse probe written by web-2's own deploy. Operator
+#      practice: dispatch serve right after a release deploy so all three describe the same build.
 #
 #  (3) THE REVERSE DIRECTION (the same wrr_peer_judge, dialing host soleur-web-2). When the LB sends users to web-2,
 #      existing sessions are owned by web-1, so web-2's relay CLIENT must reach web-1:8443. web-2's own deploy journals
@@ -74,11 +81,12 @@ WRR_PEER_LIMIT=50
 # No output alias reuses a source column name (`dt`, `raw`).
 wrr_sql() {
   cat <<SQL
-SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, extract(raw, 'relay_probe [^"\\\\\\\\]*') AS line
+SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, JSONExtractString(raw,'message','msg') AS line
 FROM remote(\$BS_TABLE)
 WHERE dt > now() - INTERVAL ${WRR_WINDOW_S} SECOND
   AND JSONExtractString(raw,'host_name') = '${WRR_HOST_NAME}'
-  AND position(raw, 'relay_probe proxy_state=') > 0
+  AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+  AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_probe proxy_state=')
 ORDER BY dt DESC LIMIT ${WRR_LIMIT}
 FORMAT JSONEachRow
 SQL
@@ -139,11 +147,12 @@ wrr_peer_dir() {
 # Both arguments are validated by the caller (wrr_peer_fetch) before they reach the SQL text.
 wrr_peer_sql() {
   cat <<SQL
-SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, extract(raw, 'relay_peer_probe peer=[0-9.]+ [a-z_]+=[a-z_]+') AS line
+SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, JSONExtractString(raw,'message') AS line
 FROM remote(\$BS_TABLE)
 WHERE dt > now() - INTERVAL ${WRR_PEER_LOOKBACK_S} SECOND
   AND JSONExtractString(raw,'host_name') = '$1'
-  AND position(raw, 'relay_peer_probe peer=$2 ') > 0
+  AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'
+  AND startsWith(JSONExtractString(raw,'message'), 'relay_peer_probe peer=$2 ')
 ORDER BY dt DESC LIMIT ${WRR_PEER_LIMIT}
 FORMAT JSONEachRow
 SQL
