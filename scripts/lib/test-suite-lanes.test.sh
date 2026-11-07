@@ -120,20 +120,30 @@ fi
 # 5b. The star predicate (#12231): one tokenizer for the park and the conflict rule. `*` as any whitespace-separated word is a star
 #     (space, tab, newline-first-line like lane_tokens_conflict's read -ra); a token merely containing `*`, or an empty set, is not.
 h_ok=1
-lane_tokens_has_star "*" || h_ok=0
-lane_tokens_has_star "artifact:x *" || h_ok=0
-lane_tokens_has_star "* artifact:x" || h_ok=0
-lane_tokens_has_star $'artifact:x\t*' || h_ok=0
-lane_tokens_has_star "" && h_ok=0
-lane_tokens_has_star "artifact:x lock:y" && h_ok=0
-lane_tokens_has_star "a*b" && h_ok=0
-lane_tokens_has_star "artifact:*" && h_ok=0
-# and it agrees with lane_tokens_conflict on every set above (a star conflicts with any non-empty set; non-stars do not conflict with a disjoint one)
-for set in "*" "artifact:x *" "* artifact:x" $'artifact:x\t*'; do
-  lane_tokens_conflict "$set" "zzz:unrelated" || h_ok=0
-done
+star_row() {  # <expect star: 1|0> <set> — has_star must match AND lane_tokens_conflict must agree against an unrelated set
+  local want="$1" set="$2" got=0 conf=0
+  lane_tokens_has_star "$set" && got=1
+  lane_tokens_conflict "$set" "zzz:unrelated" && conf=1
+  lane_tokens_conflict "zzz:unrelated" "$set" && conf=$(( conf + 1 ))
+  if (( got != want )) || (( conf != want * 2 )); then
+    printf '  5b row wrong: set=%q want-star=%s has_star=%s conflict-hits=%s (want %s)\n' "$set" "$want" "$got" "$conf" "$(( want * 2 ))"
+    h_ok=0
+  fi
+}
+star_row 1 "*"
+star_row 1 "artifact:x *"
+star_row 1 "* artifact:x"
+star_row 1 $'artifact:x\t*'
+star_row 1 $'*\nartifact:x'          # a star on the first line is a star
+star_row 0 ""
+star_row 0 "artifact:x lock:y"
+star_row 0 "a*b"
+star_row 0 "artifact:*"
+star_row 0 "*x"                       # a token merely STARTING with * is not the star token
+star_row 0 "**"
+star_row 0 $'artifact:x\n*'          # read -ra reads the first line only: a later-line star is invisible to BOTH functions
 if (( h_ok == 1 )); then
-  pass "lane_tokens_has_star: a * word in any whitespace position is a star; a token containing * and an empty set are not; it agrees with lane_tokens_conflict"
+  pass "lane_tokens_has_star: a * word in any whitespace position (first line) is a star; a token containing or starting with * and an empty set are not; it agrees with lane_tokens_conflict row by row"
 else
   fail "lane_tokens_has_star contract violated"
 fi

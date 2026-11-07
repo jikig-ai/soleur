@@ -1,8 +1,0 @@
-name=t1 tree=e2f2b4c552 fifo=0
-loadavg_start=2.54 6.33 10.97
-2026-11-06T23:11:59Z
-foreign_test_all_start: none
----
-loadavg_end=2.62 5.08 7.99
-2026-11-06T23:46:47Z
-foreign_test_all_end: none

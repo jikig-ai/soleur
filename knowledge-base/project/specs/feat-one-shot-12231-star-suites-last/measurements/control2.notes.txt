@@ -1,8 +1,0 @@
-name=control2 tree=78fbd47b9a fifo=0
-loadavg_start=2.99 4.67 7.65
-2026-11-06T23:47:51Z
-foreign_test_all_start: none
----
-loadavg_end=6.24 5.71 6.32
-2026-11-07T00:23:36Z
-foreign_test_all_end: none

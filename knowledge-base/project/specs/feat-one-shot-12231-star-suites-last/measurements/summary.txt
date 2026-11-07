@@ -23,14 +23,14 @@ Method (a measurement method only; it bypasses nothing in a ship path). Script: 
 Faster (undisturbed) control = control2. t1 versus control2: pool phase -40 s, wall -57 s, idle slot-seconds -575. The first control is
 reported but is not the comparison: it was disturbed, and a disturbed control would flatter the treatment.
 
-Per-suite start and end offsets: `<reading>.suites.tsv`; timing rows: `<reading>.timing.tsv`; derived figures: `<reading>.derived.txt`.
+Per-suite start and end offsets: `<reading>.suites.tsv`; derived figures: `<reading>.derived.txt`. Kept for control2 and t1 only (the disturbed first control is a table row, its files are not kept; raw timing rows are not kept).
 
 ## What the readings show
 
 - The structural property holds in the T1 log: the one selected `*` suite (`scripts/test-all-capacity-signal`, about 6 s) launched with
   no other suite live, after the last non-`*` suite ended, and the run ended on it (+2072 s, wall +2081 s). In the controls it launched when
   no other suite was live as well (the pool had drained to its longest suite), and then every later registration waited behind it: counting
-  suites whose start is later than the star's start in `<reading>.suites.tsv`, 50 suites (954 slot-seconds) in control and 50 (827) in
+  suites whose start is later than the star's start in `<reading>.suites.tsv`, 50 suites (954 slot-seconds) in the disturbed control (file not kept) and 50 (827) in
   control2, none in t1.
 - Idle slot-seconds fell from 2003 (control2) to 1428 (t1), but that is a difference between two runs, not a measurement of what the park caused.
   The stranded drain behind the star (about 235 s of pool phase in control2, 269 s in control) is gone. Seconds with at most one suite live
@@ -60,7 +60,7 @@ Per-suite start and end offsets: `<reading>.suites.tsv`; timing rows: `<reading>
 
 ## Guard 1 mutants (scheduler contract), one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`
 
-Control (unmutated runner): 80 passed, 0 failed. Every mutant below turned the suite red; reds = failed assertions.
+Control (unmutated runner): 80 passed, 0 failed at the time of the table (the suite has grown since). Every mutant below turned the suite red; reds = failed assertions. The mutants were one-off edits and no script is kept.
 
 | # | Edit | Result | Arms that went red |
 |---|------|--------|--------------------|

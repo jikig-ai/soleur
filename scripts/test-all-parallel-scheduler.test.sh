@@ -44,7 +44,7 @@ REPO_ROOT="$(pwd)"
 export REPO_ROOT
 
 PASSES=0; FAILURES=0
-MIN_PASSES_FLOOR=84   # the full green count; raise it in the same edit that adds an arm
+MIN_PASSES_FLOOR=85   # the full green count; raise it in the same edit that adds an arm
 pass() { PASSES=$((PASSES + 1)); printf '[pass] %s\n' "$1"; }
 fail() { FAILURES=$((FAILURES + 1)); printf '[FAIL] %s\n' "$1"; }
 dump() { sed 's/^/    /' <<<"${1:-}"; }
@@ -1008,10 +1008,10 @@ rm -f "$FIXTURES/conflict.count"
 run_arm many 4 || true
 CC="$(wc -c < "$FIXTURES/conflict.count" 2>/dev/null || echo 0)"
 MANY_LAST="$(run_pos ok59 "done")"; MANY_STAR="$(run_pos starS started)"
-if [[ "$ARM_RC" == "0" ]] && (( CC > 0 )) && (( CC <= 90 )); then
-  pass "A10 — the fill pass stays bounded: $CC lane_tokens_conflict calls for 61 suites (ceiling 90: one per queued suite, and a parked * adds none)"
+if [[ "$ARM_RC" == "0" ]] && (( CC > 0 )) && (( CC <= 61 )); then
+  pass "A10 — the fill pass stays bounded: $CC lane_tokens_conflict calls for 61 suites (ceiling 61: exactly one per queued suite, and a parked * adds none; 60 observed)"
 else
-  fail "A10 — conflict-call count $CC outside (0, 90] or rc=$ARM_RC"
+  fail "A10 — conflict-call count $CC outside (0, 61] or rc=$ARM_RC"
 fi
 if [[ -n "$MANY_LAST" && -n "$MANY_STAR" ]] && (( MANY_LAST < MANY_STAR )); then
   pass "A10 — 60 suites registered behind a * all finish before the * starts"
@@ -1072,6 +1072,41 @@ if ! grep -q '\[parallel\] mode engaged' <<<"$NL_OUT"; then
   pass "A6 — the lock-not-held run never went wide"
 else
   fail "A6 — lock-not-held run engaged parallel anyway"
+fi
+
+# stale-lib arm (#12231): a lane lib that has lane_tokens_for but not lane_tokens_has_star must take the NAMED serial
+# fallback, not engage pooled mode with every job parked as a star.
+sb_stale="$TMP/runner-stalelib.sh"
+cp "$TARGET" "$sb_stale"
+python3 - "$sb_stale" "$FIXTURES" <<'PY'
+import sys, re
+path, fixtures = sys.argv[1:3]
+s = open(path).read()
+a = 'tc_acquire "test-all"'
+b = 'tc_epilogue "${_TC_RUN_START_ENTRIES:-0}"'
+assert s.count(a) == 1 and s.count(b) == 1
+i = s.index(a) + len(a); j = s.index(b)
+body = '''
+declare -gA _SESSION_LOCK_ACQUIRED 2>/dev/null || true
+_SESSION_LOCK_ACQUIRED[test-all]=1
+_pj_lock_held=1
+unset -f lane_tokens_has_star
+_pj_resolve_run_mode
+run_suite "okfixture" bash "''' + fixtures + '''/ok.sh"
+_pj_drain
+'''
+s = s[:i] + body + s[j:]
+s = s.replace(a, 'true "test-all"  # sandbox: lock neutered', 1)
+s = re.sub(r'^tc_preamble\b.*$', 'true  # sandbox: preamble neutered', s, count=1, flags=re.M)
+open(path, 'w').write(s)
+PY
+SL_OUT=$(cd "$REPO_ROOT" && env -u CI SOLEUR_SUBAGENT= SOLEUR_ALLOW_FULL_GATE= \
+        TEST_TIMING_LOG=/dev/null TEST_GROUP=all SOLEUR_TEST_JOBS=8 \
+        timeout 60 bash "$sb_stale" 2>&1) || true
+if grep -q 'serial fallback — reason=lane-table-unavailable' <<<"$SL_OUT" && ! grep -q '\[parallel\] mode engaged' <<<"$SL_OUT"; then
+  pass "A6 — a lane lib without lane_tokens_has_star falls back to serial with the named banner (never an all-parked pool)"
+else
+  fail "A6 — stale-lib run did not take the lane-table-unavailable fallback"; dump "$SL_OUT"
 fi
 
 # jobs validation: malformed values exit 2. The `|| RC=$?` shape is required —

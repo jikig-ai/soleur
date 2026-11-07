@@ -1027,7 +1027,7 @@ Consequences, recorded:
   The `*` suites include an always-on ratchet (`scripts/test-all-capacity-signal`), which a late kill now guarantees is unevaluated locally.
 - The runtime ceiling is checked at registration only, so a star registered before it lapses still starts at the end of the run.
 - A reap fill that runs after the interrupt flag is set can release a parked star; `_pj_drain`'s signal branch then TERMs it, as for any suite. No
-  `_pj_sig` conjunct was added (CTO ruling); a signal that lands before the drain launches nothing.
+  `_pj_sig` conjunct was added (CTO ruling); a signal that lands before the drain releases no parked star.
 - Evidence and open residuals: `knowledge-base/project/specs/feat-one-shot-12231-star-suites-last/measurements/summary.txt`. On the pinned diff (one selected `*`
   suite) the park moved the pool phase by 40 s against the clean control, inside the run-to-run spread, where the #12013 amendment modelled about 300 s; the
   gain is not resolved on that diff, and the property is carried by the scheduler fixtures and the mutant table. The sixth declared `*` suite,

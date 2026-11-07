@@ -2230,7 +2230,7 @@ _pj_resolve_run_mode() {
     _pj_say_serial "bash<5.1 (wait -n -p unavailable)"; return 0
   fi
   if [[ "$want" != "auto" ]] && (( 10#$want == 1 )); then return 0; fi  # explicit serial, silent
-  if ! declare -F lane_tokens_for >/dev/null 2>&1; then
+  if ! declare -F lane_tokens_for >/dev/null 2>&1 || ! declare -F lane_tokens_has_star >/dev/null 2>&1; then
     _pj_say_serial "lane-table-unavailable (scripts/lib/test-suite-lanes.sh)"; return 0
   fi
   if (( _pj_lock_held != 1 )); then
@@ -2382,7 +2382,7 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
   for idx in "${_pj_queue[@]}"; do
     if (( _pj_live_n >= _pj_jobs )); then rest+=("$idx"); continue; fi
     tok="${_pj_tok[idx]}"; ok=1
-    if (( ${_pj_star[idx]:-0} == 1 )); then
+    if (( ${_pj_star[idx]:-1} == 1 )); then
       rest+=("$idx"); continue   # parked until the drain (see the comment above)
     fi
     lane_tokens_conflict "$tok" "$live_tok" && ok=0
@@ -2479,9 +2479,8 @@ _pj_submit() {  # _pj_submit <label> <argv...> — the run_suite dispatch under 
   _pj_label[idx]="$label"
   _pj_state[idx]=queued
   _pj_tok[idx]="$(lane_tokens_for "$label" "$@" 2>/dev/null || printf '*')"
-  # Fail closed: an unavailable predicate makes the job a star (parked, then run alone), never an independent.
-  _pj_star[idx]=0
-  if ! declare -F lane_tokens_has_star >/dev/null 2>&1 || lane_tokens_has_star "${_pj_tok[idx]}"; then _pj_star[idx]=1; fi
+  # The predicate's presence is checked once, by _pj_resolve_run_mode (lane-table-unavailable falls back to serial).
+  if lane_tokens_has_star "${_pj_tok[idx]}"; then _pj_star[idx]=1; else _pj_star[idx]=0; fi
   local enc=""
   printf -v enc '%q ' "$@"
   _pj_argvs[idx]="$enc"

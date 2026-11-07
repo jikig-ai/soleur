@@ -287,9 +287,9 @@ lane_tokens_conflict() {
   return 1
 }
 
-# lane_tokens_has_star <set> — exit 0 when the token set contains the `*` token. The ONE predicate for "is this a
-# drain-barrier suite": it tokenizes exactly as lane_tokens_conflict does (read -ra: any whitespace, first line), so
-# the scheduler's park decision and the conflict rule cannot disagree about what a star is (#12231).
+# lane_tokens_has_star <set> — exit 0 when the token set contains the `*` token. The scheduler's "is this a
+# drain-barrier suite" test: it tokenizes as lane_tokens_conflict does (read -ra: any whitespace, first line only), so
+# the park decision and the conflict rule agree about what a star is. The agreement is pinned by test section 5b (#12231).
 lane_tokens_has_star() {
   local -a _T
   read -ra _T <<<"$1"

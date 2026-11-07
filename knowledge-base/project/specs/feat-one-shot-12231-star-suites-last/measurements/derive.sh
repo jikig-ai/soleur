@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # derive.sh <name> — figures from a reading's stamped log (/var/tmp/m12231/<name>/run.log). Also writes
-# /var/tmp/m12231/<name>/suites.tsv (label, start_s, end_s, rc; no header). The committed <name>.suites.tsv, .timing.tsv and
-# .notes.txt in this directory were copied from there by hand (suites.tsv with a header row added).
+# /var/tmp/m12231/<name>/suites.tsv (label, start_s, end_s, rc; no header). The committed <name>.suites.tsv (control2, t1) was
+# copied from there by hand (with a header row added). The disturbed first control's files and the raw timing rows are not kept.
 O=/var/tmp/m12231/${1:?usage: derive.sh <name>}; L=$O/run.log
 wall=$(tail -1 "$L" | awk '{print int($1)}')
 eng=$(grep -m1 '\[parallel\] mode engaged' "$L" | awk '{print int($1)}')
