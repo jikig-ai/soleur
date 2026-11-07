@@ -13,6 +13,23 @@ lane: cross-domain
 brand_survival_threshold: aggregate pattern
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-07
+**Sections enhanced:** Research Insights (empirical fixture measurements), Phase 2 / Phase 3 conversion rules, Sharp Edges.
+**Agents and checks used:** CTO ruling rounds (Forks 1-7), plan-review panel (DHH, Kieran, code-simplicity, CTO devex lens), sharp-edges verification agent, learnings researcher, and a scratch-repo measurement of every shell construct the plan prescribes (below).
+
+### Key improvements
+
+1. Every prescribed construct was run against a real scratch repo (six specially named files, a rename-away, a config-hidden gitlink) instead of being asserted: the measured outputs are in `### Deepen-pass measurements`.
+2. The `--literal-pathspecs` rationale is corrected (it prevents over-matching and pathspec magic; it is not what makes the raw name work).
+3. A new invariant for the flag appends: the flag goes at the END of each read's argv, because the existing failure-injection shims match on an argv substring.
+
+### New considerations discovered
+
+- `infra-validation.yml` `dirs` and `ci.yml` `filter` have no `set -o pipefail` line at all (verified by parsing the YAML), so the scoped `set -o pipefail;` inside the capture is load-bearing there, and the other four converted steps already carry step-level pipefail.
+- This shell's `grep` is a wrapper function, which is why the plan insists on `grep --null-data` over short `-z` and keeps the match mode out of any pipe.
+
 ## Overview
 
 Issue #12332 is the deferred sweep from PR #12326. That PR rebuilt the changed-path list in `plugins/soleur/skills/ship/scripts/battery-owed.sh`
@@ -78,6 +95,31 @@ shape (`.claude/hooks/brand-hex-commit-gate.sh`, `plugins/soleur/scripts/resolve
 | Separate `changed-paths.test.sh` suite | P5 | Cut (Fork 7f): folded into the one new suite. |
 | Sentinel over hooks and top-level `scripts/` | P6 | Cut (Fork 7h): about twenty unconverted sites; replaced by a pinned must-keep-`-z` list. |
 | Effective-shell resolver in the harness | P4 | Cut (Fork 7e): plain `bash -e {0}` is the weakest shell. |
+
+### Deepen-pass measurements
+
+Scratch repo under the session scratchpad (unique name `deepen-12332-fixture`): a base commit with `apps/web-platform/infra/keep.tf`, a branch that renames it to
+`docs/keep.tf`, adds a gitlink `apps/web-platform/infra/sm` whose committed `.gitmodules` carries `ignore = all`, and adds six names under `apps/web-platform/infra/`
+(`é2.tf`, `tab<TAB>two.tf`, `q"uote2.tf`, `back\slash2.tf`, `glob[1].tf`, `globX.tf`). Measured with git 2.56:
+
+| Construct | Measured result | What it settles |
+|---|---|---|
+| plain `git diff --name-only origin/main...HEAD` piped to `grep -cE '^apps/web-platform/infra/'` | 2 of 6 special names match; the four others print C-quoted (`"apps/web-platform/infra/q\"uote2.tf"`, `\303\2512.tf`, `tab\ttwo.tf`, `back\\slash2.tf`) | C-quoting is a live miss for `^`-anchored regexes |
+| the same with `-c core.quotePath=false` | `é2.tf` prints raw, but tab, `"` and `\` stay quoted | confirms the issue's note: `core.quotePath=false` is not a fix |
+| `git diff -z --no-renames --ignore-submodules=none --name-only ... \| tr '\0' '\n'` | 6 of 6 match; the old path `apps/web-platform/infra/keep.tf` and the gitlink `apps/web-platform/infra/sm` are both listed | the construction fixes quoting, rename-away and the config-hidden gitlink together |
+| plain diff on the same range | lists only `docs/keep.tf` (not the old path) and hides `infra/sm` | rename-away and the gitlink are invisible without the flags |
+| `if ! C=$(set -o pipefail; git diff -z ... nosuchref...HEAD \| tr '\0' '\n'); then` | takes the fail arm | scoped pipefail fails closed |
+| the same under `bash -e -c` with NO pipefail | takes the success arm (fail-open) | confirms why every converted site needs the scoped pipefail |
+| per-file re-diff with the C-quoted string as the pathspec (the `ship-runbook-ssh-gate.sh` shape) | 0 added lines for `q"uote2.tf` | confirms the gate would pass an ssh step in a non-ASCII or quoted runbook name |
+| `mapfile -d '' -t` over the `-z` list, then `git --literal-pathspecs diff -- "$f"` | the raw name reaches git; `glob[1].tf` re-diffs to its own 1 added line | the raw-name loop works; `--literal-pathspecs` guards against glob magic matching sibling files (over-match), it is not what makes the raw name resolve |
+| `git diff -z ... --diff-filter=ACMR`, `grep --null-data -E '^apps/web-platform/infra/[^/]*\.tf$' > list \|\| [ $? -eq 1 ]`, then `xargs -0 -a list printf '[%s]\n'` | all six names arrive intact, including `q"uote2.tf` and `back\slash2.tf` | the secret-scan selection chain is sound end to end |
+| `grep --null-data -E '^zzz'` on a NUL-delimited stream with no match | exit 1 | `\|\| [ $? -eq 1 ]` tolerates only "no match" |
+| `xargs -a list.nl` on a newline list holding `q"uote.tf` | `xargs: unmatched double quote` | confirms the `xargs -0` requirement |
+
+Existing failure-injection shims match on an argv SUBSTRING: `ship-battery-refusal-wait.test.sh` line `[[ -n "${FAIL_GIT_MATCH:-}" && "$*" == *"$FAIL_GIT_MATCH"* ]]` with the
+scenarios `scn_gf_a` (`diff --name-only HEAD`) and `scn_gf_b` (`diff --name-status -M HEAD`). Appending the flag at the END of each read's argv keeps those substrings intact;
+inserting it between `diff` and `--name-only` would silently turn the existing failure rows vacuous. `test-all-pr-battery-gate.test.sh` instead uses an END-anchored glob
+(`*"diff --name-only HEAD") exit 128`), which an append DOES break, so that one glob is widened in the same commit.
 
 **Learnings applied.** The #12326 learning (enumerate every consumer; `cmd | grep -c || true` collapses failure into `0`; capture the producer
 first); `2026-10-14-c-quoted-names-evade-extension-anchored-list-filters` (`core.quotePath=false` covers only bytes at or above 0x80);
@@ -172,6 +214,8 @@ suites that extract these steps are updated in the same commit: `plugins/soleur/
   Tests in `ship-battery-refusal-wait.test.sh`: add an argv-recording git shim scenario per read that fails any `diff` invocation lacking `--ignore-submodules=none`
   (a fixture alone cannot kill one read, because a sibling read still shows the gitlink: committed gitlinks are seen by reads 1 and 4, worktree ones by 2 and 3), plus one defensive fixture
   (local `diff.ignoreSubmodules=all`, gitlink under `apps/web-platform/infra/`, expect `infra`), reusing the existing `scn_gitfail` shim pattern.
+- Invariant for both flag appends (`battery-refusal-wait.sh` and `test-all.sh`): put the flag at the END of each read's argv, after the revision argument, so the existing
+  substring failure-injection rows (`diff --name-only HEAD`, `diff --name-status -M HEAD`) still match; see `### Deepen-pass measurements`.
 - `scripts/test-all.sh`: append `--ignore-submodules=none` to the six reads, inside the pinned text. Re-derive the pins by grep and run the four named suites FIRST; edit only the ones that go red.
   Known pins: `staged_anchor` in `test-all-affected.test.sh` (pins through `-M 2>/dev/null || true)"`); the `rename-sources-dropped` mutant strings in `test-all-pr-battery-gate.test.sh`;
   the `*"diff --name-only HEAD") exit 128` shim glob in `test-all-pr-battery-gate.test.sh` (end-anchored: appended flags make it never fire, so the `headfail` row would go vacuous; widen the glob);

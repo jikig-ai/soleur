@@ -26,6 +26,7 @@ Commit order keeps each commit green; accept rows go in the last commit. `git ad
 
 ## Phase 3: Non-workflow readers
 
+- 3.0 Invariant: append each flag at the END of the read's argv (existing substring shims match `diff --name-only HEAD`, `diff --name-status -M HEAD`).
 - 3.1 `battery-refusal-wait.sh`: append `--ignore-submodules=none` to four reads; header sentence; argv-shim scenario per read plus one defensive fixture in `ship-battery-refusal-wait.test.sh`.
 - 3.2 `scripts/test-all.sh`: append `--ignore-submodules=none` to six reads; run the four pin suites first and fix only the red pins (`staged_anchor`, `rename-sources-dropped`, the end-anchored `exit 128` shim glob, notice regex); add argv-shim scenarios to the infra-notice suite.
 - 3.3 `ship-cmo-content-gate.sh` (`-z`), `ship-runbook-ssh-gate.sh` (`mapfile -d ''`, raw-name re-diff, `--literal-pathspecs`), `check-backstop-revision.sh` (`--no-renames`), each with suite rows.
