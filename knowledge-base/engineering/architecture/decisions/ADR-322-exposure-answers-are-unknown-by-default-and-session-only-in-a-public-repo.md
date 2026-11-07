@@ -66,7 +66,7 @@ not close it.
 
 - **Enforcement covers this skill's own writes only.** `fix`, `compound` and `ship` hold no exposure table and are not constrained
   by it; the hand-off payload is the only thing that reaches them. A lint over `knowledge-base/**` that rejects a CVE id paired
-  with "not affected" is the cross-skill backstop; it is a tracked follow-up filed with this change, not delivered here.
+  with "not affected" is the cross-skill backstop; it is a tracked follow-up (#12348) filed with this change, not delivered here.
 - **Public residual.** Even the single status discloses that Soleur may be exposed to a named CVE. That is bounded by dedupe (one
   issue per CVE), draft-by-default, the explicit-yes gate, and the exploitation gate: with any evidence of exploitation the skill
   files nothing public and hands off to the breach-triage path. The skill never decides that a breach occurred.
