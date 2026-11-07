@@ -501,15 +501,13 @@ if [[ "${1:-}" != "secrets" || "${2:-}" != "get" ]]; then
 fi
 name="${3:-}"
 printf '%s\n' "$name" >> "${STUB_DOPPLER_LOG:-/dev/null}"
+# #9294: the webhook trio is the Tier-B loader's env export, never a doppler read, so the ONLY name the
+# body may still ask doppler for is APP_DOMAIN_BASE (a trio name here is exit 64, which reds the case).
 case "$name" in
-  APP_DOMAIN_BASE|WEBHOOK_DEPLOY_SECRET|CF_ACCESS_CLIENT_ID|CF_ACCESS_CLIENT_SECRET|\
-  CI_SSH_ACCESS_TOKEN_ID|CI_SSH_ACCESS_TOKEN_SECRET) ;;
+  APP_DOMAIN_BASE) ;;
   *) echo "doppler-stub: unexpected secret name '$name'" >&2; exit 64 ;;
 esac
-[[ "$name" == "APP_DOMAIN_BASE" ]] && { echo "example.test"; exit 0; }
-# A case may make ONE secret unusable (a value outside the token alphabet) to drive the refusal arm.
-[[ -n "${STUB_DOPPLER_BAD:-}" && "$name" == "$STUB_DOPPLER_BAD" ]] && { echo "bad value"; exit 0; }
-echo "stub-secret-value"
+echo "example.test"
 EOS
   # SLEEP IS RECORDED, NOT JUST SUPPRESSED (#7104 PR-B review).
   #
@@ -538,7 +536,7 @@ EOS
 # `--noproxy '*'`) is missing.
 out=""
 prev=""
-have_w=0; have_maxtime=0; have_sig=0; have_url=0; have_cfg=0; have_noproxy=0; sigval=""; url=""
+have_w=0; have_maxtime=0; have_sig=0; have_url=0; have_cfg=0; have_noproxy=0; sigval=""; url=""; idval=""; secval=""
 first="${1:-}"
 for a in "$@"; do
   [[ "$prev" == "-o" ]] && out="$a"
@@ -559,6 +557,8 @@ while IFS= read -r line; do
   if [[ "$line" == 'header = "X-Signature-256: '* ]]; then
     have_sig=1; sigval="${line#header = \"X-Signature-256: }"; sigval="${sigval%\"}"
   fi
+  [[ "$line" == 'header = "CF-Access-Client-Id: '* ]] && { idval="${line#header = \"CF-Access-Client-Id: }"; idval="${idval%\"}"; }
+  [[ "$line" == 'header = "CF-Access-Client-Secret: '* ]] && { secval="${line#header = \"CF-Access-Client-Secret: }"; secval="${secval%\"}"; }
 done <<<"$cfg"
 if [[ "$first" != "--disable" || "$have_noproxy" -ne 1 || "$have_cfg" -ne 1 ]]; then
   echo "curl-stub: transport confinement missing (first='${first}' noproxy=$have_noproxy config-stdin=$have_cfg)" >&2
@@ -582,6 +582,14 @@ if [[ "$url" != https://deploy.*/hooks/infra-config-status ]]; then
   echo "curl-stub: status URL is '${url}', expected https://deploy.<domain>/hooks/infra-config-status" >&2
   exit 64
 fi
+# The signature must be the HMAC of the (empty) request body under WEBHOOK_DEPLOY_SECRET, not under another
+# trio member (#9294: the key is the loader's env now, so a swapped variable is the new wrong-secret mutant).
+# Logged rather than refused, so only the row that names this property (I6c) reds on a mismatch.
+expsig="$(printf '' | HMAC_KEY="${WEBHOOK_DEPLOY_SECRET:-}" python3 -I -c 'import hashlib,hmac,os,sys;sys.stdout.write(hmac.new(os.environb.get(b"HMAC_KEY"),sys.stdin.buffer.read(),hashlib.sha256).hexdigest())')"
+if [[ "${sigval#sha256=}" == "$expsig" ]]; then echo "sig=match" >> "${STUB_SIG_LOG:-/dev/null}"; else echo "sig=mismatch" >> "${STUB_SIG_LOG:-/dev/null}"; fi
+# The Access pair must arrive as the id header carrying CF_ACCESS_CLIENT_ID and the secret header carrying CF_ACCESS_CLIENT_SECRET
+# (distinct stub values: a swapped pair, or one header dropped, is otherwise invisible). Logged for I6c.
+echo "cfid=${idval} cfsec=${secval}" >> "${STUB_CF_LOG:-/dev/null}"
 printf '%s\n' "$url" >> "${STUB_CURL_LOG:-/dev/null}"
 [[ -n "${STUB_FRAME:-}" ]] && cp "$STUB_FRAME" "$out"
 printf '%s' "${STUB_HTTP_CODE:-200}"
@@ -654,6 +662,9 @@ drive_pass2() { # $1 frame, $2 GITHUB_OUTPUT, $3 baseline, $4 apply_start_epoch,
     [[ -n "${6:-}" ]] && export REPUSH_START_EPOCH="$6"
     bash ./infra-config-verify.sh > "$5" 2>&1 )
 }
+
+# The Tier-B loader step's job: the trio arrives as env. A case makes one unusable by overriding it.
+export WEBHOOK_DEPLOY_SECRET="stub-webhook-key" CF_ACCESS_CLIENT_ID="stub-cf-id-value" CF_ACCESS_CLIENT_SECRET="stub-cf-secret-value"
 
 mkstubs
 STALE="$I_TMP/stale.json"; MOVED="$I_TMP/moved.json"
@@ -803,12 +814,12 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   # the stub contract is enforced only by `exit 64`, which proves the required flags were
   # PRESENT and says nothing about whether the host, the secret names or the retry budget were
   # the intended ones.
-  SL="$I_TMP/sleep.log"; DL="$I_TMP/doppler.log"; CL="$I_TMP/curl.log"
-  : > "$SL"; : > "$DL"; : > "$CL"
+  SL="$I_TMP/sleep.log"; DL="$I_TMP/doppler.log"; CL="$I_TMP/curl.log"; SIGL="$I_TMP/sig.log"; CFL="$I_TMP/cf.log"
+  : > "$SL"; : > "$DL"; : > "$CL"; : > "$SIGL"; : > "$CFL"
   o9="$I_TMP/o9"; : > "$o9"
   ( cd "$SCRIPT_DIR" || exit 99
     export PATH="$I_TMP/bin:$PATH" STUB_FRAME="$MOVED" STUB_HTTP_CODE=200
-    export STUB_SLEEP_LOG="$SL" STUB_DOPPLER_LOG="$DL" STUB_CURL_LOG="$CL"
+    export STUB_SLEEP_LOG="$SL" STUB_DOPPLER_LOG="$DL" STUB_CURL_LOG="$CL" STUB_SIG_LOG="$SIGL" STUB_CF_LOG="$CFL"
     export INFRA_CONFIG_STATUS_RESPONSE="$I_TMP/status-argv-$$.json"
     export GITHUB_OUTPUT="$o9" VERIFY_PASS=1 ALLOW_MISSING_STATUS=false
     export DPF_REPLACED=true APPLY_START_EPOCH=1
@@ -828,12 +839,15 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   else
     fail "#7104 I6b: $n_sleep sleep(s) on a first-attempt success (expected exactly 1): $(tr '\n' ' ' < "$SL")"
   fi
-  # The signing secret's NAME. A body that read the wrong secret would sign with the wrong key
-  # and 401 in production, while a name-agnostic stub kept every case green.
-  if grep -qx 'WEBHOOK_DEPLOY_SECRET' "$DL"; then
-    pass "#7104 I6c: the body reads WEBHOOK_DEPLOY_SECRET by name (the signing key is pinned, not just 'some secret')"
+  # The trio is the loader's env, never a doppler read (#9294): the only secret the body may request
+  # from doppler is APP_DOMAIN_BASE (and it must, or the host would be hardcoded), and the request is
+  # signed with WEBHOOK_DEPLOY_SECRET itself and carries the Access pair id-as-id / secret-as-secret, not another trio member (a wrong-but-real key 401s in
+  # production while every presence-only check stays green).
+  if [[ -s "$DL" ]] && ! grep -qvx 'APP_DOMAIN_BASE' "$DL" && [[ -s "$SIGL" ]] && ! grep -qvx 'sig=match' "$SIGL" \
+     && [[ -s "$CFL" ]] && ! grep -qvx 'cfid=stub-cf-id-value cfsec=stub-cf-secret-value' "$CFL"; then
+    pass "#7104 I6c: doppler is asked only for APP_DOMAIN_BASE and the request is signed with WEBHOOK_DEPLOY_SECRET (the signing key is pinned by value, not just 'some secret')"
   else
-    fail "#7104 I6c: WEBHOOK_DEPLOY_SECRET was never requested (secrets read: $(tr '\n' ' ' < "$DL")). The request would be signed with the wrong key."
+    fail "#7104 I6c: doppler read: $(tr '\n' ' ' < "$DL"); signature checks: $(tr '\n' ' ' < "$SIGL"). The trio must come from the Tier-B loader's env and the HMAC must use WEBHOOK_DEPLOY_SECRET."
   fi
   # The HOST. The stub's URL check enforces the deploy.<domain> shape; this pins that the
   # domain came from APP_DOMAIN_BASE rather than being hardcoded to something else.
@@ -1018,7 +1032,7 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
   # and a ::error:: that disclaims a listener outage, makes ZERO requests, and never emits a verdict.
   for badname in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
     o12="$I_TMP/o12-$badname"; : > "$o12"; l12="$I_TMP/l12-$badname"; : > "$l12"
-    rc12=0; ( export STUB_DOPPLER_BAD="$badname" STUB_CURL_LOG="$I_TMP/curl12-$badname"; drive 1 "$STALE" "$o12" "" "$l12" ) || rc12=$?
+    rc12=0; ( export "$badname=bad value" STUB_CURL_LOG="$I_TMP/curl12-$badname"; drive 1 "$STALE" "$o12" "" "$l12" ) || rc12=$?
     cr12=$(grep -c '^credential_refused=true$' "$o12" || true)
     vd12=$(grep -c '^verdict=' "$o12" || true)
     mk12=$(grep -c '^SOLEUR_CREDENTIAL_REFUSED script=infra-config-verify reason=token_shape$' "$l12" || true)
@@ -1028,6 +1042,18 @@ if mkframe 1000 "$STALE" && mkframe 3000 "$MOVED"; then
       pass "#9597 I12: an unusable $badname is REFUSED before any request (rc!=0, credential_refused=true, marker once, no verdict, value not echoed)"
     else
       fail "#9597 I12/$badname: rc=$rc12 credential_refused=$cr12 verdict-lines=$vd12 marker=$mk12 disclaimer=$ls12 value-echo=$leak12 curl-called=$([[ -e "$I_TMP/curl12-$badname" ]] && echo yes || echo no)"
+    fi
+  done
+  # --- I13 (#9294): a trio name the Tier-B loader did not export is a refusal, never a prd_terraform read ---
+  # Unset (not merely unusable) means the job never passed the Tier-B seam. The body must stop before any
+  # request and say which name was missing; with the old fallback it would have read prd_terraform instead.
+  for gone in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
+    o13="$I_TMP/o13-$gone"; : > "$o13"; l13="$I_TMP/l13-$gone"; : > "$l13"
+    rc13=0; ( unset "$gone"; export STUB_CURL_LOG="$I_TMP/curl13-$gone"; drive 1 "$STALE" "$o13" "" "$l13" ) || rc13=$?
+    if [[ "$rc13" -ne 0 ]] && grep -qF "Tier-B loader exported no $gone" "$l13" && [[ ! -e "$I_TMP/curl13-$gone" ]]; then
+      pass "#9294 I13: $gone absent from the env stops the body before any request, naming the Tier-B loader (no prd_terraform fallback)"
+    else
+      fail "#9294 I13/$gone: rc=$rc13 named=$(grep -cF "Tier-B loader exported no $gone" "$l13" || true) curl-called=$([[ -e "$I_TMP/curl13-$gone" ]] && echo yes || echo no)"
     fi
   done
 else
@@ -1047,6 +1073,7 @@ fi
 # unmutated control and three mutants: a second python3, a one-byte change to the line, openssl put back).
 # 48 -> 52 (round 2): the scanner-independent interpreter-word pin (a direct grep row over the real file, plus three mutants the
 # scanner cannot see: `X=1 perl -e`, `K=1 python -c`, a `$(printf '' | K=1 perl ...)` stage).
+# 52 -> 55 (#9294): I13, one fail-closed row per trio name the Tier-B loader did not export (no prd_terraform fallback).
 echo ""
 echo "  $PASS passed, $FAIL failed"
 close_stdout_capture
@@ -1101,7 +1128,7 @@ else
   exit 1
 fi
 
-VERIFY_MIN_ASSERTIONS=52
+VERIFY_MIN_ASSERTIONS=55
 if [[ "$PASS" -lt "$VERIFY_MIN_ASSERTIONS" ]]; then
   printf '  FAIL: assertion-count floor: only %d assertions ran, expected >= %d — arms were deleted or skipped\n' \
     "$PASS" "$VERIFY_MIN_ASSERTIONS" >&2
