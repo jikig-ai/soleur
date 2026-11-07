@@ -20,7 +20,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { KEY_RE, TEXTS_DIR, getLegalText, loadLegalTexts } from "@/server/legal-acceptance/canonical";
 import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
 import { REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
-import { stripSqlComments } from "../helpers/sql-lex";
+import { lexSql } from "../helpers/sql-lex";
 import { FORBIDDEN_CLAIMS } from "./forbidden-claims";
 
 const KEY = "founder-acceptance-record";
@@ -29,9 +29,12 @@ const migrationFiles = (): string[] => readdirSync(MIGRATIONS).filter((f) => f.e
 const M184 = readFileSync(path.join(MIGRATIONS, "184_legal_acceptance.sql"), "utf8");
 const M185 = readFileSync(path.join(MIGRATIONS, "185_legal_acceptance_ack.sql"), "utf8");
 
+/** SQL with comments and single-quoted literals blanked (double-quoted identifiers kept). */
+const sqlCode = (sql: string): string => lexSql(sql).map((t) => (t.kind === "lit" && t.text.startsWith("'") ? " " : t.text)).join("");
+
 /** Column names of `CREATE TABLE ... <table> (...)`: comments stripped, balanced-paren body, first word of each top-level item, constraints skipped. */
 function tableColumns(sql: string, table: string): string[] {
-  const code = stripSqlComments(sql);
+  const code = sqlCode(sql);
   const m = new RegExp(`create\\s+table\\s+(?:if\\s+not\\s+exists\\s+)?(?:public\\.)?${table}\\s*\\(`, "i").exec(code);
   if (!m) return [];
   let depth = 1;
@@ -55,11 +58,11 @@ function tableColumns(sql: string, table: string): string[] {
     .sort();
 }
 
-/** Migrations whose ALTER TABLE changes a column of either table (add, drop, rename, alter column): any such change forces a review of the stored-fields list. RLS and trigger ALTERs are not column changes. */
+/** Migrations whose ALTER TABLE changes a column of either table (add, drop, rename, alter column): any such change forces a review of the stored-fields list. RLS, trigger and constraint ALTERs are not column changes. */
 function alteringMigrations(files: Record<string, string>): string[] {
   return Object.entries(files)
     .filter(([, sql]) =>
-      /alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:public\.)?"?legal_acceptance(?:_ack)?"?\s+(?:add|drop|rename|alter)\b/i.test(stripSqlComments(sql)),
+      /alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:"?public"?\.)?"?legal_acceptance(?:_ack)?"?\s+(?:add|drop|rename|alter)\s+(?!constraint\b)/i.test(sqlCode(sql)),
     )
     .map(([f]) => f)
     .sort();
@@ -190,7 +193,8 @@ describe("founder-acceptance-record: what the text says", () => {
     const sql = "CREATE TABLE IF NOT EXISTS public.t (\n  id uuid PRIMARY KEY,\n  amount numeric(10, 2) NOT NULL, -- other_col text\n  at timestamp with time zone,\n  CONSTRAINT c CHECK (amount > 0),\n  UNIQUE (id, at)\n);";
     expect(tableColumns(sql, "t")).toEqual(["amount", "at", "id"]);
     expect(tableColumns(sql, "missing")).toEqual([]);
-    expect(alteringMigrations({ "190_x.sql": "ALTER TABLE public.legal_acceptance ADD COLUMN extra text;", "191_y.sql": "alter table legal_acceptance_ack drop column acked_at;", "192_z.sql": "ALTER TABLE other ADD COLUMN a int; -- ALTER TABLE legal_acceptance ADD x", "193_w.sql": "ALTER TABLE public.legal_acceptance ENABLE ROW LEVEL SECURITY;" })).toEqual(["190_x.sql", "191_y.sql"]);
+    expect(alteringMigrations({ "190_x.sql": "ALTER TABLE public.legal_acceptance ADD COLUMN extra text;", "191_y.sql": "alter table legal_acceptance_ack drop column acked_at;", "192_z.sql": "ALTER TABLE other ADD COLUMN a int; -- ALTER TABLE legal_acceptance ADD x", "193_w.sql": "ALTER TABLE public.legal_acceptance ENABLE ROW LEVEL SECURITY;", "194_v.sql": "ALTER TABLE public.legal_acceptance ADD CONSTRAINT k CHECK (true);", "195_u.sql": "ALTER TABLE \"public\".legal_acceptance RENAME COLUMN a TO b;", "196_t.sql": "select 'alter table legal_acceptance add x';" })).toEqual(["190_x.sql", "191_y.sql", "195_u.sql"]);
+    expect(tableColumns("CREATE TABLE public.t (a text DEFAULT 'x, y', b text DEFAULT ')', c int)", "t")).toEqual(["a", "b", "c"]);
   });
 
   it("the committed registry holds only the keys this file guards (a second text must extend the merge guard below first)", () => {
@@ -231,11 +235,11 @@ describe("founder-acceptance-record: merge guard (counsel sign-off)", () => {
     expect(found.some((f) => f.startsWith("card notice: ")), "the card notice no longer carries the retention placeholder: update it in the same PR as the text").toBe(true);
   });
 
-  it("the retention clause is the placeholder sentence and nothing else states a period", () => {
+  it("the retention clause is the placeholder sentence and nothing else states a period (deleted with the guard in counsel's sign-off PR)", () => {
     expect.hasAssertions();
     const b = getLegalText(KEY).body;
     expect(b).toMatch(/How long the record is kept:\s*\[[^\]]+\]\./);
-    expect([...b.matchAll(/\b\d+\s*(?:years?|months?|days?)\b/gi)].map((m) => m[0]), "the text states a numeric retention period before counsel confirmed it").toEqual([]);
+    expect([...b.matchAll(/\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve)[\s-]*(?:years?|months?|days?)\b/gi)].map((m) => m[0]), "the text states a numeric retention period before counsel confirmed it").toEqual([]);
   });
 
   it.skipIf(!process.env.CI)(

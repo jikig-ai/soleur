@@ -613,7 +613,7 @@ export function noteLimitsIn(sql: string): { check: number[]; rpc: number[] } {
   const code = lexSql(sql).map((t) => (t.kind === "code" ? t.text : " ")).join(""); // code only: comments and string literals are blanked
   const nums = (re: RegExp): number[] => [...new Set([...code.matchAll(re)].map((m) => Number(m[1])))];
   return {
-    check: nums(/char_length\(\s*requested_edit\s*\)\s+BETWEEN\s+1\s+AND\s+(\d+)/gi),
+    check: nums(/char_length\(\s*requested_edit\s*\)\s*(?:BETWEEN\s+1\s+AND|<=)\s*(\d+)/gi),
     rpc: nums(/char_length\(\s*p_requested_edit\s*\)\s*>\s*(\d+)/gi),
   };
 }
@@ -652,6 +652,7 @@ describe("note limit (REQUEST_CHANGES_MAX against the migrations)", () => {
     expect.hasAssertions();
     const bad = "CREATE OR REPLACE FUNCTION f() ... IF CHAR_LENGTH( p_requested_edit ) > 2000 THEN";
     expect(noteLimitsIn(bad).rpc).toEqual([2000]);
+    expect(noteLimitsIn("CHECK (char_length(requested_edit) <= 2000)").check).toEqual([2000]);
     expect(noteLimitsIn("select 'char_length(p_requested_edit) > 2000 -- x', 1;").rpc).toEqual([]);
     expect(noteLimitsIn("/* a /* nested */ char_length(p_requested_edit) > 7 */ select 1;").rpc).toEqual([]);
   });
