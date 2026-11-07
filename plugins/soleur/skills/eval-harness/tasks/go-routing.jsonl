@@ -6,3 +6,12 @@
 {"vars": {"input": "Can you review PR #4502 and check whether the auth changes are sound?", "golden_label": "review"}}
 {"vars": {"input": "I'd like to add a dark-mode toggle to the settings page — where should we start?", "golden_label": "default"}}
 {"vars": {"input": "#6325 implement Phase F", "golden_label": "implement"}}
+{"vars": {"input": "Are we subject to CVE-2026-111497 on our prod hosts?", "golden_label": "cve-exposure"}}
+{"vars": {"input": "A new advisory dropped for CVE-2026-98432 -- do the hosts we run on Hetzner or our Terraform-managed infra pull in the affected package, and is Better Stack showing anything?", "golden_label": "cve-exposure"}}
+{"vars": {"input": "Does GHSA-abcd-1234-wxyz apply to anything we run in production?", "golden_label": "cve-exposure"}}
+{"vars": {"input": "Are we affected by CVE-2026-111497 on our infra, and if so fix it.", "golden_label": "cve-exposure"}}
+{"vars": {"input": "Fix CVE-2026-111497 in the base image.", "golden_label": "fix"}}
+{"vars": {"input": "Prod is down and the logs mention CVE-2026-98432.", "golden_label": "incident"}}
+{"vars": {"input": "Is CVE-2026-98432 being exploited against us right now?", "golden_label": "incident"}}
+{"vars": {"input": "Does CVE-2026-1234 affect my app's dependencies?", "golden_label": "default"}}
+{"vars": {"input": "Are we affected by CVE-2026-1234?", "golden_label": "default"}}
