@@ -2710,7 +2710,7 @@ wf_has() { local b; b="$(wf_block "$1" "$2")"; grep -qE -- "$3" <<<"$b"; }   # w
 wf_names() { grep -vE '^[[:space:]]*(#|$)' "$1"; }
 wf_coe() { wf_has "$1" "$2" '^    continue-on-error: true[[:space:]]*$'; }
 row_wf_extractor() {   # the job-block extractor, with a known positive and a known negative and a floor on its size
-  wf_coe "$RT/wf/ci.yml" harness-discovery && ! wf_coe "$RT/wf/ci.yml" credential-path-guard && [[ "$(wf_block "$RT/wf/ci.yml" harness-discovery | wc -l)" -gt 20 ]] && [[ -z "$(wf_block "$RT/wf/ci.yml" no-such-job)" ]]
+  wf_coe "$RT/wf/ci.yml" push-dedupe && ! wf_coe "$RT/wf/ci.yml" guards-ruleset && [[ "$(wf_block "$RT/wf/ci.yml" push-dedupe | wc -l)" -gt 20 ]] && [[ -z "$(wf_block "$RT/wf/ci.yml" no-such-job)" ]]
 }
 row_wf_no_needs() { local w="${1:-$RT/wf/ci.yml}"; [[ -n "$(wf_block "$w" $RJOB)" ]] && ! wf_has "$w" $RJOB '^    needs:'; }
 row_wf_if() { local w="${1:-$RT/wf/ci.yml}"; [[ "$(wf_block "$w" $RJOB | grep -cxF -- "    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'")" -eq 1 && "$(wf_block "$w" $RJOB | grep -cE '^    if:')" -eq 1 ]]; }
@@ -2736,7 +2736,9 @@ row_wf_bicond() {   # job-level continue-on-error IFF the job is not a required 
 row_wf_required_not_coe() {   # every required name that IS a ci.yml job carries no job-level continue-on-error, and enough of them were mapped
   local w="${1:-$RT/wf/ci.yml}" r="${2:-$RT/wf/required-checks.txt}" n mapped=0
   while IFS= read -r n; do [[ -n "$(wf_block "$w" "$n")" ]] || continue; mapped=$((mapped + 1)); wf_coe "$w" "$n" && return 1; done < <(wf_names "$r")
-  [[ "$mapped" -ge 8 ]]
+  # floor 3 = every required context that is a ci.yml job today (test, e2e, guards-ruleset): the umbrella
+  # consolidation folded the other required contexts into non-ci.yml workflow jobs (quality-guards, secret-guards)
+  [[ "$mapped" -ge 3 ]]
 }
 row_wf_pins() {   # the job is classified in the three pin sets (the existing parity row pins ALWAYS_RUN_JOBS to the full job list)
   grep -qE "\"$RJOB\"" "$REAL_SUT" && grep -qE "(^|[ \"'])$RJOB([ \"']|\$)" "$SCRIPT_DIR/../../../scripts/ci-push-dedupe.test.sh" && grep -qE "(^|[ \"'])$RJOB([ \"']|\$)" "$SCRIPT_DIR/../../../scripts/ci-draft-light.test.sh"
@@ -2971,7 +2973,7 @@ chk "ratchet helpers: the MERGE-BASE copy of lint-ratchet.py is the one that run
 chk "ratchet helpers: a merge base without lint-ratchet.py is exit 2 internal, naming the remedy" row_rt_helper_base_missing
 chk "ratchet helpers: a merge-base copy that does not compile is exit 2 internal, though the PR tree repairs it" row_rt_helper_base_uncompilable
 
-chk "job wiring: the job-block extractor has a known positive (harness-discovery's continue-on-error), a known negative and a size floor" row_wf_extractor
+chk "job wiring: the job-block extractor has a known positive (push-dedupe's continue-on-error), a known negative (guards-ruleset) and a size floor" row_wf_extractor
 chk "job wiring: affected-index-ratchet has no needs:" row_wf_no_needs
 chk "job wiring: its if: is exactly the positive pull_request || merge_group form" row_wf_if
 chk "job wiring: it has job-level continue-on-error: true (advisory: it cannot red the CI run a deploy waits on)" row_wf_coe
@@ -2981,7 +2983,7 @@ chk "job wiring: PR_AFFECTED_REPLAY_SELECT_TIMEOUT is numerically below the job 
 chk "job wiring: one run step calls the subcommand and holds no \${{ }}" row_wf_step
 chk "job wiring: the name is absent from scripts/required-checks.txt (dark), after proving the file is read" row_wf_dark
 chk "job wiring: continue-on-error exists if and only if the name is not a required context" row_wf_bicond
-chk "job wiring: no required context that is a ci.yml job carries continue-on-error, over at least 8 mapped names" row_wf_required_not_coe
+chk "job wiring: no required context that is a ci.yml job carries continue-on-error, over at least 3 mapped names" row_wf_required_not_coe
 chk "job wiring: the job is in ALWAYS_RUN_JOBS, UNGATED_PINNED and LIGHT_PINNED" row_wf_pins
 chk "job wiring mutant: the PR3b shape (the line removed AND the name added) is consistent, only one of the two is red" row_wf_pr3b_rehearsal
 chk "job wiring mutant: a required-checks copy that lists the name reds the dark pin" row_wf_dark_mutant
