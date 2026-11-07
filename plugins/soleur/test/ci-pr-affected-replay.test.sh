@@ -181,19 +181,10 @@ key="$(printf '%s' "$path" | sed -E 's/created=[^&]*/created=X/' | tr -c 'A-Za-z
 printf 'REQ %s\n' "$key" >> "$GH_LOG"
 # a job log is fetched with --allow-escape-sequences or gh refuses it: the stub refuses it too
 case "$path" in */logs) [ "$esc" = 1 ] || { echo "STUB-MISS no --allow-escape-sequences on $key" >> "$GH_LOG"; echo "gh: refusing escape sequences" >&2; exit 1; } ;; esac
-# SLOW_<key>: wait SLOW_S seconds BEFORE answering (the real fixture, or an ERR_ failure: a slow failing read keeps two workers in flight at once). HANG_ answers an empty run
-# list, so a delayed unit would vanish. The probe's budget clock is SECONDS (one-second granularity), so a budget row needs a read longer than the budget; the pid is recorded
-# for the trap row and S/E lines for the concurrency row.
-if [ -f "$GH_FIX/SLOW_$key" ]; then echo "$$" >> "$GH_LOG.slowpids"; echo "S $$" >> "$GH_LOG.conc"; command -p sleep "${SLOW_S:-1}"; echo "E $$" >> "$GH_LOG.conc"; fi
-if [ -f "$GH_FIX/ERR_ONCE_$key" ]; then rm -f "$GH_FIX/ERR_ONCE_$key"; echo "gh: HTTP 502" >&2; exit 1; fi   # the first call fails, later calls fall through to the fixture (or to a later ERR_ handler)
-if [ -f "$GH_FIX/ERRONCEMSG_$key" ]; then m="$(cat "$GH_FIX/ERRONCEMSG_$key")"; rm -f "$GH_FIX/ERRONCEMSG_$key"; echo "gh: $m" >&2; exit 1; fi   # the first call fails with the fixture's text as stderr
-if [ -f "$GH_FIX/ERRONCE124_$key" ]; then rm -f "$GH_FIX/ERRONCE124_$key"; exit 124; fi   # the first call is killed by `timeout` (rc 124)
+# HANG_ answers an empty run list, so a delayed unit would vanish.
 if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
-if [ -f "$GH_FIX/ERR422_$key" ]; then echo "gh: No commit found for SHA (HTTP 422)" >&2; exit 1; fi
-if [ -f "$GH_FIX/ERR401EXIT4_$key" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 4; fi   # gh exits 4 itself on an authentication failure
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
-if [ -f "$GH_FIX/ERR429RL_$key" ]; then echo "gh: Too Many Requests (HTTP 429)" >&2; exit 1; fi
 if [ -f "$GH_FIX/HANG_$key" ]; then command -p sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
@@ -209,7 +200,6 @@ fx_err() { : > "$GHFIX/ERR_$(keyof "$1")"; }
 fx_err404() { : > "$GHFIX/ERR404_$(keyof "$1")"; }
 fx_hang() { : > "$GHFIX/HANG_$(keyof "$1")"; }
 fx_err403rl() { : > "$GHFIX/ERR403RL_$(keyof "$1")"; }
-fx_err429rl() { : > "$GHFIX/ERR429RL_$(keyof "$1")"; }
 runs_path() { printf 'repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100' "${REPO_NAME:-$R}" "$1"; }
 jobs_path() { printf 'repos/%s/actions/runs/%s/jobs?per_page=100&filter=latest' "${REPO_NAME:-$R}" "$1"; }
 jobs1_path() { printf 'repos/%s/actions/runs/%s/attempts/1/jobs?per_page=100' "${REPO_NAME:-$R}" "$1"; }
