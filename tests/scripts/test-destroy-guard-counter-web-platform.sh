@@ -335,6 +335,38 @@ t_ruleset_rule_addition_passes() {
   fi
 }
 
+# T65 (ADR-321 item 10, #10479): the origin-TLS rules are ALWAYS PRESENT and only `enabled` toggles, because the documented
+# rollback is a workflow_dispatch apply and `github.event.head_commit.message` is EMPTY there, so a rule REMOVAL (nested_deletes
+# >= 1) can never be acked on that path. These fixtures are REAL `terraform plan` + `terraform show -json` documents (provider
+# config stripped), planned against a prior state built from the "before" configuration's own planned values (no live apply, no
+# credentials); the filter under test is the real one. Empty head message = a dispatch.
+t_origin_tls_rules_toggle_not_remove() {
+  local n out want
+  for spec in \
+    "merge:tfplan-origin-tls-merge.json:0:0:0:0:0:the merge adds ONE disabled rule to the live four-rule list" \
+    "flip-on:tfplan-origin-tls-flip-on.json:0:0:0:0:0:flip on = enabled false->true in place" \
+    "rollback:tfplan-origin-tls-rollback.json:0:0:0:0:0:ROLLBACK = enabled true->false in place, acceptable on a dispatch" \
+    "canary-off:tfplan-origin-tls-canary-off.json:0:0:0:0:0:canary off = enabled true->false in place" \
+    "canary-off-strict-on:tfplan-origin-tls-canary-off-strict-on.json:0:0:0:0:0:canary off while strict stays on"; do
+    IFS=: read -r n f a b c d e label <<<"$spec"
+    out=$(_run_gate "$FIXTURES/$f" "")
+    want="$a:$b:$c:$d:$e"
+    if [[ "$out" == "$want" ]]; then _report "T65 origin-TLS $n: $label (dispatch, empty message -> $want)" ok
+    else _report "T65 origin-TLS $n: $label" fail "got '$out' want '$want'"; fi
+  done
+  # The cleanup change REMOVES two rules: a deliberate, reviewed removal that needs a PUSH apply whose merge commit acks it.
+  out=$(_run_gate "$FIXTURES/tfplan-origin-tls-cleanup.json" "")
+  if [[ "$out" == "0:2:0:2:1" ]]; then _report "T65 origin-TLS cleanup (-2 rules) is REFUSED without an ack (0:2:0:2:1)" ok
+  else _report "T65 origin-TLS cleanup refused without ack" fail "got '$out' want '0:2:0:2:1'"; fi
+  out=$(_run_gate "$FIXTURES/tfplan-origin-tls-cleanup.json" $'chore: cleanup\n\n[ack-destroy]\n')
+  if [[ "$out" == "0:2:0:2:0" ]]; then _report "T65 origin-TLS cleanup passes with an [ack-destroy] line on a push (0:2:0:2:0)" ok
+  else _report "T65 origin-TLS cleanup acked" fail "got '$out' want '0:2:0:2:0'"; fi
+  # The hazard the always-present shape avoids: the first design (dynamic blocks) rolled back by REMOVING a rule.
+  out=$(_run_gate "$FIXTURES/tfplan-origin-tls-old-dynamic-rollback.json" "")
+  if [[ "$out" == "0:1:0:1:1" ]]; then _report "T65 origin-TLS dynamic-block rollback (-1 rule) is REFUSED on a dispatch (0:1:0:1:1): the hazard" ok
+  else _report "T65 origin-TLS dynamic-block rollback hazard" fail "got '$out' want '0:1:0:1:1'"; fi
+}
+
 # T10: regression anchor against captured real baseline plan.
 t_real_baseline_zero() {
   if [[ ! -f "$FIXTURES/tfplan-web-platform-real-baseline.json" ]]; then
@@ -1117,6 +1149,7 @@ t_no_changes_passes
 t_ruleset_resource_delete_no_double_count
 t_mixed_delete_and_nested
 t_ruleset_rule_addition_passes
+t_origin_tls_rules_toggle_not_remove
 t_real_baseline_zero
 t_ack_destroy_allows_nested
 t_ack_destroy_substring_rejected
@@ -2150,15 +2183,15 @@ _ran=$((pass + fail))
 # indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 2 create-arm rows (the retirement change for #9372:
 # T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107, + 4 inngest create-arm rows (#9879: T60l, T60m, T60n, and the second
 # T64o create-list removal mutant for random_password.inngest_redis_luks; T60d flipped, not added) = 111, + 2 proxy-TLS flip rows (#12167, T47b flip CREATEs are not a retirement,
-# T47c roster-change cert replace is ackable) = 113. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 112 assertions ran, floor is 113". The floor sits at the
+# T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 120 assertions ran, floor is 121". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 113 ]]; then
+if [[ "$_ran" -lt 121 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 113. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 121. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 113)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 121)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

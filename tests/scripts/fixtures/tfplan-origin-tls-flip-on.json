@@ -1,0 +1,251 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.8",
+  "resource_changes": [
+    {
+      "address": "cloudflare_ruleset.seo_config_settings",
+      "mode": "managed",
+      "type": "cloudflare_ruleset",
+      "name": "seo_config_settings",
+      "provider_name": "registry.terraform.io/cloudflare/cloudflare",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "description": "",
+          "id": "a21ac79d368f425a95c895c43a090d57",
+          "kind": "zone",
+          "name": "default",
+          "phase": "http_config_settings",
+          "rules": [
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "flexible"
+                }
+              ],
+              "description": "Flexible SSL for web platform",
+              "enabled": true,
+              "expression": "(http.host in {\"app.soleur.ai\" \"lb-staging.soleur.ai\"})",
+              "id": "rid0",
+              "ref": "dcb85b75bc3c4f4aa2a8c13a080bf854"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {}
+              ],
+              "description": "Disable Email Obfuscation on soleur.ai + www.soleur.ai (GSC 404 on /cdn-cgi/l/email-protection)",
+              "enabled": true,
+              "expression": "(http.host in {\"soleur.ai\" \"www.soleur.ai\"})",
+              "id": "rid1",
+              "ref": "rref1"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "full"
+                }
+              ],
+              "description": "TEMPORARY (2026-08-16 outage): accept the expired GitHub Pages origin cert on soleur.ai + www.soleur.ai — remove when the Pages cert is valid again",
+              "enabled": true,
+              "expression": "(http.host in {\"soleur.ai\" \"www.soleur.ai\"})",
+              "id": "rid2",
+              "ref": "rref2"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "strict"
+                }
+              ],
+              "description": "ORIGIN-TLS CANARY (ADR-321): strict only for /health with x-origin-tls-probe: 1 on app.soleur.ai - remove with the strict flip",
+              "enabled": true,
+              "expression": "(http.host eq \"app.soleur.ai\" and http.request.uri.path eq \"/health\" and any(http.request.headers[\"x-origin-tls-probe\"][*] eq \"1\"))",
+              "id": "rid3",
+              "ref": "rref3"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "strict"
+                }
+              ],
+              "description": "ORIGIN-TLS STRICT (ADR-321 flip): strict SSL for app.soleur.ai, overrides the adopted flexible rule - remove with the cleanup that makes strict the baseline",
+              "enabled": false,
+              "expression": "(http.host eq \"app.soleur.ai\")",
+              "id": "rid4",
+              "ref": "rref4"
+            }
+          ],
+          "zone_id": "0123456789abcdef0123456789abcdef"
+        },
+        "after": {
+          "description": "",
+          "id": "a21ac79d368f425a95c895c43a090d57",
+          "kind": "zone",
+          "name": "default",
+          "phase": "http_config_settings",
+          "rules": [
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "flexible"
+                }
+              ],
+              "description": "Flexible SSL for web platform",
+              "enabled": true,
+              "expression": "(http.host in {\"app.soleur.ai\" \"lb-staging.soleur.ai\"})",
+              "id": "rid0",
+              "ref": "dcb85b75bc3c4f4aa2a8c13a080bf854"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {}
+              ],
+              "description": "Disable Email Obfuscation on soleur.ai + www.soleur.ai (GSC 404 on /cdn-cgi/l/email-protection)",
+              "enabled": true,
+              "expression": "(http.host in {\"soleur.ai\" \"www.soleur.ai\"})"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "full"
+                }
+              ],
+              "description": "TEMPORARY (2026-08-16 outage): accept the expired GitHub Pages origin cert on soleur.ai + www.soleur.ai — remove when the Pages cert is valid again",
+              "enabled": true,
+              "expression": "(http.host in {\"soleur.ai\" \"www.soleur.ai\"})"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "strict"
+                }
+              ],
+              "description": "ORIGIN-TLS CANARY (ADR-321): strict only for /health with x-origin-tls-probe: 1 on app.soleur.ai - remove with the strict flip",
+              "enabled": true,
+              "expression": "(http.host eq \"app.soleur.ai\" and http.request.uri.path eq \"/health\" and any(http.request.headers[\"x-origin-tls-probe\"][*] eq \"1\"))"
+            },
+            {
+              "action": "set_config",
+              "action_parameters": [
+                {
+                  "ssl": "strict"
+                }
+              ],
+              "description": "ORIGIN-TLS STRICT (ADR-321 flip): strict SSL for app.soleur.ai, overrides the adopted flexible rule - remove with the cleanup that makes strict the baseline",
+              "enabled": true,
+              "expression": "(http.host eq \"app.soleur.ai\")"
+            }
+          ],
+          "zone_id": "0123456789abcdef0123456789abcdef"
+        },
+        "after_unknown": {
+          "rules": [
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ],
+              "id": true,
+              "ref": true
+            },
+            {
+              "action_parameters": [
+                {}
+              ],
+              "id": true,
+              "ref": true
+            },
+            {
+              "action_parameters": [
+                {}
+              ],
+              "id": true,
+              "ref": true
+            },
+            {
+              "action_parameters": [
+                {}
+              ],
+              "id": true,
+              "ref": true
+            }
+          ]
+        },
+        "before_sensitive": {
+          "rules": [
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            }
+          ]
+        },
+        "after_sensitive": {
+          "rules": [
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            },
+            {
+              "action_parameters": [
+                {}
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
