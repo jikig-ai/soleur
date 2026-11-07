@@ -660,8 +660,6 @@ jobs:
               -target=logtail_exploration_alert.egress_gw_deny_spike \
               -target=logtail_exploration.egress_gw_probe_silent \
               -target=logtail_exploration_alert.egress_gw_probe_silent \
-              -target=logtail_exploration.egress_gw_probe_silent_canary \
-              -target=logtail_exploration_alert.egress_gw_probe_silent_canary \
               -target=logtail_exploration.egress_gw_probe_fail \
               -target=logtail_exploration_alert.egress_gw_probe_fail \
               -target=logtail_exploration.registry_zot_log_credential_shape \
