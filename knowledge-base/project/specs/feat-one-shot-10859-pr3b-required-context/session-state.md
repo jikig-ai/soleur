@@ -40,3 +40,12 @@ Landed on branch `feat-one-shot-10859-pr3b-required-context` (4 commits ahead of
 - Registration: test-all.sh run_suite, suite-shard-legs.tsv/suite-durations.tsv regenerated (740 rows).
 - Docs: runbook advisory->required + accept-bound section, ADR-276 amendment 2026-11-07.
 - Verified: oracle-review 19/0, bot-synthetic 9/0, parity 53/0. OUTSTANDING: full replay suite clean run (prior runs hit transient mid-file parse crashes at different lines; earlier FAIL rows were fixed by d30e839 marker stubs — unverified since), probe/audit-ruleset-bypass/admin-merge-ready/fanout/push-dedupe/draft-light/aggregator-diagnosis, cumulative baseline re-check, push.
+
+## Work Phase Verification (parent-run, 2026-11-07)
+
+- oracle-review 19/0, bot-synthetic-unreachability 9/0, required-checks-canonical-parity 53/0 (subagent-run)
+- probe-merge-group-coverage: contexts=14 producers=13 OK
+- audit-ruleset-bypass 66/0; admin-merge-ready 99/0; pr-fanout-ledger 215/0; draft-light 209/0; aggregator-diagnosis 249/0; push-dedupe 268/0
+- ci-pr-affected-replay full: 476/476 mutants, 1110 assertions, 0 failed; leg -c (317-476): 160/160, 794 assertions; shard-totality 51/0
+- Baseline re-check: `git diff 45f0b09..origin/main -- scripts/ci-pr-affected-audit.baseline.tsv` = 0 added lines (file deleted at strict zero)
+- Fixed post-subagent: 2 accept mutants edit-failed (anchors ambiguous after accept_rows added) — multi-line anchors; DECLARED_TOTAL 473->476 + leg -c 317-473->317-476 + oracle-lane manifest + runbook pin; FLOOR_ASSERTIONS 1104->1110 measured; trailing blank line removed from accept.tsv; 3 uncommitted impl files committed (draft-light anchors, accept rows, fanout-ledger)

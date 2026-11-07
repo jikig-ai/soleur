@@ -25,5 +25,5 @@ Plan: `knowledge-base/project/plans/2026-11-07-ci-s4-pr3b-required-ratchet-conte
 
 ## Phase 4 — verification
 
-- [ ] 4.1 Suites: probe-merge-group-coverage, parity, audit-ruleset-bypass, admin-merge-ready, fanout-ledger, push-dedupe, draft-light, aggregator-diagnosis, replay suite, oracle-review suite.
-- [ ] 4.2 Cumulative baseline re-check = 0 added lines; first required-run check-list rendering → runbook log; post-merge ruleset verify (bypass_actors/conditions unchanged).
+- [x] 4.1 Suites: probe-merge-group-coverage, parity, audit-ruleset-bypass, admin-merge-ready, fanout-ledger, push-dedupe, draft-light, aggregator-diagnosis, replay suite, oracle-review suite.
+- [x] 4.2 Cumulative baseline re-check = 0 added lines; first required-run check-list rendering → runbook log; post-merge ruleset verify (bypass_actors/conditions unchanged).
