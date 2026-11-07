@@ -83,13 +83,11 @@ export const cronMachineryDrain = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      // Mondays 09:00 UTC — the measurement lands before the operator's week.
+      { cron: "0 9 * * 1" },
+      { event: "cron/machinery-drain.manual-trigger" },
+    ],
   },
-  [
-    // Mondays 09:00 UTC — the measurement lands before the operator's week.
-    { cron: "0 9 * * 1" },
-    { event: "cron/machinery-drain.manual-trigger" },
-  ],
-  cronMachineryDrainHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronMachineryDrainHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

@@ -65,7 +65,7 @@ QUERY='feature:"pino-mirror" level:error "Cannot fast-forward your working tree"
 # Encode the query for the URL
 QUERY_ENC=$(printf '%s' "$QUERY" | jq -sRr @uri)
 
-URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp&field=level"
+URL="${API}/organizations/${ORG}/events/?query=${QUERY_ENC}&statsPeriod=24h&per_page=10&field=title&field=timestamp&field=level&sort=-timestamp"
 
 RESP=$(curl --disable --noproxy '*' -sS -w '\nHTTP_STATUS:%{http_code}' \
   -H "Accept: application/json" \

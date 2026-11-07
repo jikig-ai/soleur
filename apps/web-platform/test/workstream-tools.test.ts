@@ -96,7 +96,11 @@ describe("buildWorkstreamTools", () => {
     expect(res.isError).toBeUndefined();
     expect(resolveBoardReadContext).toHaveBeenCalledWith("operator-7");
     expect(collectWorkstreamIssues).toHaveBeenCalledWith(OK_CTX);
-    const parsed = JSON.parse(res.content[0].text) as {
+    // Issue titles/descriptions are third-party GitHub text: the preamble block comes first,
+    // the JSON second.
+    expect(res.content).toHaveLength(2);
+    expect(res.content[0].text).toContain("UNTRUSTED");
+    const parsed = JSON.parse(res.content[1].text) as {
       issues: unknown[];
       board: unknown;
     };
@@ -118,7 +122,7 @@ describe("buildWorkstreamTools", () => {
     collectWorkstreamIssues.mockResolvedValue([]);
     const res = await getListTool().handler();
     expect(res.isError).toBeUndefined();
-    const parsed = JSON.parse(res.content[0].text) as { issues: unknown[] };
+    const parsed = JSON.parse(res.content[1].text) as { issues: unknown[] };
     expect(parsed.issues).toEqual([]);
   });
 

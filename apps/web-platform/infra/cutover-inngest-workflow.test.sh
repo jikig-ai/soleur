@@ -199,10 +199,9 @@ assert "quiesce gate withholds the SEAM + exits non-zero on survivors" "grep -qE
 assert "execute prints the operator SEAM only after the gate" "grep -qF 'SEAM — operator maintenance-window steps' '$WF'"
 # The SEAM must gate the flip arm on Better Stack, NOT a host read (P0-2).
 assert "SEAM confirms the flip via Better Stack, not a host cat (P0-2)" "grep -qE 'Better Stack' '$WF'"
-# #6369 — the 2.2b/2.3 arm-flip is no longer a manual Doppler write in the SEAM; the SEAM now
-# directs the operator to the no-SSH op=arm dispatch (the armed write itself is asserted in the
-# op=arm case body section below).
-assert "SEAM directs the arm-flip to the no-SSH op=arm dispatch (#6369)" "grep -qE 'dispatch the no-SSH op=arm verb|op=arm' '$WF'"
+# #9927 — op=arm was retired, so the SEAM must NOT send the operator to dispatch it: it states the
+# retirement and that a re-cutover needs a reviewed re-introduction of the verb.
+assert "#9927 SEAM states op=arm was retired and does not tell the operator to dispatch it" "grep -qF 'op=arm was RETIRED' '$BODY_SH' && ! grep -qE 'Dispatch the no-SSH op=arm|field op=arm' '$BODY_SH'"
 
 # D.3 / AC-VERIFY — op=verify: precondition registry NON-empty (2.4 landed,
 # P1-9/P2-17), 2.6 via the doublefire hook, RunsFilterV2 + STARTED_AT bucketing,
@@ -338,8 +337,8 @@ done
 assert "pool pre-check reads SUPABASE_ACCESS_TOKEN (read-only mgmt API)" "grep -qF 'secrets.SUPABASE_ACCESS_TOKEN' '$WF'"
 # Ordering: the pre-check MUST run BEFORE the 2.0 registry probe (2.0 opens its own
 # GQL→Postgres connection that would otherwise be counted against the readiness baseline).
-PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | head -1 | cut -d: -f1)
-REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | head -1 | cut -d: -f1)
+PRECHECK_LN=$(grep -nF 'READINESS_CEILING=' "$WF" | sed -n '1p' | cut -d: -f1) || true
+REGPROBE_LN=$(grep -nF '2.0 empty-registry pre-flight' "$WF" | sed -n '1p' | cut -d: -f1) || true
 assert "case (a) 2.-1 pool pre-check runs BEFORE the 2.0 registry probe" "[[ -n '$PRECHECK_LN' && -n '$REGPROBE_LN' && '$PRECHECK_LN' -lt '$REGPROBE_LN' ]]"
 assert "case (a) clean pool below ceiling emits ::notice:: and proceeds" "grep -qF '2.-1 pool pre-check CLEAN' '$WF'"
 # (b) gates on readiness baseline + burst headroom, NOT the 80%-of-cap pressure line
@@ -370,13 +369,13 @@ DF_SH="$REPO_ROOT/apps/web-platform/infra/inngest-doublefire-probe.sh"
 # in-script DEFAULT deadline < the outer curl --max-time for each op. inventory 22 < 30,
 # doublefire 50 < 60 — an ordering-only check (deadline < outer) would be met even WITHOUT
 # the clamp, so we ALSO assert the remaining-budget clamp exists in each script.
-INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | head -1)
-DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | head -1)
+INV_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$INV_SH" | sed -n '1p') || true
+DF_DEADLINE=$(grep -oP 'PREFLIGHT_DEADLINE_S:-\K[0-9]+' "$DF_SH" | sed -n '1p') || true
 assert "inventory in-script deadline (22) < outer curl --max-time 30 (SUM bound)" "[[ -n '$INV_DEADLINE' && '$INV_DEADLINE' -lt 30 ]]"
 # #6919 — the doublefire budget was raised (deadline 50→90, outer curl 60→120) + a per-page
 # FLOOR added so late pages never starve to ~0s → empty → false "malformed". SUM bound stays
 # airtight: deadline(90) + PAGE_MIN(8) = 98 < the 120s outer curl.
-DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | head -1)
+DF_PAGE_MIN=$(grep -oP 'PREFLIGHT_PAGE_MIN_S:-\K[0-9]+' "$DF_SH" | sed -n '1p') || true
 assert "doublefire in-script deadline (90) < outer curl --max-time 120 (SUM bound, #6919)" "[[ -n '$DF_DEADLINE' && '$DF_DEADLINE' -lt 120 ]]"
 assert "doublefire SUM bound airtight: deadline + PAGE_MIN < 120 (#6919)" "[[ -n '$DF_DEADLINE' && -n '$DF_PAGE_MIN' && \$(( DF_DEADLINE + DF_PAGE_MIN )) -lt 120 ]]"
 assert "doublefire per-page budget is FLOORED to PREFLIGHT_PAGE_MIN_S (anti-starvation, #6919)" "grep -qE 'max_time < PREFLIGHT_PAGE_MIN_S \)\) && max_time=\\\$PREFLIGHT_PAGE_MIN_S' '$DF_SH'"
@@ -561,103 +560,27 @@ assert "DI-C3 execute inventory gate is NOT wrapped in a retry (single-shot)" "!
 assert "registry_empty verdict is a separate downstream check (not inside the retry loop)" "grep -qE 'verify precondition FAILED' '$WF'"
 
 # ============================================================================
-# #6369 — op=arm (the no-SSH arm-flip) + op=rollback reverse flip-write. op=arm is
-# FORWARD-ONLY (writes `armed`); the reverse `rollback` write lives in op=rollback
-# (ADR-100 Decision 6b forward/reverse symmetry). AC-NOBODY: no source value is EVER echoed,
-# every value ::add-mask::'d + written via stdin; the FSM is confirmed via Better Stack.
-# Both verbs gate on the inngest-cutover environment (required-reviewer) + a conditional
-# DOPPLER_TOKEN_INNGEST_ARM. Extract each case body to a temp file and grep it — asserting
-# the awk range is NON-EMPTY first (security F6 — else every range grep passes vacuously).
+# #6369 — op=rollback reverse flip-write. Its forward twin op=arm was RETIRED by #9927 item 8 (the
+# flip is terminal `done`; Guard 2 at the end of this file pins the verb's absence). AC-NOBODY: no
+# source value is EVER echoed. op=rollback gates on the inngest-cutover environment (required-reviewer)
+# + a conditional DOPPLER_TOKEN_INNGEST_ARM. Extract each case body to a temp file and grep it —
+# asserting the awk range is NON-EMPTY first (security F6 — else every range grep passes vacuously).
 # ============================================================================
-assert "choice includes arm (#6369)" "grep -qE '^[[:space:]]+-[[:space:]]*arm\$' '$WF'"
-assert "case arm: arm)" "grep -qE '^[[:space:]]+arm\\)' '$WF'"
-
-ARM_FILE="$(mktemp)"; ROLLBACK_FILE="$(mktemp)"; SCRATCH+=("$ARM_FILE" "$ROLLBACK_FILE")
-awk '/^            arm\)$/,/^              ;;$/' "$WF" > "$ARM_FILE"
+ROLLBACK_FILE="$(mktemp)"; SCRATCH+=("$ROLLBACK_FILE")
 awk '/^            rollback\)$/,/^              ;;$/' "$WF" > "$ROLLBACK_FILE"
 RESUME_FILE="$(mktemp)"; SCRATCH+=("$RESUME_FILE")
 awk '/^            resume\)$/,/^              ;;$/' "$WF" > "$RESUME_FILE"
 RESUME_N=$(wc -l < "$RESUME_FILE" | tr -d '[:space:]')
 assert "#7674 resume) awk range is a real block (non-vacuity for the G3 rows below, got $RESUME_N)" \
   "[[ '$RESUME_N' -gt 10 ]]"
-ARM_N=$(wc -l < "$ARM_FILE"); ROLLBACK_N=$(wc -l < "$ROLLBACK_FILE")
-# F6 non-vacuity: the arm) awk range must be a real block before any range grep is trusted.
-assert "arm) case body is non-empty (>20 lines — F6 non-vacuity)" "[[ '$ARM_N' -gt 20 ]]"
+ROLLBACK_N=$(wc -l < "$ROLLBACK_FILE")
 assert "rollback) case body is non-empty (F6 non-vacuity)" "[[ '$ROLLBACK_N' -gt 20 ]]"
 
-# AC6 (AC-NOBODY): no source value is echoed; ::add-mask:: per value; writes via stdin, never argv.
-assert "arm) echoes NO source value (AC6/AC-NOBODY)" "! grep -qE 'echo[^\"]*\\\$\\{?(HB|PG|PG_DARK|POSTGRES|HEARTBEAT)' '$ARM_FILE'"
-assert "arm) does NOT dump raw Better Stack rows (no 'jq .' — C6 mask bypass)" "! grep -qE 'jq \\.($|[^a-zA-Z_])' '$ARM_FILE'"
-assert "arm) has no 'set -x' (would echo masked values — C8)" "! grep -qE 'set -x' '$ARM_FILE'"
-ARM_MASK_N=$(grep -cE '::add-mask::' "$ARM_FILE" || true)
-assert "arm) masks EACH source value (>=3 ::add-mask:: — PG/HB/PG_DARK, C8/F7)" "[[ '$ARM_MASK_N' -ge 3 ]]"
-# stdin form: >=3 `doppler secrets set INNGEST_*` writes, each fed by a `printf` pipe (never NAME=value argv).
-ARM_SET_N=$(grep -cE 'doppler secrets set INNGEST_' "$ARM_FILE" || true)
-ARM_PRINTF_N=$(grep -cE "printf '%s'" "$ARM_FILE" || true)
-assert "arm) performs >=3 doppler secrets set INNGEST_* writes" "[[ '$ARM_SET_N' -ge 3 ]]"
-assert "arm) each write is stdin-fed (>=3 printf pipes — AC6 no-argv)" "[[ '$ARM_PRINTF_N' -ge 3 ]]"
-assert "arm) NEVER writes a secret on argv (no 'secrets set INNGEST_*=value')" "! grep -qE 'secrets set INNGEST_[A-Z_]+=' '$ARM_FILE'"
-assert "arm) writes target the ISOLATED soleur-inngest/prd config" "grep -qE 'doppler secrets set INNGEST_POSTGRES_URI -p soleur-inngest -c prd' '$ARM_FILE'"
-# Source reads are read-through from prd_terraform (CTO 6b): no -p/-c on the source get, no seed name.
-assert "arm) reads POSTGRES_URI read-through from prd_terraform (no -p/-c on the source get — CTO 6b)" "grep -qE 'doppler secrets get INNGEST_POSTGRES_URI --plain' '$ARM_FILE'"
-assert "arm) does NOT reference a dropped operator seed (INNGEST_POSTGRES_URI_PROD)" "! grep -qE 'INNGEST_POSTGRES_URI_PROD' '$ARM_FILE'"
-
-# AC7 write order: armed written AFTER both URIs.
-PG_SET_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
-FLIP_SET_LN=$(grep -nE 'secrets set INNGEST_CUTOVER_FLIP ' "$ARM_FILE" | head -1 | cut -d: -f1)
-assert "arm) writes POSTGRES_URI BEFORE INNGEST_CUTOVER_FLIP=armed (write order AC7)" "[[ -n '$PG_SET_LN' && -n '$FLIP_SET_LN' && '$PG_SET_LN' -lt '$FLIP_SET_LN' ]]"
-
-# AC8 / G3 positive prod-URI assertion + :6543 reject; G1 pre-write FSM-state guard (DI-C2).
-# NOTE (#7462): the pooler-port PREDICATES moved into g3_decide, so grepping $ARM_FILE for
-# ':6543'/':5432' now matches only the error-MESSAGE strings — it would pass with the
-# predicates deleted. Behavioural coverage is the g3_decide block below (scenarios 2 and 3).
-# What remains assertable here is that the arm still SURFACES the pooler remediation.
-assert "arm) surfaces the :6543 transaction-pooler remediation to the operator" "grep -qE '::error::.*:6543 transaction pooler' '$ARM_FILE'"
-assert "arm) names the :5432 session pooler in that remediation" "grep -qE '::error::.*:5432 session pooler' '$ARM_FILE'"
-# #7462: prod == dark is a SKIP, not a refusal. The old assertion here grepped for
-# `PG.*==.*PG_DARK` in the arm body — a comparison that has since moved into g3_decide, and
-# which could not have distinguished a refusal from a skip even while it was present. The
-# behavioural coverage is the g3_decide block further down; these assert the CONSUMER wiring.
-assert "arm) has an idempotent skip arm (not a refusal) for already-current" "grep -qF 'skip-already-current' '$ARM_FILE'"
-assert "arm) no longer claims an already-current value 'would flip onto the DARK backend'" "! grep -qF 'would flip onto the DARK backend' '$ARM_FILE'"
-
-# AC6/AC7 (#7462 review). An earlier revision branched the G4 DSN write on the G3 outcome and
-# asserted that branch with PRESENCE greps — which pass identically with the writes moved
-# inside the guard, i.e. they could not fail. Three mutations went uncaught, one of which
-# skipped the write on the FIRST-arm transition and armed the host onto the dark backend with
-# the suite green. The branch is gone: all three prod writes are unconditional, which is the
-# property to pin, and it is pinnable by ABSENCE rather than by position.
-assert "arm) the G3-outcome skip flag is GONE (no conditional around a prod write)" "! grep -qE 'G3_SKIP_PG_WRITE' '$ARM_FILE'"
-assert "arm) no same-line short-circuit gates a prod write" "! grep -qE '(&&|\\|\\|)[^|]*\\| DOPPLER_TOKEN=' '$ARM_FILE'"
-# The three prod secret writes must sit at ONE indent depth, and there must be exactly three
-# of them. Depth alone is degenerate at a single match (deleting two writes leaves one depth,
-# which would pass), so the COUNT is asserted alongside it — together they fail on both the
-# "conditionally nested" and the "silently dropped" mutation classes without needing a command
-# seam. Anchored on the `| DOPPLER_TOKEN=` pipe, which a comment cannot emit. The whitespace
-# class is [[:space:]] in the grep and must match the strip, so tabs are handled identically.
-G4_WRITE_LINES=$(grep -cE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" || true)
-G4_WRITE_DEPTHS=$(grep -oE '^[[:space:]]+(printf|echo)[^|]*\| DOPPLER_TOKEN=' "$ARM_FILE" | sed -E 's/[^[:space:]].*//' | awk '{print length}' | sort -u | wc -l) || true
-assert "arm) exactly three prod secret writes remain (URI, heartbeat, flag)" "[[ '$G4_WRITE_LINES' -eq 3 ]]"
-# Indent depth and token-absence are both defeated by an if/else that keeps the write at the same
-# column (bash ignores indentation), which is the catastrophic mutation: `if [[ $G3_OUTCOME ==
-# write ]]; then :; else <write>; fi` skips the DSN write on the FIRST-arm transition, so the host
-# boots against the dark backend and the job exits 0. Measured: it satisfied every other assertion
-# here. Pin the REGION instead — from the first prod write to the `armed` write there must be no
-# branching at all, because all three writes are unconditional by design.
-W_START=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-W_END=$(grep -nF "printf '%s' 'armed'" "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-W_BRANCH=$(awk -v a="$W_START" -v b="$W_END" 'NR>=a && NR<=b' "$ARM_FILE" | grep -cE '^[[:space:]]*(if|else|elif|fi)\b' || true)
-assert "arm) the prod-write region is non-empty (F6 non-vacuity)" "[[ -n '$W_START' && -n '$W_END' && '$W_END' -gt '$W_START' ]]"
-assert "arm) NO branching between the first prod write and the armed write" "[[ '$W_BRANCH' -eq 0 ]]"
-assert "arm) all prod secret writes sit at one indent depth (none conditionally nested)" "[[ '$G4_WRITE_DEPTHS' -eq 1 ]]"
-assert "arm) G1 reads the current INNGEST_CUTOVER_FLIP from soleur-inngest (pre-write state guard)" "grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest' '$ARM_FILE'"
-assert "arm) G1 refuses re-arm over a non-safe FSM state (DI-C2 REFUSING)" "grep -qE 'G1 REFUSING' '$ARM_FILE'"
-
-# AC9 FSM confirm — the confirm logic is the SHARED confirm_flip_state() function (used by op=arm G6
-# AND op=rollback). Extract it and assert it keys on the emitter's `flag` field, NOT `reason`: the
+# AC9 FSM confirm — the confirm logic is the SHARED confirm_flip_state() function (op=rollback's
+# caller; op=arm's G6 was its other one until #9927). Extract it and assert it keys on the emitter's `flag` field, NOT `reason`: the
 # on-host emitter (apps/web-platform/infra/inngest-cutover-flip.sh `emit_state exit_code dbsize reason
 # flag`) puts the TERMINAL STATE in `flag` (done/aborted/rolled-back) and a CAUSE in `reason` (which
-# NEVER equals done/aborted). A confirm keyed on `"reason":"done"` would match no row → every op=arm
+# NEVER equals done/aborted). A confirm keyed on `"reason":"done"` would match no row → every confirm
 # times out. This block is the cross-file parity that stops that silent drift.
 CONFIRM_FILE="$(mktemp)"; SCRATCH+=("$CONFIRM_FILE")
 awk '/^          confirm_flip_state\(\) \{$/,/^          \}$/' "$WF" > "$CONFIRM_FILE"
@@ -681,325 +604,10 @@ assert "confirm distinguishes a query-path failure from FSM-not-terminal (::warn
 EMITTER="$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
 assert "emitter stamps flag 'done' (the confirm's success key) + an aborted path" "grep -qF 'flag_set \"done\"' '$EMITTER' && grep -qF 'aborted' '$EMITTER'"
 
-# op=arm calls the shared confirm with a SPACE-form timestamp (the reader has normalised ISO T/Z to this
-# form since #7761, but the space form stays the arm's contract — the P2 that once false-negatived it).
-assert "arm) calls confirm_flip_state (AC9)" "grep -qF 'confirm_flip_state \"\$ARM_ISO\"' '$ARM_FILE'"
-assert "arm) time-bounds via a SPACE-form timestamp, no ISO T/Z (the --since format P2)" "grep -qF \"+'%Y-%m-%d %H:%M:%S'\" '$ARM_FILE' && ! grep -qE 'ARM_ISO=.*T%H.*Z' '$ARM_FILE'"
-assert "arm) branches on the confirm result (done vs aborted/rolled-back vs timeout, fail-loud)" "grep -qF 'G6_STATE' '$ARM_FILE'"
-# NOTE (#7462): this used to grep $ARM_FILE for the bare prod ref. The pin moved into
-# g3_decide, which is OUTSIDE $ARM_FILE, so the only surviving occurrence there is the
-# refuse-not-prod-project error MESSAGE — deleting the pin entirely left this green. It is
-# the third assertion invalidated by that move (see the :6543/:5432 note above) and the one
-# guarding what the ADR calls the sole guard against arming onto a non-prod Postgres.
-# Behavioural coverage is the g3_decide block below; what is assertable here is the message.
-assert "arm) surfaces the prod-project-ref remediation to the operator" "grep -qE '::error::.*ref pigsfuxruiopinouvjwy' '$ARM_FILE'"
-# And the pin itself is asserted where it actually lives, anchored on the case-arm shape a
-# comment or an error string cannot produce.
-# The pin is asserted where it lives, anchored on the authority-EXTRACTION shape a comment or an
-# error string cannot produce. Behavioural coverage is the g3_case rows below; these pin that the
-# implementation still parses rather than globbing (a glob over the whole DSN cannot express
-# "the authority is X", which is how three earlier revisions were defeated).
-assert "g3_decide extracts the authority before matching it" "grep -qF '_auth=\"\${_rest%%/*}\"' '$BODY_SH'"
-assert "g3_decide matches host:port WHOLE, not by globbing the DSN" "grep -qE '^[[:space:]]+\\*\\.pooler\\.supabase\\.com:5432\\)' '$BODY_SH'"
-assert "g3_decide rejects connection-parameter overrides case-insensitively" "grep -qE '\\*host=\\*\\|\\*host%3d\\*' '$BODY_SH'"
-assert "g3_decide requires exactly one '@' inside the AUTHORITY" "grep -qF 'if [[ \"\${_auth//[!@]/}\" != \"@\" ]]' '$BODY_SH'"
-assert "arm) G1 fail-CLOSED: probes config readability (DOPPLER_PROJECT) before trusting an empty flip" "grep -qF 'config-readability probe failed' '$ARM_FILE' && grep -qE 'doppler secrets get DOPPLER_PROJECT -p soleur-inngest' '$ARM_FILE'"
-assert "arm) G3 fail-CLOSED on an empty PG_DARK read (no silent equality-pass)" "grep -qF 'could not read the current dark INNGEST_POSTGRES_URI' '$ARM_FILE'"
-assert "arm) adds NO deploy-status poll (Better Stack read only — QMAX/RMAX untouched, AC9)" "! grep -qE 'deploy-status' '$ARM_FILE'"
-
-# AC13 no ssh in the arm block.
-assert "arm) contains no ssh (AC-NOSSH/AC13)" "! grep -qE '(^|[^[:alnum:]])ssh[[:space:]]' '$ARM_FILE'"
-
-# ============================================================================
-# #7462 — G3 DECISION FUNCTION (g3_decide): BEHAVIOURAL tests, not source-greps.
-#
-# Every other assertion in this file greps the script TEXT, which is structurally blind
-# to a change in WHICH BRANCH the decision takes. The pre-#7462 assertion
-# `grep -qE 'PG.*==.*PG_DARK'` still matches after the equality arm was inverted from a
-# refusal into a skip — it cannot see this change at all. These tests EXECUTE the
-# decision instead, so a mutation of any arm reddens the suite.
-#
-# The function is extracted from the REAL script ($BODY_SH) and sourced — never
-# re-declared inline, or the suite would assert a known-good snippet is known-good while
-# the shipped file regressed underneath it.
-# ============================================================================
-# The extraction is an awk range over the REAL script, so it is coupled to g3_decide's
-# signature and closing brace both sitting at column 0. A truncated-but-parseable extraction
-# fails the scenarios loudly and an empty one fails `declare -F` below, so this fails safe.
-G3_FN="$(mktemp)"; SCRATCH+=("$G3_FN")
-awk '/^g3_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$G3_FN"
-
-# shellcheck disable=SC1090
-. "$G3_FN"
-assert "g3_decide() is defined after sourcing" "declare -F g3_decide >/dev/null"
-
-# Synthesized fixtures ONLY (cq-test-fixtures-synthesized-only) — no real password or host.
-# The project refs are public Supabase project identifiers, not secrets, and are the values
-# the guard actually pins on.
-G3_PROD_REF="pigsfuxruiopinouvjwy"
-G3_DEV_REF="mlwiodleouzwniehynfz"
-G3_PROD="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
-G3_PROD_ALT="postgresql://postgres.${G3_PROD_REF}:synth-pw-b@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
-G3_PROD_TXN="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com:6543/postgres"
-G3_PROD_NOPORT="postgresql://postgres.${G3_PROD_REF}:synth-pw-a@aws-0-eu-west-1.pooler.supabase.com/postgres"
-G3_DEV="postgresql://postgres.${G3_DEV_REF}:synth-pw-c@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
-
-G3_EVALS=0
-g3_case() { # $1 desc, $2 PG (to write), $3 PG_DARK (in place), $4 expected outcome
-  local got
-  got="$(g3_decide "$2" "$3")"
-  G3_EVALS=$((G3_EVALS + 1))
-  assert "g3_decide: $1 -> $4" "[[ '$got' == '$4' ]]"
-}
-# The eval counter and its assert are adjacent lines in one function, so a one-line excision of
-# the assert leaves the counter satisfied while every row stops being checked (measured: 357
-# passed / 0 failed / exit 0). Snapshot the verdict counters instead and require a real delta.
-G3_VERDICTS_BEFORE=$((PASS + FAIL))
-
-# HARNESS CANARY. Two measured mutations defeated every floor above: replacing g3_case's body with
-# `got="$4"` (every row then asserts the fixture table against itself) and deleting only its
-# assert line while keeping the counter increment. Both leave the suite green because the counters
-# they feed do not distinguish "compared against the SUT" from "compared against nothing". So
-# drive one row whose expectation is deliberately WRONG and require it to FAIL: a tautological or
-# assert-less g3_case cannot produce that failure.
-_HC_F=$FAIL
-g3_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "$G3_PROD" "$G3_PROD" "write"
-if [[ "$FAIL" -ne $((_HC_F + 1)) ]]; then
-  echo "  FATAL: g3_case does not compare against g3_decide — every g3_decide row in this file is void."
-  exit 2
-fi
-FAIL=$((FAIL - 1)); G3_EVALS=$((G3_EVALS - 1))
-echo "  (g3_case harness canary OK — deliberate FAIL above is expected and subtracted)"
-
-g3_case "empty dark value fails closed"            "$G3_PROD"        ""               "refuse-empty-dark"
-g3_case "rejects the :6543 transaction pooler"     "$G3_PROD_TXN"    "$G3_PROD"       "refuse-txn-pooler"
-g3_case "requires the :5432 session pooler"        "$G3_PROD_NOPORT" "$G3_PROD"       "refuse-not-session-pooler"
-g3_case "refuses a non-prod project ref"           "$G3_DEV"         "$G3_DEV"        "refuse-not-prod-project"
-g3_case "already-current is a SKIP, not a refusal" "$G3_PROD"        "$G3_PROD"       "skip-already-current"
-g3_case "dark -> prod is the first-arm write"      "$G3_PROD"        "$G3_DEV"        "write"
-g3_case "a DIFFERENT prod-project value writes"    "$G3_PROD"        "$G3_PROD_ALT"   "write"
-# The pin is the SOLE guard against a non-prod target, so every row below is a must-REFUSE on
-# an axis some weaker form of the pin waved through. All twelve were MEASURED against two
-# earlier revisions of this guard and returned `write` (i.e. armed onto the wrong Postgres):
-# a bare `*<ref>*` substring accepted the ref anywhere in the value, and pinning only the
-# pooler USERNAME accepted the prod username in front of any host. Keep these rows: they are
-# the difference between pinning a string and pinning a destination.
-G3_H='aws-0-eu-west-1.pooler.supabase.com'
-g3_case "refuses prod user @ attacker host"        "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses prod user @ raw IPv4"             "postgresql://postgres.${G3_PROD_REF}:pw@203.0.113.9:5432/postgres"           "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses prod user @ IPv6 literal"         "postgresql://postgres.${G3_PROD_REF}:pw@[2001:db8::1]:5432/postgres"         "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses prod user @ the DEV project host" "postgresql://postgres.${G3_PROD_REF}:pw@db.${G3_DEV_REF}.supabase.co:5432/postgres" "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses a host= connection-param override" "postgresql://postgres.${G3_PROD_REF}:pw@${G3_H}:5432/postgres?host=attacker.example.com" "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses a host= unix-socket override"     "postgresql://postgres.${G3_PROD_REF}:pw@${G3_H}:5432/postgres?host=/tmp"     "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses a multi-host list"                "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:5432,${G3_H}:5432/postgres" "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses the prod ref smuggled in a query param"  "postgresql://postgres.${G3_DEV_REF}:pw@${G3_H}:5432/postgres?application_name=x://postgres.${G3_PROD_REF}:y" "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses the prod ref smuggled as @db.<ref>. in a param" "postgresql://postgres.${G3_DEV_REF}:pw@${G3_H}:5432/postgres?fallback_application_name=@db.${G3_PROD_REF}.z" "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses db.<ref>. as an attacker SUBDOMAIN"  "postgresql://u:pw@db.${G3_PROD_REF}.attacker.example.com:5432/postgres"   "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses a second '@' relocating the host"    "postgresql://u:p@db.${G3_PROD_REF}.x@attacker.example.com:5432/postgres"  "$G3_PROD" "refuse-not-prod-project"
-g3_case "refuses :5432 present but not the authority port" "postgresql://postgres.${G3_PROD_REF}:pw@attacker.example.com:15432/postgres?application_name=a:5432" "$G3_PROD" "refuse-not-prod-project"
-
-# G3's terminal action. Previously each refusal arm carried its own `exit 1` and nothing tested
-# that a refusal aborts: stripping all four turned G3 into a logger that fell through to the prod
-# write, at 381/0 green. The decision now lives in g3_action and is driven here.
-ACT_FN="$(mktemp)"; SCRATCH+=("$ACT_FN")
-awk '/^g3_action\(\) \{$/,/^\}$/' "$BODY_SH" > "$ACT_FN"
-# shellcheck disable=SC1090
-. "$ACT_FN"
-assert "g3_action() is defined after sourcing" "declare -F g3_action >/dev/null"
-ACT_EVALS=0
-act_case() { local got; got="$(g3_action "$2")"; ACT_EVALS=$((ACT_EVALS + 1)); assert "g3_action: $1 -> $3" "[[ '$got' == '$3' ]]"; }
-act_case "refuse-empty-dark aborts"          "refuse-empty-dark"         "abort"
-act_case "refuse-txn-pooler aborts"          "refuse-txn-pooler"         "abort"
-act_case "refuse-not-session-pooler aborts"  "refuse-not-session-pooler" "abort"
-act_case "refuse-not-prod-project aborts"    "refuse-not-prod-project"   "abort"
-act_case "skip-already-current proceeds"     "skip-already-current"      "proceed"
-act_case "write proceeds"                    "write"                     "proceed"
-act_case "an unknown token aborts (fail-closed)" "some-future-token"     "abort"
-assert "g3_action scenarios actually dispatched (>=7)" "[[ '$ACT_EVALS' -ge 7 ]]"
-# One abort gate, routed through the tested function, sitting before the first prod write.
-assert "arm) has exactly one G3 abort gate routed through g3_action" "[[ \$(grep -cF 'if [[ \"\$(g3_action \"\$G3_OUTCOME\")\" == \"abort\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
-assert "arm) no G3 outcome arm carries its own exit (the gate decides)" "! grep -qE '^[[:space:]]+(refuse|skip|write)[a-z-]*\)[^#]*exit 1' '$ARM_FILE'"
-G3ABORT_LN=$(grep -nF 'g3_action "$G3_OUTCOME"' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-G3ABORT_PGW=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-assert "arm) the G3 abort gate precedes the first prod write" "[[ -n '$G3ABORT_LN' && -n '$G3ABORT_PGW' && '$G3ABORT_LN' -lt '$G3ABORT_PGW' ]]"
-
-# G3.6's decision, driven the same way. Greps over the arm body could not see this: adding
-# '1' to the pass-arm (i.e. arming WHILE the diagnostic flag is set — the exact catastrophe
-# the gate exists to prevent) left the suite green, because every message string survived.
-DIAG_FN="$(mktemp)"; SCRATCH+=("$DIAG_FN")
-awk '/^diag_boot_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$DIAG_FN"
-# shellcheck disable=SC1090
-. "$DIAG_FN"
-assert "diag_boot_decide() is defined after sourcing" "declare -F diag_boot_decide >/dev/null"
-DIAG_EVALS=0
-diag_case() { # $1 desc, $2 raw value, $3 expected outcome
-  local got; got="$(diag_boot_decide "$2")"
-  DIAG_EVALS=$((DIAG_EVALS + 1))
-  assert "diag_boot_decide: $1 -> $3" "[[ '$got' == '$3' ]]"
-}
-diag_case "unset is clear"                ""                "clear"
-diag_case "'0' is clear"                  "0"               "clear"
-diag_case "'false' is clear"              "false"           "clear"
-diag_case "'1' is SET — must refuse"      "1"               "set"
-diag_case "'true' is SET — must refuse"   "true"            "set"
-diag_case "any other value is SET (fail-closed)" "yes"      "set"
-diag_case "an unreadable read fails closed" "__UNREADABLE__" "unreadable"
-assert "diag_boot_decide scenarios actually dispatched (>=7)" "[[ '$DIAG_EVALS' -ge 7 ]]"
-assert "arm) routes G3.6 through diag_boot_decide (single chokepoint)" "grep -qE 'case \"\\\$\\(diag_boot_decide ' '$ARM_FILE'"
-
-# ============================================================================
-# #7462 review — G3.7 PRE-FLUSH-LATCH GATE. Behavioural, not grepped.
-#
-# WHY THIS GATE EXISTS. Making op=arm idempotent (this PR) removed the only thing that
-# stopped a re-arm of an already-flushed host from running to completion. Such an arm is
-# DOOMED — the monotonic latch on /mnt/data refuses it on-host and drives the flag to
-# terminal `aborted` — but before it does, G4 has written both prod secrets and G5 has
-# written `armed`, a value INSIDE inngest-server-flip-guard.sh's prod-start allowlist
-# {armed,flipping,flushed,done}, while op=rollback has already re-enabled the co-located
-# web schedulers. A reboot in that ~30-60s window starts a SECOND prod scheduler.
-# G3.7 refuses the doomed arm BEFORE any write, closing that window at its source.
-#
-# Three independent axes are driven below, because each is blind to the others' defects:
-#   (a) the DECISION (flush_latch_decide) — a pure token mapping;
-#   (b) the READER (_flush_latch_count) EXECUTED against a stubbed `doppler`, including
-#       its argv, so a reader that queries the WRONG thing is detectable;
-#   (c) the ASSEMBLY — that the gate is wired into arm) ahead of the first prod write,
-#       and that the remediation its message names is actually reachable by an operator.
-# ============================================================================
-
-FL_FN="$(mktemp)"; SCRATCH+=("$FL_FN")
-awk '/^flush_latch_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$FL_FN"
-FL_FN_N=$(wc -l < "$FL_FN" | tr -d '[:space:]')
-# Harness self-check FIRST — an empty extraction makes every row below vacuous.
-assert "#7462 flush_latch_decide extraction is non-vacuous (>3 lines, got $FL_FN_N)" "[[ '$FL_FN_N' -gt 3 ]]"
-# shellcheck disable=SC1090
-. "$FL_FN"
-assert "flush_latch_decide() is defined after sourcing" "declare -F flush_latch_decide >/dev/null"
-FL_EVALS=0
-fl_case() { # $1 desc, $2 L (latch count), $3 H (liveness count), $4 expected outcome
-  local got; got="$(flush_latch_decide "$2" "$3")"
-  FL_EVALS=$((FL_EVALS + 1))
-  assert "flush_latch_decide: $1 (L=$2,H=$3) -> $4" "[[ '$got' == '$4' ]]"
-}
-# THE TWO-SIGNAL TABLE (#7674). L alone cannot distinguish "no flush has happened" from
-# "I cannot tell": measured 2026-08-25, G3.7's query returns 0 rows at 7d, 30d AND 365d while
-# the host emits ~1.4 flip rows/min, so L=0 was reporting coverage the gate did not have.
-# H — any inngest-cutover-flip row from THIS host inside a short window — is the host's own
-# liveness witness, and (L=0,H=0) is now `silent`: absence proves nothing when the witness is
-# also absent. Both non-decimal arms route to `unreadable`, never `silent`, because a
-# non-decimal count is produced ONLY by a query failure and `silent` prints the host-dark
-# remediation — the mis-remediation the outcome split exists to prevent.
-fl_case "no latch + host reporting is clear — a genuine first arm proceeds" "0"  "20"  "clear"
-fl_case "no latch + host SILENT refuses — absence proves nothing"           "0"  "0"   "silent"
-fl_case "one latch row is LATCHED — must refuse"                            "1"  "20"  "latched"
-fl_case "many latch rows is LATCHED"                                        "12" "20"  "latched"
-fl_case "LATCHED even when the host is silent (L dominates)"                "1"  "0"   "latched"
-# L's VALUE is decisive BEFORE H is consulted. Without this row the "L dominates H" claim was only
-# tested against H=0, and (L>=1, H unreadable) printed the CREDENTIAL remediation for a state where
-# a latch had actually been detected.
-fl_case "LATCHED even when H is UNREADABLE (L dominates, not just over silence)" "1" "__UNREADABLE__" "latched"
-fl_case "LATCHED even when H is non-numeric"                               "12" "n/a" "latched"
-fl_case "an unreadable latch read fails closed"           "__UNREADABLE__"  "20"  "unreadable"
-fl_case "an empty latch count fails closed"               ""                "20"  "unreadable"
-fl_case "a non-numeric latch count fails closed"          "n/a"             "20"  "unreadable"
-fl_case "a negative latch count fails closed"             "-1"              "20"  "unreadable"
-fl_case "a latch count with whitespace fails closed"      " 1"              "20"  "unreadable"
-fl_case "an unreadable LIVENESS read is unreadable, NOT silent" "0" "__UNREADABLE__" "unreadable"
-fl_case "an empty liveness count is unreadable, NOT silent"     "0" ""               "unreadable"
-fl_case "a non-numeric liveness count is unreadable, NOT silent" "0" "n/a"           "unreadable"
-fl_case "a negative liveness count is unreadable, NOT silent"    "0" "-1"            "unreadable"
-fl_case "a non-decimal L wins over a non-decimal H (both unreadable)" "x" "y"        "unreadable"
-assert "flush_latch_decide scenarios actually dispatched (>=15)" "[[ '$FL_EVALS' -ge 15 ]]"
-# HARNESS CANARY, mirroring g3_case's. A fl_case whose body stopped comparing against the real
-# function would report every row above as a PASS; prove it can FAIL, then subtract.
-_FL_P=$PASS; _FL_F=$FAIL
-fl_case "harness canary: a deliberately wrong expectation MUST fail (expected FAIL below)" "0" "20" "latched"
-if [[ "$FAIL" -ne $((_FL_F + 1)) || "$PASS" -ne "$_FL_P" ]]; then
-  echo "  FATAL: fl_case does not compare against flush_latch_decide — every G3.7 decision row is void."
-  exit 2
-fi
-FAIL=$((FAIL - 1))
-echo "  (fl_case harness canary OK — deliberate FAIL above is expected and subtracted)"
-
-# --- (b) THE READER, EXECUTED. -------------------------------------------------------------
-# A gate is only as good as the question its reader asks. Stubbing `doppler` on the PRESENCE of a
-# call would leave the query shape unpinned: a reader that dropped the --grep terms would match
-# the ~2,880 noop-* heartbeat rows/day and report LATCHED forever, and one that dropped --since
-# would silently change the window. The stub therefore RECORDS its argv and the argv is asserted.
-FLC_FN="$(mktemp)"; SCRATCH+=("$FLC_FN")
-awk '/^_flush_latch_count\(\) \{$/,/^\}$/' "$BODY_SH" > "$FLC_FN"
-FLC_FN_N=$(wc -l < "$FLC_FN" | tr -d '[:space:]')
-assert "#7462 _flush_latch_count extraction is non-vacuous (>5 lines, got $FLC_FN_N)" "[[ '$FLC_FN_N' -gt 5 ]]"
-assert "#7462 extraction actually yields a callable _flush_latch_count" \
-  "bash -c 'eval \"\$(cat \"$FLC_FN\")\"; declare -F _flush_latch_count >/dev/null'"
-
-FL_ARGV="$(mktemp)"; SCRATCH+=("$FL_ARGV")
-FL_CURL_CALLS="$(mktemp)"; SCRATCH+=("$FL_CURL_CALLS")
-FLC_OUT=""; FLC_RC=0
-call_flush_latch_count() { # $1 = rows | empty | fail
-  local mode="$1"
-  set +e
-  FLC_OUT=$(
-    eval "$(cat "$FLC_FN")"
-    # Stub the ONLY external command the reader runs. Defined AFTER the eval so it wins.
-    # shellcheck disable=SC2317  # invoked indirectly, by the _flush_latch_count eval'd above
-    doppler() {
-      printf '%s\n' "$*" > "$FL_ARGV"
-      case "$mode" in
-        rows)
-          printf '%s\n' '{"dt":"2026-07-24 10:20:51.000000","raw":"r1"}'
-          printf '%s\n' '{"dt":"2026-07-24 10:20:52.000000","raw":"r2"}'
-          return 0 ;;
-        empty) return 0 ;;
-        *)     return 7 ;;
-      esac
-    }
-    eval "$(cat "$GEN_FN")"
-    # The latch is deliberately NOT generation-floored; if it ever reached the Hetzner anchor
-    # this stub records it and fails, so no mutant can reach the real api.hetzner.cloud.
-    # shellcheck disable=SC2317
-    curl() { echo called >> "$FL_CURL_CALLS"; exit 99; }
-    export FLUSH_LATCH_SINCE="365d"
-    _flush_latch_count 2>/dev/null
-  )
-  FLC_RC=$?
-  set -e
-}
-
-call_flush_latch_count rows
-assert "#7462 reader counts matching rows (2 rows -> '2', got '$FLC_OUT')" "[[ '$FLC_OUT' == '2' ]]"
-assert "#7462 reader always returns 0 so the DECISION owns the verdict (rc=$FLC_RC)" "[[ '$FLC_RC' -eq 0 ]]"
-# shellcheck disable=SC2034  # read inside the eval'd assert conditions below
-FLC_ARGV_SEEN="$(cat "$FL_ARGV")"
-# ARGV FIDELITY. Each of these is a way the gate could be silently defeated while still "working".
-assert "#7462 reader queries via prd_terraform (the betterstack-query cred config)" \
-  "grep -qF -- '-c prd_terraform' <<<\"\$FLC_ARGV_SEEN\""
-assert "#7462 reader invokes betterstack-query.sh (no SSH, no new transport)" \
-  "grep -qF -- 'scripts/betterstack-query.sh' <<<\"\$FLC_ARGV_SEEN\""
-assert "#7462 reader bounds the window with --since \$FLUSH_LATCH_SINCE" \
-  "grep -qF -- '--since 365d' <<<\"\$FLC_ARGV_SEEN\""
-assert "#7462 reader greps the flip-complete reason (QUOTED form)" \
-  "grep -qF -- '--grep \"reason\":\"flip-complete\"' <<<\"\$FLC_ARGV_SEEN\""
-assert "#7462 reader greps the refuse-rearm-after-done reason (QUOTED form)" \
-  "grep -qF -- '--grep \"reason\":\"refuse-rearm-after-done\"' <<<\"\$FLC_ARGV_SEEN\""
-# The heartbeat firehose must NOT be in the query — matching it would pin the gate at LATCHED.
-assert "#7462 reader does NOT grep the noop-* heartbeat reasons" \
-  "! grep -qE '\"reason\":\"noop' <<<\"\$FLC_ARGV_SEEN\""
-
-call_flush_latch_count empty
-assert "#7462 an empty result is '0' (clear), not an error" "[[ '$FLC_OUT' == '0' ]]"
-call_flush_latch_count fail
-assert "#7462 a FAILED query yields __UNREADABLE__, never 0 (fail-closed)" "[[ '$FLC_OUT' == '__UNREADABLE__' ]]"
-
-# The reader must never echo a raw Better Stack row — the standing purity contract of every
-# Better Stack reader in this script (a value could ride along in `.raw`).
-assert "#7462 reader extracts a COUNT only (no .raw, no jq over row bodies)" \
-  "! grep -qE '\\.raw|\\.message' '$FLC_FN'"
-
-# The window constant must carry an env-overridable default — a hardcoded literal makes the
-# error message's remediation unperformable (the #6617 dead-remediation class).
-assert "#7462 FLUSH_LATCH_SINCE is env-overridable with a default" \
-  "grep -qE '^FLUSH_LATCH_SINCE=\"\\\$\\{FLUSH_LATCH_SINCE:-[0-9]+[a-z]\\}\"' '$BODY_SH'"
+# op=rollback calls the shared confirm with a SPACE-form timestamp (the reader has normalised ISO T/Z to
+# this form since #7761, but the space form stays the caller's contract — the P2 that once false-negatived
+# the (now retired) op=arm).
+assert "rollback) calls confirm_flip_state with its own space-form timestamp (AC9)" "grep -qF 'confirm_flip_state \"\$RB_ISO\"' '$ROLLBACK_FILE'"
 
 # --- (b2) THE LIVENESS READER (#7674), EXECUTED. ---------------------------------------------
 # H is the signal that turns G3.7's `clear` from "no evidence" into "no evidence, from a host we
@@ -1184,7 +792,11 @@ lv_mocks() {
         echo HCLOUD_TOKEN_READONLY >> "$FLV_HC_READS"
         case "$LV_TOK" in both|ro) printf '%s\n' 'RO-TOKEN-SENTINEL' ;; esac
         return 0 ;;
-      "secrets get HCLOUD_TOKEN -p soleur -c prd_terraform --plain")
+      "secrets get HCLOUD_TOKEN"|"secrets get HCLOUD_TOKEN "*|"secrets get "*" HCLOUD_TOKEN"|"secrets get "*" HCLOUD_TOKEN "*)
+        # BAIT, keyed on the NAME and not the argv: any read of the bare read/write name `HCLOUD_TOKEN`, at ANY argv
+        # position (first, middle or last) and with any flags, is recorded and answered, so a respelled fallback cannot
+        # slip into the generic miss arm. Ordered after the HCLOUD_TOKEN_READONLY arm, and every form needs a space or
+        # the end of the argv after the name, so `HCLOUD_TOKEN_READONLY` in any spelling can never match here.
         echo HCLOUD_TOKEN >> "$FLV_HC_READS"
         case "$LV_TOK" in both|rw) printf '%s\n' 'RW-TOKEN-SENTINEL' ;; esac
         return 0 ;;
@@ -1436,7 +1048,9 @@ call_flip_liveness_count current rc6
 assert "G3 generation anchor: a DNS/connect failure names that class" "grep -qF 'unreachable from the runner (transport rc=6' '$FLV_ERR'"
 call_flip_liveness_count current ok none
 assert "G3 generation anchor: no token resolved -> __UNREADABLE__, curl never called" \
-  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN' '$FLV_ERR'"
+  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' ]] && grep -qF 'doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform' '$FLV_ERR' && grep -qF 'step O5 of infra-credential-tiers-8209.md' '$FLV_ERR'"
+assert "G3 generation anchor: the empty-token warning restores the secret only if it is genuinely absent (auth/network checked first)" \
+  "grep -qF 'only if the secret is genuinely absent' '$FLV_ERR'"
 
 lv_case "a timestamp with a trailing newline is excluded, not fatal to the count" nlts+2cur ok 2
 call_flip_liveness_count late-ingest ok
@@ -1446,58 +1060,71 @@ call_flip_liveness_count no-ts ok
 assert "G3 generation: counted=0 with malformed>0 warns of a schema change, which a replace will not fix" \
   "grep -qF 'carried no parseable __REALTIME_TIMESTAMP or dt' '$FLV_ERR' && ! grep -qF 'WAIT and re-dispatch' '$FLV_ERR'"
 call_flip_liveness_count current ok rw
-assert "G3 generation anchor: the read/write fallback is announced by NAME (never value)" \
-  "grep -qF '::notice::G3 generation anchor: using the read/write HCLOUD_TOKEN' '$FLV_ERR'"
-assert "G3 generation anchor: the read/write token is masked too, and reaches stderr only as the mask" \
-  "grep -qxF '::add-mask::RW-TOKEN-SENTINEL' '$FLV_ERR' && [[ \"\$(grep -c 'RW-TOKEN-SENTINEL' '$FLV_ERR')\" -eq 1 ]]"
-call_flip_liveness_count current http401 rw
+assert "G3 generation anchor: read-only empty and read/write present -> only HCLOUD_TOKEN_READONLY is read (HC_READS exact)" \
+  "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> zero curl calls and the result is __UNREADABLE__" \
+  "[[ ! -s '$FLV_CURL_CALLS' && '$FLV_OUT' == '__UNREADABLE__' ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> no doppler/curl request deviated from the contract (STUB_MISS empty)" \
+  "[[ -z \"\$(cat '$FLV_STUB_MISS' 2>/dev/null)\" ]]"
+assert "G3 generation anchor: read-only empty and read/write present -> the read/write sentinel is absent from stdout, stderr, curl argv, curl stdin and curl calls" \
+  "! grep -qF 'RW-TOKEN-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-TOKEN* ]]"
+# An ENVIRONMENT fallback (a read/write HCLOUD_TOKEN already exported into the reader's environment, read-only secret empty) must be caught too.
+HCLOUD_TOKEN=RW-ENV-SENTINEL call_flip_liveness_count current ok none
+assert "G3 generation anchor: read-only empty and HCLOUD_TOKEN exported into the environment -> __UNREADABLE__, zero curl calls, only the read-only name read" \
+  "[[ '$FLV_OUT' == '__UNREADABLE__' && ! -s '$FLV_CURL_CALLS' && \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
+assert "G3 generation anchor: read-only empty and HCLOUD_TOKEN exported into the environment -> RW-ENV-SENTINEL never reaches stdout, stderr, curl argv, curl stdin or curl calls" \
+  "! grep -qF 'RW-ENV-SENTINEL' '$FLV_ERR' '$FLV_CURL_ARGV' '$FLV_CURL_STDIN' '$FLV_CURL_CALLS' && [[ '$FLV_OUT' != *RW-ENV* ]]"
+call_flip_liveness_count current http401 both
 assert "G3 generation anchor: a rejected token names the variable that was sent" \
-  "grep -qF 'the one sent was HCLOUD_TOKEN;' '$FLV_ERR'"
+  "grep -qF 'the one sent was HCLOUD_TOKEN_READONLY;' '$FLV_ERR'"
 # A local filter fault must warn, so the `unreadable` refusal never points at a warning that is absent.
+# Herestring feeds, never `printf | _generation_scoped_count` (#9325): the counter can refuse
+# BEFORE reading stdin — the overridden _current_instance_row_counts below never reads it at
+# all, and an empty tag returns earlier still — so a producer's write lands on a closed read
+# end, pipefail turns the SIGPIPE (141) into the pipeline rc, and `set -e` propagates it out
+# of FILTER_OUT=$(…) and kills the whole suite. A herestring has no producer process.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' 'garbage'; }
-  printf '%s\n' "$FIX_CUR_1_FLIP" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" <<<"$FIX_CUR_1_FLIP" )"
 assert "G3 generation: a filter that does not yield six integers -> __UNREADABLE__ WITH a warning naming it" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF 'row-count filter did not yield six integers' '$FLV_ERR'"
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
   _current_instance_row_counts() { printf '%s' '2 2 2 0 0 0 9'; }
-  printf '%s\n' "$FIX_CUR_1_FLIP" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" <<<"$FIX_CUR_1_FLIP" )"
 assert "G3 generation: a SEVENTH token from the filter is refused, not silently absorbed" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]]"
 # #8846: a counter reached without an emitter tag cannot scope to the FSM, so it refuses, and says
 # the defect is in the script (not the host) — on STDERR, never inside the stdout token.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
-  printf '%s\n' "$FIX_CUR_1_FLIP" "$FIX_CUR_2_FLIP" | _generation_scoped_count "$FIX_FLOOR" test "" 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test "" 2>"$FLV_ERR" <<<"$FIX_CUR_1_FLIP"$'\n'"$FIX_CUR_2_FLIP" )"
 assert "#8846 an EMPTY emitter tag -> __UNREADABLE__ (got '$FILTER_OUT'), with the missing-tag warning on stderr" \
   "[[ '$FILTER_OUT' == '__UNREADABLE__' ]] && grep -qF '::warning::' '$FLV_ERR' && grep -qF 'liveness counter called without an emitter tag — a defect in cutover-inngest.sh, not a host state' '$FLV_ERR'"
 # #8873 review (test-design F4): the emitter match is EXACT. The other FSM's rows, and a tag that
 # merely shares the `inngest-` prefix, count 0 — a `startswith("inngest-")` loosening survived every
 # row above because each fixture's emitter was either the exact tag or `doppler`.
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
-  printf '%s\n' "$FIX_CUR_1_LUKS" "$FIX_CUR_2_LUKS" | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" <<<"$FIX_CUR_1_LUKS"$'\n'"$FIX_CUR_2_LUKS" )"
 assert "#8873 the LUKS FSM's current-generation rows count 0 on the FLIP counter (got '$FILTER_OUT')" "[[ '$FILTER_OUT' == '0' ]]"
 FILTER_OUT="$( eval "$(cat "$GEN_FN")"; export INNGEST_HOST=soleur-inngest INNGEST_HOST_NAME=soleur-inngest-prd
-  printf '%s\n' "$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)) inngest-cutover-flip-x)" \
-  | _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" )"
+  _generation_scoped_count "$FIX_FLOOR" test inngest-cutover-flip 2>"$FLV_ERR" \
+    <<<"$(fix_row soleur-inngest soleur-inngest-prd "$((FIX_FLOOR + 145))000000" $((FIX_FLOOR + 146)) inngest-cutover-flip-x)" )"
 assert "#8873 a tag that only SHARES the prefix (inngest-cutover-flip-x) counts 0 (got '$FILTER_OUT')" "[[ '$FILTER_OUT' == '0' ]]"
 # Closure: the host-pair predicate lives in exactly ONE place, and both write-gating readers reach it.
 HP_SITES=$(grep -cF '.r.host == $h and .r.host_name == $hn' "$BODY_SH" || true)
 OLD_HP=$(grep -cF 'select(.host == $h and .host_name == $hn)' "$BODY_SH" || true)
-GSC_CALLS=$(awk '/^_(flip|luks)_liveness_count\(\) \{$/,/^\}$/' "$BODY_SH" | grep -cE '\| _generation_scoped_count "\$floor"' || true)
-assert "G3 generation closure: one host-pair predicate (in the floored filter), no unfloored copy, both readers call it (sites=$HP_SITES old=$OLD_HP calls=$GSC_CALLS)" \
-  "[[ '$HP_SITES' -eq 1 && '$OLD_HP' -eq 0 && '$GSC_CALLS' -eq 2 ]]"
+GSC_CALLS=$(awk '/^_flip_liveness_count\(\) \{$/,/^\}$/' "$BODY_SH" | grep -cE '\| _generation_scoped_count "\$floor"' || true)
+assert "G3 generation closure: one host-pair predicate (in the floored filter), no unfloored copy, the write-gating reader calls it (sites=$HP_SITES old=$OLD_HP calls=$GSC_CALLS)" \
+  "[[ '$HP_SITES' -eq 1 && '$OLD_HP' -eq 0 && '$GSC_CALLS' -eq 1 ]]"
 # The harness evals the FIRST multi-line definition of each function; bash runs the LAST. A second
 # (e.g. one-line) definition later in the file would silently replace what the suite verified.
-for _gfn in _hcloud_created_epoch _inngest_server_created_epoch _current_instance_row_counts _generation_scoped_count _flip_liveness_count _luks_liveness_count _flush_latch_count; do
+for _gfn in _hcloud_created_epoch _inngest_server_created_epoch _current_instance_row_counts _generation_scoped_count _flip_liveness_count; do
   _defs=$(grep -cE "^[[:space:]]*(function[[:space:]]+)?${_gfn}[[:space:]]*(\(\))?[[:space:]]*\{" "$BODY_SH" || true)
   assert "G3 generation: $_gfn is defined exactly once, so the harness runs what the script runs (got $_defs)" "[[ '$_defs' -eq 1 ]]"
 done
-LATCH_REFS=$(awk '/^_flush_latch_count\(\) \{$/,/^\}$/' "$BODY_SH" | grep -vE '^[[:space:]]*#' | grep -cE '_inngest_server_created_epoch|_generation_scoped_count|_current_instance_row_counts' || true)
-assert "G3 generation: the flush latch body never reaches the generation anchor or filter (refs=$LATCH_REFS)" "[[ '$LATCH_REFS' -eq 0 ]]"
 
 # Guard 2 — token hygiene and transport, on a successful read.
 call_flip_liveness_count current ok both
-assert "G3 generation anchor: Tier A first — only HCLOUD_TOKEN_READONLY is read when it resolves" \
+assert "G3 generation anchor: only HCLOUD_TOKEN_READONLY is read" \
   "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY ' ]]"
 assert "G3 generation anchor: the token travels on curl's stdin as the Authorization header" \
   "grep -qxF 'Authorization: Bearer RO-TOKEN-SENTINEL' '$FLV_CURL_STDIN'"
@@ -1508,9 +1135,6 @@ assert "G3 generation anchor: transport pins (--disable first, --noproxy, --prot
   "[[ \"\$(head -1 '$FLV_CURL_ARGV')\" == '--disable' ]] && grep -qxF -- '--noproxy' '$FLV_CURL_ARGV' && grep -qxF -- '=https' '$FLV_CURL_ARGV' && grep -qxF -- '--max-time' '$FLV_CURL_ARGV' && grep -qxF -- '@-' '$FLV_CURL_ARGV' && grep -qxF -- 'name=soleur-inngest' '$FLV_CURL_ARGV' && grep -qxF -- 'https://api.hetzner.cloud/v1/servers' '$FLV_CURL_ARGV'"
 assert "G3 generation anchor: no --retry, no -f/--fail, no -S (the HTTP class must stay readable; curl's error text is not an egress path)" \
   "! grep -qxE -- '--retry.*|-f|--fail.*|-S|-sS|-fsS|--show-error' '$FLV_CURL_ARGV'"
-call_flip_liveness_count current ok rw
-assert "G3 generation anchor: falls back to HCLOUD_TOKEN only after an empty read-only read" \
-  "[[ \"\$(tr '\\n' ' ' < '$FLV_HC_READS')\" == 'HCLOUD_TOKEN_READONLY HCLOUD_TOKEN ' && '$FLV_OUT' == '2' ]] && grep -qxF 'Authorization: Bearer RW-TOKEN-SENTINEL' '$FLV_CURL_STDIN'"
 # The wrapper returns 0 on every failure, so a caller's `x="$(…)"` under set -e never dies mute.
 AR_REACHED=0
 for _am in rc28 http503 absent nonjson; do
@@ -1537,40 +1161,6 @@ hce_case "servers is a string"       '{"servers":"x"}'                          
 hce_case "empty input"               ''                                                                                 __UNREADABLE__
 assert "_hcloud_created_epoch: every decode case ran (12)" "[[ '$HCE_N' -eq 12 ]]"
 
-# LUKS G3 reads the same generation-scoped count.
-LKL_FN="$(mktemp)"; SCRATCH+=("$LKL_FN")
-awk '/^_luks_liveness_count\(\) \{$/,/^\}$/' "$BODY_SH" > "$LKL_FN"
-LKL_OUT=""
-call_luks_liveness_count() {
-  set +e
-  LKL_OUT=$(
-    eval "$(cat "$FLQ_FN")"; eval "$(cat "$GEN_FN")"; eval "$(cat "$LKL_FN")"
-    lv_mocks "$1" "${2:-ok}" both LUKS
-    eval "$(grep -E '^LUKS_LIVENESS_SINCE=' "$BODY_SH")"
-    export INNGEST_HOST="soleur-inngest" INNGEST_HOST_NAME="soleur-inngest-prd"
-    _luks_liveness_count 2>"$FLV_ERR"
-  )
-  set -e
-}
-call_luks_liveness_count predecessor
-assert "G3 generation: LUKS liveness does not count the predecessor (got '$LKL_OUT')" "[[ '$LKL_OUT' == '0' ]]"
-call_luks_liveness_count current
-assert "G3 generation: LUKS liveness counts the current server (got '$LKL_OUT')" "[[ '$LKL_OUT' == '2' ]]"
-assert "G3 generation: LUKS liveness keeps its own tag" "grep -qF -- '--grep inngest-luks-cutover' '$FLV_ARGV'"
-call_luks_liveness_count current absent
-assert "G3 generation: LUKS liveness fails closed on an unreadable anchor and skips Better Stack" \
-  "[[ '$LKL_OUT' == '__UNREADABLE__' && ! -s '$FLV_ARGV' ]]"
-call_luks_liveness_count eventlog
-assert "#8846 LUKS liveness: event-log rows quoting the tag (emitter doppler) are NOT liveness (got '$LKL_OUT')" "[[ '$LKL_OUT' == '0' ]]"
-call_luks_liveness_count eventlog+2cur
-assert "#8846 LUKS liveness: beside two real LUKS FSM rows, only those count (got '$LKL_OUT')" "[[ '$LKL_OUT' == '2' ]]"
-
-# The latch is deliberately unfloored and never reaches Hetzner.
-: > "$FL_CURL_CALLS"
-call_flush_latch_count rows
-assert "G3 generation: the flush latch stays UNFLOORED (2 rows -> '2') and never calls the Hetzner API" \
-  "[[ '$FLC_OUT' == '2' && ! -s '$FL_CURL_CALLS' ]]"
-
 # Invariants the floor rests on.
 INNGEST_TF="$REPO_ROOT/apps/web-platform/infra/inngest-host.tf"
 # shellcheck disable=SC2034  # read inside the eval'd assert conditions below
@@ -1586,8 +1176,8 @@ assert "G3 generation: the workflow YAML carries no knob that could weaken the f
   "! grep -vE '^[[:space:]]*#' '$WF_YAML' | grep -cE 'INNGEST_HOST|FLOOR|SKEW|HCLOUD' >/dev/null"
 assert "G3 generation: resume's silent refusal makes the replace advice conditional on the server's age" \
   "grep -qF 'Only if that ::notice:: shows the server is more than 600s old with counted=0, skew_suspect=0 AND malformed=0 is an inngest-host-replace the path forward' '$RESUME_FILE'"
-assert "G3 generation: the unreadable refusals point at the ::warning:: naming the failed read (resume, LUKS, arm)" \
-  "grep -qF 'the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named' '$RESUME_FILE' && [[ \"\$(grep -c 'the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named' '$BODY_SH')\" -eq 2 ]] && grep -qF 'Better Stack, the Hetzner generation anchor — including no server named' '$BODY_SH'"
+assert "G3 generation: the unreadable refusals point at the ::warning:: naming the failed read (resume)" \
+  "grep -qF 'the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named' '$RESUME_FILE' && [[ \"\$(grep -c 'the Hetzner generation anchor (follow that warning — including the case where the anchor found NO server named' '$BODY_SH')\" -eq 1 ]]"
 
 # Every request the section made matched the real contract (checked BEFORE the controls below,
 # which deliberately write to the ledger).
@@ -1597,14 +1187,14 @@ assert "G3 generation: no curl/doppler request in this section deviated from the
   "[[ ! -s '$FLV_STUB_MISS' ]]"
 # Positive controls: the stubs must be able to REJECT, or the ledger above proves nothing.
 ( lv_mocks current ok both; printf 'x' | curl --disable --noproxy '*' -s --proto =https --max-time 20 -H @- -w '\n%{http_code}' https://api.hetzner.cloud/v1/servers >/dev/null ) || true
-( lv_mocks current ok both; doppler secrets get HCLOUD_TOKEN -p soleur -c prd --plain >/dev/null ) || true
+( lv_mocks current ok both; doppler secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd --plain >/dev/null ) || true
 assert "G3 generation: stub control — curl without --get and doppler with the wrong config are both recorded as misses" \
-  "grep -qF 'unexpected-curl: w=1 get=0' '$FLV_STUB_MISS' && grep -qF 'unexpected-doppler: secrets get HCLOUD_TOKEN -p soleur -c prd --plain' '$FLV_STUB_MISS'"
+  "grep -qF 'unexpected-curl: w=1 get=0' '$FLV_STUB_MISS' && grep -qF 'unexpected-doppler: secrets get HCLOUD_TOKEN_READONLY -p soleur -c prd --plain' '$FLV_STUB_MISS'"
 
 # --- (b3) op=resume's G3 HOST-AUDIBILITY GATE (#7674, CTO ruling) -----------------------------
 # `flushed` is acted on ONLY by the on-host 30s timer. Writing it to a dark host recovers nothing
-# and parks the flag where resume's own G1 rejects it as IN-FLIGHT while op=arm is refused by
-# G3.7 — stranding the only dispatchable re-entry. A DELIVERABILITY gate, not an evidence one.
+# and parks the flag where resume's own G1 rejects it as IN-FLIGHT, stranding the only
+# dispatchable re-entry. A DELIVERABILITY gate, not an evidence one.
 RSL_FN="$(mktemp)"; SCRATCH+=("$RSL_FN")
 awk '/^resume_liveness_decide\(\) \{$/,/^\}$/' "$BODY_SH" > "$RSL_FN"
 RSL_N=$(wc -l < "$RSL_FN" | tr -d '[:space:]')
@@ -1621,11 +1211,6 @@ rsl_case "an empty count fails closed"              ""               "unreadable
 rsl_case "a non-numeric count fails closed"         "n/a"            "unreadable"
 rsl_case "a negative count fails closed"            "-1"             "unreadable"
 assert "#7674 resume_liveness_decide scenarios dispatched (>=6)" "[[ '$RSL_EVALS' -ge 6 ]]"
-# DELIBERATELY NOT flush_latch_decide: L's polarity INVERTS between the verbs (L>=1 REFUSES at
-# arm, SATISFIES the precondition at resume), so sharing the function would leave `latched`
-# meaning opposite things at its two call sites.
-assert "#7674 resume does NOT reuse flush_latch_decide (L's polarity inverts between the verbs)" \
-  "! grep -qF 'flush_latch_decide' '$RESUME_FILE'"
 # A refusal that does not abort is just a logger: the gate must be read BEFORE the prod write.
 # Pin the CALL, not the assignment: `RS_LIVE_N="20"` satisfies a bare `RS_LIVE_N=` grep and
 # severs the gate from its signal entirely (mutation-verified — this exact edit survived until
@@ -1673,7 +1258,7 @@ rsb_case "verdict=PASS trailing text is not literal PASS — fails closed"      
 assert "#9177 resume_bootstrap_decide scenarios dispatched (>=12)" "[[ '$RSB_EVALS' -ge 12 ]]"
 # ASSEMBLY — a refusal that does not abort BEFORE the write is a logger, not a gate.
 assert "#9177 resume) invokes the provisioning probe via doppler run prd_terraform" \
-  "grep -qF 'doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh' '$RESUME_FILE'"
+  "grep -qF 'doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh' '$RESUME_FILE'"
 # Anchored on the CALL (the `*)` refusal arm's message also names the function, so a bare
 # `resume_bootstrap_decide` grep counts 2 — measured).
 assert "#9177 resume) routes through resume_bootstrap_decide exactly once" \
@@ -1694,140 +1279,31 @@ assert "#9177 resume) names the degraded refusal distinctly (bootstrap-done-DEGR
 assert "#9177 resume) names bootstrap-done (the precondition it enforces)" \
   "grep -qF 'bootstrap-done' '$RESUME_FILE'"
 
-# --- (c) EMITTER PARITY (cross-file), in the SUBSET direction. -------------------------------
-# The two reasons this gate keys on are a vocabulary owned by inngest-cutover-flip.sh. If either
-# is renamed there, the grep silently matches nothing and the gate reports CLEAR forever — a
-# fail-open on the only question it asks. Assert each is a literal that file actually emits.
+# --- (c) the flip emitter source. ---------------------------------------------------------------
+# (The #7462 G3.7 emitter-parity rows for flip-complete / refuse-rearm-after-done were deleted with
+# op=arm in #9927: their only reader, _flush_latch_count, is gone. The surviving reader
+# _flip_transition_dt has its own emitter-parity block further down.)
 FL_EMITTER_SH="$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh"
-assert "#7462 the flip emitter exists (G3.7 parity source)" "[[ -f '$FL_EMITTER_SH' ]]"
-assert "#7462 EMITTER PARITY: flip-complete is a real emit_state literal" \
-  "grep -qE 'emit_state [^ ]+ [^ ]+ \"flip-complete\"' '$FL_EMITTER_SH'"
-assert "#7462 EMITTER PARITY: refuse-rearm-after-done is a real emit_state literal" \
-  "grep -qE 'emit_state [^ ]+ [^ ]+ \"refuse-rearm-after-done\"' '$FL_EMITTER_SH'"
-# And that both are genuinely evidence of a flush: the first is the arm that records the durable
-# latch, the second is the arm the latch itself takes.
-assert "#7462 flip-complete is emitted on the flag:done arm (a COMPLETED flip)" \
-  "grep -qE 'emit_state 0 .* \"flip-complete\" \"done\"' '$FL_EMITTER_SH'"
-assert "#7462 refuse-rearm-after-done is emitted by the latch refusal itself" \
-  "grep -qF 'refuse_rearm_after_done() {' '$FL_EMITTER_SH'"
+assert "the flip emitter exists (parity source for the transition readers)" "[[ -f '$FL_EMITTER_SH' ]]"
 
-# --- (d) ASSEMBLY: the gate is wired into arm), ahead of every prod write. --------------------
-assert "arm) routes G3.7 through flush_latch_decide exactly once (single chokepoint)" \
-  "[[ \$(grep -cE '^[[:space:]]+FL_OUTCOME=\"?\\\$\\(flush_latch_decide ' '$ARM_FILE') -eq 1 ]]"
-assert "arm) reads the latch via _flush_latch_count exactly once" \
-  "[[ \$(grep -cE '^[[:space:]]+FLUSH_LATCH_N=\"?\\\$\\(_flush_latch_count' '$ARM_FILE') -eq 1 ]]"
-# PROCEED ONLY ON `clear`. Written as a positive-allowlist gate, not a blocklist of refusals:
-# a future outcome token then fails CLOSED by construction instead of falling through.
-assert "arm) G3.7 aborts unless the outcome is exactly 'clear' (fail-closed by construction)" \
-  "[[ \$(grep -cF 'if [[ \"\$FL_OUTCOME\" != \"clear\" ]]; then exit 1; fi' '$ARM_FILE') -eq 1 ]]"
-# `silent` is in this alternation deliberately (#7674): the assertion was blind to a NEW arm,
-# so without it the no-per-arm-exit contract would be unenforced for exactly the arm being added.
+# --- (d) ASSEMBLY of the shared Better Stack reader. ---------------------------------------------
 # SINGLE-CHOKEPOINT + ORDERING (#7674, AC3/AC4). The shared reader must have exactly the two
 # callers it was extracted for — a third would be the duplicated reader the extraction exists to
 # prevent, and drift between them is how the confirm path and the gate path stop asking the same
 # question. The liveness read must also be INVOKED BEFORE the decide: a decider handed a stale or
 # unset H is the fail-open this gate was built to close.
 FLQ_SITES=$(grep -cE '^[[:space:]]*(rows=\$\(|[A-Z_]+_RC=0;[[:space:]]+)?_bs_query_rows ' "$BODY_SH") || true
-# 4 -> 6 at #6894: the LUKS cutover FSM added its OWN confirm + liveness readers. They are extra
-# CALLERS of the shared reader, not a second reader — which is the property this row protects. They
-# are a separate pair on purpose: they query a different tag, because a flip row proves nothing
-# about a unit that may never have installed (see the luks) rows below).
-assert "#7674/#8054/#6894/#8079 the shared reader has exactly 8 call sites (flip confirm + flip liveness + execute 2.0 probe + heartbeat + LUKS confirm + LUKS liveness + registry-probe probe + heartbeat), got $FLQ_SITES" \
-  "[[ '$FLQ_SITES' -eq 8 ]]"
-FLQ_LUKS_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_bs_query_rows "\$[A-Za-z_]+" inngest-luks-cutover [0-9]+\)' "$BODY_SH") || true
-assert "#6894 the two LUKS call sites pass the CUTOVER tag (never the flip tag), got $FLQ_LUKS_SITES" \
-  "[[ '$FLQ_LUKS_SITES' -eq 2 ]]"
+# 8 -> 6 at #9927: the LUKS cutover FSM's confirm + liveness callers went with op=luks-cutover.
+assert "#7674/#8054/#8079/#9927 the shared reader has exactly 6 call sites (flip confirm + flip liveness + execute 2.0 probe + heartbeat + registry-probe probe + heartbeat), got $FLQ_SITES" \
+  "[[ '$FLQ_SITES' -eq 6 ]]"
 FLQ_FLIP_SITES=$(grep -cE '^[[:space:]]*(rows=\$\()?_bs_query_rows "\$[A-Za-z_]+" inngest-cutover-flip 50\)' "$BODY_SH") || true
 assert "#7674 the confirm + liveness call sites pass the flip tag and the one-page limit unchanged, got $FLQ_FLIP_SITES" \
   "[[ '$FLQ_FLIP_SITES' -eq 2 ]]"
-FLV_SITES=$(grep -cE '^[[:space:]]+FLIP_LIVENESS_N="?\$\(_flip_liveness_count' "$ARM_FILE") || true
-assert "arm) reads liveness via _flip_liveness_count exactly once, got $FLV_SITES" \
-  "[[ '$FLV_SITES' -eq 1 ]]"
-FLV_LN=$(grep -nE '^[[:space:]]+FLIP_LIVENESS_N=' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-FLD_LN=$(grep -nE '^[[:space:]]+FL_OUTCOME=' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-assert "arm) the liveness reader is invoked BEFORE flush_latch_decide (H is never stale/unset)" \
-  "[[ -n '$FLV_LN' && -n '$FLD_LN' && '$FLV_LN' -lt '$FLD_LN' ]]"
-assert "arm) flush_latch_decide is called with BOTH signals (a one-arg call is the old fail-open)" \
-  "grep -qE 'flush_latch_decide \"\\\$FLUSH_LATCH_N\" \"\\\$FLIP_LIVENESS_N\"' '$ARM_FILE'"
-assert "arm) no G3.7 outcome arm carries its own exit (the gate decides)" \
-  "! grep -qE '^[[:space:]]+(clear|latched|unreadable|silent)\\)[^#]*exit 1' '$ARM_FILE'"
-# shellcheck disable=SC2016  # literal search pattern, not an expansion (G3ABORT_LN precedent)
-FL_GATE_LN=$(grep -nF 'if [[ "$FL_OUTCOME" != "clear" ]]; then exit 1; fi' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-FL_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-FL_ARMW_LN=$(grep -nE "secrets set INNGEST_CUTOVER_FLIP " "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-assert "arm) the G3.7 gate precedes the first prod write (pre-G4, not merely pre-G5)" \
-  "[[ -n '$FL_GATE_LN' && -n '$FL_PGW_LN' && '$FL_GATE_LN' -lt '$FL_PGW_LN' ]]"
-assert "arm) the G3.7 gate precedes the 'armed' write (the double-fire window it closes)" \
-  "[[ -n '$FL_GATE_LN' && -n '$FL_ARMW_LN' && '$FL_GATE_LN' -lt '$FL_ARMW_LN' ]]"
-# It must run AFTER G3.6 — both are pre-write refusals, and the cheaper Doppler read should not
-# be gated behind a Better Stack round-trip.
-FL_DIAG_LN=$(grep -nE 'case "\$\(diag_boot_decide ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-assert "arm) G3.7 runs after G3.6 (ordering is stated, not incidental)" \
-  "[[ -n '$FL_DIAG_LN' && -n '$FL_GATE_LN' && '$FL_DIAG_LN' -lt '$FL_GATE_LN' ]]"
-# The refusal must name the durable latch and forbid SSH, like every other refusal in this file.
-assert "arm) the G3.7 refusal names the monotonic latch as the authority" \
-  "grep -qF 'G3.7 REFUSING' '$ARM_FILE' && grep -qE 'G3\\.7 REFUSING.*/mnt/data' '$ARM_FILE'"
-assert "arm) the G3.7 refusal forbids SSH (hr-no-ssh-fallback-in-runbooks)" \
-  "grep -qE 'G3\\.7 REFUSING.*Do NOT SSH the host' '$ARM_FILE'"
-# DEAD-REMEDIATION GUARD (#6617 class). The refusal tells the operator to re-dispatch with
-# FLUSH_LATCH_SINCE set. GitHub does not export repo vars to a step unless the workflow NAMES
-# them, so without this mapping the remediation is unperformable and the message is a lie.
-assert "#7462 the G3.7 remediation is REACHABLE: FLUSH_LATCH_SINCE is mapped into the step env" \
-  "grep -qE '^[[:space:]]+FLUSH_LATCH_SINCE:[[:space:]]*\\\$\{\{[[:space:]]*vars\.FLUSH_LATCH_SINCE[[:space:]]*\}\}' '$WF_YAML'"
-assert "arm) the G3.7 refusal names the variable the workflow actually exports" \
-  "grep -qE 'G3\\.7 REFUSING.*FLUSH_LATCH_SINCE' '$ARM_FILE'"
-
-# Anti-vacuity floor (harness row H1): a suite whose scenario dispatch silently stopped
-# would otherwise report success having evaluated nothing. This counts EVALUATIONS, not
-# assertion calls, so gutting g3_case's body cannot satisfy it.
-assert "g3_decide scenarios actually dispatched (>=19 evaluations)" "[[ '$G3_EVALS' -ge 19 ]]"
-G3_VERDICTS=$((PASS + FAIL - G3_VERDICTS_BEFORE))
-assert "g3_decide rows produced >=19 VERDICTS, not just evaluations" "[[ '$G3_VERDICTS' -ge 19 ]]"
-
-# The arm) case must route through the function exactly once — the Assembly contract.
-# Anchored on the call shape, not the bare name (which also appears in comments).
-G3_CALLS=$(grep -cE '^[[:space:]]+G3_OUTCOME="?\$\(g3_decide ' "$ARM_FILE" || true)
-assert "arm) calls g3_decide exactly once (single chokepoint)" "[[ '$G3_CALLS' -eq 1 ]]"
-
-# ============================================================================
-# #6178 durability — G3.5 CHANNEL-KEY PARITY HARD GATE. INNGEST_EVENT_KEY +
-# INNGEST_SIGNING_KEY are a SHARED app<->host channel token (ADR-100 §4 Amendment),
-# NOT isolation-sensitive; op=arm must REFUSE the flip if the app (soleur/prd) and
-# host (soleur-inngest/prd) copies diverge — the exact #6178 cutover-502. AC-NOBODY:
-# the gate compares via sha256 and NEVER echoes a key value. Asserted against the
-# extracted arm) case body (ARM_FILE) so the gate can only pass by living in op=arm.
-# ============================================================================
-assert "arm) has a G3.5 channel-key parity gate (#6178 durability)" "grep -qF 'G3.5 channel-key parity' '$ARM_FILE'"
-assert "arm) G3.5 checks BOTH channel keys (event + signing)" "grep -qE 'for CK in INNGEST_EVENT_KEY INNGEST_SIGNING_KEY' '$ARM_FILE'"
-assert "arm) G3.5 compares by sha256 (never by echoing the value — AC-NOBODY)" "grep -qF 'sha256sum' '$ARM_FILE'"
-assert "arm) G3.5 reads the HOST key from soleur-inngest/prd via the arm token" "grep -qE 'DOPPLER_TOKEN=\"\\\$DOPPLER_TOKEN_INNGEST_ARM\" doppler secrets get \"\\\$CK\" -p soleur-inngest -c prd --plain' '$ARM_FILE'"
-assert "arm) G3.5 reads the APP key read-through from prd_terraform (no -p/-c on the app get)" "grep -qE 'APP_CK=\\\$\(doppler secrets get \"\\\$CK\" --plain' '$ARM_FILE'"
-# Value-silent: both copies masked; NEITHER raw value is ever echoed.
-ARM_CK_MASK_N=$(grep -cE '::add-mask::.*(APP_CK|HOST_CK)' "$ARM_FILE" || true)
-assert "arm) G3.5 masks BOTH the app + host key values (>=2 ::add-mask::)" "[[ '$ARM_CK_MASK_N' -ge 2 ]]"
-assert "arm) G3.5 NEVER echoes a raw channel-key value (no echo of \$APP_CK/\$HOST_CK — AC-NOBODY)" "! grep -qE 'echo[^\"]*\\\$\\{?(APP_CK|HOST_CK)([^_H]|\$)' '$ARM_FILE'"
-# The gate is HARD: a mismatch (or unreadable key) fails op=arm closed.
-assert "arm) G3.5 is a HARD GATE — a divergence exits op=arm non-zero (PARITY_FAIL)" "grep -qE 'PARITY_FAIL' '$ARM_FILE' && grep -qF 'CHANNEL-KEY PARITY GATE FAILED' '$ARM_FILE'"
-# G3.6 (#7462): the diagnostic-boot precondition inngest-bootstrap.sh states in prose and
-# nothing enforced. Arming with it set cuts over to a host that adopts no registry.
-assert "arm) has a G3.6 diagnostic-boot hard gate" "grep -qF 'G3.6 REFUSING' '$ARM_FILE'"
-assert "arm) G3.6 reads INNGEST_DIAGNOSTIC_BOOT from the isolated config via the arm token" "grep -qE 'doppler secrets get INNGEST_DIAGNOSTIC_BOOT -p soleur-inngest -c prd' '$ARM_FILE'"
-assert "arm) G3.6 fails CLOSED on an unreadable diagnostic flag" "grep -qF '__UNREADABLE__' '$ARM_FILE'"
-G36_LN=$(grep -nF 'G3.6 REFUSING' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-G36_PGW_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | sed -n '1p' | cut -d: -f1) || true
-assert "arm) G3.6 refuses BEFORE the first prod write (G4)" "[[ -n '$G36_LN' && -n '$G36_PGW_LN' && '$G36_LN' -lt '$G36_PGW_LN' ]]"
-assert "arm) G3.5 cites the #6178 cutover-502 condition in its remediation" "grep -qF 'cutover-502' '$ARM_FILE'"
-# The parity gate runs BEFORE the arm writes (G4/G5) — a divergent channel must
-# block the flip, never be written past.
-PARITY_LN=$(grep -nF 'G3.5 CHANNEL-KEY PARITY GATE FAILED' "$ARM_FILE" | head -1 | cut -d: -f1)
-G4_WRITE_LN=$(grep -nE 'secrets set INNGEST_POSTGRES_URI ' "$ARM_FILE" | head -1 | cut -d: -f1)
-assert "arm) G3.5 parity gate precedes the G4 POSTGRES_URI write (blocks before arming)" "[[ -n '$PARITY_LN' && -n '$G4_WRITE_LN' && '$PARITY_LN' -lt '$G4_WRITE_LN' ]]"
-
 # D5/C4 environment required-reviewer gate + C5 conditional token env (repo-level, not in the case body).
-assert "job gates op=arm/op=rollback on the inngest-cutover environment (D5/C4)" "grep -qE \"environment: .*inputs.op == 'arm'.*inputs.op == 'rollback'.*inngest-cutover\" '$WF'"
-assert "DOPPLER_TOKEN_INNGEST_ARM injected conditionally (empty for other ops — C5)" "grep -qE \"DOPPLER_TOKEN_INNGEST_ARM: .*inputs.op == 'arm'.*secrets.DOPPLER_TOKEN_INNGEST_ARM\" '$WF'"
+assert "job gates op=rollback/op=resume on the inngest-cutover environment (D5/C4)" "grep -qE \"environment: .*inputs.op == 'rollback'.*inputs.op == 'resume'.*inngest-cutover\" '$WF'"
+assert "DOPPLER_TOKEN_INNGEST_ARM injected conditionally (empty for other ops — C5)" "grep -qE \"DOPPLER_TOKEN_INNGEST_ARM: .*inputs.op == 'rollback'.*secrets.DOPPLER_TOKEN_INNGEST_ARM\" '$WF'"
 
-# D1/C1 — op=rollback owns the reverse flip write; op=arm stays FORWARD-ONLY.
+# D1/C1 — op=rollback owns the reverse flip write (op=arm, the forward twin, was retired by #9927).
 assert "rollback writes INNGEST_CUTOVER_FLIP=rollback via stdin to soleur-inngest/prd (D1/C1)" "grep -qE \"printf '%s' 'rollback'\" '$ROLLBACK_FILE' && grep -qE 'doppler secrets set INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd' '$ROLLBACK_FILE'"
 assert "rollback G1' writes only when the forward flip is armed/progressed (armed/flipping/flushed/done)" "grep -qE 'armed\\|flipping\\|flushed\\|done' '$ROLLBACK_FILE'"
 assert "rollback calls the shared confirm BLOCKING before web re-enable" "grep -qF 'confirm_flip_state \"\$RB_ISO\"' '$ROLLBACK_FILE'"
@@ -1838,7 +1314,6 @@ assert "rollback reaches Half (B) web re-enable" "grep -qE 're-enabling inngest 
 assert "rollback non-forward branch (aborted/unset) proceeds to Half B — P0-3 recovery, no exit 1" "grep -qF 'documented P0-3 aborted-state recovery; proceeding to the web re-enable' '$ROLLBACK_FILE'"
 assert "rollback withholds web re-enable on an unconfirmed rolled-back (no double-fire)" "grep -qF 'WITHHOLDING the web re-enable' '$ROLLBACK_FILE'"
 assert "rollback never re-writes POSTGRES_URI/HEARTBEAT (reverse writes ONLY the flip value)" "! grep -qE 'secrets set INNGEST_(POSTGRES_URI|HEARTBEAT_URL)' '$ROLLBACK_FILE'"
-assert "op=arm is FORWARD-ONLY: the arm block never writes the reverse flip 'rollback'" "! grep -qE \"printf '%s' 'rollback'\" '$ARM_FILE'"
 
 # #6552 — op=rollback DELETES the armed INNGEST_HEARTBEAT_URL (inverse of op=arm G4, :760) so a
 # rolled-back dark host stops being a SECOND pusher on the shared Better Stack heartbeat monitor.
@@ -1900,11 +1375,11 @@ assert "#7228 the BETTERSTACK_API_TOKEN read is explicitly scoped to soleur/prd_
 # And the mask is guarded: an unconditional add-mask on an empty read emits a bare directive.
 assert "#7228 the mask is guarded on a non-empty read (no bare ::add-mask:: on failure)" \
   "grep -qF '[[ -n \"\$BS_API\" ]] && printf '\"'\"'::add-mask::' '$ROLLBACK_FILE'"
-# THE ASYMMETRY IS DELIBERATE. op=arm must NOT unpause: ADR-117 unpauses only after a REAL beat
-# is measured, and arming before the FSM runs is the green-but-inert monitor #6537 spent nine days
-# as. This asserts the arm path contains no unpause, so a future edit "restoring symmetry" reds.
-assert "#7228 op=arm does NOT unpause the consumer heartbeat (ADR-117: never armed ahead of a real beat)" \
-  "! grep -qE '\"paused\":[[:space:]]*false' '$ARM_FILE'"
+# THE ASYMMETRY IS DELIBERATE. No op in this script unpauses the consumer heartbeat: ADR-117 unpauses
+# only after a REAL beat is measured (op=arm, which used to be the forward verb, was retired by #9927).
+# This asserts the rollback path contains no unpause, so a future edit "restoring symmetry" reds.
+assert "#7228 op=rollback does NOT unpause the consumer heartbeat (ADR-117: never armed ahead of a real beat)" \
+  "! grep -qE '\"paused\":[[:space:]]*false' '$ROLLBACK_FILE' && ! grep -qE '\"paused\":[[:space:]]*false' '$BODY_SH'"
 
 # ===========================================================================
 # #6617 — standalone read-only probe ops (registry-probe, doublefire-probe)
@@ -2051,30 +1526,143 @@ assert "#6617 probe arms add NO retry loop (the one emit-file read loop is allow
 ENV_EXPR=$(grep -E '^[[:space:]]+environment:' "$WF" | sed -n '1p' || true)
 assert "#7228 the environment: expression was located (else these pins are vacuous)" \
   "[[ -n \"\$ENV_EXPR\" ]]"
-for _op in arm rollback resume reflush; do
-  assert "#7228 prod-writing op '\$_op' is INSIDE the required-reviewer gate" \
+# #9755 adds op=backup to the loop: a Hetzner create_image with a read/write token is the same
+# prod-write class as arm — it belongs INSIDE the reviewer gate, not outside it.
+for _op in rollback resume backup; do
+  assert "#7228/#9755 prod-writing op '\$_op' is INSIDE the required-reviewer gate" \
     "printf '%s' \"\$ENV_EXPR\" | grep -cF \"inputs.op == '\$_op'\" >/dev/null"
 done
 assert "#7228 the gate still resolves to the inngest-cutover environment" \
   "printf '%s' \"\$ENV_EXPR\" | grep -cF \"'inngest-cutover'\" >/dev/null"
-# THE OP SET IS DUPLICATED IN TWO EXPRESSIONS AND NOTHING TIED THEM TOGETHER (#7674 review).
-# `environment:` decides WHO MUST APPROVE; the DOPPLER_TOKEN_INNGEST_ARM expression decides WHO
-# GETS THE PROD-WRITE TOKEN. Adding an op to the token expression but not the environment one
-# hands that op an arm-capable credential with NO required reviewer — and every pre-existing
-# assertion here passed, because they check the two expressions independently. Pin the SETS equal.
+# THE CREDENTIALED OP SET LIVES IN THREE EXPRESSIONS AND NOTHING TIED THEM TOGETHER (#7674 review,
+# widened by #9755). `environment:` decides WHO MUST APPROVE; the DOPPLER_TOKEN_INNGEST_ARM
+# expression decides WHO GETS THE ARM TOKEN; the infra-credentials step's
+# `doppler-token-infra-privileged:` input decides WHO GETS THE TIER-B EXPORTS. Adding an op to
+# either credential expression but not the environment one hands that op a prod-write-capable
+# credential with NO required reviewer; gating an op that has no credential delivery strands the
+# approval. Pin ENV_OPS == union(TOK_OPS, PRIV_OPS).
 ENV_OPS=$(printf '%s' "$ENV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
 TOK_EXPR=$(grep -E 'DOPPLER_TOKEN_INNGEST_ARM:' "$WF" | sed -n '1p') || true
 TOK_OPS=$(printf '%s' "$TOK_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
+PRIV_EXPR=$(grep -E 'doppler-token-infra-privileged:' "$WF_YAML" | sed -n '1p' || true)
+PRIV_OPS=$(printf '%s' "$PRIV_EXPR" | grep -oE "inputs\.op == '[a-z-]+'" | sort -u) || true
+CRED_OPS=$(printf '%s\n%s\n' "$TOK_OPS" "$PRIV_OPS" | sort -u) || true
 assert "#7674 the token expression was located (else the parity row below is vacuous)" \
   "[[ -n '$TOK_EXPR' ]]"
+assert "#9755 the Tier-B loader input expression was located (else the parity row below is vacuous)" \
+  "[[ -n '$PRIV_EXPR' ]]"
 assert "#7674 the reviewer-gated op set is non-empty (anti-vacuity for the parity row)" \
   "[[ -n '$ENV_OPS' ]]"
-assert "#7674 environment: and DOPPLER_TOKEN_INNGEST_ARM gate the SAME op set (no ungated arm token)" \
-  "[[ '$ENV_OPS' == '$TOK_OPS' ]]"
+assert "#9755 environment: and the credentialed op set (arm-token UNION Tier-B loader) gate the SAME ops — a credentialed-but-ungated or a gated-but-uncredentialed op breaks the equality" \
+  "[[ '$ENV_OPS' == '$CRED_OPS' ]]"
+assert "#9755 op=backup is NOT in the arm-token ternary (over-grant: DOPPLER_TOKEN_INNGEST_ARM is soleur-inngest/prd scope, not Hetzner)" \
+  "! printf '%s' \"\$TOK_OPS\" | grep -cF \"inputs.op == 'backup'\" >/dev/null"
 # A single `continue-on-error: true` on the one run: step turns EVERY guard's exit 1 into a green
 # job — the whole gate sequence tolerated at once. Nothing forbade it.
 assert "#7674 no step tolerates failure (a continue-on-error would green-light every refused gate)" \
   "! grep -qE '^[[:space:]]*continue-on-error:' '$WF_YAML'"
+
+# #9755 — the Tier-B loader step (the ADR-241 O10 mechanism): gated to op=backup, calls the
+# infra-credentials composite, passes only the environment-scoped token, and carries NO
+# doppler-token-legacy anywhere in the file. A missing environment secret must be the loader's
+# verdict=no_credential_source refusal, never a silent Tier-A fallback — the
+# git-data-cutover.yml::wipe precedent for a must-never-fall-back op.
+assert "#9755 the workflow calls the infra-credentials loader" \
+  "grep -qE 'uses:[[:space:]]*\\./\\.github/actions/infra-credentials' '$WF_YAML'"
+assert "#9755 the loader step is gated to op=backup (the whole-project export lands only on a backup dispatch)" \
+  "grep -qE \"if:[[:space:]]*inputs\\.op == 'backup'\" '$WF_YAML'"
+assert "#9755 the loader call passes the environment-scoped Tier-B token (the conditional with: mirrors the arm-token idiom and gives the parity row its extraction anchor)" \
+  "grep -qE 'doppler-token-infra-privileged:[[:space:]]*\\$\\{\\{[[:space:]]*\\(inputs\\.op == '\"'\"'backup'\"'\"'\\)[[:space:]]*&&[[:space:]]*secrets\\.DOPPLER_TOKEN_INFRA_PRIVILEGED' '$WF_YAML'"
+# The three greps above prove the lines exist, not that they sit on the SAME step — a `uses:` on
+# one step and an `if:`/`with:` on a sibling would satisfy all three while the loader call ran
+# ungated. The union weakness is worse than that: LOADER_STEP_BLOCK concatenates EVERY block
+# holding the `uses:` line, so TWO loader calls — one carrying `if:`, the other `with:` —
+# would pass the block assertion while NEITHER step was both gated and credentialed. Pin the
+# `uses:` count to exactly one first (comments cannot inflate it — the anchor demands `uses:`
+# at line start modulo `- `); then the block below is THE ONE block and the two greps inside
+# it are a per-block assertion, not a union.
+LOADER_USES_N=$(grep -cE '^[[:space:]]*(-[[:space:]]*)?uses:[[:space:]]*\./\.github/actions/infra-credentials' "$WF_YAML" || true)
+assert "#9755 exactly ONE infra-credentials uses: step in the workflow (a second caller would union the block assertions below)" \
+  "[[ '$LOADER_USES_N' -eq 1 ]]"
+LOADER_STEP_BLOCK="$(awk '/^      - / { if (has) printf "%s", block; block=""; has=0 }
+                         { block = block $0 "\n" }
+                         /uses:[[:space:]]*\.\/\.github\/actions\/infra-credentials/ { has=1 }
+                         END { if (has) printf "%s", block }' "$WF_YAML")"
+assert "#9755 the loader step's own block carries BOTH the op=backup if: and the doppler-token-infra-privileged: input (co-located on THE ONE step)" \
+  "grep -qE \"if:[[:space:]]*inputs\\.op == 'backup'\" <<<\"\$LOADER_STEP_BLOCK\" && grep -qE 'doppler-token-infra-privileged:' <<<\"\$LOADER_STEP_BLOCK\""
+assert "#9755 no doppler-token-legacy input anywhere in the file (a Tier-A fallback would defeat the gate)" \
+  "! grep -qE 'doppler-token-legacy:' '$WF_YAML'"
+
+# ── #9755: op=backup — the Hetzner snapshot writer, re-plumbed to Tier B ──────────────────
+# The arm is extracted from the REAL script and run under bash with the bearer transport stubbed,
+# so each row asserts the refusal BEFORE any request and the mask/request order on the success
+# path. The token arrives via the job env (the infra-credentials loader export), never via a
+# doppler read inside the arm — asserted on the arm's own bytes first.
+BKP_FILE="$(mktemp)"; BKP_DRV="$(mktemp)"; BKP_CALLS="$(mktemp)"; BKP_LOG="$(mktemp)"
+SCRATCH+=("$BKP_FILE" "$BKP_DRV" "$BKP_CALLS" "$BKP_LOG")
+awk '/^  backup\)$/{f=1;next} f&&/^    ;;$/{exit} f' "$BODY_SH" > "$BKP_FILE"
+BKP_N=$(wc -l < "$BKP_FILE" | tr -d '[:space:]')
+assert "#9755 backup) case arm extracted from the real script for behavioural driving (non-vacuity, got $BKP_N lines)" \
+  "[[ '$BKP_N' -gt 20 ]]"
+assert "#9755 the backup) arm carries NO doppler invocation on a non-comment line (the token comes from the loader-exported job env)" \
+  "! awk '/^[[:space:]]*#/{next} /doppler/{exit 0} END{exit 1}' '$BKP_FILE'"
+assert "#9755 the backup) arm reads the job-env HCLOUD_TOKEN (the loader-exported form, not a fetch)" \
+  "grep -qF 'HCLOUD_TOKEN=\"\${HCLOUD_TOKEN:-}\"' '$BKP_FILE'"
+assert "#9755 the refusal message names the Tier-B delivery (the loader or the inngest-cutover environment)" \
+  "grep -qE 'infra-credentials|inngest-cutover' '$BKP_FILE'"
+{
+  printf '%s\n' 'set -euo pipefail'
+  printf '%s\n' 'OP=backup'
+  grep -E '^_bearer_ok\(\)' "$BODY_SH"
+  printf '%s\n' '_bearer_curl() {'
+  printf '%s\n' '  local _tv="${1:-}"; shift'
+  printf '%s\n' '  _bearer_ok "${!_tv:-}" || { echo "_bearer_curl: ${_tv} unusable" >&2; return 2; }'
+  printf '%s\n' '  printf "BEARER_CURL %s\n" "$*" | tee -a "$BKP_CALLS" >&2'
+  printf '%s\n' '  local _all=" $* "; local _o=""; while [[ $# -gt 0 ]]; do case "$1" in -o) _o="$2"; shift 2;; *) shift;; esac; done'
+  printf '%s\n' '  case "$_all" in'
+  printf '%s\n' '    *"/actions/create_image "*) [[ -n "$_o" ]] && printf %s "$BKP_IMAGE_JSON" > "$_o"; printf %s "${BKP_CODE:-201}"; return 0 ;;'
+  printf '%s\n' '    *"/v1/actions/"*)         [[ -n "$_o" ]] && printf %s "$BKP_ACTION_JSON" > "$_o"; return 0 ;;'
+  printf '%s\n' '  esac'
+  printf '%s\n' '  return 0'
+  printf '%s\n' '}'
+  printf '%s\n' 'sleep() { :; }'
+  cat "$BKP_FILE"
+} > "$BKP_DRV"
+BKP_RC=0
+bkp_run() { # <HCLOUD_TOKEN value | __UNSET__> [stub create_image http code] — one drive of the arm
+  : > "$BKP_CALLS"; BKP_RC=0
+  if [[ "$1" == "__UNSET__" ]]; then
+    env -u HCLOUD_TOKEN BKP_CALLS="$BKP_CALLS" \
+      BKP_IMAGE_JSON='{"image":{"id":42},"action":{"id":7}}' \
+      BKP_ACTION_JSON='{"action":{"status":"success"}}' BKP_CODE="${2:-201}" \
+      bash "$BKP_DRV" > "$BKP_LOG" 2>&1 || BKP_RC=$?
+  else
+    HCLOUD_TOKEN="$1" BKP_CALLS="$BKP_CALLS" \
+      BKP_IMAGE_JSON='{"image":{"id":42},"action":{"id":7}}' \
+      BKP_ACTION_JSON='{"action":{"status":"success"}}' BKP_CODE="${2:-201}" \
+      bash "$BKP_DRV" > "$BKP_LOG" 2>&1 || BKP_RC=$?
+  fi
+}
+bkp_run __UNSET__
+assert "#9755 op=backup with HCLOUD_TOKEN unset refuses (exit 1) before any request" "[[ '$BKP_RC' == 1 ]]"
+assert "#9755 the refusal is SOLEUR_CREDENTIAL_REFUSED reason=token_shape" "grep -qF 'SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape' '$BKP_LOG'"
+assert "#9755 the refusal made ZERO curl calls (refused before the first request)" "[[ ! -s '$BKP_CALLS' ]]"
+bkp_run ''
+assert "#9755 an EXPORTED-EMPTY HCLOUD_TOKEN refuses the same way (the loader-exported var must carry a value)" "[[ '$BKP_RC' == 1 && ! -s '$BKP_CALLS' ]]"
+bkp_run 'RW TOKEN WITH SPACE'
+assert "#9755 a mis-shaped HCLOUD_TOKEN refuses at the shape gate before masking or any request" "[[ '$BKP_RC' == 1 && ! -s '$BKP_CALLS' ]]"
+bkp_run 'RW-SENTINEL.123_+/='
+assert "#9755 a shaped token runs the snapshot end to end (create_image + poll, exit 0)" "[[ '$BKP_RC' == 0 ]]"
+BKP_MASK_LN=$(grep -n 'add-mask::RW-SENTINEL' "$BKP_LOG" | head -1 | cut -d: -f1) || true
+BKP_REQ_LN=$(grep -n 'BEARER_CURL' "$BKP_LOG" | head -1 | cut -d: -f1) || true
+assert "#9755 the token is masked BEFORE the first request" \
+  "[[ -n '$BKP_MASK_LN' && -n '$BKP_REQ_LN' && '$BKP_MASK_LN' -lt '$BKP_REQ_LN' ]]"
+assert "#9755 the first request is the create_image snapshot POST" \
+  "[[ \"`head -1 \"$BKP_CALLS\"`\" == */v1/servers/123931471/actions/create_image* ]]"
+assert "#9755 the success path logs the image id" "grep -qF 'image id=42' '$BKP_LOG'"
+bkp_run 'RW-SENTINEL.123_+/=' 401
+assert "#9755 a non-201 create_image response fails with a named HTTP error" \
+  "[[ '$BKP_RC' == 1 ]] && grep -qF 'hcloud create_image returned HTTP 401' '$BKP_LOG'"
 
 assert "#6617 neither probe op appears in the environment: expression" "! grep -E '^[[:space:]]+environment:' '$WF' | grep -cE 'registry-probe|doublefire-probe' >/dev/null"
 
@@ -2420,7 +2008,7 @@ assert "#8873 _flip_transition_dt derives NO anchor from the LUKS FSM's rows" "[
 # TRUNCATION: a FULL page means betterstack-query.sh's newest-N LIMIT may have hidden the
 # earliest transition, so the row we would pick is LATER than truth — a NARROWER window,
 # the unsafe direction. It must refuse rather than derive an under-covering anchor.
-FTD_LIMIT=$(grep -oE 'local limit=[0-9]+' "$DF_HARNESS_SRC" | grep -oE '[0-9]+' | head -1)
+FTD_LIMIT=$(grep -oE 'local limit=[0-9]+' "$DF_HARNESS_SRC" | grep -oE '[0-9]+' | sed -n '1p') || true
 assert "#6178 the truncation limit was extracted from the SUT (not hardcoded here)" "[[ '$FTD_LIMIT' =~ ^[0-9]+$ && '$FTD_LIMIT' -gt 1 ]]"
 # BOUNDARY PAIR, derived: limit-1 must be accepted, limit must be refused. Sampling only
 # {0,1,3,50} left `-ge $limit` indistinguishable from `-ge 4`.
@@ -2655,7 +2243,7 @@ assert "#6178 op=verify QUALIFIES a clean verdict when the claim is weaker" \
 # extraction replaced it). `// "absent"` is load-bearing: a bare .total_count on a body
 # lacking the field yields the string "null", which matches NONE of the gate's literals, so
 # a partial GraphQL error would sail through the vacuity gate.
-TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | head -1 | sed "s/^jq -r '//; s/'\$//")
+TC_EXPR=$(grep -oE "jq -r '\.total_count[^']*'" "$VERIFY_ARM_FILE" | sed -n '1p' | sed "s/^jq -r '//; s/'\$//") || true
 assert "#6178 the total_count extraction expression was found in the verify arm" "[[ -n '$TC_EXPR' ]]"
 for _tc_case in '{}|absent' '{"total_count":0}|0' '{"total_count":"unknown"}|unknown' '{"total_count":728}|728'; do
   _tc_body="${_tc_case%%|*}"; _tc_want="${_tc_case##*|}"
@@ -2949,7 +2537,7 @@ assert "#8054 2.0 region extraction is non-vacuous (>60 non-comment lines, got $
 H5_BOOT="a1b2c3d4-0000-4000-8000-00000000cafe"; H5_BID="${H5_BOOT//-/}"
 H5_PROBE_DT="$(date -u -d '-7 min' '+%Y-%m-%d %H:%M:%S')"
 H5_HB_DT="$(date -u -d '-1 min' '+%Y-%m-%d %H:%M:%S')"
-H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=8 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ zz_trailing=1"
+H5_MSG="SOLEUR_INNGEST_SERVER_PROBE http_code=000 server_active=failed vector_active=active redis_active=active uptime_s=100 boot_id=$H5_BOOT image_ref=ghcr.io/other@sha256:fff instance_id=1 cli_version=v1 cutover_flag=rolled-back probe_schema=9 host_role=dedicated flush_latched=false redis_keys=16 redis_expires=0 redis_key_patterns=k:1 data_mount_src=/dev/sdb data_bytes=4096 data_mount_base=sdb data_mount_devid=scsi-0HC_Volume_1 registry_fns=__UNREADABLE__ data_luks=crypto_LUKS zz_trailing=1"
 H5_PROBE_ROW=$(jq -cn --arg dt "$H5_PROBE_DT" --arg m "$H5_MSG" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-server-probe", _BOOT_ID:$b, message:$m} | tojson)}')
 H5_HB_ROW=$(jq -cn --arg dt "$H5_HB_DT" --arg b "$H5_BID" '{dt:$dt, raw: ({host:"soleur-inngest", host_name:"soleur-inngest-prd", SYSLOG_IDENTIFIER:"inngest-cutover-flip", _BOOT_ID:$b, message:{flag:"rolled-back", reason:"noop-rolled-back", guard:"7761", exit_code:0}} | tojson)}')
 # #8079 D8 — the flag_armed 2x2 needs the probe row and the heartbeat each sampled at `done`
@@ -2974,13 +2562,13 @@ _h5_hb_row() {  # $1 flag
 SERVING_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/http_code=000 server_active=failed/http_code=200 server_active=active}" soleur-inngest)
 WRONGHOST_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "$H5_MSG" web-1)
 STALE_PROBE_ROW=$(_h5_probe_row "$(date -u -d '-3 hour' '+%Y-%m-%d %H:%M:%S')" "$H5_MSG" soleur-inngest)
-SCHEMA7_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/probe_schema=8/probe_schema=7}" soleur-inngest)
+SCHEMA8_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/probe_schema=9/probe_schema=8}" soleur-inngest)
 UNKNOWNFLAG_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/cutover_flag=rolled-back/cutover_flag=unknown}" soleur-inngest)
 ABORTED_PROBE_ROW=$(_h5_probe_row "$H5_PROBE_DT" "${H5_MSG/cutover_flag=rolled-back/cutover_flag=aborted}" soleur-inngest)
 ROLLBACKFLAG_HB_ROW=$(_h5_hb_row rollback)
 ABORTED_HB_ROW=$(_h5_hb_row aborted)
-assert "#8079 per-token fixtures are each ONE substitution from H5 (serving/schema7/unknownflag/aborted differ in 2 tokens; wronghost only in host; stale only in dt)" \
-  "[[ \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\${H5_MSG/probe_schema=8/probe_schema=7}\") | grep -c '^[<>]') -eq 2 && \$(jq -r '.raw|fromjson|.host' <<<\"\$WRONGHOST_PROBE_ROW\") == web-1 && \$(jq -r '.raw|fromjson|.host' <<<\"\$H5_PROBE_ROW\") == soleur-inngest && \$(jq -r .dt <<<\"\$STALE_PROBE_ROW\") != \$(jq -r .dt <<<\"\$H5_PROBE_ROW\") ]]"
+assert "#8079 per-token fixtures are each ONE substitution from H5 (serving/schema8/unknownflag/aborted differ in 2 tokens; wronghost only in host; stale only in dt)" \
+  "[[ \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\${H5_MSG/probe_schema=9/probe_schema=8}\") | grep -c '^[<>]') -eq 2 && \$(jq -r '.raw|fromjson|.host' <<<\"\$WRONGHOST_PROBE_ROW\") == web-1 && \$(jq -r '.raw|fromjson|.host' <<<\"\$H5_PROBE_ROW\") == soleur-inngest && \$(jq -r .dt <<<\"\$STALE_PROBE_ROW\") != \$(jq -r .dt <<<\"\$H5_PROBE_ROW\") ]]"
 assert "#8079 2x2 fixtures differ from H5 in the flag ONLY (done/armed probe rows; done/armed heartbeats)" \
   "[[ \"\$DONE_MSG\" != \"\$H5_MSG\" && \"\$ARMED_MSG\" != \"\$H5_MSG\" && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$DONE_MSG\") | grep -c '^[<>]') -eq 2 && \$(diff <(tr ' ' '\n' <<<\"\$H5_MSG\") <(tr ' ' '\n' <<<\"\$ARMED_MSG\") | grep -c '^[<>]') -eq 2 ]]"
 # render_2_0 <region-file> <webhook-code> <webhook-body> <probe-mode> <hb-mode>  — echoes stdout+stderr, returns rc
@@ -3035,8 +2623,8 @@ render_2_0() {
     printf 'STUB_CODE=%q; STUB_BODY=%q; PMODE=%q; HMODE=%q; TMPD=%q\n' "$code" "$body" "$pmode" "$hmode" "$tmpd"
     printf 'H5_PROBE_ROW=%q; H5_HB_ROW=%q\n' "$H5_PROBE_ROW" "$H5_HB_ROW"
     printf 'DONE_PROBE_ROW=%q; ARMED_PROBE_ROW=%q; DONE_HB_ROW=%q; ARMED_HB_ROW=%q\n' "$DONE_PROBE_ROW" "$ARMED_PROBE_ROW" "$DONE_HB_ROW" "$ARMED_HB_ROW"
-    printf 'SERVING_PROBE_ROW=%q; WRONGHOST_PROBE_ROW=%q; STALE_PROBE_ROW=%q; SCHEMA7_PROBE_ROW=%q; UNKNOWNFLAG_PROBE_ROW=%q; ABORTED_PROBE_ROW=%q\n' \
-      "$SERVING_PROBE_ROW" "$WRONGHOST_PROBE_ROW" "$STALE_PROBE_ROW" "$SCHEMA7_PROBE_ROW" "$UNKNOWNFLAG_PROBE_ROW" "$ABORTED_PROBE_ROW"
+    printf 'SERVING_PROBE_ROW=%q; WRONGHOST_PROBE_ROW=%q; STALE_PROBE_ROW=%q; SCHEMA8_PROBE_ROW=%q; UNKNOWNFLAG_PROBE_ROW=%q; ABORTED_PROBE_ROW=%q\n' \
+      "$SERVING_PROBE_ROW" "$WRONGHOST_PROBE_ROW" "$STALE_PROBE_ROW" "$SCHEMA8_PROBE_ROW" "$UNKNOWNFLAG_PROBE_ROW" "$ABORTED_PROBE_ROW"
     printf 'ROLLBACKFLAG_HB_ROW=%q; ABORTED_HB_ROW=%q\n' "$ROLLBACKFLAG_HB_ROW" "$ABORTED_HB_ROW"
     printf '%s\n' "$BS_CLASSIFY_FN"
     printf '%s\n' "$BS_READER_FN"
@@ -3060,7 +2648,7 @@ doppler() {
         serving)     printf '%s\n' "$SERVING_PROBE_ROW"; return 0 ;;
         wronghost)   printf '%s\n' "$WRONGHOST_PROBE_ROW"; return 0 ;;
         stale)       printf '%s\n' "$STALE_PROBE_ROW"; return 0 ;;
-        schema7)     printf '%s\n' "$SCHEMA7_PROBE_ROW"; return 0 ;;
+        schema8)     printf '%s\n' "$SCHEMA8_PROBE_ROW"; return 0 ;;
         unknownflag) printf '%s\n' "$UNKNOWNFLAG_PROBE_ROW"; return 0 ;;
         aborted)     printf '%s\n' "$ABORTED_PROBE_ROW"; return 0 ;;
         badjson)     printf 'not json\n'; return 0 ;;
@@ -3105,7 +2693,7 @@ assert "#8054 H5 render: the pre-arm notice names P1-5 and the webhook code" "pr
 assert "#8054 H5 render: the dark notice carries boot_id=<36-char uuid> then flag=(aborted|rolled-back)" \
   "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -cE 'boot_id=[0-9a-f-]{36}.*flag=(aborted|rolled-back)' >/dev/null"
 assert "#8054 H5 render: the dark notice says in plain words that the refusal to start is the correct pre-flip posture" \
-  "printf '%s\n' \"\$H5_OUT\" | grep -cF 'intentionally refusing to start until op=arm; a non-200 loopback with the server not active is the correct pre-flip posture, not a fault' >/dev/null"
+  "printf '%s\n' \"\$H5_OUT\" | grep -cF 'intentionally refusing to start until the flip is armed (op=arm is retired; a re-cutover needs a reviewed re-introduction of that verb); a non-200 loopback with the server not active is the correct pre-flip posture, not a fault' >/dev/null"
 assert "#8054 H5 render: the notice reports BOTH ages and the heartbeat flag from the emit file (no raw row)" \
   "printf '%s\n' \"\$H5_OUT\" | grep -E '^::notice::2\.0 dark-host arm PASSED' | grep -cE 'probe row [0-9]+s old with flag=rolled-back, FSM heartbeat [0-9]+s old with flag=rolled-back' >/dev/null && ! printf '%s\n' \"\$H5_OUT\" | grep -c 'zz_trailing' >/dev/null"
 H5_TMPD="$(render_tmpd_of "$H5_OUT")"
@@ -3346,7 +2934,7 @@ _rpg_refusal() {  # $1 label  $2 pmode  $3 hmode  $4 token  $5 headline ERE
 _rpg_refusal 'host_serving' serving h5 host_serving 'row \([0-9]+s old — hourly.*90 minutes\).*WAS serving.*hook just failed to reach 10\.0\.1\.40:8288.*inngest-host-state\.sh.*op=inventory reads the WEB host'
 _rpg_refusal 'wrong_host' wronghost h5 wrong_host 'Two causes with opposite remedies.*dead host, not a mislabel.*inngest-host-state\.sh.*treat this as silent'
 _rpg_refusal 'stale_row' stale h5 stale_row '90-minute bound.*FSM transition.*Wait for the next hourly probe'
-_rpg_refusal 'stale_schema' schema7 h5 stale_schema 'not probe_schema=8.*unbumped pin re-delivers the same bytes'
+_rpg_refusal 'stale_schema' schema8 h5 stale_schema 'not probe_schema=9.*unbumped pin re-delivers the same bytes'
 _rpg_refusal 'flag_unreadable E11' unknownflag h5 flag_unreadable 'HOURLY probe row \([0-9]+s old\).*Do NOT write the flag by hand'
 _rpg_refusal 'flag_unreadable E13' h5 rollbackflag flag_unreadable 'same-boot heartbeat \([0-9]+s old\).*reports it as __UNREADABLE__'
 _rpg_refusal 'unreadable rc=0' badjson h5 unreadable 'answered \(rc=0\).*Nothing about the host was measured'
@@ -3424,7 +3012,7 @@ check_reader_returns_rc() {
   ( set +e; eval "$fn"; doppler() { return 7; }; _bs_query_rows 15m t 5 >/dev/null 2>&1; exit $? ) || rc=$?
   [[ "$rc" -eq 7 ]]
 }
-mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
+mutate_file "row17 reader swallows rc" "$BODY_SH" 's|^  rows=\$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "\$since" --grep "\$term" --limit "\$limit" 2>"\$errfile") \|\| rc=\$?$|  rows=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") \|\| true|' check_reader_returns_rc
 # Row 18 — the *) arm falls through. Property: the *) arm exits 1.
 check_star_arm_exits() {
   awk '/^  execute\)$/{f=1;next} f&&/^  [a-z-]+\)$/{exit} f' "$1" | awk '/^        \*\)$/{f=1} f' | sed -n '1,8p' | grep -cE 'exit 1 ;;' >/dev/null
@@ -3539,12 +3127,6 @@ printf '%s\n' 'x=$(inngest_execute_registry_gate_extra)' > "$_PC"
 assert "#8316 the word-bounded strip does not eat a longer name that ends the allowed one's text (suffix)" "! check_gate_surface '$_PC'"
 printf '%s\n' 'x=$(my_inngest_execute_registry_gate)' > "$_PC"
 assert "#8316 the word-bounded strip does not eat a longer name that begins with other word characters (prefix)" "! check_gate_surface '$_PC'"
-# The reworded `latched` operator text is a claim about what exists: pin that it no longer says the recut
-# apply target exists, and that it names the retirement.
-assert "#8316 the G3.7 latched ::error:: text no longer claims inngest-volume-recut exists" \
-  "! grep -qE 'volume-recut.{0,40}DOES exist' '$BODY_SH'"
-assert "#8316 the G3.7 latched ::error:: text names the recut target as retired by #8285" \
-  "[[ \"\$(grep -F 'op=arm: G3.7 REFUSING' '$BODY_SH')\" == *'inngest-volume-recut was retired by #8285'* ]]"
 # Row H — M1.2: the probe arm's call renamed. Property: the census (registry-probe=1) reds.
 check_rpg_census() { _gate_census "$1" >/dev/null; }
 mutate_file "rpg gate call renamed (census M1.2)" "$BODY_SH" "${_RPG_RANGE}"'s|^      RPG_VERDICT="\$(inngest_execute_registry_gate |      RPG_VERDICT="$(inngest_executeX_registry_gate |' check_rpg_census
@@ -4120,7 +3702,7 @@ assert "#6921 §9 poller: lock_contention to the end -> the timeout error names 
 # shellcheck disable=SC2034
 QW_POLL_CF="$(render_qw_poll 'quiesce_capture_failed:1')"
 assert "#6921 §9 poller: quiesce_capture_failed -> fails fast naming the Better Stack read, restart-inngest-server.yml and the re-dispatch" \
-  "qw_poll_failed \"\$QW_POLL_CF\" 1 'reason=quiesce_capture_failed' 'doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED' 'restart-inngest-server.yml' 'op=quiesce-web' 'NOTHING was stopped'"
+  "qw_poll_failed \"\$QW_POLL_CF\" 1 'reason=quiesce_capture_failed' 'doppler run --preserve-env -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 1h --grep INNGEST_QUIESCE_CAPTURE_FAILED' 'restart-inngest-server.yml' 'op=quiesce-web' 'NOTHING was stopped'"
 # shellcheck disable=SC2034
 QW_POLL_CU="$(render_qw_poll 'quiesce_capture_unavailable:1')"
 assert "#6921 §9 poller: quiesce_capture_unavailable -> fails fast naming restart-inngest-server.yml, op=rollback (disabled_unattributed) and the re-quiesce" \
@@ -4241,7 +3823,7 @@ assert "#6939 verify) calls missed_tick_report exactly once (got '$MTR_CALL_CT')
 assert "#6939 the call sits after the LAST exactly-once VERIFIED echo (call=$MTR_CALL_LN verdict=$MTR_VERDICT_LN)" "[[ -n '$MTR_CALL_LN' && -n '$MTR_VERDICT_LN' && '$MTR_CALL_LN' -gt '$MTR_VERDICT_LN' ]]"
 # The neighbours pin reachability: a call wrapped in an `if`, or a second printer after it, moves
 # one of them.
-MTR_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'missed_tick_report' | head -1 | sed 's/^[[:space:]]*//' || true)
+MTR_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'missed_tick_report' | sed -n '1p' | sed 's/^[[:space:]]*//' || true)
 MTR_NEXT=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -A1 -F 'missed_tick_report' | tail -1 | sed 's/^[[:space:]]*//' || true)
 # #6940 — the call now follows the zero-run discovery block's closing `fi`; the
 # block's own position (directly after the SCOPE CAVEAT) is pinned below.
@@ -4325,8 +3907,8 @@ _mtr_rc=$MTR_RC
 MTR_SET=$(mtr_set)
 MTR_SHAPE_BAD=$( { grep -E '^  candidate ' "$MTR_OUT" || true; } | grep -cvE '^  candidate function_id=[^ ]+ empty_bucket_start=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' || true)
 MTR_CMDISH=$(grep -cE 'soleur:|--event|manual-trigger' "$MTR_OUT" || true)
-MTR_HDR_LN=$(grep -nE '^::warning::.*UNVERIFIED.*NOT a re-fire list' "$MTR_OUT" | head -1 | cut -d: -f1 || true)
-MTR_CAND1_LN=$(grep -nE '^  candidate ' "$MTR_OUT" | head -1 | cut -d: -f1 || true)
+MTR_HDR_LN=$(grep -nE '^::warning::.*UNVERIFIED.*NOT a re-fire list' "$MTR_OUT" | sed -n '1p' | cut -d: -f1 || true)
+MTR_CAND1_LN=$(grep -nE '^  candidate ' "$MTR_OUT" | sed -n '1p' | cut -d: -f1 || true)
 assert "#6939 ON canonical: rc is exactly 0 (got $_mtr_rc)" "[[ '$_mtr_rc' == '0' ]]"
 assert "#6939 ON canonical: the UNVERIFIED / NOT a re-fire list header precedes every candidate (hdr=$MTR_HDR_LN first=$MTR_CAND1_LN)" "[[ -n '$MTR_HDR_LN' && -n '$MTR_CAND1_LN' && '$MTR_HDR_LN' -lt '$MTR_CAND1_LN' ]]"
 assert "#6939 ON canonical: exact candidate set (got '$MTR_SET')" "[[ '$MTR_SET' == 'fn-d@11:00,fn-d@12:00,fn-d@13:00,fn-h@12:00' ]]"
@@ -4445,8 +4027,8 @@ echo "--- #6940 zero-run discovery (registry-sourced, scoped re-probe) ---"
 # REG_BODY is captured AFTER the registry precondition reads BODY and BEFORE the
 # doublefire fetch overwrites it — a capture after that point would hold the runs
 # body and silently un-discover every cron.
-REG_BODY_LN=$(grep -nF 'REG_BODY="$BODY"' "$VERIFY_ARM_FILE" | head -1 | cut -d: -f1 || true)
-RUNS_FETCH_LN=$(grep -n 'cat /tmp/verify-runs' "$VERIFY_ARM_FILE" | head -1 | cut -d: -f1 || true)
+REG_BODY_LN=$(grep -nF 'REG_BODY="$BODY"' "$VERIFY_ARM_FILE" | sed -n '1p' | cut -d: -f1 || true)
+RUNS_FETCH_LN=$(grep -n 'cat /tmp/verify-runs' "$VERIFY_ARM_FILE" | sed -n '1p' | cut -d: -f1 || true)
 assert "#6940 verify arm captures REG_BODY exactly once (got line '$REG_BODY_LN')" "[[ -n '$REG_BODY_LN' && \"\$(grep -cF 'REG_BODY=\"\$BODY\"' '$VERIFY_ARM_FILE')\" -eq 1 ]]"
 assert "#6940 REG_BODY is captured BEFORE the doublefire fetch overwrites BODY (reg=$REG_BODY_LN runs=$RUNS_FETCH_LN)" "[[ -n '$REG_BODY_LN' && -n '$RUNS_FETCH_LN' && '$REG_BODY_LN' -lt '$RUNS_FETCH_LN' ]]"
 
@@ -4460,7 +4042,7 @@ assert "#6940 zero_run_cron_ids() extraction is non-empty and carries its defini
 # windowless burns a webhook call the report cannot use), and the block directly
 # follows the SCOPE CAVEAT echo.
 assert "#6940 discovery is gated on flag == true AND both window vars set" "grep -qF 'if [[ \"\$MTR_GATE\" == \"true\" && -n \"\${CUTOVER_WINDOW_FROM:-}\" && -n \"\${CUTOVER_WINDOW_UNTIL:-}\" ]]; then' '$VERIFY_ARM_FILE'"
-DISC_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"' | head -1 | sed 's/^[[:space:]]*//' || true)
+DISC_PREV=$(grep -vE '^[[:space:]]*$' "$VERIFY_ARM_FILE" | grep -B1 -F 'MTR_GATE="${CUTOVER_MISSED_TICK_CANDIDATES:-}"' | sed -n '1p' | sed 's/^[[:space:]]*//' || true)
 assert "#6940 the discovery block directly follows the 2.6 SCOPE CAVEAT echo (got: \$DISC_PREV)" "[[ \"\$DISC_PREV\" == 'echo \"::notice::2.6 SCOPE CAVEAT'* ]]"
 assert "#6940 an empty zero-run set issues NO second call (guarded by -n)" "grep -qF 'if [[ -n \"\$ZERO_RUN_IDS\" ]]; then' '$VERIFY_ARM_FILE'"
 # The WIRE, not just the endpoints (#7969): the suite executes the extracted helper
@@ -4566,7 +4148,7 @@ assert "#6940 every declared zero_run_cron_ids case ran (ran=$ZR_CASES)" "[[ '$Z
 
 rm -rf "$BUCKET_PROGS_DIR"
 rm -f "$DF_HARNESS_SRC"
-rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
+rm -f "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" "$PROBE_ARMS_FILE"
 
 # WHOLE-SUITE ANTI-DELETION FLOOR (#7462 review). The only merge gate below is `FAIL -gt 0`, so
 # deleting any assertion lowers the pass count silently and exits 0 — measured: removing the
@@ -4604,22 +4186,9 @@ rm -f "$ARM_FILE" "$ROLLBACK_FILE" "$CONFIRM_FILE" "$FWD_ARM_FILE" "$TAIL_FILE" 
 #   every-body mutation, the R1 SOURCE single-writer pin + its mutation, the persisted 2.1 fields +
 #   op=capture source, the held_back P2-b rows, the rendered quiesce-web preflight (+ mutation) and
 #   poller arms, and the web-1-only / single web-2 statement pins.
-# ── #6894: op=luks-cutover — the LUKS blue-green cutover writer (op=luks-rollback retired, #8285 PR B) ──
-# Same contract as the sibling flag writers: the value goes in on STDIN (argv is world-readable via
-# /proc), stdout is discarded (`doppler secrets set` prints every remaining secret of the config),
-# every guard refuses BEFORE the write, and the on-host FSM is confirmed from Better Stack rather
-# than assumed. The distinctive one is the TAG: the confirm and liveness readers must key on
-# inngest-luks-cutover, not the flip's tag — the flip timer is enabled on a host where the cutover
-# trio never installed, so borrowing its rows would report a silently-undelivered unit as audible.
-LUKS_FILE="$(mktemp)"; SCRATCH+=("$LUKS_FILE")
-awk '/^            luks-cutover\)$/,/^              ;;$/' "$WF" > "$LUKS_FILE"
-LUKS_N=$(wc -l < "$LUKS_FILE" | tr -d '[:space:]')
-assert "#6894 luks) case body is a real block (non-vacuity for every row below, got $LUKS_N)" \
-  "[[ '$LUKS_N' -gt 40 ]]"
-assert "#6894 choice list offers luks-cutover" \
-  "grep -qE '^[[:space:]]+-[[:space:]]*luks-cutover\$' '$WF_YAML'"
-assert "#6894 luks-cutover is in the reviewer-gated environment set (an op in the list with an unextended ternary runs ungated)" \
-  "printf '%s' \"\$ENV_OPS\" | grep -cF \"inputs.op == 'luks-cutover'\" >/dev/null"
+# ── #6894 / #9927: op=luks-cutover was RETIRED by deletion (INNGEST_LUKS_CUTOVER is terminal `done`); the
+# absence of the verb itself is pinned by Guard 2 at the end of this file. Its reverse, op=luks-rollback,
+# was retired earlier by #8285 PR B and the rows below keep it retired.
 # Guard 1 (#8285 PR B): op=luks-rollback STAYS retired. The plaintext volume it reverse-copied to is destroyed, so a
 # resurrected verb would arm an on-host FSM that has nowhere to land. Each form is asserted absent from a surface it could
 # return through: the choice list, the environment ternary, the orchestrator's case arms and its LK_WANT=rollback write.
@@ -4635,141 +4204,6 @@ assert "#8285 PR B Guard 1: the orchestrator has no luks-rollback case arm (any 
 # Non-vacuity of the Guard 1 patterns: each recognises the form it forbids, so an absent result is not a blind scan.
 assert "#8285 PR B Guard 1 non-vacuity: the patterns recognise every form they forbid (quoted/commented list item, reversed/extra/quoted/spaced/G2 arms, quoted write) and not the live arm" \
   "printf '          - luks-rollback\\n' | grep -cE >/dev/null '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && printf '          - \"luks-rollback\" # x\\n' | grep -cE >/dev/null '^[[:space:]]+-[[:space:]]*[\"'\"'\"']?luks-rollback[\"'\"'\"']?[[:space:]]*(#.*)?\$' && printf 'if: inputs.op==\"luks-rollback\"\\n' | grep -cE >/dev/null \"inputs\\.op[[:space:]]*==[[:space:]]*[\\\"']luks-rollback\" && for arm in '  luks-cutover|luks-rollback)' '  luks-rollback|luks-cutover)' '  a|luks-rollback|b)' '      absent:luks-rollback)' '  luks-rollback)' '  \"luks-rollback\")' \"  'luks-rollback')\" '  luks-cutover | luks-rollback)' '  (luks-rollback)'; do printf '%s\\n' \"\$arm\" | grep -cE >/dev/null '^[[:space:]]*\(?[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*luks-rollback[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*\)' || exit 1; done && printf 'LK_WANT=\"rollback\"\\n' | grep -cE >/dev/null 'LK_WANT=[\"'\"'\"']?rollback' && ! printf '  luks-cutover)\\n' | grep -cE >/dev/null '^[[:space:]]*\(?[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*luks-rollback[A-Za-z0-9_:|\"'\"'\"'*[:space:]-]*\)'"
-LK_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "$LK_WANT" | DOPPLER_TOKEN=' "$LUKS_FILE" && LK_STDIN=1
-LK_ARGV=0;   grep -qE 'secrets set INNGEST_LUKS_CUTOVER=' "$LUKS_FILE" && LK_ARGV=1
-LK_SILENT=0; grep -E 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | grep -c '>/dev/null' >/dev/null && LK_SILENT=1
-LK_FLIPW=0;  grep -qE 'secrets set INNGEST_CUTOVER_FLIP' "$LUKS_FILE" && LK_FLIPW=1
-# `|| true` because "no match" is a possible answer here, not a crash: an EMPTY line number means
-# the anchor moved, and the two assertions below require `-n` on each before comparing — so the
-# miss reds THERE, with the value printed, instead of killing the suite here with nothing said.
-LK_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_LUKS_CUTOVER' "$LUKS_FILE" | sed -n '1p' | cut -d: -f1) || true
-LK_LASTG3_LN=$(grep -n 'G3 REFUSING' "$LUKS_FILE" | tail -1 | cut -d: -f1) || true
-LK_TS_LN=$(grep -n 'LK_TS=' "$LUKS_FILE" | sed -n '1p' | cut -d: -f1) || true
-LK_G1READ=0; grep -qE 'doppler secrets get INNGEST_LUKS_CUTOVER -p soleur-inngest -c prd --plain' "$LUKS_FILE" && LK_G1READ=1
-# BOTH fail-closed arms, by their DISTINCT sentences: one for "the config could not be read at
-# all", one for "the name exists but its value could not be read". A count alone (or the shared
-# prefix) is satisfied by either, so deleting the second one survived the first revision of this row.
-LK_G1FC=0;   grep -qF 'could not be read at all' "$LUKS_FILE" \
-             && grep -qF 'EXISTS but its value could not be read' "$LUKS_FILE" \
-             && grep -qF 'has("INNGEST_LUKS_CUTOVER")' "$LUKS_FILE" \
-             && [[ "$(grep -c 'G1 REFUSING FAIL-CLOSED' "$LUKS_FILE")" -eq 2 ]] && LK_G1FC=1
-# ANCHORED as case ARMS, not as substrings: `present:luks-cutover-DISABLED)` contains
-# `present:luks-cutover`, so a substring grep passed a mutant that had disabled the arm (measured).
-# ANCHORED as case ARMS (above), not substrings. (The G1 'aborted' arm of the retired luks-rollback verb, and its row, went with it.)
-LK_G2=0;     grep -qE '^[[:space:]]*present:luks-cutover\)' "$LUKS_FILE" \
-             && grep -qE '^[[:space:]]*unreadable:\*\)' "$LUKS_FILE" \
-             && grep -qF '_luks_pointer_state' "$LUKS_FILE" && LK_G2=1
-LK_G3TAG=0;  grep -qF '_luks_liveness_count' "$LUKS_FILE" && ! grep -qF 'inngest-cutover-flip' "$LUKS_FILE" && LK_G3TAG=1
-LK_CONF=0;   grep -qF 'confirm_luks_state' "$LUKS_FILE" && LK_CONF=1
-LK_ISO=0;    grep -qF 'LK_ISO=$(date -u -d "@$LK_TS"' "$LUKS_FILE" && LK_ISO=1
-LK_TERM=0;   grep -qE '^[[:space:]]+rolled-back\)$' "$LUKS_FILE" && grep -qE '^[[:space:]]+aborted\)$' "$LUKS_FILE" && LK_TERM=1
-LK_ERRS=$(grep -cE '::error::op=' "$LUKS_FILE" || true)
-LK_RAWJQ=0;  grep -qE 'jq \.($|[^a-zA-Z_])' "$LUKS_FILE" && LK_RAWJQ=1
-assert "#6894 writes INNGEST_LUKS_CUTOVER on STDIN, never on argv (/proc is world-readable)" \
-  "[[ '$LK_STDIN' -eq 1 && '$LK_ARGV' -eq 0 ]]"
-assert "#6894 the write discards stdout (doppler secrets set prints every remaining secret of the config)" \
-  "[[ '$LK_SILENT' -eq 1 ]]"
-assert "#6894 the verb never writes the FLIP's flag — the destructive flip and the preserving copy stay separate" \
-  "[[ '$LK_FLIPW' -eq 0 ]]"
-assert "#6894 the write is LAST: every guard refusal is above it (write line $LK_WRITE_LN > last G3 refusal $LK_LASTG3_LN)" \
-  "[[ -n '$LK_WRITE_LN' && -n '$LK_LASTG3_LN' && '$LK_WRITE_LN' -gt '$LK_LASTG3_LN' ]]"
-assert "#6894 G1 reads the flag AND separates unset from unreadable via the name list (a swallowed read is not 'unset')" \
-  "[[ '$LK_G1READ' -eq 1 && '$LK_G1FC' -eq 1 ]]"
-assert "#6894 G2 gates on the DURABLE pointer (present refuses a re-arm, unreadable refuses fail-closed)" \
-  "[[ '$LK_G2' -eq 1 ]]"
-assert "#6894 G3 liveness keys on the CUTOVER unit's own tag — a flip row proves nothing about a unit that never installed" \
-  "[[ '$LK_G3TAG' -eq 1 ]]"
-assert "#6894 the on-host FSM is CONFIRMED from Better Stack, not assumed" \
-  "[[ '$LK_CONF' -eq 1 ]]"
-assert "#6894 the confirm window is anchored at the WRITE, so a stale terminal row cannot false-succeed" \
-  "[[ -n '$LK_TS_LN' && -n '$LK_WRITE_LN' && '$LK_TS_LN' -lt '$LK_WRITE_LN' && '$LK_ISO' -eq 1 ]]"
-assert "#6894 a rolled-back or aborted FSM is reported as a FAILED dispatch, never a green one (got $LK_ERRS ::error:: arms)" \
-  "[[ '$LK_TERM' -eq 1 && '$LK_ERRS' -ge 8 ]]"
-assert "#6894 no raw Better Stack row is echoed by the verb (the standing purity contract)" \
-  "! grep -qE 'jq \\.(\$|[^a-zA-Z_])' '$LUKS_FILE'"
-
-# ── #8285 PR B review: BEHAVIOUR of the surviving luks-cutover guards. The rows above grep the arm's TEXT; none drives it,
-# so adding `|done` to the permitting G1 arm, dropping the `exit` from the in-flight or `present:` refusal, or flipping
-# LK_EXPECT all left the suite green (measured). The arm is extracted from the REAL script and run under bash with the
-# external readers stubbed (doppler, the pointer reader, the liveness/confirm helpers); each row asserts the exit status
-# AND whether the write happened, so a refusal that falls through to the write is caught.
-LKA_BODY="$(mktemp)"; LKA_DRV="$(mktemp)"; LKA_MARK="$(mktemp)"; SCRATCH+=("$LKA_BODY" "$LKA_DRV" "$LKA_MARK")
-awk '/^  luks-cutover\)$/{f=1;next} f&&/^    ;;$/{exit} f' "$BODY_SH" > "$LKA_BODY"
-LKA_N=$(wc -l < "$LKA_BODY" | tr -d '[:space:]')
-assert "#8285 luks-cutover arm extracted from the real script for behavioural driving (non-vacuity, got $LKA_N lines)" \
-  "[[ '$LKA_N' -gt 40 ]]"
-{
-  printf '%s\n' 'set -euo pipefail'
-  printf '%s\n' 'OP=luks-cutover; INNGEST_HOST=synth-host; INNGEST_HOST_NAME=synth-name; LUKS_LIVENESS_SINCE=2h'
-  printf '%s\n' 'DOPPLER_TOKEN_INNGEST_ARM="${STUB_TOKEN-synth-token}"'
-  printf '%s\n' 'doppler() { case "$*" in'
-  printf '%s\n' '  *"secrets get INNGEST_LUKS_CUTOVER"*) if [[ -n "${STUB_FLAG:-}" ]]; then printf "%s" "$STUB_FLAG"; else return 1; fi ;;'
-  printf '%s\n' '  *"--only-names"*) if [[ "${STUB_NAMES_EMPTY:-0}" == 1 ]]; then :; elif [[ "${STUB_NAMES_HAS:-0}" == 1 ]]; then printf "{\"INNGEST_LUKS_CUTOVER\":{}}"; else printf "{\"OTHER\":{}}"; fi ;;'
-  printf '%s\n' '  *"secrets set INNGEST_LUKS_CUTOVER"*) tee "$MARK" >/dev/null; if [[ "${STUB_SETFAIL:-0}" == 1 ]]; then return 1; fi ;;'
-  printf '%s\n' 'esac; }'
-  printf '%s\n' '_luks_pointer_state() { printf "%s" "${STUB_PTR:-absent}"; }'
-  printf '%s\n' '_luks_liveness_count() { echo 3; }'
-  printf '%s\n' 'resume_liveness_decide() { echo "${STUB_LIVE:-audible}"; }'
-  printf '%s\n' 'confirm_luks_state() { printf "%s" "${STUB_CONFIRM:-done}"; }'
-  cat "$LKA_BODY"
-} > "$LKA_DRV"
-lka_run() { # <flag> <pointer> <confirm> <names-has-flag> -> LKA_RC, LKA_WROTE
-  : > "$LKA_MARK"
-  LKA_RC=0
-  MARK="$LKA_MARK" STUB_FLAG="$1" STUB_PTR="$2" STUB_CONFIRM="$3" STUB_NAMES_HAS="$4" bash "$LKA_DRV" >/dev/null 2>&1 || LKA_RC=$?
-  LKA_WROTE="$(cat "$LKA_MARK")"
-}
-lka_run "" absent "done" 0
-assert "#8285 luks-cutover on an UNSET flag with the pointer absent arms (writes 'armed', exit 0) — also proves the driver reaches the write" \
-  "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
-lka_run aborted absent "done" 0
-assert "#8285 luks-cutover re-arms from 'aborted' (permitted, writes 'armed')" "[[ '$LKA_RC' -eq 0 && '$LKA_WROTE' == 'armed' ]]"
-lka_run rolled-back absent "done" 0
-assert "#8285 luks-cutover REFUSES a 'rolled-back' flag before any write (the state is unreachable on this host: an incident, runbook 5a)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run done absent "done" 0
-assert "#8285 luks-cutover REFUSES a 'done' flag before any write (G1: a completed cutover is never re-armed)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run copied absent "done" 0
-assert "#8285 luks-cutover REFUSES an in-flight flag before any write (G1: arming over a running FSM would race it)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run "" present "done" 0
-assert "#8285 luks-cutover REFUSES when the durable pointer is present, whatever the flag says, before any write (G2)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run "" absent done 1
-assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the flag exists but its value is unreadable (a swallowed read is not 'unset')" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run "" absent aborted 0
-assert "#8285 luks-cutover EXPECTS 'done' from the on-host FSM: a terminal 'aborted' confirm is a FAILED dispatch (exit 1) though the write landed" \
-  "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
-# The remaining refusals and failure arms (one row each; every one reds when its `exit 1` is dropped, because the
-# driver then falls through to the write or the green confirm).
-STUB_LIVE=silent lka_run "" absent "done" 0
-assert "#8285 luks-cutover REFUSES on a SILENT host before any write (G3: a write nothing can act on parks the flag)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_LIVE=unreadable lka_run "" absent "done" 0
-assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the liveness read path failed, before any write (G3)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_LIVE=bogus lka_run "" absent "done" 0
-assert "#8285 luks-cutover REFUSES FAIL-CLOSED on an unrecognised liveness outcome, before any write (G3)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-lka_run "" unreadable "done" 0
-assert "#8285 luks-cutover REFUSES FAIL-CLOSED when the durable pointer is unreadable, before any write (G2)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_TOKEN="" lka_run "" absent "done" 0
-assert "#8285 luks-cutover REFUSES an empty arm token before any read or write" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_NAMES_EMPTY=1 lka_run "" absent "done" 0
-assert "#8285 luks-cutover REFUSES FAIL-CLOSED when soleur-inngest/prd cannot be read at all, before any write (G1)" \
-  "[[ '$LKA_RC' -eq 1 && -z '$LKA_WROTE' ]]"
-STUB_SETFAIL=1 lka_run "" absent "done" 0
-assert "#8285 luks-cutover exits 1 when the Doppler write itself fails (never falls through to the confirm)" \
-  "[[ '$LKA_RC' -eq 1 ]]"
-lka_run "" absent rolled-back 0
-assert "#8285 luks-cutover reports a rolled-back confirm as a FAILED dispatch (exit 1)" "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
-lka_run "" absent timeout 0
-assert "#8285 luks-cutover reports no terminal flag within the window as a FAILED dispatch (exit 1)" "[[ '$LKA_RC' -eq 1 && '$LKA_WROTE' == 'armed' ]]"
-
 # #8079 D4/AC12 — `_bs_read_remedy` no longer hardcodes the step it is reporting for. The census IS
 # the assertion, not the number nine: a tenth message added later cannot slip through with a `2.0`
 # prefix, and one added with no prefix at all fails the equality arm. Scoped to `$BS_REMEDY_FN` —
@@ -4783,70 +4217,141 @@ assert "#8079 _bs_read_remedy census: 0 hardcoded '2.0 ' prefixes and all $_RM_T
   "[[ '$_RM_HARDCODED' -eq 0 && '$_RM_PARAM' -eq '$_RM_TOTAL' && '$_RM_TOTAL' -gt 0 ]]"
 
 # =============================================================================================
-# #7777 — op=reflush, the AUTHORIZED second FLUSHALL. One Doppler write of
-# `reflush,run=<gha-run-id>,by=<actor>` to INNGEST_CUTOVER_FLIP; the on-host FSM's reflush arm
-# validates the evidence, APPENDS a cleared_at authorization record to the append-only latch
-# ledger (the prior flushed_at is never erased), and re-enters the shared flush path, which
-# re-engages the latch with a fresh flushed_at. The verb is gated four ways — terminal flag,
-# latch-must-EXIST (the inverse of op=arm's G3.7), host audibility, well-formed evidence — and
-# every refusal precedes the write. The reviewer-gated environment + conditional token are the
-# same as arm's, pinned by the shared set-parity row and the membership loop above.
+# #7777 / #9927 — op=reflush (the authorized second FLUSHALL) was RETIRED by deletion; its absence is
+# pinned by Guard 2 at the end of this file. The OFF-HOST transition reader _flip_transition_dt still
+# keys on the reasons the on-host reflush arm emits, so its emitter parity stays pinned below.
 # =============================================================================================
-assert "#7777 choice includes reflush" "grep -qE '^[[:space:]]+-[[:space:]]*reflush\$' '$WF_YAML'"
-assert "#7777 case arm: reflush)" "grep -qE '^[[:space:]]+reflush\\)' '$WF'"
-RFL_FILE="$(mktemp)"; SCRATCH+=("$RFL_FILE")
-awk '/^            reflush\)$/,/^              ;;$/' "$WF" > "$RFL_FILE"
-RFL_N=$(wc -l < "$RFL_FILE" | tr -d '[:space:]')
-assert "#7777 reflush) case body is a real block (non-vacuity for every row below, got $RFL_N)" \
-  "[[ '$RFL_N' -gt 40 ]]"
-RF_STDIN=0;  grep -qF 'printf '"'"'%s'"'"' "reflush,run=$RF_RUN,by=$RF_BY" | DOPPLER_TOKEN=' "$RFL_FILE" && RF_STDIN=1
-RF_ARGV=0;   grep -qE 'secrets set INNGEST_CUTOVER_FLIP=' "$RFL_FILE" && RF_ARGV=1
-RF_SILENT=0; grep -E 'doppler secrets set INNGEST_CUTOVER_FLIP' "$RFL_FILE" | grep -c '>/dev/null' >/dev/null && RF_SILENT=1
-RF_WRITE_LN=$(grep -n 'doppler secrets set INNGEST_CUTOVER_FLIP' "$RFL_FILE" | sed -n '1p' | cut -d: -f1) || true
-RF_LASTG_LN=$(grep -n 'REFUSING' "$RFL_FILE" | tail -1 | cut -d: -f1) || true
-RF_TS_LN=$(grep -n 'RF_TS=' "$RFL_FILE" | sed -n '1p' | cut -d: -f1) || true
-RF_ISO=0;    grep -qF 'RF_ISO=$(date -u -d "@$RF_TS"' "$RFL_FILE" && RF_ISO=1
-RF_G1READ=0; grep -qE 'doppler secrets get INNGEST_CUTOVER_FLIP -p soleur-inngest -c prd --plain' "$RFL_FILE" && RF_G1READ=1
-RF_G1FC=0;   grep -qF '__READ_FAILED__' "$RFL_FILE" && grep -qE '^[[:space:]]*done\|aborted\|rolled-back\)' "$RFL_FILE" && RF_G1FC=1
-RF_G2=0;     grep -qF 'RF_LATCH_N="$(_flush_latch_count)"' "$RFL_FILE" && grep -qF 'flush_latch_decide "$RF_LATCH_N" "$RF_LIVE_N"' "$RFL_FILE" && grep -qF 'latched)' "$RFL_FILE" && RF_G2=1
-RF_G3=0;     grep -qF 'RF_LIVE_N="$(_flip_liveness_count)"' "$RFL_FILE" && grep -qF 'resume_liveness_decide "$RF_LIVE_N"' "$RFL_FILE" && RF_G3=1
-RF_G4=0;     grep -qF 'RF_RUN="${GITHUB_RUN_ID:-}"' "$RFL_FILE" && grep -qF 'RF_BY="${GITHUB_TRIGGERING_ACTOR' "$RFL_FILE" && grep -qF '=~ ^[0-9]+$' "$RFL_FILE" && RF_G4=1
-RF_CONF=0;   grep -qF 'RF_STATE=$(confirm_flip_state "$RF_ISO")' "$RFL_FILE" && RF_CONF=1
-RF_EV=0;     grep -qF 'reflush,run=' "$RFL_FILE" && RF_EV=1
-RF_ERRS=$(grep -cE '::error::op=reflush' "$RFL_FILE" || true)
-assert "#7777 writes the reflush evidence value on STDIN, never on argv (/proc is world-readable)" \
-  "[[ '$RF_STDIN' -eq 1 && '$RF_ARGV' -eq 0 ]]"
-assert "#7777 the write discards stdout (doppler secrets set prints every remaining secret of the config)" \
-  "[[ '$RF_SILENT' -eq 1 ]]"
-assert "#7777 the write is LAST-ish: every gate refusal is above it (write line $RF_WRITE_LN > last refusal $RF_LASTG_LN)" \
-  "[[ -n '$RF_WRITE_LN' && -n '$RF_LASTG_LN' && '$RF_WRITE_LN' -gt '$RF_LASTG_LN' ]]"
-assert "#7777 G1 reads the flag, fails closed on the read sentinel, and admits terminal states only" \
-  "[[ '$RF_G1READ' -eq 1 && '$RF_G1FC' -eq 1 ]]"
-assert "#7777 G2 routes the latch EXISTS check through flush_latch_decide + _flush_latch_count, latched=>proceed" \
-  "[[ '$RF_G2' -eq 1 ]]"
-assert "#7777 G3 routes audibility through resume_liveness_decide + _flip_liveness_count" \
-  "[[ '$RF_G3' -eq 1 ]]"
-assert "#7777 G4 validates the dispatch-supplied evidence (run=digits, by=token) before the write" \
-  "[[ '$RF_G4' -eq 1 ]]"
-assert "#7777 the authorization evidence RIDES the flag value (no new secret name — the config is an exact set)" \
-  "[[ '$RF_EV' -eq 1 ]]"
-assert "#7777 the on-host FSM is CONFIRMED from Better Stack, anchored at the write" \
-  "[[ -n '$RF_TS_LN' && -n '$RF_WRITE_LN' && '$RF_TS_LN' -lt '$RF_WRITE_LN' && '$RF_ISO' -eq 1 && '$RF_CONF' -eq 1 ]]"
-assert "#7777 a failed dispatch is reported, never a silent green (got $RF_ERRS ::error:: arms)" \
-  "[[ '$RF_ERRS' -ge 6 ]]"
-# EMITTER PARITY (the other direction of the G3.7 emitter rows): the transition grep this op
-# depends on must key on reasons the emitter actually writes, and the reflush arm must exist in
-# the FSM for the flag value to mean anything.
 assert "#7777 EMITTER PARITY: latch-cleared is a real emit_state literal in the FSM" \
   "grep -qF '\"latch-cleared\"' '$FL_EMITTER_SH'"
 assert "#7777 EMITTER PARITY: reflush-evidence-invalid is a real emit_state literal in the FSM" \
   "grep -qF '\"reflush-evidence-invalid\"' '$FL_EMITTER_SH'"
-assert "#7777 the FSM carries the reflush arm (the flag value would otherwise be refused as unknown)" \
-  "grep -qE 'reflush\|reflush,\*\)' '$FL_EMITTER_SH'"
-assert "#7777 the FSM's clear writer exists (record_latch_clear, append-only)" \
-  "grep -qF 'record_latch_clear() {' '$FL_EMITTER_SH'"
 assert "#7777 the off-host transition reader keys on the new emit reasons (parity with _flip_transition_dt)" \
   "grep -cF '\"reason\":\"latch-cleared\"' '$BODY_SH' >/dev/null && grep -cF '\"reason\":\"reflush-evidence-invalid\"' '$BODY_SH' >/dev/null"
+
+# =============================================================================================
+# GUARD 2 (#9927 item 8) — the retired verbs stay retired; the credentialed op sets agree.
+# op=arm, op=reflush and op=luks-cutover were retired BY DELETION (their flags are terminal);
+# op=rollback and op=resume are KEPT (CTO rulings F1/F2) and are now the only consumers of the
+# arm token. The expected sets below are LITERALS, never derived from the workflow: a set derived
+# from the artifact under test shrinks with the deleted payload and still passes (the learning
+# 2026-07-29-every-guard-i-fixed-this-session-was-narrower-than-the-claim-it-carried).
+# Assembly: the options list, the `environment:` ternary, the token env ternary, the export
+# step's own `if:`, the Tier-B loader ternary, and the case labels of the orchestrator.
+# =============================================================================================
+_G2_RETIRED="arm reflush luks-cutover"
+_G2_TOKEN_OPS="resume rollback"
+_G2_ENV_OPS="backup resume rollback"
+_G2_LABELS="backup capture doublefire-probe enumerate execute inventory quiesce-web rearm registry-probe resume rollback verify verify-wiped-volume"
+# Non-comment YAML lines only, so a retained comment naming a verb neither masks nor fakes a hit.
+_G2_YAML_CODE="$(mktemp)"; SCRATCH+=("$_G2_YAML_CODE")
+grep -vE '^[[:space:]]*#' "$WF_YAML" > "$_G2_YAML_CODE"
+# Tolerant of spacing around `==` and of single OR double quoted literals (`inputs.op=="arm"`, `inputs.op  ==  'arm'`).
+_g2_ops() { grep -oE "inputs\\.op[[:space:]]*==[[:space:]]*['\"][a-z-]+['\"]" | sed -E "s/.*['\"]([a-z-]+)['\"]\$/\\1/" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
+G2_OPTIONS=$(awk '/^[[:space:]]+options:[[:space:]]*$/{f=1;next} f && /^[[:space:]]+-[[:space:]]/{print;next} f && !/^[[:space:]]*(#.*)?$/{f=0}' "$_G2_YAML_CODE" | sed -E 's/^[[:space:]]+-[[:space:]]*//; s/[[:space:]]*(#.*)?$//; s/^["'"'"']//; s/["'"'"']$//' | tr '\n' ' ')
+G2_ENV_LINE=$(grep -E '^[[:space:]]+environment:' "$_G2_YAML_CODE" | sed -n '1p' || true)
+G2_TOK_LINE=$(grep -E '^[[:space:]]+DOPPLER_TOKEN_INNGEST_ARM:' "$_G2_YAML_CODE" | sed -n '1p' || true)
+G2_IF_LINE=$(awk '/- name: Export Inngest arm token/{f=1;next} f && /^[[:space:]]+if:/{print;exit}' "$_G2_YAML_CODE")
+G2_PRIV_LINE=$(grep -E '^[[:space:]]+doppler-token-infra-privileged:' "$_G2_YAML_CODE" | sed -n '1p' || true)
+G2_TOK_SET=$(printf '%s' "$G2_TOK_LINE" | _g2_ops)
+G2_ENV_SET=$(printf '%s' "$G2_ENV_LINE" | _g2_ops)
+G2_IF_SET=$(printf '%s' "$G2_IF_LINE" | _g2_ops)
+G2_PRIV_SET=$(printf '%s' "$G2_PRIV_LINE" | _g2_ops)
+# Case labels of the orchestrator: every 2-space-indent pattern line inside `case "$OP"`, split on
+# `|`, quotes/parens/whitespace stripped, so a combined (`arm|rollback)`) or quoted (`"arm")`) label cannot hide.
+# A label is the leading `[(]pat[|pat]...)` of a 2-space-indent line; it is found even when the arm is a ONE-LINER whose line
+# does not end in `)` (`  newop) cmd ;;`). Only label-shaped text is matched, so command text after the `)` cannot add labels.
+_g2_labels() { # <body file> -> sorted, space-separated case labels of `case "$OP" in`
+  awk '/^case "\$OP" in$/{f=1;next} /^esac$/{f=0} f && match($0, /^  \(?["\x27]?[A-Za-z0-9_*-]+["\x27]?([[:space:]]*\|[[:space:]]*["\x27]?[A-Za-z0-9_*-]+["\x27]?)*[[:space:]]*\)/){print substr($0, RSTART, RLENGTH)}' "$1" \
+    | sed -E 's/\)$//; s/^[[:space:]]*\(?//' | tr '|' '\n' | sed -E "s/[\"' ]//g" | { grep -vxF '*' || true; } | LC_ALL=C sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+G2_LABELS=$(_g2_labels "$BODY_SH")
+assert "#9927 G2 anti-vacuity: options, the environment ternary, the token ternary, the export if:, the loader ternary and the case labels were all located" \
+  "[[ -n '$G2_OPTIONS' && -n '$G2_ENV_SET' && -n '$G2_TOK_SET' && -n '$G2_IF_SET' && -n '$G2_PRIV_SET' && -n '$G2_LABELS' ]]"
+for _v in $_G2_RETIRED; do
+  assert "#9927 G2 retired verb '$_v' is not a workflow_dispatch option (bare, quoted or with a trailing comment)" \
+    "! printf '%s' '$G2_OPTIONS' | tr ' ' '\\n' | grep -cxF '$_v' >/dev/null"
+  assert "#9927 G2 retired verb '$_v' appears in no inputs.op test of the workflow (any ternary, if:, or contains() form)" \
+    "! grep -E 'inputs\\.op' '$_G2_YAML_CODE' | grep -cE \"(^|[^a-z-])$_v([^a-z-]|\\\$)\" >/dev/null"
+  assert "#9927 G2 retired verb '$_v' has no case label in the orchestrator (combined, quoted or spaced spellings included)" \
+    "! printf '%s' '$G2_LABELS' | tr ' ' '\\n' | grep -cxF '$_v' >/dev/null"
+done
+assert "#9927 G2 the token ternary (DOPPLER_TOKEN_INNGEST_ARM env) names EXACTLY the literal set: $_G2_TOKEN_OPS" \
+  "[[ '$G2_TOK_SET' == '$_G2_TOKEN_OPS' ]]"
+assert "#9927 G2 the export step's own if: names EXACTLY the literal set: $_G2_TOKEN_OPS (extracted separately from the env ternary)" \
+  "[[ '$G2_IF_SET' == '$_G2_TOKEN_OPS' ]]"
+assert "#9927 G2 the reviewer-gated environment ternary names EXACTLY the literal set: $_G2_ENV_OPS" \
+  "[[ '$G2_ENV_SET' == '$_G2_ENV_OPS' ]]"
+assert "#9927 G2 the Tier-B loader ternary names EXACTLY backup" \
+  "[[ '$G2_PRIV_SET' == 'backup' ]]"
+G2_UNGATED=0
+for _o in $G2_TOK_SET $G2_PRIV_SET; do
+  printf '%s' " $G2_ENV_SET " | grep -cF " $_o " >/dev/null || G2_UNGATED=$((G2_UNGATED + 1))
+done
+assert "#9927 G2 every credentialed op is reviewer-gated (environment set is a superset of the token set and the loader set; ungated=$G2_UNGATED)" \
+  "[[ '$G2_UNGATED' -eq 0 ]]"
+assert "#9927 G2 backup is NOT in the arm-token set (over-grant: that token is soleur-inngest/prd scope, not Hetzner)" \
+  "! printf '%s' ' $G2_TOK_SET ' | grep -cF ' backup ' >/dev/null"
+assert "#9927 G2 the surviving case labels equal EXACTLY the literal positive set (plus the unknown-op catch-all)" \
+  "[[ '$G2_LABELS' == '$_G2_LABELS' ]]"
+assert "#9927 G2 the unknown-op catch-all arm still refuses (a retired verb dispatched from a stale ref exits non-zero)" \
+  "awk '/^case \"\\\$OP\" in\$/{f=1;next} /^esac\$/{f=0} f' '$BODY_SH' | grep -A2 -E '^  \\*\\)' | grep -cE \"unknown op .*exit 1\" >/dev/null"
+assert "#9927 G2 no FLUSH_LATCH_SINCE mapping or reader remains (its only consumer, G3.7, went with op=arm)" \
+  "! grep -qF 'FLUSH_LATCH_SINCE' '$WF_YAML' && ! grep -qF 'FLUSH_LATCH_SINCE' '$BODY_SH'"
+
+# --- Guard 2 hardening (#9927 review): arm-token consumption is EXACTLY one expression, no `secrets: inherit`,
+# the op-literal extraction tolerates spacing/quote style, and one-line case arms are found as labels. Each
+# check is a function of a FILE so the mutation rows below run the SAME code on a mutated copy.
+# Case-insensitive and bracket-aware: Actions resolves secret names case-insensitively and accepts secrets['NAME'].
+_g2_arm_secret_n() { grep -vE '^[[:space:]]*#' "$1" | grep -oiE "secrets(\.|\[[^]]*)doppler_token_inngest_arm" | wc -l | tr -d ' '; }
+_g2_inherit_n() { grep -vE '^[[:space:]]*#' "$1" | grep -cE "^[[:space:]]*secrets:[[:space:]]*[\"']?inherit[\"']?([[:space:]]|$)" || true; }
+# Dynamic whole-context spellings that reach the arm token without naming it.
+_g2_dynamic_n() { grep -vE '^[[:space:]]*#' "$1" | grep -ciE 'tojson\(secrets\)|join\(secrets|secrets\[[[:space:]]*format\(' || true; }
+assert "#9927 G2 the arm token secret is consumed EXACTLY once in the workflow (non-comment): the one scoped env ternary" \
+  "[[ \"\$(_g2_arm_secret_n '$WF_YAML')\" == 1 ]]"
+assert "#9927 G2 the workflow never uses 'secrets: inherit' (it would hand every secret, the arm token included, to a callee)" \
+  "[[ \"\$(_g2_inherit_n '$WF_YAML')\" == 0 ]]"
+assert "#9927 G2 the workflow never reaches the arm token through toJSON(secrets) / join(secrets / secrets[format(...)]" \
+  "[[ \"\$(_g2_dynamic_n '$WF_YAML')\" == 0 ]]"
+G2M_DIR="$(mktemp -d)"; SCRATCH+=("$G2M_DIR")
+cp "$_G2_YAML_CODE" "$G2M_DIR/wf-ok.yml"
+{ cat "$_G2_YAML_CODE"; echo "          EXTRA_TOK: \${{ secrets.DOPPLER_TOKEN_INNGEST_ARM }}"; } > "$G2M_DIR/wf-second-consumer.yml"
+grep -v 'secrets\.DOPPLER_TOKEN_INNGEST_ARM' "$_G2_YAML_CODE" > "$G2M_DIR/wf-no-consumer.yml" || true
+{ cat "$_G2_YAML_CODE"; echo "    secrets: inherit"; } > "$G2M_DIR/wf-inherit.yml"
+{ cat "$_G2_YAML_CODE"; echo "          EXTRA_TOK: \${{ secrets['DOPPLER_TOKEN_INNGEST_ARM'] }}"; } > "$G2M_DIR/wf-bracket.yml"
+{ cat "$_G2_YAML_CODE"; echo "          EXTRA_TOK: \${{ secrets.doppler_token_inngest_arm }}"; } > "$G2M_DIR/wf-lower.yml"
+{ cat "$_G2_YAML_CODE"; echo '    secrets: "inherit"'; } > "$G2M_DIR/wf-inherit-quoted.yml"
+{ cat "$_G2_YAML_CODE"; echo "          ALL: \${{ toJSON(secrets) }}"; } > "$G2M_DIR/wf-tojson.yml"
+{ cat "$_G2_YAML_CODE"; echo "    # secrets: inherit  (a comment, must not count)"; echo "    # secrets.DOPPLER_TOKEN_INNGEST_ARM (comment)"; } > "$G2M_DIR/wf-comment-only.yml"
+assert "#9927 G2 MUTATION: a second consumer of the arm token reads count=2 (judged RED)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-second-consumer.yml')\" == 2 ]]"
+assert "#9927 G2 MUTATION: a bracket-spelled second consumer secrets['DOPPLER_TOKEN_INNGEST_ARM'] reads count=2 (judged RED)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-bracket.yml')\" == 2 ]]"
+assert "#9927 G2 MUTATION: a lower-case second consumer secrets.doppler_token_inngest_arm reads count=2 (judged RED)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-lower.yml')\" == 2 ]]"
+assert "#9927 G2 MUTATION: a quoted 'secrets: \"inherit\"' is detected" \
+  "[[ \"\$(_g2_inherit_n '$G2M_DIR/wf-inherit-quoted.yml')\" == 1 ]]"
+assert "#9927 G2 MUTATION: an added toJSON(secrets) is detected" \
+  "[[ \"\$(_g2_dynamic_n '$G2M_DIR/wf-tojson.yml')\" == 1 ]]"
+assert "#9927 G2 MUTATION: removing the only consumer reads count=0 (judged RED, not vacuously green)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-no-consumer.yml')\" == 0 ]]"
+assert "#9927 G2 MUTATION: an added 'secrets: inherit' is detected (count=1)" \
+  "[[ \"\$(_g2_inherit_n '$G2M_DIR/wf-inherit.yml')\" == 1 ]]"
+assert "#9927 G2 MUTATION: comment-only mentions of the secret or 'secrets: inherit' do not count (neither masks nor fakes a hit)" \
+  "[[ \"\$(_g2_arm_secret_n '$G2M_DIR/wf-comment-only.yml')\" == 1 && \"\$(_g2_inherit_n '$G2M_DIR/wf-comment-only.yml')\" == 0 ]]"
+assert "#9927 G2 MUTATION: the op-literal extraction reads a double-quoted, unspaced literal (inputs.op==\"arm\")" \
+  "[[ \"\$(printf '%s' 'x: \${{ inputs.op==\"arm\" && 1 || 2 }}' | _g2_ops)\" == arm ]]"
+assert "#9927 G2 MUTATION: the op-literal extraction reads a wide-spaced single-quoted literal (inputs.op  ==  'luks-cutover')" \
+  "[[ \"\$(printf '%s' \"x: \\\${{ inputs.op  ==  'luks-cutover' }}\" | _g2_ops)\" == luks-cutover ]]"
+assert "#9927 G2 MUTATION: a mutated token ternary with a double-quoted 'arm' is no longer equal to the literal set (judged RED)" \
+  "[[ \"\$(printf '%s' \"DOPPLER_TOKEN_INNGEST_ARM: \\\${{ (inputs.op == 'rollback' || inputs.op==\\\"arm\\\" || inputs.op == 'resume') && 1 }}\" | _g2_ops)\" != '$_G2_TOKEN_OPS' ]]"
+sed '/^case "\$OP" in$/a\  newop) echo hi ;;' "$BODY_SH" > "$G2M_DIR/body-oneliner.sh"
+sed '/^case "\$OP" in$/a\  "quoted-op"|other-op) echo hi ;;' "$BODY_SH" > "$G2M_DIR/body-oneliner-multi.sh"
+assert "#9927 G2 the live label extraction still equals the literal set via the shared function (anti-vacuity for the rows below)" \
+  "[[ \"\$(_g2_labels '$BODY_SH')\" == '$_G2_LABELS' ]]"
+assert "#9927 G2 MUTATION: a one-line case arm '  newop) cmd ;;' is extracted as a label (judged RED vs the literal set)" \
+  "[[ \"\$(_g2_labels '$G2M_DIR/body-oneliner.sh')\" == *newop* && \"\$(_g2_labels '$G2M_DIR/body-oneliner.sh')\" != '$_G2_LABELS' ]]"
+assert "#9927 G2 MUTATION: a one-line combined/quoted arm '  \"quoted-op\"|other-op) cmd ;;' yields both labels" \
+  "[[ \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *other-op* && \"\$(_g2_labels '$G2M_DIR/body-oneliner-multi.sh')\" == *quoted-op* ]]"
 
 _DISPATCHED=$((PASS + FAIL))
 # 628 -> 630 (+2) at PR #8204 review: the clean-fixture parse-rc and numeric-count rows on the two
@@ -4947,7 +4452,31 @@ _DISPATCHED=$((PASS + FAIL))
 #   row (+1), the empty-scan row (+1), and the two positive controls (+2).
 # 1127 -> 1131 (+4) at the #8316 review round, measured: the strip's suffix and prefix over-reach rows (+2) and the two pins on
 #   the reworded G3.7 `latched` ::error:: text (+2); the every-_erg_*-helper row now derives from `_GATE_OTHER_RE` (net 0).
-_EXACT_FLOOR=1131
+# 1131 -> 1129 (-2) at #10664 Site C (the generation anchor has no read/write fallback), measured: the "fallback is announced by
+#   NAME", "read/write token is masked too" and "falls back only after an empty read-only read" assertions are removed (-3) and
+#   one block asserting the read/write token is never read, sent or printed replaces them (+1); the 401 row keeps its place.
+# 1129 -> 1134 (+5) at the #10891 review round, measured: the compound "read-only empty, read/write present" assertion is split into
+#   four named ones (HC_READS exact, zero curl calls + verdict, STUB_MISS empty, read/write sentinel absent from every stream) (+3), and an
+#   exported-HCLOUD_TOKEN environment row adds two (verdict + zero curl + reads, sentinel absent) (+2): +5 in total.
+# 1134 -> 1135 (+1) at the #10664 review round 2, measured: one pin on the empty-token warning's remedy tail (`only if the secret is
+#   genuinely absent`, so a reword cannot drop the auth/network-first ordering).
+# 1135 -> 1156 (+21) at #9755, measured: backup env-gate + loader step + union parity + BKP behavioral battery
+# 1156 -> 1157 (+1) at the #9755 review round: the same-step co-location row — the loader step block
+#   carrying both the `if: inputs.op == 'backup'` gate and the `doppler-token-infra-privileged:` input
+#   (the uses:/if:/with: greps alone could not prove they sit on one step); the `.backup.` wildcards in
+#   the two sibling greps were tightened to the quoted literal 'backup' (same count).
+# 1157 -> 1158 (+1) at the #9755 review round 2: the uses-count pin — LOADER_STEP_BLOCK concatenates
+#   every uses-block, so a second loader call would union the if:/with: assertions across steps; the
+#   `-eq 1` row makes the block assertion per-THE-ONE-block. Same count for the block row itself.
+# 1158 -> 965 (-193) at #9927 item 8 (retire op=arm, op=reflush, op=luks-cutover; this PR), measured from the STALE FLOOR
+#   FATAL line: -212 rows that existed only for the three retired verbs and their dead helpers (the arm assembly, G3.5/G3.6/
+#   G3.7, the g3_decide / g3_action / diag_boot_decide / flush_latch_decide / _flush_latch_count harnesses, the LUKS liveness
+#   and confirm readers, the luks-cutover and reflush blocks), +19 for the Guard 2 absence / literal-set block. The kept
+#   op=rollback / op=resume / execute / probe rows are unchanged.
+# 965 -> 977 (+12) at the #9927 review round (this PR), measured from the STALE FLOOR FATAL line: Guard 2 hardening - arm-token
+#   consumption count==1, no `secrets: inherit`, tolerant op-literal extraction, one-line case-arm labels (live + mutation rows).
+# 977 -> 982 (+5, this PR's review fix round): bracket/lower-case arm readers, quoted inherit, toJSON(secrets) ban + live row.
+_EXACT_FLOOR=982
 if [[ "$_DISPATCHED" -lt "$_EXACT_FLOOR" ]]; then
   printf '\n[FATAL] anti-deletion floor: suite dispatched %d assertions, floor is %d — an assertion was removed or skipped.\n' "$_DISPATCHED" "$_EXACT_FLOOR" >&2
   echo ""

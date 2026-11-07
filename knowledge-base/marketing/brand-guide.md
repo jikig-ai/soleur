@@ -77,6 +77,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Use declarative statements ("Build at scale" not "Try building at scale")
 - Frame the founder as the decision-maker, the system as the executor
 - Use concrete numbers when available (60+ agents, 60+ skills)
+- When referencing a public tool, platform, company, or product by name in marketing content, include its official website URL and/or verified social media handle if available. This increases credibility, helps readers discover the referenced entity, and invites engagement from the referenced party (retweets, quotes, shares). Verify handles via the entity's official website or verified account — never guess. If the handle cannot be verified, include the website URL only. Do not include handles for competitors in comparison posts.
 
 > **Numbers: soft floors in prose.** Use "60+ agents" and "60+ skills" in static documentation and marketing prose. The live site renders exact counts from the filesystem via `{{ stats.agents }}` / `{{ stats.skills }}` -- never duplicate the exact count in prose, where it will drift as new agents and skills ship. Soft floors stay accurate across releases.
 
@@ -319,7 +320,7 @@ Automated weekly post to #releases (Fridays). These are operational rules for un
 - No hashtags in body tweets. One relevant hashtag in the final tweet is acceptable if it adds discoverability (e.g., #solofounder, #buildinpublic). Never more than two.
 - No emojis in hook tweets. Body tweets may use one structural emoji (arrow, checkmark) per tweet if it aids scanning.
 - Metrics and numbers land hardest. Lead with concrete data when available: "420+ merged PRs. 40+ agents. 8 departments. One founder."
-- Never use "excited to announce" or "we're thrilled." State what shipped and why it matters.
+- **Tagging referenced entities.** When a post references a public tool, platform, company, or product by name (e.g., OpenCode, Cursor, Anthropic), tag its official social handle (e.g., `@opencode`) in the first tweet or primary post. This increases visibility, invites engagement/retweets from the referenced party, and strengthens relationships. Only tag the official handle — verify it via the entity's official website or verified account before including. Do not tag competitor handles in comparison posts. If the handle cannot be verified, omit the tag rather than guessing. Include the official website URL when available.
 - Example hook: "The other 70% of running a company is still manual. AI solved coding. Nothing solved the rest."
 - Example thread body: "2/ Company-as-a-Service runs every department with AI agents that share a compounding knowledge base. Marketing knows what engineering decided. Legal references the privacy policy. Context flows everywhere."
 - Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/company-as-a-service/\n\n#solofounder"
@@ -466,7 +467,7 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - Maximum 5 replies per engagement session (smaller community, higher visibility per reply)
 - No rapid-fire posting. Space posts at least 3 minutes apart. The small community notices automated patterns quickly.
 - Engage authentically in AT Protocol and decentralization discussions -- this is native territory for Soleur's builder audience.
-- Do not cross-post identical content from X/Twitter. Adapt the message for Bluesky's audience and tone.
+- **Tagging referenced entities.** When a post references a public tool, platform, company, or product by name, tag its official social handle (e.g., `@opencode` on X, or the verified AT Protocol handle on Bluesky) in the primary post. This increases visibility, invites engagement/quotes from the referenced party, and strengthens relationships. Only tag the official handle — verify it via the entity's official website or verified account before including. Do not tag competitor handles in comparison posts. If the handle cannot be verified, omit the tag rather than guessing. Include the official website URL when available.
 
 ### Hacker News
 

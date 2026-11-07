@@ -96,6 +96,17 @@ _COMMON_ENV = {
     "CRON_WORKSPACE_ROOT": {"/workspaces"},
     "SOLEUR_HOST_ID": {"$HOST_ID"},
 }
+# The session relay (server/session-proxy.ts, #12167 PR-E). The app container runs on the default docker bridge, where the HOST's
+# 10.0.1.x does not exist (listen EADDRNOTAVAIL), so the relay binds 0.0.0.0 INSIDE the container and the PROD start publishes the
+# port on the host's private IP: `-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"` (an empty RELAY_PUBLISH_BIND is a loopback publish: unreachable by
+# peers, fail-closed, and the argv stays unconditional); ci-deploy.sh sets RELAY_PUBLISH_BIND to the host's private IP only when the
+# net.ipv4.ip_nonlocal_bind sysctl is 1 (the reboot race: the NIC address can be late), else leaves it empty. The literal 0.0.0.0 is only safe because of that publish address, which is
+# why the gate pins the publish, the literal bind and the port together. The canary publishes no 8443 and carries a literal EMPTY
+# bind (the app reports no_bind; no blue/green collision). The first-boot tuple has neither (unchanged).
+RELAY_PORT = "8443"
+RELAY_PUBLISH = "${RELAY_PUBLISH_BIND:-127.0.0.1}:%s:%s" % (RELAY_PORT, RELAY_PORT)
+RELAY_PROD_ENV = {"SOLEUR_PROXY_BIND": {"0.0.0.0"}, "SOLEUR_PROXY_PORT": {RELAY_PORT}}
+RELAY_CANARY_ENV = {"SOLEUR_PROXY_BIND": {""}}
 _VOLS = {"/mnt/data/workspaces:/workspaces", "/mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro", INNGEST_CA_VOL}
 # Scalar options a start must CARRY (MISSING_DECLARED); their allowed VALUES are checked separately. The memory cap and
 # --init are required on the two deploy starts only: ADR-062 scopes them to ci-deploy.sh's two blocks, and the
@@ -111,21 +122,22 @@ TUPLES = {
     "canary": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform-canary", "restart": {"no"},
         "mem_exprs": {"$CANARY_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
-        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$CANARY_NODE_OPTIONS"}),
+        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$CANARY_NODE_OPTIONS"}, **RELAY_CANARY_ENV),
         "volumes": set(_VOLS), "ports": {"0.0.0.0:3001:3000"}, "scalars": _SCALARS_APP,
     },
     "prod": {
         "file": "ci-deploy.sh", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": {"$PROD_MEMORY_CAP"}, "env_files": {"$ENV_FILE"}, "images": {"$VERIFIED_REF"},
-        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}),
-        "volumes": _VOLS | {_EGRESS_TOKENS_VOL}, "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS_APP,
+        "env": dict(_COMMON_ENV, NODE_OPTIONS={"$PROD_NODE_OPTIONS"}, SOLEUR_EGRESS_REAPER={"1"}, **RELAY_PROD_ENV),
+        "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
+        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000", "0.0.0.0:443:3443", RELAY_PUBLISH}, "scalars": _SCALARS_APP,
     },
     "first-boot": {
         "file": "cloud-init.yml", "name": "soleur-web-platform", "restart": {"unless-stopped"},
         "mem_exprs": set(), "env_files": {"$TMPENV"}, "images": {"$(cat /run/soleur-image-ref)"},
         "env": {"INNGEST_BASE_URL": {INNGEST_HTTP_LITERAL}, "NODE_EXTRA_CA_CERTS": {INNGEST_CA_PATH}, "SOLEUR_EGRESS_REAPER": {"1"}},
         "volumes": _VOLS | {_EGRESS_TOKENS_VOL},
-        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000"}, "scalars": _SCALARS,
+        "ports": {"0.0.0.0:80:3000", "0.0.0.0:3000:3000", "0.0.0.0:443:3443"}, "scalars": _SCALARS,
     },
 }
 TUPLE_ORDER = ("canary", "prod", "first-boot")

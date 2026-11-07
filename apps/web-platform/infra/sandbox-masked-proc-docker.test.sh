@@ -471,7 +471,7 @@ BUILD_RC=$?
 gd_apt_state_summary
 if [[ "$BUILD_RC" -ne 0 ]]; then
   docker rm -f "$CTR-build" >/dev/null 2>&1 || true
-  die "IMAGE_BUILD_FAILED: image-build container rc=$BUILD_RC: $(tail -c 400 "$WORK/build.out")"
+  die "IMAGE_BUILD_FAILED: image-build container rc=$BUILD_RC: $(gd_apt_out_tail "$WORK/build.out" 5 | tr '\n' ' ' | head -c 600)"
 fi
 docker commit --change 'USER soleur' "$CTR-build" "$IMG" >/dev/null 2>&1 \
   || die "IMAGE_BUILD_FAILED: docker commit of the image-build container failed"

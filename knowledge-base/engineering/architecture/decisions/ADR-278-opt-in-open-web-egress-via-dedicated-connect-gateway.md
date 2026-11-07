@@ -45,6 +45,8 @@ Three constraints fixed the shape before any code moved:
 Measured against the pinned `@anthropic-ai/claude-agent-sdk@0.3.284`
 vendored binary (full record: spec TR7):
 
+> **Pin moved 2026-11-04 (#12026):** the SDK pin is now `0.3.311` (CLI `2.1.311`, one shared binary). The measurements below were taken on 0.3.284 and are a dated record; they were not re-run for this ADR. The rewritten in-sandbox socat bridge (IPv6-first group, readiness watchdog) was re-exercised on 0.3.311 by the NO-EGRESS control arm in `sandbox-wrapped-command-runtime.test.ts` and by `broker-mechanism-spike.test.ts`, both passing under `C4_BWRAP_REQUIRED=1`.
+
 1. `network.httpProxyPort` is a host-side loopback port the sandbox
    runtime chains to through its own in-netns proxy — the sandboxed
    child's `localhost` is not the container loopback, so a
@@ -152,3 +154,5 @@ vendored binary (full record: spec TR7):
 | Per-request credential broker (Phase B mechanism) shipped in Phase A | Scope: Phase A's quarantine lands the safe half first; the broker is a separate deliverable (#9543). |
 | Audit-log UI in Phase A | No queryable store ships yet; deferred to #9545 rather than shipping a dead link. |
 | In-process `net.Server` forwarder per session | Reviewed (review design pass): an in-process listener would die with the dispatcher, removing the ppid watchdog, the `/proc` orphan sweep, the spawn handshake, and `EGRESS_FORWARDER_PATH` plumbing. Rejected for blast-radius isolation: the forwarder handles arbitrary client bytes for every concurrent session on one dispatcher, and a crash or memory-pinned handler inside the dispatcher takes every session's env-proxy path down with it (the SRT chain transits `api.anthropic.com` control-plane CONNECTs too — spec TR7 arm 3 — so a forwarder fault would stall the model call itself, not just WebFetch). The separate process also keeps the token-material write + the CONNECT piping off the dispatcher's event loop. The trade is recorded honestly: ~150 LOC of lifecycle machinery is the cost of that isolation, and the token-dir sweep in the reaper is needed under either shape (the dir is a shared host volume). |
+
+> **See also ADR-311 (#9543, 2026-10-30):** the route back to credentialed push that Decision 5 names is now the cc approval wiring first (#11635, #11636), then the broker (#11637).

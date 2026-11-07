@@ -2,6 +2,8 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { WorkflowName } from "@/server/conversation-routing";
 import type { InteractivePromptKind } from "@/server/pending-prompt-registry";
 import type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
+import type { ApprovalDecideOutcomeWire, ApprovalWireStatus } from "@/lib/approval-wire";
+import type { CredentialScheme } from "@/lib/auth-scheme";
 
 // Re-export so client code can import workflow-name and branded IDs from the
 // canonical wire-protocol module without reaching into server/* directly.
@@ -180,7 +182,30 @@ export type WSErrorCode =
   | "delegation_expired"
   | "delegation_hourly_cap_exceeded"
   | "delegation_daily_cap_exceeded"
-  | "delegation_cross_tenant";
+  | "delegation_cross_tenant"
+  // #11599 — the conversation's authentication mode could not be resolved. NOT credential-blocked codes (the key is
+  // fine and the composer stays enabled): `unresolved` is deterministic (start a new conversation), `unavailable` is
+  // transient (send again). Mirrored in `errorSchema.errorCode` (lib/ws-zod-schemas.ts); `_SchemaCovers` proves it.
+  | "auth_mode_unresolved"
+  | "auth_mode_unavailable";
+
+/** Single predicate for the credential-blocked pair (#11525): the chat is
+ *  blocked (composer disabled, sends refused) iff the error code is one of
+ *  these. Spell the pair ONLY here. */
+export function isCredentialErrorCode(
+  code: string | null | undefined,
+): code is "key_invalid" | "byok_key_missing" {
+  return code === "key_invalid" || code === "byok_key_missing";
+}
+
+/** Single predicate for the authentication-mode pair (#11599): not a credential block (the composer stays enabled). Spell the
+ *  pair ONLY here on the client; test/auth-mode-code-parity.test.ts pins it to the server's `AUTH_MODE_UNRESOLVED_CAUSES` and
+ *  the wire schema (`lib/` cannot import the server leaf). */
+export function isAuthModeErrorCode(
+  code: string | null | undefined,
+): code is "auth_mode_unresolved" | "auth_mode_unavailable" {
+  return code === "auth_mode_unresolved" || code === "auth_mode_unavailable";
+}
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
@@ -282,6 +307,32 @@ export interface ConversationContext {
 // Message lifecycle states: each agent bubble progresses through these states
 export type MessageState = "thinking" | "tool_use" | "streaming" | "done" | "error";
 
+// Durable approval requests (#4672). Wire shapes only: this module is client-reachable, so it must not import
+// `@/server/*`. The card view is declared structurally here and a server-side test pins it to `ApprovalView`
+// (server/approval/render.ts) in both directions, so the two cannot drift.
+export type { ApprovalDecideOutcomeWire, ApprovalWireStatus };
+export type ApprovalDecisionWire = "approve" | "deny";
+
+export interface ApprovalCardViewRow {
+  label: string;
+  value: string;
+  kind: "text" | "code" | "block";
+}
+
+export interface ApprovalCardView {
+  tool: string;
+  title: string;
+  verbPhrase: string;
+  fields: ApprovalCardViewRow[];
+  consequence: string;
+  singleUse: string;
+  /** What the request is, as one noun ("email", "commits"): server-built, so the client never parses a display sentence. */
+  noun: string;
+  approveLabel: "Approve";
+  denyLabel: "Deny";
+  danger: boolean;
+}
+
 // WebSocket message protocol
 export type WSMessage =
   | { type: "auth"; token: string }
@@ -296,6 +347,11 @@ export type WSMessage =
   // "Ask me each time". `userId` is resolved from the authenticated socket —
   // NOT a wire field (TR4 cross-user invariant; strictObject rejects forgery).
   | { type: "autonomous_disclosure_response"; gateId: string; selection: string }
+  // #4672 — the Owner's decision on a durable approval request (client→server). `decision` is a closed enum: no option
+  // string, so "approve all" cannot be expressed. `userId` is NOT a wire field: the decider is the authenticated socket
+  // (strictObject rejects forgery) and the RPC re-derives the actor from `auth.uid()`. This frame can only ever reach
+  // the approval decide path; `review_gate_response` can never resolve an approval and vice versa.
+  | { type: "approval_decide"; approvalId: string; decision: ApprovalDecisionWire }
   // Client → server: user-initiated Stop. The server resolves `userId`
   // from the authenticated socket session — `userId` is intentionally
   // NOT part of the wire shape (TR4 cross-user invariant; see
@@ -431,6 +487,35 @@ export type WSMessage =
   // in-session ack-release). The chip reads THIS, never message presence — a
   // held (un-acked) disclosure is "Approve each", not "Auto-run on".
   | { type: "autonomous_posture"; autonomous: boolean }
+  // #4672 — a durable approval request card (server→client). Built server-side from the canonical action (the same
+  // object that is hashed). NOT in the stream replay buffer: a reattaching client gets live cards re-sent from the
+  // approval_request table on session attach. `viewerRole` "member" renders the read-only waiting card.
+  | {
+      type: "approval_request";
+      approvalId: string;
+      conversationId: string;
+      toolName: string;
+      view: ApprovalCardView;
+      status: "pending" | "approved";
+      expiresAt: string;
+      requestCount: number;
+      viewerRole: "owner" | "member";
+      /** True while the agent is still inside its in-session wait for this request. Absent = not waiting. */
+      agentWaiting?: boolean;
+    }
+  // #4672 — a status change of an approval request (server→client). `outcome` is set only on the reply to the socket
+  // that sent `approval_decide`.
+  | {
+      type: "approval_status";
+      approvalId: string;
+      conversationId: string;
+      status: ApprovalWireStatus;
+      outcome?: ApprovalDecideOutcomeWire;
+      /** Set when the agent's in-session wait state changed (false once it stopped waiting). Absent = unchanged. */
+      agentWaiting?: boolean;
+      /** True when the row stays approved but can never be used (its decider or requester lost their standing). Absent = unchanged. */
+      unusable?: boolean;
+    }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[]; incomingTypes?: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | {
@@ -539,6 +624,11 @@ export type WSMessage =
       // membership-checked switch — a reset user is a non-member by
       // construction). Optional and ignorable by existing consumers.
       switchToWorkspaceId?: string;
+      // #11086 - set with `errorCode: "key_invalid"` when the failure is an
+      // agent-CLI auth failure: which credential scheme the run used, so the
+      // client shows scheme-correct copy/title/label. Optional; frames from
+      // sites that do not know the scheme omit it and render the legacy text.
+      credentialScheme?: CredentialScheme;
     }
   // #3930 — cross-process JWT revocation discriminator. Emitted when
   // ws-handler's `tenantFor` catch site sees a RuntimeAuthError with

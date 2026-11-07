@@ -36,8 +36,10 @@
 #   • The admission half has LANDED: cloud-init-inngest.yml admits INNGEST_CONFIG_DIGEST in its
 #     isolation regex AHEAD of this apply ("INNGEST_CONFIG_DIGEST is admitted AHEAD of its
 #     terraform apply, deliberately"), so the secret's existence no longer bricks a boot. The
-#     self-check FLOOR stays 5 until the secret exists; bump it (there and in inngest-host.test.sh)
-#     in the change that first promotes a digest, never before.
+#     self-check FLOOR was bumped 5->6 by the defect-3 producer fix (#10390, riding the same
+#     merge->promote window as this secret's first apply) — no further floor edit is needed;
+#     between that merge and this apply, no dispatch that renders and boots merged cloud-init
+#     may run (the ordering gate in cloud-init-inngest.yml).
 #   • Nothing is promoted: TF_VAR_inngest_config_digest is absent from prd_terraform, so the var
 #     takes its default "". An unconditional resource then planned a `+ create` of an EMPTY pointer
 #     in every drift report, with no route that could apply it. `count` below makes the secret exist

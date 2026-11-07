@@ -85,10 +85,10 @@ selftest_instrument() {
 }
 selftest_instrument || { printf '[FATAL] instrument self-test: pass, fail and check did not each move their counters as expected\n' >&2; exit 1; }
 
-# --- preconditions: a missing scanner is RED, a missing python3 is a visible SKIP ---
+# --- preconditions: a missing scanner is RED, a missing python3 is UNRESOLVED ---
 if ! command -v python3 >/dev/null 2>&1; then
-  printf 'SKIP scan suite: python3 not found (the scan needs python3; nothing was asserted)\n'
-  exit 0
+  printf 'UNRESOLVED: python3 missing — this suite asserted nothing; install python3\n'
+  exit 3
 fi
 if [[ ! -f "$SCAN" ]]; then
   printf '[FATAL] scanner missing at %s\n' "$SCAN" >&2

@@ -142,11 +142,28 @@ describe("#5111 — handler-side persistence (safeCommitAndPr migration)", () =>
     // remaining mention in the prompt prose.
     expect([...COMPETITIVE_ANALYSIS_ALLOWED_PATHS]).toEqual([
       "knowledge-base/product/competitive-intelligence.md",
+      "knowledge-base/product/competitive-intelligence/",
       "knowledge-base/marketing/content-strategy.md",
       "knowledge-base/product/pricing-strategy.md",
       "knowledge-base/sales/battlecards/",
       "knowledge-base/marketing/seo-refresh-queue.md",
     ]);
+  });
+});
+
+describe("sharded index layout (#11032)", () => {
+  // isPathAllowed is a bare startsWith: the trailing-slash dir entry must
+  // persist shard writes WITHOUT also matching a prefix-sibling decoy.
+  const allows = (p: string) =>
+    COMPETITIVE_ANALYSIS_ALLOWED_PATHS.some((a) => p.startsWith(a));
+  it.each([
+    ["knowledge-base/product/competitive-intelligence.md", true],
+    ["knowledge-base/product/competitive-intelligence/tier-3-cofounder.md", true],
+    ["knowledge-base/product/competitive-intelligence/audits/x.md", true],
+    ["knowledge-base/product/competitive-intelligence-evil/x.md", false],
+    ["knowledge-base/productx/competitive-intelligence.md", false],
+  ])("allowlist on %s -> %s", (path, expected) => {
+    expect(allows(path)).toBe(expected);
   });
 });
 

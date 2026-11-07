@@ -2,6 +2,18 @@
 Description=inngest consumer-perspective serviceability probe (web host, #7228 Phase 1)
 After=network-online.target
 Wants=network-online.target
+# SKIP-VS-FAIL (#10078, the #9962/#9939 pattern): /etc/default/inngest-consumer-probe is
+# written by web-probe-envwrite.sh, a `|| true`-tolerated late-runcmd write, and the 60s
+# timer is armed unconditionally — an absent file must SKIP this start (one "skipped,
+# unmet condition check" notice per fire), never FAIL it into an every-60s journal
+# storm. The EnvironmentFile= line stays unprefixed: once a start IS attempted, an
+# absent file still fails the unit — the fail-closed contract is retained. The
+# condition re-evaluates on every timer fire, so the probe self-heals when the file
+# appears. The detectors that do NOT share this gated dependency: the
+# `soleur-boot-emit web_probe_envwrite fatal` boot row on a writer failure, and the
+# missing betteruptime_heartbeat.inngest_consumer beat — a skipped probe pings
+# nothing.
+ConditionPathExists=/etc/default/inngest-consumer-probe
 
 [Service]
 Type=oneshot
@@ -31,10 +43,10 @@ SyslogIdentifier=inngest-consumer-probe
 # heartbeat URL). There is ONE dedicated inngest host, so unlike the per-host zot/NIC beats this
 # is a single shared beat and the mapping is an identity — the git-data probe precedent (C3:
 # "single-host makes masking moot"). The indirection is kept anyway so all three web probes read
-# identically. `doppler run` injects INNGEST_CONSUMER_URL; bash indirect expansion resolves it
-# under the generic name the script reads. `$$` is the SYSTEMD escape for a literal `$` (systemd
-# expands `$VAR`/`${VAR}` in ExecStart), so bash receives `${!INNGEST_CONSUMER_URL_KEY}`.
-# Shipped as a FILE rather than a heredoc so this nested-quoted doppler ExecStart survives intact
-# (the container-restart-monitor precedent in server.tf).
+# identically. `doppler run` injects INNGEST_CONSUMER_URL, and the probe resolves it through the
+# key NAME itself, AFTER its xtrace refusal. The ExecStart below expands and exports NOTHING
+# (#9639, #10637): the URL is a credential, and a wrapper that expanded it would print it under a
+# traced launch before the probe could refuse. doppler-injection-bound.test.sh rejects an indirect
+# expansion in the Exec directives of a doppler-run unit.
 EnvironmentFile=/etc/default/inngest-consumer-probe
-ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export INNGEST_CONSUMER_URL="$${!INNGEST_CONSUMER_URL_KEY}"; exec /usr/local/bin/inngest-consumer-probe.sh'\'''
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/inngest-consumer-probe.sh'

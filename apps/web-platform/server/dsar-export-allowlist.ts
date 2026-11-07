@@ -380,8 +380,11 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "cascade — statutory parent rows are evidence and are never purged.",
   // #9545 PR1 (ADR-288). Workspace-keyed 15-minute aggregates of destination
   // host, allowed/denied, best-effort counts and timestamps: no user_id,
-  // session, IP or path, and the pipeline ships DARK (collection is off for
-  // every external workspace, so no external subject has rows yet).
+  // session, IP or path. Collection is off for every external workspace until an
+  // operator enables it, so no external subject has rows yet; PR2 (#9545) lets
+  // current members READ the aggregate through get_egress_audit_summary (no
+  // table grant, no policy); this export decision is re-confirmed for PR2,
+  // pending CLO.
   //
   // EXCLUSION for PR1, not a permanent ruling: for a solo workspace
   // (workspace id = user id) these rows are arguably Art. 15 data. Until
@@ -392,8 +395,8 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
   // precondition of enabling collection for any external workspace
   // (runbooks/egress-audit-enable.md).
   workspace_egress_audit_rollup:
-    "Workspace-keyed aggregate (no user_id, IP, session or path); dark in " +
-    "PR1 with no external rows. Art. 15 is served by the DSAR runbook export " +
+    "Workspace-keyed aggregate (no user_id, IP, session or path); collection " +
+    "is off for external workspaces until enabled, so no external rows yet. Art. 15 is served by the DSAR runbook export " +
     "and Art. 17 by erase_egress_audit_rollup (saga step 5.15) until the " +
     "table moves to the allowlist before collection is enabled (ADR-288).",
   // DSAR meta — including would be recursive (a bundle containing
@@ -560,6 +563,62 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "satisfied by ON DELETE CASCADE from public.workspaces (no anonymise RPC " +
     "needed — the row has zero audit lineage; proven by the AC5 " +
     "cascade integration test). No DSAR export surface.",
+
+  // #4672 (migration 180): durable approval requests. requested_by_user_id /
+  // decided_by identify the data subject; canonical_action is the Owner-only
+  // action text (nulled 30 days after the terminal state). This is a DECIDED,
+  // TRACKED GAP, not a claim that the table holds no personal data: the
+  // approval-queue flag is OFF by default and the table is empty until it is
+  // switched on. It is NOT promoted to DSAR_TABLE_ALLOWLIST in this PR because
+  // the export worker reads with service_role, and migration 180 grants
+  // service_role NO privilege on this table (RPC-only by design, ADR-309 and
+  // ADR-303). An allowlist entry plus a service.from("approval_request") read
+  // would fail with "permission denied" and break EVERY user's Art. 15 export
+  // from the day the migration applies, which is worse than the gap. Closing
+  // it needs an engineering decision (a service_role column grant or a
+  // read RPC, plus the reader, ownerField requested_by_user_id and
+  // additionalOwnerFields [decided_by]) and is a recorded condition of
+  // enabling the flag outside the Jikigai canary (compliance-posture.md,
+  // Active Items, "Approval queue: public wording and enabling gate"). The
+  // manual Art. 15 route is <legal@jikigai.com>; the three published legal
+  // documents say so (Privacy Policy 4.15, GDPR Policy 3.17/5.3, DPD 2.3(ah)/5.3).
+  approval_request:
+    "Migration 180 table (#4672), dark behind the approval-queue flag (empty " +
+    "until it is switched on). Art. 17: ON DELETE SET NULL on " +
+    "requested_by_user_id/decided_by/revoked_by plus anonymise_approval_request " +
+    "(nulls the user columns and the action text and, when the user's personal " +
+    "workspace has no member left, deletes that workspace's approval rows), " +
+    "called from account-delete.ts (step 5.16). Holds user ids and the Owner-only action text (scrubbed 30 " +
+    "days after the terminal state). Excluded from the self-serve export " +
+    "because service_role has no table privilege on it (RPC-only), so a " +
+    "worker read would fail every export; manual Art. 15 route at " +
+    "legal@jikigai.com is disclosed in the Privacy Policy, GDPR Policy and " +
+    "DPD. Promote to DSAR_TABLE_ALLOWLIST (requested_by_user_id, " +
+    "additionalOwnerFields [decided_by], Art. 15) with a service-readable " +
+    "path BEFORE approval-queue is enabled for any workspace outside the " +
+    "Jikigai canary.",
+  // #12011 PR-B (ADR-319, migration 184): the founder legal-acceptance record. Both tables are RPC-only (service_role
+  // holds no table privilege), so a worker read would fail every export, same as approval_request above.
+  legal_acceptance:
+    "Migration 184 table (#12011, ADR-319), dark and empty until the first real " +
+    "acceptance. Holds a pseudonymous founder uuid with NO foreign key, the key and " +
+    "sha256 of a committed legal text, the choice, an optional note of at most 1000 " +
+    "characters, the web session id and a database-computed row checksum. Kept after " +
+    "account deletion under Art. 17(3)(e) (the record of a legal decision); no erasure " +
+    "scrub touches it by design. Excluded from the self-serve export because service_role " +
+    "has no table privilege on it (RPC-only); Art. 15 access is answered through " +
+    "legal@jikigai.com. Closing condition: before any founder other than the Jikigai " +
+    "operator is admitted, the three published legal documents are updated and a " +
+    "service-readable access path is decided (PA-40 item 17). See " +
+    "knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md.",
+  legal_reauth_event:
+    "Migration 184 table (#12011, ADR-319): a server-issued intent (30 minutes) and, " +
+    "for a Yes, the single-use email-code challenge, bound to a user uuid, a key, a " +
+    "text hash, a version and a web session id. Transient (purged after 30 days when " +
+    "the next challenge is requested; no foreign key; the uuid and the session id are " +
+    "the personal data), RPC-only, not a " +
+    "record of any decision. Excluded from the self-serve export for the same reason " +
+    "as legal_acceptance.",
 };
 
 /**

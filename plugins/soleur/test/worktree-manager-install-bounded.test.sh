@@ -54,6 +54,11 @@ TEST_DIR=$(mktemp -d)
 export INCIDENTS_REPO_ROOT="$TEST_DIR/incidents"
 mkdir -p "$INCIDENTS_REPO_ROOT/.claude"
 
+# Owning trap also installed BEFORE the source: a suite trap placed after it is
+# flagged by scripts/followthroughs/test-helpers-sandbox-trap-8644.sh as a
+# composed-trap replacement, whether or not the helpers minted a sandbox.
+trap 'rm -rf "$TEST_DIR"' EXIT
+
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"
 
@@ -66,7 +71,6 @@ echo "=== worktree-manager.sh install_deps bounded/skippable contract (#9269) ==
 echo ""
 
 assert_fixture_dir "$TEST_DIR"
-trap 'rm -rf "$TEST_DIR"' EXIT
 
 git_fixture_env "$TEST_DIR" || {
   printf 'FATAL: git_fixture_env refused to build an environment for %s\n' "$TEST_DIR" >&2

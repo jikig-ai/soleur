@@ -15,8 +15,8 @@ brand_survival_threshold: single-user incident
 ## Status
 
 **Adopting.** PR1 (this decision) ships the pipeline dark: nothing reads the table and collection is off for every external
-workspace. The status moves to `accepted` when PR2 (member read policy, read route, card) has merged and the owner notice has been
-out for at least 7 days. The ordinal was verified free against `origin/main` (highest ADR-287) and is re-verified at ship.
+workspace. The status moves to `accepted` when PR2 (member read path and card; see the amendment below, which replaced the read
+policy and route with a member RPC) has merged and the owner notice has been out for at least 7 days. The ordinal was verified free against `origin/main` (highest ADR-287) and is re-verified at ship.
 
 ## Context
 
@@ -90,7 +90,7 @@ gateway log held 3,434 rows, 3,425 from its own synthetic probe and 9 unauthenti
    processes rows in workspace order and either side retries, which is rare and only reachable once collection is on. Ingest counts
    an orphaned workspace as `skipped_orphan`, separately from `skipped_unknown`.
 8. **Nothing is readable in PR1.** The table has RLS enabled, no policy and every privilege revoked from `anon` and
-   `authenticated`. The member `SELECT` policy lands in PR2, with the DPIA t6 re-screen as its merge gate.
+   `authenticated`. *(Superseded 2026-10-26 by the PR2 amendment below: no member `SELECT` policy lands; members read through one RPC.)*
 9. **Counts are best-effort lower bounds; the host set is exact only below the cap.** A restart loses partial buckets and the cap
    discards events above 1,000 per workspace per window. Any later user-facing copy must say so.
 
@@ -141,7 +141,7 @@ account-delete saga calls `erase_egress_audit_rollup`, and a missing function ab
 | App reads Better Stack directly | Needs a workspace-unscopable ClickHouse read credential on the app runtime; the log-query runbook and `cron-inngest-config-drift.ts` keep that credential off the app deliberately. |
 | Per-event spool table | Per-event inserts were 63% of production WAL once (PR #5736); retained raw rows serve no stated need. |
 | Per-row HMAC with a replay window | Same trust root as a bearer token (anything that reads the app environment holds the key), `GREATEST` already makes replays harmless, and a replay window defeats the disk buffer after an app outage. Reversed by the CTO on plan review. |
-| Member `SELECT` policy in PR1 | A readable table is a viewer in fact and triggers the DPIA t6 re-screen at PR1. Ships in PR2. |
+| Member `SELECT` policy in PR1 | A readable table is a viewer in fact and triggers the DPIA t6 re-screen at PR1. *Not shipped in PR2 either: replaced by the member RPC (amendment 2026-10-26).* |
 | New Inngest prune function | Adds a Sentry cron monitor, which the two-PR monitor rule forbids routing in the PR that creates it; `pg_cron` retention sweeps already exist. |
 | Global flag read at the top of the route | Cannot see a per-org override, so the canary would be dropped or every external organisation enabled. Replaced by per-org evaluation after authentication. |
 | Cloudflare rule blocking the ingest path | A Terraform change for little gain: the other internal routes must stay public and the token is the real control. |
@@ -158,3 +158,217 @@ account-delete saga calls `erase_egress_audit_rollup`, and a missing function ab
   wording lands as the last commits of the PR1 branch and gates enabling, not merging.
 - The forced-error acceptance of ADR-281's `image_cve_scan` monitor is corrected in the same PR (the workflow fired with an email
   action; mailbox receipt was unobserved).
+
+## Amendment 2026-10-26 (#9545 PR2): the member read path is an RPC, not a policy
+
+*Its "ONE function" and "Fixed 30-day window" statements are superseded in part by the 2026-11-03 amendment below.*
+
+**Decision.** Members read the rollup through ONE `SECURITY DEFINER` function, `get_egress_audit_summary(p_workspace_id, p_limit,
+p_decision)` (migration 177). There is **no member `SELECT` policy and no table grant**: a direct `.from(table).select()` stays a
+permission error, so the table is still an excluded, zero-policy target in the RLS fuzz harness. This corrects the PR1 text above
+that said a policy "lands in PR2" (migration 162 is immutable on `main`; its header and table comment are left as written).
+
+- **Authorization is the function's.** First statement: `auth.uid() IS NULL OR NOT is_workspace_member(p_workspace_id, auth.uid())`
+  raises SQLSTATE `42501` with a constant message that differs from the engine's grant-denial text. Pending invitees and removed
+  members are not members. Every aggregate carries `workspace_id = p_workspace_id`: a definer bypasses RLS, so that predicate is the
+  tenant boundary once the gate passes. `EXECUTE` is revoked from PUBLIC, `anon`, `authenticated` and `service_role`, then granted to
+  `authenticated` only.
+- **Deliberately not gated on the collection flag or on `web_egress`.** The data exists only where collection is on, and history must
+  stay readable after the toggle is switched off (ruling D: switching off stops new records and deletes nothing). The flag decides
+  only which empty state the view shows and whether the enable dialog may say hosts are recorded; the three readers share
+  `server/egress-audit-collection.ts`.
+- **No HTTP route.** A server-rendered page calls the RPC through the caller's cookie client (CTO ruling 2026-10-26, reversing the
+  earlier thin-route decision: nothing consumes a route). The workspace id comes only from the fail-loud `readWorkspaceIdFromDb`.
+- **No `statement_timeout` clause.** A function-level setting does not re-arm the already-running outer statement (proved on
+  Postgres 17); the bound is the role timeout, `p_limit` at most 500, the primary-key range scan and the caller's abort signal.
+- **Shape.** Fixed 30-day window on `last_seen` (the daily purge keys on it), bounded above by `now()`. Overflow (`'(other)'`) is a
+  separate typed field summed across buckets and source hosts, never a host row; `source_host` is never exposed. `p_limit = 0`
+  returns only the last-request probe (the card hint).
+- **Verified against the repo.** The `decision` column has a `CHECK IN ('allowed','denied','other')`; `other` is shown as a third
+  visible state, never folded into Blocked. Overflow counts merge with `GREATEST` at ingest, so they are very loose lower bounds and
+  the view always says "at least".
+
+### Read-path rulings (review round, 2026-10-26)
+
+- **Second gate statement.** After the membership check the function refuses a revoked-but-unexpired JWT of a current member
+  (`is_jti_denied_from_jwt()`, mirroring migration 127): SQLSTATE `42501`, message `'egress audit: token denied'`. A definer bypasses
+  the RESTRICTIVE jti policies, so the denylist has to be restated in the body.
+- **Cost shape.** The page query is a top-N rewrite (`ORDER BY last_seen DESC LIMIT p_limit + 1` over real-host groups), the function
+  pins `SET plan_cache_mode = force_custom_plan` (after five executions in one session plpgsql would flip to a generic plan), and sums
+  are clamped to 9007199254740991 (JS `MAX_SAFE_INTEGER`). `p_limit` stays clamped to 0..500; it is not the cost driver.
+- **Loader.** `forbidden` only when the 42501 message starts with the constant prefix `egress audit:` and a space; any other 42501 (an engine "permission denied for
+  function", a lost EXECUTE grant) is a paged `rpc_error` with `pg_code=42501`. A Flagsmith outage maps to `collection: "unknown"`
+  through `readRuntimeFlagDetailed` / `readEgressAuditCollectionState`; ingest stays boolean. The op registry gains
+  `hint_workspace_read` and `web_access_read` (unpaged) and every mirror carries a sanitised `pg_code` tag. Bounds: page pointer
+  2000 ms, collection and web-access reads 1500 ms each after the RPC; card pointer 600 ms, org 800 ms, hint 800 ms, overall 1200 ms.
+  Independent reads are not started before the RPC (rejected: they would run before the caller is authorised). Only the Scope Grants
+  page guards against a workspace mismatch (it forces the card's collection state to `unknown`); the destination page resolves the
+  workspace once, so it has no second read to compare.
+- **Agent prompt.** `WEB_EGRESS_PROMPT_ADDENDUM` no longer claims "every decision is logged with workspace attribution"; it says
+  requests may be recorded best-effort and points to the audit view.
+- **Page caching.** The page response carries `Cache-Control: no-store`.
+
+### Accepted residuals (read path)
+
+1. **Adversarial worst case.** About 1.44M (host, decision) groups for one workspace took 5.4-6.3 s on the local database after the rewrite (an earlier note here said about 3.5 s; the AC3a measurement in the plan supersedes it),
+   leaving only about 1.7-2.6 s of headroom against the 8 s role timeout. A slower production host can push this case over the timeout and turn
+   the accepted fail-closed outcome into routine `rpc_timeout` pages. Accepted as
+   a documented limit: collection is off for external organisations (gated by #11237) and the failure mode is fail-closed
+   (`unavailable`, never a wrong answer). A per-workspace distinct-host cap and fold policy at ingest (PR1 scope, a new migration
+   because 162 is immutable) and a limiter for member-callable aggregation RPCs are **#11237 enablement blockers**.
+2. **Writer-side evasion.** A prompt-injected agent can push a host out of the view by contacting more than 200 decoy hosts more
+   recently, or more than 500 in one bucket (folded into the nameless `(other)` row at ingest). This is a transparency log for
+   members, **not** a forensic or exfiltration-detection control; the overflow count is the residual signal. Ordering and filters were
+   rejected as mitigations because the attacker controls denied decoys too.
+3. **Direct member RPC loops.** A member can call the RPC in a loop from their own client; it is bounded only by the
+   `authenticated` role's 8 s `statement_timeout` and per-workspace scope. The `p_limit` clamp stays 500 because it is not the cost driver.
+4. **Router Cache window.** The 30 s Router Cache (`staleTimes.dynamic`, ADR-067) lets a just-removed member's already-open session
+   re-display a payload fetched earlier.
+5. **Agent-readable surface parity gap.** The RPC is callable by any authenticated member client but no agent/MCP tool exists. A
+   follow-up issue (#11258) tracks it.
+   *Superseded in part by the 2026-11-04 amendment below: the parity gap is now a recorded deferral with a pinned absence and re-evaluation triggers, not an open-ended gap; #11258 stays open.*
+
+The status stays **Adopting**: it moves to `accepted` after PR2 has merged and the owner notice has been out for at least 7 days (an
+enablement step; the flag flip is tracked in #11237, not part of PR2).
+
+## Amendment 2026-11-03 (#11238): the member read gains a window, in a second function
+
+**Decision.** Members read the rollup through TWO `SECURITY DEFINER` functions with one contract:
+
+- `get_egress_audit_summary(p_workspace_id, p_limit, p_decision)` (migration 177): fixed 30-day window, unchanged. It stays for the
+  Scope Grants card hint (`p_limit = 0`) and for the previous app image while a deploy is in flight.
+- `get_egress_audit_window_summary(p_workspace_id, p_limit, p_decision, p_window)` (migration 183): `p_window` is one of `24h`, `7d`,
+  `30d`, with no argument defaults. The destination page always calls this one, including for the default 30 days, with no fallback
+  to the 177 function on error.
+
+This supersedes the 2026-10-26 amendment's "ONE `SECURITY DEFINER` function" and "Fixed 30-day window" wording. Everything else in that
+amendment holds for both functions: membership check first, jti denylist second, then argument validation; the
+`workspace_id = p_workspace_id` predicate on every read; `EXECUTE` for `authenticated` only; no member `SELECT` policy and no table grant.
+
+- **Window.** Derived after the two authz checks and the `p_decision` check, through a `CASE` map to a literal interval (never cast from
+  caller text, no `ELSE`), so `NULL` and any unknown value raise SQLSTATE `22023` with a message that starts with the `egress audit:` prefix (the constant `RPC_DENIAL_PREFIX`, which ends in one space).
+  Bounded above by `now()`; the `last_seen` predicate decides inclusion. The 15-minute `bucket_start` slack stays a scan aid, so a
+  bucket that began before the window start but whose `last_seen` falls inside it is counted whole: the view says "about the last N".
+- **Retention is unchanged.** A shorter window is a narrower read of the same stored rows; the purge still keys on `last_seen` at 30 days.
+- **Why a distinct name and not a 4-argument overload.** The runtime RLS fuzz coverage gates assert that no authenticated-executable
+  definer function is overloaded (both gates key on the `proname(args)` composite; AC7 is the anon-reachability gate, AC8 the authenticated-reachability and overload gate); ADR-112's
+  static allowlist tier accepts an overload name collision as a residual and does not assert it. A distinct name avoids rewriting a
+  security-gate harness and any named-argument ambiguity in PostgREST.
+- **Why the body is duplicated and the 177 function is not turned into a wrapper.** Migration 177 is immutable and the previous image
+  calls it. Drift between the two bodies is capped by a text-parity guard in the default suite
+  (`test/supabase-migrations/183-egress-audit-window-summary.test.ts`, which names the only permitted differences) and a live parity
+  check in the gated RLS fuzz suite.
+- **Retirement path.** The card's "requests in the last 24 hours" count is a later PR on #11238. That PR must either move the card to the
+  183 function or add a separate count-only function. Retiring the 177 function is TWO steps, never one change: migrations run before
+  the app image, so a migration that drops it while the previous image's card still calls it would fault the card hint for the whole
+  rollout. First ship an image whose card no longer calls 177; only a later migration (a new `DROP FUNCTION`, never an edit of 177)
+  drops it, together with the 177-function rows of `supabase/verify/177_egress_audit_summary_rpc.sql` (its two `egress_rollup_*` table rows
+  stay: they assert the rollup tables, not the function), the runbook's 177 lost-grant query, the 183 text-parity test and the loader test
+  that pins the card probe's argument object (and AC8's expectations). It must NOT add a third copy of the body: if
+  a third reader is ever needed, extract the shared aggregation into a non-granted `STABLE` helper first. A default-suite test in
+  `test/supabase-migrations/183-egress-audit-window-summary.test.ts` pins, as a text heuristic over the migration files (it cannot see a
+  grant made outside migrations), the set of member-readable readers of the rollup table to exactly migrations 177 and 183, so a third reader fails there until this paragraph is revisited. This paragraph is the record; no
+  separate issue.
+- **Skew.** Migration 183 is applied before the app image that calls it. Until PostgREST reloads its schema cache a page load can fault
+  with `PGRST202` (a paged `rpc_error`); the card keeps working because it uses the 177 function.
+
+The status stays **Adopting**.
+
+## Amendment 2026-11-04 (#11258): the agent-readable surface stays deferred, and its absence is pinned
+
+**Decision.** Ruled by the CTO agent on 2026-11-04. No agent-exposed surface over the egress audit summary is built now, and no
+migration, grant, route or tool changes. Per repository source, no agent tool file names either function, the loader or the rollup
+table, and read-only platform tools have not been promoted to the router, so neither of the first two re-evaluation triggers below
+has occurred; the third is flag state, which git cannot show and which was not re-measured for this amendment (collection stays
+operator-held). Reach by capability is a separate matter from naming: see "What the pin does not see". This amendment supersedes
+accepted residual 5 in part (marked in place): the gap is now a recorded deferral with a pinned absence and triggers. The other
+residuals are unchanged.
+
+- **Deliberate exception to AP-004 (agent-user parity).** A member reads the workspace aggregate in Scope Grants. An agent reads
+  nothing and is told to point the member to that page (`WEB_EGRESS_PROMPT_ADDENDUM`), so the capability it lacks is the
+  cross-session aggregate and the retention state. The exception is re-reviewed on the earliest trigger below; parity is restored
+  when the constraints below are met.
+- **State on 2026-11-04.** Per migrations 177 and 183, `EXECUTE` on the two member-read functions is granted to `authenticated` and
+  revoked from `anon` and `service_role`; the grant state is re-asserted at every deploy by `supabase/verify/177_egress_audit_summary_rpc.sql`
+  and `supabase/verify/183_egress_audit_window_summary.sql`. On this date a scan of non-test source under `apps/web-platform` found
+  the two function names in three files only (`server/egress-audit-read.ts`, the only caller; `lib/egress-audit/summary.ts` and
+  `server/dsar-export-allowlist.ts`, both comments), the loader imported only by the two server-rendered Scope Grants pages, and
+  the rollup table named only in the erasure saga, the ingest and the DSAR allowlist comment. It found no egress-audit reference in
+  any file that builds, registers or classifies an agent tool, in any tier-map key, or in the router's base tool list. The router
+  registers the narrate and summarize tools, behind a flag the C4 editing tool, and for a CRM new-lead chat the `crm_*` tools;
+  `readCcMcpAllowlist` throws on a denylisted or approval-required short name and otherwise returns `{}` in its current phase
+  (#3722). The leader-surface runner assembles its platform tools inline from the `server/**/*-tool(s).ts` builders; none of them
+  names egress audit data.
+- **What the pin does not see.** `apps/web-platform/test/egress-audit-agent-surface-absence.test.ts` runs in the `unit` project
+  on any diff that touches `apps/web-platform`; a diff confined to `plugins/`, `scripts/` or `.github/` never runs it, and
+  activating per-suite test selection must declare the scanned tree as an input of the suite or mark it always-run. It scans every
+  JavaScript and TypeScript source file (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`) in the app tree except
+  dependencies, build output and reports, tests, browser tests, static assets, docs, SQL and CI config, for the two function names,
+  the loader import, the rollup table name, and any egress-audit mention in a file that is a tool builder by filename or that
+  registers tools or imports the Agent SDK (a mention check, not a reachability check). It refuses symlinks and fails if production
+  code imports a test-named module or a module in an excluded directory (test-named files themselves are not scanned). Two runtime
+  assertions cover the tier-map keys and the router's base list (narrate and summarize only). It does not see: a name assembled at
+  runtime; a read through a client obtained from a helper (`getFreshTenantClient`, `mintFounderJwt`, `createServiceClient`) in a
+  file that spells none of the names, including a tool builder that already holds a service-role client; the per-dispatch C4 and
+  CRM tool names and the leader runner's inline tool list (held by the text scan only); non-JavaScript files in the app tree and
+  code outside it, including the retention probe script; a plugin-supplied MCP server, plugin skills and agents, or plugin code
+  executed in-process by a server-side cron job; an environment-supplied `CC_MCP_ALLOWLIST` value; a database-side change; a
+  deployed configuration; and an operator-run agent holding database credentials. The compensating control for a new
+  service-role importer is `apps/web-platform/scripts/service-role-allowlist-gate.sh` with the CODEOWNERS pin on
+  `apps/web-platform/.service-role-allowlist`; it checks the identifiers `createServiceClient` and `getServiceClient` per file in
+  tracked `server/` and `lib/` `.ts` files, so `app/` routes, hooks, scripts, clients built directly from a key, and a new table
+  read in a file already on the allowlist are outside it. The pin is designed to fail first for the spellings it scans; it is not
+  a proof that no surface exists.
+- **Threat model for a future surface.** An agent acting for a member would hold that member's authority, which both functions
+  scope to the whole workspace rather than to the calling session. Every current member already sees that aggregate in the view;
+  what changes is that an agent would exercise the read without the member's per-read intent, and could read hosts contacted by
+  other sessions (the rollup carries no member or session field, so nothing is attributed). Destination hosts are chosen by the
+  requesting agent or by any page it fetched and are retained for about 30 days, so a returned host string is a persistent
+  second-order injection channel across sessions; migration 162's charset check removes spaces and markup but is a floor, not a
+  mitigation. A compromised agent could also use repeated reads as an allow/deny oracle for gateway policy by host, to probe what
+  the log retains (residual 2), or to tune a decoy flood against the overflow signal. The log remains a transparency log for
+  members, not a forensic or exfiltration-detection control, and this amendment does not change that.
+- **Constraints any future agent surface must meet.**
+  - Member user-JWT client only. `service_role` cannot execute the functions but holds full privilege on the rollup table
+    (migration 174) and bypasses membership scoping, so there is also no direct table read by any client. A new service-role
+    importer in `server/` or `lib/` needs a `.service-role-allowlist` line and CODEOWNERS approval; that gate's scope is stated above.
+  - Calls only the existing functions: no generic SQL tool, no call-any-RPC tool, no new grant. The workspace id is bound by
+    closure from the server-resolved current workspace and is never a tool argument.
+  - Read-only and aggregate-only: no `source_host`, no per-request rows, only the windows the function already accepts, a small
+    fixed row and byte cap. Hosts reach the model either not at all or as fenced, length-capped, grammar-checked data; the overflow
+    signal is withheld from the agent or coarsened.
+  - Output carries no time finer than the date and no persisted relative age (extending DPIA addendum C7, which assumes a view that
+    persists nothing), or the surface returns counts only.
+    Tool results enter the conversation transcript, which retention and erasure of the rollup do not reach, so persistence of any
+    returned value beyond the 30-day horizon (C2, 12.6) is a question for the legal review, not a given.
+  - Scope: the rollup has no session or member key, so per-session filtering is impossible. Cross-session visibility through an
+    agent is not resolved by any constraint here. The surface must reach exactly the reader set of the view (current members of the
+    workspace, equally: DPIA addendum C5); any narrower set, or any consent mechanism, is decided in legal review.
+  - Rate-limited. Any record of the agent's own reads must not add a member or session field to the rollup or the function output
+    (t7). A record keyed to a member or session, including one visible only to that member, is a per-member or per-session "who"
+    view: a full DPIA, not a re-screen, and it contradicts the C6 copy "no member or session is recorded" unless that copy changes
+    (DPIA addendum 12.5, 12.6). Its retention, erasure and DSAR treatment are specified in the same PR.
+  - Tiered `gated` explicitly in the same PR, with an approval classification (ADR-305, ADR-309). This departs from the
+    auto-approved read-only RPC tools because the record is something an injected agent could use for evasion; a review card does not
+    address output-borne injection, so the output constraints above still apply.
+  - Legal and security review before it merges, including the DPIA addendum 12.6 re-screen (t6, t7) with C1 to C7 re-confirmed; the
+    wording of any changed member disclosure (C6) is prepared and reviewed by the CLO and signed off by the human operator at
+    flag-on, with the pre-flip publication-order check (DPIA addendum 13.4). The absence test,
+    its expected sets and this amendment are updated in the same PR.
+- **Re-evaluation triggers (first to occur).** The CTO ruling holder re-evaluates, with the CLO for any DPIA re-screen point, and the
+  human operator signs off any resulting amendment; the output is a dated amendment here or a closed #11258. No automated prompt
+  exists for triggers 2 and 3: the #3722 promotion and the operator-held flag flip are the moments to re-read this amendment.
+  (1) A change adds an agent tool or MCP server entry in repository source that names either function, the loader or the rollup
+  table (a naming trigger; the absence test is designed to fail first and points here). A populated `CC_MCP_ALLOWLIST` outcome is
+  not seen by the test and is held by trigger 2. (2) Read-only platform tools are promoted to the Concierge router (#3722); the test
+  does not detect this, review does. (3) The first external-organization enablement of egress audit collection, which stays
+  operator-held; moving the rollup table into the DSAR allowlist is a second member read path and a DPIA 12.6 re-screen point.
+  Until one occurs, #11258 stays open and no agent-readable surface is built.
+- **Expected sets.** They live in the test (`EXPECTED_NAME_FILES`, `EXPECTED_TABLE_FILES`, `EXPECTED_LOADER_IMPORTERS`,
+  `EXPECTED_EXCLUDED_DIR_IMPORTERS`), each entry with its reason, so this record cannot drift from them. The DSAR allowlist entry
+  is a comment and may legitimately disappear when the table moves into the allowlist; edit the set in that PR.
+- **Alternatives considered.** Building the surface now: rejected, no consumer exists and collection is off for external
+  organisations (flag state not re-measured here). A prose-only record with no pin: rejected, member user-JWT clients and an
+  allowlisted service-role client already exist in the platform tool files.
+
+The status stays **Adopting**.

@@ -41,6 +41,11 @@ const EXEMPT_ROUTES = new Set([
   // origin-validation CSRF does not apply — the secret is the trust boundary.
   // Same class as the internal routes above.
   "app/api/internal/cohort/route.ts",
+  // Counts-only HOME census (#10455): internal operator route authenticated via the same
+  // fail-closed Bearer shared secret as trigger-cron (header only, never a cookie or query
+  // string). No cookies / no browser session, so origin-validation CSRF does not apply — the
+  // secret is the trust boundary. Removed with the route after its sunset (#11714).
+  "app/api/internal/home-census/route.ts",
   // #9545 — egress audit rollup ingest is called by Vector on the same host ONLY,
   // authenticated via a bearer token (current + previous, constant-time compare) plus a
   // loopback-Host check that rejects any forwarded request. No cookies / no browser

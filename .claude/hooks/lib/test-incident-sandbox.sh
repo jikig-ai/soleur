@@ -141,6 +141,13 @@ _soleur_test_incident_sandbox_init() {
   #
   # `trap "<text>"` is still how the composed trap is installed, which is what the ORIGINAL code
   # did and what keeps `$VAR` inside the prior body expanding at FIRE time rather than now.
+  #
+  # Cleanup runs FIRST (#8659 defect B — same fix as the sibling block in
+  # plugins/soleur/test/test-helpers.sh): under the caller's `set -e` a FAILING prior command
+  # aborts the trap mid-list, so `<prior>; _soleur_inc_sb_cleanup` skipped cleanup whenever the
+  # prior failed. With cleanup first it is unconditional (its own `return 0` can never trip
+  # errexit) and the prior body stays verbatim in tail position, preserving its exit semantics
+  # exactly. Re-sourcing stays idempotent — the function is a repeat-safe `rm -rf`.
   local prior_raw prior_body="" s
   prior_raw="$(trap -p EXIT)"
   if [ -n "$prior_raw" ]; then
@@ -153,6 +160,6 @@ _soleur_test_incident_sandbox_init() {
   _SOLEUR_INC_SB_OWNED="$d"
   _soleur_inc_sb_cleanup() { [ -n "${_SOLEUR_INC_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_INC_SB_OWNED"; return 0; }
   # shellcheck disable=SC2064
-  trap "${prior_body:+$prior_body; }_soleur_inc_sb_cleanup" EXIT
+  trap "_soleur_inc_sb_cleanup${prior_body:+; $prior_body}" EXIT
 }
 _soleur_test_incident_sandbox_init

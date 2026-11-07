@@ -10,7 +10,8 @@ status: DRAFT (CLO-agent-attested, Soleur-as-tenant-zero v1 internal assessment)
 disposition: AMBIGUOUS-LEANING-TOLERATED — keep enabled as documented risk-acceptance
 reviewed_by: "CLO agent (v1 internal counsel-review attestation, Soleur-as-tenant-zero posture)"
 operator: "Jean Deruelle (Jikigai SARL gérant)"
-re_evaluation_triggers: "Anthropic un-pauses / ships its promised advance-notice update; OR amends the 'still draw from your subscription's usage limits' sentence; OR any move off owner-only operator-self-use (e.g. delegation, customer-facing, pooling)"
+re_evaluation_triggers: "Anthropic un-pauses / ships its promised advance-notice update; OR amends the 'still draw from your subscription's usage limits' sentence; OR any move off owner-only operator-self-use of the subscription credential (e.g. delegation of that credential, customer-facing, pooling); OR any code path that decrypts or serves the subscription token to a non-owner, widens the api-key skip beyond an exact `api-key`, or serves the API key to a delegated `managed` lease in place of a subscription row that exists"
+addendum_2026_10_31: "section 6 plus supersession markers in section 5 and Q5: delegated api-key lease, #11594, PR #11715"
 draft_notice: "Draft internal legal guidance for a non-lawyer founder. NOT a substitute for licensed external counsel."
 ---
 
@@ -86,6 +87,15 @@ draw from your subscription's usage limits" sentence** (now the load-bearing tol
 signal); OR **any move off owner-only operator-self-use** (delegation, customer-facing,
 pooling) — which also escalates to *external* counsel.
 
+> **Superseded 2026-10-31 for the api-key path only (see §6):** the "delegation" limb of
+> this trigger applies to delegation of the subscription credential. Routing a delegated
+> lease to the grantor's API key in exact `api-key` mode does not fire it and does not
+> escalate to external counsel. It does fire, and does escalate, if any code path decrypts or
+> serves the subscription token to a non-owner, widens the skip beyond exact `api-key`, or
+> serves the API key to a delegated `managed` lease in place of a subscription row that
+> exists. (A cross-owner lease in any other mode still SELECTs the row and is refused, as
+> before; that is the unchanged owner gate, not a trigger.)
+
 ## 3. Basis downgrade (recorded)
 
 The documented legal basis is downgraded **permitted → tolerated risk-acceptance.**
@@ -116,3 +126,33 @@ operator's own Claude subscription via the Agent SDK. It does not opine on any
 customer-facing, delegated, or pooled use (all of which remain prohibited and would
 require fresh review, including licensed external counsel). It is a draft internal
 attestation and **not a substitute for licensed external counsel.**
+
+> **Superseded 2026-10-31 for the api-key path only (feature #11594, see §6):** "delegated
+> ... use" in this section means delegated use of the operator's Claude *subscription*
+> credential, the only credential this audit assesses. A delegated or owner-mismatched lease
+> that serves the grantor's own Anthropic *API key*, with the subscription token neither
+> selected, decrypted nor served, is not within this prohibition. It runs under the consented
+> delegation basis (DPD 2.3(w), AUP 5.6) and was reviewed in §6. Delegated, customer-facing
+> or pooled use of the subscription credential remains prohibited and still requires fresh
+> review including licensed external counsel.
+
+## 6. Addendum — 2026-10-31: delegated `api-key` lease (feature #11594)
+
+*Appended only; sections 1 to 5 above are unchanged.*
+
+**Question.** May a delegated or owner-mismatched lease whose grantor also holds a subscription row proceed on the grantor's API key when the conversation's authentication mode is `api-key`, instead of being refused by the owner-only guardrail?
+
+**Ruling (CLO agent, 2026-10-31): ALLOW-WITH-CONDITIONS.** The owner-only, no-share basis in section 3 attaches to the USE of the subscription token, and that use stays owner-only. In `api-key` mode the token is not used, decrypted or served; the credential is the grantor's API key under the existing consented delegation basis (DPD 2.3(w), AUP 5.6; owner-grantor as documented, see the caveat below). This is a routing change within an existing basis, not a move off owner-only operator-self-use of the subscription credential, so, on the merge of PR #11715, none of the re-evaluation triggers in the front matter fires. External counsel is not required before merge; it remains required for any delegated, cross-owner, customer-facing or pooled use of the subscription credential, which stays fail-closed in code (`OauthDelegationForbiddenError`).
+
+**Caveat (2026-10-31): the documented grantor is the Workspace Owner.** DPD 2.3(w) and AUP 5.6 describe the Grantor as the Workspace Owner, and the product route enforces owner-only (403 `not_owner`), but the `grant_byok_delegation` RPC (migration 064) requires only that the grantor be a workspace member and is executable by `authenticated`, so a member-grantor is reachable by a direct call outside the product. That case rests on the same grantee Article 6(1)(a) consent, caps and audit row, is not described by the documents' current wording, and is tracked in #11724. This ruling relies on the existing consented delegation basis as documented, for an owner-grantor, and does not extend the documented basis to a member-grantor. Reading another principal's credential row for no purpose is avoided by design: the subscription row is not selected.
+
+**Conditions (all implemented on the merge of PR #11715; see the ADR-048 addendum of the same date).**
+
+1. The mode is resolved first for a cross-owner lease; only an exact `api-key` skips both the subscription-row SELECT and the owner-gate refusal. Every other outcome (managed, unresolved, invalid, no resolver, resolver error, workspace mismatch) follows the previous path unchanged, with no new failure mode (a scope that ends mid-await propagates as `escape`).
+2. Owner (non-delegated) behavior is unchanged.
+3. Consent, withdrawal, caps, cost attribution to the grantor and the audit row still apply.
+4. Failing-first tests with negative controls and an equality mutation check.
+5. Telemetry reuses the existing event and adds a closed `delegated` flag; no ciphertext, token shape or mode secrets are logged.
+6. A delegated `managed` lease falling back to the API key would be a silent credential substitution and is out of scope; it needs its own ruling.
+
+The CLO is to be consulted again if the implementation decrypts or serves the subscription token to a non-owner, or widens the skip beyond an exact `api-key`.

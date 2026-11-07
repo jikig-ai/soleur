@@ -254,7 +254,7 @@ cmd_activity() {
   check_array_response "$issues_f" issues
   check_cap "$(_json_len "$issues_f")" issues
 
-  prs=$(gh api "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${PER_PAGE}" 2>&1) || {
+  prs=$(gh api --paginate "repos/${repo}/pulls?state=all&sort=updated&direction=desc&per_page=${PER_PAGE}" 2>&1) || {
     _CAUSE="pulls-fetch-failed"
     echo "GITHUB_COLLECTOR_CAUSE=pulls: $(echo "$prs" | head -c 200 | tr '\n' ' ')" >&2
     echo "Error: Failed to fetch PRs ($(echo "$prs" | head -c 200))" >&2

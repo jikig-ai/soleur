@@ -137,9 +137,10 @@ declare -A ALLOW=(
   ["scripts/encryption-posture-ledger.json"]="prose in a ledger entry"
   ["scripts/test-all.sh"]="comment only"
   ["scripts/inngest-dedicated-host-classify.sh"]="pure classifier; selection lives in the workflow step that sources it"
-  ["apps/web-platform/infra/betterstack-logs-alerts.tf"]="SQL alert, already anchored; emitter check deferred to #8874"
+  ["apps/web-platform/infra/betterstack-logs-alerts.tf"]="SQL alert; emitter conjunct pinned by #8874 — its guard derives the needle from this lib"
   [".github/workflows/infra-validation.yml"]="pull_request paths: filter naming the lib"
   ["scripts/lib/bs-emitter-row.sh"]="the #8875 sibling lib — its header names this lib for contract lineage; it selects nothing itself (its own def is bs_emitter_row)"
+  ["scripts/lib/test-affected-paths.sh"]="the AFFECTED_*_PATHS declaration index — it names this lib as a feeder-read edge member and selects nothing"
 )
 
 # Files that MUST be discovered (#8873 review: a `>= N` count floor let the discovery drop the
@@ -434,11 +435,13 @@ fsm_tag() { # <fsm script> -> its readonly LOG_TAG value
   sed -nE 's/^[[:space:]]*readonly[[:space:]]+LOG_TAG="([^"]+)".*/\1/p' "$1" | head -1
 }
 FLIP_TAG="$(fsm_tag "$REPO_ROOT/apps/web-platform/infra/inngest-cutover-flip.sh")"
-LUKS_TAG="$(fsm_tag "$REPO_ROOT/apps/web-platform/infra/inngest-luks-cutover.sh")"
-if [[ "$FLIP_TAG" == "inngest-cutover-flip" && "$LUKS_TAG" == "inngest-luks-cutover" ]]; then
-  pass "FSM LOG_TAGs read: $FLIP_TAG / $LUKS_TAG"
+# The LUKS cutover emitter (inngest-luks-cutover.sh) was retired with the cutover trio (#10112) and the dispatcher's
+# op=luks-cutover arm was deleted in #9927 item 8, so there is NO luks caller and no luks tag to accept: the census below
+# accepts ONLY the flip tag. A re-introduced luks caller must come with its own reviewed tag derivation, not a literal here.
+if [[ "$FLIP_TAG" == "inngest-cutover-flip" ]]; then
+  pass "flip LOG_TAG derived from the script: $FLIP_TAG (the only FSM tag a _generation_scoped_count caller may pass)"
 else
-  fail "FSM LOG_TAGs drifted: flip='$FLIP_TAG' luks='$LUKS_TAG'"
+  fail "FSM LOG_TAG drifted: flip='$FLIP_TAG'"
 fi
 
 CALLS="$(cd "$REPO_ROOT" && git grep -n '_generation_scoped_count' -- ':!*.test.sh' ':!knowledge-base' ':!*.md' \
@@ -448,21 +451,21 @@ while IFS= read -r line; do
   [[ -n "$line" ]] || continue
   n_calls=$((n_calls + 1))
   # Third argument must be a double-quoted literal FSM tag: _generation_scoped_count "$a" "b" "<tag>"
-  if ! grep -qE "_generation_scoped_count[[:space:]]+\"[^\"]*\"[[:space:]]+\"[^\"]*\"[[:space:]]+\"(${FLIP_TAG}|${LUKS_TAG})\"" <<<"$line"; then
+  if ! grep -qE "_generation_scoped_count[[:space:]]+\"[^\"]*\"[[:space:]]+\"[^\"]*\"[[:space:]]+\"${FLIP_TAG}\"" <<<"$line"; then
     bad_calls+="$line"$'\n'
   fi
 done <<<"$CALLS"
-if [[ "$n_calls" -ge 2 && -z "$bad_calls" ]]; then
+if [[ "$n_calls" -ge 1 && -z "$bad_calls" ]]; then
   pass "every _generation_scoped_count call ($n_calls) passes a literal FSM emitter tag"
 else
   fail "_generation_scoped_count calls without a literal FSM tag (n=$n_calls):"$'\n'"$bad_calls"
 fi
 flip_ok="$(grep -cE "_generation_scoped_count .*\"${FLIP_TAG}\"" <<<"$CALLS" || true)"
-luks_ok="$(grep -cE "_generation_scoped_count .*\"${LUKS_TAG}\"" <<<"$CALLS" || true)"
-if [[ "$flip_ok" -ge 1 && "$luks_ok" -ge 1 ]]; then
-  pass "both FSM tags are passed by some caller (flip=$flip_ok luks=$luks_ok)"
+# Only the flip tag is accepted and required (the luks caller was retired by #9927 item 8).
+if [[ "$flip_ok" -ge 1 ]]; then
+  pass "the flip FSM tag is passed by some caller (flip=$flip_ok)"
 else
-  fail "an FSM tag is never passed (flip=$flip_ok luks=$luks_ok) — a counter reads the other FSM's rows"
+  fail "the flip FSM tag is never passed (flip=$flip_ok) — a counter reads the other FSM's rows"
 fi
 inner="$(grep -vE '^[[:space:]]*#' "$CUT" | grep -cE '_current_instance_row_counts[[:space:]]+"\$floor"[[:space:]]+"\$tag"' || true)"
 if [[ "$inner" -eq 1 ]]; then

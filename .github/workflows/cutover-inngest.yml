@@ -9,7 +9,11 @@
 #   op=inventory           → GET  /hooks/inngest-inventory            (full-state baseline for before/after diff) (#5509)
 #   op=registry-probe      → GET  /hooks/inngest-registry-probe       (read-only: has an SDK registered functions against 10.0.1.40?) (#6617)
 #   op=doublefire-probe    → GET  /hooks/inngest-doublefire-probe     (read-only: has 10.0.1.40 actually EXECUTED cron runs?) (#6617)
-#   op=luks-cutover        → Doppler write INNGEST_LUKS_CUTOVER=armed    (#6894; the on-host FSM copies, proves and swaps)
+#   op=quiesce-web / execute / verify / rollback / resume → the remaining cutover-lifecycle verbs (see below)
+# RETIRED by deletion (epic #9927 item 8; their flags INNGEST_CUTOVER_FLIP / INNGEST_LUKS_CUTOVER are terminal
+# `done`): op=arm, op=reflush, op=luks-cutover. A re-cutover, a second FLUSHALL or a second LUKS cutover therefore
+# needs a reviewed re-introduction of the verb (a revert of the retiring PR). op=rollback and op=resume are KEPT:
+# resume is the inherited-`done` recovery of every inngest-host-replace, rollback the only web-scheduler re-enable.
 # See knowledge-base/engineering/operations/runbooks/inngest-server.md
 # § "Cutover procedure". The live cutover is operator-triggered; this workflow is
 # the no-SSH mechanism, NOT an auto-run.
@@ -33,7 +37,6 @@ on:
           - doublefire-probe
           - execute
           - quiesce-web
-          - arm
           - verify
           - rollback
           # #7228: the post-flush re-entry. The flip guard refuses a prod start on a REPLACED
@@ -41,17 +44,6 @@ on:
           # names INNGEST_CUTOVER_FLIP=flushed as the recovery — which no verb wrote, making the
           # only documented recovery a bare out-of-band Doppler write against a deny-all host.
           - resume
-          # #7777: the authorized second FLUSHALL. Writes reflush,run=<run-id>,by=<actor> to
-          # INNGEST_CUTOVER_FLIP; the on-host FSM appends a cleared_at authorization record to
-          # the append-only latch ledger and re-enters the flush path. A prod write of the same
-          # class as arm — inside BOTH ternaries below.
-          - reflush
-          # #6894 / ADR-142: the additive blue-green cutover of the Redis AOF store onto the LUKS
-          # volume (its reverse, luks-rollback, was retired by #8285 PR B). It writes INNGEST_LUKS_CUTOVER
-          # on soleur-inngest/prd, so it is in the reviewer-gated environment ternary AND the token
-          # ternary below — an op added to this list with either ternary unextended runs ungated, or
-          # with no token at all.
-          - luks-cutover
       cron_period_seconds:
         description: "Bucket width for the exactly-once check (op=doublefire-probe / op=verify). MUST be <= the SHORTEST registered cron period, hour-aligned. Default 3600."
         required: false
@@ -84,20 +76,24 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # op=arm / op=rollback write a prod secret to soleur-inngest/prd (the arm-flip / reverse
-    # flip, #6369). They gate on the `inngest-cutover` GitHub Environment (required-reviewer
-    # rule, TF-provisioned in inngest-arm-write-token.tf): declaring `environment: inngest-cutover`
+    # op=rollback writes a prod secret to soleur-inngest/prd (the reverse flip, #6369; its forward
+    # twin op=arm was retired by #9927 item 8). It gates on the `inngest-cutover` GitHub Environment
+    # (required-reviewer rule, TF-provisioned in inngest-arm-write-token.tf): declaring `environment: inngest-cutover`
     # holds the run in "Waiting" until a human approves the dispatch — the ack that
     # hr-menu-option-ack-not-prod-write-auth requires. (DOPPLER_TOKEN_INNGEST_ARM itself is a repo
     # secret, not an environment secret — the TF App cannot write env secrets; the reviewer gate on
     # the JOB is what enforces the ack.) Every other op evaluates to '' (no environment gate),
     # preserving their existing behaviour.
     # #7228: op=resume writes INNGEST_CUTOVER_FLIP=flushed, which AUTHORIZES a prod scheduler
-    # start on the dedicated host — the same class of prod write as arm/rollback, so it takes the
+    # start on the dedicated host — the same class of prod write as rollback, so it takes the
     # same required-reviewer gate. That approval IS the prod-write ack
     # (hr-menu-option-ack-not-prod-write-auth); omitting it here would have let a flag that starts
     # a production scheduler be dispatched with no second pair of eyes.
-    environment: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover') && 'inngest-cutover' || '' }}
+    # #9755: op=backup writes a prod artifact (a Hetzner `create_image` server snapshot of the
+    # whole root disk) with a READ/WRITE Hetzner token — the same prod-write class as rollback, so it
+    # takes the same required-reviewer gate. Its credential is delivered by the Tier-B loader
+    # step below (the ADR-241 O10 mechanism), bound to this environment.
+    environment: ${{ (inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'backup') && 'inngest-cutover' || '' }}
     # SAME group as deploy/restart — these inngest host ops share the host state
     # slot and must not interleave (P1a).
     concurrency:
@@ -110,39 +106,66 @@ jobs:
       # scripts/cutover-inngest.sh, checkout is what puts the orchestrator itself on disk.
       # Without it the run: step below has no script to execute and EVERY op fails.
       #
-      # This comment used to describe checkout as needed only for op=arm/op=rollback's
+      # This comment used to describe checkout as needed only for the rollback/resume
       # Better Stack FSM confirm (scripts/betterstack-query.sh) and "harmless (no-op source
-      # read) for the webhook ops" — an open invitation to add `if: inputs.op == 'arm' ||
+      # read) for the webhook ops" — an open invitation to add `if: inputs.op == '<op>' ||
       # …`. That would now break every op, on a workflow_dispatch-only path where no CI
       # signal exists to catch it. The wording IS the mitigation.
       #
       # SHA-pinned.
       - name: Checkout (REQUIRED by all ops — provides scripts/cutover-inngest.sh)
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      # Doppler CLI is needed by op=backup (reads HCLOUD_TOKEN from the prd_terraform-scoped
-      # DOPPLER_TOKEN) and op=arm/op=rollback (source read-through + arm-token writes +
+      # Doppler CLI is needed by op=rollback/op=resume (arm-token writes +
       # betterstack-query.sh cred injection); installing it is harmless for the webhook
-      # ops. SHA-pinned, matching web-platform-release.yml.
+      # ops. op=backup's Hetzner token no longer comes from prd_terraform — it arrives via the
+      # Tier-B loader step below (#9755). SHA-pinned, matching web-platform-release.yml.
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      # #9755: op=backup's Hetzner snapshot credential comes from Tier B (the ADR-241 O10
+      # mechanism): the environment-scoped DOPPLER_TOKEN_INFRA_PRIVILEGED, present on
+      # inngest-cutover since runbook step O3. The `if:` confines the whole-project export to
+      # backup dispatches; the conditional `with:` mirrors the arm-token injection idiom and
+      # gives the op-set parity check a uniform extraction anchor. No `doppler-token-legacy`
+      # input is passed: a missing environment secret is the loader's verdict=no_credential_source refusal, never a
+      # silent Tier-A fallback (the git-data-cutover.yml::wipe precedent for a
+      # must-never-fall-back op).
+      - name: Load Tier-B infra credentials (op=backup only)
+        if: inputs.op == 'backup'
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ (inputs.op == 'backup') && secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED || '' }}
+      # #6369 — the read/write token for the flip writes to the ISOLATED soleur-inngest/prd
+      # (op=rollback writes INNGEST_CUTOVER_FLIP=rollback; op=resume writes
+      # INNGEST_CUTOVER_FLIP=flushed). op=arm, op=reflush and op=luks-cutover, its other
+      # consumers, were retired by #9927 item 8 — these two are the ONLY remaining consumers, so
+      # the owner-reserved revoke of the token stays blocked on them. It is a REPO secret, so GitHub resolves it on EVERY dispatch — including the
+      # `|| ''` unbound one — and the Tier-B census's `''`-arm clause bans an UNCONDITIONAL
+      # `secrets.` reference to it on a `''`-armed job: the conditional-expression mask this
+      # used to carry was correct behaviour but statically unverifiable. The `if:` is now the
+      # delivery gate the census CAN see (security F2/C5); the `&& secrets … || ''`
+      # expression stays as the op-set parity anchor and a second mask. $GITHUB_ENV carries
+      # the value into the run step below — a step-env var cannot be `if:`-scoped per key,
+      # so the token cannot ride the run step's own env: block. On every other dispatch this
+      # step is SKIPPED and the var stays unset: the script refuses an empty token exactly
+      # as it did under the mask.
+      # It is a repo secret; the op=rollback/op=resume JOB declares `environment: inngest-cutover`,
+      # which holds the run for the required-reviewer approval before any step (incl. this write)
+      # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
+      - name: Export Inngest arm token (gated ops only)
+        if: inputs.op == 'rollback' || inputs.op == 'resume'
+        env:
+          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'rollback' || inputs.op == 'resume') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
+        run: echo "DOPPLER_TOKEN_INNGEST_ARM=$DOPPLER_TOKEN_INNGEST_ARM" >> "$GITHUB_ENV"
       - name: Run cutover host op via webhook
         env:
           OP: ${{ inputs.op }}
           WEBHOOK_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
-          # prd_terraform READ-only (op=backup reads HCLOUD_TOKEN; op=arm/op=rollback read the
-          # source values read-through + betterstack-query.sh creds). Same secret as
-          # apply-web-platform-infra.yml's read steps — NOT DOPPLER_TOKEN_WRITE.
+          # prd_terraform READ-only (op=rollback/op=resume: betterstack-query.sh creds; op=backup's Hetzner token arrives via the Tier-B loader
+          # above, #9755). Same secret as apply-web-platform-infra.yml's read steps — NOT
+          # DOPPLER_TOKEN_WRITE.
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          # #6369 — the read/write token for the arm-flip writes to the ISOLATED soleur-inngest/prd
-          # (op=arm writes INNGEST_POSTGRES_URI/INNGEST_HEARTBEAT_URL/INNGEST_CUTOVER_FLIP=armed;
-          # op=rollback writes INNGEST_CUTOVER_FLIP=rollback). A conditional expression injects it
-          # EMPTY for every other dispatch — a bash comment cannot scope a step-env var (security F2/C5).
-          # It is a repo secret; the op=arm/op=rollback JOB declares `environment: inngest-cutover`,
-          # which holds the run for the required-reviewer approval before any step (incl. this write)
-          # runs — the gate is on the JOB, not the secret (the TF App cannot write env secrets).
-          DOPPLER_TOKEN_INNGEST_ARM: ${{ (inputs.op == 'arm' || inputs.op == 'rollback' || inputs.op == 'resume' || inputs.op == 'reflush' || inputs.op == 'luks-cutover') && secrets.DOPPLER_TOKEN_INNGEST_ARM || '' }}
           # #6258: read-only pg_stat_activity for the op=execute 2.-1 pool pre-check
           # (same secret + endpoint scheduled-inngest-health.yml uses; TF
           # github_actions_secret.supabase_access_token). Read-only Management-API scope.
@@ -191,26 +214,6 @@ jobs:
           # quiesce precedes the cutover. Overloading one variable with both meanings would
           # silently re-base the expected-tick window so the gap ticks stop being listed.
           CUTOVER_ANCHOR_FROM: ${{ vars.CUTOVER_ANCHOR_FROM }}
-          # #7462 — G3.7's flush-latch pre-filter window (OPTIONAL repo var; the script defaults
-          # it to 365d). Mapped here because the gate's REFUSAL names it in its remediation:
-          # GitHub does not export repo vars to a step unless the workflow names them, and an
-          # unmapped variable is the #6617 dead-remediation defect (an operator told to
-          # re-dispatch with X set, where X is unreachable without editing and merging this file).
-          #
-          # It NARROWS a pre-filter, never the on-host monotonic latch, which is the actual guard
-          # against a second FLUSHALL and is unbounded in time. The one legitimate use is a host
-          # whose /mnt/data was genuinely RECUT: the latch is gone, but the Better Stack rows that
-          # evidenced the old one have not aged out.
-          #
-          # CORRECTED 2026-08-25 (#7674): this comment used to name `inngest-host-replace` as the
-          # recut. It is NOT. A replace destroys and recreates the SERVER and RE-ATTACHES the same
-          # hcloud volume — /mnt/data and the latch survive it (measured: volume 106261946 created
-          # 2026-07-07, attached to a host created 2026-08-20, latch intact). No apply_target
-          # recuts /mnt/data (inngest-volume-recut, #7695, was converted by #8285 and deleted
-          # with it). The only in-repo way to authorize a second flush is op=reflush (#7777), which
-          # appends a cleared_at record rather than erasing the latch, so narrowing this window on
-          # the belief that a replace cleared the latch would be narrowing it on a false premise.
-          FLUSH_LATCH_SINCE: ${{ vars.FLUSH_LATCH_SINCE }}
           # The quiesce→register window (ISO-8601), OPTIONAL operator repo/env vars, mapped here
           # so the shell actually sees them (GitHub does not export repo vars to the step unless
           # named). CUTOVER_WINDOW_FROM/UNTIL bound the opt-in missed-tick candidate list

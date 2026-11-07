@@ -1,7 +1,7 @@
 /**
  * Location-bearing patterns on file tools that have no `path` parameter for them.
  *
- * `extractToolPath` (tool-path-checker.ts) only sees file_path / path / notebook_path, and both
+ * The path fields (file_path / path / notebook_path) are judged by `pathFieldsEscape` (tool-path-checker.ts), and both
  * hooks let an EMPTY path through ("defaults to the workspace"). Glob's `pattern` is a location
  * too: the bundled CLI treats a pattern that starts with a literal `/` as an absolute search root
  * and lets it win over `path`, so `/var/lib/soleur/egress-tokens/*` lists any directory in the

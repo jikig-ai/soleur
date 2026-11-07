@@ -45,6 +45,25 @@ users:
     lock_passwd: true
 
 write_files:
+  # FLIP-TOKEN DROP-IN (ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)"). The baked
+  # inngest-cutover-flip.service reads EnvironmentFile=/etc/default/inngest-server; this drop-in appends a
+  # SECOND EnvironmentFile, so only DOPPLER_TOKEN is overridden (the flip file holds that one variable) and
+  # the project, config and config-dir variables still come from the baked file. The flip file is the
+  # read/write token, root-only 0600, written by the runcmd item after the inngest-server write; every OTHER
+  # unit resolves the read-only boot token. inngest-flip-token.test.sh section R proves the resolution.
+  # UNPREFIXED and with NO ConditionPathExists, on purpose (CTO N1): the flip service and timer are
+  # installed by the bootstrap only after that runcmd write, and a failed write aborts runcmd, so no normal
+  # boot reaches a missing file; a Condition would turn a loud failure (the unit fails on every 30 s start,
+  # stderr shipped) into a silent skip with no detector that does not share the gate. The base unit's own
+  # ConditionPathExists on the server file still gates it. Not in the config bundle: any defect found after
+  # the replace needs a second replace of the sole scheduler.
+  - path: /etc/systemd/system/inngest-cutover-flip.service.d/10-flip-token.conf
+    content: |
+      [Service]
+      EnvironmentFile=/etc/default/inngest-flip
+    owner: root:root
+    permissions: '0644'
+
   # SSH hardening parity with registry / git-data / the web host's minimal set.
   - path: /etc/ssh/sshd_config.d/01-hardening.conf
     content: |
@@ -364,7 +383,7 @@ write_files:
   - path: /etc/systemd/system/inngest-nftables.service
     content: |
       [Unit]
-      Description=Inngest control-API nftables scoping (:8288/:8289 -> web hosts only, SEC-H2)
+      Description=Inngest nftables scoping (SEC-H2)
       After=network-online.target
       Wants=network-online.target
       [Service]
@@ -531,12 +550,17 @@ write_files:
       # P1-SEC lesson from the inngest-redis allowlist entry). Stage names are call-site
       # literals; the reason fields are numeric.
       if [ ! -r "$tok_file" ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file — the Better Stack boot-trace channel is DEAD for this boot and every marker after this one is lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs; cloud-init runcmd is first-boot only). #7228"
+        # The Better Stack boot-trace channel is DEAD for this boot and every marker after this one is
+        # lost. Expected after any reboot if the per-boot re-stage unit did not run (/run is tmpfs;
+        # cloud-init runcmd is first-boot only), or if it ran and failed (a failed re-stage does not
+        # create or overwrite the file).
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-missing path=$tok_file #7228"
         exit 0
       fi
       bs_token="$(cat "$tok_file" 2>/dev/null)"
       if [ -z "$bs_token" ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file — token file empty, boot-trace channel dead. #7228"
+        # Token file empty: the boot-trace channel is dead for this boot.
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=token-file-empty path=$tok_file #7228"
         exit 0
       fi
       host="$(hostname 2>/dev/null)"
@@ -548,7 +572,7 @@ write_files:
       # survives it) and restoring lowercase last. ONLY `sha256=` + exactly 64 hex
       # chars is exempted — the 32-hex-and-up backstop on unlabeled material is
       # unchanged, so no credential class loses redaction.
-      detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
+      detail="$(printf '%s' "$detail" | sed -E 's#sha256=[0-9a-f]{64}#\U&#g; s#(://[^:@/]+:)[^@]+(@)#\1REDACTED\2#g; s#dp\.[a-z0-9]+\.[A-Za-z0-9_.-]{10,}#REDACTED#g; s#[0-9a-f]{32,}#REDACTED#g; s#(signkey-[a-z]+-)[0-9a-f]*#\1REDACTED#g; s#SHA256=[0-9A-F]{64}#\L&#g' 2>/dev/null)"
       # Optional 3rd arg: marker override (#10382 — the cutover-flip noop dual-emit rides
       # SOLEUR_INNGEST_NOOP so ~288 daily liveness rows never crowd the BOOT_STAGE
       # consumers' fixed newest-first limits). TRUSTED-LITERAL ONLY: the jq-failure
@@ -566,7 +590,8 @@ write_files:
       # that simply stopped reporting. rc alone is enough to separate them: 6/7 = egress, 22 =
       # HTTP >=400 under -f, 28 = the 8s timeout, 35/60 = TLS.
       if [ "$crc" -ne 0 ]; then
-        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc — POST failed; curl rc 6/7 egress, 22 revoked token, 28 timeout, 35/60 TLS. #7228"
+        # The POST failed; the curl rc map is in the comment block above.
+        logger -t inngest-boot-phone-home "SOLEUR_INNGEST_BOOT_TRACE_LOST stage=$stage reason=post-failed rc=$crc #7228"
       fi
       exit 0
     owner: root:root
@@ -601,6 +626,13 @@ write_files:
       sf=/etc/default/soleur-sentry-dsn; [ -n "$SOLEUR_INNGEST_SENTRY_DSN_FILE" ] && sf="$SOLEUR_INNGEST_SENTRY_DSN_FILE"; sdsn="$(sed -n "s/^SOLEUR_SENTRY_DSN='\(.*\)'$/\1/p" "$sf" 2>/dev/null | head -n 1)"; vals+=("$sdsn")
       vals+=("$(printf %s "$sdsn" | sed -E 's#https://([^@]+)@.*#\1#')")
       . /etc/default/inngest-doppler 2>/dev/null; vals+=("$DOPPLER_TOKEN")
+      # Flip-token split (CTO R4): the read/write flip token, redacted BY VALUE. Read with sed, never
+      # sourced: a source would overwrite DOPPLER_TOKEN, which the Doppler download below uses. The
+      # line sits AFTER the boot-file source on purpose, so that hazard is real and the redactor
+      # suite can kill a sourcing mutant. The generic 40-char backstop would mask at most the body
+      # run of a `dp.st.<config>.<body>` token, so the by-value line is the control. An absent file
+      # yields an empty value, which the loop below skips (values under 6 bytes).
+      vals+=("$(sed -n 's/^DOPPLER_TOKEN=//p' /etc/default/inngest-flip 2>/dev/null)")
       if [ -n "$DOPPLER_TOKEN" ]; then
         while IFS= read -r v; do vals+=("$v"); done < <(doppler secrets download --no-file --format json --project soleur-inngest --config ${inngest_doppler_config} 2>/dev/null | jq -r 'to_entries[]|select(.key|startswith("DOPPLER_")|not)|.value' 2>/dev/null)
       fi
@@ -872,7 +904,9 @@ write_files:
         # LOUD, and non-zero so `systemctl is-active` disagrees too. Nothing Requires= this
         # unit, so a failure here cannot wedge the boot — it only makes the dead channel
         # visible instead of silent, which is the entire point of the change.
-        logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=$drc — could not re-fetch BETTERSTACK_LOGS_TOKEN from Doppler, so /run/inngest-bs-logs-token is EMPTY for this boot and every SOLEUR_INNGEST_BOOT_STAGE marker will be lost. #7228"
+        # Could not re-fetch the Better Stack token from Doppler, so no token file is written to /run for
+        # this boot (the exit below precedes the write) and every boot-stage marker will be lost.
+        logger -t inngest-bs-token-restage "SOLEUR_INNGEST_BS_TOKEN_RESTAGE_FAILED drc=$drc #7228"
         exit 1
       fi
       umask 077
@@ -900,7 +934,7 @@ write_files:
   - path: /etc/systemd/system/inngest-bs-token-restage.service
     content: |
       [Unit]
-      Description=Re-stage the Better Stack boot-trace token into tmpfs /run on every boot (#7228)
+      Description=Re-stage the boot-trace token (#7228)
       # Doppler needs the network. Before= inngest-server so a marker emitted around the
       # server's start has a token to ship with; ordering only, never a Requires=, so a failed
       # re-stage degrades the trace instead of blocking the thing being traced.
@@ -978,9 +1012,9 @@ write_files:
       # stale-file `rm -f` below and the `docker cp` set, so the two can never drift apart.
       #   inngest-redis.{conf,service}, inngest-redis-bootstrap.sh — durable Redis (#5450)
       #   vector.toml — the journald -> Better Stack shipper's config (#6197)
-      #   the cutover flip trio + arm-atomicity guard + state reader (#6178), and the LUKS cutover
-      #   trio (#6894): inngest-bootstrap.sh gates their install on `-f /tmp/<asset>`
-      STAGED="inngest-redis.conf inngest-redis.service inngest-redis-bootstrap.sh vector.toml inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh inngest-luks-cutover.sh inngest-luks-cutover.service inngest-luks-cutover.timer"
+      #   the cutover flip trio + arm-atomicity guard + state reader (#6178): inngest-bootstrap.sh
+      #   gates their install on `-f /tmp/<asset>`
+      STAGED="inngest-redis.conf inngest-redis.service inngest-redis-bootstrap.sh vector.toml inngest-cutover-flip.sh inngest-server-flip-guard.sh inngest-cutover-flip.service inngest-cutover-flip.timer cat-inngest-cutover-state.sh inngest-trace-retention.sh inngest-trace-retention.sql inngest-trace-retention.sqlite.sql"
       # ONE COMBINED EXIT TRAP, installed before the first command that can fail. In dash a later
       # `trap … EXIT` silently REPLACES an earlier one (measured), so the moved block's own
       # `trap cleanup EXIT` / `trap - EXIT` are gone and their cleanup lives here. `set +e` in the
@@ -990,8 +1024,8 @@ write_files:
       # direct curl) and Sentry through the baked DSN, which needs no Doppler — and it reports
       # FIRST: a slow cleanup (the `docker rm` is bounded at 15 s) must not push the report past
       # systemd's SIGKILL. why= is the last stage this attempt announced, so a failure in an
-      # unnamed arm still says where it was. A failed attempt that stopped the cutover FSM timers
-      # (the quiesce below) starts them again: only a successful bootstrap re-enables them itself.
+      # unnamed arm still says where it was. A failed attempt that stopped the flip timer (the
+      # quiesce below) starts it again: only a successful bootstrap re-enables it itself.
       on_exit() {
         rc=$?
         set +e
@@ -1024,8 +1058,9 @@ write_files:
       attempt=$(( $${n:-0} + 1 ))
       printf '%s\n' "$attempt" > "$STATE/attempts" || true
       # CHANNEL RE-ARM. inngest-bs-token-restage.service makes ONE attempt per boot; if it ran
-      # during a Doppler outage the token file is empty and every phone-home row is lost for the
-      # rest of the boot. Re-stage it (the same script, unchanged) whenever it is empty.
+      # during a Doppler outage the token file is missing (a failed restage never creates it) or empty
+      # and every phone-home row is lost for the rest of the boot. Re-stage it (the same script,
+      # unchanged) whenever it is missing or empty.
       [ -s /run/inngest-bs-logs-token ] || /usr/local/bin/inngest-bs-token-restage.sh >/dev/null 2>&1 || true
       /usr/local/bin/inngest-boot-phone-home.sh provision-attempt-start "attempt=$attempt iid=$IID" || true
       # THE ENVIRONMENT THE UNIT PROMISED. The token reaches every doppler call below from
@@ -1154,11 +1189,15 @@ write_files:
       # header requires the admitting regex to land atomically with the apply — admitting an
       # absent name is a no-op for the subset test (n_total and n_inngest both exclude it), so
       # landing it early is free and removes the ordering hazard entirely.
-      # The floor stays 5 ON PURPOSE. That .tf's DEC-FLOOR note calls the digest dark-present and
-      # implies a 5->6 bump, but the bump is only safe ONCE the secret exists: raising it while the
-      # digest is unapplied makes a 5-name dark boot FATAL — re-bricking the host this very change
-      # exists to unbrick. Bump the floor (here and in inngest-host.test.sh) in the SAME change
-      # that applies inngest-config-digest.tf, never before.
+      # The floor is now 6 (#10390 defect 3, 5->6): INNGEST_CONFIG_DIGEST materializes in THIS
+      # arc's promotion apply — TF_VAR_inngest_config_digest on the soleur/prd_terraform
+      # apply-web-platform-infra.yml path writes doppler_secret.inngest_config_digest into
+      # this project (runbook step 3). ORDERING GATE (CTO ruling): between this change's merge
+      # and that promotion apply, NO dispatch that renders and boots merged cloud-init may run —
+      # inngest-host-replace, inngest-provision-rehearsal.yml, cutover-inngest.yml, or any apply
+      # whose -target set carries hcloud_server.inngest. Floor 6 against a still-5-name live set
+      # FATALs that boot (remedy: promote first, then replace). The merge and the promotion must
+      # ride the same window.
       # An over-scoped `prd`-branch token would see ~116 foreign secrets → n_total != n_inngest →
       # refuse. On pass, continue; on fail, this attempt exits non-zero BEFORE any pull
       # (fail-closed) and the unit retries — a credential-scope failure repeats on every attempt,
@@ -1172,7 +1211,7 @@ write_files:
       names="$(doppler secrets --only-names --json | jq -r 'keys[]' | grep -v '^DOPPLER_' || true)"
       n_total="$(printf '%s\n' "$names" | grep -c . || true)"
       n_inngest="$(printf '%s\n' "$names" | grep -Ec '^(INNGEST_(SIGNING_KEY|EVENT_KEY|REDIS_PASSWORD|POSTGRES_URI|CUTOVER_FLIP|DIAGNOSTIC_BOOT|CONFIG_DIGEST|REDIS_LUKS_KEY|LUKS_CUTOVER|LUKS_ACTIVE_VOLUME_ID|TLS_KEY|TLS_CERT|HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)$' || true)"
-      if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 5 ]; then
+      if [ "$n_total" -ne "$n_inngest" ] || [ "$n_inngest" -lt 6 ]; then
         echo "[inngest] FATAL: boot credential not isolated (sees $n_total non-DOPPLER, $n_inngest INNGEST_)"; exit 1
       fi
       echo "[inngest] boot credential isolated ($n_inngest INNGEST_ secrets, no foreign)"
@@ -1263,7 +1302,7 @@ write_files:
       # guard reads the tag from it. Deleting it would break the bump bot and disarm the guard;
       # pulling it would be the retired GHCR leg. On a zot hit IREF is re-pointed at the zot ref,
       # and every consumer below follows IREF.
-      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.58@sha256:14a46f56af1221d41d7c716d768700142e6ca260bc3209a108e235f4a36c05b6
+      IREF=ghcr.io/jikig-ai/soleur-inngest-bootstrap:v1.1.69@sha256:5a9b50eda3bf0eb87cb77c463f71c47274325db88a809516af00716e8f51c85b
       # --- #7462 (ADR-096): resolve the effective ref ONCE, from zot ----------------------------
       # THE DEFECT THIS CLOSED. Every other pull site in the fleet was flipped to prefer the
       # self-hosted zot registry in the ADR-096 Phase-3 dark launch; this one was missed. ADR-096
@@ -1313,7 +1352,7 @@ write_files:
       # mirror_only=true` is picked up by the NEXT attempt on the same host, without a replace.
       set +e
       if [ -n "$ZOT_EP" ]; then
-        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.58@sha256:14a46f56af1221d41d7c716d768700142e6ca260bc3209a108e235f4a36c05b6"
+        ZIREF="$ZOT_EP/jikig-ai/soleur-inngest-bootstrap:v1.1.69@sha256:5a9b50eda3bf0eb87cb77c463f71c47274325db88a809516af00716e8f51c85b"
         last_stage=pre-zot-pull
         /usr/local/bin/inngest-boot-phone-home.sh pre-zot-pull "$ZIREF"
         install -m 600 /dev/null /var/log/inngest-zot-pull.log
@@ -1384,7 +1423,7 @@ write_files:
       # the ID docker create returned); the cutover flip trio + guard, whose missing docker-cp
       # lines once meant DEDICATED_FLIP stayed 0 and the flip timer never installed on any
       # dedicated host (#6178: the build baked them, the bootstrap looked in /tmp, nothing copied
-      # them there); and the LUKS cutover trio (#6894, install_missing is fail-closed).
+      # them there). (The LUKS cutover trio, #6894, left this list at #11080.)
       for _f in $STAGED; do docker cp "$cid:/$_f" "/tmp/$_f" 2>/dev/null || true; done
       # Make the staging outcome VISIBLE off-box (curl-direct phone-home, Vector-independent):
       # the silent absence of these files is exactly what hid the missing-timer bug for a full
@@ -1426,34 +1465,35 @@ write_files:
       # The token and HOME this doppler read needs come from the unit's EnvironmentFile= — before
       # #8562 they came, implicitly, from the isolation item's `set -a` in the shared runcmd shell.
       DIAG_BOOT="$(timeout 20 doppler secrets get INNGEST_DIAGNOSTIC_BOOT --project soleur-inngest --config ${inngest_doppler_config} --plain 2>/dev/null || true)"
-      # QUIESCE THE CUTOVER FSMs BEFORE EVERY BOOTSTRAP RUN (architecture P1). A retry after a late
-      # failure or a timeout kill re-runs the bootstrap's `systemctl restart inngest-redis` /
+      # QUIESCE THE CUTOVER FLIP FSM BEFORE EVERY BOOTSTRAP RUN (architecture P1). A retry after a
+      # late failure or a timeout kill re-runs the bootstrap's `systemctl restart inngest-redis` /
       # `inngest-server` and re-enables the flip timer. If that lands while an operator's op=resume
       # has the flip's `flushed` step inside its verify_serving window, verification fails and the
       # FSM writes `aborted`, which op=resume cannot recover from without a /mnt/data recut. So stop
-      # both FSM timers and wait, BOUNDED (300 s total), for an in-flight step to finish. The
-      # bootstrap re-enables both timers (`enable --now`) as it always has. On attempt 1 of a fresh
-      # host neither unit exists yet and this is a no-op. NO `Before=` ordering on those services:
+      # the flip timer and wait, BOUNDED (300 s total), for an in-flight step to finish. The
+      # bootstrap re-enables the timer (`enable --now`) as it always has. On attempt 1 of a fresh
+      # host the flip timer does not exist yet and this is a no-op. NO `Before=` ordering on that service:
       # the bootstrap restarts units synchronously, so that ordering would invite a deadlock.
-      # The timers that WERE active are recorded, so a failed attempt restarts exactly those
-      # (on_exit); a successful bootstrap re-enables both itself.
-      # BUSY is wider than "a oneshot is activating": an FSM can be mid-flight between two of its
-      # steps with no unit running. /var/lib/inngest-luks-cutover/frozen-active (non-empty) is the
-      # LUKS cutover's record that it froze the live store; the flip FSM's host state slot
+      # The timer, if it WAS active, is recorded, so a failed attempt restarts exactly it
+      # (on_exit); a successful bootstrap re-enables it itself. (The retired LUKS cutover FSM had
+      # a timer and a service in this loop until #11080; image v1.1.61 stopped baking them. The loop
+      # and the accumulator stay list-shaped on purpose: the provision-unit rows and the ci-deploy
+      # variable-unit pin anchor on that shape.)
+      # BUSY is wider than "a oneshot is activating": the FSM can be mid-flight between two of its
+      # steps with no unit running. The flip FSM's host state slot
       # (/var/lock/inngest-cutover-flip.state, written by inngest-cutover-flip.sh's emit_state)
       # carrying "flag":"flipping" means the flip set flipping and has not reached flushed/done.
-      for _t in inngest-cutover-flip.timer inngest-luks-cutover.timer; do
+      for _t in inngest-cutover-flip.timer; do
         [ "$(systemctl is-active "$_t" 2>/dev/null)" = active ] && _fsm_timers_stopped="$_fsm_timers_stopped $_t"
       done
-      systemctl stop inngest-cutover-flip.timer inngest-luks-cutover.timer >/dev/null 2>&1 || true
+      systemctl stop inngest-cutover-flip.timer >/dev/null 2>&1 || true
       _q=0
       _busy=""
       while [ "$_q" -lt 300 ]; do
         _busy=""
-        for _u in inngest-cutover-flip.service inngest-luks-cutover.service; do
+        for _u in inngest-cutover-flip.service; do
           [ "$(systemctl is-active "$_u" 2>/dev/null)" = activating ] && _busy="$_busy.$_u"
         done
-        [ -s /var/lib/inngest-luks-cutover/frozen-active ] && _busy="$_busy.luks-frozen-active"
         _flip_state="$(cat /var/lock/inngest-cutover-flip.state 2>/dev/null)" || _flip_state=""
         case "$_flip_state" in *'"flag":"flipping"'*) _busy="$_busy.flip-flag-flipping" ;; esac
         [ -z "$_busy" ] && break
@@ -1473,7 +1513,8 @@ write_files:
       timeout 300 dpkg --configure -a >/dev/null 2>&1 || true
       # DOPPLER_PROJECT=soleur-inngest routes every doppler-wrapped unit (server/heartbeat/redis/
       # vector) at THIS host's ISOLATED project (AC3) — the scoped boot token reaches only
-      # soleur-inngest (read/write, #6178). It is a LITERAL, never inherited: inngest-bootstrap.sh
+      # soleur-inngest (read-only since the flip-token split, ADR-282 addendum 2026-10-30; the
+      # flip write uses the drop-in token). It is a LITERAL, never inherited: inngest-bootstrap.sh
       # defaults an unset DOPPLER_PROJECT to `soleur` (its SOLEUR-DEBT note), and a retried run on
       # the same host must pin it exactly as the first did. VECTOR_CLI_ARCH (=${inngest_cli_arch})
       # selects the matching triple in the bootstrap map.
@@ -1582,7 +1623,7 @@ write_files:
       # installed + active = DEDICATED_FLIP reached 1) self-reports off-box, not just the
       # flip-assets-staged precondition. This is precisely the state #6178 silently failed at (the
       # timer never installed); a non-'active' 4th field surfaces it in the same curl-direct marker.
-      svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer inngest-luks-cutover.timer 2>&1 | tr '\n' ',')" || true
+      svc="$(systemctl is-active inngest-server.service inngest-redis.service vector.service inngest-cutover-flip.timer 2>&1 | tr '\n' ',')" || true
       lo="$(curl -s -o /dev/null -w '%%{http_code}' --max-time 5 http://127.0.0.1:8288/ 2>&1)" || true
       jl="$(journalctl -u inngest-server.service --no-pager -n 15 2>/dev/null | /usr/local/bin/inngest-redact.sh | tr '\n' '|' | head -c 400)" || true
       prot="$(cat /proc/sys/fs/protected_symlinks /proc/sys/fs/protected_regular 2>/dev/null | tr '\n' ',')" || true
@@ -1702,7 +1743,7 @@ write_files:
   - path: /etc/systemd/system/soleur-inngest-provision.timer
     content: |
       [Unit]
-      Description=Re-enter soleur-inngest-provision.service on every boot until it has succeeded once (#8562)
+      Description=Re-enter provisioning until it succeeds once (#8562)
 
       [Timer]
       OnBootSec=90s
@@ -1932,20 +1973,22 @@ write_files:
 
       # verify_fail — the named-failure exit. Records the attempt in applied.json WITHOUT
       # advancing the applied pair (best-effort — a dead state dir must not mask the emit),
-      # emits the marker under the same fail-open 300 s throttle as NOOP (a reason CHANGE
-      # always emits; a sustained identical failure re-emits once per window — ~288
-      # rows/day per sustained reason, not ~1,440), and exits 1 EVERY
+      # emits the marker under the same fail-open NOOP_THROTTLE_S (default 300 s)
+      # throttle as NOOP (a reason-or-detail CHANGE always emits; a sustained
+      # identical failure re-emits once per window — ~288 rows/day per sustained
+      # reason at the default, not ~1,440), and exits 1 EVERY
       # tick regardless — the oneshot failure + timer retry is the liveness signal, the row
       # is the reason (the comparator DIVERGES if it is the last thing the host said).
       VF_STAMP="$${STATE_DIR}/.verify-fail-emitted"
       verify_fail() {
         # $1 = reason token; $2 = manifest VERSION when known (rejver= — never `version=`,
         # which the comparator would parse as applied state); $3 = extra detail. The emit
-        # is reason-change-or-300s-window (emit_due fails toward emitting, never silence).
+        # is reason-or-detail-change-or-300s-window (VF_STAMP keys `reason:detail`, so a
+        # detail flip re-emits immediately; emit_due fails toward emitting, never silence).
         write_state "verify-fail:$1" "$${2:-}" "$pointer" || true
-        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1" ] || emit_due "$VF_STAMP"; then
+        if [ "$(cat "$VF_STAMP" 2>/dev/null || true)" != "$1:$${3:-}" ] || emit_due "$VF_STAMP"; then
           emit "SOLEUR_INFRA_PULL_VERIFY_FAIL" "reason=$1 offered=$${pointer:0:12} rejver=$${2:-none}$${3:+ $3}"
-          printf '%s' "$1" > "$VF_STAMP" 2>/dev/null || true
+          printf '%s' "$1:$${3:-}" > "$VF_STAMP" 2>/dev/null || true
         fi
         exit 1
       }
@@ -2018,7 +2061,7 @@ write_files:
       # Sweep residue first: a SIGKILL'd tick leaks its stage dir and orphan .new files
       # (the EXIT trap can't run under SIGKILL).
       rm -rf "$${STATE_DIR}"/stage.* 2>/dev/null || true
-      rm -f "$${APPLIED_JSON}.new" "$${APPLIED_VERSION_FILE}.new" 2>/dev/null || true
+      rm -f "$${APPLIED_JSON}.new" "$${APPLIED_VERSION_FILE}.new" "$${STATE_DIR}/verify.stderr.new" 2>/dev/null || true
       STAGE="$(mktemp -d "$${STATE_DIR}/stage.XXXXXX" 2>/dev/null)" || verify_fail stage-init
       trap 'rm -rf "$STAGE"' EXIT
 
@@ -2056,7 +2099,7 @@ write_files:
       _tgz_bytes="$(stat -c %s "$STAGE/bundle.tar.gz" 2>/dev/null || echo 0)"
       case "$_tgz_bytes" in ''|*[!0-9]*) _tgz_bytes=0 ;; esac
       [ "$_tgz_bytes" -gt 67108864 ] && verify_fail extract "" "member=oversized"
-      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '$1 !~ /^[-d]/ {found=1; exit} END{exit found?0:1}' \
+      tar -tzvf "$STAGE/bundle.tar.gz" 2>/dev/null | awk '{if ($1 !~ /^[-d]/) found=1} END{exit found?0:1}' \
         && verify_fail extract "" "member=nonregular" || true
       tar -xzf "$STAGE/bundle.tar.gz" -C "$STAGE/bundle" \
         --no-same-owner --no-same-permissions 2>/dev/null || verify_fail extract
@@ -2068,7 +2111,13 @@ write_files:
       # nothing here touches Fulcio/Rekor; the trusted root is baked and mounted :ro.
       # --network none: the verify needs no egress at all. The image was staged by the
       # explicit pull above, so docker's implicit pull is a no-op cache hit here.
-      if ! timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
+      # stderr is captured around `timeout` (not inside it) so an rc=124 kill still
+      # lands the partial stderr for the `timeout` classifier arm. The $STAGE copy
+      # is unbounded-by-design (the classifier reads it; piping `2>` through `head`
+      # would SIGPIPE the verifier) and trap-cleaned each tick; the persisted
+      # $STATE_DIR copy is bounded (4 KiB), mode 0600, last failure only.
+      _vrc=0
+      timeout "$VERIFY_TIMEOUT_S" "$DOCKER_BIN" run --rm --network none \
           -v "$STAGE/bundle:/bundle:ro" \
           -v "$TRUSTED_ROOT:/etc/cosign/trusted_root.json:ro" \
           "$COSIGN_IMAGE" verify-blob \
@@ -2076,8 +2125,39 @@ write_files:
           --bundle /bundle/manifest.txt.sigstore.json \
           --certificate-identity-regexp "$IDENTITY_REGEXP" \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
-          /bundle/manifest.txt >/dev/null 2>&1; then
-        verify_fail signature
+          /bundle/manifest.txt >/dev/null 2>"$STAGE/verify.stderr" || _vrc=$?
+      if [ "$_vrc" -ne 0 ]; then
+        # Persist the failure stderr on-host (bounded 4 KiB, 0600, last failure
+        # only — a clean tick leaves the last failure in place for triage; the
+        # `# ts=` header binds it to the rejecting tick + offered digest). Written
+        # via .new+mv inside a umask subshell: a bare `>` creates the file at the
+        # unit's umask before chmod narrows it, and a truncate-before-read would
+        # zero the LAST failure's evidence when the stage read itself fails.
+        # The classifier emits a bounded [a-z-]{1,24} token on the VERIFY_FAIL
+        # row; the token survives the phone-home redaction and the drift
+        # allowlist. Token list is restated in the S10 test loop, the runbook
+        # detail= table, and the _summ_row alternation — keep all four in sync.
+        if [ -r "$STAGE/verify.stderr" ]; then
+          ( umask 0177 && {
+              printf '# ts=%s offered=%s rc=%s\n' \
+                "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)" \
+                "$${pointer:0:12}" "$_vrc"
+              head -c 4096 "$STAGE/verify.stderr"
+            } > "$STATE_DIR/verify.stderr.new" ) 2>/dev/null \
+            && mv -f "$STATE_DIR/verify.stderr.new" "$STATE_DIR/verify.stderr" 2>/dev/null || true
+        fi
+        if [ "$_vrc" -eq 124 ]; then _cls=timeout
+        elif grep -qi 'only supported with --new-bundle-format' "$STAGE/verify.stderr" 2>/dev/null; then _cls=flag-newbundle
+        elif grep -qi 'Error response from daemon' "$STAGE/verify.stderr" 2>/dev/null; then _cls=docker
+        elif grep -qiE 'log inclusion|tlog|rekor' "$STAGE/verify.stderr" 2>/dev/null; then _cls=tlog
+        elif grep -qiE 'identity|issuer|\<san\>' "$STAGE/verify.stderr" 2>/dev/null; then _cls=identity
+        elif grep -qiE 'certificate chain|x509|signed by' "$STAGE/verify.stderr" 2>/dev/null; then _cls=chain
+        else _cls=other
+        fi
+        # Charset clamp — the emit channels and _summ_row admit only
+        # [a-z-]{1,24}-shaped tokens; a future arm must degrade, never inject.
+        case "$_cls" in ''|*[!a-z-]*) _cls=other ;; esac
+        verify_fail signature "" "detail=$_cls"
       fi
 
       # VERSION is read ONLY from the signed manifest — never from an OCI tag or the pointer
@@ -2161,7 +2241,7 @@ write_files:
   - path: /etc/systemd/system/inngest-config-refresh.service
     content: |
       [Unit]
-      Description=Pull + verify + apply the signed inngest config bundle when the promoted digest moves (#6780, ADR-135)
+      Description=Apply the signed inngest config bundle (#6780)
       After=network-online.target docker.service
       Wants=network-online.target docker.service
       ConditionPathExists=/etc/default/inngest-server
@@ -2206,7 +2286,7 @@ write_files:
   - path: /etc/systemd/system/inngest-config-refresh.timer
     content: |
       [Unit]
-      Description=Fire inngest-config-refresh.service every 60 s (#6780, ADR-135)
+      Description=Fire inngest-config-refresh every 60 s (#6780)
       ConditionPathExists=/etc/default/inngest-server
 
       [Timer]
@@ -2252,8 +2332,11 @@ runcmd:
   - mkdir -p /mnt/data
 
   # --- Doppler CLI (arch-derived) — the ONLY channel for the inngest secret set --------
-  # The scoped token is NEVER baked into user_data (retrievable via the hcloud metadata
-  # API) beyond the 0600 env file below. Arch (${doppler_arch}) + checksum (${doppler_sha256})
+  # Both Doppler tokens (the read-only boot token and the read/write flip token) ARE baked into
+  # user_data, then written to the files below (the boot token to /etc/default/inngest-doppler 0600 root
+  # and /etc/default/inngest-server 0640 root:deploy, the flip token to /etc/default/inngest-flip 0600
+  # root); user_data is retrievable through the
+  # hcloud metadata API by any local process (residual, #11816 and #11817). Arch (${doppler_arch}) + checksum (${doppler_sha256})
   # are derived from var.inngest_server_type (cax* → arm64, else amd64; same pin + values as
   # cloud-init-registry.yml). Egress (github release DL) is open.
   - |
@@ -2273,10 +2356,13 @@ runcmd:
     command -v doppler >/dev/null 2>&1 \
       && /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-installed "$(doppler --version 2>/dev/null | head -1)" \
       || /usr/local/bin/inngest-boot-phone-home.sh doppler-cli-install-FAILED
-  # Restricted (0600 root) env file with the scoped Doppler service token — NOT world-
+  # Restricted (0600 root) env file with the scoped Doppler BOOT service token — NOT world-
   # readable /etc/environment (mirrors registry's /etc/default/registry-doppler). The token
-  # is read/write on the ISOLATED `soleur-inngest` project's `prd` root config (the flip FSM
-  # writes INNGEST_CUTOVER_FLIP under it, #6178) — a SEPARATE project with NO inheritance path
+  # is READ-ONLY on the ISOLATED `soleur-inngest` project's `prd` root config (flip-token split,
+  # ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)": the flip FSM's
+  # INNGEST_CUTOVER_FLIP write runs under a SEPARATE read/write flip token, written to
+  # /etc/default/inngest-flip below and consumed as an EnvironmentFile only by inngest-cutover-flip.service through the
+  # write_files drop-in at the top of this file) — a SEPARATE project with NO inheritance path
   # to soleur/prd, so a host compromise reaches ONLY this host's own isolated secret set,
   # never a foreign project.
   # HOME is REQUIRED (#6122 boot fix — the actual dark-host boot bug, found via the #6178 boot
@@ -2293,15 +2379,23 @@ runcmd:
   # `.`-sourced by other items and helpers (inngest-redact.sh, the LUKS stage), so a value
   # carrying shell syntax would EXECUTE as root on every read. Refuse, before the write, any value
   # outside [A-Za-z0-9._:/-]. The value is read through a QUOTED heredoc, so a quote inside it
-  # cannot break this check the way it would break a quoted literal. Refusal phones home and
+  # cannot break this check the way it would break a quoted literal. ONE guard covers BOTH Doppler
+  # tokens (boot and flip, one heredoc line each, checked line by line). It is per-line by design
+  # (CTO N10, rationale corrected by R8 on 2026-11-02): an individually-clean extra line is a bare
+  # word and never an assignment. The flip file is read by systemd and sed and never sourced, so an
+  # extra line there is inert, but /etc/default/inngest-doppler IS `.`-sourced as root, so an extra
+  # bare-word line in that file would execute; accepted (it needs a hostile Doppler API response, and
+  # the pre-change guard read only the first line), see the ADR build record for the trigger. Refusal phones home and
   # `exit`s the runcmd shell: a host whose credential cannot be written safely must not arm.
   - |
-    IFS= read -r _wv <<'SOLEUR_WRITE_GUARD_EOV'
+    while IFS= read -r _wv; do
+      case "$_wv" in
+        ''|*[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED "a Doppler token carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
+      esac
+    done <<'SOLEUR_WRITE_GUARD_EOV'
     ${doppler_token}
+    ${doppler_flip_token}
     SOLEUR_WRITE_GUARD_EOV
-    case "$_wv" in
-      ''|*[!A-Za-z0-9._:/-]*) /usr/local/bin/inngest-boot-phone-home.sh inngest-doppler-write-REFUSED "the Doppler token carries a character outside [A-Za-z0-9._:/-]" || true; exit 1 ;;
-    esac
     unset _wv
   - |
     IFS= read -r _wv <<'SOLEUR_DCFG_GUARD_EOV'
@@ -2525,13 +2619,6 @@ runcmd:
       grep -qx "INNGEST_LUKS_ACTIVE_VOLUME_ID=$POINTER" /etc/default/inngest-luks || { echo "FATAL: the pointer did not land in /etc/default/inngest-luks — the boot-reopen unit would take the unpointed arm on boot 2" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
     fi
     luks_emit luks_key_stage 0 n/a staged
-    # THE VOLUME ID, for inngest-luks-cutover.service (#6894). That script ships in the image
-    # and cannot see template variables, and it compares every mount against these ids — never a
-    # kernel name. Not secret (0644), but asserted: the file's presence keeps the cutover units
-    # active. The image-baked script reads a plaintext id from this file too and now refuses every
-    # flagged run `volume-ids-unreadable` (#9786): the cutover is complete, that refusal is the intent.
-    printf 'INNGEST_LUKS_ADDITIVE_VOLUME_ID=%s\n' "$LUKS_ID" > /etc/default/inngest-luks-volumes
-    grep -qx "INNGEST_LUKS_ADDITIVE_VOLUME_ID=$LUKS_ID" /etc/default/inngest-luks-volumes || { echo "FATAL: /etc/default/inngest-luks-volumes did not land" | tee -a "$INNGEST_LUKS_DETAIL"; exit 1; }
 
     if [ "$MODE" = pointer ]; then
       # ── POINTER ARM — the post-cutover world ─────────────────────────────────────────────
@@ -2847,6 +2934,10 @@ runcmd:
   # Same content + umask 0137 (mode 0640) + root:deploy the bootstrap itself writes (:238-245); deploy
   # must exist first (created above). The unit's User=deploy gets HOME=/home/deploy from systemd, so
   # this env file carries DOPPLER_CONFIG_DIR (not HOME).
+  # The DOPPLER_TOKEN written here is the READ-ONLY boot token (same as /etc/default/inngest-doppler):
+  # this file is group-readable by deploy and read by app-user units, so it must not carry write
+  # access. The cutover flip unit overrides DOPPLER_TOKEN from /etc/default/inngest-flip (below) through
+  # the write_files drop-in; see the ADR-282 addendum "2026-10-30 (#9927 item 4, the flip-token design)".
   # #6555: DOPPLER_PROJECT=soleur-inngest lands in the env-file so the inngest units (which
   # dropped `--project`) resolve the dedicated project from EnvironmentFile at runtime. Literal
   # here (not $DOPPLER_PROJECT) — this cloud-init write runs BEFORE the bootstrap that would set
@@ -2861,6 +2952,14 @@ runcmd:
     unset _wv
   - ( umask 0137 && printf 'DOPPLER_TOKEN=%s\nDOPPLER_CONFIG_DIR=/tmp/.doppler\nDOPPLER_ENABLE_VERSION_CHECK=false\nDOPPLER_PROJECT=soleur-inngest\nDOPPLER_CONFIG=${inngest_doppler_config}\n' '${doppler_token}' > /etc/default/inngest-server )
   - chown root:deploy /etc/default/inngest-server
+  # Flip-token split: the read/write flip token, root-only 0600, ONE variable. FAIL CLOSED (CTO N2):
+  # the runcmd script has no errexit, so the bare `exit 1` is what keeps the host from arming on a
+  # failed write (the same mechanism as the charset guards above); the existing detector is the missing
+  # provision-unit-armed row for the instance id. Placed before every item that arms
+  # soleur-inngest-provision (which also runs the bootstrap that installs the flip unit). No chown:
+  # the file stays root:root, and only inngest-cutover-flip.service lists it. Written by `( umask 0177 )`
+  # for the reason given at the zot-read write above.
+  - ( umask 0177 && printf 'DOPPLER_TOKEN=%s\n' '${doppler_flip_token}' > /etc/default/inngest-flip ) || exit 1
 
   # --- #7695 probe_schema=3: the probe's Redis credential, and NOTHING else ----------------
   # ONE VARIABLE, ON PURPOSE. inngest-server-probe.service reads this via a tolerant

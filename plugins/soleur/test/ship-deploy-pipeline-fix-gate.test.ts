@@ -61,14 +61,13 @@ const TRIGGER_FILES = [
   "apps/web-platform/infra/git-lock-chardevice-sweep.sh",
   "apps/web-platform/infra/inngest-registry-probe.sh",
   "apps/web-platform/infra/inngest-doublefire-probe.sh",
-  // #6780 — the five dedicated-host carriers (the ADR-135 refresh set). They keep
+  // #6780 — the four dedicated-host carriers (the ADR-135 refresh set). They keep
   // FILE_MAP ⊆ TRIGGER_FILES true after the FILE_MAP widening; their real delivery
   // channel is the signed bundle pull on the dedicated host.
   "apps/web-platform/infra/inngest-redis-bootstrap.sh",
   "apps/web-platform/infra/inngest-cutover-flip.sh",
   "apps/web-platform/infra/inngest-server-flip-guard.sh",
   "apps/web-platform/infra/cat-inngest-cutover-state.sh",
-  "apps/web-platform/infra/inngest-luks-cutover.sh",
   // #7095 — the re-deliverable web-host Doppler credential and the two systemd
   // drop-ins that re-point the GENERATED units (vector, inngest-heartbeat) at it.
   // The .tmpl is folded in as local.webhook_doppler_token_env (the RENDERED

@@ -13,8 +13,8 @@
 # bytes; it is destroyed when the run ends.
 #
 # ONLY THE IDENTITY IS THROWAWAY, NOT THE MECHANISM. The template is the PRODUCTION
-# cloud-init-inngest.yml rendered through terraform's own templatefile, the volumes are real
-# Hetzner volumes, and the Doppler reads/writes are real — a stub anywhere in that chain
+# cloud-init-inngest.yml rendered through terraform's own templatefile, the volume is a real
+# Hetzner volume, and the Doppler reads/writes are real — a stub anywhere in that chain
 # would rehearse a boot that does not exist and report it as the real one.
 
 locals {
@@ -61,6 +61,12 @@ locals {
     # --- identity/scratch args (the ONLY deliberate divergences from prod's map) ---
     inngest_luks_volume_id = hcloud_volume.rehearsal_inngest_luks.id
     doppler_token          = doppler_service_token.rehearsal.key
+    # The template gained doppler_flip_token (ADR-282 addendum 2026-10-30, #9927 item 4). The rehearsal
+    # host NEVER arms the cutover flip (INNGEST_DIAGNOSTIC_BOOT is staged true), so it carries its
+    # READ-only token in both files; a rehearsal that must exercise a real flip write is out of scope
+    # and would need a read/write token of its own. inngest-provision-rehearsal.test.sh pins this line
+    # to the rehearsal token so the rehearsal can never be handed a read/write one.
+    doppler_flip_token     = doppler_service_token.rehearsal.key
     inngest_doppler_config = local.rehearsal_doppler_config
     # SDK URL at loopback — no web backend exists for this host to register with, and a
     # closed loopback port is what INNGEST_DIAGNOSTIC_BOOT expects anyway.
@@ -222,26 +228,16 @@ resource "doppler_service_token" "rehearsal" {
   access = "read"
 }
 
-# --- The two volumes ---------------------------------------------------------
+# --- The volume --------------------------------------------------------------
 # `rehearsal_inngest_luks` is the volume the rendered template resolves and (with no pointer, on a
 # `rehearsal_*` config) luksFormats; it is RAW (no `format` — the blkid signature IS the LUKS
 # discriminator; declaring ext4 would make the resolver's empty arm unreachable, see
 # inngest-redis-luks.tf's header note).
-# `rehearsal_inngest` is UNUSED since #9786: it used to mirror prod's retired plaintext AOF volume, and
-# the template no longer takes its id (the `inngest_volume_id` key is gone), so it is attached and
-# never read. It is kept for now only because removing it changes the rehearsal's attach topology, its
-# plan-shape fixtures and two ledger rows; removal is tracked in #10112.
+# It is the rehearsal root's ONLY volume since #10112: the second (plaintext) scratch volume that
+# used to mirror prod's retired plaintext AOF volume was never read post-#9786 — the
+# `inngest_volume_id` key is gone from the template — and was removed with its ledger row and
+# plan-shape fixtures.
 # Size matches prod's inngest_redis_volume_size default so the rehearsal exercises the same geometry.
-resource "hcloud_volume" "rehearsal_inngest" {
-  name     = "${local.rehearsal_host_name}-store"
-  size     = 10
-  location = var.location
-
-  labels = {
-    app = "soleur-inngest-provision-rehearsal"
-  }
-}
-
 resource "hcloud_volume" "rehearsal_inngest_luks" {
   name     = "${local.rehearsal_host_name}-luks"
   size     = 10
@@ -319,12 +315,6 @@ resource "hcloud_server" "rehearsal" {
   labels = {
     app = "soleur-inngest-provision-rehearsal"
   }
-}
-
-resource "hcloud_volume_attachment" "rehearsal_inngest" {
-  volume_id = hcloud_volume.rehearsal_inngest.id
-  server_id = hcloud_server.rehearsal.id
-  automount = false
 }
 
 resource "hcloud_volume_attachment" "rehearsal_inngest_luks" {

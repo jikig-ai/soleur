@@ -20,6 +20,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `${VAR:+"$VAR"}` expansion is the unset-safe form (zero words -> `rm -rf` with no
+# operands exits 0), so the trap stays a no-op if the suite exits before SANDBOX is
+# allocated — including an exit inside the source line itself (tripwire rc 97).
+cleanup() { rm -rf ${SANDBOX:+"$SANDBOX"}; }
+trap cleanup EXIT
+
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -84,10 +94,9 @@ assert_file_exists "$LEFTHOOK_YML" "lefthook.yml exists"
 
 # Build an isolated repo carrying ONLY the gdpr-gate-advisory stanza and the
 # real script, so the probe cannot be perturbed by (or perturb) sibling hooks.
+# (The owning trap was installed before the source line at the top of this file.)
 SANDBOX="$(mktemp -d -t gdpr-glob.XXXXXXXX)"
 assert_fixture_dir "$SANDBOX"
-cleanup() { rm -rf "$SANDBOX"; }
-trap cleanup EXIT
 
 # Extract the live glob list for `gdpr-gate-advisory` from the real
 # lefthook.yml. Reading the real file is the point: a hand-copied glob list in

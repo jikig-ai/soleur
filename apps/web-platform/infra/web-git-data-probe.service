@@ -2,6 +2,17 @@
 Description=git-data consumer-perspective reachability probe (web host, #6548)
 After=network-online.target
 Wants=network-online.target
+# SKIP-VS-FAIL (#10078, the #9962/#9939 pattern): /etc/default/web-git-data-probe is
+# written by web-probe-envwrite.sh, a `|| true`-tolerated late-runcmd write, and the
+# 60s timer is armed unconditionally — an absent file must SKIP this start (one
+# "skipped, unmet condition check" notice per fire), never FAIL it into an
+# every-60s journal storm. The EnvironmentFile= line stays unprefixed: once a start
+# IS attempted, an absent file still fails the unit — the fail-closed contract is
+# retained. The condition re-evaluates on every timer fire, so the probe self-heals
+# when the file appears. The detectors that do NOT share this gated dependency: the
+# `soleur-boot-emit web_probe_envwrite fatal` boot row on a writer failure, and the
+# missing betteruptime_heartbeat.git_data_prd beat — a skipped probe pings nothing.
+ConditionPathExists=/etc/default/web-git-data-probe
 
 [Service]
 Type=oneshot
@@ -19,10 +30,13 @@ Environment=HOME=/root
 # over the private net", "heartbeat ping FAILED") reaches Better Stack off-box, not SSH-only
 # (hr-no-ssh-fallback-in-runbooks; the #6556 inngest-heartbeat lesson). Mirrored in vector.toml.
 SyslogIdentifier=web-git-data-probe
-# /etc/default/web-git-data-probe (baked per-host) carries GIT_DATA_ENDPOINT + GIT_DATA_HEARTBEAT_URL_KEY
-# (the Doppler var name for this host's git_data_prd URL; git-data uses ONE shared beat today —
-# single-host makes masking moot, C3). doppler run injects GIT_DATA_HEARTBEAT_URL; bash indirect
-# expansion resolves it under the generic name the script reads. Shipped as a FILE (nested doppler
-# quotes; container-restart-monitor precedent).
+# /etc/default/web-git-data-probe (baked per-host) carries GIT_DATA_ENDPOINT +
+# GIT_DATA_HEARTBEAT_URL_KEY (the Doppler var name for this host's git_data_prd URL; git-data
+# uses ONE shared beat today — single-host makes masking moot, C3). doppler run injects
+# GIT_DATA_HEARTBEAT_URL, and the script resolves it through that key NAME itself, AFTER its
+# xtrace refusal. The ExecStart below expands and exports NOTHING (#9639): the URL is a
+# credential, and a wrapper that expanded it would print it under a traced launch before the
+# script could refuse. doppler-injection-bound.test.sh rejects an indirect expansion in the Exec
+# directives of a doppler-run unit.
 EnvironmentFile=/etc/default/web-git-data-probe
-ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- bash -c '\''export GIT_DATA_HEARTBEAT_URL="$${!GIT_DATA_HEARTBEAT_URL_KEY}"; exec /usr/local/bin/web-git-data-probe.sh'\'''
+ExecStart=/bin/bash -c 'doppler run --project soleur --config prd -- /usr/local/bin/web-git-data-probe.sh'

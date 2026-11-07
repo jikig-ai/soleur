@@ -30,7 +30,7 @@ DISCORD_SETUP="$HERE/discord-setup.sh"
 BSKY_COMMUNITY="$HERE/bsky-community.sh"
 BSKY_SETUP="$HERE/bsky-setup.sh"
 HMAC_LIB="$HERE/lib/hmac-sha1-b64.sh"
-PINNED_IMAGE='node:22-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c3575c3e4d0d4589e9ed5bfaf3d'
+PINNED_IMAGE='node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da'
 
 # ===================================================================================
 # HMAC-SHA1 oracle (S2, #9597). The plugin signs OAuth 1.0a in bash because the hosted runner
@@ -119,14 +119,9 @@ fi
 # python3: ONLY the test uses it (the independent RFC 5849 percent-encoder of the OAuth oracle); the
 # scripts under test never do, and the hosted runner image has none.
 for dep in jq openssl python3; do
-  if ! command -v "$dep" >/dev/null 2>&1; then
-    if [[ -n "${CI:-}" ]]; then
-      echo "FAIL: $dep is required in CI but not found" >&2
-      exit 1
-    fi
-    echo "SKIP: $dep not installed"
-    exit 0
-  fi
+  # #8773: a missing tool is UNRESOLVED (exit 3) in every environment — honest
+  # both locally and under CI, so the old local-SKIP/CI-FAIL split is gone.
+  command -v "$dep" >/dev/null 2>&1 || { echo "UNRESOLVED: $dep missing — this suite asserted nothing; install $dep"; exit 3; }
 done
 
 SANDBOX="$(mktemp -d -t community-argv.XXXXXXXX)" || { echo "FAIL: mktemp" >&2; exit 1; }

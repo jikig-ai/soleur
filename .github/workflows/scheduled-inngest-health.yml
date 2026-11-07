@@ -42,7 +42,15 @@ name: "Scheduled: Inngest Health Watchdog"
 on:
   schedule:
     - cron: '*/15 * * * *'   # every 15 min — inngest-down is a brand-survival outage
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      bootstrap:
+        description: >-
+          Permit a missing or corrupt gate-witness streak artifact for THIS run only
+          (reseed after a retention lapse, a deleted artifact or a poisoned one).
+          Scheduled runs can never set it. Dispatch with --ref main.
+        type: boolean
+        default: false
 
 concurrency:
   group: scheduled-inngest-health
@@ -397,6 +405,7 @@ jobs:
             # it never writes $GITHUB_OUTPUT and the always() heartbeat reads failure_mode='' → 'ok'
             # (a missed escalation page for that cycle). Degrade a gh blip to empty CREATED instead:
             # empty → restart_ok_from_age treats it as first-occurrence soft (self-heals next */15 tick).
+            # dedupe: benign — deliberate || true inside (#6407 F2): a gh blip degrades to empty CREATED = first-occurrence-soft; aborting here would break the always() heartbeat.
             CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-functions-degraded --state open --json createdAt --jq '.[0].createdAt // empty' 2>/dev/null || true)
             # Escalation decision via the extracted, unit-tested resolver (#6407 review, test-design
             # Finding A): functions_query_degraded stays soft while the open-issue age < window (or on
@@ -430,6 +439,7 @@ jobs:
           # shellcheck source=/dev/null
           source "$GITHUB_WORKSPACE/scripts/inngest-restart-age-gate.sh"
           GIVE_UP_WINDOW_MIN=45
+          # dedupe: benign — age-gate read: a gh fault aborts the step, suppressing auto-restart (the conservative direction); the filing + heartbeat paths do not read restart_ok.
           CREATED=$(gh issue list --repo "$GH_REPO" --label ci/inngest-down --state open --json createdAt --jq '.[0].createdAt // empty')
           RESTART_OK=$(restart_ok_from_age "$CREATED" "$GIVE_UP_WINDOW_MIN" "$(date -u +%s)")
           echo "restart_ok=$RESTART_OK" >> "$GITHUB_OUTPUT"
@@ -686,8 +696,15 @@ jobs:
                   gh issue comment "$EXISTING" --repo "$GH_REPO" --body "Still failing at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. (Restart-dispatch status unavailable this cycle — see the run log; the Sentry heartbeat continues to page.) Run: ${RUN_URL}"
                 fi
               elif [[ "$RESTART_OK" == "false" ]]; then
-                HAS_ESCALATION=$(gh issue view "$EXISTING" --repo "$GH_REPO" --json labels --jq '[.labels[].name] | index("ci/inngest-restart-exhausted") // empty')
-                if [[ -z "$HAS_ESCALATION" ]]; then
+                # Fail-closed like the supabase-watchdog read: a failed labels
+                # lookup must NOT produce an empty HAS_ESCALATION — || true
+                # would re-post the escalation comment every tick while the
+                # API flakes.
+                HAS_ESCALATION_RC=0
+                HAS_ESCALATION=$(gh issue view "$EXISTING" --repo "$GH_REPO" --json labels --jq '[.labels[].name] | index("ci/inngest-restart-exhausted") // empty' 2>/dev/null) || HAS_ESCALATION_RC=$?
+                if [[ "$HAS_ESCALATION_RC" != "0" ]]; then
+                  echo "::warning::could not read issue labels — deferring escalation to the next tick"
+                elif [[ -z "$HAS_ESCALATION" ]]; then
                   gh label create "ci/inngest-restart-exhausted" --repo "$GH_REPO" \
                     --description "External watchdog gave up auto-restarting inngest (>= give-up window) — human root-cause needed" --color "B60205" 2>/dev/null || true
                   gh issue edit "$EXISTING" --repo "$GH_REPO" --add-label "ci/inngest-restart-exhausted" 2>/dev/null || true
@@ -738,16 +755,19 @@ jobs:
           # Healthy means BOTH liveness AND pool are fine. Close each class's issue
           # with its OWN title search — never a union search (a union close-search
           # would close the wrong issue; #5562 plan R5 / union-AC trap).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_DOWN=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-down] Inngest health watchdog failed"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_DOWN" ]]; then
             gh issue close "$STALE_DOWN" --repo "$GH_REPO" --comment "${STATE_TXT}. Run: ${RUN_URL}"
           fi
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_POOL=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-pool] Inngest session-pool pressure/exhaustion"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_POOL" ]]; then
             gh issue close "$STALE_POOL" --repo "$GH_REPO" --comment "Inngest session pool back under threshold at ${NOW}. Run: ${RUN_URL}"
           fi
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_PROBE=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-pool-probe] Inngest pool probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_PROBE" ]]; then
@@ -755,6 +775,7 @@ jobs:
           fi
           # #6374: close the liveness-probe-unavailable issue once the probe path is
           # reachable AND healthy again (the deploy-race window closed / CF-Access recovered).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_LIVENESS_PROBE=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-probe-unavailable] Inngest liveness probe unavailable"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_LIVENESS_PROBE" ]]; then
@@ -763,6 +784,7 @@ jobs:
           # #6407: close the functions-degraded issue once the /v0/gql functions read is
           # healthy again (the transient blip cleared). Without this close the soft issue rots
           # open forever (state-machine Q4 dead-end).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_FUNCTIONS_DEGRADED=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-functions-degraded] Inngest functions query transiently degraded"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_FUNCTIONS_DEGRADED" ]]; then
@@ -770,6 +792,7 @@ jobs:
           fi
           # #8077 review: close the disabled-unattributed alarm once the web unit is serving again or
           # carries a valid op=quiesce-web marker (both read as an empty failure_mode).
+          # dedupe: benign — close-path read: a gh fault leaves that issue open; the alarm persists.
           STALE_UNATTRIBUTED=$(gh issue list --repo "$GH_REPO" --state open \
             --search 'in:title "[ci/inngest-disabled-unattributed] Web inngest scheduler disabled without a quiesce marker"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE_UNATTRIBUTED" ]]; then
@@ -837,6 +860,7 @@ jobs:
           # shellcheck disable=SC2016  # literal single-quoted GitHub search string is intentional
           set -euo pipefail
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+          # dedupe: benign — close-path read: a gh fault leaves the durability issue open; the next durable run retries the close.
           STALE=$(gh issue list --repo "$GH_REPO" --state open --label "ci/inngest-degraded-durability" \
             --search 'in:title "[ci/inngest-degraded-durability] Inngest non-durable between deploys"' --json number --jq '.[0].number // empty')
           if [[ -n "$STALE" ]]; then
@@ -1121,7 +1145,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --json number --jq '.[].number' 2>/dev/null || true); do
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-dedicated-host --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "Dedicated inngest host is serving again (server_active=active, http_code=200). Auto-closed by ${RUN_URL}." || true
           done
@@ -1218,10 +1242,283 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -uo pipefail
-          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --json number --jq '.[].number' 2>/dev/null || true); do
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-no-live-scheduler --state open --limit 100 --json number --jq '.[].number' 2>/dev/null || true); do
             gh issue close "$n" --repo "$GH_REPO" \
               --comment "A live inngest scheduler is back (the web unit is no longer quiesced, or the dedicated host is serving). Auto-closed by ${RUN_URL}." || true
           done
+
+      # ── #8080 SATISFIABILITY WITNESS ─────────────────────────────────────────
+      # The cutover pre-flight gate `inngest_execute_registry_gate` can only be
+      # PROVEN satisfiable by calling it — #8017 and #8054 were both found
+      # unsatisfiable by an operator at a keyboard on cutover day. This arm calls
+      # the gate REPORT-ONLY every 15 min (its exit code never fails the step and
+      # never dispatches an op), counts consecutive `refusal` verdicts in a
+      # streak artifact (ADR-296 carrier, same as the rehearsal monitor), and
+      # files an action-required issue at N=8 (~2h — the gate's own 5400s
+      # row-age bound, so a single missed hourly emit cannot false-file).
+      # `dark` resets; an armed-class cutover flag or `flag_armed` verdict
+      # SUPPRESSES (held, not reset — a cutover in flight or done makes refusal
+      # expected; `done` self-retires the witness until a rollback re-arms).
+      - name: Fetch gate-witness streak state (#8080)
+        id: witness-fetch
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          STREAK_ARTIFACT_NAME: inngest-gate-witness-streak
+          STREAK_BRANCH: main
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh fetch
+
+      - name: Execute-gate satisfiability witness (#8080)
+        id: witness
+        if: always()
+        env:
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+          DEDICATED_HOST: soleur-inngest
+          DEDICATED_HOST_NAME: soleur-inngest-prd
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          PRIOR: ${{ steps.witness-fetch.outputs.prior }}
+        run: |
+          set -uo pipefail
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          # The gate lib self-loads the probe-row selector (INNGEST_PROBE_ROW_JQ);
+          # a lib that cannot be sourced is a broken READER — the crash arm files
+          # it, never a host verdict.
+          if ! source "$GITHUB_WORKSPACE/tests/scripts/lib/inngest-host-dark-gate.sh"; then
+            echo "crash_reason=gate_lib_unavailable" >> "$GITHUB_OUTPUT"
+            echo "::error::#8080 witness: tests/scripts/lib/inngest-host-dark-gate.sh not found on this ref — nothing was measured."
+            exit 1
+          fi
+
+          W_DIR="$(mktemp -d)"
+          W_PROBE_ERR="$W_DIR/probe.err"; W_HB_ERR="$W_DIR/hb.err"
+          W_PROBE_ROWS="$W_DIR/probe.rows"; W_HB_ROWS="$W_DIR/hb.rows"
+          W_EMIT="$W_DIR/emit.txt"; : > "$W_EMIT"
+          # rc is captured, never allowed to abort the step (the dedicated arm's
+          # discipline — lint-betterstack-emitter-read scans this file): a failed
+          # read is --query-rc/--hb-rc, which the gate grades unreadable →
+          # refusal, counted by the streak rather than crashing the arm.
+          W_PROBE_RC=0
+          bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
+            --since 24h --grep 'SOLEUR_INNGEST_SERVER_PROBE' --limit 500 \
+            > "$W_PROBE_ROWS" 2> "$W_PROBE_ERR" || W_PROBE_RC=$?
+          W_HB_RC=0
+          bash "$GITHUB_WORKSPACE/scripts/betterstack-query.sh" \
+            --since 30m --grep 'inngest-cutover-flip' --limit 200 \
+            > "$W_HB_ROWS" 2> "$W_HB_ERR" || W_HB_RC=$?
+          if [[ "$W_PROBE_RC" -ne 0 || "$W_HB_RC" -ne 0 ]]; then
+            source "$GITHUB_WORKSPACE/scripts/lib/betterstack-read-classify.sh" 2>/dev/null || true
+            grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$W_PROBE_ERR" "$W_HB_ERR" >&2 || true
+            if declare -F bs_read_classify >/dev/null 2>&1; then
+              [[ "$W_PROBE_RC" -ne 0 ]] && echo "::warning::#8080 witness: probe read failed (rc=${W_PROBE_RC}, class=$(bs_read_classify "$W_PROBE_RC" "$W_PROBE_ROWS"), first stderr line: $(bs_read_scrub_err1 "$W_PROBE_ERR"))"
+              [[ "$W_HB_RC" -ne 0 ]] && echo "::warning::#8080 witness: heartbeat read failed (rc=${W_HB_RC}, class=$(bs_read_classify "$W_HB_RC" "$W_HB_ROWS"), first stderr line: $(bs_read_scrub_err1 "$W_HB_ERR"))"
+            fi
+          fi
+
+          # REPORT-ONLY: `|| W_GATE_RC=$?` is load-bearing — the gate's exit code
+          # is data, never a step failure, and nothing downstream dispatches on it.
+          W_GATE_RC=0
+          TOKEN="$(inngest_execute_registry_gate \
+            --rows-file "$W_PROBE_ROWS" --query-rc "$W_PROBE_RC" \
+            --hb-file "$W_HB_ROWS" --hb-rc "$W_HB_RC" \
+            --emit-file "$W_EMIT" \
+            --host "$DEDICATED_HOST" --host-name "$DEDICATED_HOST_NAME")" || W_GATE_RC=$?
+          TOKEN="$(strip_log_injection "$TOKEN")"
+          [[ "$TOKEN" =~ ^[a-z_]{1,64}$ ]] || TOKEN="unreadable"
+
+          # The newest flag the gate validated (emit file), else the newest probe
+          # row's cutover_flag — suppression keys on it, so it must not come back
+          # empty just because the gate refused before E11.
+          WFLAG="$(grep -oE '^(flag|hb_flag)=[A-Za-z0-9_-]+' "$W_EMIT" | grep -vE '__UNREADABLE__' | tail -1 | cut -d= -f2 || true)"
+          # dt lives on the OUTER warehouse row ($o), journald fields on the
+          # inner raw payload ($d) — reading .dt off $d yields "" everywhere
+          # and the newest-selection degenerates (fix-round seat, PR #11782).
+          W_PROBE_MSGS="$(printf '%s\n' "$(cat "$W_PROBE_ROWS")" \
+            | jq -R -r "${INNGEST_PROBE_ROW_JQ:?}"' fromjson? | . as $o
+                  | ($o.raw? | fromjson?) as $d
+                  | select($d | inngest_probe_row)
+                  | select($d.host == env.DEDICATED_HOST and $d.host_name == env.DEDICATED_HOST_NAME)
+                  | [($o.dt // ""), $d.message] | @tsv' 2>/dev/null || true)"
+          # hb fallback runs BEFORE the probe-row fallback: the FSM's own
+          # heartbeat attests the CURRENT flag at ~1-2/min, while the newest
+          # probe row's cutover_flag may sit on a row the gate refused before
+          # grading it (an `armed` on an ungraded row must not suppress).
+          if [[ -z "$WFLAG" ]]; then
+            WBID="$(printf '%s\n' "$W_PROBE_MSGS" | sort -rn | head -1 | cut -f2- \
+              | grep -oE 'boot_id=[0-9a-f-]+' | head -1 | cut -d= -f2 || true)"
+            # journald _BOOT_ID is UNHYPHENATED — strip the probe row's dashes
+            # before joining (the gate does the same at inngest-host-dark-gate.sh).
+            WBID="${WBID//-/}"
+            if [[ "$WBID" =~ ^[0-9a-f]{32}$ ]]; then
+              WFLAG="$(jq -Rrn --arg b "$WBID" '
+                  [ inputs
+                    | fromjson? | . as $o
+                    | ($o.raw? | fromjson?) as $d
+                    | select(($d._BOOT_ID | type) == "string" and $d._BOOT_ID == $b)
+                    | select(($d.message | type) == "object")
+                    | { dt: ($o.dt // ""), flag: (($d.message.flag // "") | tostring) }
+                  ] | (map(.dt) | max) as $newest
+                    | (map(select(.dt == $newest) | .flag) | unique) as $f
+                    | if ($f | length) == 1 then $f[0] else "" end' \
+                  < "$W_HB_ROWS" 2>/dev/null || true)"
+            fi
+          fi
+          # Probe-row fallback (dt-ordered, never positional tail -1): the
+          # newest probe row's cutover_flag.
+          if [[ -z "$WFLAG" ]]; then
+            WFLAG="$(printf '%s\n' "$W_PROBE_MSGS" | sort -rn | head -1 | cut -f2- \
+              | grep -oE 'cutover_flag=[^ ]+' | head -1 | cut -d= -f2 || true)"
+          fi
+          WFLAG="$(strip_log_injection "${WFLAG:-unknown}")"
+          [[ "$WFLAG" =~ ^[a-z0-9_-]{1,32}$ ]] || WFLAG="unknown"
+
+          ACTION="$(bash "$GITHUB_WORKSPACE/scripts/inngest-gate-witness-classify.sh" "$TOKEN" "$WFLAG")"
+          [[ "$ACTION" =~ ^(satisfy|refusal|suppressed)$ ]] || ACTION="refusal"
+
+          # Streak bookkeeping (monitor-streak contract): `refusal` writes
+          # RESTORED+1 so `seal` can prove the increment landed; `satisfy` resets
+          # via VERDICT=pass; `suppressed` leaves the restored file so the streak
+          # is HELD — `VERDICT=broken` is the only carrier verdict that round-trips
+          # the restored value unchanged (here it means "held", not "failed").
+          PRIOR_N="${PRIOR:-0}"; [[ "$PRIOR_N" =~ ^[0-9]+$ ]] || PRIOR_N=0
+          case "$ACTION" in
+            refusal)    NEW_STREAK=$((PRIOR_N + 1)); SEAL_VERDICT="transient" ;;
+            satisfy)    NEW_STREAK=0;                SEAL_VERDICT="pass" ;;
+            suppressed) NEW_STREAK=$PRIOR_N;         SEAL_VERDICT="broken" ;;
+          esac
+          mkdir -p "$(dirname "$STREAK_FILE")"
+          case "$ACTION" in
+            refusal) printf '%s' "$NEW_STREAK" > "$STREAK_FILE" 2>/dev/null || true ;;
+            satisfy) printf '%s' "0" > "$STREAK_FILE" 2>/dev/null || true ;;
+          esac
+          echo "#8080 gate-witness token=$TOKEN flag=$WFLAG streak=$NEW_STREAK action=$ACTION"
+          {
+            echo "token=$TOKEN"
+            echo "flag=$WFLAG"
+            echo "action=$ACTION"
+            echo "streak=$NEW_STREAK"
+            echo "seal_verdict=$SEAL_VERDICT"
+            echo "gate_rc=$W_GATE_RC"
+          } >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Seal gate-witness streak state (#8080)
+        id: witness-seal
+        if: ${{ !cancelled() }}
+        env:
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          VERDICT: ${{ steps.witness.outputs.seal_verdict }}
+          RESTORED: ${{ steps.witness-fetch.outputs.prior }}
+        run: bash scripts/monitor-streak-state.sh seal
+
+      - name: Assert the gate-witness streak round-trips (#8080)
+        id: witness-assert
+        if: ${{ !cancelled() }}
+        env:
+          MATCHED: ${{ steps.witness-fetch.outputs.matched }}
+          STREAK_FILE: ${{ runner.temp }}/witness-state/streak
+          BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap }}
+        run: bash scripts/monitor-streak-state.sh assert
+
+      - name: Upload gate-witness streak state (#8080)
+        id: witness-upload
+        if: ${{ !cancelled() && github.ref == 'refs/heads/main' && steps.witness-fetch.outcome == 'success' && steps.witness-seal.outcome == 'success' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: inngest-gate-witness-streak
+          path: ${{ runner.temp }}/witness-state/streak
+          retention-days: 90
+          if-no-files-found: error
+          overwrite: true
+
+      - name: File or comment gate-witness issue (#8080, streak >= 8 or state failure)
+        if: always() && github.ref == 'refs/heads/main' && (steps.witness-fetch.outcome == 'failure' || steps.witness-seal.outcome == 'failure' || steps.witness-assert.outcome == 'failure' || steps.witness-upload.outcome == 'failure' || (steps.witness.outputs.action == 'refusal' && steps.witness.outputs.streak >= 8))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TOKEN: ${{ steps.witness.outputs.token }}
+          FLAG: ${{ steps.witness.outputs.flag }}
+          STREAK: ${{ steps.witness.outputs.streak }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          gh label create "ci/inngest-gate-witness" --repo "$GH_REPO" \
+            --color BFD4F2 --description "Execute-gate satisfiability witness: N consecutive cron refusals" 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
+          gh label create "priority/p2-medium" --repo "$GH_REPO" --color FBCA04 2>/dev/null || true
+          echo "::error::#8080 gate-witness: execute-gate refused by cron (token=${TOKEN}, streak=${STREAK}) or the streak store failed — Run: ${RUN_URL}"
+          TITLE="[ci/inngest-gate-witness] execute-gate unsatisfiable by cron"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r --arg t "unsatisfiable by cron" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null) || { echo "::error::gate-witness: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+          BODY="$(printf '%s\n' \
+            "gate token: \`${TOKEN:-<none>}\`" "cutover flag: \`${FLAG:-<none>}\`" "consecutive refusals: \`${STREAK:-<none>}\`" "" \
+            "The \`inngest_execute_registry_gate\` pre-flight predicate has refused ${STREAK:-N} consecutive 15-minute watchdog runs while no cutover was in flight. The next cutover dispatch will hit this refusal cold — diagnose it now, not on cutover day (#8017, #8054 were both found that way)." "" \
+            "Run: ${RUN_URL}")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || \
+              echo "::warning::#8080 could not comment on issue #${EXISTING}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-gate-witness --label action-required --label priority/p2-medium \
+              --body "$BODY" || echo "::warning::#8080 could not file the gate-witness issue"
+          fi
+
+      - name: Auto-close gate-witness issue (gate satisfies again, #8080)
+        if: always() && github.ref == 'refs/heads/main' && steps.witness.outputs.action == 'satisfy'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          for n in $(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r '.[] | select(.title | contains("unsatisfiable by cron")) | .number' 2>/dev/null || true); do
+            gh issue close "$n" --repo "$GH_REPO" \
+              --comment "The execute-gate satisfied on a cron witness run (token=dark). Auto-closed by ${RUN_URL}." || true
+          done
+
+      # The witness's own death: every branch above keys on an OUTPUT of
+      # steps.witness; a crashed step writes no outputs and reads as a quiet
+      # window. This arm keys on the step's OUTCOME (mirrors
+      # "Dedicated-host consumer crashed").
+      - name: Gate-witness consumer crashed (#8080)
+        if: always() && github.ref == 'refs/heads/main' && steps.witness.outcome != 'success' && steps.witness.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WITNESS_OUTCOME: ${{ steps.witness.outcome }}
+          CRASH_REASON: ${{ steps.witness.outputs.crash_reason || 'unknown' }}
+        run: |
+          set -uo pipefail
+          strip_log_injection() {
+            printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g; s/\xc2\x85//g'
+          }
+          CAUSE="$(strip_log_injection "${CRASH_REASON:-unknown}")"
+          [[ -n "$CAUSE" ]] || CAUSE="unknown"
+          echo "::error::#8080 the gate-witness consumer itself FAILED (outcome=${WITNESS_OUTCOME}, cause: ${CAUSE}) — the execute-gate was NOT measured this run."
+          gh label create "ci/inngest-gate-witness" --repo "$GH_REPO" --color BFD4F2 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" --color D93F0B 2>/dev/null || true
+          TITLE="[ci/inngest-gate-witness] witness consumer is broken"
+          EXISTING=$(gh issue list --repo "$GH_REPO" --label ci/inngest-gate-witness --state open --limit 100 --json number,title | jq -r --arg t "$TITLE" '[.[] | select(.title | contains($t))][0].number // empty' 2>/dev/null) || { echo "::error::gate-witness: dedupe query failed — filing without dedupe."; EXISTING=""; }
+          BODY="$(printf '%s\n' \
+            "verdict: \`arm-crashed\`" "" \
+            "cause: \`${CAUSE}\`" "" \
+            "The gate-witness arm did not complete, so nothing measured whether the execute-gate is satisfiable. Absence of a verdict is NOT health." "" \
+            "Run: ${RUN_URL}")"
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" --body "$BODY" || true
+          else
+            gh issue create --repo "$GH_REPO" --title "$TITLE" \
+              --label ci/inngest-gate-witness --label action-required --label priority/p2-medium \
+              --body "$BODY" || true
+          fi
 
       - name: Sentry check-in (final)
         if: always()
@@ -1303,10 +1600,12 @@ jobs:
           [[ -n "$CF_API_TOKEN" ]] && echo "::add-mask::$CF_API_TOKEN"
           if [[ -z "$CF_API_TOKEN" || -z "$CF_ACCOUNT_ID" ]]; then
             # Unreadable creds are census_unavailable — NOT zero connectors. Fail soft.
+            # An unreadable census cannot prove versions either → version_unreadable (soft).
             echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
             echo "count=-1" >> "$GITHUB_OUTPUT"
+            echo "version_verdict=version_unreadable" >> "$GITHUB_OUTPUT"
             echo "detail=doppler read failed for CF_API_TOKEN/CF_ACCOUNT_ID" >> "$GITHUB_OUTPUT"
-            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 reason=doppler_read_failed"
+            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 version_verdict=version_unreadable reason=doppler_read_failed"
             exit 0
           fi
 
@@ -1316,8 +1615,9 @@ jobs:
           if [[ -z "$TUNNEL_ID" ]]; then
             echo "verdict=census_unavailable" >> "$GITHUB_OUTPUT"
             echo "count=-1" >> "$GITHUB_OUTPUT"
+            echo "version_verdict=version_unreadable" >> "$GITHUB_OUTPUT"
             echo "detail=could not resolve tunnel id for soleur-web-platform" >> "$GITHUB_OUTPUT"
-            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 reason=tunnel_id_unresolved"
+            echo "SOLEUR_ORIGIN_HOST_CHURN verdict=census_unavailable count=-1 version_verdict=version_unreadable reason=tunnel_id_unresolved"
             exit 0
           fi
 
@@ -1328,21 +1628,32 @@ jobs:
 
           read -r VERDICT COUNT <<<"$(classify_connector_census "$CODE" "$BODY")"
           EVIDENCE=$(describe_connectors "$BODY")
+          # Second classifier, SAME body (eMudhra advisory floor): every live conn's
+          # client_version must be >= 2026.10.2 — a connector can be the right COUNT and
+          # still run a compromised-trust-store binary. Per-conn, numeric field-wise compare.
+          read -r VVERDICT VBELOW VUNREAD <<<"$(classify_conn_versions "$BODY")"
+          VEVIDENCE=$(describe_conn_versions "$BODY")
 
           echo "verdict=$VERDICT" >> "$GITHUB_OUTPUT"
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
-          echo "detail=http=$CODE connectors=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "version_verdict=$VVERDICT" >> "$GITHUB_OUTPUT"
+          echo "detail=http=$CODE connectors=$COUNT version=$VVERDICT below=$VBELOW unreadable=$VUNREAD" >> "$GITHUB_OUTPUT"
           {
             echo "evidence<<CENSUS_EOF"
             echo "${EVIDENCE:-(no live connectors)}"
             echo "CENSUS_EOF"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "version_evidence<<VCENSUS_EOF"
+            echo "${VEVIDENCE:-(no live conns)}"
+            echo "VCENSUS_EOF"
           } >> "$GITHUB_OUTPUT"
 
           # Agent-facing breadcrumb, mirroring SOLEUR_INNGEST_LIVENESS_VERDICT / SOLEUR_ZOT_DISK.
           # This is a DIAGNOSTIC marker in the run log, NOT an alert route — a log marker nobody
           # greps is how the last 16h investigation started. The action-required issue below is
           # the alert.
-          echo "SOLEUR_ORIGIN_HOST_CHURN verdict=$VERDICT count=$COUNT tunnel=${TUNNEL_ID:0:8}"
+          echo "SOLEUR_ORIGIN_HOST_CHURN verdict=$VERDICT count=$COUNT version_verdict=$VVERDICT below_floor_conns=$VBELOW unreadable_conns=$VUNREAD tunnel=${TUNNEL_ID:0:8}"
           # Guard on non-empty rather than filtering inside the loop. Under `set -euo pipefail`
           # a `while read` whose last body command is a false `[[ -n "$line" ]]` exits 1, so an
           # EMPTY $EVIDENCE failed this step — and $EVIDENCE is empty precisely and only on
@@ -1386,8 +1697,8 @@ jobs:
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
               printf '### What this means\n\nCloudflare binds ingress to a **tunnel**, then picks a connector **per edge colo**. With more than one connector, `localhost:` ingress no longer means "this host" — it means "whichever replica answered". Only `/hooks/deploy` fans out to peers, so everything else is now coin-flipped:\n\n- `/hooks/deploy-status` + `/hooks/inngest-liveness` read a **random host** (a freshly-recreated non-primary host has no `inngest-inventory.sh` at all → false `inngest_down` P1s)\n- `/hooks/infra-config` is a coin-flipped **WRITE**, self-verified against a separately coin-flipped read\n- `ssh.soleur.ai` lands the seccomp/apparmor SSH bridge on a **random host** — a sandbox-escape control update can silently land on the wrong host while CI reports green\n\nThis is the #6425 regression. Users are not directly affected (`app.soleur.ai` is a direct A record to web-1, never through the tunnel).\n\n'
               printf '### Live connectors\n\n```\n%s\n```\n\n' "$EVIDENCE"
-              printf 'Colo geography attributes a connector to a host (`origin_ip` is null on this endpoint): `ams*`/`hel*` = hel1 = **web-1**, which since the #6538 retire is the ONLY web host. A connector in any other colo therefore attributes to NO fleet host — it is a stray `cloudflared` (leftover process, container, or off-fleet machine holding a valid tunnel token).\n\n'
-              printf '### Remediation\n\n1. **Identify the extra connector** from the colo attribution and the `Live connectors` block above. web-1 is the only host `server.tf` grants a connector to (`web_tunnel_connector = each.key == "web-1"`, which gates the `cloudflared` install in `cloud-init.yml`), so every connector beyond the one hel1/ams connector is a stray.\n2. **Evict it, no-SSH first:** DELETE the stray client_id under `accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections` (the same endpoint this check reads), then rotate the tunnel token so the stray cannot re-register with the credential it holds. **There is no recreate dispatch you can use HERE** — `apply_target=web-2-recreate` and `warm-standby` were removed with the web-2 retire (#6575/#6538). `apply_target=web-host-create` (#6730, ADR-145) BIRTHS a declared-but-absent host; it is additive-only and its gate refuses any plan that destroys or replaces, so it is NOT a recreate. `apply_target=web-host-replace` (#6969, ADR-148) IS a real recreate — but it REFUSES web-1 by name (the LUKS-pinned host; see its gate header), and web-1 is the only host granted a connector, so it cannot be the remedy for a stray connector either. The earlier blanket wording here ("there is NO recreate dispatch", "recreating a host is not available") went false when #6969 landed and is corrected rather than left standing: the mechanism exists, it just does not reach this host.\n3. **If the predicate itself regressed** (i.e. `web_tunnel_connector` would evaluate true for a host that must not run `cloudflared`), fix `server.tf` and ship it on the normal merge path; the running host reconciles via the infra-config push. Recreating a host is NOT the remedy here (and for web-1 it is not available — see step 2).\n4. Do **not** "fix" this by adding a per-hostname ingress rule — ADR-114 records that as a normative anti-pattern: a per-hostname rule does not pin a connector.\n5. Re-pooling a host is NOT a weight flip and is blocked on #6466 (host-addressability).\n\nRefs #6425 (the regression class this detects; the issue itself is closed), ADR-114 (I1/I2), ADR-068.\n'
+              printf 'Colo geography attributes a connector to a host (`origin_ip` is null on this endpoint): `ams*`/`hel*` = hel1, which hosts **both** web hosts today — colo cannot distinguish web-1 from web-2, so a hel1 connector attributes to "a web host", not to a named one. The granted connector host is **web-2** (`web_tunnel_connector = each.key == "web-2"` in server.tf; web-1 is LUKS-pinned and unreplaceable, so the role moved permanently to the cattle standby for the cloudflared >= 2026.10.2 eMudhra fix). A connector in any non-hel1 colo attributes to NO fleet host — it is a stray `cloudflared` (leftover process, container, or off-fleet machine holding a valid tunnel token).\n\n'
+              printf '### Remediation\n\n1. **Identify the extra connector** from the colo attribution and the `Live connectors` block above. web-2 is the only host `server.tf` grants a connector to (`web_tunnel_connector = each.key == "web-2"`, which gates the `cloudflared` service install in `cloud-init.yml`), so every connector beyond the one hel1 connector is a stray — and a SECOND hel1 connector is most plausibly web-1'"'"'s still-running legacy cloudflared (kill its credential: DELETE its client_id below, then rotate the tunnel token).\n2. **Evict it, no-SSH first:** DELETE the stray client_id under `accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections` (the same endpoint this check reads), then rotate the tunnel token so the stray cannot re-register with the credential it holds. `apply_target=web-host-create` (#6730, ADR-145) BIRTHS a declared-but-absent host; it is additive-only and its gate refuses any plan that destroys or replaces, so it is NOT a recreate. `apply_target=web-host-replace` (#6969, ADR-148) IS a real recreate and now DOES reach the connector host: it refuses web-1 by name (the LUKS-pinned host; see its gate header), but web-2 — the granted connector host since the eMudhra migration — is exactly the cattle host it was built for.\n3. **If the predicate itself regressed** (i.e. `web_tunnel_connector` would evaluate true for a host that must not run `cloudflared`), fix `server.tf` and ship it on the normal merge path; the running host reconciles via the infra-config push. Recreating a host is NOT the remedy for a stray connector — and for web-1 it is not available at all (the replace gate refuses it by name — see step 2).\n4. Do **not** "fix" this by adding a per-hostname ingress rule — ADR-114 records that as a normative anti-pattern: a per-hostname rule does not pin a connector.\n5. Re-pooling a host is NOT a weight flip and is blocked on #6466 (host-addressability).\n\nRefs #6425 (the regression class this detects; the issue itself is closed), ADR-114 (I1/I2), ADR-068.\n'
             } > "$BODY_FILE"
           else
             ISSUE_TITLE="[ci/tunnel-connector-drift] Tunnel has ZERO live connectors — every tunnel-routed surface is dark"
@@ -1397,7 +1708,7 @@ jobs:
               printf -- '- **Detected at:** %s\n' "$NOW"
               printf -- '- **Run log:** %s\n\n' "$RUN_URL"
               printf '### What this means\n\nCloudflare answered and reported **no** live connectors — this is a well-formed census, not a failed read. Every tunnel-routed surface is dark: `deploy.soleur.ai` (the deploy pipeline), `ssh.soleur.ai` (the SSH bridge), `registry.soleur.ai`.\n\n**`app.soleur.ai` is unaffected** — it is a direct CF-proxied A record to web-1 and never traverses the tunnel. So users are still served; what is lost is the ability to deploy to and remediate the host serving them.\n\n'
-              printf '### Remediation\n\n1. Check `cloudflared` on the designated ingress host (web-1). It is `restart-on-failure` under systemd, so a total absence points at the host, not the process.\n2. `app.soleur.ai` still resolves directly, so user-facing checks will look green — do not read that as "the tunnel is fine".\n3. Since #6425 only the designated ingress host runs a connector by construction, so there is no second connector to absorb this. That trade is deliberate and recorded in ADR-068: a silent-wrong-answer mode was traded for a loud-total-outage mode.\n\nRefs #6425, ADR-114 (I1), ADR-068.\n'
+              printf '### Remediation\n\n1. Check `cloudflared` on the designated connector host (web-2 — `web_tunnel_connector` in server.tf). It is `restart-on-failure` under systemd, so a total absence points at the host, not the process. `apply_target=web-host-replace -f web_host_key=web-2` is the sanctioned re-birth path (the dispatch refuses web-1 by name; web-2 is exactly the cattle host it was built for).\n2. `app.soleur.ai` still resolves directly, so user-facing checks will look green — do not read that as "the tunnel is fine".\n3. Since #6425 only the designated connector host runs a connector by construction, so there is no second connector to absorb this. That trade is deliberate and recorded in ADR-068: a silent-wrong-answer mode was traded for a loud-total-outage mode.\n\nRefs #6425, ADR-114 (I1), ADR-068.\n'
             } > "$BODY_FILE"
           fi
 
@@ -1415,6 +1726,50 @@ jobs:
               --body-file "$BODY_FILE"
           fi
 
+      - name: File action-required on a below-floor connector version (eMudhra)
+        # below_floor PAGES: a live conn on cloudflared < 2026.10.2 trusts the compromised
+        # eMudhra intermediates and can be MITM'd — on the management plane (deploy./ssh./
+        # registry.), not a theoretical surface. version_unreadable stays a soft breadcrumb
+        # (same posture as census_unavailable), but version_floor_invalid PAGES too: a floor
+        # constant that cannot parse silently disarms this whole verdict — the disarm is the
+        # incident. Distinct label from ci/tunnel-connector-drift: a below-floor conn is a
+        # COUNT-correct, VERSION-wrong connector — the drift arm above cannot see it.
+        if: always() && (steps.census.outputs.version_verdict == 'below_floor' || steps.census.outputs.version_verdict == 'version_floor_invalid')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VEVIDENCE: ${{ steps.census.outputs.version_evidence }}
+          DETAIL: ${{ steps.census.outputs.detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          NOW=$(date -u +'%Y-%m-%d %H:%M UTC')
+          BODY_FILE=$(mktemp)
+          gh label create "ci/tunnel-connector-version" --repo "$GH_REPO" \
+            --description "Live tunnel conn runs cloudflared below the 2026.10.2 eMudhra advisory floor" \
+            --color "B60205" 2>/dev/null || true
+
+          ISSUE_TITLE="[ci/tunnel-connector-version] Live tunnel conn runs cloudflared below the 2026.10.2 advisory floor"
+          {
+            printf '## A live tunnel connection is running cloudflared below the advisory floor\n\n'
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Census detail:** `%s`\n' "$DETAIL"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What this means\n\nCloudflare'"'"'s 2026-10-20 advisory disclosed that eight eMudhra (emSign) intermediate CA keys are compromised — any holder can mint certificates for any hostname, so a `cloudflared` whose trust store still chains to them can be MITM'"'"'d. The fix shipped in **2026.10.2**. A conn below the floor means the connector↔edge QUIC link — which carries `deploy.` webhooks, the `ssh.` CI bridge, and `registry.` pushes — is MITM-able on the management plane. The connector COUNT may still be 1 (`ok` above); this verdict is about the binary, not the topology.\n\n'
+            printf '### Live conns\n\n```\n%s\n```\n\n' "$VEVIDENCE"
+            printf '### Remediation\n\n1. **If this is the post-migration window:** the connector host is web-2 (`web_tunnel_connector = each.key == "web-2"`). A below-floor conn there means the host predates the pinned-.deb cloud-init — re-born it: `gh workflow run apply-web-platform-infra.yml -f apply_target=web-host-replace -f web_host_key=web-2 -f confirm=REPLACE-web-2 -f reason="cloudflared floor remediation" -f image_tag=<PINNED>` (stock preflight is mandatory).\n2. **If the conn attributes to NO fleet host** (non-hel1 colo): it is a stray holding a live tunnel token — DELETE its client_id under `accounts/$CF_ACCOUNT_ID/cfd_tunnel/$TUNNEL_ID/connections` and rotate the tunnel token.\n3. **web-1 cannot be the remedy:** `web-host-replace` refuses it by name (LUKS-pinned) and in-place host mutation is forbidden. If the below-floor conn IS web-1'"'"'s still-running legacy cloudflared, kill its credential per step 2 — do not try to patch it.\n4. **Provisioning is already deterministic:** `cloud-init.yml` installs a pinned `.deb` + sha256 (`CLOUDFLARED_VERSION="2026.10.4"`), so a fresh host cannot regress below the floor. This alert means something ALREADY RUNNING is stale, not that future births are.\n\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --label "ci/tunnel-connector-version" --limit 100 --json number,title | jq -r --arg t "$ISSUE_TITLE" '[.[] | select(.title | contains($t))][0].number // empty') || { echo "::error::tunnel-connector-version: dedupe query failed — filing without dedupe; a duplicate is the deliberate trade against filing nothing."; EXISTING=""; }
+          if [[ -n "$EXISTING" ]]; then
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Still \`below_floor\` at ${NOW}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" --title "$ISSUE_TITLE" \
+              --label "ci/tunnel-connector-version" --label "action-required" --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
       - name: Auto-resolve the drift issue once the invariant is restored
         if: always() && steps.census.outputs.verdict == 'ok'
         env:
@@ -1425,9 +1780,29 @@ jobs:
           set -euo pipefail
           # Self-closing, mirroring the sibling inngest-down issue's recovery comment. An
           # action-required issue that outlives its cause trains the operator to ignore the label.
+          # dedupe: benign — deliberate || true inside: a gh fault yields empty EXISTING; the drift issue stays open = alarm persists.
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search 'in:title "[ci/tunnel-connector-drift]"' \
             --json number --jq '.[0].number // empty' 2>/dev/null || true)
           if [[ -n "$EXISTING" ]]; then
             gh issue close "$EXISTING" --repo "$GH_REPO" \
               --comment "Connector invariant restored (census = 1) at $(date -u +'%Y-%m-%d %H:%M UTC'). Run: ${RUN_URL}"
+          fi
+
+      - name: Auto-resolve the version issue once every live conn is at/above the floor
+        # versions_ok is the quiet state. version_unreadable does NOT resolve — an unreadable
+        # read is not proof of compliance, and a self-resolving alert on a blind read is the
+        # false-recovery shape this file exists to prevent.
+        if: always() && steps.census.outputs.version_verdict == 'versions_ok'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # dedupe: benign — deliberate || true inside: a gh fault yields empty EXISTING; the version issue stays open = alarm persists.
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open --search 'in:title "[ci/tunnel-connector-version]"' \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [[ -n "$EXISTING" ]]; then
+            gh issue close "$EXISTING" --repo "$GH_REPO" \
+              --comment "Every live conn reports client_version >= 2026.10.2 at $(date -u +'%Y-%m-%d %H:%M UTC'). Run: ${RUN_URL}"
           fi

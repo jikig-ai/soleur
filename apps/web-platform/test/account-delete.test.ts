@@ -56,11 +56,32 @@ vi.mock("@/server/observability", async (importOriginal) => ({
   reportSilentFallback: (...args: unknown[]) => mockReportSilentFallback(...args),
 }));
 
+// Records the bounded session wait in the order test. Everything else (and the wait itself)
+// is the REAL registry, so the drain tests below still exercise real polling.
+const mockWaitSpy = vi.fn();
+vi.mock("@/server/agent-session-registry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/agent-session-registry")>();
+  return {
+    ...actual,
+    waitForUserSessionsToDeregister: (...args: Parameters<typeof actual.waitForUserSessionsToDeregister>) => {
+      mockWaitSpy(...args);
+      return actual.waitForUserSessionsToDeregister(...args);
+    },
+  };
+});
+
 // ---------------------------------------------------------------------------
 // Import the module under test
 // ---------------------------------------------------------------------------
 
-import { ART17_ERASURE_FEATURE, ART17_ERASURE_OP, deleteAccount } from "../server/account-delete";
+import {
+  ART17_ERASURE_FEATURE,
+  ART17_ERASURE_OP,
+  ART17_WORKSPACE_TREE_ERASURE_OP,
+  deleteAccount,
+} from "../server/account-delete";
+import { registerSession, unregisterSession, __test_only__ } from "../server/agent-session-registry";
+import { WorkspaceReapError } from "../server/workspace-reap-error";
 import type { GitDataErasureOutcome } from "../server/git-data-replication";
 
 // ---------------------------------------------------------------------------
@@ -267,6 +288,116 @@ describe("deleteAccount", () => {
     expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
   });
 
+  test("a deleteWorkspace throw is Sentry-mirrored (workspace-tree-erasure) and NEVER blocks the cascade (#8211)", async () => {
+    setupSupabaseMocks();
+    const raw = "11111111-2222-4333-8444-555555555555";
+    mockDeleteWorkspace.mockRejectedValue(
+      new WorkspaceReapError(
+        [
+          { root: "worktree", kind: "moved-aside" },
+          { root: "workspaces", kind: "error", code: "EACCES" },
+          { root: "resolver", kind: "error", label: "worktree" },
+          { root: "worktree", kind: "timeout", code: "ETIMEDOUT" },
+        ],
+        [new Error(`rm failed for /var/lib/soleur/worktrees/${raw}`)],
+        5,
+      ),
+    );
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    // The cascade completes: git-data erasure and the auth-user delete both still run.
+    expect(mockRemoveGitDataRepo).toHaveBeenCalledWith("user-123");
+    expect(mockAuth.admin.deleteUser).toHaveBeenCalledWith("user-123");
+    expect(result.success).toBe(true);
+
+    const call = mockReportSilentFallback.mock.calls.find(
+      ([, opts]) => (opts as { op?: string }).op === ART17_WORKSPACE_TREE_ERASURE_OP,
+    );
+    expect(call).toBeDefined();
+    const [errArg, opts] = call as [unknown, Record<string, unknown>];
+    expect(opts.feature).toBe(ART17_ERASURE_FEATURE);
+    expect(ART17_WORKSPACE_TREE_ERASURE_OP).toBe("workspace-tree-erasure");
+    // MESSAGE path with no Error object, and no raw path/id anywhere in the payload.
+    expect(errArg).toBeNull();
+    expect(JSON.stringify(opts)).not.toContain(raw);
+    expect(JSON.stringify(opts)).not.toContain("/var/lib/soleur");
+    // Which root failed (label), why, and the errno code: not just "AggregateError".
+    expect(opts.extra).toMatchObject({
+      errorName: "WorkspaceReapError",
+      failedRoots: ["worktree", "workspaces", "resolver:worktree", "worktree"],
+      failureKinds: ["moved-aside", "error", "error", "timeout"],
+      errorCodes: ["EACCES", "ETIMEDOUT"],
+    });
+  });
+
+  test("order: sessions aborted, THEN waited on, THEN the tree is reaped, THEN the bare repo, THEN the auth user (#8211)", async () => {
+    setupSupabaseMocks();
+    const order: string[] = [];
+    mockAbortAllUserSessions.mockImplementation(() => void order.push("abort"));
+    mockWaitSpy.mockImplementation(() => void order.push("wait"));
+    mockDeleteWorkspace.mockImplementation(async () => void order.push("reap"));
+    mockRemoveGitDataRepo.mockImplementation(async () => {
+      order.push("removeGitDataRepo");
+      return { status: "erased" };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      order.push("deleteUser");
+      return { data: {}, error: null };
+    });
+
+    await deleteAccount("user-123", "test@example.com");
+
+    expect(order).toEqual(["abort", "wait", "reap", "removeGitDataRepo", "deleteUser"]);
+    mockWaitSpy.mockReset();
+  });
+
+  describe("bounded wait for aborted sessions before the reap (#8211)", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      __test_only__.clear();
+    });
+
+    test("the reap waits for the user's registered session to deregister", async () => {
+      vi.useFakeTimers();
+      setupSupabaseMocks();
+      registerSession("user-123", "conv-1", {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map(),
+        sessionId: null,
+      });
+
+      const p = deleteAccount("user-123", "test@example.com");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+
+      unregisterSession("user-123", "conv-1");
+      await vi.advanceTimersByTimeAsync(200);
+      expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await p).success).toBe(true);
+    });
+
+    test("a session that never deregisters does not block the erasure past the bound", async () => {
+      vi.useFakeTimers();
+      setupSupabaseMocks();
+      registerSession("user-123", "conv-stuck", {
+        abort: new AbortController(),
+        reviewGateResolvers: new Map(),
+        sessionId: null,
+      });
+
+      const p = deleteAccount("user-123", "test@example.com");
+      // The 5 s bound, probed tightly: still waiting at 4.9 s, proceeding by 5.1 s.
+      await vi.advanceTimersByTimeAsync(4_900);
+      expect(mockDeleteWorkspace).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(mockDeleteWorkspace).toHaveBeenCalledWith("user-123");
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect((await p).success).toBe(true);
+    });
+  });
+
   test("erases the shared git-data bare repo for the deleted user (Art. 17 / AC9)", async () => {
     setupSupabaseMocks();
 
@@ -274,9 +405,9 @@ describe("deleteAccount", () => {
 
     // userId === workspaces.id (mig 053 N2 invariant) → the sole-owned workspace's
     // git-data repo is keyed on userId, mirroring deleteWorkspace(userId). Best-effort
-    // (removeGitDataRepo is a no-op at flag-off), so the reach — not the transport — is
-    // what this asserts; the flag gate + key authority are covered in
-    // git-data-replication.test.ts.
+    // (removeGitDataRepo gates on arming, not the live flag: an unarmed env gets `skipped`),
+    // so the reach — not the transport — is what this asserts; the arming gate + key
+    // authority are covered in git-data-replication.test.ts.
     expect(mockRemoveGitDataRepo).toHaveBeenCalledWith("user-123");
   });
 
@@ -789,6 +920,91 @@ describe("deleteAccount", () => {
       expect.anything(),
       expect.objectContaining({ feature: "account-delete", op: "erase-egress-audit-rollup" }),
     );
+  });
+
+  test("Art. 17 — anonymise_approval_request runs for the user id, before auth-delete (#4672, step 5.16)", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+    let anonymisedWith: unknown;
+
+    mockRpc.mockImplementation(async (name: string, args?: unknown) => {
+      callOrder.push(`rpc:${name}`);
+      if (name === "anonymise_approval_request") anonymisedWith = args;
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth.deleteUser");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(anonymisedWith).toEqual({ p_user_id: "user-123" });
+    const anonIdx = callOrder.indexOf("rpc:anonymise_approval_request");
+    const authIdx = callOrder.indexOf("auth.deleteUser");
+    expect(anonIdx).toBeGreaterThanOrEqual(0);
+    expect(anonIdx).toBeLessThan(authIdx);
+    // The RPC deletes a personal workspace's rows only when no member is left, so it MUST run after the membership
+    // removal (step 5.7) and after the egress-rollup erase (step 5.15), which use the same memberless-workspace rule.
+    const membersIdx = callOrder.indexOf("rpc:anonymise_workspace_members");
+    const rollupIdx = callOrder.indexOf("rpc:erase_egress_audit_rollup");
+    expect(membersIdx).toBeGreaterThanOrEqual(0);
+    expect(membersIdx).toBeLessThan(anonIdx);
+    expect(rollupIdx).toBeGreaterThanOrEqual(0);
+    expect(rollupIdx).toBeLessThan(anonIdx);
+  });
+
+  test("Art. 17 — anonymise_approval_request failure aborts cascade BEFORE auth-delete (#4672)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_approval_request") {
+        return { data: null, error: { message: "RPC unavailable", code: "XX000" } };
+      }
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/anonymise-approval-request/);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    // A LITERAL null first argument: an Error object would be captured by the pino mirror (feature=pino-mirror) and the
+    // art17_approval_anonymise_failed alert (feature=account-delete, op=anonymise-approval-request) could never fire.
+    const call = mockReportSilentFallback.mock.calls.find((c) => (c[1] as { op?: string })?.op === "anonymise-approval-request");
+    expect(call).toBeDefined();
+    expect(call![0]).toBeNull();
+    expect(call![1]).toMatchObject({
+      feature: "account-delete",
+      op: "anonymise-approval-request",
+      extra: { userId: "user-123", code: "XX000" },
+    });
+  });
+
+  test("Art. 17 — anonymise_approval_request throwing aborts cascade BEFORE auth-delete (#4672)", async () => {
+    setupSupabaseMocks();
+
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === "anonymise_approval_request") throw new Error("network down");
+      return { data: 0, error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(false);
+    expect(mockAuth.admin.deleteUser).not.toHaveBeenCalled();
+    const call = mockReportSilentFallback.mock.calls.find((c) => (c[1] as { op?: string })?.op === "anonymise-approval-request");
+    expect(call).toBeDefined();
+    expect(call![0]).toBeNull(); // see the RPC-error case: an Error here would steal the capture and mute the alert
+    expect(call![1]).toMatchObject({ feature: "account-delete", op: "anonymise-approval-request", extra: { userId: "user-123", errName: "Error" } });
+    expect(JSON.stringify(call![1])).not.toContain("network down");
   });
 
   test("Art. 17 — anonymise_tc_acceptances precedes auth.admin.deleteUser (FK ON DELETE RESTRICT)", async () => {

@@ -15,6 +15,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 # git_fixture_env, the hermetic env for this suite's git fixture writes. It
 # sets -euo pipefail, so the +e below restores this suite's
 # accumulate-then-exit contract.
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes
+# its incident-sandbox cleanup over an existing EXIT trap, whereas a trap
+# installed afterwards replaces it and leaks the sandbox on every direct run
+# (#8659). The `${VAR:+"$VAR"}` expansion is the unset-safe form (zero words ->
+# `rm -rf` with no operands exits 0), so the trap stays a no-op if the suite
+# exits before ROOT is allocated.
+cleanup() { rm -rf ${ROOT:+"$ROOT"}; }
+trap cleanup EXIT
 # shellcheck source=plugins/soleur/test/test-helpers.sh
 source "$REPO_ROOT/plugins/soleur/test/test-helpers.sh" || { echo "FATAL: could not source test-helpers.sh" >&2; exit 2; }
 set +e -uo pipefail
@@ -26,8 +34,6 @@ fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 ROOT="$(mktemp -d "$TMPDIR/hosted-ship-shallow.XXXXXXXX")"
 assert_fixture_dir "$ROOT"
 git_fixture_env "$ROOT" || exit 2
-cleanup() { rm -rf "$ROOT"; }
-trap cleanup EXIT
 
 git init -q -b main "$ROOT/src"
 git -C "$ROOT/src" config user.email t@t

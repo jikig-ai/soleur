@@ -481,25 +481,33 @@ kill-switch needs explicit CTO acknowledgement and a time box; it is not a routi
 
 **Which helper step failed, and what the tenant sees (#10455 c, e).** The helper embedded in the vendored `claude` binary
 prints `apply-seccomp: <step>: <strerror>` on a failing step. Measured on `claude-agent-sdk` 0.3.284 (the same 17 strings
-are in `claude-code` 2.1.293): 16 `<step>` literals plus the errno-less `observe sendmsg failed`. Runtime order,
+are in `claude-code` 2.1.293; 21 strings at 0.3.311, see the 2026-11-04 note below): 16 `<step>` literals plus the errno-less `observe sendmsg failed`. Runtime order,
 recorded 2026-10-19 with an `LD_PRELOAD` interposer around the helper (not recalled from source):
 `unshare(CLONE_NEWPID|CLONE_NEWNS)` attempt, `unshare(CLONE_NEWUSER)`, `write /proc/self/setgroups`, `write
 /proc/self/uid_map`, `write /proc/self/gid_map`, `unshare(CLONE_NEWPID|CLONE_NEWNS) after userns`, `fork` (the PID-namespace
 init), then in the init `prctl(PR_SET_DUMPABLE)`, `mount(MS_PRIVATE)`, `mount(/proc)`, `prctl(PR_CAP_AMBIENT_CLEAR_ALL)`,
 `fork(worker)`; the worker then runs `prctl(PR_SET_NO_NEW_PRIVS)`, `prctl(PR_SET_SECCOMP)`, `execvp`; both waiting
-processes print `waitpid` AFTER the tenant command ran. All 16 are classified (`helper_userns_eperm` for the userns step,
-`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The 15 steps before the tenant command
+processes print `waitpid` AFTER the tenant command ran. All 16 (at 0.3.284) are classified (`helper_userns_eperm` for the userns step,
+`helper_step_eperm` for the rest) and page `agent_sandbox_bash_denial`. The pre-command steps (15 at 0.3.284, 18 at 0.3.311; see the 2026-11-04 note below)
 (`HELPER_STEPS_PRE_COMMAND`: everything above up to and including `execvp`) can trigger the tenant notice; only `waitpid`
 (`HELPER_STEPS_POST_COMMAND`), which prints after the command ran, never does. (CTO ruling 2026-10-19: widened from the 11 steps
 before `fork(worker)`, because the measured order runs `fork(worker)`, both `prctl` steps and `execvp` before the tenant command;
 flip `execvp` out to make it 14 only if a measured argv shows the helper execs the tenant argv directly.) A test re-reads the binary's strings and reds when this list and the binary disagree in either direction, so an SDK
 bump that adds a step surfaces in CI rather than as an unclassified line.
 
+> **Re-measured 2026-11-04 (#12026; SDK 0.3.311 / CLI 2.1.311, one shared binary).** The helper is now the `claude` binary itself,
+> entered by `argv0=apply-seccomp` through `/proc/self/fd/3`. The pool holds 21 strings: 19 `<step>` literals (the 16 above plus
+> `prctl(PR_SET_NO_NEW_PRIVS, stub)`, `prctl(PR_SET_SECCOMP, stub)` and `prctl(PR_SET_SECCOMP, namespaces)`) and 2 errno-less lines
+> (`observe sendmsg failed` and a non-fatal `could not set user.max_user_namespaces (%s); ...` warning). An `LD_PRELOAD` interposer
+> run on 2026-11-04 shows, per process, all three new `prctl` steps before the `execvp` of the tenant command (the outer process applies the stub
+> pair to itself after the init `fork`; the worker applies a second filter next to the existing one), so the pre-command set is 18 and
+> `waitpid` stays the only post-command step. The text above describes 0.3.284 / 2.1.293 and is kept as the dated record; inline parentheticals marked 0.3.311 were added on 2026-11-04. The two outer-process `stub` prctl steps run concurrently with the init, so their order relative to the command's output is not measured; they are classified pre-command because the notice only fires on a single-line tool_result.
+
 In autonomous sessions the streamed `command_stream` text of a Bash result that is, as a whole, ONE error-flagged
 pre-exec sandbox line is replaced by: "Platform notice: command execution
 is temporarily unavailable on our side. This is a platform issue, not a problem with your project." The rewrite needs that single
 line to START with `bwrap:` plus a space (and carry EPERM / `Operation not permitted`), or to be an exact-allowlisted `apply-seccomp: <step>:
-Operation not permitted` line for one of the 15 pre-command steps (any classified helper step except `waitpid`); a line that merely
+Operation not permitted` line for one of the pre-command steps (18 at 0.3.311) (any classified helper step except `waitpid`); a line that merely
 CONTAINS "bwrap" (`rm: cannot remove 'bwrap': Operation not permitted`) is never rewritten. The mirror event is
 emitted first from the raw output. The SDK-visible tool_result is not rewritable, so the model still sees the raw line and a
 system-prompt directive (`BASH_UNAVAILABLE_PROMPT_DIRECTIVE`) tells it not to echo it, to retry the same command ONCE only
@@ -523,8 +531,7 @@ line-anchored, nothing trailing), is debounced per user (keyed with the error co
 keep one incident open, suppressing new pages (see the alert's entry in `betterstack-log-query.md`; mitigation tracked
 in #10455). The same forgery can reach the tenant notice: the notice requires the SDK's error flag, a single non-blank
 line and a pre-command helper step, but a command that ran and exited non-zero can print that line. That residual is accepted, which
-is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the email only prompts the check above. The wake path for both alerts is email-only on
-the Better Stack free tier until the ADR-260 Slack integration is verified.
+is why the notice does not claim the command did not run. The deploy-time smoke (#10453), not tenant text, is the authoritative signal; the alert only prompts the check above. Wake path for both alerts: email plus an inferred Slack post (a post is not a guaranteed page); see **Slack wake check, dashboard read 2026-11-05** below.
 
 **Slack wake check, run 2026-10-19 (#10455 d), read-only.** Two reads with the read-only token (Doppler `soleur/prd_terraform`,
 `BETTERSTACK_API_TOKEN_READONLY`; counts and flags only, nothing written):
@@ -546,6 +553,21 @@ doppler run -p soleur -c prd_terraform -- bash -c 'printf "Authorization: Bearer
 
 What an agent cannot establish is whether the dashboard routes team alerts to the connected Slack workspace; that is a
 property of the dashboard integration settings, not of anything this repository applies, and it stays open on #10455.
+
+**Slack wake check, dashboard read 2026-11-05 (#10455 item 4).** This supersedes the 2026-10-19 conclusion above that nothing here
+claims Slack wakes. It was read from the Better Stack dashboard (the 2026-10-19 API reads could not show it). **Observed:** the Slack integration is connected (Incidents product, single-channel mode,
+channel `#error-found`, workspace Soleur.ai), and the incident for the Logs alert `soleur-egress-gw-probe-fail-prd` (2026-11-04) shows
+Slack posts on its timeline at incident start and at auto-resolve, next to the email sends. **Inferred:** the integration is account-wide
+and the Logs alerts take a team-level escalation target (the 2026-10-19 read above shows one on all 17 alerts at that date;
+`betterstack-logs-alerts.tf` sets `team_name = "Your team"` on the free tier), so Logs-alert
+incidents reach Slack, including `agent_sandbox_bash_denial` and `faithful_canary_sandbox_broken`, which were not separately observed.
+**Flags (this finding changes none):** those two alerts carry `email = true` with `push`, `call`, `sms` and `critical_alert` false and no
+escalation policy in `betterstack-logs-alerts.tf` (other Logs alerts in that file also arm `push`); the Slack post comes from the
+Incidents integration, not from an alert flag.
+**Limits:** a Slack post is not proof of a phone push or a read (a push depends on the Slack client's notification settings; the
+2026-10-22 heartbeat incidents were posted to the channel and still went unseen, ADR-298), and Logs-alert escalation policies stay gated
+off on the free tier (`var.betterstack_paid_tier`). To repeat the check, read the timeline of a recent Logs-alert incident in the
+dashboard.
 
 ## Tenant-visible: no-egress AF_UNIX deny (#10455 a), runtime flag `agent-sandbox-unix-deny`
 
@@ -682,8 +704,90 @@ Expected on a healthy host: `SOLEUR_WEB_BASH_SYNTHETIC verdict=pass reason=ok �
 
 `consecutive_no_ping=<n>` in the journal separates a long deploy lock from a dead host: the beat goes dark after about 45 minutes either way,
 and the journal tells which. `selector=` is the artifact the dispatcher's resolver chose (`base` until the `agent-sandbox-unix-deny` flag is on);
-`masks_missing=<n>` counts masked dirs that did not exist in the production container (informational, they belong to real sessions); a `pass` with
-`masks_missing>0` journals `coverage=prodtuple_partial` because it tested a weaker config than production.
+`masks_missing=<n>` counts the masked dirs (of the four the app pre-creates) that are not a usable directory after the probe's own attempt to create them:
+absent, not a real directory (a symlink or a file), or owned by another uid. A value above 4 (the app pre-creates four) journals as `5+`, never as `-`, and downgrades coverage the same way. A `pass` with `masks_missing>0` journals `coverage=prodtuple_partial`
+because it tested a weaker config than production; the ping is unchanged on purpose (the run makes a claim, and withholding the beat would read as a
+dead host). `masks_created=<0-4>` is how many of those dirs THIS run created. On a FRESH container (a redeploy) it is `4`; after a plain restart
+`~/.claude/projects` survives in the writable layer and only the three tmpfs `/tmp` dirs are recreated, so it is `3`; it is `0` on every run after that.
+A real session's dispatch before the first synthetic tick lowers it (the app creates the dirs too), so the value depends on rollout order and is
+diagnostic only. `masks_note=` is the reason the probe refused to create something, from a closed list; `-` means no refusal, with a caveat: both
+fields are emitted at the END of a run and the synthetic keeps only a value inside the closed set, so `-` ALSO means an old probe (an apply that
+lands before the release), a value the synthetic rejected, or a probe killed after it created dirs but before it emitted. A `-` next to an unexpected
+`masks_missing` is therefore not proof that nothing was created or refused; read the next run.
+
+**Decode `masks_created` / `masks_note` (read `masks_note` first).**
+
+| `masks_note` | Meaning | What to do |
+|---|---|---|
+| `-` | no guard fired (or the field was not emitted: see the caveat above) | with `masks_missing=0` nothing; with `masks_missing>0` a dir is a symlink, a file, foreign-owned, or the mkdir failed: the probe could not make it usable. The journal gives a COUNT only, so WHICH of the four dirs is bad is unobservable without host access, and the `dir_kind` decode below applies only when a Sentry event exists. A `masked-dir-precreate-failed` Sentry email follows only if the app's recursive mkdir throws: the path is absent, or anything that is not a directory after symlink resolution (a regular file or a symlink to a file: `EEXIST`; a dangling symlink: `ENOENT`). A symlink to a directory, a real directory with a foreign owner or wrong mode, and a real directory make that mkdir SUCCEED, so the app emits nothing and the journal line is the only signal. Check-free remedy: redeploy (see Containment below; redeploying ends every live tenant session after a bounded drain, so pick a quiet moment), then `masks_missing=0` on the next tick confirms |
+| `uid_mismatch` | the probe's uid differs from PID 1's real or effective uid (the first two `Uid:` fields of `/proc/1/status`); NOTHING was created, because a dir owned by another uid is one the app cannot use. A future `docker exec -u root` would show this | check how the synthetic execs into the container; the app is unaffected |
+| `pid1_unreadable` | PID 1's uid could not be read; nothing was created | read the row as "no claim about the masks"; persistent means the container's `/proc` is restricted |
+| `pid1_env_unreadable` | PID 1's environment could not be read (or was over the 256 KiB cap), so the probe could not confirm it shares the app's HOME; the HOME-derived dir (`~/.claude/projects`) was NOT created and counts missing, the other three were created | expected only if the image restricts `/proc/1/environ`; the transcript mask is then unobserved by the synthetic |
+| `home_mismatch` | PID 1's HOME is not the probe's HOME; same handling as above | the synthetic's HOME comes from the container's own `$HOME` (pre-exec step); a mismatch means the app runs with another HOME, so the transcript mask the app uses is a different dir than the one the probe models |
+| `env_divergence` | informational: PID 1 has an absolute `CLAUDE_CONFIG_DIR`, `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR`, bases the probe does not model; nothing was refused and nothing is counted missing, and coverage still reads `sdk_wrapper_shim_prodtuple` | none; it surfaces the accepted residual below, and a green line carrying this note is no proof for those bases |
+
+No Better Stack rule matches these fields; the reader is whoever runs the Logs query above (`scripts/betterstack-query.sh --grep SOLEUR_WEB_BASH_SYNTHETIC`).
+A persistent `masks_missing>0` means the probe could not make a masked dir usable. If the app's recursive mkdir throws on it (the path is absent, or anything that
+is not a directory after symlink resolution), expect a `masked-dir-precreate-failed` Sentry email on the app's next dispatch and use the section below, decoding by
+`dir_kind`. If it is a symlink to a directory, or a directory with a foreign owner or wrong mode, NO email will come (the app's recursive mkdir succeeds on it) and
+the journal line is the only signal; that line gives a count, not a dir, so WHICH of the four is bad is unobservable without host access. The check-free remedy is the
+redeploy in the Containment paragraph below (it ends every live tenant session after a bounded drain, so pick a quiet moment), and `masks_missing=0` on the next tick
+is the confirmation; a count that stays above zero after a redeploy needs a code fix.
+
+### Masked-dir pre-create alert (#10455 PR-B): Sentry rule `masked-dir-precreate-failed`
+
+`buildAgentSandboxConfig` pre-creates four dirs before every session's namespace is built (the SDK skips a deny landing that does not exist). When one
+`mkdirSync` throws, the builder emits `op=masked-dir-precreate` (`feature=agent-sandbox`, tag `dir_kind`, `extra.code`, `extra.syscall`, `extra.dir`) and
+**carries on fail-open**: the entry stays in `denyRead`, the session starts, and the read-deny may not apply. The Sentry email rule
+`masked-dir-precreate-failed` (email to issue owners, ActiveMembers fallthrough; email only until the Slack wake path of ADR-260 is verified) routes it.
+
+**Decode by `dir_kind` (one Sentry issue per kind, so acknowledging one does not silence another).**
+
+| `dir_kind` | Dir | What stays unmasked for later sessions in that container |
+|---|---|---|
+| `peer-socket` | `/tmp/cc-socks`, `/tmp/cc-socks-<uid>` (and the same names under an `XDG_RUNTIME_DIR`/`CLAUDE_CODE_TMPDIR`/`TMPDIR` base) | a sibling tenant's Bash can reach another session's bridge socket |
+| `transcript` | `~/.claude/projects` (and `<CLAUDE_CONFIG_DIR>/projects`) | a sibling can read another session's transcript, which can hold a proxy credential |
+| `session-tmp` | `/tmp/.cs` | a sibling can read persisted CLI output under the shared temp root |
+
+**Decode `extra.code`:** `EACCES` a permission problem on the parent; `EEXIST` a regular file, or a symlink to a file, is in the way (the recursive mkdir cannot replace it); `ENOENT` a dangling symlink is in the way;
+`ENOSPC` the 256 MB `/tmp` tmpfs is full (one tenant's session tmp usage can cause this for the whole container; the per-session bound is an open #10455 item);
+`EROFS` a read-only mount; `ENOTDIR` a parent component is not a directory.
+
+**Containment.** Redeploy through the existing release deploy path: `gh workflow run web-platform-release.yml --ref main -f bump_type=patch`
+(leave `skip_deploy` at its default `false`; the dispatch publishes a patch release and deploys it, which starts a fresh container on both web hosts and
+ENDS every live tenant session after a bounded drain, so pick a quiet moment). Dispatching the workflow deploys whatever is on `main` at that moment
+with the CI gate bypassed (the workflow's own comment: "On a dispatch the CI gate is bypassed too — `resolve-target` reads the in-run release job rather than requiring a
+workflow_run event"), not only the fix, and it cuts and publishes a patch release on the public repository. A plain
+container restart keeps the writable layer: `~/.claude/projects` survives it and only the tmpfs `/tmp` dirs reset, so a `transcript` fault caused by
+a file or foreign-owned dir under HOME needs the redeploy (a new container) and a fault that persists after a redeploy needs a code fix. Do not
+`chmod`/`chown` from outside the app: the app's own pre-create (and, in runtime mode, the synthetic probe) are the only creators, and a manual change
+hides the fault the alert is for. **RESOLVE the per-kind Sentry issue** once contained; do not archive or ignore it, because an archived issue silences a
+later failure of the same kind. While a fault persists the rule re-notifies every `frequency_minutes` to the same inbox as the other rules.
+
+**An email proves the app's own pre-create failed.** The first synthetic run after a container start creates the missing dirs itself (`masks_created=4`
+on a fresh container, `3` after a plain restart), so from then on the synthetic can no longer observe a cold-start mkdir failure; the Sentry rule is the
+detector for that, and the synthetic is a second, journal-only witness. The converse does not hold: no email does not prove the dirs are usable (see
+the symlink and foreign-owned cases above).
+
+### What the synthetic does and does not prove about the masks (accepted limits)
+
+- It proves the sandbox namespace can mount over the four dirs under the production tuple. It does NOT prove the app created them: dirs the probe
+  created hide an app-side regression that stops pre-creating (control: the builder-versus-reality and probe/builder set-equality tests in CI, not a
+  runtime signal).
+- The app's env subset is not modelled: bases from `XDG_RUNTIME_DIR`, `CLAUDE_CODE_TMPDIR` or `TMPDIR` in PID 1's environment are not created or checked
+  (`masks_note=env_divergence` flags it). A green synthetic is no proof for those.
+- A post-creation swap of a masked dir for a symlink or file is seen only by the probe's `lstat` (journal-only, 15-minute cadence): the app's recursive
+  mkdir succeeds on an existing symlink-to-directory, so no alert route sees it. A tenant's Bash cannot write `/tmp` or `~/.claude` (`allowWrite` is the
+  workspace), so this needs a same-uid actor outside the sandbox.
+- Probe-created dirs are empty directories (mode 0700, the probe's uid = PID 1's uid); they persist after a revert and are harmless because the app's own
+  mkdir is idempotent.
+- Email delivery after the rule matches is not proven by firing a production event; the proven chain is forced failure, tagged emit, live rule with an
+  email action (`scripts/masked-dir-alert-discoverability.sh` prints `MASKED_DIR_ALERT_PATH_OK` for the committed half).
+- **#10548 soak.** The soak reads the DEPLOY-time ledger (`.sdk_bash_smoke.coverage`, read by `scripts/followthroughs/sdk-bash-smoke-verdict-10548.sh`).
+  This change does not touch the deploy mode of the probe or that ledger, so the soak clock does not restart and the flag `agent-sandbox-unix-deny`
+  stays an operator-typed step (ADR-236).
+
+**Rollback (PR-B).** Revert the squash commit (`git revert --no-commit <sha>`, then a normal PR). Simulated on 2026-10-23 by reverting the branch's whole commit range in a scratch worktree: it applies with no conflicts. Effects of the revert: the Sentry rule `masked-dir-precreate-failed` is destroyed on the next infra apply (the destroy guard will ask for an ack), the synthetic returns to counting dirs without creating them (`masks_missing=3` on a quiet container again), the apt fixture helper goes back to a private cache per container. Dirs the probe already created persist and are harmless.
 
 **Arming.** The beats are born paused. `arm-heartbeats.sh` unpauses each host's beat after a measured ping with a 300 s window and a soft landing.
 Arming is PROBABILISTIC: the cadence is 900 s against a 300 s window, so a healthy synthetic lands a beat inside one apply's window with p ~ 1/3 per
@@ -770,15 +874,14 @@ verbatim in incident notes.
 `/mnt/data/ci-deploy-workspace-isolation.json` (atomic, always returns 0) and accumulates the soak
 fields `consecutive_pass` (increments on `pass`, resets on `workspace_isolation_failed` /
 `workspace_isolation_timeout`, **holds** on `canary_infra_error`) and `first_pass_at` — the same
-accumulation `write_sandbox_canary_state` performs, so the promotion probe is a stateless GET.
+accumulation `write_sandbox_canary_state` performs, so a promotion read is a stateless GET.
 `cat-deploy-state.sh` merges the file into the `/hooks/deploy-status` payload as
 `.workspace_isolation`, and every run logs a `WORKSPACE_ISOLATION:` line under `logger -t ci-deploy`
 (the Better Stack query shape in the bwrap-probe section applies verbatim — grep on the decoded
 `message` after `fromjson`, filter `SYSLOG_IDENTIFIER == "ci-deploy"`).
 
-**Promotion contract.** The committed soak checker
-`scripts/followthroughs/workspace-isolation-verdict-2640.sh` reads `.workspace_isolation` off
-`/hooks/deploy-status` and reports PASS only when `consecutive_pass >= 5` AND the span since
+**Promotion contract.** The soak checker (retired by G1 PR-4a, #10937; history in git) read
+`.workspace_isolation` off `/hooks/deploy-status` and reported PASS only when `consecutive_pass >= 5` AND the span since
 `first_pass_at` is >= 3 days; a recorded `workspace_isolation_failed` or
 `workspace_isolation_timeout` verdict is a FAIL (investigate before promoting — do not flip the
 call site to blocking while either stands).

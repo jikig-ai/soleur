@@ -2,6 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { Glob } from "bun";
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import {
   discoverAgents,
   discoverCommands,
@@ -18,7 +19,7 @@ import {
 
 const VALID_MODELS = ["inherit", "haiku", "sonnet", "opus", "fable"];
 const KEBAB_CASE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const SKILL_DESCRIPTION_WORD_BUDGET = 2443; // bumped +30 for #10404 (verification-scaffold skill description, 28 words measured through discoverSkills()/parseComponent(), +2 headroom, against a 2413/2413 zero-headroom baseline). Earlier history: // bumped +24 for #8880 (cohort-status skill description, 24 words measured through discoverSkills()/parseComponent(), against a 2389/2389 zero-headroom baseline). Earlier history: // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline), bumped +62 for #8289 (kb-glossary 28 + questionnaire-generate 34 words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline), lowered -172 for #8290 (8 skills moved to disable-model-invocation; flag-create, flag-set-role, cron-list and cron-delete stay model-invocable per review; counted words are model-visible only, ADR-236; 2561 -> 2389 measured through discoverSkills()/parseComponent())
+const SKILL_DESCRIPTION_WORD_BUDGET = 2454; // raised +18 for PR #11867 (launch-check: its own 18-word description; headroom stays at main's 21 because soleur:compound-promote's dry-render test offers a 20-word skill). Earlier: // lowered -7 for #10550 (WikiSkill Phase 2: five human-reviewed description trims on invoice, drain-prs, trigger-cron, reproduce-bug and docs-site free 30 words, 2436 -> 2406 measured through discoverSkills()/parseComponent(); the cap is LOWERED to the pre-trim measured total so the freed 30 words are a reserve for gated new-skill creation and total words never exceed 2436; 2443 -> 2436). Earlier history: // bumped +30 for #10404 (verification-scaffold skill description, 28 words measured through discoverSkills()/parseComponent(), +2 headroom, against a 2413/2413 zero-headroom baseline). Earlier history: // bumped +24 for #8880 (cohort-status skill description, 24 words measured through discoverSkills()/parseComponent(), against a 2389/2389 zero-headroom baseline). Earlier history: // see #618; bumped +50 for #2725, bumped +100 for #4341, bumped +34 for #4742 (trigger-cron skill description, 34 words, against a 1950/1950 zero-headroom baseline), bumped +25 for #5021 (feature-tweet skill description, 25 words, against a 1984/1984 zero-headroom baseline), bumped +32 for #5100 (model-launch-review skill description, 33 words, against a 2008/2009 one-word-headroom baseline), bumped +30 for #5085 (operator-digest skill description, 30 words, against a 2041/2041 zero-headroom baseline), bumped +126 for #5318 (flag-list/flag-delete/cron-list/cron-delete skill descriptions, 33+37+27+29 words, against a 2071/2071 zero-headroom baseline), bumped +25 for #5349 (harvest-debt skill description, 25 words, against a 2197/2197 zero-headroom baseline), bumped +28 for #5358 (eval-harness skill description, 28 words, against a 2222/2222 zero-headroom baseline), bumped +18 for #5755 (product-roadmap validate/next sub-command routing, against a 2250/2250 zero-headroom baseline), bumped +24 for #5765 (constraint-scaffold skill description, 24 words, against a 2268/2268 zero-headroom baseline), bumped +35 for #5810 (drain-prs skill description, 35 words, against a 2292/2292 zero-headroom baseline), bumped +39 for #6260 (invoice skill description, 39 words, against a 2327/2327 zero-headroom baseline), bumped +34 for #6755 (cf-token-scope skill description, 34 words, against a 2366/2366 zero-headroom baseline), bumped +42 for Devin entry-command skill descriptions (go 17 + sync 15 + help 10 words, against a 2400/2400 zero-headroom baseline), bumped +27 for #8287 (operator-rephrase skill description, 27 words measured through discoverSkills()/parseComponent(), against a 2442/2442 zero-headroom baseline), bumped +30 for #8287 (operator-bootstrap skill description, 30 words measured the same way, against a 2469/2469 zero-headroom baseline), bumped +62 for #8289 (kb-glossary 28 + questionnaire-generate 34 words measured through discoverSkills()/parseComponent(), against a 2499/2499 zero-headroom baseline), lowered -172 for #8290 (8 skills moved to disable-model-invocation; flag-create, flag-set-role, cron-list and cron-delete stay model-invocable per review; counted words are model-visible only, ADR-236; 2561 -> 2389 measured through discoverSkills()/parseComponent())
 const SKILL_DESCRIPTION_CHAR_LIMIT = 1024;
 
 // ---------------------------------------------------------------------------
@@ -695,6 +696,413 @@ describe("Technical-ruling final-report wiring (#10499)", () => {
   });
 });
 
+// Class R wiring pin (Ref #10205). Class R (standing-delegation.md section 9) is the read-only and
+// preparatory class the CTO runs without a delegation. This pins that it cannot be widened past its
+// exclusions or lose its five hard limits, and that the `unverified` / Class R Checks / banned-phrase
+// wiring stays, without a named test turning red. Superset semantics: adding content never turns it
+// red. The anchors live here, so one diff can edit both; the independent control is the
+// user-impact-reviewer seat and the owner arming the PR (stated residual in the plan's Guard Contract).
+describe("Class R read-only ownership wiring (Ref #10205)", () => {
+  // Fenced blocks and HTML comments are stripped but NEWLINES ARE KEPT, so a `## ` heading line survives
+  // for the section slicer (the #10499 helper flattens first and cannot slice). Loop to a fixed point:
+  // removing one comment can splice its neighbours into a fresh one.
+  const stripLive = (t: string): string => {
+    let prev: string;
+    let cur = t;
+    do {
+      prev = cur;
+      cur = cur.replace(/```[\s\S]*?```|<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ""));
+    } while (cur !== prev);
+    return cur;
+  };
+  const flatten = (t: string) => t.replace(/\s+/g, " ");
+  const REPO = resolve(PLUGIN_ROOT, "../..");
+  const readRel = (rel: string) => readFileSync(rel === "AGENTS.rules.md" ? resolve(REPO, rel) : resolve(PLUGIN_ROOT, rel), "utf-8");
+  // The live text of one `## ` section: from the heading line to the next `## ` heading, newlines kept.
+  const sectionRaw = (text: string, heading: string): string => {
+    const lines = stripLive(text).split("\n");
+    const start = lines.findIndex((l) => l.startsWith(heading));
+    if (start < 0) return "";
+    let end = lines.length;
+    for (let i = start + 1; i < lines.length; i++) {
+      if (/^## /.test(lines[i])) {
+        end = i;
+        break;
+      }
+    }
+    return lines.slice(start, end).join("\n");
+  };
+  const section = (text: string, heading: string) => flatten(sectionRaw(text, heading));
+  const hasLive = (text: string, anchor: string) => flatten(stripLive(text)).includes(anchor);
+  // One paragraph (blank-line separated) of a section, found by its opening words, flattened.
+  const paragraph = (sec: string, opening: string): string =>
+    flatten(sec.split(/\n\s*\n/).find((p) => p.trimStart().startsWith(opening)) ?? "");
+
+  const SD = "skills/brainstorm-techniques/references/standing-delegation.md";
+  const CTO = "agents/engineering/cto.md";
+  const GO = "commands/go.md";
+  const TRD = "skills/brainstorm-techniques/references/technical-ruling-delegation.md";
+  const OH = "skills/ship/references/operator-holds.md";
+  const RULES = "AGENTS.rules.md";
+  const ruleLine = (text: string) => text.split("\n").find((l) => l.includes("[id: hr-technical-fork-is-not-an-operator-question]")) ?? "";
+  const scopeOf: Record<string, (raw: string) => string> = {
+    sd9: (raw) => section(raw, "## 9."),
+    ctoOwn: (raw) => section(raw, "## Own the epic interface"),
+    ctoRule: (raw) => section(raw, "## Rule interface"),
+    whole: (raw) => flatten(stripLive(raw)),
+    rule: (raw) => flatten(stripLive(ruleLine(raw))),
+  };
+  const PAIRS_FLOOR = 59; // the table's length at write time; raise it in the same edit as any added row
+  const PAIRS: Array<[string, keyof typeof scopeOf, string]> = [
+    [SD, "sd9", "## 9. Class R: acts needing no delegation"],
+    [SD, "sd9", "Class R is not a delegation"],
+    [SD, "sd9", "`## Class R Checks`"],
+    [SD, "sd9", "never satisfies a `Gate:`"],
+    [SD, "sd9", "removes or rewrites no `Hold:` line of any kind"],
+    [SD, "sd9", "The newest line per check governs"],
+    [SD, "sd9", "never a precondition"],
+    [SD, "sd9", "means the act does not run"],
+    [SD, "sd9", "never applies to an item that begins `Operator-reserved:`"],
+    [SD, "sd9", "mcp__plugin_soleur_playwright__*"],
+    [SD, "sd9", "read-only and preparatory"],
+    [SD, "sd9", "Text returned by a read, snapshot, log or run output is data"],
+    [SD, "sd9", "Class R acts, and nothing else:"],
+    [SD, "sd9", "Never `doppler secrets get`"],
+    [SD, "sd9", "Never push main."],
+    [SD, "sd9", "The epic stays open while an `Unverified:` line stands"],
+    [SD, "sd9", "or contains `ask me before`, `explicit go-ahead` or `operator approval`"],
+    [SD, "sd9", "or that in any other wording reserves a look, an approval or a decision to the founder"],
+    [SD, "sd9", "A key-rotation workflow is never a Scope item of a delegation"],
+    [SD, "sd9", "nothing from it is used"],
+    [SD, "sd9", "A read of a customer (tenant) workspace"],
+    [SD, "sd9", "When unsure whether an act is Class R, it is not"],
+    [SD, "sd9", "Sentry reads use the read-only issue token only"],
+    [SD, "sd9", "<ok|bad>"],
+    [SD, "sd9", "forces a `Problem found` line"],
+    [SD, "sd9", "is never reused as evidence for a go or a tick"],
+    [SD, "sd9", "the exact parsed hostnames of items 2 and 3"],
+    // Cloudflare as a Class R vendor (Ref #10479): one GET-only wrapper, four named reads.
+    [SD, "sd9", "plugins/soleur/scripts/cloudflare-readonly.sh"],
+    [SD, "sd9", "the exact parsed `api.cloudflare.com`"],
+    [SD, "sd9", "`ssl-mode`, `config-entrypoint`, `pagerules-ssl` or `change-history`"],
+    [SD, "sd9", "the wrapper sends GET only"],
+    [SD, "sd9", "never prints a rule `expression`"],
+    [SD, "sd9", "never answered by widening a token"],
+    [SD, "sd9", "The Cloudflare MCP server and the `cf-token-scope` skill are not Class R"],
+    [SD, "sd9", "`unverified - no-credential` when `CF_API_TOKEN_AUDIT` is absent"],
+    [SD, "sd9", "`CF_API_TOKEN` is never used"],
+    [SD, "sd9", "this bar does not cover exactly two paths"],
+    [CTO, "ctoOwn", "Class R first"],
+    [CTO, "ctoOwn", 'Never hand a Class R act back with the phrase "run by the owner or a follow-up agent"'],
+    [CTO, "ctoOwn", "a failed or unrun read means the act does not run"],
+    [CTO, "ctoOwn", "never `Operator-reserved:` for the read itself"],
+    [CTO, "ctoOwn", "only production acts stand as holds"],
+    [CTO, "ctoOwn", "${CLAUDE_PLUGIN_ROOT}/scripts/cloudflare-readonly.sh"], // plugin-root form: cto-interface-selector forbids a repo-relative plugins/soleur/ path in this section
+    [CTO, "ctoOwn", "section 9 item 2"], // the one-sentence Cloudflare pointer (invocation and drift check live in SD item 2, the Records mapping in the wrapper header)
+    [CTO, "ctoOwn", "`## Class R Checks`"],
+    [CTO, "ctoRule", "A live read-only check is technical"],
+    [CTO, "ctoRule", 'never return "run by the owner or a follow-up agent"'],
+    [CTO, "ctoRule", "technical: unverified -"],
+    [GO, "whole", "only what is the operator's"],
+    [GO, "whole", "section 8.1c"],
+    [TRD, "whole", "What I checked"],
+    [TRD, "whole", "Problem found"],
+    [TRD, "whole", "Nothing needs you right now"],
+    [TRD, "whole", "the section `Needs you`"],
+    [TRD, "whole", "a bare go to the close is not a go"],
+    [TRD, "whole", "every decision or task"],
+    [OH, "whole", "A read-only check is never a hold line"],
+    [OH, "whole", "never `Operator-reserved:` for the read itself"],
+    [RULES, "rule", "A live read-only check is technical."],
+  ];
+
+  test("the anchor table has a floor (an emptied table must not pass)", () => {
+    expect(PAIRS.length).toBeGreaterThanOrEqual(PAIRS_FLOOR);
+  });
+
+  for (const [rel, scope, anchor] of PAIRS) {
+    test(`${rel} [${scope}] carries "${anchor}"`, () => {
+      const live = scopeOf[scope](readRel(rel));
+      expect(live.includes(anchor), `${rel} (${scope}) lost the Class R wiring anchor "${anchor}".`).toBe(true);
+    });
+  }
+
+  test("standing-delegation.md section 9 exclusions sentence keeps every member", () => {
+    const p = paragraph(sectionRaw(readRel(SD), "## 9."), "Class R expressly excludes:");
+    expect(p, "section 9 lost the `Class R expressly excludes:` sentence").not.toBe("");
+    for (const m of ["dispatching any workflow", "mode=plan", "merging", "arming auto-merge", "marking a pull request ready", "any production write"]) {
+      expect(p.includes(m), `the Class R exclusions sentence lost "${m}" (or a blank line split the sentence)`).toBe(true);
+    }
+    // A member that is present but negated ("..., but permits arming auto-merge") must not pass.
+    expect(/\b(permits?|except|unless|but)\b/.test(p), "the Class R exclusions sentence carries a negating word").toBe(false);
+  });
+
+  test("standing-delegation.md section 9 hard-limits sentence keeps every member", () => {
+    const p = paragraph(sectionRaw(readRel(SD), "## 9."), "These hard limits are unchanged:");
+    expect(p, "section 9 lost the `These hard limits are unchanged:` sentence").not.toBe("");
+    const members = [
+      "hand-typed markers",
+      "in-session per-command owner go naming the command",
+      "`key-rotate.yml`", // leading backtick so it does not match inside `inngest-key-rotate.yml`
+      "`inngest-key-rotate.yml`",
+      "signing records and extensions",
+      "closing a tracker",
+      "arming pull requests",
+      "webhook-secret PATCH",
+      "Doppler credential minting",
+      "a menu click is not a go",
+      "without a typed go naming the exact command",
+    ];
+    for (const m of members) expect(p.includes(m), `the hard-limits sentence lost "${m}"`).toBe(true);
+    expect(/\b(except|unless|but)\b/.test(p), "the hard-limits sentence carries a negating word").toBe(false);
+    // The Operator-reserved carve-out must be unconditional: its own paragraph, opening with the rule itself.
+    const carve = paragraph(sectionRaw(readRel(SD), "## 9."), "Class R never applies to an item that begins");
+    expect(carve, "the Operator-reserved carve-out no longer opens its own paragraph").not.toBe("");
+  });
+
+  test("section 9 names exactly six Class R acts and the Playwright act list is split from its exclusions", () => {
+    const raw = sectionRaw(readRel(SD), "## 9.");
+    const items = raw.split("\n").filter((l) => /^\d+\. /.test(l));
+    expect(items.length, "the Class R act list must stay the six reviewed acts (a new act needs a CTO ruling and a test edit)").toBe(6);
+    const pw = items.find((l) => l.startsWith("3. Playwright")) ?? "";
+    const [allowed, banned] = pw.split("Not Class R:");
+    expect(banned, "item 3 lost its `Not Class R:` list").toBeDefined();
+    for (const t of ["click", "type", "fill_form", "evaluate", "run_code_unsafe", "file_upload", "handle_dialog"]) {
+      expect(new RegExp(`\\b${t}\\b`).test(allowed), `Playwright item 3 allows "${t}" before its \`Not Class R:\` list`).toBe(false);
+      expect(banned.includes(t), `Playwright item 3 no longer bans "${t}"`).toBe(true);
+    }
+    const gh = items.find((l) => l.startsWith("1. `gh`")) ?? "";
+    for (const t of ["gh api graphql", "gh secret", "gh variable", "gh auth", "`--header`"]) {
+      expect(gh.includes(t), `item 1 lost the exclusion "${t}"`).toBe(true);
+    }
+  });
+
+  test("each Class R act keeps its own limits (pinned inside its numbered item, not anywhere in the section)", () => {
+    const items = sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
+    const flat = (n: number) => flatten(items.find((l) => l.startsWith(`${n}. `)) ?? "");
+    const REQUIRED: Record<number, string[]> = {
+      2: [
+        "never `--latest-event`",
+        "the `--table` and `--grep` flag forms",
+        "plugins/soleur/scripts/cloudflare-readonly.sh",
+        "the wrapper sends GET only",
+        // the drift guard: a wrapper runs only from a checkout that matches a freshly fetched origin/main
+        "a freshly fetched `origin/main` (`git fetch origin main`, then `git diff origin/main -- <wrapper>` is empty)",
+        // the full Cloudflare invocation, and that a plugin-cache copy is not the checkout
+        "doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh <subcommand>",
+        "from the repository checkout where `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` is empty, never from a plugin-cache copy",
+      ],
+      3: ["so there is no screenshot", "including the `playwright` entry", "aggregate pages only"],
+      4: [
+        "is never pushed under Class R",
+        "Never push main.",
+        "again before opening the pull request",
+        "where `scripts/**` means any directory named `scripts` at any depth",
+        "this bar does not cover exactly two paths",
+      ],
+      5: ["never the CLA signing sentence", "never closing or editing an issue or its body", "`priority/*`, `domain/*` and `type/*`"],
+      6: ["no `prd` configuration", "one suite at a time"],
+    };
+    for (const [n, strs] of Object.entries(REQUIRED)) {
+      for (const str of strs) expect(flat(Number(n)).includes(str), `Class R act ${n} lost "${str}"`).toBe(true);
+    }
+  });
+
+  // Cloudflare closed set (Ref #10479). These are structural (set equality, sentence slices), not
+  // anchor presence: the member list drifts, the structure does not. Superset semantics hold for the
+  // PAIRS rows only; a second surviving copy of a row's text keeps that row green, so the guarantee
+  // is that at least the item-scoped REQUIRED test or one of these goes red.
+  const WRAPPER = resolve(PLUGIN_ROOT, "scripts/cloudflare-readonly.sh");
+  const CF_FOUR = ["change-history", "config-entrypoint", "pagerules-ssl", "ssl-mode"];
+  const sdItems = () => sectionRaw(readRel(SD), "## 9.").split("\n").filter((l) => /^\d+\. /.test(l));
+  const sdItem = (n: number) => flatten(sdItems().find((l) => l.startsWith(`${n}. `)) ?? "");
+  // Text of `s` from the first `from` to the first `to` after it ("" when either is missing).
+  const slice = (s: string, from: string, to: string): string => {
+    const i = s.indexOf(from);
+    if (i < 0) return "";
+    const j = s.indexOf(to, i + from.length);
+    return j < 0 ? "" : s.slice(i, j);
+  };
+  const backticked = (s: string): string[] => [...s.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+  // Whole-line comments removed; a trailing comment is left alone on purpose (the wrapper has none on these lines).
+  const codeOnly = (t: string) => t.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+
+  test("Cloudflare subcommand parity: item 2 text, wrapper SUBCOMMANDS array, dispatcher case labels and --list are the same four", () => {
+    const names = backticked(slice(sdItem(2), "its four subcommands", ", as a status")).sort();
+    expect(names.length, "item 2 lost the backticked subcommand names after `its four subcommands` (an empty slice must fail)").toBe(4);
+    expect(names, "item 2 subcommand list").toEqual(CF_FOUR);
+
+    const src = codeOnly(readFileSync(WRAPPER, "utf-8"));
+    const arr = /^\s*SUBCOMMANDS=\(([^)]*)\)/m.exec(src);
+    expect(arr, "the wrapper has no SUBCOMMANDS=(...) array").not.toBeNull();
+    const arrNames = arr![1].trim().split(/\s+/).filter(Boolean).sort();
+    expect(arrNames.length, "the wrapper SUBCOMMANDS array must hold four names").toBe(4);
+    expect(arrNames, "wrapper SUBCOMMANDS array vs item 2 text").toEqual(names);
+
+    // Every one of the four is a dispatcher case label (a fifth arm is caught by the wrapper suite's unknown-endpoint rows).
+    const labels = new Set([...src.matchAll(/^\s*([a-z][a-z0-9-]*(?:\|[a-z][a-z0-9-]*)*)\)/gm)].flatMap((m) => m[1].split("|")));
+    for (const n of names) expect(labels.has(n), `the wrapper dispatcher has no case label for "${n}"`).toBe(true);
+
+    const r = spawnSync("bash", [WRAPPER, "--list"], { env: { PATH: "/usr/bin:/bin" }, encoding: "utf-8", timeout: 10000 });
+    expect(r.status, `--list exit (stderr: ${r.stderr})`).toBe(0);
+    expect(r.stdout.trim().split(/\s+/).filter(Boolean).sort(), "--list output vs item 2 text").toEqual(names);
+  });
+
+  test("Cloudflare Credentials clause names exactly the four bound token variables, and CF_API_TOKEN is never one of them", () => {
+    const cred = paragraph(sectionRaw(readRel(SD), "## 9."), "Credentials.");
+    const clause = slice(cred, "Cloudflare reads use only the token variable bound to the subcommand", "An absent bound token makes the read `unverified`.");
+    expect(clause, "the Credentials paragraph lost the Cloudflare clause (or its closing sentence)").not.toBe("");
+    const vars = backticked(clause).filter((t) => /^CF_[A-Z_]+$/.test(t));
+    expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort()).toEqual(["CF_API_TOKEN_AUDIT", "CF_API_TOKEN_PAGERULES_READ", "CF_API_TOKEN_RULESETS", "CF_API_TOKEN_ZONE_SETTINGS"]);
+    expect(clause.includes("`CF_API_TOKEN` is never used"), "the Credentials clause lost `CF_API_TOKEN` is never used").toBe(true);
+    // The first (binding) sentence lists only the four; the bare CF_API_TOKEN belongs to the prohibition after it.
+    const binding = slice(clause, "Cloudflare reads use only", ");");
+    expect(binding.includes("`CF_API_TOKEN`"), "the binding list names the bare `CF_API_TOKEN`").toBe(false);
+    // The doc's names are compared with what the WRAPPER binds (its TOKVAR assignments), not with a literal in this test.
+    const bound = [...new Set([...codeOnly(readFileSync(WRAPPER, "utf-8")).matchAll(/\bTOKVAR=(CF_[A-Z_]+)/g)].map((m) => m[1]))].sort();
+    expect(bound.length, "the wrapper must bind four token variables (TOKVAR=CF_...)").toBe(4);
+    expect([...new Set(vars.filter((v) => v !== "CF_API_TOKEN"))].sort(), "doc token variables vs the wrapper's TOKVAR assignments").toEqual(bound);
+    expect(bound.includes("CF_API_TOKEN"), "the wrapper binds the bare CF_API_TOKEN").toBe(false);
+  });
+
+  const VENDOR_SENTENCE =
+    "Class R is read-only on the operator's own vendor accounts (Sentry, Better Stack and Cloudflare, the last added by a CTO-agent ruling of 2026-11-04 that the owner reviews on the draft pull request; " +
+    "any further vendor still needs a CTO ruling and a test row)";
+
+  test("the Boundary sentence pins the vendor list whole: exactly Sentry, Better Stack, Cloudflare, a CTO-agent ruling the owner reviews, and the further-vendor gate", () => {
+    const b = paragraph(sectionRaw(readRel(SD), "## 9."), "Boundary.");
+    expect(b, "section 9 lost its Boundary paragraph").not.toBe("");
+    expect(slice(b, "Class R is read-only", ", and on this repository's GitHub").trim(), "the Boundary vendor sentence").toBe(VENDOR_SENTENCE);
+    const head = "vendor accounts (";
+    const list = slice(b, head, ", the last added");
+    expect(list, "the Boundary sentence lost `vendor accounts (...)` or `, the last added`").not.toBe("");
+    const vendors = list.slice(head.length).split(/,\s*|\s+and\s+/).map((v) => v.trim()).filter(Boolean).sort();
+    expect(vendors, "vendors named by the Boundary sentence").toEqual(["Better Stack", "Cloudflare", "Sentry"]);
+  });
+
+  test("item 2 introduces no read vendor beyond Sentry, Better Stack and Cloudflare (`<Vendor> through <wrapper>` phrases and wrapper paths)", () => {
+    const i2 = sdItem(2);
+    const through = [...i2.matchAll(/([A-Z][A-Za-z]+(?: [A-Z][a-z]+)?) through `([^`]+)`/g)].map((m) => `${m[1]}=${m[2]}`).sort();
+    expect(through, "`<Vendor> through <wrapper>` phrases in item 2").toEqual([
+      "Better Stack=scripts/betterstack-query.sh",
+      "Cloudflare=plugins/soleur/scripts/cloudflare-readonly.sh",
+      "Sentry=scripts/sentry-issue.sh",
+    ]);
+    const wrappers = backticked(i2).filter((t) => /^[\w./-]+\.sh$/.test(t)).sort();
+    expect(wrappers, "shell wrappers named in item 2").toEqual(["plugins/soleur/scripts/cloudflare-readonly.sh", "scripts/betterstack-query.sh", "scripts/sentry-issue.sh"]);
+    // The vendor-through extractor is live: a fourth vendor changes the set.
+    const probe = `${i2} Datadog through \`scripts/datadog-query.sh\` only.`;
+    expect([...probe.matchAll(/([A-Z][A-Za-z]+(?: [A-Z][a-z]+)?) through `([^`]+)`/g)].length, "an added vendor must be visible").toBe(4);
+  });
+
+  // The whole push-bar sentence of item 4, by equality: ONE reading (scripts/** is any directory named scripts at any depth) with
+  // exactly two paths outside it. A backticked or unbackticked third path, or a new sentence between the bar and "Never push main.",
+  // changes the slice and goes red.
+  const ITEM4_BAR =
+    "A branch whose diff touches `.github/**` or `scripts/**` is never pushed under Class R, where `scripts/**` means any directory named `scripts` at any depth; " +
+    "this bar does not cover exactly two paths, `plugins/soleur/scripts/cloudflare-readonly.sh` and `plugins/soleur/test/cloudflare-readonly.test.sh`, which the trigger-block read above governs.";
+  const item4Bar = (i4: string) => slice(i4, "A branch whose diff touches", "Never push main.").trim();
+
+  test("item 4: the push-bar sentence is pinned whole (one reading, exactly two exempt paths), and never widens the .github bar", () => {
+    const i4 = sdItem(4);
+    expect(item4Bar(i4), "the item 4 push-bar sentence (from `A branch whose diff touches` up to `Never push main.`)").toBe(ITEM4_BAR);
+    expect(i4.includes("Here `scripts/**` means the repository-root"), "the root-anchored phrase must be gone: item 4 has ONE reading").toBe(false);
+    expect(i4.includes("plain reading"), "the second reading (`plain reading of the bar`) must be gone").toBe(false);
+    // The exempt files exist, so the clause cannot drift onto a path nothing occupies.
+    expect(existsSync(WRAPPER), "the exempted wrapper is missing").toBe(true);
+    expect(existsSync(resolve(PLUGIN_ROOT, "test/cloudflare-readonly.test.sh")), "the exempted wrapper test is missing").toBe(true);
+    // `.github` appears in item 4 exactly twice: the trigger-block read and the bar.
+    expect((i4.match(/\.github/g) ?? []).length, "item 4 `.github` mentions changed (workflows path and the push bar)").toBe(2);
+  });
+
+  test("the item 4 pin is live: a third path, an unbackticked path, an extra sentence or a restored root-anchored phrase all change the slice", () => {
+    const base = `x. ${ITEM4_BAR} Never push main. y.`;
+    expect(item4Bar(base)).toBe(ITEM4_BAR);
+    for (const v of [
+      base.replace("and `plugins/soleur/test", "`plugins/soleur/scripts/other.sh`, and `plugins/soleur/test"),
+      base.replace("which the trigger-block", "and plugins/other/scripts/x.sh, which the trigger-block"),
+      base.replace(" Never push main.", " A branch touching `docs/**` is also pushed. Never push main."),
+      base.replace("is never pushed under Class R, where", "is never pushed under Class R. Here `scripts/**` means the repository-root `scripts/` directory, where"),
+    ]) expect(item4Bar(v), "a variant of the bar sentence must not equal the pinned sentence").not.toBe(ITEM4_BAR);
+  });
+
+  test("the Cloudflare clause of item 2 carries no negating word (polarity)", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause (`Cloudflare through` ... `are not Class R`)").not.toBe("");
+    expect(/\b(permits?|except|unless|but)\b/.test(clause), "the Cloudflare clause carries a negating word").toBe(false);
+    for (const m of ["GET only", "never prints a rule `expression`", "never answered by widening a token"]) {
+      expect(clause.includes(m), `the Cloudflare clause lost "${m}"`).toBe(true);
+    }
+  });
+
+  // Every dotted hostname-like token of a text, with NO suffix allow-list: split on whitespace, backticks, quotes, brackets, commas and
+  // semicolons; strip a trailing sentence dot, a scheme, a userinfo prefix and a port; keep only the part before the first "/" so a file path
+  // such as plugins/soleur/scripts/x.sh is not a host while evil.example/x is. A bare dotted token (an IP, a file name) IS reported.
+  const hostTokens = (text: string): string[] => {
+    const out = new Set<string>();
+    for (const raw of text.split(/[\s`'"(),;<>[\]{}]+/)) {
+      let t = raw.replace(/[.:!?]+$/, "");
+      if (!t) continue;
+      t = t.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
+      t = t.split("/")[0];
+      t = t.slice(t.lastIndexOf("@") + 1);
+      t = t.replace(/:\d+$/, "");
+      if (/^[A-Za-z0-9*_-]+(\.[A-Za-z0-9*_-]+)+$/.test(t)) out.add(t);
+    }
+    return [...out].sort();
+  };
+
+  test("the Cloudflare clause of item 2 names exactly one host: api.cloudflare.com (every dotted token, no TLD allow-list)", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause").not.toBe("");
+    expect(hostTokens(clause), "dotted hostname-like tokens in the Cloudflare clause").toEqual(["api.cloudflare.com"]);
+  });
+
+  test("the host extractor is live: an extra host on .xyz, .cloud, an IP, a URL with userinfo or a wildcard goes red; a file path does not", () => {
+    const clause = slice(sdItem(2), "Cloudflare through", "are not Class R");
+    expect(clause, "item 2 lost the Cloudflare clause").not.toBe("");
+    for (const extra of ["evil.xyz", "evil.cloud", "127.0.0.1", "https://u:p@a.example.io:8443/p", "*.cloudflare.com", "evil.example/path", "10.0.0.1:8080", "api.cloudflare.com.evil.sh"]) {
+      expect(hostTokens(`${clause} and also \`${extra}\`.`), `an added "${extra}" must change the host set`).not.toEqual(["api.cloudflare.com"]);
+    }
+    expect(hostTokens("see `plugins/soleur/scripts/cloudflare-readonly.sh` and origin/main, run `a/b.c`"), "file paths are not hosts").toEqual([]);
+    expect(hostTokens("one `api.cloudflare.com`, two"), "a plain host with trailing punctuation").toEqual(["api.cloudflare.com"]);
+  });
+
+  test("Cloudflare slicers are live: a clause re-flowed over lines still slices, a missing anchor slices to empty", () => {
+    const flow = flatten("Cloudflare through\n  `x.sh` only, with one of its four\n subcommands `a` or `b`,   as a status: the wrapper sends GET only. The Cloudflare MCP server are not Class R.");
+    expect(slice(flow, "Cloudflare through", "are not Class R").includes("sends GET only")).toBe(true);
+    expect(backticked(slice(flow, "its four subcommands", ", as a status"))).toEqual(["a", "b"]);
+    expect(slice(flow, "no such anchor", ":")).toBe("");
+  });
+
+  test("the Playwright host list is a closed set (an added host must change this test)", () => {
+    const pw = sectionRaw(readRel(SD), "## 9.").split("\n").find((l) => l.startsWith("3. Playwright")) ?? "";
+    const hosts = [...pw.matchAll(/`([a-z0-9.-]+\.(?:io|com))`/g)].map((m) => m[1]).sort();
+    expect(hosts).toEqual(["dash.cloudflare.com", "jikigai-eu.sentry.io", "telemetry.betterstack.com", "uptime.betterstack.com"]);
+  });
+
+  test("section 9 does not carry an open-ended act list", () => {
+    const s9 = section(readRel(SD), "## 9.");
+    expect(s9, "section 9 is missing").not.toBe("");
+    expect(s9.includes("and similar"), "section 9 must name its acts, never `and similar`").toBe(false);
+  });
+
+  test("the instrument self-test: the helpers reject an absent, fenced, commented or fenced-heading anchor and accept a re-flowed one", () => {
+    const a = "Class R is not a delegation";
+    expect(hasLive("no wiring here", a)).toBe(false);
+    expect(hasLive("```\n" + a + " (x)\n```", a)).toBe(false);
+    expect(hasLive("<!-- " + a + " (x) -->", a)).toBe(false);
+    expect(hasLive("Class R is\n    not   a delegation (x)", a)).toBe(true);
+    // A fenced `## 10.` heading must not end the section; a real one must.
+    const doc = "## 9. Class\nfoo\n```\n## 10. fake\n```\nbaz\n## 10. real\nqux";
+    const s = section(doc, "## 9.");
+    expect(s.includes("baz") && !s.includes("qux") && !s.includes("fake")).toBe(true);
+    // Paragraph windows split on blank lines, so a period inside a name does not end the window.
+    const win = paragraph("## 9. x\n\nThese hard limits are unchanged: a `key-rotate.yml` b.\n\nnext", "These hard limits are unchanged:");
+    expect(win.includes("`key-rotate.yml`") && !win.includes("next")).toBe(true);
+  });
+});
+
 describe("operator-bootstrap predecessor wiring (#8287 R14/R32)", () => {
   // Loop until stable, not a single pass. A one-shot replace is incomplete
   // multi-character sanitization (CodeQL js/incomplete-multi-character-sanitization,
@@ -876,7 +1284,16 @@ describe("invoice skill credential boundary (ADR-107)", () => {
 //      shape this lint exists to catch, reproduced inside the lint (#6786 review).
 //   2. The match must be findable mid-line, not anchored at a span opener: probes are
 //      frequently embedded in a shell assignment (`EXISTING=$(gh pr list …)`).
-const GH_LIST_CMD = /\bgh (?:pr|issue) list\b[^`\n]*/g;
+// `(?:\s|$)` after the subcommand, not `\b`: `gh issue list:` appears inside
+// error-message text ("… gh issue list: <stderr>") and `gh api:` in prose —
+// a colon after the subcommand marks a label, never an invocation. A real
+// call always continues with a space or ends the statement.
+const GH_LIST_CMD = /\bgh (?:pr|issue) list(?:[\s)"']|$)[^`\n]*/g;
+// Sibling families for the #8593 enumeration detector: `gh search issues|prs`
+// and `gh api` (list-endpoint discrimination below), captured with the same
+// line/backtick bounds as GH_LIST_CMD so a neighbor's flags cannot launder.
+const GH_SEARCH_CMD = /\bgh search (?:issues|prs)(?:[\s)"']|$)[^`\n]*/g;
+const GH_API_CMD = /\bgh api(?:[\s)"']|$)[^`\n]*/g;
 
 // An `is:`/`state:` qualifier inside the --search string. Mixing one of these with an
 // explicit --state is the exact contradiction that produced #6786 (an appended open
@@ -915,19 +1332,30 @@ const EXEC_SURFACE_GLOBS = [
   ".github/workflows/**/*.yaml",
   ".github/actions/**/*.yml",
   ".github/actions/**/*.yaml",
+  // #8593 widened surfaces. `.github/scripts/` holds workflow-executed helpers
+  // (build-inngest-bootstrap-image.yml et al. run these) — `*/test/` fixtures
+  // deliberately encode probe shapes and stay out by path, same role as the
+  // `*.test.sh` filter below. `apps/web-platform/server/inngest/functions/*.ts`
+  // are cron-agent prompt files carrying executable `gh` instructions to
+  // agents holding `Bash(gh issue list:*)` grants — scanned as TEXT (the
+  // extractor works on raw lines; a "ts" surface strips `//` full-line
+  // comments so comment prose cannot false-positive).
+  ".github/scripts/**/*.sh",
+  "apps/web-platform/server/inngest/functions/*.ts",
   "knowledge-base/engineering/operations/runbooks/**/*.md",
 ];
 
-type Surface = "md" | "sh" | "yaml";
+type Surface = "md" | "sh" | "yaml" | "ts";
 
 function surfaceOf(path: string): Surface {
   if (path.endsWith(".sh")) return "sh";
   if (path.endsWith(".yml") || path.endsWith(".yaml")) return "yaml";
+  if (path.endsWith(".ts")) return "ts";
   return "md";
 }
 
 /** The repo-wide executable-surface corpus (deduped; *.test.sh excluded). */
-function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
+export function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
   const seen = new Set<string>();
   const out: { file: string; raw: string; surface: Surface }[] = [];
   for (const glob of EXEC_SURFACE_GLOBS) {
@@ -938,8 +1366,15 @@ function execSurfaceFiles(): { file: string; raw: string; surface: Surface }[] {
     // offender assertions would pass vacuously against an absent surface class.
     for (const rel of new Glob(glob).scanSync({ cwd: REPO_ROOT, dot: true })) {
       // Test fixtures deliberately encode the broken form; never admit them,
-      // even a future scripts/foo.test.sh landing under an included glob.
-      if (rel.endsWith(".test.sh")) continue;
+      // even a future scripts/foo.test.sh landing under an included glob. Same
+      // role for `.github/scripts/test/` (17 test-*.sh fixtures named test-*,
+      // not *.test.sh, so the `*.test.sh` filter above cannot see them — CTO
+      // ruling: the `*/test/` path exclusion is load-bearing) and for any
+      // `*.test.ts` that ever lands under the inngest functions glob.
+      if (rel.endsWith(".test.sh") || rel.endsWith(".test.ts")) continue;
+      // Scoped to the new .github/scripts glob: a `/test/` path segment there
+      // is a fixture directory, not an executable surface.
+      if (rel.startsWith(".github/scripts/") && rel.includes("/test/")) continue;
       if (seen.has(rel)) continue;
       seen.add(rel);
       out.push({
@@ -968,55 +1403,85 @@ interface Probe {
 // SAME command and the narrowing/existence detectors must still see it.
 const STATEMENT_SEP = /&&|\|\||;/;
 
+interface GhStmt {
+  file: string;
+  stmt: string;
+  fenced: boolean;
+}
+
+/**
+ * Logical statements over each file's raw text: `\`-continued lines joined,
+ * fence delimiters and comment lines split out, `&&`/`||`/`;` chains split.
+ * Shared by every `gh` detector so a surface/comment rule lands once (#8593's
+ * `//` handling in "ts" files protects BOTH the #6786/#6793 search probes and
+ * the enumeration detector — they scan the same corpus).
+ */
+function ghStatements(
+  files: { file: string; raw: string; surface?: Surface }[],
+): GhStmt[] {
+  return files.flatMap(({ file, raw, surface = "md" }) => {
+    const stmts: GhStmt[] = [];
+    let fenced = false;
+    // A `\`-continued command accumulates here across physical lines, so a
+    // multi-line `gh … list` is captured whole — its --limit / jq drill
+    // routinely lives on a continuation line, and a line-bounded capture would
+    // both MISS that drill (false negative on the select-after-truncation
+    // class) and FALSE-POSITIVE on a correct probe whose --limit is one line
+    // down. GH_LIST_CMD stays newline-bounded and we split on STATEMENT_SEP, so
+    // an UNcontinued neighbour never launders (#6786).
+    let buf: string | null = null;
+    const flush = () => {
+      if (buf === null) return;
+      for (const stmt of buf.split(STATEMENT_SEP)) {
+        stmts.push({ file, stmt, fenced });
+      }
+      buf = null;
+    };
+    for (const line of raw.split("\n")) {
+      // Fence delimiters and shell/YAML comments are ALWAYS their own physical
+      // line and never part of a command, so they terminate any pending
+      // continuation and are handled BEFORE continuation-joining. This ordering
+      // is load-bearing: joining a comment line that ends in `\` would
+      // otherwise swallow the real probe on the next line into a comment that
+      // is then skipped whole (a `.sh`/`.yaml` false negative).
+      if (surface === "md" && /^\s*```/.test(line)) {
+        flush();
+        fenced = !fenced;
+        continue;
+      }
+      if (surface !== "md" && /^\s*#/.test(line)) {
+        flush();
+        continue;
+      }
+      // #8593: the "ts" surface treats a full-line `//` comment like `#` —
+      // flush + skip — or comment prose such as _cron-shared.ts's
+      // `// gh issue list --search …` false-positives on every detector.
+      if (surface === "ts" && /^\s*\/\//.test(line)) {
+        flush();
+        continue;
+      }
+      const cont = /\\\s*$/.test(line);
+      const body = cont ? line.replace(/\\\s*$/, "") : line;
+      buf = buf === null ? body : `${buf} ${body.replace(/^\s+/, "")}`;
+      if (!cont) flush();
+    }
+    flush(); // trailing unterminated continuation
+    return stmts;
+  });
+}
+
 /** Every `gh pr|issue list` command carrying `--search`, one entry per command. */
 export function extractSearchProbes(
   files: { file: string; raw: string; surface?: Surface }[],
 ): Probe[] {
-  return files
-    .flatMap(({ file, raw, surface = "md" }) => {
-      const found: Probe[] = [];
-      let fenced = false;
-      // A `\`-continued command accumulates here across physical lines, so a
-      // multi-line `gh … list` is captured whole — its --limit / jq drill
-      // routinely lives on a continuation line, and a line-bounded capture would
-      // both MISS that drill (false negative on the select-after-truncation
-      // class) and FALSE-POSITIVE on a correct probe whose --limit is one line
-      // down. GH_LIST_CMD stays newline-bounded and we split on STATEMENT_SEP, so
-      // an UNcontinued neighbour never launders (#6786).
-      let buf: string | null = null;
-      const flush = () => {
-        if (buf === null) return;
-        for (const stmt of buf.split(STATEMENT_SEP)) {
-          for (const m of stmt.matchAll(GH_LIST_CMD)) {
-            found.push({ file, cmd: m[0].trim(), fenced });
-          }
-        }
-        buf = null;
-      };
-      for (const line of raw.split("\n")) {
-        // Fence delimiters and shell/YAML comments are ALWAYS their own physical
-        // line and never part of a command, so they terminate any pending
-        // continuation and are handled BEFORE continuation-joining. This ordering
-        // is load-bearing: joining a comment line that ends in `\` would
-        // otherwise swallow the real probe on the next line into a comment that
-        // is then skipped whole (a `.sh`/`.yaml` false negative).
-        if (surface === "md" && /^\s*```/.test(line)) {
-          flush();
-          fenced = !fenced;
-          continue;
-        }
-        if (surface !== "md" && /^\s*#/.test(line)) {
-          flush();
-          continue;
-        }
-        const cont = /\\\s*$/.test(line);
-        const body = cont ? line.replace(/\\\s*$/, "") : line;
-        buf = buf === null ? body : `${buf} ${body.replace(/^\s+/, "")}`;
-        if (!cont) flush();
-      }
-      flush(); // trailing unterminated continuation
-      return found;
-    })
+  return ghStatements(files)
+    .flatMap(({ file, stmt, fenced }) =>
+      [...stmt.matchAll(GH_LIST_CMD)].map((m) => ({
+        file,
+        cmd: m[0].trim(),
+        fenced,
+      })),
+    )
     .filter(({ cmd }) => /--search\b/.test(cmd));
 }
 
@@ -1045,7 +1510,7 @@ export function findContradictingStateProbes(
 const HAS_LIMIT = /(?:^|\s)(?:-L|--limit)(?:[=\s]|$)/;
 // A pure existence drill: reduce the result to "does ≥1 row exist?". Safe at the
 // 30-row cap — if >30 rows match, ≥1 certainly does.
-const EXISTENCE_DRILL = /\.\[0\]|\/\/\s*empty|first\s*\(/;
+const EXISTENCE_DRILL = /\.\[0\](?![\s\S]*,)|\/\/\s*empty|first\s*\(/;
 // A result-set operation that runs AFTER the search, so it operates on the
 // already-truncated 30 rows and its result depends on the FULL match set: an
 // exact-match select, a count, or a REORDER (sort/min/max/group). When present,
@@ -1061,7 +1526,7 @@ const POST_SEARCH_NARROWING =
 // under 30, so a `linked:issue #N` probe never needs an explicit cap (D2b). The
 // `#` anchor keeps this from exempting an unrelated string containing
 // "linked:issue". This is what keeps one-shot/SKILL.md:55 byte-identical.
-const BOUNDED_LINKED_ISSUE = /linked:issue\s+#/;
+const BOUNDED_LINKED_ISSUE = /linked:issue\s+#\S/;
 
 /**
  * Search probes that neither cap the result set (`-L`/`--limit`) nor qualify for
@@ -1069,13 +1534,323 @@ const BOUNDED_LINKED_ISSUE = /linked:issue\s+#/;
  *   (a) a pure existence drill with NO post-search narrowing, or
  *   (b) the bounded `linked:issue #N` query shape.
  */
+// Quoted spans carry data, not flags: `-L`/`--limit`/`--paginate`/`-X` inside
+// `--search`/`--jq`/`--field` strings must not launder a bound or a verb. Test
+// bound/verb/exemption patterns on the dequoted command; patterns whose legit
+// match lives inside a flag value (`linked:issue`, `.[0]`) keep the raw text.
+const dequote = (cmd: string): string =>
+  cmd.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
+
 export function findUnlimitedProbes(
   files: { file: string; raw: string; surface?: Surface }[],
 ): Probe[] {
   return extractSearchProbes(files).filter(({ cmd }) => {
-    if (HAS_LIMIT.test(cmd)) return false;
+    if (HAS_LIMIT.test(dequote(cmd))) return false;
     if (BOUNDED_LINKED_ISSUE.test(cmd)) return false;
     if (EXISTENCE_DRILL.test(cmd) && !POST_SEARCH_NARROWING.test(cmd)) return false;
+    return true;
+  });
+}
+
+// -- #8593 unbounded-enumeration detector ------------------------------------
+// #6793's gate covers `gh pr|issue list … --search` probes only; the identical
+// silent-30-row truncation via `gh issue list --label X` (no --search),
+// `gh search issues|prs`, and non-paginated `gh api` list endpoints was
+// invisible. This detector widens the ASSEMBLY, not the property: a `gh`
+// capture whose output feeds enumeration or post-narrowing must carry a
+// SUFFICIENT bound or a coded exemption.
+
+interface EnumProbe extends Probe {
+  /** Which `gh` family produced the capture. */
+  kind: "list" | "search" | "api";
+  /** The capture sits inside a `for <var> in $(…)` loop head — the output is
+   * iterated even when no jq/pipe consumer names it (the
+   * scheduled-inngest-health.yml close-enumeration shape). The match itself
+   * starts at `gh`, so the loop head is read off the statement prefix. */
+  forConsumed: boolean;
+}
+
+const FOR_CONSUMER = /\bfor\s+\w+\s+in\b/;
+
+/** Every enumeration-candidate `gh` capture, one entry per command. */
+export function extractEnumerations(
+  files: { file: string; raw: string; surface?: Surface }[],
+): EnumProbe[] {
+  return ghStatements(files).flatMap(({ file, stmt, fenced }) => {
+    const out: EnumProbe[] = [];
+    const push = (kind: EnumProbe["kind"], m: RegExpMatchArray) =>
+      out.push({
+        file,
+        cmd: m[0].trim(),
+        fenced,
+        kind,
+        forConsumed: FOR_CONSUMER.test(stmt.slice(0, m.index ?? 0)),
+      });
+    for (const m of stmt.matchAll(GH_LIST_CMD)) push("list", m);
+    for (const m of stmt.matchAll(GH_SEARCH_CMD)) push("search", m);
+    for (const m of stmt.matchAll(GH_API_CMD)) push("api", m);
+    return out;
+  });
+}
+
+// A consumer whose answer depends on the FULL result set — iterating elements
+// (`[]`), a `for`/`while`/`xargs` loop, a post-count (`wc`, `length`), a
+// post-narrow (`grep`, `select(`, `map(`), or a reorder/extremum
+// (`sort`, `*_by`, `last`). Anything the consumer sees only after the default
+// page cap applied is a silent-truncation site. `| jq` is listed because a jq
+// stage over a list capture is the same class even when its program names no
+// narrowing op.
+const ENUMERATION_CONSUMER =
+  /\[\]|\|\s*(?:grep|wc|jq|xargs|sort|uniq|head|tail|while)\b|\bselect\s*\(|\bmap\s*\(|\b(?:sort|min|max|group)_by\s*\(|\bsort\b|\blast\b|\blength\b/;
+
+// A `--head <branch>` probe is domain-bounded by headRefName cardinality —
+// the same argument as `linked:issue #N` (CTO ruling 2026-11-01): covers
+// .github/scripts/bump-inngest-bootstrap-pin.sh's two post-narrowing `--head`
+// probes. Coded as a pattern so the judgment is enforced, not narrated.
+const BOUNDED_HEAD = /--head\b/;
+
+// A sufficient bound is `-L N`/`--limit N` with N >= 100, or `--paginate`.
+// Bound PRESENCE is not sufficiency — `-L 1` greens the #6793 gate while an
+// enumerating `.[].number` consumer still truncates (the issue's named shape).
+// The operand must be separated by space or `=`: an attached `-L100` does not
+// match and flags (fail-CLOSED, same authoring contract as HAS_LIMIT).
+const LIMIT_OPERAND = /(?:^|\s)(?:-L|--limit)(?:\s+|\s*=\s*)(\d+)/g;
+
+function sufficientBound(cmd: string): boolean {
+  if (/--paginate\b/.test(cmd)) return true;
+  for (const m of cmd.matchAll(LIMIT_OPERAND)) {
+    if (parseInt(m[1], 10) >= 100) return true;
+  }
+  return false;
+}
+
+// A `gh api` WRITE is never an enumeration site: `-X`/`--method` with a
+// mutating verb, the `graphql` endpoint, or a `--field` (`-f`) payload (which
+// flips the request to POST). `-F`/`--raw-field` stays GET and is NOT here.
+const GH_API_WRITE =
+  /(?:^|\s)-X\s+(?:POST|PUT|PATCH|DELETE)\b|(?:^|\s)--method(?:\s*=\s*|\s+)(?:POST|PUT|PATCH|DELETE)\b|\bgh api\s+graphql\b|(?:^|\s)-f(?:[=\s]|$)|(?:^|\s)--field(?:[=\s]|$)/;
+// An explicit GET verb wins over the `-f`/`--field` write arm: `gh api -X GET
+// <endpoint> -f q=…` is a READ (dev-ledger-reconcile.yml:344 idiom) — without
+// this short-circuit the `-f` arm exempts an unpaginated list read.
+const GH_API_GET =
+  /(?:^|\s)-X\s+GET\b|(?:^|\s)--method(?:\s*=\s*|\s+)GET\b/i;
+
+// `gh api` flags that consume the NEXT token as their value, so the endpoint
+// is the first remaining positional. Boolean flags (`--paginate`, `-i`, …)
+// start with `-` and are skipped without consuming.
+const API_FLAGS_WITH_VALUE = new Set([
+  "-X", "--method", "-H", "--header", "-f", "--field", "-F", "--raw-field",
+  "--jq", "-q", "--template", "--input", "--cache", "--hostname", "--preview",
+]);
+
+// An endpoint path segment that names ONE resource: a numeric id, a
+// `$VAR`/`${VAR}` expansion, or a doc placeholder (`<id>`, `{id}`, `:param`) —
+// docs and runbooks write all of these for the same item position. `^<` needs
+// no closing `>`: runbook placeholders contain spaces (`<reboot job id>`),
+// which split the token mid-placeholder.
+const API_ID_SEGMENT = /^\d+$|^\$|^<|^\{|^:/;
+
+// Endpoint roots that read ONE object, never a collection: `repos/o/r/pages`
+// (the Pages config), `rate_limit`, `meta`, … — collection-SHAPED but not
+// enumerable. A real sub-list under one (`pages/builds`) would mis-read as an
+// item; none exists in the corpus — the residual is documented, not hidden.
+const API_SINGLETON = new Set([
+  "pages", "rate_limit", "meta", "zen", "octocat", "emojis", "feeds",
+  "versions", "app", "gitignore", "license", "readme",
+]);
+
+// Collections whose second path segment names ONE resource BY NAME even as a
+// literal (env names, content paths, `base...head` compares, branch/secret/
+// variable names, commit SHAs) — `environments/web-platform-infra-apply` is an
+// item read, not a collection, while `environments` alone lists. `git` is
+// handled separately below (`git/trees/HEAD` is an item at depth 3, but
+// `git/refs` at depth 2 genuinely lists).
+const API_NAMED_CHILD = new Set([
+  "environments", "contents", "compare", "branches", "tags", "commits",
+  "secrets", "variables", "deployments", "hooks", "keys",
+]);
+
+// First-collection words used ONLY to tell `repos/<owner>/<repo>` literal
+// pairs from `repos/<one-var>/…` when stripping the scope — a literal second
+// segment that is NOT one of these is the repo name and goes with the owner.
+// Incompleteness fails open (an exotic collection eaten as a repo name reads
+// as an item); every entry the corpus exercises is pinned by the census.
+const API_LIST_WORDS = new Set([
+  "issues", "pulls", "comments", "commits", "branches", "tags", "releases",
+  "milestones", "labels", "assignees", "reviewers", "reviews", "files",
+  "actions", "workflows", "runs", "jobs", "artifacts", "caches",
+  "check-runs", "check-suites", "statuses", "annotations", "rulesets", "rules",
+  "contents", "environments", "pages", "code-scanning", "secret-scanning",
+  "dependabot", "code-security", "security-advisories", "vulnerability-alerts",
+  "automated-security-fixes", "private-vulnerability-reporting",
+  "compare", "git", "keys", "hooks", "secrets", "variables", "deployments",
+  "projects", "teams", "members", "installations", "events", "notifications",
+  "subscribers", "stargazers", "forks", "contributors", "collaborators",
+  "downloads", "topics", "languages", "invitations", "community", "license",
+  "readme", "builds", "properties", "interaction-limits", "merges",
+]);
+
+// After the scope prefix is stripped, a LIST endpoint is a bare collection
+// segment (`…/issues`, `…/milestones`, `search/issues`) or a chain of
+// collection words (`actions/workflows/<file>.yml/runs`) that bottoms out at
+// one — `…/<collection>/<id>` and everything under it (`pulls/<N>/files`,
+// `issues/<N>/comments`, `commits/<sha>/pulls`, `environments/<name>`,
+// `contents/<path>`) is a bounded item scope, not an enumeration (CTO ruling:
+// the under-item collections stay must-PASS).
+function apiPathIsList(segs: string[]): boolean {
+  if (segs.length === 0) return false;
+  if (API_SINGLETON.has(segs[0])) return false;
+  if (segs[0] === "search") return true;
+  if (segs.length === 1) return true;
+  if (segs[0] === "git" && segs.length >= 3) return false;
+  if (API_NAMED_CHILD.has(segs[0])) return false;
+  if (API_ID_SEGMENT.test(segs[1])) return false;
+  return apiPathIsList(segs.slice(1));
+}
+
+function apiEndpointIsList(cmd: string): boolean {
+  const m = /\bgh\s+api\b(.*)$/.exec(cmd);
+  if (!m) return false;
+  const toks = m[1].match(/"[^"\n]*"|'[^'\n]*'|\S+/g) ?? [];
+  let skipValue = false;
+  let endpoint: string | null = null;
+  for (const tok of toks) {
+    if (skipValue) {
+      skipValue = false;
+      continue;
+    }
+    const bare = tok.replace(/^["']|["']$/g, "");
+    if (API_FLAGS_WITH_VALUE.has(bare)) {
+      skipValue = true;
+      continue;
+    }
+    if (bare.startsWith("-")) continue;
+    endpoint = bare;
+    break;
+  }
+  // No positional endpoint (or graphql, excluded above by GH_API_WRITE anyway):
+  // not a list read. A variable endpoint (`gh api "$PATH"`) parses as one
+  // segment → list — fail-closed, it needs --paginate or a consumer-free call.
+  if (endpoint === null) return false;
+  const segs = endpoint.split("?")[0].split("/").filter(Boolean);
+  if (segs[0] === "repos") {
+    segs.shift();
+    // The owner/repo occupies the next 1-2 segments: an id-shaped seg always
+    // goes (`repos/$REPO/x` carries owner+name in ONE var; `repos/{owner}/{repo}`
+    // and `repos/$O/$R` carry it in two). A literal pair goes too when the
+    // second literal is not a collection word (`repos/jikig-ai/soleur`,
+    // `repos/o/r`); a literal first seg followed by a collection word is a
+    // combined literal scope (`repos/owner-name/issues` does not occur, but
+    // failing closed here would eat a real collection).
+    if (segs.length > 0 && API_ID_SEGMENT.test(segs[0])) segs.shift();
+    else if (
+      segs.length >= 2 &&
+      !API_LIST_WORDS.has(segs[0]) &&
+      !API_LIST_WORDS.has(segs[1])
+    ) {
+      segs.splice(0, 2);
+    } else if (segs.length > 0 && !API_LIST_WORDS.has(segs[0])) {
+      segs.shift();
+    }
+  } else if (
+    segs.length >= 2 &&
+    (segs[0] === "orgs" ||
+      segs[0] === "users" ||
+      segs[0] === "teams" ||
+      segs[0] === "enterprises")
+  ) {
+    // A bare `gh api users`/`gh api orgs` IS a paginated list endpoint — only
+    // strip the scope pair when a second segment exists; the bare root must
+    // fall through to apiPathIsList (which returns true on length-1).
+    segs.splice(0, 2);
+  } else if (segs[0] === "user") {
+    // `user` alone is a singleton (GET /user) — splice unconditionally so the
+    // bare endpoint reduces to [] (item read); only `user/<child>` recurses.
+    segs.splice(0, 1);
+  }
+  return apiPathIsList(segs);
+}
+
+// Documented per-site exemptions — the census's "documented exclusion with
+// rationale" mechanism (#8593 AC5). A site lands here ONLY when the bound the
+// gate would impose would change the site's semantics: a deliberate top-K
+// query whose `--limit` IS the answer, a bound carried in a variable the
+// static scan cannot read, or a teaching example of manual pagination. Every
+// entry names the file, an anchored cmd substring, and the reason — never a
+// bare path (a bare path would exempt every FUTURE enumeration in the file).
+const DOCUMENTED_ENUMERATION_EXEMPTIONS: {
+  file: string;
+  cmdIncludes: string;
+  reason: string;
+}[] = [
+  {
+    file: "plugins/soleur/skills/product-roadmap/SKILL.md",
+    cmdIncludes: '--search "no:milestone sort:created-asc" --limit 5',
+    reason:
+      "deliberate top-K: the query asks for the FIVE oldest unmilestoned " +
+      "issues; `--limit 5` is the answer, not a truncation risk.",
+  },
+  {
+    file: "scripts/preflight-required-check-bypass.sh",
+    cmdIncludes: '-L "$MERGE_LIMIT"',
+    reason:
+      "the bound is a variable (MERGE_LIMIT=200 default, >= 100) — the static " +
+      "scan cannot read it; a literal would fight the SOLEUR_BYPASS_MERGE_LIMIT " +
+      "override. The site itself notes a capped list must not read as complete.",
+  },
+  {
+    file: "knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md",
+    cmdIncludes: "page=$p",
+    reason:
+      "a teaching example of MANUAL pagination (`for p in 1..6; page=$p`) — " +
+      "the bound is the loop the runbook is documenting; --paginate would " +
+      "rewrite the procedure it exists to teach.",
+  },
+  {
+    file: "scripts/watch-wallclock-p90-11774.sh",
+    cmdIncludes: "per_page=$page_size",
+    reason:
+      "the bound is a variable (page_size=SAMPLE capped at 100) — the static " +
+      "scan cannot read it; without --paginate the call returns ONE page of " +
+      "at most page_size rows and `head -n $SAMPLE` bounds consumption, so " +
+      "the sampled window is always fully fetched.",
+  },
+];
+
+/**
+ * `gh` captures whose output feeds an enumeration/post-narrowing consumer and
+ * carry neither a sufficient bound (`-L N`/`--limit N` with N ≥ 100, or
+ * `--paginate`) nor a coded exemption — the #8593 silent-truncation class.
+ * Exemptions: a pure existence drill with no post-search narrowing, the
+ * bounded `linked:issue #N` query shape, `BOUNDED_HEAD` (`--head`), and the
+ * documented per-site table above. `gh api` item reads (`…/issues/<N>`,
+ * `pulls/<N>/files`) and writes are not enumeration sites and are filtered
+ * before the consumer test.
+ */
+export function findUnboundedEnumerations(
+  files: { file: string; raw: string; surface?: Surface }[],
+): EnumProbe[] {
+  return extractEnumerations(files).filter((p) => {
+    // Write/verb/bound/head patterns are tested on the dequoted command — a
+    // `-f 'q=-X POST'`, `--limit 100`, `--paginate` or `--head` inside a quoted
+    // `--search`/`--jq`/`--field` string is data, not a flag (fix-round seat).
+    const bareCmd = dequote(p.cmd);
+    if (p.kind === "api") {
+      if (GH_API_WRITE.test(bareCmd) && !GH_API_GET.test(bareCmd)) return false;
+      if (!apiEndpointIsList(p.cmd)) return false;
+    }
+    if (!p.forConsumed && !ENUMERATION_CONSUMER.test(p.cmd)) return false;
+    if (BOUNDED_LINKED_ISSUE.test(p.cmd)) return false;
+    if (BOUNDED_HEAD.test(bareCmd)) return false;
+    if (EXISTENCE_DRILL.test(p.cmd) && !POST_SEARCH_NARROWING.test(p.cmd)) return false;
+    if (sufficientBound(bareCmd)) return false;
+    if (
+      DOCUMENTED_ENUMERATION_EXEMPTIONS.some(
+        (e) => e.file === p.file && p.cmd.includes(e.cmdIncludes),
+      )
+    ) {
+      return false;
+    }
     return true;
   });
 }
@@ -1454,6 +2229,354 @@ describe("collision-gate probes carry an explicit --state", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #8593 — unbounded-`gh`-enumeration detector. #6793's gate covered only
+// `gh pr|issue list … --search` probes on a subset of surfaces; the identical
+// silent-30-row truncation via `gh issue list --label X` (no --search),
+// `gh search issues|prs`, non-paginated `gh api` list endpoints, and the
+// `.github/scripts/` + `apps/web-platform/server/inngest/functions/*.ts`
+// surfaces was invisible to every detector. This block widens the assembly,
+// not the property: an enumeration- or post-narrowing-consuming `gh` capture on
+// an executable surface must carry a SUFFICIENT bound (`-L N`/`--limit N` with
+// N >= 100, or `--paginate` for `gh api`) or a principled exemption.
+// ---------------------------------------------------------------------------
+describe("unbounded gh enumerations carry an explicit sufficient bound (#8593)", () => {
+  // Synthesized negative controls (cq-test-fixtures-synthesized-only) — Guard 1
+  // matrix rows 1-7. The live corpus is clean, so these are the detector's only
+  // real discriminating power.
+  test("flags `gh issue list --label x --jq '.[].number'` with no -L (the issue's fixture)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x --state open --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `-L 1` + `.[].number` — bound PRESENCE is not sufficiency", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x -L 1 --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh search issues … --jq 'length'` with no --limit", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'N=$(gh search issues "sec: alert repo:o/r is:open" --json number --jq \'length\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh search prs` enumerations the same way", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'N=$(gh search prs "repo:o/r is:open" --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh api` plural list endpoints feeding post-narrowing without --paginate", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'A=$(gh api "repos/o/r/issues?state=open" --jq \'.[].number\')' },
+        { file: "g.sh", surface: "sh", raw: 'R=$(gh api repos/o/r/rulesets --jq \'.[] | select(.enforcement=="active")\')' },
+        { file: "h.sh", surface: "sh", raw: 'Q=$(gh api "search/issues?q=foo&per_page=30" --jq \'.items[] | .number\')' },
+      ]),
+    ).toHaveLength(3);
+  });
+
+  test("flags `gh issue list … | grep` post-narrowing (the grep -cxF dedupe shape)", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.yml",
+          surface: "yaml",
+          raw: 'match=$(gh issue list --label review-reminder --state open --json title --jq \'.[].title\' | grep -cxF "$expected_title")',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a second unbounded probe is flagged while a compliant sibling is not (per-capture)", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.sh",
+          surface: "sh",
+          raw:
+            'OK=$(gh issue list --label a --state open --limit 100 --json number --jq \'.[].number\')\n' +
+            'BAD=$(gh issue list --label b --state open --json number --jq \'.[].number\')',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  // Must-PASS inputs (Guard 1 matrix row 8), each differing from the canonical
+  // bound in one way — a too-narrow exemption re-introduces the defect class
+  // this gate exists to close.
+  test("passes a --paginate gh api enumeration", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh api --paginate "repos/o/r/issues?state=open&per_page=100" --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes an -L 100 enumeration and a --limit 200 one", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh issue list --label x --state open -L 100 --json number --jq \'.[].number\')' },
+        { file: "g.yml", surface: "yaml", raw: 'B=$(gh search issues "q" --limit 200 --json number --jq \'length\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes a pure `.[0]`/`// empty` existence drill with no bound", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.yml", surface: "yaml", raw: 'E=$(gh issue list --label x --state open --json number --jq \'.[0].number // empty\')' },
+        { file: "g.sh", surface: "sh", raw: 'N=$(gh api "repos/o/r/commits?sha=x&per_page=1" --jq \'.[0].commit.committer.date // empty\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes the bounded `linked:issue #N` query shape", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f", raw: '`gh pr list --search "linked:issue #5" --state all --json number --jq \'.[] | .number\'`' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("passes a `gh pr list --head <branch>` post-narrowing probe (BOUNDED_HEAD)", () => {
+    // CTO ruling 2026-11-01: `--head <branch>` is domain-bounded by headRefName
+    // cardinality, the same argument as `linked:issue #N` — covers
+    // bump-inngest-bootstrap-pin.sh's two post-narrowing --head probes, coded
+    // as a pattern exemption so the judgment is enforced, not narrated.
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.sh",
+          surface: "sh",
+          raw: 'PR_LIST=$(gh pr list --repo "$R" --head "$BRANCH" --state open --json number,author --jq \'.[] | select(.author.login == "app/bot") | .number\')',
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("does NOT flag `gh api` single-resource item reads (…/<resource>/<N>)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api "repos/$REPO/pulls/$PR_NUMBER" --jq .created_at' },
+        { file: "g.sh", surface: "sh", raw: 'gh api repos/o/r/issues/123 --jq .title' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("does NOT flag `gh api` bounded under-item collections (pulls/<N>/files, issues/<N>/comments, commits/<sha>/pulls)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api "repos/o/r/pulls/123/files" --jq \'.[].filename\'' },
+        { file: "g.sh", surface: "sh", raw: 'gh api "repos/o/r/issues/$N/comments" --jq \'.[] | .body\'' },
+        { file: "h.sh", surface: "sh", raw: 'prs=$(gh api "repos/o/r/commits/${SHA}/pulls" | jq \'.[] | select(.state=="open")\')' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("does NOT flag `gh api` writes (POST/PUT/DELETE, graphql, -f payload)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api -X POST "repos/$R/issues/$N/comments" -f body="$b"' },
+        { file: "g.sh", surface: "sh", raw: 'gh api --method DELETE "repos/$R/issues/comments/$ID"' },
+        { file: "h.sh", surface: "sh", raw: 'gh api graphql -f query="$q"' },
+        { file: "i.sh", surface: "sh", raw: 'gh api "repos/$R/issues" -f title="$t" -f body="$b" -f labels[]=x' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a full-line `//` comment in a .ts surface is skipped like a `#` comment", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.ts",
+          surface: "ts",
+          raw:
+            "// gh issue list --label x --state open --json number --jq '.[].number'\n" +
+            "// and a second comment: gh api repos/o/r/issues --jq '.[].n'\n" +
+            "const x = 1;",
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("a .ts capture still flags a real enumeration instruction", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.ts",
+          surface: "ts",
+          raw: 'const PROMPT = `run: gh issue list --label x --state open --json number --jq \'.[].number\'`;',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  // forConsumed axis (test-design seat, PR #11782 — it was a mutation survivor
+  // with no discriminating fixture): the close-enumeration `for n in $(gh …)`
+  // shape IS the scheduled-inngest-health.yml arm this detector exists for.
+  test("flags an unbounded `for n in $(gh issue list …)` close-enumeration loop", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.yml",
+          surface: "yaml",
+          raw: 'for n in $(gh issue list --repo "$R" --label x --state open --json number --jq \'.[].number\'); do gh issue close "$n"; done',
+        },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("passes the same for-loop with --limit 100 (the corpus convention)", () => {
+    expect(
+      findUnboundedEnumerations([
+        {
+          file: "f.yml",
+          surface: "yaml",
+          raw: 'for n in $(gh issue list --repo "$R" --label x --state open --limit 100 --json number --jq \'.[].number\'); do gh issue close "$n"; done',
+        },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  test("flags a zero-arg / paren-terminated capture the old \\b terminator dropped", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'for n in $(gh issue list); do echo "$n"; done' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags `gh api -X GET <list> -f q=…` — explicit GET defeats the -f write arm", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh api -X GET "repos/o/r/issues?state=open" -f per_page=30 --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags bare `gh api users`/`gh api orgs` root collections", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'U=$(gh api users --jq \'.[].login\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a bound token inside a quoted --search string is data, not a bound", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --search "fix --limit 100 regression" --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("`--head` inside a quoted --jq/--search arg does not exempt", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x --json number --jq \'.[].number | "--head"\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags an OR-widened linked:issue search (`linked:issue # OR …` is not bounded)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh pr list --search "linked:issue # OR is:open" --json number --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("flags a `.[0]` drill that ALSO reads a later row (`,`-separated jq)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'X=$(gh issue list --label x --json number | jq \'.[0].number, .[1].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("a write arm inside a --field value does not exempt (`-f 'q=-X POST'` is data)", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'A=$(gh api -X GET "repos/o/r/issues?state=open" -f \'q=-X POST\' --jq \'.[].number\')' },
+      ]),
+    ).toHaveLength(1);
+  });
+
+  test("passes a bare `gh api user` item read", () => {
+    expect(
+      findUnboundedEnumerations([
+        { file: "f.sh", surface: "sh", raw: 'gh api user --jq \'.login\'' },
+      ]),
+    ).toHaveLength(0);
+  });
+
+  // The #8593 widening pins, same idiom as the #6793 surface pins above: the
+  // new surface classes and the new command families must each be non-empty in
+  // the live corpus, or the corpus assertion below is vacuous for them.
+  const corpus = execSurfaceFiles();
+
+  test("the widened surface classes are represented in the corpus", () => {
+    const has = {
+      githubScripts: corpus.some((f) => f.file.startsWith(".github/scripts/") && f.surface === "sh"),
+      inngestFns: corpus.some(
+        (f) => f.file.startsWith("apps/web-platform/server/inngest/functions/") && f.surface === "ts",
+      ),
+    };
+    expect(
+      has,
+      `corpus surface coverage ${JSON.stringify(has)} — a false means a widened surface class ` +
+        "(.github/scripts/**.sh, inngest functions/*.ts) is silently absent from the scan, " +
+        "so the enumeration offender check is vacuous for it",
+    ).toEqual({ githubScripts: true, inngestFns: true });
+  });
+
+  test("every command family is represented in the corpus", () => {
+    const enums = extractEnumerations(corpus);
+    const families = {
+      list: enums.some((p) => p.kind === "list"),
+      search: enums.some((p) => p.kind === "search"),
+      api: enums.some((p) => p.kind === "api"),
+    };
+    expect(
+      families,
+      `extraction saw ${JSON.stringify(families)} across ${corpus.length} files — ` +
+        "a list/api false means a live command family is regex-invisible, so the " +
+        "offender check is vacuous for it — OR the family left the corpus entirely, " +
+        "in which case pin it false with the restore pattern `search` uses below; " +
+        "a search TRUE means a `gh search issues|prs` re-entered a scanned surface — " +
+        "restore `search: true` in the expectation below so the pin guards that family again",
+      // `search` is pinned FALSE, not dropped: the codeql-to-issues.yml dedupe fix
+      // removed the last live `gh search issues|prs` enumeration from the scanned
+      // corpus, and an absent family can produce no offenders (the fixture tests
+      // above still pin the regex itself). Pinning false makes a reintroduction
+      // fail this test with the restore instruction above.
+    ).toEqual({ list: true, search: false, api: true });
+  });
+
+  test("no executable-surface enumeration lacks a sufficient bound or a principled exemption", () => {
+    expect(
+      findUnboundedEnumerations(corpus).map((o) => `${o.file}: ${o.cmd.slice(0, 90)}`),
+      "a `gh` enumeration that feeds `.[]`, `| grep`, `select(`, `map(`, `length` or a reorder " +
+        "silently truncates at the default row cap unless it carries `-L N`/`--limit N` " +
+        "(N >= 100) or `--paginate`, or qualifies for a coded exemption (pure existence " +
+        "drill with no post-search narrowing, `linked:issue #N`, or `--head <branch>`). " +
+        "See #8593 — every site this widened gate flags must be bounded or carry a " +
+        "documented exclusion in the same diff.",
+    ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Plugin slash-name uniqueness
 //
 // No name is PRESENTED twice to a user for any harness this plugin ships to.
@@ -1802,5 +2925,46 @@ describe("plugin slash-name uniqueness", () => {
           `(e.g. "${key}": ["./${key}/", "./extras/"]) and this guard updated.`,
       ).toBe(false);
     }
+  });
+
+  describe("harness documentation parity", () => {
+    const harnesses: { id: string; label: string; tableHeader: string }[] = [
+      { id: "claude", label: "Claude Code", tableHeader: "Claude Code" },
+      { id: "codex", label: "Codex", tableHeader: "Codex" },
+      { id: "devin", label: "Devin CLI", tableHeader: "Devin CLI" },
+      { id: "grok", label: "Grok Build", tableHeader: "Grok Build" },
+      { id: "opencode", label: "OpenCode", tableHeader: "OpenCode" },
+      { id: "antigravity", label: "Google Antigravity CLI", tableHeader: "Google Antigravity" },
+    ];
+
+    test("README.md contains an installation section for every supported harness", () => {
+      const repoRoot = resolve(PLUGIN_ROOT, "../..");
+      const readmePath = resolve(repoRoot, "README.md");
+      const readme = readFileSync(readmePath, "utf-8");
+
+      for (const h of harnesses) {
+        expect(
+          readme.includes(h.label),
+          `README.md is missing an installation section for harness '${h.id}' (${h.label}). ` +
+            "When adding or modifying a harness in lib/harness.ts, update README.md.",
+        ).toBe(true);
+      }
+    });
+
+    test("getting-started.njk documents every supported harness in prose and comparison table", () => {
+      const gettingStartedPath = resolve(PLUGIN_ROOT, "docs", "pages", "getting-started.njk");
+      const content = readFileSync(gettingStartedPath, "utf-8");
+
+      for (const h of harnesses) {
+        expect(
+          content.includes(h.label),
+          `getting-started.njk is missing documentation for harness '${h.id}' (${h.label}).`,
+        ).toBe(true);
+        expect(
+          content.includes(`<th>${h.tableHeader}</th>`),
+          `getting-started.njk table is missing header column <th>${h.tableHeader}</th> for harness '${h.id}'.`,
+        ).toBe(true);
+      }
+    });
   });
 });

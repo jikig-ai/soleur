@@ -25,13 +25,22 @@ in [#3121](https://github.com/jikig-ai/soleur/issues/3121). It covers:
 
 ## Architecture
 
-Two enforcement layers, one source of truth.
+Two CI enforcement layers plus a local pre-push scan, one source of truth.
 
 | Layer | Where | When | Bypassable | Purpose |
 |---|---|---|---|---|
 | **Lefthook `gitleaks-staged`** | local pre-commit | every `git commit` | yes (`--no-verify`, hook removal) | fast feedback before a leak hits the local index |
 | **Lefthook `lint-fixture-content`** | local pre-commit | every `git commit` | yes | catches semi-sensitive shapes (real emails, prod-shape UUIDs, Supabase project refs) gitleaks misses |
+| **Ship `prepush-secret-scan.sh`** | local, run by `soleur:ship` and the review skill before their pushes | at the call sites that carry the skill text (not every push site) | yes: it runs only where the skill text calls it, so another script's push never reaches it (#11126 tracks the `git push` hook) | catches a secret-bearing commit while its history is still local, where a rewrite can still clear it; CI's scan starts only at the PR |
 | **CI `secret-scan` workflow** | GitHub Actions | PR + merge_group + push:main + weekly cron | no (CODEOWNERS-protected) | load-bearing enforcer; the rule's `[hook-enforced: ...]` tag points here |
+
+The Claude Code `PreToolUse` hook `git-commit-secret-scan` scans the would-be index for same-command staging
+(`git add -A && git commit`, `commit -a`, a pathspec commit), because the real index does not hold that content
+yet when the hook runs (#10696; see `.claude/hooks/README.md` and ADR-301). It is a courtesy layer with a stated
+residual set, NOT a claim of full coverage: what an earlier command in the same call changes (a producer,
+`sed -i`, an edit of `.gitignore` or config), a script or alias that stages inside, a host without perl, the raw-byte
+scan (a clean filter or Git LFS may record other bytes) and checkout / stash / merge / cherry-pick / read-tree /
+restore / mv / rm are not simulated. CI stays the enforcer for all of them.
 
 Each trigger scans a **different set of commits** — see
 [Ref scope per event](#ref-scope-per-event-which-commits-each-trigger-actually-scans)
@@ -66,8 +75,9 @@ The gate **fails open**: a failed or partial file-list fetch, an empty list, an 
 differs from the event's `changed_files`, a list at the API's 3000-entry cap (`CHANGED_FILES >= 3000`),
 a failed head lookup, a PR head that moved since the event, a matcher error, or a failure of the job
 itself all leave the matrix running. To force the smoke matrix on a PR, touch a subject file. The
-five required contexts (`gitleaks scan`, `lint fixture content`, `allowlist-diff`, `rename-guard`,
-`waiver discipline`) have no `needs:` edge to the gate and run on every PR as before. `smoke` must
+`secret-guards` required umbrella context (#12089) — whose five member verdicts (`scan`,
+`lint-fixture-content`, `allowlist-diff`, `rename-guard`, `waiver-discipline`) cover the retired
+per-gate contexts — has no `needs:` edge to the gate and runs on every PR as before. `smoke` must
 never become a required context: a required rollup would make `skipped` read as green and turn this
 cost optimisation into a control (ADR-032; `scripts/secret-scan-smoke-gate.test.sh` asserts neither
 `scripts/required-checks.txt` nor the canonical ruleset JSON names a `smoke` context).
@@ -109,7 +119,7 @@ and the matrix posted one skipped row, `smoke (${{ matrix.case }})`; with the st
   a directory change followed by a bare name (`cd scripts && bash lint-workflows.sh`), a path composed
   from a variable, or a bare top-level directory word (`ls scripts`). A future smoke step that reads an
   input only in one of those forms would not be flagged, so a PR editing that input could skip the
-  matrix. The five required scanners still run on every PR, and review of the new step is the check.
+  matrix. The `secret-guards` member scanners still run on every PR, and review of the new step is the check.
   These forms are recorded as decisions (shape rows expecting zero operands) in
   `scripts/secret-scan-smoke-gate.test.sh`.
 
@@ -566,6 +576,49 @@ line containing `gitleaks:allow` (across the whole tree) and rejects any
 without an `issue:#[0-9]+\s+\S{3,}` trailer. Failure blocks merge;
 CODEOWNERS guards the job definition itself so the gate cannot be removed
 without a 2nd-reviewer.
+
+## Local pre-push range scan (`soleur:ship`)
+
+`plugins/soleur/skills/ship/scripts/prepush-secret-scan.sh` runs `gitleaks git` over the non-merge commits of
+`origin/main..HEAD` before `soleur:ship` pushes, using the same range shape as the CI `pull_request` arm
+(`--log-opts="--no-merges ${BASE_SHA}..${HEAD_SHA}"`). The point is timing: a secret caught here sits in an
+unpublished commit and is cleared by rewriting it. Once pushed, a later "fix" commit cannot clear the CI range scan,
+because that scan reads every commit in the range, not the tip.
+
+The contract is in the script header: exit `0` CLEAN, `1` FINDINGS (stop), `43` NOT_RUN (the environment lacks
+something: record `secret-scan: not run (<reason>)` in the PR body and continue, since CI still gates the merge), `44`
+INCOMPLETE (stop; the operator decides). Only `0` and `43` continue. `44` covers every outcome the PR's own content
+can induce: a timeout, a crashed or empty scan, a scanned-count mismatch, `ERR`/`fatal:` output from an rc-0 scan
+(an unreadable object), or no merge base in a non-shallow clone. A `CLEAN` verdict needs gitleaks to exit 0, write a
+report of exactly `[]`, and print no error output. The receipt line carries the full base and head SHAs, the range
+size, the commit count gitleaks reports, whether the range touched the gitleaks config, which config was read
+(`cfg=base`), whether part of the range is already on `origin/<branch>` (`published=`), and the local gitleaks version.
+
+Why the scan matters: CI's secret scan starts at the pull request, after the push, and a pushed SHA stays reachable
+(`refs/pull/N/head`) even after a force-push. Only a local scan can prevent publication.
+
+What the scan reads: the **base's** committed `.gitleaks.toml` and `.gitleaksignore`, never the working tree's and never
+the PR's. A PR that widens, breaks or deletes its own config cannot scan itself clean; a legitimate allowlist-adding PR
+therefore gets FINDINGS here, and CI's `allowlist-diff` job (label or `Allowlist-Widened-By:` trailer) arbitrates.
+gitleaks is pointed at the repository's git dir (so a checked-out `.gitleaksignore` is not read), and runs with
+`GIT_ATTR_SOURCE` set to the empty tree, `--text`, and the global/system git config replaced, so committed
+`-diff`/`binary` attributes, NUL-byte files and a user's `diff.*` settings do not blind it. A base without a usable
+`.gitleaks.toml` is NOT_RUN: the scan never falls back to the PR's own config. An inline `gitleaks:allow` added by the
+PR is honoured here exactly as in CI.
+
+What it does **not** cover (documented, not claimed away):
+
+- **Content that exists only in a conflict-resolution merge commit.** `--no-merges` mirrors CI's range arm and
+  misses it (measured: rc 0, while `-m` and `gitleaks dir` find it). CI's `gitleaks dir .` step is the net; a tip-tree
+  pass belongs to #11126.
+- **UTF-16 files** are invisible here and to CI. git older than 2.40 prints `attr=unpinned` (`GIT_ATTR_SOURCE` is
+  ignored there; `--text` still holds).
+- **Version skew.** CI pins gitleaks 8.24.2; a newer local pack can flag something CI accepts. That is still a stop;
+  `.gitleaks.toml` is read from the base, so a false positive is cleared by a reviewed allowlist PR, not in place.
+- **A commit made between the scan and the push.** A continue verdict covers the `head=` it printed and says so on stderr;
+  re-run the scan if HEAD moves. Binding the scan to the pushed SHAs needs the `git pre-push` hook (#11126).
+- **Pushes that never reach it.** Another script's push (`pre-merge-rebase.sh`, `sync-pr-behind.sh`), `merge-pr`,
+  `fix-issue` and the resolve workflows rely on a `git pre-push` hook that does not exist yet (tracked in #11126).
 
 ## When an alert fires
 

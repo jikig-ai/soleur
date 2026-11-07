@@ -54,8 +54,8 @@ are part of it, because `state pull` talks to the R2 backend:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 umask 077                                  # state holds credentials in plaintext
@@ -88,8 +88,8 @@ read before one.
 > `codeql-1537-revisit-watch.yml` still watches the upstream issue; when it closes,
 > re-tightening is one Terraform diff (see ADR-270).
 
-The ruleset carries two rule types, `required_status_checks` (23 contexts at
-integration id 15368) and `merge_queue`. With `strict_required_status_checks_policy
+The ruleset carries two rule types, `required_status_checks` (10 contexts at
+integration id 15368 — 23 before the #12089 umbrella consolidation) and `merge_queue`. With `strict_required_status_checks_policy
 = true`, a PR's CI cannot converge faster than `main` merges on an active day, so
 under direct merge the PR is flipped `BEHIND` and restarts forever. The queue builds
 each candidate against the projected post-merge state, so "up-to-date" is satisfied
@@ -106,12 +106,12 @@ ADR-032 2026-07-01 and 2026-09-14 rulings.
 | Param | Value | Note |
 | --- | --- | --- |
 | `merge_method` | `SQUASH` | Matches `gh pr merge --squash`. |
-| `grouping_strategy` | `ALLGREEN` | Safe default; every group is one PR at `max_entries_to_merge = 1`. |
-| `max_entries_to_merge` | `1` | One candidate per merged group keeps CLA verification exact (the PR number is in `head_ref`). Raising it needs the ADR-270 raise checklist. |
+| `grouping_strategy` | `ALLGREEN` | A failing member splits/ejects the group; group-atomic ejection assumed by the 3-member sizing. |
+| `max_entries_to_merge` | `3` | Raised 1→3 on #11678 under the ADR-270 raise checklist: batches merge LANDINGS, not `merge_group` builds. `merge-queue-cla-verify.sh` enumerates every member (head_ref names only the deepest). Sanctioned values per Guard 2: {1,3}. |
 | `min_entries_to_merge` | `1` | Merge as soon as a candidate is green. |
 | `min_entries_to_merge_wait_minutes` | `0` | The provider default (5) would add five minutes to every merge. |
 | `max_entries_to_build` | `2` | Speculation with bounded runner contention; raise to 3 only after the canary shows contention is not binding. |
-| `check_response_timeout_minutes` | `75` | **Must exceed the slowest required check on `merge_group` including runner start spread.** Canary item 5 (#9454, 2026-10-11) measured 240 `merge_group` CI runs: p50 25.0 min, p95 44.1, longest success 60.5 (above the previous 60), one `checks_timed_out` ejection. Under-setting it *dequeues a green PR*. The stall probe fires at 45 minutes, below it. Raised 60 to 75 on 2026-10-11; the cost is that a hung entry can hold the queue up to 15 minutes longer. Raise again if a success approaches the timeout. |
+| `check_response_timeout_minutes` | `120` | **Must exceed the slowest required check on `merge_group` including runner start spread.** Canary item 5 (#9454, 2026-10-11) measured 240 `merge_group` CI runs: p50 25.0 min, p95 44.1, longest success 60.5 (above the previous 60), one `checks_timed_out` ejection. Under-setting it *dequeues a green PR*. The stall probe fires at 45 minutes, below it. Raised 60 to 75 on 2026-10-11; the cost is that a hung entry can hold the queue up to 15 minutes longer. Raise again if a success approaches the timeout. Raised again 75 to 120 on 2026-11-03 (#12030): under hosted-runner saturation a `merge_group` CI run took 79 minutes (shards waited 10-28 minutes for a runner) and the entry was ejected with `checks_timed_out`; a hung entry can now hold the queue 45 minutes longer than at 75. The demand side is #12030. |
 
 ### Sequencing (what landed together)
 
@@ -230,7 +230,7 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
 ```
 
 Then verify the queue *functions*: open a trivial human PR, `gh pr merge --squash
---auto`, confirm it ENTERS the queue (not direct-merge), all 25 contexts (23 CI plus
+--auto`, confirm it ENTERS the queue (not direct-merge), all 12 contexts (10 CI plus
 `cla-check` and `cla-evidence`) report on the `merge_group` temp ref, and it merges
 without stalling; record enqueue-to-merge minutes and the observed `mergeStateStatus`.
 Then confirm a `weakness-miner.yml` bot PR flows through (it is the only bot PR
@@ -274,7 +274,10 @@ log, 2026-10-01. Removing the legacy arm from `main.tf` is tracked in #9361.
 > check reports as non-empty, and the "mirror" block would re-create the branch-readable copy of the
 > soleur-ai key that #8209 exists to delete. The CI key is `GITHUB_INFRA_APP_*` in
 > `soleur-infra-privileged/prd`; the installation to check is soleur-infra's, 166065653. Remedies:
-> knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md.
+> knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md. The same holds for
+> the backend's `AWS_*` leg: `prd_terraform`'s pair is read-only post-O5b — state-WRITING
+> invocations export `AWS_*` from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd`
+> (§Local Terraform invocation there; blocks updated to that form 2026-10-24).
 
 Verify Doppler has both secrets:
 
@@ -330,11 +333,12 @@ manually (mirrors the CI block below), run:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository_ruleset.cla_required soleur:13304872
 ```
 
@@ -348,7 +352,10 @@ transformer is still required — this root needs `TF_VAR_github_app_id` and
 > sentinel, so a terminal run in this shape selects legacy mode and fails. Add a third layer: export
 > `TF_VAR_github_infra_app_id`, `TF_VAR_github_infra_app_installation_id` and
 > `TF_VAR_github_infra_app_private_key` from `soleur-infra-privileged/prd` before `doppler run
-> --preserve-env`, so infra mode wins exactly as it does in CI.
+> --preserve-env`, so infra mode wins exactly as it does in CI. The backend's `AWS_*` pair moved
+> too: `prd_terraform`'s is read-only post-O5b — for `import`/`apply`/`state push` export `AWS_*`
+> from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` (§Local Terraform invocation); the blocks
+> below carry that form since 2026-10-24.
 
 ### Adopting `jikig-ai/soleur-marketplace` (#7471)
 
@@ -364,11 +371,12 @@ Copying the ruleset's `owner:id` form fails at apply:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository.soleur_marketplace soleur-marketplace
 ```
 
@@ -424,7 +432,7 @@ test-destroy-guard-counter.sh` T8 pins that a replacement counts as a destroy.
 
 | Guard | Where | Runs |
 |---|---|---|
-| `marketplace-manifest-guard` (source validity) | `scripts/marketplace-manifest-validate.sh` | every PR, blocking |
+| `marketplace-manifest-guard` (source validity; member of `guards-ruleset`) | `scripts/marketplace-manifest-validate.sh` | every PR, blocking |
 | ruleset matches its declaration | `scripts/verify-marketplace-ruleset.sh` | post-apply; fixtures on every PR |
 | published bytes match source | `apply-github-infra.yml` verify step | post-apply (cache-busted body poll — the raw CDN caches 300 s) |
 | published manifest still correct | `scheduled-marketplace-drift.yml` | daily; dispatches a reconcile on content drift |
@@ -440,18 +448,20 @@ canonical sequence is:
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 # Skip the `terraform import` line below if the CI workflow has already
 # applied at least once — the resource is already in R2 state and
 # re-importing returns `Error: Resource already managed by Terraform`.
 # Run `terraform state list | grep github_repository_ruleset` to check.
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository_ruleset.ci_required soleur:14145388
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform plan
 # Expected (first apply): 10 required_check additions (9 from #3891 + 1
 # from #4384), no destroys.
@@ -499,7 +509,9 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
 
 > **Superseded 2026-10-01 (#9360):** CI applies authenticate as the Tier-B `soleur-infra` App, whose
 > key lives in `soleur-infra-privileged/prd`; rotate it there (ADR-241 D5). The text below describes
-> the soleur-ai key, which `prd_terraform` no longer holds after #8209 O10.
+> the soleur-ai key, which `prd_terraform` no longer holds after #8209 O10. Same for the backend
+> `AWS_*` pair: `prd_terraform`'s is read-only post-O5b — state-WRITING invocations source `AWS_*`
+> from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` (§Local Terraform invocation).
 
 The provider authenticates as the `soleur-ai` GitHub App. App credentials do
 not rotate operator-side -- the App PEM lives in Doppler indefinitely.
@@ -620,24 +632,30 @@ variables; only `plan`/`import`/`apply` need the `TF_VAR_*` layer.)
 
 > **Superseded 2026-10-01 (#9360):** the same third layer as Phase 1's note applies here: the
 > `prd_terraform` pair is the eviction sentinel after #8209 O10, so `plan`/`import`/`apply` also need
-> the `TF_VAR_github_infra_app_*` exports from `soleur-infra-privileged/prd`.
+> the `TF_VAR_github_infra_app_*` exports from `soleur-infra-privileged/prd`. The `AWS_*` leg moved
+> identically: `prd_terraform`'s pair is read-only post-O5b — for `import`/`apply`/`state push`
+> export `AWS_*` from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` (§Local Terraform
+> invocation); the blocks below carry that form since 2026-10-24.
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 terraform state list | grep github_                      # what is already adopted
 
 # Import only what is missing. Re-importing an adopted resource errors
 # `Resource already managed by Terraform`. Substitute any id the DR script reissued (§5b).
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform import github_repository_ruleset.marketplace_pr_required soleur-marketplace:20802604
 
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform plan -out=tfplan-rollback.binary
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform apply tfplan-rollback.binary
 ```
 
@@ -672,8 +690,8 @@ Read all four before running anything.
 
 ```bash
 cd infra/github/
-export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
-export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID -p soleur-infra-privileged -c prd --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY -p soleur-infra-privileged -c prd --plain)
 terraform init -input=false
 
 SNAP=/path/to/your/snapshot.json          # the file from the §Authorization-model block

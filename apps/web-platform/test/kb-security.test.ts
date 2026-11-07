@@ -46,11 +46,39 @@ describe("KB API security", () => {
     expect(content).toContain("\\0");
   });
 
-  it("kb-reader disables gray-matter engine execution", () => {
-    const kbReader = resolve(__dirname, "../server/kb-reader.ts");
-    const content = readFileSync(kbReader, "utf-8");
-
-    expect(content).toContain("engines: {}");
+  it("gray-matter is imported only by server/front-matter-guard.ts (no bare matter() anywhere else)", () => {
+    // Behavioural proof that the guard refuses code-bearing openers is test/front-matter-guard.test.ts;
+    // this is the wire: a new importer that skips the guard re-opens the `---js` hole. It walks every
+    // directory of the app (not a hand-picked list) and matches static, dynamic and require forms.
+    const root = resolve(__dirname, "..");
+    const SKIP = new Set(["node_modules", ".next", ".git", "coverage", ".turbo"]);
+    const SKIP_TOP = new Set(["test", "tests"]); // the app's own test dirs only, never a nested `app/api/**/test`
+    const CODE = /\.[cm]?[jt]sx?$/;
+    const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["'`]gray-matter(?:\/[^"'`]*)?["'`]/;
+    // Whole comment lines are dropped (no regex comment-stripper: one that mis-parses a string would hide an import).
+    const withoutCommentLines = (t: string) =>
+      t
+        .split("\n")
+        .map((l) => l.replace(/^\s*\/\*.*?\*\/\s*/, "")) // a leading one-line block comment must not hide code after it
+        .filter((l) => !/^\s*(\/\/|\/\*|\*)/.test(l))
+        .join("\n");
+    const importers: string[] = [];
+    const walk = (dir: string) => {
+      // Dirents carry the entry type, so no separate stat of the path precedes the read (no check-then-use race).
+      for (const ent of readdirSync(dir, { withFileTypes: true })) {
+        const name = ent.name;
+        if (SKIP.has(name) || (dir === root && SKIP_TOP.has(name))) continue;
+        const full = join(dir, name);
+        if (ent.isSymbolicLink()) continue;
+        if (ent.isDirectory()) walk(full);
+        else if (CODE.test(name) && IMPORT_RE.test(withoutCommentLines(readFileSync(full, "utf-8")))) {
+          importers.push(full.slice(root.length + 1));
+        }
+      }
+    };
+    walk(root);
+    expect(importers).toEqual(["server/front-matter-guard.ts"]);
+    expect(withoutCommentLines(readFileSync(resolve(root, "server/kb-reader.ts"), "utf-8"))).toContain("parseFrontMatterSafe(raw)");
   });
 
   it("no KB route handler exposes absolute paths in responses", () => {

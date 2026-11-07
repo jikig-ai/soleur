@@ -53,3 +53,10 @@ Two questions drove the design:
 | Ephemeral push-only (no persistent `inbox_item`) | A push you miss is gone; the founder needs a durable queue to return to. |
 | Deadline-driven statutory severity (escalate as the clock runs down) | Creates a pull-only-escalation risk + a re-notify cron + a per-class-deadline compliance dependency on the critical path. "Pin all" is strongest-safety and simplest — nothing to escalate, nothing to get wrong. |
 | Per-Owner recipient-state join in v1 | No v1 source needs independent per-Owner state (`task_completed` is targeted; `system` broadcasts resolve globally). Deferred to #4672 when broadcast `approval_required` first needs it — avoids a dual `acted_at` source-of-truth. |
+
+## Addendum (2026-10-29, #4672)
+
+Decision 6 reserved `approval_required` for #4672. The `inbox_item.source` CHECK is now widened to include it (added `NOT VALID`, then validated, in migration 180) for durable approval requests; the row is `severity='action_required'`,
+carries the approval id as `source_ref`, and stays content-minimized (no action text). The per-Owner recipient-state join stays deferred. The deferral trigger above ("when broadcast `approval_required` first needs it") was evaluated and is **not met**: an approval is a workspace-grain decision (the first
+Owner's decision settles it for every Owner), the approval row carries its own state, and the decide RPC moves the linked item out of the `action_required` count in the same transaction, so there is no
+independent per-Owner `acted_at` to reconcile. Re-evaluate if a future approval needs per-Owner acknowledgement. Rationale and invariants: [ADR-309](./ADR-309-durable-action-bound-approval-requests.md).

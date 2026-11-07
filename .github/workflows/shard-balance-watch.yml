@@ -1,0 +1,80 @@
+name: shard-balance drift watch
+
+# Weekly ADVISORY probe for the committed shard manifests (#11564, epic #11556):
+# samples suite-timings artifacts from the last 5 green merge_group ci.yml runs
+# and flags src=floor manifest rows that finally measured >= 300 s, plus
+# light-leg balance drift > 1.30x the perfect-balance bound. NOTIFY-ONLY: it
+# manages ONE watch-owned tracker issue
+# `ci-shard-balance-watch: manifest drift findings`
+# (find-or-file, sentinel-hash dedupe, resolution comment + close on all-clear)
+# and never gates a merge — it is not a required check.
+#
+# WHY a dedicated workflow and not a follow-through sweeper tracker: the
+# sweeper comments on every non-pass verdict with no per-verdict dedup; a
+# recurring drift monitor would comment every sweep. Placement follows ADR-033
+# (repo-scoped GitHub Actions, default token only: artifact reads + issue
+# comments on its own tracker; no app secrets, no Sentry). Three live siblings
+# carry the same shape (registration-narrowing-watch, codeql-1537-revisit-watch,
+# code-quality-followups-watch).
+#
+# DEFAULT BRANCH ONLY: dispatch from any other ref is skipped — the probe reads
+# the checked-out HEAD's committed manifests and must never act on a PR's state.
+#
+# DEDUPE: the sentinel `<!-- shard-balance-watch:v1 drift=<sha1-of-set> -->` on
+# the tracker suppresses reposts of an unchanged flagged set;
+# concurrency.group only serializes overlapping runs — the sentinel is the
+# work-level dedupe.
+#
+# SELF-DISABLE / RESIDUAL RISK: a silently dropped scheduled run has no
+# dead-man alarm (documented residual, shared with the sibling watches) — a
+# missing weekly run is visible in `gh run list --workflow
+# shard-balance-watch.yml --event schedule`. A green run that silently skipped
+# measurement is the banned state: zero artifact-bearing runs exits 3.
+#
+# RETIREMENT: when the manifests stop carrying floor rows or the ratchet
+# promotion lands (see the #11564 follow-up), delete in one PR:
+#   - .github/workflows/shard-balance-watch.yml (this file)
+#   - scripts/watch-shard-balance-11564.sh and scripts/watch-shard-balance-11564.test.sh
+#   - the run_suite line for that suite in scripts/test-all.sh
+#   - its rows in scripts/suite-durations.tsv and scripts/suite-shard-legs.tsv
+#   - the watcher section in knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
+#
+# To check manually: gh workflow run shard-balance-watch.yml -f dry_run=true
+# (prints the composed findings and posts nothing).
+
+on:
+  schedule:
+    - cron: '41 9 * * 2' # Tuesdays 09:41 UTC (staggered from the Mon 09:17 sibling trio)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print the would-be findings; post nothing'
+        required: false
+        default: false
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: shard-balance-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    if: github.repository == 'jikig-ai/soleur' && (github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read   # gh run list / gh run download read the Actions API (the token 403s without it)
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Sample merge_queue timing artifacts and manage the drift tracker
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash scripts/watch-shard-balance-11564.sh ${{ inputs.dry_run && '--dry-run' || '' }}

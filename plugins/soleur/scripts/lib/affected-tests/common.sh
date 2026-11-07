@@ -204,6 +204,12 @@ affected_timeout() {
 # only when a CI test workflow was detected.
 AFFECTED_BUDGET_ACTIVE=0
 AFFECTED_DEADLINE=0
+# The content trigger (lib content-trigger.sh) is armed by the gate only after the
+# whole three-key config group validates, and made eligible only at the exits that
+# ran or reported a non-`--full` verdict. Same rule as above: initialised here,
+# never inherited from the caller's environment.
+AFFECTED_CT_ARMED=0
+AFFECTED_CT_ELIGIBLE=0
 affected_bound() {
   if [[ "$AFFECTED_BUDGET_ACTIVE" == "1" ]]; then
     local rem
@@ -223,6 +229,22 @@ AFFECTED_SCRATCH=()
 affected_mktemp() { # <tag> — sets AFFECTED_TMP to a fresh registered scratch path
   AFFECTED_TMP="$(mktemp "${TMPDIR:-/tmp}/affected-$1.XXXXXX")" || return 1 # lint-trap-ownership: ok — owning `trap affected_scratch_clean EXIT INT TERM` is installed by the sourcing gate (affected-tests.sh); a sourced lib cannot own an EXIT trap without clobbering the importer's
   AFFECTED_SCRATCH+=("$AFFECTED_TMP")
+}
+# affected_sidecar_red <file> <deadline-epoch> — 0 iff the runner's provisional-red sidecar holds a
+# record `label<TAB>rc<TAB>epoch` with a non-zero rc (1..255) and an epoch strictly before the deadline.
+# The runner decides what is a red (it records only its `failed` class and never a named-signal exit), so
+# the reader does not mirror that classification. Every other shape (missing/empty/unreadable file,
+# short or non-numeric fields, rc 0 or above 255, a late stamp) is "no red seen": the caller keeps its
+# deferral. Numbers are parsed with 10# so a leading
+# zero is decimal, never an octal arithmetic error.
+affected_sidecar_red() {
+  local f="${1:-}" deadline="${2:-}" label rc ep extra
+  [[ -n "$f" && -f "$f" && -r "$f" && "$deadline" =~ ^[0-9]+$ ]] || return 1
+  while IFS=$'\t' read -r label rc ep extra || [[ -n "$label$rc$ep" ]]; do
+    [[ -z "$extra" && "$rc" =~ ^[0-9]{1,3}$ && "$ep" =~ ^[0-9]{1,15}$ ]] || continue
+    (( 10#$rc >= 1 && 10#$rc <= 255 && 10#$ep < deadline )) && return 0
+  done < "$f"
+  return 1
 }
 affected_scratch_clean() {
   ((${#AFFECTED_SCRATCH[@]} > 0)) && rm -f "${AFFECTED_SCRATCH[@]}"
@@ -297,12 +319,23 @@ _affected_cmd_vacuous() { # <command string> → rc 0 when it certifies nothing
 #           global-paths | full-requested |
 #           custom-command | delegated | runner-refused | runner-signal | foreign-runner |
 #           no-stack | bad-config key=<k> | vacuous-test-command | no-base-ref |
-#           toolchain-missing | no-tests | budget-deferred | bad-usage | help
+#           toolchain-missing | no-tests | budget-deferred | failed-before-budget | bad-usage | help |
+#           content-trigger-failed | inert-content-trigger
 #   Counts are decimal, or `-` when the path does not produce a count
 #   (delegated runner, opaque test_command, refused runs).
 finish() {
   local rc="$1" mode="${2:--}" reason="${3:--}" stack="${4:--}" ci="${5:-none}"
-  local ran="${6:--}" of="${7:--}" skipped="${8:--}"
+  local ran="${6:--}" of="${7:--}" skipped="${8:--}" ct_field=""
+  # Content trigger (content-trigger.sh): runs the configured command after a
+  # passing verdict whose diff adds the configured string, folds its result into
+  # rc/reason, and names the outcome in one trailing marker field. The hook never
+  # exits and never calls finish(); an unarmed gate skips this block byte-for-byte.
+  if [[ "${AFFECTED_CT_ARMED:-0}" == 1 ]]; then
+    affected_ct_hook "$rc" "$reason"
+    rc="$AFFECTED_CT_OUT_RC"; reason="$AFFECTED_CT_OUT_REASON"
+    if [[ "${AFFECTED_CT_OUT_RESET:-0}" == 1 ]]; then mode="selected"; ran="-"; of="-"; skipped="-"; fi
+    ct_field="$AFFECTED_CT_OUT_FIELD"
+  fi
   case "$rc" in
     0)
       if [[ "$reason" == inert ]]; then
@@ -360,6 +393,6 @@ finish() {
       echo "No test suite detected in this repository; the affected-suite gate had nothing to run."
       ;;
   esac
-  echo "AFFECTED_GATE ran=$ran of=$of skipped=$skipped mode=$mode reason=$reason stack=$stack ci=$ci"
+  echo "AFFECTED_GATE ran=$ran of=$of skipped=$skipped mode=$mode reason=$reason stack=$stack ci=$ci${ct_field:+ content_trigger=$ct_field}"
   exit "$rc"
 }

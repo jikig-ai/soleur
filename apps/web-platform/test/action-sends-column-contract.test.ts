@@ -25,10 +25,10 @@ function declaredColumns(): Set<string> {
     const sql = readFileSync(join(MIGRATIONS, f), "utf8");
     const create = sql.match(/CREATE TABLE(?: IF NOT EXISTS)? public\.action_sends \(([\s\S]*?)\n\);/);
     if (create) {
-      for (const m of create[1].matchAll(new RegExp(`^\\s+([a-z_]+)\\s+${TYPE}\\b`, "gm"))) cols.add(m[1]);
+      for (const m of create[1].matchAll(new RegExp(`^\\s+([a-z][a-z0-9_]*)\\s+${TYPE}\\b`, "gm"))) cols.add(m[1]);
     }
     for (const stmt of sql.matchAll(/ALTER TABLE(?: IF EXISTS)? public\.action_sends\b([\s\S]*?);/g)) {
-      for (const m of stmt[1].matchAll(/ADD COLUMN(?: IF NOT EXISTS)?\s+([a-z_]+)/g)) cols.add(m[1]);
+      for (const m of stmt[1].matchAll(/ADD COLUMN(?: IF NOT EXISTS)?\s+([a-z][a-z0-9_]*)/g)) cols.add(m[1]);
     }
   }
   return cols;
@@ -42,7 +42,7 @@ export function referencedColumns(src: string): string[] {
     for (const s of body.matchAll(/\.select\(\s*"([^"]*)"/g)) {
       for (const c of s[1].split(",")) if (c.trim()) out.push(c.trim());
     }
-    for (const f of body.matchAll(/\.(?:eq|is|neq|gt|gte|lt|lte|in|order|not)\(\s*"([a-z_]+)"/g)) out.push(f[1]);
+    for (const f of body.matchAll(/\.(?:eq|is|neq|gt|gte|lt|lte|in|order|not)\(\s*"([a-z][a-z0-9_]*)"/g)) out.push(f[1]);
   }
   return out;
 }

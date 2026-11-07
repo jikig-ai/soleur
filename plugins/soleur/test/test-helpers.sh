@@ -50,8 +50,10 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        export INCIDENTS_REPO_ROOT="$_soleur_sb"
        export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
        # Marker-at-creation (#9117): declare an owner the reapers can verify BEFORE anything can go
-       # wrong. 33 suites install their own EXIT trap after sourcing this file and replace the one
-       # composed below (#8659), and SIGKILL runs no trap at all; either way the dir is then a
+       # wrong. A suite that installs its own EXIT trap after sourcing this file replaces the one
+       # composed below (33 did at measurement, swept by #8659 to trap-before-source or an explicit
+       # `_soleur_sb_cleanup` call -- nothing stops a future suite reintroducing the pattern), and
+       # SIGKILL runs no trap at all; either way the dir is then a
        # reaper-eligible `marker:<pid>` entry instead of unattributable residue. Done in a SUBSHELL so
        # the suite's function namespace is not polluted and no trap is involved (ADR-129); a missing
        # lib (a lib-copy fixture) or a failed write degrades to the pre-#9117 shape, never aborts.
@@ -66,6 +68,16 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        # ERROR, which then never runs and leaks the sandbox. `eval` would round-trip it, but
        # ADR-156 forbids eval under .claude/hooks and the sibling copy of this block lives there —
        # one pattern across all three sites beats two spellings of the same fix.
+       #
+       # Cleanup runs FIRST (#8659 defect B): the composed body executes under the caller's
+       # `set -e`, where a FAILING prior command aborts the trap mid-list — measured:
+       # `bash -c 'set -e; trap "false; echo SECOND-RAN" EXIT; exit 0'` exits 1 and never runs
+       # the second command. With cleanup first it is unconditional (its own `return 0` can
+       # never trip errexit) and the prior body stays verbatim in tail position, so its exit
+       # semantics are preserved exactly — a failing prior still aborts the trap at the same
+       # point and still fails the exit. Re-sourcing stays idempotent: the re-wrapped body is
+       # `_soleur_sb_cleanup; _soleur_sb_cleanup[; prior]` and the function is a repeat-safe
+       # `rm -rf` on `_SOLEUR_SB_OWNED`.
        _soleur_prior_body=""
        _soleur_prior_raw="$(trap -p EXIT)"
        if [ -n "$_soleur_prior_raw" ]; then
@@ -78,7 +90,7 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        _SOLEUR_SB_OWNED="$_soleur_sb"
        _soleur_sb_cleanup() { [ -n "${_SOLEUR_SB_OWNED:-}" ] && rm -rf "$_SOLEUR_SB_OWNED"; return 0; }
        # shellcheck disable=SC2064
-       trap "${_soleur_prior_body:+$_soleur_prior_body; }_soleur_sb_cleanup" EXIT
+       trap "_soleur_sb_cleanup${_soleur_prior_body:+; $_soleur_prior_body}" EXIT
        unset _soleur_prior_raw _soleur_s _soleur_prior_body _soleur_sb ;;
   *)   printf "FATAL: inherited INCIDENTS_REPO_ROOT is not absolute: %s\n" \
          "$INCIDENTS_REPO_ROOT" >&2

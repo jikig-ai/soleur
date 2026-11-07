@@ -5,6 +5,7 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#12246 (2026-11-06) — exit 42 of battery-owed.sh also means the operator declared CI the gate (session-state.md token); reconciled with ADR-196; see ## Amendment — 2026-11-06 (#12246)"
   - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
   - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
@@ -13,6 +14,8 @@ amended_by:
   - "#9813 (2026-10-10) — decision 22: the `glob:<literal-head>/<glob-tail>` declared-edge kind for corpus walkers, the five-site malformed-shape doctrine, and the per-suite dispositions; see ## Amendment — 2026-10-10 (#9813)"
   - "#9814 (2026-10-11) — the local weight-drift detector: TEST_TIMING_LOG defaults on affected-shaped local runs and the epilogue emits advisory WEIGHT_DRIFT lines against committed weights; see ## Amendment — 2026-10-11 (#9814)"
   - "#10117 (2026-10-13) — decision 27: the root-anchored `glob:` grammar residual is detected, not extended; the extension triggers only on a live dir-less corpus file (#10198); see ## Amendment — 2026-10-13 (#10117)"
+  - "#10198 (2026-10-23) — decision 28: the root-anchored `glob:` grammar lands — a `/`-free head mints a real narrow edge over dir-less diff lines, the bash classifier is shared (`_affected_glob_split`), and the th8 row becomes a per-member coverage census; see ## Amendment — 2026-10-23 (#10198)"
+  - "#12013 (2026-11-06) — decision 29: the three replay arms register first so they start with the pool; measured pool phase 2703 s -> 1882 s on one pinned diff, cold gate 2134 s, the 600 s bar is not met; see ## Amendment — 2026-11-06 (#12013)"
 ---
 
 # ADR-242: `test-all.sh` — the local gate defaults to the affected set plus always-on ratchets (#8322)
@@ -747,7 +750,10 @@ root-coverage census certified a `glob:<root>/` edge by *suffix shape* rather th
 root the corpus scan enumerates).
 
 27. **The root-anchored `glob:` grammar stays unrepresentable; detection, not extension, is the
-    durable posture.** A dir-less corpus file is detected loudly — the th8 row in
+    durable posture.** *(Superseded in part by decision 28, 2026-10-23: the extension landed on
+    the evidence the deferral was waiting for — the grammar now has a root-anchored form and the
+    th8 row's question is coverage, not existence. The detect-first posture and the companion
+    hardening stand as decided.)* A dir-less corpus file is detected loudly — the th8 row in
     `scripts/test-all-affected.test.sh` re-derives the single-component complement of
     `git ls-files` (`.test.sh` and `.sh`-but-not-`.test.sh` as disjoint classes, with a
     producer-liveness floor and `_TH_REPO` fixture confinement) and REDs the first battery run
@@ -768,3 +774,242 @@ root the corpus scan enumerates).
     `scripts/audit-suite-reads.sh`: its `UNCOVERED_AWK` compares an edge by literal equality or
     `<dir>/` prefix only, so a read covered solely by a `glob:` member reports as uncovered —
     over-report, the safe direction; those rows are not oracle disagreements.
+
+## Amendment — 2026-10-23 (#10198)
+
+Context: decision 27 deferred the root-anchored `glob:` grammar to #10198 on one trigger — a
+live dir-less corpus file the grammar could not express. The deferral was posture, not
+preference: extend on evidence, never for a member that might exist. This amendment lands the
+extension on the terms the deferral set.
+
+28. **The `glob:` grammar gains a root-anchored form, classified by a single shared helper.**
+    `scripts/lib/affected-glob.sh`'s `_affected_glob_split <payload>` is the ONE bash classifier
+    (literal | dir | root | malformed, `_AGS_WHY` reason tokens, `_AGS_HEAD`/`_AGS_TAIL` splits,
+    always rc 0 — malformed is data, not a failure arm): a `/`-free metachar-free head — empty
+    (`glob:*.test.sh`, `glob:**.test.sh`) or non-empty (`glob:x*.sh`) — is ROOT-ANCHORED and
+    mints `^glob:<pattern>` with no `-d` probe (the repo root is always present); a `/`-bearing
+    tail under that head is a new malformed shape (`root-tail-slash`) — a dir-less diff line
+    can never match it. The hit arm's root branch requires a dir-less line AND `[[ == ]]` on
+    the whole pattern — `*` crosses `/` in bash, so the `!= */*` conjunct is the load-bearing
+    narrowing. Every `glob:` shape site classifies through it (mint `_affected_add_edge`, hit
+    `_diff_edge_hit`, the lint-orphan census, the test-side `materialise()`); the Python
+    `edge_hit()`/`covers()` mirrors and the GLOBENT awk superset hold the same verdicts —
+    GLOBENT admits the root form and lets `glob:x*/y` stay semantic. Malformed shapes keep the
+    doctrine: mint/hit fail toward coverage, the census REDs statically, registration-only
+    admission can only widen. Missing-lib degrade is `_AFF_LIB_OK`-folded to `index-missing`
+    (select-all), with the hit arm carrying its own `declare -F || return 0` fail-wide guard
+    for the hand-placed `^glob:` channel outside the gate. The th8 dir-less corpus row becomes
+    a per-member COVERAGE census (`_th8_corpus_covered`: literal member, metachar-free glob
+    literal, or well-formed root glob under `[[ == ]]` with the dir-less conjunct) — a covered
+    member clears; an uncovered one REDs per suite. Decision 27's detect-first posture is
+    retained: the extension landed because the representable class exists, and the census keeps
+    a root-level file from ever being unedgeable silently again.
+
+## Amendment — 2026-11-03 (#12013)
+
+Context: the ship-time affected gate took more than 30 minutes for 166 suites on 2026-11-03. The
+runner's parallel pool (`--jobs` / `SOLEUR_TEST_JOBS`, #11282) has existed since 2026-10-27 and
+defaults to serial; nothing in the ship path turned it on, so the measured run was serial by
+configuration, not for want of a mechanism.
+
+Decision:
+
+1. **The delegated affected gate hands the runner a pool width of 4.** `plugins/soleur/scripts/affected-tests.sh`
+   sets `SOLEUR_TEST_JOBS="${SOLEUR_TEST_JOBS:-4}"` on the runner call only, for `--affected` only, only
+   when `CI` is unset, and only when the runner's source mentions `SOLEUR_TEST_JOBS` (a customer runner
+   with no pool is left alone). `--full` is untouched, an operator-chosen width (including `1`, the serial
+   override) wins, and the assignment prefixes the call rather than exporting, so the gate's later steps
+   never see it. An `--affected` run that degrades to the full battery (undecidable diff, runner edited)
+   still gets the width. The runner's own default stays serial; flipping it is a separate decision with no
+   tracker yet (#7432 concerns the `JOBS: 1` stopgap in `main-health-monitor.yml`, not this default).
+2. **Why in the gate script and not in the ship prose.** An env prefix on the ship Phase 4 command is a
+   prose instruction an agent must copy correctly each time, reaches only ship, and leaves work section 9,
+   review's gate, `grok-pre-push-gate.sh` and one-shot serial. (An earlier draft of this addendum said the
+   prefix would break the dispatch pin in `plugins/soleur/test/fullsuite-merge-gate.test.ts`; that was
+   wrong — the pin flags shard tokens and mode flags, not other env prefixes.) The consequence is that
+   every caller of `affected-tests.sh` now gets the pool: ship Phase 4, work section 9, review's lead gate
+   and the agents it spawns, `test-fix-loop`, `grok-pre-push-gate.sh` and one-shot. Each runs the same
+   affected selection under the same advisory lock (ADR-133), which the pool preserves — it goes wide only
+   while holding the lock and otherwise announces a serial fallback.
+3. **The live `[run] <label> done` line is provisional.** It now carries the suite's wall time and,
+   for a non-zero rc, a marker saying the drain's `[ok]`/`[FAIL]`/`[KILLED]` text and the exit code
+   are authoritative (ADR-177: a signal-shaped rc is unresolved, not failed). The `[FAIL]` text
+   that monitors and `battery-refusal-wait.sh` parse is unchanged. A red seen only under the pool should
+   be re-run alone with `SOLEUR_TEST_JOBS=1` before it is treated as a diff regression.
+4. **The pool width is demoted from the runner's environment** next to `export -n TEST_GROUP`
+   (#11939), so a suite that runs a nested `test-all.sh` does not inherit a pool request.
+
+Known limit, stated so the 10-minute goal is not over-read: the self-SUT batteries
+(`scripts/test-all-affected.test.sh`, `ci-pr-affected-replay`, `test-all-infra-coverage-notice`, about
+3,500 s of manifest weight) derive the `lock:test-all` token and therefore run one at a time at any width,
+and the pool queue is strict FIFO, so a blocked head idles the other slots. A diff that edits the runner
+or the affected index selects them, and cannot be brought under 10 minutes by the pool alone. The goal is
+measured on a typical feature diff that does not (AC7 of the plan); the queue behaviour and the heavy
+suites are tracked in #12025.
+
+Not taken: pushing before the local battery (ADR-276 chose local-first as its cheaper policy, and a
+draft `test` is red by design so `battery-owed.sh` returns OWED regardless); an unconditional
+CI-only skip (ADR-196, ADR-183); a suite-result cache (rejected twice, see
+`scripts/lib/test-affected-derive-cache.sh`). Re-evaluation trigger for the first: after the pool
+lands, a typical single-feature gate is still over 10 minutes, or ADR-276 S3's push-count gate (a
+post-policy mean of at least 2.75 pushes per draft PR is what lets S3 proceed) reads below it. Edge
+re-pricing and measured weights for the slowest suites are tracked in #12025.
+
+## Amendment — 2026-11-04 (#12013, #12025)
+
+The pool and the live red line (previous amendment) are merged. This amendment records the measurement #12013 asked for and the re-pricing #12025 deferred. Raw rows live in `knowledge-base/project/specs/archive/20261105-094951-feat-one-shot-12013-12025-affected-gate-reprice/measurements/`; every number below carries the file it came from. The gate readings were taken on 2026-11-04; the selection rates were recomputed on 2026-11-05 (see the pricing ledger).
+
+**Outcome.** The 10-minute bar of #12013 is not met (cold gate about 6522 s). A red reported live and per-suite timings are met. All eight priced suites (the seven named in #12025 plus `image-cve-verdict`) are priced-and-kept, no edge array changed, #12025 is closed by this PR and #12013 stays open. Terms used below: *cold derive* is the first selection derivation in a fresh worktree (no derive cache); *warm derive* is the same with the per-worktree cache populated; *pool width* is how many suites the runner runs at once; *attributable* is a non-empty, evaluable first-parent commit that touches neither the runner nor the affected index; *runner-changed* is one that touches either and degrades the gate to the full battery.
+
+### Measurement: the local gate on a replayed single-feature diff
+
+One reading, taken from a private local clone at the pinned base `8cc167c2e3` (its own git-common-dir, so its own advisory lock and a pool that engages), under eight CPU burners plus whatever the sibling sessions were running. The pick is the web-platform median of the 30 most recent attributable commits (`7af192071d`, 8 files); the pick is an ancestor of the base, so the replay puts each changed path back to its pre-change content, which keeps the path set, the index and the lib untouched.
+
+| Field | Value | Source |
+|---|---|---|
+| Selected suites | 160 of 731 runnable registrations (the model said 159) | `gate-run-1.summary.txt` |
+| Load | 8 burners; 5 sibling runs at start; load average 8.65 at start and 13.6 at the end of the final run (peaking at 34.6 in a reading taken during the earlier attempts; mid-run load was not sampled; session notes, no raw load log committed) | `gate-run-1.summary.txt` |
+| Cold derive | 543 s | first attempt in the clone, `AFFECTED_SUMMARY` at +543 s |
+| Warm derive | 108 s (727 of 731 labels cached) | warm run, `AFFECTED_SUMMARY` at +108 s |
+| Queue wait | 36 ms in the private clone; in the shared worktree the run sat at ticket position 3 behind a sibling full run that had held the lock for 2 h 10 min | gate logs |
+| Warm gate wall | 6087 s (pool width 4; includes the 108 s warm derive) | `gate-run-1.summary.txt` |
+| Cold gate time | 543 + (6087 − 108) = 6522 s | derived |
+| Result | 159 passed, 1 failed (the one red is the `apps/web-platform` vitest suite, explained under AC2), 0 killed | `gate-run-1.summary.txt` |
+
+**Verdict: the 10-minute acceptance of #12013 is not met.** The cold gate took about 109 minutes under this load. Two deviations from the plan are recorded here rather than hidden. First, one reading, not three: the reading takes about 109 minutes and misses the bar by about 10.9x, and a lower bound for the cheapest possible diff under the same load is 543 s of cold derive plus 154 s for the 116 always-on suites (617 s summed, divided by the width of 4), which is 697 s (the bound assumes perfect width-4 parallelism, which finding 1 shows does not hold, and combines numbers from two runs). That floor is a property of this load, not a general one: a planning-time cold derive at load 10 to 19 took 366 s, which with the same 154 s gives at best about 520 s (the same perfect-parallelism floor), under the bar. This is one loaded reading, not a verdict on the goal; the other branch of #12013's acceptance, skipping the local gate with a recorded reason, is untouched. Second, the pool engages only while the run holds the advisory lock, so the reading uses a private lock; the shared-lock wait is a separate observation, above. The private clone and the 1-second lock timeouts used to get a pool reading are a measurement method only: they bypass the cross-worktree advisory lock of ADR-133 (Decision 3) and must not be used in a ship path. A serial run in the shared worktree (the lock gave up, the runner fell back to serial) was stopped at 30 minutes and is not a datum.
+
+**Acceptance AC2 (a red is reported live): met.** The provisional line `[run] apps/web-platform [repo-wide+component] done (rc=1, 202605ms)` with its marker appeared 1271 s into the run; 97 suites had started before it and 64 finished after it; exactly one `[FAIL]` verdict followed at drain (6084 s) and the exit code was 1. The failing suite's log from the first attempt in the same clone shows the load-sensitive real-git push test #12013 recorded (`git-data-replication` F21) plus a roster test that clones a ledger branch the private clone does not have; the warm run's red is the same suite.
+
+**Acceptance AC3 (per-suite timings for every suite): met.** The run's `suite-timings.tsv` holds 160 rows that are not `skip=` (162 less the two run-boundary markers), passing and failing alike (`gate-run-1.suite-timings.tsv`); `gate-run-1.tsv` adds start and end offsets from the live lines.
+
+### What the measurement found
+
+1. **The pool is effectively serial for most of the run.** 78 percent of the suite phase (4636 of 5960 s) had at most one suite running. The data (suite phase 5960 s from first start to last end; 5979 s as warm wall minus warm derive, which is the figure used in the cold-gate total) is consistent with the `lock:test-all` token (the known limit of the 2026-11-03 amendment) plus the strict FIFO queue (`_pj_fill`, read in source): while `ci-pr-affected-replay-a` ran for 1818 s, 46 suites had not started. The three replay arms (`-a`, `-b`, `-c`) took 1818, 835 and 627 s in the pool.
+2. **Cold derive is paid again by every fresh worktree**: 543 s here, which is 8 percent of this cold gate but most of the cost of a diff that selects few edge suites. Not filed: below the 25 percent threshold of the plan; recorded as a lever on #12013.
+3. **The budget includes the queue wait.** `budget_seconds` (2400 in `.soleur-test-gate.json`) counts from the gate's start, so a run queued behind a sibling's full run is deferred (rc 6) without a suite having run. The first attempt in the clone, with the repo's budget, ended deferred at 2400 s with 107 of 160 suites done.
+4. **A budget kill hides a red that was already visible.** In the delegated arm of `plugins/soleur/scripts/affected-tests.sh`, runner rc 124 or 137 maps to rc 6 (deferred) whenever the budget is armed (it is, when a CI workflow is detected), even if a provisional `done (rc=1` line was already printed; the header's own contract says a failure seen before budget expiry wins over deferral. Recorded on #12013 for the next lever; not fixed here. Read rc 6 as **not a pass**: if a `done (rc=1` line was printed before the kill, treat the run as red and re-run the suite named on that line directly (its command is the `SUITE_COMMAND` row of `bash scripts/test-all.sh --enumerate-commands`; `SOLEUR_TEST_JOBS` only sets the pool width and selects nothing); CI's required `test` check remains the only merge gate, so this is a local fail-open and not a merge bypass; and do not raise `budget_seconds` to fit a queued run.
+5. **Edge-selected suites are 93 percent of the suite time in this reading**: 44 edge-selected suites summed 8054 s of the 8671 s of suite time; the 116 always-on suites summed 617 s.
+
+**Supersedes the 2026-11-03 scoping.** The previous amendment's known limit said the self-SUT batteries are selected only when a diff edits the runner or the affected index, and that the 10-minute goal is measured on a typical diff that avoids them. The data above shows the three replay arms are selected on 81 percent of attributable PRs, so a typical diff does not avoid them. The same amendment's re-evaluation trigger (a typical single-feature gate still over 10 minutes after the pool lands) has fired; the re-evaluation is tracked on #12013, which stays open. The previous amendment also says the queue behaviour and the heavy suites are tracked in #12025; since this PR closes #12025, that pointer moves to #12013. The two remedies proposed on #12025 during the #12014 review are carried here so they are not lost with the closed issue: let token-free suites launch behind a blocked queue head, and split the self-SUT batteries' `lock:test-all` token.
+
+### Decision rule for re-pricing (#12025)
+
+Cost of a suite per PR = its selection rate over the attributable commits of the last 100 first-parent commits (74 attributable, 25 runner-changed, 1 empty; the 25 runner-changed commits degrade the gate to the full battery and are reported separately, not counted in the rate) multiplied by its standalone wall time. A narrowing is attempted only when that cost is at least 5 s per PR and the suite's verdict-input set is nameable. `demoted` (moving a suite to CI-only) is not available: it would remove the suite from the set a diff touching its subject files selects, which #12025 forbids. Every disposition is therefore `narrowed` or `priced-and-kept`. A narrowing edits `scripts/lib/test-affected-paths.sh`, and any such edit makes this PR's own gate the full battery, so the edit runs only if the bar is missed and the summed saving of the eligible suites reaches the gap (median cold gate minus 600 s).
+
+The gate did not fire. The eligible suites (`argv-bearer-sweep`, `test-affected-kb-consumers`, `scratch-residue`; eligible here means a cost of at least 5 s per PR has a declared edge array, and is not a `git ls-files` population; `test-affected-kb-consumers` counts as eligible because it reads `knowledge-base/` paths, not because its verdict inputs were shown nameable, which was not established because the upper bound misses the gap by a wide margin anyway) save at most 186 s per PR against a gap of 5922 s (6522 − 600); adding the three replay arms (1806 s per PR) gives 1992 s. The rule compares expected seconds per PR with one loaded reading's gap, so no narrowing alone could satisfy it for this miss; that is a statement about the rule's threshold, not a finding that narrowing is pointless. No edge array was changed in this PR.
+
+### Pricing ledger
+
+Rates are the `existing_hits` column of `glob-rate.tsv` over the 74 attributable units (`python3 -I scripts/ci-pr-affected-replay.py glob-rate --candidates glob-rate-candidates.tsv --commits 100 --base 8cc167c2e3 --spot-check 5 --out <dir>`, which writes `glob-rate.tsv` and `glob-rate.marker`; run in a checkout at the base so the selector's index is the one the rates describe; that index's lib blob sha is `e1cf919485f86d5c70be1f90332fe0502ed2ada8`, the spot-check agreed on 3650 comparisons; the candidates file is one `<suite><TAB>` line per priced suite, so the tool only reports each suite's existing rate, and the `verdict` and `reason` columns of `glob-rate.tsv` carry no meaning for these rows). Walls are standalone, lightly loaded machine (load 2.6 to 8.1, the 56.2 s `lint-orphan-test-suites` row being the 8.1 one; no sibling runs), from `standalone-weights-wave1.tsv` and `standalone-weights-wave2.tsv` (columns: suite, run, rc, wall in ms, load average at start). The committed CI weight is shown for comparison only; `suite-durations.tsv` is a CI-leg table and is not edited by hand.
+
+| Suite | Disposition | Rate | Wall (source) | Cost per PR | Committed CI weight | Evidence |
+|---|---|---|---|---|---|---|
+| `tests/scripts/argv-bearer-sweep` | priced-and-kept | 44/74 (59.5%) | 145.1 s (1 run) | 86 s | 47.0 s | candidate; its subjects are the follow-through probes, but the arithmetic gate did not fire; the recorder could not read it (`audit-suite-reads-check.txt`: unreliable, rc 2 in the no-network sandbox) |
+| `apps/web-platform/test/destroy-ask-mutation` | priced-and-kept | 36/74 (48.6%) | 125.9 s (median of 3: 123.2, 125.9, 139.1; `local-measured`) | 61 s | none (webplat shard has no durations table) | no declared edge array to narrow; derived edges only |
+| `scripts/lint-shell-trace-credential-refusal` | priced-and-kept | 56/74 (75.7%) | 134.2 s (1 run) | 102 s | 108.6 s | whole-tree population: every `*.sh` |
+| `scripts/test-affected-kb-consumers` | priced-and-kept | 67/74 (90.5%) | 85.0 s (1 run) | 77 s | 91.2 s | reads every registered suite's `knowledge-base/` use; whole-tree join; recorder contaminated by `.soleur/` |
+| `scripts/lint-orphan-test-suites` | priced-and-kept | 56/74 (75.7%) | 56.2 s (1 run) | 43 s | 27.2 s | whole-tree population: `git ls-files '*.test.sh'` |
+| `scripts/guard-vacuity-floor` | priced-and-kept | 57/74 (77.0%) | 88.4 s (1 run) | 68 s | 44.9 s | whole-tree population: `git ls-files '*.test.sh'` |
+| `tests/scripts/scratch-residue` | priced-and-kept | 46/74 (62.2%) | 36.6 s (1 run) | 23 s | 26.3 s | candidate; leaves are the directly-run suites; the recorder failed in the sandbox (rc 1) |
+| `scripts/image-cve-verdict` | priced-and-kept | 16/74 (21.6%) | 54.0 s (median of 3: 53.3, 54.0, 55.6; `local-measured`) | 12 s | 1.2 s (`floor`) | no declared edge array: its edges are derived, so there is nothing nameable to narrow |
+
+Observed while pricing, outside the eight labels: the three `ci-pr-affected-replay` arms are the largest edge-selected cost.
+
+| Suite | Rate | Wall (standalone, 1 run) | Cost per PR | Committed CI weight |
+|---|---|---|---|---|
+| `plugins/soleur/test/ci-pr-affected-replay-a` | 60/74 (81.1%) | 1301.3 s | 1055 s | 1033.1 s |
+| `plugins/soleur/test/ci-pr-affected-replay-b` | 60/74 (81.1%) | 479.6 s | 389 s | 399.4 s |
+| `plugins/soleur/test/ci-pr-affected-replay-c` | 60/74 (81.1%) | 446.0 s | 362 s | 326.2 s |
+
+Their edge set (declared plus derived, as the selector prints it) includes the whole `^plugins/soleur/` prefix and `^knowledge-base/project/specs/` (the selector's printed row for `-a`, cut at 900 characters, is committed as `replay-a-edge-row.txt`), which is why they are selected on 81 percent of PRs, and they hold `lock:test-all`, so they also serialize (finding 1). Together they cost 1806 s per PR at an idle machine, four times the seven suites named in #12025 combined (459 s: every ledger row except `image-cve-verdict`). They are the first lever of the next re-pricing; they were not narrowed here because the arithmetic gate did not fire and a prefix this wide hides reads the audit has not enumerated.
+
+**Correction to the brief.** Only `scripts/image-cve-verdict-consumers` is in `ALWAYS_ON_SUITES`. `scripts/image-cve-verdict` is edge-selected (21.6 percent), so no demotion was ever needed to price it; its 1223 ms `floor` row in `suite-durations.tsv` is a CI shard-balancing defect, tracked in #12106.
+
+Next levers, in order (the decision rule above governs only the conditional lib edit of the #12025 re-pricing; these levers are not gated by it): (1) break the serial `lock:test-all` chain: narrow the replay arms' edge set (the first re-pricing target, 1806 s per PR) and, separately, let token-free suites launch behind a blocked head and split the self-SUT token; (2) seed or share the affected-derive cache for fresh worktrees (cold derive was 543 s here; it matters most for diffs that select few edge suites and is not the gate for (1)); (3) make a budget kill report an already-printed red as a failure (finding 4). Re-evaluation: after (1) lands, repeat the measurement; the lib edit is judged at a cold derive and a pool that runs more than one suite for most of the suite phase.
+
+## Amendment — 2026-11-05 (#12013)
+
+Raw rows: `knowledge-base/project/specs/archive/20261106-052833-feat-one-shot-12013-affected-gate-lock-chain/measurements/` (`summary.txt` holds the method and the derived figures; every number below comes from it). Rulings by the CTO agent on 2026-11-05 are in that spec's `decision-challenges.md` (F1 to F5 and two review dissents). This amendment supersedes by reference the previous amendment's "Known limit" paragraph on the serial `lock:test-all` chain and the budget-kill note; it does not rewrite them.
+
+**Outcome.** The 10-minute bar of #12013 is still not met. Three cold readings of the same replayed diff (160 of 733 suites) at commit `3010ff00ca` took 3063 s and 3174 s with backfill and 3291 s for the strict-FIFO control, against 6522 s for the single earlier reading: the gate is about 52 percent faster and about 5.2 times over the bar. #12013 stays open at that measured gap. A budget kill after a red now exits 1 instead of 6.
+
+### What changed
+
+1. **Conservative backfill (`_pj_fill`), default on.** A queued suite launches only if a slot is free, its tokens conflict with no live suite, and they conflict with nothing still queued ahead of it, so suites that share a token keep registration order and a queued `*` still blocks everything after it. One pass over the queue, linear in its length. `SOLEUR_PJ_FIFO=1` restores the previous strict FIFO; it is the A/B control of the measurement, read once, and demoted from the environment of every suite. `_pj_drain` fills until empty so a torn reap cannot strand a queued suite. Unconditional skip-ahead was rejected (it breaks the `*` barrier), as was a default-off knob (no gain without it).
+2. **The three `ci-pr-affected-replay-{a,b,c}` arms carry an explicit empty lane-token set** (their derived set is exactly `lock:test-all`), because each arm runs in its own `mktemp -d` sandbox, never calls the advisory lock and only reads the real tree. `_lane_derive` is split out of `lane_tokens_for` so a guard compares the override with the live classifier. Narrowing the derivation itself (so that other `lock:test-all` holders are freed) was rejected for now: 59 of the 160 selected suites hold the token and a false "mention only" call becomes a deadlock of up to 3600 s.
+3. **The sidecar contract.** `affected-tests.sh` creates a fresh `mktemp` file per run, hands its path to the runner as `SOLEUR_PJ_PROVISIONAL_FILE`, and drops any inherited value before any arm runs. The runner appends `label<TAB>rc<TAB>epoch` for each red it reaps, only for its own `failed` class (`suite_exit_class`: rc 128, 193..255 and unnamed signals are reds; a named signal never is, ADR-177), never in an interrupted run, and demotes the variable from the environment of every suite. On a runner exit of 124 or 137 the gate exits 1 `failed-before-budget` if any record has rc 1..255 and an epoch strictly before the deadline; otherwise it keeps exit 6 `budget-deferred`. The CTO ruled the sidecar over a stderr tee (a tee parses display text that monitors also parse) and, on review, that the writer and the drain verdict share one classifier. Unchanged: a run is still never reported green by this path, and CI's required `test` check remains the only merge gate.
+
+### Measurement
+
+| Reading | Mode | Wall | Cold derive | Suite phase | At most one suite live | `replay-a` start / wall | Load average (start to end) |
+|---|---|---|---|---|---|---|---|
+| baseline (2026-11-04, one reading) | FIFO, replay arms serial | 6522 s | 543 s | 5979 s | 78 percent | late, behind `lock:test-all` | 8 burners plus siblings |
+| r1 | backfill | 3063 s | 335 s | 2728 s | 34 percent | +1511 s / 1549 s | 13.7 to 8.8 |
+| r2 (control) | `SOLEUR_PJ_FIFO=1`, replay arms parallel | 3291 s | 327 s | 2964 s | 55 percent | +1588 s / 1700 s | 8.8 to 9.7 |
+| r3 | backfill | 3174 s | 232 s | 2942 s | 40 percent | +1207 s / 1956 s | 9.5 to 38.2 (a sibling spike at the end) |
+
+What it shows, and its limits:
+
+- **Most of the gain comes from freeing the replay arms and the pool, not from backfill alone.** The control (FIFO, but with the arms already free) is 3291 s; backfill gives 3063 s and 3174 s. The difference of 128 to 228 s (4 to 7 percent) is of the same order as the spread between the two backfill readings (111 s) and the load differences, so it is a direction, not a precise gain. The share of the pool phase with at most one suite live is the sturdier signal: 34 and 40 percent with backfill against 55 percent for the control and 78 percent at baseline.
+- **The suite phase is now close to the packing floor.** The 160 suites' walls sum to 7294, 6437 and 7501 s; divided by the pool width 4 that is 1824, 1609 and 1875 s, against suite phases of 2728, 2964 and 2942 s.
+- **The tail is one suite.** `replay-a` takes 1549 to 1956 s and starts 1207 to 1588 s into the run, because it is late in registration order, so the run ends when it ends. This is the next lever: start the longest suites first (longest-processing-time ordering, or a declared start priority for a small named set), recorded on #12013.
+- **Pool-concurrent walls (not standalone weights).** `replay-a` / `-b` / `-c` took 1549 / 710 / 643 s (r1), 1700 / 697 / 661 s (r2) and 1956 / 790 / 748 s (r3) while sharing the machine with three other suites; the standalone weights of the previous amendment (1301.3 / 479.6 / 446.0 s) stay the pricing basis. No weight in `suite-durations*.tsv` changed.
+- **Lever 3 (derive cache) stays unbuilt.** Cold derive was 10.9, 9.9 and 7.3 percent of the cold gate, under the 25 percent tracker line (the 2026-11-04 amendment's share was 8 percent). Re-measure after each lever lands.
+- **Failures at the measured commit.** `lint-trap-tempfile-ownership` and `grep-q-pipe-guard` failed because of defects in this PR's own new tests at `3010ff00ca`; both were fixed in `34fcc5b27e` and verified standalone. `apps/web-platform [repo-wide+component]` is the known clone artifact. `scratch-residue` failed once (r2) on an unreproduced load flake (232/232 standalone). The gate's three-reading criterion "no new failures across readings" is met for the changed behaviour: the same four suites, or fewer, failed in every reading.
+- **Not claimed:** the 600 s bar, a general speed-up on machines with different load, a result for diffs that select a different suite mix, or that the readings at `3010ff00ca` describe the later commits byte for byte (they changed tests, the sidecar predicate, the FIFO knob's demotion and a de-duplication of the token unions; launch decisions are unchanged).
+
+### Known limits and next levers
+
+- Finished workers are reaped only when the pool saturates or at drain, so a stale token holder can delay later suites until then (pre-existing under FIFO). Follow-up recorded on #12013 with its evidence bar.
+- Edge narrowing for the replay arms (the `^plugins/soleur/` prefix) and narrowing the `lock:test-all` derivation are deferred as #12151 and #12152, blocked on #12110 and its fix.
+- Longest-first ordering (above) and the 2400 s budget counting queue wait are not addressed here.
+- A red that finished before a budget kill but was not yet reaped is not in the sidecar (lazy reap), so that case still reads rc 6, the fail-safe direction.
+
+### Alternatives considered
+
+Unconditional skip-ahead (breaks the `*` barrier); a stderr tee instead of a sidecar (parses display text, process-substitution status hazard); a suite-result memo (rejected twice before); narrowing the token derivation to exec-shaped references (a rough 32 versus 144 classification, deadlock cost); a default-off backfill knob (no measured gain without it); mirroring the signal-name predicate in the gate reader (two copies drift; the writer owns it).
+
+## Amendment — 2026-11-06 (#12246)
+
+Exit 42 of `battery-owed.sh` no longer means only "CI already verified this tree". It also means "the operator declared CI the gate": a `- ci-is-the-gate: <words>` bullet under `## Operator Constraints` in the current branch's `specs/<branch>/session-state.md`, written by `soleur:one-shot` when the brief says to rely on CI (writer contract: `skills/one-shot/references/operator-constraints.md`). Under the token, conditions 1 (dirty tree), 2 (behind main) and 4 (CI state) stand down. The following stay refused: an infra path in the committed diff, the tracked or staged working tree or the untracked files; an unmeasurable diff (UNDECIDABLE); a merge in progress or unmerged paths. `/ship --full` still outranks the token because the Phase 4 dispatch tests `FULL_BATTERY` first. The `## Consequences` description of exit 42 as a CI-evidence (dedup) verdict holds for the no-token path; with a token, 42 is an operator-intent skip that reads no CI state, and its verdict line says so ("operator declared CI the gate ... this script read no CI state"). A non-42 verdict still runs `--affected`, and `--full` still outranks even a SKIPPABLE verdict.
+
+Reconciliation with ADR-196. ADR-196 Decision 1 requires a refusal antecedent to be a condition the runner can observe, and its 2026-10-28 addendum keeps declared inputs (the ambient `SOLEUR_SUBAGENT=1`, an operator-typed `--full`) out of the waitable class. The token runs the other direction, a waiver, so ADR-196 does not govern it directly and the analogy is imperfect: it is a declared antecedent, written by an LLM from the brief and committed on the PR branch. What bounds it is measured or outside the commit: it can only skip a local run whose duplicate gate (`merge_group`, ADR-183 and ADR-276) still runs; the infra surface (#6480), an unmeasurable diff and a merge in progress are measured by git and always refuse; the printed words stay visible in the transcript and the PR Test plan. The token never decides alone.
+
+Skip channels that waive a local battery on the strength of CI or intent now include at least these four: `battery-owed.sh` 42 on CI evidence (the exact SHA is green); `battery-owed.sh` 42 on operator intent (new); `battery-refusal-wait.sh` 42 after a sibling-run refusal (ADR-183 amendment 2026-10-28); and `affected-tests.sh` rc 6 budget deferral.
+
+ADR-276's consumer-record sentence (`battery-owed.sh` reads check conclusions and fails toward stall) holds for the no-token path only. "CI's required `test` is the gate" is read per the ADR-183 amendment 2026-10-14 and ADR-276: `merge_group` is the full-battery authority, and a `pull_request` green may be a reduced run. The token is a hint the same commit can write; what bounds a planted or wrong token is outside the commit (the live ruleset, the merge queue, the arm's infra refusal, the printed words). Rejected alternatives and the CTO rulings are recorded in PR #12246's `decision-challenges.md` (F1, F5, F10, F15-F19), which is archived with the branch under `knowledge-base/project/specs/archive/`. Work Phase 2, review's local gate and the Grok pre-push gate (`grok-pre-push-gate.sh`) do not read the token (#12247).
+
+## Amendment — 2026-11-06 (#12013)
+
+Raw rows: `knowledge-base/project/specs/archive/20261106-151254-feat-one-shot-12013-replay-a-start-priority/measurements/` (`summary.txt` holds the method and every derived figure below). Ruled by CTO agent, 2026-11-06: static start-first registration over a scheduler priority; the `*`-last lever is a separate change; cold readings of one pinned diff in a private clone decide the claim (full text in `decision-challenges.md` beside the measurements).
+
+**Outcome.** The 10-minute bar of #12013 is still not met. One control and one treatment of the same replayed diff (162 of 740 runnable registrations) took 2992 s and 2134 s of wall; the pool phase fell from 2703 s to 1882 s (-821 s). This change is `Ref #12013`; the issue stays open.
+
+### Decision 29: register the replay arms first
+
+In a pooled run, registration order decides the start order of any suite that no token conflict or `*` holds back. `_pj_submit` queues a suite as the registration stream reaches it and `_pj_fill` only chooses among suites already queued; a queued `*` (drain barrier) suite blocks every later launch. The three `ci-pr-affected-replay-{a,b,c}` arms, the longest suites of the gate, were registered at rows 113 to 115 of the 160 suites one pinned diff selected, behind one `*` suite and a long `lock:test-all` chain, and started 1296 s into the pool phase. They now register first, in the first `if want_scripts` block of `scripts/test-all.sh`; labels, argv, gating and verdict order are unchanged and the scheduler is untouched. `scripts/lib/test-suite-lanes.test.sh` section 7 pins the position over the real raw registration stream: each arm exactly once, the whole battery never registered as a plain suite (by label, or by argv without `--rows`), each arm's row at most the pool width, and no `*` row before the last arm. Nothing is asserted about any other suite's order.
+
+### Measurement
+
+| Reading | Wall | Cold derive | Pool phase | `replay-a` start (pool offset) | At most one suite live | Load average (start to end) |
+|---|---|---|---|---|---|---|
+| control (before the edit) | 2992 s | 278 s | 2703 s | +1296 s | 1098 s | 8.4 to 5.7 |
+| treatment (arms first) | 2134 s | 244 s | 1882 s | 0 s | 112 s | 5.7 to 8.7 |
+
+Landed by the criteria recorded before the readings in `decision-challenges.md` (rows Q3 to Q5 and D2): `replay-a` started within 120 s of pool start (0 s); the pool phase is at least 300 s below the control (821 s); no failure the control does not share (both readings fail only `apps/web-platform [repo-wide+component]`, the known clone artifact). Per that protocol the second control was conditional (only if the gain was within 150 s of the bar or the readings looked disturbed) and was not run. Caveats one control cannot remove: the control ran first, so OS caches were warmer for the treatment (cold derive 278 s to 244 s with no code difference); the summed suite walls were 6593 s and 6183 s (about 100 s of pool phase from lower contention alone); the starting load averages were 8.4 and 5.7. The planning-time model predicted -480 to -600 s, and the measured -821 s is one reading above that. Read it as: at least the 300 s bar (the three earlier pool readings of a similar selection were 2728, 2942 and 2964 s), probably 500 to 800 s, not a point estimate. `replay-a` start offsets are from pool start; the end offsets quoted below are from run start. Per-suite start and end rows are in `control1.suites.tsv` and `treatment.suites.tsv`, derived by `derive.sh`, beside `summary.txt`.
+
+### What this does not claim, and what it costs
+
+- The cold gate is about 2.1 ks, still about 3.5 times the 600 s bar. Not claimed: a result for diffs that select a different suite mix, or a two-control confidence band. The model used at planning time predicted -516 to -653 s of pool phase; the measured -821 s is larger and the model-versus-measured start was not re-run for this control.
+- The cold gate can still end in a budget kill: the 2400 s budget includes the derive and the queue wait, and these readings run `test-all.sh` directly, so they never exercised it. The kill now lands on suites queued behind the `*` barrier, and only reaped reds reach the sidecar. The treatment's 2134 s clears the 2400 s budget by 266 s on the lightest sum of suite walls of any reading; the control (2992 s) would have been killed, and applying the planning-time model to the earlier readings gives about 2260 to 2550 s, so a kill stays plausible. `budget_seconds` is not raised.
+- A serial fallback (`lock-not-held`, width 1, `bash<5.1`) now spends the first part of the budget on the three arms (about 2.2 ks standalone) before the roughly 110 cheap suites, so a budget kill in a serial fallback leaves most cheap suites unrun. The hoist is not conditional on pool mode by choice: the enumerate walk resolves its mode silently to serial, so a dispatch-only conditional would put the two walks out of step (`AFFECTED_DIVERGENT`), and passing the mode to the child would add env coupling the CTO ruling avoided. CI shard legs run serially with one arm per leg and no budget, so their total is unchanged; no workflow invokes `--affected`.
+- Serial and pooled runs print verdict blocks in registration order, so the arms' blocks and their `TEST_TIMING_LOG` rows now come first (no consumer is order-sensitive). In positional shard mode (manifest absent or mismatched, `SOLEUR_SHARD_MANIFEST=off`, a local `SCRIPTS_SHARD`) the registrations between the arms' new and old position shift by three ordinals; that affects balance only, and CI uses manifest mode.
+- Every `*` suite now waits for the arms to drain (it runs alone either way). Running the `*` suites last is the next lever, modelled at about a further 300 s and tracked as #12231; it was kept out of this change so the measurement is not confounded.
+
+### Alternatives considered
+
+A scheduler-level priority or weight-ordered buffering (a priority cannot start a suite that is not registered yet; buffering changes streaming and lock-holder stamping, and the committed weights are CI-shard measurements, not pooled walls); a full reorder by measured wall (an oracle, modelled only 70 to 250 s better than hoisting the three arms); hoisting `replay-a` alone (the model shows `-b` and `-c` then start behind the barrier and the gain shrinks by 70 to 490 s); moving the `*` suites last in the same change (confounds the measurement, #12231).
+
+### Known limits and next levers (unchanged by this decision)
+
+Finished workers are reaped only when the pool saturates or at drain (evidence bar on #12013); edge narrowing for the replay arms is #12151 and narrowing the `lock:test-all` derivation is #12152. Both are still deferred. New from the treatment reading: `replay-a` ends at +1765 s but the run ends at +2134 s, and the last suites to finish (`operator-script`, `ship-phase-7-poll-fixtures`, `dev-ledger-parity`) register after the `*` barrier at `test-all-capacity-signal`, so the arms are no longer the tail and #12231 is now the larger lever. The arms are also unbalanced (pooled 1513 s, 570 s and 530 s for 193, 193 and 213 rows), so a pooled run cannot finish before about 252 + 1513 s; rebalancing the `--rows` split by weight is the next lever after that and needs a re-split and a manifest re-pin. The pool-phase floor (sum of walls / 4) is about 1546 s here, so the 600 s bar needs roughly 2.5 times less work, not only better ordering.

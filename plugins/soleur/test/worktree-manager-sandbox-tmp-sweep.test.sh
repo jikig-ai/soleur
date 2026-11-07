@@ -26,6 +26,12 @@ while IFS= read -r var; do
 done < <(env | grep -oP '^GIT_\w+' || true)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP:-}" ]] || rm -rf "$TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"
 
@@ -33,7 +39,6 @@ echo "=== worktree-manager.sh cleanup_stale_sandbox_tmp() sweep ==="
 echo ""
 
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
 
 # --- Source the script inside a valid work-tree so the repo-readiness gate at the
 #     top passes. The BASH_SOURCE==$0 guard means main() does NOT run on source. ---

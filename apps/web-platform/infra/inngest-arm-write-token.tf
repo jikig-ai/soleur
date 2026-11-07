@@ -1,6 +1,10 @@
-# Closes #6369. Read/write Doppler service token for the no-SSH `op=arm`
-# (and the reverse `op=rollback` flip-write) in `.github/workflows/cutover-inngest.yml`.
-# op=arm performs the three arm-flip writes on `soleur-inngest/prd`
+# Closes #6369. Read/write Doppler service token for the no-SSH cutover-flip writes in
+# `.github/workflows/cutover-inngest.yml`. As of #9927 item 8 the verbs that consume it are
+# `op=rollback` and `op=resume` ONLY: `op=arm`, `op=reflush` and `op=luks-cutover` were retired
+# (their flags are terminal `done`) and the inherited-done preflight moved to the read-only
+# DOPPLER_TOKEN_INNGEST_FLIP_READ (inngest-flip-read-token.tf). The paragraphs below describe the
+# original design; where they name a retired verb, read it as history.
+# op=arm (retired) performed the three arm-flip writes on `soleur-inngest/prd`
 # (INNGEST_POSTGRES_URI, INNGEST_HEARTBEAT_URL, then INNGEST_CUTOVER_FLIP=armed LAST)
 # that were previously an out-of-band operator hand-off in op=execute's SEAM
 # (cutover-inngest.yml:607-611). The two SOURCE values are read read-through from
@@ -49,7 +53,7 @@
 #
 # Human ack (D5/C4): a workflow_dispatch alone is only repo `actions:write` — weaker than the
 # Doppler-console credentials the manual arm-write required. The `inngest-cutover` GitHub
-# Environment (below) carries a REQUIRED-REVIEWER protection rule, and the op=arm / op=rollback
+# Environment (below) carries a REQUIRED-REVIEWER protection rule, and the op=rollback / op=resume
 # jobs declare `environment: inngest-cutover`, so the run is held in "Waiting" for reviewer
 # approval BEFORE any step executes — that approval IS the human ack. (The token itself is a
 # repo-level github_actions_secret, not an environment secret, because the TF App cannot write
@@ -66,8 +70,8 @@ resource "doppler_service_token" "inngest_arm_write" {
   access  = "read/write"
 }
 
-# GitHub Environment with a required-reviewer protection rule (D5/C4). The op=arm and
-# op=rollback jobs gate on `environment: inngest-cutover`; the reviewer (the operator) must
+# GitHub Environment with a required-reviewer protection rule (D5/C4). The op=rollback and
+# op=resume jobs gate on `environment: inngest-cutover`; the reviewer (the operator) must
 # approve each dispatch before the environment secret below resolves. reviewers.users takes
 # numeric GitHub user IDs — 54279 = @deruelle (the operator/founder).
 resource "github_repository_environment" "inngest_cutover" {
@@ -113,42 +117,39 @@ resource "github_repository_environment_deployment_policy" "inngest_cutover_main
 # secrets: the first apply failed 403 "Resource not accessible by integration" on
 # `environments/inngest-cutover/secrets/public-key`, while repo secrets (see
 # `github_actions_secret.doppler_token_write`) DO apply cleanly under the same App. So the token is
-# a repo secret and the required-reviewer HUMAN-ACK is preserved a DIFFERENT way: the op=arm /
-# op=rollback JOB declares `environment: inngest-cutover` (the github_repository_environment above),
+# a repo secret and the required-reviewer HUMAN-ACK is preserved a DIFFERENT way: the op=rollback /
+# op=resume JOB declares `environment: inngest-cutover` (the github_repository_environment above),
 # which holds the run in "Waiting" for reviewer approval BEFORE any step executes — independent of
 # where the secret lives. Residual exposure: the token is readable by every workflow (the same
 # exposure class as doppler_token_write, an equally read/write Doppler token).
 #
 # CONSUMERS — keep this list current; the bound stated here is only as true as the list.
-#   1. cutover-inngest.yml:123 — conditional injection
-#      (`(op == 'arm' || 'rollback' || 'resume') && secrets.… || ''`), and those jobs declare
-#      `environment: inngest-cutover` (cutover-inngest.yml:78), so they hold for the reviewer.
+#   1. cutover-inngest.yml — conditional injection for `op == 'rollback' || 'resume'` ONLY (#9927
+#      item 8 retired arm, reflush and luks-cutover), and those jobs declare
+#      `environment: inngest-cutover`, so they hold for the reviewer. These two are the live
+#      break-glass verbs once INNGEST_CUTOVER_FLIP is `done`, which is why this token is not yet
+#      revocable: a replacement write-credential design is tracked on the #9927 follow-up.
 #   2. (RETIRED by #8285 PR B) apply-web-platform-infra.yml, job `inngest_backstop_retire` (converted
 #      from `inngest_volume_recut` by #8285) — unconditional injection, but that job declared
 #      `environment: inngest-cutover`, so the human ack gated it. The job no longer exists; the item
 #      keeps its number so the references below stay valid.
-#   3. apply-web-platform-infra.yml, job `inngest_host_replace`, the #7228 inherited-`done`
-#      preflight (added 2026-09-17) — UNCONDITIONAL injection. Still the FIRST resolution site
-#      with neither of the two bounds above, and still the residual this comment is about.
-#      AMENDED 2026-09-23 (#8209, ADR-241 D2): the "job with NO `environment:` key" clause is
-#      no longer true — that job now declares `environment: infra-privileged`. That is NOT a
-#      third bound: the environment has no reviewers by design, so nothing human gates it. What
-#      it adds is branch reach — the deployment-branch policy admits `main` only, so the
-#      injection is unreachable from a dispatch on any other ref.
+#   3. (RETIRED by #9927 item 8) apply-web-platform-infra.yml, job `inngest_host_replace`, the #7228
+#      inherited-`done` preflight. It now reads INNGEST_CUTOVER_FLIP with the read-only
+#      DOPPLER_TOKEN_INNGEST_FLIP_READ (inngest-flip-read-token.tf) and FAILS CLOSED without it, so
+#      revoking this token no longer disables that guard. The earlier amendments to this item (the
+#      2026-09-17 addition and the 2026-09-23 #8209 / ADR-241 D2 note that the job declares
+#      `environment: infra-privileged`) are superseded by the retirement.
 #
-# An earlier revision of this comment asserted the residual was "bounded by the conditional
-# injection … and the post-cutover revoke". Consumer 3 falsifies the first half, and this file
-# is not in that PR's diff, which is exactly why the claim went unre-read. Corrected rather than
-# left standing: a comment that overstates a control teaches the next reader the wrong bound.
+# The remaining residual is consumer 1: a read/WRITE credential on the whole soleur-inngest/prd config
+# that is readable by every workflow, bounded by the reviewer gate on the two verbs that use it.
+# RE-EVAL TRIGGER: a replacement write-credential design for rollback/resume, after which this token
+# is revoked by its owner (not by CI).
 #
-# What consumer 3 actually needs is ONE read of ONE key. What it carries is read/WRITE on the
-# whole soleur-inngest/prd config. The proportionate fix is a second, `access = "read"` service
-# token (`doppler_service_token` supports it) published as DOPPLER_TOKEN_INNGEST_FLIP_READ and
-# consumed there instead — which also survives the post-cutover revoke below, where consumer 3
-# otherwise degrades silently and permanently into its "read failed" branch. Tracked as a
-# follow-up because minting and publishing a new service token is a provisioning change with its
-# own apply, not a review edit. RE-EVAL TRIGGER: whichever comes first — the post-cutover revoke
-# of this token, or a FOURTH consumer being added.
+# NOT THE SAME THING as doppler_service_token.inngest_flip (inngest-host.tf), whose name now sits
+# close to FLIP_READ in the eye: that one is the ON-HOST read/WRITE flip credential, written to
+# /etc/default/inngest-flip and consumed as an EnvironmentFile only by inngest-cutover-flip.service, and it is NEVER published
+# to a github_actions_secret. DOPPLER_TOKEN_INNGEST_FLIP_READ is the CI-side READ token that replaced
+# this token for the preflight (former consumer 3).
 #
 # Upgrade back to an environment secret if the App is later granted
 # environment-secret write. NO lifecycle.ignore_changes → a `-replace` rotation of the token

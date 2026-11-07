@@ -2,12 +2,17 @@
 """One proxy session for the suite (#7980). stdlib only.
 
     proxy-session-driver.py --out <dir> --proxy <proxy.py> --server <argv...>
-        [--proxy-arg <arg>]... [--env K=V]... [--send <json-line>]... [--end eof|sigterm|sigkill|killchild|none] [--timeout S]
+        [--proxy-arg <arg>]... [--env K=V]... [--send <json-line>]... [--end eof|sigterm|sigkill|killchild|none] [--timeout S] [--expect-death]
 
 Launches `python3 <proxy.py> <proxy-arg...> -- <server argv...>` in a NEW SESSION (so the
 proxy's own pid is the group we assert on for a SIGKILLed proxy), writes each
 --send line, reads until every sent request id has a reply or the timeout
-lapses, then ends the session per --end and waits. Writes into <out>:
+lapses, then ends the session per --end and waits. With --expect-death the proxy is
+expected to die at startup: the reply-wait phase is skipped (a stalled startup must
+not burn a deadline window waiting for a reply that never comes) and the post-`--end`
+wait is bounded by EXPECT_DEATH_TIMEOUT_S, so a slow-but-correct death records its real
+exit code instead of "TIMEOUT". Under --expect-death, --timeout still applies to the
+group_after poll but is inert for the death wait. Writes into <out>:
   stdout.bin   every byte the proxy wrote          responses.json  parsed objects
   stderr.txt   proxy + server stderr               rc              proxy exit code
   child_pgid   the pgid the proxy logged (or "")
@@ -28,8 +33,11 @@ import time
 from pathlib import Path
 
 
+EXPECT_DEATH_TIMEOUT_S = 30
+
+
 def parse(argv):
-    o = {"env": {}, "send": [], "end": "eof", "timeout": 8.0, "out": None, "proxy": None, "proxy_args": [], "server": []}
+    o = {"env": {}, "send": [], "end": "eof", "timeout": 8.0, "out": None, "proxy": None, "proxy_args": [], "server": [], "expect_death": False}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -40,6 +48,7 @@ def parse(argv):
         elif a == "--send": o["send"].append(argv[i + 1]); i += 2
         elif a == "--end": o["end"] = argv[i + 1]; i += 2
         elif a == "--timeout": o["timeout"] = float(argv[i + 1]); i += 2
+        elif a == "--expect-death": o["expect_death"] = True; i += 1
         elif a == "--server": o["server"] = argv[i + 1:]; break
         else: sys.stderr.write(__doc__); sys.exit(2)
     if not (o["out"] and o["proxy"] and o["server"]): sys.stderr.write(__doc__); sys.exit(2)
@@ -93,7 +102,7 @@ def main():
                     objs.append({"__unparsable__": line.decode("utf-8", "replace")})
             return True
 
-        while want - got and time.monotonic() < deadline and p.stdout in [k.fileobj for k in sel.get_map().values()]:
+        while not o["expect_death"] and want - got and time.monotonic() < deadline and p.stdout in [k.fileobj for k in sel.get_map().values()]:
             if pump(True) is None: break
         while sel.get_map() and pump(False): pass
         err.flush()
@@ -110,8 +119,10 @@ def main():
                 os.killpg(int(child_pgid), signal.SIGTERM)
         elif o["end"] == "sigkill":
             os.kill(p.pid, signal.SIGKILL)
-        # drain anything the proxy still says, then wait for it
-        t_end = time.monotonic() + o["timeout"]
+        # drain anything the proxy still says, then wait for it. An expect-death
+        # session is bounded by the death budget, not --timeout: a slow-but-correct
+        # startup death must record its real rc, never the deadline's TIMEOUT.
+        t_end = time.monotonic() + (EXPECT_DEATH_TIMEOUT_S if o["expect_death"] else o["timeout"])
         while time.monotonic() < t_end:
             if p.poll() is not None: break
             with contextlib.suppress(Exception):

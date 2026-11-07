@@ -143,6 +143,26 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
 ```
 
+## Task Design
+
+```yaml
+# Required when the plan creates a NEW autonomous-task surface — see the Detection table
+# in plugins/soleur/skills/plan/references/task-design-gate.md (any new
+# .github/workflows/*.yml, new Inngest function file/registration, CHECK_REGISTRY or
+# reminder arm, pg_cron, host cron.d/.timer, setInterval daemon, TF-emitted workflow).
+# Create-time only — no retrofit onto existing tasks.
+tasks:
+  - task:            # name/slug of the autonomous task being created
+    trigger:         # what fires it — cron / event / label / dispatch / upstream run
+    services:        # services or data surfaces it reads from and writes to
+    next:            # what it triggers next ("nothing" is a valid answer)
+    human_reentry:   # how a human resumes, redirects or stops it mid-run
+    dedupe:          # mechanism preventing semantic double-work — MUST name something beyond
+                     # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
+    source_dedupe:   # how the ticket source dedupes this task, or the literal "not a ticket source"
+  # one `- task:` list item per created task
+```
+
 ## Guard Contract
 
 Required when the deliverable includes a guard, gate, lint, drift-check or
@@ -376,6 +396,26 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   tracking_issue:     # #N — REQUIRED. Never silence.
   reevaluate_when:    # the concrete condition that reopens the decision
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
+```
+
+## Task Design
+
+```yaml
+# Required when the plan creates a NEW autonomous-task surface — see the Detection table
+# in plugins/soleur/skills/plan/references/task-design-gate.md (any new
+# .github/workflows/*.yml, new Inngest function file/registration, CHECK_REGISTRY or
+# reminder arm, pg_cron, host cron.d/.timer, setInterval daemon, TF-emitted workflow).
+# Create-time only — no retrofit onto existing tasks.
+tasks:
+  - task:            # name/slug of the autonomous task being created
+    trigger:         # what fires it — cron / event / label / dispatch / upstream run
+    services:        # services or data surfaces it reads from and writes to
+    next:            # what it triggers next ("nothing" is a valid answer)
+    human_reentry:   # how a human resumes, redirects or stops it mid-run
+    dedupe:          # mechanism preventing semantic double-work — MUST name something beyond
+                     # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
+    source_dedupe:   # how the ticket source dedupes this task, or the literal "not a ticket source"
+  # one `- task:` list item per created task
 ```
 
 ## Guard Contract
@@ -626,6 +666,26 @@ exception:            # present ONLY when mechanism is plaintext-exception OR ce
   tracking_issue:     # #N — REQUIRED. Never silence.
   reevaluate_when:    # the concrete condition that reopens the decision
   expires_on:         # YYYY-MM-DD — <=90 days out; Layer A FAILs an expired exception
+```
+
+## Task Design
+
+```yaml
+# Required when the plan creates a NEW autonomous-task surface — see the Detection table
+# in plugins/soleur/skills/plan/references/task-design-gate.md (any new
+# .github/workflows/*.yml, new Inngest function file/registration, CHECK_REGISTRY or
+# reminder arm, pg_cron, host cron.d/.timer, setInterval daemon, TF-emitted workflow).
+# Create-time only — no retrofit onto existing tasks.
+tasks:
+  - task:            # name/slug of the autonomous task being created
+    trigger:         # what fires it — cron / event / label / dispatch / upstream run
+    services:        # services or data surfaces it reads from and writes to
+    next:            # what it triggers next ("nothing" is a valid answer)
+    human_reentry:   # how a human resumes, redirects or stops it mid-run
+    dedupe:          # mechanism preventing semantic double-work — MUST name something beyond
+                     # `concurrency: group:` (it serializes overlapping RUNS, not the work itself)
+    source_dedupe:   # how the ticket source dedupes this task, or the literal "not a ticket source"
+  # one `- task:` list item per created task
 ```
 
 ## Guard Contract

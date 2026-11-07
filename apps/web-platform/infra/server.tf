@@ -422,15 +422,32 @@ resource "hcloud_server" "web" {
     # only /hooks/deploy fans out, so deploy-status, infra-config (a WRITE) and ssh. all
     # land coin-flipped. One connector ⇒ deterministic by construction.
     #
-    # The predicate is `each.key == "web-1"` — the in-file idiom (`name` above, `host_name`
+    # The predicate is `each.key == "web-2"` — the in-file idiom (`name` above, `host_name`
     # below) — NOT a variable. A knob here would look like a promotion switch and isn't:
     # `web["web-1"]` is pinned 23 times across 5 files (`grep -c 'web\["web-1"\]' *.tf`:
     # server.tf 15 provisioner/attachment hosts, outputs.tf 4, placement-group.tf 2,
-    # dns.tf 1 (the app A record), ci-ssh-key.tf 1). Promotion must move all of them in
-    # lockstep; a lone connector flip would put the connector on web-2 while the A record
-    # still points at web-1 — ingress split, at 3am. The coupling is recorded in ADR-068.
-    # (No load balancer exists yet — ADR-068 §(c)'s LB weight is future-tense, so it is NOT
-    # part of this coupling today. Fold it in when the LB actually lands.)
+    # dns.tf 1 (the app A record), ci-ssh-key.tf 1) and stays pinned — the A record
+    # still points at web-1 BY DESIGN.
+    #
+    # Why the connector lives on web-2 permanently: the connector role must sit on a
+    # REPLACEABLE host, and web-1 is not one. `web-host-replace` refuses web-1 by name
+    # (LUKS-pinned — hcloud_volume_attachment.workspaces_luks.server_id is hardcoded to it
+    # and carries prevent_destroy; ADR-148, tracker #6964) and in-place host mutation is
+    # forbidden, so web-1 could never carry a binary security fix such as the cloudflared
+    # >= 2026.10.2 eMudhra remediation. web-2 is the cattle standby the replace dispatch
+    # was built for — a fresh web-2 renders this flag and installs the pinned cloudflared
+    # .deb at birth. When web-1's eventual #6964 replacement lands it will NOT re-acquire
+    # the connector.
+    #
+    # The old ingress-split objection to moving the connector does not apply: all three
+    # tunnel ingress services are origin-RELATIVE to private IPs (tunnel.tf — deploy.→
+    # ${web_hosts["web-1"].private_ip}:9000, ssh.→…:22, registry.→10.0.1.30:5000), so a
+    # connector on web-2 proxies to web-1's services over the private net; ADR-114 I1's
+    # single-connector invariant is unchanged (still exactly one). The ADR-068 A-record
+    # coupling concern was about the connector following the A record — it does not have
+    # to, once ingress is origin-relative. (No load balancer exists yet — ADR-068 §(c)'s
+    # LB weight is future-tense, so it is NOT part of this coupling today. Fold it in
+    # when the LB actually lands.)
     #
     # `tunnel_token` above stays in this map unconditionally and is NOT ternary'd to "":
     # templatefile pre-checks expr.Variables() across BOTH branches of the `if` directive, so
@@ -438,7 +455,7 @@ resource "hcloud_server" "web" {
     # from this one — web-1 rendering gate-on with an empty token would `service install `,
     # fail the readiness poll, and boot the LIVE host with deploy+ssh+registry dark. One
     # predicate, one place.
-    web_tunnel_connector = each.key == "web-1"
+    web_tunnel_connector = each.key == "web-2"
     # webhook_deploy_secret stays: hooks.json is no longer rendered into user_data, but the
     # secret is injected at boot into the extracted hooks.json.tmpl (small, ~64 B).
     webhook_deploy_secret = var.webhook_deploy_secret
@@ -595,6 +612,8 @@ resource "hcloud_server" "web" {
   # applies — unwedging #5887 with ZERO reboot. web-2 was born INTO the group at
   # create time, so this defers ONLY web-1. REMOVE this entry in the GA maintenance-
   # window PR as its FIRST diff, then take the reboot on a drained host (blue-green).
+  # The same removal must update the vector_out_of_scope_changes allow-set
+  # (knowledge-base/engineering/operations/runbooks/vector-redeliver.md).
   # Guarded by plugins/soleur/test/terraform-target-parity.test.ts so it is not
   # dropped silently.
   #
@@ -611,8 +630,12 @@ resource "hcloud_server" "web" {
   # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
   # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user
   # incident. SHAPE-ONLY (prints requires_runtime_bind_probe=true) so exit 0 is NOT weight authorization.
-  # Committed-config anti-pooling (dns.tf web-1-only, connector excludes web-2, no LB pools web-2) is
-  # Condition C in lb-weight-gate.test.sh. See ADR-068 §(c) + ADR-143 + moved-block-wedge-cutover-5887.md §Scope B.
+  # Committed-config anti-pooling (dns.tf web-1-only, no LB pools web-2) is
+  # Condition C in lb-weight-gate.test.sh. The tunnel connector on web-2
+  # (web_tunnel_connector above) is management-plane ingress for deploy./ssh./registry.
+  # only — it proxies to the origin-relative private IPs and puts NO app.soleur.ai
+  # serving weight on web-2, so it is not pooling. See ADR-068 §(c) + ADR-143 +
+  # moved-block-wedge-cutover-5887.md §Scope B.
   lifecycle {
     ignore_changes = [user_data, ssh_keys, image, placement_group_id]
 
@@ -2271,7 +2294,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     # DEPLOY_PIPELINE_FIX_TRIGGERS array + DPF_REGEX + the gate test.
     file("${path.module}/inngest-registry-probe.sh"),
     file("${path.module}/inngest-doublefire-probe.sh"),
-    # #6780 — the five dedicated-host carriers (the ADR-135 refresh set). Webhook-
+    # #6780 — the four dedicated-host carriers (the ADR-135 refresh set). Webhook-
     # delivered so FILE_MAP/payload stay consistent; on web hosts they are inert
     # /usr/local/bin files. Registered here so a body-only edit re-fires the push,
     # same #5492 rationale. Lockstep: DEPLOY_PIPELINE_FIX_TRIGGERS + DPF_REGEX + the
@@ -2280,7 +2303,6 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/inngest-cutover-flip.sh"),
     file("${path.module}/inngest-server-flip-guard.sh"),
     file("${path.module}/cat-inngest-cutover-state.sh"),
-    file("${path.module}/inngest-luks-cutover.sh"),
     # #5934 — the privileged char-device config.lock substrate sweep is
     # webhook-delivered (push-infra-config.sh payload + FILE_MAP + DEST_SPEC), so a
     # body-only edit must re-fire deploy_pipeline_fix to reach /usr/local/bin (same
@@ -2968,6 +2990,99 @@ resource "terraform_data" "cron_egress_firewall" {
   }
 }
 
+# Host sysctl net.ipv4.ip_nonlocal_bind=1 for the session-relay publish (#12167 PR-G).
+# The web container publishes `-p "${PROXY_BIND:-127.0.0.1}:8443:8443"` with PROXY_BIND set to the
+# host's Hetzner PRIVATE address (10.0.1.x). That NIC is a post-boot hot attach (cloud-init.yml,
+# RequiredForOnline=no) and nothing orders docker.service after it, so on a reboot a publish on a
+# not-yet-configured IP makes docker-proxy fail to bind and the WHOLE container (80/443/3000 too)
+# fails to start. With ip_nonlocal_bind=1 docker-proxy can bind the absent address, DNAT matches
+# once the lease lands, and the source IP is preserved (the peer allowlist keeps working).
+# systemd-sysctl runs in sysinit, before docker.service, so the boot-time file is enough.
+#
+# THREE COPIES OF ONE FILE, pinned byte-for-byte by nonlocal-bind-sysctl.test.sh: this resource
+# (web-1: cloud-init is frozen, ignore_changes=[user_data]), nonlocal_bind_sysctl_web2 below, and the
+# cloud-init.yml write_files entry (fresh hosts). Shape mirrors cron_egress_firewall: config_hash
+# folds the delivered file, server_id re-fires on a replaced VM (hr-fresh-host-provisioning).
+# The final remote-exec applies the value NOW (no reboot) and reads it back — `sysctl -w` exiting 0
+# is not proof the kernel holds 1, so the assertion fails the apply loudly if it does not.
+resource "terraform_data" "nonlocal_bind_sysctl" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/99-soleur-nonlocal-bind.conf"),
+    ]))
+    server_id = hcloud_server.web["web-1"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-1"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_1_ssh_host_key
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/99-soleur-nonlocal-bind.conf"
+    destination = "/etc/sysctl.d/99-soleur-nonlocal-bind.conf"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "chmod 0644 /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "grep -qx 'net.ipv4.ip_nonlocal_bind=1' /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "sysctl -w net.ipv4.ip_nonlocal_bind=1",
+      "test \"$(sysctl -n net.ipv4.ip_nonlocal_bind)\" = '1' || { echo 'FATAL: net.ipv4.ip_nonlocal_bind is not 1 after sysctl -w' >&2; exit 1; }",
+    ]
+  }
+}
+
+# Same delivery to the RUNNING web-2 (#12167 PR-G). web-2's cloud-init is frozen too, so without
+# this twin a running web-2 gets the sysctl only on its next -replace. Reached over the web-1
+# bastion forward that apply-web-platform-infra.yml's SSH stage opens (as for journald_persistent_web2).
+# Identical artifact and commands; only the host identity differs. Carries no credential material
+# (web-host-provisioner-parity.test.sh W2_CRED_RE).
+resource "terraform_data" "nonlocal_bind_sysctl_web2" {
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/99-soleur-nonlocal-bind.conf"),
+    ]))
+    server_id = hcloud_server.web["web-2"].id
+  }
+
+  connection {
+    type        = "ssh"
+    host        = hcloud_server.web["web-2"].ipv4_address
+    user        = "root"
+    private_key = var.ci_ssh_private_key         # null in operator-local context
+    agent       = var.ci_ssh_private_key == null # agent locally, explicit key in CI
+    host_key    = local.web_2_ssh_host_key
+    # #8706 rule: %RAND% in script_path — a collision with an earlier provisioner run's
+    # copied script body would replay STALE commands under a fresh hash.
+    script_path = "/root/tf-nonlocal-bind-sysctl-web2-%RAND%.sh"
+    # web-2's SSH route is slow (~70s per dial); two dials here.
+    timeout = "10m"
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/99-soleur-nonlocal-bind.conf"
+    destination = "/etc/sysctl.d/99-soleur-nonlocal-bind.conf"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "set -e",
+      "chown root:root /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "chmod 0644 /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "grep -qx 'net.ipv4.ip_nonlocal_bind=1' /etc/sysctl.d/99-soleur-nonlocal-bind.conf",
+      "sysctl -w net.ipv4.ip_nonlocal_bind=1",
+      "test \"$(sysctl -n net.ipv4.ip_nonlocal_bind)\" = '1' || { echo 'FATAL: net.ipv4.ip_nonlocal_bind is not 1 after sysctl -w' >&2; exit 1; }",
+    ]
+  }
+}
+
 # Egress gateway delivery to the RUNNING web-1 (#9534). Fresh hosts get the
 # gateway via the baked set + cloud-init runcmd; web-1's cloud-init is frozen
 # (ignore_changes = [user_data]), so this provisioner is the sanctioned path.
@@ -3051,6 +3166,8 @@ resource "terraform_data" "egress_gateway" {
 #     (the Source-4 tag allowlist; without it a running web-2 ships only the
 #     tags its birth config knew — measured 2026-10-12: egress-gw-probe emitted
 #     to the journal every 5 min and dropped at the Vector filter for days)
+#   terraform_data.nonlocal_bind_sysctl_web2 — /etc/sysctl.d/99-soleur-nonlocal-bind.conf
+#     + `sysctl -w` now (#12167 PR-G; the private-NIC publish must survive a reboot)
 # Everything else reaches a running web-2 only via -replace (birth set) or
 # not at all by role. web-host-provisioner-parity.test.sh forces every new
 # web-1 SSH provisioner through this classification — add the twin here or

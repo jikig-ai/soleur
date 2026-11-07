@@ -3,24 +3,30 @@
 #
 # Asserts the committed knowledge-base/engineering/architecture/diagrams/
 # model.likec4.json is byte-identical to a fresh render of the .c4 sources with
-# the pinned likec4@1.50.0 CLI. This is the merge-contract backstop to the
+# the pinned likec4@1.60.0 CLI. This is the merge-contract backstop to the
 # c4-model-regenerate pre-commit hook (which is bypassable with --no-verify):
 # if any .c4 edit landed without regenerating the artifact, this test FAILS and
 # tells the author exactly how to fix it.
 #
 # Auto-discovered by the `scripts` group glob in scripts/test-all.sh and run in
-# the `test-scripts` CI shard, which installs likec4@1.50.0 (see
+# the `test-scripts` CI shard, which installs likec4@1.60.0 (see
 # .github/workflows/ci.yml, mirroring the gitleaks-install precedent). Renders
 # via plugins/soleur/scripts/render-c4-model.sh --out <temp> — the one renderer, which the
 # hook reaches through the scripts/regenerate-c4-model.sh wrapper and the merge resolver
 # runs directly — so no two of them can disagree on what "fresh" means.
 #
-# Locally (no global likec4), `npx -y likec4@1.50.0` downloads the pinned CLI on
+# Locally (no global likec4), `npx -y likec4@1.60.0` downloads the pinned CLI on
 # first run; CI's global install only warms npx's download cache.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP:-}" ]] || rm -rf "$TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -38,7 +44,6 @@ if [[ "$FAIL" -gt 0 ]]; then
 fi
 
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
 FRESH="$TMP/fresh.likec4.json"
 
 # Render + validate via the shared primitive (off-tree, never touches the tree).

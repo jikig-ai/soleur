@@ -18,7 +18,7 @@
 // drifts across patch versions — correct for a RUNTIME save path that cannot
 // pin the CLI (its element/view COUNT gates are identical to this module's).
 // This
-// producer pins `likec4@1.50.0` (asserted by a drift guard against both
+// producer pins `likec4@1.60.0` (asserted by a drift guard against both
 // precedents), so the wording is fixed and both gates are safe. That pin is load
 // bearing: if it moves, the diagnostic gate is the thing that breaks.
 //
@@ -35,13 +35,13 @@ import { join } from "node:path";
  * plugins/soleur/scripts/render-c4-model.sh and the `likec4@…` pin in
  * apps/web-platform/server/c4-render.ts — a drift guard asserts all three.
  */
-export const LIKEC4_VERSION = "1.50.0";
+export const LIKEC4_VERSION = "1.60.0";
 
 /**
  * `--before` cutoff for the `npx` resolve. MUST stay equal to `LIKEC4_BEFORE` in
  * plugins/soleur/scripts/render-c4-model.sh (BUMPING LIKEC4 there) — a drift guard asserts it.
  */
-export const LIKEC4_BEFORE = "2026-09-28";
+export const LIKEC4_BEFORE = "2026-10-16";
 
 /** Provenance stamp. A file without this as its FIRST line is never overwritten. */
 export const GENERATED_HEADER =
@@ -49,7 +49,7 @@ export const GENERATED_HEADER =
 
 /**
  * Source-fault detector, behaviourally equivalent to `DIAG_RE` in
- * plugins/soleur/scripts/render-c4-model.sh. likec4@1.50.0 exits 0 on a syntax error —
+ * plugins/soleur/scripts/render-c4-model.sh. likec4@1.60.0 exits 0 on a syntax error —
  * it drops the bad fragment, prints `Invalid <file>` / `Line N:`, and still emits
  * a non-empty but INCOMPLETE model, which element-count alone cannot see.
  *

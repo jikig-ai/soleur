@@ -107,12 +107,10 @@ export const cronDevMigrationDrift = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "15 */6 * * *" },
+      { event: "cron/dev-migration-drift.manual-trigger" },
+    ],
   },
-  [
-    { cron: "15 */6 * * *" },
-    { event: "cron/dev-migration-drift.manual-trigger" },
-  ],
-  cronDevMigrationDriftHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronDevMigrationDriftHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

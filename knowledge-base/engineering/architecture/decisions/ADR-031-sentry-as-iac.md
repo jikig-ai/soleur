@@ -1170,6 +1170,31 @@ now has a monitor.**
 - **Revisit when** pending route PRs pile up: a live-to-live `detectorIds` check in the fidelity
   probe would retire the two-PR rule.
 
+**Amendment (2026-10-29, #6590 / feat-observability-vendor-eval) — monitor-per-cron is replaced
+by monitored-where-silence-is-undetectable.** The original monitor-per-cron policy (accepted
+2026-05-15, closing the "35 scheduled workflows with zero did-it-run detection" gap) overshot:
+67 monitors at $0.78/seat ≈ $51/mo PAYG on a ~$84 bill, for a product with ~1 active user.
+The #6591 telemetry pass (this amendment's evidence base, `monitor-prune-inventory.md`) shows
+most seats guard crons whose silence is already visible — artifact-producing content/machinery
+crons, muted monitors, and surfaces covered by downstream Better Stack journald pagers.
+
+- **New policy.** A `sentry_cron_monitor` is declared only where the cron's *silence* is
+  undetectable elsewhere AND dangerous: substrate/watchdog/wake-path monitors, product-function
+  host crons, and security lines. A cron that fails loudly throws to Sentry errors for free; a
+  cron whose missed run is visible in artifacts (reports, digests, filed issues) or covered by a
+  downstream pager does not earn a seat. New-cron monitors are opt-in per risk, not automatic.
+- **Executed scope.** 67 → 24 routed monitors after the PR-A unbind (declared count stays 67 until the PR-B destroy); the 43 pruned labels are inventoried with
+  per-row surviving-signal citations in
+  `knowledge-base/project/specs/feat-observability-vendor-eval/monitor-prune-inventory.md`.
+  Removal follows the two-PR rule: PR-A unbinds via `cron_monitor_alert_unrouted` (this PR);
+  PR-B destroys the resources with the README-listed removal edits.
+- **Hard constraints honoured.** `scheduled_github_app_drift_guard` retained (Art. 33 latency
+  primitive, register-cited); muted `scheduled_anthropic_credit_probe` retained because its
+  checkin stream feeds `sentry_alert.anthropic_credit_exhausted`.
+- **Re-evaluation.** Re-widen coverage when real multi-user traffic exists or the monitor count
+  re-accretes past ~60 (#6590's own revisit criterion), and prune again on any future
+  `single-user incident` cost regression.
+
 ## Consequences
 
 ### Positive

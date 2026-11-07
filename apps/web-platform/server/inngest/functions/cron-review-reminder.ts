@@ -109,12 +109,10 @@ export const cronReviewReminder = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 0 1 * *" },
+      { event: "cron/review-reminder.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 0 1 * *" },
-    { event: "cron/review-reminder.manual-trigger" },
-  ],
-  cronReviewReminderHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronReviewReminderHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

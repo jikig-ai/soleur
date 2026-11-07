@@ -220,12 +220,6 @@ variable "git_data_server_type" {
   }
 }
 
-variable "git_data_volume_size" {
-  description = "Size of the git-data bare-repo block volume in GB (Hetzner minimum is 10 GB). The bare repos + the per-(workspace,worktree) fence sidecar/lock live here — never tmpfs (reboot-durable fence)."
-  type        = number
-  default     = 10
-}
-
 # --- #6122 (ADR-096) — the self-hosted zot registry host ---
 variable "registry_server_type" {
   description = "Hetzner server type for the zot registry host. HOST ARCH IS DERIVED FROM THIS (zot-registry.tf local.registry_arch): `cax*` (Ampere) → arm64, anything else (`cx*`/`cpx*`/`ccx*`) → amd64. A store-and-serve registry never RUNS the amd64 platform images it holds, so arch is functionally neutral — but the derivation is NOT: it selects local.zot_image between two DISTINCT OCI repositories, so an arch flip darks the sole pull path (ADR-169). Recorded via ops-advisor. HISTORY: #6288 attempted cx23→cx32 (8 GB) for OOM headroom, but **cx32 does not exist in the Hetzner catalog** (the plan's ~€6.80 figure was for a phantom type) → the registry-host-replace apply DESTROYED the old nbg1 host then failed `server type cx32 not found`. #6288 migrated the registry nbg1→**hel1** and bumped cx23→cx33 for OOM headroom; #6497/#6463 (2026-07-16) reverted to **cx23** (4 GB, ~€5.49/mo) after live telemetry showed the 8 GB was never needed (37 MB steady) and the OOM diagnosis was never confirmed. REPINNED cx23 → **cpx22** 2026-08-06 (#7309) for RECREATE SURVIVABILITY, not sizing or price — see the block comment below; cpx22 matches cx23 exactly on cores and RAM (2c/4g) and doubles local disk (40→80 GB), so nothing derived from this var moves. hel1 is where the rest of the fleet lives. cpx22 is amd64 (does NOT start with `cax`) → local.registry_arch unchanged. The zot store is a disposable GHCR MIRROR on a separate volume — the fresh host re-fills on the next CI dual-push. The window is NOT non-release-blocking: #7071 retracted the host->GHCR fallback (read PAT revoked 401, minter disabled 403 DENIED), so nothing pulls from GHCR while the store is empty — already-running containers keep serving and any restart cannot pull. THE CAP FOLLOWS THIS VAR — do not assume 7168m: zot's ADR-062 cgroup cap is DERIVED as `memory × 1024 − 1024` (zot-registry.tf local.registry_memory_cap_mb, read from the live Hetzner catalog), so it is 7168m on an 8 GB type and 3072m on any 4 GB type. It was formerly a hardcoded 7168m literal with no edge to this variable, which meant changing this var to a 4 GB type left a cap that can never bind on 4096m of RAM — silently the UNCAPPED condition that caused #6288. That is fixed; the host also self-reports zot_memory_capped + zot_memory_cap_mb so a gate can no longer assume the cap either."
@@ -322,7 +316,7 @@ variable "registry_volume_size" {
 
 # --- Epic #5274 Phase 3, Sub-PR 3.D (ADR-068) — LUKS-at-rest cutover volume ---
 variable "git_data_luks_volume_size" {
-  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf; the LUKS cutover target, #8211). >= git_data_volume_size so the plaintext repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
+  description = "Size of the FRESH LUKS-at-rest git-data volume in GB (Hetzner minimum 10 GB). The cutover target (git-data-luks.tf; the LUKS cutover target, #8211). >= 10 GB (the retired plaintext volume it replaced was 10 GB) so the repo tree rsyncs onto it without ENOSPC. Guest-side LUKS: this is a plain hcloud_volume; cryptsetup runs in the guest."
   type        = number
   default     = 10
 }
@@ -669,9 +663,9 @@ variable "git_data_betterstack_logs_token" {
 }
 
 variable "host_proxy_tls_enabled" {
-  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default false, which is today's single-serving-host posture (#8754): SOLEUR_PROXY_BIND and SOLEUR_PROXY_PEER_ALLOWLIST are absent from Doppler prd, so delivering PROXY_TLS_* now would make createProxyServer fire a reportSilentFallback (createProxyServer.no-bind) on every web container start. Set true at the multi-host flip (#5274 Phase 3/6), in the same change that adds the bind + allowlist and the -target lines for all four addresses. Target the key and the cert together: a cert in prd without its key is unusable. See the ADR-118 amendment."
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default true since the multi-host flip (#12167, ADR-118 amendment 2026-09-27): the per-merge saved plan in apply-web-platform-infra.yml targets all four addresses, key and cert together (a cert in prd without its key is unusable), and the SANs derive from every var.web_hosts private IP. SOLEUR_PROXY_BIND is NOT a Doppler prd value: ci-deploy.sh resolve_proxy_bind resolves each host's own private IP at deploy time, and SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER are operator-class prd writes; a host with PROXY_TLS_* but no bind fails closed and reports createProxyServer.no-bind. There is deliberately no TF_VAR or workflow-input route to this variable. Set false to retire the material: the four resources then plan as destroys, which needs [ack-destroy]."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "inngest_config_digest" {
@@ -857,4 +851,26 @@ variable "inngest_luks_cutover_complete" {
   description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
   type        = bool
   default     = true
+}
+
+# --- #11920 — egress_audit_ingest_token PREVIOUS grace secret --------------------
+# NAMING: ends `_previous`, never `_token`/`_pat` — the name is the only thing
+# distinguishing the grace-window feed from a credential an operator might think they
+# are expected to mint by hand (the `github_plan_actions_credential` precedent). The
+# value is never operator-minted: scripts/key-rotate.sh reads the OLD current token
+# value-silently out of Doppler and exports it as
+# TF_VAR_egress_audit_ingest_token_previous for the rotate apply only
+# (hr-tf-variable-no-operator-mint-default).
+#
+# The `""` DEFAULT IS LOAD-BEARING, not convenience: the whole root resolves every
+# TF_VAR before -target pruning, so a no-default dark variable would fail every
+# unrelated `terraform plan`/apply between merge and the first rotate — the #6780 P2
+# lesson var.inngest_config_digest records above. Empty is also the honest cleared
+# sentinel the clear apply `-replace`s back to, and the resource's
+# `ignore_changes = [value]` keeps routine applies diff-free on it in every state.
+variable "egress_audit_ingest_token_previous" {
+  description = "Grace-window PREVIOUS egress-audit ingest token (soleur/prd EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS). Fed ONLY by scripts/key-rotate.sh at rotate apply time (value-silent read of the old CURRENT) and cleared by the clear apply; default empty, written via -replace under ignore_changes=[value]. Same-host-hop credential, ADR-288."
+  type        = string
+  sensitive   = true
+  default     = ""
 }

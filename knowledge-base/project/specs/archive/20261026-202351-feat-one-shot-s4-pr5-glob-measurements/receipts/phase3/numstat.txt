@@ -1,0 +1,6 @@
+0	4	scripts/ci-pr-affected-audit.accept.tsv
+0	104	scripts/ci-pr-affected-audit.baseline.tsv
+5	1	scripts/lib/test-affected-paths.sh
+0	20	scripts/test-affected-kb-consumers.baseline.txt
+3	3	scripts/test-all-affected.test.sh
+2	1	scripts/test-all.sh

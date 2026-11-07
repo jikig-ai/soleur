@@ -22,6 +22,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runLikeInngest, type StepMemo } from "../../helpers/inngest-step-harness";
 import { applyIssueListParams } from "./helpers/issue-list-params";
 
 vi.hoisted(() => {
@@ -185,27 +186,30 @@ const okSpawn = {
   finalMessage: validDraftFinalMessage(), finalMessageTruncated: false,
 };
 
-function makeStep() {
-  const executed: string[] = [];
-  const step = {
-    executed,
-    run: vi.fn(async (name: string, cb: () => Promise<unknown>) => {
-      executed.push(name);
-      return cb();
-    }),
-  };
-  return step;
-}
-
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 type HandlerArg = Parameters<typeof cronCommunityMonitorHandler>[0];
-const invoke = (step: ReturnType<typeof makeStep>) =>
-  cronCommunityMonitorHandler({
-    step: step as unknown as HandlerArg["step"],
-    logger: logger as unknown as HandlerArg["logger"],
-    attempt: 0,
-    maxAttempts: 2,
-  } as HandlerArg);
+
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler's catch as
+// the SDK's rebuilt StepError. The in-process mock this replaced hid both
+// (the #8717/#8726 defect class). `lastMemo` plays the old `executed` role:
+// its keys are the steps that actually settled, in order.
+let lastMemo: StepMemo = new Map();
+const invoke = async () => {
+  lastMemo = new Map();
+  const out = await runLikeInngest(
+    ({ step }) =>
+      cronCommunityMonitorHandler({
+        step: step as unknown as HandlerArg["step"],
+        logger: logger as unknown as HandlerArg["logger"],
+        attempt: 0,
+        maxAttempts: 2,
+      } as HandlerArg),
+    { maxAttempts: 2, memo: lastMemo },
+  );
+  expect(out.outcome).toBe("returned");
+  return out.value;
+};
 
 const heartbeatUrls = () => fetchSpy.mock.calls.map((c) => String(c[0] as string));
 // Mirror the production predicate (isRealScheduledDigest): the EXACT canonical
@@ -273,8 +277,8 @@ afterEach(() => {
 
 describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
   it("two serialized same-date invocations file EXACTLY ONE digest (invariant via fake store)", async () => {
-    await invoke(makeStep()); // first: no existing digest → spawns + files
-    await invoke(makeStep()); // second: sees the first via fresh LIST → short-circuits
+    await invoke(); // first: no existing digest → spawns + files
+    await invoke(); // second: sees the first via fresh LIST → short-circuits
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(realDigestCount()).toBe(1);
@@ -306,11 +310,10 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
     });
     expect(committedPaths.has(DIGEST_PATH)).toBe(false); // precondition
 
-    const step = makeStep();
-    await invoke(step);
+        await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1); // recovered, not deduped
-    expect(step.executed).toContain("claude-eval");
+    expect([...lastMemo.keys()]).toContain("claude-eval");
     // and the recovery genuinely committed the artifact this time
     expect(committedPaths.has(DIGEST_PATH)).toBe(true);
     // #7122: recovery REFRESHES the existing issue (PATCH) instead of filing a
@@ -333,8 +336,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
     });
     committedPaths.add(DIGEST_PATH);
 
-    const step = makeStep();
-    const res = await invoke(step);
+        const res = await invoke();
 
     expect(spawnClaudeEvalSpy).not.toHaveBeenCalled(); // deduped
     expect(res).toEqual({ ok: true });
@@ -351,22 +353,21 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
       created_at: new Date().toISOString(),
     });
 
-    await invoke(makeStep());
+    await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(realDigestCount()).toBe(1);
   });
 
   it("the dedup-skip path posts a healthy OK heartbeat (no false-RED) and returns ok", async () => {
-    await invoke(makeStep()); // seed today's digest
+    await invoke(); // seed today's digest
     fetchSpy.mockClear();
 
-    const step = makeStep();
-    const res = await invoke(step);
+        const res = await invoke();
 
     expect(res).toEqual({ ok: true });
-    expect(step.executed).not.toContain("claude-eval"); // skipped
-    expect(step.executed).toContain("sentry-heartbeat");
+    expect([...lastMemo.keys()]).not.toContain("claude-eval"); // skipped
+    expect([...lastMemo.keys()]).toContain("sentry-heartbeat");
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(heartbeatUrls()[0]).toContain("?status=ok");
   });
@@ -378,7 +379,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
       created_at: new Date().toISOString(),
     });
 
-    await invoke(makeStep());
+    await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1); // stub did NOT block
     expect(realDigestCount()).toBe(1);
@@ -391,7 +392,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
       created_at: new Date().toISOString(),
     });
 
-    await invoke(makeStep());
+    await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(realDigestCount()).toBe(1);
@@ -400,7 +401,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
   it("fails OPEN: a LIST-read error spawns (a transient hiccup must not miss the digest)", async () => {
     fakeRequest.mockRejectedValueOnce(new Error("GitHub 502"));
 
-    await invoke(makeStep());
+    await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(realDigestCount()).toBe(1);
@@ -409,11 +410,11 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
   it("#7122 — the PUBLISH read fails CLOSED: an error there throws, no duplicate issue is created (counterpart to the fail-open dedup read)", async () => {
     // The first GET is the pre-spawn dedup read (fails open, above); the second is
     // the upsert's existence read. If it fell open to a create it would double-file
-    // whenever the list read hiccups.
-    listFaults = [new Error("GitHub 502"), new Error("GitHub 502")];
-    const step = makeStep();
-
-    const res = await invoke(step);
+    // whenever the list read hiccups. Third fault (#8764): the harness retries a
+    // failed step (attempt 0 → 1), so a PERSISTENT outage needs a fault per
+    // attempt — two faults let the retry's read succeed and double-file.
+    listFaults = [new Error("GitHub 502"), new Error("GitHub 502"), new Error("GitHub 502")];
+        const res = await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(store).toHaveLength(0);
@@ -428,7 +429,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
   });
 
   it("#7122 — the published issue is the handler's rendered digest, not agent text", async () => {
-    await invoke(makeStep());
+    await invoke();
     expect(store).toHaveLength(1);
     expect(store[0].title).toBe(`${TITLE_PREFIX} ${TODAY}`);
     expect(store[0].body).toMatch(/^Daily community digest for 2026-06-30/);
@@ -436,7 +437,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
   });
 
   it("#7122 — the pre-spawn dedup read and the upsert read are the SAME question (page size, order, state, label)", async () => {
-    await invoke(makeStep());
+    await invoke();
     const reads = fakeRequest.mock.calls
       .filter((c) => c[0] === "GET /repos/{owner}/{repo}/issues")
       .map((c) => c[1] as Record<string, unknown>);
@@ -463,7 +464,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
     });
     expect(committedPaths.has(DIGEST_PATH)).toBe(false); // the commit never landed: recover
 
-    await invoke(makeStep());
+    await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(realDigestCount()).toBe(1);
@@ -480,7 +481,7 @@ describe("cron-community-monitor — producer-side date-dedup (#5751)", () => {
       created_at: new Date(Date.now() - 86_400_000).toISOString(),
     });
 
-    await invoke(makeStep());
+    await invoke();
 
     expect(spawnClaudeEvalSpy).toHaveBeenCalledTimes(1);
     expect(realDigestCount()).toBe(1);

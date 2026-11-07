@@ -170,7 +170,7 @@ _excluded() {
 # Each entry MUST cite an OPEN tracking issue or a stated re-review trigger — `#7917` is closed
 # by the PR that adds this file, so citing it would leave every entry pointing at a dead ref.
 # CEILING: raising it is an ADR-207 edit, not a local decision.
-LEDGER_CEILING=13
+LEDGER_CEILING=14
 LEDGER=(
   # scripts/lib/repo-write-boundary.test.sh — 11 deliberate probe-tag creations. This is the
   # suite that TESTS the refs/tags boundary, so it is the one place a real tag author belongs;
@@ -197,6 +197,12 @@ LEDGER=(
   # .github/scripts/test/test-vinngest-digest-freshness.sh — one seed_tag site
   # inside the mktemp fixture repos the battery itself creates (Ref #7596).
   '.github/scripts/test/test-vinngest-digest-freshness.sh|seed_tag() { git -C "$F_REPO" tag "$1"; }'
+  # plugins/soleur/test/lib/git-corrupt-graph.sh — corrupt_dead_tag's
+  # update-ref writes refs/tags/<tag> inside the caller's mktemp fixture repo
+  # (#10921): the forged tag object is the fixture's target state, authored in
+  # a scratch store the suite destroys. Re-review trigger: void if the site
+  # stops writing into a fixture root the caller created.
+  'plugins/soleur/test/lib/git-corrupt-graph.sh|git -C "$repo" update-ref "refs/tags/$tag" "$tagobj" || return'
 )
 
 # --- out-of-class registration ledger (Stage A, AC6) ----------------------------------------

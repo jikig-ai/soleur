@@ -53,6 +53,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
 # deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
 # shellcheck source=plugins/soleur/test/test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP:-}" ]] || rm -rf "$TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: could not source $SCRIPT_DIR/test-helpers.sh" >&2; exit 2; }
 
 set +e -uo pipefail
@@ -82,7 +88,6 @@ pass() {
 }
 
 TMP=$(mktemp -d -t gitleaks-merge-commit.XXXXXXXX)
-trap 'rm -rf "$TMP"' EXIT
 
 # Synthesized Doppler-shape token, assembled at runtime. The doppler-api-token
 # rule is used deliberately instead of database-url-with-password: it keeps this
@@ -363,11 +368,37 @@ fi
 # Now: every event that runs the scan job must have its own full-tree step, and
 # each such step must reach an actual invocation. Anchored on the step-name and
 # invocation shapes, so a comment cannot satisfy either half.
-for ev in "PR" "merge_group candidate" "push:main" "weekly cron"; do
-  if grep -qF -- "- name: Scan (full tree, ${ev})" "$WORKFLOW"; then
-    pass "full-tree step present for '${ev}'"
-  else
+#
+# #12089 folded the gitleaks scan job into the `secret-guards` umbrella: `name:`
+# stopped being the list-item opener (`- id:` is) and the event gate moved off
+# the job onto each member step as `if: ${{ !cancelled() && github.event_name
+# == '<event>' }}`. The equivalent coverage proof is therefore the PAIR: inside
+# jobs.secret-guards.steps, a member step named `Scan (full tree, <ev>)` whose
+# own `if:` scopes it to <ev>'s event. A name-only grep would still pass a step
+# whose `if:` silently lost its event — the same vacuity class as the count
+# this replaced. The awk below cuts one step block per `      - ` item inside
+# the umbrella job only (no other job's steps can satisfy the anchor).
+for row in \
+  "PR|pull_request" \
+  "merge_group candidate|merge_group" \
+  "push:main|push" \
+  "weekly cron|schedule" \
+  ; do
+  ev="${row%%|*}"
+  gh_ev="${row#*|}"
+  step_block=$(awk -v target="name: Scan (full tree, ${ev})" '
+    /^  secret-guards:/        { injob=1; next }
+    injob && /^  [a-zA-Z_-]+:/ { exit }
+    injob && /^      - /       { if (inblock) exit; buf=""; inblock=0 }
+    injob                      { buf = buf $0 "\n"; if (index($0, target)) inblock=1 }
+    END                        { if (inblock) printf "%s", buf }
+  ' "$WORKFLOW")
+  if [[ -z "$step_block" ]]; then
     fail "no full-tree step for '${ev}' — that event has no tree coverage"
+  elif grep -qF "github.event_name == '${gh_ev}'" <<<"$step_block"; then
+    pass "full-tree member step for '${ev}' scopes to ${gh_ev} (secret-guards fold)"
+  else
+    fail "full-tree step for '${ev}' lost its '${gh_ev}' event if: — that event has no tree coverage"
   fi
 done
 dir_steps=$(grep -cE '^ +\./gitleaks dir \.' "$WORKFLOW")

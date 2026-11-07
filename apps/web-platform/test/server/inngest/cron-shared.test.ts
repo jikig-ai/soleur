@@ -174,6 +174,21 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-merge-queue-stall-dispatch")).toBe(false);
   });
 
+  // #4672 (ADR-309): cron-approval-expiry is a flag-independent 5-minute sweep of durable approval requests (one RPC,
+  // generic notifications, no git, no PR). Never Tier-2 deferred: a deferred tick is a missed expiry, and the dark-deploy
+  // lifecycle marker proves the cron is alive. Asserted here so the sibling-set sweep sees this dependent when
+  // EXPECTED_CRON_FUNCTIONS grows.
+  it("approval-expiry (#4672, flag-independent sweep) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-approval-expiry")).toBe(false);
+  });
+
+  // #8211 PR-B2: cron-git-data-erasure-redrive re-drives the durable pending-erasure ledger every 15 minutes (service-role
+  // RPCs plus the git-data host removal call, no git, no PR). Never Tier-2 deferred: a deferred tick is a missed Art. 17
+  // erasure retry. Asserted here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("git-data-erasure-redrive (#8211, ledger re-drive) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-git-data-erasure-redrive")).toBe(false);
+  });
+
   // #6657: cron-gh-pages-cert-reissue is an event-triggered live-infra
   // remediation (no schedule, no git, no PR) — never Tier-2 deferred. Asserted
   // here so the sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS
@@ -296,6 +311,16 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     // asserted here so the sibling-set sweep sees this dependent updated in
     // lockstep with the cron-manifest change.
     expect(TIER2_DEFERRED_CRONS.has("cron-sentry-alert-drift")).toBe(false);
+  });
+
+  // #8839: cron-agent-spawn-stale-settle is the stale-"Working" spawn backstop
+  // sweep — it settles action_sends rows whose current_turn_started_at exceeds
+  // finish-timeout + margin and reports stale_working to spawn-dead-letter.
+  // Never Tier-2 deferred: a deferred tick is a stale Working row left
+  // visible to the operator past its settle bound. Asserted here so the
+  // sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("agent-spawn-stale-settle (#8839, stale-Working sweep) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-agent-spawn-stale-settle")).toBe(false);
   });
 
   it("cron-action-required-sla is live — not Tier-2 deferred (#6836)", () => {

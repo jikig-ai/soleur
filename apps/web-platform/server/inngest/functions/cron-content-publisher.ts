@@ -21,11 +21,12 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import matter from "gray-matter";
+import { parseFrontMatterSafe } from "@/server/front-matter-guard";
 import type { Octokit } from "@octokit/core";
 import { inngest } from "@/server/inngest/client";
 import {
   reportSilentFallback,
+  warnSilentFallback,
   mirrorWarnWithDebounce,
 } from "@/server/observability";
 import {
@@ -165,6 +166,30 @@ export function buildPublisherEnv(ghToken: string): NodeJS.ProcessEnv {
     env[key] = process.env[key];
   }
   return env;
+}
+
+/**
+ * Value-free signal token emitted on stderr by `scripts/content-publisher.sh`
+ * `post_discord()` when the blog-channel webhook is absent and the post is
+ * about to land in the general channel via `DISCORD_WEBHOOK_URL`. The Inngest
+ * spawn captures the script's stderr into `result.stderr` but must never
+ * forward it raw to Sentry (incidentals: response bodies, filenames), so the
+ * script emits fixed markers and this token is the contract — pinned by tests
+ * on both sides. Literal kept identical to the bash emit site.
+ */
+export const PUBLISHER_FALLBACK_MARKER = "SOLEUR_PUBLISHER_FALLBACK";
+
+/**
+ * Pure extraction of the fixed marker tokens present in captured
+ * content-publisher.sh stderr. Exported so the test suite can pin the
+ * contract without a step.run harness.
+ */
+export function publisherStderrSignals(stderr: string): string[] {
+  const signals: string[] = [];
+  if (stderr.includes(PUBLISHER_FALLBACK_MARKER)) {
+    signals.push(PUBLISHER_FALLBACK_MARKER);
+  }
+  return signals;
 }
 
 /** Spawn a bash script and capture stdout + stderr + exit code. */
@@ -636,10 +661,18 @@ export async function cronContentPublisherHandler({
           if (!name.endsWith(".md")) continue;
           const filePath = join(contentDir, name);
           const raw = await readFile(filePath, "utf-8");
-          let parsed: ReturnType<typeof matter>;
+          let parsed: ReturnType<typeof parseFrontMatterSafe>;
           try {
-            parsed = matter(raw);
-          } catch {
+            parsed = parseFrontMatterSafe(raw);
+          } catch (err) {
+            // Malformed YAML and a refused opener (a language tag, `----`) look alike here: either way the
+            // file's stale-scheduled alert is skipped, so say so instead of dropping it silently.
+            reportSilentFallback(err, {
+              feature: "cron-content-publisher",
+              op: "stale-content-frontmatter",
+              message: `Skipped ${name}: front matter could not be parsed`,
+              extra: { name },
+            });
             continue;
           }
           const status = parsed.data.status as string | undefined;
@@ -690,6 +723,25 @@ export async function cronContentPublisherHandler({
         env,
       });
 
+      // Surface the script's fixed markers BEFORE the exit-code gate — a run
+      // that emitted the fallback marker and then hard-failed must still
+      // report the misroute. spawnScriptCapture captures stderr but nothing
+      // downstream reads it — grep for the known token and mirror a fixed
+      // message (never raw stderr) to Sentry.
+      const stderrSignals = publisherStderrSignals(result.stderr);
+      const discordBlogFallback = stderrSignals.includes(
+        PUBLISHER_FALLBACK_MARKER,
+      );
+      if (discordBlogFallback) {
+        warnSilentFallback(null, {
+          feature: "cron-content-publisher",
+          op: "discord-blog-webhook-fallback",
+          message:
+            "DISCORD_BLOG_WEBHOOK_URL unset in publisher env — Discord post routed via the general-channel fallback webhook",
+          extra: { fn: "cron-content-publisher" },
+        });
+      }
+
       if (result.exitCode === 2) {
         logger.warn(
           { fn: "cron-content-publisher", exitCode: result.exitCode },
@@ -701,7 +753,7 @@ export async function cronContentPublisherHandler({
         );
       }
 
-      return { exitCode: result.exitCode };
+      return { exitCode: result.exitCode, discordBlogFallback };
     });
 
     // Persist status updates via safeCommitAndPr (#5111) — gains the
@@ -830,12 +882,10 @@ export const cronContentPublisher = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 14 * * *" },
+      { event: "cron/content-publisher.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 14 * * *" },
-    { event: "cron/content-publisher.manual-trigger" },
-  ],
-  cronContentPublisherHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronContentPublisherHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

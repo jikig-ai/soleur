@@ -21,6 +21,12 @@ export GIT_CONFIG_GLOBAL=/dev/null
 export GIT_CONFIG_SYSTEM=/dev/null
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TEST_DIR:-}" ]] || rm -rf "$TEST_DIR"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 SCRIPT="$SCRIPT_DIR/../skills/git-worktree/scripts/worktree-manager.sh"
 
@@ -30,7 +36,6 @@ echo ""
 # Setup: create a synthetic bare repo with an initial commit on main
 # that contains knowledge-base/ (mirrors the real soleur repo layout).
 TEST_DIR=$(mktemp -d)
-trap 'rm -rf "$TEST_DIR"' EXIT
 
 git init -q -b main "$TEST_DIR/seed"
 git -C "$TEST_DIR/seed" config user.email "test@test.local"

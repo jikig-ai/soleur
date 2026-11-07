@@ -326,6 +326,51 @@ resolve_host_id() {
 HOST_ID="$(resolve_host_id || true)"
 readonly HOST_ID
 
+# Per-host owner-side relay bind (ADR-068 §(a), item 2). SOLEUR_PROXY_BIND is the
+# host's OWN private-net IP; it cannot be a fleet-wide Doppler value (two hosts
+# would bind each other's address). Resolve from the 10.0.1.0/24 interface.
+# Best-effort: empty value keeps the listener fail-closed (createProxyServer.no-bind).
+# PROXY_BIND is HOST-ONLY (#12167 PR-E): it is the address the prod container's relay port is PUBLISHED on
+# (`-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"`). The container itself binds 0.0.0.0 (a literal): the host's 10.0.1.x does not exist
+# inside the default bridge netns, so handing it to the container as SOLEUR_PROXY_BIND failed listen with EADDRNOTAVAIL.
+# The match is anchored on `inet 10.0.1.x/` (as `ip -o` prints it): an unanchored grep read 10.0.1.5 out of an interface
+# at 210.0.1.5 (or 110.0.1.5) listed before the real address.
+resolve_proxy_bind() {
+  if [[ -n "${SOLEUR_PROXY_BIND_OVERRIDE:-}" ]]; then
+    printf '%s' "$SOLEUR_PROXY_BIND_OVERRIDE"
+    return 0
+  fi
+  local ip
+  ip=$(ip -4 -o addr show 2>/dev/null | sed -n 's/.*inet \(10\.0\.1\.[0-9]\{1,3\}\)\/.*/\1/p' | head -1 || true)
+  if [[ -n "$ip" ]]; then
+    printf '%s' "$ip"
+    return 0
+  fi
+  return 1
+}
+PROXY_BIND="$(resolve_proxy_bind || true)"
+readonly PROXY_BIND
+
+# The address the prod container's relay port is PUBLISHED on (#12167 PR-E): the private IP only when the host can bind it even if the
+# NIC address is late. The Hetzner private NIC is a post-boot hot attach and nothing orders docker.service after it, so after a reboot a
+# publish on a not-yet-configured IP fails the WHOLE container start (80/443/3000 too). `net.ipv4.ip_nonlocal_bind=1` (shipped by its
+# own change) lets docker-proxy bind that address anyway, with the source IP preserved. Until the sysctl is EXACTLY 1 (or if the read
+# fails) the publish stays on loopback (unreachable by peers, today's behaviour) and one closed-grammar line says so. Prints the
+# address (empty = loopback fallback in the `-p` expansion); NEVER fails, so it can never fail a deploy.
+resolve_publish_ip() {
+  local nonlocal
+  nonlocal=$(sysctl -n net.ipv4.ip_nonlocal_bind 2>/dev/null) || nonlocal=""
+  if [[ -z "$PROXY_BIND" ]]; then
+    return 0
+  fi
+  if [[ "$nonlocal" == "1" ]]; then
+    printf '%s' "$PROXY_BIND"
+    return 0
+  fi
+  logger -t "$LOG_TAG" "relay_publish degraded=nonlocal_bind_unset"
+  return 0
+}
+
 # 2-host deploy fan-out (#5274 Phase 3, ADR-068 "deploy fan-out" amendment).
 # After the receiving host's OWN prod swap succeeds, forward the SAME deploy to
 # every PEER web host over the private net, so one webhook trigger delivers the
@@ -395,6 +440,81 @@ fan_out_to_peers() {
     fi
   done
   return "$rc"
+}
+
+# Session-relay peer probe (#12167 PR-E). After THIS host's prod swap, dial every OTHER roster peer's relay port from INSIDE the app
+# container (the path a real proxied session takes: bridge -> host SNAT -> private net -> the peer's published :8443 -> its
+# source-address allowlist) and print one closed-grammar journal line per peer (journald -> Vector -> Better Stack):
+#   relay_peer_probe peer=<10.0.1.x> result=ok|refused|timeout|tls|denied
+#   relay_peer_probe peer=<10.0.1.x> skipped=exec_failed        (the exec failed, was killed, or printed anything else)
+#   relay_peer_probe skipped=no_bind|no_roster|no_peers         (nothing to dial, said once)
+# ok = TLS verified against the pinned PROXY_TLS_CERT and the peer held the WebSocket upgrade open; denied = it closed right after the
+# upgrade (its SOLEUR_PROXY_PEER_ALLOWLIST does not carry this host's source address); refused = nothing listening / unreachable / not
+# a relay; tls = the handshake or the certificate pin failed; timeout = no answer in time. Peers come from SOLEUR_HOST_ROSTER in the
+# prd env file (the same roster the app dials with, present on a peer-received deploy too, unlike SOLEUR_DEPLOY_PEERS), only values
+# shaped 10.0.1.x, never this host. BEST-EFFORT: bounded by `timeout`, never fails the deploy (the call site ends in `|| true`), and
+# carries no secret (no token, no cert bytes: the cert is read from the container's own env by the script, never put on an argv or a
+# log line) and none of the probe's output (only the validated enum token is logged).
+# The script is plain `node -e` source (the image is node; single quotes inside it are forbidden, it lives in a '...' literal).
+readonly RELAY_PROBE_JS='
+const tls=require("node:tls"),crypto=require("node:crypto");
+const host=process.env.RELAY_PROBE_PEER,port=Number(process.env.RELAY_PROBE_PORT);
+let ca=(process.env.PROXY_TLS_CERT||"").trim();
+if(ca.indexOf("\n")<0)ca=ca.split("\\r\\n").join("\n").split("\\n").join("\n");
+let done=false,up=false,sock=null,buf=Buffer.alloc(0),hdr=-1;
+const fin=(r)=>{if(done)return;done=true;process.stdout.write(r);process.exit(0)};
+const verdict=()=>fin(buf.length>hdr+4&&buf[hdr+4]===0x88?"denied":"ok");
+setTimeout(()=>fin("timeout"),Number(process.env.RELAY_PROBE_TIMEOUT_MS)||4000);
+if(!ca)fin("tls");
+else{
+sock=tls.connect({host,port,ca,rejectUnauthorized:true});
+sock.on("secureConnect",()=>{up=true;sock.write("GET /ws-proxy HTTP/1.1\r\nHost: "+host+"\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: "+crypto.randomBytes(16).toString("base64")+"\r\n\r\n")});
+sock.on("data",(d)=>{buf=Buffer.concat([buf,d]);if(hdr>=0)return;hdr=buf.indexOf("\r\n\r\n");if(hdr<0)return;if(!/^HTTP\/1\.1 101 /.test(buf.subarray(0,hdr).toString("latin1")))return fin("refused");setTimeout(verdict,700)});
+sock.on("close",()=>{if(hdr>=0)verdict();else fin(up?"refused":"tls")});
+sock.on("error",(e)=>{const c=e&&e.code;fin(up||c==="ECONNREFUSED"||c==="EHOSTUNREACH"||c==="ENETUNREACH"?"refused":c==="ETIMEDOUT"?"timeout":"tls")});
+}
+'
+relay_peer_probe() {
+  local roster peer out res
+  local -a peers=()
+  local -A seen=()
+  if [[ -z "$PROXY_BIND" ]]; then
+    logger -t "$LOG_TAG" "relay_peer_probe skipped=no_bind"
+    return 0
+  fi
+  roster=$(sed -n 's/^SOLEUR_HOST_ROSTER=//p' "${ENV_FILE:-/dev/null}" 2>/dev/null | tail -n 1 || true)
+  if [[ -z "$roster" ]]; then
+    logger -t "$LOG_TAG" "relay_peer_probe skipped=no_roster"
+    return 0
+  fi
+  while IFS= read -r peer; do
+    [[ "$peer" =~ ^10\.0\.1\.[0-9]{1,3}$ ]] || continue
+    [[ "$peer" == "$PROXY_BIND" ]] && continue
+    [[ -n "${seen[$peer]-}" ]] && continue
+    seen["$peer"]=1
+    peers+=("$peer")
+  done < <(jq -r 'if type == "object" then .[] | strings else empty end' <<<"$roster" 2>/dev/null || true)
+  if [[ "${#peers[@]}" -eq 0 ]]; then
+    logger -t "$LOG_TAG" "relay_peer_probe skipped=no_peers"
+    return 0
+  fi
+  for peer in "${peers[@]}"; do
+    out=$(timeout 8 docker exec -e RELAY_PROBE_PEER="$peer" -e RELAY_PROBE_PORT=8443 soleur-web-platform node -e "$RELAY_PROBE_JS" 2>/dev/null) || out=""
+    res=""
+    case "$out" in
+      ok) res=ok ;;
+      refused) res=refused ;;
+      timeout) res=timeout ;;
+      tls) res=tls ;;
+      denied) res=denied ;;
+    esac
+    if [[ -n "$res" ]]; then
+      logger -t "$LOG_TAG" "relay_peer_probe peer=$peer result=$res"
+    else
+      logger -t "$LOG_TAG" "relay_peer_probe peer=$peer skipped=exec_failed"
+    fi
+  done
+  return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -548,6 +668,10 @@ TAG=""
 # #8609: the probe's closed `rejected` sub-reason (github-app-key-probe.mjs REJECT_REASONS, plus
 # no_verdict when the exec produced no verdict line, unspecified for a bare `rejected` line). Reset like the three fields at the top.
 GITHUB_APP_KEY_PROBE_REASON=""
+# #10934 (CTO R2): the stage the Inngest https self-gate's LAST attempt reached (_inngest_link_selfgate_phase's closed set). Assigned ONLY
+# by the self-gate's failure tail, reset at the top of resolve_inngest_link, and written by write_state as the closed-enum deploy-state key
+# `inngest_link_selfgate_phase` (ABSENT when empty). The run-log reason stays the constant inngest_link_selfgate_failed.
+INNGEST_LINK_SELFGATE_PHASE=""
 
 # _gak_enum <value> <a|b|…>: <value> when it is one of the alternatives, else `invalid`. write_state
 # splices these fields into JSON unescaped, so only a closed-enum value may reach it.
@@ -578,6 +702,12 @@ write_state() {
     if [[ -n "${GITHUB_APP_KEY_PROBE_REASON:-}" ]]; then
       gak+=",\"github_app_key_probe_reason\":\"$(_gak_enum "$GITHUB_APP_KEY_PROBE_REASON" 'no_app_id|unparseable_key|http_401|http_404|wrong_app|http_other|unspecified|no_verdict')\""
     fi
+  fi
+  # #10934: the self-gate's stage rides ONLY a deploy whose https self-gate failed (ABSENT otherwise, the same convention), as a
+  # closed-enum value checked here like the fields above, so an unexpected value is written as `invalid`, never spliced into the JSON.
+  local sgp=""
+  if [[ -n "${INNGEST_LINK_SELFGATE_PHASE:-}" ]]; then
+    sgp=",\"inngest_link_selfgate_phase\":\"$(_gak_enum "$INNGEST_LINK_SELFGATE_PHASE" 'connect|handshake|verify|ca_file|request|status|unknown')\""
   fi
   # #8743 Phase 2 (ADR-068 constraint (c)): persist `fanout_peers` — the
   # EFFECTIVE SOLEUR_DEPLOY_PEERS list (blank-stripped, minus this host's own
@@ -614,8 +744,8 @@ write_state() {
   fi
   # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
   # annotation (#3398). Do NOT rename without updating that workflow.
-  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s}\n' \
-    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" \
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"%s%s%s}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" "$gak" "$fp" "$sgp" \
     > "$tmp" 2>/dev/null || {
     logger -t "$LOG_TAG" "write_state: printf/redirect failed"
     rm -f "$tmp"
@@ -3386,6 +3516,31 @@ write_seccomp_profile_hash() {
   return 0
 }
 
+# #10479 (ADR-321): host :443 pre-swap check. The prod `docker run` publishes `-p 0.0.0.0:443:3443`;
+# the canary deliberately does not, so a conflict on host :443 (a stray listener, a stale docker-proxy)
+# would otherwise surface only AFTER the old container was stopped and removed, and the
+# production_start_failed arm does not restart the previous image. So refuse here, before any
+# container is touched, and the old container keeps serving. Fails CLOSED: if `ss` is missing or errors
+# the answer is unknown and the deploy is refused with a distinct reason.
+# Skipped when the running prod container already publishes 3443: it owns :443, a redeploy is fine.
+# Sets HOST_443_REASON (a fixed literal; final_write_state splices the reason into JSON unquoted).
+HOST_443_REASON=""
+host_443_preflight() {
+  local listeners
+  if docker port soleur-web-platform 3443/tcp >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! listeners="$(ss -ltnH 'sport = :443' 2>/dev/null)"; then
+    HOST_443_REASON="host_443_check_unavailable"
+    return 1
+  fi
+  if [[ -n "$listeners" ]]; then
+    HOST_443_REASON="host_443_in_use"
+    return 1
+  fi
+  return 0
+}
+
 # Resolve env file: download secrets from Doppler to a temp file (chmod 600).
 # Cleaned up automatically via EXIT trap after resolve_env_file. Exits on any failure -- no fallback.
 resolve_env_file() {
@@ -3657,7 +3812,8 @@ github_app_key_canary_check() {
 # $INNGEST_LINK_DIR/inngest-link.env is written from enum branches and constants ONLY, never from flag or CA text; the
 # probes parse it with a key allowlist and never source it. Sets: INNGEST_BASE_URL_RESOLVED, INNGEST_LINK_STATE
 # (http_default|http_lease_expired|https_flag|https_pending), INNGEST_LINK_REASON (a fixed token on failure; inngest_link_scrub_env_file also sets it),
-# INNGEST_LINK_CA_STRICT. Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
+# INNGEST_LINK_CA_STRICT, INNGEST_LINK_SELFGATE_PHASE (reset to empty on every call; one of the seven stage tokens only when the https
+# self-gate failed, which write_state records as the deploy-state key inngest_link_selfgate_phase). Returns 0, or 1 with INNGEST_LINK_REASON set. The caller invokes it with
 # `|| rc=$?` (set -e is OFF inside), so every step below handles its own failure.
 INNGEST_LINK_HTTP_URL="http://10.0.1.40:8288"
 INNGEST_LINK_HTTPS_URL="https://10.0.1.40:8443"
@@ -3764,19 +3920,95 @@ _inngest_link_install() {
   return 1
 }
 
+# _inngest_link_time_nonzero <t>: classifies ONE curl timer field (time_connect or time_appconnect). Pure: no I/O, never aborts. The ONE
+# place a timer is interpreted: the phase helper below and the tcp/tls counters of the attempt loop both call it, so the two can never
+# disagree about what a zero or an unreadable timer is (resolver-suite row S6b pins the comma-decimal zero, through mutants M22ab and M22ac;
+# row S4 pins the counters, S6 and S6c the unreadable timer).
+#   returns 0  a decimal number that is not zero (the stage happened)
+#   returns 1  a decimal number that is zero, dot or comma separated, `0.000000` or `0,000000` (the stage never happened)
+#   returns 2  not a decimal number (empty, text, an exponent): it says nothing about the stage
+_inngest_link_time_nonzero() { # <t>
+  local t="${1-}" num='^[0-9]+[.,][0-9]+$' zero='^[0.,]*$'
+  if [[ ! "$t" =~ $num ]]; then return 2; fi
+  if [[ "$t" =~ $zero ]]; then return 1; fi
+  return 0
+}
+
+# _inngest_link_selfgate_phase <rc> <code> <time_connect> <time_appconnect>: prints ONE fixed token naming the stage the LAST attempt
+# reached (#10934). Pure: no I/O, no side effect, never aborts. The input is what one curl attempt printed, split into fields; this is
+# the only code that turns the fields into a STAGE (the timers themselves are read by _inngest_link_time_nonzero, and the attempt loop
+# reads only the HTTP code and the verification result for the event). Order matters (rc 124 or an empty line first, then the two exit
+# codes that are certain without any timer, then a received HTTP status, then the timers):
+#   unknown    rc 124 (the timeout wrapper killed curl: a hang), an empty line, or a timer that is not a decimal number. Never a
+#              success-looking token: an unparsable attempt must not read as a stage. The rc 77, rc 60 and validated-status arms run
+#              BEFORE the timers are looked at, so a non-numeric timer beside them still reads ca_file, verify or status.
+#   ca_file    rc 77 (curl could not use the pinned CA file).
+#   verify     rc 60 (the served certificate does not verify against the pinned file; the handshake did not complete, tls is 0).
+#   status     a validated three-digit code other than 000 and 200 (TLS verified and an HTTP status other than 200 came back). A 200
+#              code with a non-zero rc is a body cut short: it is NOT status, it falls through to the timers and reads request.
+#   connect    time_connect is zero (no TCP connection: refused, firewall drop, unreachable).
+#   handshake  TCP connected, time_appconnect is zero (the TLS handshake did not complete).
+#   request    TLS completed and verified, no HTTP status came back. It does NOT prove a cause: it means only that the certificate is
+#              not the problem and the terminator or whatever sits behind it is to be checked. Classified by the timers, never by an
+#              rc list, because one wire event prints rc 52 on one curl build and rc 56 on another.
+# The rc tests are string compares on purpose (`${1-}` may be empty or a bare word, which `-eq` would evaluate as an arithmetic
+# variable name and abort on under `set -u`): keep them string compares.
+_inngest_link_selfgate_phase() { # <rc> <code> <tc> <ta>
+  local rc="${1-}" code="${2-}" tc="${3-}" ta="${4-}" tcr=0 tar=0
+  local c3='^[0-9]{3}$'
+  if [[ "$rc" == 124 || -z "$code$tc$ta" ]]; then printf unknown; return 0; fi
+  if [[ "$rc" == 77 ]]; then printf ca_file; return 0; fi
+  if [[ "$rc" == 60 ]]; then printf verify; return 0; fi
+  if [[ "$code" =~ $c3 && "$code" != 000 && "$code" != 200 ]]; then printf status; return 0; fi
+  _inngest_link_time_nonzero "$tc" || tcr=$?
+  _inngest_link_time_nonzero "$ta" || tar=$?
+  if [[ "$tcr" -eq 2 || "$tar" -eq 2 ]]; then printf unknown; return 0; fi
+  if [[ "$tcr" -eq 1 ]]; then printf connect; return 0; fi
+  if [[ "$tar" -eq 1 ]]; then printf handshake; return 0; fi
+  printf request
+}
+
+# _inngest_link_selfgate <cafile>: success = TLS verified against the pinned file AND a 200, decided from curl's exit code and the first
+# token of its write-out line alone, before any other field is looked at (a short or odd line from a healthy listener can never fail the
+# gate). Every attempt prints one line of four space-separated fields: the HTTP code, the TCP connect time, the TLS handshake time and
+# curl's certificate verification result. They feed ONE failure event, never a value of their own:
+#   INNGEST_LINK: class=selfgate_failed level=error rc=<n> http=<ddd|none> attempts=<n> phase=<token> tcp=<n> tls=<n> verify=<n>
+#   rc, http  the LAST attempt's curl exit code and HTTP code (http from the validated three-digit token, else none).
+#   phase     the stage the LAST attempt reached (see _inngest_link_selfgate_phase). Read it together with rc: when tcp=0 only rc tells
+#             rc 7 (refused) from rc 28 (a drop).
+#   tcp, tls  how many of ALL attempts printed a non-zero TCP connect time and a non-zero TLS handshake time, each clamped to 0-99;
+#             attempts= is the denominator. They show a listener that changed state between tries, which phase (last attempt only)
+#             hides. An attempt whose own timer field is not a decimal number adds nothing, so unknown with tcp=0 tls=0 is not
+#             "connect failed".
+#   verify    0 unless phase=verify, then the last attempt's verification result clamped to 0-99 (18 the served certificate is not the
+#             pinned one, 10 expired, 1 name mismatch; the raw value is 1 after a handshake or CA file failure, so it is suppressed).
+# Reading rule: phase=request means only that TLS verified and no HTTP response came back; check the terminator and its upstream, not
+# the certificate. It does not establish which of them failed. No -k and no second probe: the verdict path is the same one curl.
 _inngest_link_selfgate() { # <cafile>: no -k, no --capath; success = TLS verified against the pinned file AND 200
-  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" code rc=0
+  local i=1 max="${INNGEST_LINK_SELFGATE_ATTEMPTS:-3}" out code tc ta ver rc=0
+  local phase=unknown http=none vv=0 tcpn=0 tlsn=0
+  local c3='^[0-9]{3}$'
   case "$max" in '' | *[!0-9]*) max=3 ;; esac
   while :; do
     rc=0
-    code="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 \
+    out="$(timeout 20 curl --disable --noproxy '*' -s -o /dev/null -w '%{http_code} %{time_connect} %{time_appconnect} %{ssl_verify_result}' --connect-timeout 5 --max-time 10 \
       --cacert "$1" "$INNGEST_LINK_HTTPS_URL/health" 2>/dev/null)" || rc=$?
+    code=""; tc=""; ta=""; ver=""
+    IFS=' ' read -r code tc ta ver <<< "$out" || true
     if [[ "$rc" -eq 0 && "$code" == 200 ]]; then return 0; fi
+    phase="$(_inngest_link_selfgate_phase "$rc" "$code" "$tc" "$ta")"
+    if _inngest_link_time_nonzero "$tc"; then tcpn=$((tcpn + 1)); fi
+    if _inngest_link_time_nonzero "$ta"; then tlsn=$((tlsn + 1)); fi
+    http=none
+    if [[ "$code" =~ $c3 ]]; then http="$code"; fi
+    vv=0
+    if [[ "$phase" == verify ]]; then vv="$(_inngest_link_count99 "${ver%% *}")"; fi
     if [[ "$i" -ge "$max" ]]; then break; fi
     sleep 2
     i=$((i + 1))
   done
-  inngest_link_event selfgate_failed error "rc=$rc http=${code:-none} attempts=$i"
+  INNGEST_LINK_SELFGATE_PHASE="$phase"
+  inngest_link_event selfgate_failed error "rc=$rc http=$http attempts=$i phase=$phase tcp=$(_inngest_link_count99 "$tcpn") tls=$(_inngest_link_count99 "$tlsn") verify=$vv"
   return 1
 }
 
@@ -3796,6 +4028,7 @@ resolve_inngest_link() {
   local snap="${1:-}" flag="" now epoch ca_dest ca_env_dest b64="" cand="" try=1 scheme url cacert
   local proj_n proj_v cfg_n cfg_v scope_verified=1
   INNGEST_BASE_URL_RESOLVED=""; INNGEST_LINK_STATE=""; INNGEST_LINK_REASON=""; INNGEST_LINK_CA_STRICT=0; INNGEST_LINK_PENDING_SCHEME=""; INNGEST_LINK_PENDING_CA_RESET=0
+  INNGEST_LINK_SELFGATE_PHASE=""
   ca_dest="$INNGEST_LINK_DIR/inngest-ca.pem"
   ca_env_dest="$INNGEST_LINK_DIR/inngest-link.env"
 
@@ -4315,6 +4548,37 @@ verify_inngest_quiesced() {
   return 0
 }
 
+# Verify vector.service was actually restarted (#11920). `try-restart` on an INACTIVE unit is a
+# SILENT exit-0 no-op, so the sudo return code alone can never prove the restart — this check is
+# the gate. Pass = `is-active` reports active AND the unit's ActiveEnterTimestamp advanced PAST
+# the baseline the handler captured BEFORE the verb (a still-active unit whose timestamp did not
+# move was not restarted). Both queries are read-only (no sudo), matching inngest_quiesce_state's
+# reads. Deliberately NOT a /health probe: vector's serving surface is telemetry shipping, and
+# `doppler run` env resolution sits between unit-start and pipeline-readiness, so the unit-state +
+# fresh-timestamp pair is the checkable contract.
+#   arg 1: baseline epoch seconds (0 when the unit carried no prior timestamp). REQUIRED —
+#     a `${1:-N}` default here would be a second match for the #5145 drift guard's
+#     exactly-one-extraction pin on that shape (ci-deploy.test.sh).
+#   rc 0: restarted + active · rc 1: unverified → vector_restart_unverified
+verify_vector_restart() {
+  local baseline_epoch="$1"
+  [[ "$baseline_epoch" =~ ^[0-9]+$ ]] || baseline_epoch=0
+  local a ae ae_epoch
+  a="$(systemctl is-active vector.service 2>/dev/null || true)"
+  if [[ "$a" != "active" ]]; then
+    logger -t "$LOG_TAG" "VECTOR_RESTART_VERIFY: is-active=${a:-<empty>} — try-restart left the unit not-active (an inactive vector stays inactive by design)"
+    return 1
+  fi
+  ae="$(systemctl show -p ActiveEnterTimestamp --value vector.service 2>/dev/null || true)"
+  ae_epoch="$(date -d "$ae" +%s 2>/dev/null || true)"
+  if [[ ! "$ae_epoch" =~ ^[0-9]+$ || "$ae_epoch" -le "$baseline_epoch" ]]; then
+    logger -t "$LOG_TAG" "VECTOR_RESTART_VERIFY: ActiveEnterTimestamp did not advance (baseline=${baseline_epoch} now=${ae_epoch:-unparseable})"
+    return 1
+  fi
+  logger -t "$LOG_TAG" "VECTOR_RESTART_VERIFY: ok — active, ActiveEnterTimestamp ${baseline_epoch} → ${ae_epoch}"
+  return 0
+}
+
 # Exact allowlist of valid images per component (not prefix match -- prevents suffix injection).
 declare -A ALLOWED_IMAGES=(
   [web-platform]="ghcr.io/jikig-ai/soleur-web-platform"
@@ -4354,8 +4618,10 @@ fi
 
 if [[ "$ACTION" == "restart" ]]; then
   # restart inngest _ latest — lightweight systemctl restart (#4538).
-  # Only inngest is restartable; web-platform restart is docker-level.
-  if [[ "$COMPONENT" != "inngest" ]]; then
+  # restart vector _ _ — no-SSH telemetry-pipeline restart, the egress-token-rotation
+  # lever (#11920). Only inngest and vector are restartable; web-platform restart is
+  # docker-level.
+  if [[ "$COMPONENT" != "inngest" && "$COMPONENT" != "vector" ]]; then
     logger -t "$LOG_TAG" "REJECTED: component '$COMPONENT' is not restartable"
     echo "Error: component '$COMPONENT' is not restartable" >&2
     final_write_state 1 "component_not_restartable"
@@ -4537,9 +4803,57 @@ flock -n 200 || {
 # flock -n would write "lock_contention" over the winner's in-progress state.
 write_state "$EXIT_RUNNING" "running"
 
-# --- Restart action handler (#4538) ---
+# --- Restart action handler (#4538; vector arm #11920) ---
 # Lightweight systemctl restart; no image pull, no disk space check needed.
 if [[ "$ACTION" == "restart" ]]; then
+  if [[ "$COMPONENT" == "vector" ]]; then
+    # #11920 — the no-SSH egress-token-rotation lever. The argv is the already-live
+    # DROPIN_TRY_RESTART sudoers grant's EXACT argv (deploy-inngest-bootstrap.sudoers):
+    # `try-restart`, NOT `restart` — an INACTIVE vector must stay inactive (a deliberate
+    # down state is not this lever's to undo). The inngest-only quiesce/health logic
+    # below does NOT apply to vector.
+    #
+    # try-restart on an inactive unit is a SILENT exit-0 no-op, so sudo rc alone cannot
+    # prove the restart — verify_vector_restart is the gate, and the baseline is
+    # captured BEFORE the verb. Both reads are unprivileged (no sudo).
+    _v_base_ts="$(systemctl show -p ActiveEnterTimestamp --value vector.service 2>/dev/null || true)"
+    _v_base_epoch="$(date -d "$_v_base_ts" +%s 2>/dev/null || true)"
+    [[ "$_v_base_epoch" =~ ^[0-9]+$ ]] || _v_base_epoch=0
+    echo "Restarting vector.service (try-restart)..."
+    if ! sudo /usr/bin/systemctl try-restart vector.service; then
+      logger -t "$LOG_TAG" "FAILED: systemctl try-restart vector.service"
+      final_write_state 1 "vector_restart_failed"
+      exit 1
+    fi
+
+    set +e
+    verify_vector_restart "$_v_base_epoch"
+    VERIFY_RC=$?
+    set -e
+    if [[ "$VERIFY_RC" -ne 0 ]]; then
+      logger -t "$LOG_TAG" "FAILED: restart vector — unit not verifiably restarted (is-active/timestamp)"
+      final_write_state 1 "vector_restart_unverified"
+      exit 1
+    fi
+
+    # Fan the SAME `restart vector _ _` out to every peer web host over the private net —
+    # the rotate leg needs vector restarted on EVERY host, not just the dispatched one.
+    # Mirrors the quiesce arm's local → verify → fan-out ordering; peers receive on
+    # /hooks/deploy-peer → no re-fan. A peer 202 is SPAWN-ACCEPTANCE only — the peer's own
+    # verdict lands on ITS deploy-status slot (DI-C3), which the workflow polls.
+    if ! fan_out_to_peers; then
+      # MEASURED-BY: fan_out_to_peers' non-zero return on the line above (same contract
+      # as the quiesce/enable arms: spawn-acceptance is measured here, the peer's own
+      # verdict is not).
+      logger -t "$LOG_TAG" "FAILED: restart vector — a peer fan-out was NOT accepted (unreachable/rejected)"
+      final_write_state 1 "vector_peer_fanout_unaccepted"
+      exit 1
+    fi
+
+    logger -t "$LOG_TAG" "SUCCESS: restart $COMPONENT"
+    final_write_state 0 "success"
+    exit 0
+  fi
   # #8077: a quiesced unit (op=quiesce-web's stop+disable) is deliberate — the watchdog's restart
   # dispatch must not start it again mid-cutover. Refuse BEFORE the restart verb. The SHAPE is the
   # signal (contract §3): a disabled not-running unit with no valid quiesce marker is refused too
@@ -5054,6 +5368,13 @@ case "$COMPONENT" in
     fi
     INNGEST_LINK_REASON="" # hygiene: a later hunk must not see a stale scrub reason after a non-strict continue
 
+    # #10479: refuse before any container is touched if host :443 is held by something else.
+    if ! host_443_preflight; then
+      logger -t "$LOG_TAG" "DEPLOY_ABORT: host :443 is not available to the prod container ($HOST_443_REASON) — keeping previous version"
+      final_write_state 1 "$HOST_443_REASON"
+      exit 1
+    fi
+
     # The container's NODE_OPTIONS is ours alone: the heap cap via `-e NODE_OPTIONS=` below. The
     # #5417 lever (append the cap to an operator-set NODE_OPTIONS from the Doppler env-file) is
     # retired under #8609: the overlay above refuses any prd env carrying a NODE_* name other than
@@ -5061,6 +5382,11 @@ case "$COMPONENT" in
     PROD_NODE_OPTIONS="--max-old-space-size=$PROD_NODE_MAX_OLD_SPACE_MB"
     CANARY_NODE_OPTIONS="--max-old-space-size=$CANARY_NODE_MAX_OLD_SPACE_MB"
 
+    # Session relay (#12167 PR-E): the app container is on the default docker bridge, so the relay cannot bind the host's private
+    # IP. Prod PUBLISHES 8443 on that IP (-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443": RELAY_PUBLISH_BIND is PROXY_BIND only when the
+    # net.ipv4.ip_nonlocal_bind sysctl is 1, else empty = a loopback publish, unreachable by peers) and binds 0.0.0.0 inside (-e SOLEUR_PROXY_BIND=0.0.0.0, SOLEUR_PROXY_PORT=8443). The canary publishes NO 8443 and gets a
+    # literal EMPTY bind (the app reports no_bind), so blue/green never collides on the port; it is removed before prod starts.
+    # lib/docker-run-tuple.py pins all of it. Reboot race: see resolve_publish_ip.
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
     # while maintaining Docker's other security restrictions (#1570).
@@ -5084,6 +5410,7 @@ case "$COMPONENT" in
       -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
       -e CRON_WORKSPACE_ROOT=/workspaces \
       -e SOLEUR_HOST_ID="$HOST_ID" \
+      -e SOLEUR_PROXY_BIND= \
       -e NODE_OPTIONS="$CANARY_NODE_OPTIONS" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -5434,6 +5761,9 @@ case "$COMPONENT" in
         exit 1
       fi
 
+      # Relay publish address (#12167 PR-E): read the nonlocal-bind sysctl NOW, just before the prod start (see resolve_publish_ip).
+      RELAY_PUBLISH_BIND="$(resolve_publish_ip)"
+
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
       # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
       # /tmp no longer needs to be exec-able for git credential helpers.
@@ -5465,6 +5795,8 @@ case "$COMPONENT" in
         -e NODE_EXTRA_CA_CERTS=/etc/soleur/inngest-ca.pem \
         -e CRON_WORKSPACE_ROOT=/workspaces \
         -e SOLEUR_HOST_ID="$HOST_ID" \
+        -e SOLEUR_PROXY_BIND=0.0.0.0 \
+        -e SOLEUR_PROXY_PORT=8443 \
         -e NODE_OPTIONS="$PROD_NODE_OPTIONS" \
         -e SOLEUR_EGRESS_REAPER=1 \
         -v /mnt/data/workspaces:/workspaces \
@@ -5472,7 +5804,9 @@ case "$COMPONENT" in
         -v /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens \
         -v /mnt/data/inngest-link/inngest-ca.pem:/etc/soleur/inngest-ca.pem:ro \
         -p 0.0.0.0:80:3000 \
+        -p 0.0.0.0:443:3443 \
         -p 0.0.0.0:3000:3000 \
+        -p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443" \
         "$VERIFIED_REF"; then
         # Canary was already stopped+removed before the cron drain gate above
         # (memory-dwell fix), so no teardown is needed here on the success path.
@@ -5535,6 +5869,9 @@ case "$COMPONENT" in
         else
           logger -t "$LOG_TAG" "BWRAP_USERNS_SYSCTL_DRIFT: apparmor_restrict_unprivileged_userns=${userns_restrict} (expected 0) — cron Bash sandbox will fail silently; restart bwrap-userns-sysctl.service"
         fi
+
+        # Session-relay peer probe (#12167 PR-E): best-effort, bounded, journal-only; `|| true` is LOAD-BEARING (set -e).
+        relay_peer_probe || true
 
         echo "Deploy succeeded"
         # Local prod swap succeeded — now fan out to peer hosts (dormant/no-op at

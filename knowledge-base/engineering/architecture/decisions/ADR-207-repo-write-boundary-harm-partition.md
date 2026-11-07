@@ -231,9 +231,11 @@ call site learns why, and this ledger shows the cumulative position — the same
 an ORPHAN and reddens; the check is a bijection in both directions, because a one-directional check
 is where offenders go to be forgotten.
 
-**Ceiling governance, and its single home.** The exemption ledger's ceiling is **13**. That number
+**Ceiling governance, and its single home.** The exemption ledger's ceiling is **14** (raised 13 →
+14 at #10921 for `corrupt_dead_tag`'s forged-`refs/tags/` write inside the caller's mktemp fixture
+repo — same sandbox class as the boundary suite's entries, carrying a re-review trigger). That number
 is the one AUTHORITY; the guard asserts its own constant equals this line, so the two cannot drift.
-Raising it is an edit to this ADR AND to the two `LEDGER_CEILING=12` sed patterns in
+Raising it is an edit to this ADR AND to the two `LEDGER_CEILING=<n>` sed patterns in
 `scripts/battery-tag-authorship-mutations.test.sh` (rows R7/R8), which would otherwise stop
 matching. That second half is fail-CLOSED — a mutation that does not land is scored as a failed
 row, never as a pass — but it is a four-place edit and calling it a one-place edit understates it.

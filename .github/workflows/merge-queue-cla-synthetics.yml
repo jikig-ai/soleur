@@ -1,9 +1,10 @@
 name: Merge queue CLA synthetics
 
 # Merge queue (#5780, re-adopted by #9454). `main` is gated by TWO rulesets: "CI Required"
-# (23 contexts, every one produced on merge_group by its own workflow; audited by
-# scripts/probe-merge-group-coverage.sh) AND "CLA Required" (`cla-check` + `cla-evidence`,
-# see scripts/required-checks.txt). The CLA producers, cla.yml and cla-evidence.yml, are
+# (10 contexts post-#12089, each produced on merge_group by its own workflow) AND
+# "CLA Required" (`cla-check` + `cla-evidence`, synthesized by THIS workflow — see
+# scripts/required-checks.txt) — 12 required contexts total, audited by
+# scripts/probe-merge-group-coverage.sh. The CLA producers, cla.yml and cla-evidence.yml, are
 # pull_request_target/issue_comment driven (contributor-assistant action + an R2 evidence
 # sidecar), so they cannot run on a `merge_group` event (there is no PR/comment object on the
 # temp ref). Without this workflow, `cla-check`/`cla-evidence` never report on the
@@ -20,7 +21,7 @@ name: Merge queue CLA synthetics
 # ANY failure (verify, checkout, the success step itself) runs the failure step, which posts BOTH
 # names on the candidate with conclusion=failure and a title naming the reason, then the job
 # stays failed. Without it the verify failure posts nothing, the required contexts stay pending
-# and the queue entry waits out check_response_timeout_minutes (75) instead of being dequeued at
+# and the queue entry waits out check_response_timeout_minutes (120) instead of being dequeued at
 # once. The reason is the verify script's fixed die() text (steps.verify.outputs.reason), never
 # PR or event content; when verify recorded none, steps.verify.outcome picks the wording (verify
 # passed and the success post failed / verify failed unrecorded / checkout failed before verify). The failure step is the only step with an `if:`, and it can only post
@@ -51,8 +52,12 @@ name: Merge queue CLA synthetics
 # ADR-270: this workflow DEFINITION is taken from the candidate commit like every other
 # merge_group workflow, and entry to the queue needs a write-access actor.
 #
-# max_entries_to_merge = 1 (infra/github/ruleset-ci-required.tf) keeps one PR per merged group so
-# the PR number in head_ref is exact. If that is ever raised, this workflow must enumerate PRs.
+# max_entries_to_merge is raised to 3 under ADR-270's raise checklist (#11678), so a merged
+# group can contain multiple PRs and the PR number in head_ref names only the deepest member.
+# The verification script therefore enumerates EVERY constituent member — queue entries at
+# positions <= the entry whose headCommit matches head_sha — and requires each member's own
+# queued head to carry completed/success cla-check + cla-evidence (app 15368). A member it
+# cannot enumerate or verify is a failure, never a pass.
 
 on:
   merge_group:
@@ -83,6 +88,10 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Verify the PR head's real cla-check and cla-evidence
+        # Step-level timeout INSIDE the job budget: an overrun is a step failure,
+        # which fires the failure-post below — a job-level cancellation would not
+        # reach `if: failure()` and would leave both required contexts pending.
+        timeout-minutes: 4
         id: verify
         run: bash scripts/merge-queue-cla-verify.sh
 

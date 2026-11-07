@@ -1,0 +1,88 @@
+# Brainstorm: workspace egress audit log, PR2 (read path and "View egress audit log" view)
+
+Date: 2026-10-25. Issue #9545 (stays open until PR2 merges). Branch `feat-egress-audit-read-path`, draft PR #11115.
+
+## What We're Building
+
+The read side of the workspace egress audit log. PR1 (merged 2026-10-15) shipped the dark ingest pipeline: migration 162 `workspace_egress_audit_rollup` (15-minute per-workspace buckets, 30-day retention, RLS on, no member read), flag `egress-audit-collection` default off for external workspaces, ADR-288 (adopting).
+
+PR2 delivers:
+
+- A read RPC `get_egress_audit_summary` that any current workspace member can call, and a thin `GET` route over it.
+- A "View egress audit log" link on the Scope Grants "Agent web access" card, wired to a destination view (the link is currently only a stale TODO in `scope-grants/page.tsx` and `web-egress-toggle.tsx`).
+- The destination view: a host list per (host, decision) with an allowed/blocked filter, "at least N requests", last seen, a fixed 30-day window, a truncated notice, three distinct empty states, an error state that is never rendered as empty, and a "Last request: X ago" hint on the card.
+- The DPIA t6 re-screen, and the public-document changes the viewer makes true (privacy policy, AUP, DPD, GDPR policy, Art. 30 rows).
+
+## Why This Approach
+
+Product scope was minimal by operator choice (2026-10-25): host list and decision filter only, fixed 30-day window. The "N sessions used web access in 24h" signal named in the issue is dropped: the data has no session id (DPIA trigger t7 forbids adding one), so it cannot be claimed honestly. `bytes_out` is not displayed (best-effort, reads as exfiltration). No per-member attribution, timeline, or export.
+
+## Key Decisions
+
+| Decision | Ruling | Source |
+|---|---|---|
+| Who can read | Every current workspace member (`is_workspace_member`, which excludes pending and removed). Not gated on `web_egress` or the collection flag, so history stays readable after a toggle-off | CLO, CPO, CTO agree; ruling D |
+| Read path | SECURITY DEFINER RPC through the tenant client; **no member SELECT policy and no table grant**; RPC raises `42501` for non-members (route maps to 403). Direct `.from(table).select()` stays a permission error | Ruled by CTO agent |
+| Shape | Group by (requested_host, decision) over a window; RPC takes a window enum, v1 UI fixes 30 days; limit 200 (clamp 500), `truncated` flag, typed `overflow` field (see Overflow row; supersedes the earlier `(other)` row), `statement_timeout 5s` | Ruled by CTO agent; window scope by operator |
+| Honest claims | "at least N requests", "N sites contacted plus unlisted overflow", "N blocked", last activity; never "complete", "every connection", "tamper-proof", never sessions | CTO, CPO, CLO |
+| Copy | Hosts and outcome are best-effort and entries may be missing (flood cap, `drop_newest`); history visible to all current members including pre-join activity; no member/session recorded; about 30 days then deleted, separate operator copy exists; toggle-off stops new records but deletes nothing; erasure path linked | CLO, CPO |
+| DSAR | The view does not satisfy an Art. 15 request; `egress-audit-dsar` runbook stays the path (add a line). No CSV export | CLO |
+| Flag | No new read-side flag; data is already gated by per-org collection (off for externals until after PR2 plus a 7-day owner notice) | Ruled by CTO agent |
+| Migration | `164_*` additive (function plus REVOKE/GRANT), `.down.sql` drops the function (163 is taken) | Ruled by CTO agent |
+| Rate limit and observability | `withUserRateLimit` (about 30/min/user), `Cache-Control: private, no-store`, `reportSilentFallback` feature `egress-audit-read` with reason codes only | Ruled by CTO agent |
+| Visual design | `knowledge-base/product/design/settings/egress-audit-log.pen`; screenshots `07-01..07-21` (card both toggle states with "Last request: X ago", enable dialog, destination populated, populated with web access off, truncated, loading, error and three empty states; desktop and mobile). Added 2026-10-26 | `wg-ui-feature-requires-pen-wireframe` |
+| Overflow row | Typed `overflow` field in the RPC, not the literal `(other)` row. UI label "Other hosts, not listed individually" with `at least N requests` and a tooltip that counts are minimums; one row per decision; the filter applies to it. Overflow counts merge with `GREATEST`, so they are very loose lower bounds | Ruled by CTO agent 2026-10-26 |
+| Decision labels | Filter All / Allowed / Blocked / Other. DB `denied` shows as "Blocked"; `other` is a third visible state (neither folded into Blocked nor Allowed). Each state is icon plus text plus colour, never colour alone | Ruled by CTO agent 2026-10-26 |
+| Enable-dialog copy | "Every outbound request is logged with workspace attribution" is removed (conflicts with the forbidden word "every", implies a per-request log, and over-promises while collection is off for externals). Replaced by the best-effort recording notice in wireframe 07-02, rendered only when `egress-audit-collection` is on for the org. Needs CLO sign-off with the document mirrors | Ruled by CTO agent 2026-10-26; CLO sign-off pending |
+
+Inherited rulings kept: A (collection off for externals until PR2 plus owner notice at least 7 days), B (notice, not re-confirmation), D (toggle off is not a purge).
+
+## Corrections to the archived PR1 plan and ADR-288
+
+- Plan lines for "member SELECT policy" (PR2 checklist, and the "zero rows once the member policy exists" test) are superseded: direct SELECT stays denied and the RPC is the only read path. ADR-288 lines saying a policy lands in PR2 need the same amendment; ADR-288 should also say the read path is deliberately not flag-gated.
+- The plan says there is no CHECK on `decision`; migration 162 has `CHECK IN ('allowed','denied','other')`.
+- Migration 162 `REVOKE ALL` stays as is (no grant needed under the RPC design).
+- Verify the PR1 toggle join (drops rows when web access is off) against ruling D: history must stay visible after toggle-off.
+
+## User-Brand Impact
+
+- **Artifact:** the member-facing egress audit view and `get_egress_audit_summary` RPC.
+- **Vector:** a leak across workspaces, or to a pending or removed member, would reveal which external hosts one workspace's agents contacted, which can disclose what a founder asked an agent to research; a surveillance-style framing would harm trust.
+- **Threshold:** `single-user incident`.
+
+## Plan-review amendments (2026-10-26)
+
+CTO rulings after the plan-review panel, recorded here so the brainstorm does not contradict the plan: no HTTP route (a server-rendered page calls the RPC through the loader; the earlier "thin GET route" and `withUserRateLimit` decisions are superseded); no `statement_timeout` function clause (proved a no-op for the running statement on Postgres 17); no window parameter (fixed 30 days); fail-loud workspace reader instead of the fallback resolver; the migration number is picked at the last rebase because 164 is claimed by open draft PRs; wireframe copy deltas remove every retention date and the "recording since" date (no data source). See the plan: `knowledge-base/project/plans/2026-10-26-feat-egress-audit-read-path-plan.md`.
+
+## Domain Assessments
+
+**Assessed:** Marketing, Engineering, Operations, Product, Legal, Sales, Finance, Support
+
+### Product (CPO)
+
+Ship a small read-only, workspace-level "what agents reached" view; defer anything that counts or watches people. Three distinct empty states. Members whose agents are logged are not notified by the owner-only notice, so disclose in the view. Needs spec-flow plus wireframe before work.
+
+### Engineering (CTO)
+
+RPC-only read path (rulings above). Verify `resolveCurrentWorkspaceId` re-validates membership, and add a stale-current-workspace test expecting 403. Two-user cross-tenant live-DB test with a service-role positive control.
+
+### Legal (CLO)
+
+Members may read; t6 re-screen concludes "no full DPIA, conditional" (nine fields, no per-person field, 30 days, t7 tripwire). Verifying the CNIL Art. 35(4) list wording is a merge gate for the re-screen. Merge gates: re-screen as a new DPIA addendum section, document changes with mirrors and SHA re-pin, view and toggle copy. Enablement gates (not merge): retention approval, team-workspace role decision with an Art. 28 instrument and standalone LIA, Art. 21 sufficiency, owner notice live 7 days, operator authorization to flip the flag.
+
+## Open Questions
+
+- Does any member have a per-user private agent session? If so, one member's hosts become visible to another and the t6 re-screen must weigh it (CLO, confirm with CPO).
+- The owner notice (ruling B) goes to owners only; whether non-owner members need a notice or the in-view disclosure suffices (CLO).
+- Real customer volume is still unmeasured (zero real-workspace rows); it cannot be measured before collection is enabled, so PR2 does not wait on it. Sizing stays on the CTO's assumption (about 80k rows/day at 1,000 workspaces) and the RPC is bounded by limit and `statement_timeout`.
+- The enable-dialog notice depends on whether the client can read `egress-audit-collection` for the org; the plan must confirm how the value reaches the component (CTO).
+- Time-range selector and 24h request count on the card: deferred (out of scope for v1).
+- Per-member attribution and CSV export: excluded by design (out of scope).
+
+## Capability Gaps
+
+None. Evidence: repo research found no existing "View egress audit log" link (only two stale TODO comments), no read-side flag, and migration 162 with no member policy.
+
+## Correction note (2026-10-26, PR2 review round; append-only)
+
+The decision table above (row "Rate limit and observability") names `Cache-Control: private, no-store`, a rate-limited route (`withUserRateLimit`) and a `statement_timeout` bound. Superseded: there is no route (plan review 2026-10-26); the page response carries `Cache-Control: no-store` (the middleware sets `no-store, no-cache, must-revalidate` and a test asserts it); a function-level `statement_timeout` is a no-op for the running statement, and the real bound is the `authenticated` role's 8 s timeout plus the structural bounds. The migration ordinal is 177, not 164. See the plan (`knowledge-base/project/plans/2026-10-26-feat-egress-audit-read-path-plan.md`, section D6) and the ADR-288 amendment.

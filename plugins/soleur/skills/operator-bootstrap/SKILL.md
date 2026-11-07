@@ -64,11 +64,13 @@ bash SCRIPT --stage NAME --apply --plan-digest D [--rotate-token]   the approved
 - `--apply --plan-digest D` performs the write. The script **recomputes** the plan and compares the
   digest, so what runs is what was shown; a mismatch exits 75 `SOLEUR_BOOTSTRAP_PLAN_DRIFT` with
   nothing written.
-- The **receipt**: a plugin PreToolUse hook (`plugins/soleur/hooks/operator-stage-approval.sh`) mints
-  a one-time record when the harness shows the person the exact command, and rewrites the command to
-  carry `SOLEUR_APPROVAL_NONCE`. The script consumes the record before its first write. An
-  environment variable or a flag set by the agent is never an approval. No valid receipt: exit 75,
-  nothing written.
+- The **receipt** (Claude Code interactive only): a plugin PreToolUse hook
+  (`plugins/soleur/hooks/operator-stage-approval.sh`) mints a one-time record when the harness shows
+  the person the exact command, and rewrites the command to carry `SOLEUR_APPROVAL_NONCE`. The script
+  consumes the record before its first write. An environment variable or a flag set by the agent is
+  never an approval. On harnesses without that hook (OpenCode, Codex, Devin cloud, Grok) and on the
+  web app, no receipt can be minted: `--apply` exits 75 (`SOLEUR_BOOTSTRAP_APPROVAL_REQUIRED`) with
+  nothing written (see **Surfaces** below).
 - **Keep the `.env` beside the script.** "Satisfied" and `verify` read the recorded slugs there (it is
   gitignored). A fresh checkout without it turns a satisfied stage into a rotation plan and makes
   `verify` report a healthy vendor state as failed: run `verify` from the checkout that ran the stages.
@@ -244,7 +246,7 @@ state `SOLEUR_BOOTSTRAP_APPROVAL_PENDING stage=<s>` in your reply (headless only
 and approves at the prompt. There is no variable, setting or file that approves it; never suggest one.
 `bypassPermissions`, `dontAsk` and auto modes: the hook denies. The script itself accepts a typed `yes`
 only from a person at their own terminal with no agent harness around it, so never allocate a
-pseudo-terminal to answer it. Harnesses without the hook (Codex,
+pseudo-terminal to answer it. Harnesses without the hook (OpenCode, Codex,
 Devin cloud, Grok) and the web app: the script exits 75 and writes nothing; say "this surface cannot
 make production changes yet" and **never** tell the person to open a terminal (the web approval
 adapter is #9388; per-harness adapters are #9389).

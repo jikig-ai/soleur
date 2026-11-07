@@ -70,6 +70,12 @@ export const SENSITIVE_KEY_NAMES = [
   // the value is what the helper's confidentiality leans on (Recital 26).
   "SENTRY_USERID_PEPPER",
   "pepper",
+  // Origin TLS private key (#10479): base64 of the PEM, delivered through the container env-file.
+  // The listener deletes it from process.env after boot; this keeps an env dump from shipping it.
+  "ORIGIN_TLS_KEY_B64",
+  // Session-proxy TLS private key (PEM, #12167), delivered through the container env-file.
+  // PROXY_TLS_CERT is the public certificate and is deliberately NOT listed.
+  "PROXY_TLS_KEY",
   // Inbound email triage (feat-operator-inbox-delegation #5103). The
   // Inngest sentry-correlation middleware ships ctx.event.data to Sentry as
   // `extra` on every captured pipeline error (sentry-correlation.ts:76,135)
@@ -95,6 +101,10 @@ export const SENSITIVE_KEY_NAMES = [
   "email",
   "inviteeEmail",
   "recipient",
+  // Bulk user/workspace id list (#8211 PR-B2): the manual git-data erasure seed carries up to 500 raw
+  // account UUIDs in `data.ids`, and the Inngest sentry-correlation middleware ships the whole
+  // event_data to every Sentry event of the run. Redact the list (and any pino `ids` / `*.ids` field).
+  "ids",
   // HTTP transport
   "cookie",
   "x-nonce",

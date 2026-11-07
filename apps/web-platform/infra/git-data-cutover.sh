@@ -61,7 +61,7 @@
 # LUKS mapper at /mnt/git-data from boot and the bootstrap plants the fence on it. There is
 # nothing to copy, because the store has never held a repository.
 #
-# MODES (#8211 PR2, #10138). MODE selects the verb — proof (default), freeze, unfreeze, probe, wipe_assert.
+# MODES (#8211 PR2, #10138, #11431). MODE selects the verb — proof (default), freeze, unfreeze, probe, wipe_assert, refs_assert.
 # The flag write and the fleet redeploy are WORKFLOW steps, not script verbs: this script
 # reads no secret store and the webhook credentials never reach it. Host-side mode mapping:
 #   workflow flip     -> precheck(flip) -> preconditions -> MODE=freeze -> flag write ->
@@ -154,12 +154,17 @@ resolve_roster() {
 ACCESS_TMP=""       # probe capture dir of the access gate; removed on every exit
 CAPTURE_TMP=""      # stderr capture dir of gd_capture; removed on every exit
 GD_CAPTURED=""      # the last value gd_capture ACCEPTED; never printed
+STORE_LAST_VERDICT=""  # the last verdict word the store emitter spoke (refs_assert reads it to class a shared-probe refusal)
+REFS_ACTIVE=0       # 1 inside mode_refs_assert
+REFS_NOTED=0        # 1 once _refs_refuse has written the class annotation
 
 # The trap only drops temp captures: nothing on any host is ever changed, so nothing is
 # ever recovered.
 cleanup() {
   local rc=$?
   trap - EXIT
+  # refs_assert: a refusal that did not come from _refs_refuse (the access gate, the shared store probes) still carries a class.
+  [ "$rc" -eq 0 ] || [ "$REFS_ACTIVE" != 1 ] || [ "$REFS_NOTED" = 1 ] || _refs_note_unattributed || true
   _access_tmp_drop || true
   _capture_tmp_drop || true
   exit "$rc"
@@ -171,7 +176,10 @@ trap cleanup EXIT
 # ============================================================================
 # MODE selects one host-side verb; the flag write, the fleet redeploy and the flag
 # read-back are WORKFLOW steps (this script reads no secret store — the contract stands).
-#   proof     (default, DRY_RUN=1): the read-only probe chain above.
+#   proof     (default, DRY_RUN=1): the read-only probe chain above, ending (#8211 PR-E) WHEN CONTAINER_PROBE=1 (the flip's proof step only)
+#             with the container probe: from INSIDE the app container, the worktree root is writable by uid 1001 and the git-data
+#             transport answers (git-data-container-probe.sh). It covers web-1 only (the roster; web-2 has no SSH ingress) and reads the
+#             container running now, before the flip's own redeploy: web-2's egress, env drift and image version are not covered.
 #   freeze    assert git-data-gc.service inactive -> stop git-data-gc.timer -> write
 #             $OLD_ROOT/.cutover-freeze with `writer=<lineage> at=<epoch>` provenance ->
 #             purge legacy .<id>.init.lock residue inside the freeze window.
@@ -192,12 +200,18 @@ trap cleanup EXIT
 #             and for pre: WIPE_ROW_DT (the boot_complete row's dt: epoch seconds or
 #             `YYYY-MM-DD HH:MM:SS`, UTC) and WIPE_LISTING=run|skip (skip = the finish phase: no
 #             snapshot is taken, layout_signal=not_run; wipe_check and wipe both run the listing). Verdicts are exit 5 with a fixed word.
+#   refs_assert (#11431) the READ-ONLY host read that lets REFS-CONFIRMED be attained (runbook "Reading REFS-CONFIRMED"): after the
+#             store pre-flight (mounted, on the mapper, marker bound, NOT frozen: a held freeze refuses cutover_frozen, no bypass),
+#             ONE ssh session runs git-data-refs-assert.sh (sent on stdin to `bash -s`) and prints one fixed-shape line of counts
+#             and at most two commit shas, never a name. Takes no input but the (validated) store paths. Every refusal is exit 5
+#             with a fixed word and a class (FAILED, or INCONCLUSIVE when the read could not decide); the workflow runs it with the
+#             store flag OFF (FLAG_MODE=proof).
 # The legacy arm still stands for DRY_RUN!=1/CONFIRM_WIPE!=0 (refused below: the wipe is the `wipe` job of
 # the workflow, which drives MODE=wipe_assert and the Hetzner helper, not this script's legacy env);
 # ROLLBACK=1 maps to MODE=rollback at the WORKFLOW level, not here.
 MODE="${MODE:-proof}"
 case "$MODE" in
-  proof|freeze|unfreeze|probe|wipe_assert) : ;;
+  proof|freeze|unfreeze|probe|wipe_assert|refs_assert) : ;;
   *) log "REFUSE verdict=mode_invalid mode=${MODE}"
      echo "::error title=git-data-cutover::verdict=mode_invalid"
      exit 5 ;;
@@ -217,7 +231,7 @@ refuse_legacy_modes() {
   [ -n "$bad" ] || return 0
   log "REFUSE verdict=real_cutover_unreconciled vars=${bad# }"
   echo "::error title=git-data-cutover::verdict=real_cutover_unreconciled"
-  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe|wipe_assert); the plaintext-volume wipe is the workflow's wipe job (#10138), not these env words."
+  log "remedy: MODE selects the verb (proof|freeze|unfreeze|probe|wipe_assert|refs_assert); the plaintext-volume wipe is the workflow's wipe job (#10138), not these env words."
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf -- '- REFUSE verdict=real_cutover_unreconciled\n' >> "$GITHUB_STEP_SUMMARY" || true
   fi
@@ -240,6 +254,25 @@ gd_exec() {
   if [ "$rc" -ne 0 ]; then
     _access_stderr "$CAPTURE_TMP/capture.err"
   fi
+  return "$rc"
+}
+
+# --- web_exec: one bounded remote exec on a WEB host, a script on stdin (#8211 PR-E) ------------------
+# web_exec <host> <remote-cmd> <stdin-file> <timeout-seconds>: runs the command over WEB_HOST_SSH (the bridge's pinned
+# invocation, the one the access gate proves), stdin the file, stdout to capture.out and stderr to capture.err in
+# CAPTURE_TMP; returns ssh's own rc. The caller decides what to print: a mapped exit code is a fixed word, and only an
+# unmapped one dumps the (filtered) stderr. The host is a roster member (resolve_roster validated it dotted-numeric).
+web_exec() {
+  local h="$1" cmd="$2" sin="$3" tmo="$4" rc=0
+  local -a inv
+  read -ra inv <<< "${WEB_HOST_SSH:-}"
+  [ "${#inv[@]}" -gt 0 ] || return 97
+  [ -f "$sin" ] || return 95
+  [[ "$tmo" =~ ^[1-9][0-9]{0,2}$ ]] || return 95
+  if [ -z "$CAPTURE_TMP" ]; then CAPTURE_TMP="$(mktemp -d)" || return 95; fi
+  : > "$CAPTURE_TMP/capture.err" || return 95
+  timeout "$tmo" "${inv[@]}" -o BatchMode=yes -o ConnectTimeout=20 "$h" "$cmd" \
+    <"$sin" >"$CAPTURE_TMP/capture.out" 2>"$CAPTURE_TMP/capture.err" || rc=$?
   return "$rc"
 }
 
@@ -284,13 +317,13 @@ probe_freeze() {
 # it matches the pattern in full. A multi-line value never matches. On success GD_CAPTURED holds the
 # value; on failure it is empty and the return is ssh's rc, or 96 on a mismatch. The value is never
 # printed; a failed read's stderr goes out capped and filtered through _access_stderr.
-# The two optional parameters exist for ONE caller (mode_wipe_assert, which sends a host-side script on
-# stdin to `bash -s` and needs longer than 30 s for a snapshot read); with neither, the call is
+# The two optional parameters exist for TWO callers (mode_wipe_assert and mode_refs_assert, which each send a host-side
+# script on stdin to `bash -s`; the wipe read needs longer than 30 s for a snapshot read); with neither, the call is
 # byte-for-byte the old one: stdin /dev/null, 30 s. The stdin file must be a regular file; the bound a
 # positive integer of at most three digits. A malformed one is a local failure (95), never a default.
 _capture_tmp_drop() {
   [ -n "$CAPTURE_TMP" ] || return 0
-  rm -f "$CAPTURE_TMP/capture.err"
+  rm -f "$CAPTURE_TMP/capture.err" "$CAPTURE_TMP/capture.out"
   rmdir "$CAPTURE_TMP" || return 1
   CAPTURE_TMP=""
 }
@@ -458,6 +491,7 @@ access_gate() {
 # ============================================================================
 _store_emit() { # <probe> <verdict> [rc] [reason] — pass "" for rc when a reason has no rc
   local detail="probe=$1 verdict=$2${3:+ rc=$3}${4:+ reason=$4}"
+  STORE_LAST_VERDICT="$2"
   log "STORE ${detail}"
   if [ "$2" = ok ]; then
     echo "::notice title=git-data-cutover store::probe=$1 verdict=ok"
@@ -710,6 +744,78 @@ refuse_if_fence_not_intact() {
   esac
   [ -z "$reason" ] || _store_refuse fence-shape fence_not_intact "" "$reason"
   _store_emit fence-shape ok
+}
+
+# ============================================================================
+# container probe — the flag-on properties only the running container can show (#8211 PR-E)
+# ============================================================================
+# The flag-on rehearsal (2026-10-24) failed twice on things no runner-side check could see: the worktree root
+# was not writable by uid 1001 (EACCES at mkdir, every session), and the container's egress to git-data was a
+# blackhole that a host-side ssh does not share. This runs git-data-container-probe.sh INSIDE the app container,
+# as its own user, from web-1's SSH session (`docker exec -i -u 1001:1001 ... sh -s`, the script on stdin), for each
+# roster host. The container is read, never changed: the probe makes and removes one empty directory in the worktree
+# root and asks the transport wrapper for a repository that cannot exist (a `remote: git-data transport:` answer
+# proves reachability, key, pin and wrapper; a timeout is the blackhole). No key material is printed: the body keeps
+# the key in a 0600 file under a 0700 scratch directory it removes, and this verb prints only the words below.
+# The static twin is git-data-flag-precheck.sh WORKTREE_ROOT_WRITABLE (the Dockerfile owns the directory).
+# The body's exit code names the stage (its header is the table):
+#   21  worktree root absent / not writable by uid 1001   worktree_root_not_writable
+#   24  the dial timed out                                container_egress_blackhole reason=timeout
+#   25  refused / no route / unreachable / reset          container_egress_blackhole reason=refused
+#   22  no scratch directory                              probe_failed reason=scratch
+#   23  the transport env is empty in the container       probe_failed reason=transport_env_absent
+#   26  the endpoint refused the transport key            probe_failed reason=auth_refused
+#   27  the pinned host key did not verify                probe_failed reason=host_key
+#   28  anything else                                     probe_failed reason=unclassified
+#   29  ssh / timeout could not be run (rc 126 / 127)     probe_failed reason=ssh_unrunnable
+#   30  the endpoint closed or reset the connection      probe_failed reason=ssh_closed
+#   31  the transport key is not a parseable key file     probe_failed reason=key_shape (checked before any dial; #8211 PR-G)
+# Any other rc (docker exec itself failing: no such container, a stopped one; ssh's 255; the bound's 124) is
+# probe_failed rc=<n>. rc 0 counts only with the body's exact one-line answer: an exit that ran nothing is not a pass.
+CONTAINER_PROBE_ANSWER='container_probe ok worktree_root=writable transport=answered'
+# The app container's name (ci-deploy.sh starts it under this name). A named constant on ONE exact line: the A12 census in
+# git-data-luks.test.sh (the retired cutover body must not come back) exempts exactly this assignment and nothing else.
+CONTAINER_PROBE_APP_NAME="soleur-web-platform"
+# SCOPE (read before relying on it): the probe runs ONLY when the workflow sets CONTAINER_PROBE=1, which it does on the flip's proof
+# step and nowhere else. The proof that ends a rollback (flag off, egress path intentionally unused, the container possibly
+# mid-recreate) must stay able to read `clear`. It covers WEB_HOSTS, which is web-1 ONLY (web-2 has no SSH ingress): web-2's container
+# egress, env drift and image version are NOT covered. And it reads the container running NOW, before the flip's own redeploy.
+refuse_if_container_unready() {
+  local ctr="$CONTAINER_PROBE_APP_NAME" h rc body here qr cmd
+  if [ "${CONTAINER_PROBE:-}" != 1 ]; then
+    log "container probe: skipped (CONTAINER_PROBE is not 1: only the flip's proof step runs it; a proof after a rollback must not read the container)"
+    return 0
+  fi
+  step "container probe: the worktree root is writable by uid 1001 and git-data answers, both from inside the app container"
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || _store_refuse container-probe probe_failed "" arg_body
+  body="$here/git-data-container-probe.sh"
+  [ -f "$body" ] && [ -s "$body" ] || _store_refuse container-probe probe_failed "" arg_body
+  printf -v qr '%q' "$OLD_REPOS"
+  cmd="docker exec -i -u 1001:1001 -e GDCP_REPO_ROOT=$qr $ctr sh -s"
+  for h in "${WEB_HOST_LIST[@]}"; do
+    rc=0
+    web_exec "$h" "$cmd" "$body" 90 || rc=$?
+    case "$rc" in
+      0) ;;
+      21) _store_refuse container-probe worktree_root_not_writable ;;
+      22) _store_refuse container-probe probe_failed "" scratch ;;
+      23) _store_refuse container-probe probe_failed "" transport_env_absent ;;
+      24) _store_refuse container-probe container_egress_blackhole "" timeout ;;
+      25) _store_refuse container-probe container_egress_blackhole "" refused ;;
+      26) _store_refuse container-probe probe_failed "" auth_refused ;;
+      27) _store_refuse container-probe probe_failed "" host_key ;;
+      28) _store_refuse container-probe probe_failed "" unclassified ;;
+      29) _store_refuse container-probe probe_failed "" ssh_unrunnable ;;
+      30) _store_refuse container-probe probe_failed "" ssh_closed ;;
+      31) _store_refuse container-probe probe_failed "" key_shape ;;
+      *) _access_stderr "$CAPTURE_TMP/capture.err"
+         _store_refuse container-probe probe_failed "$rc" ;;
+    esac
+    [ "$(head -c 200 "$CAPTURE_TMP/capture.out")" = "$CONTAINER_PROBE_ANSWER" ] \
+      || _store_refuse container-probe probe_failed "" bad_answer
+    log "container probe: host $h ok"
+  done
+  _store_emit container-probe ok
 }
 
 # ============================================================================
@@ -1013,6 +1119,90 @@ mode_wipe_assert() {
 }
 
 # ============================================================================
+# refs_assert — the host-side read that lets REFS-CONFIRMED be attained (#11431)
+# ============================================================================
+# One gd_capture call: git-data-refs-assert.sh goes on STDIN to `bash -s` (60 s), REFS_REPOS %q-quoted in front of it.
+# The script's own exit code is the verdict; this verb maps each to a fixed word and a class, never from host text
+# (the table is the script's header `# EXIT CODES`; the suite derives both sides). Anything else, and every transport rc,
+# is probe_failed rc=<n>, INCONCLUSIVE: a read that failed is never evidence of non-replication. The answer is counts and
+# at most two shas, matched in full; the value is never printed on a failure and no host byte reaches a workflow command
+# (stderr is relayed only through _access_stderr). Read-only toward the host.
+_refs_emit() { _store_emit refs-assert "$@"; }
+_refs_class() { # <word> -> FAILED | INCONCLUSIVE (by word, from the exit-code table; INCONCLUSIVE is "no verdict on the refs")
+  case "$1" in
+    refs_repo_absent|refs_none|refs_no_branch_tip|refs_bad_sha) printf FAILED ;;
+    *) printf INCONCLUSIVE ;;
+  esac
+}
+_refs_annotate() { # <word> <class> [suffix] — the class beside the verdict, in the log, the annotation, the summary and the output
+  local line="verdict=$1 class=$2${3:+ $3}"
+  echo "::error title=git-data-cutover refs::${line}"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then printf -- '- REFS %s\n' "$line" >> "$GITHUB_STEP_SUMMARY" || true; fi
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then printf 'refs_class=%s\n' "$2" >> "$GITHUB_OUTPUT" || true; fi
+  REFS_NOTED=1
+}
+_refs_refuse() { # <word> [rc] [reason] — emit, class, stop
+  local w="$1" sfx="" n
+  _refs_emit "$@"
+  if [ "$w" = refs_shape_failed ] && [[ "${2:-}" =~ ^(27|96)$ ]]; then sfx="rc=$2"; fi
+  if [ "$w" = refs_repo_not_single ] && [ -n "$CAPTURE_TMP" ] && [ -f "$CAPTURE_TMP/capture.err" ]; then
+    n="$(sed -nE 's/^refs-assert: rc=21 reason=repos_not_single repos=([0-9]{1,6})$/\1/p' "$CAPTURE_TMP/capture.err" | head -n 1)" || n=""
+    if [[ "$n" =~ ^[0-9]{1,6}$ ]]; then sfx="repos=$n"; fi
+  fi
+  _refs_annotate "$w" "$(_refs_class "$w")" "$sfx"
+  exit 5
+}
+_refs_note_unattributed() { # a refusal from the access gate or a shared store probe: INCONCLUSIVE, the word is the last one spoken
+  # An empty last word means the access gate refused before any store probe spoke (access_refused); `ok` means the last probe
+  # passed and something after it failed (probe_failed). Both are documented words (runbook Verdict map), never a bare ok.
+  local w="${STORE_LAST_VERDICT:-}"
+  case "$w" in "") w=access_refused ;; ok) w=probe_failed ;; esac
+  _refs_annotate "$w" INCONCLUSIVE ""
+}
+mode_refs_assert() {
+  step "refs_assert: host read of the replicated refs (read-only toward the store; no name leaves the host)"
+  REFS_ACTIVE=1
+  local body pat cmd tmo=60 rc=0 qd here
+  refuse_if_config_unsafe
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || _refs_refuse probe_failed "" arg_body
+  body="$here/git-data-refs-assert.sh"
+  [ -f "$body" ] && [ -s "$body" ] || _refs_refuse probe_failed "" arg_body
+  access_gate
+  refuse_if_unmounted
+  refuse_if_not_on_mapper
+  # verified-only: mounted, on the mapper, marker bound, NOT frozen. The step sets no CUTOVER_LINEAGE, so a held sentinel is
+  # never tolerated as resume arm A; and the repositories-directory checks it skips are repeated by the host script.
+  refuse_if_store_unverified_or_not_empty verified-only  # the host script repeats the repositories-directory checks
+  printf -v qd '%q' "$OLD_REPOS"
+  cmd="REFS_REPOS=$qd bash -s"
+  pat='^refs_assert ok repos=1 namespaces=[1-9][0-9]* refs=[1-9][0-9]* heads=[1-9][0-9]* shas=[0-9a-f]{40}(,[0-9a-f]{40}){0,1}$'
+  GD_CAPTURED=""
+  gd_capture "$pat" "$cmd" "$body" "$tmo" || rc=$?
+  case "$rc" in
+    0) ;;
+    20) _refs_refuse refs_repo_absent ;;
+    21) _refs_refuse refs_repo_not_single ;;
+    23) _refs_refuse refs_none ;;
+    24) _refs_refuse refs_no_branch_tip ;;
+    26) _refs_refuse refs_unreadable ;;
+    27) _refs_refuse refs_shape_failed 27 ;;
+    28) _refs_refuse refs_bad_sha ;;
+    96) _refs_refuse refs_shape_failed 96 ;;
+    *) _refs_refuse probe_failed "$rc" ;;
+  esac
+  # Success needs the host's OWN answer line, independent of the rc table: an arm added above with an empty body, or an ssh
+  # that returns 0 with nothing, must never read as REFS-CONFIRMED. The same anchored pattern, matched against the capture.
+  [[ "$GD_CAPTURED" =~ $pat ]] || _refs_refuse refs_shape_failed 96
+  # The answer matched the fixed shape in full: counts and at most two commit shas.
+  _refs_emit ok
+  log "REFS-CONFIRMED"
+  log "REFS_ASSERT ${GD_CAPTURED#refs_assert }"
+  if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    { printf -- '- REFS-CONFIRMED\n'; printf -- '- REFS_ASSERT %s\n' "${GD_CAPTURED#refs_assert }"; } >> "$GITHUB_STEP_SUMMARY" || true
+  fi
+}
+
+# ============================================================================
 # Main
 # ============================================================================
 main() {
@@ -1027,13 +1217,15 @@ main() {
       refuse_if_not_on_mapper
       refuse_if_store_unverified_or_not_empty
       refuse_if_fence_not_intact
-      log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, no entry in the repositories directory, fence in place for pushes"
+      refuse_if_container_unready
+      log "read-only proof clear: access ok, served by the LUKS mapper, the bootstrap's store marker bound to its filesystem, not frozen, no entry in the repositories directory, fence in place for pushes, and the app container owns its worktree root and reaches git-data"
       echo "::notice title=git-data-cutover store::verdict=clear"
       ;;
     freeze)   mode_freeze ;;
     unfreeze) mode_unfreeze ;;
     probe)    mode_probe ;;
     wipe_assert) mode_wipe_assert ;;
+    refs_assert) mode_refs_assert ;;
   esac
 }
 

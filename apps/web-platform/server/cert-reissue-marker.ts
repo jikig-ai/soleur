@@ -5,9 +5,10 @@
 //
 //   H-T1 — the injected Inngest ctx `logger` is gated off. `server/inngest/
 //   client.ts` constructs `new Inngest({...})` with no `logger` option, so
-//   inngest@3.54.2 falls back to `DefaultLogger` wrapped in `ProxyLogger`.
+//   inngest@4.26.0 falls back to `ConsoleLogger` wrapped in `ProxyLogger`.
 //   `ProxyLogger.info()` begins `if (!this.enabled) return;` and `enabled` flips
-//   true only in `beforeExecution()`. Inngest re-runs the function body from the
+//   true only in `onMemoizationEnd()` (the v4 hook; v3's `beforeExecution()`).
+//   Inngest re-runs the function body from the
 //   top on every HTTP request and memoizes completed steps, so a `logger.info`
 //   on a memoization/discovery pass is silently swallowed.
 //

@@ -3,12 +3,13 @@ name: PR quality guards (#2905)
 on:
   pull_request:
     types: [opened, synchronize, reopened, edited]
-  # Merge queue (#5780; five required contexts live here post-#8902 fold).
-  # FIVE jobs are required contexts on ruleset 14145388 —
-  # `guard-script-fixture-tests`, `markdown-lint`, and the folded
-  # `dependency-review`, `enforce`, `skill-security-scan` — and NONE has a
-  # PR-event-only dependency (the folded required jobs keep their merge_group
-  # step arms), so all five run cleanly on the gh-readonly-queue/main/* temp
+  # Merge queue (#5780; three required contexts live here post-#12089
+  # umbrella). THREE job-names are required contexts on ruleset 14145388 —
+  # `quality-guards` (umbrella over the folded `enforce`, `markdown-lint`,
+  # and `guard-script-fixture-tests` member steps), `dependency-review`, and
+  # `skill-security-scan PR gate` — and NONE has a PR-event-only dependency
+  # (the folded required jobs keep their merge_group step arms as member
+  # steps), so all three report cleanly on the gh-readonly-queue/main/* temp
   # ref. Every OTHER job is a PR-quality gate keyed on
   # `github.event.pull_request.*` (PR number, diff, opt-out label) that has no
   # meaning on a merge candidate — each is gated to `pull_request` below so it
@@ -37,10 +38,12 @@ concurrency:
 
 jobs:
   # Cheap per-PR file-list probe (~8s, no checkout) gating the five file-scoped
-  # advisory jobs below — a push that cannot touch a surface skips its guard.
+  # advisory member steps in `quality-advisory` below — a push that cannot
+  # touch a surface skips its guard.
   # FAIL-OPEN: every error path emits 'true' for all surfaces (a gate may skip
-  # on PROOF, never on uncertainty). Advisory-only — the two required jobs keep
-  # no `needs: detect` edge and never read it.
+  # on PROOF, never on uncertainty). Advisory-only — the three required jobs
+  # (quality-guards, dependency-review, skill-security-scan) keep no
+  # `needs: detect` edge and never read it.
   detect:
     name: Detect gated-guard file changes
     runs-on: ubuntu-latest
@@ -91,22 +94,297 @@ jobs:
             echo "sweep=$(hit "(^|/)enforcement-contracts\.json$|^(${extra})$")" >> "$GITHUB_OUTPUT"
           fi
 
-  guard-script-fixture-tests:
-    name: Bash fixture tests for guard scripts
+  # ─── quality-guards (#12089): ONE required-context umbrella over the three
+  # required quality guards that each used to burn a runner slot — the
+  # `lint-bot-statuses` fold precedent applied to this file's required set
+  # (16 → 3 umbrella contexts across the three workflows, ADR-032 amendment
+  # 2026-11-06). The REQUIRED CONTEXT is this job's `name:` — `quality-guards`
+  # — pinned in infra/github/ruleset-ci-required.tf + the canonical JSON +
+  # scripts/required-checks.txt. The folded contexts (enforce, markdown-lint,
+  # "Bash fixture tests for guard scripts") are gone as check names but live
+  # on as MEMBER step ids: every member step carries `if: ${{ !cancelled() }}`
+  # so one red member never hides the rest, and the `aggregate` step prints
+  # every member's verdict and fails the job iff any member failed — skipped
+  # ≠ success: a member that produced no verdict on an event it owes one on
+  # is a failure, never a pass. NO job-level event `if:` — a required context
+  # that does not report on merge_group pends the queue forever (the
+  # merge_group note at the top of this file).
+  quality-guards:
+    name: quality-guards
+    # 15m — the three folded jobs measured ~7m serial worst-case (fixture
+    # battery ~4m + npm ci + markdown sweep ~1.5m + enforce <1m); >=2x headroom.
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Run guard fixture tests
-        run: bash .github/scripts/test/run-all.sh
+        with:
+          # Deepest fetch-depth any member needs (0): the enforce member's
+          # merge-base diff and the fixture battery's corrupt-ancestry fixtures.
+          fetch-depth: 0
 
-  settings-json-integrity:
-    name: Block destructive .claude/settings.json edits
+      # ── member: enforce (was jobs.enforce — legal-doc cross-document
+      # lockstep + BACKSTOP_REVISION + Art. 30, folded #4384/#8902) ──
+      - id: enforce-legal-lockstep
+        if: ${{ !cancelled() }}
+        name: Enforce legal-doc cross-document lockstep
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          # Merge-queue candidate base (a SHA, already an ancestor in the
+          # fetch-depth:0 checkout). GitHub-controlled; quoted in the run: block.
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -euo pipefail
+
+          # Surfaces whose presence in the diff REQUIRES the four legal
+          # docs to be touched in the same PR. The `paths:` trigger filter
+          # was removed in PR #4384 (required-check promotion); this list
+          # is now the SOLE source of truth for "is this PR DSAR-adjacent".
+          surface_patterns=(
+            'apps/web-platform/server/dsar-export\.ts'
+            'apps/web-platform/server/dsar-export-allowlist\.ts'
+            'apps/web-platform/server/dsar-reauth\.ts'
+            'apps/web-platform/app/api/account/export/'
+            'apps/web-platform/supabase/migrations/041_dsar_export_jobs\.sql'
+            'apps/web-platform/supabase/migrations/042_dsar_exports_storage_bucket\.sql'
+          )
+
+          required_legal_files=(
+            'docs/legal/privacy-policy.md'
+            'docs/legal/gdpr-policy.md'
+            'docs/legal/data-protection-disclosure.md'
+            'knowledge-base/legal/compliance-posture.md'
+          )
+
+          # Collect changed files in the PR diff against the PR base.
+          # BASE_REF arrives via env: + double-quoted in the command so
+          # workflow-injection guidance is honoured.
+          #
+          # NO --depth=1: the three-dot `origin/BASE...HEAD` diff is computed
+          # from the MERGE-BASE of base and HEAD (so it lists only this PR's own
+          # changes, not commits that landed on base since the branch point — a
+          # two-dot diff would mis-flag those unrelated files). A shallow
+          # `--depth=1` fetch brings only base's tip commit, so when base has
+          # advanced past the branch point the merge-base is unreachable and the
+          # diff dies with `fatal: origin/BASE...HEAD: no merge base` (exit 128)
+          # — failing the gate on a branch-history artifact, not a real finding.
+          # Checkout already runs fetch-depth:0, so this fetch is a cheap
+          # incremental that just makes the merge-base reachable.
+          if [ "$EVENT_NAME" = "merge_group" ]; then
+            # Merge-queue candidate (#5780): base_sha is an ancestor commit
+            # already present in the fetch-depth:0 checkout — diff directly
+            # against it (no ref to fetch). A vacuous pass here would post a
+            # green `quality-guards` member verdict on the temp ref WITHOUT checking the candidate
+            # (P1-1/P1-5), so an empty base_sha is a HARD failure, never a
+            # fall-through to surface_hit=false.
+            if [ -z "${MERGE_GROUP_BASE_SHA:-}" ]; then
+              echo "::error::merge_group event with empty base_sha — refusing to run the gate vacuously. The legal-doc surface check would be skipped, letting a lockstep regression merge unverified." >&2
+              exit 1
+            fi
+            diff_base="$MERGE_GROUP_BASE_SHA"
+          else
+            git fetch --quiet origin "$BASE_REF"
+            diff_base="origin/${BASE_REF}"
+          fi
+          changed_files=$(git diff --name-only "${diff_base}"...HEAD)
+          echo "Changed files in PR:"
+          echo "$changed_files" | sed 's/^/  /'
+
+          surface_hit=false
+          for pat in "${surface_patterns[@]}"; do
+            if echo "$changed_files" | grep -Ec "$pat" >/dev/null; then
+              surface_hit=true
+              break
+            fi
+          done
+
+          if [ "$surface_hit" = false ]; then
+            echo "No DSAR surface file touched — gate trivially passes."
+            exit 0
+          fi
+
+          echo "DSAR surface file detected; verifying all required legal docs are updated…"
+          missing=()
+          for legal in "${required_legal_files[@]}"; do
+            if ! echo "$changed_files" | grep -Fxc "$legal" >/dev/null; then
+              missing+=("$legal")
+            fi
+          done
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Legal-doc cross-document gate FAILED. The PR touches a DSAR-regulated-data surface but is missing updates to:"
+            for f in "${missing[@]}"; do
+              echo "::error::  - $f"
+            done
+            echo ""
+            echo "Per plan rev-2 C8 / AC8 / FR8: the Privacy Policy, GDPR Policy, Data Protection Disclosure, and compliance-posture documents must be updated in the same PR as any change to the DSAR worker, route, migration, or allowlist. Update the four files above (or split the change into two PRs)."
+            exit 1
+          fi
+
+          echo "All four required legal docs are updated. Gate passes."
+      # Guard 1 of #9239: when the merge-base diff touches
+      # .claude/hooks/memory-backstop.sh (or the sourced lib/log-rotation.sh),
+      # the BACKSTOP_REVISION marker must STRICTLY INCREASE — the resolver
+      # orders installed copies by `>`, so a same-or-lower bump is
+      # undeliverable to stale-checkout sessions. Runs
+      # UNCONDITIONALLY (no path filter — a deleted filter can never darken
+      # the gate); the script self-skips with an explicit NO-OP verdict when
+      # the hook is untouched, and does its own `git fetch` of the base ref.
+      # On merge_group, GITHUB_BASE_REF is unset and the script diffs against
+      # origin/main — correct for a queue candidate, which must carry the same
+      # bump as the PR it batches.
+      - id: enforce-backstop
+        if: ${{ !cancelled() }}
+        name: Enforce BACKSTOP_REVISION bump on memory-backstop hook changes
+        run: bash scripts/check-backstop-revision.sh
+      - id: enforce-art30
+        if: ${{ !cancelled() }}
+        name: Enforce Art. 30 re-verification triggers
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: bash scripts/lint-art30-reverification.sh
+
+      # ── member: markdown-lint (whole-corpus markdownlint, #7927 — whole
+      # corpus, not --changed; `npm ci` because the script refuses to run an
+      # unpinned binary) ──
+      - id: markdown-lint-setup-node
+        if: ${{ !cancelled() }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .nvmrc
+      # Named without the binary's own token on purpose: the single-invoker guard
+      # in scripts/markdown-lint.test.sh greps command position, and a step NAME
+      # carrying the literal reads to it exactly like a second call site.
+      - id: markdown-lint-install
+        if: ${{ !cancelled() }}
+        name: Install the pinned linter
+        run: npm ci --ignore-scripts
+      - id: markdown-lint
+        if: ${{ !cancelled() }}
+        name: Lint the tracked Markdown corpus
+        run: bash scripts/markdown-lint.sh --repo-sweep
+      # The gate's OWN suite runs here, not in test-all.sh's scripts group: it drives the
+      # real pinned binary through a hermetic sandbox, and the `test-scripts*` legs install
+      # no node deps, so this is the only CI job where it can execute rather than abort on
+      # a RED control. Ordered after the sweep so a corpus regression is reported as a
+      # corpus regression, not as a suite failure.
+      - id: markdown-lint-mutations
+        if: ${{ !cancelled() }}
+        name: Prove the gate can still fail (mutation suite)
+        run: bash scripts/markdown-lint.test.sh
+
+      # ── member: guard-script-fixture-tests (the folded context was named
+      # "Bash fixture tests for guard scripts") ──
+      - id: guard-script-fixture-tests
+        if: ${{ !cancelled() }}
+        name: Run guard fixture tests
+        run: bash .github/scripts/test/run-all.sh
+      # PACKED-STORE ARM (#10921 AC4): the corrupt-ancestry fixtures exist to
+      # prove the never-written-object construction on the store layout that
+      # caused the original flake — packed objects. SOLEUR_FIXTURE_PACKED=1
+      # makes each forge helper `git repack -ad` the fixture repo between
+      # seeding and forging. run-all.sh takes no suite filter, so the arm runs
+      # just the two suites carrying corrupt-walk rows rather than re-running
+      # all sixteen.
+      - id: guard-script-fixture-tests-packed
+        if: ${{ !cancelled() }}
+        name: Re-run corrupt-fixture suites against a packed object store
+        run: |
+          SOLEUR_FIXTURE_PACKED=1 bash .github/scripts/test/test-bump-inngest-bootstrap-pin.sh
+          SOLEUR_FIXTURE_PACKED=1 bash .github/scripts/test/test-mint-inngest-bootstrap-tag.sh
+
+      # The umbrella verdict — see the identical contract in ci.yml's
+      # guards-ruleset: green iff every member produced a verdict and none
+      # failed; all-skipped on an in-scope event is a FAIL (every member here
+      # is unconditional on both events this workflow fires on).
+      - id: aggregate
+        if: ${{ !cancelled() }}
+        name: Aggregate member verdicts
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          failed=0
+          member() {
+            local mname="$1" scope="$2" ids="$3" concs="$4" outs="$5"
+            local -a ida ca oa
+            IFS=',' read -ra ida <<<"$ids"
+            IFS=',' read -ra ca <<<"$concs"
+            IFS=',' read -ra oa <<<"$outs"
+            local any_fail=0 any_run=0 detail="" i c o
+            for i in "${!ida[@]}"; do
+              c="${ca[$i]:-unknown}"; o="${oa[$i]:-$c}"
+              [ -z "$o" ] && o="$c"
+              if [ "$o" != "$c" ]; then detail+=" ${ida[$i]}=${c}(${o})"; else detail+=" ${ida[$i]}=${c}"; fi
+              case "$c" in
+                success) any_run=1 ;;
+                skipped) ;;
+                *) any_fail=1 ;;
+              esac
+            done
+            if [ "$any_fail" -eq 1 ]; then
+              printf 'FAIL  %-30s%s\n' "$mname" "$detail"; return 1
+            fi
+            if [ "$any_run" -eq 1 ]; then
+              printf 'PASS  %-30s%s\n' "$mname" "$detail"; return 0
+            fi
+            if [ "$scope" = "*" ] || [[ ",$scope," == *",$EVENT_NAME,"* ]]; then
+              printf 'FAIL  %-30s%s  (owed a verdict on %s; every member step skipped)\n' "$mname" "$detail" "$EVENT_NAME"
+              return 1
+            fi
+            printf 'SKIP  %-30s%s  (out of scope on %s)\n' "$mname" "$detail" "$EVENT_NAME"
+          }
+          member enforce '*' 'enforce-legal-lockstep,enforce-backstop,enforce-art30' '${{ steps.enforce-legal-lockstep.conclusion }},${{ steps.enforce-backstop.conclusion }},${{ steps.enforce-art30.conclusion }}' '${{ steps.enforce-legal-lockstep.outcome }},${{ steps.enforce-backstop.outcome }},${{ steps.enforce-art30.outcome }}' || failed=1
+          member markdown-lint '*' 'markdown-lint-setup-node,markdown-lint-install,markdown-lint,markdown-lint-mutations' '${{ steps.markdown-lint-setup-node.conclusion }},${{ steps.markdown-lint-install.conclusion }},${{ steps.markdown-lint.conclusion }},${{ steps.markdown-lint-mutations.conclusion }}' '${{ steps.markdown-lint-setup-node.outcome }},${{ steps.markdown-lint-install.outcome }},${{ steps.markdown-lint.outcome }},${{ steps.markdown-lint-mutations.outcome }}' || failed=1
+          member guard-script-fixture-tests '*' 'guard-script-fixture-tests,guard-script-fixture-tests-packed' '${{ steps.guard-script-fixture-tests.conclusion }},${{ steps.guard-script-fixture-tests-packed.conclusion }}' '${{ steps.guard-script-fixture-tests.outcome }},${{ steps.guard-script-fixture-tests-packed.outcome }}' || failed=1
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::quality-guards: member guard(s) failed — see the FAIL rows above"
+            exit 1
+          fi
+          echo "quality-guards: all member guards green"
+
+  # ─── quality-advisory (#12089): the ten ADVISORY PR-quality gates folded into
+  # one umbrella (detect-gated opt-out guards + constraint-gates +
+  # auto-close-scan). ADVISORY — this job's name is NOT in required-checks.txt
+  # or the ruleset; a PR merges with it red. The folded job-level `if:`s were
+  # pushed down onto the member steps: PR-only stays at the job `if:` (advisory
+  # — no required context here, so event gating is safe), and each
+  # `needs: detect`-gated member carries its own
+  # `(needs.detect.result != 'success' || needs.detect.outputs.<flag> ==
+  # 'true')` fail-open condition — the `always() &&` at job level defeats
+  # needs-skip propagation exactly as the folded jobs' `if:`s did. The
+  # `opt_out` step ids were renamed per member (id uniqueness within a job).
+  # An all-skipped member is a designed no-op (detect found nothing in scope),
+  # never a failure — scope `-` below.
+  quality-advisory:
     needs: detect
-    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.settings_json == 'true')  # PR-only quality gate; not run on merge_group (#5780)
+    if: always() && github.event_name == 'pull_request'  # advisory PR-only umbrella; not run on merge_group (#5780)
+    permissions:
+      contents: read
+      pull-requests: write  # auto-close-scan member posts/edits its sticky comment
+    # 15m — serial sum of the folded members (~5m measured: opt-out API checks
+    # ~10s each, constraint-gates npm ci ~2m worst-case, the rest seconds).
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
-      - name: Check for opt-out label (must be applied by non-author)
-        id: opt_out
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          # Deepest fetch-depth any member needs (0): settings-json-integrity's
+          # base/head diff and auto-commit-message-density's full-range commit
+          # scan both read history.
+          fetch-depth: 0
+          # The umbrella's token grants pull-requests: write (auto-close-scan
+          # member) — stripping the persisted credential keeps a write-capable
+          # token out of .git/config for the member steps. Members carrying gh
+          # calls pass GH_TOKEN explicitly; member git fetches are anonymous
+          # (public repo — secret-scan.yml:164 pattern).
+          persist-credentials: false
+
+      # ── member: settings-json-integrity (detect: settings_json) ──
+      - id: sji-opt-out
+        if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.settings_json == 'true') }}
+        name: Check for opt-out label (must be applied by non-author)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -131,24 +409,18 @@ jobs:
             echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        if: steps.opt_out.outputs.skip != 'true'
-        with:
-          fetch-depth: 0
-      - name: Run integrity check
-        if: steps.opt_out.outputs.skip != 'true'
+      - id: settings-json-integrity
+        if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.settings_json == 'true') && steps.sji-opt-out.outputs.skip != 'true' }}
+        name: Run integrity check
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.sha }}
         run: bash .github/scripts/check-settings-integrity.sh
 
-  pr-body-vs-diff:
-    name: Block PR body citing files not in diff
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check for opt-out label (must be applied by non-author)
-        id: opt_out
+      # ── member: pr-body-vs-diff ──
+      - id: pbd-opt-out
+        if: ${{ !cancelled() }}
+        name: Check for opt-out label (must be applied by non-author)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -169,24 +441,19 @@ jobs:
             echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        if: steps.opt_out.outputs.skip != 'true'
-      - name: Run body-vs-diff check
-        if: steps.opt_out.outputs.skip != 'true'
+      - id: pr-body-vs-diff
+        if: ${{ !cancelled() && steps.pbd-opt-out.outputs.skip != 'true' }}
+        name: Run body-vs-diff check
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/check-pr-body-vs-diff.sh
 
-  stray-worktree-marker-block:
-    name: Block .claude/worktrees/ entries in diff
-    needs: detect
-    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.worktrees == 'true')  # PR-only quality gate; not run on merge_group (#5780)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check for opt-out label (must be applied by non-author)
-        id: opt_out
+      # ── member: stray-worktree-marker-block (detect: worktrees) ──
+      - id: swm-opt-out
+        if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.worktrees == 'true') }}
+        name: Check for opt-out label (must be applied by non-author)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -207,8 +474,9 @@ jobs:
             echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      - name: Check diff for .claude/worktrees/ entries
-        if: steps.opt_out.outputs.skip != 'true'
+      - id: stray-worktree-marker-block
+        if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.worktrees == 'true') && steps.swm-opt-out.outputs.skip != 'true' }}
+        name: Check diff for .claude/worktrees/ entries
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -224,21 +492,10 @@ jobs:
             exit 1
           fi
 
-  pii-grep:
-    name: Block Linear CDN URLs in PR diff (#3635)
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
-    # Intentionally NO opt-out support. The redaction guard is the
-    # load-bearing defense for a single-user incident threshold per
-    # knowledge-base/project/specs/feat-linear-issue-image-context/spec.md FR7.
-    # An opt-out label would defeat the purpose. If a PR legitimately
-    # needs to commit a uploads.linear.app reference (e.g., a test
-    # fixture documenting the failure mode), use the synthesized non-
-    # routable string `uploads.linear.app/TEST-FIXTURE-NOT-REAL.png`
-    # convention from cq-test-fixtures-synthesized-only — that string
-    # is detected as a test-fixture and skipped below.
-    runs-on: ubuntu-latest
-    steps:
-      - name: Scan PR diff for Linear CDN URLs
+      # ── member: pii-grep (#3635 — Linear CDN URLs; intentionally NO opt-out) ──
+      - id: pii-grep
+        if: ${{ !cancelled() }}
+        name: Scan PR diff for Linear CDN URLs
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -280,34 +537,10 @@ jobs:
             exit 1
           fi
 
-  userid-bypass-lint:
-    name: Block direct userId emissions in apps/web-platform (#3698)
-    needs: detect
-    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.webplat == 'true')  # PR-only quality gate; not run on merge_group (#5780)
-    # Intentionally NO opt-out support. The pino formatters.log rename hook
-    # in apps/web-platform/server/logger.ts is the load-bearing defense for
-    # the single-user incident threshold per ADR-028 / PA8 §(c)(ii). Future
-    # direct `logger.{error,warn,info,debug}({...userId...})` sites would be
-    # caught at runtime by formatters.log, but raw-source readability suffers
-    # and any silent regression of the formatter erodes the disclosure
-    # truthfulness. This guard enforces a baseline known-cover set.
-    #
-    # Allowlist:
-    # - reportSilentFallback / warnSilentFallback / mirrorP0Deduped — emit
-    #   userIdHash via observability.ts:hashExtraUserId (already pseudonymised).
-    #   Match position-anchored to (line-start | non-quote char) so a string
-    #   literal like `"warnSilentFallback("` cannot defeat the gate.
-    # - github-resolve/callback/route.ts — known leave-and-cover info
-    #   success log (covered by formatters.log defence-in-depth per #3698).
-    # Note: there is no `userIdHash:` exemption — the prior `grep -vE
-    # '\buserIdHash\s*:'` step let `{ userId: x, userIdHash: "decoy" }`
-    # silently pass. Lines containing ONLY `userIdHash:` (no raw `userId`)
-    # already filter out at the `\buserId\b|\buser_id\b` step (word
-    # boundary fails on `userIdHash`), so the exemption was unnecessary.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Scan PR diff for direct userId emissions
+      # ── member: userid-bypass-lint (detect: webplat; #3698, NO opt-out) ──
+      - id: userid-bypass-lint
+        if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.webplat == 'true') }}
+        name: Scan PR diff for direct userId emissions
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -340,13 +573,10 @@ jobs:
             exit 1
           fi
 
-  auto-commit-message-density:
-    name: Block PRs dominated by auto-commit headlines
-    if: github.event_name == 'pull_request'  # PR-only quality gate; not run on merge_group (#5780)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check for opt-out label (must be applied by non-author)
-        id: opt_out
+      # ── member: auto-commit-message-density ──
+      - id: acd-opt-out
+        if: ${{ !cancelled() }}
+        name: Check for opt-out label (must be applied by non-author)
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -367,28 +597,21 @@ jobs:
             echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
-      # Checkout is UNCONDITIONAL because the CI-skip scan below runs even when the
-      # density check is opted out, and it needs the tree. fetch-depth: 0 because that
-      # scan reads every commit message in base..HEAD — a shallow clone would scan
-      # fewer commits and still report a pass.
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-      - name: Run density check
-        if: steps.opt_out.outputs.skip != 'true'
+      - id: auto-commit-message-density
+        if: ${{ !cancelled() && steps.acd-opt-out.outputs.skip != 'true' }}
+        name: Run density check
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/check-auto-commit-density.sh
-      # Folded in here rather than given its own job: this job already reads the
-      # branch's COMMIT MESSAGES, which is exactly the surface a CI-skip directive
-      # hides in, and scripts/pr-fanout-ledger.txt caps this workflow at 10 jobs
-      # (#8149's remedy — fold into an existing job as a step). Deliberately NOT
-      # gated on the opt_out label: that label authorises a claude-config change,
-      # and no reviewer decision makes it correct to ship a token that silently
-      # disables post-merge CI, the version bump and the whole deploy chain (#8405).
-      - name: Block CI-skip directives reaching the squash commit (#8405)
+      # Deliberately NOT gated on the opt_out label: that label authorises a
+      # claude-config change, and no reviewer decision makes it correct to ship
+      # a token that silently disables post-merge CI, the version bump and the
+      # whole deploy chain (#8405).
+      - id: acd-ci-skip
+        if: ${{ !cancelled() }}
+        name: Block CI-skip directives reaching the squash commit (#8405)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -400,84 +623,223 @@ jobs:
           # moving base would change which commits are in scope.
           bash scripts/lint-squash-ci-directives.sh --base "$BASE_SHA" --pr "$PR_NUMBER"
 
-  client-pii-grep:
-    name: Block userId/email in extra of direct client Sentry.capture* (#3703)
-    needs: detect
-    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.client_pii == 'true')  # PR-only quality gate; not run on merge_group (#5780)
-    # SIGNAL-QUALITY gate (NOT a security control). The L3 stripUserContextFromEvent
-    # beforeSend backstop (sentry.client.config.ts, #3696/#3700) already strips PII
-    # at runtime, so production has never been at risk — this surfaces the bypass in
-    # the PR diff, which otherwise only shows as a piiStripped sentinel in Sentry.
-    # Boundary (do NOT collapse): userid-bypass-lint (#3698) covers logger.* on the
-    # server/app surface; pii-grep covers Linear CDN URLs in the diff; this covers
-    # direct Sentry.capture* `extra:` on the CLIENT surface. Intentionally no opt-out.
-    # Tree-scans source (multi-line-aware), so unlike pii-grep it MUST check out.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Scan client-importable code for PII in Sentry extra
+      # ── member: client-pii-grep (detect: client_pii; #3703, NO opt-out) ──
+      - id: client-pii-grep
+        if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.client_pii == 'true') }}
+        name: Scan client-importable code for PII in Sentry extra
         run: bash .github/scripts/check-client-pii-sentry.sh
 
-  sweep-completeness:
-    name: Sibling-set sweep completeness (#5269)
-    needs: detect
-    if: always() && github.event_name == 'pull_request' && (needs.detect.result != 'success' || needs.detect.outputs.sweep == 'true')  # PR-only quality gate; not run on merge_group (#5780)
-    # Fails a PR that changes a sibling-set's TRIGGER file but leaves a
-    # registered DEPENDENT unchanged, per .github/enforcement-contracts.json.
-    # Closes the cross-file-drift class mechanically (hr-write-boundary-sentinel-
-    # sweep-all-write-sites). Intentionally NO opt-out: at single-user-incident
-    # threshold the gate should not carry a bypass label (modeled on pii-grep).
-    # MUST check out — the script self-checks that every registry path exists on
-    # disk (anti-rot), which needs the working tree.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - name: Check sibling-set sweep completeness
+      # ── member: sweep-completeness (detect: sweep; #5269, NO opt-out) ──
+      - id: sweep-completeness
+        if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.sweep == 'true') }}
+        name: Check sibling-set sweep completeness
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/check-sweep-completeness.sh
 
-  # markdownlint over the whole tracked corpus (#7927, also #7837 #7832 #2685).
-  #
-  # WHY IT IS A JOB AND NOT A HOOK. The linter used to exist ONLY as a lefthook
-  # pre-commit command. PRs land by squash merge, where lefthook never runs, so a
-  # red file reached main whenever its PR had no local commit staging it -- and it
-  # accumulated to 32,356 errors across 3,818 files before anyone could see it.
-  #
-  # WHOLE CORPUS, NOT --changed. Zero of the 49 errors that first blocked a
-  # contributor's `git merge origin/main` were in the PR that tripped over them, so
-  # a changed-files gate reproduces the blind spot by construction.
-  #
-  # Deliberately NO `if:` and no opt-out label, matching guard-script-fixture-tests
-  # above: a required context that does not report on merge_group leaves the queue
-  # entry pending forever.
-  #
-  # `npm ci` because the script refuses to run an unpinned binary -- resolving the
-  # latest release per invocation is the drift defect #7927 exists to close.
-  markdown-lint:
-    name: markdown-lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      # ── member: constraint-gates (L1 import-boundary; folded
+      # constraint-gates.yml — its in-member detect step was renamed
+      # `constraint-gates-changed` from `changed`) ──
+      - id: constraint-gates-changed
+        if: ${{ !cancelled() }}
+        name: Detect target changes
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          # No --depth here: a shallow fetch can leave the merge-base unreachable,
+          # making the three-dot diff fail under `set -e` and redden every
+          # non-target PR. checkout already used fetch-depth: 0 (full history).
+          git fetch --no-tags origin "$BASE_REF"
+          changed_files=$(git -c core.quotePath=false diff --name-only "origin/${BASE_REF}...HEAD")
+          if grep -qE '^apps/web-platform/' <<<"$changed_files"; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "apps/web-platform/** unchanged in this PR — constraint-gates passes (no-op)."
+          fi
+      - id: constraint-gates-setup-node
+        if: ${{ !cancelled() && steps.constraint-gates-changed.outputs.changed == 'true' }}
+        name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version-file: .nvmrc
-      # Named without the binary's own token on purpose: the single-invoker guard
-      # in scripts/markdown-lint.test.sh greps command position, and a step NAME
-      # carrying the literal reads to it exactly like a second call site.
-      - name: Install the pinned linter
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+      - id: constraint-gates-install
+        if: ${{ !cancelled() && steps.constraint-gates-changed.outputs.changed == 'true' }}
+        name: Install dependencies
+        working-directory: apps/web-platform
         run: npm ci --ignore-scripts
-      - name: Lint the tracked Markdown corpus
-        run: bash scripts/markdown-lint.sh --repo-sweep
-      # The gate's OWN suite runs here, not in test-all.sh's scripts group: it drives the
-      # real pinned binary through a hermetic sandbox, and the `test-scripts*` legs install
-      # no node deps, so this is the only CI job where it can execute rather than abort on
-      # a RED control. Ordered after the sweep so a corpus regression is reported as a
-      # corpus regression, not as a suite failure.
-      - name: Prove the gate can still fail (mutation suite)
-        run: bash scripts/markdown-lint.test.sh
+      - id: constraint-gates
+        if: ${{ !cancelled() && steps.constraint-gates-changed.outputs.changed == 'true' }}
+        name: Run constraint gates (fail-closed)
+        run: bash apps/web-platform/scripts/constraint-gates.sh
+
+      # ── member: auto-close-scan (#3407 — scans title/body/commits for
+      # auto-close keyword + #N; fail-soft by design, needs pull-requests: write) ──
+      - id: auto-close-scan
+        if: ${{ !cancelled() }}
+        name: Scan PR title and body for auto-close keyword + #N
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          # Honor explicit operator opt-out marker.
+          if printf '%s\n' "$PR_BODY" | grep -cF '<!-- auto-close-scanner: confirm -->' >/dev/null; then
+            echo "::notice::PR body contains <!-- auto-close-scanner: confirm --> — scanner skipped per author opt-in."
+            exit 0
+          fi
+
+          TMP_T=$(mktemp); TMP_B=$(mktemp); TMP_C=$(mktemp)
+          printf '%s\n' "$PR_TITLE" > "$TMP_T"
+          printf '%s\n' "$PR_BODY"  > "$TMP_B"
+          # Commit messages feed the squash-merge commit (this repo's default),
+          # which is the text GitHub's auto-close parser reads on merge to main.
+          # A negated keyword in a commit body ("Does not close #N") still fires
+          # the close — the parser is negation-blind — yet a title/body-only scan
+          # misses it. That exact gap closed #5463 twice (#5519, then #5564). The
+          # commit messages are untrusted PR-author input, so they are treated as
+          # data: written to a file, scanned, and backtick-stripped before any
+          # embedding (same model as PR_BODY).
+          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits" \
+            --jq '.[].commit.message' > "$TMP_C" 2>/dev/null || true
+
+          T_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_T")
+          B_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_B")
+          C_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_C")
+
+          if [[ -z "$T_MATCHES_RAW" && -z "$B_MATCHES_RAW" && -z "$C_MATCHES_RAW" ]]; then
+            echo "No auto-close keyword + #N references detected in title, body, or commits."
+            exit 0
+          fi
+
+          # Strip backticks from match output before embedding inside the bot
+          # comment's triple-backtick fences. Without this, an attacker submitting
+          # a PR body containing literal ``` near an auto-close keyword could
+          # break out of the bot comment's code fence and inject arbitrary
+          # Markdown into a github-actions[bot]-authored comment (high apparent
+          # trust, downstream agents read bot comments). See PR #3411 P2-1.
+          T_MATCHES=$(printf '%s' "$T_MATCHES_RAW" | tr -d '`')
+          B_MATCHES=$(printf '%s' "$B_MATCHES_RAW" | tr -d '`')
+          C_MATCHES=$(printf '%s' "$C_MATCHES_RAW" | tr -d '`')
+
+          MSG="auto-close keyword + #N detected in PR title, body, or a commit message. Verify each match is intentional. NOTE: GitHub's parser is negation-blind — 'does not close #N' still closes #N — and commit messages feed the squash-merge commit, so a keyword there auto-closes on merge even if the PR body is clean. If unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add <!-- auto-close-scanner: confirm --> to the PR body."
+          MSG_SAFE="${MSG//[$'\n\r']/}"
+          echo "::warning::${MSG_SAFE}"
+
+          # Build the comment body with a stable header line so we can match a
+          # prior bot comment for in-place edit (idempotency — see #3407 R3).
+          COMMENT_HEADER='## Auto-close keyword scanner (#3407)'
+          COMMENT_BODY=$(printf '%s\n\n%s\n\n### Title matches\n```\n%s\n```\n\n### Body matches\n```\n%s\n```\n\n### Commit message matches\n```\n%s\n```\n\nIf any match is unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add `<!-- auto-close-scanner: confirm -->` to the PR body.\n' \
+            "$COMMENT_HEADER" \
+            "$MSG" \
+            "${T_MATCHES:-(none)}" \
+            "${B_MATCHES:-(none)}" \
+            "${C_MATCHES:-(none)}")
+
+          # Find a prior bot comment with the same header → edit in place.
+          # Otherwise post a new comment. Either path keeps the surface to a
+          # single PR-thread comment regardless of edit cadence. `--paginate
+          # ?per_page=100` covers PRs with >30 comments where the prior bot
+          # comment may not be on page 1; without paging we'd silently degrade
+          # to "post a new comment every edit" on long PRs.
+          PRIOR_ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" \
+            --jq '[.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("## Auto-close keyword scanner")))] | .[0].id // empty')
+
+          if [[ -n "$PRIOR_ID" ]]; then
+            # If the prior comment was deleted between GET and PATCH, fall
+            # through to POST instead of failing the workflow.
+            if ! gh api -X PATCH "repos/$REPO/issues/comments/$PRIOR_ID" \
+              -f "body=$COMMENT_BODY" \
+              >/dev/null 2>&1; then
+              echo "Prior comment $PRIOR_ID PATCH failed (deleted?); posting fresh."
+              gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+                -f "body=$COMMENT_BODY" \
+                >/dev/null
+            else
+              echo "Edited prior scanner comment (id=$PRIOR_ID)."
+            fi
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -f "body=$COMMENT_BODY" \
+              >/dev/null
+            echo "Posted new scanner comment."
+          fi
+
+          # Always exit 0 — fail-soft per #3407.
+          exit 0
+
+      # Advisory aggregate — same contract as guards-advisory in ci.yml: FAIL
+      # iff a member step failed; all-skipped members (detect found nothing,
+      # or an opt-out label applied) report SKIP, never a failure.
+      - id: aggregate
+        if: ${{ !cancelled() }}
+        name: Aggregate member verdicts
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          failed=0
+          member() {
+            local mname="$1" scope="$2" ids="$3" concs="$4" outs="$5"
+            local -a ida ca oa
+            IFS=',' read -ra ida <<<"$ids"
+            IFS=',' read -ra ca <<<"$concs"
+            IFS=',' read -ra oa <<<"$outs"
+            local any_fail=0 any_run=0 detail="" i c o
+            for i in "${!ida[@]}"; do
+              c="${ca[$i]:-unknown}"; o="${oa[$i]:-$c}"
+              [ -z "$o" ] && o="$c"
+              if [ "$o" != "$c" ]; then detail+=" ${ida[$i]}=${c}(${o})"; else detail+=" ${ida[$i]}=${c}"; fi
+              case "$c" in
+                success) any_run=1 ;;
+                skipped) ;;
+                *) any_fail=1 ;;
+              esac
+            done
+            if [ "$any_fail" -eq 1 ]; then
+              printf 'FAIL  %-30s%s\n' "$mname" "$detail"; return 1
+            fi
+            if [ "$any_run" -eq 1 ]; then
+              printf 'PASS  %-30s%s\n' "$mname" "$detail"; return 0
+            fi
+            if [ "$scope" = "*" ] || [[ ",$scope," == *",$EVENT_NAME,"* ]]; then
+              printf 'FAIL  %-30s%s  (owed a verdict on %s; every member step skipped)\n' "$mname" "$detail" "$EVENT_NAME"
+              return 1
+            fi
+            printf 'SKIP  %-30s%s  (out of scope on %s)\n' "$mname" "$detail" "$EVENT_NAME"
+          }
+          member settings-json-integrity '-' 'sji-opt-out,settings-json-integrity' '${{ steps.sji-opt-out.conclusion }},${{ steps.settings-json-integrity.conclusion }}' '${{ steps.sji-opt-out.outcome }},${{ steps.settings-json-integrity.outcome }}' || failed=1
+          member pr-body-vs-diff '-' 'pbd-opt-out,pr-body-vs-diff' '${{ steps.pbd-opt-out.conclusion }},${{ steps.pr-body-vs-diff.conclusion }}' '${{ steps.pbd-opt-out.outcome }},${{ steps.pr-body-vs-diff.outcome }}' || failed=1
+          member stray-worktree-marker-block '-' 'swm-opt-out,stray-worktree-marker-block' '${{ steps.swm-opt-out.conclusion }},${{ steps.stray-worktree-marker-block.conclusion }}' '${{ steps.swm-opt-out.outcome }},${{ steps.stray-worktree-marker-block.outcome }}' || failed=1
+          member pii-grep '-' 'pii-grep' '${{ steps.pii-grep.conclusion }}' '${{ steps.pii-grep.outcome }}' || failed=1
+          member userid-bypass-lint '-' 'userid-bypass-lint' '${{ steps.userid-bypass-lint.conclusion }}' '${{ steps.userid-bypass-lint.outcome }}' || failed=1
+          member auto-commit-message-density '-' 'acd-opt-out,auto-commit-message-density,acd-ci-skip' '${{ steps.acd-opt-out.conclusion }},${{ steps.auto-commit-message-density.conclusion }},${{ steps.acd-ci-skip.conclusion }}' '${{ steps.acd-opt-out.outcome }},${{ steps.auto-commit-message-density.outcome }},${{ steps.acd-ci-skip.outcome }}' || failed=1
+          member client-pii-grep '-' 'client-pii-grep' '${{ steps.client-pii-grep.conclusion }}' '${{ steps.client-pii-grep.outcome }}' || failed=1
+          member sweep-completeness '-' 'sweep-completeness' '${{ steps.sweep-completeness.conclusion }}' '${{ steps.sweep-completeness.outcome }}' || failed=1
+          member constraint-gates '-' 'constraint-gates-changed,constraint-gates-setup-node,constraint-gates-install,constraint-gates' '${{ steps.constraint-gates-changed.conclusion }},${{ steps.constraint-gates-setup-node.conclusion }},${{ steps.constraint-gates-install.conclusion }},${{ steps.constraint-gates.conclusion }}' '${{ steps.constraint-gates-changed.outcome }},${{ steps.constraint-gates-setup-node.outcome }},${{ steps.constraint-gates-install.outcome }},${{ steps.constraint-gates.outcome }}' || failed=1
+          member auto-close-scan '-' 'auto-close-scan' '${{ steps.auto-close-scan.conclusion }}' '${{ steps.auto-close-scan.outcome }}' || failed=1
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::quality-advisory: member guard(s) failed — see the FAIL rows above"
+            exit 1
+          fi
+          echo "quality-advisory: all member guards green (or out-of-scope)"
+
+  # The eight advisory Block-*/detect-gated jobs that used to sit here
+  # (settings-json-integrity, pr-body-vs-diff, stray-worktree-marker-block,
+  # pii-grep, userid-bypass-lint, auto-commit-message-density, client-pii-grep,
+  # sweep-completeness) are member steps of `quality-advisory` above (#12089).
+
+  # markdown-lint (#7927, whole-corpus) is now a member step of `quality-guards`
+  # above (#12089 consolidation).
 
   # ─── Folded single-job gates (#8902, CI-efficiency item 4) ───────────────────
   # Each job below was previously its own workflow file; check contexts are
@@ -485,8 +847,12 @@ jobs:
   #   dependency-review.yml, legal-doc-cross-document-gate.yml,
   #   skill-security-scan-pr-trailer.yml, constraint-gates.yml,
   #   pr-auto-close-scanner.yml.
-  # The three required jobs keep NO job-level `if:` (merge_group semantics
-  # preserved); the two advisory PR-only jobs are gated to pull_request.
+  # The two surviving required jobs (dependency-review, skill-security-scan)
+  # keep NO job-level `if:` (merge_group semantics preserved); the folded
+  # three (enforce, markdown-lint, guard-script-fixture-tests) are member
+  # steps of `quality-guards` above (#12089). The advisory PR-only members
+  # (constraint-gates, auto-close-scan, the detect-gated Block-* guards) are
+  # gated inside `quality-advisory`.
 
   dependency-review:
     # Job-level permissions REPLACE the workflow default (contents/pull-requests
@@ -573,130 +939,8 @@ jobs:
             pkg:pypi/litellm
             pkg:npm/event-stream
 
-  enforce:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout PR
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-
-      - name: Enforce legal-doc cross-document lockstep
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          # Merge-queue candidate base (a SHA, already an ancestor in the
-          # fetch-depth:0 checkout). GitHub-controlled; quoted in the run: block.
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: |
-          set -euo pipefail
-
-          # Surfaces whose presence in the diff REQUIRES the four legal
-          # docs to be touched in the same PR. The `paths:` trigger filter
-          # was removed in PR #4384 (required-check promotion); this list
-          # is now the SOLE source of truth for "is this PR DSAR-adjacent".
-          surface_patterns=(
-            'apps/web-platform/server/dsar-export\.ts'
-            'apps/web-platform/server/dsar-export-allowlist\.ts'
-            'apps/web-platform/server/dsar-reauth\.ts'
-            'apps/web-platform/app/api/account/export/'
-            'apps/web-platform/supabase/migrations/041_dsar_export_jobs\.sql'
-            'apps/web-platform/supabase/migrations/042_dsar_exports_storage_bucket\.sql'
-          )
-
-          required_legal_files=(
-            'docs/legal/privacy-policy.md'
-            'docs/legal/gdpr-policy.md'
-            'docs/legal/data-protection-disclosure.md'
-            'knowledge-base/legal/compliance-posture.md'
-          )
-
-          # Collect changed files in the PR diff against the PR base.
-          # BASE_REF arrives via env: + double-quoted in the command so
-          # workflow-injection guidance is honoured.
-          #
-          # NO --depth=1: the three-dot `origin/BASE...HEAD` diff is computed
-          # from the MERGE-BASE of base and HEAD (so it lists only this PR's own
-          # changes, not commits that landed on base since the branch point — a
-          # two-dot diff would mis-flag those unrelated files). A shallow
-          # `--depth=1` fetch brings only base's tip commit, so when base has
-          # advanced past the branch point the merge-base is unreachable and the
-          # diff dies with `fatal: origin/BASE...HEAD: no merge base` (exit 128)
-          # — failing the gate on a branch-history artifact, not a real finding.
-          # Checkout already runs fetch-depth:0, so this fetch is a cheap
-          # incremental that just makes the merge-base reachable.
-          if [ "$EVENT_NAME" = "merge_group" ]; then
-            # Merge-queue candidate (#5780): base_sha is an ancestor commit
-            # already present in the fetch-depth:0 checkout — diff directly
-            # against it (no ref to fetch). A vacuous pass here would post a
-            # green `enforce` on the temp ref WITHOUT checking the candidate
-            # (P1-1/P1-5), so an empty base_sha is a HARD failure, never a
-            # fall-through to surface_hit=false.
-            if [ -z "${MERGE_GROUP_BASE_SHA:-}" ]; then
-              echo "::error::merge_group event with empty base_sha — refusing to run the gate vacuously. The legal-doc surface check would be skipped, letting a lockstep regression merge unverified." >&2
-              exit 1
-            fi
-            diff_base="$MERGE_GROUP_BASE_SHA"
-          else
-            git fetch --quiet origin "$BASE_REF"
-            diff_base="origin/${BASE_REF}"
-          fi
-          changed_files=$(git diff --name-only "${diff_base}"...HEAD)
-          echo "Changed files in PR:"
-          echo "$changed_files" | sed 's/^/  /'
-
-          surface_hit=false
-          for pat in "${surface_patterns[@]}"; do
-            if echo "$changed_files" | grep -Ec "$pat" >/dev/null; then
-              surface_hit=true
-              break
-            fi
-          done
-
-          if [ "$surface_hit" = false ]; then
-            echo "No DSAR surface file touched — gate trivially passes."
-            exit 0
-          fi
-
-          echo "DSAR surface file detected; verifying all required legal docs are updated…"
-          missing=()
-          for legal in "${required_legal_files[@]}"; do
-            if ! echo "$changed_files" | grep -Fxc "$legal" >/dev/null; then
-              missing+=("$legal")
-            fi
-          done
-
-          if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Legal-doc cross-document gate FAILED. The PR touches a DSAR-regulated-data surface but is missing updates to:"
-            for f in "${missing[@]}"; do
-              echo "::error::  - $f"
-            done
-            echo ""
-            echo "Per plan rev-2 C8 / AC8 / FR8: the Privacy Policy, GDPR Policy, Data Protection Disclosure, and compliance-posture documents must be updated in the same PR as any change to the DSAR worker, route, migration, or allowlist. Update the four files above (or split the change into two PRs)."
-            exit 1
-          fi
-
-          echo "All four required legal docs are updated. Gate passes."
-
-      # Guard 1 of #9239: when the merge-base diff touches
-      # .claude/hooks/memory-backstop.sh (or the sourced lib/log-rotation.sh),
-      # the BACKSTOP_REVISION marker must STRICTLY INCREASE — the resolver
-      # orders installed copies by `>`, so a same-or-lower bump is
-      # undeliverable to stale-checkout sessions. Runs
-      # UNCONDITIONALLY (no path filter — a deleted filter can never darken
-      # the gate); the script self-skips with an explicit NO-OP verdict when
-      # the hook is untouched, and does its own `git fetch` of the base ref.
-      # On merge_group, GITHUB_BASE_REF is unset and the script diffs against
-      # origin/main — correct for a queue candidate, which must carry the same
-      # bump as the PR it batches.
-      - name: Enforce BACKSTOP_REVISION bump on memory-backstop hook changes
-        run: bash scripts/check-backstop-revision.sh
-
-      - name: Enforce Art. 30 re-verification triggers
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
-        run: bash scripts/lint-art30-reverification.sh
+  # enforce (#4384, folded #8902) is now a member step of `quality-guards`
+  # above (#12089 consolidation).
 
   skill-security-scan:
     # DO NOT RENAME — this exact string is referenced as a required check
@@ -914,152 +1158,5 @@ jobs:
           echo "skill-security-scan: $scanned verdict(s) produced from $requested queued path(s)."
           exit $fail
 
-  constraint-gates:
-    if: github.event_name == 'pull_request'  # folded from constraint-gates.yml (PR-only; never had merge_group)
-    name: L1 import-boundary gate
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-        with:
-          fetch-depth: 0
-
-      - name: Detect target changes
-        id: changed
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          set -euo pipefail
-          # No --depth here: a shallow fetch can leave the merge-base unreachable,
-          # making the three-dot diff fail under `set -e` and redden every
-          # non-target PR. checkout already used fetch-depth: 0 (full history).
-          git fetch --no-tags origin "$BASE_REF"
-          changed_files=$(git -c core.quotePath=false diff --name-only "origin/${BASE_REF}...HEAD")
-          if grep -qE '^apps/web-platform/' <<<"$changed_files"; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "apps/web-platform/** unchanged in this PR — constraint-gates passes (no-op)."
-          fi
-
-      - name: Setup Node.js
-        if: steps.changed.outputs.changed == 'true'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/web-platform/package-lock.json
-
-      - name: Install dependencies
-        if: steps.changed.outputs.changed == 'true'
-        working-directory: apps/web-platform
-        run: npm ci --ignore-scripts
-
-      - name: Run constraint gates (fail-closed)
-        if: steps.changed.outputs.changed == 'true'
-        run: bash apps/web-platform/scripts/constraint-gates.sh
-
-  auto-close-scan:
-    if: github.event_name == 'pull_request'  # PR-only gate; never had merge_group
-    permissions:
-      contents: read
-      pull-requests: write
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Scan PR title and body for auto-close keyword + #N
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -uo pipefail
-
-          # Honor explicit operator opt-out marker.
-          if printf '%s\n' "$PR_BODY" | grep -cF '<!-- auto-close-scanner: confirm -->' >/dev/null; then
-            echo "::notice::PR body contains <!-- auto-close-scanner: confirm --> — scanner skipped per author opt-in."
-            exit 0
-          fi
-
-          TMP_T=$(mktemp); TMP_B=$(mktemp); TMP_C=$(mktemp)
-          printf '%s\n' "$PR_TITLE" > "$TMP_T"
-          printf '%s\n' "$PR_BODY"  > "$TMP_B"
-          # Commit messages feed the squash-merge commit (this repo's default),
-          # which is the text GitHub's auto-close parser reads on merge to main.
-          # A negated keyword in a commit body ("Does not close #N") still fires
-          # the close — the parser is negation-blind — yet a title/body-only scan
-          # misses it. That exact gap closed #5463 twice (#5519, then #5564). The
-          # commit messages are untrusted PR-author input, so they are treated as
-          # data: written to a file, scanned, and backtick-stripped before any
-          # embedding (same model as PR_BODY).
-          gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/commits" \
-            --jq '.[].commit.message' > "$TMP_C" 2>/dev/null || true
-
-          T_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_T")
-          B_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_B")
-          C_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_C")
-
-          if [[ -z "$T_MATCHES_RAW" && -z "$B_MATCHES_RAW" && -z "$C_MATCHES_RAW" ]]; then
-            echo "No auto-close keyword + #N references detected in title, body, or commits."
-            exit 0
-          fi
-
-          # Strip backticks from match output before embedding inside the bot
-          # comment's triple-backtick fences. Without this, an attacker submitting
-          # a PR body containing literal ``` near an auto-close keyword could
-          # break out of the bot comment's code fence and inject arbitrary
-          # Markdown into a github-actions[bot]-authored comment (high apparent
-          # trust, downstream agents read bot comments). See PR #3411 P2-1.
-          T_MATCHES=$(printf '%s' "$T_MATCHES_RAW" | tr -d '`')
-          B_MATCHES=$(printf '%s' "$B_MATCHES_RAW" | tr -d '`')
-          C_MATCHES=$(printf '%s' "$C_MATCHES_RAW" | tr -d '`')
-
-          MSG="auto-close keyword + #N detected in PR title, body, or a commit message. Verify each match is intentional. NOTE: GitHub's parser is negation-blind — 'does not close #N' still closes #N — and commit messages feed the squash-merge commit, so a keyword there auto-closes on merge even if the PR body is clean. If unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add <!-- auto-close-scanner: confirm --> to the PR body."
-          MSG_SAFE="${MSG//[$'\n\r']/}"
-          echo "::warning::${MSG_SAFE}"
-
-          # Build the comment body with a stable header line so we can match a
-          # prior bot comment for in-place edit (idempotency — see #3407 R3).
-          COMMENT_HEADER='## Auto-close keyword scanner (#3407)'
-          COMMENT_BODY=$(printf '%s\n\n%s\n\n### Title matches\n```\n%s\n```\n\n### Body matches\n```\n%s\n```\n\n### Commit message matches\n```\n%s\n```\n\nIf any match is unintentional, edit the PR title/body or reword the commit. To silence this scanner on subsequent body edits, add `<!-- auto-close-scanner: confirm -->` to the PR body.\n' \
-            "$COMMENT_HEADER" \
-            "$MSG" \
-            "${T_MATCHES:-(none)}" \
-            "${B_MATCHES:-(none)}" \
-            "${C_MATCHES:-(none)}")
-
-          # Find a prior bot comment with the same header → edit in place.
-          # Otherwise post a new comment. Either path keeps the surface to a
-          # single PR-thread comment regardless of edit cadence. `--paginate
-          # ?per_page=100` covers PRs with >30 comments where the prior bot
-          # comment may not be on page 1; without paging we'd silently degrade
-          # to "post a new comment every edit" on long PRs.
-          PRIOR_ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" \
-            --jq '[.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("## Auto-close keyword scanner")))] | .[0].id // empty')
-
-          if [[ -n "$PRIOR_ID" ]]; then
-            # If the prior comment was deleted between GET and PATCH, fall
-            # through to POST instead of failing the workflow.
-            if ! gh api -X PATCH "repos/$REPO/issues/comments/$PRIOR_ID" \
-              -f "body=$COMMENT_BODY" \
-              >/dev/null 2>&1; then
-              echo "Prior comment $PRIOR_ID PATCH failed (deleted?); posting fresh."
-              gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
-                -f "body=$COMMENT_BODY" \
-                >/dev/null
-            else
-              echo "Edited prior scanner comment (id=$PRIOR_ID)."
-            fi
-          else
-            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
-              -f "body=$COMMENT_BODY" \
-              >/dev/null
-            echo "Posted new scanner comment."
-          fi
-
-          # Always exit 0 — fail-soft per #3407.
-          exit 0
+  # constraint-gates + auto-close-scan are member steps of `quality-advisory`
+  # above (#12089 consolidation).

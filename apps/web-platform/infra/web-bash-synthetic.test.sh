@@ -426,6 +426,79 @@ case_journal() {  # <sut> <lib>: what reaches the journal from docker's stderr a
   reset_case_env
 }
 
+case_masks_created() {  # <sut> <lib>: masks_created is one digit 0-4, else `-`
+  local sut="$1" lib="$2"
+  reset_case_env
+  local base='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":0'
+  # masks_created: one digit 0-4 (the probe's closed set has four dirs); anything else is `-` and never reaches the journal
+  for bad in '"9;touch x"' '5' '-1' '12' '"4 forged=1"' '"4\nforged=1"' 'true' '[4]' '{"a":4}' '4.5'; do
+    MOCK_RESULT="$base,\"masks_created\":$bad}" run_case "$sut" "$lib"
+    ok_if "masks_created $bad is journaled as - (one digit 0-4 only), the run still passes" "[[ \"\$(field masks_created)\" == '-' && \"\$(field verdict)\" == pass && \"\$(pings_ok)\" -eq 1 ]]"
+  done
+  for good in 0 1 2 3 4; do
+    MOCK_RESULT="$base,\"masks_created\":$good}" run_case "$sut" "$lib"
+    ok_if "masks_created $good is journaled as that digit" "[[ \"\$(field masks_created)\" == '$good' ]]"
+  done
+  reset_case_env
+}
+
+case_masks_note() {  # <sut> <lib>: masks_note is a whole-string match against the closed enum, else `-`
+  local sut="$1" lib="$2"
+  reset_case_env
+  local base='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":0'
+  # masks_note: whole-string match against the closed enum, else `-`; never text from the probe, never a path or an errno
+  for good in uid_mismatch pid1_unreadable pid1_env_unreadable home_mismatch env_divergence; do
+    MOCK_RESULT="$base,\"masks_note\":\"$good\"}" run_case "$sut" "$lib"
+    ok_if "masks_note $good is journaled as itself" "[[ \"\$(field masks_note)\" == '$good' ]]"
+  done
+  for bad in '"uid_mismatch\nforged=1"' '"forged=1\nuid_mismatch"' '"uid_mismatch forged=1"' '"uid_mismatch,"' '"EACCES: /tmp/cc-socks"' '"UID_MISMATCH"' '""' '"-"' '7' 'true' '["uid_mismatch"]' 'null'; do
+    MOCK_RESULT="$base,\"masks_note\":$bad}" run_case "$sut" "$lib"
+    ok_if "masks_note $bad is journaled as - (closed enum), no forged field, the run still passes" "[[ \"\$(field masks_note)\" == '-' && -z \"\$(field forged)\" && \"\$(field verdict)\" == pass && \"\$(printf '%s\\n' \"\$JOURNAL\" | wc -l)\" -eq 1 ]]"
+  done
+  reset_case_env
+}
+
+case_masks_missing() {  # <sut> <lib>: masks_missing is one digit 0-4; an over-range count is `5+` AND partial; only non-numeric is `-`
+  local sut="$1" lib="$2"
+  reset_case_env
+  local base='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":0'
+  # Non-numeric or non-integer text is `-` (unknown): no forged field, no journal pollution, the run still passes with the tuple it claimed.
+  for bad in '-1' '"4 forged=1"' '"4\nforged=1"' 'true' '[1]' '4.5' '"9;touch x"'; do
+    MOCK_RESULT="${base/\"masks_missing\":0/\"masks_missing\":$bad}}" run_case "$sut" "$lib"
+    ok_if "masks_missing $bad is journaled as - (not a count), the run still passes" "[[ \"\$(field masks_missing)\" == '-' && -z \"\$(field forged)\" && \"\$(field verdict)\" == pass && \"\$(pings_ok)\" -eq 1 ]]"
+  done
+  # An all-digit count above 4 is something the closed set cannot produce: it is NOT unknown. It is journaled as the bounded token 5+ and
+  # the pass is downgraded exactly like any non-zero count (the ping is unchanged). A `-` here would read as "no gap" and keep the full tuple.
+  for over in 5 12 99999999999999999999 '"7"' 007; do
+    MOCK_RESULT="${base/\"masks_missing\":0/\"masks_missing\":$over}}" run_case "$sut" "$lib"
+    ok_if "masks_missing $over (over-range count) is journaled as 5+, downgrades coverage to prodtuple_partial, and still pings ok" "[[ \"\$(field masks_missing)\" == '5+' && \"\$(field coverage)\" == prodtuple_partial && \"\$(field verdict)\" == pass && \"\$(pings_ok)\" -eq 1 ]]"
+  done
+  for good in 0 1 2 3 4; do
+    MOCK_RESULT="${base/\"masks_missing\":0/\"masks_missing\":$good}}" run_case "$sut" "$lib"
+    ok_if "masks_missing $good is journaled as that digit; coverage is the full tuple only for 0" "[[ \"\$(field masks_missing)\" == '$good' && ( ( '$good' == 0 && \"\$(field coverage)\" == sdk_wrapper_shim_prodtuple ) || ( '$good' != 0 && \"\$(field coverage)\" == prodtuple_partial ) ) ]]"
+  done
+  reset_case_env
+}
+
+case_masks_absent() {  # <sut> <lib>: an old probe emits neither new field, and the journal line shape
+  local sut="$1" lib="$2"
+  reset_case_env
+  local base='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":0'
+  # an old probe (the apply lands before the release) emits neither field: both read `-`
+  MOCK_RESULT="$base}" run_case "$sut" "$lib"
+  ok_if "an old probe's output (no masks_created, no masks_note) journals - for both and still passes with the full tuple" "[[ \"\$(field masks_created)\" == '-' && \"\$(field masks_note)\" == '-' && \"\$(field coverage)\" == sdk_wrapper_shim_prodtuple && \"\$(pings_ok)\" -eq 1 ]]"
+  # the line shape: the new fields sit right after masks_missing, before consecutive_no_ping
+  ok_if "journal field order: masks_missing, masks_created, masks_note, consecutive_no_ping" "[[ \"\$JOURNAL\" == *' masks_missing='*' masks_created=- masks_note=- consecutive_no_ping='* ]]"
+  reset_case_env
+}
+
+case_masks() {  # <sut> <lib>: every masks_* journal field (the control run; each mutation row runs only the group that guards it)
+  case_masks_created "$1" "$2"
+  case_masks_note "$1" "$2"
+  case_masks_missing "$1" "$2"
+  case_masks_absent "$1" "$2"
+}
+
 case_pass_shape() {  # <sut> <lib>: one pass run exercising every argv assertion of the mock (a changed request is refused with rc 64)
   reset_case_env; run_case "$1" "$2"
   ok_if "the pass run reached the mock with every modelled argv shape (no MOCK_ARGV_VIOLATION)" "[[ \"\$(field verdict)\" == pass ]] && ! grep -q MOCK_ARGV_VIOLATION '$RUN_DIR/log/calls'"
@@ -554,6 +627,14 @@ reset_case_env; MOCK_SELECTOR=unixdeny MOCK_RESULT='{"verdict":"pass","reason":"
 ok_if "selector flows from the resolver to the probe exec (mock refuses a mismatch) and is journaled" "[[ \"\$(field verdict)\" == pass && \"\$(field selector)\" == unixdeny ]]"
 ok_if "masks_missing from the probe is journaled" "[[ \"\$(field masks_missing)\" == 2 ]]"
 ok_if "a pass with masks_missing > 0 is labelled prodtuple_partial, not the full tuple (the ping is unchanged)" "[[ \"\$(field coverage)\" == prodtuple_partial && \"\$(pings_ok)\" -eq 1 ]]"
+reset_case_env; MOCK_RESULT='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":0,"masks_created":4,"masks_note":null}' run_case "$SUT" "$LIB"
+ok_if "a cold-container run that created all four dirs journals masks_created=4 masks_missing=0, keeps the full tuple and pings" "[[ \"\$(field masks_created)\" == 4 && \"\$(field masks_missing)\" == 0 && \"\$(field masks_note)\" == - && \"\$(field coverage)\" == sdk_wrapper_shim_prodtuple && \"\$(pings_ok)\" -eq 1 ]]"
+reset_case_env; MOCK_RESULT='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":1,"masks_created":3,"masks_note":"home_mismatch"}' run_case "$SUT" "$LIB"
+ok_if "created 3 of 4 with a note: all three fields journaled, prodtuple_partial, and the heartbeat is NOT withheld (it is a claim)" "[[ \"\$(field masks_created)\" == 3 && \"\$(field masks_missing)\" == 1 && \"\$(field masks_note)\" == home_mismatch && \"\$(field coverage)\" == prodtuple_partial && \"\$(pings_ok)\" -eq 1 && \"\$(pings_any)\" -eq 1 ]]"
+reset_case_env; MOCK_RESULT='{"verdict":"pass","reason":"ok","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":0,"masks_created":0,"masks_note":"env_divergence"}' run_case "$SUT" "$LIB"
+ok_if "an informational note (env_divergence) with nothing missing does not downgrade the tuple" "[[ \"\$(field masks_note)\" == env_divergence && \"\$(field coverage)\" == sdk_wrapper_shim_prodtuple && \"\$(pings_ok)\" -eq 1 ]]"
+reset_case_env; MOCK_RESULT='{"verdict":"sdk_bash_smoke_failed","reason":"x","coverage":"sdk_wrapper_shim_prodtuple","selector":"base","masks_missing":4,"masks_created":0,"masks_note":"uid_mismatch"}' run_case "$SUT" "$LIB"
+ok_if "a verified fail still journals the new fields and still pings /fail" "[[ \"\$(field verdict)\" == fail && \"\$(field masks_note)\" == uid_mismatch && \"\$(field masks_created)\" == 0 && \"\$(pings_fail)\" -eq 1 ]]"
 ok_if "the resolver ran BEFORE the probe exec" "[[ \"\$(grep -n 'RESOLVER_RAN\|SMOKE=1' '$RUN_DIR/log/calls' | head -n 1 | cut -d: -f2)\" == RESOLVER_RAN ]]"
 ok_if "no -u / -e / --env on any docker exec (no uid change, no env copied from the host)" "! grep -E 'docker exec.* (-u|-e|--user|--env|--env-file)( |=)' '$RUN_DIR/log/calls'"
 nonce1="$(grep -h NONCE_SEEN "$RUN_DIR/log/calls")"
@@ -565,6 +646,7 @@ case_pass_shape "$SUT" "$LIB"
 echo "--- consecutive_no_ping counter, journal scrub, state dir mode ---"
 case_counter "$SUT" "$LIB"
 case_journal "$SUT" "$LIB"
+case_masks "$SUT" "$LIB"
 case_umask "$SUT" "$LIB"
 
 echo "--- heartbeat discipline (real curl path, stub curl) ---"
@@ -887,7 +969,17 @@ mut_sut P3_scrub_allowlist_dropped case_journal "tr -cd 'A-Za-z0-9._:/ =-' | cut
 mut_sut P3_scrub_cut_dropped case_journal "tr -cd 'A-Za-z0-9._:/ =-' | cut -c1-120" "tr -cd 'A-Za-z0-9._:/ =-'"
 mut_sut P3_scrub_env_values_dropped case_journal 'if [ "${#v}" -ge 8 ]; then' 'if false; then'
 mut_sut P3_scrub_shapes_dropped case_journal 's/dp\.[a-z]{2,}\.[A-Za-z0-9._-]*/dp.REDACTED/g' 's/ZZZZ/ZZZZ/g'
-mut_sut P3_masks_digit_guard_dropped case_journal 'case "$_m" in '"''"'|*[!0-9]*) MASKS="-" ;; *) MASKS="$_m" ;; esac' 'MASKS="$_m"'
+# The masks_missing guard line, as written in the SUT (the empty pattern is spelled with a quote pair inside single quotes).
+MASKS_M_CASE='case "$_m" in [0-4]) MASKS="$_m" ;; '"''"'|*[!0-9]*) MASKS="-" ;; *) MASKS="5+" ;; esac'
+mut_sut P3_masks_digit_guard_dropped case_journal "$MASKS_M_CASE" 'MASKS="$_m"'
+mut_sut P3_masks_missing_guard_loosened case_masks_missing "$MASKS_M_CASE" 'case "$_m" in '"''"'|*[!0-9]*) MASKS="-" ;; *) MASKS="$_m" ;; esac'
+# The over-range count read as unknown (`-`): the pre-fix shape, where 5 or 12 kept the full tuple.
+mut_sut P4_masks_overrange_is_unknown case_masks_missing "$MASKS_M_CASE" 'case "$_m" in [0-4]) MASKS="$_m" ;; *) MASKS="-" ;; esac'
+# The over-range count journaled but not downgraded.
+mut_sut P4_masks_overrange_keeps_full_tuple case_masks_missing 'case "$MASKS" in -|0) : ;; *) COV=prodtuple_partial ;; esac' 'case "$MASKS" in -|0|5+) : ;; *) COV=prodtuple_partial ;; esac'
+mut_sut P3_masks_created_guard_dropped case_masks_created 'case "$_c" in [0-4]) MCREATED="$_c" ;; *) MCREATED="-" ;; esac' 'MCREATED="$_c"'
+mut_sut P3_masks_note_enum_dropped case_masks_note 'case "$_n" in uid_mismatch|pid1_unreadable|pid1_env_unreadable|home_mismatch|env_divergence) MNOTE="$_n" ;; *) MNOTE="-" ;; esac' 'MNOTE="$_n"'
+mut_sut P3_masks_note_enum_prefix_match case_masks_note 'case "$_n" in uid_mismatch|pid1_unreadable|pid1_env_unreadable|home_mismatch|env_divergence) MNOTE="$_n" ;;' 'case "$_n" in uid_mismatch*|pid1_unreadable*|pid1_env_unreadable*|home_mismatch*|env_divergence*) MNOTE="$_n" ;;'
 mut_sut P3_umask_dropped case_umask $'\numask 077\n' $'\n'
 # A rc 124 label: the cap that fired, not always the host one
 mut_sut P3_cap_label_always_host case_timeouts 'if [ "$_elapsed" -ge "$PROBE_TIMEOUT" ]; then _cap="$PROBE_TIMEOUT"; else _cap="$INNER_TIMEOUT"; fi' '_cap="$PROBE_TIMEOUT"'
@@ -921,7 +1013,7 @@ done
 ok_if "the pristine SUT/lib copies still equal the files under test (no mutation leaked into the tree)" "cmp -s '$SUT' '$PRISTINE_SUT' && cmp -s '$LIB' '$PRISTINE_LIB'"
 
 # Assertion floor (anti-vacuity): reported with printf + exit, never through the helpers it backstops.
-FLOOR=320
+FLOOR=381
 total=$((passes + fails))
 if [[ "$total" -lt "$FLOOR" ]]; then printf 'FAIL: only %s assertions ran (floor %s): the suite lost coverage\n' "$total" "$FLOOR"; exit 1; fi
 echo "=== $passes passed, $fails failed ($total assertions) ==="

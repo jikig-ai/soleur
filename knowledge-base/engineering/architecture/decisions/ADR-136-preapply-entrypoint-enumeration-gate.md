@@ -87,6 +87,9 @@ every `cloudflare_*` class in that list is adjudicated here):
 | `cloudflare_record` | name+type | No — errors/duplicates, never silent whole-replace | OUT |
 | `cloudflare_pages_project` | `(account_id, name)` — natural | No — there is no whole-list surface to replace: `build_config` / `deployment_configs` / `source` are all MaxItems:1 and `domains` is read-only computed (attachment is a separate `cloudflare_pages_domain`) | OUT |
 | `cloudflare_pages_domain` | `(account_id, project_name, domain)` — natural | No — the resource has **no block types at all**: it is a pure attachment record whose only non-computed fields are the three key parts, so there is no child collection for a whole-list PUT to clobber | OUT |
+| `cloudflare_load_balancer_monitor` | TF-generated ID | No — a create mints a distinct monitor object | OUT |
+| `cloudflare_load_balancer_pool` | `(account_id, name)` | No — duplicate pool name errors on create rather than silently adopting/replacing a live pool | OUT |
+| `cloudflare_load_balancer` | `(zone_id, name)` | No — creates the LB object (coexisting with the retained proxied A record per `cf-lb-a-record-gaplessness-verify.md`), never silently adopts a ruleset entrypoint | OUT |
 
 The gate covers exactly `cloudflare_ruleset`. This is NOT a speculative
 "extensible whole-list class registry" (exactly one class exists); it is a

@@ -13,6 +13,7 @@
 // to prove the probe asserts the documented shape, not just HTTP 200.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runLikeInngest } from "../../helpers/inngest-step-harness";
 import { loadGithubFixture } from "../../fixtures/github/load";
 
 // --- Module mocks (hoisted by vitest) --------------------------------------
@@ -40,24 +41,18 @@ vi.mock("@/server/github-app", () => ({
 
 // --- Helpers ---------------------------------------------------------------
 
-interface MockStep {
-  calls: { name: string; result: unknown }[];
-  run<T>(name: string, cb: () => Promise<T>): Promise<T>;
-}
-
-function makeStep(): MockStep {
-  const calls: { name: string; result: unknown }[] = [];
-  return {
-    calls,
-    async run<T>(name: string, cb: () => Promise<T>): Promise<T> {
-      const result = await cb();
-      calls.push({ name, result });
-      return result;
-    },
-  };
-}
-
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+// #8764 — driven through the real step boundary: every step ends an invocation
+// and re-enters the handler, and a step failure reaches the handler's catch as
+// the SDK's rebuilt StepError. The in-process mock this replaced hid both
+// (the #8717/#8726 defect class).
+async function runHandler() {
+  const { cronKbTemplateHealthHandler } = await importHandler();
+  return runLikeInngest(({ step }) => cronKbTemplateHealthHandler({ step, logger }), {
+    maxAttempts: 1,
+  });
+}
 
 // Default healthy GET /repos response — template, public.
 const healthyRepoResponse = {
@@ -133,9 +128,7 @@ function issueCreates() {
 
 describe("cronKbTemplateHealthHandler — happy path", () => {
   it("is_template:true/private:false → no issue filed on green", async () => {
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronKbTemplateHealthHandler({ step, logger });
+    const out = (await runHandler()).value!;
     expect(out.failureMode).toBe("");
     expect(issueCreates().length).toBe(0);
     // Probed the right repo.
@@ -164,9 +157,7 @@ describe("cronKbTemplateHealthHandler — failure modes", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronKbTemplateHealthHandler({ step, logger });
+    const out = (await runHandler()).value!;
     expect(out.failureMode).not.toBe("");
     const creates = issueCreates();
     expect(creates.length).toBe(1);
@@ -195,9 +186,7 @@ describe("cronKbTemplateHealthHandler — failure modes", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronKbTemplateHealthHandler({ step, logger });
+    const out = (await runHandler()).value!;
     expect(out.failureMode).not.toBe("");
     const creates = issueCreates();
     expect(creates.length).toBe(1);
@@ -219,9 +208,7 @@ describe("cronKbTemplateHealthHandler — failure modes", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronKbTemplateHealthHandler({ step, logger });
+    const out = (await runHandler()).value!;
     expect(out.failureMode).not.toBe("");
     expect(issueCreates().length).toBe(1);
     // 404 reports to Sentry.
@@ -236,9 +223,7 @@ describe("cronKbTemplateHealthHandler — failure modes", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronKbTemplateHealthHandler({ step, logger });
+    const out = (await runHandler()).value!;
     expect(out.failureLabel).toBe("ci/guard-broken");
     const creates = issueCreates();
     expect(creates.length).toBe(1);
@@ -263,9 +248,7 @@ describe("cronKbTemplateHealthHandler — auto-close", () => {
       }
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    await cronKbTemplateHealthHandler({ step, logger });
+    await runHandler();
     const closed = octokitRequestSpy.mock.calls.find(
       ([route, params]) =>
         route === "PATCH /repos/{owner}/{repo}/issues/{issue_number}" &&
@@ -291,9 +274,7 @@ describe("cronKbTemplateHealthHandler — auto-close", () => {
       }
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    await cronKbTemplateHealthHandler({ step, logger });
+    await runHandler();
     expect(issueCreates().length).toBe(0);
     const comment = octokitRequestSpy.mock.calls.find(
       ([route]) =>
@@ -330,11 +311,9 @@ describe("cronKbTemplateHealthHandler — leak tripwire", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
     // Handler swallows the issue-handling error into reportSilentFallback; it
     // must NOT create an issue, and the Sentry report must NOT carry raw PEM.
-    await cronKbTemplateHealthHandler({ step, logger });
+    await runHandler();
     expect(issueCreates().length).toBe(0);
     // Sentry never sees raw PEM bytes (redactedError stripped them).
     for (const call of reportSilentFallbackSpy.mock.calls) {
@@ -364,9 +343,7 @@ describe("cronKbTemplateHealthHandler — transient retry", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronKbTemplateHealthHandler({ step, logger });
+    const out = (await runHandler()).value!;
     expect(probeCallCount).toBe(2);
     expect(out.failureMode).toBe("");
     expect(issueCreates().length).toBe(0);
@@ -388,9 +365,7 @@ describe("cronKbTemplateHealthHandler — transient retry", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    const out = await cronKbTemplateHealthHandler({ step, logger });
+    const out = (await runHandler()).value!;
     expect(probeCallCount).toBe(2);
     expect(out.failureLabel).toBe("ci/guard-broken");
     const creates = issueCreates();
@@ -412,9 +387,7 @@ describe("cronKbTemplateHealthHandler — transient retry", () => {
       if (route === "GET /search/issues") return { data: { items: [] } };
       return { data: {} };
     });
-    const { cronKbTemplateHealthHandler } = await importHandler();
-    const step = makeStep();
-    await cronKbTemplateHealthHandler({ step, logger });
+    await runHandler();
     expect(probeCallCount).toBe(1);
     expect(issueCreates().length).toBe(1);
   });

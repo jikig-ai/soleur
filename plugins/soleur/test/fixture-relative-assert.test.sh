@@ -51,8 +51,8 @@ case "$SCRIPT_DIR" in
   *)       echo "FATAL: SCRIPT_DIR is RELATIVE; refusing" >&2; exit 2 ;;
 esac
 
-command -v python3 >/dev/null 2>&1 || { echo "SKIP: python3 missing"; exit 0; }
-[[ -f "$SCANNER" ]] || { echo "FATAL: scanner missing at $SCANNER" >&2; exit 2; }
+command -v python3 >/dev/null 2>&1 || { echo "UNRESOLVED: python3 missing — this suite asserted nothing; install python3"; exit 3; }
+[[ -f "$SCANNER" ]] || { echo "FAIL: scanner not found at $SCANNER — the file under test is repo-owned" >&2; exit 1; }
 
 if [[ "${1:-}" == "--write-baseline" ]]; then
   hdr="$(mktemp)" || exit 2

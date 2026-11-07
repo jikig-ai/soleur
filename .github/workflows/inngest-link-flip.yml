@@ -3,7 +3,9 @@
 #
 # DISPATCH-ONLY, and a production act: the owner's recorded go names the PR build, not this flag write (plan
 # Production Actions A3), so `flip` needs its own dated go and the typo-guard below. `off` is the rollback and needs
-# none. The orchestration body is scripts/inngest-link-flip.sh (unit-tested with stubbed gh/curl by
+# none UNLESS the Inngest keys were rotated (a non-plan inngest-key-rotate.yml run exists): then `off` (and `flip`, which can start
+# from a flag at 1 and reverts through `off`) needs confirm_off_after_rotation=OFF-AFTER-ROTATION, because the new key would cross
+# plaintext :8288 again (#10540, ADR-307); the best-effort `revert` step is never given it. The orchestration body is scripts/inngest-link-flip.sh (unit-tested with stubbed gh/curl by
 # apps/web-platform/infra/inngest-link-flip-workflow.test.sh); this file is the thin, least-privilege shell around it.
 #
 # WHY THE FLAG IS NOT WRITTEN HERE. This workflow holds no Doppler token and no Terraform credential. It dispatches
@@ -42,6 +44,10 @@ on:
           - "off"
       confirm:
         description: "For action=flip only: type FLIP-INNGEST-LINK. A typo-guard, NOT the authorization (that is the owner's dated go on #10136)."
+        required: false
+        type: string
+      confirm_off_after_rotation:
+        description: "Only after the Inngest keys were rotated (a non-plan inngest-key-rotate.yml run exists): type OFF-AFTER-ROTATION to let action=off (or a post-rotation flip) proceed. Off puts the NEW key on plaintext :8288 again and a re-rotation follows."
         required: false
         type: string
 
@@ -91,6 +97,8 @@ jobs:
         timeout-minutes: 153
         env:
           ACTION: ${{ inputs.action }}
+          # Compared as data inside scripts/inngest-link-flip.sh (flip_guard_after_rotation); never interpolated into the run: body.
+          CONFIRM_OFF_AFTER_ROTATION: ${{ inputs.confirm_off_after_rotation }}
           GH_TOKEN: ${{ github.token }}
           WEBHOOK_DEPLOY_SECRET: ${{ secrets.WEBHOOK_DEPLOY_SECRET }}
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}

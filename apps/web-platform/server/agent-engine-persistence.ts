@@ -110,7 +110,10 @@ export class AgentEnginePersistenceRepository {
       p_routine_run_id: input.routineRunId ?? null,
       p_created_by: input.createdBy,
     });
-    if (result.error) throw new Error(`engine run bind failed: ${result.error.message}`);
+    if (result.error) {
+      const code = (result.error as { code?: string }).code;
+      throw Object.assign(new Error(`engine run bind failed: ${result.error.message}`), code ? { code } : {});
+    }
     return result.data;
   }
 
@@ -131,21 +134,29 @@ export class AgentEnginePersistenceRepository {
     return normalizeRun(result.data);
   }
 
-  async getConversationRun(conversationId: string): Promise<unknown> {
-    const result = await this.client.from("agent_engine_runs")
+  /**
+   * `createdBy` (optional) scopes the read to runs bound by that user. The `agent_engine_runs`
+   * select policy is workspace-member-wide, so a caller that must not learn another member's binding (the
+   * credential lease, #11591) passes it; a non-matching row then reads as "no run".
+   */
+  async getConversationRun(conversationId: string, createdBy?: string): Promise<unknown> {
+    let query = this.client.from("agent_engine_runs")
       .select("*")
       .eq("execution_kind", "conversation")
-      .eq("conversation_id", conversationId)
-      .maybeSingle();
+      .eq("conversation_id", conversationId);
+    if (createdBy !== undefined) query = query.eq("created_by", createdBy);
+    const result = await query.maybeSingle();
     if (result.error) throw new Error(`conversation engine run lookup failed: ${result.error.message}`);
     return normalizeRun(result.data);
   }
 
-  async getConversationBindingState(conversationId: string): Promise<string | null> {
-    const result = await this.client.from("conversations")
+  /** `userId` (optional) scopes the read to conversations owned by that user (see `getConversationRun`). */
+  async getConversationBindingState(conversationId: string, userId?: string): Promise<string | null> {
+    let query = this.client.from("conversations")
       .select("engine_binding_state")
-      .eq("id", conversationId)
-      .maybeSingle();
+      .eq("id", conversationId);
+    if (userId !== undefined) query = query.eq("user_id", userId);
+    const result = await query.maybeSingle();
     if (result.error) throw new Error(`conversation engine binding state lookup failed: ${result.error.message}`);
     if (!result.data || typeof result.data !== "object") return null;
     const state = (result.data as { engine_binding_state?: unknown }).engine_binding_state;

@@ -255,6 +255,13 @@ async function seedRpcCtxTx(t: Txn): Promise<RpcCtx> {
   const emailTriageA = await seedEmailTriageItem(t, base);
   const [grant] = await t`insert into scope_grants (founder_id, workspace_id, action_class, tier)
     values (${base.userA}, ${base.wsA}, ${`general.${randomUUID().slice(0, 8)}`}, 'auto') returning id`;
+  // A pending approval request of wsA (decide_approval attack target). The create RPC is service-role-only and keys on
+  // auth.uid() IS NULL, so it runs here with no claims set; it also validates the conversation/workspace/member pairing.
+  const approvalHash = randomUUID().replaceAll("-", "").repeat(2);
+  const [appr] = await t<{ r: { approval: { id: string } } }[]>`
+    select public.create_approval_request(
+      ${base.wsA}::uuid, ${base.convA}::uuid, ${base.userA}::uuid, 'mcp__soleur_platform__email_send',
+      ${approvalHash}::text, '{"v":1}'::jsonb, 86400) as r`;
   const [poison] = await t<{ debug_mode: boolean }[]>`select debug_mode from workspaces where id = ${base.wsA}`;
   if (poison?.debug_mode !== true) throw new Error("fixture seed failed: workspace flag poison did not land");
   return {
@@ -264,6 +271,7 @@ async function seedRpcCtxTx(t: Txn): Promise<RpcCtx> {
     delegationA: del.id as string,
     contactA: contact.id as string,
     inboxA: inbox.id as string,
+    approvalA: appr.r.approval.id,
     emailTriageA,
     scopeGrantA: grant.id as string,
   };

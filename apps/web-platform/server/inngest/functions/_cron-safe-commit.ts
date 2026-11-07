@@ -23,6 +23,16 @@ import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./_git-hardening";
 // divergence recorded in the plan + PR body.
 export const DEFAULT_MAX_DELETIONS = 10;
 
+/**
+ * Ceiling on the assembled PR body sent to POST /pulls. Callers embed
+ * file-derived content (a proposed diff via agentsPointerNote; dropped-path
+ * names) — the body was the one unbounded string in the request (CodeQL
+ * js/file-access-to-http alert #215), and an over-limit body also risks a 422
+ * the already-exists fallback would misread. 60k sits under GitHub's ~64 KiB
+ * body ceiling with room for the truncation marker.
+ */
+export const MAX_PR_BODY_CHARS = 60_000;
+
 // Workspace scaffolding the substrate writes on EVERY run (settings overlay,
 // cron-allow.txt). Expected-dirty by construction and never staged —
 // excluding them is silent by design; everything else dropped by the
@@ -55,12 +65,19 @@ export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [
 // would fabricate the #8181 binding result on exactly the re-vendor diffs
 // the gate exists to protect. See the two-arm note in
 // scripts/required-checks.txt.
+//
+// #12089 — `enforce` is gone as a context (folded into the `quality-guards`
+// umbrella member steps). The three umbrella names (`guards-ruleset`,
+// `quality-guards`, `secret-guards`) are DELIBERATELY ABSENT too: each
+// umbrella is earned by real CI under the App-token push (#8166) — posting a
+// fabricated green umbrella would claim member verdicts no member ran.
+// Whether a synthetic MAY stand in for an umbrella needs a per-cron ADR-139
+// reachability re-derivation before any name is added here.
 export const SYNTHETIC_CHECK_NAMES = [
   "test",
   "dependency-review",
   "e2e",
   "skill-security-scan PR gate",
-  "enforce",
   "cla-check",
   "cla-evidence",
 ] as const;
@@ -1127,10 +1144,30 @@ export async function safeCommitAndPr(
     //        appended REGARDLESS — the loud-truncation invariant survives
     //        every override.
     const octokit = await resolveOctokit(config);
-    const prBody =
+    let prBody =
       (config.prBody ??
         `Automated PR from \`${cronName}\` — committed handler-side via safeCommitAndPr (#5091).`) +
       (prBodyExtras.length ? `\n\n${prBodyExtras.join("\n")}` : "");
+    // Cap AFTER assembly so prBodyExtras cannot push the body over either.
+    // Same loud-truncation discipline as the dropped-path marker: the PR
+    // carries the ⚠️ note AND Sentry hears about it — never silently
+    // shortened.
+    if (prBody.length > MAX_PR_BODY_CHARS) {
+      const marker =
+        `\n\n> ⚠️ PR body truncated at ${MAX_PR_BODY_CHARS} chars ` +
+        `(Sentry op \`safe-commit-pr-body-truncated\`)`;
+      reportSilentFallback(
+        new Error(`safeCommitAndPr prBody ${prBody.length} chars exceeds ${MAX_PR_BODY_CHARS}`),
+        {
+          feature: config.cronName,
+          op: "safe-commit-pr-body-truncated",
+          message:
+            "PR body exceeded MAX_PR_BODY_CHARS and was truncated — the full text never left the worker",
+          extra: { fn: config.cronName, chars: prBody.length },
+        },
+      );
+      prBody = prBody.slice(0, MAX_PR_BODY_CHARS - marker.length) + marker;
+    }
     let prNumber: number;
     let prNodeId: string;
     try {

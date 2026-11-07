@@ -77,6 +77,7 @@ cache_run() {
     TEST_GROUP=all && _PRINT_AFFECTED=0 &&
     _wt_missing_die() { :; } &&
     eval "$(cat "$DERIVE_SRC")" &&
+    source "$REPO_ROOT/scripts/lib/affected-glob.sh" &&
     source "$CACHELIB" &&
     eval "$2" )
 }

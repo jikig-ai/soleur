@@ -50,34 +50,56 @@ else
   fail "dedicated secrets reference the dedicated keys, not the co-located _prd keys"
 fi
 
-# 1b. (#6178) The host-boot token MUST be read/write, NOT read-only. The cutover flip FSM
-#     (inngest-cutover-flip.sh:flag_set) advances INNGEST_CUTOVER_FLIP on soleur-inngest/prd
-#     via `doppler secrets set` under this token; a read-only token fails that write at the
-#     FIRST transition (flag_set flipping), so the dedicated scheduler can never complete the
-#     flip. Extract the access value from the token resource block specifically (not a bare
-#     file-wide grep that a comment could satisfy), so a silent revert to "read" red-lines CI.
-#     The awk SKIPS in-block comment lines and requires `access` at STATEMENT position
-#     (^[[:space:]]*access) — a bare `access[[:space:]]*=` match plus no comment-skip is
-#     defeated by an in-block decoy comment (`# access = "read/write"`) sitting above the real
-#     read-only attribute (awk matches the comment first, prints read/write, exits green).
-TOKEN_ACCESS="$(awk '
-  /resource "doppler_service_token" "inngest"/ { inblk=1; next }
-  inblk && /^[[:space:]]*#/ { next }
-  inblk && /^[[:space:]]*access[[:space:]]*=/ { gsub(/[",]/,""); print $NF; exit }
-  inblk && /^}/ { exit }
-' "$HOST_TF")"
-[[ "$TOKEN_ACCESS" == "read/write" ]] \
-  && pass || fail "doppler_service_token.inngest access must be 'read/write' so the flip FSM can write INNGEST_CUTOVER_FLIP (got '${TOKEN_ACCESS:-<none>}'); a read-only token boot-fails the flip at its first transition (#6178)"
-# Cross-check: the flip script's flag_set genuinely writes under the ambient (boot-token) env —
-# if flag_set ever grows an explicit --token, this test's premise (boot token authorizes the
-# write) must be re-derived rather than trusted. Scope to the WHOLE flag_set function body
-# (awk between `flag_set() {` and the closing `}`), not a single line — the real write spans
-# two physical lines (`doppler secrets set … \` then `  --project … --silent`), so a --token
-# added on the continuation line would evade a line-scoped grep.
+# 1b. (#6178, split by ADR-282 addendum 2026-10-30 #9927 item 4) The credential is SPLIT.
+#     - doppler_service_token.inngest (the BOOT token; both on-host copies) is access = "read".
+#     - doppler_service_token.inngest_flip (the FLIP token) is access = "read/write", named
+#       "inngest-flip", and is consumed as an EnvironmentFile only by inngest-cutover-flip.service (the
+#       redactor also reads it by value) through the cloud-init drop-in (inngest-flip-token.test.sh proves
+#       the resolution; this block proves the grant).
+#     The cutover flip FSM (inngest-cutover-flip.sh:flag_set) advances INNGEST_CUTOVER_FLIP on
+#     soleur-inngest/prd via `doppler secrets set`; that write must run under a read/write token,
+#     and every OTHER consumer must hold a read-only one.
+#     Extract each value from its OWN resource block (block-scoped awk, exits at `^}`), skipping
+#     in-block comment lines and requiring the attribute at STATEMENT position, so an in-block
+#     decoy comment (`# access = "read/write"`) above the real attribute cannot satisfy it and
+#     the first block's attributes cannot leak into the second. The resource anchor includes the
+#     closing quote: `"inngest"` is a prefix of nothing here, and `"inngest_flip"` never matches it.
+tok_attr() { # $1 resource label  $2 attribute
+  awk -v lbl="$1" -v attr="$2" '
+    index($0, "resource \"doppler_service_token\" \"" lbl "\" {") == 1 { inblk=1; next }
+    inblk && /^[[:space:]]*#/ { next }
+    inblk && $0 ~ "^[[:space:]]*" attr "[[:space:]]*=" { gsub(/[",]/,""); print $NF; exit }
+    inblk && /^}/ { exit }
+  ' "$HOST_TF"
+}
+BOOT_ACCESS="$(tok_attr inngest access)"
+[[ "$BOOT_ACCESS" == "read" ]] \
+  && pass || fail "doppler_service_token.inngest (the boot token) access must be 'read' (got '${BOOT_ACCESS:-<none>}'): a leak of the boot token must not be able to overwrite the LUKS passphrase pair (ADR-282 addendum, #9927 item 4)"
+FLIP_ACCESS="$(tok_attr inngest_flip access)"
+[[ "$FLIP_ACCESS" == "read/write" ]] \
+  && pass || fail "doppler_service_token.inngest_flip access must be 'read/write' so the flip FSM can write INNGEST_CUTOVER_FLIP (got '${FLIP_ACCESS:-<none>}')"
+FLIP_NAME="$(tok_attr inngest_flip name)"
+[[ "$FLIP_NAME" == "inngest-flip" ]] \
+  && pass || fail "doppler_service_token.inngest_flip name must be 'inngest-flip' (got '${FLIP_NAME:-<none>}')"
+# The flip token lives on the same isolated project and config as the boot token, never elsewhere.
+[[ "$(tok_attr inngest_flip project)" == "$(tok_attr inngest project)" && -n "$(tok_attr inngest_flip project)" ]] \
+  && [[ "$(tok_attr inngest_flip config)" == "$(tok_attr inngest config)" && -n "$(tok_attr inngest_flip config)" ]] \
+  && pass || fail "doppler_service_token.inngest_flip must name the same project and config as doppler_service_token.inngest"
+# The templatefile map hands the flip key to the template as its own variable.
+HOST_TF_CODE="$(grep -vE '^[[:space:]]*#' "$HOST_TF" || true)"
+grep -qE 'doppler_flip_token[[:space:]]*=[[:space:]]*doppler_service_token\.inngest_flip\.key' <<<"$HOST_TF_CODE" \
+  && pass || fail "the templatefile map must pass doppler_flip_token = doppler_service_token.inngest_flip.key"
+# Cross-check: the flip script's flag_set genuinely writes under the AMBIENT env (the flip unit's
+# drop-in makes the ambient DOPPLER_TOKEN the flip token; inngest-flip-token.test.sh section R
+# proves which token that is). If flag_set ever grows an explicit --token, the premise must be
+# re-derived rather than trusted. Scope to the WHOLE flag_set function body (awk between
+# `flag_set() {` and the closing `}`), not a single line — the real write spans two physical
+# lines (`doppler secrets set ... \` then `  --project ... --silent`), so a --token added on the
+# continuation line would evade a line-scoped grep.
 FLAG_SET_BODY="$(awk '/^flag_set\(\)[[:space:]]*\{/{i=1} i{print} i&&/^\}/{exit}' "${DIR}/inngest-cutover-flip.sh")"
 printf '%s\n' "$FLAG_SET_BODY" | grep -cE 'doppler secrets set INNGEST_CUTOVER_FLIP' >/dev/null \
   && ! printf '%s\n' "$FLAG_SET_BODY" | grep -cE -- >/dev/null '--token' \
-  && pass || fail "flip flag_set must write INNGEST_CUTOVER_FLIP under the ambient boot token (no explicit --token anywhere in the function body) — else the read/write requirement above is testing the wrong credential"
+  && pass || fail "flip flag_set must write INNGEST_CUTOVER_FLIP under the ambient token (no explicit --token anywhere in the function body) — the ambient token is whichever the flip unit's EnvironmentFile order yields (inngest-flip-token.test.sh section R), so an explicit --token would make that proof test the wrong credential"
 
 # 2. Separate Doppler PROJECT (AC3), not a prd branch config.
 grep -qE 'resource "doppler_project" "inngest"' "$HOST_TF" \
@@ -473,18 +495,21 @@ fi
 # 9. Boot isolation self-check admits BETTERSTACK_LOGS_TOKEN as a TOP-LEVEL alternation
 #    member (#6197). A NESTED member would match INNGEST_BETTERSTACK_LOGS_TOKEN and fail to
 #    match a bare BETTERSTACK_LOGS_TOKEN → boot-brick. The HEARTBEAT_URL)|BETTERSTACK anchor
-#    proves the token is a sibling of the INNGEST_ group, not inside it. Floor rose 4->5.
+#    proves the token is a sibling of the INNGEST_ group, not inside it. Floor rose 4->5,
+#    then 5->6 (#10390 defect 3 — INNGEST_CONFIG_DIGEST materializes in that arc's
+#    promotion apply; the bump and the doppler_secret write ride the same merge->promote
+#    window, per the ordering gate in cloud-init-inngest.yml).
 #    SOURCE LOCATION (#8562): the check moved out of runcmd into the provision script
 #    (/usr/local/bin/soleur-inngest-provision, a write_files entry), so §9-§9c read THAT entry's
 #    body, not the whole file — a copy of the regex anywhere else cannot satisfy them.
 ISO_SRC="${_G1_TMP}/provision-script.sh"
 awk '/^  - path: \/usr\/local\/bin\/soleur-inngest-provision$/{f=1;next} f&&/^  - path: /{f=0} f&&/^[^[:space:]]/{f=0} f' "$CLOUD_INIT" > "$ISO_SRC"
 grep -qF 'HEARTBEAT_URL)|BETTERSTACK_LOGS_TOKEN)' "$ISO_SRC" \
-  && grep -qF '"$n_inngest" -lt 5' "$ISO_SRC" \
-  && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is -lt 5"
+  && grep -qF '"$n_inngest" -lt 6' "$ISO_SRC" \
+  && pass || fail "isolation self-check admits BETTERSTACK_LOGS_TOKEN (top-level) and the floor is -lt 6"
 # The old floor must be gone.
-if grep -qF '"$n_inngest" -lt 4' "$ISO_SRC"; then
-  fail "isolation floor must be -lt 5, not the old -lt 4"
+if grep -qF '"$n_inngest" -lt 5' "$ISO_SRC"; then
+  fail "isolation floor must be -lt 6, not the old -lt 5"
 else
   pass
 fi
@@ -503,7 +528,7 @@ FLOOR="$(grep -oE '\[ "\$n_inngest" -lt [0-9]+ \]' "$ISO_SRC" | grep -oE '[0-9]+
 # Non-vacuity: a failed extraction must NOT silently pass every case below. An empty GUARD_RE
 # makes `grep -Ec ""` match every line, which would fake a clean replay.
 [[ -n "$GUARD_RE" ]] && pass || fail "could not extract the admit-regex from the provision script in $CLOUD_INIT (the replay below would be vacuous)"
-[[ "$FLOOR" == "5" ]] && pass || fail "could not extract the cardinality floor, or it is not 5 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
+[[ "$FLOOR" == "6" ]] && pass || fail "could not extract the cardinality floor, or it is not 6 (got '${FLOOR:-<empty>}') — see the DEC-FLOOR note in cloud-init-inngest.yml before changing it"
 
 # Replays the file's exact predicate: strip DOPPLER_ builtins, then FATAL unless the visible
 # non-DOPPLER set is a SUBSET of the allowlist (n_total == n_inngest) AND meets the floor.
@@ -519,8 +544,14 @@ isolation_decision() {
 DARK5=(INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI BETTERSTACK_LOGS_TOKEN)
 LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
 
-# Dark boot (pre-arm) must PASS — the host has to bootstrap before any cutover.
-[[ "$(isolation_decision "${DARK5[@]}")" == PASS ]] && pass || fail "dark 5-secret boot must PASS the isolation self-check"
+# Dark boot must PASS — the host has to bootstrap. Under floor 6 the minimal bootable set is
+# the dark five + INNGEST_CONFIG_DIGEST, which this arc's promotion apply materializes (#10390
+# defect 3 — the bump and the doppler_secret write ride the same merge->promote window).
+DARK6=("${DARK5[@]}" INNGEST_CONFIG_DIGEST)
+[[ "$(isolation_decision "${DARK6[@]}")" == PASS ]] && pass || fail "dark 6-secret boot (incl. INNGEST_CONFIG_DIGEST) must PASS the isolation self-check"
+# And a 5-name read post-materialization means the digest was deleted — FATAL, a loud brick,
+# never a silent under-floor boot.
+[[ "$(isolation_decision "${DARK5[@]}")" == FATAL ]] && pass || fail "a 5-name set without INNGEST_CONFIG_DIGEST must FATAL under floor 6 — a deleted digest bricks loudly"
 # THE #6178 REGRESSION, behaviorally: op=arm adds CUTOVER_FLIP + HEARTBEAT_URL. Before the fix
 # this FATALed (n_total=7 vs n_inngest=6), bricking every provision while the flip was armed.
 [[ "$(isolation_decision "${LIVE7[@]}")" == PASS ]] && pass || fail "armed 7-secret set must PASS — op=arm writes INNGEST_CUTOVER_FLIP; rejecting it boot-bricks the dedicated host (#6178)"
@@ -561,7 +592,7 @@ LIVE7=("${DARK5[@]}" INNGEST_CUTOVER_FLIP INNGEST_HEARTBEAT_URL)
 # so the INNGEST_-prefixed spelling must NOT be admitted.
 [[ "$(isolation_decision INNGEST_SIGNING_KEY INNGEST_EVENT_KEY INNGEST_REDIS_PASSWORD INNGEST_POSTGRES_URI INNGEST_BETTERSTACK_LOGS_TOKEN)" == FATAL ]] && pass || fail "INNGEST_BETTERSTACK_LOGS_TOKEN must FATAL — BETTERSTACK_LOGS_TOKEN is a TOP-LEVEL member, not nested (#6197)"
 # DOPPLER_* builtins are stripped before counting.
-[[ "$(isolation_decision "${DARK5[@]}" DOPPLER_PROJECT DOPPLER_CONFIG)" == PASS ]] && pass || fail "DOPPLER_* builtins must be stripped before counting"
+[[ "$(isolation_decision "${DARK6[@]}" DOPPLER_PROJECT DOPPLER_CONFIG)" == PASS ]] && pass || fail "DOPPLER_* builtins must be stripped before counting"
 
 # 9c. Pin the COMPARISON OPERATOR. The replay above re-derives the predicate, so it cannot see
 #     an inversion in the file itself: flipping -ne to -eq makes an isolated host FATAL and a
@@ -857,7 +888,8 @@ fi
 
 # 12b. Isolation: INNGEST_TLS_KEY / INNGEST_TLS_CERT are admitted (Terraform mints both into
 #      soleur-inngest/prd at merge; an unadmitted name boot-bricks the next re-provision), the floor
-#      stays 5, and neither a bare nor a suffixed look-alike is.
+#      is now 6 (#10390 defect 3 — INNGEST_CONFIG_DIGEST materialized), and neither a bare nor a
+#      suffixed look-alike is.
 [[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_KEY INNGEST_TLS_CERT)" == PASS ]] && pass || fail "DARK5 + INNGEST_TLS_KEY + INNGEST_TLS_CERT must PASS — the TLS key and cert are minted into soleur-inngest/prd (#10136)"
 [[ "$(isolation_decision "${LIVE7[@]}" INNGEST_CONFIG_DIGEST INNGEST_REDIS_LUKS_KEY INNGEST_LUKS_CUTOVER INNGEST_LUKS_ACTIVE_VOLUME_ID INNGEST_TLS_KEY INNGEST_TLS_CERT)" == PASS ]] && pass || fail "the full 13-name set incl. the TLS pair must PASS"
 [[ "$(isolation_decision "${DARK5[@]}" INNGEST_TLS_KEY)" == PASS ]] && pass || fail "INNGEST_TLS_KEY alone must PASS (the pair is written by one apply but each name stands alone)"
@@ -1068,6 +1100,41 @@ else
 fi
 rm -rf "$TLS_T"
 
+# 10. (#10540) The key-rotation route re-propagates BOTH copies from the dedicated random_id, so the
+#     dedicated pair must stay rotatable by a plain `-replace` of the random_id: no lifecycle block on the
+#     dedicated random_ids or doppler_secrets (an `ignore_changes=[value]` here would swallow the in-place
+#     update phase 1 relies on), and the app (soleur/prd) copies in inngest.tf must derive from them.
+_tf_block() { # FILE TYPE NAME -> resource block with comment lines removed
+  awk -v t="$2" -v n="$3" '
+    $0 ~ "^resource \"" t "\" \"" n "\" \\{" { inb=1 }
+    inb && /^[[:space:]]*#/ { next }
+    inb { print }
+    inb && /^}/ { exit }
+  ' "$1"
+}
+for _n in inngest_signing_key_dedicated inngest_event_key_dedicated; do
+  _b="$(_tf_block "$HOST_TF" doppler_secret "$_n")"
+  if [ -n "$_b" ] && ! grep -q 'lifecycle' <<<"$_b"; then pass; else fail "doppler_secret.${_n} must exist and carry NO lifecycle block (#10540: phase 1 updates it in place)"; fi
+  _b="$(_tf_block "$HOST_TF" random_id "$_n")"
+  if [ -n "$_b" ] && ! grep -q 'lifecycle' <<<"$_b"; then pass; else fail "random_id.${_n} must exist and carry NO lifecycle block (#10540: -replace must regenerate it)"; fi
+done
+_app_sign="$(_tf_block "$INNGEST_TF" doppler_secret inngest_signing_key_prd)"
+_app_evt="$(_tf_block "$INNGEST_TF" doppler_secret inngest_event_key_prd)"
+if grep -q 'value[[:space:]]*=.*random_id\.inngest_signing_key_dedicated\.hex' <<<"$_app_sign" \
+   && grep -q 'value[[:space:]]*=[[:space:]]*random_id\.inngest_event_key_dedicated\.hex' <<<"$_app_evt"; then
+  pass
+else
+  fail "app soleur/prd INNGEST_SIGNING_KEY/INNGEST_EVENT_KEY must derive from the dedicated random_id hex (#10540)"
+fi
+if grep -q 'ignore_changes[[:space:]]*=[[:space:]]*\[value\]' <<<"$_app_sign" \
+   && grep -q 'ignore_changes[[:space:]]*=[[:space:]]*\[value\]' <<<"$_app_evt"; then
+  pass
+else
+  fail "app key copies must keep ignore_changes=[value] so a per-merge plan shows no diff (#10540)"
+fi
+# Harness row: the extractor discriminates (an absent resource yields an empty block, which the loop above FAILS).
+if [ -z "$(_tf_block "$HOST_TF" doppler_secret inngest_no_such_secret)" ]; then pass; else fail "block extractor returned text for a resource that does not exist"; fi
+
 # ANTI-VACUITY FLOOR. Reported by printf + exit, never through fail()/pass(), so neutering those
 # cannot disarm it. The bound is the exact passing count; raise it with every added assertion.
 # 99 -> 100 (#9786): measured 101 before the D1 rewrite (the old floor carried 2 of slack). The rewrite drops the
@@ -1078,7 +1145,16 @@ rm -rf "$TLS_T"
 # 105 -> 183 (#10136): the TLS block (nft order/pins, isolation rows, write_files shape, fetch and health
 # behaviour) adds 78 unconditional assertions (197 passing measured locally, which includes the one
 # `nft -c` row that only runs where nft and unprivileged user namespaces exist).
-INNGEST_HOST_MIN_ASSERTIONS=183
+# 183 -> 184 (#10390 defect 3, floor 5->6): the dark-boot replay splits into a DARK6 PASS row and a
+# 5-name FATAL row (+1 net new) and the DOPPLER_* strip row rides DARK6 (+0) — 203 passing measured
+# locally with the conditional nft row.
+# 184 -> 191 (#10540, +7): the dedicated pair carries no lifecycle (4 rows), the app copies derive from the dedicated hex (1)
+# and keep ignore_changes (1), plus the extractor harness row (1). The pre-existing slack is unchanged.
+# 191 -> 213 (flip-token split review round, K8): the floor had drifted 23 BELOW the suite (214 passing measured; the
+# old 191 let 23 assertions vanish unnoticed). It is now the UNCONDITIONAL count: 214 passing includes the one `nft -c`
+# row that only runs where nft and unprivileged user namespaces exist, so 213 holds on a runner without them. Still a
+# floor (never `-eq`): raise it in the same edit that adds an assertion.
+INNGEST_HOST_MIN_ASSERTIONS=213
 if [ "$((passes + fails))" -lt "$INNGEST_HOST_MIN_ASSERTIONS" ]; then
   printf 'FAIL: only %s assertions ran against a floor of %s — a section was skipped or the suite narrowed\n' "$((passes + fails))" "$INNGEST_HOST_MIN_ASSERTIONS" >&2
   exit 1

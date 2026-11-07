@@ -1,0 +1,5 @@
+# final state of the PR4b tree (rebased onto origin/main, recorded 2026-10-25)
+ratchet --base origin/main: SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=1629 baseline=1629  wall=42
+audit --all-refs --accept (pre-rebase final tree): SOLEUR_PR_AFFECTED_AUDIT suites=667 always_on=119 audited=548 unaudited=0 gap_suites=253 gap_refs=1629 accepted=36 stale=0 refs=3548 files_read=1067
+baseline lines: 1629  accept data rows: 43
+rounds: round 1 = 25 new pairs, round 2 = 2 (comment mentions), round 3 declares nothing; fixpoint

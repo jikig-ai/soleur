@@ -166,8 +166,28 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // report an overlap decision, and the dominant non-zero cause is a real overlap the operator
 // is told about on the terminal. The drift guard in test/git-lock-marker-telemetry.test.ts
 // walks skills/*/scripts/*.sh and found it unmirrored.
+// MIRRORED-NOT-PAGED (PR #11867): SOLEUR_LAUNCH_CHECK_REPORT_INVALID. Emitted by
+// plugins/soleur/skills/launch-check/scripts/launch-check.sh `verify-report` when an existing
+// readiness report fails its state-block grammar. The line carries `reason=` only (a fixed
+// token), no path and no report content. launch-check is a local-CLI skill with no telemetry
+// of its own (ADR-314 decision 6); this entry only matters if a platform-hosted agent runs
+// the skill, and it is not a wedge, so it is not in WEDGE_RE. Its other markers (_RUN, _WRITE,
+// _REPORT_OK) are success-path signals exempted in the drift guard; _ABORT lives under
+// scripts/lib/ and can carry a repository path, so it is deliberately NOT mirrored.
+// Same for the issue-filing markers (ADR-314 amendment 2026-11-03, #11910): _ISSUES, _ISSUES_PLAN
+// and _PLAN_OK are emitted from plugins/soleur/skills/launch-check/scripts/lib/issues.sh, outside
+// the skills/*/scripts/*.sh walk of the drift guard, and are deliberately NOT mirrored: they carry
+// the customer's owner/name repository slug and counts, and their only sink is the customer's
+// own tool result. A hosted run of `issues --create` is a non-goal and stays dark (it needs an
+// executed Art. 28(3) instrument first), so no entry here, no WEDGE_RE change and no exempt-set
+// change. The suite in launch-check/test/issues-guards.test.sh asserts no scripts/*.sh file emits them.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_CLEANUP_SPACE\b.*|SOLEUR_DOCKER_PRUNE\b.*|SOLEUR_OVERLAP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|SOLEUR_BARE_ROOT_CWD\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_CLEANUP_SPACE\b.*|SOLEUR_DOCKER_PRUNE\b.*|SOLEUR_OVERLAP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|SOLEUR_BARE_ROOT_CWD\b.*|SOLEUR_LAUNCH_CHECK_REPORT_INVALID\b.*|SOLEUR_INCIDENT_PULL\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+
+// MIRRORED-NOT-PAGED: SOLEUR_INCIDENT_PULL. The incident skill prints one stdout
+// line per source. The only extractor is the agent PostToolUse(Bash) hook, not a
+// hosted cron. Not in WEDGE_RE. The alternation is SOLEUR_INCIDENT_PULL\b and
+// nothing narrower: the drift-guard sample carries no source= field.
 
 // MIRRORED-NOT-PAGED (#10383): SOLEUR_BARE_ROOT_CWD. A session anchored at a bare
 // repo root — detected by .claude/hooks/bare-root-cwd-guard.sh (source=session-start,

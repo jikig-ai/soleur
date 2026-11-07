@@ -598,7 +598,7 @@ if command -v terraform >/dev/null 2>&1; then
   TF_AVAILABLE=1
   RENDER_SCRATCH=$(mktemp -d)
   # Render the web cloud-init into $2. $1 = web_colocate_inngest; $3 = web_tunnel_connector
-  # (defaults true = web-1, the connector host, so AC7's call sites stay two-arg).
+  # (defaults true = web-2, the connector host, so AC7's call sites stay two-arg).
   # All map vars are placeholders EXCEPT the toggles; keep in sync with server.tf's
   # templatefile map — a new map var breaks this render (the intended tripwire).
   # stderr is NOT swallowed: a render error must surface, not present as an empty file
@@ -798,12 +798,18 @@ PY
   # burn the full budget and emit a false private_nic_timeout.
   assert "render web_tunnel_connector=false OMITS the NIC wait entirely (#6441)" \
     "! grep -qF 'soleur-wait-nic' '$CONN_OFF'"
-  # The apt install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
-  # keeps the binary and stays promotable without an image change.
-  assert "render web_tunnel_connector=false RETAINS ungated 'apt-get install -y cloudflared'" \
-    "grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
+  # The binary install stays UNGATED — only tunnel REGISTRATION is gated, so a de-pooled host
+  # keeps the binary and stays promotable without an image change. The install is the pinned
+  # .deb + sha256 fail-closed arm (eMudhra advisory: an unpinned apt install can resurrect a
+  # below-floor binary on the next host birth), so BOTH its tokens must survive the render.
+  assert "render web_tunnel_connector=false RETAINS the ungated pinned cloudflared .deb install" \
+    "grep -qF 'cloudflared-linux-amd64.deb' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false RETAINS the cloudflared checksum fail-closed guard" \
+    "grep -qF 'soleur-boot-emit cloudflared_checksum fatal' '$CONN_OFF'"
+  assert "render web_tunnel_connector=false carries NO unpinned 'apt-get install -y cloudflared' (eMudhra)" \
+    "! grep -qF 'apt-get install -y cloudflared' '$CONN_OFF'"
   # RETENTION TOKENS BELOW THE endif — the assertions above cannot constrain the gate's LOWER
-  # boundary, because the apt-install token sits ABOVE the `%{ if }`. Without these, moving the
+  # boundary, because the .deb-install token sits ABOVE the `%{ if }`. Without these, moving the
   # `%{ endif ~}` DOWN swallows the webhook install + its fail-closed :9000 poll and every
   # assertion here still passes — a de-pooled host would boot permanently undeployable and
   # would not even fail closed (the poll it needs to fail on is inside the swallowed region).
@@ -818,9 +824,11 @@ PY
   assert "render web_tunnel_connector=false is valid YAML (column-0 directive hazard)" \
     "render_yaml_ok '$CONN_OFF'"
   # The render cannot see WHICH host maps to which toggle value — and that mapping is the
-  # risk that darkens web-1 (AC5's inverted-predicate catastrophe). Pin it at the source.
-  assert "server.tf pins the connector predicate to web-1 (each.key == \"web-1\")" \
-    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-1\"' '$SCRIPT_DIR/server.tf'"
+  # risk that darkens the connector host (AC5's inverted-predicate catastrophe). Pin it at
+  # the source: the connector lives on web-2, the replaceable cattle standby — web-1 is
+  # LUKS-pinned and `web-host-replace` refuses it, so it can never carry a binary fix.
+  assert "server.tf pins the connector predicate to web-2 (each.key == \"web-2\")" \
+    "grep -qE 'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*\"web-2\"' '$SCRIPT_DIR/server.tf'"
 
   rm -rf "$RENDER_SCRATCH"
 else
@@ -1668,6 +1676,71 @@ assert "GuardA3 anti-vacuity: the section ran its full inventory (expected 7, ra
   "(( GUARDA3_ASSERTIONS == 7 ))"
 
 # =========================================================================================
+# Guard A4 (#11602) — the pinned image provably carries the host_metrics trim
+# =========================================================================================
+# Guard A byte-compares every baked carrier at the pinned tag, so the image's
+# vector.toml IS HEAD's — but that is a structural binding, not the content
+# claim #11602 needs. This block names it: the image the NEXT
+# inngest-host-replace boots carries the trim — `scrape_interval_secs = 900`
+# and the EXACT collector set {memory, filesystem} (cpu/disk/load dropped,
+# #7577) — in the baked vector.toml's [sources.host_metrics] block. Asserted
+# at the PINNED TAG's tree — HEAD's vector.toml is not the image, the pinned
+# tag's tree is — and again at HEAD, so a HEAD-side revert reds too. A future
+# pin to a pre-trim tag (e.g. vinngest-v1.1.61) reds HERE, before the bake,
+# instead of shipping the ~17.8k-rows/day untrimmed set #11602 measured.
+#
+# Own counted span, own floor — never folded into the GuardA or GuardA3
+# inventories (a block inside another span is fungible against it).
+GUARDA4_BEFORE="$TOTAL"
+GA4_VEC_TAG=""
+GA4_HM_TAG=""
+if (( GA_TAG_OK == 1 )); then
+  GA4_VEC_TAG="$(git -C "$SCRIPT_DIR" show "$GA_TAG_REF:apps/web-platform/infra/vector.toml" 2>/dev/null || true)"
+  # Same awk-window idiom as Guard A3's HSJ extraction — scope membership to
+  # the host_metrics block, not the whole file. The end pattern stops at the
+  # next section header, so the [sources.host_metrics.filesystem] subtable is
+  # excluded — the excluded-collector check below reads only the block proper.
+  GA4_HM_TAG="$(awk '/^\[sources\.host_metrics\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' <<<"$GA4_VEC_TAG")"
+fi
+# An unresolvable pinned tag (or a vector.toml absent from its tree) yields an
+# EMPTY blob — the named FAIL verdict below, never "nothing to compare, pass".
+assert "GuardA4: vector.toml resolves at the pinned tag $GA_TAG_REF (non-empty blob)" \
+  "[[ -n \"\$GA4_VEC_TAG\" ]]"
+assert "GuardA4: the pinned tag's vector.toml carries the [sources.host_metrics] block" \
+  "[[ -n \"\$GA4_HM_TAG\" ]]"
+assert "GuardA4: the pinned tag scrapes host_metrics at 900s" \
+  "grep -qE '^[[:space:]]*scrape_interval_secs[[:space:]]*=[[:space:]]*900[[:space:]]*\$' <<<\"\$GA4_HM_TAG\""
+assert "GuardA4: the pinned tag collectors include \"memory\"" \
+  "grep -qF '\"memory\"' <<<\"\$GA4_HM_TAG\""
+assert "GuardA4: the pinned tag collectors include \"filesystem\"" \
+  "grep -qF '\"filesystem\"' <<<\"\$GA4_HM_TAG\""
+assert "GuardA4: the pinned tag collectors exclude cpu/disk/load" \
+  "! grep -qE '\"(cpu|disk|load)\"' <<<\"\$GA4_HM_TAG\""
+# Exclusions alone do not bound the set: a future "network" collector would
+# pass them yet trip the #11602 probe's exact-set read. The literal whole-array
+# match is the only assert that pins membership, not just non-membership.
+assert "GuardA4: the pinned tag collectors array is literally [\"memory\", \"filesystem\"] (the exact set — no third member)" \
+  "grep -qE '^[[:space:]]*collectors[[:space:]]*=[[:space:]]*\[\"memory\",[[:space:]]*\"filesystem\"\][[:space:]]*\$' <<<\"\$GA4_HM_TAG\""
+
+GA4_HM_HEAD="$(awk '/^\[sources\.host_metrics\]/{f=1;next} f&&/^\[[a-z]/{f=0} f' "$SCRIPT_DIR/vector.toml")"
+assert "GuardA4: HEAD's vector.toml carries the [sources.host_metrics] block" \
+  "[[ -n \"\$GA4_HM_HEAD\" ]]"
+assert "GuardA4: HEAD scrapes host_metrics at 900s" \
+  "grep -qE '^[[:space:]]*scrape_interval_secs[[:space:]]*=[[:space:]]*900[[:space:]]*\$' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors include \"memory\"" \
+  "grep -qF '\"memory\"' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors include \"filesystem\"" \
+  "grep -qF '\"filesystem\"' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors exclude cpu/disk/load" \
+  "! grep -qE '\"(cpu|disk|load)\"' <<<\"\$GA4_HM_HEAD\""
+assert "GuardA4: HEAD collectors array is literally [\"memory\", \"filesystem\"] (the exact set — no third member)" \
+  "grep -qE '^[[:space:]]*collectors[[:space:]]*=[[:space:]]*\[\"memory\",[[:space:]]*\"filesystem\"\][[:space:]]*\$' <<<\"\$GA4_HM_HEAD\""
+
+GUARDA4_ASSERTIONS=$(( TOTAL - GUARDA4_BEFORE ))
+assert "GuardA4 anti-vacuity: the section ran its full inventory (expected 13, ran $GUARDA4_ASSERTIONS)" \
+  "(( GUARDA4_ASSERTIONS == 13 ))"
+
+# =========================================================================================
 # Guard D (#7695) — quoted delimiters on generated artifacts
 # =========================================================================================
 # PROPERTY. Every heredoc that writes a generated host artifact uses a NON-EXPANDING
@@ -1720,8 +1793,9 @@ assert "GuardD dispatch: the operator count is a positive integer (got '$GD_ALL_
   "[[ '$GD_ALL_PERMISSIVE' =~ ^[0-9]+$ ]] && (( GD_ALL_PERMISSIVE > 0 ))"
 assert "GuardD dispatch: every heredoc operator parsed (parsed $GD_ALL of $GD_ALL_PERMISSIVE)" \
   "(( GD_ALL == GD_ALL_PERMISSIVE ))"
+# #5150: two quoted heredocs (RETENTIONUNITEOF, RETENTIONTIMEREOF) raised the inventory 11 -> 13.
 assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
-  "(( GD_ALL == 10 ))"
+  "(( GD_ALL == 13 ))"
 # Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
 # why this counts every match rather than inspecting the first.
 # Unquoted == the delimiter carries neither ' nor ". Derived from the SAME scan as the
@@ -2242,13 +2316,16 @@ STUB
   printf '#!/bin/sh\ncat\n' > "$G4_FX/bin/inngest-redact.sh"
   # #8562: the isolation self-check now runs in the same script, BEFORE the pull. The stub runs
   # the check's heredoc for real (`doppler run … -- bash -s`) and answers its name listing with
-  # the dark 5-name set, so the check PASSES and the pull arms are what these rows exercise.
+  # the dark 6-name set (floor raised 5→6 by #10390 defect 3: INNGEST_CONFIG_DIGEST is an
+  # admitted member, so the stub serves it — a 5-name set FATALs under the new floor and the
+  # pull arms would be scored for a reason that is not their row), so the check PASSES and the
+  # pull arms are what these rows exercise.
   cat > "$G4_FX/bin/doppler" <<'STUB'
 #!/bin/sh
 printf 'doppler %s\n' "$1" >> "$G4_LOG"
 case "$1" in
   run) while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done; shift; exec "$@" ;;
-  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{}}\n' ;;
+  secrets) [ "$2" = --only-names ] && printf '{"INNGEST_SIGNING_KEY":{},"INNGEST_EVENT_KEY":{},"INNGEST_REDIS_PASSWORD":{},"INNGEST_POSTGRES_URI":{},"BETTERSTACK_LOGS_TOKEN":{},"INNGEST_CONFIG_DIGEST":{}}\n' ;;
 esac
 exit 0
 STUB
@@ -2410,8 +2487,35 @@ COND_ASSERTIONS=$(( COND_ASSERTIONS + TOTAL - _COND_BEFORE ))
 # #10045: 163 -> 173 (the KDENY_KERNEL_STREAM argv-lockstep block added 10 unconditional rows in AC5).
 # #6780: 173 -> 175 (the AC6c cross-file pin-consistency block added 2 unconditional rows).
 # #4699/#7596: -> 192 (the AC6d wiring pins + GuardA3 at-tag block added 17 unconditional rows over 175).
+# #5150: 192 -> 203 (trace retention: 6 bootstrap pins, 3 STAGED words, 2 image-build pins).
+RETENTION_BOOTSTRAP="$SCRIPT_DIR/inngest-bootstrap.sh"
+RETENTION_CLOUD_INIT="$SCRIPT_DIR/cloud-init-inngest.yml"
+RETENTION_IMAGE_YML="$SCRIPT_DIR/../../../.github/workflows/build-inngest-bootstrap-image.yml"
+assert "retention unit is rendered in the bootstrap" \
+  "grep -qF 'inngest-trace-retention.service' '$RETENTION_BOOTSTRAP'"
+assert "retention timer is OnCalendar=daily" \
+  "grep -qF 'OnCalendar=daily' '$RETENTION_BOOTSTRAP'"
+assert "retention timer is Persistent=false" \
+  "grep -qF 'Persistent=false' '$RETENTION_BOOTSTRAP'"
+assert "retention timer sets RandomizedDelaySec" \
+  "grep -qF 'RandomizedDelaySec=30min' '$RETENTION_BOOTSTRAP'"
+assert "retention ExecStart takes the flock lock" \
+  "grep -qF 'flock -n /run/lock/inngest-trace-retention.lock' '$RETENTION_BOOTSTRAP'"
+assert "retention ensure-indexes runs before the timer is enabled" \
+  "awk '/--ensure-indexes/ && !e {e=NR} /systemctl enable --now inngest-trace-retention\\.timer/ && !t {t=NR} END {exit !(e>0 && t>0 && e<t)}' '$RETENTION_BOOTSTRAP'"
+assert "STAGED names inngest-trace-retention.sh as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sh([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "STAGED names inngest-trace-retention.sql as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sql([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "STAGED names inngest-trace-retention.sqlite.sql as a word" \
+  "grep -qE '^[[:space:]]*STAGED=\"([^\"]*[[:space:]])?inngest-trace-retention\\.sqlite\\.sql([[:space:]][^\"]*)?\"' '$RETENTION_CLOUD_INIT'"
+assert "bootstrap image build copies inngest-trace-retention.sh into the build context" \
+  "grep -qF 'cp apps/web-platform/infra/inngest-trace-retention.sh' '$RETENTION_IMAGE_YML'"
+assert "bootstrap image copies inngest-trace-retention.sh to the image root" \
+  "grep -qF 'COPY inngest-trace-retention.sh /inngest-trace-retention.sh' '$RETENTION_IMAGE_YML'"
 UNCONDITIONAL_ASSERTIONS=$(( TOTAL - COND_ASSERTIONS ))
-BOOTSTRAP_MIN_ASSERTIONS=192
+# 203 -> 215 when Guard A4 (#11602) landed: 11 span asserts + the anti-vacuity row.
+BOOTSTRAP_MIN_ASSERTIONS=215
 if [[ "$UNCONDITIONAL_ASSERTIONS" -lt "$BOOTSTRAP_MIN_ASSERTIONS" ]]; then
   printf 'FAIL: assertion-count floor: only %s unconditional assertions ran (%s total, %s from tool-gated blocks), expected >= %s — a block was skipped or emptied.\n' \
     "$UNCONDITIONAL_ASSERTIONS" "$TOTAL" "$COND_ASSERTIONS" "$BOOTSTRAP_MIN_ASSERTIONS" >&2

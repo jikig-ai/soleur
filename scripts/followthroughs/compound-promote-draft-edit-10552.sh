@@ -19,7 +19,8 @@
 # proof: a derived diff touches only the declared target, removes nothing and cannot mint an
 # `hr-` id, so one of them firing means the SERVER derivation is defective (class F; CTO ruling).
 # The PASS set is NOT the complement of the failure set: a complement would pass
-# `target-path-refused`, `quorum-not-met`, `skill-conflict-guard`, `diff-size-exceeded`,
+# `target-path-refused`, `quorum-not-met`, `skill-conflict-guard`,
+# `skill-conflict-guard-unverifiable`, `diff-size-exceeded`,
 # `branch-name-shape-failed`, `target-missing` and any forged unknown string, none of
 # which touches the derived diff.
 #
@@ -30,7 +31,8 @@
 #   N  no proof     -> exit 2   model-side `edit-*`, `quorum-not-met` (a sub-quorum cluster
 #                               the server refused before any model call: no derived diff
 #                               was consumed, and it is not a server defect),
-#                               `skill-conflict-guard`, quiet weeks, every status other
+#                               `skill-conflict-guard`, `skill-conflict-guard-unverifiable`,
+#                               quiet weeks, every status other
 #                               than the above, and anything unrecognised
 # Precedence over the post-floor runs: ANY class-P run -> PASS; otherwise the LATEST
 # post-floor run decides (F -> FAIL, N -> NOT YET). A run holding both a proof and a
@@ -44,7 +46,7 @@
 #   3 = CANNOT ESTABLISH  (credential, floor, or positive control missing; the message
 #                          carries a closed-vocabulary cause, never raw helper output)
 #   5 = ACTION REQUIRED   (still NOT YET 35 days after the floor: a permanent
-#                          `edit-*` or skill-conflict streak must surface, not leave
+#                          `edit-*` or skill-conflict (incl. unverifiable) streak must surface, not leave
 #                          a silently open tracker)
 #
 # Fail-open shapes this probe is built to avoid (construction copied from
@@ -255,7 +257,7 @@ def pset: ["byte-budget-overflow"];
 def fset: ["git-apply-check-failed","edit-derive-failed","diff-path-off-target","corpus-shrink-refused",
              "agents-core-hr-rule-edit-refused"];
 def nset: ["edit-target-unreadable","edit-target-too-large","edit-invalid","edit-anchor-not-found",
-           "edit-anchor-ambiguous","edit-target-duplicate","skill-conflict-guard","target-path-refused",
+           "edit-anchor-ambiguous","edit-target-duplicate","skill-conflict-guard","skill-conflict-guard-unverifiable","target-path-refused",
            "target-missing","branch-name-shape-failed","diff-size-exceeded","quorum-not-met"];
 def sset: ["disabled","deduped","week-cap-reached","empty-corpus","anthropic-truncated",
            "no-qualifying-clusters","completed","error"];

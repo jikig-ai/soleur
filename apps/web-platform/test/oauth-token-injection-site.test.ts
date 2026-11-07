@@ -29,9 +29,13 @@ const ALLOWED = new Set([path.join("server", "agent-env.ts"), AUTH_NAMES_MODULE]
 // Identifiers that carry the auth variable names, and the only modules that
 // may reference them: the injector reads the single names; the sandbox config
 // reads the full set to deny it.
+// `server/agent-auth-failure.ts` (the temporary auth-failure diagnostic, #10455) reads the two single names to test
+// whether the leased credential's variable was PRESENT in the options handed to the SDK; it never writes an env var.
+// Remove its entries here with the diagnostic (checklist in the header of `server/agent-auth-mode.ts`).
+const AUTH_FAILURE_DIAGNOSTIC = path.join("server", "agent-auth-failure.ts");
 const NAME_IDENTIFIER_USERS: Record<string, Set<string>> = {
-  OAUTH_ENV_VAR: new Set([path.join("server", "agent-env.ts"), AUTH_NAMES_MODULE]),
-  API_KEY_ENV_VAR: new Set([path.join("server", "agent-env.ts"), AUTH_NAMES_MODULE]),
+  OAUTH_ENV_VAR: new Set([path.join("server", "agent-env.ts"), AUTH_NAMES_MODULE, AUTH_FAILURE_DIAGNOSTIC]),
+  API_KEY_ENV_VAR: new Set([path.join("server", "agent-env.ts"), AUTH_NAMES_MODULE, AUTH_FAILURE_DIAGNOSTIC]),
   AGENT_AUTH_ENV_VARS: new Set([
     path.join("server", "agent-runner-sandbox-config.ts"),
     AUTH_NAMES_MODULE,

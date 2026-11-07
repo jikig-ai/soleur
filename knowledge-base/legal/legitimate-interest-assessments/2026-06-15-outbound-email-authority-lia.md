@@ -8,7 +8,7 @@ status: draft-requires-counsel-review
 controller: "Jikigai SARL (France; 25 rue de Ponthieu, 75008 Paris)"
 processing_activity: "Agent-assisted, human-approved outbound cold email for founder 1:1 outreach (`outbound.soleur.ai`) — Article 30 register Processing Activity 28"
 lawful_basis: "Art. 6(1)(f) GDPR — legitimate interest"
-addenda: ["2026-09-23 (#8617) — plaintext footprint outside the outbound tables"]
+addenda: ["2026-09-23 (#8617) — plaintext footprint outside the outbound tables", "2026-10-28 (#11303) — the per-send approval gate was not enforced in the hosted legacy runner; trigger fired; voiding consequence overridden"]
 data_subjects: "Outbound recipients (involuntary data subjects whose contact details were NOT obtained from them — Art. 14 applies); the founder/operator"
 related:
   [
@@ -239,6 +239,25 @@ protective of the data subject or fails the purpose.
 > accountability record all survive. The larger footprint sits in conversation content already
 > covered by the Web Platform processing activity. The #3418 disclosure and erasure gap is a
 > named residual.
+
+> **Addendum 2026-10-28 (#11303; Ruled by CLO agent, 2026-10-28).** The trigger "any move to auto-send
+> (removal or bypass of the per-send human-approval gate)" fired **inadvertently**: SDK `allowedTools`
+> pre-approved `email_send`, `email_reply` and `email_suppress` from their introduction (2026-06-15) to
+> the PR #11304 fix. The fix was reported serving at the 2026-10-28T17:53Z check (host unidentified);
+> soleur-web-2 unconfirmed. Statements above that the gate operates describe the design and the position
+> from the fix, not the window. **The automatic voiding consequence is overridden, after a limited
+> re-run of the balancing and the DPIA screen, on these bases:** (1) the trigger was written for a
+> decision to auto-send, and the processing mode that ran is the one assessed because no send is
+> recorded; (2) the chokepoint, suppression and opt-out controls were intact **at HEAD; history before
+> HEAD is unread**; (3) *interest* (promoting the controller's activities by 1:1 outreach to
+> professionals at their published professional addresses, Recital 47), *necessity* (1:1
+> human-addressed outreach; no less intrusive means) and the data subject's *reasonable expectation*
+> (a single message carrying the Art. 14 disclosure) are unchanged, because on the evidence no outreach
+> occurred in the window; (4) the DPIA screen is unchanged (no full DPIA at single-operator scale).
+> Email limb: no evidence of a send; INCONCLUSIVE for the residual before about 2026-07-30, which
+> remains open. If that residual flips to a send, this LIA is void for that send and the full balancing
+> and DPIA screen are mandatory. Evidence and reasoning:
+> `knowledge-base/legal/audits/2026-10-28-clo-determination-11303-gated-tier-allowedtools-bypass.md`.
 
 ---
 

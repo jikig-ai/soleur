@@ -32,7 +32,8 @@
 #     resolver exists.
 #
 #   Flat key=value lines, rewritten wholesale under with_lock:
-#     seats / ci_cycles / fix_rounds / agent_rounds   (counts, default 0)
+#     seats / ci_cycles / fix_rounds / agent_rounds / ci_wall_s
+#                                     (counts, default 0)
 #     cap_<dim>=N      (0 = unset — persisted at init so caps survive
 #                       skill-to-skill handoff; argv dies at skill boundaries)
 #     warned_<dim>=N   (level at which WARN first fired, ask included; 0 = never)
@@ -64,23 +65,29 @@
 # pass included — `gate seats <panel-size>` before dispatch). `agent_rounds` =
 # orchestration dispatches (one-shot child skills, drain items, resolver
 # fan-outs). `fix_rounds` = fix/retry iterations. `ci_cycles` = CI runs the run
-# itself drove (each push to the PR head). Heterogeneous units land on one dim
-# by design — a cap reads as "work units", not a strict taxonomy.
+# itself drove (each push to the PR head). `ci_wall_s` = measured CI wall-clock
+# seconds (#11775) — summed over the driven runs whose timing was readable; a
+# caller with no measurement posts NOTHING, so the count is a floor and count 0
+# means "never measured", which the render surfaces print as
+# `ci_wall_s=unmeasured` (an explicit absent marker — never `ci_wall_s=0`, a
+# fabricated zero that would masquerade as a measured run). Heterogeneous units
+# land on one dim by design — a cap reads as "work units", not a strict taxonomy.
 #
-# DIMENSIONS: seats | ci_cycles | fix_rounds | agent_rounds
-# (`ci-cycles` is accepted as an alias for `ci_cycles` everywhere a dim is
-# taken). One writer per dimension per skill invocation — a prose `incr` and a
-# workflow `counts:` post for the same dim never both fire.
+# DIMENSIONS: seats | ci_cycles | fix_rounds | agent_rounds | ci_wall_s
+# (`ci-cycles` and `ci-wall-s` are accepted as aliases for `ci_cycles` and
+# `ci_wall_s` everywhere a dim is taken). One writer per dimension per skill
+# invocation — a prose `incr` and a workflow `counts:` post for the same dim
+# never both fire.
 #
 # SUBCOMMANDS
 #
 #   init [--reset] [--branch <b>]
 #        [--max-seats N] [--max-ci-cycles N] [--max-fix-rounds N]
-#        [--max-agent-rounds N]
+#        [--max-agent-rounds N] [--max-ci-wall-s N]
 #     Idempotent MERGE: creates the file if absent, preserves counters, merges
 #     --max-* flags into cap_<dim>. Prints `tally-init: <slug> <outcome>` where
 #     outcome ∈ fresh | continued | reset | capped-reset | stale-reset |
-#     repaired:
+#     repaired | default-branch-reset:
 #       fresh         no file existed; new ledger created
 #       continued     existing ledger kept; argv caps merged. A capped ledger
 #                     prints `continued capped=<dim>` — the latch is visible.
@@ -99,7 +106,30 @@
 #                     clean (fail-open) with SOLEUR_TALLY_ERROR
 #                     reason=unreadable; NEVER reported `continued`, because
 #                     nothing readable was preserved.
-#     CAP SEMANTICS: a ledger carrying `capped` is NOT reset by a bare `init` —
+#       default-branch-reset
+#                     the branch is exactly `main` or `master` (derived or
+#                     --branch; `feat-main`, `main-x` and a detached HEAD do
+#                     not match) and the ledger existed and was readable: a
+#                     default-branch ledger is shared across sessions, so init
+#                     scopes it to the run that is starting — counts/warned/
+#                     capped cleared, caps merged as for every reset. Precedence:
+#                     fresh > reset (--reset) > repaired > default-branch-reset >
+#                     capped-reset > stale-reset > continued. Applies to ledgers
+#                     that are NOT capped: a capped main/master ledger follows
+#                     the ordinary capped rules (bare init -> `continued
+#                     capped=<dim>`; raised caps -> capped-reset; 24h idle ->
+#                     stale-reset), so the CAP SEMANTICS latch below holds on
+#                     main as on every branch. Not idempotent
+#                     on main/master: each init there zeroes the counts, so a
+#                     second init inside one run loses the first's. Side
+#                     effect: a concurrent session's init on `main` zeroes
+#                     another session's counts (ADR-268 amendment
+#                     2026-10-31). Only `init` scopes the ledger: `incr`,
+#                     `gate` and `show` on main read whatever has accumulated
+#                     since the last init, which is why `show` carries the
+#                     note: line. A detached HEAD (branch `HEAD`) is not a
+#                     default branch and still shares one ledger.
+#     CAP SEMANTICS (holds on main/master too): a ledger carrying `capped` is NOT reset by a bare `init` —
 #     it reports `continued` and `capped` persists, so the next `gate` still
 #     returns STOP (a budget-capped run cannot be accidentally resumed under
 #     the same caps; livelock impossible). `capped` clears only via an explicit
@@ -115,7 +145,8 @@
 #     Flag validation: values must match ^[1-9][0-9]{0,9}$ — non-numeric,
 #     negative, zero, leading-zero forms (`08`), and digit strings that would
 #     wrap mod-2^64 are rejected with SOLEUR_TALLY_ERROR reason=bad-flag on
-#     stderr and exit 0. `--max-ci_cycles` (underscore) aliases --max-ci-cycles.
+#     stderr and exit 0. `--max-ci_cycles` (underscore) aliases --max-ci-cycles;
+#     `--max-ci_wall_s` aliases --max-ci-wall-s the same way.
 #
 #   incr <dim> [n] [--branch <b>]
 #     Adds n (default 1, ^[0-9]{1,10}$ validated and 10#-normalized) to <dim> under
@@ -127,9 +158,15 @@
 #
 #   show [--branch <b>]
 #     Absent/unreadable file → UNKNOWN. Else prints
-#     `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N`, a `cap:<dim>=<n>`
+#     `tally: seats=N ci_cycles=N fix_rounds=N agent_rounds=N ci_wall_s=W` —
+#     where W is `unmeasured` at count 0 (the absent marker, never a fabricated
+#     `ci_wall_s=0`) and the count itself once any measured wall was posted — a
+#     `cap:<dim>=<n>`
 #     token line when caps are set (the stop-hook floor reads this), and, when
-#     any is set, `warned:<dim>=<at>` / `capped:<dim>=<cap>` tokens.
+#     any is set, `warned:<dim>=<at>` / `capped:<dim>=<cap>` tokens. On a
+#     default-branch ledger (`main`/`master`) a last line
+#     `note:default-branch-ledger (shared across sessions; not attributable to
+#     one run)` follows; the `tally:` line and the tokens above are unchanged.
 #
 #   gate <dim> [n] [--branch <b>]
 #     Reads cap_<dim> from the FILE, never argv. Verdict on stdout:
@@ -224,16 +261,23 @@ _tally_shorthash() {
 # Map _tally_paths rc -> the right error reason (1=bad-branch, 2=lib-missing).
 _tally_paths_err() { case "$1" in 1) _tally_err bad-branch ;; *) _tally_err lib-missing ;; esac; }
 
-# Canonicalize a dim token -> seats|ci_cycles|fix_rounds|agent_rounds, or fail.
+# Default branches: exact `main` or `master` only. `feat-main`, `main-x` and a
+# detached `HEAD` do not match. Their ledgers are shared across sessions (no
+# per-run key), so init scopes them to one run and show discloses it.
+_tally_is_default_branch() { [[ "${T_BRANCH:-}" == "main" || "${T_BRANCH:-}" == "master" ]]; }
+
+# Canonicalize a dim token -> seats|ci_cycles|fix_rounds|agent_rounds|ci_wall_s, or fail.
 _tally_dim() {
   case "$1" in
-    seats|ci_cycles|fix_rounds|agent_rounds) printf '%s' "$1" ;;
+    seats|ci_cycles|fix_rounds|agent_rounds|ci_wall_s) printf '%s' "$1" ;;
     ci-cycles) printf 'ci_cycles' ;;
+    ci-wall-s) printf 'ci_wall_s' ;;
     *) return 1 ;;
   esac
 }
 
-# _tally_paths <branch-or-empty> -> T_SLUG T_COUNTERS_DIR T_FILE
+# _tally_paths <branch-or-empty> -> T_BRANCH T_SLUG T_COUNTERS_DIR T_FILE
+# (T_BRANCH = the resolved branch name, or the --branch value, or `HEAD`.)
 # rc 1 = unsafe branch token refused; rc 2 = no session-state root.
 # _tally_paths_err maps the rc to the right reason marker.
 _tally_paths() {
@@ -242,6 +286,7 @@ _tally_paths() {
     branch=$(git branch --show-current 2>/dev/null || true)
     [[ -n "$branch" ]] || branch="HEAD"
   fi
+  T_BRANCH="$branch"
   T_SLUG=$(_tally_slug "$branch")-$(_tally_shorthash "$branch")
   # `.`/`..` survive the slug transform and would compose a path outside
   # counters/ (mv deposits the tmp file in the state root). Same refusal
@@ -289,12 +334,12 @@ _tally_ledger_ok() {
   [[ -f "$1" && -r "$1" ]] || return 1
   grep -q '^seats=' "$1" 2>/dev/null || return 1
   if grep -qvE '=[0-9]{1,18}$' \
-     < <(grep -E '^(seats|ci_cycles|fix_rounds|agent_rounds|cap_[a-z_]+|warned_[a-z_]+)=' "$1" 2>/dev/null); then
+     < <(grep -E '^(seats|ci_cycles|fix_rounds|agent_rounds|ci_wall_s|cap_[a-z_]+|warned_[a-z_]+)=' "$1" 2>/dev/null); then
     return 1
   fi
   # EVERY capped= line must carry the dim vocabulary or be empty — a duplicate
   # corrupt line after a clean one must not slip past a first-line read.
-  if grep -qvE '^capped=(|seats|ci_cycles|fix_rounds|agent_rounds)$' \
+  if grep -qvE '^capped=(|seats|ci_cycles|fix_rounds|agent_rounds|ci_wall_s)$' \
      < <(grep -E '^capped=' "$1" 2>/dev/null); then
     return 1
   fi
@@ -308,9 +353,9 @@ _tally_setf() { printf -v "T_$1" '%s' "$2"; }
 # Load the ledger into T_* globals; missing/corrupt fields default to 0/empty.
 _tally_load() {
   local k v
-  for k in seats ci_cycles fix_rounds agent_rounds \
-           cap_seats cap_ci_cycles cap_fix_rounds cap_agent_rounds \
-           warned_seats warned_ci_cycles warned_fix_rounds warned_agent_rounds; do
+  for k in seats ci_cycles fix_rounds agent_rounds ci_wall_s \
+           cap_seats cap_ci_cycles cap_fix_rounds cap_agent_rounds cap_ci_wall_s \
+           warned_seats warned_ci_cycles warned_fix_rounds warned_agent_rounds warned_ci_wall_s; do
     v=""
     [[ -r "$1" ]] && v=$(_tally_field "$1" "$k")
     [[ "$v" =~ ^[0-9]+$ ]] || v=0
@@ -322,7 +367,7 @@ _tally_load() {
     # Sanitize: an unvetted latch value would reach indirect expansion in
     # `show` (`cap_$T_capped` -> invalid variable name) and mis-STOP gates.
     case "$T_capped" in
-      ""|seats|ci_cycles|fix_rounds|agent_rounds) ;;
+      ""|seats|ci_cycles|fix_rounds|agent_rounds|ci_wall_s) ;;
       *) T_capped="" ;;
     esac
   fi
@@ -341,14 +386,17 @@ seats=$(_tally_getf seats)
 ci_cycles=$(_tally_getf ci_cycles)
 fix_rounds=$(_tally_getf fix_rounds)
 agent_rounds=$(_tally_getf agent_rounds)
+ci_wall_s=$(_tally_getf ci_wall_s)
 cap_seats=$(_tally_getf cap_seats)
 cap_ci_cycles=$(_tally_getf cap_ci_cycles)
 cap_fix_rounds=$(_tally_getf cap_fix_rounds)
 cap_agent_rounds=$(_tally_getf cap_agent_rounds)
+cap_ci_wall_s=$(_tally_getf cap_ci_wall_s)
 warned_seats=$(_tally_getf warned_seats)
 warned_ci_cycles=$(_tally_getf warned_ci_cycles)
 warned_fix_rounds=$(_tally_getf warned_fix_rounds)
 warned_agent_rounds=$(_tally_getf warned_agent_rounds)
+warned_ci_wall_s=$(_tally_getf warned_ci_wall_s)
 capped=$T_capped
 EOF
   if ! mv "$tmp" "$1" 2>/dev/null; then
@@ -361,9 +409,16 @@ EOF
 }
 
 _tally_print_line() {
-  printf 'tally: seats=%s ci_cycles=%s fix_rounds=%s agent_rounds=%s\n' \
+  # ci_wall_s at count 0 is UNMEASURED, not zero (#11775): the render prints
+  # the explicit absent marker so a run that never posted a measurement is
+  # never mistaken for a measured 0-second run. The ledger stores 0 either
+  # way; only this surface translates it. Distinct from SOLEUR_TALLY_ABSENT,
+  # which marks a missing/unreadable ledger as a whole.
+  local wall="$(_tally_getf ci_wall_s)"
+  (( wall == 0 )) && wall="unmeasured"
+  printf 'tally: seats=%s ci_cycles=%s fix_rounds=%s agent_rounds=%s ci_wall_s=%s\n' \
     "$(_tally_getf seats)" "$(_tally_getf ci_cycles)" \
-    "$(_tally_getf fix_rounds)" "$(_tally_getf agent_rounds)"
+    "$(_tally_getf fix_rounds)" "$(_tally_getf agent_rounds)" "$wall"
 }
 
 # Reap sibling counter files older than 30 days (mtime) — opportunistic
@@ -416,7 +471,7 @@ _tally_norm_cap() {
 
 _tally_init_locked() {
   local reset="$1" caps_given="$2"
-  local n_seats="$3" n_ci="$4" n_fix="$5" n_agent="$6"
+  local n_seats="$3" n_ci="$4" n_fix="$5" n_agent="$6" n_wall="$7"
   local existed=0 ok=0 outcome
   [[ -f "$T_FILE" ]] && existed=1
   if (( existed )) && _tally_ledger_ok "$T_FILE"; then ok=1; fi
@@ -443,6 +498,20 @@ _tally_init_locked() {
     # a continuation.
     outcome="repaired"
     _tally_err unreadable
+  elif _tally_is_default_branch && [[ -z "$T_capped" ]]; then
+    # `main`/`master` ledgers are shared by every session on the default branch
+    # and would accumulate forever (a read there is not one run's cost), so an
+    # init scopes them to the run that is starting. Beats stale-reset and
+    # `continued`; --reset (explicit) and repaired (corrupt) keep their own
+    # names above. A CAPPED ledger is not scoped here: it falls through to the
+    # ordinary capped rules (raised caps -> capped-reset, bare -> `continued
+    # capped=<dim>`, or stale-reset after 24h idle), exactly as on any other
+    # branch — the sticky latch is the budget stop, and a bare init (every skill
+    # runs one) must not lift it. The latch is written by `gate`, not by `incr`: an
+    # uncapped-latched ledger that is merely at its cap is scoped like any other
+    # until a gate has run (ADR-268 amendment). A concurrent session's init on `main` still
+    # zeroes this session's counts — accepted (ADR-268 amendment 2026-10-31).
+    outcome="default-branch-reset"
   elif [[ -n "$T_capped" ]] && (( caps_given )); then
     # Raised-cap resume BEATS stale: an explicit `--max-*` argv is operator
     # intent to continue THIS run under a new budget, and the counts are the
@@ -461,13 +530,15 @@ _tally_init_locked() {
   fi
 
   case "$outcome" in
-    reset|stale-reset|repaired)
+    reset|stale-reset|repaired|default-branch-reset)
       # Fresh ledger — counts, warnings, capped cleared. cap_<dim> survive:
       # reset clears the ledger, never the budget.
       _tally_setf seats 0; _tally_setf ci_cycles 0
       _tally_setf fix_rounds 0; _tally_setf agent_rounds 0
+      _tally_setf ci_wall_s 0
       _tally_setf warned_seats 0; _tally_setf warned_ci_cycles 0
       _tally_setf warned_fix_rounds 0; _tally_setf warned_agent_rounds 0
+      _tally_setf warned_ci_wall_s 0
       T_capped=""
       ;;
     capped-reset)
@@ -478,6 +549,7 @@ _tally_init_locked() {
       T_capped=""
       _tally_setf warned_seats 0; _tally_setf warned_ci_cycles 0
       _tally_setf warned_fix_rounds 0; _tally_setf warned_agent_rounds 0
+      _tally_setf warned_ci_wall_s 0
       ;;
   esac
 
@@ -490,6 +562,7 @@ _tally_init_locked() {
   _tally_merge_cap ci_cycles "$n_ci" "$reset"
   _tally_merge_cap fix_rounds "$n_fix" "$reset"
   _tally_merge_cap agent_rounds "$n_agent" "$reset"
+  _tally_merge_cap ci_wall_s "$n_wall" "$reset"
 
   _tally_write "$T_FILE" || { _tally_err write-failed; printf 'UNKNOWN\n'; return 0; }
   _tally_sweep
@@ -506,7 +579,7 @@ _tally_init_locked() {
 # armed: line and show's cap: line so the two renderings cannot drift.
 _tally_cap_tokens() {
   local _d _c out=""
-  for _d in seats ci_cycles fix_rounds agent_rounds; do
+  for _d in seats ci_cycles fix_rounds agent_rounds ci_wall_s; do
     _c=$(_tally_getf "cap_$_d")
     (( _c > 0 )) && out="${out}cap:${_d}=${_c} "
   done
@@ -529,7 +602,7 @@ _tally_merge_cap() {
 
 cmd_init() {
   local reset=0 caps_given=0 branch="" flag=""
-  local n_seats="" n_ci="" n_fix="" n_agent="" v=""
+  local n_seats="" n_ci="" n_fix="" n_agent="" n_wall="" v=""
   while [[ $# -gt 0 ]]; do
     # Underscored spellings of a flag alias to its hyphenated form —
     # `--max-ci_cycles` would otherwise silently bad-flag the operator's budget.
@@ -552,11 +625,14 @@ cmd_init() {
       --max-agent-rounds)
         v=$(_tally_norm_cap "${2:-}") || { _tally_err bad-flag; printf 'UNKNOWN\n'; return 0; }
         n_agent=$v; caps_given=1; shift 2 ;;
+      --max-ci-wall-s)
+        v=$(_tally_norm_cap "${2:-}") || { _tally_err bad-flag; printf 'UNKNOWN\n'; return 0; }
+        n_wall=$v; caps_given=1; shift 2 ;;
       *) _tally_err bad-flag; printf 'UNKNOWN\n'; return 0 ;;
     esac
   done
   _tally_paths "$branch" || { _tally_paths_err $?; printf 'UNKNOWN\n'; return 0; }
-  _tally_locked _tally_init_locked "$reset" "$caps_given" "$n_seats" "$n_ci" "$n_fix" "$n_agent" || true
+  _tally_locked _tally_init_locked "$reset" "$caps_given" "$n_seats" "$n_ci" "$n_fix" "$n_agent" "$n_wall" || true
   return 0
 }
 
@@ -637,13 +713,17 @@ cmd_show() {
   [[ -n "$caps" ]] && printf '%s\n' "${caps% }"
   # Third line: warned/capped annotations, only when set.
   local ann=""
-  for d in seats ci_cycles fix_rounds agent_rounds; do
+  for d in seats ci_cycles fix_rounds agent_rounds ci_wall_s; do
     w=$(_tally_getf "warned_$d")
     [[ "$w" != "0" ]] && ann="${ann}warned:${d}=${w} "
   done
   [[ -n "$T_capped" ]] && ann="${ann}capped:${T_capped}=$(_tally_getf "cap_$T_capped")"
   ann="${ann% }"
   [[ -n "$ann" ]] && printf '%s\n' "$ann"
+  # Last line: a default-branch ledger is shared across sessions, so its counts
+  # are not attributable to one run. Carries none of the tally:/cap:/warned:/
+  # capped: tokens, so the stop-hook and ship's render parse as before.
+  _tally_is_default_branch && printf 'note:default-branch-ledger (shared across sessions; not attributable to one run)\n'
   return 0
 }
 
@@ -733,13 +813,14 @@ _tally_usage() {
 usage: pipeline-tally.sh <subcommand> [args]
 
   init [--reset] [--branch <b>] [--max-seats N] [--max-ci-cycles N]
-       [--max-fix-rounds N] [--max-agent-rounds N]
+       [--max-fix-rounds N] [--max-agent-rounds N] [--max-ci-wall-s N]
   incr <dim> [n] [--branch <b>]
   show [--branch <b>]
   gate <dim> [n] [--branch <b>]
   selfcheck
 
-dims: seats | ci_cycles (alias ci-cycles) | fix_rounds | agent_rounds
+dims: seats | ci_cycles (alias ci-cycles) | fix_rounds | agent_rounds |
+      ci_wall_s (alias ci-wall-s)
 gate's optional [n] is a lookahead: STOP when count+n would exceed the cap.
 fail-open: every subcommand exits 0; errors are SOLEUR_TALLY_ERROR on stderr.
 EOF

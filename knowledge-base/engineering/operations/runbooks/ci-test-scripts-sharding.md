@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | ~9.4-9.6 min predicted per leg (566.1-578.2 s of suite time) from the manifest regenerated on five green main runs (37111686980, 37112007418, 37116885720, 37130724002, 37148301745); the worst leg stays under 600 s by ~22 s before setup. A table prediction, not a CI measurement and not job wall-clock; derivation in Measured history 2026-10-03 (the orphan-suite battery is two `--rows` halves — see Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=582 → 1-193/194-386/387-582) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -157,6 +157,94 @@ deliberately NOT in `resolve-regenerable-conflicts.sh`'s RESOLVABLE-SET:
 regeneration needs `gh` plus a chosen green run id, which the pure-local
 resolver cannot supply — this path stays manual.
 
+## The drift watch (`shard-balance-watch`, #11564)
+
+A weekly advisory probe (`Tue 09:41 UTC` + `workflow_dispatch`) samples the
+last 5 green `merge_group` `ci.yml` runs' `suite-timings-scripts-*` artifacts
+and runs `python3 scripts/regenerate-shard-manifest.py --drift-report
+--timings-dir <run-dir> ...` — a read-only mode that emits `DRIFT_ROW` (a
+`src=floor` or `src=estimate` durations row that finally measured —
+`FLOOR_UNMEASURED` counts both src classes; the token stays literal because
+the watcher greps it), `LEG_PREDICTED`,
+`LEG_OBSERVED` (light only — heavy legs are atomic one-suite floors),
+`BOUND_PERFECT` (light only), and `FLOOR_UNMEASURED` rows against the committed tables.
+`scripts/watch-shard-balance-11564.sh` thresholds them (floor rows >= 300 s,
+leg ratio > 1.30) and manages ONE watch-owned tracker issue
+(`ci-shard-balance-watch: manifest drift findings`, sentinel
+`<!-- shard-balance-watch:v1 drift=<set-sha1> -->`): comment only when the
+flagged-set hash changes, resolution comment + close on all-clear.
+
+Why `merge_group` and `--timings-dir`, not `--runs`: `push-dedupe` elides the
+shards job on main `push` runs, so they routinely carry no timings artifacts;
+merge_group runs are the canonical as-merged full-matrix run and artifacts
+live 14 days. To re-price by hand: `gh run download <id> -R jikig-ai/soleur
+-p 'suite-timings-scripts-*' -D <dir>` per run, then the same
+`--timings-dir` invocation — the probe's measurement path and the regen path
+are one generator. `bash scripts/watch-shard-balance-11564.sh --dry-run`
+prints findings and posts nothing; `--print-report` prints the raw rows.
+Retirement checklist: the workflow header.
+
+## The wall-clock ratchet (`wallclock-p90-watch`, #11774)
+
+A weekly RATCHET (`Fri 09:07 UTC` + `workflow_dispatch`, deliberately ahead
+of the operator digest's Friday 13:00 UTC run that reads its tracker) — the standing
+instrument for epic #11556's 20-min/15-min required-check wall-clock goals.
+`scripts/watch-wallclock-p90-11774.sh` samples the last 30 completed,
+conclusion=success `ci.yml` runs per surface (`pull_request` AND
+`merge_group`), and per run makes ONE
+`repos/{r}/commits/{head_sha}/check-runs` call that covers every required
+context across all workflows. The measured population is DERIVED from the
+non-comment rows of `scripts/required-checks.txt` — a required check added
+later is measured with no code change, and a required context with no row
+in `scripts/required-check-wallclock-bounds.tsv` is itself a finding (the
+untracked-member class).
+
+Metric: `latency_s = check.completed_at − run.created_at` — queue wait +
+runner acquisition + every serialized predecessor + execution, i.e. the
+wall clock a PR or merge-queue entry actually experiences (the cohort
+model in "Runner-availability data" below); `duration_s` p90 is carried
+only as an execution-isolating diagnostic column. Success-only sampling
+keeps the percentile an honest green-path figure; a timeout-cancelled or
+skipped check run contributes no sample and the row's `n` shows the
+surviving count. Same-sha suites (push + pull_request + retry on one sha)
+resolve by own-`check_suite.id` match, else nearest `started_at` to the
+run's `created_at` — a check run that completed BEFORE the sampled run was
+created belongs to an earlier trigger batch and is dropped, never
+misattributed.
+
+Verdict: nearest-rank p50/p90 of latency per (check, surface); breach iff
+p90 > bound × (1 + margin). Exit `1` on a breach, an unbound required
+context, or a required context unmeasured on a live surface — the run goes
+red and the offenders are named; `0` ok/no-data (zero qualifying samples
+is a reported state, never a ratchet failure); `3` cannot-establish (gh
+API failure, empty derived population, malformed bounds TSV). The report
+home is ONE standing tracker, `ci-wallclock-p90: required-check wall-clock
+report`, labelled `ci/wallclock-p90` (the digest's §6 read selects on that
+label; the watch re-adds it on every run so a stripped label self-heals),
+whose body the watch rewrites in place every run — it is also the
+sixth source the weekly operator digest reads (aggregate-only, ADR-057) —
+and it NEVER auto-closes (the deliberate divergence from
+shard-balance-watch: standing report, not episode tracker). Drift comments
+post only on flagged-set identity change (sentinel
+`<!-- wallclock-p90-watch:v1 drift=<sha1> -->`).
+
+Bounds seeding method: `bound = measured p90 latency rounded up to the
+next minute`, margin `0.30`, seeded from the 2026-11-02 measured baseline
+in Measured history below — NOT the epic target (seeding `test` at the
+20-min goal would have fired immediately at a measured p90 of ~51 min).
+Re-derive a row when a required check is added (in the same change as the
+required-checks.txt row) or when a sustained improvement justifies a
+tighter bound; record the measurement that moved a bound here. A required
+check that legitimately runs on only one surface reports `unmeasured` on
+the other every week — intended loud signal; silence it only by editing
+`required-checks.txt`, never by removing its bound row (bound-row removal
+is itself an unbound finding).
+
+`bash scripts/watch-wallclock-p90-11774.sh --dry-run` prints the would-be
+table/comments and posts nothing; `--print-report` prints the derived
+population + raw rows + flagged set. Retirement checklist: the workflow
+header.
+
 ## Why the OLD positional method is retained
 
 `SCRIPTS_SHARD=k/K` keeps suites whose registration ordinal ≡ k−1 (mod K)
@@ -177,8 +265,9 @@ Per-suite durations come from the run's own `suite-timings-scripts-*` /
 retention 14 days), each a TSV written in execution order. To reconstruct
 the registration order that produced them:
 
-1. Download all legs' TSVs for one run (`gh run download <run-id> -n
-   'suite-timings-*'` or via the artifacts API).
+1. Download all legs' TSVs for one run (`gh run download <run-id> -p
+   'suite-timings-scripts-*' -D <dir>` or via the artifacts API — `-p` is the
+   glob flag; `-n/--name` is exact-name and matches nothing here).
 2. Interleave the legs back into ordinal order: leg k holds ordinals
    k−1, k−1+K, k−1+2K, … under the runner's C-collation sort — recover the
    sequence by round-robin merge, NOT by concatenating legs.
@@ -252,6 +341,94 @@ span to the NEXT registered mark.
   `gh run view <run> --json jobs,createdAt` (start delay = a job's
   `startedAt` minus the run's `createdAt`) and compare against the cohort
   shape in the section below; if the 8th leg's start delay dominates, revisit.
+- **2026-10-30 pre-split baseline (#11562):** jobs-API read over three green
+  PR/merge_group runs (41037175716, 41036790949, 41030652561) — worst
+  `test-scripts` leg wall clocks 49.4 / 51.0 / 43.2 min, per-run leg
+  spreads ~31 / ~32 / ~22 min. The two atomic suites carried it:
+  `ci-pr-affected-replay.test.sh` median 1,322,511 ms (~22 min) and
+  `scripts/test-all-affected` median 1,746,404 ms (~29 min) across five
+  green runs, both on legs already holding ~10 min of other work. Suite
+  sums ≈ wall clock (queue time was not the driver). Split to
+  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-193/194-386/387-578` of 578)
+  and `test-all-affected-{a,b,c,d}` (`--rows 1-13/14-32/33-36/37-38` of 38)
+  inside the same relevance gates; arm prices seeded at CI-median × local
+  arm-share — the first green run carrying real arm timings is the
+  re-price input (interim-pin pattern from 2026-09-26). Post-split
+  manifest: incumbent rows kept their committed prices (a full
+  `--timings-dir` re-price showed the always-on fast-tier budget breaks
+  on pre-existing main drift — 8 always-on labels at 11-378 s CI real —
+  tracked separately), arms placed on least-loaded legs by seeded weight
+  on distinct legs per the `-<letter>` rule. The ~28-min bound is
+  delivered only after real arm timings re-price; until then
+  `--incremental` regens only, since a `--runs` pass would floor-price
+  the estimated arm rows. **Ownership checkpoint:** re-check leg spread
+  and worst leg on the first green PR run after merge — that run's
+  `suite-timings-*` artifacts carry the real arm prices and are the
+  `--runs 5 --write` input (note: `--timings-dir` requires PR/merge_group
+  artifact runs — main `push` runs elide the shards job).
+- **2026-11-02 wallclock-p90 baseline (#11774 seed):** last 30
+  completed+success `ci.yml` runs per surface (30 `pull_request` head
+  SHAs plus 30 `merge_group` SHAs), one `commits/{sha}/check-runs` call per run
+  (**must be paginated — ~55-80 check runs per head sha vs the API's
+  30-item default page**; the probe uses `--paginate` + `per_page=100`),
+  latency = check.completed_at − run.created_at, nearest-rank percentiles.
+  **Commit-time probe-verified `test` required-check p90: 3246 s
+  pull_request / 2803 s merge_group** (p50 2400 / 2426 s — the aggregate
+  `test` job's own execution is ~4 s, so the figure IS pipeline depth);
+  next-slowest p90s (s): `e2e` 700/440, `Bash fixture tests` 503/260,
+  `marketplace-manifest-guard` 358/432, `grok-fidelity` 374/427,
+  `rule-body-lint` 325/370, `service-role-allowlist-gate` 338/368,
+  `lockfile-sync` 418/335; every other required context p90 ≤ 379/299 on
+  both surfaces; every context n ≥ 28/29 per surface. These p90s (rounded
+  up to the minute) seed `scripts/required-check-wallclock-bounds.tsv` at
+  margin 0.30 — every committed bound is ≥ the probe-verified p90 for its
+  (check, surface). An earlier same-day hand pass produced smaller p90s
+  for several small checks (`dependency-review` PR measured 349 s at
+  commit time, `cla-check` PR 185 s) plus uniformly lower merge-queue
+  p90s — consistent with non-paginated truncation of the ~55-80-check-run
+  payload and/or a same-day merge-queue latency step-up; the rows raised
+  at commit time are recorded in the bounds-TSV header note. Reproduced by
+  `bash scripts/watch-wallclock-p90-11774.sh --dry-run` — the standing
+  tracker's report body carries the same aggregate table (per-check
+  percentiles only, no per-run rows, ADR-057).
+- **2026-10-31 post-merge re-price (#11562 ownership checkpoint, CLOSED):**
+  8 green post-merge ci.yml runs carried the arm timings — merge_group
+  41132662609, 41136687119, 41138355176, 41141190932, 41146395715,
+  41180934660 and pull_request 41133279254, 41135223254 (each dir held all 8
+  light legs; `-p` also fetched the 3 heavy-leg artifacts, which
+  `LIGHT_ARTIFACT` excludes). **Observed on the seeded topology:** worst-leg
+  suite-times per run (in the run-id order above) 35.9 / 35.0 / 36.2 /
+  33.7 / 34.9 / 35.2 / 36.8 / 35.2 min, leg spreads 16.1 / 11.5 / 13.5 /
+  10.5 / 12.0 / 12.9 / 17.2 / 8.9 min; jobs-API wall clocks worst 37 / 36 /
+  37 / 35 / 36 / 36 / 38 / 36 min, wall spreads 16 / 11 / 14 / 11 / 12 /
+  13 / 17 / 9 min — improved vs the 43–51 min pre-split baseline but
+  **above the ~28-min bound on every run** (seeded
+  prices were off: replay-a seeded 635 s vs measured 1033 s; affected-b
+  913 s vs 502 s). **Measured arm medians (ms, seeded → measured):**
+  replay-a 635037→1033094, replay-b 336324→399378, replay-c 351151→326172,
+  affected-a 153713→53969, affected-b 912865→502348, affected-c
+  297241→517988, affected-d 382585→610788. **Committed re-price:**
+  incumbent-preserving `--durations` seed (the merge commit's own
+  mechanism) — a full `--timings-dir --write` would have re-priced the 8
+  always-on drifters #11648 tracks and red `test-all-fast-tier-budget`;
+  21 manifest rows re-seated plus 3 new labels seated; 94 incumbent floor
+  rows re-derived at the 1222 ms floor (2 stale rows moved 1200→1222);
+  budget suite stays green. Post-reprice
+  predicted packing ~1230–1277 s/leg (~21.3 min worst) on committed
+  prices — nominally under the bound but inherits incumbent staleness; the
+  honest all-measured table predicts ~1824.7 s/leg (~30.4 min, spread
+  10 ms). **Verdict:** the split delivers ~35 min worst legs — below the
+  old 43–51 min but short of ~28; the residual is incumbent-price
+  staleness (see next) plus 9–17 min of per-run variance, not arm packing.
+  **#11648 corroborated:** the 8 always-on drifters' fresh 8-run medians
+  (ms): test-all-group-affected 356,915; lint-ratchet 26,575;
+  check-deps-adapter-drift 24,513; token-drift-workflow-causes 19,777;
+  grep-q-pipe-guard 15,618; lint-encryption-posture 11,375;
+  gitleaks-merge-commit 11,791; lint-gh-argv-arg-live 13,212 — consistent
+  with the issue's 5-run table (sustained cost, not a measurement
+  artifact); evidence posted as an issue comment. 1 floor row in the
+  measured table: `tests/scripts/cf-lb-overlay-gate` (registered after the
+  staged runs — no CI timing yet).
 
 ## Runner-availability data (why extra legs are not free)
 
@@ -305,3 +482,44 @@ two pages and inflate the population. The raw `jobs.tsv` is committed at
 - `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` — the
   synthetic `test` check has six `needs:` jobs; a failed or skipped heavy
   matrix fails it.
+
+## Arm-split checklist (#11562 convention, ADR-313)
+
+Splitting a too-long battery into `--rows` `-<letter>` arms touches every
+site below — the same commit bumps `DECLARED_TOTAL` and re-splits the
+registered ranges, because the bounds check refuses a range the battery
+cannot execute.
+
+1. **Registrations**: `run_suite "<stem>-<letter>" bash <file> --rows A-B`
+   pairs, one per arm, every registration flagged (a mixed contract reds);
+   each `skip_suite` re-run text carries the same `bash <file> --rows A-B`
+   line, and `_relevance_declined` counts stay in step (pr-gated arms only).
+   A `ci.yml` `rows:` matrix is the other style — its run step consumes
+   `--rows "${{ matrix.rows }}"`.
+2. **Relevance**: shared `<NAME>_PATHS` array in
+   `scripts/lib/test-relevance-paths.sh` + `RELEVANCE_ARRAYS` row in
+   `scripts/lint-orphan-test-suites.sh`; `AFFECTED_CONSUMED_EDGES` rows per
+   arm label in `scripts/lib/test-affected-paths.sh`; `is_pr_gated_decline`
+   in `scripts/ci-pr-selection.sh`; `GATED` rows in
+   `scripts/test-all-infra-coverage-notice.test.sh`; pr-battery-gate
+   constants (`L_*`/`ARRAYS`/`own_file`/`add_arm`/`arm_id`) in
+   `scripts/test-all-pr-battery-gate.test.sh`.
+3. **Battery**: `DECLARED_TOTAL` beside the gate comment; source
+   `scripts/lib/rows-range.sh`, call `rows_parse_args "$@"`, `in_range`
+   once per gated site in file order (ordinal arg where declared),
+   `rows_gate_floor` + battery extras at EOF. Optional `ROWS_COUNT_VAR` +
+   `ROWS_BLOCK_CASES` per-block case floors.
+4. **Regen**: `python3 scripts/regenerate-shard-manifest.py --incremental
+   --write` for both TSVs — the distinct-legs post-pass must pin each
+   `-<letter>` sibling on a different leg.
+5. **Guards**: re-pin totality-mutations' verbatim `run_suite … --rows`
+   anchors if the argv lines moved; run the affected-index ratchet and add
+   declared edges or accept rows for every newly flagged (suite, path)
+   pair.
+6. **Seeding prices**: a hand-seeded arm price stamps `src=estimate` in
+   `scripts/suite-durations.tsv` — never `measured`. An estimate supplies
+   weight but stays out of the floor median and the measured-only drift
+   accounting; it upgrades to `measured` only when a `--runs`/`--timings-dir`
+   pass has real timing rows. (`estimate→measured` / `measured→estimate`
+   emit named drift-gate notes; `DRIFT_ROW`/`FLOOR_UNMEASURED` count both
+   src classes.)

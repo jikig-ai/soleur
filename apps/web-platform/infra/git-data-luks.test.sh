@@ -172,7 +172,8 @@ p_no_rollback_mode() {
 
 # A12 retired: no freeze, rsync, set-identity verify or flip — called or defined.
 p_no_freeze_flip() {
-  if _cutover_code "$1" | grep -Ec '(^|[^A-Za-z_])((acquire|release)_freeze|(bulk|delta)_rsync|verify_set_identity|flip_flag_and_reload)([^A-Za-z_]|$)|soleur-(web|drain)' >/dev/null; then echo 0; else echo 1; fi
+  # The one exact line naming the app container (#8211 PR-E container probe) is exempt; any other mention of those names still trips.
+  if _cutover_code "$1" | grep -vxF 'CONTAINER_PROBE_APP_NAME="soleur-web-platform"' | grep -Ec '(^|[^A-Za-z_])((acquire|release)_freeze|(bulk|delta)_rsync|verify_set_identity|flip_flag_and_reload)([^A-Za-z_]|$)|soleur-(web|drain)' >/dev/null; then echo 0; else echo 1; fi
 }
 
 # DI-HIGH: the pre-receive hook honours the cutover freeze sentinel (fail-closed).

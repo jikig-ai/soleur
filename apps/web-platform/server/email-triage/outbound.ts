@@ -8,10 +8,13 @@
 // body-hash match → in-txn suppression recheck → Resend → record WORM audit.
 //
 // Approval model (ADR-060): the gated-tier review is the human trust boundary.
-// The caller passes approvedBodySha256 (the hash of the body the human approved
-// at the gate); the chokepoint recomputes sha256(body) and rejects on mismatch,
-// so a body mutated after approval cannot be sent. The send is recorded into the
-// outbound_sends WORM table (migration 104) via record_outbound_send.
+// What binds the send to the reviewed input is canUseTool returning
+// allow(toolInput): the handler runs on that same object. approvedBodySha256 is
+// a handler-local integrity hash of the body AS SENT (the tool computes it from
+// the same args it passes as bodyText; the chokepoint recomputes sha256(body) and
+// rejects on mismatch), NOT a binding to what the review card showed. It also
+// keys the duplicate-send guard. The send is recorded into the outbound_sends
+// WORM table (migration 104) via record_outbound_send.
 
 import { createHash } from "node:crypto";
 
@@ -64,7 +67,7 @@ export interface SendCompliantOutboundArgs {
   optOut?: string;
   art14?: Art14Disclosure;
   ftcDisclosure?: string;
-  /** The body hash the human approved at the gated review (P0-1 body-binding). */
+  /** Handler-local integrity hash of the body as sent (P0-1); not a binding to the review card's text. */
   approvedBodySha256: string;
 }
 
@@ -120,7 +123,7 @@ export async function sendCompliantOutbound(
   // 4. Recipient allow-list — no internal/own-domain/role addresses (P0-3).
   assertRecipientAllowed(to);
 
-  // 5. Body-hash approval match (P0-1) — reject a body mutated after approval.
+  // 5. Body-hash integrity check (P0-1) — reject a body that differs from the hash the handler computed for it.
   const perSendBodySha256 = sha256(bodyText);
   if (perSendBodySha256 !== approvedBodySha256) {
     throw new OutboundComplianceError(

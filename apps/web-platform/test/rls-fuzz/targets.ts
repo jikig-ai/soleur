@@ -93,7 +93,13 @@ export const EXCLUDED_ISOLATION: Record<string, string> = {
   dsar_export_jobs:
     "GDPR DSAR export jobs, user-keyed (auth.uid()=user_id), SELECT-only policy → now fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened; INSERT default-denied (no INSERT policy) so no write-forge",
   workspace_egress_audit_rollup:
-    "egress audit rollup (mig 162, #9545 PR1): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated (service-role RPC writes only, nothing reads in PR1) -> every authenticated read or write is denied by grant, fuzzed in egress-audit-rollup.integration.test.ts (members of both workspaces denied 42501 with a service-role positive control). PR2 adds the is_workspace_member SELECT policy and converts this to a base-matrix target.",
+    "egress audit rollup (mig 162, #9545 PR1): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated (service-role RPC writes only, nothing reads in PR1) -> every authenticated read or write is denied by grant, fuzzed in egress-audit-rollup.integration.test.ts (members of both workspaces denied 42501 with a service-role positive control). PR2 (mig 177) does NOT add a member SELECT policy: members read only through the get_egress_audit_summary RPC. #11238 (mig 183) adds a second read function, get_egress_audit_window_summary, with a 24h/7d/30d window and the same membership-first contract; still no member SELECT policy and no table grant, so this table stays an excluded, zero-policy target (ADR-288 amendments).",
+  approval_request:
+    "durable approval requests (mig 180, #4672): workspace-OWNER-gated SELECT (is_workspace_owner(workspace_id, auth.uid())), no INSERT/UPDATE/DELETE policy and no write grant for any api role (every write is an approval RPC under a write-once trigger) -> fuzzed on SELECT-USING (owner sees, co-member denied) in rls-excluded-deepened, plus the decide_approval RPC attack (non-owner tenant B denied with the same error as for a missing id; the Owner check runs BEFORE the row lock, and the Owner revoke of an approved row shares it)",
+  legal_reauth_event:
+    "single-use email-code challenge (mig 184, #12011): RLS ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated/service_role (access only through SECURITY DEFINER RPCs) -> every direct authenticated read or write is denied by grant, so a co-member positive control is schema-impossible; the denial for every api role is asserted in legal-acceptance.tenant-isolation.test.ts and supabase/verify/184_legal_acceptance.sql",
+  git_data_erasure_pending:
+    "git-data erasure ledger (mig 182, #8211 PR-B1): carries workspace_id (no FK) but RLS is ENABLED with ZERO policies and ALL privileges revoked from anon/authenticated/service_role (access only through service_role-only SECURITY DEFINER RPCs) -> every direct authenticated read or write is denied by grant, so a co-member positive control is schema-impossible; fuzzed in git-data-erasure-pending.integration.test.ts (anon/authenticated/service_role denied 42501 on the tables and on every RPC, with a service_role RPC positive control).",
   workspace_member_actions:
     "member-action audit; authenticated has NO table grant at all (SELECT+INSERT both revoked) → direct base-table access is grant-blocked for every tenant; cross-tenant read is fuzzed via the list_workspace_member_actions RPC attack (AC8)",
   action_sends:
@@ -150,6 +156,8 @@ export const USER_ISOLATION_TARGETS: Target[] = [
 export const USER_EXCLUDED: Record<string, string> = {
   tc_acceptances:
     "RLS ENABLED with ZERO policies (service-role-only via accept_terms/anonymise RPCs, mig 044) → owner userA reads 0 rows too, so an owner positive control is schema-impossible AND userIsolationTables (reads pg_policies) never enumerates it — documented, not a gate target",
+  legal_acceptance:
+    "founder legal acceptance record (mig 184, #12011, ADR-319): user-keyed (founder_id = auth.uid(), no workspace_id), founder-gated SELECT plus a RESTRICTIVE jti-deny policy, no INSERT/UPDATE/DELETE policy and no write grant for any api role (the only write is record_legal_acceptance under a write-once trigger) -> base-table co-member target deferred; isolation (owner sees, another founder denied, runtime audience denied) is fuzzed in legal-acceptance.tenant-isolation.test.ts and writes through the RPC attacks in rpc-cases",
   beta_contacts:
     "beta-CRM contact (mig 126), SELECT user_id=auth.uid(); writes go through the crm_* SECURITY DEFINER RPCs already fuzzed at AC8 (crm_contact_set_stage/crm_note_append/crm_get_contact_detail) — base-table co-member SELECT target deferred",
   beta_contact_stage_transitions:
@@ -243,10 +251,15 @@ export const ISOLATION_TARGETS: Target[] = [
   },
   {
     table: "messages",
-    updateCol: "workspace_id",
+    // Migration 181 narrows authenticated UPDATE to (status, draft_preview) behind messages_owner_draft_update, which
+    // only reaches an author's DRAFT rows. The attack therefore self-assigns draft_preview of a draft card A authored:
+    // A can update it (positive control) and a denial for B/C comes from the policy, not from a column privilege.
+    updateCol: "draft_preview",
     seed: async (b, c) => {
-      const [{ id }] = await b`insert into messages (workspace_id, template_id, conversation_id, role, content)
-        values (${c.wsA}, 'work', ${c.convA}, 'user', 'rls-fuzz-seed') returning id`;
+      const [{ id }] = await b`insert into messages
+        (workspace_id, template_id, user_id, status, source, owning_domain, draft_preview, tier)
+        values (${c.wsA}, 'work', ${c.userA}, 'draft', 'rls-fuzz', 'engineering', 'rls-fuzz-seed', 'external_low_stakes')
+        returning id`;
       return idLocate(id);
     },
     forge: (h, c) =>

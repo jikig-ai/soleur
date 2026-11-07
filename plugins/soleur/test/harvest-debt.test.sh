@@ -14,6 +14,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # `set -euo pipefail`, so the `+e` below is REQUIRED to preserve this suite's
 # deliberate no-errexit contract -- delete the source line and the `+e` becomes wrong.
 # shellcheck source=plugins/soleur/test/test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${tmpd:-}" ]] || rm -rf "$tmpd"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh" || { echo "FATAL: could not source $SCRIPT_DIR/test-helpers.sh" >&2; exit 2; }
 
 set +e -uo pipefail
@@ -45,7 +51,6 @@ seed_repo() {
 
 # === Case 1-6: a repo with markers ===
 tmpd="$(mktemp -d)"
-trap 'rm -rf "$tmpd"' EXIT
 seed_repo "$tmpd"
 out="$(cd "$tmpd" && bash "$HARVEST")"
 rc=$?

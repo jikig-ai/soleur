@@ -682,6 +682,45 @@ resource "sentry_alert" "art17_erasure_incomplete" {
   }
 }
 
+# (#8211) Sibling of art17_erasure_incomplete, for the LOCAL working-tree leg of the Art. 17
+# erasure. `deleteWorkspace` reaps WORKSPACES_ROOT/<id> and WORKTREE_ROOT/<id>; a root it cannot
+# remove (or a tree only MOVED ASIDE to `<id>.orphaned-<ts>`) is mirrored as op=workspace-tree-
+# erasure by account-delete (feature=account-delete) AND repo/disconnect (feature=repo-disconnect)
+# while the caller still succeeds, so the filter is the OP ALONE. Triggers/actions copy the rule
+# above (re-pages per event). Distinct `frequency_minutes = 38` avoids Sentry POST-time
+# exact-duplicate dedup (taken: 5,10-37,60-63,120,240,1440-1442; keyed on action shape +
+# frequency, NOT conditions). Contract: test/sentry-git-data-pin-fault-alert-op-contract.test.ts.
+resource "sentry_alert" "art17_workspace_tree_erasure_incomplete" {
+  organization      = var.sentry_org
+  name              = "art17-workspace-tree-erasure-incomplete"
+  enabled           = true
+  frequency_minutes = 38
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "op", match = "eq", value = "workspace-tree-erasure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
 # Rule 2 — BYOK delegation cap exceeded (hourly | daily). Lower urgency:
 # wider frequency + quieter `NoOne` fallthrough. Filters require
 # feature=byok-delegations AND op ∈ {hourly-cap-exceeded, daily-cap-exceeded}
@@ -954,6 +993,57 @@ resource "sentry_alert" "egress_blocked" {
       conditions = [
         { tagged_event = { key = "feature", match = "eq", value = "cron-egress-firewall" } },
         { tagged_event = { key = "op", match = "in", value = "egress_blocked,ghcr_deny_lost,ghcr_deny_probe_blind,resolve_link_local" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# ── Egress audit read path (#9545 PR2, ADR-288 amendment) — member view of the egress rollup ──
+# apps/web-platform/server/egress-audit-read.ts mirrors faults on the destination page with
+# feature=egress-audit-read and the reason in `op`, `err = null` and a STATIC message per reason, so
+# each reason is its own Sentry issue group and this tag filter matches (an Error object would let the
+# pino mirror capture it first and de-duplicate the tagged event away, #8629). Paged ops:
+#   rpc_error              -> the summary RPC failed or returned a malformed body
+#   rpc_timeout            -> the summary RPC outlived its bound
+#   workspace_read_error   -> the destination PAGE's current-workspace pointer read threw or timed out
+#                             (the view renders `unavailable`); page-only, the card has its own unpaged op
+# Everything else the loader emits is a WARNING-level debounced mirror of a decorative read and is
+# deliberately NOT routed here: this rule has no level filter, so routing them would email a person for
+# a hidden "Last recorded request". They stay searchable as feature:egress-audit-read, unpaged:
+# hint_timeout, hint_rpc_error, hint_workspace_read (the card), org_read, flag_eval, web_access_read.
+# The in-body 42501 denial (a removed member or stale pointer) is never mirrored at all; an engine 42501
+# ("permission denied for function", a lost grant) IS a fault and arrives as rpc_error with pg_code=42501.
+# Do NOT rename this resource or the live rule name (`egress-audit-read-failure`): a rename is a
+# destroy/create of a live paging rule. frequency_minutes=41 is distinct from every other rule (Sentry
+# de-duplicates on action_match+logic_type+frequency+actions-shape, not on conditions). The feature
+# and op literals are pinned against the loader by
+# apps/web-platform/test/sentry-egress-audit-read-alert-op-contract.test.ts.
+resource "sentry_alert" "egress_audit_read_failure" {
+  organization      = var.sentry_org
+  name              = "egress-audit-read-failure"
+  enabled           = true
+  frequency_minutes = 41
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "egress-audit-read" } },
+        { tagged_event = { key = "op", match = "in", value = "rpc_error,rpc_timeout,workspace_read_error" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
@@ -1652,6 +1742,115 @@ resource "sentry_alert" "seccomp_remediation_failed" {
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# server/agent-runner-sandbox-config.ts (buildAgentSandboxConfig) pre-creates each masked dir (peer-socket,
+# transcript, session-tmp) before every dispatch (an ungated, idempotent mkdirSync on each build); the SDK skips a deny landing that does not exist, so a failed
+# mkdir leaves a cross-tenant read channel UNMASKED for that dir (the entry stays in denyRead: fail-open per dir).
+# Before this rule the failure was an error event with nobody behind it (#10455). The emit is
+# `reportSilentFallback(null, { feature: "agent-sandbox", op: "masked-dir-precreate", tags: { dir_kind } })`: the
+# literal `null` first argument keeps it on the MESSAGE path, because an Error would be mirrored by the pino
+# logger as feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never
+# match. Contract: test/sentry-masked-dir-precreate-alert-op-contract.test.ts (emit site <-> this block) and
+# test/agent-sandbox-precreate-sentry-path.test.ts (real logger, real helper).
+#
+# GROUPING: the message is constant per `dir_kind` (peer-socket | transcript | session-tmp) and carries no path, so
+# Sentry opens ONE issue per kind (an acknowledged benign kind cannot silence a later one); no per-dir fingerprint
+# (one persistent fault would otherwise page once per dir). value=0 notifies on the first event of a group within
+# the hour, and a persistent fault re-notifies every `frequency_minutes` (an acknowledged/resolved issue stops it).
+# Email only (issue owners, ActiveMembers fallthrough: the project has no ownership rule, so issue_owners alone
+# resolves to nobody); NOT paged to Slack until ADR-260's Slack path is verified. Both filters (feature AND op)
+# are carried: `op` alone would also match any future emitter reusing the op name under another feature.
+# Distinct frequency_minutes = 39 avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-38,60-63,120,240,
+# 1440-1442; re-verified free after merging main, which took 38 for art17_workspace_tree_erasure_incomplete); dedup keys on action shape + action_match + filter_match + frequency, not
+# conditions. Events carry only the kind, the errno (code/syscall) and the dir path: no user content.
+resource "sentry_alert" "masked_dir_precreate_failed" {
+  organization      = var.sentry_org
+  name              = "masked-dir-precreate-failed"
+  enabled           = true
+  frequency_minutes = 39
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-sandbox" } },
+        { tagged_event = { key = "op", match = "eq", value = "masked-dir-precreate" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# server/agent-auth-failure.ts observes the SDK stream of BOTH runners (legacy agent-runner.ts, cc-dispatcher.ts)
+# and emits ONE event when the Claude CLI replies "Not logged in · Please run /login" (or its structured
+# `authentication_failed` code): `reportSilentFallback(null, { feature: "agent-auth", op: "cli-auth-failure", ... })`.
+# Before this rule that reply reached the user with nothing in Sentry or Better Stack (#10455, #10548); the cause is
+# not known, so the event carries ten closed-enum tags that separate the competing hypotheses in ONE event. The
+# literal `null` first argument keeps it on the MESSAGE path: an Error would be mirrored by the pino logger as
+# feature=pino-mirror and the tagged capture deduplicated behind it (#8629), so this rule could never match.
+# Contract: test/sentry-agent-auth-failure-alert-op-contract.test.ts (emit site <-> this block <-> alert-reference.json)
+# and test/agent-auth-failure-sentry-path.test.ts (real logger, real helper, secret canary).
+#
+# TEMPORARY DIAGNOSTIC. It exists to find the cause of the outage, not to page on a steady state. Lifecycle: step 1
+# (#11085, first real event 2026-10-27T09:01Z recorded on #10455) takes effect when this change is applied on merge: the
+# provider rejects a rule with no action, so the rule keeps ONE issue_owners email with the NoOne fallthrough, which
+# resolves to no recipient. Step 2 removes the rule when the root-cause fix merges or on 2026-11-26 (30 days after the
+# first event), whichever comes first. The removal checklist is in the header of server/agent-auth-mode.ts.
+#
+# GROUPING: the message is constant, so every event shares ONE Sentry issue; the per-user 5-minute debounce and the
+# process-wide cap (10 events per 5 minutes) bound the events. NoOne resolves to no recipient ONLY while the project has
+# no Sentry ownership rule (last measured 2026-09-06; a 2026-10-29 retry with the read-only token got 403): a rule that
+# names owners would deliver to them. This covers THIS rule only: Sentry's vendor-default workflow "Send a notification
+# for high priority issues" (not managed here) can still email active members for a new or re-prioritised high-priority
+# issue; see README.md.
+# No Slack action is wired for this rule. Both filters (feature AND op) are carried so a later diagnostic op under
+# feature=agent-auth cannot match by accident.
+#
+# DECODE KEY: README.md ("Diagnostic rule: agent-auth-failure") is the one copy of the tag decode table, the responder
+# steps and the read commands.
+# Distinct frequency_minutes = 40 avoids Sentry POST-time exact-duplicate dedup (`grep -h frequency_minutes *.tf` lists
+# the values in use); dedup keys on action shape + action_match + filter_match + frequency, not conditions. The value is
+# provisional until the last merge of origin/main: re-check it then.
+# Events carry only ten closed-enum values: no key material, env value, message body, user or workspace id, or path.
+resource "sentry_alert" "agent_auth_failure" {
+  organization      = var.sentry_org
+  name              = "agent-auth-failure"
+  enabled           = true
+  frequency_minutes = 40
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "agent-auth" } },
+        { tagged_event = { key = "op", match = "eq", value = "cli-auth-failure" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "NoOne" } },
       ]
     },
   ]
@@ -2764,6 +2963,325 @@ resource "sentry_alert" "haiku_no_text_block_rate" {
       conditions = [
         { tagged_event = { key = "feature", match = "in", value = "domain-router,email-triage" } },
         { tagged_event = { key = "op", match = "eq", value = "no-text-block" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# Approval request nobody answered (#4672, ADR-309). The 5-minute expiry cron
+# (server/inngest/functions/cron-approval-expiry.ts) fires the `gate_unanswered` op ONCE per request, 15 minutes after
+# it was created while still pending (sweep_approvals() marks `unanswered_flagged_at`, so a request flags at most once).
+# The agent has stopped waiting at 5 minutes, so a request this old means the Owner's push/inbox nudge did not land.
+# Together with approval_key_unavailable (below) and the Art. 17 anonymise alert, this is one of the only approval
+# alerts: every other approval op is a Sentry warn event whose rate is the rollout metric reviewed at the enabling
+# gate, not a page. The op has its own static message (server/approval/ops.ts),
+# so the group is one condition; `approval_id` is a row UUID tag, not personal data.
+#
+# Triggers: the event is a message event with no stack trace, so Sentry groups it by message text and EVERY unanswered
+# request lands in the same one issue for its whole life (`approval_id` is a tag, not part of the group). The three
+# transition triggers alone would therefore email once for the first request ever and then stay silent while the issue
+# is open. `event_frequency_count {1h, 0}` fires on every event, as the sibling alerts (anthropic_credit_exhausted,
+# spawn_agent_dead_letter) do. `frequency_minutes = 42` (unused elsewhere in the root) is the per-issue throttle: a
+# second unanswered request more than 42 minutes after the previous email emails again; requests inside that window
+# share one email. Triggers fire only on an UNRESOLVED issue, so resolve this issue after triage, never archive it.
+resource "sentry_alert" "approval_gate_unanswered" {
+  organization      = var.sentry_org
+  name              = "approval-gate-unanswered"
+  enabled           = true
+  frequency_minutes = 42
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "approval-queue" } },
+        { tagged_event = { key = "op", match = "eq", value = "gate_unanswered" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#4672, ADR-309) The approval HMAC key is unavailable: SENTRY_USERID_PEPPER is unset or empty in the container, so
+# deriveApprovalHashKey (server/approval/canonical.ts) throws key_unavailable and the gate FAILS CLOSED for every
+# approval-gated tool call (no request is created, the agent is told approvals are unavailable). server/approval/ops.ts
+# registers it as its own op (`approval-key-unavailable`, ERROR level via reportSilentFallback(null, ...)) so it does not
+# disappear into the shared approval-gate-failed group. It is a deploy/config fault, not a user event: while the flag is
+# on, a missing pepper blocks every gated action for every workspace until the secret is restored, and the same fault
+# during a pepper ROTATION window invalidates live approvals. The op has its own static message, so the group is one
+# condition; the filter is `feature` + `op`.
+#
+# Triggers/actions copy approval_gate_unanswered (re-pages per event: the event is a message event with no stack trace,
+# so Sentry groups every occurrence into one issue and the three transition triggers alone would email once and then
+# stay silent while the issue is open). Distinct `frequency_minutes = 44` avoids Sentry POST-time exact-duplicate dedup
+# (re-verified root-wide and against origin/main: 5,10-43,60-63,120,240,1440-1442 taken). Resolve the issue after the
+# pepper is restored, never archive it.
+resource "sentry_alert" "approval_key_unavailable" {
+  organization      = var.sentry_org
+  name              = "approval-key-unavailable"
+  enabled           = true
+  frequency_minutes = 44
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "approval-queue" } },
+        { tagged_event = { key = "op", match = "eq", value = "approval-key-unavailable" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#4672) The Art. 17 approval-queue anonymise step failed. server/account-delete.ts saga step 5.16 calls
+# anonymise_approval_request (migration 180) and mirrors BOTH failure shapes (an RPC error and a thrown error) as
+# feature=account-delete, op=anonymise-approval-request, then ABORTS the deletion with a user-facing "Account deletion
+# failed" error. The step is flag-independent (it runs for every account whether or not the approval-queue flag was ever
+# on) and fail-closed, so a persistent fault here blocks EVERY account deletion and the data subject is owed their
+# erasure. The filter is `feature` + `op` (the op string is unique to this step). Triggers/actions copy
+# art17_erasure_incomplete (re-pages per event, because an issue left open must not swallow the next refusal).
+# Distinct `frequency_minutes = 43` avoids Sentry POST-time exact-duplicate dedup (taken: 5,10-42,60-63,120,240,1440-1443).
+# Resolve the Sentry issue after the sweep, never archive it (an archived issue silences later events).
+resource "sentry_alert" "art17_approval_anonymise_failed" {
+  organization      = var.sentry_org
+  name              = "art17-approval-anonymise-failed"
+  enabled           = true
+  frequency_minutes = 43
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "account-delete" } },
+        { tagged_event = { key = "op", match = "eq", value = "anonymise-approval-request" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#12011, PR-C; ADR-319) The founder legal-acceptance card's failure signals. The web card
+# (server/legal-acceptance/**, app/api/legal-acceptance/**) emits Sentry events tagged feature=legal-acceptance with an
+# `op` of accepted (an accepted row was written; liveness, never paged), decide_rejected (the decide RPC refused;
+# `reason` tag), reauth_failed (the email code send or verify failed; provider error class tag), page_read_failed (a
+# founder page could not read its rows; not matched by either rule, not paged) or row_without_event (a legal_acceptance
+# row with no matching accepted event; reconciliation). Two rules route them, and neither matches the
+# feature alone (that would email on every accepted row): test/sentry-legal-acceptance-alert-op-contract.test.ts derives
+# the op set from the server source and refuses a rule that omits or adds one.
+#
+# legal_acceptance_failure_burst: decide_rejected and reauth_failed, 3 events in one hour on one issue. Only a BURST pages:
+# one stale hash or one mistyped-code provider error is expected on a card a single founder uses, so the transition
+# triggers are deliberately absent. The threshold of 3 in 1h is PROVISIONAL (the card ships behind the approval-queue flag
+# and no baseline exists): recalibrate from the first 14 days of data after the flag is enabled. The email is the existing
+# approval alerts' route (issue_owners, ActiveMembers fallthrough). `frequency_minutes = 45` is unused elsewhere in the root.
+resource "sentry_alert" "legal_acceptance_failure_burst" {
+  organization      = var.sentry_org
+  name              = "legal-acceptance-failure-burst"
+  enabled           = true
+  frequency_minutes = 45
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { event_frequency_count = { interval = "1h", value = 3 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "legal-acceptance" } },
+        { tagged_event = { key = "op", match = "in", value = "decide_rejected,reauth_failed" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# legal_acceptance_row_without_event: PAGE severity, but INERT until the PR-D verify endpoint exists: nothing emits
+# op=row_without_event before then, so this rule cannot fire. A legal_acceptance row exists with no matching op=accepted event, so
+# the write path and the observability disagree about a recorded acceptance of a legal text. Any single event matters,
+# and the event is a message event with a static message (one Sentry issue for its whole life), so the three transition
+# triggers alone would email once and then stay silent while the issue is open; `event_frequency_count {1h, 0}` fires on
+# every event, as approval_gate_unanswered does. `frequency_minutes = 46` (unused elsewhere in the root) is the per-issue
+# throttle. Resolve the Sentry issue after the row has been reconciled, never archive it (an archived issue fires no trigger).
+resource "sentry_alert" "legal_acceptance_row_without_event" {
+  organization      = var.sentry_org
+  name              = "legal-acceptance-row-without-event"
+  enabled           = true
+  frequency_minutes = 46
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "legal-acceptance" } },
+        { tagged_event = { key = "op", match = "eq", value = "row_without_event" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#10914, Ref #8211) The git-data erasure re-drive's paging rules. server/inngest/functions/
+# cron-git-data-erasure-redrive.ts (feature=cron-git-data-erasure-redrive, op=git-data-erasure-redrive)
+# raises a Sentry ERROR event when the oldest pending erasure whose owner is GONE reaches 20 days
+# (tag escalation=20d) and another at 28 days (escalation=28d). Without a rule those are issues in the
+# un-routed stream that email nobody, and the privacy policy promises the erasure "will be completed":
+# the Art. 12(3) one-month limit (as short as 28 days) could pass with nobody told. This is that rule.
+# The 28-day event is the LAST warning, not a margin.
+#
+# Filter = feature AND the `escalation` tag, with `in` over the two tiers (the `in` match is comma
+# separated, as in egress_audit_read_failure). It deliberately does NOT match the feature alone: the
+# same feature also emits an info event on each run that claimed a row or found one pending (idle runs
+# emit none), the owner_still_exists / live_owner_aged warns and the heartbeat/claim/resolve error ops, none of which is a deadline. Nothing here reads
+# GIT_DATA_STORE_ENABLED or any environment: if the ledger write is later gated on that flag, rows (and so
+# escalations) simply stop appearing while it is off, and this rule is unchanged. The tags are low-cardinality
+# and carry no workspace id (the handler never tags one).
+#
+# Triggers copy art17_erasure_incomplete (an open issue must not swallow the next escalation): the
+# handler re-emits each tier at most hourly per process, and `frequency_minutes = 360` is the per-issue
+# action interval, so a persisting escalation re-pages at most every 6 h per tier (about 4 emails a day
+# per live issue). Resolve the Sentry issue after the erasure is confirmed, never archive it: an
+# archived issue fires no trigger. 360 is used only by this rule in the root (Sentry dedups identical
+# rules on action shape + frequency; the other values in use are 5,10-44,60-63,120,240,1440-1442, plus 720 for the
+# no-progress rule below).
+#
+# DEAD-OR-FAILING-CRON GAP, stated so nobody reads this rule as covering it: if the cron stops, no escalation
+# event is ever emitted and this rule stays silent; a cron that runs but fails (heartbeat ?status=error, or the
+# stage-failure ERROR events) matches neither new rule either, and only the unrouted monitor issue sees it. The liveness cover is the cron's own Sentry monitor
+# (sentry_cron_monitor.scheduled_git_data_erasure_redrive), routed into cron_monitor_failure (PR 2 of the README's
+# two-PR rule, #10914), so a missed or failed check-in emails.
+# The tag literals are pinned against the handler by
+# apps/web-platform/test/sentry-git-data-erasure-redrive-alert-op-contract.test.ts.
+resource "sentry_alert" "git_data_erasure_redrive_escalation" {
+  organization      = var.sentry_org
+  name              = "git-data-erasure-redrive-escalation"
+  enabled           = true
+  frequency_minutes = 360
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "cron-git-data-erasure-redrive" } },
+        { tagged_event = { key = "escalation", match = "in", value = "20d,28d" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
+
+# (#10914) Fleet-wide refusal, the early warning ahead of the 20-day escalation above: a run drove rows at
+# the host and the host confirmed none (reason=no_erasure_progress, a WARNING-level event with the status
+# counts in `extra.byStatus`). It is a separate rule so it can be disabled on its own: it also fires during
+# a deliberate freeze / rotate window (the runbook says a refusal inside the window simply waits), where the
+# right move is to leave it open and resolve it after the unfreeze. Same trigger set and email as the rule
+# above; a quieter `frequency_minutes = 720` (at most 2 emails a day per issue) because it is a lead
+# indicator, not the deadline. 720 is used only by this rule in the root.
+resource "sentry_alert" "git_data_erasure_redrive_no_progress" {
+  organization      = var.sentry_org
+  name              = "git-data-erasure-redrive-no-progress"
+  enabled           = true
+  frequency_minutes = 720
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "cron-git-data-erasure-redrive" } },
+        { tagged_event = { key = "reason", match = "eq", value = "no_erasure_progress" } },
       ]
       actions = [
         { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },

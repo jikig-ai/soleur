@@ -4,7 +4,10 @@
 # the prod service-role + Terraform apply out of GitHub Actions; security P0-1).
 #
 # Negative AC (enforced by review):
-#   grep -rl "bootstrap-live-verify\|seed-live-verify" .github/workflows/ → zero
+#   grep -rl "bootstrap-live-verify" .github/workflows/ → zero
+# (seed-live-verify-user.sh IS legitimately wired into web-platform-release.yml
+# for principal refresh — only this script's terraform-apply half must never
+# reach CI)
 #
 # Usage:
 #   doppler run -p soleur -c prd -- bash apps/web-platform/scripts/bootstrap-live-verify.sh
@@ -13,10 +16,12 @@
 # steps run under DIFFERENT Doppler configs:
 #   1. terraform apply -target the two new resources in apps/web-platform/infra
 #      (random_password.live_verify_user → doppler_secret LIVE_VERIFY_USER_PASSWORD),
-#      under `-c prd_terraform` (the infra root reads its TF_VAR_* + doppler_token_tf
-#      from prd_terraform, NOT prd) with `--name-transformer tf-var`, plus BARE
-#      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY exported (outside the transformer)
-#      for the Cloudflare-R2 S3 backend. Mirrors apply-web-platform-infra.yml.
+#      under the canonical nested loader — outer `-p soleur-infra-privileged -c
+#      prd` (Tier-B TF_STATE_AWS_* + doppler_token_tf) wrapping inner `-c
+#      prd_terraform --preserve-env` (~12 TF_VAR_* inputs) — plus BARE
+#      AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY exported from the same Tier-B
+#      pair for the Cloudflare-R2 S3 backend. Mirrors apply-web-platform-infra.yml
+#      (its infra-credentials action aliases TF_STATE_AWS_* onto AWS_*).
 #   2. Run the seed under a FRESH `doppler run -c prd` so it picks up the
 #      password Terraform just published to Doppler prd (the launching env was
 #      captured before the secret existed).
@@ -25,6 +30,14 @@
 # in Doppler prd afterwards so the harness allowlist code-gate (run.ts) binds.
 
 set -euo pipefail
+
+# Refuse to run under xtrace: -x prints a variable's value the moment it is bound (see #7797),
+# and this script binds the Tier-B R2 state pair. There is no legitimate traced run, so the
+# refusal is unconditional and sits before anything is bound (same guard as
+# apps/cla-evidence/infra/bootstrap.sh).
+case "$-" in
+  *x*) printf '[FATAL] refusing to run under xtrace: this script handles a live credential and -x would print it (see #7797)\n' >&2; exit 78 ;;
+esac
 
 if [[ "${DOPPLER_CONFIG:-}" != "prd" ]]; then
   echo "::error::DOPPLER_CONFIG=\"${DOPPLER_CONFIG:-<unset>}\" — run via:" >&2
@@ -44,10 +57,11 @@ SEED="$REPO_ROOT/apps/web-platform/scripts/seed-live-verify-user.sh"
 
 echo "==> Step 1: terraform apply (-target the two live-verify resources)"
 
-# The infra root authenticates via the prd_terraform config (NOT prd): it reads
-# doppler_token_tf + betterstack/github-app TF vars (~12 TF_VAR_* inputs). Under
-# -c prd the apply fails immediately with "No value for required variable". So
-# Step 1 runs under prd_terraform; Step 2 (the seed) stays under prd.
+# The infra root's ~12 TF_VAR_* inputs come from the prd_terraform config (NOT prd) — under
+# -c prd alone the apply fails immediately with "No value for required variable". The provider
+# write token `doppler_token_tf` lives only in Tier B post-O5b, so Step 1 runs under the nested
+# loader below (outer soleur-infra-privileged/prd wrapping inner prd_terraform), not a bare
+# prd_terraform read; Step 2 (the seed) stays under prd.
 #
 # The Cloudflare-R2 S3 backend reads its creds during `terraform init`, BEFORE any
 # provider/variable evaluates — and it wants RAW AWS_ACCESS_KEY_ID /
@@ -59,17 +73,22 @@ echo "==> Step 1: terraform apply (-target the two live-verify resources)"
 # The `|| { … }` handles a doppler non-zero exit (secret absent / auth failure);
 # the -z check below handles a present-but-empty value. Both fail closed with a
 # friendly message (mirrors apply-web-platform-infra.yml:220-231).
-AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID --plain -p soleur -c prd_terraform) || {
-  echo "::error::Failed to read AWS_ACCESS_KEY_ID from Doppler prd_terraform (R2 backend cred)" >&2
+# State-backend creds: the soleur-terraform-state R2 bucket's READ/WRITE pair
+# lives in Tier B (soleur-infra-privileged/prd) as TF_STATE_AWS_* — the
+# prd_terraform AWS_* pair is read-only since O5b (#8209/ADR-241) and 403s the
+# apply's state PutObject mid-run. Exported bare (outside the transformer) so
+# they reach the backend unrenamed.
+AWS_ACCESS_KEY_ID=$(doppler secrets get TF_STATE_AWS_ACCESS_KEY_ID --plain -p soleur-infra-privileged -c prd) || {
+  echo "::error::Failed to read TF_STATE_AWS_ACCESS_KEY_ID from Doppler soleur-infra-privileged/prd (R2 backend write cred)" >&2
   exit 1
 }
-AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain -p soleur -c prd_terraform) || {
-  echo "::error::Failed to read AWS_SECRET_ACCESS_KEY from Doppler prd_terraform (R2 backend cred)" >&2
+AWS_SECRET_ACCESS_KEY=$(doppler secrets get TF_STATE_AWS_SECRET_ACCESS_KEY --plain -p soleur-infra-privileged -c prd) || {
+  echo "::error::Failed to read TF_STATE_AWS_SECRET_ACCESS_KEY from Doppler soleur-infra-privileged/prd (R2 backend write cred)" >&2
   exit 1
 }
 export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" ]]; then
-  echo "::error::R2 backend creds empty in Doppler prd_terraform (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)" >&2
+  echo "::error::R2 backend creds empty in Doppler soleur-infra-privileged/prd (TF_STATE_AWS_ACCESS_KEY_ID/TF_STATE_AWS_SECRET_ACCESS_KEY)" >&2
   exit 1
 fi
 
@@ -78,10 +97,15 @@ fi
 # (defends against a malicious republish of a pinned provider version).
 terraform -chdir="$INFRA" init -input=false -lockfile=readonly >/dev/null
 
-# prd_terraform carries the ~12 TF_VAR_* inputs; --name-transformer tf-var renames
-# them so terraform sees TF_VAR_*. The bare AWS_* exported above survive into this
-# child env for the R2 backend.
-doppler run -p soleur -c prd_terraform --name-transformer tf-var -- \
+# Canonical nested loader (runbook infra-credential-tiers-8209.md §Local
+# Terraform invocation): the outer Tier-B loader injects TF_STATE_AWS_* and
+# doppler_token_tf (the provider write token — absent from prd_terraform since
+# O5b); the inner prd_terraform loader carries the ~12 TF_VAR_* inputs, and its
+# --preserve-env is load-bearing: without it the inner loader would overwrite
+# the outer Tier-B TF_VAR_* values with prd_terraform's plantable copies. The
+# bare AWS_* exported above still reach the backend unrenamed.
+doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- \
+  doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- \
   terraform -chdir="$INFRA" apply -input=false -auto-approve \
     -target=random_password.live_verify_user \
     -target=doppler_secret.live_verify_user_password

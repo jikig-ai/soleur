@@ -701,19 +701,61 @@ t_web2_retire_firewall_delete_aborts() {
   fi
 }
 
-# T47: THE ADR-118 BIRTH HAZARD (D1(A), measured 2026-07-17). The proxy-TLS
-# resources are ABSENT from state and from Doppler prd — `proxy-tls.tf` is
-# "contract before consumer" config that was never applied. So they plan as
-# CREATE, not replace/update. They are deliberately ABSENT from web2_retire_allow,
-# so any attempt to birth them inside a host retirement trips oos -> ABORT.
-# Guards against re-adding `-target=doppler_secret.proxy_tls_cert` to B6.2, which
-# would write PROXY_TLS_CERT to prd with NO matching PROXY_TLS_KEY.
+# T47: THE ADR-118 BIRTH HAZARD (D1(A), measured 2026-07-17). When #6538 retired
+# web-2 the proxy-TLS resources were ABSENT from state and from Doppler prd, so they
+# planned as CREATE, not replace/update. They are deliberately ABSENT from
+# web2_retire_allow, so any attempt to birth them inside a host retirement trips
+# oos -> ABORT. Guards against adding `-target=doppler_secret.proxy_tls_cert` to the
+# retire scope, which would write PROXY_TLS_CERT to prd with NO matching PROXY_TLS_KEY.
+# This pin is about the RETIRE operation's contract, not about whether the material
+# exists today: since the #12167 flip the quartet is created by the per-merge saved
+# plan (T47b/T47c), and a retirement still must not carry it.
 t_web2_retire_proxy_tls_birth_aborts() {
   local out; out=$(_run_web2_retire_gate "tfplan-web2-retire-proxy-tls-birth.json")
   if [[ "$out" == "2:1:1:1:1:1:0:1" ]]; then
     _report "T47 proxy-TLS create ABORTS (oos=2 — no keyless cert into prd)" ok
   else
     _report "T47 proxy-TLS create ABORTS" fail "got '$out' want '2:1:1:1:1:1:0:1'"
+  fi
+}
+
+# T47b (#12167): the flip's own plan — four `[0]` CREATEs on the per-merge saved plan —
+# is NOT a retirement and trips NO halting counter: no deletes, no host/volume create,
+# no reboot, no LUKS rotation, no undecidable entry. The legacy gate passes without an
+# [ack-destroy], and the retire gate (a different operation's contract) still refuses it
+# because none of the four is a web-2 retire member.
+t_proxy_tls_flip_create_is_not_a_retirement() {
+  local fx="$FIXTURES/tfplan-proxy-tls-flip-create.json" counts halting legacy retire rc
+  counts=$(jq -f "$FILTER" < "$fx" 2>/dev/null) || counts='{}'
+  halting=$(echo "$counts" | jq -r '[.plan_ok, .resource_deletes, .nested_deletes, .reboot_updates, .host_creates, .non_terraform_data_deletes, .luks_passphrase_rotations, .undecidable_entries, .web2_server_destroyed, .web2_volume_destroyed] | map(tostring) | join(":")')
+  legacy=$(_run_gate "$fx" "feat: flip host_proxy_tls_enabled")
+  web2_retire_gate "$fx" >/dev/null 2>&1 && rc=0 || rc=$?
+  retire="$rc"
+  if [[ "$halting" == "true:0:0:0:0:0:0:0:0:0" && "$legacy" == "0:0:0:0:0" && "$retire" == "1" ]]; then
+    _report "T47b proxy-TLS flip CREATEs trip no counter, need no ack, and are not a retirement" ok
+  else
+    _report "T47b proxy-TLS flip CREATEs are not a retirement" fail \
+      "got counters='$halting' legacy='$legacy' retire_rc='$retire' want 'true:0:0:0:0:0:0:0:0:0' / '0:0:0:0:0' / '1'"
+  fi
+}
+
+# T47c (#12167, ADR-118 §3.D): after the flip, a roster change (a host added to or
+# removed from var.web_hosts) re-derives the cert SANs, which is `RequiresReplace`:
+# delete+create on the cert and an in-place update on the Doppler copy. That is an
+# ordinary ackable delete (rdel=1, rc=1 without [ack-destroy], rc=0 with it) and NEVER a
+# host_creates halt, so the cert rotation is loud on the per-merge plan without being
+# un-passable. The key stays untouched (it has no dependency on var.web_hosts).
+t_proxy_tls_roster_change_cert_replace_is_ackable() {
+  local fx="$FIXTURES/tfplan-proxy-tls-roster-change-cert-replace.json"
+  local bare ack hc
+  bare=$(_run_gate "$fx" "feat: add web-3 to var.web_hosts")
+  ack=$(_run_gate "$fx" $'feat: add web-3 to var.web_hosts\n\n[ack-destroy]\n')
+  hc=$(_run_host_creates_gate "$fx")
+  if [[ "$bare" == "1:0:0:1:1" && "$ack" == "1:0:0:1:0" && "$hc" == "0:0" ]]; then
+    _report "T47c proxy-TLS cert replace on a roster change is ackable and not a host_creates halt" ok
+  else
+    _report "T47c proxy-TLS cert replace is ackable" fail \
+      "got bare='$bare' (want 1:0:0:1:1) ack='$ack' (want 1:0:0:1:0) host_creates='$hc' (want 0:0)"
   fi
 }
 
@@ -1098,6 +1140,8 @@ t_web2_retire_web1_touch_aborts
 t_web2_retire_web1_volume_destroy_aborts
 t_web2_retire_firewall_delete_aborts
 t_web2_retire_proxy_tls_birth_aborts
+t_proxy_tls_flip_create_is_not_a_retirement
+t_proxy_tls_roster_change_cert_replace_is_ackable
 t_web2_retire_noop_aborts
 t_web2_retire_volume_forget_aborts
 t_web2_retire_substring_collision_aborts
@@ -2105,15 +2149,16 @@ _ran=$((pass + fail))
 # delete arms (#8705, T63a-f, T56e-h) = 87, + 2 reboot_updates arms (T56i-j) = 89, + 10 workspaces passphrase HALT arms (#9377, T64, T64b-g: 4 gates + e + 4 removal mutants + g) = 99, + 6 review-round arms (T64h-m: neighbours, widening mutant,
 # indexed forms, indexed fixture, normalization mutant, executed HALT segment) = 105, + 2 create-arm rows (the retirement change for #9372:
 # T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107, + 4 inngest create-arm rows (#9879: T60l, T60m, T60n, and the second
-# T64o create-list removal mutant for random_password.inngest_redis_luks; T60d flipped, not added) = 111. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 110 assertions ran, floor is 111". The floor sits at the
+# T64o create-list removal mutant for random_password.inngest_redis_luks; T60d flipped, not added) = 111, + 2 proxy-TLS flip rows (#12167, T47b flip CREATEs are not a retirement,
+# T47c roster-change cert replace is ackable) = 113. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 112 assertions ran, floor is 113". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 111 ]]; then
+if [[ "$_ran" -lt 113 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 111. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 113. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 111)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 113)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

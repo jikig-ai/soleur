@@ -58,6 +58,7 @@ Deploying `terraform_data.disk_monitor_install` to the production server require
 ## Solution
 
 The correct pattern requires two-step credential injection:
+> **Superseded in part (2026-10-24, #10979):** still correct for READ-ONLY invocations (plan, init, state pull). For state-WRITING invocations (apply, import, state push) the `prd_terraform` `AWS_*` pair is intentionally read-only post-O5b and PUTs 403 — export `AWS_*` from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` instead (canonical form: `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` §Local Terraform invocation).
 
 ```bash
 # Step 1: Extract R2 backend creds as raw AWS env vars

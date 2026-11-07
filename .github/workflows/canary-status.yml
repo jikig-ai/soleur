@@ -3,13 +3,12 @@
 # The deploy-time canary replays the SDK-captured bwrap argv inside the prod canary
 # container each deploy and records a verdict to the host deploy-state, surfaced —
 # no-SSH (hr-no-ssh-fallback-in-runbooks) — on /hooks/deploy-status.sandbox_canary.
-# The scheduled follow-through sweeper only reads this after #5889's `earliest`
-# window opens; this workflow_dispatch lets an operator read the CURRENT verdict +
+# The scheduled follow-through soak probe that read this was retired by G1 PR-4a
+# (#10937; history in git); this workflow_dispatch lets an operator read the CURRENT verdict +
 # soak counters at any time (e.g. to confirm the fixture replays `pass` after an
 # SDK bump or a fresh capture). Read-only: it prints verdict / consecutive_pass /
-# span — no secrets in the output. Same authenticated GET as
-# scripts/followthroughs/canary-promotion-5875.sh (HMAC over an empty body +
-# CF-Access service token).
+# span — no secrets in the output. Same authenticated GET as the retired soak probe
+# (G1 PR-4a, #10937; history in git): HMAC over an empty body + CF-Access service token.
 name: canary-status
 on:
   workflow_dispatch: {}
@@ -56,8 +55,8 @@ jobs:
             echo "::error::deploy-status returned HTTP $CODE"; exit 1
           fi
           # -e: a non-JSON 200 body (e.g. a CF Access interstitial) must fall into
-          # the MISSING branch, not silently through to "unknown" (parity with
-          # scripts/followthroughs/canary-promotion-5875.sh).
+          # the MISSING branch, not silently through to "unknown" (parity with the
+          # retired soak probe, G1 PR-4a #10937; history in git).
           SC="$(printf '%s' "$BODY" | jq -ce '.sandbox_canary // "MISSING"' 2>/dev/null || echo '"MISSING"')"
           if [[ "$SC" == '"MISSING"' ]]; then
             echo "::warning::deploy-status has no .sandbox_canary field (old host / not yet written)"; echo "$BODY" | head -c 400; exit 0

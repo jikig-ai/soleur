@@ -64,6 +64,7 @@ const outPath = inPlace
 //   - observability    → hr-observability-as-plan-quality-gate            (§4.7, code/infra only)
 //   - patShape         → hr-github-app-auth-not-pat                       (§4.8, ALWAYS)
 //   - uiWireframe      → wg-ui-feature-requires-pen-wireframe             (§4.9, UI surface only)
+//   - taskDesign       → plan §2.9.3 / deepen-plan §4.13                  (§4.13 mirror, new autonomous-task surfaces only)
 // A gate that is "applicable && !satisfied" blocks the fan-out; the workflow
 // returns the SKILL's halt payload and never spends the research budget.
 // ---------------------------------------------------------------------------
@@ -103,6 +104,16 @@ const GATES = {
       'run the producer (brainstorm Phase 3.55 or plan Phase 2.5; Pencil auto-installs via pencil-setup --auto), commit the ' +
       '.pen under knowledge-base/product/design/{domain}/, and reference it in the plan FRs. No Markdown/ASCII fallback.',
   },
+  taskDesign: {
+    rule: 'skill-enforced: plan Phase 2.9.3 + deepen-plan Phase 4.13',
+    halt:
+      'Plan creates a NEW autonomous-task surface (per the Detection table in ' +
+      'plugins/soleur/skills/plan/references/task-design-gate.md — new workflow file, Inngest function, ' +
+      'registered check/reminder arm, pg_cron, host timer, daemon, TF-emitted workflow) but is missing a `## Task Design` ' +
+      'section, or the section lacks a `- task:` item per created task, a required field (trigger, services, next, ' +
+      'human_reentry, dedupe, source_dedupe) is absent/empty/placeholder, or `dedupe` names only `concurrency: group:` ' +
+      'with no semantic mechanism. See task-design-gate.md for the contract; add the section and re-run.',
+  },
 }
 
 // ---------------------------------------------------------------------------
@@ -127,16 +138,17 @@ const PARSE_SCHEMA = {
   properties: {
     exists: { type: 'boolean', description: 'true if the plan file was readable' },
     planTitle: { type: 'string', description: 'the plan H1 / feature name, or the basename if no H1' },
-    // The four pre-fan-out hard gates (SKILL §§4.6–4.9).
+    // The pre-fan-out hard gates (SKILL §§4.6–4.9 + the §4.13 taskDesign mirror).
     gates: {
       type: 'object',
-      required: ['userBrandImpact', 'observability', 'patShape', 'uiWireframe'],
+      required: ['userBrandImpact', 'observability', 'patShape', 'uiWireframe', 'taskDesign'],
       additionalProperties: false,
       properties: {
         userBrandImpact: GATE_VERDICT,
         observability: GATE_VERDICT,
         patShape: GATE_VERDICT,
         uiWireframe: GATE_VERDICT,
+        taskDesign: GATE_VERDICT,
       },
     },
     technologies: {
@@ -237,11 +249,12 @@ ${planPath}
 
 If the file is unreadable, return exists=false with an empty sections array.
 
-STEP 1 — Run the four pre-fan-out hard gates. For each, set { applicable, satisfied, detail }:
+STEP 1 — Run the pre-fan-out hard gates. For each, set { applicable, satisfied, detail }:
 - userBrandImpact (ALWAYS applicable): the plan MUST contain a non-empty \`## User-Brand Impact\` section whose threshold line is one of none / "single-user incident" / "aggregate pattern", with no placeholder-only bullets, and (when threshold=none AND the diff/Files-to-Edit touch a sensitive path) a "threshold: none, reason: <one sentence>" scope-out bullet. applicable=true always; satisfied=false if the section is missing, empty, placeholder-only, has an invalid threshold, or is none-without-scope-out.
 - observability (applicable ONLY when the plan's Files-to-Edit touch production code/infra — i.e. NOT pure-docs: not all paths under knowledge-base/, docs/, README.md, CHANGELOG.md, or *.md outside plugins/*/skills and apps/*): a \`## Observability\` section with all 5 fields (liveness_signal, error_reporting, failure_modes, logs, discoverability_test), no placeholder values (TODO/TBD/N/A/placeholder/"manual operator check"), no empty field, and discoverability_test.command must NOT require ssh. It must also be executable by preflight Check 10, which runs it in a sandbox behind a deny-by-default allowlist: the first whitespace-delimited token of its dequoted, normalized value is one of curl bash grep rg jq python3 node bun printf git, with no path-shaped exemption. The OPTIONAL discoverability_test.credentials_required sub-field declares a probe whose property has no unauthenticated substitute ("<scope> — <justification>"), making Check 10 skip without executing; it is checked only when present, must not be placeholder text, and does NOT override the ssh reject. Two further rejects (#8412) bind ONLY a discoverability_test this run authors or amends — against a pre-existing block, report them as findings and leave satisfied unchanged: (a) command must be able to finish inside Check 10's 15-second `timeout 15s` cap, so a whole test suite or full build is rejected (wrapping a suite in a script satisfies the verb allowlist, not the cap); (b) expected_output must be the LITERAL string(s) the command prints, not prose describing them, because Check 10 asks whether any token of expected_output is a substring of stdout and a sentence can never match. If pure-docs, applicable=false, satisfied=true.
 - patShape (ALWAYS applicable): grep the plan for PAT-shaped TF vars / env vars / literal tokens — \`var.*_(token|pat)\`, \`TF_VAR_(GITHUB|GH)_(TOKEN|PAT|AUTH)\`, literal \`ghp_<40>\` or \`github_pat_<82+>\` (placeholder forms like ghp_XXX are allowed). satisfied=false if any real PAT-shape matches.
 - uiWireframe (applicable ONLY when the plan's Files-to-Edit/Create touch a UI surface — tsx/jsx/css under app/components, or UI-surface terms): the plan must reference a committed \`knowledge-base/product/design/**.pen\` wireframe (confirm committed via \`git ls-files --error-unmatch <path>\`). If no UI surface, applicable=false, satisfied=true.
+- taskDesign (applicable ONLY when the plan creates a NEW autonomous-task surface per the Detection table in plugins/soleur/skills/plan/references/task-design-gate.md — any new .github/workflows/*.yml, a new Inngest function file or registration, a CHECK_REGISTRY/reminder arm, pg_cron, host cron.d/.timer, a setInterval daemon, or a TF-emitted workflow): the plan must contain an UNFENCED \`## Task Design\` section (outside ALL fence forms) with a \`tasks:\` list of one \`- task:\` item per created task, all of trigger/services/next/human_reentry/dedupe/source_dedupe present and non-placeholder (case-insensitive incl. WIP/FIXME/none/see above), and \`dedupe\` naming a semantic mechanism beyond \`concurrency: group:\`. Create-time only — no retrofit. If no new surface, applicable=false, satisfied=true.
 
 STEP 2 — Extract the technologies/frameworks named in the plan (Rails, React, Next.js, TypeScript, Python, Postgres, Terraform, Supabase, etc.).
 

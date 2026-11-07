@@ -1,7 +1,7 @@
 // Server-only: stage the INPUT of the C4 re-render (#8623).
 //
 // The tenant workspace (worktree AND `.git`) is untrusted input: a sandboxed
-// agent can write it, including `.git/objects`, refs and HEAD. likec4 1.50.0
+// agent can write it, including `.git/objects`, refs and HEAD. likec4 1.60.0
 // executes a `likec4.config.{js,cjs,mjs,ts,cts,mts}` found under its cwd,
 // honours `.likec4rc` / `likec4.config.json` `include.paths`, and follows
 // symlinks. So the render never reads the workspace. Its only input is the
@@ -21,7 +21,7 @@
 // (plugins/soleur/scripts/resolve-regenerable-conflicts.sh). Differences:
 //   - bytes come from GitHub, not the local object store (here the object store
 //     is the tenant's; the resolver's is the operator's own);
-//   - config names are the exact likec4@1.50.0 list (the resolver refuses the
+//   - config names are the exact likec4@1.60.0 list (the resolver refuses the
 //     glob `likec4.config.*`; the parity test pins every name here to it);
 //   - sources under directories likec4 ignores (node_modules, .git, ...) are
 //     skipped, as likec4 itself skips them;
@@ -36,7 +36,8 @@ import { join, resolve, sep } from "node:path";
 import { githubApiGet } from "@/server/github-api";
 import { C4_DIAGRAMS_DIR, C4_MODEL_JSON } from "@/lib/c4-constants";
 
-// Copied from the installed likec4@1.50.0 dist (`_chunks/src.mjs`); the version
+// Copied from the installed likec4@1.60.0 dist (`chunks/filenames.mjs`, pre-1.60
+// `_chunks/src.mjs`); the version
 // is pinned across Dockerfile / ci.yml / render-c4-model.sh by
 // test/c4-likec4-version-pin.test.ts, and the acceptance suite re-reads this
 // list from the installed dist when the binary is present.
@@ -51,9 +52,9 @@ export const LIKEC4_CONFIG_NAMES: readonly string[] = Object.freeze([
   "likec4.config.cts",
   "likec4.config.mts",
 ]);
-// likec4@1.50.0 `_chunks/binary.mjs`.
+// likec4@1.60.0 `chunks/node.mjs` (pre-1.60 `_chunks/binary.mjs`).
 export const LIKEC4_SOURCE_EXTENSIONS: readonly string[] = Object.freeze([".c4", ".likec4", ".like-c4"]);
-// Directories likec4's project crawl excludes (`_chunks/binary.mjs`, `ed`).
+// Directories likec4's project crawl excludes (`chunks/node.mjs` (pre-1.60 `_chunks/binary.mjs`), `ed`).
 // Exported for server/c4-staleness.ts, whose snapshot compare must exclude the
 // same set — churn under them is not a source change.
 export const LIKEC4_IGNORED_DIRS: readonly string[] = Object.freeze(["node_modules", ".git", ".svn", ".yarn", ".pnpm"]);
@@ -250,6 +251,17 @@ function cachePut(key: string, b: Buffer): void {
 export function __clearBlobCacheForTests(): void {
   blobCache.clear();
   blobCacheBytes = 0;
+}
+
+/**
+ * TEST-ONLY: inject a cache entry directly, bypassing the verified provenance
+ * arms — the only way to reach the sink-side integrity assert with bytes that
+ * do not match the key's sha. Production callers cannot produce this state
+ * today; the assert exists so a FUTURE arm cannot produce it either.
+ */
+export function __putBlobCacheForTests(key: string, b: Buffer): void {
+  blobCache.set(key, b);
+  blobCacheBytes += b.length;
 }
 
 /**
@@ -471,6 +483,20 @@ async function stageWith(input: StageInput, configNames: readonly string[]): Pro
           });
         }
         if (inner.signal.aborted) throw new StageAbort(abortedFailure(inner.signal));
+        // Every provenance arm (fetch, cacheGet, known) converges at this one
+        // write. The fetch arm verifies sha+size above; the other two cannot be
+        // mismatched TODAY (known is keyed by gitBlobSha, the cache is fed only
+        // from verified buffers) but nothing STRUCTURAL enforces that — a
+        // future provenance arm, or a shared/persistent cache, would reach this
+        // write unverified. Assert at the sink so the invariant is
+        // arm-independent (CodeQL js/http-to-file-access alert #230).
+        if (buf.length !== s.size || gitBlobSha(buf) !== s.sha) {
+          throw new StageAbort({
+            ok: false,
+            reason: "io_error",
+            detail: "stage: blob integrity mismatch",
+          });
+        }
         await writeFile(target, buf, { flag: "wx", mode: 0o600 });
       }
     };

@@ -265,24 +265,84 @@ jobs:
       ci_declared_path_min: ${{ steps.budget.outputs.ci_declared_path_min }}
       ci_undeclared_jobs: ${{ steps.budget.outputs.ci_undeclared_jobs }}
     steps:
+      # TRUST GATE BEFORE THE CHECKOUT (CodeQL alert #216,
+      # actions/untrusted-checkout). `branches: [main]` on the workflow_run
+      # trigger matches head_branch, which a fork PR from a branch literally
+      # named `main` also satisfies — so `github.event.workflow_run.head_sha`
+      # CAN be an attacker-controlled PR head. `resolve` re-checks that event
+      # shape at runtime (its not_main/not_push clean-skips), but only AFTER
+      # the checkout had already landed the tree on the runner. This step
+      # hoists the same check ABOVE the checkout: `trusted`/`deploy_target` are
+      # emitted only when the ref is provably a push to THIS repo's main (a
+      # push to main can only come from a collaborator or the merge queue), or
+      # for the dispatch arm's github.sha. On any other shape the checkout and
+      # the tree-parsing `budget` step below are skipped and `resolve` still
+      # emits its usual clean-skip skip_reason. THIS STEP'S CHECK AND
+      # `resolve`'s RUNTIME RE-CHECK ARE COUPLED — change one and change the
+      # other.
+      - name: Gate the checkout on the upstream event's trust shape
+        id: gate
+        env:
+          WR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          WR_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WR_EVENT: ${{ github.event.workflow_run.event }}
+        run: |
+          set -euo pipefail
+          emit() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
+          if [ "$WR_EVENT" = "push" ] && [ "$WR_HEAD_BRANCH" = "main" ] \
+              && [[ "$WR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            emit deploy_target "$WR_HEAD_SHA"
+            emit trusted "true"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            # workflow_dispatch (github.sha by design, the DISPATCH_SHA permit
+            # below) and direct push — the only trusted non-workflow_run arms.
+            # POSITIVELY keyed: a negatively-keyed `!= workflow_run` would
+            # silently trust any FUTURE trigger (schedule, merge_group,
+            # pull_request, repository_dispatch) with the same github.sha
+            # checkout. Unreachable on the workflow_run arm.
+            emit deploy_target "$GITHUB_SHA"
+            emit trusted "true"
+          else
+            emit deploy_target ""
+            emit trusted "false"
+          fi
       # `actions/checkout` IS permitted here and is NOT permitted on `deploy`. The
       # prohibition is specific to `deploy`, which drives the cutover over a webhook
       # while holding the cross-pipeline `web-1-swap` lock — a checkout there would
       # pull ~1.5k files onto the runner holding that lock. `resolve-target` holds no
       # lock and drives no deploy, which is exactly why the derivation lives here.
-      # PINNED TO THE EVENT'S SHA. Under `workflow_run`, `actions/checkout` with no
-      # `ref:` resolves the DEFAULT-BRANCH head — this file already says so on the
-      # `release` job, and that warning was not applied to the jobs rehomed onto this
-      # arm. Unpinned, every ceiling this job parses would come from whatever main
-      # HEAD is at deploy time rather than from the SHA being deployed.
+      # PINNED TO THE GATE'S VALIDATED SHA, never to a raw event field. Under
+      # `workflow_run`, `actions/checkout` with no `ref:` resolves the DEFAULT-BRANCH
+      # head — this file already says so on the `release` job, and that warning was
+      # not applied to the jobs rehomed onto this arm. Unpinned, every ceiling this
+      # job parses would come from whatever main HEAD is at deploy time rather than
+      # from the SHA being deployed. `ref:` reads
+      # `steps.gate.outputs.deploy_target` and not
+      # `github.event.workflow_run.head_sha` directly for TWO reasons at
+      # once: the gate is what guarantees the SHA is a trusted push-to-main
+      # commit (see above), and a `ref:` naming an event head-SHA field is
+      # exactly the sink CodeQL alert #216 flags — a gate the scanner cannot
+      # see is not a gate. THE OUTPUT NAME IS ALSO THE FIX: #216's fix named
+      # it `deploy_sha` and CodeQL opened a NEW alert (#332) on the same site
+      # minutes post-merge — the medium query's ActionsSHACheckout/ActionsMutableRefCheckout
+      # heuristic arms flag any `ref:` field/steps/needs identifier matching
+      # .*(head|sha|commit).* / .*(head|branch|ref).*, so the name carries
+      # none of head|sha|commit|branch|ref. Do not "fix" it back to a
+      # head-patterned name — a future rename reds P4's negative-token clause.
+      # THE `emit()` INDIRECTION IS LOAD-BEARING, not style: FlowSteps.qll's
+      # env→output extractors only fire on a literal `echo|printf >>` /
+      # `VAR2=$VAR` shape, and a literal
+      # `echo "deploy_target=$WR_HEAD_SHA" >> $GITHUB_OUTPUT` would make the
+      # taint path modeled — the #332 alert would survive the rename.
       # DEPTH 1, DELIBERATELY — never deepen this checkout. plugins/soleur/scripts/deploy-arm.sh
       # (used by ship and postmerge) identifies the deploy arm by this checkout's
       # `--depth=1 origin <sha>` log line. The one path that needs the parent commit (the
       # empty-lookup diff check in step `resolve`) deepens lazily by SHA instead.
-      # workflow-run-deploy-invariants.test.sh P2 pins this.
+      # workflow-run-deploy-invariants.test.sh P2 pins this; P4 pins the gate.
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: steps.gate.outputs.trusted == 'true'
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ steps.gate.outputs.deploy_target }}
 
       - name: Resolve the deploy target
         id: resolve
@@ -750,6 +810,11 @@ jobs:
       # the four subtracted terms by call form and the partition by shape.
       - name: Derive the CI budget and check for creep
         id: budget
+        # Reads files FROM THE CHECKED-OUT TREE. When `gate` declined the
+        # upstream shape (untrusted path — CodeQL #216) the checkout never ran
+        # and there is no tree: without this `if:` its missing-file branch
+        # would exit 1 and turn a designed GREEN clean-skip into a red job.
+        if: steps.gate.outputs.trusted == 'true'
         env:
           RUN_STARTED_AT: ${{ github.event.workflow_run.run_started_at }}
           RUN_UPDATED_AT: ${{ github.event.workflow_run.updated_at }}
@@ -1113,6 +1178,7 @@ jobs:
           done
           echo "Verified migrations: ${verified_names[*]}"
 
+          # dedupe: benign — close-path read: a gh fault aborts this step (the job goes red = loud) with every follow-through issue left open; the next verified release retries the closes.
           issue_numbers=$(gh issue list \
             --label follow-through --state open \
             --limit 200 --json number --jq '.[].number')
@@ -1124,6 +1190,8 @@ jobs:
           closed=0
           while IFS= read -r issue_number; do
             [[ -z "$issue_number" ]] && continue
+            # dedupe: benign — close-path read: a failed body read yields empty and the -z arm
+            # skips the close; the issue stays open (visible) and the next verified release retries it.
             body=$(gh issue view "$issue_number" --json body --jq .body 2>/dev/null || echo "")
             [[ -z "$body" ]] && continue
 
@@ -1165,7 +1233,20 @@ jobs:
     # shipped NEXT_PUBLIC_APP_URL=undefined to production. `deploy.if` keeps its
     # `needs.verify-doppler-secrets.result == 'success'` conjunct at full strength
     # because the job now lives in the SAME run as the deploy it gates.
-    if: github.event_name != 'push'
+    # SAME TRUST SHAPE AS `resolve-target`'s gate (CodeQL #216): this job's
+    # checkout reads `github.event.workflow_run.head_sha` — which CAN be a fork
+    # PR head (a fork branch literally named `main` satisfies `branches:
+    # [main]`) — and then EXECUTES `verify-required-secrets.sh` from that tree
+    # under `doppler run -c prd`, with every prd secret in env. The job-level
+    # `if:` is the only expression evaluated before its steps materialize the
+    # tree, so the gate lives here and nowhere later. On an untrusted-shape
+    # run the job skips; `deploy` stays blocked the same way it already was
+    # (resolve-target's should_deploy is false there too).
+    if: >-
+      github.event_name != 'push' &&
+      (github.event_name != 'workflow_run' ||
+        (github.event.workflow_run.event == 'push' &&
+         github.event.workflow_run.head_branch == 'main'))
     # Pre-deploy guard: asserts the hand-maintained list of required build/runtime
     # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
     # shipped NEXT_PUBLIC_APP_URL=undefined via PR #2767).
@@ -1182,8 +1263,15 @@ jobs:
         with:
           # See resolve-target: under workflow_run an unpinned checkout is the
           # DEFAULT-BRANCH head, not the SHA being deployed. This job declares no
-          # `needs:`, so it reads the event directly rather than resolve-target.
+          # `needs:`, so it reads the event directly rather than resolve-target —
+          # which is also why the trusted-shape gate lives on the job `if:` above
+          # (CodeQL #216 class): the expression below is only ever evaluated on a
+          # proven push-to-main or dispatch run.
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          # persist-credentials: false — the workflow's write-scoped GITHUB_TOKEN
+          # does not belong in .git/config of a tree this job then EXECUTES a
+          # script from. Nothing here runs an authenticated git command.
+          persist-credentials: false
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
       - name: Assert required build/runtime secrets present in Doppler prd

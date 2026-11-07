@@ -45,10 +45,23 @@
 # Emits one line per poll:
 #   [OPEN|BLOCKED|automerge=true] 73/78 pass · 0 fail · 0 cancel · 2 pending → test-scripts,...
 # and exactly one terminal line:
-#   MERGED — ... | CLOSED WITHOUT MERGE — ... | CHECKS SETTLED — ... | TIMEOUT — ...
+#   MERGED — ... | CLOSED WITHOUT MERGE — ... | CHECKS SETTLED — ... | TIMEOUT — ... | DUPLICATE MONITOR — ... (exit 4)
 #
-# Exit 0 on a merge or an all-green settle; 1 on a red/closed terminal; 2 on timeout;
-# 3 on usage error. The caller's Monitor watch ends when this exits.
+# Exit 0 on a merge or an all-green settle; 1 on a red/closed terminal or any stop that needs a human
+# (BEHIND, DIRTY, DRAFT, BLOCKED, LEFT THE MERGE QUEUE UNMERGED, a stalled or unapproved ready run);
+# 2 on timeout; 3 on usage error or when no temp file can be created; 4 when another live monitor already
+# watches this repo + PR (the PR is being watched: not a PR failure, and do not re-arm blindly).
+# The caller's Monitor watch ends when this exits.
+#
+# One monitor per PR (P4c of #10924): after argument validation and the temp-file setup, and BEFORE any gh
+# call, the script takes a per-(repo, PR) lock (lib/monitor-lock.sh). A second monitor waits about
+# 2 x SOLEUR_MONITOR_LOCK_GRACE_S (2 s) in case the holder is releasing, then prints one `DUPLICATE MONITOR`
+# line and exits 4. A lock that cannot be established prints `monitor-lock: UNAVAILABLE (...)` and the watch
+# runs anyway; SOLEUR_MONITOR_LOCK=off bypasses it (prints `DISABLED`). SOLEUR_MONITOR_LOCK_DIR overrides
+# the lock directory. A stale lock (dead, zombie or pid-reused holder) never blocks. The repo is --repo,
+# else GH_REPO, else `git remote get-url origin`. To see a holder:
+#   readlink "${XDG_RUNTIME_DIR:-/tmp}/soleur-monitor-locks-$(id -u)/pr-checks+<owner>+<repo>+<pr>.lock"
+# (owner and repo lowercased). On a fork clone where gh resolves a different repo than origin, pass --repo.
 #
 # CI_DRAFT_LIGHT (ADR-276 S3, #9728): a red `test` row is read through ci-head-verdict.sh. pending-full and no-run report it
 # PENDING (`test(ready run <state>)`), stalled and awaiting-approval end the watch (exit 1) with the recovery command, and
@@ -58,7 +71,10 @@
 # auto-merge-off verdicts below (which tell the caller to sync, wait on protection, or merge by hand) would
 # be wrong or dangerous for it — a push dequeues it. Those arms (and every --heartbeat-every'th poll, so a PR that
 # reads CLEAN + armed is covered too) first read the queue through `sync-pr-behind.sh <pr> --queue-state` (the
-# one shared read). The read is TRI-STATE: queued / not queued / unknown. A queued PR prints one `IN MERGE QUEUE`
+# one shared read). The read runs BEFORE the emission, because a queued PR's REST autoMergeRequest is null
+# (#11789: the queue owns the merge) and a bare `automerge=false` on the poll line would false-report
+# "disarmed": while the PR is queued that field is emitted as `automerge=false(queued)` instead. The read is
+# TRI-STATE: queued / not queued / unknown. A queued PR prints one `IN MERGE QUEUE`
 # line and keeps watching. `LEFT THE MERGE QUEUE UNMERGED` (exit 1) needs a POSITIVE not-queued read of an OPEN
 # PR from a measured poll, and either a `dequeued` verdict (a removal event newer than the last re-arm / push,
 # or seen queued earlier) or a queued sighting of this watch followed by auto-merge off (confirmed by ONE re-read
@@ -103,7 +119,52 @@ if [[ -z "$ERRTMP" || ! -w "$ERRTMP" ]]; then
     "${TMPDIR:-/tmp}" >&2
   exit 3
 fi
-trap 'rm -f "$ERRTMP"' EXIT
+
+# Per-PR monitor lock (P4c of #10924). ONE exit funnel: every way out after the lock is taken (terminal
+# verdicts, TERM, HUP) runs _cleanup via the EXIT trap. There is deliberately NO INT/TERM trap: a trapped
+# TERM is deferred until the foreground `sleep` below returns, which keeps the lock for up to --interval
+# after the watch was stopped (the plugin test pins a release within 4 s of TERM at --interval 10).
+# SIGKILL runs no trap; the next monitor reclaims the dead holder's lock instead.
+ML_LIB="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/lib/monitor-lock.sh"
+ML_LOADED=0
+if [[ -r "$ML_LIB" ]]; then
+  # shellcheck source=lib/monitor-lock.sh
+  source "$ML_LIB" && ML_LOADED=1
+fi
+[[ "$ML_LOADED" == "1" ]] || monitor_lock_release() { :; }
+_cleanup() {
+  monitor_lock_release  # mut:cleanup-release
+  rm -f "$ERRTMP"
+}
+trap _cleanup EXIT
+
+# acquire_or_exit — the ONE chokepoint for the lock. Runs in the main shell (a `$(...)` subshell would
+# drop the lock state and never run the EXIT trap). A live other holder -> one terminal line, exit 4, no gh call.
+# Anything that merely prevents the lock from being established runs the watch anyway, loudly.
+acquire_or_exit() {
+  local lock_repo lrc=0
+  if [[ "$ML_LOADED" != "1" ]]; then
+    echo "monitor-lock: UNAVAILABLE (lib/monitor-lock.sh not found or not loadable next to this script) - running without exclusion"
+    return 0
+  fi
+  # The repo gh will poll: --repo, else GH_REPO, else the origin remote. `remote get-url` resolves url.insteadOf
+  # aliases that `config --get` returns raw (an aliased origin would otherwise silently lose the lock).
+  lock_repo="${REPO_ARG[1]:-${GH_REPO:-}}"
+  [[ -n "$lock_repo" ]] || lock_repo="$(git remote get-url origin 2>/dev/null || git config --get remote.origin.url 2>/dev/null || true)"
+  monitor_lock_acquire "$lock_repo" "$PR" || lrc=$?
+  case "$lrc" in
+    0) return 0 ;;
+    1) printf 'DUPLICATE MONITOR — PR #%s is already watched by pid %s (watching for %ss, repo %s). This watch exits without polling. Only if this session still has a running Monitor task for that PR, read that task'"'"'s output. Otherwise it belongs to a resumed or other session (or one you already stopped): check that "ps -o args= -p %s" names monitor-pr-checks.sh, then stop it with: kill %s — and arm this watch once.\n' \
+         "$PR" "$ML_HOLDER_PID" "$ML_HOLDER_AGE" "$ML_REPO" "$ML_HOLDER_PID" "$ML_HOLDER_PID"
+       exit 4 ;;
+    *) if [[ "$ML_STATE" == "disabled" ]]; then
+         echo "monitor-lock: DISABLED (SOLEUR_MONITOR_LOCK=off) - running without exclusion"
+       else
+         echo "monitor-lock: UNAVAILABLE (${ML_WHY:-unknown}) - running without exclusion"
+       fi ;;
+  esac
+  return 0
+}
 
 # ── Red-on-main annotation (terminal-fail exit path ONLY) ─────────────────────
 # Runs at most once per watch — never per-tick. The gh budget for this is
@@ -211,6 +272,7 @@ ci_verdict() {
   case "$m" in n/a|full-decided|pending-full|no-run|stalled|awaiting-approval) V_STATE="$m" ;; *) return 1 ;; esac
 }
 
+acquire_or_exit
 n=0; prev_sig=""; queue_seen=0
 while :; do
   n=$((n + 1))
@@ -258,13 +320,44 @@ while :; do
   waiting=$(jq -r '[.[]|select(.bucket=="pending")|.name]|join(",")' <<<"$checks" 2>/dev/null | cut -c1-90)
   red=$(jq -r '[.[]|select(.bucket=="fail" or .bucket=="cancel")|"\(.bucket):\(.name)"]|join(" ")' <<<"$checks" 2>/dev/null | cut -c1-160)
 
+  # ── THE QUEUE READ, before the emission (#9454, #11789). A QUEUED PR can read BEHIND, BLOCKED, or
+  # auto-merge-off while perfectly healthy, and its autoMergeRequest reads null on the REST view — the
+  # queue owns the merge — so a bare `automerge=false` would false-report "disarmed". The read runs here,
+  # ahead of the emission, so that field can be annotated; the settled verdicts below consume the same
+  # result. Same gate as before: only a settled poll (checks exist, none pending) of an OPEN PR in a
+  # queued-shaped state pays for the read, plus every --heartbeat-every'th poll so a CLEAN + armed PR is
+  # covered; a failed read is UNKNOWN (2), never a verdict.
+  queued=0; qread=2
+  if [[ "$state" == "OPEN" && "$tot" -gt 0 && "$pend" -eq 0 \
+        && ( "$mergestate" == "BEHIND" || "$mergestate" == "BLOCKED" || "$automerge" == "false" \
+             || $(( n % HEARTBEAT_EVERY )) -eq 0 ) ]]; then
+    in_queue; qread=$?
+    # A positive not-queued OPEN answer with NO removal evidence (not `dequeued`) that would end the watch because a queued
+    # sighting is followed by auto-merge off is confirmed by ONE re-read first (as queue_read_settled does for the script's
+    # own candidates): the instant the queue's own merge lands reads not queued + OPEN once, then MERGED. The re-read's
+    # answer replaces the first (queued again: keeps watching; unknown: holds; not queued OPEN: the departure stands).
+    if [[ "$qread" == "1" && "$Q_DQ" != "1" && "$queue_seen" == "1" && "$automerge" == "false" ]]; then
+      in_queue; qread=$?
+    fi
+  fi
+  if [[ "$qread" == "0" ]]; then
+    queued=1
+  elif [[ "$qread" == "2" && "$queue_seen" == "1" ]]; then
+    queued=1   # UNKNOWN read after a queued sighting: hold that verdict quietly, never guess a dequeue
+  fi
+  # The REST automerge bit is a lie for a queued PR (#11789): autoMergeRequest is null because the queue
+  # owns the merge. Annotate it — like `test(ready run <state>)` above — so the line never renders
+  # "disarmed" for the one PR whose merge is most certainly armed.
+  am_disp="$automerge"
+  [[ "$queued" == "1" && "$automerge" == "false" ]] && am_disp="false(queued)"
+
   # ── THE EMISSION DECISION, before any terminal branch. Emit when the observable state CHANGED,
   # and otherwise every HEARTBEAT_EVERY polls so a long quiet stretch still proves liveness. The
   # first poll always emits (prev is empty), so the operator sees a baseline immediately.
   # `waiting` and `red` are IN the signature: a re-run that swaps which check is pending, or a
   # different check failing at the same count, changes nothing numeric but changes what the
   # operator is waiting on. probe_ok is in it so repeated outages are not collapsed.
-  sig="${probe_ok}|${failed_probe}|${state}|${mergestate}|${automerge}|${pass}|${tot}|${skip}|${fail}|${cancel}|${pend}|${waiting}|${red}"
+  sig="${probe_ok}|${failed_probe}|${state}|${mergestate}|${am_disp}|${pass}|${tot}|${skip}|${fail}|${cancel}|${pend}|${waiting}|${red}"
   if [[ "$sig" != "${prev_sig:-}" ]]; then
     why=""
   elif [[ $(( n % HEARTBEAT_EVERY )) -eq 0 ]]; then
@@ -282,7 +375,7 @@ while :; do
         # unknown" here would discard data we hold and hide a merge/disarm/DIRTY transition for the
         # whole outage.
         printf '[%s|%s|automerge=%s] check counts UNAVAILABLE — `gh pr checks` failed (poll %s/%s)%s%s\n' \
-          "$state" "$mergestate" "$automerge" "$n" "$MAX_POLLS" \
+          "$state" "$mergestate" "$am_disp" "$n" "$MAX_POLLS" \
           "${checks_fail_err:+ · checks: }${checks_fail_err}" "$why"
       else
         printf '[gh probe FAILED: %s — state unknown] (poll %s/%s)%s%s%s\n' \
@@ -292,7 +385,7 @@ while :; do
       fi
     else
       printf '[%s|%s|automerge=%s] %s/%s pass · %s fail · %s cancel · %s pending%s skipped · (poll %s/%s)%s%s%s\n' \
-        "$state" "$mergestate" "$automerge" "$pass" "$gradable" "$fail" "$cancel" "$pend" \
+        "$state" "$mergestate" "$am_disp" "$pass" "$gradable" "$fail" "$cancel" "$pend" \
         " · $skip" "$n" "$MAX_POLLS" \
         "${waiting:+ → }" "$waiting" "$why"
     fi
@@ -363,24 +456,8 @@ while :; do
     fi
     # Merge queue (#9454): BEHIND, BLOCKED and an unarmed auto-merge are what a QUEUED PR can look like,
     # and each verdict below is wrong for it (syncing or merging by hand dequeues it / skips the
-    # merge_group run). Read the queue only for those states; a healthy CLEAN + armed PR costs no call.
-    queued=0; qread=2
-    if [[ "$state" == "OPEN" && ( "$mergestate" == "BEHIND" || "$mergestate" == "BLOCKED" || "$automerge" == "false" \
-          || $(( n % HEARTBEAT_EVERY )) -eq 0 ) ]]; then
-      in_queue; qread=$?
-      # A positive not-queued OPEN answer with NO removal evidence (not `dequeued`) that would end the watch because a queued
-      # sighting is followed by auto-merge off is confirmed by ONE re-read first (as queue_read_settled does for the script's
-      # own candidates): the instant the queue's own merge lands reads not queued + OPEN once, then MERGED. The re-read's
-      # answer replaces the first (queued again: keeps watching; unknown: holds; not queued OPEN: the departure stands).
-      if [[ "$qread" == "1" && "$Q_DQ" != "1" && "$queue_seen" == "1" && "$automerge" == "false" ]]; then
-        in_queue; qread=$?
-      fi
-    fi
-    if [[ "$qread" == "0" ]]; then
-      queued=1
-    elif [[ "$qread" == "2" && "$queue_seen" == "1" ]]; then
-      queued=1   # UNKNOWN read after a queued sighting: hold that verdict quietly, never guess a dequeue
-    fi
+    # merge_group run). The queue read ran before the emission above (same gate); a healthy CLEAN + armed
+    # PR costs no call.
     if [[ "$queued" == "1" ]]; then
       if [[ "$qread" == "0" && "$queue_seen" != "1" ]]; then
         printf 'IN MERGE QUEUE — PR #%s is queued (mergeState=%s): checks are green and the queue merges it. Do NOT sync, update-branch, push or --admin it (a push dequeues it); watching for MERGED or removal from the queue.\n' "$PR" "$mergestate"
@@ -389,7 +466,7 @@ while :; do
     elif [[ "$qread" == "1" && ( "$Q_DQ" == "1" || ( "$queue_seen" == "1" && "$automerge" == "false" ) ) ]]; then
       # qread is 1 only when the read ran: state OPEN (the gate above) inside this settled block, which needs a
       # measured `gh pr checks` (tot > 0) and, with a failed `gh pr view`, state UNKNOWN: T24i pins it.
-      printf 'LEFT THE MERGE QUEUE UNMERGED — PR #%s is OPEN and out of the queue (removal: %s; auto-merge %s): a failed merge_group run or a removal. Do NOT merge it by hand or --admin it. Read it: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '"'"'.[] | select(.headBranch | startswith("gh-readonly-queue/main/pr-%s-"))'"'"'; recovery (ONE re-enqueue): plugins/soleur/skills/ship/references/merge-queue-dequeue.md.\n' "$PR" "$Q_RM" "$([[ "$automerge" == "true" ]] && echo armed || echo disarmed)" "$PR"
+      printf 'LEFT THE MERGE QUEUE UNMERGED — PR #%s is OPEN and out of the queue (removal: %s; auto-merge %s): a failed merge_group run or a removal. Do NOT merge it by hand or --admin it. Read it: gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url --jq '"'"'.[] | select(.headBranch | startswith("gh-readonly-queue/main/pr-%s-"))'"'"' (grouped merging: a member PR'"'"'s group ref names the DEEPEST member — if no run matches, list recent merge_group runs and correlate by headSha/createdAt); recovery (ONE re-enqueue): plugins/soleur/skills/ship/references/merge-queue-dequeue.md.\n' "$PR" "$Q_RM" "$([[ "$automerge" == "true" ]] && echo armed || echo disarmed)" "$PR"
       exit 1
     fi
 

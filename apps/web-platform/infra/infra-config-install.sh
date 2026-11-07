@@ -73,7 +73,7 @@ declare -rA DEST_SPEC=(
   ["/usr/local/bin/git-lock-chardevice-sweep.sh"]="755 root:root"
   ["/usr/local/bin/inngest-registry-probe.sh"]="755 root:root"
   ["/usr/local/bin/inngest-doublefire-probe.sh"]="755 root:root"
-  # #6780 — the five dedicated-host carriers: the DEDICATED host's own scripts, which the
+  # #6780 — the four dedicated-host carriers: the DEDICATED host's own scripts, which the
   # signed config-bundle refresh channel (ADR-135) installs through this helper. They are
   # the refresh-set members — same lockstep rule applies (FILE_MAP + push payload +
   # TRIGGER_FILES), and on web hosts they are inert dead files at /usr/local/bin.
@@ -81,7 +81,6 @@ declare -rA DEST_SPEC=(
   ["/usr/local/bin/inngest-cutover-flip.sh"]="755 root:root"
   ["/usr/local/bin/inngest-server-flip-guard.sh"]="755 root:root"
   ["/usr/local/bin/cat-inngest-cutover-state.sh"]="755 root:root"
-  ["/usr/local/bin/inngest-luks-cutover.sh"]="755 root:root"
   # #7095 — see the FILE_MAP note in infra-config-apply.sh for why this is 640 root:deploy
   # and not the 600 deploy:deploy of the existing /etc/default/webhook-deploy.
   ["/etc/default/soleur-doppler-token"]="640 root:deploy"
@@ -128,7 +127,7 @@ declare -rA DEST_SPEC=(
 # no SSH runbook. `test_service_pin_matches_repo_unit` derives the expected value from the
 # committed unit and is what makes the split safe; update both together or that test reds.
 declare -rA SERVICE_SHA256=(
-  ["/etc/systemd/system/webhook.service"]="93a6b5b7d9c4e7d01811cd505f95fe192f3fe3e8e282ad29d5ee90c3947ce2ac"
+  ["/etc/systemd/system/webhook.service"]="c8a2faf21b345ede92c7b2b8ba4d0c5b450c5f7f22ad86ed5bb7f4e63b4846b3"
 )
 
 # TEST_DESTDIR redirects writes to a sandbox and skips chown (no root needed),

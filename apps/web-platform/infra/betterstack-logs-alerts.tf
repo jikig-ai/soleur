@@ -176,7 +176,8 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # ── #6894 / ADR-142: the store is not on the encrypted volume ───────────────────────────────────
 #
 # WHAT IT DETECTS. After the LUKS cutover, the dedicated host's own probe row resolves the device
-# backing /mnt/data all the way to a Hetzner by-id alias (`data_mount_devid`, probe_schema=8). Post
+# backing /mnt/data all the way to a Hetzner by-id alias (`data_mount_devid`, added at
+# probe_schema=8; probe_schema=9's `data_luks` then reads the container TYPE directly, #8525). Post
 # cutover that alias must be the ADDITIVE volume's. Anything else is the store having moved back —
 # an on-host rollback, or any boot that mounted a device other than the additive volume (the
 # plaintext volume is destroyed and the template no longer has an arm for it, #9786, so this is now
@@ -209,15 +210,92 @@ resource "logtail_exploration_alert" "monitor_send_failed" {
 # otherwise leave the rule watching for an alias that no longer exists — the alert would go quiet,
 # which reads exactly like health. `hcloud_volume.inngest_redis_luks.id` is the digits Hetzner
 # assigns; the by-id alias is `scsi-0HC_Volume_<id>`, the same construction the host's own resolver
-# and inngest-luks-cutover.sh use.
+# and (until it was retired with the cutover trio, #10112) inngest-luks-cutover.sh used.
 locals {
   inngest_luks_wrong_volume_alias = "scsi-0HC_Volume_${hcloud_volume.inngest_redis_luks.id}"
 
   # The probe row is a space-separated key=value message, so the field is matched WITH its key and
   # WITH a trailing space — `data_mount_devid=scsi-0HC_Volume_1234` is a prefix of
-  # `…_12345`, and the row has a field after this one on every emitted path. The negation is over
+  # `…_12345`, and the row has a field after this one on every emitted path (the emitted row ends
+  # `data_mount_devid=… registry_fns=… data_luks=…`, true in `message` and in the fallback's `detail`). The negation is over
   # the whole predicate, so a row that cannot be matched at all (a schema change that drops or
   # renames the field) FIRES rather than going quiet: an unreadable answer is not a clean one.
+  # The row set is also pinned to the probe's OWN EMITTER (the first conjunct below, #8874):
+  # the host's `doppler` event log ships to this same source and quotes the marker verbatim
+  # whenever GitHub webhooks in issue/PR text about the probe — the #8846 defect class, measured
+  # 50 quoting rows vs 6 real probe rows in one 6h window (the issue's own body counts 36 under a
+  # narrower event-log subset; both are 2026-09-25 measurements). The start-of-message anchor
+  # alone excluded those rows only because every one happens to begin with `{` — a payload
+  # accident, not a control.
+  # Residual edges leg A does not close, recorded so they are not re-derived:
+  #   * the emitted tag is now load-bearing — a probe-tag rename that misses this SQL leaves the
+  #     population permanently zero, which reads as health; the drift guard derives its needle
+  #     from the canonical lib so a coordinated rename that skips this file goes red;
+  #   * unlike the negated devid check, the conjunct fails QUIET — a raw schema change that drops
+  #     or renames SYSLOG_IDENTIFIER excludes every row and reads healthy;
+  #   * the marker anchor lacks the canonical def's trailing space — a hypothetical
+  #     `SOLEUR_INNGEST_SERVER_PROBEX` prefix would count here but not per `inngest_probe_row`;
+  #     latent, fail-loud.
+  #
+  # CLOSED 2026-10-29 (#11526): the vector-down blind edge. While Vector is down the probe POSTs
+  # the identical field row curl-direct to this same source (inngest-bootstrap.sh, gated on
+  # vector_active != "active") as marker=SOLEUR_INNGEST_BOOT_STAGE /
+  # stage=inngest-server-probe-vector-down with the field row in `detail`,
+  # shipper='cloud-init-phone-home', and no SYSLOG_IDENTIFIER — the marker-at-position-1 anchor
+  # made it invisible, so during a Vector outage the alert read an empty row set and
+  # treat_as_zero reported health in exactly the degraded states (rebuilds, restores, partial
+  # boots) where a wrong-volume mount is most plausible. A pre-existing blind edge, not a
+  # regression (CTO ruling, PR #11519). Leg B below admits those rows on envelope-field equality
+  # (shipper + stage) with the field checks on `detail`, never `marker` — nothing emits
+  # marker='SOLEUR_INNGEST_SERVER_PROBE' on this call site.
+  # Residual edges on leg B, recorded so they are not re-derived:
+  #   * a fallback row carrying the shipper+stage identity with `detail` absent or renamed
+  #     counts as wrong-volume — the `detail = ''` disjunct below exists precisely because the
+  #     field conjuncts alone cannot express it: on an absent detail both field checks evaluate
+  #     position('') = 0, and the host_role `> 0` gate rejects the row BEFORE the negated devid
+  #     check can count it (measured pre-merge on synthetic raw: detail-absent returned 0 under
+  #     the conjunct-only form, 1 with the disjunct). Deliberate fail-loud for the schema-drop
+  #     class, same philosophy as leg A's negated devid. The mirror edge stands too: a `detail`
+  #     present but missing `host_role` reads quiet — the same coverage boundary leg A has for
+  #     a dropped host_role field;
+  #   * the jq-failure fallback payload (cloud-init-inngest.yml — `{"message","marker","stage",
+  #     "host"}`, no `detail`, no `shipper`) never satisfies the shipper conjunct, so it is
+  #     silently uncounted, NOT counted — the fail-loud property holds only for rows carrying
+  #     the shipper+stage identity (CTO T1 dissent);
+  #   * the phone-home envelope POSTs its own `dt` — whether the warehouse honors the
+  #     self-attested value over receive-time is unmeasured (#9784); a severely skewed host
+  #     clock could place a real wrong-volume row outside this alert's 5400 s window;
+  #   * the leg-B literals are load-bearing — `stage` is a call-site literal whose authority is
+  #     the emit site in inngest-bootstrap.sh (a RESERVED token on the shared phone-home helper —
+  #     the guard asserts exactly one emit site passes it); `shipper` is the payload builder's
+  #     literal in cloud-init-inngest.yml; the drift guard derives both needles from those
+  #     sources, so a coordinated rename that misses this SQL goes red rather than quietly
+  #     re-pinning. The alert's integrity bound on BOTH legs is the source ingest token — every
+  #     identity field here (SYSLOG_IDENTIFIER, message, shipper, stage, detail) is
+  #     sender-attested, so a token holder can forge either leg (parity, not a new capability).
+  # LIVE-PROBED 2026-10-29 (dual-path predicate, #11526), 48h window over the hot remote() UNION
+  # s3Cluster archive — controls A–E measured against the shipped shape:
+  #   A leg-A population (emitter + marker + host_role=dedicated)    -> 49 rows
+  #   B shipper=cloud-init-phone-home census                        -> 27 stages, 1700 rows;
+  #     stage=inngest-server-probe-vector-down                      ->  1 row
+  #     (a real fallback row at 2026-10-29 08:44Z — a fresh boot still activating Vector;
+  #      its detail carries host_role=dedicated + the live alias, so it does NOT count)
+  #   C full dual-path predicate, live alias                        ->  0 rows  (quiet control)
+  #   D full predicate, devid needle = scsi-0HC_Volume_0            -> 50 rows  (49 leg-A + the
+  #     1 real leg-B row — both channels verified counting live, not just on synthetics)
+  #   E leg-B on synthetic raw envelopes (live alias in the needle): wrong devid -> 1,
+  #     live alias -> 0, shipper+stage identity with detail absent -> 1, jq-failure shape
+  #     (no shipper) -> 0. The detail-absent arm is what the detail='' disjunct below exists
+  #     for — under the conjunct-only form it returned 0 (the host_role `> 0` gate rejected
+  #     the row before the negated devid could count it), so the disjunct is load-bearing.
+  # LIVE-PROBED 2026-10-29 after adding the emitter conjunct, 48h window over the hot remote()
+  # UNION s3Cluster archive:
+  #   population  (emitter + marker + host_role=dedicated)   -> 49 rows
+  #   emitter breakdown of marker-anchored rows              -> inngest-server-probe: 97
+  #     (49 dedicated + 48 web-1; no foreign-emitter rows in this window — the class the
+  #      conjunct excludes is latent by design, measured in #8846, not seen live today)
+  #   watched alias = the live encrypted alias (…_106903269) -> 0 rows  (quiet control)
+  #   watched alias = a wrong id (scsi-0HC_Volume_0)         -> 49 rows (positive control = population)
   # LIVE-PROBED 2026-09-18 against the ClickHouse table (the step-1 requirement above), 24h window:
   #   total=37248  probe_rows=22  host_role=dedicated rows=11
   #   watched alias = the live PLAINTEXT alias  -> 0 rows   (quiet when the field matches)
@@ -230,9 +308,23 @@ locals {
     SELECT {{time}} AS time, count(*) AS value
     FROM {{source}}
     WHERE time BETWEEN {{start_time}} AND {{end_time}}
-      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
-      AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
-      AND position(JSONExtractString(raw, 'message'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-server-probe'
+        AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_SERVER_PROBE') = 1
+        AND position(JSONExtractString(raw, 'message'), 'host_role=dedicated ') > 0
+        AND position(JSONExtractString(raw, 'message'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'inngest-server-probe-vector-down'
+          AND (
+            JSONExtractString(raw, 'detail') = ''
+            OR (
+              position(JSONExtractString(raw, 'detail'), 'host_role=dedicated ') > 0
+              AND position(JSONExtractString(raw, 'detail'), 'data_mount_devid=${local.inngest_luks_wrong_volume_alias} ') = 0
+            )
+          )
+        )
+      )
     GROUP BY time
   SQL
 
@@ -294,15 +386,191 @@ resource "logtail_exploration_alert" "inngest_luks_wrong_volume" {
   # this file whose paused state is a variable rather than a constant `false`.
   paused = !var.inngest_luks_cutover_complete
 
+  # #11068 — push armed under the #9168 measured-flip convention; revert to `push = false` if the apply refuses it.
   email          = true
-  push           = false
+  push           = true
   call           = false
   sms            = false
   critical_alert = false
 
-  incident_cause = "The dedicated Inngest host reports /mnt/data backed by a volume that is NOT the encrypted one (probe_schema=8 data_mount_devid). Redis writes are landing unencrypted. Runbook: ${local.inngest_luks_wrong_volume_runbook_url}"
+  incident_cause = "The dedicated Inngest host reports /mnt/data backed by a volume that is NOT the encrypted one (data_mount_devid, probe_schema>=8; the probe_schema=9 row's data_luks field names the backing device's blkid TYPE for the same verdict). Redis writes are landing unencrypted. If Vector was down, the evidence row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=inngest-server-probe-vector-down) — decode its .detail, not the message. Runbook: ${local.inngest_luks_wrong_volume_runbook_url}"
   metadata = {
     runbook = local.inngest_luks_wrong_volume_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9927 item 2: the on-host LUKS key-continuity probe (paging alert) ──────────────────────────
+# Once the owner delivers the signed bundle (#11266; merged, inert until then), the dedicated Inngest host
+# runs a bounded probe (luks_key_probe_tick in inngest-cutover-flip.sh)
+# that asks cryptsetup whether the key the host holds still unlocks the LUKS2 header behind
+# /mnt/data, and reports ONE row per run: `SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<v> rc=<n> at=<where>`,
+# verdict in {ok, fail_passphrase, fail_header, fail_key_absent, indeterminate}, shipped twice (the
+# journald tag inngest-cutover-flip, and a curl-direct phone-home whose message BEGINS with the marker).
+# Rulings: the archived #9927 spec's decision-challenges.md D4 (paging) and D12 (the dead-man alert is NOT in this file: it
+# ships in a follow-up PR once an owner-authorized create-and-delete probe proves the API accepts
+# query_period = 2592000; tracked on the owner-hold issue #11266, a blocking prerequisite of the
+# bundle promotion), plan 2026-10-26-feat-inngest-luks-key-continuity-probe-plan.md Phase 3.
+# Pinned by apps/web-platform/test/infra/inngest-luks-key-probe-alert.test.sh.
+#
+# SQL RULES: the marker is anchored at message position 1, never a `raw LIKE` prefilter (webhook
+# payloads that quote the marker reach this source); the window filter is the `dt` COLUMN, never
+# the `time` alias; one whole-window aggregate, no GROUP BY.
+locals {
+  # PAGES on any failed verdict. `indeterminate` is deliberately absent: an unmeasured verdict
+  # never pages on its own (a transient low-memory skip would page a day). A non-ok probe re-runs
+  # hourly, so a failing incident stays open on recovery_period (it outlasts the gap between rows). When and why it
+  # resolves is recorded once, in the AUTO-RESOLVE WINDOW comment above logtail_exploration_alert.inngest_luks_key_probe_fail.
+  # EMITTER PIN (#11527, ADR-218 dual-channel convention): the marker alone admitted ANY emitter, so the
+  # row set is pinned to the probe's two real emitters — leg A the journald tag
+  # SYSLOG_IDENTIFIER='inngest-cutover-flip' (readonly LOG_TAG= at inngest-cutover-flip.sh), leg B the
+  # phone-home envelope identity shipper='cloud-init-phone-home' + stage='luks-key-probe' (payload
+  # builder at cloud-init-inngest.yml's jq payload line; arg-3 marker override at the
+  # inngest-boot-phone-home.sh "luks-key-probe" call in inngest-cutover-flip.sh). The
+  # position-1 marker anchor is shared: the phone-home message begins with the marker, so it reads
+  # BOTH channels with no marker OR-leg. `verdict=fail_` is leg-scoped (message on leg A, detail on leg
+  # B — equivalent on every real leg-B row since its message is `marker + stage=luks-key-probe +
+  # detail`). The `{`-prefix exclusion of quoting webhook rows is incidental (#8846), not the
+  # mechanism — the emitter pin is.
+  # Residual edges, recorded not silently uncounted: (a) the jq-failure fallback payload carries
+  # stage but NO shipper, so it matches neither leg and is silently uncounted (sibling T1 dissent,
+  # accepted); (b) the detail='' disjunct counts an identity-pinned row whose detail is absent —
+  # the schema-drop/degraded-emit class — so a benign malformed empty-detail emit under that
+  # identity also pages (accepted trade, sibling T4); (c) self-attested `dt` is unmeasured (the
+  # emitter stamps its own row time); (d) `value` can reach 2 for one failure (journald + phone-home
+  # carry no per-run dedup) — harmless under higher_than 0; (e) the shared marker anchor makes leg-B
+  # admission contingent on the phone-home `message` retaining its marker prefix — a
+  # message-composition regression in the payload builder silently uncounts leg-B rows, an edge the
+  # sibling leg B (envelope-only) does not have; the pin is noise-exclusion, not emitter
+  # authentication — self-attested SYSLOG_IDENTIFIER/shipper/stage fields can be forged by a local
+  # caller with journald or the bearer token (forgeability adds false pages, never masks a real one).
+  # LIVE-PROBED 2026-10-30 (window ending ~10:00 UTC), 48h over the hot remote() UNION s3Cluster
+  # archive (216296 rows total):
+  #   A marker-anchored emitter census                          -> 0 rows (probe inert pre-#11266;
+  #     the emitter breakdown is vacuously clean — the pinned pair is the only set that can emit)
+  #   B shipper=cloud-init-phone-home stage census              -> 20 stages x 1 row each
+  #     (bootstrap journey); stage='luks-key-probe' absent — the channel is live, the stage unused
+  #   C full-predicate count                                    -> 0 rows (quiet control)
+  #   D marker-only vs emitter-pinned                           -> 0 vs 0 (delta 0 — nothing
+  #     under a foreign emitter currently quotes the marker; the exclusion is latent, synthetic E7
+  #     is its proof)
+  #   E synthetic raw evals (journald fail/ok, phone-home fail/ok, identity-pinned detail-absent,
+  #     jq-failure shape, doppler-shaped forgery)               -> 1/0/1/0/1/0/0
+  #   E re-run 2026-10-30 ~12:00 UTC under the verdict= needle (review found token= dead on
+  #     journald — vector.toml pii_scrub_string rewrites token=<v>; D5 ruling renamed the emit
+  #     key on both channels)                                         -> 1/0/1/0/1/0/0 (identical)
+  #   NOTE: synthetic evals inject raw rows pre-scrub — they prove the predicate, not that a real
+  #     journald row survives ingest; the guard's scrub-immunity check (vector.toml alternation)
+  #     is the standing control for that transform.
+  inngest_luks_key_probe_fail_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1
+      AND (
+        JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip'
+        AND position(JSONExtractString(raw, 'message'), 'verdict=fail_') > 0
+        OR (
+          JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home'
+          AND JSONExtractString(raw, 'stage') = 'luks-key-probe'
+          AND (
+            JSONExtractString(raw, 'detail') = ''
+            OR position(JSONExtractString(raw, 'detail'), 'verdict=fail_') > 0
+          )
+        )
+      )
+  SQL
+
+  # The subsection is written by the same change (runbook section 5c, "Key-continuity probe (#9927 item 2)").
+  inngest_luks_key_probe_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md#key-continuity-probe-9927-item-2"
+}
+
+resource "logtail_exploration" "inngest_luks_key_probe_fail" {
+  name      = "soleur-inngest-luks-key-probe-fail-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.inngest_luks_key_probe_fail_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+# AUTO-RESOLVE WINDOW (#11388; comment only, the attributes below are unchanged). THIS IS THE ONE AUTHORITATIVE COPY of
+# the arithmetic; betterstack-log-query.md and the cutover runbook point here. The incident resolves once the count has
+# read 0 for a full recovery_period (3600 s). While the probe keeps failing it re-emits hourly (luks_probe_due: limit 3600
+# for any stamp that is not `ok`), so each failing row sits in the 900 s window for 900 s and leaves ~2700 s of zeros, shorter
+# than recovery_period, and the incident stays open.
+# The incident resolves on time alone, about 4500 to 4800 s (1.25 to 1.33 h; the 300 s check cadence adds up to 300 s)
+# after the last failing row; no later row is needed, so a silent probe also resolves it. At most one hourly row (at about
+# +3600 s) can land before it resolves. Resolution is therefore not evidence of recovery; only a `verdict=ok` row is.
+# After an `indeterminate` the next row is hourly too, so fail, indeterminate, fail leaves ~6300 s of zeros, longer than
+# recovery_period: the incident resolves and re-pages once. After an `ok` the next row is 24 h later (limit 86400).
+resource "logtail_exploration_alert" "inngest_luks_key_probe_fail" {
+  exploration_id = logtail_exploration.inngest_luks_key_probe_fail.id
+  name           = "soleur-inngest-luks-key-probe-fail-prd"
+
+  # Presence-only, so safe before the probe is delivered (no rows, value 0). The window is 900 s
+  # because that is the largest query_period Better Stack has accepted for a per-row-parse alert
+  # created since 2026-10-01 (see the measured table below). The probe re-emits no sooner than hourly after any
+  # non-ok token, so while it fails the incident stays open and does not re-page. It pages within about
+  # 5 min of the first failing row. When it resolves, and why that is not recovery, is in the
+  # AUTO-RESOLVE WINDOW comment above this resource.
+  #
+  # MEASURED 2026-10-28 (a read-only GET of the live /api/v2/alerts, 19 alerts; as of 2026-10-28, two of them -
+  # luks_monitor_host_timer_dark and claude_cost_capture_dark - since retired by #11631), not inferred: this
+  # alert was refused 422 "too resource intensive" FOUR times at merge apply, at (check, query) =
+  # (300, 10800) #11260, (900, 10800) #11384, (3600, 10800) #11404 and (300, 5400) #11374. Live
+  # alerts with query_period above 900 are all September-created: luks_monitor_host_timer_dark
+  # 3600/97200, claude_cost_daily_burn and claude_cost_capture_dark 3600/86400, inngest_luks_wrong_volume
+  # 300/5400. Every alert created since 2026-10-01 has query_period <= 900 (registry_zot_log_credential_shape
+  # 300/900 on 10-15, egress_gw_probe_fail 300/900 on 10-12, web_nic_guard_unpinned_url 60/300 on 10-27).
+  # So an existing long window proves nothing about what the API accepts today. The (300, 900) pair set
+  # below was created by #11427 (744396abbb): push run 40744937376 on 744396abbb planned "+ query_period = 900"
+  # and "+ push = true" and logged "Creation complete" for this alert (id 888101/2988722350); that run later
+  # failed at an SSH step ("SSH forward to web-2 through the web-1 bastion"), fixed by 04cad4e8e0 (#11454). Push
+  # run 40782617701 on 04cad4e8e0, which descends from 744396abbb, refreshed this alert (it is in the -target
+  # list) and reported "No changes", so the live attributes matched this block at that time.
+  # 604800 s and 2592000 s were never tried, so whether a 30-day dead-man can exist is unknown; a try needs an
+  # owner-authorized create-and-delete probe.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 3600
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  # #11068 convention (#9168 measured flip): push armed. History: the original plan was to revert to
+  # `push = false` if the apply refused it; the apply accepted it (run 40744937376 planned and created it
+  # with `push = true`; run 40782617701 refreshed it and reported "No changes").
+  email          = true
+  push           = true
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "The on-host LUKS key-continuity probe on the dedicated Inngest host reports a FAILED verdict (verdict=fail_passphrase, fail_header or fail_key_absent): the key the host holds no longer opens the volume behind /mnt/data, or is absent. The next reboot may not be able to reopen the store, and no header backup exists. If Vector was down, the evidence row arrived on the phone-home channel (shipper=cloud-init-phone-home, stage=luks-key-probe) — decode its .detail, not the message. Do NOT replace the host until the cause is established. Runbook: ${local.inngest_luks_key_probe_runbook_url}"
+  metadata = {
+    runbook = local.inngest_luks_key_probe_runbook_url
   }
 
   escalation_target {
@@ -595,14 +863,15 @@ resource "logtail_exploration_alert" "registry_clientip_not_rfc1918" {
 # ── #8611 / ADR-243: Anthropic spend — a step outliving the proxy, and the daily burn ───────────
 #
 # WHY THESE EXIST. The self-hosted Inngest server calls every step at the Cloudflare-proxied
-# serveHost, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
+# serveOrigin, and Cloudflare gives up on an origin response after ~100 s. A claude-eval step that
 # outlives that gets a 524, `retries: 1` re-invokes it while the first Claude session is still
 # running, and the run fails anyway: 51% of 30-day cron spend was those duplicates and a $50
-# top-up lasted ~39 h. Three standing alarms, one per question:
+# top-up lasted ~39 h. Three standing checks, one per question (two native alerts and, since #11631, one heartbeat):
 #   (1) inngest_step_524         — is a step being cut at the proxy again? (per 15 min)
 #   (2) claude_cost_daily_burn   — is the cron fleet spending more than $25 in 24 h?
-#   (3) claude_cost_capture_dark — has the cost telemetry itself gone dark for 24 h?
-# (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists.
+#   (3) (retired, #11631) the cost-capture dark-man is now the archive-fed heartbeat
+#       soleur-claude-cost-capture-prd (uptime-alerts.tf), not a native logs alert
+# (2) cannot fire on silence (treat_as_zero reads "no rows" as $0), which is why (3) exists (as a heartbeat now).
 # (2) is a FLOOR on spend, not the total: a marker with a null cost_usd (a timeout, a no-result or
 # parse-error exit, the HTTP-transport crons compound-promote / weekly-release-digest / the credit
 # probe) sums as $0, and a run killed mid-flight emits no marker at all.
@@ -677,20 +946,6 @@ locals {
       AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
   SQL
 
-  claude_cost_capture_dark_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
-    FROM {{source}}
-    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
-      AND (
-        (raw LIKE '%"SOLEUR_CLAUDE_COST":true%'
-          AND JSONExtractString(raw, 'message', 'component') = 'claude-cost'
-          AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%'
-          AND JSONExtract(raw, 'message', 'cost_usd', 'Nullable(Float64)') IS NOT NULL)
-        OR (JSONExtractString(raw, 'message', 'feature') = 'cron-anthropic-credit-probe'
-          AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid'))
-      )
-  SQL
-
   # The burn threshold, in dollars per trailing 24 h. $25 clears a healthy Monday (the per-site
   # medians already sum ~$13 before daily-triage and follow-through, newly metered by #8611) and a
   # 1st-of-quarter day, while staying under the $28–34 duplicate-storm days probed above.
@@ -739,8 +994,9 @@ resource "logtail_exploration_alert" "inngest_step_524" {
 
   paused = false
 
+  # #11068 — push armed under the #9168 measured-flip convention; revert to `push = false` if the apply refuses it.
   email          = true
-  push           = false
+  push           = true
   call           = false
   sms            = false
   critical_alert = false
@@ -791,7 +1047,7 @@ resource "logtail_exploration_alert" "claude_cost_daily_burn" {
   query_period        = 86400
   confirmation_period = 0
   recovery_period     = 3600
-  # An empty window is $0 spent — healthy. Silence is claude_cost_capture_dark's job.
+  # An empty window is $0 spent — healthy. Silence is the soleur-claude-cost-capture-prd heartbeat's job (#11631).
   on_missing_data = "treat_as_zero"
 
   paused = false
@@ -805,153 +1061,6 @@ resource "logtail_exploration_alert" "claude_cost_daily_burn" {
   incident_cause = "The claude-eval cron fleet spent more than USD ${local.claude_cost_daily_burn_usd} of operator Anthropic credit in the last 24 h (SOLEUR_CLAUDE_COST cost_usd, cron sources; a floor: null-cost markers sum as $0). Runbook: ${local.claude_spend_runbook_url}"
   metadata = {
     runbook = local.claude_spend_runbook_url
-  }
-
-  escalation_target {
-    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
-    team_name = var.betterstack_paid_tier ? null : "Your team"
-  }
-}
-
-resource "logtail_exploration" "claude_cost_capture_dark" {
-  name      = "soleur-claude-cost-capture-dark-prd"
-  team_name = "Your team"
-
-  chart {
-    chart_type = "line_chart"
-  }
-
-  query {
-    query_type      = "sql_expression"
-    source_variable = "source"
-    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
-    sql_query = replace(trimspace(local.claude_cost_capture_dark_sql), "/\\s+/", " ")
-  }
-
-  variable {
-    name          = "source"
-    variable_type = "source"
-    values        = [local.vector_prd_source_id]
-  }
-}
-
-resource "logtail_exploration_alert" "claude_cost_capture_dark" {
-  exploration_id = logtail_exploration.claude_cost_capture_dark.id
-  name           = "soleur-claude-cost-capture-dark-prd"
-
-  # Pages when a trailing 24 h holds neither a cron cost marker with a non-null cost_usd nor a
-  # credit-probe RED row. The cron fleet runs many times a day, so a whole day of neither means the
-  # marker path (emitter, Vector, or the nested field) is broken — and the burn alert above is blind.
-  alert_type          = "threshold"
-  operator            = "lower_than"
-  value               = 1
-  check_period        = 3600
-  query_period        = 86400
-  confirmation_period = 0
-  recovery_period     = 3600
-  # The inverse of every sibling's reason: a missing value must read as 0 so silence FIRES.
-  on_missing_data = "treat_as_zero"
-
-  paused = false
-
-  email          = true
-  push           = false
-  call           = false
-  sms            = false
-  critical_alert = false
-
-  incident_cause = "No claude-eval cron cost marker with a cost_usd (and no credit-probe RED row) reached Better Stack in 24 h: the spend telemetry is dark, so the daily burn alert cannot fire. Runbook: ${local.claude_spend_runbook_url}"
-  metadata = {
-    runbook = local.claude_spend_runbook_url
-  }
-
-  escalation_target {
-    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
-    team_name = var.betterstack_paid_tier ? null : "Your team"
-  }
-}
-
-# ── #8706: web-1's daily LUKS at-rest probe has stopped reporting ───────────────────────────────
-# luks-monitor.timer never existed on web-1 for nine weeks and nothing noticed: the shared
-# betteruptime_heartbeat.workspaces_luks has a second pusher (workspaces-luks-verify.yml, over SSH)
-# that kept it green. This alert singles out the HOST unit on web-1. Under luks-monitor.service
-# every log() line is journaled twice; the stdout copy carries _SYSTEMD_UNIT (measured 100% on the
-# stdout rows of sibling web-1 units such as web-private-nic-guard.service, whose SyslogIdentifier
-# also differs from its unit name; luks-monitor.service itself has never run). logger rows drop it
-# about half the time. The verify job's rows carry session-N.scope or no unit, so they can never
-# keep this quiet. host_name scopes it to web-1: web-2 (soleur-web-2) ships to the same source.
-#
-# Window: OnCalendar=daily + RandomizedDelaySec=1800 can space two runs 24h30m (88200 s) apart,
-# so a 24 h window would read empty for up to 30 minutes on a healthy day. 27 h (97200 s) covers it
-# with margin. Pages about 27 h after the last good host run; a Vector or Logs-source outage trips
-# it too (the runbook's decode says to check the pipeline before the host).
-#
-# Live-probed 2026-09-27 (7 days, hot+archive): as written 0 (the dark state this pages on);
-# control with the unit swapped for inngest-heartbeat.service and no needle 39228; the unit
-# conjunct dropped 9 (the verify job's OK rows — the unit conjunct is what excludes them).
-# The host_name conjunct was added at review (2026-09-27): stdout rows from web-1 units read
-# host_name='soleur-web-platform', web-2's read 'soleur-web-2' (measured over 2 days).
-locals {
-  luks_monitor_host_timer_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
-    FROM {{source}}
-    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
-      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor'
-      AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service'
-      AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%'
-      AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'
-  SQL
-
-  luks_monitor_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706"
-}
-
-resource "logtail_exploration" "luks_monitor_host_timer_dark" {
-  name      = "soleur-luks-monitor-host-timer-dark-prd"
-  team_name = "Your team"
-
-  chart {
-    chart_type = "line_chart"
-  }
-
-  query {
-    query_type      = "sql_expression"
-    source_variable = "source"
-    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
-    sql_query = replace(trimspace(local.luks_monitor_host_timer_sql), "/\\s+/", " ")
-  }
-
-  variable {
-    name          = "source"
-    variable_type = "source"
-    values        = [local.vector_prd_source_id]
-  }
-}
-
-resource "logtail_exploration_alert" "luks_monitor_host_timer_dark" {
-  exploration_id = logtail_exploration.luks_monitor_host_timer_dark.id
-  name           = "soleur-luks-monitor-host-timer-dark-prd"
-
-  alert_type          = "threshold"
-  operator            = "lower_than"
-  value               = 1
-  check_period        = 3600
-  query_period        = 97200
-  confirmation_period = 0
-  recovery_period     = 3600
-  # A missing value must read as 0 so silence FIRES (the claude_cost_capture_dark precedent).
-  on_missing_data = "treat_as_zero"
-
-  paused = false
-
-  email          = true
-  push           = false
-  call           = false
-  sms            = false
-  critical_alert = false
-
-  incident_cause = "web-1's nightly encryption self-check (luks-monitor.service) has not recorded a PASSING run in about 27 hours. Either the host check is not running, or it runs and fails one of its checks; a failing check is the incident, so look first for a luks-monitor FAIL row or a workspaces-luks-drift event. First step: check whether ANY luks-monitor rows arrived at all; total silence means the log pipeline, not the host. The daily workspaces-luks-verify job checks the volume independently. Runbook: ${local.luks_monitor_runbook_url}"
-  metadata = {
-    runbook = local.luks_monitor_runbook_url
   }
 
   escalation_target {
@@ -1300,8 +1409,12 @@ resource "logtail_exploration_alert" "ghcr_hostsfile_deny_lost" {
 # green. The count is DISTINCT host_name over the whole window (ADR-218's
 # amendment): a source-multiplexed aggregate where one host's rows keep the
 # sum above threshold while the other host is dark is exactly the failure this
-# alert exists for, so it pages when the emitting-host count drops below the
-# fleet roster (length(var.web_hosts)).
+# alert exists for. Since 2026-11-05 (#12180) the alert reports the number of
+# roster hosts that did NOT emit (length(var.web_hosts) minus the distinct
+# emitting hosts, floored at 0) and pages on higher_than 0, so an evaluator
+# step that reads 0 reads healthy instead of paging (INFERRED mechanism, see
+# the alert block); a throwaway canary alert runs the same query against an
+# identifier no host emits and must fire.
 #
 # egress_gw_probe_fail is the verdict detector: result=fail rows (allow leg
 # refused, deny leg bypassed) are security-relevant on first sight, and
@@ -1329,12 +1442,19 @@ locals {
   SQL
 
   # Whole-window scalar (ADR-218's host-mask amendment): one value per window =
-  # how many DISTINCT hosts shipped a probe row in it. count(*) would let one
-  # healthy host's ~3 beats keep a 2-host fleet above a row threshold while the
-  # other host ships nothing. `host_name` is Vector's injected per-host field
-  # (`soleur-web-platform` / `soleur-web-2`).
+  # how many roster hosts did NOT ship a probe row in it (0 healthy, 1 one dark
+  # host, length(var.web_hosts) fully dark). An aggregate without GROUP BY always
+  # returns one row, so a fully dark window yields the roster size, not "no data".
+  # count(*) would let one healthy host's ~3 beats keep a 2-host fleet above a
+  # row threshold while the other host ships nothing. toInt64 on both operands:
+  # ClickHouse count() is unsigned and an unsigned subtraction wraps when more
+  # hosts emit than the roster names; greatest(..., 0) floors that surplus.
+  # `host_name` is Vector's injected per-host field (`soleur-web-platform` /
+  # `soleur-web-2`). Accepted residual: this compares a distinct-host COUNT to
+  # the roster size, not set identity, so an extra or renamed emitter could mask
+  # a dead host.
   egress_gw_probe_silent_sql = <<-SQL
-    SELECT toDateTime({{end_time}}) AS time, count(DISTINCT JSONExtractString(raw, 'host_name')) AS value
+    SELECT toDateTime({{end_time}}) AS time, greatest(toInt64(${length(var.web_hosts)}) - toInt64(count(DISTINCT JSONExtractString(raw, 'host_name'))), 0) AS value
     FROM {{source}}
     WHERE dt BETWEEN {{start_time}} AND {{end_time}}
       AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'egress-gw-probe'
@@ -1354,6 +1474,11 @@ locals {
       AND (position(JSONExtractString(raw, 'message'), 'result=fail') > 0
         OR position(JSONExtractString(raw, 'message'), 'reason=gw_absent') > 0)
   SQL
+
+  # THROWAWAY positive control (#12180): the production query against an identifier no
+  # host emits, so it reads length(var.web_hosts) and must fire. Derived, never copied:
+  # the guard pins this line whole and the replace() target occurring once in the source.
+  egress_gw_probe_silent_canary_sql = replace(local.egress_gw_probe_silent_sql, "'egress-gw-probe'", "'egress-gw-probe-canary-absent'")
 
   egress_gw_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md#egress-gateway-better-stack-alerts"
 }
@@ -1439,13 +1564,35 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   exploration_id = logtail_exploration.egress_gw_probe_silent.id
   name           = "soleur-egress-gw-probe-silent-prd"
 
-  # Fewer emitting HOSTS than the fleet roster in 15 min (each host's probe
-  # emits every 5 min when due). count(DISTINCT host_name) — a multiplexed row
-  # count would let web-1's beats mask a dead web-2 probe pipeline (the
-  # pre-amendment defect). treat_as_zero makes a fully-dark window read as 0.
+  # At least one roster HOST missing in 15 min (each host's probe emits every 5
+  # min when due). The value is the missing-host count, not the emitting count:
+  # the earlier lower_than shape opened incident 1047829421 on a healthy fleet
+  # (#12180), and incident 1031046761 of the same alert stayed open for 24 days
+  # (it began as a true positive, web-2 dark; rows were measured arriving on
+  # 2026-11-02; nothing resolved it until we did). The INFERRED mechanism is that
+  # an evaluator step it cannot evaluate is read as 0 and compared against the
+  # threshold; under higher_than 0 that zero reads healthy. Not excluded:
+  # partial visibility of one host's rows in the evaluator's window (the hot
+  # window is about 40 minutes per betterstack-log-query.md, the archive lag was
+  # measured at about 66 minutes) reads 1 under either operator,
+  # and a vendor that never auto-resolves incidents cannot be fixed by inverting
+  # the metric. The query is proven (healthy 0, one host 1, unknown identifier 2);
+  # the evaluator is not, which is what the canary below is for. A green alert is
+  # not evidence of health until the canary has fired.
+  # Residual: an evaluator error or timeout also reads 0 under treat_as_zero, so
+  # that failure is quiet here. The sibling detectors cover only a fleet-wide dead
+  # resolver timer (the Sentry cron check-in has no host dimension) and a probe
+  # that runs and returns result=fail (op=egress_gw_probe_fail needs such a row);
+  # a Vector, allowlist or journal break on ONE host has no independent detector
+  # until the heartbeat poller (#12190). treat_as_zero is kept per the CTO ruling:
+  # it is NOT what detects a fully dark window (the aggregate always returns one
+  # row, the roster size) and it is the source of the quiet residual above. The
+  # count is compared with the roster size, not set identity: an extra or renamed
+  # emitter, or a row with an empty host_name, counts as a host and could mask a
+  # dead one.
   alert_type          = "threshold"
-  operator            = "lower_than"
-  value               = length(var.web_hosts)
+  operator            = "higher_than"
+  value               = 0
   check_period        = 300
   query_period        = 900
   confirmation_period = 0
@@ -1460,7 +1607,69 @@ resource "logtail_exploration_alert" "egress_gw_probe_silent" {
   sms            = false
   critical_alert = false
 
-  incident_cause = "Fewer than the expected ${length(var.web_hosts)} web hosts emitted an egress_gw_probe heartbeat in 15+ min — a resolver timer, Vector pipeline (stale Source-4 allowlist on one host is a measured failure mode), or host journal is dead. The gateway's allow/deny verification is dark on the silent host(s). Runbook: ${local.egress_gw_runbook_url}"
+  incident_cause = "Value = roster hosts NOT emitting an egress_gw_probe row in 15+ min (1 = one dark, ${length(var.web_hosts)} = all dark). Rows on both hosts in the window => suspect the evaluator, not the fleet. Cause: resolver timer, Vector (stale Source-4 allowlist is a measured failure mode) or host journal; allow/deny verification is dark on the silent host(s). Runbook: ${local.egress_gw_runbook_url}"
+  metadata = {
+    runbook = local.egress_gw_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# THROWAWAY CANARY (#12180). Same shape and windows as egress_gw_probe_silent, run
+# against an identifier no host emits, so it reads length(var.web_hosts) and must
+# fire. Its incident never recovers (the query is constant): that, its mirrored P1
+# issue and the email are expected and last until the follow-up PR deletes the two
+# resources (RETIREMENT line in scripts/followthroughs/egress-gw-probe-silent-12180.sh).
+# If it NEVER fires, the evaluator is blind for this query shape and the production
+# alert cannot be trusted; leave it armed and build the heartbeat poller (#12190).
+# The canary shares the production query shape, so it proves non-zero delivery on an
+# empty count, not general evaluator health.
+resource "logtail_exploration" "egress_gw_probe_silent_canary" {
+  name      = "soleur-egress-gw-probe-silent-canary-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.egress_gw_probe_silent_canary_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "egress_gw_probe_silent_canary" {
+  exploration_id = logtail_exploration.egress_gw_probe_silent_canary.id
+  name           = "soleur-egress-gw-probe-silent-canary-prd"
+
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "THROWAWAY CANARY (#12180), NOT an outage. Do NOT close its mirror issue: closing it files a fresh P1 at the next 15-minute run. Expected to fire; it proves the evaluator delivers a non-zero value for this query shape. Never firing = the evaluator is blind for this shape: keep soleur-egress-gw-probe-silent-prd armed and build the poller. Delete the pair once it has fired. Runbook: ${local.egress_gw_runbook_url}"
   metadata = {
     runbook = local.egress_gw_runbook_url
   }
@@ -1653,7 +1862,7 @@ resource "logtail_exploration_alert" "registry_zot_log_credential_shape" {
 #   apply-seccomp: unshare(CLONE_NEWUSER): Operation not permitted
 # (the shim's seccomp filter is inherited by the helper, which then cannot create its user namespace; every
 # Bash call in the session fails), or the same helper failing with EPERM at ANY other of its steps (#10455 e: an exact
-# allowlist of the 16 step strings in the vendored binary). server/cc-dispatcher.ts `mirrorBashSandboxFailure`
+# allowlist of the 19 step strings in the vendored binary at SDK 0.3.311). server/cc-dispatcher.ts `mirrorBashSandboxFailure`
 # classifies the output (server/sandbox-startup-classifier.ts `classifyBashSandboxFailure`; errorCode
 # `helper_userns_eperm` for the userns step, `helper_step_eperm` for every other step, and the predicate below pages on
 # BOTH) and mirrors ONE pino row per user per debounce window per code: feature `agent-sandbox`, op
@@ -1835,6 +2044,240 @@ resource "logtail_exploration_alert" "faithful_canary_sandbox_broken" {
   incident_cause = "Report-only signal (the smoke does not gate the deploy): a canary build could not run one real wrapped Bash call through the real Agent SDK, the shim and the production sandbox config (reason sdk_bash_smoke_failed). The deploy was NOT rolled back and this build is promoted to production in the same run: treat hosted Bash as failing in production until the reason is read and cleared (the 2026-10-06 incident shape, #10445); if only the AF_UNIX variant fails the consequence applies only once the agent-sandbox-unix-deny flag is ON. The email has no row body: read the failure detail without SSH from the deploy-status field sdk_bash_smoke (reason carries the first sandbox error line) or the runbook's Query block. This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.faithful_canary_sandbox_broken_runbook_url}"
   metadata = {
     runbook = local.faithful_canary_sandbox_broken_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ── #9639 F8: the nic guard refused to POST the token to an unpinned ingest URL ────────────────
+#
+# WHAT IT DETECTS. web-private-nic-guard.sh refuses to send the Better Stack token to a
+# destination other than the pinned ingest URL: on its `[nic] unpinned_url:` stderr line the POST
+# is withheld AND the liveness beat lapses — the guard that cannot report must not claim health.
+# The line is journald-tagged SYSLOG_IDENTIFIER='web-nic-guard' at PRIORITY 6 — NOT a SOLEUR_*
+# PRIORITY-2 marker, so monitor_send_failed's predicate cannot see it; until this alert the
+# refusal mode was visible only through a post-merge query (betterstack-log-query.md's decode).
+#
+# NO host_name conjunct, deliberately: the guard timer runs on web-1 (SSH provisioner) and is
+# baked for web-2-class hosts (cloud-init.yml), and either host can refuse — the luks sibling's
+# host conjunct would blind half the fleet (the #8706 lesson in reverse: a threshold-any-row
+# alert, not a liveness count).
+#
+# Column shape: live positive control `doppler run -p soleur -c prd_terraform --
+# scripts/betterstack-query.sh` (2026-10-26, rc 0) returned rows carrying `dt`; the {{time}}
+# placeholder resolves to that column, same as every sibling above.
+locals {
+  web_nic_guard_unpinned_url_sql = <<-SQL
+    SELECT {{time}} AS time, count(*) AS value
+    FROM {{source}}
+    WHERE time BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'web-nic-guard'
+      AND position(JSONExtractString(raw, 'message'), 'unpinned_url') > 0
+    GROUP BY time
+  SQL
+
+  web_nic_guard_unpinned_url_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/web-nic-guard-unpinned-url-alert.md"
+}
+
+resource "logtail_exploration" "web_nic_guard_unpinned_url" {
+  name      = "soleur-web-nic-guard-unpinned-url-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    # Single-line at the resource site, for the same perpetual-diff reason as the siblings above.
+    sql_query = replace(trimspace(local.web_nic_guard_unpinned_url_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "web_nic_guard_unpinned_url" {
+  exploration_id = logtail_exploration.web_nic_guard_unpinned_url.id
+  name           = "soleur-web-nic-guard-unpinned-url-prd"
+
+  # monitor_send_failed's paging semantics: any matching row in a 5-min bucket pages within a
+  # minute, one quiet 10-min window auto-resolves. treat_as_zero: a count query with no rows
+  # returns NO bucket — that must read as healthy or an open incident can never observe recovery.
+  alert_type          = "threshold"
+  operator            = "higher_than"
+  value               = 0
+  check_period        = 60
+  query_period        = 300
+  confirmation_period = 0
+  recovery_period     = 600
+  on_missing_data     = "treat_as_zero"
+
+  # Same note as monitor_send_failed: vendor-side pauses are re-armed by the next per-merge
+  # apply; the `logs_alert` arm of reconcile-live-heartbeats.ts is the drift detector.
+  paused = false
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "A web host's private-NIC guard refused to POST the Better Stack token to an unpinned ingest URL ([nic] unpinned_url) and withheld its beat — the host is healthy but cannot report, so its web_nic_guard heartbeat lapse will read as host-down on that beat. The runbook's readback names the row and the remediation (fix the Doppler value or the pin). This incident auto-resolves after 10 quiet minutes; resolution does NOT mean the cause was fixed. Runbook: ${local.web_nic_guard_unpinned_url_runbook_url}"
+  metadata = {
+    runbook = local.web_nic_guard_unpinned_url_runbook_url
+  }
+
+  escalation_target {
+    policy_id = var.betterstack_paid_tier ? tonumber(betteruptime_policy.uptime[0].id) : null
+    team_name = var.betterstack_paid_tier ? null : "Your team"
+  }
+}
+
+# ---------------------------------------------------------------------------------------------
+# inngest_cutover_flip_silent — the flip unit stopped writing its JSON liveness row (#11820).
+#
+# After the flip-token split the cutover-flip unit runs `doppler run` under its OWN read/write
+# Doppler token (ADR-282 addendum "2026-11-01 (#9927 item 4, the flip-token build record)"), so a
+# revoked, rotated-alone or invalid flip token fails the unit BEFORE any script code runs, on every
+# 30 s timer start. The throttled `noop-*` row (one per CUTOVER_NOOP_THROTTLE_S = 300 s, journald
+# tag `inngest-cutover-flip`) then stops arriving as a JSON row. One silence alert covers the three
+# failure arms that share that cause (the unit not reaching the script's first emit):
+#   1. the unit stalled or failing at the Doppler CLI, before or after `done` (after `done`,
+#      rollback is dead with no other alert: the only alert on this tag is the key-probe one, and
+#      it fires from inside the script, which never starts);
+#   2. the boot-time flip-file write abort in the cloud-init runcmd list, which stops runcmd with
+#      no push signal;
+#   3. the LUKS key-continuity probe going silent (`luks_key_probe_tick` is called only from the
+#      unit's terminal arms, so any flip-token defect silences it).
+#
+# THE DISCRIMINATOR IS THE JSON TYPE OF `message`, NOT A STRING PATTERN (CTO ruling, 2026-11-02;
+# measured with betterstack-query.sh, never the row content): every `emit_state` row of the script
+# (the throttled noop heartbeat AND the FSM transition rows such as `flushed-resume-no-reflush`,
+# `rolled-back` and `unexpected-exit(from=...)`) carries an OBJECT-typed `message` (about 12 per
+# hour at rest); the doppler `Using DOPPLER_...` lines under the same tag carry a STRING `message`
+# (about 160 per hour), so a bare tag count would stay green while the unit fails. CTO measurement
+# 2026-11-02: 1,891 object rows over the prior 7 days and no gap over 900 s.
+#
+# WHAT IT DOES NOT SEE. A failure that REACHES `emit_state` (for example a flip token that
+# authenticates but is read-only, so the Doppler write is refused on a pending transition) emits an
+# object row via the ERR trap (`unexpected-exit(...)` is unthrottled), so this alert stays green on
+# it; the runbook's post-resume row check (step 5 of the first-replace steps) and the replace gate's
+# access pin cover that case, NOT the `noop-done` check before `op=resume` (which proves only the
+# Doppler read). It is also a LIVENESS signal, not an authenticated one: any process on the host
+# that logs a JSON object under this tag holds it green.
+# `JSONExtractString(raw,'message')` returns '' for the object rows, which is why the sibling
+# alerts' string-position predicate cannot select them. Do not use a `startsWith` on the raw text:
+# Better Stack re-serializes the keys alphabetically. `JSONType` is the first use in this file.
+#
+# PAUSED PENDING #11869 (false positive, measured 2026-11-02). The alert opened an incident at its
+# first evaluation (started 14:00:00Z, alert created 14:05:54Z) and has read `Current value: 0` ever
+# since, while the query API returns 3 rows for a 900 s window (269 object rows in 24 h;
+# `JSONType(...)='Object'` and `JSONExtractRaw(raw,'message') LIKE '{%'` select the identical 269 rows,
+# and an empty window returns 0 under both). The API accepted the resource (no 422), so the evaluator
+# does not REJECT it; it returns 0 for a window that holds rows. The predicate cannot be blamed alone:
+# the sibling silence alert `egress_gw_probe_silent` (`lower_than` until #12180 inverted it on 2026-11-05; the same `toDateTime({{end_time}})`
+# + `dt BETWEEN` shape, NO JSONType) has sat at `Current value: 0` since 2026-10-12 while the query API
+# returns 2 distinct hosts against its threshold of 2. So replacing JSONType cannot be validated here
+# (the evaluator is observable only through a live incident), and a wrong guess costs a merge-apply
+# cycle plus another false page. The resource is kept, predicate unchanged, and paused; re-arming is
+# one line (`paused = false`) once an evaluator-side fix is MEASURED on a live alert, and the guard
+# pins `paused = true` with this issue number so the pause cannot be lost silently.
+#
+# THIS ALERT HAS NO REPLACE-WINDOW SUPPRESSION AND WILL EMAIL DURING AN OWNER-AUTHORIZED
+# `apply_target=inngest-host-replace`: the host is legitimately dark from the destroy until the
+# first `noop-*` row after the new host boots. That is expected; it clears on its own. A logs query
+# cannot express the suppression, which stays open on #11820 (a heartbeat beaten by a scheduled
+# workflow, so the suppression lives in the workflow, not in the query). Email
+# only, like egress_gw_probe_silent: push, call and sms stay off and critical_alert stays false.
+#
+# WINDOW. The emitter writes at most one noop row per 300 s, so a 900 s query window holds about
+# three rows; the alert pages only when none arrived (value lower_than 1, treat_as_zero so a fully
+# dark window reads 0). The 900 s window is the ceiling every alert created since 2026-10-01 stays
+# within; a longer window was refused by the Better Stack API.
+#
+# INCIDENT LIFECYCLE (#11820, mirror #11869). A `lower_than` silence incident may stay open after the data returns.
+# Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually. The runbook bullets for
+# this alert carry those three sentences, each followed by a per-alert resolve rule (the egress_gw_probe_silent bullet
+# dropped them when #12180 inverted that alert); edit the bullet and this comment together.
+# Observed 2026-11-02, re-read with betterstack-query.sh (read only): incident 1031046761 (egress_gw_probe_silent, whose
+# SQL has no JSONType, so this is not a JSONType artefact) is Started and unresolved since 2026-10-12 while probe rows
+# keep arriving (22 in the last hour). Incident 1045365287 (this alert) started at 14:00Z, so it was only hours old at
+# writing, and was still open with object rows arriving about one per 5 min (11 in the last hour). Since the mirror
+# began (first mirror issue 2026-10-25), no `lower_than` incident has resolved while its alert was live: the only two
+# closures (#11048, #11049) came minutes after their alerts were deleted (#11631). The `higher_than` twin
+# egress_gw_probe_fail closed its mirror issue in about 30 minutes. The mechanism is not established. CTO ruling
+# 2026-11-02: leave the alert as it is.
+locals {
+  # One aggregate over the whole window, `dt` as the time column (the sibling silence alert's
+  # shape), pinned to the production Inngest host so a web host or a dev host cannot satisfy it.
+  inngest_cutover_flip_silent_sql = <<-SQL
+    SELECT toDateTime({{end_time}}) AS time, count(*) AS value
+    FROM {{source}}
+    WHERE dt BETWEEN {{start_time}} AND {{end_time}}
+      AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') IN ('inngest-cutover-flip')
+      AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd'
+      AND JSONType(raw, 'message') = 'Object'
+  SQL
+
+  inngest_cutover_flip_silent_runbook_url = "https://github.com/jikig-ai/soleur/blob/main/knowledge-base/engineering/operations/runbooks/inngest-server.md#flip-token-split-adr-282-addendum-2026-10-30-9927-item-4"
+}
+
+resource "logtail_exploration" "inngest_cutover_flip_silent" {
+  name      = "soleur-inngest-cutover-flip-silent-prd"
+  team_name = "Your team"
+
+  chart {
+    chart_type = "line_chart"
+  }
+
+  query {
+    query_type      = "sql_expression"
+    source_variable = "source"
+    sql_query       = replace(trimspace(local.inngest_cutover_flip_silent_sql), "/\\s+/", " ")
+  }
+
+  variable {
+    name          = "source"
+    variable_type = "source"
+    values        = [local.vector_prd_source_id]
+  }
+}
+
+resource "logtail_exploration_alert" "inngest_cutover_flip_silent" {
+  exploration_id = logtail_exploration.inngest_cutover_flip_silent.id
+  name           = "soleur-inngest-cutover-flip-silent-prd"
+
+  alert_type          = "threshold"
+  operator            = "lower_than"
+  value               = 1
+  check_period        = 300
+  query_period        = 900
+  confirmation_period = 0
+  recovery_period     = 900
+  on_missing_data     = "treat_as_zero"
+
+  # Paused pending #11869 (see "PAUSED PENDING #11869" above). A literal true keeps the
+  # reconciler's `logs-alert-paused` arm quiet: it reports only a live pause under a declaration
+  # that resolves to `paused = false`.
+  paused = true
+
+  email          = true
+  push           = false
+  call           = false
+  sms            = false
+  critical_alert = false
+
+  incident_cause = "No JSON inngest-cutover-flip row arrived from the production Inngest host in 15+ min. The flip unit is not running to completion: a revoked, rotated-alone or invalid flip Doppler token fails it before the script starts, the boot-time flip-file write may have aborted, or Vector stopped shipping the tag. The LUKS key-continuity probe is silent with it. EXPECTED during an owner-authorized inngest-host-replace (the host is dark until the first noop row after boot), and then it clears on its own. Runbook: ${local.inngest_cutover_flip_silent_runbook_url}"
+  metadata = {
+    runbook = local.inngest_cutover_flip_silent_runbook_url
   }
 
   escalation_target {

@@ -78,7 +78,7 @@ describe("tls-canary event: no function may trigger on it", () => {
   });
 
   it("the scanner itself sees a planted canary trigger (negative control)", () => {
-    const planted = `inngest.createFunction({ id: "x" }, { event: "${CANARY_EVENT}" }, async () => {});`;
+    const planted = `inngest.createFunction({ id: "x", triggers: { event: "${CANARY_EVENT}" } }, async () => {});`;
     const found = [...planted.matchAll(/\bevent\s*:\s*(["'`])([^"'`$\n]+)\1/g)].map((m) => m[2]);
     expect(found).toEqual([CANARY_EVENT]);
     expect(globToRegExp("soleur.*").test(CANARY_EVENT)).toBe(true);

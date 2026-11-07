@@ -138,6 +138,7 @@ import {
   DEFAULT_API_KEY_ROW,
   createSupabaseMockImpl,
   createQueryMock,
+  registeredPlatformTools,
 } from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------
@@ -154,6 +155,9 @@ function setupSupabaseMock(
 function setupQueryMockImmediate() {
   createQueryMock(mockQuery);
 }
+
+// #11303: `allowedTools` now holds only auto-approve tools, so "is this tool registered?" is asked of the server via the
+// shared `registeredPlatformTools` helper (helpers/agent-runner-mocks.ts).
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -196,9 +200,14 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.mcpServers).toBeDefined();
     expect(options.mcpServers.soleur_platform).toBeDefined();
 
-    // allowedTools should include the MCP tool
-    expect(options.allowedTools).toContain("mcp__soleur_platform__create_pull_request");
-    expect(options.allowedTools).toContain("mcp__soleur_platform__create_issue");
+    // The gated GitHub write tools are registered but NOT pre-approved (#11303): the SDK would run a pre-approved
+    // tool before consulting canUseTool, so the review card would never appear. Read tools stay pre-approved.
+    expect(registeredPlatformTools(options)).toEqual(
+      expect.arrayContaining(["create_pull_request", "create_issue", "github_read_ci_status"]),
+    );
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__create_pull_request");
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__create_issue");
+    expect(options.allowedTools).toContain("mcp__soleur_platform__github_read_ci_status");
   });
 
   test("omits GitHub platform tools when user has no installationId", async () => {
@@ -217,12 +226,9 @@ describe("agent-runner MCP tool wiring", () => {
 
     // KB share tools register unconditionally (#2309) so mcpServers is
     // defined — but the GitHub-specific tool names must not appear.
-    expect(options.allowedTools).not.toContain(
-      "mcp__soleur_platform__create_pull_request",
-    );
-    expect(options.allowedTools).not.toContain(
-      "mcp__soleur_platform__github_read_ci_status",
-    );
+    expect(registeredPlatformTools(options)).not.toContain("create_pull_request");
+    expect(registeredPlatformTools(options)).not.toContain("github_read_ci_status");
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__github_read_ci_status");
   });
 
   test("canUseTool allows registered platform MCP tools", async () => {
@@ -285,9 +291,7 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.allowedTools).not.toContain(
-      "mcp__soleur_platform__create_pull_request",
-    );
+    expect(registeredPlatformTools(options)).not.toContain("create_pull_request");
   });
 
   test("omits GitHub platform tools when repo_url has missing segments", async () => {
@@ -303,9 +307,7 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.allowedTools).not.toContain(
-      "mcp__soleur_platform__create_pull_request",
-    );
+    expect(registeredPlatformTools(options)).not.toContain("create_pull_request");
   });
 
   test("omits GitHub platform tools when repo_url is not a valid URL", async () => {
@@ -321,9 +323,7 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.allowedTools).not.toContain(
-      "mcp__soleur_platform__create_pull_request",
-    );
+    expect(registeredPlatformTools(options)).not.toContain("create_pull_request");
   });
 
   test("omits GitHub platform tools when repo_url owner contains special characters", async () => {
@@ -339,9 +339,7 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.allowedTools).not.toContain(
-      "mcp__soleur_platform__create_pull_request",
-    );
+    expect(registeredPlatformTools(options)).not.toContain("create_pull_request");
   });
 
   test("canUseTool allows plugin MCP tools from registered servers", async () => {
@@ -476,9 +474,13 @@ describe("agent-runner MCP tool wiring", () => {
     await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
-    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_add_goal");
-    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_get_stats");
+    // Registered, but gated (the user's own account-wide PLAUSIBLE_API_KEY, no per-site scoping) and therefore NOT pre-approved (#11303).
+    expect(registeredPlatformTools(options)).toEqual(
+      expect.arrayContaining(["plausible_create_site", "plausible_add_goal", "plausible_get_stats"]),
+    );
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__plausible_create_site");
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__plausible_add_goal");
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__plausible_get_stats");
   });
 
   test("Plausible tools registered even without GitHub installation", async () => {
@@ -501,9 +503,9 @@ describe("agent-runner MCP tool wiring", () => {
     await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
-    // PR tool should NOT be present (no GitHub installation)
-    expect(options.allowedTools).not.toContain("mcp__soleur_platform__create_pull_request");
+    expect(registeredPlatformTools(options)).toContain("plausible_create_site");
+    // PR tool should NOT be registered (no GitHub installation)
+    expect(registeredPlatformTools(options)).not.toContain("create_pull_request");
   });
 
   test("Plausible tools not registered when user has no PLAUSIBLE_API_KEY", async () => {
@@ -518,8 +520,8 @@ describe("agent-runner MCP tool wiring", () => {
     await startAgentSession("11111111-1111-4111-8111-111111111111", "conv-1", "cpo");
 
     const options = mockQuery.mock.calls[0][0].options;
-    const allowed = options.allowedTools ?? [];
-    expect(allowed).not.toContain("mcp__soleur_platform__plausible_create_site");
+    expect(registeredPlatformTools(options)).not.toContain("plausible_create_site");
+    expect(options.allowedTools ?? []).not.toContain("mcp__soleur_platform__plausible_create_site");
   });
 
   test("canUseTool allows Plausible MCP tools when registered", async () => {

@@ -659,7 +659,7 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 23 entries, all GitHub Actions (15368), and NO CodeQL row
+# T-rsc-7: real canonical RSC has 10 entries, all GitHub Actions (15368), and NO CodeQL row
 # (#9454: CodeQL is advisory; a merge queue and a required CodeQL context are mutually exclusive).
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
 # (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
@@ -693,7 +693,11 @@ t_rsc_order_insensitive() {
 # the Inngest SYNTHETIC_CHECK_NAMES path deliberately EXCLUDES this name so
 # re-vendor PRs earn it via real CI on App-token pushes, #8166);
 # bumped 24->23 by #9454 (the `CodeQL` row was REMOVED when the merge queue was
-# adopted — CodeQL cannot report a status on `merge_group`, codeql-action#1537).
+# adopted — CodeQL cannot report a status on `merge_group`, codeql-action#1537);
+# bumped 23->10 by #12089 (the 16 folded small-guard contexts were consolidated
+# into the three umbrella contexts guards-ruleset / quality-guards /
+# secret-guards in the same PR that produced them — ADR-032 amendment
+# 2026-11-06; per-member history above records each member's lineage).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -711,10 +715,10 @@ t_rsc_real_canonical_shape() {
   codeql_rows=$(jq '[.[] | select(.context=="CodeQL")] | length' < "$real")
   # Every check is a GitHub Actions context (15368). CodeQL (GHAS 57789) is NOT required.
   non_15368_apps=$(jq -r '[.[] | select(.integration_id != 15368) | .context] | join(",")' < "$real")
-  if [[ "$n" == "23" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
-    _report "T-rsc-7 real canonical RSC: 23 entries, no CodeQL row, all 15368" ok
+  if [[ "$n" == "10" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
+    _report "T-rsc-7 real canonical RSC: 10 entries, no CodeQL row, all 15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 23 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
+    _report "T-rsc-7 real canonical RSC: 10 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
   fi
 }
 
@@ -883,15 +887,17 @@ _mq_guard2() {
     MQ_REASON="README params != tf: $(diff <(echo "$tf_p") <(echo "$rd_p") | tr '\n' ' ')"; return 1
   fi
   # SAFETY VALUES (not just parity: three sources can agree on a dangerous value).
-  #  - max_entries_to_merge == 1: merge-queue-cla-verify.sh takes the PR number from head_ref, which is exact only
-  #    for a one-PR group.
+  #  - max_entries_to_merge in {1,3}: merge-queue-cla-verify.sh enumerates group members
+  #    (head_ref names only the deepest), so multi-PR groups are supported — but the set is
+  #    deliberately {1,3} so an unsanctioned raise still fails while a value-only 1<->3
+  #    rollback/re-raise needs no guard edit (#11678 adoption window).
   #  - merge_method == SQUASH: matches `gh pr merge --squash` and the repo's linear-history contract.
   #  - check_response_timeout_minutes > the stall probe's threshold: else the probe cannot report before the queue
   #    ejects the entry silently.
   local me mm to thr
   me=$(_mq_val "$tf_p" max_entries_to_merge); mm=$(_mq_val "$tf_p" merge_method); to=$(_mq_val "$tf_p" check_response_timeout_minutes)
-  if [[ "$me" != "1" ]]; then
-    MQ_REASON="max_entries_to_merge=$me, must be 1 (the CLA verify takes the PR number from head_ref; a larger group batches PRs)"; return 1
+  if [[ "$me" != "1" && "$me" != "3" ]]; then
+    MQ_REASON="max_entries_to_merge=$me, must be in {1,3} (sanctioned set; the CLA verify enumerates group members — an unsanctioned raise is a deliberate act needing this guard's own edit)"; return 1
   fi
   if [[ "$mm" != "SQUASH" ]]; then MQ_REASON="merge_method=$mm, must be SQUASH"; return 1; fi
   thr=$(_mq_stall_threshold "$wf")
@@ -1037,9 +1043,9 @@ t_mq_mutations() {
     'FN:_mq_mut_commented_old_block'
   # 9-11 — SAFETY VALUES, changed consistently in all three sources so PARITY still holds and only
   # the safety assertion can catch it.
-  _mq_mutation "T-mq-1.m9 max_entries_to_merge 1 -> 2 in tf+DR+README (parity holds) -> RED on the safety value" \
+  _mq_mutation "T-mq-1.m9 max_entries_to_merge -> 7 in tf+DR+README (parity holds, unsanctioned value) -> RED on the safety value" \
     'max_entries_to_merge' tf,dr,readme \
-    's/(max_entries_to_merge[[:space:]]*=[[:space:]]*)1/\12/; s/("max_entries_to_merge":[[:space:]]*)1/\12/; s/^(\|[[:space:]]*`max_entries_to_merge`[[:space:]]*\|[[:space:]]*`)1/\12/'
+    's/(max_entries_to_merge[[:space:]]*=[[:space:]]*)[0-9]+/\17/; s/("max_entries_to_merge":[[:space:]]*)[0-9]+/\17/; s/^(\|[[:space:]]*`max_entries_to_merge`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\17/'
   _mq_mutation "T-mq-1.m10 merge_method SQUASH -> MERGE in tf+DR+README (parity holds) -> RED on the safety value" \
     'merge_method' tf,dr,readme \
     's/(merge_method[[:space:]]*=[[:space:]]*")SQUASH/\1MERGE/; s/("merge_method":[[:space:]]*")SQUASH/\1MERGE/; s/^(\|[[:space:]]*`merge_method`[[:space:]]*\|[[:space:]]*`)SQUASH/\1MERGE/'
@@ -1169,7 +1175,7 @@ resource "x" "y" {
       grouping_strategy                 = "ALLGREEN"
       min_entries_to_merge_wait_minutes = 0
       min_entries_to_merge              = 1
-      max_entries_to_merge              = 1
+      max_entries_to_merge              = 3
     }
   }
 }
@@ -1181,7 +1187,7 @@ cat > "$skeleton" << 'EOF'
     {"type": "merge_queue", "parameters": {
       "min_entries_to_merge_wait_minutes": 0, "max_entries_to_build": 2,
       "check_response_timeout_minutes": 60, "merge_method": "SQUASH",
-      "grouping_strategy": "ALLGREEN", "max_entries_to_merge": 1, "min_entries_to_merge": 1}},
+      "grouping_strategy": "ALLGREEN", "max_entries_to_merge": 3, "min_entries_to_merge": 1}},
     {"type": "required_status_checks", "parameters": {"required_status_checks": []}}
   ]
 }
@@ -1195,7 +1201,7 @@ FIX
 | `merge_method` | `SQUASH` |
 | `min_entries_to_merge_wait_minutes` | `0` |
 | `grouping_strategy` | `ALLGREEN` |
-| `max_entries_to_merge` | `1` |
+| `max_entries_to_merge` | `3` |
 | `min_entries_to_merge` | `1` |
 FIX
   printf '%s' '[{"context":"test","integration_id":15368}]' > "$d/canon"

@@ -31,6 +31,7 @@ import {
   type CaptureStatus,
 } from "@/server/claude-cost-marker";
 import { budgetFlags } from "@/server/inngest/cron-budgets";
+import { UNTRUSTED_PREAMBLES } from "@/server/untrusted-content";
 
 export interface SpawnResult {
   ok: boolean;
@@ -1421,7 +1422,20 @@ async function spawnClaudeEvalUnguarded(args: {
         : ["--output-format", "json"];
       const child = spawn(
         claudeBin,
-        ["--strict-mcp-config", ...budget, ...outputFormatFlags, ...flags, prompt],
+        [
+          "--strict-mcp-config",
+          // Untrusted-data caution for GitHub-sourced text (issue/PR/comment/CI-log) any
+          // cron may read with gh. A system-prompt append, NOT a prompt prefix: several
+          // crons pass a `/soleur:…` slash command as the prompt, and prepending text would
+          // stop the CLI recognising it (and change the single-flight prompt key). Single
+          // value, placed before `--print` and any variadic --allowedTools. #10194.
+          "--append-system-prompt",
+          UNTRUSTED_PREAMBLES.github,
+          ...budget,
+          ...outputFormatFlags,
+          ...flags,
+          prompt,
+        ],
         {
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],

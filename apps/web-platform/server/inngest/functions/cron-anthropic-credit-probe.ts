@@ -158,12 +158,10 @@ export const cronAnthropicCreditProbe = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "47 * * * *" },
+      { event: "cron/anthropic-credit-probe.manual-trigger" },
+    ],
   },
-  [
-    { cron: "47 * * * *" },
-    { event: "cron/anthropic-credit-probe.manual-trigger" },
-  ],
-  cronAnthropicCreditProbeHandler as unknown as Parameters<
-    typeof inngest.createFunction
-  >[2],
+  cronAnthropicCreditProbeHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

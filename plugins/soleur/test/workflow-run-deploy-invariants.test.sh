@@ -328,7 +328,7 @@ fi
 # DEFAULT-BRANCH TIP. That line silently deploys a commit CI never verified,
 # while the definition count stays at 1 and the dispatch branch still mentions
 # the name, so both existing bounds hold.
-_disp_lo=$(grep -n 'EVENT_NAME" = "workflow_dispatch"' "$W/resolve.code" | head -1 | cut -d: -f1)
+_disp_lo=$(grep -n '\$EVENT_NAME" = "workflow_dispatch"' "$W/resolve.code" | head -1 | cut -d: -f1)
 _disp_hi=$(awk -v lo="${_disp_lo:-0}" 'NR>lo && /^          fi$/{print NR; exit}' "$W/resolve.code")
 if [ -n "$_disp_lo" ] && [ -n "$_disp_hi" ]; then pass; else
   fail "G3 could not locate the workflow_dispatch branch span (lo='${_disp_lo:-}' hi='${_disp_hi:-}') — the read-scope row below would be vacuous"
@@ -478,7 +478,7 @@ esac
 # RELEASE_PATH_FILTER. B8 in scripts/prod-version-drift-check.test.sh binds
 # path_filter to the drift checker's PATHSPEC, a separate file (the anchor).
 _pc=$(python3 - "$REL" <<'PYPC'
-import sys, yaml
+import re, sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 on = d.get(True) or d.get("on")      # PyYAML reads the bare `on:` key as boolean True
 pf = d["jobs"]["release"]["with"]["path_filter"]
@@ -487,6 +487,51 @@ res = next(s for s in rt if s.get("id") == "resolve")
 rpf = res.get("env", {}).get("RELEASE_PATH_FILTER", "")
 co = [s for s in rt if str(s.get("uses", "")).startswith("actions/checkout@")]
 depth = "missing" if len(co) != 1 else str((co[0].get("with") or {}).get("fetch-depth", "unset"))
+# P4 — the checkout's trust gate (CodeQL #216 + #332, actions/untrusted-checkout).
+# The medium query's sink is a `ref:`/`repository:` expression that textually
+# names a head-SHA source (github.event.workflow_run.head_sha, \bhead_sha\b,
+# merge_sha, head.sha) — OR whose field/step/job identifier matches
+# .*(head|sha|commit).* (ActionsSHACheckout) or .*(head|branch|ref).*
+# (ActionsMutableRefCheckout): #216 was the taint arm, #332 fired on the
+# field-name arm via `deploy_sha`. The query carries NO `if:` sanitizer and NO
+# persist-credentials sanitizer, so the ONLY structural fix is a `ref:` that
+# reads the gate-validated value under an identifier matching none of
+# head|sha|commit|branch|ref. Asserted by exact string equality on the `if:`/
+# `ref:` so ANY event-field spelling returns RED; the negative-token clause on
+# the extracted steps.<id>.outputs.<name> identifier (id AND name — the
+# heuristic tests both) is the latent guard that names the property itself —
+# if the equality is ever relaxed, only token-clean renames stay green. The
+# name `deploy_target` IS the fix.
+# `gate_ok` anchors on `^\s*emit deploy_target` — a bare substring would pass
+# a literal `echo "deploy_target=$WR_HEAD_SHA" >> $GITHUB_OUTPUT` refactor,
+# which FlowSteps.qll's envToOutputStoreStep DOES model (the `emit`
+# indirection is load-bearing, not style — #332's second precondition).
+gts = [s for s in rt if s.get("id") == "gate"]
+co_if = str(co[0].get("if", "")) if len(co) == 1 else ""
+co_ref = str((co[0].get("with") or {}).get("ref", "")) if len(co) == 1 else ""
+gts_run = str(gts[0].get("run", "")) if len(gts) == 1 else ""
+gate_ok = (len(gts) == 1
+           and re.search(r"^\s*emit deploy_target\b", gts_run, re.M) is not None
+           and "trusted" in gts_run)
+_m = re.fullmatch(r"\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)\s*\}\}", co_ref)
+name_ok = (_m is not None
+           and not re.search(r"(head|sha|commit|branch|ref)", _m.group(1), re.I)
+           and not re.search(r"(head|sha|commit|branch|ref)", _m.group(2), re.I))
+ref_ok = (co_if == "steps.gate.outputs.trusted == 'true'"
+          and co_ref == "${{ steps.gate.outputs.deploy_target }}"
+          and name_ok)
+print("P4=" + ("ok" if gate_ok and ref_ok else "gate_steps=%d co.if=%r co.ref=%r" % (len(gts), co_if, co_ref)))
+# P5 — verify-doppler-secrets' job-level trusted-shape gate. It EXECUTES a
+# script from its checked-out tree under `doppler run -c prd`, so the gate
+# must sit on the job `if:` — the only expression evaluated before its steps
+# materialize the tree.
+vds_if = " ".join(str((d["jobs"].get("verify-doppler-secrets") or {}).get("if", "")).split())
+vds_co = [s for s in (d["jobs"].get("verify-doppler-secrets") or {}).get("steps", []) if str(s.get("uses", "")).startswith("actions/checkout@")]
+vds_pc = str((vds_co[0].get("with") or {}).get("persist-credentials", "unset")) if len(vds_co) == 1 else "multi"
+p5 = ("github.event.workflow_run.event == 'push'" in vds_if
+      and "github.event.workflow_run.head_branch == 'main'" in vds_if
+      and vds_pc.lower() == "false")
+print("P5=" + ("ok" if p5 else "vds.if=%r persist-credentials=%r" % (vds_if, vds_pc)))
 trans, bad = [], []
 paths = on["push"]["paths"]
 # ORDER MATTERS in GitHub path filters: a later pattern overrides an earlier one, so a
@@ -514,6 +559,7 @@ else:
 PYPC
 )
 _p1=$(printf '%s\n' "$_pc" | sed -n 's/^P1=//p'); _p2=$(printf '%s\n' "$_pc" | sed -n 's/^P2=//p'); _p3=$(printf '%s\n' "$_pc" | sed -n 's/^P3=//p')
+_p4=$(printf '%s\n' "$_pc" | sed -n 's/^P4=//p'); _p5=$(printf '%s\n' "$_pc" | sed -n 's/^P5=//p')
 if [ "$_p1" = "ok" ]; then pass; else
   fail "P1 resolve-target's RELEASE_PATH_FILTER is not byte-identical to jobs.release.with.path_filter ($_p1) — the empty-lookup diff would decide 'docs-only' against a different definition than the release gate uses"
 fi
@@ -523,6 +569,12 @@ case "$_p2" in
 esac
 if [ "$_p3" = "ok" ]; then pass; else
   fail "P3 on.push.paths and path_filter disagree ($_p3) — the clean skip now depends on path_filter meaning exactly what on.push.paths means. Globs other than 'X/**' and '!X/**' are a translation FAIL, not a skip"
+fi
+if [ "$_p4" = "ok" ]; then pass; else
+  fail "P4 resolve-target's checkout is not gated on the upstream event's trust shape ($_p4) — CodeQL #216+#332 (actions/untrusted-checkout): a ref: naming an event head-SHA is the taint-arm sink, and a steps.<id>.outputs.<name> identifier matching .*(head|sha|commit).* / .*(head|branch|ref).* is the field-name sink (#332 fired on deploy_sha). The gate step must emit trusted+deploy_target, the checkout must carry if: steps.gate.outputs.trusted == 'true' and ref: \${{ steps.gate.outputs.deploy_target }}, and the output identifier must match none of head|sha|commit|branch|ref"
+fi
+if [ "$_p5" = "ok" ]; then pass; else
+  fail "P5 verify-doppler-secrets is not gated on the upstream event's trust shape ($_p5) — it executes a script from the checked-out tree under doppler run -c prd, so its job if: must require github.event.workflow_run.event == 'push' AND head_branch == 'main', and its checkout must pin persist-credentials: false"
 fi
 
 # ═══ WIRING OF THE RESOLVE STEP (2026-09-24 review) ════════════════════════════
@@ -1206,10 +1258,13 @@ TOTAL=$((passes + fails))
 # + 2 G8 fallback-read rows (must-PASS, must-RED) = 75
 # + 5 resolve-step wiring (W1 outputs declared, W2 one no_release_run producer,
 #   W3 no continue-on-error/if, W4 CAUSE arms, W5 NEXT arms) = 80
+# + 2 checkout trust-gate pins (P4 resolve-target gate/if/ref shape, P5
+#   verify-doppler-secrets trusted-shape if: + persist-credentials; CodeQL #216+#332)
+#   = 82
 # The previous itemisation summed to 40 while the suite executed 41 — a floor
 # below the real count is slack an undispatched row can hide in, which is the
 # same failure mode the floor exists to catch.
-MIN_ROWS=80
+MIN_ROWS=82
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor — %d rows executed, at least %d required. The suite this replaced floored at 14; a successor may raise it, never lower it.\n' "$TOTAL" "$MIN_ROWS" >&2
   exit 1

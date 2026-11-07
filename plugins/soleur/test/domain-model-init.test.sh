@@ -20,6 +20,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${WORK:-}" ]] || rm -rf "$WORK"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -33,7 +39,6 @@ if [[ "$FAIL" -gt 0 ]]; then print_results; fi
 
 export TMPDIR="${TMPDIR:-/var/tmp}"
 WORK="$(mktemp -d -t dminit.XXXXXXXX)" || { echo "FATAL: mktemp failed"; exit 2; }
-trap 'rm -rf "$WORK"' EXIT
 
 REG_REL="knowledge-base/engineering/architecture/domain-model.md"
 mkdir -p "$WORK/repo/knowledge-base/engineering/architecture" || { echo "FATAL: mkdir failed"; exit 2; }

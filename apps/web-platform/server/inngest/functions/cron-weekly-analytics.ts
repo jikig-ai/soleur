@@ -281,10 +281,10 @@ export const cronWeeklyAnalytics = inngest.createFunction(
       { scope: "account", key: '"cron-platform"', limit: 1 },
     ],
     retries: 1,
+    triggers: [
+      { cron: "0 6 * * 1" },
+      { event: "cron/weekly-analytics.manual-trigger" },
+    ],
   },
-  [
-    { cron: "0 6 * * 1" },
-    { event: "cron/weekly-analytics.manual-trigger" },
-  ],
-  cronWeeklyAnalyticsHandler as unknown as Parameters<typeof inngest.createFunction>[2],
+  cronWeeklyAnalyticsHandler as unknown as Parameters<typeof inngest.createFunction>[1],
 );

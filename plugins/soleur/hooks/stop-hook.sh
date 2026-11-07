@@ -354,13 +354,20 @@ if [[ -f "$TALLY_SCRIPT" ]]; then
   fi
 fi
 
+# Constant reminder appended to the MODEL-VISIBLE `reason` on every iteration (ADR-084 addendum, 2026-10-26; CTO ruling B3c).
+# The repo-local closing gate judges only the first Stop of a chain, and inside this loop every later Stop is unjudged, so the
+# control at the carrier boundary is this reminder plus the pre-check in section 8.1b of the delegation reference. `systemMessage`
+# is user-visible only, so the reminder never goes there. One physical line, single-quoted: no backtick, apostrophe or angle bracket.
+REMINDER='Before ending a turn with Blocked: or Paused:, class every decision the reason leaves to the operator. Send the technical ones to soleur:engineering:cto first (legal ones to soleur:legal:clo) and name only the operator-only remainder. See section 8.1b of skills/brainstorm-techniques/references/technical-ruling-delegation.md in the Soleur plugin.'
+
 # Output JSON to block the stop and feed prompt back
 jq -n \
   --arg prompt "$PROMPT_TEXT" \
+  --arg rem "$REMINDER" \
   --arg msg "$SYSTEM_MSG" \
   '{
     "decision": "block",
-    "reason": $prompt,
+    "reason": ($prompt + "\n\n" + $rem),
     "systemMessage": $msg
   }'
 

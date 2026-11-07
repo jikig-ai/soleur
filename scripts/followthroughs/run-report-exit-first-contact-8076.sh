@@ -117,7 +117,7 @@ fi
 # (Runs AFTER the deny-row read below so a missing report can be told apart
 # from a denied one.)
 for label in scheduled-architecture-diagram-sync scheduled-roadmap-review; do
-  rows="$(gh api "search/issues?q=repo:${REPO}+is:issue+label:${label}+created:>=${MERGE_FLOOR}&per_page=5" \
+  rows="$(gh api --paginate "search/issues?q=repo:${REPO}+is:issue+label:${label}+created:>=${MERGE_FLOOR}&per_page=5" \
             --jq '[.items[] | {number, labels: [.labels[].name]}]' 2>&1)" || {
     echo "NOT YET: GitHub search failed for ${label}: ${rows:0:200}"; exit 2; }
   n="$(jq -r 'length' <<<"$rows" 2>/dev/null || true)"
@@ -149,7 +149,7 @@ done
 # SUCCESS-bodied. (A ">= 25 closed" threshold was unreachable — 36 of the 43
 # were FAILED-bodied and 3 more human-commented — and would have paged a
 # false alarm on first fire.)
-closed_rows="$(gh api "search/issues?q=repo:${REPO}+is:issue+is:closed+label:scheduled-community-monitor+%22soleur:auto-close-run-report%22+in:comments&per_page=100" \
+closed_rows="$(gh api --paginate "search/issues?q=repo:${REPO}+is:issue+is:closed+label:scheduled-community-monitor+%22soleur:auto-close-run-report%22+in:comments&per_page=100" \
             --jq '[.items[] | {number, failed: ((.body // "") | startswith("'"$FAILED_PREFIX"'"))}]' 2>&1)" || {
   echo "NOT YET: GitHub search failed (AC19): ${closed_rows:0:200}"; exit 2; }
 closed="$(jq -r 'length' <<<"$closed_rows" 2>/dev/null || true)"

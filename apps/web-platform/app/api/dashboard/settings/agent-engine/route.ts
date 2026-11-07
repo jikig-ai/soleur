@@ -72,9 +72,17 @@ export async function PUT(request: Request) {
       return NextResponse.json({ error: "auth_mode_unsupported" }, { status: 400 });
     }
     const repository = new AgentEnginePersistenceRepository(resolved.supabase as unknown as PersistenceClient);
-    if (authMode === undefined) await repository.setDefaultEngine(resolved.workspaceId, definition.id);
-    else await repository.setDefaultEngine(resolved.workspaceId, definition.id, authMode);
-    return NextResponse.json({ defaultEngineId: definition.id, ...(authMode ? { defaultAuthMode: authMode } : {}) });
+    // The RPC defaults p_auth_mode to 'managed' and overwrites the stored value, so a PUT carrying only
+    // engineId would silently reset a stored 'api-key' to 'managed' (#11591: the stored mode now selects
+    // the leased credential). Preserve the current default when the new engine supports it.
+    let effectiveAuthMode = authMode;
+    if (effectiveAuthMode === undefined) {
+      const current = await repository.getDefaultAuthMode(resolved.workspaceId);
+      if (current !== null && definition.authModes.includes(current)) effectiveAuthMode = current;
+    }
+    if (effectiveAuthMode === undefined) await repository.setDefaultEngine(resolved.workspaceId, definition.id);
+    else await repository.setDefaultEngine(resolved.workspaceId, definition.id, effectiveAuthMode);
+    return NextResponse.json({ defaultEngineId: definition.id, ...(effectiveAuthMode ? { defaultAuthMode: effectiveAuthMode } : {}) });
   } catch (error) {
     if (error instanceof Error && error.message === "engine_unknown") {
       return NextResponse.json({ error: "engine_unknown" }, { status: 400 });

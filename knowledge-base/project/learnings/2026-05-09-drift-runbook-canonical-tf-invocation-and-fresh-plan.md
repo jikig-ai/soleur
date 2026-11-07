@@ -58,6 +58,7 @@ The plan's own halt condition (Phase 1 step 4: "if the plan output contains *any
 ### For Gap 1 — canonical invocation triplet
 
 Use this exact pattern in any plan whose Phase 1 talks to `apps/web-platform/infra/` via Doppler `prd_terraform`:
+> **Superseded in part (2026-10-24, #10979):** still correct for READ-ONLY invocations (plan, init, state pull). For state-WRITING invocations (apply, import, state push) the `prd_terraform` `AWS_*` pair is intentionally read-only post-O5b and PUTs 403 — export `AWS_*` from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` instead (canonical form: `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` §Local Terraform invocation).
 
 ```bash
 # 1. Export R2 backend creds RAW (name-transformer would otherwise mangle them).

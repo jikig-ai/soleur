@@ -29,6 +29,10 @@ trap 'rm -rf "$TMP"' EXIT
 
 # A resource_change object with the given address + actions array.
 rc_obj() { printf '{"address":"%s","change":{"actions":[%s]}}' "$1" "$2"; }
+# A token resource_change that also carries the planned `access` (#11831: the gate pins it on any
+# plan entry that creates the token). `access` is a configured literal, so it is present in .after at
+# plan time even on a first replace.
+tok_obj() { printf '{"address":"%s","change":{"actions":[%s],"after":{"access":"%s"}}}' "$1" "$2" "$3"; }
 
 # The 4 allowed replaces (server + 2 id-referencing dependents + the token whose ForceNew
 # access change CAUSES the recreate, #6178), each delete+create.
@@ -40,7 +44,7 @@ srv_replace() { printf '{"address":"hcloud_server.inngest","change":{"actions":[
 SERVER_REPLACE="$(srv_replace "{\"firewall_ids\":[${FW_ID}]}"),${FW_NOOP}"
 NET_REPLACE="$(rc_obj 'hcloud_server_network.inngest' '"delete","create"')"
 VA_REPLACE="$(rc_obj 'hcloud_volume_attachment.inngest_redis_luks' '"delete","create"')"
-TOKEN_REPLACE="$(rc_obj 'doppler_service_token.inngest' '"delete","create"')"
+TOKEN_REPLACE="$(tok_obj 'doppler_service_token.inngest' '"delete","create"' 'read')"
 
 write_plan() { printf '{"resource_changes":[%s]}' "$1" > "$TMP/plan.json"; }
 
@@ -72,6 +76,220 @@ if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
   fail "T1c: a non-inngest doppler_service_token change must ABORT (rc=1) — allow-set is exact-equality"
 else
   pass
+fi
+
+# --- Flip-token split (ADR-282 addendum 2026-10-30, #9927 item 4). The FLIP token is a SECOND
+#     doppler_service_token upstream of the server's user_data, admitted by exact equality like the
+#     boot token. On the first replace after the split the boot token is delete+create (its `access`
+#     is ForceNew) and the flip token is a plain create; a later flip-only rotation is delete+create.
+#     The plan is STILL required to replace the server, so admitting the address cannot let a
+#     destructive plan through (T1h pins that direction). ---
+FLIP_CREATE="$(tok_obj 'doppler_service_token.inngest_flip' '"create"' 'read/write')"
+FLIP_REPLACE="$(tok_obj 'doppler_service_token.inngest_flip' '"delete","create"' 'read/write')"
+
+# --- Test 1d: PASS — the first replace after the split: server + deps, boot token delete+create,
+#     flip token create. ---
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${TOKEN_REPLACE},${FLIP_CREATE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T1d: server replace + boot token delete/create + flip token create should PASS (rc=0)"
+fi
+
+# --- Test 1e: PASS — a flip-token rotation: flip delete+create with the server replaced. ---
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FLIP_REPLACE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  pass
+else
+  fail "T1e: server replace + flip token delete/create should PASS (rc=0)"
+fi
+
+# --- Test 1f: FAIL — a LOOKALIKE address after a compliant flip token must still ABORT (exact
+#     equality, mirrors T1c: a prefix/substring match on `inngest_flip` would admit it). ---
+LOOKALIKE_TOKEN="$(rc_obj 'doppler_service_token.inngest_flip_x' '"create"')"
+write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${FLIP_CREATE},${LOOKALIKE_TOKEN}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T1f: doppler_service_token.inngest_flip_x (lookalike) must ABORT (rc=1) — allow-set is exact-equality"
+else
+  pass
+fi
+
+# --- Test 1g: FAIL — the flip token is created but the server is NOT replaced. The token alone
+#     must never be a path to a green plan (fixture direction). ---
+write_plan "$(rc_obj 'hcloud_server.inngest' '"no-op"'),${FLIP_CREATE}"
+if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then
+  fail "T1g: a flip token create WITHOUT a server replace must ABORT (rc=1)"
+else
+  pass
+fi
+
+# --- Test 1h: MUTATION — delete the address from the gate's def allow in a COPY and the T1d plan
+#     must ABORT. Proves T1d is graded by the allow-set entry, not by something incidental (a
+#     gate that admitted every doppler_service_token would pass T1d AND T1c's twin, so T1c/T1f
+#     cover the other direction). The copy is sourced in a subshell so the real gate stays loaded. ---
+MUT="$TMP/mut"; mkdir -p "$MUT"
+cp "${DIR:?}/lib/inngest-host-replace-gate.sh" "${DIR:?}/lib/plan-gate-preamble.sh" "${MUT:?}/"
+sed -i '/"doppler_service_token\.inngest_flip"/d' "$MUT/inngest-host-replace-gate.sh"
+if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT/inngest-host-replace-gate.sh"; then
+  fail "T1h: HARNESS ABORT — the mutation did not land (the gate does not name doppler_service_token.inngest_flip)"
+else
+  write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${TOKEN_REPLACE},${FLIP_CREATE}"
+  _t1h_rc=0; _t1h_out="$( source "$MUT/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" 2>&1 )" || _t1h_rc=$?
+  if [[ "$_t1h_rc" -eq 0 ]]; then
+    fail "T1h: with the address removed from def allow, the T1d plan must ABORT (the allow-set entry is what admits it)"
+  elif [[ "$_t1h_out" != *"reason=inngest_out_of_scope_changes"* ]]; then
+    fail "T1h: the T1d plan aborted for the wrong reason with the address removed (want inngest_out_of_scope_changes): ${_t1h_out}"
+  else
+    pass
+  fi
+fi
+
+# --- Tests 1i-1p (CTO R10, review round): PER-ADDRESS ACTIONS for BOTH Doppler tokens. Allow-set
+#     membership only says an address may appear; `doppler_token_touched` says what it may do
+#     (no-op | create | replace). Each ABORT fixture is the compliant T1d plan with ONE token action
+#     swapped, so a gate that ignored the class would pass it. The reason token is asserted too: an
+#     ABORT for the wrong counter would hide a counter that does not fire. ---
+BASE_PLAN="${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE}"
+expect_token_abort() { # <label> <token resource_change objects>
+  write_plan "${BASE_PLAN},$2"
+  local out; out=$(inngest_host_replace_gate "$TMP/plan.json" 2>&1); local rc=$?
+  if [[ "$rc" -ne 0 && "$out" == *"reason=doppler_token_touched"* ]]; then pass
+  else fail "$1: must ABORT with reason=doppler_token_touched (rc=${rc}): ${out}"; fi
+}
+expect_token_pass() { # <label> <token resource_change objects>
+  write_plan "${BASE_PLAN},$2"
+  if inngest_host_replace_gate "$TMP/plan.json" >/dev/null; then pass
+  else fail "$1: must PASS (rc=0)"; fi
+}
+expect_token_abort "T1i: flip token update"  "$(rc_obj 'doppler_service_token.inngest_flip' '"update"')"
+expect_token_abort "T1j: flip token delete"  "$(rc_obj 'doppler_service_token.inngest_flip' '"delete"')"
+expect_token_abort "T1k: flip token forget"  "$(rc_obj 'doppler_service_token.inngest_flip' '"forget"')"
+expect_token_abort "T1l: boot token forget"  "$(rc_obj 'doppler_service_token.inngest' '"forget"')"
+expect_token_abort "T1m: boot token update"  "$(rc_obj 'doppler_service_token.inngest' '"update"')"
+expect_token_pass  "T1n: flip token create"        "$(tok_obj 'doppler_service_token.inngest_flip' '"create"' 'read/write')"
+expect_token_pass  "T1o: flip token delete+create" "$(tok_obj 'doppler_service_token.inngest_flip' '"delete","create"' 'read/write')"
+expect_token_pass  "T1p: boot token no-op"         "$(rc_obj 'doppler_service_token.inngest' '"no-op"')"
+expect_token_pass  "T1o2: boot token create+delete (either replace order)" "$(tok_obj 'doppler_service_token.inngest' '"create","delete"' 'read')"
+expect_token_pass  "T1o3: flip token create+delete (either replace order)" "$(tok_obj 'doppler_service_token.inngest_flip' '"create","delete"' 'read/write')"
+
+# --- Test 1q: MUTATION — drop the doppler_token_touched PASS conjunct in a COPY: the T1k plan (flip
+#     forget, which the allow-set alone admits) must then PASS, proving the counter is what aborts it. ---
+MUT2="$TMP/mut2"; mkdir -p "$MUT2"
+cp "${DIR:?}/lib/inngest-host-replace-gate.sh" "${DIR:?}/lib/plan-gate-preamble.sh" "${MUT2:?}/"
+sed -i 's/ \&\& "\$dtt" -eq 0//' "$MUT2/inngest-host-replace-gate.sh"
+if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT2/inngest-host-replace-gate.sh"; then
+  fail "T1q: HARNESS ABORT — the mutation did not land (the gate has no '\$dtt -eq 0' conjunct)"
+else
+  write_plan "${BASE_PLAN},$(rc_obj 'doppler_service_token.inngest_flip' '"forget"')"
+  if ( source "$MUT2/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" >/dev/null ); then
+    pass
+  else
+    fail "T1q: with the dtt conjunct removed the flip-forget plan should PASS (proves the counter is the only thing aborting it)"
+  fi
+fi
+
+# --- Test 1r: the counter's WIRING. T1q proves the PASS conjunct; this proves the counter is also in
+#     plan_gate_assert_numeric. Without that member an uncomputed counter is the empty string and
+#     [[ "" -eq 0 ]] is TRUE, so a jq that stops emitting it would let a token update through.
+#     (a) source pin on the assert call; (b) behavioural twin of C16: with the counter emptied the gate
+#     must ABORT naming it, on an otherwise COMPLIANT plan (so nothing else can be the aborting counter). ---
+GATE_CODE_ONE_LINE="$(grep -v '^[[:space:]]*#' "${DIR:?}/lib/inngest-host-replace-gate.sh" | tr '\n' ' ')"
+if grep -q 'plan_gate_assert_numeric[^;]*"doppler_token_touched=\${dtt}"' <<<"$GATE_CODE_ONE_LINE"; then
+  pass
+else
+  fail "T1r: doppler_token_touched is not a member of the plan_gate_assert_numeric call (an uncomputed counter would coerce to zero)"
+fi
+write_plan "${BASE_PLAN},$(rc_obj 'doppler_service_token.inngest' '"no-op"')"
+awk -v n="jq -r '.doppler_token_touched'" '{ if (index($0, n)) sub(n, "jq -r '"'"'empty'"'"'"); print }' "${DIR:?}/lib/inngest-host-replace-gate.sh" > "$TMP/mutated-dtt.sh"
+if cmp -s "$TMP/mutated-dtt.sh" "${DIR:?}/lib/inngest-host-replace-gate.sh"; then
+  fail "T1r2: the empty-dtt mutation matched NOTHING in the gate; the extraction shape drifted"
+else
+  _rc=0; _out="$(bash -c "source '${DIR:?}/lib/plan-gate-preamble.sh'; source '$TMP/mutated-dtt.sh'; inngest_host_replace_gate '$TMP/plan.json'" 2>&1)" || _rc=$?
+  if [[ "$_rc" -eq 1 && "$_out" == *"counter parse failed"* && "$_out" == *"doppler_token_touched=''"* ]]; then
+    pass
+  else
+    fail "T1r2: an empty doppler_token_touched must ABORT naming it (rc=${_rc}): ${_out}"
+  fi
+fi
+
+# --- Tests 1s-1x, 1r3, 1y-1z (#11831): the ACCESS PIN. `doppler_token_touched` constrains the ACTION on
+#     both token addresses and says nothing about the access LEVEL. A flip token minted `read`, or a boot
+#     token left `read/write`, is only caught today by the owner's pre-go read of inngest-host.tf; if
+#     missed it surfaces as repeated unexpected-exit(from=flushed) rows after op=resume with the
+#     scheduler already started. The gate now pins `.change.after.access` on any plan entry that
+#     CREATES the token (create, delete+create, create+delete): flip == "read/write", boot == "read".
+#     A missing/unreadable after.access reads as "" and fails closed. A no-op token is not judged. ---
+expect_access_abort() { # <label> <token resource_change objects> [expected offender text on the ABORT output]
+  write_plan "${BASE_PLAN},$2"
+  local out; out=$(inngest_host_replace_gate "$TMP/plan.json" 2>&1); local rc=$?
+  if [[ "$rc" -ne 0 && "$out" == *"reason=doppler_token_access"* && ( -z "${3-}" || "$out" == *"$3"* ) ]]; then pass
+  else fail "$1: must ABORT with reason=doppler_token_access${3:+ naming '$3'} (rc=${rc}): ${out}"; fi
+}
+expect_access_abort "T1s: flip token create minted read"            "$(tok_obj 'doppler_service_token.inngest_flip' '"create"' 'read')" "doppler_service_token.inngest_flip want=read/write got=read"
+expect_access_abort "T1t: flip token delete+create minted read"     "$(tok_obj 'doppler_service_token.inngest_flip' '"delete","create"' 'read')"
+expect_access_abort "T1u: boot token delete+create left read/write" "$(tok_obj 'doppler_service_token.inngest' '"delete","create"' 'read/write')" "doppler_service_token.inngest want=read got=read/write"
+expect_access_abort "T1v: flip token create with after absent (fail closed)" "$(rc_obj 'doppler_service_token.inngest_flip' '"create"')" "got=<absent>"
+expect_access_abort "T1w: flip token create with after.access absent (fail closed)" '{"address":"doppler_service_token.inngest_flip","change":{"actions":["create"],"after":{}}}'
+expect_token_pass   "T1x: boot token create minted read"            "$(tok_obj 'doppler_service_token.inngest' '"create"' 'read')"
+# Review (test-design seat): the REAL first-replace shape carries BOTH tokens, and a gate that judged only
+# the first (or only one address) would pass every single-token row above. One token right, one wrong, in
+# both orders; the create+delete replace order for each token; and the boot-token fail-closed twins.
+BOOT_OK="$(tok_obj 'doppler_service_token.inngest' '"delete","create"' 'read')"
+FLIP_OK="$(tok_obj 'doppler_service_token.inngest_flip' '"create"' 'read/write')"
+expect_access_abort "T1aa: both tokens, boot right and flip minted read"      "${BOOT_OK},$(tok_obj 'doppler_service_token.inngest_flip' '"create"' 'read')" "inngest_flip want=read/write got=read"
+expect_access_abort "T1ab: both tokens, flip right and boot left read/write"  "$(tok_obj 'doppler_service_token.inngest' '"delete","create"' 'read/write'),${FLIP_OK}" "doppler_service_token.inngest want=read got=read/write"
+expect_access_abort "T1ac: flip token create+delete (other replace order) minted read" "$(tok_obj 'doppler_service_token.inngest_flip' '"create","delete"' 'read')"
+expect_access_abort "T1ad: boot token create+delete (other replace order) left read/write" "$(tok_obj 'doppler_service_token.inngest' '"create","delete"' 'read/write')"
+expect_access_abort "T1ae: boot token create with after absent (fail closed)" "$(rc_obj 'doppler_service_token.inngest' '"create"')" "got=<absent>"
+expect_access_abort "T1af: boot token create with after.access absent (fail closed)" '{"address":"doppler_service_token.inngest","change":{"actions":["create"],"after":{}}}' "got=<absent>"
+expect_token_pass   "T1ag: both tokens compliant (the real first-replace shape)" "${BOOT_OK},${FLIP_OK}"
+
+# T1ah: the token addresses are named ONCE (the `tokens` map). A third address added to a hand-copied list
+# elsewhere in the gate would be admitted without being judged; pin that the code names exactly the two.
+_tok_code_addrs="$(grep -v '^[[:space:]]*#' "${DIR:?}/lib/inngest-host-replace-gate.sh" | grep -o 'doppler_service_token\.[A-Za-z0-9_]*' | wc -l | tr -d '[:space:]')"
+if [[ "$_tok_code_addrs" -eq 2 ]]; then pass
+else fail "T1ah: the gate's code names ${_tok_code_addrs} doppler_service_token address occurrences, expected exactly the 2 entries of the tokens map (a copy of an address in another list, e.g. allow[], would admit it without judging its access)"; fi
+
+# --- Test 1r3: the access counter's WIRING, the twin of T1r: it must be a member of the
+#     plan_gate_assert_numeric call, or an uncomputed counter is the empty string and [[ "" -eq 0 ]] is TRUE. ---
+if grep -q 'plan_gate_assert_numeric[^;]*"doppler_token_access_wrong=\${dta}"' <<<"$GATE_CODE_ONE_LINE"; then
+  pass
+else
+  fail "T1r3: doppler_token_access_wrong is not a member of the plan_gate_assert_numeric call (an uncomputed counter would coerce to zero)"
+fi
+
+# --- Test 1y (mutation M3): drop the access PASS conjunct in a COPY: the T1s plan (flip created `read`,
+#     which the allow-set and doppler_token_touched both admit) must then PASS, proving the access counter
+#     is the only thing aborting it. ---
+MUT3="$TMP/mut3"; mkdir -p "$MUT3"
+cp "${DIR:?}/lib/inngest-host-replace-gate.sh" "${DIR:?}/lib/plan-gate-preamble.sh" "${MUT3:?}/"
+sed -i 's/ \&\& "\$dta" -eq 0//' "$MUT3/inngest-host-replace-gate.sh"
+if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT3/inngest-host-replace-gate.sh"; then
+  fail "T1y: HARNESS ABORT — the mutation did not land (the gate has no '\$dta -eq 0' conjunct)"
+else
+  write_plan "${BASE_PLAN},$(tok_obj 'doppler_service_token.inngest_flip' '"create"' 'read')"
+  if ( source "$MUT3/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" >/dev/null ); then
+    pass
+  else
+    fail "T1y: with the dta conjunct removed the flip-read plan should PASS (proves the access counter is the only thing aborting it)"
+  fi
+fi
+
+# --- Test 1z (mutation M5): swap the expected access per address in a COPY: the compliant first-replace
+#     plan (T1d: boot read, flip read/write) must then ABORT, proving the mapping is graded and not
+#     merely the presence of an `access` key. ---
+MUT4="$TMP/mut4"; mkdir -p "$MUT4"
+cp "${DIR:?}/lib/inngest-host-replace-gate.sh" "${DIR:?}/lib/plan-gate-preamble.sh" "${MUT4:?}/"
+sed -i -e 's|\(doppler_service_token\.inngest"\): "read"|\1: "read/write"|' -e 's|\(doppler_service_token\.inngest_flip"\): "read/write"|\1: "read"|' "$MUT4/inngest-host-replace-gate.sh"
+if cmp -s "${DIR}/lib/inngest-host-replace-gate.sh" "$MUT4/inngest-host-replace-gate.sh"; then
+  fail "T1z: HARNESS ABORT — the mutation did not land (the gate has no per-address access map to swap)"
+else
+  write_plan "${SERVER_REPLACE},${NET_REPLACE},${VA_REPLACE},${TOKEN_REPLACE},${FLIP_CREATE}"
+  if ( source "$MUT4/inngest-host-replace-gate.sh"; inngest_host_replace_gate "$TMP/plan.json" >/dev/null ); then
+    fail "T1z: with the per-address access mapping swapped the compliant T1d plan must ABORT (the mapping is what is graded)"
+  else
+    pass
+  fi
 fi
 
 # --- Test 2: FAIL — Redis AOF volume destroyed (the preservation invariant) ---
@@ -349,14 +567,15 @@ fi
 # floor: it exited 127 under `set -uo pipefail`, recorded nothing, and the suite passed. A
 # floor that depends on the thing it guards is not a floor.
 #
-# A FLOOR, NOT EQUALITY — the count is developer-incremented, so `-eq` would redden the
-# suite on every legitimately-added assertion and train people to bump it unread.
+# A FLOOR set to the CURRENT count (raised in the same edit that adds an assertion): a floor, not
+# equality, so a legitimately-added assertion does not redden the suite, but with no slack so a
+# deleted assertion does.
 _ran=$((passes + fails))
-if [[ "$_ran" -lt 49 ]]; then
+if [[ "$_ran" -lt 84 ]]; then
   fails=$((fails + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 49. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 84. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 49)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 84)\n' "$_ran"
 fi
 
 echo ""

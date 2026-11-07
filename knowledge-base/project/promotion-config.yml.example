@@ -5,8 +5,9 @@
 #   knowledge-base/project/learnings/ files to Anthropic for clustering.
 # - The pre-promotion GDPR shell pre-pass excludes any learning matching
 #   the canonical PII regex (email, IPv4, IBAN) BEFORE the Anthropic call.
-# - Opens public draft PRs whose bodies quote source-learning paths and the
-#   proposed diff. PR bodies are world-readable on the public repo.
+# - Opens public draft PRs whose bodies name the source-learning paths and
+#   the proposed rule slugs; the proposed diff is the PR's committed change.
+#   PR bodies and diffs are world-readable on the public repo.
 # - Kill switch: set `enabled: false` and commit; next cron tick exits no-op.
 #
 # Copy this file to `knowledge-base/project/promotion-config.yml` (gitignored)

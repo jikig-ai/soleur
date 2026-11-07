@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { NextRequest } from "next/server";
 
 // PR-F Phase 2 (#3244, #3940). Signature-verify gate on /api/inngest POST.
@@ -9,9 +9,11 @@ import type { NextRequest } from "next/server";
 // INNGEST_DEV=0 so the route handler validates `x-inngest-signature` against
 // INNGEST_SIGNING_KEY on every step-execution POST. ADR-030 invariant I4.
 //
-// #8611 / ADR-243: the route serves with `streaming: "force"`, so every POST answers HTTP 201 at
-// once and the real status arrives in the streamed JSON envelope. The 401 is therefore asserted
-// on the ENVELOPE (`status: 401`), and the HTTP status is pinned to 201 so a silent revert of
+// #8611 / ADR-243: the route serves with `streaming: true` (inngest@4; the v3
+// "force" enum member is gone — a boolean streams wherever the handler supports
+// it), so every POST answers HTTP 201 at once and the real status arrives in
+// the streamed JSON envelope. The 401 is therefore asserted on the ENVELOPE
+// (`status: 401`), and the HTTP status is pinned to 201 so a silent revert of
 // streaming (which would put 401 back on the status line) reds this file too.
 //
 // Test asserts: without a valid signature, the handler returns 401 BEFORE
@@ -34,14 +36,6 @@ process.env.INNGEST_SIGNING_KEY =
 process.env.INNGEST_EVENT_KEY =
   "evtkey-test-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 process.env.INNGEST_DEV = "0";
-
-// Pass-through spy over the real wrapper, so every other test still sees the production behaviour.
-const { detachSpy } = vi.hoisted(() => ({ detachSpy: vi.fn() }));
-vi.mock("@/server/inngest/stream-detach", async (importOriginal) => {
-  const real = await importOriginal<typeof import("@/server/inngest/stream-detach")>();
-  detachSpy.mockImplementation(real.detachFromConsumerCancel);
-  return { ...real, detachFromConsumerCancel: detachSpy };
-});
 
 async function importRoute() {
   return await import("@/app/api/inngest/route");
@@ -70,10 +64,10 @@ async function envelopeStatus(res: Response): Promise<number> {
 }
 
 describe("app/api/inngest/route.ts — signature verification (cloud mode)", () => {
-  it("is the ONLY serve() mount (a second mount would bypass the stream-detach wrapper)", async () => {
+  it("is the ONLY serve() mount (a second mount is a duplicate-registration surface)", async () => {
     const { execFileSync } = await import("node:child_process");
     // Anchored on the IMPORT of `serve` from an inngest adapter (what a mount needs), not the bare
-    // token — prose explaining the wrapper mentions `serve({` and must not count.
+    // token — prose explaining the mount mentions `serve({` and must not count.
     const out = execFileSync("git", ["grep", "-lE", "^import \\{[^}]*\\bserve\\b[^}]*\\} from \"inngest/", "--", "app", "server", "pages", "middleware.ts"], {
       cwd: `${__dirname}/../../..`,
       encoding: "utf8",
@@ -134,18 +128,6 @@ describe("app/api/inngest/route.ts — signature verification (cloud mode)", () 
       makePostRequest({ "x-inngest-signature": sig }),
       undefined,
     );
-    expect(await envelopeStatus(res)).toBe(401);
-  });
-
-  it("POST hands every response to the stream-detach wrapper (the SDK stream never sees a client disconnect)", async () => {
-    // The wrapper's behaviour (no heartbeat throw, no finalize rejection after a cancel) is proven
-    // against the real SDK createStream in stream-detach.test.ts. An end-to-end disconnect here cannot
-    // discriminate: an unsigned request finalizes before any client can cancel. So this pins the wiring.
-    const { POST } = await importRoute();
-    detachSpy.mockClear();
-    const res = await POST(makePostRequest(), undefined);
-    expect(detachSpy).toHaveBeenCalledTimes(1);
-    expect(res).toBe(detachSpy.mock.results[0]!.value);
     expect(await envelopeStatus(res)).toBe(401);
   });
 });

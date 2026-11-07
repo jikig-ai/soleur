@@ -166,7 +166,7 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
     trap 'rm -f "$STATUS_TMP"' EXIT
     code="$(curl --disable --noproxy '*' --proto '=https' -s -o "$STATUS_TMP" -w '%{http_code}' --max-time 20 \
       "https://deploy.${BASE}/hooks/deploy-status" \
-      --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$HMAC" "$CF_ID" "$CF_SEC") 2>/dev/null || echo 000)"
+      --config - < <(printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$HMAC" "$CF_ID" "$CF_SEC" 2>/dev/null) 2>/dev/null || echo 000)"
     if [[ "$code" != "200" ]]; then
       echo "DRIFT(status): /hooks/deploy-status returned HTTP $code — web-1 parity cannot be read" >&2; fail=1
       body=""

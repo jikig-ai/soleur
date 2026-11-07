@@ -18,6 +18,7 @@
 
 import * as Sentry from "@sentry/nextjs";
 import { createChildLogger } from "./logger";
+import { mirrorWarnWithDebounce } from "./observability";
 
 const log = createChildLogger("crash-handler");
 
@@ -59,11 +60,57 @@ export async function reportFatalAndExit(
   process.exit(1);
 }
 
+// #11772 — benign inbound client abort. Node mints `Error: aborted` +
+// `code: "ECONNRESET"` (connResetException) on `_http_server` when an inbound
+// client resets mid-request. vercel/next.js #49587: the proxy/middleware
+// body-clone path (`getCloneableBody().finalize()` → `replaceRequestBody`)
+// copies `_events` onto the IncomingMessage and wipes its 'error' listeners,
+// so that otherwise-absorbed abort reaches our process handlers. Stock Next
+// logs `⨯` and keeps serving; exiting here hands an unauthenticated client a
+// one-request restart-DoS in prod and kills the e2e dev server. The pair is
+// exact-match ONLY: outbound ECONNRESET ("socket hang up") and code-less
+// Error("aborted") producers (e.g. `dsar-export.ts` › abort-signal arms) stay
+// fatal — widening the predicate is how a real fatal becomes warn-level noise.
+export function isBenignClientAbort(err: unknown): err is Error {
+  return (
+    err instanceof Error &&
+    err.message === "aborted" &&
+    (err as Error & { code?: unknown }).code === "ECONNRESET"
+  );
+}
+
+// Sibling classifier: `server/abort-classifier.ts` classifies session-layer
+// aborts — a different producer; do not unify these predicates.
+//
+// Hybrid bound (CTO ruling, #11772): the trigger is unauthenticated, so the
+// Sentry arm rides `mirrorWarnWithDebounce` — ≤1 warn envelope per 5min per
+// process under the constant "crash-handlers" key — while every abort still
+// emits a pino warn carrying the tags, so the burst count (the detection
+// signal) stays full-fidelity in container stdout. An undebounced Sentry
+// emitter here would hand a client a quota dial that spike-protects away
+// every OTHER error signal during an attack.
+function classifyAbortOrFatal(err: unknown, kind: FatalKind): void {
+  if (isBenignClientAbort(err)) {
+    log.warn(
+      { feature: "crash-handlers", op: "client-abort", kind },
+      "benign inbound client abort — non-fatal, Sentry debounced",
+    );
+    mirrorWarnWithDebounce(
+      err,
+      { feature: "crash-handlers", op: "client-abort", tags: { kind } },
+      "crash-handlers",
+      "client-abort",
+    );
+    return;
+  }
+  void reportFatalAndExit(err, kind);
+}
+
 export function installCrashHandlers(): void {
-  process.on("uncaughtException", (err) => {
-    void reportFatalAndExit(err, "uncaughtException");
-  });
-  process.on("unhandledRejection", (reason) => {
-    void reportFatalAndExit(reason, "unhandledRejection");
-  });
+  process.on("uncaughtException", (err) =>
+    classifyAbortOrFatal(err, "uncaughtException"),
+  );
+  process.on("unhandledRejection", (reason) =>
+    classifyAbortOrFatal(reason, "unhandledRejection"),
+  );
 }

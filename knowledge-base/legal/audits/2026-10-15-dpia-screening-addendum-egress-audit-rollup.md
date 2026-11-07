@@ -6,8 +6,9 @@ issue: 9545
 status: draft-requires-counsel-review
 addendum_to: "knowledge-base/legal/audits/2026-10-05-dpia-screening-agent-web-egress.md"
 processing_activity: "Article 30 register Processing Activity 2 — Conversation Data, opt-in web-egress sub-purpose (#9534), extended by the PR1 egress audit rollup store (#9545). A dedicated register row is proposed in the PR1 legal commits, not asserted here."
-conclusion: "PR1 as designed (dark pipeline, no member read, no external-workspace collection): a full DPIA is NOT required on the facts as designed, PROVISIONAL. The facts of the 2026-10-05 memo are changed. WP248 criterion 3 (systematic monitoring) is now partly engaged alongside the memo's partly-engaged innovative-technology criterion, so the WP248 'two criteria' threshold is reached in the partial sense. The full t6 re-screen is a PR2 merge gate and must treat a full DPIA as a live outcome. New trigger t7 pinned."
+conclusion: "PR1 as designed (dark pipeline, no member read, no external-workspace collection): a full DPIA is NOT required on the facts as designed, PROVISIONAL. The facts of the 2026-10-05 memo are changed. WP248 criterion 3 (systematic monitoring) is now partly engaged alongside the memo's partly-engaged innovative-technology criterion, so the WP248 'two criteria' threshold is reached in the partial sense. The full t6 re-screen is a PR2 merge gate and must treat a full DPIA as a live outcome. New trigger t7 pinned. [Superseded 2026-10-26 (#9545, PR2), as to 'The full t6 re-screen is a PR2 merge gate': the re-screen is section 12 and concludes 'no full DPIA, conditional'; a full DPIA stays the outcome of every tripwire in 12.6.]"
 plan: "knowledge-base/project/plans/archive/20261015-142700-2026-10-15-feat-workspace-egress-audit-log-plan.md"
+t6_rescreen: "section 12 (Addendum, 2026-10-26, #9545 PR2): the t6 re-screen against the member-readable state. Conclusion: no full DPIA, CONDITIONAL on the tripwires in 12.5 and 12.6. Fires on the merge of PR #11115 (draft at the date of writing). The CNIL Art. 35(4) list wording is verified in 12.4."
 final_pipeline_addendum: "section 11 (Addendum, 2026-10-15): reconciliation with the final pipeline and the Phase 0 measurements; supersedes the design-statement wording of sections 2 (attribution paragraph), 3 (Art. 35(3)(b) row), 4 (provisional paragraph) and 7 as marked there"
 pr: "10349 (draft, unmerged)"
 related:
@@ -52,6 +53,8 @@ therefore superseded as to the rollup (see 3). Counsel/operator: a
 `Superseded` marker under that sentence in the 2026-10-05 memo, and a
 frontmatter pointer key to this addendum, are owed (the append-only discipline
 used for earlier addenda); this draft does not edit the memo.
+
+> **Superseded 2026-10-26 (#9545, PR2), by section 12, as to the second row of the table above ("The member `SELECT` policy and read route land in PR2").** The PR2 design adds **no** member `SELECT` policy and **no** HTTP route: the table stays unreadable to `anon` and `authenticated`, and members read through one `SECURITY DEFINER` function that checks workspace membership itself. The recipient class (current members of the workspace) is the one this row anticipated, so the t6 finding stands; the mechanism is different. Conditioned on the merge of PR #11115 (draft at the date of writing). The earlier text is left as written.
 
 ## 2. The processing as designed
 
@@ -115,6 +118,8 @@ authority's Art. 35(4) list (CNIL for a French controller) names constant
 monitoring of employee activity; this addendum has not verified the list
 wording and does not rely on it.
 
+> **Superseded 2026-10-26 (#9545, PR2), by section 12.4, as to "this addendum has not verified the list wording".** The CNIL list was fetched and read on 2026-10-26; section 12.4 quotes the relevant row and records the URL. The earlier text is left as written.
+
 ## 4. Conclusion for PR1, and why it is provisional
 
 On the design as it stands for PR1, **a full DPIA is not required, PROVISIONAL**:
@@ -175,6 +180,8 @@ a standalone LIA:
    attaches to processing under Art. 6(1)(f); the DSAR runbook and the
    toggle-off path (stops new records) are the product routes, and counsel
    should confirm they suffice.
+
+> **Superseded 2026-10-26 (#9545, PR2), by section 12, as to "no member read until PR2" in the safeguards list above and as to "members are not the opt-in party and are told through the owner notice and PR2 copy".** From the merge of PR #11115 (draft at the date of writing) every current member can read a 30-day summary, and the PR2 disclosure to members is the banner on the view and the recording notice in the enable dialog (12.2). The balancing is re-stated in 12.3. The earlier text is left as written.
 
 ## 6. Roles (the plan's CLO assessment, recorded as drafted)
 
@@ -254,6 +261,8 @@ Inconsistencies found in the plan and the existing record:
    PR1 already changes the facts by creating the store. t7 below closes that
    gap for PR1; the memo's t6 text is left as written.
 
+> **Superseded 2026-10-26 (#9545, PR2), as to section 8: calls 2 and 3 ("PR1 conclusion held provisional"; "the PR2 re-screen must reason from the readable state and keep a full DPIA open") and the "until PR2 ... exists only in the operator's Better Stack store" clause of inconsistency 3.** Both calls are discharged by section 12, which reasons from the readable state and keeps a full DPIA open as the outcome of every tripwire in 12.6. The Better Stack clause described the public sentences before the PR1 legal commits qualified them; the viewer now reads the in-app rollup and never the Better Stack copy. The earlier text is left as written.
+
 ## 9. Re-screening triggers
 
 The triggers t1 through t6 of the 2026-10-05 memo stand unchanged. New:
@@ -267,9 +276,13 @@ The triggers t1 through t6 of the 2026-10-05 memo stand unchanged. New:
   workspaces before PR2's legal copy and the 7-day owner notice are live
   breaches rulings A and B and needs operator and CLO authorization.
 
+> **Note 2026-10-26 (#9545, PR2), on t7's corollary "adding a member read path before the t6 re-screen has run is a t6 trigger as well".** The re-screen has run (section 12), so the corollary is satisfied for the read path as designed in PR #11115. A **second** member read path, or any widening of the reader set, the window, the exported fields or the retention, is a fresh t6 and t7 trigger (12.6).
+
 **t6 status.** Open. The viewer (member `SELECT` policy plus read route plus
 "View egress audit log" view) lands in PR2; the full re-screen against the
 readable state is a **PR2 merge gate**, tracked on #9545.
+
+> **Superseded 2026-10-26 (#9545, PR2), by section 12, as to the "t6 status. Open" paragraph above, as to "member `SELECT` policy plus read route", and as to the last paragraph of section 4 ("It runs when the member `SELECT` policy and read route are in the diff").** The re-screen against the readable state is section 12. Its conclusion is "no full DPIA, **conditional**", and the member read path is a `SECURITY DEFINER` function with no policy and no route (see the marker under section 1). t6 is discharged for the read path as designed and re-fires on any widening listed in 12.6. The earlier text is left as written.
 
 ## 10. Rulings carried (CTO agent, plan section "Decisions Ruled by the CTO Agent")
 
@@ -290,6 +303,8 @@ readable state is a **PR2 merge gate**, tracked on #9545.
 These are authorizations the operator still holds: enabling the flag in
 production, creating the runtime flag, and publishing any notice or legal
 text.
+
+> **Note 2026-10-26 (#9545, PR2), on rulings A and D ("until PR2 ships"; "PR2's toggle copy must say so").** PR2 ships the viewer and the toggle copy, but it does **not** satisfy ruling A's condition for external collection: collection stays OFF for every external workspace until the operator carries out the enablement steps tracked on #11237 (7-day owner notice live, retention number approved, team-workspace capacity decision with an Art. 28(3) instrument and a standalone LIA, Art. 21 sufficiency, then the flag flip). Ruling D's copy requirement is met by the enable-dialog recording notice and the Off status line ("Turning web access off stops new records but does not delete existing ones"), whose wording is subject to CLO sign-off. The earlier text is left as written.
 
 ## 11. Addendum — 2026-10-15: reconciliation with the final pipeline and the Phase 0 measurements
 
@@ -343,6 +358,119 @@ The ingest route's Sentry events are designed to carry counts, a reason code and
 
 > **Superseded 2026-10-15 (#9545), as to item 5 above:** the pre-authentication 403 residual was measured by engineering and is closed for the tested paths (11.8); it is no longer an open counsel item. Items 1 to 4, 6 and 7 stay OPEN. The CLO attestation of the public wording (`knowledge-base/legal/audits/2026-10-counsel-review-9545.md`) does not resolve any of them.
 
+> **Superseded 2026-10-26 (#9545, PR2), by section 12.4, as to the words "the supervisory authority's Art. 35(4) list is unverified" in item 4 above.** The CNIL list was read on 2026-10-26 and the relevant row is recorded in 12.4; that limb of item 4 is verified. The WP248 criteria 3 and 7 limbs of item 4 are re-screened in 12.3 (both partly engaged, neither fully engaged) and item 4 is otherwise carried by the conditions in 12.5. Items 1 to 3, 6 and 7 stay OPEN. The earlier text is left as written.
+
+> **Superseded 2026-10-26 (#9545, PR2; CLO ruling F3 on PR #11115), as to the words "The drafts record Jikigai as **processor** for a team workspace's rollup" in item 1 above, read as a working position without qualification.** The reader rule (every current member, including activity from before the member joined) is fixed by Jikigai and cannot be set, narrowed or switched off by the Workspace Owner's organisation, and Jikigai also chose the fields, the retention and the purpose. A processor that determines purposes and means is treated as a controller for that processing (Art. 28(10)). The public texts now say that Jikigai may be a controller of the team-workspace rollup, alone or jointly, and not only a processor. Item 1 stays OPEN, but it is now an explicit decision gate and not a general open question: see section 13.1. The earlier text is left as written.
+
 ### 11.8 Addendum — 2026-10-15 (#9545): the pre-authentication 403 residual (11.2) is measured
 
 Engineering ran the repository's Squid configuration on the pinned digest (Squid 6.13) and sent three requests that are denied before the authentication rule, each presenting a victim workspace id as the proxy username with a bogus password: a plain GET, a CONNECT to port 22 and a CONNECT to port 8443. All three were logged with `workspace` `-` and status 403, so the presented name is not recorded on those paths; the same username on a CONNECT to port 443 reached authentication and was logged with status 407, which Vector drops (positive status allowlist). The 11.2 residual does not materialise on the tested paths; it is therefore removed from the open counsel list in 11.7 item 5 as an engineering fact. Re-measure on a Squid version change.
+
+## 12. Addendum — 2026-10-26: the t6 re-screen against the member-readable state (#9545, PR2)
+
+> **DRAFT — AI-generated screening record requiring professional legal review. It is a screening record, NOT a counsel-review attestation of any public text.**
+>
+> **Timing.** This section describes the design of PR #11115 (draft at the date of writing). The viewer does not exist until that PR merges and is deployed, and the record is append-only, so every statement about the viewer is conditioned on that merge. Collection is still OFF for every external workspace; nothing here is evidence that records of any external workspace exist or are being read.
+
+**Question screened:** with the 30-day rollup readable by every current member of the workspace, does the 2026-10-15 conclusion ("no full DPIA, provisional") survive, and under what conditions?
+
+**Answer: no full DPIA, CONDITIONAL.** The conditions are 12.5 and the tripwires are 12.6. A full DPIA is the required outcome if any tripwire fires.
+
+### 12.1 What the read path is
+
+| Item | PR2 design |
+|---|---|
+| Mechanism | One `SECURITY DEFINER` function, `get_egress_audit_summary`, which raises `42501` unless the caller is a **current** member of the workspace. No member `SELECT` policy, no table grant, no HTTP route; the table stays unreadable to `anon` and `authenticated`. The page is server-rendered and calls the function directly. |
+| Readers | Every current member of the workspace, owner included, on the same terms. Not a pending invitee, a removed member, a member of another workspace, `anon` or the service role (to be proven by live-database tests in the PR; this section does not assert they passed). |
+| Fields shown | Requested host, outcome (Allowed, Blocked, Other), a request count shown as a minimum, and the last time seen; plus a summary (minimum request count, minimum blocked count, last request time). |
+| Fields not shown | `source_host`, `bytes_out`, `first_seen`, bucket times, and any member, session, IP, client-address or path value (the last group is not stored at all). |
+| Window | Fixed 30 days; the 200 most recent entries; no time-range selector, no export, no 24-hour count. |
+| History | Visible to every current member including activity from before they joined; unaffected by the web-access toggle (ruling D: switching it off stops new records and deletes nothing). |
+| Disclosure to members | A banner on the view and a recording notice in the enable dialog (copy subject to CLO sign-off, 12.7). |
+
+> **Superseded 2026-10-26 (#9545, PR2; CLO rulings F2, F10 and F16 on PR #11115), as to two rows of the table above.** (1) "Fields shown" lists four fields and a summary and omits one more place where a derived value is shown: the Agent web access card shows every member, in the same loader and from the same membership-checked summary, the time of the newest recorded request ("Last recorded request: N ago"). It adds no field and no reader; it is a disclosed display of `last_seen` (section 13.2 sets its resolution). (2) "Disclosure to members: a banner on the view and a recording notice in the enable dialog" is superseded by the three-surface rule in section 13.3 (banner on the view; a one-line card note for every role; the dialog notice, in a true state and in a conditional "could not check" state). The earlier text is left as written.
+
+### 12.2 The nine fields and the absence of a per-person field
+
+The rollup keeps nine fields: `workspace_id`, `bucket_start`, `requested_host`, `decision`, `source_host`, `request_count`, `bytes_out`, `first_seen`, `last_seen`. None identifies a member, a session or a device, and the view shows four of them. A reader cannot learn from this data **which person directed a connection**. In a solo workspace the only reader is the person whose agents made the connections, so the read adds no recipient. In a team workspace the host list reflects activity directed by the workspace's members (section 3), but it is attributable to the workspace, not to a member, and every member (the owner included) sees the same list. That symmetry is what separates it from a supervisory view an employer holds over staff.
+
+> **Superseded 2026-10-26 (#9545, PR2; CLO ruling F4 on PR #11115), as to the sentence "A reader cannot learn from this data **which person directed a connection**" and the words "the data cannot single out a member" used in 12.3 and in the CNIL-row reasoning in 12.4.** The correct statement is: no member, session, user, IP, client-address or request-path field is held or shown. A reader can still infer, from the time an entry was last seen set against other activity that the workspace already shows its members (conversations are readable by every member, migration 059), who was probably active. That inference is not eliminated by this design; it is reduced by not showing finer time than needed (section 13.2) and it is carried as a named residual in criterion 7. The earlier sentence is left as written and must not be quoted without this marker.
+
+### 12.3 Re-screen against Art. 35(3) and WP248 rev.01, from the readable state
+
+| Criterion | Finding now |
+|---|---|
+| Art. 35(3)(a) automated evaluation with legal or similar effects | Not met. Nothing is scored, ranked or used to decide anything about a person. |
+| Art. 35(3)(b) large-scale special categories | Not met as systematic. Residual unchanged in kind but now visible to readers: a host name can reveal subject matter (a health, legal or political site) to a member who did not direct that connection. Mitigants: workspace members already share the workspace; only hosts and counts, no content, no person. Noted as a residual, not a ground for a DPIA. |
+| Art. 35(3)(c) systematic monitoring of a publicly accessible area | Not met. |
+| WP248 criterion 3: systematic monitoring | **Partly engaged, now live for readers** (it was latent in PR1). Not fully engaged: the record observes agents' connections at workspace level, not a person's activity; no person field; 15-minute buckets; 30-day horizon; counts are minimums; no profiling. |
+| WP248 criterion 7: vulnerable data subjects or imbalance | **Partly engaged.** Team-workspace members are not the opt-in party and may be staff of the owner's organisation. Mitigants: the view gives the owner nothing about a person that it does not give every member; every reader is told by the banner that all current members can see the list including pre-join history; the data cannot single out a member. **Not resolved here:** the owner's own duty, as the controller of its staff's data, to tell staff what the workspace records is for that owner and is tied to the open capacity question (11.7 item 1). |
+| WP248 criterion 8: innovative use of technology | Partly engaged, unchanged. |
+| WP248 criteria 6 (matching) and 9 (prevents exercise of rights) | Not met. The view is **not** a rights mechanism and is not presented as one: it is a minimum-count, best-effort, 30-day summary and does **not** satisfy an Art. 15 request; the DSAR runbook (`knowledge-base/engineering/operations/runbooks/egress-audit-dsar.md`) remains the path. Erasure of a member's data follows the existing account-deletion saga; the rollup holds no member-keyed field, so a member's departure removes nothing from it and a team workspace's rows persist for the remaining members (unchanged, 11.6). |
+
+**Count.** Criteria 3, 7 and 8 are each partly engaged. That reaches WP248's "two criteria in most cases" threshold in the partial sense, as the 2026-10-15 count already said, and does not by itself mandate a DPIA. The decisive reasons not to default to a DPIA are the nine-field minimisation with no per-person field, workspace-level attribution, the symmetric visibility, the 30-day horizon, and that no external workspace's data is collected yet. Those reasons are exactly what 12.5 and 12.6 pin.
+
+> **Superseded 2026-10-26 (#9545, PR2; CLO rulings F3 and F4 on PR #11115), as to the criterion 7 row of the table above.** Criterion 7 stays **partly engaged**, with two additions to its findings. (1) **Residual: timing linkability.** The view cannot name a member, but its last-seen time can be matched against workspace-visible conversations and activity, so a team member may be able to infer who was probably active. The mitigants are the 15-minute bucketing, the minimum-count and best-effort nature of the list, the 30-day horizon, the absence of any export, the removal of the minute-resolution hover time (13.2), and symmetric visibility. The residual does not tip the conclusion to a full DPIA because it adds no information a member does not already obtain from the conversations they can read, but it is the reason C1 and C7 are tripwires and not preferences. (2) "The owner's own duty, as the controller of its staff's data" assumed the owner's organisation is the controller; that assumption is the open capacity question (13.1). The earlier text is left as written.
+
+### 12.4 The CNIL Art. 35(4) list: VERIFIED
+
+- **Source:** the CNIL's "Liste des types d'opérations de traitement pour lesquelles une analyse d'impact relative à la protection des données est requise", `https://www.cnil.fr/sites/default/files/atoms/files/liste-traitements-aipd-requise.pdf`, **retrieved 2026-10-26** and read in full (the PDF carries no date on its face). The CNIL page `https://www.cnil.fr/fr/ce-quil-faut-savoir-sur-lanalyse-dimpact-relative-la-protection-des-donnees-aipd`, retrieved the same day, links it as the list adopted by délibération n° 2018-327 du 11 octobre 2018 and mentions no later amendment. **Not checked:** whether a later délibération has amended the list (no Légifrance check was made), the CNIL's separate list of processing for which a DPIA is *not* required, and the Art. 35(4) lists of any other EEA authority.
+- **The relevant row (verbatim):** "Traitements ayant pour finalité de surveiller de manière constante l'activité des employés concernés". Criteria cited with it: "personnes dites « vulnérables »" and "surveillance systématique". Examples cited: "dispositif de cyber surveillance tels que ceux procédant à une analyse des flux de courriels sortants afin de détecter d'éventuelles fuites d'information (dispositifs dits de Data Loss Prevention)"; "vidéosurveillance portant sur les employés manipulant de l'argent"; "vidéosurveillance d'un entrepôt stockant des biens de valeur au sein duquel travaillent des manutentionnaires"; "chronotachygraphe des véhicules de transport routier". No other row of the list concerns employee monitoring, and no row names network or connection logs as such.
+- **Application.** The row is defined by purpose ("ayant pour finalité"). The rollup's purpose, as designed and as disclosed, is workspace-level accountability for agent connections and abuse and incident investigation. It records no employee's activity: it has no person field and the view cannot attribute a connection to a member. On that design the row is **not met**. The closest example is the Data Loss Prevention one (analysis of outbound flows to detect leaks); the difference is the absence of any per-person attribution and a purpose that is not staff surveillance. That reasoning is only as strong as the two facts it rests on, so both are conditions (12.5 C1, C4), and a per-person field would meet the row almost literally.
+- **Whose list.** Jikigai is established in Paris, so the CNIL is the competent authority for Jikigai's own processing. A team workspace's owner is a separate controller of any use it makes of the view; if an owner organisation uses the list to monitor its staff, the CNIL row is that owner's question for its own processing, not a finding about this one.
+
+### 12.5 Conclusion: no full DPIA, conditional
+
+A full DPIA is **not required** for the member-readable rollup **provided all of the following hold**; if one stops holding, this conclusion lapses and a DPIA is the outcome.
+
+- **C1. No per-person field.** No member, session, user, IP, client-address or request-path value is added to the table, the ingest payload, the Vector rollup, the function's output or the view (t7).
+- **C2. Retention stays 30 days.** It does not rise above 30 days (about 31 in practice with the daily sweep) (t7). The number is still proposed, not approved; its approval is the CLO's call and gates enabling (11.7 item 2).
+- **C3. Collection stays OFF for every external workspace** until the enablement steps tracked on #11237 are done. This conclusion rests on there being no external data subjects today. The real rows-per-day figure is still unmeasured (11.1); the screening is to be re-confirmed in writing against measured volume before the first external enablement.
+- **C4. The purpose stays workspace-level accountability.** A feature whose purpose is to monitor, rate or alert on a person (per-member alerts, activity reports, performance use) is out of this conclusion and is a CNIL-row question (12.4).
+- **C5. The reader set stays "current members of that workspace, equally".** No pending invitee, removed member, share link, support or operator read through the product, and no owner-only richer view.
+- **C6. The disclosures stay true.** The banner and the dialog notice say that all current members can see the list, including activity from before they joined; that no member or session is recorded; that entries may be missing and counts are minimums; that records are deleted about 30 days after they were recorded; and that switching web access off stops new records and deletes nothing. If that copy is removed or becomes inaccurate, C6 fails.
+
+Open counsel items carried unchanged: team-workspace capacity and basis with an Art. 28(3) instrument and a standalone LIA (11.7 item 1), retention approval (item 2), Art. 21 sufficiency (item 3), marker lines and Sentry fragments (item 6), and whether a T&C change is owed (item 7). The Art. 35(4) limb of item 4 is closed by 12.4; the criteria 3 and 7 limbs are carried by this section.
+
+### 12.6 Tripwires (t7 restated, with the read-path corollaries)
+
+Re-run this screening **before merge** if any of these is proposed:
+
+- retention of the application-database rollup rises above 30 days (t7);
+- any user, session, IP, client-address, member or request-path field is added to the rollup, the ingest payload, the Vector rollup, the function's output or the view (t7);
+- the reader set widens beyond current members of the workspace, or a second read path (route, export, share link, API, support view) is added;
+- the window or the history shown grows past 30 days, or a time-range selector or export is added;
+- any per-member, per-session or "who" view is considered (this is a full DPIA, not a re-screen);
+- collection is enabled for an external workspace (re-confirm C3 first).
+
+### 12.7 Public text and copy
+
+The public documents (Privacy Policy 4.7 and 7, AUP 5.8, DPD 2.3(ag), GDPR Policy 3.16, 8.4 and 9) are amended in the same PR to state the facts in 12.1 and the conditions that matter to a reader, with mirrors. The two product texts that carry the member disclosure (the enable-dialog recording notice and the view banner) are subject to CLO sign-off as a merge gate (AC10); the wireframe banner headline still contains the word "complete" in a negation ("not a complete record"), which the copy rules forbid in any user-facing sentence, and is to be reworded.
+
+> **Superseded 2026-10-26 (#9545, PR2; CLO ruling F12 on PR #11115), as to the words "the wireframe banner headline still contains the word 'complete' in a negation ('not a complete record')... and is to be reworded".** Reworded: the wireframe banner headline was changed in commit bdda54a4d7 to "A best-effort summary, not a full record." and its body aligned. The remaining requirement of this paragraph, CLO sign-off of the final banner and dialog strings as a merge gate (AC10), is **not yet discharged**: see section 13.4 and `knowledge-base/legal/audits/2026-10-counsel-review-9545.md`. The earlier text is left as written.
+
+## 13. Addendum — 2026-10-26: CLO rulings on the PR #11115 review findings (#9545, PR2)
+
+> **DRAFT — AI-generated screening record requiring professional legal review. Not a counsel-review attestation.** Timing: PR #11115 is a draft at the date of writing; every statement about the viewer, the card line and the dialog is conditioned on its merge. Collection is still OFF for every external workspace. The flag is not flipped by this PR; the enablement gates are tracked on #11237.
+
+### 13.1 Team-workspace capacity: an explicit decision gate (F3)
+
+Facts. The rule about who reads the summary is Jikigai's, and the Workspace Owner's organisation cannot set, narrow or disable it. Jikigai chose the fields, the retention and the purpose, and claims Art. 6(1)(f) for the rollup in every workspace. The only choice the owner's organisation makes is whether Agent web access is on. Those facts do not fit a pure processor role (Art. 28(10)).
+
+Ruling. (1) The public texts no longer present "processor" as the working position without qualification; they say Jikigai may be a controller (independent or joint) for the team-workspace rollup. (2) Before the flag is flipped for any workspace Jikigai does not own, the capacity is decided in a dated determination (processor, joint controller under Art. 26, or independent controller), with the instrument that follows from it and the standalone LIA. (3) **Recommended outcome, not yet decided:** independent controller of the rollup in every workspace, as for the 90-day log. It matches the Art. 6(1)(f) basis already claimed, needs no Art. 28(3) instrument, and puts the Art. 13/14 duty on Jikigai, which already performs it through the public texts and the in-product notices. The owner's organisation remains a controller of its own use of the view and of its staff-facing notice. If that outcome is taken, the reserved record P-3 in `article-30-2-register.md` is closed as not applicable. (4) Until the determination exists, the flip does not happen; "no such collection takes place today" stays true.
+
+### 13.2 Timing linkability and display resolution (F4, F10)
+
+Ruling. (1) Residual recorded at 12.3 criterion 7. (2) The absolute, minute-resolution time in the hover (`title`) attribute of the view's time cells is **removed**: it is the only place a finer-than-relative time persists, it serves no stated purpose (accountability needs the host and the outcome, not the clock minute), and it is the sharpest tool for matching an entry to a workspace-visible conversation. (3) New condition **C7: no clock-time display.** The view and the card show a relative age ("N minutes ago", "N days ago") and nothing more precise that persists: no absolute clock time (hh:mm), tooltip, export, copy-to-clipboard or API field carrying a time finer than the date. A relative age is read at the moment of viewing and leaves nothing to compare later; an absolute minute-resolution time stays on the page and can be matched afterwards. (4) The card's "Last recorded request: N ago" is the same datum as the view's "last seen" for the newest entry and is disclosed (Privacy Policy 4.7, GDPR Policy 3.16, DPD 2.3(ag)); it is covered by C7.
+
+### 13.3 Notice surfaces and the three dialog states (F1, F2, F9, F16)
+
+C6 is restated as follows. (1) **View banner:** always, for every reader. (2) **Agent web access card:** a one-line note for **every role** (owner and member) when collection is on, and in a conditional form when it could not be checked; nothing when collection is positively off. (3) **Enable dialog (owner):** the full notice when collection is on; when collection could not be checked, a conditional lead plus the same full notice from the same constant; nothing when collection is positively off. "Could not be checked" covers a failed organisation lookup **and** a failed flag read, including a Flagsmith outage; only a successful read that returns off may be treated as off. The exact strings are listed for sign-off in `knowledge-base/legal/audits/2026-10-counsel-review-9545.md`. The decision values are three, and the copy says so ("allowed, blocked or ended another way"). **Population notice (F16):** no push message to members is required at the PR2 merge because the data names no member and the surfaces above sit where members look; before the first external flip, #11237 re-checks that the three surfaces are live in production for all roles, and the 7-day owner notice (ruling B) goes out. A message to all members at the flip is an option for the capacity decision (13.1), not a condition of this screening.
+
+### 13.4 Sign-off and publication order (F5, F17)
+
+The CLO does not record sign-off on the banner and dialog strings in this section; it is recorded only after the lead returns the final strings (audit file, "PR2 sign-off requirements"). Publication order: the harmful order is the view live while the public text still says nobody can read the rollup; the reverse (text before view) over-describes for a short time but exposes nobody because external collection is off. The permanent text therefore carries no temporal qualifier; the ordering control is the pre-flip check in #11237 that the deployed product and the published `https://soleur.ai/legal/` text agree.
+
+### 13.5 Conditions after this addendum
+
+C1 to C6 as in 12.5, with C6 as restated in 13.3, plus **C7** (13.2). Tripwires of 12.6, plus: an absolute clock time, or any exportable or persisted time finer than the date, is added anywhere a reader can see it; the card note is removed for any role while collection is on; the capacity determination (13.1) is not made before the first external flip. Open counsel items unchanged except as marked above.

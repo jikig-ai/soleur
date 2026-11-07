@@ -43,6 +43,7 @@ vi.mock("@/server/cron-liveness-marker", () => ({
 
 import {
   DEFAULT_MAX_DELETIONS,
+  MAX_PR_BODY_CHARS,
   SYNTHETIC_CHECK_NAMES,
   enableAutoMergeSquash,
   deriveBranchName,
@@ -639,13 +640,12 @@ describe("safeCommitAndPr — workspace lost (non-throwing)", () => {
 // ---------------------------------------------------------------------------
 
 describe("safeCommitAndPr — #5111 option surface", () => {
-  it("exports the 7 canonical synthetic CI check names (consolidated from the 5 per-cron copies)", () => {
+  it("exports the 6 canonical synthetic CI check names (consolidated from the 5 per-cron copies; `enforce` dropped with the #12089 umbrella fold)", () => {
     expect([...SYNTHETIC_CHECK_NAMES]).toEqual([
       "test",
       "dependency-review",
       "e2e",
       "skill-security-scan PR gate",
-      "enforce",
       "cla-check",
       "cla-evidence",
     ]);
@@ -1812,9 +1812,19 @@ describe("safeCommitAndPr — #7122 round-1 exactPaths hardening", () => {
         ["core.hooksPath", hooksDir],
       ] as const) await cfgSet(cfg, k, v);
 
-      await __safeCommitInternals.runGit(f.repo, ["hash-object", "-w", "--", TODAY_DIGEST]);
-      await __safeCommitInternals.runGit(f.repo, ["status", "--porcelain=v1"]);
-      await __safeCommitInternals.runGit(f.repo, ["commit", "--allow-empty", "-m", "x"], BOT_ENV);
+      // scripts/test-all.sh exports a count-indexed `GIT_CONFIG_*` core.hooksPath for the whole run; env config outranks the repo
+      // config planted above, so with it present a missing `-c core.hooksPath=/dev/null` is masked and the hooks layer proves nothing
+      // (the mutation battery's G1-HD13 survived in CI for exactly this reason). Strip it for this test, restore it after.
+      const injected = Object.keys(process.env).filter((k) => /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(k));
+      const saved = injected.map((k) => [k, process.env[k]] as const);
+      for (const k of injected) delete process.env[k];
+      try {
+        await __safeCommitInternals.runGit(f.repo, ["hash-object", "-w", "--", TODAY_DIGEST]);
+        await __safeCommitInternals.runGit(f.repo, ["status", "--porcelain=v1"]);
+        await __safeCommitInternals.runGit(f.repo, ["commit", "--allow-empty", "-m", "x"], BOT_ENV);
+      } finally {
+        for (const [k, v] of saved) if (v !== undefined) process.env[k] = v;
+      }
 
       expect(existsSync(marker(f, "filter")), "attributesFile layer").toBe(false);
       expect(existsSync(marker(f, "fsmonitor")), "fsmonitor layer").toBe(false);
@@ -1935,5 +1945,56 @@ describe("safeCommitAndPr — #7122 round-1 exactPaths hardening", () => {
       expect(failedWith(result)).toBe("integrity: resume-content-mismatch");
       expect(await remoteBranches(f.remote)).toEqual(["main"]);
     });
+  });
+});
+
+// CodeQL alert #215 (js/file-access-to-http): the assembled PR body was the one
+// unbounded string reaching POST /pulls — callers embed file-derived content
+// (compound-promote's `agentsPointerNote` carries `proposed_diff_unified`) and
+// dropped-path names. The fix bounds the ASSEMBLED body at the sink with the
+// file's own loud-truncation idiom.
+describe("safeCommitAndPr — PR body bound (CodeQL alert 215)", () => {
+  it("truncates an oversize config.prBody at MAX_PR_BODY_CHARS with the ⚠️ marker and a Sentry report", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-3.md"), "updated\n");
+    let posted: string | undefined;
+    const octokit = makeOctokitStub({
+      prCreate: async (params) => {
+        posted = params.body as string;
+        return { data: { number: 42, node_id: "PR_node_42" } };
+      },
+    });
+    const result = await safeCommitAndPr({
+      ...baseConfig(f, octokit),
+      prBody: "x".repeat(MAX_PR_BODY_CHARS + 5000),
+    });
+    expect(result.status).toBe("committed");
+    expect(posted).toBeDefined();
+    expect(posted!.length).toBeLessThanOrEqual(MAX_PR_BODY_CHARS);
+    expect(posted).toContain("⚠️ PR body truncated");
+    const calls = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-pr-body-truncated",
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a body inside the cap is sent verbatim and reports nothing (must-PASS)", async () => {
+    const f = await makeFixture();
+    await writeFile(join(f.repo, "knowledge-base/marketing/file-4.md"), "updated\n");
+    const body = "line one\n\n- checklist item\n";
+    let posted: string | undefined;
+    const octokit = makeOctokitStub({
+      prCreate: async (params) => {
+        posted = params.body as string;
+        return { data: { number: 42, node_id: "PR_node_42" } };
+      },
+    });
+    const result = await safeCommitAndPr({ ...baseConfig(f, octokit), prBody: body });
+    expect(result.status).toBe("committed");
+    expect(posted).toBe(body);
+    const calls = reportSilentFallbackMock.mock.calls.filter(
+      (c) => c[1]?.op === "safe-commit-pr-body-truncated",
+    );
+    expect(calls).toHaveLength(0);
   });
 });

@@ -5,7 +5,7 @@
 // covered without per-handler instrumentation.
 //
 // THE BUG CLASS. inngest's `ProxyLogger` methods open with
-// `if (!this.enabled) return;` (inngest@3.54.2 middleware/logger.js › ProxyLogger.info/warn/error/debug).
+// `if (!this.enabled) return;` (inngest@4.26.0 middleware/logger.js › ProxyLogger.info/warn/error/debug).
 // Detaching one — `const f = ctx.logger.info`, `p.catch(ctx.logger.error)`,
 // `setTimeout(ctx.logger.info, 0)` — drops the receiver, so strict-mode class
 // code sees `this === undefined` and throws
@@ -23,7 +23,7 @@
 // idiomatic next occurrences in async cron code than the one that already
 // happened.
 
-import { InngestMiddleware } from "inngest";
+import { Middleware } from "inngest";
 
 import { warnSilentFallback } from "@/server/observability";
 
@@ -56,7 +56,7 @@ const boundCache = new WeakMap<object, WeakMap<object, unknown>>();
  */
 export function applyBoundLogger(raw: unknown): unknown {
   // FAIL OPEN, BUT NOT FAIL SILENT — those are separable, and only the first is
-  // forced. `new Proxy(undefined, …)` THROWS, and a throw inside transformInput
+  // forced. `new Proxy(undefined, …)` THROWS, and a throw inside transformFunctionInput
   // would red EVERY cron on the surface over a logging concern, so we must not
   // throw. That says nothing about whether we may REPORT.
   //
@@ -76,10 +76,11 @@ export function applyBoundLogger(raw: unknown): unknown {
   // ProxyLogger. `ctx.logger` being absent implies nothing about module-scope
   // pino, so the re-entrancy argument does not transfer.
   //
-  // Reachable by more than an SDK bump: reading ctx.logger from onFunctionRun
-  // instead of transformInput lands here too (see the note on that hook below),
-  // and tsc cannot catch that — `raw` is `unknown` and InitialRunInfo is
-  // loosely typed. A refactor is the likelier trigger than a vendor change.
+  // Reachable by more than an SDK bump: reading ctx.logger from a later hook
+  // (e.g. `wrapFunctionHandler`) instead of transformFunctionInput lands here too (see the note on that hook below),
+  // and tsc cannot catch that — `raw` is `unknown` and v4's hook ctx
+  // (Context.Any) is loosely typed. A refactor is the likelier trigger than a
+  // vendor change.
   // `typeof raw === "function"` is ACCEPTED, not rejected: the callable-logger
   // shape (a function with `info`/`warn`/`error` attached) is what debug, npmlog
   // and roarr hand you, and `new Proxy(fn, …)` is perfectly legal. Rejecting it
@@ -167,35 +168,33 @@ export function applyBoundLogger(raw: unknown): unknown {
   });
 }
 
-export const boundLoggerMiddleware = new InngestMiddleware({
-  name: "bound-ctx-logger",
-  init() {
-    return {
-      // NOTE the empty signature. `ctx.logger` MUST be read in transformInput,
-      // never here: onFunctionRun's ctx is Inngest's InitialRunInfo
-      // (`{ event, runId }` only — "does not necessarily contain all the
-      // data"), and the full BaseContext is handed only to transformInput.
-      // run-log.ts › runLogMiddleware documents the same trap for
-      // attempt/maxAttempts.
-      // Capturing `logger` here would silently yield `undefined`, the guard
-      // below would fail open, and every cron would keep its unbound logger —
-      // a silent no-op with no error to detect it.
-      onFunctionRun() {
-        return {
-          transformInput({ ctx }) {
-            const logger = applyBoundLogger(ctx.logger);
-            if (!logger) return;
-            // Returning a ctx patch is new to this repo (both existing
-            // middlewares return void); the pattern is borrowed from Inngest's
-            // own built-in logger middleware (Inngest.js › builtInMiddleware). Safe to
-            // clobber `logger` specifically: the ctx merge is a shallow spread
-            // in array order, last-write-wins (execution/v1.js ›
-            // initializeMiddleware()), and
-            // neither sibling middleware writes that key.
-            return { ctx: { logger } };
-          },
-        };
-      },
-    };
-  },
-});
+// v4 port (#8628): registered on the client as a CLASS; the SDK instantiates
+// one per request, so per-request state would live on `this`. This middleware
+// keeps none — the fail-open dedupe flag and the two-level bound-method cache
+// stay module-scope (a fresh instance must NOT reset either, or the once-per-
+// process Sentry report would fire per-request and shared-prototype methods
+// could cross-bind between concurrent runs).
+export class BoundLoggerMiddleware extends Middleware.BaseMiddleware {
+  readonly id = "bound-ctx-logger";
+
+  // `ctx.logger` is read in transformFunctionInput — the v4 hook that receives
+  // the full run ctx (the v3 note about InitialRunInfo-vs-BaseContext collapses
+  // into a single hook; the trap it documented — reading `logger` off a ctx
+  // that does not carry it — is preserved as the fail-open branch inside
+  // applyBoundLogger, so a v4 hook-layout change degrades to a REPORTED no-op,
+  // not a silent one).
+  transformFunctionInput(
+    arg: Middleware.TransformFunctionInputArgs,
+  ): Middleware.TransformFunctionInputArgs {
+    const logger = applyBoundLogger(
+      (arg.ctx as { logger?: unknown }).logger,
+    );
+    if (!logger) return arg;
+    // The ctx patch pattern is borrowed from Inngest's own dependencyInjection
+    // middleware (verified in the 4.26.0 source): the returned arg object's
+    // `ctx` REPLACES the run ctx wholesale, so the full ctx is spread and only
+    // `logger` is overridden — a bare `{ logger }` ctx would strip event/step/
+    // runId from every function's handler args.
+    return { ...arg, ctx: { ...arg.ctx, logger } as typeof arg.ctx };
+  }
+}

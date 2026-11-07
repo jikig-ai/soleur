@@ -87,6 +87,33 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - auth: bot
 - gotchas: needs a seeded inbound email — with no fixture the only reachable state is the 404, not the detail surface
 
+## `/dashboard/approvals/[id]`
+
+- route: `/dashboard/approvals/[id]`
+- entry: deep link from an approval push or email, or the inbox row of an `approval_required` item
+- selectors: `data-testid="approval-request-card"` (the card), `data-testid="approval-badge"`, `data-testid="approval-expiry"`, `data-testid="approval-bound-block"` (the exact bound action)
+- expects: an Owner of the request's workspace sees the stored action and the Approve/Deny (or Revoke) controls; a signed-out visitor is redirected to `/login?redirectTo=...`; a non-Owner, an unknown id and a malformed id all end in the same 404
+- auth: bot
+- gotchas: needs a seeded `approval_request` row, which exists only while the `approval-queue` flag has been on for the workspace (the page itself renders regardless of the flag); with no fixture the only reachable state is the 404
+
+## `/dashboard/approvals/legal`
+
+- route: `/dashboard/approvals/legal`
+- entry: direct URL; the list of legal texts the founder has already answered
+- selectors: the list of linked text names with their version and answered state; with no rows the page ends in the not-found view
+- expects: a signed-in founder sees one link per text they have a recorded answer for (with the `approval-queue` flag on, every released text); a signed-out visitor is redirected to `/login?redirectTo=...`
+- auth: bot
+- gotchas: reads registry texts from the server texts directory, which holds no real text yet, so the only reachable state is the not-found view; with the flag off only texts the founder already answered are listed
+
+## `/dashboard/approvals/legal/[key]`
+
+- route: `/dashboard/approvals/legal/[key]`
+- entry: a link from the legal index, or a direct URL for a registered text key
+- selectors: `data-testid="legal-card"` (the card), `data-testid="legal-reauth-dialog"` (the email-code dialog opened by Yes)
+- expects: a signed-in founder sees the text, the notices, the three choices (none preselected) and a Yes that stays locked until the text is scrolled to the end and ticked; an unknown, malformed or unreleased key ends in the same not-found view; a signed-out visitor is redirected to `/login?redirectTo=...`
+- auth: bot
+- gotchas: needs a registry text, and none is committed yet, so the only reachable state is the not-found view; the Yes path sends a real email code and records a row, so never drive it against a shared database
+
 ## `/dashboard/kb`
 
 - route: `/dashboard/kb`
@@ -221,6 +248,15 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - expects: scope-grant settings render — OAuth/agent scope grants with revoke affordances
 - auth: bot
 - gotchas: revoking a grant has downstream agent effects (agent-runner scope checks) — assert the grant row state, not just the click
+
+## `/dashboard/settings/scope-grants/egress-audit`
+
+- route: `/dashboard/settings/scope-grants/egress-audit`
+- entry: `View egress audit log` link on the Agent web access card at `/dashboard/settings/scope-grants`
+- selectors: `table` with `Host` / `Outcome` / `Requests (minimum)` / `Last seen` column headers, `nav` labelled `Filter by outcome`
+- expects: agent outbound hosts for the current workspace over the selected window (window selector: 24 hours, 7 days or 30 days; default 30 days) (counts are minimums, outcomes Allowed / Blocked / Other); an unavailable read renders an error state, never an empty log
+- auth: bot
+- gotchas: read-only; collection is off for external organisations until the #11237 gates clear, so the log may be legitimately empty; relative times only (no absolute timestamps in the DOM)
 
 ## `/dashboard/settings/services`
 

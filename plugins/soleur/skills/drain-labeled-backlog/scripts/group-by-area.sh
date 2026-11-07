@@ -70,7 +70,7 @@ else
   # gh milestone flags take the title, not numeric ID — rule
   # cq-gh-issue-create-milestone-takes-title.
   if ! grep -Fxq "$MILESTONE" \
-        < <(gh api "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' 2>/dev/null); then
+        < <(gh api --paginate "repos/:owner/:repo/milestones?state=open&per_page=100" --jq '.[].title' 2>/dev/null); then
     echo "Error: milestone title '$MILESTONE' not found (open milestones only)" >&2
     exit 2
   fi

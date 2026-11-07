@@ -107,6 +107,7 @@
 PR_GATE_MACHINERY_PATHS=(
   "scripts/test-all.sh"                                     # the predicate, the canary and every call site
   "scripts/lib/test-affected-paths.sh"                      # ALWAYS_ON / consumed-edge classification of these batteries
+  "scripts/lib/affected-glob.sh"                            # the shared glob: shape classifier every ^glob: edge classifies through (#10198)
   ".github/workflows/ci.yml"                                # binds the event and the shard legs the gate runs in
   "scripts/suite-shard-legs.tsv"                            # leg assignment: a mid-block shift changes which leg RUNS a battery
   "scripts/suite-shard-legs-heavy.tsv"
@@ -122,6 +123,7 @@ REGISTRY_BATTERY_PATHS=(
   "scripts/registry-restore-from-ghcr.sh"                   # SUT_ENGINE
   "tests/scripts/test-registry-pull-path-health.sh"         # SUITE_GATE (the oracle)
   "tests/scripts/test-registry-restore-from-ghcr.sh"        # SUITE_ENGINE (the oracle)
+  "tests/scripts/lib/restore-engine-header.sh"              # shared exit-code extractor, copied into the sandbox
   "scripts/zot-mirror-diagnosis.sh"                         # sourced companion; absence changes which arm runs
   "scripts/check-cloudflare-token-drift.sh"                 # copied, but seam-overridden on every run
   "apps/web-platform/infra/cloud-init.yml"                  # copied fixture
@@ -169,6 +171,7 @@ CF_TUNNEL_BATTERY_PATHS=(
 LINT_ORPHAN_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
   "scripts/lint-orphan-test-suites.sh"                      # SUT
+  "scripts/lib/rows-range.sh"                               # sourced --rows preamble/gate (#11647 S2)
   "scripts/lib/repo-write-boundary.sh"                      # copied into the sandbox
   "apps/web-platform/infra/run-registered-suites.sh"        # copied; a REQUIRED_RUNNERS registration
   ".github/workflows"                                       # cp .github/workflows/*.yml — directory, see above
@@ -196,13 +199,15 @@ TAG_AUTHORSHIP_BATTERY_PATHS=(
   "scripts/lib/test-relevance-paths.sh"                      # THIS FILE — see the self-reference note above
 )
 
-# scripts/test-all-affected (test-all.sh, light group) — ~440 s on CI. Source of truth:
+# scripts/test-all-affected-{a,b,c,d} (test-all.sh, light group; #11562's --rows split over one
+# battery file) — ~440 s on CI. Source of truth:
 # scripts/test-all-affected.test.sh — RUNNER / AFF_LIB / REL_LIB / RWB_LIB at its top, plus the census
 # sandbox. THE SANDBOX HARDLINKS ALL OF scripts/ (`cp -al "$REPO_ROOT/scripts/."`), so a prefix
 # declaration would arm this battery on over half of recent commits (re-measure with the replay script) for no
 # added signal; it is declared by dependency instead and the hardlinked corpus is ADR-262 residual R3.
 TEST_ALL_AFFECTED_BATTERY_PATHS=(
   "${PR_GATE_MACHINERY_PATHS[@]}"
+  "scripts/lib/rows-range.sh"                               # sourced --rows preamble/gate (#11647 S2)
   "scripts/lib/repo-write-boundary.sh"                      # RWB_LIB
   "scripts/lint-orphan-test-suites.sh"                      # the census linter the sandbox arms drive
   "scripts/test-all-affected.test.sh"                       # SELF — see the note above
@@ -379,8 +384,8 @@ webplat_related_meta_hit() {
 }
 
 # webplat_related_files <diff_names_blob> — prints app-relative paths under
-# apps/web-platform/, one per line, deduped. Tokenizes like the runner's
-# _AFFECT_PATTERNS loop (IFS space+tab: `M\tpath` and `R100\told\tnew` rows keep
+# apps/web-platform/, one per line, deduped. Tokenizes the way the runner's
+# diff blob readers do (IFS space+tab: `M\tpath` and `R100\told\tnew` rows keep
 # every path field and drop status tokens).
 webplat_related_files() {
   local _line _tok

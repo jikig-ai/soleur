@@ -260,6 +260,7 @@ jobs:
           # routes to the create branch, so an API blip files a DUPLICATE issue and re-sends the
           # first-detection email on every subsequent tick — destroying the one-issue-per-episode
           # property the close step depends on. Capture rc and treat a failed query as unknown.
+          # dedupe: fail-closed — deliberate list_rc
           EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
           list_rc=$?
@@ -423,6 +424,7 @@ jobs:
           gh label create "ci/prod-version-drift" --repo "$GH_REPO" \
             --description "Standing alarm: production is serving a stale image" --color "B60205" 2>/dev/null || true
 
+          # dedupe: fail-closed — deliberate list_rc
           EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
           list_rc=$?
@@ -558,6 +560,7 @@ jobs:
           # Deliberate: if an operator closes the issue without fixing the drift, the next tick
           # finds none open and files a NEW one. The condition is still true, so it stays visible.
           TITLE="[ci/prod-version-drift] Production is serving a stale build"
+          # dedupe: fail-closed — deliberate list_rc (::error:: + exit 0 below)
           open_issues="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
           list_rc=$?
@@ -601,6 +604,7 @@ jobs:
           # exit 1 — a sustained drift is a successful evaluation, so a fixed misconfiguration
           # must be allowed to close even while prod is still stale.
           TITLE="[ci/prod-version-drift] Version-drift check could not evaluate"
+          # dedupe: fail-closed — deliberate list_rc (::error:: + exit 0 below)
           open_issues="$(gh issue list --repo "$GH_REPO" --state open --label "ci/prod-version-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
           list_rc=$?

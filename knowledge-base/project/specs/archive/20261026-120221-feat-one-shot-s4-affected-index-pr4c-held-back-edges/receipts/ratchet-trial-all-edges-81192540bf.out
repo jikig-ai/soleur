@@ -1,0 +1,128 @@
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.claude/settings.json	plugins/soleur/test/destructive-command-guard-hook.test.sh:2551
+  cause: your change touched neither plugins/soleur/test/destructive-command-guard-hook.test.sh nor .claude/settings.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/destructive-command-guard-hook.test.sh:2551	44eff70f65bc/1	printf '{"env":{"SOLEUR_DISABLE_DESTRUCTIVE_GUARD":"1"}}\x5cn' > "$WORK/decoy/.claude/settings.json"
+  ref	plugins/soleur/test/destructive-command-guard-hook.test.sh:2558	815e418942aa/1	printf '{"env":{"SOLEUR_DISABLE_DESTRUCTIVE_GUARD":"1"}}\x5cn' > "$WORK/.claude/settings.json"
+  ref	plugins/soleur/test/destructive-command-guard-hook.test.sh:2560	e4d0f1c9e101/1	env_row "a .claude/settings.json in the hook's own working directory that sets the switch is not read by the hook" ask "$(mkjson 'terraform destroy' "$TREE")"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/actions/cf-tunnel-registry-bridge/action.yml	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh:463
+  cause: your change touched neither plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh nor .github/actions/cf-tunnel-registry-bridge/action.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh:463	5725b79a3d35/1	if python3 - "$WF" "$REPO_ROOT/.github/actions/cf-tunnel-registry-bridge/action.yml" <<'PY'
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/actions/infra-credentials/action.yml	plugins/soleur/test/sole-copy-drift-check.test.sh:78
+  cause: your change touched neither plugins/soleur/test/sole-copy-drift-check.test.sh nor .github/actions/infra-credentials/action.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/sole-copy-drift-check.test.sh:78	37e84759a26b/1	LOADER="$REPO_ROOT/.github/actions/infra-credentials/action.yml"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/actions/sentry-heartbeat/action.yml	scripts/marketplace-drift-check.test.sh:623
+  cause: your change touched neither scripts/marketplace-drift-check.test.sh nor .github/actions/sentry-heartbeat/action.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/marketplace-drift-check.test.sh:623	8d1b0e96c40c/1	composite = pathlib.Path(".github/actions/sentry-heartbeat/action.yml")
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/build-inngest-config-bundle.yml	plugins/soleur/test/inngest-config-bundle-mirror.test.sh:26
+  cause: your change touched neither plugins/soleur/test/inngest-config-bundle-mirror.test.sh nor .github/workflows/build-inngest-config-bundle.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/inngest-config-bundle-mirror.test.sh:26	013222b9404c/1	WF="$REPO_ROOT/.github/workflows/build-inngest-config-bundle.yml"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/ci.yml	plugins/soleur/test/ci-pr-affected-preactivation.test.sh:434
+  cause: your change touched neither plugins/soleur/test/ci-pr-affected-preactivation.test.sh nor .github/workflows/ci.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-pr-affected-preactivation.test.sh:434	d74c74096461/1	ci_groups="$(sed -n "s/.*skip_re='^(\x5c([^)]*\x5c)).*/\x5c1/p" "$REPO_ROOT_DIR/.github/workflows/ci.yml" | head -1 | tr '|' '\x5cn' | sort -u)"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/registration-narrowing-watch.yml	scripts/watch-registration-narrowing-9564.test.sh:11
+  cause: your change touched neither scripts/watch-registration-narrowing-9564.test.sh nor .github/workflows/registration-narrowing-watch.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/watch-registration-narrowing-9564.test.sh:11	fce499b07a4f/1	WF="$SCRIPT_DIR/../.github/workflows/registration-narrowing-watch.yml"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/scheduled-actions-queue-health.yml	scripts/actions-queue-health.test.sh:458
+  cause: your change touched neither scripts/actions-queue-health.test.sh nor .github/workflows/scheduled-actions-queue-health.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/actions-queue-health.test.sh:458	082f053222b4/1	QH_WF=".github/workflows/scheduled-actions-queue-health.yml"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/scheduled-followthrough-sweeper.yml	scripts/followthroughs/web2-luks-live-6931.test.sh:260
+  cause: your change touched neither scripts/followthroughs/web2-luks-live-6931.test.sh nor .github/workflows/scheduled-followthrough-sweeper.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/followthroughs/web2-luks-live-6931.test.sh:260	70a10bdb65d3/1	SWEEPER="$ROOT/.github/workflows/scheduled-followthrough-sweeper.yml"
+  ref	scripts/sweep-followthroughs.sh:668	eb983b3a2e71/1	Fix: add the name to the \x5c`env:\x5c` block of \x5c`.github/workflows/scheduled-followthrough-sweeper.yml\x5c` (bound from a repo secret that exists), or correct the directive's \x5c`secrets=\x5c` clause."
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/scheduled-inngest-probe-heartbeat.yml	scripts/inngest-probe-heartbeat-feeder.test.sh:45
+  cause: your change touched neither scripts/inngest-probe-heartbeat-feeder.test.sh nor .github/workflows/scheduled-inngest-probe-heartbeat.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/inngest-probe-heartbeat-feeder.test.sh:45	93a53d423584/1	WORKFLOW="$REPO/.github/workflows/scheduled-inngest-probe-heartbeat.yml"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/scheduled-marketplace-drift.yml	scripts/marketplace-drift-check.test.sh:43
+  cause: your change touched neither scripts/marketplace-drift-check.test.sh nor .github/workflows/scheduled-marketplace-drift.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/marketplace-drift-check.test.sh:43	964b534f0744/1	WORKFLOW="${MARKETPLACE_DRIFT_WORKFLOW:-$REPO_ROOT/.github/workflows/scheduled-marketplace-drift.yml}"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	.github/workflows/secret-scan.yml	scripts/ci-demand-census.test.sh:842
+  cause: your change touched neither scripts/ci-demand-census.test.sh nor .github/workflows/secret-scan.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/ci-demand-census.test.sh:842	f390c9101508/1	run_census "$S" --fixture "$FIXTURE" --workflow .github/workflows/secret-scan.yml
+  ref	scripts/ci-demand-census.test.sh:843	ae637e6d56cc/1	chk 7 "--workflow .github/workflows/secret-scan.yml is accepted: exit 0 (got $RC)" rc_is 0
+  ref	scripts/ci-demand-census.test.sh:844	909e5f089578/1	chk 7 "--workflow .github/workflows/secret-scan.yml: the prefix is stripped from the filter line" hasx "WORKFLOW_FILTER=secret-scan.yml" "$OUT"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	AGENTS.rules.md	plugins/soleur/test/technical-ruling-gate.test.sh:36
+  cause: your change touched neither plugins/soleur/test/technical-ruling-gate.test.sh nor AGENTS.rules.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/technical-ruling-gate.test.sh:36	8903a7bafad5/1	RULES="$REPO_ROOT/AGENTS.rules.md"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	README.md	plugins/soleur/test/ci-pr-affected-preactivation.test.sh:401
+  cause: your change touched neither plugins/soleur/test/ci-pr-affected-preactivation.test.sh nor README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-pr-affected-preactivation.test.sh:401	17a318b5a5a2/1	resp "repos/$R/pulls/77/files?per_page=100" 200 "[{\x5c"filename\x5c":\x5c"${KBDIR}/project/x.md\x5c"},{\x5c"filename\x5c":\x5c"README.md\x5c"}]"
+  ref	plugins/soleur/test/destructive-command-guard-hook.test.sh:1032	71d581a67b7e/1	HOOKS_README="$REPO_ROOT/.claude/hooks/README.md"
+  ref	plugins/soleur/test/destructive-command-guard-hook.test.sh:1122	301a06d428fd/1	PLUGIN_README="$REPO_ROOT/plugins/soleur/README.md"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	bunfig.toml	scripts/lint-dual-lockfile.test.sh:164
+  cause: your change touched neither scripts/lint-dual-lockfile.test.sh nor bunfig.toml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-dual-lockfile.test.sh:164	3bb4f1b5c943/1	printf '[install]\x5cnminimumReleaseAge = 259200\x5cn\x5cn[test]\x5cnpreload = "./x.ts"\x5cn' > "$R6/bunfig.toml"
+  ref	scripts/lint-dual-lockfile.test.sh:172	8c3c0682e876/1	printf '[test]\x5cnpreload = "./x.ts"\x5cn' > "$R6B/bunfig.toml"
+  ref	scripts/lint-dual-lockfile.test.sh:174	deac5a97b7a3/1	expect_pass "$R6B" "row6b bunfig.toml with only [test] (bun stays the test runner)"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md	plugins/soleur/test/sole-copy-drift-check.test.sh:1403
+  cause: your change touched neither plugins/soleur/test/sole-copy-drift-check.test.sh nor knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/sole-copy-drift-check.test.sh:1403	2eac31f0cadd/1	_adr="$REPO_ROOT/knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md	plugins/soleur/test/ship-followthrough-directive.test.sh:81
+  cause: your change touched neither plugins/soleur/test/ship-followthrough-directive.test.sh nor knowledge-base/engineering/operations/runbooks/followthrough-convention.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ship-followthrough-directive.test.sh:81	da1a74538198/1	grep -qF 'knowledge-base/engineering/operations/runbooks/followthrough-convention.md' "$SKILL_MD" \x5c
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md	plugins/soleur/test/sole-copy-drift-check.test.sh:83
+  cause: your change touched neither plugins/soleur/test/sole-copy-drift-check.test.sh nor knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/sole-copy-drift-check.test.sh:83	5707121cde04/1	TIERS="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md"
+  ref	apps/web-platform/infra/infra-config-verify.sh:494	d2cee17a1ba3/1	echo "::error::RECOVERY — the bounded automatic re-push added by #7104 does NOT cover this shape: it fires only on a stale FRAME from a live listener, and this branch means the listener itself is DOWN, so there is nothing to re-push through. A plain workflow_dispatch re-run does NOT fix it either. -target SELECTS resources, it does not force replacement, and this branch fires after a SUCCESSFUL apply, so the provisioners are clean and their remote-exec never re-runs. The route back is an explicit replace: (run from apps/web-platform/infra; export the Tier-B state pair first — AWS_ACCESS_KEY_ID/SECRET_ACCESS_KEY from TF_STATE_AWS_* in soleur-infra-privileged/prd, since the prd_terraform pair is read-only post-O5b — full recipe in knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md §Local Terraform invocation) doppler run -p soleur-infra-privileged -c prd --name-transformer tf-var -- doppler run -p soleur -c prd_terraform --name-transformer tf-var --preserve-env -- terraform apply -replace=terraform_data.infra_config_handler_bootstrap -target=terraform_data.infra_config_handler_bootstrap -input=false -lock-timeout=120s (root SSH over the CF Tunnel, which does not depend on the webhook being alive), or a nonce bump in push-infra-config.sh. webhook.service itself is delivered by terraform_data.deploy_pipeline_fix, not by the bridge. The webhook is the ONLY no-SSH remediation channel on this host and the host cannot be replaced (cx33, orderable in 0 of 3 EU DCs), so treat a persistent unreachable state as a P1."
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md	plugins/soleur/test/sole-copy-drift-check.test.sh:82
+  cause: your change touched neither plugins/soleur/test/sole-copy-drift-check.test.sh nor knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/sole-copy-drift-check.test.sh:82	36ad5276fd45/1	RUNBOOK="$REPO_ROOT/knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md"
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/constitution.md	scripts/test-jaccard-duplicates.sh:75
+  cause: your change touched neither scripts/test-jaccard-duplicates.sh nor knowledge-base/project/constitution.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/test-jaccard-duplicates.sh:75	c9c5eb152f3e/1	cat > "$TEST_DIR/knowledge-base/project/constitution.md" << 'EOF'
+  ref	scripts/test-jaccard-duplicates.sh:106	c9c5eb152f3e/2	cat > "$TEST_DIR/knowledge-base/project/constitution.md" << 'EOF'
+  ref	scripts/test-jaccard-duplicates.sh:135	c9c5eb152f3e/3	cat > "$TEST_DIR/knowledge-base/project/constitution.md" << 'EOF'
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh	plugins/soleur/test/operator-9321-stages.test.sh:48
+  cause: your change touched neither plugins/soleur/test/operator-9321-stages.test.sh nor knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/operator-9321-stages.test.sh:48	479610c70a69/1	S="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  ref	plugins/soleur/test/operator-agent-runnable.test.sh:57	3ee87a6fb5de/1	SCRIPT9321="${REPO_ROOT}/knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh"
+  ref	plugins/soleur/test/operator-agent-runnable.test.sh:379	a5e2d9765f1b/1	if [[ "$V2_COUNT" -ge 2 ]] && grep -qxF 'plugins/soleur/skills/operator-bootstrap/template.sh' <<<"$FOUND" && grep -qxF 'knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh' <<<"$FOUND"; then
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	package-lock.json	scripts/lint-dual-lockfile.test.sh:61
+  cause: your change touched neither scripts/lint-dual-lockfile.test.sh nor package-lock.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-dual-lockfile.test.sh:61	87820796b648/1	printf '{"name":"root","lockfileVersion":3}\x5cn' > "$d/package-lock.json" || return 2
+  ref	scripts/lint-dual-lockfile.test.sh:65	995ba848e3de/1	printf '{"name":"pkg%d","lockfileVersion":3}\x5cn' "$i" > "$d/pkg$i/package-lock.json" || return 2
+  ref	scripts/lint-dual-lockfile.test.sh:142	d170838c165e/1	git -C "$R3" rm -q --cached package-lock.json pkg1/package-lock.json pkg2/package-lock.json pkg3/package-lock.json
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	package.json	plugins/soleur/test/destructive-command-guard-hook.test.sh:1920
+  cause: your change touched neither plugins/soleur/test/destructive-command-guard-hook.test.sh nor package.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/destructive-command-guard-hook.test.sh:1920	9e61989f7431/1	C @@ corpus: a [[ ]] test @@ none @@ - @@ [[ -f package.json ]] && echo yes || echo no
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/.claude-plugin/plugin.json	scripts/marketplace-drift-check.test.sh:644
+  cause: your change touched neither scripts/marketplace-drift-check.test.sh nor plugins/soleur/.claude-plugin/plugin.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/marketplace-drift-check.test.sh:644	fc4f9a4939f6/1	if "raw.githubusercontent.com/jikig-ai/soleur/main/plugins/soleur/.claude-plugin/plugin.json" not in src:
+  ref	scripts/marketplace-drift-check.test.sh:645	103ad58b56f3/1	problems.append("does not confirm plugins/soleur/.claude-plugin/plugin.json resolves at main")
+new-pair	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/README.md	plugins/soleur/test/destructive-command-guard-hook.test.sh:1122
+  cause: your change touched neither plugins/soleur/test/destructive-command-guard-hook.test.sh nor plugins/soleur/README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/destructive-command-guard-hook.test.sh:1122	301a06d428fd/1	PLUGIN_README="$REPO_ROOT/plugins/soleur/README.md"
+more	new-pair	450
+remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file (that is what the selector must know); editing that file runs the full battery once
+remedy: or add an anchor-keyed accept row to scripts/ci-pr-affected-audit.accept.tsv only when the suite merely names the file (a message, a fixture it writes into a scratch tree, a negative-test string); the reason names the line kind
+remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)
+remedy: an accept row on a file the suite really reads is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository's ruleset
+remedy: a baseline row cannot be added
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/scripts/delegation-verify.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/boundary-prefix.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/ci-pr-affected-preactivation.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/deploy-arm-mutations.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/deploy-arm.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/destructive-command-guard-hook.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/flag-detach-shared.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/flag-org-scoping-pr2.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/heartbeat-reconcile-issue-step.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/hold-gate-eval.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/inngest-config-bundle-mirror.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/operator-9321-stages.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/operator-ack-guard.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/operator-agent-runnable.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/reusable-release-zot-mirror-retry.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/ship-followthrough-directive.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/sole-copy-drift-check.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	plugins/soleur/test/technical-ruling-gate.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	scripts/actions-queue-health.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	scripts/ci-demand-census.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	scripts/followthroughs/web2-luks-live-6931.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	scripts/inngest-probe-heartbeat-feeder.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/grep-q-pipe-guard.test.sh	scripts/lint-dual-lockfile.test.sh
+more	stale-line	79
+remedy: confirm the pair is really gone on a clean checkout; if the selector output was partial or this run exited 2, do not prune: rerun
+remedy: delete the offending line(s) above from scripts/ci-pr-affected-audit.baseline.tsv; if the file is in conflict, restore main's copy with git checkout origin/main -- scripts/ci-pr-affected-audit.baseline.tsv, then run: python3 -I scripts/ci-pr-affected-replay.py ratchet --print-baseline > scripts/ci-pr-affected-audit.baseline.tsv.new && mv scripts/ci-pr-affected-audit.baseline.tsv.new scripts/ci-pr-affected-audit.baseline.tsv
+SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=2000 baseline=1629
+wall=192

@@ -102,6 +102,15 @@ rg_rows="$(revert_if_eval 1 0 flip true; revert_if_eval 0 1 flip true; revert_if
 rg_rows="$(printf '%s ' $rg_rows)"
 [[ "$rg_rows" == "True True False False False False " ]] && ok "A24 revert fires only for a failed/cancelled flip that started; not for a guard refusal, a failed off, or success" || bad "A24 revert gate evaluates to: $rg_rows"
 
+# A65-A66 (#10540): the off-after-rotation confirm is a workflow_dispatch string input consumed only through env: by the flip step; the
+# best-effort revert step never receives it (a refused revert must stay refused). A9 already pins that no input is interpolated into run:.
+[[ "$(yq 'on["workflow_dispatch"]["inputs"]["confirm_off_after_rotation"]["type"] + "|" + str(on["workflow_dispatch"]["inputs"]["confirm_off_after_rotation"]["required"])')" == "string|False" ]] \
+  && ok "A65 confirm_off_after_rotation is an optional string input of the dispatch" || bad "A65 input"
+[[ "$(yq 'next(s["env"].get("CONFIRM_OFF_AFTER_ROTATION") for s in steps if s.get("name") == "Run the flip")')" == '${{ inputs.confirm_off_after_rotation }}' \
+   && "$(yq 'any("CONFIRM_OFF_AFTER_ROTATION" in s.get("env", {}) for s in steps if "Revert" in s.get("name", ""))')" == False \
+   && "$(yq 'any("confirm_off_after_rotation" in s.get("run", "") for s in steps)')" == False ]] \
+  && ok "A66 the flip step reads the confirm from env; the revert step does not receive it; no run: body names the input" || bad "A66 confirm wiring"
+
 printf '\n=== A. static: the dispatch target and the script ===\n'
 check "A15 the Tier-B job this flow dispatches exists with its option and input" python3 - "$APPLY_WF" <<'PY'
 import sys, yaml
@@ -166,6 +175,16 @@ case "$1 $2" in
     exit "${GH_RUN_RC:-0}" ;;
   "run list")
     case "$*" in
+      *"--workflow inngest-key-rotate.yml"*)
+        # The off-after-rotation guard's ONE entitled request. Anything else for this workflow is refused (exit 64), so a guard that
+        # drops --event, --json or the workflow name fails closed instead of silently reading the wrong list. The fixture is keyed
+        # by the request (the workflow name), is honoured only up to the requested --limit, and an unreadable one is returned raw.
+        if [[ "$*" =~ ^run\ list\ --workflow\ inngest-key-rotate\.yml\ --event\ workflow_dispatch\ --limit\ ([0-9]+)\ --json\ displayTitle$ ]]; then lim="${BASH_REMATCH[1]}"
+        else echo "gh stub: unexpected request: gh $*" >&2; exit 64; fi
+        echo "$*" >> "$STUB/rotate-query.log"
+        [[ -f "$STUB/state/runs-inngest-key-rotate.yml.rc" ]] && exit "$(cat "$STUB/state/runs-inngest-key-rotate.yml.rc")"
+        if [[ -f "$STUB/state/runs-inngest-key-rotate.yml.json" ]]; then jq -c --argjson n "$lim" '.[:$n]' "$STUB/state/runs-inngest-key-rotate.yml.json" 2>/dev/null || cat "$STUB/state/runs-inngest-key-rotate.yml.json"
+        else echo '[]'; fi ;;
       *"-q length"*) cat "$STUB/state/busy" 2>/dev/null || echo 0 ;;
       *)
         # An EARLIER flip's green run (older than the dispatch) and/or a recent run whose flag job was skipped come first.
@@ -243,6 +262,10 @@ values() { grep -o 'inngest_link_value=[^ ]*' "$1/gh.log" 2>/dev/null | sed 's/i
 tracked() { if [[ -f "$1/track.log" ]]; then grep -c '^track ' "$1/track.log" || true; else echo 0; fi; }
 started() { if [[ -f "$1/github_output" ]]; then grep -c '^started=true$' "$1/github_output" || true; else echo 0; fi; }
 order() { if [[ -f "$1/order.log" ]]; then tr '\n' ' ' < "$1/order.log"; fi; }
+# rot_runs <dir> <titles...>: the stubbed inngest-key-rotate.yml run list (newest first), one displayTitle per run.
+rot_runs() { local d="$1"; shift; python3 -c 'import json,sys; print(json.dumps([{"displayTitle": t} for t in sys.argv[1:]]))' "$@" > "$d/state/runs-inngest-key-rotate.yml.json"; }
+rot_queries() { if [[ -f "$1/rotate-query.log" ]]; then wc -l < "$1/rotate-query.log"; else echo 0; fi; }
+PLAN_T="inngest-key-rotate plan both"; ROT_T="inngest-key-rotate rotate both"; CONV_T="inngest-key-rotate converge both"
 
 printf '\n=== A. the Tier-B flag job (its real steps executed against stateful fake doppler/terraform) ===\n'
 # ---- Tier-B job (apply-web-platform-infra.yml::inngest_link_flag) ----------------------------------------------------
@@ -310,10 +333,13 @@ FLAG='doppler_secret.inngest_link_tls[0]'
 [[ "$(tb 'd["rec_if"] == "failure() || cancelled()" and d["apply_id"] == "apply" and d["rec_env"].get("APPLY_OUTCOME") == "${{ steps.apply.outcome }}" and d["rec_env"].get("DOPPLER_TOKEN") == "${{ secrets.DOPPLER_TOKEN_WRITE }}"')" == True ]] && ok "A31c the reconcile step runs on failure() || cancelled(), reads the apply step's own outcome and holds the write-scoped token" || bad "A31c reconcile wiring"
 python3 -c 'import re,sys; s=re.sub(r"\\\n\s*", " ", open(sys.argv[1]).read()); sys.exit(1 if re.search(r"secrets delete INNGEST_LINK_TLS[^\n]*\|\| true", s) else 0)' "$TMP/tierb-write.sh" && python3 -c 'import re,sys; s=re.sub(r"\\\n\s*", " ", open(sys.argv[1]).read()); sys.exit(1 if re.search(r"secrets (delete|set) INNGEST_LINK_TLS[^\n]*\|\| true", s) else 0)' "$TMP/tierb-reconcile.sh" && ok "A31b neither the source-key write nor the reconcile swallows a failed delete or set (no || true)" || bad "A31b a swallowed delete"
 [[ "$(tb 'd["checkout"].get("with", {}).get("persist-credentials")')" == False ]] && ok "A32 the job's checkout sets persist-credentials: false (the Doppler write token is not a git credential; nothing in the job pushes or fetches over git)" || bad "A32 checkout credentials"
-APPLY_LINE="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply.sh" | sed 's/^[[:space:]]*//')"
-[[ "$APPLY_LINE" == "terraform apply -no-color -input=false -auto-approve tfplan" ]] && ok "A33 the apply argv is exactly '-auto-approve tfplan': only the gated, saved plan is applied (no -target, -replace, -var, no re-plan)" || bad "A33 apply argv: '$APPLY_LINE'"
-sed 's/ tfplan$//' "$TMP/tierb-apply.sh" > "$TMP/tierb-apply-mut.sh"
+REDACT_SFX=' 2>&1 | tf_redact_random_ids' # #11294: the apply streams through the redaction filter; the PINNED argv is what precedes it
+APPLY_RAW="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply.sh" | sed 's/^[[:space:]]*//')"
+APPLY_LINE="${APPLY_RAW%"$REDACT_SFX"}"
+[[ "$APPLY_LINE" == "terraform apply -no-color -input=false -auto-approve tfplan" && "$APPLY_RAW" == "$APPLY_LINE$REDACT_SFX" ]] && ok "A33 the apply argv is exactly '-auto-approve tfplan' (then the redaction pipe): only the gated, saved plan is applied (no -target, -replace, -var, no re-plan)" || bad "A33 apply argv: '$APPLY_LINE'"
+sed 's/ tfplan\( 2>&1 | tf_redact_random_ids\)$/\1/' "$TMP/tierb-apply.sh" > "$TMP/tierb-apply-mut.sh"
 APPLY_MUT="$(grep -E '^[[:space:]]*terraform apply ' "$TMP/tierb-apply-mut.sh" | sed 's/^[[:space:]]*//')"
+APPLY_MUT="${APPLY_MUT%"$REDACT_SFX"}"
 [[ "$APPLY_MUT" != "terraform apply -no-color -input=false -auto-approve tfplan" ]] && ok "A33m a mutated apply (the plan operand dropped, which re-plans untargeted and applies ALL drift) no longer equals the pinned argv" || bad "A33m"
 
 # The stateful fakes. soleur/prd and soleur/prd_terraform are directories of key files; DOPPLER_INHERIT=1 makes prd_terraform's
@@ -373,7 +399,7 @@ SH
 tb_env() { # dir -> runs "$@" with the job's environment in dir
   local d="$1"; shift
   ( cd "$d" && env -i PATH="$d/bin:/usr/local/bin:/usr/bin:/bin" HOME="$d" STUB="$d" RUNNER_TEMP="$d" CI_SSH_PUB=/x/key.pub REASON_RAW="flip test" DOPPLER_TOKEN=tok \
-      GITHUB_SERVER_URL=https://example.invalid GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/summary" "$@" 2>&1 )
+      GITHUB_WORKSPACE="$REPO_ROOT" GITHUB_SERVER_URL=https://example.invalid GITHUB_REPOSITORY=o/r GITHUB_RUN_ID=1 GITHUB_OUTPUT="$d/out" GITHUB_STEP_SUMMARY="$d/summary" "$@" 2>&1 )
 }
 run_tb_job() { # dir value [write-script] [plan-script] [apply-script] [env assignments...] -> TB_RC, TB_OUT, TB_STAGE, TB_REC_RC; stops at the first failing step like Actions, then runs the reconcile step (failure() || cancelled())
   local d="$1" value="$2" ws="${3:-$TMP/tierb-write.sh}" ps="${4:-$TMP/tierb-plan.sh}" as="${5:-$TMP/tierb-apply.sh}"; shift 5 2>/dev/null || shift $#
@@ -684,6 +710,58 @@ D="$(fresh badvalue)"; ( source "$BODY"; PATH="$D/bin:$PATH" STUB="$D"; flip_app
 D="$(fresh nomode)"; run_script "$D" "$BODY" bogus
 [[ "$RC" == 64 ]] && ok "B20 an unknown subcommand exits 64" || bad "B20 rc=$RC"
 
+printf '\n=== B. off-after-rotation guard (#10540, ADR-307 Guard 3) ===\n'
+refused_out() { grep -q '^verdict=refused$' "$1/github_output" 2>/dev/null; }
+# Fixed both directions: no rotation run => off is exactly as before; a plan-only history => unchanged.
+D="$(fresh rot-none)"; run_script "$D" "$BODY" off
+[[ "$RC" == 0 && "$(values "$D")" == "off " && "$(tracked "$D")" == 1 && "$(rot_queries "$D")" == 1 ]] && grep -qx 'run list --workflow inngest-key-rotate.yml --event workflow_dispatch --limit 200 --json displayTitle' "$D/rotate-query.log" \
+  && ok "B30 no rotation run (empty list): off proceeds unchanged, after exactly one run-list request of the pinned shape (dispatch runs only, --limit 200)" || bad "B30 rc=$RC values='$(values "$D")' q=$(rot_queries "$D")" "$OUT"
+D="$(fresh rot-plan-only)"; rot_runs "$D" "$PLAN_T" "$PLAN_T" "inngest-key-rotate plan keys=app"; run_script "$D" "$BODY" off
+[[ "$RC" == 0 && "$(values "$D")" == "off " && "$(tracked "$D")" == 1 ]] && ok "B31 a history of only plan runs does not trigger the guard (off proceeds without a confirm)" || bad "B31 rc=$RC values='$(values "$D")'" "$OUT"
+D="$(fresh rot-refuse)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$BODY" off
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 && "$(tracked "$D")" == 0 && "$(started "$D")" == 0 ]] && refused_out "$D" \
+  && ok "B32 a rotate run exists, no confirm: off refuses before any dispatch or redeploy, writes no started output and emits verdict=refused" || bad "B32 rc=$RC dispatched=$(dispatched "$D")" "$OUT"
+[[ "$OUT" == *"::error::"*"plaintext :8288 again"* && "$OUT" == *"re-rotation follows"* && "$OUT" == *"confirm_off_after_rotation=OFF-AFTER-ROTATION"* ]] \
+  && ok "B32b the refusal states that the new key would cross plaintext :8288 again, that a re-rotation follows, and names the input to type" || bad "B32b text" "$OUT"
+D="$(fresh rot-confirm)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$BODY" off CONFIRM_OFF_AFTER_ROTATION=OFF-AFTER-ROTATION
+[[ "$RC" == 0 && "$(values "$D")" == "off " && "$(tracked "$D")" == 1 && "$OUT" == *"OFF: "* ]] && ok "B33 a rotate run exists WITH exactly OFF-AFTER-ROTATION: off proceeds (the incident rollback is not removed)" || bad "B33 rc=$RC values='$(values "$D")'" "$OUT"
+for wrong in off-after-rotation "OFF-AFTER-ROTATION " yes "OFF-AFTER-ROTATIONS"; do
+  D="$(fresh rot-wrong)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$BODY" off "CONFIRM_OFF_AFTER_ROTATION=$wrong"
+  [[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B34 a rotate run exists and the confirm is '$wrong': refused (exact match only)" || bad "B34 '$wrong' rc=$RC dispatched=$(dispatched "$D")" "$OUT"
+done
+D="$(fresh rot-second)"; rot_runs "$D" "$PLAN_T" "$CONV_T" "$PLAN_T"; run_script "$D" "$BODY" off
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B35 a plan run first and a non-plan (converge) run second: the guard still refuses (every member is read)" || bad "B35 rc=$RC" "$OUT"
+D="$(fresh rot-deep)"; python3 -c 'import json; print(json.dumps([{"displayTitle": "inngest-key-rotate plan both"}] * 150 + [{"displayTitle": "inngest-key-rotate rotate both"}]))' > "$D/state/runs-inngest-key-rotate.yml.json"; run_script "$D" "$BODY" off
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B36 150 plan runs newer than the rotate run: the marker is still found (the 200-run window, not the script's 20)" || bad "B36 rc=$RC" "$OUT"
+D="$(fresh rot-listfail)"; echo 1 > "$D/state/runs-inngest-key-rotate.yml.rc"; run_script "$D" "$BODY" off
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 && "$OUT" == *"cannot read the inngest-key-rotate.yml run list"* ]] && ok "B37 a run-list failure fails CLOSED (off refuses, names the cause)" || bad "B37 rc=$RC" "$OUT"
+D="$(fresh rot-notitle)"; echo '[{"databaseId":1},{"databaseId":2}]' > "$D/state/runs-inngest-key-rotate.yml.json"; run_script "$D" "$BODY" off
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B38 runs whose displayTitle field is missing count as non-plan: the guard fails closed" || bad "B38 rc=$RC" "$OUT"
+D="$(fresh rot-garbage)"; echo 'not json' > "$D/state/runs-inngest-key-rotate.yml.json"; run_script "$D" "$BODY" off
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B38b an unparseable run list fails closed" || bad "B38b rc=$RC" "$OUT"
+D="$(fresh rot-confirm-listfail)"; echo 1 > "$D/state/runs-inngest-key-rotate.yml.rc"; run_script "$D" "$BODY" off CONFIRM_OFF_AFTER_ROTATION=OFF-AFTER-ROTATION
+[[ "$RC" == 0 && "$(values "$D")" == "off " && "$(rot_queries "$D")" == 0 ]] && ok "B39 a correct confirm skips the run-list query, so the rollback works while GitHub's run API is degraded" || bad "B39 rc=$RC values='$(values "$D")'" "$OUT"
+D="$(fresh rot-unexpected)"; PATH="$D/bin:$PATH" STUB="$D" gh run list --workflow inngest-key-rotate.yml --limit 200 --json displayTitle >/dev/null 2>&1; rc_unexp=$?
+[[ "$rc_unexp" == 64 ]] && ok "B39b the stub gh refuses (exit 64) a rotation-run request that is not the pinned shape" || bad "B39b rc=$rc_unexp"
+
+# revert goes through the same chokepoint and never gets the confirm: the refusal is logged through the existing warning branch.
+D="$(fresh rot-revert)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$BODY" revert
+[[ "$RC" == 0 && "$(dispatched "$D")" == 0 && "$OUT" == *"::error::refusing flag off"* && "$OUT" == *"::warning::the best-effort off dispatch did not finish green"* && "$OUT" == *"REVERT-INCOMPLETE:"* ]] \
+  && grep -q '^verdict=revert_incomplete$' "$D/github_output" && ok "B40 revert with a rotate run: exits 0, dispatches NO flag apply, logs the refusal through the existing warning branch and ends REVERT-INCOMPLETE (verdict not overwritten by refused)" || bad "B40 rc=$RC dispatched=$(dispatched "$D")" "$OUT"
+D="$(fresh rot-revert-plan)"; rot_runs "$D" "$PLAN_T"; run_script "$D" "$BODY" revert
+[[ "$RC" == 0 && "$(values "$D")" == "off " && "$OUT" == *"REVERTED:"* ]] && ok "B40b revert with only plan runs behaves as before (off applied, REVERTED)" || bad "B40b rc=$RC values='$(values "$D")'" "$OUT"
+
+# flip can start from a flag already at 1 (Phase 0.6): nothing reads the flag, pending:<epoch> over 1 is an update, and the failure revert is off.
+D="$(fresh rot-flip)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$BODY" flip
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 && "$(started "$D")" == 0 && "$(tracked "$D")" == 0 && "$OUT" == *"flip can start from a flag already at 1"* ]] && refused_out "$D" \
+  && ok "B41 flip while a rotation run exists, no confirm: refused before anything is dispatched or started (so no revert follows), verdict=refused" || bad "B41 rc=$RC dispatched=$(dispatched "$D")" "$OUT"
+D="$(fresh rot-flip-confirm)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$BODY" flip CONFIRM_OFF_AFTER_ROTATION=OFF-AFTER-ROTATION
+[[ "$RC" == 0 && "$(values "$D")" == "pending 1 " ]] && ok "B41b flip with the confirm proceeds after a rotation (re-enabling TLS after a deliberate post-rotation off)" || bad "B41b rc=$RC values='$(values "$D")'" "$OUT"
+D="$(fresh rot-flip-plan)"; rot_runs "$D" "$PLAN_T"; run_script "$D" "$BODY" flip
+[[ "$RC" == 0 && "$(values "$D")" == "pending 1 " ]] && ok "B41c flip with only plan runs listed proceeds unchanged" || bad "B41c rc=$RC values='$(values "$D")'" "$OUT"
+D="$(fresh rot-flip-listfail)"; echo 1 > "$D/state/runs-inngest-key-rotate.yml.rc"; run_script "$D" "$BODY" flip
+[[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "B41d flip with an unreadable run list fails closed" || bad "B41d rc=$RC" "$OUT"
+
 printf '\n=== C. mutations (each guard removed; the scenario that needs it must now promote) ===\n'
 mutate() { # name sed-expression -> $TMP/mut-<name>.sh ; asserts it landed
   sed "$2" "$BODY" > "$TMP/mut-$1.sh"
@@ -742,6 +820,42 @@ if mutate offguard 's/^  flip_load_bearer; flip_require_peers$/  flip_load_beare
   [[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "C9 with an idle guard on off, a running apply blocks the release valve (so B16c can see its absence)" || bad "C9 rc=$RC dispatched=$(dispatched "$D")"
 fi
 
+# C15-C23 (#10540): the off-after-rotation guard. Each guard is removed or weakened and the scenario that needs it must flip.
+if mutate rotguard 's/^  if \[\[ "\$value" == off \]\]; then flip_guard_after_rotation off || return 1; fi$/  :/'; then
+  D="$(fresh m-rotguard)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$TMP/mut-rotguard.sh" off
+  [[ "$RC" == 0 && "$(values "$D")" == "off " ]] && ok "C15 without the chokepoint check off IS dispatched after a rotation (so B32 can see the guard)" || bad "C15 rc=$RC values='$(values "$D")'"
+  D="$(fresh m-rotguard-rv)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$TMP/mut-rotguard.sh" revert
+  [[ "$(values "$D")" == "off " ]] && ok "C15b without the chokepoint check the revert path dispatches off after a rotation (so B40 can see it)" || bad "C15b values='$(values "$D")'"
+fi
+if mutate rotlimit 's/--event workflow_dispatch --limit 200 --json/--event workflow_dispatch --limit 20 --json/'; then
+  D="$(fresh m-rotlimit)"; python3 -c 'import json; print(json.dumps([{"displayTitle": "inngest-key-rotate plan both"}] * 30 + [{"displayTitle": "inngest-key-rotate rotate both"}]))' > "$D/state/runs-inngest-key-rotate.yml.json"; run_script "$D" "$TMP/mut-rotlimit.sh" off
+  [[ "$RC" == 0 && "$(values "$D")" == "off " ]] && ok "C16 with --limit 20 a rotate run behind 30 plan runs is missed and off proceeds (so B36 can see the window)" || bad "C16 rc=$RC values='$(values "$D")'"
+fi
+if mutate rotplan 's/ | select(test("^inngest-key-rotate plan( |\$)") | not)//'; then
+  D="$(fresh m-rotplan)"; rot_runs "$D" "$PLAN_T"; run_script "$D" "$TMP/mut-rotplan.sh" off
+  [[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "C17 counting plan runs too makes a plan-only history refuse (so B31 can see the plan filter)" || bad "C17 rc=$RC"
+fi
+if mutate rotfailopen 's/^  if ! n="\$(flip_rotation_runs)"; then$/  if ! n="$(flip_rotation_runs || echo 0)"; then/'; then
+  D="$(fresh m-rotfailopen)"; echo 1 > "$D/state/runs-inngest-key-rotate.yml.rc"; run_script "$D" "$TMP/mut-rotfailopen.sh" off
+  [[ "$RC" == 0 && "$(values "$D")" == "off " ]] && ok "C18 treating a failed listing as zero runs lets off proceed (so B37 can see the fail-closed branch)" || bad "C18 rc=$RC values='$(values "$D")'"
+fi
+if mutate rottitle 's/(\.displayTitle \/\/ "")/(.displayTitle \/\/ "inngest-key-rotate plan")/'; then
+  D="$(fresh m-rottitle)"; echo '[{"databaseId":1}]' > "$D/state/runs-inngest-key-rotate.yml.json"; run_script "$D" "$TMP/mut-rottitle.sh" off
+  [[ "$RC" == 0 && "$(values "$D")" == "off " ]] && ok "C19 reading a missing title as a plan run lets off proceed (so B38 can see the fail-closed default)" || bad "C19 rc=$RC values='$(values "$D")'"
+fi
+if mutate rotflip 's/^  flip_guard_after_rotation flip$/  :/'; then
+  D="$(fresh m-rotflip)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$TMP/mut-rotflip.sh" flip
+  [[ "$RC" == 0 && "$(values "$D")" == "pending 1 " ]] && ok "C20 without the flip check a flip dispatches after a rotation (so B41 can see it)" || bad "C20 rc=$RC values='$(values "$D")'"
+fi
+if mutate rotconfirm 's/\[\[ "\${CONFIRM_OFF_AFTER_ROTATION:-}" == "OFF-AFTER-ROTATION" \]\]/[[ -n "${CONFIRM_OFF_AFTER_ROTATION:-}" ]]/'; then
+  D="$(fresh m-rotconfirm)"; rot_runs "$D" "$ROT_T"; run_script "$D" "$TMP/mut-rotconfirm.sh" off CONFIRM_OFF_AFTER_ROTATION=yes
+  [[ "$RC" == 0 && "$(values "$D")" == "off " ]] && ok "C21 a confirm that is merely non-empty lets off proceed (so B34 can see the exact match)" || bad "C21 rc=$RC values='$(values "$D")'"
+fi
+if mutate rotshape 's/--event workflow_dispatch --limit 200/--limit 200/'; then
+  D="$(fresh m-rotshape)"; run_script "$D" "$TMP/mut-rotshape.sh" off
+  [[ "$RC" != 0 && "$(dispatched "$D")" == 0 ]] && ok "C22 a request of the wrong shape is refused by the stub (exit 64) and the guard fails closed (so B30 can see the stub's strictness)" || bad "C22 rc=$RC values='$(values "$D")'"
+fi
+
 # A-readline: the closing sentence names the canary_ok row only for an https verdict (a flag-off deploy runs no canary layer, so the OFF and
 # REVERTED verdicts must not ask for a row that cannot exist); both variants keep the resolved-row query.
 RL_HTTPS="$( source "$BODY"; FLIP_T0=1760000000; flip_read_line 'state=https_pending scheme=https' )"
@@ -750,7 +864,7 @@ RL_HTTP="$( source "$BODY"; FLIP_T0=1760000000; flip_read_line 'state=http_defau
 [[ "$RL_HTTP" != *"canary_ok"* && "$RL_HTTP" == *"class=resolved"* ]] && ok "A-readline-2 a flag-off verdict's closing sentence never asks for a canary_ok row" || bad "A-readline-2 http sentence" "$RL_HTTP"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=155
+FLOOR=188
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1

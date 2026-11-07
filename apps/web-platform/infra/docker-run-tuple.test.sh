@@ -19,6 +19,12 @@
 # arm is itself vacuous. H2: passes + fails == rows executed, and the row count is an exact literal beside
 # its use, reported by printf + exit 1 (never through ok()/bad()).
 #
+# WHY NOT scripts/lib/mutation-harness.sh. That lib's caller contract is followthrough-specific (the FT_INNER / FT_SUT /
+# FT_REPO inner-run protocol, a `# [mut:NAME]` tagged probe, rc 1 + named `FAIL:` line crediting). This suite shares
+# apps/web-platform/infra/lib/mutation-scorer.sh instead, under its own exit-2 protocol, and keeps its own
+# instrument_selftest below. Unifying the scorer protocols is tracked in #11628 item B, to be re-evaluated when a third
+# suite needs the harness.
+#
 # Run: bash apps/web-platform/infra/docker-run-tuple.test.sh   (unprivileged, no docker, python3 only).
 
 set -uo pipefail
@@ -447,6 +453,7 @@ kill_row K24a-prod-no-workspaces-vol 'm_del prod "-v /mnt/data/workspaces:/works
 kill_row K24b-prod-no-plugin-vol     'm_del prod "/app/shared/plugins/soleur:ro"'         'MISSING_DECLARED: volume /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro missing from ci-deploy.sh prod' '!canary' '#1'
 kill_row K24c-prod-no-host-id-env    'm_del prod "-e SOLEUR_HOST_ID"'                     'MISSING_DECLARED: env SOLEUR_HOST_ID missing from ci-deploy.sh prod' '!canary' '#1'
 kill_row K24d-prod-no-second-port    'm_del prod "-p 0.0.0.0:3000:3000"'                  'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from ci-deploy.sh prod' '!canary' '#1'
+kill_row K24e-prod-no-tls-port       'm_del prod "-p 0.0.0.0:443:3443"'                   'MISSING_DECLARED: port 0.0.0.0:443:3443 missing from ci-deploy.sh prod' '!canary' '#1'
 kill_row K25a-prod-no-token-mount    'm_del prod "-v /var/lib/soleur/egress-tokens"'      'MISSING_DECLARED: volume /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
 kill_row K25b-prod-no-reaper-env     'm_del prod "-e SOLEUR_EGRESS_REAPER"'               'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
 kill_row K25c-first-boot-no-token-mount 'm_del first-boot "-v /var/lib/soleur/egress-tokens"' 'MISSING_DECLARED: volume /var/lib/soleur/egress-tokens:/var/lib/soleur/egress-tokens missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
@@ -462,6 +469,7 @@ kill_row K27c-canary-no-host-id-env   'm_del canary "-e SOLEUR_HOST_ID"'        
 kill_row K27d-first-boot-no-reaper-env 'm_del first-boot "-e SOLEUR_EGRESS_REAPER"'         'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 kill_row K27e-first-boot-no-inngest-env 'm_del first-boot "-e INNGEST_BASE_URL"'            'MISSING_DECLARED: env INNGEST_BASE_URL missing from cloud-init.yml first-boot' 'MISSING_REQUIRED: -e INNGEST_BASE_URL is required in every tuple' '!ci-deploy.sh' '#2'
 kill_row K27f-first-boot-no-port      'm_del first-boot "-p 0.0.0.0:3000:3000"'             'MISSING_DECLARED: port 0.0.0.0:3000:3000 missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
+kill_row K27i-first-boot-no-tls-port  'm_del first-boot "-p 0.0.0.0:443:3443"'              'MISSING_DECLARED: port 0.0.0.0:443:3443 missing from cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 kill_row K27g-prod-two-members-gone   'm_del prod "-v /mnt/data/workspaces:/workspaces"; m_del prod "-e SOLEUR_EGRESS_REAPER"' 'MISSING_DECLARED: volume /mnt/data/workspaces:/workspaces missing from ci-deploy.sh prod' 'MISSING_DECLARED: env SOLEUR_EGRESS_REAPER missing from ci-deploy.sh prod' '!canary' '#2'
 kill_row K27h-prod-unbalanced-quote   'm_repl prod "-e SOLEUR_HOST_ID=\"\$HOST_ID\"" "-e SOLEUR_HOST_ID=\"\$HOST_ID"' 'UNPARSEABLE_OPTION' 'ci-deploy.sh prod' '!MISSING_DECLARED'
 # --- scalar posture flags are REQUIRED too, per tuple (first-boot has no --memory/--memory-swap/--init by design): deleting
@@ -488,6 +496,27 @@ kill_row K29g-prod-no-add-host        'm_del prod "--add-host"'                 
 kill_row K29h-rogue-option-and-missing 'm_ins prod "--cap-add NET_ADMIN"; m_del prod "--env-file"' 'UNKNOWN_OPTION: --cap-add in ci-deploy.sh prod' 'MISSING_DECLARED: option --env-file missing from ci-deploy.sh prod' '#2'
 kill_row K20i-memory-zero-unlimited 'm_repl prod "--memory \"\$PROD_MEMORY_CAP\"" "--memory 0"' 'POSTURE_VALUE: --memory 0 in ci-deploy.sh prod'
 kill_row K20h-main-file-symlink   'm_symlink "$CI_DEPLOY_REL" /dev/zero'                 'TUPLE_COUNT: cannot read ci-deploy.sh' 'not a regular file'
+# --- #12167 PR-E: the session relay (8443) is PUBLISHED on the host's private IP and bound 0.0.0.0 INSIDE the bridge netns.
+# --- Prod only: `-p "${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443"` (an empty PROXY_BIND falls back to a loopback publish: fail-closed, argv stays
+# --- unconditional), `-e SOLEUR_PROXY_BIND=0.0.0.0` (literal) and `-e SOLEUR_PROXY_PORT=8443`. The canary publishes no 8443 and carries a
+# --- literal empty SOLEUR_PROXY_BIND (no_bind, so no blue/green port collision). The first-boot tuple is unchanged.
+kill_row K31a-canary-relay-publish-var   'm_ins canary "-p \"\${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443\""' 'UNPARSEABLE_OPTION: -p ${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443 in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K31b-canary-relay-publish-all   'm_ins canary "-p 0.0.0.0:8443:8443"'           'UNKNOWN_OPTION: -p 0.0.0.0:8443:8443 in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K31c-prod-relay-publish-all-interfaces 'm_repl prod "-p \"\${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443\"" "-p 0.0.0.0:8443:8443"' 'UNKNOWN_OPTION: -p 0.0.0.0:8443:8443 in ci-deploy.sh prod' 'MISSING_DECLARED: port ${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443 missing from ci-deploy.sh prod' '!canary' '#2'
+kill_row K31d-prod-no-relay-publish      'm_del prod "8443:8443"'                         'MISSING_DECLARED: port ${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443 missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K31e-prod-relay-publish-fallback-open 'm_repl prod "\${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443" "\${RELAY_PUBLISH_BIND:-0.0.0.0}:8443:8443"' 'UNPARSEABLE_OPTION: -p ${RELAY_PUBLISH_BIND:-0.0.0.0}:8443:8443 in ci-deploy.sh prod' '!canary' '!MISSING_DECLARED' '#1'
+kill_row K31f-prod-relay-publish-container-port 'm_repl prod "\${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:8443" "\${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:3000"' 'UNPARSEABLE_OPTION: -p ${RELAY_PUBLISH_BIND:-127.0.0.1}:8443:3000 in ci-deploy.sh prod' '!canary' '!MISSING_DECLARED' '#1'
+kill_row K31g-prod-bind-host-ip          'm_repl prod "-e SOLEUR_PROXY_BIND=0.0.0.0" "-e SOLEUR_PROXY_BIND=\"\$PROXY_BIND\""' 'UNPARSEABLE_OPTION: -e SOLEUR_PROXY_BIND=$PROXY_BIND in ci-deploy.sh prod' '!canary' '#1'
+kill_row K31h-prod-bind-other-literal    'm_repl prod "-e SOLEUR_PROXY_BIND=0.0.0.0" "-e SOLEUR_PROXY_BIND=10.0.1.20"' "ENV_NAME: SOLEUR_PROXY_BIND value '10.0.1.20' in ci-deploy.sh prod" '!canary' '#1'
+kill_row K31i-prod-bind-empty            'm_repl prod "-e SOLEUR_PROXY_BIND=0.0.0.0" "-e SOLEUR_PROXY_BIND="' "ENV_NAME: SOLEUR_PROXY_BIND value '' in ci-deploy.sh prod" '!canary' '#1'
+kill_row K31j-prod-no-bind-env           'm_del prod "-e SOLEUR_PROXY_BIND"'              'MISSING_DECLARED: env SOLEUR_PROXY_BIND missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K31k-prod-no-port-env           'm_del prod "-e SOLEUR_PROXY_PORT"'              'MISSING_DECLARED: env SOLEUR_PROXY_PORT missing from ci-deploy.sh prod' '!canary' '!cloud-init.yml' '#1'
+kill_row K31l-prod-port-env-other        'm_repl prod "-e SOLEUR_PROXY_PORT=8443" "-e SOLEUR_PROXY_PORT=9443"' "ENV_NAME: SOLEUR_PROXY_PORT value '9443' in ci-deploy.sh prod" '!canary' '#1'
+kill_row K31m-canary-bind-not-empty      'm_repl canary "-e SOLEUR_PROXY_BIND=" "-e SOLEUR_PROXY_BIND=0.0.0.0"' "ENV_NAME: SOLEUR_PROXY_BIND value '0.0.0.0' in ci-deploy.sh canary" '!prod' '#1'
+kill_row K31n-canary-bind-host-ip        'm_repl canary "-e SOLEUR_PROXY_BIND=" "-e SOLEUR_PROXY_BIND=\"\$PROXY_BIND\""' 'UNPARSEABLE_OPTION: -e SOLEUR_PROXY_BIND=$PROXY_BIND in ci-deploy.sh canary' '!prod' '#1'
+kill_row K31o-canary-no-bind-env         'm_del canary "-e SOLEUR_PROXY_BIND"'            'MISSING_DECLARED: env SOLEUR_PROXY_BIND missing from ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K31p-canary-port-env            'm_ins canary "-e SOLEUR_PROXY_PORT=8443"'       'ENV_NAME: SOLEUR_PROXY_PORT in ci-deploy.sh canary' '!prod' '!cloud-init.yml' '#1'
+kill_row K31q-first-boot-relay-publish   'm_ins first-boot "-p 0.0.0.0:8443:8443"'        'UNKNOWN_OPTION: -p 0.0.0.0:8443:8443 in cloud-init.yml first-boot' '!ci-deploy.sh' '#1'
 
 # --- must-PASS rows (non-canonical shapes of the SAME posture) ------------------------------------
 pass_row P1-reordered-equals      'm_secopts_last prod; m_repl prod "--restart unless-stopped" "--restart=unless-stopped"; m_repl prod "--log-driver journald" "--log-driver=journald"'
@@ -681,16 +710,18 @@ h1_stub classify check_options '[]' \
   K04a-prod-systempaths K04b-prod-systempaths-eq K07a-canary-env-path K07b-canary-env-ldpre \
   K08a-splat K10a-apparmor-unconfined K10b-seccomp-unconfined K10f-privileged K10r-volume-root K20i-memory-zero-unlimited \
   K26a-canary-reaper-env K26b-canary-token-mount \
-  K07h-canary-literal-https K07m-canary-no-link-env K07o-prod-no-extra-ca-env K10x-prod-no-ca-volume K07r-canary-reject-unauthorized
+  K07h-canary-literal-https K07m-canary-no-link-env K07o-prod-no-extra-ca-env K10x-prod-no-ca-volume K07r-canary-reject-unauthorized \
+  K31a-canary-relay-publish-var K31b-canary-relay-publish-all K31c-prod-relay-publish-all-interfaces K31g-prod-bind-host-ip K31h-prod-bind-other-literal K31m-canary-bind-not-empty K31p-canary-port-env K31q-first-boot-relay-publish
 h1_stub declared check_declared '[]' \
-  K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port \
+  K24a-prod-no-workspaces-vol K24b-prod-no-plugin-vol K24c-prod-no-host-id-env K24d-prod-no-second-port K24e-prod-no-tls-port \
   K25a-prod-no-token-mount K25b-prod-no-reaper-env K25c-first-boot-no-token-mount \
   K27a-canary-no-workspaces-vol K27b-canary-no-port K27c-canary-no-host-id-env K27d-first-boot-no-reaper-env \
-  K27e-first-boot-no-inngest-env K27f-first-boot-no-port K27g-prod-two-members-gone \
+  K27e-first-boot-no-inngest-env K27f-first-boot-no-port K27i-first-boot-no-tls-port K27g-prod-two-members-gone \
   K28a-prod-no-env-file K28b-prod-no-memory K28c-canary-no-restart K28d-first-boot-no-env-file K28e-first-boot-no-add-host \
   K28f-prod-no-init K28g-prod-not-detached K28h-canary-no-log-driver K28i-prod-no-memory-swap \
   K29a-canary-no-init K29b-canary-no-memory K29c-canary-no-memory-swap K29d-canary-no-env-file \
-  K29e-prod-no-restart K29f-prod-no-log-driver K29g-prod-no-add-host
+  K29e-prod-no-restart K29f-prod-no-log-driver K29g-prod-no-add-host \
+  K31d-prod-no-relay-publish K31j-prod-no-bind-env K31k-prod-no-port-env K31o-canary-no-bind-env
 h1_stub census check_count '[]' \
   K05-prod-renamed K06-fourth-site-dup K11-heredoc-all K16-missing-cloud-init K20h-main-file-symlink
 h1_stub projection check_projection '[]' \
@@ -714,7 +745,7 @@ if [ "$((PASS + FAIL))" -ne "$ROWS" ]; then
   printf '[FATAL] accounting identity: passes(%s) + fails(%s) != rows(%s) - a verdict was discarded\n' "$PASS" "$FAIL" "$ROWS" >&2
   exit 1
 fi
-MIN_ROWS=296
+MIN_ROWS=329
 if [ "$ROWS" -lt "$MIN_ROWS" ]; then
   printf '[FATAL] anti-vacuity floor: only %s rows ran, floor is %s\n' "$ROWS" "$MIN_ROWS" >&2
   exit 1

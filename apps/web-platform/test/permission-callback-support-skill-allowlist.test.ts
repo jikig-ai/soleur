@@ -18,7 +18,9 @@ const { mockIsFileTool, mockIsSafeTool } = vi.hoisted(() => ({
   mockIsSafeTool: vi.fn((t: string) => t === "Skill"),
 }));
 
-vi.mock("../server/tool-path-checker", () => ({
+vi.mock("../server/tool-path-checker", async (importOriginal) => ({
+  // Keep the real exports a new helper adds (pathFieldsEscape): a wholesale factory breaks every file-tool test the moment one is added.
+  ...(await importOriginal<typeof import("../server/tool-path-checker")>()),
   UNVERIFIED_PARAM_TOOLS: [] as readonly string[],
   extractToolPath: vi.fn(() => null),
   isFileTool: mockIsFileTool,
@@ -28,6 +30,8 @@ vi.mock("../server/sandbox", () => ({ isPathInWorkspace: vi.fn(() => true) }));
 vi.mock("../server/tool-tiers", () => ({
   getToolTier: vi.fn(() => "auto-approve"),
   buildGateMessage: vi.fn(() => "Permission needed"),
+  buildGateCard: () => ({ card: "Permission needed" }),
+  pluginToolPrefix: (server: string) => `mcp__plugin_soleur_${server}__`,
 }));
 vi.mock("../server/review-gate", () => ({
   extractReviewGateInput: vi.fn(() => ({

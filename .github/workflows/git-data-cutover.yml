@@ -1,6 +1,6 @@
 # git-data cutover — reviewer-gated modes (epic #5274 / ADR-068 / ADR-220 / ADR-239).
 #
-# workflow_dispatch-only, five modes on one reviewer-gated job (`cutover`), four wipe-family modes on a second
+# workflow_dispatch-only, six modes on one reviewer-gated job (`cutover`), four wipe-family modes on a second
 # reviewer-gated job (`wipe`, #10138; header at the job), plus a separate `notify-failure` job that reports
 # a failed, stranded or cancelled run of either:
 #
@@ -23,6 +23,11 @@
 #   unfreeze  clears a freeze sentinel ONLY when its writer lineage is this run's
 #             CUTOVER_LINEAGE (github.run_id); foreign/unattributed sentinels refuse.
 #   redeploy  the same-version redeploy lever alone (manual recovery for pin loads etc.).
+#   refs_assert (#11431) read-only, store flag OFF (FLAG_MODE=proof, so a flag that is on refuses flag_already_true): flag read,
+#             root-key access, the verified-only store probes (a held freeze refuses cutover_frozen), then ONE host session that
+#             reads the replicated refs and prints counts and at most two commit shas, never a name. This is how REFS-CONFIRMED
+#             is attained without SSH (runbook, "Reading REFS-CONFIRMED"). Writes nothing to the store; the host session makes
+#             one transient scratch directory under /dev/shm (root-only) and removes it.
 #   wipe / wipe_finish / wipe_check  (job `wipe`; the `cutover` job is skipped for them): retire the plaintext
 #             rollback volume. Owner-gated; see the runbook section "The wipe".
 #   snapshot_clear  (job `wipe`, no loader, no Hetzner write): remove a LEFTOVER throwaway device-mapper snapshot of the
@@ -54,7 +59,7 @@
 # Credentials, each bound in exactly one step's env (the credential census suite pins this):
 #   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck steps (the cutover job's; the wipe job's precheck and flag re-read)
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_FLAG   `prd` write — the flag WRITE steps ONLY (#8573); the rollback's soak-anchor delete (#10297) rides the same step
-#   - secrets.DOPPLER_TOKEN                 prd_terraform read — the bridge and the Better Stack reads (the webhook trio is the Tier-B loader's export since #9294)
+#   - secrets.DOPPLER_TOKEN                 prd_terraform read — the bridge and the flip preconditions step's Better Stack new_sessions_paused read (#11704; bound there as BS_DOPPLER_TOKEN, handed to the reader per command); the webhook trio is the Tier-B loader's export since #9294
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_ROOT   soleur-git-data-root/prd read — the key fetch
 #   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the loader step of BOTH jobs: `wipe` (the Hetzner write token) and `cutover` in the flip/rollback/redeploy modes (the webhook trio, #9294), plus the cutover flip's reachability check
 #   - secrets.SENTRY_ACTIONS_RO_TOKEN       read-only Sentry — the live pin-fault rule check
@@ -84,13 +89,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "proof | flip | rollback | unfreeze | redeploy | wipe | wipe_finish | wipe_check | snapshot_clear"
+        description: "proof | flip | rollback | unfreeze | redeploy | refs_assert | wipe | wipe_finish | wipe_check | snapshot_clear"
         required: true
         type: choice
         default: proof
-        options: [proof, flip, rollback, unfreeze, redeploy, wipe, wipe_finish, wipe_check, snapshot_clear]
+        options: [proof, flip, rollback, unfreeze, redeploy, refs_assert, wipe, wipe_finish, wipe_check, snapshot_clear]
       confirm:
-        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA wipe=WIPE-GIT-DATA wipe_finish=WIPE-FINISH-GIT-DATA wipe_check=WIPE-CHECK-GIT-DATA snapshot_clear=CLEAR-SNAPSHOT-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
+        description: "Typed token matching the mode: proof=CUTOVER-GIT-DATA flip=FLIP-GIT-DATA rollback=ROLLBACK-GIT-DATA unfreeze=UNFREEZE-GIT-DATA redeploy=REDEPLOY-GIT-DATA refs_assert=REFS-ASSERT-GIT-DATA wipe=WIPE-GIT-DATA wipe_finish=WIPE-FINISH-GIT-DATA wipe_check=WIPE-CHECK-GIT-DATA snapshot_clear=CLEAR-SNAPSHOT-GIT-DATA (typo-guard; the environment reviewer is the authorization)."
         required: true
         type: string
       lineage:
@@ -123,8 +128,8 @@ env:
   # The fleet the same-version redeploy must cover — the fan-out peers literal pinned by
   # web-hosts-fanout-parity.test.sh against var.web_hosts.
   WEB_HOST_PRIVATE_IPS: "10.0.1.10,10.0.1.11"
-  CLOUDFLARED_VERSION: "2026.5.0"
-  CLOUDFLARED_SHA256: "0095e46fdc88855d801c4d304cb1f5dd4bd656116c47ab94c2ad0ae7cda1c7ec"
+  CLOUDFLARED_VERSION: "2026.10.4"
+  CLOUDFLARED_SHA256: "ae5e8add7884b0531d66bbca4570d1de491ff6da51e4ebe7eb160cdf241d9e42"
 
 jobs:
   cutover:
@@ -148,6 +153,7 @@ jobs:
       recovery_failed: ${{ steps.finalizer.outputs.recovery_failed }}
       probe_failed: ${{ steps.probe.outcome == 'failure' && '1' || '' }}
       gc_timer_stopped: ${{ steps.finalizer.outputs.gc_timer_stopped }}
+      refs_class: ${{ steps.refs.outputs.refs_class }}
     steps:
       - name: Validate mode + confirm token
         id: confirm
@@ -165,6 +171,7 @@ jobs:
             rollback) want="ROLLBACK-GIT-DATA" ;;
             unfreeze) want="UNFREEZE-GIT-DATA" ;;
             redeploy) want="REDEPLOY-GIT-DATA" ;;
+            refs_assert) want="REFS-ASSERT-GIT-DATA" ;;
             *) echo "::error::unknown mode '$MODE'"; exit 1 ;;
           esac
           if [[ "$CONFIRM" != "$want" ]]; then
@@ -205,7 +212,9 @@ jobs:
         if: steps.confirm.outputs.mode != 'redeploy'
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
-          FLAG_MODE: ${{ steps.confirm.outputs.mode }}
+          # refs_assert reads the store with the flag OFF: it maps to the precheck's `proof` read (flag true refuses
+          # flag_already_true), and the precheck script itself is unchanged.
+          FLAG_MODE: ${{ steps.confirm.outputs.mode == 'refs_assert' && 'proof' || steps.confirm.outputs.mode }}
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
@@ -302,6 +311,11 @@ jobs:
           # WORKTREE_ROOT) — flipping onto an image that denies only
           # WORKSPACES_ROOT would leave every sibling worktree unmasked.
           GIT_DATA_DENY_FLOOR: ${{ vars.GIT_DATA_DENY_FLOOR }}
+          # the prd_terraform read credential for the new_sessions_paused Better Stack read ONLY (#11704): bound under a
+          # different name than DOPPLER_TOKEN, so nothing in this step authenticates to Doppler by default, and handed to the reader as a
+          # per-command DOPPLER_TOKEN prefix. A step-level env reaches every command in the step (gh, bc_curl, jq and the reader all
+          # inherit it); the prefix does NOT hide it from them. What it limits is which commands use it as a Doppler credential.
+          BS_DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
@@ -380,7 +394,96 @@ jobs:
           # the deny fix must be SERVED before the flag flips, not merely merged.
           [[ -n "${GIT_DATA_DENY_FLOOR:-}" ]] || fail sandbox_deny_floor "vars.GIT_DATA_DENY_FLOOR unset — set it to the first release carrying the #9725 workspaceTenantDenyRoots deny."
           ver_le "$GIT_DATA_DENY_FLOOR" "$running" || fail sandbox_deny_floor "running $running is below deny floor $GIT_DATA_DENY_FLOOR — a pre-fix image would deny only WORKSPACES_ROOT while workspaces live under WORKTREE_ROOT; wait for the deploy arm, then re-dispatch."
-          echo "preconditions clear: tier_b seam, pin-fault rule live, d6 replace stamped ($last_ok), no deploy in flight, image $running >= $GIT_DATA_EMITTER_FLOOR, image >= deny floor $GIT_DATA_DENY_FLOOR."
+          # new_sessions_paused (#11704): both web hosts must report new_sessions_paused=1 in EVERY reporter row of the last 2 minutes, the
+          # newest row at most 75 s old (75 s = one 60 s reporter tick plus 15 s ingest slack, so ONE missed tick refuses; a stale pause is the
+          # unsafe direction), before the SSH bridge is reached.
+          # Placed last so a refusal here costs no earlier gate; a precondition-time check, not a lock held across the sequence (CTO F10).
+          # The reader gets the Better Stack credential as a per-command DOPPLER_TOKEN prefix. --only-secrets to the three query secrets (as
+          # inngest-config-drift.yml does) is hygiene: it narrows what doppler injects into the step; the token itself can still read
+          # prd_terraform. The reader also inherits the step env (GH_TOKEN, the Sentry read token). Integers are extracted in SQL behind the closed-grammar match, so the runner never receives a
+          # raw log row; anything that is not a clean integer fails closed as pause_unread. Only integers, host labels and the class token are printed.
+          # A LIMIT 200 answer may have cut off an older =0 row, so a full page is pause_unread, never a pass. A full page does not change
+          # in 20 s, so it ends the retry loop at once (no ~4 min of sleeping on an answer that cannot improve).
+          BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-pause-err.$$"
+          # shellcheck source=/dev/null
+          source "${GITHUB_WORKSPACE:-.}/scripts/lib/betterstack-read-classify.sh" || true
+          pause_sql="SELECT multiIf(JSONExtractString(raw,'host_name') IN ('soleur-web-platform','soleur-inngest-prd'),'web-1', JSONExtractString(raw,'host_name') = 'soleur-web-2','web-2','') AS leg, dateDiff('second', dt, now()) AS age_s, toUInt8OrNull(extract(raw,'new_sessions_paused=([01])')) AS p FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 2 MINUTE AND leg != '' AND match(raw,'agent_sessions_live=[0-9]+ cc_queries=[0-9]+ legacy_sessions=[0-9]+ starting=[0-9]+ new_sessions_paused=[01] refused_since_last=[0-9]+') ORDER BY dt DESC LIMIT 200 FORMAT JSONEachRow"
+          pause_max_age=75
+          pause_try=0
+          while :; do
+            pause_try=$((pause_try + 1))
+            pause_rc=0; pause_class=""; pause_unread=""; pause_zero=0; pause_bad=0; pause_total=0; pause_detail=""; pause_tsv=""
+            pause_rows="$(DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh "$pause_sql" 2>"$BS_ERR")" || pause_rc=$?
+            if [ "$pause_rc" -ne 0 ]; then
+              # The reader's marker line is surfaced (a credential refusal reads as such, not as a host that never reported); its other stderr is not.
+              grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true
+              printf '%s' "$pause_rows" > "$BS_ERR.rows"
+              pause_class="unclassified"
+              if declare -F bs_read_classify >/dev/null; then pause_class="$(bs_read_classify "$pause_rc" "$BS_ERR.rows")"; fi
+              pause_unread="read_failed"; pause_rows=""
+            fi
+            pause_tsv="$(printf '%s\n' "$pause_rows" | jq -r '[(.leg | tostring), (.age_s | tostring), (.p | tostring)] | @tsv')" || pause_unread="${pause_unread:-unparseable}"
+            pause_sum="$(printf '%s\n' "$pause_tsv" | awk -F'\t' '
+              NF == 0 { next }
+              { tot++ }
+              ($1 != "web-1" && $1 != "web-2") || $3 !~ /^[01]$/ { bad++; next }
+              $3 == "0" { z[$1]++ }
+              $2 !~ /^[0-9]+$/ { bad++; next }
+              { n[$1]++; if (!($1 in a) || $2 + 0 < a[$1] + 0) a[$1] = $2 }
+              END { print "bad", bad + 0, tot + 0; split("web-1 web-2", L, " "); for (i = 1; i <= 2; i++) print L[i], n[L[i]] + 0, z[L[i]] + 0, (L[i] in a ? a[L[i]] : 0) }')"
+            while read -r pl pn pz pa; do
+              if [ "$pl" = bad ]; then pause_bad="$pn"; pause_total="$pz"; continue; fi
+              pause_zero=$((pause_zero + pz))
+              if [ "$pn" -eq 0 ] || [ "$pa" -gt "$pause_max_age" ]; then pause_unread="${pause_unread:-no_fresh_row}"; fi
+              if [ "$pn" -eq 0 ]; then pa="none"; fi
+              pause_detail="${pause_detail} ${pl} rows=${pn} zeros=${pz} newest_age_s=${pa};"
+            done <<<"$pause_sum"
+            if [ "$pause_zero" -gt 0 ]; then break; fi
+            if [ "$pause_bad" -gt 0 ]; then pause_unread="${pause_unread:-non_integer}"; fi
+            if [ "$pause_total" -ge 200 ]; then pause_unread="${pause_unread:-truncated}"; break; fi
+            if [ -z "$pause_unread" ] || [ "$pause_try" -ge 3 ]; then break; fi
+            sleep 20
+          done
+          rm -f "$BS_ERR" "$BS_ERR.rows"
+          if [ "$pause_zero" -gt 0 ]; then fail pause_not_on "Owner action (agents must not run it): bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd on, then ask the owner to re-dispatch. A reporter row in the last 2 minutes reads new_sessions_paused=0 (${pause_detail# }); after the pause is on, wait 2 minutes so no =0 row remains in the window. new_sessions_paused=1 does not mean zero sessions (the exempt synthetic account can still start one), so read agent_sessions_live too."; fi
+          if [ -n "$pause_unread" ]; then fail pause_unread "the pause could not be verified after ${pause_try} read(s): ${pause_unread}${pause_class:+ class=${pause_class}} bad_rows=${pause_bad} (${pause_detail# }). No reporter row under ${pause_max_age} s old for both hosts, a full 200-row answer, or the Better Stack read failed. Read-only check (an agent may run it; it needs the Doppler prd_terraform query secrets): bash scripts/betterstack-query.sh with the reporter-line query, or read the reporter line in Better Stack. Causes: no_fresh_row or truncated mean a missing or stale reporter heartbeat or a flood of rows, so the owner checks the web hosts; class=credentials-rejected (or a SOLEUR_CREDENTIAL_REFUSED line above) needs the owner to fix the BETTERSTACK_QUERY_* secrets in Doppler prd_terraform; read_failed with transport or reader-exit-1 may clear on a re-dispatch. Then re-dispatch."; fi
+          echo "preconditions clear: tier_b seam, pin-fault rule live, d6 replace stamped ($last_ok), no deploy in flight, image $running >= $GIT_DATA_EMITTER_FLOOR, image >= deny floor $GIT_DATA_DENY_FLOOR, both web hosts paused (new_sessions_paused=1 in every row of the last 2 minutes, newest <= ${pause_max_age} s)."
+
+          # liveness_unproven (#9943, CTO F9): the flip freezes writes on the git-data host, so a host
+          # that is dark must refuse BEFORE the freeze — the predicate the runbook's hard item only
+          # documented by hand until now. Two evidences, both fail-closed (an unreadable read is a
+          # REFUSAL, never a pass):
+          #   (a) the `soleur-git-data-host-prd` betteruptime heartbeat reads `up` — the private-NIC
+          #       probe's own liveness signal; `down`/`paused`/`pending`/absent all refuse.
+          #   (b) a `state=ok` liveness event STRICTLY newer than the newest `boot_complete`
+          #       row on host_name=soleur-git-data — a pre-boot ok row describes the PREVIOUS host.
+          # Both reads reuse the step's BS_DOPPLER_TOKEN: the heartbeat API token and the warehouse
+          # query secrets are prd_terraform-scoped Doppler secrets — and sits deliberately AFTER the pinned
+          # "preconditions clear" echo — the access suite's region pin owns everything through that
+          # line, and the echo names only the predicates above it.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/betterstack-sources.sh" || fail liveness_unproven "scripts/lib/betterstack-sources.sh could not be loaded — the git-data table identifier is unreadable."
+          BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-live-err.$$"
+          hb_rc=0
+          hb_json="$(DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_API_TOKEN_READONLY -- bash -c 'curl -fsS -m 20 -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN_READONLY:?BETTERSTACK_API_TOKEN_READONLY absent from prd_terraform}" "https://uptime.betterstack.com/api/v2/heartbeats?per_page=250"' 2>"$BS_ERR")" || hb_rc=$?
+          [[ "$hb_rc" -eq 0 ]] || { grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true; fail liveness_unproven "the soleur-git-data-host-prd heartbeat status read failed (rc=$hb_rc) — an unreadable heartbeat is not a live host; check BETTERSTACK_API_TOKEN_READONLY in prd_terraform and re-dispatch."; }
+          hb_count="$(printf '%s' "$hb_json" | jq -r '[.data[] | select(.attributes.name == "soleur-git-data-host-prd")] | length' 2>/dev/null)"
+          [[ "$hb_count" == "1" ]] || fail liveness_unproven "the soleur-git-data-host-prd heartbeat name matched ${hb_count:-0} monitors, not exactly 1 — an ambiguous liveness read is not a live host; re-dispatch only when the name is unique."
+          hb_status="$(printf '%s' "$hb_json" | jq -r '.data[] | select(.attributes.name == "soleur-git-data-host-prd") | .attributes.status' 2>/dev/null | head -1)"
+          [[ "$hb_status" == "up" ]] || fail liveness_unproven "the soleur-git-data-host-prd heartbeat reads '${hb_status:-absent}', not 'up' — a dark, paused or unarmed heartbeat is not a live host. Read it with the runbook's Private-NIC readiness read; re-dispatch only when it reports up."
+          live_sql="SELECT (SELECT dt FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data' AND JSONExtractString(raw,'stage') = 'boot_complete' AND dt > now() - INTERVAL 30 DAY ORDER BY dt DESC LIMIT 1) AS boot_dt, (SELECT dt FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data' AND JSONExtractString(raw,'state') = 'ok' AND dt > now() - INTERVAL 30 DAY ORDER BY dt DESC LIMIT 1) AS ok_dt, dateDiff('second', (SELECT dt FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data' AND JSONExtractString(raw,'state') = 'ok' AND dt > now() - INTERVAL 30 DAY ORDER BY dt DESC LIMIT 1), now()) AS ok_age_s FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 30 DAY LIMIT 1 FORMAT JSONEachRow"
+          live_rc=0
+          live_rows="$(BS_TABLE="${BS_GIT_DATA_TABLE:?sourced lib did not define BS_GIT_DATA_TABLE}" BS_TABLE_S3="${BS_GIT_DATA_TABLE_S3:?sourced lib did not define BS_GIT_DATA_TABLE_S3}" DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh "$live_sql" 2>"$BS_ERR")" || live_rc=$?
+          [[ "$live_rc" -eq 0 ]] || { grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true; fail liveness_unproven "the state=ok/boot_complete warehouse read failed (rc=$live_rc) — an unreadable read is not evidence of a live host; check the BETTERSTACK_QUERY_* secrets in prd_terraform and re-dispatch."; }
+          live_eval="$(printf '%s\n' "$live_rows" | jq -r '[.boot_dt, .ok_dt, (.ok_age_s | tostring)] | @tsv' | awk -F'\t' '
+            $2 == "" || $2 == "null" { print "no_ok_row"; next }
+            $1 == "" || $1 == "null" { print "no_boot_row"; next }
+            $3 !~ /^[0-9]+$/ { print "bad_age"; next }
+            $3 + 0 > 900 { print "stale"; next }
+            $2 <= $1 { print "pre_boot"; next }
+            { print "ok" }' | head -1)"
+          rm -f "$BS_ERR"
+          [[ "$live_eval" == "ok" ]] || fail liveness_unproven "no qualifying post-boot liveness event on soleur-git-data (${live_eval}: needs a state=ok row newer than the newest boot_complete and under 900s old). A stale or pre-boot event describes a previous host, not the one the flip would freeze. Wait for the liveness timer's next emit (10 min) or investigate the emit path; never force past a dark host."
+          echo "liveness precondition clear: heartbeat up; post-boot state=ok row present (verdict basis: ${live_eval})."
 
       # --- SSH access path (all host-touching modes) --------------------------------
       - name: CF Tunnel SSH bridge
@@ -522,6 +625,21 @@ jobs:
           GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
           MODE: proof
           CUTOVER_LINEAGE: cutover-${{ github.run_id }}
+          # The container probe (worktree root writable by uid 1001, git-data reachable from INSIDE the app container) is the flip's
+          # gate and only the flip's: mode=proof also reads a clear after a rollback redeploy, where the egress path is intentionally
+          # unused and the container may be mid-recreate. Web-1 only (the roster); it reads the container running now.
+          CONTAINER_PROBE: ${{ steps.confirm.outputs.mode == 'flip' && '1' || '' }}
+        run: bash apps/web-platform/infra/git-data-cutover.sh
+
+      # --- refs_assert (#11431): the host read behind REFS-CONFIRMED. No CUTOVER_LINEAGE is set, so a held freeze
+      #     sentinel is never tolerated as resume arm A; the step writes refs_class to its outputs on a refusal only. ---
+      - name: Host-side refs assertion (store probes + one refs read)
+        id: refs
+        if: steps.confirm.outputs.mode == 'refs_assert' && steps.flag_precheck.outputs.nothing_to_rollback != '1'
+        env:
+          WEB_HOSTS: ${{ env.WEB_HOST_PRIVATE_IP }}
+          GIT_DATA_SSH: ssh -F ${{ runner.temp }}/gd-ssh-config
+          MODE: refs_assert
         run: bash apps/web-platform/infra/git-data-cutover.sh
 
       # --- flip: freeze the store (gc quiesced, provenance sentinel, lock purge) ------
@@ -855,6 +973,8 @@ jobs:
             echo ""
             if [[ "$MODE" == "proof" ]]; then
               echo "Nothing on any host was changed."
+            elif [[ "$MODE" == "refs_assert" ]]; then
+              echo "Nothing was written to the store (the host session made and removed one transient /dev/shm scratch directory)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -1677,6 +1797,7 @@ jobs:
           RECOVERY_FAILED: ${{ needs.cutover.outputs.recovery_failed }}
           PROBE_FAILED: ${{ needs.cutover.outputs.probe_failed }}
           GC_TIMER_STOPPED: ${{ needs.cutover.outputs.gc_timer_stopped }}
+          REFS_CLASS: ${{ needs.cutover.outputs.refs_class }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -1684,10 +1805,23 @@ jobs:
           # A wipe job that published no outputs (lost runner, rejected approval) leaves MODE empty while the
           # cutover job was skipped: that is a wipe-family failure of unknown mode, never a cutover one.
           if [ -z "$MODE" ] && [ "${CUTOVER_RESULT:-}" = skipped ]; then MODE=wipe_unknown; fi
-          case "$MODE" in proof|flip|rollback|unfreeze|redeploy|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac
+          case "$MODE" in proof|flip|rollback|unfreeze|redeploy|refs_assert|wipe|wipe_finish|wipe_check|snapshot_clear|wipe_unknown) ;; *) MODE=unknown ;; esac
           case "$RESULT" in failure|cancelled|success|skipped) ;; *) RESULT=unknown ;; esac
           case "$RUN_ID" in ''|*[!0-9]*) echo "::error::run id is not numeric"; exit 1 ;; esac
           words=""; swords=""; remedy_needed=0; wipe_family=0
+          # refs_assert (#11431) is read-only and has its own two words, chosen BEFORE the generic logic: the class comes from the
+          # job output the refs step wrote on its refusal path (a runner-side refusal before the verb reads INCONCLUSIVE). Verdict
+          # word and class only reach the notification, never a sha or an id.
+          if [ "$MODE" = refs_assert ]; then
+            case "${REFS_CLASS:-}" in FAILED|INCONCLUSIVE) ;; *) REFS_CLASS=INCONCLUSIVE ;; esac
+            if [ "$REFS_CLASS" = FAILED ]; then
+              words=" REFS_ASSERT_FAILED (mode=refs_assert writes nothing to the store. The store was read and does not show a replicated branch tip. Rehearsal step R6, the account deletion and any flip stay blocked: read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED: gh run view ${RUN_ID} --log)"
+              swords=" REFS_ASSERT_FAILED"
+            else
+              words=" REFS_ASSERT_INCONCLUSIVE (mode=refs_assert writes nothing to the store. The read could not decide, so this is not evidence of non-replication. Read the verdict word in the failing step annotation and the runbook section Reading REFS-CONFIRMED for the retry rule: gh run view ${RUN_ID} --log)"
+              swords=" REFS_ASSERT_INCONCLUSIVE"
+            fi
+          fi
           # The wipe family (#10138) has its own words, chosen BEFORE the generic logic below. No wipe word ever
           # carries the unfreeze remedy: a wipe run never froze anything. An ABSENT phase is read as "this run made
           # no irreversible call" only when the started output proves the job published outputs.

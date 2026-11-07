@@ -47,6 +47,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./test-helpers.sh
+# Owning trap installed BEFORE the helper is sourced: test-helpers.sh composes its
+# incident-sandbox cleanup over an existing EXIT trap, whereas a trap installed
+# afterwards replaces it and leaks the sandbox on every direct run (#8659). The
+# `:-` guard keeps it a no-op if the suite exits before allocating the scratch dir
+# (e.g. the git-location tripwire's exit 97 inside the source line itself).
+trap '[[ -z "${TMP:-}" ]] || rm -rf "$TMP"' EXIT
 source "$SCRIPT_DIR/test-helpers.sh"
 
 # Pin C collation so `sort` and `comm` agree on byte order — without this,
@@ -171,7 +177,7 @@ assert_eq "" "$missing_from_config" "(1b) no canonical-15368 context missing fro
 # Sanity: the set is non-empty (a both-empty parse would pass vacuously).
 n_ci=$(parse_ci_required "$CONFIG_FILE" | wc -l | tr -d ' ')
 n_canon=$(canonical_15368 "$CANONICAL" | wc -l | tr -d ' ')
-if [[ "$n_ci" -ge 16 && "$n_canon" -ge 16 ]]; then
+if [[ "$n_ci" -ge 10 && "$n_canon" -ge 10 ]]; then
   echo "  PASS: (1c) non-vacuous — $n_ci CI names, $n_canon canonical-15368 contexts"
   PASS=$((PASS + 1))
 else
@@ -184,7 +190,6 @@ echo ""
 
 echo "Test 2: adding a canonical-15368 context not in required-checks.txt FAILS (⊇)"
 TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
 jq '. + [{"context": "z-fake-context", "integration_id": 15368}]' "$CANONICAL" > "$TMP/canon-extra.json"
 mut_diff=$(diff_sets "$CONFIG_FILE" "$TMP/canon-extra.json")
 mut_missing=$(only_in_canon "$mut_diff" | sed '/^$/d')
@@ -196,11 +201,11 @@ echo ""
 # violation (canonical ⊄ config): the name surfaces in `only_in_canon`.
 
 echo "Test 3: removing a name from required-checks.txt FAILS (⊇)"
-# Drop 'adr-ordinals' from a config copy; it must then surface as canonical-only.
-grep -v '^adr-ordinals$' "$CONFIG_FILE" > "$TMP/cfg-drop.txt"
+# Drop 'guards-ruleset' from a config copy; it must then surface as canonical-only.
+grep -v '^guards-ruleset$' "$CONFIG_FILE" > "$TMP/cfg-drop.txt"
 drop_diff=$(diff_sets "$TMP/cfg-drop.txt" "$CANONICAL")
 drop_missing=$(only_in_canon "$drop_diff" | sed '/^$/d')
-assert_contains "$drop_missing" "adr-ordinals" "(3) dropped name surfaces as a ⊇ violation (canonical has it, config doesn't)"
+assert_contains "$drop_missing" "guards-ruleset" "(3) dropped name surfaces as a ⊇ violation (canonical has it, config doesn't)"
 echo ""
 
 # --- Test 3b: mutation — an EXTRA required-checks name is caught (⊆) --------

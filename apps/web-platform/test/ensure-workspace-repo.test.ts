@@ -12,6 +12,7 @@ const {
   mockReportSilentFallback,
   mockReportRepoCloneFailed,
   mockLogInfo,
+  mockLogWarn,
   mockIsValid,
   mockIsEmptyCorrupt,
   mockProbeShape,
@@ -27,6 +28,7 @@ const {
   mockReportSilentFallback: vi.fn(),
   mockReportRepoCloneFailed: vi.fn(),
   mockLogInfo: vi.fn(),
+  mockLogWarn: vi.fn(),
   mockIsValid: vi.fn(),
   mockIsEmptyCorrupt: vi.fn(),
   mockProbeShape: vi.fn(),
@@ -74,7 +76,7 @@ vi.mock("@/server/repo-resolver-divergence", () => ({
   reportRepoCloneFailed: mockReportRepoCloneFailed,
 }));
 vi.mock("@/server/logger", () => ({
-  createChildLogger: () => ({ info: mockLogInfo, warn: vi.fn(), error: vi.fn() }),
+  createChildLogger: () => ({ info: mockLogInfo, warn: mockLogWarn, error: vi.fn() }),
 }));
 // Sub-PR 3.D — the clone-from-git-data overlay: flag gate, membership-gated
 // fetch into refs/remotes/git-data/*, and the per-user worktree id resolver.
@@ -98,6 +100,7 @@ import {
   ensureWorkspaceRepoCloned,
   __setGraftForTests,
   __setLocalGitForTests,
+  isFirstSessionStoreMiss,
 } from "@/server/ensure-workspace-repo";
 
 const REPO = "https://github.com/acme/widget";
@@ -498,6 +501,323 @@ describe("ensureWorkspaceRepoCloned", () => {
       // The error was swallowed BEFORE any reset.
       const resetCalls = mockLocalGit.mock.calls.filter((c) => c[0][0] === "reset");
       expect(resetCalls).toHaveLength(0);
+    });
+
+    // -----------------------------------------------------------------------
+    // #11704 Phase 2 — first-session classification (CTO F5) and the ancestry
+    // gate with its rescue branch (CTO F4/F7/F11).
+    // -----------------------------------------------------------------------
+    const STORE_SHA = "0123456789abcdef0123456789abcdef01234567";
+    // CTO F12: a FLAT name. A `soleur/` prefix would let a store head named `soleur` make every
+    // later (atomic) push for that user fail on a refname conflict.
+    const RESCUE = "soleur-store-tip-0123456789ab";
+    const WRAPPER_STDERR =
+      "remote: git-data transport: repo does not exist (provision it first): '/srv/x/ws-uuid.git'\n" +
+      "fatal: Could not read from remote repository.";
+    const execErr = (message: string, code: number | undefined, stderr?: string) =>
+      Object.assign(new Error(message), { code, stderr });
+    const allLogs = () =>
+      JSON.stringify([
+        mockLogInfo.mock.calls,
+        mockLogWarn.mock.calls,
+        mockReportSilentFallback.mock.calls,
+      ]);
+    const gitCalls = (verb: string) => mockLocalGit.mock.calls.filter((c) => c[0][0] === verb);
+
+    function armOverlay(
+      handlers: {
+        mergeBase?: () => Promise<{ stdout: string }>;
+        branch?: () => Promise<{ stdout: string }>;
+        branchRevParse?: () => Promise<{ stdout: string }>;
+        // `git rev-parse <dataRef>` (the store tip sha); default is a valid full sha.
+        storeTip?: () => Promise<{ stdout: string }>;
+        // `git rev-parse HEAD` (the fresh clone tip); default is empty (unresolvable).
+        head?: () => Promise<{ stdout: string }>;
+      } = {},
+    ) {
+      mockIsGitDataStoreEnabled.mockReturnValue(true);
+      mockExistsSync.mockReturnValue(false);
+      mockIsValid.mockReturnValueOnce(false).mockReturnValue(true);
+      mockLocalGit.mockImplementation(async (args: string[]) => {
+        if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") return { stdout: "main\n" };
+        if (args[0] === "rev-parse" && args[1] === primaryRef("main")) {
+          return handlers.storeTip ? handlers.storeTip() : { stdout: `${STORE_SHA}\n` };
+        }
+        if (args[0] === "rev-parse" && args[1] === "HEAD") {
+          return handlers.head ? handlers.head() : { stdout: "" };
+        }
+        if (args[0] === "rev-parse") {
+          return handlers.branchRevParse ? handlers.branchRevParse() : { stdout: "" };
+        }
+        if (args[0] === "merge-base") return handlers.mergeBase ? handlers.mergeBase() : { stdout: "" };
+        if (args[0] === "branch") return handlers.branch ? handlers.branch() : { stdout: "" };
+        return { stdout: "" }; // show-ref present + reset
+      });
+    }
+    const run = () =>
+      ensureWorkspaceRepoCloned({ userId: "u1", workspacePath: WS, installationId: 123, repoUrl: REPO });
+
+    describe("first-session store miss (isFirstSessionStoreMiss)", () => {
+      it("code 128 + the wrapper phrase on stderr → info, NOT the level-50 fallback; no reset; no ids in any log", async () => {
+        armOverlay();
+        mockFetchFromGitData.mockRejectedValue(execErr("Command failed: git fetch", 128, WRAPPER_STDERR));
+        const out = await run();
+        expect(out).toBe("ok");
+        expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+        expect(mockLogInfo).toHaveBeenCalledWith(
+          expect.objectContaining({ action: "git-data-overlay-first-session-miss" }),
+          expect.any(String),
+        );
+        expect(gitCalls("reset")).toHaveLength(0);
+        const logs = allLogs();
+        expect(logs).not.toContain("u1");
+        expect(logs).not.toContain("ws-uuid");
+        expect(logs).not.toContain("/srv/x");
+      });
+
+      it("a non-miss fetch failure stays level 50", async () => {
+        armOverlay();
+        mockFetchFromGitData.mockRejectedValue(execErr("git-data unreachable", 128, "ssh: connect to host: Connection timed out"));
+        await run();
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+        expect(mockLogInfo).not.toHaveBeenCalledWith(
+          expect.objectContaining({ action: "git-data-overlay-first-session-miss" }),
+          expect.anything(),
+        );
+      });
+
+      it("the phrase with a non-128 code stays level 50 (through the overlay)", async () => {
+        armOverlay();
+        mockFetchFromGitData.mockRejectedValue(execErr("Command failed", 1, WRAPPER_STDERR));
+        await run();
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+      });
+
+      it.each([
+        ["code 128 + phrase on stderr", execErr("Command failed", 128, WRAPPER_STDERR), true],
+        ["code 128 + phrase only in message (no stderr)", execErr(`Command failed\n${WRAPPER_STDERR}`, 128, undefined), true],
+        ["code 128 + phrase only in message (empty stderr)", execErr(`Command failed\n${WRAPPER_STDERR}`, 128, ""), true],
+        ["code 1 + phrase", execErr("Command failed", 1, WRAPPER_STDERR), false],
+        ["code undefined + phrase", execErr("Command failed", undefined, WRAPPER_STDERR), false],
+        ["string code '128' + phrase", execErr("Command failed", "128" as unknown as number, WRAPPER_STDERR), false],
+        ["code 128 + Permission denied", execErr("Command failed", 128, "git@host: Permission denied (publickey).\nfatal: Could not read from remote repository."), false],
+        ["code 128 + phrase text on message but stderr names a different failure", execErr(`Command failed\n${WRAPPER_STDERR}`, 128, "ssh: connect to host: Connection refused"), false],
+        // N22: the phrase is matched whole. A bare "does not exist" (or a bare "provision it first")
+        // on a code-128 failure is some other fault and must stay level 50.
+        ["code 128 + 'does not exist' without the parenthetical", execErr("Command failed", 128, "fatal: '/srv/x/ws-uuid.git' does not exist"), false],
+        ["code 128 + 'provision it first' without 'does not exist'", execErr("Command failed", 128, "remote: git-data transport: (provision it first)"), false],
+        ["non-object", "does not exist (provision it first)", false],
+        ["null", null, false],
+      ])("%s → %s", (_n, err, expected) => {
+        expect(isFirstSessionStoreMiss(err)).toBe(expected);
+      });
+    });
+
+    describe("ancestry gate + rescue branch", () => {
+      it("store tip descends from the clone tip → merge-base then reset --hard, no rescue branch", async () => {
+        armOverlay();
+        const out = await run();
+        expect(out).toBe("ok");
+        expect(mockLocalGit).toHaveBeenCalledWith(["merge-base", "--is-ancestor", "HEAD", primaryRef("main")], WS);
+        const verbs = mockLocalGit.mock.calls.map((c) => c[0][0]);
+        expect(verbs.indexOf("merge-base")).toBeGreaterThan(-1);
+        expect(verbs.indexOf("merge-base")).toBeLessThan(verbs.indexOf("reset"));
+        expect(mockLocalGit).toHaveBeenCalledWith(["reset", "--hard", primaryRef("main")], WS);
+        expect(gitCalls("branch")).toHaveLength(0);
+        expect(mockLogWarn).not.toHaveBeenCalled();
+      });
+
+      it("not a descendant (merge-base exit 1) → rescue branch created BEFORE the skip; no reset; warn without ids; no Sentry", async () => {
+        armOverlay({ mergeBase: async () => { throw execErr("Command failed", 1, ""); } });
+        const out = await run();
+        expect(out).toBe("ok");
+        // N25: created from the full sha that named it, not from the ref name
+        expect(mockLocalGit).toHaveBeenCalledWith(["branch", RESCUE, STORE_SHA], WS);
+        expect(gitCalls("reset")).toHaveLength(0);
+        const verbs = mockLocalGit.mock.calls.map((c) => c[0][0]);
+        expect(verbs.indexOf("merge-base")).toBeLessThan(verbs.indexOf("branch"));
+        // the rescue branch is created without -f
+        expect(JSON.stringify(gitCalls("branch"))).not.toMatch(/"-f"|"--force"|"-D"|"-M"/);
+        expect(mockLogWarn).toHaveBeenCalledTimes(1);
+        expect(mockLogWarn).toHaveBeenCalledWith(
+          expect.objectContaining({ op: "git-data-overlay-not-descendant" }),
+          expect.any(String),
+        );
+        expect(mockReportSilentFallback).not.toHaveBeenCalled();
+        const logs = allLogs();
+        expect(logs).not.toContain("u1");
+        expect(logs).not.toContain("ws-uuid");
+        expect(logs).not.toContain(STORE_SHA.slice(0, 12));
+      });
+
+      it("not a descendant and the branch cannot be created → level-50 fallback, NO reset, no skip warn", async () => {
+        armOverlay({
+          mergeBase: async () => { throw execErr("Command failed", 1, ""); },
+          branch: async () => { throw execErr("Command failed", 128, "fatal: cannot lock ref"); },
+        });
+        const out = await run();
+        expect(out).toBe("ok");
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+        expect(gitCalls("reset")).toHaveLength(0);
+        expect(mockLogWarn).not.toHaveBeenCalled();
+      });
+
+      it("not a descendant and the rescue branch already exists at the same sha → success (skip warn, no fallback)", async () => {
+        armOverlay({
+          mergeBase: async () => { throw execErr("Command failed", 1, ""); },
+          branch: async () => { throw execErr("Command failed", 128, `fatal: a branch named '${RESCUE}' already exists`); },
+          branchRevParse: async () => ({ stdout: `${STORE_SHA}\n` }),
+        });
+        await run();
+        expect(mockReportSilentFallback).not.toHaveBeenCalled();
+        expect(mockLogWarn).toHaveBeenCalledWith(
+          expect.objectContaining({ op: "git-data-overlay-not-descendant" }),
+          expect.any(String),
+        );
+        expect(gitCalls("reset")).toHaveLength(0);
+      });
+
+      it("rescue branch exists at a DIFFERENT sha → level-50 fallback, NO reset", async () => {
+        armOverlay({
+          mergeBase: async () => { throw execErr("Command failed", 1, ""); },
+          branch: async () => { throw execErr("Command failed", 128, "already exists"); },
+          branchRevParse: async () => ({ stdout: "ffffffffffffffffffffffffffffffffffffffff\n" }),
+        });
+        await run();
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+        expect(gitCalls("reset")).toHaveLength(0);
+        expect(mockLogWarn).not.toHaveBeenCalled();
+      });
+
+      // CTO F14 (amends F4/F7): an INDETERMINATE ancestry result (exit neither 0 nor 1) is not an
+      // answer. The store tip is still protected with a best-effort rescue branch, then the ORIGINAL
+      // error goes to the level-50 catch; the reset never runs.
+      it("merge-base exits 128 → best-effort rescue branch, original error reported once at level 50, no reset", async () => {
+        const mbErr = execErr("Command failed", 128, "fatal: Not a valid object name");
+        armOverlay({ mergeBase: async () => { throw mbErr; } });
+        const out = await run();
+        expect(out).toBe("ok");
+        expect(mockLocalGit).toHaveBeenCalledWith(["branch", RESCUE, STORE_SHA], WS);
+        expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(
+          mbErr, // the ORIGINAL error object, not the rescue's
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+        expect(gitCalls("reset")).toHaveLength(0);
+        // ordering: ancestry was asked first, the rescue came after
+        const verbs = mockLocalGit.mock.calls.map((c) => c[0][0]);
+        expect(verbs.indexOf("merge-base")).toBeLessThan(verbs.indexOf("branch"));
+        expect(mockLogWarn).not.toHaveBeenCalled(); // no "skipped" warn: this is the fault path
+      });
+
+      it("merge-base exits 128 and the rescue branch ALSO fails → the secondary error is swallowed; the original is reported once; no reset", async () => {
+        const mbErr = execErr("Command failed", 128, "fatal: Not a valid object name");
+        armOverlay({
+          mergeBase: async () => { throw mbErr; },
+          branch: async () => { throw execErr("Command failed", 128, "fatal: not a valid object name: missing"); },
+          branchRevParse: async () => { throw execErr("Command failed", 128, "fatal: Needed a single revision"); },
+        });
+        const out = await run();
+        expect(out).toBe("ok");
+        expect(gitCalls("branch")).toHaveLength(1);
+        expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(
+          mbErr,
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+        expect(gitCalls("reset")).toHaveLength(0);
+      });
+
+      it("merge-base exits 128 and the store tip does not resolve to a commit id → no branch call, original error reported, no reset", async () => {
+        const mbErr = execErr("Command failed", 128, "fatal: Not a valid object name");
+        armOverlay({ mergeBase: async () => { throw mbErr; }, storeTip: async () => ({ stdout: "zzz\n" }) });
+        await run();
+        expect(gitCalls("branch")).toHaveLength(0);
+        expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(mbErr, expect.objectContaining({ op: "git-data-overlay" }));
+        expect(gitCalls("reset")).toHaveLength(0);
+      });
+
+      // N24: the `^[0-9a-f]{40,64}$` guard on the resolved store tip. Replacing it with `true`
+      // would build a branch name from garbage.
+      it.each([
+        ["empty", ""],
+        ["non-hex", "zzz"],
+        ["too short", "0123456789abcdef"],
+        ["upper-case hex", "0123456789ABCDEF0123456789ABCDEF01234567"],
+        ["a symbolic name", "refs/remotes/git-data/main"],
+      ])("not a descendant and rev-parse of the store tip returns %s → level-50 fallback, NO branch call, NO reset, no skip warn", async (_n, out) => {
+        armOverlay({
+          mergeBase: async () => { throw execErr("Command failed", 1, ""); },
+          storeTip: async () => ({ stdout: `${out}\n` }),
+        });
+        await run();
+        expect(gitCalls("branch")).toHaveLength(0);
+        expect(gitCalls("reset")).toHaveLength(0);
+        expect(mockReportSilentFallback).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ op: "git-data-overlay" }),
+        );
+        expect(mockLogWarn).not.toHaveBeenCalled();
+      });
+
+      // N27: a second racer whose clone already sits at the store tip must not `reset --hard`
+      // (that would wipe uncommitted edits the first racer's session already made).
+      it("descends and HEAD already equals the store tip → NO reset (and no rescue branch)", async () => {
+        armOverlay({ head: async () => ({ stdout: `${STORE_SHA}\n` }) });
+        const out = await run();
+        expect(out).toBe("ok");
+        expect(mockLocalGit).toHaveBeenCalledWith(["rev-parse", "HEAD"], WS);
+        expect(gitCalls("reset")).toHaveLength(0);
+        expect(gitCalls("branch")).toHaveLength(0);
+        expect(mockReportSilentFallback).not.toHaveBeenCalled();
+        expect(mockLogWarn).not.toHaveBeenCalled();
+      });
+
+      it("descends and HEAD differs from the store tip → reset --hard still runs (positive control for the equality skip)", async () => {
+        armOverlay({ head: async () => ({ stdout: "ffffffffffffffffffffffffffffffffffffffff\n" }) });
+        await run();
+        expect(mockLocalGit).toHaveBeenCalledWith(["reset", "--hard", primaryRef("main")], WS);
+      });
+
+      it("descends and `rev-parse HEAD` fails → the optimisation is skipped, reset --hard still runs", async () => {
+        armOverlay({ head: async () => { throw execErr("Command failed", 128, "fatal: bad revision"); } });
+        await run();
+        expect(mockLocalGit).toHaveBeenCalledWith(["reset", "--hard", primaryRef("main")], WS);
+        expect(mockReportSilentFallback).not.toHaveBeenCalled();
+      });
+
+      // N27 guard: the equality skip needs a valid FULL sha on both sides. Two results that are
+      // EQUAL but not a commit id (an empty or garbage `rev-parse`) are not "already at the store
+      // tip"; without the `FULL_SHA_RE.test(tip) &&` guard they would skip the reset.
+      it.each([
+        ["empty", ""],
+        ["non-hex", "zzz"],
+      ])("descends and both rev-parse results are %s (equal, but not a full sha) → reset --hard still runs", async (_n, out) => {
+        armOverlay({
+          head: async () => ({ stdout: `${out}\n` }),
+          storeTip: async () => ({ stdout: `${out}\n` }),
+        });
+        await run();
+        expect(mockLocalGit).toHaveBeenCalledWith(["reset", "--hard", primaryRef("main")], WS);
+        expect(gitCalls("branch")).toHaveLength(0);
+        expect(mockReportSilentFallback).not.toHaveBeenCalled();
+      });
     });
   });
 });

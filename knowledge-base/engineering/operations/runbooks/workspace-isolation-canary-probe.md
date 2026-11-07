@@ -160,9 +160,9 @@ reaches hosts via `apply-deploy-pipeline-fix.yml` ahead of the first
 vitest-carrying image): an rc-125/126/127 records state without paging, so the
 window is benign by design and never reads as a false green.
 
-**Promotion criteria** (checked by the committed soak probe
-`scripts/followthroughs/workspace-isolation-verdict-2640.sh`, a stateless GET of
-`/hooks/deploy-status` — the host accumulates the counters):
+**Promotion criteria** (the soak probe that checked them was retired by G1 PR-4a, #10937;
+history in git; it was a stateless GET of `/hooks/deploy-status` — the host accumulates the
+counters):
 
 1. `consecutive_pass >= 5` — five consecutive green verdicts (any
    `workspace_isolation_failed` / `workspace_isolation_timeout` resets the

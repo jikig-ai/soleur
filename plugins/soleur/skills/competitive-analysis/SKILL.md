@@ -13,7 +13,7 @@ description: "This skill should be used when running competitive intelligence sc
 
 # Competitive Analysis
 
-Run a competitive intelligence scan (monthly tiered report) or a targeted peer-plugin audit. Both modes produce structured output in `knowledge-base/product/competitive-intelligence.md`.
+Run a competitive intelligence scan (monthly tiered report) or a targeted peer-plugin audit. Both modes produce structured output in the `knowledge-base/product/competitive-intelligence.md` index plus dated-record shards under `knowledge-base/product/competitive-intelligence/` (see references/living-kb-doc-sharding.md).
 
 ## Sub-Modes
 
@@ -55,7 +55,7 @@ Use AskUserQuestion to select tiers:
 
 Spawn the soleur:product:competitive-intelligence agent via Task tool:
 
-Task soleur:product:competitive-intelligence: "Run a competitive intelligence scan for tiers <TIERS>. Research each competitor in the specified tiers, read brand-guide.md and business-validation.md for positioning context, and write the report to knowledge-base/product/competitive-intelligence.md."
+Task soleur:product:competitive-intelligence: "Run a competitive intelligence scan for tiers <TIERS>. Research each competitor in the specified tiers, read brand-guide.md and business-validation.md for positioning context, and write the report as the index at knowledge-base/product/competitive-intelligence.md with dated/detail shards under knowledge-base/product/competitive-intelligence/."
 
 ### 4. Report Results
 
@@ -66,4 +66,4 @@ After the agent completes:
 
 ## Scheduled Execution
 
-The `scheduled-competitive-analysis.yml` workflow runs this skill monthly via `claude-code-action`. The agent's prompt includes instructions to commit and push the report to main after creating the audit trail issue. The push must happen inside the agent (not a separate workflow step) because: (1) `claude-code-action` revokes the App installation token in its post-step cleanup, and (2) the Claude App is a bypass actor on the CLA Required ruleset, so only pushes under its identity succeed. The GitHub Issue is still created as an audit trail.
+This skill runs monthly via the Inngest cron `cron-competitive-analysis` (apps/web-platform/server/inngest/functions/cron-competitive-analysis.ts; `0 9 1 * *`). The agent does NOT commit or push: the platform persists allowlisted changes and opens a PR handler-side via `safeCommitAndPr` after the run, gated on the audit-trail issue ("[Scheduled] Competitive Analysis - <date>") being created first.

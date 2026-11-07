@@ -35,6 +35,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 }));
 
 import { buildWorkspaceSettingsTools } from "@/server/workspace-settings-tools";
+import { ExecutionGrants } from "@/server/approval/grants";
 
 function textOf(res: unknown): unknown {
   const r = res as { content: Array<{ text: string }>; isError?: boolean };
@@ -48,7 +49,7 @@ describe("buildWorkspaceSettingsTools", () => {
   });
 
   it("registers the get + set tool names", () => {
-    const { toolNames } = buildWorkspaceSettingsTools({ userId: "user-1" });
+    const { toolNames } = buildWorkspaceSettingsTools({ userId: "user-1", grants: new ExecutionGrants() });
     expect(toolNames).toEqual([
       "mcp__soleur_platform__workspace_get_autonomous",
       "mcp__soleur_platform__workspace_set_autonomous",
@@ -57,7 +58,7 @@ describe("buildWorkspaceSettingsTools", () => {
 
   it("get tool returns { autonomous } from resolveBashAutonomous", async () => {
     mockResolve.mockResolvedValue(true);
-    buildWorkspaceSettingsTools({ userId: "user-1" });
+    buildWorkspaceSettingsTools({ userId: "user-1", grants: new ExecutionGrants() });
     const res = await captured.workspace_get_autonomous.handler({});
     expect(mockResolve).toHaveBeenCalledWith("user-1");
     expect(textOf(res)).toEqual({ payload: { autonomous: true }, isError: false });
@@ -65,7 +66,7 @@ describe("buildWorkspaceSettingsTools", () => {
 
   it("set tool calls setBashAutonomous(userId, value) and returns the value", async () => {
     mockSet.mockResolvedValue(true);
-    buildWorkspaceSettingsTools({ userId: "user-1" });
+    buildWorkspaceSettingsTools({ userId: "user-1", grants: new ExecutionGrants() });
     const res = await captured.workspace_set_autonomous.handler({ value: true });
     expect(mockSet).toHaveBeenCalledWith("user-1", true);
     expect(textOf(res)).toEqual({ payload: { autonomous: true }, isError: false });
@@ -73,7 +74,7 @@ describe("buildWorkspaceSettingsTools", () => {
 
   it("set tool surfaces an error (owner-deny / fault) as an isError response", async () => {
     mockSet.mockRejectedValue(new Error("not authorized"));
-    buildWorkspaceSettingsTools({ userId: "user-1" });
+    buildWorkspaceSettingsTools({ userId: "user-1", grants: new ExecutionGrants() });
     const res = await captured.workspace_set_autonomous.handler({ value: true });
     const out = textOf(res) as { payload: { error: string }; isError: boolean };
     expect(out.isError).toBe(true);
@@ -81,7 +82,7 @@ describe("buildWorkspaceSettingsTools", () => {
   });
 
   it("set tool description carries the prompt-injection risk text", () => {
-    buildWorkspaceSettingsTools({ userId: "user-1" });
+    buildWorkspaceSettingsTools({ userId: "user-1", grants: new ExecutionGrants() });
     expect(captured.workspace_set_autonomous.description).toMatch(
       /prompt-injected|approval-bypass/i,
     );

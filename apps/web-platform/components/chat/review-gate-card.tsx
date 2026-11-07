@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { RefusedSendNotice, type RefusalContext } from "@/components/chat/refused-send-notice";
+
+// A short fixed label: the full question (up to a whole email body) stays visible text, not the accessible name.
+export const REVIEW_GATE_ARIA_LABEL = "Approval needed";
 
 export function ReviewGateCard({
   gateId,
@@ -13,6 +17,8 @@ export function ReviewGateCard({
   resolved,
   selectedOption,
   gateError,
+  refusal,
+  resetKey,
   onSelect,
 }: {
   gateId: string;
@@ -24,15 +30,35 @@ export function ReviewGateCard({
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
-  onSelect: (gateId: string, selection: string) => void;
+  /** Why a refused response was refused (credential vs plain connection). */
+  refusal?: RefusalContext;
+  /** Changes when the connection is sendable again: clears a stale refusal line. */
+  resetKey?: number;
+  /** Return `false` when the response was REFUSED (nothing left the client). */
+  onSelect: (gateId: string, selection: string) => boolean | void;
 }) {
   const [pending, setPending] = useState<string | null>(null);
+  // Count of refusals since the last accepted send / reset (0 = none). It is the
+  // notice's React key so a SECOND refusal remounts the role=alert node and is
+  // announced again.
+  const [refusalCount, setRefusalCount] = useState(0);
 
   function handleSelect(option: string) {
     if (pending || resolved) return;
     setPending(option);
-    onSelect(gateId, option);
+    // Only an explicit `false` is a refusal: re-enable the options and say why.
+    // (No pre-reset to 0: batched with the increment it would repeat the key.)
+    if (onSelect(gateId, option) === false) {
+      setPending(null);
+      setRefusalCount((n) => n + 1);
+    } else {
+      setRefusalCount(0);
+    }
   }
+
+  useEffect(() => {
+    setRefusalCount(0);
+  }, [resetKey]);
 
   useEffect(() => {
     if (gateError) setPending(null);
@@ -50,7 +76,7 @@ export function ReviewGateCard({
   }
 
   return (
-    <div role="group" aria-label={question} aria-busy={pending !== null} className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
+    <div role="group" aria-label={REVIEW_GATE_ARIA_LABEL} aria-busy={pending !== null} className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
       {stepProgress && stepProgress.total > 0 && (() => {
         const pct = Math.round((stepProgress.current / stepProgress.total) * 100);
         return (
@@ -79,7 +105,7 @@ export function ReviewGateCard({
           <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
           <line x1="12" y1="17" x2="12.01" y2="17" />
         </svg>
-        <p className="text-base font-medium text-amber-200">{question}</p>
+        <p className="min-w-0 text-base font-medium text-amber-200 whitespace-pre-wrap [overflow-wrap:anywhere]">{question}</p>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {options.map((option) => (
@@ -107,6 +133,7 @@ export function ReviewGateCard({
       {gateError && (
         <p role="alert" className="mt-2 text-sm text-red-400">{gateError}</p>
       )}
+      {refusalCount > 0 && !resolved && <RefusedSendNotice key={refusalCount} refusal={refusal} />}
     </div>
   );
 }

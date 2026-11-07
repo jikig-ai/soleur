@@ -175,14 +175,15 @@ else
   no "H3: expected a 'set +e  # H3 …' restoring errexit-off after the extraction block"
 fi
 # Non-vacuity: the set +e must appear AFTER the extraction's rm -rf "$SEED" and
-# BEFORE the bare cloudflared apt install.
+# BEFORE the bare cloudflared install (now the pinned .deb block — same "first
+# leak-vulnerable downstream command" role the apt install used to fill).
 rm_ln=$(line_of "$CI" 'rm -rf "$SEED"')
 h3_ln=$(grep -nE 'set \+e.*H3' "$CI" | sed -n '1p' | cut -d: -f1 || true)
-apt_ln=$(line_of "$CI" 'apt-get install -y cloudflared')
+apt_ln=$(line_of "$CI" 'cloudflared-linux-amd64.deb')
 if [ -n "$rm_ln" ] && [ -n "$h3_ln" ] && [ -n "$apt_ln" ] && [ "$rm_ln" -lt "$h3_ln" ] && [ "$h3_ln" -lt "$apt_ln" ]; then
-  ok "H3: set +e (line $h3_ln) sits between extraction end ($rm_ln) and cloudflared apt ($apt_ln)"
+  ok "H3: set +e (line $h3_ln) sits between extraction end ($rm_ln) and the cloudflared install ($apt_ln)"
 else
-  no "H3: set +e must sit after rm -rf \$SEED ($rm_ln) and before cloudflared apt ($apt_ln); h3=$h3_ln"
+  no "H3: set +e must sit after rm -rf \$SEED ($rm_ln) and before the cloudflared install ($apt_ln); h3=$h3_ln"
 fi
 
 # ── AC6 (readiness gates — the load-bearing async-death detector) ──
@@ -731,14 +732,24 @@ if [ -n "$su_ln" ] && [ -n "$auu_ln" ] && [ -n "$armln2" ] && [ "$armln2" -lt "$
 else
   no "AC17: need trap-arm < STAGE=apt_update < apt-get update (arm=$armln2 stage=$su_ln update=$auu_ln)"
 fi
-# The cloudflare keyring must be fetched BEFORE the first apt-get update — the cloudflare source is
-# active from boot (write_files), so an update before the key deterministically fails (missing
-# signed-by keyring) and masks the real cause. (Anchor on the curl fetch, not the deb/signed-by line.)
-cfk_ln=$(grep -nE 'curl.*cloudflare-main\.gpg' "$CI" | sed -n '1p' | cut -d: -f1 || true)
-if [ -n "$cfk_ln" ] && [ -n "$auu_ln" ] && [ "$cfk_ln" -lt "$auu_ln" ]; then
-  ok "AC17: cloudflare keyring fetched (line $cfk_ln) BEFORE apt-get update ($auu_ln) — no missing-key fatal"
+# The Cloudflare apt source + keyring are GONE (eMudhra remediation): the repo rotated
+# versions, so an unpinned `apt-get install -y cloudflared` could resurrect a below-advisory-
+# floor binary on a host birth. cloudflared now installs as a pinned .deb + sha256 fail-closed
+# arm (soleur-boot-emit cloudflared_checksum), and the missing-keyring-before-apt-update
+# ordering hazard is gone with the source. Pin all three halves: no source list, no keyring
+# fetch, no unpinned install.
+if ! grep -qE 'cloudflare-main\.list|cloudflare-main\.gpg|cf_apt_key' "$CI" \
+   && ! grep -qF 'apt-get install -y cloudflared' "$CI"; then
+  ok "AC17: no Cloudflare apt source/keyring/cf_apt_key stage and no unpinned cloudflared apt install"
 else
-  no "AC17: cloudflare-main.gpg must be curl-fetched before the first apt-get update (cfk=$cfk_ln update=$auu_ln)"
+  no "AC17: Cloudflare apt machinery must be REMOVED (cloudflared installs via pinned .deb, not the rotating apt repo)"
+fi
+if grep -qF 'cloudflared-linux-amd64.deb' "$CI" \
+   && grep -qF 'sha256sum -c -' "$CI" \
+   && grep -qF 'soleur-boot-emit cloudflared_checksum fatal' "$CI"; then
+  ok "AC17: cloudflared installs via pinned .deb + sha256 fail-closed arm (cloudflared_checksum)"
+else
+  no "AC17: cloud-init must install cloudflared as a pinned .deb + sha256sum -c + soleur-boot-emit cloudflared_checksum fatal"
 fi
 
 # ── AC18 (#6090): ghcr_login/pull capture the host-side error into the emit `detail` tag ──
@@ -1023,6 +1034,35 @@ if awk '/cat > \/usr\/local\/bin\/soleur-vector-install/,/^VINEOF$/' "$BOOT" \
   ok "AC22: helper skips install when an inngest-owned vector.service is present (no clobber on colocate hosts)"
 else
   no "AC22: soleur-vector-install must skip when /etc/systemd/system/vector.service is inngest-owned (colocate mutual-exclusion)"
+fi
+# (4d) #10078 (CTO ruling) — vector.service stays DESIGNED-LOUD on /etc/default/webhook-deploy:
+#      the file is written unconditionally by cloud-init before first start, so absence is a
+#      real fault, and a skipped Type=simple shipper never re-evaluates the condition (no
+#      self-heal). The extraction reads the UNITEOF heredoc BODY — a grep against $BOOT alone
+#      would also see comments/tests, so the negative pin must scope to what ships in the unit.
+VEC_UNIT_BODY="$(awk '/cat > "\$UNIT" <<'"'"'UNITEOF'"'"'/,/^UNITEOF$/' "$BOOT")"
+if [ -n "$VEC_UNIT_BODY" ]; then
+  ok "AC22: the web vector.service UNITEOF heredoc body extracts"
+else
+  no "AC22: could not extract the vector.service heredoc — the (4d) arms are vacuous"
+fi
+if ! printf '%s\n' "$VEC_UNIT_BODY" | _qgrep -E '^[[:space:]]*ConditionPathExists='; then
+  ok "AC22: web vector.service carries zero ConditionPathExists= directives (designed-loud)"
+else
+  no "AC22: web vector.service gained a ConditionPathExists= — conditioning the log shipper kills its self-heal (#10078 says keep the crash-loop signal)"
+fi
+if printf '%s\n' "$VEC_UNIT_BODY" | _qgrep -F 'DELIBERATELY UNCONDITIONED'; then
+  ok "AC22: web vector.service carries the DELIBERATELY UNCONDITIONED comment"
+else
+  no "AC22: web vector.service lost the designed-loud comment (must name why no ConditionPathExists)"
+fi
+# The designed-loud claim needs a named receiver — "loud" without "heard by whom"
+# is an inference the debugging agent must make. Vector's comment must name its
+# detector (Better Stack / betteruptime), mirroring §12b's detector pinning.
+if grep -cqE '^[[:space:]]*#.*(Better Stack|betterstack|betteruptime)' <<<"$VEC_UNIT_BODY"; then
+  ok "AC22: web vector.service designed-loud comment names its detector (Better Stack)"
+else
+  no "AC22: web vector.service designed-loud comment names no detector — 'loud' needs a receiver"
 fi
 # (5) bootstrap stages vector.toml, rendering @@HOST_NAME@@ from the TF-injected SOLEUR_HOST_NAME
 if grep -qE 's\|@@HOST_NAME@@\|\$\{SOLEUR_HOST_NAME:-\$\(hostname\)\}\|g' "$BOOT"; then

@@ -4,8 +4,9 @@
 # The dependency-cruiser config and the shared runner are emitted as
 # BYTE-IDENTICAL copies of the skill's templates; the CI workflow is a single
 # `sed __TARGET_DIR__ -> apps/web-platform` substitution of the workflow
-# template; and the repo-root dogfood gate lives folded as `jobs.constraint-gates` inside
-# `.github/workflows/pr-quality-guards.yml` (#8902) — structurally compared to the template job. ANY edit to a template
+# template; and the repo-root dogfood gate lives folded as the `constraint-gates*`
+# member steps of `jobs.quality-advisory` inside
+# `.github/workflows/pr-quality-guards.yml` (#8902, member-folded under #12089) — structurally compared to the template job. ANY edit to a template
 # MUST be mirrored into every emitted copy (and vice-versa), or the gate Soleur
 # ships diverges from the gate Soleur tests. This test fails loud on any drift.
 #
@@ -72,31 +73,77 @@ else
 fi
 
 # 4. The folded repo-root gate == the template's constraint-gates job. Since
-#    #8902 the dogfood instance lives as `jobs.constraint-gates` inside
-#    `.github/workflows/pr-quality-guards.yml` (the standalone root file was
-#    folded into the shared PR-gates workflow). Structural compare: parse both
-#    sides, drop the fold-added `if:` (PR-only gate — the template file has no
-#    merge_group so the arm is equivalent), and diff canonical YAML.
+#    #8902 the dogfood instance lives inside `.github/workflows/pr-quality-guards.yml`
+#    (the standalone root file was folded into the shared PR-gates workflow), and
+#    since #12089 as the `constraint-gates*` member-step block of
+#    `jobs.quality-advisory` (the standalone job was folded into the advisory
+#    umbrella). Structural compare: the umbrella job's own checkout stands in
+#    for the folded job's checkout step (same action pin and fetch-depth; extra
+#    `with:` keys like persist-credentials are fold additions), and each member
+#    step is compared to its template step after undoing the fold — the
+#    `constraint-gates-` id prefix (`changed` -> `constraint-gates-changed`) and
+#    the `${{ !cancelled() }}` member-standard `if:`.
 strip_body() { grep -vE '^[[:space:]]*#' | grep -vE '^[[:space:]]*$' || true; }
 D="$(python3 - "$SUBST" "$REPO_ROOT/.github/workflows/pr-quality-guards.yml" <<'PY' 2>&1 || true
-import sys, yaml
+import sys, yaml, re, difflib
 tmpl = yaml.safe_load(sys.argv[1])["jobs"]["constraint-gates"]
-root = yaml.safe_load(open(sys.argv[2]))["jobs"]["constraint-gates"]
-root.pop("if", None)  # fold-added: host file merges merge_group; job is PR-only
-a = yaml.safe_dump(tmpl, sort_keys=True)
-b = yaml.safe_dump(root, sort_keys=True)
+root = yaml.safe_load(open(sys.argv[2]))["jobs"]["quality-advisory"]
+problems = []
+
+# the umbrella job's own checkout stands in for the folded job's checkout step
+tco, rco = tmpl["steps"][0], root["steps"][0]
+if rco.get("uses") != tco.get("uses"):
+    problems.append("umbrella checkout uses %r != template %r" % (rco.get("uses"), tco.get("uses")))
+if (rco.get("with") or {}).get("fetch-depth") != (tco.get("with") or {}).get("fetch-depth"):
+    problems.append("umbrella checkout fetch-depth %r != template %r"
+                    % ((rco.get("with") or {}).get("fetch-depth"), (tco.get("with") or {}).get("fetch-depth")))
+
+# every member step carries the constraint-gates id prefix, in file order
+mem = [s for s in root["steps"]
+       if str(s.get("id", "")) == "constraint-gates" or str(s.get("id", "")).startswith("constraint-gates-")]
+tsteps = tmpl["steps"][1:]
+if len(mem) != len(tsteps):
+    problems.append("member census: %d constraint-gates* steps in quality-advisory != %d template steps"
+                    % (len(mem), len(tsteps)))
+norm_mem = []
+for ts, ms in zip(tsteps, mem):
+    ms = dict(ms)
+    if ms.get("name") != ts.get("name"):
+        problems.append("member step %r order/name diverges from template step %r" % (ms.get("name"), ts.get("name")))
+    mid = ms.pop("id", None)
+    if ts.get("id") == "changed":
+        # the fold renamed the detect step's id to constraint-gates-changed and gave
+        # the previously unconditional step the member-standard ${{ !cancelled() }}
+        if mid != "constraint-gates-changed":
+            problems.append("detect member id %r != 'constraint-gates-changed'" % mid)
+        ms["id"] = "changed"
+        if ms.get("if") == "${{ !cancelled() }}":
+            ms.pop("if")
+        else:
+            problems.append("detect member if: %r is not the fold-standard ${{ !cancelled() }}" % ms.get("if"))
+    else:
+        m = re.fullmatch(r"\$\{\{ !cancelled\(\) && (.*) \}\}", str(ms.get("if", "")))
+        if m:
+            ms["if"] = m.group(1).replace("steps.constraint-gates-changed", "steps.changed")
+        else:
+            problems.append("member step %r if: %r is not the ${{ !cancelled() && ... }} fold shape"
+                            % (ms.get("name"), ms.get("if")))
+    norm_mem.append(ms)
+
+a = yaml.safe_dump(tsteps, sort_keys=True)
+b = yaml.safe_dump(norm_mem, sort_keys=True)
 if a != b:
-    import difflib
-    print("\n".join(difflib.unified_diff(a.splitlines(), b.splitlines(),
-          "template.jobs.constraint-gates", "pr-quality-guards.jobs.constraint-gates",
+    problems.append("\n".join(difflib.unified_diff(a.splitlines(), b.splitlines(),
+          "template.jobs.constraint-gates.steps[1:]", "pr-quality-guards.jobs.quality-advisory.constraint-gates*",
           lineterm="")))
+print("\n".join(problems))
 PY
 )"
 cases=$((cases + 1))
 if [[ -z "$D" ]]; then
-  pass "jobs.constraint-gates in pr-quality-guards.yml == substituted template job"
+  pass "constraint-gates* member steps of quality-advisory in pr-quality-guards.yml == substituted template job"
 else
-  fail "jobs.constraint-gates in pr-quality-guards.yml DIVERGES from template job"
+  fail "constraint-gates* member steps of quality-advisory DIVERGE from template job"
   printf '%s\n' "$D" | sed 's/^/    /'
 fi
 

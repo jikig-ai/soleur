@@ -90,15 +90,23 @@ Grep: pattern="component:.*background_job" path=knowledge-base/project/learnings
 Grep: pattern="email" path=knowledge-base/project/learnings/ output_mode=files_with_matches -i=true
 ```
 
-### Step 3b: Always Check Critical Patterns
+### Step 3b: Always Check Required-Reading Patterns
 
-**Regardless of Grep results**, always read the critical patterns file:
+**Regardless of Grep results**, check the pattern pages:
 
 ```bash
-Read: knowledge-base/project/learnings/patterns/critical-patterns.md
+Glob: knowledge-base/project/patterns/*.md
 ```
 
-This file contains must-know patterns that apply across all work - high-severity issues promoted to required reading. Scan for patterns relevant to the current feature/task.
+If `knowledge-base/project/patterns/` does not exist or the glob matches nothing, say so explicitly in the output ("no patterns directory in this repo") and continue; this is a normal state, not an error. Otherwise read the frontmatter of each page (limit:30) to select those with `status: open` and `required_reading: true`, then read the FULL body of each selected page and scan it for relevance to the current feature/task. If the directory exists but no page has `required_reading: true`, say so ("no required-reading pages") and report nothing from this step. If a page fails to parse (malformed frontmatter), skip it and mention it by file name in the output; do not abort.
+
+**Fallback directory (repos with no `knowledge-base/project/patterns/`):** also check
+
+```bash
+Glob: knowledge-base/project/learnings/patterns/*.md
+```
+
+This is where `compound-capture` appends required-reading entries when a repo has no patterns directory (`knowledge-base/project/learnings/patterns/required-reading.md`). Read any file found as before and merge its relevant entries into the same output section. Older installs may also carry a legacy required-reading file in that directory; it is read the same way.
 
 ### Step 4: Read Frontmatter of Candidates Only
 
@@ -219,8 +227,8 @@ Structure your findings as:
 - **Files Scanned**: [X total files]
 - **Relevant Matches**: [Y files]
 
-### Critical Patterns (Always Check)
-[Any matching patterns from critical-patterns.md]
+### Required-Reading Patterns (Always Check)
+[Matching open pattern pages with `required_reading: true`, plus any legacy required-reading entries; state if no patterns directory exists]
 
 ### Relevant Learnings
 
@@ -254,7 +262,7 @@ Structure your findings as:
 - Use category directories to narrow scope when feature type is clear
 - Do a broader content Grep as fallback if <3 candidates found
 - Re-narrow with more specific patterns if >25 candidates found
-- Always read the critical patterns file (Step 3b)
+- Always check the required-reading pattern pages (Step 3b)
 - Only read frontmatter of Grep-matched candidates (not all files)
 - Filter aggressively - only fully read truly relevant files
 - Prioritize high-severity and critical patterns
@@ -272,7 +280,7 @@ Structure your findings as:
 - Read every file in full (wasteful)
 - Return raw document contents (distill instead)
 - Include tangentially related learnings (focus on relevance)
-- Skip the critical patterns file (always check it)
+- Skip the required-reading pattern pages (always check them)
 
 ## Integration Points
 

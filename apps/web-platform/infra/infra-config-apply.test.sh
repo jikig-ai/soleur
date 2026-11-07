@@ -126,14 +126,13 @@ export_valid_env_vars() {
   export GIT_LOCK_CHARDEVICE_SWEEP_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_REGISTRY_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_DOUBLEFIRE_PROBE_SH_B64=$(_payload_file "#!/bin/bash")
-  # #6780 — the five dedicated-host carriers (ADR-135 D3 refresh-set members), payload
+  # #6780 — the four dedicated-host carriers (ADR-135 D3 refresh-set members), payload
   # fields mirrored from push-infra-config.sh; on web hosts they land as inert
   # /usr/local/bin files, their real channel being the dedicated host's bundle pull.
   export INNGEST_REDIS_BOOTSTRAP_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_CUTOVER_FLIP_SH_B64=$(_payload_file "#!/bin/bash")
   export INNGEST_SERVER_FLIP_GUARD_SH_B64=$(_payload_file "#!/bin/bash")
   export CAT_INNGEST_CUTOVER_STATE_SH_B64=$(_payload_file "#!/bin/bash")
-  export INNGEST_LUKS_CUTOVER_SH_B64=$(_payload_file "#!/bin/bash")
   # #7095 — the re-deliverable Doppler credential + the two drop-ins re-pointing the
   # generated units (vector, inngest-heartbeat) at it. The credential payload MUST be valid
   # KEY=VALUE: infra-config-install.sh rejects a malformed /etc/default/* payload outright
@@ -1670,6 +1669,44 @@ test_webhook_start_limit_disabled() {
   assert_eq "StartLimitIntervalSec=0 is present in the [Unit] section" "1" "$in_unit"
 }
 
+# #10078 (CTO ruling) — the deploy channel stays DESIGNED-LOUD. The five web probe units
+# gained ConditionPathExists= skip-vs-fail on their late-written env files, but
+# webhook.service (and its cloud-init.yml write_files twin, which parity §4b keeps
+# directive-identical) must NEVER carry a ConditionPathExists= on
+# /etc/default/webhook-deploy: the file is written unconditionally by the same runcmd
+# before this unit's first start, so absence is a real fault already fatal-trapped —
+# and a skipped Type=simple service never re-evaluates the condition, turning a
+# transient fault into a permanently dead deploy channel with no self-heal. The
+# RestartSec=5 crash-loop B5.3 keeps un-rate-limited IS the designed signal.
+test_webhook_envfile_unconditioned() {
+  echo "TEST: #10078 — webhook.service stays designed-loud (no ConditionPathExists on its env file)"
+  local unit="${SCRIPT_DIR}/webhook.service" cloud_init="${SCRIPT_DIR}/cloud-init.yml"
+  # File-wide, not section-scoped: in [Unit] a condition would skip the start; anywhere
+  # else it is an inert lvalue that still documents the wrong intent. `|| true` INSIDE
+  # each substitution — grep -c exits 1 on zero matches and this file runs set -e.
+  local n_cond n_marker
+  n_cond=$(grep -cE '^[[:space:]]*ConditionPathExists=' "$unit" || true)
+  assert_eq "repo webhook.service carries zero ConditionPathExists= directives" "0" "$n_cond"
+  n_marker=$(grep -cF 'DELIBERATELY UNCONDITIONED' "$unit" || true)
+  assert_eq "repo webhook.service carries the DELIBERATELY UNCONDITIONED comment" "1" "$n_marker"
+  # The designed-loud rationale must name a RECEIVER for the crash-loop signal —
+  # the §12b conditioned units each pin their detectors (web_probe_envwrite fatal
+  # emit + per-unit beat); a marker without a named detector tells the debugging
+  # agent "loud" but not "heard by whom". Any one of the pinned tokens counts.
+  grep -qE 'webhook_bound|github_webhook_failures|soleur-boot-emit' "$unit" \
+    || fail "repo webhook.service designed-loud comment names no detector (want webhook_bound / github_webhook_failures / soleur-boot-emit)"
+  # The write_files twin is the copy a fresh host actually boots — a skip would land
+  # THERE first, on the boot ordering where the env file is most plausibly absent.
+  local twin n_twin_cond n_twin_marker
+  twin=$(awk 'f && /^  - path:/{exit} /^  - path: \/etc\/systemd\/system\/webhook\.service$/{f=1} f' "$cloud_init")
+  n_twin_cond=$(printf '%s\n' "$twin" | grep -cE 'ConditionPathExists=' || true)
+  assert_eq "cloud-init webhook.service twin carries zero ConditionPathExists= directives" "0" "$n_twin_cond"
+  n_twin_marker=$(printf '%s\n' "$twin" | grep -cF 'DELIBERATELY UNCONDITIONED' || true)
+  assert_eq "cloud-init webhook.service twin carries the designed-loud comment" "1" "$n_twin_marker"
+  grep -qE 'webhook_bound|github_webhook_failures|soleur-boot-emit' <<<"$twin" \
+    || fail "cloud-init webhook.service twin names no detector token for the crash-loop signal"
+}
+
 test_daemon_reload_grant_lockstep() {
   echo "TEST: #7220 B2 — daemon-reload is granted, and the handler sends the granted argv"
   local sudoers="${SCRIPT_DIR}/deploy-inngest-bootstrap.sudoers"
@@ -2433,6 +2470,7 @@ test_handler_to_grant_lint
 test_unparseable_hooks_json_is_a_hard_failure
 test_self_restart_collect_argv_lockstep
 test_webhook_start_limit_disabled
+test_webhook_envfile_unconditioned
 test_daemon_reload_grant_lockstep
 test_daemon_reload_runs_on_a_clean_apply
 test_daemon_reload_reachable_with_test_mode_unset
@@ -2579,7 +2617,8 @@ fi
 # only a ratchet if it tracks the real total; leaving it at 190 after adding 61 assertions would
 # let the entire new parity block vanish without the floor noticing — which is the exact
 # "a count-framed ratchet cannot see a removal" failure the floor exists to prevent.
-APPLY_MIN_ASSERTIONS=251
+# #10078 raised it to 255 (+4 for test_webhook_envfile_unconditioned's designed-loud pins).
+APPLY_MIN_ASSERTIONS=255
 if [[ $((CASES + SKIPPED_ASSERTIONS)) -lt "$APPLY_MIN_ASSERTIONS" ]]; then
   printf '\n[FATAL] anti-vacuity floor: only %d assertion(s) ran and %d were declared-skipped (%d total), expected >= %d.\n' \
     "$CASES" "$SKIPPED_ASSERTIONS" "$((CASES + SKIPPED_ASSERTIONS))" "$APPLY_MIN_ASSERTIONS" >&2

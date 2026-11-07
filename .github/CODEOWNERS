@@ -26,11 +26,28 @@
 /scripts/ci-draft-push-census.sh                       @deruelle
 /scripts/ci-draft-push-census.test.sh                  @deruelle
 /scripts/ci-push-dedupe.test.sh                         @deruelle
+/scripts/ci-oracle-lane.sh                              @deruelle
+/scripts/ci-oracle-lane.test.sh                         @deruelle
+/scripts/ci-oracle-lane-suites.txt                      @deruelle
 /scripts/followthroughs/ci-draft-light-soak-9728.sh      @deruelle
 /scripts/followthroughs/ci-draft-light-soak-9728.test.sh @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.sh     @deruelle
 /scripts/followthroughs/ci-push-dedupe-soak-9512.test.sh @deruelle
+/scripts/followthroughs/dispatch-recovery-sweeper-11211.sh      @deruelle
+/scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh @deruelle
+/scripts/followthroughs/inngest-luks-keeper-dark-11265.sh      @deruelle
+/scripts/followthroughs/inngest-luks-keeper-dark-11265.test.sh @deruelle
 /apps/web-platform/test/__synthesized__/parse-gitleaks-allowlists.test.sh @deruelle
+
+# Sole-copy Inngest LUKS guard files outside /apps/web-platform/infra/ (#9927 item 10, ADR-282). ROUTING TEXT ONLY: `*` already names the same
+# owner and the CI ruleset has no require_code_owner_review, so these rows are not a second reviewer and not enforcement.
+/plugins/soleur/test/terraform-target-parity.test.ts    @deruelle
+/tests/scripts/test-infra-privileged-tier-census.sh     @deruelle
+/tests/scripts/lib/hcl-effective-text.sh                @deruelle
+/tests/scripts/lib/inngest-host-replace-gate.sh         @deruelle
+/tests/scripts/test-inngest-host-replace-gate.sh        @deruelle
+/scripts/test-all.sh                                    @deruelle
+/scripts/lint-orphan-test-suites.sh                    @deruelle
 
 # Trust-binding gate — protects last-verified from drive-by edits (issue #3535).
 # gdpr-gate-self-test.yml is the self-test that asserts the operator-attested-mode
@@ -228,6 +245,7 @@
 # they carry explicit rows (load-bearing-files-get-explicit-rows). NOTE: as the header says,
 # CODEOWNERS review is only an anchor once branch protection requires it.
 /apps/web-platform/infra/web-1-ssh-host-key.pub         @deruelle
+/apps/web-platform/infra/web-2-ssh-host-key.pub         @deruelle
 /.github/actions/dispatch-web-redeploy/                 @deruelle
 /apps/web-platform/server/git-auth.ts                   @deruelle
 /apps/web-platform/server/git-data-replication.ts       @deruelle
@@ -249,7 +267,10 @@
 /plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh @deruelle
 /plugins/soleur/test/fixtures/codeql-main-alert-gate/   @deruelle
 /plugins/soleur/test/fixtures/codeql-main-alert-gate-workflow-wiring/ @deruelle
+/plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh @deruelle
+/plugins/soleur/test/fixtures/codeql-to-issues-sweep-wiring/ @deruelle
 /scripts/merge-queue-cla-verify.sh                      @deruelle
+/scripts/merge-queue-jump.sh                          @deruelle
 /scripts/probe-merge-group-coverage.sh                  @deruelle
 /plugins/soleur/scripts/sync-pr-behind.sh               @deruelle
 /.claude/hooks/pre-merge-rebase.sh                      @deruelle

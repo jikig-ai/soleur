@@ -59,8 +59,8 @@
 # WHY `gh run view --job <id> --log` AND NOT `gh api …/jobs/<id>/logs`: measured
 # 2026-09-18 on gh 2.101.0 — `gh api` exits 1 on this log, refusing a response that
 # carries terminal escape sequences (the runner echoes each step's script in ANSI colour).
-# `gh run view` is also what scripts/followthroughs/monitor-streak-cache-roundtrip-7574.sh
-# used to reach its PASS from inside the sweeper.
+# `gh run view` is also what a since-retired streak round-trip follow-through (#7574) used to
+# reach its PASS from inside the sweeper.
 #
 # KNOWN RESIDUAL: `head_branch == "main"` is also satisfied by a TAG named `main`. Pushing
 # one needs repository write access, which already exceeds what this probe defends against.

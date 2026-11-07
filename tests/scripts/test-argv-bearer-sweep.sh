@@ -41,6 +41,15 @@
 # All tokens are SYNTHESIZED. No network, no Doppler, no real credential is ever read.
 set -uo pipefail
 
+# STDIN IS CLOSED FOR THE WHOLE SUITE (#11572 item 13). Children inherit this process's stdin, and the S6 stub `docker`
+# (written below) drains it unconditionally with `pw="$(cat)"` on every arm: under an open stdin (a terminal, a CI pipe
+# that never closes) any call that reaches it without its own piped stdin blocks forever. Other readers of stdin exist too
+# (the curl shim cats its body for `@-` and `--config -`); only the `read` loops in this file are all fed by a here-string, a
+# file, a process substitution or a pipe. This line gives every child that is not handed its own stdin an immediate EOF.
+# The pin rows after `_selftest_report` assert that it stays the FIRST statement after `set -uo pipefail`, and that fd 0
+# really is /dev/null at run time.
+exec < /dev/null
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT" || { echo "FATAL: cannot cd to $REPO_ROOT" >&2; exit 2; }
 
@@ -100,6 +109,43 @@ _selftest_report() {
   pass=$p0; fail=$f0; CASES=$c0
 }
 _selftest_report
+
+# Pin of the `exec < /dev/null` above (Guard 3 of #11572 item 13): it must be the FIRST statement after the first
+# `set -uo pipefail`, at column 0 and unconditional. A layout where it sits later, inside a function, an `if` or a `case` arm
+# is refused (each of those lets a child be started with the inherited stdin before it runs, or never runs it).
+_pin_exec_stdin() { # <suite file>
+  awk '
+    !s && $0 == "set -uo pipefail" { s = 1; next }
+    s && !r && $0 !~ /^[[:space:]]*(#|$)/ { r = 1; ok = ($0 == "exec < /dev/null") }
+    END { exit !(s && r && ok) }' "$1"
+}
+if _pin_exec_stdin "${BASH_SOURCE[0]}"; then row "stdin: the suite closes its stdin (exec < /dev/null) as the first statement after set -uo pipefail" ok
+else row "stdin: the suite closes its stdin (exec < /dev/null) as the first statement after set -uo pipefail" fail "the exec line is missing, not first, conditional, or nested"; fi
+# Runtime: fd 0 really is /dev/null (the file pin above cannot see an exec that never ran). Without /proc, a read that returns
+# EOF at once (rc 1) stands in; an open stdin would time out (rc > 128) instead.
+_fd0="$(readlink /proc/self/fd/0 2>/dev/null || true)"
+if [[ -z "$_fd0" ]]; then IFS= read -r -t 2 _fd0_line; _fd0_rc=$?; [[ "$_fd0_rc" == 1 ]] && _fd0=/dev/null; fi
+if [[ "$_fd0" == /dev/null ]]; then row "stdin: fd 0 is /dev/null at run time" ok
+else row "stdin: fd 0 is /dev/null at run time" fail "fd 0 is '$_fd0'"; fi
+# Controls: the pin accepts the canonical layout and refuses each broken one (written under the scratch root).
+printf '#!/usr/bin/env bash\n# c\nset -uo pipefail\n\n# note\nexec < /dev/null\nX=1\n' > "$TMPD/pin-good.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nX=1\nexec < /dev/null\n' > "$TMPD/pin-late.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nf() {\nexec < /dev/null\n}\nX=1\n' > "$TMPD/pin-nested.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nif false; then\nexec < /dev/null\nfi\nX=1\n' > "$TMPD/pin-conditional.sh"
+# A comment above the real `set` that quotes it: an anchor loosened to a substring match would start counting at the comment,
+# and then accept the exec line that sits between the comment and the real `set`.
+printf '#!/usr/bin/env bash\n# note: set -uo pipefail\nexec < /dev/null\nset -uo pipefail\nX=1\n' > "$TMPD/pin-set-quoted.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\n exec < /dev/null\nX=1\n' > "$TMPD/pin-exec-indented.sh"
+printf '#!/usr/bin/env bash\nset -uo pipefail\nexec < /dev/null || true\nX=1\n' > "$TMPD/pin-exec-trailing.sh"
+if _pin_exec_stdin "$TMPD/pin-good.sh"; then row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" ok
+else row "stdin pin control: the canonical layout (exec first after set, comments and blanks between) is accepted" fail "a good layout was refused"; fi
+for _pin_bad in late nested conditional set-quoted; do
+  if _pin_exec_stdin "$TMPD/pin-$_pin_bad.sh"; then row "stdin pin control: the $_pin_bad layout is refused" fail "the pin accepted a $_pin_bad layout"
+  else row "stdin pin control: the $_pin_bad layout is refused" ok; fi
+done
+if _pin_exec_stdin "$TMPD/pin-exec-indented.sh" || _pin_exec_stdin "$TMPD/pin-exec-trailing.sh"; then
+  row "stdin pin control: an exec line with a leading space, or with trailing text, is refused" fail "the pin accepted an altered exec line"
+else row "stdin pin control: an exec line with a leading space, or with trailing text, is refused" ok; fi
 
 # --------------------------------------------------------------------------------------
 # TOOLING: the real tools a probe needs, symlinked into ONE dir. curl/gh/doppler/ssh/git are
@@ -906,30 +952,35 @@ web2-standby-soak-6459|BETTERSTACK_API_TOKEN|uptime\.betterstack\.com|1|bs_up'
 #   fixed-tmp    must still name the fixed path (RED the day the fixed /tmp write is gone)
 #   gh-chained   must still call gh issue/pr/api (the second curl is only reachable through a gh model)
 #   bs-chained   must still chain into the named script (a second credentialed tool)
+#   env-gated    runs under env -i and must refuse with zero calls + a TRANSIENT marker while still
+#                naming its arg as the required-secret gate set (RED the day the credentialed legs
+#                are reachable without the env, or the gate set changes)
 STATIC_MANIFEST='phase3-ga-soak-5274|placeholder|<POST_CUTOVER_UTC>|exits TRANSIENT on the literal START placeholder before any curl; a hermetic run can never reach its credentialed call
 sentry-checkins-3859|fixed-tmp|/tmp/ck.json|writes the fixed path /tmp/ck.json, which a hermetic row must not touch
 sync-health-residual-5689|fixed-tmp|/tmp/sh5689.json|writes the fixed path /tmp/sh5689.json, which a hermetic row must not touch
 cron-machinery-soak-9272|gh-chained|gh|its second and third credentialed curls (-D header file, paging) are reachable only through a gh issue/pr/api model; the fail-closed gh stub makes it exit TRANSIENT after the first call
 zot-soak-6122|gh-chained|gh|its credentialed curl sits behind START-anchor and blocker arms that call gh pr/issue view; unreachable under a fail-closed gh stub
-workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call it chains into betterstack-query.sh, a second credentialed tool with basic auth that this shim does not model'
+workspaces-luks-soak-6604|bs-chained|betterstack-query.sh|after the Sentry call it chains into betterstack-query.sh, a second credentialed tool with basic auth that this shim does not model
+egress-enforce-probe-11361|gh-chained|gh|its second credentialed read (the post-merge birth evidence) is a gh api workflow-runs query, reachable only through a gh model the fail-closed gh stub does not provide
+ga-lb-pool-soak-6027|env-gated|CF_API_TOKEN CF_ACCOUNT_ID|its CF and Better Stack credentialed curls sit behind required-secret and deploy-anchor gates; under env -i it exits TRANSIENT (rc 3) before any call — no hermetic path reaches the bearer'
 
 # DELEGATED: name | owning test (extended in place by the conversion; not re-modelled here).
-DELEGATED_MANIFEST='anthropic-admin-key-6297|scripts/followthroughs/anthropic-admin-key-6297.test.sh
+DELEGATED_MANIFEST='post-deploy-incident-soak|scripts/followthroughs/post-deploy-incident-soak.test.sh
+anthropic-admin-key-6297|scripts/followthroughs/anthropic-admin-key-6297.test.sh
 cwv-field-rum-9178|scripts/followthroughs/cwv-field-rum-9178.test.sh
 send-failed-alert-probe-8097|scripts/followthroughs/send-failed-alert-probe-8097.test.sh
 betterstack-roundtrip-latency-7855|tests/scripts/test-betterstack-roundtrip-latency.sh
-git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh'
+git-data-rehearsal-evidence|scripts/followthroughs/git-data-rehearsal-evidence.test.sh
+discord-blog-webhook-fallback|scripts/followthroughs/discord-blog-webhook-fallback.test.sh
+dispatch-recovery-sweeper-11211|scripts/followthroughs/dispatch-recovery-sweeper-11211.test.sh
+egress-gw-probe-silent-12180|scripts/followthroughs/egress-gw-probe-silent-12180.test.sh'
 
-# HMAC (S2-C): the four probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
-# config channel: name | kind | hosts (regex) | min_calls | canned 200 body | owning test (delegated only). `dynamic` probes have
-# no owning suite and run under `probe_rows_hmac` and the `hmac-cf` shim profile; `delegated` probes keep their own suite, and
-# the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot pass while sending
-# no credential).
-HMAC_MANIFEST='canary-promotion-5875|dynamic|deploy\.soleur\.ai|1|canary_pass|
-workspace-isolation-verdict-2640|dynamic|deploy\.soleur\.ai|1|workspace_isolation_pass|
-infra-config-fatal-channel-7220|dynamic|deploy\.soleur\.ai|1|fatal_frame|
-infra-config-activation-7220|delegated|||activation_frame|scripts/followthroughs/infra-config-activation-7220.test.sh
-inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
+# HMAC (S2-C): the probes that carry the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) on the stdin
+# config channel: name | kind | hosts | min_calls | body | owning test. Only `delegated` rows remain, so the hosts, min_calls and
+# body columns are reserved and stay empty (the loop below still reads them). `delegated` probes keep their own suite, and the delegation row asserts that the suite RECORDS stdin and asserts the three header lines (a probe cannot
+# pass while sending no credential). The `dynamic` kind (no owning suite, run under the `hmac-cf` shim profile) was retired with the
+# last probe that used it (G1 PR-4a, #10937; history in git).
+HMAC_MANIFEST='inngest-soak-6178|delegated|||none|scripts/followthroughs/inngest-soak-6178.test.sh
 sdk-bash-smoke-verdict-10548|delegated|||none|scripts/followthroughs/sdk-bash-smoke-verdict-10548.test.sh'
 
 # --- the DERIVED population: tracked followthrough probes holding a credentialed curl ---------
@@ -954,7 +1005,7 @@ fi
 # DISJOINTNESS (replaces "baseline E followthrough rows equal the S2-owned list", which only held in the commit that emptied
 # the list). A followthrough probe converted to the BEARER or the HMAC form (classified in the dynamic, static-only, delegated
 # or HMAC manifest above) must not also be listed in baseline E: a listed one is an argv credential that crept back. Baseline E
-# no longer lists the four HMAC probes (the baseline-only commit removed them), so the HMAC manifest is part of the converted
+# no longer lists the HMAC probes (the baseline-only commit removed them), so the HMAC manifest is part of the converted
 # set now; re-adding one probe to baseline E is a red row. The extractor is a function so a positive control can drive it.
 be_followthrough_rows() { # <baseline file> -> followthrough probe names listed in it, one per line
   awk -F'\t' '!/^#/ && $1 ~ /^scripts\/followthroughs\// {print $1}' "$1" | sed 's|^scripts/followthroughs/||; s|\.sh$||' | sort -u
@@ -1086,6 +1137,16 @@ while IFS='|' read -r s_name s_kind s_arg s_why; do
     bs-chained)
       if grep -qF -- "$s_arg" < <(grep -vE '^[[:space:]]*#' "$s_script"); then row "static-only $s_name: still chained into $s_arg -- $s_why" ok
       else row "static-only $s_name: still chained into $s_arg" fail "the chain is gone: the probe is now hermetically reachable; move it to the dynamic manifest"; fi ;;
+    env-gated)
+      # The credentialed legs sit behind required-secret (and deploy-anchor) gates that fire BEFORE
+      # any curl; under env -i the probe refuses with zero calls and a TRANSIENT marker. The arg pins
+      # the literal gate set (`for v in $s_arg`); a probe that ever reaches the shim or exits 0 is
+      # hermetically reachable and must move to the dynamic manifest.
+      run_probe "$s_name-S" "$s_script"
+      count_calls "$RUN_ROW"
+      if grep -qF -- "$s_arg" "$s_script" && [[ "$EV_CALLS" -eq 0 && "$RUN_RC" -ne 0 && ! -e "$RUN_ROW/shim/unexpected" && ! -e "$RUN_ROW/shim/unmodelled" ]] && grep -q 'TRANSIENT' "$RUN_ROW/stderr"; then
+        row "static-only $s_name: still unreachable (env gate $s_arg, rc $RUN_RC, zero calls) -- $s_why" ok
+      else row "static-only $s_name: still unreachable (env gate $s_arg, zero calls)" fail "rc=$RUN_RC calls=$EV_CALLS: the probe is now hermetically reachable; move it to the dynamic manifest"; fi ;;
     *) row "static-only $s_name: known kind" fail "unknown kind '$s_kind'" ;;
   esac
 done <<< "$STATIC_MANIFEST"
@@ -1585,7 +1646,7 @@ bk_run() { # <rowname> <token> <create_status> <create_body_file> <action_body_f
   local name="$1" row="$ROWS/$1" drv="${6:-$BKDRV}"
   assert_fixture_dir "$row"; mkdir -p "$row/tmp" "$row/home" "$row/shim"
   ( cd "$row" && env -i PATH="$BKBIN:$REALBIN" HOME="$row/home" TMPDIR="$row/tmp" BK_TMP="$row/tmp" BK_SHIM="$row/shim" \
-      BK_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
+      BK_TOKEN="$2" HCLOUD_TOKEN="$2" BK_CREATE_STATUS="$3" BK_CREATE_BODY="$4" BK_ACTION_BODY="$5" \
       "$BASH_BIN" "$drv" < /dev/null > "$row/out" 2>&1 )
   BK_RC=$?
 }
@@ -2464,24 +2525,18 @@ HB_MUTANTS
 if [[ -z "$hb_bad" ]]; then row "cutover rollback heartbeat mutants: the marker commented out or sent to stdout, the shape warning no-op'd or sent to stderr, the mask moved back before the shape check, the shape arm removed or inverted, the mask dropped, the unreadable warning no-op'd, an arm that exits, a lookup that is dropped or puts the token in argv, an empty or unusable token that reaches the request, and a shape arm that says 'unreadable' are each caught, and only by the clauses that name them" ok
 else row "cutover rollback heartbeat mutants: the marker commented out or sent to stdout, the shape warning no-op'd or sent to stderr, the mask moved back before the shape check, the shape arm removed or inverted, the mask dropped, the unreadable warning no-op'd, an arm that exits, a lookup that is dropped or puts the token in argv, an empty or unusable token that reaches the request, and a shape arm that says 'unreadable' are each caught, and only by the clauses that name them" fail "$hb_bad"; fi
 # =====================================================================================
-# #9757 review leads (a), (b) and (g) of scripts/cutover-inngest.sh, each driven through a recording curl / doppler and the script's own text:
+# #9757 review leads (a) and (g) of scripts/cutover-inngest.sh (lead (b), the five op=arm mask sites, was retired with op=arm by #9927), each driven through a recording curl / doppler and the script's own text:
 #   (a1) _inngest_server_created_epoch judges its token with _bearer_ok BEFORE it masks it or feeds it to `-H @-`: a refusal takes the empty-token arm's verdict
 #        class (one ::warning::, `__UNREADABLE__`, rc 0), prints the marker on stderr, and makes zero requests;
 #   (a2) the op=verify zero-run discovery call judges $SIG and both Cloudflare Access values before its own `--config -`;
-#   (b)  the six `::add-mask::` sites of op=arm / _inngest_server_created_epoch shape-check first (no control character: a newline would end the directive and
-#        start a forged one) and mask second, and keep `-n` (an empty read never prints a bare directive);
 #   (g)  the four response-body echoes print a bounded (160), scrubbed (printable ASCII) FIRST line, mid-line in the arm's own ::error:: text, never the raw body.
 # The text under test is EXTRACTED from the real script; mutants doctor exactly one clause (text_mut refuses a replacement that changes more than one line).
 # =====================================================================================
-LD_REAL="$TMPD/ldreal"; LD_BIN="$TMPD/ldbin"
-for d in "$LD_REAL" "$LD_BIN"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+LD_REAL="$TMPD/ldreal"
+assert_fixture_dir "$LD_REAL"; mkdir -p "$LD_REAL"
 for t in bash cat grep sed tr awk head cut sha256sum jq mktemp rm mkdir env wc sort true false printf; do
   p="$(type -P "$t" || true)"; [[ -n "$p" ]] && ln -s "$p" "$LD_REAL/$t"
 done
-# doppler stub for the op=arm reads: `doppler secrets get NAME ...` prints $BK_A_NAME (the read-through app config) or $BK_H_NAME when the call names
-# the soleur-inngest project (the host config); an unset variable prints an empty line, like an empty secret.
-printf '#!%s\nname="$3"; scope=A\nfor a in "$@"; do [[ "$a" == soleur-inngest ]] && scope=H; done\nv="BK_${scope}_${name}"\nprintf "%%s\\n" "${!v:-}"\n' "$BASH_BIN" > "$LD_BIN/doppler"
-chmod +x "$LD_BIN/doppler"
 LD_MARK='SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape'
 LD_RC=0; LD_BAD=""
 ld_caught() { # <bad clauses string> <must-name clause> -> rc 0 when the mutant was caught AND the named clause is among the failures
@@ -2524,7 +2579,7 @@ ie_check() { # <row> <mode: ok|bad|empty> <token>
       [[ "$(bk_count "$o" '::add-mask::')" == 0 ]] || LD_BAD+=" mask-line"
       [[ "$(bk_calls "$row")" == 0 ]] || LD_BAD+=" calls=$(bk_calls "$row")"
       [[ "$(bk_count "$o" "$LD_MARK")" == 0 ]] || LD_BAD+=" marker-on-empty"
-      [[ "$(bk_count "$o" 'doppler returned nothing for HCLOUD_TOKEN_READONLY or HCLOUD_TOKEN')" == 1 ]] || LD_BAD+=" empty-warning"
+      [[ "$(bk_count "$o" 'doppler returned nothing for HCLOUD_TOKEN_READONLY in prd_terraform')" == 1 ]] || LD_BAD+=" empty-warning"
       [[ "$(grep -cxF 'DRV-OUT=__UNREADABLE__' "$o" || true)" == 1 ]] || LD_BAD+=" verdict-class" ;;
   esac
 }
@@ -2553,7 +2608,7 @@ while IFS='|' read -r ld_name ld_mode ld_cls ld_from ld_to ld_must; do
 done <<'IE_MUTANTS'
 check-removed|bad|quote-newline-url|  if ! _bearer_ok "$tok"; then|  if false; then|mask-line
 marker-dropped|bad|quote|    echo "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|    : "SOLEUR_CREDENTIAL_REFUSED script=cutover-inngest reason=token_shape" >&2|marker-count
-warning-dropped|bad|quote|    echo "::warning::G3 generation anchor: the $tokvar read|    : "::warning::G3 generation anchor: the $tokvar read|shape-warning
+warning-dropped|bad|quote|    echo "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read|    : "::warning::G3 generation anchor: the HCLOUD_TOKEN_READONLY read|shape-warning
 check-inverted|ok||  if ! _bearer_ok "$tok"; then|  if _bearer_ok "$tok"; then|calls=0
 mask-dropped|ok||  printf '::add-mask::%s\n' "$tok" >&2|  : '::add-mask::%s\n' "$tok" >&2|mask-line
 IE_MUTANTS
@@ -2622,102 +2677,6 @@ DC_MUTANTS
 [[ "$ld_n" == 5 ]] || ld_bad+=" [ran $ld_n of 5 mutants]"
 if [[ -z "$ld_bad" ]]; then row "lead (a2) mutants: the guard removed, either Cloudflare Access value left unjudged, the marker dropped and a refusal that reads as success are each caught" ok
 else row "lead (a2) mutants: the guard removed, either Cloudflare Access value left unjudged, the marker dropped and a refusal that reads as success are each caught" fail "$ld_bad"; fi
-
-# ---- (b) the five op=arm `::add-mask::` sites -------------------------------------------------------------------
-# G2 (PG, HB) and the G3 dark read (PG_DARK) as one extracted chunk, and the G3.5 channel-key loop (APP_CK, HOST_CK) as another. Every value is a synthesized
-# stand-in; the control values carry `:`, `@`, `?` and `&` (a DSN and a URL), which a bearer-shape check would have refused and left UNMASKED.
-ar_g2="$(awk '/^    PG=\$\(doppler secrets get INNGEST_POSTGRES_URI/{f=1} f{print} f&&/^    \[\[ -n "\$PG_DARK" \]\]/{exit}' "$CUT")"
-ar_g35="$(awk '/^    PARITY_FAIL=0$/{f=1} f{print} f&&/^    echo "::notice::op=arm: G3.5 channel-key parity gate PASSED/{exit}' "$CUT")"
-[[ "$ar_g2" == *'_mask_ok "$PG"'* && "$ar_g2" == *'_mask_ok "$HB"'* && "$ar_g2" == *'_mask_ok "$PG_DARK"'* && "$ar_g35" == *'_mask_ok "$APP_CK"'* && "$ar_g35" == *'_mask_ok "$HOST_CK"'* ]] || fatal "lead (b): the op=arm mask sites were not extracted from $CUT"
-ar_run() { # <row> <chunk text> <NAME=value>...: the chunk under the script's own _mask_ok, DOPPLER_TOKEN_INNGEST_ARM set, doppler stubbed by NAME and scope
-  local row="$ROWS/$1" txt="$2"; shift 2
-  assert_fixture_dir "$row"; mkdir -p "$row/shim"
-  { printf 'set -euo pipefail\nDOPPLER_TOKEN_INNGEST_ARM=armtoken\n'; grep -m1 '^_mask_ok() {' "$CUT"; printf '%s\n' "$txt"; printf 'echo DRV-AFTER\n'; } > "$row/drv.sh"
-  ( cd "$row" && env -i PATH="$LD_BIN:$LD_REAL" "$@" "$BASH_BIN" "$row/drv.sh" < /dev/null > "$row/stdout" 2> "$row/stderr" )
-  LD_RC=$?
-}
-AR_SCHEME=postgresql; AR_PW1=synth-pass; AR_DSN="${AR_SCHEME}://synth_user:${AR_PW1}@aws-0.pooler.example.test:5432/postgres?sslmode=require&x=1"
-AR_URL='https://uptime.example.test/api/v1/heartbeat/synthetic-heartbeat-path'
-AR_PW2=dark-pass; AR_DARK="${AR_SCHEME}://dark_user:${AR_PW2}@dark.example.test:5432/postgres"
-AR_KEY="evt-synthetic-$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-AR_FORGED="SYNTHMARK0001"$'\n'"::error::forged-by-the-value"
-# ar_env <chunk g2|g35> <mode>: sets AR_ENV (the NAME=value assignments the doppler stub serves) and AR_WANT_MASKS (the values that must be masked, in read order).
-#   modes: ok | hostile-<which> (that ONE read is AR_FORGED: a value holding a newline and a forged ::error:: line) | empty (g2: the DSN; g35: every key)
-ar_env() {
-  local pg="$AR_DSN" hb="$AR_URL" dk="$AR_DARK" ea="$AR_KEY" sa="$AR_KEY" eh="$AR_KEY" sh="$AR_KEY"
-  case "$1:$2" in
-    g2:hostile-pg) pg="$AR_FORGED" ;; g2:hostile-hb) hb="$AR_FORGED" ;; g2:hostile-dark) dk="$AR_FORGED" ;; g2:empty) pg="" ;;
-    g35:hostile-app) ea="$AR_FORGED" ;; g35:hostile-host) eh="$AR_FORGED" ;; g35:empty) ea=""; sa=""; eh=""; sh="" ;;
-  esac
-  AR_ENV=(BK_A_INNGEST_POSTGRES_URI="$pg" BK_A_INNGEST_HEARTBEAT_URL="$hb" BK_H_INNGEST_POSTGRES_URI="$dk"
-          BK_A_INNGEST_EVENT_KEY="$ea" BK_A_INNGEST_SIGNING_KEY="$sa" BK_H_INNGEST_EVENT_KEY="$eh" BK_H_INNGEST_SIGNING_KEY="$sh")
-  AR_WANT_MASKS=()
-  if [[ "$1" == g2 ]]; then
-    [[ "$pg" == "$AR_FORGED" || -z "$pg" ]] || AR_WANT_MASKS+=("$pg"); [[ "$hb" == "$AR_FORGED" ]] || AR_WANT_MASKS+=("$hb"); [[ "$dk" == "$AR_FORGED" ]] || AR_WANT_MASKS+=("$dk")
-    [[ "$2" == empty ]] && AR_WANT_MASKS=("$hb")
-  else
-    [[ "$ea" == "$AR_FORGED" || -z "$ea" ]] || AR_WANT_MASKS+=("$ea"); [[ "$eh" == "$AR_FORGED" || -z "$eh" ]] || AR_WANT_MASKS+=("$eh")
-    AR_WANT_MASKS+=("$sa" "$sh"); [[ "$2" == empty ]] && AR_WANT_MASKS=()
-  fi
-}
-ar_check() { # <row> <chunk> <mode> -> LD_BAD: the mask lines are EXACTLY the wanted values, one line each, in read order; a hostile value is printed nowhere
-  local o="$ROWS/$1/stdout" chunk="$2" mode="$3" want="" v; LD_BAD=""
-  for v in ${AR_WANT_MASKS[@]+"${AR_WANT_MASKS[@]}"}; do want+="::add-mask::$v"$'\n'; done
-  [[ "$(grep '^::add-mask::' "$o" || true)"$'\n' == "$want" || ( -z "$want" && -z "$(grep '^::add-mask::' "$o" || true)" ) ]] || LD_BAD+=" mask-lines"
-  [[ "$(grep -c '^::add-mask::$' "$o" || true)" == 0 ]] || LD_BAD+=" bare-directive"
-  case "$mode" in
-    ok) [[ "$LD_RC" -eq 0 && "$(bk_count "$o" DRV-AFTER)" == 1 ]] || LD_BAD+=" rc=$LD_RC" ;;
-    hostile-*)
-      [[ "$(grep -c '^::error::forged-by-the-value' "$o" || true)" == 0 ]] || LD_BAD+=" forged-directive"
-      [[ "$(bk_count "$o" SYNTHMARK0001)" == 0 ]] || LD_BAD+=" value-in-output" ;;
-    empty) [[ "$LD_RC" -eq 1 && "$(bk_count "$o" DRV-AFTER)" == 0 ]] || LD_BAD+=" rc=$LD_RC"
-      [[ "$chunk" != g2 || "$(bk_count "$o" '::error::op=arm: a source value')" == 1 ]] || LD_BAD+=" existing-refusal" ;;
-  esac
-}
-ar_drive() { # <row> <chunk g2|g35> <mode> [chunk text override]
-  local txt="$ar_g2"; [[ "$2" == g35 ]] && txt="$ar_g35"; [[ -n "${4:-}" ]] && txt="$4"
-  ar_env "$2" "$3"; ar_run "$1" "$txt" "${AR_ENV[@]}"; ar_check "$1" "$2" "$3"
-}
-ar_drive ar-g2-ok g2 ok
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G2/G3 driven with a DSN, a heartbeat URL and a dark DSN (control, values carrying : @ ? &): each is masked exactly once, in read order, by its own '::add-mask::<value>' line" ok
-else row "lead (b) op=arm G2/G3 driven with a DSN, a heartbeat URL and a dark DSN (control, values carrying : @ ? &): each is masked exactly once, in read order, by its own '::add-mask::<value>' line" fail "$LD_BAD"; fi
-ld_bad=""
-for ld_m in hostile-pg hostile-hb hostile-dark; do ar_drive "ar-g2-$ld_m" g2 "$ld_m"; [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_m:$LD_BAD]"; done
-if [[ -z "$ld_bad" ]]; then row "lead (b) op=arm G2/G3 driven with each of the DSN, the heartbeat URL and the dark DSN holding a newline and a forged ::error:: directive: that value is never printed (no mask line, no forged line at a line start) and the other two are still masked" ok
-else row "lead (b) op=arm G2/G3 driven with each of the DSN, the heartbeat URL and the dark DSN holding a newline and a forged ::error:: directive: that value is never printed (no mask line, no forged line at a line start) and the other two are still masked" fail "$ld_bad"; fi
-ar_drive ar-g2-empty g2 empty
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G2 driven with an EMPTY DSN: no bare '::add-mask::' directive is printed (-n kept) and the arm's existing 'source value is empty' refusal still ends the run" ok
-else row "lead (b) op=arm G2 driven with an EMPTY DSN: no bare '::add-mask::' directive is printed (-n kept) and the arm's existing 'source value is empty' refusal still ends the run" fail "$LD_BAD"; fi
-ar_drive ar-g35-ok g35 ok
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G3.5 channel-key loop driven with matching keys (control): the app and host reads of both keys are each masked once by their own line" ok
-else row "lead (b) op=arm G3.5 channel-key loop driven with matching keys (control): the app and host reads of both keys are each masked once by their own line" fail "$LD_BAD"; fi
-ld_bad=""
-for ld_m in hostile-app hostile-host; do ar_drive "ar-g35-$ld_m" g35 "$ld_m"; [[ "$LD_RC" -eq 1 ]] || LD_BAD+=" rc=$LD_RC"; [[ -z "$LD_BAD" ]] || ld_bad+=" [$ld_m:$LD_BAD]"; done
-if [[ -z "$ld_bad" ]]; then row "lead (b) op=arm G3.5 driven with the app key, then the host key, holding a newline and a forged ::error:: directive: it is never printed (no forged line, no value), the other three reads are still masked, and the parity gate refuses" ok
-else row "lead (b) op=arm G3.5 driven with the app key, then the host key, holding a newline and a forged ::error:: directive: it is never printed (no forged line, no value), the other three reads are still masked, and the parity gate refuses" fail "$ld_bad"; fi
-ar_drive ar-g35-empty g35 empty
-if [[ -z "$LD_BAD" ]]; then row "lead (b) op=arm G3.5 driven with every key EMPTY: no bare '::add-mask::' directive is printed (-n kept) and the parity gate refuses" ok
-else row "lead (b) op=arm G3.5 driven with every key EMPTY: no bare '::add-mask::' directive is printed (-n kept) and the parity gate refuses" fail "$LD_BAD"; fi
-ld_bad=""; ld_n=0
-while IFS='|' read -r ld_name ld_chunk ld_mode ld_from ld_to ld_must; do
-  [[ -n "$ld_name" ]] || continue
-  if [[ "$ld_chunk" == g2 ]]; then ld_txt="$ar_g2"; else ld_txt="$ar_g35"; fi
-  text_mut "$ld_txt" "$ld_from" "$ld_to"
-  ar_drive "ar-mut-$ld_name" "$ld_chunk" "$ld_mode" "$TM_OUT"
-  ld_n=$((ld_n + 1)); ld_caught "$LD_BAD" "$ld_must" || ld_bad+=" [$ld_name: got '${LD_BAD:-<none>}' wanted a failure naming '$ld_must']"
-done <<'AR_MUTANTS'
-pg-unchecked|g2|hostile-pg|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    [[ -n "$PG" ]] && printf|forged-directive
-hb-unchecked|g2|hostile-hb|    [[ -n "$HB" ]] && _mask_ok "$HB" && printf|    [[ -n "$HB" ]] && printf|forged-directive
-pgdark-unchecked|g2|hostile-dark|    [[ -n "$PG_DARK" ]] && _mask_ok "$PG_DARK" && printf|    [[ -n "$PG_DARK" ]] && printf|forged-directive
-pg-bare-on-empty|g2|empty|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    printf|bare-directive
-pg-bearer-shaped|g2|ok|    [[ -n "$PG" ]] && _mask_ok "$PG" && printf|    [[ -n "$PG" ]] && _bearer_ok "$PG" && printf|mask-lines
-app-unchecked|g35|hostile-app|      [[ -n "$APP_CK" ]] && _mask_ok "$APP_CK" && printf|      [[ -n "$APP_CK" ]] && printf|forged-directive
-host-unchecked|g35|hostile-host|      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf|      [[ -n "$HOST_CK" ]] && printf|forged-directive
-host-bare-on-empty|g35|empty|      [[ -n "$HOST_CK" ]] && _mask_ok "$HOST_CK" && printf|      printf|bare-directive
-AR_MUTANTS
-[[ "$ld_n" == 8 ]] || ld_bad+=" [ran $ld_n of 8 mutants]"
-if [[ -z "$ld_bad" ]]; then row "lead (b) mutants: each of the five mask lines with its shape check removed is caught on a hostile value, a mask line with no -n guard on an empty read is caught, and a bearer-shaped check (which would leave a DSN unmasked) is caught" ok
-else row "lead (b) mutants: each of the five mask lines with its shape check removed is caught on a hostile value, a mask line with no -n guard on an empty read is caught, and a bearer-shaped check (which would leave a DSN unmasked) is caught" fail "$ld_bad"; fi
 
 # ---- (g) the four response-body echoes ------------------------------------------------------------------------
 # Each statement is taken verbatim from the script and run with a BODY whose first line is hostile (an ESC sequence, a CR, a forged `::error::` start, 300
@@ -3142,11 +3101,11 @@ echo "=== stage S2-B: Better Stack reader (basic auth off argv) done ==="
 
 # =====================================================================================
 # STAGE S2-C: the deploy-webhook triple (X-Signature-256 + the Cloudflare Access pair) off curl argv in
-# scripts/check-deploy-script-parity.sh and the four followthrough probes. Same canonical HMAC snippet as the
+# scripts/check-deploy-script-parity.sh and the followthrough probes that remain in HMAC_MANIFEST. Same canonical HMAC snippet as the
 # cutover copies (key on the python3 child's ENVIRONMENT only), `_bearer_ok` (a copy of the cutover function) on both
 # Cloudflare Access values, `--disable --noproxy '*'` first, `--config -` with three `header = "..."` lines on a
 # process substitution. A refusal sends nothing and prints the value-free marker; the exit code is the SURFACE'S
-# non-verdict code (2 for the parity script and the two probes whose contract reads 2 as TRANSIENT; 3 for the soak
+# non-verdict code (2 for the parity script and the 10548 probe, whose contract reads 2 as TRANSIENT; 3 for the soak
 # probe, whose contract reserves 2 for a reading), never 1 (a FAIL verdict, a tracker reopen).
 #
 # The instrument is the `hmac-cf` auth profile of the shared curl shim. It is NOT shape-only: it RECOMPUTES the digest
@@ -3191,7 +3150,7 @@ hmx_status chm6 "$HMX_GOOD" "$HMX_CFID" "${HMX_CFSEC}x"; hmx_st6="$HMX_ST"
 [[ "$hmx_st5" == 401 && "$hmx_st6" == 401 ]] || fatal "CHM5/6 a wrong Cloudflare Access value was accepted (id $hmx_st5, secret $hmx_st6)"
 row "control CHM5: a wrong Cloudflare Access client id or secret is 401 (both compared exactly)" ok
 
-# ---- the audit of the five converted files: ONE function, so the real rows and the mutant rows judge identically ----
+# ---- the audit of the converted files: ONE function, so the real rows and the mutant rows judge identically ----
 # HM5_BAD names the failed facets: snippet (the HMAC line is not the canonical program with the deploy key, exactly once),
 # guard (no `|| VAR=""` after it), hexcheck (no ^[0-9a-f]{64}$ test), openssl (an openssl/-hmac token on a non-comment line),
 # bearer (the _bearer_ok function differs from the cutover's, or is not applied to exactly two values), config (the curl command
@@ -3217,19 +3176,27 @@ hm5_audit() { # <file>
   [[ "$(grep -cF -e 'case "$-" in' <<< "$code" || true)" -ge 1 ]] || HM5_BAD+=" preamble"
   return 0
 }
+# DERIVED from HMAC_MANIFEST (plus the parity script), never hand-listed: a hand-written list let a manifest probe (10548) sit unaudited, and a
+# swapped entry kept the row count while dropping a probe's audit.
 HM5_FILES="scripts/check-deploy-script-parity.sh
-scripts/followthroughs/canary-promotion-5875.sh
-scripts/followthroughs/infra-config-activation-7220.sh
-scripts/followthroughs/infra-config-fatal-channel-7220.sh
-scripts/followthroughs/inngest-soak-6178.sh"
+$(printf '%s\n' "$HMAC_MANIFEST" | cut -d'|' -f1 | sed 's|^|scripts/followthroughs/|; s|$|.sh|')"
+# a malformed manifest row (empty name, no separator) derives a bogus path: refuse it here, by name, before the audit and its mutants run on nothing
+while IFS= read -r hf; do
+  [[ -f "$hf" ]] || fatal "HM5_FILES derived a path that is not a file ($hf): an HMAC_MANIFEST row is malformed"
+done <<< "$HM5_FILES"
+# the files that hold the canonical HMAC program (outside *.test.sh) must be exactly the audited set: a probe classified into another manifest, or moved
+# out of this one, would otherwise leave the audit green with that probe unaudited
+HM5_HOLDERS="$(git ls-files 'scripts/*.sh' 'scripts/followthroughs/*.sh' | grep -v '\.test\.sh$' | xargs grep -lF 'HMAC_KEY="$WEBHOOK_DEPLOY_SECRET" python3' | sort)"
+if [[ -n "$HM5_HOLDERS" && "$HM5_HOLDERS" == "$(printf '%s\n' "$HM5_FILES" | sort)" ]]; then row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" ok
+else row "census: the files holding the canonical HMAC program are exactly the audited set (the parity script and every HMAC_MANIFEST probe)" fail "holders='${HM5_HOLDERS//$'\n'/,}' audited='${HM5_FILES//$'\n'/,}'"; fi
 while IFS= read -r hf; do
   hm5_audit "$hf"
   if [[ -z "$HM5_BAD" ]]; then row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" ok
   else row "$hf: the canonical HMAC program with the deploy key (guarded, 64-hex checked), _bearer_ok on both Cloudflare Access values, curl --disable --noproxy '*' with the three header lines on a process substitution, no openssl, xtrace refusal" fail "failed facets:$HM5_BAD"; fi
 done <<< "$HM5_FILES"
-hm_hmacflag="$(git grep -nE -- '-hmac' -- scripts/check-deploy-script-parity.sh scripts/followthroughs/canary-promotion-5875.sh scripts/followthroughs/infra-config-activation-7220.sh scripts/followthroughs/infra-config-fatal-channel-7220.sh scripts/followthroughs/inngest-soak-6178.sh | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
-if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the four probes (the key is on no openssl argv)" ok
-else row "census: no -hmac operand remains in the parity script or the four probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
+hm_hmacflag="$(git grep -nE -- '-hmac' -- $HM5_FILES | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' | grep -c . || true)"
+if [[ "$hm_hmacflag" == 0 ]]; then row "census: no -hmac operand remains in the parity script or the manifest probes (the key is on no openssl argv)" ok
+else row "census: no -hmac operand remains in the parity script or the manifest probes (the key is on no openssl argv)" fail "$hm_hmacflag non-comment -hmac lines"; fi
 
 # ---- per-script mutants of the audit: one mutant per script and kind, each asserting WHICH facet fails and WHICH LINE it touched ----
 hm5_mut() { # <file> <label> <from> <to> -> HM5_MUT (path); fatal when the literal is absent
@@ -3286,43 +3253,28 @@ hm5_facet_mut() { # <file> <facet> -> HM5_MUT
   return 0
 }
 while IFS= read -r hf; do
-  base="$(basename "$hf" .sh)"; hm5_fbad=""
+  base="$(basename "$hf" .sh)"; hm5_fbad=""; hm5_fn=0
   for hm5_facet in guard openssl config config-hdr-cf config-nodisable config-barecurl config-noprintf config-twoprintf preamble; do
-    hm5_facet_mut "$hf" "$hm5_facet"; hm5_audit "$HM5_MUT"
+    hm5_facet_mut "$hf" "$hm5_facet"; hm5_audit "$HM5_MUT"; hm5_fn=$((hm5_fn + 1))
     [[ "$HM5_BAD" == " ${hm5_facet%%-*}" ]] || hm5_fbad+=" [$hm5_facet:${HM5_BAD:-none}]"
   done
+  # a facet deleted from the list above and from hm5_audit together leaves every remaining mutant green: count the facets driven
+  [[ "$hm5_fn" -eq 9 ]] || hm5_fbad+=" [facet count $hm5_fn, expected 9]"
   if [[ -z "$hm5_fbad" ]]; then row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" ok
   else row "mutation ($base): dropping the || VAR=\"\" guard, adding an openssl line, removing the xtrace refusal, and (for the config facet, each conjunct and alternative ALONE) adding an X-Signature -H header, adding a CF-Access -H header, dropping --disable, adding a second bare curl command, dropping the header printf and repeating it each fail exactly their own facet" fail "facets that did not fire alone:$hm5_fbad"; fi
 done <<< "$HM5_FILES"
 
-# ---- running the probes under the hmac-cf profile ------------------------------------------------------------
-PARBIN="$HMX/parbin"; PYSEL="$HMX/pysel"; PYBAD="$HMX/pybad"; PYGARB="$HMX/pygarb"
-for d in "$PARBIN" "$PYSEL" "$PYBAD" "$PYGARB"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
+# ---- running the parity script under the hmac-cf profile ------------------------------------------------------------
+PARBIN="$HMX/parbin"; PYSEL="$HMX/pysel"; PYGARB="$HMX/pygarb"
+for d in "$PARBIN" "$PYSEL" "$PYGARB"; do assert_fixture_dir "$d"; mkdir -p "$d"; done
 ln -s "$(type -P sha256sum)" "$PARBIN/sha256sum"                        # the parity script hashes ci-deploy.sh; not added to REALBIN
-printf '#!%s\nexit 1\n' "$BASH_BIN" > "$PYBAD/python3"                                # python3 that fails
 printf '#!%s\nprintf "not-a-digest"\n' "$BASH_BIN" > "$PYGARB/python3"                # python3 that prints a non-digest
 printf '#!%s\n[[ "${1:-}" == "-I" ]] && exit 1\nexec "%s" "$@"\n' "$BASH_BIN" "$REAL_PY" > "$PYSEL/python3"   # fails ONLY the HMAC call (-I -c), runs the host-key parse
-chmod +x "$PYBAD/python3" "$PYGARB/python3" "$PYSEL/python3"
-printf '%s' '{"sandbox_canary":{"verdict":"pass","consecutive_pass":6,"first_pass_at":1700000000,"checked_at":1700345600,"sdk_version":"0.0.0-synthetic"}}' > "$BODIES/canary_pass.json"
-printf '%s' '{"workspace_isolation":{"verdict":"pass","consecutive_pass":6,"first_pass_at":1700000000,"checked_at":1700345600}}' > "$BODIES/workspace_isolation_pass.json"
-printf '%s' '{"schema_version":2,"start_ts":1700000000,"end_ts":1700000100,"fatal_rc":0}' > "$BODIES/fatal_frame.json"
+chmod +x "$PYGARB/python3" "$PYSEL/python3"
 HMX_ENV=("WEBHOOK_DEPLOY_SECRET=$HMX_KEY" "CF_ACCESS_CLIENT_ID=$HMX_CFID" "CF_ACCESS_CLIENT_SECRET=$HMX_CFSEC"
   "BETTERSTACK_QUERY_HOST=bs.example.test" "BETTERSTACK_QUERY_USERNAME=bsu" "BETTERSTACK_QUERY_PASSWORD=bsp"
   "SHIM_AUTH=hmac-cf" "SHIM_HMAC_KEY=$HMX_KEY" "SHIM_CF_ID=$HMX_CFID" "SHIM_CF_SECRET=$HMX_CFSEC")
 HMX_PATH="$HMBIN:$PYDIR:$PARBIN"   # recording python3/openssl (real tool behind them), then the real python3, then sha256sum
-# hmx_sandbox <name> <source script> -> prints the path of the copy inside a sandbox repo root that also holds a stub betterstack-query.sh
-hmx_sandbox() {
-  local sb="$HMX/sb-$1"; assert_fixture_dir "$sb"; mkdir -p "$sb/scripts/followthroughs"
-  cp "$2" "$sb/scripts/followthroughs/$(basename "$2")"
-  printf '#!%s\nexit 0\n' "$BASH_BIN" > "$sb/scripts/betterstack-query.sh"; chmod +x "$sb/scripts/betterstack-query.sh"
-  printf '%s' "$sb/scripts/followthroughs/$(basename "$2")"
-}
-hmx_run() { # <rowname> <script> [extra NAME=value ...]   (HMX_ENV first, extras after so they win; HMX_RUN_PATH overrides the extra PATH)
-  local name="$1" script="$2"; shift 2
-  RUN_EXTRA_PATH="${HMX_RUN_PATH-$HMX_PATH}"
-  run_probe "$name" "$script" "BK_SHIM=$ROWS/$name/shim" "${HMX_ENV[@]}" "$@"
-  RUN_EXTRA_PATH=""
-}
 # evaluate_hmac <rowdir> <hosts-regex> <min_calls> -> EV_FAILED (space-separated check names, empty = GREEN)
 #   headers-not-on-stdin  a call to a manifest host whose stdin is not EXACTLY the three header lines (a 64-hex digest, then the id, then the secret)
 #   secret-in-argv        the webhook key, the Cloudflare Access id or secret, or the digest is in any recorded curl argv
@@ -3380,126 +3332,10 @@ hmx_refused() {
 HMX_CLASSES="$TOK_CLASSES"
 class_floor "$HMX_CLASSES" || { printf '[FATAL] HMX_CLASSES lost a required class or repeats one: %s\n' "$HMX_CLASSES" >&2; exit 2; }
 
-HMX_ENV_SAVED=()
-hmx_env_without() { local e; HMX_ENV_SAVED=("${HMX_ENV[@]}"); HMX_ENV=(); for e in "${HMX_ENV_SAVED[@]}"; do [[ "$e" == "$1="* ]] || HMX_ENV+=("$e"); done; }
-hmx_env_restore() { HMX_ENV=("${HMX_ENV_SAVED[@]}"); }
-
-# probe_rows_hmac <name> <hosts> <min> <body> <refusal rc> <PASS regex>
-probe_rows_hmac() {
-  local name="$1" hosts="$2" min="$3" body="$4" refrc="$5" okre="$6"
-  local src="$REPO_ROOT/scripts/followthroughs/$name.sh" script cls v rc bad
-  N_DYN=$((N_DYN + 1))
-  [[ -f "$src" ]] || { row "$name: manifest entry names an existing probe" fail "missing"; return 0; }
-  script="$(hmx_sandbox "$name" "$src")"
-  local -a bodyenv=("SHIM_BODY_FILE=$BODIES/$body.json")
-
-  # A. the full contract: the success outcome is reachable ONLY through the recomputed digest and the exact Cloudflare Access pair
-  hmx_run "$name-A" "$script" "${bodyenv[@]}"; rc=$RUN_RC; evaluate_hmac "$RUN_ROW" "$hosts" "$min"
-  if [[ "$rc" -eq 0 && -z "$EV_FAILED" ]] && grep -qE -e "$okre" "$RUN_ROW/stdout"; then
-    row "$name: full contract (the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv; HMAC_KEY in python3's environment only)" ok
-  else row "$name: full contract (the shim recomputes the digest and accepts it; exactly the three header lines on stdin; key, id, secret and digest in no argv; HMAC_KEY in python3's environment only)" fail "rc=$rc calls=$EV_HOST_CALLS failed='$EV_FAILED'"; fi
-  # A2. must-PASS, not the canonical: a key holding a quote, a newline, a dollar and a backslash still signs correctly (the key has no shape guard)
-  v=$'wh"key\n$x\\y-'"$HMX_RAND"
-  hmx_run "$name-A2" "$script" "${bodyenv[@]}" "WEBHOOK_DEPLOY_SECRET=$v" "SHIM_HMAC_KEY=$v"; rc=$RUN_RC
-  # (the call count is a conjunct: a negated grep over a glob that matches no file is vacuously true)
-  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] && ! grep -aqF -- "$HMX_RAND" "$RUN_ROW"/shim/calls/*.argv; then
-    row "$name: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly (the shim's recomputed digest agrees) and reaches no argv" ok
-  else row "$name: a webhook key holding a quote, a newline, a dollar and a backslash signs correctly (the shim's recomputed digest agrees) and reaches no argv" fail "rc=$rc"; fi
-  # B. a 401 never reaches the success outcome
-  hmx_run "$name-B" "$script" "${bodyenv[@]}" SHIM_MODE=deny; rc=$RUN_RC
-  if [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ ! -e "$RUN_ROW/shim/unexpected" && ! -e "$RUN_ROW/shim/unmodelled" ]]; then
-    row "$name: a 401 never reaches the success outcome" ok
-  else row "$name: a 401 never reaches the success outcome" fail "rc=$rc"; fi
-  # B2. the digest check is real: a probe signing with a different key than the shim's, and a hard-coded 64-zero digest, are both 401
-  hmx_run "$name-B2key" "$script" "${bodyenv[@]}" "SHIM_HMAC_KEY=other-$HMX_RAND"; rc=$RUN_RC
-  bad=""; [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" || bad+=" wrong-key-reached-success"
-  hm5_mut "scripts/followthroughs/$name.sh" zero "$HM_CANON_DEPLOY" "printf '%064d' 0"
-  local zsrc; zsrc="$(hmx_sandbox "$name-zero" "$HM5_MUT")"
-  hmx_run "$name-B2zero" "$zsrc" "${bodyenv[@]}"; rc=$RUN_RC
-  [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] || bad+=" zero-digest-reached-success"
-  if [[ -z "$bad" ]]; then row "$name: a signing key different from the shim's, and a hard-coded 64-zero digest (a mutant that still sends a call), are both 401 and never reach the success outcome" ok
-  else row "$name: a signing key different from the shim's, and a hard-coded 64-zero digest (a mutant that still sends a call), are both 401 and never reach the success outcome" fail "$bad"; fi
-  # C. the signature header stripped by a mutated COPY of the real probe
-  hm5_mut "scripts/followthroughs/$name.sh" strip 'header = "X-Signature-256: sha256=%s"' 'header = "X-Stripped: sha256=%s"'
-  local csrc; csrc="$(hmx_sandbox "$name-strip" "$HM5_MUT")"
-  hmx_run "$name-C" "$csrc" "${bodyenv[@]}"; rc=$RUN_RC
-  if [[ "$rc" -ne 0 ]] && ! grep -qE -e "$okre" "$RUN_ROW/stdout"; then row "$name: a header-stripped copy never reaches the success outcome" ok
-  else row "$name: a header-stripped copy never reaches the success outcome" fail "rc=$rc"; fi
-  # D. each credential unset or empty: zero calls, the non-verdict outcome (rc 2, TRANSIENT), no bash error
-  bad=""
-  for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-    hmx_run "$name-D-$v-empty" "$script" "${bodyenv[@]}" "$v="; rc=$RUN_RC; count_calls "$RUN_ROW"
-    [[ "$EV_CALLS" -eq 0 ]] && transient_outcome "$RUN_ROW" "$rc" || bad+=" [$v empty: rc=$rc calls=$EV_CALLS]"
-    hmx_env_without "$v"
-    hmx_run "$name-D-$v-unset" "$script" "${bodyenv[@]}"; rc=$RUN_RC; count_calls "$RUN_ROW"
-    hmx_env_restore
-    [[ "$EV_CALLS" -eq 0 ]] && transient_outcome "$RUN_ROW" "$rc" || bad+=" [$v unset: rc=$rc calls=$EV_CALLS]"
-  done
-  if [[ -z "$bad" ]]; then row "$name: each of the three credentials unset or empty produces zero calls and a TRANSIENT rc 2" ok
-  else row "$name: each of the three credentials unset or empty produces zero calls and a TRANSIENT rc 2" fail "$bad"; fi
-  # E1. hostile Cloudflare Access values: refused BEFORE curl (zero calls), the marker once, the value not echoed, rc $refrc
-  bad=""; e1_n=0
-  for v in CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-    for cls in $HMX_CLASSES; do
-      e1_n=$((e1_n + 1))
-      hmx_run "$name-E1-$v-$cls" "$script" "${bodyenv[@]}" "$v=$(tok_for "$cls")"; hmx_refused "$RUN_ROW" "$refrc" "$name"
-      [[ -z "$HMX_BAD" ]] || bad+=" [$v $cls:$HMX_BAD]"
-    done
-  done
-  # a zero-iteration loop must fail: an empty class list emitted `ok` over no run at all
-  [[ "$e1_n" -ge 1 && "$e1_n" -eq $((2 * $(wc -w <<< "$HMX_CLASSES"))) ]] || bad+=" [E1 ran $e1_n iterations]"
-  if [[ -z "$bad" ]]; then row "$name: hostile Cloudflare Access values (quote+newline+url, newline, non-ASCII, quote, space, backslash, tab, CR) in the id and in the secret: zero calls, rc $refrc, the marker once, nothing echoed" ok
-  else row "$name: hostile Cloudflare Access values (quote+newline+url, newline, non-ASCII, quote, space, backslash, tab, CR) in the id and in the secret: zero calls, rc $refrc, the marker once, nothing echoed" fail "$bad"; fi
-  # E1b. an unusable signature (python3 fails, prints a non-digest, or is absent) is refused BEFORE curl, not sent unsigned
-  bad=""
-  for cls in bad garbage absent; do
-    case "$cls" in bad) HMX_RUN_PATH="$PYBAD:$PYDIR" ;; garbage) HMX_RUN_PATH="$PYGARB:$PYDIR" ;; absent) HMX_RUN_PATH="$PARBIN" ;; esac
-    hmx_run "$name-E1b-$cls" "$script" "${bodyenv[@]}"; hmx_refused "$RUN_ROW" "$refrc" "$name"
-    [[ -z "$HMX_BAD" ]] || bad+=" [python3 $cls:$HMX_BAD]"
-  done
-  unset HMX_RUN_PATH
-  if [[ -z "$bad" ]]; then row "$name: python3 failing, printing a non-digest or missing is refused before curl (zero calls, rc $refrc, the marker once), never an unsigned request" ok
-  else row "$name: python3 failing, printing a non-digest or missing is refused before curl (zero calls, rc $refrc, the marker once), never an unsigned request" fail "$bad"; fi
-  # E2. xtrace refusal (both forms) with each credential set alone: rc 78, zero calls, nothing on output
-  for mode in env flag; do
-    bad=""
-    for v in WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET; do
-      if xtrace_check "$script" "$v" "$name-E2-$v-$mode" "$mode"; then :; else bad+=" [$v: $XT_DETAIL]"; fi
-    done
-    if [[ -z "$bad" ]]; then row "$name: refuses xtrace ($mode form) with each of the three credentials set: rc 78, zero calls, no token on output" ok
-    else row "$name: refuses xtrace ($mode form) with each of the three credentials set: rc 78, zero calls, no token on output" fail "$bad"; fi
-  done
-  # E4. a 100,000-byte (class-clean) Cloudflare Access secret with a never-reading shim under pipefail: the process-substitution writer dies silently
-  hmx_run "$name-E4" "$script" "${bodyenv[@]}" SHIM_MODE=noread "CF_ACCESS_CLIENT_SECRET=$BIGTOK"; rc=$RUN_RC
-  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] && ! grep -aqi 'broken pipe' "$RUN_ROW/stderr"; then
-    row "$name: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" ok
-  else row "$name: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" fail "rc=$rc"; fi
-  # E5/E6. harness mutations against the real converted probe
-  hmx_run "$name-E5" "$script" "${bodyenv[@]}" SHIM_MUTATE=nostdin; evaluate_hmac "$RUN_ROW" "$hosts" "$min"
-  if [[ " $EV_FAILED " == *" headers-not-on-stdin "* ]]; then row "$name: a shim that stops recording stdin turns the full-contract row RED (headers-not-on-stdin)" ok
-  else row "$name: a shim that stops recording stdin turns the full-contract row RED (headers-not-on-stdin)" fail "failed='$EV_FAILED'"; fi
-  hmx_run "$name-E6" "$csrc" "${bodyenv[@]}" SHIM_MUTATE=noauth; rc=$RUN_RC
-  if [[ "$rc" -eq 0 ]] && grep -qE -e "$okre" "$RUN_ROW/stdout"; then row "$name: a shim that stops being auth-gated lets the stripped copy reach the success outcome, and the check sees it" ok
-  else row "$name: a shim that stops being auth-gated lets the stripped copy reach the success outcome, and the check sees it" fail "stripped copy still not reaching success (rc=$rc)"; fi
-  # M. per-script mutants of the real probe, run: the guards must be what stops the request
-  hm5_mut "scripts/followthroughs/$name.sh" bearer '*[!A-Za-z0-9._~+/=-]*) return 1' '*[!A-Za-z0-9._~+/=\"-]*) return 1'
-  local msrc; msrc="$(hmx_sandbox "$name-mbearer" "$HM5_MUT")"
-  hmx_run "$name-Mbearer" "$msrc" "${bodyenv[@]}" "CF_ACCESS_CLIENT_SECRET=$(tok_for quote)"; evaluate_hmac "$RUN_ROW" "$hosts" 0
-  if [[ "$(bk_calls "$RUN_ROW")" -ge 1 && " $EV_FAILED " == *" injected "* ]]; then row "$name: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED (the E1 row goes RED)" ok
-  else row "$name: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED (the E1 row goes RED)" fail "calls=$(bk_calls "$RUN_ROW") failed='$EV_FAILED'"; fi
-  hm5_mut "scripts/followthroughs/$name.sh" nohex '^[0-9a-f]{64}$' '^[0-9a-f]*$'
-  msrc="$(hmx_sandbox "$name-mnohex" "$HM5_MUT")"
-  HMX_RUN_PATH="$PYBAD:$PYDIR"; hmx_run "$name-Mnohex" "$msrc" "${bodyenv[@]}"; unset HMX_RUN_PATH
-  if [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]]; then row "$name: mutant weakening the 64-hex check sends an UNSIGNED request when python3 fails (the E1b row goes RED)" ok
-  else row "$name: mutant weakening the 64-hex check sends an UNSIGNED request when python3 fails (the E1b row goes RED)" fail "calls=$(bk_calls "$RUN_ROW")"; fi
-}
 
 while IFS='|' read -r h_name h_kind h_hosts h_min h_body h_test; do
   [[ -n "$h_name" ]] || continue
   case "$h_kind" in
-    dynamic)
-      refrc=2; okre='^PASS'
-      probe_rows_hmac "$h_name" "$h_hosts" "$h_min" "$h_body" "$refrc" "$okre" ;;
     delegated)
       # The delegation row is NOT "the suite names the probe": the suite must RECORD the curl stdin and assert the exact three header lines
       # (the id and secret values and a 64-hex signature), so a delegated probe cannot pass while sending no credential. A mutant copy of the
@@ -3581,6 +3417,12 @@ for mode in env flag; do
 done
 if [[ -z "$bad" ]]; then row "check-deploy-script-parity: refuses xtrace (env and flag forms) with a live credential: rc 78, zero calls, no token on output" ok
 else row "check-deploy-script-parity: refuses xtrace (env and flag forms) with a live credential: rc 78, zero calls, no token on output" fail "$bad"; fi
+# E4 (moved here from the retired per-probe rows; CTO F7): a 100,000-byte (class-clean) Cloudflare Access secret with a never-reading shim under
+# pipefail: the process-substitution writer dies silently, and the script must still reach its recorded call and exit 0 with no broken-pipe text.
+par_run par-E4 SHIM_MODE=noread "CF_ACCESS_CLIENT_SECRET=$BIGTOK"; rc=$RUN_RC
+if [[ "$rc" -eq 0 ]] && grep -qF 'PARITY(status)' "$RUN_ROW/stdout" && [[ "$(bk_calls "$RUN_ROW")" -ge 1 ]] && ! grep -aqi 'broken pipe' "$RUN_ROW/stderr"; then
+  row "check-deploy-script-parity: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" ok
+else row "check-deploy-script-parity: a 100,000-byte Cloudflare Access secret with a never-reading shim under pipefail: rc 0, a recorded call, no broken pipe" fail "rc=$rc calls=$(bk_calls "$RUN_ROW")"; fi
 hm5_mut "$PAR" bearer '*[!A-Za-z0-9._~+/=-]*) return 1' '*[!A-Za-z0-9._~+/=\"-]*) return 1'
 PARSB="$HMX/sb-par"; assert_fixture_dir "$PARSB"; mkdir -p "$PARSB/scripts"; ln -sfn "$REPO_ROOT/apps" "$PARSB/apps"   # ROOT = the sandbox; the infra files it reads come through the symlink
 cp "$HM5_MUT" "$PARSB/scripts/check-deploy-script-parity.sh"
@@ -3589,7 +3431,7 @@ par_run par-Mbearer "CF_ACCESS_CLIENT_SECRET=$(tok_for quote)"; evaluate_hmac "$
 PAR_SCRIPT=""
 if [[ "$(bk_calls "$RUN_ROW")" -ge 1 && " $EV_FAILED " == *" injected "* ]]; then row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" ok
 else row "check-deploy-script-parity: mutant admitting the double quote in _bearer_ok sends the hostile secret and the shim records INJECTED" fail "calls=$(bk_calls "$RUN_ROW") failed='$EV_FAILED'"; fi
-echo "=== stage S2-C: deploy-webhook triple (parity script and four probes) done ==="
+echo "=== stage S2-C: deploy-webhook triple (parity script and the HMAC manifest probes) done ==="
 
 # =====================================================================================
 # STAGE S3 (argv-bearer sweep S3, ADR-280): workflow YAML and the two composite actions send their credential
@@ -4504,7 +4346,7 @@ else row "S4 parity population: a Markdown file teaches a divergent or unlisted 
 # first bc_* use; no credential header literal inside a bc_curl statement; no stderr discard on one; no branch on rc == 2; the marker
 # names the file).
 # =====================================================================================
-S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
+S4_SCRIPT_MANIFEST="$(printf '%s\n' .github/actions/dispatch-web-redeploy/track.sh apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/probe-github-app-mint.sh apps/web-platform/infra/git-data-wipe.sh scripts/inngest-link-flip.sh scripts/inngest-key-rotate.sh scripts/key-rotate.sh scripts/followthroughs/git-data-rehearsal-evidence.sh | sort)"
 S4_SCRIPT_POP="$(cd "$REPO_ROOT" && git grep -lE '^[[:space:]]*(source|\.)[[:space:]].*scripts/lib/bearer-curl\.sh' -- '*.sh' ':!*.test.sh' ':!tests' ':!scripts/lib' | sort)"
 S4_SU="$(comm -23 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
 S4_SS="$(comm -13 <(printf '%s\n' "$S4_SCRIPT_POP" | grep .) <(printf '%s\n' "$S4_SCRIPT_MANIFEST"))"
@@ -4515,7 +4357,7 @@ S4_YML_NEW=".github/actions/mint-infra-app-token/action.yml .github/workflows/ap
 S4_YML_MISS=""; for f in $S4_YML_NEW; do grep -qxF -- "$f" <<<"$S3_POP" || S4_YML_MISS+=" $f"; done
 [[ -z "$S4_YML_MISS" ]] && row "S4 population: the five newly converted YAML files and the converted inngest-health probe are all in the derived library-user set ($(printf '%s\n' "$S3_POP" | grep -c .) YAML members in all, judged by the S3 structure rows)" ok || row "S4 population: a converted YAML file is not a derived library user" fail "$S4_YML_MISS"
 # Anti-vacuity floor on the two derived populations (BOTH operands are literals on the lines IMMEDIATELY above the `if`).
-S4_POP_FLOOR=24
+S4_POP_FLOOR=25
 S4_POP_N=$(( $(printf '%s\n' "$S3_POP" | grep -c .) + $(printf '%s\n' "$S4_SCRIPT_POP" | grep -c .) ))
 if [[ "$S4_POP_N" -ge "$S4_POP_FLOOR" ]]; then row "S4 population: the derived library-user population holds $S4_POP_N members (anti-vacuity floor $S4_POP_FLOOR)" ok
 else row "S4 population: the derived library-user population is below its anti-vacuity floor" fail "n=$S4_POP_N floor=$S4_POP_FLOOR"; fi
@@ -4542,8 +4384,8 @@ done
 [[ -z "$S4_RC2_BAD" ]] && row "S4 structure: no script branches on rc == 2 (the marker is the discriminator)" ok || row "S4 structure: a script branches on rc 2" fail "$S4_RC2_BAD"
 [[ -z "$S4_NAME_BAD" ]] && row "S4 structure: every bc_curl / bc_refuse in a script names its own file in the marker" ok || row "S4 structure: a script's marker names another file" fail "$S4_NAME_BAD"
 [[ -z "$S4_HMAC_SCRIPT_BAD" ]] && row "S4 structure: no library-user script computes an HMAC with the key on openssl's argv" ok || row "S4 structure: openssl -hmac in a library-user script" fail "$S4_HMAC_SCRIPT_BAD"
-# The floor is the realized count (9 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), inngest-link-flip x2 (flip_webhook's POST and GET arms)). BOTH operands are literals above the `if`.
-S4_SCALLS_FLOOR=9
+# The floor is the realized count (13 bc_curl statements: track.sh x2, push-infra-config x1, github-app-key-status x1, probe-github-app-mint x1, git-data-wipe x2 (the read and the write wrapper), git-data-rehearsal-evidence x1, inngest-link-flip x2 (flip_webhook's POST and GET arms), inngest-key-rotate x1 (kr_hz, the Hetzner read), key-rotate x2 (the deploy-status GET and the vector-restart POST)). BOTH operands are literals above the `if`.
+S4_SCALLS_FLOOR=13
 if [[ "$S4_SCALLS" -ge "$S4_SCALLS_FLOOR" ]]; then row "S4 structure: the library-user scripts hold $S4_SCALLS bc_curl statements (anti-vacuity floor $S4_SCALLS_FLOOR)" ok
 else row "S4 structure: the script population floor" fail "only $S4_SCALLS bc_curl statements derived (floor $S4_SCALLS_FLOOR)"; fi
 # The lint's SCRIPT-CONSUMER derivation (scripts/lint-workflow-local-action-checkout.py, SCRIPT CONSUMERS) runs its `git ls-files` arm on the REAL tree only here
@@ -4680,9 +4522,9 @@ for f in files:
 print(n_ok, n_sig, n_brr, ",".join(bad))
 '
 read -r S4_G_OK S4_G_SIG S4_G_BRR S4_G_BAD < <(cd "$REPO_ROOT" && python3 -I -c "$s4_guard_py" "$BEARER_FN" "$CUT" $S4_OK_DERIVED)
-# BOTH operands are literals above the `if`: 76 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
-# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76), 6 `_sig_curl`, 2 `_bearer_curl`.
-S4_GUARD_FLOOR=76
+# BOTH operands are literals above the `if`: 74 `_bearer_ok` definitions outside the cutover script (the four S4 inline-wrapper files hold 10 of them: release 6,
+# deploy-inngest-image 2, luks 1, verify-tunnel 1; the rest are the ops scripts and followthrough probes converted by S1 to S3; #10546 retired two of those probes, the outer-wrap soak and the sandbox readback, taking the count from 77 to 76, after which later definition changes left it at 78 against this floor of 76; G1 PR-4a, #10937, retired four more, the canary-promotion, infra-config activation, infra-config fatal-channel and workspace-isolation soaks, taking the measured count from 78 to 74, and the floor now equals it), 6 `_sig_curl`, 2 `_bearer_curl`.
+S4_GUARD_FLOOR=74
 if [[ -z "$S4_G_BAD" && "$S4_G_OK" -ge "$S4_GUARD_FLOOR" && "$S4_G_OK" == "$S4_OK_DEFS" && "$S4_G_SIG" == 6 && "$S4_G_BRR" == 2 ]]; then
   row "S4 inline guard pin: all $S4_G_OK _bearer_ok definitions of the $(printf '%s\n' "$S4_OK_DERIVED" | grep -c .) tracked files that define one equal the canonical text byte for byte (the count equals git grep's), and the $S4_G_SIG _sig_curl and $S4_G_BRR _bearer_curl wrappers equal the cutover script's (marker name and its --max-time normalized); floor $S4_GUARD_FLOOR"  ok
 else row "S4 inline guard pin: an inline guard or wrapper differs from the canonical text" fail "ok=$S4_G_OK defs=$S4_OK_DEFS sig=$S4_G_SIG brr=$S4_G_BRR bad=$S4_G_BAD"; fi
@@ -5634,7 +5476,7 @@ for f in sys.argv[2:]:
 print(n)
 '
 S4_RP="$S4/replay"; assert_fixture_dir "$S4_RP"; mkdir -p "$S4_RP"
-S4_REPLAY_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh"
+S4_REPLAY_FILES=".github/actions/dispatch-web-redeploy/track.sh .github/actions/mint-infra-app-token/action.yml .github/workflows/apply-deploy-pipeline-fix.yml .github/workflows/apply-github-infra.yml .github/workflows/apply-inngest-rls.yml .github/workflows/restart-inngest-server.yml .github/workflows/scheduled-inngest-health.yml apps/web-platform/infra/push-infra-config.sh apps/web-platform/scripts/github-app-key-status.sh scripts/key-rotate.sh"
 S4_RP_N="$(cd "$REPO_ROOT" && python3 -I -c "$s4_replay_py" "$S4_RP" $S4_REPLAY_FILES)"
 S4_RP_OK=0; S4_RP_BAD=""
 for stm in "$S4_RP"/*.stm; do
@@ -5646,8 +5488,8 @@ for stm in "$S4_RP"/*.stm; do
   res="$(grep -cx OK "$stm.out" || true)"; [[ "$(grep -c REFUSED "$stm.out" || true)" == 0 ]] || res=0
   [[ "$res" -ge 1 ]] && S4_RP_OK=$((S4_RP_OK + 1)) || S4_RP_BAD+=" $(basename "$stm")"
 done
-# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 24 bc_curl statements in the nine files.
-S4_REPLAY_FLOOR=24
+# BOTH operands are literals on the lines IMMEDIATELY above the `if`: 26 bc_curl statements in the ten files.
+S4_REPLAY_FLOOR=26
 if [[ -z "$S4_RP_BAD" && "$S4_RP_OK" == "$S4_RP_N" && "$S4_RP_OK" -ge "$S4_REPLAY_FLOOR" ]]; then row "S4 replay (static): all $S4_RP_OK converted bc_curl statements hand an argument list the library's own _bc_tail_ok accepts (zero refusals; anti-vacuity floor $S4_REPLAY_FLOOR)" ok
 else row "S4 replay (static): a converted call's argument list is refused or does not parse" fail "ok=$S4_RP_OK of $S4_RP_N bad:$S4_RP_BAD"; fi
 s4_tail_probe() { # <argv file>: the recorded call minus the library's own prefix and the config channel, judged by _bc_tail_ok
@@ -7556,7 +7398,7 @@ for v in good rc calls user-flag injected user-token user-token-bundle user-toke
 done
 ctl_row "bs_ok_call: a well-formed call is green, and each of its clauses fails ALONE when only its fact is doctored: exit 0, one call, no user flag, no INJECTED, each spelling of the user token (-u, a -sSu bundle, a -4u bundle with a digit, a -#u bundle with the hash, --user, --user=...) and each of the two values (username, password) in argv, exactly one stdin user line, USERPWD equal, SQL an argument, pinned URL, value absent from the output, no marker, no unmodelled flag (the user-line-count clause is unreachable: the exact-stdin clause fails first)"
 
-# --- hmx_refused (every hostile-credential refusal of the canary-promotion, fatal-channel and parity rows) ---
+# --- hmx_refused (every hostile-credential refusal of the parity rows) ---
 hmr_mk() { # <variant> -> row name; sets RUN_RC
   local v="$1" d; d="$(ctl_dir "hmr-$v")"; assert_fixture_dir "$d"
   RUN_RC=2
@@ -7586,7 +7428,7 @@ for v in good rc curl-called marker-line marker-count value-in-output value-in-o
 done
 ctl_row "hmx_refused: a compliant refusal is green, and each of its clauses fails ALONE when only its fact is doctored: the rc, zero calls, the marker line, one marker, nothing echoed (EACH alternative of the echo test alone: the SYNTHMARK0001 hostile-token marker, the webhook key, the Cloudflare Access id, the Cloudflare Access secret, and the same marker on stdout rather than stderr), no stub (an unexpected tool and an unmodelled flag each), no bash error"
 
-# --- evaluate_hmac (the full-contract judge of the HMAC probes) ---
+# --- evaluate_hmac (the full-contract judge of the parity script's live status arm) ---
 EHM_DIG="$(printf '%064d' 7)"
 ehm_stdin() { printf 'header = "X-Signature-256: sha256=%s"\nheader = "CF-Access-Client-Id: %s"\nheader = "CF-Access-Client-Secret: %s"\n' "$1" "$2" "$3"; }
 ehm_mk() { # <variant> -> row dir
@@ -8283,7 +8125,7 @@ else row "S9 exclusions: an exclusion rule hid a credential -var it should not, 
 
 # ---- Guard 2: the four rehearsal terraform step bodies EXECUTED under strict stubs --------------------------------------------------
 S9_CANARY="S9CANARYzot0123"
-for t in date; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date; every other command in the four bodies is a builtin
+for t in date sed; do p="$(type -P "$t" || true)"; [[ "$p" == /* ]] || fatal "stage S9: $t is required"; ln -s "$p" "$S9/real/$t"; done # phase B writes a timestamp with date, the sourced redaction filter (#11294) is sed; every other command in the four bodies is a builtin
 { printf '#!%s\n' "$BASH_BIN"; cat <<'S9DOP'
 # Stub doppler: records argv (NUL-delimited) and answers ONLY the two argv shapes the steps use (anything else: exit 64 and a refusal line, so a changed
 # flag, config or project is visible). `run` execs the command after `--` and injects NO TF_VAR_* (production inherits an equal value from prd_terraform; the stub
@@ -8313,6 +8155,8 @@ S9_N=0
 s9_run() { # <bodyfile> <expected terraform argv> -> S9_RC S9_DIR
   local r; S9_N=$((S9_N + 1)); r="$S9/rows/r$S9_N"; assert_fixture_dir "$r"; mkdir -p "$r/calls" "$r/cwd"
   S9_RC=0
+  # The step bodies source the redaction filter through $GITHUB_WORKSPACE (#11294); this scratch workspace gets a copy of the real one.
+  mkdir -p "$r/cwd/tests/scripts/lib" && cp "$REPO_ROOT/tests/scripts/lib/tf-redact-random-ids.sh" "$r/cwd/tests/scripts/lib/"
   ( cd "$r/cwd" && env -i PATH="$S9/shim:$S9/real" HOME="$r" CALLS_DIR="$r/calls" GITHUB_RUN_ID=424242 GITHUB_WORKSPACE="$r/cwd" DOPPLER_TOKEN="default-scope" DOPPLER_TOKEN_PRD="prd-scope" \
       S9_CANARY_VAL="$S9_CANARY" S9_TF_ARGV="$2" "$BASH_BIN" --noprofile --norc -eo pipefail "$1" ) > "$r/out" 2>&1 || S9_RC=$?
   S9_DIR="$r"
@@ -8345,12 +8189,12 @@ s9_mrow() { # <tag> <id> <want reasons> <old> <new> [<old> <new>]...: copy the b
 for spec in 'teardown-only|Teardown only (recovery arm)|destroy -auto-approve -input=false|false' 'teardown-job|Terraform destroy (everything|destroy -auto-approve -input=false|false' \
             'plan-a|Terraform plan (phase A|plan -no-color -input=false -out=tfplan-a|false' 'plan-b|Terraform plan (phase B|plan -no-color -input=false -out=tfplan-b|true'; do
   IFS='|' read -r tag sel argv nic <<<"$spec"
-  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic"$'\n'
+  S9_TF_ARGV="$argv -var rehearsal_run_id=424242 -var nic_attached=$nic"; S9_TAIL="-var nic_attached=$nic 2>&1 | tf_redact_random_ids"$'\n' # the step tail now pipes through the redactor (#11294)
   s3_body "$REPO_ROOT/$S9_WF" "$sel" > "$S9/body-$tag.sh" || fatal "S9 could not extract the $tag step"
   s9_run "$S9/body-$tag.sh" "$S9_TF_ARGV"; s9_judge_run
   if [[ -z "$S9_R_REASONS" ]]; then row "S9 Guard 2 control ($tag): the real step body runs GREEN under the strict stubs: one terraform call with exactly the expected argv, the token masked before terraform runs, in its environment and in no argv" ok
   else row "S9 Guard 2 control ($tag): the real step body is not GREEN under the strict stubs (every mutant below would measure the base)" fail "reasons='$S9_R_REASONS'"; fatal "S9 control not green for $tag: a red baseline voids every mutant"; fi
-  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}"\n'
+  s9_mrow "$tag" m1a "rc canary-in-argv env-not-set refused" "$S9_EXP" '' "$S9_TAIL" "-var nic_attached=$nic"$' \\\n    -var "zot_pull_token=${ZOT_PULL}" 2>&1 | tf_redact_random_ids\n'
   s9_mrow "$tag" m2-reorder "env-not-set" "$S9_EXP" '' "$S9_TAIL" "$S9_TAIL$S9_EXP"
   s9_mrow "$tag" m3-mask "mask-missing" "$S9_MASK" ''
   s9_mrow "$tag" m4-doppler-scope "rc ncalls refused" "-c prd_terraform" "-c prd"
@@ -8362,7 +8206,7 @@ echo "=== stage S9: Guard 1 rows (terraform -var credentials: derived scan, floo
 
 # =====================================================================================
 # VERDICT. The floor and the conservation check are reported with printf + exit 1, never
-# through the helpers they guard. Rows only grow as probes convert, so the floor is a LOWER bound.
+# through the helpers they guard. The floor is EXACT (a count above it is a STALE FLOOR, see the -ne branch at the end): raise it in the same PR as the rows.
 # =====================================================================================
 # Conservation: `row` counts at the call site, `_report` counts the verdict. If they diverge the
 # helper stopped counting (or a row bypassed it). A function over its three counters so a control can
@@ -8402,10 +8246,21 @@ SELFTEST_PASSES=0
 # 841 -> 874 at #9757 item 2 (stage S9, terraform -var credentials off argv: derived scan, rehearsal-workflow pins, the four terraform step bodies executed under strict stubs): the 33 S9 rows. The tree measured 841 after merging main (the floor said 840, so it had 1 row of slack), so the new floor is the measured total (874 passed, 0 failed).
 # 874 -> 875 at the second merge of main: #10566 added one S4 manifest row (git-data-rehearsal-evidence), so the base is 842 and the total is the measured 875 (875 passed, 0 failed).
 # 875 -> 880 at the #10697 fix round (rebased onto the 875 above; was 842 -> 847 on its own base) (#10455): web-bash-synthetic.sh joins S6H_CONVERTED (1 row), its _hb_url_ok digest and _hb_curl line pins (2 rows) and one mutation row each (2): measured (847 passed, 0 failed). S6H_FILE_FLOOR stays 7: it detects a mis-resolved directory (the derived population is 17 files), and the S6-HB scratch tree holds only the converted scripts plus two controls.
-EXPECTED_TESTS=880
+# 880 -> 824 at G1 PR-4a (#10937; S4_GUARD_FLOOR 76 -> 74, the measured count): the four retired followthrough probes take their per-probe HMAC rows (the dynamic rows of three, the delegated row of the fourth, their hm5_audit and mutation rows and the manifest rows) with them; the parity block gains one E4 row and HM5_FILES gains sdk-bash-smoke-verdict-10548.sh (its audit and mutation rows): measured (824 passed, 0 failed); 824 -> 825 at the same PR's review round: one census row (the files holding the canonical HMAC program are exactly the audited set): measured (825 passed, 0 failed).
+# 825 -> 824 at #6590 PR-B: the orphan-sweeps-relook-10972 suite was retired (monitor destroyed);
+# its DELEGATED_MANIFEST row left with it. Rebased over #11483's dispatch-recovery-sweeper-11211
+# (+1, main 825): net floor stays 824.
+# 824 -> 830 at #11572 (item 13): 829 measured on main before this change, plus the one stdin pin row (830 passed, 0 failed).
+# 830 -> 837 at the #11572 review rounds (2026-10-30): the pin is "first statement after set -uo pipefail" (1 row), plus the run-time fd 0 row, the canonical-layout control, four refused-layout controls (late, nested, conditional, a quoted `set` above the real one) and one altered-exec-line control: measured (837 passed, 0 failed).
+# 837 -> 831 at #9927 item 8 (this PR): lead (b), the op=arm mask battery (the G2/G3 control, hostile and empty drives, the G3.5 control, hostile and empty drives, and the
+#   mutants row: seven rows), left with op=arm; the tree measured 838 rows before (floor 837, one row of slack) and 831 after (831 passed, 0 failed), so the floor is now the exact measured count.
+EXPECTED_TESTS=832
 REAL=$((pass + fail - SELFTEST_PASSES))
 if [[ "$REAL" -lt "$EXPECTED_TESTS" ]]; then
   printf 'ANTI-VACUITY FLOOR: only %s rows ran, floor is %s -- rows were skipped, truncated, or the assertion machinery was neutered.\n' "$REAL" "$EXPECTED_TESTS" >&2
+  exit 1
+elif [[ "$REAL" -ne "$EXPECTED_TESTS" ]]; then
+  printf 'STALE FLOOR: %s rows ran, EXPECTED_TESTS is %s -- set EXPECTED_TESTS=%s (the count is exact by design; rows were added without updating it).\n' "$REAL" "$EXPECTED_TESTS" "$REAL" >&2
   exit 1
 fi
 

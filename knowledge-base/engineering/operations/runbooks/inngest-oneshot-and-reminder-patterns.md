@@ -148,6 +148,29 @@ with a **future `ts`** (Inngest natively schedules the delayed delivery — no
   persisted step state (`mintInstallationToken` from `_cron-shared.ts`). Each
   `step.run` that needs a token mints its own.
 
+## Task-design answers for new autonomous work (#11015)
+
+Every NEW autonomous task on this substrate — ANY new `.ts` function file under
+`apps/*/server/inngest/functions/` (`oneshot-*`, `cron-*`, `event-*`, or future
+prefixes; shared code SHOULD be `_`-prefixed like `_cron-shared.ts`, though
+four existing helpers break the rule — name new helpers `_<name>.ts`), or a new
+registered reminder/sweeper check — MUST carry written answers
+to the six task-design questions **before** it is armed or merged. Record them in
+the design issue or the plan's `## Task Design` section (plan §2.9.3 / deepen-plan
+§4.13); for a registered check, record them in the arming record.
+
+1. **trigger** — what fires it (cron expression, event name, armed check schedule).
+2. **services** — services/data surfaces it reads from and writes to.
+3. **next** — what it triggers next (`nothing` is a valid answer).
+4. **human re-entry** — how a human resumes, redirects or stops it mid-run.
+5. **dedupe** — the mechanism preventing semantic double-work; MUST name something
+   beyond `concurrency: group:` (an idempotency precheck, a marker dedupe, an
+   immutable ticket key).
+6. **source dedupe** — how the ticket source dedupes the task, or the literal
+   `not a ticket source`.
+
+Create-time only — existing functions and armed checks are not retroactively gated.
+
 ## References
 
 - ADR-046 — Inngest oneshot scheduler: self-arm + registered-functions-only.

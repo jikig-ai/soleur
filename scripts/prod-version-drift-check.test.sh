@@ -44,6 +44,7 @@ SUT="${DRIFT_TEST_SCRIPT:-$SCRIPT_DIR/prod-version-drift-check.sh}"
 WORKFLOW="${DRIFT_TEST_WORKFLOW:-$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml}"
 RELEASE_WORKFLOW="${DRIFT_TEST_RELEASE_WORKFLOW:-$REPO_ROOT/.github/workflows/web-platform-release.yml}"
 MONITORS_TF="${DRIFT_TEST_MONITORS_TF:-$REPO_ROOT/apps/web-platform/infra/sentry/cron-monitors.tf}"
+PRUNED_TS_FILE="${DRIFT_TEST_PRUNED_TS:-$REPO_ROOT/apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts}"
 
 # Part C re-invokes this file against a sandbox; the guard stops infinite recursion.
 MUTATION_CHILD="${DRIFT_MUTATION_CHILD:-0}"
@@ -1542,12 +1543,15 @@ run_part_b() {
 
   # B10g -- monitor slug parity. A mismatched slug leaves the Sentry monitor permanently
   # green over a dead alarm: the worst shape available, since it looks like coverage.
+  # #6590 PR-B: a pruned slug keeps its emitter (spec NG4 void-post) — membership in
+  # PRUNED_MONITOR_SLUGS satisfies this check; absent from both is the red state.
   if [[ -f "$MONITORS_TF" ]]; then
     local slug="${X_HEARTBEAT_SLUG:-}"
-    if [[ -n "$slug" ]] && grep -qF -- "\"$slug\"" "$MONITORS_TF"; then
-      pass "B10g heartbeat slug '$slug' has a matching sentry_cron_monitor in cron-monitors.tf"
+    local pruned_ts="$PRUNED_TS_FILE"
+    if [[ -n "$slug" ]] && { grep -qE "^[[:space:]]*name[[:space:]]*=[[:space:]]*\"$slug\"" "$MONITORS_TF" || { [[ -f "$pruned_ts" ]] && grep -qxF "$slug" < <(grep -oE "^[[:space:]]*\"[a-z0-9-]+\",?[[:space:]]*$" "$pruned_ts" | tr -d ' ,"'); }; }; then
+      pass "B10g heartbeat slug '$slug' has a matching sentry_cron_monitor or is registered pruned"
     else
-      fail "B10g heartbeat slug has a matching sentry_cron_monitor" "\"$slug\" present" "absent"
+      fail "B10g heartbeat slug has a matching sentry_cron_monitor" "\"$slug\" declared or pruned" "absent"
     fi
   else
     fail "B10g cron-monitors.tf readable" "a readable file" "absent"
@@ -1575,6 +1579,7 @@ run_child() {
     DRIFT_TEST_WORKFLOW="$sbx/.github/workflows/scheduled-prod-version-drift.yml" \
     DRIFT_TEST_RELEASE_WORKFLOW="$sbx/.github/workflows/web-platform-release.yml" \
     DRIFT_TEST_MONITORS_TF="$sbx/apps/web-platform/infra/sentry/cron-monitors.tf" \
+    DRIFT_TEST_PRUNED_TS="$sbx/apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts" \
     DRIFT_EXTRACT_OUT="$sbx/extract.env" \
     bash "$sbx/scripts/prod-version-drift-check.test.sh" 2>&1
   )
@@ -1585,12 +1590,13 @@ make_sandbox() {
   # Every setup command is checked. A harness that fails to SET UP and continues does not
   # degrade into a missing result -- it degrades into a confident wrong one, because the next
   # case runs against the previous case's tree.
-  mkdir -p "$dst/scripts" "$dst/.github/workflows" "$dst/apps/web-platform/infra/sentry" || return 1
+  mkdir -p "$dst/scripts" "$dst/.github/workflows" "$dst/apps/web-platform/infra/sentry" "$dst/apps/web-platform/test/server/inngest" || return 1
   cp "$SCRIPT_DIR/prod-version-drift-check.sh"      "$dst/scripts/" || return 1
   cp "$SCRIPT_DIR/prod-version-drift-check.test.sh" "$dst/scripts/" || return 1
   cp "$REPO_ROOT/.github/workflows/scheduled-prod-version-drift.yml" "$dst/.github/workflows/" || return 1
   cp "$RELEASE_WORKFLOW" "$dst/.github/workflows/web-platform-release.yml" || return 1
   cp "$MONITORS_TF" "$dst/apps/web-platform/infra/sentry/cron-monitors.tf" || return 1
+  cp "$PRUNED_TS_FILE" "$dst/apps/web-platform/test/server/inngest/pruned-monitor-slugs.ts" || return 1
   # B9 reads CI's declared longest needs: path out of ci.yml since #5806 replaced the
   # `await-ci` term with it, so the sandbox must carry ci.yml too. Without it the
   # extraction falls back to the GitHub 360 default, B9 reds in EVERY sandbox arm,

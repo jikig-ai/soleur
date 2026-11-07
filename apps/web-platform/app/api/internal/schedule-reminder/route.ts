@@ -51,7 +51,7 @@ function isCutoverQuiesced(): boolean {
 const RETRY_AFTER_S = "120";
 
 // inngest.send surfaces a transport failure as TypeError("fetch failed") with the errno/TLS code on
-// `cause` (refusal measured on inngest 3.54.2; TLS codes surface the same way from undici) — match the
+// `cause` (refusal measured on inngest 3.54.2; pin now ^4.26.0, shape re-verified — TLS codes surface the same way from undici) — match the
 // code, never message text. Every code here means "the scheduler is not reachable / not verifiable right
 // now", so the caller must re-arm (inngest-rearm-reminders.sh aborts on the `backend-refused` 503 instead
 // of continuing past a lost arm). The event carries `id: reminderId`, so a re-arm after an ambiguous failure

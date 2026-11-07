@@ -346,9 +346,9 @@ if [[ -f "$MANIFEST" && -n "${LEG_N:-}" && "$LEG_BAD" -eq 0 ]]; then
         err "  suite (privileged or untracked) — a stale/dead durations row."
         err "  Regenerate: regenerate-shard-manifest.py --group infra --write"
         fails=$((fails + 1))
-      elif [[ -n "$drest" || ! "$dms" =~ ^[0-9]+$ || ( "$dsrc" != "measured" && "$dsrc" != "floor" ) ]]; then
+      elif [[ -n "$drest" || ! "$dms" =~ ^[0-9]+$ || ( "$dsrc" != "measured" && "$dsrc" != "floor" && "$dsrc" != "estimate" ) ]]; then
         err "suite-durations.tsv row for '$dl' is malformed — expected"
-        err "  'label<TAB>ms<TAB>src' with src in {measured,floor}."
+        err "  'label<TAB>ms<TAB>src' with src in {measured,floor,estimate}."
         fails=$((fails + 1))
       elif [[ -n "${D_SEEN[$dl]+x}" ]]; then
         err "suite-durations.tsv weights '$dl' twice — a duplicate row."

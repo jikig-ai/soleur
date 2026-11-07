@@ -12,7 +12,7 @@
 // See plan §"Test Scenarios" — T1–T19. The Bash review-gate E2E (T12–T14)
 // lives in a sibling file (`cc-dispatcher-bash-gate.test.ts`).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
@@ -52,7 +52,23 @@ const {
   mockWriteC4Diagram,
   mockGetSessionMessages,
   mockResolveSandboxUnixDeny,
+  mockPushBranch,
+  mockApprovalFlag,
+  mockGithubApiGet,
+  mockHeadSha,
+  registrarOverride,
+  conversationWriteOverride,
 } = vi.hoisted(() => ({
+  conversationWriteOverride: { fn: null as null | (() => Promise<unknown>) },
+  // #11636: a per-test replacement for the registrar (null = the REAL one). Lets a test hand the dispatcher a result the real
+  // registrar can never produce (a foreign name), to prove the dispatcher's own runtime assertion rejects it.
+  registrarOverride: { fn: null as null | ((a: Record<string, unknown>) => Promise<unknown>) },
+  // #11636: the github_push_branch registration. `pushBranch` is the handler's only side effect; the approval flag is a
+  // per-test switch (default OFF = the dark path); the default-branch lookup and the workspace HEAD are canned.
+  mockPushBranch: vi.fn(async (_o: Record<string, unknown>) => ({ branch: "feat-x", pushed: true })),
+  mockApprovalFlag: vi.fn(async (): Promise<unknown> => false),
+  mockGithubApiGet: vi.fn(async (): Promise<unknown> => ({ default_branch: "trunk" })),
+  mockHeadSha: vi.fn(async () => "d".repeat(40)),
   mockResolveSandboxUnixDeny: vi.fn(async () => false),
   mockResolveC4FlagEnabled: vi.fn(async () => false),
   mockWriteC4Diagram: vi.fn(),
@@ -331,7 +347,7 @@ vi.mock("@/server/byok-lease", async () => {
           getRestApiKey: () => mockGetUserApiKey(),
           getAgentCredential: async () => ({
             value: await mockGetUserApiKey(),
-            scheme: "api_key" as const,
+            scheme: authDiag.scheme,
           }),
         }),
     ),
@@ -373,8 +389,92 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@/server/notifications", () => ({ notifyOfflineUser: vi.fn() }));
 
-import { realSdkQueryFactory } from "@/server/cc-dispatcher";
+// Agent auth-failure diagnostic: the authMode resolver module pulls the Supabase graph, so it is stubbed here (the real
+// resolver has its own test). The probe factory is wrapped in a spy that defaults to the REAL implementation so one case
+// can make construction throw.
+const authDiag = vi.hoisted(() => ({
+  makeResolver: vi.fn(),
+  createProbe: vi.fn(),
+  // The scheme the bridged lease reports; one case flips it to oauth_token to pin the wiring of `credentialScheme`.
+  scheme: "api_key" as "api_key" | "oauth_token",
+}));
+vi.mock("@/server/agent-auth-mode", () => ({ makeAuthModeResolver: authDiag.makeResolver }));
+vi.mock("@/server/agent-auth-failure", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/agent-auth-failure")>();
+  authDiag.createProbe.mockImplementation(actual.createAgentAuthFailureProbe as never);
+  return { ...actual, createAgentAuthFailureProbe: authDiag.createProbe };
+});
+
+// #11636: the push tool's side effect. Nothing here reaches a real remote.
+vi.mock("@/server/push-branch", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/push-branch")>()),
+  pushBranch: mockPushBranch,
+}));
+
+// #11636: the warm-turn dispatch test passes the dispatcher's conversation-ownership write through this seam; everything else (and
+// every other test in this file) uses the REAL writer.
+vi.mock("@/server/conversation-writer", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/conversation-writer")>();
+  return {
+    ...actual,
+    updateConversationFor: (...a: Parameters<typeof actual.updateConversationFor>) =>
+      conversationWriteOverride.fn ? conversationWriteOverride.fn() : actual.updateConversationFor(...a),
+  };
+});
+
+// #11636: the registrar, delegating to the REAL one unless a test installs `registrarOverride.fn`.
+vi.mock("@/server/cc-github-push", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/cc-github-push")>();
+  return {
+    ...actual,
+    resolveCcGithubPushRegistration: (a: Parameters<typeof actual.resolveCcGithubPushRegistration>[0]) =>
+      registrarOverride.fn ? registrarOverride.fn(a as unknown as Record<string, unknown>) : actual.resolveCcGithubPushRegistration(a),
+  };
+});
+
+// #11636: the approval-queue flag read, shared by the registrar and the gate's default seam. A per-test switch.
+vi.mock("@/server/approval/flag", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/approval/flag")>()),
+  isApprovalQueueEnabled: mockApprovalFlag,
+}));
+
+// #11636: the default-branch lookup. The file-wide github-app mock exposes only three exports, so the REAL github-api is kept
+// (importOriginal) and only githubApiGet is replaced; GitHubApiError and the rest must survive.
+vi.mock("@/server/github-api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/github-api")>()),
+  githubApiGet: mockGithubApiGet,
+}));
+
+// #11636: forwards to the REAL gate-deps factory but injects a `headSha` seam (the real `gitHeadSha` runs no git any more; it
+// reads `<workspace>/.git/HEAD` as data and would refuse the fixture's nonexistent workspace with `git_dir_not_plain`). The wrapper is a spy, so the args the dispatcher passes (workspaceId, repoSlug,
+// workspacePath, grants) are inspectable.
+vi.mock("@/server/approval/gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/approval/gate")>();
+  return {
+    ...actual,
+    createApprovalGateDeps: vi.fn((a: Parameters<typeof actual.createApprovalGateDeps>[0]) =>
+      actual.createApprovalGateDeps({ ...a, headSha: mockHeadSha }),
+    ),
+  };
+});
+
+import {
+  __resetDispatcherForTests,
+  CC_REGISTERED_PLATFORM_TOOL_NAMES,
+  cleanupCcBashGatesForConversation,
+  crmLeadPermissionToolNames,
+  dispatchSoleurGo,
+  __setCcRunnerForTests,
+  getCcRegisteredApprovalTools,
+  realSdkQueryFactory,
+} from "@/server/cc-dispatcher";
+import { ccPushPromptAddendum } from "@/server/cc-github-push";
+import { createApprovalGateDeps } from "@/server/approval/gate";
+import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
+import { __resetAgentAuthDedupeForTests } from "@/server/agent-auth-failure";
 import { createCanUseTool } from "@/server/permission-callback";
+import { ExecutionGrants, putGrant } from "@/server/approval/grants";
+import { APPROVAL_REQUIRED_TOOLS } from "@/server/approval/tools";
 
 // Helper: build a fake Query that the SDK mock returns.
 function makeFakeQuery() {
@@ -461,6 +561,13 @@ function makeArgs(overrides: Partial<Parameters<typeof realSdkQueryFactory>[0]> 
 describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // #11636: the push registration's seams default to the dark path (flag OFF) so every pre-existing case is unaffected.
+    registrarOverride.fn = null;
+    conversationWriteOverride.fn = null;
+    mockApprovalFlag.mockReset().mockResolvedValue(false);
+    mockGithubApiGet.mockReset().mockResolvedValue({ default_branch: "trunk" });
+    mockHeadSha.mockReset().mockResolvedValue("d".repeat(40));
+    mockPushBranch.mockReset().mockResolvedValue({ branch: "feat-x", pushed: true });
     mockGetUserApiKey.mockResolvedValue("sk-test");
     mockGetUserServiceTokens.mockResolvedValue({});
     mockBuildAgentEnv.mockReturnValue({ ANTHROPIC_API_KEY: "sk-test" });
@@ -806,6 +913,495 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     // rendering connect-repo copy to a connected user.
     mockReadCurrentRepoUrlResult.mockResolvedValueOnce({ url: null, degraded: true });
     expect(await readDep()).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Approval wiring (ADR-309 addendum): the live ccDeps object carries the gate dependency, one fresh grants object per
+  // factory invocation, and the fail-closed switch. A source-text census cannot see the live object; this can.
+  // -------------------------------------------------------------------------
+  describe("approval wiring on the live canUseTool deps", () => {
+    type CcApprovalDeps = {
+      approval?: { grants: { enforcing: boolean }; workspaceId: string };
+      approvalFailClosed?: boolean;
+    };
+    const capture = async (): Promise<CcApprovalDeps> => {
+      const mock = createCanUseTool as unknown as { mockClear(): void; mock: { calls: unknown[][] } };
+      mock.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      const ctx = mock.mock.calls[0][0] as { deps: CcApprovalDeps };
+      return ctx.deps;
+    };
+
+    it("carries the gate dependency, a grants object with enforcing off, and the fail-closed switch", async () => {
+      const deps = await capture();
+      expect(deps.approval).toBeDefined();
+      expect(deps.approval?.grants).toBeInstanceOf(ExecutionGrants);
+      expect(deps.approval?.grants.enforcing).toBe(false);
+      expect(deps.approvalFailClosed).toBe(true);
+    });
+
+    it("binds the gate to the resolved active workspace, not to the user id", async () => {
+      // A team workspace: its id differs from the user id, so binding to `args.userId` instead would be visible.
+      const TEAM_WORKSPACE = "00000000-0000-4000-8000-0000000000aa";
+      mockResolveActiveWorkspace.mockImplementation(async () => ({ ok: true, workspaceId: TEAM_WORKSPACE }));
+      const deps = await capture();
+      expect(deps.approval?.workspaceId).toBe(TEAM_WORKSPACE);
+      expect(deps.approval?.workspaceId).not.toBe("user-1");
+    });
+
+    it("builds a distinct grants object per factory invocation (never module scope, so none leaks across Queries)", async () => {
+      const first = await capture();
+      const second = await capture();
+      expect(first.approval?.grants).toBeDefined();
+      expect(second.approval?.grants).toBeDefined();
+      expect(second.approval?.grants).not.toBe(first.approval?.grants);
+    });
+
+    it("registers no approval-required tool in the final allowedTools", async () => {
+      await realSdkQueryFactory(makeArgs());
+      const opts = mockQuery.mock.calls[0][0].options;
+      for (const tool of APPROVAL_REQUIRED_TOOLS) expect(opts.allowedTools).not.toContain(tool);
+    });
+  });
+
+
+  // -------------------------------------------------------------------------
+  // #11636 (ADR-309): github_push_branch is registered in the cc soleur_platform server ONLY when the approval-queue
+  // flag, the workspace web-egress grant, a non-support persona, a connected repo and an installation all hold.
+  // -------------------------------------------------------------------------
+  describe("github_push_branch registration (#11636)", () => {
+    const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
+    const HEAD = "d".repeat(40);
+    const REPO_URL = "https://github.com/acme/kb-repo";
+    // The default branch the mocked lookup answers with (see the hoisted `mockGithubApiGet` default).
+    const ADDENDUM = ccPushPromptAddendum("trunk");
+
+    /** Every precondition true (flag on, entitled, repo, installation); a test turns ONE off. */
+    function eligible(over: { flag?: unknown; entitled?: boolean; repo?: boolean; forwarder?: boolean } = {}) {
+      mockApprovalFlag.mockResolvedValue(over.flag === undefined ? true : over.flag);
+      mockResolveWebEgress.mockResolvedValue(over.entitled ?? true);
+      if (over.repo !== false) {
+        mockGetCurrentRepoUrl.mockResolvedValue(REPO_URL);
+        mockResolveInstallationId.mockResolvedValue(987654);
+      } else {
+        mockGetCurrentRepoUrl.mockResolvedValue(null);
+        mockResolveInstallationId.mockResolvedValue(null);
+      }
+      if ((over.entitled ?? true) && over.forwarder !== false) {
+        mockSpawnEgressForwarder.mockResolvedValue({ port: 28711, token: "tok-abc", pid: 4242 });
+      } else {
+        mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+      }
+    }
+
+    const ccCtx = () => {
+      const mock = createCanUseTool as unknown as { mock: { calls: unknown[][] } };
+      return mock.mock.calls.at(-1)![0] as {
+        platformToolNames: string[];
+        deps: { approval: { grants: ExecutionGrants; workspaceId: string; resolveServerDerived: (t: string, s: Record<string, unknown>) => Promise<unknown> } };
+      };
+    };
+    const platformTools = () => mockQuery.mock.calls.at(-1)![0].options.mcpServers.soleur_platform.tools as Array<{ name: string; handler: (a: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>;
+    const toolNames = () => platformTools().map((t) => t.name);
+    const prompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
+    const registrationEvents = () => mockInfoSilentFallback.mock.calls.filter(([, o]) => o?.feature === "cc-push-registration");
+
+    beforeEach(() => {
+      __resetDispatcherForTests();
+      (createCanUseTool as unknown as { mockClear(): void }).mockClear();
+      (createApprovalGateDeps as unknown as { mockClear(): void }).mockClear();
+    });
+
+    /** The dark-path baseline as LITERALS (vi.mock is hoisted file-wide, so a "baseline captured without the mock" would compare the new code with itself). */
+    function expectDarkPath() {
+      expect(toolNames()).toEqual(["narrate", "summarize"]);
+      expect(ccCtx().platformToolNames).toEqual([]);
+      expect(prompt()).not.toContain("github_push_branch");
+      expect(prompt()).not.toContain(ADDENDUM);
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+      const opts = mockQuery.mock.calls.at(-1)![0].options;
+      expect(opts.allowedTools).not.toContain(PUSH_FQN);
+    }
+
+    it("flag OFF (everything else true): the tool set, platformToolNames and prompt are the pre-change LITERALS, the lookup is not called, the gate deps are unchanged", async () => {
+      eligible({ flag: false });
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(prompt().startsWith("system\n\n## GitHub `gh` errors")).toBe(true);
+      const deps = ccCtx().deps;
+      expect(deps.approval.grants).toBeInstanceOf(ExecutionGrants);
+      expect(deps.approval.grants.enforcing).toBe(false);
+      // The normal dark states emit no outcome event (the registered case and the failures do).
+      expect(registrationEvents()).toHaveLength(0);
+    });
+
+    it("flag read THROWS: not registered (fail closed), reported under cc-push-flag-resolve, dark-path literals hold", async () => {
+      eligible();
+      mockApprovalFlag.mockRejectedValue(new Error("flagsmith down"));
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-flag-resolve")).toBe(true);
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a flag value that is not exactly true (undefined)", { flag: undefined as unknown, set: (): void => void mockApprovalFlag.mockResolvedValue(undefined) }],
+      ["not entitled to web egress", { set: (): void => eligible({ entitled: false }) }],
+      ["no connected repo", { set: (): void => eligible({ repo: false }) }],
+    ])("%s: not registered, dark-path literals, the lookup is not called", async (_n, row) => {
+      eligible();
+      row.set();
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+    });
+
+    it("a registrar that THROWS never breaks Query construction: the Query is built on the dark path and the failure is reported", async () => {
+      eligible();
+      mockInfoSilentFallback.mockImplementation((_e: unknown, o: { feature?: string }) => {
+        if (o?.feature === "cc-push-registration") throw new Error("emit boom");
+      });
+      try {
+        await realSdkQueryFactory(makeArgs());
+      } finally {
+        mockInfoSilentFallback.mockReset();
+      }
+      expectDarkPath();
+      expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-registration-failed")).toBe(true);
+    });
+
+    it.each([
+      ["a foreign toolName (not grant-wired)", { tools: [{ name: "github_push_branch" }], toolNames: ["mcp__soleur_platform__email_send"] }],
+      ["a built tool whose name does not match its registered name", { tools: [{ name: "email_send" }], toolNames: [PUSH_FQN] }],
+      ["tools and toolNames that do not correspond one-to-one", { tools: [], toolNames: [PUSH_FQN] }],
+    ])("the dispatcher's wired-set assertion rejects %s: the Query is built on the dark path, nothing is published, and it is reported", async (_n, bad) => {
+      eligible();
+      // defaultBranch present: the prompt-addendum guard must not be what rejects it (the wired-set assertion is under test).
+      registrarOverride.fn = async () => ({ registered: true, reason: "registered", defaultBranch: "trunk", ...bad });
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-registration-failed")).toBe(true);
+    });
+
+    it.each([
+      ["a null defaultBranch", null],
+      ["an unsafe defaultBranch", "a b"],
+    ])("the prompt addendum THROWS (%s) after a valid wired result: nothing is published (no tool, no name, no Map entry, no addendum), the Query is built on the dark path, reported", async (_n, defaultBranch) => {
+      eligible();
+      registrarOverride.fn = async () => ({
+        registered: true,
+        reason: "registered",
+        tools: [{ name: "github_push_branch" }],
+        toolNames: [PUSH_FQN],
+        defaultBranch,
+      });
+      await realSdkQueryFactory(makeArgs());
+      // The addendum is computed BEFORE the first assignment, so the failed registration leaves no half-published set.
+      expectDarkPath();
+      expect(Object.keys(mockQuery.mock.calls.at(-1)![0].options.mcpServers)).toEqual(["soleur_platform"]);
+      const call = mockReportSilentFallback.mock.calls.find(([, o]) => o?.op === "cc-push-registration-failed")!;
+      expect(call[0]).toBeNull();
+    });
+
+    it("a registrar that throws is reported with a null first argument and the class name, never the Error (its message may embed a repo path)", async () => {
+      eligible();
+      registrarOverride.fn = async () => {
+        throw new Error("boom GET /repos/acme/kb-repo");
+      };
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      const call = mockReportSilentFallback.mock.calls.find(([, o]) => o?.op === "cc-push-registration-failed")!;
+      expect(call[0]).toBeNull();
+      expect(call[1]).toMatchObject({ extra: { userId: "user-1", errName: "Error" } });
+      expect(JSON.stringify(call[1])).not.toContain("kb-repo");
+    });
+
+    it("persona support with every other precondition true: not registered", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs({ persona: "support" }));
+      expectDarkPath();
+      expect(mockGithubApiGet).not.toHaveBeenCalled();
+    });
+
+    it("default-branch lookup fails: not registered (fail closed, never a 'main' fallback), reported under cc-push-default-branch-resolve", async () => {
+      eligible();
+      mockGithubApiGet.mockRejectedValue(new Error("404"));
+      await realSdkQueryFactory(makeArgs());
+      expectDarkPath();
+      expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-default-branch-resolve")).toBe(true);
+    });
+
+    it("all preconditions true: the tool is registered ONCE, its FQN is in platformToolNames, the addendum is in the prompt, the Map entry is published, and it is NOT in allowedTools", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(toolNames()).toEqual(["narrate", "summarize", "github_push_branch"]);
+      expect(toolNames().filter((n) => n === "github_push_branch")).toHaveLength(1);
+      expect(ccCtx().platformToolNames).toEqual([PUSH_FQN]);
+      // One server only (the sweep's blind spot, pinned on the live options), and what that server registers equals the base
+      // list plus exactly the push FQN: the base names are the always-on narration tools, canUseTool's list carries the rest.
+      expect(Object.keys(mockQuery.mock.calls.at(-1)![0].options.mcpServers)).toEqual(["soleur_platform"]);
+      expect(toolNames().map((n) => `mcp__soleur_platform__${n}`)).toEqual([...CC_REGISTERED_PLATFORM_TOOL_NAMES, PUSH_FQN]);
+      expect(prompt()).toContain(ADDENDUM);
+      expect(prompt().split(ADDENDUM)).toHaveLength(2);
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+      // ADR-305: a gated tool never enters allowedTools (canUseTool, i.e. the gate, is its only allow source).
+      expect(mockQuery.mock.calls.at(-1)![0].options.allowedTools).not.toContain(PUSH_FQN);
+      expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
+      expect(registrationEvents()[0][1]).toMatchObject({ tags: { reason: "registered" } });
+    });
+
+    it("registered x crm-lead x c4 on: the server list is narration, c4, push, crm in that order, canUseTool's list is c4, push, crm, and NO approval-required tool is in allowedTools", async () => {
+      eligible();
+      mockResolveC4FlagEnabled.mockResolvedValueOnce(true);
+      await realSdkQueryFactory(makeArgs({ crmLead: true }));
+      const C4_FQN = "mcp__soleur_platform__edit_c4_diagram";
+      const crm = crmLeadPermissionToolNames(true);
+      expect(crm.length).toBeGreaterThan(0);
+      expect(toolNames().map((n) => `mcp__soleur_platform__${n}`)).toEqual([...CC_REGISTERED_PLATFORM_TOOL_NAMES, C4_FQN, PUSH_FQN, ...crm]);
+      expect(ccCtx().platformToolNames).toEqual([C4_FQN, PUSH_FQN, ...crm]);
+      expect(Object.keys(mockQuery.mock.calls.at(-1)![0].options.mcpServers)).toEqual(["soleur_platform"]);
+      // ADR-305: not one of the 8 approval-required tools (the push tool included) is pre-allowed.
+      const allowed = mockQuery.mock.calls.at(-1)![0].options.allowedTools as string[];
+      expect([...APPROVAL_REQUIRED_TOOLS]).toHaveLength(8);
+      for (const tool of APPROVAL_REQUIRED_TOOLS) expect(allowed, tool).not.toContain(tool);
+      expect(prompt()).toContain(ADDENDUM);
+    });
+
+    it("registered: none of the 8 approval-required tools is in allowedTools", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(toolNames()).toContain("github_push_branch");
+      const allowed = mockQuery.mock.calls.at(-1)![0].options.allowedTools as string[];
+      for (const tool of APPROVAL_REQUIRED_TOOLS) expect(allowed, tool).not.toContain(tool);
+    });
+
+    it("the registered prompt equals the dark prompt plus exactly the addendum (nothing else moved)", async () => {
+      eligible({ flag: false });
+      await realSdkQueryFactory(makeArgs());
+      const dark = prompt();
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(prompt().replace(`\n\n${ADDENDUM}`, "")).toBe(dark);
+    });
+
+    it("entitled with the forwarder DEGRADED (spawn failed, webEgress undefined): still registered (push is server-side)", async () => {
+      eligible({ forwarder: false });
+      await realSdkQueryFactory(makeArgs());
+      expect(mockSpawnEgressForwarder).toHaveBeenCalled();
+      expect(toolNames()).toContain("github_push_branch");
+      expect(ccCtx().platformToolNames).toEqual([PUSH_FQN]);
+    });
+
+    it("identity: the grants object the gate deps carry IS the one the push handler checks (a gate-written grant releases the push)", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      const deps = ccCtx().deps;
+      const gateArgs = (createApprovalGateDeps as unknown as { mock: { calls: Array<[{ grants: unknown }]> } }).mock.calls.at(-1)![0];
+      expect(gateArgs.grants).toBe(deps.approval.grants);
+      const handler = platformTools().find((t) => t.name === "github_push_branch")!.handler;
+      // Before the gate ran (not enforcing) the strict handler refuses.
+      const refused = await handler({ branch: "feat-x", force: false });
+      expect(refused.isError).toBe(true);
+      expect(mockPushBranch).not.toHaveBeenCalled();
+      // A grant written on the gate's object releases the handler: they share one object.
+      deps.approval.grants.enforcing = true;
+      putGrant(deps.approval.grants, PUSH_FQN, { branch: "feat-x" }, { workspaceId: deps.approval.workspaceId, headSha: HEAD });
+      const ok = await handler({ branch: "feat-x", force: false });
+      expect(ok.isError).toBeUndefined();
+      expect(mockPushBranch).toHaveBeenCalledTimes(1);
+      expect(mockPushBranch.mock.calls[0][0]).toMatchObject({ commitSha: HEAD, defaultBranch: "trunk" });
+    });
+
+    it("workspace capture (brief ruling 1): the gate's workspaceId/repoSlug/workspacePath equal the tool closure's, and a mid-Query workspace switch cannot split them", async () => {
+      const TEAM = "00000000-0000-4000-8000-0000000000aa";
+      const OTHER = "00000000-0000-4000-8000-0000000000bb";
+      mockResolveActiveWorkspace.mockImplementation(async () => ({ ok: true, workspaceId: TEAM }));
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+
+      const gateArgs = (createApprovalGateDeps as unknown as {
+        mock: { calls: Array<[{ workspaceId: string; repoSlug: string; workspacePath: string; grants: ExecutionGrants }]> };
+      }).mock.calls.at(-1)![0];
+      // The id the gate binds is the id every workspace-keyed read received.
+      expect(gateArgs.workspaceId).toBe(TEAM);
+      expect(mockResolveActiveWorkspacePath.mock.calls.at(-1)).toContain(TEAM);
+      expect(mockReadCurrentRepoUrlResult.mock.calls.at(-1)![1]).toBe(TEAM);
+      expect(mockResolveInstallationId.mock.calls.at(-1)![1]).toBe(TEAM);
+
+      // The tool closure's owner/repo/workspacePath, observed through the handler's call to pushBranch.
+      const deps = ccCtx().deps;
+      deps.approval.grants.enforcing = true;
+      putGrant(deps.approval.grants, PUSH_FQN, { branch: "feat-x" }, { workspaceId: gateArgs.workspaceId, headSha: HEAD });
+      // Switch the active workspace AFTER construction.
+      mockResolveActiveWorkspace.mockImplementation(async () => ({ ok: true, workspaceId: OTHER }));
+      const handler = platformTools().find((t) => t.name === "github_push_branch")!.handler;
+      await handler({ branch: "feat-x", force: false });
+      const pushed = mockPushBranch.mock.calls[0][0] as { owner: string; repo: string; workspacePath: string };
+      expect(gateArgs.repoSlug).toBe(`${pushed.owner}/${pushed.repo}`);
+      expect(gateArgs.repoSlug).toBe("acme/kb-repo");
+      expect(gateArgs.workspacePath).toBe(pushed.workspacePath);
+      expect(pushed.workspacePath).toBe(WORKSPACE_PATH);
+
+      // The gate still binds the ORIGINAL workspace: resolveServerDerived reads the captured path/repo, not a re-resolve.
+      const derived = await deps.approval.resolveServerDerived(PUSH_FQN, { branch: "feat-x", force: false });
+      expect(derived).toEqual({ repo: "acme/kb-repo", headSha: HEAD });
+      expect(mockHeadSha).toHaveBeenLastCalledWith(WORKSPACE_PATH);
+      expect(deps.approval.workspaceId).toBe(TEAM);
+    });
+
+    it("two cold builds never share a grants object: a grant on build A's gate object does not release build B's handler", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs({ conversationId: "conv-a" }));
+      const a = { deps: ccCtx().deps, handler: platformTools().find((t) => t.name === "github_push_branch")!.handler };
+      await realSdkQueryFactory(makeArgs({ conversationId: "conv-b" }));
+      const b = { deps: ccCtx().deps, handler: platformTools().find((t) => t.name === "github_push_branch")!.handler };
+      expect(a.deps.approval.grants).not.toBe(b.deps.approval.grants);
+      a.deps.approval.grants.enforcing = true;
+      b.deps.approval.grants.enforcing = true;
+      putGrant(a.deps.approval.grants, PUSH_FQN, { branch: "feat-x" }, { workspaceId: a.deps.approval.workspaceId, headSha: HEAD });
+      const resB = await b.handler({ branch: "feat-x", force: false });
+      expect(resB.isError).toBe(true);
+      expect(mockPushBranch).not.toHaveBeenCalled();
+      const resA = await a.handler({ branch: "feat-x", force: false });
+      expect(resA.isError).toBeUndefined();
+      expect(mockPushBranch).toHaveBeenCalledTimes(1);
+    });
+
+    it("the registrar receives the gate's identity and the SAME installation the tool is closed over: flag seam {userId, workspaceId}, lookup (installationId, repo path, signal), pushBranch installationId", async () => {
+      const TEAM = "00000000-0000-4000-8000-0000000000aa";
+      mockResolveActiveWorkspace.mockImplementation(async () => ({ ok: true, workspaceId: TEAM }));
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      // The flag is read for the same workspace identity the gate binds (the TEAM id, not the user id).
+      expect(mockApprovalFlag.mock.calls[0]).toEqual([{ userId: "user-1", workspaceId: TEAM }]);
+      expect(ccCtx().deps.approval.workspaceId).toBe(TEAM);
+      // The default-branch lookup: the effective installation id, owner/repo in order, and an abort signal.
+      expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
+      expect(mockGithubApiGet).toHaveBeenCalledWith(987654, "/repos/acme/kb-repo", { signal: expect.any(AbortSignal) });
+      // The handler pushes with that same installation.
+      const deps = ccCtx().deps;
+      deps.approval.grants.enforcing = true;
+      putGrant(deps.approval.grants, PUSH_FQN, { branch: "feat-x" }, { workspaceId: TEAM, headSha: HEAD });
+      await platformTools().find((t) => t.name === "github_push_branch")!.handler({ branch: "feat-x", force: false });
+      expect(mockPushBranch.mock.calls[0][0]).toMatchObject({ installationId: 987654, owner: "acme", repo: "kb-repo", hardened: true });
+    });
+
+    // The warm turn: the factory does not run, the per-dispatch re-resolve knows nothing about the push tool, and the
+    // `onToolUse` mirror consults the set the cold build published. Driven through the REAL dispatch loop (a stub runner
+    // delivers the tool_use block to the dispatcher's own `onToolUse`), so a regex-shaped line cannot stand in for the behaviour.
+    describe("warm turn: a push tool_use through the real dispatch loop", () => {
+      const unregisteredMirrors = () => mockReportSilentFallback.mock.calls.filter(([, o]) => o?.op === "unregistered-tool-invoked");
+
+      /** A permissive tenant chain for the dispatcher's own persistence: every builder call chains, every await yields no error. */
+      function permissiveTenantChain(): unknown {
+        const q: unknown = new Proxy(function () {}, {
+          get: (_t, p) => {
+            if (p === "then") return undefined;
+            if (p === "error" || p === "data") return null;
+            if (p === "single" || p === "maybeSingle") return async () => ({ data: { workspace_id: "ws-warm", workspace_path: WORKSPACE_PATH }, error: null });
+            return () => q;
+          },
+        });
+        return q;
+      }
+
+      async function warmTurnWith(toolName: string, conversationId = "conv-1") {
+        mockSupabaseFrom.mockImplementation(() => permissiveTenantChain());
+        conversationWriteOverride.fn = async () => ({ ok: true });
+        const runner = {
+          dispatch: vi.fn(async (a: { events: { onToolUse: (b: { name: string; input: Record<string, unknown>; toolUseId: string }) => void } }) => {
+            await Promise.resolve();
+            a.events.onToolUse({ name: toolName, input: { branch: "feat-x" }, toolUseId: "tu-1" });
+            return { queryReused: true };
+          }),
+          hasActiveQuery: () => true,
+          activeQueriesSize: () => 1,
+          reapIdle: () => 0,
+          closeConversation: () => {},
+          respondToToolUse: () => false,
+          notifyAwaitingUser: () => {},
+        };
+        __setCcRunnerForTests(runner as never);
+        mockReportSilentFallback.mockClear();
+        await dispatchSoleurGo({
+          persona: "command_center",
+          userId: "user-1",
+          conversationId,
+          userMessage: "push my branch",
+          currentRouting: { kind: "soleur_go_pending" },
+          sendToClient: vi.fn().mockReturnValue(true),
+          persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+        } as never);
+      }
+
+      it("after a REGISTERED cold build the push tool_use does not mirror as an unregistered platform tool", async () => {
+        eligible();
+        await realSdkQueryFactory(makeArgs());
+        expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+        await warmTurnWith(PUSH_FQN);
+        expect(unregisteredMirrors()).toHaveLength(0);
+      });
+
+      it("control: another platform tool on the same conversation STILL mirrors", async () => {
+        eligible();
+        await realSdkQueryFactory(makeArgs());
+        await warmTurnWith("mcp__soleur_platform__email_send");
+        expect(unregisteredMirrors()).toHaveLength(1);
+      });
+
+      it("control: the push tool_use on a conversation whose cold build did NOT register it (flag off) STILL mirrors", async () => {
+        eligible({ flag: false });
+        await realSdkQueryFactory(makeArgs());
+        expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+        await warmTurnWith(PUSH_FQN);
+        expect(unregisteredMirrors()).toHaveLength(1);
+      });
+
+      it("control: the set is per conversation (a registered conv-1 does not silence conv-other)", async () => {
+        eligible();
+        await realSdkQueryFactory(makeArgs());
+        await warmTurnWith(PUSH_FQN, "conv-other");
+        expect(unregisteredMirrors()).toHaveLength(1);
+      });
+    });
+
+    it("both drain sites forget the published set: the conversation close hook and the test reset", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+      cleanupCcBashGatesForConversation("user-1", "conv-1");
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+      __resetDispatcherForTests();
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+    });
+
+    it("a factory throw AFTER registration drains the Map entry (no stale published set)", async () => {
+      eligible();
+      mockQuery.mockImplementationOnce(() => {
+        throw new Error("sdk construction boom");
+      });
+      await expect(realSdkQueryFactory(makeArgs())).rejects.toThrow(/sdk construction boom/);
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+    });
+
+    it("a rebuild with the flag OFF deletes a stale entry from an earlier unclean build (publish happens on EVERY cold build)", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
+      mockApprovalFlag.mockResolvedValue(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([]);
+    });
+
+    it("the Map is keyed per conversation: another conversation does not see the entry", async () => {
+      eligible();
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredApprovalTools("user-1", "conv-other")).toEqual([]);
+      expect(getCcRegisteredApprovalTools("user-2", "conv-1")).toEqual([]);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -1976,6 +2572,141 @@ const EXPECTED_SA_ACCOUNTS = Array.from(
       });
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
       expect(mockSpawnEgressForwarder).not.toHaveBeenCalled();
+    });
+  });
+
+  // Agent auth-failure diagnostic (plan Phase 1 items 5 and 6): the cc factory taps the Query it returns and feeds the shared
+  // probe. The probe, matcher, tap, context derivation and the real buildAgentQueryOptions are real; the emit is the
+  // mocked observability seam; `sdkQuery` is the mock.
+  describe("agent auth-failure diagnostic wiring", () => {
+    const SEP = "\u00B7";
+    const authEmits = () =>
+      mockReportSilentFallback.mock.calls.filter((c) => (c[1] as { feature?: string })?.feature === "agent-auth");
+    const failureStream = () => [
+      { type: "system", subtype: "init", apiKeySource: "none", session_id: "sess-1" },
+      {
+        type: "assistant",
+        message: { model: "<synthetic>", content: [{ type: "text", text: `Not logged in ${SEP} Please run /login` }] },
+        error: "authentication_failed",
+        is_api_error_message: true,
+        session_id: "sess-1",
+      },
+      { type: "result", subtype: "success", is_error: true, result: `Not logged in ${SEP} Please run /login`, session_id: "sess-1" },
+    ];
+    const queryStreaming = (messages: unknown[]) => {
+      const q = makeFakeQuery();
+      q[Symbol.asyncIterator] = async function* () {
+        for (const m of messages) yield m;
+      };
+      return q;
+    };
+    const drain = async (q: AsyncIterable<unknown>) => {
+      const out: unknown[] = [];
+      for await (const m of q) out.push(m);
+      return out;
+    };
+
+    afterEach(() => {
+      authDiag.scheme = "api_key";
+    });
+
+    beforeEach(() => {
+      __resetAgentAuthDedupeForTests();
+      authDiag.makeResolver.mockImplementation(() => async () => "managed");
+      // The posture the REAL buildAgentSandboxConfig would record (this file mocks the builder).
+      mockBuildAgentSandboxConfig.mockReturnValue(
+        recordSandboxPosture(
+          { enabled: true, filesystem: { allowWrite: [WORKSPACE_PATH], denyRead: ["/workspaces", "/proc"] } },
+          { hasEgress: false, unixDenyFlag: false },
+        ),
+      );
+    });
+
+    it("an auth-failure stream emits exactly ONE reportSilentFallback(null, ...) with the cc runner and real context tags", async () => {
+      const fake = queryStreaming(failureStream());
+      mockQuery.mockReturnValue(fake);
+      const q = await realSdkQueryFactory(makeArgs());
+      expect(q).toBe(fake); // the tap preserves identity
+      expect(await drain(q as unknown as AsyncIterable<unknown>)).toHaveLength(3);
+
+      await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
+      const [first, opts] = authEmits()[0] as [unknown, { feature: string; op: string; tags: Record<string, string> }];
+      expect(first).toBeNull();
+      expect(opts).toMatchObject({ feature: "agent-auth", op: "cli-auth-failure" });
+      expect(opts.tags).toMatchObject({
+        runner: "cc-soleur-go",
+        credential_scheme: "api_key",
+        auth_env_present: "true",
+        auth_mode: "managed",
+        cli_key_source: "none",
+        seccomp_artifact: "base",
+        has_egress: "false",
+        sandbox: "on",
+        outer_wrap: "false",
+        match_kind: "not_logged_in",
+      });
+      expect(authDiag.makeResolver).toHaveBeenCalledWith("user-1", "conv-1");
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(1);
+    });
+
+    it("the leased scheme reaches the probe: an oauth_token lease reports credential_scheme=oauth_token and reads the OAuth variable", async () => {
+      authDiag.scheme = "oauth_token";
+      mockBuildAgentEnv.mockReturnValue({ CLAUDE_CODE_OAUTH_TOKEN: "sk-test-oauth" });
+      mockQuery.mockReturnValue(queryStreaming(failureStream()));
+      const q = await realSdkQueryFactory(makeArgs());
+      await drain(q as unknown as AsyncIterable<unknown>);
+      await vi.waitFor(() => expect(authEmits()).toHaveLength(1));
+      const opts = authEmits()[0][1] as { tags: Record<string, string> };
+      // A hard-coded api_key scheme would read ANTHROPIC_API_KEY (absent here) and report auth_env_present=false.
+      expect(opts.tags).toMatchObject({ credential_scheme: "oauth_token", auth_env_present: "true" });
+    });
+
+    it("the debounce is per USER: two users with the same tuple each emit once", async () => {
+      for (const userId of ["user-a", "user-b"]) {
+        mockQuery.mockReturnValue(queryStreaming(failureStream()));
+        const q = await realSdkQueryFactory(makeArgs({ userId, conversationId: `conv-${userId}` }));
+        await drain(q as unknown as AsyncIterable<unknown>);
+      }
+      await vi.waitFor(() => expect(authEmits()).toHaveLength(2));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(2);
+    });
+
+    it("a clean stream emits nothing", async () => {
+      mockQuery.mockReturnValue(queryStreaming([{ type: "system", subtype: "init", apiKeySource: "ANTHROPIC_API_KEY" }, { type: "result", subtype: "success", is_error: false, result: "ok" }]));
+      const q = await realSdkQueryFactory(makeArgs());
+      await drain(q as unknown as AsyncIterable<unknown>);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(0);
+    });
+
+    it("a throwing probe construction falls back to a working untapped Query and is NOT mirrored as a sandbox failure", async () => {
+      authDiag.createProbe.mockImplementationOnce(() => {
+        throw new Error("bwrap: Operation not permitted (the diagnostic must not be misreported as this)");
+      });
+      const fake = queryStreaming(failureStream());
+      mockQuery.mockReturnValue(fake);
+      const q = await realSdkQueryFactory(makeArgs());
+      expect(q).toBe(fake);
+      expect(await drain(q as unknown as AsyncIterable<unknown>)).toHaveLength(3);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(authEmits()).toHaveLength(0);
+      const sandboxMirrors = mockReportSilentFallback.mock.calls.filter(
+        (c) => (c[1] as { feature?: string; op?: string })?.feature === "agent-sandbox" && (c[1] as { op?: string })?.op === "sdk-startup",
+      );
+      expect(sandboxMirrors).toHaveLength(0);
+    });
+
+    it("source pins: the factory imports the module, creates the probe, wraps the option expression, and returns the tapped Query", async () => {
+      const { readFileSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+      const src = readFileSync(new URL("../server/cc-dispatcher.ts", import.meta.url), "utf8");
+      expect(src).toMatch(/from "\.\/agent-auth-failure"/);
+      expect(src).toContain("createAgentAuthFailureProbe(");
+      expect(src).toMatch(/options: authProbe\.bindOptions\(recordCcSeccompArtifact\(/);
+      expect(src).toMatch(/return tapAgentAuthFailure\(\s*sdkQuery\(\{/);
+      // The construction-failure fallback is visible, not silent.
+      expect(src).toMatch(/\} catch \{[^}]*warnAgentAuthProbeUnavailable\(\);/);
     });
   });
 });

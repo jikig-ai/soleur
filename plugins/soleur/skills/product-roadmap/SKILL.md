@@ -146,7 +146,7 @@ gh issue list --state open --limit 100 --json number,title,labels,milestone
 ```
 
 ```bash
-gh api repos/{owner}/{repo}/milestones --jq '.[] | {title, open_issues, closed_issues, due_on}'
+gh api --paginate repos/{owner}/{repo}/milestones --jq '.[] | {title, open_issues, closed_issues, due_on}'
 ```
 
 **Present Context Summary.** Display a table of what was found and what is missing. If an existing `roadmap.md` was found, ask whether to update it or start fresh. In headless mode: default to "Update existing" if found, "Start fresh" if not.
@@ -288,7 +288,7 @@ git commit -m "docs(product): generate product roadmap"
 List existing milestones, then create any that are missing:
 
 ```bash
-gh api repos/{owner}/{repo}/milestones --jq '.[].title'
+gh api --paginate repos/{owner}/{repo}/milestones --jq '.[].title'
 ```
 
 For each phase not already present:

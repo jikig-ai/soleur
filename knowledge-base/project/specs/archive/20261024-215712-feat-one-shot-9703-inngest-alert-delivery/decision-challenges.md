@@ -1,0 +1,17 @@
+# Decision Challenges — feat-one-shot-9703-inngest-alert-delivery
+
+Recorded during `soleur:plan` on the Devin CLI harness (no subagent-spawn
+capability). Per the pipeline's technical-ruling delegation rule, technical
+forks that could not be ruled by `soleur:engineering:cto` are recorded as
+`pending - assumed: <default>`; the plan ships the assumed default and the
+ruling is owed at review/ship time.
+
+## Decision Classes
+
+| Item | Class | Ruling |
+|---|---|---|
+| WS1 alert-routing route: GitHub-issue incident mirror (repo-side `GET /api/v2/incidents` poller filing deduped `ci/betterstack-incident` issues) vs Slack integration coverage vs paid-tier escalation policy | technical | Ruled by CTO agent, 2026-10-24: build the GitHub-issue incident mirror as primary deliverable + Phase-0 Slack-coverage measurement + measured push=true secondary arm; Responder-tier escalation operator-reserved (money) - GitHub issues are the channel empirically observed to reach the operator Oct-22; BETTERSTACK_API_TOKEN_READONLY read path proven in-repo (send-failed-alert-probe-8097.sh, scheduled-inngest-probe-heartbeat.yml); zero vendor-tier dependency. Dissent: free-tier /api/v2/incidents readability is the Phase-0 empirical gate; if refused, fallback = push armed + Slack re-verified. |
+| Mirror placement: dedicated `scheduled-betterstack-incident-mirror.yml` + watchdog-dispatch-table row + sentry_cron_monitor vs a job inside the existing scheduled-inngest-probe-heartbeat.yml | technical | Ruled by CTO agent, 2026-10-24: dedicated scheduled-betterstack-incident-mirror.yml + watchdog-dispatch row (15-min, clause-1 eligibility) + unrouted sentry_cron_monitor - one workflowFile->one monitorSlug contract with per-row eligibility; a mirror reporting on the Inngest substrate cannot ride an Inngest-scheduled row (ADR-033 anti-circularity); unrouted landing per cron-monitors.tf precedent + sentry README two-PR rule. |
+| WS2 serving-verdict delivery: beat `<url>/fail` on `not-serving` (web-bash-synthetic precedent) vs withhold the beat vs a second heartbeat | technical | Ruled by CTO agent, 2026-10-24: beat <url>/fail on classify_dedicated_host not-serving, normal beat on healthy + stopped-by-brake, withhold (exit 3 CANNOT BEAT) on probe-unavailable - /fail convention live at web-bash-synthetic.sh:135; classifier already emits the four-verdict vocabulary from fields the probe row carries; one jq pass extension, one monitor, no emitter change. Dissent: a transient mid-cutover not-serving pages once per window, deduped upstream + by the WS1 mirror; acceptable vs serving-dead reading green. |
+| WS3 soak vehicle: postmerge skill phase (point read) + followthrough-enrolled soak script (daily window) vs ship Phase-7 edit (sibling-collision surface) | technical | Ruled by CTO agent, 2026-10-24: postmerge Phase 3.9 alert-channel sweep (advisory point read) + generic post-deploy-incident-soak.sh enrolled via the followthrough convention + WS1 mirror as always-on arm - postmerge Phase 3.5 advisory idiom verified in place; ship/SKILL.md confirmed in sibling #10966 worktree diff (collision) and Phase 7 merge-poll is the wrong duration for an alert soak. Dissent: enrollment discipline is the weak link; convention-table row + always-on mirror bound it. |
+| Epic #10390 scope: implement WS1+WS2+WS3 in one PR vs split | operator (scope) | Ruled by operator brief, 2026-10-24: single PR - the ask authorized all three workstreams; split thresholds not met (~19 files, ~750 lines); only the sentry-monitor routing half may follow per the two-PR rule. |

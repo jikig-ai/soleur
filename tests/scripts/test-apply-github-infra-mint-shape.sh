@@ -530,7 +530,9 @@ if [[ "$_gated" == "ci_required cla_required" ]]; then pass "G2c: the rulesets c
 else fail "G2c: the rulesets carrying required checks differ from the two the gate covers" "got [$_gated]; gate the new address in the workflow, the checker's want-map and a canonical"; fi
 
 # Floors (printf + exit, never through fail()): the control, the mutation rows, Guard 2 and Guard 1.
-MIN_ASSERTIONS=138
+# The Guard-1 per-row rebound loop runs once per canonical context, so this floor moves with the
+# canonical row counts (ci_required 23 -> 10 under the #12089 umbrella consolidation, cla_required 2).
+MIN_ASSERTIONS=125
 if [[ $((passes + fails)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FAIL ANTI-VACUITY: %s assertions ran, floor is %s\n' "$((passes + fails))" "$MIN_ASSERTIONS" >&2; exit 1
 fi

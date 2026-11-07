@@ -61,3 +61,34 @@ path per session + size check + atomic rename.
    **Prevention:** read the gate's error text literally; it names the format.
 6. Headless `.pen` reopen wipe (this file's subject).
    **Prevention:** the v2-path + size-check + mv pattern above.
+
+## Addendum — 2026-10-26 (#11143): the root cause was the missing `--in`
+
+The "second session loads an empty document" behaviour above is not an engine
+defect. `pencil interactive --out <file>` starts an empty document unless
+`--in <file>` is also passed, and the adapter's `open_document` passed `--in`
+only when the caller supplied `inputPath`. Measured against @pencil.dev/cli
+0.2.9: `--in X --out X` loads the existing file and saves it back correctly.
+The adapter now decides `--in` at every spawn (`planSpawn`), reports the loaded
+node count, and routes every save through one sentinel that refuses an empty
+document over a non-empty file. The prevention above (a fresh path per session)
+still protects a Bash-driven REPL that passes no `--in`.
+
+The same issue found the reason design calls "did nothing": the adapter sent
+`batch_design({ operations })` where 0.2.9 takes `{ input }`; the engine drops
+an unknown key and prints `OK`. Prevention: every REPL line is built by one
+formatter that refuses a tool or key outside the pinned CLI's signature table,
+and `engine-contract-probe.sh` diffs that table against the live `--help`.
+
+## Addendum — 2026-10-26 (#11143 review round): measure the open, not only the save
+
+The upstream report (#4859) saw the file truncated at the `open_document` call itself,
+while this fix measured writes only on `save()` (and none on SIGTERM or `exit()`). The
+two are not reconciled, so the adapter no longer relies on either reading: the file the
+engine is told to load is checked at open (a non-blank file the engine would load as an
+empty document is refused), a template is never opened over an existing document, and
+every save is guarded. Live measurements from the review: the engine loads a truncated
+`.pen`, one with a byte-order mark, one with git conflict markers and an arbitrary text
+file as an EMPTY document with exit 0, and `batch_get()` of a 1500-node design is ~950 KB,
+so anything that parses that reply must not read the 64 KiB-capped classifier text.
+

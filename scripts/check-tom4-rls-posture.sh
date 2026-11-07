@@ -200,6 +200,8 @@ SHAPE_IV = {  # TOM 4 shape (iv): RLS enabled, ZERO policies, Customer Data
     "tenant_deploy_audit", "denied_jti", "mint_rate_window", "runtime_mint_intent",
     "pending_checkout_sessions",  # user-keyed checkout claim marker (migration 144)
     "workspace_egress_audit_rollup",  # per-workspace egress audit rollup, dark until PR2 (migration 162, ADR-288)
+    "git_data_erasure_pending",  # workspace-id-keyed pending git-data erasure ledger (migration 182, #8211)
+    "legal_reauth_event",  # single-use email-code challenge keyed on a user uuid and web session id (migration 184, #12011)
 }
 # Zero-policy tables that hold no Customer Data. Assertion 4 requires every
 # zero-policy table to sit in exactly one of these two lists, so a NEW
@@ -208,6 +210,7 @@ NOT_CUSTOMER_DATA = {
     "_schema_migrations", "flag_flip_audit", "probe_tokens",
     "processed_github_events", "processed_resend_events", "processed_stripe_events",
     "statutory_repin_send", "tool_attempts",
+    "git_data_erasure_counts",  # monthly non-identifying erasure-latency counter, no id/timestamp (migration 182, #8211)
     "email_inbox_routes",  # inbound address -> (workspace, owner) routing config (migration 155, ADR-269); no Customer Data
 }
 WORKSPACE_KEYED = {
@@ -278,15 +281,30 @@ check("7", re.search(r'GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+(?:public\.)?purge_work
       "not found — TOM 4 shape (iv) states postgres reaches these ledgers; if "
       "that grant is gone, the instrument now overstates the principal set")
 
-client_roles = re.compile(r'\bTO\s+[^;]*?\b(anon|authenticated)\b', re.I)
-bad8 = []
-for mo in re.finditer(r'GRANT\s+[^;]*?\bON\s+(?:TABLE\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s+TO\s+[^;]*?;',
-                      ALL, re.I | re.S):
-    if mo.group(1) in SHAPE_IV and client_roles.search(mo.group(0)):
-        bad8.append(mo.group(0).strip())
+# NET of revokes, replayed in migration order — the same model granted_roles()
+# uses for functions below. A raw GRANT grep cannot express the corpus's
+# effective state once a later migration revokes (174 granted, 175 revoked:
+# cumulative text still shows the GRANT). Assertion 8's warrant is about the
+# EFFECTIVE corpus posture, so the instrument replays it.
+tbl_acl = collections.defaultdict(set)  # shape-(iv) table -> effective grantee set
+tbl_op = re.compile(
+    r'\b(GRANT|REVOKE)\s+[^;]*?\bON\s+(?:TABLE\s+)?(?:public\.)?"?([a-z_][a-z0-9_]*)"?\s+(TO|FROM)\s+([^;]+?);',
+    re.I | re.S)
+for m in MIGRATIONS:
+    for mo in tbl_op.finditer(BODY[m]):
+        tab = mo.group(2)
+        if tab not in SHAPE_IV:
+            continue
+        roles = {r.strip().strip('"').lower() for r in mo.group(4).split(",")}
+        if mo.group(1).upper() == "GRANT":
+            tbl_acl[tab] |= roles
+        else:
+            tbl_acl[tab] -= roles
+bad8 = ["%s -> %s" % (tab, sorted(tbl_acl[tab] & {"anon", "authenticated"}))
+        for tab in sorted(SHAPE_IV) if tbl_acl[tab] & {"anon", "authenticated"}]
 check("8", not bad8,
-      "no shape-(iv) TABLE is granted to anon or authenticated",
-      "client-reachable grants found: %s — shape (iv) warrants that no "
+      "no shape-(iv) TABLE holds an EFFECTIVE anon or authenticated grant (net of revokes, corpus order)",
+      "client-reachable grantees found: %s — shape (iv) warrants that no "
       "client-held credential reaches these tables" % bad8)
 
 # ================================================================= PREDICATES

@@ -116,6 +116,16 @@ LB.
 
 ## Part 2 — Staging convert (empirical continuity + de-risk the one assumed step)
 
+> **Machinery (2026-10-30, #11181 F3):** the convert now runs through dedicated
+> dispatch arms of `.github/workflows/cf-lb-overlay.yml` against the throwaway
+> Terraform root `apps/web-platform/infra/lb-staging/` — `staging-record` →
+> `staging-overlay` (runs the continuity loop in-runner and grades it) →
+> `staging-teardown`, then `ga-overlay` after a GO verdict. The manual steps below
+> remain the design reference for what each arm does; run the arms, not the manual
+> path. Each dispatch needs fresh, named operator authorization plus its `confirm`
+> typo-guard literal (`CONVERT-LB-STAGING` / `TEARDOWN-LB-STAGING` /
+> `APPLY-GA-LB-OVERLAY`).
+
 Docs say the overlay is gapless, but the **Terraform provider's** exact behavior when a
 `cloudflare_load_balancer` is created while a same-name `cloudflare_dns_record` is *retained*
 is **assumed, not verified** (see "Still unverified"). Part 2 de-risks precisely that on a
@@ -358,3 +368,13 @@ excluded from current burn until then.
   [health details](https://developers.cloudflare.com/load-balancing/understand-basics/health-details/),
   [Load Balancing FAQ (monitor source IPs)](https://developers.cloudflare.com/load-balancing/troubleshooting/load-balancing-faq/),
   [v4→v5 migration (key renames)](https://developers.cloudflare.com/terraform/schema-changes/), [monitors](https://developers.cloudflare.com/load-balancing/monitors/)
+
+## GA update arms (2026-11-01, #6027 continuation)
+
+Two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` cover UPDATE semantics on the live GA trio — `ga-overlay` keeps create-only semantics.
+
+- `arm=ga-monitor-fix` — confirm `FIX-GA-LB-MONITOR`. Updates `cloudflare_load_balancer_monitor.web` only; grader `cf_lb_gate_ga_monitor_update` pins the after-state to `{type:http, port:80, path:/health, expected_codes:200}` (the https/:443 create shape probed a port nothing listens on and reported every origin permanently down, hidden by the B1 self-fallback). Post-apply asserts every pool origin reports `healthy:true` one monitor interval later. Deployable immediately — needs no flip authorization.
+- `arm=ga-pool-update -f mode=drain` — confirm `UPDATE-GA-LB-POOL`. Updates the GA pool + LB + `cloudflare_notification_policy.web_lb_health`; grader `cf_lb_gate_ga_pool_update` confines changes to that set, resolves every origin address from the plan's `hcloud_server.web[*]` no-op entries (never a literal), and pins web-2's after-weight to `0`.
+- `arm=ga-pool-update -f mode=serve` — the #6027 maintenance-window 0→1 flip ONLY: the job runs `lb-weight-gate-with-marker.sh` (the §(c) gate chain) fail-closed BEFORE plan, so an unauthorized flip never reaches a grader. Requires the window sequence per #6027 (weight flip → drain → `ignore_changes` removal → drained-host reboot).
+
+**ForceNew caveat:** a `cloudflare_load_balancer_monitor.type` change may plan `["delete","create"]` (replace) on some provider versions — every arm's grader fails closed on replace verbs by design, so verify with a `terraform plan` dry-run at window time before dispatching.

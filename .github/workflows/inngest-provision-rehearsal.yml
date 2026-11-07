@@ -213,6 +213,8 @@ jobs:
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           export TF_VAR_zot_pull_token="$ZOT_PULL"
@@ -221,7 +223,7 @@ jobs:
           # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false 2>&1 | tf_redact_random_ids
           echo "teardown-only complete"
 
       # ── PHASE A: birth WITHOUT the private NIC ────────────────────────────────────
@@ -244,12 +246,14 @@ jobs:
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           ZOT_PULL="$(DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler secrets get ZOT_PULL_TOKEN -p soleur -c prd --plain)"
           printf '::add-mask::%s\n' "$ZOT_PULL"
           export TF_VAR_zot_pull_token="$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-a \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false 2>&1 | tf_redact_random_ids
 
       # THE PLAN-SHAPE GUARD RUNS ON THE REAL ARM TOO, not only dry_run: the dangerous
       # dispatch is precisely the one with dry_run=false. The shape step reads EXACTLY the
@@ -284,13 +288,15 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # The observation window opens BEFORE the apply: the host starts booting the
           # instant ServerCreate lands, so a post-apply timestamp would exclude the
           # earliest (most diagnostic) rows.
           date -u +%Y-%m-%dT%H:%M:%S > "$GITHUB_WORKSPACE/phase-a-since.txt"
           cat "$GITHUB_WORKSPACE/phase-a-since.txt"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -auto-approve -input=false tfplan-a
+            terraform apply -auto-approve -input=false tfplan-a 2>&1 | tf_redact_random_ids
 
       # THE PHASE-A EVIDENCE GATE. Phase B may not start until the EXPECTED failure is
       # observed: provision-unit-armed, >=2 provision-attempt-start, and a NIC-absent marker
@@ -366,6 +372,8 @@ jobs:
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # The phase-B window bound is taken BEFORE the plan/apply — phase-A's
           # (expected-failure) rows share the host name, and the capture must not count
           # them as recovery evidence.
@@ -375,7 +383,7 @@ jobs:
           export TF_VAR_zot_pull_token="$ZOT_PULL"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan-b \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=true 2>&1 | tf_redact_random_ids
 
       - name: Assert the phase-B delta is exactly the NIC attachment (plan-shape nic-attach)
         if: ${{ !inputs.teardown_only && !inputs.dry_run }}
@@ -397,8 +405,10 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
-            terraform apply -auto-approve -input=false tfplan-b
+            terraform apply -auto-approve -input=false tfplan-b 2>&1 | tf_redact_random_ids
 
       # RECOVERY OBSERVED, not assumed: private_nic_ok + bootstrap-done for this host. The
       # unit's next retry after the attach runs the full zot-login -> pull -> Doppler
@@ -634,6 +644,8 @@ jobs:
           DOPPLER_TOKEN_PRD: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           # zot_pull_token is REQUIRED (no default) and is validated even on destroy —
           # without it this step dies on `No value for required variable`, the orphan
           # assertion below is skipped, and a real run leaks the paid stack.
@@ -645,7 +657,7 @@ jobs:
           # destroy graph — so a transiently-unreadable prod network cannot fail teardown.
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform destroy -auto-approve -input=false \
-              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false
+              -var "rehearsal_run_id=${GITHUB_RUN_ID}" -var nic_attached=false 2>&1 | tf_redact_random_ids
 
       # THE ORPHAN ASSERTION, IN-WORKFLOW. `terraform destroy` acts only on state, so a
       # destroy that half-ran leaves paying objects behind — the drift sweep DETECTS those

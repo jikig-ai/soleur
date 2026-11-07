@@ -2,6 +2,10 @@ import { readFileSync } from "node:fs";
 import { join, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 import { stripComments } from "./helpers/strip-comments";
+import {
+  parseWebServerEntries,
+  playwrightConfigPath,
+} from "./helpers/web-server-entries";
 
 /**
  * The e2e harness runs TWO next dev servers (a public origin and an authenticated one).
@@ -38,13 +42,14 @@ describe("playwright dev servers use distinct dist directories", () => {
   // "command: `npm run dev`" instead would answer "how many entries use that one command"
   // — measured: a third entry spelled `npm run dev:mock` was invisible to it, and its
   // undercount exactly cancelled the missing declaration, leaving the suite green.
-  const webServerBlock = playwright.slice(playwright.indexOf("webServer:"));
+  // Bounded parse shared with playwright-web-server-exit-marker.test.ts
+  // (test/helpers/web-server-entries.ts) — one copy, never two drifting ones.
+  const { block: webServerBlock, entries } = parseWebServerEntries(
+    playwrightConfigPath(__dirname),
+  );
   // Unanchored on purpose: a single-line entry (`{ command: ..., url: ... }`) must count too.
   const webServers = (webServerBlock.match(/\b(?:port|url):\s/g) ?? []).length;
   const webServerCommands = (webServerBlock.match(/\bcommand:\s/g) ?? []).length;
-  // One segment per webServer entry (text after each `command:`), so per-entry properties
-  // are asserted per entry rather than counted across the whole block.
-  const entries = webServerBlock.split(/\bcommand:\s/).slice(1);
 
   it("polls /login for readiness on both servers, with a budget that covers the cold compile", () => {
     // `port:` is a TCP check: a server whose first compile 5xx's counts as ready and the

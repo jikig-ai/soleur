@@ -71,6 +71,8 @@ const ACKS: Record<string, { reason: AckReason; lines: number }> = {
   "plugins/soleur/skills/flag-set-role/SKILL.md|flag-delete": { reason: "doc-mention", lines: 1 },
   "plugins/soleur/skills/flag-set-role/SKILL.md|user-set-role": { reason: "operator-handoff", lines: 2 },
   "plugins/soleur/skills/operator-bootstrap/SKILL.md|provision-hetzner": { reason: "doc-mention", lines: 1 },
+  "plugins/soleur/skills/registry-breakglass-mirror/SKILL.md|admin-ip-refresh": { reason: "operator-handoff", lines: 2 },
+  "plugins/soleur/skills/registry-breakglass-mirror/SKILL.md|cf-token-scope": { reason: "doc-mention", lines: 1 },
 };
 
 // The referrer population: what the model reads or is dispatched with. Every entry is a

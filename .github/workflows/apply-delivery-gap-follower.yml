@@ -1,0 +1,100 @@
+# Apply delivery gap follower (tracker #9454; Ref #10033, #8167).
+#
+# Both apply workflows share ONE concurrency group (the apply group; the state backend has no lock, so that group is
+# the only serializer). A group keeps a single pending run, so a second push evicts the first: the evicted run is
+# CANCELLED, usually with zero jobs, and nothing pages. This follower runs after every completed run of either apply
+# workflow, reads the Actions API, and files ONE deduplicated `apply-delivery-gap` issue naming each push that never
+# reached production.
+#
+# BOUNDED ACTUATION (ADR-318): a second `redrive` job re-dispatches
+# `apply-deploy-pipeline-fix.yml --ref main` when, and only when, the reconcile
+# found deploy-fix gap rows ALL classed `evicted-before-start` (zero jobs ran -
+# nothing partial on the lockless backend) with no non-stale deploy-fix run in
+# flight. cancelled-mid-run stays human-only: a mid-run cancel can leave
+# partial apply state, and auto-applying over it is the split-state the
+# shared group exists to prevent. The dispatch cannot widen: deploy-fix only
+# (the `infra` key stays reserved), no `apply_target` and no
+# `allow_missing_status_endpoint`, at most once per reconcile, and the
+# dispatched run lands in the same apply group so
+# apply serialization is untouched - a re-eviction just re-fires this follower
+# on the next completion, with the aged-issue escalation as the floor. The
+# `follow` job itself still holds no credential beyond the run token and
+# enters no protected environment - `actions: write` is scoped to the redrive
+# job alone (ADR-189 sense/adjudicate/actuate split at job granularity). The
+# merge is the authorization - a redrive applies main HEAD, which is exactly
+# what the printed manual command already instructed a human to run. A read or
+# write failure in `follow` is a red run plus a distinct degraded issue; a
+# failed dispatch in `redrive` is a red run and the open gap issue is the floor.
+#
+# The logic and its contract live in scripts/apply-delivery-gap.sh (tests:
+# plugins/soleur/test/apply-delivery-gap-follower.test.sh, which also asserts the shape of THIS file on its parsed form
+# and on its raw text). A watched workflow renamed without updating `workflows:` below silently stops the follower; the
+# suite compares both names to the live files.
+#
+# Trigger scope: the watched workflows are started only by a push or a manual run, never by a pull request, so no
+# fork-controlled run can fire this follower. The single run id passed to the script is checked for digits there.
+# `workflow_run` workflows execute from the default branch's copy of this file: inert until it is merged.
+#
+# Runbook: knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-red-run.md
+
+name: Apply Delivery Gap Follower
+
+on:
+  workflow_run:
+    workflows:
+      - "Apply deploy-pipeline-fix"
+      - "Apply web-platform infra (Doppler/Cloudflare/BetterStack/GitHub-App/Inngest/firewall)"
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: apply-delivery-gap-follower
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  follow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      redrive_deploy_fix: ${{ steps.reconcile.outputs.redrive_deploy_fix }}
+    steps:
+      - name: Checkout the follower script
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/apply-delivery-gap.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Reconcile undelivered apply pushes
+        id: reconcile
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          TRIGGER_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: bash scripts/apply-delivery-gap.sh
+
+  # Bounded actuation (ADR-318): the only `actions: write` grant in this
+  # workflow. Fires once per reconcile, deploy-fix rows only, every row
+  # evicted-before-start, nothing in flight. The dispatched run lands in the
+  # same apply group, so serialization is untouched and a re-eviction just
+  # re-fires the follower on the next completion.
+  redrive:
+    needs: follow
+    if: needs.follow.outputs.redrive_deploy_fix == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Re-dispatch apply-deploy-pipeline-fix on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # No checkout in this job: gh resolves the repo from GH_REPO, not a git dir.
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run apply-deploy-pipeline-fix.yml --ref main -f reason="apply-delivery-gap redrive follower-run ${{ github.run_id }}"

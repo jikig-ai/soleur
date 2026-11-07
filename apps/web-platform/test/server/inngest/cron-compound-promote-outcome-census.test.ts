@@ -1145,3 +1145,236 @@ describe("Guard 1d -- PROMOTION_QUORUM is the single source of the quorum", () =
     expect(() => censusQuorum(read().replace(decl, "export const PROMOTION_QUORUM = Number('5');"))).toThrow(/numeric literal/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #10550 -- the gated create arm's censuses.
+//
+//   Guard 1e  CREATE_REFUSAL_CLASSES is declared once and every member is EMITTED by a refusal site in the create
+//             modules (and every emitted class is declared): a dead class or an undeclared one is RED.
+//   Guard 3d  The create steps' callbacks accumulate nothing (they return a verdict); every outcome is recorded in
+//             the handler body from the MEMOIZED return, so a replay still reports it.
+//   Guard 1f  `create-refused` has exactly one emit site in the handler, every create refusal in the arm goes through
+//             a mirroring helper (no bare returned refusal), and the marker spreads the create fields only where the
+//             arm could have run.
+// ---------------------------------------------------------------------------
+const SERVER_DIR = join(__dirname, "..", "..", "..", "server");
+const CREATE_MODULE = join(SERVER_DIR, "compound-promote-create.ts");
+const CREATE_ARM = join(SERVER_DIR, "compound-promote-create-arm.ts");
+const CREATE_GATES = join(SERVER_DIR, "compound-promote-create-gates.ts");
+
+/**
+ * window-assembly: censusCreateClasses -- complete against the three create modules, each parsed whole: every
+ * CallExpression whose callee is one of the refusal constructors and whose first argument is a string literal, plus
+ * every `class: "<literal>"` property of a returned object. The declared side is the array literal assigned to
+ * `CREATE_REFUSAL_CLASSES`. Throws when either side is empty so a census that found nothing can never read clean.
+ */
+export function censusCreateClasses(sources: string[]): { declared: string[]; emitted: string[] } {
+  const declared: string[] = [];
+  const emitted: string[] = [];
+  const CTORS = new Set(["refuse", "refusal", "fail"]);
+  for (const src of sources) {
+    const sf = ts.createSourceFile("t.ts", src, ts.ScriptTarget.Latest, true);
+    const visit = (n: ts.Node): void => {
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.name.text === "CREATE_REFUSAL_CLASSES" && n.initializer) {
+        let init: ts.Node = n.initializer;
+        if (ts.isAsExpression(init)) init = init.expression;
+        if (ts.isArrayLiteralExpression(init)) {
+          for (const el of init.elements) if (ts.isStringLiteral(el)) declared.push(el.text);
+        }
+      }
+      if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && CTORS.has(n.expression.text)) {
+        const a0 = n.arguments[0];
+        if (a0 && (ts.isStringLiteral(a0) || ts.isNoSubstitutionTemplateLiteral(a0))) emitted.push(a0.text);
+      }
+      if (ts.isPropertyAssignment(n) && ts.isIdentifier(n.name) && n.name.text === "class" && ts.isStringLiteral(n.initializer)) {
+        emitted.push(n.initializer.text);
+      }
+      n.forEachChild(visit);
+    };
+    visit(sf);
+  }
+  if (declared.length === 0) throw new Error("census found no declared create refusal classes");
+  if (emitted.length === 0) throw new Error("census found no emitted create refusal classes");
+  return { declared, emitted };
+}
+
+describe("Guard 1e (#10550) -- every create refusal class is declared once and emitted by a site", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const read = () => [CREATE_MODULE, CREATE_ARM, CREATE_GATES].map((f) => readFileSync(f, "utf-8"));
+
+  it("the declared set equals the emitted set, in both directions (the gates' `class:` literals included)", () => {
+    const { declared, emitted } = censusCreateClasses(read());
+    expect(declared).toHaveLength(13); // the single pin of the class-vocabulary length (the marker suite does not repeat it)
+    expect(new Set(declared).size).toBe(13);
+    expect(sortedUnique(emitted)).toEqual(sortedUnique(declared));
+  });
+
+  it("mutation: a declared-but-unemitted class is RED", () => {
+    const [create, arm, gates] = read();
+    const mutated = create.replace('"stub-drift",\n  "persist",', '"stub-drift",\n  "persist",\n  "ghost-class",');
+    expect(mutated).not.toBe(create); // the mutation must LAND, or the row is vacuous
+    const { declared, emitted } = censusCreateClasses([mutated, arm, gates]);
+    expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
+  });
+
+  it("mutation: an emitted-but-undeclared class is RED", () => {
+    const [create, arm, gates] = read();
+    const mutated = arm.replace('fail("week-cap", "no-slot"', 'fail("ghost-class", "no-slot"');
+    expect(mutated).not.toBe(arm);
+    const { declared, emitted } = censusCreateClasses([create, mutated, gates]);
+    expect(sortedUnique(emitted)).not.toEqual(sortedUnique(declared));
+  });
+
+  it("mutation: retargeting the ONLY week-cap site leaves week-cap declared-but-unemitted (RED)", () => {
+    const [create, arm, gates] = read();
+    const mutated = arm.replace('fail("week-cap", "no-slot"', 'fail("budget", "no-slot"');
+    expect(mutated).not.toBe(arm);
+    const { declared, emitted } = censusCreateClasses([create, mutated, gates]);
+    expect(sortedUnique(declared).filter((c) => !emitted.includes(c))).toEqual(["week-cap"]);
+  });
+
+  it("dispatch: a census finding nothing THROWS, never reads clean", () => {
+    expect(() => censusCreateClasses(["export const x = 1;\n"])).toThrow(/found no declared/);
+    expect(() => censusCreateClasses(['export const CREATE_REFUSAL_CLASSES = ["a"] as const;\n'])).toThrow(/found no emitted/);
+  });
+
+  it("refactor-tolerance: the same refusal through the other constructor spelling stays GREEN", () => {
+    const { emitted } = censusCreateClasses([
+      'export const CREATE_REFUSAL_CLASSES = ["a", "b"] as const;\nconst r = refuse("a", "d");\nconst q = refusal("b", "d");\n',
+    ]);
+    expect(sortedUnique(emitted)).toEqual(["a", "b"]);
+  });
+});
+
+/** The text of every `step.run("<name>", ...)` callback body in the handler (until the matching close of the call). */
+function stepBodies(src: string, name: string): string[] {
+  const handler = src.slice(src.indexOf("export async function cronCompoundPromoteHandler"));
+  const out: string[] = [];
+  let from = 0;
+  const needle = `step.run("${name}"`;
+  for (;;) {
+    const i = handler.indexOf(needle, from);
+    if (i === -1) break;
+    let depth = 0;
+    let j = handler.indexOf("(", i);
+    const start = j;
+    for (; j < handler.length; j++) {
+      if (handler[j] === "(") depth++;
+      else if (handler[j] === ")") {
+        depth--;
+        if (depth === 0) break;
+      }
+    }
+    out.push(
+      handler
+        .slice(start, j + 1)
+        .split("\n")
+        .map((l) => l.replace(/^\s*\/\/.*$/, ""))
+        .join("\n"),
+    );
+    from = j;
+  }
+  return out;
+}
+
+describe("Guard 3d (#10550) -- the create steps accumulate nothing; outcomes are recorded from the memoized return", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const MUTATED = ["refusals.push(", "refusalDetail.push(", "clustersOpened++", "ledgerSuppressed++", "createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createOffered =", "createArmRan ="];
+
+  it.each(["create-propose", "create-persist"])("%s: exactly one step, and no handler-scope accumulator is mutated inside its callback", (name) => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const bodies = stepBodies(src, name);
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0].length).toBeGreaterThan(40); // non-vacuity: the window is the callback, not an empty span
+    expect(MUTATED.filter((m) => bodies[0].includes(m))).toEqual([]);
+  });
+
+  it("non-vacuity: the accumulation DOES happen, in the handler body outside both callbacks", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const inside = [...stepBodies(src, "create-propose"), ...stepBodies(src, "create-persist")].join("\n");
+    for (const m of ["createOutcome =", "createRefusal =", "createPr =", "createNoAction =", "createOffered =", "createArmRan =", "refusals.push("]) {
+      expect(src).toContain(m);
+      expect(inside).not.toContain(m);
+    }
+  });
+
+  it("mutation: a createOutcome assignment moved INTO the create-propose callback is caught", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const mutated = src.replace('return runCreateProposeStep({', 'createOutcome = "refused";\n        return runCreateProposeStep({');
+    expect(mutated).not.toBe(src);
+    expect(stepBodies(mutated, "create-propose")[0]).toContain("createOutcome =");
+  });
+
+  it("mutation: a createOffered assignment moved INTO the create-propose callback is caught (a replay would lose the field)", () => {
+    const src = readFileSync(SRC_PATH, "utf-8");
+    const mutated = src.replace('return runCreateProposeStep({', 'createOffered = 0;\n        return runCreateProposeStep({');
+    expect(mutated).not.toBe(src);
+    expect(stepBodies(mutated, "create-propose")[0]).toContain("createOffered =");
+  });
+
+  it("dispatch: a handler with no / two create-propose steps is detected by the count, never read clean", () => {
+    expect(stepBodies("export async function cronCompoundPromoteHandler() {}", "create-propose")).toHaveLength(0);
+    const twice = 'export async function cronCompoundPromoteHandler() { await step.run("create-propose", () => 1); await step.run("create-propose", () => 2); }';
+    expect(stepBodies(twice, "create-propose")).toHaveLength(2);
+  });
+});
+
+describe("Guard 1f (#10550) -- one emit site for `create-refused`, every create refusal is mirrored, the marker spreads where the arm ran", () => {
+  beforeEach(() => {
+    expect.hasAssertions();
+  });
+  const code = (f: string) => readFileSync(f, "utf-8").split("\n").map((l) => l.replace(/^\s*\/\/.*$/, "").replace(/^\s*\*.*$/, "")).join("\n");
+
+  it("the handler has exactly ONE `create-refused` literal (the refusals[] push); the arm owns the Sentry op constant once", () => {
+    const handler = code(SRC_PATH);
+    expect(handler.split('"create-refused"').length - 1).toBe(1);
+    expect(handler).toMatch(/refusals\.push\("create-refused"\)/);
+    const arm = code(CREATE_ARM);
+    expect(arm.split('CREATE_REFUSED_OP = "create-refused"').length - 1).toBe(1);
+    expect(arm.split('"create-refused"').length - 1).toBe(1);
+  });
+
+  it("no bare `return refusal(` / `return refuse(` in the arm: every returned refusal passes a mirroring helper", () => {
+    const arm = code(CREATE_ARM);
+    expect(arm).not.toMatch(/return refusal\(/);
+    expect(arm).not.toMatch(/return refuse\(/);
+    // non-vacuity: the helpers are used many times
+    expect((arm.match(/\bfail\(|\bmirrored\(/g) ?? []).length).toBeGreaterThanOrEqual(20);
+  });
+
+  it("every returned refusal in the arm's step bodies is one of the helper spellings (no `return {` with kind refused)", () => {
+    const arm = code(CREATE_ARM);
+    expect(arm).not.toMatch(/return \{ kind: "refused"/);
+  });
+
+  it("the three markers that can follow the arm spread createMarker(); the early terminal rows do not", () => {
+    const handler = code(SRC_PATH);
+    expect(handler.split("...createMarker()").length - 1).toBe(3);
+    for (const status of ['status: "disabled"', 'status: "deduped"', 'status: "week-cap-reached"', 'status: "empty-corpus"']) {
+      const i = handler.indexOf(`emitOutcomeMarker({ trigger, run_id: runId, ${status}`);
+      expect(i, status).toBeGreaterThan(-1);
+      expect(handler.slice(i, handler.indexOf(");", i))).not.toContain("createMarker");
+    }
+  });
+
+  it("createMarker() returns nothing unless the arm ran (the scheduled path gains no field)", () => {
+    const handler = code(SRC_PATH);
+    const i = handler.indexOf("const createMarker = ");
+    expect(i).toBeGreaterThan(-1);
+    expect(handler.slice(i, i + 140)).toMatch(/if \(!createArmRan\) return \{\};/);
+  });
+
+  it("the arm sets createArmRan only inside runCreateArm, which is called under `allowCreate` at both sites", () => {
+    const handler = code(SRC_PATH);
+    expect(handler.split("createArmRan = true").length - 1).toBe(1);
+    const calls = [...handler.matchAll(/await runCreateArm\(\)/g)];
+    expect(calls).toHaveLength(2);
+    for (const m of calls) {
+      expect(handler.slice(Math.max(0, (m.index ?? 0) - 60), m.index)).toMatch(/allowCreate/);
+    }
+  });
+});

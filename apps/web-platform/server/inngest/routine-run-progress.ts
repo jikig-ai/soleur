@@ -3,7 +3,8 @@
 // Makes an in-flight HEAVY claude-loop cron a queryable DB fact. The writer lives
 // at the instrumentation point (spawnClaudeEval): upsert on entry + heartbeat
 // every ~HEARTBEAT_INTERVAL_MS while the child runs. finishRoutineRunProgress is
-// called from the run-log middleware transformOutput AFTER the terminal write
+// called from the run-log middleware's writeTerminalRow (via onRunComplete /
+// onRunError) AFTER the terminal write
 // succeeds (arch-A-2), so live-row domain ≡ heartbeat domain by construction (no
 // isHeavyCron predicate — only spawnClaudeEval callers ever write a row).
 //
@@ -108,7 +109,8 @@ export async function heartbeatRoutineRunProgress(runId: string): Promise<void> 
 }
 
 /**
- * Delete the live row on terminal completion. Called from run-log transformOutput
+ * Delete the live row on terminal completion. Called from run-log's
+ * writeTerminalRow (via onRunComplete / onRunError)
  * AFTER the terminal write succeeds (arch-A-2): if the terminal write failed, this
  * is never reached, so the live row survives and the reader shows "stuck" rather
  * than vanishing the run (DI-P1-C). Its own fail-soft mirror keeps a delete error

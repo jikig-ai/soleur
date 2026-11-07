@@ -558,3 +558,186 @@ event for the deploy signal; the refusal would fail the whole push apply, so it 
   predicate against fixture rows in the real `raw` shape, censuses every logtail alert's `-target=` lines, and carries mutation rows.
 - **Wake path.** Email on the free tier; the Slack wake of ADR-260 is not verified for Logs alerts (recorded in the runbook).
   Runbook: `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` and `canary-probe-set.md`.
+
+## Amendment — 2026-10-29 (#11526): the dual-channel predicate convention
+
+Not a new alert — a new predicate shape on an existing one, and the convention it establishes for
+the alert family. `logtail_exploration_alert.inngest_luks_wrong_volume` now counts rows on BOTH
+delivery channels the dedicated Inngest host's probe can take: leg A is the journald path
+(`SYSLOG_IDENTIFIER='inngest-server-probe'` + the position-1 marker, unchanged conjuncts), leg B
+is the curl-direct phone-home fallback that fires only while Vector is down — identified by
+envelope-field equality (`shipper='cloud-init-phone-home'` + `stage='inngest-server-probe-vector-down'`)
+with the probe fields read out of `detail`, never `marker` or `message` (the fallback envelope's
+`marker` is always `SOLEUR_INNGEST_BOOT_STAGE` and its `message` is marker-prefixed).
+
+**The convention:** an alert that consumes a dual-channel emitter's rows must enumerate EVERY
+channel the emitter can take — journald AND the curl-direct phone-home — and must pin row
+identity on the markerless channel's envelope fields (`shipper`+`stage` equality, the
+`inngest-tls-soak-10136.sh` contract), because the channel exists precisely when journald-only
+signals are dark and `on_missing_data = "treat_as_zero"` would read the empty set as health.
+CTO ruling T1 (ACCEPT, `decision-challenges.md` for branch
+`feat-one-shot-11526-vector-down-fallback`) recorded the dissent correction that ships in the
+`.tf` comment: the jq-failure fallback payload carries no `shipper`, so it is silently uncounted
+— leg B's fail-loud property holds only for rows carrying the `shipper`+`stage` identity with
+`detail` absent. The self-attested `dt` edge is recorded as residual.
+
+This is the pattern #11527 applies to `inngest_luks_key_probe_fail` (a sibling dual-channel
+emitter — its marker already names a curl-direct phone-home copy) and #11528 pins in the guard
+family. Both are deliberately out of scope here.
+
+Two recorded refinements (post-panel, 2026-10-29):
+
+- **Marker override is the enumerated alternative.** Where a fallback caller already passes its
+  marker as the phone-home arg-3 override (as `inngest-cutover-flip.sh` does for
+  `SOLEUR_INNGEST_LUKS_KEY_PROBE`, so the fallback `message` itself begins with the marker), the
+  position-1 anchor reads BOTH channels with no second OR leg — emitter-side override, not
+  envelope-field identity, is the mechanism there. Envelope-field legs are the convention for a
+  fallback that cannot or must not override `marker` (this probe re-purposing
+  `SOLEUR_INNGEST_BOOT_STAGE`, ~15 call sites, was rejected at plan).
+- **No per-run dedup.** The two channels are mutually exclusive per ROW (no envelope carries both
+  `SYSLOG_IDENTIFIER` and `shipper`), but one probe RUN during `activating`/flap can land a row in
+  each — Vector's journald cursor ships the journald copy late on recovery. `value` can read 2 for
+  one wrong-volume event; harmless under `operator = "higher_than", value = 0`, but a future
+  sibling alert with a `>1` threshold inherits the inflation — record the threshold assumption
+  when copying this convention.
+
+- **Enforcement.** `apps/web-platform/test/infra/inngest-luks-wrong-volume-alert.test.sh` derives
+  the stage needle from the emit site in `inngest-bootstrap.sh` (a coordinated rename that misses
+  the `.tf` goes red), carries per-leg presence rows (`message`-anchored on leg A,
+  `detail`-anchored on leg B — a shared substring is permitted duplication, never ambiguity) and
+  mutation rows for each leg-B conjunct plus deletion of the whole `OR (…)` arm.
+- **Verification.** Pre-merge live-probe controls A–E per the #8874 precedent — population,
+  fallback census by `stage`, quiet control with the live alias, positive control with a wrong
+  alias, and synthetic-raw leg-B evaluations — recorded in the `.tf` LIVE-PROBED comment.
+- **Apply path.** Unchanged: merge-triggered `apply-web-platform-infra.yml` updates the stored
+  exploration SQL in place (`Ref #11526`, never `Closes` — the merge-triggered apply is part of
+  the remediation; the issue closes after the apply lands).
+
+## Amendment — 2026-10-30 (#11631): once-a-day absence alarms leave the native logs alerts
+
+A dated amendment. The text above is unchanged; where it conflicts with this section, this section wins.
+
+**Finding.** `luks_monitor_host_timer_dark` (`soleur-luks-monitor-host-timer-dark-prd`, `query_period`
+97200) and `claude_cost_capture_dark` (`soleur-claude-cost-capture-dark-prd`, `query_period` 86400) wait
+for a row that arrives once a day (luks) or a few times a day (cost: Phase 0 measured n=4 qualifying rows in
+24 h). The live luks incident (1023423999, #11048) read `Current value: 0` through 33 nights of passing rows, so
+the luks alert could not see its own row. That 33-nights fact is luks-only; the cost alert (incident
+1020832712, #11049) shares the class (a native alert with `query_period` 86400) but its blindness was not
+measured. The reading that Better Stack evaluates a native logs alert over the hot window only is INFERRED, not
+proven; the design below does not depend on it. The sibling `claude_cost_daily_burn` (86400 s) may share the
+same blind spot; that is UNMEASURED and out of scope here.
+
+**Decision.** A once-a-day absence alarm is not a native logs alert above the 900 s ceiling. Such
+dead-mans are Better Stack heartbeats (`betteruptime_heartbeat`) fed by a scheduled GitHub workflow that
+reads the Logs archive itself (`remote()` UNION `s3Cluster`) and beats only when a qualifying row exists
+inside the old alert's window. With no qualifying row it withholds the beat, so the heartbeat times out and
+pages; it never beats `/fail`.
+
+- **Both alerts are retired.** Their `logtail_exploration` and `logtail_exploration_alert` resources
+  are deleted. Successors: `betteruptime_heartbeat.luks_monitor_host_timer`
+  (`soleur-luks-monitor-host-timer-prd`, period 3600, grace 7200, window 97200 s) and
+  `betteruptime_heartbeat.claude_cost_capture` (`soleur-claude-cost-capture-prd`, period 3600, grace 7200,
+  window 86400 s), both born `paused = true` behind `ignore_changes = [paused]`. Feeder:
+  `scripts/deadman-heartbeat-feeder.sh`, run hourly by `scheduled-deadman-heartbeat-feeder.yml` (ADR-248
+  amendment of the same date). The historical ADR-117 and ADR-119 mentions of the retired alert stay as
+  written; read them as naming the predecessor of these heartbeats.
+- **Count.** The Terraform-managed native logs alerts go from 19 to **17** (`CENSUS_FLOOR_ALERTS` and
+  `CENSUS_FLOOR_EXPLORATIONS` follow).
+- **Ceiling sentinel.** `apps/web-platform/test/infra/logs-alert-query-period-ceiling.test.sh` fails if any
+  `logtail_exploration_alert` is created with `query_period` above 900, and allowlists only the two live
+  legacy alerts that predate it (`claude_cost_daily_burn`, `inngest_luks_wrong_volume`).
+- **Superseded by name.** The 2026-09-27 (#8706) claim that `query_period = 97200` was "measured, not
+  clamped" stays true of what the API stored, but it is no longer evidence that the alert evaluated over
+  that window, and the alert is gone. The 2026-09-23 (#8611) `claude_cost_capture_dark` absence-alarm
+  paragraph is superseded: the cost-marker dead-man is now `betteruptime_heartbeat.claude_cost_capture`.
+- **Preserved.** The 2026-10-12 standing rule (absence alerts on multiplexed sources count emitting hosts,
+  never rows) still holds: the luks predicate keeps `host_name = 'soleur-web-platform'`, now inside the
+  feeder.
+
+**Alternatives considered, both rejected.** A host-side ping needs a `user_data` change, which is a host
+replace, and the shared `workspaces_luks` heartbeat cannot tell the host timer from the verify workflow's
+second pusher. An hourly host row with a logs alert of 900 s or less is also a host change, and
+cost-capture has no hourly cadence.
+
+**Consequences.**
+
+- **Until armed there is NO paging dead-man for luks or cost.** The merge-triggered apply destroys the old
+  alerts and creates the heartbeats paused; a paused heartbeat pages nothing. The window is closed only by the
+  owner's arm (runbook `workspaces-luks-cutover-6604.md#arming-the-dead-man-heartbeats-11631`), which is why the
+  feeder reports `qualifying_row_heartbeat_paused` (UNARMED) every hour in the meantime.
+- **Detection latency is measured from the last qualifying row: window W plus 2 to 3 h** (page threshold =
+  period 3600 + grace 7200 = 10800 s after the last beat). The last beat falls in the final hour of the window that opens on the last qualifying row
+  (`(t0 + W - 1 h, t0 + W]`), so the page arrives `W + 2 h` to `W + 3 h` after that row: luks (W = 97200 s,
+  27 h) about 29 to 30 h; cost (W = 86400 s, 24 h) about 26 to 27 h. Fine for a nightly dead-man.
+- **Archive ingestion lag is MEASURED, not unmeasured: 66 minutes** (Phase 0.2, `phase0-measurements.md`: archive
+  newest 3957 s to 3968 s old, with no gap between the archive and the hot arm). The lever that absorbs it is
+  the WINDOW SLACK, not the grace: the luks window (27 h) exceeds the legitimate gap between nightly rows
+  (24.5 h) by 2.5 h, which is more than the lag. The grace (7200 s) governs only the dispatch cadence
+  (beat-to-beat spacing), so widening it would slow detection without adding lag tolerance. The cost window's
+  slack was not measured per gap (n=4 in 24 h is a mean gap near 6 h, which the 24 h window covers several
+  times over).
+- **Zero-withhold is the permitted direction (ADR-197).** ADR-197 says a zero from a log surface is not evidence
+  of absence. The feeder never reads a zero as healthy: `n = 0` withholds the beat (a fail-loud page), so a
+  truncated or lagging answer produces a false page, never a false "healthy". The coverage and instrumentation
+  assertions ADR-197 asks for are carried for luks as counts-only diagnostics (`any_rows`, `fail_rows`) on the
+  withhold line. Known limits: the cost target has NO `any_rows` positive control, and its predicate keeps the
+  beat when EITHER one cron cost marker OR one credit-probe RED row exists in 24 h, so a RED row can mask a dead
+  marker path. Both are accepted and recorded, not fixed here.
+- **Feeder-substrate false page, bounded.** The feeder runs on a GitHub Actions runner started by the watchdog
+  dispatch clock (ADR-248 amendment). One lost slot gives about 9718 s between beats against the 10800 s
+  threshold (Phase 0.4: 3680 + 3600 + 2438), so it does not page a healthy host. TWO lost slots (a GitHub or
+  GitHub App token outage that also defeats the `schedule:` fallback) give about 13300 s (3680 + 2 x 3600 +
+  2438 = 13318) and WILL false-page both heartbeats. Runbook step 0 is to check the feeder before the host.
+- The heartbeats are armed by the owner, not by CI. Runbooks:
+  `workspaces-luks-cutover-6604.md#host-timer-liveness-alert-8706` and `betterstack-log-query.md`.
+
+## Amendment — 2026-11-05 (#10455): a Slack post is observed on one Logs-alert incident
+
+Appended, not edited. The text above is unchanged; where it conflicts with this section, this section wins. The "Wake path" bullet of the
+2026-10-19 (#10453) amendment ("the Slack wake of ADR-260 is not verified for Logs alerts") has its Slack clause superseded by the 2026-11-05 dashboard read,
+recorded in `canary-probe-set.md` under "Slack wake check, dashboard read 2026-11-05": a Slack post is observed on one Logs-alert incident
+and inferred for the others. A factual correction; no decision changes.
+
+## Amendment — 2026-11-05 (#12180): absence alerts on a multiplexed source report a missing-host count; the egress silence alert carries a positive-control canary
+
+A dated amendment, appended, not edited. The text above is unchanged; where it conflicts with this section, this section wins. Scope: sub-900 s host-roster absence alerts on a multiplexed source (today only `egress_gw_probe_silent`). The once-a-day dead-mans of the 2026-10-30 amendment are untouched.
+
+**Preserved.** The 2026-10-12 standing rule: count emitting HOSTS (`count(DISTINCT host_name)`), never rows, over a whole-window scalar with no `GROUP BY`.
+
+**Superseded.** Only that amendment's comparator: `lower_than length(var.web_hosts)` over the emitting-host count. The alert now reports the number of roster hosts that did NOT emit, `greatest(toInt64(length(var.web_hosts)) - toInt64(count(DISTINCT host_name)), 0)`, and pages on `higher_than 0`. `on_missing_data = "treat_as_zero"` stays per the CTO ruling. It is NOT what detects a fully dark window (the aggregate without `GROUP BY` always returns one row, the roster size); it is the source of the false-silence residual below, and the CTO rejected dropping it because an empty evaluator result would then carry no value at all.
+
+**Evidence.** Incident 1047829421 on `soleur-egress-gw-probe-silent-prd` opened at 2026-11-05T17:15:00Z while both hosts shipped probe rows (read-only query: 2 distinct hosts in the window). Incident 1031046761 from the same alert stayed open for 24 days: it began as a true positive (web-2 dark, the 2026-10-12 amendment), rows were measured arriving on 2026-11-02, and nothing resolved it until we did at 2026-11-05T17:31:42Z with the owner's approval in the session (no GitHub comment records that, unlike #11869's). The paused `inngest_cutover_flip_silent` sibling showed the same stuck-at-0 (#11869), and the 2026-11-02 rule that no `lower_than` incident had resolved while its alert was live (#11887) still holds: this change has not yet shown that an incident of this alert can recover on its own. The per-merge apply that ran at 2026-11-05T17:15:38Z changed nothing, so an apply-triggered re-create is not the cause.
+
+**INFERRED, not measured.** The mechanism is that the evaluator reads a step it cannot evaluate as 0 and compares 0 to the threshold: a false page under `lower_than 2`, a healthy reading under `higher_than 0`. Neither the incident object nor the alert object carries the evaluated value (attribute keys checked read-only on 2026-11-06; the alert's `value` is the threshold, and no key beyond it is value-shaped), so the mechanism cannot be read directly (the same limit as the hot-window rule of the 2026-10-30 amendment). Two alternatives are NOT excluded and the canary cannot separate them: partial visibility of one host's rows in the evaluator's window (the hot window is about 40 minutes per `betterstack-log-query.md`; the archive lag was measured at about 66 minutes) reads 1 under either operator, and a vendor that never auto-resolves incidents is not fixed by inverting the metric. The QUERY is proven read-only on the final text: 0 on healthy data, 1 with one host excluded, 2 for an identifier no host emits. The EVALUATOR is not.
+
+**Inversion of an earlier posture.** ADR-197 says a zero from a log surface is not evidence of absence, and the 2026-10-30 amendment's feeder never reads a zero as healthy. This alert reads a zero as healthy. The accepted failure direction moves from false page to false silence: with `treat_as_zero` kept, an evaluator error or timeout also reads 0 and is now quiet. Compensating controls are narrower than host death: the canary below; the Sentry cron check-in (`cron-egress-resolve`, no host dimension), which covers only a fleet-wide dead resolver timer; `op=egress_gw_probe_fail`, which needs a probe that ran and returned `result=fail`; and the deferred heartbeat poller (#12190). A Vector, allowlist or journal break on ONE host has no independent detector until the poller exists.
+
+**Canary and decision rule.** A throwaway alert pair, `egress_gw_probe_silent_canary`, runs the production query against `egress-gw-probe-canary-absent` (derived with `replace()` from the production local, so there is one producer), reads the roster size, and must open an incident that never recovers. It proves non-zero delivery on an empty count for this query shape; it shares the production shape, so it cannot tell a silent fleet from an empty window and does not prove general evaluator health. Decision table (full text in `cron-egress-blocked.md`): canary fired and 1047829421 resolved by the alert (not by an actor; ASSUMED to read as `resolved_by` null, never observed) and stayed clear for 4 hours means delete the canary (tracker #12189); `canary=absent` with the canary alert live, unpaused and older than 20 minutes means the evaluator reads 0 for this shape, so keep the production alert armed and build the poller; `canary=absent` with the alert not live means the canary was deleted or never created (a hotfix, not an evaluator finding); an incident that stays open with rows on both hosts now means the poller, never a revert (a revert restores the shape that misfired). Any Better Stack write (a pause, a manual resolve, deleting the canary) needs the owner's per-command go-ahead.
+
+**Alert count.** 19 Logs alerts were live when read on 2026-11-05 (names and counts only; 18 managed here plus one hand-made). With the canary, 20 once applied; 19 after the canary is deleted. The free-tier cap is undocumented and the apply is refused if it is lower; the pre-decided response is a hotfix PR that removes the canary and proceeds to the poller.
+
+**Alternatives considered.**
+
+- A feeder-fed heartbeat poller (the 2026-10-30 pattern) as the first move: rejected as the first move, kept as the fallback (#12190), because the canary answers the cheaper question first.
+- Dropping `treat_as_zero`: rejected, a fully dark window must remain detectable.
+- A time-bucketed rewrite of the query: rejected, it trades the stuck incident for false pages on windows with a single missing bucket.
+
+**Enforcement.** `apps/web-platform/test/infra/egress-gw-alert.test.sh` pins the production canon whole, the canary derivation line, the canary's paging semantics, the production alert's name, windows and channels, a block-for-block equality of canary and production alerts (apart from name, exploration and cause) and of the two explorations (apart from name and SQL local), the production exploration's remaining attributes, the probe's name literals, the four `-target` lines and an exact count of four `egress_gw_probe_silent*` resources; `scripts/followthroughs/egress-gw-probe-silent-12180.sh` reads the incident and alert APIs and prints the verdict line: whoever merges runs it once at apply completion + 25 minutes, and once tracker #12189 is enrolled the daily sweeper is the backstop, so an evaluator-blind finding waits up to a day without that run. Residual, accepted: the metric compares a distinct-host COUNT to the roster size, so an extra or renamed emitter could mask a dead host.
+
+## Amendment 2026-11-06 (#12189, Ref #12180): the soak probe is floored at the apply and no longer gates on who resolved the anchor
+
+A dated amendment, appended, not edited. The text above is unchanged; where it conflicts with this section, this section wins. Scope: the verdict logic of `scripts/followthroughs/egress-gw-probe-silent-12180.sh` and the facts it rests on. No alert, no Terraform resource and no sweeper behaviour changes.
+
+**OBSERVED 2026-11-06 (read-only incident API; ids, names and timestamps only).** `resolved_by` is null on production-alert incident 1048111600 (the OLD alert shape; started 07:45Z, `resolved_at` 12:10Z, before the apply at 12:14Z to 12:17Z; that the null means the alert recovered it is inferred, not measured), and is "API" on incident 1047829421 (resolved through the API at 07:47:00.612Z, not by the alert). This supersedes the wording in the 2026-11-05 amendment that a null `resolved_by` on an auto-resolve was ASSUMED and never observed. It also supersedes that amendment's sentence that this change "has not yet shown that an incident of this alert can recover on its own", in one respect only: an incident of this alert did resolve while the alert was live, once, on the old shape. It does not show that the inverted shape recovers.
+
+**Still NOT measured.** That the null is the evaluator's own recovery rather than another vendor path (so "auto-resolved" for 1048111600 is a reading of the null, not a vendor statement); that incidents of the inverted shape auto-resolve; whether the canary incident survives the deletion of its alert; why the canary incident started 64 s before its alert's `created_at`; and what bumps an alert's `updated_at` (inferred vendor churn about every five minutes, seen at 14:10Z, 14:15Z and 14:19Z, not a change marker, and never read by the probe).
+
+**Decision.** The probe's first version failed in two ways that made exit 0 unreachable: it counted incident 1048111600 (old shape, before the apply) as a recurrence forever, and its pass path required the anchor to have been resolved by the alert, which it was not. The probe now (a) floors the recurrence check at a pinned apply time, `APPLY_FLOOR_EPOCH` = 2026-11-06T12:16:03Z (the canary alert's `created_at`, apply run 42216140017), counting a production incident other than the anchor as a recurrence when it started at or after that floor minus 300 s; (b) replaces its three age gates with one soak clock, `quiet_since` = the later of the floor and the latest resolve of any listed production incident, and passes only 4 h after it; (c) makes the anchor's resolve actor informational (printed as `anchor_resolved_by`, gating nothing); (d) treats an exact-name production incident that started before the floor and is still open as a block (exit 2 until 15300 s past `quiet_since`, then exit 5); and (e) makes the rows read verdict-bearing on the pass path: unreadable is exit 3, a roster host with no rows is exit 5. The verdict line keeps its first ten fields and appends `quiet_age_s` and `pre_floor_open_prod_incident`. Exit 1 stays unused.
+
+**Cost of the pin, stated.** The floor is a stored value. A reshape of the production alert's evaluated query, `on_missing_data` or `query_period` that keeps `higher_than 0` is invisible to the live shape check, so a follow-up commit measured from that apply run must re-pin `APPLY_FLOOR_EPOCH` by hand. The pin may be later than the true change by up to about 1.6 minutes (the apply ran 12:14:26Z to 12:17:27Z and the canary incident started 64 s before its alert was created), which the 300 s slack covers, and earlier than it by up to about 83 s (an old-shape incident opening between about 383 s before the change, the slack plus that gap, and the change itself would read as a recurrence: a false exit 5, cleared by a hand close or a re-pin). A live canary incident or canary alert created earlier than the floor minus slack is exit 3 (the pin sits later than the canary by more than the slack: move the pin back, or delete and re-create the canary); that verdict is raised after the production-alert and recurrence findings so it never masks those two (it does precede the open-incident, soak and canary branches), and a forward re-pin made while the canary still exists trips it at every sweep, so that re-pin also needs the canary re-created. After a reshape of the production alert the re-pin is a follow-up commit measured from that apply run, because the reshape PR cannot know the apply time. A code-level detector that hashes the production alert block beside the pin is not built here; if the owner wants the pin enforced, it is a follow-up test.
+
+**Exit 0 and the canary.** With the canary declared or live, a held soak returns exit 5 asking for the deletion (owner's go-ahead and the standalone `[ack-destroy]` line). The sweep after the deletion returns 0 only if the vendor keeps listing the canary incident, which is unverified. If the vendor drops the canary incident with its alert, the probe returns a distinct exit 5 (retired canary, close by hand citing the last sweep comment that read `canary=fired`) and never a pass.
+
+**Blind spot.** The incident walk stops at the page that carries the anchor, so a production incident older than the anchor's page is invisible to it (older ones on the anchor's own page of 50 are read). The vendor status filter that would close the gap is unverified, so the walk is unchanged.
+
+**Accepted residuals (CTO ruling 2026-11-06, review round).** (1) A manual resolve of a still-open exact-name production incident that started before the floor moves `quiet_since` to the resolve time, so the probe passes 4 h later instead of blocking; the resolver is presumed owner-class (unverified), and a still-misfiring alert shows up again inside the 4 h window, as a new incident (a recurrence) or as the old one reopened (an open pre-floor incident), and either way blocks the pass. The null-versus-actor distinction is not trusted enough to gate on while `resolved_by` null is observed on one incident and the vendor's other resolve paths are unmeasured; if it is later measured null on several auto-resolved incidents of the new shape, project only a boolean (as the anchor read does), never the raw actor. (2) A recurrence is permanent by design: one production incident at or after the floor minus slack returns exit 5 at every sweep, resolved or not, until a human closes the tracker by hand or re-pins. (3) The rows evidence is a Vector-stamped `host_name` label: anyone holding the shared ingest token can claim a roster host name, and the probe cannot distinguish that from a real emitter. (4) The probe's roster default restates the host names behind `var.web_hosts` (the alert itself only compares a count); a probe-suite row derives the canonical names from `variables.tf` and fails when the default drifts, in the manner of the #6608 allowlist parity. **Superseded:** the 2026-11-05 decision rule's condition that the anchor was "resolved by the alert (not by an actor)" before the canary is deleted; the amendment above replaces it with the soak from the pinned floor.

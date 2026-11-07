@@ -28,7 +28,7 @@
 # the SAME symbol is one code path with different array data and proves little
 # beyond the first. What does need one case per symbol is TABLE COVERAGE -- and
 # that is not a hypothetical. During implementation, a mutation battery showed
-# all three PER_RULE_CAP rows could be deleted from SITES with the suite fully
+# all four PER_RULE_CAP rows could be deleted from SITES with the suite fully
 # green: the loop was well tested, its coverage was not. That is the same defect
 # the guard exists to catch (a restatement site silently outside it), reproduced
 # one level up. T2/T8/T9 give each authority symbol a coverage case, and T1 pins
@@ -121,6 +121,7 @@ EOF
   cat > "$root/apps/web-platform/server/inngest/functions/cron-compound-promote.ts" <<EOF
 const MAX_ALWAYS_LOADED_BYTES = ${FIX_REJECT};
 const PROPOSE_ALWAYS_LOADED_BUDGET = ${FIX_WARN};
+export const AGENTS_EDIT_LINE_MAX_CHARS = ${FIX_CAP};
 EOF
 
   cat > "$root/scripts/compound-promote.sh" <<EOF
@@ -449,7 +450,7 @@ t11_vacuous_authority_extraction_fails_closed() {
 #
 # T2 alone was not enough: it bumps B_ALWAYS_REJECT, so it only exercises the
 # REJECT rows. A mutation battery run during implementation showed that all
-# three PER_RULE_CAP rows could be DELETED from SITES with the suite still fully
+# four PER_RULE_CAP rows could be DELETED from SITES with the suite still fully
 # green -- the exact defect this guard exists to prevent (a restatement site
 # silently outside the guard), reproduced inside the guard's own test suite.
 #
@@ -466,6 +467,7 @@ t8_per_rule_cap_covers_every_site() {
   assert_contains "T8 covers AGENTS.rules.md"        "AGENTS.rules.md"    "$GUARD_OUT"
   assert_contains "T8 covers plan sharp-edges"      "plan-sharp-edges.md" "$GUARD_OUT"
   assert_contains "T8 covers compound/SKILL.md"     "compound/SKILL.md" "$GUARD_OUT"
+  assert_contains "T8 covers the cron edit-line cap" "cron-compound-promote.ts" "$GUARD_OUT"
   rm -rf "$root"
 }
 

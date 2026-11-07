@@ -104,8 +104,11 @@ for file in "${strategy_files[@]}"; do
   slug="${slug%.md}"
   expected_title="Strategy Review: $slug"
 
-  # Dedup: skip if open issue already exists
-  match=$(gh issue list --label "$LABEL" --state open --json title --jq '.[].title' | grep -cxF "$expected_title" || true)
+  # Dedup: skip if open issue already exists. --search narrows server-side
+  # first and --limit 100 bounds the page the grep -cxF exact-match verify
+  # counts over (#8593): an unbounded page can silently evict the match and
+  # re-file a duplicate.
+  match=$(gh issue list --label "$LABEL" --state open --search "in:title \"$expected_title\"" --limit 100 --json title --jq '.[].title' | grep -cxF "$expected_title" || true)
   if [[ "$match" -gt 0 ]]; then
     echo "Skipping $file -- open issue already exists"
     skipped=$((skipped + 1))

@@ -57,6 +57,8 @@ function usagePayload(message: RecordLike): EngineEventPayload | null {
   };
 }
 
+// The `authentication_failed` member is also spelled as SDK_AUTHENTICATION_FAILED in `claude-error-signatures.ts`, where the
+// auth-failure diagnostic (`agent-auth-failure.ts`) reads it; a change to the SDK's code must be made at both sites.
 const CLAUDE_ASSISTANT_ERROR_CODES = new Set([
   "authentication_failed",
   "oauth_org_not_allowed",

@@ -115,7 +115,7 @@ inputs:
     description: 'Path to the terraform root; `terraform output -raw server_ip` is read from it ONLY when `server-ip` is empty. e.g. apps/web-platform/infra.'
     required: true
   cloudflared-version:
-    description: 'cloudflared release version to install (e.g. 2026.5.0).'
+    description: 'cloudflared release version to install (e.g. 2026.10.4).'
     required: true
   cloudflared-sha256:
     description: 'SHA-256 of the cloudflared-linux-amd64 binary at cloudflared-version (recompute against the real binary — see header).'

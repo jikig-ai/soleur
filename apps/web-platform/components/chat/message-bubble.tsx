@@ -113,6 +113,7 @@ export const MessageBubble = memo(function MessageBubble({
   liveNarration,
   liveNarrationStartedAt,
   suppressLive = false,
+  unanswered = false,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -154,6 +155,9 @@ export const MessageBubble = memo(function MessageBubble({
    *  autonomous_disclosure parks the turn on the operator, so the live
    *  line must not claim "still working". The trail itself still renders. */
   suppressLive?: boolean;
+  /** #11525 - a user message a credential error left without a reply (the
+   *  server persisted it but started no turn). Session-only marker. */
+  unanswered?: boolean;
   // Review F5 (#2886): the `parentId` prop, the `ml-6` indentClass, and the
   // `data-parent-id` attribute were removed — they had no production caller.
   // SubagentGroup renders its child rows directly with their own indentation
@@ -299,6 +303,13 @@ export const MessageBubble = memo(function MessageBubble({
 
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
+          )}
+
+          {isUser && unanswered && (
+            <p className="mt-1 text-xs text-amber-500" data-testid="message-unanswered">
+              <span>Not answered</span>{" "}
+              <span className="sr-only">No reply was started</span>
+            </p>
           )}
         </div>
       </div>

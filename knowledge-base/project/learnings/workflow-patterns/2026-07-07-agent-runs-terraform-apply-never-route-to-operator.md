@@ -35,6 +35,8 @@ a "operator runs the apply" line in `lint-infra-ignore` hides a correct guardrai
 The R2 (S3-compatible) backend needs `AWS_*` **unprefixed**; the TF vars need the `TF_VAR_` prefix.
 A single blanket transformer breaks one or the other. Do both:
 
+> **Superseded in part (2026-10-24, #10979):** still correct for READ-ONLY invocations (plan, init, state pull). For state-WRITING invocations (apply, import, state push) the `prd_terraform` `AWS_*` pair is intentionally read-only post-O5b and PUTs 403 — export `AWS_*` from `TF_STATE_AWS_*` in `soleur-infra-privileged/prd` instead (canonical form: `knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md` §Local Terraform invocation).
+
 ```bash
 cd apps/web-platform/infra
 export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)

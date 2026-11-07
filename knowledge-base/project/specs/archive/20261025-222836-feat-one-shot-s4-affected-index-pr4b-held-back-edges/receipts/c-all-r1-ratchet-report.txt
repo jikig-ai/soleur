@@ -1,0 +1,480 @@
+new-pair	.claude/hooks/hook-input-contract.test.sh	README.md	scripts/rule-metrics-aggregate.sh:644
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:644	ca3f51fb41f9/1	echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+new-pair	.claude/hooks/hook-input-contract.test.sh	scripts/retired-rule-ids.txt	scripts/rule-metrics-aggregate.sh:148
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor scripts/retired-rule-ids.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:148	9d9c418124fd/1	RETIRED_IDS_SRC="$REPO_ROOT/scripts/retired-rule-ids.txt"
+new-pair	.claude/hooks/rule-incident-marker-capture.test.sh	.claude/hooks/README.md	scripts/rule-metrics-aggregate.sh:644
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor .claude/hooks/README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:644	ca3f51fb41f9/1	echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+new-pair	.claude/hooks/rule-incident-marker-capture.test.sh	AGENTS.md	scripts/rule-metrics-aggregate.sh:38
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor AGENTS.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:38	5e2aca558f91/1	AGENTS_MD="$REPO_ROOT/AGENTS.md"
+  ref	scripts/rule-metrics-aggregate.sh:651	ca51b842c4dd/1	echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
+  ref	scripts/rule-metrics-aggregate.sh:708	ca51b842c4dd/2	echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
+new-pair	.claude/hooks/rule-incident-marker-capture.test.sh	README.md	scripts/rule-metrics-aggregate.sh:644
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:644	ca3f51fb41f9/1	echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+new-pair	.claude/hooks/rule-incident-marker-capture.test.sh	scripts/retired-rule-ids.txt	scripts/rule-metrics-aggregate.sh:148
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor scripts/retired-rule-ids.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:148	9d9c418124fd/1	RETIRED_IDS_SRC="$REPO_ROOT/scripts/retired-rule-ids.txt"
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	plugins/soleur/scripts/admin-merge-ready.sh	.claude/hooks/pre-merge-rebase.sh:786
+  cause: your change touched neither .claude/hooks/pre-merge-rebase.sh nor plugins/soleur/scripts/admin-merge-ready.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/pre-merge-rebase.sh:786	61e8481e2d27/1	additionalContext: ("Pre-merge hook: PR #" + $n + " is BEHIND with auto-merge armed (GitHub merge state BEHIND or UNKNOWN) and is not in the queue yet; skipped the origin/main sync. This skip is ALSO a refusal when the PR\x5cu0027s base branch has no merge queue or is not a supported branch name (both print the same answer, so this hook cannot tell them apart; read the base with gh pr view " + $n + " --json baseRefName): this hook and the Phase 7 poll\x5cu0027s fallback only merge origin/main, which is wrong for a PR on another base. For such a PR whose base has no merge queue, sync by hand against its own base (git fetch origin <base> && git merge origin/<base>, then push); if that base has a merge queue of its own, the queue makes the PR current and no sync is needed. Either way do NOT disarm and re-arm: disarming makes the next check find the PR disarmed, and this hook then merges origin/main. If the PR is based on main (a merge-queue repo): no sync is needed, the queue makes the PR current itself and a resync push restarts every required check for nothing. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md (\x5cu0027Armed and green but never enqueued\x5cu0027). For a main-based PR keep polling for MERGED: the Phase 7 poll\x5cu0027s expiry fallback is the sanctioned sync, and only for a main-based PR, if you truly need a hand sync, disarm first (gh pr merge " + $n + " --disable-auto), sync, then re-arm. A --admin merge bypasses the queue and lands the head as pushed, so a not-up-to-date refusal there is real: gate it with plugins/soleur/scripts/admin-merge-ready.sh.")
+  ref	.claude/hooks/pre-merge-rebase.sh:835	04a5da6d0ec9/1	additionalContext: ("Pre-merge hook: origin/main moved " + $incoming + " file(s), all disjoint from " + $branch + "\x5cu0027s " + $prfiles + " changed file(s) (delta disjoint) — no sync merge, the head SHA stays put. Under the merge queue an out-of-date branch enqueues fine (`gh pr merge --squash --auto`; the queue builds its own candidate), so do not update-branch, push or --admin a queued PR. Without the queue a non-admin merge may still fail GitHub\x5cu0027s not-up-to-date check: run `gh pr update-branch`, or gate an --admin merge with plugins/soleur/scripts/admin-merge-ready.sh to land the verified head unmodified — the admin path does not exist for a workflow-editing PR." + $qnote)
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	plugins/soleur/scripts/lib/session-state.sh	.claude/hooks/pre-merge-rebase.sh:61
+  cause: your change touched neither .claude/hooks/pre-merge-rebase.sh nor plugins/soleur/scripts/lib/session-state.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/pre-merge-rebase.sh:61	dd7a6ef40768/1	_SS_LIB="$(dirname "${BASH_SOURCE[0]}")/../../plugins/soleur/scripts/lib/session-state.sh"
+  ref	.claude/hooks/lib/incidents.sh:19	4d679009dcb3/1	source "$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/scripts/lib/session-state.sh" 2>/dev/null || true
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	plugins/soleur/scripts/lib/wrapper-boundary.sh	.claude/hooks/lib/incidents.sh:34
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor plugins/soleur/scripts/lib/wrapper-boundary.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:34	133aa7df1afc/1	_incidents_wb="$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/scripts/lib/wrapper-boundary.sh"
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	plugins/soleur/scripts/resolve-regenerable-conflicts.sh	.claude/hooks/pre-merge-rebase.sh:871
+  cause: your change touched neither .claude/hooks/pre-merge-rebase.sh nor plugins/soleur/scripts/resolve-regenerable-conflicts.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/pre-merge-rebase.sh:871	3e9994c3d253/1	REGEN_RESOLVER="$WORK_DIR/plugins/soleur/scripts/resolve-regenerable-conflicts.sh"
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	plugins/soleur/scripts/sync-pr-behind.sh	.claude/hooks/pre-merge-rebase.sh:740
+  cause: your change touched neither .claude/hooks/pre-merge-rebase.sh nor plugins/soleur/scripts/sync-pr-behind.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/pre-merge-rebase.sh:740	58edbc2db184/1	_Q_NOTE=" Merge-queue state unreadable (cause=$_q_cause) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if it were not queued; if it was queued, that push dequeued it. Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-state; a result of dequeued: plugins/soleur/skills/ship/references/merge-queue-dequeue.md."
+  ref	.claude/hooks/pre-merge-rebase.sh:792	d2765a6a8f2c/1	_Q_NOTE="${_Q_NOTE} Merge-queue wait check unreadable (cause=queue_wait_unreadable) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if the PR were not waiting on the queue; if it was, that push restarted its required checks, and if the PR is not based on main that merge of origin/main was the wrong base (gh pr view $PR_HEAD_NUMBER --json baseRefName). Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-wait."
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	plugins/soleur/skills/review/scripts/emit-review-trailer.sh	.claude/hooks/pre-merge-rebase.sh:630
+  cause: your change touched neither .claude/hooks/pre-merge-rebase.sh nor plugins/soleur/skills/review/scripts/emit-review-trailer.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/pre-merge-rebase.sh:630	a16421c3b2b8/1	permissionDecisionReason: ("BLOCKED: No review evidence for commits in " + $range + " (" + $source + ")." + $notes + " If review has NOT run: run /soleur:review. If it HAS run (or found nothing, which emits no artifacts): bash plugins/soleur/skills/review/scripts/emit-review-trailer.sh --findings <n>." + $where + " Signals checked: todos/ tagged code-review introduced by the PR, a review: commit or Reviewed-By-Soleur: trailer, a code-review-labelled issue citing this PR. Note the scope is the PR only — evidence already on main does not count. Run the trailer script as its own command, then git push, then re-issue gh pr merge: a chained `emit-review-trailer.sh && gh pr merge` is denied because this hook evaluates the whole command before any of it runs. A code-review issue filed only to satisfy this gate is not review.")
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	plugins/soleur/skills/ship/references/merge-queue-dequeue.md	.claude/hooks/pre-merge-rebase.sh:740
+  cause: your change touched neither .claude/hooks/pre-merge-rebase.sh nor plugins/soleur/skills/ship/references/merge-queue-dequeue.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/pre-merge-rebase.sh:740	58edbc2db184/1	_Q_NOTE=" Merge-queue state unreadable (cause=$_q_cause) for PR #$PR_HEAD_NUMBER, so the origin/main sync ran as if it were not queued; if it was queued, that push dequeued it. Re-check: bash plugins/soleur/scripts/sync-pr-behind.sh $PR_HEAD_NUMBER --queue-state; a result of dequeued: plugins/soleur/skills/ship/references/merge-queue-dequeue.md."
+  ref	.claude/hooks/pre-merge-rebase.sh:786	61e8481e2d27/1	additionalContext: ("Pre-merge hook: PR #" + $n + " is BEHIND with auto-merge armed (GitHub merge state BEHIND or UNKNOWN) and is not in the queue yet; skipped the origin/main sync. This skip is ALSO a refusal when the PR\x5cu0027s base branch has no merge queue or is not a supported branch name (both print the same answer, so this hook cannot tell them apart; read the base with gh pr view " + $n + " --json baseRefName): this hook and the Phase 7 poll\x5cu0027s fallback only merge origin/main, which is wrong for a PR on another base. For such a PR whose base has no merge queue, sync by hand against its own base (git fetch origin <base> && git merge origin/<base>, then push); if that base has a merge queue of its own, the queue makes the PR current and no sync is needed. Either way do NOT disarm and re-arm: disarming makes the next check find the PR disarmed, and this hook then merges origin/main. If the PR is based on main (a merge-queue repo): no sync is needed, the queue makes the PR current itself and a resync push restarts every required check for nothing. Red required check? Push the fix itself, not a resync. Green and never enqueued? Follow plugins/soleur/skills/ship/references/merge-queue-dequeue.md (\x5cu0027Armed and green but never enqueued\x5cu0027). For a main-based PR keep polling for MERGED: the Phase 7 poll\x5cu0027s expiry fallback is the sanctioned sync, and only for a main-based PR, if you truly need a hand sync, disarm first (gh pr merge " + $n + " --disable-auto), sync, then re-arm. A --admin merge bypasses the queue and lands the head as pushed, so a not-up-to-date refusal there is real: gate it with plugins/soleur/scripts/admin-merge-ready.sh.")
+new-pair	.claude/hooks/ship-kb-archive-gate.test.sh	scripts/lib/rule-metrics-constants.sh	.claude/hooks/lib/incidents.sh:71
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor scripts/lib/rule-metrics-constants.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:71	4caa3cc456cd/1	_incidents_constants="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/rule-metrics-constants.sh"
+new-pair	apps/cla-evidence/test/ccla-add.test.sh	.github/workflows/cla-evidence.yml	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts:5
+  cause: your change touched neither apps/web-platform/scripts/cla-evidence/cla-doc-path.ts nor .github/workflows/cla-evidence.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts:5	fd413264f97f/1	* `.github/workflows/cla-evidence.yml`, plus `cla-backfill-evidence.ts`,
+new-pair	apps/cla-evidence/test/ccla-add.test.sh	docs/legal/corporate-cla.md	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts:33
+  cause: your change touched neither apps/web-platform/scripts/cla-evidence/cla-doc-path.ts nor docs/legal/corporate-cla.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts:33	3ce0c5f56750/1	export const CORPORATE_CLA_DOC_PATH = "docs/legal/corporate-cla.md";
+new-pair	apps/cla-evidence/test/ccla-add.test.sh	docs/legal/individual-cla.md	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts:30
+  cause: your change touched neither apps/web-platform/scripts/cla-evidence/cla-doc-path.ts nor docs/legal/individual-cla.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts:30	ee3d8679e621/1	export const INDIVIDUAL_CLA_DOC_PATH = "docs/legal/individual-cla.md";
+new-pair	plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/lib/filing-shape.pl	.claude/hooks/guardrails.sh:721
+  cause: your change touched neither .claude/hooks/guardrails.sh nor .claude/hooks/lib/filing-shape.pl (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/guardrails.sh:721	fdc0576286a5/1	"BLOCKED: the older filing detector sees a gh issue create / gh api issues POST here that the filing lexer did not, so its exits cannot be read. If this is a filing, run it as a plain top-level command with an absolute --body-file path; if the match is prose (a comment, a message), reword it. Debug: save the command to a file and run perl .claude/hooks/lib/filing-shape.pl --trace < cmd.txt"
+  ref	.claude/hooks/guardrails.sh:724	a49a2c620978/1	"BLOCKED: the filing gate could not parse this command (${_fs_c}); run the filing as a plain top-level command with an absolute --body-file path. Debug: save the command to a file and run perl .claude/hooks/lib/filing-shape.pl --trace < cmd.txt"
+  ref	.claude/hooks/guardrails.sh:734	1d1395271023/1	permissionDecisionReason: ("COULD NOT VERIFY: the filing gate could not parse this command (" + $c + "), so it cannot tell whether it files a GitHub issue. Approve only if it does not file an issue. Debug: save the command to a file and run perl .claude/hooks/lib/filing-shape.pl --trace < cmd.txt. Set SOLEUR_DISABLE_HOOK_INPUT_ASK=1 to suppress this prompt.")
+new-pair	plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/lib/freeze-lock.sh	.claude/hooks/guardrails.sh:100
+  cause: your change touched neither .claude/hooks/guardrails.sh nor .claude/hooks/lib/freeze-lock.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/guardrails.sh:100	78fac7a8824a/1	permissionDecisionReason: ("BLOCKED: a freeze is active — edits are restricted to " + $a + ". Target " + $p + " is outside the allowed prefix. Edit within the prefix, or clear the freeze: bash .claude/hooks/lib/freeze-lock.sh clear")
+new-pair	plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/lib/hook-input.sh	.claude/hooks/guardrails.sh:48
+  cause: your change touched neither .claude/hooks/guardrails.sh nor .claude/hooks/lib/hook-input.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/guardrails.sh:48	c26d5acda9d1/1	printf '%s\x5cn' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"SAFETY: .claude/hooks/lib/hook-input.sh is missing or unreadable, so PreToolUse guards did NOT run for this call. This is a broken deploy, not a transient fault \x5cu2014 reinstall the hooks before continuing."}}'
+new-pair	plugins/soleur/scripts/precommit-guard.test.sh	knowledge-base/product/roadmap.md	.claude/hooks/guardrails.sh:792
+  cause: your change touched neither .claude/hooks/guardrails.sh nor knowledge-base/product/roadmap.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/guardrails.sh:792	031569f5fe42/1	"BLOCKED: gh issue create must include --milestone. Default to 'Post-MVP / Later' for operational issues. Read knowledge-base/product/roadmap.md for feature issues. The filing ALSO needs one of the three filing exits unless it already carries one: --label meta/machinery, a User-Impact: + Fix-Size: pair in the body, or a Mandated-By: line in the body.${sfx}"
+new-pair	plugins/soleur/scripts/precommit-guard.test.sh	scripts/lib/rule-metrics-constants.sh	.claude/hooks/lib/incidents.sh:71
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor scripts/lib/rule-metrics-constants.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:71	4caa3cc456cd/1	_incidents_constants="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/rule-metrics-constants.sh"
+new-pair	plugins/soleur/skills/community/test/github-community.test.sh	scripts/lib/scratch-root.sh	plugins/soleur/test/test-helpers.sh:60
+  cause: your change touched neither plugins/soleur/test/test-helpers.sh nor scripts/lib/scratch-root.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/test-helpers.sh:60	2c4077daf552/1	( set +e; _soleur_sr="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/../../../scripts/lib/scratch-root.sh"
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	.claude/settings.json	apps/web-platform/test/plugin-root-anchoring.test.ts:1321
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor .claude/settings.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:1321	6f479699fe7b/1	const settingsPath = resolve(REPO_ROOT, ".claude/settings.json");
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	.mcp.json	apps/web-platform/test/plugin-root-anchoring.test.ts:797
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor .mcp.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:797	f609596128c0/1	* name and `agent-browser/SKILL.md`'s `.mcp.json` shape must reference it through
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	README.md	apps/web-platform/test/plugin-root-anchoring.test.ts:1901
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:1901	e4940bf16fb7/1	check(["plugins/soleur/README.md", "plugins/soleur/commands/go.md", "plugins/soleur/agents/legal/clo.md"].filter((n) => !names.includes(n))).toEqual([]);
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	plugins/soleur/.claude-plugin/plugin.json	apps/web-platform/test/plugin-root-anchoring.test.ts:78
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor plugins/soleur/.claude-plugin/plugin.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:78	904c5d1db346/1	'SOLEUR_MONOREPO="$(test -f plugins/soleur/.claude-plugin/plugin.json && pwd || true)"';
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	plugins/soleur/NOTICE	apps/web-platform/test/plugin-root-anchoring.test.ts:1743
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor plugins/soleur/NOTICE (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:1743	4c4d105a5216/1	* backtick prefix in 2a false-flagged `/plugins/soleur/NOTICE` code spans.
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	plugins/soleur/README.md	apps/web-platform/test/plugin-root-anchoring.test.ts:1901
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor plugins/soleur/README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:1901	e4940bf16fb7/1	check(["plugins/soleur/README.md", "plugins/soleur/commands/go.md", "plugins/soleur/agents/legal/clo.md"].filter((n) => !names.includes(n))).toEqual([]);
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	plugins/soleur/agents/legal/clo.md	apps/web-platform/test/plugin-root-anchoring.test.ts:1901
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor plugins/soleur/agents/legal/clo.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:1901	e4940bf16fb7/1	check(["plugins/soleur/README.md", "plugins/soleur/commands/go.md", "plugins/soleur/agents/legal/clo.md"].filter((n) => !names.includes(n))).toEqual([]);
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	plugins/soleur/commands/go.md	apps/web-platform/test/plugin-root-anchoring.test.ts:739
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor plugins/soleur/commands/go.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:739	9aacf2c82a3a/1	"so a torn install is NAMED rather than skipped without a word, in plugins/soleur/commands/go.md",
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:1901	e4940bf16fb7/1	check(["plugins/soleur/README.md", "plugins/soleur/commands/go.md", "plugins/soleur/agents/legal/clo.md"].filter((n) => !names.includes(n))).toEqual([]);
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	plugins/soleur/commands/sync.md	apps/web-platform/test/plugin-root-anchoring.test.ts:642
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor plugins/soleur/commands/sync.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:642	243605a491e8/1	`plugins/soleur/commands/sync.md must echo ` +
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:655	5189f22d03bb/1	"SOLEUR_SYNC_PRODUCER_MISSING line in plugins/soleur/commands/sync.md",
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:682	793ffddd2bac/1	"line in plugins/soleur/commands/sync.md — if it was renamed, update this assertion",
+new-pair	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	plugins/soleur/test/go-session-gates.test.sh	apps/web-platform/test/plugin-root-anchoring.test.ts:136
+  cause: your change touched neither apps/web-platform/test/plugin-root-anchoring.test.ts nor plugins/soleur/test/go-session-gates.test.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/test/plugin-root-anchoring.test.ts:136	fb506bf6c7d1/1	* plugins/soleur/test/go-session-gates.test.sh block L2, one language over.
+new-pair	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	.claude/hooks/lib/hook-tool-kind.sh	.claude/hooks/skill-security-scan-write.sh:29
+  cause: your change touched neither .claude/hooks/skill-security-scan-write.sh nor .claude/hooks/lib/hook-tool-kind.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/skill-security-scan-write.sh:29	af4920973bca/1	if [ -f "$PROJECT_DIR/.claude/hooks/lib/hook-tool-kind.sh" ]; then
+  ref	.claude/hooks/skill-security-scan-write.sh:31	2a7610183e41/1	. "$PROJECT_DIR/.claude/hooks/lib/hook-tool-kind.sh" || true
+new-pair	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	.claude/hooks/lib/incidents.sh	.claude/hooks/skill-security-scan-write.sh:25
+  cause: your change touched neither .claude/hooks/skill-security-scan-write.sh nor .claude/hooks/lib/incidents.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/skill-security-scan-write.sh:25	3e1a3601ef1a/1	if [ -f "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" ]; then
+  ref	.claude/hooks/skill-security-scan-write.sh:27	d9121a6cabeb/1	. "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" || true
+new-pair	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	plugins/soleur/scripts/lib/session-state.sh	.claude/hooks/lib/incidents.sh:19
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor plugins/soleur/scripts/lib/session-state.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:19	4d679009dcb3/1	source "$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/scripts/lib/session-state.sh" 2>/dev/null || true
+new-pair	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	plugins/soleur/scripts/lib/wrapper-boundary.sh	.claude/hooks/lib/incidents.sh:34
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor plugins/soleur/scripts/lib/wrapper-boundary.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:34	133aa7df1afc/1	_incidents_wb="$(dirname "${BASH_SOURCE[0]}")/../../../plugins/soleur/scripts/lib/wrapper-boundary.sh"
+new-pair	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	scripts/lib/rule-metrics-constants.sh	.claude/hooks/lib/incidents.sh:71
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor scripts/lib/rule-metrics-constants.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:71	4caa3cc456cd/1	_incidents_constants="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/rule-metrics-constants.sh"
+new-pair	plugins/soleur/test/audit-flag-flip.test.sh	apps/web-platform/.env.example	plugins/soleur/skills/flag-create/scripts/create.sh:71
+  cause: your change touched neither plugins/soleur/skills/flag-create/scripts/create.sh nor apps/web-platform/.env.example (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/skills/flag-create/scripts/create.sh:71	6a8dc95fd48b/1	readonly ENV_EXAMPLE="apps/web-platform/.env.example"
+new-pair	plugins/soleur/test/audit-flag-flip.test.sh	apps/web-platform/lib/feature-flags/server.ts	plugins/soleur/skills/flag-create/scripts/create.sh:70
+  cause: your change touched neither plugins/soleur/skills/flag-create/scripts/create.sh nor apps/web-platform/lib/feature-flags/server.ts (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/skills/flag-create/scripts/create.sh:70	3517473c0ee6/1	readonly SERVER_TS="apps/web-platform/lib/feature-flags/server.ts"
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/scripts/check-tc-document-sha.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:167
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor apps/web-platform/scripts/check-tc-document-sha.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:167	66bca089b181/1	run_step "tc-document-sha-guard" bash apps/web-platform/scripts/check-tc-document-sha.sh
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	apps/web-platform/scripts/service-role-allowlist-gate.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:163
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor apps/web-platform/scripts/service-role-allowlist-gate.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:163	dd4262397664/1	run_step "service-role-allowlist-gate" bash apps/web-platform/scripts/service-role-allowlist-gate.sh
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/grok-fidelity-gate.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:229
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor plugins/soleur/scripts/grok-fidelity-gate.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:229	367583005763/1	run_step "grok-fidelity-gate" bash plugins/soleur/scripts/grok-fidelity-gate.sh
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	scripts/check-adr-ordinals.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:162
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor scripts/check-adr-ordinals.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:162	06e63a9f176b/1	run_step "adr-ordinals" bash scripts/check-adr-ordinals.sh
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-bot-synthetic-completeness.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:165
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor scripts/lint-bot-synthetic-completeness.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:165	159377749260/1	run_step "lint-bot-synthetic-completeness" bash scripts/lint-bot-synthetic-completeness.sh
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-bot-synthetic-statuses.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:164
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor scripts/lint-bot-synthetic-statuses.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:164	f428ddbad4fb/1	run_step "lint-bot-synthetic-statuses" bash scripts/lint-bot-synthetic-statuses.sh
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-conversations-update-callsites.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:166
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor scripts/lint-conversations-update-callsites.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:166	afa47804e982/1	run_step "lint-conversations-update-callsites" bash scripts/lint-conversations-update-callsites.sh
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	scripts/lint-rule-bodies.py	plugins/soleur/scripts/grok-pre-push-gate.sh:172
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor scripts/lint-rule-bodies.py (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:172	b2058d50b8e8/1	run_step "rule-body-lint" python3 scripts/lint-rule-bodies.py --check --base "$merge_base"
+new-pair	plugins/soleur/test/fanout-suite-scope.test.sh	scripts/sync-readme-counts.sh	plugins/soleur/scripts/grok-pre-push-gate.sh:161
+  cause: your change touched neither plugins/soleur/scripts/grok-pre-push-gate.sh nor scripts/sync-readme-counts.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/grok-pre-push-gate.sh:161	cbba9a87f100/1	run_step "readme-counts" bash scripts/sync-readme-counts.sh --check
+new-pair	plugins/soleur/test/gdpr-gate-self-test.test.sh	knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts:2170
+  cause: your change touched neither apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts nor knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts:2170	c91de6459fb9/1	`Automated re-vendor on upstream drift for bundle \x5c`${bundle.slug}\x5c`. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md.`,
+  ref	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts:2345	40d97bc16f1e/1	"Follow `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §2-§5 (classifier-rc-specific branches).",
+new-pair	plugins/soleur/test/hook-input-classification-mutation.test.sh	.claude/hooks/README.md	scripts/rule-metrics-aggregate.sh:644
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor .claude/hooks/README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:644	ca3f51fb41f9/1	echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+new-pair	plugins/soleur/test/hook-input-classification-mutation.test.sh	README.md	scripts/rule-metrics-aggregate.sh:644
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:644	ca3f51fb41f9/1	echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+new-pair	plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/retired-rule-ids.txt	scripts/rule-metrics-aggregate.sh:148
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor scripts/retired-rule-ids.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:148	9d9c418124fd/1	RETIRED_IDS_SRC="$REPO_ROOT/scripts/retired-rule-ids.txt"
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	.claude/hooks/README.md	scripts/rule-metrics-aggregate.sh:644
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor .claude/hooks/README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:644	ca3f51fb41f9/1	echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	.claude/rule-body-hashes.txt	scripts/lint-rule-bodies.py:14
+  cause: your change touched neither scripts/lint-rule-bodies.py nor .claude/rule-body-hashes.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:14	e6ca16a2cb3f/1	(.claude/rule-body-hashes.txt) over the current corpus. Run this
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	.claude/rule-weakening-acks.txt	scripts/lint-rule-bodies.py:7
+  cause: your change touched neither scripts/lint-rule-bodies.py nor .claude/rule-weakening-acks.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:7	260888cc7de7/1	WORM file `.claude/rule-weakening-acks.txt`. The safe primitive is "add a new
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	AGENTS.md	scripts/rule-metrics-aggregate.sh:38
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor AGENTS.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:38	5e2aca558f91/1	AGENTS_MD="$REPO_ROOT/AGENTS.md"
+  ref	scripts/rule-metrics-aggregate.sh:651	ca51b842c4dd/1	echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
+  ref	scripts/rule-metrics-aggregate.sh:708	ca51b842c4dd/2	echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	README.md	scripts/rule-metrics-aggregate.sh:644
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:644	ca3f51fb41f9/1	echo "WARNING: $hook_input_fault_count PreToolUse hook input-contract fault(s) — a hook could not parse its stdin and ran with guards disarmed [${hook_input_breakdown}]. See .claude/hooks/README.md 'Parsing hook input' (ADR-157)." >&2
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	scripts/_agents_md_sections.py	scripts/lint-rule-bodies.py:74
+  cause: your change touched neither scripts/lint-rule-bodies.py nor scripts/_agents_md_sections.py (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:74	857ac48bc9ea/1	SECTIONS_MODULE_REL = "scripts/_agents_md_sections.py"
+  ref	scripts/lint-rule-bodies.py:482	1f11ee587821/1	cp scripts/_agents_md_sections.py "$D/scripts/"
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	scripts/lib/rule-metrics-constants.sh	.claude/hooks/lib/incidents.sh:71
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor scripts/lib/rule-metrics-constants.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:71	4caa3cc456cd/1	_incidents_constants="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/rule-metrics-constants.sh"
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	scripts/lint-migrated-rule-ids.sh	scripts/lint-rule-bodies.py:127
+  cause: your change touched neither scripts/lint-rule-bodies.py nor scripts/lint-migrated-rule-ids.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:127	d96ff524fb10/1	scripts/lint-migrated-rule-ids.sh `hash_text` must agree with this on every body it accepts
+  ref	scripts/lint-rule-bodies.py:349	8c59fe5445e7/1	f"`bash scripts/lint-migrated-rule-ids.sh --print-hash {rid}`."
+new-pair	plugins/soleur/test/net-issue-flow.test.sh	scripts/retired-rule-ids.txt	scripts/rule-metrics-aggregate.sh:148
+  cause: your change touched neither scripts/rule-metrics-aggregate.sh nor scripts/retired-rule-ids.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/rule-metrics-aggregate.sh:148	9d9c418124fd/1	RETIRED_IDS_SRC="$REPO_ROOT/scripts/retired-rule-ids.txt"
+new-pair	plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/lib/commit-target-roots.sh	.claude/hooks/git-commit-secret-scan.sh:263
+  cause: your change touched neither .claude/hooks/git-commit-secret-scan.sh nor .claude/hooks/lib/commit-target-roots.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/git-commit-secret-scan.sh:263	333e6f1e7976/1	undeterminable="the helper library .claude/hooks/lib/commit-target-roots.sh is missing or unreadable"
+new-pair	plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/lib/incidents.sh	.claude/hooks/git-commit-secret-scan.sh:48
+  cause: your change touched neither .claude/hooks/git-commit-secret-scan.sh nor .claude/hooks/lib/incidents.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/git-commit-secret-scan.sh:48	3e1a3601ef1a/1	if [ -f "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" ]; then
+  ref	.claude/hooks/git-commit-secret-scan.sh:50	d9121a6cabeb/1	. "$PROJECT_DIR/.claude/hooks/lib/incidents.sh" || true
+new-pair	plugins/soleur/test/required-checks-canonical-parity.test.sh	.gitattributes	.claude/hooks/git-commit-secret-scan.sh:428
+  cause: your change touched neither .claude/hooks/git-commit-secret-scan.sh nor .gitattributes (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/git-commit-secret-scan.sh:428	d9a1084935e4/1	deny "BLOCKED: gitleaks found ${nd_count} secret-shaped string(s) in staged file(s) of ${repo_root} carrying a \x5c`-diff\x5c` gitattribute: ${nd_files%, }. A \x5c`-diff\x5c` attribute makes git emit \x5c"Binary files … differ\x5c" with no added lines, so the normal staged scan sees NOTHING in these files — they were re-scanned from their staged blobs. Recovery: (1) scrub the secret bytes (never commit-then-rotate); (2) if the \x5c`-diff\x5c` attribute is not deliberate, remove it from .gitattributes / .git/info/attributes."
+new-pair	plugins/soleur/test/required-checks-canonical-parity.test.sh	.gitleaks.toml	.claude/hooks/git-commit-secret-scan.sh:309
+  cause: your change touched neither .claude/hooks/git-commit-secret-scan.sh nor .gitleaks.toml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/git-commit-secret-scan.sh:309	72ad5fedfacd/1	echo "[git-commit-secret-scan] WARN: .gitleaks.toml not found at repo root — skipping scan." >&2
+  ref	.claude/hooks/git-commit-secret-scan.sh:310	17132a3c4317/1	emit git-commit-secret-scan bypass ".gitleaks.toml absent"
+  ref	.claude/hooks/git-commit-secret-scan.sh:316	365600ea6af6/1	if [ -f "$_r/.gitleaks.toml" ]; then
+new-pair	plugins/soleur/test/required-checks-canonical-parity.test.sh	knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md	.claude/hooks/git-commit-secret-scan.sh:460
+  cause: your change touched neither .claude/hooks/git-commit-secret-scan.sh nor knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/git-commit-secret-scan.sh:460	937a15a6bdde/1	reason="BLOCKED: gitleaks found ${findings_count} secret-shaped string(s) in the staged index of ${repo_root}. Locations: ${findings_summary}. The default action is to scrub the secrets — never commit-then-rotate. Recovery: (1) unstage the offending file(s) in ${repo_root} with 'git restore --staged <path>'; (2) redact the secret bytes in place; (3) re-stage and retry. If the staged content is a captured-real fixture from 'terraform show -json' or similar, strip the '.variables' block — terraform-show-json embeds sensitive HCL variables verbatim regardless of sensitive=true. See knowledge-base/project/learnings/security-issues/2026-05-25-terraform-show-json-leaks-sensitive-variables-into-fixtures.md."
+new-pair	plugins/soleur/test/required-checks-canonical-parity.test.sh	scripts/lib/rule-metrics-constants.sh	.claude/hooks/lib/incidents.sh:71
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor scripts/lib/rule-metrics-constants.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:71	4caa3cc456cd/1	_incidents_constants="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/rule-metrics-constants.sh"
+new-pair	plugins/soleur/test/rtk-grammar-parity.test.sh	scripts/lib/rule-metrics-constants.sh	.claude/hooks/lib/incidents.sh:71
+  cause: your change touched neither .claude/hooks/lib/incidents.sh nor scripts/lib/rule-metrics-constants.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/lib/incidents.sh:71	4caa3cc456cd/1	_incidents_constants="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/rule-metrics-constants.sh"
+new-pair	plugins/soleur/test/vendor-bundle-coverage.test.sh	knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts:2170
+  cause: your change touched neither apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts nor knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts:2170	c91de6459fb9/1	`Automated re-vendor on upstream drift for bundle \x5c`${bundle.slug}\x5c`. Resolution path: knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md.`,
+  ref	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts:2345	40d97bc16f1e/1	"Follow `knowledge-base/engineering/operations/runbooks/vendor-pin-drift-resolution.md` §2-§5 (classifier-rc-specific branches).",
+new-pair	plugins/soleur/test/zot-http-deadlines-required.test.sh	apps/web-platform/infra/zot-registry.tf	apps/web-platform/infra/zot-config-deadlines.test.sh:260
+  cause: your change touched neither apps/web-platform/infra/zot-config-deadlines.test.sh nor apps/web-platform/infra/zot-registry.tf (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/infra/zot-config-deadlines.test.sh:260	97f2e470114c/1	< <(grep -oE 'ghcr\x5c.io/project-zot/zot-linux-amd64:[^"]+' "$REPO_ROOT/apps/web-platform/infra/zot-registry.tf")
+new-pair	scripts/ci-push-dedupe	README.md	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:110
+  cause: your change touched neither plugins/soleur/test/ci-e2e-skip-anchors.test.sh nor README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:110	aa95596435fb/1	expect_verdict "pure kb + root-md diff skips" false pull_request "$(mrow knowledge-base/project/specs/x.md; mrow README.md)"
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:118	6267d4f5bf52/1	expect_verdict "subdir .md is NOT root-md safe" true pull_request "$(mrow plugins/soleur/README.md)"
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:120	ccfb988d4e17/1	expect_verdict "bare path (no status column) fails closed" true pull_request $'knowledge-base/a.md\x5cnREADME.md\x5cn'
+new-pair	scripts/ci-push-dedupe	plugins/soleur/README.md	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:118
+  cause: your change touched neither plugins/soleur/test/ci-e2e-skip-anchors.test.sh nor plugins/soleur/README.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:118	6267d4f5bf52/1	expect_verdict "subdir .md is NOT root-md safe" true pull_request "$(mrow plugins/soleur/README.md)"
+new-pair	scripts/ci-push-dedupe	scripts/ci-e2e-classify.sh	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:52
+  cause: your change touched neither plugins/soleur/test/ci-e2e-skip-anchors.test.sh nor scripts/ci-e2e-classify.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:52	d432aa60b2b9/1	CLASSIFIER="$REPO_ROOT/scripts/ci-e2e-classify.sh"
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:141	40230dbb4577/1	expect_verdict "classifier edit runs e2e" true pull_request "$(mrow scripts/ci-e2e-classify.sh)"
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:222	27834abe9a11/1	anchor_in_e2e "classifier invoked from workflow" "scripts/ci-e2e-classify.sh"
+new-pair	scripts/ci-push-dedupe	scripts/followthroughs/actions-queue-tail-8450.sh	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:144
+  cause: your change touched neither plugins/soleur/test/ci-e2e-skip-anchors.test.sh nor scripts/followthroughs/actions-queue-tail-8450.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:144	fb4b3860ca7c/1	expect_verdict "soak-probe edit runs e2e" true pull_request "$(mrow scripts/followthroughs/actions-queue-tail-8450.sh)"
+new-pair	scripts/ci-push-dedupe	scripts/lint-encryption-posture.py	plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh:944
+  cause: your change touched neither plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh nor scripts/lint-encryption-posture.py (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh:944	1f844bf1774a/1	SWEEP = "python3 scripts/lint-encryption-posture.py --repo-sweep"
+new-pair	scripts/ci-push-dedupe	scripts/sweep-followthroughs.sh	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:143
+  cause: your change touched neither plugins/soleur/test/ci-e2e-skip-anchors.test.sh nor scripts/sweep-followthroughs.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/test/ci-e2e-skip-anchors.test.sh:143	7cea23435565/1	expect_verdict "sweeper edit runs e2e" true pull_request "$(mrow scripts/sweep-followthroughs.sh)"
+new-pair	scripts/compound-promote	knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md	scripts/learning-retrieval-bench.sh:111
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:111	8a4b92447154/1	Brainstorm: knowledge-base/project/brainstorms/archive/20261013-014038-2026-05-19-learnings-retrieval-bench-brainstorm.md
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md	scripts/learning-retrieval-bench.sh:729
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:729	2e29f9cc4367/1	"knowledge-base/project/learnings/2026-02-22-archiving-slug-extraction-must-match-branch-conventions.md"
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md	scripts/learning-retrieval-bench.sh:734
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:734	73d87c6ace69/1	"knowledge-base/project/learnings/2026-03-05-awk-scoping-yaml-frontmatter-shell.md"
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md	scripts/learning-retrieval-bench.sh:730
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:730	a1a9160ea9d7/1	"knowledge-base/project/learnings/2026-03-05-bulk-yaml-frontmatter-migration-patterns.md"
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md	scripts/learning-retrieval-bench.sh:735
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:735	109a201bb529/1	"knowledge-base/project/learnings/2026-03-06-disambiguation-budget-compounds-with-domain-size.md"
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md	scripts/learning-retrieval-bench.sh:733
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:733	050186d8b73d/1	"knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md"
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md	scripts/learning-retrieval-bench.sh:732
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:732	5a45494cc4cb/1	"knowledge-base/project/learnings/2026-03-21-kb-migration-verification-pitfalls.md"
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md	scripts/learning-retrieval-bench.sh:731
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:731	e2da007d9392/1	"knowledge-base/project/learnings/2026-04-14-plan-prescribed-test-framework-not-available.md"
+new-pair	scripts/compound-promote	knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md	scripts/learning-retrieval-bench.sh:1394
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:1394	dd69f5102216/1	got="$(build_close_comment_line vindicate 0.83 knowledge-base/project/learnings/2026-05-19-retrieval-diagnostic-findings.md)"
+new-pair	scripts/compound-promote	knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md	scripts/learning-retrieval-bench.sh:109
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:109	171cdeda5357/1	Plan: knowledge-base/project/plans/archive/20261013-014038-2026-05-19-feat-learnings-retrieval-bench-plan.md
+new-pair	scripts/compound-promote	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md	scripts/learning-retrieval-bench.sh:110
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:110	e6b20999dc89/1	Spec: knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
+new-pair	scripts/compound-promote	scripts/ensure-kb-index.sh	scripts/learning-retrieval-bench.sh:80
+  cause: your change touched neither scripts/learning-retrieval-bench.sh nor scripts/ensure-kb-index.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/learning-retrieval-bench.sh:80	5ad49376ea79/1	[[ -f "$REPO_ROOT/scripts/ensure-kb-index.sh" ]] \x5c
+  ref	scripts/learning-retrieval-bench.sh:81	ecc42a93f335/1	&& bash "$REPO_ROOT/scripts/ensure-kb-index.sh" --soft || true
+new-pair	scripts/followthrough-varq-ban	.github/workflows/scheduled-followthrough-sweeper.yml	scripts/sweep-followthroughs.sh:668
+  cause: your change touched neither scripts/sweep-followthroughs.sh nor .github/workflows/scheduled-followthrough-sweeper.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/sweep-followthroughs.sh:668	eb983b3a2e71/1	Fix: add the name to the \x5c`env:\x5c` block of \x5c`.github/workflows/scheduled-followthrough-sweeper.yml\x5c` (bound from a repo secret that exists), or correct the directive's \x5c`secrets=\x5c` clause."
+new-pair	scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	scripts/betterstack-query.sh:104
+  cause: your change touched neither scripts/betterstack-query.sh nor knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/betterstack-query.sh:104	a85eed92c105/1	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+new-pair	scripts/followthrough-varq-ban	plugins/soleur/skills/ship/SKILL.md	scripts/sweep-followthroughs.sh:1041
+  cause: your change touched neither scripts/sweep-followthroughs.sh nor plugins/soleur/skills/ship/SKILL.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/sweep-followthroughs.sh:1041	f62f5ece6643/1	printf '\x5cnResolve each by either (a) adding the directive (see `plugins/soleur/skills/ship/SKILL.md` §Phase 7 Step 3.5.A-F), or (b) closing as wontfix with rationale.\x5cn'
+new-pair	scripts/followthrough-varq-ban	scripts/ensure-doppler.sh	scripts/betterstack-query.sh:109
+  cause: your change touched neither scripts/betterstack-query.sh nor scripts/ensure-doppler.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/betterstack-query.sh:109	1027621c5bba/1	scripts/ensure-doppler.sh # installs to ~/.local/bin, prints the path
+  ref	scripts/betterstack-query.sh:110	7c59a1e49464/1	scripts/ensure-doppler.sh --state # missing | unauthenticated | ready | unknown
+new-pair	scripts/followthroughs/ccla-representative-icla-7922	apps/cla-evidence/scripts/ccla-add.sh	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts:9
+  cause: your change touched neither apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts nor apps/cla-evidence/scripts/ccla-add.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts:9	bbd33653b856/1	* one (CI) and the write path (`apps/cla-evidence/scripts/ccla-add.sh`).
+new-pair	scripts/followthroughs/ccla-representative-icla-7922	knowledge-base/legal/ccla-register.md	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts:254
+  cause: your change touched neither apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts nor knowledge-base/legal/ccla-register.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts:254	e4fb881a4f4b/1	"Give the notice directly, record it in knowledge-base/legal/ccla-register.md, then add " +
+new-pair	scripts/git-data-reboot-evidence-landed-8210	.github/workflows/git-data-rung2-rehearsal.yml	tests/scripts/lib/git-data-birth-readiness-gate.sh:967
+  cause: your change touched neither tests/scripts/lib/git-data-birth-readiness-gate.sh nor .github/workflows/git-data-rung2-rehearsal.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	tests/scripts/lib/git-data-birth-readiness-gate.sh:967	c012f29dd45b/1	GIT_DATA_RUNG2_WORKFLOW_PATH=".github/workflows/git-data-rung2-rehearsal.yml"
+  ref	tests/scripts/lib/git-data-birth-readiness-gate.sh:1541	174c3fc37748/1	.github/workflows/git-data-rung2-rehearsal.yml (see runbook git-data-rung2-rehearsal.md).
+new-pair	scripts/git-data-reboot-evidence-landed-8210	knowledge-base/engineering/operations/runbooks/git-data-birth.md	tests/scripts/lib/git-data-birth-readiness-gate.sh:181
+  cause: your change touched neither tests/scripts/lib/git-data-birth-readiness-gate.sh nor knowledge-base/engineering/operations/runbooks/git-data-birth.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	tests/scripts/lib/git-data-birth-readiness-gate.sh:181	bf9412cfd989/1	knowledge-base/engineering/operations/runbooks/git-data-birth.md (the DO-NOT-DISPATCH
+  ref	tests/scripts/lib/git-data-birth-readiness-gate.sh:1524	4976ef615b07/1	knowledge-base/engineering/operations/runbooks/git-data-birth.md.
+new-pair	scripts/rules-loader-stamp-probe	.mcp.json	.claude/hooks/session-rules-loader.sh:388
+  cause: your change touched neither .claude/hooks/session-rules-loader.sh nor .mcp.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/session-rules-loader.sh:388	5ca967703425/1	jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/.mcp.json" 2>/dev/null || true
+  ref	.claude/hooks/session-rules-loader.sh:390	a3f0a99479c8/1	jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
+new-pair	scripts/rules-loader-stamp-probe	plugins/soleur/.claude-plugin/plugin.json	.claude/hooks/session-rules-loader.sh:389
+  cause: your change touched neither .claude/hooks/session-rules-loader.sh nor plugins/soleur/.claude-plugin/plugin.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/session-rules-loader.sh:389	f1447b612723/1	jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugins/soleur/.claude-plugin/plugin.json" 2>/dev/null || true
+new-pair	scripts/rules-loader-stamp-probe	plugins/soleur/.mcp.json	.claude/hooks/session-rules-loader.sh:390
+  cause: your change touched neither .claude/hooks/session-rules-loader.sh nor plugins/soleur/.mcp.json (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/session-rules-loader.sh:390	a3f0a99479c8/1	jq -r '.mcpServers // {} | keys[] | gsub("[[:cntrl:]]";"") | gsub("\x5cu2028|\x5cu2029";"")' "$REPO_ROOT/plugins/soleur/.mcp.json" 2>/dev/null || true
+new-pair	scripts/rules-loader-stamp-probe	scripts/lib/frontmatter-strip/strip.sh	.claude/hooks/session-rules-loader.sh:79
+  cause: your change touched neither .claude/hooks/session-rules-loader.sh nor scripts/lib/frontmatter-strip/strip.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	.claude/hooks/session-rules-loader.sh:79	bad8bd6ca7ab/1	_strip_lib="$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib/frontmatter-strip/strip.sh"
+new-pair	scripts/tmpfs-guard	.claude/hooks/lib/test-incident-sandbox.sh	plugins/soleur/scripts/lib/tmp-classify.sh:509
+  cause: your change touched neither plugins/soleur/scripts/lib/tmp-classify.sh nor .claude/hooks/lib/test-incident-sandbox.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/lib/tmp-classify.sh:509	6499a3cc5a86/1	"soleur-inc-*|.claude|.claude/hooks/lib/test-incident-sandbox.sh"
+new-pair	scripts/tmpfs-guard	apps/web-platform/infra/run-registered-suites.sh	plugins/soleur/scripts/lib/tmp-classify.sh:508
+  cause: your change touched neither plugins/soleur/scripts/lib/tmp-classify.sh nor apps/web-platform/infra/run-registered-suites.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/lib/tmp-classify.sh:508	54648249b64a/1	"infra-suites.*|_*.test.sh.meta|apps/web-platform/infra/run-registered-suites.sh"
+new-pair	scripts/tmpfs-guard	plugins/soleur/test/gdpr-gate.test.ts	plugins/soleur/scripts/lib/tmp-classify.sh:514
+  cause: your change touched neither plugins/soleur/scripts/lib/tmp-classify.sh nor plugins/soleur/test/gdpr-gate.test.ts (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/lib/tmp-classify.sh:514	271cfa9bff07/1	"gdpr-gate-incidents-*|.claude/.rule-incidents.jsonl|plugins/soleur/test/gdpr-gate.test.ts"
+new-pair	scripts/tmpfs-guard	plugins/soleur/test/kb-coverage.test.ts	plugins/soleur/scripts/lib/tmp-classify.sh:513
+  cause: your change touched neither plugins/soleur/scripts/lib/tmp-classify.sh nor plugins/soleur/test/kb-coverage.test.ts (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/lib/tmp-classify.sh:513	6ed33dcc81dd/1	"kbcov-*|engineering|plugins/soleur/test/kb-coverage.test.ts"
+new-pair	scripts/tmpfs-guard	plugins/soleur/test/ship-incident-pir-gate.test.ts	plugins/soleur/scripts/lib/tmp-classify.sh:512
+  cause: your change touched neither plugins/soleur/scripts/lib/tmp-classify.sh nor plugins/soleur/test/ship-incident-pir-gate.test.ts (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/lib/tmp-classify.sh:512	1195d2e9941c/1	"pirgate-*|.git/config|plugins/soleur/test/ship-incident-pir-gate.test.ts"
+new-pair	scripts/tmpfs-guard	tests/scripts/lib/git-data-birth-readiness-gate.sh	plugins/soleur/scripts/lib/tmp-classify.sh:506
+  cause: your change touched neither plugins/soleur/scripts/lib/tmp-classify.sh nor tests/scripts/lib/git-data-birth-readiness-gate.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	plugins/soleur/scripts/lib/tmp-classify.sh:506	288d9aa9a8e6/1	"rung2-archive.*|git-data-bootstrap.sh|tests/scripts/lib/git-data-birth-readiness-gate.sh"
+new-pair	tests/scripts/betterstack-roundtrip-latency	scripts/betterstack-query.sh	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh:133
+  cause: your change touched neither scripts/followthroughs/betterstack-roundtrip-latency-7855.sh nor scripts/betterstack-query.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh:133	fe989b6a4141/1	QUERY="${BETTERSTACK_QUERY_SH:-${REPO_ROOT}/scripts/betterstack-query.sh}"
+new-pair	tests/scripts/betterstack-roundtrip-latency	scripts/lib/betterstack-absence.sh	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh:164
+  cause: your change touched neither scripts/followthroughs/betterstack-roundtrip-latency-7855.sh nor scripts/lib/betterstack-absence.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh:164	91ef04dfa62c/1	source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+new-pair	tests/scripts/betterstack-roundtrip-latency	scripts/lib/trusted-verdict.sh	scripts/lint-followthrough-varq-ban.sh:311
+  cause: your change touched neither scripts/lint-followthrough-varq-ban.sh nor scripts/lib/trusted-verdict.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-followthrough-varq-ban.sh:311	a156176796ef/1	echo "$f:${lineno:-1}: rule 4: reads issue comments AND branches on a RESULT: verdict or an S<n>- soak marker WITHOUT routing the decision through scripts/lib/trusted-verdict.sh. This repo is PUBLIC with issues open, so an unfiltered '.comments[].body' accepts a verdict from ANY authenticated GitHub user -- one HTTP POST of 'RESULT: PASS' closes the tracker (#7448). Source the lib and call trusted_verdict_bodies (verdict text) or trusted_verdict_comments ({t,b} per comment, for markers). Do NOT re-inline an author-association select instead (rule 5): it is computed against the READING token's visibility, so a member with PRIVATE org membership renders as CONTRIBUTOR under GITHUB_TOKEN and their verdict is dropped silently (#6617: two months of nightly FAIL on an already-recorded verdict)." >&2
+  ref	scripts/lint-followthrough-varq-ban.sh:347	0e28e1d32b7b/1	echo "$f:${hit%%:*}: rule 5: names the comment-author-association field on an executable line. A comment's association is computed against the READING token's visibility, so under the sweeper's GITHUB_TOKEN a member with PRIVATE org membership renders as CONTRIBUTOR and their comment is dropped silently (#6617, #8389, #9818). Decide trust from scripts/lib/trusted-verdict.sh (trusted_verdict_bodies / trusted_verdict_comments), which resolves effective repository permission. There is no per-line opt-out." >&2
+  ref	scripts/lint-followthrough-varq-ban.sh:518	25a129edb2d6/1	echo "FAILED: $violations violation(s) -- banned \x5c${VAR:?}/\x5c${VAR?} on an executable line (rule 1), the retired credential name (rule 2), a repo-relative path absent from this checkout (rule 3), a comment-verdict or soak-marker read that bypasses scripts/lib/trusted-verdict.sh (rule 4), and/or the comment-author-association field named on an executable line (rule 5). See followthrough-convention.md §Author workflow." >&2
+new-pair	tests/scripts/git-data-rung2-evidence-capture	apps/web-platform/infra/cloud-init-git-data.yml	scripts/followthroughs/git-data-rung2-evidence-capture.sh:126
+  cause: your change touched neither scripts/followthroughs/git-data-rung2-evidence-capture.sh nor apps/web-platform/infra/cloud-init-git-data.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/followthroughs/git-data-rung2-evidence-capture.sh:126	af2aeb7317f8/1	CLOUD_INIT="${REPO_ROOT}/apps/web-platform/infra/cloud-init-git-data.yml"
+new-pair	tests/scripts/git-data-rung2-evidence-capture	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	scripts/betterstack-query.sh:104
+  cause: your change touched neither scripts/betterstack-query.sh nor knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/betterstack-query.sh:104	a85eed92c105/1	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+new-pair	tests/scripts/git-data-rung2-evidence-capture	scripts/ensure-doppler.sh	scripts/betterstack-query.sh:109
+  cause: your change touched neither scripts/betterstack-query.sh nor scripts/ensure-doppler.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/betterstack-query.sh:109	1027621c5bba/1	scripts/ensure-doppler.sh # installs to ~/.local/bin, prints the path
+  ref	scripts/betterstack-query.sh:110	7c59a1e49464/1	scripts/ensure-doppler.sh --state # missing | unauthenticated | ready | unknown
+new-pair	tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh	scripts/betterstack-ingest-probe.sh:144
+  cause: your change touched neither scripts/betterstack-ingest-probe.sh nor scripts/followthroughs/betterstack-roundtrip-latency-7855.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/betterstack-ingest-probe.sh:144	2424e9456781/1	emit "INGEST_ACKNOWLEDGED" "$http" "the write endpoint acknowledged an empty batch; this establishes reachability and credential validity ONLY — it does NOT establish that any row was stored, which needs a readback (scripts/followthroughs/betterstack-roundtrip-latency-7855.sh)"
+new-pair	tests/scripts/git-data-rung2-evidence-capture	scripts/lib/betterstack-absence.sh	scripts/followthroughs/git-data-rung2-evidence-capture.sh:787
+  cause: your change touched neither scripts/followthroughs/git-data-rung2-evidence-capture.sh nor scripts/lib/betterstack-absence.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/followthroughs/git-data-rung2-evidence-capture.sh:787	91ef04dfa62c/1	source "${REPO_ROOT}/scripts/lib/betterstack-absence.sh"
+new-pair	tests/scripts/inngest-host-dark-gate	knowledge-base/engineering/operations/runbooks/inngest-server.md	scripts/cutover-inngest.sh:1244
+  cause: your change touched neither scripts/cutover-inngest.sh nor knowledge-base/engineering/operations/runbooks/inngest-server.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/cutover-inngest.sh:1244	b7c01c11cb80/1	local RUNBOOK="knowledge-base/engineering/operations/runbooks/inngest-server.md § Bounded-outage note"
+  ref	scripts/cutover-inngest.sh:1486	f1cac49fb7e4/1	echo "registry-probe: 3. if the watchdog also reports the host down, recovery is a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) for the dispatch and its preconditions."
+  ref	scripts/cutover-inngest.sh:1496	f1cac49fb7e4/2	echo "registry-probe: 3. if the watchdog also reports the host down, recovery is a host replace — see the dedicated-host cutover runbook (knowledge-base/engineering/operations/runbooks/inngest-server.md) for the dispatch and its preconditions."
+new-pair	tests/scripts/inngest-host-dark-gate	scripts/betterstack-query.sh	scripts/cutover-inngest.sh:174
+  cause: your change touched neither scripts/cutover-inngest.sh nor scripts/betterstack-query.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/cutover-inngest.sh:174	3d2037e0b797/1	rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since "$since" --grep "$term" --limit "$limit" 2>"$errfile") || rc=$?
+  ref	scripts/cutover-inngest.sh:324	2a433ad0584c/1	rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \x5c
+  ref	scripts/cutover-inngest.sh:452	2a433ad0584c/2	rows=$(doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh \x5c
+new-pair	tests/scripts/inngest-host-dark-gate	scripts/followthroughs/inngest-provision-unit-8562.sh	scripts/cutover-inngest.sh:3533
+  cause: your change touched neither scripts/cutover-inngest.sh nor scripts/followthroughs/inngest-provision-unit-8562.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/cutover-inngest.sh:3533	e5e59863f00f/1	RS_G4_RAW="$(doppler run -p soleur -c prd_terraform -- bash scripts/followthroughs/inngest-provision-unit-8562.sh)" || RS_G4_RC=$?
+new-pair	tests/scripts/inngest-host-dark-gate	scripts/inngest-host-state.sh	scripts/cutover-inngest.sh:1436
+  cause: your change touched neither scripts/cutover-inngest.sh nor scripts/inngest-host-state.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/cutover-inngest.sh:1436	72b268467bb1/1	echo "::error::registry-probe REFUSED (webhook_path): the webhook returned HTTP $CODE without the dedicated host's fetch-failure signature (inngest-registry-probe: FATAL … __FETCH_FAILED__), so the host's reachability was NOT measured. If the body line below begins 'inngest-registry-probe: FATAL' the hook RAN and the dedicated host ANSWERED /v0/gql with an error — the path is healthy; read the host's own state: doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh. Otherwise this is a WEBHOOK-PATH fault: isolate it with a sibling GET through the SAME path: gh workflow run cutover-inngest.yml -f op=inventory. If op=inventory returns 200 the path is healthy and the fault is in the inngest-registry-probe hook itself; if it also fails, the path is at fault (CF Access / WAF / webhook.service on the web host). Do NOT SSH the host."
+  ref	scripts/cutover-inngest.sh:1485	1d1b4cbc4cdb/1	echo "registry-probe: 2. read the host's own current state — doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
+  ref	scripts/cutover-inngest.sh:1495	1d1b4cbc4cdb/2	echo "registry-probe: 2. read the host's own current state — doppler run -p soleur -c prd_terraform -- bash scripts/inngest-host-state.sh (needs BETTERSTACK_QUERY_* from prd_terraform; it is a local read, not dispatchable)."
+new-pair	tests/scripts/inngest-host-dark-gate	scripts/lib/betterstack-read-classify.sh	scripts/cutover-inngest.sh:48
+  cause: your change touched neither scripts/cutover-inngest.sh nor scripts/lib/betterstack-read-classify.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/cutover-inngest.sh:48	36dca4c51c85/1	printf '::error::scripts/lib/betterstack-read-classify.sh not found — the read-failure partition is unavailable, so a failed read cannot be classified. Dispatch with --ref main.\x5cn' >&2
+new-pair	tests/scripts/lint-rule-bodies	.claude/rule-body-hashes.txt	scripts/lint-rule-bodies.py:14
+  cause: your change touched neither scripts/lint-rule-bodies.py nor .claude/rule-body-hashes.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:14	e6ca16a2cb3f/1	(.claude/rule-body-hashes.txt) over the current corpus. Run this
+new-pair	tests/scripts/lint-rule-bodies	.claude/rule-weakening-acks.txt	scripts/lint-rule-bodies.py:7
+  cause: your change touched neither scripts/lint-rule-bodies.py nor .claude/rule-weakening-acks.txt (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:7	260888cc7de7/1	WORM file `.claude/rule-weakening-acks.txt`. The safe primitive is "add a new
+new-pair	tests/scripts/lint-rule-bodies	scripts/_agents_md_sections.py	scripts/lint-rule-bodies.py:74
+  cause: your change touched neither scripts/lint-rule-bodies.py nor scripts/_agents_md_sections.py (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:74	857ac48bc9ea/1	SECTIONS_MODULE_REL = "scripts/_agents_md_sections.py"
+  ref	scripts/lint-rule-bodies.py:482	1f11ee587821/1	cp scripts/_agents_md_sections.py "$D/scripts/"
+new-pair	tests/scripts/lint-rule-bodies	scripts/lint-migrated-rule-ids.sh	scripts/lint-rule-bodies.py:127
+  cause: your change touched neither scripts/lint-rule-bodies.py nor scripts/lint-migrated-rule-ids.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/lint-rule-bodies.py:127	d96ff524fb10/1	scripts/lint-migrated-rule-ids.sh `hash_text` must agree with this on every body it accepts
+  ref	scripts/lint-rule-bodies.py:349	8c59fe5445e7/1	f"`bash scripts/lint-migrated-rule-ids.sh --print-hash {rid}`."
+new-pair	tests/scripts/no-tofu-ssh-mutation	.github/workflows/apply-deploy-pipeline-fix.yml	apps/web-platform/infra/infra-config-gate.test.sh:342
+  cause: your change touched neither apps/web-platform/infra/infra-config-gate.test.sh nor .github/workflows/apply-deploy-pipeline-fix.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/infra/infra-config-gate.test.sh:342	f97661be0cd9/1	APPLY_WF="$REPO_ROOT/.github/workflows/apply-deploy-pipeline-fix.yml"
+  ref	apps/web-platform/infra/infra-config-gate.test.sh:738	19d374e7ae04/1	('D', 'f() {\x5cn sed -i "s/old/new/" ../../../.github/workflows/apply-deploy-pipeline-fix.yml\x5cn}\x5cn'),
+new-pair	tests/scripts/no-tofu-ssh-mutation	.github/workflows/infra-validation.yml	apps/web-platform/infra/infra-config-gate.test.sh:27
+  cause: your change touched neither apps/web-platform/infra/infra-config-gate.test.sh nor .github/workflows/infra-validation.yml (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/infra/infra-config-gate.test.sh:27	aa1085f17feb/1	INFRA_VALIDATION="$REPO_ROOT/.github/workflows/infra-validation.yml"
+new-pair	tests/scripts/no-tofu-ssh-mutation	apps/web-platform/infra/infra-config-verify.sh	apps/web-platform/infra/infra-config-gate.test.sh:350
+  cause: your change touched neither apps/web-platform/infra/infra-config-gate.test.sh nor apps/web-platform/infra/infra-config-verify.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/infra/infra-config-gate.test.sh:350	8d77ff839453/1	VERIFY_SH="$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh"
+  ref	apps/web-platform/infra/infra-config-gate.test.sh:1595	8d77ff839453/2	VERIFY_SH="$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh"
+  ref	apps/web-platform/infra/infra-config-gate.test.sh:1861	fe1df93a43f7/1	GUARD1=$(python3 - "$APPLY_WF" "$REPO_ROOT/apps/web-platform/infra/infra-config-verify.sh" <<'PYEOF'
+new-pair	tests/scripts/no-tofu-ssh-mutation	scripts/betterstack-query.sh	apps/web-platform/infra/infra-config-gate.sh:523
+  cause: your change touched neither apps/web-platform/infra/infra-config-gate.sh nor scripts/betterstack-query.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	apps/web-platform/infra/infra-config-gate.sh:523	38d986ae0679/1	echo "::error::next: doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 1h --grep SOLEUR_INFRA_CONFIG_FATAL"
+new-pair	tests/scripts/zot-log-channel-probe	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md	scripts/betterstack-query.sh:104
+  cause: your change touched neither scripts/betterstack-query.sh nor knowledge-base/engineering/operations/runbooks/betterstack-log-query.md (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/betterstack-query.sh:104	a85eed92c105/1	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md)
+new-pair	tests/scripts/zot-log-channel-probe	scripts/ensure-doppler.sh	scripts/betterstack-query.sh:109
+  cause: your change touched neither scripts/betterstack-query.sh nor scripts/ensure-doppler.sh (main is already red for this pair, or a covering edge was removed): rebase, then declare the edge or add an accept row
+  ref	scripts/betterstack-query.sh:109	1027621c5bba/1	scripts/ensure-doppler.sh # installs to ~/.local/bin, prints the path
+  ref	scripts/betterstack-query.sh:110	7c59a1e49464/1	scripts/ensure-doppler.sh --state # missing | unauthenticated | ready | unknown
+remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file (that is what the selector must know); editing that file runs the full battery once
+remedy: or add an anchor-keyed accept row to scripts/ci-pr-affected-audit.accept.tsv only when the suite merely names the file (a message, a fixture it writes into a scratch tree, a negative-test string); the reason names the line kind
+remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)
+remedy: an accept row on a file the suite really reads is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository's ruleset
+remedy: a baseline row cannot be added
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/hook-input-contract.test.sh	scripts/rule-metrics-aggregate.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/rule-incident-marker-capture.test.sh	scripts/rule-metrics-aggregate.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	.claude/hooks/ship-kb-archive-gate.test.sh	.claude/hooks/pre-merge-rebase.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	apps/cla-evidence/test/ccla-add.test.sh	apps/web-platform/scripts/cla-evidence/cla-doc-path.ts
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/scripts/precommit-guard.test.sh	.claude/hooks/guardrails.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/skills/community/test/github-community.test.sh	plugins/soleur/test/test-helpers.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/skills/incident/test/redact-sentinel.test.sh	apps/web-platform/test/plugin-root-anchoring.test.ts
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/skills/skill-security-scan/test/meta-dir-reap.test.sh	.claude/hooks/skill-security-scan-write.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/audit-flag-flip.test.sh	plugins/soleur/skills/flag-create/scripts/create.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/fanout-suite-scope.test.sh	plugins/soleur/scripts/grok-pre-push-gate.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/gdpr-gate-self-test.test.sh	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/hook-input-classification-mutation.test.sh	scripts/rule-metrics-aggregate.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/net-issue-flow.test.sh	.claude/hooks/ship-net-issue-flow-gate.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/net-issue-flow.test.sh	scripts/lint-rule-bodies.py
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/net-issue-flow.test.sh	scripts/rule-metrics-aggregate.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/required-checks-canonical-parity.test.sh	.claude/hooks/git-commit-secret-scan.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/rtk-grammar-parity.test.sh	.claude/hooks/pkill-self-match-guard.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/vendor-bundle-coverage.test.sh	apps/web-platform/server/inngest/functions/cron-content-vendor-drift.ts
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	plugins/soleur/test/zot-http-deadlines-required.test.sh	apps/web-platform/infra/zot-config-deadlines.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/ci-push-dedupe	plugins/soleur/test/ci-e2e-skip-anchors.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/ci-push-dedupe	plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/compound-promote	scripts/learning-retrieval-bench.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/followthrough-varq-ban	scripts/betterstack-query.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/followthrough-varq-ban	scripts/sweep-followthroughs.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/followthroughs/ccla-representative-icla-7922	apps/web-platform/scripts/cla-evidence/roster-entry-gate.ts
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/git-data-reboot-evidence-landed-8210	tests/scripts/lib/git-data-birth-readiness-gate.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/rules-loader-stamp-probe	.claude/hooks/session-rules-loader.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	scripts/tmpfs-guard	plugins/soleur/scripts/lib/tmp-classify.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/betterstack-roundtrip-latency	scripts/followthroughs/betterstack-roundtrip-latency-7855.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/betterstack-roundtrip-latency	scripts/lint-followthrough-varq-ban.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/git-data-rung2-evidence-capture	scripts/betterstack-query.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/git-data-rung2-evidence-capture	scripts/followthroughs/git-data-rung2-evidence-capture.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/inngest-host-dark-gate	scripts/cutover-inngest.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/lint-rule-bodies	scripts/lint-rule-bodies.py
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/no-tofu-ssh-mutation	apps/web-platform/infra/infra-config-gate.test.sh
+stale-line	scripts/ci-pr-affected-audit.baseline.tsv	tests/scripts/zot-log-channel-probe	scripts/betterstack-query.sh
+remedy: confirm the pair is really gone on a clean checkout; if the selector output was partial or this run exited 2, do not prune: rerun
+remedy: delete the offending line(s) above from scripts/ci-pr-affected-audit.baseline.tsv; if the file is in conflict, restore main's copy with git checkout origin/main -- scripts/ci-pr-affected-audit.baseline.tsv, then run: python3 -I scripts/ci-pr-affected-replay.py ratchet --print-baseline > scripts/ci-pr-affected-audit.baseline.tsv.new && mv scripts/ci-pr-affected-audit.baseline.tsv.new scripts/ci-pr-affected-audit.baseline.tsv
+SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=1734 baseline=1640

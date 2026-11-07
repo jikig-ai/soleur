@@ -7,6 +7,7 @@ import {
   readContent,
   searchKb,
   statKnownPaths,
+  parseFrontmatter,
   KbNotFoundError,
   KbAccessDeniedError,
   KbValidationError,
@@ -509,5 +510,31 @@ describe("statKnownPaths", () => {
     fs.mkdirSync(path.join(kbRoot, "overview"), { recursive: true });
     const stats = await statKnownPaths(kbRoot, ["overview"]);
     expect(stats["overview"]).toEqual({ exists: false, size: 0 });
+  });
+});
+
+describe("parseFrontmatter never evaluates front matter as code", () => {
+  // gray-matter MERGES `engines` over its defaults, so `engines: {}` did not remove the js engine.
+  const g = globalThis as Record<string, unknown>;
+  beforeEach(() => {
+    delete g.KB_FM_PWNED;
+  });
+
+  test("positive control: a plain YAML block parses", () => {
+    expect(parseFrontmatter("---\ntitle: ok\n---\nbody")).toEqual({ frontmatter: { title: "ok" }, content: "body" });
+    expect(parseFrontmatter("\uFEFF---\r\ntitle: ok\r\n---\r\nbody").frontmatter).toEqual({ title: "ok" });
+  });
+
+  test.each(["js", "javascript", "JS", "Javascript"])("a ---%s block whose body is a valid JS object literal never runs", (lang) => {
+    const raw = `---${lang}\n(globalThis.KB_FM_PWNED = 1, { title: 'x' })\n---\nbody`;
+    const out = parseFrontmatter(raw);
+    expect(g.KB_FM_PWNED).toBeUndefined();
+    expect(out.frontmatter).toEqual({});
+    expect(out.content).toBe(raw.trim());
+  });
+
+  test("a language tag after a BOM is also refused", () => {
+    parseFrontmatter("\uFEFF---js\n(globalThis.KB_FM_PWNED = 1, { title: 'x' })\n---\nbody");
+    expect(g.KB_FM_PWNED).toBeUndefined();
   });
 });

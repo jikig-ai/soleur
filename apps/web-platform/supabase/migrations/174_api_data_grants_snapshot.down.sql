@@ -1,0 +1,14 @@
+-- 174_api_data_grants_snapshot.down.sql — DOCUMENTED NO-OP.
+--
+-- The up-migration re-declares privileges that are already effective on prd
+-- (they arrived via Supabase's pre-2026-10-30 default auto-grants). REVOKE
+-- cannot distinguish "privilege granted by 174" from "privilege granted by the
+-- platform defaults" — a revoke-down would strip the underlying effective
+-- access on prd, leaving it strictly LESS privileged than before 174 ran.
+-- Precedent: 079_workspace_repo_ownership_schema.down.sql documents "restore
+-- the Supabase default table-level SELECT grant" — a correct down restores the
+-- PRIOR grant posture, and for 174 prior == post.
+--
+-- A real rollback of this snapshot is a forward migration per
+-- docs/migration-rollback.md; do not attempt it via this file.
+SELECT 'no-op: see file header';

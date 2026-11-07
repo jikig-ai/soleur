@@ -75,9 +75,11 @@ for feat in $FEATURES; do
 done
 
 # --- Arms 3+4 need DNS. Degrade explicitly rather than silently skipping.
+# #8773: the static arms ran but the sender-domain arms cannot — that is
+# UNRESOLVED (exit 3), never a green SKIP that reads as a pass.
 if ! command -v dig >/dev/null 2>&1; then
-  echo "RESEND_ALERT_PATH_SKIP_NO_DIG static arms passed; dig absent so the sender-domain arms did not run"
-  exit 0
+  echo "UNRESOLVED: dig missing — the sender-domain arms did not run (static arms passed)"
+  exit 3
 fi
 
 # --- Arm 4 FIRST: falsify the instrument BOTH WAYS before trusting arm 3.
