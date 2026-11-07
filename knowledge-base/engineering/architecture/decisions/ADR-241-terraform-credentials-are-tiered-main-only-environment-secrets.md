@@ -1232,6 +1232,7 @@ Appended; no status or earlier entry is edited. D2 stays `proposed`: residual R1
   loudly), ADR-065 (Terraform variables exist before an IaC merge), ADR-231 (workflow byte budget),
   ADR-228 (generated operator scripts), ADR-237 (host keys are pinned; its #8209 residual is in
   scope here)
+
 ### 2026-10-23 (#9294 PR-2): `git-data-cutover.yml::cutover` joins the Tier-B loader, and the deploy token leaves state
 
 No status change (D1 `adopting`, D2 `proposed`). Ruled by CTO agent, 2026-10-23.
