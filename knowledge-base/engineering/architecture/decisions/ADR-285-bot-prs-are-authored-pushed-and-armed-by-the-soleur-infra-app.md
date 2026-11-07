@@ -110,6 +110,12 @@ it expires in an hour, like the pin-bump caller's. The three-job split exists to
 - `scripts/audit-bot-codeql-coverage.sh` filtered `--author app/github-actions` and would have stopped sampling new digest
   PRs; it now samples both `app/github-actions` and the `ci/` branches of `app/soleur-infra`, with a test row.
 - Revisit trigger: if a lower-grant App for digest-class PRs is created, this caller moves to it.
+- 2026-11-07 — first `WM_COMPOSITE_PIN` re-pin (#12276): the run body gained a `waiver-discipline`
+  earned-green block (added `gitleaks:allow` lines must carry `issue:#NNN <reason>`), replacing an
+  unreachability argument that leaned on the generator-emitted digest's output format. Pin moved
+  `6162bd69…f25e` → `5f736544…40fe`; the change itself was deliberate and is logged in the composite
+  CHANGELOG. The pin mechanism worked as designed — CI refused the drifted composite until the
+  re-pin landed in the same PR.
 
 ## Verification
 
