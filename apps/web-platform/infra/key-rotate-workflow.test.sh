@@ -1520,7 +1520,7 @@ eq "C9.3d the vector leg refuses a non-egress key" "$RC|$(verdict_of)" '1|intern
 fresh; set_state vbusy_10.0.1.11 3; run_script "redeploy vector" "${VEC_ENV[@]}"
 eq "C9.7 a peer mid-deploy makes the settle gate wait (per-poll slot rows logged); the restart is dispatched only after every slot is terminal - no lock race" \
   "$RC|$(nlog "$D/webhook.log" 'lost the lock race')|$(nlog "$D/webhook.log" 'restart-vector')|$(grep -c '10.0.1.11 web-platform/running' <<<"$OUT")" '0|0|1|2'
-fresh; set_state vbusy_10.0.1.11 2; printf '%s\n' '{"component":"vector","reason":"lock_contention","start_ts":1,"exit_code":1}' > "$D/state/vbusyframe_10.0.1.11"; run_script "redeploy vector" "${VEC_ENV[@]}"
+fresh; set_state vbusy_10.0.1.11 2; set_state vbusyframe_10.0.1.11 '{"component":"vector","reason":"lock_contention","start_ts":1,"exit_code":1}'; run_script "redeploy vector" "${VEC_ENV[@]}"
 eq "C9.7b a transient vector/lock_contention slot is NON-terminal for the gate (exit_code 1 but the reason proves the lock is still held): the gate waits it out" \
   "$RC|$(grep -c '10.0.1.11 vector/lock_contention' <<<"$OUT")|$(nlog "$D/webhook.log" 'restart-vector')" '0|1|1'
 fresh; set_state vbusy_10.0.1.11 60; run_script "redeploy vector" "${VEC_ENV[@]}"
