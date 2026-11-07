@@ -1016,7 +1016,7 @@ Finished workers are reaped only when the pool saturates or at drain (evidence b
 
 ## Amendment — 2026-11-06 (#12231)
 
-Measurements, method and the mutant outcomes live in `knowledge-base/project/specs/feat-one-shot-12231-star-suites-last/measurements/summary.txt`; this amendment records only the decision. Rulings by the CTO agent on 2026-11-06 are in that spec's `decision-challenges.md`.
+Measurements, method and the mutant outcomes live in `knowledge-base/project/specs/archive/20261107-113626-feat-one-shot-12231-star-suites-last/measurements/summary.txt`; this amendment records only the decision. Rulings by the CTO agent on 2026-11-06 are in that spec's `decision-challenges.md`.
 
 ### Decision 30: park the `*` (drain-barrier) suites until the drain
 
@@ -1039,7 +1039,7 @@ Consequences, recorded:
 - The runtime ceiling is checked at registration only, so a star registered before it lapses still starts at the end of the run.
 - A reap fill that runs after the interrupt flag is set can release a parked star; `_pj_drain`'s signal branch then TERMs it, as for any suite. No
   `_pj_sig` conjunct was added (CTO ruling); a signal that lands before the drain releases no parked star.
-- Evidence and open residuals: `knowledge-base/project/specs/feat-one-shot-12231-star-suites-last/measurements/summary.txt`. On the pinned diff (one selected `*`
+- Evidence and open residuals: `knowledge-base/project/specs/archive/20261107-113626-feat-one-shot-12231-star-suites-last/measurements/summary.txt`. On the pinned diff (one selected `*`
   suite) the park moved the pool phase by 40 s against the clean control, inside the run-to-run spread, where the #12013 amendment modelled about 300 s; the
   gain is not resolved on that diff, and the property is carried by the scheduler fixtures and the mutant table. The sixth declared `*` suite,
   `apps/web-platform/infra/run-registered-suites.sh`, was never run on the parked order (declined in the full-battery run, and CI forces serial mode).
