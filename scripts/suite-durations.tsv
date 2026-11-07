@@ -662,6 +662,7 @@ tests/scripts/betterstack-read-classify	210	measured
 tests/scripts/betterstack-roundtrip-latency	165085	measured
 tests/scripts/cf-lb-overlay-gate	1222	floor
 tests/scripts/cleanup-merged-space	9398	measured
+tests/scripts/deploy-access-token-forget	2001	measured
 tests/scripts/destroy-guard-counter-github	70	measured
 tests/scripts/destroy-guard-counter-sentry	267	measured
 tests/scripts/destroy-guard-counter-web-platform	8291	measured

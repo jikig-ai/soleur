@@ -46,9 +46,12 @@ fi
 ALLOW_MISSING_STATUS="${ALLOW_MISSING_STATUS:-false}"
 
 APP_DOMAIN_BASE=$(doppler secrets get APP_DOMAIN_BASE --plain 2>/dev/null || echo "soleur.ai")
-WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain)
-CF_ACCESS_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain)
-CF_ACCESS_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain)
+# The webhook trio comes from the caller's env (the Tier-B loader step exports and masks it, #9294); there is
+# no prd_terraform read and no CI_SSH_ACCESS_TOKEN_* fallback, so a job without the Tier-B seam fails here (UNSET aborts;
+# an empty or hostile value flows to the header-value guard below, which refuses it with its own named message).
+WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?Tier-B loader exported no WEBHOOK_DEPLOY_SECRET - see the Load infra credentials step source= line}"
+CF_ACCESS_ID="${CF_ACCESS_CLIENT_ID?Tier-B loader exported no CF_ACCESS_CLIENT_ID - see the Load infra credentials step source= line}"
+CF_ACCESS_SECRET="${CF_ACCESS_CLIENT_SECRET?Tier-B loader exported no CF_ACCESS_CLIENT_SECRET - see the Load infra credentials step source= line}"
 
 # Initial delay: the async script + state write + sync + restart
 # scheduling takes ~5-8s; polling immediately wastes attempt 1.
@@ -472,7 +475,7 @@ elif [[ "$HTTP_CODE" == "200" ]]; then
         unreachable) PRE_DETAIL="the reading taken BEFORE the apply got no response (3 attempts over ~15s). Two readings are consistent with that and this run cannot distinguish them: a transient network blip, OR something restarted or reconfigured the listener outside this workflow — note the apply changed nothing on the host, so a listener that was down before and up after is not explained by this run" ;;
         http404)     PRE_DETAIL="the pre-apply reading returned HTTP 404 (no status endpoint) while the post-apply reading returned 200. On a run that pushed nothing the endpoint should not have appeared — treat this as a host changed outside this workflow, or a transient edge 404" ;;
         malformed)   PRE_DETAIL="the pre-apply reading returned HTTP 200 but carried no numeric start_ts" ;;
-        secret_unavailable) PRE_DETAIL="the pre-apply reading never fired because a credential the probe needs could not be read from Doppler or was unusable; see the pre_frame step's warning — the step DID run and DID record that. A prd credential read failing on the workflow that delivers /etc/default/soleur-doppler-token is its own incident, separate from a missing reading" ;;
+        secret_unavailable) PRE_DETAIL="the pre-apply reading never fired because a credential the probe needs was absent from the job env or unusable (the Tier-B loader step exports the webhook trio: its source= line says whether the job lacked the Tier-B token or soleur-infra-privileged/prd lacks the name); see the pre_frame step's warning — the step DID run and DID record that" ;;
         *)           PRE_DETAIL="the pre-apply reading step did not record a result at all (the step did not run, or its result did not reach this step)" ;;
       esac
       echo "::warning::Freshness evidence is DEGRADED on this run. No config push was expected (deploy_pipeline_fix was not replaced) and the status endpoint answered 200 after the apply — but ${PRE_DETAIL}, so this run cannot show the frame was unchanged. VERIFIED: the endpoint answered, the frame parses, its start_ts is not in the future, and no frame postdating this apply was published. NOT VERIFIED: that the frame is byte-identical to the one that preceded this apply. (The per-file digest match is omitted from the VERIFIED list deliberately — on a no-push arm it is guaranteed by construction and is not independent evidence.) The delivery channel is reachable now; this run is recorded in Sentry as op=infra-config-preframe-degraded."

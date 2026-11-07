@@ -6936,6 +6936,8 @@ if want_scripts; then
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
   # auto-discovers tests/scripts/.
   run_suite "tests/scripts/hcloud-token-readonly-no-fallback-scan" bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh
+  # G1 PR-2 (#9294): the deploy Access token is forgotten from state (removed block), never destroyed.
+  run_suite "tests/scripts/deploy-access-token-forget" bash tests/scripts/test-deploy-access-token-forget.sh
   # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
   # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
   # auto-discovered, so this line IS the registration.
