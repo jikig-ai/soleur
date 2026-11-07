@@ -44,7 +44,7 @@ not close it.
 ## Decision
 
 1. **Affected and Reachable are three-valued: yes, no, unknown.** An unobservable, stale, silent or unmapped surface is `unknown`,
-   never "not affected". `Affected=no` on a mutable host needs fresh observation; a declared-only source supports `no` only for an
+   never "not affected". `Affected=no` on a mutable host needs fresh observation of the kernel or package version itself (marker liveness is not that); a declared-only source supports `no` only for an
    immutable, digest-pinned artifact. `Reachable=no` needs positive evidence from both the network layer and the code path. The
    overall verdict is worst-case: unknown reachability counts as reachable. This extends ADR-197 and ADR-192; "tri-state" is
    avoided in the title because ADR-192 already uses "three states" for a different classifier.
@@ -91,6 +91,9 @@ not close it.
   later is a deletion of the script and its call site; no data depends on it.
 - **Not durable.** Re-asking the question re-runs the telemetry read. That is cheap and keeps the answer fresh, which is the point
   for a mutable host.
+- **Fix diffs and search consistency.** A runtime or dependency fix PR shows the new version in its public diff; the skill asks the
+  operator to acknowledge that residual before the PR is opened and cannot prevent it. The duplicate check relies on GitHub search,
+  which is eventually consistent, so two rapid `--create` runs can still file twice.
 - **Telemetry rows are trusted as written.** Anyone holding the Better Stack ingest token can forge a marker row, and a forged row
   can fabricate `fresh`. The skill never lets a single marker ground `Affected=no`, and the reader is verified; forged telemetry from
   a legitimate ingest credential is a residual this skill does not defend against.

@@ -29,7 +29,8 @@
 # rows still compare a changed file against the base and stay meaningful. Rows match the violation token as an
 # EXACT line (`V:x` is not satisfied by `V:x-y`).
 #
-# ANCHOR. The block's hash is compared with `git show $(git merge-base origin/main HEAD):<go.md>`, a
+# ANCHOR. A block hash is accepted when it equals the merge base's OR is listed in ACKED_BLOCK_HASHES (each entry is added in the PR
+# that edits the block, and records review, not an eval run). The block's hash is compared with `git show $(git merge-base origin/main HEAD):<go.md>`, a
 # value that lives OUTSIDE the commit under test. An unresolvable base is a FAIL, never a skip (H1):
 # a guard that skips when its anchor is missing reports green exactly where it cannot see.
 #
@@ -98,6 +99,12 @@ GATED_BLOCK_ID="go-routing"
 BLOCK_START="<!-- eval-gate:block:${GATED_BLOCK_ID}:start -->"
 BLOCK_END="<!-- eval-gate:block:${GATED_BLOCK_ID}:end -->"
 HEADING_RE='^#+ .*Hold routing [(]pre-route[)]'
+
+# Reviewed go-routing block hashes (CTO ruling on the review of #12343). The default anchor is merge-base equality; a PR
+# that legitimately edits the table adds ITS block hash here, in the same PR. An entry records that a reviewer saw the edit
+# and that it does not touch the hold-routing paragraph. It is NOT an eval-run attestation (the eval gate is opt-in and manual).
+# #12006 / PR #12343: cve-exposure route row, legal-threshold exploitation trigger.
+ACKED_BLOCK_HASHES=( "a5eb69282c3ef87304e9492b0d4d39ac9cb16d2284657e40b16f77c53d70d4a3" )
 
 # git, read-only, with the git-location variables swept off the invocation (a linked worktree exports
 # GIT_DIR / GIT_INDEX_FILE to hooks; neither is wanted here).
@@ -408,7 +415,8 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
       # The anchor must be the real block (a degenerate base would make the comparison vacuous when base == HEAD).
       [[ "$bst" == ok ]] || emit base-degenerate
       gh="$(block_of "$f" | hash_stdin)"
-      [[ -n "$bh" && "$bh" == "$gh" ]] || emit block-hash-differs
+      _acked=0; for _a in "${ACKED_BLOCK_HASHES[@]}"; do [[ "$gh" == "$_a" ]] && _acked=1; done
+      [[ -n "$bh" && ( "$bh" == "$gh" || "$_acked" -eq 1 ) ]] || emit block-hash-differs
     fi
   fi
   return "$v"

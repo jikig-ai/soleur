@@ -1499,17 +1499,6 @@
 "id": "15chxlqosi117",
 "title": "Hold evaluator (web-acceptance gate) asks the legal-acceptance check endpoint whether the founder decided a given text hash: GET /api/internal/legal-acceptance/[key]?hash= over HTTPS with a bearer token, no redirects. Read-only; the answer is status, text_hash, decided_at and row_ok, never the note. Dark (503) until the token and founder id are configured (#12196)"
 },
-"15dglgevfcwdl": {
-"technology": "HTTPS (ClickHouse SQL)",
-"source": {
-"model": "founder"
-},
-"target": {
-"model": "betterstack"
-},
-"id": "15dglgevfcwdl",
-"title": "cve-exposure host-state read: fixed read-only ClickHouse SQL through scripts/betterstack-query.sh under the Doppler prd_terraform credential; output is session-only"
-},
 "15jcg8gdjqck": {
 "technology": "HTTPS (GitHub REST API via gh)",
 "source": {
@@ -1662,6 +1651,17 @@
 "id": "1csnfkovwrhwe",
 "title": "Ships journald + host_metrics via Vector (arm64, aarch64 build) to Logs source 2457081 (the journald includes, on a host created from an image cut after PR #10975, the TLS terminator unit soleur-inngest-tls.service through the fail-open drop-list filter inngest_terminator_filter, which omits only three healthy-request line shapes). SECOND DELIVERY CHANNEL on this edge (the curl-direct phone-home): while Vector is down, inngest-boot-phone-home.sh POSTs an envelope {message, marker, stage, detail, host, dt (self-attested), shipper=cloud-init-phone-home} to the SAME source 2457081 independent of Vector — e.g. the probe's stage=inngest-server-probe-vector-down row, which carries the identical field row in `detail`; since #11526 the wrong-volume alert's predicate reads BOTH channels (journald leg OR shipper+stage envelope leg) -- SINCE #8054 the inngest-cutover-flip heartbeat on this edge (one JSON STRING per 30 s FSM tick via logger -t, on EVERY flag including terminal ones, carrying the journald _BOOT_ID envelope; Vector ships the message as a STRING and it is Better Stack's ingest-side parse that yields the .message.{flag,reason,guard,exit_code,start_ts} object the consumer selects on) is a SAFETY-CRITICAL INPUT to cutover-inngest.yml op=execute step 2.0 (E13 of inngest_execute_registry_gate: the newest same-boot heartbeat within 15 min is the freshness bridge that lets a <=90-min-old dark probe row authorize the pre-flight). A producer-side change to the FSM's emit shape (the flag key, pinned by inngest-cutover-flip.test.sh), the timer cadence, or the vector.toml allowlist for that tag is a change to the cutover's own gate, and a warehouse-side change to the ingest parse surfaces there as fsm_unreadable — read the github -> betterstack edge for the consumer. Also on this edge once delivered (#9927 item 2, ADR-282 addendum 2026-10-26; merged but inert on the host until the owner delivers the signed bundle that carries it, #11266): the plain-text (never JSON) marker SOLEUR_INNGEST_LUKS_KEY_PROBE verdict=<ok|fail_passphrase|fail_header|fail_key_absent|indeterminate> rc=<n> at=<step>, emitted (daily while healthy, hourly while not ok) by a bounded function inside inngest-cutover-flip.sh under the same tag plus a curl-direct phone-home copy; since #11527 the key-probe paging alert's predicate reads BOTH emitters (journald tag inngest-cutover-flip OR shipper=cloud-init-phone-home + stage=luks-key-probe envelope leg, fail-loud detail='' arm) per the ADR-218 dual-channel convention; verdict=fail_ pages and indeterminate never pages on its own (a dead-man absence alert is a planned follow-up, not shipped with this change). It asserts only that the key the host holds opens a keyslot of the header at probe time. Separately, this edge does NOT carry the user-serving application container's pino stream, which reaches the same source over the `hetzner -> betterstack` Vector edge instead; the two multiplex into one source and are distinguished only by host_name, so do not read this edge as accounting for the source's user-data-bearing content; token in soleur-inngest/prd (ADR-100 Phase-1 caveat resolved, #6197). Source 2457081 is NOT isolated to this node — the web hosts ship to the SAME source (see the hetzner edge), and the two are told apart only by the per-host host_name discriminator, which web-1 currently POISONS: web-1 wears this node's host_name=soleur-inngest-prd until its recreate clears the stale label (#6616). The dedicated node's telemetry host (auto OS hostname) is soleur-inngest, which equals its hcloud_server.inngest name (inngest-host.tf) — NOT soleur-inngest-server-prd, which is a Better Stack heartbeat monitor name (inngest.tf), never a telemetry value. host_metrics rows on this edge are the bare Vector metric and carry the host in tags.host, not host_name (#9372: confirmed 2026-10-06 for the web hosts; this node runs the same vector.toml)"
 },
+"1d3me9ksz1bvh": {
+"technology": "gh CLI (HTTPS)",
+"source": {
+"model": "founder"
+},
+"target": {
+"model": "github"
+},
+"id": "1d3me9ksz1bvh",
+"title": "cve-exposure gap issues in jikig-ai/soleur only, written solely through plugins/soleur/skills/cve-exposure/scripts/file-gap-issue.sh: CVE id + generalized class + the single status exposure-review-needed; never versions, hosts or 'not affected'; visible to publicReader (ADR-322)"
+},
 "1eaio9u8uvb3o": {
 "source": {
 "model": "platform.engine.claude.composition"
@@ -1779,17 +1779,6 @@
 },
 "id": "1iehv9mtlcvv",
 "title": "Generates L1 import-boundary gate (CI)"
-},
-"1j8fhgd2l326b": {
-"technology": "gh CLI (HTTPS)",
-"source": {
-"model": "founder"
-},
-"target": {
-"model": "github"
-},
-"id": "1j8fhgd2l326b",
-"title": "cve-exposure gap issues in jikig-ai/soleur only, written solely through scripts/file-gap-issue.sh: CVE id + generalized class + the single status exposure-review-needed; never versions, hosts or 'not affected'; visible to publicReader (ADR-322)"
 },
 "1jfrvosmjjtgy": {
 "technology": "File I/O",
@@ -2879,6 +2868,17 @@
 "id": "3idpj0g67ih89",
 "title": "Incident mirror (ADR-298, epic #10390): scheduled-betterstack-incident-mirror.yml runs every 15 min (watchdog-dispatch primary — it watches the paging substrate, so it cannot be Inngest-scheduled — plus schedule: fallback), reads GET /api/v2/incidents?resolved=false with BETTERSTACK_API_TOKEN_READONLY (GET-only; bearer on curl stdin config, never argv; projected {id,name,cause,started_at} — ping URLs never echo) and files/dedupes/resolves [ci/betterstack-incident] issues on jikig-ai/soleur keyed on a <!-- betterstack-incident id= --> body marker, never title alone (the #10918 title-confusion class). Read failures are fail-loud: error Sentry check-in on sentry_cron_monitor.scheduled_betterstack_incident_mirror (unrouted at first apply, two-PR rule) + ::error::. The issue WRITE is github-internal (github.token, issues:write) — a github -> github self-relation LikeC4 refuses, recorded here per the #8359/ADR-232 convention"
 },
+"3ijae32ni13da": {
+"technology": "HTTPS (ClickHouse SQL)",
+"source": {
+"model": "founder"
+},
+"target": {
+"model": "betterstack"
+},
+"id": "3ijae32ni13da",
+"title": "cve-exposure host-state read: fixed read-only ClickHouse SQL through scripts/betterstack-query.sh under the Doppler prd_terraform credential via the upstream-verified reader (byte-identical to main); output is session-only"
+},
 "3iwk8dw7n1ck1": {
 "technology": "HTTPS (Flagsmith Admin API)",
 "source": {
@@ -3702,7 +3702,7 @@
 "bounds": {
 "x": 0,
 "y": 0,
-"width": 15374,
+"width": 15372,
 "height": 3348
 },
 "nodes": [
@@ -3769,7 +3769,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 12874,
+"x": 12873,
 "y": 3168,
 "width": 345,
 "height": 180,
@@ -5907,7 +5907,7 @@
 "parent": null,
 "relations": [
 "14e78jcrtpvgn",
-"1j8fhgd2l326b",
+"1d3me9ksz1bvh",
 "1jqvnjh6ie1uo"
 ],
 "color": "gray",
@@ -6128,7 +6128,7 @@
 "id": "1w68dcl",
 "source": "founder",
 "target": "betterstack",
-"label": "cve-exposure host-state read: fixed \nread-only ClickHouse SQL through \nscripts/betterstack-query.sh under the \nDoppler prd_terraform credential; output \nis session-only",
+"label": "cve-exposure host-state read: fixed \nread-only ClickHouse SQL through \nscripts/betterstack-query.sh under the \nDoppler prd_terraform credential via the \nupstream-verified reader (byte-identical ",
 "points": [
 [
 12504,
@@ -6174,12 +6174,12 @@
 "labelBBox": {
 "x": 14318,
 "y": 1627,
-"width": 253,
+"width": 251,
 "height": 106
 },
 "parent": null,
 "relations": [
-"15dglgevfcwdl"
+"3ijae32ni13da"
 ],
 "color": "gray",
 "line": "dashed",
@@ -6371,31 +6371,31 @@
 2914
 ],
 [
-11819,
+11818,
 2914
 ],
 [
-14792,
-2889
+14790,
+2888
 ],
 [
-14792,
+14790,
 2505
 ],
 [
-14792,
+14790,
 859
 ],
 [
-14792,
+14790,
 859
 ],
 [
-14792,
+14790,
 859
 ],
 [
-14792,
+14790,
 629
 ],
 [
@@ -6408,7 +6408,7 @@
 ]
 ],
 "labelBBox": {
-"x": 14793,
+"x": 14791,
 "y": 1627,
 "width": 262,
 "height": 106
@@ -6429,39 +6429,39 @@
 "label": "Mobile push notification",
 "points": [
 [
-13219,
+13218,
 3248
 ],
 [
-13734,
+13732,
 3219
 ],
 [
-15222,
+15220,
 3118
 ],
 [
-15222,
+15220,
 2916
 ],
 [
-15222,
+15220,
 859
 ],
 [
-15222,
+15220,
 859
 ],
 [
-15222,
+15220,
 859
 ],
 [
-15222,
+15220,
 585
 ],
 [
-13161,
+13160,
 483
 ],
 [
@@ -6470,7 +6470,7 @@
 ]
 ],
 "labelBBox": {
-"x": 15223,
+"x": 15221,
 "y": 1866,
 "width": 150,
 "height": 39
@@ -10230,7 +10230,7 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-11023,
+11022,
 2945
 ],
 [
@@ -10242,7 +10242,7 @@
 3165
 ],
 [
-12864,
+12863,
 3229
 ]
 ],
@@ -13385,7 +13385,7 @@
 "parent": null,
 "relations": [
 "14e78jcrtpvgn",
-"1j8fhgd2l326b",
+"1d3me9ksz1bvh",
 "1jqvnjh6ie1uo"
 ],
 "color": "gray",
@@ -15726,7 +15726,7 @@
 "id": "1w68dcl",
 "source": "founder",
 "target": "betterstack",
-"label": "cve-exposure host-state read: fixed \nread-only ClickHouse SQL through \nscripts/betterstack-query.sh under the \nDoppler prd_terraform credential; output \nis session-only",
+"label": "cve-exposure host-state read: fixed \nread-only ClickHouse SQL through \nscripts/betterstack-query.sh under the \nDoppler prd_terraform credential via the \nupstream-verified reader (byte-identical ",
 "points": [
 [
 6260,
@@ -15745,31 +15745,31 @@
 1469
 ],
 [
-6114,
+6115,
 1549
 ],
 [
 6022,
-1581
+1580
 ],
 [
 6185,
 2032
 ],
 [
-6263,
+6262,
 2247
 ],
 [
-6295,
+6293,
 2332
 ],
 [
-6494,
+6492,
 2443
 ],
 [
-6619,
+6618,
 2512
 ],
 [
@@ -15784,12 +15784,12 @@
 "labelBBox": {
 "x": 6186,
 "y": 1923,
-"width": 253,
+"width": 251,
 "height": 106
 },
 "parent": null,
 "relations": [
-"15dglgevfcwdl"
+"3ijae32ni13da"
 ],
 "color": "gray",
 "line": "dashed",
@@ -18321,7 +18321,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 9246,
+"x": 9247,
 "y": 1699,
 "width": 379,
 "height": 180,
@@ -19327,7 +19327,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 9958,
+"x": 9959,
 "y": 1699,
 "width": 345,
 "height": 180,
@@ -19414,7 +19414,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 9905,
+"x": 9907,
 "y": 2150,
 "width": 354,
 "height": 180,
@@ -19646,7 +19646,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 10108,
+"x": 10110,
 "y": 2581,
 "width": 388,
 "height": 180,
@@ -19684,7 +19684,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 10586,
+"x": 10587,
 "y": 2934,
 "width": 345,
 "height": 180,
@@ -20278,7 +20278,7 @@
 1629
 ],
 [
-8394,
+8395,
 1678
 ],
 [
@@ -20286,23 +20286,23 @@
 1659
 ],
 [
-8526,
+8527,
 1689
 ],
 [
-8782,
+8783,
 1769
 ],
 [
-8831,
+8832,
 1841
 ],
 [
-9095,
+9096,
 1889
 ],
 [
-9705,
+9706,
 2000
 ],
 [
@@ -20351,7 +20351,7 @@
 ]
 ],
 "labelBBox": {
-"x": 9096,
+"x": 9097,
 "y": 1769,
 "width": 94,
 "height": 38
@@ -20404,15 +20404,15 @@
 1564
 ],
 [
-8301,
+8302,
 1843
 ],
 [
-8402,
+8403,
 1889
 ],
 [
-8742,
+8743,
 2044
 ],
 [
@@ -20461,7 +20461,7 @@
 ]
 ],
 "labelBBox": {
-"x": 8403,
+"x": 8404,
 "y": 1769,
 "width": 99,
 "height": 38
@@ -20684,27 +20684,27 @@
 1691
 ],
 [
-8681,
+8682,
 1570
 ],
 [
-8961,
+8962,
 1689
 ],
 [
-9086,
+9087,
 1742
 ],
 [
-9065,
+9066,
 1840
 ],
 [
-9191,
+9192,
 1889
 ],
 [
-9343,
+9344,
 1948
 ],
 [
@@ -23011,7 +23011,7 @@
 "parent": null,
 "relations": [
 "14e78jcrtpvgn",
-"1j8fhgd2l326b",
+"1d3me9ksz1bvh",
 "1jqvnjh6ie1uo"
 ],
 "color": "gray",
@@ -24282,14 +24282,14 @@
 ],
 [
 10514,
-1688
+1687
 ],
 [
-10405,
+10406,
 1726
 ],
 [
-10313,
+10315,
 1751
 ]
 ],
@@ -24355,27 +24355,27 @@
 1554
 ],
 [
-9235,
+9236,
 1584
 ],
 [
-9323,
+9324,
 1619
 ],
 [
-9681,
+9682,
 1689
 ],
 [
-9769,
+9770,
 1706
 ],
 [
-9867,
+9868,
 1728
 ],
 [
-9949,
+9950,
 1746
 ]
 ],
@@ -24481,11 +24481,11 @@
 1679
 ],
 [
-10485,
+10486,
 1727
 ],
 [
-10314,
+10315,
 1757
 ]
 ],
@@ -24513,11 +24513,11 @@
 "label": "Injects secrets",
 "points": [
 [
-10303,
-1753
+10304,
+1752
 ],
 [
-10371,
+10372,
 1729
 ],
 [
@@ -24611,27 +24611,27 @@
 "label": "Injects the web-host boot credential. \nThe LUKS-at-rest passphrase \n(WORKSPACES_LUKS_KEY, ADR-119) is \ndeliberately scoped to a DEDICATED \nprd_workspaces_luks config read by a ",
 "points": [
 [
-9958,
+9959,
 1742
 ],
 [
-9875,
+9876,
 1722
 ],
 [
-9774,
+9775,
 1701
 ],
 [
-9681,
+9682,
 1689
 ],
 [
-8941,
+8942,
 1595
 ],
 [
-8749,
+8750,
 1659
 ],
 [
@@ -24697,19 +24697,19 @@
 "label": "Injects secrets — dedicated host's boot \ncredential is scoped to the SEPARATE \nDoppler project `soleur-inngest` (its \nown `prd` root holds only inngest \nsecrets: Postgres URI, freshly-rotated ",
 "points": [
 [
-9958,
+9959,
 1746
 ],
 [
-9875,
+9876,
 1727
 ],
 [
-9773,
+9774,
 1705
 ],
 [
-9681,
+9682,
 1689
 ],
 [
@@ -24717,7 +24717,7 @@
 1604
 ],
 [
-9057,
+9058,
 1584
 ],
 [
@@ -24726,7 +24726,7 @@
 ],
 [
 6585,
-1437
+1438
 ],
 [
 4195,
@@ -25780,11 +25780,11 @@
 2006
 ],
 [
-9038,
+9040,
 2191
 ],
 [
-9895,
+9897,
 2231
 ]
 ],
@@ -25854,11 +25854,11 @@
 2185
 ],
 [
-9018,
+9020,
 2229
 ],
 [
-9894,
+9896,
 2237
 ]
 ],
@@ -25948,16 +25948,16 @@
 2068
 ],
 [
-10795,
+10796,
 2093
 ],
 [
-10469,
-2156
+10471,
+2155
 ],
 [
-10269,
-2198
+10271,
+2197
 ]
 ],
 "labelBBox": {
@@ -25982,36 +25982,36 @@
 "label": "Injects the registry-host boot \ncredential (scoped to the isolated \nsoleur-registry project's prd root — the \n4 admitted secrets ZOT_PULL/PUSH_TOKEN + \nBETTERSTACK_LOGS_TOKEN + ",
 "points": [
 [
-10097,
+10098,
 1879
 ],
 [
-10089,
-1901
+10091,
+1902
 ],
 [
-10083,
+10085,
 1926
 ],
 [
-10079,
+10081,
 1949
 ],
 [
-10069,
+10071,
 2012
 ],
 [
-10070,
+10072,
 2084
 ],
 [
-10073,
+10075,
 2140
 ]
 ],
 "labelBBox": {
-"x": 10080,
+"x": 10082,
 "y": 1950,
 "width": 304,
 "height": 106
@@ -26032,15 +26032,15 @@
 "label": "Fetches its OWN zot image at first boot \nas the pinned release asset \nzot-image-<version>-<D12> (a prerelease \nof this repo) - NEVER from itself \n(bootstrap paradox) and NEVER from ",
 "points": [
 [
-10259,
+10261,
 2200
 ],
 [
-10458,
-2158
+10459,
+2157
 ],
 [
-10790,
+10791,
 2093
 ],
 [
@@ -26163,7 +26163,7 @@
 "id": "1w68dcl",
 "source": "founder",
 "target": "betterstack",
-"label": "cve-exposure host-state read: fixed \nread-only ClickHouse SQL through \nscripts/betterstack-query.sh under the \nDoppler prd_terraform credential; output \nis session-only",
+"label": "cve-exposure host-state read: fixed \nread-only ClickHouse SQL through \nscripts/betterstack-query.sh under the \nDoppler prd_terraform credential via the \nupstream-verified reader (byte-identical ",
 "points": [
 [
 11087,
@@ -26198,47 +26198,47 @@
 1797
 ],
 [
-10971,
+10972,
 1798
 ],
 [
-10879,
+10881,
 1949
 ],
 [
-10735,
+10737,
 2187
 ],
 [
-10798,
+10800,
 2311
 ],
 [
-10605,
+10607,
 2511
 ],
 [
-10576,
+10578,
 2540
 ],
 [
-10541,
+10543,
 2565
 ],
 [
-10505,
+10507,
 2586
 ]
 ],
 "labelBBox": {
-"x": 10880,
+"x": 10882,
 "y": 1950,
-"width": 253,
+"width": 251,
 "height": 106
 },
 "parent": null,
 "relations": [
-"15dglgevfcwdl"
+"3ijae32ni13da"
 ],
 "color": "gray",
 "line": "dashed",
@@ -26292,15 +26292,15 @@
 2060
 ],
 [
-5893,
+5894,
 2570
 ],
 [
-9235,
+9236,
 2654
 ],
 [
-10098,
+10100,
 2667
 ]
 ],
@@ -26378,15 +26378,15 @@
 2511
 ],
 [
-5086,
+5087,
 2650
 ],
 [
-9136,
+9138,
 2667
 ],
 [
-10098,
+10100,
 2669
 ]
 ],
@@ -26468,11 +26468,11 @@
 2661
 ],
 [
-9182,
+9183,
 2670
 ],
 [
-10098,
+10100,
 2670
 ]
 ],
@@ -26598,15 +26598,15 @@
 2380
 ],
 [
-11117,
-2552
+11118,
+2551
 ],
 [
-10737,
-2623
+10739,
+2622
 ],
 [
-10506,
+10508,
 2651
 ]
 ],
@@ -26632,36 +26632,36 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-10103,
+10105,
 2330
 ],
 [
-10119,
+10121,
 2384
 ],
 [
-10142,
+10144,
 2454
 ],
 [
-10173,
+10175,
 2511
 ],
 [
-10185,
+10187,
 2532
 ],
 [
-10199,
+10201,
 2553
 ],
 [
-10215,
+10217,
 2573
 ]
 ],
 "labelBBox": {
-"x": 10174,
+"x": 10176,
 "y": 2401,
 "width": 264,
 "height": 106
@@ -26682,35 +26682,35 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-10411,
+10413,
 2581
 ],
 [
-10431,
+10433,
 2560
 ],
 [
-10449,
+10452,
 2536
 ],
 [
-10462,
+10464,
 2511
 ],
 [
-10573,
+10575,
 2285
 ],
 [
-10406,
+10407,
 2166
 ],
 [
-10533,
+10534,
 1949
 ],
 [
-10541,
+10542,
 1936
 ],
 [
@@ -26726,7 +26726,7 @@
 1581
 ],
 [
-11014,
+11013,
 1520
 ],
 [
@@ -26735,7 +26735,7 @@
 ]
 ],
 "labelBBox": {
-"x": 10534,
+"x": 10535,
 "y": 1950,
 "width": 262,
 "height": 106
@@ -26756,12 +26756,12 @@
 "label": "Origin uptime probe at the LB-fronted \napp.soleur.ai surface \n(betteruptime_monitor.app/soleur_apex) — \ncovers web-1 (the app A-record → web-1, \ndns.tf); the #5933 per-host web-<n> ",
 "points": [
 [
-10108,
+10110,
 2666
 ],
 [
-9210,
-2648
+9212,
+2649
 ],
 [
 5480,
@@ -26818,15 +26818,15 @@
 "label": "Incident mirror (ADR-298, epic #10390): \nscheduled-betterstack-incident-mirror.yml \nruns every 15 min (watchdog-dispatch \nprimary — it watches the paging \nsubstrate, so it cannot be ",
 "points": [
 [
-10496,
+10498,
 2655
 ],
 [
-10705,
+10706,
 2635
 ],
 [
-11043,
+11044,
 2593
 ],
 [
@@ -27454,7 +27454,7 @@
 1711
 ],
 [
-9636,
+9637,
 1746
 ]
 ],
@@ -27524,12 +27524,12 @@
 1646
 ],
 [
-9119,
+9120,
 1689
 ],
 [
 9237,
-1726
+1727
 ]
 ],
 "labelBBox": {
@@ -27554,7 +27554,7 @@
 "label": "Reaps the agent session by stopping its \nscope, via BindsTo= on the terminal's \nown scope — a UNIT dependency, because \nadoption moves the process out of the \nterminal's cgroup so co-membership can ",
 "points": [
 [
-9400,
+9401,
 1699
 ],
 [
@@ -27640,24 +27640,24 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-10418,
+10419,
 2760
 ],
 [
-10484,
+10486,
 2812
 ],
 [
-10568,
+10569,
 2876
 ],
 [
-10635,
+10637,
 2928
 ]
 ],
 "labelBBox": {
-"x": 10559,
+"x": 10560,
 "y": 2832,
 "width": 214,
 "height": 39
@@ -27679,11 +27679,11 @@
 "points": [
 [
 10932,
-2969
+2968
 ],
 [
-11061,
-2916
+11062,
+2915
 ],
 [
 11217,
@@ -28038,7 +28038,7 @@
 1629
 ],
 [
-9539,
+9540,
 1687
 ],
 [
@@ -28046,23 +28046,23 @@
 1639
 ],
 [
-9681,
+9682,
 1689
 ],
 [
-9798,
+9799,
 1752
 ],
 [
-9780,
+9781,
 1840
 ],
 [
-9903,
+9904,
 1889
 ],
 [
-10145,
+10146,
 1986
 ],
 [
@@ -28184,20 +28184,20 @@
 1689
 ],
 [
-7637,
+7638,
 1744
 ],
 [
-7684,
+7685,
 1842
 ],
 [
-7960,
+7961,
 1889
 ],
 [
-8364,
-1959
+8365,
+1958
 ],
 [
 11241,
@@ -28245,7 +28245,7 @@
 ]
 ],
 "labelBBox": {
-"x": 7961,
+"x": 7962,
 "y": 1760,
 "width": 238,
 "height": 56
@@ -28482,27 +28482,27 @@
 1911
 ],
 [
-10127,
+10129,
 1883
 ],
 [
-10291,
+10293,
 1949
 ],
 [
-10358,
+10360,
 1976
 ],
 [
-10344,
+10346,
 2033
 ],
 [
-10411,
+10413,
 2060
 ],
 [
-10436,
+10438,
 2070
 ],
 [
