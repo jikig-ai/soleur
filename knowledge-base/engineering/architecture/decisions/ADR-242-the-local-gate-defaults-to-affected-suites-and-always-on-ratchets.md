@@ -1048,3 +1048,9 @@ This supersedes, by name, sentences of earlier amendments, which stay as written
 its rejection of skip-ahead as one that "breaks the `*` barrier" (the park removes the conflict by keeping the `*` invisible to backfill); and, in the
 2026-11-06 amendment (Decision 29), "a queued `*` (drain barrier) suite blocks every later launch" (Decision 29 text), "The kill now lands on suites queued
 behind the `*` barrier" and "Every `*` suite now waits for the arms to drain" (its "What this does not claim" bullets).
+
+## Amendment — 2026-11-07 (#12013, #12231)
+
+Decision 30 left one residual open: the pool-phase gain of parking the `*` suites was not resolved on the pinned diff (inside the run-to-run spread, as Decision 30 records), and the issue that carried it stayed open for a cold reading. This amendment closes that residual by decision, not by a new reading. The structural change is the deliverable: after Decision 30 the `*` suites run alone, last, and are invisible to backfill, and the scheduler fixtures and the mutant table carry that property. No pool-phase figure is claimed for it, and none is owed: a cold pair occupies the host for the better part of an hour and cannot resolve a gain smaller than its own spread, so the rule is that a later claim of a gain from the park needs its own reading, not that Decision 30 is incomplete.
+
+What this does not close: the cold local gate is still far above the 600 s bar of #12013, and ordering or re-splitting the replay arms cannot reach it. The per-site measurement, the paper checks on it and the verdict are in the `measurements/summary.txt` of the spec directory `feat-one-shot-12013-site-cost-measurement` (archived at ship). The work-reduction levers named in #12013 are the open path.

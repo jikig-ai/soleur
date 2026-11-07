@@ -46,6 +46,15 @@ assert_fixture_dir "$O"
 [[ ! -e "$O" ]] || { echo "ABORT: $O exists (an output dir is never reused)"; exit 2; }
 mkdir -p "$SC_OUT_ROOT" && mkdir -m 700 "$O" || exit 2
 
+# One reading at a time on the host: two readings that pass the start guard within seconds of each other disturb each other
+# (r2 and r3 of the first attempt did exactly that, and the later one finished before the earlier one looked). The lock is
+# held for the life of this script, and a second instance aborts with rc 3 like any other disturbance.
+assert_fixture_dir "$SC_OUT_ROOT"
+exec 9>"$SC_OUT_ROOT/.reading.lock"
+if ! flock -n 9; then
+  echo "ABORT $REP: another site-cost reading holds $SC_OUT_ROOT/.reading.lock"; echo "DISTURBED (concurrent reading)" >"$O/guard.txt"; exit 3
+fi
+
 live_runs() {  # one line per live test-all.sh or replay-arm run whose cwd is not this reading's clone
   local p cwd args
   for p in /proc/[0-9]*; do
