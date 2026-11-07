@@ -214,8 +214,10 @@ The same list is copied verbatim into `knowledge-base/project/specs/archive/2026
    every member invite**: inviting a second member to an enabled workspace takes it out of the cohort, so its override is removed first or in the same change.
 2. **`SENTRY_USERID_PEPPER` is non-empty in the running container** (not only set in Doppler `prd`; invariant 1 fails closed without it, and `approval-key-unavailable` pages). Verify read-only after the deploy that
    the container has it and that the `approval-key-unavailable` alert has no events. **Never rotate the pepper while any approval is live**: a rotation invalidates every pending and approved row (and changes ADR-029 pseudonyms).
-3. **Route the cron monitor** (accepted deviation, below): `scheduled_approval_expiry` is declared-unrouted under the two-PR rule and has no independent cover (the unanswered alert is emitted by the sweep itself, and no Better Stack
-   missing-`SOLEUR_APPROVAL_SWEEP` monitor exists). After its first measured check-in, route it into `cron_monitor_failure` (add its id to the sorted `monitor_ids`, delete the unrouted entry) in a follow-up PR before the flip.
+3. **Route the cron monitor** (accepted deviation, below): the `scheduled_approval_expiry` sweep monitor had no independent cover for a dead sweep (the unanswered alert is emitted by the sweep itself, and no Better Stack
+   missing-`SOLEUR_APPROVAL_SWEEP` monitor exists). Routing is now **declared, not yet confirmed**: Ref #9601 (PR #12293) adds the monitor's id to the sorted `monitor_ids` of `cron_monitor_failure` and deletes its
+   unrouted entry in `cron-monitor-alerts.tf`, so a missed or failed check-in emails the org once the change is applied. Keep this item open until both hold, read-only: `apply-sentry-infra` is green for that change, and the
+   live `cron-monitor-failure` workflow's `detectorIds` contains the monitor's detector id (detectors endpoint, query `scheduled-approval-expiry`). Re-read both at flip time.
 4. **Real-SDK probe and post-deploy verification**: re-run the probe (`dev-probe-approval-gate.ts`, ADR-305 checklist) and confirm the post-deploy verification below is green.
 5. **Erasure and fingerprint conformance** (compliance-posture row, item (i)): after a real-database erasure of a personal workspace, `select count(*) from approval_request where workspace_id = :erased_user_id` is 0 and the
    fingerprint is keyed (pepper set, known-answer vector green); both recorded in `knowledge-base/legal/audits/`. The integration test `approval-request.tenant-isolation.test.ts` is the falsifier; `verify/180` deliberately has no row-level check (invariant 3).
@@ -237,6 +239,8 @@ The CTO review asked that the cron monitor's cover be real: name an independent 
 exists to cite, and a `sentry_cron_monitor` cannot be routed in the PR that creates it (the two-PR rule: the monitor must exist and report a measured check-in before it joins `cron_monitor_failure`'s `monitor_ids`). The monitor is therefore declared
 unrouted with its cover sentence corrected to say that no independent cover exists, and routing it is item 3 of the checklist above. Until then a dead sweep is not paged; the flag is off, so nothing depends on the sweep
 yet. The approval alerts that DO exist and are routed in this PR: `approval-gate-unanswered`, `approval-key-unavailable` and `art17-approval-anonymise-failed`.
+
+Routed 2026-11-07 by PR #12293 (declared, applied on merge; checklist item 3 states the confirmation it still owes).
 
 ## Rollback and post-deploy verification
 
