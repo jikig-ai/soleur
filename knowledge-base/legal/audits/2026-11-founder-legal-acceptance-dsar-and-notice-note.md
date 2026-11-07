@@ -37,6 +37,8 @@ Scope: tables `legal_acceptance` and `legal_reauth_event` (migration 184). Data 
 
 To be used in the reply to an account-deletion or Art. 17 request from a founder who has a row. Square brackets are filled in by the person answering; the period is a placeholder until counsel confirms it.
 
+> **Superseded 2026-11-07 (#12197; fires on the merge of the pull request that carries it), as to "For how long" and the bracketed sign-in code table sentence below:** the CLO agent ruled on 2026-11-07, as a v1 internal position standing in for counsel on the operator's instruction (a human lawyer's review is still owed), that the period for the decision record and for the Request changes note is 5 years from the date of the decision, extended only while a legal claim, a complaint or an official inquiry about the record is open. The proposal below (life of the text plus 5 years, no more than 10) is withdrawn. The code request records are deleted when the next request for a decision is made and they are older than 30 days, so one can last longer than 30 days; they are not deleted on erasure and are not covered by the 5 years. Ruling: `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`.
+
 > **What we keep after you delete your account**
 >
 > We have deleted your account and the data linked to it, with one exception. When you accepted, declined or asked for changes to a legal text, we recorded that decision. That record stays after your account is gone.
@@ -57,7 +59,9 @@ Notes for the person answering: do not describe the identifier as anonymous; do 
 
 Shown directly above or below the text box, before the founder types. Plain words, two sentences:
 
-> **Say only what you want changed in the text. Please do not write names, email addresses or private details about yourself or anyone else here: this note is saved with your decision, up to 1000 characters, and is kept even if you later delete your account.**
+> **Say only what you want changed in the text. Please do not write names, email addresses or private details about yourself or anyone else here: this note is saved with your decision, up to 1000 characters, and is kept for 5 years from the date of the decision, even if you later delete your account.**
+
+> **Superseded 2026-11-07 (#12197; fires on the merge of the pull request that carries it), as to the wording above:** the notice previously ended "...and is kept even if you later delete your account." with no period. It now states the ruled period (CLO agent v1 ruling of 2026-11-07, not counsel). `LEGAL_COPY.requestChangesNotice` is pinned to the line above byte for byte.
 
 Constraints the screen (PR-C) must match: counter or hard stop at 1000 characters; the stored note is trimmed; the field is empty-not-allowed for Request changes and absent for Yes and No (migration checks); the notice is visible without scrolling or clicking.
 
@@ -65,9 +69,11 @@ Constraints the screen (PR-C) must match: counter or hard stop at 1000 character
 
 The Request changes notice in (c) covers one field. Art. 13 information is also owed at the point the decision is made, for every choice, and the LIA (Balancing iii) relies on the founder being told what is kept before deciding. Proposed wording, shown on the card above the choices:
 
-> **Your decision is saved with your account identifier, the text's version and fingerprint, the time, and (for Yes) the time you confirmed the emailed code. Jikigai keeps this record to be able to show later what was decided, even if you delete your account, for [period to be confirmed by counsel]. You can ask what we hold or object by writing to <legal@jikigai.com>, and you can complain to the CNIL.**
+> **Your decision is saved with your account identifier, the text's version and fingerprint, the time, and (for Yes) the time you confirmed the emailed code. Jikigai keeps this record to be able to show later what was decided, even if you delete your account, for 5 years from the date of the decision (longer only while a legal claim, a complaint or an official inquiry about it is open). You can ask what we hold, ask for erasure or restriction, or object by writing to <legal@jikigai.com>, and you can complain to the CNIL.**
 
-Not approved for display until counsel has decided the retention period. Operator first: if the operator is the only founder, Art. 13(4) (the data subject already has the information) is the fallback, but it does not carry over to any other founder.
+> **Superseded 2026-11-07 (#12197; fires on the merge of the pull request that carries it), as to "Not approved for display until counsel has decided the retention period" and the wording above:** the placeholder is replaced by the ruled period and the rights sentence now names erasure and restriction (CLO agent v1 ruling of 2026-11-07, standing in for counsel on the operator's instruction; a human lawyer's review is still owed). `LEGAL_COPY.cardNotice` is pinned to the line above byte for byte.
+
+Operator first: if the operator is the only founder, Art. 13(4) (the data subject already has the information) is the fallback, but it does not carry over to any other founder.
 
 ---
 

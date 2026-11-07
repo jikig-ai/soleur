@@ -1,24 +1,20 @@
 /**
  * #12197 / #12011: structural checks on the first committed legal text, `founder-acceptance-record`.
  *
- * DRAFT, HELD for counsel sign-off (PR #12342). These checks assert shape and the numbers the text states, never the
- * wording, and they pin NO sha256 literal: the retention placeholder is replaced at sign-off, which changes the bytes, so a
- * hash pinned now would be rewritten once for nothing (the sign-off PR adds the published `{version: sha256}` pin and bumps
- * `version` if the bytes change after a first merge).
+ * SIGNED OFF as a v1 internal position (CLO agent ruling of 2026-11-07, which stands in for counsel on the operator's
+ * instruction; a human lawyer's review is still owed). The ruling is persisted in
+ * knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md.
  *
- * MERGE GUARD (the last describe): while counsel's sign-off is pending, a CI run is RED. A ready or merge_group run sets
- * `CI`, so an accidental ready or merge of the held draft is blocked. It fails on any placeholder-shaped token in the text
- * body AND in the card notice that shows the same retention period. Under the draft-light CI the webplat shard (and so this
- * guard) is skipped and the `test` aggregator is red by design (ADR-276); a local run is green.
- * Only counsel's sign-off PR may delete or edit the guard: nobody else "fixes" a red run by editing the text, the guard,
- * the placeholder pattern or the skip condition.
+ * These checks assert shape and the numbers the text states. The published `{version: sha256}` pin and the exact key set
+ * live in registry-pins.test.ts. The unfinished-marker check below is permanent and always on: it runs on every run, not
+ * only under CI, and it covers the text body and both notices that state the retention period.
  */
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { KEY_RE, TEXTS_DIR, getLegalText, loadLegalTexts } from "@/server/legal-acceptance/canonical";
-import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
+import { LEGAL_COPY, LEGAL_TEXT_KIND, legalTextKind } from "@/lib/legal-acceptance-copy";
 import { REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
 import { lexSql } from "../helpers/sql-lex";
 import { FORBIDDEN_CLAIMS } from "./forbidden-claims";
@@ -58,27 +54,37 @@ function tableColumns(sql: string, table: string): string[] {
     .sort();
 }
 
-/** Migrations whose ALTER TABLE changes a column of either table (add, drop, rename, alter column): any such change forces a review of the stored-fields list. RLS, trigger and constraint ALTERs are not column changes. */
+/** Migrations whose ALTER TABLE changes a column of any of the three tables (add, drop, rename, alter column): any such change forces a review of the stored-fields list. RLS, trigger and constraint ALTERs are not column changes. */
 function alteringMigrations(files: Record<string, string>): string[] {
   return Object.entries(files)
     .filter(([, sql]) =>
-      /alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:"?public"?\.)?"?legal_acceptance(?:_ack)?"?\s+(?:add|drop|rename|alter)\s+(?!constraint\b)/i.test(sqlCode(sql)),
+      /alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(?:"?public"?\.)?"?legal_(?:acceptance(?:_ack)?|reauth_event)"?\s+(?:add|drop|rename|alter)\s+(?!constraint\b)/i.test(sqlCode(sql)),
     )
     .map(([f]) => f)
     .sort();
 }
 
-/** Anything that reads as an unfinished retention period or other open item. Not a wording check: a draft-state detector. */
-const PLACEHOLDER =
-  /\[[^\]]*\]|\b(?:TBD|TBC|TODO)\b|\bX{2,}\b|_{3,}|to be (?:confirmed|decided|determined)|\bcounsel\b/gi;
-/** Every placeholder-shaped token in a text (empty when finished). */
-const placeholdersIn = (text: string): string[] => [...text.matchAll(PLACEHOLDER)].map((m) => m[0]);
-/** Every open item across the surfaces that state the retention period: the text body, the card notice and the request-changes notice. */
-const heldFindings = (): string[] => [
-  ...placeholdersIn(getLegalText(KEY).body).map((t) => `text body: ${t}`),
-  ...placeholdersIn(LEGAL_COPY.cardNotice).map((t) => `card notice: ${t}`),
-  ...placeholdersIn(LEGAL_COPY.requestChangesNotice).map((t) => `request-changes notice: ${t}`),
-];
+/** Anything that reads as an unfinished retention period or other open item. Not a wording check: an unfinished-marker detector. */
+const UNFINISHED = /\[[^\]]*\]|\b(?:TBD|TBC|TODO)\b|\bX{2,}\b|_{3,}|to be (?:confirmed|decided|determined)/gi;
+/** Every unfinished marker in a text (empty when finished). */
+const unfinishedIn = (text: string): string[] => [...text.matchAll(UNFINISHED)].map((m) => m[0]);
+
+/** Any retention-shaped duration: digits or a number word, then a unit; plus a bare "decade". Generic on purpose (CLO B, CTO 4). */
+const DURATION =
+  /\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty)[\s-]*(?:years?|months?|weeks?|days?|decades?)\b|\bdecades?\b/gi;
+const durationsIn = (text: string): string[] => [...text.matchAll(DURATION)].map((m) => m[0].toLowerCase().replace(/[\s-]+/g, " ")).sort();
+
+/** The one retention phrase the CLO ruled (CLO B). The text, the card notice and the request-changes notice carry it word for word. */
+const RETENTION_PERIOD = "5 years from the date of the decision";
+
+/** The dated safeguard (CLO 4a): once the 5-year end is near, a text that still says the deletion step is not built must not ship. */
+const NOT_BUILT_DEADLINE = "2030-11-07T00:00:00Z";
+function notBuiltOverdue(now: Date, body: string): string | null {
+  if (now.getTime() < Date.parse(NOT_BUILT_DEADLINE)) return null;
+  return body.includes("has not yet built")
+    ? "The text still says Jikigai has not yet built the step that deletes a record. Build it (#12080), then publish a new version without that sentence."
+    : null;
+}
 
 const scratch: string[] = [];
 afterAll(() => {
@@ -184,8 +190,11 @@ describe("founder-acceptance-record: what the text says", () => {
       ].sort(),
     );
     expect(tableColumns(M185, "legal_acceptance_ack"), "the ack table changed: review the text's sentence about the monitoring marker").toEqual(["acceptance_id", "acked_at"]);
+    expect(tableColumns(M184, "legal_reauth_event"), "the request-record table changed: review the text's paragraph about request records (the paragraph that starts Each decision also uses a short-lived request record)").toEqual(
+      ["attempts", "consumed_at", "created_at", "expires_at", "id", "key", "session_id", "superseded_at", "text_hash", "user_id", "verified_at", "version"],
+    );
     const files = Object.fromEntries(migrationFiles().map((f) => [f, readFileSync(path.join(MIGRATIONS, f), "utf8")]));
-    expect(alteringMigrations(files), "a migration alters legal_acceptance or its ack table: review the text's list of what is stored").toEqual([]);
+    expect(alteringMigrations(files), "a migration alters legal_acceptance, its ack table or legal_reauth_event: review the text's list of what is stored").toEqual([]);
   });
 
   it("the column pin bites: a multi-word type, a trailing constraint, a comment decoy, a later ALTER and a missing table", () => {
@@ -193,63 +202,107 @@ describe("founder-acceptance-record: what the text says", () => {
     const sql = "CREATE TABLE IF NOT EXISTS public.t (\n  id uuid PRIMARY KEY,\n  amount numeric(10, 2) NOT NULL, -- other_col text\n  at timestamp with time zone,\n  CONSTRAINT c CHECK (amount > 0),\n  UNIQUE (id, at)\n);";
     expect(tableColumns(sql, "t")).toEqual(["amount", "at", "id"]);
     expect(tableColumns(sql, "missing")).toEqual([]);
-    expect(alteringMigrations({ "190_x.sql": "ALTER TABLE public.legal_acceptance ADD COLUMN extra text;", "191_y.sql": "alter table legal_acceptance_ack drop column acked_at;", "192_z.sql": "ALTER TABLE other ADD COLUMN a int; -- ALTER TABLE legal_acceptance ADD x", "193_w.sql": "ALTER TABLE public.legal_acceptance ENABLE ROW LEVEL SECURITY;", "194_v.sql": "ALTER TABLE public.legal_acceptance ADD CONSTRAINT k CHECK (true);", "195_u.sql": "ALTER TABLE \"public\".legal_acceptance RENAME COLUMN a TO b;", "196_t.sql": "select 'alter table legal_acceptance add x';" })).toEqual(["190_x.sql", "191_y.sql", "195_u.sql"]);
+    expect(alteringMigrations({ "190_x.sql": "ALTER TABLE public.legal_acceptance ADD COLUMN extra text;", "191_y.sql": "alter table legal_acceptance_ack drop column acked_at;", "192_z.sql": "ALTER TABLE other ADD COLUMN a int; -- ALTER TABLE legal_acceptance ADD x", "193_w.sql": "ALTER TABLE public.legal_acceptance ENABLE ROW LEVEL SECURITY;", "194_v.sql": "ALTER TABLE public.legal_acceptance ADD CONSTRAINT k CHECK (true);", "195_u.sql": "ALTER TABLE \"public\".legal_acceptance RENAME COLUMN a TO b;", "196_t.sql": "select 'alter table legal_acceptance add x';", "197_s.sql": "ALTER TABLE public.legal_reauth_event ADD COLUMN extra text;", "198_r.sql": "ALTER TABLE public.legal_reauth_event ENABLE ROW LEVEL SECURITY;" })).toEqual(["190_x.sql", "191_y.sql", "195_u.sql", "197_s.sql"]);
     expect(tableColumns("CREATE TABLE public.t (a text DEFAULT 'x, y', b text DEFAULT ')', c int)", "t")).toEqual(["a", "b", "c"]);
-  });
-
-  it("the committed registry holds only the keys this file guards (a second text must extend the merge guard below first)", () => {
-    expect.hasAssertions();
-    expect([...loadLegalTexts().keys()], "a second text was added: the CI-only placeholder guard below covers only founder-acceptance-record; extend it before adding another").toEqual([KEY]);
   });
 });
 
-describe("founder-acceptance-record: merge guard (counsel sign-off)", () => {
-  it("the placeholder detector bites: each unfinished shape is found, a finished sentence is not", () => {
+describe("founder-acceptance-record: no unfinished marker (always on, every run)", () => {
+  it("the unfinished-marker detector bites: each unfinished shape is found, a finished sentence is not", () => {
     expect.hasAssertions();
     for (const s of [
-      "kept for [period to be confirmed by counsel].",
+      "kept for [the period].",
       "kept for [a\nwrapped bracket].",
       "kept for TBD years",
       "kept for XX days",
       "kept for ___ years",
       "kept for TODO.",
       "the period is to be confirmed.",
-      "ask counsel",
     ]) {
-      expect(placeholdersIn(s).length, s).toBeGreaterThan(0);
+      expect(unfinishedIn(s).length, s).toBeGreaterThan(0);
     }
-    expect(placeholdersIn("kept for as long as the text is in force, and no more than ten years.")).toEqual([]);
-    expect(placeholdersIn("write to <legal@jikigai.com> and you can complain to the CNIL.")).toEqual([]);
+    expect(unfinishedIn("kept for 5 years from the date of the decision.")).toEqual([]);
+    expect(unfinishedIn("write to <legal@jikigai.com> and you can complain to the CNIL.")).toEqual([]);
   });
 
-  it("CI is visible to this run whenever it runs under GitHub Actions (a scrubbed CI variable would silently skip the guard)", () => {
+  it("the text body, the card notice and the request-changes notice carry no unfinished marker", () => {
     expect.hasAssertions();
-    expect(!process.env.GITHUB_ACTIONS || Boolean(process.env.CI), "GITHUB_ACTIONS is set but CI is not: the merge guard below would be skipped").toBe(true);
+    expect(unfinishedIn(getLegalText(KEY).body), "text body").toEqual([]);
+    expect(unfinishedIn(LEGAL_COPY.cardNotice), "card notice").toEqual([]);
+    expect(unfinishedIn(LEGAL_COPY.requestChangesNotice), "request-changes notice").toEqual([]);
   });
+});
 
-  it("while the draft is held the detector sees its open items in the real data (a guard that finds nothing here is not guarding)", () => {
+describe("founder-acceptance-record: the retention period has one source (CLO B)", () => {
+  const body = (): string => getLegalText(KEY).body;
+  const count = (hay: string, needle: string): number => hay.split(needle).length - 1;
+  /** The paragraph that names the request records (CLO A5); the only place a 30-day figure belongs. */
+  const requestRecordParagraph = (): string => {
+    const p = body().split("\n\n").find((x) => x.startsWith("Each decision also uses a short-lived request record"));
+    expect(p, "the request-record paragraph (CLO A5) is missing").toBeDefined();
+    return p as string;
+  };
+
+  it("the duration detector bites: digits, number words, a year, weeks, a decade", () => {
     expect.hasAssertions();
-    // Deleted together with the guard in counsel's sign-off PR: once the retention period is written, nothing is left to find.
-    const found = heldFindings();
-    expect(found.some((f) => f.startsWith("text body: ")), "the retention placeholder is gone from the text body: this draft is no longer held, remove the guard in the sign-off PR").toBe(true);
-    expect(found.some((f) => f.startsWith("card notice: ")), "the card notice no longer carries the retention placeholder: update it in the same PR as the text").toBe(true);
+    expect(durationsIn("7 years, seven years, a year, twenty years, 3 weeks, a decade, ten-year, 30 days")).toEqual(
+      ["30 days", "3 weeks", "7 years", "a decade", "a year", "seven years", "ten year", "twenty years"].sort(),
+    );
+    expect(durationsIn("kept for the decision")).toEqual([]);
   });
 
-  it("the retention clause is the placeholder sentence and nothing else states a period (deleted with the guard in counsel's sign-off PR)", () => {
+  it("the text states the period exactly twice, and every duration in the body is 5 years (x4) or 30 days (x2)", () => {
     expect.hasAssertions();
-    const b = getLegalText(KEY).body;
-    expect(b).toMatch(/How long the record is kept:\s*\[[^\]]+\]\./);
-    expect([...b.matchAll(/\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve)[\s-]*(?:years?|months?|days?)\b/gi)].map((m) => m[0]), "the text states a numeric retention period before counsel confirmed it").toEqual([]);
+    expect(count(body(), RETENTION_PERIOD), "the retention phrase in the text body").toBe(2);
+    expect(durationsIn(body()), "every duration token in the text body").toEqual(["30 days", "30 days", "5 years", "5 years", "5 years", "5 years"]);
   });
 
-  it.skipIf(!process.env.CI)(
-    "CI only, RED BY DESIGN while the draft is held: no open item is left in the text body, the card notice or the request-changes notice",
-    () => {
-      expect.hasAssertions();
-      expect(
-        heldFindings(),
-        "HELD for counsel (PR #12342): the text or the card notice that states the same retention period still has an open item. Both are replaced in counsel's sign-off PR; do not edit the text, the card notice, the pattern or this check to turn CI green: escalate to the operator.",
-      ).toEqual([]);
-    },
-  );
+  it("30 days appears only in the request-record paragraph, and that paragraph is not covered by the 5 years", () => {
+    expect.hasAssertions();
+    const p = requestRecordParagraph();
+    expect(durationsIn(p)).toEqual(["30 days", "30 days", "5 years"]);
+    expect(body().replace(p, ""), "a 30-day figure outside the request-record paragraph").not.toMatch(/30 days/);
+    expect(p).toContain("is not covered by the 5 years above");
+    expect(p, "the text must never promise a hard 30-day bound for request records").toContain("so one can last longer than 30 days");
+  });
+
+  it("the 30 days the text states is the interval the database purge uses", () => {
+    expect.hasAssertions();
+    const purge = /DELETE FROM public\.legal_reauth_event WHERE created_at < now\(\) - interval '(\d+) days'/.exec(M184);
+    expect(purge, "the purge statement in migration 184 changed: review the text's request-record paragraph").not.toBeNull();
+    const stated = /older than (\d+) days/.exec(requestRecordParagraph());
+    expect(stated, "the request-record paragraph must say older than N days").not.toBeNull();
+    expect((stated as RegExpExecArray)[1]).toBe((purge as RegExpExecArray)[1]);
+  });
+
+  it("the card notice and the request-changes notice carry the same phrase once, and no other duration", () => {
+    expect.hasAssertions();
+    expect(count(LEGAL_COPY.cardNotice, RETENTION_PERIOD)).toBe(1);
+    expect(count(LEGAL_COPY.requestChangesNotice, RETENTION_PERIOD)).toBe(1);
+    expect(durationsIn(LEGAL_COPY.cardNotice)).toEqual(["5 years"]);
+    expect(durationsIn(LEGAL_COPY.requestChangesNotice)).toEqual(["5 years"]);
+    expect(body()).toContain(`How long the record is kept: ${RETENTION_PERIOD}, and then Jikigai deletes it.`);
+  });
+
+  it("the dated safeguard: from 2030-11-07 the text must no longer say the deletion step is not built (#12080)", () => {
+    expect.hasAssertions();
+    expect(notBuiltOverdue(new Date(NOT_BUILT_DEADLINE), "x has not yet built y")).toContain("#12080");
+    expect(notBuiltOverdue(new Date("2030-11-06T23:59:59Z"), "x has not yet built y")).toBeNull();
+    expect(notBuiltOverdue(new Date("2031-01-01T00:00:00Z"), "the step is built")).toBeNull();
+    expect(notBuiltOverdue(new Date(), body()), "#12080 must be built, and the text re-published without 'has not yet built'").toBeNull();
+  });
+});
+
+describe("founder-acceptance-record: the declared kind and its title", () => {
+  it("the key has a declared kind, and the first line of every acknowledgement text has no double quote and no newline", () => {
+    expect.hasAssertions();
+    expect(legalTextKind(KEY)).toBe("acknowledgement");
+    const keys = Object.keys(LEGAL_TEXT_KIND).filter((k) => LEGAL_TEXT_KIND[k] === "acknowledgement");
+    expect(keys.length).toBeGreaterThan(0);
+    for (const k of keys) {
+      const first = getLegalText(k).body.split("\n")[0];
+      expect(first, `${k}: the title line is quoted in the card, so it carries no double quote`).not.toContain('"');
+      expect(first.length, `${k}: the title line must fit the label guard`).toBeLessThanOrEqual(120);
+    }
+  });
 });
