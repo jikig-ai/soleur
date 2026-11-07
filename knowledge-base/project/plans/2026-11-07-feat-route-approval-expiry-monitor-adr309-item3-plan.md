@@ -172,6 +172,9 @@ ADR "Accepted deviation: cron monitor routing" section one sentence: "Routed 202
 merge; checklist item 3 states the confirmation it still owes)." Leave the post-deploy verification paragraph and the handover "Other
 preconditions" bullet untouched (they are dated, time-bound statements that item 3 does not contradict).
 
+> Superseded 2026-11-07 (review round 1): the text shipped in ADR-309 item 3 and the handover is the reviewed wording, not the
+> plan-time draft above; the dated ADR sentence is likewise reworded as an inline `*Updated 2026-11-07 ...*` note.
+
 Lockstep proof (content anchors, not line numbers): extract each copy from the line starting `3. **Route the cron
 monitor` up to, not including, the line starting `4. **Real-SDK probe` and `cmp` the two extracts.
 
