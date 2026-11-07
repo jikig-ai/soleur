@@ -281,6 +281,7 @@ configuration values exist and are well formed (see Hard limits).
   one-line scope note pointing here. Comparing the configured uuid with the operator's account by a boolean-only read belongs to #12196.
 - **Terraform is plan-only here.** No `.tf` file ships in this PR: the infra workflow applies on the push that merges one, so the secrets are carried by a separate change after the operator approves the plan (#12196). The secrets reach the container through an
   env file that is frozen when the container is created, so a restart is not enough; a redeploy is needed.
+- **Update 2026-11-07 (#12196): the token is now minted by Terraform.** `apps/web-platform/infra/legal-acceptance-secrets.tf` creates one 48-character alphanumeric token per Doppler config (dev and prd, two independent generators) and the per-merge infra run converges it. The statements above that the token "does not exist yet" and that no Tier-A read path exists are superseded from that merge: a Tier-A reader (a branch workflow) can read the token from Terraform state, and the reach is the same four fields about one founder, never the note, never a write. Nothing is widened. The founder uuid is still entered by the operator per project, and the endpoint still answers 503 until both values exist and the web app is redeployed (a restart is not enough). Rotation has no automated route; it is a local, operator-approved `-replace`. Status stays `adopting`.
 
 ### Added signals
 
