@@ -3696,6 +3696,17 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/lint-umbrella-aggregate — text-parses the three workflow files carrying
+# umbrella jobs (the `- id:` step census, `member(` calls, `if:` lines) plus a
+# `- id: aggregate` discovery scan over .github/workflows/*.yml for the census
+# invariant. Edges cover the glob, not just today's three files: a new umbrella
+# in a fourth file feeds the verdict.
+AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
+  ".github/workflows/"
+  "scripts/lint-umbrella-aggregate.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/check-cloudflare-token-drift — scans .github/ workflows and actions for token drift.
 AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
   ".github/"

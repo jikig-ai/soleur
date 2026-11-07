@@ -182,9 +182,11 @@ runs:
           exit 1
         fi
         # --- #6049 safe-surface allowlist (explicit enumeration) ---
-        # This action fabricates a green `gitleaks scan` AND `lint fixture
-        # content` for bot PRs (both are required 15368 contexts the bot cannot
-        # trigger). It may therefore only add artifacts whose content it can
+        # This action fabricates a green `secret-guards` for bot PRs — the
+        # umbrella required context whose members include the `gitleaks scan`
+        # and `lint fixture content` gates (#12089 folded the five secret-scan
+        # contexts; the member names below are pre-fold context names, kept
+        # because the scans they name are what this preflight reproduces). It may therefore only add artifacts whose content it can
         # ACTUALLY scan with a real gitleaks run below. `.gitleaks.toml`
         # allowlists the knowledge-base/{plans,specs,references}/** and
         # learnings/** subtrees, so a real gitleaks pass over them finds nothing
@@ -194,8 +196,8 @@ runs:
         # the rule-metrics `.json` caller).
         #
         # ⚠ #6103 / ADR-092 PREFLIGHT-TODO (rule-body-lint fabrication ceiling):
-        # `rule-body-lint` is a required 15368 context this action FABRICATES a
-        # green for (it is in required-checks.txt for canonical set-parity). That
+        # `rule-body-lint` is a member of the required `guards-ruleset` context
+        # this action FABRICATES a green for (via required-checks.txt). That
         # is sound ONLY because no AGENTS.rules.md path is in
         # ALLOWED_PATHS below, so no bot PR can weaken a hard-rule body under the
         # fabricated green. BEFORE adding any AGENTS.rules.md path here
@@ -210,7 +212,8 @@ runs:
         # above (and the sentry-destroy-required note in required-checks.txt)
         # rely on the guarded surface being UNREACHABLE from ALLOWED_PATHS. That
         # argument is per-gate and must be RE-DERIVED, never inherited: it does
-        # NOT hold for `credential-path-guard`, whose scanner walks tracked *.md
+        # NOT hold for `credential-path-guard` (a `guards-ruleset` member),
+        # whose scanner walks tracked *.md
         # under plugins/ and knowledge-base/ — which includes weakness-digest.md
         # below. Its green is therefore EARNED by a real scan in the Phase-4
         # ceiling, not argued. Before adding ANY path here, re-derive the
@@ -256,8 +259,9 @@ runs:
           exit 0
         fi
         # --- #6049 content-safety ceiling (Tier 2, MANDATORY) ---
-        # Because the synthetic set now fabricates greens for `gitleaks scan`
-        # AND `lint fixture content`, the action must EARN both over its own
+        # Because the synthetic set now fabricates a green for `secret-guards`
+        # — whose members include `gitleaks scan` AND `lint fixture content` —
+        # the action must EARN both scans over its own
         # staged diff before creating the PR. Any finding => fail loud, no
         # branch pushed, no PR, no synthetics. Tier 1 (push-protection only)
         # was REJECTED: it misses this repo's custom .gitleaks.toml rules +
@@ -292,13 +296,13 @@ runs:
           echo "::error::lint-fixture-content found a PII/prod-ref string in the bot diff — refusing to create the PR or post synthetics (#6049 content-safety ceiling)."
           exit 1
         fi
-        # --- #6882 earned green for `credential-path-guard` (ADR-139) ---
+        # --- #6882 earned green for `credential-path-guard` (a `guards-ruleset` member, ADR-139) ---
         # A resolvable home-relative path to a real credential file makes Claude
         # Code's harness auto-attach that file into model context when the doc
         # loads — the vector that leaked a live Doppler token into transcripts.
         #
-        # `credential-path-guard` is a required 15368 context, so the synthetic
-        # posted below is unconditional. Unlike `rule-body-lint` (#6103) and
+        # `credential-path-guard` is a member of the required `guards-ruleset`
+        # context, so the synthetic posted below is unconditional. Unlike `rule-body-lint` (#6103) and
         # `sentry-destroy-required` (#6589) — whose fabricated greens are sound
         # because their guarded surfaces sit OUTSIDE ALLOWED_PATHS — this gate's
         # SCAN_DIRS (tracked *.md under plugins/ + knowledge-base/) INCLUDES

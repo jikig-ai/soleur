@@ -65,12 +65,19 @@ export const STRUCTURAL_EXCLUSION_PREFIXES: readonly string[] = [
 // would fabricate the #8181 binding result on exactly the re-vendor diffs
 // the gate exists to protect. See the two-arm note in
 // scripts/required-checks.txt.
+//
+// #12089 — `enforce` is gone as a context (folded into the `quality-guards`
+// umbrella member steps). The three umbrella names (`guards-ruleset`,
+// `quality-guards`, `secret-guards`) are DELIBERATELY ABSENT too: each
+// umbrella is earned by real CI under the App-token push (#8166) — posting a
+// fabricated green umbrella would claim member verdicts no member ran.
+// Whether a synthetic MAY stand in for an umbrella needs a per-cron ADR-139
+// reachability re-derivation before any name is added here.
 export const SYNTHETIC_CHECK_NAMES = [
   "test",
   "dependency-review",
   "e2e",
   "skill-security-scan PR gate",
-  "enforce",
   "cla-check",
   "cla-evidence",
 ] as const;

@@ -70,104 +70,104 @@ dependency-review
 e2e
 skill-security-scan PR gate
 
-# Secret-scan + guard-script-fixture jobs (secret-scan.yml + pr-quality-guards.yml).
-# The action reproduces `gitleaks scan` AND `lint fixture content` over the bot
-# diff before posting these (action.yml Phase-4 ceiling) — the greens are earned,
-# not fabricated. (#6049)
-gitleaks scan
-lint fixture content
-allowlist-diff (.gitleaks.toml paths surface)
-rename-guard (allowlist destinations)
-waiver discipline (issue:#NNN trailer)
-Bash fixture tests for guard scripts
+# ─── Umbrella contexts (#12089; ADR-032 amendment 2026-11-06) ────────────────
+# The 16 small-guard contexts were consolidated into THREE umbrella required
+# contexts in the same commit that renamed them — the paired-edit contract of
+# ADR-032 Sharp Edge 1. Each member guard now runs as a `!cancelled()`-gated
+# step inside its umbrella job; the umbrella's aggregate step fails the job iff
+# any member failed. The #6049 compound justification for each umbrella is the
+# UNION of its members' dispositions, re-derived per member (ADR-139's per-gate
+# rule), never inherited:
+#
+#   secret-guards (.github/workflows/secret-scan.yml job `secret-guards`)
+#     members: scan (context was `gitleaks scan`), lint-fixture-content
+#     (`lint fixture content`), waiver-discipline (`waiver discipline
+#     (issue:#NNN trailer)`), rename-guard (`rename-guard (allowlist
+#     destinations)`), allowlist-diff (`allowlist-diff (.gitleaks.toml paths
+#     surface)`).
+#       - scan + lint-fixture-content: EARNED — the composite action reproduces
+#         BOTH over the bot diff in its Phase-4 "Secret-safety ceiling" before
+#         posting any synthetic (action.yml); the greens are earned, not
+#         fabricated. (#6049)
+#       - waiver-discipline: reachable only if a bot diff adds a `gitleaks:allow`
+#         waiver line. The one file a bot PR may write is
+#         knowledge-base/project/weakness-digest.md, emitted verbatim by
+#         weakness-miner.sh — a digest listing that contains no `gitleaks:allow`
+#         token, so the member is vacuously clean over every bot diff
+#         (unreachability-by-construction, re-derived here).
+#       - rename-guard / allowlist-diff: CONTENT-SCOPED, sound by
+#         UNREACHABILITY — their guarded surfaces (renames into allowlist
+#         destinations under apps/web-platform/**, and the .gitleaks.toml paths
+#         surface) are disjoint from ALLOWED_PATHS = {weakness-digest.md} ->
+#         intersection EMPTY.
+#   quality-guards (.github/workflows/pr-quality-guards.yml job
+#     `quality-guards`)
+#     members: enforce, markdown-lint, guard-script-fixture-tests (context was
+#     `Bash fixture tests for guard scripts`).
+#       - enforce: CONTENT-SCOPED, UNREACHABLE — its DSAR surface patterns +
+#         the four required legal docs are all outside ALLOWED_PATHS (∅).
+#       - markdown-lint: CONTENT-SCOPED, UNREACHABLE — the whole-corpus sweep
+#         excludes knowledge-base/project/ via .markdownlintignore, so
+#         weakness-digest.md is never read. THE TRIPWIRE HAS TWO DIRECTIONS
+#         (this was the first unreachability entry whose scan surface is
+#         generator-derived from a mutable repo file):
+#           (A) ALLOWED_PATHS gains ANY file this gate reads — not only the
+#               swept *.md but .markdownlintignore, .markdownlint.json,
+#               package.json, package-lock.json, .nvmrc, scripts/markdown-lint.sh;
+#           (B) the .markdownlintignore exclusion NARROWS (e.g. to
+#               knowledge-base/project/plans/) with ALLOWED_PATHS untouched —
+#               weakness-miner.yml is a live bot-PR producer writing exactly
+#               that file under auto-merge, so the synthetic green becomes a
+#               fabrication over a reachable surface.
+#         Re-derive ALLOWED_PATHS ∩ swept-set on ANY change to
+#         .markdownlintignore; scripts/markdown-lint.test.sh row M12 asserts
+#         the intersection (measured constructible in direction B).
+#       - guard-script-fixture-tests: CONTENT-SCOPED, UNREACHABLE — it executes
+#         the fixture battery under .github/scripts/**; ALLOWED_PATHS ∩ that
+#         tree = ∅.
+#   guards-ruleset (.github/workflows/ci.yml job `guards-ruleset`)
+#     members: adr-ordinals, rule-body-lint, tc-document-sha-guard,
+#     marketplace-manifest-guard, service-role-allowlist-gate,
+#     credential-path-guard, lockfile-sync, grok-fidelity.
+#       - credential-path-guard: REACHABLE — and this is the member that breaks
+#         the unreachability pattern. Its SCAN_DIRS = (plugins, knowledge-base)
+#         over tracked *.md INCLUDES knowledge-base/project/weakness-digest.md,
+#         one of the paths the action may write — ALLOWED_PATHS ∩ SCAN_DIRS is
+#         NON-EMPTY, so a fabricated green would assert something false over a
+#         reachable surface. The action therefore REPRODUCES the scan over its
+#         own staged paths in the Phase-4 ceiling before opening any PR or
+#         posting any synthetic (action.yml); deleting that reproduction is
+#         caught by required-checks-canonical-parity.test.sh Test 8. The
+#         intersection must be re-derived per gate — reachability can widen
+#         WITHOUT touching ALLOWED_PATHS (a generator's output-format change
+#         moves the other input silently). See ADR-139.
+#       - rule-body-lint: CONTENT-SCOPED, UNREACHABLE — its guarded surface is
+#         the hr-*/wg-* rule bodies of AGENTS.rules.md; ALLOWED_PATHS excludes
+#         AGENTS bodies (∅). The residual goes live if #6038's auto-proposer
+#         adds an AGENTS path to ALLOWED_PATHS — the #6049 ceiling forces that
+#         PR to reproduce `lint-rule-bodies.py --check` over the bot diff first.
+#       - adr-ordinals: CONTENT-SCOPED, UNREACHABLE — ADR files under
+#         knowledge-base/engineering/architecture/decisions/ (∅).
+#       - tc-document-sha-guard: CONTENT-SCOPED, UNREACHABLE — docs/legal/*.md,
+#         tc-version.ts, legal-doc-shas.ts (∅).
+#       - marketplace-manifest-guard: CONTENT-SCOPED, UNREACHABLE — the single
+#         file infra/github/soleur-marketplace-manifest.json (∅); unlike
+#         weakness-digest.md its reachability can widen only via ALLOWED_PATHS.
+#       - service-role-allowlist-gate: CONTENT-SCOPED, UNREACHABLE —
+#         apps/web-platform/{server,lib}/** + .service-role-allowlist (∅).
+#       - lockfile-sync: CONTENT-SCOPED, UNREACHABLE — the five committed
+#         package-lock.json files + their package.json inputs (∅).
+#       - grok-fidelity: CONTENT-SCOPED, UNREACHABLE — the gate exercises the
+#         vendored plugin surface (plugins/soleur/**) via the pinned Grok CLI
+#         (∅).
+#
+# Any change to the action's ALLOWED_PATHS, to .markdownlintignore, or to a
+# generator's output format RE-DERIVES every `∅` above — that is the live risk
+# this block exists to name.
+secret-guards
+quality-guards
+guards-ruleset
 
-# markdown-lint — pr-quality-guards.yml (#7927).
-#
-# THIS IS A CONTENT-SCOPED GATE, so the auto-fabrication guard above applies and
-# the exemption is by UNREACHABILITY, derived rather than asserted. The bot-PR
-# action's ALLOWED_PATHS has exactly two members, and neither is in the swept set:
-#
-#   knowledge-base/project/weakness-digest.md  — a .md file, but knowledge-base/project/
-#                                                is excluded in .markdownlintignore, so
-#                                                the sweep never reads it.
-#   (knowledge-base/project/rule-metrics.json was a second member and was "not Markdown at
-#   all"; #8377 untracked it and removed it from the array entirely.)
-#
-# Measured against the live producer: the swept set is 1,345 files and its
-# intersection with ALLOWED_PATHS is 0. A bot PR therefore cannot change a file
-# this gate inspects, so the synthetic green cannot mask a real failure.
-#
-# THE TRIPWIRE HAS TWO DIRECTIONS, AND THE SECOND ONE IS THE LIVE RISK HERE.
-#
-# (A) ALLOWED_PATHS grows toward the scan surface. This entry stops being sound if it
-# ever gains ANY path this gate READS -- which is not only the 1,345
-# swept *.md, but also .markdownlintignore, .markdownlint.json, package.json,
-# package-lock.json, .nvmrc and scripts/markdown-lint.sh. None of those is "inside the
-# swept set", so a bot allowlisted to edit .markdownlintignore (plausible: auto-
-# excluding a noisy directory) would leave a narrower tripwire silent while destroying
-# the soundness argument entirely. On any such change, move the gate to the action's
-# Phase-4 preflight instead of widening this note.
-#
-# (B) THE SCAN SURFACE GROWS TOWARD ALLOWED_PATHS, with ALLOWED_PATHS untouched. This
-# gate's scope is DERIVED from .markdownlintignore, a mutable in-repo file, so a
-# narrowing of that exclusion moves the intersection without anything editing this
-# allowlist. Measured: delete the `knowledge-base/project/` line and
-# knowledge-base/project/weakness-digest.md enters the swept set immediately -- and
-# .github/workflows/weakness-miner.yml is a live bot-PR producer that writes exactly
-# that file under auto-merge. Narrowing the exclusion to, say, `knowledge-base/project/plans/`
-# is a plausible cleanup and would make the synthetic green a fabrication over a
-# reachable surface.
-#
-# So: RE-DERIVE `ALLOWED_PATHS ∩ scope_nul()` on any change to .markdownlintignore, not
-# only on changes to ALLOWED_PATHS. markdown-lint is the first unreachability-argued
-# entry in this file whose scan surface is generator-derived from a mutable repo file,
-# so the immunity the marketplace-manifest-guard entry claims below does NOT transfer
-# to it, and this note inherited that entry's ALLOWED_PATHS-only phrasing anyway.
-# This intersection is ASSERTED, not merely noted: `scripts/markdown-lint.test.sh`
-# row M12 parses ALLOWED_PATHS out of the bot-PR action and re-derives membership
-# through the gate's OWN scope logic (explicit mode), so the two cannot drift apart.
-# Measured constructible in the (B) direction: narrowing the .markdownlintignore
-# entry to `knowledge-base/project/plans/` -- with ALLOWED_PATHS untouched -- turns
-# M12 red and names weakness-digest.md as the fabricated surface.
-markdown-lint
-
-# ci.yml correctness gate jobs (#6049 completed the drift). adr-ordinals was
-# live-required but absent from the IaC + canonical JSON until #6049.
-lockfile-sync
-service-role-allowlist-gate
-tc-document-sha-guard
-adr-ordinals
-
-# #6103 (ADR-092) — hard-rule body-weakening gate. ci.yml `rule-body-lint`
-# always-run job; blocks un-acked hr-*/wg-* rule-BODY changes in AGENTS
-# sidecars. Present here for canonical-JSON set-parity (required-checks-
-# canonical-parity.test.sh Test 1).
-#
-# ⚠ FABRICATED-NOT-EARNED for bot PRs (#6049 auto-fabrication guard): this is a
-# CONTENT-scoped gate, but the bot composite action does NOT reproduce it in its
-# Phase-4 ceiling — so the synthetic green is unconditional. This is SOUND ONLY
-# because the action's ALLOWED_PATHS = {weakness-digest.md}
-# (#8377 removed knowledge-base/project/rule-metrics.json from that array when it
-# became an untracked cache. Every intersection below is unchanged: dropping a member
-# can only shrink an intersection, never grow one. The premises are restated from the
-# current array rather than carried, because a premise naming a set that no longer
-# exists reads as verified and is not.)
-# makes AGENTS.rules.md physically unreachable by every bot PR today,
-# so no bot can weaken a rule body under a fabricated green. The residual goes
-# LIVE the instant #6038's auto-proposer adds an AGENTS path to ALLOWED_PATHS —
-# and the #6049 ceiling forces that PR to reproduce `rule-body-lint --check`
-# over the bot diff first. Do NOT extend ALLOWED_PATHS to any AGENTS path
-# without that reproduction. See the Phase-4 preflight-TODO in
-# .github/actions/bot-pr-with-synthetic-checks/action.yml + ADR-092.
-rule-body-lint
-
-# #6325 Phase F — Grok fidelity gate. ci.yml `grok-fidelity` job: grok inspect
-# contract + /go golden-path eval. Always-runs; installs Grok CLI on ubuntu-latest.
-grok-fidelity
-
-# #4384 — pr-quality-guards.yml jobs.enforce (folded from legal-doc-cross-document-gate.yml, #8902). Always-runs (no
-# path filter post-#4384) — synthetic needed for bot PRs only.
-enforce
 # #5585 — tenant-integration.yml jobs.tenant-integration-required. Always-run
 # aggregator gate job (the heavy suite is path-gated behind it). Bot PRs never
 # trigger CI, so they need the synthetic; on relevant human PRs the real gate
@@ -196,62 +196,6 @@ tenant-integration-required
 # See .github/actions/bot-pr-with-synthetic-checks/action.yml ALLOWED_PATHS +
 # the ADR-031 Amendment (2026-07-17, #6589).
 sentry-destroy-required
-
-# #6882 (ADR-139) — ci.yml `credential-path-guard` job. Always-run FULL-SCAN of
-# scripts/lint-credential-path-literals.py over tracked *.md under plugins/ and
-# knowledge-base/. Promoted advisory → blocking once #6880 drained the
-# grandfathered backlog to zero, so a green asserts the REPOSITORY is clean, not
-# merely this diff.
-#
-# ✅ EARNED, NOT FABRICATED — and this is the entry that breaks the pattern above.
-# `rule-body-lint` and `sentry-destroy-required` are content-scoped gates whose
-# unconditional bot-PR greens are sound by UNREACHABILITY: their guarded surfaces
-# sit outside the composite action's ALLOWED_PATHS. That argument does NOT hold
-# here. This scanner's SCAN_DIRS = (plugins, knowledge-base) over tracked *.md
-# INCLUDES knowledge-base/project/weakness-digest.md — one of exactly two paths
-# the action may write. ALLOWED_PATHS ∩ SCAN_DIRS is NON-EMPTY, so a fabricated
-# green would assert something false over a REACHABLE surface.
-#
-# The action therefore REPRODUCES the scan over its own staged paths in the
-# Phase-4 "Secret-safety ceiling" before opening any PR or posting any synthetic
-# (see .github/actions/bot-pr-with-synthetic-checks/action.yml). Deleting that
-# reproduction is caught by required-checks-canonical-parity.test.sh Test 8.
-#
-# ⚠ The ALLOWED_PATHS ∩ SCAN_DIRS test must be RE-DERIVED per gate, never
-# inherited — and reachability can widen WITHOUT touching ALLOWED_PATHS: a change
-# to a generator's output format (e.g. weakness-miner.sh emitting learning titles
-# instead of bare basenames) moves the other input silently. The existing
-# tripwires above watch only ALLOWED_PATHS. See ADR-139.
-credential-path-guard
-
-# #7493 — ci.yml `marketplace-manifest-guard` job. Always-run validation of
-# infra/github/soleur-marketplace-manifest.json, the SOURCE that
-# `github_repository_file.marketplace_manifest` publishes to
-# jikig-ai/soleur-marketplace (the plugin's sole distribution channel).
-#
-# BORN BLOCKING, not promoted from advisory. Once Terraform owns the manifest's
-# contents AND scheduled-marketplace-drift.yml dispatches a reconcile apply on a
-# drift verdict, a bad manifest that MERGES is published, detected, and then
-# REPUBLISHED every day — while a published-vs-source byte-diff reports in-sync
-# throughout, because published genuinely does match source. A red-but-mergeable
-# check would hand the reconcile loop a wrong state to defend indefinitely.
-#
-# ⚠ CONTENT-SCOPED — cleared under the #6049 ceiling by the UNREACHABILITY
-# argument (rule-body-lint / sentry-destroy-required shape), NOT the earned-green
-# argument that credential-path-guard above required. Re-derived here rather than
-# inherited, per the ADR-139 instruction that the intersection test is per-gate:
-#
-#   SCAN_DIRS  = { infra/github/soleur-marketplace-manifest.json }  (one file)
-#   ALLOWED_PATHS = { knowledge-base/project/weakness-digest.md }
-#   ALLOWED_PATHS ∩ SCAN_DIRS = ∅
-#
-# So no bot PR can modify this gate's guarded surface, and its synthetic green
-# asserts nothing false. Before adding ANY infra/github path to ALLOWED_PATHS,
-# reproduce `bash scripts/marketplace-manifest-validate.sh <manifest>` over the
-# bot diff in the action's Phase-4 ceiling — this gate's surface is a single
-# fixed file, so unlike weakness-digest.md its reachability cannot widen via a
-# generator's output format, only via ALLOWED_PATHS itself.
-marketplace-manifest-guard
 
 # #8203 — vendor-pin-verify.yml `vendor-pin-required` job. Always-run
 # aggregator (third instance of the #5585 pattern — sentry-destroy-required

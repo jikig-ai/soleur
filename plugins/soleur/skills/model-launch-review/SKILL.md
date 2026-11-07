@@ -129,7 +129,7 @@ Only item 1 is applied by `--fix`. Items 2–7 are reported in the PR body for a
    (#1174) rejects a fresh resolution with `ETARGET … with a date before <date>`. Waiving it is
    an operator decision; when waived, regenerate with a one-off `--min-release-age=0` (below) and
    leave `.npmrc` untouched. > **Corrected 2026-09-23 (#8601):** this passage said CI's
-   `lockfile-sync` re-run makes such a PR red regardless. Measured on npm 11.19.0: once the
+   a `lockfile-sync` member re-run inside `guards-ruleset` makes such a PR red regardless. Measured on npm 11.19.0: once the
    lockfile pins the version, `npm install --package-lock-only` under the floor exits 0 and
    leaves the lockfile unchanged, and `npm ci` installs it — the floor gates new resolution,
    not an already-locked version.
@@ -233,7 +233,7 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
   <3 days old and `apps/web-platform/.npmrc` sets `min-release-age=3`, so
   regenerate with an explicit override:
   `cd apps/web-platform && npx --yes npm@11 install --package-lock-only --min-release-age=0`.
-  CI's `lockfile-sync` job now covers this directory AND the repo root. Note the
+  CI's `lockfile-sync` member step (in `guards-ruleset`) now covers this directory AND the repo root. Note the
   repo ROOT has no `.npmrc` precisely so that this skill's own
   `npm install -g "@anthropic-ai/claude-code@${CLI_VERSION}"` — an exact pin to a
   same-day release — is not blocked by the floor. See

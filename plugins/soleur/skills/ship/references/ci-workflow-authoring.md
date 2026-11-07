@@ -58,6 +58,8 @@ The transform is **one context-aware tokenizing pass**, not two string passes. S
 
 When wiring the converter, guard the call so a non-zero exit cannot fail the release: `if ! BODY=$(node scripts/md-to-mrkdwn.mjs --max 3000 < "$F"); then …sed-escape fallback…; fi`. The `if !` form is load-bearing — a bare `BODY=$(node …)` assignment masks the exit code under `bash -e`. The fallback is for **availability**, not safety (safety lives in the converter's escaping + the keystone invariant).
 
+- **A checkout gated on a lane output (`if: needs.<job>.outputs.<lane> == 'true'`) is unexercised until the first PR on that lane, so give it the depth its consumers need.** `actions/checkout` defaults to depth 1, where `origin/main` is not a ref and any `git diff origin/main...HEAD` in the job's scripts fails; set `fetch-depth: 0` and pin it with a test. **Why:** #12262 — the oracle-only lane's `oracle-index-check` first ran on a docs-only PR and went red on `undecidable-diff`. See `knowledge-base/project/learnings/2026-11-06-a-lane-gated-checkout-hid-a-shallow-clone-until-the-first-docs-only-pr.md`.
+
 ## When to Load This File
 
 - Editing any `.github/workflows/*.yml`

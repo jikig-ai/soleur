@@ -65,6 +65,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 - 2026-11-04 demand-lever evaluation recorded (#12030; see `## Amendment 2026-11-04 (#12030 demand-lever evaluation)` below): no new stage and no status change; no safe demand-trim lever was found beyond S2 and S3, and the residual risk is delivered runner concurrency; S4 stays NO-GO and unactivated
 - 2026-11-05 S4 index completion PR5z strict zero (#10861): the drain series ended at strict zero — `scripts/ci-pr-affected-audit.baseline.tsv` deleted, the adoption arm replaced by the unconditional `baseline-reintroduced` verdict; audit exits 0, ratchet strict; replay and go/no-go re-ruling pending
 - 2026-11-05 oracle-only fast lane amended (#12156; see `## Amendment 2026-11-05 (oracle-only fast lane, #12156)` below): the `oracle-selection` classifier, the `oracle-index-check` validation leg, the `ORACLE-ONLY-SKIP` aggregator tolerance and the push-dedupe six-leg proof ship DARK and LOCKED (`readonly ORACLE_LANE_LOCKED=1` keeps `active=false` whatever `CI_ORACLE_LANE` says); no stage changes state, `S4 live` is NOT recorded, and activation waits for a separate authorized PR gated on the blocking `would_skip` audit of at least one real oracle-repair merge
+- 2026-11-06 guard-umbrella consolidation recorded (#12089; see `## Amendment 2026-11-06 (guard-umbrella consolidation, #12089)` below): the 16→3 required-context rename is classified as a topology change under #11556 demand reduction, not a Decision-3(a) battery cut — every folded gate still reports as a member verdict; no stage changes state
 
 ## Context
 
@@ -598,3 +599,11 @@ Status stays `adopting`. This is a NEW lever beside S2 and S4, not a stage and n
 ## Amendment 2026-11-06 (operator ci-is-the-gate token, #12246)
 
 Pointer only. The consumer-record sentence that `battery-owed.sh` reads check conclusions and fails toward stall holds for the no-token path only; with an operator `ci-is-the-gate` token it answers 42 without CI evidence. See the ADR-242 amendment of the same date.
+
+## Amendment 2026-11-06 (guard-umbrella consolidation, #12089)
+
+Status stays `adopting`. This amendment is non-activating: it records the classification of the #12089 rename inside this ADR's grammar, and activates nothing.
+
+- **Classification (Decision 3(a)).** The 16-required-context → 3-umbrella-context rename (`guards-ruleset`, `quality-guards`, `secret-guards`) is a TOPOLOGY change under epic #11556's demand-reduction work — runner slots and queued-context count drop because folded guards now share a job — NOT a Decision-3(a) "PR-level reduction of the required battery". No gate was cut: every folded guard still runs and still reports, now as a member verdict inside its umbrella's `aggregate` step (skipped-≠-success is enforced per member). The required CHECK NAME surface changed (the point of the exercise); the required VERDICT surface did not. This satisfies the 3(a) consumer-record intent: the only consumers that can read a difference are name-readers (ruleset, `required-checks.txt`, bot-PR synthetics, `admin-merge-ready.sh`), and each was updated or had its transition behavior documented in the same PR.
+- **Battery authority unchanged (Decision 2).** `merge_group` still executes the full battery against the candidate tree: umbrella members carry the folded jobs' merge_group arms (`if: ${{ !cancelled() }}` plus the transplanted event conditions), and `scripts/probe-merge-group-coverage.sh` audits that every required context reports on the queue ref.
+- **Record (Decision 3(g)).** This entry is the dated-amendment record the rename's stage owes; no measurement amendment is attached because the change is behavioural-neutral on verdicts — the demand delta (runner-slot concurrency) is reported under #11556's census, not here.
