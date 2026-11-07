@@ -397,6 +397,19 @@ variable "adopt_seo_config_entrypoint" {
   default = true
 }
 
+# ADR-321 / #10479: the origin-TLS CANARY RULE switch (seo-config-rules.tf). Default FALSE so that merging the
+# code that declares the rule changes NOTHING at the edge; the rule exists in the live ruleset only while a
+# Doppler prd_terraform secret ENABLE_ORIGIN_TLS_CANARY_RULE=true is present when an apply runs
+# (`doppler run --name-transformer tf-var` turns it into TF_VAR_enable_origin_tls_canary_rule). Turning it on
+# and off is the owner's deliberate act (see the PR's Holds); removing the secret and re-applying removes the
+# rule in place (an in-place ruleset update, never a destroy of the entrypoint). The default is the safe state,
+# so an unprovisioned secret does not fail the merge-triggered apply (the no-default-variable hazard above).
+variable "enable_origin_tls_canary_rule" {
+  description = "Create the header-scoped strict-SSL canary rule for /health on app.soleur.ai (ADR-321). Off unless the owner sets ENABLE_ORIGIN_TLS_CANARY_RULE=true in Doppler prd_terraform."
+  type        = bool
+  default     = false
+}
+
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
   type        = string
