@@ -442,7 +442,7 @@ assert_eq "$OWED" "$(run_gate "$WORKB" "$STUBB")" \
 # every *.tf in that directory, so it is a real infra change with no content diff,
 # on the one shard no required check covers. T5h is the same bug at the workflow
 # literal, whose `$` anchor fails when the literal sits in column 1.
-# Both die if `tr '\t' '\n'` is removed from the CHANGED pipeline.
+# T5f and T5h die if --no-renames is dropped from the CHANGED line.
 # =============================================================================
 in_fixture "$WORKB" bash -c 'git checkout --quiet -- . && printf "y\n" > outside.tf && git add -A && git commit --quiet -m "add a tf file outside infra" && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
 in_fixture "$WORKB" bash -c 'mkdir -p apps/web-platform/infra && git mv outside.tf apps/web-platform/infra/outside.tf && git commit --quiet -m "rename INTO the infra surface"'
@@ -1034,17 +1034,17 @@ assert_reason "$W18m" "$S18m" "a merge is in progress or paths are unmerged" "T1
 
 # Each of the four git sources fails closed: a git shim that fails on that source's argv -> UNDECIDABLE.
 REAL_GIT18="$(command -v git)"
-shim18() { # <label> <argv-pattern>
+shim18() { # <label> <argv-pattern> [<fail from the Nth matching call, default 1>]
   new_fixture_root SHIMROOT18
   local w s
   w="$(build_fixture "$SHIMROOT18")"; s="$SHIMROOT18/stub"
   ss18_write "$w" "$TOK18" commit
   make_stub "$s" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
-  ( cd "$s" && printf '#!/usr/bin/env bash\ncase "$*" in *"%s"*) exit 1 ;; esac\nexec %s "$@"\n' "$2" "$REAL_GIT18" > git && chmod +x git )
-  assert_eq "$UNDECIDABLE" "$(run_gate "$w" "$s")" "$1: a failing git source -> UNDECIDABLE (never SKIPPABLE)"
+  ( cd "$s" && printf '#!/usr/bin/env bash\ncase "$*" in *"%s"*) d="$(dirname "$0")"; c=$(cat "$d/n" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$d/n"; [ "$c" -ge %s ] && exit 1 ;; esac\nexec %s "$@"\n' "$2" "${3:-1}" "$REAL_GIT18" > git && chmod +x git )
+  assert_eq "$UNDECIDABLE" "$(run_gate "$w" "$s")" "$1: a failing git source -> UNDECIDABLE (never SKIPPABLE)"; rm -f "$s/n"
   assert_reason "$w" "$s" "working-tree scope check failed" "$1: the failure names itself"
 }
-shim18 "T18i source 1 (committed diff)" "--name-only refs/remotes/origin/main...HEAD --"
+shim18 "T18i source 1 (committed diff)" "--name-only refs/remotes/origin/main...HEAD --" 2  # the no-token CHANGED line runs this command first (#12251); the token arm's source 1 is the 2nd match
 shim18 "T18i source 2 (working tree)" "--name-only HEAD --"
 shim18 "T18i source 3 (untracked)" "ls-files -z"
 shim18 "T18i source 4 (staged)" "--cached HEAD --"
@@ -1591,7 +1591,91 @@ OC_ITEM4="$(grep -E '^4\. ' "$REF18" 2>/dev/null || true)"
 assert_has "$OC_ITEM4" "--token-only" "T19h the writer reference's item 4 names the --token-only readers"
 assert_has "$OC_ITEM4" "gate-or-skip.sh" "T19h the writer reference's item 4 names the wrapper"
 
+# =============================================================================
+# T20 — the no-token infra refusal reads every path git reports (#12251).
+# Three hides, each with its own row family: a C-quoted name (non-ASCII byte, tab,
+# double quote, backslash), a submodule gitlink hidden by configuration (repo config
+# key, and a committed ignore=all), and diff.relative run from a subdirectory.
+# Every shape has a control OUTSIDE infra expected SKIPPABLE, and a precondition that
+# proves the hide is real (the plain diff really C-quotes or drops the path), so a
+# row cannot pass vacuously. The control path begins with a capital Z so it sorts
+# BEFORE apps/ in the diff, which is what lets the glue and first-member mutations
+# bite. The mutation list is the plan's Guard Contract rows 1-10 and H1-H4.
+# =============================================================================
+t20_commit() { # <work> <relpath>: the special bytes travel as an argv element
+  in_fixture "$1" bash -c 'mkdir -p "$(dirname "$1")" && printf x > "$1" && git add -A && git commit --quiet -m t20' _ "$2"
+}
+t20_count() { # <work> <subdir> <grep pattern>: lines of the PLAIN diff matching, 0 when none
+  ( cd "$1/$2" || exit 9
+    git_fixture_env "$1" >/dev/null 2>&1 || exit 9
+    git diff --name-only refs/remotes/origin/main...HEAD | grep -c -e "$3" || true )
+}
+t20_sm() { # <work> <path>: a real submodule whose ignore=all lives in the committed module config
+  in_fixture "$1" bash -c 'git init --quiet ../subsrc && git -C ../subsrc -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m s && mkdir -p "$(dirname "$1")" && git -c protocol.file.allow=always submodule add --quiet ../subsrc "$1" && git config -f .gitmodules submodule."$1".ignore all && git add -A && git commit --quiet -m gitlink' _ "$2"
+}
+t20_reason_sub() { # <work> <stub> <subdir> <needle> <label>: the verdict line from a SUBDIRECTORY
+  local out
+  out="$( ( cd "$1/$3" || exit 9
+            git_fixture_env "$1" >/dev/null 2>&1 || exit 9
+            PATH="$2:$PATH" bash "$GATE" 2>&1 ) || true )"
+  if printf '%s' "$out" | grep -cF >/dev/null "$4"; then
+    assert_eq "ok" "ok" "$5"
+  else
+    assert_eq "$out" "reason containing: $4" "$5"
+  fi
+  return 0
+}
+
+T20_NAMES=( $'\303\251' $'t\tb' $'q"x' $'b\\s' )
+T20_LABELS=( "non-ASCII byte" "tab" "double quote" "backslash" )
+for t20i in 0 1 2 3; do
+  t20nm="${T20_NAMES[$t20i]}"; t20lb="${T20_LABELS[$t20i]}"
+  new_fixture_root R20a; W20a="$(build_fixture "$R20a")"; S20a="$R20a/stub"
+  t20_commit "$W20a" "Zcontrol-20/${t20nm}.md"
+  make_stub "$S20a" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20a")"
+  assert_eq "$SKIPPABLE" "$(run_gate "$W20a" "$S20a")" "T20a control ($t20lb): the name outside the infra surface, every check green -> SKIPPABLE"
+  t20_commit "$W20a" "apps/web-platform/infra/${t20nm}.tf"
+  assert_eq "1" "$(t20_count "$W20a" . '^"apps/web-platform/infra/')" "T20a precondition ($t20lb): the plain diff C-quotes exactly one infra line"
+  make_stub "$S20a" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20a")"
+  assert_eq "$OWED" "$(run_gate "$W20a" "$S20a")" "T20a ($t20lb) an infra path whose name holds that byte -> OWED"
+  assert_reason "$W20a" "$S20a" "diff touches the infra surface" "T20a ($t20lb) the refusal is the infra condition, not an accident"
+done
+
+# T20b — a gitlink under infra hidden by the REPO CONFIG key, then by a COMMITTED ignore=all.
+new_fixture_root R20b; W20b="$(build_fixture "$R20b")"; S20b="$R20b/stub"
+in_fixture "$W20b" bash -c 'git config diff.ignoreSubmodules all'
+T20_HEAD="$(head_sha_of "$W20b")"
+in_fixture "$W20b" bash -c 'git update-index --add --cacheinfo "160000,$1,Zcontrol-20/sub20" && git commit --quiet -m gitlink-control' _ "$T20_HEAD"
+make_stub "$S20b" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20b")"
+assert_eq "$SKIPPABLE" "$(run_gate "$W20b" "$S20b")" "T20b control (config key): a gitlink outside the infra surface -> SKIPPABLE"
+in_fixture "$W20b" bash -c 'mkdir -p apps/web-platform/infra && git update-index --add --cacheinfo "160000,$1,apps/web-platform/infra/sub20" && git commit --quiet -m gitlink-infra' _ "$T20_HEAD"
+assert_eq "0" "$(t20_count "$W20b" . 'sub20')" "T20b precondition (config key): the plain diff drops both gitlinks"
+make_stub "$S20b" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20b")"
+assert_eq "$OWED" "$(run_gate "$W20b" "$S20b")" "T20b (config key) a gitlink under infra hidden by diff.ignoreSubmodules -> OWED"
+assert_reason "$W20b" "$S20b" "diff touches the infra surface" "T20b (config key) the refusal is the infra condition"
+
+new_fixture_root R20m; W20m="$(build_fixture "$R20m")"; S20m="$R20m/stub"
+t20_sm "$W20m" "Zcontrol-20/sub"
+make_stub "$S20m" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20m")"
+assert_eq "$SKIPPABLE" "$(run_gate "$W20m" "$S20m")" "T20b control (committed ignore=all): a submodule outside the infra surface -> SKIPPABLE"
+t20_sm "$W20m" "apps/web-platform/infra/sub"
+assert_eq "0" "$(t20_count "$W20m" . 'infra/sub$')" "T20b precondition (committed ignore=all): the plain diff drops the infra gitlink"
+make_stub "$S20m" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20m")"
+assert_eq "$OWED" "$(run_gate "$W20m" "$S20m")" "T20b (committed ignore=all) a submodule under infra -> OWED"
+assert_reason "$W20m" "$S20m" "diff touches the infra surface" "T20b (committed ignore=all) the refusal is the infra condition"
+
+# T20c — diff.relative limits a plain diff to the caller's subtree; the gate runs git at the repo top.
+new_fixture_root R20c; W20c="$(build_fixture "$R20c")"; S20c="$R20c/stub"
+in_fixture "$W20c" bash -c 'git config diff.relative true'
+make_stub "$S20c" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20c")"
+assert_eq "$SKIPPABLE" "$(run_gate_sub "$W20c" "$S20c" plugins)" "T20c control: diff.relative from a subdirectory, no infra change -> SKIPPABLE"
+t20_commit "$W20c" "apps/web-platform/infra/rel20.tf"
+assert_eq "0" "$(t20_count "$W20c" plugins 'rel20')" "T20c precondition: the plain diff run from the subdirectory does not list the infra file"
+make_stub "$S20c" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20c")"
+assert_eq "$OWED" "$(run_gate_sub "$W20c" "$S20c" plugins)" "T20c diff.relative from a subdirectory with an infra change -> OWED"
+t20_reason_sub "$W20c" "$S20c" plugins "diff touches the infra surface" "T20c the refusal is the infra condition (verdict line read from the subdirectory)"
+
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 391
+print_results 419
