@@ -1113,35 +1113,7 @@ jobs:
         run: |
           set -uo pipefail
           failed=0
-          member() {
-            local mname="$1" scope="$2" ids="$3" concs="$4" outs="$5"
-            local -a ida ca oa
-            IFS=',' read -ra ida <<<"$ids"
-            IFS=',' read -ra ca <<<"$concs"
-            IFS=',' read -ra oa <<<"$outs"
-            local any_fail=0 any_run=0 detail="" i c o
-            for i in "${!ida[@]}"; do
-              c="${ca[$i]:-unknown}"; o="${oa[$i]:-$c}"
-              [ -z "$o" ] && o="$c"
-              if [ "$o" != "$c" ]; then detail+=" ${ida[$i]}=${c}(${o})"; else detail+=" ${ida[$i]}=${c}"; fi
-              case "$c" in
-                success) any_run=1 ;;
-                skipped) ;;
-                *) any_fail=1 ;;  # failure, cancelled, or unreadable — all fail closed
-              esac
-            done
-            if [ "$any_fail" -eq 1 ]; then
-              printf 'FAIL  %-30s%s\n' "$mname" "$detail"; return 1
-            fi
-            if [ "$any_run" -eq 1 ]; then
-              printf 'PASS  %-30s%s\n' "$mname" "$detail"; return 0
-            fi
-            if [ "$scope" = "*" ] || [[ ",$scope," == *",$EVENT_NAME,"* ]]; then
-              printf 'FAIL  %-30s%s  (owed a verdict on %s; every member step skipped)\n' "$mname" "$detail" "$EVENT_NAME"
-              return 1
-            fi
-            printf 'SKIP  %-30s%s  (out of scope on %s)\n' "$mname" "$detail" "$EVENT_NAME"
-          }
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/umbrella-member.sh" || { echo "::error::scripts/lib/umbrella-member.sh could not be loaded from the job checkout — the member() verdict arbiter is absent; failing closed"; exit 1; }
           member adr-ordinals '*' 'adr-ordinals' '${{ steps.adr-ordinals.conclusion }}' '${{ steps.adr-ordinals.outcome }}' || failed=1
           member rule-body-lint '*' 'rule-body-lint,rule-body-lint-ratchet' '${{ steps.rule-body-lint.conclusion }},${{ steps.rule-body-lint-ratchet.conclusion }}' '${{ steps.rule-body-lint.outcome }},${{ steps.rule-body-lint-ratchet.outcome }}' || failed=1
           member tc-document-sha-guard '*' 'tc-document-sha-guard' '${{ steps.tc-document-sha-guard.conclusion }}' '${{ steps.tc-document-sha-guard.outcome }}' || failed=1
@@ -1394,35 +1366,7 @@ jobs:
         run: |
           set -uo pipefail
           failed=0
-          member() {
-            local mname="$1" scope="$2" ids="$3" concs="$4" outs="$5"
-            local -a ida ca oa
-            IFS=',' read -ra ida <<<"$ids"
-            IFS=',' read -ra ca <<<"$concs"
-            IFS=',' read -ra oa <<<"$outs"
-            local any_fail=0 any_run=0 detail="" i c o
-            for i in "${!ida[@]}"; do
-              c="${ca[$i]:-unknown}"; o="${oa[$i]:-$c}"
-              [ -z "$o" ] && o="$c"
-              if [ "$o" != "$c" ]; then detail+=" ${ida[$i]}=${c}(${o})"; else detail+=" ${ida[$i]}=${c}"; fi
-              case "$c" in
-                success) any_run=1 ;;
-                skipped) ;;
-                *) any_fail=1 ;;
-              esac
-            done
-            if [ "$any_fail" -eq 1 ]; then
-              printf 'FAIL  %-30s%s\n' "$mname" "$detail"; return 1
-            fi
-            if [ "$any_run" -eq 1 ]; then
-              printf 'PASS  %-30s%s\n' "$mname" "$detail"; return 0
-            fi
-            if [ "$scope" = "*" ] || [[ ",$scope," == *",$EVENT_NAME,"* ]]; then
-              printf 'FAIL  %-30s%s  (owed a verdict on %s; every member step skipped)\n' "$mname" "$detail" "$EVENT_NAME"
-              return 1
-            fi
-            printf 'SKIP  %-30s%s  (out of scope on %s)\n' "$mname" "$detail" "$EVENT_NAME"
-          }
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/umbrella-member.sh" || { echo "::error::scripts/lib/umbrella-member.sh could not be loaded from the job checkout — the member() verdict arbiter is absent; failing closed"; exit 1; }
           member sandbox-canary-capture-gate '-' 'trigger-canary,sandbox-canary-capture-gate' '${{ steps.trigger-canary.conclusion }},${{ steps.sandbox-canary-capture-gate.conclusion }}' '${{ steps.trigger-canary.outcome }},${{ steps.sandbox-canary-capture-gate.outcome }}' || failed=1
           member plugin-root-propagation-gate '-' 'trigger-propagation,plugin-root-propagation-gate' '${{ steps.trigger-propagation.conclusion }},${{ steps.plugin-root-propagation-gate.conclusion }}' '${{ steps.trigger-propagation.outcome }},${{ steps.plugin-root-propagation-gate.outcome }}' || failed=1
           member harness-discovery '-' 'harness-discovery-setup-bun,harness-discovery-install-codex,harness-discovery-codex,harness-discovery-install-devin,harness-discovery-devin,harness-discovery-install-opencode,harness-discovery-opencode' '${{ steps.harness-discovery-setup-bun.conclusion }},${{ steps.harness-discovery-install-codex.conclusion }},${{ steps.harness-discovery-codex.conclusion }},${{ steps.harness-discovery-install-devin.conclusion }},${{ steps.harness-discovery-devin.conclusion }},${{ steps.harness-discovery-install-opencode.conclusion }},${{ steps.harness-discovery-opencode.conclusion }}' '${{ steps.harness-discovery-setup-bun.outcome }},${{ steps.harness-discovery-install-codex.outcome }},${{ steps.harness-discovery-codex.outcome }},${{ steps.harness-discovery-install-devin.outcome }},${{ steps.harness-discovery-devin.outcome }},${{ steps.harness-discovery-install-opencode.outcome }},${{ steps.harness-discovery-opencode.outcome }}' || failed=1
@@ -2222,6 +2166,15 @@ jobs:
           # explicit 0) once the oracle checkout depth changes or a row flakes on the detection flag (CTO ruling, #12262).
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Fetch origin/main for the manifest's diff reads
+        # Deliberately a STEP, not a line in the manifest run block: the
+        # ci-oracle-lane guard suite replays that block verbatim in a bare
+        # sandbox where `git fetch` exits 128. Same oracle_only gate, so
+        # non-oracle runs stay a no-op. Public repo — persist-credentials:false
+        # does not break the fetch (#12274).
+        if: needs.oracle-selection.outputs.oracle_only == 'true'
+        run: git fetch --no-tags --quiet origin main
 
       - name: Run the oracle-validation manifest
         shell: bash

@@ -378,3 +378,32 @@ Two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` cover UPDATE semanti
 - `arm=ga-pool-update -f mode=serve` — the #6027 maintenance-window 0→1 flip ONLY: the job runs `lb-weight-gate-with-marker.sh` (the §(c) gate chain) fail-closed BEFORE plan, so an unauthorized flip never reaches a grader. Requires the window sequence per #6027 (weight flip → drain → `ignore_changes` removal → drained-host reboot).
 
 **ForceNew caveat:** a `cloudflare_load_balancer_monitor.type` change may plan `["delete","create"]` (replace) on some provider versions — every arm's grader fails closed on replace verbs by design, so verify with a `terraform plan` dry-run at window time before dispatching.
+
+## Moving the GA monitor to https/:443 (ADR-321 R7, #10479)
+
+The monitor was http/:80 while the origin had no :443 listener (the `ga-monitor-fix` arm). The listener now exists on both hosts, so the
+probe moves to https/:443 with `Host: app.soleur.ai` and the certificate **validated** (`allow_insecure = false`). It is applied ONLY by the
+dispatch-only `ga-monitor-https` arm of `cf-lb-overlay.yml`; a merge of `cloudflare-lb.tf` applies nothing (the parent apply's `-target`
+list excludes the LB trio, and the workflow has no push trigger). Until the owner dispatches it, the code and the live monitor differ and the
+scheduled full-root drift plan will report that one monitor update: dispatch promptly after merge.
+
+Preconditions (read-only, before the owner's go):
+
+1. Both hosts logged `origin-tls: listening` after their last start (`scripts/betterstack-query.sh --since 6h --grep 'origin-tls: listening'`, decoded
+   per ADR-321; one line each from `soleur-web-platform` and `soleur-web-2`). No `feature:origin_tls` Sentry events.
+2. Pool health is green for BOTH origins under the current http/:80 probe (the arm also refuses to plan otherwise).
+3. `ORIGIN_TLS_REQUIRED` is not required for this step; the edge hop is unchanged (`flexible`), so users see nothing.
+
+Dispatch (owner's go, per command):
+
+```bash
+gh workflow run cf-lb-overlay.yml --ref main -f arm=ga-monitor-https -f confirm=MOVE-GA-LB-MONITOR-HTTPS -f reason="ADR-321 R7: move LB monitor to https/443 after both hosts bound the origin TLS listener"
+```
+
+The reviewer-gated environment (`web-platform-infra-apply`) waits for approval. The arm plans only `cloudflare_load_balancer_monitor.web`, grades
+the saved plan against the pinned https shape, applies it, then polls the pool health for ~5 minutes and fails red unless BOTH origins read healthy.
+
+If it ends red (an origin unhealthy or a one-origin read): traffic is unaffected (web-2 is weight 0, the B1 fallback serves web-1), but the
+Cloudflare notification policy `web_lb_health` will mail "Unhealthy". Roll back: revert the PR that changed `cloudflare-lb.tf`, then dispatch
+`-f arm=ga-monitor-fix -f confirm=FIX-GA-LB-MONITOR` (http/:80). Do not set `allow_insecure = true` as a reflex: ADR-321 R7 requires the
+trust to be shown, and a red result with both listeners proven is the evidence to decide that deliberately.

@@ -34,6 +34,17 @@ queue entry received no `merge_group` runs (PR 10013, 2026-10-11).
   run body, env, shell, inputs and defaults: an edit to any of them re-pins `WM_COMPOSITE_PIN` there in the same
   PR. The earned-green blocks, the allowlist and the off-main refusal are unchanged.
 
+## 2026-11-07 — waiver-discipline earned green (#12276)
+
+The staged-diff lint chain gains a `waiver-discipline` reproduction: added `gitleaks:allow` lines
+outside the member's own exclusions must carry an `issue:#NNN <reason>` trailer, or the step fails
+loud before the PR is created. This replaces the earlier unreachability argument, which leaned on the
+generator-emitted `weakness-digest.md` never containing the token — a claim about today's output
+format, not a property of the diff. The synthetic green for `waiver-discipline` (a `secret-guards`
+member) is now earned the same way `credential-path-guard` is below it. Re-pinned
+`WM_COMPOSITE_PIN` in `tests/scripts/test-weakness-miner.sh` (run body changed; first re-pin since
+v4 set the pin); recorded in ADR-285.
+
 ## 2026-09-20 — ALLOWED_PATHS drops rule-metrics.json (#8377)
 
 `knowledge-base/project/rule-metrics.json` was removed from `ALLOWED_PATHS`. ADR-235

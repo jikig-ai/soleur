@@ -296,6 +296,34 @@ runs:
           echo "::error::lint-fixture-content found a PII/prod-ref string in the bot diff — refusing to create the PR or post synthetics (#6049 content-safety ceiling)."
           exit 1
         fi
+        # --- #12276 earned green for `waiver-discipline` (a `secret-guards` member) ---
+        # Same earned-green obligation as credential-path below: the member reads
+        # diff CONTENT, and the old "unreachable by construction" note in
+        # required-checks.txt leaned on weakness-digest.md never containing the
+        # token — but that file is generator-emitted (weakness-miner.sh), so the
+        # argument was a claim about today's output format. Mirror the member's
+        # own predicate (secret-scan.yml `waiver-discipline` member) over the
+        # staged diff: an added `gitleaks:allow` line without an
+        # `issue:#NNN <reason>` trailer fails loud, so the synthetic green is
+        # earned regardless of what the digest's format becomes. Parity Test 9.
+        violations=$(git diff --cached --unified=0 -- \
+            ':!.github/workflows/secret-scan.yml' \
+            ':!apps/web-platform/scripts/lint-fixture-content.mjs' \
+            ':!.gitleaks.toml' \
+            ':!AGENTS.md' \
+            ':!knowledge-base/**' \
+          | grep -E '^\+' \
+          | grep -v '^\+\+\+ ' \
+          | grep -E '(#|//)\s*gitleaks:allow\b' \
+          | grep -vE '^\+\s*(#|//)' \
+          | grep -vE '`[^`]*gitleaks:allow' \
+          | grep -vE 'issue:#[0-9]+\s+\S{3,}' || true)
+        if [[ -n "$violations" ]]; then
+          echo "::error::gitleaks:allow waivers MUST include 'issue:#NNN <reason>' trailer (reason >= 3 chars) — refusing to create the PR or post synthetics (#12276 earned green for waiver-discipline)." >&2
+          echo "Offending lines:" >&2
+          echo "$violations" >&2
+          exit 1
+        fi
         # --- #6882 earned green for `credential-path-guard` (a `guards-ruleset` member, ADR-139) ---
         # A resolvable home-relative path to a real credential file makes Claude
         # Code's harness auto-attach that file into model context when the doc

@@ -3717,6 +3717,7 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
 AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
   ".github/workflows/"
   "scripts/lint-umbrella-aggregate.sh"
+  "scripts/lib/umbrella-member.sh"  # the canonical member() the (f) pin sources
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -4886,13 +4887,12 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
 
 # plugins/soleur/test/ci-pr-affected-replay-{a,b,c} (#11562 --rows arms of one suite file) — the rows
 # grep, awk and cp REAL files (the sibling test scripts for the pin row, the preactivation script for
-# the GIT_ var census, the required-checks fixture copy) and EXECUTE the observation-window probe under
-# a stub gh; the suite file is shared by all three labels, so all three arrays carry the same edges.
+# the GIT_ var census, the required-checks fixture copy); the suite file is shared by all three
+# labels, so all three arrays carry the same edges.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_A_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4901,7 +4901,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_B_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4910,7 +4909,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"

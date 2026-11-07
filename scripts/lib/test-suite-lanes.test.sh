@@ -117,6 +117,37 @@ else
   fail "lane_tokens_conflict contract violated"
 fi
 
+# 5b. The star predicate (#12231): one tokenizer for the park and the conflict rule. `*` as any whitespace-separated word is a star
+#     (space, tab, newline-first-line like lane_tokens_conflict's read -ra); a token merely containing `*`, or an empty set, is not.
+h_ok=1
+star_row() {  # <expect star: 1|0> <set> — has_star must match AND lane_tokens_conflict must agree against an unrelated set
+  local want="$1" set="$2" got=0 conf=0
+  lane_tokens_has_star "$set" && got=1
+  lane_tokens_conflict "$set" "zzz:unrelated" && conf=1
+  lane_tokens_conflict "zzz:unrelated" "$set" && conf=$(( conf + 1 ))
+  if (( got != want )) || (( conf != want * 2 )); then
+    printf '  5b row wrong: set=%q want-star=%s has_star=%s conflict-hits=%s (want %s)\n' "$set" "$want" "$got" "$conf" "$(( want * 2 ))"
+    h_ok=0
+  fi
+}
+star_row 1 "*"
+star_row 1 "artifact:x *"
+star_row 1 "* artifact:x"
+star_row 1 $'artifact:x\t*'
+star_row 1 $'*\nartifact:x'          # a star on the first line is a star
+star_row 0 ""
+star_row 0 "artifact:x lock:y"
+star_row 0 "a*b"
+star_row 0 "artifact:*"
+star_row 0 "*x"                       # a token merely STARTING with * is not the star token
+star_row 0 "**"
+star_row 0 $'artifact:x\n*'          # read -ra reads the first line only: a later-line star is invisible to BOTH functions
+if (( h_ok == 1 )); then
+  pass "lane_tokens_has_star: a * word in any whitespace position (first line) is a star; a token containing or starting with * and an empty set are not; it agrees with lane_tokens_conflict row by row"
+else
+  fail "lane_tokens_has_star contract violated"
+fi
+
 # 6. The replay arms' explicit override (#12013): every registered `ci-pr-affected-replay-*` label carries an override
 #    equal to what the classifier derives for it MINUS `lock:test-all`. The arms drive sandboxed copies of the
 #    runner under `mktemp -d` roots and never take the real advisory lock, so the token only serialized them.
@@ -213,8 +244,10 @@ else
 fi
 
 # 7. Start-first order of the replay arms (#12013). In the pooled gate a suite starts as the registration stream reaches it
-#    and a queued `*` (drain-barrier) suite blocks every later launch; the replay arms are the longest suites, so they are
-#    registered first. Over the runner's REAL raw registration stream (--enumerate-commands all, not the label-deduplicated
+#    (the pooled backfill scheduler parks a `*` drain-barrier suite until the drain since #12231, so there it no longer
+#    holds later launches back; the "no `*` before the last arm" assertion below is kept for SOLEUR_PJ_FIFO=1 and the
+#    serial fallbacks, where registration position still decides start order); the replay arms are the longest suites,
+#    so they are registered first. Over the runner's REAL raw registration stream (--enumerate-commands all, not the label-deduplicated
 #    map): every label under the arm prefix (at least three) appears exactly once, no registration runs the whole battery
 #    (by label, or by argv without --rows), each arm's 1-based row is at most the pool width, and no row before the last arm
 #    carries a `*` token. Nothing is asserted about any other suite's order, the total, or the --rows ranges (the totality

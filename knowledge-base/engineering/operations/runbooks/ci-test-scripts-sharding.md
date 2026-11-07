@@ -28,7 +28,7 @@ rows; for leg-balance corrections use the full
 
 | Job | Legs | Contents | Worst leg |
 |---|---|---|---|
-| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=582 → 1-193/194-386/387-582) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
+| `test-scripts` | K=8 | light `scripts` group, manifest lookup + hash fallback | read the committed `scripts/suite-shard-legs.tsv` totals — per-leg predicted suite time drifts with every regen (the ~9.5-min figure once written here measured 54.9 min on the worst leg by #11562). Post-#11562 the two atomic mega-suites register as `--rows` arms: `plugins/soleur/test/ci-pr-affected-replay-{a,b,c}` (DECLARED_TOTAL=473 → 1-158/159-316/317-473, re-pinned 2026-11-07 after the observation-window section retired) and `scripts/test-all-affected-{a,b,c,d}` (DECLARED_TOTAL=38 → 1-13/14-32/33-36/37-38); the orphan-suite battery is two `--rows` halves (Measured history 2026-09-26) |
 | `test-scripts-heavy` | K=3 | heavy manifest lookup + hash fallback | battery floor ≈ 9 min + setup |
 | `shard-totality-mutations` | 3 | battery rows split `--rows 1-14` / `15-28` / `29-42` | ~6 min each + setup |
 
@@ -349,7 +349,7 @@ span to the NEXT registered mark.
   `scripts/test-all-affected` median 1,746,404 ms (~29 min) across five
   green runs, both on legs already holding ~10 min of other work. Suite
   sums ≈ wall clock (queue time was not the driver). Split to
-  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-193/194-386/387-578` of 578)
+  `ci-pr-affected-replay-{a,b,c}` (`--rows 1-158/159-316/317-473` of 473)
   and `test-all-affected-{a,b,c,d}` (`--rows 1-13/14-32/33-36/37-38` of 38)
   inside the same relevance gates; arm prices seeded at CI-median × local
   arm-share — the first green run carrying real arm timings is the

@@ -12,8 +12,9 @@
 #
 # ── THE FIXTURES ─────────────────────────────────────────────────────────────────────────────
 # Every row is a jq edit of ONE real-shape base captured read-only from GitHub
-# (test/fixtures/admin-merge-ready/, provenance in its README): 26 required contexts across two
-# rulesets, 77 check runs, all required contexts green. No hand-written required set exists.
+# (test/fixtures/admin-merge-ready/, provenance in its README): 13 required contexts across two
+# rulesets (the 16 folded names swapped for the 3 umbrella contexts, #12276), 66 check runs,
+# all required contexts green. No hand-written required set exists.
 #
 # ── MUTATION ROWS ────────────────────────────────────────────────────────────────────────────
 # M-rows copy the SUT, apply one edit (asserted to have landed), and require BOTH that the named
@@ -68,8 +69,8 @@ TIMEOUT_BIN="$(command -v timeout)" || { echo "[FATAL] timeout(1) required" >&2;
 
 # ── H6: fixture preconditions every row depends on ──────────────────────────────────────────
 pre() { jq -e "$1" "$2" >/dev/null || { echo "[FATAL] H6 fixture precondition failed: $3 -- recapture the base (see README)" >&2; exit 1; }; }
-pre '[.[0][] | select(.type=="required_status_checks") | .parameters.required_status_checks[]] | length >= 26' \
-  "$BASE_FX/rules-branches-main.json" ">=26 required entries"
+pre '[.[0][] | select(.type=="required_status_checks") | .parameters.required_status_checks[]] | length >= 13' \
+  "$BASE_FX/rules-branches-main.json" ">=13 required entries"
 pre '[.[0][] | select(.ruleset_id==13304872) | .parameters.required_status_checks[]?.context] | index("cla-evidence") != null' \
   "$BASE_FX/rules-branches-main.json" "cla-evidence in ruleset 13304872"
 pre '[.[0][] | select(.ruleset_id!=13304872) | .parameters.required_status_checks[]?.context] | index("cla-evidence") == null' \
@@ -240,7 +241,7 @@ PY
 rowdir() { printf '%s' "$SANDBOX/rows/$1"; }
 rc_of() { cat "$(rowdir "$1")/rc"; }
 
-READY_TAIL="required=26 absent=[] pending=[] failed=[]"
+READY_TAIL="required=13 absent=[] pending=[] failed=[]"
 
 # ── rows ────────────────────────────────────────────────────────────────────────────────────
 row_H1() { local d; d=$(mkrow H1); assert_fixture_dir "$d"; run "$d" "$PR" "$SHA"
@@ -248,23 +249,23 @@ row_H1() { local d; d=$(mkrow H1); assert_fixture_dir "$d"; run "$d" "$PR" "$SHA
     || why "H1 stdout is not exactly the ready marker: $(cat "$d/out")"; }
 row_H2() { local d; d=$(mkrow H2); assert_fixture_dir "$d"
   setrun "$d" "e2e" '.conclusion = "skipped"'
-  setrun "$d" "markdown-lint" '.conclusion = "neutral"'
-  runs "$d" '. + [(.[] | select(.name == "lockfile-sync") | .id = (.id - 5) | .conclusion = "failure")]'
+  setrun "$d" "quality-guards" '.conclusion = "neutral"'
+  runs "$d" '. + [(.[] | select(.name == "guards-ruleset") | .id = (.id - 5) | .conclusion = "failure")]'
   runs "$d" ". + [range(0;50) as \$i | {id: (9000000000 + \$i), name: \"extra-\\(\$i)\", head_sha: \"$SHA\", status: \"completed\", conclusion: \"failure\", started_at: null, app: {id: 15368}, check_suite: {id: 1}}]"
   run "$d" "$PR" "$SHA"; rc_is "$d" 0 && nomiss "$d" && tailis "$d" "$READY_TAIL"; }
 row_R1() { local d; d=$(mkrow R1); assert_fixture_dir "$d"; drop "$d" test; run "$d" "$PR" "$SHA"
   rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  test" && verdict "$d" not-ready && reason "$d" not-green \
-    && tailis "$d" 'required=26 absent=["test"] pending=[] failed=[]'; }
+    && tailis "$d" 'required=13 absent=["test"] pending=[] failed=[]'; }
 row_R3() { local d; d=$(mkrow R3); assert_fixture_dir "$d"; drop "$d" tenant-integration-required; drop "$d" cla-evidence; run "$d" "$PR" "$SHA"
   rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  tenant-integration-required" && line "$d" "ABSENT  cla-evidence" \
-    && noline "$d" " enforce" && tailis "$d" 'required=26 absent=["tenant-integration-required","cla-evidence"] pending=[] failed=[]'; }
+    && noline "$d" " quality-guards" && tailis "$d" 'required=13 absent=["tenant-integration-required","cla-evidence"] pending=[] failed=[]'; }
 row_R4() { local d; d=$(mkrow R4); assert_fixture_dir "$d"
-  setrun "$d" enforce '.id = 99999999999'
-  runs "$d" '. + [(.[] | select(.name == "enforce") | .id = 100000000000 | .status = "queued" | .conclusion = null | .started_at = null)]'
-  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING enforce (queued)" \
-    && tailis "$d" 'required=26 absent=[] pending=["enforce"] failed=[]'; }
+  setrun "$d" quality-guards '.id = 99999999999'
+  runs "$d" '. + [(.[] | select(.name == "quality-guards") | .id = 100000000000 | .status = "queued" | .conclusion = null | .started_at = null)]'
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING quality-guards (queued)" \
+    && tailis "$d" 'required=13 absent=[] pending=["quality-guards"] failed=[]'; }
 row_R5() { local d; d=$(mkrow R5); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; run "$d" "$PR" "$SHA"
-  rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && tailis "$d" 'required=26 absent=[] pending=[] failed=["test"]'; }
+  rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && tailis "$d" 'required=13 absent=[] pending=[] failed=["test"]'; }
 row_R6() { local c d; for c in stale cancelled bogus-conclusion; do d=$(mkrow "R6-$c"); assert_fixture_dir "$d"
     setrun "$d" test ".conclusion = \"$c\""; run "$d" "$PR" "$SHA"
     rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test ($c)" || return 1; done; }
@@ -296,7 +297,7 @@ row_R11() { local d; d=$(mkrow R11); assert_fixture_dir "$d"
   jqf "$d" runs.json '[.[0] | .check_runs |= map(select(.name != "test"))] + [{total_count: 1, check_runs: [(.[0].check_runs[] | select(.name == "test"))]}]'
   run "$d" "$PR" "$SHA"; rc_is "$d" 0 && nomiss "$d" && tailis "$d" "$READY_TAIL"; }
 row_R12() { local d; d=$(mkrow R12); assert_fixture_dir "$d"; jqf "$d" rules.json '.[0][0].parameters.required_status_checks[0].integration_id = null'
-  run "$d" "$PR" "$SHA"; rc_is "$d" 3 && nomiss "$d" && verdict "$d" error && reason "$d" unpinned && grep -q 'unpinned required context(s) \["enforce"\]' "$d/err" \
+  run "$d" "$PR" "$SHA"; rc_is "$d" 3 && nomiss "$d" && verdict "$d" error && reason "$d" unpinned && grep -q 'unpinned required context(s) \["guards-ruleset"\]' "$d/err" \
     || why "R12 does not name the unpinned context: $(cat "$d/err")"; }
 row_R13() { local d; d=$(mkrow R13); assert_fixture_dir "$d"; jqf "$d" pr.json '.state = "MERGED"'; run "$d" "$PR" "$SHA"
   rc_is "$d" 4 && nomiss "$d" && verdict "$d" stale && line "$d" "NOT-OPEN: PR is not open"; }
@@ -320,7 +321,7 @@ row_R18() { local d; d=$(mkrow R18); assert_fixture_dir "$d"; drop "$d" test run
   run "$d" "$PR" "$SHA" --wait; rc_is "$d" 4 && nomiss "$d" && polls "$d" 2 && verdict "$d" stale; }
 row_R19() { local d; d=$(mkrow R19); assert_fixture_dir "$d"; drop "$d" test
   run "$d" "$PR" "$SHA" --wait --timeout 180; rc_is "$d" 1 && nomiss "$d" && polls "$d" 3 && sleeps "$d" 2 && verdict "$d" timeout \
-    && tailis "$d" 'required=26 absent=["test"] pending=[] failed=[]' || return 1
+    && tailis "$d" 'required=13 absent=["test"] pending=[] failed=[]' || return 1
   # A timeout that is not a multiple of 60 rounds UP: 90 s is two polls, never one or zero.
   run "$d" "$PR" "$SHA" --wait --timeout 90; rc_is "$d" 1 && polls "$d" 2 && verdict "$d" timeout; }
 row_R20() { local d; d=$(mkrow R20); assert_fixture_dir "$d"; drop "$d" test runs.1.json; touch "$d/rules.fail.2"
@@ -333,7 +334,7 @@ row_R22() { local d; d=$(mkrow R22); assert_fixture_dir "$d"; setrun "$d" CodeQL
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  CodeQL (failure)"; }
 row_R23() { local d; d=$(mkrow R23); assert_fixture_dir "$d"; drop "$d" test
   jqf "$d" rules.json '.[0] |= map(if .ruleset_id == 13304872 and .type == "required_status_checks" then .parameters.required_status_checks += [{context: "test", integration_id: 15368}] else . end)'
-  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && count "$d" '^ABSENT  test$' 1 && tailis "$d" 'required=26 absent=["test"] pending=[] failed=[]'; }
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && count "$d" '^ABSENT  test$' 1 && tailis "$d" 'required=13 absent=["test"] pending=[] failed=[]'; }
 row_R24() { local d; d=$(mkrow R24); assert_fixture_dir "$d"; setrun "$d" test '.status = "mystery" | .conclusion = null'; run "$d" "$PR" "$SHA"
   rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (unknown status mystery)"; }
 row_R25() { local d i; d=$(mkrow R25); assert_fixture_dir "$d"
@@ -386,13 +387,14 @@ row_R34() { local d; d=$(mkrow R34); assert_fixture_dir "$d"; drop "$d" test run
 row_R35() { local d; d=$(mkrow R35); assert_fixture_dir "$d"
   # The same context required from two different apps: both entries must be satisfied.
   jqf "$d" rules.json '.[0] |= map(if .ruleset_id == 13304872 and .type == "required_status_checks" then .parameters.required_status_checks += [{context: "CodeQL", integration_id: 15368}] else . end)'
-  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  CodeQL" && tailis "$d" 'required=27 absent=["CodeQL"] pending=[] failed=[]'; }
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  CodeQL" && tailis "$d" 'required=14 absent=["CodeQL"] pending=[] failed=[]'; }
 # R36/R37 (#9454): the POST-ADOPTION live rule shape -- the CI Required ruleset gains a
 # `merge_queue` rule and LOSES its `CodeQL` required context (CodeQL is advisory: it cannot report on
-# `merge_group`). The base capture above is the PRE-adoption shape (26 contexts incl. CodeQL/57789), so
+# `merge_group`). The base capture above is the PRE-adoption shape (13 contexts incl. CodeQL/57789 —
+# the 16 folded names already swapped for the 3 umbrella contexts per #12276), so
 # these rows derive the new shape from it rather than hand-writing a required set.
-#   R36: merge_queue present + CodeQL not required -> READY with required=25 (24 CI Required minus
-#        CodeQL = 23, plus the 2 CLA contexts); a FAILED advisory CodeQL run must not block.
+#   R36: merge_queue present + CodeQL not required -> READY with required=12 (11 CI Required minus
+#        CodeQL = 10, plus the 2 CLA contexts); a FAILED advisory CodeQL run must not block.
 #        Before the fix the script errored `unsupported-rule` on the `merge_queue` type, so every
 #        admin-merge gate would have failed closed the moment the queue went live.
 #   R37: the allowlist stayed SPECIFIC -- merge_queue present alongside an unevaluated type
@@ -404,7 +406,7 @@ _post_adoption_rules() { # <dir>
 row_R36() { local d; d=$(mkrow R36); assert_fixture_dir "$d"; _post_adoption_rules "$d"
   setrun "$d" CodeQL '.conclusion = "failure"'
   run "$d" "$PR" "$SHA"; rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready \
-    && tailis "$d" 'required=25 absent=[] pending=[] failed=[]'; }
+    && tailis "$d" 'required=12 absent=[] pending=[] failed=[]'; }
 row_R37() { local d; d=$(mkrow R37); assert_fixture_dir "$d"; _post_adoption_rules "$d"
   jqf "$d" rules.json '.[0] += [{type: "workflows", ruleset_id: 1}]'
   run "$d" "$PR" "$SHA"; rc_is "$d" 3 && nomiss "$d" && verdict "$d" error && reason "$d" unsupported-rule; }
@@ -586,42 +588,42 @@ row_L15() { local d; d=$(mkrow L15); assert_fixture_dir "$d"
 # `test` is FAILED at the graded head, and can only move the context to PENDING or ABSENT, never to green.
 row_S1() { local d; d=$(mkrow S1); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING test (draft-era-row-while-ready-run-pending)" && verdict "$d" not-ready && reason "$d" not-green \
-    && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]' && vcalled "$d" 1 && grep -Fxq "verdict $PR" "$d/vlog" || why "S1: $(tail -2 "$d/out" | tr '\n' '|')"; }
+    && tailis "$d" 'required=13 absent=[] pending=["test"] failed=[]' && vcalled "$d" 1 && grep -Fxq "verdict $PR" "$d/vlog" || why "S1: $(tail -2 "$d/out" | tr '\n' '|')"; }
 row_S2() { local d; d=$(mkrow S2); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"' runs.1.json; setv "$d" pending-full 8
   run "$d" "$PR" "$SHA" --wait; rc_is "$d" 0 && nomiss "$d" && polls "$d" 2 && verdict "$d" ready && sleeps "$d" 1 && count "$d" '^WAIT ' 1 && line "$d" 'WAIT poll=1/60 absent=[] pending=["test"]'; }
 row_S3() { local d; d=$(mkrow S3); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'
   runs "$d" '. + [(.[] | select(.name == "test") | .id = (.id + 100) | .status = "queued" | .conclusion = null | .started_at = null)]'; setv "$d" pending-full 8
-  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING test (queued)" && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]' && vcalled "$d" 0; }
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING test (queued)" && tailis "$d" 'required=13 absent=[] pending=["test"] failed=[]' && vcalled "$d" 0; }
 row_S4() { local d; d=$(mkrow S4); assert_fixture_dir "$d"
   runs "$d" '. + [(.[] | select(.name == "test") | .id = (.id - 100) | .conclusion = "failure")]'; setv "$d" no-run
   run "$d" "$PR" "$SHA"; rc_is "$d" 0 && nomiss "$d" && verdict "$d" ready && tailis "$d" "$READY_TAIL" && vcalled "$d" 0; }
 row_S5() { local d; d=$(mkrow S5); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" no-run
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "PENDING test (no-ready-run)" && reason "$d" not-green || return 1
-  run "$d" "$PR" "$SHA" --wait --timeout 120; rc_is "$d" 1 && polls "$d" 2 && verdict "$d" timeout && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]'; }
+  run "$d" "$PR" "$SHA" --wait --timeout 120; rc_is "$d" 1 && polls "$d" 2 && verdict "$d" timeout && tailis "$d" 'required=13 absent=[] pending=["test"] failed=[]'; }
 row_S6() { local d; d=$(mkrow S6); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" stalled
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready && reason "$d" stalled && line "$d" "ABSENT  test (stalled: no full CI run decided after the ready event)" \
-    && tailis "$d" 'required=26 absent=["test"] pending=[] failed=[]' && grep -Fq "gh pr ready --undo $PR" "$d/out" && grep -Fq "gh pr ready $PR" "$d/out" \
+    && tailis "$d" 'required=13 absent=["test"] pending=[] failed=[]' && grep -Fq "gh pr ready --undo $PR" "$d/out" && grep -Fq "gh pr ready $PR" "$d/out" \
     && ! grep -Fq 'gh run rerun' "$d/out" || return 1
   run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && reason "$d" stalled; }
 row_S7() { local d; d=$(mkrow S7); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" awaiting-approval 8
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && reason "$d" awaiting-approval && line "$d" "PENDING test (awaiting-approval: a maintainer must approve the fork workflow run)" \
-    && tailis "$d" 'required=26 absent=[] pending=["test"] failed=[]' || return 1
+    && tailis "$d" 'required=13 absent=[] pending=["test"] failed=[]' || return 1
   run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && reason "$d" awaiting-approval; }
 row_S8() { local d; d=$(mkrow S8); assert_fixture_dir "$d"; setrun "$d" test ".conclusion = \"failure\" | .details_url = \"$TEST_URL_RUN8\""; setv "$d" full-decided 8
-  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green && tailis "$d" 'required=26 absent=[] pending=[] failed=["test"]' || return 1
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green && tailis "$d" 'required=13 absent=[] pending=[] failed=["test"]' || return 1
   run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && verdict "$d" not-ready; }
 row_S9() { local d; d=$(mkrow S9); assert_fixture_dir "$d"
   setrun "$d" test ".details_url = \"$TEST_URL_RUN8\""
   runs "$d" ". + [(.[] | select(.name == \"test\") | .id = (.id + 1) | .conclusion = \"failure\" | .details_url = \"$TEST_URL_RUN6\")]"; setv "$d" full-decided 8
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && verdict "$d" not-ready && reason "$d" stale-row && line "$d" "FAILED  test (stale-row: the newest test row belongs to run 6, not the deciding run 8)" \
-    && tailis "$d" 'required=26 absent=[] pending=[] failed=["test"]' && grep -Fq "gh pr ready --undo $PR" "$d/out" || return 1
+    && tailis "$d" 'required=13 absent=[] pending=[] failed=["test"]' && grep -Fq "gh pr ready --undo $PR" "$d/out" || return 1
   run "$d" "$PR" "$SHA" --wait; rc_is "$d" 1 && polls "$d" 1 && reason "$d" stale-row; }
 row_S10() { local d; d=$(mkrow S10); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" n/a
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green && vcalled "$d" 1; }
 row_S11() { local d; d=$(mkrow S11); assert_fixture_dir "$d"; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8; touch "$d/vstate.fail"
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && reason "$d" not-green && vcalled "$d" 1; }
 row_S12() { local d; d=$(mkrow S12); assert_fixture_dir "$d"; drop "$d" test; setv "$d" pending-full 8
-  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  test" && tailis "$d" 'required=26 absent=["test"] pending=[] failed=[]' && vcalled "$d" 0; }
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  test" && tailis "$d" 'required=13 absent=["test"] pending=[] failed=[]' && vcalled "$d" 0; }
 row_S13() { local d; d=$(mkrow S13); assert_fixture_dir "$d"
   jqf "$d" runs.json "map(.check_runs[].head_sha = \"$GREEN\")"; setrun "$d" test '.conclusion = "failure"'; setv "$d" pending-full 8
   run "$d" "$PR" "$SHA" --green-sha "$GREEN"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (failure)" && vcalled "$d" 0; }
