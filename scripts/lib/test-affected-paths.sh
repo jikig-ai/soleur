@@ -3717,6 +3717,7 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
 AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
   ".github/workflows/"
   "scripts/lint-umbrella-aggregate.sh"
+  "scripts/lib/umbrella-member.sh"  # the canonical member() the (f) pin sources
   "scripts/lib/test-affected-paths.sh"
 )
 
