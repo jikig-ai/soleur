@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=473   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=476   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -3676,13 +3676,21 @@ mutate accept-stale-lines-unsorted 'c.stale = sorted(set(c.stale))' 'c.stale = l
 mutate accept-missing-file-is-an-error '    if not os.path.exists(path):' '    if False:' row_acc_missing
 mutate accept-missing-file-silent '        print("replay: --accept %s does not exist: no exemptions" % path, file=sys.stderr)' '        pass' row_acc_missing
 mutate accept-os-error-unmapped '        raise ReadError("cannot read the accept file %s: %s" % (path, e.strerror or e))' '        raise' row_acc_isdir
-mutate accept-comment-lines-are-rows '        if not line.strip() or line.startswith("#"):' '        if not line.strip():' row_acc_comments
+mutate accept-comment-lines-are-rows '        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split("\t")
+        where = "%s:%d" % (path, n)' '        if not line.strip():
+            continue
+        f = line.split("\t")
+        where = "%s:%d" % (path, n)' row_acc_comments
 mutate accept-duplicate-row-tolerated '        if tuple(f[:4]) in seen:' '        if False:' row_acc_dupe
 mutate accept-duplicate-key-needs-the-same-reason '        if tuple(f[:4]) in seen:' '        if tuple(f[:5]) in seen:' row_acc_dupe2
 mutate accept-ordinal-zero-tolerated 're.match(r"^[1-9][0-9]*$", f[3])' 're.match(r"^[0-9]+$", f[3])' row_acc_ord0
 mutate accept-anchor-not-hex 're.match(r"^[0-9a-f]{12}$", f[2])' 'f[2]' row_acc_nothex
 mutate accept-star-needs-no-dashes '            if f[2:4] != ["-", "-"]:' '            if False:' row_acc_starkey
-mutate accept-extra-columns-tolerated '        if len(f) != 5:' '        if len(f) < 5:' row_acc_six
+mutate accept-extra-columns-tolerated '        if len(f) != 5:
+            raise ValueError("%s: %d column(s), want 5: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>; the 3-column "' '        if len(f) < 5:
+            raise ValueError("%s: %d column(s), want 5: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>; the 3-column "' row_acc_six
 mutate accept-empty-reason-tolerated 'if not re.match(r"^false-positive: \S", f[4]):' 'if not re.match(r"^false-positive:", f[4]):' row_acc_emptyreason
 mutate accept-blank-reason-tolerated 'if not re.match(r"^false-positive: \S", f[4]):' 'if not re.match(r"^false-positive: ", f[4]):' row_acc_trailing
 
@@ -4290,7 +4298,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1104   # 1313 minus the retired observation-window section's 209 assertions (129 gated ow_mutate sites + 80 of unconditional floor share; 86 chk calls removed — the old floor carried 6 of slack; probe retired 2026-11-07 with #10865 closed); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1110   # 1104 + 6 net unconditional assertions from the PR3b accept-bound and job-wiring rows (measured full run 2026-11-07: 1110 passed, 476 gated sites); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
