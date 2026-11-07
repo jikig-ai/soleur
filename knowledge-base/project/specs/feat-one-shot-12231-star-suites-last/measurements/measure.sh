@@ -69,7 +69,7 @@ git config commit.gpgsign false
 while IFS=$'\t' read -r st f; do
   case "$st" in
     A) git rm -q -f --ignore-unmatch -- "$f" ;;
-    M) git show "$PIN^:$f" >"$f" && git add -- "$f" ;;
+    M) git checkout -q "$PIN^" -- "$f" ;;
   esac
 done < <(git diff --name-status "$PIN^" "$PIN" | awk '{ if ($1=="A"||$1=="M") { st=$1; $1=""; sub(/^ /,""); print st "\t" $0 } }')
 LEFTHOOK=0 git commit -q --no-verify -m "measure: pinned diff of $PIN" || { echo "ABORT: pinned-diff commit empty"; exit 2; }

@@ -466,6 +466,7 @@ fi
 # --- A4b: a `*` suite runs alone, at the drain (#12231) ------------------------
 # indA, starS, slowL, indB: the `*` is parked by the scheduler, so it starts only after BOTH later suites
 # (slowL holds a 1.2 s window, so a premature launch overlaps it for at least 0.8 s) have ended.
+assert_fixture_dir "$TMP"
 TIMING_FILE="$TMP/timing.star"; : > "$TIMING_FILE"
 run_arm star 4 || true
 STAR_VERDICTS="$(verdict_lines "$ARM_OUT" | tr '\n' ' ')"; STAR_RC="$ARM_RC"
@@ -712,7 +713,7 @@ fi
 # --- A10: conservative backfill (#12013) -----------------------------------------------
 # A candidate may launch iff a slot is free, it conflicts with no LIVE suite, and it conflicts with nothing
 # still queued AHEAD of it. `*` conflicts with everything, so it runs alone: the scheduler PARKS it and launches it
-# at the drain, after every non-`*` suite (#12231), so a queued `*` holds nothing back. SOLEUR_PJ_FIFO=1 restores the
+# at the drain, after every non-`*` suite (#12231), so a parked `*` holds nothing back. SOLEUR_PJ_FIFO=1 restores the
 # strict FIFO the runner had before (the A/B control of the measurement). Order of suites that share a token
 # is registration order in both modes; only INDEPENDENT suites may jump a blocked head.
 
@@ -775,7 +776,7 @@ else
   fail "A10 — order among conflicting suites violated"; dump "$(cat "$FIXTURES/timeline.log")"
 fi
 
-# Parked `*` (#12231): a queued `*` suite no longer blocks later token-free suites. indA2 (registered AFTER the star)
+# Parked `*` (#12231): a parked `*` suite no longer blocks later token-free suites. indA2 (registered AFTER the star)
 # starts while holdQ is live; the star starts only after both have ended.
 run_arm bf3 4 || true
 if [[ "$ARM_RC" == "0" ]] && tl_check "S:indA2<E:holdQ" "S:starS>=E:holdQ" "S:starS>=E:indA2"; then

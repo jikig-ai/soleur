@@ -91,3 +91,20 @@ no per-site measurement, no re-split, no T2 reading. Per-site costs are unmeasur
   barrier removal only; with several `*` suites selected the effect is structural (each runs solo either way and the stranded drain disappears),
   not measured.
 - A result for diffs that select a different suite mix; a confidence band.
+
+## Full battery (AC12) on the runner commit tree
+
+`env -u CI SOLEUR_TEST_JOBS=4 bash scripts/test-all.sh` (the runner changed, so the gate degraded to full: `AFFECTED_FALLBACK reason=runner-changed`;
+two attempts were refused first because a sibling session's full-gate run was in flight, then run when it ended): `746/754 suites passed`, rc 1,
+4 reds, 4 declined.
+- The five `*` suites it selected launched last, in registration order, each with no other suite live, and all passed:
+  `orphan-process-reaper`, `orphan-process-reaper-mutations`, `md-to-mrkdwn`, `cf-tunnel-liveness-gate-mutations`, `test-all-capacity-signal`.
+  The sixth declared `*` suite, `apps/web-platform/infra/run-registered-suites.sh`, was declined (`not_in_diff`) in this run, so it is not
+  exercised here; CI runs it.
+- Red 1, `plugins/soleur/test/fixture-relative-assert.test.sh`: caused by this change, two new sites (the star arm's timing-file write in the scheduler
+  suite, and a redirect in `measure.sh`). Fixed (`assert_fixture_dir "$TMP"` before the write; `git checkout <pin>^ -- <file>` instead of a redirect);
+  suite re-run green (rc 0).
+- Red 2 and 3, `flag-detach-shared` and `flag-org-scoping-pr2`: fail in this worktree's environment when run alone (rc 1) and pass in a clean clone of the
+  base tree (rc 0); they exercise the flag scripts, no file of this diff is read by them (`git diff` over `plugins` and `.claude` is empty), and the
+  runner already lists both as "unverified suite fails at base under the isolated run" (`JOINED` lines of `grep-q-pipe-guard`). Environment-bound, not this change.
+- Red 4, `community-argv` (103 s): passes alone in the worktree (rc 0) and in the base clone; load-sensitive under the pooled full run.
