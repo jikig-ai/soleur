@@ -4,7 +4,7 @@
 - Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-retire-10865-window-probe/knowledge-base/project/plans/2026-11-07-chore-retire-ratchet-observation-window-probe-plan.md
 - Status: complete
 - Plan artifact: complete (selector=branch)
-- cto_spawns=0
+- cto_spawns=1
 
 ### Errors
 - One tool rejection: `git commit` ran from the bare root and was blocked by the main-branch guard; re-ran with `git -C <worktree>`. No plan-file errors.
