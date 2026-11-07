@@ -203,7 +203,7 @@ the densest concurrency in the whole pipeline, and concurrent full-gate runs inf
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
 panel returns — the bounded default `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"` (token-aware
 `affected-tests.sh`: here it delegates `--affected` to the [runner](../../../../scripts/test-all.sh), its sole scope
-absent one — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md); rc 6 and 7 are not a pass),
+absent one — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md); rc 6, 7 and a SKIPPED line are not a pass),
 previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`:
 "every covering suite ran" is the printed selection vs the run's per-suite results, not memory
 (#10333). Two backstops:

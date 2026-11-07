@@ -386,7 +386,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    and that 1.9x figure was then nearly used as the suite's cost budget. The lead runs the gate
    ONCE, after collecting fan-out work — step 9's `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"`
    (the same `--affected` run; rc table: [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)),
-   previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`. Two mechanical backstops exist, and neither depends on an
+   previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M` (a SKIPPED line is not a pass). Two mechanical backstops exist, and neither depends on an
    agent volunteering anything: a `--full` or degraded-full [scripts/test-all.sh](../../../../scripts/test-all.sh)
    exits 4 when it MEASURES a sibling full-gate run already in flight (#7553), and `tc_acquire`'s
    advisory lock (ADR-133) serialises whatever gets past that. **`SOLEUR_SUBAGENT=1` is a convention
@@ -1040,6 +1040,8 @@ State plainly which axes your battery did NOT edit. Two mechanical companions: r
    # wraps affected-tests.sh; skips only on a brief's ci-is-the-gate token
    bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"
    ```
+
+   A `SKIPPED` line (`AFFECTED_GATE_SKIPPED`) means the gate was NOT run: report it so, never as a pass.
 
    The gate's rc contract (0/1/4/6/7), the `.soleur-test-gate.json` override schema, and per-rc actions live in [affected-gate-contract.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md). In THIS repo it capability-probes and delegates [scripts/test-all.sh](../../../../scripts/test-all.sh) --affected — selection fails toward coverage (`AFFECTED_FALLBACK reason=…` on an undecidable diff or a touched runner/index); preview it via `bash scripts/test-all.sh --print-selection` (repo-local). A green affected run is the diff's coverage, not a full-coverage claim; CI's sharded battery is the backstop. A refusal (rc 4) names its cause and prints a `remedy:` line — never retry it blindly.
 

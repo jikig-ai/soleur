@@ -4,8 +4,9 @@
 
 Canonical contract for `plugins/soleur/scripts/affected-tests.sh` — the single
 affected-suite gate entry point for Soleur-guided repos. Prescribed dispatch
-(wired from `ship` Phase 4, `work` Phase 2 exit and `review` through the
-token-aware wrapper below, `test-fix-loop`, `grok-pre-push-gate.sh`):
+(wired from `ship` Phase 4, `work` Phase 2 exit, `review`, `test-fix-loop`,
+`grok-pre-push-gate.sh`; work and review reach it through the token-aware wrapper below,
+ship, test-fix-loop and the Grok gate do not):
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"          # affected selection
