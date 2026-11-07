@@ -4,7 +4,7 @@
  * "Still working…" narration is suppressed, exactly like a review gate).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import type { ChatMessage } from "@/lib/chat-state-machine";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
@@ -173,7 +173,7 @@ describe("requester label and withheld view through the chat thread (#9601)", ()
     await renderStreaming([userMsg, card(ID1, { view: null, toolName: "redacted", viewerRole: "member", content: "x" } as Partial<Card>)]);
     expect(screen.getByTestId("approval-request-card").getAttribute("data-approval-state")).toBe("pending_member");
     expect(screen.queryByTestId("approval-bound-block")).toBeNull();
-    expect(screen.queryAllByRole("button", { name: /Approve|Deny/ })).toHaveLength(0);
+    expect(within(screen.getByTestId("approval-request-card")).queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("An action in this conversation is waiting for an Owner's approval.")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("Details removed");
   });

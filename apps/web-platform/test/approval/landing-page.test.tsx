@@ -334,8 +334,10 @@ describe("the requester line (#9601)", () => {
     expect(screen.getByRole("button", { name: "Deny" })).toBeTruthy();
     expect(fake.queries[0].terminal).toBe("await");
     expect(labelReports()).toHaveLength(1);
-    expect(JSON.stringify(h.report.mock.calls)).not.toContain(REQUESTER_EMAIL);
-    expect((labelReports()[0][2] as { extra: { code?: string } }).extra.code).toBe("57014");
+    // The thrown value is handed to the (mocked) ops helper raw; the real helper keeps only {code, fn, errName}. What the
+    // landing page itself puts in the context must carry no address.
+    expect(JSON.stringify(h.report.mock.calls.map((c) => c[2]))).not.toContain(REQUESTER_EMAIL);
+    expect((labelReports()[0][1] as { code?: string }).code).toBe("57014");
   });
 
   it("a lookup that times out still renders Approve and Deny, with no line", async () => {

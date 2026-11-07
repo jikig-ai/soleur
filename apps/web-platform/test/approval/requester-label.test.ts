@@ -380,7 +380,13 @@ describe("construction", () => {
     expect(h.serviceClient).toHaveBeenCalledTimes(1);
   });
 
-  it("the real service client satisfies the labeler's query interface (bridges the casts at the call sites)", () => {
-    expectTypeOf<ReturnType<typeof createServiceClient>>().toExtend<RequesterQueryClient>();
+  it("the real service client keeps the shapes the labeler's query interface relies on (bridges the casts at the call sites)", () => {
+    // A whole-client `toExtend` instantiates the generated PostgREST types without bound (TS2589), so the bridge pins the
+    // two slices the labeler uses: the auth admin read, and `from(table: string)` with a `select` after it.
+    type Svc = ReturnType<typeof createServiceClient>;
+    expectTypeOf<Svc["auth"]["admin"]["getUserById"]>().parameter(0).toBeString();
+    expectTypeOf<Svc["from"]>().parameter(0).toExtend<string>();
+    expectTypeOf<ReturnType<Svc["from"]>>().toHaveProperty("select");
+    expectTypeOf<RequesterQueryClient["auth"]["admin"]["getUserById"]>().parameter(0).toBeString();
   });
 });
