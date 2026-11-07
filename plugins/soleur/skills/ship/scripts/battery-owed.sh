@@ -248,12 +248,14 @@ fi
 if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
   undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }origin/main is unresolvable; cannot scope the diff"
 fi
-# Same construction, and the same reasons, as the operator-token arm below: NUL-delimited so a C-quoted name reaches
-# INFRA_RE as raw bytes, `--no-renames` so a rename lists BOTH its old and its new path (a rename-detected diff prints only
-# the new one), `--ignore-submodules=none` so a gitlink is not hidden by configuration. New here: `git -C` the repo top,
-# because `diff.relative` limits a diff to the cwd subtree. `core.quotePath=false` alone is NOT a fix: it governs only bytes
-# at or above 0x80, and a tab, `"` or `\` stays quoted. A copy needs no handling. T5f-T5h pin the rename members (dropping
-# `--no-renames` reddens T5f and T5h); T20 pins the rest.
+# The operator-token arm below builds its path lists the same way, for the same reasons: NUL-delimited so a C-quoted name
+# reaches INFRA_RE as raw bytes, `--no-renames` so a rename lists BOTH its old and its new path (a rename-detected diff prints
+# only the new one), `--ignore-submodules=none` so a gitlink is not hidden by configuration, and `git -C` the repo top (`_tp`,
+# resolved above once the work-tree check passed) because `diff.relative` limits a diff to the cwd subtree.
+# `core.quotePath=false` alone is NOT a fix: it governs only bytes at or above 0x80; a tab, `"` or `\` stays quoted.
+# A copy needs no handling (its source is never listed in either form). `tr` re-splits a name that holds a newline: the extra
+# lines can only add a false OWED, never hide a real infra path (its first line still starts at the prefix). T5f and T5h pin
+# the rename members (dropping `--no-renames` reddens both); T20 pins the rest.
 CHANGED="$(git -C "${_tp:-.}" diff -z --no-renames --ignore-submodules=none --name-only refs/remotes/origin/main...HEAD -- 2>/dev/null | tr '\0' '\n')"
 rc=$?
 (( rc == 0 )) || undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }could not compute the branch diff (rc=$rc)"
@@ -458,7 +460,11 @@ fi
 # {context, integration_id} OBJECTS, so a bare-string index never matches and the
 # condition would never retire.
 if ! jq -e --arg c "infra-validate-required" 'any(.[]; .context == $c)' <<<"$REQUIRED_JSON" >/dev/null 2>&1; then
-  if grep -qE "$INFRA_RE" <<<"$CHANGED"; then
+  # The grep runs on the paths PLUS one sentinel infra path (as in the token arm): a here-string or pipe that silently fails
+  # (a full TMPDIR for a large list) would otherwise read as "no infra match" and fall through to SKIPPABLE.
+  _n461="$(printf '%s\n%s\n' "$CHANGED" 'apps/web-platform/infra/__sentinel__' | grep -cE "$INFRA_RE")"
+  [[ "$_n461" =~ ^[0-9]+$ ]] && (( _n461 >= 1 )) || undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }the infra scope check did not run"
+  if (( _n461 > 1 )); then
     owed "diff touches the infra surface and infra-validate-required is NOT in the live required set (#6480) — the battery is its only BLOCKING gate"
   fi
 fi

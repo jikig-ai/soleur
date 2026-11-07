@@ -420,9 +420,9 @@ assert_eq "$SKIPPABLE" "$(run_gate "$WORKB" "$STUBB")" \
 # =============================================================================
 # T5f — a file RENAMED OUT of the infra surface still counts as an infra diff.
 #
-# `--name-only` prints only the new path, so the gate would miss it while
-# test-all.sh's predicate catches it. Measured: --name-only gave `moved.tf`;
-# --name-status -M gave `R100 apps/web-platform/infra/a.tf moved.tf`.
+# With rename detection `--name-only` prints only the new path (`moved.tf`), so the gate
+# would miss the infra path; `--no-renames` lists the old path too. (History: the gate once
+# read `--name-status -M` for the same reason; T5g/T5h below pin the other rename shapes.)
 # =============================================================================
 in_fixture "$WORKB" bash -c 'mkdir -p apps/web-platform/infra && printf "x\n" > apps/web-platform/infra/a.tf && git add -A && git commit --quiet -m "add infra file" && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
 in_fixture "$WORKB" bash -c 'git mv apps/web-platform/infra/a.tf moved.tf && git commit --quiet -m "rename out of the infra surface"'
@@ -431,17 +431,17 @@ assert_eq "$OWED" "$(run_gate "$WORKB" "$STUBB")" \
   "T5f a file renamed OUT of apps/web-platform/infra/ -> OWED (the old path must still count)"
 
 # =============================================================================
-# T5g/T5h — the MIRROR of T5f, which T5f structurally could not reach.
+# T5g/T5h — the other rename shapes: a rename INTO infra, and a rename OUT of the workflow literal.
 #
-# A rename emits both paths on ONE tab-joined line and INFRA_RE is `^`-anchored,
-# so testing the joined line tests the OLD path only. T5f renames OUT, putting
-# the infra path in column 1 where the anchor matches -- so T5f passed while the
-# gate was blind to every rename IN. Measured on a probe repo before the fix:
-# `R100  src/x.tf  apps/web-platform/infra/x.tf` did NOT match, i.e. a .tf file
-# renamed into the Terraform module directory returned SKIPPABLE. Terraform loads
-# every *.tf in that directory, so it is a real infra change with no content diff,
-# on the one shard no required check covers. T5h is the same bug at the workflow
-# literal, whose `$` anchor fails when the literal sits in column 1.
+# A rename INTO infra lists its new path under any construction, so T5g alone cannot tell
+# a construction from its predecessor; T5h (rename OUT of the apply-workflow literal) dies
+# with T5f when --no-renames is dropped. History: the pre-#12251 `--name-status -M` form
+# printed a rename as ONE tab-joined line, and INFRA_RE is `^`-anchored, so a rename IN
+# (`R100  src/x.tf  apps/web-platform/infra/x.tf`) did not match and returned SKIPPABLE,
+# although Terraform loads every *.tf in that directory (a real infra change with no
+# content diff, on the one shard no required check covers). The workflow literal's `$`
+# anchor failed the same way when the literal sat in column 1. Both are gone with the
+# tab-joined line; the rows stay as the pin on the rename members of the path list.
 # T5f and T5h die if --no-renames is dropped from the CHANGED line.
 # =============================================================================
 in_fixture "$WORKB" bash -c 'git checkout --quiet -- . && printf "y\n" > outside.tf && git add -A && git commit --quiet -m "add a tf file outside infra" && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
@@ -1044,7 +1044,7 @@ shim18() { # <label> <argv-pattern> [<fail from the Nth matching call, default 1
   assert_eq "$UNDECIDABLE" "$(run_gate "$w" "$s")" "$1: a failing git source -> UNDECIDABLE (never SKIPPABLE)"; rm -f "$s/n"
   assert_reason "$w" "$s" "working-tree scope check failed" "$1: the failure names itself"
 }
-shim18 "T18i source 1 (committed diff)" "--name-only refs/remotes/origin/main...HEAD --" 2  # the no-token CHANGED line runs this command first (#12251); the token arm's source 1 is the 2nd match
+shim18 "T18i source 1 (committed diff)" "--name-only refs/remotes/origin/main...HEAD --" 2  # the no-token CHANGED line runs this command first (#12251) and the token arm's source 1 is the 2nd match: this row is coupled to that argv text and to that order
 shim18 "T18i source 2 (working tree)" "--name-only HEAD --"
 shim18 "T18i source 3 (untracked)" "ls-files -z"
 shim18 "T18i source 4 (staged)" "--cached HEAD --"
@@ -1600,15 +1600,17 @@ assert_has "$OC_ITEM4" "gate-or-skip.sh" "T19h the writer reference's item 4 nam
 # proves the hide is real (the plain diff really C-quotes or drops the path), so a
 # row cannot pass vacuously. The control path begins with a capital Z so it sorts
 # BEFORE apps/ in the diff, which is what lets the glue and first-member mutations
-# bite. The mutation list is the plan's Guard Contract rows 1-10 and H1-H4.
+# bite. Mutations that must red: revert to the old pipeline, drop -z, --ignore-submodules=none, --no-renames or git -C, tr -d NUL, head -n 1.
 # =============================================================================
 t20_commit() { # <work> <relpath>: the special bytes travel as an argv element
   in_fixture "$1" bash -c 'mkdir -p "$(dirname "$1")" && printf x > "$1" && git add -A && git commit --quiet -m t20' _ "$2"
 }
-t20_count() { # <work> <subdir> <grep pattern>: lines of the PLAIN diff matching, 0 when none
+t20_count() { # <work> <subdir> <grep pattern>: lines of the PLAIN diff matching, 0 when none; a failing git prints NOTHING, so it never reads as 0
   ( cd "$1/$2" || exit 9
     git_fixture_env "$1" >/dev/null 2>&1 || exit 9
-    git diff --name-only refs/remotes/origin/main...HEAD | grep -c -e "$3" || true )
+    local l
+    l="$(git diff --name-only refs/remotes/origin/main...HEAD)" || exit 9
+    printf '%s\n' "$l" | grep -c -e "$3" || true )
 }
 t20_sm() { # <work> <path>: a real submodule whose ignore=all lives in the committed module config
   in_fixture "$1" bash -c 'git init --quiet ../subsrc && git -C ../subsrc -c user.name=t -c user.email=t@t commit --quiet --allow-empty -m s && mkdir -p "$(dirname "$1")" && git -c protocol.file.allow=always submodule add --quiet ../subsrc "$1" && git config -f .gitmodules submodule."$1".ignore all && git add -A && git commit --quiet -m gitlink' _ "$2"
@@ -1675,7 +1677,56 @@ make_stub "$S20c" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20c")"
 assert_eq "$OWED" "$(run_gate_sub "$W20c" "$S20c" plugins)" "T20c diff.relative from a subdirectory with an infra change -> OWED"
 t20_reason_sub "$W20c" "$S20c" plugins "diff touches the infra surface" "T20c the refusal is the infra condition (verdict line read from the subdirectory)"
 
+# T20d — a DELETION and a TYPE CHANGE under infra are infra changes: the list must not carry a --diff-filter that drops D or T.
+for t20k in delete typechange; do
+  new_fixture_root R20d; W20d="$(build_fixture "$R20d")"; S20d="$R20d/stub"
+  in_fixture "$W20d" bash -c 'mkdir -p apps/web-platform/infra && printf x > apps/web-platform/infra/d20.tf && git add -A && git commit --quiet -m base-infra && git push --quiet origin feat-fixture && git checkout --quiet main && git merge --quiet feat-fixture --no-edit && git push --quiet origin main && git checkout --quiet feat-fixture'
+  t20_commit "$W20d" "Zcontrol-20/${t20k}.md"
+  make_stub "$S20d" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20d")"
+  assert_eq "$SKIPPABLE" "$(run_gate "$W20d" "$S20d")" "T20d control ($t20k): a change outside the infra surface, every check green -> SKIPPABLE"
+  if [[ "$t20k" == delete ]]; then
+    in_fixture "$W20d" bash -c 'git rm --quiet apps/web-platform/infra/d20.tf && git commit --quiet -m del-infra'
+  else
+    in_fixture "$W20d" bash -c 'rm apps/web-platform/infra/d20.tf && ln -s ../elsewhere apps/web-platform/infra/d20.tf && git add -A && git commit --quiet -m typechange-infra'
+  fi
+  make_stub "$S20d" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20d")"
+  assert_eq "$OWED" "$(run_gate "$W20d" "$S20d")" "T20d ($t20k) an infra file ${t20k}d in place -> OWED"
+  assert_reason "$W20d" "$S20d" "diff touches the infra surface" "T20d ($t20k) the refusal is the infra condition"
+done
+
+# T20e — a NEAR MISS of the prefix is outside the surface: a directory named infra<TAB> must stay SKIPPABLE (a stripper of control bytes would turn it into infra/).
+new_fixture_root R20e; W20e="$(build_fixture "$R20e")"; S20e="$R20e/stub"
+t20_commit "$W20e" $'apps/web-platform/infra\t/y.tf'
+assert_eq "1" "$(t20_count "$W20e" . 'y\.tf"$')" "T20e precondition: the plain diff lists the near-miss path (C-quoted)"
+make_stub "$S20e" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20e")"
+assert_eq "$SKIPPABLE" "$(run_gate "$W20e" "$S20e")" "T20e a directory named infra<TAB> (a near miss of the prefix) is outside the surface -> SKIPPABLE"
+
+# T20f — the infra grep itself failing must not read as "no infra match" (a here-string needs a temp file for a large list).
+new_fixture_root R20f; W20f="$(build_fixture "$R20f")"; S20f="$R20f/stub"
+t20_commit "$W20f" "apps/web-platform/infra/g20.tf"
+make_stub "$S20f" "$TWO_REQUIRED" "$GREEN_CHECKS" "$(head_sha_of "$W20f")"
+assert_eq "$OWED" "$(run_gate "$W20f" "$S20f")" "T20f control: an infra path with the real grep -> OWED"
+REAL_GREP20="$(command -v grep)"
+printf '#!/usr/bin/env bash\ncase "$*" in *apps/web-platform/infra/*) exit 2 ;; esac\nexec %s "$@"\n' "$REAL_GREP20" | tee "$S20f/grep" >/dev/null
+chmod +x "$S20f/grep"
+assert_eq "$UNDECIDABLE" "$(run_gate "$W20f" "$S20f")" "T20f the infra grep failing on an infra diff -> UNDECIDABLE (never SKIPPABLE)"
+assert_reason "$W20f" "$S20f" "infra scope check did not run" "T20f the failure names itself"
+
+# CONTROL: assert_reason and t20_reason_sub OWN their verdict, so the dispatch floor cannot see one being neutered.
+# Drive each in the pass AND the fail direction; the two deliberate FAILs are unwound.
+_p20=$PASS; _f20=$FAIL
+assert_reason "$W20f" "$S20f" "infra scope check did not run" "T20 control: assert_reason accepts a present reason"
+t20_reason_sub "$W20c" "$S20c" plugins "diff touches the infra surface" "T20 control: t20_reason_sub accepts a present reason"
+_p20b=$PASS; _f20b=$FAIL
+assert_reason "$W20f" "$S20f" "this reason does not exist" "T20 control: assert_reason rejects a missing reason (EXPECTED FAIL, subtracted)"
+t20_reason_sub "$W20c" "$S20c" plugins "this reason does not exist" "T20 control: t20_reason_sub rejects a missing reason (EXPECTED FAIL, subtracted)"
+if (( _p20b - _p20 != 2 || FAIL - _f20b != 2 || _f20b != _f20 )); then
+  printf 'FATAL: T20 helper controls did not move the counters as expected (pass %s->%s, fail %s->%s->%s).\n' "$_p20" "$_p20b" "$_f20" "$_f20b" "$FAIL" >&2
+  exit 1
+fi
+FAIL=$(( FAIL - 2 ))
+
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 419
+print_results 432
