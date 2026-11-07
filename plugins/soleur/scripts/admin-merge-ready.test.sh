@@ -12,7 +12,7 @@
 #
 # ── THE FIXTURES ─────────────────────────────────────────────────────────────────────────────
 # Every row is a jq edit of ONE real-shape base captured read-only from GitHub
-# (test/fixtures/admin-merge-ready/, provenance in its README): 13 required contexts across two
+# (test/fixtures/admin-merge-ready/, provenance in its README): 15 required contexts across two
 # rulesets (the 16 folded names swapped for the 3 umbrella contexts, #12276), 66 check runs,
 # all required contexts green. No hand-written required set exists.
 #

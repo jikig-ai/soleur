@@ -226,8 +226,8 @@ mg_arm() {
   embedded="${BASH_REMATCH[2]}"
 
   # --- group membership enumeration (#11678, ADR-270 raise checklist) -----------
-  # PARITY-PINNED COPY of scripts/merge-queue-cla-verify.sh:89-181 — the only permitted divergence is the context
-  # list `cla-check cla-evidence` -> `oracle-review-required` (pinned byte-for-byte by scripts/ci-oracle-review.test.sh).
+    # PARITY-PINNED COPY of scripts/merge-queue-cla-verify.sh:89-181 — the only permitted divergence is the context
+    # list `cla-check cla-evidence` -> `oracle-review-required` (pinned byte-for-byte by scripts/ci-oracle-review.test.sh).
   # The candidate HEAD_SHA is the cumulative merge commit built for the DEEPEST
   # member of the group it verifies: with merge_method SQUASH each queue position
   # dispatches its own merge_group run whose candidate contains every shallower
@@ -247,82 +247,82 @@ mg_arm() {
   #   * the named PR appears in the member set AND is its maximal position
   #     (if head_ref ever names a non-deepest member, positions<= would
   #     silently skip the group's tail — that is the under-enumeration hole)
-MQ_QUERY='query($o:String!,$n:String!){
-  repository(owner:$o,name:$n){
-    mergeQueue(branch:"main"){ entries(first:100){
-      pageInfo{ hasNextPage }
-      nodes{ position headCommit{ oid } pullRequest{ number headRefOid } } } }
-  }
-}'
-gh_read "merge queue entries" graphql -f query="$MQ_QUERY" -F o="${REPO%%/*}" -F n="${REPO##*/}"
-entries="$REPLY_JSON"
+  MQ_QUERY='query($o:String!,$n:String!){
+    repository(owner:$o,name:$n){
+      mergeQueue(branch:"main"){ entries(first:100){
+        pageInfo{ hasNextPage }
+        nodes{ position headCommit{ oid } pullRequest{ number headRefOid } } } }
+    }
+  }'
+  gh_read "merge queue entries" graphql -f query="$MQ_QUERY" -F o="${REPO%%/*}" -F n="${REPO##*/}"
+  entries="$REPLY_JSON"
 
-[[ "$(jq -er '.data.repository.mergeQueue.entries.pageInfo.hasNextPage' <<<"$entries")" == "false" ]] \
-  || die "merge queue entries list is paginated beyond first:100 — refusing a truncated member set"
+  [[ "$(jq -er '.data.repository.mergeQueue.entries.pageInfo.hasNextPage' <<<"$entries")" == "false" ]] \
+    || die "merge queue entries list is paginated beyond first:100 — refusing a truncated member set"
 
-# anchor: the entry whose candidate is HEAD_SHA. Fallback: the named PR's entry —
-# allowed only when its own headCommit is absent or also HEAD_SHA; a named entry
-# whose headCommit differs means the verified candidate belongs to a DEEPER entry
-# and positions<=named would silently under-enumerate the tail.
-anchor_pos="$(jq -er --arg sha "$HEAD_SHA" --argjson pr "$pr" '
-  .data.repository.mergeQueue.entries.nodes
-  | ([.[] | select(.headCommit.oid == $sha) | .position] | first)
-    // ([.[] | select(.pullRequest.number == $pr)
-         | if ((.headCommit.oid // "") != "" and .headCommit.oid != $sha)
-           then "mismatch" else .position end] | first)
-    // empty' <<<"$entries")" \
-  || die "cannot bind merge_group candidate to queue membership for PR #${pr}"
-[[ "$anchor_pos" != "mismatch" ]] \
-  || die "named PR #${pr} does not own candidate ${HEAD_SHA} — head_ref names a non-deepest member, refusing partial verification"
-anchor_kind="headCommit"
-[[ "$(jq -er --arg sha "$HEAD_SHA" '[.data.repository.mergeQueue.entries.nodes[] | select(.headCommit.oid == $sha)] | length' <<<"$entries")" -ge 1 ]] \
-  || anchor_kind="named-fallback"
+  # anchor: the entry whose candidate is HEAD_SHA. Fallback: the named PR's entry —
+  # allowed only when its own headCommit is absent or also HEAD_SHA; a named entry
+  # whose headCommit differs means the verified candidate belongs to a DEEPER entry
+  # and positions<=named would silently under-enumerate the tail.
+  anchor_pos="$(jq -er --arg sha "$HEAD_SHA" --argjson pr "$pr" '
+    .data.repository.mergeQueue.entries.nodes
+    | ([.[] | select(.headCommit.oid == $sha) | .position] | first)
+      // ([.[] | select(.pullRequest.number == $pr)
+           | if ((.headCommit.oid // "") != "" and .headCommit.oid != $sha)
+             then "mismatch" else .position end] | first)
+      // empty' <<<"$entries")" \
+    || die "cannot bind merge_group candidate to queue membership for PR #${pr}"
+  [[ "$anchor_pos" != "mismatch" ]] \
+    || die "named PR #${pr} does not own candidate ${HEAD_SHA} — head_ref names a non-deepest member, refusing partial verification"
+  anchor_kind="headCommit"
+  [[ "$(jq -er --arg sha "$HEAD_SHA" '[.data.repository.mergeQueue.entries.nodes[] | select(.headCommit.oid == $sha)] | length' <<<"$entries")" -ge 1 ]] \
+    || anchor_kind="named-fallback"
 
-# members: every entry at position <= anchor — each carries its OWN recorded
-# queued head (headRefOid is the entry's head at enqueue; a pushed PR would
-# have been dequeued, so it is the head the candidate contains)
-members="$(jq -ec --argjson pos "$anchor_pos" '
-  [.data.repository.mergeQueue.entries.nodes[]
-   | select(.position <= $pos)
-   | {number: .pullRequest.number, head: .pullRequest.headRefOid, pos: .position}]
-  | sort_by(.pos)' <<<"$entries")" \
-  || die "cannot enumerate queue members for candidate ${HEAD_SHA}"
-member_count="$(jq -r 'length' <<<"$members")"
-[[ "$member_count" -ge 1 ]] || die "zero queue members enumerated for candidate ${HEAD_SHA} — refusing a vacuous pass"
-[[ "$member_count" == "$anchor_pos" ]] \
-  || die "member set (${member_count}) is not contiguous with the anchor position (${anchor_pos}) — a gapped or null position would silently drop a member"
+  # members: every entry at position <= anchor — each carries its OWN recorded
+  # queued head (headRefOid is the entry's head at enqueue; a pushed PR would
+  # have been dequeued, so it is the head the candidate contains)
+  members="$(jq -ec --argjson pos "$anchor_pos" '
+    [.data.repository.mergeQueue.entries.nodes[]
+     | select(.position <= $pos)
+     | {number: .pullRequest.number, head: .pullRequest.headRefOid, pos: .position}]
+    | sort_by(.pos)' <<<"$entries")" \
+    || die "cannot enumerate queue members for candidate ${HEAD_SHA}"
+  member_count="$(jq -r 'length' <<<"$members")"
+  [[ "$member_count" -ge 1 ]] || die "zero queue members enumerated for candidate ${HEAD_SHA} — refusing a vacuous pass"
+  [[ "$member_count" == "$anchor_pos" ]] \
+    || die "member set (${member_count}) is not contiguous with the anchor position (${anchor_pos}) — a gapped or null position would silently drop a member"
 
-# the named PR must be a member and its position maximal (deepest member)
-max_pos="$(jq -r '[.[].pos] | max' <<<"$members")"
-named_pos="$(jq -r --argjson pr "$pr" '[.[] | select(.number == $pr) | .pos] | first // -1' <<<"$members")"
-[[ "$named_pos" -ge 1 ]] || die "named PR #${pr} is absent from the enumerated member set — head_ref names a non-member"
-[[ "$named_pos" == "$max_pos" ]] \
-  || die "named PR #${pr} is at position ${named_pos} but the group runs deeper (max ${max_pos}) — refusing partial verification"
+  # the named PR must be a member and its position maximal (deepest member)
+  max_pos="$(jq -r '[.[].pos] | max' <<<"$members")"
+  named_pos="$(jq -r --argjson pr "$pr" '[.[] | select(.number == $pr) | .pos] | first // -1' <<<"$members")"
+  [[ "$named_pos" -ge 1 ]] || die "named PR #${pr} is absent from the enumerated member set — head_ref names a non-member"
+  [[ "$named_pos" == "$max_pos" ]] \
+    || die "named PR #${pr} is at position ${named_pos} but the group runs deeper (max ${max_pos}) — refusing partial verification"
 
-# `gh api --paginate` prints one JSON object per page, concatenated with no outer array, so the
-# reply is slurped (-s) and every page's check_runs read.
-# shellcheck disable=SC2016  # a jq program: $n is a jq variable, not a shell expansion
-latest_program='[.[].check_runs[]? | select(.name == $n and .app.id == 15368)]
-  | sort_by(.id)
-  | last
-  | if . == null then "missing" else "\(.status)/\(.conclusion)" end'
+  # `gh api --paginate` prints one JSON object per page, concatenated with no outer array, so the
+  # reply is slurped (-s) and every page's check_runs read.
+  # shellcheck disable=SC2016  # a jq program: $n is a jq variable, not a shell expansion
+  latest_program='[.[].check_runs[]? | select(.name == $n and .app.id == 15368)]
+    | sort_by(.id)
+    | last
+    | if . == null then "missing" else "\(.status)/\(.conclusion)" end'
 
-member_lines=()
-while IFS=' ' read -r mpr mhead; do
-  [[ -n "$mpr" ]] || die "blank member row enumerated — the member set is corrupt, refusing"
-  [[ "$mhead" =~ ^[0-9a-f]{40}$ ]] || die "member PR #${mpr} head sha is not 40 lowercase hex characters"
-  gh_read "the check-runs of member PR #${mpr}" --paginate \
-    "repos/${REPO}/commits/${mhead}/check-runs?filter=all&per_page=100"
-  mruns="$REPLY_JSON"
-  for ctx in oracle-review-required; do
-    verdict="$(jq -rs --arg n "$ctx" "$latest_program" <<<"$mruns")" \
-      || die "cannot read the ${ctx} check-runs of member PR #${mpr}"
-    verdict="$(printf '%s' "$verdict" | tr -cd 'A-Za-z0-9/_')"
-    [[ "$verdict" == "completed/success" ]] \
-      || die "${ctx} on member PR #${mpr} head is ${verdict:-unreadable}, not completed/success"
-  done
-  member_lines+=("pr${mpr}@${mhead:0:10}")
-done < <(jq -r '.[] | "\(.number) \(.head)"' <<<"$members")
+  member_lines=()
+  while IFS=' ' read -r mpr mhead; do
+    [[ -n "$mpr" ]] || die "blank member row enumerated — the member set is corrupt, refusing"
+    [[ "$mhead" =~ ^[0-9a-f]{40}$ ]] || die "member PR #${mpr} head sha is not 40 lowercase hex characters"
+    gh_read "the check-runs of member PR #${mpr}" --paginate \
+      "repos/${REPO}/commits/${mhead}/check-runs?filter=all&per_page=100"
+    mruns="$REPLY_JSON"
+    for ctx in oracle-review-required; do
+      verdict="$(jq -rs --arg n "$ctx" "$latest_program" <<<"$mruns")" \
+        || die "cannot read the ${ctx} check-runs of member PR #${mpr}"
+      verdict="$(printf '%s' "$verdict" | tr -cd 'A-Za-z0-9/_')"
+      [[ "$verdict" == "completed/success" ]] \
+        || die "${ctx} on member PR #${mpr} head is ${verdict:-unreadable}, not completed/success"
+    done
+    member_lines+=("pr${mpr}@${mhead:0:10}")
+  done < <(jq -r '.[] | "\(.number) \(.head)"' <<<"$members")
   # --- END parity-pinned copy ---------------------------------------------------
 
   finish pass members-green

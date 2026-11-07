@@ -38,5 +38,13 @@
   {
     "context": "vendor-pin-required",
     "integration_id": 15368
+  },
+  {
+    "context": "affected-index-ratchet",
+    "integration_id": 15368
+  },
+  {
+    "context": "oracle-review-required",
+    "integration_id": 15368
   }
 ]

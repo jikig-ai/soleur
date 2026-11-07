@@ -107,7 +107,7 @@ OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
 SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
-LIGHT_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-selection pr-selection push-dedupe"
+LIGHT_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection pr-selection push-dedupe"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'
 REASONS="bad_pr ready fork read_error not_draft switch_off ok"
 REPO_SLUG="jikig-ai/soleur"

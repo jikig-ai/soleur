@@ -659,7 +659,7 @@ t_rsc_order_insensitive() {
   rm -rf "$tmp"
 }
 
-# T-rsc-7: real canonical RSC has 10 entries, all GitHub Actions (15368), and NO CodeQL row
+# T-rsc-7: real canonical RSC has 12 entries, all GitHub Actions (15368), and NO CodeQL row
 # (#9454: CodeQL is advisory; a merge queue and a required CodeQL context are mutually exclusive).
 # Reconciled from the stale 5-check baseline to the Terraform-managed live set
 # (#4397); bumped 16->17 by #6049 (adr-ordinals reconciled from live); bumped
@@ -715,10 +715,10 @@ t_rsc_real_canonical_shape() {
   codeql_rows=$(jq '[.[] | select(.context=="CodeQL")] | length' < "$real")
   # Every check is a GitHub Actions context (15368). CodeQL (GHAS 57789) is NOT required.
   non_15368_apps=$(jq -r '[.[] | select(.integration_id != 15368) | .context] | join(",")' < "$real")
-  if [[ "$n" == "10" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
-    _report "T-rsc-7 real canonical RSC: 10 entries, no CodeQL row, all 15368" ok
+  if [[ "$n" == "12" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
+    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 10 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
+    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
   fi
 }
 

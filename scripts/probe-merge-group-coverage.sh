@@ -67,7 +67,7 @@ except ImportError:
 SYNTHETIC_WORKFLOW = "merge-queue-cla-synthetics.yml"
 # Floor on the number of contexts examined: an empty or relocated canonical must not read
 # as "all covered". 12 = 10 CI (post-#12089 umbrella consolidation: 23 -> 10) + 2 CLA.
-MIN_CONTEXTS_DEFAULT = 12
+MIN_CONTEXTS_DEFAULT = 14
 
 root = sys.argv[1]
 wf_dir = os.environ.get("MGC_WORKFLOWS_DIR") or os.path.join(root, ".github", "workflows")

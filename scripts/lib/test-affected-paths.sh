@@ -2073,6 +2073,27 @@ AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/ci-oracle-review (#10859, PR3b) — the suite executes the driver scripts/ci-oracle-review.sh under
+# PATH stubs and reads scripts/merge-queue-cla-verify.sh for the enumeration parity pin. Naming-only paths
+# (scripts/ci-pr-affected-replay.py — a fixture's RATCHET_ORACLE text and the stub-git dispatch glob) carry
+# accept rows; the suite never opens them.
+AFFECTED_SCRIPTS_CI_ORACLE_REVIEW_PATHS=(
+  "scripts/ci-oracle-review.sh"
+  "scripts/ci-oracle-review.test.sh"
+  "scripts/merge-queue-cla-verify.sh"
+)
+
+# plugins/soleur/test/bot-synthetic-unreachability.test.sh (#10859, PR3b) — reads the composite action's
+# ALLOWED_PATHS, imports RATCHET_ORACLE from the live replay module, and pins the two new required contexts in
+# required-checks.txt. Edge set = the files it opens.
+AFFECTED_PLUGINS_SOLEUR_TEST_BOT_SYNTHETIC_UNREACHABILITY_TEST_SH_PATHS=(
+  ".github/actions/bot-pr-with-synthetic-checks/action.yml"
+  "scripts/ci-pr-affected-replay.py"
+  "scripts/required-checks.txt"
+  "scripts/lib/test-affected-paths.sh"
+  "plugins/soleur/test/bot-synthetic-unreachability.test.sh"
+)
+
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
 # ci.yml, executes the classifier script, and sweeps every workflow for the falsy-middle ternary shape, so the one corpus it walks
 # is .github/workflows. Declared from the repo paths its suite file names.

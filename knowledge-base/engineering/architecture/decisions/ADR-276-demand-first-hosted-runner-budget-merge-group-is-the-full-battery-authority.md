@@ -607,3 +607,28 @@ Status stays `adopting`. This amendment is non-activating: it records the classi
 - **Classification (Decision 3(a)).** The 16-required-context → 3-umbrella-context rename (`guards-ruleset`, `quality-guards`, `secret-guards`) is a TOPOLOGY change under epic #11556's demand-reduction work — runner slots and queued-context count drop because folded guards now share a job — NOT a Decision-3(a) "PR-level reduction of the required battery". No gate was cut: every folded guard still runs and still reports, now as a member verdict inside its umbrella's `aggregate` step (skipped-≠-success is enforced per member). The required CHECK NAME surface changed (the point of the exercise); the required VERDICT surface did not. This satisfies the 3(a) consumer-record intent: the only consumers that can read a difference are name-readers (ruleset, `required-checks.txt`, bot-PR synthetics, `admin-merge-ready.sh`), and each was updated or had its transition behavior documented in the same PR.
 - **Battery authority unchanged (Decision 2).** `merge_group` still executes the full battery against the candidate tree: umbrella members carry the folded jobs' merge_group arms (`if: ${{ !cancelled() }}` plus the transplanted event conditions), and `scripts/probe-merge-group-coverage.sh` audits that every required context reports on the queue ref.
 - **Record (Decision 3(g)).** This entry is the dated-amendment record the rename's stage owes; no measurement amendment is attached because the change is behavioural-neutral on verdicts — the demand delta (runner-slot concurrency) is reported under #11556's census, not here.
+
+## Amendment 2026-11-07 (PR3b required-context flip + oracle-review sentinel + accept-row growth bound, #10859)
+
+Status stays `adopting`. This amendment records the PR3b rulings and what landed; nothing here is a new decision.
+
+- **Ruling (a), the oracle control — REAL, not "review" (entry condition 9(a)).** Rather than a
+  `required_approving_review_count` ruleset (which cannot bind an approval to a SHA), the control is a required
+  check-run `oracle-review-required` (`scripts/ci-oracle-review.sh`, job in `.github/workflows/ci.yml`) enforcing a
+  BOUND owner-review act: on `pull_request`, the merge-ref diff's intersection with the BASE commit's
+  `RATCHET_ORACLE` must be empty OR the author is `deruelle` (self-approval is barred on GitHub, so authorship is
+  the release valve for owner-authored oracle repairs) OR a `deruelle` APPROVED review whose `commit_id` is the PR
+  head SHA exists — an approval bound to the reviewed tree, not a blanket approval; on `merge_group`, every member's
+  queued head must show its LATEST `oracle-review-required` check-run (app 15368, highest id) completed/success —
+  the self-loop is closed by member enumeration (the `merge-queue-cla-verify.sh` machinery, parity-pinned), never by
+  self-report. Classification uses the BASE commit's `RATCHET_ORACLE` and the driver re-execs from base when the base
+  carries it, so no PR can shrink the list that judges it. Fail-closed on every unknown.
+- **Ruling (b), accept-row growth (entry condition 9(b)).** Diff-scoped, not cumulative-only: every pair whose accept
+  row-set differs base→HEAD must attribute to the diff — the named path, a file that references the pair, or an
+  oracle input OTHER than the accept file itself touched — else `accept-unattributed` (exit 1); every head-side row
+  added or re-reasoned must carry one of the six typed kinds (the runbook's canonical list) else `accept-bad-kind`
+  (exit 1). Legacy rows are never re-litigated. The marker line carries `accept=<n>` (parsed row count).
+- **The flip.** `affected-index-ratchet` is a required context: `continue-on-error` dropped in the same commit
+  (ADR-032 paired edit: every required name lands with its producer), `required-checks.txt`, the canonical JSON and
+  `infra/github` all carry both names (CI Required 10→12), and the bot-PR synthetics are sound by unreachability —
+  `ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅`, pinned by `plugins/soleur/test/bot-synthetic-unreachability.test.sh`.
