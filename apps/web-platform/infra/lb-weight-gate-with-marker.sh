@@ -32,6 +32,13 @@
 #      The Doppler calls themselves get DOPPLER_CONFIG_DIR pointed at an empty private directory, so a
 #      planted ~/.doppler config cannot steer them (api-host, token, scope).
 #
+# DOPPLER_BIN (#12167, CTO ruling). The Doppler CLI the GitHub runner installs lives in ${RUNNER_TEMP}/doppler-cli
+# and is on $GITHUB_PATH only, so the pinned PATH cannot find it (names_rc_127, the gate never ran). DOPPLER_BIN is
+# read BEFORE the pin and unset; it is honoured ONLY when it is exactly ${RUNNER_TEMP}/doppler-cli/doppler
+# (RUNNER_TEMP absolute, free of `..`), a regular non-symlink executable owned by the effective uid, in a directory
+# that is not a symlink and not group/world-writable. Anything else is exit 3 `bad_doppler_bin` and NEVER a
+# fallback to PATH. Unset => the pinned-PATH lookup, unchanged. It is not in GATE_ENV_ALLOW (the gate never sees it).
+#
 # The wrapper handles ONLY the WORKSPACES marker. GIT_DATA_LUKS_CUTOVER_AT and the rest of the gate's
 # environment (weights, rotation, roster, soak days) remain the orchestrator's.
 #
@@ -52,15 +59,26 @@ case "$-" in
     ;;
 esac
 
+# Exported functions (BASH_FUNC_*) must not shadow env/rm/mktemp/unset/export/... inside this wrapper either. This
+# runs FIRST (before any unset/export), so an exported `unset` or `export` function cannot intercept them.
+while IFS= read -r _fn; do builtin unset -f -- "$_fn"; done < <(builtin compgen -A function) # seam:purge-functions
+unset _fn
+
+# DOPPLER_BIN (#12167): read BEFORE the PATH pin, then removed from the environment. It is the ONLY way the
+# Doppler CLI the runner installed outside the pinned PATH (${RUNNER_TEMP}/doppler-cli, added to $GITHUB_PATH
+# only) can be found; it is validated below and NEVER consulted again by name, and it is not in GATE_ENV_ALLOW,
+# so the gate never sees it. Option A of the CTO ruling: no lookup on the caller's PATH, ever.
+_dbin_set=0
+_dbin=""
+if [[ -n "${DOPPLER_BIN+x}" ]]; then _dbin_set=1; _dbin="$DOPPLER_BIN"; fi
+builtin unset DOPPLER_BIN # seam:unset-dbin
+
 PINNED_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 PATH="$PINNED_PATH"
 export PATH
 TMPDIR=/tmp # the private Doppler config dir below is created here whatever TMPDIR the caller exported
 export TMPDIR
 unset BASH_ENV ENV
-# Exported functions (BASH_FUNC_*) must not shadow env/rm/mktemp/... inside this wrapper either.
-while IFS= read -r _fn; do builtin unset -f -- "$_fn"; done < <(builtin compgen -A function) # seam:purge-functions
-unset _fn
 
 # The ONLY variables the gate may inherit besides PATH. DERIVED from lb-weight-gate.sh (every NAME that
 # the gate expands as `${NAME-`, `${NAME:-` or `${NAME+`), not guessed; lb-weight-gate-with-marker.test.sh
@@ -95,6 +113,34 @@ src_fail() {
 [[ -n "${DOPPLER_TOKEN-}" ]] || src_fail "no_token" # seam:token-required
 doppler_token="$DOPPLER_TOKEN"
 
+# Validate DOPPLER_BIN (when set) and resolve it to the ONE absolute path doppler_ro may run. Every check is a
+# Guard 5 mutation row. It must be exactly ${RUNNER_TEMP}/doppler-cli/doppler (RUNNER_TEMP non-empty, absolute,
+# free of `..` and of symlinked components), a regular non-symlink executable owned by the effective uid and not
+# group- or world-writable, in a directory that is owned by the effective uid, not a symlink and not group- or
+# world-writable. An invalid value is exit 3 `bad_doppler_bin`: it NEVER falls back to a
+# PATH lookup (that would reopen the planted-binary hole the pinned PATH closes). Unset => today's pinned-PATH lookup.
+doppler_bin_valid() { # <path>
+  local p="$1" rt="${RUNNER_TEMP-}" dir mode bmode
+  [[ -n "$rt" && "$rt" == /* && "$rt/" != *"/../"* ]] || return 1 # seam:dbin-rt
+  # RUNNER_TEMP is its own canonical path: no symlinked or dot-dot component anywhere above doppler-cli (the
+  # directory and the binary carry their own non-symlink checks below, so each guard stays independent).
+  [[ "$(realpath -e -- "$rt")" == "$rt" ]] || return 1 # seam:dbin-real
+  [[ "$p" == "${rt}/doppler-cli/doppler" ]] || return 1 # seam:dbin-exact
+  [[ -f "$p" && ! -L "$p" && -x "$p" && -O "$p" ]] || return 1 # seam:dbin-file
+  bmode="$(stat -L -c '%a' -- "$p")" || return 1 # -L for the same reason as the directory below: the symlink check above stays an independent guard
+  [[ "$bmode" =~ ^[0-7]+$ ]] && (( (8#$bmode & 8#022) == 0 )) || return 1 # seam:dbin-bmode
+  dir="${rt}/doppler-cli"
+  [[ -d "$dir" && ! -L "$dir" && -O "$dir" ]] || return 1 # seam:dbin-dir
+  mode="$(stat -L -c '%a' -- "$dir")" || return 1 # -L: the mode of what the path resolves to (a symlink's own mode is always 777), so the symlink check above is an independent guard
+  [[ "$mode" =~ ^[0-7]+$ ]] && (( (8#$mode & 8#022) == 0 )) || return 1 # seam:dbin-dirmode
+  return 0
+}
+DOPPLER_RESOLVED=""
+if [[ "$_dbin_set" -eq 1 ]]; then
+  if ! doppler_bin_valid "$_dbin"; then src_fail "bad_doppler_bin"; fi # seam:dbin-reject
+  DOPPLER_RESOLVED="$_dbin"
+fi
+
 # The child environment of every Doppler call is built explicitly: nothing but the pinned PATH, HOME,
 # the token and an EMPTY PRIVATE DOPPLER_CONFIG_DIR reaches it (a planted ~/.doppler/.doppler.yaml or a
 # caller-supplied DOPPLER_CONFIG_DIR therefore cannot set api-host/token/scope; the dir is created under a
@@ -105,7 +151,7 @@ DOPPLER_CFG_DIR="$(mktemp -d)" || src_fail "no_confdir" # seam:confdir
 trap 'rm -rf "$DOPPLER_CFG_DIR"' EXIT
 doppler_ro() {
   env -i PATH="$PINNED_PATH" HOME="${HOME:-/nonexistent}" DOPPLER_TOKEN="$doppler_token" \
-    DOPPLER_CONFIG_DIR="$DOPPLER_CFG_DIR" DOPPLER_ENABLE_VERSION_CHECK=false doppler "$@"
+    DOPPLER_CONFIG_DIR="$DOPPLER_CFG_DIR" DOPPLER_ENABLE_VERSION_CHECK=false "${DOPPLER_RESOLVED:-doppler}" "$@"
 }
 
 names_rc=0
