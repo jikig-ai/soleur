@@ -146,6 +146,25 @@ No cross-domain implications detected — infrastructure/tooling change.
 | Brief: "delete its rows … (the section named 'ratchet observation window')" | The OW content spans lines ~3020–3947 (three sub-headers) plus OW-only code outside it (`row_ow_parity` ~2810, `nosleep` ~202–204) and OW terms in the epilogue census ~5241–5260 | Enumerate all of it; the "section" boundary is the `# == glob-rate` banner at ~3948 |
 | Sweeper comment: "Retire this line with the probe." (re `pull-requests: read`) | 7+ other live probes read `/pulls` or the mixed `issues` endpoint that silently filters PRs without the scope | Keep the permission; re-attribute the comment (decision row) |
 
+## Files to Delete
+
+- `scripts/followthroughs/ratchet-observation-window-10865.sh`
+
+## Files to Edit
+
+- `plugins/soleur/test/ci-pr-affected-replay.test.sh` (section excision + census re-pins)
+- `scripts/test-all.sh` (`--rows` re-split)
+- `scripts/ci-oracle-lane-suites.txt` (`--rows` re-split)
+- `scripts/lib/test-affected-paths.sh` (three declared-edge entries + comment)
+- `scripts/ci-pr-affected-audit.accept.tsv` (stale accept-row prune)
+- `.github/workflows/scheduled-followthrough-sweeper.yml` (comment re-attribution only)
+- `scripts/sweep-followthroughs.test.sh` (comment update only)
+- `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` (dated past-tense retirement note)
+
+## Files to Create
+
+None.
+
 ## Implementation Phases
 
 **Phase 1 — deletion and census re-pins (one commit):**
@@ -204,6 +223,32 @@ No cross-domain implications detected — infrastructure/tooling change.
 - Section-runner hazard: `knowledge-base/project/learnings/2026-10-27-a-section-only-runner-cannot-see-a-cleanup-glob-deleting-another-sections-fixture.md`
 - `--rows` split contract: `plugins/soleur/test/ci-pr-affected-replay.test.sh:60-90`, `scripts/test-all.sh:5620-5629`
 - ADR-276 PR3a amendment (item 8/9; append-only; references by issue number)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-11-07 (`soleur:deepen-plan`, pipeline subagent context — no Task/Agent tool; research and review fan-outs were executed inline as grep/gh verifications or recorded as gate evaluations).
+
+### Key Improvements
+
+- **Full retirement footprint discovered beyond the RETIREMENT clause's 3 sites** — the live re-census found ~9 live-code sites: the probe, the ~928-line suite section plus its OW-only outliers (`row_ow_parity`, `nosleep`), three census pins in the suite epilogue (`DECLARED_TOTAL=602`, `FLOOR_ASSERTIONS=1313`, `OW_SITES>=126` floor), the three-arm `--rows` split registered identically in `test-all.sh` and `ci-oracle-lane-suites.txt`, the declared-edge arrays in `test-affected-paths.sh`, and ≥12 accept rows citing the probe (stale-accept → `census-degraded` exit 2).
+- **`pull-requests: read` blast-radius resolved** — the workflow comment says "Retire this line with the probe," but `ci-push-dedupe-soak-9512.sh` reads the same mixed `issues?labels=` endpoint that filters PRs for scope-less tokens, and 6 more live probes read `/pulls`. The permission stays; only the comment is re-attributed (decision-challenges row 1).
+- **Accept-row pruning made ratchet-derived, not hand-counted** — `--print-baseline` is the stale-accept oracle; the AC pins its exit 0.
+- **ADR-276 verified free of the literal script path** — the RETIREMENT clause's reference claim was stale; no edit needed (append-only dated amendments).
+
+### New Considerations Discovered
+
+- `sweep-followthroughs.test.sh` PERM-1 is a deliberate pin of `pull-requests: read` — survives only because the permission survives; its `#10865` comment needs re-attribution in the same edit.
+- `ci-oracle-lane.md` names #10865 as the future evidence-attachment tracker — left as the issue record; flagged as a decision row rather than expanded into scope.
+- Section-only `--rows` runs are an iteration tool, not a verdict (learning 2026-10-27): the AC requires a full-file suite run.
+
+### Gate evaluations (deepen-plan halts)
+
+- **4.6 User-Brand Impact:** PASS — section present, threshold `none` with reason and sensitive-path scope-out note.
+- **4.7 Observability:** skip — no Files-to-Edit under code/infra trigger paths; deletion-only.
+- **4.8 PAT variables / 4.9 UI wireframe / 4.10 Encryption / 4.13 Task Design / 4.5 network / 4.55 downtime:** skip — no triggers.
+- **4.11 Guard Contract:** skip — no new guard in the deliverable; census re-pins are bookkeeping inside an existing suite (lint skips plans with no `## Guard Contract` heading).
+- **4.12 Scope Check:** PASS — all three subsections present, every ask mapped, `inferred` rows carry justifications, `Recommendation:` present.
+- **4.4 Precedent-diff:** prior probe retirements (convention doc's issue-8006 "3 sites vs true 5" precedent) cover the pattern; no novel mechanism.
 
 ## Sharp Edges
 
