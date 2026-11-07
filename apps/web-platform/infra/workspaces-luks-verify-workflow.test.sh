@@ -2015,7 +2015,7 @@ PY
     local code
     # The serve arm (#12167) injects exactly three more gate inputs through the same inner env; strip those three
     # exact assignments (and nothing else) so the pin below still sees the wrapper hand-off in its exact form.
-    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ' | sed -e 's/ SOLEUR_WEB2_SERVING_WEIGHT="\$WEB2_LB_WEIGHT"//' -e 's/ SOLEUR_SERVING_ROTATION="web-1,web-2"//' -e 's/ SOLEUR_PROXY_BIND="synthetic-gate-shape-input-not-a-bind-address"//')" || true  # an all-comment/empty file yields no code: the counts below then read 0 and the check returns non-zero
+    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ' | sed -e 's/ SOLEUR_WEB2_SERVING_WEIGHT="[^"]*"//' -e 's/ SOLEUR_SERVING_ROTATION="web-1,web-2"//' -e 's/ SOLEUR_PROXY_BIND="synthetic-gate-shape-input-not-a-bind-address"//')" || true  # an all-comment/empty file yields no code: the counts below then read 0 and the check returns non-zero
     [[ "$(grep -cF -- "$g3_dbin_pipeline" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -cF -- "$g3_dbin_cmd" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -oF 'lb-weight-gate-with-marker.sh' <<<"$code" | wc -l)" -eq 1 ]] \

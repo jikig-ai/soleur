@@ -36,6 +36,12 @@
 #      No row, a malformed newest row, or any other result refuses. A refused/denied/tls/timeout newest row means: fix
 #      it, then redeploy web-1 (which re-probes) before dispatching.
 #
+#  (3) THE REVERSE DIRECTION (the same wrr_peer_judge, dialing host soleur-web-2). When the LB sends users to web-2,
+#      existing sessions are owned by web-1, so web-2's relay CLIENT must reach web-1:8443. web-2's own deploy journals
+#      `relay_peer_probe peer=<web-1 ip> result=...` with host_name soleur-web-2. The owner-recorded gate is "ok in BOTH
+#      directions": the judge is parameterised on the dialing host and every verdict carries dir=w1_to_w2 or dir=w2_to_w1,
+#      so a missing or bad row in either direction is a RED with its own label, never a GREEN. Redeploy web-2 to re-probe.
+#
 # JUDGES (pure, no network, no clock: age_s is computed by the server). Each prints exactly one line and returns 0 (the
 # verdict is the data): GREEN ... | RED reason=<token>. An empty body is zero rows (RED), never a pass. A QUERY FAILURE is
 # neither: the fetch returns non-zero and the caller refuses without judging. The judges echo only their closed
@@ -118,41 +124,60 @@ wrr_judge() {
   printf '%s\n' "$out"
 }
 
-# wrr_peer_sql <ipv4> — web-1's newest peer-probe rows for web-2's private address. The address is validated by the
-# caller (wrr_peer_fetch) before it reaches the SQL text.
+# wrr_peer_dir <dialing_host_name> — the direction label for a dialer, empty (rc 1) for any host that is not one of
+# the two roster hosts. soleur-web-platform is web-1, soleur-web-2 is web-2 (raw.host_name; CONTAINER_NAME is the
+# same on both hosts and is never used to tell them apart).
+wrr_peer_dir() {
+  case "${1:-}" in
+    "$WRR_PEER_HOST_NAME") printf 'w1_to_w2' ;;
+    "$WRR_HOST_NAME") printf 'w2_to_w1' ;;
+    *) return 1 ;;
+  esac
+}
+
+# wrr_peer_sql <dialing_host_name> <ipv4> — the dialing host's newest peer-probe rows about the given peer address.
+# Both arguments are validated by the caller (wrr_peer_fetch) before they reach the SQL text.
 wrr_peer_sql() {
   cat <<SQL
 SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, extract(raw, 'relay_peer_probe peer=[0-9.]+ [a-z_]+=[a-z_]+') AS line
 FROM remote(\$BS_TABLE)
 WHERE dt > now() - INTERVAL ${WRR_PEER_LOOKBACK_S} SECOND
-  AND JSONExtractString(raw,'host_name') = '${WRR_PEER_HOST_NAME}'
-  AND position(raw, 'relay_peer_probe peer=$1 ') > 0
+  AND JSONExtractString(raw,'host_name') = '$1'
+  AND position(raw, 'relay_peer_probe peer=$2 ') > 0
 ORDER BY dt DESC LIMIT ${WRR_PEER_LIMIT}
 FORMAT JSONEachRow
 SQL
 }
 
-# wrr_peer_fetch <outfile> <web2_private_ipv4> — same rc contract as wrr_fetch (plus rc 1 on a non-IPv4 argument).
+# wrr_peer_fetch <outfile> <dialing_host_name> <peer_private_ipv4> — same rc contract as wrr_fetch (plus rc 1 on an
+# unknown dialing host or a non-IPv4 argument, before any query is sent).
 wrr_peer_fetch() {
-  if [[ ! "${2:-}" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
+  if ! wrr_peer_dir "${2:-}" >/dev/null; then
+    echo "wrr_peer_fetch: dialing host is not a roster host" >&2; return 1
+  fi
+  if [[ ! "${3:-}" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
     echo "wrr_peer_fetch: peer address is not a 10.0.1.x IPv4" >&2; return 1
   fi
-  w2l_query "$(wrr_peer_sql "$2")" "$1"
+  w2l_query "$(wrr_peer_sql "$2" "$3")" "$1"
 }
 
-# wrr_peer_judge <rows.jsonl> <web2_private_ipv4> — the PEER-LINE judge. GREEN iff the NEWEST row (smallest age_s;
-# every row tied at that age) from web-1 for this peer, within the 24 h lookback, is result=ok.
-#   GREEN peer_age_s=<s> peer=<ip>
-#   RED reason=<peer_addr_invalid|body_unparseable|peer_row_age_malformed|peer_rows_none|peer_row_malformed|peer_<result>|peer_skipped>
+# wrr_peer_judge <rows.jsonl> <dialing_host_name> <peer_private_ipv4> — the PEER-LINE judge for ONE direction. GREEN iff
+# the NEWEST row (smallest age_s; every row tied at that age) from the DIALING host about this peer, within the 24 h
+# lookback, is result=ok. The serve gate needs it GREEN in BOTH directions (web-1 dialing web-2, and web-2 dialing web-1:
+# existing sessions are owned by web-1, so web-2's relay client must reach it). Every verdict carries the direction:
+#   GREEN peer_age_s=<s> peer=<ip> dir=<w1_to_w2|w2_to_w1>
+#   RED reason=<peer_addr_invalid|body_unparseable|peer_row_age_malformed|peer_rows_none|peer_row_malformed|peer_<result>|peer_skipped> dir=<...>
+#   RED reason=peer_dialer_invalid                (the dialing host is not a roster host; no direction exists)
 wrr_peer_judge() {
-  local f="$1" ip="${2:-}" out
+  local f="$1" dh="${2:-}" ip="${3:-}" out dir
+  dir="$(wrr_peer_dir "$dh")" || { printf 'RED reason=peer_dialer_invalid\n'; return 0; }
   if [[ ! "$ip" =~ ^10\.0\.1\.[0-9]{1,3}$ ]]; then
-    printf 'RED reason=peer_addr_invalid\n'; return 0
+    printf 'RED reason=peer_addr_invalid dir=%s\n' "$dir"; return 0
   fi
   if ! jq -e -s 'all(.[]; type == "object")' "$f" >/dev/null 2>&1; then
-    printf 'RED reason=body_unparseable\n'; return 0
+    printf 'RED reason=body_unparseable dir=%s\n' "$dir"; return 0
   fi
-  out="$(jq -r -s --arg host "$WRR_PEER_HOST_NAME" --arg ip "$ip" --argjson win "$WRR_PEER_LOOKBACK_S" '
+  out="$(jq -r -s --arg host "$dh" --arg ip "$ip" --argjson win "$WRR_PEER_LOOKBACK_S" '
     def age: ((.age_s | tostring) as $a | if ($a | test("^[0-9]+$")) then ($a | tonumber) else null end);
     def parsed: (if (.line | type) == "string" then
         ((.line | capture("^relay_peer_probe peer=(?<peer>[0-9.]+) (result=(?<res>ok|refused|timeout|tls|denied)|skipped=(?<skip>exec_failed))$")) // null)
@@ -172,5 +197,5 @@ wrr_peer_judge() {
           end
       end' "$f" 2>/dev/null)" || out=""
   [[ -n "$out" ]] || out="RED reason=judge_error"
-  printf '%s\n' "$out"
+  printf '%s dir=%s\n' "$out" "$dir"
 }

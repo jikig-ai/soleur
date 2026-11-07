@@ -32,10 +32,10 @@ row() { jq -cn --arg age "$1" --arg l "$2" --arg h "${3:-soleur-web-2}" '{age_s:
 line() { # line [state] [addr] [port] [wp]
   printf 'relay_probe proxy_state=%s addr=%s port=%s workspaces_populated=%s' "${1:-listening}" "${2:-$EXP}" "${3:-8443}" "${4:-1}"
 }
-jv() { # jv <label> <want-prefix> <peer-ip or ""> <rows-on-stdin> — a 3rd arg of peer:<ip> selects the PEER judge
-  local label="$1" want="$2" pip="$3" out
+jv() { # jv <label> <want-prefix> <peer-ip or ""> <rows-on-stdin> — a 3rd arg of peer:<dialer-host>:<ip> selects the PEER judge
+  local label="$1" want="$2" pip="$3" out pr
   cat > "$WORK/rows.jsonl"
-  if [[ "$pip" == peer:* ]]; then out="$(wrr_peer_judge "$WORK/rows.jsonl" "${pip#peer:}")"; else out="$(wrr_judge "$WORK/rows.jsonl")"; fi
+  if [[ "$pip" == peer:* ]]; then pr="${pip#peer:}"; out="$(wrr_peer_judge "$WORK/rows.jsonl" "${pr%%:*}" "${pr#*:}")"; else out="$(wrr_judge "$WORK/rows.jsonl")"; fi
   # jv runs at the end of a pipeline (a subshell), so it logs; the log is replayed into the counters below.
   if [[ "$out" == "$want"* ]]; then printf 'ok\t%s\n' "$label -> $out" >> "$WORK/jlog"; else printf 'no\t%s\n' "$label: want '$want...', got '$out'" >> "$WORK/jlog"; fi
 }
@@ -79,30 +79,46 @@ done
 { row 20 "$(line)"; jq -cn '{age_s:"-3",host_name:"soleur-web-2",line:"x"}'; } | jv "J16b a negative age -> refused" "RED reason=row_age_malformed" ""
 { jq -cn --arg l "$(line)" '{age_s:20,host_name:"soleur-web-2",line:$l}'; jq -cn --arg l "$(line)" '{age_s:80,host_name:"soleur-web-2",line:$l}'; } | jv "J17 bare-number ages are accepted" "GREEN" ""
 # --- JP: the peer judge (web-1's relay_peer_probe rows about web-2) ---------------------------------------
+W1H=soleur-web-platform; W2H=soleur-web-2; W1IP=10.0.1.10
 prow() { jq -cn --arg age "$1" --arg l "$2" --arg h "${3:-soleur-web-platform}" '{age_s: $age, host_name: $h, line: $l}'; }
 pline() { printf 'relay_peer_probe peer=%s %s' "${1:-$PEERIP}" "${2:-result=ok}"; }
-prow 100 "$(pline)" | jv "JP01 the only row says result=ok -> GREEN" "GREEN peer_age_s=100 peer=$PEERIP" "peer:$PEERIP"
-{ prow 5000 "$(pline "$PEERIP" result=refused)"; prow 100 "$(pline)"; } | jv "JP02 an older refused row is superseded by a newer ok" "GREEN" "peer:$PEERIP"
-{ prow 5000 "$(pline)"; prow 100 "$(pline "$PEERIP" result=refused)"; } | jv "JP03 a NEWER refused row beats an older ok: refused" "RED reason=peer_refused" "peer:$PEERIP"
+prow 100 "$(pline)" | jv "JP01 the only row says result=ok -> GREEN" "GREEN peer_age_s=100 peer=$PEERIP dir=w1_to_w2" "peer:$W1H:$PEERIP"
+{ prow 5000 "$(pline "$PEERIP" result=refused)"; prow 100 "$(pline)"; } | jv "JP02 an older refused row is superseded by a newer ok" "GREEN" "peer:$W1H:$PEERIP"
+{ prow 5000 "$(pline)"; prow 100 "$(pline "$PEERIP" result=refused)"; } | jv "JP03 a NEWER refused row beats an older ok: refused" "RED reason=peer_refused" "peer:$W1H:$PEERIP"
 for r in refused timeout tls denied; do
-  prow 100 "$(pline "$PEERIP" "result=$r")" | jv "JP04 newest result=$r -> refused" "RED reason=peer_$r" "peer:$PEERIP"
+  prow 100 "$(pline "$PEERIP" "result=$r")" | jv "JP04 newest result=$r -> refused" "RED reason=peer_$r" "peer:$W1H:$PEERIP"
 done
-prow 100 "$(pline "$PEERIP" skipped=exec_failed)" | jv "JP05 newest is skipped=exec_failed -> refused" "RED reason=peer_skipped" "peer:$PEERIP"
-: | jv "JP06 an EMPTY body is no row, never a pass" "RED reason=peer_rows_none" "peer:$PEERIP"
-prow 86401 "$(pline)" | jv "JP07 an ok row older than the 24 h lookback does not count" "RED reason=peer_rows_none" "peer:$PEERIP"
-prow 86400 "$(pline)" | jv "JP07b an ok row exactly at the lookback edge counts" "GREEN" "peer:$PEERIP"
-prow 100 "$(pline "$PEERIP")" soleur-web-2 | jv "JP08 a row from web-2 itself is not web-1's probe" "RED reason=peer_rows_none" "peer:$PEERIP"
-prow 100 "$(pline 10.0.1.12)" | jv "JP09 the newest row is about ANOTHER peer -> malformed, never a pass" "RED reason=peer_row_malformed" "peer:$PEERIP"
-prow 100 "$(pline) extra=1" | jv "JP10 trailing junk -> malformed" "RED reason=peer_row_malformed" "peer:$PEERIP"
-prow 100 "x$(pline)" | jv "JP10b leading junk -> malformed" "RED reason=peer_row_malformed" "peer:$PEERIP"
-prow 100 "$(pline "$PEERIP" result=weird)" | jv "JP10c unknown result word -> malformed" "RED reason=peer_row_malformed" "peer:$PEERIP"
-prow 100 "" | jv "JP10d an empty extracted line -> malformed" "RED reason=peer_row_malformed" "peer:$PEERIP"
-{ prow 100 "$(pline)"; prow 100 "$(pline "$PEERIP" result=denied)"; } | jv "JP11 two rows tied at the newest age, one denied -> refused" "RED reason=peer_denied" "peer:$PEERIP"
-printf '<html>502</html>\n' | jv "JP12 an HTML body -> unparseable" "RED reason=body_unparseable" "peer:$PEERIP"
-jq -cn '{age_s:"abc",host_name:"soleur-web-platform",line:"x"}' | jv "JP13 a non-numeric age -> refused" "RED reason=peer_row_age_malformed" "peer:$PEERIP"
+prow 100 "$(pline "$PEERIP" skipped=exec_failed)" | jv "JP05 newest is skipped=exec_failed -> refused" "RED reason=peer_skipped" "peer:$W1H:$PEERIP"
+: | jv "JP06 an EMPTY body is no row, never a pass" "RED reason=peer_rows_none" "peer:$W1H:$PEERIP"
+prow 86401 "$(pline)" | jv "JP07 an ok row older than the 24 h lookback does not count" "RED reason=peer_rows_none" "peer:$W1H:$PEERIP"
+prow 86400 "$(pline)" | jv "JP07b an ok row exactly at the lookback edge counts" "GREEN" "peer:$W1H:$PEERIP"
+prow 100 "$(pline "$PEERIP")" soleur-web-2 | jv "JP08 a row from web-2 itself is not web-1's probe" "RED reason=peer_rows_none" "peer:$W1H:$PEERIP"
+prow 100 "$(pline 10.0.1.12)" | jv "JP09 the newest row is about ANOTHER peer -> malformed, never a pass" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+prow 100 "$(pline) extra=1" | jv "JP10 trailing junk -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+prow 100 "x$(pline)" | jv "JP10b leading junk -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+prow 100 "$(pline "$PEERIP" result=weird)" | jv "JP10c unknown result word -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+prow 100 "" | jv "JP10d an empty extracted line -> malformed" "RED reason=peer_row_malformed" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline)"; prow 100 "$(pline "$PEERIP" result=denied)"; } | jv "JP11 two rows tied at the newest age, one denied -> refused" "RED reason=peer_denied" "peer:$W1H:$PEERIP"
+printf '<html>502</html>\n' | jv "JP12 an HTML body -> unparseable" "RED reason=body_unparseable" "peer:$W1H:$PEERIP"
+jq -cn '{age_s:"abc",host_name:"soleur-web-platform",line:"x"}' | jv "JP13 a non-numeric age -> refused" "RED reason=peer_row_age_malformed" "peer:$W1H:$PEERIP"
 for bad in "::" "0.0.0.0" "none" "web-2" "10.0.1" "10.0.1.11 " "192.168.1.5" ""; do
-  prow 100 "$(pline)" | jv "JP14 peer address '$bad' -> refused" "RED reason=peer_addr_invalid" "peer:$bad"
+  prow 100 "$(pline)" | jv "JP14 peer address '$bad' -> refused" "RED reason=peer_addr_invalid" "peer:$W1H:$bad"
 done
+# --- JR: the REVERSE direction (web-2 dials web-1; web-2's own deploy journals host_name soleur-web-2) -------
+# The owner-recorded gate is 'ok in both directions': existing sessions are owned by web-1, so web-2's relay client
+# must reach web-1:8443. The judge is parameterised on the dialing host; each direction has its own distinct label.
+prow 100 "$(pline "$W1IP")" "$W2H" | jv "JR01 web-2's own row says peer=web-1 result=ok -> GREEN, labelled w2_to_w1" "GREEN peer_age_s=100 peer=$W1IP dir=w2_to_w1" "peer:$W2H:$W1IP"
+prow 100 "$(pline "$W1IP")" "$W1H" | jv "JR02 the same row from WEB-1 does not satisfy the web-2 dialer (direction is the host)" "RED reason=peer_rows_none dir=w2_to_w1" "peer:$W2H:$W1IP"
+prow 100 "$(pline "$PEERIP")" "$W2H" | jv "JR03 a web-2 row about web-2's own address is not the w2->w1 proof" "RED reason=peer_row_malformed dir=w2_to_w1" "peer:$W2H:$W1IP"
+prow 100 "$(pline "$W1IP" result=refused)" "$W2H" | jv "JR04 web-2 -> web-1 result=refused -> refused, labelled w2_to_w1" "RED reason=peer_refused dir=w2_to_w1" "peer:$W2H:$W1IP"
+prow 100 "$(pline "$W1IP" result=denied)" "$W2H" | jv "JR05 web-2 -> web-1 result=denied -> refused" "RED reason=peer_denied dir=w2_to_w1" "peer:$W2H:$W1IP"
+prow 100 "$(pline "$W1IP" skipped=exec_failed)" "$W2H" | jv "JR06 web-2 -> web-1 skipped=exec_failed -> refused" "RED reason=peer_skipped dir=w2_to_w1" "peer:$W2H:$W1IP"
+: | jv "JR07 no web-2 row at all -> RED rows_none, labelled w2_to_w1 (a missing direction is never GREEN)" "RED reason=peer_rows_none dir=w2_to_w1" "peer:$W2H:$W1IP"
+prow 100 "$(pline)" "$W1H" | jv "JR08 a forward ok row alone: the forward judge is GREEN labelled w1_to_w2 (distinct from JR02's reverse verdict)" "GREEN peer_age_s=100 peer=$PEERIP dir=w1_to_w2" "peer:$W1H:$PEERIP"
+{ prow 5000 "$(pline "$W1IP")" "$W2H"; prow 100 "$(pline "$W1IP" result=timeout)" "$W2H"; } | jv "JR09 a NEWER web-2 timeout beats an older ok" "RED reason=peer_timeout dir=w2_to_w1" "peer:$W2H:$W1IP"
+prow 100 "$(pline "$W1IP")" "$W2H" | jv "JR10 an unknown dialing host is refused, never GREEN" "RED reason=peer_dialer_invalid" "peer:soleur-web-9:$W1IP"
+prow 100 "$(pline "$W1IP")" "$W2H" | jv "JR11 an empty dialing host is refused" "RED reason=peer_dialer_invalid" "peer::$W1IP"
+prow 90000 "$(pline "$W1IP")" "$W2H" | jv "JR12 a web-2 ok row older than the 24 h lookback does not count" "RED reason=peer_rows_none dir=w2_to_w1" "peer:$W2H:$W1IP"
 # a full page is possibly truncated: never a pass
 for i in $(seq 1 200); do row "$((i % 100))" "$(line)"; done | jv "J19 a 200-row page -> truncated, never a pass" "RED reason=rows_truncated" ""
 # the judge never prints a credential or row body: only its closed vocabulary
@@ -145,7 +161,7 @@ q() { # q <label> <want-rc> [ENV=VAL...] — runs wrr_fetch in a clean env, outp
     GH_TOKEN=decoy-gh DOPPLER_TOKEN=decoy-doppler \
     BETTERSTACK_QUERY_HOST=fixture-connect.betterstackdata.com BETTERSTACK_QUERY_USERNAME=fixture-user \
     BETTERSTACK_QUERY_PASSWORD=fixture-pass "$@" \
-    bash -c 'source "$1"; if [ "${3:-}" = peer ]; then wrr_peer_fetch "$2" "${4:-}"; else wrr_fetch "$2"; fi' _ "$LIB" "$WORK/q.out" "${QMODE:-own}" "${QPEER:-}" >/dev/null 2>"$WORK/q.err" || rc=$?
+    bash -c 'source "$1"; if [ "${3:-}" = peer ]; then wrr_peer_fetch "$2" "${5:-soleur-web-platform}" "${4:-}"; else wrr_fetch "$2"; fi' _ "$LIB" "$WORK/q.out" "${QMODE:-own}" "${QPEER:-}" "${QHOST:-soleur-web-platform}" >/dev/null 2>"$WORK/q.err" || rc=$?
   if [[ "$rc" == "$want" ]]; then ok "$label (rc=$rc)"; else no "$label: want rc $want got $rc: $(head -c 200 "$WORK/q.err")"; fi
   if [[ -s "$WORK/leak" ]]; then no "$label: a secret-shaped variable reached the query child: $(tr '\n' ' ' < "$WORK/leak")"; fi
 }
@@ -164,7 +180,7 @@ q "Q08 credentials absent: rc 1" 1 BETTERSTACK_QUERY_PASSWORD=
 # --- Q-peer: wrr_peer_fetch -----------------------------------------------------------------------------------
 { prow 100 "$(pline)"; } > "$FX/peer_rows"
 QMODE=peer QPEER=$PEERIP q "QP01 a healthy peer answer is rc 0" 0
-if [[ "$(wrr_peer_judge "$WORK/q.out" "$PEERIP")" == GREEN* ]]; then ok "QP01b the fetched peer body judges GREEN"; else no "QP01b fetched peer body did not judge GREEN"; fi
+if [[ "$(wrr_peer_judge "$WORK/q.out" "$W1H" "$PEERIP")" == GREEN* ]]; then ok "QP01b the fetched peer body judges GREEN"; else no "QP01b fetched peer body did not judge GREEN"; fi
 sql="$(cat "$WORK/sql")"
 [[ "$sql" == *"= 'soleur-web-platform'"* ]] && ok "QP02 the peer SQL pins host_name = 'soleur-web-platform' (web-1)" || no "QP02 peer SQL lacks the host pin: $sql"
 [[ "$sql" == *"INTERVAL 86400 SECOND"* ]] && ok "QP03 the peer SQL asks for the last 24 h" || no "QP03 peer SQL lacks the 24 h window: $sql"
@@ -174,11 +190,20 @@ printf '503' > "$FX/mode"; QMODE=peer QPEER=$PEERIP q "QP06 a peer 5xx is a fail
 : > "$FX/mode"
 QMODE=peer QPEER="x' OR 1=1 --" q "QP07 a non-IPv4 peer address is refused before any query: rc 1" 1
 [[ ! -s "$WORK/sql" ]] && ok "QP07b …and no query was sent" || no "QP07b a query was sent for an invalid peer address"
+# reverse direction: the SQL pins the dialing host web-2 (and not web-1) and the web-1 address
+printf '%s\n' "$(prow 100 "$(pline "$W1IP")" "$W2H")" > "$FX/peer_rows"
+QMODE=peer QPEER=$W1IP QHOST=$W2H q "QP08 the reverse (web-2 dialer) peer answer is rc 0" 0
+sql="$(cat "$WORK/sql")"
+[[ "$sql" == *"= 'soleur-web-2'"* && "$sql" != *"= 'soleur-web-platform'"* ]] && ok "QP09 the reverse peer SQL pins host_name = 'soleur-web-2' only" || no "QP09 reverse SQL host pin wrong: $sql"
+[[ "$sql" == *"relay_peer_probe peer=$W1IP "* ]] && ok "QP10 the reverse peer SQL selects on web-1's address" || no "QP10 reverse SQL lacks web-1's address: $sql"
+if [[ "$(wrr_peer_judge "$WORK/q.out" "$W2H" "$W1IP")" == "GREEN peer_age_s=100 peer=$W1IP dir=w2_to_w1" ]]; then ok "QP11 the fetched reverse body judges GREEN under the web-2 dialer"; else no "QP11 reverse fetched body did not judge GREEN"; fi
+QMODE=peer QPEER=$W1IP QHOST=soleur-web-9 q "QP12 an unknown dialing host is refused before any query: rc 1" 1
+[[ ! -s "$WORK/sql" ]] && ok "QP12b …and no query was sent" || no "QP12b a query was sent for an unknown dialing host"
 echo ""
 echo "=== web2-relay-rows.test.sh: ${pass} passed, ${fail} failed ==="
 _ran=$((pass + fail))
-if [ "$_ran" -lt 85 ]; then
-  printf 'GUARD FAIL: ran only %d assertion(s) (floor 85) — the suite did not execute fully\n' "$_ran" >&2
+if [ "$_ran" -lt 103 ]; then
+  printf 'GUARD FAIL: ran only %d assertion(s) (floor 103) — the suite did not execute fully\n' "$_ran" >&2
   exit 2
 fi
 [[ "$fail" -eq 0 ]]

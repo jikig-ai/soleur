@@ -1056,12 +1056,16 @@ jobs:
           # WHY THIS STEP. The gate chain's bind check is fed a synthetic value (it proves nothing about the real
           # relay) and the pool-health read proves origin HEALTH, not that the relay is reachable on web-2's private
           # address. The runner cannot reach web-2 and does not need to: it reads the fleet's own reports from Better
-          # Stack. Two pieces of evidence, BOTH required (contract and judges: scripts/lib/web2-relay-rows.sh):
+          # Stack. Three pieces of evidence, ALL required (contract and judges: scripts/lib/web2-relay-rows.sh):
           #   (1) web-2's app reports its own listener (WARN, every 60 s): proxy_state=listening addr=${WRR_BIND_ADDR}
           #       port=${WRR_PORT}. The app binds the wildcard INSIDE its container; docker publishes 8443 on the
           #       host's private IP, so the app can never report that IP itself.
           #   (2) web-1's deploy-time peer probe dialled web-2's published private address (from state) and the
-          #       newest relay_peer_probe row for it in the last 24 h says result=ok.
+          #       newest relay_peer_probe row for it in the last 24 h says result=ok (web-1 -> web-2).
+          #   (3) the REVERSE direction: web-2's own deploy journals host_name soleur-web-2; its newest row about web-1's
+          #       private address (from state) must say result=ok too (web-2 -> web-1). When the LB sends users to web-2,
+          #       existing sessions are owned by web-1, so web-2's relay client must reach web-1:${WRR_PORT}. The
+          #       owner-recorded gate is "ok in both directions"; a missing row in either direction refuses.
           # Every refusal below is exit 1 BEFORE any plan exists. An unanswered read, an empty or unparseable
           # answer and a missing credential are refusals, never passes.
           for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
@@ -1080,6 +1084,11 @@ jobs:
             || { echo "::error::could not read web-2's private address from state. NOTHING planned, NOTHING applied."; exit 1; }
           [[ "$WEB2_PRIVATE" =~ ^10\.0\.1\.[0-9]{1,3}$ ]] \
             || { echo "::error::web-2's private IPv4 is absent from state (hcloud_server_network.web[\"web-2\"].ip) — nothing to match web-1's peer probe against. NOTHING planned, NOTHING applied."; exit 1; }
+          WEB1_PRIVATE="$(printf '%s' "$STATE_JSON" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server_network.web[\"web-1\"]") | .values.ip // empty')" \
+            || { echo "::error::could not read web-1's private address from state. NOTHING planned, NOTHING applied."; exit 1; }
+          [[ "$WEB1_PRIVATE" =~ ^10\.0\.1\.[0-9]{1,3}$ && "$WEB1_PRIVATE" != "$WEB2_PRIVATE" ]] \
+            || { echo "::error::web-1's private IPv4 is absent from state or equals web-2's (hcloud_server_network.web[\"web-1\"].ip) — nothing to match web-2's peer probe against. NOTHING planned, NOTHING applied."; exit 1; }
           # shellcheck source=scripts/lib/web2-relay-rows.sh
           source "${GITHUB_WORKSPACE}/scripts/lib/web2-relay-rows.sh"
           RELAY_TMP="$(mktemp -d)"
@@ -1099,16 +1108,28 @@ jobs:
             echo "::error::web-2's relay does not report a listener (${VERDICT}). Need >= 2 reports in the last 180 s, newest <= 120 s, all proxy_state=listening addr=${WRR_BIND_ADDR} port=${WRR_PORT}. workspaces_populated is recorded, not judged. NOTHING planned, NOTHING applied."
             exit 1
           fi
-          wrr_peer_fetch "$RELAY_TMP/peer.jsonl" "$WEB2_PRIVATE" || {
+          wrr_peer_fetch "$RELAY_TMP/peer.jsonl" "$WRR_PEER_HOST_NAME" "$WEB2_PRIVATE" || {
             echo "::error::the Better Stack read for web-1's peer probe of web-2 FAILED (class above) — reachability on the private address cannot be proven. NOTHING planned, NOTHING applied."
             echo "- relay bind probe: REFUSED (peer query failed)" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           }
-          PEER_VERDICT="$(wrr_peer_judge "$RELAY_TMP/peer.jsonl" "$WEB2_PRIVATE")"
-          echo "- web-1 peer probe of ${WEB2_PRIVATE}:${WRR_PORT} (newest row in 24 h must be result=ok): ${PEER_VERDICT}" >> "$GITHUB_STEP_SUMMARY"
-          echo "relay bind probe (peer line): ${PEER_VERDICT}"
+          PEER_VERDICT="$(wrr_peer_judge "$RELAY_TMP/peer.jsonl" "$WRR_PEER_HOST_NAME" "$WEB2_PRIVATE")"
+          echo "- web-1 -> web-2 peer probe of ${WEB2_PRIVATE}:${WRR_PORT} (newest row in 24 h must be result=ok): ${PEER_VERDICT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "relay bind probe (peer line web-1 -> web-2): ${PEER_VERDICT}"
           if [[ "$PEER_VERDICT" != GREEN\ * ]]; then
             echo "::error::web-2's relay is not provably reachable on ${WEB2_PRIVATE}:${WRR_PORT} from web-1 (${PEER_VERDICT}). The newest relay_peer_probe row from web-1 for this peer in the last 24 h must say result=ok; redeploy web-1 to re-probe after fixing. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+          wrr_peer_fetch "$RELAY_TMP/peer-rev.jsonl" "$WRR_HOST_NAME" "$WEB1_PRIVATE" || {
+            echo "::error::the Better Stack read for web-2's peer probe of web-1 FAILED (class above) — the reverse direction (web-2 -> web-1) cannot be proven. NOTHING planned, NOTHING applied."
+            echo "- relay bind probe: REFUSED (reverse peer query failed)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          PEER_VERDICT_REV="$(wrr_peer_judge "$RELAY_TMP/peer-rev.jsonl" "$WRR_HOST_NAME" "$WEB1_PRIVATE")"
+          echo "- web-2 -> web-1 peer probe of ${WEB1_PRIVATE}:${WRR_PORT} (newest row in 24 h must be result=ok): ${PEER_VERDICT_REV}" >> "$GITHUB_STEP_SUMMARY"
+          echo "relay bind probe (peer line web-2 -> web-1): ${PEER_VERDICT_REV}"
+          if [[ "$PEER_VERDICT_REV" != GREEN\ * ]]; then
+            echo "::error::web-1's relay is not provably reachable on ${WEB1_PRIVATE}:${WRR_PORT} from web-2 (${PEER_VERDICT_REV}). The newest relay_peer_probe row from web-2 for this peer in the last 24 h must say result=ok (the gate is ok in BOTH directions); redeploy web-2 to re-probe after fixing. NOTHING planned, NOTHING applied."
             exit 1
           fi
       - name: Terraform plan (GA pool + LB + health policy)

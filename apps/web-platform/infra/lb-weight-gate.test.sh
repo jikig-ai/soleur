@@ -688,7 +688,9 @@ c4_assert "C.4-G11b: …but WITHOUT requires_runtime_bind_probe=true (the serve 
 # credentials ride the environment, never argv) and refuses unless BOTH hold: (1) >= 2 own-line rows in the last 180 s,
 # newest <= 120 s, every row proxy_state=listening addr=0.0.0.0 (the in-container wildcard the shipped design binds; docker
 # publishes the private IP) port 8443 (workspaces_populated is recorded, not judged: owner ruling 2026-11-06); (2) web-1's
-# newest relay_peer_probe row (last 24 h) for the address Terraform STATE holds for web-2 says result=ok.
+# newest relay_peer_probe row (last 24 h) for the address Terraform STATE holds for web-2 says result=ok (web-1 -> web-2);
+# (3) the REVERSE direction: web-2's own newest row (host_name soleur-web-2) about the address STATE holds for web-1 says
+# result=ok (web-2 -> web-1; existing sessions are owned by web-1). The owner-recorded gate is "ok in both directions".
 # R1-R8 pin the step's position and form; E1-E24 EXECUTE the step's own run body against stubbed `terraform` and
 # `curl` (the real helper and the real scripts/betterstack-query.sh in between), one refusal per fixture.
 PROBE_STEP="$(step_of 'relay bind probe \(serve only\)' || true)"
@@ -710,15 +712,17 @@ c4_assert "C.4-R4: no continue-on-error / '|| true' / 'set +e' in the probe step
 c4_assert "C.4-R4b: no 'secrets.' expression in the probe's run body (credentials arrive only through the env block)" \
   "$([[ -n "$PROBE_RUN_NC" && -z "$(grep -F 'secrets.' <<<"$PROBE_RUN_NC")" ]] && echo 1 || echo 0)"
 c4_assert "C.4-R5: the peer address is READ FROM STATE (terraform show -json, hcloud_server_network.web[\"web-2\"]) and handed to the peer fetch AND the peer judge as a variable" \
-  "$(grep -qF 'terraform show -json' <<<"$PROBE_RUN_NC" && grep -qF 'hcloud_server_network.web[\"web-2\"]' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge[[:space:]]+"[^"]+"[[:space:]]+"\$\{?[A-Z_0-9]+\}?"' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_fetch[[:space:]]+"[^"]+"[[:space:]]+"\$\{?[A-Z_0-9]+\}?"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+  "$(grep -qF 'terraform show -json' <<<"$PROBE_RUN_NC" && grep -qF 'hcloud_server_network.web[\"web-2\"]' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge[[:space:]]+"[^"]+"[[:space:]]+"[^"]+"[[:space:]]+"\$\{?WEB2_PRIVATE\}?"' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_fetch[[:space:]]+"[^"]+"[[:space:]]+"[^"]+"[[:space:]]+"\$\{?WEB2_PRIVATE\}?"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+c4_assert "C.4-R5c: the REVERSE direction is READ FROM STATE too (hcloud_server_network.web[\"web-1\"]) and handed to the peer fetch AND the peer judge, dialled by the web-2 host constant (WRR_HOST_NAME), forward by web-1's (WRR_PEER_HOST_NAME)" \
+  "$(grep -qF 'hcloud_server_network.web[\"web-1\"]' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_fetch[[:space:]]+"[^"]+"[[:space:]]+"\$WRR_HOST_NAME"[[:space:]]+"\$\{?WEB1_PRIVATE\}?"' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge[[:space:]]+"[^"]+"[[:space:]]+"\$WRR_HOST_NAME"[[:space:]]+"\$\{?WEB1_PRIVATE\}?"' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_fetch[[:space:]]+"[^"]+"[[:space:]]+"\$WRR_PEER_HOST_NAME"[[:space:]]+"\$\{?WEB2_PRIVATE\}?"' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge[[:space:]]+"[^"]+"[[:space:]]+"\$WRR_PEER_HOST_NAME"[[:space:]]+"\$\{?WEB2_PRIVATE\}?"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
 c4_assert "C.4-R5b: no literal IPv4 address anywhere in the probe step" \
   "$([[ -n "$PROBE_NC" && -z "$(grep -E '(^|[^0-9.])[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9.]|$)' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
 c4_assert "C.4-R6: the step never names SOLEUR_PROXY_BIND, never writes Doppler or GITHUB_ENV" \
   "$([[ -n "$PROBE_NC" && -z "$(grep -E 'SOLEUR_PROXY_BIND|doppler[[:space:]]+secrets|GITHUB_ENV' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
 c4_assert "C.4-R7: the three BETTERSTACK_QUERY_* credentials ride the step env, each refused when empty, none on a command line" \
   "$([[ "$(grep -cE '^          BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD): \$\{\{ secrets\.BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD) \}\}$' <<<"$PROBE_STEP")" -eq 3 ]] && grep -qE 'for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD' <<<"$PROBE_RUN_NC" && grep -qE '\-z "\$\{!v:-\}"' <<<"$PROBE_RUN_NC" && [[ -z "$(grep -E 'BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD)[^ ]*[[:space:]]*(=|\))' <<<"$(grep -vE 'for v in|^[[:space:]]*(if|echo)' <<<"$PROBE_RUN_NC")")" ]] && echo 1 || echo 0)"
-c4_assert "C.4-R8: the step uses the shared helper (wrr_fetch, wrr_judge, wrr_peer_fetch, wrr_peer_judge) and passes ONLY when BOTH verdicts are GREEN" \
-  "$(grep -qF 'scripts/lib/web2-relay-rows.sh' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_fetch|[[:space:]]wrr_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_judge' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_peer_fetch|[[:space:]]wrr_peer_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge' <<<"$PROBE_RUN_NC" && grep -qE '"\$VERDICT".*!=.*GREEN' <<<"$PROBE_RUN_NC" && grep -qE '"\$PEER_VERDICT".*!=.*GREEN' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+c4_assert "C.4-R8: the step uses the shared helper (wrr_fetch, wrr_judge, wrr_peer_fetch, wrr_peer_judge) and passes ONLY when ALL THREE verdicts (own line, web-1 -> web-2, web-2 -> web-1) are GREEN" \
+  "$(grep -qF 'scripts/lib/web2-relay-rows.sh' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_fetch|[[:space:]]wrr_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_judge' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_peer_fetch|[[:space:]]wrr_peer_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge' <<<"$PROBE_RUN_NC" && grep -qE '"\$VERDICT".*!=.*GREEN' <<<"$PROBE_RUN_NC" && grep -qE '"\$PEER_VERDICT".*!=.*GREEN' <<<"$PROBE_RUN_NC" && grep -qE '"\$PEER_VERDICT_REV".*!=.*GREEN' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
 c4_assert "C.4-R9: the step does NOT compare the app's addr to the private IP (the app binds the wildcard in its container): wrr_judge takes exactly one argument" \
   "$(grep -qE 'wrr_judge[[:space:]]+"[^"]+"\)"' <<<"$PROBE_RUN_NC" && ! grep -qE 'wrr_judge[[:space:]]+"[^"]+"[[:space:]]+"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
 
@@ -750,7 +754,7 @@ case "$url" in "https://fixture-connect.betterstackdata.com?"*) : ;; *) exit 64 
 [ "$user" = fixture-user:fixture-pass ] || exit 64
 printf 'q\n' >> "$CALLS"
 case "$(cat "$FX/mode" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; timeout) exit 28 ;; esac
-case "$data" in *relay_peer_probe*) printf 'p\n' >> "$CALLS"; case "$(cat "$FX/peer_mode" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; esac; cat "$FX/peer_rows" ;; *) cat "$FX/rows" ;; esac
+case "$data" in *relay_peer_probe*) case "$data" in *"'soleur-web-2'"*) sfx=_w2 ;; *) sfx= ;; esac; printf 'p%s\n' "$sfx" >> "$CALLS"; case "$(cat "$FX/peer_mode$sfx" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; esac; cat "$FX/peer_rows$sfx" ;; *) cat "$FX/rows" ;; esac
 STUB
 chmod +x "$R_BIN/terraform" "$R_BIN/curl"
 r_state() { printf '{"values":{"root_module":{"resources":[{"address":"hcloud_server_network.web[\\"web-1\\"]","values":{"ip":"10.0.1.10"}},{"address":"hcloud_server_network.web[\\"web-2\\"]","values":{"ip":"%s"}}]}}}' "$1" > "$R_FX/state"; }
@@ -770,14 +774,14 @@ e_refuse() { # e_refuse <desc> <needle> [ENV=VAL ...] — exit 1 with an ::error
   r_exec "${@:3}"
   c4_assert "$1 → exit 1, refused for: $2" "$([[ "$R_RC" -eq 1 && "$R_OUT" == *"::error::"* && "$R_OUT" == *"$2"* && ! -s "$R_WORK/leak" ]] && echo 1 || echo 0)"
 }
-e_reset() { : > "$R_FX/mode"; : > "$R_FX/peer_mode"; rm -f "$R_FX/tf.fail"; r_state 10.0.1.11; { r_row 20 "$(r_line)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; r_prow 3600 "$(r_peer)" > "$R_FX/peer_rows"; }
+e_reset() { : > "$R_FX/mode"; : > "$R_FX/peer_mode"; : > "$R_FX/peer_mode_w2"; rm -f "$R_FX/tf.fail"; r_state 10.0.1.11; { r_row 20 "$(r_line)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; r_prow 3600 "$(r_peer)" > "$R_FX/peer_rows"; r_prow 1800 "$(r_peer 10.0.1.10)" soleur-web-2 > "$R_FX/peer_rows_w2"; }
 
 if [[ -n "$PROBE_RUN" ]]; then
 e_reset; r_exec
-c4_assert "C.4-E1: two healthy own-line rows (addr=0.0.0.0) + an ok peer row for the state address → exit 0, two GREEN lines in the run summary" \
-  "$([[ "$R_RC" -eq 0 && "$(grep -c 'GREEN' "$R_WORK/summary")" -eq 2 ]] && echo 1 || echo 0)"
-c4_assert "C.4-E1a: …and BOTH queries were sent (own line, then peer line)" \
-  "$([[ "$(grep -c '^q$' "$R_WORK/calls")" -eq 2 && "$(grep -c '^p$' "$R_WORK/calls")" -eq 1 ]] && echo 1 || echo 0)"
+c4_assert "C.4-E1: two healthy own-line rows (addr=0.0.0.0) + an ok peer row for the state address → exit 0, three GREEN lines in the run summary (own line, web-1 -> web-2, web-2 -> web-1)" \
+  "$([[ "$R_RC" -eq 0 && "$(grep -c 'GREEN' "$R_WORK/summary")" -eq 3 && "$(grep -c 'dir=w1_to_w2' "$R_WORK/summary")" -eq 1 && "$(grep -c 'dir=w2_to_w1' "$R_WORK/summary")" -eq 1 ]] && echo 1 || echo 0)"
+c4_assert "C.4-E1a: …and all THREE queries were sent (own line, forward peer line, reverse peer line)" \
+  "$([[ "$(grep -c '^q$' "$R_WORK/calls")" -eq 3 && "$(grep -c '^p$' "$R_WORK/calls")" -eq 1 && "$(grep -c '^p_w2$' "$R_WORK/calls")" -eq 1 ]] && echo 1 || echo 0)"
 c4_assert "C.4-E1b: …no credential-shaped variable reached the query child, no decoy printed" \
   "$([[ ! -s "$R_WORK/leak" && "$R_OUT" != *decoy-* && "$R_OUT" != *fixture-pass* ]] && echo 1 || echo 0)"
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
@@ -809,6 +813,20 @@ e_reset; r_prow 90000 "$(r_peer)" > "$R_FX/peer_rows"; e_refuse "C.4-E10h: the o
 e_reset; printf '503' > "$R_FX/peer_mode"; e_refuse "C.4-E10i: Better Stack answers 503 to the peer query" "peer probe of web-2 FAILED"
 e_reset; { r_prow 7200 "$(r_peer)"; r_prow 300 "$(r_peer 10.0.1.11 result=refused)"; } > "$R_FX/peer_rows"; e_refuse "C.4-E10j: a NEWER refused row beats an older ok" "reason=peer_refused"
 e_reset; r_prow 3600 "$(r_peer)" soleur-web-2 > "$R_FX/peer_rows"; e_refuse "C.4-E10k: an ok peer row from web-2 itself is not web-1's probe" "reason=peer_rows_none"
+# the REVERSE direction (web-2 -> web-1): each of these has a healthy forward direction, so only the reverse can refuse
+e_reset; r_prow 1800 "$(r_peer 10.0.1.10 result=refused)" soleur-web-2 > "$R_FX/peer_rows_w2"; e_refuse "C.4-E17: web-2's newest row about web-1 says result=refused (forward is ok)" "reason=peer_refused dir=w2_to_w1"
+e_reset; r_prow 1800 "$(r_peer 10.0.1.10 result=denied)" soleur-web-2 > "$R_FX/peer_rows_w2"; e_refuse "C.4-E17b: web-2 -> web-1 result=denied (web-1's allowlist lacks web-2)" "reason=peer_denied dir=w2_to_w1"
+e_reset; r_prow 1800 "$(r_peer 10.0.1.10 result=tls)" soleur-web-2 > "$R_FX/peer_rows_w2"; e_refuse "C.4-E17c: web-2 -> web-1 result=tls" "reason=peer_tls dir=w2_to_w1"
+e_reset; : > "$R_FX/peer_rows_w2"; e_refuse "C.4-E18: NO web-2 row at all in 24 h (a missing direction is a distinct refusal, not a pass)" "reason=peer_rows_none dir=w2_to_w1"
+e_reset; r_prow 90000 "$(r_peer 10.0.1.10)" soleur-web-2 > "$R_FX/peer_rows_w2"; e_refuse "C.4-E18b: the only ok web-2 row is older than 24 h" "reason=peer_rows_none dir=w2_to_w1"
+e_reset; r_prow 1800 "$(r_peer 10.0.1.10)" > "$R_FX/peer_rows_w2"; e_refuse "C.4-E19: the ok row about web-1 comes from WEB-1 (soleur-web-platform), not web-2: the dialing host is the direction" "reason=peer_rows_none dir=w2_to_w1"
+e_reset; r_prow 1800 "$(r_peer 10.0.1.11)" soleur-web-2 > "$R_FX/peer_rows_w2"; e_refuse "C.4-E19b: web-2's ok row is about its own address, not web-1's" "reason=peer_row_malformed dir=w2_to_w1"
+e_reset; r_prow 1800 "$(r_peer 10.0.1.10 skipped=exec_failed)" soleur-web-2 > "$R_FX/peer_rows_w2"; e_refuse "C.4-E19c: web-2's newest row is skipped=exec_failed" "reason=peer_skipped dir=w2_to_w1"
+e_reset; { r_prow 7200 "$(r_peer 10.0.1.10)" soleur-web-2; r_prow 300 "$(r_peer 10.0.1.10 result=timeout)" soleur-web-2; } > "$R_FX/peer_rows_w2"; e_refuse "C.4-E19d: a NEWER web-2 timeout beats an older ok" "reason=peer_timeout dir=w2_to_w1"
+e_reset; printf '503' > "$R_FX/peer_mode_w2"; e_refuse "C.4-E19e: Better Stack answers 503 to the reverse peer query" "peer probe of web-1 FAILED"
+e_reset; r_prow 3600 "$(r_peer 10.0.1.11 result=refused)" > "$R_FX/peer_rows"; e_refuse "C.4-E19f: forward refused is labelled w1_to_w2 (the two directions carry distinct labels)" "reason=peer_refused dir=w1_to_w2"
+e_reset; printf '{"values":{"root_module":{"resources":[{"address":"hcloud_server_network.web[\\"web-2\\"]","values":{"ip":"10.0.1.11"}}]}}}' > "$R_FX/state"; e_refuse "C.4-E20: web-1's private address absent from state" "web-1's private IPv4 is absent from state"
+e_reset; r_state 10.0.1.10; e_refuse "C.4-E20b: state gives web-1 and web-2 the SAME address (a self-probe proves nothing)" "web-1's private IPv4 is absent from state or equals web-2's"
 e_reset; { r_row 20 "$(r_line listening 0.0.0.0 8443 0)"; r_row 80 "$(r_line listening 0.0.0.0 8443 0)"; } > "$R_FX/rows"; r_exec
 c4_assert "C.4-E12: workspaces_populated=0 is RECORDED, not judged (owner ruling 2026-11-06) → exit 0 and a GREEN line" \
   "$([[ "$R_RC" -eq 0 && "$(cat "$R_WORK/summary")" == *GREEN* ]] && echo 1 || echo 0)"
@@ -823,7 +841,7 @@ else
 fi
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=217
+MIN_CASES=231
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
