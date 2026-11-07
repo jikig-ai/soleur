@@ -13,12 +13,14 @@
 #
 # State exposure: both random_password.result and doppler_secret.value are written to terraform.tfstate in the R2 state
 # bucket, which the Tier-A read pair can read (ADR-241 residual R2); the bucket has no versioning and no lock (ADR-006). The
-# Doppler prd config is readable by the agent by design (the hold evaluator reads it). prd_terraform is a standalone config that
-# inherits nothing from prd (measured 2026-11-07), so the Tier-A reach is the state read, not a Doppler read. The apply job also
-# writes terraform show -json of the whole state to its runner temp dir. Dev and prd are independent only against readers scoped
-# to one config: a state reader gets both. Rotating the value does not repair a leak, because the next run writes the new value
-# to the same readable state; a leak is handled by treating the token as public and keeping its reach at four read-only fields.
-# If the token ever gains write reach it must leave Terraform: mint it outside, remove both secrets from state, delete this file.
+# Doppler prd config is readable by the agent by design (the hold evaluator reads it), and the prd_terraform branch config lists
+# every prd secret, including other Terraform-written ones such as EGRESS_AUDIT_INGEST_TOKEN (names-only read, 2026-11-07), so a
+# Tier-A Doppler token can read this value without reading state. The apply job also writes terraform show -json of the whole
+# state to its runner temp dir. Dev and prd are independent only against readers scoped to one config: a state reader gets both.
+# Rotating the value does not repair a leak, because the next run writes the new value to the same readable state; a leak is
+# handled by treating the token as public and keeping its reach at four read-only fields. If the token ever gains write reach it
+# must leave Terraform: mint it outside, remove both secrets from state, delete this file, and shadow the prd value in
+# prd_terraform (the ADR-241 sentinel pattern), or the Tier-A reach stays.
 #
 # Rotation: replace the random_password (-replace=random_password.legal_acceptance_verify_token_prd or _dev) with the plan NOT
 # narrowed to the generator alone (target the dependent doppler_secret too, or run the full root), then redeploy the web app:
