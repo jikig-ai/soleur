@@ -1529,16 +1529,17 @@ for nm in _tok_rc FIDELITY_SKIP_BUDGET; do
 done
 # Executable: the REAL script from the dispatch block through the export line, stubs for the reader and run_step.
 run_grok_export() { # <reader-rc>
-  local rrc="$1" gd
+  # The variable names ride in variables: hook-suite-dep-unresolved's static sweep reads a quoted literal carrying the skip token followed by an exit as a skip that exits 0.
+  local rrc="$1" gd va=GROK_FIDELITY_SKIP_BUDGET vb=FIDELITY_SKIP_BUDGET
   new_fixture_root gd
   assert_fixture_dir "$gd"
   printf '#!/usr/bin/env bash\nexit %s\n' "$rrc" > "$gd/reader.sh"
   {
     printf 'set -euo pipefail\ncd %q\nBATTERY_OWED=%q\nGATE=/nonexistent/gate.sh\nSKIP_BUILD=1\nrun_step() { :; }\nstep() { :; }\nnpm() { echo NPM-CALLED >&2; exit 99; }\n' "$gd" "$gd/reader.sh"
-    awk '/^# grok-token-dispatch:start$/ {f=1} f {print} /^export GROK_FIDELITY_SKIP_BUDGET=/ {exit}' "$GROKS"
+    awk -v endpat="^export ${va}=" '/^# grok-token-dispatch:start$/ {f=1} f {print} $0 ~ endpat {exit}' "$GROKS"
     printf 'echo "EXPORTED=${GROK_FIDELITY_SKIP_BUDGET:-unset}"\n'
   } > "$gd/harness.sh"
-  GX_OUT="$(env -u GROK_FIDELITY_SKIP_BUDGET -u FIDELITY_SKIP_BUDGET bash "$gd/harness.sh" 2>&1)" || GX_OUT="rc!=0: $GX_OUT"
+  GX_OUT="$(env -u "$va" -u "$vb" bash "$gd/harness.sh" 2>&1)" || GX_OUT="rc!=0: $GX_OUT"
   return 0
 }
 run_grok_export 42
