@@ -30,7 +30,7 @@
 #        Better Stack (test harness)]
 #
 # Live arms need (web-1 status): WEBHOOK_DEPLOY_SECRET, CF_ACCESS_CLIENT_ID +
-# CF_ACCESS_CLIENT_SECRET (or CI_SSH_ACCESS_TOKEN_ID/SECRET fallback),
+# CF_ACCESS_CLIENT_SECRET (no CI_SSH_ACCESS_TOKEN_* fallback since #9294),
 # APP_DOMAIN_BASE (default soleur.ai); (BS): doppler CLI + prd_terraform creds.
 #
 # Exit: 0 parity; 1 drift/missing/transport failure (each named); 2 usage, or a credential/signature
@@ -42,7 +42,7 @@ set -uo pipefail
 # would trace the token into whatever collects this script's output.
 case "$-" in
   *x*)
-    if [ -n "${CF_ACCESS_CLIENT_SECRET:+x}${CI_SSH_ACCESS_TOKEN_SECRET:+x}${HMAC_KEY:+x}${WEBHOOK_DEPLOY_SECRET:+x}" ]; then
+    if [ -n "${CF_ACCESS_CLIENT_SECRET:+x}${HMAC_KEY:+x}${WEBHOOK_DEPLOY_SECRET:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -149,8 +149,8 @@ if [[ "$STATUS_ARM" -eq 1 ]]; then
       || { echo "FATAL: APP_DOMAIN_BASE is not a plain hostname ($BASE)" >&2; exit 2; }
     unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIASES LOCALDOMAIN RES_OPTIONS
     : "${WEBHOOK_DEPLOY_SECRET:?required for the web-1 status arm}"
-    CF_ID="${CF_ACCESS_CLIENT_ID:-${CI_SSH_ACCESS_TOKEN_ID:-}}"
-    CF_SEC="${CF_ACCESS_CLIENT_SECRET:-${CI_SSH_ACCESS_TOKEN_SECRET:-}}"
+    CF_ID="${CF_ACCESS_CLIENT_ID:-}"
+    CF_SEC="${CF_ACCESS_CLIENT_SECRET:-}"
     : "${CF_ID:?CF Access client id required}" "${CF_SEC:?CF Access secret required}"
     # (#9597, S2) The three credentials ride curl's stdin as `header = "..."` config lines, values checked first (the why and the
     # process-substitution rule: the comment above `_bs_refuse` in scripts/betterstack-query.sh). The signature must be exactly 64
