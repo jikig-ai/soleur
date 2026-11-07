@@ -2215,14 +2215,6 @@ jobs:
           # explicit 0) once the oracle checkout depth changes or a row flakes on the detection flag (CTO ruling, #12262).
           fetch-depth: 0
           persist-credentials: false
-          # fetch-depth: 0 is LOAD-BEARING (#12274): manifest suites exercise
-          # scripts/test-all.sh's `origin/main...HEAD` diff read, and at depth 1
-          # origin/main is not a ref — every detection-dependent arm degrades to
-          # undecidable-diff and reds the leg. The fetch step below covers the
-          # case where the target ref's own history is complete but the base ref
-          # itself was never materialised. Same failure mode the lockfile-sync
-          # job documents; same fix shape as rule-body-lint.
-          fetch-depth: 0
 
       - name: Fetch origin/main for the manifest's diff reads
         # Deliberately a STEP, not a line in the manifest run block: the
