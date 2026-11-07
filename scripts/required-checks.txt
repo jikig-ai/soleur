@@ -103,7 +103,8 @@ skill-security-scan PR gate
 #   quality-guards (.github/workflows/pr-quality-guards.yml job
 #     `quality-guards`)
 #     members: enforce, markdown-lint, guard-script-fixture-tests (context was
-#     `Bash fixture tests for guard scripts`).
+#     `Bash fixture tests for guard scripts`), workflow-yaml-strict (step
+#     `workflow-duplicate-keys`, added 2026-11-07, #12283).
 #       - enforce: CONTENT-SCOPED, UNREACHABLE — its DSAR surface patterns +
 #         the four required legal docs are all outside ALLOWED_PATHS (∅).
 #       - markdown-lint: CONTENT-SCOPED, UNREACHABLE — the whole-corpus sweep
@@ -125,6 +126,15 @@ skill-security-scan PR gate
 #       - guard-script-fixture-tests: CONTENT-SCOPED, UNREACHABLE — it executes
 #         the fixture battery under .github/scripts/**; ALLOWED_PATHS ∩ that
 #         tree = ∅.
+#       - workflow-yaml-strict (step `workflow-duplicate-keys`): CONTENT-SCOPED,
+#         UNREACHABLE — it strict-parses (duplicate-key aware, keys compared
+#         case-insensitively as GitHub does) only .github/workflows/*.{yml,yaml}
+#         (suffix any case) and .github/actions/**/action.{yml,yaml};
+#         ALLOWED_PATHS = {weakness-digest.md} ∩ that scan surface = ∅. Re-derive
+#         on ANY change to the guard's file set
+#         (.github/scripts/check-workflow-duplicate-keys.py). Comment-only
+#         disposition: no ruleset, .tf or canonical-JSON change (the umbrella
+#         context `quality-guards` is unchanged).
 #   guards-ruleset (.github/workflows/ci.yml job `guards-ruleset`)
 #     members: adr-ordinals, rule-body-lint, tc-document-sha-guard,
 #     marketplace-manifest-guard, service-role-allowlist-gate,
