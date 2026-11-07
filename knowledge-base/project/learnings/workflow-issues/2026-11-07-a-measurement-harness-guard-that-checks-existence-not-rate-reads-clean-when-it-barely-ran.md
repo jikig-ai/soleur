@@ -62,4 +62,4 @@ own change.
 ## Tags
 
 category: workflow-issues
-module: test-gate measurement (knowledge-base/project/specs/feat-one-shot-12013-site-cost-measurement)
+module: test-gate measurement (archived spec feat-one-shot-12013-site-cost-measurement)
