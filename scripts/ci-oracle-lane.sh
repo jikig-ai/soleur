@@ -70,8 +70,6 @@
 # at the final block. No tool beyond bash, git and coreutils (timeout unused; mktemp, wc, tr, rm) is used.
 set -uo pipefail
 
-readonly ORACLE_LANE_LOCKED=1  # ACTIVATION LOCK (#12156): the activation PR removes this line after the observation window
-
 export LC_ALL=C
 export GIT_TERMINAL_PROMPT=0
 export GIT_OPTIONAL_LOCKS=0
