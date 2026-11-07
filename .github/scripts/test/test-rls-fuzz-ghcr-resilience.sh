@@ -382,12 +382,15 @@ else fail "wiring:supa-rc-propagated" "supabase-local.sh no longer exits the sta
 if grep -qE '(DOCKER_CONFIG|HOME)=[^ ]' "$SUPA_LOCAL"; then fail "wiring:supa-no-cred-strip" "supabase-local.sh prefixes an env credential-path override"
 else pass "wiring:supa-no-cred-strip"; fi
 
-# run-all's floor must equal the post-addition suite count (16 on main + this
-# suite = 17; 18 with test-check-workflow-duplicate-keys.sh, #12283) or the
-# new guard is itself silently deletable. Whole-line anchor: `MIN_SUITES=180`
-# must not satisfy it.
-if grep -qxF 'MIN_SUITES=18' "$RUN_ALL"; then pass "wiring:min-suites-18"
-else fail "wiring:min-suites-18" "run-all.sh MIN_SUITES is not 18"; fi
+# run-all's floor must not drop below the real suite count, or a deleted suite goes unnoticed (it was
+# 16 on main, 17 with this suite, 18 with test-check-workflow-duplicate-keys.sh, #12283). Asserted
+# numerically against the count derived from the same glob run-all.sh loops over, so a deliberate
+# raise of MIN_SUITES (up to the real count) does not redden an unrelated suite, while a floor
+# below the real count, or an unparseable floor, does.
+MIN_SUITES_NOW=$(grep -m1 -E '^MIN_SUITES=[0-9]+$' "$RUN_ALL" | cut -d= -f2)
+REAL_SUITES=$(find "$(dirname "$RUN_ALL")" -maxdepth 1 -type f -name 'test-*.sh' | wc -l)
+if [[ "$MIN_SUITES_NOW" =~ ^[0-9]+$ ]] && (( MIN_SUITES_NOW >= 18 && MIN_SUITES_NOW >= REAL_SUITES )); then pass "wiring:min-suites-floor"
+else fail "wiring:min-suites-floor" "run-all.sh MIN_SUITES='${MIN_SUITES_NOW}' is unparseable or below max(18, ${REAL_SUITES} real suites)"; fi
 
 # The workflow's own pull_request.paths must list the helper and this suite —
 # a helper-only edit otherwise never exercises the live wiring (the wrapped

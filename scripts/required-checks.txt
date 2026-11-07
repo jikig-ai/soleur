@@ -127,8 +127,9 @@ skill-security-scan PR gate
 #         the fixture battery under .github/scripts/**; ALLOWED_PATHS ∩ that
 #         tree = ∅.
 #       - workflow-yaml-strict (step `workflow-duplicate-keys`): CONTENT-SCOPED,
-#         UNREACHABLE — it strict-parses (duplicate-key aware) only
-#         .github/workflows/*.{yml,yaml} and .github/actions/**/action.{yml,yaml};
+#         UNREACHABLE — it strict-parses (duplicate-key aware, keys compared
+#         case-insensitively as GitHub does) only .github/workflows/*.{yml,yaml}
+#         (suffix any case) and .github/actions/**/action.{yml,yaml};
 #         ALLOWED_PATHS = {weakness-digest.md} ∩ that scan surface = ∅. Re-derive
 #         on ANY change to the guard's file set
 #         (.github/scripts/check-workflow-duplicate-keys.py). Comment-only

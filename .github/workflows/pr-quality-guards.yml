@@ -6,7 +6,8 @@ on:
   # Merge queue (#5780; three required contexts live here post-#12089
   # umbrella). THREE job-names are required contexts on ruleset 14145388 —
   # `quality-guards` (umbrella over the folded `enforce`, `markdown-lint`,
-  # and `guard-script-fixture-tests` member steps), `dependency-review`, and
+  # and `guard-script-fixture-tests` member steps plus the `workflow-yaml-strict`
+  # member step added 2026-11-07, #12283), `dependency-review`, and
   # `skill-security-scan PR gate` — and NONE has a PR-event-only dependency
   # (the folded required jobs keep their merge_group step arms as member
   # steps), so all three report cleanly on the gh-readonly-queue/main/* temp
@@ -116,7 +117,9 @@ jobs:
   quality-guards:
     name: quality-guards
     # 15m — the three folded jobs measured ~7m serial worst-case (fixture
-    # battery ~4m + npm ci + markdown sweep ~1.5m + enforce <1m); >=2x headroom.
+    # battery ~4m + npm ci + markdown sweep ~1.5m + enforce <1m); the fourth
+    # member adds ~1s (guard step) plus ~35s (its suite, inside the fixture
+    # battery; 33s measured on a loaded dev box) = ~8m serial, ~1.9x headroom.
     timeout-minutes: 15
     runs-on: ubuntu-latest
     steps:
@@ -131,11 +134,13 @@ jobs:
       # Runs first and cheaply (~1 s). Bare command on purpose: no `|| true`, no
       # continue-on-error — the verdict reaches the required context only through
       # the `member workflow-yaml-strict` row in `aggregate` below. PyYAML is
-      # preinstalled on ubuntu-latest; the guard exits 2 (red) if it ever is not. ──
+      # assumed preinstalled on ubuntu-latest (the `pyyaml=` field in this
+      # step's summary line is the evidence); the guard exits 2 (red) if it is not.
+      # `-I` (isolated mode): no script-dir sys.path[0], no PYTHON* env, no user site. ──
       - id: workflow-duplicate-keys
         if: ${{ !cancelled() }}
         name: Strict duplicate-key parse of workflows and composite actions
-        run: python3 .github/scripts/check-workflow-duplicate-keys.py
+        run: python3 -I .github/scripts/check-workflow-duplicate-keys.py
 
       # ── member: enforce (was jobs.enforce — legal-doc cross-document
       # lockstep + BACKSTOP_REVISION + Art. 30, folded #4384/#8902) ──

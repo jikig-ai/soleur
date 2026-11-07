@@ -928,7 +928,7 @@ rulesets is 25 → 12):
 | Umbrella context | Producer job | Folded members (former contexts / job names) |
 | --- | --- | --- |
 | `guards-ruleset` | `.github/workflows/ci.yml` job `guards-ruleset` (`name: guards-ruleset`) | `adr-ordinals`, `rule-body-lint`, `tc-document-sha-guard`, `marketplace-manifest-guard`, `service-role-allowlist-gate`, `credential-path-guard`, `lockfile-sync`, `grok-fidelity` |
-| `quality-guards` | `.github/workflows/pr-quality-guards.yml` job `quality-guards` (`name: quality-guards`) | `enforce`, `markdown-lint`, `guard-script-fixture-tests` (context `Bash fixture tests for guard scripts`) |
+| `quality-guards` | `.github/workflows/pr-quality-guards.yml` job `quality-guards` (`name: quality-guards`) | `enforce`, `markdown-lint`, `guard-script-fixture-tests` (context `Bash fixture tests for guard scripts`), `workflow-yaml-strict` (step `workflow-duplicate-keys`, added 2026-11-07, #12283) |
 | `secret-guards` | `.github/workflows/secret-scan.yml` job `secret-guards` (`name: secret-guards`) | `scan` (`gitleaks scan`), `lint-fixture-content` (`lint fixture content`), `waiver-discipline` (`waiver discipline (issue:#NNN trailer)`), `rename-guard` (`rename-guard (allowlist destinations)`), `allowlist-diff` (`allowlist-diff (.gitleaks.toml paths surface)`) |
 
 Each folded guard is a **member step** of its umbrella: it keeps its step
@@ -1038,3 +1038,26 @@ surface is `.github/workflows` and `.github/actions`, intersection empty) is
 recorded in `scripts/required-checks.txt`. The member's verdict reaches the
 required context only through the `member workflow-yaml-strict` row of the
 `aggregate` step, which `scripts/lint-umbrella-aggregate.sh` enforces.
+
+### Review rulings on the guard (PR #12295, 2026-11-07)
+
+- **Key identity.** GitHub compares mapping keys as case-insensitive strings on every mapping
+  (actions/runner `TemplateReader.cs` builds an `OrdinalIgnoreCase` key set per mapping), so the
+  guard's identity for a scalar key is its text with ASCII letters folded to upper case: `Fetch-Depth`
+  and `fetch-depth` collide, `on` and `true` do not, and the merge key `<<` is an ordinary key. The
+  earlier residual limited to `with:` and `env:` input names was wrong and is withdrawn. The fold is
+  ASCII-only (Python `upper()` would equate sharp-s with `SS`, which `OrdinalIgnoreCase` does not), so
+  non-ASCII case variants and non-scalar keys remain a stated false-GREEN residual.
+- **File set.** The `yml` and `yaml` suffixes are matched case-insensitively; a dangling or unreadable
+  entry named like a workflow is an unparseable finding (only directories are skipped). Composite
+  actions outside `.github/actions` stay unscanned, with a suite tripwire row asserting none is tracked.
+- **Host-file residual.** The guard cannot protect its own host file: a duplicate key in
+  `pr-quality-guards.yml` stops `quality-guards` from reporting at all. The host file's own duplicate
+  is caught by this script's real-tree row in `ci.yml` `test`, not by `quality-guards`; that residual
+  reopens if `ci.yml`'s gate is narrowed. No ruleset change and no new required workflow. A PR that
+  edits the script, the step or the aggregate row is caught by review, not by the guard (the same trust
+  model as the other three members); the CODEOWNERS rows added for the script and its suite are routing
+  text only (the ruleset has no `require_code_owner_review`), not a second reviewer.
+- **PyYAML.** PyYAML is assumed preinstalled on `ubuntu-latest`, not verified. The guard prints
+  `pyyaml=<version>` on every summary line (that run output is the evidence), exits 2 if it is missing,
+  and has no pip fallback.
