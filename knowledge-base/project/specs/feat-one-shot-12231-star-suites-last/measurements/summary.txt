@@ -1,0 +1,93 @@
+# Measurements: park the `*` suites until the drain (#12231), and the replay-arm rebalance (not landed). Ref #12013.
+
+Method (a measurement method only; it bypasses nothing in a ship path). Script: `measure.sh`; figures: `derive.sh`.
+- Each reading is a fresh `git clone` into its own directory (own git-common-dir, so the advisory lock is its own and the pool engages;
+  empty per-clone derive cache, so cold). The two `node_modules` are symlinked from the worktree. `origin/main` in the clone is the tree
+  under test, so a runner edit is part of the base and the gate is not degraded to full.
+- Pinned diff: the files commit `7af192071d` touched (web-platform, 8 files); added files removed, modified files restored to the
+  parent's content, committed. Selection in every reading: `selected=162 of=742 always_on=118 edge=44 fallback=none` (the earlier
+  readings said 740; main gained two registrations).
+- Command: `env -u CI SOLEUR_TEST_JOBS=4 TEST_TIMING_LOG=<f> nice -n 10 bash scripts/test-all.sh --affected`, output stamped per line.
+  `SOLEUR_PJ_FIFO` unset in every reading. The 18k-line stamped logs are not committed.
+- Disturbance guard: a reading aborts at start when load1 > 9 or any other `test-all.sh` is live; the same two facts are recorded at the end.
+- Trees: control and control2 = `78fbd47b9a` (merge base, the old barrier); t1 = `e2f2b4c552` (the park).
+
+## Readings (pool phase = wall minus the `mode engaged` offset)
+
+| reading  | wall  | cold derive | pool phase | idle slot-s | <=1 suite live (s) | replay-a (start..end) | `*` suite start (pool-relative), others live | load start / end | disturbed |
+|----------|-------|-------------|------------|-------------|--------------------|------------------------|---------------------------------------------|------------------|-----------|
+| control  | 2417 s | 255 s | 2153 s | 2402 | 435 | +264..+1726 | +1884 s, none | 2.87 / 7.26 | YES: a sibling worktree's `test-all.sh` was live at the end |
+| control2 | 2138 s | 234 s | 1894 s | 2003 | 305 | +245..+1609 | +1659 s, none | 2.99 / 6.24 | no |
+| t1       | 2081 s | 216 s | 1854 s | 1428 | 364 | +227..+1714 | +1845 s, none | 2.54 / 2.62 | no |
+
+Faster (undisturbed) control = control2. t1 versus control2: pool phase -40 s, wall -57 s, idle slot-seconds -575. The first control is
+reported but is not the comparison: it was disturbed, and a disturbed control would flatter the treatment.
+
+Per-suite start and end offsets: `<reading>.suites.tsv`; timing rows: `<reading>.timing.tsv`; derived figures: `<reading>.derived.txt`.
+
+## What the readings show
+
+- The structural property holds in the T1 log: the one selected `*` suite (`scripts/test-all-capacity-signal`, 9 s) launched with no
+  other suite live, after the last non-`*` suite ended, and the run ended on it (+2072 s, wall +2081 s). In the controls it launched when
+  the pool had drained to its longest live suite, and 36 suites (907 slot-seconds) in the first control and 35 (708) in control2 started after it
+  (none in t1).
+- The park removed about 575 idle slot-seconds against the clean control but moved the pool phase by only 40 s: the pool end is set by
+  the long suites that start late (`approval-guard1-mutation`, `argv-bearer-sweep`, `destroy-ask-mutation`), whose start is a queue-order
+  effect. That is the lever #12263 (start-first) names.
+- AC7 (claim criterion): T1's pool phase is 40 s below the faster control, under the 100 s bar. So the PR says `Ref #12231`, not `Closes`.
+  The park is kept on the structural evidence (AC6 and the Phase 1 fixtures), not on this delta. T1 is not worse than the control, so C2 did not
+  have to reproduce a regression.
+- Run-to-run spread is not resolved by three readings: control and control2 differ by 263 s wall (the first was disturbed), and the
+  clean pair differs by 57 s. A 40 s pool-phase difference is inside that spread. Read the T1 result as "no regression, structural
+  property confirmed, gain not resolved on this diff".
+
+## Failures
+
+- Every reading: `apps/web-platform [repo-wide+component]` (the known clone artifact; the clone has no `.env` and shares symlinked
+  `node_modules`). The remaining `[FAIL]` lines in the logs are the expected self-test lines of suites that fail on purpose.
+- t1 only: `.claude/hooks/grep-q-pipe-guard.test.sh`. Cause: a line added by this change to `scripts/test-all-parallel-scheduler.test.sh`
+  (`grep -E '^starS<TAB>' "$TIMING_FILE" | grep -qE ...`) is the pipe-into-`grep -q` shape that guard bans. A real defect of the change, not
+  load; fixed in the next commit (`grep -qE ... < <(grep ...)`), guard re-run green. The reading stands as taken.
+
+## Guard 1 mutants (scheduler contract), one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`
+
+Control (unmutated runner): 80 passed, 0 failed. Every mutant below turned the suite red; reds = failed assertions.
+
+| # | Edit | Result | Arms that went red |
+|---|------|--------|--------------------|
+| M1a | revert the park | 11 reds | star-last, parked-star, blocked-head, two-stars, derived-star, drain-order, star-first, multi-token, signal-while-parked, many |
+| M1b | park, but add the star to `skip_tok` | 1 red | blocked-head star |
+| M1c | park, add to `skip_tok` and set `any_q` | 11 reds | as M1a |
+| M2 | release without the draining flag | 4 reds | star-first, signal-while-parked, many (cost and order) |
+| M3a | release without the empty-pool check | 17 reds | star-last (overlap), tmp_delta, order among conflicting suites, and more |
+| M3b | launch all of `rest` | 3 reds | two-stars, queued-ahead accumulation, non-canonical shape |
+| M3c | release `rest[-1]` | 1 red | two-stars (registration order among stars) |
+| M3d | release without dropping the index | 12 reds | star-last (rc 124), parked-star, blocked-head, and more |
+| M4 | run the release before the pass | 1 red | drain-order (this is the only arm that observes the position of the step) |
+| M5 | the strict-FIFO branch no longer taken | 3 reds | FIFO knob, frozen FIFO order, FIFO star control |
+| M6 | set the draining flag at submit | 4 reds | star-first, signal-while-parked, many |
+| M7 | `$tok == "*"` instead of the word-bounded match | 1 red | multi-token star |
+| M8 | release only in the normal reap path | 1 red | torn-reap star |
+
+M9 (an extra signal conjunct) is not a mutant of this implementation: `_pj_fill` has no signal check and no launch site runs after the
+interrupt flag is set (the drain's signal branch reaps without filling), so there is no behaviour to flip; the signal-while-parked arm is
+killed by M2 and M6 instead. Harness rows: H1 (flip an expected order in the star-last `tl_check` of a suite copy) -> that arm went red;
+H2 (a `*` registered last, and the zero-star shapes) stay green on the unmodified and on the new runner; H3 (the checker over a timeline with no
+`star` stamp) fails, not skips.
+
+Enumeration: `bash scripts/test-all.sh --enumerate-commands | sort` at the merge base versus this tree: 754 rows each, diff empty.
+
+## Lever 2 (replay-arm rebalance): not landed
+
+Paper check (`rebalance_whatif.py`, output `rebalance_whatif.out.txt`): the list-schedule reproduces the previous treatment reading
+(pool end 1611 s, `approval-guard1-mutation` start 945 s). The best of 178503 contiguous splits is predicted +40 s but leaves the arms at
+1569 / 263 / 781 s; the best split within the 1.5x balance bound is predicted 78 s worse. CTO ruling 2026-11-06 (decision-challenges.md): stop;
+no per-site measurement, no re-split, no T2 reading. Per-site costs are unmeasured; recorded on #12263.
+
+## Not claimed
+
+- The 600 s bar (the cold gate is still about 2.0 ks; the pool-phase floor is about 1.5 ks).
+- A gain from the park on this diff: 40 s is inside the run-to-run spread. The pinned diff selects one 9 s `*` suite, so T1 measures
+  barrier removal only; with several `*` suites selected the effect is structural (each runs solo either way and the stranded drain disappears),
+  not measured.
+- A result for diffs that select a different suite mix; a confidence band.

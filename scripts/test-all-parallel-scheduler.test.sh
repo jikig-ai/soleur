@@ -501,7 +501,7 @@ if [[ "$STAR_TIMING_ORDER" == "indA starS slowL indB " ]]; then
 else
   fail "A4 - timing rows '$STAR_TIMING_ORDER'"; dump "$(cat "$TIMING_FILE")"
 fi
-if grep -E '^starS	' "$TIMING_FILE" | grep -qE 'tmp_delta=-?[0-9]+$'; then
+if grep -qE 'tmp_delta=-?[0-9]+$' < <(grep -E '^starS	' "$TIMING_FILE"); then
   pass "A4 - the parked * launched solo, so its tmp_delta is a number (not unattributed)"
 else
   fail "A4 - starS tmp_delta is not numeric: $(grep -E '^starS' "$TIMING_FILE" | tr '\t' '>')"
