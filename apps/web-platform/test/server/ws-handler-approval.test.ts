@@ -11,13 +11,17 @@ import { TC_VERSION } from "@/lib/legal/tc-version";
 import { canonicalizeAction, computeActionHash } from "@/server/approval/canonical";
 import {
   APPROVAL_ID,
+  CANARIES,
   CONVERSATION_ID,
   OTHER_CONVERSATION_ID,
   OTHER_WORKSPACE_ID,
+  REQUESTER_EMAIL,
+  REQUESTER_ID,
   SAMPLES,
   TOOLS,
   USER_ID,
   WORKSPACE_ID,
+  makeLabelerClient,
 } from "../approval/fixtures";
 
 const OTHER_USER = "00000000-0000-4000-8000-0000000000aa";
@@ -37,6 +41,13 @@ const h = vi.hoisted(() => ({
   report: vi.fn(),
   warn: vi.fn(),
   logWarn: vi.fn(),
+  /** #9601: the service client's `from` (requester-label membership read) and `auth.admin.getUserById`. */
+  serviceFrom: vi.fn(),
+  getUserById: vi.fn(),
+  /** #9601: lets a test make the NEXT tenant mint fail like a denied principal (the null-tenant path of the role read). */
+  failNextTenant: { value: false },
+  tenantClient: { value: null as unknown },
+  RuntimeAuthError: null as unknown as new (message: string, cause?: string) => Error,
 }));
 
 vi.mock("@/server/current-repo-url", () => ({ getCurrentRepoUrl: vi.fn(async () => "https://github.com/acme/repo.git") }));
@@ -71,12 +82,18 @@ vi.mock("@/lib/supabase/tenant", () => {
     from: () => chain(),
     rpc: (...a: unknown[]) => h.tenantRpc(...a),
   };
+  h.tenantClient.value = tenantClient;
+  h.RuntimeAuthError = RuntimeAuthError;
   h.getFreshTenantClient.mockImplementation(async () => tenantClient);
   return { getFreshTenantClient: h.getFreshTenantClient, getMyRevocationStatus: vi.fn(async () => null), RuntimeAuthError };
 });
 
 vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({ rpc: (...a: unknown[]) => h.serviceRpc(...a), from: vi.fn(), auth: { getUser: vi.fn() } }),
+  createServiceClient: () => ({
+    rpc: (...a: unknown[]) => h.serviceRpc(...a),
+    from: (...a: unknown[]) => h.serviceFrom(...a),
+    auth: { getUser: vi.fn(), admin: { getUserById: (...a: unknown[]) => h.getUserById(...a) } },
+  }),
   serverUrl: "https://test.supabase.co",
 }));
 
@@ -512,7 +529,7 @@ describe("reattach re-send", () => {
     expect(h.serviceRpc).toHaveBeenCalledWith("list_live_approvals", { p_conversation: CONVERSATION_ID });
     const card = frames(s).find((f) => f.type === "approval_request") as Extract<WSMessage, { type: "approval_request" }>;
     expect(card).toMatchObject({ approvalId: APPROVAL_ID, conversationId: CONVERSATION_ID, status: "pending", requestCount: 2, viewerRole: "owner" });
-    expect(card.view.fields.map((f) => f.value).join("|")).toContain("Updated pricing");
+    expect(card.view!.fields.map((f) => f.value).join("|")).toContain("Updated pricing");
   });
 
   it("flag on: agentWaiting reflects whether THIS process still holds the agent's wait for the request", async () => {
@@ -582,5 +599,194 @@ describe("reattach re-send", () => {
     await resume(makeSession(CONVERSATION_ID));
     await settle();
     expect(h.serviceRpc).not.toHaveBeenCalledWith("list_live_approvals", { p_conversation: OTHER_CONVERSATION_ID });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// #9601: the redaction and the requester label through the REAL handler. The attach is `conversations.user_id`-scoped in
+// production, so the viewing member is the conversation's own creator and the row's requester is NULL or another member
+// (the tenant mock above resolves the conversation for the attaching user). A NEW top-level describe: nothing here lives
+// inside `reattach re-send`. Absence is never asserted behind the fixed settle(): a visible row is seeded after the skipped
+// one and awaited with `vi.waitFor` first.
+// ---------------------------------------------------------------------------------------------------------------------
+describe("requester label and redaction through the handler (#9601)", () => {
+  const ROW_SKIPPED = "00000000-0000-4000-8000-0000000000b1";
+  const ROW_VISIBLE = "00000000-0000-4000-8000-0000000000b2";
+  const input = {
+    to: `${CANARIES.to}@example.com`,
+    subject: `Subject ${CANARIES.subject}`,
+    body: `Hello ${CANARIES.body}`,
+    jurisdiction: "us",
+  };
+  const live = (over: Record<string, unknown> = {}) => {
+    const action = canonicalizeAction(TOOLS.emailSend, input, undefined);
+    const workspaceId = (over.workspace_id as string | undefined) ?? WORKSPACE_ID;
+    const hash = computeActionHash({ toolName: TOOLS.emailSend, workspaceId, conversationId: CONVERSATION_ID, action });
+    return { approval: row({ status: "pending", decided_at: null, decided_by: null, canonical_action: action, action_sha256: hash, ...over }), request_count: 1 };
+  };
+  const attach = async (s: ClientSession) => {
+    sessions.set(USER_ID, s);
+    await send(USER_ID, { type: "resume_stream", conversationId: CONVERSATION_ID, ackSeq: 0 });
+  };
+  const cards = (s: ClientSession) => frames(s).filter((f): f is Extract<WSMessage, { type: "approval_request" }> => f.type === "approval_request");
+  const useWorld = (members: Array<{ workspace_id: string; user_id: string; role: string }>) => {
+    const fake = makeLabelerClient({ members, authEmails: { [REQUESTER_ID]: REQUESTER_EMAIL, [OTHER_USER]: "other.member@example.com" } });
+    h.serviceFrom.mockImplementation(fake.client.from);
+    h.getUserById.mockImplementation(fake.client.auth.admin.getUserById);
+    return fake;
+  };
+  const isOwner = (v: boolean) =>
+    h.tenantRpc.mockImplementation(async (fn: string) => {
+      if (fn === "is_workspace_owner") return { data: v, error: null };
+      return { data: null, error: null };
+    });
+
+  beforeEach(() => {
+    h.flagOn.value = true;
+    h.serviceFrom.mockReset();
+    h.getUserById.mockReset();
+    h.failNextTenant.value = false;
+  });
+  afterEach(() => {
+    h.failNextTenant.value = false;
+    h.getFreshTenantClient.mockImplementation(async () => h.tenantClient.value);
+  });
+
+  it("a non-requester member attaching over resume_stream: the frame the socket receives is the redacted one", async () => {
+    isOwner(false);
+    h.serviceRpc.mockResolvedValue({ data: [live({ requested_by_user_id: OTHER_USER })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s)).toHaveLength(1));
+    const c = cards(s)[0];
+    expect(c.view).toBeNull();
+    expect(c.toolName).toBe("redacted");
+    expect(c.viewerRole).toBe("member");
+    expect(Object.hasOwn(c, "requester")).toBe(false);
+    const wire = (s.ws.send as unknown as { mock: { calls: unknown[][] } }).mock.calls.map((x) => String(x[0])).join("\n");
+    for (const canary of Object.values(CANARIES)) expect(wire).not.toContain(canary);
+    expect(wire).not.toContain("email_send");
+    expect(h.serviceFrom).not.toHaveBeenCalled();
+    expect(h.getUserById).not.toHaveBeenCalled();
+    // The redacted frame is one the client schema accepts.
+    expect(parseWSMessage(c).ok).toBe(true);
+  });
+
+  it("a NULL requester (erased account) and a member viewer: redacted", async () => {
+    isOwner(false);
+    h.serviceRpc.mockResolvedValue({ data: [live({ requested_by_user_id: null })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s)).toHaveLength(1));
+    expect(cards(s)[0].view).toBeNull();
+  });
+
+  it("the member who is the requester gets the full view and the literal you", async () => {
+    isOwner(false);
+    h.serviceRpc.mockResolvedValue({ data: [live({ requested_by_user_id: USER_ID })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s)).toHaveLength(1));
+    const c = cards(s)[0];
+    expect(c.view).not.toBeNull();
+    expect(c.viewerRole).toBe("member");
+    expect(c.requester).toBe("you");
+  });
+
+  it("an Owner attaching gets the full view plus the requester's auth email, from a membership read scoped to the row's workspace", async () => {
+    isOwner(true);
+    const fake = useWorld([
+      { workspace_id: WORKSPACE_ID, user_id: USER_ID, role: "owner" },
+      { workspace_id: WORKSPACE_ID, user_id: REQUESTER_ID, role: "member" },
+    ]);
+    h.serviceRpc.mockResolvedValue({ data: [live({ requested_by_user_id: REQUESTER_ID })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s)).toHaveLength(1));
+    const c = cards(s)[0];
+    expect(c.view).not.toBeNull();
+    expect(c.viewerRole).toBe("owner");
+    expect(c.requester).toBe(REQUESTER_EMAIL);
+    expect(fake.queries).toHaveLength(1);
+    expect(fake.queries[0].filters).toContainEqual({ op: "eq", col: "workspace_id", val: WORKSPACE_ID });
+    expect(fake.queries[0].signalPresent).toBe(true);
+  });
+
+  it("an Owner's labeler failure never breaks the attach: the card is sent without a requester key", async () => {
+    isOwner(true);
+    h.serviceFrom.mockImplementation(() => {
+      throw new Error("client exploded");
+    });
+    h.serviceRpc.mockResolvedValue({ data: [live({ requested_by_user_id: REQUESTER_ID })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s)).toHaveLength(1));
+    expect(cards(s)[0].view).not.toBeNull();
+    expect(Object.hasOwn(cards(s)[0], "requester")).toBe(false);
+    expect(h.warn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-requester-label-failed")).toBe(true);
+    expect(JSON.stringify(h.warn.mock.calls)).not.toContain(REQUESTER_EMAIL);
+  });
+
+  it("one labeler per attach: a second attach re-reads (nothing is cached across attaches)", async () => {
+    isOwner(true);
+    const fake = useWorld([
+      { workspace_id: WORKSPACE_ID, user_id: USER_ID, role: "owner" },
+      { workspace_id: WORKSPACE_ID, user_id: REQUESTER_ID, role: "member" },
+    ]);
+    h.serviceRpc.mockResolvedValue({ data: [live({ requested_by_user_id: REQUESTER_ID })], error: null });
+    const s1 = makeSession(CONVERSATION_ID);
+    await attach(s1);
+    await vi.waitFor(() => expect(cards(s1)).toHaveLength(1));
+    const s2 = makeSession(CONVERSATION_ID);
+    await attach(s2);
+    await vi.waitFor(() => expect(cards(s2)).toHaveLength(1));
+    expect(fake.queries).toHaveLength(2);
+  });
+
+  it("a failed role read for a viewer who is not the requester sends no frame; the next visible row still arrives", async () => {
+    h.tenantRpc.mockImplementation(async (fn: string) => (fn === "is_workspace_owner" ? { data: null, error: { code: "XX000" } } : { data: null, error: null }));
+    h.serviceRpc.mockResolvedValue({
+      data: [live({ id: ROW_SKIPPED, requested_by_user_id: OTHER_USER }), live({ id: ROW_VISIBLE, requested_by_user_id: USER_ID })],
+      error: null,
+    });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s).map((c) => c.approvalId)).toContain(ROW_VISIBLE));
+    expect(cards(s).map((c) => c.approvalId)).not.toContain(ROW_SKIPPED);
+    expect(cards(s).find((c) => c.approvalId === ROW_VISIBLE)).toMatchObject({ viewerRole: "member", requester: "you" });
+    expect(h.warn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-viewer-role-failed")).toBe(true);
+  });
+
+  it("the null-tenant path of the role read is REPORTED (it throws into the viewer-role-failed op) and fails closed for a non-requester", async () => {
+    h.serviceRpc.mockImplementation(async () => {
+      // The list read happens right before the role read: the next tenant mint is the role read's.
+      h.failNextTenant.value = true;
+      return { data: [live({ id: ROW_SKIPPED, requested_by_user_id: OTHER_USER }), live({ id: ROW_VISIBLE, requested_by_user_id: USER_ID })], error: null };
+    });
+    h.getFreshTenantClient.mockImplementation(async () => {
+      if (h.failNextTenant.value) {
+        h.failNextTenant.value = false;
+        throw new h.RuntimeAuthError("denied", "unknown");
+      }
+      return h.tenantClient.value;
+    });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s).map((c) => c.approvalId)).toContain(ROW_VISIBLE));
+    expect(cards(s).map((c) => c.approvalId)).not.toContain(ROW_SKIPPED);
+    expect(h.warn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-viewer-role-failed")).toBe(true);
+  });
+
+  it("an approved row is not re-sent to a member who cannot see the action; a pending row is the redacted frame", async () => {
+    isOwner(false);
+    h.serviceRpc.mockResolvedValue({
+      data: [live({ id: ROW_SKIPPED, status: "approved", requested_by_user_id: OTHER_USER }), live({ id: ROW_VISIBLE, requested_by_user_id: OTHER_USER })],
+      error: null,
+    });
+    const s = makeSession(CONVERSATION_ID);
+    await attach(s);
+    await vi.waitFor(() => expect(cards(s).map((c) => c.approvalId)).toContain(ROW_VISIBLE));
+    expect(cards(s).map((c) => c.approvalId)).not.toContain(ROW_SKIPPED);
+    expect(cards(s).find((c) => c.approvalId === ROW_VISIBLE)?.view).toBeNull();
   });
 });

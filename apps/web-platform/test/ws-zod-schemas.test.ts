@@ -529,6 +529,18 @@ describe("approval frames (#4672)", () => {
     expect(parseWSMessage({ ...request, view: { ...view, extra: 1 } }).ok).toBe(false);
   });
 
+  test("approval_request round-trips with a null view (withheld) and with a valid requester label (#9601)", () => {
+    const redacted = { ...request, toolName: "redacted", view: null, viewerRole: "member" };
+    const parsed = parseWSMessage(redacted);
+    expect(parsed.ok).toBe(true);
+    expect(parseWSMessage({ ...request, requester: "you" }).ok).toBe(true);
+    const withLabel = parseWSMessage({ ...request, requester: "jane@example.com" });
+    expect(withLabel.ok).toBe(true);
+    // The forged-field rejection keeps working next to the new keys.
+    expect(parseWSMessage({ ...redacted, options: ["Approve"] }).ok).toBe(false);
+    expect(parseWSMessage({ ...request, requester: "" }).ok).toBe(false);
+  });
+
   test("the card view carries a non-empty noun (the client never parses a display sentence)", () => {
     const { noun: _n, ...withoutNoun } = view;
     expect(parseWSMessage({ ...request, view: withoutNoun }).ok).toBe(false);

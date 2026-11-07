@@ -15,6 +15,7 @@ import { ApprovalCanonicalError, CANONICAL_VERSION, computeActionHash, type Cano
 import { isApprovalQueueEnabled } from "./flag";
 import { reportApprovalOp } from "./ops";
 import { renderApprovalView } from "./render";
+import type { RequesterLabelFn } from "./card-visibility";
 import { hasWaiter } from "./waiters";
 import { listLiveApprovals, type ApprovalRpcClient } from "./service";
 import { isApprovalRequiredTool } from "./tools";
@@ -33,6 +34,8 @@ export interface ReemitArgs {
    * checked again against its own `workspace_id`.
    */
   workspaceId: string;
+  /** The requester label for an Owner viewer (optional until Phase 2 makes it required). */
+  requesterLabel?: RequesterLabelFn;
   /** Test seam; defaults to the flag read for `{userId, workspaceId}`. */
   isEnabled?: (workspaceId: string) => Promise<boolean>;
 }

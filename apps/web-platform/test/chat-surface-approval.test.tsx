@@ -162,3 +162,19 @@ describe("awaitingUserInput counts a pending approval the agent is waiting on", 
     expect(screen.getByTestId("live-narration")).toBeInTheDocument();
   });
 });
+
+describe("requester label and withheld view through the chat thread (#9601)", () => {
+  it("passes the reducer's requester through to the card (one pass-through case; the label matrix lives in the card test)", async () => {
+    await renderStreaming([userMsg, card(ID1, { requester: "jane@example.com" })]);
+    expect(screen.getByTestId("approval-requester").textContent).toBe("Requested by jane@example.com");
+  });
+
+  it("a redacted member card renders the waiting copy with no bound block and no buttons", async () => {
+    await renderStreaming([userMsg, card(ID1, { view: null, toolName: "redacted", viewerRole: "member", content: "x" } as Partial<Card>)]);
+    expect(screen.getByTestId("approval-request-card").getAttribute("data-approval-state")).toBe("pending_member");
+    expect(screen.queryByTestId("approval-bound-block")).toBeNull();
+    expect(screen.queryAllByRole("button", { name: /Approve|Deny/ })).toHaveLength(0);
+    expect(screen.getByText("An action in this conversation is waiting for an Owner's approval.")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("Details removed");
+  });
+});

@@ -7,6 +7,7 @@
  */
 
 import type { ServerDerived } from "./canonical";
+import type { RequesterLabelFn } from "./card-visibility";
 import type { ExecutionGrants } from "./grants";
 import type { ConsumeResult, CreateApprovalParams, SubmitResult } from "./service";
 import type { WaitDeps, WaitStatus } from "./waiters";
@@ -32,6 +33,8 @@ export interface ApprovalGateDeps {
   readStatus(approvalId: string): Promise<WaitStatus | null>;
   /** Fail closed: only `{consumed: true}` from the database is an allow. */
   consume(p: { id: string; hash: string; conversationId: string }): Promise<ConsumeResult>;
+  /** The requester label for an Owner viewer (optional: absent means no label on the first send). */
+  requesterLabel?: RequesterLabelFn;
   /** Role of the requester in the workspace; the owner can decide, a member sees a read-only waiting card. Failure = member. */
   viewerRole(): Promise<"owner" | "member">;
   /**
