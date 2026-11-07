@@ -1534,7 +1534,7 @@ run_grok_export() { # <reader-rc>
   assert_fixture_dir "$gd"
   printf '#!/usr/bin/env bash\nexit %s\n' "$rrc" > "$gd/reader.sh"
   {
-    printf 'set -euo pipefail\nBATTERY_OWED=%q\nGATE=/nonexistent/gate.sh\nSKIP_BUILD=1\nrun_step() { :; }\nstep() { :; }\nnpm() { echo NPM-CALLED >&2; exit 99; }\n' "$gd/reader.sh"
+    printf 'set -euo pipefail\ncd %q\nBATTERY_OWED=%q\nGATE=/nonexistent/gate.sh\nSKIP_BUILD=1\nrun_step() { :; }\nstep() { :; }\nnpm() { echo NPM-CALLED >&2; exit 99; }\n' "$gd" "$gd/reader.sh"
     awk '/^# grok-token-dispatch:start$/ {f=1} f {print} /^export GROK_FIDELITY_SKIP_BUDGET=/ {exit}' "$GROKS"
     printf 'echo "EXPORTED=${GROK_FIDELITY_SKIP_BUDGET:-unset}"\n'
   } > "$gd/harness.sh"

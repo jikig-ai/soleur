@@ -1193,6 +1193,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh"         # T19 negative: its own exit-42 contract
   "scripts/hooks/pre-push"                                             # T19 negative: opt-in hook stays token-blind
   "plugins/soleur/scripts/lib/affected-tests/"                         # T19 negative: sourced libs stay token-blind
+  "plugins/soleur/scripts/grok-fidelity-gate.sh"                       # T19 pins its rule-budget skip comparison
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )

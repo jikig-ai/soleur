@@ -13,7 +13,7 @@
 # a preview or a full run must never be waived by a hint.
 #
 # NOT used by: soleur:ship (calls the reader directly, bare), soleur:test-fix-loop (a fix loop must run tests) and
-# lefthook.yml's bun-test hook (deferred, #12297) nor the opt-in scripts/hooks/pre-push hook. The reader and the gate are siblings resolved from THIS file's own
+# lefthook.yml's bun-test hook (deferred, #12297) or the opt-in scripts/hooks/pre-push hook. The reader and the gate are siblings resolved from THIS file's own
 # directory, never through CLAUDE_PLUGIN_ROOT (ADR-179: an env-directed root is a trust class).
 # Precedent for the shape: collision-precheck.sh (no `-e`, siblings via BASH_SOURCE).
 set -uo pipefail
