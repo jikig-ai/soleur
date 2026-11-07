@@ -459,6 +459,10 @@ jobs:
               -target=random_id.egress_audit_ingest_token \
               -target=doppler_secret.egress_audit_ingest_token \
               -target=doppler_secret.egress_audit_ingest_token_previous \
+              -target=random_password.legal_acceptance_verify_token_prd \
+              -target=random_password.legal_acceptance_verify_token_dev \
+              -target=doppler_secret.legal_acceptance_verify_token_prd \
+              -target=doppler_secret.legal_acceptance_verify_token_dev \
               -target=cloudflare_bot_management.soleur_ai \
               -target=cloudflare_ruleset.seo_page_redirects \
               -target=cloudflare_ruleset.seo_response_headers \
