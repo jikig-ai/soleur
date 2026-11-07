@@ -70,7 +70,7 @@ jobs:
           # a bare `out="$(...)"; rc=$?` would abort the step at the assignment. The loop never stops on a failing
           # target: one dark check must not hide the other.
           all_decided=true
-          for t in luks-monitor-host-timer claude-cost-capture; do
+          for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do
             rc=0
             out="$(bash scripts/deadman-heartbeat-feeder.sh "$t" 2>&1)" || rc=$?
 

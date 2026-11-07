@@ -117,7 +117,7 @@ export LC_ALL=C
 # ── THE TARGET TABLE ─────────────────────────────────────────────────────────────────────────────
 # Predicates are the retired alerts' WHERE conjuncts, moved verbatim minus the window conjunct (the window is
 # the SQL's own, below). Each is ONE physical line. They are read by name by the harness.
-TARGETS="luks-monitor-host-timer claude-cost-capture"
+TARGETS="luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe"
 
 # luks-monitor.service's own passing row: tag (luks-monitor.sh LOG_TAG / the unit's SyslogIdentifier), the unit
 # journald stamps (the verify job's rows carry session-N.scope or no unit, so they can never keep this fed), the
@@ -140,6 +140,13 @@ EOF
 def_pred LUKS_FAIL_PRED <<'EOF'
 JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND JSONExtractString(raw, 'message') LIKE 'FAIL (%'
 EOF
+# The LUKS key-continuity probe's MEASURED rows on either channel (#12230 / ADR-282 D12 dead-man): the
+# journald channel anchors the marker at message position 1 like the paging SQL, and the phone-home
+# channel carries it in .detail under shipper=cloud-init-phone-home stage=luks-key-probe. Only verdict=ok
+# and verdict=fail_* count as health — an indeterminate-only stream is NOT health (ADR-282 ruling D12).
+def_pred KEYPROBE_PRED <<'EOF'
+(JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip' AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1 AND (position(JSONExtractString(raw, 'message'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'message'), 'verdict=fail_') > 0)) OR (JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home' AND JSONExtractString(raw, 'stage') = 'luks-key-probe' AND (position(JSONExtractString(raw, 'detail'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'detail'), 'verdict=fail_') > 0))
+EOF
 
 # The target is matched by LITERAL EQUALITY against the table and never interpolated: the matched arm assigns
 # constants (T, W, NAME, PRED), and nothing else of $1 reaches SQL, a marker, a path or a curl config.
@@ -150,6 +157,8 @@ select_target() {
       T="luks-monitor-host-timer"; W=97200; NAME="soleur-luks-monitor-host-timer-prd"; PRED="$LUKS_PRED" ;;
     claude-cost-capture)
       T="claude-cost-capture"; W=86400; NAME="soleur-claude-cost-capture-prd"; PRED="$COST_PRED" ;;
+    inngest-luks-key-probe)
+      T="inngest-luks-key-probe"; W=93600; NAME="soleur-inngest-luks-key-probe-deadman-prd"; PRED="$KEYPROBE_PRED" ;;
     *) return 1 ;;
   esac
   return 0
