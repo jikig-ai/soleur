@@ -211,7 +211,7 @@ it could prove are real reads, PR5a→PR5d the rest; what remains undrained is n
 **a PR that adds a new path mention to a suite fails the ratchet and must declare an edge** (or add an accept row for a mention) in the same PR.
 
 A rename or move of a path a suite names reads as a new pair (exit 1): a rename of a covered path or suite must declare or accept the renamed pairs in the same PR.
-While the job is advisory a red on such a rename is expected and is noted in the PR.
+Since PR3b the job is required — a red on such a rename is a merge-gate failure, never a note: the drains ride the rename PR. (While it was advisory, a red on such a rename was expected and was noted in the PR.)
 
 A PR that **widens the audit's reach** (the REACH section of the script) may land only in the same PR that drains every pair it reveals: zero baseline pairs added, nothing undeclared revealed. A baseline re-base is forbidden (it would turn the ratchet into a ledger that can be reset).
 If the reveal is too large the widening lands dark (code present behind an off-by-default option the ratchet job does not pass) and the PR that drains the revealed pairs turns the option on in the same commit. Every reach change needs a reach-differential receipt like PR1b's. A widening PR with a non-empty reveal is red by design.
