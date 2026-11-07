@@ -20,19 +20,22 @@ fail() { FAILS=$((FAILS + 1));  ASSERTED=$((ASSERTED + 1)); echo "[FAIL] $1"; }
 WORK="$(mktemp -d)"
 TOKEN="probe-test-$$-$RANDOM"
 REQLOG="$WORK/requests.log"
+HDRLOG="$WORK/probe-header.log"
 srv_pid=""
 PORT=""
 # $1=status $2=transport header value ('' for none)
 start_srv() {
   PORT="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-  : > "$REQLOG"
-  python3 - "$1" "$2" "$PORT" "$TOKEN" "$REQLOG" <<'PY' &
+  : > "$REQLOG"; : > "$HDRLOG"
+  python3 - "$1" "$2" "$PORT" "$TOKEN" "$REQLOG" "$HDRLOG" <<'PY' &
 import sys, http.server
-code, transport, port, token, reqlog = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+code, transport, port, token, reqlog, hdrlog = int(sys.argv[1]), sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5], sys.argv[6]
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(s):
         with open(reqlog, "a") as f:
             f.write("%s | cache-control=%s\n" % (s.path, s.headers.get("Cache-Control")))
+        with open(hdrlog, "a") as f:
+            f.write("x-origin-tls-probe=%s\n" % s.headers.get("x-origin-tls-probe"))
         s.send_response(code)
         if transport: s.send_header("x-origin-transport", transport)
         s.send_header("x-probe-test-server", token)
@@ -99,6 +102,24 @@ start_srv 301 TLSv1.3 || exit 1
 run;                    expect_rc "P7 301 is NOT-200" 1 "result=NOT-200"
 stop_srv
 
+# --- canary mode (ADR-321 ORIGIN-TLS CANARY rule) ---
+# The header name is pinned against the Terraform rule, so the probe and the rule cannot drift apart.
+TF_RULES="$SCRIPT_DIR/seo-config-rules.tf"
+if grep -v '^[[:space:]]*#' "$TF_RULES" | grep -qF 'http.request.headers[\"x-origin-tls-probe\"]'; then pass "C0 the rule matches the header the probe sends (x-origin-tls-probe)"; else fail "C0 header name in seo-config-rules.tf does not match the probe"; fi
+start_srv 200 TLSv1.3 || exit 1
+run;                    expect_rc "C1 default mode, TLS header" 0 "result=TLS-ON-ORIGIN-HOP"
+[ "$(grep -c 'x-origin-tls-probe=1' "$HDRLOG")" -eq 0 ] && pass "C1b default mode does NOT send the canary header" || fail "C1b default mode sent the canary header: $(cat "$HDRLOG")"
+: > "$HDRLOG"
+run --canary;           expect_rc "C2 --canary, TLS header (rule applied, certificate accepted)" 0 "mode=canary result=TLS-ON-ORIGIN-HOP"
+grep -qx 'x-origin-tls-probe=1' "$HDRLOG" && pass "C2b --canary sends x-origin-tls-probe: 1" || fail "C2b canary header missing: $(cat "$HDRLOG")"
+stop_srv
+start_srv 200 "" || exit 1
+run --canary;           expect_rc "C3 --canary, no TLS header (rule did NOT apply: must not pass, implies --require-tls)" 3 "mode=canary result=NO-TLS-ON-ORIGIN-HOP"
+stop_srv
+start_srv 526 "" || exit 1
+run --canary;           expect_rc "C4 --canary, 526 (rule applied, Cloudflare refused the certificate)" 1 "mode=canary result=NOT-200"
+stop_srv
+
 # P8: nothing listening -> UNREACHABLE, its own exit code, never a verdict, with curl's exit code.
 OUT="$(ORIGIN_TLS_PROBE_ALLOW_HTTP=1 ORIGIN_TLS_PROBE_URL="http://127.0.0.1:${PORT}/health" bash "$PROBE" 2>&1)"; RC=$?
 expect_rc "P8 connection refused" 2 "UNREACHABLE"
@@ -115,7 +136,7 @@ OUT="$(ORIGIN_TLS_PROBE_URL="ftp://example.invalid/health" bash "$PROBE" 2>&1)";
 echo
 echo "=== origin-tls-probe: $PASSES passed, $FAILS failed, $ASSERTED asserted ==="
 
-MIN_ASSERTIONS=26
+MIN_ASSERTIONS=37
 if [ "$ASSERTED" -lt "$MIN_ASSERTIONS" ]; then
   echo "ANTI-VACUITY: only $ASSERTED assertions ran, floor is $MIN_ASSERTIONS." >&2
   echo "Assertions were removed or the dispatch was disarmed." >&2

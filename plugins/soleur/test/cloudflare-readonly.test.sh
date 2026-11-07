@@ -349,7 +349,11 @@ grp_source() {
   # Terraform file, so a rule added to seo-config-rules.tf without a header update fails here instead of misleading a flip go.
   local TF="$REPO_ROOT/apps/web-platform/infra/seo-config-rules.tf" TF_RULES TF_SSL
   TF_RULES="$(grep -cE '^[[:space:]]+rules \{' "$TF" || true)"
-  TF_SSL="$(grep -cE '^[[:space:]]+ssl[[:space:]]+=[[:space:]]+"' "$TF" || true)"
+  # The header snapshots the LIVE ruleset. The origin-TLS canary (`ssl = "strict"`, ADR-321) sits in a `dynamic "rules"` block that is
+  # empty unless var.enable_origin_tls_canary_rule is set, so it is not in the live ruleset by default and is excluded here; its own
+  # pins live in apps/web-platform/test/seo-config-rules.test.ts. When the owner turns the canary on, the live count is one higher
+  # until the strict flip removes it.
+  TF_SSL="$(grep -E '^[[:space:]]+ssl[[:space:]]+=[[:space:]]+"' "$TF" | grep -cvE '"strict"' || true)"
   t "snapshot: anchor - the Terraform file yields a non-zero rule count" test "${TF_RULES:-0}" -gt 0
   t "snapshot: header enabled_ssl_rules equals the ssl rules in seo-config-rules.tf ($TF_SSL)" has_file "$SUT_SRC" "enabled_ssl_rules is $TF_SSL AND one of those rules has ref"
   t "snapshot: header rule_count equals the rules in seo-config-rules.tf ($TF_RULES)" has_file "$SUT_SRC" "AND rule_count is $TF_RULES; anything else"
