@@ -177,7 +177,10 @@ removed {
 # token, id line only) BEFORE this change merges. The policy's precondition refuses an empty or malformed
 # list, so a plan of this root fails loudly until then rather than locking the deploy webhook out.
 locals {
-  deploy_service_token_ids = ["baa7825d-c52a-4cc4-bfe4-300140ed6bcb"]
+  # Rotation PR-A (#9294): the new token (d9204def-…) is admitted beside the old
+  # (baa7825d-…) so the deploy webhook keeps working during the cutover. PR-B
+  # removes the old id once the Tier-B copies + canary prove the new pair.
+  deploy_service_token_ids = ["baa7825d-c52a-4cc4-bfe4-300140ed6bcb", "d9204def-4154-4fea-b9ee-d419d8d665f7"]
 }
 
 resource "cloudflare_zero_trust_access_policy" "deploy_service_token" {
