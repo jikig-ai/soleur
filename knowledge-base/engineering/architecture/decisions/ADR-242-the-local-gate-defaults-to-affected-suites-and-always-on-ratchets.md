@@ -5,6 +5,7 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#12246 (2026-11-06) — exit 42 of battery-owed.sh also means the operator declared CI the gate (session-state.md token); reconciled with ADR-196; see ## Amendment — 2026-11-06 (#12246)"
   - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
   - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
   - "#9173 (2026-09-29) — the diff-source scope axis (`--affected-scope=staged`) and the scope-aware `runner-changed` arm; see ## Amendment — 2026-09-29"
@@ -967,6 +968,16 @@ What it shows, and its limits:
 ### Alternatives considered
 
 Unconditional skip-ahead (breaks the `*` barrier); a stderr tee instead of a sidecar (parses display text, process-substitution status hazard); a suite-result memo (rejected twice before); narrowing the token derivation to exec-shaped references (a rough 32 versus 144 classification, deadlock cost); a default-off backfill knob (no measured gain without it); mirroring the signal-name predicate in the gate reader (two copies drift; the writer owns it).
+
+## Amendment — 2026-11-06 (#12246)
+
+Exit 42 of `battery-owed.sh` no longer means only "CI already verified this tree". It also means "the operator declared CI the gate": a `- ci-is-the-gate: <words>` bullet under `## Operator Constraints` in the current branch's `specs/<branch>/session-state.md`, written by `soleur:one-shot` when the brief says to rely on CI (writer contract: `skills/one-shot/references/operator-constraints.md`). Under the token, conditions 1 (dirty tree), 2 (behind main) and 4 (CI state) stand down. The following stay refused: an infra path in the committed diff, the tracked or staged working tree or the untracked files; an unmeasurable diff (UNDECIDABLE); a merge in progress or unmerged paths. `/ship --full` still outranks the token because the Phase 4 dispatch tests `FULL_BATTERY` first. The `## Consequences` description of exit 42 as a CI-evidence (dedup) verdict holds for the no-token path; with a token, 42 is an operator-intent skip that reads no CI state, and its verdict line says so ("operator declared CI the gate ... this script read no CI state"). A non-42 verdict still runs `--affected`, and `--full` still outranks even a SKIPPABLE verdict.
+
+Reconciliation with ADR-196. ADR-196 Decision 1 requires a refusal antecedent to be a condition the runner can observe, and its 2026-10-28 addendum keeps declared inputs (the ambient `SOLEUR_SUBAGENT=1`, an operator-typed `--full`) out of the waitable class. The token runs the other direction, a waiver, so ADR-196 does not govern it directly and the analogy is imperfect: it is a declared antecedent, written by an LLM from the brief and committed on the PR branch. What bounds it is measured or outside the commit: it can only skip a local run whose duplicate gate (`merge_group`, ADR-183 and ADR-276) still runs; the infra surface (#6480), an unmeasurable diff and a merge in progress are measured by git and always refuse; the printed words stay visible in the transcript and the PR Test plan. The token never decides alone.
+
+Skip channels that waive a local battery on the strength of CI or intent now include at least these four: `battery-owed.sh` 42 on CI evidence (the exact SHA is green); `battery-owed.sh` 42 on operator intent (new); `battery-refusal-wait.sh` 42 after a sibling-run refusal (ADR-183 amendment 2026-10-28); and `affected-tests.sh` rc 6 budget deferral.
+
+ADR-276's consumer-record sentence (`battery-owed.sh` reads check conclusions and fails toward stall) holds for the no-token path only. "CI's required `test` is the gate" is read per the ADR-183 amendment 2026-10-14 and ADR-276: `merge_group` is the full-battery authority, and a `pull_request` green may be a reduced run. The token is a hint the same commit can write; what bounds a planted or wrong token is outside the commit (the live ruleset, the merge queue, the arm's infra refusal, the printed words). Rejected alternatives and the CTO rulings are recorded in PR #12246's `decision-challenges.md` (F1, F5, F10, F15-F19), which is archived with the branch under `knowledge-base/project/specs/archive/`. Work Phase 2, review's local gate and the Grok pre-push gate (`grok-pre-push-gate.sh`) do not read the token (#12247).
 
 ## Amendment — 2026-11-06 (#12013)
 
