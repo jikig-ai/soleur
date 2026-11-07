@@ -13,6 +13,19 @@ brand_survival_threshold: none
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). There is no spec.md for this branch.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-07
+**Sections enhanced:** Guard Contract (lint-verified), Workstream C (`accept=<n>` count pinned to the head/input accept file; unreachability assertion location pinned), Files to Edit (consumer enumeration caught two missed pin files), Acceptance Criteria (probe output literals corrected to contexts=14 producers=12), Dependencies & Risks (precedent-diff gate note).
+**Research agents used:** none — Task/agent fan-out unavailable in this harness; per-section research and the review-agent fan-outs were executed inline (repo greps, archived-plan extraction, sibling-PR overlap scan, learnings sweep, verify-the-negative + post-edit self-audit) and every halt gate in deepen-plan §§4.5-4.13 was run mechanically: 4.6 pass (threshold none, no sensitive-path hits), 4.7 pass (5-field block, `bash` probe, literal output), 4.8 pass (no PAT shapes), 4.9 skip (no UI files), 4.10 pass (`.tf` trigger, full ledger), 4.11 pass (`lint-guard-contract.py` rc=0, 4 entries), 4.12 pass (one unfenced Scope Check, all asks mapped), 4.13 pass (one task entry, six fields). §4.5 network-outage and §4.55 downtime triggers do not fire (no SSH/network symptom; config-replace apply only, no reboot/DDL/deploy class).
+
+### Key Improvements
+
+1. `accept=<n>` pinned to the head/input accept file's parsed data-row count (removes an ambiguity a reader could resolve either way).
+2. Unreachability assertion pinned to a concrete test artifact location (`plugins/soleur/test/bot-synthetic-unreachability.test.sh`) instead of "a committed test".
+3. **Consumer enumeration** — every file pinning the required-context set or advisory state was re-grepped at deepen time, catching two misses: `probe-merge-group-coverage.sh`'s `MIN_CONTEXTS_DEFAULT = 12` (floor over CI+CLA canonicals → 14) and the parity test's `-ge 10` non-vacuity floors (→ `-ge 12`); the AC's expected probe output corrected to `contexts=14 producers=12`. The T-rsc-7 literal, admin-merge-ready fixtures, `UNGATED_PINNED`/`LIGHT_PINNED`, `ALWAYS_RUN_JOBS`, the replay-suite `row_wf_*` advisory pins and the wallclock-bounds mutation contract all live in files already in Files to Edit.
+4. Precedent-diff gate record: every new mechanism cites its in-repo precedent (driver shape, enumeration, parity-copy, disposition comments) — none novel.
+
 ## Overview
 
 Issue #10859 (OPEN, labels `priority/p3-low`, `type/chore`, `domain/engineering`, `meta/machinery`) is the PR3b stage of the S4 affected-index series (#10448, #9729, ADR-276). All entry conditions are discharged: the #10865 observation window certified PASS on 2026-11-07 (probe retired by PR #12296), the canary and ceilings were ruled satisfied, the rename-carry design dissolved under strict zero, the cumulative baseline check reads 0 added lines (re-verified today; the file is deleted on `origin/main`), and the budget owner's go-ahead was recorded on the issue 2026-11-07 — the merge cite is that comment, which is the go-ahead receipt.
@@ -70,10 +83,10 @@ RATCHET_ORACLE gains `scripts/ci-oracle-review.sh` and `scripts/ci-oracle-review
 ### Workstream C — accept-row growth bound (ruling b)
 
 - `scripts/ci-pr-affected-replay.py`:
-  - `ratchet_marker` gains ` accept=<n>` — `n` = the count of parsed accept data rows (non-comment, non-blank lines, `*` rows included) — after `baseline=<n>`. Docstring grammar at :162 updated in the same edit.
+  - `ratchet_marker` gains `accept=<n>` field — `n` = the count of parsed data rows in the accept file being validated (the head/input file loaded by `load_accept`; non-comment, non-blank lines, `*` rows included) — after `baseline=<n>`. Docstring grammar at :162 updated in the same edit.
   - In `ratchet_run`, after `ratchet_base` resolves the base SHA, read the **base** accept file through the same confined reader; diff each pair's row-set base→HEAD. Every pair whose row-set differs must attribute to the diff — `path ∈ touched` OR `ref_files(pair) ∩ touched ≠ ∅` OR oracle touched — else finding `accept-unattributed` (exit 1). Every row present on the head side whose (suite,path,anchor,ordinal) key is absent from base OR whose reason differs must carry one of the six typed kinds — `message`, `JSDoc/comment`, `PR-body string`, `help/menu text`, `data row not fed to a read loop`, `code line in a file read only as text` (canonical list at runbook `ci-pr-affected-activation.md` line ~244) — else finding `accept-bad-kind` (exit 1). Diff-scoped by design: legacy non-conforming rows (`fixture:`-prefixed and free-form reasons in today's 3,000+ rows) are never re-litigated; only the delta is judged.
   - `RATCHET_REMEDY_NEW`'s line "no required review exists in this repository's ruleset" is rewritten — `oracle-review-required` is that required review now.
-- Consumers of the marker grammar, same commit: `plugins/soleur/test/ci-pr-affected-replay.test.sh` `rt_marker` (grammar pin extended to ` accept=[0-9]+`), the docstring, and the runbook's marker documentation. The ci.yml reason extractor (`sed 's/^SOLEUR_PR_AFFECTED_RATCHET exit=[0-9]* reason=\([a-z0-9-]*\) .*/\1/p'`) tolerates the trailing field already (`.*` tail); the step comment is updated to name the field. The ruling's cited consumer `scripts/followthroughs/ratchet-observation-window-10865.sh` `MARKER_RE` is gone — the probe was retired 2026-11-07 (PR #12296); the surviving grammar consumers are the three above.
+- Consumers of the marker grammar, same commit: `plugins/soleur/test/ci-pr-affected-replay.test.sh` `rt_marker` (grammar pin extended to accept=[0-9]+ field), the docstring, and the runbook's marker documentation. The ci.yml reason extractor (`sed 's/^SOLEUR_PR_AFFECTED_RATCHET exit=[0-9]* reason=\([a-z0-9-]*\) .*/\1/p'`) tolerates the trailing field already (`.*` tail); the step comment is updated to name the field. The ruling's cited consumer `scripts/followthroughs/ratchet-observation-window-10865.sh` `MARKER_RE` is gone — the probe was retired 2026-11-07 (PR #12296); the surviving grammar consumers are the three above.
 - New suite `scripts/ci-oracle-review.test.sh` covering the driver (stub `gh`: oracle-diff arms, author arm, approved-SHA binding including stale-SHA rejection, merge_group member enumeration incl. hasNextPage die, missing-context fail, API-failure fail-closed, annotation-literal grammar). Registered per the machinery below.
 
 ### Registration and the recursive ratchet tax
@@ -253,7 +266,7 @@ tasks:
 | 1 | Add an accept row with no touched path/ref/oracle | RED (accept-unattributed) |
 | 2 | Add a row attributing correctly but reason `false-positive: vibes` | RED (accept-bad-kind) |
 | 3 | Add a second unattributed row after a compliant first | RED (second-member — a loop that stops at the first is the defect) |
-| 4 | Marker emitted without ` accept=` field | RED (rt_marker grammar pin) |
+| 4 | Marker emitted without accept= field field | RED (rt_marker grammar pin) |
 | 5 | Harness: base accept file unreadable mid-comparison | exit 2 (infra), never a pass |
 | 6 | Must-PASS: a row added with a typed kind whose ref file the diff also touched | PASS |
 
@@ -263,7 +276,7 @@ tasks:
 
 **Property.** No bot-PR-writable path intersects the surfaces either new required context reads.
 
-**Assembly.** `.github/actions/bot-pr-with-synthetic-checks/action.yml` `ALLOWED_PATHS` (the chokepoint every bot write flows through) vs `RATCHET_ORACLE` (for oracle-review-required) and the audit's read surface — the files whose content the audit reads, exposed under `--all-refs` (for affected-index-ratchet; `knowledge-base/project/weakness-digest.md` is named by gap pairs and a data file, so disjointness is re-derived, not assumed — if the assertion fails, the remedy is reproducing the gate in the action's Phase-4 preflight, per the #6049 convention, never widening ALLOWED_PATHS to overlap).
+**Assembly.** `.github/actions/bot-pr-with-synthetic-checks/action.yml` `ALLOWED_PATHS` (the chokepoint every bot write flows through) vs `RATCHET_ORACLE` (for oracle-review-required) and the audit's read surface — the files whose content the audit reads, exposed under `--all-refs` (for affected-index-ratchet; `knowledge-base/project/weakness-digest.md` is named by gap pairs and a data file, so disjointness is re-derived, not assumed — if the assertion fails, the remedy is reproducing the gate in the action's Phase-4 preflight, per the #6049 convention, never widening ALLOWED_PATHS to overlap). The assertion ships as a new committed suite — `plugins/soleur/test/bot-synthetic-unreachability.test.sh` (parse `ALLOWED_PATHS` from the real `action.yml`, `RATCHET_ORACLE` from the real replay file, the audit read surface from the audit's `--all-refs` enumeration; intersect) — registered in `test-all.sh` like every other suite.
 
 **Mutation matrix.**
 
@@ -342,6 +355,8 @@ The ADR text describes the post-merge state (required set = 12) and lands in the
 - `scripts/ci-required-ruleset-canonical-required-status-checks.json` (two rows, 15368)
 - `infra/github/ruleset-ci-required.tf` (two `required_check` blocks + dated comments)
 - `tests/scripts/test-audit-ruleset-bypass.sh` (T-rsc-7 literal 10→12 + history comment)
+- `plugins/soleur/test/required-checks-canonical-parity.test.sh` (non-vacuity floor `-ge 10` → `-ge 12` on both `n_ci` and `n_canon` — the acknowledgement pattern; the floor stays meaningful per-name-set)
+- `scripts/probe-merge-group-coverage.sh` (`MIN_CONTEXTS_DEFAULT` 12→14 + comment — the floor counts CI+CLA canonicals; 10+2 today, 12+2 after this PR)
 - `plugins/soleur/test/fixtures/admin-merge-ready/rules-branches-main.json`, `check-runs.json`, `README.md`
 - `plugins/soleur/scripts/admin-merge-ready.test.sh` (header counts comment)
 - `scripts/pr-fanout-ledger.txt` (ci.yml row 21→22 dated clause + advisory-wording touch-up)
@@ -382,7 +397,7 @@ None. `gh issue list --label code-review --state open` (≤200) searched with `j
 - [ ] `jq 'length'` of the canonical JSON = 12; `jq -r '.[].context'` sorted equals the `context` set grepped from `infra/github/ruleset-ci-required.tf` and the CI-subset of `scripts/required-checks.txt` (T-rsc-9 + parity Test 1 pass locally).
 - [ ] `bash tests/scripts/test-audit-ruleset-bypass.sh` green with the T-rsc-7 literal at 12.
 - [ ] `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`, `plugins/soleur/scripts/admin-merge-ready.test.sh`, `plugins/soleur/test/pr-fanout-ledger.test.sh`, `scripts/ci-push-dedupe.test.sh`, `scripts/ci-draft-light.test.sh`, `plugins/soleur/test/ci-test-aggregator-diagnosis.test.sh` all green.
-- [ ] `bash scripts/probe-merge-group-coverage.sh` prints `merge-group-coverage=OK contexts=12` and exit 0; the output is quoted in the PR body.
+- [ ] `bash scripts/probe-merge-group-coverage.sh` prints `merge-group-coverage=OK contexts=14 producers=12` and exit 0 (12 CI + 2 CLA contexts, 12 merge_group producers); the output is quoted in the PR body.
 - [ ] `python3 -I scripts/ci-pr-affected-replay.py ratchet` exits 0 on this branch with marker `SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=<n> baseline=0 accept=<n>` — every pair the new suite names is drained (edge or accept row) in this commit.
 - [ ] `bash scripts/ci-oracle-review.test.sh` green — mutation rows: oracle-diff-no-approval RED; stale-SHA approval RED; member-enumeration zero/hasNextPage/missing-context RED; `gh` failure RED; non-oracle diff PASS; deruelle-author and bound-approval PASS.
 - [ ] The unreachability assertion test parses ALLOWED_PATHS from the real `action.yml` and `RATCHET_ORACLE` from the real replay file; both intersections are empty on this tree (or the action Phase-4 preflight reproduction shipped instead, per Guard 4's recorded branch).
@@ -423,28 +438,7 @@ None. `gh issue list --label code-review --state open` (≤200) searched with `j
 - **R4 — new suite named-path pairs:** the suite's strings become audit pairs; any undrained pair reds the ratchet on this PR's own merge run. Mitigation: Phase 1 drains in the same commit; AC requires `ratchet` exit 0 on this branch.
 - **R5 — driver base-sourcing gap:** a pre-PR3b base lacks the driver; the HEAD copy runs with the BASE oracle list — a PR editing the driver still classifies oracle-touching under the base list. The remaining hole (a malicious driver hiding a NON-oracle-path review requirement) is bounded by Guard 2 row 5 + the fact that editing the driver is itself oracle-touching.
 - **R6 — `fixture:`-kind legacy rows:** the six-kind set excludes `fixture` as a kind even though 100+ legacy rows use it. Only added rows are judged; if implementation finds `fixture` is genuinely needed as a new kind, the kind set is the amendment surface (recorded — the ruling says "six", matching the runbook list verbatim).
-
-## Enhancement Summary
-
-Deepen-plan pass, 2026-11-07 (single-agent environment — no Task-spawn
-available; the per-section research and review-agent fan-outs were executed
-inline by the planning agent against the live tree):
-
-- **Gate verification:** all mechanical halt gates verified green —
-  `lint-guard-contract.py` RC=0 (4 guard entries; `**Assembly.**` split to its
-  own line and `**Mutation matrix.**` labels added where they were missing),
-  Encryption Posture `at_rest` given a real no-store entry instead of `[]`,
-  Scope Check unfenced-count = 1 with all three subsections and a
-  `Recommendation:` line, UBI/Observability/Task-Design/PAT scans clean.
-- **Consumer enumeration:** every file that pins the required-context set or
-  the advisory state was enumerated by grep against the live tree — the count
-  pins (T-rsc-7 literal, parity `-ge 10`, merge-group-coverage
-  `contexts=12 producers=11` literals + `MIN_CONTEXTS_DEFAULT`), the
-  wallclock-bounds `unbound`-finding contract, the fixtures, and the
-  replay-suite `row_wf_*` advisory pins are all in Files to Edit.
-- **Re-examination recorded:** draft-light participation ruled (stay ungated;
-  measured ~2,250 billed min/wk on drafts vs a needs-edge stall class or a
-  fabricated green — decision-challenges.md row 1).
+- **Precedent-diff gate (deepen §4.4) — satisfied:** driver shape ← `scripts/ci-oracle-lane.sh` (base-sourced script + literal marker grammar); member enumeration ← `merge-queue-cla-verify.sh:89-181` (parity-pinned copy, O-DOCPARITY precedent); enrollment/disposition comments ← the ten existing `required_check` blocks and `required-checks.txt` #6049 convention; accept-diff verdicts ← in-file `judge_rules`/`ratchet_run` extension. No mechanism in this plan is without an in-repo precedent.
 
 ## References & Research
 
