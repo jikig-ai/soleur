@@ -1,0 +1,10 @@
+rep=r1 tree=c7c1c0b98b2664e96adb27707bff7114ebaa601c
+loadavg_start=4.59 9.88 14.46 load1_used=4.59 max_load1=9.0
+2026-11-07T14:20:49Z
+foreign_runs_start: none
+loadavg_end=10.65 8.09 8.87
+max_load1_during=16.55
+2026-11-07T14:44:43Z
+foreign_runs_end: 2299605 /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-ci-duplicate-yaml-key-guard-queue-stall
+2299606 /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-ci-duplicate-yaml-key-guard-queue-stall
+DISTURBED
