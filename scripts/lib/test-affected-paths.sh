@@ -1194,6 +1194,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
+  "plugins/soleur/skills/one-shot/references/operator-constraints.md"  # T18p derives the writer strings from it
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -3705,6 +3706,17 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
   "test/"
   "tests/"
   "scripts/lint-trap-tempfile-ownership.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/lint-umbrella-aggregate — text-parses the three workflow files carrying
+# umbrella jobs (the `- id:` step census, `member(` calls, `if:` lines) plus a
+# `- id: aggregate` discovery scan over .github/workflows/*.yml for the census
+# invariant. Edges cover the glob, not just today's three files: a new umbrella
+# in a fourth file feeds the verdict.
+AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
+  ".github/workflows/"
+  "scripts/lint-umbrella-aggregate.sh"
   "scripts/lib/test-affected-paths.sh"
 )
 

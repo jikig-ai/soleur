@@ -397,6 +397,8 @@ jobs:
           # A FAILED LOOKUP IS NOT "NOTHING FOUND". Collapsing a `gh issue list` failure
           # into "" routes to the create branch, so an API blip files a DUPLICATE issue on
           # every subsequent day the drift persists.
+          # dedupe: fail-closed — deliberate list_rc: an unreadable list declines to file
+          # rather than create a duplicate ci/devin-docs-drift alarm
           EXISTING="$(gh issue list --repo "$GH_REPO" --state open --label "ci/devin-docs-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[0].number' 2>/dev/null)"
           list_rc=$?
@@ -462,6 +464,8 @@ jobs:
           set +e
 
           TITLE="[ci/devin-docs-drift] docs.devin.ai capability claims or release notes changed in a watched way"
+          # dedupe: fail-closed — deliberate list_rc: an unreadable list declines to
+          # close; a resolved alarm stays open (visible)
           OPEN_NUMS="$(gh issue list --repo "$GH_REPO" --state open --label "ci/devin-docs-drift" -L 100 \
             --search "in:title \"$TITLE\"" --json number --jq '.[].number' 2>/dev/null)"
           list_rc=$?

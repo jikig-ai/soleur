@@ -78,5 +78,5 @@ promoted to a required check (the Grok comparison outlives that promotion). The 
 hypothetical — this work was planned against Codex 0.155.1 and npm was at 0.156.1
 one day later.
 
-`grok-fidelity`, unlike `harness-discovery`, is a **required** check; since #8615 it
+`grok-fidelity`, unlike `harness-discovery`, feeds a **required** check (the `guards-ruleset` umbrella since #12089); since #8615 it
 conforms to the pinning rule only (ADR-245 decision 3, amendment).

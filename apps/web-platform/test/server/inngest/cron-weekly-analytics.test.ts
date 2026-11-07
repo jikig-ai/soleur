@@ -18,8 +18,8 @@ describe("cronWeeklyAnalytics — registration shape (import-time smoke)", () =>
 });
 
 describe("cronWeeklyAnalytics — exported constants", () => {
-  it("SYNTHETIC_CHECK_NAMES has 7 entries", () => {
-    expect(SYNTHETIC_CHECK_NAMES).toHaveLength(7);
+  it("SYNTHETIC_CHECK_NAMES has 6 entries", () => {
+    expect(SYNTHETIC_CHECK_NAMES).toHaveLength(6);
   });
 });
 
