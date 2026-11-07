@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# (#11631) Feeder for the two archive-fed dead-man heartbeats that replaced the native logs alerts
+# (#11631) Feeder for the archive-fed dead-man heartbeats that replaced the native logs alerts
 # `luks_monitor_host_timer_dark` (window 97200 s, once-a-day row) and `claude_cost_capture_dark` (window 86400 s):
 #
 #   luks-monitor-host-timer -> betteruptime_heartbeat.luks_monitor_host_timer  (soleur-luks-monitor-host-timer-prd)
@@ -34,7 +34,7 @@
 # narrow what counts (tag, unit, host, message; marker key, component, source) but cannot tell a forged row from a
 # real one. This control detects a dark emitter or shipper, not a hostile writer.
 #
-# BEAT BUDGET. Both heartbeats use period 3600 + grace 7200: the page threshold is 10800 s. The workflow runs this
+# BEAT BUDGET. Each heartbeat uses period 3600 + grace 7200: the page threshold is 10800 s. The workflow runs this
 # hourly WHEN the web watchdog clock delivers it (WATCHDOG_DISPATCH_TABLE); the `schedule:` fallback alone
 # (one run every 2-7 h, measured) cannot hold the budget, and a dark clock shows as a missed Sentry check-in.
 #
@@ -322,6 +322,9 @@ withhold_no_row() {
   fmarker "no_qualifying_row"
   if [[ "$T" == "luks-monitor-host-timer" ]]; then
     echo "CANNOT BEAT: no qualifying row for $T in the last ${W}s (hot plus archive). The checked host, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+  elif [[ "$T" == "inngest-luks-key-probe" ]]; then
+    echo "CANNOT BEAT: no SOLEUR_INNGEST_LUKS_KEY_PROBE verdict row for $T in the last ${W}s (hot plus archive, either channel). The key-continuity probe, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+    echo "CANNOT BEAT: next action for $T: see knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md."
   else
     echo "CANNOT BEAT: no cost marker or credit-probe RED row for $T in the last ${W}s (hot plus archive). The cron cost-capture path, the log shipper or the Logs source may be dark; this line does not say which."
     echo "CANNOT BEAT: next action for $T: see the cost-marker section (Querying Anthropic cost markers) of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md."

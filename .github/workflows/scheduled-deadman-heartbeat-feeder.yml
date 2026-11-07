@@ -11,7 +11,7 @@
 # (measured: one run every 2-7 h, which cannot hold the heartbeats' 10800 s page budget on its own); keep
 # workflow_dispatch and the concurrency group (cancel-in-progress: false) and no other trigger
 # (sentry-monitor-iac-parity.test.ts).
-# UNARMED: both heartbeats are born paused. While one is paused its target reports
+# UNARMED: each heartbeat is born paused. While one is paused its target reports
 # `qualifying_row_heartbeat_paused`; this run then emits an UNARMED ::warning:: annotation and a line in the step
 # summary every hour. That is the whole surface: an unarmed state is visible only on the run page, and NOTHING PAGES
 # for it until the owner unpauses the heartbeat. Arming is the owner's (runbook:

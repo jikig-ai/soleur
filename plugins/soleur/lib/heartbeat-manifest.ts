@@ -408,6 +408,9 @@ export const MANIFEST: ManifestEntry[] = [
         pattern: "bash scripts/deadman-heartbeat-feeder.sh",
       },
     },
+    // Fed but paused until the owner arms post-#11266 promotion + two qualifying runs: without this,
+    // heartbeat-live-reconcile reports fed-but-paused on every twice-daily drift run (seat P2, PR #12331).
+    arming_pending: { tracking_issue: 12230 },
     exempt_reason:
       "archive-reading repo-side feeder over the probe's measured rows (verdict=ok|fail_ on either channel); no host change applies — the probe rows ship off the dedicated host already. Not dedicated-host-boot, so ADR-103's replace_target requirement correctly does not fire.",
   },
