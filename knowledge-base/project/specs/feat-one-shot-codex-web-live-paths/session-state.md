@@ -4162,6 +4162,9 @@
 - A further local merge incorporated main through
   `93c5bd6ffc3417025026473686365ba04d099aa9` without textual conflicts. This
   is not a qualification of the merged head or permission to collect.
+- Main advanced again and was merged locally through
+  `a9840740425e42a22d3217e9017f5f87e732d988`, without textual conflicts. The
+  changed CI and infrastructure are not qualified on the resulting head.
 - The role-only embedded collector formerly evaluated a timeout getter before
   its failure handler, allowing a thrown diagnostic to escape. It now rejects
   accessor options and sanitizes descriptor errors before its own transaction
