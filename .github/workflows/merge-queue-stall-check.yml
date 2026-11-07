@@ -83,8 +83,10 @@ name: Merge queue stall check
 # keeps a push-only workflow that never gates the queue from being blamed for a stall. Any other entry is
 # filed unchanged. Strings taken from run records are untrusted: head_branch must match
 # `^gh-readonly-queue/main/pr-<N>-<40 hex>$` and path `^\.github/workflows/[A-Za-z0-9._-]+\.ya?ml$` or that
-# run or candidate is dropped (the issue body tells an agent to run commands on them). The title carries at
-# most the first path plus `(+N more)` and stays at or under 250 characters (GitHub rejects 256+); a
+# run or candidate is dropped (the issue body tells an agent to run commands on them; the jq tests end in `\z`, not
+# `$`, because jq's `$` also matches before one trailing newline). The title carries at
+# most the first path plus `(+N more)` and stays at or under 250 characters (assumed GitHub limit 256, not verified;
+# the 250 cap keeps slack); a
 # rejected cause-form create is retried once with the plain `(suspected, verify first)` title. The lookups
 # read the Actions API with `actions: read`, are fail-soft (a failed read is a bounded ::warning:: and the
 # issue says "suspected"), and run only AFTER the dedupe check, so an entry that already has an open issue
@@ -258,7 +260,7 @@ jobs:
           cause_tmpl="$(cat <<'CTMPL'
           LIKELY CAUSE (inferred from the run signature): PR #@PR@'s queue temp ref has a failed `push` run for @CPATHS@ and no `merge_group` run of that workflow on that ref, although that workflow has run on `merge_group` before.
 
-          What is observed (run records): a failed `push` run whose name equals its own file path, and no `merge_group` run of that workflow on this ref (@CREF@). What is inferred: GitHub records exactly this signature (a run named after the file path instead of the workflow's `name:`, concluding failure) when a workflow file cannot be loaded, so its required check never reports and the entry pends. A duplicate or invalid YAML key is the usual cause (#12283); the same signature can have another cause.
+          What is observed (run records): a failed `push` run whose name equals its own file path, and no `merge_group` run of that workflow on this ref (@CREF@). What is inferred: GitHub records exactly this signature (a run named after the file path instead of the workflow's `name:`, concluding failure) when a workflow file cannot be loaded, so its required check never reports and the entry pends. For example, a duplicate or invalid YAML key produces it (#12283); the same signature can have another cause.
 
           Failed push run(s) that carry the signature:
           @CLINES@
@@ -303,8 +305,9 @@ jobs:
           # has_mg_history <workflow_id>: 0 only when that workflow_id has at least ONE merge_group run EVER
           # (unwindowed: a one-entry queue window holds no ci.yml merge_group run, so a windowed form would un-name the
           # real incident). total_count is the full count; per_page=1 keeps the reply tiny. A lookup error, an unparsable
-          # reply or total_count 0 returns 1 (the candidate falls back to "suspected"), with at most ONE bounded
-          # ::warning:: per entry ($HIST_WARNED, reset by the caller). Reads $pr from the caller. The exit code is
+          # reply or a missing or non-numeric total_count returns 1 (the candidate falls back to "suspected") after at
+          # most ONE bounded ::warning:: per entry ($HIST_WARNED, reset by the caller); a well-formed total_count of 0
+          # also returns 1, silently (there is simply no history). Reads $pr from the caller. The exit code is
           # captured explicitly and </dev/null keeps gh off the loop's here-string.
           has_mg_history() {
             local wid="$1" out n rc=0 errf
@@ -312,7 +315,10 @@ jobs:
             errf="$(mktemp)"
             out="$(gh api -X GET "repos/${GH_REPO}/actions/workflows/${wid}/runs" -f event=merge_group -F per_page=1 </dev/null 2>"$errf")" || rc=$?
             if [[ "$rc" -eq 0 ]]; then
-              n="$(jq -r '.total_count // 0' <<<"$out" 2>>"$errf")" || rc=$?
+              n="$(jq -r '.total_count' <<<"$out" 2>>"$errf")" || rc=$?
+            fi
+            if [[ "$rc" -eq 0 && ! "$n" =~ ^[0-9]+$ ]]; then
+              rc=65; printf 'total_count is not a number: %s\n' "${n:0:40}" >"$errf"
             fi
             if [[ "$rc" -ne 0 ]]; then
               if [[ "$HIST_WARNED" -eq 0 ]]; then
@@ -332,7 +338,8 @@ jobs:
           #
           # Signature (inferred from run records; GitHub does not document it): a workflow file that cannot be loaded
           # gets a failed `push` run on the ref whose `name` is the file PATH (a loaded run shows the workflow's own
-          # `name:`), and no `merge_group` run. Live runs 42336368201 (PR 12275's temp ref) and 42337331354
+          # `name:`; a workflow with no `name:` also shows its path, so a nameless workflow that fails for another
+          # reason shows the same signature), and no `merge_group` run. Live runs 42336368201 (PR 12275's temp ref) and 42337331354
           # (PR 12279's) both show name == path, conclusion failure, event push, for .github/workflows/ci.yml,
           # and ci.yml has a merge_group history. The run's workflow_id is equal on a
           # failed push run and a healthy merge_group run of the same workflow (path is display-only and can carry
@@ -340,7 +347,10 @@ jobs:
           # issue stays "suspected".
           queue_candidate_cause() {
             local pr="$1" enq="$2" refre since enq_s PUSH_LIST MG_LIST named ref p u w HIST_WARNED=0
-            refre="^gh-readonly-queue/main/pr-${pr}-[0-9a-f]{40}\$"
+            refre="^gh-readonly-queue/main/pr-${pr}-[0-9a-f]{40}\\z"
+            # Defence in depth, not protection of the real step: the `stalled` jq above already aborts the step on an
+            # empty or unparseable enqueuedAt (its fromdateiso8601; pre-existing), so this guard is not reachable from
+            # the step today. It keeps this function safe on its own (date -d "" means TODAY), and the L24 row calls it directly.
             if [[ -z "$enq" ]] || ! enq_s="$(date -u -d "$enq" +%s 2>/dev/null)"; then
               echo "::warning::merge-queue-stall: could not read the Actions runs for PR #${pr} (empty or unparseable enqueuedAt); filing without a named cause."
               return 0
@@ -361,8 +371,8 @@ jobs:
                   | ($b | map(select(.head_branch == $ref) | .workflow_id)) as $mg
                   | $p | sort_by(.created_at) | reverse
                   | map(select(.conclusion == "failure" and .name == .path
-                      and ((.path // "") | test("^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$"))
-                      and ((.html_url // "") | test("^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/actions/runs/[0-9]+$"))
+                      and ((.path // "") | test("^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml\\z"))
+                      and ((.html_url // "") | test("^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/actions/runs/[0-9]+\\z"))
                       and (.workflow_id as $w | ($mg | index($w)) == null)))
                   | unique_by(.path)[]
                   | [$ref, .path, .html_url, (.workflow_id | tostring)] | @tsv
@@ -412,12 +422,12 @@ jobs:
             body="${body//@NAME@/"$name"}"
             body="${body//@REPO@/"$GH_REPO"}"
             if [[ -n "$CAUSE_PATHS" ]]; then
-              # The title names at most the FIRST path plus a count (GitHub rejects titles over 256 characters, and an
-              # aborted create would hide a stalled queue); the full list stays in the body. A cause title that still
+              # The title names at most the FIRST path plus a count (assumed GitHub limit 256, not verified; the 250 cap
+              # keeps slack, and an aborted create would hide a stalled queue); the full list stays in the body. A cause title that still
               # exceeds 250 characters (one very long path) falls back to the plain title.
               cause_more=""
               [[ "$CAUSE_N" -le 1 ]] || cause_more=" (+$(( CAUSE_N - 1 )) more)"
-              cause_suffix="(cause: load failure suspected in ${CAUSE_PATHS%%, *}${cause_more}; duplicate/invalid key is the usual cause)"
+              cause_suffix="(cause: load failure suspected in ${CAUSE_PATHS%%, *}${cause_more}; for example a duplicate or invalid key)"
               cause_title="merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m ${cause_suffix}"
               if [[ "${#cause_title}" -le 250 ]]; then title="$cause_title"; fi
               cbody="$cause_tmpl"

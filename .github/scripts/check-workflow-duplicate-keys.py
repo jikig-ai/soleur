@@ -15,14 +15,29 @@ any quote style) is collected with its `path:line:col`, and the walk continues s
 ALL files are reported in one run.
 
 KEY IDENTITY. GitHub compares mapping keys as case-insensitive STRINGS on every mapping, not as
-typed YAML values (actions/runner TemplateReader.cs builds an OrdinalIgnoreCase key set for each
-mapping it reads). So the identity of a scalar key is its source text with ASCII letters folded to
-upper case: `Fetch-Depth` and `fetch-depth` collide, `"a"` and `a` collide, `on` and `true` do not
+typed YAML values. Source claim, verified 2026-11-07 against actions/runner TemplateReader.cs (the
+per-mapping key set is built with StringComparer.OrdinalIgnoreCase, lines 180 and 307 of that
+file). So the identity of a scalar key is its source text with ASCII letters folded to upper
+case: `Fetch-Depth` and `fetch-depth` collide, `"a"` and `a` collide, `on` and `true` do not
 (two different strings to GitHub, though one bool to YAML), and the merge key `<<` is an ordinary
 key (two of them in one mapping are a repeat). The fold is ASCII-only on purpose: Python's full
 `upper()` equates sharp-s with `SS` and dotless-i with `i`, which .NET OrdinalIgnoreCase does not.
+That text identity is only valid for keys that stay strings. GitHub first converts a PLAIN scalar
+key that reads as a YAML 1.2 core null, bool, int or float into a string of its VALUE (`1` and
+`1.0` and `0xA`/`10`, `~` and `null` become the same key) and only then runs its duplicate check,
+so source text would miss those collisions. The guard does not emulate the conversion (hex, octal
+and float-to-string rules could be wrong); instead such a key is itself a finding, is never
+compared and never enters the comparison set: `plain scalar key '<k>' is converted to a string by
+GitHub before its duplicate check; quote it or rename it`. NON_STRING_PLAIN is the YAML 1.2 core
+null/bool/int/float forms only, case-sensitive: `on`, `off`, `yes`, `no`, `y`, `n` are plain
+STRINGS in YAML 1.2 (which is why `on:` is safe and not flagged), as are underscore integers and
+sexagesimals. The real tree has no such key; a lone numeric key is flagged although GitHub would
+accept it (deliberate over-strictness, flip evidence would be a workflow that needs one). A
+quoted or block-scalar key is not plain and is compared as text.
 Stated residuals, both false-GREEN: non-ASCII case variants that OrdinalIgnoreCase equates are NOT
-flagged, and non-scalar (complex) keys are skipped, never compared.
+flagged, and non-scalar (complex) keys are skipped, never compared. Non-scalar keys, unknown tags
+and non-plain tagged scalars make GitHub fail to LOAD a file but are outside the duplicate-key
+class; the merge-queue stall check covers that failure shape.
 
 FAIL CLOSED. A file that does not parse, holds more than one document, is empty, or whose top
 level is not a mapping is a finding, never a skip, and so is an entry named like a workflow that
@@ -30,17 +45,23 @@ cannot be opened (a dangling symlink): a guard that skips what it cannot read is
 shape the incident came from. Only directories are skipped.
 
 SCOPE RESIDUALS, stated. Composite actions outside `.github/actions` are not scanned; the suite
-carries a tripwire row asserting none is tracked. The host workflow file (pr-quality-guards.yml)
-is scanned, but a duplicate in it also stops the `quality-guards` check from reporting, so that
-case is caught by this script's real-tree row in the `ci.yml` test gate, not by quality-guards;
-the residual reopens if ci.yml's gate is narrowed.
+carries a tripwire row asserting none is tracked. A symlinked DIRECTORY under `.github/actions` is
+not walked (os.walk does not follow it; whether GitHub resolves such a link is unverified). The
+host workflow file (pr-quality-guards.yml) is scanned, but a duplicate in it also stops the
+`quality-guards` check from reporting, so that case is caught by this script's real-tree row in
+the `ci.yml` test gate, not by quality-guards, and the latency differs from the other members: the
+red arrives through ci.yml's heavy leg (timeout 60 minutes) in tens of minutes, not minutes. The
+residual reopens if ci.yml's gate is narrowed.
 
 USAGE.  python3 check-workflow-duplicate-keys.py [ROOT]
   ROOT defaults to the repository root that contains this script. The summary line is
   `workflow-duplicate-keys=OK files=N loader=c|py pyyaml=V` or
   `workflow-duplicate-keys=FAIL files=N duplicates=D unparseable=U loader=c|py pyyaml=V`; each
   finding is a GitHub annotation `::error file=<rel>,line=<L>,col=<C>::duplicate key '<k>' (first
-  at line <F>)`. The pyyaml= field is the evidence of which PyYAML the runner image provided.
+  at line <F>)` (a plain non-string key prints the message above instead and counts in
+  duplicates=). The pyyaml= field is the evidence of which PyYAML the runner image provided.
+  Annotation text is escaped for %, CR, LF (GitHub's own set) and, beyond that, U+2028, U+2029,
+  U+0085 and DEL are written as \\uXXXX so a key cannot smuggle a line break into the log.
 
 EXIT.  0 clean | 1 any duplicate, unparseable, multi-document, empty or non-mapping file |
        2 environment (PyYAML missing, ROOT not a directory, zero workflow files scanned).
@@ -48,13 +69,14 @@ EXIT.  0 clean | 1 any duplicate, unparseable, multi-document, empty or non-mapp
        (the pyyaml= field printed by the quality-guards job is the evidence), and a network
        dependency on a required check is worse than a loud exit 2.
 
-LOADER. CSafeLoader when libyaml is available (0.4 s over the tree), else the pure SafeLoader
-(5.7 s). `WFDK_PURE_PYTHON=1` forces the pure loader; it is a TEST-ONLY seam so the suite can run
+LOADER. CSafeLoader when libyaml is available (roughly 0.1-0.7 s over the tree), else the pure
+SafeLoader (roughly 1.4-6 s); timings are host dependent. `WFDK_PURE_PYTHON=1` forces the pure loader; it is a TEST-ONLY seam so the suite can run
 the same fixtures under both. The summary prints which loader ran. The graph walk here is
 iterative; the pure loader's own composer is recursive and can hit its recursion limit on a
 pathologically deep document, which fails closed (an unparseable finding, rc 1).
 """
 import os
+import re
 import string
 import sys
 
@@ -67,6 +89,23 @@ WF_SUFFIXES = (".yml", ".yaml")
 ACTION_NAMES = ("action.yml", "action.yaml")
 # ASCII-only upper-case fold (NOT str.upper(): see KEY IDENTITY in the module docstring).
 ASCII_FOLD = str.maketrans(string.ascii_lowercase, string.ascii_uppercase)
+
+# Plain scalars GitHub converts to null/bool/number tokens before its duplicate check (YAML 1.2 core
+# schema, case-sensitive, matched with fullmatch). The empty alternative is the empty plain key.
+# NOT on/off/yes/no/y/n (strings in YAML 1.2), underscore integers or sexagesimals.
+NON_STRING_PLAIN = re.compile("|".join((
+    "",
+    "~|null|Null|NULL",
+    "true|True|TRUE|false|False|FALSE",
+    "[-+]?[0-9]+",
+    "0o[0-7]+",
+    "0x[0-9a-fA-F]+",
+    r"[-+]?(?:\.[0-9]+|[0-9]+(?:\.[0-9]*)?)(?:[eE][-+]?[0-9]+)?",
+    r"[-+]?\.(?:inf|Inf|INF)",
+    r"\.(?:nan|NaN|NAN)",
+)))
+# Characters that would survive GitHub's %/CR/LF escaping and still break a log line.
+CTRL = re.compile("[\u2028\u2029\u0085\x7f]")
 
 LOADER = None
 
@@ -81,7 +120,8 @@ def pick_loader():
 
 
 def esc_data(s):
-    return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    s = CTRL.sub(lambda m: "\\u%04x" % ord(m.group()), str(s))
+    return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
 def esc_prop(s):
@@ -102,10 +142,14 @@ def check_mapping(node, dups):
     for key_node, _value_node in node.value:
         if not isinstance(key_node, yaml.ScalarNode):
             continue
-        ident = key_node.value.translate(ASCII_FOLD)
         line = key_node.start_mark.line + 1
         col = key_node.start_mark.column + 1
         label = key_node.value
+        # style is None (pure loader) or '' (libyaml loader) for a plain scalar.
+        if not key_node.style and NON_STRING_PLAIN.fullmatch(label):
+            dups.append((line, col, label, None))
+            continue
+        ident = key_node.value.translate(ASCII_FOLD)
         if ident in seen:
             dups.append((line, col, label, seen[ident]))
         else:
@@ -160,7 +204,11 @@ def check_file(rel, path):
         emit_error(rel, "top level is not a mapping")
         return 0, 1  # fail-closed:non-mapping
     for line, col, label, first in sorted(dups, key=lambda d: (d[0], d[1])):
-        emit_error(rel, "duplicate key '%s' (first at line %d)" % (label, first), line, col)
+        if first is None:
+            emit_error(rel, "plain scalar key '%s' is converted to a string by GitHub before its "
+                       "duplicate check; quote it or rename it" % label, line, col)
+        else:
+            emit_error(rel, "duplicate key '%s' (first at line %d)" % (label, first), line, col)
     return len(dups), 0
 
 

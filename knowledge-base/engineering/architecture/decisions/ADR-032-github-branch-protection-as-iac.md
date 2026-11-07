@@ -1027,7 +1027,8 @@ cleanly in git, could not be loaded by GitHub Actions (a failed `push` run on
 the queue temp ref, no `merge_group` run, the required `test` context never
 reported) and stalled the queue for 175 minutes (#12283). `quality-guards`
 already reports on `merge_group` and does not depend on `ci.yml` loading, so a
-red member there ejects the candidate in minutes.
+red member there ejects the candidate in minutes (except for a duplicate in the
+host file itself, which takes tens of minutes; see the host-file residual below).
 
 No required context is added or renamed and no ruleset, Terraform or canonical
 JSON changes, so the Sharp Edge 1 paired-edit contract is not triggered; the
@@ -1042,19 +1043,27 @@ required context only through the `member workflow-yaml-strict` row of the
 ### Review rulings on the guard (PR #12295, 2026-11-07)
 
 - **Key identity.** GitHub compares mapping keys as case-insensitive strings on every mapping
-  (actions/runner `TemplateReader.cs` builds an `OrdinalIgnoreCase` key set per mapping), so the
+  (actions/runner `TemplateReader.cs` builds an `OrdinalIgnoreCase` key set per mapping; verified
+  2026-11-07 against lines 180 and 307 of that file), so the
   guard's identity for a scalar key is its text with ASCII letters folded to upper case: `Fetch-Depth`
-  and `fetch-depth` collide, `on` and `true` do not, and the merge key `<<` is an ordinary key. The
+  and `fetch-depth` collide, `on` and `"true"` do not, and the merge key `<<` is an ordinary key. The
   earlier residual limited to `with:` and `env:` input names was wrong and is withdrawn. The fold is
   ASCII-only (Python `upper()` would equate sharp-s with `SS`, which `OrdinalIgnoreCase` does not), so
-  non-ASCII case variants and non-scalar keys remain a stated false-GREEN residual.
+  non-ASCII case variants and non-scalar keys remain a stated false-GREEN residual. Plain scalar keys
+  that read as a YAML 1.2 core null, bool, int or float (`1`, `1.0`, `0xA`, `~`, `null`, `true`, an
+  empty key) are converted to strings by GitHub before its duplicate check, so the guard does not
+  compare them: each is itself a finding (quote it or rename it), no canonicalization is emulated, and
+  `on`, `off`, `yes`, `no` (plain strings in YAML 1.2) are untouched. A lone numeric key is flagged
+  although GitHub would accept it (deliberate over-strictness; the real tree has none).
 - **File set.** The `yml` and `yaml` suffixes are matched case-insensitively; a dangling or unreadable
   entry named like a workflow is an unparseable finding (only directories are skipped). Composite
   actions outside `.github/actions` stay unscanned, with a suite tripwire row asserting none is tracked.
 - **Host-file residual.** The guard cannot protect its own host file: a duplicate key in
   `pr-quality-guards.yml` stops `quality-guards` from reporting at all. The host file's own duplicate
   is caught by this script's real-tree row in `ci.yml` `test`, not by `quality-guards`; that residual
-  reopens if `ci.yml`'s gate is narrowed. No ruleset change and no new required workflow. A PR that
+  reopens if `ci.yml`'s gate is narrowed. The latency differs from the other members: the red reaches
+  `test` through the heavy leg (`timeout-minutes: 60`), so it arrives in tens of minutes, not minutes
+  (still well under the 175-minute incident). No ruleset change and no new required workflow. A PR that
   edits the script, the step or the aggregate row is caught by review, not by the guard (the same trust
   model as the other three members); the CODEOWNERS rows added for the script and its suite are routing
   text only (the ruleset has no `require_code_owner_review`), not a second reviewer.

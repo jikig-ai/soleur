@@ -50,7 +50,7 @@
 /scripts/lint-orphan-test-suites.sh                    @deruelle
 
 # Strict duplicate-key guard behind the `workflow-yaml-strict` member of `quality-guards` (#12283, ADR-032
-# addendum 2026-11-07), next to its host-workflow row above. ROUTING TEXT ONLY, not enforcement: `*` already
+# addendum 2026-11-07), see the host-workflow row (`pr-quality-guards.yml`) near the top of this file. ROUTING TEXT ONLY, not enforcement: `*` already
 # names the same owner, the CI ruleset has no require_code_owner_review, and these rows add no second reviewer.
 /.github/scripts/check-workflow-duplicate-keys.py       @deruelle
 /.github/scripts/test/test-check-workflow-duplicate-keys.sh @deruelle

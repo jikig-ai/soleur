@@ -28,16 +28,25 @@
 #   compiles, a NAMED row goes RED, and the clean-path rows (B2, B10) stay GREEN: a crashed guard
 #   fails every row and proves nothing. Mutation batteries evaluate only the named rows plus the
 #   clean-path rows (the kill criterion is unchanged; the real-tree row runs once, not per mutant).
+#   A kill also needs the failing row's OWN assertion to have failed, not a crash: if the guard's
+#   output for a failing fixture carries a crash signature (Traceback, NameError, UnboundLocalError,
+#   "is not defined") or an `unparseable:` finding (unless that row expects it, or the mutant is
+#   declared to produce it), the mutant is UNRESOLVED and the suite FAILS loudly. This catches a
+#   mutant that crashes only on the duplicate-finding path, which the guard's `except Exception`
+#   turns into an `unparseable:` finding and which the clean-path rows never reach.
 #
 # MUTATION MATRIX (Guard 1) -- M1 strict collector swapped for yaml.safe_load (last-wins), M2 zero
-# files exit-2 arm removed, M3 raise-first across files, M3b raise-first within a file, M4a/M4b
+# files exit-2 arm removed, M3 raise-first across files, M3b stop walking a file after its first finding mapping, M4a/M4b
 # extension coverage narrowed, M5 line off by one, M6a-g member wiring (strip !cancelled(), drop the
 # aggregate row, append || true, add continue-on-error, drop merge_group, aggregate reads outcome,
 # drop python3 -I), M7a-c fail-closed arms neutered, M8 missing-PyYAML exit-2 arm, M9 pure-python
-# seam, M10a-d key identity (no ASCII fold, full upper(), merge-key skip, non-scalar keys), M11a/b
+# seam, M10a-e key identity (no ASCII fold, full upper(), merge-key skip, non-scalar keys compared,
+# fold applied only under the C loader), M21a-d plain non-string keys (D19: branch neutralized, quote
+# style ignored, finding also compared, hex form dropped), M11a/b
 # case-sensitive suffix/action names, M12a/b isfile gate / directory gate, M13 recursion into
 # workflows/, M14 default root, M15 pyyaml= field, M16-M18 walker cardinality (first sequence item
-# only, stop after first repeat, first-at drift), M19 annotation escaping, M20 strict stdout.
+# only, stop after first repeat, first-at drift), M19a/b annotation escaping (and control-character
+# escaping), M20 strict stdout.
 # Non-battery rows: R1/R2 real-tree no-argument runs, T1/T1c composite-action tripwire (+ control),
 # W1/W1m GITHUB_SCRIPTS_SUITE_PATHS still names .github (+ mutation).
 # The exact pass floor sits at the bottom, a literal adjacent to its `if`.
@@ -337,9 +346,10 @@ put "$R_PASS" .github/workflows/intbool.yml <<'EOF'
 name: IntBool
 on: [push]
 m:
-  1: a
-  true: b
-  "2": c
+  on: a
+  "1": b
+  "true": c
+  "2": d
 jobs: {}
 EOF
 put "$R_PASS" .github/actions/ok/action.yml <<'EOF'
@@ -361,13 +371,14 @@ jobs: {}
 EOF
 KC_L1="$(nth_line "$R_KEYCASE/.github/workflows/kc.yml" 'Fetch-Depth' 1)"
 KC_L2="$(nth_line "$R_KEYCASE/.github/workflows/kc.yml" 'fetch-depth' 1)"
-# B14: `on` and `true` are one bool to YAML but two different strings to GitHub: clean.
+# B14: `on` and `"true"` are two different strings to GitHub and `on` is a plain STRING in YAML 1.2: clean
+# (a PLAIN `true` key is a D19 finding, see B22).
 mk_root ontrue; R_ONTRUE="$ROOT"
 put "$R_ONTRUE" .github/workflows/ot.yml <<'EOF'
 name: OT
 m:
   on: 1
-  true: 2
+  "true": 2
 jobs: {}
 EOF
 # B15: the merge key is an ordinary key: a second `<<` in one mapping is a repeat.
@@ -499,6 +510,8 @@ m:
   "p%q": 2
   "n\nm": 1
   "n\nm": 2
+  "u\u2028v\x7f": 1
+  "u\u2028v\x7f": 2
 jobs: {}
 EOF
 # B21: a non-ASCII duplicate key must still produce its annotation under an ASCII-only stdout.
@@ -509,6 +522,99 @@ on: [push]
 m:
   "é": 1
   "é": 2
+jobs: {}
+EOF
+
+# B22 (D19): plain scalar keys that GitHub converts to null/bool/number before its duplicate check are
+# findings themselves and are never compared. One mapping holds every form; the empty plain key is
+# written as `? ` + `: x` (the only spelling PyYAML accepts for it, identical under both loaders).
+NS_POS=('1' '1.0' '01' '+1' '0xA' '10' '0o10' '8' '1e0' '.5' '0.5' '~' 'null' 'Null' 'true' 'FALSE' '.inf' '.nan')
+mk_root nonstr; R_NONSTR="$ROOT"
+{ printf 'name: NS\non: [push]\nm:\n'
+  for k in "${NS_POS[@]}"; do printf '  %s: x\n' "$k"; done
+  printf '  ? \n  : x\njobs: {}\n'; } | put "$R_NONSTR" .github/workflows/ns.yml
+NS_EMPTY_LINE=$((4 + ${#NS_POS[@]}))
+# B22c: the same finding inside a nested step mapping, a flow mapping and a composite action.
+mk_root nonstrctx; R_NSCTX="$ROOT"
+put "$R_NSCTX" .github/workflows/nest.yml <<'EOF'
+name: N
+on: [push]
+jobs:
+  j:
+    runs-on: x
+    steps:
+      - uses: a/b@v1
+        with:
+          1: a
+flow:
+  vars: {2: a, k: b}
+EOF
+put "$R_NSCTX" .github/actions/c/action.yml <<'EOF'
+name: A
+runs:
+  using: composite
+  steps:
+    - run: x
+      shell: bash
+      env:
+        true: a
+EOF
+NC_L1="$(nth_line "$R_NSCTX/.github/workflows/nest.yml" '^          1:' 1)"
+NC_L2="$(nth_line "$R_NSCTX/.github/workflows/nest.yml" '^  vars:' 1)"
+NC_L3="$(nth_line "$R_NSCTX/.github/actions/c/action.yml" '^        true:' 1)"
+# B22l: a LONE numeric key is flagged although GitHub would accept it (deliberate over-strictness, D19).
+mk_root nonstrlone; R_NSLONE="$ROOT"
+put "$R_NSLONE" .github/workflows/lone.yml <<'EOF'
+name: L
+on: [push]
+m:
+  1: a
+jobs: {}
+EOF
+# B22m: two numeric keys are never compared with each other, and a real duplicate beside them still prints.
+mk_root nonstrmix; R_NSMIX="$ROOT"
+put "$R_NSMIX" .github/workflows/mix.yml <<'EOF'
+name: M
+on: [push]
+m:
+  1: a
+  x: 1
+  x: 2
+  1: b
+jobs: {}
+EOF
+NM_L1="$(nth_line "$R_NSMIX/.github/workflows/mix.yml" '^  1:' 1)"
+NM_L2="$(nth_line "$R_NSMIX/.github/workflows/mix.yml" '^  1:' 2)"
+NM_X1="$(nth_line "$R_NSMIX/.github/workflows/mix.yml" '^  x:' 1)"
+NM_X2="$(nth_line "$R_NSMIX/.github/workflows/mix.yml" '^  x:' 2)"
+# B23: names that merely LOOK special stay clean (on/off/yes/no/y/n are strings in YAML 1.2; underscore
+# ints and sexagesimals are not core-schema numbers), as do quoted keys, a block scalar value and a
+# complex key.
+mk_root nonstrneg; R_NSNEG="$ROOT"
+put "$R_NSNEG" .github/workflows/neg.yml <<'EOF'
+name: NN
+on: [push]
+m:
+  on: 1
+  off: 2
+  yes: 3
+  no: 4
+  y: 5
+  n: 6
+  name: 7
+  nullable: 8
+  True1: 9
+  v1.0: 10
+  1abc: 11
+  1_000: 12
+  "1": 13
+  'true': 14
+  "": 15
+  blk: |
+    1: x
+    ~: y
+  ? [1, 2]
+  : 16
 jobs: {}
 EOF
 
@@ -524,7 +630,8 @@ python3 -c 'import sys, yaml; sys.exit(0 if hasattr(yaml, "CSafeLoader") else 1)
 # ---- the battery -------------------------------------------------------------------------------
 declare -A BAT_RES
 declare -A BAT_DESC
-BAT_IDS=(B1 B1p B2 B3 B3b B3c B3d B4 B5 B6 B6q B7 B7m B7n B7e B8 B8w B8m B9 B10 B10s B12 B13 B14 B15 B15n B16 B17 B17d B19 B20 B21)
+declare -A BAT_OUT
+BAT_IDS=(B1 B1p B2 B3 B3b B3c B3d B4 B5 B6 B6q B7 B7m B7n B7e B8 B8w B8m B9 B10 B10s B12 B13 B14 B15 B15n B16 B17 B17d B19 B20 B21 B22 B22c B22l B22m B23)
 CLEAN_IDS=(B2 B10)   # clean-path rows: they must stay GREEN under any mutant, or the mutant crashed
 BAT_DESC[B1]="nested with: fetch-depth x2 -> rc 1, file/line/col/first-line, FAIL summary, loader=$EXPECT_LOADER"
 BAT_DESC[B1p]="same fixture under WFDK_PURE_PYTHON=1 -> rc 1, same line, loader=py"
@@ -542,14 +649,14 @@ BAT_DESC[B8]="root with no .github -> rc 2"
 BAT_DESC[B8w]="empty .github/workflows (zero files scanned) -> rc 2, never OK"
 BAT_DESC[B8m]="root path that does not exist -> rc 2"
 BAT_DESC[B9]="PyYAML not importable -> rc 2, no pip fallback"
-BAT_DESC[B10]="must-PASS corpus (sibling keys, flow, << with override, on, multiline, CRLF, aliases, cycle, 1/true/2) -> rc 0"
+BAT_DESC[B10]="must-PASS corpus (sibling keys, flow, << with override, on, multiline, CRLF, aliases, cycle, on/quoted 1/true/2) -> rc 0"
 BAT_DESC[B12]="real tree -> rc 0, OK, files= equals git ls-files count (SKIP outside a git work tree)"
 BAT_DESC[B3b]="duplicates in step 2 AND step 3 of one steps: list -> both reported (the walk reaches every sequence item)"
 BAT_DESC[B3c]="a,a,b,b in ONE mapping and a triple c,c,c -> 4 findings, each repeat names the FIRST line"
 BAT_DESC[B3d]="key and file name with % : , newline -> escaped in the annotation (%25 %3A %2C %0A)"
 BAT_DESC[B10s]="workflows/ subdirectory and a directory named dir.yml are not scanned -> rc 0, files= equals find count"
 BAT_DESC[B13]="Fetch-Depth vs fetch-depth in one mapping -> flagged, under BOTH loaders"
-BAT_DESC[B14]="on vs true in one mapping -> clean (distinct strings to GitHub), under BOTH loaders"
+BAT_DESC[B14]="on vs \"true\" in one mapping -> clean (distinct strings to GitHub), under BOTH loaders"
 BAT_DESC[B15]="two << keys in one mapping -> flagged (the merge key is an ordinary key), under BOTH loaders"
 BAT_DESC[B15n]="non-scalar keys repeated -> skipped, clean, under BOTH loaders"
 BAT_DESC[B16]="sharp-s vs SS and dotless-i vs i -> clean (ASCII-only fold), under BOTH loaders"
@@ -558,6 +665,11 @@ BAT_DESC[B17d]="dangling symlink x.yml in workflows/ -> rc 1, unparseable findin
 BAT_DESC[B19]="NO-argument default root (as CI runs it) from the root and from a subdirectory cwd -> OK, files= equals find count"
 BAT_DESC[B20]="OK and FAIL summary lines carry pyyaml=<yaml.__version__>"
 BAT_DESC[B21]="non-ASCII duplicate key under an ASCII-only stdout -> annotation still printed, no traceback"
+BAT_DESC[B22]="every plain null/bool/int/float spelling as a key (1 1.0 01 +1 0xA 10 0o10 8 1e0 .5 0.5 ~ null Null true FALSE .inf .nan and the empty key) -> one finding each, never compared, under BOTH loaders"
+BAT_DESC[B22c]="plain numeric/bool keys in a nested step mapping, a flow mapping and a composite action -> each flagged, files named"
+BAT_DESC[B22l]="a LONE numeric key -> flagged (deliberate over-strictness), under BOTH loaders"
+BAT_DESC[B22m]="two numeric keys beside a real duplicate -> every finding prints, the numeric keys are never compared"
+BAT_DESC[B23]="on off yes no y n name nullable True1 v1.0 1abc 1_000, quoted 1/true/empty keys, a block-scalar value, a complex key -> clean, under BOTH loaders"
 
 # Real-tree enumerator pathspecs, ALL case-insensitive (the guard matches suffixes and action names
 # case-insensitively, D14); the independent count must use the same breadth.
@@ -565,14 +677,14 @@ LS_PATHSPECS=(':(icase,glob).github/workflows/*.yml' ':(icase,glob).github/workf
               ':(icase,glob).github/actions/**/action.yml' ':(icase,glob).github/actions/**/action.yaml')
 
 b_ok() { BAT_RES["$1"]="ok"; }
-b_no() { BAT_RES["$1"]="$2"; }
+b_no() { BAT_RES["$1"]="$2"; BAT_OUT["$1"]="$G_OUT"; }   # BAT_OUT: the guard output of the failing run (crash-signature check)
 snip() { printf '%s' "${G_OUT:0:240}" | tr '\n' '|'; }
 
-real_ls_count() { # independent enumerator of the real tree: tracked files that exist on disk
-  local f n=0
+real_ls_count() { # independent enumerator of the real tree: tracked OR untracked-not-ignored files that exist on disk
+  local f n=0   # (-co: an untracked workflow draft is scanned by the guard, so it must be counted here too)
   while IFS= read -r -d '' f; do
     [[ -f "$REPO_ROOT/$f" ]] && n=$((n + 1))
-  done < <(git -C "$REPO_ROOT" ls-files -z -- "${LS_PATHSPECS[@]}")
+  done < <(git -C "$REPO_ROOT" ls-files -z -co --exclude-standard -- "${LS_PATHSPECS[@]}")
   echo "$n"
 }
 # stray_actions <repo>: tracked action.yml/action.yaml (any case) OUTSIDE .github/actions. The guard
@@ -591,13 +703,34 @@ paths_has_github() {
 # Predicates over G_RC/G_OUT for the rows that run under BOTH loaders.
 p_clean() { [[ "$G_RC" -eq 0 && "$G_OUT" == *"workflow-duplicate-keys=OK "* && "$G_OUT" != *"::error"* ]]; }
 p_keycase() { [[ "$G_RC" -eq 1 && "$G_OUT" == *"line=$KC_L2,col=3::duplicate key 'fetch-depth' (first at line $KC_L1)"* && "$G_OUT" == *"duplicates=1"* ]]; }
+P_WHY=""
+p_nonstr() { # every NS_POS key is its own finding at its own line, plus the empty key; nothing is compared
+  local i k want_n=$(( ${#NS_POS[@]} + 1 ))
+  P_WHY=""
+  [[ "$G_RC" -eq 1 && "$G_OUT" == *"duplicates=$want_n"* && "$G_OUT" != *"duplicate key '"* ]] || { P_WHY="rc/count/compared"; return 1; }
+  for i in "${!NS_POS[@]}"; do
+    k="${NS_POS[$i]}"
+    [[ "$G_OUT" == *"line=$((4 + i)),col=3::plain scalar key '$k' is converted to a string by GitHub before its duplicate check; quote it or rename it"* ]] \
+      || { P_WHY="key '$k' not flagged at line $((4 + i))"; return 1; }
+  done
+  [[ "$G_OUT" == *"line=$NS_EMPTY_LINE,col="*"::plain scalar key '' is converted to a string by GitHub before its duplicate check; quote it or rename it"* ]] \
+    || { P_WHY="empty key not flagged at line $NS_EMPTY_LINE"; return 1; }
+  return 0
+}
+p_nslone() { [[ "$G_RC" -eq 1 && "$G_OUT" == *"line=4,col=3::plain scalar key '1' is converted to a string by GitHub before its duplicate check; quote it or rename it"* && "$G_OUT" == *"duplicates=1"* ]]; }
+p_nsmix() {
+  [[ "$G_RC" -eq 1 && "$G_OUT" == *"duplicates=3"* && "$G_OUT" != *"duplicate key '1'"* \
+     && "$G_OUT" == *"line=$NM_L1,col=3::plain scalar key '1' is converted"* && "$G_OUT" == *"line=$NM_L2,col=3::plain scalar key '1' is converted"* \
+     && "$G_OUT" == *"line=$NM_X2,col=3::duplicate key 'x' (first at line $NM_X1)"* ]]
+}
 p_twomerge() { [[ "$G_RC" -eq 1 && "$G_OUT" == *"line=$TM_L2,col=3::duplicate key '<<' (first at line $TM_L1)"* && "$G_OUT" == *"duplicates=1"* ]]; }
 check_both() { # <row> <guard> <root> <predicate>: the predicate must hold under the C loader AND the pure one
   local id="$1" g="$2" r="$3" pred="$4" lv extra
   for lv in default pure; do
     extra=(); [[ "$lv" == "pure" ]] && extra=(WFDK_PURE_PYTHON=1)
     run_guard "$g" "$r" "${extra[@]}"
-    if ! "$pred"; then b_no "$id" "loader=$lv rc=$G_RC out=$(snip)"; return 0; fi
+    P_WHY=""
+    if ! "$pred"; then b_no "$id" "loader=$lv rc=$G_RC ${P_WHY} out=$(snip)"; return 0; fi
   done
   b_ok "$id"
 }
@@ -639,7 +772,7 @@ sel() { [[ -z "${SEL:-}" || " $SEL " == *" $1 "* ]]; }   # row selected? (SEL is
 
 battery() { # <guard> [row ids to evaluate; default all]
   local g="$1" id n want pv_ok pv_rc SEL="${2:-}"
-  for id in "${BAT_IDS[@]}"; do BAT_RES["$id"]="not run"; done
+  for id in "${BAT_IDS[@]}"; do BAT_RES["$id"]="not run"; BAT_OUT["$id"]=""; done
   if sel B1; then
     run_guard "$g" "$R_INC"
     if [[ "$G_RC" -eq 1 && "$G_OUT" == *"::error file=.github/workflows/ci.yml,line=$INC_L2,col=11::duplicate key 'fetch-depth' (first at line $INC_L1)"* \
@@ -687,7 +820,8 @@ battery() { # <guard> [row ids to evaluate; default all]
   if sel B3d; then
     run_guard "$g" "$R_ESC"
     if [[ "$G_RC" -eq 1 && "$G_OUT" == *"::error file=.github/workflows/sp%3Aec%2Cial.yml,line="* \
-          && "$G_OUT" == *"duplicate key 'p%25q'"* && "$G_OUT" == *"duplicate key 'n%0Am'"* && "$G_OUT" == *"duplicates=2"* ]]; then
+          && "$G_OUT" == *"duplicate key 'p%25q'"* && "$G_OUT" == *"duplicate key 'n%0Am'"* \
+          && "$G_OUT" == *"duplicate key 'u\\u2028v\\u007f'"* && "$G_OUT" != *$'\u2028'* && "$G_OUT" != *$'\x7f'* && "$G_OUT" == *"duplicates=3"* ]]; then
       b_ok B3d; else b_no B3d "rc=$G_RC out=$(snip)"; fi
   fi
 
@@ -797,7 +931,7 @@ battery() { # <guard> [row ids to evaluate; default all]
 
   if sel B19; then
     noarg_layout "$g"
-    if [[ "$NOARG_OK" -eq 1 ]]; then b_ok B19; else b_no B19 "$NOARG_WHY"; fi
+    if [[ "$NOARG_OK" -eq 1 ]]; then b_ok B19; else G_OUT="$NOARG_WHY"; b_no B19 "$NOARG_WHY"; fi
   fi
 
   if sel B20; then
@@ -815,6 +949,19 @@ battery() { # <guard> [row ids to evaluate; default all]
           && "$G_OUT" != *"Traceback"* ]]; then
       b_ok B21; else b_no B21 "rc=$G_RC out=$(snip)"; fi
   fi
+
+  sel B22 && check_both B22 "$g" "$R_NONSTR" p_nonstr
+  if sel B22c; then
+    run_guard "$g" "$R_NSCTX"
+    if [[ "$G_RC" -eq 1 && "$G_OUT" == *"duplicates=3"* \
+          && "$G_OUT" == *"file=.github/workflows/nest.yml,line=$NC_L1,"*"::plain scalar key '1' is converted"* \
+          && "$G_OUT" == *"file=.github/workflows/nest.yml,line=$NC_L2,"*"::plain scalar key '2' is converted"* \
+          && "$G_OUT" == *"file=.github/actions/c/action.yml,line=$NC_L3,"*"::plain scalar key 'true' is converted"* ]]; then
+      b_ok B22c; else b_no B22c "rc=$G_RC out=$(snip)"; fi
+  fi
+  sel B22l && check_both B22l "$g" "$R_NSLONE" p_nslone
+  sel B22m && check_both B22m "$g" "$R_NSMIX" p_nsmix
+  sel B23 && check_both B23 "$g" "$R_NSNEG" p_clean
 
   if sel B12; then
     if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -926,13 +1073,17 @@ wiring_check() { # <yml> -> 0 ok; else REASON
 }
 
 # ---- mutation harness --------------------------------------------------------------------------
-# mutate_guard <label> <expected-failing-row-regex> <old-literal> <new-literal> [clean-rows-allowed-red]
+# mutate_guard <label> <expected-failing-row-regex> <old-literal> <new-literal> [clean-rows-allowed-red] [allow]
+# allow: space-separated tokens naming a crash-class signature this mutant legitimately produces in a
+# failing row's output: `crash` (Traceback/NameError/...), `unp` (an `unparseable:` finding).
 # Applies the literal replacement to a SANDBOX copy of the guard (never the real file), requires
 # the mutation to have LANDED (the copy differs from the pristine bytes), then requires the battery
 # to go RED on a row matching the expected regex.
 MUT_N=0
+CRASH_RE='Traceback|NameError|UnboundLocalError|is not defined|referenced before assignment'
+EXPECT_UNP="B7 B7m B17d"   # rows whose PASSING output already carries an `unparseable:` finding
 mutate_guard() {
-  local label="$1" want="$2" old="$3" new="$4" exempt="${5:-}" cp id failed="" cid unresolved="" sel_ids=""
+  local label="$1" want="$2" old="$3" new="$4" exempt="${5:-}" allow="${6:-}" cp id failed="" cid unresolved="" sel_ids="" crashed="" out
   MUT_N=$((MUT_N + 1))
   cp="$SB/mut${MUT_N}.py"
   cp "$GUARD_REAL" "$cp" || { fail "$label (could not copy the guard)"; return 0; }
@@ -975,6 +1126,18 @@ PY
   done
   if [[ -n "$unresolved" ]]; then
     fail "$label: UNRESOLVED -- clean-path rows went RED under the mutant (verdict-less crash, not a kill):$unresolved"; return 0
+  fi
+  # A kill is the named row's OWN assertion failing, not a crash. The guard turns an exception on the
+  # duplicate-finding path into an `unparseable:` finding (the clean-path rows never reach it), so the
+  # failing rows' output is scanned for crash signatures; rows that legitimately print `unparseable:`
+  # (EXPECT_UNP) and mutants declared to produce a signature (`allow`) are exempt for that signature only.
+  for id in $failed; do
+    out="${BAT_OUT[$id]-}"
+    if [[ " $allow " != *" crash "* ]] && grep -qE "$CRASH_RE" <<<"$out"; then crashed="$crashed $id"; fi
+    if [[ " $allow " != *" unp "* && " $EXPECT_UNP " != *" $id "* ]] && grep -qF 'unparseable:' <<<"$out"; then crashed="$crashed $id"; fi
+  done
+  if [[ -n "$crashed" ]]; then
+    fail "$label: UNRESOLVED -- crash signature in the failing row's output (a crash, not a kill):$crashed"; return 0
   fi
   if grep -qE "$want" <<<"$failed"; then
     pass "$label -> RED on:${failed}"
@@ -1081,8 +1244,8 @@ mutate_guard "M2 zero-files exit-2 arm removed -> RED" '(^| )B8w( |$)' \
   '    if not files:' '    if False:'
 mutate_guard "M3 raise-first across files (stop after the first failing file) -> RED" '(^| )B4( |$)' \
   '        unparseable += n_unp' $'        unparseable += n_unp\n        if n_dup or n_unp:\n            break'
-mutate_guard "M3b raise-first within a file (stop after the first repeat) -> RED" '(^| )B3( |$)' \
-  '            dups.append((line, col, label, seen[ident]))' $'            dups.append((line, col, label, seen[ident]))\n            raise SystemExit(1)'
+mutate_guard "M3b stop walking a file after its first finding mapping -> RED" '(^| )(B3|B3b)( |$)' \
+  '            check_mapping(node, dups)' $'            check_mapping(node, dups)\n            if dups:\n                return'
 mutate_guard "M4a workflow suffix glob narrowed to .yml only -> RED" '(^| )B5( |$)' \
   'WF_SUFFIXES = (".yml", ".yaml")' 'WF_SUFFIXES = (".yml",)' B2   # B2 legitimately counts the .yaml sibling
 mutate_guard "M4b action name narrowed to action.yml only -> RED" '(^| )B5( |$)' \
@@ -1112,8 +1275,18 @@ mutate_guard "M10b key identity uses Python full upper() (sharp-s collides with 
   '        ident = key_node.value.translate(ASCII_FOLD)' '        ident = key_node.value.upper()'
 mutate_guard "M10c merge key skipped again (two << keys read as clean) -> RED" '(^| )B15( |$)' \
   '        ident = key_node.value.translate(ASCII_FOLD)' $'        if key_node.value == "<<":\n            continue\n        ident = key_node.value.translate(ASCII_FOLD)'
-mutate_guard "M10d non-scalar keys no longer skipped (complex key reaches .value.translate) -> RED" '(^| )B15n( |$)' \
-  '        if not isinstance(key_node, yaml.ScalarNode):' '        if False:'
+mutate_guard "M10d non-scalar keys no longer skipped (every complex key compared as one text) -> RED" '(^| )B15n( |$)' \
+  $'        if not isinstance(key_node, yaml.ScalarNode):\n            continue' $'        if not isinstance(key_node, yaml.ScalarNode):\n            key_node = yaml.ScalarNode("tag:yaml.org,2002:str", "?", key_node.start_mark, key_node.end_mark)'
+mutate_guard "M10e ASCII fold applied only under the C loader (the pure leg of check_both is real) -> RED" '(^| )B13( |$)' \
+  '        ident = key_node.value.translate(ASCII_FOLD)' '        ident = key_node.value.translate(ASCII_FOLD) if LOADER is not yaml.SafeLoader else key_node.value'
+mutate_guard "M21a plain non-string key branch neutralized (D19) -> RED" '(^| )B22( |$)' \
+  '        if not key_node.style and NON_STRING_PLAIN.fullmatch(label):' '        if False:'
+mutate_guard "M21b quote style ignored (quoted 1 / true / empty flagged too) -> RED" '(^| )B23( |$)' \
+  '        if not key_node.style and NON_STRING_PLAIN.fullmatch(label):' '        if NON_STRING_PLAIN.fullmatch(label):' B10   # B10 legitimately holds a quoted "1"/"true"
+mutate_guard "M21c flagged non-string key also compared (two numeric keys read as a duplicate) -> RED" '(^| )B22m( |$)' \
+  $'            dups.append((line, col, label, None))\n            continue' '            dups.append((line, col, label, None))'
+mutate_guard "M21d hexadecimal form dropped from the pattern -> RED" '(^| )B22( |$)' \
+  '    "0x[0-9a-fA-F]+",' '    "0x[g]+",'
 mutate_guard "M11a workflow suffix match made case-sensitive -> RED" '(^| )B17( |$)' \
   '            if name.lower().endswith(WF_SUFFIXES) and not os.path.isdir(path):' '            if name.endswith(WF_SUFFIXES) and not os.path.isdir(path):'
 mutate_guard "M11b action name match made case-sensitive -> RED" '(^| )B17( |$)' \
@@ -1121,7 +1294,7 @@ mutate_guard "M11b action name match made case-sensitive -> RED" '(^| )B17( |$)'
 mutate_guard "M12a isfile gate restored (dangling symlink skipped) -> RED" '(^| )B17d( |$)' \
   '            if name.lower().endswith(WF_SUFFIXES) and not os.path.isdir(path):' '            if name.lower().endswith(WF_SUFFIXES) and os.path.isfile(path):'
 mutate_guard "M12b directory gate removed (dir.yml opened as a file) -> RED" '(^| )B10s( |$)' \
-  '            if name.lower().endswith(WF_SUFFIXES) and not os.path.isdir(path):' '            if name.lower().endswith(WF_SUFFIXES):'
+  '            if name.lower().endswith(WF_SUFFIXES) and not os.path.isdir(path):' '            if name.lower().endswith(WF_SUFFIXES):' '' unp   # opening a directory IS an `unparseable:` finding
 mutate_guard "M13 workflows/ enumeration recurses into subdirectories -> RED" '(^| )B10s( |$)' \
   '        for name in sorted(os.listdir(wf_dir)):' '        for name in sorted(os.path.relpath(os.path.join(d, f), wf_dir) for d, _s, fs in os.walk(wf_dir) for f in fs):'
 mutate_guard "M14 default root loses one dirname (no-argument run scans the wrong directory) -> RED" '(^| )B19( |$)' \
@@ -1134,10 +1307,12 @@ mutate_guard "M17 stop after the first repeat inside a mapping -> RED" '(^| )B3c
   '            dups.append((line, col, label, seen[ident]))' $'            dups.append((line, col, label, seen[ident]))\n            break'
 mutate_guard "M18 first-at drifts to the previous occurrence -> RED" '(^| )B3c( |$)' \
   '            dups.append((line, col, label, seen[ident]))' $'            dups.append((line, col, label, seen[ident]))\n            seen[ident] = line'
-mutate_guard "M19 annotation escaping removed -> RED" '(^| )B3d( |$)' \
-  '    return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")' '    return str(s)'
+mutate_guard "M19a annotation escaping removed -> RED" '(^| )B3d( |$)' \
+  '    return s.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")' '    return s'
+mutate_guard "M19b control-character escaping removed (U+2028 / U+0085 / DEL pass through raw) -> RED" '(^| )B3d( |$)' \
+  '    s = CTRL.sub(lambda m: "\\u%04x" % ord(m.group()), str(s))' '    s = str(s)'
 mutate_guard "M20 stdout error handler left strict (non-ASCII key crashes the print) -> RED" '(^| )B21( |$)' \
-  '            stream.reconfigure(errors="replace")' '            pass'
+  '            stream.reconfigure(errors="replace")' '            pass' '' crash   # the strict stdout IS a Traceback
 
 # ---- 3. controls: the mutation helper must FAIL on inputs that must fail ------------------------
 # control_fails <label> <wanted-message-substring> <cmd...>: drive a verdict helper once with an input
@@ -1166,6 +1341,8 @@ control_fails "mutate_guard (RED for the wrong reason)" "wrong reason" \
   mutate_guard "CTL-c" 'NO_SUCH_ROW' '    if not files:' '    if False:'
 control_fails "mutate_guard (mutant does not compile)" "does not compile" \
   mutate_guard "CTL-d" 'B1' '    if not files:' '    if not files::'
+control_fails "mutate_guard (crash only on the duplicate-finding path)" "crash signature" \
+  mutate_guard "CTL-f" 'B3c' '            dups.append((line, col, label, seen[ident]))' '            dups.append((line, col, label, seen[idnt]))'
 control_fails "mutate_guard (clean-path rows crash under the mutant)" "UNRESOLVED" \
   mutate_guard "CTL-e" 'B1' '    LOADER, loader_name = pick_loader()' $'    LOADER, loader_name = pick_loader()\n    raise RuntimeError("boom")'
 
@@ -1176,7 +1353,7 @@ if [[ "$fails" -ne 0 ]]; then
 fi
 # EXACT floor: every row either passes or is a counted SKIP, so a dropped row or a neutered
 # verdict helper moves the total. Update the literal deliberately when a row is added.
-if [[ $((passes + skips)) -ne 80 ]]; then
-  printf '[FAIL] verdict count %s != exact floor 80 (a row was dropped or added)\n' "$((passes + skips))" >&2; exit 1
+if [[ $((passes + skips)) -ne 92 ]]; then
+  printf '[FAIL] verdict count %s != exact floor 92 (a row was dropped or added)\n' "$((passes + skips))" >&2; exit 1
 fi
 exit 0
