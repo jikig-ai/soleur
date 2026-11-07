@@ -31,3 +31,5 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto (x2)
 - constraint: Before pushing a PR that changes a test suite run the affected-replay ratchet, fixture-env-adoption test, grep-q-pipe-guard test and the suite run-all registration locally. Batch every fix before pushing. Stage and commit in separate Bash calls. Re-read the PR body after editing it.
 - constraint: Do not touch the A6 record, the off-project copy spend decision, host-replace authorisation or dispatch, closing the epic, the inngest_arm_write token, the G2e pin, PR 12275, the CI_ORACLE_LANE variable, or the SOLEUR-DEBT marker in ci.yml.
 - constraint: Done requires a merged PR, postmerge verification with merge_group evidence by run kind and leg, deploy arm exact and success, KB archival read-back clean, pipeline-tally.sh show cited, and a Ref-only classification comment on the epic.
+- constraint: Operator said in session on 2026-11-07 to rely on CI instead of the local affected battery because the machine is contended. Targeted local gates already passed.
+- ci-is-the-gate: Rely on CI instead of the local affected battery as the machine is contended.
