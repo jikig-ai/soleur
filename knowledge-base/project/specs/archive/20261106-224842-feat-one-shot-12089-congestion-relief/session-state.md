@@ -66,3 +66,10 @@
 - CI head 7fd8c97071: fixed affected-index-ratchet (declared AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS), body-vs-diff (PR body backticks), orphan-test lint (was stale/transient — 0 orphans locally).
 - OPEN: shard-totality-mutations leg (29-42) fail on run 42310015463 — likely my lint registration shifted mutation row boundary. Repro locally: plugins/soleur/test/scripts-shard-totality.test.sh (battery: scripts-shard-totality-mutations.sh; classify: scripts/ci-shard-totality-classify.sh).
 - After green: operator `gh pr merge --admin` (raw, outside admin-merge-ready.sh gate — documented). Then: apply-github-infra apply-watch, queue inspection (task 3.3), merge_group canary (3.4), post-merge census delta on #12089 (3.5), postmerge verify, <promise>DONE</promise>.
+
+## Ship CI status (head 0c704d21fa)
+- Fixed+pushed: affected-index-ratchet (edge declaration 7fd8c97071), body-vs-diff (PR body backticks), orphan-test (stale/transient — 0 orphans locally), shard-totality ROWS-CI-KEY2* anchors (Phase F #6325 tombstone restore 0c704d21fa — local leg 29-42 green 15/15).
+- OPEN: 5/8 test-scripts shards FAILED on run 42313516305 (jobs e.g. 128220892537) — step "Run scripts-side tests" failed; per-suite FAIL lines not yet extracted (log grep returned empty — try `gh run view --log-failed <run>` or the steps API + targeted grep on the job log).
+- Also pending when last checked: test-scripts 5,6,7 pending; 3 other legs pending.
+- Diagnosis needed: likely test-all shard-leg assignment changed by lint-umbrella-aggregate registration OR suite failure in new lint inside battery env.
+- After all-green: operator `gh pr merge --admin` (raw, outside admin-merge-ready.sh gate — documented). Then apply-github-infra watch + queue inspection (3.3) + merge_group canary (3.4) + census delta on #12089 (3.5) + postmerge verify + DONE.
