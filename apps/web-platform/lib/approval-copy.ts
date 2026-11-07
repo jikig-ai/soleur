@@ -67,7 +67,7 @@ export const APPROVAL_COPY = {
   memberWaitingRedacted: "An action in this conversation is waiting for an Owner's approval.",
   /** The verified requester's own card. */
   memberWaitingOwn: "You requested this. Waiting for an Owner's approval.",
-  /** Defensive only: a card whose action is withheld from the viewer and whose status is no longer pending. */
+  /** A card whose action is withheld from the viewer and whose status is no longer pending (a refused non-Owner decide settles it). */
   withheldSettledTitle: "This request is no longer waiting",
   conversationClosed: "This conversation is closed",
   detailsRemoved: "Details removed per retention policy",
@@ -92,7 +92,7 @@ export const APPROVAL_STATE_COPY = {
     alreadyDecided: "Already decided",
     notRecorded: "Not recorded",
     detailsRemoved: "Details removed",
-    /** Defensive only: a withheld card whose status moved on. */
+    /** A withheld card whose status moved on. */
     withheldSettled: "Not waiting",
   },
   deniedTitle: (noun: string) => `You denied this ${noun}`,

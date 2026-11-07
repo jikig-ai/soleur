@@ -446,8 +446,9 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       break;
   }
 
-  // Defensive only: the server never sends a non-pending status to a withheld card (approved rows are skipped, status frames
-  // go to the decider and the requester). If one arrives anyway, say nothing about the agent, the action or an outcome.
+  // A withheld card can still be handed a non-pending status: reattach skips approved rows for such a viewer, but a status
+  // frame also reaches a non-Owner member whose own decide was refused (`decider_not_owner`). Say nothing about the agent,
+  // the action or an outcome.
   const withheldSettled = withheld && state !== "pending_member";
   if (withheldSettled) {
     title = APPROVAL_COPY.withheldSettledTitle;

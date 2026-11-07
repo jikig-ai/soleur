@@ -1595,8 +1595,9 @@ export function applyStreamEvent(
         expiresAt: event.expiresAt,
         requestCount: event.requestCount,
         viewerRole: event.viewerRole,
-        // Copied explicitly (an optional field is dropped silently at any explicit destructure hop), and only when present
-        // so a later frame without a label clears a stale one through the upsert spread below.
+        // Copied explicitly (an optional field is dropped silently at any explicit destructure hop), and only when present:
+        // the upsert below writes this FRESH card object over the entry (the old entry is not spread), so a later frame
+        // without a label clears a stale one.
         ...(event.requester !== undefined ? { requester: event.requester } : {}),
         agentWaiting: event.agentWaiting === true,
       };

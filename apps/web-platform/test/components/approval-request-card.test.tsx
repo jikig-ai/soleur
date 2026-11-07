@@ -556,3 +556,33 @@ describe("withheld member card (#9601)", () => {
     expect(text).not.toContain("email"); // the generic noun is 'request'
   });
 });
+
+describe("a member card never shows the requester line and only the literal you reads as 'You requested this' (#9601)", () => {
+  const OWN = "You requested this. Waiting for an Owner's approval.";
+
+  it("member + full view + requester 'you': the existing member title with the own-request wording, and NO approval-requester line", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: view(), requester: "you" })} />);
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+    expect(screen.getByRole("heading").textContent).toBe(OWN);
+  });
+
+  it("member + full view + requester 'jane@example.com': no line, and the card does not claim 'You requested this'", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: view(), requester: "jane@example.com" })} />);
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+    expect(card().textContent).not.toContain("You requested this");
+    expect(card().textContent).not.toContain("jane@example.com");
+    expect(screen.getByRole("heading").textContent).toBe("Waiting for the workspace Owner");
+  });
+
+  it("a withheld member card with a non-'you' requester reads as withheld, never as 'You requested this'", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: null, requester: "a workspace member" })} />);
+    expect(card().textContent).not.toContain("You requested this");
+    expect(screen.queryByTestId("approval-requester")).toBeNull();
+    expect(screen.getByRole("heading").textContent).toBe("An action in this conversation is waiting for an Owner's approval.");
+  });
+
+  it("a requester string that merely contains 'you' is not the literal (strict equality)", () => {
+    render(<ApprovalRequestCard {...props({ viewerRole: "member", view: view(), requester: "you@example.com" })} />);
+    expect(card().textContent).not.toContain("You requested this");
+  });
+});
