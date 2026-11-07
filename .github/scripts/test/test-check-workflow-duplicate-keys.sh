@@ -680,11 +680,11 @@ b_ok() { BAT_RES["$1"]="ok"; }
 b_no() { BAT_RES["$1"]="$2"; BAT_OUT["$1"]="$G_OUT"; }   # BAT_OUT: the guard output of the failing run (crash-signature check)
 snip() { printf '%s' "${G_OUT:0:240}" | tr '\n' '|'; }
 
-real_ls_count() { # independent enumerator of the real tree: tracked OR untracked-not-ignored files that exist on disk
+real_ls_count() { # independent enumerator of the real tree: tracked OR untracked files that exist on disk (ignored ones too: the guard scans the filesystem)
   local f n=0   # (-co: an untracked workflow draft is scanned by the guard, so it must be counted here too)
   while IFS= read -r -d '' f; do
     [[ -f "$REPO_ROOT/$f" ]] && n=$((n + 1))
-  done < <(git -C "$REPO_ROOT" ls-files -z -co --exclude-standard -- "${LS_PATHSPECS[@]}")
+  done < <(git -C "$REPO_ROOT" ls-files -z -co -- "${LS_PATHSPECS[@]}")
   echo "$n"
 }
 # stray_actions <repo>: tracked action.yml/action.yaml (any case) OUTSIDE .github/actions. The guard

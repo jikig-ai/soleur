@@ -1534,7 +1534,7 @@ mutate_lit "C13 exclude_pull_requests dropped -> RED (the stub exits 64; the cau
 mutate_lit "C14 merge_group-history conjunct dropped (every candidate is named) -> RED (a push-only workflow is blamed)" causerow 'L15:' \
   'if has_mg_history "$w"; then' 'if true; then'
 mutate_lit "C15a total_count ignored (a zero count counts as history) -> RED" causerow 'L15:' \
-  '[[ "$n" =~ ^[0-9]+$ ]] && [[ "$n" -gt 0 ]]' 'true'
+  '[[ "$n" =~ ^[0-9]+$ ]] && [[ "$((10#$n))" -gt 0 ]]' 'true'
 mutate_lit "C15b a failed history lookup counts as history (return 1 -> return 0) -> RED" causerow 'L16:' \
   '              HIST_WARNED=1
               rm -f "$errf"

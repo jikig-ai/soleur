@@ -19,7 +19,7 @@ typed YAML values. Source claim, verified 2026-11-07 against actions/runner Temp
 per-mapping key set is built with StringComparer.OrdinalIgnoreCase, lines 180 and 307 of that
 file). So the identity of a scalar key is its source text with ASCII letters folded to upper
 case: `Fetch-Depth` and `fetch-depth` collide, `"a"` and `a` collide, `on` and `true` do not
-(two different strings to GitHub, though one bool to YAML), and the merge key `<<` is an ordinary
+(two different strings to GitHub, although PyYAML's YAML 1.1 resolver reads both as bool), and the merge key `<<` is an ordinary
 key (two of them in one mapping are a repeat). The fold is ASCII-only on purpose: Python's full
 `upper()` equates sharp-s with `SS` and dotless-i with `i`, which .NET OrdinalIgnoreCase does not.
 That text identity is only valid for keys that stay strings. GitHub first converts a PLAIN scalar
@@ -33,7 +33,9 @@ null/bool/int/float forms only, case-sensitive: `on`, `off`, `yes`, `no`, `y`, `
 STRINGS in YAML 1.2 (which is why `on:` is safe and not flagged), as are underscore integers and
 sexagesimals. The real tree has no such key; a lone numeric key is flagged although GitHub would
 accept it (deliberate over-strictness, flip evidence would be a workflow that needs one). A
-quoted or block-scalar key is not plain and is compared as text.
+quoted or block-scalar key is not plain and is compared as text. The style test cannot see an
+explicit tag or anchor, so a plain key such as `!!str 5` (a string to GitHub) is flagged too: further
+over-strictness with the same remedy, quote it.
 Stated residuals, both false-GREEN: non-ASCII case variants that OrdinalIgnoreCase equates are NOT
 flagged, and non-scalar (complex) keys are skipped, never compared. Non-scalar keys, unknown tags
 and non-plain tagged scalars make GitHub fail to LOAD a file but are outside the duplicate-key
@@ -104,8 +106,9 @@ NON_STRING_PLAIN = re.compile("|".join((
     r"[-+]?\.(?:inf|Inf|INF)",
     r"\.(?:nan|NaN|NAN)",
 )))
-# Characters that would survive GitHub's %/CR/LF escaping and still break a log line.
-CTRL = re.compile("[\u2028\u2029\u0085\x7f]")
+# Control characters left after GitHub's %/CR/LF escaping (CR/LF/tab are handled or harmless): every other
+# C0 control, DEL, and the Unicode line separators that Python and other tools treat as line breaks.
+CTRL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u0085\u2028\u2029]")
 
 LOADER = None
 

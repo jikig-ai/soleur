@@ -329,7 +329,7 @@ jobs:
               return 1
             fi
             rm -f "$errf"
-            [[ "$n" =~ ^[0-9]+$ ]] && [[ "$n" -gt 0 ]]
+            [[ "$n" =~ ^[0-9]+$ ]] && [[ "$((10#$n))" -gt 0 ]]
           }
 
           # queue_candidate_cause <pr> <enqueuedAt>: sets CAUSE_PATHS / CAUSE_LINES / CAUSE_REF / CAUSE_N when the
