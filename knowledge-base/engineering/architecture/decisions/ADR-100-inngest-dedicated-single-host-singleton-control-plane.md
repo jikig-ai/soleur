@@ -14,10 +14,12 @@ brand_survival_threshold: single-user incident
 
 > **Status `accepted`** (flipped `adopting → accepted` 2026-11-07). The Phase-4 soak (7 days,
 > per-`(function_id, startedAt-bucket)` exactly-once) was the condition set for the flip (plan
-> Phase 4.3); its reading went stale (`horizon_passed` 2026-10-06 — the heaviest slice outgrew the
-> host's page budget, so the day-7 reading is no longer takeable). ~7.5 weeks of incident-free
-> production on the dedicated host, including a live sanctioned host replace, supersedes it as
-> acceptance evidence — see the [2026-11-07 addendum](#addendum--2026-11-07-6178--flip-to-accepted).
+> Phase 4.3). The soak read clean on 2026-09-25 and 2026-09-26, qualified by unmeasured
+> new-registry functions; its horizon then passed (2026-10-06) before the flip verbs ran, so the
+> day-7 slice is no longer takeable. ~7.5 weeks of measured production on the dedicated host,
+> including a live sanctioned host replace, corroborates acceptance — with one disclosed residual:
+> the last takeable reading (2026-10-03) carried 2 unexplained multi-run groups whose attribution
+> lapsed undischarged. See the [2026-11-07 addendum](#addendum--2026-11-07-6178--flip-to-accepted).
 > Amends **ADR-030** (Inngest as durable trigger layer); does not supersede it.
 
 ## Context
@@ -1939,14 +1941,32 @@ frontmatter `status:` now read `accepted`; everything below stays as written.
   run 34947956908); `web_colocate_inngest=false` gates bootstrap on fresh web hosts
   (`cloud-init.yml`); the dedicated host runs no cloudflared; `INNGEST_BASE_URL=http://10.0.1.40:8288`
   ends the split-brain this decision was written to prevent.
-- **Why the soak condition is satisfied by other evidence.** The 7-day per-`(function_id,
-  startedAt-bucket)` exactly-once reading was the planned acceptance test; the enrolled probe
-  (`scripts/followthroughs/inngest-soak-6178.sh`) reported `horizon_passed` on 2026-10-06 — the
-  heaviest slice outgrew the host's page budget and the day-7 reading can no longer be taken.
-  Production itself is the superseding evidence: ~7.5 weeks incident-free on the dedicated host,
-  including the live sanctioned host replace of 2026-10-26 (`SOLEUR_INFRA_PULL_APPLIED version=5`
-  2026-10-26T13:44:27Z, tracked on epic #10390). A planned 7-day sample is weaker evidence than a
-  measured 7.5-week run across a host replace.
+- **Acceptance evidence.** The 7-day per-`(function_id, startedAt-bucket)` exactly-once reading
+  was the planned acceptance test, and it substantially ran: the enrolled probe
+  (`scripts/followthroughs/inngest-soak-6178.sh`) reported `UNEXPLAINED=0` on 2026-09-25 (2404
+  measured runs, comment 5839440887) and again on 2026-09-26 (2631 runs, comment 5849570153),
+  each qualified by newly-registered functions whose trigger attribution was a precondition to
+  flipping (2, later 4). That attribution and the flip verbs never ran, and the probe reported
+  `horizon_passed` on 2026-10-06 — the heaviest slice outgrew the host's page budget and the
+  day-7 reading can no longer be taken. Measured production is the corroborating evidence:
+  ~7.5 weeks on the dedicated host including the live sanctioned host replace of 2026-10-26
+  (`SOLEUR_INFRA_PULL_APPLIED version=5` 2026-10-26T13:44:27Z, tracked on epic #10390) —
+  a stronger acceptance signal than the planned 7-day sample.
+- **Disclosed residual — the terminal reading was NOT clean.** The last takeable full reading
+  (2026-10-03, comment 5973167424: `SOAK NOT CLEAN`, qualified) carried `UNEXPLAINED=2` multi-run
+  groups — bucket 1492102 (function `26e6836b`, ×2 within 2026-09-27T15:20–15:40Z, ~25 min after
+  the #8754 firewall-replace host birth, sharing the function id and catch-up shape of two
+  groups the probe had already attributed to resume catch-up — a hypothesis, never recorded as
+  attribution) and bucket 1492317 (function `4b7b1e68`, ×2 within 2026-09-30T15:00–15:20Z) —
+  plus 4 unmeasured functions. The probe's own operator verb was to attribute each group
+  against `routine_runs` before any flip; that investigation lapsed undischarged when the
+  horizon passed, so the groups were never established benign or malignant. They are recorded
+  here rather than smoothed into "incident-free": the flip rests on the two clean readings plus
+  ~7.5 weeks of production, and the post-horizon window is unmeasured — the honest limit of
+  this record.
+- **Cutover sequence precision.** "Cutover completed 2026-09-15" above anchors on the
+  `op=execute` run 34947956908; the full sequence was `op=execute` (34947956908) → the FSM
+  `done` write under `op=arm` (34948112813) → `op=verify` (34974655656).
 - **Close-out state.** The four `inngest-cutover-pre-*` rollback snapshots were verified
   released 2026-11-07 (all four ids answer 404 image-not-found on the Hetzner API). HA is
   re-filed as #6185 (open); nothing rides the ~2026-11-23 window — a failover pair is
