@@ -18,6 +18,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { KEY_RE, LegalTextError, TEXT_HASH_RE, parseLegalText } from "@/server/legal-acceptance/canonical";
 import { stripHclComments } from "../lib/terraform-hcl-blocks";
+import { REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
 
 const WEB = path.join(__dirname, "../..");
 const REPO = path.join(WEB, "../..");
@@ -601,5 +602,34 @@ describe("the minted token (legal-acceptance-secrets.tf) against the route bound
     expect.hasAssertions();
     expect(routeExports(ROUTE_SRC), "the verify route gained an export; a write path or a wider response re-triggers the ADR-320 decision-4 review and moves LEGAL_ACCEPTANCE_VERIFY_TOKEN out of Terraform").toEqual(["GET", "dynamic"]);
     expect(routeExports(`${ROUTE_SRC}\nexport async function POST() {}`)).toContain("POST");
+  });
+});
+
+// ── the note limit (founder-acceptance-record states it; #12197) ─────────────────────────────────────────────────
+
+/** Both note-limit literals of migration 184, comments stripped: the `requested_edit` CHECK upper bound and the RPC argument guard. */
+export function extractSqlNoteLimits(sql: string): { check: number[]; rpc: number[] } {
+  const code = sql
+    .split("\n")
+    .map((l) => l.replace(/--.*$/, ""))
+    .join("\n");
+  const check = [...code.matchAll(/char_length\(requested_edit\)\s+BETWEEN\s+1\s+AND\s+(\d+)/g)].map((m) => Number(m[1]));
+  const rpc = [...code.matchAll(/char_length\(p_requested_edit\)\s*>\s*(\d+)/g)].map((m) => Number(m[1]));
+  return { check: nonEmpty("SQL requested_edit CHECK upper bound", check), rpc: nonEmpty("SQL p_requested_edit RPC guard", rpc) };
+}
+
+describe("note limit (REQUEST_CHANGES_MAX against migration 184)", () => {
+  it("the CHECK upper bound and the RPC guard are both the TypeScript limit", () => {
+    expect.hasAssertions();
+    const { check, rpc } = extractSqlNoteLimits(M184);
+    expect(check).toEqual([REQUEST_CHANGES_MAX]);
+    expect(rpc).toEqual([REQUEST_CHANGES_MAX]);
+  });
+
+  it("the extractor sees a drift in either literal, and an empty extraction throws", () => {
+    expect.hasAssertions();
+    expect(extractSqlNoteLimits(M184.replace("AND 1000)", "AND 1001)")).check).not.toEqual([REQUEST_CHANGES_MAX]);
+    expect(extractSqlNoteLimits(M184.replace("p_requested_edit) > 1000", "p_requested_edit) > 999")).rpc).not.toEqual([REQUEST_CHANGES_MAX]);
+    expect(() => extractSqlNoteLimits("-- char_length(requested_edit) BETWEEN 1 AND 1000 only in a comment\nselect 1;")).toThrow(/found nothing/);
   });
 });

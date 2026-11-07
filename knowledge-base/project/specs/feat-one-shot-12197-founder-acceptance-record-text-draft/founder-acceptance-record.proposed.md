@@ -1,6 +1,7 @@
 ---
 version: 2026-11-07
 ---
+<!-- SUPERSEDED 2026-11-07: the committed file apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md is the only authority; this snapshot is history. -->
 How your decisions are recorded and kept
 
 This text describes how Soleur records and keeps the decisions you give on legal texts. Saying Yes here records that you acknowledge this description. Your answer covers this text only: it does not accept any other text and is not given for any other purpose. This record applies to whoever signs in and gives an answer here.

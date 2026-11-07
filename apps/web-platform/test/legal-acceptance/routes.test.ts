@@ -102,7 +102,7 @@ vi.mock("@/server/legal-acceptance/reauth", async (orig) => {
       real.sendReauthCode({ ...deps, sendFailures: h.failures.value as InstanceType<typeof real.SendFailureMemory> }, a),
   };
 });
-// The registry directory is a fixture dir (the real one holds no legal text yet).
+// The registry directory is a fixture dir, so these route tests do not depend on whatever the real texts directory holds.
 vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
   const real = await orig<typeof import("@/server/legal-acceptance/canonical")>();
   return { ...real, getLegalText: (key: string) => real.getLegalText(key, h.texts.dir) };
