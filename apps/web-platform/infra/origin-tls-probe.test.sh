@@ -105,7 +105,8 @@ stop_srv
 # --- canary mode (ADR-321 ORIGIN-TLS CANARY rule) ---
 # The header name is pinned against the Terraform rule, so the probe and the rule cannot drift apart.
 TF_RULES="$SCRIPT_DIR/seo-config-rules.tf"
-if grep -v '^[[:space:]]*#' "$TF_RULES" | grep -qF 'http.request.headers[\"x-origin-tls-probe\"]'; then pass "C0 the rule matches the header the probe sends (x-origin-tls-probe)"; else fail "C0 header name in seo-config-rules.tf does not match the probe"; fi
+TF_RULES_CODE="$(grep -v '^[[:space:]]*#' "$TF_RULES" || true)"
+if grep -qF 'http.request.headers[\"x-origin-tls-probe\"]' <<<"$TF_RULES_CODE"; then pass "C0 the rule matches the header the probe sends (x-origin-tls-probe)"; else fail "C0 header name in seo-config-rules.tf does not match the probe"; fi
 start_srv 200 TLSv1.3 || exit 1
 run;                    expect_rc "C1 default mode, TLS header" 0 "result=TLS-ON-ORIGIN-HOP"
 [ "$(grep -c 'x-origin-tls-probe=1' "$HDRLOG")" -eq 0 ] && pass "C1b default mode does NOT send the canary header" || fail "C1b default mode sent the canary header: $(cat "$HDRLOG")"
