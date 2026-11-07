@@ -383,10 +383,11 @@ if grep -qE '(DOCKER_CONFIG|HOME)=[^ ]' "$SUPA_LOCAL"; then fail "wiring:supa-no
 else pass "wiring:supa-no-cred-strip"; fi
 
 # run-all's floor must equal the post-addition suite count (16 on main + this
-# suite = 17) or the new guard is itself silently deletable. Whole-line
-# anchor: `MIN_SUITES=170` must not satisfy it.
-if grep -qxF 'MIN_SUITES=17' "$RUN_ALL"; then pass "wiring:min-suites-17"
-else fail "wiring:min-suites-17" "run-all.sh MIN_SUITES is not 17"; fi
+# suite = 17; 18 with test-check-workflow-duplicate-keys.sh, #12283) or the
+# new guard is itself silently deletable. Whole-line anchor: `MIN_SUITES=180`
+# must not satisfy it.
+if grep -qxF 'MIN_SUITES=18' "$RUN_ALL"; then pass "wiring:min-suites-18"
+else fail "wiring:min-suites-18" "run-all.sh MIN_SUITES is not 18"; fi
 
 # The workflow's own pull_request.paths must list the helper and this suite —
 # a helper-only edit otherwise never exercises the live wiring (the wrapped

@@ -16,6 +16,11 @@
 #      serves canned GraphQL JSON, and EXECUTE it for: head entry old -> files; entry deeper than
 #      the build window old -> does NOT file; young -> no file; empty queue -> no file; gh error ->
 #      the step fails loudly; existing open issue -> deduped.
+# 3. CAUSE NAMING (#12283): the `gh` stub also serves `api -X GET repos/o/r/actions/runs` from canned run JSON
+#    synthesized from the live shape, and APPLIES event, the created range and per_page/--paginate (a stub
+#    that ignored the filters would make every cause row vacuous; the L9 row proves the stub itself filters
+#    and exits 64 on an unexpected request). Rows L1-L14 drive the real run body; mutation rows C1-C12 prove
+#    each load-bearing literal of `queue_candidate_cause`.
 # Every structural/behavioural arm is proven live by a mutation row run against a SANDBOX COPY of
 # the workflow (the mutation is diffed against the pristine copy first, then the guard must go
 # RED for the expected reason), with an unmutated sandbox copy as the positive control. The
@@ -31,7 +36,7 @@ TF_REAL="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
 SANDBOX_PATH="/usr/local/bin:/usr/bin:/bin"
 
 # EXACT number of PASS verdicts a healthy run records. Update deliberately when a row is added.
-EXPECTED_PASSES=61
+EXPECTED_PASSES=96
 
 passes=0; fails=0; FAILED=()
 pass() { passes=$((passes + 1)); echo "  PASS: $1"; }
@@ -146,8 +151,8 @@ structural_check() {
   if ! jq -e 'any(.runs[]; test("select\\(\\.position <= \\$maxpos\\)") and test("--argjson maxpos \"\\$MAX_ENTRIES_TO_BUILD\""))' <<<"$f" >/dev/null; then
     REASON="position filter (position <= \$maxpos from MAX_ENTRIES_TO_BUILD) missing from the run body"; return 1
   fi
-  jq -e '.permissions == {"contents":"read","issues":"write"} and (.job_permissions == null)' <<<"$f" >/dev/null \
-    || { REASON="permissions are not exactly contents:read + issues:write"; return 1; }
+  jq -e '.permissions == {"contents":"read","issues":"write","actions":"read"} and (.job_permissions == null)' <<<"$f" >/dev/null \
+    || { REASON="permissions are not exactly contents:read + issues:write + actions:read"; return 1; }
   jq -e '.continue_on_error | length == 0' <<<"$f" >/dev/null \
     || { REASON="continue-on-error present: $(jq -c .continue_on_error <<<"$f")"; return 1; }
   jq -e '.has_expr_in_run | not' <<<"$f" >/dev/null || { REASON="a run body interpolates \${{ }}"; return 1; }
@@ -188,6 +193,13 @@ cat > "$BIN/gh" <<'STUB'
 #                 the workflow must pin it, it may not lean on gh's default), --label, --limit and --json
 #                 (field projection), then runs the workflow's own --jq expression on the result.
 #   issue create  records the title, labels and body.
+#   api -X GET repos/<GH_REPO>/actions/runs   serves GH_STUB_RUNS (a raw array of runs) and APPLIES the request:
+#                 event=<push|merge_group> filters on .event, created=>=<iso> filters on .created_at (range),
+#                 per_page=N sets the page size (capped by GH_STUB_PAGE_CAP to force several pages), and
+#                 --paginate emits ONE {total_count, workflow_runs:[...]} object per page (without it only page
+#                 1 is served), exactly as `gh api --paginate` prints them. exclude_pull_requests is REQUIRED.
+#                 ANY other shape (other verb, endpoint, field, event, created form, missing field) exits 64, so
+#                 a workflow that drops a filter fails loudly here instead of being served unfiltered data.
 echo "gh $*" >> "$GH_STUB_LOG"
 case "$1 $2" in
   "api graphql")
@@ -215,6 +227,41 @@ case "$1 $2" in
           | (if $num then . else del(.pullRequest.number) end)
           | (if $url then . else del(.pullRequest.url) end)))
         end)' "$GH_STUB_GRAPHQL" ;;
+  "api -X")
+    shift 2
+    [[ "${1-}" == "GET" ]] || { echo "stub gh: api -X needs GET (got '${1-}')" >&2; exit 64; }
+    shift
+    endpoint=""; paginate=0; event=""; created=""; per_page=""; excl=""
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --paginate) paginate=1; shift ;;
+        -f) case "${2-}" in
+              event=*)   event="${2#event=}" ;;
+              created=*) created="${2#created=}" ;;
+              *) echo "stub gh: unexpected -f field '${2-}'" >&2; exit 64 ;;
+            esac; shift 2 ;;
+        -F) case "${2-}" in
+              per_page=*) per_page="${2#per_page=}" ;;
+              exclude_pull_requests=*) excl="${2#exclude_pull_requests=}" ;;
+              *) echo "stub gh: unexpected -F field '${2-}'" >&2; exit 64 ;;
+            esac; shift 2 ;;
+        repos/*) endpoint="$1"; shift ;;
+        *) echo "stub gh: unexpected api argument '$1'" >&2; exit 64 ;;
+      esac
+    done
+    [[ "$endpoint" == "repos/${GH_REPO}/actions/runs" ]] || { echo "stub gh: unexpected endpoint '$endpoint'" >&2; exit 64; }
+    case "$event" in push|merge_group) : ;; *) echo "stub gh: unexpected event '$event'" >&2; exit 64 ;; esac
+    created_re='^>=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+    [[ "$created" =~ $created_re ]] || { echo "stub gh: created must be a >=<iso> range (got '$created')" >&2; exit 64; }
+    [[ "$per_page" =~ ^[0-9]+$ && "$per_page" -ge 1 && "$per_page" -le 100 ]] || { echo "stub gh: per_page must be 1..100 (got '$per_page')" >&2; exit 64; }
+    [[ "$excl" == "true" ]] || { echo "stub gh: exclude_pull_requests=true is required (got '$excl')" >&2; exit 64; }
+    if [[ "${GH_STUB_RUNS_FAIL:-0}" == "1" ]]; then printf 'stub: runs 502 caf\303\251 bad gateway\n' >&2; exit 1; fi
+    size="$per_page"; [[ -n "${GH_STUB_PAGE_CAP:-}" && "$GH_STUB_PAGE_CAP" -lt "$size" ]] && size="$GH_STUB_PAGE_CAP"
+    jq -c --arg e "$event" --arg since "${created#>=}" --argjson size "$size" --argjson pg "$paginate" '
+      (map(select(.event == $e and .created_at >= $since)) | sort_by(.created_at) | reverse) as $f
+      | ([range(0; ($f | length); $size)] | if length == 0 then [0] else . end) as $starts
+      | ($starts | if $pg == 1 then . else .[0:1] end)[]
+      | {total_count: ($f | length), workflow_runs: $f[.:(. + $size)]}' "${GH_STUB_RUNS:?stub gh: GH_STUB_RUNS unset}" ;;
   "label create")
     if [[ "${GH_STUB_LABEL_FAIL:-0}" == "1" ]]; then echo "stub: label already exists" >&2; exit 1; fi
     exit 0 ;;
@@ -273,7 +320,8 @@ case "$1 $2" in
       case "$1" in
         --title) echo "TITLE:$2" >> "$GH_STUB_LOG.create"; shift 2 ;;
         --label) echo "LABEL:$2" >> "$GH_STUB_LOG.create"; shift 2 ;;
-        --body)  printf '%s' "$2" > "$GH_STUB_LOG.body"; shift 2 ;;
+        --body)  printf '%s' "$2" > "$GH_STUB_LOG.body"
+                 printf '%s' "$2" > "$GH_STUB_LOG.body.$(grep -c '^TITLE:' "$GH_STUB_LOG.create")"; shift 2 ;;
         *) shift ;;
       esac
     done ;;
@@ -292,6 +340,9 @@ node() {
 queue_json() { jq -s '{data:{repository:{mergeQueue:{entries:{nodes:.}}}}}'; }
 
 CASE_RC=0; CASE_CREATES=0; CASE_TITLES=""; CASE_LABELS=""; CASE_BODY=""
+# Actions-runs inputs for run_case (reset by reset_runs): the raw runs file, a forced list failure, a page cap.
+CASE_RUNS=""; CASE_RUNS_FAIL=0; CASE_PAGE_CAP=""
+reset_runs() { CASE_RUNS=""; CASE_RUNS_FAIL=0; CASE_PAGE_CAP=""; }
 # issue <number> <state> <label> <title>: one raw `gh issue list` row (labels as GitHub returns them)
 issue() {
   jq -n --argjson n "$1" --arg s "$2" --arg l "$3" --arg t "$4" \
@@ -307,15 +358,22 @@ run_case() {
   jq -r '.steps[] | select(.name | test("^Detect stalled")) | .run' <<<"$f" > "$body"
   thr="$(jq -r '.env.STALL_THRESHOLD_MINUTES' <<<"$f")"
   maxpos="$(jq -r '.env.MAX_ENTRIES_TO_BUILD // "999"' <<<"$f")"
-  rm -f "$WORK/gh.log" "$WORK/gh.log.create" "$WORK/gh.log.body"
+  rm -f "$WORK/gh.log" "$WORK/gh.log.create" "$WORK/gh.log.body" "$WORK"/gh.log.body.*
+  local runs="$CASE_RUNS"
+  if [[ -z "$runs" ]]; then
+    runs="$WORK/no-runs.json"
+    assert_fixture_dir "$runs"
+    printf '[]' > "$runs"
+  fi
   if [[ -z "$issues" ]]; then
     issues="$WORK/no-issues.json"
     assert_fixture_dir "$issues"
     printf '[]' > "$issues"
   fi
-  env -i PATH="$BIN:$SANDBOX_PATH" HOME="$WORK" GH_REPO="o/r" GH_TOKEN=x \
+  env -i PATH="$BIN:$SANDBOX_PATH" HOME="$WORK" TMPDIR="$WORK" GH_REPO="o/r" GH_TOKEN=x \
     STALL_THRESHOLD_MINUTES="$thr" MAX_ENTRIES_TO_BUILD="$maxpos" \
     GH_STUB_LOG="$WORK/gh.log" GH_STUB_GRAPHQL="$gql" GH_STUB_FAIL="$failgh" GH_STUB_ISSUES="$issues" GH_STUB_LABEL_FAIL="$labelfail" \
+    GH_STUB_RUNS="$runs" GH_STUB_RUNS_FAIL="$CASE_RUNS_FAIL" GH_STUB_PAGE_CAP="$CASE_PAGE_CAP" \
     bash "$body" >"$WORK/out.txt" 2>"$WORK/err.txt"
   CASE_RC=$?
   CASE_CREATES="$(grep -c '^TITLE:' "$WORK/gh.log.create" 2>/dev/null || true)"; CASE_CREATES="${CASE_CREATES:-0}"
@@ -530,10 +588,313 @@ drain_check() {
   return 0
 }
 
+# ---- stall-cause naming harness (#12283) ----------------------------------------------------------
+# Canned runs are SYNTHESIZED from the live shape (id, name, path, workflow_id, event, head_branch, head_sha,
+# status, conclusion, created_at, html_url; read-only probe of run 42336368201 on 2026-11-07), never copied:
+# the ids, shas and workflow ids are invented. A loaded workflow shows its own `name:`; a workflow file that
+# could not be loaded shows its PATH as the name (the `name == path` signature this feature keys on).
+WF_PATH_CI=".github/workflows/ci.yml"
+SHA0="0000000000000000000000000000000000000a00"   # a superseded temp ref's sha
+SHA1="1111111111111111111111111111111111111b11"   # the latest temp ref's sha
+qref() { printf 'gh-readonly-queue/main/pr-%s-%s' "$1" "$2"; }
+
+# mkrun <id> <event> <name> <path> <workflow_id> <branch> <conclusion|""> <minutes-ago>
+mkrun() {
+  jq -n --argjson id "$1" --arg ev "$2" --arg name "$3" --arg path "$4" --argjson wid "$5" --arg br "$6" \
+    --arg c "$7" --arg t "$(iso_ago "$8")" '
+    {id:$id, name:$name, path:$path, workflow_id:$wid, event:$ev, head_branch:$br,
+     head_sha:"2222222222222222222222222222222222222c22", run_number:1, run_attempt:1,
+     status:(if $c == "" then "in_progress" else "completed" end),
+     conclusion:(if $c == "" then null else $c end),
+     created_at:$t, updated_at:$t, html_url:("https://github.com/o/r/actions/runs/\($id)"), pull_requests:[]}'
+}
+# mg_noise <branch> <minutes-ago> <id-base>: the six OTHER workflows that DID run on merge_group for the ref
+# (the real incident: only ci.yml was missing, so "no merge_group run at all" never held).
+mg_noise() {
+  local b="$1" m="$2" i="$3"
+  mkrun $((i + 1)) merge_group "PR quality guards" .github/workflows/pr-quality-guards.yml 201 "$b" success "$m"
+  mkrun $((i + 2)) merge_group "Secret scan" .github/workflows/secret-scan.yml 202 "$b" success "$m"
+  mkrun $((i + 3)) merge_group "Vendor pin verify" .github/workflows/vendor-pin-verify.yml 203 "$b" success "$m"
+  mkrun $((i + 4)) merge_group "Tenant integration" .github/workflows/tenant-integration.yml 204 "$b" "" "$m"
+  mkrun $((i + 5)) merge_group "Apply sentry infra" .github/workflows/apply-sentry-infra.yml 205 "$b" success "$m"
+  mkrun $((i + 6)) merge_group "Merge queue CLA synthetics" .github/workflows/merge-queue-cla-synthetics.yml 206 "$b" success "$m"
+}
+# the real-incident run set for PR <pr> enqueued 50 minutes ago (queue entry built by the caller)
+incident_runs() {
+  local pr="$1" ref ref0
+  ref="$(qref "$pr" "$SHA1")"; ref0="$(qref "$pr" "$SHA0")"
+  mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 49          # THE failed load (name == path)
+  mg_noise "$ref" 48 9100
+  mkrun 9000 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref0" failure 53         # a superseded temp ref of the same PR
+  mg_noise "$ref0" 53 9200
+  mkrun 9300 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$(qref 999 "$SHA1")" failure 49   # an unrelated PR's ref
+  mkrun 9302 push .github/workflows/other.yml .github/workflows/other.yml 170 main failure 49  # not a queue ref
+  mkrun 9400 push .github/workflows/old.yml .github/workflows/old.yml 150 "$ref" failure 56    # before the window
+}
+
+title_n() { grep '^TITLE:' "$WORK/gh.log.create" 2>/dev/null | sed -n "${1}p" || true; }
+body_n()  { cat "$WORK/gh.log.body.$1" 2>/dev/null || true; }
+THR_REAL="$(python3 "$HELPER" wf "$WF_REAL" | jq -r '.env.STALL_THRESHOLD_MINUTES')"
+
+# title_anchors_ok <title-line> <pr>: BOTH consumers of the filed title still match it: the dedupe anchor
+# (a title that STARTS WITH `merge-queue stall: PR #N pending`) and the drain capture.
+title_anchors_ok() {
+  local t="${1#TITLE:}" pr="$2" got
+  [[ "$t" == "merge-queue stall: PR #${pr} pending"* ]] || return 1
+  got="$(printf '%s\n' "$t" | jq -Rr 'try (capture("PR #(?<pr>[0-9]+) pending") | .pr) catch ""')"
+  [[ "$got" == "$pr" ]]
+}
+# check_named <label> <entry-index> <pr> <path> <run-id>; check_suspected <label> <entry-index> <pr>
+check_named() {
+  local l="$1" n="$2" pr="$3" path="$4" rid="$5" t b
+  t="$(title_n "$n")"; b="$(body_n "$n")"
+  title_anchors_ok "$t" "$pr" || { REASON="$l: entry $n title no longer matches the dedupe/drain anchor ('$t')"; return 1; }
+  [[ "$t" == "TITLE:merge-queue stall: PR #${pr} pending >${THR_REAL}m (cause: load failure suspected in ${path}; duplicate/invalid key is the usual cause)" ]] \
+    || { REASON="$l: entry $n title lacks the named-cause suffix for ${path} ('$t')"; return 1; }
+  [[ "$b" == "CAUSE (observed)"* ]] || { REASON="$l: entry $n body does not open with the CAUSE (observed) paragraph"; return 1; }
+  [[ "$b" == *"${path}"* && "$b" == *"https://github.com/o/r/actions/runs/${rid}"* ]] \
+    || { REASON="$l: entry $n body lacks the named path or the failed run URL"; return 1; }
+  [[ "$b" == *'python3 .github/scripts/check-workflow-duplicate-keys.py'* ]] \
+    || { REASON="$l: entry $n body lacks the agent-runnable duplicate-key check"; return 1; }
+  [[ "$b" == *"SUSPECTED merge-queue stall (needs verification)"* && "$b" == *"Triage (every step"* ]] \
+    || { REASON="$l: entry $n body lost the existing suspected/triage text"; return 1; }
+  return 0
+}
+check_suspected() {
+  local l="$1" n="$2" pr="$3" t b
+  t="$(title_n "$n")"; b="$(body_n "$n")"
+  title_anchors_ok "$t" "$pr" || { REASON="$l: entry $n title no longer matches the dedupe/drain anchor ('$t')"; return 1; }
+  [[ "$t" == "TITLE:merge-queue stall: PR #${pr} pending >${THR_REAL}m (suspected, verify first)" ]] \
+    || { REASON="$l: entry $n was given a cause it has no evidence for ('$t')"; return 1; }
+  [[ "$b" == "SUSPECTED merge-queue stall (needs verification)"* && "$b" != *"CAUSE (observed)"* ]] \
+    || { REASON="$l: entry $n body is not the unchanged suspected form"; return 1; }
+  return 0
+}
+# one_entry <pr> <runs-array-file>: queue = PR at position 1, enqueued 50 minutes ago; runs from the file.
+one_entry() {
+  local wf="$1" pr="$2" rf="$3" g="$WORK/q.json"
+  { node 1 50 "$pr"; } | queue_json > "$g"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"
+}
+
+lrow1() { # the real incident: six other merge_group runs, a stale superseded ref, noise -> ci.yml named
+  local wf="$1" rf="$WORK/runs.json"; REASON=""
+  incident_runs 101 | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L1: incident did not file exactly one issue (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_named L1 1 101 "$WF_PATH_CI" 9001 || return 1
+  local b; b="$(body_n 1)"
+  [[ "$b" != *"old.yml"* && "$b" != *"other.yml"* && "$b" != *"/runs/9000"* && "$b" != *"/runs/9300"* ]] \
+    || { REASON="L1: the cause names more than the one failed load on the latest ref (a run outside the created window, off-prefix, or stale)"; return 1; }
+  return 0
+}
+lrow2() { # no failed push run at all -> unchanged suspected form
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 9001 push CI "$WF_PATH_CI" 111 "$ref" success 49; mg_noise "$ref" 48 9100; } | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L2: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L2 1 101
+}
+lrow3() { # failed push run, but a merge_group run of the SAME workflow exists -> suspected
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 49; mg_noise "$ref" 48 9100
+    mkrun 9150 merge_group CI "$WF_PATH_CI" 111 "$ref" "" 48; } | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L3: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L3 1 101
+}
+lrow4() { # stale failure on a superseded ref, the LATEST ref has no failed push run -> suspected
+  local wf="$1" rf="$WORK/runs.json" ref ref0; REASON=""; ref="$(qref 101 "$SHA1")"; ref0="$(qref 101 "$SHA0")"
+  { mkrun 9000 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref0" failure 53; mg_noise "$ref0" 53 9200
+    mkrun 9700 merge_group "Merge queue CLA synthetics" .github/workflows/merge-queue-cla-synthetics.yml 206 "$ref" success 49
+  } | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L4: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L4 1 101 || { REASON="${REASON} (a stale failure on a superseded ref named a cause for the latest ref)"; return 1; }
+}
+lrow5() { # PR 12 must not read PR 123's refs (prefix has the trailing dash)
+  local wf="$1" rf="$WORK/runs.json"; REASON=""
+  { mkrun 9800 merge_group "Merge queue CLA synthetics" .github/workflows/merge-queue-cla-synthetics.yml 206 "$(qref 12 "$SHA0")" success 49
+    mkrun 9801 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$(qref 123 "$SHA1")" failure 48
+  } | jq -s '.' > "$rf"
+  one_entry "$wf" 12 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L5: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L5 1 12 || { REASON="${REASON} (pr-12 collided with pr-123: the prefix lacks its trailing dash)"; return 1; }
+}
+lrow6() { # the runs list fails -> suspected, ONE bounded ASCII warning, rc 0
+  local wf="$1" rf="$WORK/runs.json" w n; REASON=""
+  incident_runs 101 | jq -s '.' > "$rf"
+  CASE_RUNS_FAIL=1; one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L6: a failed runs lookup must not fail the step (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L6 1 101 || return 1
+  n="$(cat "$WORK/out.txt" "$WORK/err.txt" | grep -c 'could not read the Actions runs' || true)"
+  [[ "$n" -eq 1 ]] || { REASON="L6: expected exactly one could-not-read warning, got $n"; return 1; }
+  w="$(cat "$WORK/out.txt" "$WORK/err.txt" | grep 'could not read the Actions runs' | head -n 1)"
+  [[ "$w" == "::warning::"* && "${#w}" -le 400 ]] || { REASON="L6: the warning is not a bounded ::warning:: (len ${#w})"; return 1; }
+  ! LC_ALL=C grep -qP '[^\x20-\x7e]' <<<"$w" || { REASON="L6: the warning carries non-ASCII bytes from the API error"; return 1; }
+  return 0
+}
+lrow7() { # two stalled entries: the cause must not leak between iterations, in either order
+  local wf="$1" rf="$WORK/runs.json" g="$WORK/q.json" ref1 ref2 ok; REASON=""
+  ref1="$(qref 101 "$SHA1")"; ref2="$(qref 102 "$SHA1")"
+  # (a) only the SECOND entry carries the signature
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref2" failure 49; mg_noise "$ref2" 48 9100
+    mg_noise "$ref1" 48 9300; } | jq -s '.' > "$rf"
+  { node 1 50 101; node 2 50 102; } | queue_json > "$g"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 2 ]] || { REASON="L7: two stalled entries did not file two issues (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L7 1 101 || return 1
+  check_named L7 2 102 "$WF_PATH_CI" 9001 || return 1
+  # (b) only the FIRST entry carries it: a cause variable that is not reset per entry leaks into the second
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref1" failure 49; mg_noise "$ref1" 48 9100
+    mg_noise "$ref2" 48 9300; } | jq -s '.' > "$rf"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 2 ]] || { REASON="L7: (b) two stalled entries did not file two issues"; return 1; }
+  check_named L7 1 101 "$WF_PATH_CI" 9001 || return 1
+  check_suspected L7 2 102 || { REASON="${REASON} (the first entry's cause leaked into the second: the per-entry reset is missing)"; return 1; }
+}
+lrow8() { # a CANCELLED push run is not a load failure
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" cancelled 49; mg_noise "$ref" 48 9100; } | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L8: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L8 1 101
+}
+lrow10() { # a failed push run of a LOADED workflow (name differs from its path), no merge_group run of it -> suspected
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 9001 push "Lint (push only)" .github/workflows/lint.yml 160 "$ref" failure 49; mg_noise "$ref" 48 9100; } | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L10: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L10 1 101 || { REASON="${REASON} (a legitimately failing push-only workflow was blamed as a load failure: the name == path gate is missing)"; return 1; }
+}
+lrow11() { # a SUCCESS push run is not a load failure
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" success 49; mg_noise "$ref" 48 9100; } | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L11: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L11 1 101
+}
+lrow12() { # two-or-more-page --paginate shape: the broken run is on page 2
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 49
+    mkrun 9611 push "Other A" .github/workflows/other-a.yml 181 "$ref" success 48
+    mkrun 9612 push "Other B" .github/workflows/other-b.yml 182 "$ref" success 47
+    mkrun 9613 push "Other C" .github/workflows/other-c.yml 183 "$ref" success 46
+    mg_noise "$ref" 45 9100; } | jq -s '.' > "$rf"
+  CASE_PAGE_CAP=2; one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L12: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_named L12 1 101 "$WF_PATH_CI" 9001 || { REASON="${REASON} (a run on page 2 of a paginated list was not read)"; return 1; }
+}
+lrow13() { # a deduped entry makes ZERO actions/runs calls (cause form and old form both dedupe)
+  local wf="$1" rf="$WORK/runs.json" g="$WORK/q.json" iss="$WORK/issues.json" t n; REASON=""
+  incident_runs 101 | jq -s '.' > "$rf"
+  for t in "merge-queue stall: PR #101 pending >45m (cause: load failure suspected in .github/workflows/ci.yml; duplicate/invalid key is the usual cause)" \
+           "merge-queue stall: PR #101 pending >45m (suspected, verify first)"; do
+    { node 1 50 101; } | queue_json > "$g"
+    { issue 9 OPEN merge-queue-stall "$t"; } | issues_json > "$iss"
+    CASE_RUNS="$rf"; run_case "$wf" "$g" 0 "$iss"; reset_runs
+    n="$(grep -c 'actions/runs' "$WORK/gh.log" 2>/dev/null || true)"
+    [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 ]] || { REASON="L13: an open stall issue did not dedupe (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+    [[ "${n:-0}" -eq 0 ]] || { REASON="L13: a deduped entry still made $n actions/runs call(s) (the lookup runs before the dedupe check)"; return 1; }
+  done
+  return 0
+}
+lrow14() { # merge_group run whose path carries a ref suffix but the SAME workflow_id -> loaded, suspected
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 49; mg_noise "$ref" 48 9100
+    mkrun 9150 merge_group CI "${WF_PATH_CI}@refs/heads/${ref}" 111 "$ref" "" 48; } | jq -s '.' > "$rf"
+  one_entry "$wf" 101 "$rf"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L14: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected L14 1 101 || { REASON="${REASON} (the join is on path, not workflow_id)"; return 1; }
+}
+# L9: the stub's own filters (the controls that make every L row non-vacuous). Runs against the stub only.
+lrow9() {
+  local pf="$WORK/l9-push.json" mf="$WORK/l9-mixed.json" ref rc n
+  REASON=""; ref="$(qref 101 "$SHA1")"
+  { mkrun 1 push CI "$WF_PATH_CI" 111 "$ref" failure 49; mkrun 2 push B b.yml 112 "$ref" success 48; mkrun 3 push C c.yml 113 "$ref" success 47; } | jq -s '.' > "$pf"
+  { mkrun 1 push CI "$WF_PATH_CI" 111 "$ref" failure 49; mkrun 2 push B b.yml 112 "$ref" success 48; mkrun 3 push C c.yml 113 "$ref" success 47
+    mkrun 4 merge_group D d.yml 114 "$ref" success 46; mkrun 5 merge_group E e.yml 115 "$ref" success 45; } | jq -s '.' > "$mf"
+  stub_runs() { # <runs-file> <page-cap> <args...>
+    local f="$1" cap="$2"; shift 2
+    env -i PATH="$BIN:$SANDBOX_PATH" GH_REPO=o/r GH_STUB_LOG="$WORK/l9.log" GH_STUB_RUNS="$f" GH_STUB_PAGE_CAP="$cap" \
+      gh api -X GET repos/o/r/actions/runs "$@"
+  }
+  local base=(-F per_page=100 -F exclude_pull_requests=true) since60 since485 future
+  since60="$(iso_ago 60)"; since485="$(date -u -d '-2910 seconds' +%Y-%m-%dT%H:%M:%SZ)"   # 48.5 min ago: 30 s clear of both neighbours
+  future="$(date -u -d '+10 minutes' +%Y-%m-%dT%H:%M:%SZ)"
+  count() { jq -s '[.[].workflow_runs[]] | length'; }
+  # the right event serves its rows; the WRONG event serves nothing (the filter is applied, not ignored)
+  n="$(stub_runs "$pf" "" --paginate -f event=push -f created=">=$since60" "${base[@]}" | count)"
+  [[ "$n" == 3 ]] || { REASON="L9: stub did not serve the 3 push runs for event=push (got $n)"; return 1; }
+  n="$(stub_runs "$pf" "" --paginate -f event=merge_group -f created=">=$since60" "${base[@]}" | count)"
+  [[ "$n" == 0 ]] || { REASON="L9: stub ignored event= (a wrong event served $n runs)"; return 1; }
+  n="$(stub_runs "$mf" "" --paginate -f event=merge_group -f created=">=$since60" "${base[@]}" | jq -s '[.[].workflow_runs[] | select(.event != "merge_group")] | length')"
+  [[ "$n" == 0 ]] || { REASON="L9: stub served non-merge_group rows for event=merge_group"; return 1; }
+  # the created RANGE is applied: a bound in the future serves nothing, a tight bound drops the older rows
+  n="$(stub_runs "$pf" "" --paginate -f event=push -f created=">=$future" "${base[@]}" | count)"
+  [[ "$n" == 0 ]] || { REASON="L9: stub ignored the created= range (a future bound served $n runs)"; return 1; }
+  n="$(stub_runs "$pf" "" --paginate -f event=push -f created=">=$since485" "${base[@]}" | count)"
+  [[ "$n" == 2 ]] || { REASON="L9: stub did not apply the created= lower bound (>=48.5m ago served $n, wanted 2)"; return 1; }
+  # per_page and --paginate: one object per page with a cap; page 1 only without --paginate
+  n="$(stub_runs "$pf" 2 --paginate -f event=push -f created=">=$since60" "${base[@]}" | jq -s 'length')"
+  [[ "$n" == 2 ]] || { REASON="L9: --paginate with a 2-run page cap did not emit 2 page objects (got $n)"; return 1; }
+  n="$(stub_runs "$pf" 2 -f event=push -f created=">=$since60" "${base[@]}" | jq -s '[length, (.[0].workflow_runs | length), .[0].total_count] | join(",")' | tr -d '"')"
+  [[ "$n" == "1,2,3" ]] || { REASON="L9: without --paginate the stub must serve page 1 only (got $n)"; return 1; }
+  n="$(stub_runs "$pf" "" -f event=push -f created=">=$since60" -F per_page=1 -F exclude_pull_requests=true | jq -s '.[0].workflow_runs | length')"
+  [[ "$n" == 1 ]] || { REASON="L9: per_page=1 was not applied (got $n)"; return 1; }
+  # an unexpected request exits 64 (never silently served)
+  stub_runs "$pf" "" --paginate -f event=push "${base[@]}" >/dev/null 2>&1; rc=$?
+  [[ "$rc" -eq 64 ]] || { REASON="L9: a request without created= must exit 64 (rc=$rc)"; return 1; }
+  stub_runs "$pf" "" --paginate -f event=push -f created=">=$since60" -F per_page=100 >/dev/null 2>&1; rc=$?
+  [[ "$rc" -eq 64 ]] || { REASON="L9: a request without exclude_pull_requests must exit 64 (rc=$rc)"; return 1; }
+  stub_runs "$pf" "" --paginate -f event=schedule -f created=">=$since60" "${base[@]}" >/dev/null 2>&1; rc=$?
+  [[ "$rc" -eq 64 ]] || { REASON="L9: an unexpected event must exit 64 (rc=$rc)"; return 1; }
+  stub_runs "$pf" "" --paginate -f event=push -f created=">=$since60" -f bogus=1 "${base[@]}" >/dev/null 2>&1; rc=$?
+  [[ "$rc" -eq 64 ]] || { REASON="L9: an unexpected field must exit 64 (rc=$rc)"; return 1; }
+  env -i PATH="$BIN:$SANDBOX_PATH" GH_REPO=o/r GH_STUB_LOG="$WORK/l9.log" GH_STUB_RUNS="$pf" \
+    gh api -X POST repos/o/r/actions/runs >/dev/null 2>&1; rc=$?
+  [[ "$rc" -eq 64 ]] || { REASON="L9: a non-GET verb must exit 64 (rc=$rc)"; return 1; }
+  env -i PATH="$BIN:$SANDBOX_PATH" GH_REPO=o/r GH_STUB_LOG="$WORK/l9.log" GH_STUB_RUNS="$pf" \
+    gh api -X GET repos/o/r/actions/jobs -f event=push -f created=">=$since60" "${base[@]}" >/dev/null 2>&1; rc=$?
+  [[ "$rc" -eq 64 ]] || { REASON="L9: an unexpected endpoint must exit 64 (rc=$rc)"; return 1; }
+  return 0
+}
+
+CAUSE_ROWS=(1 2 3 4 5 6 7 8 10 11 12 13 14)
+# cause_check <workflow>: executes the real run body against every cause row (L9 is a stub control, run once).
+cause_check() {
+  local wf="$1" r
+  for r in "${CAUSE_ROWS[@]}"; do "lrow$r" "$wf" || return 1; done
+  return 0
+}
+ldesc() {
+  case "$1" in
+    1) echo "real incident (six other merge_group runs, stale superseded ref, noise) names .github/workflows/ci.yml with the run URL" ;;
+    2) echo "no failed push run -> unchanged suspected form" ;;
+    3) echo "failed push run but a merge_group run of the same workflow exists -> suspected" ;;
+    4) echo "stale failure on a superseded ref, latest ref healthy -> suspected" ;;
+    5) echo "pr-12 does not read pr-123 refs (trailing dash)" ;;
+    6) echo "runs endpoint fails -> suspected, one bounded ASCII warning, rc 0" ;;
+    7) echo "two entries: the cause never leaks between iterations (both orders)" ;;
+    8) echo "cancelled push run -> suspected" ;;
+    9) echo "stub controls: event/created/per_page/paginate applied, unexpected request exits 64" ;;
+    10) echo "failed push run whose name differs from its path (a loaded workflow) -> suspected" ;;
+    11) echo "success push run -> suspected" ;;
+    12) echo "two-page --paginate: the broken run on page 2 is still named" ;;
+    13) echo "deduped entry (cause form and old form) makes zero actions/runs calls" ;;
+    14) echo "merge_group run with a suffixed path but the same workflow_id -> suspected" ;;
+  esac
+}
+
 # ---- rows ---------------------------------------------------------------------------------------
 if structural_check "$WF_REAL"; then pass "S0 real workflow: structural invariants hold"; else fail "S0 real workflow: structural invariants hold ($REASON)"; fi
 if behav_check "$WF_REAL"; then pass "B0 real workflow: executed run body behaves on canned queues"; else fail "B0 real workflow: executed run body behaves on canned queues ($REASON)"; fi
 if drain_check "$WF_REAL"; then pass "B1 real workflow: drain step closes only issues whose target PR left OPEN"; else fail "B1 real workflow: drain step behaves ($REASON)"; fi
+
+for r in 1 2 3 4 5 6 7 8 10 11 12 13 14; do
+  if "lrow$r" "$WF_REAL"; then pass "L$r real workflow: $(ldesc "$r")"; else fail "L$r real workflow: $(ldesc "$r") ($REASON)"; fi
+done
+if lrow9 "$WF_REAL"; then pass "L9 $(ldesc 9)"; else fail "L9 $(ldesc 9) ($REASON)"; fi
 
 # Derivation sanity: the .tf numbers are real and the relation is not vacuous.
 if [[ "$TF_TIMEOUT" -gt 0 && "$TF_BUILD" -ge 1 ]]; then pass "D0 derived tf timeout=$TF_TIMEOUT build window=$TF_BUILD (positive integers)"; else fail "D0 derived tf values"; fi
@@ -544,7 +905,7 @@ chk() { if jq -e "$2" <<<"$FACTS" >/dev/null; then pass "$1"; else fail "$1"; fi
 chk "S1 on.schedule cron present" '(.cron | length) > 0'
 chk "S2 workflow_dispatch trigger present (manual / Inngest-driven runs)" '.on_keys | index("workflow_dispatch")'
 chk "S3 STALL_THRESHOLD_MINUTES numeric" '.env.STALL_THRESHOLD_MINUTES | test("^[0-9]+$")'
-chk "S4 permissions exactly contents:read + issues:write" '.permissions == {"contents":"read","issues":"write"}'
+chk "S4 permissions exactly contents:read + issues:write + actions:read" '.permissions == {"contents":"read","issues":"write","actions":"read"}'
 chk "S5 no continue-on-error anywhere" '.continue_on_error | length == 0'
 chk "S6 no \${{ }} inside any run body" '.has_expr_in_run | not'
 if (( $(jq -r '.env.STALL_THRESHOLD_MINUTES' <<<"$FACTS") < TF_TIMEOUT )); then pass "S7 threshold < tf check_response_timeout_minutes ($TF_TIMEOUT)"; else fail "S7 threshold < tf timeout"; fi
@@ -559,6 +920,17 @@ if grep -q 'FALSE POSITIVES ARE POSSIBLE' "$WF_REAL" && grep -q 'SUSPECTED stall
   pass "S12 header states the false-positive possibility and that the threshold (45) sits below the measured merge_group CI maximum"
 else
   fail "S12 header states the false-positive possibility and the threshold-below-CI-maximum fact"
+fi
+chk "S16 cause lookup is a paginated -X GET of actions/runs, flattened with jq -s, exclude_pull_requests, per_page=100" 'any(.runs[]; test("queue_candidate_cause\\(\\)") and test("gh api -X GET --paginate") and test("-F per_page=100") and test("-F exclude_pull_requests=true") and test("jq -s \u0027\\[\\.\\[\\]\\.workflow_runs\\[\\]\\]\u0027"))'
+if grep -q '42336368201' "$WF_REAL" && grep -q '42337331354' "$WF_REAL" && grep -q 'name == path' "$WF_REAL"; then
+  pass "S17 inline comment cites runs 42336368201 and 42337331354 as the observed name == path signature"
+else
+  fail "S17 inline comment cites runs 42336368201 and 42337331354 as the observed name == path signature"
+fi
+if grep -q 'actions: read' "$WF_REAL" && grep -q 'CAUSE NAMING' "$WF_REAL" && ! grep -q 'default GITHUB_TOKEN + `gh api graphql`/`gh issue` ONLY' "$WF_REAL"; then
+  pass "S18 header documents the cause lookup and the actions: read scope (the old graphql/issue-ONLY sentence is gone)"
+else
+  fail "S18 header documents the cause lookup and the actions: read scope"
 fi
 chk "S13 drain step exists, gated on if: always()" 'any(.steps[]; .name == "Drain stale stall issues" and .if == "always()")'
 chk "S14 drain enumeration is a bounded label-scoped --json list" 'any(.runs[]; test("gh issue list") and test("\\-L 50") and test("--label merge-queue-stall") and test("--json number,title"))'
@@ -590,7 +962,7 @@ PY
 # Positive control: an UNMUTATED sandbox copy must be green on all engines, so a sandbox-harness
 # fault cannot manufacture the RED verdicts below.
 cp "$WF_REAL" "$SB/control.yml"
-if structural_check "$SB/control.yml" && behav_check "$SB/control.yml" && drain_check "$SB/control.yml"; then pass "M0 positive control: unmutated sandbox copy is GREEN on all engines"; else fail "M0 positive control ($REASON)"; fi
+if structural_check "$SB/control.yml" && behav_check "$SB/control.yml" && drain_check "$SB/control.yml" && cause_check "$SB/control.yml"; then pass "M0 positive control: unmutated sandbox copy is GREEN on all engines"; else fail "M0 positive control ($REASON)"; fi
 
 mutate "M1 threshold raised to the timeout -> RED" structural "threshold $TF_TIMEOUT >= check_response_timeout_minutes" \
   "re.sub(r\"STALL_THRESHOLD_MINUTES: '[0-9]+'\", \"STALL_THRESHOLD_MINUTES: '$TF_TIMEOUT'\", s)"
@@ -608,8 +980,12 @@ mutate "M6 workflow_dispatch removed -> RED" structural 'workflow_dispatch trigg
   "s.replace('  workflow_dispatch: {}\n', '')"
 mutate "M7 continue-on-error added at job level -> RED" structural 'continue-on-error present' \
   "s.replace('    timeout-minutes: 10\n', '    timeout-minutes: 10\n    continue-on-error: true\n')"
-mutate "M8 permissions widened -> RED" structural 'permissions are not exactly' \
-  "s.replace('  issues: write\n', '  issues: write\n  actions: write\n', 1)"
+mutate "M8 permissions widened (actions: read -> write) -> RED" structural 'permissions are not exactly' \
+  "s.replace('  actions: read\n', '  actions: write\n', 1)"
+mutate "M8b actions: read dropped (the cause lookup loses its scope) -> RED" structural 'permissions are not exactly' \
+  "s.replace('  actions: read\n', '', 1)"
+mutate "M8c a further scope added (pull-requests: write) -> RED" structural 'permissions are not exactly' \
+  "s.replace('  actions: read\n', '  actions: read\n  pull-requests: write\n', 1)"
 mutate "M9 action-required dropped from the filed label set -> RED" structural 'label set lacks|does not create both' \
   "s.replace('--label merge-queue-stall --label action-required', '--label merge-queue-stall')"
 mutate "M9b action-required label creation dropped -> RED" structural 'does not create both' \
@@ -656,7 +1032,7 @@ mutate "Q11 gh label create made fatal (|| true removed) -> RED" behav 'label cr
 mutate "Q12 dedupe anchor loses the ' pending' suffix -> RED (PR #109 suppresses PR #10)" behav "' pending' anchor" \
   "s.replace('PR #\${pr} pending\"', 'PR #\${pr}\"', 1)"
 mutate "Q13 title no longer says the stall is suspected -> RED" behav 'does not say the stall is suspected' \
-  "s.replace(' (suspected, verify first)', '')"
+  "s.replace('(suspected, verify first)', '(unverified)')"
 mutate "Q14 body no longer opens with the SUSPECTED caveat -> RED" behav 'suspected / healthy-slow-build caveat' \
   "s.replace('SUSPECTED merge-queue stall (needs verification)', 'Merge-queue stall')"
 
@@ -673,6 +1049,55 @@ mutate "MD5 drain drops the label scope -> RED" drain 'outside the merge-queue-s
   "s.replace('--json number,title --label merge-queue-stall', '--json number,title')"
 mutate "MD6 drain drops the -L 50 bound -> RED" drain 'cap' \
   "s.replace('-L 50 ', '')"
+
+# ---- stall-cause mutations (#12283): each is a LITERAL replacement of one load-bearing fragment of
+# queue_candidate_cause, applied to a sandbox copy; mutate() diffs it against the pristine copy first (it must
+# LAND) and the `cause` engine must go RED for the NAMED row.
+# mutate_lit <label> <engine> <want> <old> <new> [<old2> <new2>]
+mutate_lit() {
+  export MUT_OLD="$4" MUT_NEW="$5" MUT_OLD2="${6-}" MUT_NEW2="${7-}"
+  mutate "$1" "$2" "$3" '(lambda t: t.replace(os.environ["MUT_OLD2"], os.environ["MUT_NEW2"]) if os.environ.get("MUT_OLD2") else t)(s.replace(os.environ["MUT_OLD"], os.environ["MUT_NEW"]))'
+  unset MUT_OLD MUT_NEW MUT_OLD2 MUT_NEW2
+}
+mutate_lit "C1 join: 'no merge_group run of P' -> 'no merge_group run at all' -> RED (the six other merge_group runs hide the cause)" cause 'L1:' \
+  '($mg | index($w)) == null' '($mg | length) == 0'
+mutate_lit "C2 latest-ref selection dropped (every ref under the prefix) -> RED (a stale failure names a cause for a healthy ref)" cause 'L4:' \
+  '($a | map(select(.head_branch == $ref))) as $p' '$a as $p'
+mutate_lit "C3 prefix loses its trailing dash (pr-12 matches pr-123) -> RED" cause 'L5:' \
+  'pr-${pr}-"' 'pr-${pr}"'
+mutate_lit "C4a lookup failure exits the step (|| return 0 -> || exit 1) -> RED" cause 'L6:' \
+  'fetch_runs push PUSH_LIST || return 0' 'fetch_runs push PUSH_LIST || exit 1'
+mutate_lit "C4b lookup failure is not captured (the explicit rc capture is dropped on the gh call) -> RED" cause 'L6:' \
+  '</dev/null)" || rc=$?' '</dev/null)"'
+mutate_lit "C5 per-entry cause reset removed -> RED (the first entry's cause leaks into the second)" cause 'L7:' \
+  '            CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""
+' ''
+mutate_lit "C6 cause suffix moved in front of the PR anchor -> RED (dedupe/drain anchors stop matching)" cause 'L1:.*anchor' \
+  '--title "merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m ${cause_suffix}"' '--title "merge-queue stall: ${cause_suffix} PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m"'
+mutate_lit "C7 conclusion == \"failure\" -> != null (a cancelled or success push run counts as failed) -> RED" cause 'L8:|L11:' \
+  '.conclusion == "failure"' '.conclusion != null'
+mutate_lit "C8 name == path conjunct dropped -> RED (a loaded push-only workflow is blamed)" cause 'L10:' \
+  '.name == .path and ' ''
+mutate_lit "C9 join on path instead of workflow_id -> RED (a suffixed merge_group path is mistaken for a missing run)" cause 'L14:' \
+  '.workflow_id)) as $mg' '.path)) as $mg' \
+  '(.workflow_id as $w |' '(.path as $w |'
+mutate_lit "C10a created= bound dropped -> RED (the stub exits 64 on an unbounded list; the cause is lost)" cause 'L1:' \
+  ' -f created=">=${since}"' ''
+mutate_lit "C10b slack sign flipped (enqueuedAt + 5 min) -> RED (the entry's own runs fall before the bound)" cause 'L1:' \
+  'enq_s - 300' 'enq_s + 300'
+mutate_lit "C10c slack widened to hours -> RED (a run before the window is named too)" cause 'L1:' \
+  'enq_s - 300' 'enq_s - 30000'
+mutate_lit "C11 lookup called before the dedupe check -> RED (a deduped entry spends API calls)" cause 'L13:' \
+  '            CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""
+            queue_candidate_cause "$pr" "$enq"
+' '' \
+  '            existing=$(gh issue list' '            CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""
+            queue_candidate_cause "$pr" "$enq"
+            existing=$(gh issue list'
+mutate_lit "C12 --paginate dropped -> RED (a run on page 2 is never read)" cause 'L12:' \
+  'gh api -X GET --paginate ' 'gh api -X GET '
+mutate_lit "C13 exclude_pull_requests dropped -> RED (the stub exits 64; the cause is lost)" cause 'L1:' \
+  ' -F exclude_pull_requests=true' ''
 
 # ---- controls: the mutation engine and the chk helper must FAIL on inputs that must fail ---------------
 # control_fails <label> <wanted-message-substring> <cmd...>: drive a verdict helper once with an input that

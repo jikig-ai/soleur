@@ -3,8 +3,9 @@ name: Merge queue stall check
 # Scheduled stall detector for the GitHub merge queue on `main` (#5780, re-adopted by #9454).
 #
 # WHY GH-Actions cron (ADR-033 repo-scoped determination): this probe uses the
-# default GITHUB_TOKEN + `gh api graphql`/`gh issue` ONLY — no app context, no
-# app/Doppler secrets, no app-token mint. The `repository.mergeQueue` GraphQL
+# default GITHUB_TOKEN with `gh api graphql`, `gh issue`, and one read-only `gh api -X GET`
+# of the repository's Actions runs (CAUSE NAMING below; `actions: read`) and nothing
+# else — no app context, no app/Doppler secrets, no app-token mint. The `repository.mergeQueue` GraphQL
 # field is the same data the https://github.com/<repo>/queue/main UI shows any
 # contributor (ordinary repo read scope); it is NOT the Administration-scoped
 # REST `/rulesets` config surface. So it stays on a GHA ephemeral runner per
@@ -68,6 +69,18 @@ name: Merge queue stall check
 # target state keeps the issue and retries next sweep; closing is the only
 # mutation and it needs a positively-read non-OPEN state.
 #
+# CAUSE NAMING (#12283): the 2026-11-07 stall lasted 175 minutes because a duplicate key in
+# ci.yml made GitHub fail to LOAD that workflow on the queue temp ref: it recorded a failed
+# `push` run for ci.yml, never created the `merge_group` run, and the required `test`
+# context never reported. When a filed entry's LATEST temp ref (`gh-readonly-queue/main/pr-<N>-<sha>`)
+# shows a failed `push` run whose name equals its path and NO `merge_group` run of the same
+# workflow_id, the issue names that workflow file as the cause ("CAUSE (observed)", the run URL, and
+# the agent-runnable duplicate-key check) instead of leaving only "suspected". Any other entry is
+# filed unchanged. The lookup reads the runs list with `actions: read`, is fail-soft (a failed read
+# is a bounded ::warning:: and the issue says "suspected"), and runs only AFTER the dedupe check,
+# so an entry that already has an open issue costs no API call. Prevention is the strict
+# duplicate-key member of the quality-guards umbrella (pr-quality-guards.yml); this is diagnosis.
+#
 # FALSE POSITIVES ARE POSSIBLE, BY CONSTRUCTION. The age is measured from `enqueuedAt`,
 # which is when the PR joined the queue, NOT when its own merge_group build started. An
 # entry that waited behind others and was promoted to position 2 or 1 can already be
@@ -110,6 +123,7 @@ on:
 permissions:
   contents: read
   issues: write
+  actions: read
 
 concurrency:
   group: merge-queue-stall-check
@@ -170,7 +184,7 @@ jobs:
           now="$(date -u +%s)"
           threshold_s=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-          # One line per stalled entry: <pr_number>\t<age_minutes>\t<pr_url>\t<state>
+          # One line per stalled entry: <pr_number>\t<age_minutes>\t<pr_url>\t<state>\t<enqueuedAt>
           # (title is intentionally excluded to keep the TSV delimiter-safe).
           # Only entries at position <= MAX_ENTRIES_TO_BUILD are aged: deeper
           # entries legitimately wait their turn (see FALSE-POSITIVE FILTER).
@@ -186,7 +200,7 @@ jobs:
             | select((.state // "") != "UNMERGEABLE")
             | (($now) - (.enqueuedAt | fromdateiso8601)) as $age
             | select($age > $thr)
-            | "\(.pullRequest.number)\t\(($age/60)|floor)\t\(.pullRequest.url)\t\(.state // "UNKNOWN")"
+            | "\(.pullRequest.number)\t\(($age/60)|floor)\t\(.pullRequest.url)\t\(.state // "UNKNOWN")\t\(.enqueuedAt)"
           ' <<<"$resp")"
 
           if [[ -z "$stalled" ]]; then
@@ -229,7 +243,93 @@ jobs:
           TMPL
           )"
 
-          while IFS=$'\t' read -r pr age url state; do
+          # CAUSE paragraph prepended to the issue body when a cause is named (quoted heredoc: backticks
+          # and $ are literal text for the READER; @TOKENS@ are substituted in the loop).
+          cause_tmpl="$(cat <<'CTMPL'
+          CAUSE (observed): PR #@PR@'s queue temp ref (@CREF@) has a FAILED `push` run for @CPATHS@ and no `merge_group` run of that same workflow, while other workflows did run on that ref. GitHub records exactly this signature (a run named after the file path instead of the workflow's `name:`, concluding failure) when a workflow file cannot be loaded, so its required check never reports and the entry pends. A duplicate or invalid YAML key is the usual cause (#12283).
+
+          Failed push run(s) that name the cause:
+          @CLINES@
+
+          Next step (agent-runnable): fetch the temp ref into a scratch checkout (`git fetch origin @CREF@`, then `git worktree add --detach <scratch dir> FETCH_HEAD`) and run `python3 .github/scripts/check-workflow-duplicate-keys.py <checkout root>`; it prints file:line for every duplicate key. If it finds nothing, the SUSPECTED text below still applies.
+          CTMPL
+          )"
+
+          # fetch_runs <event> <out-var>: list runs of one event created since $since and keep only those on a
+          # temp ref of PR $pr (prefix $prefix). Reads $pr/$prefix/$since from the caller. Returns 1 after ONE
+          # bounded ::warning:: on any failure; the exit code is captured explicitly (rc=0; out=$(...) || rc=$?)
+          # because the Actions run: block is `bash -eo pipefail` and a bare failure would abort the step.
+          # `--paginate` prints one {total_count, workflow_runs:[...]} object per page; `jq -s` flattens them.
+          fetch_runs() {
+            local ev="$1" outvar="$2" out flat list rc=0 errf
+            errf="$(mktemp)"
+            out="$(gh api -X GET --paginate "repos/${GH_REPO}/actions/runs" \
+              -f event="$ev" -f created=">=${since}" -F per_page=100 -F exclude_pull_requests=true 2>"$errf" </dev/null)" || rc=$?
+            if [[ "$rc" -eq 0 ]]; then
+              flat="$(jq -s '[.[].workflow_runs[]]' <<<"$out" 2>>"$errf")" || rc=$?
+            fi
+            if [[ "$rc" -eq 0 ]]; then
+              list="$(jq -c --arg pfx "$prefix" 'map(select((.head_branch // "") | startswith($pfx)) | {id, name, path, workflow_id, event, head_branch, conclusion, created_at, html_url})' <<<"$flat" 2>>"$errf")" || rc=$?
+            fi
+            if [[ "$rc" -ne 0 ]]; then
+              echo "::warning::merge-queue-stall: could not read the Actions runs (event=${ev}) for PR #${pr} (rc=${rc}: $(LC_ALL=C tr -cd '\40-\176' <"$errf" | head -c 200)); filing without a named cause."
+              rm -f "$errf"
+              return 1
+            fi
+            rm -f "$errf"
+            printf -v "$outvar" '%s' "$list"
+          }
+
+          # queue_candidate_cause <pr> <enqueuedAt>: sets CAUSE_PATHS / CAUSE_LINES / CAUSE_REF when the entry's
+          # LATEST temp ref shows a failed load, else leaves them empty (the caller resets them per entry).
+          # Never fails the step. Called only AFTER the dedupe check.
+          #
+          # Observed signature (GitHub does not document it): a workflow file that cannot be loaded gets a
+          # failed `push` run on the ref whose `name` is the file PATH (a loaded run shows the workflow's own
+          # `name:`), and no `merge_group` run. Live runs 42336368201 (PR 12275's temp ref) and 42337331354
+          # (PR 12279's) both show name == path, conclusion failure, event push, for .github/workflows/ci.yml,
+          # while six other workflows ran on merge_group for the same ref. The run's workflow_id is equal on a
+          # failed push run and a healthy merge_group run of the same workflow (path is display-only and can carry
+          # a ref suffix), so workflow_id is the join key. If GitHub changes the signature the failure is safe: the
+          # issue stays "suspected".
+          queue_candidate_cause() {
+            local pr="$1" enq="$2" prefix since enq_s PUSH_LIST MG_LIST named p u
+            prefix="gh-readonly-queue/main/pr-${pr}-"
+            if ! enq_s="$(date -u -d "$enq" +%s 2>/dev/null)"; then
+              echo "::warning::merge-queue-stall: could not read the Actions runs for PR #${pr} (unparseable enqueuedAt); filing without a named cause."
+              return 0
+            fi
+            # 5 minutes of slack: the queue's enqueuedAt and a run's created_at come from different clocks.
+            since="$(date -u -d "@$(( enq_s - 300 ))" +%Y-%m-%dT%H:%M:%SZ)"
+            fetch_runs push PUSH_LIST || return 0
+            fetch_runs merge_group MG_LIST || return 0
+            # LATEST temp ref = newest created_at across both lists (a superseded ref's stale failure must not
+            # name a cause for the live one); on it, a failed push run with name == path whose workflow_id has
+            # no merge_group run on the same ref is NAMED. unique_by keeps the newest run per path.
+            named="$(jq -r -n --argjson a "$PUSH_LIST" --argjson b "$MG_LIST" '
+              ($a + $b) as $all
+              | if ($all | length) == 0 then empty else
+                  ($all | max_by(.created_at) | .head_branch) as $ref
+                  | ($a | map(select(.head_branch == $ref))) as $p
+                  | ($b | map(select(.head_branch == $ref) | .workflow_id)) as $mg
+                  | $p | sort_by(.created_at) | reverse
+                  | map(select(.conclusion == "failure" and .name == .path and (.workflow_id as $w | ($mg | index($w)) == null)))
+                  | unique_by(.path)[]
+                  | [$ref, .path, .html_url] | @tsv
+                end' 2>/dev/null)" || return 0
+            [[ -n "$named" ]] || return 0
+            CAUSE_REF="$(head -n 1 <<<"$named" | cut -f 1)"
+            while IFS=$'\t' read -r _ p u; do
+              CAUSE_PATHS+="${CAUSE_PATHS:+, }${p}"
+              CAUSE_LINES+="- ${p}: ${u}"$'\n'
+            done <<<"$named"
+            echo "Named cause for PR #${pr}: load failure suspected in ${CAUSE_PATHS} (ref ${CAUSE_REF})."
+          }
+
+          # Declared once (set -u), reset for EVERY entry inside the loop below.
+          CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""
+
+          while IFS=$'\t' read -r pr age url state enq; do
             [[ -z "$pr" ]] && continue
             # Match anchor includes the constant " pending" suffix that always
             # follows the PR number in the filed title — without it, the prefix
@@ -243,6 +343,9 @@ jobs:
               echo "Open stall issue #${existing} already tracks PR #${pr}; skipping create."
               continue
             fi
+            CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""
+            queue_candidate_cause "$pr" "$enq"
+            cause_suffix="(suspected, verify first)"
             body="$tmpl"
             body="${body//@PR@/"$pr"}"
             body="${body//@AGE@/"$age"}"
@@ -252,8 +355,17 @@ jobs:
             body="${body//@OWNER@/"$owner"}"
             body="${body//@NAME@/"$name"}"
             body="${body//@REPO@/"$GH_REPO"}"
+            if [[ -n "$CAUSE_PATHS" ]]; then
+              cause_suffix="(cause: load failure suspected in ${CAUSE_PATHS}; duplicate/invalid key is the usual cause)"
+              cbody="$cause_tmpl"
+              cbody="${cbody//@PR@/"$pr"}"
+              cbody="${cbody//@CREF@/"$CAUSE_REF"}"
+              cbody="${cbody//@CPATHS@/"$CAUSE_PATHS"}"
+              cbody="${cbody//@CLINES@/"${CAUSE_LINES%$'\n'}"}"
+              body="${cbody}"$'\n\n'"${body}"
+            fi
             gh issue create --repo "$GH_REPO" \
-              --title "merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m (suspected, verify first)" \
+              --title "merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m ${cause_suffix}" \
               --label merge-queue-stall --label action-required \
               --body "$body"
             echo "Filed stall issue for PR #${pr}."

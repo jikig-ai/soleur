@@ -95,7 +95,11 @@ jobs:
           fi
 
   # ─── quality-guards (#12089): ONE required-context umbrella over the three
-  # required quality guards that each used to burn a runner slot — the
+  # required quality guards that each used to burn a runner slot (plus a fourth
+  # member, `workflow-yaml-strict`, added 2026-11-07 for #12283: the strict
+  # duplicate-key parse of every workflow and composite action — a required
+  # workflow that does not depend on ci.yml loading, because a ci.yml with a
+  # repeated key fails to load and stalls the queue silently) — the
   # `lint-bot-statuses` fold precedent applied to this file's required set
   # (16 → 3 umbrella contexts across the three workflows, ADR-032 amendment
   # 2026-11-06). The REQUIRED CONTEXT is this job's `name:` — `quality-guards`
@@ -121,6 +125,17 @@ jobs:
           # Deepest fetch-depth any member needs (0): the enforce member's
           # merge-base diff and the fixture battery's corrupt-ancestry fixtures.
           fetch-depth: 0
+
+      # ── member: workflow-yaml-strict (#12283) — strict duplicate-key parse of
+      # .github/workflows/*.{yml,yaml} and .github/actions/**/action.{yml,yaml}.
+      # Runs first and cheaply (~1 s). Bare command on purpose: no `|| true`, no
+      # continue-on-error — the verdict reaches the required context only through
+      # the `member workflow-yaml-strict` row in `aggregate` below. PyYAML is
+      # preinstalled on ubuntu-latest; the guard exits 2 (red) if it ever is not. ──
+      - id: workflow-duplicate-keys
+        if: ${{ !cancelled() }}
+        name: Strict duplicate-key parse of workflows and composite actions
+        run: python3 .github/scripts/check-workflow-duplicate-keys.py
 
       # ── member: enforce (was jobs.enforce — legal-doc cross-document
       # lockstep + BACKSTOP_REVISION + Art. 30, folded #4384/#8902) ──
@@ -335,6 +350,7 @@ jobs:
             fi
             printf 'SKIP  %-30s%s  (out of scope on %s)\n' "$mname" "$detail" "$EVENT_NAME"
           }
+          member workflow-yaml-strict '*' 'workflow-duplicate-keys' '${{ steps.workflow-duplicate-keys.conclusion }}' '${{ steps.workflow-duplicate-keys.outcome }}' || failed=1
           member enforce '*' 'enforce-legal-lockstep,enforce-backstop,enforce-art30' '${{ steps.enforce-legal-lockstep.conclusion }},${{ steps.enforce-backstop.conclusion }},${{ steps.enforce-art30.conclusion }}' '${{ steps.enforce-legal-lockstep.outcome }},${{ steps.enforce-backstop.outcome }},${{ steps.enforce-art30.outcome }}' || failed=1
           member markdown-lint '*' 'markdown-lint-setup-node,markdown-lint-install,markdown-lint,markdown-lint-mutations' '${{ steps.markdown-lint-setup-node.conclusion }},${{ steps.markdown-lint-install.conclusion }},${{ steps.markdown-lint.conclusion }},${{ steps.markdown-lint-mutations.conclusion }}' '${{ steps.markdown-lint-setup-node.outcome }},${{ steps.markdown-lint-install.outcome }},${{ steps.markdown-lint.outcome }},${{ steps.markdown-lint-mutations.outcome }}' || failed=1
           member guard-script-fixture-tests '*' 'guard-script-fixture-tests,guard-script-fixture-tests-packed' '${{ steps.guard-script-fixture-tests.conclusion }},${{ steps.guard-script-fixture-tests-packed.conclusion }}' '${{ steps.guard-script-fixture-tests.outcome }},${{ steps.guard-script-fixture-tests-packed.outcome }}' || failed=1

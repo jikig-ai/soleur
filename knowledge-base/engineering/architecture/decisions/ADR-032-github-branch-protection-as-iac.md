@@ -1013,3 +1013,28 @@ candidates are evaluated against the restored 16-name set.
 `sentry-destroy-required` (apply-sentry-infra.yml);
 `vendor-pin-required` (vendor-pin-verify.yml). The CLA Required ruleset
 (`cla-check`, `cla-evidence`) is unchanged.
+
+## Addendum 2026-11-07 (#12283, Ref #9927): `quality-guards` gains a fourth member, `workflow-yaml-strict`
+
+The `quality-guards` umbrella (2026-11-06 amendment above) now has four member
+guards: `enforce`, `markdown-lint`, `guard-script-fixture-tests` and
+**`workflow-yaml-strict`** (step id `workflow-duplicate-keys`, run by
+`.github/scripts/check-workflow-duplicate-keys.py`). The member is a strict
+duplicate-key parse of every `.github/workflows/*.{yml,yaml}` and
+`.github/actions/**/action.{yml,yaml}`. It exists because a merge candidate
+whose `ci.yml` carried two `fetch-depth` keys in one `with:` mapping merged
+cleanly in git, could not be loaded by GitHub Actions (a failed `push` run on
+the queue temp ref, no `merge_group` run, the required `test` context never
+reported) and stalled the queue for 175 minutes (#12283). `quality-guards`
+already reports on `merge_group` and does not depend on `ci.yml` loading, so a
+red member there ejects the candidate in minutes.
+
+No required context is added or renamed and no ruleset, Terraform or canonical
+JSON changes, so the Sharp Edge 1 paired-edit contract is not triggered; the
+three-umbrella inventory table above changes only by its `quality-guards`
+member list. The #6049 per-member disposition for the new member (CONTENT-SCOPED,
+UNREACHABLE from the bot `ALLOWED_PATHS = {weakness-digest.md}`: the scan
+surface is `.github/workflows` and `.github/actions`, intersection empty) is
+recorded in `scripts/required-checks.txt`. The member's verdict reaches the
+required context only through the `member workflow-yaml-strict` row of the
+`aggregate` step, which `scripts/lint-umbrella-aggregate.sh` enforces.
