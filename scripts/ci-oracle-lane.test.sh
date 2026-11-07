@@ -42,10 +42,12 @@
 # (affected|lint-orphan-test-suites|ci-pr|ci-path-gating) must be a member OR named in a commented
 # exclusion line — a NEW oracle-machinery registration cannot silently escape the leg.
 #
-# THE ACTIVATION LOCK: `readonly ORACLE_LANE_LOCKED=1` keeps active=false forever; with SWITCH=on on
-# an oracle-only diff the driver still emits the `would_skip` telemetry (the five heavy legs) while
-# skip_legs stays EMPTY — the lane is dark. The lock-neutralized copy (same edit recipe as
-# ci-pr-selection.test.sh) proves the arm fires for EXACTLY `on` and nothing else.
+# THE ACTIVATION LOCK (removed): `readonly ORACLE_LANE_LOCKED=1` used to keep active=false forever —
+# the activation PR (#12156 follow-up) deleted it, so the driver ARMS on an oracle-only diff with
+# SWITCH=on: active=true and skip_legs carries the five heavy legs. The env-read at O-LOCK-READ
+# remains as the dark-mode revert path (ORACLE_LANE_LOCKED=1 in env re-locks without a code edit);
+# row_lock covers it. The lock-neutralized copy (same edit recipe as ci-pr-selection.test.sh) is now
+# identical to the pristine driver, which is itself the pinned absence check.
 #
 # GUARD ANCHORS (contract with the driver, same convention as scripts/ci-pr-selection.sh): the
 # mutation battery below deletes or weakens lines tagged `# GUARD:<id>`; a driver line that carries
@@ -230,8 +232,9 @@ git_fixture_env "$FX/_anchor" || { printf 'FAIL: git_fixture_env refused\n' >&2;
 # ── The pristine driver, and the lock-neutralized COPY ───────────────────────
 PRISTINE="$SANDBOX/drv.pristine.sh"
 cp "$DRIVER" "$PRISTINE"
-# The lock line is ONE literal line, byte-exact (the PR_AFFECTED_LOCKED analogue). The anchor is
-# `readonly ORACLE_LANE_LOCKED=1`, carried on its own line — the activation PR deletes it.
+# The lock line WAS ONE literal line, byte-exact (the PR_AFFECTED_LOCKED analogue), carried on its own
+# line — the activation PR deleted it. LOCK_RE is kept as the absence pin: a re-lock must never sneak
+# back in through an unrelated diff.
 LOCK_RE='^readonly ORACLE_LANE_LOCKED=1([[:space:]]+#.*)?$'
 UNLOCKED="$SANDBOX/drv.unlocked.sh"
 sed -E "/$LOCK_RE/d" "$PRISTINE" > "$UNLOCKED"
@@ -648,13 +651,13 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   fi
 }
 
-expect_lane() {  # $1=label: oracle_only=true, locked dark telemetry, audit shas bound
+expect_lane() {  # $1=label: oracle_only=true, armed post-activation, audit shas bound
   local lbl="$1"
   check_eq "$lbl: oracle_only" "$O_OO" "true"
-  check_eq "$lbl: active (locked)" "$O_ACTIVE" "false"
-  check_eq "$lbl: skip_legs empty (locked)" "$O_SKIP" ""
+  check_eq "$lbl: active (unlocked)" "$O_ACTIVE" "true"
+  check_eq "$lbl: skip_legs is the five heavy legs (unlocked)" "$O_SKIP" "$ORACLE_FIVE"
   check_eq "$lbl: would_skip telemetry is the five heavy legs" "$N_WOULD" "$ORACLE_FIVE"
-  check_eq "$lbl: notice locked" "$N_LOCKED" "true"
+  check_eq "$lbl: notice locked" "$N_LOCKED" "false"
   check_match "$lbl: head_sha bound" "$O_HEAD" '^[0-9a-f]{40}$'
   check_match "$lbl: base_sha bound" "$O_BASE" '^[0-9a-f]{40}$'
 }
@@ -925,16 +928,23 @@ row_switch() {  # the switch is compared EXACTLY (driven against the lock-neutra
   drive ex_code "$d" "SWITCH=on"
   check_eq "O-SWITCH SWITCH=on on a code diff: oracle_only stays false" "$O_OO" "false"
 }
-row_lock() {  # the activation lock: SWITCH=on classifies and annotates but never arms
+row_lock() {  # post-activation: SWITCH=on classifies, annotates AND arms; the env-read
+  # ORACLE_LANE_LOCKED remains as the dark-mode revert path (a runner env can re-lock the lane
+  # without a code change — O-LOCK-READ is still live machinery, so it is covered here).
   local d="$1"
   drive accept "$d" "SWITCH=on"
-  check_eq "O-LOCK lock + SWITCH=on: active" "$O_ACTIVE" "false"
-  check_eq "O-LOCK lock + SWITCH=on: skip_legs" "$O_SKIP" ""
-  check_eq "O-LOCK lock + SWITCH=on: notice locked" "$N_LOCKED" "true"
-  check_eq "O-LOCK the would-skip telemetry is still produced under the lock" "$N_WOULD" "$ORACLE_FIVE"
+  check_eq "O-ARM unlocked + SWITCH=on: active" "$O_ACTIVE" "true"
+  check_eq "O-ARM unlocked + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
+  check_eq "O-ARM unlocked + SWITCH=on: notice locked" "$N_LOCKED" "false"
+  check_eq "O-ARM the would-skip telemetry still names the five legs" "$N_WOULD" "$ORACLE_FIVE"
+  drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=1"
+  check_eq "O-LOCK env re-lock + SWITCH=on: active" "$O_ACTIVE" "false"
+  check_eq "O-LOCK env re-lock + SWITCH=on: skip_legs" "$O_SKIP" ""
+  check_eq "O-LOCK env re-lock + SWITCH=on: notice locked" "$N_LOCKED" "true"
+  check_eq "O-LOCK env re-lock keeps would_skip telemetry" "$N_WOULD" "$ORACLE_FIVE"
   drive accept "$d" "UNSET:SWITCH"
-  check_eq "O-LOCK dark (switch unset): oracle_only" "$O_OO" "false"
-  check_eq "O-LOCK dark (switch unset): would_skip" "$N_WOULD" "none"
+  check_eq "O-ARM dark (switch unset): oracle_only" "$O_OO" "false"
+  check_eq "O-ARM dark (switch unset): would_skip" "$N_WOULD" "none"
 }
 row_defaults_first() {  # a step killed anywhere leaves exactly the defaults (adversarial: unlocked + on)
   local d="$1"
@@ -1037,14 +1047,11 @@ echo "  control: $((passes)) checks green against the pristine and the lock-neut
 
 # ── Static guards: the lock literal, the lock copy, and the driver's tool surface ──
 _lockn=$(grep -c -E "$LOCK_RE" "$PRISTINE")
-check_eq "O-LOCK the activation lock is ONE literal line" "$_lockn" "1"
-_lockline=$(grep -n -E "$LOCK_RE" "$PRISTINE" | cut -d: -f1)
-_armline=$(grep -n 'GUARD:O-ARM' "$PRISTINE" | head -1 | cut -d: -f1)
-check_true "O-LOCK the lock line is read BEFORE the arm that checks it ($_lockline < $_armline)" "$(rc_of test "$_lockline" -lt "$_armline")"
-check_eq "O-LOCK the neutralized copy differs from the pristine driver by exactly the lock line" \
-  "$(diff "$PRISTINE" "$UNLOCKED" | grep -c '^[<>]')" "1"
+check_eq "O-LOCK the activation lock is ABSENT (removed by the activation PR; a re-lock is a driver edit, not an accident)" "$_lockn" "0"
+check_eq "O-LOCK the lock-neutralization recipe is now a no-op on the unlocked driver" \
+  "$(cmp -s "$PRISTINE" "$UNLOCKED"; echo $?)" "0"
 check_eq "O-LOCK the neutralized copy has no lock line" "$(grep -c -E '^readonly ORACLE_LANE_LOCKED=' "$UNLOCKED")" "0"
-check_true "O-LOCK the driver READS the lock for the arm" "$(grep -q 'ORACLE_LANE_LOCKED:-' "$PRISTINE"; echo $?)"
+check_true "O-LOCK the driver still READS an env lock for the arm (dark-mode revert path)" "$(grep -q 'ORACLE_LANE_LOCKED:-' "$PRISTINE"; echo $?)"
 check_eq "PRISTINE copy is byte-identical to the live driver" "$(cmp -s "$PRISTINE" "$DRIVER"; echo $?)" "0"
 # The driver's comment claims the doc allowlist grammar is IDENTICAL to ci-pr-selection.sh is_doc_path — enforce it
 # byte-for-byte (a divergence between the two classifiers is exactly the drift the comment warns about).
