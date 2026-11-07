@@ -65,7 +65,7 @@ chk "RATCHET_ORACLE names both oracle-review-required producers" \
 
 # The disjointness itself: a bot PR diff is confined to ALLOWED_PATHS; none of those paths is oracle surface.
 chk "ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅ (the synthetic green is not-oracle, earned by shape)" \
-  bash -c '! grep -xFf "$1" "$2" | grep -q .' _ "$SANDBOX/allowed.txt" "$SANDBOX/oracle.txt"
+  bash -c '! grep -q . < <(grep -xFf "$1" "$2")' _ "$SANDBOX/allowed.txt" "$SANDBOX/oracle.txt"
 
 # weakness-digest.md must appear in no AFFECTED_*_PATHS edge: a declared edge naming it would bind a
 # bot-diff-reachable path into the selector's audit surface. (It MAY appear as an accept-row TARGET —
@@ -94,7 +94,7 @@ open(sys.argv[1], "w").write(s)
 PY
 awk '/ALLOWED_PATHS=\(/{f=1;next} f&&/^\s*\)/{f=0} f' "$SANDBOX/action-mut.yml" | tr -d ' "' > "$SANDBOX/allowed-mut.txt"
 chk "mutation proof: an ALLOWED_PATHS carrying an oracle path DOES intersect (the check reads real sets)" \
-  bash -c 'grep -xFf "$1" "$2" | grep -q .' _ "$SANDBOX/allowed-mut.txt" "$SANDBOX/oracle.txt"
+  bash -c 'grep -q . < <(grep -xFf "$1" "$2")' _ "$SANDBOX/allowed-mut.txt" "$SANDBOX/oracle.txt"
 
 [[ "$passes" -ge 8 ]] && pass || fail "anti-vacuity floor: only $passes checks ran"
 printf '\nbot-synthetic-unreachability.test.sh: %d passed, %d failed\n' "$passes" "$fails"
