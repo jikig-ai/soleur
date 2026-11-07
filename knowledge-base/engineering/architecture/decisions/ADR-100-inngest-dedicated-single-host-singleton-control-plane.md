@@ -1,6 +1,6 @@
 ---
 title: Inngest as a dedicated single-host singleton control plane
-status: adopting
+status: accepted
 date: 2026-07-07
 amends: ADR-030
 supersedes: none
@@ -12,15 +12,13 @@ brand_survival_threshold: single-user incident
 
 # ADR-100: Inngest as a dedicated single-host singleton control plane
 
-> **Status `adopting`.** The Phase-4 soak (7 days, per-`(function_id, startedAt-bucket)`
-> exactly-once) is the condition for flipping `adopting → accepted` (plan Phase 4.3).
-> **It has not started.** The cutover did not hold: the dedicated host has served nothing since
-> 2026-07-30 and `INNGEST_CUTOVER_FLIP` rests at `rollback`. See the
-> [2026-08-12 addendum](#addendum--2026-08-12-7228--the-cutover-did-not-hold-and-the-soak-never-started)
-> before treating any statement below as describing a running system.
-> **Superseded 2026-09-15:** the cutover was re-run and completed — see the
-> [2026-09-15 addendum](#addendum--2026-09-15-6178-8191--the-cutover-completed). Amends **ADR-030** (Inngest
-> as durable trigger layer); does not supersede it.
+> **Status `accepted`** (flipped `adopting → accepted` 2026-11-07). The Phase-4 soak (7 days,
+> per-`(function_id, startedAt-bucket)` exactly-once) was the condition set for the flip (plan
+> Phase 4.3); its reading went stale (`horizon_passed` 2026-10-06 — the heaviest slice outgrew the
+> host's page budget, so the day-7 reading is no longer takeable). ~7.5 weeks of incident-free
+> production on the dedicated host, including a live sanctioned host replace, supersedes it as
+> acceptance evidence — see the [2026-11-07 addendum](#addendum--2026-11-07-6178--flip-to-accepted).
+> Amends **ADR-030** (Inngest as durable trigger layer); does not supersede it.
 
 ## Context
 
@@ -1928,3 +1926,29 @@ Appended; nothing above is changed. The four terminal arms of `run_flip` (`done`
 Appended; nothing above is changed, and no dated record is edited. The 2026-07-24 amendment to Decision 4 records that `INNGEST_EVENT_KEY` and `INNGEST_SIGNING_KEY` are one shared app-to-host channel credential whose values in `soleur/prd` and `soleur-inngest/prd` must be equal, and that its live fix was a copy "out-of-band" into `soleur/prd`, with a reconcile that used "the Doppler copy (or `terraform apply -replace=random_id.inngest_{event,signing}_key_dedicated` + copy)". That description is superseded for how the app copy is produced; the shared-channel contract and the G3.5 parity gate it states are unchanged and still hold.
 
 Since #10540 the `doppler_secret.inngest_{signing,event}_key_prd` values in `inngest.tf` derive from `random_id.inngest_{signing,event}_key_dedicated`, the same source the dedicated secrets use, so equality holds by construction and there is no separate copy step and no out-of-band write. `ignore_changes = [value]` stays on the app secrets, so a plain apply still moves nothing; a rotation is `-replace` of the dedicated `random_id`s and then of the app secrets, reached only through the dispatch-only `inngest-key-rotate.yml` route. The route, its two-phase order, the Hetzner soft reboot that restarts the dedicated scheduler (the earlier `restart-inngest-server.yml` lever terminates on web-1 and cannot reach `10.0.1.40`), the rollback confirm in the link flip, and the accepted residuals are decided in [ADR-307](ADR-307-inngest-key-rotation-route.md). Between the two phases the copies legitimately differ, and the G3.5 gate fails closed in that window. The orphaned `random_id.inngest_{signing,event}_key_prd` are state-only and their removal is tracked in #11293.
+
+## Addendum — 2026-11-07 (#6178) — flip to `accepted`
+
+Appended; nothing above is changed, and no dated record is edited. The status line above and the
+frontmatter `status:` now read `accepted`; everything below stays as written.
+
+- **Authority.** Ruled by CTO agent, 2026-11-07, on #6178 (epic #10390 residual, scope/close
+  call): the motivating scope — extraction off the web backends onto a dedicated host — is
+  delivered and has run production ~7.5 weeks. `hcloud_server.inngest`
+  (`apps/web-platform/infra/inngest-host.tf`), cutover completed 2026-09-15 (`op=execute`,
+  run 34947956908); `web_colocate_inngest=false` gates bootstrap on fresh web hosts
+  (`cloud-init.yml`); the dedicated host runs no cloudflared; `INNGEST_BASE_URL=http://10.0.1.40:8288`
+  ends the split-brain this decision was written to prevent.
+- **Why the soak condition is satisfied by other evidence.** The 7-day per-`(function_id,
+  startedAt-bucket)` exactly-once reading was the planned acceptance test; the enrolled probe
+  (`scripts/followthroughs/inngest-soak-6178.sh`) reported `horizon_passed` on 2026-10-06 — the
+  heaviest slice outgrew the host's page budget and the day-7 reading can no longer be taken.
+  Production itself is the superseding evidence: ~7.5 weeks incident-free on the dedicated host,
+  including the live sanctioned host replace of 2026-10-26 (`SOLEUR_INFRA_PULL_APPLIED version=5`
+  2026-10-26T13:44:27Z, tracked on epic #10390). A planned 7-day sample is weaker evidence than a
+  measured 7.5-week run across a host replace.
+- **Close-out state.** The four `inngest-cutover-pre-*` rollback snapshots were verified
+  released 2026-11-07 (all four ids answer 404 image-not-found on the Hetzner API). HA is
+  re-filed as #6185 (open); nothing rides the ~2026-11-23 window — a failover pair is
+  meaningless-or-harmful while queue/run state sits on the sole-copy LUKS volume. #6178 closes
+  once this flip merges.
