@@ -149,6 +149,10 @@ pr_arm() {
   done
   unset _tmpd
   [ -n "$work" ] || finish fail api
+  # Owning trap for the mktemp dir above (lint-trap-ownership): the manual
+  # rm -rf below covers the named exit paths; this covers a signal/errexit
+  # death. ${work:-/nonexistent} stays silent once the local is out of scope.
+  trap 'rm -rf -- "${work:-/nonexistent}"' EXIT
 
   git diff --name-only --no-renames "$base" HEAD -- > "$work/touched" 2> "$work/diff.err" || { rm -rf "$work"; finish fail api; }
   # The classification list is the BASE commit's RATCHET_ORACLE — never the PR tree's: a PR cannot shrink the list
