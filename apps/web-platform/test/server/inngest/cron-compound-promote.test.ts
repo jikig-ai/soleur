@@ -198,8 +198,8 @@ describe("extractEnabledFlag (FR2)", () => {
 // =============================================================================
 
 describe("synthetic checks (AC18)", () => {
-  it("exactly 7 check names", () => {
-    expect(SYNTHETIC_CHECK_NAMES.length).toBe(7);
+  it("exactly 6 check names", () => {
+    expect(SYNTHETIC_CHECK_NAMES.length).toBe(6);
   });
 
   it("names match the verbatim list from the workflow", () => {
@@ -208,7 +208,6 @@ describe("synthetic checks (AC18)", () => {
       "dependency-review",
       "e2e",
       "skill-security-scan PR gate",
-      "enforce",
       "cla-check",
       "cla-evidence",
     ]);

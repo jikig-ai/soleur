@@ -28,7 +28,11 @@
 #       (p95 237 s overall, ~249-250 s daily on 2026-11-02/03, maximum 317 s, mean billed 3.47 min/unit; series: the runbook observation log). This probe's own
 #       sliding window lags the population by construction (wall_p95_s=206 wall_max_s=284 over units=260 on 2026-11-03): a probe read-window item, not a constants
 #       item. A breach is no longer a re-rule trigger: the recheck trigger is a whole-population p95 above 240 s on two consecutive reads, a CI cost regression
-#       for the budget owner;
+#       for the budget owner. DISCHARGE (Ruled by CTO agent, 2026-11-06, recorded on #10859): while the accepted-spend issue WALL_DISCHARGE_ISSUE is closed AND
+#       its ruling comment WALL_DISCHARGE_COMMENT resolves with the `soleur-cto-ruling` marker, criterion (d) reports wall=accepted-spend-<issue> on the status
+#       line instead of evaluating the numeric legs — the ceilings stay RULED and the measured walls still print, so acceptance is never silent. A failed
+#       discharge read is CANNOT ESTABLISH; a deadline cut is a budget cut like any other; a reopened or absent issue or a missing or markerless comment falls
+#       the legs back to the numeric comparison (the revocation mechanism: reopen the issue and the numeric leg resumes);
 #   (e) composition among the green pull_request units: one docs-only PR (every file a knowledge-base markdown file or a root markdown file), one
 #       DRAFT PR (read from the issue timeline: draft at the unit's own time), and one bot PR (a user of type Bot) when one occurs; when none
 #       occurs by REVIEW_DAYS (30) days after the merge the committed synthetic-green unit test substitutes and the substitution is printed;
@@ -93,6 +97,8 @@ MIN_PR=3
 MIN_MG=3
 P95_MAX=240   # RULED (see (d)); re-ruled 2026-11-02 from 210, confirmed unchanged and FINAL 2026-11-03 (whole-population p95 237 s, max 317 s)
 MAX_MAX=285   # RULED (see (d)); re-ruled 2026-11-02 from 270, confirmed unchanged and FINAL 2026-11-03
+WALL_DISCHARGE_ISSUE="${SOAK_WALL_DISCHARGE_ISSUE:-12129}"     # accepted-spend discharge for criterion (d) (Ruled by CTO agent, 2026-11-06); env seam is test-only
+WALL_DISCHARGE_COMMENT="${SOAK_WALL_DISCHARGE_COMMENT:-6687357348}"   # must resolve AND carry the soleur-cto-ruling marker; else the numeric legs stand
 TIMEOUT_WALL=290
 REVIEW_DAYS=30
 MAX_PAGES="${SOAK_MAX_PAGES:-40}"
@@ -509,7 +515,33 @@ if [ "$grew" != unread ]; then
     nots+=("baseline grew by $grew line(s) since the PR3a merge ($first3)")
   fi
 fi
-echo "window opened=$merged_at age_days=$age_days floor=$floor_src green_pr_units_distinct_prs=$distinct green_merge_group_shas=$mg_n scripts_pr=$any_scripts docs_only=$docs_seen draft=$draft_seen bot=$bot_seen wall_p95_s=$p95 wall_max_s=$max units=$n_w runs_listed=$runs_listed units_read=$units_read truncated=$TRUNC baseline_grown=$grew pr_unattributed_runs=$unattr"
+# (d) discharge: while the accepted-spend issue is closed AND its ruling comment resolves carrying the soleur-cto-ruling
+# marker, criterion (d) reports wall=accepted-spend-<issue> and the numeric legs do not run; the ceilings stay RULED and
+# the measured walls still print. A failed read is CANNOT ESTABLISH; a deadline cut is a budget cut (rc 46); a reopened
+# or absent issue or a missing or markerless comment falls the legs back to numeric. (Ruled by CTO agent, 2026-11-06.)
+wall_discharge=none
+if (( SECONDS - T0 >= BUDGET )); then
+  nots+=("read budget ended before the wall-discharge check (SOAK_BUDGET_S=$BUDGET)"); TRUNC=1
+else
+  djson="$(api "repos/$REPO/issues/$WALL_DISCHARGE_ISSUE")"; drc=$?
+  case "$drc" in
+    0) ;;
+    44|45) ;;                       # the discharge issue itself is gone: not closed, the numeric legs stand
+    46) nots+=("read budget ended during the wall-discharge check (SOAK_BUDGET_S=$BUDGET)"); TRUNC=1 ;;
+    *)  fail_api "the wall-discharge issue $WALL_DISCHARGE_ISSUE" ;;
+  esac
+  if [ "$drc" -eq 0 ] && [ "$(printf '%s' "$djson" | jq -r '.state // empty' 2>/dev/null)" = closed ]; then
+    dcomment="$(api "repos/$REPO/issues/comments/$WALL_DISCHARGE_COMMENT")"; drc=$?
+    case "$drc" in
+      0)  grep -q 'soleur-cto-ruling' <<<"$(printf '%s' "$dcomment" | jq -r '.body // empty' 2>/dev/null)" \
+            && wall_discharge="accepted-spend-$WALL_DISCHARGE_ISSUE" ;;
+      44|45) ;;                     # the ruling comment is gone: the numeric legs stand
+      46) nots+=("read budget ended during the wall-discharge check (SOAK_BUDGET_S=$BUDGET)"); TRUNC=1 ;;
+      *)  fail_api "the wall-discharge comment $WALL_DISCHARGE_COMMENT" ;;
+    esac
+  fi
+fi
+echo "window opened=$merged_at age_days=$age_days floor=$floor_src green_pr_units_distinct_prs=$distinct green_merge_group_shas=$mg_n scripts_pr=$any_scripts docs_only=$docs_seen draft=$draft_seen bot=$bot_seen wall_p95_s=$p95 wall_max_s=$max wall_discharge=$wall_discharge units=$n_w runs_listed=$runs_listed units_read=$units_read truncated=$TRUNC baseline_grown=$grew pr_unattributed_runs=$unattr"
 # the quota this sweep spent (rate_limit is free to read); a failed read here never decides the verdict
 rl1="$(api "rate_limit" 2>/dev/null)" || rl1=""
 RL_USED1="$(jq -r '.resources.core.used // empty' <<<"$rl1" 2>/dev/null)"; RL_LIMIT="$(jq -r '.resources.core.limit // empty' <<<"$rl1" 2>/dev/null)"; RL_REM1="$(jq -r '.resources.core.remaining // empty' <<<"$rl1" 2>/dev/null)"
@@ -528,10 +560,10 @@ if (( bot_seen == 0 )); then
   else nots+=("no bot PR in the window yet (the synthetic-green unit test substitutes only after $REVIEW_DAYS days)"); fi
 fi
 nwall=0
-if (( n_w > 0 )); then
+if (( n_w > 0 )) && [ "$wall_discharge" = none ]; then
   (( p95 <= P95_MAX )) || { nots+=("wall p95 ${p95}s is over $P95_MAX s (ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)"); nwall=$((nwall + 1)); }
   (( max <= MAX_MAX )) || { nots+=("wall max ${max}s is over $MAX_MAX s (ruled ceiling; a confirmed breach is a CI cost regression for the budget owner, not a re-rule)"); nwall=$((nwall + 1)); }
-else
+elif (( n_w == 0 )); then
   nots+=("no unit ran to take a wall time from")
 fi
 if (( nwall > 0 && ${#nots[@]} == nwall && age_days >= REVIEW_DAYS )); then
@@ -544,5 +576,5 @@ if (( ${#nots[@]} > 0 )); then
   printf 'NOT YET: %s\n' "${nots[@]}"
   exit 2
 fi
-echo "PASS: the window held: $distinct distinct PRs and $mg_n merge_group SHAs green, wall p95 ${p95}s max ${max}s, docs-only, draft and bot coverage as above, the baseline has not grown. It certifies the earliest prefix of the LISTED runs plus the newest queue state (units_read=$units_read truncated=$TRUNC); a listing is capped at 1,000 results, so the prefix moves between sweeps. The two wall ceilings are RULED (240/285 s, confirmed 2026-11-03; runbook, 'Ceilings are RULED'). Closing #10865 does not authorize PR3b (#10859)."
+echo "PASS: the window held: $distinct distinct PRs and $mg_n merge_group SHAs green, wall p95 ${p95}s max ${max}s$([ "$wall_discharge" = none ] || printf ' (wall=accepted-spend-%s: the numeric legs discharged by the accepted spend; reopening the issue restores them)' "$WALL_DISCHARGE_ISSUE"), docs-only, draft and bot coverage as above, the baseline has not grown. It certifies the earliest prefix of the LISTED runs plus the newest queue state (units_read=$units_read truncated=$TRUNC); a listing is capped at 1,000 results, so the prefix moves between sweeps. The two wall ceilings are RULED (240/285 s, confirmed 2026-11-03; runbook, 'Ceilings are RULED'). Closing #10865 does not authorize PR3b (#10859)."
 exit 0

@@ -459,7 +459,8 @@ fan_out_to_peers() {
 readonly RELAY_PROBE_JS='
 const tls=require("node:tls"),crypto=require("node:crypto");
 const host=process.env.RELAY_PROBE_PEER,port=Number(process.env.RELAY_PROBE_PORT);
-const ca=(process.env.PROXY_TLS_CERT||"").trim();
+let ca=(process.env.PROXY_TLS_CERT||"").trim();
+if(ca.indexOf("\n")<0)ca=ca.split("\\r\\n").join("\n").split("\\n").join("\n");
 let done=false,up=false,sock=null,buf=Buffer.alloc(0),hdr=-1;
 const fin=(r)=>{if(done)return;done=true;process.stdout.write(r);process.exit(0)};
 const verdict=()=>fin(buf.length>hdr+4&&buf[hdr+4]===0x88?"denied":"ok");

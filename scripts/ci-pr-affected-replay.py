@@ -197,10 +197,9 @@ SUITE_JOB = re.compile(r"^test-(scripts|webplat|bun)( \(|$)|^test-scripts-heavy(
 # Every other ci.yml job, which the rule never skips. An allowlist: a failing job whose name is in neither set is a job
 # this tool has not classified, so the unit is not-evaluable rather than reassuring (a parity test pins this set to ci.yml).
 ALWAYS_RUN_JOBS = frozenset((
-    "detect-changes", "push-dedupe", "draft-light", "pr-selection", "credential-path-guard", "lint-bot-statuses",
-    "encryption-posture", "marketplace-manifest-guard", "service-role-allowlist-gate", "tc-document-sha-guard",
-    "adr-ordinals", "rule-body-lint", "lockfile-sync", "sandbox-canary-capture-gate", "plugin-root-propagation-gate",
-    "lint-webplat", "web-platform-build", "shard-totality-mutations", "grok-fidelity", "harness-discovery", "test", "e2e",
+    "detect-changes", "push-dedupe", "draft-light", "pr-selection", "guards-ruleset", "lint-bot-statuses",
+    "encryption-posture", "guards-advisory",
+    "lint-webplat", "web-platform-build", "shard-totality-mutations", "test", "e2e",
     "critical-css-gate", "affected-index-ratchet", "oracle-selection", "oracle-index-check",
 ))
 FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")

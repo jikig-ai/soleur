@@ -14,7 +14,7 @@ no agent dispatches it without a fresh in-session go that names the command.
 ## Preconditions
 
 - The listener release (slice 1, #12181) is deployed on both web hosts. Publishing the secret earlier is harmless but proves nothing.
-- `CF_API_TOKEN_ORIGIN_CA` (Zone / SSL and Certificates / Edit, zone `soleur.ai`) and `CF_ZONE_ID` are in `soleur/prd_terraform`.
+- `CF_API_TOKEN_ORIGIN_CA` (Zone / SSL and Certificates / Edit, zone `soleur.ai`) is in the Tier-B project `soleur-infra-privileged/prd`; `CF_ZONE_ID` is in `soleur/prd_terraform`. A copy of the token left in `prd_terraform` is ignored.
 
 ## 1. Rehearse (read-only)
 

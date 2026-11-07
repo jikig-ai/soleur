@@ -721,6 +721,16 @@ kk_want() {
   # is recoverable although the copies are present
   grep -qx target <<<"$(kr_gate_rows B "$1" | cut -d'|' -f4)" && tgt=true
   base="$(jq -cs 'add' <(kr_gate_want A "$1") <(kr_gate_want B "$1"))" || return 1
+  # A phase-B row whose address ends _previous is the egress PREVIOUS satellite (#11920): its value is VAR-FED, so a
+  # real plan always knows it and the gate's recovery -> after_unknown_value clause can never hold for it (the clear
+  # leg spells the same row recovery:false in its one-row want). Demote it out of the recovery class: recover falls to
+  # the same ($all or $tgt) class the random_id row sits in, and previous_not_staged still verifies the staged value
+  # landed. The address comes out of the gate table (B19), never a literal.
+  local sat
+  sat="$(kr_gate_rows B "$1" | cut -d'|' -f3 | grep '_previous$' | head -1 || true)"
+  if [[ -n "$sat" ]]; then
+    base="$(jq -c --arg sat "$sat" 'map(if .address == $sat then .recovery = false else . end)' <<<"$base")" || return 1
+  fi
   repl="$( { kr_gate_replaces A "$1"; kr_gate_replaces B "$1"; } | sed -e 's/^-replace=//' | jq -R -cs 'split("\n") | map(select(length > 0))')"
   for i in "${!KK_CP[@]}"; do
     IFS='|' read -r _ p c nm addr <<<"${KK_CP[i]}"

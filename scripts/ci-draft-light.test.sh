@@ -107,7 +107,7 @@ OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
 SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
-LIGHT_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard oracle-index-check oracle-selection plugin-root-propagation-gate pr-selection push-dedupe rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+LIGHT_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-selection pr-selection push-dedupe"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'
 REASONS="bad_pr ready fork read_error not_draft switch_off ok"
 REPO_SLUG="jikig-ai/soleur"
@@ -1007,7 +1007,7 @@ mutate_yml y-gate-lost-elide "  test-scripts:
     if: \${{ !cancelled() && $LIGHT_CLAUSE }}" truth TT:test-scripts
 # a fifth heavy job that needs draft-light but forgets the clause, and one gated in the condition but not in needs
 mutate_yml y-gate-new-heavy-no-clause "
-  credential-path-guard:
+  guards-ruleset:
 " "
   new-heavy-job:
     needs: [push-dedupe, draft-light]
@@ -1015,10 +1015,10 @@ mutate_yml y-gate-new-heavy-no-clause "
     steps:
       - run: true
 
-  credential-path-guard:
+  guards-ruleset:
 " gated G-SET-NEEDS
 mutate_yml y-gate-clause-without-need "
-  credential-path-guard:
+  guards-ruleset:
 " "
   new-heavy-job:
     if: \${{ $LIGHT_CLAUSE }}
@@ -1026,17 +1026,17 @@ mutate_yml y-gate-clause-without-need "
     steps:
       - run: true
 
-  credential-path-guard:
+  guards-ruleset:
 " gated G-SET-IF
 mutate_yml y-gate-unclassified "
-  credential-path-guard:
+  guards-ruleset:
 " "
   new-heavy-job:
     runs-on: ubuntu-latest
     steps:
       - run: true
 
-  credential-path-guard:
+  guards-ruleset:
 " gated G-UNCLASSIFIED:new-heavy-job
 # the untouched light set: e2e (a required context), test-bun, web-platform-build gain no draft-light term
 mutate_yml y-e2e-needs "  e2e:

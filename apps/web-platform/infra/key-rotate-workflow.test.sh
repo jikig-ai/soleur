@@ -677,6 +677,9 @@ case "$sub" in
         *) acts='["update"]' ;;
       esac
       [[ -f "$S/nounknown_$addr" ]] && unknown=false
+      # the egress PREVIOUS satellite is var-fed: every real plan knows its value (after_unknown.value is never true),
+      # the shape the live plan gate refused on — modelled always, never behind a state file
+      [[ "$addr" == doppler_secret.egress_audit_ingest_token_previous ]] && unknown=false
       [[ -f "$S/actions_$addr" ]] && { acts="$(cat "$S/actions_$addr")"; [[ "$acts" == '["create"]' ]] && bnull=true; }
       [[ -f "$S/nonnullbefore_$addr" ]] && bnull=false
       entries+=("$(jq -cn --arg a "$addr" --argjson acts "$acts" --arg r "$reason" --argjson bn "$bnull" --argjson unk "$unknown" --arg id "$B64" --arg hex "$HEX" --arg std "$STD" \

@@ -916,3 +916,100 @@ The #8450 amendment above rejects a job-level `if:` or `needs:` on `e2e` (a fail
 ## Addendum 2026-10-09 (ADR-276 S3, #9728): the required `test` aggregator is red by design on one event class
 
 ADR-276's S3 stage makes the `test` aggregator conclude red, with the message `draft: full battery owed at ready`, in a `pull_request` run of a draft PR while the repository variable `CI_DRAFT_LIGHT` is `on` (Option R; the heavy families are skipped by a `draft-light` job and the aggregator exits 1 before its final check). It is never red on `merge_group` or `push`, and the `ready_for_review` run is always full. A required context is therefore not "pending or skipped-green" on any event: it reports, red, until the ready run's newer `test` row replaces it (the newest row per name decides, measured on the S3 entry-gate probe: BLOCKED while a newer row is pending, CLEAN once it is green). S2 left one named exception for `e2e`; this is the second class of deliberate red on a required context.
+
+## Amendment — 2026-11-06 (#12089): the 16 small required guards consolidated into three umbrella contexts
+
+The 16 small-guard contexts listed in the pre-amendment inventory were folded
+into **three required umbrella contexts** — the lever-3 consolidation of the
+CI-congestion-relief plan — reducing the CI Required context set from 23 to 10
+(the two CLA contexts are untouched, so the file-level total across both
+rulesets is 25 → 12):
+
+| Umbrella context | Producer job | Folded members (former contexts / job names) |
+| --- | --- | --- |
+| `guards-ruleset` | `.github/workflows/ci.yml` job `guards-ruleset` (`name: guards-ruleset`) | `adr-ordinals`, `rule-body-lint`, `tc-document-sha-guard`, `marketplace-manifest-guard`, `service-role-allowlist-gate`, `credential-path-guard`, `lockfile-sync`, `grok-fidelity` |
+| `quality-guards` | `.github/workflows/pr-quality-guards.yml` job `quality-guards` (`name: quality-guards`) | `enforce`, `markdown-lint`, `guard-script-fixture-tests` (context `Bash fixture tests for guard scripts`) |
+| `secret-guards` | `.github/workflows/secret-scan.yml` job `secret-guards` (`name: secret-guards`) | `scan` (`gitleaks scan`), `lint-fixture-content` (`lint fixture content`), `waiver-discipline` (`waiver discipline (issue:#NNN trailer)`), `rename-guard` (`rename-guard (allowlist destinations)`), `allowlist-diff` (`allowlist-diff (.gitleaks.toml paths surface)`) |
+
+Each folded guard is a **member step** of its umbrella: it keeps its step
+`name:`, its `env:`/conditions (job-level event conditions were pushed down
+onto the member steps), and gains an `id:` (its kebab-case member name) plus
+`if: ${{ !cancelled() }}` so one red member never hides its siblings. Each
+umbrella ends in an `aggregate` step that prints every member's verdict and
+exits non-zero iff any member failed — an all-skipped member on an event it
+owes a verdict on is a failure, never a pass. Advisory folds land in the same
+diff: `guards-advisory` (ci.yml) covers `sandbox-canary-capture-gate`,
+`plugin-root-propagation-gate` and `harness-discovery` (the folded job's
+`continue-on-error` moved to per-step `continue-on-error`, preserving the
+run-conclusion guarantee `web-platform-release.yml` relies on);
+`quality-advisory` (pr-quality-guards.yml) covers the eight advisory
+Block-* members (five of them detect-gated) plus `constraint-gates` and
+`auto-close-scan`.
+
+**Paired-edit contract satisfied.** This ADR's Sharp Edge 1 requires that a
+required-context rename and its producer land in the same PR. The rename was
+atomic in one PR: the workflow producers (`guards-ruleset`, `quality-guards`,
+`secret-guards` — each always-run on `pull_request`, `push` and `merge_group`,
+with NO job-level event `if:`), the Terraform declaration
+(`infra/github/ruleset-ci-required.tf`), the canonical JSON
+(`scripts/ci-required-ruleset-canonical-required-status-checks.json`), the
+synthetic-check SSOT (`scripts/required-checks.txt`, with per-member compound
+#6049 justifications) and the wall-clock bounds TSV
+(`scripts/required-check-wallclock-bounds.tsv`, re-seeded
+`max(member bound) + Σ member p90_dur`, margin 0.30) all changed together. At
+no commit does a required name lack a `merge_group` producer — the
+pend-forever deadlock class the 2026-06-30 amendment records.
+
+**Self-merge path (this PR's own landing).** While this PR is open the live
+ruleset still requires the 16 old context names — which this branch's
+workflows no longer produce — so the PR's head reports only the new umbrella
+names and the old names stay Expected-forever. `gh pr merge --auto` would arm
+an entry that can never dequeue (its merge_group candidate contains the new
+workflows and produces only the new names; the entry ejects at the 120-min
+timeout). The landing path is therefore `gh pr merge --admin` once the 10
+reporting CI-required contexts (3 umbrellas + 7 unrenamed) are green —
+cla-check/cla-evidence report via merge-queue-cla-synthetics and are
+unaffected — the old-name
+pending rows are expected-by-design, not a broken run. Note that
+`plugins/soleur/scripts/admin-merge-ready.sh` exits not-ready on the ABSENT
+old context names (it waits on required names that will never report), so the
+self-merge runs as a raw `gh pr merge --admin` operator command outside the
+skill gate. Post-merge,
+`apply-github-infra.yml` applies the renamed set (~minutes) and the
+transition-hazard recipe below covers in-flight queue entries.
+
+**Transition hazard and re-queue recipe.** Entries already inside the merge
+queue when this apply lands carry a stale required-context set: their
+`merge_group` runs post `guards-ruleset`/`quality-guards`/`secret-guards`,
+not the old names, so a queued entry evaluated against the OLD required list
+pends on names that will never report. The hazard window is wider than the
+queue snapshot at apply time: entries ENQUEUED between this PR's merge and
+the `apply-github-infra.yml` run land under the OLD ruleset (still live until
+the apply) while their `merge_group` candidate already contains the new
+workflows — the same pend-forever shape, created post-merge. Re-check the
+queue after the apply completes, not just before merging. The recipe is
+symmetric for both directions: dequeue and re-enqueue the affected entries —
+remove each entry from the queue and re-add it (`gh pr merge --auto` re-arm),
+so its queue evaluation starts against the new context set. Entries whose
+`merge_group` run was already green under the old set are unaffected; only
+in-flight or freshly-enqueued candidates need the re-arm. Open PRs NOT in
+the queue also report the old-name pending rows: they produce the new names
+only after a re-run or an update-branch (their last check-suite predates the
+rename), which is expected and clears on their next push.
+
+**Full-revert recipe.** Revert the merge commit of this PR on `main`. The
+`apply-github-infra.yml` path then restores the 16 old required contexts from
+the reverted Terraform in the same apply, and the reverted workflows resume
+producing the old names — a symmetric paired edit. Any merge-queue entries
+queued under the umbrella names then face the mirror-image stale-context
+problem; apply the symmetric re-queue recipe (dequeue, re-enqueue) so their
+candidates are evaluated against the restored 16-name set.
+
+**Context↔job inventory after this amendment** (CI Required, 10 contexts):
+`test`, `e2e`, `guards-ruleset` (ci.yml); `dependency-review`,
+`quality-guards` (pr-quality-guards.yml);
+`skill-security-scan PR gate` (codeql.yml); `secret-guards` (secret-scan.yml);
+`tenant-integration-required` (tenant-integration.yml);
+`sentry-destroy-required` (apply-sentry-infra.yml);
+`vendor-pin-required` (vendor-pin-verify.yml). The CLA Required ruleset
+(`cla-check`, `cla-evidence`) is unchanged.

@@ -4,7 +4,7 @@
 # The #5849 P0 shipped GREEN because a routine @anthropic-ai/claude-agent-sdk bump
 # (0.2.85→0.3.197) split bwrap's unshare() and nothing FORCED a human to look. This
 # gate closes that class deterministically (no model turn, no creds — ADR-079
-# option (b)): it runs BLOCKING in ci.yml's `lockfile-sync` job (a branch-protection
+# option (b)): it runs BLOCKING in ci.yml's `lockfile-sync` member step of `guards-ruleset` (a branch-protection
 # required check) on every PR.
 #
 # Two assertions:
@@ -149,7 +149,7 @@ fi
 # --- 3. CAPTURE GATE (ADR-079 deferral B / #5913) --------------------------------
 # Only runs where explicitly enabled (SANDBOX_CANARY_GATE_ENABLED=1) — a dedicated
 # creds-bearing CI job (bun + npm ci + ANTHROPIC_API_KEY). The always-run
-# `lockfile-sync` gate leaves this OFF so sections 1+2 (presence + bump-ack) run on
+# `lockfile-sync` member leaves this OFF so sections 1+2 (presence + bump-ack) run on
 # every PR (incl. forks) WITHOUT the paid capture turn, and a routine edit to the
 # canary script never trips a false ack-fallback. Fork PRs get no secrets → the
 # capture job is skipped. TRUST-BOUNDARY NOTE (security review #5913 L1): a fork's
@@ -159,7 +159,7 @@ fi
 # executes post-merge, in bwrap, in the canary container). This is acceptable
 # while the capture gate is dark-launch; if it is promoted to a required check,
 # add a fork-safe fixture-integrity path (e.g. a maintainer re-verify on the base
-# ref). See ci.yml `sandbox-canary-capture-gate`.
+# ref). See ci.yml `sandbox-canary-capture-gate` member step of `guards-advisory`.
 if [[ "${SANDBOX_CANARY_GATE_ENABLED:-0}" == "1" ]]; then
 # Re-capture + byte-diff the committed CANONICAL fixture when the diff touches a
 # capture input. Block ONLY on `argv_drift` (deterministic once captured). Every

@@ -1,9 +1,10 @@
 name: Merge queue CLA synthetics
 
 # Merge queue (#5780, re-adopted by #9454). `main` is gated by TWO rulesets: "CI Required"
-# (23 contexts, every one produced on merge_group by its own workflow; audited by
-# scripts/probe-merge-group-coverage.sh) AND "CLA Required" (`cla-check` + `cla-evidence`,
-# see scripts/required-checks.txt). The CLA producers, cla.yml and cla-evidence.yml, are
+# (10 contexts post-#12089, each produced on merge_group by its own workflow) AND
+# "CLA Required" (`cla-check` + `cla-evidence`, synthesized by THIS workflow — see
+# scripts/required-checks.txt) — 12 required contexts total, audited by
+# scripts/probe-merge-group-coverage.sh. The CLA producers, cla.yml and cla-evidence.yml, are
 # pull_request_target/issue_comment driven (contributor-assistant action + an R2 evidence
 # sidecar), so they cannot run on a `merge_group` event (there is no PR/comment object on the
 # temp ref). Without this workflow, `cla-check`/`cla-evidence` never report on the

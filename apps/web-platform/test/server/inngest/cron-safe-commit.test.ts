@@ -640,13 +640,12 @@ describe("safeCommitAndPr — workspace lost (non-throwing)", () => {
 // ---------------------------------------------------------------------------
 
 describe("safeCommitAndPr — #5111 option surface", () => {
-  it("exports the 7 canonical synthetic CI check names (consolidated from the 5 per-cron copies)", () => {
+  it("exports the 6 canonical synthetic CI check names (consolidated from the 5 per-cron copies; `enforce` dropped with the #12089 umbrella fold)", () => {
     expect([...SYNTHETIC_CHECK_NAMES]).toEqual([
       "test",
       "dependency-review",
       "e2e",
       "skill-security-scan PR gate",
-      "enforce",
       "cla-check",
       "cla-evidence",
     ]);

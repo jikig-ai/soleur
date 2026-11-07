@@ -35,8 +35,9 @@
 # GUARD 4 MATRIX MAPPING (manifest parity): row 1 → check_manifest bogus-member copy;
 # row 2 → check_manifest empty copy; row 3 → check_manifest copy that drops lint-orphan-test-suites;
 # row 4 → row_index_job (the extracted oracle-index-check step must propagate a member's non-zero
-# exit into the leg verdict); row 5 → check_manifest reordered copy (a different member order is a
-# PASS). The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
+# exit into the leg verdict); row 4b → the leg's checkout declares fetch-depth 0 and is gated on
+# oracle_only (a static pin of ci.yml); row 5 → check_manifest reordered copy (a different member
+# order is a PASS). The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
 # registration, and every live registration whose label matches the declared oracle-SUT name class
 # (affected|lint-orphan-test-suites|ci-pr|ci-path-gating) must be a member OR named in a commented
 # exclusion line — a NEW oracle-machinery registration cannot silently escape the leg.
@@ -1268,6 +1269,22 @@ PYX
   else
     fail "G4 row4 the oracle-index-check manifest step could not be extracted from ci.yml ($(head -c 120 "$SANDBOX/oic.err"))"
   fi
+  # Guard 4 row 4b: the leg's checkout carries full history AND runs on oracle-only runs. At the default depth 1
+  # `origin/main` is not a ref, so the manifest's test-all-affected rows degrade to `undecidable-diff` and go red on the
+  # first oracle-only run (PR #12245); a checkout whose `if:` is flipped never runs there at all. Pins the config, not the
+  # behaviour: the behaviour is only observable on a real oracle-only run.
+  _oic_depth="$(python3 - "$CI_YML" 2>/dev/null <<'PYX' || echo "parse-failed"
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]))
+job = (doc.get("jobs") or {}).get("oracle-index-check") or {}
+co = [s for s in (job.get("steps") or []) if isinstance(s, dict) and str(s.get("uses", "")).startswith("actions/checkout@")]
+if len(co) == 1:
+    print(len(co), (co[0].get("with") or {}).get("fetch-depth", "unset"), co[0].get("if", "unset"), "first" if (job.get("steps") or [None])[0] is co[0] else "late")
+else:
+    print(len(co), "n/a")
+PYX
+)"
+  check_eq "G4 row4b the oracle-index-check leg has exactly one checkout: first step, fetch-depth 0, gated on oracle_only" "$_oic_depth" "1 0 needs.oracle-selection.outputs.oracle_only == 'true' first"
 fi
 
 # Self-registration: this sentinel is a registered suite with its own edge array (Phase 4 wiring).

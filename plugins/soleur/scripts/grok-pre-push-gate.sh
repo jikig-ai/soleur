@@ -174,7 +174,7 @@ else
   echo "SKIP rule-body-lint (no origin/main ref)"
 fi
 
-# lockfile-sync (ci.yml): regenerate under npm@11 and diff; restore on failure.
+# lockfile-sync (ci.yml `guards-ruleset` member): regenerate under npm@11 and diff; restore on failure.
 step "lockfile-sync"
 if command -v npm >/dev/null 2>&1; then
   npm_major="$(npm --version | cut -d. -f1)"
@@ -224,7 +224,7 @@ else
   echo "SKIP web-platform-build (--skip-build)"
 fi
 
-# --- Phase 4: Grok fidelity (CI grok-fidelity required check) ---
+# --- Phase 4: Grok fidelity (the `grok-fidelity` member of the `guards-ruleset` required check) ---
 export GROK_FIDELITY_SKIP_BUDGET=1
 run_step "grok-fidelity-gate" bash plugins/soleur/scripts/grok-fidelity-gate.sh
 

@@ -5,7 +5,7 @@
 # command. The typed confirm is a fat-finger guard, NOT an authorization (it is derivable from public inputs); the guard also refuses
 # a ref other than main, a bot, and any actor outside the committed owner allowlist, and the apply job runs on the reviewer-gated
 # environment web-platform-infra-apply, so a human approval is a second, separate key. `mode=plan` is the read-only rehearsal: it
-# reads the Cloudflare token and zone id from Doppler value-silently, builds a key and CSR on the runner, verifies the CSR, checks the
+# reads the Cloudflare token (Tier-B project soleur-infra-privileged/prd) and the zone id (soleur/prd_terraform) from Doppler value-silently, builds a key and CSR on the runner, verifies the CSR, checks the
 # Cloudflare credential with a certificate LIST, and reports what apply would do. It creates nothing and writes nothing.
 #
 # WHAT APPLY WRITES. Doppler soleur/prd ORIGIN_TLS_KEY_B64 and ORIGIN_TLS_CERT_B64 (base64 -w0 of the PEM; the contract of

@@ -114,7 +114,7 @@ pre-commit:
       priority: 5
       # #8302 / ADR-229: the lifecycle SKILL.md byte ratchet, anchored to the merge
       # base. Registered here so the LOCAL gate sees a red before push (CI's
-      # rule-body-lint job is the required context; without this entry the lint's
+      # rule-body-lint member step of `guards-ruleset` produces the required context; without this entry the lint's
       # staged/unstaged diff arms were dead code and a contributor learned of a
       # red only after pushing). ~0.1 s. Base-unavailable is a hard failure
       # inside the lint, never a skip -- fetch origin main first.

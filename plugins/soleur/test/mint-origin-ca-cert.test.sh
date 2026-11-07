@@ -166,8 +166,8 @@ chmod +x "$STUBS/curl" "$STUBS/doppler"
 
 SC=0
 reset_env() { # fresh Doppler state with the Cloudflare credential and an unrelated prd secret
-  rm -rf "$TMP/state" "$TMP/rt"; mkdir -p "$TMP/state/soleur/prd_terraform" "$TMP/state/soleur/prd" "$TMP/rt"
-  printf '%s' "$CF_TOKEN" > "$TMP/state/soleur/prd_terraform/CF_API_TOKEN_ORIGIN_CA"
+  rm -rf "$TMP/state" "$TMP/rt"; mkdir -p "$TMP/state/soleur/prd_terraform" "$TMP/state/soleur/prd" "$TMP/state/soleur-infra-privileged/prd" "$TMP/rt"
+  printf '%s' "$CF_TOKEN" > "$TMP/state/soleur-infra-privileged/prd/CF_API_TOKEN_ORIGIN_CA"
   printf '%s' "$ZONE" > "$TMP/state/soleur/prd_terraform/CF_ZONE_ID"
   printf 'unrelated' > "$TMP/state/soleur/prd/SOME_OTHER_SECRET"
   : > "$TMP/stub.log"; : > "$TMP/summary.md"; : > "$TMP/gh_out"
@@ -314,8 +314,14 @@ refuse_case "R4 certificate for another host" cert_wrong_host STUB_CF_HOST=other
 refuse_case "R5 certificate for another key" cert_key_mismatch STUB_CF_WRONG_KEY=1
 GE=$(( $(date -u +%s) - 7200 )); refuse_case "R6 stale guard" guard_stale; unset GE
 GE=notanumber; refuse_case "R7 missing guard epoch" guard_epoch_missing; unset GE
-reset_env; rm -f "$TMP/state/soleur/prd_terraform/CF_API_TOKEN_ORIGIN_CA"; run_mint apply false
-eq "R8 missing Cloudflare token exits 1" "$RC" 1; has "R8b verdict" "$OUT" "verdict=cf_token_unreadable"
+reset_env; rm -f "$TMP/state/soleur-infra-privileged/prd/CF_API_TOKEN_ORIGIN_CA"; run_mint apply false
+eq "R8 missing Cloudflare token exits 1" "$RC" 1; has "R8b verdict" "$OUT" "verdict=cf_token_unreadable"; has "R8c names the Tier-B project" "$OUT" "soleur-infra-privileged/prd"
+# The Tier-A copy must NOT be a fallback: a token only in prd_terraform (any branch workflow can plant or read it) is unreadable.
+reset_env; rm -f "$TMP/state/soleur-infra-privileged/prd/CF_API_TOKEN_ORIGIN_CA"; printf '%s' "$CF_TOKEN" > "$TMP/state/soleur/prd_terraform/CF_API_TOKEN_ORIGIN_CA"; run_mint apply false
+eq "R8d a Cloudflare token present only in prd_terraform is not used" "$RC" 1; has "R8e verdict" "$OUT" "verdict=cf_token_unreadable"
+eq "R8f no Cloudflare call was made with it" "$(grep -c 'ARGV.*api.cloudflare.com' "$TMP/stub.log")" 0
+reset_env; run_mint plan false
+eq "R8g the Cloudflare token is read from soleur-infra-privileged/prd and nowhere else" "$(grep -c 'secrets get CF_API_TOKEN_ORIGIN_CA --plain -p soleur-infra-privileged -c prd' "$TMP/stub.log")$(grep -c 'secrets get CF_API_TOKEN_ORIGIN_CA.*-c prd_terraform' "$TMP/stub.log")" 10
 reset_env; printf 'not-a-zone' > "$TMP/state/soleur/prd_terraform/CF_ZONE_ID"; run_mint apply false
 eq "R9 a malformed zone id exits 1" "$RC" 1; has "R9b verdict" "$OUT" "verdict=zone_id_unreadable"
 reset_env; run_mint apply false TF_VAR_doppler_token_tf=
