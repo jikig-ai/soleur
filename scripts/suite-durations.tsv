@@ -18,7 +18,7 @@
 .claude/hooks/doppler-secrets-delete-redirect.test.sh	240	measured
 .claude/hooks/durable-reminder-prefer-inngest.test.sh	294	measured
 .claude/hooks/follow-through-directive-gate.test.sh	1645	measured
-.claude/hooks/git-commit-secret-scan.test.sh	6938	measured
+.claude/hooks/git-commit-secret-scan.test.sh	297100	measured
 .claude/hooks/grep-q-pipe-guard.test.sh	6081	measured
 .claude/hooks/grep-rewrite.test.sh	3369	measured
 .claude/hooks/guardrails.test.sh	26393	measured
@@ -609,7 +609,7 @@ scripts/test-all-capacity-signal	4519	measured
 scripts/test-all-corpus-weight-budget	1222	floor
 scripts/test-all-enumerate-toolchain	21652	measured
 scripts/test-all-fast-tier-budget	708	measured
-scripts/test-all-group-affected	3200	measured
+scripts/test-all-group-affected	349500	measured
 scripts/test-all-infra-coverage-notice	163566	measured
 scripts/test-all-killed-classification	4540	measured
 scripts/test-all-orphan-log-retention	48506	measured

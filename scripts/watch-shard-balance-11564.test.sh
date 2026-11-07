@@ -344,6 +344,95 @@ run
 [[ "$RC" -eq 3 && "$ERR" == *"zero suite-timings artifacts"* && "$(ncalls 'issue create')" -eq 0 ]] \
   && pass "S18 non-digit artifact suffix: run skipped, exit 3, never an all-clear" || fail "S18 (rc=$RC)"
 
+# ---- S19: stale measured price -> price-drift finding (#12016) ---------------
+# The arm needs timed>=3 sampled runs, so this scenario feeds three artifact-
+# bearing runs (run_ids 101/102/103) instead of the usual one. f-meas-x times
+# 350000 in every run against a committed 5000 (70x) — over the 4x/120000ms
+# bound in every sample.
+mkscene
+printf '101\n102\n103\n' > "$MOCKD/run_ids"
+for rid in 101 102 103; do seed "$rid" suite-timings-scripts-0 <<'EOF'
+f-meas-x	350000
+f-meas-y	5000
+f-floor-big	1222
+f-floor-big2	1222
+f-floor-sub	1222
+EOF
+done
+run
+body="$(cat "$MOCKD/created")"
+[[ "$RC" -eq 0 && "$(ncalls 'issue create')" -eq 1 && "$body" == *"price-drift light f-meas-x"* \
+   && "$body" == *"committed=5000ms"* && "$body" == *"median=350000ms"* ]] \
+  && pass "S19 stale measured price flags a price-drift finding" || fail "S19 (rc=$RC body has price-drift: $(grep -c price-drift <<<"$body"))"
+[[ "$body" != *"price-drift light f-meas-y"* ]] \
+  && pass "S19b stable measured row is not flagged" || fail "S19b stable row flagged"
+
+# ---- S20: two stale measured prices -> BOTH flag (no break-after-first) ------
+mkscene
+printf '101\n102\n103\n' > "$MOCKD/run_ids"
+for rid in 101 102 103; do seed "$rid" suite-timings-scripts-0 <<'EOF'
+f-meas-x	350000
+f-meas-y	350000
+f-floor-big	1222
+f-floor-big2	1222
+f-floor-sub	1222
+EOF
+done
+run
+body="$(cat "$MOCKD/created")"
+[[ "$RC" -eq 0 && "$body" == *"price-drift light f-meas-x"* && "$body" == *"price-drift light f-meas-y"* ]] \
+  && pass "S20 two stale measured prices both land in the findings set" || fail "S20"
+
+# ---- S21: sub-bound measured drift -> must-PASS unflagged --------------------
+# f-meas-x at 19000 vs committed 5000: ratio 3.8 (<4) AND |delta|=14000
+# (<120000) — under both conjuncts, so no price-drift finding. The audit's
+# ordinary +12%..+190% band must never alert.
+mkscene
+printf '101\n102\n103\n' > "$MOCKD/run_ids"
+for rid in 101 102 103; do seed "$rid" suite-timings-scripts-0 <<'EOF'
+f-meas-x	19000
+f-meas-y	5000
+f-floor-big	1222
+f-floor-big2	1222
+f-floor-sub	1222
+EOF
+done
+run
+# A tracker may legitimately be created for the leg-observed imbalance this
+# fixture carries; the property under test is that NO price-drift line lands.
+body="$(cat "$MOCKD/created")"
+[[ "$RC" -eq 0 && "$body" != *"price-drift"* ]] \
+  && pass "S21 sub-bound measured drift (3.8x, |d|=14s) is not flagged" || fail "S21 (rc=$RC body: $(grep -c price-drift <<<"$body") price-drift lines)"
+
+# ---- S22: price-drift magnitude slide -> same identity, no repost ------------
+# The sentinel hashes type+group+label only — an episode whose median slides
+# (350s -> 1900s) while staying over bound must NOT churn the tracker.
+mkscene
+printf '101\n102\n103\n' > "$MOCKD/run_ids"
+for rid in 101 102 103; do seed "$rid" suite-timings-scripts-0 <<'EOF'
+f-meas-x	350000
+f-meas-y	5000
+f-floor-big	1222
+f-floor-big2	1222
+f-floor-sub	1222
+EOF
+done
+run; sha="$(sentinel_of "$MOCKD/created")"; [[ -n "$sha" ]] || fatal "S22 setup: no sentinel captured"
+: > "$MOCKD/calls"
+printf '[{"number":505,"title":"ci-shard-balance-watch: manifest drift findings","author":{"login":"github-actions"}}]' > "$MOCKD/issues.json"
+printf '{"number":505,"state":"OPEN","author":{"login":"github-actions"},"body":"","comments":[{"author":{"login":"github-actions"},"body":"prior\\n<!-- shard-balance-watch:v1 %s -->"}]}' "$sha" > "$MOCKD/issue.json"
+for rid in 101 102 103; do seed "$rid" suite-timings-scripts-0 <<'EOF'
+f-meas-x	1900000
+f-meas-y	5000
+f-floor-big	1222
+f-floor-big2	1222
+f-floor-sub	1222
+EOF
+done
+run
+[[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 0 && "$(ncalls 'issue create')" -eq 0 ]] \
+  && pass "S22 magnitude slide inside a persistent price-drift episode does not repost" || fail "S22 (comments=$(ncalls 'issue comment'))"
+
 # ---- S10: workflow contract --------------------------------------------------
 [[ -s "$WF" ]] || fatal "workflow missing: $WF"
 wf="$(grep -vE '^[[:space:]]*#' "$WF")"
@@ -382,7 +471,7 @@ else
 fi
 
 echo; echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
-MIN_ASSERTIONS=24
+MIN_ASSERTIONS=29
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 2
 fi

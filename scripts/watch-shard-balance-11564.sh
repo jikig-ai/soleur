@@ -133,6 +133,11 @@ while IFS= read -r line; do
       if (( fresh >= FLOOR_DRIFT_BOUND_MS )); then
         findings+=("floor-row $g $label committed=${committed}ms median=${fresh}ms timed=${ts}")
       fi ;;
+    PRICE_DRIFT_ROW\ *)
+      # A committed src=measured price gone stale past the generator's bound
+      # (#12016) — the generator already applied ratio/|delta|/timed gates.
+      read -r _ g label committed fresh ts <<<"$line"
+      findings+=("price-drift $g $label committed=${committed}ms median=${fresh}ms timed=${ts}") ;;
     LEG_PREDICTED\ *|LEG_OBSERVED\ *) printf '%s\n' "$line" >> "$WORK/legs.txt" ;;
     BOUND_PERFECT\ *) bound_light="${line##* }" ;;
     FLOOR_UNMEASURED\ *) unmeasured_lines+=("$line") ;;
