@@ -1040,7 +1040,7 @@ shim18() { # <label> <argv-pattern> [<fail from the Nth matching call, default 1
   w="$(build_fixture "$SHIMROOT18")"; s="$SHIMROOT18/stub"
   ss18_write "$w" "$TOK18" commit
   make_stub "$s" "$TWO_REQUIRED" "$GREEN_CHECKS" ""
-  ( cd "$s" && printf '#!/usr/bin/env bash\ncase "$*" in *"%s"*) d="$(dirname "$0")"; c=$(cat "$d/n" 2>/dev/null || echo 0); c=$((c+1)); echo "$c" > "$d/n"; [ "$c" -ge %s ] && exit 1 ;; esac\nexec %s "$@"\n' "$2" "${3:-1}" "$REAL_GIT18" > git && chmod +x git )
+  ( cd "$s" && printf '#!/usr/bin/env bash\ncase "$*" in *"%s"*) d="$(dirname "$0")"; printf x | tee -a "$d/n" >/dev/null; c=$(cat "$d/n" | wc -c); [ "$c" -ge %s ] && exit 1 ;; esac\nexec %s "$@"\n' "$2" "${3:-1}" "$REAL_GIT18" > git && chmod +x git )
   assert_eq "$UNDECIDABLE" "$(run_gate "$w" "$s")" "$1: a failing git source -> UNDECIDABLE (never SKIPPABLE)"; rm -f "$s/n"
   assert_reason "$w" "$s" "working-tree scope check failed" "$1: the failure names itself"
 }
