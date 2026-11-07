@@ -93,10 +93,11 @@ magnitude slides inside a persistent episode do not re-post.
 
 **Probe budget seam.** `pr-battery-gate-saving-9323.sh:88` pins `BUDGET="${PBG_BUDGET_S:-270}"`
 with a `<= 300` validation because the sweeper kills probes at 300 s. The seam
-`PBG_UNBOUNDED=1` skips the wall-deadline computation (END unset → the `api()`/`api_bin()`
-caps fall back to their per-call 60 s ceiling, budget-cut rc 46 unreachable). Sweeper
-behaviour is unchanged: the variable is never set there and the `<=300` pin still guards
-`PBG_BUDGET_S`.
+`PBG_UNBOUNDED=1` replaces the wall deadline with a far-future bound (`END=$((T0+86400))` —
+under `set -u` an unset `END` would crash `api()`'s `rem=$((END-SECONDS-5))`, so the seam
+overrides the bound, never removes it; per-call caps stay at 60 s and budget-cut rc 46 is
+unreachable in practice). Sweeper behaviour is unchanged: the variable is never set there
+and the `<=300` pin still guards `PBG_BUDGET_S`.
 
 **S4 evidence.** All commands are READ-ONLY (runbook §4); the only writes are the replay's
 `--out` directory (outside the repo), the committed receipts under this branch's spec dir,
@@ -525,6 +526,65 @@ plugins/soleur/test/ are named *.mutation.sh and run in no gate") — mentions
 `scripts/test-all.sh`. **Disposition: Acknowledge** — different concern (unregistered
 `*.mutation.sh` batteries vs our conditional one-line `run_suite` removal on the #9323
 retire arm); no fold-in, the issue remains open.
+
+## Enhancement Summary (deepen-plan, 2026-11-07)
+
+Deepen-plan ran on Devin CLI without subagent-spawn capability: the mechanical halt
+gates executed and passed; the spawn-dependent phases (skill/learnings/research/review
+agent fan-outs, spec-flow, advisor consult) were degraded to the inline research already
+recorded in `## Research Insights` and are listed as degraded, not skipped-silently.
+
+### Halt-gate results
+
+- **4.6 User-Brand Impact:** PASS — section present, `threshold: none` with a decision
+  line; sensitive-path regex verified zero matches against the file list (no scope-out
+  bullet required).
+- **4.7 Observability:** PASS — all five fields populated; `discoverability_test.command`
+  first token `grep` is on the Check-10 allowlist, `expected_output` is the literal path
+  string the command prints, no `ssh`, finishes in <1 s.
+- **4.8 PAT-shaped variable:** PASS — zero matches; the plan's `GH_TOKEN` use is the
+  probe's existing operator-local read contract, not an infra-time write credential.
+- **4.9 UI wireframe:** does not fire — zero UI-surface files.
+- **4.10 Encryption Posture:** does not fire — no new persistent store or cross-component
+  connection.
+- **4.11 Guard Contract:** PASS — `scripts/lint-guard-contract.py` scanned 1 plan, 1 guard
+  entry, no FAIL; the Assembly names the two structural chokepoints
+  (`drift_report_group()` emission, the watch findings loop), the matrix has 7 rows incl.
+  own-dispatch, second-member, must-PASS (under-bound, under-sampled), harness and anchor
+  rows; matrix authored before the guard.
+- **4.12 Scope Check:** PASS — exactly one unfenced `## Scope Check`; every ask mapped or
+  descoped-with-justification; every `inferred` item justified; no `status: BLOCKED`.
+- **4.13 Task Design:** does not fire — no new autonomous-task surface (the watch and
+  sweeper already exist; this PR deletes a suite registration, adds none).
+- **4.5/4.5x network-outage & downtime gates:** not triggered — no SSH/network symptom
+  patterns, no offline-inducing operation.
+
+### Enrichments applied during the deepen pass
+
+- Corrected the `PBG_UNBOUNDED` seam description: under `set -u` an unset `END` crashes
+  `api()` — the seam sets `END=$((T0+86400))`, it never removes the bound.
+- Confirmed `lane: cross-domain` (fail-closed; no spec.md `lane:` to carry forward) and
+  `closes: [12016]` only — #9323 closes by verdict evidence in-work, never by autoclose.
+
+### Degraded phases (recorded, not silently skipped)
+
+- Phase 2/4/5 agent fan-outs (community-discovery, functional-overlap, per-section
+  research, all review agents), spec-flow analyzer, and the scoped advisor consult could
+  not spawn in this harness. The plan's design decisions rest on the inline evidence in
+  `## Research Insights`; open technical rulings are parked in
+  `specs/feat-one-shot-ci-lever-residuals/decision-challenges.md` as `pending - assumed`
+  rows for a spawn-capable surface (or the operator) to confirm.
+
+### New considerations discovered
+
+- The post-refresh predicted leg totals (leg 6 → 29.9 min, max/mean 1.26) sit just under
+  the watch's 1.30 flag — the first live datapoint the new drift arm may legitimately
+  surface is leg-balance drift, not price staleness; that is the watch working as
+  designed, not a false positive.
+- Criterion (c) may still re-rule NO-GO even on a complete index (the prior rough per-run
+  estimate ~11.6 net billed min is under the ~20 bar, and the advisory ratchet adds ~3.4
+  billed min/run). The plan treats a repeated NO-GO as a valid, recorded outcome with the
+  retire-vs-schedule call routed to the operator — not a failure of this PR.
 
 ## References & Research
 
