@@ -1828,7 +1828,9 @@ function reattachApprovals(
         if (!tenant) throw new Error("viewer role read failed");
         const { data, error } = await tenant.rpc("is_workspace_owner", { p_workspace_id: workspaceId, p_user_id: userId });
         if (error) throw new Error("viewer role read failed"); // reported by reattach; the card shows the read-only view
-        return data === true ? "owner" : "member";
+        // Only a boolean answer is a role: a null / undefined / garbage payload is a failed read, never a silent "member".
+        if (typeof data !== "boolean") throw new Error("viewer role read failed");
+        return data ? "owner" : "member";
       },
     });
   })().catch((err) => {

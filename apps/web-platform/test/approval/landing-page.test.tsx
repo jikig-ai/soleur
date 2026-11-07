@@ -344,13 +344,17 @@ describe("the requester line (#9601)", () => {
     const ctl = new AbortController();
     const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => ctl.signal);
     try {
+      let hungReads = 0;
       h.serviceClient.value = {
-        from: () => ({ select: () => ({ eq: () => ({ in: () => ({ abortSignal: () => new Promise(() => {}) }) }) }) }),
+        from: () => {
+          hungReads += 1;
+          return { select: () => ({ eq: () => ({ in: () => ({ abortSignal: () => new Promise(() => {}) }) }) }) };
+        },
         auth: { admin: { getUserById: () => new Promise(() => {}) } },
       };
       h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
       const pending = run();
-      await new Promise((r) => setTimeout(r, 10));
+      await vi.waitFor(() => expect(hungReads).toBe(1));
       ctl.abort();
       render(await pending);
       expect(line()).toBeNull();
@@ -370,14 +374,63 @@ describe("the requester line (#9601)", () => {
     expect(fake.queries).toHaveLength(0);
   });
 
-  it("a row object WITHOUT the requested_by_user_id key omits the label instead of showing the 'left or erased' fallback", async () => {
+  it("a row read that carries no requested_by_user_id value behaves as an erased requester (the fixed fallback, no query)", async () => {
     const fake = useWorld(world());
     const row = stored();
     expect("requested_by_user_id" in row).toBe(false);
     h.row.value = row;
     render(await run());
-    expect(line()).toBeNull();
+    expect(line()?.textContent).toBe("Requested by a workspace member");
     expect(fake.queries).toHaveLength(0);
+  });
+
+  describe("two or more requests for the conversation and action", () => {
+    it("another member's request with count 2: no line and the labeler is not asked (no service-role read)", async () => {
+      h.count.value = 2;
+      const fake = useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+      render(await run());
+      expect(line()).toBeNull();
+      expect(fake.queries).toHaveLength(0);
+      expect(fake.authCalls).toEqual([]);
+      expect(h.serviceCalls.value).toBe(0);
+      expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+    });
+
+    it("an erased requester with count 2: no line either (the fallback literal is a label too)", async () => {
+      h.count.value = 3;
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: null });
+      render(await run());
+      expect(line()).toBeNull();
+    });
+
+    it("the Owner is the requester with count 2: the literal you stays", async () => {
+      h.count.value = 2;
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: USER_ID });
+      render(await run());
+      expect(line()?.textContent).toBe("Requested by you");
+      expect(h.serviceCalls.value).toBe(0);
+    });
+
+    it("an unavailable count (read error) is suppress-safe: no line for another member, the error is reported", async () => {
+      h.countError.value = { code: "57014" };
+      const fake = useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+      render(await run());
+      expect(line()).toBeNull();
+      expect(fake.queries).toHaveLength(0);
+      expect(h.report.mock.calls.some((c) => c[0] === "landingReadFailed")).toBe(true);
+    });
+
+    it("an unavailable count still shows 'you' for the requester", async () => {
+      h.countError.value = { code: "57014" };
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: USER_ID });
+      render(await run());
+      expect(line()?.textContent).toBe("Requested by you");
+    });
   });
 
   it("an invisible row (not found for a non-Owner) makes no service-role read", async () => {

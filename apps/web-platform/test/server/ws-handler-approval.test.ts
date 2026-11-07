@@ -790,3 +790,54 @@ describe("requester label and redaction through the handler (#9601)", () => {
     expect(cards(s).find((c) => c.approvalId === ROW_VISIBLE)?.view).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// #9601 review round: the reattach role read accepts only a BOOLEAN answer from is_workspace_owner. A null / undefined /
+// non-boolean payload is a failed read (reported, fail-closed), not a silent "member".
+// ---------------------------------------------------------------------------------------------------------------------
+describe("reattach role read: a non-boolean is_workspace_owner answer is a failed read (#9601)", () => {
+  const ROW_SKIPPED = "00000000-0000-4000-8000-0000000000c1";
+  const ROW_VISIBLE = "00000000-0000-4000-8000-0000000000c2";
+  const input = { to: `${CANARIES.to}@example.com`, subject: `Subject ${CANARIES.subject}`, body: `Hello ${CANARIES.body}`, jurisdiction: "us" };
+  const live = (over: Record<string, unknown> = {}) => {
+    const action = canonicalizeAction(TOOLS.emailSend, input, undefined);
+    const hash = computeActionHash({ toolName: TOOLS.emailSend, workspaceId: WORKSPACE_ID, conversationId: CONVERSATION_ID, action });
+    return { approval: row({ status: "pending", decided_at: null, decided_by: null, canonical_action: action, action_sha256: hash, ...over }), request_count: 1 };
+  };
+  const cards = (s: ClientSession) => frames(s).filter((f): f is Extract<WSMessage, { type: "approval_request" }> => f.type === "approval_request");
+  const roleAnswers = (data: unknown) =>
+    h.tenantRpc.mockImplementation(async (fn: string) => (fn === "is_workspace_owner" ? { data, error: null } : { data: null, error: null }));
+
+  beforeEach(() => {
+    h.flagOn.value = true;
+  });
+
+  it.each([null, undefined, "true", 1, { owner: true }])("%j: reported as viewer-role-failed, no frame for a non-requester, the requester's own card still arrives as a member", async (data) => {
+    roleAnswers(data);
+    h.serviceRpc.mockResolvedValue({
+      data: [live({ id: ROW_SKIPPED, requested_by_user_id: OTHER_USER }), live({ id: ROW_VISIBLE, requested_by_user_id: USER_ID })],
+      error: null,
+    });
+    const s = makeSession(CONVERSATION_ID);
+    sessions.set(USER_ID, s);
+    await send(USER_ID, { type: "resume_stream", conversationId: CONVERSATION_ID, ackSeq: 0 });
+    await vi.waitFor(() => expect(cards(s).map((c) => c.approvalId)).toContain(ROW_VISIBLE));
+    expect(cards(s).map((c) => c.approvalId)).not.toContain(ROW_SKIPPED);
+    expect(cards(s).find((c) => c.approvalId === ROW_VISIBLE)).toMatchObject({ viewerRole: "member", requester: "you" });
+    expect(h.warn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-viewer-role-failed")).toHaveLength(1);
+  });
+
+  it("a clean true is an Owner and a clean false is a member (no failed-read report for either)", async () => {
+    for (const [data, expected] of [[true, "owner"], [false, "member"]] as const) {
+      h.warn.mockClear();
+      roleAnswers(data);
+      h.serviceRpc.mockResolvedValue({ data: [live({ id: ROW_VISIBLE, requested_by_user_id: USER_ID })], error: null });
+      const s = makeSession(CONVERSATION_ID);
+      sessions.set(USER_ID, s);
+      await send(USER_ID, { type: "resume_stream", conversationId: CONVERSATION_ID, ackSeq: 0 });
+      await vi.waitFor(() => expect(cards(s)).toHaveLength(1));
+      expect(cards(s)[0].viewerRole).toBe(expected);
+      expect(h.warn.mock.calls.some((c) => (c[1] as { op?: string }).op === "approval-viewer-role-failed")).toBe(false);
+    }
+  });
+});
