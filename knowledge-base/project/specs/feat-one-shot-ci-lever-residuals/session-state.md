@@ -24,3 +24,8 @@
 ## Operator Constraints
 
 - constraint: Lever A residuals 12016, 9323 and Lever C 9729 parked all in one PR.
+
+## Ruling Gate
+
+- cto_spawns=1 (one batched spawn discharged all six unruled-technical rows; all confirmed except none replaced — rulings written to decision-challenges.md)
+- technical-ruling-gate.sh --branch: PASS (8 rows examined)
