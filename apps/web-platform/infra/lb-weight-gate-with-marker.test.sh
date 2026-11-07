@@ -34,6 +34,11 @@
 #   14c the executable check is dropped                   14d the not-a-symlink check on the directory is dropped
 #   14e the dir-not-group/world-writable check is dropped 14f the regular-file check is dropped
 #   15 an invalid DOPPLER_BIN falls back silently to the pinned PATH (fail-closed contract broken)
+#   13c/13e RUNNER_TEMP shape + realpath dropped ('..' / relative accepted)   13d exact-path loosened to a prefix match
+#   14g..14p binary mode check dropped / dir+binary masks narrowed (020, 002) / over-strict dir mode / the -O operands
+#       (binary, directory) changed to the temp root (structural pins, since a foreign owner needs root)
+#   14i the realpath check dropped (symlinked RUNNER_TEMP or intermediate component accepted)
+#   17 the function purge runs after a plain `unset DOPPLER_BIN` (a shadowing unset runs)
 #   16 doppler_ro ignores the validated absolute path (calls bare `doppler` again)
 #   5g DOPPLER_BIN is allowlisted AND no longer unset (it would reach the gate)
 #   H1 HARNESS: a stub that records nothing must fail the argv assertion
@@ -65,6 +70,7 @@ assert_fixture_dir() {
   esac
 }
 TMP="$(mktemp -d)" || exit 2
+TMP="$(cd "$TMP" && pwd -P)" || exit 2 # physical path: the wrapper rejects a symlinked RUNNER_TEMP, so fixtures must not sit under a symlink
 assert_fixture_dir "$TMP"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -76,6 +82,10 @@ cases=0
 # requires assert/refute to move BOTH their counter and this ledger.
 LEDGER=()
 ok() { passes=$((passes + 1)); LEDGER+=("ok|$1"); printf '  ok   %s\n' "$1"; }
+# skip <name> [why] — a case that could NOT run here. NOT a pass: it moves neither passes nor cases, so the
+# anti-vacuity floor cannot be met by skipping. It lands in the ledger as "skip|..." and in the final tally.
+skips=0
+skip() { skips=$((skips + 1)); LEDGER+=("skip|$1"); printf '  SKIP %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; return 0; }
 no() { fails=$((fails + 1)); LEDGER+=("FAIL|$1"); printf '  FAIL %s\n' "$1"; [ -n "${2:-}" ] && printf '       %s\n' "$2"; return 0; }
 
 # assert <name> <command...> — passes when the command exits 0.
@@ -341,15 +351,85 @@ scn_dbin_notfile() { # the path is a directory (executable bit set), not a regul
 }
 dbin_owner_constructible() { [ "$(id -u)" -eq 0 ]; } # chown to another uid needs root; the CI runner is not
 scn_dbin_foreign_owner() { # the binary is owned by another user
-  dbin_owner_constructible || { printf '       SKIP (counted, not executed): not root, so a file owned by another uid cannot be constructed here\n'; return 0; }
   dbin_neg_sb "$1"; chown 65534 "$DB"
   run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
 }
-scn_dbin_dir_writable() { # the binary's directory is world-writable, then group-writable
-  dbin_neg_sb "$1"; chmod 777 "$RT/doppler-cli"
-  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected || return 1
-  chmod 775 "$RT/doppler-cli"; : > "$FX/calls"
+scn_dbin_foreign_dir_owner() { # the doppler-cli DIRECTORY is owned by another user
+  dbin_neg_sb "$1"; chown 65534 "$RT/doppler-cli"
   run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
+}
+scn_dbin_dir_writable() { # the binary's directory is world-writable, then group-writable
+  # 777 and 775 (group bit set), 757 and 703 (world-writable ONLY: the group bit is clear), 772 (group-writable only)
+  dbin_neg_sb "$1"; local m
+  for m in 777 775 757 703 772; do
+    chmod "$m" "$RT/doppler-cli"; : > "$FX/calls"
+    run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected || { printf '       dir mode %s was accepted\n' "$m"; return 1; }
+  done
+}
+scn_dbin_bin_writable() { # the BINARY is group-writable / world-writable (alone and together)
+  dbin_neg_sb "$1"; local m
+  for m in 775 757 777 703 772; do
+    chmod "$m" "$DB"; : > "$FX/calls"
+    run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected || { printf '       binary mode %s was accepted\n' "$m"; return 1; }
+  done
+}
+scn_dbin_modes_pass() { # MUST-PASS: any dir/binary mode without a group/world write bit works (an over-strict validator is RED)
+  build_sb "$1" real; set_marker "$OLD4D"; rm -f "$SB/bin/doppler"; mk_rt
+  local pair dm bm
+  for pair in "755 755" "750 755" "700 755" "755 700" "750 700" "700 700" "755 555"; do
+    dm="${pair% *}"; bm="${pair#* }"
+    chmod "$dm" "$RT/doppler-cli"; chmod "$bm" "$DB"
+    [ "$bm" = 555 ] && chmod 555 "$DB"
+    run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"
+    { [ "$RC" -eq 0 ] && [[ "$OUT" == *"requires_runtime_bind_probe=true"* ]]; } || { printf '       dir %s / binary %s was refused (rc %s)\n' "$dm" "$bm" "$RC"; chmod 755 "$RT/doppler-cli"; return 1; }
+  done
+  chmod 755 "$RT/doppler-cli"
+}
+scn_dbin_exact_variants() { # only EXACTLY .../doppler-cli/doppler is accepted: another name, a dir-hopping spelling, a ./ spelling
+  dbin_neg_sb "$1"
+  cp "$DB" "$RT/doppler-cli/other"; chmod 755 "$RT/doppler-cli/other"
+  local v
+  for v in "$RT/doppler-cli/other" "$RT/doppler-cli/../doppler-cli/doppler" "$RT/doppler-cli/doppler/../doppler" "$RT/doppler-cli/./doppler"; do
+    : > "$FX/calls"; run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$v"
+    dbin_rejected || { printf '       accepted %s\n' "$v"; return 1; }
+  done
+}
+scn_dbin_rel_rt() { # a RELATIVE RUNNER_TEMP with a matching relative DOPPLER_BIN (everything else valid) is refused
+  dbin_neg_sb "$1"
+  local here="$PWD" rrt="${RT#"$TMP"/}" rdb="${DB#"$TMP"/}"
+  cd "$TMP" || return 1
+  run_wb "RUNNER_TEMP=$rrt" "DOPPLER_BIN=$rdb"
+  cd "$here" || return 1
+  dbin_rejected
+}
+scn_dbin_empty_rt() { # an EMPTY RUNNER_TEMP with DOPPLER_BIN=/doppler-cli/doppler reaches the RUNNER_TEMP check and is refused
+  dbin_neg_sb "$1"; run_wb "RUNNER_TEMP=" "DOPPLER_BIN=/doppler-cli/doppler"; dbin_rejected
+}
+scn_dbin_symlinked_rt() { # RUNNER_TEMP itself a symlink, then a symlinked INTERMEDIATE component: both refused
+  dbin_neg_sb "$1"
+  local base; base="$(mktemp -d "$TMP/lnk.XXXXXX")"; assert_fixture_dir "$base"
+  mv "$RT" "$base/real"; ln -s real "$base/lnk"
+  run_wb "RUNNER_TEMP=$base/lnk" "DOPPLER_BIN=$base/lnk/doppler-cli/doppler"; dbin_rejected || { printf '       a symlinked RUNNER_TEMP was accepted\n'; return 1; }
+  mkdir "$base/real/tmp"; mv "$base/real/doppler-cli" "$base/real/tmp/doppler-cli"; : > "$FX/calls"
+  run_wb "RUNNER_TEMP=$base/lnk/tmp" "DOPPLER_BIN=$base/lnk/tmp/doppler-cli/doppler"; dbin_rejected || { printf '       a symlinked intermediate component was accepted\n'; return 1; }
+}
+scn_fn_unset() { # exported functions shadowing unset/export never run (DOPPLER_BIN is set, so the wrapper reaches its unset)
+  build_sb "$1" real; set_marker "$OLD4D"; rm -f "$SB/bin/doppler"; mk_rt; rm -f "$TMP/fn2.canary"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB" \
+    "BASH_FUNC_unset%%=() { echo \"\$*\" >> $TMP/fn2.canary; builtin unset \"\$@\"; }" \
+    "BASH_FUNC_export%%=() { echo \"\$*\" >> $TMP/fn2.canary; builtin export \"\$@\"; }"
+  [ ! -e "$TMP/fn2.canary" ] && [ "$RC" -eq 0 ] && [[ "$OUT" == *"requires_runtime_bind_probe=true"* ]]
+}
+# structural pins on the SOURCE (comment-stripped): the ownership tests name the exact operand. An -O on the wrong
+# operand (the temp root, say) is owned by the caller too, so no behavioural case can tell it apart without root.
+wrapper_code() { grep -vE '^[[:space:]]*#' "$1"; }
+scn_owner_pin_bin() {
+  local c; c="$(wrapper_code "$1")"
+  [ "$(grep -cF -- '-O "$p"' <<<"$c")" -eq 1 ] && grep -F -- '-O "$p"' <<<"$c" | grep -qF '[[ -f "$p" &&'
+}
+scn_owner_pin_dir() {
+  local c; c="$(wrapper_code "$1")"
+  [ "$(grep -cF -- '-O "$dir"' <<<"$c")" -eq 1 ] && grep -F -- '-O "$dir"' <<<"$c" | grep -qF '[[ -d "$dir" &&'
 }
 scn_dbin_dir_symlink() { # the doppler-cli directory is a symlink to a good directory
   dbin_neg_sb "$1"; mv "$RT/doppler-cli" "$RT/real-cli"; ln -s real-cli "$RT/doppler-cli"
@@ -473,8 +553,22 @@ assert "a RUNNER_TEMP carrying '..' exits 3 bad_doppler_bin although DOPPLER_BIN
 assert "a DOPPLER_BIN that is a symlink exits 3 bad_doppler_bin" scn_dbin_symlink "$WRAPPER"
 assert "a DOPPLER_BIN that is not executable exits 3 bad_doppler_bin" scn_dbin_notexec "$WRAPPER"
 assert "a DOPPLER_BIN that is a directory, not a regular file, exits 3 bad_doppler_bin" scn_dbin_notfile "$WRAPPER"
-assert "a DOPPLER_BIN owned by another user exits 3 bad_doppler_bin (counted skip when not root)" scn_dbin_foreign_owner "$WRAPPER"
-assert "a world-writable or group-writable doppler-cli directory exits 3 bad_doppler_bin" scn_dbin_dir_writable "$WRAPPER"
+if dbin_owner_constructible; then
+  assert "a DOPPLER_BIN owned by another user exits 3 bad_doppler_bin" scn_dbin_foreign_owner "$WRAPPER"
+  assert "a doppler-cli directory owned by another user exits 3 bad_doppler_bin" scn_dbin_foreign_dir_owner "$WRAPPER"
+else
+  skip "a DOPPLER_BIN / doppler-cli directory owned by another user exits 3 (NOT RUN: not root)" "a foreign-owned file cannot be constructed without root; the -O operands are pinned structurally below instead"
+fi
+assert "STRUCTURE: the binary's ownership test is -O \"\$p\" inside the [[ -f \"\$p\" ... ]] test (comment-stripped source)" scn_owner_pin_bin "$WRAPPER"
+assert "STRUCTURE: the directory's ownership test is -O \"\$dir\" inside the [[ -d \"\$dir\" ... ]] test (comment-stripped source)" scn_owner_pin_dir "$WRAPPER"
+assert "a doppler-cli directory with mode 777, 775, 757, 703 or 772 (group- or world-writable, each bit alone too) exits 3 bad_doppler_bin" scn_dbin_dir_writable "$WRAPPER"
+assert "a DOPPLER_BIN with mode 775, 757, 777, 703 or 772 (group- or world-writable) exits 3 bad_doppler_bin" scn_dbin_bin_writable "$WRAPPER"
+assert "MUST-PASS: dir 755/750/700 with binary 755/700/555 (no group/world write bit) all run the gate chain" scn_dbin_modes_pass "$WRAPPER"
+assert "only EXACTLY RUNNER_TEMP/doppler-cli/doppler is accepted (another name, ../ hop, doppler/../ and ./ spellings exit 3)" scn_dbin_exact_variants "$WRAPPER"
+assert "a RELATIVE RUNNER_TEMP with a matching relative DOPPLER_BIN exits 3 bad_doppler_bin" scn_dbin_rel_rt "$WRAPPER"
+assert "an EMPTY RUNNER_TEMP with DOPPLER_BIN=/doppler-cli/doppler reaches the RUNNER_TEMP check and exits 3 bad_doppler_bin" scn_dbin_empty_rt "$WRAPPER"
+assert "a symlinked RUNNER_TEMP, and a symlinked intermediate component, exit 3 bad_doppler_bin" scn_dbin_symlinked_rt "$WRAPPER"
+assert "exported functions shadowing unset/export in the caller's environment never run (DOPPLER_BIN set)" scn_fn_unset "$WRAPPER"
 assert "a doppler-cli directory that is a symlink exits 3 bad_doppler_bin" scn_dbin_dir_symlink "$WRAPPER"
 assert "a set-but-empty DOPPLER_BIN, and a DOPPLER_BIN with no RUNNER_TEMP, exit 3 bad_doppler_bin" scn_dbin_empty_or_no_rt "$WRAPPER"
 
@@ -626,12 +720,31 @@ mutate "row 8: the shape check is dropped" 's/^  if \[\[ -z "\$value" || ! "\$va
 mutate "row 9: the token requirement is dropped" 's/^\[\[ -n "\${DOPPLER_TOKEN-}" \]\] || src_fail "no_token" # seam:token-required/: # seam:token-required/' scn_token
 mutate "row 13a: the exact-path check is dropped (a wrong path is accepted)" '/# seam:dbin-exact$/d' scn_dbin_wrongpath
 mutate "row 13b: the exact-path check is dropped (a RUNNER_TEMP mismatch is accepted)" '/# seam:dbin-exact$/d' scn_dbin_rt_mismatch
-mutate "row 13c: the '..'-free RUNNER_TEMP check is dropped" 's| \&\& "\$rt/" != \*"/../"\*||' scn_dbin_dotdot
+# The RUNNER_TEMP shape terms (non-empty, absolute, no '..') overlap with the realpath check by design (defence in depth):
+# a mutant that drops ONLY the shape line is behaviourally equivalent, so rows 13c/13e drop BOTH lines; row 14i drops
+# the realpath line alone (a symlinked ancestor is invisible to every other check). The empty-string term is
+# unkillable on its own (DOPPLER_BIN=/doppler-cli/doppler then fails the -f test with the same class), so
+# scn_dbin_empty_rt pins the behaviour but no mutation row claims to kill it.
+mutate "row 13c: the RUNNER_TEMP shape check and the realpath check are dropped ('..' accepted)" '/# seam:dbin-rt$/d; /# seam:dbin-real$/d' scn_dbin_dotdot
+mutate "row 13e: the RUNNER_TEMP shape check and the realpath check are dropped (relative RUNNER_TEMP accepted)" '/# seam:dbin-rt$/d; /# seam:dbin-real$/d' scn_dbin_rel_rt
+mutate "row 13d: the exact-path check is loosened to a doppler-cli/ prefix match" 's|\[\[ "\$p" == "\${rt}/doppler-cli/doppler" \]\]|[[ "$p" == "${rt}/doppler-cli/"* ]]|' scn_dbin_exact_variants
+mutate "row 14i: the realpath (symlinked ancestor) check is dropped" '/# seam:dbin-real$/d' scn_dbin_symlinked_rt
+mutate "row 14j: the binary group/world-writable check is dropped" '/# seam:dbin-bmode$/d' scn_dbin_bin_writable
+mutate "row 14k: the directory mask is narrowed to the group bit (8#020)" 's|8#\$mode \& 8#022|8#$mode \& 8#020|' scn_dbin_dir_writable
+mutate "row 14l: the directory mask is narrowed to the world bit (8#002)" 's|8#\$mode \& 8#022|8#$mode \& 8#002|' scn_dbin_dir_writable
+mutate "row 14m: the binary mask is narrowed to the group bit (8#020)" 's|8#\$bmode \& 8#022|8#$bmode \& 8#020|' scn_dbin_bin_writable
+mutate "row 14m2: the binary mask is narrowed to the world bit (8#002)" 's|8#\$bmode \& 8#022|8#$bmode \& 8#002|' scn_dbin_bin_writable
+mutate "row 14n: the directory mode is over-strict (must be exactly 755)" 's|(( (8#\$mode \& 8#022) == 0 ))|(( 8#$mode == 8#755 ))|' scn_dbin_modes_pass
+mutate "row 14n2: the binary mode is over-strict (must be exactly 755)" 's|(( (8#\$bmode \& 8#022) == 0 ))|(( 8#$bmode == 8#755 ))|' scn_dbin_modes_pass
+mutate "row 14o: the -O test on the binary names the wrong operand (the temp root)" 's|-O "\$p"|-O "$rt"|' scn_owner_pin_bin
+mutate "row 14p: the -O test on the directory names the wrong operand (the temp root)" 's|-O "\$dir"|-O "$rt"|' scn_owner_pin_dir
+mutate "row 17: exported-function purge runs AFTER the DOPPLER_BIN unset, which is a plain unset (a shadowing unset runs)" 's|^builtin unset DOPPLER_BIN|unset DOPPLER_BIN|; /# seam:purge-functions$/{h;d}; /# seam:unset-dbin$/{p;x}' scn_fn_unset
 mutate "row 14a: the not-a-symlink check on the binary is dropped" 's| \&\& ! -L "\$p"||' scn_dbin_symlink
 if dbin_owner_constructible; then
   mutate "row 14b: the owned-by-euid check on the binary is dropped" 's| \&\& -O "\$p"||' scn_dbin_foreign_owner
+  mutate "row 14b2: the owned-by-euid check on the directory is dropped" 's| \&\& -O "\$dir"||' scn_dbin_foreign_dir_owner
 else
-  cases=$((cases + 1)); ok "row 14b: SKIPPED (counted) - not root, a file owned by another uid cannot be constructed; the -O check is exercised only when this suite runs as root"
+  skip "row 14b/14b2: the -O mutants (NOT RUN: not root); rows 14o/14p pin the operands structurally" "behavioural -O coverage needs root"
 fi
 mutate "row 14c: the executable check on the binary is dropped" 's| \&\& -x "\$p"||' scn_dbin_notexec
 mutate "row 14d: the not-a-symlink check on the directory is dropped" 's| \&\& ! -L "\$dir"||' scn_dbin_dir_symlink
@@ -659,13 +772,13 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=99
+CASES_FLOOR=119
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1
 fi
 printf '  ok   anti-vacuity floor: %s cases ran, each recorded one verdict (floor %s)\n' "$cases" "$CASES_FLOOR"
 
-printf '\n=== lb-weight-gate-with-marker: %d passed, %d failed ===\n\n' "$passes" "$fails"
+printf '\n=== lb-weight-gate-with-marker: %d passed, %d failed, %d skipped (skips are not cases and do not count toward the floor) ===\n\n' "$passes" "$fails" "$skips"
 [ "$fails" -eq 0 ] || exit 1
 exit 0

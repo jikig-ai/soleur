@@ -2008,10 +2008,14 @@ PY
   # the exact DOPPLER_BIN assignment, the wrapper must be invoked exactly once, and DOPPLER_BIN must appear on no
   # other code line (a prd-planted or outer-env value cannot stand in for it: the inner env overrides).
   g3_dbin_cmd='env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh"'
+  # the assignment sits INSIDE the `doppler run ... --` pipeline (the wrapper is the command doppler run executes, so the
+  # inner env's DOPPLER_BIN is what the wrapper sees), not in a statement beside it
+  g3_dbin_pipeline='doppler run --preserve-env -p soleur -c prd -- '"$g3_dbin_cmd"
   g3_dbin_ok() { # <cf-lb-overlay.yml copy> -> 0 when the §(c) step hands the wrapper the exact DOPPLER_BIN
     local code
     code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ')"
-    [[ "$(grep -cF -- "$g3_dbin_cmd" <<<"$code")" -eq 1 ]] \
+    [[ "$(grep -cF -- "$g3_dbin_pipeline" <<<"$code")" -eq 1 ]] \
+      && [[ "$(grep -cF -- "$g3_dbin_cmd" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -oF 'lb-weight-gate-with-marker.sh' <<<"$code" | wc -l)" -eq 1 ]] \
       && [[ "$(grep -oF 'DOPPLER_BIN' <<<"$code" | wc -l)" -eq 1 ]]
   }
@@ -2030,6 +2034,9 @@ PY
   g3_dbin_mut "DOPPLER_BIN points at a path other than RUNNER_TEMP/doppler-cli/doppler" 'DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler"' 'DOPPLER_BIN="${HOME}/doppler-cli/doppler"'
   g3_dbin_mut "DOPPLER_BIN moves to the OUTER env (a prd-injected value would override it)" 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run' 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" doppler run'
   g3_dbin_mut "DOPPLER_BIN survives only in a comment (prose is not the command)" 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \' $'env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \\\n            # DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \\'
+
+  g3_dbin_mut "the wrapper is no longer run by doppler run (the env assignment sits OUTSIDE the doppler run pipeline)" ' doppler run --preserve-env -p soleur -c prd -- \' ' true -- \'
+  g3_dbin_mut "the doppler run -- separator is dropped (the assignment is no longer the command's own env)" ' -p soleur -c prd -- \' ' -p soleur -c prd \'
 
   # =====================================================================================================
   # MUTATION ROWS — each against a fresh sandbox copy; the pristine files are never touched.
@@ -2371,8 +2378,9 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # Review round 1: S61/S62 (the NEWEST readiness row decides, both directions) + mutation row 22c, 332 -> 335.
 # #9372 retirement: the marker-token census (one real-tree row, three synthetic-root rows: control, second holder, comment-only; review round 1 added four direction rows: lower-case, composite action, .yaml, trailing comment) 335 -> 343 (measured green count).
 # #12167: the cf-lb-overlay §(c) DOPPLER_BIN hand-off (one real-tree row + mutation 23 x4) -> 352 (measured green count; the floor had
-# drifted 4 below green since #11766, so this raise also re-pins it to EXACT).
-WF_MIN_ASSERTIONS=352
+# drifted 4 below green since #11766, so this raise also re-pins it to EXACT). Review round: the assignment must sit inside the
+# `doppler run ... --` pipeline (+ mutation rows: pipeline broken, separator dropped) 352 -> 354 (measured green).
+WF_MIN_ASSERTIONS=354
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1
