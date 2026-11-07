@@ -935,7 +935,7 @@ object carries no evaluated value (checked 2026-11-06: no key beyond the alert's
 own threshold `value`), so the mechanism is **an inference, not a measurement**:
 an evaluator step that cannot be evaluated is read as 0, and 0 against `lower_than 2`
 is a false page while 0 against `higher_than 0` reads healthy. Two alternatives are
-NOT excluded and the canary cannot separate them: partial visibility of one host's
+NOT excluded and the canary could not separate them: partial visibility of one host's
 rows in the evaluator's window (the hot window is about 40 minutes per
 `betterstack-log-query.md`; the archive lag was measured at about 66 minutes) reads 1
 under either operator, and a vendor that never auto-resolves
@@ -948,7 +948,9 @@ below.
 
 **Two limits that follow.**
 
-- A green alert is not evidence of health until the canary below has fired.
+- The canary (#12180) fired and was retired (record below). It proved non-zero delivery on an empty count for
+  this query shape, not general evaluator health, so a green alert is evidence of health only next to
+  `rows_in_window` showing rows on both hosts.
 - An evaluator error or timeout also reads 0 under `treat_as_zero`, so that failure
   is quiet here: the old shape would have paged and this one does not. The sibling
   detectors cover less than "host death": the Sentry cron check-in
@@ -960,14 +962,11 @@ below.
   identity, so an extra or renamed emitter, or a row with an empty `host_name`,
   counts as a host and could mask a dead one.
 
-**Canary (throwaway, #12180).** `soleur-egress-gw-probe-silent-canary-prd` runs the
+**Canary (retired by #12189; throwaway, #12180).** `soleur-egress-gw-probe-silent-canary-prd` ran the
 same query against `egress-gw-probe-canary-absent`, an identifier no host emits, so
-it reads the roster size and MUST open an incident that never recovers. That
-incident, its mirrored P1 `action-required` issue and one email are expected until
-the follow-up PR (tracker #12189) deletes the canary pair. The mirror also posts a
-"Still open" comment on that issue every 15 minutes (about 96 a day), and files a
-fresh issue at the next 15-minute run if you close it: do NOT close the canary's mirror issue, delete the pair
-instead. Read the verdict, not the dashboard:
+it read the roster size and opened an incident that never recovers (mirror issue #12242). It was read as
+`canary=fired` on 2026-11-06 (tracker #12189), and the push-triggered apply of the change that carries this
+edit destroys the pair. The soak probe stays as the way to reproduce that finding. Read the verdict, not the dashboard:
 `doppler run -p soleur -c prd_terraform -- bash -c 'BETTERSTACK_API_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" bash scripts/followthroughs/egress-gw-probe-silent-12180.sh'`
 (the probe reads `BETTERSTACK_API_TOKEN`; `prd_terraform` also holds the account-wide
 read/write token under that exact name, so without the remap the probe would run with
@@ -978,19 +977,20 @@ that `rows_in_window` reads are in the same config and need no mapping) prints o
 `rows_in_window=` (the trailing 15 minutes of rows per host), `newer_prod_incident=`,
 `quiet_age_s=` (seconds since `quiet_since`: the later of the pinned apply floor,
 2026-11-06T12:16:03Z, and the latest resolve of any production incident) and
-`pre_floor_open_prod_incident=`. Whoever merges the change runs it once at
-apply completion + 25 minutes; once tracker #12189 is enrolled (its follow-through
-directive, `earliest` set after the apply) the daily sweeper is the backstop, so an
-evaluator-blind finding waits up to a day without that run. The canary shares the production query shape, so it proves non-zero
-delivery on an empty count, not general evaluator health.
+`pre_floor_open_prod_incident=`. The daily sweeper reads it while tracker #12189 is enrolled
+(its follow-through directive), so a finding waits up to a day unless the probe is run by hand after the
+retirement apply.
 
 Read the table against `verdict=` and the one `ACTION REQUIRED:` or `TRANSIENT:` line the probe
-prints beside it; several rows share the same `canary=` and `canary_alert_live=` values.
+prints beside it; several rows share the same `canary=` and `canary_alert_live=` values. The probe code is
+unchanged by the retirement, so every row still matches a verdict it can print; the rows that name a declared or
+live canary (`canary_declared=1`, `canary_alert_live=1`, the exit 5 asking for the deletion) or that prescribe
+creating or re-creating one are reachable only until the retirement apply lands, and are historical after it.
 
 | Observation | Reading | Response |
 |---|---|---|
 | `verdict=not_yet`, `canary=fired`, `prod_alert=ok`, `newer_prod_incident=0` and `quiet_age_s` below 14400 | the production alert has been quiet for less than the 4 h soak counted from the apply floor (earliest soak-held verdict about 16:16Z on 2026-11-06: that is exit 5 asking for the canary deletion, and exit 0 comes only after it) | rerun later; not a finding |
-| `verdict=action_required`, `canary=fired`, `prod_alert=ok`, `newer_prod_incident=0`, `quiet_age_s` at least 14400, rows on both hosts, message says delete the canary | the evaluator delivers a non-zero value for this shape and the production alert stayed quiet for 4 h after the apply | delete the canary pair (tracker #12189; needs the owner's go-ahead and the standalone `[ack-destroy]` line); the sweep after the deletion returns exit 0 and closes the tracker if the vendor still lists the canary incident; if it does not, the retired row below applies |
+| `verdict=action_required`, `canary=fired`, `prod_alert=ok`, `newer_prod_incident=0`, `quiet_age_s` at least 14400, rows on both hosts, message says delete the canary | the evaluator delivers a non-zero value for this shape and the production alert stayed quiet for 4 h after the apply | the retirement apply deletes the pair (#12189; it carried the owner's go-ahead and the standalone `[ack-destroy]` line); the sweep after the deletion returns exit 0 and closes the tracker if the vendor still lists the canary incident, otherwise the retired row below applies (Unverified A) |
 | `newer_prod_incident=1` (a production incident other than the anchor started at or after the apply floor minus 300 s) | a recurrence on the inverted shape (it is permanent: exit 5 at every sweep, resolved or not, until a human closes the tracker by hand or re-pins) | the poller (#12190); `rows_in_window` separates an evaluator fault (rows on both hosts) from an emitter or ingest fault (a host with none); never a revert; any Better Stack write needs the owner's per-command go-ahead |
 | `pre_floor_open_prod_incident=1` with `verdict=not_yet` or `action_required` | an exact-name production incident that started before the apply is still open (one that already resolved, like 1048111600, never counts) | `not_yet` until 15300 s past `quiet_since`, then the poller (#12190); a manual resolve is a Better Stack write needing the owner's per-command go-ahead |
 | `verdict=action_required`, message says a roster host has no rows | the production alert is green but a roster host emits nothing in the trailing 15 minutes | the decode ladder below; the host is the finding, not the alert |
@@ -999,8 +999,8 @@ prints beside it; several rows share the same `canary=` and `canary_alert_live=`
 | `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says the evaluator is blind | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
 | `verdict=not_yet`, `canary=absent`, `canary_alert_live=1`, message says the canary alert was created N s ago | one evaluation cycle (20 minutes) has not passed | rerun later; not a finding |
 | `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says PAUSED | someone paused the canary | not an evaluator finding; unpausing is a Better Stack write needing the owner's per-command go-ahead |
-| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=1` | the canary alert was deleted or never created (the apply has not run, alert-count cap, failed create) | hotfix PR using the "Deleting the canary" recipe below, then the poller; not an evaluator finding |
-| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=0`, message says retired | the canary was deleted and its incident is no longer listed, so `canary=fired` cannot be re-read | close tracker #12189 by hand citing the last sweep comment that read `canary=fired`, and remove its `follow-through` label so the sweeper stops scanning it; do NOT build the poller on this (whether the vendor keeps a canary incident after its alert is deleted is unverified) |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=1` | the canary alert was deleted or never created (the apply has not run, alert-count cap, failed create) | hotfix PR removing the canary resources (the retirement record below lists the sites), then the poller; not an evaluator finding |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=0`, message says retired | the canary was deleted and its incident is no longer listed, so `canary=fired` cannot be re-read | close tracker #12189 by hand citing the last comment on #12189 that read `canary=fired`, and remove its `follow-through` label so the sweeper stops scanning it; do NOT build the poller on this (whether the vendor keeps a canary incident after its alert is deleted is unverified: Unverified A below) |
 | `prod_alert=absent` or `prod_alert=shape` | the production alert is not running as designed | restore it by apply; do not read anything else until it is |
 | `prod_alert=paused` | the page is off | unpausing is a Better Stack write needing the owner's per-command go-ahead; do not leave it paused |
 | a production incident still open (`prod_incident=open` for 1047829421, or `pre_floor_open_prod_incident=1`) and `rows_in_window` shows rows on both hosts now | evaluator, partial visibility, or a vendor that never auto-resolves | the poller (#12190); any pause or manual resolve is a Better Stack write needing the owner's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
@@ -1014,24 +1014,48 @@ another vendor path (the "auto-resolved" reading of 1048111600 is an inference f
 deletion of its alert, why the canary incident started 64 s before its alert's `created_at`, and what bumps
 alert `updated_at` (inferred vendor churn about every five minutes; the probe never reads it). The earlier
 wording that a null `resolved_by` was ASSUMED to mean "the alert recovered it" is superseded by this paragraph
-and the ADR-218 amendment of 2026-11-06.
+and the ADR-218 amendment of 2026-11-06 titled "the soak probe is floored at the apply" (#12189).
 
 A Better Stack write (resolving or pausing an incident by hand) needs the owner's
-explicit per-command go-ahead, and so does deleting the canary (a Better Stack
-destroy, which also needs the standalone `[ack-destroy]` merge-commit line below).
+explicit per-command go-ahead, and so did deleting the canary (a Better Stack
+destroy, authorized by the standalone `[ack-destroy]` merge-commit line recorded below).
 
-**Deleting the canary** (also the undo recipe for this change; it is a deletion, not a revert of the inverted shape). Remove the two
-`egress_gw_probe_silent_canary` resources from `betterstack-logs-alerts.tf`, but keep
-their two `-target` lines in `apply-web-platform-infra.yml` for one apply (a bare
-`-target` on an address with no configuration plans its DELETE), and put
-`[ack-destroy]` on its own line in the merge commit (the plan shows 2 destroyed). Move
-`EXPECT_BLOCKS` 19 to 18 in `logs-alert-query-period-ceiling.test.sh`, the `== 19`
-anchor to 18 in `betterstack-send-failed-alert-mutation.test.sh`, both census floors 19 to 18 in
-`betterstack-alert-structure.test.sh`, add the two canary addresses to `INTENDED_DESTROYS` in
-`tests/scripts/test-infra-privileged-tier-census.sh` (without them the structure suite rejects the
-bare targets; checked in a scratch worktree), and drop the G2b block and rows from
-`egress-gw-alert.test.sh`; a later PR removes the two `-target` lines and the census entries. The
-full site list is the `RETIREMENT:` line in the probe header.
+**Canary retirement record (#12189).** Both `egress_gw_probe_silent_canary` resources and the derived
+SQL local were removed from `betterstack-logs-alerts.tf`; the push-triggered apply destroys exactly those two
+resources (the plan reads 2 to destroy). The two bare `-target` lines stay in `apply-web-platform-infra.yml` for
+that one apply (a bare `-target` on an address with no configuration plans its DELETE), the two canary
+addresses sit in `INTENDED_DESTROYS` in `tests/scripts/test-infra-privileged-tier-census.sh` so the structure
+suite accepts the bare targets, and the merge commit carries `[ack-destroy]` on its own line. Counts moved
+19 to 18 in `logs-alert-query-period-ceiling.test.sh` (`EXPECT_BLOCKS`), in the `== 19` anchor of
+`betterstack-send-failed-alert-mutation.test.sh` and in both census floors of `betterstack-alert-structure.test.sh`;
+`egress-gw-alert.test.sh` dropped its canary block and now pins exactly two `egress_gw_probe_silent*` resources.
+Merge when no apply run is in progress or queued: the destroy is authorized by the `[ack-destroy]` line in this
+one merge commit, and `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` share one concurrency
+group, which keeps one running and one pending run (a running run is never cancelled, a pending one is replaced by
+a newer arrival from either workflow). A superseded run has no ack, sees the 2 pending destroys and fails the
+guard closed (nothing is destroyed), and because the bare targets stay, every later infra-path merge then fails the
+same way. The way out is #12270 (remove the two bare `-target` lines and the two census entries), or a standalone
+`[ack-destroy]` line on the next merge commit, used only with the owner's go-ahead and only after the run's list of
+resources to be destroyed shows exactly the two canary addresses. Read the apply log for
+`Plan: 0 to add, 0 to change, 2 to destroy`; the ack covers a count, not these two addresses, so any other number
+is reported, not acked. Do not start #12270 until the apply log shows `2 destroyed`. Removing the two `-target`
+lines and the two census entries is #12270 (after the apply; it also flips the present-tense lines of this
+record), and the probe's transport extraction is #12271. The full site list is the `RETIREMENT:` line in the probe header, with its
+STATUS line. This was a deletion, not a revert of the inverted shape.
+
+**Unverified after the canary's deletion.** Both facts depend on vendor behavior nothing in this repository
+measures.
+
+- **A. Whether the vendor keeps listing the canary incident after its alert is deleted.** If it does, the sweep
+  after the deletion returns exit 0 and closes tracker #12189. If it does not, the probe returns the distinct exit 5
+  "canary retired, incident unreadable": tracker #12189 is then closed by hand citing the latest comment on
+  #12189 that read `canary=fired`, its `follow-through` label removed so the sweeper stops scanning it. Do not
+  build the poller (#12190) on that evidence.
+- **B. Whether mirror issue #12242 closes itself.** The mirror closes an issue only when the incident leaves the
+  vendor's open list. If the vendor keeps the incident open after the alert is gone, the mirror keeps posting
+  "Still open" every 15 minutes (about 96 a day), and closing the issue by hand files a fresh P1 at the next
+  run. Resolving the incident is a Better Stack write that needs the owner's per-command go-ahead; the state is
+  reported on tracker #12189 rather than closed by hand.
 
 **Decode ladder:**
 

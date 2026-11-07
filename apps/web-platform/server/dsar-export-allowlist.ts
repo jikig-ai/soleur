@@ -619,6 +619,19 @@ export const DSAR_TABLE_EXCLUSIONS: Readonly<Record<string, string>> = {
     "the personal data), RPC-only, not a " +
     "record of any decision. Excluded from the self-serve export for the same reason " +
     "as legal_acceptance.",
+  // #12011 PR-D (ADR-319, migration 185): the acknowledgement marker behind the row_without_event reconciliation.
+  legal_acceptance_ack:
+    "Migration 185 table (#12011, ADR-319): one marker per legal_acceptance row whose " +
+    "accepted event the web route reported. Holds a random acceptance uuid and a " +
+    "timestamp only: NO founder id, no foreign key, no decision field. It is " +
+    "pseudonymous personal data, not data that is non-personal on its own: the acceptance " +
+    "uuid is the key of a legal_acceptance row Jikigai holds, which carries the founder id. " +
+    "Kept with that row (Art. 17(3)(e) carve-out, same LIA and PA-40); no erasure scrub " +
+    "touches it. Excluded from the self-serve export for one reason: service_role holds no " +
+    "table privilege on it (RPC-only), so a worker read would fail every export. Art. 15 " +
+    "access is answered through legal@jikigai.com, and the matching ack rows can be produced " +
+    "on request with the legal_acceptance rows (procedure: the DSAR and notice note, " +
+    "Addendum 2026-11-06).",
 };
 
 /**
