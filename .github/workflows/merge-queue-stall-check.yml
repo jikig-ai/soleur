@@ -346,7 +346,7 @@ jobs:
           # a ref suffix), so workflow_id is the join key. If GitHub changes the signature the failure is safe: the
           # issue stays "suspected".
           queue_candidate_cause() {
-            local pr="$1" enq="$2" refre since enq_s PUSH_LIST MG_LIST named ref p u w HIST_WARNED=0
+            local pr="$1" enq="$2" refre since enq_s PUSH_LIST="" MG_LIST="" named ref p u w HIST_WARNED=0
             refre="^gh-readonly-queue/main/pr-${pr}-[0-9a-f]{40}\\z"
             # Defence in depth, not protection of the real step: the `stalled` jq above already aborts the step on an
             # empty or unparseable enqueuedAt (its fromdateiso8601; pre-existing), so this guard is not reachable from
