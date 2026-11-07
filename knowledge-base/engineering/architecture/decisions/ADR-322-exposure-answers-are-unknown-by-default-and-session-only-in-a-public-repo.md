@@ -10,7 +10,7 @@ related_adrs: [ADR-281, ADR-197, ADR-192, ADR-286, ADR-287, ADR-236, ADR-214, AD
 
 Refs: #12006, #12007. Related: ADR-281 (image scan, public-repo constraint), ADR-197 and ADR-192 (absence of evidence on a log
 surface), ADR-286 (Vector admission), ADR-287 (untrusted content), ADR-236 (human-only skills), ADR-214, ADR-280 (credentials on
-stdin), ADR-179 (bare plugin-root anchor). Plan: `knowledge-base/project/plans/2026-11-07-feat-cve-exposure-skill-plan.md`.
+stdin), ADR-179 (bare plugin-root anchor). Plan: `knowledge-base/project/plans/archive/20261108-004152-2026-11-07-feat-cve-exposure-skill-plan.md`.
 
 ## Context
 
@@ -87,7 +87,7 @@ not close it.
   files nothing public and hands off to the breach-triage path. The skill never decides that a breach occurred.
 - **Dissent.** The DHH plan-review reviewer argued for dropping gap-issue filing entirely, since any public mention is a
   disclosure. The plan keeps filing, narrowed to one status and a fixed body, and records the dissent as a user-challenge row in
-  `knowledge-base/project/specs/feat-one-shot-12006-cve-exposure-skill/decision-challenges.md` for `ship` to surface. Reversing it
+  `knowledge-base/project/specs/archive/20261108-004152-feat-one-shot-12006-cve-exposure-skill/decision-challenges.md` for `ship` to surface. Reversing it
   later is a deletion of the script and its call site; no data depends on it.
 - **Not durable.** Re-asking the question re-runs the telemetry read. That is cheap and keeps the answer fresh, which is the point
   for a mutable host.
