@@ -11,13 +11,16 @@
 # lb-staging/ root shares no state with prod, so reaching a prod address is a
 # structural impossibility; teardown is a whole-root destroy that cannot name one.
 #
-# THE SIX ARMS (exactly one runs per dispatch — each job's `if:` gates on inputs.arm):
+# THE SEVEN ARMS (exactly one runs per dispatch — each job's `if:` gates on inputs.arm):
 #   staging-record    create the throwaway lb-staging.soleur.ai proxied A record
 #   staging-overlay   create monitor+pool+LB on lb-staging + continuity probe + verdict
 #   staging-teardown  whole-root destroy of the four staging addresses
 #   ga-overlay        create the GA LB trio on app.soleur.ai (parent root, reviewer env)
 #   ga-monitor-fix    update the GA monitor to http/:80 — the https create shape
 #                     probes a port nothing listens on and reports every origin down
+#   ga-monitor-https  move the GA monitor to https/:443, Host app.soleur.ai, certificate validated (ADR-321 R7, #10479):
+#                     baseline both-origins-healthy gate before the plan, both-origins-healthy gate after the apply.
+#                     ga-monitor-fix stays the rollback lever (the code must be http/:80 again first)
 #   ga-pool-update    update the GA pool/LB (+ web_lb_health policy) — mode=drain pins
 #                     web-2 at weight 0; mode=serve is the #6027 window 0→1 flip and
 #                     runs the §(c) gate chain fail-closed BEFORE plan
@@ -33,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       arm:
-        description: "staging-record | staging-overlay | staging-teardown | ga-overlay | ga-monitor-fix | ga-pool-update — see each job header and runbook cf-lb-a-record-gaplessness-verify.md"
+        description: "staging-record | staging-overlay | staging-teardown | ga-overlay | ga-monitor-fix | ga-monitor-https | ga-pool-update — see each job header and runbook cf-lb-a-record-gaplessness-verify.md"
         required: true
         type: choice
         options:
@@ -42,9 +45,10 @@ on:
           - staging-teardown
           - ga-overlay
           - ga-monitor-fix
+          - ga-monitor-https
           - ga-pool-update
       confirm:
-        description: "Typo-guard, NOT the authorization: CONVERT-LB-STAGING (record/overlay) | TEARDOWN-LB-STAGING | APPLY-GA-LB-OVERLAY | FIX-GA-LB-MONITOR | UPDATE-GA-LB-POOL"
+        description: "Typo-guard, NOT the authorization: CONVERT-LB-STAGING (record/overlay) | TEARDOWN-LB-STAGING | APPLY-GA-LB-OVERLAY | FIX-GA-LB-MONITOR | MOVE-GA-LB-MONITOR-HTTPS | UPDATE-GA-LB-POOL"
         required: true
         type: string
       mode:
@@ -687,6 +691,185 @@ jobs:
             exit 1
           fi
           echo "Pool reports all origins healthy — the monitor probes the real :80 listener."
+
+  ga_monitor_https:
+    if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-https'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # REVIEWER-GATED like ga-overlay: an update on the LIVE monitor is a prod write. ADR-321 R7 (#10479): moves the
+    # probe from http/:80 to https/:443 (Host app.soleur.ai, certificate validated). It runs ONLY on an explicit
+    # dispatch (this workflow has no push trigger and the parent apply's -target list excludes the monitor), and it
+    # fails closed at both ends: BEFORE the plan, both pool origins must read healthy under the current probe (so a
+    # red result afterwards is attributable to the switch, and a pool already down is not made to look like a
+    # TLS failure); AFTER the apply, BOTH origins must read healthy under the https probe within ~5 min or the job
+    # fails red. Rollback: a revert PR, then the `ga-monitor-fix` arm (http/:80). Traffic is never at risk: web-2 is
+    # weight 0 and the B1 fallback serves web-1 even if every origin reads down.
+    environment: web-platform-infra-apply
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: hashicorp/setup-terraform@5e8dbf3c6d9deaf4193ca7a8fb23f2ac83bb6c85 # v4.0.0
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Typo-guard
+        env:
+          CONFIRM_RAW: ${{ inputs.confirm }}
+          REASON_RAW: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          if [[ "$CONFIRM_RAW" != "MOVE-GA-LB-MONITOR-HTTPS" ]]; then
+            echo "::error::confirm must be exactly 'MOVE-GA-LB-MONITOR-HTTPS' for arm=ga-monitor-https — it re-points the LIVE health probe to https/:443."
+            exit 1
+          fi
+          [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
+          echo "- Reason: ${REASON_RAW} (arm=ga-monitor-https, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
+      - name: Extract backend credentials
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          KEY_ID="${AWS_ACCESS_KEY_ID:-$(doppler secrets get AWS_ACCESS_KEY_ID --plain 2>/dev/null)}" || { echo "::error::AWS_ACCESS_KEY_ID missing"; exit 1; }
+          SECRET="${AWS_SECRET_ACCESS_KEY:-$(doppler secrets get AWS_SECRET_ACCESS_KEY --plain 2>/dev/null)}" || { echo "::error::AWS_SECRET_ACCESS_KEY missing"; exit 1; }
+          [[ -n "$KEY_ID" && -n "$SECRET" ]] || { echo "::error::empty R2 backend creds"; exit 1; }
+          printf '::add-mask::%s\n' "$KEY_ID"; printf '::add-mask::%s\n' "$SECRET"
+          printf 'AWS_ACCESS_KEY_ID=%s\n' "$KEY_ID" >> "$GITHUB_ENV"
+          printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$SECRET" >> "$GITHUB_ENV"
+      - name: Pre-gate - both pool origins healthy under the CURRENT probe (fail-closed)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # A baseline read, not a promise: if either origin is already unhealthy under http/:80 the https result
+          # could not be attributed to the switch, so refuse before any plan. The bearer rides curl's stdin --config
+          # channel, never argv (Rule E); CF_* expand inside the doppler-run child, ${POOL_ID} expands here.
+          POOL_ID=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+            curl --disable --noproxy '*' -s --max-time 10 \
+              \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools\" \
+              --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\") \
+              | jq -r '.result[] | select(.name==\"web-1\") | .id'")
+          [[ "$POOL_ID" =~ ^[0-9a-f]+$ ]] || { echo "::error::web-1 pool id unresolvable or off-shape ('${POOL_ID}') - refusing."; exit 1; }
+          HEALTH_JSON=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+            curl --disable --noproxy '*' -s --max-time 10 \
+              \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health\" \
+              --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\")" || true)
+          NAMES=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[] | keys[]] | unique | length' 2>/dev/null || printf '0')
+          HEALTH=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[][] | .healthy] | unique | join(",")' 2>/dev/null || true)
+          [[ "$NAMES" =~ ^[0-9]+$ ]] || NAMES=0
+          {
+            echo "### GA monitor-https pre-gate (baseline under the current probe)"
+            echo "- Pool: ${POOL_ID}"
+            echo "- Distinct origins seen: ${NAMES}"
+            echo "- Origin health verdicts: ${HEALTH:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$NAMES" -lt 2 || "$HEALTH" != "true" ]]; then
+            echo "::error::baseline refused: expected BOTH origins (web-1 and web-2) healthy under the current probe, saw ${NAMES} origin(s) with verdict(s) '${HEALTH:-none}'. Nothing planned or applied."
+            exit 1
+          fi
+          echo "baseline ok: both origins healthy under the current probe"
+      - name: Terraform init (parent root)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: terraform init -input=false -lockfile=readonly
+      - name: Terraform plan (GA monitor only, https shape)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -uo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          set +e
+          ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform plan -no-color -input=false -out=tfplan \
+              -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -target=cloudflare_load_balancer_monitor.web 2>&1 | tf_redact_random_ids
+          rc=${PIPESTATUS[0]}
+          if [[ $rc -ne 0 ]]; then
+            echo "::error::terraform plan (ga-monitor-https) failed (exit $rc). NOTHING applied."
+            exit $rc
+          fi
+          set -e
+      - name: Plan gate (exactly the monitor update, pinned https after-shape)
+        working-directory: ${{ env.INFRA_DIR }}
+        run: |
+          set -euo pipefail
+          terraform show -json tfplan > "$RUNNER_TEMP/ga-monitor-https-plan.json"
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/cf-lb-overlay-gate.sh"
+          cf_lb_gate_ga_monitor_https "$RUNNER_TEMP/ga-monitor-https-plan.json" || {
+            terraform show -no-color tfplan | grep -E 'will be|Plan:' | head -30 >&2 || true
+            exit 1
+          }
+      - name: Terraform apply (the graded tfplan)
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: |
+          set -euo pipefail
+          # shellcheck source=tests/scripts/lib/tf-redact-random-ids.sh
+          source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
+          doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
+            terraform apply -no-color -input=false -auto-approve tfplan 2>&1 | tf_redact_random_ids
+      - name: Post-apply pool-health assertion (BOTH origins healthy under https/:443)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          DOPPLER_PROJECT: soleur
+          DOPPLER_CONFIG: prd_terraform
+        run: |
+          set -euo pipefail
+          # The monitor needs one 60s interval + consecutive_up to republish. Poll the
+          # pool-health endpoint every 15s against a ~5min deadline (well inside this
+          # job's timeout-minutes:20) rather than a fixed sleep 70 that grades whatever
+          # the edge happens to report at second 70.
+          # The bearer rides curl's stdin --config channel, never argv (Rule E); the
+          # double-quoted `bash -c` script escapes the CF_* expansions so they resolve
+          # inside the doppler-run child, while ${POOL_ID} expands here.
+          POOL_ID=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+            curl --disable --noproxy '*' -s --max-time 10 \
+              \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools\" \
+              --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\") \
+              | jq -r '.result[] | select(.name==\"web-1\") | .id'")
+          # Re-interpolated into the health URL below — pin the id shape first.
+          [[ "$POOL_ID" =~ ^[0-9a-f]+$ ]] || { echo "::error::web-1 pool id unresolvable or off-shape ('${POOL_ID}') — refusing to re-interpolate it into the health URL."; exit 1; }
+          HEALTH_JSON=""; ORIGINS=0; HEALTH=""
+          for i in $(seq 1 20); do
+            HEALTH_JSON=$(doppler run --preserve-env -p soleur -c prd_terraform -- bash -c "
+              curl --disable --noproxy '*' -s --max-time 10 \
+                \"https://api.cloudflare.com/client/v4/accounts/\${CF_ACCOUNT_ID}/load_balancers/pools/${POOL_ID}/health\" \
+                --config - < <(printf 'header = \"Authorization: Bearer %s\"\n' \"\${CF_API_TOKEN}\")" || true)
+            ORIGINS=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[] | keys[]] | unique | length' 2>/dev/null || printf '0')
+            HEALTH=$(printf '%s' "$HEALTH_JSON" | jq -r '[.result.pop_health[].origins[][] | .healthy] | unique | join(",")' 2>/dev/null || true)
+            [[ "$ORIGINS" =~ ^[0-9]+$ ]] || ORIGINS=0
+            if [[ "$ORIGINS" -ge 2 && "$HEALTH" == "true" ]]; then
+              echo "pool-health green after ~$((i * 15))s (${ORIGINS} distinct origin(s))"
+              break
+            fi
+            sleep 15
+          done
+          {
+            echo "### GA monitor-https post-apply pool health"
+            echo "- Pool: ${POOL_ID}"
+            echo "- Distinct origins seen: ${ORIGINS}"
+            echo "- Origin health verdicts: ${HEALTH:-none}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # An EMPTY or one-origin pop_health is not a verdict - grade it as an instrument failure, never as healthy.
+          if [[ "$ORIGINS" -lt 2 ]]; then
+            echo "::error::pop_health carried ${ORIGINS} distinct origin(s) across the ~5min poll, fewer than the 2 required (web-1 and web-2) - the health read cannot be graded as 'both healthy'. The monitor IS already https/:443: roll back (revert PR, then the ga-monitor-fix arm) unless the read recovers."
+            exit 1
+          fi
+          if [[ "$HEALTH" != "true" ]]; then
+            echo "::error::pool-health reports unhealthy origin(s) (${HEALTH}) across the ~5min poll under https/:443 - the listener or Cloudflare's certificate trust did not hold. The monitor IS already https/:443 (traffic is unaffected: web-2 is weight 0, B1 fallback serves web-1). Roll back: revert PR, then the ga-monitor-fix arm (http/:80). Do NOT set allow_insecure=true as a reflex: ADR-321 R7 needs the trust shown."
+            exit 1
+          fi
+          echo "Pool reports BOTH origins healthy under the https/:443 probe with certificate validation on."
 
   ga_pool_update:
     if: github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-pool-update'

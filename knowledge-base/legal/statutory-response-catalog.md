@@ -163,7 +163,12 @@ timestamp — never webhook-processing time.
    Art. 15+20, `user_id` owner; sender-keyed requests are fulfilled manually
    via the service role); **accountless ex-member** → runbook
    `knowledge-base/legal/runbooks/dsar-accountless-ex-member.md` (Art. 12(6)
-   identity verification); **community / repository third party** (Discord
+   identity verification); **founder legal-acceptance record** (PA-40; the
+   three tables are in `DSAR_TABLE_EXCLUSIONS`, not in the self-serve export)
+   → answer by email from the database-owner SQL session following the
+   procedure in
+   `knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md`
+   (Addendum 2026-11-06); **community / repository third party** (Discord
    guild member, GitHub commenter or stargazer, Hacker News poster, X or
    Bluesky poster, contributor) → **PA-31 §(h) / PA-32 §(h)** in
    `knowledge-base/legal/article-30-register.md`. Manual route only: a

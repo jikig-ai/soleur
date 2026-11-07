@@ -497,6 +497,12 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/skills/linear-fetch/test/parity.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_BEARER_FETCH_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # SUT (plugins/soleur/test/bearer-fetch.test.sh:32)
+  "plugins/soleur/test/bearer-fetch.test.sh"
+  "scripts/lib/bearer-curl.sh"  # real read: the env -u list parity test (plugins/soleur/test/bearer-fetch.test.sh:292)
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
   ".github/workflows/ci.yml"  # plugins/soleur/test/ci-head-verdict.test.sh:111
   "plugins/soleur/test/ci-head-verdict.test.sh"
@@ -552,6 +558,13 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DESTRUCTIVE_COMMAND_GUARD_MUTATION_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
   ".gitleaks.toml"  # plugins/soleur/test/gitleaks-rules.test.sh:2
   "plugins/soleur/test/gitleaks-rules.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HOLD_GATE_EVAL_TEST_SH_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md"  # real read: the runbook wording pin (plugins/soleur/test/hold-gate-eval.test.sh:914)
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # sourced by the SUT and copied into the mutant sandboxes (plugins/soleur/test/hold-gate-eval.test.sh:1375)
+  "plugins/soleur/skills/ship/scripts/hold-gate-eval.sh"  # SUT
+  "plugins/soleur/test/hold-gate-eval.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_LEFTHOOK_TYPECHECK_HEAP_TEST_SH_PATHS=(
@@ -3704,6 +3717,7 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
 AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
   ".github/workflows/"
   "scripts/lint-umbrella-aggregate.sh"
+  "scripts/lib/umbrella-member.sh"  # the canonical member() the (f) pin sources
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -4873,13 +4887,12 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
 
 # plugins/soleur/test/ci-pr-affected-replay-{a,b,c} (#11562 --rows arms of one suite file) — the rows
 # grep, awk and cp REAL files (the sibling test scripts for the pin row, the preactivation script for
-# the GIT_ var census, the required-checks fixture copy) and EXECUTE the observation-window probe under
-# a stub gh; the suite file is shared by all three labels, so all three arrays carry the same edges.
+# the GIT_ var census, the required-checks fixture copy); the suite file is shared by all three
+# labels, so all three arrays carry the same edges.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_A_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4888,7 +4901,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_B_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4897,7 +4909,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"

@@ -89,12 +89,13 @@ skill-security-scan PR gate
 #         BOTH over the bot diff in its Phase-4 "Secret-safety ceiling" before
 #         posting any synthetic (action.yml); the greens are earned, not
 #         fabricated. (#6049)
-#       - waiver-discipline: reachable only if a bot diff adds a `gitleaks:allow`
-#         waiver line. The one file a bot PR may write is
-#         knowledge-base/project/weakness-digest.md, emitted verbatim by
-#         weakness-miner.sh — a digest listing that contains no `gitleaks:allow`
-#         token, so the member is vacuously clean over every bot diff
-#         (unreachability-by-construction, re-derived here).
+#       - waiver-discipline: EARNED — the composite action reproduces the
+#         member's own predicate over the staged diff (added `gitleaks:allow`
+#         lines must carry an `issue:#NNN <reason>` trailer) in the same
+#         Phase-4 ceiling as the gitleaks / lint-fixture-content arms
+#         (action.yml). Replaces the earlier unreachability note, which
+#         leaned on weakness-digest.md's current output format — a
+#         generator-emitted file is not a bound on the format. (#12276)
 #       - rename-guard / allowlist-diff: CONTENT-SCOPED, sound by
 #         UNREACHABILITY — their guarded surfaces (renames into allowlist
 #         destinations under apps/web-platform/**, and the .gitleaks.toml paths

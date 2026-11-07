@@ -18,6 +18,7 @@
 #               cloudflare_load_balancer_pool.web_1,
 #               cloudflare_load_balancer.app   (parent root, ga-overlay arm, create-only)
 #   UPDATE    = cloudflare_load_balancer_monitor.web   (ga-monitor-fix, update-only)
+#               cloudflare_load_balancer_monitor.web   (ga-monitor-https, update-only, ADR-321 R7)
 #   POOL-UPD  = cloudflare_load_balancer_pool.web_1 +
 #               cloudflare_load_balancer.app           (update-only)
 #               + cloudflare_notification_policy.web_lb_health (create|update —
@@ -241,6 +242,39 @@ cf_lb_gate_ga_monitor_update() {
     return 1
   fi
   echo "cf-lb-overlay gate[ga-monitor-fix]: monitor update pinned to {http,:80,/health,200} — pass"
+}
+
+# ga-monitor-https (PARENT root; ADR-321 R7, #10479): exactly ONE change - an update of
+# cloudflare_load_balancer_monitor.web - whose after-state is exactly
+# {type:"https", port:443, path:"/health", expected_codes:"200", allow_insecure:false,
+#  header:[{header:"Host", values:["app.soleur.ai"]}]}. The certificate is VALIDATED
+# (allow_insecure=false): an unvalidated probe would report the listener healthy while
+# proving nothing about the Origin CA trust R7 requires. A different shape (http, another
+# port, allow_insecure true or unset, a missing or different Host), a create/delete/
+# replace, or a second member beside it -> refuse. The http/:80 gate above stays the
+# rollback grader: after a revert PR the code is http again and ga-monitor-fix applies it.
+cf_lb_gate_ga_monitor_https() {
+  local plan_json="$1"
+  plan_gate_assert_readable "cf_lb_gate_ga_monitor_https" "$plan_json" || return 1
+  plan_gate_assert_classifiable "cf_lb_gate_ga_monitor_https" "$plan_json" || return 1
+  local bad offenders updates shape
+  bad=$(jq -r "${_CF_LB_CHANGES} | map(select(.change.actions != [\"update\"] or .address != \"cloudflare_load_balancer_monitor.web\")) | length" "$plan_json")
+  offenders=$(jq -r "${_CF_LB_CHANGES} | map(select(.change.actions != [\"update\"] or .address != \"cloudflare_load_balancer_monitor.web\") | .address) | join(\", \")" "$plan_json")
+  updates=$(jq -r "${_CF_LB_CHANGES} | map(select(.change.actions == [\"update\"] and .address == \"cloudflare_load_balancer_monitor.web\")) | length" "$plan_json")
+  if [[ "$bad" != "0" ]]; then
+    echo "::error::ga-monitor-https gate: $bad change(s) that are not 'update cloudflare_load_balancer_monitor.web' (${offenders}) - a non-update verb or a second member beside it would launder an ungraded change. Refusing."
+    return 1
+  fi
+  if [[ "$updates" != "1" ]]; then
+    echo "::error::ga-monitor-https gate: expected exactly 1 monitor update, got $updates - a plan that grades nothing approves nothing. Refusing."
+    return 1
+  fi
+  shape=$(jq -c '[.resource_changes[] | select(.address == "cloudflare_load_balancer_monitor.web" and .change.actions == ["update"]) | .change.after | {type: (.type // ""), port: (.port // 0), path: (.path // ""), expected_codes: (.expected_codes // ""), allow_insecure: (.allow_insecure // false), header: ((.header // []) | map({header: .header, values: (.values // [])}))}] | .[0]' "$plan_json")
+  if [[ "$shape" != '{"type":"https","port":443,"path":"/health","expected_codes":"200","allow_insecure":false,"header":[{"header":"Host","values":["app.soleur.ai"]}]}' ]]; then
+    echo "::error::ga-monitor-https gate: monitor after=${shape} is not {type:https,port:443,path:/health,expected_codes:200,allow_insecure:false,header:[Host=app.soleur.ai]} - refusing to apply an unpinned probe shape to the live pool."
+    return 1
+  fi
+  echo "cf-lb-overlay gate[ga-monitor-https]: monitor update pinned to {https,:443,/health,200,validate-cert,Host=app.soleur.ai} - pass"
 }
 
 # ga-pool-update (PARENT root): PER-VERB allow-set over {pool web_1, LB app,

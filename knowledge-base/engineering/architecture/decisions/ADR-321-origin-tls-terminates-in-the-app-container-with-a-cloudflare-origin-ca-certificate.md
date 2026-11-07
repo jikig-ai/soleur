@@ -191,3 +191,13 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    fails closed as `no_provider_token`. (c) Cloudflare's exact response shape was read from current documentation, not from a live call.
 7. **Expiry alert: deferred, documented here, not filed.** See Consequences. Trigger to build it: the strict flip landing (PR-5) plus a
    decision that 15-year expiry needs an external signal; or Cloudflare shortening Origin CA validity.
+
+8. **LB monitor move (R7), amended 2026-11-07.** `cloudflare_load_balancer_monitor.web` becomes https/:443, `Host: app.soleur.ai`,
+   `allow_insecure = false` (certificate validated), applied only by the dispatch-only `ga-monitor-https` arm of `cf-lb-overlay.yml`, whose
+   grader (`cf_lb_gate_ga_monitor_https`) pins that exact shape, whose pre-gate refuses unless both origins are healthy under the current
+   probe, and whose post-apply gate fails red unless both origins read healthy under the new one. A merge applies nothing. Cloudflare's
+   monitor documentation does not say whether the monitor trusts an Origin CA certificate or uses `Host` as SNI (both unverified); the
+   post-apply gate is the measurement, and a red result with both listeners proven is the evidence that would justify a separate,
+   deliberate `allow_insecure = true` decision. Rollback is a revert PR plus the existing `ga-monitor-fix` arm (http/:80). A healthy
+   https monitor proves a listener answers TLS on each origin with a certificate Cloudflare's monitor accepts; it does not prove the
+   edge-to-origin traffic hop uses TLS (still `flexible` until the strict flip).

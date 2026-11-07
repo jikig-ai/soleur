@@ -264,8 +264,9 @@ _AFF_SCOPE_REQ=0
 # SOLEUR_PJ_FIFO (#12013) — launch order of the parallel pool. Unset/0: conservative BACKFILL. A suite
 # blocked on a token no longer idles the free slots; a later suite launches iff it conflicts with no live
 # suite and with nothing still
-# queued ahead of it (so suites that share a token keep registration order, and a queued `*`
-# blocks everything after it). SOLEUR_PJ_FIFO=1 restores the previous strict FIFO — the A/B
+# queued ahead of it (so suites that share a token keep registration order). A `*` (drain-barrier) suite is
+# PARKED: it holds nothing back, and launches alone at the drain, after every other suite (#12231; the contract
+# is written once, in the _pj_fill comment). SOLEUR_PJ_FIFO=1 restores the previous strict FIFO — the A/B
 # control of the measurement, not a tuning knob. Tests: scripts/test-all-parallel-scheduler.test.sh.
 _JOBS_REQ=""
 # Wall-clock bound for the enumerate family (#8761). Overridable by
@@ -2162,10 +2163,11 @@ _pj_rendered=0        # jobs whose verdict was printed at drain
 _pj_unaccounted=0     # jobs submitted but never measured (UNACCOUNTED class)
 _pj_sig=0             # set by the INT/TERM trap armed with parallel mode
 _pj_fifo=0            # 1 = strict FIFO launch (SOLEUR_PJ_FIFO=1, the A/B control); 0 = conservative backfill
+_pj_draining=0        # set once by _pj_drain; until then a parked `*` suite is never released (#12231)
 _pj_cap=""            # per-run capture dir for <idx>.out/.err files
 _pj_queue=()          # FIFO of unlaunched job indices
 _pj_live_pids=()      # pids currently live (kept in sync with _pj_state)
-declare -a _pj_pid=() _pj_label=() _pj_tok=() _pj_argvs=() _pj_state=()
+declare -a _pj_pid=() _pj_label=() _pj_tok=() _pj_argvs=() _pj_state=() _pj_star=()
 declare -a _pj_rc=() _pj_start=() _pj_end=() _pj_solo=() _pj_tmp0=() _pj_tmpdelta=()
 # Width inputs, overridable for host classes the measured defaults misfit.
 _PJ_MEM_PER_SUITE_MB="${SOLEUR_TEST_SUITE_MEM_MB:-512}"
@@ -2189,7 +2191,8 @@ _PJ_HARD_CAP=$(( 10#${_PJ_HARD_CAP} ))
 # pair. The launcher (_pj_fill) walks the queue in registration order and starts a
 # job while (a) the pool has a free slot, (b) no token intersects a live job's set
 # and (c) none intersects a job still queued ahead of it (backfill; strict FIFO under
-# SOLEUR_PJ_FIFO=1) — `*` intersects everything and is the drain barrier.
+# SOLEUR_PJ_FIFO=1) — `*` intersects everything, so a `*` job runs alone: the backfill pass parks it
+# and releases it at the drain (see _pj_fill).
 # `wait -n -p` reaps in completion order; every verdict prints at drain in index
 # order through _run_suite_verdict, so [ok]/[FAIL]/[KILLED]/[TRIPWIRE]/[skip] lines,
 # TEST_TIMING_LOG rows and the terminal marker are produced by the same code as
@@ -2227,7 +2230,7 @@ _pj_resolve_run_mode() {
     _pj_say_serial "bash<5.1 (wait -n -p unavailable)"; return 0
   fi
   if [[ "$want" != "auto" ]] && (( 10#$want == 1 )); then return 0; fi  # explicit serial, silent
-  if ! declare -F lane_tokens_for >/dev/null 2>&1; then
+  if ! declare -F lane_tokens_for >/dev/null 2>&1 || ! declare -F lane_tokens_has_star >/dev/null 2>&1; then
     _pj_say_serial "lane-table-unavailable (scripts/lib/test-suite-lanes.sh)"; return 0
   fi
   if (( _pj_lock_held != 1 )); then
@@ -2352,11 +2355,24 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
   #   (ii)  its tokens conflict with no LIVE suite  (live_tok: the union of the live suites' token sets),
   #   (iii) its tokens conflict with no suite still QUEUED ahead of it  (skip_tok: the union of the token
   #         sets of earlier candidates that stayed queued), so order among conflicting suites is preserved.
-  # `*` conflicts with everything: a queued `*` suite lands in skip_tok and blocks every later suite, and a
-  # `*` candidate launches only with the pool drained and nothing queued before it (lane_tokens_conflict "*"
-  # "" is TRUE, so the empty-set case is stated explicitly here instead of asked of it). lane_tokens_conflict
-  # stays the only comparison. A launch cannot unblock an earlier skipped candidate (it only adds to the live
-  # set), so one pass is complete; the work per call is linear in the queue, not quadratic.
+  # `*` conflicts with everything, so a `*` job must run alone. It is PARKED (#12231): a parked `*` is
+  # invisible to backfill until the drain (it joins neither live_tok nor skip_tok, and sets no any_q), so its
+  # registration position delays nothing, and it is released only when the pool is empty after the pass.
+  # "Is a star" is decided ONCE, at submit, by lane_tokens_has_star (the tokenizer lane_tokens_conflict uses), and
+  # read here from _pj_star[idx]. Ordering: suites that share a token keep registration order; a `*` is exclusive
+  # but ordered LAST, in registration order among the `*` jobs. The release is one step after the pass: with
+  # _pj_draining set (by _pj_drain), an empty pool and a non-empty rest, the head of rest launches. Invariant: if
+  # _pj_live_n is 0 after the pass, rest holds only parked `*` jobs (a parked star joins neither live_tok nor
+  # skip_tok, so on an empty pool the first non-`*` candidate always launches); launching the head of a pool-empty
+  # queue is legal in any case. One `*` is released per fill: the next reap's fill releases the next, and after a
+  # torn reap (which never fills) the drain loop's own fill does. A fill has no _pj_sig check, so a reap fill can
+  # still release a star after the interrupt flag is set; _pj_drain's signal branch then TERMs it, as for any suite
+  # (accepted edge, CTO ruling). A star is registered before the runtime ceiling may lapse but starts at the end of
+  # the run, so the ceiling (checked at registration only) does not hold it back. Registration, render order and
+  # verdicts are untouched (only launch timing moves). With any_q now set only by non-`*` candidates, `any_q == 0`
+  # is also what skips lane_tokens_conflict when nothing is queued ahead.
+  # lane_tokens_conflict stays the only comparison. A launch cannot unblock an earlier skipped candidate (it only
+  # adds to the live set), so one pass is complete; the work per call is linear in the queue, not quadratic.
   (( ${#_pj_queue[@]} > 0 )) || return 0
   local live_tok="" skip_tok="" any_q=0 j idx tok ok
   local -a rest=()
@@ -2366,14 +2382,11 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
   for idx in "${_pj_queue[@]}"; do
     if (( _pj_live_n >= _pj_jobs )); then rest+=("$idx"); continue; fi
     tok="${_pj_tok[idx]}"; ok=1
-    if [[ " $tok " == *" * "* ]]; then
-      # any_q is implied by live==0 (the first candidate of a pass always launches when the pool is
-      # empty); kept explicit so the rule reads as stated above.
-      (( _pj_live_n == 0 && any_q == 0 )) || ok=0
-    else
-      lane_tokens_conflict "$tok" "$live_tok" && ok=0
-      if (( ok == 1 && any_q == 1 )) && lane_tokens_conflict "$tok" "$skip_tok"; then ok=0; fi
+    if (( ${_pj_star[idx]:-1} == 1 )); then
+      rest+=("$idx"); continue   # parked until the drain (see the comment above)
     fi
+    lane_tokens_conflict "$tok" "$live_tok" && ok=0
+    if (( ok == 1 && any_q == 1 )) && lane_tokens_conflict "$tok" "$skip_tok"; then ok=0; fi
     if (( ok == 1 )); then
       _pj_launch "$idx"
       [[ " $live_tok " == *" $tok "* ]] || live_tok+=" $tok"
@@ -2385,6 +2398,10 @@ _pj_fill() {  # launch what may launch, in registration order (conservative back
       [[ " $skip_tok " == *" $tok "* ]] || skip_tok+=" $tok"
     fi
   done
+  if (( _pj_draining == 1 && _pj_live_n == 0 && ${#rest[@]} > 0 )); then
+    _pj_launch "${rest[0]}"
+    rest=("${rest[@]:1}")
+  fi
   if ((${#rest[@]})); then _pj_queue=("${rest[@]}"); else _pj_queue=(); fi
 }
 
@@ -2462,6 +2479,8 @@ _pj_submit() {  # _pj_submit <label> <argv...> — the run_suite dispatch under 
   _pj_label[idx]="$label"
   _pj_state[idx]=queued
   _pj_tok[idx]="$(lane_tokens_for "$label" "$@" 2>/dev/null || printf '*')"
+  # The predicate's presence is checked once, by _pj_resolve_run_mode (lane-table-unavailable falls back to serial).
+  if lane_tokens_has_star "${_pj_tok[idx]}"; then _pj_star[idx]=1; else _pj_star[idx]=0; fi
   local enc=""
   printf -v enc '%q ' "$@"
   _pj_argvs[idx]="$enc"
@@ -2497,6 +2516,7 @@ _pj_render() {  # _pj_render <idx> — print one suite's block in registration o
 
 _pj_drain() {
   (( _pj_mode == 1 )) || return 0
+  _pj_draining=1   # from here _pj_fill releases the parked `*` jobs, one per empty pool (#12231); called once, never reset
   # Fill until empty (#12013): the torn-reap branch of _pj_reap never calls _pj_fill, and under backfill one
   # fill may leave a queued suite whose blocker has just been reaped. A launch from a single trailing fill
   # would leave that suite live at render and mark it UNACCOUNTED, so reap and fill alternate until nothing
@@ -5603,12 +5623,13 @@ fi
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
   # START-FIRST (#12013): these arms are registered first on purpose. In the pooled
-  # local gate a suite starts as the registration stream reaches it, and a queued `*`
-  # (drain barrier) suite blocks every later launch; with no `*` suite live or queued
-  # ahead of it, an empty-token suite such as an arm starts as soon as a slot is
-  # free. The arms include the longest suite of the gate (-a), so registered late
-  # they ended the run. The three move together: hoisting
-  # only -a leaves -b and -c behind the barrier. Applies to a pooled run only (the
+  # local gate a suite starts as the registration stream reaches it, so an empty-token
+  # suite such as an arm starts as soon as a slot is free. (A `*` drain-barrier suite
+  # no longer holds later launches back: it is parked until the drain, #12231.)
+  # The arms include the longest suite of the gate (-a), so registered late
+  # they ended the run. The three move together: -b and -c are the next-longest
+  # suites after -a, so leaving them registered late would let them end the run
+  # instead. Applies to a pooled run only (the
   # local --affected gate); serial runs and CI shard legs get the same order but no
   # wall-time change. Pinned by scripts/lib/test-suite-lanes.test.sh section 7;
   # numbers and rationale: ADR-242, decision 29.
@@ -5624,9 +5645,9 @@ if want_scripts; then
   # the battery must land in the same commit as a re-split of these ranges.
   # Literal path in argv, never "$f": the totality checker resolves each arm's
   # battery from the run_suite command token and dies on <unresolved>.
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-602
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-158
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 159-316
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-473
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the

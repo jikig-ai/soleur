@@ -326,35 +326,7 @@ jobs:
         run: |
           set -uo pipefail
           failed=0
-          member() {
-            local mname="$1" scope="$2" ids="$3" concs="$4" outs="$5"
-            local -a ida ca oa
-            IFS=',' read -ra ida <<<"$ids"
-            IFS=',' read -ra ca <<<"$concs"
-            IFS=',' read -ra oa <<<"$outs"
-            local any_fail=0 any_run=0 detail="" i c o
-            for i in "${!ida[@]}"; do
-              c="${ca[$i]:-unknown}"; o="${oa[$i]:-$c}"
-              [ -z "$o" ] && o="$c"
-              if [ "$o" != "$c" ]; then detail+=" ${ida[$i]}=${c}(${o})"; else detail+=" ${ida[$i]}=${c}"; fi
-              case "$c" in
-                success) any_run=1 ;;
-                skipped) ;;
-                *) any_fail=1 ;;
-              esac
-            done
-            if [ "$any_fail" -eq 1 ]; then
-              printf 'FAIL  %-30s%s\n' "$mname" "$detail"; return 1
-            fi
-            if [ "$any_run" -eq 1 ]; then
-              printf 'PASS  %-30s%s\n' "$mname" "$detail"; return 0
-            fi
-            if [ "$scope" = "*" ] || [[ ",$scope," == *",$EVENT_NAME,"* ]]; then
-              printf 'FAIL  %-30s%s  (owed a verdict on %s; every member step skipped)\n' "$mname" "$detail" "$EVENT_NAME"
-              return 1
-            fi
-            printf 'SKIP  %-30s%s  (out of scope on %s)\n' "$mname" "$detail" "$EVENT_NAME"
-          }
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/umbrella-member.sh" || { echo "::error::scripts/lib/umbrella-member.sh could not be loaded from the job checkout — the member() verdict arbiter is absent; failing closed"; exit 1; }
           member workflow-yaml-strict '*' 'workflow-duplicate-keys' '${{ steps.workflow-duplicate-keys.conclusion }}' '${{ steps.workflow-duplicate-keys.outcome }}' || failed=1
           member enforce '*' 'enforce-legal-lockstep,enforce-backstop,enforce-art30' '${{ steps.enforce-legal-lockstep.conclusion }},${{ steps.enforce-backstop.conclusion }},${{ steps.enforce-art30.conclusion }}' '${{ steps.enforce-legal-lockstep.outcome }},${{ steps.enforce-backstop.outcome }},${{ steps.enforce-art30.outcome }}' || failed=1
           member markdown-lint '*' 'markdown-lint-setup-node,markdown-lint-install,markdown-lint,markdown-lint-mutations' '${{ steps.markdown-lint-setup-node.conclusion }},${{ steps.markdown-lint-install.conclusion }},${{ steps.markdown-lint.conclusion }},${{ steps.markdown-lint-mutations.conclusion }}' '${{ steps.markdown-lint-setup-node.outcome }},${{ steps.markdown-lint-install.outcome }},${{ steps.markdown-lint.outcome }},${{ steps.markdown-lint-mutations.outcome }}' || failed=1
@@ -809,35 +781,7 @@ jobs:
         run: |
           set -uo pipefail
           failed=0
-          member() {
-            local mname="$1" scope="$2" ids="$3" concs="$4" outs="$5"
-            local -a ida ca oa
-            IFS=',' read -ra ida <<<"$ids"
-            IFS=',' read -ra ca <<<"$concs"
-            IFS=',' read -ra oa <<<"$outs"
-            local any_fail=0 any_run=0 detail="" i c o
-            for i in "${!ida[@]}"; do
-              c="${ca[$i]:-unknown}"; o="${oa[$i]:-$c}"
-              [ -z "$o" ] && o="$c"
-              if [ "$o" != "$c" ]; then detail+=" ${ida[$i]}=${c}(${o})"; else detail+=" ${ida[$i]}=${c}"; fi
-              case "$c" in
-                success) any_run=1 ;;
-                skipped) ;;
-                *) any_fail=1 ;;
-              esac
-            done
-            if [ "$any_fail" -eq 1 ]; then
-              printf 'FAIL  %-30s%s\n' "$mname" "$detail"; return 1
-            fi
-            if [ "$any_run" -eq 1 ]; then
-              printf 'PASS  %-30s%s\n' "$mname" "$detail"; return 0
-            fi
-            if [ "$scope" = "*" ] || [[ ",$scope," == *",$EVENT_NAME,"* ]]; then
-              printf 'FAIL  %-30s%s  (owed a verdict on %s; every member step skipped)\n' "$mname" "$detail" "$EVENT_NAME"
-              return 1
-            fi
-            printf 'SKIP  %-30s%s  (out of scope on %s)\n' "$mname" "$detail" "$EVENT_NAME"
-          }
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/umbrella-member.sh" || { echo "::error::scripts/lib/umbrella-member.sh could not be loaded from the job checkout — the member() verdict arbiter is absent; failing closed"; exit 1; }
           member settings-json-integrity '-' 'sji-opt-out,settings-json-integrity' '${{ steps.sji-opt-out.conclusion }},${{ steps.settings-json-integrity.conclusion }}' '${{ steps.sji-opt-out.outcome }},${{ steps.settings-json-integrity.outcome }}' || failed=1
           member pr-body-vs-diff '-' 'pbd-opt-out,pr-body-vs-diff' '${{ steps.pbd-opt-out.conclusion }},${{ steps.pr-body-vs-diff.conclusion }}' '${{ steps.pbd-opt-out.outcome }},${{ steps.pr-body-vs-diff.outcome }}' || failed=1
           member stray-worktree-marker-block '-' 'swm-opt-out,stray-worktree-marker-block' '${{ steps.swm-opt-out.conclusion }},${{ steps.stray-worktree-marker-block.conclusion }}' '${{ steps.swm-opt-out.outcome }},${{ steps.stray-worktree-marker-block.outcome }}' || failed=1

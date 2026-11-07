@@ -2,6 +2,7 @@
 .claude/hooks/browser-snapshot-credential-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
@@ -12,6 +13,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/key-rotation.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project
@@ -32,6 +34,7 @@
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/domain-model.md
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms/archive
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/plans
@@ -113,6 +116,7 @@ plugins/soleur/test/go-hold-routing.test.sh	knowledge-base/project/specs
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
+plugins/soleur/test/hold-gate-eval.test.sh	knowledge-base/engineering/operations/runbooks
 plugins/soleur/test/infra-validation-detect.test.sh	knowledge-base/project/plans
 plugins/soleur/test/kb-search-support-path.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md

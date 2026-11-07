@@ -329,13 +329,13 @@ Live standing alarms over this source:
   incident 1031046761 stayed open for 24 days (rows measured arriving 2026-11-02). **The zero-fill mechanism is an INFERENCE** (a step the
   evaluator cannot evaluate is read as 0): the query is proven read-only (healthy 0, one host 1,
   unknown identifier 2), the vendor evaluator is not, and the evaluated value is not exposed by the
-  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, runs the same
-  query against an identifier no host emits; it must fire. Until it has fired, a green production
-  alert is not evidence of health, and an evaluator error also reads 0 (a quiet failure here; the
+  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, ran the same
+  query against an identifier no host emits; it fired (2026-11-06) and was retired by #12189. An
+  evaluator error also reads 0 (a quiet failure here; the
   sibling Sentry detectors cover only a fleet-wide dead timer and a failing probe, not one host's Vector
   or journal).
-  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary decision
-  table:
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary's retirement
+  record:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
   An open incident does not by itself mean a host is silent: read `rows_in_window` from
   `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (the exact `doppler run` form, which

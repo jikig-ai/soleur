@@ -1,0 +1,125 @@
+# Measurements: park the `*` suites until the drain (#12231), and the replay-arm rebalance (not landed). Ref #12013.
+
+Method (a measurement method only; it bypasses nothing in a ship path). Script: `measure.sh`; figures: `derive.sh`.
+- Each reading is a fresh `git clone` into its own directory (own git-common-dir, so the advisory lock is its own and the pool engages;
+  empty per-clone derive cache, so cold). The two `node_modules` are symlinked from the worktree. `origin/main` in the clone is the tree
+  under test, so a runner edit is part of the base and the gate is not degraded to full.
+- Pinned diff: the files commit `7af192071d` touched (web-platform, 8 files); added files removed, modified files restored to the
+  parent's content, committed. Selection in every reading: `selected=162 of=742 always_on=118 edge=44 fallback=none` (the earlier
+  readings said 740; main gained two registrations).
+- Command: `env -u CI SOLEUR_TEST_JOBS=4 TEST_TIMING_LOG=<f> nice -n 10 bash scripts/test-all.sh --affected`, output stamped per line.
+  `SOLEUR_PJ_FIFO` unset in every reading. The 18k-line stamped logs are not committed.
+- Disturbance guard: a reading aborts at start when load1 > 9 or any other `test-all.sh` is live; the same two facts are recorded at the end.
+- Trees: control and control2 = `78fbd47b9a` (merge base, the old barrier); t1 = `e2f2b4c552` (the park).
+
+## Readings (pool phase = wall minus the `mode engaged` offset)
+
+| reading  | wall  | cold derive | pool phase | idle slot-s | <=1 suite live (s) | replay-a (start..end) | `*` suite start (pool-relative), others live | load start / end | disturbed |
+|----------|-------|-------------|------------|-------------|--------------------|------------------------|---------------------------------------------|------------------|-----------|
+| control  | 2417 s | 255 s | 2153 s | 2402 | 435 | +264..+1726 | +1884 s, none | 2.87 / 7.26 | YES: a sibling worktree's `test-all.sh` was live at the end |
+| control2 | 2138 s | 234 s | 1894 s | 2003 | 305 | +245..+1609 | +1659 s, none | 2.99 / 6.24 | no |
+| t1       | 2081 s | 216 s | 1854 s | 1428 | 364 | +227..+1714 | +1845 s, none | 2.54 / 2.62 | no |
+
+Faster (undisturbed) control = control2. t1 versus control2: pool phase -40 s, wall -57 s, idle slot-seconds -575. The first control is
+reported but is not the comparison: it was disturbed, and a disturbed control would flatter the treatment.
+
+Per-suite start and end offsets: `<reading>.suites.tsv`; derived figures: `<reading>.derived.txt`. Kept for control2 and t1 only (the disturbed first control is a table row, its files are not kept; raw timing rows are not kept).
+
+## What the readings show
+
+- The structural property holds in the T1 log: the one selected `*` suite (`scripts/test-all-capacity-signal`, about 6 s) launched with
+  no other suite live, after the last non-`*` suite ended, and the run ended on it (+2072 s, wall +2081 s). In the controls it launched when
+  no other suite was live as well (the pool had drained to its longest suite), and then every later registration waited behind it: counting
+  suites whose start is later than the star's start in `<reading>.suites.tsv`, 50 suites (954 slot-seconds) in the disturbed control (file not kept) and 50 (827) in
+  control2, none in t1.
+- Idle slot-seconds fell from 2003 (control2) to 1428 (t1), but that is a difference between two runs, not a measurement of what the park caused.
+  The stranded drain behind the star (about 235 s of pool phase in control2, 269 s in control) is gone. Seconds with at most one suite live
+  ROSE against the clean control, 305 s to 364 s: the long suites now form a single-suite tail (the decision-challenges check "seconds with at most
+  one suite live must fall against C" is met against the disturbed control, 435 s, and not against the clean one).
+- The pool end is set by `approval-guard1-mutation` alone: it is the last non-`*` suite to end in every reading (its end equals the star's
+  start). Its wall is 1049 s (control), 880 s (control2) and 1080 s (t1), and the mean number of other suites live while it ran roughly doubled in
+  t1 (about 0.8 to 1.7), because the park moved about 35 to 50 suites into its window. One reading per arm, so that is a hypothesis for why 575
+  fewer idle slot-seconds bought only 40 s of pool phase. `argv-bearer-sweep` and `destroy-ask-mutation` end well before the pool end. The
+  lever #12263 (start-first for the long suites) is the one this points at.
+- AC7 (claim criterion): T1's pool phase is 40 s below the faster control, under the 100 s bar. So the PR says `Ref #12231`, not `Closes`.
+  The park is kept on the structural evidence (AC6 and the Phase 1 fixtures), not on this delta. "No regression" holds for the POOL PHASE only,
+  against one clean control: the critical suite's own wall was 200 s longer in t1 than in control2.
+- Run-to-run spread is not resolved by three readings: control and control2 differ by 263 s wall (the first was disturbed), and the clean pair
+  differs by 57 s. The readings ran in a fixed order (control, control2, t1) and cold derive fell monotonically (255, 234, 216 s) although the
+  scheduler cannot affect it, so warm-up favouring later readings is a live confound; quote pool phase only, and an ABBA order would be needed
+  for a claim. A 40 s pool-phase difference is inside that spread. Read the T1 result as "structural property confirmed, gain not resolved on
+  this diff".
+
+## Failures
+
+- Every reading: `apps/web-platform [repo-wide+component]` (the known clone artifact; the clone has no `.env` and shares symlinked
+  `node_modules`). The remaining `[FAIL]` lines in the logs are the expected self-test lines of suites that fail on purpose.
+- t1 only: `.claude/hooks/grep-q-pipe-guard.test.sh`. Cause: a line added by this change to `scripts/test-all-parallel-scheduler.test.sh`
+  (`grep -E '^starS<TAB>' "$TIMING_FILE" | grep -qE ...`) is the pipe-into-`grep -q` shape that guard bans. A real defect of the change, not
+  load; fixed in a later commit of this PR (`grep -qE ... < <(grep ...)`), guard re-run green. The reading stands as taken.
+
+## Guard 1 mutants (scheduler contract), one edit to a runner copy via `TESTALL_TARGET_OVERRIDE`
+
+Control (unmutated runner): 80 passed, 0 failed at the time of the table (the suite has grown since). Every mutant below turned the suite red; reds = failed assertions. The mutants were one-off edits and no script is kept.
+
+| # | Edit | Result | Arms that went red |
+|---|------|--------|--------------------|
+| M1a | revert the park | 11 reds | star-last, parked-star, blocked-head, two-stars, derived-star, drain-order, star-first, multi-token, signal-while-parked, many |
+| M1b | park, but add the star to `skip_tok` | 1 red | blocked-head star |
+| M1c | park, add to `skip_tok` and set `any_q` | 11 reds | as M1a |
+| M2 | release without the draining flag | 4 reds | star-first, signal-while-parked, many (cost and order) |
+| M3a | release without the empty-pool check | 17 reds | star-last (overlap), tmp_delta, order among conflicting suites, and more |
+| M3b | launch all of `rest` | 3 reds | two-stars, queued-ahead accumulation, non-canonical shape |
+| M3c | release `rest[-1]` | 1 red | two-stars (registration order among stars) |
+| M3d | release without dropping the index | 12 reds | star-last (rc 124), parked-star, blocked-head, and more |
+| M4 | run the release before the pass | 1 red | drain-order (this is the only arm that observes the position of the step) |
+| M5 | the strict-FIFO branch no longer taken | 3 reds | FIFO knob, frozen FIFO order, FIFO star control |
+| M6 | set the draining flag at submit | 4 reds | star-first, signal-while-parked, many |
+| M7 | `$tok == "*"` instead of the word-bounded match | 1 red | multi-token star |
+| M8 | release only in the normal reap path | 1 red | torn-reap star |
+
+M9 (an extra signal conjunct) is not a mutant that changes behaviour in the shipped arms: `_pj_fill` has no signal check by CTO ruling
+(plan Phase 2), and the drain's signal branch reaps without filling, so a signal that lands BEFORE the drain launches nothing (the
+signal-while-parked arm pins exactly that, and is killed by M2 and M6). A reap fill that runs after the flag is set can still release a
+parked star, which the drain's signal branch then TERMs; that edge is accepted and recorded in the `_pj_fill` comment, not pinned. Harness rows: H1 (flip an expected order in the star-last `tl_check` of a suite copy) -> that arm went red;
+H2 (a `*` registered last, and the zero-star shapes) stay green on the unmodified and on the new runner; H3 (the checker over a timeline with no
+`star` stamp) fails, not skips.
+
+Enumeration: `bash scripts/test-all.sh --enumerate-commands | sort` at the merge base versus this tree: 754 rows each, diff empty.
+
+## Lever 2 (replay-arm rebalance): not landed
+
+Paper check (`rebalance_whatif.py`, output `rebalance_whatif.out.txt`): the list-schedule reproduces the previous treatment reading
+(pool end 1611 s, `approval-guard1-mutation` start 945 s). The best of 178503 contiguous splits is predicted +40 s but leaves the arms at
+1569 / 263 / 781 s; the best split within the 1.5x balance bound is predicted 78 s worse. CTO ruling 2026-11-06 (decision-challenges.md): stop;
+no per-site measurement, no re-split, no T2 reading. Per-site costs are unmeasured; recorded on #12263.
+
+## Not claimed
+
+- The 600 s bar (the cold gate is still about 2.0 ks; the pool-phase floor is about 1.5 ks).
+- A gain from the park on this diff: 40 s is inside the run-to-run spread. The pinned diff selects one 6 s `*` suite, so T1 measures
+  barrier removal only; with several `*` suites selected the effect is structural (each runs solo either way and the stranded drain disappears),
+  not measured.
+- A result for diffs that select a different suite mix; a confidence band.
+
+## Full battery (AC12) on the runner commit tree
+
+`env -u CI SOLEUR_TEST_JOBS=4 bash scripts/test-all.sh` (the runner changed, so the gate degraded to full: `AFFECTED_FALLBACK reason=runner-changed`;
+two attempts were refused first because a sibling session's full-gate run was in flight, then run when it ended): `746/754 suites passed`, rc 1,
+4 reds, 4 declined.
+- The five `*` suites it selected launched last, in registration order, each with no other suite live, and all passed:
+  `orphan-process-reaper`, `orphan-process-reaper-mutations`, `md-to-mrkdwn`, `cf-tunnel-liveness-gate-mutations`, `test-all-capacity-signal`.
+  The sixth declared `*` suite, `apps/web-platform/infra/run-registered-suites.sh`, was declined (`not_in_diff`) in this run, so it was never
+  exercised on the parked order. CI does not cover it either: CI forces serial mode (`_pj_resolve_run_mode` returns serial when `CI` is set), where
+  registration position, not the park, decides order. The CTO's gate ("all six `*` verdicts green on the parked order") is therefore met 5 of 6;
+  the sixth is an open residual (its source was read for order dependence, none found: it uses its own `mktemp` log dir and resolves its
+  durations file from its manifest directory).
+- Red 1, `plugins/soleur/test/fixture-relative-assert.test.sh`: caused by this change, two new sites (the star arm's timing-file write in the scheduler
+  suite, and a redirect in `measure.sh`). Fixed (`assert_fixture_dir "$TMP"` before the write; `git checkout <pin>^ -- <file>` instead of a redirect);
+  suite re-run green (rc 0).
+- Red 2 and 3, `flag-detach-shared` and `flag-org-scoping-pr2`: fail when run alone in this worktree (rc 1) AND at the merge base (rc 1, re-run by the
+  history seat in a fresh clone of `78fbd47b9a`); they exercise the flag scripts, no file of this diff is read by them (`git diff` over `plugins` and
+  `.claude` is empty), and the runner already lists both as "unverified suite fails at base under the isolated run" (`JOINED` lines of
+  `grep-q-pipe-guard`). Pre-existing, not this change. (An earlier version of this line said they passed in a base clone; that clone carried the
+  pinned diff and a different environment, and was wrong evidence.)
+- Red 4, `community-argv` (103 s): passes alone in the worktree (rc 0) and in the base clone; load-sensitive under the pooled full run.
