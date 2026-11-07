@@ -93,6 +93,16 @@ name: Merge queue stall check
 # costs no API call. Prevention is the strict duplicate-key member of the quality-guards umbrella
 # (pr-quality-guards.yml); this is diagnosis.
 #
+# CORRELATION (#12320): a candidate is attributed to an entry only when its run's head_sha is byte-equal to the entry's
+# headCommit.oid (a validated 40-hex string); a stale run on a reused or superseded ref is therefore never blamed on a newer
+# entry, which narrows the earlier caveat that an unrelated broken push of the same workflow could be named. A null or
+# malformed headCommit.oid (a QUEUED entry has none yet) means "cannot correlate": no Actions read, the unchanged
+# "suspected" issue, and a ::notice:: of its own. The arm only ever REMOVES a claim; the "inferred" wording is unchanged.
+# Stated residuals: a grouped-merge member that is not the deepest entry stays "suspected" (its oid differs from the group
+# ref's tip, or its ref fails the prefix join); and if GitHub nulls headCommit.oid for a BUILT entry that never reports,
+# every named cause would silently degrade to "suspected" (the "no usable" notice in the run log is the signal; the flip
+# is to drop that short-circuit and fall back to the ref-prefix join).
+#
 # FALSE POSITIVES ARE POSSIBLE, BY CONSTRUCTION. The age is measured from `enqueuedAt`,
 # which is when the PR joined the queue, NOT when its own merge_group build started. An
 # entry that waited behind others and was promoted to position 2 or 1 can already be
@@ -181,6 +191,7 @@ jobs:
                         enqueuedAt
                         position
                         state
+                        headCommit { oid }
                         pullRequest { number url }
                       }
                     }
@@ -196,8 +207,10 @@ jobs:
           now="$(date -u +%s)"
           threshold_s=$(( STALL_THRESHOLD_MINUTES * 60 ))
 
-          # One line per stalled entry: <pr_number>\t<age_minutes>\t<pr_url>\t<state>\t<enqueuedAt>
-          # (title is intentionally excluded to keep the TSV delimiter-safe).
+          # One line per stalled entry: <pr_number>\t<age_minutes>\t<pr_url>\t<state>\t<enqueuedAt>\t<headCommit.oid>
+          # (title is intentionally excluded to keep the TSV delimiter-safe). The oid is LAST on purpose: a QUEUED
+          # entry has a null headCommit, which is an EMPTY field, and tab is IFS whitespace so `read` collapses an
+          # empty MIDDLE field but not a trailing one.
           # Only entries at position <= MAX_ENTRIES_TO_BUILD are aged: deeper
           # entries legitimately wait their turn (see FALSE-POSITIVE FILTER).
           # UNMERGEABLE entries are skipped: the queue holds them until the author
@@ -212,7 +225,7 @@ jobs:
             | select((.state // "") != "UNMERGEABLE")
             | (($now) - (.enqueuedAt | fromdateiso8601)) as $age
             | select($age > $thr)
-            | "\(.pullRequest.number)\t\(($age/60)|floor)\t\(.pullRequest.url)\t\(.state // "UNKNOWN")\t\(.enqueuedAt)"
+            | "\(.pullRequest.number)\t\(($age/60)|floor)\t\(.pullRequest.url)\t\(.state // "UNKNOWN")\t\(.enqueuedAt)\t\(.headCommit.oid // "")"
           ' <<<"$resp")"
 
           if [[ -z "$stalled" ]]; then
@@ -291,7 +304,7 @@ jobs:
               flat="$(jq -s '[.[].workflow_runs[]]' <<<"$out" 2>>"$errf")" || rc=$?
             fi
             if [[ "$rc" -eq 0 ]]; then
-              list="$(jq -c --arg re "$refre" 'map(select((.head_branch // "") | test($re)) | {id, name, path, workflow_id, event, head_branch, conclusion, created_at, html_url})' <<<"$flat" 2>>"$errf")" || rc=$?
+              list="$(jq -c --arg re "$refre" 'map(select((.head_branch // "") | test($re)) | {id, name, path, workflow_id, event, head_branch, head_sha, conclusion, created_at, html_url})' <<<"$flat" 2>>"$errf")" || rc=$?
             fi
             if [[ "$rc" -ne 0 ]]; then
               echo "::warning::merge-queue-stall: could not read the Actions runs (event=${ev}) for PR #${pr} (rc=${rc}: $(LC_ALL=C tr -cd '\40-\176' <"$errf" | head -c 200)); filing without a named cause."
@@ -332,7 +345,7 @@ jobs:
             [[ "$n" =~ ^[0-9]+$ ]] && [[ "$((10#$n))" -gt 0 ]]
           }
 
-          # queue_candidate_cause <pr> <enqueuedAt>: sets CAUSE_PATHS / CAUSE_LINES / CAUSE_REF / CAUSE_N when the
+          # queue_candidate_cause <pr> <enqueuedAt> [<oid>]: sets CAUSE_PATHS / CAUSE_LINES / CAUSE_REF / CAUSE_N when the
           # entry's LATEST temp ref shows a failed load, else leaves them empty (the caller resets them per entry).
           # Never fails the step. Called only AFTER the dedupe check.
           #
@@ -346,7 +359,15 @@ jobs:
           # a ref suffix), so workflow_id is the join key. If GitHub changes the signature the failure is safe: the
           # issue stays "suspected".
           queue_candidate_cause() {
-            local pr="$1" enq="$2" refre since enq_s PUSH_LIST="" MG_LIST="" named ref p u w HIST_WARNED=0
+            local pr="$1" enq="$2" oid="${3-}" refre since enq_s PUSH_LIST="" MG_LIST="" named ref p u w hs HIST_WARNED=0
+            # Correlation (#12320): a run is attributed to this entry only if its head_sha equals the entry's
+            # headCommit.oid. A null or malformed oid (a QUEUED entry has none yet) means "cannot correlate": say so
+            # (a notice of its own, never the mismatch one) and read nothing. Empty must never equal empty, so this
+            # validation is the only defence for the equality below.
+            if ! [[ "$oid" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::notice::merge-queue-stall: PR #${pr}: the queue entry has no usable headCommit.oid (a QUEUED entry has none); cannot correlate a run to it, so no cause is named."
+              return 0
+            fi
             refre="^gh-readonly-queue/main/pr-${pr}-[0-9a-f]{40}\\z"
             # Defence in depth, not protection of the real step: the `stalled` jq above already aborts the step on an
             # empty or unparseable enqueuedAt (its fromdateiso8601; pre-existing), so this guard is not reachable from
@@ -375,11 +396,14 @@ jobs:
                       and ((.html_url // "") | test("^https://github\\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/actions/runs/[0-9]+\\z"))
                       and (.workflow_id as $w | ($mg | index($w)) == null)))
                   | unique_by(.path)[]
-                  | [$ref, .path, .html_url, (.workflow_id | tostring)] | @tsv
+                  | [$ref, .path, .html_url, (.workflow_id | tostring), (.head_sha // "")] | @tsv
                 end' 2>/dev/null)" || return 0
             [[ -n "$named" ]] || return 0
-            # Each candidate must also have merge_group history (a workflow that never gated the queue is not blamed).
-            while IFS=$'\t' read -r ref p u w; do
+            # Each candidate must carry the entry's own commit (a stale or foreign ref is skipped, per candidate, before
+            # any further lookup) and also have merge_group history (a workflow that never gated the queue is not blamed).
+            while IFS=$'\t' read -r ref p u w hs; do
+              if [[ "$hs" != "$oid" ]]; then
+                echo "::notice::merge-queue-stall: PR #${pr}: the failed push run for ${p} has a head_sha that does not match the queue entry's headCommit.oid (stale or foreign ref); not attributing the stall to it."; continue; fi
               if has_mg_history "$w"; then
                 CAUSE_REF="$ref"
                 CAUSE_N=$(( CAUSE_N + 1 ))
@@ -393,7 +417,7 @@ jobs:
           # Declared once (set -u), reset for EVERY entry inside the loop below.
           CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0
 
-          while IFS=$'\t' read -r pr age url state enq; do
+          while IFS=$'\t' read -r pr age url state enq oid; do
             [[ -z "$pr" ]] && continue
             # Match anchor includes the constant " pending" suffix that always
             # follows the PR number in the filed title — without it, the prefix
@@ -408,7 +432,7 @@ jobs:
               continue
             fi
             CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0
-            queue_candidate_cause "$pr" "$enq"
+            queue_candidate_cause "$pr" "$enq" "$oid"
             cause_suffix="(suspected, verify first)"
             plain_title="merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m ${cause_suffix}"
             title="$plain_title"

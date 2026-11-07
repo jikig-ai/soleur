@@ -20,8 +20,8 @@
 #    synthesized from the live shape, and APPLIES event, the created range and per_page/--paginate, plus the
 #    UNWINDOWED per-workflow merge_group-history lookup (`actions/workflows/<id>/runs`); a stub that ignored the
 #    filters would make every cause row vacuous, so the L9 and L25 rows prove the stub itself filters and exits 64 on
-#    an unexpected request. Rows L1-L24 and L26 drive the real run body (positive rows name the cause, every NEGATIVE
-#    row also asserts the lookup ran, so a failed lookup cannot satisfy it); mutation rows C1-C26 prove each
+#    an unexpected request. Rows L1-L24 and L26-L29 drive the real run body (positive rows name the cause, every NEGATIVE
+#    row also asserts the lookup ran, so a failed lookup cannot satisfy it); mutation rows C1-C34 prove each
 #    load-bearing literal of `queue_candidate_cause`, run only the row they name, and are scored a KILL only if
 #    (1) the mutant still compiles (bash -n), (2) it still completes a clean entry, (3) the named row went red with
 #    ITS OWN assertion message, and (4) NO captured stream (the run's stdout/stderr and the stderr of every jq call,
@@ -196,7 +196,7 @@ cat > "$BIN/gh" <<'STUB'
 #   api graphql   serves the full raw queue JSON, then (a) answers null unless the query names
 #                 mergeQueue(branch:"main"), (b) cuts entries to the query's `entries(first:N)`, and
 #                 (c) keeps only the node fields the query SELECTS (enqueuedAt, position, state,
-#                 pullRequest.number, pullRequest.url): a field the query forgot to ask for is absent,
+#                 headCommit.oid, pullRequest.number, pullRequest.url): a field the query forgot to ask for is absent,
 #                 exactly as GitHub answers.
 #   issue list    serves the raw issue array and APPLIES --state (an absent --state is treated as ALL, so
 #                 the workflow must pin it, it may not lean on gh's default), --label, --limit and --json
@@ -234,13 +234,15 @@ case "$1 $2" in
     has() { if grep -qw -- "$1" <<<"$query"; then echo true; else echo false; fi; }
     jq --arg branch "$branch" --argjson first "${first:-0}" \
        --argjson enq "$(has enqueuedAt)" --argjson pos "$(has position)" \
-       --argjson st "$(has state)" --argjson num "$(has number)" --argjson url "$(has url)" '
+       --argjson st "$(has state)" --argjson num "$(has number)" --argjson url "$(has url)" \
+       --argjson oid "$(has oid)" '
       .data.repository.mergeQueue |= (
         if . == null or $branch != "main" then null
         else .entries.nodes |= (.[0:$first] | map(
           (if $enq then . else del(.enqueuedAt) end)
           | (if $pos then . else del(.position) end)
           | (if $st then . else del(.state) end)
+          | (if $oid then . else del(.headCommit) end)
           | (if $num then . else del(.pullRequest.number) end)
           | (if $url then . else del(.pullRequest.url) end)))
         end)' "$GH_STUB_GRAPHQL" ;;
@@ -389,10 +391,23 @@ crash_scan() { local cs; cs="$(cat "$STREAM_LOG" "$JQ_ERR_LOG" 2>/dev/null)"; gr
 
 iso_ago() { date -u -d "-$1 minutes" +%Y-%m-%dT%H:%M:%SZ; }
 
-# node <position> <minutes-ago> <pr> <state>
+# The default head sha of every canned run AND of every canned queue entry (so a legacy row, whose run and entry agree,
+# is unchanged by the headCommit.oid correlation), plus two INVENTED shas for the correlation rows (L27-L29), never
+# copied from a real run (cq-test-fixtures-synthesized-only). A typo here would turn a negative row vacuous, so each must
+# be 40 lowercase hex or the suite stops (exit 2, not a verdict).
+TIP_SHA="2222222222222222222222222222222222222c22"
+SHA_A="a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+SHA_B="b9a8c7d6e5f4031221304f5e6d7c8b9a0f1e2d3c"
+for _s in "$TIP_SHA" "$SHA_A" "$SHA_B"; do
+  [[ "$_s" =~ ^[0-9a-f]{40}$ ]] || { echo "[FATAL] fixture sha '$_s' is not 40 lowercase hex" >&2; exit 2; }
+done
+
+# node <position> <minutes-ago> <pr> [state] [oid|null]: the oid defaults to TIP_SHA; the token `null` is a null
+# headCommit (what GitHub answers for a QUEUED entry whose merge group is not built yet); any other text is the oid.
 node() {
-  jq -n --arg t "$(iso_ago "$2")" --argjson p "$1" --argjson n "$3" --arg s "${4:-AWAITING_CHECKS}" \
-    '{enqueuedAt:$t, position:$p, state:$s, pullRequest:{number:$n, url:("https://github.com/o/r/pull/\($n)")}}'
+  jq -n --arg t "$(iso_ago "$2")" --argjson p "$1" --argjson n "$3" --arg s "${4:-AWAITING_CHECKS}" --arg o "${5:-$TIP_SHA}" \
+    '{enqueuedAt:$t, position:$p, state:$s, headCommit:(if $o == "null" then null else {oid:$o} end),
+      pullRequest:{number:$n, url:("https://github.com/o/r/pull/\($n)")}}'
 }
 queue_json() { jq -s '{data:{repository:{mergeQueue:{entries:{nodes:.}}}}}'; }
 
@@ -665,12 +680,13 @@ SHA0="0000000000000000000000000000000000000a00"   # a superseded temp ref's sha
 SHA1="1111111111111111111111111111111111111b11"   # the latest temp ref's sha
 qref() { printf 'gh-readonly-queue/main/pr-%s-%s' "$1" "$2"; }
 
-# mkrun <id> <event> <name> <path> <workflow_id> <branch> <conclusion|""> <minutes-ago>
+# mkrun <id> <event> <name> <path> <workflow_id> <branch> <conclusion|""> <minutes-ago>; head_sha is $MKSHA (default
+# TIP_SHA), set as an inline prefix (`MKSHA=<sha> mkrun ...`, also through mg_noise) so the setting cannot outlive the call.
 mkrun() {
   jq -n --argjson id "$1" --arg ev "$2" --arg name "$3" --arg path "$4" --argjson wid "$5" --arg br "$6" \
-    --arg c "$7" --arg t "$(iso_ago "$8")" '
+    --arg c "$7" --arg t "$(iso_ago "$8")" --arg sha "${MKSHA:-$TIP_SHA}" '
     {id:$id, name:$name, path:$path, workflow_id:$wid, event:$ev, head_branch:$br,
-     head_sha:"2222222222222222222222222222222222222c22", run_number:1, run_attempt:1,
+     head_sha:$sha, run_number:1, run_attempt:1,
      status:(if $c == "" then "in_progress" else "completed" end),
      conclusion:(if $c == "" then null else $c end),
      created_at:$t, updated_at:$t, html_url:("https://github.com/o/r/actions/runs/\($id)"), pull_requests:[]}'
@@ -768,10 +784,11 @@ check_suspected() {
     || { REASON="$l: entry $n body is not the unchanged suspected form"; return 1; }
   [[ "$k" == "none" ]] || lookup_ran "$l" "$k"
 }
-# one_entry <pr> <runs-array-file>: queue = PR at position 1, enqueued 50 minutes ago; runs from the file.
+# one_entry <wf> <pr> <runs-array-file> [oid|null [state]]: queue = PR at position 1, enqueued 50 minutes ago; runs from
+# the file; the entry's headCommit.oid defaults to TIP_SHA (equal to every canned run's head_sha).
 one_entry() {
-  local wf="$1" pr="$2" rf="$3" g="$WORK/q.json"
-  { node 1 50 "$pr"; } | queue_json > "$g"
+  local wf="$1" pr="$2" rf="$3" oid="${4:-$TIP_SHA}" st="${5:-AWAITING_CHECKS}" g="$WORK/q.json"
+  { node 1 50 "$pr" "$st" "$oid"; } | queue_json > "$g"
   CASE_RUNS="$rf"; run_case "$wf" "$g"
 }
 
@@ -1094,7 +1111,7 @@ lrow24() { # an EMPTY or unparseable enqueuedAt reaches the cause lookup: no API
   [[ "$defs" == *"queue_candidate_cause()"* && "$defs" == *"fetch_runs()"* ]] || { REASON="L24: could not extract the cause functions from the run body"; return 1; }
   for kind in empty garbage good; do
     case "$kind" in empty) enq="" ;; garbage) enq="not-a-date" ;; good) enq="$(iso_ago 50)" ;; esac
-    { printf 'set -euo pipefail\nCAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0\n%s\nqueue_candidate_cause 101 %q\nprintf "paths=[%%s]\\n" "$CAUSE_PATHS"\n' "$defs" "$enq"; } > "$drv"
+    { printf 'set -euo pipefail\nCAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0\n%s\nqueue_candidate_cause 101 %q %q\nprintf "paths=[%%s]\\n" "$CAUSE_PATHS"\n' "$defs" "$enq" "$TIP_SHA"; } > "$drv"
     rm -f "$WORK/gh.log"
     out="$(env -i PATH="$BIN:$SANDBOX_PATH" HOME="$WORK" TMPDIR="$WORK" GH_REPO=o/r GH_TOKEN=x GH_STUB_LOG="$WORK/gh.log" GH_STUB_RUNS="$rf" GH_STUB_EVER="$CASE_EVER" bash "$drv" 2>/dev/null | tail -n 1)"
     if [[ "$kind" == good ]]; then
@@ -1226,7 +1243,101 @@ lrow26() { # a malformed history reply (non-numeric or missing total_count): sus
   return 0
 }
 
-CAUSE_ROWS=(1 2 3 4 5 6 7 8 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 26)
+# ---- headCommit.oid correlation rows (#12320) ---------------------------------------------------------
+# The correlation compares a failed push run's head_sha with the queue entry's headCommit.oid. What is known, in three
+# tiers (CTO ruling D7; nothing here pretends to more):
+#   DIRECTLY OBSERVED (read-only, 2026-11-07): run 42336368201 (event push, name == path, conclusion failure, ci.yml) has a
+#     head_sha equal to all 6 merge_group runs on the same temp ref; on two live AWAITING_CHECKS entries every merge_group
+#     run on the entry's temp ref (7 of 7 each) had head_sha == the entry's headCommit.oid; QUEUED entries had a null one.
+#   TRANSITIVE, NOT OBSERVED: that a failed push run's head_sha equals the entry's headCommit.oid follows from the push run
+#     matching its siblings, the siblings matching the oid, and temp-ref suffix chaining (each ref's suffix is the previous
+#     entry's tip). No live entry's headCommit was ever read while its OWN push run was failed (that entry had left the queue).
+#   NOT OBSERVED: the headCommit.oid of an entry while its own push run is failed.
+# The shas below are INVENTED. The arm is subtractive: it can only turn a named cause into "suspected".
+NOTICE_NULL="has no usable headCommit.oid"
+NOTICE_MISMATCH="does not match the queue entry's headCommit.oid"
+notice_has() { grep -qF -- "$1" "$WORK/out.txt" "$WORK/err.txt" 2>/dev/null; }
+actions_calls() { local n; n="$(grep -c '^gh api -X GET' "$WORK/gh.log" 2>/dev/null || true)"; echo "${n:-0}"; }
+# check_uncorrelated <label> <pr>: the unchanged suspected form, ZERO Actions API calls, the "no usable oid" notice and not
+# the mismatch notice (a null or malformed oid is "cannot correlate", never a mismatch).
+check_uncorrelated() {
+  local l="$1" pr="$2"
+  check_suspected "$l" 1 "$pr" none || return 1
+  [[ "$(actions_calls)" -eq 0 ]] || { REASON="$l: an entry without a usable headCommit.oid still made $(actions_calls) Actions API call(s)"; return 1; }
+  notice_has "$NOTICE_NULL" || { REASON="$l: the 'no usable headCommit.oid' notice is missing"; return 1; }
+  ! notice_has "$NOTICE_MISMATCH" || { REASON="$l: a missing oid was reported as a MISMATCH"; return 1; }
+  return 0
+}
+lrow27() { # a failed load whose head_sha EQUALS the entry's headCommit.oid (invented shas) -> named
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { MKSHA="$SHA_A" mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46
+    MKSHA="$SHA_A" mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
+  set_ever 111; one_entry "$wf" 101 "$rf" "$SHA_A"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L27: filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_named L27 1 101 "$WF_PATH_CI" 9001 || return 1
+  [[ "$(hist_calls 111)" -eq 1 ]] || { REASON="L27: the matching candidate did not reach the history lookup exactly once"; return 1; }
+  ! notice_has "$NOTICE_NULL" && ! notice_has "$NOTICE_MISMATCH" || { REASON="L27: a matching oid printed a null or mismatch notice"; return 1; }
+  return 0
+}
+lrow28() { # stale ref on a NEW entry: the failed push run carries the OLD tip, the entry's headCommit.oid is the NEW one
+  local wf="$1" rf="$WORK/runs.json" ref; REASON=""; ref="$(qref 101 "$SHA1")"
+  { MKSHA="$SHA_A" mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46
+    MKSHA="$SHA_A" mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
+  # (a) control: the same runs on an entry whose oid is the run's head_sha name the cause
+  set_ever 111; one_entry "$wf" 101 "$rf" "$SHA_A"; reset_runs
+  check_named "L28 (a)" 1 101 "$WF_PATH_CI" 9001 || return 1
+  # (b) the entry was re-enqueued and now carries SHA_B: the old-tip run is stale for it -> suspected, no history lookup
+  set_ever 111; one_entry "$wf" 101 "$rf" "$SHA_B"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L28 (b): filing failed (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+  check_suspected "L28 (b)" 1 101 || return 1
+  [[ "$(hist_calls 111)" -eq 0 ]] || { REASON="L28 (b): a mismatching candidate spent a merge_group-history lookup"; return 1; }
+  notice_has "$NOTICE_MISMATCH" || { REASON="L28 (b): the mismatch notice is missing"; return 1; }
+  ! notice_has "$NOTICE_NULL" || { REASON="L28 (b): a mismatch was reported as a missing oid"; return 1; }
+  # (c) two candidates on one ref, the MISMATCHING one sorts first (aa-stale.yml < ci.yml): only ci.yml is named, and the
+  #     skip is per candidate, not an abort. Unreachable in production (one ref's runs share a head_sha); kept as the
+  #     stops-at-first-member row of the guard contract.
+  { MKSHA="$SHA_B" mkrun 9002 push .github/workflows/aa-stale.yml .github/workflows/aa-stale.yml 113 "$ref" failure 46
+    MKSHA="$SHA_A" mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46
+    MKSHA="$SHA_A" mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
+  set_ever 111 113; one_entry "$wf" 101 "$rf" "$SHA_A"; reset_runs
+  check_named "L28 (c)" 1 101 "$WF_PATH_CI" 9001 || return 1
+  [[ "$(body_n 1)" != *"aa-stale"* ]] || { REASON="L28 (c): the mismatching candidate leaked into the issue"; return 1; }
+  [[ "$(hist_calls 113)" -eq 0 && "$(hist_calls 111)" -eq 1 ]] \
+    || { REASON="L28 (c): history lookups were 111=$(hist_calls 111) 113=$(hist_calls 113), wanted 1 and 0"; return 1; }
+  # (d) a candidate run that carries NO head_sha, against a valid oid -> suspected
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46 | jq -c 'del(.head_sha)'
+    mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
+  set_ever 111; one_entry "$wf" 101 "$rf" "$SHA_A"; reset_runs
+  check_suspected "L28 (d)" 1 101 || return 1
+  [[ "$(hist_calls 111)" -eq 0 ]] || { REASON="L28 (d): a candidate without head_sha spent a history lookup"; return 1; }
+  return 0
+}
+lrow29() { # a null, absent or malformed headCommit.oid is "cannot correlate": suspected, no Actions call, its own notice
+  local wf="$1" rf="$WORK/runs.json" ref bad; REASON=""; ref="$(qref 101 "$SHA1")"
+  # (a) control: a valid oid names the cause
+  { MKSHA="$SHA_A" mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46
+    MKSHA="$SHA_A" mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
+  set_ever 111; one_entry "$wf" 101 "$rf" "$SHA_A"; reset_runs
+  check_named "L29 (a)" 1 101 "$WF_PATH_CI" 9001 || return 1
+  # (d) a null oid and runs that carry no head_sha at all: empty must NEVER equal empty
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46 | jq -c 'del(.head_sha)'
+    mg_noise "$ref" 46 9100 | jq -c 'del(.head_sha)'; } | jq -s '.' > "$rf"
+  set_ever 111; one_entry "$wf" 101 "$rf" null QUEUED; reset_runs
+  check_uncorrelated "L29 (d)" 101 || return 1
+  # (b) a QUEUED entry (headCommit null) beside runs that DO carry a head_sha
+  { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46
+    mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
+  set_ever 111; one_entry "$wf" 101 "$rf" null QUEUED; reset_runs
+  check_uncorrelated "L29 (b)" 101 || return 1
+  # (c) malformed oids behave like null: uppercase 40-hex, 39 characters, text
+  for bad in "ABCDEF0123456789ABCDEF0123456789ABCDEF01" "${SHA_A:0:39}" "not-a-sha"; do
+    set_ever 111; one_entry "$wf" 101 "$rf" "$bad" QUEUED; reset_runs
+    check_uncorrelated "L29 (c) '$bad'" 101 || return 1
+  done
+  return 0
+}
+
+CAUSE_ROWS=(1 2 3 4 5 6 7 8 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 26 27 28 29)
 # cause_check <workflow> [rows...]: executes the real run body against the cause rows (default: all). L9 and L25 are
 # stub controls, run once on the real workflow.
 cause_check() {
@@ -1263,6 +1374,9 @@ ldesc() {
     24) echo "empty or unparseable enqueuedAt makes zero Actions calls and names nothing" ;;
     25) echo "stub history endpoint: unwindowed total_count, rejects every other shape with 64" ;;
     26) echo "malformed history reply (non-numeric or missing total_count) -> suspected, ONE bounded ASCII warning, rc 0" ;;
+    27) echo "failed push run whose head_sha equals the entry's headCommit.oid (invented shas) -> named, one history lookup" ;;
+    28) echo "stale ref on a new entry (head_sha != headCommit.oid) -> suspected, no history lookup, mismatch notice; a matching candidate beside a mismatching one is still named" ;;
+    29) echo "null or malformed headCommit.oid (QUEUED entry) -> suspected, zero Actions calls, 'no usable' notice and not the mismatch notice; empty never equals empty" ;;
   esac
 }
 
@@ -1524,10 +1638,10 @@ mutate_lit "C10e slack cut to 60 s -> RED (a run created 2 minutes before enqueu
   'enq_s - 300' 'enq_s - 60'
 mutate_lit "C11 lookup called before the dedupe check -> RED (a deduped entry spends API calls)" causerow 'L13:' \
   '            CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0
-            queue_candidate_cause "$pr" "$enq"
+            queue_candidate_cause "$pr" "$enq" "$oid"
 ' '' \
   '            existing=$(gh issue list' '            CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0
-            queue_candidate_cause "$pr" "$enq"
+            queue_candidate_cause "$pr" "$enq" "$oid"
             existing=$(gh issue list'
 mutate_lit "C12 --paginate dropped -> RED (a run on page 2 is never read)" causerow 'L12:' \
   'gh api -X GET --paginate ' 'gh api -X GET '
@@ -1589,6 +1703,25 @@ mutate_lit "C26 both run-list fetches skipped -> RED only through lookup_ran (a 
 ' '            return 0
 '
 
+# ---- headCommit.oid correlation mutations (#12320): C27-C34 score every load-bearing literal of the correlation arm.
+mutate_lit "C27 equality check removed (a stale ref names a cause again) -> RED" causerow 'L28 \(b\)' \
+  'if [[ "$hs" != "$oid" ]]; then' 'if false; then'
+mutate_lit "C28 equality inverted (a matching candidate is dropped) -> RED" causerow 'L27:' \
+  'if [[ "$hs" != "$oid" ]]; then' 'if [[ "$hs" == "$oid" ]]; then'
+mutate_lit "C29 null short-circuit removed (a null oid spends fetches; empty equals empty) -> RED" causerow 'L29 \([bd]\)' \
+  'if ! [[ "$oid" =~ ^[0-9a-f]{40}$ ]]; then' 'if false; then'
+mutate_lit "C30 oid validation accepts empty (an empty oid equals a run with no head_sha) -> RED" causerow 'L29 \([bd]\)' \
+  '"$oid" =~ ^[0-9a-f]{40}$ ]]' '"$oid" =~ ^[0-9a-f]{0,40}$ ]]'
+mutate_lit "C31 the mismatch branch aborts the loop (a mismatching first member hides a matching one) -> RED" causerow 'L28 \(c\)' \
+  '(stale or foreign ref); not attributing the stall to it."; continue; fi' '(stale or foreign ref); not attributing the stall to it."; return 0; fi'
+mutate_lit "C32 head_sha dropped from the fetch_runs projection (every candidate mismatches) -> RED" causerow 'L27:' \
+  'head_branch, head_sha, conclusion' 'head_branch, conclusion'
+mutate_lit "C33 the call site drops the oid (every entry reads as null) -> RED" causerow 'L27:' \
+  'queue_candidate_cause "$pr" "$enq" "$oid"' 'queue_candidate_cause "$pr" "$enq"'
+mutate_lit "C34 headCommit.oid dropped from the queue query (the stub then strips it too) -> RED" causerow 'L27:' \
+  '                        headCommit { oid }
+' ''
+
 # ---- controls: the mutation engine and the chk helper must FAIL on inputs that must fail ---------------
 # control_fails <label> <wanted-message-substring> <cmd...>: drive a verdict helper once with an input that
 # must fail; the failure counter must move by exactly one (and the message must carry the substring); the
@@ -1644,7 +1777,7 @@ printf '=== %s passed, %s failed ===\n' "$passes" "$fails"
 if [[ "$fails" -ne 0 ]]; then
   printf '[FAIL] rows failed:\n' >&2; printf '  %s\n' "${FAILED[@]}" >&2; exit 1
 fi
-EXPECTED_PASSES=142
+EXPECTED_PASSES=153
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then
   printf '[FAIL] pass count %s != exact floor %s (a row was dropped or added)\n' "$passes" "$EXPECTED_PASSES" >&2; exit 1
 fi
