@@ -39,3 +39,11 @@ Draft PR #12342 open, HOLD for counsel. Not marked ready, not merged, not enqueu
 - CLO (stand-in for counsel, operator ruling): retention 5 years from the date of the decision, extended only while a legal claim, complaint or inquiry is open; two-kind card deck; 12 residual risks.
 - CTO: kind map in the pure leaf, no default (fail-closed render), `registry-pins.test.ts`, dispatch `ci.yml` for the full battery then ready, `parked` label merge barrier, server-side founder gate.
 - Errors: none blocking. plan-sharp-edges.md (about 250 KB) was not re-read in full; the separate plan-review panel was folded into deepen-plan.
+
+## Work phase (2026-11-08)
+- Status: phases 0 to 6 of tasks.md done (text and notices, kind-keyed deck and consumers, founder gate, null-kind guard, tests, records, holds, hold mechanism). Not run: soleur:review (6.5), merge of origin/main, CI dispatch, the `parked` label, ready (phase 7).
+- Commits: 2be52e2190 (text, notices, deck, pins), 2be03a905c (consumers, founder gate, null-kind guard), 0289d64358 (records), ce632723e2 (old-plan holds, decision rows), 535a41b254 (parked barrier).
+- Text sha256: 43eef1162d0c8148b7fe5d62adaa116d0102249794163302592453ce9ce983f1 (5480 bytes), pinned in `registry-pins.test.ts`.
+- Filed: #12365 (published trio), #12366 (terms wording, code lifetime wording, base-SHA pin guard); commented on #12080.
+- Verified locally: the three node-only files, routes, surface, ops contract, card, card-ack and page suites one file at a time (single worker), the hook suite (59 rows) and the drain-prs suite (54 assertions); 18 mutation rows on the app suites and 4 on the hook all RED.
+- Unverified locally: full tsc, the repo-wide ratchet suites, the full CI battery, the Sentry `accepted` count.
