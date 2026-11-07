@@ -451,12 +451,23 @@ describe("seo-config-rules.tf origin-TLS canary rule (ADR-321)", () => {
     return out;
   }
 
-  test("exactly one dynamic rules block exists (a second would be an unguarded rule)", () => {
-    expect(dynamicRuleBlocks()).toHaveLength(1);
+  /** The dynamic block gated on the named variable (selected by gate, never by position). */
+  function gatedBlock(variable: string): string {
+    const m = dynamicRuleBlocks().filter((b) =>
+      new RegExp(`for_each\\s*=\\s*var\\.${variable}\\b`).test(b),
+    );
+    expect(m, `expected exactly one dynamic rules block gated on var.${variable}`).toHaveLength(1);
+    return m[0];
+  }
+
+  // Two gated dynamic blocks exist: the canary (ADR-321 step 4) and the host-wide strict flip (step 6). A third would be an
+  // unguarded rule, because the static helpers above cannot see a dynamic block at all.
+  test("exactly two dynamic rules blocks exist (canary + strict flip); a third would be an unguarded rule", () => {
+    expect(dynamicRuleBlocks()).toHaveLength(2);
   });
 
   test("it is gated on var.enable_origin_tls_canary_rule and empty otherwise", () => {
-    const block = dynamicRuleBlocks()[0];
+    const block = gatedBlock("enable_origin_tls_canary_rule");
     expect(block).toMatch(
       /for_each\s*=\s*var\.enable_origin_tls_canary_rule\s*\?\s*toset\(\["canary"\]\)\s*:\s*toset\(\[\]\)/,
     );
@@ -471,12 +482,12 @@ describe("seo-config-rules.tf origin-TLS canary rule (ADR-321)", () => {
   });
 
   test("the canary expression is EXACTLY host + /health + the probe header", () => {
-    const block = dynamicRuleBlocks()[0];
+    const block = gatedBlock("enable_origin_tls_canary_rule");
     expect(quotedAttr(block, "expression")).toBe(CANARY_EXPRESSION);
   });
 
   test("the canary sets exactly one setting, ssl = strict, via an enabled set_config", () => {
-    const block = dynamicRuleBlocks()[0];
+    const block = gatedBlock("enable_origin_tls_canary_rule");
     expect(block).toMatch(/action\s*=\s*"set_config"/);
     expect(block).toMatch(/enabled\s*=\s*true/);
     const params = block.match(/action_parameters\s*\{([^}]*)\}/)?.[1] ?? "";
@@ -507,5 +518,79 @@ describe("seo-config-rules.tf origin-TLS canary rule (ADR-321)", () => {
       "utf-8",
     );
     expect(probe).toContain("x-origin-tls-probe: 1");
+  });
+});
+
+// ORIGIN-TLS STRICT FLIP (ADR-321 decision 3 step 6, #10479). The host-wide flip is ADDITIVE and GATED: a second dynamic rule,
+// appended after the adopted `flexible` rule and the canary, that sets `strict` for the whole app host. The adopted `flexible`
+// rule stays verbatim (pinned above), so merging the code is a no-op and the flip is the owner's separate Doppler switch plus
+// apply. These pins guard what that rule matches, what it sets, that it is off by default, and that nothing else moved.
+describe("seo-config-rules.tf origin-TLS strict flip rule (ADR-321)", () => {
+  function body(): string {
+    return extractResourceBody(
+      stripHclComments(readFileSync(TF_PATH, "utf-8")),
+      RESOURCE_NAME,
+    );
+  }
+
+  /** The dynamic `rules` block gated on var.enable_origin_tls_strict, brace-matched. */
+  function strictBlock(): string {
+    const b = body();
+    const re = /\bdynamic\s+"rules"\s*\{(?=[^}]*for_each\s*=\s*var\.enable_origin_tls_strict\b)/g;
+    const hits = [...b.matchAll(re)];
+    expect(hits, "exactly one dynamic rules block gated on var.enable_origin_tls_strict").toHaveLength(1);
+    const open = b.indexOf("{", hits[0].index);
+    let depth = 0;
+    for (let i = open; i < b.length; i++) {
+      if (b[i] === "{") depth++;
+      else if (b[i] === "}" && --depth === 0) return b.slice(open + 1, i);
+    }
+    throw new Error("unterminated strict dynamic block");
+  }
+
+  test("the flip is gated: empty unless var.enable_origin_tls_strict, and the variable defaults to FALSE (merge is a no-op)", () => {
+    expect(strictBlock()).toMatch(
+      /for_each\s*=\s*var\.enable_origin_tls_strict\s*\?\s*toset\(\["strict"\]\)\s*:\s*toset\(\[\]\)/,
+    );
+    const vars = stripHclComments(readFileSync(VARIABLES_PATH, "utf-8"));
+    const m = vars.match(/variable\s+"enable_origin_tls_strict"\s*\{([\s\S]*?)\n\}/);
+    expect(m, "variable enable_origin_tls_strict must be declared").not.toBeNull();
+    expect(m![1]).toMatch(/type\s*=\s*bool/);
+    expect(m![1]).toMatch(/default\s*=\s*false/);
+  });
+
+  test("the flip expression is EXACTLY the app host and nothing else", () => {
+    expect(quotedAttr(strictBlock(), "expression")).toBe('(http.host eq "app.soleur.ai")');
+  });
+
+  test("the flip sets exactly one setting: ssl = strict (never full, never off), via an enabled set_config", () => {
+    const block = strictBlock();
+    expect(block).toMatch(/action\s*=\s*"set_config"/);
+    expect(block).toMatch(/enabled\s*=\s*true/);
+    const params = block.match(/action_parameters\s*\{([^}]*)\}/)?.[1] ?? "";
+    const keys = params
+      .split("\n")
+      .map((l) => l.trim().match(/^([a-z_]+)\s*=/)?.[1])
+      .filter((k): k is string => Boolean(k));
+    expect(keys).toEqual(["ssl"]);
+    expect(params).toMatch(/ssl\s*=\s*"strict"/);
+    expect(params).not.toMatch(/ssl\s*=\s*"(?:full|off|flexible)"/);
+  });
+
+  test("the flip is appended LAST: after the flexible rule and after the canary (set_config: the last match wins)", () => {
+    const b = body();
+    const flexAt = b.search(/ssl\s*=\s*"flexible"/);
+    const canaryAt = b.search(/for_each\s*=\s*var\.enable_origin_tls_canary_rule\b/);
+    const strictAt = b.search(/for_each\s*=\s*var\.enable_origin_tls_strict\b/);
+    expect(flexAt).toBeGreaterThan(-1);
+    expect(canaryAt).toBeGreaterThan(flexAt);
+    expect(strictAt).toBeGreaterThan(canaryAt);
+  });
+
+  test("the adopted flexible rule, the apex full rule and the static rule count are untouched by the flip", () => {
+    expect(allRuleBlocks()).toHaveLength(3);
+    expect(quotedAttr(flexibleSslRule(), "expression")).toBe(ADOPTED_SSL_EXPRESSION);
+    expect(quotedAttr(flexibleSslRule(), "ref")).toBe(ADOPTED_SSL_REF);
+    expect(quotedAttr(apexFullSslRule(), "expression")).toBe(CANONICAL_EXPRESSION);
   });
 });

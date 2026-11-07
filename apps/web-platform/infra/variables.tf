@@ -410,6 +410,19 @@ variable "enable_origin_tls_canary_rule" {
   default     = false
 }
 
+# ADR-321 / #10479: the host-wide STRICT FLIP switch (seo-config-rules.tf). Default FALSE so that merging the code that
+# declares the rule changes NOTHING at the edge. The rule exists in the live ruleset only while a Doppler prd_terraform
+# secret ENABLE_ORIGIN_TLS_STRICT=true is present when an apply runs (`doppler run --name-transformer tf-var` turns it into
+# TF_VAR_enable_origin_tls_strict). The ORDER is the whole point of the switch: ORIGIN_TLS_REQUIRED=1 must be in Doppler prd
+# and BOTH hosts restarted on it (a bad certificate then fails the canary container and the old one keeps serving) BEFORE
+# this is set, because after it a bad deploy is a 525/526 for every user. See runbooks/origin-tls-strict-flip.md. Removing the
+# secret (or setting it false) and re-applying removes the rule IN PLACE: the app host returns to the adopted `flexible` rule.
+variable "enable_origin_tls_strict" {
+  description = "Create the host-wide strict-SSL rule for app.soleur.ai (the ADR-321 flip). Off unless the owner sets ENABLE_ORIGIN_TLS_STRICT=true in Doppler prd_terraform, after ORIGIN_TLS_REQUIRED=1 is live on both hosts."
+  type        = bool
+  default     = false
+}
+
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
   type        = string

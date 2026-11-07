@@ -214,3 +214,18 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    certificate validation (item 8) and by its `origin-tls: listening` line. **Unverified:** that the `http_config_settings` phase accepts a
    request-header field in an expression (Cloudflare's documentation does not say). If it does not, the apply fails at the API with nothing
    written, and the probe stays at exit 3.
+10. **The strict flip (decision 3, step 6; R6(6) amended 2026-11-07).** R6 described the flip as an in-place edit of the `flexible` rule with the
+    canary removed in the same change. Because the per-merge apply targets the whole ruleset resource, that edit would flip production at
+    MERGE, before `ORIGIN_TLS_REQUIRED=1` is proven live on both hosts, and a bad deploy under `strict` is a 525/526 for every user. The flip is
+    therefore ADDITIVE and GATED: a second `dynamic "rules"` block in `seo-config-rules.tf` (`ssl = "strict"`, expression
+    `(http.host eq "app.soleur.ai")`, appended last so it wins over `flexible`), empty unless `var.enable_origin_tls_strict` (default false;
+    Doppler `prd_terraform` `ENABLE_ORIGIN_TLS_STRICT=true`). Merge is a no-op; the adopted `flexible` rule, the canary, the apex/www `full` rule
+    (ADR-194) and the lb-staging host are untouched. **Order of the production acts (each the owner's go):** (1) `ORIGIN_TLS_REQUIRED=1` in Doppler
+    `prd`; (2) restart both hosts on it (same-version redeploy), so a bad certificate fails the canary container, the deploy fails and the old
+    container keeps serving while the edge is still `flexible`; (3) only then the Doppler switch plus an apply dispatch. Rollback is removing the
+    switch and re-applying (one in-place change, -1 rule), or the entrypoint PUT of R8. The cleanup change after the flip has baked edits the
+    `flexible` rule to `strict`, removes both dynamic blocks and both variables, and deletes the two Doppler switches.
+    **Unverified / gaps:** the app's startup line does not state whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED=1 is live" is proven
+    by ordering (the Doppler write precedes a green redeploy whose per-host `origin-tls: listening` lines follow it) rather than read directly;
+    adding a `required` field to that line is an app change that would itself redeploy, so it is not bundled here. WebSocket upgrades have never
+    crossed the edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only; the upgrade path is unit-tested in-process).

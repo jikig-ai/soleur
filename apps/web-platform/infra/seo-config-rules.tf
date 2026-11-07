@@ -457,4 +457,38 @@ resource "cloudflare_ruleset" "seo_config_settings" {
     }
   }
 
+
+  # ── ORIGIN-TLS STRICT FLIP (ADR-321 decision 3, step 6, #10479) — OFF unless var.enable_origin_tls_strict ──
+  #
+  # PURPOSE. The host-wide flip: every request to app.soleur.ai is fetched from the origin in `strict` (the Origin CA
+  # certificate and hostname are VALIDATED). Appended AFTER the adopted `flexible` rule and the canary: `set_config`
+  # is non-terminating and the LAST match wins, so this rule overrides `flexible` for the host without editing it.
+  #
+  # WHY ADDITIVE AND GATED, NOT AN EDIT OF THE FLEXIBLE RULE. The per-merge apply targets this whole resource, so an
+  # in-place `flexible` -> `strict` edit would flip production at MERGE, before ORIGIN_TLS_REQUIRED=1 is proven live
+  # on both hosts (a bad deploy under `strict` is a 525/526 for every user; ORIGIN_TLS_REQUIRED=1 is what makes the
+  # canary container fail first so the old container keeps serving). With the gate off the rule list is identical to
+  # today's, so merge is a no-op, and the flip is the owner's separate Doppler switch plus an apply dispatch. ADR-321
+  # R6(6) describes the end state (flexible edited, canary removed); that edit is the CLEANUP change after the flip has
+  # baked, which also deletes both gates. Until then the adopted `flexible` rule stays verbatim and pinned.
+  #
+  # ROLLBACK. Remove ENABLE_ORIGIN_TLS_STRICT from Doppler prd_terraform (or set it false) and re-apply: one in-place
+  # change, -1 rule, the entrypoint is never destroyed (compare "ROLL FORWARD, NEVER REVERT" in the header, which is
+  # about deleting the resource). The canary rule is independent and may stay on.
+  #
+  # NOT TOUCHED. The apex/www `full` rule (ADR-194), the lb-staging host (it no longer resolves) and port 80 (stays open
+  # until the post-flip probe passes, CLO condition 3).
+  dynamic "rules" {
+    for_each = var.enable_origin_tls_strict ? toset(["strict"]) : toset([])
+    content {
+      action      = "set_config"
+      description = "ORIGIN-TLS STRICT (ADR-321 flip): strict SSL for app.soleur.ai, overrides the adopted flexible rule - remove with the cleanup that makes strict the baseline"
+      enabled     = true
+      expression  = "(http.host eq \"app.soleur.ai\")"
+      action_parameters {
+        ssl = "strict"
+      }
+    }
+  }
+
 }
