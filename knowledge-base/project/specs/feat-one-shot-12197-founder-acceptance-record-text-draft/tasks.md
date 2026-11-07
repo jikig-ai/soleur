@@ -38,3 +38,11 @@ Supersedes the draft-phase task list (all done). The CLO agent's ruling stands i
 - 7.2 `gh workflow run ci.yml --ref <branch>`; arm a Monitor watch; confirm headSha; require success incl. `test-webplat` shards not skipped.
 - 7.3 `gh pr ready 12342` per ready-run-wait; watch to `full-decided`.
 - 7.4 Stop. Never merge, never enqueue, flag untouched.
+
+## Deepen-plan additions (2026-11-07; see the plan's deepen-plan block)
+- 5.0 Phase 5 starts by filing S5, S6, the base-SHA pin deferral issues and commenting on #12080 (CLO 4b, 4c); records cite real numbers.
+- 3.3 Founder gate: `server/legal-acceptance/surface.ts`, wire into both pages and the decide/reauth routes; null-kind 404 in `guardLegalRequest`; `kindUndeclared` op, contract test, README line.
+- 4.5 Tests per the deepen-plan block C7/C8 (neutral probes, `document.body` DOM ban without negation stripping, exact retention multiset, 30-day tie, dated 2030-11-07 test, wording pin of 16 fields x 2 kinds, hoisted `declared` mock).
+- 6.3 Hold mechanism (commit group 4): `ship-operator-step-gate.sh` merge branch + tests, `triage-prs.sh` `parked` tier + test; old-plan superseded banners; verify `hold-gate-eval.sh` rc 0 on the old plan and rc 3 on the new plan.
+- 6.5 `soleur:review` on the delta before the final push.
+- 7.0 Add and verify the `parked` label BEFORE `gh pr ready`; pre-ready head and `origin/main` assertions.

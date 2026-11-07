@@ -32,3 +32,10 @@ soleur:plan, soleur:deepen-plan, soleur:gdpr-gate; agents cto x2, clo x2, cpo, u
 ## Pipeline state (HOLD)
 
 Draft PR #12342 open, HOLD for counsel. Not marked ready, not merged, not enqueued. Stopped before ship's merge phase by design.
+
+## Sign-off planning phase (2026-11-07)
+- Plan file: knowledge-base/project/plans/2026-11-07-feat-founder-acceptance-record-text-draft-signoff-plan.md (supersedes the draft-phase plan's holds)
+- Status: planned and deepened; no product code changed.
+- CLO (stand-in for counsel, operator ruling): retention 5 years from the date of the decision, extended only while a legal claim, complaint or inquiry is open; two-kind card deck; 12 residual risks.
+- CTO: kind map in the pure leaf, no default (fail-closed render), `registry-pins.test.ts`, dispatch `ci.yml` for the full battery then ready, `parked` label merge barrier, server-side founder gate.
+- Errors: none blocking. plan-sharp-edges.md (about 250 KB) was not re-read in full; the separate plan-review panel was folded into deepen-plan.
