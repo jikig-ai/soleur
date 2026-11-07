@@ -1510,17 +1510,6 @@
 "id": "15jcg8gdjqck",
 "title": "launch-check issue writes (ADR-314 amendment, #11910): after a preview and the customer's explicit yes, `launch-check.sh issues --create` creates absent lc: labels, one epic and severity-ranked sub-issues, links them, and edits only the marked section of the epic body, in the customer's OWN repository on github.com (or the explicit --host), from a saved plan, never headless, through one allowlisted gh api wrapper. The preview before it makes read-only authenticated GETs to the same repository (its metadata, the labelled issue listing, the signed-in login). Authenticated with the customer's own gh login (their token, on their machine); every byte the tool authors passes the redaction gate first. Jikigai receives nothing and runs no server in this path; GitHub and, on a public repository, the world see the issue text."
 },
-"15nyjgb72ed3l": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "platform.infra.approvalStore"
-},
-"id": "15nyjgb72ed3l",
-"title": "Gated-tool gate creates, polls and consumes an approval request (service-role RPCs); the Owner decides via decide_approval as the authenticated user (chat card, inbox landing page, decide route). Flag-gated, default off (ADR-309)"
-},
 "15vuvuvwt8mbg": {
 "technology": "MCP tool → mcp.stripe.com (HTTPS)",
 "source": {
@@ -2141,6 +2130,17 @@
 "id": "241p3diiuvub3",
 "title": "Routes traffic"
 },
+"24odqbjgekq7": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.engine"
+},
+"target": {
+"model": "platform.infra.approvalStore"
+},
+"id": "24odqbjgekq7",
+"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher registers github_push_branch through the same gate, ADR-309 addendum, #11636); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309); requester label read at render time from users and workspace_members (service role, membership-scoped, not persisted)"
+},
 "24xuohm5gdv38": {
 "technology": "HTTPS (supabase-js service client)",
 "source": {
@@ -2290,17 +2290,6 @@
 },
 "id": "2e0lg9cd4ztb4",
 "title": "Publishes the zot restart-loop alarm verdict, and since #8038 the weekly issue-flow measurement, which updates one standing public issue with aggregate counts (find-or-update, never re-filed) into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard)."
-},
-"2eeaw1pytdwjh": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.engine"
-},
-"target": {
-"model": "platform.infra.approvalStore"
-},
-"id": "2eeaw1pytdwjh",
-"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher registers github_push_branch through the same gate, ADR-309 addendum, #11636); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
 },
 "2g0w538bran25": {
 "technology": "HTTPS (Git Data API)",
@@ -3320,6 +3309,17 @@
 },
 "id": "giowg6p8w1jd",
 "title": "Reads worktree lease"
+},
+"gk37r0f0s1yn": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "platform.infra.approvalStore"
+},
+"id": "gk37r0f0s1yn",
+"title": "Gated-tool gate creates, polls and consumes an approval request (service-role RPCs); the Owner decides via decide_approval as the authenticated user (chat card, inbox landing page, decide route). Card frames to a non-Owner, non-requester member carry no action text and the requester label is read at render time, not stored (ADR-309 addendum 2026-11-07). Flag-gated, default off (ADR-309)"
 },
 "gxkkp0qf6t0l": {
 "technology": "CLI (doppler run / scoped read-only service tokens: prd_workspaces_luks, prd_workspaces_luks_web, soleur-github-app)",
@@ -28075,7 +28075,7 @@
 },
 "parent": null,
 "relations": [
-"15nyjgb72ed3l"
+"gk37r0f0s1yn"
 ],
 "color": "gray",
 "line": "dashed",
@@ -28161,7 +28161,7 @@
 },
 "parent": null,
 "relations": [
-"2eeaw1pytdwjh"
+"24odqbjgekq7"
 ],
 "color": "gray",
 "line": "dashed",
