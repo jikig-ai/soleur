@@ -78,6 +78,8 @@ def parse_stamps(path, total):
             times.append(Decimal(parts[1]))
         except Exception:
             raise Refusal(f"{path}: bad time in {line[:40]!r}")
+        if not times[-1].is_finite():
+            raise Refusal(f"{path}: bad time in {line[:40]!r}")
     for i in range(1, len(times)):
         if times[i] < times[i - 1]:
             raise Refusal(f"{path}: time goes backwards at tag {tags[i]}")
@@ -335,7 +337,7 @@ def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False, bas
     _write(os.path.join(raw, f"{rep}.guard.txt"), f"rep={rep} tree={tree}\nloadavg_start=1 1 1\n{'CLEAN' if clean else 'DISTURBED'}\n")
 
 
-MIN_CHECKS = 47  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
+MIN_CHECKS = 50  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
 
 
 def selftest():
@@ -512,6 +514,19 @@ def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
         check("refusal expected: malformed sites.tsv line", False)
     except Refusal as e:
         check(f"refusal for a malformed sites.tsv line: {e}", "malformed line" in str(e))
+    for tok in ("NaN", "Infinity", "-Infinity"):
+        d = os.path.join(tmp, "bad-time-" + tok)
+        os.makedirs(d)
+        make_rep(d, "r1", base_costs)
+        sp = os.path.join(d, "r1.a.stamps.tsv")
+        ls = open(sp).read().split("\n")
+        ls[3] = ls[3].split("\t")[0] + "\t" + tok
+        _write(sp, "\n".join(ls))
+        try:
+            build(d)
+            check(f"refusal expected: stamp time {tok}", False)
+        except Refusal as e:
+            check(f"refusal for stamp time {tok}: {e}", "bad time" in str(e))
     d = os.path.join(tmp, "bad-empty")
     os.makedirs(d)
     try:

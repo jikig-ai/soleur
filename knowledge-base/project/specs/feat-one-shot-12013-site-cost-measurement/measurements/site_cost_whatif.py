@@ -39,7 +39,7 @@ ADDED = (127, 128, 129)
 FIRST_ADDED = ADDED[0]
 OLD_RANGES = {"a": (1, 193), "b": (194, 386), "c": (387, 599)}
 ARMS = ("a", "b", "c")
-MIN_CHECKS = 72  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
+MIN_CHECKS = 74  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
 
 
 def p(msg):
@@ -395,6 +395,10 @@ def validation(t, by_rep, readings):
     if len(reps) < 2:
         lines.append("validation split-half and rep-disagreement: FAILED (fail closed): the per-rep file is missing or holds fewer than two reps")
         return False, lines, scale
+    tarm = {r["site"]: r["arm"] for r in t.rows}
+    if set(brows) != set(tarm) or any(brows[k][0] != tarm[k] or len(brows[k][1]) != len(reps) for k in brows):
+        lines.append("validation split-half and rep-disagreement: FAILED (fail closed): the per-rep file does not cover exactly the table's sites, arms and reps")
+        return False, lines, scale
     label = "/".join(reps[:2]) if len(reps) == 2 else ",".join(reps)
     for a in ARMS:
         ords = [k for k in sorted(brows) if brows[k][0] == a]
@@ -721,6 +725,13 @@ def selftest():
     tv, byv, rdv = _synthetic_validation_inputs(rep_fn=lambda k, a, i: ((1.0, 3.0) if (a == "a" and i < 19) else (1.0, 1.0)))
     oksp, lsp, _ = validation(tv, byv, rdv)
     ck("validation: a spike on the first tenth of arm a shows up as 'unstable blocks=[0]'", not oksp and any("arm a" in l and "unstable blocks=[0]" in l for l in lsp))
+    tv, byv, rdv = _synthetic_validation_inputs(rep_fn=lambda k, a, i: ((0.02, 1.0) if (a == "a" and block_of(i, 193) == 3) else (1.0, 1.0)))
+    okm, lm, _ = validation(tv, byv, rdv)
+    ck("validation: a block material in only the SECOND rep is counted (union over reps) and shows as unstable", not okm and any("arm a" in l and "unstable blocks=[3]" in l for l in lm))
+    tv, byv, rdv = _synthetic_validation_inputs()
+    short = (byv[0], {k: v for k, v in byv[1].items() if k % 2})
+    okc, lc, _ = validation(tv, short, rdv)
+    ck("validation: a per-rep file that omits sites fails closed", not okc and any("does not cover exactly" in l for l in lc))
     tv, byv, rdv = _synthetic_validation_inputs(live_alone=50)
     oka, la, _ = validation(tv, byv, rdv)
     ck("validation: the alone/overlapped split of arm a is 50.0 / 143.0 s", oka and any("alone_s=50.0 overlapped_s=143.0" in l for l in la))
