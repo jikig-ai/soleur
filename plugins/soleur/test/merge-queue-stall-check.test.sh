@@ -20,8 +20,8 @@
 #    synthesized from the live shape, and APPLIES event, the created range and per_page/--paginate, plus the
 #    UNWINDOWED per-workflow merge_group-history lookup (`actions/workflows/<id>/runs`); a stub that ignored the
 #    filters would make every cause row vacuous, so the L9 and L25 rows prove the stub itself filters and exits 64 on
-#    an unexpected request. Rows L1-L24 and L26-L29 drive the real run body (positive rows name the cause, every NEGATIVE
-#    row also asserts the lookup ran, so a failed lookup cannot satisfy it); mutation rows C1-C34 prove each
+#    an unexpected request. Rows L1-L24 and L26-L29 (L29 incl. c2) drive the real run body (positive rows name the cause, every NEGATIVE
+#    row also asserts the lookup ran, so a failed lookup cannot satisfy it); mutation rows C1-C41 prove each
 #    load-bearing literal of `queue_candidate_cause`, run only the row they name, and are scored a KILL only if
 #    (1) the mutant still compiles (bash -n), (2) it still completes a clean entry, (3) the named row went red with
 #    ITS OWN assertion message, and (4) NO captured stream (the run's stdout/stderr and the stderr of every jq call,
@@ -235,7 +235,7 @@ case "$1 $2" in
     jq --arg branch "$branch" --argjson first "${first:-0}" \
        --argjson enq "$(has enqueuedAt)" --argjson pos "$(has position)" \
        --argjson st "$(has state)" --argjson num "$(has number)" --argjson url "$(has url)" \
-       --argjson oid "$(has oid)" '
+       --argjson oid "$(if grep -qE 'headCommit[[:space:]]*\{[^}]*\<oid\>' <<<"$query"; then echo true; else echo false; fi)" '
       .data.repository.mergeQueue |= (
         if . == null or $branch != "main" then null
         else .entries.nodes |= (.[0:$first] | map(
@@ -394,7 +394,8 @@ iso_ago() { date -u -d "-$1 minutes" +%Y-%m-%dT%H:%M:%SZ; }
 # The default head sha of every canned run AND of every canned queue entry (so a legacy row, whose run and entry agree,
 # is unchanged by the headCommit.oid correlation), plus two INVENTED shas for the correlation rows (L27-L29), never
 # copied from a real run (cq-test-fixtures-synthesized-only). A typo here would turn a negative row vacuous, so each must
-# be 40 lowercase hex or the suite stops (exit 2, not a verdict).
+# be 40 lowercase hex or the suite stops (exit 2, not a verdict). These are head shas; SHA0 and SHA1 further down are
+# temp-ref SUFFIXES, a different thing.
 TIP_SHA="2222222222222222222222222222222222222c22"
 SHA_A="a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
 SHA_B="b9a8c7d6e5f4031221304f5e6d7c8b9a0f1e2d3c"
@@ -414,8 +415,10 @@ queue_json() { jq -s '{data:{repository:{mergeQueue:{entries:{nodes:.}}}}}'; }
 CASE_RC=0; CASE_CREATES=0; CASE_ATTEMPTS=0; CASE_TITLES=""; CASE_LABELS=""; CASE_BODY=""
 # Actions-runs inputs for run_case (reset by reset_runs): the raw runs file, a forced list failure, a page cap, the
 # all-time merge_group history file (GH_STUB_EVER), a forced history-lookup failure, the stub's create title limit.
-CASE_RUNS=""; CASE_RUNS_FAIL=0; CASE_PAGE_CAP=""; CASE_EVER=""; CASE_WFHIST_FAIL=0; CASE_CREATE_MAX=256; CASE_WFHIST_BODY=""
-reset_runs() { CASE_RUNS=""; CASE_RUNS_FAIL=0; CASE_PAGE_CAP=""; CASE_EVER=""; CASE_WFHIST_FAIL=0; CASE_CREATE_MAX=256; CASE_WFHIST_BODY=""; }
+CASE_RUNS=""; CASE_RUNS_FAIL=0; CASE_PAGE_CAP=""; CASE_EVER=""; CASE_WFHIST_FAIL=0; CASE_CREATE_MAX=256; CASE_WFHIST_BODY=""; CASE_LC_ALL=""
+reset_runs() { CASE_RUNS=""; CASE_RUNS_FAIL=0; CASE_PAGE_CAP=""; CASE_EVER=""; CASE_WFHIST_FAIL=0; CASE_CREATE_MAX=256; CASE_WFHIST_BODY=""; CASE_LC_ALL=""; }
+# Hosts that carry the en_US.utf8 locale (CI runners and most developer machines do): L29 (c2) and mutant C38 need it.
+HAVE_EN_US="$(locale -a 2>/dev/null | grep -ci '^en_US\.utf-\?8$' || true)"; HAVE_EN_US="${HAVE_EN_US:-0}"
 # issue <number> <state> <label> <title>: one raw `gh issue list` row (labels as GitHub returns them)
 issue() {
   jq -n --argjson n "$1" --arg s "$2" --arg l "$3" --arg t "$4" \
@@ -448,7 +451,7 @@ run_case() {
     assert_fixture_dir "$issues"
     printf '[]' > "$issues"
   fi
-  env -i PATH="$JQBIN:$BIN:$SANDBOX_PATH" HOME="$WORK" TMPDIR="$WORK" GH_REPO="o/r" GH_TOKEN=x JQ_ERR_LOG="$JQ_ERR_LOG" \
+  env -i ${CASE_LC_ALL:+LC_ALL="$CASE_LC_ALL"} PATH="$JQBIN:$BIN:$SANDBOX_PATH" HOME="$WORK" TMPDIR="$WORK" GH_REPO="o/r" GH_TOKEN=x JQ_ERR_LOG="$JQ_ERR_LOG" \
     STALL_THRESHOLD_MINUTES="$thr" MAX_ENTRIES_TO_BUILD="$maxpos" \
     GH_STUB_LOG="$WORK/gh.log" GH_STUB_GRAPHQL="$gql" GH_STUB_FAIL="$failgh" GH_STUB_ISSUES="$issues" GH_STUB_LABEL_FAIL="$labelfail" \
     GH_STUB_RUNS="$runs" GH_STUB_RUNS_FAIL="$CASE_RUNS_FAIL" GH_STUB_PAGE_CAP="$CASE_PAGE_CAP" \
@@ -1245,7 +1248,7 @@ lrow26() { # a malformed history reply (non-numeric or missing total_count): sus
 
 # ---- headCommit.oid correlation rows (#12320) ---------------------------------------------------------
 # The correlation compares a failed push run's head_sha with the queue entry's headCommit.oid. What is known, in three
-# tiers (CTO ruling D7; nothing here pretends to more):
+# tiers (the PR's recorded technical ruling; nothing here pretends to more):
 #   DIRECTLY OBSERVED (read-only, 2026-11-07): run 42336368201 (event push, name == path, conclusion failure, ci.yml) has a
 #     head_sha equal to all 6 merge_group runs on the same temp ref; on two live AWAITING_CHECKS entries every merge_group
 #     run on the entry's temp ref (7 of 7 each) had head_sha == the entry's headCommit.oid; QUEUED entries had a null one.
@@ -1257,7 +1260,8 @@ lrow26() { # a malformed history reply (non-numeric or missing total_count): sus
 NOTICE_NULL="has no usable headCommit.oid"
 NOTICE_MISMATCH="does not match the queue entry's headCommit.oid"
 notice_has() { grep -qF -- "$1" "$WORK/out.txt" "$WORK/err.txt" 2>/dev/null; }
-actions_calls() { local n; n="$(grep -c '^gh api -X GET' "$WORK/gh.log" 2>/dev/null || true)"; echo "${n:-0}"; }
+# Counts every logged Actions API read by ENDPOINT (like lookup_ran and hist_calls), not by the argument order.
+actions_calls() { local n; n="$(grep -c '^gh api .*repos/.*actions/' "$WORK/gh.log" 2>/dev/null || true)"; echo "${n:-0}"; }
 # check_uncorrelated <label> <pr>: the unchanged suspected form, ZERO Actions API calls, the "no usable oid" notice and not
 # the mismatch notice (a null or malformed oid is "cannot correlate", never a mismatch).
 check_uncorrelated() {
@@ -1310,6 +1314,17 @@ lrow28() { # stale ref on a NEW entry: the failed push run carries the OLD tip, 
   set_ever 111; one_entry "$wf" 101 "$rf" "$SHA_A"; reset_runs
   check_suspected "L28 (d)" 1 101 || return 1
   [[ "$(hist_calls 111)" -eq 0 ]] || { REASON="L28 (d): a candidate without head_sha spent a history lookup"; return 1; }
+  # (e) byte-equality is the contract, so a head_sha that differs from the oid only in its LAST character, one that is the
+  #     oid plus one more character, and the oid in upper case must each be a mismatch (a truncated, prefix or case-folded
+  #     compare would name the cause)
+  local hsv
+  for hsv in "${SHA_A:0:39}9" "${SHA_A}0" "${SHA_A^^}"; do
+    { MKSHA="$hsv" mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref" failure 46
+      MKSHA="$hsv" mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
+    set_ever 111; one_entry "$wf" 101 "$rf" "$SHA_A"; reset_runs
+    check_suspected "L28 (e) '$hsv'" 1 101 || return 1
+    [[ "$(hist_calls 111)" -eq 0 ]] || { REASON="L28 (e) '$hsv': a near-miss head_sha spent a history lookup"; return 1; }
+  done
   return 0
 }
 lrow29() { # a null, absent or malformed headCommit.oid is "cannot correlate": suspected, no Actions call, its own notice
@@ -1329,11 +1344,18 @@ lrow29() { # a null, absent or malformed headCommit.oid is "cannot correlate": s
     mg_noise "$ref" 46 9100; } | jq -s '.' > "$rf"
   set_ever 111; one_entry "$wf" 101 "$rf" null QUEUED; reset_runs
   check_uncorrelated "L29 (b)" 101 || return 1
-  # (c) malformed oids behave like null: uppercase 40-hex, 39 characters, text
-  for bad in "ABCDEF0123456789ABCDEF0123456789ABCDEF01" "${SHA_A:0:39}" "not-a-sha"; do
+  # (c) malformed oids behave like null: uppercase 40-hex, 39 characters, text, 41 hex (end anchor), a leading character
+  #     (start anchor), 39 hex plus a non-ASCII letter
+  for bad in "ABCDEF0123456789ABCDEF0123456789ABCDEF01" "${SHA_A:0:39}" "not-a-sha" "${SHA_A}0" "x${SHA_A}" "${SHA_A:0:39}é"; do
     set_ever 111; one_entry "$wf" 101 "$rf" "$bad" QUEUED; reset_runs
     check_uncorrelated "L29 (c) '$bad'" 101 || return 1
   done
+  # (c2) the same non-ASCII oid under a locale whose [0-9a-f] range is collation-ordered (bash 5.3 under en_US.utf8 accepted it
+  #      before the function pinned LC_ALL=C); only where that locale exists, else C38 reports the skip
+  if [[ "$HAVE_EN_US" -gt 0 ]]; then
+    set_ever 111; CASE_LC_ALL=en_US.utf8; one_entry "$wf" 101 "$rf" "${SHA_A:0:39}é" QUEUED; reset_runs
+    check_uncorrelated "L29 (c2) non-ASCII oid under en_US.utf8" 101 || return 1
+  fi
   return 0
 }
 
@@ -1703,7 +1725,7 @@ mutate_lit "C26 both run-list fetches skipped -> RED only through lookup_ran (a 
 ' '            return 0
 '
 
-# ---- headCommit.oid correlation mutations (#12320): C27-C34 score every load-bearing literal of the correlation arm.
+# ---- headCommit.oid correlation mutations (#12320): C27-C41 score every load-bearing literal of the correlation arm.
 mutate_lit "C27 equality check removed (a stale ref names a cause again) -> RED" causerow 'L28 \(b\)' \
   'if [[ "$hs" != "$oid" ]]; then' 'if false; then'
 mutate_lit "C28 equality inverted (a matching candidate is dropped) -> RED" causerow 'L27:' \
@@ -1721,6 +1743,28 @@ mutate_lit "C33 the call site drops the oid (every entry reads as null) -> RED" 
 mutate_lit "C34 headCommit.oid dropped from the queue query (the stub then strips it too) -> RED" causerow 'L27:' \
   '                        headCommit { oid }
 ' ''
+# C35-C37: the equality weakened to a truncated, case-folded or prefix compare (review round: byte-equality is the contract).
+mutate_lit "C35 equality truncated to the first 7 characters (a near-miss head_sha names a cause) -> RED" causerow 'L28 \(e\)' \
+  'if [[ "$hs" != "$oid" ]]; then' 'if [[ "${hs:0:7}" != "${oid:0:7}" ]]; then'
+mutate_lit "C36 equality case-folded (an upper-case head_sha names a cause) -> RED" causerow 'L28 \(e\)' \
+  'if [[ "$hs" != "$oid" ]]; then' 'if [[ "${hs,,}" != "${oid,,}" ]]; then'
+mutate_lit "C37 equality becomes a prefix test (the oid plus extra characters names a cause) -> RED" causerow 'L28 \(e\)' \
+  'if [[ "$hs" != "$oid" ]]; then' 'if [[ "$hs" != "$oid"* ]]; then'
+# C38-C40: the oid validation's anchors and locale pin (a longer, prefixed or non-ASCII oid must read as 'no usable oid').
+if [[ "$HAVE_EN_US" -gt 0 ]]; then
+  mutate_lit "C38 LC_ALL=C pin dropped (a locale-ordered [0-9a-f] accepts 39 hex plus a non-ASCII letter) -> RED" causerow 'L29 \(c2\)' \
+    '            local LC_ALL=C
+' ''
+else
+  pass "C38 skipped: this host has no en_US.utf8 locale, so the locale pin cannot be driven red here (CI runners carry it)"
+fi
+mutate_lit "C39 oid validation loses its end anchor (41 hex reads as usable) -> RED" causerow 'L29 \(c\)' \
+  '"$oid" =~ ^[0-9a-f]{40}$ ]]' '"$oid" =~ ^[0-9a-f]{40} ]]'
+mutate_lit "C40 oid validation loses its start anchor (a prefixed oid reads as usable) -> RED" causerow 'L29 \(c\)' \
+  '"$oid" =~ ^[0-9a-f]{40}$ ]]' '"$oid" =~ [0-9a-f]{40}$ ]]'
+# C41: the query selects a field that does not exist on MergeQueueEntry (the stub now anchors on headCommit { oid }, not the bare word).
+mutate_lit "C41 query selects commit { oid } instead of headCommit { oid } (a non-existent field) -> RED" causerow 'L27:' \
+  'headCommit { oid }' 'commit { oid }'
 
 # ---- controls: the mutation engine and the chk helper must FAIL on inputs that must fail ---------------
 # control_fails <label> <wanted-message-substring> <cmd...>: drive a verdict helper once with an input that
@@ -1777,7 +1821,7 @@ printf '=== %s passed, %s failed ===\n' "$passes" "$fails"
 if [[ "$fails" -ne 0 ]]; then
   printf '[FAIL] rows failed:\n' >&2; printf '  %s\n' "${FAILED[@]}" >&2; exit 1
 fi
-EXPECTED_PASSES=153
+EXPECTED_PASSES=160
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then
   printf '[FAIL] pass count %s != exact floor %s (a row was dropped or added)\n' "$passes" "$EXPECTED_PASSES" >&2; exit 1
 fi

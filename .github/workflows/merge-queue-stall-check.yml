@@ -69,8 +69,8 @@ name: Merge queue stall check
 # target state keeps the issue and retries next sweep; closing is the only
 # mutation and it needs a positively-read non-OPEN state.
 #
-# CAUSE NAMING (#12283): the 2026-11-07 stall lasted 175 minutes because a duplicate key in
-# ci.yml made GitHub fail to LOAD that workflow on the queue temp ref: it recorded a failed
+# CAUSE NAMING (#12283): the 2026-11-07 stall (the entry was already 175 minutes old when its issue was filed)
+# was caused by a duplicate key in ci.yml, which made GitHub fail to LOAD that workflow on the queue temp ref: it recorded a failed
 # `push` run for ci.yml, never created the `merge_group` run, and the required `test`
 # context never reported. When a filed entry's LATEST temp ref (`gh-readonly-queue/main/pr-<N>-<sha>`)
 # shows a failed `push` run whose name equals its path, NO `merge_group` run of the same workflow_id on
@@ -94,12 +94,13 @@ name: Merge queue stall check
 # (pr-quality-guards.yml); this is diagnosis.
 #
 # CORRELATION (#12320): a candidate is attributed to an entry only when its run's head_sha is byte-equal to the entry's
-# headCommit.oid (a validated 40-hex string); a stale run on a reused or superseded ref is therefore never blamed on a newer
-# entry, which narrows the earlier caveat that an unrelated broken push of the same workflow could be named. A null or
-# malformed headCommit.oid (a QUEUED entry has none yet) means "cannot correlate": no Actions read, the unchanged
-# "suspected" issue, and a ::notice:: of its own. The arm only ever REMOVES a claim; the "inferred" wording is unchanged.
-# Stated residuals: a grouped-merge member that is not the deepest entry stays "suspected" (its oid differs from the group
-# ref's tip, or its ref fails the prefix join); and if GitHub nulls headCommit.oid for a BUILT entry that never reports,
+# headCommit.oid (a validated 40-hex string), so a stale run on a reused or superseded ref is not named for a newer
+# entry. A null or malformed headCommit.oid (a QUEUED entry has none yet) means "cannot correlate": no Actions read, the
+# unchanged "suspected" issue, and a ::notice:: of its own. The arm only ever REMOVES a claim; the "inferred" wording is
+# unchanged. The notices print once, in the run that files the issue (the dedupe check precedes the correlation): that
+# run's log is where the residual below is read, and a "suspected" filing stays final until its issue is closed.
+# Stated residuals: a grouped-merge member that is not the deepest entry may stay "suspected" (its oid may differ from the
+# group ref's tip, or its ref fails the prefix join); and if GitHub nulls headCommit.oid for a BUILT entry that never reports,
 # every named cause would silently degrade to "suspected" (the "no usable" notice in the run log is the signal; the flip
 # is to drop that short-circuit and fall back to the ref-prefix join).
 #
@@ -345,8 +346,10 @@ jobs:
             [[ "$n" =~ ^[0-9]+$ ]] && [[ "$((10#$n))" -gt 0 ]]
           }
 
-          # queue_candidate_cause <pr> <enqueuedAt> [<oid>]: sets CAUSE_PATHS / CAUSE_LINES / CAUSE_REF / CAUSE_N when the
-          # entry's LATEST temp ref shows a failed load, else leaves them empty (the caller resets them per entry).
+          # queue_candidate_cause <pr> <enqueuedAt> <oid>: sets CAUSE_PATHS / CAUSE_LINES / CAUSE_REF / CAUSE_N when the
+          # entry's LATEST temp ref shows a failed load whose run carries the entry's own commit (head_sha equals <oid>, the
+          # entry's validated 40-hex headCommit.oid; a missing or malformed <oid> names no cause), else leaves them empty
+          # (the caller resets them per entry).
           # Never fails the step. Called only AFTER the dedupe check.
           #
           # Signature (inferred from run records; GitHub does not document it): a workflow file that cannot be loaded
@@ -360,6 +363,9 @@ jobs:
           # issue stays "suspected".
           queue_candidate_cause() {
             local pr="$1" enq="$2" oid="${3-}" refre since enq_s PUSH_LIST="" MG_LIST="" named ref p u w hs HIST_WARNED=0
+            # Pin the collation for the oid check below: a locale-ordered [0-9a-f] range can admit non-ASCII letters
+            # (bash 5.3 under en_US.utf8 accepted 39 hex digits plus an accented e). Function-local, restored on return.
+            local LC_ALL=C
             # Correlation (#12320): a run is attributed to this entry only if its head_sha equals the entry's
             # headCommit.oid. A null or malformed oid (a QUEUED entry has none yet) means "cannot correlate": say so
             # (a notice of its own, never the mismatch one) and read nothing. Empty must never equal empty, so this
@@ -403,7 +409,7 @@ jobs:
             # any further lookup) and also have merge_group history (a workflow that never gated the queue is not blamed).
             while IFS=$'\t' read -r ref p u w hs; do
               if [[ "$hs" != "$oid" ]]; then
-                echo "::notice::merge-queue-stall: PR #${pr}: the failed push run for ${p} has a head_sha that does not match the queue entry's headCommit.oid (stale or foreign ref); not attributing the stall to it."; continue; fi
+                echo "::notice::merge-queue-stall: PR #${pr}: the failed push run for ${p} has no head_sha, or one that does not match the queue entry's headCommit.oid (stale or foreign ref); not attributing the stall to it."; continue; fi
               if has_mg_history "$w"; then
                 CAUSE_REF="$ref"
                 CAUSE_N=$(( CAUSE_N + 1 ))
