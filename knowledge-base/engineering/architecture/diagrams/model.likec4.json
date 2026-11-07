@@ -1543,6 +1543,17 @@
 "id": "167befz9bdb4g",
 "title": "RESTORE path, added 2026-08-05 (#7277/ADR-169). After the recut destroys the store, a needs:-chained job copies the required pin set GHCR -> zot over the CF Tunnel bridge and verifies each reference's BLOBS with crane validate --remote, not just its manifest — zot gc can evict a layer, so a digest-only check goes green on an image no host can pull (measured). Rehearsed against a throwaway zot in the runner BEFORE the destroy; that rehearsal is what authorizes the destroy at all. Fail-loud with one operator action per enumerated exit code; resumable, so a partial pass is recovered by re-running. SECOND, INDEPENDENT TRAVERSAL added 2026-08-06 (#7278/ADR-172) — the READ-ONLY INVENTORY sweep: registry-zot-inventory.yml walks GET /v2/ -> /v2/_catalog -> /v2/<repo>/tags/list -> /v2/<repo>/manifests/<ref> (+ index recursion and the referrers API) over the SAME cloudflared access tcp bridge, as the PULL user, with curl+jq and NOT crane (crane collapses every failure to exit 1, so the verdict taxonomy could not key on status codes, and it would move egress into a second binary). GET/HEAD only, asserted at the wire by a recording origin in the tests. It accumulates blob sizes DEDUPLICATED BY DIGEST — a naive per-tag sum multiplies every shared base layer and yields a number with no relationship to the disk. It reaches the bridge with skip-docker-login: true, so ZOT_PUSH_* is never materialized into the runner; the guarantee is NON-MATERIALIZATION, not non-possession (the job still holds a soleur/prd-root Doppler token that COULD read them — Doppler tokens are config-scoped, not secret-scoped — so the script asserts at entry that ZOT_PUSH_USER/ZOT_PUSH_TOKEN are unset and exits non-zero otherwise). The WRITE half of this surface is NOT reachable and must not be re-proposed as though it were: the deny-by-default accessControl grants the pull user ['read'] and the push user ['read','create','update'], so NO user holds 'delete' (measured) and manifest DELETE is refused whatever the pinned build implements. The INVENTORY is fired by workflow_dispatch only: manually, or (since #7377) by scheduled-zot-restart-loop.yml when it opens a NEW non-OOM restart-loop tracker. The label-triggered route that preceded it could never fire (a label applied with GITHUB_TOKEN starts no workflow run) and was deleted. After the walk the enumerator reads one SOLEUR_ZOT_DISK heartbeat newer than its START row through betterstack-query.sh, so a restart or host replace during the sweep reaches the durable marker as reason=restart_during_sweep."
 },
+"17avbtslz2b32": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "platform.infra.approvalStore"
+},
+"id": "17avbtslz2b32",
+"title": "Gated-tool gate creates, polls and consumes an approval request (service-role RPCs); the Owner decides via decide_approval as the authenticated user (chat card, inbox landing page, decide route). Card frames to a non-Owner, non-requester member carry no action text and the requester label is read at render time from the auth record (auth.admin) and workspace_members (service role, membership-scoped, not persisted) (ADR-309 addendum 2026-11-07). Flag-gated, default off (ADR-309)"
+},
 "189i3k1f8wlqb": {
 "technology": "Conversation",
 "source": {
@@ -2130,17 +2141,6 @@
 "id": "241p3diiuvub3",
 "title": "Routes traffic"
 },
-"24odqbjgekq7": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.engine"
-},
-"target": {
-"model": "platform.infra.approvalStore"
-},
-"id": "24odqbjgekq7",
-"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher registers github_push_branch through the same gate, ADR-309 addendum, #11636); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309); requester label read at render time from users and workspace_members (service role, membership-scoped, not persisted)"
-},
 "24xuohm5gdv38": {
 "technology": "HTTPS (supabase-js service client)",
 "source": {
@@ -2290,6 +2290,17 @@
 },
 "id": "2e0lg9cd4ztb4",
 "title": "Publishes the zot restart-loop alarm verdict, and since #8038 the weekly issue-flow measurement, which updates one standing public issue with aggregate counts (find-or-update, never re-filed) into a PUBLIC GitHub issue, including a credential-scrubbed sample of the container log tail (ADR-211). DENYLIST at this layer: the producer's sanitizer has already destroyed the JSON, so an unanticipated header name survives — the allowlist lives at the producer (ADR-211 Layer 1 — DELIVERED 2026-09-18, see its Amendment 2026-09-18; the denylist here is the backstop, not the only guard)."
+},
+"2eeaw1pytdwjh": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.engine"
+},
+"target": {
+"model": "platform.infra.approvalStore"
+},
+"id": "2eeaw1pytdwjh",
+"title": "Hosted agent sessions run the same gated branch of canUseTool in-process and consume an approved request once for a byte-identical re-proposal (the Concierge cc dispatcher registers github_push_branch through the same gate, ADR-309 addendum, #11636); no decide path is imported by the agent tool builders (sentinel-tested; the in-process residual risk is recorded in ADR-309)"
 },
 "2g0w538bran25": {
 "technology": "HTTPS (Git Data API)",
@@ -3309,17 +3320,6 @@
 },
 "id": "giowg6p8w1jd",
 "title": "Reads worktree lease"
-},
-"gk37r0f0s1yn": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "platform.infra.approvalStore"
-},
-"id": "gk37r0f0s1yn",
-"title": "Gated-tool gate creates, polls and consumes an approval request (service-role RPCs); the Owner decides via decide_approval as the authenticated user (chat card, inbox landing page, decide route). Card frames to a non-Owner, non-requester member carry no action text and the requester label is read at render time, not stored (ADR-309 addendum 2026-11-07). Flag-gated, default off (ADR-309)"
 },
 "gxkkp0qf6t0l": {
 "technology": "CLI (doppler run / scoped read-only service tokens: prd_workspaces_luks, prd_workspaces_luks_web, soleur-github-app)",
@@ -28075,7 +28075,7 @@
 },
 "parent": null,
 "relations": [
-"gk37r0f0s1yn"
+"17avbtslz2b32"
 ],
 "color": "gray",
 "line": "dashed",
@@ -28161,7 +28161,7 @@
 },
 "parent": null,
 "relations": [
-"24odqbjgekq7"
+"2eeaw1pytdwjh"
 ],
 "color": "gray",
 "line": "dashed",
