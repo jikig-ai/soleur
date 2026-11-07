@@ -174,7 +174,7 @@ describe("legal-acceptance alert op contract", () => {
     // The tag KEY and VALUE together: a bare literal elsewhere (a path, a log label) must not satisfy this.
     expect(emitter).toMatch(/\bfeature:\s*["']legal-acceptance["']/);
     // The op KEY and VALUE together (`op: "x"` in the registry), so a stray literal elsewhere cannot satisfy it.
-    for (const op of ["decide_rejected", "reauth_failed", "row_without_event", "accepted", "page_read_failed", "record_invalid", "store_failed"]) {
+    for (const op of ["decide_rejected", "reauth_failed", "row_without_event", "accepted", "page_read_failed", "kind_undeclared", "record_invalid", "store_failed"]) {
       expect(emitter, `op ${op} emitted`).toMatch(new RegExp(`\\bop:\\s*["']${op}["']`));
     }
     // Every emitted op is reported through the legal helper, never the gate's (which would tag feature=approval-queue).
@@ -184,8 +184,8 @@ describe("legal-acceptance alert op contract", () => {
   // PR-D (#12011): every emitted op is either routed by one of the two rules or named here, so a NEW op cannot ship
   // unrouted by accident. This is a plain list, not a ratchet: nothing counts it down. `record_invalid` and
   // `store_failed` page nobody until the paging-rule follow-up (#12195) lands; `accepted` is the liveness signal and
-  // `page_read_failed` is recorded, not paged (both stated above).
-  const UNPAGED_OPS = ["accepted", "page_read_failed", "record_invalid", "store_failed"] as const;
+  // `page_read_failed` and `kind_undeclared` are recorded, not paged (both stated above).
+  const UNPAGED_OPS = ["accepted", "page_read_failed", "kind_undeclared", "record_invalid", "store_failed"] as const;
 
   // ── pure analysers: fed the real sources below, and synthetic sources by the negative controls ─────────────────────
 

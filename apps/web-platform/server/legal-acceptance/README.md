@@ -34,7 +34,7 @@ covers the esbuild bundle layout; the Next-compiled routes and pages rely on the
 
 Registered in `server/approval/ops.ts` with `feature: "legal-acceptance"`: `accepted` (once per recorded row),
 `decide_rejected` (tag `reason`), `reauth_failed` (extra `errorClass`, never the address), `page_read_failed` (a founder page
-could not read its rows; not paged) and `row_without_event` (reconciliation, reported by the check endpoint, see Ack and
+could not read its rows; not paged), `kind_undeclared` (a registered text has no declared card kind, so the page 404s and the index leaves it out; warn; tag `key`; reported only after the founder surface gate; not paged) and `row_without_event` (reconciliation, reported by the check endpoint, see Ack and
 reconciliation). PR-D adds `record_invalid` (a row failed its checksum; error) and `store_failed` (a verify, ack-state or ack
 call failed; error; tag `stage` is `verify`, `ack_state`, `ack`, `registry` (the legal text could not be read, or the committed text is malformed; the on-call reads `extra.code`) or `config` (a token or
 founder id that is set but malformed; once per process, names only the variable)). `record_invalid` and `store_failed` have no paging rule yet

@@ -1,17 +1,19 @@
 // Index of the founder's legal texts (#12011 PR-C, wireframe 17 style): one plain line per registry key with its state in
 // plain words, each linking to its card. Server component with the same auth gate as the card page.
 //
-// The `approval-queue` flag is read first (effectively global: `workspaceId: null`). With it off the page lists only the
+// The surface gate is read first: the `approval-queue` flag (effectively global: `workspaceId: null`) AND the founder
+// (`LEGAL_ACCEPTANCE_FOUNDER_ID`); anyone else behaves as if the flag were off. A text with no declared card kind is left out
+// (and reported once, after the gate). With the gate off the page lists only the
 // keys the founder already has a recorded row for, and is not-found when there is none: an unreleased key is never listed.
 
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { reportLegalOp } from "@/server/approval/ops";
-import { isApprovalQueueEnabled } from "@/server/approval/flag";
+import { isLegalSurfaceEnabled } from "@/server/legal-acceptance/surface";
 import { loadLegalTexts } from "@/server/legal-acceptance/canonical";
 import { NavLink } from "@/components/ui/nav-link";
 import { deriveLegalCardState } from "@/lib/approval-card-state";
-import { LEGAL_COPY, legalTextLabel } from "@/lib/legal-acceptance-copy";
+import { LEGAL_COPY, legalDisplayLabel, legalIndexState, legalKindCopy, legalTextKind } from "@/lib/legal-acceptance-copy";
 import { LEGAL_ROW_COLUMNS, parseLegalRows } from "@/lib/legal-acceptance-wire";
 
 export const dynamic = "force-dynamic";
@@ -23,8 +25,8 @@ export default async function LegalAcceptanceIndexPage() {
   } = await supabase.auth.getUser();
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent("/dashboard/approvals/legal")}`);
 
-  // Flag first: it decides what this page may show at all.
-  const flagOn = await isApprovalQueueEnabled({ userId: user.id, workspaceId: null });
+  // The surface gate first (flag AND founder): it decides what this page may show at all.
+  const flagOn = await isLegalSurfaceEnabled(user.id);
 
   let entries;
   try {
@@ -32,6 +34,16 @@ export default async function LegalAcceptanceIndexPage() {
   } catch (err) {
     reportLegalOp("pageReadFailed", err, { userId: user.id, extra: { read: "legal_text" } });
     throw new Error("legal text read failed");
+  }
+
+  // A text with no declared card kind has no wording and no card: leave it out, and report each one once after the gate.
+  const declaredEntries = entries.flatMap((e) => {
+    const kind = legalTextKind(e.key);
+    const kc = legalKindCopy(e.key);
+    return kind !== null && kc !== null ? [{ ...e, kind, kc }] : [];
+  });
+  if (flagOn) {
+    for (const e of entries) if (legalKindCopy(e.key) === null) reportLegalOp("kindUndeclared", null, { userId: user.id, tags: { key: e.key } });
   }
 
   const { data, error } = await supabase.from("legal_acceptance").select(LEGAL_ROW_COLUMNS);
@@ -42,12 +54,14 @@ export default async function LegalAcceptanceIndexPage() {
   }
 
   // Flag off: only the founder's own recorded keys; nothing recorded means there is nothing to show.
-  const visible = flagOn ? entries : entries.filter((e) => rows.some((r) => r.key === e.key));
+  const visible = flagOn ? declaredEntries : declaredEntries.filter((e) => rows.some((r) => r.key === e.key));
   if (!flagOn && visible.length === 0) notFound();
 
   const now = new Date();
   const items = visible.map((e) => ({
     key: e.key,
+    label: legalDisplayLabel(e.kind, e.key, e.body),
+    kc: e.kc,
     version: e.version,
     state: deriveLegalCardState({
       cardHash: e.textHash,
@@ -72,10 +86,10 @@ export default async function LegalAcceptanceIndexPage() {
                 className="flex flex-wrap items-baseline justify-between gap-2 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 p-4 hover:bg-soleur-bg-surface-2"
               >
                 <span className="text-sm font-medium text-soleur-text-primary">
-                  {legalTextLabel(i.key)}, version {i.version}
+                  {i.label}, version {i.version}
                 </span>
                 <span className="text-sm text-soleur-text-secondary">
-                  {i.state === "pending" && !flagOn ? LEGAL_COPY.index.notAvailable : LEGAL_COPY.index.state[i.state]}
+                  {i.state === "pending" && !flagOn ? LEGAL_COPY.index.notAvailable : legalIndexState(i.kc, i.state)}
                 </span>
               </NavLink>
             </li>

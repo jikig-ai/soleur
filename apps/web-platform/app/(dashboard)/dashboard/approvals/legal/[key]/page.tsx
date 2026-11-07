@@ -6,7 +6,8 @@
 //   - A malformed key and an unknown key end in the SAME notFound().
 //   - The card gets the registry text body and its hash from here; nothing is hashed in the browser and the browser never
 //     sends text back. The row for the CURRENT hash gives the state; rows for older hashes render as "replaced" cards.
-//   - The `approval-queue` flag is read first (effectively global: `workspaceId: null`). With it off the founder's own
+//   - The surface gate is read first: the `approval-queue` flag (effectively global: `workspaceId: null`) AND the founder (`LEGAL_ACCEPTANCE_FOUNDER_ID`;
+//     anyone else behaves as if the flag were off). With it off the founder's own
 //     recorded rows still render, but a pending or expired current card never does, so neither the registry text nor an
 //     unreleased key is shown: with no recorded row for the key the page is the same not-found as an unknown key.
 //   - A failed read is reported and throws a generic error: never a silent empty page.
@@ -14,12 +15,12 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { reportLegalOp } from "@/server/approval/ops";
-import { isApprovalQueueEnabled } from "@/server/approval/flag";
+import { isLegalSurfaceEnabled } from "@/server/legal-acceptance/surface";
 import { KEY_RE, LegalTextError, getLegalText } from "@/server/legal-acceptance/canonical";
 import { LegalAcceptanceCard, type LegalRowFacts } from "@/components/approvals/legal-acceptance-card";
 import { NavLink } from "@/components/ui/nav-link";
 import { deriveLegalCardState } from "@/lib/approval-card-state";
-import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
+import { LEGAL_COPY, legalDisplayLabel, legalKindCopy, legalTextKind } from "@/lib/legal-acceptance-copy";
 import { LEGAL_ROW_COLUMNS, parseLegalRows, type LegalStoredRow } from "@/lib/legal-acceptance-wire";
 
 export const dynamic = "force-dynamic";
@@ -42,8 +43,8 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
   } = await supabase.auth.getUser();
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent(`/dashboard/approvals/legal/${key}`)}`);
 
-  // Flag first: it decides what this page may show at all.
-  const flagOn = await isApprovalQueueEnabled({ userId: user.id, workspaceId: null });
+  // The surface gate first (flag AND founder): it decides what this page may show at all.
+  const flagOn = await isLegalSurfaceEnabled(user.id);
 
   let entry;
   try {
@@ -54,6 +55,16 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
     reportLegalOp("pageReadFailed", err, { userId: user.id, extra: { read: "legal_text" } });
     throw new Error("legal text read failed");
   }
+
+  // A registered text with no declared card kind has no wording and no card: a 404, mirrored to Sentry once the surface gate
+  // has passed (a user who may not see the surface generates no event). Before the database read.
+  const kc = legalKindCopy(key);
+  const kind = legalTextKind(key);
+  if (kc === null || kind === null) {
+    if (flagOn) reportLegalOp("kindUndeclared", null, { userId: user.id, tags: { key } });
+    notFound();
+  }
+  const label = legalDisplayLabel(kind, key, entry.body);
 
   const { data, error } = await supabase
     .from("legal_acceptance")
@@ -94,6 +105,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
           <div id="current-version">
             <LegalAcceptanceCard
               keyName={key}
+              label={label}
               version={entry.version}
               body={entry.body}
               textHash={entry.textHash}
@@ -110,6 +122,7 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
           <LegalAcceptanceCard
             key={r.text_hash}
             keyName={key}
+            label={label}
             version={r.version}
             body=""
             textHash={r.text_hash}
