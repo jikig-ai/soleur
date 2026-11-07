@@ -2000,6 +2000,37 @@ PY
     no "G3 token census: holders|files scanned = ${g3_th}"
   fi
 
+  # --- the §(c) DOPPLER_BIN hand-off (#12167) -------------------------------------------------------------------
+  # lb-weight-gate-with-marker.sh pins its PATH, so the pinned Doppler CLI that infra-credentials installs into
+  # ${RUNNER_TEMP}/doppler-cli (GITHUB_PATH only) is invisible to it (names_rc_127, the gate never ran). The wrapper
+  # accepts DOPPLER_BIN only when it is EXACTLY that path. This row pins the SOURCE COMMAND FORM in cf-lb-overlay.yml:
+  # comment-stripped, backslash continuations joined, the inner `env` that hands the wrapper its token must carry
+  # the exact DOPPLER_BIN assignment, the wrapper must be invoked exactly once, and DOPPLER_BIN must appear on no
+  # other code line (a prd-planted or outer-env value cannot stand in for it: the inner env overrides).
+  g3_dbin_cmd='env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh"'
+  g3_dbin_ok() { # <cf-lb-overlay.yml copy> -> 0 when the §(c) step hands the wrapper the exact DOPPLER_BIN
+    local code
+    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ')"
+    [[ "$(grep -cF -- "$g3_dbin_cmd" <<<"$code")" -eq 1 ]] \
+      && [[ "$(grep -oF 'lb-weight-gate-with-marker.sh' <<<"$code" | wc -l)" -eq 1 ]] \
+      && [[ "$(grep -oF 'DOPPLER_BIN' <<<"$code" | wc -l)" -eq 1 ]]
+  }
+  if g3_dbin_ok .github/workflows/cf-lb-overlay.yml; then
+    ok "G3 cf-lb-overlay §(c): the inner env hands the wrapper DOPPLER_BIN=\"\${RUNNER_TEMP}/doppler-cli/doppler\" (exact command form, the wrapper invoked once, DOPPLER_BIN on no other code line)"
+  else
+    no "G3 cf-lb-overlay §(c): the wrapper invocation lost the exact DOPPLER_BIN hand-off (names_rc_127 returns on the runner)"
+  fi
+  g3_dbin_mut() { # <label> <old> <new> -> RED when the edit lands exactly once and the row turns false
+    local label="$1" f="$G3/st/cf-lb-overlay-mut.yml"
+    cp .github/workflows/cf-lb-overlay.yml "$f"
+    if ! g3_sub "$f" "$2" "$3"; then no "G3 mutation 23 ($label): the edit did not land exactly once in cf-lb-overlay.yml"; return; fi
+    if g3_dbin_ok "$f"; then no "G3 mutation 23 ($label) stayed GREEN: the DOPPLER_BIN hand-off row cannot see this defect"; else ok "G3 mutation 23 ($label) -> RED"; fi
+  }
+  g3_dbin_mut "the DOPPLER_BIN assignment is dropped" ' DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \' ' \'
+  g3_dbin_mut "DOPPLER_BIN points at a path other than RUNNER_TEMP/doppler-cli/doppler" 'DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler"' 'DOPPLER_BIN="${HOME}/doppler-cli/doppler"'
+  g3_dbin_mut "DOPPLER_BIN moves to the OUTER env (a prd-injected value would override it)" 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run' 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" doppler run'
+  g3_dbin_mut "DOPPLER_BIN survives only in a comment (prose is not the command)" 'env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \' $'env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \\\n            # DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \\'
+
   # =====================================================================================================
   # MUTATION ROWS — each against a fresh sandbox copy; the pristine files are never touched.
   # =====================================================================================================
@@ -2339,7 +2370,9 @@ printf '\n%s passed, %s failed\n' "$pass" "$fail"
 # with row 22 re-pointed at the old reboot requirement, 325 -> 332 (measured green count).
 # Review round 1: S61/S62 (the NEWEST readiness row decides, both directions) + mutation row 22c, 332 -> 335.
 # #9372 retirement: the marker-token census (one real-tree row, three synthetic-root rows: control, second holder, comment-only; review round 1 added four direction rows: lower-case, composite action, .yaml, trailing comment) 335 -> 343 (measured green count).
-WF_MIN_ASSERTIONS=343
+# #12167: the cf-lb-overlay §(c) DOPPLER_BIN hand-off (one real-tree row + mutation 23 x4) -> 352 (measured green count; the floor had
+# drifted 4 below green since #11766, so this raise also re-pins it to EXACT).
+WF_MIN_ASSERTIONS=352
 if [[ "$pass" -lt "$WF_MIN_ASSERTIONS" ]]; then
   echo "FAIL - only $pass assertions ran (floor $WF_MIN_ASSERTIONS) — fewer verdicts than expected; a green run here would be vacuous"
   exit 1

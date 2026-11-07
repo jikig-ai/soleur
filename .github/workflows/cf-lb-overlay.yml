@@ -933,7 +933,12 @@ jobs:
           # fails closed with a named sub_condition. It can only pass when every
           # precondition provably holds — the orchestrator (#6027) sets the full env.
           # The outer `env DOPPLER_TOKEN=` scopes the prd read; the inner `env` hands
-          # the wrapper the marker config's own token.
+          # the wrapper the marker config's own token AND DOPPLER_BIN (#12167): the
+          # wrapper pins its PATH, so the pinned Doppler CLI that infra-credentials
+          # installs into ${RUNNER_TEMP}/doppler-cli (GITHUB_PATH only) is invisible to
+          # it (names_rc_127, gate never ran). The inner env overrides anything `prd`
+          # injected; the wrapper accepts ONLY that exact path and fails closed
+          # (exit 3, bad_doppler_bin) on anything else -- it never falls back to PATH.
           #
           # BARE EXIT 0 IS NOT THE PROOF. The gate has TWO exit-0 branches
           # (lb-weight-gate.sh): the web2_standby branch prints "SHAPE-ONLY — NOT
@@ -945,7 +950,7 @@ jobs:
           # step must see.
           GATE_OUT=""
           GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
-            env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" \
+            env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
             echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
             exit 1

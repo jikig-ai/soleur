@@ -28,8 +28,23 @@
 #   9 the token requirement is dropped
 #   10 DOPPLER_CONFIG_DIR no longer points the Doppler calls at an empty private dir
 #   11 exported functions are no longer purged           12 the private dir leaks past the exec
+#   13a/13b the exact-path check (DOPPLER_BIN == ${RUNNER_TEMP}/doppler-cli/doppler) is dropped (wrong path / RUNNER_TEMP
+#       mismatch accepted)                                13c the `..`-free RUNNER_TEMP check is dropped
+#   14a the not-a-symlink check on the binary is dropped  14b the owned-by-euid check is dropped (skipped as a case unless root)
+#   14c the executable check is dropped                   14d the not-a-symlink check on the directory is dropped
+#   14e the dir-not-group/world-writable check is dropped 14f the regular-file check is dropped
+#   15 an invalid DOPPLER_BIN falls back silently to the pinned PATH (fail-closed contract broken)
+#   16 doppler_ro ignores the validated absolute path (calls bare `doppler` again)
+#   5g DOPPLER_BIN is allowlisted AND no longer unset (it would reach the gate)
 #   H1 HARNESS: a stub that records nothing must fail the argv assertion
 #   H2 MUST-PASS: a valid marker 4 days old yields the gate's authorized-shape exit 0
+#
+# DOPPLER_BIN (#12167, CTO ruling 2026-11-07, option A). On the GitHub runner the pinned Doppler CLI lives in
+# ${RUNNER_TEMP}/doppler-cli (added via $GITHUB_PATH only), which is NOT in the wrapper's pinned PATH, so the wrapper
+# died with names_rc_127 and the gate never ran. The workflow now passes DOPPLER_BIN; the wrapper accepts it ONLY
+# when it is exactly ${RUNNER_TEMP}/doppler-cli/doppler and passes the file/dir checks, else exit 3
+# `bad_doppler_bin`, never a fallback to PATH. Each negative scenario keeps a working stub on the pinned PATH, so a
+# silent fallback would RUN the gate and turn the scenario RED.
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
 
@@ -275,6 +290,76 @@ scn_token() { # no token: rc 3 and Doppler is never called
   [ "$RC" -eq 3 ] && [ ! -s "$FX/calls" ] && [[ "$ERR" == *"class=no_token"* ]]
 }
 
+# ── DOPPLER_BIN: the runner's pinned CLI lives outside the pinned PATH (#12167) ─────────────────
+# mk_rt — a fake RUNNER_TEMP holding a valid doppler-cli/doppler stub (after build_sb: the stub bakes in $FX).
+# Sets RT (the RUNNER_TEMP) and DB (the binary). The stub lives ONLY here when the caller removes $SB/bin/doppler.
+mk_rt() {
+  RT="$(mktemp -d "$TMP/rt.XXXXXX")"; assert_fixture_dir "$RT"
+  mkdir -p "$RT/doppler-cli"; chmod 755 "$RT/doppler-cli"
+  write_stub "$RT/doppler-cli/doppler" "$FX"
+  DB="$RT/doppler-cli/doppler"
+}
+scn_dbin_pass() { # REPRO (fixed): the stub exists ONLY under RUNNER_TEMP/doppler-cli; DOPPLER_BIN makes the gate chain run
+  build_sb "$1" real; set_marker "$OLD4D"; rm -f "$SB/bin/doppler"; mk_rt
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"
+  [ "$RC" -eq 0 ] && [[ "$OUT" == *"requires_runtime_bind_probe=true"* ]] \
+    && argv_is "$(printf '%s\n%s' "$ARGV_NAMES" "$ARGV_GET")"
+}
+scn_dbin_unset_127() { # REPRO (defect): without DOPPLER_BIN the pinned PATH has no doppler => names_rc_127, the gate never ran
+  build_sb "$1" spy; set_marker "$OLD4D"; rm -f "$SB/bin/doppler"; mk_rt
+  run_wb "RUNNER_TEMP=$RT"
+  [ "$RC" -eq 3 ] && [ ! -e "$FX/gate.env" ] && [[ "$ERR" == *"class=names_rc_127"* ]]
+}
+# dbin_rejected — the common verdict of every negative: exit 3, class=bad_doppler_bin, the gate never ran, and NO
+# doppler (neither the supplied one nor the decoy on the pinned PATH) was executed.
+dbin_rejected() {
+  [ "$RC" -eq 3 ] && [ ! -e "$FX/gate.env" ] && [[ "$ERR" == *"class=bad_doppler_bin"* ]] && [ ! -s "$FX/calls" ]
+}
+dbin_neg_sb() { build_sb "$1" spy; set_marker "$OLD4D"; mk_rt; } # keeps a working stub on the pinned PATH (fallback detector)
+scn_dbin_wrongpath() { # a valid-looking binary that is not RUNNER_TEMP/doppler-cli/doppler
+  dbin_neg_sb "$1"; run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$SB/bin/doppler"; dbin_rejected
+}
+scn_dbin_rt_mismatch() { # DOPPLER_BIN is valid under ANOTHER temp root than the RUNNER_TEMP the wrapper is given
+  dbin_neg_sb "$1"; local db1="$DB"; mk_rt
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$db1"; dbin_rejected
+}
+scn_dbin_dotdot() { # RUNNER_TEMP carrying `..` is refused even though DOPPLER_BIN equals RUNNER_TEMP/doppler-cli/doppler literally
+  dbin_neg_sb "$1"; mkdir -p "$RT/x"
+  run_wb "RUNNER_TEMP=$RT/x/.." "DOPPLER_BIN=$RT/x/../doppler-cli/doppler"; dbin_rejected
+}
+scn_dbin_symlink() { # the binary is a symlink (to a perfectly good stub)
+  dbin_neg_sb "$1"; rm -f "$DB"; ln -s "$SB/bin/doppler" "$DB"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
+}
+scn_dbin_notexec() { # the binary is a regular file that is not executable
+  dbin_neg_sb "$1"; chmod 644 "$DB"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
+}
+scn_dbin_notfile() { # the path is a directory (executable bit set), not a regular file
+  dbin_neg_sb "$1"; rm -f "$DB"; mkdir "$DB"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
+}
+dbin_owner_constructible() { [ "$(id -u)" -eq 0 ]; } # chown to another uid needs root; the CI runner is not
+scn_dbin_foreign_owner() { # the binary is owned by another user
+  dbin_owner_constructible || { printf '       SKIP (counted, not executed): not root, so a file owned by another uid cannot be constructed here\n'; return 0; }
+  dbin_neg_sb "$1"; chown 65534 "$DB"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
+}
+scn_dbin_dir_writable() { # the binary's directory is world-writable, then group-writable
+  dbin_neg_sb "$1"; chmod 777 "$RT/doppler-cli"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected || return 1
+  chmod 775 "$RT/doppler-cli"; : > "$FX/calls"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
+}
+scn_dbin_dir_symlink() { # the doppler-cli directory is a symlink to a good directory
+  dbin_neg_sb "$1"; mv "$RT/doppler-cli" "$RT/real-cli"; ln -s real-cli "$RT/doppler-cli"
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB"; dbin_rejected
+}
+scn_dbin_empty_or_no_rt() { # set-but-empty DOPPLER_BIN, and a DOPPLER_BIN with no RUNNER_TEMP, both fail closed
+  dbin_neg_sb "$1"; run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN="; dbin_rejected || return 1
+  : > "$FX/calls"; run_wb -RUNNER_TEMP "DOPPLER_BIN=$DB"; dbin_rejected
+}
+
 # ── the exec environment is an ALLOWLIST (security P3-1) ────────────────────────────────────────
 # The variables lb-weight-gate.sh reads, DERIVED FROM THE GATE ITSELF (never typed here): every NAME the
 # gate expands in a code line as ${NAME-, ${NAME:- or ${NAME+. Comment lines are skipped (a comment names a
@@ -292,11 +377,14 @@ scn_allow_parity() { # the wrapper's allowlist equals the gate's own read set (a
   [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 10 ] && [ "$d" = "$w" ]
 }
 scn_survivors() { # nothing but PATH + allowlisted gate inputs reaches the gate, INCLUDING non-identifier names and functions
-  build_sb "$1" spy; set_marker "$OLD4D"
-  run_wb 'DOPPLER-API-HOST=https://evil.invalid' 'BASH_FUNC_date%%=() { echo pwn; }' 'BASH_FUNC_jq%%=() { echo pwn; }' \
+  # DOPPLER_BIN (and RUNNER_TEMP) are SET and VALID here, with the only working doppler under RUNNER_TEMP: the chain
+  # runs through DOPPLER_BIN, and neither name may reach the gate.
+  build_sb "$1" spy; set_marker "$OLD4D"; rm -f "$SB/bin/doppler"; mk_rt
+  run_wb "RUNNER_TEMP=$RT" "DOPPLER_BIN=$DB" 'DOPPLER-API-HOST=https://evil.invalid' 'BASH_FUNC_date%%=() { echo pwn; }' 'BASH_FUNC_jq%%=() { echo pwn; }' \
     DOPPLER_API_HOST=https://x.invalid doppler_token=lower FOO_UNRELATED=1 TMPDIR=/var/tmp/x LC_ALL=C.UTF-8 TZ=Asia/Tokyo
   [ "$RC" -eq 42 ] && [ -f "$FX/gate.env" ] || return 1
   ! grep -q '^DOPPLER' "$FX/gate.env" && ! grep -qi '^doppler' "$FX/gate.env" && ! grep -q 'BASH_FUNC' "$FX/gate.env" \
+    && ! grep -qE '^(DOPPLER_BIN|RUNNER_TEMP)=' "$FX/gate.env" && ! grep -qF -- "$DB" "$FX/gate.env" \
     && ! grep -qE '^(FOO_UNRELATED|HOME|TMPDIR|LC_ALL|TZ)=' "$FX/gate.env" || return 1
   local allowed names n; allowed="$(gate_read_vars)"; names="$(sed -nE 's/^([^=]+)=.*/\1/p' "$FX/gate.env")"
   for n in $names; do
@@ -377,6 +465,18 @@ assert "the PATH is pinned: a doppler earlier on the caller's PATH is never run"
 assert "a get failure after a positive membership test exits 3 (never 'absent'), the gate never runs" scn_get_fail "$WRAPPER"
 assert "a malformed marker value exits 4 and is never exported" scn_shape "$WRAPPER"
 assert "no DOPPLER_TOKEN exits 3 without calling Doppler" scn_token "$WRAPPER"
+assert "REPRO (fixed): a doppler that exists only under RUNNER_TEMP/doppler-cli runs the full gate chain when DOPPLER_BIN names it" scn_dbin_pass "$WRAPPER"
+assert "REPRO (defect): the same layout WITHOUT DOPPLER_BIN dies names_rc_127 and the gate never runs" scn_dbin_unset_127 "$WRAPPER"
+assert "a DOPPLER_BIN that is not RUNNER_TEMP/doppler-cli/doppler exits 3 bad_doppler_bin, the gate not run, no doppler executed" scn_dbin_wrongpath "$WRAPPER"
+assert "a DOPPLER_BIN valid under a DIFFERENT temp root than RUNNER_TEMP exits 3 bad_doppler_bin" scn_dbin_rt_mismatch "$WRAPPER"
+assert "a RUNNER_TEMP carrying '..' exits 3 bad_doppler_bin although DOPPLER_BIN equals RUNNER_TEMP/doppler-cli/doppler literally" scn_dbin_dotdot "$WRAPPER"
+assert "a DOPPLER_BIN that is a symlink exits 3 bad_doppler_bin" scn_dbin_symlink "$WRAPPER"
+assert "a DOPPLER_BIN that is not executable exits 3 bad_doppler_bin" scn_dbin_notexec "$WRAPPER"
+assert "a DOPPLER_BIN that is a directory, not a regular file, exits 3 bad_doppler_bin" scn_dbin_notfile "$WRAPPER"
+assert "a DOPPLER_BIN owned by another user exits 3 bad_doppler_bin (counted skip when not root)" scn_dbin_foreign_owner "$WRAPPER"
+assert "a world-writable or group-writable doppler-cli directory exits 3 bad_doppler_bin" scn_dbin_dir_writable "$WRAPPER"
+assert "a doppler-cli directory that is a symlink exits 3 bad_doppler_bin" scn_dbin_dir_symlink "$WRAPPER"
+assert "a set-but-empty DOPPLER_BIN, and a DOPPLER_BIN with no RUNNER_TEMP, exit 3 bad_doppler_bin" scn_dbin_empty_or_no_rt "$WRAPPER"
 
 # a boxed-table listing is tolerated
 scn_table() { build_sb "$1" real; set_marker "$OLD4D"; : > "$FX/names_table"; run_wb; [ "$RC" -eq 0 ] && [[ "$OUT" == *"requires_runtime_bind_probe=true"* ]]; }
@@ -413,9 +513,10 @@ no_write_verbs() { # the wrapper only READS: no secrets set/delete/upload, no AP
 assert "the wrapper carries no Doppler write verb, no doppler run, no secrets download, no HTTP write" no_write_verbs
 one_doppler_site() { # exactly the two read forms, both through the single doppler_ro helper
   [ "$(grep -vE '^[[:space:]]*#' "$WRAPPER" | grep -c 'doppler_ro secrets')" -eq 2 ] \
-    && [ "$(grep -vE '^[[:space:]]*#' "$WRAPPER" | grep -cE '(^|[^_a-z])doppler[[:space:]]+"?\$@')" -eq 1 ]
+    && [ "$(grep -vE '^[[:space:]]*#' "$WRAPPER" | grep -cF '"${DOPPLER_RESOLVED:-doppler}" "$@"')" -eq 1 ] \
+    && [ "$(grep -vE '^[[:space:]]*#' "$WRAPPER" | grep -cE '(^|[^_a-z])doppler[[:space:]]+"?\$@')" -eq 0 ]
 }
-assert "the wrapper holds exactly one doppler invocation site and two read call forms" one_doppler_site
+assert "the wrapper holds exactly one doppler invocation site (through the validated DOPPLER_RESOLVED path) and two read call forms" one_doppler_site
 
 # ═══ the census (Guard 5 / task 2.3) ════════════════════════════════════════════════════════════
 # A LITERAL-STRING SCAN, NOT PROOF that nothing else feeds the gate: it flags the spellings it knows. No
@@ -523,6 +624,22 @@ mutate "row 6a: the PATH is not pinned for the Doppler call" 's/env -i PATH="\$P
 mutate "row 7: a get failure after a positive membership test is read as absent" 's/if \[\[ "\$get_rc" -ne 0 \]\]; then src_fail "get_rc_\${get_rc}"; fi # seam:get-fail/if false; then :; fi # seam:get-fail/' scn_get_fail
 mutate "row 8: the shape check is dropped" 's/^  if \[\[ -z "\$value" || ! "\$value" =~ \$ISO_RE \]\]; then # seam:shape/  if false; then # seam:shape/' scn_shape
 mutate "row 9: the token requirement is dropped" 's/^\[\[ -n "\${DOPPLER_TOKEN-}" \]\] || src_fail "no_token" # seam:token-required/: # seam:token-required/' scn_token
+mutate "row 13a: the exact-path check is dropped (a wrong path is accepted)" '/# seam:dbin-exact$/d' scn_dbin_wrongpath
+mutate "row 13b: the exact-path check is dropped (a RUNNER_TEMP mismatch is accepted)" '/# seam:dbin-exact$/d' scn_dbin_rt_mismatch
+mutate "row 13c: the '..'-free RUNNER_TEMP check is dropped" 's| \&\& "\$rt/" != \*"/../"\*||' scn_dbin_dotdot
+mutate "row 14a: the not-a-symlink check on the binary is dropped" 's| \&\& ! -L "\$p"||' scn_dbin_symlink
+if dbin_owner_constructible; then
+  mutate "row 14b: the owned-by-euid check on the binary is dropped" 's| \&\& -O "\$p"||' scn_dbin_foreign_owner
+else
+  cases=$((cases + 1)); ok "row 14b: SKIPPED (counted) - not root, a file owned by another uid cannot be constructed; the -O check is exercised only when this suite runs as root"
+fi
+mutate "row 14c: the executable check on the binary is dropped" 's| \&\& -x "\$p"||' scn_dbin_notexec
+mutate "row 14d: the not-a-symlink check on the directory is dropped" 's| \&\& ! -L "\$dir"||' scn_dbin_dir_symlink
+mutate "row 14e: the directory group/world-writable check is dropped" '/# seam:dbin-dirmode$/d' scn_dbin_dir_writable
+mutate "row 14f: the regular-file check on the binary is dropped" 's|\[\[ -f "\$p" \&\& |[[ |' scn_dbin_notfile
+mutate "row 15: an invalid DOPPLER_BIN falls back silently to the pinned PATH" 's|then src_fail "bad_doppler_bin"; fi # seam:dbin-reject|then _dbin=""; fi # seam:dbin-reject|' scn_dbin_wrongpath
+mutate "row 16: doppler_ro ignores the validated absolute path" 's|"\${DOPPLER_RESOLVED:-doppler}" "\$@"|doppler "$@"|' scn_dbin_pass
+mutate "row 5g: DOPPLER_BIN is allowlisted and no longer unset (it reaches the gate)" 's|^  SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION$|  DOPPLER_BIN SOLEUR_WEB2_SERVING_WEIGHT SOLEUR_SERVING_ROTATION|; /# seam:unset-dbin$/d' scn_survivors
 
 # row 3 as a mutation of the census input: a second invoker planted next to the real files turns it RED
 cases=$((cases + 1))
@@ -542,7 +659,7 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=75
+CASES_FLOOR=99
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1
