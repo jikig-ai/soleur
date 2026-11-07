@@ -1208,11 +1208,19 @@ if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   else fail "T1 tripwire: tracked composite action(s) outside .github/actions are NOT scanned: $(printf '%s' "$stray" | tr '\n' ' ')"; fi
   # T1 control: the tripwire must see a stray file in a throwaway repo, and ignore .github/actions.
   TRIP="$WORK/triprepo"; assert_fixture_dir "$TRIP"; mkdir -p "$TRIP" || exit 2
-  git -C "$TRIP" init -q || exit 2
-  put "$TRIP" .github/actions/a/action.yml </dev/null
-  put "$TRIP" pkg/action.yml </dev/null
-  put "$TRIP" x/Action.YAML </dev/null
-  git -C "$TRIP" add -A >/dev/null 2>&1 || exit 2
+  # The fixture WRITES (init, add), so it runs under the shared fixture git environment (identity,
+  # discovery ceiling, config hermeticity, tripwire). A subshell keeps that environment off the
+  # real-tree rows above and below; the source arms the #7833 tripwire only for this block.
+  (
+    # shellcheck source=../../../plugins/soleur/test/lib/git-fixture-env.sh
+    source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh" || exit 2
+    git_fixture_env "$TRIP" || exit 2
+    git -C "$TRIP" init -q || exit 2
+    put "$TRIP" .github/actions/a/action.yml </dev/null
+    put "$TRIP" pkg/action.yml </dev/null
+    put "$TRIP" x/Action.YAML </dev/null
+    git -C "$TRIP" add -A >/dev/null 2>&1 || exit 2
+  ) || exit 2
   stray="$(stray_actions "$TRIP")"
   if [[ "$stray" == *"pkg/action.yml"* && "$stray" == *"x/Action.YAML"* && "$stray" != *".github/actions/a"* ]]; then
     pass "T1c tripwire control: flags stray pkg/action.yml and x/Action.YAML (any case), ignores .github/actions"
