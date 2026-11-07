@@ -419,6 +419,25 @@ else
 fi
 unset _p_src _p_drv _p_src_n _p_drv_n
 
+# ── job wiring (structural-enumeration P1, #12329): the required context's producer ──
+# coverage on pull_request was asserted only by comments. Pin the ci.yml job block's `if:`
+# shape (the positive pull_request || merge_group form), the absence of needs: and
+# job-level continue-on-error, and the checks:read scope the merge_group arm requires.
+_wf="$(awk '/^  oracle-review-required:/{f=1;next} f&&/^  [a-zA-Z0-9_-]+:/{f=0} f' "$REPO_ROOT/.github/workflows/ci.yml")"
+[ -n "$_wf" ] || { echo "[FATAL] oracle-review-required job block not extractable from ci.yml" >&2; exit 2; }
+_chk_wf() { chk "$1" bash -c "grep -qF \"\$2\" <<<\"$_wf\"" _ "$2"; }
+chk "job wiring: if: is the positive pull_request || merge_group form (PR coverage producer)" \
+  bash -c "grep -qE \"if: github.event_name == 'pull_request' \\\\|\\\\| github.event_name == 'merge_group'\" <<<\"$_wf\""
+chk "job wiring: no needs: edge (a required context waits on nothing)" \
+  bash -c "! grep -qE '^\\s+needs:' <<<\"$_wf\""
+chk "job wiring: no job-level continue-on-error (a required job that cannot red the run is decorative)" \
+  bash -c "! grep -qE '^\\s+continue-on-error:' <<<\"$_wf\""
+chk "job wiring: checks: read granted (the merge_group arm reads member check-runs — P1 #12329)" \
+  bash -c "grep -qE '^\\s+checks: read' <<<\"$_wf\""
+chk "job wiring: timeout-minutes present (a hung gate must not hold the runner)" \
+  bash -c "grep -qE '^\\s+timeout-minutes:' <<<\"$_wf\""
+unset _wf _chk_wf
+
 # ── verdict accounting ───────────────────────────────────────────────────────
 printf '\n%d passed, %d failed\n' "$passes" "$fails"
 if [ "$fails" -gt 0 ]; then
