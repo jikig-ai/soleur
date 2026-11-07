@@ -1,30 +1,40 @@
-# Tasks: founder-acceptance-record text draft (#12197, HOLD)
+# Tasks: sign off the founder-acceptance-record text (plan 2026-11-07-feat-founder-acceptance-record-text-draft-signoff-plan.md)
 
-Plan: `knowledge-base/project/plans/2026-11-07-feat-founder-acceptance-record-text-draft-plan.md`
+Supersedes the draft-phase task list (all done). The CLO agent's ruling stands in for counsel on the operator's instruction of 2026-11-07; human-lawyer review stays owed.
 
-DRAFT, HOLD: the PR (#12342) stays draft. Never `gh pr ready`, never merge, never enqueue, never touch the `approval-queue` flag, never record a decision. Read the prd flag state only if asked, and only read-only.
+## Phase 0: setup
+- 0.1 Confirm cwd and branch; `git fetch`; text still absent from `origin/main`; PR #12342 still DRAFT; `ci.yml` has `workflow_dispatch`.
 
-## Phase 1: Setup
+## Phase 1: RED first
+- 1.1 Write `registry-pins.test.ts`, the always-on unfinished-marker check, the retention single-source test, the `legal_reauth_event` column pin, the kind-copy tests; run only the node-only files once (`--no-file-parallelism --maxWorkers=1`) and cite the RED output.
 
-- 1.1 Confirm the worktree and branch (`pwd`, `git branch --show-current`) and that PR #12342 is still a draft.
-- 1.2 Re-read `apps/web-platform/server/legal-acceptance/texts/README.md` and `canonical.ts`; confirm nothing changed since the plan. If counsel has edited the committed text since the plan, take the file as it is and recompute the hash (the `.proposed.md` copy was deleted at review).
+## Phase 2: text and notices
+- 2.1 Apply edits A1 to A8 to `founder-acceptance-record.md` by exact OLD/NEW (each OLD once before, each NEW once after); version stays `2026-11-07`.
+- 2.2 Edit `cardNotice` and `requestChangesNotice` in `legal-acceptance-copy.ts` and sections (c), (c-2) (and (b)) of the DSAR note in the same commit.
+- 2.3 `sha256sum` the final bytes; check LF-only printable ASCII; markdownlint on the committed path.
 
-## Phase 2: Core Implementation (RED first)
+## Phase 3: deck, consumers, label (#12344)
+- 3.1 Add `LEGAL_TEXT_KINDS`, `LEGAL_KIND_COPY`, `LEGAL_TEXT_KIND`, `legalTextKind`, `legalKindCopy`, `legalIndexState`, `legalDisplayLabel` to the leaf; move the 16 members; `exactTextHeading` and `dialog.codeBody` new strings; `signOff.clo`; header comment.
+- 3.2 Card: null render for an undeclared key, `label` prop, `answerDetail` to the dialog. Dialog: required `answerDetail` prop. `[key]` page: 404 plus Sentry mirror. Index: filter plus Sentry plus `legalIndexState`.
 
-- 2.1 Write `apps/web-platform/test/legal-acceptance/founder-acceptance-record.test.ts`: `auditDir(dir)` raw-byte loop (no 0x0D, nothing above 0x7F, no BOM, at least one key) with a temp-dir negative control; shared `FORBIDDEN` regex with a planted-string control; the body's single `up to (\d+) characters` equals `REQUEST_CHANGES_MAX`; loader version matches `^\d{4}-\d{2}-\d{2}$` and `validUntil` is null; `it.skipIf(!process.env.CI)` merge guard (no `\[[^\]\n]*\]` token in the body). Run it and cite the RED output (the text does not exist yet).
-- 2.2 Extend `apps/web-platform/test/legal-acceptance/cross-layer-limits.test.ts`: extract both note-limit literals from migration 184 (the `requested_edit` CHECK and the RPC `char_length(p_requested_edit) > 1000` guard) using the file's existing comment-stripping helpers; each equals `REQUEST_CHANGES_MAX`; an empty extraction fails.
-- 2.3 Copy the proposal byte for byte: `cp knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/founder-acceptance-record.proposed.md apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`, then `cmp` (exit 0). Do not run any formatter or `--fix` on it. (Done; the `.proposed.md` was later deleted at review so there is one authority.)
-- 2.4 Rename the stale `canonical.test.ts` title only; refresh the `routes.test.ts` comment and the `server/legal-acceptance/README.md` sentence.
+## Phase 4: tests
+- 4.1 Delete the merge guard describe, its real-data control, the retention-clause test, the CI-visible test, the registry tripwire.
+- 4.2 `legal-copy.test.ts`: both variants walked, ban regex, identity, null cases, signOff pins, notices byte for byte without placeholder.
+- 4.3 `card.test.tsx`, `page.test.tsx`: `declared` mock for `customer-terms`/`other-terms`; new `card-ack.test.tsx`, `card-kind.test.tsx`.
+- 4.4 Run mutation rows (node-side once each; jsdom one file at a time, single worker) and cite.
 
-## Phase 3: Verification
+## Phase 5: records
+- 5.1 Persist the CLO ruling as `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`.
+- 5.2 Addenda with superseded markers: attestation (block stays blank), counsel-review-12011 pointer, LIA, PA-40 and item 17, compliance-posture row, ADR-319 dated amendment. Read all three `.c4` files before concluding "no C4 impact".
+- 5.3 `texts/README.md` (pin rule), `server/legal-acceptance/README.md`, `test/feature-map.md`.
+- 5.4 File tracking issues: published trio as flag precondition (S5); terms "updated" wording and base-SHA pin guard (S6); restate #12080 trigger.
 
-- 3.1 `sha256sum` the committed file; compare with `loadLegalTexts()` `textHash`; note the value for the PR body.
-- 3.2 `LC_ALL=C grep -c -P '[^\x00-\x7F]'` and `grep -c $'\r'` on the committed file print 0; `git check-attr eol` reports `lf`.
-- 3.3 markdownlint with the repo config on the committed path and on the README; rc=0.
-- 3.4 Run vitest scoped to `apps/web-platform/test/legal-acceptance/`; then run the new file once with `CI=1` and cite the RED merge-guard output. Cite all outputs in the PR body.
-- 3.5 After committing, re-run `cmp` (no hook rewrote the file) and check `git diff --stat` shows only the files in the plan.
+## Phase 6: holds and PR
+- 6.1 Rewrite the old plan's `## Operator Holds` and `## HOLD procedure`; append rows to `decision-challenges.md`.
+- 6.2 Rewrite PR #12342 title and body (stand-in statement, 8 residual risks, new sha256, conditional `Closes #12344`, pre-flag count check).
 
-## Phase 4: PR (draft, HOLD)
-
-- 4.1 Push; keep PR #12342 DRAFT. Retitle it away from `WIP:` (for example `feat(legal-acceptance): DRAFT founder-acceptance-record text, HOLD for counsel`); the body leads with a HOLD banner, `Ref #12197`, `Ref #12011` (no `Closes`/`Fixes`/`Resolves`), the counsel items list (see plan AC8), #12344 as a merge precondition, the rulings, local test output, hash, and that the `test` aggregator is red by design on drafts (`CI_DRAFT_LIGHT=on`).
-- 4.2 List the light-set checks with `gh pr checks` and confirm green; report any pre-existing failure with evidence. Do not mark ready, do not merge, do not enqueue, do not run ship's merge phase.
+## Phase 7: CI then ready (no local full runs)
+- 7.1 `git merge origin/main`; commit; push; head SHA fixed.
+- 7.2 `gh workflow run ci.yml --ref <branch>`; arm a Monitor watch; confirm headSha; require success incl. `test-webplat` shards not skipped.
+- 7.3 `gh pr ready 12342` per ready-run-wait; watch to `full-decided`.
+- 7.4 Stop. Never merge, never enqueue, flag untouched.
