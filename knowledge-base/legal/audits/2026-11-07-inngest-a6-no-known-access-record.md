@@ -10,11 +10,12 @@ brand_survival_threshold: single-user incident
 
 # A6 "no known access" record — Hetzner project holding the Inngest sole-copy volume
 
-owner sentence relayed 2026-11-07 on #10136 (S6-A6-RELAYED); CLO attestation pending
+owner sentence relayed 2026-11-07T17:31Z on #10136 (S6-A6-RELAYED, own words, Agent-drafted text: no); CLO attestation pending after the 2026-11-07T13:31Z relay was refused for a disclosed drafted flag
 
 > **SIGNED BY RELAY, NOT YET ATTESTED.** The owner's sentence was relayed on #10136 at
-> 2026-11-07T13:31:17Z under the 2026-11-02 signing route (`S6-A6-RELAYED`, honest provenance: agent
-> drafted the example, the owner replied with it as quoted, not typed by the owner into the thread).
+> 2026-11-07T17:31:48Z under the 2026-11-02 signing route (`S6-A6-RELAYED`, `Agent-drafted text: no`,
+> not typed by the owner into the thread; this second relay supersedes a 13:31Z relay whose disclosed
+> drafted flag the CLO refused — see "Owner's own sentence").
 > It is a record only once `soleur:legal:clo` attests it separately. No agent signs it or sends it.
 > The file name carries the UTC date of signing. Counts and roles only: no names, no email addresses,
 > no token values.
@@ -73,24 +74,26 @@ Read on 2026-10-29 through the owner's own signed-in browser session; the figure
 | Prerequisite | State (cells updated 2026-11-06) | Owner fills in |
 |---|---|---|
 | A5 complete | recorded complete on #10136 (updated 2026-11-06): `S5-A5-DONE` 2026-11-02T14:28:00Z (agent-posted at owner delegation) and `S5-A5-RELAYED` 2026-11-02T21:51:04Z (owner's words). It covers the dedicated Inngest key pair only; the other exposed keys are still rotating, see `knowledge-base/legal/audits/2026-11-02-a6-no-known-access-record-inngest-keys.md` and the CLO re-assessment due 2026-11-08 | owner re-checks A5 at signing |
-| Measured re-read from the deployed #10405 emit | PR #10405 merged 2026-10-19; the 2026-11-02 keys record holds a tls-health re-read (`nft_rules=7`, `legacy_8288_packets=0`) that is available as evidence (updated 2026-11-06) | owner links one or marks "n/a" |
+| Measured re-read from the deployed #10405 emit | PR #10405 merged 2026-10-19; the 2026-11-02 keys record holds a tls-health re-read (`nft_rules=7`, `legacy_8288_packets=0`) that is available as evidence (updated 2026-11-06) | n/a (owner, in session 2026-11-07) |
 | Hetzner support answer on delete protection versus project delete and account closure | received 2026-11-02: a paraphrase of the support reply is in #9927 comment 6577564178 (updated 2026-11-06); a support reply, not a contract term | owner links the answer |
 
 Superseded 2026-11-06: the three cells above read as follows on 2026-10-31, kept as history. A5: "no, as of 2026-10-31: `S5-A5-DONE` is not on #10136, and the #11218 sweeper reports NOT YET because #11215 is open; the earliest 48-hour point of the new-link soak (#11215, window opened 2026-10-30T15:15:48Z) is 2026-11-01T15:15:48Z". Measured re-read: "PR #10405 merged 2026-10-19; no comment on #9927 or #10136 records a read of the deployed ruleset". Hetzner answer: "question reported sent on #9927 at 2026-10-29 17:28 UTC; no answer on #9927 as of 2026-10-31: pending".
 
 ## Owner's own sentence
 
-Posted by Devin (agent) at 2026-11-07T13:31:17Z on the owner's instruction given in session at 2026-11-07T13:30:00Z. Owner's words, verbatim:
+Posted by Devin (agent) at 2026-11-07T17:31:48Z on the owner's instruction given in session at 2026-11-07T17:31:00Z. Owner's words, verbatim:
 
-> I am not aware of any person or system outside the sanctioned paths that holds usable access to the Inngest host's LUKS key material
+> I'm not aware of any external access to the Inngest host's LUKS key material
 
-Agent-drafted text: yes (the sentence was proposed by the agent as an example; the owner replied with it as quoted). Not typed by the owner into this thread. Relayed on #10136 as `S6-A6-RELAYED`: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6707582642>.
+Agent-drafted text: no (the sentence is the owner's own composition in session; no agent proposed or supplied it). Not typed by the owner into this thread. Relayed on #10136 as `S6-A6-RELAYED`: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6710705414>.
+
+Superseded 2026-11-07: an earlier relay (comment 6707582642, 13:31:17Z) carried a sentence the agent had proposed as an example (`Agent-drafted text: yes`), which failed resubmission condition 1 (`Agent-drafted text: no`); the CLO refused attestation on #10382 (comment 6709536378). The owner then composed the sentence above in their own words. The earlier block is kept as history.
 
 An agent-written evidence-framing block stood here from 2026-10-30 until 2026-11-06. It was removed because an agent never drafts the owner's knowledge sentence. It is recoverable from git history (commit b959fe4b84).
 
 ## Signature block
 
-- Signed by the owner (human, not an agent) through the 2026-11-02 agent-relay route, by the `S6-A6-RELAYED` comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6707582642>   UTC date and time: 2026-11-07T13:31:17Z
+- Signed by the owner (human, not an agent) through the 2026-11-02 agent-relay route, by the `S6-A6-RELAYED` comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6710705414>   UTC date and time: 2026-11-07T17:31:48Z
 - Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the owner's own sentence and the claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
 
 Superseded 2026-11-06: the two lines above used to refer to a "statement above"; that block was removed. They now point at the owner's own sentence field, which stays empty until the owner gives it in their own words.
