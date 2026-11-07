@@ -448,4 +448,14 @@ describe("the requester line (#9601)", () => {
     expect(at).toBeGreaterThan(-1);
     expect(sql.slice(at, at + 400)).toContain("is_workspace_owner(workspace_id, auth.uid())");
   });
+
+  it("migration 180 is the ONLY migration that defines approval_request_owner_select (a later redefinition would silently move the Owner gate)", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = join(__dirname, "../../supabase/migrations");
+    const defining = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => /\b(CREATE|ALTER)\s+POLICY\s+"?approval_request_owner_select\b/i.test(readFileSync(join(dir, f), "utf8")));
+    expect(defining).toEqual(["180_approval_request.sql"]);
+  });
 });
