@@ -2074,10 +2074,13 @@ AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
 )
 
 # scripts/ci-oracle-review (#10859, PR3b) — the suite executes the driver scripts/ci-oracle-review.sh under
-# PATH stubs and reads scripts/merge-queue-cla-verify.sh for the enumeration parity pin. Naming-only paths
+# PATH stubs, reads scripts/merge-queue-cla-verify.sh for the enumeration parity pin, and reads
+# .github/workflows/ci.yml for the job-wiring pins (the awk extraction of the oracle-review-required job
+# block the review fix round added at scripts/ci-oracle-review.test.sh:426). Naming-only paths
 # (scripts/ci-pr-affected-replay.py — a fixture's RATCHET_ORACLE text and the stub-git dispatch glob) carry
 # accept rows; the suite never opens them.
 AFFECTED_SCRIPTS_CI_ORACLE_REVIEW_PATHS=(
+  ".github/workflows/ci.yml"
   "scripts/ci-oracle-review.sh"
   "scripts/ci-oracle-review.test.sh"
   "scripts/merge-queue-cla-verify.sh"
