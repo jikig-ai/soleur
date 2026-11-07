@@ -52,10 +52,10 @@ permissions:
   # verdict) through `gh api`; under the explicit-permissions rule (#8450) an unlisted scope is `none` and 403s.
   # Retire this line with the probe.
   checks: read
-  # (#10865) the observation-window probe reads the `s4-drain` label list through the mixed issues endpoint, which GitHub
-  # filters to issues when the token has no pull-requests scope; without this line the restart floor silently stays at the
-  # PR3a merge (both 2026-11-01 outputs printed floor=pr3a). Read only; the token reaches only probes declaring secrets=GH_TOKEN, and every such probe now holds this scope.
-  # Retire this line with the probe.
+  # Surviving probes need this scope: ci-push-dedupe-soak-9512.sh reads the mixed issues endpoint (which GitHub filters to
+  # issues when the token has no pull-requests scope), and ci-draft-light-soak-9728.sh, pr-battery-gate-saving-9323.sh,
+  # cron-machinery-soak-9272.sh, git-data-boot-poll-8178.sh and inngest-cli-apply-window-7463.sh read /pulls. Read only;
+  # the token reaches only probes declaring secrets=GH_TOKEN, and every such probe now holds this scope.
   pull-requests: read
 
 jobs:
