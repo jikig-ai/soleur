@@ -2,6 +2,18 @@
 Description=Web-host private-NIC self-report (detect+emit+alarm, NO reboot; #6438 §3)
 After=network-online.target
 Wants=network-online.target
+# SKIP-VS-FAIL (#10078, the #9962/#9939 pattern): /etc/default/web-private-nic-guard
+# is written by web-probe-envwrite.sh, a `|| true`-tolerated late-runcmd write, and
+# the 5min timer is armed unconditionally — an absent file must SKIP this start
+# (one "skipped, unmet condition check" notice per fire), never FAIL it into an
+# every-5min journal storm. The EnvironmentFile= line stays unprefixed: once a
+# start IS attempted, an absent file still fails the unit — the fail-closed
+# contract is retained. The condition re-evaluates on every timer fire, so the
+# guard self-heals when the file appears. The detectors that do NOT share this
+# gated dependency: the `soleur-boot-emit web_probe_envwrite fatal` boot row on a
+# writer failure, and the missing betteruptime_heartbeat.web_nic_guard beat — a
+# skipped report pings nothing.
+ConditionPathExists=/etc/default/web-private-nic-guard
 
 [Service]
 Type=oneshot

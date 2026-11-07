@@ -191,7 +191,10 @@
     "does_not_defend": "a leaked credential; an app-layer read on the unlocked dedicated host; exfiltration through a compromised redis or inngest process; and a dead probe pipeline, which the wrong-volume alert reads as healthy under on_missing_data = treat_as_zero (D1, #8516). ALSO, and this is the one a reader must not miss: this volume is now the ONLY copy of the Inngest store, and the Doppler key INNGEST_REDIS_LUKS_KEY is the only copy of the passphrase the host reads; an independent second copy of the passphrase exists in Terraform state (the R2 backend, with no versioning), so losing the volume is data loss with no second copy, and losing both passphrase copies is the same. Hetzner delete protection on the volume and prevent_destroy on the volume, the passphrase pair and the two Doppler cascade parents were declared in Terraform by #9879 (ADR-282) and merged in PR #9925 (2026-10-11); the Hetzner delete-protection flag was read back as `protected` on 2026-10-15 (point-in-time; `prevent_destroy` is a plan-time control and is not read back); they defend against mistaken deletes, NOT against a holder of the read/write Hetzner token (which can lift protection), or the three writers of the Doppler copy (the inngest cutover arm token, the workplace Doppler token DOPPLER_TOKEN_TF and the host boot token inngest-boot), and neither the ciphertext nor the LUKS header has a backup (no escrow copy exists by decision, ADR-142). The plaintext copy that once sat beside it, hcloud_volume.inngest_redis, was destroyed on 2026-10-09 (Hetzner GET /v1/volumes/106261946 answered 404 at 16:21:26Z; destroy run 37958051426); that erasure is logical, guest-side and self-attested, not physical",
     "disclosed_as": "not-publicly-claimed",
     "live_verification": "unavailable:the hourly SOLEUR_INNGEST_SERVER_PROBE row proves WHICH device backs /mnt/data (data_mount_devid), not that it is crypto_LUKS; the cipher half is the statically-resolved apparatus check_luks_row verifies. Flip to available in the commit that records a probe row carrying an explicit LUKS-type field, the way hcloud_volume.registry's store_luks field earned it (#8423). Until then nothing cross-reads this row's claim daily: the daily probe that did was retired on 2026-10-12 (#9703 Stage 3b), probe-pipeline silence is now covered by betteruptime_heartbeat.inngest_server_probe, and the paging detector is the wrong-volume alert (it keys on data_mount_devid only, so the dm-crypt mapper path of the mount is not automatically checked)."
-   }
+   },
+   "records": [
+    "knowledge-base/legal/article-30-register.md — Processing Activity 14 (per-tenant scope grants and audit viewer), [2026-11-05 AMENDMENT (#8624)]: this store is a store of PA-14's activity"
+   ]
   },
   {
    "store": "hcloud_volume.registry",
@@ -249,29 +252,6 @@
     "does_not_defend": "anything readable while the rehearsal host is up and the mapper is open; and the passphrase in the rehearsal root's terraform.tfstate (distinct R2 key, so it is not prod material)",
     "disclosed_as": "not-publicly-claimed",
     "live_verification": "unavailable:observed point-in-time only — the rung-2 rehearsal (run 34768256297, 2026-09-13) and the production host carrying the SIBLING store hcloud_volume.git_data_luks (born by run 34836141887, re-birthed by git-data-host-replace run 34861860722 after the first host died in cloud-init; 2026-09-14) each emitted stage:boot_complete with luks_mounted=yes (a findmnt device-binding claim since #7204); no STANDING probe exists for this volume, which the rehearsal workflow tears down every run, so Layer B has nothing to reconcile. The earlier reason (no rehearsal has ever been dispatched) was falsified 2026-09-13. tracked #6897"
-   }
-  },
-  {
-   "store": "hcloud_volume.rehearsal_inngest",
-   "kind": "guest-luks-volume",
-   "device_binding": {
-    "volume": "hcloud_volume.rehearsal_inngest",
-    "attachment": "hcloud_volume_attachment.rehearsal_inngest",
-    "mapper": "inngest-redis-plain"
-   },
-   "at_rest": {
-    "mechanism": "plaintext-exception",
-    "evidence": "apps/web-platform/infra/inngest-provision-rehearsal/rehearsal.tf, resource \"hcloud_volume\" \"rehearsal_inngest\" (RAW — no format attribute, no LUKS apparatus) — UNUSED since #9786: the rendered template no longer takes this volume's id, so the volume is attached and never read; it formerly mirrored the retired plaintext AOF volume of the production boot the #8539 forced-race rehearsal reproduces. Kept pending #10112 (removal changes the rehearsal's attach topology and plan-shape fixtures)",
-    "defends_against": "nothing at the volume layer",
-    "does_not_defend": "at-rest recovery of the detached device — acceptable here only because the volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown",
-    "disclosed_as": "not-publicly-claimed",
-    "live_verification": "unavailable:n/a by construction — NO user data ever reaches a rehearsal host. The volume is created empty for one boot and destroyed empty by the workflow's if:always() teardown, with a post-teardown Hetzner API assertion that no soleur-inngest-rehearsal-* object survives (#9175).",
-    "exception": {
-     "justification": "UNUSED LEFTOVER since #9786: it mirrored the prod plaintext member, which was destroyed in #8285, and the template no longer takes this volume's id, so it is attached to the rehearsal host and never read, mounted or formatted (the mapper name below is historical). It holds no data and is created empty and destroyed empty with the rehearsal. Removal is tracked in #10112 and changes the rehearsal's attach topology and plan-shape fixtures, so it is not done in the parked strip.",
-     "tracking_issue": "#8285",
-     "reevaluate_when": "the #9175 rehearsal completes and the volumes are destroyed — the resource is transient by construction; also reevaluate when #10112 removes this unused volume (nothing in the template reads it any more)",
-     "expires_on": "2026-12-31"
-    }
    }
   },
   {
@@ -372,7 +352,10 @@
     "does_not_defend": "a leaked credential or an application-layer read",
     "disclosed_as": "not-publicly-claimed",
     "live_verification": "unavailable:named SOC 2 attestation formalization pending; tracked #6911"
-   }
+   },
+   "records": [
+    "knowledge-base/legal/article-30-register.md — Processing Activity 14 (per-tenant scope grants and audit viewer), [2026-11-05 AMENDMENT (#8624)]: this store is a store of PA-14's activity"
+   ]
   },
   {
    "store": "supabase.prd",
@@ -443,10 +426,10 @@
     "does_not_defend": "a passive on-net attacker could read pulled image bytes AND the zot pull credential (HTTP Basic on every login/pull; read-only per cloud-init-registry.yml accessControl actions [read]; the same random_password.zot_pull the inngest host bakes, and since #8651 also baked into every fresh web host's user_data); integrity (not confidentiality) comes from the @sha256 digest pin (docker verifies content against it) on every pull, plus the cosign signature check on the deploy path only; a fresh web boot runs no signature check, which is why it sends ONLY @sha256-pinned refs to zot",
     "disclosed_as": "not-publicly-claimed",
     "exception": {
-     "justification": "private-network-only registry link; integrity comes from @sha256 digest pinning (plus cosign verification on the deploy path), not TLS; the image bytes are NOT public (the GHCR package is private), so confidentiality on this link rests on the private network alone. Compensating control, as recorded for this link and not re-measured 2026-10-12: it is carried on the Hetzner private network (the separate CI path through the CF Tunnel has its own row); the nftables peer restrictions on the registry were not re-read for this renewal. Renewed to 2026-11-12 pending the CLO ruling due 2026-10-24. The published unqualified TLS sentence (privacy-policy.md / data-protection-disclosure.md, 2026-09-28) is referred to the 2026-10-24 CLO ruling and disclosed_as stays not-publicly-claimed pending it (#10136).",
+     "justification": "RULED WRITTEN DECISION, 2026-11-05 (#10136): private-network plaintext on this link is ACCEPTED, not pending a ruling. The CTO agent ruling of 2026-11-05, recorded in the ci-hygiene-batch spec's decision-challenges.md: the ruled-acceptance path over a zot-TLS build - TLS-terminating zot on the private NIC is a multi-week arc wholly disproportionate to a link whose only exposure is a passive on-net attacker on a 5-server private segment already carrying @sha256 digest-pinned pulls and a read-only credential. The owner-dated half is the accepted-risk record mechanism the A7 precedent established: the 2026-10-18 owner instructed record on #10136 (comment 6251081172, posted at the owner's in-session instruction \"sign the accepted-risk\") accepted this link until 2027-01-31 (inside the CLO maximum of 2027-04-24) conditional on compensating controls then unmeasured; all three conditions are now discharged - (i) the registry carries NO nftables rule (cloud-init-registry.yml; Hetzner firewalls filter only the public interface), so the control is network membership of the five Terraform-defined hosts, per the 2026-10-18 CTO correction recorded on the issue, and this row now says so; (ii) the read-only Hetzner enumeration measured 2026-11-02 for the A7 record read 5 servers, all Jikigai's, on 10.0.1.0/24; (iii) this reword. The record is re-posted on #10136 as comment 6645392554 for owner confirmation (the A7 mechanism). Record: knowledge-base/legal/audits/2026-11-05-zot-private-network-accepted-risk-10136.md. Integrity on the link (not confidentiality) comes from the @sha256 digest pin on every pull plus the cosign signature check on the deploy path; a fresh web boot sends only @sha256-pinned refs.",
      "tracking_issue": "#10136",
-     "reevaluate_when": "the registry is exposed beyond the private network, a new tenant joins 10.0.1.0/24, or TLS is added to the link",
-     "expires_on": "2026-11-12"
+     "reevaluate_when": "a server beyond the five attached to 10.0.1.0/24 joins the network, a new tenant joins 10.0.1.0/24, the registry is exposed publicly or across networks (the acceptance's own void triggers), or the link gains TLS",
+     "expires_on": "2027-01-31"
     }
    }
   },
@@ -479,25 +462,35 @@
     "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read image bytes on the final leg; integrity comes from cosign digest-pinning, not TLS. Also does not defend a leaked CF Access service token or a leaked zot pull credential.",
     "disclosed_as": "not-publicly-claimed",
     "exception": {
-     "justification": "the same private-network-only exception already recorded for 'web hosts -> zot registry' - the final leg is plain HTTP inside the Hetzner private network; image bytes are our own OCI layers and integrity is cosign-digest-pinned. Folded in here rather than deferred because #7278 adds the fifth CI caller to this leg. Compensating control, as recorded for this link and not re-measured 2026-10-12: the runner-to-edge and edge-to-connector legs are TLS 1.2+ and only the final leg is plain HTTP on the private network; the nftables peer restrictions were not re-read for this renewal. Renewed to 2026-11-12 pending the CLO ruling due 2026-10-24. The published unqualified TLS sentence (privacy-policy.md / data-protection-disclosure.md, 2026-09-28) is referred to the 2026-10-24 CLO ruling and disclosed_as stays not-publicly-claimed pending it (#10136).",
+     "justification": "RULED WRITTEN DECISION, 2026-11-05 (#10136): private-network plaintext on the final leg (origin connector <-> 10.0.1.30:5000) is ACCEPTED under the same written decision as 'web hosts -> zot registry' - the runner-to-edge and edge-to-connector legs are TLS 1.2+ and only the final leg is plain HTTP on the Hetzner private network. The CTO agent ruling of 2026-11-05, recorded in the ci-hygiene-batch spec's decision-challenges.md: the ruled-acceptance path over a zot-TLS build - TLS-terminating zot on the private NIC is a multi-week arc wholly disproportionate to a link whose only exposure is a passive on-net attacker on a 5-server private segment already carrying @sha256 digest-pinned pulls and a read-only credential. The owner-dated half: the 2026-10-18 owner instructed record on #10136 (comment 6251081172) covered both zot links until 2027-01-31 (inside the CLO maximum of 2027-04-24) conditional on compensating controls then unmeasured, all now discharged - (i) the registry carries NO nftables rule, so the control is network membership of the five Terraform-defined hosts; (ii) the read-only Hetzner enumeration measured 2026-11-02 for the A7 record read 5 servers, all Jikigai's; (iii) this reword. Re-posted on #10136 as comment 6645392554 for owner confirmation (the A7 mechanism). Record: knowledge-base/legal/audits/2026-11-05-zot-private-network-accepted-risk-10136.md. #7278 adds the fifth CI caller to this leg; integrity is cosign-digest-pinned, not TLS.",
      "tracking_issue": "#10136",
-     "reevaluate_when": "the registry link gains TLS, a new tenant joins 10.0.1.0/24, or the store is exposed beyond the private network",
-     "expires_on": "2026-11-12"
+     "reevaluate_when": "a server beyond the five attached to 10.0.1.0/24 joins the network, a new tenant joins 10.0.1.0/24, the registry is exposed publicly or across networks (the acceptance's own void triggers), or the link gains TLS",
+     "expires_on": "2027-01-31"
     }
    }
   },
   {
-   "connection": "web-platform app (web hosts) <-> dedicated inngest host (10.0.1.40:8288, and its sdk_url call-back to 10.0.1.10:3000/api/inngest)",
-   "enforced_at": "apps/web-platform/infra/ci-deploy.sh / cloud-init.yml (-e INNGEST_BASE_URL=http://10.0.1.40:8288); apps/web-platform/infra/inngest-host.tf (sdk_url); apps/web-platform/infra/cron-egress-nftables.sh (10.0.1.40:8288 accept)",
+   "connection": "web-platform app (web hosts) -> dedicated inngest host (10.0.1.40:8443; leg 1 of the app<->scheduler channel, split from the single pre-flip row)",
+   "enforced_at": "apps/web-platform/infra/inngest-tls.tf (tls_private_key + tls_self_signed_cert, ECDSA P-256 CA:FALSE SAN IP:10.0.1.40, and the three Doppler copies INNGEST_TLS_KEY/INNGEST_TLS_CERT in soleur-inngest/prd and INNGEST_TLS_CA in soleur/prd); apps/web-platform/infra/cloud-init-inngest.yml (soleur-inngest-tls.service, the stunnel4 terminator accepting 10.0.1.40:8443 and connecting 127.0.0.1:8288); apps/web-platform/infra/ci-deploy.sh resolve_inngest_link (the single scheme chokepoint; validates and installs the CA at /mnt/data/inngest-link/inngest-ca.pem and fails closed on a bad CA or failed self-gate); the three docker run sites (read-only bind of /etc/soleur/inngest-ca.pem + NODE_EXTRA_CA_CERTS; NODE_TLS_REJECT_UNAUTHORIZED pinned absent); ADR-294",
    "in_transit": {
-    "tls": "none (plain HTTP on the Hetzner private network by design, ADR-100)",
+    "tls": "TLS 1.2+ via soleur-inngest-tls.service (stunnel4 terminator on the inngest host; Inngest v1.45.1 has no native TLS, ADR-294). Measured live since the 2026-10-26 flip: inngest-link-flip.yml run 40333905086 completed 2026-10-26T13:48:55Z green after the five-check canary (https URL in docker inspect, in-container fetch, a real in-container inngest.send, a CA-withheld negative control, a non-empty registry over https). Ongoing evidence: the host's tls-health phone-home rows every 5 minutes carry unit=, listener=, served_sha256 vs the Terraform cert_sha256, notafter_days, and the nft counters legacy_8288 / tls_8443 plus nft8443_sha256 of the :8443 accept chain.",
+    "cert_verification": "on",
+    "does_not_defend": "the app verifies the terminator against a single pinned CA file (the resolver rejects CA:TRUE, a second certificate, an expired or unparseable PEM, and fails the deploy rather than downgrade), so a passive on-net attacker can no longer read INNGEST_EVENT_KEY, the hashed signing key or event payloads on THIS leg — but: the legacy :8288 listener stays open and counted for the soak (physically closing it rides the next unrelated host replace); a NEW web host's first container starts on the http literal in cloud-init.yml until its first ci-deploy resolves the flag, so a born-after-flip host sends plaintext until that first deploy (ADR-294 consequence); a key sniffed before the flip stays valid (TLS does not invalidate INNGEST_EVENT_KEY; its rotation is tracked separately, #10540); and TLS does not defend a compromised endpoint on either side. The Inngest->app sdk_url poll is leg 2 and has its own row (plaintext, accepted-risk); the step-call leg through Cloudflare is the 'Cloudflare edge -> web hosts origin' row (#10479).",
+    "disclosed_as": "not-publicly-claimed"
+   }
+  },
+  {
+   "connection": "dedicated inngest host -> web-platform app sdk_url poll (10.0.1.10:3000/api/inngest; leg 2 of the app<->scheduler channel, split from the single pre-flip row)",
+   "enforced_at": "apps/web-platform/infra/inngest-host.tf (sdk_url); apps/web-platform/app/api/inngest/route.ts (the polled serve endpoint); the app's run-list reads (apps/web-platform/lib/inngest/list-runs.ts)",
+   "in_transit": {
+    "tls": "none (plain HTTP on the Hetzner private network, every 60 s)",
     "cert_verification": "off",
-    "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read INNGEST_EVENT_KEY (in the /e/<key> send path), the hashed signing key (Bearer signkey-prod-<sha256> on the app's run-list reads — true as of 2026-10-15; before that date apps/web-platform/lib/inngest/list-runs.ts sent the RAW key, and that exposure window plus the rotation question is recorded on #10136), and event payloads; step outputs' transport is not asserted on this link (step execution is attributed to the Cloudflare serve-URL step-call leg, #9139, which has its own row below: 'Cloudflare edge -> web hosts origin for app.soleur.ai', #10479); replaying a sniffed key additionally requires sending from a web host's private IP (the inngest host's nftables allows :8288 only from 10.0.1.10/10.0.1.11). Inngest->app requests carry only an HMAC.",
+    "does_not_defend": "a passive on-net attacker on 10.0.1.0/24 could read the poll's HMAC-signed request and the public function metadata it returns (no user content, no key material - #10538, measured by code read, not a wire capture); Inngest->app requests carry only an HMAC. The send path's key material moved to leg 1 (TLS) at the 2026-10-26 flip.",
     "disclosed_as": "not-publicly-claimed",
     "exception": {
-     "justification": "the same private-network-only plaintext exception recorded for the zot registry link: the app<->scheduler channel stays inside the Hetzner private network, both ends were recorded as nftables-restricted to the web hosts' private IPs, and the peers on 10.0.1.0/24 are our own hosts (git-data .20, registry .30). Transport confidentiality on this link is accepted, not provided; recorded when the #6178 2.4 app-repoint (#8191) moved the channel off the host loopback. Renewed to 2026-11-12 pending the CLO ruling due 2026-10-24; this hop carries event payloads (step outputs ride the Cloudflare serve-URL leg, #9139), so it remains a priority link to close. Not re-measured 2026-10-12: nftables peer restrictions. The published unqualified TLS sentence (privacy-policy.md / data-protection-disclosure.md, 2026-09-28) is referred to the 2026-10-24 CLO ruling and disclosed_as stays not-publicly-claimed pending it (#10136).",
-     "tracking_issue": "#10136",
-     "reevaluate_when": "the channel gains TLS, a non-Jikigai peer joins 10.0.1.0/24, a new tenant joins 10.0.1.0/24, or the inngest host is reachable beyond the private network",
+     "justification": "RULED ACCEPTED-RISK (A7), anchored to the record's verbatim dates and voids: accepted-risk record posted on #10136 (comment 6580646693, agent-posted 2026-11-02T15:11:51Z at the owner's in-session instruction, comment 6581495825; owner confirmation comment 6582099901, 2026-11-02T16:15:26Z; record file knowledge-base/legal/audits/2026-11-02-a7-leg2-accepted-risk-ledger-inngest-sdk-url-poll.md). Verbatim bound: \"Accepted until 2026-11-12 (CLO bridge date). Extension to 2026-12-10 only if the replacement is merged by 2026-11-12 and the replace-window go is dated. After 2026-12-10 the row lapses and is not accepted again.\" Voids: a server beyond the five attached to 10.0.1.0/24, or any public or cross-network exposure of the poll; also not accepted: any non-Jikigai peer on the network, and pointing --sdk-url at the public host while Cloudflare to origin is flexible (#10479). Compensating controls measured 2026-11-02: INNGEST_SIGNING_KEY and INNGEST_EVENT_KEY rotated (rotate run 41411331535, converge run 41461246883, converge_ok; event-key rejections 0 after 14:30Z); nftables re-read from the host via tls-health (nft_rules=7, nft8443_sha256 present, legacy_8288=0); read-only Hetzner enumeration: 5 servers, all Jikigai's.",
+     "tracking_issue": "#10538",
+     "reevaluate_when": "the replacement tracked as #10538 merges (a web-side TLS listener or removing the poll), a non-Jikigai peer or new tenant joins 10.0.1.0/24, or the poll is exposed publicly or across networks",
      "expires_on": "2026-11-12"
     }
    }

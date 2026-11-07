@@ -581,7 +581,7 @@ c4_assert "C.4-V4: web2_lb_weight is declared exactly once in the tree's .tf fil
 c4_assert "C.4-V5: cloudflare-lb.tf feeds web-2's origin weight from var.web2_lb_weight" \
   "$(grep -qE '^[[:space:]]*weight[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*$' "$SCRIPT_DIR/cloudflare-lb.tf" && echo 1 || echo 0)"
 c4_assert "C.4-V6: web-1's origin weight stays the literal 1 (no variable on the serving member)" \
-  "$(awk '/name[[:space:]]*=[[:space:]]*"web-1"/ {on=1} on && /weight/ {print; exit}' "$SCRIPT_DIR/cloudflare-lb.tf" | grep -qE 'weight[[:space:]]*=[[:space:]]*1[[:space:]]*$' && echo 1 || echo 0)"
+  "$(W1_LINE="$(awk '/name[[:space:]]*=[[:space:]]*"web-1"/ {on=1} on && /weight/ {print; found=1} found {exit}' "$SCRIPT_DIR/cloudflare-lb.tf")"; grep -qE 'weight[[:space:]]*=[[:space:]]*1[[:space:]]*$' <<<"$W1_LINE" && echo 1 || echo 0)"
 
 # --- F: the feeder census ---------------------------------------------------------------------
 # Every file in the live tree that names the variable, minus this test and the knowledge base.
@@ -601,7 +601,7 @@ step_of() { # $1 = ERE matched against the step's `- name:` line
   ' <<<"$JOB"
 }
 line_of() { # $1 = ERE on the `- name:` line -> line number inside $JOB (0 if absent)
-  local n; n="$(grep -nE "^      - name:.*($1)" <<<"$JOB" | head -1 | cut -d: -f1)"; echo "${n:-0}"
+  local n; n="$(grep -nE "^      - name:.*($1)" <<<"$JOB" | head -1 | cut -d: -f1 || true)"; echo "${n:-0}"
 }
 PIN_STEP="$(step_of 'Typo-guard' || true)"
 GATE_STEP="$(step_of '§\(c\) gate chain')"
@@ -685,8 +685,10 @@ c4_assert "C.4-G11b: …but WITHOUT requires_runtime_bind_probe=true (the serve 
 # The gate chain's A.1 shape check is VACUOUS for the real bind (it is fed a synthetic value), and the
 # pool-health read proves origin HEALTH, not that the relay listens on web-2's private address. This step
 # closes that: it reads web-2's OWN relay report from Better Stack (scripts/lib/web2-relay-rows.sh, the
-# credentials ride the environment, never argv) and refuses unless >= 2 rows in the last 180 s, newest <= 120 s,
-# every row proxy_state=listening on the address Terraform STATE holds for web-2, port 8443 (workspaces_populated is recorded, not judged: owner ruling 2026-11-06).
+# credentials ride the environment, never argv) and refuses unless BOTH hold: (1) >= 2 own-line rows in the last 180 s,
+# newest <= 120 s, every row proxy_state=listening addr=0.0.0.0 (the in-container wildcard the shipped design binds; docker
+# publishes the private IP) port 8443 (workspaces_populated is recorded, not judged: owner ruling 2026-11-06); (2) web-1's
+# newest relay_peer_probe row (last 24 h) for the address Terraform STATE holds for web-2 says result=ok.
 # R1-R8 pin the step's position and form; E1-E24 EXECUTE the step's own run body against stubbed `terraform` and
 # `curl` (the real helper and the real scripts/betterstack-query.sh in between), one refusal per fixture.
 PROBE_STEP="$(step_of 'relay bind probe \(serve only\)' || true)"
@@ -707,16 +709,18 @@ c4_assert "C.4-R4: no continue-on-error / '|| true' / 'set +e' in the probe step
   "$([[ -n "$PROBE_NC" && -z "$(grep -E 'continue-on-error|\|\|[[:space:]]*true|set[[:space:]]+\+e' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
 c4_assert "C.4-R4b: no 'secrets.' expression in the probe's run body (credentials arrive only through the env block)" \
   "$([[ -n "$PROBE_RUN_NC" && -z "$(grep -F 'secrets.' <<<"$PROBE_RUN_NC")" ]] && echo 1 || echo 0)"
-c4_assert "C.4-R5: the expected address is READ FROM STATE (terraform show -json, hcloud_server_network.web[\"web-2\"]) and handed to the judge as a variable" \
-  "$(grep -qF 'terraform show -json' <<<"$PROBE_RUN_NC" && grep -qF 'hcloud_server_network.web[\"web-2\"]' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_judge[[:space:]]+"[^"]+"[[:space:]]+"\$\{?[A-Z_0-9]+\}?"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+c4_assert "C.4-R5: the peer address is READ FROM STATE (terraform show -json, hcloud_server_network.web[\"web-2\"]) and handed to the peer fetch AND the peer judge as a variable" \
+  "$(grep -qF 'terraform show -json' <<<"$PROBE_RUN_NC" && grep -qF 'hcloud_server_network.web[\"web-2\"]' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge[[:space:]]+"[^"]+"[[:space:]]+"\$\{?[A-Z_0-9]+\}?"' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_fetch[[:space:]]+"[^"]+"[[:space:]]+"\$\{?[A-Z_0-9]+\}?"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
 c4_assert "C.4-R5b: no literal IPv4 address anywhere in the probe step" \
   "$([[ -n "$PROBE_NC" && -z "$(grep -E '(^|[^0-9.])[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}([^0-9.]|$)' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
 c4_assert "C.4-R6: the step never names SOLEUR_PROXY_BIND, never writes Doppler or GITHUB_ENV" \
   "$([[ -n "$PROBE_NC" && -z "$(grep -E 'SOLEUR_PROXY_BIND|doppler[[:space:]]+secrets|GITHUB_ENV' <<<"$PROBE_NC")" ]] && echo 1 || echo 0)"
 c4_assert "C.4-R7: the three BETTERSTACK_QUERY_* credentials ride the step env, each refused when empty, none on a command line" \
   "$([[ "$(grep -cE '^          BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD): \$\{\{ secrets\.BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD) \}\}$' <<<"$PROBE_STEP")" -eq 3 ]] && grep -qE 'for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD' <<<"$PROBE_RUN_NC" && grep -qE '\-z "\$\{!v:-\}"' <<<"$PROBE_RUN_NC" && [[ -z "$(grep -E 'BETTERSTACK_QUERY_(HOST|USERNAME|PASSWORD)[^ ]*[[:space:]]*(=|\))' <<<"$(grep -vE 'for v in|^[[:space:]]*(if|echo)' <<<"$PROBE_RUN_NC")")" ]] && echo 1 || echo 0)"
-c4_assert "C.4-R8: the step uses the shared helper (wrr_fetch, wrr_judge) and passes ONLY on a GREEN verdict" \
-  "$(grep -qF 'scripts/lib/web2-relay-rows.sh' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_fetch|[[:space:]]wrr_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_judge' <<<"$PROBE_RUN_NC" && grep -qE 'VERDICT.*!=.*GREEN' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+c4_assert "C.4-R8: the step uses the shared helper (wrr_fetch, wrr_judge, wrr_peer_fetch, wrr_peer_judge) and passes ONLY when BOTH verdicts are GREEN" \
+  "$(grep -qF 'scripts/lib/web2-relay-rows.sh' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_fetch|[[:space:]]wrr_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_judge' <<<"$PROBE_RUN_NC" && grep -qE '^wrr_peer_fetch|[[:space:]]wrr_peer_fetch ' <<<"$PROBE_RUN_NC" && grep -qE 'wrr_peer_judge' <<<"$PROBE_RUN_NC" && grep -qE '"\$VERDICT".*!=.*GREEN' <<<"$PROBE_RUN_NC" && grep -qE '"\$PEER_VERDICT".*!=.*GREEN' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
+c4_assert "C.4-R9: the step does NOT compare the app's addr to the private IP (the app binds the wildcard in its container): wrr_judge takes exactly one argument" \
+  "$(grep -qE 'wrr_judge[[:space:]]+"[^"]+"\)"' <<<"$PROBE_RUN_NC" && ! grep -qE 'wrr_judge[[:space:]]+"[^"]+"[[:space:]]+"' <<<"$PROBE_RUN_NC" && echo 1 || echo 0)"
 
 # --- E: execute the step's own run body, offline ------------------------------------------------------
 R_WORK="$(mktemp -d)"; trap 'rm -rf "$R_WORK"' EXIT
@@ -746,12 +750,14 @@ case "$url" in "https://fixture-connect.betterstackdata.com?"*) : ;; *) exit 64 
 [ "$user" = fixture-user:fixture-pass ] || exit 64
 printf 'q\n' >> "$CALLS"
 case "$(cat "$FX/mode" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; timeout) exit 28 ;; esac
-cat "$FX/rows"
+case "$data" in *relay_peer_probe*) printf 'p\n' >> "$CALLS"; case "$(cat "$FX/peer_mode" 2>/dev/null)" in 503) printf '{"error":"x"}'; exit 22 ;; esac; cat "$FX/peer_rows" ;; *) cat "$FX/rows" ;; esac
 STUB
 chmod +x "$R_BIN/terraform" "$R_BIN/curl"
 r_state() { printf '{"values":{"root_module":{"resources":[{"address":"hcloud_server_network.web[\\"web-1\\"]","values":{"ip":"10.0.1.10"}},{"address":"hcloud_server_network.web[\\"web-2\\"]","values":{"ip":"%s"}}]}}}' "$1" > "$R_FX/state"; }
-r_line() { printf 'relay_probe proxy_state=%s addr=%s port=%s workspaces_populated=%s' "${1:-listening}" "${2:-10.0.1.11}" "${3:-8443}" "${4:-1}"; }
+r_line() { printf 'relay_probe proxy_state=%s addr=%s port=%s workspaces_populated=%s' "${1:-listening}" "${2:-0.0.0.0}" "${3:-8443}" "${4:-1}"; }
 r_row() { jq -cn --arg a "$1" --arg l "$2" --arg h "${3:-soleur-web-2}" '{age_s:$a,host_name:$h,line:$l}'; }
+r_peer() { printf 'relay_peer_probe peer=%s %s' "${1:-10.0.1.11}" "${2:-result=ok}"; }
+r_prow() { jq -cn --arg a "$1" --arg l "$2" --arg h "${3:-soleur-web-platform}" '{age_s:$a,host_name:$h,line:$l}'; }
 R_OUT=""; R_RC=0
 r_exec() { # r_exec [ENV=VAL ...] — run the step body in a clean env; output -> R_OUT, rc -> R_RC
   : > "$R_WORK/leak"; : > "$R_WORK/calls"; : > "$R_WORK/summary"
@@ -764,12 +770,14 @@ e_refuse() { # e_refuse <desc> <needle> [ENV=VAL ...] — exit 1 with an ::error
   r_exec "${@:3}"
   c4_assert "$1 → exit 1, refused for: $2" "$([[ "$R_RC" -eq 1 && "$R_OUT" == *"::error::"* && "$R_OUT" == *"$2"* && ! -s "$R_WORK/leak" ]] && echo 1 || echo 0)"
 }
-e_reset() { : > "$R_FX/mode"; rm -f "$R_FX/tf.fail"; r_state 10.0.1.11; { r_row 20 "$(r_line)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; }
+e_reset() { : > "$R_FX/mode"; : > "$R_FX/peer_mode"; rm -f "$R_FX/tf.fail"; r_state 10.0.1.11; { r_row 20 "$(r_line)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; r_prow 3600 "$(r_peer)" > "$R_FX/peer_rows"; }
 
 if [[ -n "$PROBE_RUN" ]]; then
 e_reset; r_exec
-c4_assert "C.4-E1: two healthy rows on the state address → exit 0 and a GREEN line in the run summary" \
-  "$([[ "$R_RC" -eq 0 && "$(cat "$R_WORK/summary")" == *GREEN* ]] && echo 1 || echo 0)"
+c4_assert "C.4-E1: two healthy own-line rows (addr=0.0.0.0) + an ok peer row for the state address → exit 0, two GREEN lines in the run summary" \
+  "$([[ "$R_RC" -eq 0 && "$(grep -c 'GREEN' "$R_WORK/summary")" -eq 2 ]] && echo 1 || echo 0)"
+c4_assert "C.4-E1a: …and BOTH queries were sent (own line, then peer line)" \
+  "$([[ "$(grep -c '^q$' "$R_WORK/calls")" -eq 2 && "$(grep -c '^p$' "$R_WORK/calls")" -eq 1 ]] && echo 1 || echo 0)"
 c4_assert "C.4-E1b: …no credential-shaped variable reached the query child, no decoy printed" \
   "$([[ ! -s "$R_WORK/leak" && "$R_OUT" != *decoy-* && "$R_OUT" != *fixture-pass* ]] && echo 1 || echo 0)"
 for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
@@ -785,11 +793,23 @@ e_reset; { r_row 20 "$(r_line)"; r_row 200 "$(r_line)"; } > "$R_FX/rows"; e_refu
 e_reset; { r_row 121 "$(r_line)"; r_row 150 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E7: newest row 121 s old" "reason=newest_stale"
 e_reset; { r_row 20 "$(r_line no_bind none)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E8: a row says proxy_state=no_bind" "reason=proxy_state_not_listening"
 e_reset; { r_row 20 "$(r_line disabled)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E8b: a row says proxy_state=disabled" "reason=proxy_state_not_listening"
-e_reset; { r_row 20 "$(r_line listening ::)"; r_row 80 "$(r_line listening ::)"; } > "$R_FX/rows"; e_refuse "C.4-E9: addr=:: (wildcard)" "reason=addr_wildcard"
-e_reset; { r_row 20 "$(r_line listening 0.0.0.0)"; r_row 80 "$(r_line listening 0.0.0.0)"; } > "$R_FX/rows"; e_refuse "C.4-E9b: addr=0.0.0.0 (wildcard)" "reason=addr_wildcard"
-e_reset; r_state 10.0.1.12; e_refuse "C.4-E10: rows say 10.0.1.11 but STATE says 10.0.1.12 (address compared against state, not a literal)" "reason=addr_mismatch"
-e_reset; { r_row 20 "$(r_line listening 10.0.1.11 8444)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E11: port 8444" "reason=port_mismatch"
-e_reset; { r_row 20 "$(r_line listening 10.0.1.11 8443 0)"; r_row 80 "$(r_line listening 10.0.1.11 8443 0)"; } > "$R_FX/rows"; r_exec
+e_reset; { r_row 20 "$(r_line listening ::)"; r_row 80 "$(r_line listening ::)"; } > "$R_FX/rows"; e_refuse "C.4-E9: addr=:: (not the shipped IPv4 wildcard)" "reason=addr_mismatch"
+e_reset; { r_row 20 "$(r_line listening 10.0.1.11)"; r_row 80 "$(r_line listening 10.0.1.11)"; } > "$R_FX/rows"; e_refuse "C.4-E9b: addr=10.0.1.11 (the old host-private-IP bind: the container can never report it)" "reason=addr_mismatch"
+e_reset; { r_row 20 "$(r_line listening none)"; r_row 80 "$(r_line listening none)"; } > "$R_FX/rows"; e_refuse "C.4-E9c: addr=none while listening" "reason=addr_mismatch"
+e_reset; { r_row 20 "$(r_line listening 0.0.0.0 8444)"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E11: port 8444" "reason=port_mismatch"
+# the peer line (web-1's relay_peer_probe about web-2's STATE address): the private-address reachability proof
+e_reset; r_prow 3600 "$(r_peer 10.0.1.11 result=refused)" > "$R_FX/peer_rows"; e_refuse "C.4-E10: web-1's newest peer row says result=refused" "reason=peer_refused"
+e_reset; r_prow 3600 "$(r_peer 10.0.1.11 result=denied)" > "$R_FX/peer_rows"; e_refuse "C.4-E10b: web-1's newest peer row says result=denied (allowlist)" "reason=peer_denied"
+e_reset; r_prow 3600 "$(r_peer 10.0.1.11 result=tls)" > "$R_FX/peer_rows"; e_refuse "C.4-E10c: web-1's newest peer row says result=tls" "reason=peer_tls"
+e_reset; : > "$R_FX/peer_rows"; e_refuse "C.4-E10d: no peer row at all in the last 24 h" "reason=peer_rows_none"
+e_reset; r_prow 3600 "$(r_peer 10.0.1.12)" > "$R_FX/peer_rows"; e_refuse "C.4-E10e: the peer row is about another address, not the one STATE holds for web-2" "reason=peer_row_malformed"
+e_reset; r_state 10.0.1.12; e_refuse "C.4-E10f: STATE says web-2 is 10.0.1.12 but the ok peer row is for 10.0.1.11 (compared against state, not a literal)" "reason=peer_row_malformed"
+e_reset; r_prow 3600 "$(r_peer 10.0.1.11 skipped=exec_failed)" > "$R_FX/peer_rows"; e_refuse "C.4-E10g: web-1's newest peer row is skipped=exec_failed" "reason=peer_skipped"
+e_reset; r_prow 90000 "$(r_peer)" > "$R_FX/peer_rows"; e_refuse "C.4-E10h: the only ok peer row is older than 24 h" "reason=peer_rows_none"
+e_reset; printf '503' > "$R_FX/peer_mode"; e_refuse "C.4-E10i: Better Stack answers 503 to the peer query" "peer probe of web-2 FAILED"
+e_reset; { r_prow 7200 "$(r_peer)"; r_prow 300 "$(r_peer 10.0.1.11 result=refused)"; } > "$R_FX/peer_rows"; e_refuse "C.4-E10j: a NEWER refused row beats an older ok" "reason=peer_refused"
+e_reset; r_prow 3600 "$(r_peer)" soleur-web-2 > "$R_FX/peer_rows"; e_refuse "C.4-E10k: an ok peer row from web-2 itself is not web-1's probe" "reason=peer_rows_none"
+e_reset; { r_row 20 "$(r_line listening 0.0.0.0 8443 0)"; r_row 80 "$(r_line listening 0.0.0.0 8443 0)"; } > "$R_FX/rows"; r_exec
 c4_assert "C.4-E12: workspaces_populated=0 is RECORDED, not judged (owner ruling 2026-11-06) → exit 0 and a GREEN line" \
   "$([[ "$R_RC" -eq 0 && "$(cat "$R_WORK/summary")" == *GREEN* ]] && echo 1 || echo 0)"
 e_reset; { r_row 20 "$(r_line) extra=1"; r_row 80 "$(r_line)"; } > "$R_FX/rows"; e_refuse "C.4-E13: trailing text after the grammar (substring match must not pass)" "reason=row_malformed"
@@ -803,7 +823,7 @@ else
 fi
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=204
+MIN_CASES=217
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

@@ -5,8 +5,9 @@
  * Why: the approval binds identifiers (and, for a push, the commit), but three handlers re-resolve something at execution
  * (`github_push_branch` pushes the workspace HEAD, `workspace_set_autonomous` and `kb_share_create` resolve the active
  * workspace). The tool zod strips extra keys and an SDK tool handler gets no reliable `tool_use_id`, so a pinned value
- * cannot ride in the tool input without letting the model supply it. This object is created once per session in
- * `agent-runner.ts` and shared BY CLOSURE between `createApprovalGateDeps` (writer) and the tool builders (readers). No
+ * cannot ride in the tool input without letting the model supply it. This object is created once per `startAgentSession` call in
+ * `agent-runner.ts` (per leader, per user message), and once per Query (`realSdkQueryFactory`) in `cc-dispatcher.ts` (ADR-309
+ * Addendum), and shared BY CLOSURE between `createApprovalGateDeps` (writer) and the tool builders (readers). No
  * MCP tool exposes it and the Bash sandbox holds no handle to it, so the model cannot write a grant.
  *
  * Contract:
@@ -123,7 +124,7 @@ export const GRANT_MISSING_MESSAGE =
 export const WORKSPACE_CHANGED_MESSAGE =
   "The active workspace changed after the approval was granted, so the action was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation in the intended workspace if they still want it done.";
 export const APPROVED_COMMIT_UNAVAILABLE_MESSAGE =
-  "The commit the Owner approved is not available in the workspace, so the push was NOT performed. Do not retry in this conversation. Tell the user, and ask them to start a new conversation if they still want it pushed.";
+  "The commit the Owner approved is not available in the workspace, so the push was NOT performed, and the Owner's approval is spent. Do not retry in this conversation. Tell the user, and ask them to start a new conversation if they still want it pushed.";
 
 const REFUSAL_BY_REASON: Record<GrantRefusedReason, { error: string; code: string; status: number }> = {
   grant_missing: { error: GRANT_MISSING_MESSAGE, code: "approval_grant_missing", status: 403 },

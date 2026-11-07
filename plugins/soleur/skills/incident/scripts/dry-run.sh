@@ -138,6 +138,10 @@ fi
 rm -f "${early_input_check}"
 
 # --- Phase 0 ---
+# Live readers stay in the skill. This harness does not call them.
+echo "SOLEUR_INCIDENT_PULL source=betterstack verdict=never-ran"
+echo "SOLEUR_INCIDENT_PULL source=sentry verdict=never-ran"
+echo "SOLEUR_INCIDENT_PULL source=supabase verdict=never-ran"
 echo "=== Phase 0: facts captured ==="
 echo "  title:               ${title}"
 echo "  detected_at:         ${detected_at}"

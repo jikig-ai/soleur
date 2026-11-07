@@ -5,7 +5,8 @@
 Canonical contract for `plugins/soleur/scripts/affected-tests.sh` — the single
 affected-suite gate entry point for Soleur-guided repos. Prescribed dispatch
 (wired from `ship` Phase 4, `work` Phase 2 exit, `review`, `test-fix-loop`,
-`grok-pre-push-gate.sh`):
+`grok-pre-push-gate.sh`; work and review reach it through the token-aware wrapper below,
+ship, test-fix-loop and the Grok gate do not):
 
 ```bash
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"          # affected selection
@@ -52,14 +53,39 @@ gate probes registration, not presence.
 | rc | Meaning | Skill action |
 |----|---------|--------------|
 | 0 | Selected tests passed, or `NO_TESTS_AFFECTED` (all-inert diff) | proceed |
-| 1 | A selected test failed / runner signal-killed / the content-trigger command failed (`reason=content-trigger-failed`) | stop; report failures (for `content-trigger-failed`, re-run the `content_trigger_command` directly) |
+| 1 | A selected test failed / runner signal-killed / the content-trigger command failed (`reason=content-trigger-failed`) / the budget killed the runner AFTER it printed a red (`reason=failed-before-budget`) | stop; report failures (for `content-trigger-failed`, re-run the `content_trigger_command` directly; for `failed-before-budget`, re-run each suite whose `[run] … done (rc=N` line shows a non-zero rc in the log (pool mode), or whose `[FAIL]` line printed (serial mode)) |
 | 4 | `AFFECTED_GATE_REFUSED reason=<no-stack\|bad-config\|vacuous-test-command\|no-base-ref\|not-a-repo\|toolchain-missing\|runner-refused>` + a `remedy:` line | stop; fix the named cause — never retry blindly |
-| 6 | `AFFECTED_GATE_BUDGET_DEFERRED` — budget expired AND a CI test workflow exists (with `content_trigger=deferred` the selected tests passed and only the content-trigger command is owed to CI) | proceed to CI; record CI as the authoritative gate; never label the run passed |
+| 6 | `AFFECTED_GATE_BUDGET_DEFERRED` — budget expired AND a CI test workflow exists AND the runner had recorded no red before the kill (with `content_trigger=deferred` the selected tests passed and only the content-trigger command is owed to CI) | proceed to CI; record CI as the authoritative gate; never label the run passed |
 | 7 | No test suite detected at all | proceed with the disclosed note; never label passed |
 
 Multi-stack aggregation: worst-of `1 > 4 > 6 > 0`; `7` only when every adapter
 finds no suite. Delegated-runner codes map in: runner `4` → `reason=runner-refused`,
 runner `3` → rc 1 `reason=runner-signal`.
+
+## Token-aware front door (`gate-or-skip.sh`, #12247)
+
+Work Phase 2 (step 9 and the fan-out lead's consolidation run) and review's lead gate call
+`plugins/soleur/scripts/gate-or-skip.sh`, not `affected-tests.sh`. On a bare invocation it runs
+`battery-owed.sh --token-only` (exit contract in that script's header). Reader exit 42 is the only skip: the
+wrapper prints the reader's verdict, then `affected gate: SKIPPED (NOT run, NOT passed); CI test is the gate` and
+`AFFECTED_GATE_SKIPPED reason=operator-ci-is-the-gate`, and exits 0. **An `AFFECTED_GATE_SKIPPED` line is not a pass**: report it as
+"affected gate NOT run; operator declared CI the gate", never as "tests passed". Every other reader status, a missing
+reader, and any argument (`--full`, `--explain`, `--base`) run `affected-tests.sh` verbatim and return its rc from the
+table above. Consumers: work step 9, work's fan-out lead gate, review's lead gate; `grok-pre-push-gate.sh` makes the same
+`--token-only` call inline and waives only its affected-tests step (a waive also makes grok-fidelity run the AGENTS rule-budget lint, which it otherwise skips because the affected gate ran test-all; an affected step that ends rc 6 or 7 can leave that lint unrun locally, CI `test-scripts` is the backstop). Non-consumers: `soleur:ship` Phase 4 (calls the reader
+bare), `soleur:test-fix-loop` (a fix loop must run tests), `lefthook.yml` (#12297) and the opt-in
+`scripts/hooks/pre-push` hook (active only after `git config core.hooksPath scripts/hooks`). The
+reader's `battery-owed: OWED` line printed before a normal run is its no-token verdict; the gate then runs. The wrapper is the same
+`--affected` run the lead's bare runner call was, plus `.soleur-test-gate.json` budget and content-trigger
+semantics and the rc mapping above, so rc 6 and 7 are never reported as passed. `skills/one-shot/SKILL.md` still describes
+the Grok gate as running the affected gate unconditionally; the token waives that step (see the ADR-242 2026-11-07
+amendment).
+
+## Relocated from the work and review SKILL.md bodies (byte ceilings)
+
+A deprecated compat spelling also exists (#8621): `TEST_GROUP=affected` set in front of the repo runner `scripts/test-all.sh` is an alias of `--affected` — the #8591 heuristic it replaces was folded into the declared-edge axis after the decline-set measurement found misses on every corpus diff. It remains the substitute both rc=4 refusals prescribe; `TEST_GROUP=affected --affected` refuses rc=2. Either spelling is scoped evidence, not the ship gate.
+
+The `SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the lead-gate paragraphs in work and review are instruction for the non-concurrent case, not claim.
 
 ## Output
 

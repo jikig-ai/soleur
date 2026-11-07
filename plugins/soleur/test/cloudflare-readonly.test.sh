@@ -92,6 +92,7 @@ mkdir -p "$STUB" || { echo "FATAL: mkdir failed" >&2; exit 2; }
 TOK_Z="zfake""ZONESET.Ab~1+2/3=x-9"
 TOK_R="rfake""RULESET.Cd~4+5/6=y-8"
 TOK_A="afake""AUDITTK.Ef~7+8/9=z-7"
+TOK_P="pfake""PAGERUL.Ij~2+3/4=v-5"
 TOK_BARE="bfake""BARE.Gh~0+1/2=w-6"
 CANARY_BODY="CANARYBODY_7f3a91"
 CANARY_ERR="CANARYERR_91bcd2"
@@ -105,9 +106,9 @@ mkdir -p "$HOMEDIR" || { echo "FATAL: mkdir failed" >&2; exit 2; }
 BASE_ENV=(
   "HOME=$HOMEDIR" "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform"
   "CF_ZONE_ID=$ZONE" "CF_ACCOUNT_ID=$ACCT"
-  "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" "CF_API_TOKEN_RULESETS=$TOK_R" "CF_API_TOKEN_AUDIT=$TOK_A"
+  "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" "CF_API_TOKEN_RULESETS=$TOK_R" "CF_API_TOKEN_PAGERULES_READ=$TOK_P" "CF_API_TOKEN_AUDIT=$TOK_A"
 )
-LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_A" "$TOK_BARE" "$CANARY_BODY" "$CANARY_ERR"
+LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE" "$CANARY_BODY" "$CANARY_ERR"
   "EXPR_CANARY" "DESC_CANARY" "ACTOR_CANARY" "203.0.113.77" "PATTERN_CANARY" "Bearer")
 SUBS=(ssl-mode config-entrypoint pagerules-ssl change-history)
 
@@ -216,14 +217,16 @@ load_argv() {
 tok_of() { # bound token value per subcommand
   case "$1" in
     ssl-mode) printf '%s' "$TOK_Z" ;;
-    config-entrypoint | pagerules-ssl) printf '%s' "$TOK_R" ;;
+    config-entrypoint) printf '%s' "$TOK_R" ;;
+    pagerules-ssl) printf '%s' "$TOK_P" ;;
     change-history) printf '%s' "$TOK_A" ;;
   esac
 }
 tokvar_of() {
   case "$1" in
     ssl-mode) printf '%s' CF_API_TOKEN_ZONE_SETTINGS ;;
-    config-entrypoint | pagerules-ssl) printf '%s' CF_API_TOKEN_RULESETS ;;
+    config-entrypoint) printf '%s' CF_API_TOKEN_RULESETS ;;
+    pagerules-ssl) printf '%s' CF_API_TOKEN_PAGERULES_READ ;;
     change-history) printf '%s' CF_API_TOKEN_AUDIT ;;
   esac
 }
@@ -342,6 +345,19 @@ grp_source() {
   fi
   t "source: header documents direct-exec invocation" has_file "$SUT_SRC" 'doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh'
   tn "source: header never shows doppler run ... -- bash" grep -Eq -- '--[[:space:]]+bash' "$SUT_SRC"
+  # drift pin (#10479, Ref #10205): the header's dated snapshot of the config-settings ruleset must equal the counts in the
+  # Terraform file, so a rule added to seo-config-rules.tf without a header update fails here instead of misleading a flip go.
+  local TF="$REPO_ROOT/apps/web-platform/infra/seo-config-rules.tf" TF_RULES TF_SSL
+  TF_RULES="$(grep -cE '^[[:space:]]+rules \{' "$TF" || true)"
+  # The header snapshots the LIVE ruleset. The origin-TLS canary (`ssl = "strict"`, ADR-321) sits in a `dynamic "rules"` block that is
+  # empty unless var.enable_origin_tls_canary_rule is set, so it is not in the live ruleset by default and is excluded here; its own
+  # pins live in apps/web-platform/test/seo-config-rules.test.ts. When the owner turns the canary on, the live count is one higher
+  # until the strict flip removes it.
+  TF_SSL="$(grep -E '^[[:space:]]+ssl[[:space:]]+=[[:space:]]+"' "$TF" | grep -cvE '"strict"' || true)"
+  t "snapshot: anchor - the Terraform file yields a non-zero rule count" test "${TF_RULES:-0}" -gt 0
+  t "snapshot: header enabled_ssl_rules equals the ssl rules in seo-config-rules.tf ($TF_SSL)" has_file "$SUT_SRC" "enabled_ssl_rules is $TF_SSL AND one of those rules has ref"
+  t "snapshot: header rule_count equals the rules in seo-config-rules.tf ($TF_RULES)" has_file "$SUT_SRC" "AND rule_count is $TF_RULES; anything else"
+  tn "snapshot: header no longer states the stale enabled_ssl_rules is 1" has_file "$SUT_SRC" 'enabled_ssl_rules is 1 AND'
   # census controls: the scan is live
   assert_fixture_dir "$WORK"
   printf '%s\n' 'x=$("$CURL" a)' 'y=$("$CURL" b)' > "$WORK/c2.txt"
@@ -417,7 +433,7 @@ grp_source() {
   tn "source: no jq --arg / --args / --rawfile / --slurpfile / --jsonargs" src_has '[[:space:]]--(arg|args|rawfile|slurpfile|jsonargs)([[:space:]]|$)'
   tn "source: no NAME=value prefix on an env child" src_has '/usr/bin/env[[:space:]]+([A-Z_]+=|-[A-Za-z]*[[:space:]]+[A-Z_]+=)'
   t "source: the xtrace refusal list names exactly the dispatcher TOKVAR names plus CF_API_TOKEN" eq "$(xtrace_names "$STRIPPED" | tr '\n' ' ')" "$({ tokvar_names "$STRIPPED"; echo CF_API_TOKEN; } | sort -u | tr '\n' ' ')"
-  t "source: anchor - the dispatcher binds exactly three token variables" eq "$(tokvar_names "$STRIPPED" | wc -l)" 3
+  t "source: anchor - the dispatcher binds exactly four token variables" eq "$(tokvar_names "$STRIPPED" | wc -l)" 4
   t "source: LIMIT is assigned once as 50" eq "$(grep -cE '^LIMIT=50$' "$STRIPPED")" 1
   t "source: the literal 50 appears exactly once (the LIMIT assignment)" eq "$(grep -cw '50' "$STRIPPED")" 1
   t "source: the truncated test reads the same LIMIT via --argjson" src_has 'argjson limit "\$LIMIT"'
@@ -455,7 +471,7 @@ check_wire() { # $1 = subcommand
     case "$a" in
       -d | --data* | --json | -T | --upload-file | -F | --form | -L | --location | --url | -u | --user | -H | --header | --request | -K) bad=1 ;;
     esac
-    for n in "$TOK_Z" "$TOK_R" "$TOK_A" "$TOK_BARE"; do
+    for n in "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"; do
       if [[ "$a" == *"$n"* ]]; then tokleak=1; fi
     done
     if [[ "$a" == *Authorization* || "$a" == *Bearer* ]]; then tokleak=1; fi
@@ -484,7 +500,7 @@ check_wire() { # $1 = subcommand
   t "wire[$sub]: URL host is api.cloudflare.com despite a planted CF_API_BASE" bash -c '[[ "$1" == https://api.cloudflare.com/client/v4/* ]]' _ "$(last_arg)"
   t "wire[$sub]: stdin carries the bound token exactly once on one config line" eq "$(grep -cF -- "header = \"Authorization: Bearer $tok\"" "$STUB/stdin.log" 2>/dev/null || true)" 1
   t "wire[$sub]: stdin is exactly one line" eq "$(wc -l < "$STUB/stdin.log" 2>/dev/null || echo 0)" 1
-  for n in "$TOK_Z" "$TOK_R" "$TOK_A" "$TOK_BARE"; do
+  for n in "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"; do
     if [[ "$n" != "$tok" ]]; then
       tn "wire[$sub]: stdin carries no other token ($n)" has_file "$STUB/stdin.log" "$n"
     fi
@@ -657,7 +673,19 @@ grp_token() {
   mkenv CF_API_TOKEN_ZONE_SETTINGS
   fixture 200 "$SSL_OK"
   run "${ENVX[@]}" -- ssl-mode
-  t "token: ssl-mode with only the RULESETS and AUDIT tokens set -> exit 10" eq "$RC" 10
+  t "token: ssl-mode with only the RULESETS, PAGERULES_READ and AUDIT tokens set -> exit 10" eq "$RC" 10
+  # pagerules-ssl is bound to PAGERULES_READ alone: the RULESETS token (403 on /pagerules, 2026-11-05), the ZONE_SETTINGS and
+  # AUDIT tokens and the bare CF_API_TOKEN are never a fallback
+  fixture 200 "$PAGE_OK"
+  mkenv CF_API_TOKEN_PAGERULES_READ
+  run "${ENVX[@]}" "CF_API_TOKEN=$TOK_BARE" -- pagerules-ssl
+  t "token: pagerules-ssl with every token EXCEPT PAGERULES_READ set -> exit 10" eq "$RC" 10
+  t "token: pagerules-ssl without PAGERULES_READ names that variable" eq "$L1" "cloudflare-readonly: pagerules-ssl unverified - no-credential (CF_API_TOKEN_PAGERULES_READ)"
+  t "token: pagerules-ssl without PAGERULES_READ -> curl never called (no token swap)" eq "$(ncalls)" 0
+  fixture 200 "$PAGE_OK"
+  run "${BASE_ENV[@]}" -- pagerules-ssl
+  t "token: pagerules-ssl presents PAGERULES_READ" has_file "$STUB/stdin.log" "$TOK_P"
+  tn "token: pagerules-ssl never presents the RULESETS token" has_file "$STUB/stdin.log" "$TOK_R"
 }
 
 # =============================================================================================
@@ -669,7 +697,7 @@ grp_env() {
     fixture 200 "$(ok_body "$s")"
     run "${BASE_ENV[@]}" "CF_API_TOKEN=$TOK_BARE" "PLANTED_CANARY=plantedvalue_5521" "HTTPS_PROXY=http://127.0.0.1:9" "CF_API_BASE=https://evil.example" -- "$s"
     t "env[$s]: anchor - the stub dumped its environment (non-empty log)" test -s "$STUB/env.log"
-    tn "env[$s]: curl child sees no token (any of four)" bash -c 'grep -qF -e "$2" -e "$3" -e "$4" -e "$5" "$1"' _ "$STUB/env.log" "$TOK_Z" "$TOK_R" "$TOK_A" "$TOK_BARE"
+    tn "env[$s]: curl child sees no token (any of five)" bash -c 'grep -qF -e "$2" -e "$3" -e "$4" -e "$5" -e "$6" "$1"' _ "$STUB/env.log" "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"
     tn "env[$s]: curl child sees no CF_* variable" grep -q 'CF_' "$STUB/env.log"
     tn "env[$s]: curl child sees no planted non-TLS canary" grep -q 'PLANTED_CANARY' "$STUB/env.log"
     tn "env[$s]: curl child sees no DOPPLER_* variable" grep -q 'DOPPLER_' "$STUB/env.log"
@@ -750,7 +778,7 @@ status_cells() { # $1 = subcommand
     t "status[$s/$name]: curl called exactly once (no retry, no second token)" eq "$(ncalls)" 1
     t "status[$s/$name]: the stub refused no flag" test ! -s "$STUB/refusal.log"
     t "leak[$s/$name]: stdout+stderr carry no token, canary, actor, IP or Bearer" leak_scan "$WORK/comb.txt"
-    t "leak[$s/$name]: argv log carries no token or Authorization" bash -c '! grep -qaF -e "$2" -e "$3" -e "$4" -e Authorization "$1"' _ "$STUB/argv.bin" "$TOK_Z" "$TOK_R" "$TOK_A"
+    t "leak[$s/$name]: argv log carries no token or Authorization" bash -c '! grep -qaF -e "$2" -e "$3" -e "$4" -e "$5" -e Authorization "$1"' _ "$STUB/argv.bin" "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A"
     if [[ "$name" == 403 || "$name" == 401 ]]; then
       t "status[$s/$name]: only the bound token was presented" eq "$(grep -cF -- "Bearer $(tok_of "$s")\"" "$STUB/stdin.log" 2>/dev/null || true)" 1
     fi
@@ -794,7 +822,7 @@ grp_xtrace() {
   t "xtrace: anchor - --list under -x with NO token set is not refused" eq "$RC" 0
   # every bound variable ALONE (the case-glob list is a union; a variable missing from it only shows when it is the only one set)
   local xv
-  for xv in CF_API_TOKEN_ZONE_SETTINGS CF_API_TOKEN_RULESETS CF_API_TOKEN_AUDIT CF_API_TOKEN; do
+  for xv in CF_API_TOKEN_ZONE_SETTINGS CF_API_TOKEN_RULESETS CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_AUDIT CF_API_TOKEN; do
     fixture 200 "$SSL_OK"
     RUNFLAGS=(-x)
     run "$xv=$TOK_BARE" -- ssl-mode
@@ -1254,6 +1282,7 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G1.8a delete token-shape check" "token: refused shape" token 'if [[ ! "$TOK" =~ $TOKEN_RE ]]; then' 'if false; then'
   mutate "G1.8b delete trailing-whitespace trim" "token: trailing newline is accepted" token 'TOK="${TOK%"${TOK##*[![:space:]]}"}"' ':'
   mutate "G1.9a swap token binding" "wire[ssl-mode]: stdin carries the bound token exactly once" wire 'TOKVAR=CF_API_TOKEN_ZONE_SETTINGS' 'TOKVAR=CF_API_TOKEN_RULESETS'
+  mutate "G1.9a2 swap pagerules binding back to RULESETS" "token: pagerules-ssl with every token EXCEPT PAGERULES_READ set -> exit 10" token 'pagerules-ssl) TOKVAR=CF_API_TOKEN_PAGERULES_READ;' 'pagerules-ssl) TOKVAR=CF_API_TOKEN_RULESETS;'
   mutate "G1.9b CF_API_TOKEN fallback" "only CF_API_TOKEN present -> exit 10" token 'TOK="${!TOKVAR:-}"' 'TOK="${!TOKVAR:-${CF_API_TOKEN:-}}"'
   mutate "G1.10 delete DOPPLER pin" "refuse: DOPPLER_CONFIG=dev -> exit 64" refuse 'if [ "${DOPPLER_PROJECT:-}" != soleur ] || [ "${DOPPLER_CONFIG:-}" != prd_terraform ]; then' 'if false; then'
   mutate "G1.11a curl by name" "source: sandbox rewrite of CURL= matches exactly once" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=curl\n'
@@ -1339,6 +1368,7 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W6.2 id regex accepts uppercase" "refuse: CF_ZONE_ID uppercase -> exit 64" refuse "ID_RE='^[0-9a-f]{32}\$'" "ID_RE='^[0-9a-fA-F]{32}\$'"
   mutate "W6.3 xtrace list drops ZONE_SETTINGS" "xtrace[CF_API_TOKEN_ZONE_SETTINGS alone]: exit 78" xtrace '${CF_API_TOKEN_ZONE_SETTINGS:+x}' ''
   mutate "W6.4 xtrace list drops RULESETS" "xtrace[CF_API_TOKEN_RULESETS alone]: exit 78" xtrace '${CF_API_TOKEN_RULESETS:+x}' ''
+  mutate "W6.4b xtrace list drops PAGERULES_READ" "xtrace[CF_API_TOKEN_PAGERULES_READ alone]: exit 78" xtrace '${CF_API_TOKEN_PAGERULES_READ:+x}' ''
   mutate "W6.5 xtrace list drops AUDIT" "xtrace[CF_API_TOKEN_AUDIT alone]: exit 78" xtrace '${CF_API_TOKEN_AUDIT:+x}' ''
   mutate "W6.6 xtrace list drops CF_API_TOKEN" "xtrace[CF_API_TOKEN alone]: exit 78" xtrace '${CF_API_TOKEN:+x}' ''
   mutate "W6.7 3-space quoted fifth arm" "parity: dispatcher case labels" source '  *) die 64 "refused: unknown subcommand" ;;' $'   "raw") sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
@@ -1371,7 +1401,7 @@ if [[ -z "$INNER" ]] && want all; then
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 106 mutation rows ran (the exact current count)" test "$MUT_TOTAL" -ge 106
+  t "mutation floor: at least 108 mutation rows ran (the exact current count)" test "$MUT_TOTAL" -ge 108
 fi
 
 # --- accounting ---

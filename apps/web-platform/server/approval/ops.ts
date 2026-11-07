@@ -162,6 +162,16 @@ export const APPROVAL_OPS = {
     message: "Approval gate: the approval hash key is unavailable (SENTRY_USERID_PEPPER unset or empty); gated actions are denied",
     level: "error",
   },
+  /**
+   * The gate's no-git read of the workspace HEAD (`readWorkspaceHeadSha`) refused for a `github_push_branch` card (ADR-309 9b):
+   * no card was created and the gate denies. `tags.reason` / `extra.reason` is the reader's closed `WorkspaceHeadReason`, never
+   * the Error, a path or file content. The gate's `approval-bind-failed` report still fires after it.
+   */
+  headReadFailed: {
+    op: "approval-head-read-failed",
+    message: "Approval gate: the workspace HEAD could not be read safely for the push; no approval card was created",
+    level: "error",
+  },
   /** Fired by the expiry cron (15 minutes pending): issue-alerts registers THIS op only. */
   gateUnanswered: {
     op: "gate_unanswered",
@@ -182,7 +192,11 @@ export interface ApprovalOpContext {
   conversationId?: string;
   workspaceId?: string;
   userId?: string;
+  /** Extra low-cardinality Sentry TAGS (searchable), merged after `approval_id`. Static enum values only, never user content. */
+  tags?: Record<string, string>;
   extra?: Record<string, unknown>;
+  /** `reportLegalOp` only: sets the severity of ONE report (default: the op's own level). Ignored by `reportApprovalOp`. */
+  level?: "error" | "warn";
 }
 
 /**
@@ -212,7 +226,7 @@ export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: Approval
     feature: FEATURE,
     op: def.op,
     message: def.message,
-    tags: ctx.approvalId ? { approval_id: ctx.approvalId } : undefined,
+    tags: ctx.approvalId || ctx.tags ? { ...(ctx.approvalId ? { approval_id: ctx.approvalId } : {}), ...ctx.tags } : undefined,
     extra: {
       ...(ctx.toolName ? { tool: ctx.toolName } : {}),
       ...(ctx.conversationId ? { conversationId: ctx.conversationId } : {}),
@@ -224,6 +238,94 @@ export function reportApprovalOp(key: ApprovalOpKey, err: unknown, ctx: Approval
   };
   try {
     if (def.level === "error") reportSilentFallback(null, options);
+    else warnSilentFallback(null, options);
+  } catch {
+    // Observability must never turn a deny into a throw.
+  }
+}
+
+/**
+ * Founder legal acceptance ops (#12011, ADR-319). A separate registry and helper, NOT members of APPROVAL_OPS: the Sentry
+ * alert rules match `feature=legal-acceptance` plus the op, while every gate op keeps `feature=approval-queue` (the gate's
+ * alert and its contract tests iterate APPROVAL_OPS). Same rules as above: one static message per op, no database text,
+ * the thrown value contributes only `{code, fn, errName}`, and never the note, the code, the address or the text.
+ */
+export const LEGAL_OPS = {
+  /** One event per RECORDED row (any choice; `extra.choice` says which). The liveness signal: a row the decide route did not acknowledge after flushing this event is `row_without_event`. */
+  accepted: {
+    op: "accepted",
+    message: "Legal acceptance: a founder decision was recorded",
+    level: "warn",
+  },
+  /** A decision was not recorded; `tags.reason` is one of DecideRejectReason (hash_mismatch, replaced, expired, denied_42501, db_error, unexpected, ...). */
+  decideRejected: {
+    op: "decide_rejected",
+    message: "Legal acceptance: a founder decision was not recorded",
+    level: "warn",
+  },
+  /** The email-code step failed for a reason other than a wrong code; `extra.errorClass` is the provider error class, never the address. */
+  reauthFailed: {
+    op: "reauth_failed",
+    message: "Legal acceptance: the email code step failed at the auth service; nothing was recorded",
+    level: "error",
+  },
+  /**
+   * Reconciliation found a legal_acceptance row with no acknowledgement (reported by the verify endpoint, PR-D): the decide
+   * route writes the ack only after the `accepted` event was flushed, so this proves the route did not acknowledge, not that
+   * Sentry received or missed the event. Alert-only. `extra` carries `key`, the public `textHash`, `ageSeconds` and `status`.
+   */
+  rowWithoutEvent: {
+    op: "row_without_event",
+    message: "Legal acceptance: a legal acceptance row has no recorded acknowledgement",
+    level: "error",
+  },
+  /** A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged. */
+  pageReadFailed: {
+    op: "page_read_failed",
+    message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
+    level: "error",
+  },
+  /** The check endpoint read a row whose checksum no longer matches (status `invalid`). Recorded in Sentry; no paging rule yet (#12195). `extra` carries `key` and the public `textHash`. */
+  recordInvalid: {
+    op: "record_invalid",
+    message: "Legal acceptance: a stored decision failed its integrity check",
+    level: "error",
+  },
+  /**
+   * A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is one of
+   * STORE_FAILED_STAGES: `verify` (the verify RPC), `ack_state` (the reconciliation RPC), `ack` (the decide path's flush or
+   * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; verify endpoint step 4) or `config` (a token or founder id
+   * that is SET but malformed; once per process, names only the variable). No paging rule yet (#12195).
+   */
+  storeFailed: {
+    op: "store_failed",
+    message: "Legal acceptance: a store call on the verify or acknowledge path failed",
+    level: "error",
+  },
+} as const satisfies Record<string, ApprovalOp>;
+
+export type LegalOpKey = keyof typeof LEGAL_OPS;
+
+/** The closed set of `store_failed` `tags.stage` values; every storeFailed report carries exactly one (the contract test pins it). */
+export const STORE_FAILED_STAGES = ["verify", "ack_state", "ack", "registry", "config"] as const;
+export type StoreFailedStage = (typeof STORE_FAILED_STAGES)[number];
+
+export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {
+  const def: ApprovalOp = LEGAL_OPS[key];
+  const level = ctx.level ?? def.level;
+  const options = {
+    feature: "legal-acceptance",
+    op: def.op,
+    message: def.message,
+    tags: ctx.tags,
+    extra: {
+      ...(ctx.userId ? { userId: ctx.userId } : {}),
+      ...describeError(err),
+      ...ctx.extra,
+    },
+  };
+  try {
+    if (level === "error") reportSilentFallback(null, options);
     else warnSilentFallback(null, options);
   } catch {
     // Observability must never turn a deny into a throw.

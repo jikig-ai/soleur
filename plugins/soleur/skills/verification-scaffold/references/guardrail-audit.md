@@ -5,7 +5,7 @@ which re-derives this set from `git ls-files` — a new member with no row here 
 CI failure):
 
 - `.claude/hooks/**/*.sh`, excluding `*.test.sh` and files under `/test/` — **57 files**.
-- `scripts/lint-*`, excluding `*.test.sh`, `*.baseline.txt`, `*.highwater*` — **47 files**.
+- `scripts/lint-*`, excluding `*.test.sh`, `*.baseline.txt`, `*.highwater*` — **48 files**.
 
 ## Verdicts
 
@@ -16,7 +16,7 @@ CI failure):
 | `soleur-coupled` | The guard's *purpose* is Soleur's: it enforces a Soleur rule id, a Soleur corpus path, a vendor in Soleur's stack, or Soleur telemetry/workflow machinery. Not shipped. |
 
 **Counts:** hooks — 0 generic / 10 generic-after-extraction / 48 soleur-coupled.
-lints — 9 generic / 8 generic-after-extraction / 30 soleur-coupled.
+lints — 9 generic / 8 generic-after-extraction / 31 soleur-coupled.
 
 The canonical emit pair `plugins/soleur/scripts/precommit-guard.sh` +
 `plugins/soleur/scripts/lib/wrapper-boundary.sh` is NOT in the census set (it
@@ -112,6 +112,7 @@ template rather than shipping the monolith.
 | `lint-feature-map-coverage.sh` | soleur-coupled | `apps/web-platform/app/**` page set + `feature-map.md`. |
 | `lint-followthrough-varq-ban.sh` | soleur-coupled | Soleur probe-set/varq conventions. |
 | `lint-gh-argv-arg.py` | generic | Repo-wide `gh` argv vs jq-flag-token lint over workflows + `*.sh`; no Soleur coupling. |
+| `lint-gh-dedupe-shape.py` | generic | Repo-wide `gh issue|pr list/search` capture-shape census over `.github/workflows/` — typed `dedupe:` markers (fail-closed/benign), vacuous-arm + condition-list detection; workflow-only producer, no Soleur coupling. |
 | `lint-guard-contract.py` | soleur-coupled | Soleur plan/SKILL.md guard-contract shape (deepen-plan §4.11). |
 | `lint-hcloud-token-readonly-no-fallback.sh` | soleur-coupled | Tree scan for the read/write Hetzner token read (ADR-241 D4); the Soleur secret store. Zero-tolerance — #9755 retired the `op=backup` allowlist entry. |
 | `lint-infra-no-human-steps.py` | soleur-coupled | `hr-no-ssh-fallback-in-runbooks` on `knowledge-base` docs. |
@@ -133,6 +134,7 @@ template rather than shipping the monolith.
 | `lint-squash-ci-directives.sh` | generic | `[skip ci]` token scan of `gh pr create` bodies in workflows; token set is GitHub-documented. |
 | `lint-supabase-deprecated-endpoints.sh` | soleur-coupled | Supabase endpoint corpus + `apps/web-platform/lib/supabase`. |
 | `lint-trap-tempfile-ownership.py` | generic-after-extraction | Tempfile-cleanup ownership rules are generic (v2); keys on `SOLEUR_SCRATCH_SESSION_ROOT` markers. |
+| `lint-umbrella-aggregate.sh` | soleur-coupled | Parses the Soleur umbrella-job contract (`- id:` step census, `member(` calls, `!cancelled()` isolation, verdict-flow edge) inside `.github/workflows/` — the #12089 fold topology is Soleur's own. |
 | `lint-window-closure-assertion.allowlist.txt` | soleur-coupled | Data companion of the window-closure lint (Soleur test roots). |
 | `lint-window-closure-assertion.py` | soleur-coupled | TEST_ROOTS = `apps/web-platform`, `plugins/soleur/test`, `test`. |
 | `lint-workflow-errexit-capture.py` | generic | Workflow run-body errexit-capture class; scans `.github/workflows`. |

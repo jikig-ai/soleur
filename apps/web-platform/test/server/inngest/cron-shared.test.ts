@@ -313,6 +313,16 @@ describe("deferIfTier2Cron (Tier-2 deferral guard)", () => {
     expect(TIER2_DEFERRED_CRONS.has("cron-sentry-alert-drift")).toBe(false);
   });
 
+  // #8839: cron-agent-spawn-stale-settle is the stale-"Working" spawn backstop
+  // sweep — it settles action_sends rows whose current_turn_started_at exceeds
+  // finish-timeout + margin and reports stale_working to spawn-dead-letter.
+  // Never Tier-2 deferred: a deferred tick is a stale Working row left
+  // visible to the operator past its settle bound. Asserted here so the
+  // sibling-set sweep sees this dependent when EXPECTED_CRON_FUNCTIONS grows.
+  it("agent-spawn-stale-settle (#8839, stale-Working sweep) is NOT in the deferred set", () => {
+    expect(TIER2_DEFERRED_CRONS.has("cron-agent-spawn-stale-settle")).toBe(false);
+  });
+
   it("cron-action-required-sla is live — not Tier-2 deferred (#6836)", () => {
     // The action-required SLA lifecycle cron is a dispatch-hybrid: it enumerates
     // the action-required backlog and fans out `sla/issue.process` events to a

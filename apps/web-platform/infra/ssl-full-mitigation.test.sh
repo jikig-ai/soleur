@@ -190,8 +190,11 @@ awk '
     if (!inrule) {
       if ($0 ~ /^[[:space:]]*phase[[:space:]]*=/)     { print "phase=" rhs($0) > META }
       if ($0 ~ /^[[:space:]]*kind[[:space:]]*=/)      { print "kind=" rhs($0)  > META }
-      if ($0 ~ /^[[:space:]]*count[[:space:]]*=/)     { print "count=present"  > META }
-      if ($0 ~ /^[[:space:]]*for_each[[:space:]]*=/)  { print "for_each=present" > META }
+      # depth == 1 is the own body of the resource. A `for_each` inside a nested `dynamic "rules"` block (depth 2: the gated
+      # origin-TLS canary, ADR-321) only varies one rule and cannot remove the ruleset; it is pinned by
+      # apps/web-platform/test/seo-config-rules.test.ts instead.
+      if (depth == 1 && $0 ~ /^[[:space:]]*count[[:space:]]*=/)     { print "count=present"  > META }
+      if (depth == 1 && $0 ~ /^[[:space:]]*for_each[[:space:]]*=/)  { print "for_each=present" > META }
       if ($0 ~ /^[[:space:]]*lifecycle[[:space:]]*\{/) { print "lifecycle=present" > META }
     }
     if (inrule) {

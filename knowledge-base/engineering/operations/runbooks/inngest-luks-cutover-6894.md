@@ -7,11 +7,15 @@ related: [6894, 7228, 7695, 8017, 8285, 8294, 8295, 8296, 9703, 9786, 9879, 9927
 # Inngest LUKS cutover (#6894)
 
 > **Cutover dispatch retired 2026-10-25 (#10112).** The on-host cutover trio (`inngest-luks-cutover.{sh,service,timer}`) is no longer baked into
-> the image, shipped in the signed config-refresh bundle, or pushed to the web hosts, and the dispatcher refuses `op=luks-cutover` (G1/G2/G3).
+> the image, shipped in the signed config-refresh bundle, or pushed to the web hosts, and the dispatcher refused `op=luks-cutover` (G1/G2/G3) until the verb was deleted on 2026-11-05 (#9927 item 8, §5a-2).
 > Sections 1-5b are the record of how the cutover ran (2026-09-20); do not follow their dispatch steps. **Section 5c (sole-copy
 > protection, key loss, total loss, deliberate unprotect, break-glass and revert) stays in force** and is still the operator procedure those alerts point at. Section 6 below is FSM-dispatch troubleshooting; read it as history. A host provisioned before this
 > change still has the trio installed and its timer enabled until the next host replace; the dispatcher stays inert only while the flag is `done`
-> and the pointer is set. The dispatcher's `op=luks-cutover` arm and refusal text are retired in a tracked follow-up.
+> and the pointer is set. The dispatcher's `op=luks-cutover` arm and refusal text were deleted on 2026-11-05 (#9927 item 8, §5a-2).
+>
+> **Dispatch verb deleted 2026-11-05 (#9927 item 8).** That follow-up landed: `op=luks-cutover` is gone from `cutover-inngest.yml`
+> and `scripts/cutover-inngest.sh` (by deletion, no refusal stub), so a dispatch naming it is rejected by GitHub as an invalid `op` input.
+> See §5a-2. Every `gh workflow run ... -f op=luks-cutover` command below is history.
 
 **What this does.** Moves the dedicated Inngest host's Redis AOF store from the plaintext volume to
 the encrypted (LUKS) one, without losing a byte and without SSH. The host freezes its writers, copies
@@ -20,19 +24,19 @@ swaps the mount, restarts the writers, and verifies. (Before 2026-10-09 a failed
 itself back by reverse-copying to the plaintext volume; that volume was destroyed, so on this host a failed
 post-swap verification is an incident with no automatic rollback — see §5a.)
 
-**One dispatch, nothing else.** There is no SSH step in this document and there is no manual
+**[RETIRED 2026-11-05, history only, see 5a-2] One dispatch, nothing else.** There is no SSH step in this document and there is no manual
 Doppler write. If you find yourself wanting one, the answer is in §6.
 
 | | |
 | --- | --- |
-| Forward | `gh workflow run cutover-inngest.yml -f op=luks-cutover` |
+| Forward | none. `op=luks-cutover` was retired by deletion on 2026-11-05 (#9927 item 8, §5a-2); the command that used to sit here no longer exists. |
 | Back | none. `op=luks-rollback` was retired by #8285 PR B (§5a): the plaintext volume it copied back to was destroyed on 2026-10-09. |
 
 The forward dispatch holds in **Waiting** until a reviewer approves the `inngest-cutover` environment. That approval
 is the prod-write ack; the token that can write the flag is injected only for the ops that need it.
 
 > **The cutover this document describes has run (2026-09-20) and its rollback route is gone (2026-10-09).** Sections 1-4
-> are kept because the forward verb still exists; §5a says what replaced the rollback and §5b is the record of how the
+> are kept as the record of the forward verb, which was itself deleted on 2026-11-05 (§5a-2); §5a says what replaced the rollback and §5b is the record of how the
 > plaintext backstop was retired. Where an older sentence below says "roll back", read §5a first.
 
 ---
@@ -87,6 +91,8 @@ is the prod-write ack; the token that can write the flag is injected only for th
 ---
 
 ## 2. Dispatch, then watch the FSM
+
+> **RETIRED 2026-11-05, history only, see 5a-2.** The command below no longer exists; GitHub rejects `op=luks-cutover` as an invalid input.
 
 ```
 gh workflow run cutover-inngest.yml -f op=luks-cutover
@@ -286,7 +292,7 @@ production write and needs the operator's per-command go-ahead:
 | --- | --- | --- |
 | Host dark / probe silent, volume intact (first read `GET /v1/servers/<id>` with the read-only token, §5b read-backs: the LUKS volume must still be attached, else stop and escalate) | Host or shipper failure, store not implicated | `gh workflow run apply-web-platform-infra.yml -f apply_target=inngest-host-replace -f reason="<why>"` (keeps the LUKS volume by omission), then `gh workflow run cutover-inngest.yml -f op=resume` (#7228) |
 | `data_mount_src` is not `/dev/mapper/inngest-redis`, or the wrong-volume alert fires | The store is on a device the ledger does not claim | Incident (`soleur:incident`); do NOT replace the host until the probe row says which device is mounted |
-| `op=luks-cutover` dispatched again | Refused on this host: the durable pointer is set and the flag is `done` (G1/G2) | Nothing to do |
+| `op=luks-cutover` dispatched again | The verb no longer exists (deleted 2026-11-05, §5a-2): GitHub rejects the dispatch as an invalid `op` input. Before that it was refused on this host (durable pointer set, flag `done`, G1/G2) | Nothing to do |
 
 **Recovery routes that exist:** the host-replace route is the first row of the table above (note #7228: **every**
 replace strands the scheduler, whose one-dispatch recovery is `gh workflow run cutover-inngest.yml -f op=resume`).
@@ -299,6 +305,30 @@ replace strands the scheduler, whose one-dispatch recovery is `gh workflow run c
 wrong-volume alert and amended the C4 model and ADR-142. All of that assumed a plaintext volume to revert to. With the
 volume destroyed there is no plaintext exception to record, so none of those steps applies. This heading is kept
 (`op=luks-rollback` in the title) so existing links to 5a still resolve.
+
+---
+
+## 5a-2. `op=luks-cutover` is retired: what to do instead (#9927 item 8, 2026-11-05)
+
+`op=luks-cutover` (a Doppler write of `INNGEST_LUKS_CUTOVER=armed` with the arm token, then a poll of the on-host copy FSM through
+Better Stack) was deleted from `cutover-inngest.yml` and `scripts/cutover-inngest.sh` as part of #9927 item 8, together with
+`op=arm` and `op=reflush`. The cutover it drove ran once (2026-09-20) and `INNGEST_LUKS_CUTOVER` is `done` (read live on
+2026-11-05, flag value only). Its dispatch had been inert since PR #10966 (merged 2026-10-26: the on-host trio no longer ships, and G1/G2
+refused on a set pointer plus `done`), so nothing operational is lost; what changed is that there is no dispatchable surface and
+no arm-token consumer for it any more. The dated history of the verb stays in ADR-142 and in §§1-5b above.
+
+- **What stays in force:** §5c (sole-copy protection, key loss, total loss, deliberate unprotect, break-glass, revert) and the
+  `op=resume` recovery for an inherited `done` after a host replace. `op=rollback` and `op=resume` still use the arm token, so
+  `DOPPLER_TOKEN_INNGEST_ARM` is not revoked by this retirement (that revoke is a separate, owner-reserved act).
+- **A second LUKS cutover** (for example onto a recreated volume) needs a reviewed re-introduction of the verb: a revert of the
+  #9927 item 8 retirement PR, or a new reviewed design. Do not improvise a Doppler write of `INNGEST_LUKS_CUTOVER`; read the
+  flag live first, and treat a non-terminal value as an in-flight FSM you must not race.
+- **Signals:** a probe row or alert that used to point here for "dispatch `op=luks-cutover` again" is now an incident
+  (`soleur:incident`), exactly as §5a says for the rollback signals. Read the newest `host_role=dedicated`
+  `SOLEUR_INNGEST_SERVER_PROBE` row first (§5 step 1's query).
+
+This heading is kept so that links to §5a-2 resolve; `op=luks-cutover` stays in the title because that is what a search for the
+verb will find.
 
 ---
 
@@ -566,7 +596,7 @@ If any limb is a personal-data breach, the 72-hour clock of Art. 33 runs from aw
 empty store, the app's behaviour is that functions re-register and new reminders arm normally; do not tell users their
 reminders will be restored. **Restoring an empty store has no automated route:** the recut dispatch is retired (#8285), the
 per-merge create HALT refuses a new passphrase, and the inngest-host shape gate refuses the volume and passphrase pair, so
-the owner designs the restoration in a reviewed change (#9927).
+the owner designs the restoration in a reviewed change (#9927). The ready notice text lives in [`inngest-store-total-loss-user-notice.md`](./inngest-store-total-loss-user-notice.md); the constraints in this section bind it (#10664).
 
 #### Which Inngest events carry a user reference (code read, 2026-10-20, #9927 item C1)
 
@@ -777,7 +807,7 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
 ## 6. If something looks stuck
 
 - **The flag is a non-terminal value and nothing is moving.** The unit holds a `flock` and resumes
-  from its own state on the next 30s tick. Do not re-dispatch blind: `op=luks-cutover` refuses an
+  from its own state on the next 30s tick. Do not re-dispatch blind: the retired `op=luks-cutover` refused an
   in-flight flag precisely so a second write cannot race the FSM. Read the rows first.
 - **No rows at all.** The host is dark or the trio never installed. Neither is fixed by writing the
   flag — the write would park it in a state the next dispatch refuses. The route is
@@ -793,9 +823,9 @@ and no `BASELINE_DECLARED_PROBES` bump were created.
   An unpointed boot-reopen of a non-LUKS volume now FAILS `reopen_not_luks` (it used to skip with exit 0), and the
   first-boot stage row for the no-pointer world reads `mode=unpointed` (was `plaintext_canonical`). A blank volume is
   formatted only on a `rehearsal_*` config; on any other config the stage fails with `stage=unpointed_raw_refused`
-  (`inngest-luks-FAILED` phone-home carries the same stage), and there is no automated bring-up for a brand-new blank
-  `prd` volume, so that case needs a disaster-recovery procedure written when it is ever needed (ADR-142, addendum
-  2026-10-12). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
+  (`inngest-luks-FAILED` phone-home carries the same stage), and a brand-new blank `prd` volume has no automated
+  bring-up — the written disaster-recovery procedure is the 2026-11-06 section below (#10112, ADR-142 addendum
+  2026-11-06). A lost pointer over an INTACT LUKS volume boots (opened and mounted) and is visible only as
   `pointer=absent` on the `stage=resolve` row.
 
 ---
@@ -814,3 +844,93 @@ Since this change, a boot where the LUKS stage lost the volume-attach race is no
 Failure surface: `reopen_fstab` (fstab write/install), `reopen_mount` (umount/mkdir/mount, and the new stacked-mountpoint refusal), `reopen_backing` (an already-open mapper not backed by the arm's verified device — the noop path now refuses this rather than entrenching it), and `reopen_pointer_lost` (empty pointer plus post-cutover evidence — the ext4-skip arm refuses rather than mounting the plaintext backstop). All leave the unit `failed`. **Phone-home scope:** `inngest-luks-reopen-ARM-FAILED` fires only from the first-boot runcmd arm — on boot ≥2 there is no `OnFailure=` reporter, so the detection path is the journald row itself → the hourly probe (`data_mount_devid=__UNREADABLE__` / `redis_active=inactive`) → the wrong-volume alarm. Conversely, the emit signature differs by boot number: on the FIRST boot (`enable --now` arm) a healthy run emits `reopen_noop` and NO `reopen_mount` (the stage already mounted). On boot ≥2 the mapper starts closed and this unit runs `Before=local-fs.target`, so a healthy boot shows `reopen_ok` then a `reopen_mount` completion row — it performs the mount itself (the fstab-generated unit cannot precede it: the mapper device does not exist until this unit's cryptsetup). A boot ≥2 with `reopen_ok` and NO `reopen_mount` is fine iff `/mnt/data` was already mounted from the mapper — the silent fast path.
 
 Incident that motivated it: iid 170091264 (first replace of the day) — `pointer_device_wait` FATAL at the 30 s bound while the attachment took ~80 s; reopen opened the mapper but could not mount; Redis refused (`not a mountpoint`); `bootstrap-done-DEGRADED`; `op=resume` G4 refused; healed only by a second replace (iid 170097260). Both readers now carry a counted 300 s bound (timeout-wrapped probe, one post-loop `udevadm settle`, post-settle re-probe) and the reopen self-heals the mount, so a lost race converges on the same boot — and any later boot heals the 170091264 shape outright.
+
+## 2026-11-06 — blank `prd` volume bring-up: the disaster-recovery procedure (#10112)
+
+The `unpointed_raw_refused` arm formats a blank canonical volume only on a `rehearsal_*` config — the
+`case '${inngest_doppler_config}' in rehearsal_*)` allowlist in `cloud-init-inngest.yml` refuses every
+other config, and `inngest_doppler_config = "prd"` is a rendered literal (`inngest-host.tf`). So a
+brand-new blank production volume — the store intentionally re-created, the sole-copy AOF gone or
+deliberately abandoned — has no bring-up path on the shipped template. This is the procedure. **It is
+verified statically, not drilled**: every mechanism it names is pinned on main today (the refusal arm,
+the pointer resolver, the dispatch target, the emitted stage rows), but no run has ever exercised the
+sequence end to end.
+
+### Preconditions
+
+1. **Establish the volume is intentionally blank.** The refusal exists because a blank device is
+   otherwise indistinguishable from a damaged header on the sole copy of the AOF — running this
+   procedure against a volume that was *not* meant to be blank is the format-the-sole-copy event the
+   control was built to prevent. The operator states, in the window PR, why the prior store is gone or
+   abandoned.
+2. If the blank volume **replaces** `hcloud_volume.inngest_redis_luks` in place, the ADR-282
+   protection lift runs first in its own reviewed change(s) — Hetzner `delete_protection` off, let the
+   per-merge apply land it, then `prevent_destroy` off in a second PR — the §5c "Deliberate unprotect"
+   two-step, never one change and never an out-of-band lift. A *new* volume resource created alongside
+   the old one needs no lift — but it renders nothing until `inngest_luks_volume_id`
+   (`inngest-host.tf`) is re-pointed at it in the same change; otherwise `$DEV` still resolves the old
+   volume and the blank one sits attached-never-read.
+
+### Procedure
+
+1. **Delete `INNGEST_LUKS_ACTIVE_VOLUME_ID` in the `soleur-inngest` `prd` Doppler config.** A stale or
+   foreign pointer refuses at `STAGE=resolve` ("the pointer names volume N, which is not this host's
+   volume") — and on boot ≥2 at `reopen_pointer` — *before* the unpointed arm and its format allowlist
+   are ever reached. The pointer must be absent for the resolver to take `mode=unpointed` at all.
+2. **A reviewed PR widens the allowlist for the window**: `case '${inngest_doppler_config}' in
+   rehearsal_*)` → `rehearsal_*|prd)` in `cloud-init-inngest.yml`, and in the SAME diff the literal pins
+   that fail closed on an incomplete change — the `_D6_HEAD` pin, the D6-case literal, **T1.16i** (the
+   driven config table puts `prd` in the refuse-expectation arm; under the widen it reaches format)
+   and **T1.16k** (the `in rehearsal_*) ;; *) echo` glob-agreement pin) in
+   `inngest-redis-luks.test.sh`, and the UNP5/UNP5b expectations in
+   `inngest-redis-luks-loopback.test.sh` (under the widened glob a `prd` config formats, so UNP5's
+   refuse-expectation moves to a config still outside the glob). Every named pin fails closed — an
+   unexplained red on widen or revert means the change is incomplete, not that the suite is wrong.
+   The PR opens a dated revert follow-through before it merges: once `prd` satisfies the glob,
+   nothing alerts if it stays — the follow-through script should assert the literal on main is back
+   to `rehearsal_*)`, not only remind.
+3. **Dispatch `apply_target=inngest-host-replace`** on `apply-web-platform-infra.yml`. The host is
+   born with the new blank volume attached; `STAGE=resolve` takes `mode=unpointed`, the widened
+   allowlist admits `prd`, and the unpointed arm runs its format path.
+4. **Verify the stage rows** (Better Stack, `inngest-luks-stage` source): `luks_format` →
+   `luks_open_fresh` → `mkfs` → `mount_luks`, never `stage=unpointed_raw_refused`. Redis starts on the
+   empty store; then `op=resume` per #7228 — every replace strands the scheduler.
+5. **A second reviewed PR reverts the allowlist** and restores the pins — the widen/revert diff-pair
+   §5c uses for protection lifts. The suites fail closed on an incomplete revert.
+6. **Optionally re-write `INNGEST_LUKS_ACTIVE_VOLUME_ID`** to the new volume id in `prd`, restoring the
+   pinned-canonical invariant: the pointer arm is strictly stronger than the unpointed arm — a damaged
+   header under a pointer is a refusal, not a blank-reading that depends on the allowlist.
+
+What this deliberately is NOT: no standing flag, no variable, no apply target, no permanent `prd`
+blank-format path. A shipped mechanism that formats a blank `prd` volume on demand re-opens the
+format-the-sole-copy hole `unpointed_raw_refused` exists to close — the two reviewed PRs and the suite
+pins that fail closed on an incomplete revert are the whole control, and that is the cost of the
+route.
+
+## 2026-11-06 — the two-copy resolver decision is deliberate (#10112)
+
+`/usr/local/bin/inngest-luks-open.sh` (a `write_files` entry in `cloud-init-inngest.yml`, run by
+`inngest-luks-open.service`, started on boot 1 by `enable --now` and on boots ≥2 by its
+`WantedBy=multi-user.target` — as `reopen_noop` until boot ≥2) and the first-boot runcmd `STAGE=resolve`
+block each carry their own copy of the resolver decision — pointer absent → the one rendered volume;
+pointer `== LUKS_ID` → the pointer arm; anything else → refuse. The duplication is **accepted in
+writing** (this section is that acceptance; ADR-142 addendum 2026-11-06 records the same disposition),
+not an accident awaiting a shared helper. The named asymmetries are deliberate, not drift:
+
+- **The reopen never formats.** A blank unpointed volume there is `reopen_not_luks`, a refusal — only
+  the first-boot stage carries a format arm, and only behind the `rehearsal_*` allowlist above.
+- **Reporting differs by necessity.** The reopen runs pre-network and reports via `logger`
+  (`SOLEUR_INNGEST_LUKS_STAGE` on journald → Vector → Better Stack); the stage tees its detail to
+  `$INNGEST_LUKS_DETAIL` for the `inngest-luks-FAILED` phone-home.
+- **Pointer refusal granularity differs.** The stage distinguishes a non-numeric pointer first
+  (`*[!0-9]*` → its own FATAL, refusing to derive a device path from it); the reopen folds every
+  non-matching pointer into the single `reopen_pointer` refusal ("not this host's volume").
+
+The drift bound is mechanical, not aspirational: `inngest-redis-luks-loopback.test.sh` extracts and
+executes BOTH copies verbatim on every run — a behavioural divergence reds the suite — and
+`inngest-redis-luks.test.sh` pins the arm literals (`_D6_HEAD`, the D6-case line, T1.16j). ADR-142's
+2026-10-13 addendum (CTO ruling D5) already chose pinned duplication over a shared helper for the same
+two readers' `wait_dev` bound; this is that precedent applied to the resolver decision itself, which
+is frozen post-cutover. A future change that flips the fork to a shared `/usr/local/lib/` `write_files`
+helper edits `cloud-init-inngest.yml` and must re-run the open-PR overlap check on that file first —
+this plan's dated check is not inherited.

@@ -1,0 +1,133 @@
+# Mint the Cloudflare Origin CA certificate for app.soleur.ai and deliver it through Doppler `prd` (#10479, epic #10205, ADR-321 slice 2).
+# The body is scripts/mint-origin-ca-cert.sh; the offline suite is plugins/soleur/test/mint-origin-ca-cert.test.sh.
+#
+# DISPATCH-ONLY, and a production secret write in `mode=apply`. The authorization is the owner's fresh in-session go naming the exact
+# command. The typed confirm is a fat-finger guard, NOT an authorization (it is derivable from public inputs); the guard also refuses
+# a ref other than main, a bot, and any actor outside the committed owner allowlist, and the apply job runs on the reviewer-gated
+# environment web-platform-infra-apply, so a human approval is a second, separate key. `mode=plan` is the read-only rehearsal: it
+# reads the Cloudflare token (Tier-B project soleur-infra-privileged/prd) and the zone id (soleur/prd_terraform) from Doppler value-silently, builds a key and CSR on the runner, verifies the CSR, checks the
+# Cloudflare credential with a certificate LIST, and reports what apply would do. It creates nothing and writes nothing.
+#
+# WHAT APPLY WRITES. Doppler soleur/prd ORIGIN_TLS_KEY_B64 and ORIGIN_TLS_CERT_B64 (base64 -w0 of the PEM; the contract of
+# apps/web-platform/server/origin-tls.ts), read back and compared, with a compensating restore if anything disagrees. It restarts
+# nothing: the containers load the value at their next start. It never revokes an older certificate. The key never enters Terraform
+# state (ADR-320), a log, a summary or an artifact: this file uploads nothing and holds no terraform command.
+#
+# THE REPOSITORY IS PUBLIC. Every Cloudflare and Doppler response stays in a private 0600 file the script shreds; only parsed numbers,
+# ids, dates and fixed verdict tokens are printed. Inputs reach the shell through env: only, never interpolated into a run: body.
+#
+# THE ORDER:
+#   guard  no environment, no Doppler credential: the refusal ladder (dispatch event, first attempt, ref, actor, inputs, confirm).
+#   mint   Tier-B environment (infra-privileged for plan, reviewer-gated web-platform-infra-apply for apply): the infra-credentials
+#          loader, then the script in a deny-by-default child environment.
+#
+# LOCKS. One workflow-wide group, never cancelled, so two mints never overlap and the second sees the first's result (the policy in the
+# script then refuses an unforced re-mint of a certificate that is not expiring).
+name: Mint Origin CA Certificate
+
+run-name: mint-origin-ca-cert ${{ inputs.mode }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "plan = read-only rehearsal (no confirm needed). apply = mint the certificate and write ORIGIN_TLS_* to Doppler prd."
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+      replace:
+        description: "apply only: replace a certificate that is still valid for more than 90 days (a deliberate rotation). Default false refuses."
+        required: false
+        type: boolean
+        default: false
+      confirm:
+        description: "apply only: MINT-ORIGIN-CA-<YYYY-MM-DD> (UTC date of this run), or MINT-ORIGIN-CA-REPLACE-<YYYY-MM-DD> when replace is true. A fat-finger guard, NOT the authorization."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mint-origin-ca-cert
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      go: ${{ steps.guard.outputs.go }}
+      mode: ${{ steps.guard.outputs.mode }}
+      replace: ${{ steps.guard.outputs.replace }}
+      guard_epoch: ${{ steps.guard.outputs.guard_epoch }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      # No secret and no network here. Writes nothing.
+      - name: Refusal ladder (writes nothing)
+        id: guard
+        timeout-minutes: 2
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
+          INPUT_REPLACE: ${{ inputs.replace }}
+          INPUT_CONFIRM: ${{ inputs.confirm }}
+        run: bash scripts/mint-origin-ca-cert.sh guard
+
+  mint:
+    needs: guard
+    if: ${{ github.event_name == 'workflow_dispatch' && needs.guard.result == 'success' && needs.guard.outputs.go == 'true' }}
+    # plan runs unattended on the no-reviewer Tier-B environment; apply waits for the reviewer on web-platform-infra-apply (both are
+    # main-only and both carry DOPPLER_TOKEN_INFRA_PRIVILEGED).
+    environment: ${{ needs.guard.outputs.mode == 'apply' && 'web-platform-infra-apply' || 'infra-privileged' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        timeout-minutes: 2
+        with:
+          persist-credentials: false
+
+      - name: Load infra credentials (tiered)
+        uses: ./.github/actions/infra-credentials
+        timeout-minutes: 3
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+
+      - name: Mint (or plan) the Origin CA certificate
+        id: mint
+        timeout-minutes: 8
+        env:
+          MINT_MODE: ${{ needs.guard.outputs.mode }}
+          MINT_REPLACE: ${{ needs.guard.outputs.replace }}
+          MINT_GUARD_EPOCH: ${{ needs.guard.outputs.guard_epoch }}
+        run: |
+          set -uo pipefail
+          # Deny-by-default child environment: unset every exported name but the allowlist, in a subshell, so the loader's other
+          # exports (Hetzner, R2, GitHub App material) are not inherited by the script, the Doppler CLI or anything they spawn. This
+          # is hygiene against accidental inheritance, not a boundary (the parent step shell keeps the full environment readable
+          # at /proc/$PPID/environ by same-UID processes). No `env -i VAR=...` form: that would put the token in an argv.
+          # Exported shell functions are not variables (`compgen -e` never lists them), so they are unset by a second loop.
+          rc=0
+          (
+            while IFS= read -r v; do
+              case "$v" in PATH|HOME|TMPDIR|LANG|RUNNER_TEMP|GITHUB_STEP_SUMMARY|MINT_MODE|MINT_REPLACE|MINT_GUARD_EPOCH|TF_VAR_doppler_token_tf) ;; *) unset "$v" 2>/dev/null || true ;; esac
+            done < <(compgen -e)
+            while read -r _k _t f; do unset -f "$f" 2>/dev/null; done < <(declare -Fx)
+            exec timeout -k 10 420 bash scripts/mint-origin-ca-cert.sh run
+          ) || rc=$?
+          case "$rc" in
+            0) : ;;
+            124|137) echo "::error title=mint-origin-ca::verdict=timed_out the run was stopped after 420 seconds; read soleur/prd ORIGIN_TLS_* state before any retry" ;;
+            *) : ;;
+          esac
+          exit "$rc"

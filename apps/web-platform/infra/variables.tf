@@ -397,6 +397,19 @@ variable "adopt_seo_config_entrypoint" {
   default = true
 }
 
+# ADR-321 / #10479: the origin-TLS CANARY RULE switch (seo-config-rules.tf). Default FALSE so that merging the
+# code that declares the rule changes NOTHING at the edge; the rule exists in the live ruleset only while a
+# Doppler prd_terraform secret ENABLE_ORIGIN_TLS_CANARY_RULE=true is present when an apply runs
+# (`doppler run --name-transformer tf-var` turns it into TF_VAR_enable_origin_tls_canary_rule). Turning it on
+# and off is the owner's deliberate act (see the PR's Holds); removing the secret and re-applying removes the
+# rule in place (an in-place ruleset update, never a destroy of the entrypoint). The default is the safe state,
+# so an unprovisioned secret does not fail the merge-triggered apply (the no-default-variable hazard above).
+variable "enable_origin_tls_canary_rule" {
+  description = "Create the header-scoped strict-SSL canary rule for /health on app.soleur.ai (ADR-321). Off unless the owner sets ENABLE_ORIGIN_TLS_CANARY_RULE=true in Doppler prd_terraform."
+  type        = bool
+  default     = false
+}
+
 variable "cf_api_token_bot_management" {
   description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
   type        = string
@@ -681,9 +694,9 @@ variable "git_data_betterstack_logs_token" {
 }
 
 variable "host_proxy_tls_enabled" {
-  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default false, which is today's single-serving-host posture (#8754): SOLEUR_PROXY_BIND and SOLEUR_PROXY_PEER_ALLOWLIST are absent from Doppler prd, so delivering PROXY_TLS_* now would make createProxyServer fire a reportSilentFallback (createProxyServer.no-bind) on every web container start. Set true at the multi-host flip (#5274 Phase 3/6), in the same change that adds the bind + allowlist and the -target lines for all four addresses. Target the key and the cert together: a cert in prd without its key is unusable. See the ADR-118 amendment."
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert). Default true since the multi-host flip (#12167, ADR-118 amendment 2026-09-27): the per-merge saved plan in apply-web-platform-infra.yml targets all four addresses, key and cert together (a cert in prd without its key is unusable), and the SANs derive from every var.web_hosts private IP. SOLEUR_PROXY_BIND is NOT a Doppler prd value: ci-deploy.sh resolve_proxy_bind resolves each host's own private IP at deploy time, and SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER are operator-class prd writes; a host with PROXY_TLS_* but no bind fails closed and reports createProxyServer.no-bind. There is deliberately no TF_VAR or workflow-input route to this variable. Set false to retire the material: the four resources then plan as destroys, which needs [ack-destroy]."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "inngest_config_digest" {
@@ -869,4 +882,26 @@ variable "inngest_luks_cutover_complete" {
   description = "True once the Inngest Redis store has been cut over to the LUKS volume; arms the wrong-volume alert."
   type        = bool
   default     = true
+}
+
+# --- #11920 — egress_audit_ingest_token PREVIOUS grace secret --------------------
+# NAMING: ends `_previous`, never `_token`/`_pat` — the name is the only thing
+# distinguishing the grace-window feed from a credential an operator might think they
+# are expected to mint by hand (the `github_plan_actions_credential` precedent). The
+# value is never operator-minted: scripts/key-rotate.sh reads the OLD current token
+# value-silently out of Doppler and exports it as
+# TF_VAR_egress_audit_ingest_token_previous for the rotate apply only
+# (hr-tf-variable-no-operator-mint-default).
+#
+# The `""` DEFAULT IS LOAD-BEARING, not convenience: the whole root resolves every
+# TF_VAR before -target pruning, so a no-default dark variable would fail every
+# unrelated `terraform plan`/apply between merge and the first rotate — the #6780 P2
+# lesson var.inngest_config_digest records above. Empty is also the honest cleared
+# sentinel the clear apply `-replace`s back to, and the resource's
+# `ignore_changes = [value]` keeps routine applies diff-free on it in every state.
+variable "egress_audit_ingest_token_previous" {
+  description = "Grace-window PREVIOUS egress-audit ingest token (soleur/prd EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS). Fed ONLY by scripts/key-rotate.sh at rotate apply time (value-silent read of the old CURRENT) and cleared by the clear apply; default empty, written via -replace under ignore_changes=[value]. Same-host-hop credential, ADR-288."
+  type        = string
+  sensitive   = true
+  default     = ""
 }

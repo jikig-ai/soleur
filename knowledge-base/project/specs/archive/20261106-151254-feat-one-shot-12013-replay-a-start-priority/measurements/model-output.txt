@@ -1,0 +1,69 @@
+# model validation + what-if (python3 schedule-model-matrix.py <dir-with-tokens.tsv> <measurements-dir>); core model = _pj_fill backfill, width 4, measured pool-concurrent walls
+## validation vs measured (r1 pool 2728 s, replay-a start 1166 s; r3 pool 2942 s, start 967 s)
+r1-backfill jobs 160 sum 7294 model pool phase 2713
+ replay-a model start 1165 end 2713
+ lock:test-all/* chain sum 1164 n 57
+r3-backfill jobs 160 sum 7501 model pool phase 2920
+ replay-a model start 964 end 2920
+ lock:test-all/* chain sum 999 n 57
+## what-if
+reading  base  hoistA  hoistABC  starlast  hoistABC+starlast  hoistA+starlast  | floor(sum/4)
+r1-backfill  2713  2264  2197  2120  1897  1853 | 1824
+   stars in selection: ['scripts/test-all-capacity-signal']
+r3-backfill  2920  2753  2267  2461  1962  1962 | 1875
+   stars in selection: ['scripts/test-all-capacity-signal']
+r2-fifo-control  2585  2402  1984  2111  1705  1705 | 1609
+   stars in selection: ['scripts/test-all-capacity-signal']
+## detail
+r1-backfill sum 7294 sum/4 1824
+  baseline (registration order)                pool=  2713  replay-a start=  1165
+  hoist replay-a                               pool=  2264  replay-a start=     0
+  hoist replay-a,b,c                           pool=  2197  replay-a start=     0
+  hoist top-7 by measured wall                 pool=  2143  replay-a start=   288
+  LPT by committed weights (full reorder)      pool=  2513  replay-a start=     0
+  LPT by measured wall (oracle, full reorder)  pool=  2129  replay-a start=     0
+  committed weights a/b/c: [1033.094, 399.378, 326.172]
+  baseline @ width 8 (reference only)          pool=  2497  replay-a start=   948
+r3-backfill sum 7501 sum/4 1875
+  baseline (registration order)                pool=  2920  replay-a start=   964
+  hoist replay-a                               pool=  2753  replay-a start=     0
+  hoist replay-a,b,c                           pool=  2267  replay-a start=     0
+  hoist top-7 by measured wall                 pool=  2546  replay-a start=   280
+  LPT by committed weights (full reorder)      pool=  2756  replay-a start=     0
+  LPT by measured wall (oracle, full reorder)  pool=  2020  replay-a start=     0
+  committed weights a/b/c: [1033.094, 399.378, 326.172]
+  baseline @ width 8 (reference only)          pool=  2780  replay-a start=   824
+r2-fifo-control sum 6437 sum/4 1609
+  baseline (registration order)                pool=  2585  replay-a start=   885
+  hoist replay-a                               pool=  2402  replay-a start=     0
+  hoist replay-a,b,c                           pool=  1984  replay-a start=     0
+  hoist top-7 by measured wall                 pool=  2220  replay-a start=   237
+  LPT by committed weights (full reorder)      pool=  2451  replay-a start=     0
+  LPT by measured wall (oracle, full reorder)  pool=  1764  replay-a start=     0
+  committed weights a/b/c: [1033.094, 399.378, 326.172]
+  baseline @ width 8 (reference only)          pool=  2347  replay-a start=   647
+---- timeline r1, hoist a,b,c
+    0 plugins/soleur/test/ci-pr-affected-replay-a                  wall=  1549 start=     0 end=  1549 tok=[]
+    1 plugins/soleur/test/ci-pr-affected-replay-b                  wall=   710 start=     0 end=   710 tok=[]
+    2 plugins/soleur/test/ci-pr-affected-replay-c                  wall=   643 start=     0 end=   643 tok=[]
+   48 scripts/lint-shell-trace-credential-refusal                  wall=   451 start=   507 end=   959 tok=['lock:test-all']
+   95 tests/scripts/trio-baseline-census                           wall=   171 start=   737 end=   909 tok=[]
+   97 tests/scripts/argv-bearer-sweep                              wall=   373 start=   765 end=  1138 tok=[]
+   99 apps/web-platform [repo-wide+component]                      wall=   195 start=   909 end=  1105 tok=['fs:node_modules_vite']
+  101 apps/web-platform/test/destroy-ask-mutation                  wall=   288 start=  1138 end=  1426 tok=[]
+  102 apps/web-platform/test/approval-guard1-mutation              wall=   729 start=  1162 end=  1891 tok=[]
+  110 scripts/test-all-capacity-signal                             wall=     6 start=  1891 end=  1897 tok=['*']
+  129 plugins/soleur/test/operator-script.test.sh                  wall=   211 start=  1931 end=  2142 tok=[]
+  134 plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh       wall=   168 start=  2028 end=  2197 tok=[]
+  busy 7294 capacity 8788 idle slot-s 1493
+---- barrier-last variant (move * suites to end) + hoist
+  pool 1897
+## star-injection (assumed walls for the injected suites)
+r1-backfill  none                                 baseline=  2656 hoistABC=  2181 delta=  -476
+r1-backfill  +orphan-process-reaper (60s)         baseline=  3258 hoistABC=  2900 delta=  -359
+r1-backfill  +orphan-reaper(60)+mutations(120)    baseline=  3378 hoistABC=  3020 delta=  -359
+r1-backfill  +md-to-mrkdwn (30s)                  baseline=  3252 hoistABC=  2621 delta=  -631
+r3-backfill  none                                 baseline=  2863 hoistABC=  2291 delta=  -572
+r3-backfill  +orphan-process-reaper (60s)         baseline=  3427 hoistABC=  3146 delta=  -282
+r3-backfill  +orphan-reaper(60)+mutations(120)    baseline=  3547 hoistABC=  3266 delta=  -282
+r3-backfill  +md-to-mrkdwn (30s)                  baseline=  3392 hoistABC=  2907 delta=  -485

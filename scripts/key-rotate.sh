@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
 # key-rotate.sh - the orchestration body of .github/workflows/key-rotate.yml (#11294, ADR-317; runbook key-rotation.md).
 #
-# Rotates ONE non-tunnel secret per dispatch (the six rotatable keys of the table below; a seventh, egress_audit_ingest_token, is
-# plan-only) by a targeted Terraform -replace, then redeploys
-# the web fleet canary-then-prod. It SOURCES scripts/inngest-key-rotate.sh (ADR-307, untouched) and overrides what differs
+# Rotates ONE non-tunnel secret per dispatch (all seven keys of the table below; egress_audit_ingest_token became fully
+# rotatable when the no-SSH vector restart lever and the Terraform PREVIOUS secret landed, #11920) by a targeted
+# Terraform -replace, then redeploys the web fleet canary-then-prod. It SOURCES scripts/inngest-key-rotate.sh
+# (ADR-307, untouched) and overrides what differs
 # (CTO F1): the gate table, the in-flight list, the verdict tokens and the same-name redefinitions further down. Bash binds late,
 # so only a redefinition BY THE SAME NAME intercepts the sourced callers (kr_post_write_failure calls kr_refuse and kr_post_write_stop).
 #
 #   key-rotate.sh precondition        credential-free sanity step: the ref rung, then the redaction suite on the dispatched ref
-#   key-rotate.sh guard               refusal ladder; outputs go/mode/key/run_apply/run_redeploy/guard_epoch (writes nothing)
+#   key-rotate.sh guard               refusal ladder; outputs go/mode/key/run_apply/run_redeploy/guard_epoch (writes nothing);
+#                                     kk_chk_approval is a LIVE verify of the key-rotate-approval environment's protection_rules
 #   key-rotate.sh apply               re-checks, value-silent pre-state, plan, five-field projection, gate, apply, post-state
-#                                     (EFF_MODE=plan: everything up to and including the gate, writes nothing)
-#   key-rotate.sh redeploy recheck|track|verdict   the three steps of the redeploy job
+#                                     (EFF_MODE=plan: everything up to and including the gate, writes nothing). Egress apply-A
+#                                     also feeds the old CURRENT into TF_VAR_egress_audit_ingest_token_previous (env only).
+#   key-rotate.sh redeploy recheck|track|vector|verdict   the steps of the redeploy job; `vector` runs for egress only and,
+#                                     after a settle gate confirms every roster host's deploy slot is terminal,
+#                                     dispatches `restart vector _ _` over the deploy webhook, then polls the merged
+#                                     deploy-status until EVERY host reports a fresh component=vector success frame
+#   key-rotate.sh clear               egress only: plan+apply -replace of doppler_secret.egress_audit_ingest_token_previous
+#                                     with the var default "" (PREVIOUS cleared) once the vector leg is green
 #   key-rotate.sh notify              the ONLY issue filer: after a write, a job that was cancelled or never reported leaves no stop
 #                                     sentence of its own, so this files the one action-required issue
 #   key-rotate.sh --print-contract    offline and credential-free: the fixed verdict-token list
@@ -65,19 +73,24 @@ done
 # would make "the list equals the emitted literals" unsatisfiable.
 KR_VERDICT_TOKENS=(
   guard_ok ref_refused inputs_invalid actor_refused actor_not_owner rerun_refused confirm_mismatch quiet_window_missing
-  egress_rotate_unsupported_no_vector_restart_lever approval_environment_missing webhook_patch_not_ready owner_step_open
+  approval_environment_unprotected webhook_patch_not_ready owner_step_open
   kb_drift_cron_window kb_drift_walker_in_flight run_in_flight run_list_unreadable redaction_coverage_unconfirmed credential_absent
   authorization_stale copy_unreadable partial_absent_state plan_ok plan_gate_refused replace_not_requested terraform_failed
-  apply_failed post_hash_unreadable value_unchanged copies_differ rotated_redeploy_failed owner_step_pending issue_unfiled
+  apply_failed post_hash_unreadable value_unchanged copies_differ rotated_redeploy_failed vector_restarted previous_not_cleared
+  previous_not_staged owner_step_pending issue_unfiled
   rotate_ok job_cancelled internal_error
 )
 KR_INFLIGHT_WORKFLOWS=(apply-web-platform-infra.yml apply-deploy-pipeline-fix.yml web-platform-release.yml inngest-key-rotate.yml inngest-link-flip.yml cutover-inngest.yml deploy-inngest-image.yml)
 
 # THE GATE TABLE (Guard 1). One table feeds the -target list, the -replace list and the jq allowlist. Fields:
 # phase|key|address|flag|actions. flag=replace: targeted AND replaced. flag=target: targeted only; the address changes in place
-# because the replaced random_id feeds it. The four inngest_* secrets carry lifecycle.ignore_changes=[value], so they are replaced
-# with their random_id (replace-both); the other three have no ignore_changes, so a replaced random_id updates them in place and
+# because the replaced random_id feeds it. The four inngest_* secrets and egress_audit_ingest_token_previous carry
+# lifecycle.ignore_changes=[value], so they are replaced
+# with their random_id (replace-both) or written by -replace with the TF_VAR feed (PREVIOUS); the other three have no ignore_changes,
+# so a replaced random_id updates them in place and
 # there is no absent-secret window (CTO ruling 2026-11-02; terraform-target-parity.test.ts derives the flag from the HCL).
+# The egress PREVIOUS row (#11920) sits in the same apply-A: -replace writes the old CURRENT (staged via the
+# PREVIOUS TF variable, env only) so the route accepts CURRENT+PREVIOUS during the vector-restart window.
 KR_GATE_TABLE=(
   'A|inngest_manual_trigger_secret_dev|random_id.inngest_manual_trigger_secret_dev|replace|delete,create'
   'B|inngest_manual_trigger_secret_dev|doppler_secret.inngest_manual_trigger_secret_dev|replace|delete,create'
@@ -92,6 +105,7 @@ KR_GATE_TABLE=(
   'B|kb_drift_ingest_signing_key|doppler_secret.kb_drift_ingest_signing_key_app_runtime|target|update'
   'A|egress_audit_ingest_token|random_id.egress_audit_ingest_token|replace|delete,create'
   'B|egress_audit_ingest_token|doppler_secret.egress_audit_ingest_token|target|update'
+  'B|egress_audit_ingest_token|doppler_secret.egress_audit_ingest_token_previous|replace|delete,create'
   'A|github_webhook_secret|random_id.github_webhook_secret|replace|delete,create'
   'B|github_webhook_secret|doppler_secret.github_app_webhook_secret|target|update'
 )
@@ -110,12 +124,17 @@ KK_COPIES=(
 KK_KEYS=(inngest_manual_trigger_secret_dev inngest_manual_trigger_secret_prd inngest_signing_key_dev inngest_event_key_dev
   kb_drift_ingest_signing_key egress_audit_ingest_token github_webhook_secret)
 
-# Authorization posture (CTO H2). The environment infra-privileged has ZERO required reviewers (#11923), so the typed confirm is derivable
-# from public inputs: a fat-finger guard, not an authorization. Both actors must be in this committed, exact-match allowlist (the
-# CODEOWNERS owner); an owner PAT still passes (residual). Until the reviewer-gated environment exists, a rotate of the keys listed
-# in kk_chk_approval refuses approval_environment_missing; the PR that binds the apply job to that environment flips the one line.
+# Authorization posture (CTO H2). The environment infra-privileged has ZERO required reviewers by design (the unattended
+# apply-on-merge needs it), so the typed confirm is derivable from public inputs: a fat-finger guard, not an authorization.
+# The authorization is now TWO mechanisms: both actors must be in this committed, exact-match allowlist (the CODEOWNERS
+# owner), AND every rotate dispatch waits at the reviewer-gated `key-rotate-approval` environment in front of the first
+# production-mutating job (#11923). kk_chk_approval below is the LIVE verify of that environment's protection (a
+# referenced-but-absent environment auto-creates UNPROTECTED, the #6780 class): an unreadable read, a missing
+# required_reviewers/branch_policy type, an EMPTY reviewer list or a branch policy admitting anything but
+# refs/heads/main refuses approval_environment_unprotected. An owner PAT can still dispatch, but the
+# reviewer's approval remains a distinct human act (residual, bounded by the gate).
 KK_OWNER_LOGINS=(deruelle)
-KK_APPROVAL_ENV_BOUND=false
+KK_APPROVAL_ENV_BOUND=true
 KK_AUTH_MAX_AGE_S=3600
 KK_RETRIES=3
 KK_RETRY_SLEEP_S=20
@@ -125,13 +144,31 @@ KK_OWN_WORKFLOW="key-rotate.yml"
 KK_ISSUE_LIMIT=1000
 
 # BUDGET TABLE (seconds): only the values that differ from the sourced route. The suite pins the workflow's timeout-minutes to it as
-# plain literals (guard 15/25, apply 40/50, redeploy 85/105, notify 5/15). The G3 window constants derive from these.
+# plain literals (guard 15/25, approve 1/11, apply 40/50, redeploy 85/120, clear 40/50, notify 5/15). The G3 window constants derive from these.
 KK_APPLY_STEP_S=$((KR_TF_INIT_S + KR_TF_PLAN_S + KR_TF_APPLY_S + KR_STEP_SLACK_S))
 KK_APPLY_JOB_S=$((KK_APPLY_STEP_S + KR_JOB_SLACK_S))
 KK_RECHECK_STEP_S=600
-# The redeploy JOB holds four steps (checkout 2 + Re-checks 10 + track 85 + Verdict 5 = 102 min), so its bound is the track step plus
-# the sourced slack plus the 10 minutes the Re-checks step adds: 105 min.
-KK_REDEPLOY_JOB_S=$((KR_REDEPLOY_STEP_S + KR_JOB_SLACK_S + KK_RECHECK_STEP_S))
+# The approve job stamps approval_epoch after the reviewer click (the environment wait does not count against the job bound).
+KK_APPROVE_STEP_S=60
+KK_APPROVE_JOB_S=$((KK_APPROVE_STEP_S + KR_JOB_SLACK_S))
+# The vector leg (egress only): dispatch `restart vector _ _` over the deploy webhook, then poll the merged deploy-status
+# until every host reports a fresh component=vector success frame. A vector restart is seconds; the bound covers frame
+# propagation across the fan-out (the per-peer read itself is bounded at 3 s by cat-deploy-state.sh).
+KK_VECTOR_S=600
+KK_VECTOR_POLL_S=15
+# The pre-dispatch settle gate (#12299): the merged status can still show a peer's slot running (its own deploy holds
+# /var/lock/ci-deploy.lock) or a transient lock_contention when track declares green; a restart dispatched into that
+# window is silently lost (see kk_redeploy_vector). The 90 s gate plus the 600 s green poll stays under the 15-minute
+# vector step bound.
+KK_SETTLE_S=90
+KK_SETTLE_POLL_S=10
+KK_VECTOR_STEP_S=$((KK_VECTOR_S + KR_STEP_SLACK_S))
+# The redeploy JOB holds five steps (checkout 2 + Re-checks 10 + track 85 + vector 15 + Verdict 5 = 117 min), so its bound
+# is the track step plus the sourced slack plus the Re-checks step plus the vector step: 120 min.
+KK_REDEPLOY_JOB_S=$((KR_REDEPLOY_STEP_S + KR_JOB_SLACK_S + KK_RECHECK_STEP_S + KK_VECTOR_STEP_S))
+# The clear job (egress only): init + one plan + one apply for the single PREVIOUS row, same shape as the apply job.
+KK_CLEAR_STEP_S=$((KR_TF_INIT_S + KR_TF_PLAN_S + KR_TF_APPLY_S + KR_STEP_SLACK_S))
+KK_CLEAR_JOB_S=$((KK_CLEAR_STEP_S + KR_JOB_SLACK_S))
 # kb_drift window (CTO G3): refuse when [now, now + the remaining budget] intersects [03:00, 03:30] UTC.
 KK_KB_WIN_START_S=10800
 KK_KB_WIN_LEN_S=1800
@@ -270,9 +307,12 @@ kk_state_row() {
   case "$1:${EFF_KEY:-${INPUT_KEY:-}}" in
     partial_absent_state:kb_drift_ingest_signing_key) printf 'Doppler: some copies present, some absent (or all absent). Terraform state: partial. Running containers: old. URGENT, not auto-repaired: do not restart anything. If one copy is still present, recreate the missing copy in Doppler (or accept the mixed state) and then rotate; a rotate refuses identically until then. If every copy is absent, a recovery rotate is the way out.'; return 0 ;;
     partial_absent_state:*) printf 'Doppler: the copy is absent. Terraform state: partial. Running containers: old. URGENT, not auto-repaired: do not restart anything; run the recovery rotate now (every copy absent is the shape a rotate recovers).'; return 0 ;;
+    apply_failed:egress_audit_ingest_token) printf 'Doppler: per-copy classification printed in the run log; the ingest route still accepts the old token through PREVIOUS until the clear runs. Terraform state: possibly partial (a replace may have destroyed and not created). Running containers: old. Next safe action: a fresh rotate; if the CURRENT copy is absent it is urgent.'; return 0 ;;
   esac
   case "$1" in
     apply_failed) printf 'Doppler: per-copy classification printed in the run log. Terraform state: possibly partial (a replace may have destroyed and not created). Running containers: old. Next safe action: a fresh rotate; if any copy is absent it is urgent, because a container restart now starts without the secret.' ;;
+    previous_not_cleared) printf 'Doppler: CURRENT is new; EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS is still set (the old token stays accepted - the lossless direction). Terraform state: PREVIOUS populated. Running containers: new. Next safe action: re-dispatch the rotate (the clear leg re-runs); if it refuses again, clear EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS by hand in Doppler soleur/prd.' ;;
+    previous_not_staged) printf 'Doppler: CURRENT is new; EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS is absent or empty (the old token is accepted NOWHERE - the LOSSY direction: every host still on the old env is rejected). Terraform state: PREVIOUS empty. Running containers: old. Next safe action: redeploy the web fleet NOW so hosts pick up the new CURRENT; if old-env hosts must be served first, set EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS in Doppler soleur/prd to the prior token value (recoverable from a running host env or the Doppler audit log - drift-free under ignore_changes), then re-dispatch the rotate to land the clear.' ;;
     post_hash_unreadable) printf 'Doppler: unknown. Terraform state: new. Running containers: old. Next safe action: a fresh rotate; the value is unknown, not unchanged.' ;;
     value_unchanged) printf 'Doppler: OLD value. Terraform state: new random_id. Running containers: old. Next safe action: stop and read the ADR item on the ignore_changes premise before re-dispatching; a repeat means the premise is false.' ;;
     copies_differ) printf 'Doppler: both copies present but unequal. Terraform state: new. Running containers: old. Next safe action: a fresh rotate outside the cron window.' ;;
@@ -305,6 +345,7 @@ kk_degrade() {
     rotated_redeploy_failed:kb_drift_ingest_signing_key) printf 'Until a redeploy lands, the next 03:00 UTC kb-drift walker run is rejected.' ;;
     rotated_redeploy_failed:inngest_manual_trigger_secret_prd) printf 'Until a redeploy lands, soleur:trigger-cron and the internal routes answer 401 on hosts still on the old value.' ;;
     rotated_redeploy_failed:inngest_*_dev) printf 'No production container reads the soleur/dev keys; the production redeploy was a rehearsal of the route'"'"'s last leg.' ;;
+    previous_not_staged:*) printf 'Consequence: every egress send from a host still on the old env is rejected (the old token is accepted nowhere) until the fleet redeploys onto the new CURRENT or PREVIOUS is set by hand.' ;;
     apply_failed:*|post_hash_unreadable:*|value_unchanged:*|copies_differ:*|partial_absent_state:*|job_cancelled:*) kk_consequence "$k" ;;
     *) printf 'Consequence: depends on the verdict; read it before restarting anything.' ;;
   esac
@@ -338,10 +379,12 @@ kr_post_write_stop() {
   return 1
 }
 
-# kr_file_issue <token> <sentence>: the ONLY issue filer. De-duplicated on (key, token, run); re-lists after the create call and fails
-# loudly when the issue is not there (a swallowed `gh` error would leave a written rotation with no owner).
+# kr_file_issue <token> <sentence>: the ONLY issue filer. De-duplicated on (key, token, run). The create call's own URL is
+# the filing proof (GitHub's issue index lags a fresh create — the immediate re-list reported issue_unfiled while the
+# issue existed, #12299); a create that returns no URL is verified by a bounded re-list on the retry cadence, and fails
+# loudly when the issue is still not there (a swallowed `gh` error would leave a written rotation with no owner).
 kr_file_issue() {
-  local repo="${GITHUB_REPOSITORY:-}" key="${EFF_KEY:-}" run="${GITHUB_RUN_ID:-0}" title body list n num att="${GITHUB_RUN_ATTEMPT:-1}"
+  local repo="${GITHUB_REPOSITORY:-}" key="${EFF_KEY:-}" run="${GITHUB_RUN_ID:-0}" title body list n num att="${GITHUB_RUN_ATTEMPT:-1}" url try
   local -a labels=(--label action-required)
   kr_token_known "$1" || { kr_refuse issue_unfiled "the verdict token is unknown"; return 1; }
   if [[ -z "${GH_TOKEN:-}" || -z "$repo" ]]; then kr_refuse issue_unfiled "no GH_TOKEN or repository; the action-required issue was not filed"; return 1; fi
@@ -360,13 +403,21 @@ kr_file_issue() {
     gh issue comment "$num" --repo "$repo" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || { kr_refuse issue_unfiled "the follow-up comment could not be posted"; return 1; }
     return 0
   fi
-  gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" >/dev/null 2>&1 || true
-  list="$(gh issue list --repo "$repo" --label action-required --state open --limit "$KK_ISSUE_LIMIT" --json number,title 2>/dev/null)" || list="[]"
-  if ! jq -e --arg t "$title" 'any(.[]; .title == $t)' <<<"$list" >/dev/null 2>&1; then
-    kr_refuse issue_unfiled "the action-required issue was not created (or is missing its label); the red run is the only record"
-    return 1
+  url="$(gh issue create --repo "$repo" --title "$title" "${labels[@]}" --body-file "$KR_TMP/issue.md" 2>/dev/null)" || url=""
+  if [[ "$url" == */issues/[0-9]* ]]; then
+    kk_say "key-rotate: the action-required issue was filed (${url})"
+    return 0
   fi
-  return 0
+  # no URL: the create call failed, or its response was lost after the issue landed — a bounded re-list on the retry
+  # cadence covers both without racing the index (the old single immediate re-list is what produced the false
+  # issue_unfiled verdicts of #12299)
+  for ((try = 1; try <= KK_RETRIES; try++)); do
+    list="$(gh issue list --repo "$repo" --label action-required --state open --limit "$KK_ISSUE_LIMIT" --json number,title 2>/dev/null)" || list="[]"
+    if jq -e --arg t "$title" 'any(.[]; .title == $t)' <<<"$list" >/dev/null 2>&1; then return 0; fi
+    (( try < KK_RETRIES )) && kr_sleep "$KK_RETRY_SLEEP_S"
+  done
+  kr_refuse issue_unfiled "the action-required issue was not created (or is missing its label); the red run is the only record"
+  return 1
 }
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -400,19 +451,40 @@ kk_chk_actors() {
   kr_summary "actors: github.actor=$(printf '%s' "${GITHUB_ACTOR:-}" | kr_scrub) github.triggering_actor=$(printf '%s' "${GITHUB_TRIGGERING_ACTOR:-}" | kr_scrub)"
 }
 
-kk_chk_egress() {
-  [[ "${1:-${INPUT_KEY:-}}" != egress_audit_ingest_token ]] && return 0
-  KR_CHECK_TOKEN=egress_rotate_unsupported_no_vector_restart_lever
-  KR_CHECK_DETAIL="egress_audit_ingest_token is plan-only: Vector reads the token at start and no restart lever exists without SSH (#11920)"
-  return 1
-}
-
+# kk_chk_approval (CTO H2/G6, #11923): the LIVE verify of the reviewer-gated environment the rotate waits at. A
+# referenced-but-absent or drifted key-rotate-approval environment auto-creates UNPROTECTED (the #6780 vacuous-gate
+# class), so the workflow binding alone is not proof — every rotate reads protection_rules once, for every key (the
+# approve job gates mode=rotate for all keys). Fail closed at every rung: an unreadable API read refuses, an
+# environment whose protection_rules lack EITHER required_reviewers OR a branch policy refuses, a required_reviewers
+# rule whose reviewer list is EMPTY refuses (type-presence alone is not protection), and a deployment branch policy
+# that admits anything other than refs/heads/main refuses approval_environment_unprotected.
 kk_chk_approval() {
-  case "${1:-${INPUT_KEY:-}}" in inngest_manual_trigger_secret_prd|kb_drift_ingest_signing_key|github_webhook_secret) ;; *) return 0 ;; esac
-  [[ "$KK_APPROVAL_ENV_BOUND" == true ]] && return 0
-  KR_CHECK_TOKEN=approval_environment_missing
-  KR_CHECK_DETAIL="this key needs the reviewer-gated approval environment (#11923), which does not exist yet; the dev keys are not subject to this"
-  return 1
+  local out pol
+  if [[ "$KK_APPROVAL_ENV_BOUND" != true ]]; then
+    KR_CHECK_TOKEN=approval_environment_unprotected
+    KR_CHECK_DETAIL="KK_APPROVAL_ENV_BOUND is not true: the workflow's approve job is not bound to the reviewer-gated environment"
+    return 1
+  fi
+  out="$(gh api "repos/${GITHUB_REPOSITORY:-}/environments/key-rotate-approval" 2>/dev/null)" \
+    || { KR_CHECK_TOKEN=approval_environment_unprotected; KR_CHECK_DETAIL="the key-rotate-approval environment could not be read (an unreadable read is an unprotected environment, fail closed)"; return 1; }
+  if ! jq -e '[.protection_rules[]? | .type] | index("required_reviewers") and index("branch_policy")' <<<"$out" >/dev/null 2>&1; then
+    KR_CHECK_TOKEN=approval_environment_unprotected
+    KR_CHECK_DETAIL="the key-rotate-approval environment's protection_rules lack required_reviewers or a branch policy"
+    return 1
+  fi
+  # content level (a type that names no reviewer protects nobody)
+  if ! jq -e '[.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length > 0' <<<"$out" >/dev/null 2>&1; then
+    KR_CHECK_TOKEN=approval_environment_unprotected
+    KR_CHECK_DETAIL="the key-rotate-approval environment's required_reviewers rule lists no reviewer (a review nobody can give is no gate)"
+    return 1
+  fi
+  pol="$(gh api --paginate "repos/${GITHUB_REPOSITORY:-}/environments/key-rotate-approval/deployment-branch-policies" 2>/dev/null)" \
+    || { KR_CHECK_TOKEN=approval_environment_unprotected; KR_CHECK_DETAIL="the key-rotate-approval deployment-branch-policies read failed (an unreadable read is an unprotected environment, fail closed)"; return 1; }
+  if ! jq -e '.branch_policies as $p | ($p | length) > 0 and all($p[]; .type == "branch" and .name == "main")' <<<"$pol" >/dev/null 2>&1; then
+    KR_CHECK_TOKEN=approval_environment_unprotected
+    KR_CHECK_DETAIL="the key-rotate-approval deployment branch policy does not restrict deployments to refs/heads/main alone"
+    return 1
+  fi
 }
 
 kk_chk_webhook_ready() {
@@ -590,7 +662,6 @@ kk_cmd_guard() {
     kk_check run_attempt_is_1 kr_chk_attempt || return 1
     kk_check confirm_ok kr_chk_confirm || return 1
     kk_check quiet_window_attested kr_chk_quiet || return 1
-    kk_check key_rotatable kk_chk_egress || return 1
     kk_check approval_environment_bound kk_chk_approval || return 1
     kk_check webhook_patch_ready kk_chk_webhook_ready || return 1
   fi
@@ -667,6 +738,16 @@ kk_want() {
   # is recoverable although the copies are present
   grep -qx target <<<"$(kr_gate_rows B "$1" | cut -d'|' -f4)" && tgt=true
   base="$(jq -cs 'add' <(kr_gate_want A "$1") <(kr_gate_want B "$1"))" || return 1
+  # A phase-B row whose address ends _previous is the egress PREVIOUS satellite (#11920): its value is VAR-FED, so a
+  # real plan always knows it and the gate's recovery -> after_unknown_value clause can never hold for it (the clear
+  # leg spells the same row recovery:false in its one-row want). Demote it out of the recovery class: recover falls to
+  # the same ($all or $tgt) class the random_id row sits in, and previous_not_staged still verifies the staged value
+  # landed. The address comes out of the gate table (B19), never a literal.
+  local sat
+  sat="$(kr_gate_rows B "$1" | cut -d'|' -f3 | grep '_previous$' | head -1 || true)"
+  if [[ -n "$sat" ]]; then
+    base="$(jq -c --arg sat "$sat" 'map(if .address == $sat then .recovery = false else . end)' <<<"$base")" || return 1
+  fi
   repl="$( { kr_gate_replaces A "$1"; kr_gate_replaces B "$1"; } | sed -e 's/^-replace=//' | jq -R -cs 'split("\n") | map(select(length > 0))')"
   for i in "${!KK_CP[@]}"; do
     IFS='|' read -r _ p c nm addr <<<"${KK_CP[i]}"
@@ -820,14 +901,30 @@ kk_print_post() {
 
 kk_has_post() { local s; for s in "${KK_POST_ST[@]}"; do [[ "$s" == "$1" ]] && return 0; done; return 1; }
 
+# kk_egress_previous_feed (egress only, #11920): apply-A reads the OLD current value once, value-silently, into the
+# PREVIOUS TF variable — env only: the value never reaches argv, a file, a summary or a log (the
+# -replace of the PREVIOUS row in the same plan writes it, so the route accepts
+# CURRENT+PREVIOUS during the redeploy + vector-restart window). An absent CURRENT (the recovery rotate, KK_ABSENT_ALL)
+# feeds "": there is no old token left to preserve.
+kk_egress_previous_feed() {
+  local v rc=0
+  v="$(DOPPLER_TOKEN="${DOPPLER_TOKEN_TF:-}" timeout "$KK_DOPPLER_READ_S" doppler secrets get EGRESS_AUDIT_INGEST_TOKEN --plain -p soleur -c prd 2>/dev/null)" || rc=$?
+  if [[ "$rc" != 0 ]]; then
+    if [[ "$KK_ABSENT_ALL" == true ]]; then export TF_VAR_egress_audit_ingest_token_previous=""; return 0; fi
+    kr_refuse copy_unreadable "the old EGRESS_AUDIT_INGEST_TOKEN could not be read for the PREVIOUS feed; nothing was written"
+    return 1
+  fi
+  export TF_VAR_egress_audit_ingest_token_previous="$v"
+  kk_say "key-rotate: the old EGRESS_AUDIT_INGEST_TOKEN was staged for the PREVIOUS row (env only, never argv)"
+}
+
 # kk_rotate_would_refuse <key>: report-only (plan mode): the first rotate-only rung this key would meet, as a token already in the
 # fixed set, or none. Not evaluated here: the guard-time rungs that need dispatch inputs or the issues API (confirm, quiet_window,
 # attempt, webhook_patch_ready, owner_step_open) and authorization_stale (in plan mode it would measure the plan run's own guard age,
 # not the age a later rotate dispatch would have).
 kk_rotate_would_refuse() {
   local tok=none
-  if ! kk_chk_egress "$1"; then tok="$KR_CHECK_TOKEN"
-  elif ! kk_chk_approval "$1"; then tok="$KR_CHECK_TOKEN"
+  if ! kk_chk_approval "$1"; then tok="$KR_CHECK_TOKEN"
   elif ! kk_recheck "$1" "$KK_KB_BUDGET_APPLY_S"; then tok="$KR_CHECK_TOKEN"
   fi
   [[ "$tok" == none ]] || kr_token_known "$tok" || tok=internal_error
@@ -841,7 +938,6 @@ kk_cmd_apply() {
   kr_init || return 1
   if [[ "$mode" == rotate ]]; then
     kk_require_attempt || return 1
-    kk_chk_egress "$key" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }
     kk_chk_approval "$key" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }
     kk_chk_stale || return 1
     kk_recheck "$key" "$KK_KB_BUDGET_APPLY_S" || { kr_refuse "$KR_CHECK_TOKEN" "${KR_CHECK_DETAIL}; nothing was written"; return 1; }
@@ -858,6 +954,7 @@ kk_cmd_apply() {
   kk_tf_clean
   kk_load_copies "$key"
   kk_pre_state || return 1
+  [[ "$key" == egress_audit_ingest_token ]] && { kk_egress_previous_feed || return 1; }
   kk_gate_plan "$key" p || return 1
   if [[ "$mode" == plan ]]; then
     kr_summary "gate rows: $(kr_gate_rows A "$key" | cut -d'|' -f3,5 | tr '\n' ' ')$(kr_gate_rows B "$key" | cut -d'|' -f3,5 | tr '\n' ' ')"
@@ -884,6 +981,29 @@ kk_cmd_apply() {
   if kk_has_post present-unchanged; then kr_post_write_failure value_unchanged "a copy did not change (new_differs_from_prior=false)" "The apply reported success but a copy did not change."; return 1; fi
   if [[ "${#KK_POST_H[@]}" -gt 1 && "$(printf '%s\n' "${KK_POST_H[@]}" | sort -u | wc -l | tr -d ' ')" != 1 ]]; then
     kr_post_write_failure copies_differ "copies_equal=false after the apply" "The apply finished but the copies of the key are not equal."; return 1
+  fi
+  # post-apply PREVIOUS verify (egress only, #11920): the grace window exists only when PREVIOUS reads back the value the
+  # feed staged - the old CURRENT (absent or empty reads as the LOSSY direction: hosts still on the old env are rejected
+  # until the redeploy). The recovery rotate (KK_ABSENT_ALL, nothing old left to preserve) legitimately reads absent or
+  # empty. Value-silent through kk_copy_state; the same retry shape as the post-state read covers Doppler lag. A read that
+  # cannot prove the staged value is previous_not_staged; a read that fails outright is post_hash_unreadable.
+  if [[ "$key" == egress_audit_ingest_token ]]; then
+    local pvs pvc=unread try
+    for ((try = 1; try <= KK_RETRIES; try++)); do
+      pvs="$(kk_copy_state soleur prd EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS)"
+      case "$pvs" in
+        "present "*) [[ "$KK_ABSENT_ALL" != true && "$pvs" == "present ${KK_PRE_H[0]:-none}" ]] && pvc=ok || pvc=fail ;;
+        absent|unknown:read_empty|unknown:listing_empty) [[ "$KK_ABSENT_ALL" == true ]] && pvc=ok || pvc=fail ;;
+        *) pvc=unread ;;
+      esac
+      [[ "$pvc" == ok ]] && break
+      (( try < KK_RETRIES )) && kr_sleep "$KK_RETRY_SLEEP_S"
+    done
+    case "$pvc" in
+      unread) kr_post_write_failure post_hash_unreadable "EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS could not be read back after the apply" "The apply landed but the PREVIOUS read-back failed."; return 1 ;;
+      fail) kr_post_write_failure previous_not_staged "after the apply, EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS reads ${pvs:-unknown} - the old token is accepted nowhere (hosts on the old env are rejected until the redeploy)" "The apply landed but the PREVIOUS staging did not take."; return 1 ;;
+    esac
+    kk_say "key-rotate: post-apply verify - EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS reads the staged old value"
   fi
   kk_say "key-rotate: apply done for key=${key}; every copy changed and the copies are equal; the redeploy leg is next"
   [[ "$KK_ABSENT_ALL" == true ]] && { kk_say "key-rotate: recovery path - the old value survives only in running containers; the redeploy is mandatory and urgent"; }
@@ -949,16 +1069,267 @@ kk_redeploy_verdict() { # the last step: exports a verdict on EVERY path
   if [[ "$key" == github_webhook_secret ]]; then
     kr_post_write_failure owner_step_pending "the redeploy was confirmed by track.sh; the owner step is the only thing left" "The rotation landed and the fleet redeploy was confirmed."; return 1
   fi
+  if [[ "$key" == egress_audit_ingest_token ]]; then
+    if [[ "${EFF_VECTOR_OUTCOME:-}" != success ]]; then
+      kr_post_write_failure rotated_redeploy_failed "the vector restart leg did not confirm every host (outcome ${EFF_VECTOR_OUTCOME:-unknown}); PREVIOUS stays set and the old token remains accepted" "The fleet redeploy was confirmed but the vector restart did not confirm on every host."
+      return 1
+    fi
+    kr_ok vector_restarted "key=${key}; the fleet redeploy and the per-host vector restart were confirmed; the PREVIOUS clear leg is next"
+    return 0
+  fi
   kr_ok rotate_ok "key=${key}; the fleet redeploy was confirmed by track.sh (this does not prove each consumer picked up the value)"
+}
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# REDEPLOY vector (egress only, #11920): dispatch `restart vector _ _` with the peer roster over the existing deploy
+# webhook channel (adnanh/webhook, the same HMAC + CF-Access path track.sh uses), then poll the MERGED deploy-status
+# until every host reports a fresh component=vector success frame (start_ts above that host's own baseline frame). A
+# host that does not report makes the leg non-green: the clear job never runs and PREVIOUS stays set (FR9 - the old
+# token remains accepted, the lossless direction). The per-peer slots of the merged read are the peers' whole status
+# JSON (cat-deploy-state.sh), so a peer error slot is a failure, never a pass.
+#
+# #12299: the dispatch additionally runs AFTER a settle gate. track green does not mean a peer's deploy has released
+# /var/lock/ci-deploy.lock — a `restart vector` fanned out while a peer is mid-deploy loses that host's flock -n; the
+# loser's transient vector/lock_contention frame is then OVERWRITTEN by the still-running deploy's terminal frame, so
+# kk_vector_green can never see a fresh vector/success for it and the leg times out into rotated_redeploy_failed with
+# nothing actually wrong. The gate polls the merged status until EVERY roster slot is terminal (a numeric exit_code
+# >= 0 whose reason is neither running nor lock_contention — a lock_contention frame is terminal for the loser but
+# proves the lock is still held by another invocation), then the settled read doubles as the per-host baseline and the
+# restart is dispatched. One mid-window re-dispatch is kept as a residual: a peer that still lost the first fan-out is
+# caught by the second (the peer arm is an idempotent try-restart).
+KK_DEPLOY_BASE="deploy.soleur.ai"
+declare -A KK_VBASE_PEERS=()
+KK_VBASE_SELF=0
+KK_VBASE_EPOCH=0
+
+kk_vector_status() { # <outfile> -> the http code on stdout; the body lands in $1
+  # shellcheck source=/dev/null
+  source "$KK_ROOT/scripts/lib/bearer-curl.sh" || return 1
+  bc_curl key-rotate 'X-Signature-256:sha256=:KK_GET_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+    'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+    -s --max-time 15 -o "$1" -w '%{http_code}' -X GET "https://${KK_DEPLOY_BASE}/hooks/deploy-status" || echo 000
+}
+
+# kk_vector_green <status-file>: the responder's base frame is a fresh component=vector success AND every roster ip
+# either reports one in its peers slot or is the responder itself (absent from .peers = self, covered by the base frame).
+kk_vector_green() {
+  local f="$1" ip st base
+  st="$(jq -r 'select(.component == "vector" and .reason == "success") | .start_ts // 0' "$f" 2>/dev/null)"
+  [[ "$st" =~ ^[0-9]+$ && "$st" -gt "$KK_VBASE_SELF" ]] || return 1
+  for ip in ${WEB_HOST_PRIVATE_IPS//,/ }; do
+    st="$(jq -r --arg ip "$ip" '.peers[$ip] // empty | select(type == "object") | select(.component == "vector" and .reason == "success") | .start_ts // 0' "$f" 2>/dev/null)"
+    if [[ -z "$st" ]]; then
+      jq -e --arg ip "$ip" '.peers | has($ip)' "$f" >/dev/null 2>&1 && return 1   # a slot exists but holds no fresh success
+      continue   # absent slot: the responder's own ip, already confirmed by the base frame
+    fi
+    [[ "$st" =~ ^[0-9]+$ ]] || return 1
+    base="${KK_VBASE_PEERS[$ip]:-$KK_VBASE_EPOCH}"
+    (( st > base )) || return 1
+  done
+  return 0
+}
+
+# kk_vector_slot_rows <status-file>: one "ip component/reason/start_ts/exit_code" line per roster host — the .peers[ip]
+# slot when present, the base frame for an absent slot (the responder itself, the kk_vector_green convention). A peer
+# error object prints its error word in place of the reason.
+kk_vector_slot_rows() {
+  local f="$1" ip
+  for ip in ${WEB_HOST_PRIVATE_IPS//,/ }; do
+    jq -r --arg ip "$ip" '
+      (if (.peers // {} | has($ip)) then .peers[$ip] else . end) as $s
+      | "\($ip) \($s.component // "-")/\($s.reason // ($s.error // "-"))/\($s.start_ts // "-")/\($s.exit_code // "-")"' \
+      "$f" 2>/dev/null
+  done
+}
+
+# kk_vector_settled <status-file>: every roster ip's slot is terminal — a numeric exit_code >= 0 with a reason that is
+# neither running nor lock_contention. A peer error slot ({"error":...}) has no exit_code and is not settled.
+kk_vector_settled() {
+  local f="$1" ip
+  for ip in ${WEB_HOST_PRIVATE_IPS//,/ }; do
+    jq -e --arg ip "$ip" '
+      (if (.peers // {} | has($ip)) then .peers[$ip] else . end) as $s
+      | (($s.exit_code | type) == "number" and $s.exit_code >= 0)
+        and (($s.reason // "") != "running" and ($s.reason // "") != "lock_contention")' \
+      "$f" >/dev/null 2>&1 || return 1
+  done
+  return 0
+}
+
+# kk_vector_dispatch: POST the restart-vector command over the deploy webhook; prints the http code. Idempotent by
+# contract (the peer arm is systemctl try-restart), which is what licenses the mid-window re-dispatch.
+kk_vector_dispatch() {
+  local payload post_sig
+  payload="$(jq -cn --arg cmd "restart vector _ _" --arg peers "$WEB_HOST_PRIVATE_IPS" '{command:$cmd, peers:$peers}')"
+  post_sig="$(printf '%s' "$payload" | bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET)" || post_sig=""
+  if [[ -z "$post_sig" ]]; then kk_say "key-rotate: the dispatch signature could not be computed; nothing was sent"; printf '000'; return; fi
+  KK_POST_SIG="$post_sig"
+  bc_curl key-rotate 'X-Signature-256:sha256=:KK_POST_SIG' 'CF-Access-Client-Id::CF_ACCESS_CLIENT_ID' \
+    'CF-Access-Client-Secret::CF_ACCESS_CLIENT_SECRET' -- \
+    -s -o /dev/null -w '%{http_code}' --max-time 30 -X POST -H "Content-Type: application/json" \
+    -d "$payload" "https://${KK_DEPLOY_BASE}/hooks/deploy" || echo 000
+}
+
+kk_redeploy_vector() {
+  [[ "${EFF_MODE:-}" == rotate && "${EFF_KEY:-}" == egress_audit_ingest_token ]] || { kr_refuse internal_error "the vector leg runs for egress rotate only"; return 1; }
+  kr_init || return 1
+  if [[ -z "${WEBHOOK_DEPLOY_SECRET:-}" || -z "${CF_ACCESS_CLIENT_ID:-}" || -z "${CF_ACCESS_CLIENT_SECRET:-}" ]]; then
+    kk_say "key-rotate: the deploy webhook trio is not set; the vector restart was not dispatched"; return 1
+  fi
+  [[ "${WEB_HOST_PRIVATE_IPS:-}" =~ ^[0-9.]+(,[0-9.]+)*$ ]] \
+    || { kk_say "WEB_HOST_PRIVATE_IPS is unset or malformed; a partial vector restart would leave the fleet mixed. Nothing was dispatched."; return 1; }
+  # shellcheck source=/dev/null
+  source "$KK_ROOT/scripts/lib/bearer-curl.sh" || { kk_say "key-rotate: bearer-curl.sh could not be loaded; the vector restart was not dispatched"; return 1; }
+  local ip b post_code http start now retried="" row
+  KK_GET_SIG="$(bc_hmac_sha256_hex WEBHOOK_DEPLOY_SECRET < /dev/null)" || KK_GET_SIG=""
+  if [[ -z "$KK_GET_SIG" ]]; then kk_say "key-rotate: the status-read signature could not be computed; the vector restart was not dispatched"; return 1; fi
+  # the settle gate (#12299): poll the merged status until every roster slot is terminal (per-poll slot rows in the
+  # log, the full table on timeout), bounded by KK_SETTLE_S; the settled read doubles as the per-host baseline
+  start="$(kr_now)"
+  while :; do
+    http="$(kk_vector_status "$KR_TMP/vbase.json")"
+    if [[ "$http" == 200 ]] && kk_vector_settled "$KR_TMP/vbase.json"; then
+      kk_say "key-rotate: settle gate - every host slot is terminal; taking the read as the per-host baseline"
+      break
+    fi
+    now="$(kr_now)"
+    if (( now - start + KK_SETTLE_POLL_S > KK_SETTLE_S )); then
+      kk_say "key-rotate: settle gate - not every host reported a terminal frame within ${KK_SETTLE_S}s (last read HTTP ${http}); the vector restart was not dispatched. Per-host table:"
+      while IFS= read -r row; do kk_say "  ${row}"; done < <(kk_vector_slot_rows "$KR_TMP/vbase.json")
+      return 1
+    fi
+    if [[ "$http" == 200 ]]; then
+      while IFS= read -r row; do kk_say "  ${row}"; done < <(kk_vector_slot_rows "$KR_TMP/vbase.json")
+    else
+      kk_say "key-rotate: settle gate - /hooks/deploy-status unreadable (HTTP ${http}); retrying"
+    fi
+    kr_sleep "$KK_SETTLE_POLL_S"
+  done
+  # the per-host baseline (fail closed, like track.sh): a frame is fresh only when start_ts exceeds it
+  KK_VBASE_SELF="$(jq -r '.start_ts // 0' "$KR_TMP/vbase.json" 2>/dev/null)"
+  KK_VBASE_EPOCH="$(kr_now)"
+  if [[ ! "$KK_VBASE_SELF" =~ ^[0-9]+$ || "$KK_VBASE_SELF" == 0 ]]; then kk_say "key-rotate: /hooks/deploy-status returned no numeric start_ts baseline; refusing to assert a vector restart blind"; return 1; fi
+  KK_VBASE_PEERS=()
+  for ip in ${WEB_HOST_PRIVATE_IPS//,/ }; do
+    b="$(jq -r --arg ip "$ip" '.peers[$ip].start_ts // empty' "$KR_TMP/vbase.json" 2>/dev/null)"
+    [[ "$b" =~ ^[0-9]+$ ]] || b="$KK_VBASE_EPOCH"
+    KK_VBASE_PEERS[$ip]="$b"
+  done
+  post_code="$(kk_vector_dispatch)"
+  if [[ "$post_code" != 202 ]]; then kk_say "key-rotate: POST /hooks/deploy rejected (HTTP ${post_code}); the vector restart was not dispatched"; return 1; fi
+  kk_say "key-rotate: restart vector dispatched (HTTP 202, peers=${WEB_HOST_PRIVATE_IPS}); polling for a fresh component=vector success frame on every host"
+  start="$(kr_now)"
+  while :; do
+    http="$(kk_vector_status "$KR_TMP/vpoll.json")"
+    if [[ "$http" == 200 ]] && kk_vector_green "$KR_TMP/vpoll.json"; then
+      kk_say "key-rotate: every host reports a fresh component=vector success frame"
+      return 0
+    fi
+    now="$(kr_now)"
+    if [[ -z "$retried" ]] && (( now - start >= KK_VECTOR_S / 2 )); then
+      retried=1
+      post_code="$(kk_vector_dispatch)"
+      if [[ "$post_code" == 202 ]]; then
+        kk_say "key-rotate: mid-window re-dispatch of restart vector accepted (HTTP 202; idempotent try-restart - covers a peer that lost the first fan-out to its own deploy lock)"
+      else
+        kk_say "key-rotate: mid-window re-dispatch rejected (HTTP ${post_code}); the first dispatch's frames still govern"
+      fi
+    fi
+    if (( now - start + KK_VECTOR_POLL_S > KK_VECTOR_S )); then
+      kk_say "key-rotate: not every host reported a fresh component=vector success frame within ${KK_VECTOR_S}s; PREVIOUS stays set"
+      return 1
+    fi
+    kr_sleep "$KK_VECTOR_POLL_S"
+  done
 }
 
 kk_cmd_redeploy() {
   case "${1:-}" in
     recheck) kk_redeploy_recheck ;;
     track) kk_redeploy_track ;;
+    vector) kk_redeploy_vector ;;
     verdict) kk_redeploy_verdict ;;
-    *) printf 'usage: %s redeploy recheck|track|verdict\n' "${0##*/}" >&2; return 64 ;;
+    *) printf 'usage: %s redeploy recheck|track|vector|verdict\n' "${0##*/}" >&2; return 64 ;;
   esac
+}
+
+# ---------------------------------------------------------------------------------------------------------------------------
+# CLEAR (egress only, #11920): once the vector leg has confirmed every host on the fresh frame, plan+apply the -replace
+# of doppler_secret.egress_audit_ingest_token_previous with the var default "" — the honest cleared sentinel (the ingest
+# route skips empty values). The plan is gated on exactly that one row; the write goes through the same kr_tf
+# chokepoint. Post-verify reads PREVIOUS value-silently: it must be absent or empty, else the old token would stay
+# accepted silently — a non-success (previous_not_cleared) retains PREVIOUS only as a diagnosis, never as an outcome.
+kk_cmd_clear() {
+  local key="${EFF_KEY:-}" rc=0 want cls s try
+  [[ "${EFF_MODE:-}" == rotate && "$key" == egress_audit_ingest_token ]] || { kr_refuse internal_error "clear runs for egress rotate only"; return 1; }
+  kk_valid_inputs rotate "$key" || return 1
+  kr_init || return 1
+  if ! kk_require_attempt; then
+    kr_post_write_failure previous_not_cleared "the clear leg re-run was refused (${KR_CHECK_TOKEN}); PREVIOUS stays set and the old token remains accepted" "The PREVIOUS clear did not run."
+    return 1
+  fi
+  if ! kk_recheck "$key" 0 redeploy; then
+    kr_post_write_failure previous_not_cleared "the clear leg could not start (${KR_CHECK_TOKEN}: ${KR_CHECK_DETAIL}); PREVIOUS stays set and the old token remains accepted" "The PREVIOUS clear did not run."
+    return 1
+  fi
+  if ! kr_tf_prepare; then
+    kk_tf_clean
+    kr_post_write_failure previous_not_cleared "the init could not start the clear (verdict ${KR_VERDICT:-terraform_failed}); PREVIOUS stays set" "The PREVIOUS clear did not run."
+    return 1
+  fi
+  # one-row want: the PREVIOUS row delete,create by the requested replace, nothing else. The address comes out of the
+  # gate table (B19: no resource literal outside it) and the flags through the one -target/-replace construction site.
+  local prow pa targets=() repls=()
+  prow="$(kr_gate_rows B "$key" | grep 'previous' || true)"
+  [[ -n "$prow" ]] || { kr_refuse internal_error "the gate table carries no PREVIOUS row for $key"; return 1; }
+  IFS='|' read -r _ _ pa _ _ <<<"$prow"
+  mapfile -t targets < <(kr_gate_targets B "$key" | grep "=$pa\$")
+  mapfile -t repls < <(kr_gate_replaces B "$key" | grep "=$pa\$")
+  want="$(jq -cn --arg a "$pa" '[{address:$a,actions:["delete","create"],recovery:false,replace:true,recover:false}]')"
+  rc=0
+  kr_tf "plan-clear" plan -no-color -input=false -out="$KR_TMP/tfplan-clear" -var="ssh_key_path=${KR_TMP}/ci_ssh_key.pub" \
+    "${targets[@]}" "${repls[@]}" || rc=$?
+  if [[ "$rc" != 0 ]]; then
+    cls="$(kk_tf_class "plan-clear" "$rc")"; kk_tf_clean
+    kr_post_write_failure terraform_failed "the clear plan step exited ${rc} (cause class: ${cls}); its output was deleted from the runner; PREVIOUS stays set" "The PREVIOUS clear could not be planned."
+    return 1
+  fi
+  rc=0
+  KR_TF_T="$KK_TF_SHOW_S" kr_tf "show-clear" show -json "$KR_TMP/tfplan-clear" || rc=$?
+  if [[ "$rc" != 0 ]]; then
+    cls="$(kk_tf_class "show-clear" "$rc")"; kk_tf_clean
+    kr_post_write_failure terraform_failed "the clear plan-to-JSON step exited ${rc} (cause class: ${cls}); its output was deleted from the runner; PREVIOUS stays set" "The PREVIOUS clear could not be gated."
+    return 1
+  fi
+  local proj="$KR_TMP/proj-clear.json"
+  ( umask 077; jq -c "$KK_PROJECT_JQ" "$KR_TMP/tf-show-clear.out" > "$proj" 2>/dev/null ) || rc=$?
+  kk_tf_clean keep-plan
+  if [[ "$rc" != 0 || ! -s "$proj" ]] || ! jq -e 'type == "array"' "$proj" >/dev/null 2>&1; then
+    kk_tf_clean
+    kr_post_write_failure terraform_failed "the clear plan projection failed or was empty; the full plan JSON was deleted; PREVIOUS stays set" "The PREVIOUS clear could not be gated."
+    return 1
+  fi
+  if ! kk_gate "$key" "$proj" "$want"; then kk_tf_clean; return 1; fi
+  rc=0
+  KR_TF_T="$KR_TF_APPLY_S" kr_tf apply apply -no-color -input=false "$KR_TMP/tfplan-clear" || rc=$?
+  kk_tf_clean
+  if [[ "$rc" != 0 ]]; then
+    kr_post_write_failure apply_failed "the clear apply exited ${rc}; its output was deleted from the runner; PREVIOUS may be absent, populated or unchanged" "The PREVIOUS clear failed part-way."
+    return 1
+  fi
+  # post-verify (the value is read through a pipe into sha256sum only): PREVIOUS must be absent or empty. Doppler reads
+  # can lag the write, so the same retry shape as the post-state read applies.
+  for ((try = 1; try <= KK_RETRIES; try++)); do
+    s="$(kk_copy_state soleur prd EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS)"
+    case "$s" in
+      absent|unknown:read_empty|unknown:listing_empty)
+        kr_ok rotate_ok "key=${key}; the PREVIOUS clear applied and EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS reads empty or absent"
+        return 0 ;;
+    esac
+    (( try < KK_RETRIES )) && kr_sleep "$KK_RETRY_SLEEP_S"
+  done
+  kr_post_write_failure previous_not_cleared "after the clear apply, EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS still reads ${s:-unknown}; the old token stays accepted" "The PREVIOUS clear applied but the token did not empty."
+  return 1
 }
 
 # ---------------------------------------------------------------------------------------------------------------------------
@@ -970,7 +1341,7 @@ kk_norm_result() { case "${1:-}" in success|failure|cancelled|skipped) printf '%
 # already established that the apply exported no write_started=true.
 kk_prewrite_token() {
   case "$1" in
-    rerun_refused|authorization_stale|credential_absent|copy_unreadable|plan_gate_refused|replace_not_requested|terraform_failed|run_in_flight|run_list_unreadable|kb_drift_cron_window|kb_drift_walker_in_flight|inputs_invalid|internal_error|egress_rotate_unsupported_no_vector_restart_lever|approval_environment_missing) return 0 ;;
+    rerun_refused|authorization_stale|credential_absent|copy_unreadable|plan_gate_refused|replace_not_requested|terraform_failed|run_in_flight|run_list_unreadable|kb_drift_cron_window|kb_drift_walker_in_flight|inputs_invalid|internal_error|approval_environment_unprotected) return 0 ;;
   esac
   return 1
 }
@@ -990,13 +1361,15 @@ kk_close_earlier() { # <key>: closes only issues whose title run number is LESS 
 }
 
 kr_cmd_notify() {
-  local mode="${EFF_MODE:-}" key="${EFF_KEY:-}" ra rr av rv ws wrote=0 tok what
+  local mode="${EFF_MODE:-}" key="${EFF_KEY:-}" ra rr rcr av rv cv ws wrote=0 tok what
   [[ "$mode" == rotate ]] || { kk_say "key-rotate: notify has nothing to report for mode '${mode:-}'"; return 0; }
   kk_valid_inputs rotate "$key" || return 1
-  ra="$(kk_norm_result "${EFF_RESULT_APPLY:-}")"; rr="$(kk_norm_result "${EFF_RESULT_REDEPLOY:-}")"
-  av="${EFF_APPLY_VERDICT:-}"; rv="${EFF_REDEPLOY_VERDICT:-}"; ws="${EFF_WRITE_STARTED:-}"
+  ra="$(kk_norm_result "${EFF_RESULT_APPLY:-}")"; rr="$(kk_norm_result "${EFF_RESULT_REDEPLOY:-}")"; rcr="$(kk_norm_result "${EFF_RESULT_CLEAR:-}")"
+  av="${EFF_APPLY_VERDICT:-}"; rv="${EFF_REDEPLOY_VERDICT:-}"; cv="${EFF_CLEAR_VERDICT:-}"; ws="${EFF_WRITE_STARTED:-}"
   kr_init || return 1
   if [[ "$rr" == success && "$rv" == rotate_ok ]]; then kk_close_earlier "$key"; return 0; fi
+  # egress only: the terminal green is the CLEAR leg's rotate_ok (vector_restarted is the interim marker)
+  if [[ "$key" == egress_audit_ingest_token && "$rr" == success && "$rv" == vector_restarted && "$rcr" == success && "$cv" == rotate_ok ]]; then kk_close_earlier "$key"; return 0; fi
   [[ "$ra" == skipped ]] && { kk_say "key-rotate: the apply job was skipped; nothing was written"; return 0; }
   case "$ra" in success|cancelled|unknown) wrote=1 ;; esac
   [[ "$ws" == true ]] && wrote=1
@@ -1005,10 +1378,11 @@ kr_cmd_notify() {
     elif [[ -z "$av" ]] || ! kk_prewrite_token "$av"; then wrote=1; fi
   fi
   if [[ "$wrote" == 0 ]]; then kk_say "key-rotate: no write happened (apply=${ra}); nothing to report"; return 0; fi
-  if [[ "$rr" == failure || "$rr" == cancelled ]] && kr_token_known "$rv" && [[ "$rv" != rotate_ok ]]; then tok="$rv"
+  if [[ "$rcr" == failure || "$rcr" == cancelled ]] && kr_token_known "$cv"; then tok="$cv"
+  elif [[ "$rr" == failure || "$rr" == cancelled ]] && kr_token_known "$rv" && [[ "$rv" != rotate_ok ]]; then tok="$rv"
   elif [[ "$ra" == failure ]] && kr_token_known "$av"; then tok="$av"
   else tok=job_cancelled; fi
-  what="A job after the first write ended without a stop sentence of its own (apply=${ra} redeploy=${rr})."
+  what="A job after the first write ended without a stop sentence of its own (apply=${ra} redeploy=${rr} clear=${rcr})."
   [[ -z "$ws" ]] && what="${what} (no write_started marker seen from the apply job: a write may or may not have happened)"
   [[ "$tok" == owner_step_pending ]] && what="The rotation landed and the fleet redeploy was confirmed."
   KR_VERDICT="$tok"
@@ -1024,8 +1398,9 @@ main() {
     guard) kk_cmd_guard ;;
     apply) kk_cmd_apply ;;
     redeploy) kk_cmd_redeploy "${2:-}" ;;
+    clear) kk_cmd_clear ;;
     notify) kr_cmd_notify ;;
-    *) printf 'usage: %s --print-contract|precondition|guard|apply|redeploy recheck|track|verdict|notify\n' "${0##*/}" >&2; return 64 ;;
+    *) printf 'usage: %s --print-contract|precondition|guard|apply|redeploy recheck|track|vector|verdict|clear|notify\n' "${0##*/}" >&2; return 64 ;;
   esac
 }
 

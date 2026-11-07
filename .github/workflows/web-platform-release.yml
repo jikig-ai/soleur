@@ -1178,6 +1178,7 @@ jobs:
           done
           echo "Verified migrations: ${verified_names[*]}"
 
+          # dedupe: benign — close-path read: a gh fault aborts this step (the job goes red = loud) with every follow-through issue left open; the next verified release retries the closes.
           issue_numbers=$(gh issue list \
             --label follow-through --state open \
             --limit 200 --json number --jq '.[].number')
@@ -1189,6 +1190,8 @@ jobs:
           closed=0
           while IFS= read -r issue_number; do
             [[ -z "$issue_number" ]] && continue
+            # dedupe: benign — close-path read: a failed body read yields empty and the -z arm
+            # skips the close; the issue stays open (visible) and the next verified release retries it.
             body=$(gh issue view "$issue_number" --json body --jq .body 2>/dev/null || echo "")
             [[ -z "$body" ]] && continue
 

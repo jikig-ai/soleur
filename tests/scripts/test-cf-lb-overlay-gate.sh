@@ -139,6 +139,33 @@ mk mu8 '{"resource_changes":[{"address":"cloudflare_load_balancer_monitor.web","
 run cf_lb_gate_ga_monitor_update "$TMP/mu8.json"; ok "monitor-fix: wrong path refused" $? 1
 mk mu9 '{"resource_changes":[{"address":"cloudflare_load_balancer_monitor.web","change":{"actions":["update"],"after":{"type":"http","port":80,"path":"/health","expected_codes":"2xx"}}}]}'
 run cf_lb_gate_ga_monitor_update "$TMP/mu9.json"; ok "monitor-fix: expected_codes drift refused" $? 1
+
+# --- ga-monitor-https arm (ADR-321 R7) ---
+HTTPS_OK='{"type":"https","port":443,"path":"/health","expected_codes":"200","allow_insecure":false,"header":[{"header":"Host","values":["app.soleur.ai"]}]}'
+mon_https() { printf '{"address":"cloudflare_load_balancer_monitor.web","change":{"actions":["update"],"after":%s}}' "$1"; }
+mk mh1 "{\"resource_changes\":[$(mon_https "$HTTPS_OK")]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh1.json"; ok "monitor-https: pinned https/:443 validate-cert Host=app.soleur.ai update passes" $? 0
+mk mh2 "{\"resource_changes\":[$(mon_https '{"type":"http","port":80,"path":"/health","expected_codes":"200","allow_insecure":false,"header":[{"header":"Host","values":["app.soleur.ai"]}]}')]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh2.json"; ok "monitor-https: http/:80 refused" $? 1
+mk mh3 "{\"resource_changes\":[$(mon_https '{"type":"https","port":443,"path":"/health","expected_codes":"200","allow_insecure":true,"header":[{"header":"Host","values":["app.soleur.ai"]}]}')]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh3.json"; ok "monitor-https: allow_insecure=true (no cert validation) refused" $? 1
+mk mh4 "{\"resource_changes\":[$(mon_https '{"type":"https","port":443,"path":"/health","expected_codes":"200"}')]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh4.json"; ok "monitor-https: missing Host header refused" $? 1
+mk mh5 "{\"resource_changes\":[$(mon_https '{"type":"https","port":443,"path":"/health","expected_codes":"200","allow_insecure":false,"header":[{"header":"Host","values":["evil.example"]}]}')]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh5.json"; ok "monitor-https: Host other than app.soleur.ai refused" $? 1
+mk mh6 "{\"resource_changes\":[$(mon_https '{"type":"https","port":8443,"path":"/health","expected_codes":"200","allow_insecure":false,"header":[{"header":"Host","values":["app.soleur.ai"]}]}')]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh6.json"; ok "monitor-https: right type wrong port refused" $? 1
+mk mh7 "{\"resource_changes\":[$(mon_https '{"type":"https","port":443,"path":"/health","expected_codes":"200","allow_insecure":false,"header":[{"header":"Host","values":["app.soleur.ai"]},{"header":"X-Extra","values":["1"]}]}')]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh7.json"; ok "monitor-https: extra header beside Host refused" $? 1
+mk mh8 '{"resource_changes":[{"address":"cloudflare_load_balancer_monitor.web","change":{"actions":["delete","create"]}}]}'
+run cf_lb_gate_ga_monitor_https "$TMP/mh8.json"; ok "monitor-https: delete+create (replace) refused" $? 1
+mk mh9 "{\"resource_changes\":[$(mon_https "$HTTPS_OK"),{\"address\":\"cloudflare_load_balancer_pool.web_1\",\"change\":{\"actions\":[\"update\"]}}]}"
+run cf_lb_gate_ga_monitor_https "$TMP/mh9.json"; ok "monitor-https: second member smuggled beside refused" $? 1
+mk mh10 '{"resource_changes":[]}'
+run cf_lb_gate_ga_monitor_https "$TMP/mh10.json"; ok "monitor-https: empty plan refused" $? 1
+# The http/:80 grader stays the rollback lever and must refuse the https shape (and the reverse).
+run cf_lb_gate_ga_monitor_update "$TMP/mh1.json"; ok "monitor-fix (rollback grader): the https shape is refused" $? 1
+run cf_lb_gate_ga_monitor_https "$TMP/mu1.json"; ok "monitor-https: the http/:80 rollback shape is refused" $? 1
 run cf_lb_gate_ga_monitor_update "$TMP/nonexistent.json"; ok "monitor-fix: unreadable plan refused" $? 1
 
 # --- ga-pool-update arm ---

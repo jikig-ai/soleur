@@ -155,7 +155,7 @@ row_skipped() {
 row_green() {
   local label="$1" want="$2"
   if ! landed; then fail "$label: mutation did not land (copy identical to pristine)"; return; fi
-  if engine_green 25 && [[ "$OUT" == *"$want"* ]]; then
+  if engine_green 12 && [[ "$OUT" == *"$want"* ]]; then
     pass "$label"
   else
     fail "$label: expected GREEN with $want (rc=$RC)"
@@ -173,8 +173,8 @@ if [[ ! -f "$ENGINE" ]]; then
   fail "case 0: engine $ENGINE_REL is missing"
 else
   run_engine "$REPO_ROOT"
-  if engine_green 25; then
-    pass "case 0: real repo is GREEN with >= 25 contexts ($(grep -E -- '^merge-group-coverage=OK' <<<"$OUT" | head -n 1))"
+  if engine_green 12; then
+    pass "case 0: real repo is GREEN with >= 12 contexts ($(grep -E -- '^merge-group-coverage=OK' <<<"$OUT" | head -n 1))"
   else
     fail "case 0: real repo is not green (rc=$RC)"
     printf '%s\n' "$OUT" | head -n 15 >&2
@@ -183,7 +183,7 @@ else
   start=$SECONDS
   run_engine "$REPO_ROOT"
   elapsed=$((SECONDS - start))
-  if [[ "$elapsed" -lt 15 ]] && engine_green 25; then
+  if [[ "$elapsed" -lt 15 ]] && engine_green 12; then
     pass "case 0b: runs under env -i PATH=$SANDBOX_PATH in ${elapsed}s (< 15s)"
   else
     fail "case 0b: env -i run was not green within 15s (rc=$RC, ${elapsed}s)"
@@ -210,11 +210,11 @@ echo "-- mutation rows"
 
 m1() { sed -i '/^  merge_group:$/d' "$SBX/.github/workflows/ci.yml"; }
 mutate m1
-row_red "row 1: ci.yml loses merge_group (names lockfile-sync)" "merge-group-coverage: lockfile-sync:"
+row_red "row 1: ci.yml loses merge_group (names guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 
-m2() { sed -i "/^  adr-ordinals:\$/a\\    if: github.event_name == 'pull_request'" "$SBX/.github/workflows/ci.yml"; }
+m2() { sed -i "/^  guards-ruleset:\$/a\\    if: github.event_name == 'pull_request'" "$SBX/.github/workflows/ci.yml"; }
 mutate m2
-row_red "row 2: required job gains a pull_request-only if (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+row_red "row 2: required job gains a pull_request-only if (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 
 m3() {
   printf '[]\n' > "$SBX/scripts/ci-required-ruleset-canonical-required-status-checks.json"
@@ -240,9 +240,9 @@ else
   fail "row 5: merge-queue-cla-synthetics.yml is missing from the workflows (nothing to mutate)"
 fi
 
-m6() { sed -i 's/^  lockfile-sync:$/  lockfile-sync2:/' "$SBX/.github/workflows/ci.yml"; }
+m6() { sed -i 's/^    name: guards-ruleset$/    name: guards-ruleset2/' "$SBX/.github/workflows/ci.yml"; }
 mutate m6
-row_red "row 6: required job renamed (lockfile-sync -> lockfile-sync2) has no producer" "merge-group-coverage: lockfile-sync: no merge_group producer"
+row_red "row 6: required context renamed (guards-ruleset -> guards-ruleset2) has no producer" "merge-group-coverage: guards-ruleset: no merge_group producer"
 
 m7() {
   cat > "$SBX/.github/workflows/zz-duplicate-name.yml" <<'EOF'
@@ -251,14 +251,14 @@ on:
   merge_group:
 jobs:
   other:
-    name: lockfile-sync
+    name: guards-ruleset
     runs-on: ubuntu-latest
     steps:
       - run: echo duplicate
 EOF
 }
 mutate m7
-row_red "row 7: a second job named lockfile-sync is an ambiguous producer" "merge-group-coverage: lockfile-sync: ambiguous"
+row_red "row 7: a second job named guards-ruleset is an ambiguous producer" "merge-group-coverage: guards-ruleset: ambiguous"
 
 # Row 8: the synthetic workflow posts a name the CLA ruleset does not require. The synthetic
 # names are DERIVED from the CLA canonical, so the workflow's posted set must equal it: an extra
@@ -269,35 +269,35 @@ row_red "row 8: synthetic posts cla-extra, which the CLA ruleset does not requir
 
 # Row 9: an `if:` that names merge_group only inside a NEGATION excludes the event; a substring
 # check would accept it. (Control: the positive spelling on the same job is accepted, see H2.)
-m9() { sed -i "/^  adr-ordinals:\$/a\\    if: github.event_name != 'merge_group'" "$SBX/.github/workflows/ci.yml"; }
+m9() { sed -i "/^  guards-ruleset:\$/a\\    if: github.event_name != 'merge_group'" "$SBX/.github/workflows/ci.yml"; }
 mutate m9
-row_red "row 9: required job gains a merge_group-NEGATING if (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+row_red "row 9: required job gains a merge_group-NEGATING if (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 
 # ---- rows 10+: if: shapes, synthetic step wiring, queue-off ------------------------------------
 echo "-- rows 10+"
 
-ifjob() { sed -i "/^  adr-ordinals:\$/a\\    if: $1" "$SBX/.github/workflows/ci.yml"; }
+ifjob() { sed -i "/^  guards-ruleset:\$/a\\    if: $1" "$SBX/.github/workflows/ci.yml"; }
 m10() { ifjob "\${{ !(github.event_name == 'merge_group') }}"; }
 mutate m10
-row_red "row 10: job if is !(github.event_name == 'merge_group') (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+row_red "row 10: job if is !(github.event_name == 'merge_group') (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 m11() { ifjob "github.event_name == 'merge_group' \&\& false"; }
 mutate m11
-row_red "row 11: job if is merge_group && false (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+row_red "row 11: job if is merge_group && false (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 m12() { ifjob "github.event_name == 'merge_group' \&\& 0"; }
 mutate m12
-row_red "row 12: job if is merge_group && 0 (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+row_red "row 12: job if is merge_group && 0 (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 m13() { ifjob "\${{ !contains(fromJSON('[\"merge_group\"]'), github.event_name) }}"; }
 mutate m13
-row_red "row 13: job if is !contains(..merge_group..) (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+row_red "row 13: job if is !contains(..merge_group..) (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 m14() { ifjob "false"; }
 mutate m14
-row_red "row 14: job if is the YAML boolean false (adr-ordinals)" "merge-group-coverage: adr-ordinals:"
+row_red "row 14: job if is the YAML boolean false (guards-ruleset)" "merge-group-coverage: guards-ruleset:"
 m15() { ifjob "true"; }
 mutate m15
-row_green "row 15: job if is the YAML boolean true stays GREEN" "contexts=25 producers=24"
+row_green "row 15: job if is the YAML boolean true stays GREEN" "contexts=12 producers=11"
 m16() { ifjob "github.event_name == 'merge_group' || github.event_name == 'pull_request'"; }
 mutate m16
-row_green "row 16: a positive merge_group || pull_request if stays GREEN" "contexts=25 producers=24"
+row_green "row 16: a positive merge_group || pull_request if stays GREEN" "contexts=12 producers=11"
 
 SYN_WF=".github/workflows/merge-queue-cla-synthetics.yml"
 POST_STEP='/^      - name: Re-post cla-check/'
@@ -323,7 +323,7 @@ row_red "row 22: the synthetic posts conclusion=neutral, not success" "merge-gro
 # on the live tree; this row proves the step-level-if rule is scoped to the success poster).
 m23() { sed -i 's/^        if: failure()$/        if: always()/' "$SBX/$SYN_WF"; }
 mutate m23
-row_green "row 23: an if on the failure-report step (not the success poster) stays GREEN" "contexts=25 producers=24"
+row_green "row 23: an if on the failure-report step (not the success poster) stays GREEN" "contexts=12 producers=11"
 
 # Queue-off (rows 24-28): no merge_queue block means no queue and no merge_group producer is
 # required. A rollback PR re-adding CodeQL to the canonical must not go red; the queue-on
@@ -372,31 +372,31 @@ fi
 echo "-- F2 if: forms"
 ifx() { reset_sbx; ifjob "$1"; run_engine "$SBX"; }
 ifx "github.run_attempt > 0 \&\& github.event_name == 'merge_group'"
-row_green "F2a: run_attempt > 0 && merge_group (a numeric comparison with 0 is not a false literal) stays GREEN" "contexts=25 producers=24"
+row_green "F2a: run_attempt > 0 && merge_group (a numeric comparison with 0 is not a false literal) stays GREEN" "contexts=12 producers=11"
 ifx "github.event_name == 'merge_group' || github.ref == 'x' \&\& false"
-row_green "F2b: merge_group || (ref && false): && binds tighter, the first disjunct runs, GREEN" "contexts=25 producers=24"
+row_green "F2b: merge_group || (ref && false): && binds tighter, the first disjunct runs, GREEN" "contexts=12 producers=11"
 ifx "always() \&\& !cancelled()"
-row_green "F2c: always() && !cancelled() (event-independent status form) stays GREEN" "contexts=25 producers=24"
+row_green "F2c: always() && !cancelled() (event-independent status form) stays GREEN" "contexts=12 producers=11"
 ifx "\${{ !cancelled() }}"
-row_green "F2d: !cancelled() alone stays GREEN" "contexts=25 producers=24"
+row_green "F2d: !cancelled() alone stays GREEN" "contexts=12 producers=11"
 ifx "github.event_name == 'merge_group' \&\& !cancelled()"
-row_green "F2e: merge_group && !cancelled() stays GREEN" "contexts=25 producers=24"
+row_green "F2e: merge_group && !cancelled() stays GREEN" "contexts=12 producers=11"
 ifx "github.event_name == 'merge_group' \&\& !true"
-row_red "F2f: merge_group && !true can never run (RED)" "merge-group-coverage: adr-ordinals:"
+row_red "F2f: merge_group && !true can never run (RED)" "merge-group-coverage: guards-ruleset:"
 ifx "github.event_name == 'merge_group' \&\& !(github.event_name == 'merge_group')"
-row_red "F2g: merge_group && !(merge_group) is a contradiction (RED)" "merge-group-coverage: adr-ordinals:"
+row_red "F2g: merge_group && !(merge_group) is a contradiction (RED)" "merge-group-coverage: guards-ruleset:"
 ifx "failure()"
-row_red "F2h: failure() alone can skip the job on a green merge_group (RED, fail closed)" "merge-group-coverage: adr-ordinals:"
+row_red "F2h: failure() alone can skip the job on a green merge_group (RED, fail closed)" "merge-group-coverage: guards-ruleset:"
 ifx "cancelled()"
-row_red "F2i: cancelled() alone (RED, fail closed)" "merge-group-coverage: adr-ordinals:"
+row_red "F2i: cancelled() alone (RED, fail closed)" "merge-group-coverage: guards-ruleset:"
 ifx "github.event_name != 'pull_request'"
-row_red "F2j: != 'pull_request' does not name merge_group: kept fail closed (RED by the documented rule)" "merge-group-coverage: adr-ordinals:"
+row_red "F2j: != 'pull_request' does not name merge_group: kept fail closed (RED by the documented rule)" "merge-group-coverage: guards-ruleset:"
 ifx "github.event_name == 'pull_request' \&\& github.event_name == 'merge_group'"
-row_red "F2k: pull_request && merge_group is a contradiction (RED)" "merge-group-coverage: adr-ordinals:"
+row_red "F2k: pull_request && merge_group is a contradiction (RED)" "merge-group-coverage: guards-ruleset:"
 ifx "github.ref == 'refs/heads/main'"
-row_red "F2l: a bare ref test is not provably true on merge_group (RED)" "merge-group-coverage: adr-ordinals:"
+row_red "F2l: a bare ref test is not provably true on merge_group (RED)" "merge-group-coverage: guards-ruleset:"
 ifx "(github.event_name == 'merge_group' \&\& false) || github.ref == 'x'"
-row_red "F2m: a false-conjoined merge_group || a bare ref test (RED)" "merge-group-coverage: adr-ordinals:"
+row_red "F2m: a false-conjoined merge_group || a bare ref test (RED)" "merge-group-coverage: guards-ruleset:"
 
 # ---- F1: queue-ON HCL shapes must never read as queue-OFF ------------------------------------------
 echo "-- F1 queue-on shapes"
@@ -456,7 +456,7 @@ row_on() {
   local label="$1"
   if engine_skipped; then
     fail "$label: a queue-ON shape was reported SKIPPED (read as queue off)"
-  elif engine_green 25; then
+  elif engine_green 12; then
     pass "$label"
   else
     fail "$label: expected the full GREEN check, rc=$RC"
@@ -610,13 +610,13 @@ else fail "MF3: mutation did not land"; fi
 eng_mutate '"!true", "!1", ' ''
 if landed; then
   ifjob "github.event_name == 'merge_group' \&\& !true"; run_engine "$SBX"
-  if engine_green 25; then pass "MF4: dropping !true from the false literals accepts merge_group && !true (row F2f would go red)"; else fail "MF4: not caught (rc=$RC)"; fi
+  if engine_green 12; then pass "MF4: dropping !true from the false literals accepts merge_group && !true (row F2f would go red)"; else fail "MF4: not caught (rc=$RC)"; fi
 else fail "MF4: mutation did not land"; fi
 # mutant: acceptance widened to every runnable expression
 eng_mutate 'return can_run and (positive or status)' 'return can_run'
 if landed; then
   ifjob "failure()"; run_engine "$SBX"
-  if engine_green 25; then pass "MF5: a widened acceptance mutant accepts failure() (rows F2h-F2m would go red)"; else fail "MF5: not caught (rc=$RC)"; fi
+  if engine_green 12; then pass "MF5: a widened acceptance mutant accepts failure() (rows F2h-F2m would go red)"; else fail "MF5: not caught (rc=$RC)"; fi
 else fail "MF5: mutation did not land"; fi
 # ---- controls: each verdict helper must fail on an input that must fail ----------------------
 echo "-- controls"
@@ -638,12 +638,12 @@ control_fails() {
 # engine_green / engine_skipped are predicates: they must say "no" to the wrong verdict.
 RC=0; OUT="merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)"
 if engine_green 1; then fail "C1a: engine_green accepted a SKIPPED line"; else pass "C1a: engine_green rejects SKIPPED"; fi
-RC=0; OUT="merge-group-coverage=OK contexts=25 producers=24"
+RC=0; OUT="merge-group-coverage=OK contexts=12 producers=11"
 if engine_skipped; then fail "C1b: engine_skipped accepted an OK line"; else pass "C1b: engine_skipped rejects OK"; fi
 RC=1; OUT="merge-group-coverage=SKIPPED (no merge_queue rule: producers not required)"
 if engine_skipped; then fail "C1c: engine_skipped accepted rc 1"; else pass "C1c: engine_skipped rejects a non-zero exit"; fi
 RC=0; OUT="merge-group-coverage=OK contexts=3 producers=3"
-if engine_green 25; then fail "C1d: engine_green ignored its own floor"; else pass "C1d: engine_green enforces its floor"; fi
+if engine_green 12; then fail "C1d: engine_green ignored its own floor"; else pass "C1d: engine_green enforces its floor"; fi
 # row_red: no mutation landed / engine stayed green / anchor missing
 reset_sbx
 RC=1; OUT="::error::merge-group-coverage: other: reason"

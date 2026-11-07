@@ -152,3 +152,165 @@ None. No NFR register row changes tier.
 
 C4: `platform.infra.legalAcceptanceStore` ("Legal Acceptances") with `webapp -> legalAcceptanceStore`, included in the `containers` view. There is deliberately no edge from
 the engine.
+
+## Amendment 2026-11-05 (PR-C)
+
+PR-C ships the web card and the in-place email-code check behind the `approval-queue` flag. The decisions above are unchanged; this amendment records what PR-C decided on top of them, how each
+precondition carried from PR-B's review (the "PR-C preconditions" bullet under Consequences, numbered 6.5 to 6.10 in the PR-C task list) was closed, and what stays open. Status stays
+`adopting`: nothing here is a measured production claim and no real row has been recorded.
+
+### Decisions
+
+- **Every choice needs a server-issued intent.** `record_legal_acceptance` refuses any choice without a live intent for the same user, key, text hash and web session. The intent is opened in one of two places: the decide route calls
+  `issue_legal_reauth` (30 minutes) at decision time for Decline and Request changes, while a Yes relies on the intent the email-code send step already opened. The choice is sent with the text hash the founder was shown. A refusal with no live
+  intent (SQLSTATE 42501) is answered as HTTP 403 with the body `{ "error": "reverify" }`; it is not a member of the typed `LegalDecideOutcome`, and the dialog maps it to a step that sends the founder back to ask for a new code.
+- **Yes needs an email code confirmed within five minutes.** The founder asks for the code on the card; the server verifies it on a throwaway client whose session is discarded, so the founder's own session (and its id) is unchanged, and then calls
+  `mark_legal_reauth_verified` bound to the event id that `claim_legal_reauth_attempt` returned. Password and provider confirmation are not built (#12031).
+- **Web session id, derived exactly as the SQL reads it.** The server takes the `session_id` claim of the founder's access token, else `ses_id`, and treats an empty value as absent, the same order `record_legal_acceptance` uses. A request with no web
+  session id never opens an intent, and a runtime token is refused before any RPC is called.
+- **The send step has no address-enumeration surface.** The address comes from the authenticated session only, never from the request, so a caller cannot ask about an address that is not their own. The response is `sent` on success and for the one
+  exact auth-service code that means "unknown user or email codes disabled"; every real failure is `unavailable`, and an auth-service 429 is `rate_limited`. A reused live intent skips the email, so a repeated request does not send a second mail, but only when the earlier send is not known to have failed: after a failed or rate-limited send the next request mails again (the dialog sends a resend, and the server remembers the failure for the intent window), because a live intent is not proof that a code went out.
+- **A per-user ceiling on verify attempts**, in addition to the five per challenge. It is in-process, per web host, and resets on restart (two web hosts exist), so it is a soft brake, not a bound. The hard bounds are the database ones.
+- **The card says an answer is final.** It states that changing an answer means a new text version sent by the team. There is no undo button.
+- **The two notices are shown on the card** (the card-level notice and the notice for the free-text note), word for word as drafted. The retention period inside the card-level notice is still marked "to be confirmed by counsel", so the card is
+  PROVISIONAL and ships behind the flag until counsel decides.
+- **Failure signals.** The card emits Sentry events tagged `feature=legal-acceptance` with `op` in `accepted` (one per accepted row, liveness, never paged), `decide_rejected` (reason tag), `reauth_failed` (provider error class),
+  `page_read_failed` (the founder page could not read its rows; not paged) and `row_without_event` (a row with no matching `accepted` event). Two issue alerts in `apps/web-platform/infra/sentry` route them to the existing approval recipients:
+  a burst rule that matches `decide_rejected` and `reauth_failed` (not `accepted`, not `page_read_failed`) and a per-event rule for `row_without_event`. Nothing emits `row_without_event` until the PR-D verify endpoint exists, so that page-severity
+  rule is inert until then.
+
+### Carry-over items from PR-B's review, and how each was closed
+
+| Item | How it was closed |
+| --- | --- |
+| 6.4 Alerting for the card's failure modes | Two Sentry issue alerts (`legal-acceptance-failure-burst`, `legal-acceptance-row-without-event`) with a contract test that derives the op set from the server source and pins the committed alert reference. The burst threshold is provisional. |
+| 6.5 Web session required, never an intent for a runtime token; session id as the SQL reads it | Closed in the service layer: the session id is derived by the SQL's own rule (`session_id`, else `ses_id`, empty meaning absent); no session id or a runtime token means no intent. |
+| 6.6 Same response for a known and an unknown address | Closed by construction in the reauth route: the address comes only from the session, never the request, so there is nothing to enumerate. Success and the exact unknown-user code return `sent`; real failures return `unavailable`; a 429 returns `rate_limited`. |
+| 6.7 Texts reach the production image | The registry reads `<cwd>/server/legal-acceptance/texts`; the runtime image carries that directory (the choice and its test are documented in `apps/web-platform/server/legal-acceptance/README.md`). The deployed-path test covers the esbuild bundle layout; the Next-compiled routes and pages rely on the same cwd convention (`WORKDIR /app`, `node dist/server/index.cjs`). A post-deploy smoke that loads a key from inside the container is a PR-D or ship follow-up. |
+| 6.8 A per-user attempt ceiling across keys | Mitigated: the per-user ceiling is in-process, per host, and resets on restart (two web hosts exist); the 5-per-challenge database bound and the 3-challenges-per-15-minutes issue limit are the hard bounds. |
+| 6.9 Typed outcomes for the RPC results | The service maps `recorded`, `already_recorded`, `replaced`, `expired` and `code_expired` to typed results that the route returns and the card renders as one of six states; an unexpected outcome fails closed and is reported to Sentry. A no-live-intent refusal is the exception: it is HTTP 403 `{ "error": "reverify" }`, outside `LegalDecideOutcome`. |
+| 6.10 A way to recover from a mistaken answer | By design there is no undo button. The card tells the founder an answer is final and that changing it means a new text version sent by their team (a new text hash is a new row, as in the Decision section). |
+
+The numbering follows the PR-C task list in `knowledge-base/project/specs/archive/20261105-131233-feat-founder-approval-cards-pr-c/tasks.md`; each item is also identified here by what it requires, so it does not depend on the number.
+
+### Flag scope
+
+`approval-queue` is read with `workspaceId: null`, which keys on role only, so the flag is effectively global: it is not per user and not per workspace. Enabling the card means enabling `approval-queue` for every workspace. With no real text committed,
+an unknown key answers 404 for everyone. The card is therefore not "per-user behind the flag".
+
+### Enabling conditions
+
+All of these hold before the flag goes on for any founder:
+
+- The "Request changes" note has no delivery path to the team until PR-D, although the card copy says it is saved with the decision.
+- Counsel's retention decision is made and the `(c-2)` notice placeholder is replaced.
+- The three published privacy documents are updated together.
+- The Supabase "single session per user" setting is confirmed off; otherwise the throwaway `verifyOtp` would end the founder's web session.
+
+### Verification state
+
+`verify_legal_acceptance` (PR-B) returns `invalid` when a row's checksum does not match. The founder page has no card state for it: it shows the row as recorded while the agent-facing status reads `invalid`. PR-D must not collapse `invalid` into `none`.
+
+### Still open
+
+- **Retention and redaction.** The retention period (life of the instrument plus five years, capped at ten) remains unconfirmed by counsel (counsel item 17), and the deletion or redaction path for a retained row, in particular the free-text note,
+  is not built (#12080). The card ships PROVISIONAL behind the flag for this reason; the first real row waits for counsel.
+- **Password and provider confirmation** as further strength checks: #12031.
+- **Counsel review** of the card wording and both notices. Nothing in this amendment says counsel has reviewed anything.
+- **PR-D:** the check endpoint and the hold evaluator that read the record.
+
+## Amendment 2026-11-05 (PR-D)
+
+PR-D ships the read path: a check endpoint, an acknowledgement table that gives the `row_without_event` alert an emitter, a `web-acceptance` kind in the ship hold evaluator, and a pull-only way for the operator to read a Request changes note. The
+decisions above are unchanged; this amendment records what PR-D decided on top of them. Status stays `adopting`: no real row has been recorded and the endpoint has not run against one. The code merges dark: the endpoint answers 503 until both
+configuration values exist and are well formed (see Hard limits).
+
+**Superseded by this amendment (the dated text above is not edited):**
+
+- Context, "nothing reads the table to enforce anything until PR-D": from the merge of PR #12187 the check endpoint and the hold gate read the table.
+- Consequences, "gate before the flag is enabled beyond the canary": there is no canary. The flag is global (see Flag scope). The condition reads: before the flag is on for anyone beyond the operator-run exercise.
+- PR-C Enabling conditions, "no delivery path to the team until PR-D": restated below as pull-only delivery, no push.
+- PR-C Still open, "PR-D: the check endpoint and the hold evaluator that read the record": built here, dark.
+- Residual risk, "A holder of production credentials ...": the database-owner credential is held by the operator and by the production migration pipeline (a CI secret that runs the migrate and verify steps of the release workflow); no agent session is meant to use either, which is a rule and not a control. What else that pipeline credential set can mint (a founder session, for example) is not assessed here.
+- PR-C Enabling conditions, "The three published privacy documents are updated together": the three documents are amended in PR #12187 for the third table and the status check (draft-marked, temporally qualified, as the DSAR lockstep gate requires). The final-form rewrite stays an enabling condition before any non-operator founder.
+
+### Decisions
+
+- **Read path as built.** `GET /api/internal/legal-acceptance/[key]?hash=<64 hex>`. Check order: 503 (token or founder id unset or malformed), 401 (wrong token), 400 (malformed key or hash), then the registry read (503 if the registry cannot be read or the committed text is malformed, which is
+  step 4 and comes after 401 and 400, never first), 404 (key not in the registry), then the lookup (503 if a database call fails or throws, including the reconciliation read; 502 if the database answers a shape the endpoint does not recognise). The 200 body
+  has exactly four keys: `status`, `text_hash`, `decided_at`, `row_ok`. The founder id comes from the endpoint's own configuration, never from the request. The hash is answered from the database for the exact hash asked; whether that hash equals the committed
+  text is the gate's job. The token is its own secret, `LEGAL_ACCEPTANCE_VERIFY_TOKEN`, separate from the Inngest one. `lib/internal-auth.ts` is **not** changed by this PR: it is one of the census-bound paths (CLO ruling on #10455, discharged sha 8c77db1) and any
+  edit would refuse the census run. The named-secret reader lives in a new module, `lib/internal-auth-named.ts` (a closed union of secret names), and the route compares with the shared `bearerMatches`.
+- **The acknowledgement table and what `row_without_event` proves.** Migration 185 adds `legal_acceptance_ack(acceptance_id, acked_at)`: service-role only, no founder id, no foreign key, no note and no decision field. It is pseudonymous personal data through its
+  key (the id of a `legal_acceptance` row); see the Art. 30 PA-40 addendum. The decide route writes the acknowledgement (`ack_legal_acceptance`) after the `accepted` event is emitted and `Sentry.flush` resolved true, off the request path, so the founder's response never
+  waits on it. The verify endpoint reads `legal_acceptance_ack_state` for the one row it found and emits `row_without_event` when there is no acknowledgement and the row is at least 120 s old (>= 120 s). This proves "the web route did not acknowledge this
+  row", not "Sentry received the event": a `true` flush result means the flush completed without an error, not that Sentry received and kept the event (it can also be `true` when no DSN is configured, or when the event was dropped before sending), so a row that
+  raises no `row_without_event` is not proof that its `accepted` event was delivered. A flush that is slow (more than 2 s) or answers false writes no acknowledgement and logs a warning only (`legal acceptance ack skipped: flush not confirmed`); it emits no Sentry
+  event, and the unacknowledged row is surfaced by the next verify. `row_without_event` is alert-only. If the reconciliation read fails or disagrees with the verify read, the endpoint answers 503 or 502 and never a partial 200. Migrations apply before the deploy (the
+  migrate job precedes deploy), so the functions exist when the code that calls them runs.
+- **Note delivery: pull-only.** The note stays in `legal_acceptance.requested_edit`. No email, no Inngest function, no GitHub issue and no other push: that would create a second copy outside the retention and redaction decisions (#12080) and the agent holds
+  the GitHub identity. The operator reads it personally with an owner-level query in their own Supabase login, following `knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md`. No `service_role` function returns the note, the card
+  copy is not changed, and the endpoint never returns it. The note is not readable through the endpoint or through any `service_role` path. A database-owner credential could read it; that credential is held by the operator and by the production migration pipeline (a CI secret), and no agent session is meant to use either, which is a rule and not a control; the restriction is a policy
+  and a design choice, not an absolute control. The PR-C enabling condition "no delivery path to the team until PR-D" is restated as: pull-only delivery, no push.
+- **The `invalid` rule.** A row whose checksum no longer matches is `invalid`. The endpoint passes it through as `invalid` with `row_ok: false` and emits `record_invalid` (error); the gate treats it as unevaluable (exit 2, "the saved decision looks damaged"). It
+  is never collapsed into `none` at any layer PR-D touches. **Standing gap:** the founder page still shows such a row as recorded, because the card has six states and none is `invalid`. Adding one needs a wireframe and counsel-gated copy, so it is
+  deferred to #12193; it is an enabling condition before the `approval-queue` flag is on for anyone beyond the operator-run exercise.
+- **Hold-gate semantics.** `web-acceptance <key> <hash>` discharges a hold only when all of these hold: the endpoint answers `accepted` with `row_ok` true; the echoed hash equals the gate's hash; that hash equals the sha256 of the committed text; the text has
+  not expired (its front-matter `valid_until`, when present, is a `YYYY-MM-DD` date that is not before today in UTC; an expired text is a decision for a person, and a malformed `valid_until` is unevaluable); and the hold's own `Hold:` line names the gate's key
+  as a whole token (see the binding below). A declined or changes-requested answer is terminal for that hash (a revised text with a new hash is needed). Every other answer, and every inability to ask, keeps the hold with a printed reason. A 503 is reported as
+  "the check is not available right now (not switched on, or temporarily down)", a 502 as "answer not understood", and any other outcome as `unreachable (HTTP <status>, curl rc <code>)`. A plan that carries a `web-acceptance` gate and no `Delegation:` line is
+  evaluated rather than handed to the prose path; mixed with another kind and no delegation it is unevaluable (exit 2); a no-delegation plan without such a gate keeps exit 3; `Operator-reserved:` holds always stand. In the envelope (`--file`) mode a
+  `web-acceptance` gate is unevaluable ("a recorded decision on a legal text cannot back a production step").
+- **The binding between a hold and its gate is lexical, and the residual is accepted.** The gate discharges only a hold whose own `Hold:` line names the gate's key as a whole token (lowercase, boundary: any character outside `a-z0-9-`); with several
+  `web-acceptance` gates on one hold, each key must appear. A hold that does not name its key is unevaluable (exit 2). The residual, accepted: a hold that names the key but is about something else would still be discharged by a recorded Yes. The guards that remain
+  are that `Operator-reserved:` holds always stand, that the `Done:` line prints the key and the hash so a human sees what cleared the hold.
+- **A recorded Yes authorizes no production act.** A `web-acceptance` gate backs only a hold on that legal acceptance itself, for a text written for that hold. It is not a licence for any other action.
+- **The flag is still effectively global.** `approval-queue` is read with `workspaceId: null`; the endpoint does not read the flag at all. The statement in the PR-C amendment stands. There is no canary: "before the flag is on for anyone beyond the operator-run
+  exercise" is the condition wherever an earlier line says "canary".
+- **Hard limits on the endpoint.** The bearer token, the read-only RPC and the single configured founder id. The token does not exist yet [superseded 2026-11-07, see the Update below]: it will be minted at 48 characters by the Terraform change (#12196), and until then the endpoint answers 503 to every request.
+  The route and the shell helper accept a token of 48 to 256 characters of a safe set; a shorter value is treated as not configured. A wrong token is answered 401 with no throttle, which the minted length makes acceptable. Once #12196 lands, a Tier-A reader
+  (a branch workflow) will be able to read the token from Terraform state and query one founder's status. That is bounded to four fields about one founder, and it will be the consequence of choosing Terraform over a Doppler-only token (see the ADR-320
+  ruling below). Before #12196 lands, no such read path exists [superseded 2026-11-07, see the Update below].
+- **The alert is pull-driven.** `row_without_event` fires when a row is verified; a row nobody verifies stays silent. A sweep over unacknowledged rows is a follow-up (#12194) that must exist before the flag is on for a non-operator founder.
+  `already_recorded` never acknowledges: a second tab proves nothing about a first tab that died, and a heal there would hide a row written through the RPC directly. A row whose acknowledgement was lost is reconciled by the operator through the runbook
+  after confirming with the founder.
+- **Rows that predate the ack table.** There is no backfill migration. Before the `approval-queue` flag is on in the production project, `select count(*) from legal_acceptance` there must be 0; otherwise the matching ack rows are inserted per the runbook,
+  scoped by founder id, so that no false `row_without_event` is raised. The project is the production one, never dev.
+- **ADR-320 review of the verify token (of the design, on 2026-11-05; applies to the Terraform change when it is proposed; applied to the landed file 2026-11-07, see the Update below).** Outside ADR-320 decision 1: a read-only status token, reviewed under decision 4. Rotating it does not repair a leak, and it would move
+  out of Terraform if it ever gains write reach. The founder uuid is not a secret: the operator will enter it into the Doppler dev and prd configs outside Terraform, and the planned check reads it and never passes it as a Terraform variable. ADR-320 carries a
+  one-line scope note pointing here. Comparing the configured uuid with the operator's account by a boolean-only read belongs to #12196.
+- **Terraform is plan-only here** [true of PR-D; #12196 superseded it 2026-11-07, see the Update below]. No `.tf` file ships in this PR: the infra workflow applies on the push that merges one, so the secrets are carried by a separate change after the operator approves the plan (#12196). The secrets reach the container through an
+  env file that is frozen when the container is created, so a restart is not enough; a redeploy is needed.
+- **Update 2026-11-07 (#12196): the token is now minted by Terraform.** `apps/web-platform/infra/legal-acceptance-secrets.tf` creates one 48-character alphanumeric token per Doppler config (dev and prd, two independent generators) and the per-merge infra run converges it. The statements above that the token "does not exist yet" and that no Tier-A read path exists are superseded from that merge: a Tier-A reader (a branch workflow) can read the token from Terraform state, and the reach is the same four fields about one founder, never the note, never a write. Nothing is widened. The founder uuid is still entered by the operator per project, and the endpoint still answers 503 until both values exist and the web app is redeployed (a restart is not enough). Rotation has no automated route; it is a local, operator-approved `-replace`. The `prd_terraform` Doppler config lists the `prd` secrets, so a Tier-A Doppler token can also read it; the reach is unchanged. Before the flag is turned on, an authenticated check proves the container holds the current token (runbook `legal-acceptance-note-read.md`, step 4). Status stays `adopting`.
+
+### Added signals
+
+Two ops join the existing set under `feature=legal-acceptance`: `record_invalid` and `store_failed` (tag `stage` in `verify`, `ack_state`, `ack`, `registry`, `config`). `row_without_event` now has its emitter. `record_invalid` and `row_without_event` carry the key
+and the text hash. A set-but-malformed configuration value emits one `store_failed` per process (stage `config`), naming the variable and never a value or a length; an unset value stays silent (the dark state). `record_invalid` and `store_failed` have no paging rule in
+this PR; the draft rules are tracked in #12195 and are an enabling condition before the flag is on. No payload carries the note.
+
+### Accepted residuals
+
+- The binding between a hold and its gate is lexical (see Decisions). A hold that names the key but is about something else is still discharged.
+- An expired text is caught by `valid_until`, when the text carries one; a text without `valid_until` never expires.
+- The op list is derived by the contract test with a wide pattern and an equality check; no further guard on op spellings is added.
+- The ack row has no checksum and no guard trigger; a database-owner credential could change it (Art. 30 PA-40 addendum, (g)).
+
+### Still open after PR-D
+
+- The founder-page state for `invalid` (#12193), the sweep (#12194), paging for the two new ops (#12195), the founder uuid and the web app redeploy (#12196; the Terraform secrets landed 2026-11-07, see the Update in the Decisions list above).
+- The first real acceptance verified end to end by the gate, the post-deploy registry smoke (no text is committed, so every key answers 404) and the roadmap wording (#12197). Status moves to `accepted` only after the first.
+- Published documents: amended in this PR for the third table and the status check; still owed before any non-operator founder: the final-form rewrite (the handling of the status check's output in an operator session, which is a counsel question and not a recorded processing activity, the retention period, the reader role for the note).
+- #12195 (paging for `record_invalid` and `store_failed`) should use per-stage fingerprints: `store_failed` has a single static message, so an alert rule that groups by message would merge the stages; group by `tags.stage`.
+- The deletion path for `legal_acceptance` (#12080) must delete the `legal_acceptance_ack` row of every deleted `legal_acceptance` row, by `acceptance_id`, in the same operation. The ack table has no foreign key, so no cascade does it, and an ack row left behind keeps a
+  pseudonymous marker and a timestamp for a decision whose record has been removed.
+- The pre-flip count check (above), run against the production project.
+- After the secrets are applied: the probe expects the body `{"error":"Not available"}` with `cache-control: no-store` while dark, not just a 503; the first pulls of `store_failed`, `record_invalid`, `row_without_event` and unacknowledged rows are scheduled at +1 h and +24 h.
+- Before any non-operator founder: a named reader role for the note with a response expectation, a count-only "note waiting" signal, a visible acknowledgement for the founder, counsel-approved card copy that matches the real delivery behaviour, and the UX test with a
+  non-technical founder.
+
+### Diagram
+
+The C4 model gains three edges: the ship component to the web application (read-only HTTPS bearer to the check endpoint), the ship component to Doppler (read of the one token, once configured under #12196), and the founder to the legal-acceptance store (the operator's
+owner-level read of the note; operator-only by policy). The statement that no edge reaches the store from the agent side is replaced: the agent can read four fields about one decision through the endpoint; the note is not readable through the endpoint or any
+`service_role` path (a database-owner credential could read it; it is held by the operator and by the production migration pipeline, a CI secret, and no agent session is meant to use either). That is a policy and a design choice, not an absolute control.

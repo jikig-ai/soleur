@@ -71,7 +71,8 @@
 # Input: `terraform show -json <plan>` document.
 # Output: {resource_deletes: int, nested_deletes: int, reboot_updates: int,
 #          host_creates: int, non_terraform_data_deletes: int,
-#          luks_passphrase_rotations: int, …}.
+#          luks_passphrase_rotations: int, deploy_policy_changes: int,
+#          deploy_policy_unsafe: int, access_token_stray_forgets: int, …}.
 # Every key past the first three is ADDITIVE; the first three are byte-unchanged
 # so the manual-rerun consumer that reads only them keeps working. host_creates
 # has TWO workflow readers: the `apply` job (#6416) and apply-deploy-pipeline-fix.yml
@@ -129,16 +130,19 @@ def cf_list_item_count($side):
 #
 # proxy-TLS is DELIBERATELY ABSENT (ADR-118 premise falsified, measured 2026-07-17).
 # tls_private_key.proxy_server / tls_self_signed_cert.proxy_server /
-# doppler_secret.proxy_tls_{cert,key} are absent from BOTH state and Doppler prd —
-# `proxy-tls.tf` is "contract before consumer" config that was never applied — so
-# they plan as CREATE, not the replace/update ADR-118 assumed. Excluding them means
-# any attempt to birth them inside a host retirement trips
-# web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to B6.2's
-# -target list: targeting doppler_secret.proxy_tls_cert without
+# doppler_secret.proxy_tls_{cert,key} were absent from BOTH state and Doppler prd at
+# the #6538 retirement — `proxy-tls.tf` was "contract before consumer" config that had
+# never been applied — so they planned as CREATE, not the replace/update ADR-118
+# assumed. Excluding them means any attempt to birth them inside a host retirement
+# trips web2_retire_out_of_scope_changes and ABORTS. Do NOT add them here or to a
+# retire -target list: targeting doppler_secret.proxy_tls_cert without
 # doppler_secret.proxy_tls_key writes a cert to prd with NO matching key.
-# (#8754) They are now count-gated on host_proxy_tls_enabled (default false), so a
-# retirement plan contains none of them unless the flip set the variable; when present
-# they carry `[0]` and still fall outside web2_retire_allow.
+# (#8754, #12167) They are count-gated on host_proxy_tls_enabled, which the multi-host
+# flip (#12167) defaulted to true, so the per-merge saved plan now CREATES all four
+# (addresses carry `[0]`). That create is not a retirement: it trips no counter in this
+# file (T47b), and a later roster change plans the cert as an ordinary ackable
+# delete+create (T47c), never a host_creates halt. They stay outside web2_retire_allow
+# because that set is one operation's contract (retire web-2), not a fleet allow-list.
 def web2_retire_allow: [
   "hcloud_server.web[\"web-2\"]",
   "hcloud_server_network.web[\"web-2\"]",
@@ -576,6 +580,44 @@ def destroyed_at($addr):
     [ .resource_changes[]?
       | select(.address == "hcloud_firewall_attachment.web")
       | select(.change.actions? | index("delete")) ]
+    | length
+  )  ,
+  # G1 PR-2 (#9294, ADR-241 D10; Ruled by CTO agent, 2026-10-23). The deploy webhook's Access policy admits
+  # the ids in local.deploy_service_token_ids; a wrong id in the single `include` block locks the deploy
+  # channel out at Access, and nothing above can see it: cf_access_policy_include_count counts BLOCKS (an
+  # id swap inside the one block counts 0) and an in-place update is not a delete. These three counters are
+  # evaluated by the workflow OUTSIDE the destroy_count sum, so `[ack-destroy]` cannot reach them.
+  #
+  # deploy_policy_changes: the policy's plan entry is anything but exactly ["no-op"]. An ABSENT entry counts
+  # as 1 (the policy is always in the -target list, so an absent entry is a changed plan shape). The only
+  # acknowledgeable one: a rotation PR changes the include on purpose and carries [ack-deploy-policy].
+  deploy_policy_changes: (
+    [ .resource_changes[]? | select(.address == "cloudflare_zero_trust_access_policy.deploy_service_token") ] as $p
+    | if ($p | length) == 0 then 1
+      else ($p | map(select(.change.actions != ["no-op"])) | length) end
+  ),
+  # deploy_policy_unsafe: the policy would be created or deleted, or its planned include is not exactly ONE
+  # block holding a non-empty service_token list, or any part of the include is unknown at plan time. Never
+  # acknowledgeable: this is the lockout shape.
+  deploy_policy_unsafe: (
+    [ .resource_changes[]?
+      | select(.address == "cloudflare_zero_trust_access_policy.deploy_service_token")
+      | select(
+          ((.change.actions? // []) | any(. == "create" or . == "delete"))
+          or ((.change.after_unknown.include? // false) != false)
+          or (((.change.after // {}) | .include? // []) | length) != 1
+          or ((((.change.after // {}) | .include? // [])[0].service_token? // []) | length) == 0
+        ) ]
+    | length
+  ),
+  # access_token_stray_forgets: a forget of an Access service token other than the deploy token this PR
+  # forgets on purpose (the ci_ssh and registry_push tokens are other credentials). Once the forget has
+  # applied, the `removed` tombstone yields no plan entry, so the permanent rule needs no maintenance.
+  access_token_stray_forgets: (
+    [ .resource_changes[]?
+      | select(.type == "cloudflare_zero_trust_access_service_token")
+      | select((.change.actions? // []) | any(. == "forget"))
+      | select(.address != "cloudflare_zero_trust_access_service_token.deploy") ]
     | length
   )
 }

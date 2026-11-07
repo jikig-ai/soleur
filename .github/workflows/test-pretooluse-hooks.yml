@@ -60,7 +60,7 @@ jobs:
 
       - name: Test hooks via claude-code-action
         id: claude-hooks-test
-        uses: anthropics/claude-code-action@20f0b248c5003db4b9ca43c45e17949bcdc36d2d # v1.0.236
+        uses: anthropics/claude-code-action@3b7e1a45ca6f231c62605aabcf79e6a41b08c7da # v1.0.263
         env:
           # Test 6 asserts dry-run telemetry (kind=would_defer). The hook's
           # hardcoded default is now 0 (enforce) as of PR #3800, so this test

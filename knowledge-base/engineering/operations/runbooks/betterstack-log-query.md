@@ -220,13 +220,7 @@ Live standing alarms over this source:
   [the 2026-10-16 PIR](../post-mortems/hosted-agent-bash-apply-seccomp-userns-eperm-postmortem.md): check whether
   `network.allowAllUnixSockets` is still set in `agent-runner-sandbox-config.ts` and whether an SDK bump changed
   the helper-selection condition; do NOT loosen the seccomp filter to unblock (a filter cannot key on the
-  caller). A single row from a single user is either a forged line (the limitation below) or a real regression seen by the only active tenant: make a real hosted Bash call and read the result (step 4 of `canary-probe-set.md`) before dismissing it. **Wake path: email
-  only.** On the free tier the alert emails the team and nothing else; the Slack wake of
-  [ADR-260](../../architecture/decisions/ADR-260-db-outage-paging-and-bounded-auto-restart.md) is a
-  dashboard-side integration that has NOT been verified for this alert, so do not assume a Slack message
-  accompanies the email until that verification is recorded. (2026-10-19 read-only check: the account has one Slack integration and every
-  Logs alert carries a team-email escalation target only, so delivery to Slack is not provable from the API; the dated result and the two
-  reads are in `canary-probe-set.md`, "Slack wake check".) **Accepted limitation:** a tenant (or a
+  caller). A single row from a single user is either a forged line (the limitation below) or a real regression seen by the only active tenant: make a real hosted Bash call and read the result (step 4 of `canary-probe-set.md`) before dismissing it. **Wake path: email plus an inferred Slack post (a post is not a guaranteed page);** see `canary-probe-set.md`, "Slack wake check, dashboard read 2026-11-05". **Accepted limitation:** a tenant (or a
   prompt-injected agent) printing the exact helper line every few minutes can keep ONE incident open and suppress new
   pages for everyone (`recovery_period 600`, `treat_as_zero`, per-user 5-minute debounce). Accepted at current scale;
   mitigation (page on at least 2 distinct users, or verify server-side) is tracked in #10455. It auto-resolves after 10 quiet minutes,
@@ -285,8 +279,7 @@ Live standing alarms over this source:
   consequence applies only once the `agent-sandbox-unix-deny` flag is ON). **First move (no SSH):** read `sdk_bash_smoke` from `/hooks/deploy-status` (call
   pattern in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`; `reason` carries the first sandbox error
   line) and decode it with the table in
-  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445). **Wake path: email
-  only** (the same unverified Slack caveat as the siblings above). **Positive control (run 2026-10-19, counts only):** the
+  [`canary-probe-set.md`](./canary-probe-set.md#sdk-bash-smoke-and-the-helper_userns_eperm-denial-10445). **Wake path: email plus an inferred Slack post (a post is not a guaranteed page);** see `canary-probe-set.md`, "Slack wake check, dashboard read 2026-11-05". **Positive control (run 2026-10-19, counts only):** the
   predicate's non-reason conjuncts match live rows: 167 `ci-deploy` rows in 14 days start `SANDBOX_CANARY_FAIL:
   verdict=sandbox_broken` with `(op=sandbox-canary-outer-wrap;` (the retired arm), 45 more carry `(op=sandbox-canary;`
   (inner `bwrap_*` reasons), and the full predicate matches 0 of them, which is the discrimination the alert depends on. The
@@ -325,16 +318,31 @@ Live standing alarms over this source:
   CONNECT to metadata/RFC1918/ULA destinations. Dark-launch baseline is ~1 row per 5-min probe pair,
   so 20 clears only a real burst. Decode + revocation path:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
-- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, `lower_than length(var.web_hosts)`
-  over 900 s, missing data counts as zero): `soleur-egress-gw-probe-silent-prd`. Pages when fewer
-  DISTINCT `host_name`s emitted an `egress_gw_probe` row (`SYSLOG_IDENTIFIER=egress-gw-probe`, one
-  row per 5 min per host) than the fleet roster over 15+ min — a dead timer, dead Vector pipeline
-  (a stale birth-frozen vector.toml allowlist is a measured failure mode), or dead host journal can
-  never read as green, and one host's beats cannot mask the other's silence. Defined in
-  `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode:
+- **`logtail_exploration_alert.egress_gw_probe_silent`** (#9534, inverted 2026-11-05 in #12180:
+  `higher_than 0` over 900 s, missing data counts as zero): `soleur-egress-gw-probe-silent-prd`. The
+  value is the number of roster hosts that did NOT emit an `egress_gw_probe` row
+  (`SYSLOG_IDENTIFIER=egress-gw-probe`, one row per 5 min per host) in the last 15+ min, floored at 0
+  (healthy 0, one host dark 1, all dark `length(var.web_hosts)`), so a dead timer, dead Vector
+  pipeline (a stale birth-frozen vector.toml allowlist is a measured failure mode) or dead host
+  journal pages, and one host's beats cannot mask the other's silence. The metric was inverted
+  because the old `lower_than` shape paged on a healthy fleet (incident 1047829421), and its earlier
+  incident 1031046761 stayed open for 24 days (rows measured arriving 2026-11-02). **The zero-fill mechanism is an INFERENCE** (a step the
+  evaluator cannot evaluate is read as 0): the query is proven read-only (healthy 0, one host 1,
+  unknown identifier 2), the vendor evaluator is not, and the evaluated value is not exposed by the
+  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, ran the same
+  query against an identifier no host emits; it fired (2026-11-06) and was retired by #12189. An
+  evaluator error also reads 0 (a quiet failure here; the
+  sibling Sentry detectors cover only a fleet-wide dead timer and a failing probe, not one host's Vector
+  or journal).
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary's retirement
+  record:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
-  A `lower_than` silence incident may stay open after the data returns. Open does not mean currently silent. Verify with `betterstack-query.sh`, and resolve manually.
-  Resolve only if every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of `var.web_hosts`) shows an `egress-gw-probe` row in the last 15 minutes; if any host has none, the silence is real, so leave the incident open.
+  An open incident does not by itself mean a host is silent: read `rows_in_window` from
+  `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (the exact `doppler run` form, which
+  remaps `BETTERSTACK_API_TOKEN_READONLY` onto the name the probe reads, is in the runbook), or run `betterstack-query.sh`, and check that every roster host (`host_name` `soleur-web-platform` and `soleur-web-2`, the hosts of
+  `var.web_hosts`) shows an `egress-gw-probe` row. Rows on both hosts point at the evaluator, not the
+  fleet. Resolving a Better Stack incident by hand is a vendor write that needs the owner's explicit
+  per-command go-ahead.
 - **`logtail_exploration_alert.egress_gw_probe_fail`** (#9534 review, `higher_than 0` over 900 s,
   missing data counts as zero): `soleur-egress-gw-probe-fail-prd`. Pages on any `egress-gw-probe`
   row carrying `result=fail` (allow leg refused, or deny leg BYPASSED — Squid accepted a denied
@@ -363,7 +371,7 @@ Live standing alarms over this source:
   checked every 300 s, missing data counts as zero, email only): `soleur-inngest-cutover-flip-silent-prd`.
   **PAUSED (`paused = true`) pending #11869**: its first evaluation opened an incident and it has read
   `Current value: 0` ever since, while the query API shows the rows arriving every ~5 min; the same
-  stuck-at-0 shows on `egress_gw_probe_silent` (no `JSONType`), so the cause is not yet isolated and no
+  stuck-at-0 showed on `egress_gw_probe_silent` (no `JSONType`) before #12180 inverted it, so the cause is not yet isolated and no
   replacement predicate was validated. Do not re-arm it without a measured evaluator fix. Intended behaviour when armed:
   Pages when NO row with `SYSLOG_IDENTIFIER='inngest-cutover-flip'`, `host_name='soleur-inngest-prd'`
   and an OBJECT-typed `message` (`JSONType(raw,'message')='Object'`) arrives in the window. Every JSON
@@ -411,6 +419,69 @@ Live standing alarms over this source:
     egress so every other signal here stays green.
 - **`scheduled-followthrough-sweeper.yml`** — one-shot soak follow-throughs (e.g.
   `scripts/followthroughs/zot-restart-plateau-6288.sh`) recur the same query+decode shape.
+- **`logtail_exploration_alert.relay_listener_down`** (#12167 / epic #8211, `higher_than 3` over 300 s, checked every 60 s,
+  missing data counts as zero): `soleur-relay-listener-down-prd`. Emails (team email on the free tier) when four or more
+  `relay_probe proxy_state=<X>` lines in the window have X other than `listening` (`disabled`, `no_bind`, `no_allowlist`,
+  `error`) on either web host. Decode and the host-attributed query: [Session relay probe alerts (#12167)](#session-relay-probe-alerts-12167).
+- **`logtail_exploration_alert.relay_probe_silent`** (#12167, `higher_than 0` over 600 s, checked every 300 s, missing data
+  counts as zero): `soleur-relay-probe-silent-prd`. The value is the number of roster hosts that did NOT ship a `relay_probe`
+  line in 10 minutes (the `egress_gw_probe_silent` shape). Same section for the decode, including what a silent host means.
+- **`logtail_exploration_alert.relay_peer_probe_failed`** (#12167, `higher_than 0` over 300 s, checked every 60 s, missing data
+  counts as zero): `soleur-relay-peer-probe-failed-prd`. Emails on the FIRST `ci-deploy` row `relay_peer_probe peer=<ip>
+  result=<R>` with R in `refused`, `timeout`, `tls`, `denied`. `result=ok` and `skipped=` never match. Deploy-time only. Same
+  section for the decode.
+
+## Session relay probe alerts (#12167)
+
+Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts.tf`, drift guard
+`apps/web-platform/test/infra/relay-probe-alerts.test.sh`) read the session relay's own evidence off-host, with no SSH. The
+`host_name` field separates the hosts: `soleur-web-platform` is web-1, `soleur-web-2` is web-2.
+
+- **The listener line.** `server/proxy-listener-status.ts` logs ONE warn-level pino line per minute per host:
+  `relay_probe proxy_state=<listening|disabled|no_bind|no_allowlist|error> addr=<ip|none> port=<n> workspaces_populated=<0|1>`.
+  `addr=0.0.0.0` is the expected bound address now. `disabled` is a relay switched off, `no_bind` and `no_allowlist` are a
+  missing `SOLEUR_PROXY_BIND` / peer allowlist, `error` is a recorded server that is not listening (the listen failed or the
+  server closed). It is an app-container row: `CONTAINER_NAME = 'soleur-web-platform'` and the sentence is in
+  `message.msg`, with `message.proxyState` / `message.addr` / `message.port` alongside.
+- **The peer line.** `ci-deploy.sh` `relay_peer_probe` journals `relay_peer_probe peer=<10.0.1.x> result=<ok|refused|timeout|tls|denied>`
+  (`SYSLOG_IDENTIFIER = 'ci-deploy'`) once per peer after this host's prod swap. `refused` is nothing listening or unreachable,
+  `tls` is a failed handshake or certificate pin, `timeout` is no answer in time, `denied` is a peer that closed right after the
+  upgrade (its allowlist does not carry this host). `skipped=no_bind|no_roster|no_peers|exec_failed` is "nothing to dial" or "the
+  probe could not run" and never pages.
+- **Reading a page (counts and enum words only, no secrets in these rows).** Per host, last hour, with the delivery control first:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host,
+            JSONExtractString(raw,'message','msg') AS line, count() AS rows, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 HOUR
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_probe proxy_state=')
+     GROUP BY host, line ORDER BY host, last DESC FORMAT JSONEachRow"
+  ```
+
+  The same query with `JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'` and `startsWith(JSONExtractString(raw,'message'),
+  'relay_peer_probe peer=')` over a day reads the peer dials. A host with ~60 rows an hour and only `proxy_state=listening` is healthy.
+- **`relay_listener_down` fired.** Read the host and the state. `disabled` / `no_bind` / `no_allowlist` mean the relay was never
+  configured on that host: `disabled` is no TLS material (`PROXY_TLS_CERT` / `PROXY_TLS_KEY` absent or unparseable), `no_bind` is no
+  `SOLEUR_PROXY_BIND`, `no_allowlist` is no `SOLEUR_PROXY_PEER_ALLOWLIST`; read the host's `ci-deploy` lines for the same deploy
+  (`relay_publish degraded=...`), not SSH; `error` means the listener failed or closed after boot. It sums rows across BOTH hosts, so confirm one host carries
+  the four rows. It auto-resolves after 10 quiet minutes, which does not mean the relay was fixed.
+- **`relay_probe_silent` fired.** The value is the count of silent hosts. Read the query above: no row for a host means its app
+  container is down, runs a build older than #12167 (no reporter yet), or its app-container log path is broken (Vector or journald
+  on that host). Rows from every host in the window while the alert is open means suspect the evaluator (the
+  `egress_gw_probe_silent` open question, #12190), not the fleet; verify with the query before acting.
+- **`relay_peer_probe_failed` fired.** Read `peer` and `result`. A `refused` or `timeout` seconds after the peer's own deploy can be
+  its container mid-swap: re-read the peer's `relay_probe` line (it must say `listening`) and the next deploy's peer line before
+  treating it as a defect. A `denied` is an allowlist that lacks this host's source address; `tls` is the pinned certificate.
+- **Verified when this shipped.** The nested `message.msg` row shape of the relay line and the plain-string peer row were
+  live-probed 2026-11-07 (rows from both hosts, `CONTAINER_NAME` = `soleur-web-platform`).
+- **Not verified when this shipped (REQUIRED post-merge check).** That the evaluator delivers a value for the silence shape
+  (`relay_probe_silent`, the `egress_gw_probe_silent` open question #12190) was not measured, and this change ships no canary for
+  it. After the merge's apply, read the alert in Better Stack: with both hosts reporting its value must be 0 and it must not be
+  open. If it is open while the query above shows rows from every host, the evaluator is the suspect (#12190), not the fleet.
 
 ## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
 

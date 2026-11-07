@@ -93,10 +93,10 @@ BAD_URL_SENT="SYNTHbadURLid9"
 dt_ago() { date -u -d "@$((NOW_EPOCH - $1))" '+%Y-%m-%d %H:%M:%S.000000'; }
 dt_ago_t() { date -u -d "@$((NOW_EPOCH - $1))" '+%Y-%m-%dT%H:%M:%S.000000'; }
 msg() { # <host_role> [tail]
-  printf 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active uptime_s=900 boot_id=synthetic probe_schema=8 host_role=%s%s' "$1" "${2:+ $2}"
+  printf 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 server_active=active redis_active=active uptime_s=900 boot_id=synthetic probe_schema=9 host_role=%s%s' "$1" "${2:+ $2}"
 }
 msgf() { # <server_active> <http_code> [cutover_flag|''] [host_role] — a serving-verdict variant of msg()
-  printf 'SOLEUR_INNGEST_SERVER_PROBE http_code=%s server_active=%s redis_active=active uptime_s=900 boot_id=synthetic%s probe_schema=8 host_role=%s' "$2" "$1" "${3:+ cutover_flag=$3}" "${4:-dedicated}"
+  printf 'SOLEUR_INNGEST_SERVER_PROBE http_code=%s server_active=%s redis_active=active uptime_s=900 boot_id=synthetic%s probe_schema=9 host_role=%s' "$2" "$1" "${3:+ cutover_flag=$3}" "${4:-dedicated}"
 }
 row() { # <dt> <message> [host] [host_name] [emitter] -> one JSONEachRow line with the double-encoded raw
   jq -cn --arg dt "$1" --arg m "$2" --arg h "${3:-soleur-inngest}" --arg hn "${4:-soleur-inngest-prd}" --arg e "${5:-inngest-server-probe}" \
@@ -710,9 +710,9 @@ expect "a classifier seam set inside GitHub Actions is refused" 3 query_failed "
 # probe-unavailable: the serving fields did not parse -> withhold, never a false verdict either way.
 # The withhold sits AFTER heartbeat resolution (a paused heartbeat must dominate the routing table),
 # so the API GET legitimately ran — the assertion is that NO beat shape was attempted.
-reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE uptime_s=1 probe_schema=8 host_role=dedicated' | fx nofld)"; C_APIS=1
+reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE uptime_s=1 probe_schema=9 host_role=dedicated' | fx nofld)"; C_APIS=1
 expect "a fresh row with no serving fields withholds (probe-unavailable)" 3 serving_unavailable "serving=probe-unavailable"
-reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 probe_schema=8 host_role=dedicated' | fx halffld)"; C_APIS=1
+reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 probe_schema=9 host_role=dedicated' | fx halffld)"; C_APIS=1
 expect "a fresh row missing server_active alone withholds" 3 serving_unavailable "serving=probe-unavailable"
 # (f) must-PASS: on a healthy row the harness sees the normal arm AND the absent /fail arm.
 reset_case; C_ROWS="$(dedf 60 active 200 | fx arms)"; C_BEATS=1; C_FAILBEATS=0; C_APIS=1
@@ -907,7 +907,7 @@ else fail "mutation row MS2: expected a fail_beat claim over a logged normal bea
 # classifies not-serving (a /fail on a row that proved nothing) instead of probe-unavailable.
 M="$WORK/mut/ms3.sh"; sed -E '/\[\[ "\$sa" == "-" \]\] && sa=""/d' "$PROBE_SRC" > "$M"
 assert_landed MS3 "$M" "$FRESH_R"
-reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 probe_schema=8 host_role=dedicated' | fx ms3)"; C_PROBE="$M"; C_EXPECT_URL="${HB_URL}/fail"; C_APIS=1
+reset_case; C_ROWS="$(row "$(dt_ago 60)" 'SOLEUR_INNGEST_SERVER_PROBE http_code=200 probe_schema=9 host_role=dedicated' | fx ms3)"; C_PROBE="$M"; C_EXPECT_URL="${HB_URL}/fail"; C_APIS=1
 expect_red MS3 "absent server_active misgraded not-serving" 3 serving_unavailable 0 fail_beat
 cases=$((cases + 1))
 if [[ "$(count_calls '^beatfail$')" == 1 ]]; then pass "mutation row MS3: the false /fail was actually sent"

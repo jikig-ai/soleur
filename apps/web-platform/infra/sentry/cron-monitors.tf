@@ -892,8 +892,10 @@ resource "sentry_cron_monitor" "scheduled_supabase_watchdog" {
 # heartbeat means the sweep_approvals() RPC failed (the next tick retries). The cron runs with the
 # `approval-queue` flag OFF as well, so the monitor is live from the first deploy. Pure database RPC plus
 # generic push, no claude-eval spawn: the 30-min margin and 10-min runtime of the Inngest small-cron
-# cohort. Slug MUST match SENTRY_MONITOR_SLUG in the handler. Routing to cron_monitor_failure follows the
-# two-PR rule (cron_monitor_alert_unrouted in cron-monitor-alerts.tf).
+# cohort. Slug MUST match SENTRY_MONITOR_SLUG in the handler. Routed into cron_monitor_failure
+# (cron-monitor-alerts.tf, #12293): this monitor is the only cover for a dropped or dead sweep function
+# (scheduled_inngest_cron_watchdog covers only whole-scheduler death), because the gate_unanswered alert is
+# emitted by the sweep itself.
 resource "sentry_cron_monitor" "scheduled_approval_expiry" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
@@ -923,6 +925,27 @@ resource "sentry_cron_monitor" "scheduled_git_data_erasure_redrive" {
   organization            = var.sentry_org
   project                 = data.sentry_project.web_platform.slug
   name                    = "scheduled-git-data-erasure-redrive"
+  schedule                = { crontab = "*/15 * * * *" }
+  checkin_margin_minutes  = 30
+  max_runtime_minutes     = 10
+  failure_issue_threshold = 1
+  recovery_threshold      = 1
+  timezone                = "UTC"
+}
+
+# 2026-11-05 (#8839): Inngest-fired via
+# `apps/web-platform/server/inngest/functions/cron-agent-spawn-stale-settle.ts`.
+# The stale-Working backstop itself is a monitored cron — if the scheduler stops
+# firing it, a lost run sits on "Working" undetected exactly when the sweep is
+# needed. Posts ok=false only when the select step failed. No in_progress
+# check-in, so max_runtime_minutes is inert. 15-min crontab matches the handler;
+# the 30-min margin and 10-min runtime mirror the Inngest small-cron cohort
+# (scheduled-approval-expiry, scheduled-git-data-erasure-redrive). Slug MUST
+# match SENTRY_MONITOR_SLUG in the handler.
+resource "sentry_cron_monitor" "scheduled_agent_spawn_stale_settle" {
+  organization            = var.sentry_org
+  project                 = data.sentry_project.web_platform.slug
+  name                    = "scheduled-agent-spawn-stale-settle"
   schedule                = { crontab = "*/15 * * * *" }
   checkin_margin_minutes  = 30
   max_runtime_minutes     = 10

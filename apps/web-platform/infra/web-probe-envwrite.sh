@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# web-probe-envwrite.sh — fresh-boot env-file writer for the 3 web-host probes (#6459 Phase 2.2).
+# web-probe-envwrite.sh — fresh-boot env-file writer for the 5 web-host probes (#6459 Phase 2.2).
 #
 # CONTEXT: the private-NIC guard (#6438 §3), zot-consumer probe (#6438 §1) and git-data
 # reachability probe (#6548) each read a per-host /etc/default/web-<probe> EnvironmentFile that

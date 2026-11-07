@@ -125,7 +125,7 @@ jobs:
           allowlist: "dependabot[bot],github-actions[bot],deruelle,soleur-ai[bot],soleur-infra[bot]"
 EOF
   git -C "$work" add .github/workflows/cla.yml
-  git -C "$work" commit -q -m "add cla.yml"
+  setup_commit "$work" "add cla.yml"
   git -C "$work" push -q origin main
 }
 
@@ -141,7 +141,7 @@ push_cla_signatures() {
 {"signedContributors":[{"name":"Elvalio","id":92384917},{"name":"deruelle","id":54279}]}
 EOF
   git -C "$work" add signatures/cla.json
-  git -C "$work" commit -q -m "signatures"
+  setup_commit "$work" "signatures"
   git -C "$work" push -q origin cla-signatures
   git -C "$work" checkout -q main
 }
@@ -164,6 +164,19 @@ commit_branch() {
       ${ce:+GIT_COMMITTER_NAME=C GIT_COMMITTER_EMAIL=$ce} \
       git -C "$work" commit -q -m "work by $ae"
   done
+}
+
+# setup_commit <work> <msg> — fixture-setup commit with an explicit identity via
+# env, so it works on runners with no global git identity. Repo config is left
+# untouched: T15 unsets user.email on purpose and then reaches this helper (via
+# push_cla_yml), and the hook under test must still see none. T16 unsets it too
+# but only uses commit_branch, which pins its own identity.
+setup_commit() {
+  local work="$1" msg="$2"
+  assert_fixture_dir "$work"
+  env GIT_AUTHOR_NAME="S" GIT_AUTHOR_EMAIL="setup@test.local" \
+    GIT_COMMITTER_NAME="S" GIT_COMMITTER_EMAIL="setup@test.local" \
+    git -C "$work" commit -q -m "$msg"
 }
 
 # $5 (optional) = a literal substring the deny payload MUST name — used by the

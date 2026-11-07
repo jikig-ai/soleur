@@ -640,13 +640,12 @@ describe("safeCommitAndPr — workspace lost (non-throwing)", () => {
 // ---------------------------------------------------------------------------
 
 describe("safeCommitAndPr — #5111 option surface", () => {
-  it("exports the 7 canonical synthetic CI check names (consolidated from the 5 per-cron copies)", () => {
+  it("exports the 6 canonical synthetic CI check names (consolidated from the 5 per-cron copies; `enforce` dropped with the #12089 umbrella fold)", () => {
     expect([...SYNTHETIC_CHECK_NAMES]).toEqual([
       "test",
       "dependency-review",
       "e2e",
       "skill-security-scan PR gate",
-      "enforce",
       "cla-check",
       "cla-evidence",
     ]);
@@ -1813,9 +1812,19 @@ describe("safeCommitAndPr — #7122 round-1 exactPaths hardening", () => {
         ["core.hooksPath", hooksDir],
       ] as const) await cfgSet(cfg, k, v);
 
-      await __safeCommitInternals.runGit(f.repo, ["hash-object", "-w", "--", TODAY_DIGEST]);
-      await __safeCommitInternals.runGit(f.repo, ["status", "--porcelain=v1"]);
-      await __safeCommitInternals.runGit(f.repo, ["commit", "--allow-empty", "-m", "x"], BOT_ENV);
+      // scripts/test-all.sh exports a count-indexed `GIT_CONFIG_*` core.hooksPath for the whole run; env config outranks the repo
+      // config planted above, so with it present a missing `-c core.hooksPath=/dev/null` is masked and the hooks layer proves nothing
+      // (the mutation battery's G1-HD13 survived in CI for exactly this reason). Strip it for this test, restore it after.
+      const injected = Object.keys(process.env).filter((k) => /^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(k));
+      const saved = injected.map((k) => [k, process.env[k]] as const);
+      for (const k of injected) delete process.env[k];
+      try {
+        await __safeCommitInternals.runGit(f.repo, ["hash-object", "-w", "--", TODAY_DIGEST]);
+        await __safeCommitInternals.runGit(f.repo, ["status", "--porcelain=v1"]);
+        await __safeCommitInternals.runGit(f.repo, ["commit", "--allow-empty", "-m", "x"], BOT_ENV);
+      } finally {
+        for (const [k, v] of saved) if (v !== undefined) process.env[k] = v;
+      }
 
       expect(existsSync(marker(f, "filter")), "attributesFile layer").toBe(false);
       expect(existsSync(marker(f, "fsmonitor")), "fsmonitor layer").toBe(false);

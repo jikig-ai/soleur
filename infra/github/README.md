@@ -88,8 +88,8 @@ read before one.
 > `codeql-1537-revisit-watch.yml` still watches the upstream issue; when it closes,
 > re-tightening is one Terraform diff (see ADR-270).
 
-The ruleset carries two rule types, `required_status_checks` (23 contexts at
-integration id 15368) and `merge_queue`. With `strict_required_status_checks_policy
+The ruleset carries two rule types, `required_status_checks` (10 contexts at
+integration id 15368 — 23 before the #12089 umbrella consolidation) and `merge_queue`. With `strict_required_status_checks_policy
 = true`, a PR's CI cannot converge faster than `main` merges on an active day, so
 under direct merge the PR is flipped `BEHIND` and restarts forever. The queue builds
 each candidate against the projected post-merge state, so "up-to-date" is satisfied
@@ -230,7 +230,7 @@ gh api repos/jikig-ai/soleur/rulesets/14145388 \
 ```
 
 Then verify the queue *functions*: open a trivial human PR, `gh pr merge --squash
---auto`, confirm it ENTERS the queue (not direct-merge), all 25 contexts (23 CI plus
+--auto`, confirm it ENTERS the queue (not direct-merge), all 12 contexts (10 CI plus
 `cla-check` and `cla-evidence`) report on the `merge_group` temp ref, and it merges
 without stalling; record enqueue-to-merge minutes and the observed `mergeStateStatus`.
 Then confirm a `weakness-miner.yml` bot PR flows through (it is the only bot PR
@@ -432,7 +432,7 @@ test-destroy-guard-counter.sh` T8 pins that a replacement counts as a destroy.
 
 | Guard | Where | Runs |
 |---|---|---|
-| `marketplace-manifest-guard` (source validity) | `scripts/marketplace-manifest-validate.sh` | every PR, blocking |
+| `marketplace-manifest-guard` (source validity; member of `guards-ruleset`) | `scripts/marketplace-manifest-validate.sh` | every PR, blocking |
 | ruleset matches its declaration | `scripts/verify-marketplace-ruleset.sh` | post-apply; fixtures on every PR |
 | published bytes match source | `apply-github-infra.yml` verify step | post-apply (cache-busted body poll — the raw CDN caches 300 s) |
 | published manifest still correct | `scheduled-marketplace-drift.yml` | daily; dispatches a reconcile on content drift |

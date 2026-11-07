@@ -82,6 +82,50 @@ Measured on Grok Build 1.0.41 with `grok --agent <stub> -p`. `model: haiku` on a
 
 Decision 4 is unchanged: the Claude research agents stay `model: haiku` until a harness accepts semantic tiers in agent spawn. The Grok generator omits the `model` line when the source value is `haiku`, `sonnet`, `opus`, or `fable`. It does not write `cheap` or `grok-4.5`. Writing a catalog slug onto these files would pin the session profile, not a research child.
 
+## Addendum — 2026-11-05 (Devin harness / SWE-2 Flash launch, PR #12135)
+
+Cognition released SWE-2 Flash on 2026-11-04 (~1/5 price, ~3x speed of SWE-2; free in
+Devin CLI/Desktop through 2026-11-30, no published post-promo rate card). Measured
+`devin models` on Devin CLI (authenticated, CLI 3000.11.234, 2026-11-05): family `swe-2-flash` with
+`swe-2-flash-medium` / `-high` / `-max`, all tagged `Free, new`, 262K context; family
+`adaptive` and `swe-2` (medium/high/max free, `-lightning` paid) also listed; short
+family aliases (`swe`, `opus`, `sonnet`, `codex`, `gemini`, `gpt`) resolve to
+latest-in-family on model-SELECTION surfaces.
+
+**Decision: `TIER_MAPS` gets no `devin` row — all tiers stay `inherit`.** Three reasons,
+all measured. (1) No consumer: `run_subagent` takes a *profile*, not a model — the
+semantic map resolves nothing at spawn time on Devin, and the workflow fence that would
+resolve it doesn't execute there. (2) The absolute-pin criterion fails: Free-plan Devin
+accounts get SWE-1.6 only and org admins restrict models (a disallowed
+`agent.subagent_model` is ignored, team default applies) — no `swe-2-flash` SKU is
+always-available across plans/orgs, so the *router* is the always-available entity, not
+any SKU. (3) Upper tiers on Devin span heterogeneous families (swe-2, opus, gpt-6,
+gemini); any absolute pick can downgrade judgment — `inherit` is the honest value, the
+Grok-map collapse pattern.
+
+**What shipped instead:** profile-surface routing. `subagent_explore` (no exec/git/
+arbitrary-fetch; lands on the router's default subagent model) is the cheap lane;
+`subagent_general` (full tools, always the parent's model) is the write/exec lane.
+`agent.subagent_model` (user-scope `~/.config/devin/config.json`, NEW sessions only,
+explore + unpinned customs only) is the documented opt-in for the router default.
+`plugins/soleur/devin/INSTRUCTIONS.md` §Domain agents + `lib/harness.ts` devin arms emit
+this rule; a phrase-pin suite guards it.
+
+**Deferred to #12141** (unblocks on three measurements — plugin-profile registration,
+forbidden-pin fail-vs-reroute, post-promo Flash rate card): `TIER_MAPS.devin` +
+`sync-devin-agent-compat.ts` generated profiles. Recorded seams: the devin `agent:` field
+in `spawnAgent` still carries the Soleur registry id today (an identity label consumed
+by tests, NOT the `run_subagent` arg — the arg is a profile slot; the id travels in
+the prompt's definition path). Rewiring the field is part of #12141; the pre-change generated strings said
+"Inherit the session model" unconditionally, which was false for explore. If Devin
+profiles ever register, `model: haiku` frontmatter on the five research agents must be
+translated (Grok #8604 precedent) — an unrecognized value could silently bill the
+session default or resolve to an Anthropic SKU inside a Devin session.
+
+This is the first non-Anthropic/non-xAI addendum; the title's "(Claude Code + Grok
+Build)" scope predates the opencode TIER_MAPS row (#10571) and this Devin addendum
+(which adds no row) and is retained for continuity.
+
 ## Alternatives considered
 
 | Alternative | Rejected because |

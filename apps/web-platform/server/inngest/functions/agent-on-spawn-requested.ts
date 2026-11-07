@@ -1493,7 +1493,7 @@ interface SettleArgs {
   attempt?: number;
 }
 
-type SettleLifecycle = Exclude<SpawnLifecycle, "settle_failed">;
+type SettleLifecycle = Exclude<SpawnLifecycle, "settle_failed" | "stale_working">;
 
 interface SettleTarget {
   actionSendId: string;
@@ -1502,6 +1502,11 @@ interface SettleTarget {
   // A cancel provably before the finish timeout: only then can a pending Stop
   // be what ended the run.
   stopEligible: boolean;
+  // Optional atomic re-verification of the sweep's age predicate: appended as
+  // an OR filter on the settle UPDATE so a row freshened between select and
+  // update (a late-starting run's first turn write) writes 0 rows instead of
+  // being settled (TOCTOU, review P2). ISO string; null/absent = unchanged.
+  staleBeforeIso?: string;
 }
 
 function asString(v: unknown): string | null {
@@ -1674,13 +1679,19 @@ export async function agentOnSpawnSettleHandler({
 /**
  * The one memoized step. Every query is scoped to the founder, so a forged or
  * mismatched envelope matches zero rows and reports nothing.
+ *
+ * EXPORTED for `cron-agent-spawn-stale-settle` (#8839): the sweep settles each
+ * stale row through THIS path — never a second write path — passing its own
+ * per-row `stepId` (step ids must be unique within a run; the settle step name
+ * is otherwise fixed for the lifecycle caller).
  */
-async function settleOrphanedSpawn(
+export async function settleOrphanedSpawn(
   step: HandlerArgs["step"],
   target: SettleTarget,
   attempt: number,
+  stepId = "settle-orphaned-spawn",
 ): Promise<{ wrote: boolean; reason: FailureReason }> {
-  return step.run("settle-orphaned-spawn", async () => {
+  return step.run(stepId, async () => {
     const sb = getServiceClient();
     const { actionSendId, founderId, messageId } = target;
 
@@ -1705,7 +1716,7 @@ async function settleOrphanedSpawn(
     // Report on the rows THIS UPDATE returned: zero rows covers every no-op —
     // a terminal state already recorded, a concurrent writer that won, a gone
     // row, or an envelope that is not that founder's.
-    const { data: written, error } = await sb
+    const updateBase = sb
       .from("action_sends")
       .update({ failure_reason: reason })
       .eq("id", actionSendId)
@@ -1713,8 +1724,13 @@ async function settleOrphanedSpawn(
       .eq("message_id", messageId)
       .is("failure_reason", null)
       .is("acknowledged_at", null)
-      .is("undone_at", null)
-      .select("id");
+      .is("undone_at", null);
+    const updateQ = target.staleBeforeIso
+      ? updateBase.or(
+          `and(current_turn_started_at.is.null,created_at.lt.${target.staleBeforeIso}),current_turn_started_at.lt.${target.staleBeforeIso}`,
+        )
+      : updateBase;
+    const { data: written, error } = await updateQ.select("id");
     if (error) {
       // The code only: a PostgREST message can echo a value.
       throw new Error(
@@ -1770,7 +1786,14 @@ export const agentOnSpawnRequested = inngest.createFunction(
     retries: 3,
     // AC7 — 10-minute timeout. 8 turns × 60s per-turn budget + 2 min
     // for step replay + DB writes.
-    timeouts: { finish: `${FINISH_TIMEOUT_MS / 60_000}m` },
+    timeouts: {
+      // Queue bound: a run that has not STARTED within the finish bound is
+      // cancelled, which settles its row through the evented path BEFORE the
+      // stale-Working sweep's 15m bound can settle it — a queued-never-started
+      // run can then never execute turns against a settled row (#8839 review).
+      start: `${FINISH_TIMEOUT_MS / 60_000}m`,
+      finish: `${FINISH_TIMEOUT_MS / 60_000}m`,
+    },
     // #8803: a run that fails past its retries is forwarded to
     // agent-on-spawn-settle; a timeout or cancel reaches it directly.
     onFailure: agentOnSpawnRequestedOnFailure,

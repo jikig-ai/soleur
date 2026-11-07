@@ -59,9 +59,9 @@
 # Credentials, each bound in exactly one step's env (the credential census suite pins this):
 #   - secrets.DOPPLER_TOKEN_PRD             `prd` read — the flag precheck steps (the cutover job's; the wipe job's precheck and flag re-read)
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_FLAG   `prd` write — the flag WRITE steps ONLY (#8573); the rollback's soak-anchor delete (#10297) rides the same step
-#   - secrets.DOPPLER_TOKEN                 prd_terraform read — bridge + webhook creds, and the flip preconditions step's Better Stack new_sessions_paused read (#11704; bound there as BS_DOPPLER_TOKEN, handed to the reader per command)
+#   - secrets.DOPPLER_TOKEN                 prd_terraform read — the bridge and the flip preconditions step's Better Stack new_sessions_paused read (#11704; bound there as BS_DOPPLER_TOKEN, handed to the reader per command); the webhook trio is the Tier-B loader's export since #9294
 #   - secrets.DOPPLER_TOKEN_GIT_DATA_ROOT   soleur-git-data-root/prd read — the key fetch
-#   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the `wipe` job's loader step (the Hetzner write token), and the cutover flip's reachability check
+#   - secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED the Tier-B read token — the loader step of BOTH jobs: `wipe` (the Hetzner write token) and `cutover` in the flip/rollback/redeploy modes (the webhook trio, #9294), plus the cutover flip's reachability check
 #   - secrets.SENTRY_ACTIONS_RO_TOKEN       read-only Sentry — the live pin-fault rule check
 #   - secrets.RESEND_API_KEY                send-only ops email — the notify-failure job ONLY (ADR-241, Tier A)
 #   - secrets.GITHUB_TOKEN                  notify-failure: issues:write; the precondition step: actions:read
@@ -194,7 +194,7 @@ jobs:
           # Progress markers the if:always() finalizer reconciles from. freeze_held is touched BEFORE the
           # freeze runs ("a freeze may have run"); flag_write_attempted BEFORE the flag write ("a write may
           # have landed"; it is also touched in a rollback and is inert there, the flip arm alone reads it);
-          # flag_written after the write verified; cutover_at_written only when the flip fully concluded.
+          # flag_written after the write verified; redeploy_confirmed after the same-version redeploy; cutover_at_written only when the flip fully concluded.
           mkdir -p "$RUNNER_TEMP/cutover-progress"
           echo "progress dir ready."
 
@@ -257,6 +257,41 @@ jobs:
             fi
           fi
           echo "required secrets present."
+
+      # #9294 G1: the webhook trio (the redeploy's HMAC key and Access pair) is a Tier-B read now. Only the modes
+      # that dispatch a redeploy (flip, rollback, redeploy) load it: proof and unfreeze never reach track.sh, so a
+      # revoked Tier-B token must not stop an unfreeze. The loader runs before the preflight below and before the
+      # first flag write, so the finalizer's unwind redeploy always has the trio in env.
+      - name: Load infra credentials (tiered)
+        id: tiered_creds
+        if: steps.flag_precheck.outputs.nothing_to_rollback != '1' && (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback' || steps.confirm.outputs.mode == 'redeploy')
+        uses: ./.github/actions/infra-credentials
+        with:
+          doppler-token-infra-privileged: ${{ secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED }}
+          doppler-token-legacy: ${{ secrets.DOPPLER_TOKEN }}
+
+      # Fail closed BEFORE any production write: the loader's legacy arm (no Tier-B token) exits 0 and exports no
+      # trio, and a Tier-B project that lacks the names exports a green `source=tier_b`. Either way the redeploy
+      # (and the finalizer's unwind of a flipped store) would be refused only AFTER the freeze and the flag write,
+      # leaving the fleet on the flag-on env with a red run. track.sh in preflight mode applies its own credential
+      # checks (present, and the Access pair token-shaped) without sending anything.
+      - name: Webhook trio preflight (fail closed before the freeze and any flag write)
+        if: steps.flag_precheck.outputs.nothing_to_rollback != '1' && (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback' || steps.confirm.outputs.mode == 'redeploy')
+        env:
+          LOADER_SOURCE: ${{ steps.tiered_creds.outputs.source }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          if [[ "$LOADER_SOURCE" != "tier_b" ]]; then
+            echo "::error title=git-data-cutover preconditions::verdict=precondition_trio_absent source=${LOADER_SOURCE:-none}"
+            echo "remedy: this job did not load soleur-infra-privileged/prd (the Load infra credentials step reports source=legacy). Seed DOPPLER_TOKEN_INFRA_PRIVILEGED on the web-platform-infra-apply environment (ADR-241 R7), then re-dispatch."
+            exit 1
+          fi
+          if ! TRACK_PREFLIGHT=1 bash .github/actions/dispatch-web-redeploy/track.sh; then
+            echo "::error title=git-data-cutover preconditions::verdict=precondition_trio_absent source=tier_b"
+            echo "remedy: soleur-infra-privileged/prd lacks a usable webhook HMAC key or Cloudflare Access pair. The owner-run hash-equal copy (plan: Owner-named command chain, step 1) has not landed; re-dispatch after it. Nothing was frozen or written."
+            exit 1
+          fi
 
       # --- flip preconditions (precondition chain, flip only) ------------------------
       - name: Flip preconditions (live-rule / d6 freshness / deploy-in-flight)
@@ -413,6 +448,42 @@ jobs:
           if [ "$pause_zero" -gt 0 ]; then fail pause_not_on "Owner action (agents must not run it): bash plugins/soleur/skills/flag-set-role/scripts/flip.sh new-sessions-paused prd on, then ask the owner to re-dispatch. A reporter row in the last 2 minutes reads new_sessions_paused=0 (${pause_detail# }); after the pause is on, wait 2 minutes so no =0 row remains in the window. new_sessions_paused=1 does not mean zero sessions (the exempt synthetic account can still start one), so read agent_sessions_live too."; fi
           if [ -n "$pause_unread" ]; then fail pause_unread "the pause could not be verified after ${pause_try} read(s): ${pause_unread}${pause_class:+ class=${pause_class}} bad_rows=${pause_bad} (${pause_detail# }). No reporter row under ${pause_max_age} s old for both hosts, a full 200-row answer, or the Better Stack read failed. Read-only check (an agent may run it; it needs the Doppler prd_terraform query secrets): bash scripts/betterstack-query.sh with the reporter-line query, or read the reporter line in Better Stack. Causes: no_fresh_row or truncated mean a missing or stale reporter heartbeat or a flood of rows, so the owner checks the web hosts; class=credentials-rejected (or a SOLEUR_CREDENTIAL_REFUSED line above) needs the owner to fix the BETTERSTACK_QUERY_* secrets in Doppler prd_terraform; read_failed with transport or reader-exit-1 may clear on a re-dispatch. Then re-dispatch."; fi
           echo "preconditions clear: tier_b seam, pin-fault rule live, d6 replace stamped ($last_ok), no deploy in flight, image $running >= $GIT_DATA_EMITTER_FLOOR, image >= deny floor $GIT_DATA_DENY_FLOOR, both web hosts paused (new_sessions_paused=1 in every row of the last 2 minutes, newest <= ${pause_max_age} s)."
+
+          # liveness_unproven (#9943, CTO F9): the flip freezes writes on the git-data host, so a host
+          # that is dark must refuse BEFORE the freeze — the predicate the runbook's hard item only
+          # documented by hand until now. Two evidences, both fail-closed (an unreadable read is a
+          # REFUSAL, never a pass):
+          #   (a) the `soleur-git-data-host-prd` betteruptime heartbeat reads `up` — the private-NIC
+          #       probe's own liveness signal; `down`/`paused`/`pending`/absent all refuse.
+          #   (b) a `state=ok` liveness event STRICTLY newer than the newest `boot_complete`
+          #       row on host_name=soleur-git-data — a pre-boot ok row describes the PREVIOUS host.
+          # Both reads reuse the step's BS_DOPPLER_TOKEN: the heartbeat API token and the warehouse
+          # query secrets are prd_terraform-scoped Doppler secrets — and sits deliberately AFTER the pinned
+          # "preconditions clear" echo — the access suite's region pin owns everything through that
+          # line, and the echo names only the predicates above it.
+          source "${GITHUB_WORKSPACE:?}/scripts/lib/betterstack-sources.sh" || fail liveness_unproven "scripts/lib/betterstack-sources.sh could not be loaded — the git-data table identifier is unreadable."
+          BS_ERR="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/bs-live-err.$$"
+          hb_rc=0
+          hb_json="$(DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_API_TOKEN_READONLY -- bash -c 'curl -fsS -m 20 -H "Authorization: Bearer ${BETTERSTACK_API_TOKEN_READONLY:?BETTERSTACK_API_TOKEN_READONLY absent from prd_terraform}" "https://uptime.betterstack.com/api/v2/heartbeats?per_page=250"' 2>"$BS_ERR")" || hb_rc=$?
+          [[ "$hb_rc" -eq 0 ]] || { grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true; fail liveness_unproven "the soleur-git-data-host-prd heartbeat status read failed (rc=$hb_rc) — an unreadable heartbeat is not a live host; check BETTERSTACK_API_TOKEN_READONLY in prd_terraform and re-dispatch."; }
+          hb_count="$(printf '%s' "$hb_json" | jq -r '[.data[] | select(.attributes.name == "soleur-git-data-host-prd")] | length' 2>/dev/null)"
+          [[ "$hb_count" == "1" ]] || fail liveness_unproven "the soleur-git-data-host-prd heartbeat name matched ${hb_count:-0} monitors, not exactly 1 — an ambiguous liveness read is not a live host; re-dispatch only when the name is unique."
+          hb_status="$(printf '%s' "$hb_json" | jq -r '.data[] | select(.attributes.name == "soleur-git-data-host-prd") | .attributes.status' 2>/dev/null | head -1)"
+          [[ "$hb_status" == "up" ]] || fail liveness_unproven "the soleur-git-data-host-prd heartbeat reads '${hb_status:-absent}', not 'up' — a dark, paused or unarmed heartbeat is not a live host. Read it with the runbook's Private-NIC readiness read; re-dispatch only when it reports up."
+          live_sql="SELECT (SELECT dt FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data' AND JSONExtractString(raw,'stage') = 'boot_complete' AND dt > now() - INTERVAL 30 DAY ORDER BY dt DESC LIMIT 1) AS boot_dt, (SELECT dt FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data' AND JSONExtractString(raw,'state') = 'ok' AND dt > now() - INTERVAL 30 DAY ORDER BY dt DESC LIMIT 1) AS ok_dt, dateDiff('second', (SELECT dt FROM remote(\$BS_TABLE) WHERE JSONExtractString(raw,'host_name') = 'soleur-git-data' AND JSONExtractString(raw,'state') = 'ok' AND dt > now() - INTERVAL 30 DAY ORDER BY dt DESC LIMIT 1), now()) AS ok_age_s FROM remote(\$BS_TABLE) WHERE dt > now() - INTERVAL 30 DAY LIMIT 1 FORMAT JSONEachRow"
+          live_rc=0
+          live_rows="$(BS_TABLE="${BS_GIT_DATA_TABLE:?sourced lib did not define BS_GIT_DATA_TABLE}" BS_TABLE_S3="${BS_GIT_DATA_TABLE_S3:?sourced lib did not define BS_GIT_DATA_TABLE_S3}" DOPPLER_TOKEN="$BS_DOPPLER_TOKEN" doppler run --preserve-env -p soleur -c prd_terraform --only-secrets BETTERSTACK_QUERY_HOST,BETTERSTACK_QUERY_USERNAME,BETTERSTACK_QUERY_PASSWORD -- bash scripts/betterstack-query.sh "$live_sql" 2>"$BS_ERR")" || live_rc=$?
+          [[ "$live_rc" -eq 0 ]] || { grep -m1 '^SOLEUR_CREDENTIAL_REFUSED' "$BS_ERR" >&2 || true; fail liveness_unproven "the state=ok/boot_complete warehouse read failed (rc=$live_rc) — an unreadable read is not evidence of a live host; check the BETTERSTACK_QUERY_* secrets in prd_terraform and re-dispatch."; }
+          live_eval="$(printf '%s\n' "$live_rows" | jq -r '[.boot_dt, .ok_dt, (.ok_age_s | tostring)] | @tsv' | awk -F'\t' '
+            $2 == "" || $2 == "null" { print "no_ok_row"; next }
+            $1 == "" || $1 == "null" { print "no_boot_row"; next }
+            $3 !~ /^[0-9]+$/ { print "bad_age"; next }
+            $3 + 0 > 900 { print "stale"; next }
+            $2 <= $1 { print "pre_boot"; next }
+            { print "ok" }' | head -1)"
+          rm -f "$BS_ERR"
+          [[ "$live_eval" == "ok" ]] || fail liveness_unproven "no qualifying post-boot liveness event on soleur-git-data (${live_eval}: needs a state=ok row newer than the newest boot_complete and under 900s old). A stale or pre-boot event describes a previous host, not the one the flip would freeze. Wait for the liveness timer's next emit (10 min) or investigate the emit path; never force past a dark host."
+          echo "liveness precondition clear: heartbeat up; post-boot state=ok row present (verdict basis: ${live_eval})."
 
       # --- SSH access path (all host-touching modes) --------------------------------
       - name: CF Tunnel SSH bridge
@@ -614,7 +685,6 @@ jobs:
         if: (steps.confirm.outputs.mode == 'flip' || steps.confirm.outputs.mode == 'rollback' || steps.confirm.outputs.mode == 'redeploy') && steps.flag_precheck.outputs.nothing_to_rollback != '1'
         env:
           MODE: ${{ steps.confirm.outputs.mode }}
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           WEB_HOST_PRIVATE_IPS: ${{ env.WEB_HOST_PRIVATE_IPS }}
           # The webhook swap is minutes; a 2400 s bound leaves finalizer headroom inside
           # the 120-min job timeout and converts a wedged poll into a timed verdict.
@@ -622,11 +692,10 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-          WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform)"
-          CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform)"
+          # The Tier-B loader step above exported (and masked) the trio into this job's env; track.sh refuses
+          # (verdict=redeploy_credential_absent) when it is missing, and there is no fallback read (#9294).
           bash .github/actions/dispatch-web-redeploy/track.sh
+          touch "$RUNNER_TEMP/cutover-progress/redeploy_confirmed"
 
       # --- per-host git_data_store= readback via Better Stack (host_name keyed) -------
       - name: Per-host git_data_store= assertion (Better Stack)
@@ -828,22 +897,22 @@ jobs:
               unwind_failed=1
             fi
             if [[ "$unwind_failed" = 0 ]]; then
-              export WEBHOOK_DEPLOY_SECRET CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET
-              WEBHOOK_DEPLOY_SECRET="$(doppler secrets get WEBHOOK_DEPLOY_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
-              CF_ACCESS_CLIENT_ID="$(doppler secrets get CF_ACCESS_CLIENT_ID --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_ID --plain -p soleur -c prd_terraform 2>/dev/null)" || true
-              CF_ACCESS_CLIENT_SECRET="$(doppler secrets get CF_ACCESS_CLIENT_SECRET --plain -p soleur -c prd_terraform 2>/dev/null || doppler secrets get CI_SSH_ACCESS_TOKEN_SECRET --plain -p soleur -c prd_terraform 2>/dev/null)" || true
-              if [[ -n "${WEBHOOK_DEPLOY_SECRET:-}" ]]; then
-                if REDEPLOY_TIMEOUT_S=900 bash .github/actions/dispatch-web-redeploy/track.sh; then
-                  echo "finalizer: off-line redeploy confirmed"
-                else
-                  echo "::error::finalizer: unwind redeploy did not confirm — verify git_data_store=disabled per host via Better Stack"
-                  unwind_failed=1
-                fi
+              # The trio is the Tier-B loader step's export (job env). track.sh refuses with
+              # verdict=redeploy_credential_absent when it is missing (a job that died before that step).
+              if REDEPLOY_TIMEOUT_S=900 bash .github/actions/dispatch-web-redeploy/track.sh; then
+                echo "finalizer: off-line redeploy confirmed"
               else
-                echo "::error::finalizer: WEBHOOK_DEPLOY_SECRET unreadable — flag-off written but NO redeploy dispatched; the fleet still runs the prior env. Page on-call."
+                echo "::error::finalizer: flag-off written but the unwind redeploy did NOT confirm — the fleet may still run the flag-on env. Page on-call and verify git_data_store=disabled per host via Better Stack (track.sh's verdict line above names why; redeploy_credential_absent means the trio was not in the job env)."
                 unwind_failed=1
               fi
             fi
+          fi
+          # A rollback's flag-off is the write itself, but the fleet only leaves the flag-on env at the same-version
+          # redeploy: a rollback that wrote the flag and never confirmed that redeploy leaves production on the
+          # flipped env while Doppler says off, and a second rollback would exit as nothing_to_rollback.
+          if [[ "$MODE" == "rollback" && -f "$prog/flag_written" && ! -f "$prog/redeploy_confirmed" ]]; then
+            echo "::error::finalizer: the rollback wrote the flag off but its same-version redeploy never confirmed — the fleet may still run the flag-on env. Read the redeploy step's track.sh verdict, then dispatch mode=redeploy and verify git_data_store=disabled per host via Better Stack."
+            unwind_failed=1
           fi
           if [[ -f "$prog/freeze_held" ]]; then
             run_unfreeze unfreeze

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { KEY_RE, LegalTextError, TEXT_HASH_RE, getLegalText, isCurrent, loadLegalTexts, parseLegalText, textHash } from "@/server/legal-acceptance/canonical";
@@ -132,6 +132,17 @@ describe("registry loading", () => {
     expect(getLegalText("terms-update", dir).version).toBe("1");
     expect(code(() => getLegalText("absent", dir))).toBe("unknown_key");
     expect(code(() => getLegalText("../etc", dir))).toBe("unknown_key");
+  });
+  it("getLegalText throws a distinct read_failed for a read error that is not a missing file (EISDIR, ENOTDIR), never unknown_key", () => {
+    const d = mkdtempSync(path.join(tmpdir(), "legal-readfail-"));
+    mkdirSync(path.join(d, "dir-as-file.md")); // reading a directory: EISDIR
+    expect(code(() => getLegalText("dir-as-file", d))).toBe("read_failed");
+    const notADir = path.join(d, "plain-file");
+    writeFileSync(notADir, "x");
+    expect(code(() => getLegalText("any-key", notADir))).toBe("read_failed"); // texts dir is a file: ENOTDIR
+    // ENOENT (the file or the whole directory is absent) stays unknown_key.
+    expect(code(() => getLegalText("absent", d))).toBe("unknown_key");
+    expect(code(() => getLegalText("absent", path.join(d, "no-such-dir")))).toBe("unknown_key");
   });
   it("the committed registry loads without error (it is EMPTY until counsel signs off a real text, so this proves the loader and the directory, not any text)", () => {
     expect(() => loadLegalTexts()).not.toThrow();

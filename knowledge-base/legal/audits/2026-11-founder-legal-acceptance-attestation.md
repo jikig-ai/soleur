@@ -7,7 +7,7 @@ status: "DRAFTED, NOT COUNSEL-REVIEWED — sign-off block blank"
 signed_off_at: null
 signed_off_by: null
 disposition: "OPEN. This record must exist before the first real row; it is not a sign-off. The sign-off block in section 6 is blank and no reviewer or date is recorded."
-gates: "The first real row in `legal_acceptance`. Not the merge of PR-B (the feature ships dark)."
+gates: "The first real row in `legal_acceptance`. Not the merge of PR-B (dark) or PR-C (behind the `approval-queue` flag, PROVISIONAL)."
 open_follow_ups: ["Register Maintenance item 17 (a) to (g)", "external anchor (deferred)", "deletion path at the end of retention (not built)", "challenge-table purge on erasure (not built; opportunistic 30-day purge is built)"]
 re_evaluation_triggers: "First founder other than the Jikigai operator OR EEA-out data subject OR regulated-industry user OR any component that reads the table to enforce something OR the external anchor built OR the retention period confirmed or changed OR a first erasure request or objection from a founder whose row is kept."
 ---
@@ -32,7 +32,13 @@ Design properties, as ADR-319 states them. Each is a property of the **design as
 | 6 | The row checksum is computed by the database from length-prefixed columns, not supplied by a caller. It detects a changed row. | `legal_acceptance_row_hash`, the guard |
 | 7 | The founder reads only their own rows; `service_role` holds no table privilege and reaches the table through functions only; the read-only check function returns status, text hash, decision time and a checksum-match flag, not the note. | RLS, grants, `verify_legal_acceptance` |
 | 8 | `requested_edit` is limited to 1000 characters and exists only for a Request changes decision. | column checks, `record_legal_acceptance` |
-| 9 | The feature ships dark: nothing in the product reads the table to enforce anything. | PR-B scope; PR-C and PR-D are separate |
+| 9 | Nothing in the product reads the table to enforce anything: the database record shipped dark (PR-B), and the web screen added in PR-C only writes and shows the founder's own rows. | PR-B scope; PR-D is separate |
+| 10 | (PR-C, web screen) The card is shown only behind the `approval-queue` flag; with the flag off the page still renders existing rows but creates nothing and cannot record a Yes. The flag is read with `workspaceId: null`, so it is effectively global, not per user; it does not confine the card to the operator. | `server/approval/flag.ts`, the card page |
+| 11 | (PR-C) Both notices (card-level, and beside the free-text field) are shown on the card before the choice, with the drafted wording; the retention period inside the card-level notice is "to be confirmed by counsel". | `apps/web-platform/lib/legal-acceptance-copy.ts` (PROVISIONAL) |
+| 12 | (PR-C) A Yes needs an emailed code confirmed within 5 minutes on a throwaway client; the email address comes from the session only, never the request, so the send step has no address-enumeration surface; a per-user attempt ceiling applies on top of the 5 per challenge (in-process, per host, resets on restart; the database bounds (5 per challenge, 3 challenges per 15 minutes) are the hard limit); the session id used is the one the recording function reads. | the reauth and decide routes in `apps/web-platform/app/api/legal-acceptance/` |
+| 13 | (PR-C) The card states that an answer is final and that changing it needs a new text version; it has no undo. | the card copy |
+
+> **Superseded 2026-11-05 (#12187, PR-D; fires on its merge), as to design property 9 ("Nothing in the product reads the table to enforce anything"):** from that merge the check endpoint and the ship hold gate read the table. Property 9 describes the state at PR-B and PR-C. The re-evaluation trigger is met and recorded in the LIA Addendum 2026-11-05; the sign-off block stays blank.
 
 Property 3 of the CTO ruling (a holder of production credentials can mint a founder session) is carried as a residual (section 3), not a property.
 
@@ -46,6 +52,9 @@ Property 3 of the CTO ruling (a holder of production credentials can mint a foun
 - **That the founder id is anonymous.** It is pseudonymous.
 - **That the free-text note is free of personal data.** The notice reduces the risk.
 - **That the intent and challenge table is handled correctly after its 30 minutes.** Rows older than 30 days are deleted when the next challenge is issued (so a row can outlast 30 days when none is issued), and nothing deletes them on erasure.
+- **The wording of the card.** The card copy is PROVISIONAL and has not been reviewed by counsel; the retention period it shows is not decided. This record says what the card shows, not that the wording is sufficient notice.
+- **That the Request changes note reaches anyone.** It has no delivery path to the team until PR-D, although the card says it is saved with the decision. **Superseded (PR-D, takes effect on the merge of the pull request that carries it, drafted, not counsel-reviewed):** the note is read by pull only, by the operator personally through their own database login, following `knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md`; nothing pushes it to anyone, and the card copy is unchanged. This narrows the line above to: the note is not delivered to anyone and is read only by the operator, by the operator's own query. Still not attested: that a named reader, a response expectation or a count-only signal exists (required before any founder other than the operator), and that the card wording matches this behaviour.
+- **That the screen behaves as described in production.** The card has not been run in production by a founder; the component and route tests are the engineering evidence.
 - **Customer founders.** Not assessed. Admitting one is outside this record.
 - **Published privacy text.** A short disclosure marked `[DRAFT — pending CLO/counsel review per #12011]` was added to the Privacy Policy, GDPR Policy and Data Protection Disclosure (canonical and mirror) in PR-B because the CI DSAR lockstep gate requires it. Its wording is not attested as final; the markers remain until external counsel clears item 17. The full update before any other founder is posed in the DSAR and notice note (part d).
 - **The DSAR export exclusion in code.** The exclusion entries are in the PR (`DSAR_TABLE_EXCLUSIONS`) and are guarded by the allowlist completeness test; this record has not checked their wording against counsel's.
@@ -76,9 +85,9 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 
 - [ ] This record exists (done by this file) and the sign-off block in section 6 is completed by counsel, or the operator records an express deferral of each open item.
 - [ ] The LIA exists (done by the file named above) and its balancing outcome is accepted.
-- [ ] ADR-319 exists and its three stated properties, its residual-risk list and its Decision text agree with the nine design properties above; any difference is corrected here, not in the ADR alone.
+- [ ] ADR-319 exists and its three stated properties, its residual-risk list and its Decision text agree with the thirteen design properties above; any difference is corrected here, not in the ADR alone.
 - [ ] The `DSAR_TABLE_EXCLUSIONS` entry for both tables is in the code.
-- [ ] The notice text for the Request changes field and the card-level notice (parts (c) and (c-2) of the DSAR and notice note) are in the screen (PR-C), word for word.
+- [ ] The notice text for the Request changes field and the card-level notice (parts (c) and (c-2) of the DSAR and notice note) are in the screen (PR-C), word for word. PR-C puts them on the card; the retention period inside (c) remains "to be confirmed by counsel", so this box is not ticked as a sign-off.
 - [ ] The erasure reply wording is available to whoever answers an erasure request.
 
 ## 6. Counsel sign-off

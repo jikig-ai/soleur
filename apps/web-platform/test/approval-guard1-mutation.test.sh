@@ -64,10 +64,13 @@
 #          the post-race check is skipped, the next iteration returns aborted before any read), abort after the wake
 #          (same). Every path ends with the same `aborted` result and the same read count. (Round 2 added `lastReadError` to
 #          the result; the two returns still carry the same fields.)
-#   G1-GD24 the `COMMIT_SHA_RE` check on `git rev-parse HEAD` in gate.ts is defence in depth. Input shapes surveyed: a
-#          normal repository (one 40-hex id), a sha-256 repository (64-hex, the regex admits it), an empty repository (no
-#          commit: git exits 128, execFile throws before the check), a non-repository directory (exit 128), a detached
-#          HEAD (one id). None reaches the check with a non-sha; the throw tests in gate-deps.test.ts hold the exit paths.
+#   G1-GD24 the `COMMIT_SHA_RE` check on the sha `readWorkspaceHeadSha` returns, in gate.ts, is defence in depth (ADR-309 9b:
+#          the gate no longer runs `git rev-parse HEAD`). Input shapes surveyed: a symbolic HEAD to a loose ref, a detached
+#          HEAD, a packed-only branch (each returned only after `HEX40.test`), a 64-hex body (the reader throws not_hex40
+#          first), a garbage body (the reader throws first). None reaches the check with a non-sha.
+#   G1-ISO7b the `cwd` of a hardened git child placed AFTER the `execOpts` spread in git-auth.ts is defence in depth: a hardened
+#          call that carries a caller `cwd` is refused before the token is minted, so `execOpts` holds no `cwd` to override
+#          (surveyed: none, relative, absolute, empty-string; all but the first throw first).
 # RESIDUAL GAPS (NOT equivalent: real behaviour the test suite does not see; each must SURVIVE and is reported, so a
 # future fix that kills one turns the battery red until the row is moved to the must-kill table):
 #   G1-DB3  a tool builder that assembles the RPC name at run time (`decide_${"approval"}`) is not seen by the sentinel's
@@ -82,6 +85,16 @@
 #           the snapshot values are not re-checked at run time), the gate's seam is typed `Promise<boolean>`, tests inject booleans and a rejected promise (both pinned), and a
 #           mutated seam returning `undefined` / `"yes"` / `1` is not constructible from the typed seam. The dev impact is
 #           nil; the fail-closed contract for an odd value is unpinned and a typed-seam change would be the trigger.
+#
+# NOT A ROW (ADR-309 9b, honest): `O_NONBLOCK` on the `open` in `readSmallRegularFile` (server/approval/workspace-head.ts). Removing it
+#   makes the SYNCHRONOUS open of a planted FIFO block the vitest worker, and a test timeout cannot interrupt a blocked syscall, so the
+#   mutant would hang until the harness timeout (UNRESOLVED), never fail a test. The FIFO tests in workspace-head.test.ts and
+#   git-isolated-push-dir.test.ts hold the property in the unmutated tree; the git children are protected by their own timeouts.
+#   (The creator never opens an object file, so its FIFO tests are ordinary rows: G1-ISO33 and G1-ISO34.)
+#
+# NOT JUDGED HERE (ADR-309 9b): test/push-branch-isolated-real-git.test.ts. It runs real git over real transports and is judged by its
+#   own self-controls (each vector is shown effective under the 9a form before it is shown inert under the isolated one, plus a
+#   positive TLS control), not by mutation rows; the battery has no row and no control floor for it.
 #
 # NOT COVERED OFFLINE (honest gaps, not rows): mutations whose only detector is the database-gated behavioural suite
 #   (test/server/approval-request.tenant-isolation.test.ts, runs in tenant-integration.yml against a DEV database) and the
@@ -98,6 +111,11 @@
 #   enforcement for every tool, grants-required builders (an AST pin), push grant without a commit, grant-refused and
 #   key-unavailable ops, the not_approved mapping and the consume-reject settle frame; 13 requestedByUserId / expiresAt payload
 #   wiring (test/approval/gate-flow-payload.test.ts); 14 the Art. 17 erasure emitters' literal null first argument.
+#   15 (ADR-309 flip item 9b, rows G1-ISO*, G1-WH*, G1-GD22/GD23/GD29/GD30 and the rewritten G1-X9/HD*): the git child that carries the
+#   token reads no config, hook, ref, index or redirect file of the workspace. Chokepoints, each with rows: the creator
+#   (server/git-isolated-push-dir.ts, test/git-isolated-push-dir.test.ts), the env builder (server/git-hardened-env.ts), the one
+#   hardened spawn site (server/git-auth.ts), the second spawn site, the hardened `rev-parse` commit check (server/push-branch.ts,
+#   test/push-branch-hardened.test.ts) and the gate's no-git HEAD reader (server/approval/workspace-head.ts).
 #
 # Usage: bash apps/web-platform/test/approval-guard1-mutation.test.sh [--only <ERE over mutant ids>] [--list] [--check-anchors]
 # Exit: 0 all verdicts as designed; 1 a finding; 2 setup failure; 3 inconclusive (a mutant could not be judged).
@@ -177,6 +195,14 @@ GD = "server/approval/gate.ts"
 KBS = "server/kb-share-tools.ts"
 WSET = "server/workspace-settings-tools.ts"
 ACC = "server/account-delete.ts"
+CCP = "server/cc-github-push.ts"
+CCD = "server/cc-dispatcher.ts"
+GAUTH = "server/git-auth.ts"
+HENV = "server/git-hardened-env.ts"
+ISOD = "server/git-isolated-push-dir.ts"
+WH = "server/approval/workspace-head.ts"
+GHARD = "server/inngest/functions/_git-hardening.ts"
+RPB = "server/resolve-protected-branches.ts"
 
 T_GF = "test/approval/gate-flow.test.ts"
 T_RES = "test/approval/gate-flow-resolver-snapshot.test.ts"
@@ -204,6 +230,14 @@ T_PAY = "test/approval/gate-flow-payload.test.ts"
 T_BGR = "test/approval/builder-grants-required.test.ts"
 T_PCGB = "test/approval/permission-callback-gated-branch.test.ts"
 T_AD = "test/account-delete.test.ts"
+T_CCP = "test/cc-github-push.test.ts"
+T_RF = "test/cc-dispatcher-real-factory.test.ts"
+T_HARD = "test/push-branch-hardened.test.ts"
+T_GAH = "test/git-auth-hardened-env.test.ts"
+T_GAU = "test/git-auth-hardened.test.ts"
+T_ISO = "test/git-isolated-push-dir.test.ts"
+T_WH = "test/approval/workspace-head.test.ts"
+T_CSC = "test/server/inngest/cron-safe-commit.test.ts"
 STATIC = "static:probe"
 
 # Test-name fragments reused by several rows.
@@ -343,7 +377,7 @@ M("G1-X5d-grant-written-on-a-wait-timeout", GF, E('a.logDecision(a.toolName, "de
 M("G1-X6-push-handler-ignores-the-grant-commit", GHT, E('commitSha: grant.kind === "granted" ? grant.binding.headSha : undefined,', "commitSha: undefined,"), T_PUSHG, ["a grant pins the approved commit: pushBranch gets commitSha = the approved headSha"])
 M("G1-X7-push-handler-runs-without-a-grant", GHT, E('if (grant.kind === "refuse") return grantRefusalResponse("grant_missing");', 'if (false) return grantRefusalResponse("grant_missing");'), T_PUSHG, ["enforcing and no grant: refuses with the grant-missing text and pushes nothing"])
 M("G1-X8-push-ignores-the-pinned-commit", PUSH, E('`${commitSha ?? "HEAD"}:refs/heads/${branch}`', '`HEAD:refs/heads/${branch}`'), T_PINNED, ["approve at A, HEAD moves to B: the remote branch ends at A, not B"])
-M("G1-X9-push-pinned-commit-not-verified", PUSH, E('execFileSync("git", ["cat-file", "-e", `${commitSha}^{commit}`], { cwd: workspacePath, stdio: "pipe" });', "void 0;"), T_PINNED, ["a sha that is absent from the repository throws and the remote branch is not created"])
+M("G1-X9-push-pinned-commit-not-verified", PUSH, E('execFileSync("git", ["cat-file", "-e", `${commitSha}^{commit}`], {\n            cwd: workspacePath,\n            stdio: "pipe",\n          });', "void 0;"), T_PINNED, ["a sha that is absent from the repository throws and the remote branch is not created"])
 M("G1-X10-check-grant-does-not-refuse-when-enforcing", GRANTS, E('if (!grants.enforcing) return { kind: "legacy" };', 'return { kind: "legacy" };'), T_GRANTS, ["checkGrant enforcing and no grant: refuse (the sticky flag fails closed)"])
 M("G1-X11-grant-is-not-one-shot", GRANTS, E("    if (!e) return null;\n    this.entries.delete(id);\n", "    if (!e) return null;\n"), T_GRANTS, ["ExecutionGrants take is one-shot"])
 M("G1-X12-grant-never-expires", GRANTS, E("return e.expiresAt > this.now() ? e.binding : null;", "return e.binding;"), T_GRANTS, ["ExecutionGrants a grant expires after 120 s and the expired read still consumes it"])
@@ -451,13 +485,15 @@ M("G1-GD18-factory-reply-read-error-ignored", GD, E("if (error || typeof sender 
 M("G1-GD19-factory-pushes-again-on-a-re-ask", GD, E("if (!created || !notify) return;", "if (!notify) return;"), T_GD, ["pushes only for a NEW request the database said to notify about"])
 M("G1-GD20-factory-undelivered-push-is-silent", GD, E('if (!delivered) throw new Error("approval notification not delivered");', ""), T_GD, ["a dispatch that reaches nobody throws, so the gate reports approval-notify-failed"])
 M("G1-GD21-factory-service-client-not-memoised", GD, E("(service ??= (args.serviceClient", "(service = (args.serviceClient"), T_GD, ["the service client is created once and reused across calls"])
-M("G1-GD22-factory-head-read-in-the-process-cwd", GD, E("{ cwd: workspacePath, timeout: 10_000 }", "{ cwd: process.cwd(), timeout: 10_000 }"), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
-M("G1-GD23-factory-head-not-trimmed", GD, E("const sha = stdout.trim();", "const sha = stdout;"), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
+M("G1-GD22-factory-head-read-in-the-process-cwd", WH, E("    const ws = realpathSync(workspacePath);", '    const ws = realpathSync(".");'), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
+M("G1-GD23-factory-head-body-not-newline-stripped", WH, E("    loose = stripOneNewline(readSmallRegularFile(refPath, REF_MAX_BYTES));", "    loose = readSmallRegularFile(refPath, REF_MAX_BYTES);"), T_GD, ["push binds the HEAD of THE WORKSPACE PATH (not the process cwd's repository), as a bare commit sha"])
 M("G1-GD25-factory-default-tenant-client-is-built-for-the-workspace", GD, E("getFreshTenantClient(args.userId)", "getFreshTenantClient(args.workspaceId)"), T_GD, ["the default tenant client is getFreshTenantClient(userId): the USER id, never the workspace id"])
 M("G1-GD26-factory-default-service-client-is-not-createServiceClient", GD, E("createServiceClient() as unknown as ApprovalRpcClient", "({}) as unknown as ApprovalRpcClient"), T_GD, ["the default service client is createServiceClient (service role), never the tenant client"])
 M("G1-GD27-factory-default-notifier-gets-the-user-not-the-workspace", GD, E("(args.notifyRequested ?? notifyApprovalRequested)(approvalId, args.workspaceId, expiresAt)", "(args.notifyRequested ?? notifyApprovalRequested)(approvalId, args.userId, expiresAt)"), T_GD, ["the default notifier forwards a newly created request to the real notify path with the approval id, the workspace id and the expiry"])
 M("G1-GD28-factory-default-notifier-is-not-the-real-notify-path", GD, E("args.notifyRequested ?? notifyApprovalRequested", "args.notifyRequested ?? (async () => true)"), T_GD, ["the default notifier forwards a newly created request to the real notify path with the approval id, the workspace id and the expiry"])
-M("G1-GD24-factory-head-shape-unchecked", GD, E('if (!COMMIT_SHA_RE.test(sha)) throw new Error("workspace HEAD is not a commit sha");', ""), T_GD, equivalent="`git rev-parse HEAD` that exits 0 prints exactly one full object id (40 or 64 hex) and an unborn or missing HEAD exits non-zero, which execFile already turns into a throw; surveyed input shapes: a normal repo, an empty repo (no commit), a non-repository directory, a repository with a detached HEAD; none reaches the shape check with a non-sha. Defence in depth for a future change of the git command.")
+M("G1-GD24-factory-head-shape-unchecked", GD, E('if (!COMMIT_SHA_RE.test(sha)) throw new Error("workspace HEAD is not a commit sha");', ""), T_GD, equivalent="`readWorkspaceHeadSha` returns a value only after `HEX40.test` passed on it (classifyBody, classifyHeadBody and packedRefSha each return the matched 40-hex string and throw for everything else, a 64-hex id included), and `COMMIT_SHA_RE` admits exactly that shape plus 64-hex, so the gate-side check can never reject what the reader returned; surveyed input shapes: a symbolic HEAD to a loose ref, a detached HEAD, a packed-only branch, a 64-hex body (the reader throws not_hex40 first), a garbage body (the reader throws first). No input reaches the shape check with a non-sha. Defence in depth for a future change of the reader.")
+M("G1-GD29-factory-head-read-failure-not-reported", GD, E('    reportApprovalOp("headReadFailed", null, { tags: { reason }, extra: { reason } });\n', ""), T_GD, ["ADR-309 9b: a worktree-style .git FILE and a symlinked .git are not approvable, and each refusal is reported with a closed reason"])
+M("G1-GD30-factory-head-read-failure-hands-the-error-to-the-reporter", GD, E('reportApprovalOp("headReadFailed", null,', 'reportApprovalOp("headReadFailed", err,'), T_GD, ["ADR-309 9b: an unborn HEAD is reported as ref_unresolvable and never passes a path or the Error to the reporter"])
 
 # ---- 12. Sticky enforcement, grants refused / key unavailable ops, push without a commit, consume-reject frames (round-2 Q3/Q5/Q6/Q8) --
 K_STICKY = [": flag on, then off, on ONE ExecutionGrants object -> terminal unavailable deny, no review card, no request"]
@@ -471,6 +507,143 @@ M("G1-ST7-grants-required-builder-takes-another-type", GHT, E("export function b
 M("G1-PG1-push-grant-without-a-commit-pushes-head", GHT, E('if (grant.kind === "granted" && !grant.binding.headSha) {', "if (false) {"), T_PUSHG, ["a grant that carries no headSha REFUSES (never pushes HEAD) and is reported as commit_mismatch"])
 M("G1-PG2-push-grant-without-a-commit-refuses-unreported", GHT, E('reportGrantRefused(toolName, "commit_mismatch");', ""), T_SINK, ["commit_mismatch: a push grant that carries no headSha refuses (never pushes HEAD)"])
 M("G1-PG3-approved-commit-unavailable-refuses-unreported", GHT, E('reportGrantRefused(toolName, "commit_unavailable");', ""), T_SINK, ["commit_unavailable: the approved commit cannot be pushed"])
+# ---- 12b. cc strict push handler (#11636): `requireGrant` makes a `legacy` (no gate-written grant) outcome a refusal -----------
+K_RG = ["buildGithubPushBranchTool (requireGrant: true, the cc registration) enforcing false + no grant => refused as grant_missing, reported, and pushBranch is NOT called"]
+M("G1-RG1-cc-push-handler-runs-without-a-gate-grant", GHT, E('if (grant.kind === "legacy" && requireGrant) {', "if (false) {"), T_PUSHG, K_RG)
+M("G1-RG2-cc-push-handler-strict-refusal-unreported", GHT, E('reportGrantRefused(toolName, "grant_missing");', ""), T_PUSHG, K_RG)
+M("G1-RG3-grants-required-require-grant-optional", GHT, E("\n  requireGrant: boolean;", "\n  requireGrant?: boolean;"), T_BGR, ["the cc push builder takes a REQUIRED boolean `requireGrant` (a forgotten wiring does not compile)"])
+# ---- 12c. cc push registration (#11636): the dispatcher's wired-set assertion, the registrar's own gates, the hardened push -------
+K_WS1 = ["the dispatcher's wired-set assertion rejects a foreign toolName (not grant-wired): the Query is built on the dark path, nothing is published, and it is reported"]
+M("G1-CCR1-wired-set-assertion-call-dropped", CCD, E("        assertCcApprovalSetWired(pushRegistration.tools, pushRegistration.toolNames);\n", ""), T_RF, K_WS1)
+M("G1-CCR2-registrar-flag-off-still-registers", CCP, E('  if (!flagEnabled) return done("flag-off");\n', ""), T_CCP, ["'flag off' -> 'flag-off'; lookup and builder not called"])
+M("G1-CCR3-registrar-support-persona-registers", CCP, E('  if (args.persona === "support") return done("support-persona");\n', ""), T_CCP, ["-> 'support-persona'; lookup and builder not called"])
+M("G1-CCR4-platform-tool-names-drop-the-registrar-result", CCD, E("            ...approvalToolNames,\n", ""), T_RF, ["all preconditions true: the tool is registered ONCE"])
+M("G1-CCR5-warm-turn-mirror-ignores-the-published-registered-set", CCD, E("          ...getCcRegisteredApprovalTools(userId, conversationId),\n", ""), T_RF, ["after a REGISTERED cold build the push tool_use does not mirror as an unregistered platform tool"])
+M("G1-CCR6-push-success-result-drops-the-approved-commit", GHT, E('? { ...pushed, commit: grant.binding.headSha } : pushed;', '? pushed : pushed;'), T_PUSHG, ["a gate-written grant with a valid commit pushes exactly the approved commit with the CLOSED-OVER values"])
+M("G1-CCR7-push-failure-after-consume-omits-the-spent-approval-line", GHT, E("if (requireGrant && result.isError) {", "if (false) {"), T_PUSHG, ["pushBranch failing AFTER the grant was taken: isError 'Error pushing branch: ...', the grant is spent, a retry is refused as grant_missing"])
+M("G1-HD1-hardened-push-skips-the-isolated-dir-check", GAUTH, E("    assertIsolatedPushDir(hardened);\n", ""), T_GAH, ["hardened: a stray true, an unbranded object, a relative or unsafe path and a missing option are refused BEFORE a token is minted"])
+M("G1-HD2-hardened-push-inherits-the-server-env", GAUTH, E("? buildIsolatedGitEnv(hardened, authEnv)", "? { ...process.env, ...authEnv }"), T_GAH, ["hardened: no process.env canary, no proxy var and no GIT_SSH_COMMAND reaches the child; GIT_DIR is the isolated directory"])
+M("G1-HD3-hardened-push-drops-the-hardening-args", GAUTH, E("...(hardened ? HARDENED_GIT_ARGS : []), ", ""), T_GAH, ["hardened argv: credential reset, the shared hardening args, the proxy and extra-header resets, then the command"])
+M("G1-HD4-strict-builder-does-not-ask-for-the-hardened-push", GHT, E("...(requireGrant ? { hardened: true as const } : {}),", "...{},"), T_PUSHG, ["hardened push is cc-only: the strict builder sets it, buildGithubTools and requireGrant false leave the key ABSENT"])
+# ---- 12d. fix round 1 (#11636): the published-set seam, the single outcome event, the hardened env and .git checks ----------
+K_PUB = ["the wired-set assertion also guards the PUBLISHED sets immediately before the one createSdkMcpServer; each is written in exactly two places; the one-server key set is pinned"]
+M("G1-CCR8-published-set-assertion-dropped", CCD, E("    assertCcApprovalSetWired(approvalTools, approvalToolNames);\n", ""), T_TC, K_PUB)
+M("G1-CCR9-second-writer-of-the-published-set", CCD, E("    assertCcApprovalSetWired(approvalTools, approvalToolNames);\n", "    approvalTools = [...approvalTools];\n    assertCcApprovalSetWired(approvalTools, approvalToolNames);\n"), T_TC, K_PUB)
+M("G1-CCR10-one-server-key-pin-dropped", CCD, E('    if (!Object.keys(c4McpServers).every((key) => key === "soleur_platform")) {\n      throw new Error("cc dispatcher: unexpected MCP server key beside soleur_platform");\n    }\n', ""), T_TC, K_PUB)
+M("G1-CCR11-addendum-after-the-assignments-and-catch-resets-dropped", CCD, [
+    E("          const addendum = ccPushPromptAddendum(pushRegistration.defaultBranch as string);\n", ""),
+    E("          pushPromptAddendum = addendum;", "          pushPromptAddendum = ccPushPromptAddendum(pushRegistration.defaultBranch as string);"),
+    E("        approvalTools = [];\n        approvalToolNames = [];\n        pushPromptAddendum = undefined;\n", ""),
+  ], T_RF, ["the prompt addendum THROWS (a null defaultBranch) after a valid wired result: nothing is published"])
+M("G1-CCR12-wired-set-assertion-accepts-a-duplicate-name", CCP, E("  if (new Set(toolNames).size !== toolNames.length) {", "  if (false) {"), T_CCP, ["rejects the same wired name registered twice (one-to-one by position, but a duplicate) with a static message that echoes no name"])
+M("G1-CCR13-failure-reasons-emit-a-second-info-event", CCP, E('new Set(["registered"]);', 'new Set(["registered", "flag-error"]);'), T_CCP, ["only the registered case emits the outcome event; each failure is reported ONCE, by its own op-tagged mirror (no second info event)"])
+M("G1-CCR14-segment-guard-accepts-the-current-directory", RPB, E("/^(?!\\.{1,2}$)[A-Za-z0-9._-]+$/", "/^[A-Za-z0-9._-]+$/"), T_CCP, ["'an owner of one dot' -> 'no-repo-or-installation'; lookup and builder not called"])
+M("G1-CCR15-addendum-gains-an-exception-sentence", CCP, E('"Never set force.\\n" +', '"Never set force. Exception: a branch named release/* is fine.\\n" +'), T_CCP, ["the full text is pinned (an added exception or sentence is a failure, not a pass)"])
+M("G1-CCR16-spent-approval-line-claims-nothing-was-pushed", GHT, E("The branch may or may not have been pushed: tell the user the push failed and why, and ask them to check the remote branch before you ask for a new approval.", "Tell the user that nothing was pushed and why before you try again."), T_PUSHG, ["the approval-spent line never claims 'nothing was pushed': a timeout or killed child can fail a push the remote already accepted"])
+M("G1-HD5-hardened-env-drops-the-protocol-clamp", HENV, E("  env.GIT_ALLOW_PROTOCOL = HARDENED_ALLOW_PROTOCOL;\n", ""), T_GAU, ["hardened: with the production clamp (GIT_ALLOW_PROTOCOL=https) a local-path push is refused, not performed"])
+M("G1-HD7-hardened-args-drop-the-follow-tags-reset", HENV, E('  "-c",\n  "push.followTags=false",\n', ""), T_GAH, ["hardened argv: credential reset, the shared hardening args, the proxy and extra-header resets, then the command"])
+M("G1-HD8-isolated-dir-allows-an-alternates-chain-file", ISOD, E('        if (name === "info" && (e.name === "alternates" || e.name === "http-alternates")) {\n          throw new IsolatedPushDirRefusal("object_store_redirect");\n        }\n', ""), T_ISO, ["objects/info/alternates present (git follows the chain)", "objects/info/http-alternates present (git follows the chain)"])
+M("G1-HD9-isolated-dir-follows-object-store-entry-symlinks", ISOD, E('        if (kind === "other") throw new IsolatedPushDirRefusal("object_store_redirect");\n', ""), T_ISO, ["a symlinked pack file", "a symlinked loose OBJECT inside a fan-out directory"])
+M("G1-HD10-isolated-dir-accepts-a-symlinked-git-dir", ISOD, E('  if (wrapFs(() => realpathSync(gitDir)) !== gitDir) throw new IsolatedPushDirRefusal("git_dir_not_plain");\n', ""), T_ISO, ["a symlinked .git to a complete copy"])
+M("G1-HD11-hardened-commit-check-unbounded", PUSH, E("          timeout: HARDENED_COMMIT_CHECK_TIMEOUT_MS,\n", ""), T_HARD, ["from the isolated directory (no cwd), after ONE commit check in that directory and NO git config call"])
+M("G1-HD12-hardened-isolation-guard-runs-after-the-token-mint", GAUTH, E('  if (hardened !== undefined) {\n    assertIsolatedPushDir(hardened);\n    if (execOpts.cwd !== undefined) throw new Error("hardened git invocation takes no cwd of its own");\n  }\n\n  const token = await generateInstallationToken(installationId);\n', '  const token = await generateInstallationToken(installationId);\n  if (hardened !== undefined) {\n    assertIsolatedPushDir(hardened);\n    if (execOpts.cwd !== undefined) throw new Error("hardened git invocation takes no cwd of its own");\n  }\n'), T_GAH, ["hardened: runs with cwd = the isolated directory, placed after the option spread (a caller cwd is refused, never overridden)", "hardened: a stray true, an unbranded object, a relative or unsafe path and a missing option are refused BEFORE a token is minted"])
+M("G1-HD13-shared-hardening-args-lose-the-hooks-path", GHARD, E('"core.hooksPath=/dev/null"', '"core.sparseCheckout=false"'), T_CSC, ["R-8c: `-c core.attributesFile=/dev/null`, `core.fsmonitor=false` and `core.hooksPath=/dev/null` each hold on their own"])  # the isolated push reads no hooks directory at all (9b), so the shared constant is defence in depth for the cc push and LIVE for the Inngest handler steps; the Inngest consumer test is the detector that still measures it
+M("G1-HD14-hardened-env-allowlist-gains-a-server-secret", HENV, E('  "SSL_CERT_DIR",\n];', '  "SSL_CERT_DIR",\n  "ANTHROPIC_API_KEY",\n];'), T_GAH, ["hardened: the child env is EXACTLY the allowlist (those that are set) + the shared hardening env + the pins + the askpass wiring"])
+M("G1-HD16-isolated-dir-walk-skips-the-loose-fan-out-directories", ISOD, E('    if (kind === "dir" && (e.name === "pack" || e.name === "info" || FAN_OUT.test(e.name))) subdirs.push(e.name);\n', '    if (kind === "dir" && (e.name === "pack" || e.name === "info")) subdirs.push(e.name);\n'), T_ISO, ["a symlinked loose OBJECT inside a fan-out directory"])
+# ---- 12e. ADR-309 flip item 9b: the isolated GIT_DIR push and the no-git workspace HEAD reader (Guard 1 of the 9b plan: the git child that carries the token reads no config, hook, ref, index or redirect file from the workspace) ----
+M("G1-ISO1-env-git-dir-is-not-the-isolated-directory", HENV, E("  env.GIT_DIR = dir.gitDir;\n", '  env.GIT_DIR = dir.alternateObjectDirectory.replace(/\\/objects$/, "");\n'), T_GAH, ["hardened: no process.env canary, no proxy var and no GIT_SSH_COMMAND reaches the child; GIT_DIR is the isolated directory"])
+M("G1-ISO2-creator-copies-the-workspace-config", ISOD, E('writeFileSync(join(dir, "config"), ISOLATED_CONFIG, { mode: 0o600 });', 'writeFileSync(join(dir, "config"), readSmallRegularFile(join(objects, "..", "config"), SHALLOW_MAX_BYTES), { mode: 0o600 });'), T_ISO, ["writes exactly HEAD, config and empty object/ref directories, with the workspace objects as the only alternate"])
+M("G1-ISO3-hardened-commit-check-runs-with-the-server-env", PUSH, E("      env: buildIsolatedGitEnv(isolated),\n", "      env: process.env,\n"), T_HARD, ["EVERY git child of a hardened push runs from the isolated directory, never with the workspace as cwd or GIT_DIR"], blast=0.6)  # 27/50 measured: handing the commit-check child process.env breaks every test that reads that child's env
+M("G1-ISO4-commit-absent-refusal-leaks-the-directory", PUSH, E('  disposeIsolated(isolated);\n  if (check === "absent") {', '  if (check === "absent") {'), T_HARD, ["a valid sha that is not in the object store is refused (reason commit_absent) and the directory is removed", "removed after a creator refusal and after a commit-check refusal (asserted by path non-existence)"])
+M("G1-ISO5-dispose-skipped-after-the-push", PUSH, E("  } finally {\n    disposeIsolated(isolated);\n  }", "  } finally {\n  }"), T_HARD, ["removed after success", "removed after a push failure, and the surfaced text is path-stripped"])
+M("G1-ISO6-askpass-script-written-outside-the-isolated-directory", GAUTH, E("hardened ? writeAskpassScriptTo(hardened.gitDir) : writeAskpassScript();", "hardened ? writeAskpassScript() : writeAskpassScript();"), T_GAH, ["hardened: the askpass script lives INSIDE the isolated directory (not $HOME) and is gone after the call"])
+M("G1-ISO7-hardened-child-cwd-not-set", GAUTH, E("      ...(hardened ? { cwd: hardened.gitDir } : {}),\n", ""), T_GAH, ["hardened: runs with cwd = the isolated directory, placed after the option spread (a caller cwd is refused, never overridden)"])
+M("G1-ISO7b-hardened-child-cwd-before-the-option-spread", GAUTH, E("      ...execOpts,\n      // Hardened: the isolated directory, AFTER the spread so nothing the caller passed can place the child elsewhere.\n      ...(hardened ? { cwd: hardened.gitDir } : {}),\n", "      ...(hardened ? { cwd: hardened.gitDir } : {}),\n      ...execOpts,\n"), T_GAH, equivalent="the spread order only matters if `execOpts.cwd` can be set on a hardened call, and `gitWithInstallationAuth` refuses any caller cwd before the token is minted (`execOpts.cwd !== undefined` throws), so `execOpts` carries no cwd to override; surveyed input shapes: no cwd, a relative cwd, an absolute cwd, an empty-string cwd (all but the first throw first). The placement after the spread is defence in depth for a future relaxation of the refusal.")
+M("G1-ISO8-child-keeps-the-server-home", HENV, E("  env.HOME = dir.gitDir;\n", ""), T_GAH, ["hardened: the child env is EXACTLY the allowlist (those that are set) + the shared hardening env + the pins + the askpass wiring"])
+M("G1-ISO9-child-loses-the-alternate-object-directory", HENV, E("  env.GIT_ALTERNATE_OBJECT_DIRECTORIES = dir.alternateObjectDirectory;\n", ""), T_GAH, ["hardened: the child env is EXACTLY the allowlist (those that are set) + the shared hardening env + the pins + the askpass wiring"])
+M("G1-ISO10-creator-places-the-directory-under-tmpdir", ISOD, E("const pushRoot = join(home, SOLEUR_PUSH_ROOT);", "const pushRoot = join(process.env.TMPDIR ?? home, SOLEUR_PUSH_ROOT);"), T_ISO, ["placement: under $HOME/.soleur-push, never under the workspace, TMPDIR (= os.tmpdir() here), the session tmp root or the workspaces root"])
+M("G1-ISO11-creator-allows-a-home-under-a-forbidden-root", ISOD, E('  if (underAny(home, roots)) throw new IsolatedPushDirRefusal("setup_failed");\n', ""), T_ISO, ["a HOME under the workspace, TMPDIR, the session tmp root, WORKSPACES_ROOT or WORKTREE_ROOT refuses as setup_failed and creates nothing"])
+M("G1-ISO12-creator-accepts-a-symlinked-push-root", ISOD, E('    if (realpathSync(pushRoot) !== pushRoot) throw new IsolatedPushDirRefusal("setup_failed");\n', ""), T_ISO, ["a pre-existing .soleur-push that is a symlink elsewhere refuses as setup_failed and writes nothing through it"])
+M("G1-ISO13-creator-accepts-a-non-hex-shallow-line", ISOD, E('  for (const l of lines) if (!HEX40.test(l)) throw new IsolatedPushDirRefusal("shallow_invalid");\n', ""), T_ISO, ["an oversized shallow (over 64 KiB), a non-hex line, a short hex line, an uppercase line and a symlinked shallow"])
+M("G1-ISO14-creator-accepts-an-alternate-path-that-splits-the-list", ISOD, E('  if (!isSafeGitPath(objects)) throw new IsolatedPushDirRefusal("alternate_path_unsafe");\n', ""), T_ISO, ["a workspace path containing ':' (it would split GIT_ALTERNATE_OBJECT_DIRECTORIES)"])
+M("G1-ISO15-creator-skips-the-env-path-check", ISOD, E("  assertEnvPathsSafe(roots);\n", ""), T_ISO, ["under any agent-writable root is refused as env_path_unsafe", "a PATH entry that is a SYMLINK resolving into a root is refused"])
+M("G1-ISO16-safe-path-rule-admits-the-list-separator", HENV, E(r'!/[:"\\\n\0]/.test(p)', r'!/["\\\n\0]/.test(p)'), T_ISO, ["a workspace path containing ':' (it would split GIT_ALTERNATE_OBJECT_DIRECTORIES)"])  # the it.each case 'refuses a path containing ":"' fails too; a double quote in a kill name does not survive the harness TSV hop
+M("G1-ISO17-isolated-dir-brand-not-checked", HENV, E("    (v as Record<symbol, unknown>)[ISOLATED_PUSH_DIR_BRAND] !== true ||\n", ""), T_GAH, ["hardened: a stray true, an unbranded object, a relative or unsafe path and a missing option are refused BEFORE a token is minted"])
+M("G1-ISO18-object-store-walk-unbounded", ISOD, E('        if (--budget < 0) throw new IsolatedPushDirRefusal("object_store_too_large");\n', ""), T_ISO, ["an object-store walk above the entry cap is refused as object_store_too_large (not tamper), and a store just under it passes"])
+M("G1-ISO19-dispose-does-not-remove", ISOD, E("      rmSync(created, { recursive: true, force: true });\n", ""), T_ISO, ["dispose() removes the directory, is idempotent, and tolerates it already being gone"])
+M("G1-ISO20-creator-failure-leaves-the-directory", ISOD, E("        rmSync(dir, { recursive: true, force: true });\n", ""), T_ISO, ["an injected write failure at EVERY write step maps to setup_failed, leaves no directory and leaks no path"])
+M("G1-ISO21-isolated-refusal-not-reported", PUSH, E('function reportIsolatedRefusal(reason: IsolatedRefusalReason): void {\n  reportSilentFallback(null, {', 'function reportIsolatedRefusal(reason: IsolatedRefusalReason): void {\n  void ({'), T_HARD, ["when .git is a FILE"])
+M("G1-ISO22-env-path-unsafe-reads-as-commit-unavailable", PUSH, E('    if (TAMPER_REASONS.has(reason)) {', '    if (reason !== "setup_failed") {'), T_HARD, ["a PATH entry under the workspace is refused as infrastructure (env_path_unsafe), not as a tampered repository"])
+M("G1-ISO23-push-timeout-reads-as-nothing-landed", PUSH, E('if (failureClass === "timeout") throw new Error(', 'if (false) throw new Error('), T_HARD, ["a timeout says the push MAY have landed (never reads as 'nothing landed') and is reported as class timeout"])
+M("G1-ISO24-failed-push-after-consume-not-reported", PUSH, E('        reportSilentFallback(null, {\n          feature: PUSH_FEATURE,\n          op: "push-failed-after-consume",\n          message: PUSH_FAILED_MESSAGE,\n          tags: { class: failureClass },\n          extra: { class: failureClass },\n        });\n', ""), T_HARD, ["is reported with the closed enum only", "a timeout says the push MAY have landed (never reads as 'nothing landed') and is reported as class timeout"])
+M("G1-ISO25-hardened-push-accepts-a-non-sha-commit", PUSH, E("if (commitSha === undefined || !HEX40.test(commitSha)) {", "if (commitSha === undefined) {"), T_HARD, ["a 64-hex (sha256-shaped) id is refused as ApprovedCommitUnavailableError (reason sha_invalid)", "uppercase hex is refused as ApprovedCommitUnavailableError (reason sha_invalid)", "too short is refused as ApprovedCommitUnavailableError (reason sha_invalid)", "not hex is refused as ApprovedCommitUnavailableError (reason sha_invalid)"])
+M("G1-ISO26-brand-check-accepts-a-forged-handle-for-the-workspace-git-dir", HENV, E('    !isSafeGitPath(v.alternateObjectDirectory) ||\n    !hasIsolatedShape(v.gitDir, v.alternateObjectDirectory)\n', '    !isSafeGitPath(v.alternateObjectDirectory)\n'), T_GAH, ["hardened: a stray true, an unbranded object, a relative or unsafe path and a missing option are refused BEFORE a token is minted"])
+M("G1-ISO27-extra-env-overrides-a-pinned-key", HENV, E('  env.HOME = dir.gitDir;\n  return env as NodeJS.ProcessEnv;', '  env.HOME = dir.gitDir;\n  Object.assign(env, extra);\n  return env as NodeJS.ProcessEnv;'), T_GAH, ["buildIsolatedGitEnv: the allowlisted passthrough keys come from the server environment, not from extra, and the pins always win"])
+M("G1-ISO28-env-check-covers-only-the-workspace", ISOD, E('    if (underAny(c, roots)) throw new IsolatedPushDirRefusal("env_path_unsafe");', '    if (underAny(c, roots.slice(0, 1))) throw new IsolatedPushDirRefusal("env_path_unsafe");'), T_ISO, ["under any agent-writable root is refused as env_path_unsafe"])
+M("G1-ISO29-root-check-does-not-resolve-symlinks", ISOD, E('  const resolved = resolveIfExists(path);\n  return roots.some((root) => isUnder(resolved, root) || isUnder(path, root));', '  return roots.some((root) => isUnder(path, root));'), T_ISO, ["a PATH entry that is a SYMLINK resolving into a root is refused (the resolved path is what the child runs)"])
+M("G1-ISO30-root-list-drops-the-session-tmp-root", ISOD, E('    AGENT_SESSION_TMP_ROOT,\n    process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT,\n', '    process.env.WORKSPACES_ROOT || WORKSPACES_ROOT_DEFAULT,\n'), T_ISO, ["a HOME under the workspace, TMPDIR, the session tmp root, WORKSPACES_ROOT or WORKTREE_ROOT refuses as setup_failed and creates nothing", "the mirrored root list contains every sandbox tenant deny root (a ONE-WAY subset check against workspaceTenantDenyRoots)"])
+M("G1-ISO31-root-list-drops-the-worktree-root", ISOD, E('    process.env.WORKTREE_ROOT || WORKTREE_ROOT_DEFAULT,\n  ];', '  ];'), T_ISO, ["a HOME under the workspace, TMPDIR, the session tmp root, WORKSPACES_ROOT or WORKTREE_ROOT refuses as setup_failed and creates nothing", "the mirrored root list contains every sandbox tenant deny root (a ONE-WAY subset check against workspaceTenantDenyRoots)"])
+M("G1-ISO32-config-parses-the-pack-reverse-index", ISOD, E('  "\\treadReverseIndex = false",\n', ""), T_ISO, ["writes exactly HEAD, config and empty object/ref directories, with the workspace objects as the only alternate", "a garbage pack .rev in the alternate is not parsed (readReverseIndex off); the same git with it on prints the corruption (control)"])
+M("G1-ISO33-walk-treats-a-fifo-as-an-object", ISOD, E('  return st.isFile() ? "file" : st.isDirectory() ? "dir" : "other";\n', '  return st.isFile() || st.isFIFO() ? "file" : st.isDirectory() ? "dir" : "other";\n'), T_ISO, ["a FIFO at the approved commit's loose-object path is refused (object_store_redirect), never opened", "a FIFO named pack-<40hex>.idx is refused (object_store_redirect)"])
+M("G1-ISO34-walk-treats-a-socket-as-an-object", ISOD, E('  return st.isFile() ? "file" : st.isDirectory() ? "dir" : "other";\n', '  return st.isFile() || st.isSocket() ? "file" : st.isDirectory() ? "dir" : "other";\n'), T_ISO, ["a FIFO as the objects/info entry and a unix socket under objects/pack are refused"])
+M("G1-ISO35-over-cap-store-reads-as-tamper", ISOD, E('        if (--budget < 0) throw new IsolatedPushDirRefusal("object_store_too_large");', '        if (--budget < 0) throw new IsolatedPushDirRefusal("object_store_redirect");'), T_ISO, ["an object-store walk above the entry cap is refused as object_store_too_large (not tamper), and a store just under it passes"])
+M("G1-ISO36-too-large-store-reads-as-commit-unavailable", PUSH, E('  "shallow_invalid",\n]);', '  "shallow_invalid",\n  "object_store_too_large",\n]);'), T_HARD, ["an object store above the walk cap is infrastructure (object_store_too_large) with its own static text, not a tamper refusal"])
+M("G1-ISO37-unknown-refusal-reason-reads-as-commit-unavailable", PUSH, E('    if (TAMPER_REASONS.has(reason)) {', '    if (reason !== "setup_failed" && reason !== "env_path_unsafe") {'), T_HARD, ["a refusal reason push-branch does not know defaults to the plain infrastructure error (never to 'commit not available')"])
+M("G1-ISO38-commit-check-blocks-the-event-loop", PUSH, E('  const check = await checkCommitPresent(isolated, commitSha);', '  (await import("node:child_process")).execFileSync("true");\n  const check = await checkCommitPresent(isolated, commitSha);'), T_HARD, ["the commit check is ASYNC (the event loop is not blocked): the hardened path runs no execFileSync at all"], blast=0.75)  # 59/83 measured (47/70 before review round 2): the injected sync call is recorded in execCalls, which most flow tests assert on exactly
+M("G1-ISO39-commit-check-timeout-reads-as-failed", PUSH, E('          if (e.killed === true || e.signal === "SIGTERM") return resolve("timeout");\n', ""), T_HARD, ["a timeout (killed by the 10 s bound) is infrastructure, NOT commit_absent"])
+M("G1-ISO40-any-commit-check-failure-reads-as-commit-absent", PUSH, E('          resolve(e.code === 1 ? "absent" : "failed");', '          resolve("absent");'), T_HARD, ["git missing from PATH (spawn ENOENT) is infrastructure, NOT commit_absent", "EMFILE on spawn is infrastructure, NOT commit_absent", "exit status 128 (a broken object store) is infrastructure, NOT commit_absent", "a REAL spawn failure (git not found on PATH) is commit_check_failed, not commit_absent"])
+M("G1-ISO41-exit-status-one-is-not-commit-absent", PUSH, E('          resolve(e.code === 1 ? "absent" : "failed");', '          resolve(e.code === 2 ? "absent" : "failed");'), T_HARD, ["exit status 1 (git's answer for 'not a valid commit here') IS commit_absent"])
+M("G1-ISO42-a-github-403-does-not-classify-as-auth", PUSH, E('|returned error: 40[13]|Invalid username or token|Permission to .+ denied/i.test(', '|Invalid username or token/i.test('), T_HARD, ["the REAL GitHub 403 (no contents:write) classifies as auth, not other"])
+M("G1-ISO43-a-connect-timeout-classifies-as-timeout", PUSH, E('|| e?.code === "ETIMEDOUT") return "timeout";', '|| e?.code === "ETIMEDOUT" || /timed out/i.test(stderr)) return "timeout";'), T_HARD, ["a connect timeout (nothing landed) is NOT class timeout and does not say the push MAY HAVE been pushed"])
+M("G1-ISO44-agent-chosen-names-are-matched-by-the-classifier", PUSH, E('  for (const line of redactAgentNames(stderr, names).split(/\\r?\\n/)) {\n', '  for (const line of stderr.split(/\\r?\\n/)) {\n'), T_HARD, ["a branch named non-fast-forward echoed by the host cannot forge the class (agent-chosen names are not matched)"])
+M("G1-ISO45-refusal-reason-is-not-a-searchable-tag", PUSH, E('    tags: { reason },\n    extra: { reason },\n', '    extra: { reason },\n'), T_HARD, ["a valid sha that is not in the object store is refused (reason commit_absent) and the directory is removed"])
+M("G1-ISO46-dispose-failure-reported-by-class-name", PUSH, E('    const cls = typeof code === "string" && /^E[A-Z]+$/.test(code) ? code : "unknown";', '    const cls = (err as Error | undefined)?.name ?? "unknown";'), T_HARD, ["a throwing dispose() with an errno code is reported by that code (the class name would always be 'Error')"])
+M("G1-ISO47-push-failure-report-has-no-own-message", PUSH, E('      message: PUSH_FAILED_MESSAGE,\n', ""), T_HARD, ["the REAL GitHub 403 (no contents:write) classifies as auth, not other"])
+M("G1-ISO48-push-timeout-text-does-not-warn-the-branch-may-exist", PUSH, E('MAY HAVE been pushed to the remote. Ask the user to check the remote branch before asking for a new approval.', 'MAY have landed.'), T_HARD, ["a timeout says the push MAY have landed (never reads as 'nothing landed') and is reported as class timeout"])
+M("G1-ISO49-infrastructure-error-text-is-static-no-cause", PUSH, E('const PREPARE_FAILED_TEXT = "Push could not be prepared (server-side setup problem)";', 'const PREPARE_FAILED_TEXT = "Push could not be prepared";'), T_HARD, ["an unusable HOME is a plain static error (no path, no cause), reported as setup_failed, with no /tmp fallback"])
+M("G1-ISO50-missing-workspace-root-reads-as-tamper", ISOD, E('const ws = wrapFs(() => realpathSync(workspacePath), "setup_failed");', 'const ws = wrapFs(() => realpathSync(workspacePath));'), T_ISO, ["a missing .git is git_dir_not_plain; a missing workspace root is the server's own state (setup_failed)"])
+M("G1-ISO51-nonexistent-home-reads-as-tamper", ISOD, E('const home = wrapFs(() => realpathSync(homeEnv), "setup_failed");', 'const home = wrapFs(() => realpathSync(homeEnv));'), T_ISO, ["HOME unset, relative (even when it exists relative to the cwd) or nonexistent refuses as setup_failed"])
+M("G1-ISO52-unreadable-shallow-reads-as-tamper", ISOD, E('      if (err.code === "IO") throw new IsolatedPushDirRefusal("setup_failed");\n', ""), T_ISO, ["(skipped as uid 0) an unreadable .git/shallow (EACCES) says nothing about its content: setup_failed"])
+M("G1-ISO53-creator-accepts-a-relative-workspace-path", ISOD, E('if (typeof workspacePath !== "string" || !isAbsolute(workspacePath)) throw new IsolatedPushDirRefusal("git_dir_not_plain");', 'if (typeof workspacePath !== "string") throw new IsolatedPushDirRefusal("git_dir_not_plain");'), T_ISO, ["a relative workspace path is refused even when it EXISTS relative to the current directory"])
+M("G1-ISO54-creator-accepts-a-relative-home", ISOD, E('if (!homeEnv || !isAbsolute(homeEnv)) throw new IsolatedPushDirRefusal("setup_failed");', 'if (!homeEnv) throw new IsolatedPushDirRefusal("setup_failed");'), T_ISO, ["HOME unset, relative (even when it exists relative to the cwd) or nonexistent refuses as setup_failed"])
+M("G1-ISO55-env-allowlist-drops-a-forwarded-key", HENV, E('export const HARDENED_ENV_ALLOWLIST: readonly string[] = [\n  "PATH",\n', 'export const HARDENED_ENV_ALLOWLIST: readonly string[] = [\n'), T_GAH, ["the allowlist is EXACTLY the forwarded set (dropping or adding any key is a red test)"])
+M("G1-ISO56-creator-accepts-an-unsafe-isolated-directory-path", ISOD, E('    if (!isSafeGitPath(dir)) throw new IsolatedPushDirRefusal("setup_failed");\n', ""), T_ISO, ["a HOME whose real path contains ':' or a double quote refuses as setup_failed (the directory would be an unsafe GIT_DIR)"])
+M("G1-ISO57-env-leaf-imports-fs", HENV, E('import { basename, dirname, isAbsolute, normalize, sep } from "node:path";\n', 'import { basename, dirname, isAbsolute, normalize, sep } from "node:path";\nimport { readFileSync } from "node:fs";\n'), T_GAH, ["git-hardened-env.ts is a leaf: it imports only node:path and the shared hardening constants, never the creator or fs"])
+M("G1-ISO58-timeout-class-is-read-from-the-error-message", PUSH, E('|| e?.code === "ETIMEDOUT") return "timeout";', '|| e?.code === "ETIMEDOUT" || /timeout exceeded/i.test(String((err as Error | undefined)?.message))) return "timeout";'), T_HARD, ["stderr text that says 'timeout exceeded' cannot forge class timeout"])
+M("G1-ISO59-branch-redaction-is-a-blind-substring-removal", PUSH, E('    out = out.replace(new RegExp(token, "g"), " ");', '    out = out.split(names.branch).join("");'), T_HARD, ["a one-letter branch (a) does not eat letters", "a one-letter branch (e) does not eat letters", "a one-letter branch (o) does not eat letters"])
+M("G1-ISO60-slug-removal-joins-its-neighbours", PUSH, E('  if (names.slug) out = out.split(names.slug).join(" ");', '  if (names.slug) out = out.split(names.slug).join("");'), T_HARD, ["removing the slug cannot JOIN its neighbours into a class word"])
+M("G1-ISO61-branch-redaction-misses-the-refs-heads-spelling", PUSH, E('(?:refs/heads/)?${escapeRegExp', '${escapeRegExp'), T_HARD, ["the ref spelled refs/heads/<branch> in a host echo"])
+M("G1-ISO62-branch-redaction-has-no-left-boundary", PUSH, E('(?<![A-Za-z0-9_./-])(?:refs/heads/)?', '(?:refs/heads/)?'), T_HARD, ["a one-letter branch against the 'remote:' line prefix"])
+M("G1-ISO63-extra-env-keys-are-not-restricted", HENV, E('    if (!EXTRA_ENV_KEYS.has(key)) throw new Error("hardened git invocation: environment key is not allowed");\n', ""), T_GAH, ["buildIsolatedGitEnv: extra carrying GIT_EXEC_PATH is refused", "buildIsolatedGitEnv: extra carrying PATH is refused", "buildIsolatedGitEnv: extra carrying LD_PRELOAD is refused", "buildIsolatedGitEnv: extra carrying GIT_CONFIG_COUNT is refused"], blast=0.9)
+M("G1-ISO64-extra-env-keys-gain-git-exec-path", HENV, E('  "GIT_SSL_CAINFO",\n]);', '  "GIT_SSL_CAINFO",\n  "GIT_EXEC_PATH",\n]);'), T_GAH, ["buildIsolatedGitEnv: extra carrying GIT_EXEC_PATH is refused"])
+M("G1-ISO65-extra-env-keys-gain-path", HENV, E('  "GIT_SSL_CAINFO",\n]);', '  "GIT_SSL_CAINFO",\n  "PATH",\n]);'), T_GAH, ["buildIsolatedGitEnv: extra carrying PATH is refused"])
+M("G1-ISO66-extra-env-keys-drop-the-installation-token", HENV, E('  "GIT_INSTALLATION_TOKEN",\n  "GIT_USERNAME",\n', '  "GIT_USERNAME",\n'), T_GAH, ["buildIsolatedGitEnv: the production authEnv and the test-only GIT_SSL_CAINFO seam are accepted and land in the child env"], blast=0.9)
+M("G1-ISO67-vanished-entry-reads-as-an-error", ISOD, E('    if (isEnoent(err)) return "gone";\n', ""), T_ISO, ["a FIFO entry that vanishes before its lstat is skipped"])
+M("G1-ISO68-vanished-directory-reads-as-tamper", ISOD, E('      if (mayBeGone && isEnoent(err)) return;\n', ""), T_ISO, ["a fan-out directory that vanishes before its scan is skipped", "the pack and info directories are scanned the same way"])
+M("G1-ISO69-vanished-objects-directory-is-skipped-too", ISOD, E('      if (mayBeGone && isEnoent(err)) return;\n', '      if (isEnoent(err)) return;\n'), T_ISO, ["every other errno on that scan stays an infrastructure refusal"])
+M("G1-ISO70-any-scan-error-reads-as-gone", ISOD, E('      if (mayBeGone && isEnoent(err)) return;\n', '      if (mayBeGone) return;\n'), T_ISO, ["every other errno on that scan stays an infrastructure refusal"])
+M("G1-ISO71-root-list-drops-the-resolved-form", ISOD, E('    out.add(resolveIfExists(trimmed));\n', ""), T_ISO, ["a root that is itself a symlink: HOME, PATH and SSL_CERT_*", "the same holds for a symlinked WORKTREE_ROOT and a symlinked TMPDIR"])
+M("G1-ISO72-root-check-drops-the-as-written-path", ISOD, E('roots.some((root) => isUnder(resolved, root) || isUnder(path, root))', 'roots.some((root) => isUnder(resolved, root))'), T_ISO, ["a PATH entry INSIDE a root that is a symlink pointing OUTSIDE it is refused"])
+M("G1-ISO73-commit-check-accepts-any-printed-sha", PUSH, E('resolve(String(stdout).trim() === commitSha ? "present" : "absent")', 'resolve("present")'), T_HARD, ["an annotated-tag OBJECT sha is not the approved commit"])
+M("G1-ISO74-synchronous-check-throw-reads-as-commit-absent", PUSH, E('      } catch {\n        resolve("failed");\n      }', '      } catch {\n        resolve("absent");\n      }'), T_HARD, ["a SYNCHRONOUS throw from the commit check is infrastructure"])
+M("G1-ISO75-commit-check-import-outside-the-try", PUSH, E('  try {\n    // Imported lazily, like inflight-checkpoint.ts, so that sibling test files which mock `child_process` with factories lacking\n    // `execFile` still load this module (a missing export then fails only on use, inside this try, and never at import time).\n    const { execFile } = await import("node:child_process");\n', '  const { execFile } = await import("node:child_process");\n  try {\n'), T_HARD, ["the commit check's lazy import runs INSIDE the try"])
+M("G1-ISO76-too-large-store-shares-the-generic-text", PUSH, E('reason === "object_store_too_large" ? OBJECT_STORE_TOO_LARGE_TEXT : PREPARE_FAILED_TEXT', 'PREPARE_FAILED_TEXT'), T_HARD, ["an object store above the walk cap is infrastructure (object_store_too_large) with its own static text"])
+M("G1-ISO77-leaf-gains-a-side-effect-import", HENV, E('import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";\n', 'import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";\nimport "./logger";\n'), T_GAH, ["git-hardened-env.ts is a leaf"])
+M("G1-WH13-packed-refs-bound-is-64-kib", WH, E('const PACKED_REFS_MAX_BYTES = 1024 * 1024;', 'const PACKED_REFS_MAX_BYTES = 64 * 1024;'), T_WH, ["a ~500 KiB packed-refs file"])
+M("G1-WH14-packed-ref-sha-is-not-hex-checked", WH, E('    if (HEX40.test(sha)) return sha;\n    throw new WorkspaceHeadUnreadable("ref_invalid");\n', '    return sha;\n'), T_WH, ["a packed-refs entry whose first 40 characters are not lowercase hex"])
+M("G1-WH15-reader-gains-a-side-effect-import", WH, E('import { join, sep } from "node:path";\n', 'import { join, sep } from "node:path";\nimport "./canonical";\n'), T_WH, ["imports only node:fs and node:path"])
+M("G1-WH11-packed-refs-cap-is-8-mib", WH, E('const PACKED_REFS_MAX_BYTES = 1024 * 1024;', 'const PACKED_REFS_MAX_BYTES = 8 * 1024 * 1024;'), T_WH, ["a packed-refs file over 1 MiB is not read (ref_unresolvable)"])
+M("G1-WH12-loose-ref-containment-ignores-the-separator", WH, E('    if (!realRef.startsWith(gitDir + sep)) throw new WorkspaceHeadUnreadable("ref_invalid");\n', '    if (!realRef.startsWith(gitDir)) throw new WorkspaceHeadUnreadable("ref_invalid");\n'), T_WH, ["a symlinked refs/heads directory leading to a SIBLING whose name merely starts with .git (the .git2 directory) is refused (containment needs the separator)"])
+M("G1-WH1-head-reader-accepts-a-symlinked-git-dir", WH, E("    if (realpathSync(gitDir) !== gitDir || !statSync(gitDir).isDirectory()) {", "    if (!statSync(gitDir).isDirectory()) {"), T_WH, ["a SYMLINKED .git to a complete repository (both sides of a later containment compare would resolve to the other repo)"])
+M("G1-WH2-head-reader-accepts-a-loose-ref-outside-the-git-dir", WH, E('    if (!realRef.startsWith(gitDir + sep)) throw new WorkspaceHeadUnreadable("ref_invalid");\n', ""), T_WH, ["a symlinked refs/heads directory (a complete copy holding the same ref)"])
+M("G1-WH3-head-reader-shows-a-sha256-id", WH, E('  if (HEX64.test(body)) throw new WorkspaceHeadUnreadable("not_hex40");\n', ""), T_WH, ["a 64-hex (sha256-shaped) id is never displayed"])
+M("G1-WH4-head-reader-follows-a-final-symlink", WH, E("constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW", "constants.O_RDONLY | constants.O_NONBLOCK"), T_WH, ["a symlinked HEAD", "refuses a symlink final component, a directory, an oversized file and a FIFO (without hanging)"])  # a symlinked loose ref FILE is also caught by the realpath containment check (WH2), so it is not named here
+M("G1-WH5-head-reader-ignores-reftable", WH, E('  if (existsSync(join(gitDir, "reftable"))) throw new WorkspaceHeadUnreadable("reftable");\n', ""), T_WH, ["a reftable repository"])
+M("G1-WH6-head-reader-has-no-size-cap", WH, E('    if (st.size > maxBytes) throw new SmallFileError("TOO_LARGE");\n', ""), T_WH, ["an oversized HEAD (over 4 KiB) is head_unreadable"])
+M("G1-WH7-head-reader-reads-a-non-regular-file", WH, E('    if (!st.isFile()) throw new SmallFileError("NOT_REGULAR");\n', ""), T_WH, ["refuses a symlink final component, a directory, an oversized file and a FIFO (without hanging)"])
+M("G1-WH8-head-reader-takes-any-packed-line", WH, E("    if (line.slice(sp + 1) !== name) continue;\n", ""), T_WH, ["a packed-only branch among several packed refs returns the sha of THE NAMED ref, not of the first line"])
+M("G1-WH9-head-reader-follows-a-symref-chain-silently", WH, E('  if (body.startsWith("ref:")) throw new WorkspaceHeadUnreadable("symref_chain");\n', ""), T_WH, ["a loose ref that is itself a symref (deeper than the one hop HEAD took)"])
+M("G1-WH10-head-reader-trusts-any-ref-name", WH, E('  if (!isSafeRefName(name)) throw new WorkspaceHeadUnreadable("ref_invalid");\n', ""), T_WH, [f"a HEAD naming a bad ref ({c}) is refused as ref_invalid" for c in ["traversal", "dot component", "empty component", "not under refs/", "a .lock suffix", "a backslash", "a trailing CR"]])  # the eighth case, an empty name, is also refused by the NOT_REGULAR read of the .git directory itself
 M("G1-GR1-checkgrant-refusal-not-reported", GRANTS, E('reportGrantRefused(tool, threw ? "grant_error" : "grant_missing", threw ? cause : null);', "void 0;"), T_SINK, ["grant_missing: an enforcing session, no grant", "grant_error: args that cannot be keyed"])
 M("G1-GR2-keying-failure-reported-as-missing", GRANTS, E('threw ? "grant_error" : "grant_missing"', '"grant_missing"'), T_SINK, ["grant_error: args that cannot be keyed"])
 M("G1-GR3-grant-refused-op-drops-the-reason", GRANTS, E('reportApprovalOp("grantRefused", cause, { toolName: tool, extra: { reason } });', 'reportApprovalOp("grantRefused", cause, { toolName: tool });'), T_SINK, ["grant_missing: an enforcing session, no grant"])
@@ -478,7 +651,7 @@ M("G1-GR4-kb-share-workspace-change-not-reported", KBS, E('reportGrantRefused(to
 M("G1-GR5-settings-workspace-change-not-reported", WSET, E('reportGrantRefused(toolName, "workspace_changed");', ""), T_SINK, ["workspace_changed: approved in W1, active workspace W2"])
 M("G1-GR6-refusal-code-differs-between-tools", GRANTS, E('workspace_changed: { error: WORKSPACE_CHANGED_MESSAGE, code: "workspace_changed", status: 409 }', 'workspace_changed: { error: WORKSPACE_CHANGED_MESSAGE, code: "workspace-changed", status: 409 }'), T_EXG, ["kb_share_create the active workspace changed after approval: refused with workspace_changed, createShare never called", "workspace_set_autonomous approved on W1 but the active workspace is W2: refused with workspace_changed, setBashAutonomous never called"])
 M("G1-GR7-workspace-changed-text-is-the-generic-grant-missing-text", GRANTS, E('"The active workspace changed after the approval was granted, so the action was NOT performed.', '"The approval for this action could not be applied to this call, so the action was NOT performed.'), T_GRANTS, ["the terminal refusal texts say what actually happened (one per cause, never the generic grant-missing text) the texts themselves"])
-M("G1-GR8-commit-unavailable-text-is-the-generic-grant-missing-text", GRANTS, E('"The commit the Owner approved is not available in the workspace, so the push was NOT performed.', '"The approval for this action could not be applied to this call, so the push was NOT performed.'), T_GRANTS, ["the terminal refusal texts say what actually happened (one per cause, never the generic grant-missing text) the texts themselves"])
+M("G1-GR8-commit-unavailable-text-is-the-generic-grant-missing-text", GRANTS, E('"The commit the Owner approved is not available in the workspace, so the push was NOT performed,', '"The approval for this action could not be applied to this call, so the push was NOT performed,'), T_GRANTS, ["the terminal refusal texts say what actually happened (one per cause, never the generic grant-missing text) the texts themselves"])
 M("G1-GR9-commit-unavailable-reason-answers-grant-missing", GRANTS, E("commit_unavailable: { error: APPROVED_COMMIT_UNAVAILABLE_MESSAGE,", "commit_unavailable: { error: GRANT_MISSING_MESSAGE,"), T_GRANTS, ["each refusal reason answers with its own text, code and status"])
 M("G1-BGR1-content-census-loses-a-grant-reading-builder", KBS, E('import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";', 'import { grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";'), T_BGR, ["grant-reading builders and the three known ones among them"])
 M("G1-7f-runner-hands-a-builder-a-different-grants-object", "server/agent-runner.ts", E("buildWorkspaceSettingsTools({ userId, grants: approvalGrants })", "buildWorkspaceSettingsTools({ userId, grants: approvalGrantsB })"), T_RC, ["runner registration census the legacy runner creates ONE per-session ExecutionGrants and hands the same object to the gate and the three grant-reading builders (ADR-309 ExecutionGrants)"])
@@ -785,8 +958,8 @@ python3 "$PROBE_PY" "$CAN/commented.ts" "$CAN/commented.json" > "$CAN/commented.
 check "harness row (probe-comment): anchors that exist only in comments are reported MISSING by the static probe checker" grep -q 'MISSING probe: a case where canUseTool was never invoked is the BYPASS verdict' "$CAN/commented.log"
 
 assert_fixture_dir "$SB"
-# 228 rows today (round 3); at most ONE may be deleted silently. The verdict classes are pinned too (below, full run only).
-MIN_MUTANTS=227
+# 356 rows today (the 9b isolated-push change deleted 2 and added 38: G1-ISO1..ISO25, G1-WH1..WH10, G1-GD29, G1-GD30 and the ISO7b equivalent; review round 1 added 34: G1-ISO26..ISO57, G1-WH11, G1-WH12; review round 2 added 23: G1-ISO58..ISO77, G1-WH13..WH15, with G1-ISO27 and G1-HD8 re-anchored); the floor is the count. The verdict classes are pinned too (below, full run only).
+MIN_MUTANTS=356
 TOTAL="$(jq 'length' "$MUTANTS")"
 if [ "$TOTAL" -lt "$MIN_MUTANTS" ]; then printf 'HALT: mutant table has %s rows, floor %s: a truncated table is vacuous\n' "$TOTAL" "$MIN_MUTANTS"; exit 1; fi
 
@@ -806,8 +979,8 @@ declare -A FLOOR=(
   ["test/approval/waiters.test.ts"]=19
   ["test/approval/service.test.ts"]=26
   ["test/approval/migration-180-approval-request.test.ts"]=91
-  ["test/approval/tools-census.test.ts"]=18
-  ["test/approval/runner-census.test.ts"]=10
+  ["test/approval/tools-census.test.ts"]=34
+  ["test/approval/runner-census.test.ts"]=17
   ["test/approval/flag.test.ts"]=5
   ["test/approval/decide-boundary.test.ts"]=52
   ["test/approval/render.test.ts"]=44
@@ -817,15 +990,23 @@ declare -A FLOOR=(
   ["test/approval/execution-grant-handlers.test.ts"]=10
   ["test/server/ws-handler-approval.test.ts"]=37
   ["test/build-allowed-tools-census.test.ts"]=47
-  ["test/github-tools-push-grant.test.ts"]=7
+  ["test/github-tools-push-grant.test.ts"]=19
   ["test/push-branch-pinned.test.ts"]=4
-  ["test/approval/gate-deps.test.ts"]=29
+  ["test/approval/gate-deps.test.ts"]=35
   ["test/approval/approval-ops-real-sink.test.ts"]=13
-  ["test/approval/ops-sink.test.ts"]=37
+  ["test/approval/ops-sink.test.ts"]=39
   ["test/approval/gate-flow-payload.test.ts"]=4
-  ["test/approval/builder-grants-required.test.ts"]=9
+  ["test/approval/builder-grants-required.test.ts"]=14
   ["test/account-delete.test.ts"]=55
   ["test/approval/permission-callback-gated-branch.test.ts"]=3
+  ["test/cc-dispatcher-real-factory.test.ts"]=106
+  ["test/cc-github-push.test.ts"]=61
+  ["test/push-branch-hardened.test.ts"]=83
+  ["test/git-auth-hardened-env.test.ts"]=39
+  ["test/git-auth-hardened.test.ts"]=10
+  ["test/git-isolated-push-dir.test.ts"]=59
+  ["test/approval/workspace-head.test.ts"]=42
+  ["test/server/inngest/cron-safe-commit.test.ts"]=96
 )
 for tf in $(jq -r '.[].test' "$MUTANTS" | sort -u); do
   if [ "$tf" = "static:probe" ]; then
@@ -947,18 +1128,19 @@ if [ -n "$ONLY" ]; then
   exit 0
 fi
 
-# Verdict classes of a full run: exactly the documented survivors (3 equivalent: G1-R4, G1-W6, G1-GD24; 2 residual gaps:
+# Verdict classes of a full run: exactly the documented survivors (4 equivalent: G1-R4, G1-W6, G1-GD24, G1-ISO7b; 2 residual gaps:
 # G1-F5, G1-DB3) and at least MIN_KILLED must-kill rows killed. A deleted or reclassified row moves one of these literals.
-EXPECT_EQUIV=3
+EXPECT_EQUIV=4
 EXPECT_RESID=2
-MIN_KILLED=222
+MIN_KILLED=350
 if [ "$SURVIVED_EQ" != "$EXPECT_EQUIV" ] || [ "$SURVIVED_RES" != "$EXPECT_RESID" ] || [ "$KILLED" -lt "$MIN_KILLED" ]; then
   printf '[FATAL] verdict classes: killed=%s (floor %s) equivalent=%s (expected %s) residual=%s (expected %s)\n' "$KILLED" "$MIN_KILLED" "$SURVIVED_EQ" "$EXPECT_EQUIV" "$SURVIVED_RES" "$EXPECT_RESID" >&2
   exit 1
 fi
 
 # Anti-vacuity: the floor is a literal directly above its `if`, and reported by printf + exit, never through ok/bad.
-MIN_CHECKS=499
+# 763 = 405 checks before the mutant loop (19 harness, 35 controls, 350 rows with a named detector, harness row b = 405; the 6 equivalent / residual rows name none) + 356 mutants + 2 after the loop (tracked-status, harness row c).
+MIN_CHECKS=763
 if [ "$CHECKED" -lt "$MIN_CHECKS" ]; then
   printf '[FATAL] assertion floor: only %s assertions ran, floor %s: the battery is vacuous\n' "$CHECKED" "$MIN_CHECKS" >&2
   exit 1

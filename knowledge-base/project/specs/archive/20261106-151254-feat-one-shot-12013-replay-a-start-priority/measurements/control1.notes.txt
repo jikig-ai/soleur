@@ -1,0 +1,24 @@
+name=control1 commit=3d4a9567ba head=48e914d33b origin_main=3d4a9567ba
+enum first rows:
+1:SUITE_COMMAND	tests/hooks/incidents	bash	tests/hooks/test_incidents.sh
+2:SUITE_COMMAND	tests/hooks/emissions	bash	tests/hooks/test_hook_emissions.sh
+3:SUITE_COMMAND	tests/hooks/drop-sentinel-parity	bash	tests/hooks/test_drop_sentinel_parity.sh
+4:SUITE_COMMAND	tests/scripts/lint-rule-ids	python3	-m	unittest	tests.scripts.test_lint_rule_ids
+loadavg_start=8.42 8.27 10.21
+2026-11-06T11:42:48Z
+heavy_start:
+%CPU ELAPSED COMMAND
+ 115       0 node /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-9601-adr309-9b-push-hardening/apps/web-platform/node_modules/.bin/vi
+83.0      19 bash /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-10390-residual-chores/scripts/test-all.sh --print-selection --paths=
+22.0       0 gh run list --workflow ci.yml --event merge_group -L 5 --json databaseId,headSha,status,conclusion
+19.6      75 bash /data/git-repositories/jikig-ai/soleur/scripts/tmpfs-guard.sh
+14.1    8726 /opt/zen-browser-bin/zen-bin
+loadavg_end=5.71 6.69 9.45
+2026-11-06T12:32:41Z
+heavy_end:
+%CPU ELAPSED COMMAND
+50.0       0 bash /var/tmp/soleur-run.433429.M4C4L5sq/tmp.OWJYyJgfSZ/test-all-bun-1-1.sh
+20.0       0 doppler run -p soleur -c prd_terraform -- bash -c BETTERSTACK_API_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" bash scripts/followthroughs/egr
+19.2      65 bash /data/git-repositories/jikig-ai/soleur/scripts/tmpfs-guard.sh
+11.4   11719 /opt/zen-browser-bin/zen-bin
+10.8   17006 /home/jean/.local/share/mise/installs/codex/latest/bin/codex --no-daemon

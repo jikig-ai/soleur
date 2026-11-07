@@ -112,7 +112,15 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // 349 -> 353 (#9927 item 10, +4): the G2f registration pin (live, mutation matrix, must-PASS rows) and its ci.yml wiring pin - Guard 1 stays registered in the required test-scripts leg.
 // Exact: grep -cE '^\s*test\(' = 353.
 // 353 -> 354 (#11857, +1): token_drift ordering and closure row (inventory-named doppler_config blocks vs depends_on, the per-merge -target list and the operator-applied exclusions; mutants and a must-pass fixture run through the same function). Exact: 354.
-const TEST_FLOOR = 354;
+// 354 -> 358 (#8780, +4): the publish-admission pins — the exactly-{main} membership pin for
+// inngest_config_signing + release_publish inside DP-11 F8, the two job<->environment bindings
+// (reusable-release.yml::release, build-inngest-bootstrap-image.yml::build), and the three
+// -target= presence pins for the new environment resources.
+// 358 -> 366 (#11923/#11920, +6 incl. the #8780 merge, exact): the key-rotate-approval + egress-PREVIOUS -target pins (2) and the
+// Guard-5 satellite derivation rows (the must-PASS satellite conformance + three mutation rows).
+// 366 -> 367 (#12167 PR-G, +1): the nonlocal_bind_sysctl pair test (both resources SSH-provisioned and targeted by the SSH stage of
+// apply-web-platform-infra.yml). This change adds exactly one test row, so the floor moves by exactly one.
+const TEST_FLOOR = 367;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -153,7 +161,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // #9151: raised 18 -> 19 for terraform_data.deploy_pipeline_fix_web2 (server.tf).
 // #9534-review: raised 19 -> 20 for terraform_data.journald_persistent_web2 (server.tf).
 // #10455 b: raised 20 -> 22 for terraform_data.web_bash_synthetic_install and terraform_data.web_bash_synthetic_install_web2 (server.tf).
-const MIN_SSH_PROVISIONED = 22;
+// #12167 PR-G: raised 22 -> 24 for terraform_data.nonlocal_bind_sysctl and terraform_data.nonlocal_bind_sysctl_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 24;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -323,6 +332,16 @@ describe("terraform -target parity — current state is covered", () => {
 
   test("deploy_pipeline_fix (local-exec, no connection block) is NOT counted", () => {
     expect(sshProvisioned).not.toContain("deploy_pipeline_fix");
+  });
+
+  // #12167 PR-G — the nonlocal-bind sysctl reaches BOTH running hosts through the SSH stage of
+  // apply-web-platform-infra.yml (web-2 over its bastion forward, like journald_persistent_web2).
+  // A missing -target leaves that host without the sysctl until its next -replace, silently.
+  test("nonlocal_bind_sysctl and its web-2 twin are SSH-provisioned and targeted by apply-web-platform-infra.yml (#12167)", () => {
+    for (const n of ["nonlocal_bind_sysctl", "nonlocal_bind_sysctl_web2"]) {
+      expect(sshProvisioned).toContain(n);
+      expect(webPlatformTargets.has(n)).toBe(true);
+    }
   });
 
   // #9151 — apply-deploy-pipeline-fix.yml is the web-2 sibling's SOLE carrier: it
@@ -1327,18 +1346,15 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   //   - the spread placement group attaches to the RUNNING hcloud_server.web and
   //     forces a power-off reboot — a maintenance-window apply, same class as the
   //     host it groups;
-  //   - the host↔host proxy TLS keypair/cert + their prd doppler_secrets are
-  //     count-gated on var.host_proxy_tls_enabled (default false, #8754 / ADR-118
-  //     amendment) and exist only after the multi-host flip, which must move all
-  //     four to a -target list in the same change (doppler_secret, not the
-  //     CI-published token types the test forces).
+  //   - the host↔host proxy TLS quartet (tls_private_key.proxy_server,
+  //     tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key,
+  //     doppler_secret.proxy_tls_cert) LEFT this set at the multi-host flip (#12167 /
+  //     ADR-118 amendment 2026-09-27): host_proxy_tls_enabled now defaults true and all
+  //     four ride the per-merge saved plan, key and cert together. Pinned by the
+  //     "#8754 PR-B" describe below.
   "tls_private_key.git_remove",
   "doppler_secret.git_remove_ssh_private_key",
   "hcloud_placement_group.web_spread",
-  "tls_private_key.proxy_server",
-  "tls_self_signed_cert.proxy_server",
-  "doppler_secret.proxy_tls_key",
-  "doppler_secret.proxy_tls_cert",
   // #11181 / #11182 (ADR-068 §(b)) — Cloudflare Load Balancer overlay-add trio
   // (monitor, web-1 pool, LB on app.soleur.ai). Stays deliberately excluded after
   // the 2026-10-30 CF_API_TOKEN widen (the 2026-10-27 code-10000 premise below is
@@ -3503,12 +3519,22 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       ]);
     });
 
-    test("PL2: the pin-load reads webhook creds from prd_terraform only, and fans out to every web host", () => {
+    test("PL2: the pin-load takes the webhook trio from the Tier-B loader's env (no prd_terraform read), and fans out to every web host", () => {
       for (const job of gitDataJobs) {
+        const steps = (wfd.jobs?.[job]?.steps ?? []) as any[];
         const s = pinLoad(wfd, job)[0];
         const run = String(s.run ?? "");
-        expect(run).toContain("-p soleur -c prd_terraform");
-        expect(run).toContain("WEBHOOK_DEPLOY_SECRET");
+        // #9294 G1: the loader step runs earlier in the same job and exports the trio into the job env;
+        // the step itself reads no store, so a job without the Tier-B seam gets track.sh's credential-absent refusal.
+        const loaderIdx = steps.findIndex((x) => String(x.uses ?? "") === "./.github/actions/infra-credentials");
+        expect(loaderIdx, `${job}: the Tier-B loader step`).toBeGreaterThanOrEqual(0);
+        expect(loaderIdx, `${job}: the loader runs before the pin-load`).toBeLessThan(steps.indexOf(s));
+        // A disabled or unprivileged loader exports no trio: the step must run unconditionally and be fed the Tier-B read token.
+        expect(steps[loaderIdx].if, `${job}: the loader step has no if:`).toBeUndefined();
+        expect(String(steps[loaderIdx].with?.["doppler-token-infra-privileged"] ?? ""), `${job}: the loader is fed the Tier-B token`).toContain("secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED");
+        expect(run).not.toContain("prd_terraform");
+        expect(run).not.toContain("doppler secrets get");
+        expect(run).not.toContain("CI_SSH_ACCESS_TOKEN");
         // The peers CSV must be present — a single-host swap leaves the fleet MIXED.
         expect(String((s.env as any)?.WEB_HOST_PRIVATE_IPS ?? "")).toBe("10.0.1.10,10.0.1.11");
       }
@@ -4260,6 +4286,26 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     "inngest_cutover",
     "inngest_config_signing",
     "web_platform_infra_apply",
+    // #11923 — the key-rotation route's approval gate. Reviewer-gated from birth:
+    // the `approve` jobs of key-rotate.yml / inngest-key-rotate.yml bind it, and an
+    // empty reviewers.users would convert the sole human authorization on a
+    // production credential rotate into an auto-approve.
+    "key_rotate_approval",
+  ]);
+
+  // (#8780 review) The mirror ratchet: environments that are reviewer-less BY
+  // DESIGN. REVIEWERS_RATCHET only ratchets the keep-reviewers direction —
+  // nothing stopped a well-meaning `reviewers { users = [54279] }` being added
+  // to `release_publish` or `infra_privileged`, which silently DEADLOCKS every
+  // unattended publish/apply the environment exists to admit (the auto-mint
+  // dispatches, the push-arm releases run with no human in the loop). The
+  // admission gate on these envs is the exactly-{main} policy, and adding a
+  // reviewer does not strengthen it — it converts a batch pipeline into a
+  // prompt nobody is hired to answer. Same shape as the ratchet above: named
+  // members must be IN the population, or a rename drops the guard.
+  const REVIEWER_LESS_RATCHET = new Set([
+    "infra_privileged",
+    "release_publish",
   ]);
 
   test("every cutover-gate environment in the infra root gates on ≥1 reviewer", () => {
@@ -4309,6 +4355,13 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     // (#8209) The reviewer-less Tier-B environment must be IN the population, or the
     // widened property below is vacuous for exactly the class it was widened for.
     expect(names).toContain("infra_privileged");
+    // (#8780) The reviewer-less publish-admission environment must be IN the
+    // population for the same reason: deleting release-publish-environment.tf would
+    // silently drop the reviewer-less limb's second member with the suite still green.
+    expect(names).toContain("release_publish");
+    // (#11923) The rotation-approval environment must be IN the population — its
+    // ratchet membership is only load-bearing if the extractor actually sees it.
+    expect(names).toContain("key_rotate_approval");
     // And the policy extractor must have found something, or every environment would
     // trivially satisfy the branch-policy limb and the check would pass for the wrong
     // reason. A zero-match extractor is the worst outcome: it still prints a verdict.
@@ -4318,6 +4371,7 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
     ).toBeGreaterThan(0);
 
     const seenRatchet = new Set<string>();
+    const seenLessRatchet = new Set<string>();
     for (const env of envs) {
       const ids = env.users
         .split(",")
@@ -4333,6 +4387,23 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
             `Removing its reviewers converts a human authorization into an auto-approve (DP-11 F8; #6730).`,
         ).toBeGreaterThan(0);
         continue;
+      }
+
+      if (REVIEWER_LESS_RATCHET.has(env.name)) {
+        seenLessRatchet.add(env.name);
+        // A `reviewers` BLOCK of any shape — users, teams, a var-indirect
+        // list — deadlocks the unattended jobs these environments exist to
+        // admit. Pinning the block's absence (not just an empty users list)
+        // covers every spelling, since `env.body` is comment-stripped.
+        expect(
+          /\breviewers\b/.test(env.body),
+          `github_repository_environment.${env.name} is in REVIEWER_LESS_RATCHET and gained a reviewers block. ` +
+            `These environments admit UNATTENDED jobs — a required reviewer does not strengthen the gate, ` +
+            `it deadlocks every publish/apply that runs with no human present ` +
+            `(ADR-241 D2; #8780). Remove the reviewers block.`,
+        ).toBe(false);
+        // No `continue`: the branch-policy limb below is their ONLY gate and
+        // must still be proven intact.
       }
 
       // A reviewer-less environment relies entirely on the branch policy, so the policy
@@ -4368,6 +4439,64 @@ describe("github_repository_environment declares a non-empty reviewers.users (DP
           `or it was deleted. An unmatched ratchet entry is an unenforced one.`,
       ).toBe(true);
     }
+    for (const name of REVIEWER_LESS_RATCHET) {
+      expect(
+        seenLessRatchet.has(name),
+        `REVIEWER_LESS_RATCHET names ${name}, but no github_repository_environment by that name was found ` +
+          `in the infra root. Either it was renamed (update the ratchet and confirm the new name still ` +
+          `carries NO reviewers) or it was deleted. An unmatched ratchet entry is an unenforced one.`,
+      ).toBe(true);
+    }
+  });
+
+  // (#8780) Asserted, not merely permitted: the DP-11 disjunction ALLOWS a ratchet
+  // environment to also carry a main-only policy ("a branch policy on top of them is
+  // additive"), but the loop `continue`s past every REVIEWERS_RATCHET member after
+  // checking reviewers, so nothing above ever reads `inngest_config_signing`'s policy.
+  // Its admission half is pinned here. `release_publish` is reviewer-less, so the
+  // exactly-{main} set IS its only gate — a missing env, a dropped `main` policy, or a
+  // second wider policy all take it out of the set.
+  // (#8780 review) `release_publish` is an ADMISSION gate, not a credential
+  // carrier — the tf header's "Do NOT attach a github_actions_environment_secret"
+  // was prose-only until this pin. A secret or variable bound to it re-widens the
+  // boundary the design keeps narrow (every `environment: release-publish` job
+  // inherits it), and nothing else goes red: the -target allow-list does not stop
+  // a sibling PR adding resource + target in one diff.
+  test("no environment secret or variable is bound to release_publish", () => {
+    const offenders: string[] = [];
+    const re =
+      /resource\s+"github_actions_environment_(?:secret|variable)"\s+"([A-Za-z0-9_]+)"\s*\{([\s\S]*?)\n\}/g;
+    for (const file of listInfraTfFiles()) {
+      const stripped = stripComments(readFileSync(file, "utf8"));
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(stripped)) !== null) {
+        if (/release[-_]publish\b/.test(m[2])) offenders.push(m[1]);
+      }
+    }
+    expect(
+      offenders,
+      `environment secret/variable resources bound to release_publish: ${JSON.stringify(offenders)} — ` +
+        `release_publish is reviewer-less and secrets-free by design (ADR-241 D2). A bound secret widens ` +
+        `the admission gate into a credential carrier and the environment's only remaining protection ` +
+        `is the branch policy — binding GITHUB_TOKEN-scoped publish jobs to it was the deliberate narrowness.`,
+    ).toEqual([]);
+  });
+
+  test("inngest_config_signing and release_publish are each in the exactly-{main} policy set (#8780)", () => {
+    expect(
+      mainOnlyPolicyEnvs.has("inngest_config_signing"),
+      `inngest_config_signing is in REVIEWERS_RATCHET (reviewers stay) AND must carry an exactly-{main} ` +
+        `deployment-policy set — the additive shape #8780 added for publish admission ` +
+        `(saw ${JSON.stringify([...(policyPatterns.get("inngest_config_signing") ?? [])])}). ` +
+        `Without it a non-main dispatch of build-inngest-config-bundle.yml reaches the reviewer prompt.`,
+    ).toBe(true);
+    expect(
+      mainOnlyPolicyEnvs.has("release_publish"),
+      `release_publish is reviewer-less — its ONLY gate is an exactly-{main} deployment-policy set ` +
+        `(saw ${JSON.stringify([...(policyPatterns.get("release_publish") ?? [])])}). ` +
+        `Without it a workflow_dispatch of a publish workflow runs from any ref (#8780, ADR-241 D2).`,
+    ).toBe(true);
   });
 
   // The must-trip side of the branch-policy limb. Every deployment policy on the live
@@ -4446,6 +4575,112 @@ resource "github_repository_environment_deployment_policy" "synthetic_any" {
     // authorizing one thing and getting another.
     expect(wf).toMatch(/^permissions:\n\s{2}contents:\s*read\s*$/m);
     expect(wf).not.toMatch(/contents:\s*write/);
+  });
+});
+
+// ─── #8780: publish-admission pins. Every publish-path job in the three
+//     dispatchable workflows is bound to an environment whose deployment-policy
+//     set is exactly {main} (the DP-11 limb above asserts the policy half; these
+//     assert the job↔environment half and the apply wiring). A YAML-side
+//     dispatch-ref guard was deliberately NOT the mechanism — a dispatch runs
+//     the selected ref's bytes, so only the server-side environment policy is
+//     outside the blast radius (ADR-241 D2). ─────────────────────────────────
+describe("publish-path jobs declare a main-only admission environment (#8780)", () => {
+  test("reusable-release.yml's `release` job declares environment: release-publish", () => {
+    // The single publish chokepoint: both callers (web-platform-release.yml and
+    // version-bump-and-release.yml) reach it through `uses:`, and `environment:` is
+    // valid only HERE — a caller's `uses:` job cannot declare one, and the called
+    // job's environment is evaluated against the calling run's ref. `\s{4}` pins
+    // JOB-level indentation: a step-level `environment:` at six spaces is ignored
+    // by GitHub, so a looser anchor would certify nothing (same family as the
+    // web-platform-infra-apply pins above).
+    const wf = readFileSync(
+      resolve(REPO_ROOT, ".github/workflows/reusable-release.yml"),
+      "utf8",
+    );
+    const jobBlock = extractJobBlock(wf, "release");
+    expect(jobBlock, "release job not found in reusable-release.yml").not.toEqual(
+      "",
+    );
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*release-publish\s*$/m);
+  });
+
+  test("build-inngest-bootstrap-image.yml's `build` job declares environment: release-publish", () => {
+    // The bootstrap image's publish arm keeps `packages: write` + `id-token: write`
+    // — the admission gate is what keeps a non-main dispatch from exercising them.
+    // `bump-cloud-init-pin` keeps `infra-privileged` (it mints a Tier-B App token);
+    // this pin covers `build` only.
+    const wf = readFileSync(
+      resolve(
+        REPO_ROOT,
+        ".github/workflows/build-inngest-bootstrap-image.yml",
+      ),
+      "utf8",
+    );
+    const jobBlock = extractJobBlock(wf, "build");
+    expect(
+      jobBlock,
+      "build job not found in build-inngest-bootstrap-image.yml",
+    ).not.toEqual("");
+    expect(jobBlock).toMatch(/^\s{4}environment:\s*release-publish\s*$/m);
+  });
+
+  test("the three new environment resources are in the -target= allow-list", () => {
+    // The targeted apply prunes any *.tf resource not in this list, so without
+    // these lines the environment and its policy are declared and never applied —
+    // and the FIRST job that references `release-publish` auto-creates it
+    // unprotected (the auto-create hazard ADR-241 D2 records). Presence, not
+    // position: extractAllTargets strips comments, so a commented-out line reds.
+    const targets = extractAllTargets(
+      readFileSync(WEB_PLATFORM_WORKFLOW, "utf8"),
+    );
+    for (const addr of [
+      "github_repository_environment.release_publish",
+      "github_repository_environment_deployment_policy.release_publish_main",
+      "github_repository_environment_deployment_policy.inngest_config_signing_main",
+    ]) {
+      expect(
+        targets.has(addr),
+        `missing -target=${addr} in apply-web-platform-infra.yml's allow-list`,
+      ).toBe(true);
+    }
+  });
+});
+
+/**
+ * #11923 + #11920 — the rotation-approval environment, its main-only deployment
+ * policy and the egress PREVIOUS grace secret must all ride the apply job's
+ * saved-plan `-target` allow-list. A bare *.tf in this root is NEVER applied (the
+ * -target filter prunes it): an environment a workflow references but the
+ * allow-list omits auto-creates UNPROTECTED on first use — the #6780 vacuous-gate
+ * class the run-time `kk_chk_approval` protection_rules read exists to catch —
+ * and an un-targeted `doppler_secret` stays absent, so the rotate apply's
+ * `-replace` would have nothing to write. The dispatch-stripped per-merge set
+ * must see them too: a -target line inside a dispatch-only job cannot masquerade
+ * as routine coverage (stripDispatchJobs).
+ */
+describe("key-rotate-approval env + egress PREVIOUS secret are per-merge -targeted (#11923, #11920)", () => {
+  const wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+  const savedPlan = commandIn(
+    stripComments(extractJobBlock(wf, "apply")),
+    /^\s*terraform plan\b.*-out=tfplan/,
+  );
+  const planTargets = extractAllTargets(savedPlan);
+  const perMerge = extractAllTargets(stripDispatchJobs(wf));
+  const ADDRS = [
+    "github_repository_environment.key_rotate_approval",
+    "github_repository_environment_deployment_policy.key_rotate_approval_main",
+    "doppler_secret.egress_audit_ingest_token_previous",
+  ];
+
+  test("all three addresses are -targeted inside the apply job's saved plan", () => {
+    expect(planTargets.has("github_repository_environment.web_platform_infra_apply")).toBe(true); // non-vacuity
+    expect(ADDRS.filter((a) => !planTargets.has(a))).toEqual([]);
+  });
+
+  test("and the dispatch-stripped per-merge coverage set sees the same three", () => {
+    expect(perMerge.has("github_repository_environment.infra_privileged")).toBe(true); // non-vacuity
+    expect(ADDRS.filter((a) => !perMerge.has(a))).toEqual([]);
   });
 });
 
@@ -5297,6 +5532,7 @@ describe("inngest dispatch surfaces after the backstop retirement (#8285 PR B)",
 // could weaken it. Original wording: fold G2e into Guard 1 when Guard 1 becomes a required check (#9927). Until then G2e must not become a superset of it:
 // it holds what one diff must not weaken (delete_protection, prevent_destroy, no ignore_changes, no depth-0 count/for_each/provider/
 // provisioner, the attachment unpinned), over exactly the six addresses G2 and census G4h name (tied below).
+// Superseded 2026-11-06 (CTO ruling, #9927): G2e is kept permanently as the independent different-language anchor; no sunset.
 
 /**
  * HCL with comments removed: whole-line and trailing `#` and `//`, and `/* ... *\/` (newlines kept). Strings are copied whole (a
@@ -5760,6 +5996,7 @@ describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering 
     ["staging_record", ["cloudflare_record.lb_staging"]],
     ["ga_overlay", ["cloudflare_load_balancer_monitor.web", "cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app"]],
     ["ga_monitor_fix", ["cloudflare_load_balancer_monitor.web"]],
+    ["ga_monitor_https", ["cloudflare_load_balancer_monitor.web"]],
     ["ga_pool_update", ["cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app", "cloudflare_notification_policy.web_lb_health"]],
   ];
 
@@ -5777,6 +6014,55 @@ describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering 
     expect([...extractAllTargets(job("ga_monitor_fix"))]).toEqual([
       "cloudflare_load_balancer_monitor.web",
     ]);
+  });
+
+  test("the https monitor arm -targets ONLY the monitor (ADR-321 R7, #10479)", () => {
+    expect([...extractAllTargets(job("ga_monitor_https"))]).toEqual([
+      "cloudflare_load_balancer_monitor.web",
+    ]);
+  });
+
+  test("ga_monitor_https is dispatch-only, reviewer-gated, and grades the saved plan with the https grader BEFORE the apply", () => {
+    const raw = job("ga_monitor_https");
+    expect(raw, "ga_monitor_https job must exist").not.toEqual("");
+    const block = stripComments(raw);
+    expect(block).toContain("github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-https'");
+    expect(block).toMatch(/^\s*environment: web-platform-infra-apply\s*$/m);
+    expect(block).toContain("MOVE-GA-LB-MONITOR-HTTPS");
+    const CALL = /cf_lb_gate_ga_monitor_https "\$RUNNER_TEMP\/ga-monitor-https-plan\.json"/;
+    expect(block).toMatch(CALL);
+    // The http grader must NOT be what grades this arm (it would refuse the https shape, but a swap would be silent).
+    expect(block).not.toContain("cf_lb_gate_ga_monitor_update");
+    const applyAt = block.indexOf("terraform apply -no-color -input=false -auto-approve tfplan");
+    expect(applyAt).toBeGreaterThan(-1);
+    expect(block.search(CALL)).toBeGreaterThan(-1);
+    expect(block.search(CALL)).toBeLessThan(applyAt);
+  });
+
+  test("ga_monitor_https baseline gate precedes the plan and its Plan gate step carries NO `if:`", () => {
+    const block = job("ga_monitor_https");
+    const pre = extractStep(block, /Pre-gate - both pool origins healthy/);
+    expect(pre).not.toBeNull();
+    expect(pre!).not.toMatch(/^\s*if:/m);
+    const plan = extractStep(block, /Terraform plan \(GA monitor only, https shape\)/);
+    expect(plan).not.toBeNull();
+    expect(block.indexOf(plan!)).toBeGreaterThan(block.indexOf(pre!));
+    const gate = extractStep(block, /Plan gate/);
+    expect(gate).not.toBeNull();
+    expect(gate!).not.toMatch(/^\s*if:/m);
+  });
+
+  test("ga_monitor_https requires BOTH origins healthy after the apply (a one-origin read is not a verdict)", () => {
+    const block = stripComments(job("ga_monitor_https"));
+    expect(block).toContain('if [[ "$ORIGINS" -ge 2 && "$HEALTH" == "true" ]]; then');
+    expect(block).toContain('if [[ "$ORIGINS" -lt 2 ]]; then');
+  });
+
+  test("the arm is a workflow_dispatch option and the workflow has no push/schedule trigger (merge cannot apply the monitor)", () => {
+    expect(wf).toMatch(/^\s*- ga-monitor-https\s*$/m);
+    const onBlock = wf.slice(wf.indexOf("\non:\n"), wf.indexOf("\nconcurrency:"));
+    expect(onBlock).toContain("workflow_dispatch:");
+    expect(onBlock).not.toMatch(/^\s*(push|schedule|pull_request|workflow_run):/m);
   });
 
   test("staging-overlay/teardown carry NO -target (whole-root plan / -destroy)", () => {
@@ -6289,7 +6575,7 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(res).not.toMatch(/ignore_changes/);
   });
 
-  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default false", () => {
+  test("the proxy-TLS quartet is count-gated on host_proxy_tls_enabled, default true after the multi-host flip (#12167)", () => {
     const src = tf("proxy-tls.tf");
     const quartet: Array<[string, string]> = [
       ["tls_private_key", "proxy_server"],
@@ -6305,7 +6591,8 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(ungated).toEqual([]);
     const v = block(tf("variables.tf"), /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
     expect(v).toMatch(/^\s*type\s*=\s*bool\s*$/m);
-    expect(v).toMatch(/^\s*default\s*=\s*false\s*$/m);
+    expect(v).toMatch(/^\s*default\s*=\s*true\s*$/m);
+    expect(v).not.toMatch(/^\s*default\s*=\s*false\s*$/m);
   });
 
   test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
@@ -6315,16 +6602,33 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(v).toMatch(/^\s*default\s*=\s*""\s*$/m);
   });
 
-  test("no workflow targets the gated resources or overrides their gate variables", () => {
-    const gated = [
+  test("the proxy-TLS quartet rides the per-merge saved plan (key and cert together), out of the exclusion set (#12167)", () => {
+    // Inverted from "no workflow targets the gated resources" at the multi-host flip (ADR-118
+    // amendment 2026-09-27). Targeting the cert alone writes a cert to prd with no matching key,
+    // so the four are asserted as a unit: all in, or the row is red.
+    const quartet = [
       "tls_private_key.proxy_server",
       "tls_self_signed_cert.proxy_server",
       "doppler_secret.proxy_tls_key",
       "doppler_secret.proxy_tls_cert",
-      "doppler_secret.inngest_config_digest",
     ];
+    expect(missingFrom(quartet, planTargets)).toEqual([]);
+    expect(presentIn(quartet, OPERATOR_APPLIED_EXCLUSIONS)).toEqual([]);
+    // The saved plan is the ONLY route: the dispatch jobs must not carry any of the four. The
+    // birth gate demands zero destroys, so it cannot grade a SAN-driven cert replace.
+    const dispatchJobs = ["web_host_create", "web_host_replace"];
+    const dispatchTargets = extractAllTargets(dispatchJobs.map((j) => extractJobBlock(wf, j)).join("\n"));
+    expect(dispatchTargets.has("hcloud_server.web")).toBe(true); // non-vacuity
+    expect(presentIn(quartet, dispatchTargets)).toEqual([]);
+  });
+
+  test("no workflow targets the still-gated resources or overrides any gate variable", () => {
+    const gated = ["doppler_secret.inngest_config_digest"];
     expect(presentIn(gated, anyFormTargets)).toEqual([]);
     expect(gated.filter((a) => !OPERATOR_APPLIED_EXCLUSIONS.has(a))).toEqual([]);
+    // host_proxy_tls_enabled is flipped by its variables.tf default, never by a workflow
+    // input, -var or TF_VAR route (the "no TF_VAR route" ruling for #12167).
+    expect(writeSurface).not.toMatch(/TF_VAR_host_proxy_tls_enabled/i);
     // A `-var`/TF_VAR_ override in a workflow would flip the gate without touching variables.tf.
     expect(writeSurface).not.toMatch(/\bhost_proxy_tls_enabled\b/);
     expect(writeSurface).not.toMatch(/-var[= ]+['"]?inngest_config_digest=|TF_VAR_inngest_config_digest/);
@@ -9986,12 +10290,23 @@ function keyRotateViolations(rows: KrRow[], copies: KrCopy[], sibling: KrRow[], 
   const inTable = new Set(rows.map((r) => r.address));
   const siblingIds = new Set(sibling.map((r) => r.address));
   const keys = [...new Set(rows.map((r) => r.key))];
+  // #11920 — a `doppler_secret.<key>_previous` SATELLITE of a rotatable key: the grace-window
+  // previous-value secret of the CURRENT+PREVIOUS rotation pair (egress_audit_ingest_token).
+  // Its value comes from var.<key>_previous, never from random_id.<key>, so it is NOT a
+  // referrer the closure below can demand; its lifecycle is the same
+  // ignore_changes=[value] + -replace-to-write pattern the four inngest_* secrets use, so the
+  // flag rule below derives `replace` for it identically. It is also NOT a KK_COPIES member —
+  // a "copy" holds the key's CURRENT value and PREVIOUS must differ from it by design — so the
+  // closure and the copies-count both run on referrer rows only.
+  const isSatellite = (key: string, addr: string): boolean =>
+    addr === `doppler_secret.${key}_previous` &&
+    new RegExp(`\\bvar\\.${key}_previous\\b`).test(byAddr.get(addr)?.body ?? "");
   for (const r of rows) {
     if (!byAddr.has(r.address)) v.push(`address-missing:${r.address}`);
     if (/^(hcloud_|terraform_data\.)/.test(r.address)) v.push(`forbidden-type:${r.address}`);
     if (r.flag !== "replace" && r.flag !== "target") v.push(`bad-flag:${r.address}`);
     if (r.phase === "A" && (r.flag !== "replace" || !r.address.startsWith("random_id."))) v.push(`phase-A-not-random_id-replace:${r.address}`);
-    if (r.phase === "B" && r.address.startsWith("doppler_secret.")) {
+    if (r.address.startsWith("doppler_secret.")) {
       const body = byAddr.get(r.address)?.body ?? "";
       const ignores = /ignore_changes\s*=\s*\[[^\]]*\bvalue\b/.test(body);
       if (ignores && !(r.flag === "replace" && r.actions === "delete,create")) v.push(`ignore_changes-secret-not-replace:${r.address}`);
@@ -10002,7 +10317,8 @@ function keyRotateViolations(rows: KrRow[], copies: KrCopy[], sibling: KrRow[], 
     const rid = `random_id.${key}`;
     const refs = new RegExp(`\\brandom_id\\.${key}\\.(?:hex|id|b64_url|b64_std|dec)\\b`);
     const referrers = blocks.filter((b) => refs.test(b.body)).map(blockAddr);
-    const want = rows.filter((r) => r.key === key && r.phase === "B").map((r) => r.address).sort();
+    const bRows = rows.filter((r) => r.key === key && r.phase === "B").map((r) => r.address);
+    const want = bRows.filter((a) => !isSatellite(key, a)).sort();
     if (JSON.stringify([...referrers].sort()) !== JSON.stringify(want)) v.push(`closure:${key}: HCL referrers ${JSON.stringify([...referrers].sort())} != table ${JSON.stringify(want)}`);
     if (!rows.some((r) => r.key === key && r.address === rid && r.phase === "A")) v.push(`no-A-row:${key}`);
     const cp = copies.filter((c) => c.key === key);
@@ -10029,7 +10345,9 @@ describe("key-rotate route: the gate table versus the HCL (Guard 5, #11294)", ()
   const real = krTables(KEY_ROTATE_SCRIPT);
 
   test("the real table, copies and HCL are conformant (closure over every referencing block, flags follow ignore_changes, every random_id has a disposition)", () => {
-    expect(real.rows.length).toBe(15);
+    // 15 -> 16 (#11920): the egress_audit_ingest_token_previous satellite row — a phase-B
+    // doppler_secret admitted into the table without a random_id referrer or a KK_COPIES member.
+    expect(real.rows.length).toBe(16);
     expect(keyRotateViolations(real.rows, real.copies, real.sibling, hclTexts())).toEqual([]);
   });
 
@@ -10081,6 +10399,35 @@ describe("key-rotate route: the gate table versus the HCL (Guard 5, #11294)", ()
     expect(keyRotateViolations(b, real.copies, real.sibling, hclTexts())).toContain("plain-secret-not-update:doppler_secret.kb_drift_ingest_signing_key");
     const c = real.rows.map((r) => (r.address === "random_id.kb_drift_ingest_signing_key" ? { ...r, flag: "target" } : r));
     expect(keyRotateViolations(c, real.copies, real.sibling, hclTexts()).some((x) => x.startsWith("phase-A"))).toBe(true);
+  });
+
+  const PREV = "doppler_secret.egress_audit_ingest_token_previous";
+  const prevRow = (flag: string, actions: string): KrRow => ({ phase: "B", key: "egress_audit_ingest_token", address: PREV, flag, actions });
+
+  // #11920 — the egress PREVIOUS secret is a satellite of egress_audit_ingest_token: it never
+  // references random_id.egress_audit_ingest_token, so the closure must admit its phase-B row
+  // anyway; its flag still derives from ignore_changes=[value] exactly like the four inngest_*
+  // secrets. GREEN today (the row is admitted but not required — the runtime gate's
+  // `replace_not_requested` refuses a missing -replace), and stays green once the table row
+  // itself lands.
+  test("the egress PREVIOUS satellite row (replace/delete,create) is conformant — admitted into the closure without a random_id referrer (#11920)", () => {
+    expect(keyRotateViolations([...real.rows, prevRow("replace", "delete,create")], real.copies, real.sibling, hclTexts())).toEqual([]);
+  });
+
+  test("mutation: the same satellite row with flag target/update is red — the flag derives from the HCL lifecycle, not the table spelling", () => {
+    expect(keyRotateViolations([...real.rows, prevRow("target", "update")], real.copies, real.sibling, hclTexts())).toContain(
+      `ignore_changes-secret-not-replace:${PREV}`,
+    );
+  });
+
+  test("mutation: the satellite row filed under a different key is red — it is that key's neither referrer nor satellite", () => {
+    const rows = [...real.rows, { ...prevRow("replace", "delete,create"), key: "github_webhook_secret" }];
+    expect(keyRotateViolations(rows, real.copies, real.sibling, hclTexts()).some((x) => x.startsWith("closure:github_webhook_secret"))).toBe(true);
+  });
+
+  test("mutation: a non-satellite non-referrer phase-B row for the egress key is still a closure red — satellite admission is narrow", () => {
+    const rows = [...real.rows, { phase: "B", key: "egress_audit_ingest_token", address: "doppler_secret.kb_drift_ingest_signing_key", flag: "target", actions: "update" }];
+    expect(keyRotateViolations(rows, real.copies, real.sibling, hclTexts()).some((x) => x.startsWith("closure:egress_audit_ingest_token"))).toBe(true);
   });
 });
 

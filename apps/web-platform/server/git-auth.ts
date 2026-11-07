@@ -28,6 +28,7 @@ import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
+import { HARDENED_GIT_ARGS, assertIsolatedPushDir, buildIsolatedGitEnv, type IsolatedPushDir } from "./git-hardened-env";
 
 const execFileAsync = promisify(execFile);
 
@@ -130,6 +131,16 @@ export function cleanupAskpassScript(scriptPath: string): void {
 export interface GitExecOptions {
   cwd?: string;
   timeout?: number;
+  /**
+   * Opt-in hardened form (#11636, ADR-309 9b, the cc push only): run from a server-created isolated bare GIT_DIR (the branded
+   * `IsolatedPushDir` from `createIsolatedPushDir`), never against the workspace `.git`. The child gets the shared git
+   * hardening args, the unscoped proxy / extra-header resets, a `https`-only transport clamp, an ALLOWLISTED environment
+   * (never `process.env`), `GIT_DIR` = the isolated directory, the workspace object store as the only alternate, and
+   * `HOME` = the isolated directory (the askpass script is written inside it). The value is validated at runtime BEFORE any
+   * token is minted (a stray `true`, an unbranded object or an unsafe path refuses), and a caller-supplied `cwd` is refused:
+   * the child's cwd is the isolated directory. Unset keeps the exact legacy argv and environment.
+   */
+  hardened?: IsolatedPushDir;
 }
 
 /**
@@ -280,6 +291,14 @@ export async function gitWithInstallationAuth(
   installationId: number,
   opts: GitExecOptions = {},
 ): Promise<Buffer> {
+  const { hardened, ...execOpts } = opts;
+  // Checked BEFORE the mint: a malformed isolated directory (a stray `true`, an unbranded object, an unsafe path) or a caller
+  // cwd refuses without minting a token or running git. `undefined` is the only legacy value.
+  if (hardened !== undefined) {
+    assertIsolatedPushDir(hardened);
+    if (execOpts.cwd !== undefined) throw new Error("hardened git invocation takes no cwd of its own");
+  }
+
   const token = await generateInstallationToken(installationId);
 
   if (!TOKEN_FORMAT_RE.test(token)) {
@@ -290,12 +309,11 @@ export async function gitWithInstallationAuth(
     );
   }
 
-  const scriptPath = writeAskpassScript();
+  const scriptPath = hardened ? writeAskpassScriptTo(hardened.gitDir) : writeAskpassScript();
 
   try {
-    const fullArgs = [...HELPER_RESET, ...args];
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+    const fullArgs = [...HELPER_RESET, ...(hardened ? HARDENED_GIT_ARGS : []), ...args];
+    const authEnv = {
       GIT_ASKPASS: scriptPath,
       GIT_INSTALLATION_TOKEN: token,
       GIT_USERNAME: "x-access-token",
@@ -307,6 +325,10 @@ export async function gitWithInstallationAuth(
       // unexpected `$HOME` sibling ever becomes writeable.
       GIT_CONFIG_GLOBAL: "/dev/null",
     };
+    // Hardened: an allowlisted environment, never the server's. Legacy: unchanged.
+    const env: NodeJS.ProcessEnv = hardened
+      ? buildIsolatedGitEnv(hardened, authEnv)
+      : { ...process.env, ...authEnv };
 
     // Async exec (non-blocking) — critical for Next.js route handlers
     // that invoke this helper on the request path (kb/upload pull,
@@ -314,7 +336,9 @@ export async function gitWithInstallationAuth(
     // A sync exec here would stall the Node event loop for the full
     // git RTT, queueing all other requests on the instance.
     const { stdout } = await execFileAsync("git", fullArgs, {
-      ...opts,
+      ...execOpts,
+      // Hardened: the isolated directory, AFTER the spread so nothing the caller passed can place the child elsewhere.
+      ...(hardened ? { cwd: hardened.gitDir } : {}),
       env,
       // Cap stdout to prevent memory spikes on verbose git output.
       maxBuffer: 10 * 1024 * 1024,

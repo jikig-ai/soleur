@@ -32,8 +32,8 @@ SUT="${CEN_SCRIPT:-$PRISTINE}"
 #   CEN_STUB_NOLOG=1   the stub nft records nothing (the "0 calls checked" harness row).
 #   CEN_MUT_JOBS=<n>   how many mutation rows run at once (default 3; the infra runner is already -P4).
 CEN_MUTANT="${CEN_MUTANT:-}"
-MUT_ROWS_EXPECTED=45 # the mutation rows of the outer run; also the floor's row term
-INNER_ASSERTIONS=65 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
+MUT_ROWS_EXPECTED=56 # the mutation rows of the outer run; also the floor's row term
+INNER_ASSERTIONS=69 # the assertions of an inner (mutant) run; the outer run adds one per mutation row
 
 pass=0; fail=0; FAILED=()
 ok() { if [ "$1" -eq 0 ]; then pass=$((pass + 1)); printf '[ok] %s\n' "$2"; else fail=$((fail + 1)); FAILED+=("$2"); printf '[FAIL] %s\n' "$2"; fi; }
@@ -226,6 +226,7 @@ ip daddr 172.17.0.1 tcp dport 8288 accept
 ip daddr 10.0.1.40 tcp dport 8288 accept
 ip daddr 10.0.1.40 tcp dport 8443 accept
 ip daddr 10.0.1.20 tcp dport 22 accept
+ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept
 ip daddr @soleur_egress_allow accept
 ip daddr @soleur_egress_allow_cidr accept
 PIN
@@ -239,8 +240,24 @@ PIN
 chain_norm() { chain | sed -E 's/ comment "[^"]*"$//'; }
 chain_accepts() { chain_norm | grep -E '(^| )accept$' | LC_ALL=C sort; }
 chain_early_verdicts() { chain_norm | awk '$0 == "ip daddr 10.0.1.20 tcp dport 22 accept" { exit } { print }' | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
-expect "git-data: the WHOLE accept set of the rendered chain equals the reviewed pin (10 rules): a sibling accept after the git-data rule is RED" all 'test "$(chain_accepts)" = "$GD_ACCEPT_PIN"' 'test "$(chain_accepts | grep -c .)" -eq 10'
+expect "git-data: the WHOLE accept set of the rendered chain equals the reviewed pin (11 rules): a sibling accept after the git-data rule is RED" all 'test "$(chain_accepts)" = "$GD_ACCEPT_PIN"' 'test "$(chain_accepts | grep -c .)" -eq 11'
 expect "git-data: the only verdict rules (other than accept) ahead of the git-data accept are the pinned link-local drop and the two port-53 exfil drops: a shadowing drop is RED" all 'test "$(chain_early_verdicts)" = "$GD_EARLY_PIN"' 'test -n "$(chain_norm | grep -Fx "ip daddr 10.0.1.20 tcp dport 22 accept")"'
+# #12167 PR-F: the host-to-host session-proxy relay. proxyClientToOwner (session-proxy.ts) dials wss://<peer private ip>:8443 from INSIDE the
+# app container, so the request traverses DOCKER-USER -> SOLEUR-EGRESS and, with no accept, dies in the default drop (the host's own
+# listener probe uses host OUTPUT and stays green). The destination is the web peers' private IPs: ONE anonymous set, ONE port, no prefix.
+# The source is masqueraded to the host's own 10.0.1.x, which the peers' SOLEUR_PROXY_PEER_ALLOWLIST already admits. The roster is a bash
+# literal (like 10.0.1.40 / 10.0.1.20: NOT injected from Terraform); the STATIC row derives the expected set from var.web_hosts so a host
+# added or renumbered there leaves this suite red until the rule follows it.
+RELAY_RE='^ip daddr \{ 10\.0\.1\.10, 10\.0\.1\.11 \} tcp dport 8443 accept comment "soleur-egress: web peer session-proxy relay \(#12167\)"$'
+RELAY_NORM='ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept'
+r_relay=$(ridx "$RELAY_RE")
+relay_roster() { awk '/^variable "web_hosts"/ { v = 1 } v && /^[[:space:]]*default[[:space:]]*=[[:space:]]*\{/ { d = 1; next } d && /^[[:space:]]*\}/ { exit } d' "$DIR/variables.tf" | sed -nE 's/^[[:space:]]*"web-[0-9]+"[[:space:]]*=[[:space:]]*\{.*private_ip[[:space:]]*=[[:space:]]*"([0-9.]+)".*/\1/p' | LC_ALL=C sort -V; }
+relay_rendered() { chain_norm | sed -nE 's/^ip daddr \{ ([0-9., ]+) \} tcp dport 8443 accept$/\1/p' | tr -d ' ' | tr ',' '\n' | LC_ALL=C sort -V; }
+chain_early_verdicts_relay() { chain_norm | awk -v r="$RELAY_NORM" '$0 == r { exit } { print }' | grep -E '(^| )(drop|reject|return|queue|(jump|goto) [^ ]+)$'; }
+expect "relay: exactly one tcp/8443 accept for the web peers, rendered AFTER the dedicated-Inngest and git-data accepts and BEFORE the default-drop log and drop" all 'test -n "$r_relay"' 'test "$(chain | grep -cE -- "$RELAY_RE")" -eq 1' 'test "$r_relay" -gt "$r_gd"' 'test "$r_relay" -lt "$r_log"'
+expect "relay: scoped to the web peers and one port: only the Inngest accept and this rule match dport 8443 (the stub has no gateway), nothing else names 10.0.1.10 / 10.0.1.11, and the rule carries no prefix length or range" all 'test "$(chain | grep -c "dport 8443")" -eq 2' 'test "$(chain | grep -cE "10\.0\.1\.1[01]")" -eq 1' 'test "$(chain | grep -E "10\.0\.1\.1[01]" | sed "s/ comment .*//" | grep -cE "/[0-9]|-")" -eq 0'
+expect "relay: STATIC parity: the rendered peer set equals the private_ips of var.web_hosts (variables.tf default), two or more hosts: a host added or renumbered there is RED here" all 'test "$(relay_roster | grep -c .)" -ge 2' 'test "$(relay_roster)" = "$(relay_rendered)"'
+expect "relay: the only verdict rules (other than accept) ahead of the relay accept are the pinned link-local drop and the two port-53 exfil drops: a shadowing drop is RED" all 'test "$(chain_early_verdicts_relay)" = "$GD_EARLY_PIN"' 'test -n "$(chain_norm | grep -Fx -- "$RELAY_NORM")"'
 expect "happy: the CIDR elements reached nft as one flush+add transaction before the rules" all 'test "$(elems | grep -c "^add element ip filter soleur_egress_allow_cidr { 203.0.113.0/24,198.51.100.7/32 }$")" -eq 1' 'grep -q "^flush set ip filter soleur_egress_allow_cidr$" "$HAPPY"/txn.2'
 expect "happy: census: exactly one DROP names 169.254 (before every accept) and exactly one LOG names it, immediately before that drop" ll_clean "$HAPPY"
 expect "happy: no add-element payload names a link-local address" test "$(elems | grep -c '169\.254')" -eq 0
@@ -564,6 +581,47 @@ add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 accept comment "x"
 ' 'add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 counter drop comment "x"
 add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.20 tcp dport 22 accept comment "soleur-egress: git-data transport"
 '
+  # #12167 PR-F: the web-peer relay accept (tcp/8443 to the var.web_hosts private IPs).
+  RLY='ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment "soleur-egress: web peer session-proxy relay (#12167)"'
+  msub "12a the relay accept is deleted (the owner-relay dial dies in the default drop again)" caught \
+    "add rule ip filter SOLEUR-EGRESS $RLY
+" ''
+  msub "12b the relay accept names the wrong port (8444)" caught \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer" \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8444 accept comment \"soleur-egress: web peer"
+  msub "12b2 the relay accept admits every port of the web peers (the port match is dropped)" caught \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer" \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } accept comment \"soleur-egress: web peer"
+  msub "12c the relay peer set is widened to the whole private subnet (10.0.1.0/24 would admit git-data, registry, Inngest on 8443)" caught \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer" \
+    "ip daddr 10.0.1.0/24 tcp dport 8443 accept comment \"soleur-egress: web peer"
+  msub "12d the relay peer set names a host var.web_hosts does not have (static parity)" caught \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer" \
+    "ip daddr { 10.0.1.10, 10.0.1.12 } tcp dport 8443 accept comment \"soleur-egress: web peer"
+  msub "12e the relay peer set omits web-2 (static parity: the standby could not be relayed to)" caught \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer" \
+    "ip daddr 10.0.1.10 tcp dport 8443 accept comment \"soleur-egress: web peer"
+  msub "12e2 the relay peer set gains a third host var.web_hosts does not have" caught \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer" \
+    "ip daddr { 10.0.1.10, 10.0.1.11, 10.0.1.40 } tcp dport 8443 accept comment \"soleur-egress: web peer"
+  mutate "12f the relay accept is moved AFTER the default drop (dead rule: never evaluated)" caught \
+    'rl = "add rule ip filter SOLEUR-EGRESS ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer session-proxy relay (#12167)\"\n"
+dd = "add rule ip filter SOLEUR-EGRESS counter drop comment \"soleur-egress: default drop\"\n"
+assert rl in s and dd in s
+new = s.replace(rl, "", 1).replace(dd, dd + rl, 1)'
+  msub "12g the relay accept loses its destination (any host on tcp/8443: an open 8443 egress)" caught \
+    "ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept comment \"soleur-egress: web peer" \
+    "tcp dport 8443 accept comment \"soleur-egress: web peer"
+  msub "12h a sibling accept for the whole private subnet on 8443 is added right after the relay accept (the per-rule pins cannot see it)" caught \
+    "add rule ip filter SOLEUR-EGRESS $RLY
+" "add rule ip filter SOLEUR-EGRESS $RLY
+add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.0/24 tcp dport 8443 accept comment \"x\"
+"
+  msub "12i a shadowing drop for the web peers is inserted BEFORE the relay accept" caught \
+    "add rule ip filter SOLEUR-EGRESS $RLY
+" "add rule ip filter SOLEUR-EGRESS ip daddr 10.0.1.11 counter drop comment \"x\"
+add rule ip filter SOLEUR-EGRESS $RLY
+"
   mutate "9 harmless: a comment-only edit must stay green" survive \
     "s.replace('declare table/sets/chains', 'declare the table, sets and chains', 1)"
   # Guard 2 rows 2 and 6: the resolver's feeders (host answers, container view, grace pool, pin set).

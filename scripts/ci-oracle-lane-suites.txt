@@ -1,0 +1,49 @@
+# ci-oracle-lane-suites.txt — the oracle-validation manifest (#12156, ADR-276 amendment).
+#
+# The `oracle-index-check` job in .github/workflows/ci.yml runs EVERY non-comment line below, serially, when — and only
+# when — the `oracle-selection` job classifies a pull_request/merge_group diff as `oracle_only`. Lines are
+#   <registration-label><TAB><argv>
+# where the label is the enumerate-EXACT registration label (`scripts/test-all.sh --enumerate` prints
+# `SUITE_REGISTRATION<TAB><label>`) and argv is the command the job executes from the checkout root. A suite's non-zero
+# exit propagates into the leg verdict; zero members would be a vacuous leg, so the job also reds on an empty manifest.
+#
+# MEMBERSHIP (decision-challenges T3): every registration whose SUT is the oracle/selector machinery — the affected-set
+# index, its derive path, the audit replay battery, the census linter that is the AFFECTED_*_PATHS census authority,
+# and the two selection levers that read the index. Guard 4 pins the pin BI-DIRECTIONALLY: manifest ≡ this declared
+# oracle-SUT set minus the exclusion list below, so a NEW oracle-machinery registration cannot silently escape the leg.
+#
+# The root `*.md` surface member admits AGENTS.md/CLAUDE.md edits (T2): those are covered by the rule-corpus lints
+# (rule-body-lint, adr-ordinals, tc-document-sha-guard stay required and are never in the skip set), so the oracle leg
+# does not need to duplicate them.
+#
+# COMMITTED EXCLUSION LIST — the oracle/selector-adjacent registrations that were evaluated and deliberately left out,
+# with the reason (a registration added here needs a matching exclusion note or a membership line):
+#   scripts/lint-orphan-test-suites-mutations-a   SUT is the linter's own detection corpus (fixtures), not repo oracle state
+#   scripts/lint-orphan-test-suites-mutations-b   same: corpus mutations, not repo oracle state
+#   scripts/test-all-orphan-log-retention         known flake (ADR-276 amendment 2026-10-16 item 5); a lane leg must not flake
+#   plugins/soleur/scripts/affected-tests.test.sh   SUT is the local
+#                                                 affected gate's own test list, not the index the lane protects
+#   plugins/soleur/test/affected-tests-pool-default.test.sh   same shape: glob-registered pool-default suite, adjacent not oracle SUT
+#   scripts/audit-suite-reads                     runtime-read recorder; adjacent machinery, not the oracle/selector SUT
+#   tests/scripts/lint-ratchet                    the ratchet LINTER's suite — adjacent machinery (the ratchet's own
+#                                                 affected-index-ratchet job already runs on the reduced set)
+#   scripts/pre-push-ratchet-lane                 local pre-push lane, not part of the hosted oracle validation
+#   plugins/soleur/test/ci-path-gating.test.sh     path-gating classifier, adjacent machinery
+#   scripts/ci-oracle-lane                        SUT is the lane driver itself, unreachable by a lane-eligible diff
+#                                                 (the driver, its sentinel and this manifest are all in the
+#                                                 hard-exclusion list — a diff touching them always pays the battery)
+#
+scripts/lint-orphan-test-suites	bash scripts/lint-orphan-test-suites.sh
+scripts/test-all-affected-a	bash scripts/test-all-affected.test.sh --rows 1-13
+scripts/test-all-affected-b	bash scripts/test-all-affected.test.sh --rows 14-32
+scripts/test-all-affected-c	bash scripts/test-all-affected.test.sh --rows 33-36
+scripts/test-all-affected-d	bash scripts/test-all-affected.test.sh --rows 37-38
+scripts/test-all-group-affected	bash scripts/test-all-group-affected.test.sh
+scripts/test-affected-derive	bash scripts/test-affected-derive.test.sh
+scripts/test-affected-derive-cache	bash scripts/test-affected-derive-cache.test.sh
+scripts/test-affected-kb-consumers	bash scripts/test-affected-kb-consumers.test.sh
+plugins/soleur/test/ci-pr-affected-replay-a	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-158
+plugins/soleur/test/ci-pr-affected-replay-b	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 159-316
+plugins/soleur/test/ci-pr-affected-replay-c	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-473
+scripts/ci-pr-selection	bash scripts/ci-pr-selection.test.sh
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	bash plugins/soleur/test/ci-pr-affected-preactivation.test.sh

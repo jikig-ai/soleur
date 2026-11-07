@@ -261,6 +261,13 @@ _AFF_SCOPE_REQ=0
 # flag wins over the env var, matching the flag-over-env convention the other
 # mode flags follow. Parallel scheduling applies to the RUN path only —
 # selection (--affected, --print-selection, --enumerate) is untouched.
+# SOLEUR_PJ_FIFO (#12013) — launch order of the parallel pool. Unset/0: conservative BACKFILL. A suite
+# blocked on a token no longer idles the free slots; a later suite launches iff it conflicts with no live
+# suite and with nothing still
+# queued ahead of it (so suites that share a token keep registration order). A `*` (drain-barrier) suite is
+# PARKED: it holds nothing back, and launches alone at the drain, after every other suite (#12231; the contract
+# is written once, in the _pj_fill comment). SOLEUR_PJ_FIFO=1 restores the previous strict FIFO — the A/B
+# control of the measurement, not a tuning knob. Tests: scripts/test-all-parallel-scheduler.test.sh.
 _JOBS_REQ=""
 # Wall-clock bound for the enumerate family (#8761). Overridable by
 # SOLEUR_ENUM_DEADLINE_S (digits only, else the default holds); the deadline is
@@ -1465,6 +1472,18 @@ export -n TEST_GROUP
 # #11939 class, for a different variable. Pinned by scripts/test-all-parallel-scheduler.test.sh A8.
 export -n SOLEUR_TEST_JOBS
 
+# #12013: the provisional-red sidecar path is a carrier of the same kind. affected-tests.sh hands it
+# to THIS runner; a suite that runs a nested sandboxed test-all.sh (its fixtures plant FAILs on
+# purpose) must never append those to the outer gate's sidecar. The shell variable stays readable
+# (`export -n` only demotes it from the environment of what we spawn). Pinned by
+# scripts/test-all-parallel-scheduler.test.sh (the demotion count and the nested-runner arm).
+export -n SOLEUR_PJ_PROVISIONAL_FILE
+
+# #12013: SOLEUR_PJ_FIFO is read once in _pj_resolve_run_mode (a shell read) and is the OUTER pool's A/B
+# control. Left exported, a suite that drives a nested/sandboxed runner (the scheduler suite's arms) would
+# inherit the control and run FIFO, turning its backfill arms red and mislabelling the control reading.
+export -n SOLEUR_PJ_FIFO
+
 # `_ENUMERATE == 0` is a genuine exemption, not a hole: this refusal exists because concurrent
 # full-gate runs inflate each other's timings, and an enumerate pass starts NO suite and takes
 # NO lock, so it can inflate nothing. Without the exemption the shard-totality guard could not
@@ -1930,7 +1949,35 @@ run_suite() {
   else
     "$@" || rc=$?
   fi
+  (( _pj_mode == 0 )) && _provisional_append "$label" "$rc"
   _run_suite_verdict "$label" "$rc" "$start" "$tmp_before" "$_suite_log"
+}
+
+# #12013: when affected-tests.sh handed this runner a sidecar (SOLEUR_PJ_PROVISIONAL_FILE), record
+# each red the moment it is seen: one `label<TAB>rc<TAB>epoch` line, one short O_APPEND write (atomic).
+# The gate reads it only if its budget kills the run, so a red seen before the kill is not reported
+# as a deferral. Exactly two callers, one per run mode (_pj_fmt_done for the pool, the serial tail of
+# run_suite) so nothing is double-counted; _run_suite_verdict is NOT one (the pool reaches it at
+# drain too). `tee -a`, not `>>`: the sidecar path was already proven absolute, regular and writable by the
+# test below, and `tee` keeps the single append write; `>> "$f"` would add a site to the
+# fixture-relative-assert operand census for a path that census cannot see is already checked. A red that
+# finished but was not yet reaped when the budget killed the run is not recorded (lazy reap): that falls
+# back to the old deferral, the fail-safe direction. Only the runner's own `failed` class is recorded (a
+# named-signal status is unresolved, ADR-177, never a red). An interrupted run (_pj_sig) records nothing. Fail-open by design: a missing/unwritable sidecar changes nothing.
+_provisional_append() {  # _provisional_append <label> <rc>
+  local f="${SOLEUR_PJ_PROVISIONAL_FILE:-}" rc="${2:-}"
+  [[ "$f" == /* && -f "$f" && -w "$f" ]] || return 0
+  # An exit status: the bound makes "the writer records only what the reader accepts" hold by construction. It is
+  # unreachable today ($? and the worker's rc file are 0..255), so deleting it is an equivalent mutant: kept as
+  # defense in depth, not pinned by a row.
+  [[ "$rc" =~ ^[0-9]{1,3}$ ]] && (( 10#$rc >= 1 && 10#$rc <= 255 )) || return 0
+  # Exactly the runner's own `failed` class (suite_exit_class), so the sidecar and the drain verdict cannot
+  # disagree: 128, 193..255 and unnamed signals are reds the drain prints [FAIL] for; a named signal (the
+  # `killed` class, e.g. 130/137/143) is unresolved (ADR-177) and is never recorded. rc 0 is `ok`.
+  [[ "$(suite_exit_class "$rc")" == failed ]] || return 0
+  (( _pj_sig == 1 )) && return 0   # an interrupted run (INT/TERM) records nothing
+  printf '%s\t%s\t%s\n' "${1//[[:cntrl:]]/?}" "$(( 10#$rc ))" "${EPOCHSECONDS:-$(date +%s)}" | tee -a -- "$f" >/dev/null 2>&1 || true
+  return 0
 }
 
 # The post-exec half of run_suite, factored so the serial path and the parallel
@@ -2115,10 +2162,12 @@ _pj_submitted=0       # jobs the chokepoint handed the scheduler
 _pj_rendered=0        # jobs whose verdict was printed at drain
 _pj_unaccounted=0     # jobs submitted but never measured (UNACCOUNTED class)
 _pj_sig=0             # set by the INT/TERM trap armed with parallel mode
+_pj_fifo=0            # 1 = strict FIFO launch (SOLEUR_PJ_FIFO=1, the A/B control); 0 = conservative backfill
+_pj_draining=0        # set once by _pj_drain; until then a parked `*` suite is never released (#12231)
 _pj_cap=""            # per-run capture dir for <idx>.out/.err files
 _pj_queue=()          # FIFO of unlaunched job indices
 _pj_live_pids=()      # pids currently live (kept in sync with _pj_state)
-declare -a _pj_pid=() _pj_label=() _pj_tok=() _pj_argvs=() _pj_state=()
+declare -a _pj_pid=() _pj_label=() _pj_tok=() _pj_argvs=() _pj_state=() _pj_star=()
 declare -a _pj_rc=() _pj_start=() _pj_end=() _pj_solo=() _pj_tmp0=() _pj_tmpdelta=()
 # Width inputs, overridable for host classes the measured defaults misfit.
 _PJ_MEM_PER_SUITE_MB="${SOLEUR_TEST_SUITE_MEM_MB:-512}"
@@ -2139,12 +2188,15 @@ _PJ_HARD_CAP=$(( 10#${_PJ_HARD_CAP} ))
 # derived from the existing registration source by construction. What defers
 # under _pj_mode==1 is only `"$@"`: each registration becomes a job with an
 # index, a token set from scripts/lib/test-suite-lanes.sh, and a capture file
-# pair. A strict FIFO launches jobs while (a) the pool has a free slot and (b)
-# no token intersects a live job's set — `*` intersects everything and is the
-# drain barrier. `wait -n -p` reaps in completion order; every verdict prints
-# at drain in index order through _run_suite_verdict, so [ok]/[FAIL]/[KILLED]/
-# [TRIPWIRE]/[skip] lines, TEST_TIMING_LOG rows and the terminal marker are
-# produced by the same code as the serial path.
+# pair. The launcher (_pj_fill) walks the queue in registration order and starts a
+# job while (a) the pool has a free slot, (b) no token intersects a live job's set
+# and (c) none intersects a job still queued ahead of it (backfill; strict FIFO under
+# SOLEUR_PJ_FIFO=1) — `*` intersects everything, so a `*` job runs alone: the backfill pass parks it
+# and releases it at the drain (see _pj_fill).
+# `wait -n -p` reaps in completion order; every verdict prints at drain in index
+# order through _run_suite_verdict, so [ok]/[FAIL]/[KILLED]/[TRIPWIRE]/[skip] lines,
+# TEST_TIMING_LOG rows and the terminal marker are produced by the same code as
+# the serial path.
 
 _pj_say_serial() {  # _pj_say_serial <reason> — one announced fallback line.
   printf '[parallel] serial fallback — reason=%s. Rerun serial explicitly with SOLEUR_TEST_JOBS=1 or --jobs=1.\n' "$1" >&2
@@ -2152,6 +2204,10 @@ _pj_say_serial() {  # _pj_say_serial <reason> — one announced fallback line.
 
 _pj_resolve_run_mode() {
   _pj_mode=0
+  # SOLEUR_PJ_FIFO=1 restores the strict FIFO launch order this runner had before backfill (#12013). It is
+  # read once, here, and is the A/B control of the measurement; documented in this runner's header only.
+  _pj_fifo=0
+  [[ "${SOLEUR_PJ_FIFO:-}" == "1" ]] && _pj_fifo=1
   local want="${_JOBS_REQ:-${SOLEUR_TEST_JOBS:-}}"
   # THE DEFAULT. Unset resolves to serial — the explicit, measured choice:
   # parallel ships opt-in (the #7376 interference diagnosis closed 2026-10-20; the
@@ -2174,7 +2230,7 @@ _pj_resolve_run_mode() {
     _pj_say_serial "bash<5.1 (wait -n -p unavailable)"; return 0
   fi
   if [[ "$want" != "auto" ]] && (( 10#$want == 1 )); then return 0; fi  # explicit serial, silent
-  if ! declare -F lane_tokens_for >/dev/null 2>&1; then
+  if ! declare -F lane_tokens_for >/dev/null 2>&1 || ! declare -F lane_tokens_has_star >/dev/null 2>&1; then
     _pj_say_serial "lane-table-unavailable (scripts/lib/test-suite-lanes.sh)"; return 0
   fi
   if (( _pj_lock_held != 1 )); then
@@ -2234,15 +2290,18 @@ _pj_fmt_done() {  # _pj_fmt_done <idx> — the live reap line (#12013), one writ
   if [[ "$s" == *.* && "$e" == *.* ]]; then
     ms=$(( ( (${e%.*} * 1000000 + 10#${e#*.}) - (${s%.*} * 1000000 + 10#${s#*.}) ) / 1000 ))
   fi
-  if [[ "$rc" =~ ^[0-9]+$ ]] && (( rc >= 128 )); then
+  # Same classifier the drain verdict and the provisional-red sidecar use, so the three can never disagree:
+  # only a NAMED signal exit (the `killed` class) is "unresolved"; 128 and 193..255 are plain failures.
+  if [[ "$rc" =~ ^[0-9]+$ ]] && [[ "$(suite_exit_class "$rc")" == killed ]]; then
     note=" — signal-shaped, unresolved until drain"
   elif [[ "$rc" != 0 ]]; then
     note=" — provisional, verdict at drain"
   fi
   printf '[run] %s done (rc=%s%s)%s\n' "${_pj_label[j]//[[:cntrl:]]/?}" "$rc" "${ms:+, ${ms}ms}" "$note" >&2
+  _provisional_append "${_pj_label[j]}" "$rc"
 }
 
-_pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set.
+_pj_launchable() {  # _pj_launchable <idx> — free slot AND no token conflict vs the live set. FIFO-only form (SOLEUR_PJ_FIFO=1): the backfill pass in _pj_fill carries this rule inline.
   local idx="$1"
   (( _pj_live_n >= _pj_jobs )) && return 1
   local j
@@ -2280,13 +2339,70 @@ _pj_launch() {
   printf '[run] %s started (pid=%s)\n' "${_pj_label[idx]}" "${_pj_pid[idx]}" >&2
 }
 
-_pj_fill() {  # launch every queue head that is launchable (strict registration order)
-  while (( ${#_pj_queue[@]} > 0 )); do
-    _pj_launchable "${_pj_queue[0]}" || return 0
-    local idx="${_pj_queue[0]}"
-    _pj_queue=("${_pj_queue[@]:1}")
-    _pj_launch "$idx"
+_pj_fill() {  # launch what may launch, in registration order (conservative backfill; strict FIFO under SOLEUR_PJ_FIFO=1)
+  if (( _pj_fifo == 1 )); then
+    while (( ${#_pj_queue[@]} > 0 )); do
+      _pj_launchable "${_pj_queue[0]}" || return 0
+      local idx="${_pj_queue[0]}"
+      _pj_queue=("${_pj_queue[@]:1}")
+      _pj_launch "$idx"
+    done
+    return 0
+  fi
+  # Backfill (#12013). One pass over the queue in registration order, so the head is always the first
+  # candidate and a token-ready head is never delayed by an independent stream. A candidate launches iff
+  #   (i)   a slot is free,
+  #   (ii)  its tokens conflict with no LIVE suite  (live_tok: the union of the live suites' token sets),
+  #   (iii) its tokens conflict with no suite still QUEUED ahead of it  (skip_tok: the union of the token
+  #         sets of earlier candidates that stayed queued), so order among conflicting suites is preserved.
+  # `*` conflicts with everything, so a `*` job must run alone. It is PARKED (#12231): a parked `*` is
+  # invisible to backfill until the drain (it joins neither live_tok nor skip_tok, and sets no any_q), so its
+  # registration position delays nothing, and it is released only when the pool is empty after the pass.
+  # "Is a star" is decided ONCE, at submit, by lane_tokens_has_star (the tokenizer lane_tokens_conflict uses), and
+  # read here from _pj_star[idx]. Ordering: suites that share a token keep registration order; a `*` is exclusive
+  # but ordered LAST, in registration order among the `*` jobs. The release is one step after the pass: with
+  # _pj_draining set (by _pj_drain), an empty pool and a non-empty rest, the head of rest launches. Invariant: if
+  # _pj_live_n is 0 after the pass, rest holds only parked `*` jobs (a parked star joins neither live_tok nor
+  # skip_tok, so on an empty pool the first non-`*` candidate always launches); launching the head of a pool-empty
+  # queue is legal in any case. One `*` is released per fill: the next reap's fill releases the next, and after a
+  # torn reap (which never fills) the drain loop's own fill does. A fill has no _pj_sig check, so a reap fill can
+  # still release a star after the interrupt flag is set; _pj_drain's signal branch then TERMs it, as for any suite
+  # (accepted edge, CTO ruling). A star is registered before the runtime ceiling may lapse but starts at the end of
+  # the run, so the ceiling (checked at registration only) does not hold it back. Registration, render order and
+  # verdicts are untouched (only launch timing moves). With any_q now set only by non-`*` candidates, `any_q == 0`
+  # is also what skips lane_tokens_conflict when nothing is queued ahead.
+  # lane_tokens_conflict stays the only comparison. A launch cannot unblock an earlier skipped candidate (it only
+  # adds to the live set), so one pass is complete; the work per call is linear in the queue, not quadratic.
+  (( ${#_pj_queue[@]} > 0 )) || return 0
+  local live_tok="" skip_tok="" any_q=0 j idx tok ok
+  local -a rest=()
+  for (( j = 0; j < _pj_next; j++ )); do
+    [[ "${_pj_state[j]:-}" == "live" ]] && live_tok+=" ${_pj_tok[j]}"
   done
+  for idx in "${_pj_queue[@]}"; do
+    if (( _pj_live_n >= _pj_jobs )); then rest+=("$idx"); continue; fi
+    tok="${_pj_tok[idx]}"; ok=1
+    if (( ${_pj_star[idx]:-1} == 1 )); then
+      rest+=("$idx"); continue   # parked until the drain (see the comment above)
+    fi
+    lane_tokens_conflict "$tok" "$live_tok" && ok=0
+    if (( ok == 1 && any_q == 1 )) && lane_tokens_conflict "$tok" "$skip_tok"; then ok=0; fi
+    if (( ok == 1 )); then
+      _pj_launch "$idx"
+      [[ " $live_tok " == *" $tok "* ]] || live_tok+=" $tok"
+    else
+      rest+=("$idx"); any_q=1
+      # Append-only union, de-duplicated by whole token SET (a set already present as a word-bounded run is not
+      # appended again), so repeated identical sets do not grow the string that lane_tokens_conflict re-splits on
+      # every call. A multi-token set is appended whole: dedupe never drops a word, so no decision changes.
+      [[ " $skip_tok " == *" $tok "* ]] || skip_tok+=" $tok"
+    fi
+  done
+  if (( _pj_draining == 1 && _pj_live_n == 0 && ${#rest[@]} > 0 )); then
+    _pj_launch "${rest[0]}"
+    rest=("${rest[@]:1}")
+  fi
+  if ((${#rest[@]})); then _pj_queue=("${rest[@]}"); else _pj_queue=(); fi
 }
 
 _pj_reap() {  # reap ONE completed worker; returns 1 when nothing live/observeable.
@@ -2363,6 +2479,8 @@ _pj_submit() {  # _pj_submit <label> <argv...> — the run_suite dispatch under 
   _pj_label[idx]="$label"
   _pj_state[idx]=queued
   _pj_tok[idx]="$(lane_tokens_for "$label" "$@" 2>/dev/null || printf '*')"
+  # The predicate's presence is checked once, by _pj_resolve_run_mode (lane-table-unavailable falls back to serial).
+  if lane_tokens_has_star "${_pj_tok[idx]}"; then _pj_star[idx]=1; else _pj_star[idx]=0; fi
   local enc=""
   printf -v enc '%q ' "$@"
   _pj_argvs[idx]="$enc"
@@ -2398,8 +2516,20 @@ _pj_render() {  # _pj_render <idx> — print one suite's block in registration o
 
 _pj_drain() {
   (( _pj_mode == 1 )) || return 0
-  while (( _pj_live_n > 0 )) && (( _pj_sig == 0 )); do _pj_reap || break; done
-  (( _pj_sig == 0 )) && _pj_fill || true
+  _pj_draining=1   # from here _pj_fill releases the parked `*` jobs, one per empty pool (#12231); called once, never reset
+  # Fill until empty (#12013): the torn-reap branch of _pj_reap never calls _pj_fill, and under backfill one
+  # fill may leave a queued suite whose blocker has just been reaped. A launch from a single trailing fill
+  # would leave that suite live at render and mark it UNACCOUNTED, so reap and fill alternate until nothing
+  # is live or queued. The signature guard stops a pass that changed nothing (an unlaunchable queue).
+  local _dsig=""
+  while (( _pj_sig == 0 )); do
+    while (( _pj_live_n > 0 )) && (( _pj_sig == 0 )); do _pj_reap || break; done
+    (( _pj_sig == 0 && ${#_pj_queue[@]} > 0 )) || break
+    _pj_fill
+    [[ "${#_pj_queue[@]}:$_pj_live_n" == "$_dsig" ]] && break
+    _dsig="${#_pj_queue[@]}:$_pj_live_n"
+    (( _pj_live_n > 0 )) || break
+  done
   if (( _pj_sig == 1 )); then
     # Interrupted: TERM live workers explicitly — a signal targeted at the
     # runner (kill -TERM <runner-pid>) never reaches them the way a
@@ -4231,7 +4361,9 @@ _aff_runner_banner() {
 # token-drift-workflow-causes, grep-q-pipe-guard, lint-encryption-posture, gitleaks-merge-commit,
 # lint-gh-argv-arg-live — all withdrawn to edge-selection); re-pinned at 114-5.
 # #9826: +2 always-on (the image-cve public-claim guard + verdict-consumers sweep, both repo-global); re-pinned at 116-5.
-_MIN_ALWAYS_ON_DECLARED=111
+# #10448: +1 always-on (boundary-prefix wholesale dir-glob sweep; measured-verdict install, 718 ms / selection over the 25% bar); re-pinned at 117-5.
+# #9659: +1 always-on (lint-gh-dedupe-shape, repo-global); re-pinned at 118-5.
+_MIN_ALWAYS_ON_DECLARED=113
 # An explicit non-`all` TEST_GROUP ask scopes the walk itself — every
 # registration that reaches the chokepoint is in the named group and the
 # classifier's `group` rung selects it unconditionally. The nested enumerate
@@ -5490,6 +5622,32 @@ fi
 
 # Pre-suite bash/python tests — scripts shard.
 if want_scripts; then
+  # START-FIRST (#12013): these arms are registered first on purpose. In the pooled
+  # local gate a suite starts as the registration stream reaches it, so an empty-token
+  # suite such as an arm starts as soon as a slot is free. (A `*` drain-barrier suite
+  # no longer holds later launches back: it is parked until the drain, #12231.)
+  # The arms include the longest suite of the gate (-a), so registered late
+  # they ended the run. The three move together: -b and -c are the next-longest
+  # suites after -a, so leaving them registered late would let them end the run
+  # instead. Applies to a pooled run only (the
+  # local --affected gate); serial runs and CI shard legs get the same order but no
+  # wall-time change. Pinned by scripts/lib/test-suite-lanes.test.sh section 7;
+  # numbers and rationale: ADR-242, decision 29.
+  #
+  # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
+  # battery was the test-scripts shard's worst leg, so it registers THREE times —
+  # the -a/-b/-c arms that follow carrying complementary --rows ranges over its
+  # DECLARED_TOTAL gated sites. Unconditional (no relevance gate,
+  # so no skip_suite pairing — the suite is never declined). The boundary lives in
+  # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
+  # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
+  # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
+  # the battery must land in the same commit as a re-split of these ranges.
+  # Literal path in argv, never "$f": the totality checker resolves each arm's
+  # battery from the run_suite command token and dies on <unresolved>.
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-158
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 159-316
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-473
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
@@ -5505,7 +5663,7 @@ if want_scripts; then
   run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt --index-file AGENTS.md AGENTS.md AGENTS.rules.md
   # Hard-rule body-weakening gate (#6103, ADR-091): hermetic fixtures + a live
   # calibration (base HEAD → zero findings on the committed corpus). The real
-  # merge-blocking gate is the standalone `rule-body-lint` ci.yml job with
+  # merge-blocking gate is the `rule-body-lint` member step of ci.yml's `guards-ruleset` umbrella with
   # --base <merge-base>; this live line is the calibration + orphan-suite guard.
   run_suite "tests/scripts/lint-rule-bodies" python3 -m unittest tests.scripts.test_lint_rule_bodies
   run_suite "scripts/lint-rule-bodies-live" python3 scripts/lint-rule-bodies.py --check --base HEAD
@@ -5565,7 +5723,7 @@ if want_scripts; then
   # check reports green", which is precisely the defect class it exists to catch, and it
   # caught this. A registration here must be unconditional or absent.
   #
-  # It runs in the `markdown-lint` job of .github/workflows/pr-quality-guards.yml, which
+  # It runs in the `markdown-lint` member of the `quality-guards` umbrella in .github/workflows/pr-quality-guards.yml, which
   # does `npm ci --ignore-scripts` first. That is a runner lint-orphan-test-suites
   # recognises, and row W1e of the suite itself asserts the workflow still carries the
   # step, so deleting it reddens the suite rather than silently ending its coverage.
@@ -5615,6 +5773,13 @@ if want_scripts; then
   # tree.
   run_suite "scripts/lint-gh-argv-arg" bash scripts/lint-gh-argv-arg.test.sh
   run_suite "scripts/lint-gh-argv-arg-live" python3 scripts/lint-gh-argv-arg.py
+  # #9659. Same both-halves shape: a bare/silent `VAR=$(gh issue|pr list|search)` dedupe
+  # capture under `set -euo pipefail` aborts the step mid-alarm with no breadcrumb — the
+  # class #9612 normalized kept re-growing past its enumeration. The unit suite proves the
+  # classifier's buckets on fixtures (and carries the planted-defect verify-the-verifier);
+  # the live scan proves every census site is wrapped, ||-handled, or `# dedupe:`-marked.
+  run_suite "scripts/lint-gh-dedupe-shape" bash scripts/lint-gh-dedupe-shape.test.sh
+  run_suite "scripts/lint-gh-dedupe-shape-live" python3 scripts/lint-gh-dedupe-shape.py
   # #7695 review: actionlint flags unparseable run: bodies, but lint-workflows.sh treats its rc=1 as
   # accepted (census tracked in #7042), so the class was green in CI. This one exits non-zero.
   run_suite "scripts/lint-workflow-run-body-syntax" python3 scripts/lint-workflow-run-body-syntax.py
@@ -5938,7 +6103,7 @@ if want_scripts; then
   # check-tc-document-sha.sh is deliberately NOT registered here, and an earlier revision of
   # this block that did register it was wrong twice over. (a) It reintroduces #5780: that
   # script's TC_VERSION-bump bypass needs the step-scoped GITHUB_BASE_REF /
-  # MERGE_GROUP_BASE_SHA that ci.yml gives the `tc-document-sha-guard` job and NOT this one
+  # MERGE_GROUP_BASE_SHA that ci.yml gives the `tc-document-sha-guard` member step of `guards-ruleset` and NOT this one
   # (`test-scripts` passes only GITHUB_TOKEN), so on the merge queue a legitimate stale-SHA +
   # TC_VERSION-bump PR would go green on its own required context and red here. (b) Its stated
   # rationale -- catching a normaliser weakening that "silently re-bases every drift
@@ -6056,6 +6221,10 @@ if want_scripts; then
   # gates (the #5417 class). The soak authorizes an irreversible PAT revoke, so its arms
   # returning the right codes is not optional coverage.
   run_suite "scripts/zot-soak-6122-arms" bash scripts/followthroughs/zot-soak-6122.test.sh
+  # #12229: exit-code harness for the arm-token revisit probe (notify-only; exits 2, 3 or 5, never 0 or 1).
+  # Registered explicitly (orphan-suite class above); a probe that stops at its first member would go quiet
+  # while the token is still in config.
+  run_suite "scripts/arm-token-revisit-12229" bash scripts/followthroughs/arm-token-revisit-12229.test.sh
   # #6616: exit-code harness for the host_name-mislabel follow-through's decision tree (identity,
   # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
   # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.
@@ -6070,6 +6239,7 @@ if want_scripts; then
   # sweeper closes issue 8651 as completed — the observed-evidence condition zot-soak-6122.sh's
   # WEB_BLOCKER arm requires — so every sweeper exit code is driven by a fixture.
   run_suite "scripts/web-fresh-boot-zot-8651" bash scripts/followthroughs/web-fresh-boot-zot-8651.test.sh
+  run_suite "scripts/inngest-luks-field-8525" bash scripts/followthroughs/inngest-luks-field-8525.test.sh
   # #10585: exit-code harness for the standing first-deploy watchdog probe. Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). Its exit code is the ONLY signal on
   # the standing tracker's boot→first-deploy obligation — a vacuous PASS, a reachable 0 (would
@@ -6175,6 +6345,12 @@ if want_scripts; then
   # SCOPED (an inngest-only source is channel_dark, never row_absent); incident matching is
   # anchored on the row's own dt; raw incident objects are projected before they reach stdout.
   run_suite "scripts/send-failed-alert-probe-8097" bash scripts/followthroughs/send-failed-alert-probe-8097.test.sh
+  # #12180: verdict harness for the egress-gw probe-silence soak follow-through. Registered explicitly
+  # (orphan-suite class above). Its exit code is the closure of the tracker (0 closes; 2 not yet; 3 =
+  # an unanswered read; 5 = a named cause; 1 is NEVER emitted). Load-bearing arms: the 4 h window
+  # boundary on non-collinear fixtures, a truncated incident list is unknown never pass, exact-name
+  # incident matching, the canary-still-declared exit 5, and no response body or credential in output.
+  run_suite "scripts/egress-gw-probe-silent-12180" bash scripts/followthroughs/egress-gw-probe-silent-12180.test.sh
   # #8076: fixture harness for the run-report-exit first-contact follow-through. Registered
   # explicitly (orphan-suite class above). Its load-bearing arm is ROW SHAPE: the live Better
   # Stack row nests the pino payload under `.message` of the decoded `raw`, and the probe's
@@ -6571,7 +6747,7 @@ if want_scripts; then
   # directory, so they are registered here explicitly. This is the
   # ratchet SUITE's only registration: lint-orphan-test-suites.sh refuses double coverage,
   # so the ci.yml step that used to run it was removed. The ratchet LINT itself runs as a
-  # step in the required `rule-body-lint` job, which is the depth-0 base it needs.
+  # step in the `rule-body-lint` member block of the required `guards-ruleset` job, which is the depth-0 base it needs.
   run_suite "scripts/classify-workflow-transitions" bash scripts/classify-workflow-transitions.test.sh
   run_suite "scripts/measure-plan-sharp-edges-turns" bash scripts/measure-plan-sharp-edges-turns.test.sh
   # #8377 / ADR-235 — the regen-if-stale gate in front of the now-untracked KB index.
@@ -6760,6 +6936,8 @@ if want_scripts; then
   # against synthetic fixtures and the real tree by this suite). Registered HERE because nothing
   # auto-discovers tests/scripts/.
   run_suite "tests/scripts/hcloud-token-readonly-no-fallback-scan" bash tests/scripts/test-hcloud-token-readonly-no-fallback-scan.sh
+  # G1 PR-2 (#9294): the deploy Access token is forgotten from state (removed block), never destroyed.
+  run_suite "tests/scripts/deploy-access-token-forget" bash tests/scripts/test-deploy-access-token-forget.sh
   # apply-github-infra.yml::apply soleur-infra token shape (#9360): the third consumer of the
   # mint composite gets the shape rows its two siblings carry. tests/scripts/ is not
   # auto-discovered, so this line IS the registration.
@@ -6987,6 +7165,19 @@ if want_scripts; then
   run_suite "scripts/watch-brand-hex-triggers-11177" bash scripts/watch-brand-hex-triggers-11177.test.sh
   run_suite "scripts/watch-shard-balance-11564" bash scripts/watch-shard-balance-11564.test.sh
   run_suite "scripts/watch-wallclock-p90-11774" bash scripts/watch-wallclock-p90-11774.test.sh
+  # #12156 (ADR-276 amendment): the oracle-lane driver EXECUTED (fixture-diff battery over the real driver, the
+  # surface/exclusion/extent mutation rows, output-grammar pins, the lock and fail-closed defaults, and the
+  # manifest↔registration parity assertion). Same explicit-registration and LAST-in-block reasons as above.
+  # Declared edge set, not always-on.
+  run_suite "scripts/ci-oracle-lane" bash scripts/ci-oracle-lane.test.sh
+  # #12089 review: the umbrella-aggregate parity lint — for each umbrella job
+  # (guards-ruleset, guards-advisory in ci.yml; quality-guards, quality-advisory
+  # in pr-quality-guards.yml; secret-guards in secret-scan.yml) asserts every
+  # `- id:` member step appears in exactly one `member(...)` call in the
+  # aggregate run block, every member `if:` carries `!cancelled()`, and an
+  # `aggregate` step exists. Live lint (no .test.sh wrapper); appended LAST in
+  # the block so no earlier registration's positional-shard ordinal moves.
+  run_suite "scripts/lint-umbrella-aggregate" bash scripts/lint-umbrella-aggregate.sh
 fi
 
 # Named bun-test entries — bun shard.
@@ -7359,21 +7550,11 @@ if want_scripts; then
         continue
       fi
     fi
-    # ROWS-SPLIT (#11562 / lint-orphan #8864 shape): as one ~25-min atomic suite this
-    # battery was the test-scripts shard's worst leg, so it registers THREE times —
-    # the -a/-b/-c arms below carrying complementary --rows ranges over its
-    # DECLARED_TOTAL gated sites. Unconditional like its siblings (no relevance gate,
-    # so no skip_suite pairing — the suite is never declined). The boundary lives in
-    # the FLAG ARGUMENT, never the label; the union tiling 1..DECLARED_TOTAL is
-    # asserted by plugins/soleur/test/scripts-shard-totality.test.sh, and the ranges
-    # must pin to distinct legs in the committed manifests. A DECLARED_TOTAL bump in
-    # the battery must land in the same commit as a re-split of these ranges.
+    # The replay arms register at the top of this shard (start-first block); this arm
+    # keeps the bare suite file out of the plain registration below. The test on the
+    # next line is read by lint-orphan-test-suites.sh and scripts-shard-totality, so
+    # the `if` stays.
     if [[ "$f" == "plugins/soleur/test/ci-pr-affected-replay.test.sh" ]]; then
-      # Literal path in argv, never "$f": the totality checker resolves each
-      # arm's battery from the run_suite command token and dies on <unresolved>.
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
-      run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-596
       continue
     fi
     run_suite "$f" bash "$f"

@@ -151,6 +151,7 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-anthropic-content-position-live"
   "scripts/lint-doppler-description-length-live"
   "scripts/lint-dual-lockfile-live"
+  "scripts/lint-gh-dedupe-shape-live"
   "scripts/lint-guard-contract-live"
   "scripts/lint-feature-map-coverage-live"
   "scripts/lint-integration-env-gates-live"
@@ -210,6 +211,12 @@ ALWAYS_ON_SUITES=(
   "scripts/lint-workflow-errexit-capture"
   "scripts/lint-workflow-issue-write-scope"
   "scripts/lint-workflow-step-env-refs"
+  # #10448 boundary-prefix sweeps .claude/hooks{,/lib} and plugins/soleur/scripts{,/lib}
+  # wholesale (4 dir globs, ~170 files) — a file class scanned wholesale like the ratchets
+  # above. Measured-verdict install (CTO ruling 2026-11-05): 718 ms measured,
+  # selection over the 25% bar on both PR5d readings (97/200 conservative,
+  # 48/151 excluded) — the policy's own >25% answer, never an amended bar.
+  "plugins/soleur/test/boundary-prefix.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-completeness.test.sh"
   "plugins/soleur/test/lint-bot-synthetic-statuses.test.sh"
   "plugins/soleur/test/lint-distribution-content.test.sh"
@@ -490,6 +497,12 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/skills/linear-fetch/test/parity.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_BEARER_FETCH_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # SUT (plugins/soleur/test/bearer-fetch.test.sh:32)
+  "plugins/soleur/test/bearer-fetch.test.sh"
+  "scripts/lib/bearer-curl.sh"  # real read: the env -u list parity test (plugins/soleur/test/bearer-fetch.test.sh:292)
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
   ".github/workflows/ci.yml"  # plugins/soleur/test/ci-head-verdict.test.sh:111
   "plugins/soleur/test/ci-head-verdict.test.sh"
@@ -498,6 +511,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_PREACTIVATION_TEST_SH_PATHS=(
   ".github/workflows/ci.yml"  # plugins/soleur/test/ci-pr-affected-preactivation.test.sh:434
   "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_CLOUDFLARE_READONLY_TEST_SH_PATHS=(
+  "apps/web-platform/infra/seo-config-rules.tf"  # real read: snapshot pin counts rules{}/ssl= against the SUT header (#10479 drift pin)
+  "plugins/soleur/scripts/cloudflare-readonly.sh"  # SUT
+  "plugins/soleur/test/cloudflare-readonly.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_CLOUD_INIT_STRIP_HELPERS_MUTATION_TEST_SH_PATHS=(
@@ -514,6 +533,11 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_MAIN_ALERT_GATE_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_MAIN_ALERT_GATE_WORKFLOW_WIRING_TEST_SH_PATHS=(
   ".github/workflows/codeql-main-alert-gate.yml"  # plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh:2
   "plugins/soleur/test/codeql-main-alert-gate-workflow-wiring.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_CODEQL_TO_ISSUES_SWEEP_WIRING_TEST_SH_PATHS=(
+  ".github/workflows/codeql-to-issues.yml"  # plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh:25
+  "plugins/soleur/test/codeql-to-issues-sweep-wiring.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_DEPLOY_ARM_TEST_SH_PATHS=(
@@ -534,6 +558,13 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DESTRUCTIVE_COMMAND_GUARD_MUTATION_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
   ".gitleaks.toml"  # plugins/soleur/test/gitleaks-rules.test.sh:2
   "plugins/soleur/test/gitleaks-rules.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HOLD_GATE_EVAL_TEST_SH_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md"  # real read: the runbook wording pin (plugins/soleur/test/hold-gate-eval.test.sh:914)
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # sourced by the SUT and copied into the mutant sandboxes (plugins/soleur/test/hold-gate-eval.test.sh:1375)
+  "plugins/soleur/skills/ship/scripts/hold-gate-eval.sh"  # SUT
+  "plugins/soleur/test/hold-gate-eval.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_LEFTHOOK_TYPECHECK_HEAP_TEST_SH_PATHS=(
@@ -775,6 +806,7 @@ AFFECTED_PLUGINS_SOLEUR_TEST_REAL_SDK_ASK_PROBE_WORKFLOW_TEST_SH_PATHS=(
   "apps/web-platform/server/agent-runner-sandbox-config.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/gate-flow.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/gate-types.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
+  "apps/web-platform/server/approval/ops.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/approval/tools.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/destroy-ask-classifier.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
   "apps/web-platform/server/destroy-ask-lane.ts"  # delete-sensitive: TABLE-STALE / UNRESOLVED-IMPORT red the suite on a delete or rename (#11647 review)
@@ -1071,6 +1103,13 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_REDACT_SENTINEL_TEST_SH_PATHS=(
   "plugins/soleur/skills/incident/test/redact-sentinel.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
+# pull-card.test.sh greps and parses the marker registry through a $REPO_ROOT path the derive does not
+# select. The three query-script names are skill-text needles, accepted in scripts/ci-pr-affected-audit.accept.tsv.
+AFFECTED_PLUGINS_SOLEUR_SKILLS_INCIDENT_TEST_PULL_CARD_TEST_SH_PATHS=(
+  "apps/web-platform/server/git-lock-marker-telemetry.ts"  # plugins/soleur/skills/incident/test/pull-card.test.sh:17
+  "plugins/soleur/skills/incident/test/pull-card.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 # plugins/soleur/test/scheduled-realtime-probe-guard (#12009) — executes the probe step body parsed out of the workflow and
 # compares its setup-node version with apps/web-platform/.nvmrc, both through $ROOT-built paths no derivation channel reaches.
 AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULED_REALTIME_PROBE_GUARD_TEST_SH_PATHS=(
@@ -1089,6 +1128,14 @@ AFFECTED_PLUGINS_SOLEUR_TEST_WEB_HOST_ESCROW_DIAGNOSE_WORKFLOW_TEST_SH_PATHS=(
   "knowledge-base/engineering/operations/runbooks/web-host-replace.md"
   "plugins/soleur/test/web-host-escrow-diagnose-workflow.test.sh"  # self-inclusion
   "scripts/lib/test-affected-paths.sh"                              # THIS FILE
+)
+# plugins/soleur/test/mint-origin-ca-cert (#10479, ADR-321 slice 2) - parses the workflow and drives the body script through
+# $REPO-built paths no derivation channel reaches, so a later edit to either must still select this guard.
+AFFECTED_PLUGINS_SOLEUR_TEST_MINT_ORIGIN_CA_CERT_TEST_SH_PATHS=(
+  ".github/workflows/mint-origin-ca-cert.yml"
+  "scripts/mint-origin-ca-cert.sh"
+  "plugins/soleur/test/mint-origin-ca-cert.test.sh"  # self-inclusion
+  "scripts/lib/test-affected-paths.sh"                # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_APPLY_DELIVERY_GAP_FOLLOWER_TEST_SH_PATHS=(
   "scripts/apply-delivery-gap.sh"
@@ -1147,7 +1194,19 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SCHEDULE_TASK_DESIGN_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
+  "plugins/soleur/skills/one-shot/references/operator-constraints.md"  # T18p derives the writer strings from it
   "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/scripts/gate-or-skip.sh"                             # T19 runs the wrapper against a fake tree
+  "plugins/soleur/scripts/grok-pre-push-gate.sh"                       # T19 slices its two sentinel blocks
+  "plugins/soleur/skills/work/SKILL.md"                                # T19 call-site pin (step 9 fence, fan-out lead)
+  "plugins/soleur/skills/review/SKILL.md"                              # T19 call-site pin (lead gate)
+  "plugins/soleur/skills/test-fix-loop/SKILL.md"                       # T19 negative: stays token-blind
+  "lefthook.yml"                                                       # T19 negative: stays token-blind
+  "plugins/soleur/scripts/affected-tests.sh"                           # T19 negative: the gate itself never reads the token
+  "plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh"         # T19 negative: its own exit-42 contract
+  "scripts/hooks/pre-push"                                             # T19 negative: opt-in hook stays token-blind
+  "plugins/soleur/scripts/lib/affected-tests/"                         # T19 negative: sourced libs stay token-blind
+  "plugins/soleur/scripts/grok-fidelity-gate.sh"                       # T19 pins its rule-budget skip comparison
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -1232,6 +1291,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   ".github/workflows/git-data-rung2-rehearsal.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:1896
   ".github/workflows/git-data-cutover.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:9122
   ".github/workflows/cutover-inngest.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:4824
+  ".github/workflows/build-inngest-bootstrap-image.yml"  # plugins/soleur/test/terraform-target-parity.test.ts:4583 readFileSync's the workflow for the arm↔gate parity pin
   ".github/workflows/inngest-key-rotate.yml"
   # #11294: terraform-target-parity.test.ts reads the single-key rotation workflow at runtime (existsSync-guarded: literal -target pin) and parses scripts/key-rotate.sh's gate table against the HCL (Guard 5).
   ".github/workflows/key-rotate.yml"
@@ -1694,6 +1754,9 @@ AFFECTED_TESTS_SCRIPTS_ARGV_BEARER_SWEEP_PATHS=(
   "apps/web-platform/infra/seccomp-bwrap.json"
   "scripts/inngest-liveness-classify.sh"
   "scripts/inngest-restart-poll-classify.sh"
+  # S4 manifest member (test-argv-bearer-sweep.sh:4336,5466): the stage names the script in S4_SCRIPT_MANIFEST /
+  # S4_REPLAY_FILES and executes/scans its real content under the recording curl.
+  "scripts/key-rotate.sh"
   # Real reads: the S4/HMAC census and Rule-E sweep grep the CONTENT of every `git ls-files 'scripts/*.sh'`
   # member (test-argv-bearer-sweep.sh:3288,4264) — an edit to any of these changes the derived set the census compares.
   "scripts/betterstack-ingest-probe.sh"
@@ -1994,6 +2057,20 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
   "scripts/guard-vacuity-floor.test.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/test-all.sh"
+)
+
+# scripts/ci-oracle-lane (#12156, ADR-276 amendment) — the suite EXECUTES the oracle-lane driver against throwaway git
+# fixtures (surface members, every exclusion, the hunk-extent arms, output grammar, the activation lock and the
+# fail-closed defaults) and asserts manifest↔registration parity for scripts/ci-oracle-lane-suites.txt. ci.yml is an
+# edge because the suite pins the oracle-selection/oracle-index-check wiring and the ORACLE-ONLY-SKIP arm. Declared
+# edge set, not always-on; self-includes this file per the SELF-INCLUSION rule.
+AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-oracle-lane-suites.txt"
+  "scripts/ci-oracle-lane.sh"
+  "scripts/ci-oracle-lane.test.sh"
+  "scripts/ci-pr-selection.sh"  # ci-oracle-lane.test.sh:1050 reads is_doc_path live for the O-DOCPARITY byte-equality check
+  "scripts/lib/test-affected-paths.sh"
 )
 
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
@@ -2379,6 +2456,21 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_PARITY_TEST_SH_PATHS=(
   "plugins/soleur/skills/constraint-scaffold/references/"
   "plugins/soleur/skills/constraint-scaffold/test/parity.test.sh"
   "scripts/lib/test-affected-paths.sh"
+  "scripts/test-all.sh"
+)
+
+# plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh — derived edges could not reach its real inputs
+# (they are composed through $REAL_SCRIPTS/$REAL_REFS/$OLD_FIXTURE, never literal); declared from the paths it reads:
+# the SUT and the whole scripts/+references/ dirs it `cp -R`s into per-case sandboxes (:142), the pinned emitted
+# fixture, and the sourced git-fixture-env (:96). Fixture-shape apps/web-platform literals (:129, :368) are scratch-repo
+# mentions — accept rows, not edges (suite :8 "the real apps/web-platform tree is never touched").
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_REFRESH_STAGE_A_TEST_SH_PATHS=(
+  "plugins/soleur/skills/constraint-scaffold/references/"
+  "plugins/soleur/skills/constraint-scaffold/scripts/"
+  "plugins/soleur/skills/constraint-scaffold/test/fixtures/"
+  "plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh"
+  "plugins/soleur/test/lib/git-fixture-env.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
   "scripts/test-all.sh"
 )
 
@@ -3628,6 +3720,18 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/lint-umbrella-aggregate — text-parses the three workflow files carrying
+# umbrella jobs (the `- id:` step census, `member(` calls, `if:` lines) plus a
+# `- id: aggregate` discovery scan over .github/workflows/*.yml for the census
+# invariant. Edges cover the glob, not just today's three files: a new umbrella
+# in a fourth file feeds the verdict.
+AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
+  ".github/workflows/"
+  "scripts/lint-umbrella-aggregate.sh"
+  "scripts/lib/umbrella-member.sh"  # the canonical member() the (f) pin sources
+  "scripts/lib/test-affected-paths.sh"
+)
+
 # scripts/check-cloudflare-token-drift — scans .github/ workflows and actions for token drift.
 AFFECTED_SCRIPTS_CHECK_CLOUDFLARE_TOKEN_DRIFT_PATHS=(
   ".github/"
@@ -4157,6 +4261,12 @@ AFFECTED_PLUGINS_SOLEUR_TEST__BASE_NOTICE_FRONTMATTER_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   "scripts/lib/test-affected-paths.sh"               # THIS FILE
 )
+# Retained per deferred-item AC 6 while the suite is ALWAYS_ON (dead for selection — rung 1
+# short-circuits — and moot to the audit census; the #11648 demotion precedent keeps the edge
+# set for a future re-pricing). KNOWN under-declaration by design: the suite sweeps
+# .claude/hooks{,/lib} + plugins/soleur/scripts{,/lib} wholesale (the always_on install's
+# reason) but this block only declares the named hooks edges — if the suite is ever withdrawn
+# to edge-selection, plugins/soleur/scripts/ diffs would silently under-select until widened.
 AFFECTED_PLUGINS_SOLEUR_TEST_BOUNDARY_PREFIX_TEST_SH_PATHS=(
   "${_CLOSURE_LEAF_SCRATCH_ROOT[@]}"
   ".claude/hooks/brand-hex-commit-gate.sh"
@@ -4764,6 +4874,16 @@ AFFECTED_SCRIPTS_LINT_GH_ARGV_ARG_LIVE_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+# scripts/lint-gh-dedupe-shape — the suite `cp -r`s the whole real .github tree into a scratch repo and
+# runs the linter over it (a planted-regression probe on each workflow), so EVERY .github file's state
+# feeds the verdict; dir entry, not a per-workflow name list.
+AFFECTED_SCRIPTS_LINT_GH_DEDUPE_SHAPE_PATHS=(
+  ".github/"
+  "scripts/lint-gh-dedupe-shape.py"
+  "scripts/lint-gh-dedupe-shape.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+
 # apps/web-platform/infra/inngest-luks-sole-copy — derivation cannot reach these: the suite sources the
 # shared HCL lexer, yaml-parses the real infra-validation workflow for its pull_request.paths, and reads
 # the runbook + postmerge skill bodies for the H1b/H2 read-back parity checks.
@@ -4778,13 +4898,12 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
 
 # plugins/soleur/test/ci-pr-affected-replay-{a,b,c} (#11562 --rows arms of one suite file) — the rows
 # grep, awk and cp REAL files (the sibling test scripts for the pin row, the preactivation script for
-# the GIT_ var census, the required-checks fixture copy) and EXECUTE the observation-window probe under
-# a stub gh; the suite file is shared by all three labels, so all three arrays carry the same edges.
+# the GIT_ var census, the required-checks fixture copy); the suite file is shared by all three
+# labels, so all three arrays carry the same edges.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_A_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4793,7 +4912,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_B_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4802,7 +4920,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"

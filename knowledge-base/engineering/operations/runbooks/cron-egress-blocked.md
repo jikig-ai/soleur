@@ -367,6 +367,7 @@ table, so the mapping cannot silently desync from `server.tf`):
 | `dedicated-inngest-8288-accept` | the dedicated Inngest host egress rule (`ip daddr 10.0.1.40 tcp dport 8288 accept`, #6178 / ADR-100 cutover) is absent from `SOLEUR-EGRESS` — post-cutover this default-drops every `inngest.send()` container→`10.0.1.40:8288` POST (missed reminders/crons) | confirm `cron-egress-nftables.sh` still carries the `10.0.1.40 tcp dport 8288 accept` rule and the firewall service restarted; the IP is pinned to `inngest-host.tf:33` `inngest_private_ip` |
 | `dedicated-inngest-8443-accept` | the dedicated Inngest host's TLS egress rule (`ip daddr 10.0.1.40 tcp dport 8443 accept`, #10136) is absent from `SOLEUR-EGRESS` — once the Inngest link flag flips, every container→`10.0.1.40:8443` handshake is default-dropped (the egress gateway's own `dport 8443` accept is another daddr and does not count) | confirm `cron-egress-nftables.sh` still carries the `10.0.1.40 tcp dport 8443 accept` rule and the firewall service restarted; the IP is pinned to `inngest-host.tf` `inngest_private_ip` |
 | `dedicated-git-data-22-accept` | the git-data transport's egress rule (`ip daddr 10.0.1.20 tcp dport 22 accept`, #8211) is absent from `SOLEUR-EGRESS`, or is listed after the terminal default drop — the rule text is what this sentinel checks, not that a container can reach the host. Diagnosis (CTO, 2026-10-24, about 90% confidence): with `GIT_DATA_STORE_ENABLED=true` the container's `git fetch`/`git push` over `ssh://git@10.0.1.20/...` was default-dropped here and hung until its timeout, while the host's own `web-git-data-probe` (host OUTPUT, never this chain) stayed green | confirm `cron-egress-nftables.sh` still carries the `10.0.1.20 tcp dport 22 accept` rule ahead of the default drop and the firewall service restarted; the IP is pinned to `git-data.tf` `local.git_data_private_ip` (parity pinned by `cron-egress-nftables.test.sh`) |
+| `web-peer-relay-8443-accept` | the host-to-host session-proxy relay's egress rule (`ip daddr { 10.0.1.10, 10.0.1.11 } tcp dport 8443 accept`, #12167) is absent from `SOLEUR-EGRESS`, names a different peer set (a /24, a third host, one host only) or port, or is listed after the terminal default drop — the rule text is what this sentinel checks, not that a container can reach the peer. Effect: `proxyClientToOwner` (`session-proxy.ts`) dials `wss://<peer private ip>:8443` from inside the app container, so a non-owner host's relay to the owner is default-dropped here and hangs until its timeout, while the peer's own listener probe (host OUTPUT, never this chain) stays green | confirm `cron-egress-nftables.sh` still carries the web-peer `tcp dport 8443 accept` rule ahead of the default drop and the firewall service restarted; the set is pinned to the `variables.tf` `var.web_hosts` private IPs (parity pinned by `cron-egress-nftables.test.sh` and `cron-egress-firewall.test.sh`) |
 
 The fix lands via the existing `apply-web-platform-infra.yml` on merge for web-1
 (the resource is tainted and re-fires; no manual apply) and via
@@ -910,18 +911,171 @@ them) flips **Settings → Agent web access** off.
 domain-fronting/SNI drift (Squid sees the CONNECT line only; the tunnel is
 opaque). Both are named residuals in the ADR.
 
-#### `soleur-egress-gw-probe-silent-prd` (lower_than fleet size / 900 s)
+#### `soleur-egress-gw-probe-silent-prd` (higher_than 0 missing hosts / 900 s)
 
-**What it means.** Fewer DISTINCT `host_name`s emitted an `egress_gw_probe` row
-under `SYSLOG_IDENTIFIER=egress-gw-probe` than `var.web_hosts` over the last 15
-minutes — one host's beats can no longer mask the other's silence (pre-2026-10-12
-this alert counted ROWS, so web-1 emitting kept a dead web-2 pipeline green).
+**What it means.** The alert's value is the number of roster hosts that did NOT
+emit an `egress_gw_probe` row under `SYSLOG_IDENTIFIER=egress-gw-probe` in the
+last 15 minutes: `var.web_hosts` minus the DISTINCT emitting `host_name`s, floored
+at 0 (healthy 0, one host dark 1, all dark 2). It pages on any value above 0.
+One host's beats cannot mask the other's silence (pre-2026-10-12 this alert
+counted ROWS, so web-1 emitting kept a dead web-2 pipeline green).
 The heartbeat is emitted by `run_egress_gw_probe` in `cron-egress-resolve.sh`
 every 5 minutes per host. A host's absence means its resolver timer stopped, its
 journal→Vector pipeline broke (a stale, birth-frozen `vector.toml` Source-4
 allowlist on that host is a measured failure mode — the tag must exist in the
 config the agent reads), or the probe function errored — that host's gateway
 allow/deny verification is dark.
+
+**Why the metric is inverted (2026-11-05, #12180).** The previous shape was
+`lower_than` the roster size over the emitting-host count. It opened incident
+1047829421 on a healthy fleet. Incident 1031046761 of the same alert stayed open
+for 24 days: it began as a true positive (web-2 dark), probe rows were measured
+arriving on 2026-11-02, and nothing resolved it until we did. The vendor's incident
+object carries no evaluated value (checked 2026-11-06: no key beyond the alert's
+own threshold `value`), so the mechanism is **an inference, not a measurement**:
+an evaluator step that cannot be evaluated is read as 0, and 0 against `lower_than 2`
+is a false page while 0 against `higher_than 0` reads healthy. Two alternatives are
+NOT excluded and the canary could not separate them: partial visibility of one host's
+rows in the evaluator's window (the hot window is about 40 minutes per
+`betterstack-log-query.md`; the archive lag was measured at about 66 minutes) reads 1
+under either operator, and a vendor that never auto-resolves
+incidents is not fixed by inverting the metric. What IS proven (read-only, counts
+only) is the query: it returned 0 on healthy data, 1 with one host excluded and 2 for
+an identifier no host emits. The vendor evaluator is not proven. `treat_as_zero` is
+kept per the CTO ruling; it is not what detects a fully dark window (the aggregate
+always returns one row, the roster size), and it is the source of the quiet residual
+below.
+
+**Two limits that follow.**
+
+- The canary (#12180) fired and was retired (record below). It proved non-zero delivery on an empty count for
+  this query shape, not general evaluator health, so a green alert is evidence of health only next to
+  `rows_in_window` showing rows on both hosts.
+- An evaluator error or timeout also reads 0 under `treat_as_zero`, so that failure
+  is quiet here: the old shape would have paged and this one does not. The sibling
+  detectors cover less than "host death": the Sentry cron check-in
+  (`cron-egress-resolve`) has no host dimension, so it covers only a fleet-wide dead
+  resolver timer, and `op=egress_gw_probe_fail` fires only on a probe that ran and
+  returned `result=fail`. A Vector, allowlist or journal break on ONE host (the
+  measured failure mode above) has no independent detector until the heartbeat
+  poller tracked in #12190. The count also compares to the roster size, not host
+  identity, so an extra or renamed emitter, or a row with an empty `host_name`,
+  counts as a host and could mask a dead one.
+
+**Canary (retired by #12189; throwaway, #12180).** `soleur-egress-gw-probe-silent-canary-prd` ran the
+same query against `egress-gw-probe-canary-absent`, an identifier no host emits, so
+it read the roster size and opened an incident that never recovers (mirror issue #12242). It was read as
+`canary=fired` on 2026-11-06 (tracker #12189), and the push-triggered apply of the change that carries this
+edit destroys the pair. The soak probe stays as the way to reproduce that finding. Read the verdict, not the dashboard:
+`doppler run -p soleur -c prd_terraform -- bash -c 'BETTERSTACK_API_TOKEN="$BETTERSTACK_API_TOKEN_READONLY" bash scripts/followthroughs/egress-gw-probe-silent-12180.sh'`
+(the probe reads `BETTERSTACK_API_TOKEN`; `prd_terraform` also holds the account-wide
+read/write token under that exact name, so without the remap the probe would run with
+it, and the remap keeps the run on the read-only token. The `BETTERSTACK_QUERY_*` names
+that `rows_in_window` reads are in the same config and need no mapping) prints one
+`SOLEUR_EGRESS_GW_SILENT_SOAK` line with twelve fields, among them `canary=`,
+`canary_alert_live=`, `prod_incident=`, `prod_alert=`, `anchor_resolved_by=`,
+`rows_in_window=` (the trailing 15 minutes of rows per host), `newer_prod_incident=`,
+`quiet_age_s=` (seconds since `quiet_since`: the later of the pinned apply floor,
+2026-11-06T12:16:03Z, and the latest resolve of any production incident) and
+`pre_floor_open_prod_incident=`. The daily sweeper reads it while tracker #12189 is enrolled
+(its follow-through directive), so a finding waits up to a day unless the probe is run by hand after the
+retirement apply.
+
+Read the table against `verdict=` and the one `ACTION REQUIRED:` or `TRANSIENT:` line the probe
+prints beside it; several rows share the same `canary=` and `canary_alert_live=` values. The probe code is
+unchanged by the retirement, so every row still matches a verdict it can print; the rows that name a declared or
+live canary (`canary_declared=1`, `canary_alert_live=1`, the exit 5 asking for the deletion) or that prescribe
+creating or re-creating one are reachable only until the retirement apply lands, and are historical after it.
+
+| Observation | Reading | Response |
+|---|---|---|
+| `verdict=not_yet`, `canary=fired`, `prod_alert=ok`, `newer_prod_incident=0` and `quiet_age_s` below 14400 | the production alert has been quiet for less than the 4 h soak counted from the apply floor (earliest soak-held verdict about 16:16Z on 2026-11-06: that is exit 5 asking for the canary deletion, and exit 0 comes only after it) | rerun later; not a finding |
+| `verdict=action_required`, `canary=fired`, `prod_alert=ok`, `newer_prod_incident=0`, `quiet_age_s` at least 14400, rows on both hosts, message says delete the canary | the evaluator delivers a non-zero value for this shape and the production alert stayed quiet for 4 h after the apply | the retirement apply deletes the pair (#12189; it carried the owner's go-ahead and the standalone `[ack-destroy]` line); the sweep after the deletion returns exit 0 and closes the tracker if the vendor still lists the canary incident, otherwise the retired row below applies (Unverified A) |
+| `newer_prod_incident=1` (a production incident other than the anchor started at or after the apply floor minus 300 s) | a recurrence on the inverted shape (it is permanent: exit 5 at every sweep, resolved or not, until a human closes the tracker by hand or re-pins) | the poller (#12190); `rows_in_window` separates an evaluator fault (rows on both hosts) from an emitter or ingest fault (a host with none); never a revert; any Better Stack write needs the owner's per-command go-ahead |
+| `pre_floor_open_prod_incident=1` with `verdict=not_yet` or `action_required` | an exact-name production incident that started before the apply is still open (one that already resolved, like 1048111600, never counts) | `not_yet` until 15300 s past `quiet_since`, then the poller (#12190); a manual resolve is a Better Stack write needing the owner's per-command go-ahead |
+| `verdict=action_required`, message says a roster host has no rows | the production alert is green but a roster host emits nothing in the trailing 15 minutes | the decode ladder below; the host is the finding, not the alert |
+| `verdict=unknown` with `rows_in_window=unknown` after the soak held | the warehouse read did not answer on the pass path (or `BETTERSTACK_QUERY_*` is unbound), so a pass cannot be granted; the tracker's follow-through directive lists `BETTERSTACK_QUERY_HOST`, `_USERNAME` and `_PASSWORD` in `secrets=` as of 2026-11-06 | rerun with the `prd_terraform` config; never read as healthy |
+| `verdict=unknown` and the message names the apply floor, the canary alert's `created_at` or the canary incident | the pinned floor and a live cross-check disagree: the pin sits later than the canary by more than 300 s (this verdict is raised after the production-alert and recurrence findings, so it never masks them) | move `APPLY_FLOOR_EPOCH` back, or delete and re-create the canary (a forward re-pin made while the canary still exists trips this verdict at every sweep, so it needs the canary re-created too); after a reshape of the production alert's evaluated query, `on_missing_data` or `query_period`, re-pin by hand in a follow-up commit measured from that apply run |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says the evaluator is blind | the evaluator reads 0 for this shape | build the heartbeat poller (#12190); keep the production alert armed |
+| `verdict=not_yet`, `canary=absent`, `canary_alert_live=1`, message says the canary alert was created N s ago | one evaluation cycle (20 minutes) has not passed | rerun later; not a finding |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=1`, message says PAUSED | someone paused the canary | not an evaluator finding; unpausing is a Better Stack write needing the owner's per-command go-ahead |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=1` | the canary alert was deleted or never created (the apply has not run, alert-count cap, failed create) | hotfix PR removing the canary resources (the retirement record below lists the sites), then the poller; not an evaluator finding |
+| `verdict=action_required`, `canary=absent`, `canary_alert_live=0`, `canary_declared=0`, message says retired | the canary was deleted and its incident is no longer listed, so `canary=fired` cannot be re-read | close tracker #12189 by hand citing the last comment on #12189 that read `canary=fired`, and remove its `follow-through` label so the sweeper stops scanning it; do NOT build the poller on this (whether the vendor keeps a canary incident after its alert is deleted is unverified: Unverified A below) |
+| `prod_alert=absent` or `prod_alert=shape` | the production alert is not running as designed | restore it by apply; do not read anything else until it is |
+| `prod_alert=paused` | the page is off | unpausing is a Better Stack write needing the owner's per-command go-ahead; do not leave it paused |
+| a production incident still open (`prod_incident=open` for 1047829421, or `pre_floor_open_prod_incident=1`) and `rows_in_window` shows rows on both hosts now | evaluator, partial visibility, or a vendor that never auto-resolves | the poller (#12190); any pause or manual resolve is a Better Stack write needing the owner's per-command go-ahead; never a revert (a revert restores the shape that misfired) |
+| a production incident still open and one host has no rows now | real silence | the decode ladder below; the alert is right |
+
+**`anchor_resolved_by` is informational; no verdict depends on it.** OBSERVED on 2026-11-06 (read-only
+incident API): `resolved_by` is null on production-alert incident 1048111600 (the old alert shape, started
+07:45Z, `resolved_at` 12:10Z, before the apply), and is "API" on 1047829421 (resolved through the API at
+07:47:00.612Z, not by the alert). Still NOT measured: that the null is the evaluator's own recovery rather than
+another vendor path (the "auto-resolved" reading of 1048111600 is an inference from the null), that incidents of the new shape auto-resolve, whether the canary incident survives the
+deletion of its alert, why the canary incident started 64 s before its alert's `created_at`, and what bumps
+alert `updated_at` (inferred vendor churn about every five minutes; the probe never reads it). The earlier
+wording that a null `resolved_by` was ASSUMED to mean "the alert recovered it" is superseded by this paragraph
+and the ADR-218 amendment of 2026-11-06 titled "the soak probe is floored at the apply" (#12189).
+
+A Better Stack write (resolving or pausing an incident by hand) needs the owner's
+explicit per-command go-ahead, and so did deleting the canary (a Better Stack
+destroy, authorized by the standalone `[ack-destroy]` merge-commit line recorded below).
+
+**Canary retirement record (#12189).** Both `egress_gw_probe_silent_canary` resources and the derived
+SQL local were removed from `betterstack-logs-alerts.tf`; the push-triggered apply destroys exactly those two
+resources (the plan reads 2 to destroy). The two bare `-target` lines stay in `apply-web-platform-infra.yml` for
+that one apply (a bare `-target` on an address with no configuration plans its DELETE), the two canary
+addresses sit in `INTENDED_DESTROYS` in `tests/scripts/test-infra-privileged-tier-census.sh` so the structure
+suite accepts the bare targets, and the merge commit carries `[ack-destroy]` on its own line. Counts moved
+19 to 18 in `logs-alert-query-period-ceiling.test.sh` (`EXPECT_BLOCKS`), in the `== 19` anchor of
+`betterstack-send-failed-alert-mutation.test.sh` and in both census floors of `betterstack-alert-structure.test.sh`;
+`egress-gw-alert.test.sh` dropped its canary block and now pins exactly two `egress_gw_probe_silent*` resources.
+Merge when no apply run is in progress or queued: the destroy is authorized by the `[ack-destroy]` line in this
+one merge commit, and `apply-web-platform-infra.yml` and `apply-deploy-pipeline-fix.yml` share one concurrency
+group, which keeps one running and one pending run (a running run is never cancelled, a pending one is replaced by
+a newer arrival from either workflow). A superseded run has no ack, sees the 2 pending destroys and fails the
+guard closed (nothing is destroyed), and because the bare targets stay, every later infra-path merge then fails the
+same way. The way out is #12270 (remove the two bare `-target` lines and the two census entries), or a standalone
+`[ack-destroy]` line on the next merge commit, used only with the owner's go-ahead and only after the run's list of
+resources to be destroyed shows exactly the two canary addresses. Read the apply log for
+`Plan: 0 to add, 0 to change, 2 to destroy`; the ack covers a count, not these two addresses, so any other number
+is reported, not acked. Do not start #12270 until the apply log shows `2 destroyed`. Removing the two `-target`
+lines and the two census entries is #12270 (after the apply; it also flips the present-tense lines of this
+record), and the probe's transport extraction is #12271. The full site list is the `RETIREMENT:` line in the probe header, with its
+STATUS line. This was a deletion, not a revert of the inverted shape.
+
+[Update 2026-11-07 (#12270): in this subsection, the sentence "edit destroys the pair" in the paragraph "Canary (retired by #12189; throwaway, #12180)", the "whether the canary incident survives the deletion of its alert" clause in the paragraph about `anchor_resolved_by`, the decision-table rows that cite "Unverified A", and the statements that the two bare targets and census entries stay, that the merge must be timed and carry `[ack-destroy]`, and "Do not start #12270 until the apply log shows `2 destroyed`", are superseded by the update paragraph below, which also supersedes both "Unverified after the canary's deletion" bullets (A and B) with what was observed]
+
+**Unverified after the canary's deletion.** Both facts depend on vendor behavior nothing in this repository
+measures.
+
+- **A. Whether the vendor keeps listing the canary incident after its alert is deleted.** If it does, the sweep
+  after the deletion returns exit 0 and closes tracker #12189. If it does not, the probe returns the distinct exit 5
+  "canary retired, incident unreadable": tracker #12189 is then closed by hand citing the latest comment on
+  #12189 that read `canary=fired`, its `follow-through` label removed so the sweeper stops scanning it. Do not
+  build the poller (#12190) on that evidence.
+- **B. Whether mirror issue #12242 closes itself.** The mirror closes an issue only when the incident leaves the
+  vendor's open list. If the vendor keeps the incident open after the alert is gone, the mirror keeps posting
+  "Still open" every 15 minutes (about 96 a day), and closing the issue by hand files a fresh P1 at the next
+  run. Resolving the incident is a Better Stack write that needs the owner's per-command go-ahead; the state is
+  reported on tracker #12189 rather than closed by hand.
+
+**Update 2026-11-07 (#12270).** Apply run 42369320061 (head `d8758629231f84feb18400915bb3b6715cd6642f`) logged
+`Plan: 0 to add, 0 to change, 2 to destroy` and `Apply complete! Resources: 0 added, 0 changed, 2 destroyed.`,
+destroying `logtail_exploration_alert.egress_gw_probe_silent_canary` and
+`logtail_exploration.egress_gw_probe_silent_canary`. The window the record above describes is closed: #12270 removed
+the two bare `-target` lines from `apply-web-platform-infra.yml` and the two `INTENDED_DESTROYS` entries from
+`tests/scripts/test-infra-privileged-tier-census.sh` in one change, and the condition for starting it (the apply log
+showing `2 destroyed`) was met. With the destroys applied, the removal is expected to plan no destroy and
+carries no `[ack-destroy]` line. The #11785 precedent is the same removal of retained targets after their destroys applied
+(apply run 41306010098: `No changes`, then `Apply complete! Resources: 0 added, 0 changed, 0 destroyed.`); it is one
+precedent, so the post-merge apply is the check, and a destroy there is reported, never acked. What was observed for
+the two unverified bullets above: (A) the vendor kept listing the canary incident after its alert was deleted (it
+left the open list by 12:02Z, see B). The read recorded on tracker #12189
+(`https://github.com/jikig-ai/soleur/issues/12189#issuecomment-6707181573`) shows `verdict=pass`, `canary=fired`,
+`canary_alert_live=0` and `prod_alert=ok`; the exit contract maps `verdict=pass` to exit 0, and no later sweep is
+recorded here. (B) Mirror issue #12242 closed itself at 2026-11-07T12:02Z ("incident `1048213461` is no longer in
+Better Stack's open list"), with no hand close and no Better Stack write. The probe's transport extraction remains
+#12271.
 
 **Decode ladder:**
 

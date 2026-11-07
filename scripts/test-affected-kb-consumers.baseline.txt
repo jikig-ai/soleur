@@ -2,6 +2,7 @@
 .claude/hooks/browser-snapshot-credential-guard.test.sh	knowledge-base/project/specs
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/architecture/decisions/ADR-282-sole-copy-luks-volume-protection-set.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/cron-egress-blocked.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
@@ -12,6 +13,7 @@
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-provision-rehearsal.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/key-rotation.md
+.claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/npm-publish-trusted-publisher.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md
 .claude/hooks/grep-q-pipe-guard.test.sh	knowledge-base/project
@@ -32,6 +34,7 @@
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/diagrams/model.likec4.json
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/architecture/domain-model.md
+.claude/hooks/lib/context-sanitize.test.sh	knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/brainstorms/archive
 .claude/hooks/lib/context-sanitize.test.sh	knowledge-base/project/plans
@@ -82,11 +85,9 @@ plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowled
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/brainstorms/archive
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/plans
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/specs
+plugins/soleur/skills/incident/test/pull-card.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	knowledge-base/engineering/security/skill-overrides
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
-plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/engineering/architecture/diagrams
-plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/marketing/brand-guide.md
-plugins/soleur/test/boundary-prefix.test.sh	knowledge-base/product/roadmap.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
 plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
@@ -115,6 +116,7 @@ plugins/soleur/test/go-hold-routing.test.sh	knowledge-base/project/specs
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/arm5-delivered.txt
 plugins/soleur/test/go-session-gates.test.sh	knowledge-base/project/specs/archive/20261013-051752-feat-one-shot-7450-git-root-anchor-untrusted/arm4-probe/commands/zzzprobe.md
+plugins/soleur/test/hold-gate-eval.test.sh	knowledge-base/engineering/operations/runbooks
 plugins/soleur/test/infra-validation-detect.test.sh	knowledge-base/project/plans
 plugins/soleur/test/kb-search-support-path.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/lint-questionnaire-identity.test.sh	knowledge-base/project/questionnaires/README.md
@@ -146,6 +148,11 @@ plugins/soleur/test/vendor-pin-integrity.test.sh	knowledge-base/engineering/poli
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/betterstack-emitter-read	knowledge-base/engineering/operations/runbooks/inngest-server.md
 scripts/ci-draft-light	knowledge-base/engineering/operations/runbooks/cloud-scheduled-tasks.md
+scripts/ci-oracle-lane	knowledge-base
+scripts/ci-oracle-lane	knowledge-base/engineering/architecture/diagrams
+scripts/ci-oracle-lane	knowledge-base/project
+scripts/ci-oracle-lane	knowledge-base/project/learnings
+scripts/ci-oracle-lane	knowledge-base/project/specs
 scripts/ci-pr-selection	knowledge-base
 scripts/ci-pr-selection	knowledge-base/engineering/architecture/diagrams
 scripts/ci-pr-selection	knowledge-base/project
@@ -154,6 +161,7 @@ scripts/ci-pr-selection	knowledge-base/project/specs
 scripts/ci-pr-selection	knowledge-base/project/specs/archive
 scripts/ci-pr-selection	knowledge-base/project/specs/archive/20261013-062704-feat-one-shot-9321-scoped-app-token-doppler/bootstrap.sh
 scripts/ci-push-dedupe	knowledge-base
+scripts/ci-push-dedupe	knowledge-base/engineering/architecture/diagrams
 scripts/ci-push-dedupe	knowledge-base/project/specs
 scripts/compound-promote	knowledge-base
 scripts/compound-promote	knowledge-base/project
@@ -174,6 +182,7 @@ scripts/compound-promote	knowledge-base/project/promotion-config.yml
 scripts/compound-promote	knowledge-base/project/specs/archive/20261013-014038-feat-learnings-retrieval-bench/spec.md
 scripts/compound-promote-draft-edit-10552	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/content-publisher-residue	knowledge-base/marketing/distribution-content
+scripts/egress-gw-probe-silent-12180	knowledge-base/project
 scripts/followthrough-predicate-parity	knowledge-base/engineering/operations/runbooks/followthrough-convention.md
 scripts/followthrough-varq-ban	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/followthrough-varq-ban	knowledge-base/project
@@ -288,6 +297,7 @@ tests/hooks/drop-sentinel-parity	knowledge-base/project
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks
 tests/hooks/emissions	knowledge-base/engineering/operations/runbooks/ci-test-scripts-sharding.md
 tests/scripts/argv-bearer-sweep	knowledge-base/engineering/operations/runbooks/infra-credential-tiers-8209.md
+tests/scripts/argv-bearer-sweep	knowledge-base/project
 tests/scripts/betterstack-query-archive	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 tests/scripts/git-data-birth-readiness-gate	knowledge-base
 tests/scripts/git-data-birth-readiness-gate	knowledge-base/engineering/operations/runbooks/git-data-birth.md

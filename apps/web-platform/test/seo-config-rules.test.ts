@@ -412,3 +412,100 @@ describe("seo-config-rules.tf Email Obfuscation Configuration Rule guard", () =>
     ).toMatch(targetRe);
   });
 });
+
+// ORIGIN-TLS CANARY RULE (ADR-321, #10479). The rule is declared as ONE `dynamic "rules"` block whose for_each is
+// empty unless var.enable_origin_tls_canary_rule is true, so merging the code changes nothing at the edge (the
+// per-merge apply targets this whole resource). The static helpers above deliberately do not see a dynamic block
+// (`\brules\s*\{` does not match `dynamic "rules" {`), so these pins are the only guard on it: what it matches,
+// what it sets, that it is the only one, and that it is OFF by default.
+describe("seo-config-rules.tf origin-TLS canary rule (ADR-321)", () => {
+  const CANARY_EXPRESSION =
+    '(http.host eq "app.soleur.ai" and http.request.uri.path eq "/health" and any(http.request.headers["x-origin-tls-probe"][*] eq "1"))';
+
+  /** The ruleset body, comment-stripped. */
+  function body(): string {
+    return extractResourceBody(
+      stripHclComments(readFileSync(TF_PATH, "utf-8")),
+      RESOURCE_NAME,
+    );
+  }
+
+  /** Every `dynamic "rules"` block's text, brace-matched. */
+  function dynamicRuleBlocks(): string[] {
+    const b = body();
+    const out: string[] = [];
+    const opener = /\bdynamic\s+"rules"\s*\{/g;
+    let m: RegExpExecArray | null;
+    while ((m = opener.exec(b)) !== null) {
+      const open = b.indexOf("{", m.index);
+      let depth = 0;
+      for (let i = open; i < b.length; i++) {
+        if (b[i] === "{") depth++;
+        else if (b[i] === "}" && --depth === 0) {
+          out.push(b.slice(open + 1, i));
+          opener.lastIndex = i + 1;
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  test("exactly one dynamic rules block exists (a second would be an unguarded rule)", () => {
+    expect(dynamicRuleBlocks()).toHaveLength(1);
+  });
+
+  test("it is gated on var.enable_origin_tls_canary_rule and empty otherwise", () => {
+    const block = dynamicRuleBlocks()[0];
+    expect(block).toMatch(
+      /for_each\s*=\s*var\.enable_origin_tls_canary_rule\s*\?\s*toset\(\["canary"\]\)\s*:\s*toset\(\[\]\)/,
+    );
+  });
+
+  test("the variable exists with a FALSE default (merge must be a no-op) and is a bool", () => {
+    const vars = stripHclComments(readFileSync(VARIABLES_PATH, "utf-8"));
+    const m = vars.match(/variable\s+"enable_origin_tls_canary_rule"\s*\{([\s\S]*?)\n\}/);
+    expect(m, "variable enable_origin_tls_canary_rule must be declared").not.toBeNull();
+    expect(m![1]).toMatch(/type\s*=\s*bool/);
+    expect(m![1]).toMatch(/default\s*=\s*false/);
+  });
+
+  test("the canary expression is EXACTLY host + /health + the probe header", () => {
+    const block = dynamicRuleBlocks()[0];
+    expect(quotedAttr(block, "expression")).toBe(CANARY_EXPRESSION);
+  });
+
+  test("the canary sets exactly one setting, ssl = strict, via an enabled set_config", () => {
+    const block = dynamicRuleBlocks()[0];
+    expect(block).toMatch(/action\s*=\s*"set_config"/);
+    expect(block).toMatch(/enabled\s*=\s*true/);
+    const params = block.match(/action_parameters\s*\{([^}]*)\}/)?.[1] ?? "";
+    const keys = params
+      .split("\n")
+      .map((l) => l.trim().match(/^([a-z_]+)\s*=/)?.[1])
+      .filter((k): k is string => Boolean(k));
+    expect(keys).toEqual(["ssl"]);
+    expect(params).toMatch(/ssl\s*=\s*"strict"/);
+  });
+
+  test("the canary does not touch the static rules: still exactly three, flexible rule unchanged", () => {
+    expect(allRuleBlocks()).toHaveLength(3);
+    expect(quotedAttr(flexibleSslRule(), "expression")).toBe(ADOPTED_SSL_EXPRESSION);
+  });
+
+  test("the canary is appended AFTER the adopted flexible rule (set_config: the last match wins)", () => {
+    const b = body();
+    const flexAt = b.search(/ssl\s*=\s*"flexible"/);
+    const dynAt = b.search(/\bdynamic\s+"rules"\s*\{/);
+    expect(flexAt).toBeGreaterThan(-1);
+    expect(dynAt).toBeGreaterThan(flexAt);
+  });
+
+  test("the probe sends the same header the rule matches", () => {
+    const probe = readFileSync(
+      path.join(REPO_ROOT, "apps/web-platform/infra/origin-tls-probe.sh"),
+      "utf-8",
+    );
+    expect(probe).toContain("x-origin-tls-probe: 1");
+  });
+});

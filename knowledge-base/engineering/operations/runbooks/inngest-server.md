@@ -26,10 +26,12 @@ Per ADR-030 the Inngest server runs as a single-host durable trigger layer servi
 | Link TLS: flag, flip, rollback, post-merge acts A0 to A7, replace duration, reading `tls-health`, certificate expiry (#10136) | [§ Link TLS (#10136)](#link-tls-10136) |
 | Private-NIC boot event after a host replace (#8539) | [§ Reading the private-NIC boot event](#reading-the-private-nic-boot-event-8539) |
 | `inngest_pull_fatal attempt=N` / provision-unit stages after a host replace (#8562) | [§ Provision unit (#8562)](#provision-unit-8562) |
-| Flush latch stands on a `done` host / `op=arm` refused at G3.7 | expected — [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
-| Deliberate SECOND FLUSHALL on the same host (#7777) | `gh workflow run cutover-inngest.yml -f op=reflush` — [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush-7777) |
+| Flush latch stands on a `done` host | expected, the latch refuses a second FLUSHALL on purpose. `op=arm` is retired (#9927 item 8): [§ Retired cutover verbs](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8); history in [§ Dedicated-host cutover](#dedicated-host-cutover-phase-2-opexecute-gated-sequence--ref-6178), G3.7 post-cutover status |
+| Deliberate SECOND FLUSHALL on the same host (#7777) or a re-cutover | no dispatch: `op=reflush` and `op=arm` are retired (#9927 item 8). Needs a reviewed re-introduction (revert of the retirement PR); see [§ Retired cutover verbs and the re-cutover / second-FLUSHALL path](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8) |
+| `apply_target=inngest-host-replace` fails at the inherited-`done` preflight naming `DOPPLER_TOKEN_INNGEST_FLIP_READ` | [§ The inherited-`done` preflight, repair line](#the-inherited-done-preflight-how-it-reads-the-flag-and-why-8252-9927) |
 | First boot or reboot fails with `stage=unpointed_raw_refused`, `reopen_not_luks` or `inngest-luks-FAILED` (after the #9786 host replace) | read the stage and its `detail=` in Better Stack ([log query](betterstack-log-query.md)); meaning of each refusal: [cutover runbook, "After the host replace that carries #9786"](inngest-luks-cutover-6894.md) |
 | Choosing rollback on a `done` host | one-way on this volume — [§ Rollback sequence](#rollback-sequence-p1-13--mirrors-the-forward-gate-stop-the-dedicated-host-first), then the G3.7 post-cutover status |
+| Pre-drafted user notice after a total loss (#10664) | [notice runbook](inngest-store-total-loss-user-notice.md) — text, constraints and fill fields; send conditions are the CLO's call |
 
 ## Inherited `done` after a host replace (#7228)
 
@@ -52,8 +54,11 @@ is the reasoning that produced a second stranded host on 2026-09-17.
 
 `apply-web-platform-infra.yml`'s `inngest_host_replace` job reads the flag before applying and,
 on `done`, emits a `::warning::` and writes the recovery below into the job summary. It does not
-block — the replace is often exactly what you want and the recovery is one dispatch — and it
-degrades open on an unreadable flag.
+block on a value it has read — the replace is often exactly what you want and the recovery is
+one dispatch — but it **fails closed on an unreadable flag** (since #9927 item 8, 2026-11-05;
+it used to degrade open): an empty `DOPPLER_TOKEN_INNGEST_FLIP_READ`, or a Doppler read that
+cannot be trusted, fails the step and therefore the job. See
+[§ The preflight, how it reads the flag and why](#the-inherited-done-preflight-how-it-reads-the-flag-and-why-8252-9927).
 
 **Recovery — one dispatch, then an approval, no data loss:**
 
@@ -142,60 +147,167 @@ Nothing was written in any of these cases. The anchor reads `HCLOUD_TOKEN_READON
 #10664 (2026-10-23) there is no fallback to the read/write `HCLOUD_TOKEN`, which no longer exists in
 `prd_terraform` (names-only listing, 2026-10-20). A missing or unusable read-only token is
 `unreadable`. A transient Doppler auth or network failure clears on re-dispatch; a secret that is truly absent
-is restored by the owner (`infra-credential-tiers-8209.md` step O5) before a re-dispatch can pass. The same generation scope applies to op=arm G3.7's
-liveness signal and to op=luks-cutover / op=luks-rollback G3, so **all four ops now also refuse
-while the Hetzner API or the HCLOUD token is unavailable** — including op=luks-rollback (retired by #8285 PR B,
-so three ops today; the sentence is kept as written).
+is restored by the owner (`infra-credential-tiers-8209.md` step O5) before a re-dispatch can pass. The same generation scope applied to op=arm G3.7's
+liveness signal and to op=luks-cutover / op=luks-rollback G3, so those ops also refused
+while the Hetzner API or the HCLOUD token was unavailable. All three are retired (op=luks-rollback by #8285 PR B;
+op=arm and op=luks-cutover by #9927 item 8, 2026-11-05), so today the surviving readers of the generation scope are
+`op=resume` G3 and `op=execute` 2.0's reads (`scripts/cutover-inngest.sh`, `_flip_liveness_count`).
 
-**Do NOT re-arm.** The monotonic flush latch on `/mnt/data` survives the replace and will refuse
-it. If the intent is a deliberate SECOND flush on the same host — not a recovery — the verb is
-`op=reflush` (see [§ Authorizing a second FLUSHALL](#authorizing-a-second-flushall-opreflush-7777)).
+**Do NOT re-arm.** `op=arm` no longer exists (retired 2026-11-05, #9927 item 8), and the monotonic
+flush latch on `/mnt/data` survives the replace and would have refused it anyway. A deliberate
+SECOND flush on the same host — not a recovery — has no dispatch either: see
+[§ Retired cutover verbs and the re-cutover / second-FLUSHALL path](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8).
 For diagnosis only, `INNGEST_DIAGNOSTIC_BOOT=1` starts SQLite-only and serves nothing.
+
+### The inherited-done preflight: how it reads the flag and why (#8252, #9927)
+
+This section holds the rationale that used to sit as comments above the preflight step in
+`apply-web-platform-infra.yml` (moved here on 2026-11-05 to keep that workflow under its file-size
+gate, `plugins/soleur/test/workflow-file-size.test.ts`). The step's name in the workflow is
+`Preflight - inherited-done check, fails closed on a blind instrument (#8252, #9927)`. The preflight itself
+came from PR #8252 (merged 2026-09-17).
+
+**Why the step exists (2026-09-17 incident).** A replace of this host leaves its scheduler
+refusing to start, every time, and nothing said so before the step existed. `INNGEST_CUTOVER_FLIP`
+lives in Doppler and outlives the host. The matching `done-owner` marker lives on the host root
+disk, which a replace destroys. So the new machine inherits a `done` it never earned, and
+`inngest-server-flip-guard.sh` correctly refuses a prod start on it (#7228): the guard is
+preventing a SECOND prod scheduler, not malfunctioning. Measured: two replaces, 76 minutes with no
+live scheduler, and the cause stayed invisible until the host journal was read. The step exists so
+that the recovery is known BEFORE the outage rather than after.
+
+**What it reads, and with which credential.** The read uses the read-only repo secret
+`DOPPLER_TOKEN_INNGEST_FLIP_READ` (Doppler service token `inngest-ci-flip-read`, `access = "read"`,
+project `soleur-inngest`, config `prd`; Terraform: `doppler_service_token.inngest_flip_read` and
+`github_actions_secret.doppler_token_inngest_flip_read` in `apps/web-platform/infra/inngest-flip-read-token.tf`,
+minted by the standard per-merge `apply-web-platform-infra` run). Before #9927 item 8 the same read
+used the read/write arm token and silently skipped when that secret was empty. A read token still
+reaches the WHOLE config (`INNGEST_REDIS_LUKS_KEY`, `INNGEST_TLS_KEY`, `INNGEST_SIGNING_KEY` and
+`INNGEST_EVENT_KEY` live there), so the token bounds writes, not reads.
+
+**What "fails closed" covers.** The step fails the job (exit 1, `continue-on-error` removed) when
+the instrument cannot be trusted, and only then:
+
+- `DOPPLER_TOKEN_INNGEST_FLIP_READ` is empty (the secret is not published yet, or a bad rotation);
+- the names list (`doppler secrets --only-names --json -p soleur-inngest -c prd`) cannot be
+  trusted: `doppler` or `jq` missing, a non-zero exit, empty or non-JSON output, or an empty object;
+- `INNGEST_CUTOVER_FLIP` is present in the names list but the `get` of it fails.
+
+`INNGEST_CUTOVER_FLIP` absent from a trusted names list is the normal pre-cutover state: the step
+warns "unset" and proceeds. A **successful** read of any value (`done`, `armed`, `flipping`,
+`flushed`, anything else, or an empty string) still warns and proceeds, by design: the replace is
+often exactly what the owner wants and the recovery is one dispatch. The step also refuses to run
+under shell tracing (exit 78), because the inline `DOPPLER_TOKEN=... doppler` assignment would
+otherwise print the token.
+
+**The exit code is captured, not discarded (why the read is not `2>/dev/null || true`).** That form
+collapsed seven conditions into one "unreadable" message: secret absent (the NORMAL pre-cutover
+state), token revoked, wrong project/config, `doppler` missing, network fault, a typo, and the
+secret genuinely holding `""`. The last is a SAFE read and was reported with the same alarm as a dead
+instrument. Worse, a revoked token made the step permanently blind and, because it degraded open on
+every run, nobody would ever have noticed. Hence the names-list-first design: an absent secret
+cannot be told apart from a blind instrument by the exit code of `get` alone.
+
+**Whitespace is stripped to match the on-host readers.** `inngest-server-flip-guard.sh` and
+`inngest-cutover-flip.sh` both `tr -d '[:space:]'` before comparing, so the step does the same. A
+single stray space once made the step print "no hazard" at the one value where the guard is
+guaranteed to refuse the start.
+
+**`done` is not the only stranding value.** `inngest-server-flip-guard.sh` allowlists
+`{armed, flipping, flushed, done}`; everything outside it refuses a prod start outright, and of the
+four inside it only `flushed` self-heals after a replace (`record_flush_latch -> start_server ->
+verify -> done`). The `/mnt/data` flush latch survives the replace, so `armed` and `flipping` drive
+the FSM to `flush_already_performed -> refuse_rearm_after_done` and write `aborted`, which is itself
+outside the allowlist. `op=resume`'s G1 accepts `done` only, so those two states have no
+one-dispatch recovery at all: resolve the flag with the owner BEFORE replacing. A value outside the
+allowlist (a standing `rollback`, for instance) may be intended, but it is not an inherited-`done`
+hazard and `op=resume` does not clear it. The step's warnings are scoped to the value they are true
+of, and an unset flag is itself outside the allowlist, so the replaced host refuses a prod start
+until a cutover sets it.
+
+<!-- lint-infra-ignore start: owner-reserved operator-local credential rotation; there is no CI rotation path for this token (#7263), and the step is a recovery for a failed owner-gated dispatch, not a prescribed agent step -->
+**Availability failure mode: a fail-closed preflight blocks a recovery replace when
+`DOPPLER_TOKEN_INNGEST_FLIP_READ` is missing or dead.** The fail-closed design trades availability for
+a trustworthy read: a recovery `inngest-host-replace` (for example after a host loss) cannot proceed
+while the instrument is blind. This is document-only; there is no bypass input. Two exact repairs:
+
+**Repair line: `DOPPLER_TOKEN_INNGEST_FLIP_READ` dead or missing.** A dispatch of
+`apply_target=inngest-host-replace` that fails at this step naming the missing secret means the
+per-merge apply has not (yet) minted it, or a rotation went wrong.
+
+1. Secret MISSING (the merge window between the merge and its push-triggered apply, or a partial
+   apply where the token was created and the repo secret was not): either re-run the failed
+   `apply-web-platform-infra` push run on `main` (the apply is idempotent on retry), or dispatch
+   `apply-web-platform-infra.yml` with its default target (`apply_target=manual-rerun`, plus the
+   required `reason` input, for example `gh workflow run apply-web-platform-infra.yml -f reason='mint
+   DOPPLER_TOKEN_INNGEST_FLIP_READ'`). Then re-dispatch the replace. When `main` has moved since the
+   failed run, dispatch from current `main`; never re-run an old-sha run, which would apply stale
+   state. **Never `-replace` the token on a partial apply**: that orphans a live key.
+2. Token DEAD (revoked, wrong config; the secret exists but the read fails): the owner
+   runs the operator-local rotation from the header of `inngest-flip-read-token.tf`:
+   `terraform apply -replace=doppler_service_token.inngest_flip_read` with `-target` on BOTH
+   `doppler_service_token.inngest_flip_read` and `github_actions_secret.doppler_token_inngest_flip_read`
+   (`-target` selects dependencies, never dependents, so both must be named for the new key to reach
+   the repo secret in the same apply). The orphaned old key is revoked by slug with
+   `doppler configs tokens revoke --project soleur-inngest --config prd --slug <slug>`. There is no
+   CI rotation path for this token (the family-wide gap is tracked at #7263).
+3. Verify with metadata only: `gh secret list --repo jikig-ai/soleur | grep DOPPLER_TOKEN_INNGEST_FLIP_READ`
+   and `doppler configs tokens -p soleur-inngest -c prd --json | jq -r '.[]|"\(.name)\t\(.access)"'`
+   showing `inngest-ci-flip-read` with access `read`. No key material is ever read. **These two checks
+   prove existence, not that the token works**: a revoked token still lists. The proof of a working
+   token is the preflight itself reading the names list on the next replace dispatch.
+<!-- lint-infra-ignore end -->
 
 **Measured 2026-09-17:** two replaces and 76 minutes with no live scheduler, because the cause
 was invisible until the host journal was read — see
 [§ Reading host state without SSH](#reading-host-state-without-ssh) for the read that finds it.
 
-### Authorizing a second FLUSHALL (`op=reflush`, #7777)
+### Retired cutover verbs and the re-cutover / second-FLUSHALL path (#9927 item 8)
 
-The `/mnt/data` latch is an **append-only ledger**, never a flag file: each record is one line,
-`flushed_at=… host=… dbsize=…` when a FLUSHALL ran, and `cleared_at=… run=… by=… boot_id=…` when a
-deliberate second flush was authorized. **The newest record decides** whether the FSM may flush —
-a `cleared_at` supersedes the `flushed_at` it follows, and a later `flushed_at` re-latches the
-host. Records are only ever appended; nothing deletes or truncates the ledger, so the flush
-evidence and the authorization evidence coexist permanently.
+**Retired 2026-11-05 (#9927 item 8): `op=arm`, `op=reflush` and `op=luks-cutover` no longer exist.**
+They were deleted from `.github/workflows/cutover-inngest.yml` and `scripts/cutover-inngest.sh`
+(by deletion, not by refusal stubs); a dispatch naming one is rejected by GitHub as an invalid
+`op` input. Their flags are terminal (`INNGEST_CUTOVER_FLIP=done` and `INNGEST_LUKS_CUTOVER=done`
+at the time of retirement). **Still in force:** `op=rollback` and `op=resume` stay, because
+`op=resume`'s G1 accepts `done` only (so it is the recovery for every inherited-`done` host
+replace, above) and `op=rollback` is the only documented re-enable of the web scheduler. They still
+consume the read/write arm token (repo secret `DOPPLER_TOKEN_INNGEST_ARM`,
+`doppler_service_token.inngest_arm_write`), so **that token is not revoked and its revoke is not part
+of this retirement**; it remains an owner-reserved act, now additionally blocked on retiring those
+two verbs after a replacement write-credential design exists.
 
-A second flush is needed when a deliberate recut emptied the queue once and a later operation —
-typically the `inngest-volume-recut` refusal telling you the store holds N keys (that dispatch is gone since #8285 PR A, see the Update callout under § Post-cutover status below) — requires it
-empty again. The verb:
+**A re-cutover, or a deliberate second FLUSHALL, now needs a reviewed re-introduction of the
+verb**, that is a revert of the #9927 item 8 retirement PR (and with it the G1 to G6 gate sequences
+described in the historical sections below). There is no other CI path, and there is no owner
+console path either: **a second flush requires a reviewed PR re-introducing the verb with its four
+gates restored.** Do not hand-write `INNGEST_CUTOVER_FLIP` values in the Doppler console to
+approximate it: a malformed or mistimed value can drive the on-host FSM to `aborted`, which is
+terminal and has no CI exit. There is still no SSH anywhere in this path.
 
-```
-gh workflow run cutover-inngest.yml -f op=reflush
-```
+**What blocks the arm-token revoke, and the tracker.** `op=rollback` and `op=resume` still need a
+write credential, so the revoke of `doppler_service_token.inngest_arm_write` stays blocked until a
+replacement exists. The single follow-up tracker is #12158: the replacement write credential for
+rollback/resume (the Tier-B move before the arm revoke, optionally a canary) and removal of the arm
+`-target` lines in the revoke PR.
 
-Like `op=resume`, the run **holds in `Waiting` for the required-reviewer approval** on the
-`inngest-cutover` environment before any step executes — that approval IS the authorization the
-ledger records. The op writes `INNGEST_CUTOVER_FLIP=reflush,run=<gha-run-id>,by=<actor>` — the
-evidence rides the flag value because `soleur-inngest/prd`'s boot-isolation self-check is an
-exact-set match on the config and no new secret name can exist. The on-host FSM's `reflush` arm
-then appends the `cleared_at` record (stamping `cleared_at` and the host's own `boot_id` at the
-host, so a clear can never be attributed to a boot that did not record it) and re-enters the
-normal `stop → FLUSHALL → assert → flushed → start → done` path, which appends a fresh
-`flushed_at` and re-engages the latch.
+**Host-side log text.** The on-host `SOLEUR_INNGEST_CUTOVER_REFLUSH_REFUSED` line still says
+`op=reflush writes both`. That verb is retired. The text is part of the sha256-compared
+config-bundle content (`inngest-cutover-flip.sh`), so it is left as is and changes with the next
+host-config change (the next owner-gated `inngest-host-replace` delivers it). Read such a row as
+"a reflush carried no authorization", not as an instruction to dispatch anything.
 
-Gates, all refusing **before** the write:
+**How the latch ledger works (still true on the host).** The `/mnt/data` latch is an
+**append-only ledger**, never a flag file: each record is one line, `flushed_at=... host=...
+dbsize=...` when a FLUSHALL ran, and `cleared_at=... run=... by=... boot_id=...` when a deliberate
+second flush was authorized. **The newest record decides** whether the FSM may flush: a
+`cleared_at` supersedes the `flushed_at` it follows, and a later `flushed_at` re-latches the host.
+Records are only ever appended; nothing deletes or truncates the ledger. Confirm it with `tail` on
+the latch record surfaced by `cat-inngest-cutover-state.sh`, or the Better Stack rows
+`reason="latch-cleared"` followed by `reason="flip-complete"`.
 
-- **G1** the flag must be terminal (`done`/`aborted`/`rolled-back`) — a reflush over an
-  in-flight flip races the running FSM;
-- **G2** the latch must **exist** off-host (the inverse of op=arm's G3.7) — a reflush with no
-  recorded flush is a first flush, and its verb is `op=arm`;
-- **G3** the host must be audible — `reflush` is consumed only by the on-host 30s timer;
-- **G4** the evidence must be well-formed — a bare or malformed `reflush` carries no
-  authorization, and the FSM refuses it the same way (`reflush-evidence-invalid`).
-
-Confirm the ledger afterwards with `tail` on the latch record surfaced by
-`cat-inngest-cutover-state.sh`, or the Better Stack rows `reason="latch-cleared"` followed by
-`reason="flip-complete"`. **There is still no delete and no SSH anywhere in this path.**
+**The sections below that dispatch the retired verbs are kept as the historical record of the
+2026-09 cutover.** Where they say "dispatch `op=arm`", "`op=reflush`" or "`op=luks-cutover`", read
+"retired; see this section". Nothing in them is a live procedure for those three verbs.
 
 ### Reading the private-NIC boot event (#8539)
 
@@ -987,7 +1099,7 @@ to the *web* host and cannot reach 10.0.1.40. **Do not** dispatch a host replace
 the flag lives in Doppler and survives, so the replaced host reads it at boot and stops again,
 while the standing diagnostic evidence is destroyed.
 
-**The only thing that releases the brake is a cutover window** (`op=arm` and its gate sequence).
+**The only thing that releases the brake is a cutover window** (historically `op=arm` and its gate sequence). `op=arm` was retired on 2026-11-05 (#9927 item 8), so releasing a standing brake now needs a reviewed re-introduction of the verb; see [§ Retired cutover verbs](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8).
 
 **But "the brake is on" is NOT "nothing is broken" — correct an earlier reading here.** This entry
 originally said "while the brake stands there is no outage". That is HALF true and the false half
@@ -1312,7 +1424,7 @@ reported `quiesced_since`, the dedicated-host verdict is anything but `healthy` 
 the run prints `::error::`, files or comments `[ci/inngest-no-live-scheduler]` (label
 `action-required`), and the Sentry check-in is `error`; the issue closes on the first tick without
 the alarm. Nothing is scheduling crons or reminders for any user while it is open. Remedy: finish the
-window (2.4 merged and redeployed, `op=arm` confirmed `done`) if the dedicated host is coming up;
+window (2.4 merged and redeployed, `op=arm` confirmed `done`; `op=arm` is retired since #9927 item 8, so on a host that is not already `done` this needs the reviewed re-introduction in [§ Retired cutover verbs](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8)) if the dedicated host is coming up;
 otherwise dispatch `op=rollback` to bring the web scheduler back.
 
 **One false `[ci/inngest-down]` per window is expected.** The stop can take up to
@@ -1715,10 +1827,10 @@ Built and merged but NOT delivered to any host until the owner-gated A1-class `a
      ```
 
      `raw` is double-encoded, and the flip unit's `message` is a JSON object that Better Stack may hold either parsed or as a string, so the filter decodes it second if needed (modelled on `_fsm_own_rows` in `scripts/cutover-inngest.sh`; it was checked against synthetic rows, not live ones). The "Find the host life" recipe above decodes the boot-stage rows (`.marker` and `.stage`), not these. Accept ONE row with ALL of: tag `inngest-cutover-flip`, a `dt` at or after the new server's created time, and a message that is a JSON object with `reason` `noop-done` and flag `done`. The first post-boot row always emits; allow 10 minutes after `bootstrap-done`. A second, independent witness is the unit's phone-home row (the script dual-emits every non-throttled `noop-*` tick through the curl-direct channel): `--grep cutover-flip-noop-done` and decode with `fromjson? | .raw? | fromjson? | select(.marker == "SOLEUR_INNGEST_NOOP" and .stage == "cutover-flip-noop-done") | "\(.dt) \(.host) \(.detail)"`. It is emitted by the same code path as the tagged row (read from `inngest-cutover-flip.sh`); that it is queryable this way is UNVERIFIED (not run against Better Stack). If ONLY the phone-home row exists, the flip token's READ is proven and the gap is Vector shipping, not the token: wait and recheck rather than choosing a second replace (`op=resume`'s own G3 refuses until a tagged row from the new server exists, so it cannot be dispatched past this). If neither row exists, treat it as step 4.
-  4. Abort rule: no such tagged JSON row and no phone-home row, or the only tagged rows are plain doppler error text or `unexpected-exit`, means STOP and do not dispatch `op=resume`. The liveness gates (G3 for `op=resume`, G3.7 for `op=arm`) count any row carrying the flip unit's tag, a doppler auth-failure line included, so they pass on error rows and do NOT catch a dead flip token; a resume would park the flag at `flushed`, which `op=resume`'s own G1 rejects as in-flight, stranding the only re-entry. Stopping is not free: the scheduler stays dark until the rotation, the second replace (15 to 60 minutes plus approval) and a passing step 3 are all done, and each needs the owner present. The runbook's own limits apply to that wait: a dashboard approval older than 23 hours is archived and abandoned (the sweeper, #11211, is not built), and a failed Stripe `invoice.payment_failed` delivery during the window can be lost permanently (see "Event sends during the window"). So the moment the stop is chosen, run the replay check from "Window controls" and have the founder re-click whatever it finds inside the 23-hour window (a re-click replays the same event id), and start the recovery (the owner-run flip rotation plus the gated replace, route 1 below) without waiting for a quiet period.
+  4. Abort rule: no such tagged JSON row and no phone-home row, or the only tagged rows are plain doppler error text or `unexpected-exit`, means STOP and do not dispatch `op=resume`. The liveness gates (G3 for `op=resume`; G3.7 of the since-retired `op=arm` counted the same way) count any row carrying the flip unit's tag, a doppler auth-failure line included, so they pass on error rows and do NOT catch a dead flip token; a resume would park the flag at `flushed`, which `op=resume`'s own G1 rejects as in-flight, stranding the only re-entry. Stopping is not free: the scheduler stays dark until the rotation, the second replace (15 to 60 minutes plus approval) and a passing step 3 are all done, and each needs the owner present. The runbook's own limits apply to that wait: a dashboard approval older than 23 hours is archived and abandoned (the sweeper, #11211, is not built), and a failed Stripe `invoice.payment_failed` send during the window is retried by Stripe, because the route releases the dedup row and returns 500 (see "Event sends during the window"; the retry window is not measured). So the moment the stop is chosen, run the replay check from "Window controls" and have the founder re-click whatever it finds inside the 23-hour window (a re-click replays the same event id), and start the recovery (the owner-run flip rotation plus the gated replace, route 1 below) without waiting for a quiet period.
   5. If the step 3 row exists, dispatch `op=resume` (a fresh owner go), then confirm a JSON row with `reason` `flushed-resume-no-reflush` and flag `done`. If neither that row nor an `unexpected-exit` row appears within 10 minutes, treat the unit as not ticking: do not re-dispatch `op=resume`; read the `SOLEUR_INNGEST_SERVER_PROBE` row (it carries `server_active` and `cutover_flag`) before choosing a route.
   6. If `unexpected-exit(from=flushed)` rows repeat, the flip write is rejected: the flag stays `flushed` and the server is already started. Do NOT re-dispatch resume (its G1 refuses `flushed`). The only route is the same owner-run rotation plus the gated replace, on the expectation (UNVERIFIED) that a replaced host re-enters `flushed` and completes to `done` (the flag lives in the Doppler config, so a replaced host inherits `flushed`). Decision rule: that replace STOPS the working scheduler for the window above (15 to 60 minutes plus approval), and the cost of waiting is that the flip FSM cannot reach `done` and the LUKS key-continuity probe stays silent (each tick fails, nothing alerts); any user-visible cost beyond that is UNKNOWN. So do not replace in a hurry: pick a low-traffic window, do the "Window controls" first, and weigh a stuck FSM that does not stop the serving scheduler against 15 to 60 minutes of none.
-  7. If a single `unexpected-exit` row is followed by `noop-aborted` rows, the flag is `aborted` (the script writes it best-effort when it exits unexpectedly). That is the KNOWN DEAD END recorded in `scripts/cutover-inngest.sh` (op=resume, G1 accepts `done` only; `op=arm` is refused by G3.7 while the flush latch stands): there is no dispatchable path forward and a replace does not obviously help, because the replaced host would inherit `aborted` from Doppler. STOP and escalate to the CTO for a flag repair; do not improvise a flag write. Whether a replace recovers `aborted` is UNVERIFIED.
+  7. If a single `unexpected-exit` row is followed by `noop-aborted` rows, the flag is `aborted` (the script writes it best-effort when it exits unexpectedly). That is the KNOWN DEAD END recorded in `scripts/cutover-inngest.sh` (op=resume, G1 accepts `done` only; `op=arm` was refused by G3.7 while the flush latch stands and is now retired, #9927 item 8): there is no dispatchable path forward and a replace does not obviously help, because the replaced host would inherit `aborted` from Doppler. STOP and escalate to the CTO for a flag repair; do not improvise a flag write. Whether a replace recovers `aborted` is UNVERIFIED.
 - **State to dispatch matrix (after a partial failure).** Every route below is production-mutating. "Dispatch" is `gh workflow run apply-web-platform-infra.yml -f apply_target=<x>` and needs the owner's fresh in-session go. "Owner-run" is a local apply the owner runs under their own Doppler credentials (commands below); it is not delegable. The gate outcomes come from a synthetic plan JSON, not a live plan. The recovery read for the dispatch routes is `stock_recovery_report` in the apply run's log.
 
   | State after a partial failure | Plan shape | Route that passes | Who |
@@ -1757,7 +1869,7 @@ Built and merged but NOT delivered to any host until the owner-gated A1-class `a
 
 - **Owner-only, production-mutating routes** (CTO N4; no dispatch exists for them, `ci-ssh-token-replace` is the precedent for building one):
   1. Rotating the flip token alone: the owner-run flip rotation above, then the gated host replace straight away. The `inngest_host_replace` dispatch re-embeds the EXISTING flip key unchanged.
-  2. Recovering from a revoked flip token: the same route (re-dispatching the replace alone re-embeds the dead key). Unverified on a live host: a revoked token fails `doppler run` before the script starts, so there is no FSM marker and a mid-FSM rollback is dead. Neither the `op=arm` nor the `op=resume` liveness gate catches it (they count the unit's tagged error rows as audible); after `done` it is unalarmed (follow-up #11820).
+  2. Recovering from a revoked flip token: the same route (re-dispatching the replace alone re-embeds the dead key). Unverified on a live host: a revoked token fails `doppler run` before the script starts, so there is no FSM marker and a mid-FSM rollback is dead. The `op=resume` liveness gate does not catch it (nor did the retired `op=arm` one; they count the unit's tagged error rows as audible); after `done` it is unalarmed (follow-up #11820).
   3. Recovering from a guard refusal (signals: an `inngest-doppler-write-REFUSED` row and no `provision-unit-armed` row): the same route; re-dispatching alone repeats the refusal. The guard message names neither token, so if the refusal repeats after the flip rotation, rotate BOTH: add `-replace=doppler_service_token.inngest -target=doppler_service_token.inngest` to the flip rotation command, then the gated replace.
   Cost and decision rule for routes 1 and 2: on a host that is already in `done` and serving, a revoked or rotated flip token costs a flip FSM that only the silence alert watches (it emails when no JSON row arrives for 15 minutes) and a silent key-continuity probe, not user traffic (any further cost is UNKNOWN), while the cure replaces the working scheduler and darkens it for 15 to 60 minutes plus approval. Choose a low-traffic window, run the "Window controls" first, and do not treat a dead flip FSM on a serving host as an emergency replace. Pick the window BEFORE starting the rotation, because the rotation and the replace must follow each other straight away (below).
   Rotating the flip token alone leaves the RUNNING host's flip file holding a dead key until the host is replaced, so the flip FSM is dead in between: do the host replace straight away. A leak response (revoke before replace) briefly leaves the old host with a dead boot token; order it per the same route.
@@ -1786,7 +1898,7 @@ Measured from the repository's own records on 2026-10-18 (no estimate is used wh
   (`apps/web-platform/server/inngest/send-with-retry.ts`). What each caller does with the throw (code read 2026-10-18):
   GitHub-push and Resend-inbound webhooks release their dedup row and return 500 so the sender redelivers; `schedule-reminder` returns
   the retryable 503 only for connection refusal today (this PR extends it to timeouts and TLS causes), and otherwise 502, so the
-  caller must re-arm; the dashboard send path returns the retryable 503 `enqueue_unavailable` (`Retry-After: 5`) after a bounded retry, keeps the draft and the approval row, and a founder re-click replays the same event id (`agent-spawn-<actionSendId>`) for up to 23 hours (#10543, fixed in PR #11208); an approval older than 23 hours is archived and abandoned, and the sweeper that would re-dispatch it is tracked as #11211; the Stripe `invoice.payment_failed` route swallows the failure and returns 200, so that finance event can be lost permanently (#10542, closed 2026-10-20: it no longer blocks a replace go). The quiesce op below covers reminder arming only, so it does not stop a dashboard send; #10543 fixed was a hard precondition of any replace go, as the terminator-journal change (PR #10975) records, and a send that fails during the replace window now surfaces a 503 the founder can re-click rather than a silently archived draft.
+  caller must re-arm; the dashboard send path returns the retryable 503 `enqueue_unavailable` (`Retry-After: 5`) after a bounded retry, keeps the draft and the approval row, and a founder re-click replays the same event id (`agent-spawn-<actionSendId>`) for up to 23 hours (#10543, fixed in PR #11208); an approval older than 23 hours is archived and abandoned, and the sweeper that would re-dispatch it is tracked as #11211; the Stripe `invoice.payment_failed` route releases the dedup row and returns 500 so Stripe redelivers (`apps/web-platform/app/api/webhooks/stripe/route.ts`, `op: inngest-send-payment-failed`; #10542, closed 2026-10-20), so a failed send in the window is retried by Stripe within its retry window (not measured). The quiesce op below covers reminder arming only, so it does not stop a dashboard send; #10543 fixed was a hard precondition of any replace go, as the terminator-journal change (PR #10975) records, and a send that fails during the replace window now surfaces a 503 the founder can re-click rather than a silently archived draft.
 - **Window controls:** a low-traffic dispatch; the `cutover-inngest.yml` quiesce op; and a replay check afterwards (rows in
   `action_sends` without a spawn, Stripe dedup rows without a CFO draft). Whether the quiesce flag reaches the container without a
   redeploy is unverified, so use the existing op and do not assume a mechanism.
@@ -2111,7 +2223,7 @@ the script sends every Terraform stream to a private file and prints only addres
 show` output anywhere.
 
 **Between the two phases the copies legitimately differ.** The dedicated copy is new and the app copy is old until `apply2`. In that window the
-`cutover-inngest.yml` `op=arm` G3.5 channel-key parity gate fails closed (correct, do not work around it), and a merge or release that
+`cutover-inngest.yml` `op=arm` G3.5 channel-key parity gate failed closed (correct, and the guard against the #6178 cutover-502; `op=arm` is retired since #9927 item 8, so no dispatch runs that gate any more and the parity is not enforced there), and a merge or release that
 deploys would read the old app key against the new scheduler and fail its canary (a red release, not an outage; the old containers keep
 running). The in-flight-run refusal and the quiet-window attestation exist for this.
 
@@ -2931,6 +3043,16 @@ setting).
 
 ## Dedicated-host cutover (Phase 2, `op=execute` gated sequence) — Ref #6178
 
+> **RETIRED 2026-11-05 (#9927 item 8): `op=arm`, `op=reflush` and `op=luks-cutover` no longer
+> exist.** The cutover completed (`INNGEST_CUTOVER_FLIP=done`, 2026-09-18) and these verbs were
+> deleted from `cutover-inngest.yml` and `scripts/cutover-inngest.sh`. **This section is the
+> historical record of that cutover, not a live procedure for the retired verbs.** Wherever it says
+> to dispatch `op=arm`, `op=reflush` or `op=luks-cutover`, read "retired"; a re-cutover needs a
+> reviewed re-introduction (a revert of the retirement PR), see
+> [§ Retired cutover verbs](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8).
+> **Still live:** `op=execute`, `op=quiesce-web`, `op=rearm`, `op=verify`, `op=rollback` and
+> `op=resume` (the last two still consume the arm token, which is therefore not revoked).
+
 > **This is the ADR-100 dedicated-host extraction cutover** (move Inngest off the
 > co-located web host onto the singleton `hcloud_server.inngest` at `10.0.1.40`),
 > distinct from the same-host durable-backend cutover above. It flips the dedicated
@@ -2956,7 +3078,7 @@ FSM flag (`INNGEST_CUTOVER_FLIP`) is the sole gate, so arming is pure Doppler wr
 
 ### Op order (the gated sequence)
 
-`op=execute` → **`op=arm` (no-SSH flip arm)** → **operator app-repoint (2.4)** → `op=rearm` →
+`op=execute` → **`op=arm` (no-SSH flip arm; RETIRED, see the banner above)** → **operator app-repoint (2.4)** → `op=rearm` →
 `op=verify`. `op=execute` automates the web-host-expressible spine (2.0 → 2.2) and then
 **withholds a SEAM**. As of #6369 the flip arm (2.2b/2.3) is **no longer an operator Doppler
 write** — it is the no-SSH **`op=arm`** dispatch (a prod-write behind explicit dispatch + the
@@ -3213,7 +3335,7 @@ ADR-100, amendment 2026-09-14.
    2026-07-17 (#6538), and #6230 was closed as obviated by its retirement. The "single-host web
    set" note that followed was true only until the cattle web-2 was born.
 
-2. **Arm the flip (2.2b/2.3) — dispatch the no-SSH `op=arm` verb (#6369).** This REPLACES the
+2. **[RETIRED 2026-11-05, #9927 item 8 — historical record only] Arm the flip (2.2b/2.3) — dispatch the no-SSH `op=arm` verb (#6369).** This REPLACES the
    former three manual Doppler writes. `op=arm` performs all three writes on
    **`soleur-inngest/prd`** itself and confirms the on-host FSM reached `done` via Better Stack,
    with **no secret value ever echoed** (AC-NOBODY):
@@ -3264,7 +3386,7 @@ ADR-100, amendment 2026-09-14.
      > before. An operator following the old wording would clear the flag, wait for a re-render
      > that cannot happen, and re-run `op=arm` into the same refusal. The gate's own `::error::`
      > string carried the same false instruction and was corrected in the same change.
-   - **G3.7 pre-flush-latch gate (#7462):** refuses to arm — **before any prod write** — when the
+   - **[RETIRED 2026-11-05, #9927 item 8: `op=arm` is deleted, so this gate no longer runs and the `FLUSH_LATCH_SINCE` repo variable is no longer read; historical record only]** **G3.7 pre-flush-latch gate (#7462):** refuses to arm — **before any prod write** — when the
      dedicated host's Better Stack log source carries a `"reason":"flip-complete"` or
      `"reason":"refuse-rearm-after-done"` row inside `FLUSH_LATCH_SINCE` (default `365d`), i.e. when a
      `FLUSHALL` has already been performed for this host. Such an arm was always doomed: the monotonic
@@ -3277,7 +3399,7 @@ ADR-100, amendment 2026-09-14.
      current `soleur-inngest` server, because its liveness signal counts only that server's rows
      (the latch count stays unscoped: a predecessor's `flip-complete` is still valid evidence). It is a **pre-filter, not the authority** — the on-host latch is what actually
      prevents a second `FLUSHALL`, and this gate can only ever ADD a refusal.
-     **Remediation:** the only path is the authorized flush `op=reflush` (#7777); `op=resume` is not it
+     **Remediation (historical; `op=reflush` is retired, #9927 item 8):** the only path was the authorized flush `op=reflush` (#7777); `op=resume` is not it
      (its G1 accepts `done` only). `op=reflush` appends a `cleared_at` record to the latch ledger — never by SSH, and **not** by an `inngest-host-replace`.
      (The recut route this line used to name, `apply_target=inngest-volume-recut`, was retired by #8285;
      see the ADR-199 addendum of 2026-10-14.)
@@ -3295,8 +3417,8 @@ ADR-100, amendment 2026-09-14.
      > recorded in the #7674 plan and tracked for the PR that opens the cutover window. Until it is
      > built, a standing latch has no in-repo remediation, and pretending otherwise is what left
      > this gate's operator-facing message pointing at a window that could not clear it. If that recut has ALREADY happened but
-     > the old rows have not aged out, set the repo variable `FLUSH_LATCH_SINCE` to a window starting
-     > after it (e.g. `1h`) and re-dispatch; that narrows this pre-filter only.
+     > the old rows have not aged out, the then-advice was to set the repo variable `FLUSH_LATCH_SINCE` to a window starting
+     > after it (e.g. `1h`) and re-dispatch (RETIRED: the variable is no longer read, `op=arm` being deleted).
 
      > **Post-cutover status (2026-09-18, #7695).** The recut target now exists:
      > `apply_target=inngest-volume-recut` merged 2026-09-04 (PR #7778), dispatch-only, behind the
@@ -3325,7 +3447,7 @@ ADR-100, amendment 2026-09-14.
      > this volume a rollback is one-way: after `rolled-back`, `op=arm` G1 admits the flag, G3.7
      > refuses BEFORE any write (the flag stays `rolled-back`), and if that pre-filter is narrowed
      > the on-host latch refuses into terminal `aborted` (#7777). The `FLUSH_LATCH_SINCE` narrowing
-     > above has no application here — no recut has happened and the latch rows are genuine. The
+     > above (retired, see the G3.7 bullet) had no application here — no recut has happened and the latch rows are genuine. The
      > latch's real precondition is a measured-empty store, which this volume cannot reach without
      > #7777; the plaintext posture is #6894's (ADR-142, additive), and the target's fate — dormant
      > on this volume, retire-or-keep undecided — is decided on #8316.
@@ -3388,8 +3510,16 @@ ADR-100, amendment 2026-09-14.
    aid only**, never the operator gate. (These tags are on the `vector.toml` Source 4 allowlist —
    see the `vector-pii-scrub.test.sh` drift-guard — so they are guaranteed to ship off-box.)
 
-3b. **Post-cutover: revoke the arm-write token (#6369, security F4/D6 — after AC17).** Once
-   `op=verify` confirms exactly-once on the dedicated host, `DOPPLER_TOKEN_INNGEST_ARM` is a
+3b. **Post-cutover: revoke the arm-write token (#6369, security F4/D6 — after AC17).**
+
+   > **Status 2026-11-05 (#9927 item 8): NOT done, and not authorized by the retirement.** The
+   > verbs this step was written around (`op=arm` and friends) are gone, but `op=rollback` and
+   > `op=resume` still consume `DOPPLER_TOKEN_INNGEST_ARM` (`doppler_service_token.inngest_arm_write`),
+   > so revoking it now would break the inherited-`done` recovery and the web
+   > scheduler re-enable (a `-replace` rotation propagates a new key to the repo secret in the same apply, but orphans the old key until it is revoked by slug). The revoke stays an owner-reserved act, blocked on a replacement
+   > write-credential design for those two verbs. The recipe below is the historical one.
+
+   Once `op=verify` confirms exactly-once on the dedicated host, `DOPPLER_TOKEN_INNGEST_ARM` is a
    **standing read+write handle to the now-armed prod `INNGEST_POSTGRES_URI`** on
    `soleur-inngest/prd`. Rotate + revoke it (no-SSH); there is **no seed to delete** (reads are
    read-through):
@@ -3692,7 +3822,8 @@ deny-all-public; `hr-no-ssh-fallback-in-runbooks`). Then `gh issue close 6608`.
 
 > **One-way on volume `106261946` (2026-09-18, #7695):** a re-arm after `rolled-back` is refused while the
 > durable flush latch stands — read the G3.7 "Post-cutover status" callout under § Dedicated-host cutover
-> before dispatching.
+> before dispatching. Since 2026-11-05 (#9927 item 8) there is no `op=arm` to re-arm with at all: a
+> rollback on a `done` host is final unless the verb is re-introduced through review.
 
 1. **Dispatch `op=rollback` (no-SSH — it now does BOTH halves, #6369).** As of #6369 `op=rollback`
    first writes `INNGEST_CUTOVER_FLIP=rollback` on `soleur-inngest/prd` itself (the still-enabled
@@ -3786,7 +3917,7 @@ re-attempt storm, and `aborted` never reads as success). The web schedulers are 
 quiesced/disabled from `op=execute` 2.2, so **recover via the same rollback path**: run
 `gh workflow run cutover-inngest.yml --field op=rollback` to bring the web schedulers back,
 fix the Redis state (the non-zero `DBSIZE` means stale dark queue state — investigate why the
-dark Redis was not empty), then re-arm from `op=execute`.
+dark Redis was not empty), then re-arm from `op=execute` (historical: `op=arm` is retired since #9927 item 8, so the re-arm now needs the reviewed re-introduction in [§ Retired cutover verbs](#retired-cutover-verbs-and-the-re-cutover--second-flushall-path-9927-item-8)).
 
 > **On volume `106261946` (2026-09-18, #7695):** a re-arm after `rolled-back` is refused — see the G3.7
 > "Post-cutover status" callout under § Dedicated-host cutover before choosing this path.

@@ -2,7 +2,8 @@
 # Decide whether `/ship` Phase 4 still owes a local `test-all.sh` run.
 #
 # EXIT CONTRACT (the caller branches on this, never on the prose):
-#   42  SKIPPABLE    — CI already verified this exact tree; running it again buys nothing
+#   42  SKIPPABLE    — CI already verified this exact tree; running it again buys nothing,
+#                     OR the operator declared CI the gate (`ci-is-the-gate` token, below)
 #    0  OWED         — run the gate. Since #8322 that means `--affected` by
 #                     default; the FULL local battery is opt-in via
 #                     `/ship --full` (operator) → `test-all.sh --full`
@@ -37,6 +38,27 @@
 # weakens no merge gate. At FIRST run Phase 4 precedes the Phase 6 push, so
 # there is usually no CI for HEAD and this returns OWED — by design. The saving
 # is concentrated on the re-run path, which is where the duplicate cost lives.
+#
+# OPERATOR INTENT (2026-11-06). A brief that says "rely on CI's required test check" produced a ~45-minute local battery
+# anyway, because this script read CI state and never intent. A bullet `- ci-is-the-gate: <words>` under a level-2
+# `## Operator Constraints` heading in the CURRENT branch's knowledge-base/project/specs/<branch>/session-state.md (working
+# tree only, never origin/*) now makes this return 42 without CI evidence: conditions 1 (dirty tree), 2 (behind main) and 4
+# (CI state) stand down for it. It NEVER overrides the infra surface (committed, staged or untracked; the local infra shard
+# is its only blocking gate, #6480), an unmeasurable diff or a merge in progress, and `/ship --full` outranks it (the
+# caller checks that first). Standalone runs (no one-shot): the operator may add the bullet by hand; nothing else should.
+# TRUST: the token is a hint the same commit can write. What bounds a planted or wrong token is outside the commit: the live
+# branch ruleset (required `test` context, merge queue) still gates every merge, the arm's infra refusal, and the verdict
+# line printing the words, so a planted token is visible in the transcript and the PR Test plan. The words are untrusted
+# text: cut at 200 bytes, then only [A-Za-z0-9 ,.-] survive. Any HTML comment marker or unrecognised fence line in the
+# file voids the token (fail closed), fenced code is skipped, the file must hold exactly ONE `## Operator Constraints`
+# section, and a symlinked file or directory reads no token. A branch name holding `/` reads the
+# nested path specs/<a>/<b>/session-state.md. The committed diff is the gate; the working-tree sources are defence in depth,
+# and per-file index flags (assume-unchanged, skip-worktree) are operator-local state, bounded by the merge queue.
+# Writer contract: skills/one-shot/references/operator-constraints.md.
+# CONSUMERS (#12247): ship Phase 4 calls this with NO argument (token, then CI evidence). Work Phase 2, review's lead gate and the
+# Grok pre-push gate call `--token-only`: no valid token is OWED at once with no CI state read; a valid token runs the arm above
+# unchanged. Any other argument is UNDECIDABLE. Work and review reach it through scripts/gate-or-skip.sh; test-fix-loop and the
+# lefthook bun-test hook never read it (a fix loop must run tests; the hook is tracked in #12297).
 set -uo pipefail
 
 VERDICT_OWED=0
@@ -67,11 +89,56 @@ owed()        { say "OWED — $1";        exit "$VERDICT_OWED"; }
 skippable()   { say "SKIPPABLE — $1";   exit "$VERDICT_SKIPPABLE"; }
 undecidable() { say "UNDECIDABLE — $1 (caller must treat as OWED)"; exit "$VERDICT_UNDECIDABLE"; }
 
+# The one accepted argument is `--token-only` (#12247); anything else, including a second argument, is UNDECIDABLE.
+TOKEN_ONLY=0
+if (( $# == 1 )) && [[ "$1" == "--token-only" ]]; then TOKEN_ONLY=1
+elif (( $# > 0 )); then undecidable "unknown argument (the only accepted flag is --token-only)"; fi
+
 command -v git >/dev/null 2>&1 || undecidable "git not on PATH"
+# An inherited git-location variable (a hook's GIT_DIR / GIT_INDEX_FILE) would redirect every read below.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_NAMESPACE
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || undecidable "not inside a work tree"
+
+# --- operator token (see OPERATOR INTENT in the header) -------------------------------------------------------------
+# Bytes, not locale characters (LC_ALL=C). Fenced code is skipped (CommonMark rules: an opener is 3+ backticks or tildes
+# indented at most 3 spaces, a closer is the same character, at least as long, nothing else on the line); a fence-looking
+# line the rule does not recognise (blockquoted, indented 4+) and ANY `<!--` or `-->` voids the token, so a quoted or
+# hidden copy of the section fails closed. The section ends at the first non-bullet line, at a blank line after a bullet,
+# and at any `#` heading; a SECOND `## Operator Constraints` section voids the token (n must be 1), so text appended later
+# cannot become one. The filter runs BEFORE the emptiness test, so whitespace-only, control-only or non-ASCII-only words
+# are no token. The reader prints only the matching line; a symlinked file or directory is not read at all.
+# Accepted: only comment markers void the token, so a section inside another invisible HTML block (<style>, <pre>) still reads; the file is pipeline-written, and the infra refusal still stands.
+OPERATOR_CI_WORDS=""
+_br="$(git branch --show-current 2>/dev/null)"
+_tp="$(cd "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null && pwd -P)"
+_ss="${_tp}/knowledge-base/project/specs/${_br}/session-state.md"
+_sd="$(cd "${_ss%/*}" 2>/dev/null && pwd -P)"
+if [[ -n "$_br" && -n "$_tp" && "$_sd" == "${_ss%/*}" && -f "$_ss" && ! -L "$_ss" ]]; then
+  OPERATOR_CI_WORDS="$(LC_ALL=C awk '
+    function runlen(t, c,   i) { for (i = 1; substr(t, i, 1) == c; i++); return i - 1 }
+    /<!--|-->/ { bad = 1; next }
+    f { t = $0; if (t ~ /^    /) next; sub(/^ */, "", t); sub(/[ \t]+$/, "", t)
+        if (length(t) >= fl && runlen(t, fc) == length(t)) f = 0; next }
+    { t = $0
+      if (t !~ /^    /) { u = t; sub(/^ */, "", u); c = substr(u, 1, 1)
+        if ((c == "`" || c == "~") && runlen(u, c) >= 3) { f = 1; fc = c; fl = runlen(u, c); next } } }
+    /^[ \t>]*(```|~~~)/ { bad = 1; next }
+    /^#+[[:space:]]/ { s = ($0 == "## Operator Constraints"); b = 0; if (s) n++; next }
+    s && /^[[:space:]]*$/ { if (b) s = 0; next }
+    s && !/^- / { s = 0; next }
+    s { b = 1 }
+    s && !w && /^- ci-is-the-gate:[[:space:]]+[^[:space:]]/ { w = $0; sub(/^- ci-is-the-gate:[[:space:]]+/, "", w); w = substr(w, 1, 200) }
+    END { if (n == 1 && !bad && w != "") print w }' "$_ss" 2>/dev/null \
+    | LC_ALL=C tr -cd "A-Za-z0-9 ,.-")"
+  [[ -n "${OPERATOR_CI_WORDS//[[:space:]]/}" ]] || OPERATOR_CI_WORDS=""
+fi
+# `--token-only`: no valid token is OWED right here, before any CI state, ruleset or origin/main read (#12247).
+(( TOKEN_ONLY )) && [[ -z "$OPERATOR_CI_WORDS" ]] && owed "--token-only: no operator ci-is-the-gate token (CI state is not consulted at this site)"
 
 # ---------------------------------------------------------------------------
 # NO GROK-SPECIFIC ARM, and the reason is measured rather than argued.
+# (Scope, #12247: this rejects a harness-keyed arm. The operator-intent token waiving the Grok pre-push gate's affected step
+# is a different channel; its residuals are recorded in the ADR-242 2026-11-07 amendment.)
 #
 # An earlier revision skipped unconditionally on the Grok harness, on the claim
 # that `plugins/soleur/scripts/grok-pre-push-gate.sh` "re-runs test-all.sh at
@@ -107,7 +174,7 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || undecidable "not inside a
 DIRTY="$(git status --porcelain 2>/dev/null)"
 rc=$?
 (( rc == 0 )) || undecidable "git status failed (rc=$rc)"
-[[ -n "$DIRTY" ]] && owed "working tree is dirty; CI verified a different tree"
+[[ -n "$DIRTY" && -z "$OPERATOR_CI_WORDS" ]] && owed "working tree is dirty; CI verified a different tree"
 
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
 [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || undecidable "could not resolve a full HEAD sha"
@@ -150,7 +217,7 @@ HEAD_SHA="$(git rev-parse HEAD 2>/dev/null)"
 # that a behind branch runs the battery — which is the status quo, not a
 # regression.
 # ---------------------------------------------------------------------------
-if ! git merge-base --is-ancestor refs/remotes/origin/main HEAD 2>/dev/null; then
+if [[ -z "$OPERATOR_CI_WORDS" ]] && ! git merge-base --is-ancestor refs/remotes/origin/main HEAD 2>/dev/null; then
   owed "origin/main is not an ancestor of HEAD; CI's pull_request run verified merge(HEAD, base), not this tree"
 fi
 
@@ -179,39 +246,55 @@ fi
 # rather than scripts/required-checks.txt, applied one level up.
 # ---------------------------------------------------------------------------
 if ! git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null 2>&1; then
-  undecidable "origin/main is unresolvable; cannot scope the diff"
+  undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }origin/main is unresolvable; cannot scope the diff"
 fi
-# `--name-status -M` and BOTH path columns, not `--name-only`: a file renamed OUT
-# of the infra surface prints only its new path under --name-only, so the gate
-# would miss it while test-all.sh's own predicate catches it. Measured on a probe
-# repo: --name-only gave `moved.tf`; --name-status -M gave
-# `R100  apps/web-platform/infra/a.tf  moved.tf`.
-#
-# `tr '\t' '\n'` IS THE FIX, NOT FORMATTING. A rename emits both paths on ONE
-# tab-joined line, and INFRA_RE is `^`-anchored, so `cut -f2-` alone tests only
-# the OLD path — the gate saw renames OUT of the surface and was blind to renames
-# IN. Measured on a probe repo: `R100  src/x.tf  apps/web-platform/infra/x.tf`
-# did NOT match, so a 100%-similarity rename of a .tf file INTO the module
-# directory returned SKIPPABLE. Terraform loads every *.tf in the directory, so
-# that is a real infra change with no content diff, on the one shard no required
-# check covers. The `$`-anchored workflow alternative had the mirror bug: a
-# rename of apply-web-platform-infra.yml OUT of .github/workflows/ left the
-# literal in column 1 and never matched. Splitting the columns onto separate
-# lines tests each path independently.
-#
-# A COPY is not affected and needs no handling: without `-C` git reports the new
-# file as `A` with a single column, which already matches. Do not add `-C` in the
-# belief that it closes a gap — measured, it does not exist.
-CHANGED="$(git diff --name-status -M origin/main...HEAD 2>/dev/null | cut -f2- | tr '\t' '\n')"
+# The operator-token arm below builds its path lists the same way, for the same reasons: NUL-delimited so a C-quoted name
+# reaches INFRA_RE as raw bytes, `--no-renames` so a rename lists BOTH its old and its new path (a rename-detected diff prints
+# only the new one), `--ignore-submodules=none` so a gitlink is not hidden by configuration, and `git -C` the repo top (`_tp`,
+# resolved above once the work-tree check passed) because `diff.relative` limits a diff to the cwd subtree.
+# `core.quotePath=false` alone is NOT a fix: it governs only bytes at or above 0x80; a tab, `"` or `\` stays quoted.
+# A copy needs no handling (its source is never listed in either form). `tr` re-splits a name that holds a newline: the extra
+# lines can only add a false OWED, never hide a real infra path (its first line still starts at the prefix). T5f and T5h pin
+# the rename members (dropping `--no-renames` reddens both); T20 pins the rest.
+CHANGED="$(git -C "${_tp:-.}" diff -z --no-renames --ignore-submodules=none --name-only refs/remotes/origin/main...HEAD -- 2>/dev/null | tr '\0' '\n')"
 rc=$?
-(( rc == 0 )) || undecidable "could not compute the branch diff (rc=$rc)"
+(( rc == 0 )) || undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }could not compute the branch diff (rc=$rc)"
 # An EMPTY diff is not "no infra paths" — it is "HEAD is an ancestor of
 # origin/main" (already merged, or origin/main fetched past the branch point), in
 # which case condition 2 is a no-op regardless of what the branch touched.
-if [[ -z "${CHANGED//[[:space:]]/}" ]] && ! git merge-base --is-ancestor HEAD origin/main 2>/dev/null; then
-  undecidable "the branch diff is empty but HEAD is not an ancestor of origin/main; cannot scope the infra check"
+if [[ -z "${CHANGED//[[:space:]]/}" ]] && ! git merge-base --is-ancestor HEAD refs/remotes/origin/main 2>/dev/null; then
+  undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }the branch diff is empty but HEAD is not an ancestor of origin/main; cannot scope the infra check"
 fi
 INFRA_RE='^(apps/web-platform/infra/|\.github/workflows/apply-web-platform-infra\.yml$)'
+
+# The operator-token arm. Condition 1 no longer guarantees a clean tree, so it builds its OWN path list from four
+# NUL-delimited, rename-free sources: the committed diff, tracked working-tree changes, staged changes (a path staged then
+# deleted from disk shows only here), and untracked files. NUL-delimited because git C-quotes a path holding a non-ASCII
+# byte, a tab, `"` or `\` (`"apps/web-platform/infra/\303\251.tf"`), which the `^`-anchored INFRA_RE then misses;
+# `--no-renames` lists both the old and the new path of a rename; `git -C "$_top"` makes the untracked listing repo-wide
+# whatever the cwd; `refs/remotes/origin/main` cannot be shadowed by a tag or branch of the same short name. The sources share
+# one failure exit. The grep runs on the paths PLUS one sentinel infra path, so a here-string or pipe that silently
+# fails (count 0) cannot read as "no infra match". It runs its OWN INFRA_RE grep: the existing refusal sits after condition
+# 4 and needs REQUIRED_JSON, which this exit skips. Its infra refusal does not self-retire like condition 4's. A merge in
+# progress or an unmerged path is refused: the tree is not a state anyone reviewed.
+if [[ -n "$OPERATOR_CI_WORDS" ]]; then
+  _top="$(git rev-parse --show-toplevel 2>/dev/null)" \
+    && _un="$(git -C "$_top" ls-files -u)" \
+    && _w1="$(git -C "$_top" diff -z --no-renames --ignore-submodules=none --name-only refs/remotes/origin/main...HEAD -- | tr '\0' '\n')" \
+    && _w2="$(git -C "$_top" diff -z --no-renames --ignore-submodules=none --name-only HEAD -- | tr '\0' '\n')" \
+    && _w3="$(git -C "$_top" ls-files -z -o --exclude-standard | tr '\0' '\n')" \
+    && _w4="$(git -C "$_top" diff -z --no-renames --ignore-submodules=none --name-only --cached HEAD -- | tr '\0' '\n')" \
+    || undecidable "operator ci-is-the-gate set but the working-tree scope check failed"
+  if [[ -n "$_un" ]] || git -C "$_top" rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 \
+     || [[ -e "$(git -C "$_top" rev-parse --absolute-git-dir)/MERGE_HEAD" ]]; then
+    owed "operator ci-is-the-gate set, but a merge is in progress or paths are unmerged"
+  fi
+  _all="${_w1}"$'\n'"${_w2}"$'\n'"${_w3}"$'\n'"${_w4}"
+  _n="$(printf '%s\n%s\n' "$_all" 'apps/web-platform/infra/__sentinel__' | grep -cE "$INFRA_RE")"
+  [[ "$_n" =~ ^[0-9]+$ ]] && (( _n >= 1 )) || undecidable "operator ci-is-the-gate set but the infra scope check did not run"
+  (( _n > 1 )) && owed "operator ci-is-the-gate set, but the diff touches the infra surface (no required CI check, #6480): the local infra shard is its only BLOCKING gate"
+  skippable "operator declared CI the gate (untrusted text from session-state.md: ${OPERATOR_CI_WORDS}): local battery NOT executed; this script read no CI state. Record in the PR Test plan: local battery NOT executed per operator constraint; operator declared CI test the gate"
+fi
 
 # ---------------------------------------------------------------------------
 # Condition 4 — every required context PRESENT and green on this exact SHA.
@@ -377,7 +460,11 @@ fi
 # {context, integration_id} OBJECTS, so a bare-string index never matches and the
 # condition would never retire.
 if ! jq -e --arg c "infra-validate-required" 'any(.[]; .context == $c)' <<<"$REQUIRED_JSON" >/dev/null 2>&1; then
-  if grep -qE "$INFRA_RE" <<<"$CHANGED"; then
+  # The grep runs on the paths PLUS one sentinel infra path (as in the token arm): a here-string or pipe that silently fails
+  # (a full TMPDIR for a large list) would otherwise read as "no infra match" and fall through to SKIPPABLE.
+  _n461="$(printf '%s\n%s\n' "$CHANGED" 'apps/web-platform/infra/__sentinel__' | grep -cE "$INFRA_RE")"
+  [[ "$_n461" =~ ^[0-9]+$ ]] && (( _n461 >= 1 )) || undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }the infra scope check did not run"
+  if (( _n461 > 1 )); then
     owed "diff touches the infra surface and infra-validate-required is NOT in the live required set (#6480) — the battery is its only BLOCKING gate"
   fi
 fi

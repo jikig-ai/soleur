@@ -17,8 +17,9 @@ import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGra
 // SURFACE + KNOWN PARTIAL-PARITY GAP (review PR #4868): these tools register on
 // the LEGACY `agent-runner.ts` platform-tools surface where tool-capable
 // domain-leader agents run. The cc-soleur-go Concierge router (`cc-dispatcher`)
-// wires `platformToolNames: []` and `readCcMcpAllowlist() === {}` (Phase 1) by
-// design, so it exposes NO platform MCP tools — and it is BOTH the live
+// wires `platformToolNames` to the c4 edit tool and, for crm-lead chats, the CRM
+// tools (never these settings tools), with `readCcMcpAllowlist() === {}` (Phase 1)
+// by design — and it is BOTH the live
 // interactive path users converse with AND the sole consumer of the toggle.
 // Net: today a leader agent can read/set the toggle, but the Concierge a user
 // actually talks to cannot yet honor "turn on autonomous mode" via a tool — it
@@ -27,9 +28,10 @@ import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGra
 // MCP tools to the cc-router via CC_MCP_ALLOWLIST). The READ tool can join that
 // promotion (closure-bound to `userId`; the Tier-3 cross-tenant-credential
 // rationale does not apply). The SET tool CANNOT be promoted that way: it is
-// approval-required (ADR-309), the cc runner has no approval wiring, and
-// `readCcMcpAllowlist` throws on any approval-required name. Promoting it needs
-// the approval gate wired into the cc runner first. Until #3722 lands, the HTTP
+// approval-required (ADR-309), no cc builder for THIS tool is wired to the execution
+// grants (only `github_push_branch` is, through its gated registrar), and
+// `readCcMcpAllowlist` throws on any approval-required name.
+// Promoting it needs a grant-reading builder in the cc runner first. Until that promotion lands, the HTTP
 // route + UI is the user's path and these tools are the leader-surface agent
 // equivalent.
 

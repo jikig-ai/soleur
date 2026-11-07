@@ -201,17 +201,15 @@ proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
-panel returns — the bounded default `bash scripts/test-all.sh` (bare resolves `--affected`;
-plugin-portable: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/affected-tests.sh"`, sole scope absent a
-[runner](../../../../scripts/test-all.sh) — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md)),
+panel returns — the bounded default `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"` (token-aware wrapper over
+`affected-tests.sh`: here it delegates `--affected` to the [runner](../../../../scripts/test-all.sh), its sole scope
+absent one — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md); rc 6, 7 and `AFFECTED_GATE_SKIPPED` are not a pass),
 previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`:
 "every covering suite ran" is the printed selection vs the run's per-suite results, not memory
 (#10333). Two backstops:
 [scripts/test-all.sh](../../../../scripts/test-all.sh) exits 4 when it MEASURES a sibling full-gate run already in flight
 (#7553) — `affected` is exempt from that too — and `tc_acquire`'s advisory lock (ADR-133)
-serialises whatever gets past that. The
-`SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the
-paragraph above is instruction for the non-concurrent case, not claim.
+serialises whatever gets past that.
 
 **A mutating seat gets an ALLOCATED sandbox, never a hand-copied tree.** Brief it with this, anchored to the live root (the script exists only in this repo): `ROOT=$(git rev-parse --show-toplevel); SBX=$(bash "$ROOT/scripts/soleur-sandbox.sh" new <seat>) && [ -d "$SBX" ] || { echo ALLOC-FAILED; exit 2; }`. One copy, restored per row, then `bash "$ROOT/scripts/soleur-sandbox.sh" rm "$SBX"` before returning. On ALLOC-FAILED it stops: never mutate the live tree, never fall back to `/tmp` or the scratchpad. The owner is the SESSION, so the lead `rm`s the path after any seat returns or fails. No script in the repo: use the fallback in [work-scratch-sandboxes.md](../work/references/work-scratch-sandboxes.md). A helper that signals or removes files: run each mutant via `run-isolated "$SBX" -- <cmd>` under `timeout -k 5 120`; one that cannot start there (125 with `RUN_IN_PID_NAMESPACE_REFUSED`, a missing script or verb) is `UNVERIFIED-NO-NAMESPACE`, never run on the host (same file, mutating-helper section).
 
@@ -926,7 +924,7 @@ embedded in it, including in file paths.
 
 **Pipeline detection (run BEFORE writing the summary):** Scan the conversation for `skill: soleur:work` or `skill: soleur:one-shot` output, a `soleur:work` or `soleur:one-shot` slash command, or a `slash_command` tool use of those skills, or the arguments carried `--parent ship`. If any is present, you are in **pipeline mode** — the calling orchestrator owns the lifecycle and is waiting on you to return so it can run step 5 / Phase 4. Emit the **compact progress marker** below instead of the verbose summary, then return immediately. Do NOT use the heading `## Code Review Complete`, do NOT include a `### Next Steps` section, and do NOT write a wrap-up sentence — those framings cause one-shot to mistake the summary for a turn boundary and stop mid-pipeline.
 
-**Final-report decision check (before either template).** Class every decision the report leaves to the operator per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) section 8.1; only `operator (<category>)` items stay, the rest go through the item-4 ruling gate first.
+**Final-report decision check (before either template).** Class every decision the report leaves to the operator per [technical-ruling-delegation.md](../brainstorm-techniques/references/technical-ruling-delegation.md) section 8.1; only `operator (<category>)` items stay, the rest go through the item-4 ruling gate first. If the report will be saved or pasted into a file, run `technical-ruling-gate.sh --report <file>`; exit 1 means rewrite per 8.1, exit 2 means fix the file.
 
 **Pre-emission cost-of-filing pass (run BEFORE the marker):** Build the
 candidate "Filed as scope-out" list from your synthesis. For each candidate,
@@ -1054,7 +1052,7 @@ After the marker, control returns to one-shot step 5 / work Phase 4 in the SAME 
 
 ### 6. Exit Gate
 
-**Pipeline detection:** If the conversation contains `skill: soleur:work` output, a `soleur:work` slash command, or `slash_command` of `work` (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` / `soleur:one-shot` / `slash_command` of `one-shot` (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. The verbose summary's `### Next Steps` block is the failure mode that causes orchestrators to mistake the report for a turn-ending deliverable. **If the arguments carried `--parent ship`,** run only step 3 below (the review-evidence trailer, which ship re-reads) and return to ship: ship's own Phase 2 runs compound and ship is already running, so invoking either here nests a second ship run. This clause wins over the conversation scan above: under a one-shot or work pipeline that reaches ship, the trailer must still be emitted, or ship's evidence re-read finds none.
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output, a `soleur:work` slash command, or `slash_command` of `work` (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` / `slash_command` of `one-shot` (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps **and do not output the verbose `## Code Review Complete` block from Step 3** — the compact `## Review Phase Complete` marker (Step 3, pipeline mode) is the only output and the orchestrator's continuation gate handles progression. **If the arguments carried `--parent ship`,** run only step 3 below (the review-evidence trailer, which ship re-reads) and return to ship: ship's own Phase 2 runs compound and ship is already running, so invoking either here nests a second ship run. This clause wins over the conversation scan above: under a one-shot or work pipeline that reaches ship, the trailer must still be emitted, or ship's evidence re-read finds none.
 
 **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
 
