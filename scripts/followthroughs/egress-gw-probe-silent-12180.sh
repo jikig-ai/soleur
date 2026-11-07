@@ -171,7 +171,7 @@
 #       do NOT close it by hand (expected: a hand close files a fresh P1 at the next 15-minute run while the incident is still open;
 #       the mirror dedupes on OPEN issues only). If the vendor keeps the incident open
 #       after its alert is deleted, say so on tracker #12189.
-#   STATUS after #12189: sites (1), (3b), (4), (5), (6) and (7) are done; (2) the two -target lines and (3) the two INTENDED_DESTROYS entries stay until #12270 (after the apply); (8) is deferred to #12271; (9) is unchanged; (10) is pending the apply.
+#   STATUS after #12270: sites (1), (3b), (4), (5), (6) and (7) were done by #12189; (2) the two -target lines and (3) the two INTENDED_DESTROYS entries were removed by #12270 once the apply had destroyed the pair (apply run 42369320061, "2 destroyed"); (8) is deferred to #12271; (9) is unchanged; (10) was observed, and so was the "unverified" exit-0 note in the exit-code contract above: the runbook update (tracker #12189, comment 6707181573) owns the details.
 #   After the sweeper PASS closes the tracker, closed_precheck never runs this again; the script stays as the reproduction.
 
 set -uo pipefail
