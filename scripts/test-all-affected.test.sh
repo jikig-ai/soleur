@@ -3666,7 +3666,10 @@ done
 #        select .md (dir prefixes cover any extension) — excluded by the same
 #        deliberate literal set.
 while IFS= read -r _sandbox_probe; do
-  _th_is_prefix_root "$_sandbox_probe" && continue
+  # .claude-plugin's *.md is corpus via the declared glob:.claude-plugin/**.md
+  # edge (minted by the #11779 always-on demotion), not a dir prefix — it is
+  # excluded alongside the prefix roots, by literal, same doctrine.
+  _th_is_prefix_root "$_sandbox_probe" || [[ "$_sandbox_probe" == ".claude-plugin" ]] && continue
   cases=$((cases + 1))
   SANDBOX_LIB=with-lib run_arm \
     "SANDBOX_DIFF_NAMES=${_sandbox_probe}/x.md" \
