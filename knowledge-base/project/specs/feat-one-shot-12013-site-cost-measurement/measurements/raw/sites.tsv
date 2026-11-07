@@ -210,7 +210,7 @@
 210	mutate	row_scan_esc
 211	mutate	row_scan_basename
 212	mutate	row_scan_poison
-213	mutate	row_scan_memo
+213	mutate	row_rc_closure
 214	mutate	row_scan_memo
 215	mutate	row_scan_ops
 216	mutate	row_scan_ops
@@ -349,7 +349,7 @@
 349	mutate	row_scan_ops
 350	mutate	row_scan_ops
 351	mutate	row_scan_ops
-352	mutate	row_sym
+352	mutate	row_scan_ops
 353	mutate	row_sym
 354	mutate	row_sym
 355	mutate	row_sym

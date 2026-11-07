@@ -22,7 +22,7 @@ site_cost_whatif.py: validation rep-disagreement arm a: sites with r4/r5 cost di
 site_cost_whatif.py: validation rep-disagreement arm b: sites with r4/r5 cost differing by more than max(2 s, 25%) hold 4.1% of raw site-seconds (limit 20%)
 site_cost_whatif.py: validation rep-disagreement arm c: sites with r4/r5 cost differing by more than max(2 s, 25%) hold 0.0% of raw site-seconds (limit 20%)
 site_cost_whatif.py: validation FAILED: the table does not support a rebalance
-site_cost_whatif.py: robustness: arm perturbations (-0.15, 0.0, 0.15) each x approval-guard1-mutation walls (666.0, 880.0, 1080.0) s = 81 paired combinations
+site_cost_whatif.py: robustness: arm perturbations (-0.15, 0.0, 0.15) each x approval-guard1-mutation walls (666.0, 880.0, 1080.0) s = 81 paired combinations (666 s: the #12263 issue body; 880 s: archived control2; 1080 s: archived t1)
 site_cost_whatif.py: t1-order pristine_charge=off: baseline pool end 1842 s (ends on approval-guard1-mutation); best split 1-18 / 19-586 / 587-602 arm walls 387/1718/359; pool end 1727 s; nominal gain 115 s; min paired gain over 81 combinations -357 s
 site_cost_whatif.py: t1-order pristine_charge=on: baseline pool end 1842 s (ends on approval-guard1-mutation); best split 1-555 / 556-558 / 559-602 arm walls 1725/345/385; pool end 1726 s; nominal gain 116 s; min paired gain over 81 combinations -366 s
 site_cost_whatif.py: start-first pristine_charge=off: baseline pool end 1509 s (ends on dev-ledger-parity.test.sh); best split 1-53 / 54-576 / 577-602 arm walls 807/1285/371; pool end 1493 s; nominal gain 16 s; min paired gain over 81 combinations -20 s

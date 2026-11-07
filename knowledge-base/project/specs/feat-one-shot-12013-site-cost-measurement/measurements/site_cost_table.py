@@ -110,6 +110,8 @@ def load_rep(raw, rep, total):
             wall_s, wall_e = Decimal(s), Decimal(e)
         except (ValueError, InvalidOperation):
             raise Refusal(f"rep {rep} arm {arm}: malformed .wall file")
+        if not (wall_s.is_finite() and wall_e.is_finite() and wall_e > wall_s):
+            raise Refusal(f"rep {rep} arm {arm}: malformed .wall file (not finite, or the end is not after the start)")
         arms[arm] = {
             "times": parse_stamps(base + ".stamps.tsv", total),
             "range": parse_range(read_text(base + ".range")),
@@ -198,12 +200,15 @@ def build(raw, total=TOTAL, opts=None):
     comp = [(r, compute_rep(rp, total, opts)) for r, rp in loaded]
     rowmap = {}
     sites_path = os.path.join(raw, "sites.tsv")
-    if os.path.exists(sites_path):
-        for line in read_text(sites_path).splitlines():
-            o, _kind, row = line.split("\t")
-            rowmap[int(o)] = row
-        if len(rowmap) != total:
-            raise Refusal(f"sites.tsv maps {len(rowmap)} sites, expected {total} (regenerate it from the test file of the tree that was measured)")
+    if not os.path.exists(sites_path):
+        raise Refusal("raw/sites.tsv is missing: without it every row would be labelled '?' (generate it with --sites from the test file of the tree that was measured)")
+    for line in read_text(sites_path).splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3 or not parts[0].isdigit():
+            raise Refusal(f"sites.tsv has a malformed line: {line[:60]!r}")
+        rowmap[int(parts[0])] = parts[2]
+    if sorted(rowmap) != list(range(1, total + 1)):
+        raise Refusal(f"sites.tsv maps {len(rowmap)} sites, expected exactly the ordinals 1..{total} (regenerate it from the test file of the tree that was measured)")
     final = {}
     for k in range(1, total + 1):
         raws = [c["sites"][k]["raw"] for _, c in comp]
@@ -213,7 +218,7 @@ def build(raw, total=TOTAL, opts=None):
         raw = agg(raws, opts.use_mean)
         final[k] = {
             "arm": comp[0][1]["sites"][k]["owner"],
-            "row": rowmap.get(k, "?"),
+            "row": rowmap[k],
             "raw": raw,
             "cost": max(Decimal(0), raw),
             "noise": agg(noises, opts.use_mean),
@@ -237,6 +242,7 @@ def render(t):
            "# ranges " + " ".join(f"{a}={t['ranges'][a][0]}-{t['ranges'][a][1]}" for a in ARMS),
            "# unconditional_s " + " ".join(f"{a}={f3(t['uncond'][a])}" for a in ARMS),
            "# wall_s " + " ".join(f"{a}={f3(t['walls'][a])}" for a in ARMS),
+           "# scope: the tree named above only. After the observation-window retirement (129 sites, ordinals 1-129 here), ordinal k of the 473-site test file is ordinal k+129 here.",
            "# estimator: raw_cost = owner interval - median(two non-owner intervals), unclamped; reps aggregated by median; cost = max(0, raw_cost)",
            "site\tarm\trow\tcost_s\traw_cost_s\tnoise_s\tflag\tothers_live"]
     for k in range(1, t["total"] + 1):
@@ -269,7 +275,7 @@ def sites_of(test_file):
         for j in range(i, min(i + 60, len(lines))):
             if j > i and re.match(r"(mutate|ow_mutate) ", lines[j]):
                 break  # the next call starts: this one had no row label
-            mm = re.search(r"\s(row_[A-Za-z0-9_]+)\s*$", lines[j])
+            mm = re.search(r"\s(row_[A-Za-z0-9_]+)\s*(?:#.*)?$", lines[j])
             if mm:
                 row = mm.group(1)
                 break
@@ -288,7 +294,7 @@ def round_half_up_median(values):
 
 
 def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False, base=0, tree="deadbeef", rc="0",
-             passed="ci-pr-affected-replay.test.sh: 10 passed, 0 failed, 10 assertions, 3 mutants", range_a="1-193", wall_text=None, chunks=None):
+             passed="ci-pr-affected-replay.test.sh: 10 passed, 0 failed, 10 assertions, 3 mutants", range_a="1-193", wall_text=None, chunks=None, wall_a=1000):
     """Synthetic rep. Every site: owner interval = true cost + 0.025, non-owners 0.020 and 0.030 (median 0.025).
     Head 0->1 is 4.0 s in arm a and 1.0 s elsewhere. Site TOTAL carries the tail: owner c 0.5 s + cost, non-owners a 0.4 s and b 0.6 s
     (median 0.5, so raw_cost is the cost and noise_s is 0.2). `chunks` adds an unconditional chunk (seconds) to site k in every arm."""
@@ -296,7 +302,7 @@ def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False, bas
     b0 = Decimal(base)
     starts = {"a": Decimal("1000.0") + b0, "b": Decimal("1030.2") + b0, "c": Decimal("1100.4") + b0}  # staggered so others_live varies per site
     ranges = {"a": (1, 193), "b": (194, 386), "c": (387, 602)}
-    walls = {"a": Decimal("1000.0"), "b": Decimal("500.0"), "c": Decimal("400.0")}
+    walls = {"a": Decimal(wall_a), "b": Decimal("500.0"), "c": Decimal("400.0")}
     for arm in ARMS:
         t = starts[arm]
         stamps = [("0", t)]
@@ -329,7 +335,7 @@ def make_rep(raw, rep, costs, clean=True, extra_line=False, backwards=False, bas
     _write(os.path.join(raw, f"{rep}.guard.txt"), f"rep={rep} tree={tree}\nloadavg_start=1 1 1\n{'CLEAN' if clean else 'DISTURBED'}\n")
 
 
-MIN_CHECKS = 33  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
+MIN_CHECKS = 47  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
 
 
 def selftest():
@@ -361,8 +367,9 @@ def selftest():
 def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
     raw = os.path.join(tmp, "raw")
     os.makedirs(raw)
-    for idx, (rep, c1) in enumerate((("r1", D(5)), ("r2", D(5)), ("r3", D(50)))):
-        make_rep(raw, rep, {**base_costs, 1: c1}, base=idx * 10000, chunks=chunks)
+    # the three reps differ in site 1's cost, in the unconditional chunk at site 150 and in arm a's wall, so a median, a mean and a first-rep read differ
+    for idx, (rep, c1, ch, wa) in enumerate((("r1", D(5), 6, 1010), ("r2", D(5), 6, 1000), ("r3", D(50), 20, 1000))):
+        make_rep(raw, rep, {**base_costs, 1: c1}, base=idx * 10000, chunks={150: ch}, wall_a=wa)
     _write(os.path.join(raw, "sites.tsv"), "".join(f"{k}\tmutate\trow_{k}\n" for k in range(1, TOTAL + 1)))
 
     def golden(t):
@@ -399,6 +406,15 @@ def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
     lines = text.splitlines()
     check("render has 602 data rows", len([l for l in lines if re.match(r"\d+\t", l)]) == TOTAL)
     check("render header carries the unconditional shares", "# unconditional_s a=987.010 b=486.000 c=388.500" in lines)
+    for hline in ("# tree=deadbeef", f"# DECLARED_TOTAL={TOTAL}", "# reps=r1,r2,r3", "# ranges a=1-193 b=194-386 c=387-602", "# wall_s a=1000.000 b=500.000 c=400.000"):
+        check(f"render header line {hline!r}", hline in lines)
+    check("render header carries the scope line", any(l.startswith("# scope:") for l in lines))
+    # producer-consumer contract: what the builder renders is what the what-if reads and accepts
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import site_cost_whatif as wf
+    contract = os.path.join(tmp, "contract.tsv")
+    _write(contract, text)
+    check("render -> site_cost_whatif.read_table -> check() reports no problem", wf.check(wf.read_table(contract)) == [])
     check("render row of site 1", "1\ta\trow_1\t5.000\t5.000\t0.010\t-\t2" in lines)
     check("render row of site 100 (negative raw kept, cost clamped)", "100\ta\trow_100\t0.000\t-0.010\t0.010\tflag\t2" in lines)
     by = render_by_rep(good).splitlines()
@@ -422,6 +438,7 @@ def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
         check(f"round_half_up_median({vals}) == {want}", round_half_up_median(vals) == want)
     two = os.path.join(tmp, "two")
     os.makedirs(two)
+    _write(os.path.join(two, "sites.tsv"), "".join(f"{k}\tmutate\trow_{k}\n" for k in range(1, TOTAL + 1)))
     for idx, rep in enumerate(("r1", "r2")):
         make_rep(two, rep, base_costs, base=idx * 10000, chunks=chunks)
     t2 = build(two)
@@ -435,6 +452,8 @@ def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
         ("unclean passed line", {"passed": "x: 9 passed, 1 failed, 10 assertions"}, "not a clean pass"),
         ("ranges that do not tile", {"range_a": "1-190"}, "do not tile"),
         ("malformed wall file", {"wall_text": "garbage\n"}, "malformed .wall"),
+        ("non-finite wall file", {"wall_text": "nan nan\n"}, "malformed .wall"),
+        ("wall file whose end is before its start", {"wall_text": "9 5\n"}, "malformed .wall"),
     )
     for label, kw, want in cases:
         d = os.path.join(tmp, "bad-" + label.replace(" ", "-"))
@@ -455,15 +474,44 @@ def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
         check("refusal expected: reps on different trees", False)
     except Refusal as e:
         check(f"refusal for different trees: {e}", "different trees" in str(e))
-    d = os.path.join(tmp, "bad-overlap")
+    for label, base2 in (("reps overlapping in time (all arms)", 100), ("reps overlapping only the longest arm of the first", 600)):
+        d = os.path.join(tmp, "bad-overlap-" + str(base2))
+        os.makedirs(d)
+        make_rep(d, "r1", base_costs, base=0)
+        make_rep(d, "r2", base_costs, base=base2)
+        try:
+            build(d)
+            check(f"refusal expected: {label}", False)
+        except Refusal as e:
+            check(f"refusal for {label}: {e}", "overlap in time" in str(e))
+    d = os.path.join(tmp, "abutting")  # the second rep starts exactly when the first one's longest arm ends: accepted
     os.makedirs(d)
+    _write(os.path.join(d, "sites.tsv"), "".join(f"{k}\tmutate\trow_{k}\n" for k in range(1, TOTAL + 1)))
     make_rep(d, "r1", base_costs, base=0)
-    make_rep(d, "r2", base_costs, base=100)
+    make_rep(d, "r2", base_costs, base=1000)
+    check("abutting reps are accepted", build(d)["reps"] == ["r1", "r2"])
+    d = os.path.join(tmp, "equal-stamps")  # a skipped site whose consecutive stamps tie (microsecond clock) is accepted; only a decrease is refused
+    os.makedirs(d)
+    _write(os.path.join(d, "sites.tsv"), "".join(f"{k}\tmutate\trow_{k}\n" for k in range(1, TOTAL + 1)))
+    make_rep(d, "r1", {**base_costs, 5: D("-0.025")}, base=0)
+    check("equal consecutive stamps are accepted", build(d)["reps"] == ["r1"])
+    d = os.path.join(tmp, "no-sites")
+    os.makedirs(d)
+    make_rep(d, "r1", base_costs)
     try:
         build(d)
-        check("refusal expected: reps overlapping in time", False)
+        check("refusal expected: sites.tsv missing", False)
     except Refusal as e:
-        check(f"refusal for overlapping reps: {e}", "overlap in time" in str(e))
+        check(f"refusal for a missing sites.tsv: {e}", "sites.tsv is missing" in str(e))
+    d = os.path.join(tmp, "bad-sites-line")
+    os.makedirs(d)
+    make_rep(d, "r1", base_costs)
+    _write(os.path.join(d, "sites.tsv"), "1\tmutate\n")
+    try:
+        build(d)
+        check("refusal expected: malformed sites.tsv line", False)
+    except Refusal as e:
+        check(f"refusal for a malformed sites.tsv line: {e}", "malformed line" in str(e))
     d = os.path.join(tmp, "bad-empty")
     os.makedirs(d)
     try:
@@ -482,9 +530,10 @@ def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
         check(f"refusal for a sites map of the wrong size: {e}", "maps 3 sites" in str(e))
     # the sites extractor: single-line call, multi-line call (row on the closing line), call without a row
     tf = os.path.join(tmp, "t.sh")
-    _write(tf, "mutate m1 'old' 'new' row_alpha\now_mutate m2 $'a\nb' $'c\nd' row_beta\nmutate m3 'x' 'y'\nchk something\nmutate m4 'p' 'q' row_gamma\n")
-    check("sites_of reads single-line, multi-line and unlabelled calls", sites_of(tf) ==
-          "1\tmutate\trow_alpha\n2\tow_mutate\trow_beta\n3\tmutate\t?\n4\tmutate\trow_gamma\n")
+    _write(tf, "mutate m1 'old' 'new' row_alpha\now_mutate m2 $'a\nb' $'c\nd' row_beta\nmutate m3 'x' 'y'\nchk something\nmutate m4 'p' 'q' row_gamma\n"
+              "mutate m5 'p' $'q\nr' row_delta   # a note after the row token\nmutate m6 'p' 'q' row_eps # trailing comment\n")
+    check("sites_of reads single-line, multi-line, unlabelled and trailing-comment calls", sites_of(tf) ==
+          "1\tmutate\trow_alpha\n2\tow_mutate\trow_beta\n3\tmutate\t?\n4\tmutate\trow_gamma\n5\tmutate\trow_delta\n6\tmutate\trow_eps\n")
     # exit status of a refusal through main()
     d = os.path.join(tmp, "bad-rc")
     os.makedirs(d)
@@ -503,7 +552,7 @@ def _selftest_body(tmp, check, fails, ran, D, base_costs, chunks):
     if ran[0] < MIN_CHECKS:
         print(f"SELFTEST FAIL: only {ran[0]} checks ran, floor is {MIN_CHECKS}")
         return 1
-    print(f"site_cost_table.py selftest: {ran[0]} checks, golden ok, {len(mutants)} mutants red, {len(cases) + 4} refusals matched by reason, rc 2 on DISTURBED")
+    print(f"site_cost_table.py selftest: {ran[0]} checks, golden ok, {len(mutants)} mutants red, {len(cases) + 7} refusals matched by reason, rc 2 on DISTURBED")
     return 0
 
 

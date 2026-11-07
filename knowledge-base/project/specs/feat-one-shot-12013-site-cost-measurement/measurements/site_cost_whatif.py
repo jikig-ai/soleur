@@ -39,7 +39,7 @@ ADDED = (127, 128, 129)
 FIRST_ADDED = ADDED[0]
 OLD_RANGES = {"a": (1, 193), "b": (194, 386), "c": (387, 599)}
 ARMS = ("a", "b", "c")
-MIN_CHECKS = 47  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
+MIN_CHECKS = 72  # absolute floor on the assertions the selftest runs; raise it with the suite, never derive it
 
 
 def p(msg):
@@ -105,6 +105,9 @@ def check(t):
         if r["cost"] < 0:
             bad.append(f"site {r['site']} has a negative cost")
             break
+    unlabelled = [r["site"] for r in t.rows if r["row"] == "?"]
+    if unlabelled:
+        bad.append(f"{len(unlabelled)} unlabelled rows (first: site {unlabelled[0]}): the pristine-row model would pool them into one pseudo-row")
     for r in t.rows:
         lo, hi = t.ranges.get(r["arm"], (0, -1))
         if not lo <= r["site"] <= hi:
@@ -234,7 +237,8 @@ class Model:
 
 def estimate_pristine(t):
     """Per-row pristine cost: first site of a row in an arm minus the median of its other sites there (>= 0); a row with no arm
-    holding two of its sites takes the largest estimate observed."""
+    holding two of its sites takes the largest estimate observed (an arbitrary but conservative fallback: for a row that sits in one
+    arm the subtraction and the charge cancel exactly in the baseline, so it only matters for a candidate split that cuts such a row)."""
     est = {}
     by = {}
     for r in t.rows:
@@ -316,6 +320,19 @@ def robust_min(table, scale, rest, splits, base_split, prist, pristine, long_fir
     return worst
 
 
+def candidates_of(results):
+    """The splits that would land: the best split of the uncharged model and the best split of the charged one (t1 order)."""
+    return sorted({results[("t1-order", False)][2], results[("t1-order", True)][2]})
+
+
+def gate_for(t, scale, rest, prist, base, cands, pristine):
+    """(minimum nominal gain, minimum paired gain over the perturbation combinations) over ALL candidate splits under one pristine model."""
+    m = Model(t, scale, None, pristine, prist)
+    e0, _, _ = pool_end_for(arm_walls_for(m, base), rest)
+    gains = [e0 - pool_end_for(arm_walls_for(m, s), rest)[0] for s in cands]
+    return min(gains), robust_min(t, scale, rest, cands, base, prist, pristine)
+
+
 def base_split_of(t):
     return (t.ranges["a"][1], t.ranges["b"][1])
 
@@ -382,13 +399,18 @@ def validation(t, by_rep, readings):
     for a in ARMS:
         ords = [k for k in sorted(brows) if brows[k][0] == a]
         n = len(ords)
+        if n == 0:
+            lines.append(f"validation split-half arm {a}: FAILED (fail closed): the per-rep file holds no site of this arm")
+            ok = False
+            continue
         blocks = [[] for _ in range(10)]
         for i, k in enumerate(ords):
             blocks[i * 10 // n].append(k)
-        armtot = sum(max(0.0, brows[k][1][0]) for k in ords) or 1.0
+        armtots = [sum(max(0.0, brows[k][1][i]) for k in ords) or 1.0 for i in range(len(reps))]
         bad = []
         sums = [[sum(brows[k][1][i] for k in blk) for blk in blocks] for i in range(len(reps))]
-        material = [j for j in range(len(blocks)) if sums[0][j] >= 0.05 * armtot]
+        # a block is material when it holds at least 5% of the arm's raw seconds in ANY rep
+        material = [j for j in range(len(blocks)) if any(sums[i][j] >= 0.05 * armtots[i] for i in range(len(reps)))]
         for j in material:
             vals = [sums[i][j] for i in range(len(reps))]
             if (max(vals) - min(vals)) / max(abs(max(vals)), 1e-9) > 0.20:
@@ -461,7 +483,8 @@ def report(table_path, t1_path, c2_path, derived):
     prist = estimate_pristine(t)
     base = base_split_of(t)
     n_combo = len(ARM_PERT) ** 3 * len(APPROVAL_WALLS)
-    p(f"robustness: arm perturbations {ARM_PERT} each x approval-guard1-mutation walls {APPROVAL_WALLS} s = {n_combo} paired combinations")
+    p(f"robustness: arm perturbations {ARM_PERT} each x approval-guard1-mutation walls {APPROVAL_WALLS} s = {n_combo} paired combinations "
+      f"(666 s: the #12263 issue body; 880 s: archived control2; 1080 s: archived t1)")
     results = {}
     for ordering, long_first in (("t1-order", None), ("start-first", LONG3)):
         for pristine in (False, True):
@@ -474,15 +497,11 @@ def report(table_path, t1_path, c2_path, derived):
               f"1-{x} / {x + 1}-{y} / {y + 1}-{TOTAL} arm walls {w[0]:.0f}/{w[1]:.0f}/{w[2]:.0f}; pool end {end:.0f} s; nominal gain {e0 - end:.0f} s; "
               f"min paired gain over {n_combo} combinations {rob:.0f} s")
     # the split that would land must clear the bar under BOTH pristine models: cross-evaluate both candidate splits under both models
-    cands = sorted({results[("t1-order", False)][2], results[("t1-order", True)][2]})
+    cands = candidates_of(results)
     gate = {}
     for pristine in (False, True):
-        m = Model(t, scale, None, pristine, prist)
-        e0, _, _ = pool_end_for(arm_walls_for(m, base), rest)
-        gains = [e0 - pool_end_for(arm_walls_for(m, s), rest)[0] for s in cands]
-        rob = robust_min(t, scale, rest, cands, base, prist, pristine)
-        gate[pristine] = (min(gains), rob)
-        p(f"gate pristine_charge={'on' if pristine else 'off'}: candidate splits {cands}; minimum nominal gain {min(gains):.0f} s; minimum paired gain {rob:.0f} s")
+        gate[pristine] = gate_for(t, scale, rest, prist, base, cands, pristine)
+        p(f"gate pristine_charge={'on' if pristine else 'off'}: candidate splits {cands}; minimum nominal gain {gate[pristine][0]:.0f} s; minimum paired gain {gate[pristine][1]:.0f} s")
     sf_on = results[("start-first", True)][0] - results[("start-first", True)][1]
     sf_ok = results[("start-first", True)][3] >= 0 and results[("start-first", False)][3] >= 0
     # #12263 pricing (paper only)
@@ -511,8 +530,11 @@ def _toy_table(costs_a=(10, 10, 10), costs_b=(5, 5), costs_c=(5,), live=0, uncon
     return t
 
 
-def _synthetic_validation_inputs(raw=1.0, u=100.0, scale=1.2, a_factor=1.0, c_factor=1.0, reps=("x", "y"), rep_values=(1.0, 1.0)):
-    """A 602-row table and archived walls consistent with `scale` on arms b and c; arm a's archived wall is a_factor times its prediction."""
+def _synthetic_validation_inputs(raw=1.0, u=100.0, scale=1.2, a_factor=1.0, c_factor=1.0, reps=("x", "y"), rep_values=(1.0, 1.0),
+                                 rep_fn=None, live_alone=0, scale2=None):
+    """A 602-row table and archived walls consistent with `scale` on arms b and c; arm a's archived wall is a_factor times its prediction.
+    rep_fn(k, arm, i_in_arm) -> per-rep values replaces rep_values; live_alone makes the first N sites of arm a run with no other arm live;
+    scale2 adds a second reading ('other') built with that scale."""
     t = Table()
     t.tree, t.total = "synthetic", TOTAL
     t.ranges = {"a": (1, 193), "b": (194, 386), "c": (387, TOTAL)}
@@ -524,8 +546,46 @@ def _synthetic_validation_inputs(raw=1.0, u=100.0, scale=1.2, a_factor=1.0, c_fa
     pred = {a: u + raw * len(sites[a]) for a in ARMS}
     walls = {"a": scale * pred["a"] * a_factor, "b": scale * pred["b"], "c": scale * pred["c"] * c_factor}
     jobs = {lab: {"wall": walls[a]} for a, lab in zip(ARMS, ARM_LABELS)}
-    by_rep = (list(reps), {k: (t.rows[k - 1]["arm"], list(rep_values)) for k in range(1, TOTAL + 1)}) if reps else None
-    return t, by_rep, {"t1": jobs}
+    for r in t.rows[:live_alone]:
+        r["live"] = 0
+    idx = {a: 0 for a in ARMS}
+    by_rep_rows = {}
+    for r in t.rows:
+        by_rep_rows[r["site"]] = (r["arm"], list(rep_fn(r["site"], r["arm"], idx[r["arm"]])) if rep_fn else list(rep_values))
+        idx[r["arm"]] += 1
+    by_rep = (list(reps), by_rep_rows) if reps else None
+    readings = {"t1": jobs}
+    if scale2 is not None:
+        readings["other"] = {lab: {"wall": scale2 * pred[a] * (a_factor if a == "a" else 1.0)} for a, lab in zip(ARMS, ARM_LABELS)}
+    return t, by_rep, readings
+
+
+def _write_table(path, t):
+    """Render a Table in the format site_cost_table.py writes (the consumer's input)."""
+    out = [f"# tree={t.tree}", f"# DECLARED_TOTAL={t.total}", "# reps=x,y",
+           "# ranges " + " ".join(f"{a}={t.ranges[a][0]}-{t.ranges[a][1]}" for a in ARMS),
+           "# unconditional_s " + " ".join(f"{a}={t.uncond[a]:.3f}" for a in ARMS), "site\tarm\trow\tcost_s\traw_cost_s\tnoise_s\tflag\tothers_live"]
+    out += [f"{r['site']}\t{r['arm']}\t{r['row']}\t{r['cost']:.3f}\t{r['raw']:.3f}\t{r['noise']:.3f}\t{r['flag']}\t{r['live']}" for r in t.rows]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+
+
+def _write_by_rep(path, by_rep):
+    reps, rows = by_rep
+    out = ["# raw_cost_s per rep: " + ",".join(reps), "site\tarm\t" + "\t".join(reps)]
+    out += [f"{k}\t{a}\t" + "\t".join(f"{v:.3f}" for v in vals) for k, (a, vals) in sorted(rows.items())]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(out) + "\n")
+
+
+def _write_launch(path, arm_walls):
+    """A launch-order file produced by the model's own scheduler: three arms, the approval suite, two more long suites, ten fillers, then a lone drain suite."""
+    jobs = list(zip(ARM_LABELS, arm_walls)) + [(APPROVAL, 300.0), (LONG3[1], 200.0), (LONG3[2], 150.0)] + [(f"filler/{i}", 40.0) for i in range(10)]
+    end, starts, _ = schedule(jobs)
+    rows = [(lab, starts[lab], starts[lab] + w, w) for lab, w in jobs] + [("drain/alone", end + 5.0, end + 8.0, 3.0)]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("# reading=synthetic engaged_at_s=0\n")
+        f.write("".join(f"{lab}\t{s0:.3f}\t{d:.3f}\t{int(w * 1000)}\t0\n" for lab, s0, d, w in rows))
 
 
 def selftest():
@@ -643,6 +703,104 @@ def selftest():
     for r in tv.rows:
         r["flag"] = "flag"
     ck("validation fails when flagged sites hold more than 20% of an arm's raw seconds", not validation(tv, byv, rdv)[0])
+    # validation(): each branch pinned by a fixture that reaches ONLY that branch (the logs name the branch that fired)
+    def block_of(i, n):
+        return i * 10 // n
+    n_of = {"a": 193, "b": 193, "c": 216}
+    tv, byv, rdv = _synthetic_validation_inputs(rep_fn=lambda k, a, i: (1.0 + 0.01 * block_of(i, n_of[a]), 1.0 + 0.01 * (9 - block_of(i, n_of[a]))))
+    okr, lr, _ = validation(tv, byv, rdv)
+    ck("validation: only the rank order differs -> fails with 'unstable blocks=[], rank order DIFFERS'", not okr and any("unstable blocks=[], rank order DIFFERS" in l for l in lr))
+    tv, byv, rdv = _synthetic_validation_inputs(rep_fn=lambda k, a, i: (3.0 + 0.5 * block_of(i, n_of[a]) + (1.5 if i % 2 == 0 else -1.5),
+                                                                       3.0 + 0.5 * block_of(i, n_of[a]) - (1.5 if i % 2 == 0 else -1.5)))
+    okd, ld, _ = validation(tv, byv, rdv)
+    ck("validation: only the per-site rep disagreement fires (ranks equal, blocks stable, 100% of raw seconds)",
+       not okd and any("rank order equal" in l for l in ld) and any("hold 100.0%" in l for l in ld) and not any("unstable blocks=[0" in l for l in ld))
+    tv, byv, rdv = _synthetic_validation_inputs(rep_fn=lambda k, a, i: ((0.02, 0.06) if (a == "a" and block_of(i, 193) == 3) else (1.0, 1.0)))
+    oks, ls, _ = validation(tv, byv, rdv)
+    ck("validation: a sub-5% block that is 3x apart between reps is not material and passes", oks)
+    tv, byv, rdv = _synthetic_validation_inputs(rep_fn=lambda k, a, i: ((1.0, 3.0) if (a == "a" and i < 19) else (1.0, 1.0)))
+    oksp, lsp, _ = validation(tv, byv, rdv)
+    ck("validation: a spike on the first tenth of arm a shows up as 'unstable blocks=[0]'", not oksp and any("arm a" in l and "unstable blocks=[0]" in l for l in lsp))
+    tv, byv, rdv = _synthetic_validation_inputs(live_alone=50)
+    oka, la, _ = validation(tv, byv, rdv)
+    ck("validation: the alone/overlapped split of arm a is 50.0 / 143.0 s", oka and any("alone_s=50.0 overlapped_s=143.0" in l for l in la))
+    tv, byv, rdv = _synthetic_validation_inputs(scale2=2.0)
+    okt, lt, st = validation(tv, byv, rdv)
+    ck(f"validation: the model scale is the FIRST reading's (1.2), got {st}", abs(st - 1.2) < 1e-9 and any("validation other:" in l for l in lt))
+    tv, byv, rdv = _synthetic_validation_inputs(a_factor=1.17)
+    ck("validation: arm a's error is taken against the archived wall (14.5% passes; against the prediction it would be 17%)", validation(tv, byv, rdv)[0])
+    tv, byv, rdv = _synthetic_validation_inputs(c_factor=1.105)
+    ck("validation: the b/c spread is taken against the larger ratio (9.5% passes; against the smaller it would be 10.5%)", validation(tv, byv, rdv)[0])
+    tv, byv, rdv = _synthetic_validation_inputs()
+    del byv[1][1]  # arm a loses its site 1 in the per-rep file: still fine; remove every arm-b row instead
+    for k in [k for k, (a, _v) in byv[1].items() if a == "b"]:
+        del byv[1][k]
+    ck("validation: an arm with no row in the per-rep file fails closed", not validation(tv, byv, rdv)[0])
+    # check(): a table with an unlabelled row is refused
+    tv, byv, rdv = _synthetic_validation_inputs()
+    ck("check() accepts the consistent synthetic table", check(tv) == [])
+    tv.rows[10]["row"] = "?"
+    ck("check() refuses a table with an unlabelled row", any("unlabelled" in b for b in check(tv)))
+    # pristine charge under live, scale and perturbation, hand-computed: R at sites 1,2 (arm a) and 4 (arm b), live everywhere, scale 1.5, +15% on arm a, R=3
+    tq = _toy_table()
+    for r in tq.rows:
+        r["live"] = 1
+        r["row"] = "R" if r["site"] in (1, 2, 4) else r["row"]
+    mq = Model(tq, 1.5, {"a": 0.15, "b": 0.0, "c": 0.0}, True, {"R": 3.0})
+    ck(f"pristine under pert+scale: wall(a,1-2) = 34.5 (= the uncharged baseline), got {mq.wall('a', 1, 2):.4f}", abs(mq.wall("a", 1, 2) - 34.5) < 1e-9)
+    ck(f"pristine under pert+scale: wall(a,2-3) = 34.5 + 3*1.15*1.5 = 39.675, got {mq.wall('a', 2, 3):.4f}", abs(mq.wall("a", 2, 3) - 39.675) < 1e-9)
+    ck(f"pristine under pert+scale: wall(b,3-4) = 17.25 + 7.5 (site 4 charged back) = 24.75, got {mq.wall('b', 3, 4):.4f}", abs(mq.wall("b", 3, 4) - 24.75) < 1e-9)
+    # robust_min over several splits is the minimum over them: adding the baseline split itself (gain 0) pulls the minimum to 0
+    ck("robust_min over [(2,4)] is 8.5 and over [(2,4), (3,5)] is 0 (the baseline split gains nothing)",
+       abs(robust_min(t, 1.0, [], [(2, 4)], base, {}, False, with_approval=False) - 8.5) < 1e-9
+       and abs(robust_min(t, 1.0, [], [(2, 4), (3, 5)], base, {}, False, with_approval=False)) < 1e-9)
+    ck("gate_for(): the minimum over candidates, not the best (the baseline split gains 0)",
+       gate_for(t, 1.0, [], {}, base, [(2, 4), (3, 5)], False) == (0.0, 0.0))
+    ck("gate_for(): a single candidate keeps its own nominal gain (10) and robust minimum (8.5)",
+       gate_for(t, 1.0, [], {}, base, [(2, 4)], False) == (10.0, 8.5))
+    ck("candidates_of(): both models' best splits, sorted, deduplicated",
+       candidates_of({("t1-order", False): (0, 0, (5, 9), 0), ("t1-order", True): (0, 0, (1, 2), 0)}) == [(1, 2), (5, 9)]
+       and candidates_of({("t1-order", False): (0, 0, (1, 2), 0), ("t1-order", True): (0, 0, (1, 2), 0)}) == [(1, 2)])
+    ck("decide(): an invalid table wins over a void model", decide(False, False, 500, 500, 5, 5).startswith("GATE: NO-REBALANCE (table"))
+    ck("decide(): a start-first gain exactly at the bar prints (start-first only)", decide(True, True, 10, 8, 1, 0, 60.0, True) == "GATE: NO-REBALANCE (start-first only)")
+    # report(): the wiring from files to the GATE line, on a consistent synthetic table (uniform costs: validation passes, no split gains 60 s)
+    import contextlib
+    import io
+    import tempfile
+    rep_dir = tempfile.mkdtemp(prefix="swf-", dir=os.environ.get("TMPDIR") or "/var/tmp")
+    try:
+        tv, byv, rdv = _synthetic_validation_inputs()
+        tpath = os.path.join(rep_dir, "t.tsv")
+        _write_table(tpath, tv)
+        _write_by_rep(os.path.join(rep_dir, "t.by_rep.tsv"), byv)
+        lpath = os.path.join(rep_dir, "launch.tsv")
+        _write_launch(lpath, [rdv["t1"][lab]["wall"] for lab in ARM_LABELS])
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc_rep = report(tpath, lpath, lpath, {"t1": 216.0})
+        out = buf.getvalue()
+        ck("report(): rc 0 and a plain NO-REBALANCE on a consistent uniform table", rc_rep == 0 and out.rstrip().endswith("GATE: NO-REBALANCE"))
+        ck("report(): validation passed, model reproduction ok, both gate lines and the robustness provenance are printed",
+           "validation passed" in out and "model reproduction ok" in out and out.count("gate pristine_charge=") == 2 and "666 s: the #12263 issue body" in out)
+        ck("report(): the cold derive is added to the packing floor", "with cold derive 216 s" in out)
+        short = tv
+        short.rows = short.rows[:-1]
+        _write_table(tpath, short)
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            rc_bad = report(tpath, lpath, lpath, {})
+        ck("report(): a table that fails check() returns 2 with the table-level GATE line", rc_bad == 2 and "GATE: NO-REBALANCE (table does not support a rebalance)" in buf2.getvalue())
+        tv2, byv2, rdv2 = _synthetic_validation_inputs(rep_values=(1.0, 2.0))
+        _write_table(tpath, tv2)
+        _write_by_rep(os.path.join(rep_dir, "t.by_rep.tsv"), byv2)
+        buf3 = io.StringIO()
+        with contextlib.redirect_stdout(buf3):
+            rc_v = report(tpath, lpath, lpath, {})
+        ck("report(): failing validation is carried into the GATE line", rc_v == 0 and "validation FAILED" in buf3.getvalue()
+           and buf3.getvalue().rstrip().endswith("GATE: NO-REBALANCE (table does not support a rebalance)"))
+    finally:
+        import shutil
+        shutil.rmtree(rep_dir, ignore_errors=True)
     # estimate_pristine: first site minus the median of the others in the same arm, clamped at 0; a single-site row takes the maximum
     te = _toy_table(costs_a=(9, 3, 3), costs_b=(5, 5), costs_c=(5,))
     for r, row in zip(te.rows, ("R", "R", "R", "S", "S", "T")):

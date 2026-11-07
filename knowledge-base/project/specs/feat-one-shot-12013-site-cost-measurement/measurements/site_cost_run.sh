@@ -12,6 +12,9 @@
 #     (default 9.0) or when any other test-all.sh / replay-arm run is live; the same facts are recorded at the end, a sampler notes any
 #     foreign run seen WHILE the arms ran (it makes the reading DISTURBED), and the maximum load1 seen is recorded (informational: it
 #     includes the reading's own three arms). guard.txt ends in CLEAN or DISTURBED. One reading at a time: an exclusive lock on SC_LOCK.
+#     Limits of the guard, stated honestly: it sees only test-all.sh and replay-arm runs spelled `bash scripts/test-all.sh`, `bash */scripts/test-all.sh` or
+#     `bash plugins/soleur/test/ci-pr-affected-replay.test.sh`, from users whose cwd it can read, sampled every 15 s (a shorter run can fall between ticks);
+#     other CPU load only shows as max_load1_during, which does not gate.
 #     (Hardened after readings r4 and r5 were taken: the exit trap, the in-run sightings, the fixed lock path, LC_ALL=C and the arm timeout.)
 # Env: TREE (required, a commit), SC_SRC (repo to clone; default the soleur repo), SC_SRC_WT (worktree whose node_modules are
 #      linked), SC_OUT_ROOT (default /var/tmp/m12013), SC_LOCK (default /var/tmp/m12013.lock), SC_ARM_TIMEOUT (seconds, default 5400), MAX_LOAD1, SC_LOAD1_OVERRIDE (synthetic load, used to exercise the guard),
@@ -62,7 +65,7 @@ if ! flock -n 9; then
   echo "ABORT $REP: another site-cost reading holds $SC_LOCK"; echo "DISTURBED (concurrent reading)" >"$O/guard.txt"; exit 3
 fi
 
-live_runs() {  # one line per live test-all.sh or replay-arm run whose cwd is not this reading's clone
+live_runs() {  # one line per live test-all.sh or replay-arm run whose cwd is not under this reading's output dir
   local p cwd args
   for p in /proc/[0-9]*; do
     args="$(tr '\0' ' ' 2>/dev/null <"$p/cmdline")" || continue
@@ -72,7 +75,7 @@ live_runs() {  # one line per live test-all.sh or replay-arm run whose cwd is no
       *) continue ;;
     esac
     cwd="$(readlink "$p/cwd" 2>/dev/null)" || continue
-    [[ "$cwd" == "$O/clone"* ]] && continue
+    [[ "$cwd" == "$O" || "$cwd" == "$O/"* ]] && continue   # this reading's own arms and their fixture subshells (cwd under the clone or a tmp-<arm> dir)
     echo "${p#/proc/} $cwd"
   done
 }
@@ -93,7 +96,10 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+trap 'exit 131' QUIT   # SIGKILL cannot be trapped: the arms then run to their timeout still holding the lock, which is the right state for a busy host
 
 assert_fixture_dir "$O"   # re-asserted after the last function head: the ratchet bounds a guard window at the enclosing function head
 load1="${SC_LOAD1_OVERRIDE:-$(cut -d' ' -f1 /proc/loadavg)}"
@@ -135,16 +141,17 @@ ARM_ORDER="$(printf '%s\n' "${!ROWS[@]}" | sort)"
 for arm in $ARM_ORDER; do mkdir -p "$O/tmp-$arm"; echo "${ROWS[$arm]}" >"$O/$arm.range"; done
 MAIN=$$
 (  # sampler: maximum load1 and any foreign run seen while the arms run; it stops when the arms are done or this script is gone
-  mx=0
+  mx=0; ticks=0
   while kill -0 "$MAIN" 2>/dev/null && [[ ! -e "$O/.arms-done" ]]; do
     l="$(cut -d' ' -f1 /proc/loadavg)"
     awk -v l="$l" -v m="$mx" 'BEGIN{exit !(l>m)}' && mx="$l"
     echo "$mx" >"$O/.max-load1"
     live_runs >>"$O/.foreign-during"
+    ticks=$((ticks + 1)); echo "$ticks" >"$O/.sampler-ticks"
     sleep 15
   done
 ) 9>&- &
-SAMPLER=$!
+SAMPLER=$!   # not niced on purpose: a niced sampler would be starved exactly when the host is busy; its cost is one /proc scan per 15 s
 
 pids=()
 for arm in $ARM_ORDER; do
@@ -168,10 +175,13 @@ fr_end="$(live_runs | sort -u)"
 fr_during="$(sort -u "$O/.foreign-during" 2>/dev/null | head -n 5)"
 verdict=CLEAN
 [[ -n "$fr_end" || -n "$fr_during" ]] && verdict=DISTURBED
+# a sampler that never ran (or died) observed nothing: that is not a clean reading
+[[ -s "$O/.sampler-ticks" && -s "$O/.max-load1" ]] || verdict=DISTURBED
 {
   echo "loadavg_end=$(cut -d' ' -f1-3 /proc/loadavg)"
   echo "max_load1_during=$(cat "$O/.max-load1" 2>/dev/null || echo unknown)"
   date -u +%FT%TZ
+  echo "sampler_ticks=$(cat "$O/.sampler-ticks" 2>/dev/null || echo 0)"
   echo "foreign_runs_during: ${fr_during:-none}"
   echo "foreign_runs_end: ${fr_end:-none}"
   echo "$verdict"

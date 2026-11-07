@@ -4,6 +4,7 @@
 # ranges a=1-193 b=194-386 c=387-602
 # unconditional_s a=313.901 b=311.848 c=313.110
 # wall_s a=1356.512 b=483.547 c=479.196
+# scope: the tree named above only. After the observation-window retirement (129 sites, ordinals 1-129 here), ordinal k of the 473-site test file is ordinal k+129 here.
 # estimator: raw_cost = owner interval - median(two non-owner intervals), unclamped; reps aggregated by median; cost = max(0, raw_cost)
 site	arm	row	cost_s	raw_cost_s	noise_s	flag	others_live
 1	a	row_ow_few_prs	1.298	1.298	0.000	-	2
@@ -218,7 +219,7 @@ site	arm	row	cost_s	raw_cost_s	noise_s	flag	others_live
 210	b	row_scan_esc	0.356	0.356	0.001	-	2
 211	b	row_scan_basename	0.359	0.359	0.000	-	2
 212	b	row_scan_poison	0.380	0.380	0.000	-	2
-213	b	row_scan_memo	0.357	0.357	0.001	-	2
+213	b	row_rc_closure	0.357	0.357	0.001	-	2
 214	b	row_scan_memo	0.286	0.286	0.000	-	2
 215	b	row_scan_ops	6.250	6.250	0.000	-	2
 216	b	row_scan_ops	1.095	1.095	0.000	-	2
@@ -357,7 +358,7 @@ site	arm	row	cost_s	raw_cost_s	noise_s	flag	others_live
 349	b	row_scan_ops	0.478	0.478	0.000	-	2
 350	b	row_scan_ops	0.487	0.487	0.000	-	2
 351	b	row_scan_ops	0.509	0.509	0.000	-	2
-352	b	row_sym	0.289	0.289	0.000	-	2
+352	b	row_scan_ops	0.289	0.289	0.000	-	2
 353	b	row_sym	0.924	0.924	0.000	-	2
 354	b	row_sym	30.143	30.143	0.000	-	2
 355	b	row_sym	0.588	0.588	0.000	-	2
