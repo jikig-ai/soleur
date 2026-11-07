@@ -1189,6 +1189,9 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/skills/review/SKILL.md"                              # T19 call-site pin (lead gate)
   "plugins/soleur/skills/test-fix-loop/SKILL.md"                       # T19 negative: stays token-blind
   "lefthook.yml"                                                       # T19 negative: stays token-blind
+  "plugins/soleur/scripts/affected-tests.sh"                           # T19 negative: the gate itself never reads the token
+  "plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh"         # T19 negative: its own exit-42 contract
+  "scripts/hooks/pre-push"                                             # T19 negative: opt-in hook stays token-blind
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )

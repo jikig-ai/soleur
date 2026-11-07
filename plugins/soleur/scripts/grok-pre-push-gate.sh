@@ -212,10 +212,12 @@ fi
 # (sliced by plugins/soleur/test/ship-battery-owed.test.sh T19: keep both sentinel lines)
 # grok-token-dispatch:start
 AFFECTED_GATE_WAIVED=0
+FIDELITY_SKIP_BUDGET=1   # grok-fidelity may skip its rule-budget lint only because the affected gate ran test-all
 _tok_rc=0
 "$BASH" "$BATTERY_OWED" --token-only || _tok_rc=$?
 if (( _tok_rc == 42 )); then
   AFFECTED_GATE_WAIVED=1
+  FIDELITY_SKIP_BUDGET=0   # nothing ran test-all, so grok-fidelity must run the AGENTS rule-budget lint itself
   echo "[note] affected-tests gate SKIPPED (NOT run, NOT passed): the brief declared CI the gate; only this step is waived, CI test still gates the merge" >&2
 else
   run_step "affected-tests gate" bash "$GATE"
@@ -240,7 +242,7 @@ else
 fi
 
 # --- Phase 4: Grok fidelity (the `grok-fidelity` member of the `guards-ruleset` required check) ---
-export GROK_FIDELITY_SKIP_BUDGET=1
+export GROK_FIDELITY_SKIP_BUDGET="$FIDELITY_SKIP_BUDGET"
 run_step "grok-fidelity-gate" bash plugins/soleur/scripts/grok-fidelity-gate.sh
 
 echo ""

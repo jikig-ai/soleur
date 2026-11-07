@@ -92,7 +92,7 @@ undecidable() { say "UNDECIDABLE — $1 (caller must treat as OWED)"; exit "$VER
 # The one accepted argument is `--token-only` (#12247); anything else, including a second argument, is UNDECIDABLE.
 TOKEN_ONLY=0
 if (( $# == 1 )) && [[ "$1" == "--token-only" ]]; then TOKEN_ONLY=1
-elif (( $# > 0 )); then undecidable "unknown argument"; fi
+elif (( $# > 0 )); then undecidable "unknown argument (the only accepted flag is --token-only)"; fi
 
 command -v git >/dev/null 2>&1 || undecidable "git not on PATH"
 # An inherited git-location variable (a hook's GIT_DIR / GIT_INDEX_FILE) would redirect every read below.
@@ -137,6 +137,8 @@ fi
 
 # ---------------------------------------------------------------------------
 # NO GROK-SPECIFIC ARM, and the reason is measured rather than argued.
+# (Scope, #12247: this rejects a harness-keyed arm. The operator-intent token waiving the Grok pre-push gate's affected step
+# is a different channel; its residuals are recorded in the ADR-242 2026-11-07 amendment.)
 #
 # An earlier revision skipped unconditionally on the Grok harness, on the claim
 # that `plugins/soleur/scripts/grok-pre-push-gate.sh` "re-runs test-all.sh at

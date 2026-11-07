@@ -26,3 +26,24 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto (1 s
 - constraint: Check a push real exit code, no pipe to tail. Run git add and git commit in separate calls. No rm -rf inside the worktree. No SSH.
 - constraint: Mutation-battery discipline for any new guard, a green unmutated control, a mutation-landed check, a lead-unique scratchpad file name. Cap fix rounds at two targeted rounds plus one verification pass.
 - ci-is-the-gate: Rely on CI required test check, do not run the local affected battery to completion.
+
+## Review Phase (PR 12294, panel SHA f3bee8bda5)
+
+dedup: 72 raw -> 22 unique. Tier: none (source: plan). Seats: 8 panel + 1 coverage consult. structural-cause roll-up: verdict-owning helpers and extraction anchors that pin a substring or a spelling instead of the command or the wire (test-design 1/3/4/5/7, security 4, architecture 2, enumeration populations); one cause, one fix family (controls plus exact-line equality plus footprint counts). Coverage consult: five leads, four refuted by probe (copied-plugin fail-closed, GIT_DIR unset by reader, per-run mktemp log, no stale-prose hits), one is the recorded token-lifetime residual.
+
+| defect | seats | disposition |
+|---|---|---|
+| test helpers (assert_has, assert_lacks, reason_args) neuterable with no signal (P1) | test-design | fixed: pass+fail controls, counters unwound; mutation-proven |
+| work step 9 command neuterable (echo, or-true); gateLines widened for ship too (P2) | test-design, architecture, enumeration | fixed: exact-line equality row; wrapper spelling admitted for work step 9 only |
+| Grok waiver hid the AGENTS rule-budget lint (P2) | architecture | fixed: grok-fidelity runs it when waived; row plus export-line pin |
+| Grok BATTERY_OWED path unexercised; waiver footprint; skip note unpinned (P2/P3) | test-design, pattern, security | fixed: real-assignment row, footprint row, note row |
+| stale "no Grok arm" rationale (P2) | history | fixed: scope note in the reader header |
+| "SKIPPED" not a unique anchor (P2) | agent-native | fixed: AFFECTED_GATE_SKIPPED in work, review; pinned |
+| declared edges, wider rc sets, stdout pin, negative list incl. pre-push hook and token pattern (P3) | arch, enumeration, test-design | fixed |
+| contract headings/grammar, issue-vs-PR wording, unknown-argument message, wrapper var rename (P3) | pattern, code-quality, history | fixed |
+| inline assert_fixture_dir duplicate (P2) | pattern, code-quality | fixed: removed, sourced canonical helper suffices (ratchets green) |
+| Grok recipe deletes the log on green so the banner is invisible (P2) | agent-native, security S1 | accepted: ship/SKILL.md byte-frozen; ADR-242 residual; Phase 4 already prints the same verdict |
+| one-shot/SKILL.md line 25 stale (P3) | several | accepted: 9 B headroom; disclosed in the contract |
+| same-commit edit of the gate scripts plus token (S2), BASH_ENV, symlinked wrapper (P3) | security | accepted: no new capability, CI required check and merge queue gate the merge; symlink fails closed |
+| near-copy helpers (run_gate_args etc.), sentinel/BASH naming, header shape (P3) | pattern, code-quality | wontfix: cosmetic, keeps the existing helpers above the accept-row cites untouched |
+| token lifetime across branch reuse | consult | design residual, operator-constraints item 5 |

@@ -73,15 +73,19 @@ wrapper prints the reader's verdict, then `affected gate: SKIPPED (NOT run, NOT 
 reader, and any argument (`--full`, `--explain`, `--base`) run `affected-tests.sh` verbatim and return its rc from the
 table above. Consumers: work step 9, work's fan-out lead gate, review's lead gate; `grok-pre-push-gate.sh` makes the same
 `--token-only` call inline and waives only its affected-tests step. Non-consumers: `soleur:ship` Phase 4 (calls the reader
-bare), `soleur:test-fix-loop` (a fix loop must run tests) and `lefthook.yml` (#12297). The wrapper is the same
+bare), `soleur:test-fix-loop` (a fix loop must run tests), `lefthook.yml` (#12297) and the opt-in
+`scripts/hooks/pre-push` hook (active only after `git config core.hooksPath scripts/hooks`). The
+reader's `battery-owed: OWED` line printed before a normal run is its no-token verdict; the gate then runs. The wrapper is the same
 `--affected` run the lead's bare runner call was, plus `.soleur-test-gate.json` budget and content-trigger
 semantics and the rc mapping above, so rc 6 and 7 are never reported as passed. `skills/one-shot/SKILL.md` still describes
 the Grok gate as running the affected gate unconditionally; the token waives that step (see the ADR-242 2026-11-07
 amendment).
 
+## Relocated from the work and review SKILL.md bodies (byte ceilings)
+
 A deprecated compat spelling also exists (#8621): `TEST_GROUP=affected` set in front of the repo runner `scripts/test-all.sh` is an alias of `--affected` — the #8591 heuristic it replaces was folded into the declared-edge axis after the decline-set measurement found misses on every corpus diff. It remains the substitute both rc=4 refusals prescribe; `TEST_GROUP=affected --affected` refuses rc=2. Either spelling is scoped evidence, not the ship gate.
 
-`SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the lead-gate paragraphs in work and review are instruction for the non-concurrent case, not claim.
+The `SOLEUR_SUBAGENT=1` exit-4 path is a deliberate-export convention, not harness-enforced — the lead-gate paragraphs in work and review are instruction for the non-concurrent case, not claim.
 
 ## Output
 

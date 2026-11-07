@@ -19,11 +19,11 @@
 set -uo pipefail
 
 HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
-OWED="$HERE/../skills/ship/scripts/battery-owed.sh"
+READER="$HERE/../skills/ship/scripts/battery-owed.sh"
 GATE="$HERE/affected-tests.sh"
 
-if (( $# == 0 )) && [[ -r "$OWED" ]]; then
-  "$BASH" "$OWED" --token-only
+if (( $# == 0 )) && [[ -r "$READER" ]]; then
+  "$BASH" "$READER" --token-only
   rc=$?
   if (( rc == 42 )); then
     echo "affected gate: SKIPPED (NOT run, NOT passed); CI test is the gate"
