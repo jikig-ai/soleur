@@ -201,3 +201,16 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    deliberate `allow_insecure = true` decision. Rollback is a revert PR plus the existing `ga-monitor-fix` arm (http/:80). A healthy
    https monitor proves a listener answers TLS on each origin with a certificate Cloudflare's monitor accepts; it does not prove the
    edge-to-origin traffic hop uses TLS (still `flexible` until the strict flip).
+9. **The canary rule (decision 3, step 4), amended 2026-11-07.** `seo-config-rules.tf` carries one `dynamic "rules"` block: for a request to
+   `/health` on `app.soleur.ai` that carries `x-origin-tls-probe: 1`, `set_config { ssl = "strict" }`. It is appended after the adopted
+   `flexible` rule (last match wins), so every other request to the host stays `flexible`. It is **gated by
+   `var.enable_origin_tls_canary_rule` (default false)**: the per-merge apply targets this whole resource, so an unconditional rule would
+   reach the edge at merge; with the gate, merge is a verified no-op (the rule list stays the three static rules) and the canary exists only
+   after the owner sets `ENABLE_ORIGIN_TLS_CANARY_RULE=true` in Doppler `prd_terraform` and dispatches the apply. Removing the secret and
+   re-applying removes that one rule in place; this is not the entrypoint-destroying revert the file's "ROLL FORWARD, NEVER REVERT" header warns about.
+   Proof: `origin-tls-probe.sh --canary` (implies `--require-tls`) exits 0 only when the rule applied AND Cloudflare accepted the Origin CA
+   certificate under strict for that request; exit 1 (525/526) means it applied and the certificate was refused; exit 3 means the rule did
+   not apply. The edge canary reaches the host that carries traffic (web-1) only; web-2 (weight 0) is covered by the https LB monitor with
+   certificate validation (item 8) and by its `origin-tls: listening` line. **Unverified:** that the `http_config_settings` phase accepts a
+   request-header field in an expression (Cloudflare's documentation does not say). If it does not, the apply fails at the API with nothing
+   written, and the probe stays at exit 3.
