@@ -169,6 +169,7 @@ const supabase = new Proxy({} as ServiceClient, {
 async function tenantFor(
   userId: string,
   op: string,
+  emitNotice = true,
 ): Promise<ServiceClient | null> {
   try {
     return await getFreshTenantClient(userId);
@@ -190,7 +191,7 @@ async function tenantFor(
       // is the founder-readable inspection API for support-driven
       // inquiry on that flow. ~750ms p95 RPC latency is accepted on
       // the deny path only (one-shot per revoke).
-      if (err.cause === "denied_jti") {
+      if (emitNotice && err.cause === "denied_jti") {
         await emitRevocationNotice(userId);
       }
       return null;
@@ -217,7 +218,7 @@ async function emitRevocationNotice(userId: string): Promise<void> {
   if (!session || session.ws.readyState !== WebSocket.OPEN) return;
   try {
     const status = await getMyRevocationStatus(userId);
-    if (!status || !status.revoked) return;
+    if (!status || !status.revoked || sessions.get(userId) !== session || session.ws.readyState !== WebSocket.OPEN) return;
     sendToClient(userId, {
       type: "revocation_notice",
       reason: status.reason ?? null,
@@ -865,6 +866,8 @@ export function sendToClient(userId: string, message: WSMessage): boolean {
 
 /** Auth timeout: close unauthenticated connections after 5 seconds. */
 const AUTH_TIMEOUT_MS = 5_000;
+// Provisional local bootstrap budget; proxy-owner readiness has a separate lifecycle.
+const AUTH_BOOTSTRAP_TIMEOUT_MS = 15_000;
 
 /** Idle timeout: close connections with no user activity (default 30 min). */
 const WS_IDLE_TIMEOUT_MS = parseInt(process.env.WS_IDLE_TIMEOUT_MS ?? "1800000", 10);
@@ -3915,6 +3918,8 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
     let authenticated = false;
     let authStarted = false;
     let commandsReady = false;
+    let bootstrapTimedOut = false;
+    let bootstrapTimer: ReturnType<typeof setTimeout> | undefined;
     let userId: string | null = null;
 
     // ---- Auth timeout: close if no auth message within 5 seconds ----
@@ -3928,7 +3933,8 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
     let pingInterval: ReturnType<typeof setInterval> | undefined;
 
     // ---- Message handling ----
-    ws.on("message", async (data) => {
+    ws.on("message", (data) => {
+      void (async () => {
       if (!authenticated) {
         if (authStarted) {
           ws.close(WS_CLOSE_CODES.AUTH_REQUIRED, "Auth already in progress");
@@ -3974,6 +3980,13 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
         authenticated = true;
         userId = user.id;
         pendingConnections.remove(clientIp);
+        bootstrapTimer = setTimeout(() => {
+          if (commandsReady || ws.readyState !== WebSocket.OPEN) return;
+          bootstrapTimedOut = true;
+          try { reportSilentFallback(new Error("WebSocket bootstrap timed out"), { feature: "ws-handler", op: "auth-bootstrap-timeout" }); }
+          catch { /* Closing the timed-out socket must not depend on telemetry. */ }
+          ws.close(WS_CLOSE_CODES.INTERNAL_ERROR, "Session setup timed out");
+        }, AUTH_BOOTSTRAP_TIMEOUT_MS);
 
         // PR-C §2.10 (#3244): tenant-scoped post-auth bootstrap. The
         // `supabase.auth.getUser(token)` above resolved `user.id`; this
@@ -3982,7 +3995,10 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
         // BEFORE userId exists). Auth-probe failure here = close socket
         // with INTERNAL_ERROR — same disclosure shape as the original
         // `tcError` branch.
-        const tenantBootstrap = await tenantFor(user.id, "setupWebSocket.auth-bootstrap");
+        // This socket is not registered yet; a user-scoped notice here could
+        // target an older or successor socket instead of this bootstrap.
+        const tenantBootstrap = await tenantFor(user.id, "setupWebSocket.auth-bootstrap", false);
+        if (bootstrapTimedOut || ws.readyState !== WebSocket.OPEN) return;
         if (!tenantBootstrap) {
           if (ws.readyState === WebSocket.OPEN) {
             ws.close(WS_CLOSE_CODES.INTERNAL_ERROR, "Internal error");
@@ -3997,7 +4013,7 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
           .single();
 
         // Guard: socket may have closed during the await
-        if (ws.readyState !== WebSocket.OPEN) {
+        if (bootstrapTimedOut || ws.readyState !== WebSocket.OPEN) {
           return;
         }
 
@@ -4039,7 +4055,7 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);
         const stillRegistered = () => {
-          if (ws.readyState === WebSocket.OPEN && sessions.get(user.id) === newSession) return true;
+          if (!bootstrapTimedOut && ws.readyState === WebSocket.OPEN && sessions.get(user.id) === newSession) return true;
           if (newSession.subscriptionRefreshTimer) clearInterval(newSession.subscriptionRefreshTimer);
           if (newSession.idleTimer) clearTimeout(newSession.idleTimer);
           if (pingInterval) { clearInterval(pingInterval); pingInterval = undefined; }
@@ -4177,6 +4193,7 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
             // down the local pre-session state we set up above so this host holds no
             // stale binding for a session it is not serving.
             clearTimeout(authTimer);
+            if (bootstrapTimer) clearTimeout(bootstrapTimer);
             if (pingInterval) clearInterval(pingInterval);
             sessions.delete(userId);
             clearUserWorkspace(userId);
@@ -4194,6 +4211,7 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
         if (!stillRegistered()) return;
         ws.send(JSON.stringify({ type: "auth_ok" }));
         commandsReady = true;
+        if (bootstrapTimer) clearTimeout(bootstrapTimer);
         return;
       }
 
@@ -4207,11 +4225,20 @@ export function setupWebSocket(server: HTTPServer, allowNextUpgrades = false) {
           sendToClient(userId!, { type: "error", message: "Internal server error" });
         }
       });
+      })().catch(() => {
+        // Do not forward exception details: authentication errors may contain
+        // credentials or tenant data. Only this connection can be closed.
+        try { reportSilentFallback(new Error("WebSocket message processing failed"), { feature: "ws-handler", op: "message-processing" }); }
+        catch { /* Cleanup must not depend on telemetry. */ }
+        if (bootstrapTimer) clearTimeout(bootstrapTimer);
+        if (ws.readyState === WebSocket.OPEN) ws.close(WS_CLOSE_CODES.INTERNAL_ERROR, "Internal error");
+      });
     });
 
     // ---- Cleanup on disconnect ----
     ws.on("close", () => {
       clearTimeout(authTimer);
+      if (bootstrapTimer) clearTimeout(bootstrapTimer);
       if (pingInterval) clearInterval(pingInterval);
       // If not yet authenticated, release the pending connection slot
       if (!authenticated) {

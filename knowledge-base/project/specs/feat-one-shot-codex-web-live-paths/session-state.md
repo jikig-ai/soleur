@@ -4159,6 +4159,9 @@
   `1ee0d6af49ad7039e9af9fb7569f07f53b49064e` without textual conflicts; its
   deployment-infrastructure changes have not been qualified on this recovery
   head. Refresh and reconcile main again at any later final review.
+
+### Isolated recovery continuation — 2026-11-07
+
 - A further local merge incorporated main through
   `93c5bd6ffc3417025026473686365ba04d099aa9` without textual conflicts. This
   is not a qualification of the merged head or permission to collect.
@@ -4189,7 +4192,7 @@
   wall clocks can move backward, and reinsertion after expiry can start a new
   lifetime. The end-to-end expiry/user-loss tradeoff remains unresolved; no
   disclosure, legal or retention clearance follows from this improvement.
-- Ruled by CTO agent, 2026-11-06: on recovery-cache expiry, retain any sole
+- Ruled by CTO agent, 2026-11-07: on recovery-cache expiry, retain any sole
   visible draft on the current page with an explicit copy-before-leaving
   warning, remove the cached nonce and disable acknowledgment, resend and
   replay; auth-scope invalidation must still remove the relevant display.
@@ -4235,6 +4238,24 @@
   emitted Node DEP0205 and the synthetic environment's missing Sentry pepper
   warning. Independent review found no further concrete issue in this admission
   slice, but did not run tests. No shared system or provider was contacted.
+- A further provisional local bootstrap timeout closes the initiating socket
+  after 15 seconds after token validation and refuses late local bootstrap
+  results. This budget has not been validated against real latency or the
+  terminal-error user experience; proxy-owner readiness is outside it, and
+  closing a socket does not cancel underlying database work. Bootstrap now
+  suppresses user-scoped revocation notices that could reach another socket,
+  and a notice already awaiting its status RPC rechecks session identity.
+  Unexpected bootstrap rejections are caught with a constant telemetry error
+  and close only the initiating socket. Synthetic tests cover late denial,
+  late tenant/terms/routing completion, early tenant/terms rejection and a
+  late unexpected rejection with a successor. Independent review found this
+  suitable only as WIP: close-event cleanup can be delayed, the detached
+  message-error handler is outside the wrapper, and non-bootstrap in-flight
+  callers, registration ordering and real proxy transport remain unfenced.
+  The reviewer did not run tests. These changes confer no gate clearance.
+
+### Earlier local experiments — 2026-11-06
+
 - Independent local review found the injected Firestore v2 authority adapter
   accepted another command while an earlier POST remained unresolved. A
   process-local latch now refuses concurrent and changed commands and clears

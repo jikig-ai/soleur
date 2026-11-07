@@ -6,10 +6,11 @@ import { createServer } from "node:http";
 import { afterEach, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
-const { bootstrap, releaseSlot, authGetUser } = vi.hoisted(() => ({
-  bootstrap: { resolve: undefined as ((value: unknown) => void) | undefined, started: vi.fn() },
+const { bootstrap, releaseSlot, authGetUser, revocation } = vi.hoisted(() => ({
+  bootstrap: { resolve: undefined as ((value: unknown) => void) | undefined, reject: undefined as ((error: Error) => void) | undefined, started: vi.fn() },
   releaseSlot: vi.fn(),
   authGetUser: vi.fn(async () => ({ data: { user: { id: "synthetic-user" } }, error: null })),
+  revocation: vi.fn(async () => ({ revoked: true, reason: null, deniedAt: null })),
 }));
 const { workspaceLookup } = vi.hoisted(() => ({ workspaceLookup: vi.fn(async () => null as string | null) }));
 const { routeFixture } = vi.hoisted(() => ({ routeFixture: {
@@ -21,11 +22,12 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: "https://test.supabase.co",
 }));
 vi.mock("@/lib/supabase/tenant", () => ({
-  getFreshTenantClient: vi.fn(() => { bootstrap.started(); return new Promise((resolve) => { bootstrap.resolve = resolve; }); }),
-  getMyRevocationStatus: vi.fn(),
-  RuntimeAuthError: class RuntimeAuthError extends Error {},
+  getFreshTenantClient: vi.fn(() => { bootstrap.started(); return new Promise((resolve, reject) => { bootstrap.resolve = resolve; bootstrap.reject = reject; }); }),
+  getMyRevocationStatus: revocation,
+  RuntimeAuthError: class RuntimeAuthError extends Error { constructor(public cause: string) { super("synthetic auth error"); } },
 }));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn(), captureMessage: vi.fn() }));
+vi.mock("../server/observability", () => ({ reportSilentFallback: vi.fn(), warnSilentFallback: vi.fn() }));
 vi.mock("../server/concurrency", () => ({
   SLOT_STALENESS_THRESHOLD_SECONDS: 240, SLOT_HEARTBEAT_INTERVAL_MS: 60_000,
   releaseSlot, acquireSlot: vi.fn(), touchSlot: vi.fn(), emitConcurrencyCapHit: vi.fn(),
@@ -51,6 +53,9 @@ vi.mock("../server/session-proxy", async (importOriginal) => ({
 import { setupWebSocket } from "../server/ws-handler";
 import { sessions } from "../server/session-registry";
 import { TC_VERSION } from "@/lib/legal/tc-version";
+import { WS_CLOSE_CODES } from "@/lib/types";
+import { reportSilentFallback } from "../server/observability";
+import { RuntimeAuthError } from "@/lib/supabase/tenant";
 import { clearUserWorkspace, getUserWorkspace, setUserWorkspace } from "../server/agent-session-registry";
 
 class FakeSocket extends EventEmitter {
@@ -61,7 +66,7 @@ class FakeSocket extends EventEmitter {
   close = vi.fn(() => { this.readyState = WebSocket.CLOSED; if (this.emitClose) this.emit("close"); });
 }
 
-afterEach(() => { sessions.delete("synthetic-user"); clearUserWorkspace("synthetic-user"); bootstrap.resolve = undefined; routeFixture.enabled = false; vi.clearAllMocks(); });
+afterEach(() => { sessions.delete("synthetic-user"); clearUserWorkspace("synthetic-user"); bootstrap.resolve = undefined; bootstrap.reject = undefined; routeFixture.enabled = false; vi.clearAllMocks(); });
 
 it("does not run concurrent token checks for repeated first frames", async () => {
   let resolveAuth!: (value: { data: { user: { id: string } }; error: null }) => void;
@@ -105,6 +110,140 @@ it("does not route a new socket's frames into an existing session during bootstr
     incoming.close();
     server.close();
     http.close();
+  }
+});
+
+it("times out a stalled local bootstrap without starting a late user query", async () => {
+  vi.useFakeTimers();
+  const http = createServer();
+  const server = setupWebSocket(http);
+  const incoming = new FakeSocket();
+  const from = vi.fn();
+  try {
+    server.emit("connection", incoming as never, {} as never, "127.0.0.1" as never);
+    incoming.emit("message", Buffer.from(JSON.stringify({ type: "auth", token: "synthetic-token" })));
+    await Promise.resolve(); await Promise.resolve();
+    expect(bootstrap.started).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(15_000);
+    expect(incoming.close).toHaveBeenCalledWith(WS_CLOSE_CODES.INTERNAL_ERROR, "Session setup timed out");
+    expect(reportSilentFallback).toHaveBeenCalledWith(expect.any(Error), expect.objectContaining({ op: "auth-bootstrap-timeout" }));
+    bootstrap.resolve?.({ from });
+    await Promise.resolve(); await Promise.resolve();
+    expect(from).not.toHaveBeenCalled();
+    expect(sessions.get("synthetic-user")).toBeUndefined();
+  } finally {
+    bootstrap.resolve?.(null); incoming.close(); server.close(); http.close(); vi.useRealTimers();
+  }
+});
+
+it("does not send a late bootstrap revocation notice to a successor socket", async () => {
+  vi.useFakeTimers();
+  const http = createServer();
+  const server = setupWebSocket(http);
+  const incoming = new FakeSocket();
+  const successor = new FakeSocket();
+  try {
+    server.emit("connection", incoming as never, {} as never, "127.0.0.1" as never);
+    incoming.emit("message", Buffer.from(JSON.stringify({ type: "auth", token: "synthetic-token" })));
+    await Promise.resolve(); await Promise.resolve();
+    expect(bootstrap.started).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(15_000);
+    sessions.set("synthetic-user", { ws: successor as never, lastActivity: Date.now() } as never);
+    bootstrap.reject?.(new RuntimeAuthError("denied_jti", "synthetic auth error"));
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(revocation).not.toHaveBeenCalled();
+    expect(successor.send).not.toHaveBeenCalled();
+  } finally { bootstrap.resolve?.(null); incoming.close(); server.close(); http.close(); vi.useRealTimers(); }
+});
+
+it.each(["tenant", "terms"])("closes the initiating socket on an unexpected %s rejection", async (phase) => {
+  const http = createServer();
+  const server = setupWebSocket(http);
+  const incoming = new FakeSocket();
+  try {
+    server.emit("connection", incoming as never, {} as never, "127.0.0.1" as never);
+    incoming.emit("message", Buffer.from(JSON.stringify({ type: "auth", token: "synthetic-token" })));
+    await vi.waitFor(() => expect(bootstrap.started).toHaveBeenCalledOnce());
+    if (phase === "tenant") bootstrap.reject?.(new Error("synthetic private detail"));
+    else bootstrap.resolve?.({ from: () => ({ select: () => ({ eq: () => ({ single: async () => { throw new Error("synthetic private detail"); } }) }) }) });
+    await vi.waitFor(() => expect(incoming.close).toHaveBeenCalledWith(WS_CLOSE_CODES.INTERNAL_ERROR, "Internal error"));
+    expect(reportSilentFallback).toHaveBeenCalledWith(expect.objectContaining({ message: "WebSocket message processing failed" }), expect.objectContaining({ op: "message-processing" }));
+    expect(JSON.stringify(vi.mocked(reportSilentFallback).mock.calls)).not.toContain("synthetic private detail");
+  } finally { bootstrap.resolve?.(null); incoming.close(); server.close(); http.close(); }
+});
+
+it("does not affect a successor when an unexpected bootstrap rejection arrives after timeout", async () => {
+  vi.useFakeTimers();
+  const http = createServer();
+  const server = setupWebSocket(http);
+  const incoming = new FakeSocket();
+  const successor = new FakeSocket();
+  try {
+    server.emit("connection", incoming as never, {} as never, "127.0.0.1" as never);
+    incoming.emit("message", Buffer.from(JSON.stringify({ type: "auth", token: "synthetic-token" })));
+    await Promise.resolve(); await Promise.resolve();
+    vi.advanceTimersByTime(15_000);
+    sessions.set("synthetic-user", { ws: successor as never, lastActivity: Date.now() } as never);
+    bootstrap.reject?.(new Error("synthetic private detail"));
+    for (let i = 0; i < 8; i++) await Promise.resolve();
+    expect(successor.send).not.toHaveBeenCalled();
+    expect(successor.close).not.toHaveBeenCalled();
+    expect(reportSilentFallback).toHaveBeenCalledWith(expect.objectContaining({ message: "WebSocket message processing failed" }), expect.objectContaining({ op: "message-processing" }));
+  } finally { bootstrap.resolve?.(null); incoming.close(); server.close(); http.close(); vi.useRealTimers(); }
+});
+
+it("does not register a socket when its delayed terms lookup finishes after timeout", async () => {
+  vi.useFakeTimers();
+  const http = createServer();
+  const server = setupWebSocket(http);
+  const incoming = new FakeSocket();
+  let finishTerms!: (value: unknown) => void;
+  const termsStarted = vi.fn();
+  try {
+    server.emit("connection", incoming as never, {} as never, "127.0.0.1" as never);
+    incoming.emit("message", Buffer.from(JSON.stringify({ type: "auth", token: "synthetic-token" })));
+    await Promise.resolve(); await Promise.resolve();
+    expect(bootstrap.started).toHaveBeenCalledOnce();
+    bootstrap.resolve?.({ from: () => ({ select: () => ({ eq: () => ({
+      single: () => { termsStarted(); return new Promise((resolve) => { finishTerms = resolve; }); },
+    }) }) }) });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(termsStarted).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(15_000);
+    expect(incoming.close).toHaveBeenCalledWith(WS_CLOSE_CODES.INTERNAL_ERROR, "Session setup timed out");
+    finishTerms({ data: { tc_accepted_version: TC_VERSION }, error: null });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(sessions.get("synthetic-user")).toBeUndefined();
+    expect(incoming.send).not.toHaveBeenCalledWith(JSON.stringify({ type: "auth_ok" }));
+  } finally { finishTerms?.({ data: null, error: null }); incoming.close(); server.close(); http.close(); vi.useRealTimers(); }
+});
+
+it("does not hand a timed-out routing attempt to the proxy after its late reply", async () => {
+  vi.useFakeTimers();
+  routeFixture.enabled = true;
+  let finishRoute!: (value: { decision: "proxy"; ownerAddress: string }) => void;
+  routeFixture.resolve.mockImplementationOnce(() => new Promise((resolve) => { finishRoute = resolve; }));
+  const http = createServer();
+  const server = setupWebSocket(http);
+  const incoming = new FakeSocket();
+  try {
+    server.emit("connection", incoming as never, {} as never, "127.0.0.1" as never);
+    incoming.emit("message", Buffer.from(JSON.stringify({ type: "auth", token: "synthetic-token" })));
+    await Promise.resolve(); await Promise.resolve();
+    bootstrap.resolve?.({ from: () => ({ select: () => ({ eq: () => ({
+      single: async () => ({ data: { tc_accepted_version: TC_VERSION }, error: null }),
+    }) }) }) });
+    for (let i = 0; i < 12; i++) await Promise.resolve();
+    expect(routeFixture.resolve).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(15_000);
+    expect(incoming.close).toHaveBeenCalledWith(WS_CLOSE_CODES.INTERNAL_ERROR, "Session setup timed out");
+    finishRoute({ decision: "proxy", ownerAddress: "synthetic-owner" });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(routeFixture.attached).not.toHaveBeenCalled();
+    expect(sessions.get("synthetic-user")).toBeUndefined();
+  } finally {
+    finishRoute?.({ decision: "proxy", ownerAddress: "synthetic-owner" });
+    incoming.close(); server.close(); http.close(); vi.useRealTimers();
   }
 });
 
