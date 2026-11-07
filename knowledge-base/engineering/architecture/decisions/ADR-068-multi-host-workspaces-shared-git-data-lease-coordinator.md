@@ -622,7 +622,7 @@ Phase 4b (continuous checkpoint).
 > claim — verify against CF docs + a staging convert before the GA window. The LB is a
 > paid add-on (~$5/mo) — record the recurring expense. web-2 sits in the pool at
 > **weight 0** (drained) until GA. **(c) Hard invariant.** NO live LB weight to web-2
-> before BOTH the owner-side relay is active (`SOLEUR_PROXY_BIND`/`PEER_ALLOWLIST`/
+> before BOTH the owner-side relay is active (`PEER_ALLOWLIST`/
 > `HOST_ROSTER` set → `session-proxy.ts createProxyServer` binds) AND the git-data store
 > is cut over (`isGitDataStoreEnabled()` true, 3.C write-boundary sentinel merged, 3.D
 > LUKS cutover soak-verified). Rationale: with the router gated off (default) each host
@@ -1525,7 +1525,7 @@ Two corrections against §(b) as-shipped 2026-11-01, both verified live before t
    zero traffic — until the #6027 window flips 0→1 behind the §(c) gate chain
    (`lb-weight-gate-with-marker.sh`, run fail-closed by the new `ga-pool-update` arm in
    `mode=serve` BEFORE plan). Live gate state 2026-11-01: `GIT_DATA_STORE_ENABLED=false`,
-   `GIT_DATA_LUKS_CUTOVER_AT` and `SOLEUR_PROXY_BIND` absent — the flip is not authorized
+   `GIT_DATA_LUKS_CUTOVER_AT` absent (a `SOLEUR_PROXY_BIND` absence was also read as unmet until 2026-11-07, when that gate input was retired: #12167 — the bind is a literal in `ci-deploy.sh`, not a Doppler value) — the flip is not authorized
    today. LB `steering_policy` stays `"off"` (it selects between POOLS — one default
    pool); origin selection is pinned as `origin_steering { policy = "random" }` on the
    pool (CTO ruling: `hash` is de facto session affinity contradicting

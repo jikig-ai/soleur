@@ -44,7 +44,6 @@ reset_def() {
   DEF=(
     [SOLEUR_WEB2_SERVING_WEIGHT]='1'
     [SOLEUR_SERVING_ROTATION]='web-1,web-2'
-    [SOLEUR_PROXY_BIND]='10.0.1.10'
     [SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.11'
     [SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11"}'
     [GIT_DATA_STORE_ENABLED]='true'
@@ -99,7 +98,7 @@ echo "=== lb-weight-gate.sh test suite (rebuilt #6575 / ADR-143 D3) ==="
 reset_def
 DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'
 DEF[SOLEUR_SERVING_ROTATION]=''            # explicit empty = "no rotation" (a SET, valid state)
-unset 'DEF[SOLEUR_PROXY_BIND]' 'DEF[SOLEUR_PROXY_PEER_ALLOWLIST]' 'DEF[SOLEUR_HOST_ROSTER]'
+unset 'DEF[SOLEUR_PROXY_PEER_ALLOWLIST]' 'DEF[SOLEUR_HOST_ROSTER]'
 unset 'DEF[GIT_DATA_STORE_ENABLED]' 'DEF[GIT_DATA_LUKS_CUTOVER_AT]' 'DEF[WORKSPACES_LUKS_CUTOVER_AT]'
 run_with_def
 assert_zero "standby (weight=0, empty rotation, NO flip env) → exit 0 (fixes #6575 flaw)"
@@ -170,10 +169,19 @@ assert_stdout_contains "success prints SHAPE-ONLY banner" "SHAPE-ONLY"
 # =============================================================================
 # §2-5 — Condition A (owner-side relay config-shape). Reached because DEF pools web-2.
 # =============================================================================
-reset_def; unset 'DEF[SOLEUR_PROXY_BIND]'; run_with_def
-assert_rejects_with "SOLEUR_PROXY_BIND missing" "A_proxy_bind_empty"
+# A.1 (SOLEUR_PROXY_BIND non-empty) was DELETED (CTO ruling, #12167 / #8211, run 42418102446): the bind is
+# not a Doppler value (the app container binds 0.0.0.0 via a literal in ci-deploy.sh, pinned by
+# docker-run-tuple.py), so a Doppler "declared intent" proved nothing and refused a correctly configured
+# fleet. The real bind proof is the relay_probe / relay_peer_probe evidence, not this shape gate. These rows
+# pin that the gate neither reads nor refuses on it.
+reset_def; run_with_def
+assert_zero "SOLEUR_PROXY_BIND absent (the shipped relay design) does not refuse the pooled flip"
+reset_def; DEF[SOLEUR_PROXY_BIND]=''; run_with_def
+assert_zero "SOLEUR_PROXY_BIND set-but-empty does not refuse the pooled flip"
 reset_def; DEF[SOLEUR_PROXY_BIND]='   '; run_with_def
-assert_rejects_with "SOLEUR_PROXY_BIND whitespace-only" "A_proxy_bind_empty"
+assert_zero "SOLEUR_PROXY_BIND whitespace-only does not refuse the pooled flip"
+reset_def; DEF[SOLEUR_PROXY_BIND]='10.0.1.10'; run_with_def
+assert_zero "SOLEUR_PROXY_BIND set to a value is ignored (exit 0, same as absent)"
 
 reset_def; unset 'DEF[SOLEUR_PROXY_PEER_ALLOWLIST]'; run_with_def
 assert_rejects_with "SOLEUR_PROXY_PEER_ALLOWLIST missing" "A_peer_allowlist_empty"
@@ -503,8 +511,38 @@ c3_fixture nested_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
 assert_c3 "C.3-fixture: nested block + hot web-2 member still → red" "1 1 0"
 rm -rf "$C3_TMP"
 
+# =============================================================================
+# §A1 — A.1 stays deleted. Static: no code line of the gate expands SOLEUR_PROXY_BIND and the retired
+#       sub-condition id is gone. Mutation: a copy of the gate with an A.1-style check RE-INTRODUCED is
+#       run against the same no-SOLEUR_PROXY_BIND env the §2-5 rows use; it must refuse, which is the
+#       exact outcome those assert_zero rows would turn RED on. The mutation is asserted to have LANDED
+#       (the copy differs from the pristine gate and carries the injected check) so the row cannot pass
+#       against an unmutated copy.
+# =============================================================================
+assert_no_grep "A1-static: no code line of lb-weight-gate.sh references SOLEUR_PROXY_BIND" lb-weight-gate.sh \
+  '^[^#]*SOLEUR_PROXY_BIND'
+assert_no_grep "A1-static: the retired A_proxy_bind_empty sub-condition id is gone from the gate" lb-weight-gate.sh \
+  'A_proxy_bind_empty'
+
+A1_TMP="$(mktemp -d)"
+trap 'rm -rf "$A1_TMP"' EXIT
+GATE_PRISTINE="$GATE"
+sed '/^# PARITY POINTER:/i [[ -n "${SOLEUR_PROXY_BIND-}" ]] || fail "A_proxy_bind_empty"' "$GATE_PRISTINE" > "$A1_TMP/lb-weight-gate.sh"
+TOTAL=$((TOTAL + 1))
+if ! cmp -s "$A1_TMP/lb-weight-gate.sh" "$GATE_PRISTINE" && [[ "$(cat "$A1_TMP/lb-weight-gate.sh")" == *'fail "A_proxy_bind_empty"'* ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: A1-mutation: the A.1 re-introduction LANDED (copy differs from the pristine gate)"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: A1-mutation: the sed matched nothing — the mutant is byte-identical to the pristine gate"
+fi
+GATE="$A1_TMP/lb-weight-gate.sh"
+reset_def; run_with_def
+assert_rejects_with "A1-mutation: a gate with A.1 re-introduced refuses the no-SOLEUR_PROXY_BIND env (the assert_zero rows above would RED)" "A_proxy_bind_empty"
+GATE="$GATE_PRISTINE"
+reset_def; run_with_def
+assert_zero "A1-control: the pristine gate accepts the same env (control for the mutation row)"
+
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=72
+MIN_CASES=121
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
