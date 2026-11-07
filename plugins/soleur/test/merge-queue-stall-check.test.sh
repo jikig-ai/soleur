@@ -232,10 +232,13 @@ case "$1 $2" in
     branch="$(grep -oE 'mergeQueue\(branch:"[^"]*"\)' <<<"$query" | sed 's/.*branch:"\(.*\)".*/\1/')"
     first="$(grep -oE 'entries\(first:[0-9]+\)' <<<"$query" | grep -oE '[0-9]+' | head -n 1)"
     has() { if grep -qw -- "$1" <<<"$query"; then echo true; else echo false; fi; }
+    # the oid check reads the query WITHOUT GraphQL comments and anchors on the whole `headCommit { oid }` selection (a bare
+    # word, a comment, or `oid` under another field must not keep the stub's headCommit)
+    qnc="$(sed 's/#.*//' <<<"$query")"
     jq --arg branch "$branch" --argjson first "${first:-0}" \
        --argjson enq "$(has enqueuedAt)" --argjson pos "$(has position)" \
        --argjson st "$(has state)" --argjson num "$(has number)" --argjson url "$(has url)" \
-       --argjson oid "$(if grep -qE 'headCommit[[:space:]]*\{[^}]*\<oid\>' <<<"$query"; then echo true; else echo false; fi)" '
+       --argjson oid "$(if grep -qE 'headCommit[[:space:]]*\{[[:space:]]*oid[[:space:]]*\}' <<<"$qnc"; then echo true; else echo false; fi)" '
       .data.repository.mergeQueue |= (
         if . == null or $branch != "main" then null
         else .entries.nodes |= (.[0:$first] | map(
@@ -1346,7 +1349,8 @@ lrow29() { # a null, absent or malformed headCommit.oid is "cannot correlate": s
   check_uncorrelated "L29 (b)" 101 || return 1
   # (c) malformed oids behave like null: uppercase 40-hex, 39 characters, text, 41 hex (end anchor), a leading character
   #     (start anchor), 39 hex plus a non-ASCII letter
-  for bad in "ABCDEF0123456789ABCDEF0123456789ABCDEF01" "${SHA_A:0:39}" "not-a-sha" "${SHA_A}0" "x${SHA_A}" "${SHA_A:0:39}é"; do
+  #     and a 40-character lowercase string whose letters are not all hex (a widened class like [0-9a-z] would accept it)
+  for bad in "ABCDEF0123456789ABCDEF0123456789ABCDEF01" "${SHA_A:0:39}" "not-a-sha" "${SHA_A}0" "x${SHA_A}" "${SHA_A:0:39}é" "${SHA_A:0:39}g" "gggggggggggggggggggggggggggggggggggggggg"; do
     set_ever 111; one_entry "$wf" 101 "$rf" "$bad" QUEUED; reset_runs
     check_uncorrelated "L29 (c) '$bad'" 101 || return 1
   done
@@ -1397,8 +1401,8 @@ ldesc() {
     25) echo "stub history endpoint: unwindowed total_count, rejects every other shape with 64" ;;
     26) echo "malformed history reply (non-numeric or missing total_count) -> suspected, ONE bounded ASCII warning, rc 0" ;;
     27) echo "failed push run whose head_sha equals the entry's headCommit.oid (invented shas) -> named, one history lookup" ;;
-    28) echo "stale ref on a new entry (head_sha != headCommit.oid) -> suspected, no history lookup, mismatch notice; a matching candidate beside a mismatching one is still named" ;;
-    29) echo "null or malformed headCommit.oid (QUEUED entry) -> suspected, zero Actions calls, 'no usable' notice and not the mismatch notice; empty never equals empty" ;;
+    28) echo "stale ref on a new entry (head_sha != headCommit.oid) -> suspected, no history lookup, mismatch notice; a matching candidate beside a mismatching one is still named; a near-miss, longer or upper-case head_sha is still a mismatch" ;;
+    29) echo "null or malformed headCommit.oid (QUEUED entry) -> suspected, zero Actions calls, 'no usable' notice and not the mismatch notice; empty never equals empty; 41-hex, prefixed, non-hex-letter and non-ASCII oids (also under en_US.utf8) read as unusable" ;;
   esac
 }
 
@@ -1755,8 +1759,10 @@ if [[ "$HAVE_EN_US" -gt 0 ]]; then
   mutate_lit "C38 LC_ALL=C pin dropped (a locale-ordered [0-9a-f] accepts 39 hex plus a non-ASCII letter) -> RED" causerow 'L29 \(c2\)' \
     '            local LC_ALL=C
 ' ''
+elif [[ -n "${CI:-}" ]]; then
+  fail "C38 needs the en_US.utf8 locale on CI (this host has none), so the LC_ALL=C pin is unguarded: install or generate the locale"
 else
-  pass "C38 skipped: this host has no en_US.utf8 locale, so the locale pin cannot be driven red here (CI runners carry it)"
+  pass "C38 skipped (SKIP, counted as one pass so the floor stays exact): this host has no en_US.utf8 locale, so the locale pin cannot be driven red here; CI runners must carry it"
 fi
 mutate_lit "C39 oid validation loses its end anchor (41 hex reads as usable) -> RED" causerow 'L29 \(c\)' \
   '"$oid" =~ ^[0-9a-f]{40}$ ]]' '"$oid" =~ ^[0-9a-f]{40} ]]'

@@ -97,8 +97,9 @@ name: Merge queue stall check
 # headCommit.oid (a validated 40-hex string), so a stale run on a reused or superseded ref is not named for a newer
 # entry. A null or malformed headCommit.oid (a QUEUED entry has none yet) means "cannot correlate": no Actions read, the
 # unchanged "suspected" issue, and a ::notice:: of its own. The arm only ever REMOVES a claim; the "inferred" wording is
-# unchanged. The notices print once, in the run that files the issue (the dedupe check precedes the correlation): that
-# run's log is where the residual below is read, and a "suspected" filing stays final until its issue is closed.
+# unchanged. The notices print once per filing attempt, in the run that files the issue (the dedupe check precedes the
+# correlation): that run's log is where the residual below is read, and a "suspected" filing stays final until its
+# issue is closed.
 # Stated residuals: a grouped-merge member that is not the deepest entry may stay "suspected" (its oid may differ from the
 # group ref's tip, or its ref fails the prefix join); and if GitHub nulls headCommit.oid for a BUILT entry that never reports,
 # every named cause would silently degrade to "suspected" (the "no usable" notice in the run log is the signal; the flip
