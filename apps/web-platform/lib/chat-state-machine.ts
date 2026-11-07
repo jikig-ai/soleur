@@ -146,6 +146,8 @@ interface ChatTextMessage extends ChatMessageBase {
   type: "text";
   /** Local delivery feedback; held turns retain content and attachments for explicit resend. */
   delivery?: "unsent" | "retryable" | "unresolved";
+  /** The bounded tab recovery copy expired; this mounted view may still show the draft. */
+  recoveryExpired?: boolean;
   /**
    * feat-concierge-stream-commands — retained for the command_stream arm's
    * chip-prune + liveness; nothing renders these. Append-only; `undefined`/empty on bubbles

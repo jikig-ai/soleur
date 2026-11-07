@@ -109,6 +109,7 @@ export const MessageBubble = memo(function MessageBubble({
   status,
   usage,
   delivery,
+  recoveryExpired = false,
   onResend,
   resendDisabled = false,
   activity,
@@ -122,6 +123,7 @@ export const MessageBubble = memo(function MessageBubble({
   role: "user" | "assistant";
   content: string;
   delivery?: "unsent" | "retryable" | "unresolved";
+  recoveryExpired?: boolean;
   onResend?: () => void;
   resendDisabled?: boolean;
   leaderId?: DomainLeaderId;
@@ -318,7 +320,9 @@ export const MessageBubble = memo(function MessageBubble({
           )}
           {isUser && delivery === "unresolved" && (
             <p role="status" aria-live="polite" className="mt-2 text-xs text-amber-400">
-              Delivery could not be confirmed. Copy this draft before leaving; do not resend it yet.
+              {recoveryExpired
+                ? "The recovery copy expired. This draft remains on this page; copy it before leaving or reloading. Delivery is unresolved; do not resend. Copying text does not copy attachments."
+                : "Delivery could not be confirmed. Copy this draft before leaving; do not resend it yet."}
             </p>
           )}
           {isUser && delivery === "retryable" && onResend && (

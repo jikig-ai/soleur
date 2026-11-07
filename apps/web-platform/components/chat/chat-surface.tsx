@@ -1242,6 +1242,7 @@ export function ChatSurface({
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
                       delivery={msg.delivery}
+                      recoveryExpired={msg.recoveryExpired}
                       onResend={msg.delivery === "retryable" ? () => resendMessage(msg) : undefined}
                       resendDisabled
                       variant={variant}

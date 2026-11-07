@@ -208,6 +208,53 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     expect(result.current.messages[0]).toEqual(expect.objectContaining({ delivery: "unresolved" }));
   });
 
+  it("removes an uncached held-off draft when its auth scope is invalidated", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+    act(() => result.current.sendMessage("Held synthetic draft"));
+    const chat = wsInstance!.send.mock.calls.map(([frame]) => JSON.parse(frame as string)).find((frame) => frame.type === "chat");
+    serverSend({ type: "error", errorCode: "codex_dispatch_unavailable", message: "Held", conversationId: "conv-history-ack", clientTurnId: chat.clientTurnId });
+    expect(result.current.messages.some((message) => message.id === `user-${chat.clientTurnId}`)).toBe(true);
+    act(() => codexHeldTurnCache.clear());
+    expect(result.current.messages.some((message) => message.id === `user-${chat.clientTurnId}`)).toBe(false);
+  });
+
+  it("refuses a reused local turn ID before sending from another conversation", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const uuid = vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("a0000000-0000-4000-8000-000000000006");
+    try {
+      const { result } = renderHook(() => useWebSocket("new"));
+      await connectAndAuth(result);
+      serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+      act(() => { expect(result.current.sendMessage("First synthetic draft")).toBe(true); });
+      serverSend({ type: "error", errorCode: "codex_dispatch_unavailable", message: "Held", conversationId: "conv-history-ack", clientTurnId: "a0000000-0000-4000-8000-000000000006" });
+      serverSend({ type: "session_started", conversationId: "other-conversation" });
+      const count = wsInstance!.send.mock.calls.filter(([frame]) => JSON.parse(frame as string).type === "chat").length;
+      act(() => { expect(result.current.sendMessage("Second synthetic draft")).toBe(false); });
+      expect(wsInstance!.send.mock.calls.filter(([frame]) => JSON.parse(frame as string).type === "chat")).toHaveLength(count);
+    } finally { uuid.mockRestore(); }
+  });
+
+  it("refuses a reused turn ID across two synchronous sends", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const uuid = vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("a0000000-0000-4000-8000-000000000007");
+    try {
+      const { result } = renderHook(() => useWebSocket("new"));
+      await connectAndAuth(result);
+      serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+      act(() => {
+        expect(result.current.sendMessage("First synthetic draft")).toBe(true);
+        expect(result.current.sendMessage("Second synthetic draft")).toBe(false);
+      });
+      expect(wsInstance!.send.mock.calls.filter(([frame]) => JSON.parse(frame as string).type === "chat")).toHaveLength(1);
+    } finally { uuid.mockRestore(); }
+  });
+
   it("restores a cached draft as unresolved while the hold is active", async () => {
     const token = syntheticScopeToken();
     mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
@@ -220,6 +267,123 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     serverSend({ type: "session_started", conversationId: "conv-history-ack" });
     expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Cached synthetic draft", delivery: "unresolved" }));
     expect(result.current.lastError?.code).not.toBe("codex_history_transfer_required");
+  });
+
+  it("does not restore an old snapshot after scope invalidation during restore", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    const scope = codexHeldTurnCache.acceptToken(token);
+    const id = "a0000000-0000-4000-8000-000000000004";
+    expect(codexHeldTurnCache.put(scope, { clientTurnId: id, conversationId: "conv-history-ack", authModeGeneration: 2,
+      noticeNonce: "A".repeat(43), message: { id: `user-${id}`, type: "text", role: "user", content: "Old scope draft" } })).toBe(true);
+    const spy = vi.spyOn(codexHeldTurnCache, "markUnresolved").mockImplementation(() => { codexHeldTurnCache.clear(); return null; });
+    try {
+      serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+      expect(spy).toHaveBeenCalledOnce();
+      expect(result.current.messages.some((message) => message.id === `user-${id}`)).toBe(false);
+    } finally { spy.mockRestore(); }
+  });
+
+  it("does not restore a snapshot that expires while its delivery is marked", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    vi.useFakeTimers();
+    const original = codexHeldTurnCache.markUnresolved;
+    const spy = vi.spyOn(codexHeldTurnCache, "markUnresolved").mockImplementation((...args) => {
+      vi.setSystemTime(Date.now() + 30 * 60 * 1000 + 1);
+      return original(...args);
+    });
+    try {
+      const scope = codexHeldTurnCache.acceptToken(token);
+      const id = "a0000000-0000-4000-8000-000000000005";
+      expect(codexHeldTurnCache.put(scope, { clientTurnId: id, conversationId: "conv-history-ack", authModeGeneration: 2,
+        noticeNonce: "A".repeat(43), message: { id: `user-${id}`, type: "text", role: "user", content: "Expired synthetic draft" } })).toBe(true);
+      serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+      expect(spy).toHaveBeenCalledOnce();
+      expect(result.current.messages.some((message) => message.id === `user-${id}`)).toBe(false);
+    } finally { spy.mockRestore(); codexHeldTurnCache.clear(); vi.useRealTimers(); }
+  });
+
+  it("keeps a visible expired draft unresolved and warns that its recovery copy expired", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    vi.useFakeTimers();
+    try {
+      const scope = codexHeldTurnCache.acceptToken(token);
+      const id = "a0000000-0000-4000-8000-000000000001";
+      expect(codexHeldTurnCache.put(scope, { clientTurnId: id, conversationId: "conv-history-ack", authModeGeneration: 2,
+        noticeNonce: "A".repeat(43), message: { id: `user-${id}`, type: "text", role: "user", content: "Visible synthetic draft" } })).toBe(true);
+      serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+      expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Visible synthetic draft", delivery: "unresolved" }));
+      act(() => { vi.advanceTimersByTime(30 * 60 * 1000); });
+      expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Visible synthetic draft", delivery: "unresolved", recoveryExpired: true }));
+      const sent = wsInstance!.send.mock.calls.length;
+      const draft = result.current.messages[0];
+      if (draft.type !== "text") throw new Error("expected text");
+      act(() => result.current.resendMessage(draft));
+      act(() => result.current.acknowledgeCodexHistoryTransfer("conv-history-ack", 2, "A".repeat(43)));
+      expect(wsInstance!.send.mock.calls.length).toBe(sent);
+      act(() => codexHeldTurnCache.clear());
+      expect(result.current.messages.some((message) => message.id === `user-${id}`)).toBe(false);
+    } finally { codexHeldTurnCache.clear(); vi.useRealTimers(); }
+  });
+
+  it("marks expiry during credential teardown without replacing the credential error", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    vi.useFakeTimers();
+    try {
+      const scope = codexHeldTurnCache.acceptToken(token);
+      const id = "a0000000-0000-4000-8000-000000000002";
+      expect(codexHeldTurnCache.put(scope, { clientTurnId: id, conversationId: "conv-history-ack", authModeGeneration: 2,
+        noticeNonce: "A".repeat(43), message: { id: `user-${id}`, type: "text", role: "user", content: "Held synthetic draft" } })).toBe(true);
+      serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+      serverSend({ type: "error", errorCode: "key_invalid", message: "Synthetic credential error" });
+      expect(result.current.credentialBlocked).toBe(true);
+      expect(result.current.realConversationId).toBeNull();
+      act(() => { vi.advanceTimersByTime(30 * 60 * 1000); });
+      expect(result.current.lastError?.code).toBe("key_invalid");
+      expect(result.current.credentialBlocked).toBe(true);
+      expect(result.current.messages[0]).toEqual(expect.objectContaining({ content: "Held synthetic draft", delivery: "unresolved", recoveryExpired: true }));
+    } finally { codexHeldTurnCache.clear(); vi.useRealTimers(); }
+  });
+
+  it("tracks a visible held draft through conversation changes until scope invalidation", async () => {
+    const token = syntheticScopeToken();
+    mockGetSession.mockResolvedValue({ data: { session: { access_token: token } } });
+    const { codexHeldTurnCache } = await import("@/lib/codex-held-turn-cache");
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+    await connectAndAuth(result);
+    vi.useFakeTimers();
+    try {
+      const scope = codexHeldTurnCache.acceptToken(token);
+      const id = "a0000000-0000-4000-8000-000000000003";
+      expect(codexHeldTurnCache.put(scope, { clientTurnId: id, conversationId: "conv-history-ack", authModeGeneration: 2,
+        noticeNonce: "A".repeat(43), message: { id: `user-${id}`, type: "text", role: "user", content: "Retained synthetic draft" } })).toBe(true);
+      serverSend({ type: "session_started", conversationId: "conv-history-ack" });
+      serverSend({ type: "session_started", conversationId: "other-conversation" });
+      act(() => { vi.advanceTimersByTime(30 * 60 * 1000); });
+      expect(result.current.messages.find((message) => message.id === `user-${id}`)).toEqual(expect.objectContaining({ recoveryExpired: true, delivery: "unresolved" }));
+      act(() => codexHeldTurnCache.clear());
+      expect(result.current.messages.some((message) => message.id === `user-${id}`)).toBe(false);
+    } finally { codexHeldTurnCache.clear(); vi.useRealTimers(); }
   });
 
   it("keeps a full-cache draft unresolved across repeated remounts and delayed frames", async () => {

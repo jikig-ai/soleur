@@ -55,6 +55,15 @@ describe("ChatSurface Codex history-transfer acknowledgment", () => {
     expect(screen.queryByRole("button", { name: "Resend message" })).toBeNull();
   });
 
+  it("labels a visible draft whose recovery copy expired", async () => {
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    wsReturn.messages = [{ id: "user-held-turn", type: "text", role: "user", content: "Expired synthetic draft", delivery: "unresolved", recoveryExpired: true }];
+    render(<ChatSurface variant="full" conversationId="test-id" />);
+    expect(screen.getByText("Expired synthetic draft")).toBeVisible();
+    expect(screen.getByText(/recovery copy expired/i)).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Resend message" })).toBeNull();
+  });
+
   it("sends the explicit acknowledgment for the displayed conversation generation", async () => {
     const { ChatSurface } = await import("@/components/chat/chat-surface");
     const view = render(<ChatSurface variant="full" conversationId="test-id" />);

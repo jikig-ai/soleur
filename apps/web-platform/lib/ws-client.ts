@@ -38,7 +38,7 @@ import { STUCK_TIMEOUT_MS, CONVERSATION_NOT_FOUND_MESSAGE } from "@/lib/ws-const
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type { CredentialScheme } from "@/lib/auth-scheme";
 import { C4_DIAGRAM_SAVED_EVENT } from "@/lib/c4-constants";
-import { codexHeldTurnCache } from "@/lib/codex-held-turn-cache";
+import { codexHeldTurnCache, type HeldCodexTurn } from "@/lib/codex-held-turn-cache";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
@@ -341,6 +341,7 @@ export type ChatAction =
   | { type: "add_message"; message: ChatMessage }
   | { type: "set_message_delivery"; clientTurnId: string; delivery: "unsent" | "retryable" | "unresolved" | undefined }
   | { type: "codex_dispatch_held"; clientTurnId: string }
+  | { type: "codex_recovery_expired"; clientTurnId: string }
   | { type: "remove_held_messages"; clientTurnIds: string[] }
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
@@ -626,6 +627,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return { ...state, messages: state.messages.map((message) =>
         message.type === "text" && message.role === "user" && message.id === `user-${action.clientTurnId}`
           ? { ...message, delivery: "unresolved" as const } : message) };
+    case "codex_recovery_expired":
+      return { ...state, messages: state.messages.map((message) =>
+        message.type === "text" && message.role === "user" && message.id === `user-${action.clientTurnId}`
+          ? { ...message, delivery: "unresolved" as const, recoveryExpired: true } : message) };
     case "set_message_delivery":
       return {
         ...state,
@@ -785,17 +790,40 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     acknowledged: boolean;
     unresolved?: boolean;
   }>());
+  // Keep tracking visible held messages even if the active conversation changes.
+  const retainedCodexHeldRef = useRef(new Map<string, string>());
+  const issuedClientTurnIdsRef = useRef(new Set<string>());
   const explicitCodexResumeRef = useRef<string | null>(null);
   const codexDraftScopeRef = useRef<string | null>(null);
   const chatMessagesRef = useRef(chatState.messages);
   chatMessagesRef.current = chatState.messages;
 
   useEffect(() => codexHeldTurnCache.subscribe(() => {
-    dispatch({ type: "remove_held_messages", clientTurnIds: [...pendingCodexHistoryTurnsRef.current.keys()] });
+    dispatch({ type: "remove_held_messages", clientTurnIds: [...pendingCodexHistoryTurnsRef.current.keys(), ...retainedCodexHeldRef.current.keys()] });
     pendingCodexHistoryTurnsRef.current.clear();
+    retainedCodexHeldRef.current.clear();
+    issuedClientTurnIdsRef.current.clear();
     codexDraftScopeRef.current = null;
     explicitCodexResumeRef.current = null;
     setLastError((current) => current?.code === "codex_history_transfer_required" ? null : current);
+  }), []);
+
+  useEffect(() => codexHeldTurnCache.subscribeExpiry((event) => {
+    if (event.scopeEpoch !== codexHeldTurnCache.scopeEpoch(codexDraftScopeRef.current)
+      || retainedCodexHeldRef.current.get(event.clientTurnId) !== event.conversationId) return;
+    const held = pendingCodexHistoryTurnsRef.current.get(event.clientTurnId);
+    if (held && held.conversationId === event.conversationId) {
+      held.acknowledged = false;
+      held.unresolved = true;
+    }
+    dispatch({ type: "codex_recovery_expired", clientTurnId: event.clientTurnId });
+    const generation = held?.conversationId === event.conversationId ? held.authModeGeneration : undefined;
+    setLastError((current) => {
+      if (current?.code !== "codex_history_transfer_required" || current.conversationId !== event.conversationId
+        || current.authModeGeneration !== generation || current.noticeNonce === undefined) return current;
+      const { noticeNonce: _expiredNonce, ...withoutNonce } = current;
+      return withoutNonce;
+    });
   }), []);
 
   function historyTransferNotice(
@@ -824,14 +852,32 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   function restoreHeldCodexTurns(targetConversationId: string) {
     // Only a server-confirmed conversation may select drafts from the cache.
-    const restored = codexHeldTurnCache.get(codexDraftScopeRef.current, targetConversationId)
+    const scope = codexDraftScopeRef.current;
+    const epoch = codexHeldTurnCache.scopeEpoch(scope);
+    if (epoch === null) return;
+    const currentScope = () => codexDraftScopeRef.current === scope && codexHeldTurnCache.scopeEpoch(scope) === epoch;
+    const candidates = codexHeldTurnCache.get(scope, targetConversationId)
       .filter((turn) => !pendingCodexHistoryTurnsRef.current.has(turn.clientTurnId))
-      .map((turn) => {
-        if (codexResendQualified() || turn.message.delivery === "unresolved") return turn;
-        return codexHeldTurnCache.markUnresolved(codexDraftScopeRef.current, turn.conversationId, turn.clientTurnId)
-          ?? { ...turn, message: { ...turn.message, delivery: "unresolved" as const } };
-      });
+      .filter((turn) => !retainedCodexHeldRef.current.has(turn.clientTurnId)
+        || retainedCodexHeldRef.current.get(turn.clientTurnId) === turn.conversationId);
+    if (!currentScope()) return;
+    const staged: HeldCodexTurn[] = [];
+    for (const turn of candidates) {
+      if (codexResendQualified() || turn.message.delivery === "unresolved") { staged.push(turn); continue; }
+      const marked = codexHeldTurnCache.markUnresolved(scope, turn.conversationId, turn.clientTurnId);
+      if (!currentScope()) return;
+      if (marked) { staged.push(marked); continue; }
+      // A full cache can prevent rewriting the delivery marker. Only project
+      // that fallback if the exact turn is still present after pruning.
+      const stillCached = codexHeldTurnCache.get(scope, targetConversationId).find((item) => item.clientTurnId === turn.clientTurnId);
+      if (!currentScope()) return;
+      if (stillCached) staged.push({ ...stillCached, message: { ...stillCached.message, delivery: "unresolved" } });
+    }
+    const liveIds = new Set(codexHeldTurnCache.get(scope, targetConversationId).map((turn) => turn.clientTurnId));
+    if (!currentScope()) return;
+    const restored = staged.filter((turn) => liveIds.has(turn.clientTurnId));
     for (const turn of restored) {
+      retainedCodexHeldRef.current.set(turn.clientTurnId, turn.conversationId);
       pendingCodexHistoryTurnsRef.current.set(turn.clientTurnId, {
         conversationId: turn.conversationId, authModeGeneration: turn.authModeGeneration, acknowledged: false,
         unresolved: turn.message.delivery === "unresolved",
@@ -1465,6 +1511,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "error": {
           if (msg.errorCode === "codex_dispatch_unavailable") {
             if (msg.conversationId !== realConversationIdRef.current || !msg.clientTurnId) break;
+            if (!retainedCodexHeldRef.current.has(msg.clientTurnId)) {
+              retainedCodexHeldRef.current.set(msg.clientTurnId, msg.conversationId);
+            }
             dispatch({ type: "codex_dispatch_held", clientTurnId: msg.clientTurnId });
             setLastError({ code: msg.errorCode, message: msg.message });
             break;
@@ -2452,7 +2501,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // wiring the reset here covers both paths without per-path branching. No-op
       // when already `live` (the reducer arm short-circuits).
       const clientTurnId = crypto.randomUUID();
+      if (issuedClientTurnIdsRef.current.has(clientTurnId) || retainedCodexHeldRef.current.has(clientTurnId)
+        || chatMessagesRef.current.some((message) => message.id === `user-${clientTurnId}`)) {
+        reportSilentFallback(new Error("Generated chat turn ID already exists"), {
+          feature: "send-message", op: "duplicate-client-turn-id",
+        });
+        return false;
+      }
+      issuedClientTurnIdsRef.current.add(clientTurnId);
       if (!send({ type: "chat", content, attachments, clientTurnId })) {
+        issuedClientTurnIdsRef.current.delete(clientTurnId);
         mirrorRefusedSend();
         return false;
       }
@@ -2518,6 +2576,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const acknowledgeCodexHistoryTransfer = useCallback(
     (targetConversationId: string, authModeGeneration: number, noticeNonce: string) => {
+      if (!codexResendQualified()) return;
       send({
         type: "codex_history_transfer_acknowledge",
         conversationId: targetConversationId,

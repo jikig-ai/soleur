@@ -4174,6 +4174,47 @@
   shared send path lacks authenticated engine identity before socket send, so
   a pre-send cache would also retain other engines' drafts. Privacy review and
   a safe scoped design are required; no such preservation guarantee exists.
+- Preliminary CLO review ruled that retaining every engine's outbound draft
+  would expand beyond the accepted held-Codex cache policy; pursue a trustworthy
+  engine discriminator or a Codex-only fail-closed path before considering
+  broader capture. The existing cache was changed to schedule best-effort Map
+  expiry and preserve an unexpired entry's original deadline on replacement.
+  Focused cache/UI tests passed (16 plus four selected hook tests), typecheck
+  passed, and removing the timer cleanup made the expiry regression fail.
+  Independent CLO and technical review found this is not a hard 30-minute
+  all-memory bound: rendered state may retain a copy, timers can be throttled,
+  wall clocks can move backward, and reinsertion after expiry can start a new
+  lifetime. The end-to-end expiry/user-loss tradeoff remains unresolved; no
+  disclosure, legal or retention clearance follows from this improvement.
+- Ruled by CTO agent, 2026-11-06: on recovery-cache expiry, retain any sole
+  visible draft on the current page with an explicit copy-before-leaving
+  warning, remove the cached nonce and disable acknowledgment, resend and
+  replay; auth-scope invalidation must still remove the relevant display.
+  A local candidate emits scoped expiry events and marks a matching visible
+  message, including through credential teardown and a conversation switch;
+  unavailability, all race paths and final UI review remain incomplete. A
+  visible page copy beyond cache TTL differs from
+  the accepted plan and needs explicit lifecycle wording and CLO review before
+  qualification. A delayed nonce update now prunes overdue cache entries before
+  mutation, tested against an unfired timer. A fresh advisory GDPR path scan
+  examined the two changed files and matched zero; this is not privacy review.
+- Further independent review reproduced a reentrant cache scope-switch leak,
+  an expired-snapshot restore after invalidation, and reuse of a generated turn
+  ID before React rendered. Local regression tests and guards address those
+  specific cases; scope invalidation also removes tracked held-response drafts.
+  These are not cross-mount or durable dispatch fences. The ID set is scoped to
+  one hook and clears on scope invalidation. A separate stale socket `auth_ok`
+  and stale inbound-frame race, pre-reply draft loss, expired-ID reinsertion,
+  current-notice validation at acknowledgment, and attachment availability
+  remain open. An attempted shared socket/auth guard was removed after review
+  found it could break valid workspace-fallback sessions and newer sockets.
+  The latest focused run passed 27 cache/UI tests and 12 selected hook tests
+  (39 hook tests skipped), plus typecheck. Vitest emitted Node's DEP0205
+  deprecation warning. Independent review found no additional concrete issue
+  in this narrow candidate, but did not run tests or qualify privacy; the
+  per-hook issued-ID set grows until scope invalidation or unmount and is not
+  a bounded or durable fence. The interim hard hold stays active; do not claim
+  these tests qualify it.
 - Independent local review found the injected Firestore v2 authority adapter
   accepted another command while an earlier POST remained unresolved. A
   process-local latch now refuses concurrent and changed commands and clears
