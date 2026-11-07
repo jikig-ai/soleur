@@ -1397,12 +1397,16 @@ jobs:
     needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
     if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name != 'push' || needs.push-dedupe.outputs.elide != 'true') && needs.draft-light.outputs.light != 'true' && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-webplat,')) && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',test-webplat,')) }}
     runs-on: ubuntu-latest
-    # Bounds a HUNG job (#7902). Healthy shards now take 17-25 min (the vitest split is by file
-    # count, not duration, and approval-guard1-mutation alone is ~15 min on a loaded runner), so
-    # 25 min sat on the edge and cancelled roughly half of the merge-queue attempts with no
-    # assertion failing (#12030). 35 min is ~40% over the observed peak and still a real bound on a
-    # hang. An absent value would read as GitHub's 360-minute default. Flip trigger: if any shard
-    # reaches 30 min, go to three shards rather than raising this again.
+    # Bounds a HUNG job (#7902). Healthy shards take 16-25 min, and the cancelled ones were still
+    # running when the old 25-min ceiling fired (so the true peak is unknown, not 25). The vitest
+    # part is only ~5 min; the rest is the mutation batteries that scripts/test-all.sh registers as
+    # plain run_suite calls in the webplat group (approval-guard1-mutation ~12-15 min,
+    # destroy-ask-mutation ~2 min, home-census-mutations), which run in FULL on BOTH shards. That
+    # put the shards on the edge and cancelled roughly half of the merge-queue attempts with no
+    # assertion failing (#12030). 35 min is a real bound on a hang that clears the observed range.
+    # An absent value would read as GitHub's 360-minute default. Flip trigger: if any shard reaches
+    # 30 min, pin those batteries to one shard (as the tsc step does with strategy.job-index == 0)
+    # or give them their own job; a third shard would repeat them and not help.
     timeout-minutes: 35
     strategy:
       fail-fast: false
