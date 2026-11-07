@@ -298,68 +298,13 @@ Trigger (b) of Phase 2.7 fires (single-user incident declared). The substantive 
 | 9 | "Ref #12197 and Ref #12011, never Closes" | AC 9 | mapped |
 | 10 | "Do not record an acceptance, do not touch the approval-queue flag, no production actions" | Operator Holds; Non-goals | mapped |
 | 11 | "stop after the draft PR is open with CI green; do not run ship's merge phase, do not mark ready, do not enqueue" | AC 8, 10; Operator Holds | mapped |
-| 12 | "Include a ## User-Brand Impact section and `## Operator Holds`" | both sections | mapped |
+| 12 | "Include a ## User-Brand Impact section and `## Superseded hold record
 
-### Plan-Item Provenance
+Superseded 2026-11-07. The live holds for PR #12342 are in knowledge-base/project/plans/2026-11-07-feat-founder-acceptance-record-text-draft-signoff-plan.md. Nothing in this plan is evaluated as a hold.
 
-| Plan item | User words cited (verbatim quote) | Verdict |
-|-----------|-----------------------------------|---------|
-| text file | "file `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`" | asked |
-| structural test `founder-acceptance-record.test.ts` | "Check what tests ... need so the new text loads and hashes correctly" | asked (CTO ruled structural, no pin) |
-| rename of the `canonical.test.ts` title | "whether any test asserts the texts directory is empty" | asked (the one stale title found) |
-| `cross-layer-limits.test.ts` SQL leg | "every number, e.g. the 1000-character note limit, is checked against the code/migration" | asked |
-| refresh of two stale comments (routes test, server README) | "say only what is true of the shipped system" | inferred - justification: both state "no text is committed", which the PR makes false if merged; tiny, docs-only |
-| follow-up issue #12344 (card copy) | "bind the founder to nothing beyond the record itself" | inferred - justification: CLO and CPO found the deck's "these terms" line contradicts it; the deck is test-pinned so it is deferred, per `wg-when-deferring-a-capability-create-a` |
-| Guard Contract | "Check what tests ... need so the new text loads and hashes correctly" | inferred - justification: the structural test is an assertion-based check |
+## Superseded procedure
 
-### Split Assessment
-
-- Subsystems touched: 2 (`apps/web-platform`, `knowledge-base`)
-- Planned files: 6 (3 product files + 1 new text + 1 new test counted once each; spec artifacts excluded) | Estimated changed lines: about 120
-- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: single PR
-
-## Open Code-Review Overlap
-
-None. Checked open `code-review` issues for `legal-acceptance/texts`, `legal-acceptance/canonical`, `test/legal-acceptance`, `legal-acceptance/README`, `legal-acceptance-copy`: no matches.
-
-## Acceptance Criteria
-
-<!-- founder-stated check: see plan-founder-check.md -->
-
-- [ ] AC1: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` was byte-identical to the proposal at copy time (`cmp` exit 0; the `.proposed.md` was deleted at review, and review corrected the ack-marker sentence in the committed file, so the plan snapshot is history), starts with `---`, `version: 2026-11-07`, `---`, has no `valid_until`, ends with one LF. The committed file is the only authority.
-- [ ] AC2: `LC_ALL=C grep -c -P '[^\x00-\x7F]'` and `grep -c $'\r'` on the committed file both print 0; `git check-attr eol` for the path reports `lf`; `cmp` (AC1) after the commit proves no hook rewrote it.
-- [ ] AC3: `markdownlint` with the repo `.markdownlint.json` run on the committed path (not only on a copy) exits 0, and the same run is repeated on the changed `server/legal-acceptance/README.md`.
-- [ ] AC4: `sha256sum` of the committed file equals `textHash` from `loadLegalTexts()` and the value printed in the PR body. The plan's value `acd38414...c9db` is a snapshot of the draft bytes; the PR body states the value of the bytes actually committed (they are identical unless counsel edited before the work phase).
-- [ ] AC5: written RED first: `founder-acceptance-record.test.ts` fails before the text is copied in (cite the output); after the copy, `apps/web-platform/test/legal-acceptance/` passes locally under vitest (including `canonical.test.ts` and the extended `cross-layer-limits.test.ts`), and the merge guard is run once with `CI=1` and shown RED for the placeholder (the right reason), then skipped without `CI`. All three outputs are cited in the PR body.
-- [ ] AC6: `canonical.test.ts` title renamed; `cross-layer-limits.test.ts` carries the two-literal SQL leg (an empty extraction fails); `routes.test.ts` comment and `server/legal-acceptance/README.md` sentence refreshed; no other source file changed (`git diff --stat` shows only the files listed above).
-- [ ] AC7: no test, doc or text claims "verified", "reviewed", "legally binding", "audit-ready" or "compliant" about the text (the deck test and the new test both pass).
-- [ ] AC8: PR #12342 is converted from `WIP:` to a real title (for example `feat(legal-acceptance): DRAFT founder-acceptance-record text, HOLD for counsel`; if a title-lint check objects, keep the `feat(...)` shape and the word DRAFT) and remains a DRAFT. Its body leads with a HOLD banner and lists the counsel items: the sentence "Saying Yes here records that you acknowledge this description"; the retention period; the card-copy mismatch #12344 (a merge precondition, not only a note); the PA-40 register note for the technical-labels and ack-marker sentences; the Art. 6(1)(f) / 17(3)(e) framing, with the LIA still `draft-requires-counsel-review`; how the database host, backups and the release-process credential set are described; the non-operator founder case under the global flag; the flag state in prd read-only before any merge. It states `Ref #12197` and `Ref #12011`.
-- [ ] AC9: the PR body contains no `Closes`, `Fixes` or `Resolves`.
-- [ ] AC10: "CI green" means, per the CTO ruling, every light-set check green on the draft (list them with `gh pr checks`) with the `test` aggregator red by design (ADR-276 Option R, `CI_DRAFT_LIGHT=on`); the PR body names the red aggregator as expected and carries the local vitest and markdownlint output. A light-set check that fails for a pre-existing reason is reported with its evidence, not hidden. The PR is never marked ready, never merged, never enqueued; `ship` merge phase is not run.
-- [ ] AC11: `approval-queue` flag, Doppler, Supabase production, migrations and `legal_acceptance` rows are untouched (no command in the work phase targets them).
-
-## Test Scenarios
-
-1. Format: `auditDir` over the real `texts/` directory reads raw bytes of every key: no 0x0D, nothing above 0x7F, no BOM, at least one key. Negative control: a temp directory with a compliant file and one with a CR fails.
-2. Forbidden words: the shared `FORBIDDEN` regex finds none in the text; a planted string is caught.
-3. Limit: the body contains exactly one `up to (\d+) characters`, equal to `REQUEST_CHANGES_MAX`; in `cross-layer-limits.test.ts` both SQL literals equal the constant.
-4. Loader: `getLegalText("founder-acceptance-record")` gives a version matching `^\d{4}-\d{2}-\d{2}$` and a null `validUntil`.
-5. Merge guard (`it.skipIf(!process.env.CI)`): `heldFindings()` (text body, card notice, request-changes notice) finds no placeholder-shaped token; RED with `CI=1` while the placeholder stands. A non-CI control proves the detector finds the open items in the real data; a second text in the registry fails a tripwire until the guard is extended.
-
-## Operator Holds
-
-- Hold: Operator-reserved: counsel's sign-off of the wording of `founder-acceptance-record`, in particular the sentence "Saying Yes here records that you acknowledge this description", the Art. 6(1)(f) / 17(3)(e) framing, the access-role disclosures, and the retention period (#12080), before this text is merged, marked ready, enqueued or answered. [Text name (added by the plan's author): founder-acceptance-record]
-- Hold: Operator-reserved: merging or marking PR #12342 ready (merge deploys the file to production, where it becomes answerable by any signed-in user once the global `approval-queue` flag is on; preconditions: counsel's sign-off above, #12344 resolved or the card copy accepted by counsel, and the prd flag state read first, CPO condition B).
-- Hold: Operator-reserved: the first real acceptance of this text, the registry smoke and the roadmap CP2 wording (#12197 stays open; wording stays "In progress (legal-acceptance slice)").
-
-These are Operator-reserved by category: legal-risk (the wording of a legal text is reserved for counsel) and irreversible / production-mutating authorization. No recorded Yes for any key discharges them (ADR-319: "A recorded Yes authorizes no production act").
-
-## HOLD procedure
-
-1. The draft PR #12342 stays DRAFT for its whole life in this pipeline. Do not run `gh pr ready`, `gh pr merge`, `gh pr merge --auto`, or enqueue it.
-2. On sign-off (a separate, later change, by counsel's text): replace the placeholder with the confirmed period in the text AND in `LEGAL_COPY.cardNotice` (the guard stays red until both are done), delete the merge guard and its real-data control in that same PR (counsel's sign-off PR is the only change that may), pin a published `{version: sha256}` entry and the exact key set in the test, run the full CI battery on that PR, then decide the flag state (CPO condition B) before merge. After the first merge to main any byte change bumps `version` (CTO ruling); before it, bytes may change freely because the first merge is the sign-off version.
-3. Do not touch the `approval-queue` flag or record any decision at any step.
+Superseded 2026-11-07 by the sign-off plan (see above); the draft-hold steps no longer apply.
 
 ## Non-goals
 
