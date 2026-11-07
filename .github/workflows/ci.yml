@@ -2223,6 +2223,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Fetch origin/main for the manifest's diff reads
+        # Deliberately a STEP, not a line in the manifest run block: the
+        # ci-oracle-lane guard suite replays that block verbatim in a bare
+        # sandbox where `git fetch` exits 128. Same oracle_only gate, so
+        # non-oracle runs stay a no-op. Public repo — persist-credentials:false
+        # does not break the fetch (#12274).
+        if: needs.oracle-selection.outputs.oracle_only == 'true'
+        run: git fetch --no-tags --quiet origin main
+
       - name: Run the oracle-validation manifest
         shell: bash
         env:
