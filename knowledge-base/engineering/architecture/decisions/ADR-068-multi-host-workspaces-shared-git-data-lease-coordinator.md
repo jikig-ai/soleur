@@ -622,8 +622,10 @@ Phase 4b (continuous checkpoint).
 > claim — verify against CF docs + a staging convert before the GA window. The LB is a
 > paid add-on (~$5/mo) — record the recurring expense. web-2 sits in the pool at
 > **weight 0** (drained) until GA. **(c) Hard invariant.** NO live LB weight to web-2
-> before BOTH the owner-side relay is active (`PEER_ALLOWLIST`/
-> `HOST_ROSTER` set → `session-proxy.ts createProxyServer` binds) AND the git-data store
+> before BOTH the owner-side relay is active (`PEER_ALLOWLIST`/`HOST_ROSTER` set AND
+> `session-proxy.ts createProxyServer` binds; the bind address is the literal
+> `-e SOLEUR_PROXY_BIND=0.0.0.0` in `ci-deploy.sh`, NOT a Doppler value, and
+> `createProxyServer` refuses to bind without it) AND the git-data store
 > is cut over (`isGitDataStoreEnabled()` true, 3.C write-boundary sentinel merged, 3.D
 > LUKS cutover soak-verified). Rationale: with the router gated off (default) each host
 > serves purely locally on its own `/workspaces` volume, so any live request round-robined
@@ -780,8 +782,12 @@ Phase 4b (continuous checkpoint).
 > paragraph below describes what it DID, retained because the contract it encoded (especially the
 > `GIT_DATA_LUKS_CUTOVER_AT` soak-marker semantics) still binds any future implementation.
 >
+> *Amendment 2026-11-07 (#12167):* the rebuilt gate no longer shape-checks `SOLEUR_PROXY_BIND` (the
+> bind is a literal in `ci-deploy.sh`, not a Doppler value). Bind/reachability evidence is the serve
+> arm's relay-evidence step (#12168), not the gate.
+>
 > As deleted, it verified the config-shape of BOTH §(c) conditions
-> over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
+> over injected env (owner-side relay: `SOLEUR_PROXY_PEER_ALLOWLIST` +
 > `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
 > `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`
 >

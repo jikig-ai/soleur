@@ -446,8 +446,19 @@ scn_dbin_empty_or_no_rt() { # set-but-empty DOPPLER_BIN, and a DOPPLER_BIN with 
 # The variables lb-weight-gate.sh reads, DERIVED FROM THE GATE ITSELF (never typed here): every NAME the
 # gate expands in a code line as ${NAME-, ${NAME:- or ${NAME+. Comment lines are skipped (a comment names a
 # placeholder VAR).
-gate_read_vars() {
-  grep -vE '^[[:space:]]*#' "$GATE" | grep -oE '\$\{[A-Z][A-Z0-9_]*:?[-+]' | sed -E 's/^\$\{//; s/:?[-+]$//' | sort -u
+gate_read_vars() { # the gate's INPUTS: every variable it expands in ANY form ($NAME, ${NAME}, ${NAME-, ${NAME:-, ${NAME+, ${NAME:?, ...)
+  # that it does not itself assign (NAME=..., local/declare/typeset/readonly, for NAME in, read NAME). Reading the
+  # gate's own derived variables is not an input; reading a name nobody assigns is, whatever the expansion form.
+  local body reads assigned
+  body="$(sed -E '/^[[:space:]]*#/d' "$GATE")"
+  reads="$(grep -oE '\$\{?[A-Za-z_][A-Za-z0-9_]*' <<<"$body" | sed -E 's/^\$\{?//')"
+  assigned="$({
+    grep -oE '(^|[;[:space:](])[A-Za-z_][A-Za-z0-9_]*\+?=' <<<"$body" | sed -E 's/^[;[:space:](]//; s/\+?=$//'
+    grep -E '^[[:space:]]*(local|declare|typeset|readonly)[[:space:]]' <<<"$body" | tr -s ' ;' '\n\n' | sed -E 's/=.*//'
+    grep -oE '(^|[;[:space:]])for[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]+in' <<<"$body" | awk '{print $(NF-1)}'
+    grep -E '(^|[;[:space:]])read[[:space:]]' <<<"$body" | tr -s ' ' '\n' | sed -E 's/[^A-Za-z0-9_].*//'
+  })"
+  comm -23 <(sort -u <<<"$reads") <(sort -u <<<"$assigned")
 }
 wrapper_allow_vars() { # the NAMEs inside the wrapper's GATE_ENV_ALLOW=( ... ) array
   sed -n '/^GATE_ENV_ALLOW=(/,/^)/p' "$1" | sed '1d;$d' | tr -s ' \n' '\n\n' | sed '/^$/d' | sort -u
@@ -457,6 +468,13 @@ BASH_ADDED='^(PWD|SHLVL|_|OLDPWD)$'
 scn_allow_parity() { # the wrapper's allowlist equals the gate's own read set (a drift either way is RED)
   local d w; d="$(gate_read_vars)"; w="$(wrapper_allow_vars "$1")"
   [ -n "$d" ] && [ "$(wc -l <<<"$d")" -eq 9 ] && [ "$d" = "$w" ]
+}
+scn_derive_sees_every_form() { # PLANTED reads in every expansion form are derived as inputs; the gate's own variables are not
+  local real="$GATE" planted="$TMP/gate.planted.sh" got
+  { cat "$real"; printf '%s\n' 'x_plain=$PLANT_PLAIN' 'x_brace="${PLANT_BRACE}"' 'x_req="${PLANT_REQ:?missing}"' 'x_dflt="${PLANT_DFLT:-d}"' 'PLANT_OWN=1' 'x_own="$PLANT_OWN"' '# $PLANT_COMMENT'; } > "$planted"
+  GATE="$planted"; got="$(gate_read_vars)"; GATE="$real"
+  grep -qxF PLANT_PLAIN <<<"$got" && grep -qxF PLANT_BRACE <<<"$got" && grep -qxF PLANT_REQ <<<"$got" && grep -qxF PLANT_DFLT <<<"$got" \
+    && ! grep -qxF PLANT_OWN <<<"$got" && ! grep -qxF PLANT_COMMENT <<<"$got" && [ "$(wc -l <<<"$got")" -eq 13 ]
 }
 scn_survivors() { # nothing but PATH + allowlisted gate inputs reaches the gate, INCLUDING non-identifier names and functions
   # DOPPLER_BIN (and RUNNER_TEMP) are SET and VALID here, with the only working doppler under RUNNER_TEMP: the chain
@@ -497,7 +515,8 @@ scn_proxy_bind_not_forwarded() { # SOLEUR_PROXY_BIND (no longer a gate input, CT
   build_sb "$1" spy; set_marker "$OLD4D"; run_wb SOLEUR_PROXY_BIND=10.0.1.10
   [ "$RC" -eq 42 ] && [ -f "$FX/gate.env" ] || return 1
   ! grep -q '^SOLEUR_PROXY_BIND' "$FX/gate.env" || return 1
-  # through the REAL gate: with and without it the pooled authorized shape is the same exit 0
+  # GATE-ONLY check (it does not exercise the wrapper's forwarding; the spy half above does that): the REAL gate,
+  # fed an empty SOLEUR_PROXY_BIND, still reaches the pooled authorized-shape exit 0
   build_sb "$1" real; set_marker "$OLD4D"; run_wb SOLEUR_PROXY_BIND=
   [ "$RC" -eq 0 ] && [[ "$OUT" == *"requires_runtime_bind_probe=true"* ]]
 }
@@ -544,6 +563,7 @@ assert "the gate's own exit code propagates through exec (failure and success)" 
 assert "no DOPPLER_*, BASH_ENV or ENV reaches the gate; the marker and the orchestrator's env do" scn_doppler_scrub "$WRAPPER"
 assert "the gate's environment is an allowlist: DOPPLER-API-HOST, doppler_token, BASH_FUNC_* and every unrelated variable are dropped" scn_survivors "$WRAPPER"
 assert "the wrapper's allowlist equals the set of variables lb-weight-gate.sh itself reads (derived from the gate, 9 names)" scn_allow_parity "$WRAPPER"
+assert "the derivation of the gate's reads sees every expansion form (\$NAME, \${NAME}, \${NAME:?, \${NAME:-) and ignores the gate's own variables and comments" scn_derive_sees_every_form
 assert "every allowlisted gate input the caller set reaches the gate verbatim; set-but-empty stays set, unset stays unset" scn_allow_passthrough "$WRAPPER"
 assert "SOLEUR_PROXY_BIND is not a gate input: a caller-set value never reaches the gate and an empty one does not refuse the real gate" scn_proxy_bind_not_forwarded "$WRAPPER"
 assert "an UNSET SOLEUR_SERVING_ROTATION stays unset through the wrapper and the real gate fails closed on it" scn_rotation_unset_fails_closed "$WRAPPER"
@@ -785,7 +805,7 @@ if [ "$cases" -ne "$verdicts" ]; then
   printf '  FAIL CONSERVATION: %s cases ran but %s verdicts were recorded.\n' "$cases" "$verdicts" >&2
   exit 1
 fi
-CASES_FLOOR=122
+CASES_FLOOR=123
 if [ "$cases" -lt "$CASES_FLOOR" ]; then
   printf '  FAIL ANTI-VACUITY: only %s cases ran, floor is %s.\n' "$cases" "$CASES_FLOOR" >&2
   exit 1
