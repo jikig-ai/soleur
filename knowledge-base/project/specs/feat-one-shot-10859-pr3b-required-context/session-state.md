@@ -26,3 +26,17 @@
 - gh issue view 10859; gh pr list overlap scan; gh issue list --label code-review.
 - bash scripts/probe-merge-group-coverage.sh (green today: contexts=12 producers=11).
 - Artifacts committed + pushed under knowledge-base/project/{plans,specs}/feat-one-shot-10859-pr3b-required-context/.
+
+
+## Implementation-phase status (PR3b #10859, worktree branch, 2026-11-07)
+
+Landed on branch `feat-one-shot-10859-pr3b-required-context` (4 commits ahead of origin; not yet pushed — Phase 3 verify incomplete):
+
+- `scripts/ci-oracle-review.sh` + `scripts/ci-oracle-review.test.sh` — driver + sentinel; suite GREEN 19/0.
+- `scripts/ci-pr-affected-replay.py` — `accept=<n>` marker, `accept-unattributed`/`accept-bad-kind` verdicts, `ACCEPT_KINDS`, `RATCHET_ORACLE`+2, `ALWAYS_RUN_JOBS`+1, remedy rewrite, base-ratchet helpers.
+- `plugins/soleur/test/ci-pr-affected-replay.test.sh` — accept= grammar, accx/accbad/accattr fixtures + rows (3/3 PASS in-run).
+- `plugins/soleur/test/bot-synthetic-unreachability.test.sh` — NEW Guard-4 suite, GREEN 9/0; edge block + 6 accept rows; exclusion note in ci-oracle-lane-suites.txt.
+- Enrollment: ci.yml (coe dropped, oracle-review-required job), required-checks.txt, canonical JSON, ruleset-ci-required.tf (+2), T-rsc-7 10->12, parity floor -ge 12, probe MIN_CONTEXTS 14, UNGATED/LIGHT pins, fanout-ledger 22, admin-merge-ready fixture 11->13 + README.
+- Registration: test-all.sh run_suite, suite-shard-legs.tsv/suite-durations.tsv regenerated (740 rows).
+- Docs: runbook advisory->required + accept-bound section, ADR-276 amendment 2026-11-07.
+- Verified: oracle-review 19/0, bot-synthetic 9/0, parity 53/0. OUTSTANDING: full replay suite clean run (prior runs hit transient mid-file parse crashes at different lines; earlier FAIL rows were fixed by d30e839 marker stubs — unverified since), probe/audit-ruleset-bypass/admin-merge-ready/fanout/push-dedupe/draft-light/aggregator-diagnosis, cumulative baseline re-check, push.
