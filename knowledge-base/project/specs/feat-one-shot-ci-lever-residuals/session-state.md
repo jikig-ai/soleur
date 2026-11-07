@@ -29,3 +29,10 @@
 
 - cto_spawns=1 (one batched spawn discharged all six unruled-technical rows; all confirmed except none replaced — rulings written to decision-challenges.md)
 - technical-ruling-gate.sh --branch: PASS (8 rows examined)
+
+## Pipeline Position (work phase)
+
+- Phase 1 #12016: DONE+committed `7350495e62` — suite-durations.tsv rows 3200→349500 + 6938→297100; PRICE_DRIFT_ROW emission in regenerate-shard-manifest.py (4x/120000ms/timed>=3); price-drift finding in watch-shard-balance-11564.sh; Z8 + S19-S22 tests green 142/142 + 29/29.
+- Phase 2 #9323: DONE+committed `4591c12e39` — PBG_UNBOUNDED seam + 5 seam test rows (49/49 green); local verdict run = NOT YET (7 open PRs lack merge-commit push runs — structural pending); 2 comments on #9323, filed #12360; probe NOT retired.
+- Phase 3 #9729: IN FLIGHT via subagent 19aaddab — collect chunks /var/tmp/s4-replay/units-commits-{1..4}-of-4.jsonl (~34/300 units); audit done /var/tmp/s4-audit.out; ejections+aggregate+criteria+verdict+receipts+ADR-276 amendment+#9729 comment pending; subagent does NOT commit — lead commits at phase end.
+- Remaining: Phase 4 consolidate; exit gates = gdpr-gate on full diff + affected-test gate + `lefthook run pre-commit` (core.hooksPath=/dev/null so hooks bypassed all commits); then review→resolve→qa→compound→ship→merge→postmerge.
