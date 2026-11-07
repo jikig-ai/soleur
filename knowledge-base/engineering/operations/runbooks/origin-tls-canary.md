@@ -43,7 +43,14 @@ covered by the https LB monitor and its own `origin-tls: listening` line.
 
 ## Turn it off / rollback
 
-Delete the Doppler secret (or set it to `false`) and dispatch the same apply again. The plan shows one in-place change (-1 rule); the
-entrypoint is never destroyed. Time to take effect: the apply run (several minutes) plus edge propagation (seconds to about a minute).
-Real traffic is never in the canary's scope, so there is no user-facing urgency. A `git revert` of the code PR after the canary is on is
-also safe (it removes the dynamic block, the same in-place -1 rule), but it needs a merge to apply; the Doppler switch is the fast lever.
+The canary rule is ALWAYS present in the ruleset; the Doppler switch only sets its `enabled` flag (it defaults to false). Turning it off is therefore an in-place update with the
+rule count constant, which the destroy guard accepts on a `workflow_dispatch` (replayed with real plans: `nested_deletes` 0, T65 in
+`tests/scripts/test-destroy-guard-counter-web-platform.sh`). An earlier shape added and removed the rule, which the same guard refuses on a dispatch.
+
+```bash
+doppler secrets delete ENABLE_ORIGIN_TLS_CANARY_RULE -p soleur -c prd_terraform --yes > /dev/null     # or set the lowercase string false
+gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-rerun -f reason="ADR-321: disable the origin-TLS canary rule"
+```
+
+Only a lowercase `true` or `false` is a valid value: anything else aborts the whole root's plan. Time to effect is the apply run (measured 109 to 370 s on this workflow; propagation
+unmeasured). Real traffic is never in the canary's scope, so there is no user-facing urgency. See `origin-tls-strict-flip.md` for the strict flip that builds on this rule.
