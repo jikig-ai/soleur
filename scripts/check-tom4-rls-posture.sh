@@ -202,6 +202,7 @@ SHAPE_IV = {  # TOM 4 shape (iv): RLS enabled, ZERO policies, Customer Data
     "workspace_egress_audit_rollup",  # per-workspace egress audit rollup, dark until PR2 (migration 162, ADR-288)
     "git_data_erasure_pending",  # workspace-id-keyed pending git-data erasure ledger (migration 182, #8211)
     "legal_reauth_event",  # single-use email-code challenge keyed on a user uuid and web session id (migration 184, #12011)
+    "legal_acceptance_ack",  # pseudonymous personal data (acceptance id + time; no founder id, but joins to legal_acceptance.founder_id); zero-policy, service-role RPCs only (migration 185, #12011)
 }
 # Zero-policy tables that hold no Customer Data. Assertion 4 requires every
 # zero-policy table to sit in exactly one of these two lists, so a NEW
