@@ -5,6 +5,7 @@ date: 2026-09-18
 amends: ADR-181, ADR-183, ADR-196, ADR-133
 related_adrs: [ADR-181, ADR-183, ADR-196, ADR-133, ADR-177]
 amended_by:
+  - "#12247 (2026-11-07) — the ci-is-the-gate token is also honoured at work Phase 2, review's lead gate and the Grok pre-push gate through `battery-owed.sh --token-only` (wrapper `gate-or-skip.sh` for work and review, inline for Grok); see ## Amendment — 2026-11-07 (#12247)"
   - "#12246 (2026-11-06) — exit 42 of battery-owed.sh also means the operator declared CI the gate (session-state.md token); reconciled with ADR-196; see ## Amendment — 2026-11-06 (#12246)"
   - "#9552 (2026-10-05) — decision 20: a registration-only runner diff takes the bounded selection under branch scope (closed grammar, fail closed); the 2026-09-29 option-d rejection is reversed in part; see ## Amendment — 2026-10-05 (#9552)"
   - "ADR-262 (2026-09-30, #9323) — decision 1's \"CI keeps the full battery\" and the merge-gate statements are narrowed for five self-test mutation batteries on a pull_request run; four labels leave ALWAYS_ON; see ## Amendment — 2026-09-30"
@@ -130,7 +131,8 @@ commit hook.
   `battery-owed.sh` first; OWED (or any non-42 verdict) runs `--affected`,
   and `--full` is an explicit operator opt-in that outranks even a SKIPPABLE
   verdict — the operator who typed `--full` asked for the battery itself, not
-  a dedup decision.
+  a dedup decision. The operator token also applies at work, review and the
+  Grok gate (see Amendment 2026-11-07).
 - **ADR-196's Decision 6 is stale in one direction.** It asserted the two
   git-hook invokers "invoke the full gate deliberately and both set
   `SOLEUR_ALLOW_FULL_GATE=1`". Post-#8322 both invoke `--affected` with no
@@ -1048,6 +1050,16 @@ This supersedes, by name, sentences of earlier amendments, which stay as written
 its rejection of skip-ahead as one that "breaks the `*` barrier" (the park removes the conflict by keeping the `*` invisible to backfill); and, in the
 2026-11-06 amendment (Decision 29), "a queued `*` (drain barrier) suite blocks every later launch" (Decision 29 text), "The kill now lands on suites queued
 behind the `*` barrier" and "Every `*` suite now waits for the arms to drain" (its "What this does not claim" bullets).
+
+## Amendment — 2026-11-07 (#12247)
+
+Supersedes the closing sentence of the 2026-11-06 amendment ("Work Phase 2, review's local gate and the Grok pre-push gate ... do not read the token (#12247)"). The `ci-is-the-gate` token is now read at four moments of a run, all through the one reader and its exit contract (42 skips; 0, 2 and anything else run the gate). Ship Phase 4 still calls `battery-owed.sh` bare (token, then CI evidence). Work Phase 2 (step 9 and the fan-out lead's consolidation run) and review's lead gate call `plugins/soleur/scripts/gate-or-skip.sh`, which on a bare invocation runs `battery-owed.sh --token-only` and skips only on 42, printing `affected gate: SKIPPED (NOT run, NOT passed); CI test is the gate` and the machine line `AFFECTED_GATE_SKIPPED reason=operator-ci-is-the-gate`; any argument (`--full`, `--explain`, `--base`) bypasses the token. The Grok pre-push gate makes the same `--token-only` call inline and waives only its affected-tests step (fast jobs, build and grok-fidelity still run; a waive also makes grok-fidelity run the AGENTS rule-budget lint, which it skips only when the affected gate ran test-all; an affected step ending rc 6 or 7 can leave that lint unrun locally, a pre-existing residual with CI `test-scripts` as the backstop), ending in a distinct `PASS WITH SKIPPED GATE` banner instead of "safe to git push". `--token-only` returns OWED at once when no valid token exists, with no CI state read; with a token it runs the existing arm unchanged, so the infra surface, a merge in progress and an unmeasurable diff still refuse. The channels named on 2026-11-06 are unchanged in kind: the operator-intent channel (the token) now applies at four moments of a run, not one, and is still one channel with one reader.
+
+Not consumers, on purpose: `soleur:test-fix-loop` (a fix loop reacting to red must run tests), `lefthook.yml`'s per-commit bun-test hook (deferred, tracked in #12297 with its re-evaluation criterion), and every gate after Phase 6.45 archival. Measured for the archival question: no gate needs the token afterwards except a Grok push made after archival (the archive push, a CI-fix push), which then runs the affected gate in full, the stricter outcome; the reader is not extended to `specs/archive/` because that would read an older run of the same branch name and widen the trust surface.
+
+Residuals, stated once. With a valid token a commit that fails the local suites can reach `git push` with no local test run at three sites, bounded by the required `test` check and the merge queue. Review-time skipping trusts the branch under review (the token is a hint the same commit can write; the bound is the one named on 2026-11-06). The Grok skip note is log-only and ship deletes the log on green, while Phase 4 already printed the verdict for the same token; when `--full` outranked the token at Phase 4 the full battery already ran, so waiving the Grok step is coherent. The declaration is the operator's assertion that a CI test gate exists. The two lead-gate sentences in work and review changed command, not only wiring: the bare runner call became the plugin gate, which adds `.soleur-test-gate.json` budget and content-trigger semantics and the contract's rc mapping (rc 6 and 7 are never reported as passed).
+
+Alternatives. Per-site inline branches (runner-up: no shared front door, but each SKILL.md would carry the branch and the byte ceilings forbid it). A token consult inside `affected-tests.sh` mapped to a new rc (rejected: it widens a contract `soleur:test-fix-loop` and ship's OWED arm consume and must stay token-blind). Bare reader calls with CI-evidence conditions at these sites (rejected: the head is usually unpushed there). Rulings: the plan's `decision-challenges.md` rows F1-F5 and F12 (archived with the branch). Issue #12251 (C-quoted paths in the no-token infra refusal) is tracked there and ships as its own PR.
 
 ## Amendment — 2026-11-07 (#12013, #12231)
 
