@@ -30,14 +30,20 @@
 #   - PR body contains operator-step accretions without OPEN
 #     `deferred-automation` / `automation gap` companion issues
 #
-# The `parked` barrier (#12197, CTO ruling 2026-11-07), a SEPARATE branch that runs first: a PR carrying the existing
-# `parked` label ("Reviewed draft held until an approved window; do not merge or arm auto-merge") cannot be merged or
-# enqueued by an agent session. Any `gh pr merge` that is not `--disable-auto` (plain, --auto, --admin, chained, and a
-# `gh api` PUT on pulls/N/merge) is denied while the PR carries the label, and so is REMOVING the label (`gh pr|issue edit
-# --remove-label parked`, `gh api -X DELETE .../labels/parked`). `gh pr ready` is not blocked. The label read for a resolved
-# PR number fails CLOSED. SOLEUR_SKIP_OPERATOR_STEP_GATE does not lift it: the operator clears the label in the UI or in their
-# own terminal, then the hold line is rewritten. Limit, stated plainly: this stops accidental merges by agent sessions and by
-# drain-prs; it does not stop a human or an admin UI merge.
+# The `parked` barrier (#12197, CTO rulings 2026-11-07 and 2026-11-08), a SEPARATE branch that runs first. It is a BEST-EFFORT
+# GUARDRAIL against accidental merges by agent sessions working in a checkout that carries this file. It is NOT an access
+# control: the real hold on a parked PR is its DRAFT status (GitHub refuses to merge a draft; drain-prs excludes drafts), and this
+# hook is absent from origin/main until the pull request that adds it merges, so a session on a main-based checkout does not run
+# it. While a PR carries the existing `parked` label ("Reviewed draft held until an approved window; do not merge or arm
+# auto-merge"), a `gh pr merge` that is not `--disable-auto` (plain, --auto, --admin, chained, quoted, wrapped in `bash -c`, a
+# PR URL, `-R/--repo`, a `gh api` merge or a GraphQL merge/enqueue mutation) is denied, and so is anything that removes or
+# replaces the label (`gh pr|issue edit --remove-label`, `gh label delete|edit`, a `gh api` write on the labels). A merge whose
+# target cannot be read as a literal PR number (a shell variable, a branch name) is denied while ANY open PR is parked, and a
+# failed or hung label read (bounded by `timeout`, default 10 s) fails CLOSED. `gh pr ready` is not blocked. The override
+# SOLEUR_SKIP_OPERATOR_STEP_GATE does not lift it: the operator clears the label in the UI or in their own terminal, then the
+# hold line is rewritten. Limits, stated plainly: it matches command TEXT, so a merge hidden in a script file, built from `$GH`
+# or `xargs` input, run from a GitHub Actions job (schedule), or made by a human or an admin UI merge is not seen; the other merge
+# sites in skills and scripts do not check `parked` (tracked in the consolidated follow-up issue).
 
 set -eo pipefail
 
@@ -90,48 +96,116 @@ else
   SCAN="$CMD"
 fi
 # ---- the parked barrier (see the header) ---------------------------------------------------------------------------------
-# Runs BEFORE the ready / merge --auto trigger below, which stays exactly as it was. A statement is one `gh ...` between the
-# chain operators; the wrapper prefix (rtk etc.) is the shared fragment the trigger uses.
-PARKED_STMT_PFX='(^|[[:space:]])('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh[[:space:]]+'
+# Runs BEFORE the ready / merge --auto trigger below, which stays exactly as it was. Only heredoc BODIES are blanked here
+# (strip_heredocs): quoted spans stay visible, because `bash -c "gh pr merge 7"` and `--remove-label "parked"` are commands too.
+# A statement is one piece of the command between the chain operators (&& || ; | &); inside a statement the quote and
+# parenthesis characters become spaces and a trailing ` #` comment is cut, so every pattern below reads plain words.
+if command -v strip_heredocs >/dev/null 2>&1; then
+  PSCAN=$(strip_heredocs "$CMD")
+else
+  PSCAN="$CMD"
+fi
+PARKED_GH_TIMEOUT="${SOLEUR_PARKED_GH_TIMEOUT:-10}"
+[[ "$PARKED_GH_TIMEOUT" =~ ^[0-9]+$ ]] || PARKED_GH_TIMEOUT=10
+# `gh`, optionally behind the shared wrapper prefix, optionally with a global -R/--repo; the boundary character before it may be
+# anything but a word character or a hyphen (so `/usr/bin/gh`, `\gh`, `$(gh`, `|gh` all count, `foo-gh` does not).
+PARKED_STMT_PFX='(^|[^[:alnum:]_-])('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh[[:space:]]+((-R|--repo)[[:space:]=]+[^[:space:]]+[[:space:]]+)?'
+parked_incident() {
+  declare -f emit_incident >/dev/null 2>&1 || return 0
+  emit_incident wg-block-pr-ready-on-undeferred-operator-steps deny "parked barrier blocked a merge, enqueue or un-park" "${CMD:0:200}" 2>/dev/null || true
+}
 parked_deny() {
   local why="$1"
+  parked_incident
   jq -nc --arg r "$why" '{decision: "deny", reason: $r}'
   exit 0
 }
+# Every gh READ the barrier makes is bounded: a hung gh must read as "could not read" (deny), not as a hook timeout the
+# harness may treat as non-blocking.
+parked_gh() {
+  if command -v timeout >/dev/null 2>&1; then timeout "$PARKED_GH_TIMEOUT" gh "$@"; else gh "$@"; fi
+}
+# parked_check_pr <n> [repo]: deny when PR n carries the label (any case) or its labels cannot be read.
+parked_check_pr() {
+  local n="$1" repo="${2:-}" labels
+  local -a ra=()
+  [[ -n "$repo" ]] && ra=(--repo "$repo")
+  if ! labels=$(parked_gh pr view "$n" "${ra[@]}" --json labels --jq '.labels[].name' 2>/dev/null); then
+    parked_deny "Could not read the labels of PR #${n}, so the 'parked' barrier fails closed: merge and enqueue of a held PR are reserved for the operator. Retry once gh answers."
+  fi
+  if grep -qixF 'parked' <<<"$labels"; then
+    parked_deny "PR #${n} carries the 'parked' label: merge and enqueue of this PR are reserved for the operator. Agent sessions on this branch and drain-prs do not merge or arm auto-merge on it; the PR's DRAFT status is the real hold. The operator removes the label (GitHub UI or their own terminal), then the hold line in the plan is rewritten. This is not overridable by SOLEUR_SKIP_OPERATOR_STEP_GATE."
+  fi
+}
+# parked_any_hold <why> [repo]: deny when ANY open PR carries the label, for a command whose target is not a literal PR number.
+parked_any_hold() {
+  local why="$1" repo="${2:-}" c
+  local -a ra=()
+  [[ -n "$repo" ]] && ra=(--repo "$repo")
+  if ! c=$(parked_gh pr list --label parked --state open "${ra[@]}" --json number --jq length 2>/dev/null) || [[ ! "$c" =~ ^[0-9]+$ ]]; then
+    parked_deny "Could not list the open 'parked' PRs, so the barrier fails closed for ${why}. Retry once gh answers."
+  fi
+  if (( c > 0 )); then
+    parked_deny "${why} cannot be matched to a literal PR number, and ${c} open PR(s) carry the 'parked' label: merge, enqueue and label changes on a held PR are reserved for the operator. Use the literal PR number (the barrier then checks that PR only)."
+  fi
+}
 parked_barrier() {
-  local stmt after n labels
+  local stmt plain after tok repo n
+  local -a toks=() prs=()
+  local nonflag
   while IFS= read -r stmt; do
-    [[ -n "${stmt//[[:space:]]/}" ]] || continue
-    # Removing the label: never allowed from an agent session, whatever the PR carries.
-    if grep -qE "${PARKED_STMT_PFX}(pr|issue)[[:space:]]+edit[[:space:]].*--remove-label[[:space:]=]+['\"]?([^[:space:]'\"]*,)?parked(,|['\"]|[[:space:]]|$)" <<<"$stmt" \
-       || { grep -qE "${PARKED_STMT_PFX}api[[:space:]]" <<<"$stmt" && grep -qiE '(-X|--method)[[:space:]=]*DELETE' <<<"$stmt" && grep -qE 'labels/parked([[:space:]]|$|["'"'"'])' <<<"$stmt"; }; then
-      parked_deny "Removing the 'parked' label is reserved for the operator: PR merge and enqueue are held by that label. The operator removes it in the GitHub UI or from their own terminal; then the hold line in the plan is rewritten."
+    [[ "$stmt" == *gh* ]] || continue
+    plain=${stmt//[\"\'\`()]/ }
+    plain=${plain%%[[:space:]]#*}
+    [[ -n "${plain//[[:space:]]/}" ]] || continue
+    repo=""
+    if [[ "$plain" =~ (^|[[:space:]])(-R|--repo)[[:space:]=]+([^[:space:]]+) ]]; then repo="${BASH_REMATCH[3]}"; fi
+    # Removing or replacing the label: never allowed from an agent session, whatever the PR carries.
+    if grep -qiE "${PARKED_STMT_PFX}(pr|issue)[[:space:]]+edit[[:space:]].*--remove-label[[:space:]=]+([^[:space:]]*,)?parked(,|[[:space:]]|$)" <<<"$plain" \
+       || grep -qiE "${PARKED_STMT_PFX}label[[:space:]]+(delete|edit)[[:space:]]+parked([[:space:]]|$)" <<<"$plain"; then
+      parked_deny "Removing, renaming or deleting the 'parked' label is reserved for the operator: PR merge and enqueue are held by that label. The operator changes it in the GitHub UI or from their own terminal; then the hold line in the plan is rewritten."
     fi
-    local -a prs=()
-    if grep -qE "${PARKED_STMT_PFX}pr[[:space:]]+merge([[:space:]]|\$)" <<<"$stmt"; then
-      # --disable-auto only un-arms an auto-merge: allowed.
-      grep -qE -- '--disable-auto' <<<"$stmt" && continue
-      after=${stmt#*merge}
-      # every number after `merge` is a candidate (a flag value can be numeric); also the current branch's PR when none is given
-      while IFS= read -r n; do [[ -n "$n" ]] && prs+=("$n"); done < <(grep -oE '(^|[[:space:]])[0-9]+([[:space:]]|$)' <<<"$after" | tr -d '[:space:]' | sort -u || true)
-      if [[ ${#prs[@]} -eq 0 ]]; then
-        n=$(gh pr view --json number --jq .number 2>/dev/null || true)
-        [[ -n "$n" ]] && prs+=("$n")
+    if grep -qE "${PARKED_STMT_PFX}api[[:space:]]" <<<"$plain"; then
+      if grep -qiE '(-X|--method)[[:space:]=]*DELETE' <<<"$plain" && grep -qiE 'labels/parked([[:space:]]|$)' <<<"$plain"; then
+        parked_deny "Removing the 'parked' label is reserved for the operator: PR merge and enqueue are held by that label. The operator removes it in the GitHub UI or from their own terminal; then the hold line in the plan is rewritten."
       fi
-    elif grep -qE "${PARKED_STMT_PFX}api[[:space:]].*pulls/[0-9]+/merge" <<<"$stmt"; then
-      while IFS= read -r n; do [[ -n "$n" ]] && prs+=("$n"); done < <(grep -oE 'pulls/[0-9]+/merge' <<<"$stmt" | grep -oE '[0-9]+' || true)
+      # Replacing or clearing the whole label set removes `parked` too: judge it by the PR it is aimed at.
+      if grep -qiE '(-X|--method)[[:space:]=]*(PUT|PATCH|DELETE)' <<<"$plain" && grep -qE 'issues/[^[:space:]/]+/labels([[:space:]]|$)' <<<"$plain"; then
+        if [[ "$plain" =~ issues/([0-9]+)/labels([[:space:]]|$) ]]; then parked_check_pr "${BASH_REMATCH[1]}" "$repo"; else parked_any_hold "A label write on an issue or PR" "$repo"; fi
+      fi
+      if grep -qE 'pulls/[^[:space:]/]+/merge' <<<"$plain"; then
+        if [[ "$plain" =~ pulls/([0-9]+)/merge ]]; then parked_check_pr "${BASH_REMATCH[1]}" "$repo"; else parked_any_hold "A merge through gh api" "$repo"; fi
+      fi
+      if grep -qiE 'mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|removeLabelsFromLabelable|clearLabelsFromLabelable' <<<"$plain"; then
+        parked_any_hold "A GraphQL merge, enqueue or label mutation" "$repo"
+      fi
+      continue
     fi
-    for n in "${prs[@]}"; do
-      if ! labels=$(gh pr view "$n" --json labels --jq '.labels[].name' 2>/dev/null); then
-        parked_deny "Could not read the labels of PR #${n}, so the 'parked' barrier fails closed: merge and enqueue of a held PR are reserved for the operator. Retry once gh answers."
-      fi
-      if grep -qxF 'parked' <<<"$labels"; then
-        parked_deny "PR #${n} carries the 'parked' label: merge and enqueue of this PR are reserved for the operator. Agent sessions and drain-prs do not merge or arm auto-merge on it. The operator removes the label (GitHub UI or their own terminal), then the hold line in the plan is rewritten. This is not overridable by SOLEUR_SKIP_OPERATOR_STEP_GATE."
+    grep -qE "${PARKED_STMT_PFX}pr[[:space:]]+merge([[:space:]]|\$)" <<<"$plain" || continue
+    # --disable-auto only un-arms an auto-merge: allowed. A whole token, so a flag value or a comment cannot carry it.
+    [[ "$plain" =~ (^|[[:space:]])--disable-auto([[:space:]]|$) ]] && continue
+    after=${plain#*merge}
+    read -ra toks <<<"$after"
+    prs=(); nonflag=0
+    for tok in "${toks[@]}"; do
+      if [[ "$tok" =~ ^[0-9]+$ ]]; then prs+=("$tok")
+      elif [[ "$tok" =~ pull/([0-9]+) ]]; then prs+=("${BASH_REMATCH[1]}")
+      elif [[ "$tok" =~ ^[0-9]*[\<\>] ]]; then :   # a redirection (2>, >/dev/null) is not a target
+      elif [[ "$tok" != -* ]]; then nonflag=1
       fi
     done
-  done < <(sed -E 's/(&&|\|\||;)/\n/g' <<<"$SCAN")
+    for n in "${prs[@]}"; do parked_check_pr "$n" "$repo"; done
+    if [[ ${#prs[@]} -eq 0 ]]; then
+      # No literal number: the current branch's PR is the target of a bare merge; a non-flag word (a variable, a branch name)
+      # makes the target unknowable, so any parked PR holds it.
+      n=$(parked_gh pr view --json number --jq .number 2>/dev/null || true)
+      if [[ "$n" =~ ^[0-9]+$ ]]; then parked_check_pr "$n" "$repo"; fi
+      if (( nonflag )); then parked_any_hold "This merge" "$repo"; fi
+    fi
+  done < <(sed -E 's/(&&|\|\||;|\||&)/\n/g' <<<"$PSCAN")
 }
-if grep -qE 'gh[[:space:]]+(pr|issue)[[:space:]]+(merge|edit)|gh[[:space:]]+api[[:space:]]' <<<"$SCAN" && [[ "$WORK_DIR" == /* && -d "$WORK_DIR" ]] && cd "$WORK_DIR" 2>/dev/null; then
+if [[ "$WORK_DIR" == /* && -d "$WORK_DIR" ]]; then cd "$WORK_DIR" 2>/dev/null || true; fi
+if grep -qE '(^|[^[:alnum:]_-])gh[[:space:]]' <<<"$PSCAN"; then
   parked_barrier
 fi
 

@@ -39,7 +39,7 @@ Use `merge-pr` for a single named PR. Use `drain-labeled-backlog` for labeled *i
 
 Optional flags (any subset):
 
-- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`, plus `ready-unarmed` (recover-only, never armed). Drafts and `parked` PRs are always excluded.
+- `--tiers <list>` — comma-separated tiers to drain (e.g., `ready-green,needs-lockfile-fix`). Default: prompt for tier scope at the decision gate. Tiers: `ready-green`, `needs-lockfile-fix`, `needs-conflict-resolution`, `needs-review`, `broken`, plus `ready-unarmed` (recover-only, never armed). `parked` PRs are always excluded; drafts are excluded unless the operator names one (see Rules).
 - `--pr <N,…>` — restrict the whole run to an explicit set of PR numbers (still triaged + still gated).
 - `--dry-run` — print the full tier table and exit with zero merges and zero delegation. More valuable here than in the sibling because this skill *merges*.
 
@@ -57,7 +57,7 @@ Delegate to the helper [triage-prs.sh](./scripts/triage-prs.sh):
 bash "${CLAUDE_PLUGIN_ROOT}/skills/drain-prs/scripts/triage-prs.sh"
 ```
 
-The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **seven tiers**:
+The helper runs `gh pr list --state open --json number,title,headRefName,isDraft,mergeable,reviewDecision,labels,author,createdAt,statusCheckRollup` (two-stage `gh --json … | jq`, never `gh --jq` with `--arg` — learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`) and classifies each PR into **eight tiers**:
 
 | Tier | Signal | Default handling |
 |------|--------|------------------|
@@ -67,7 +67,7 @@ The helper runs `gh pr list --state open --json number,title,headRefName,isDraft
 | `needs-review` | `bot-fix/review-required` label, or a feature PR with no review | review (delegate or inline) → merge |
 | `ready-unarmed` | ready PR whose head verdict (`ci-head-verdict.sh`) is `no-run` or `stalled`: no full CI run exists, the red `test` row is the draft run's. `awaiting-approval` is not here: it lands in `needs-review` (the line shows `ci=awaiting-approval`; a maintainer must approve the fork run) | **recover, never arm**, unless another session is still inside `wait-ready-run` for it: `gh pr ready --undo <N>`, then the whole ready block ([ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md)), then re-triage |
 | `drafts` | `isDraft=true` | **skip** — author-owned WIP, never merged |
-| `parked` | has the `parked` label ("Reviewed draft held until an approved window; do not merge or arm auto-merge") | **skip** — reviewed and held for the operator; never merged, never armed, never fixed here. The operator removes the label; `.claude/hooks/ship-operator-step-gate.sh` also denies an agent's `gh pr merge` on it |
+| `parked` | has the `parked` label ("Reviewed draft held until an approved window; do not merge or arm auto-merge") | **skip** — reviewed and held for the operator; never merged, never armed, never fixed here. The operator removes the label. A parked **draft** is classified under `drafts` (drafts are classified first). `.claude/hooks/ship-operator-step-gate.sh` is a best-effort guardrail on a branch that carries it, not an access control: a draft PR is the real hold. The tier prints a `recovery:` line saying to do nothing |
 | `broken` | `CONFLICTING` **and** many failing checks | surface; fix only if in explicit scope |
 
 Pass `--dry-run` to stop here and print the table.
@@ -126,6 +126,7 @@ If `$ARGUMENTS` contains a `RETURN CONTRACT` section (i.e., this skill is being 
 
 ## Sharp edges
 
+- **A `parked` PR is never readied, armed or merged, even when the operator names it.** The operator removes the label first, in the GitHub UI or their own terminal.
 - **Drafts are skipped unless the operator names one.** A draft PR is author-owned WIP; merging it would ship incomplete work. The only exception is a draft the operator explicitly authorizes in the request (readied and armed through the block above); no flag selects drafts.
 - **`gh pr merge --squash --auto` cannot bypass server-side required checks.** Branch protection enforces `CI Required` and the merge queue re-runs the checks on its own candidate, so a mis-triaged red PR never lands — but under the queue it does not fail at merge time: a red candidate is a SILENT dequeue (the PR stays OPEN, auto-merge disarmed). See it with the dequeue arm in step 4 (`gh run list --event merge_group`, or `gh pr view <N> --json state,autoMergeRequest`); the triage is an optimization, not the safety boundary.
 - **An operator-authorized admin merge removes the server-side check the bullet above relies on.** It goes through [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md) step 2 (`"${CLAUDE_PLUGIN_ROOT}/scripts/admin-merge-ready.sh"`, which must exit 0) and that file's merge block, never through a `gh pr checks --required` watch (#8458, #8500). For a PR that is BEHIND with the new head's checks unsettled, "CI was green" is encoded as `--green-sha <prior-green-sha>`: it certifies the current head only when that head is GitHub's own verified merge of the green sha and the base — see the reference's "was-green carryover" section.
@@ -141,4 +142,4 @@ Unit tests live at [drain-prs.test.sh](../../test/drain-prs.test.sh). Run them w
 bash plugins/soleur/test/drain-prs.test.sh
 ```
 
-Covers: one synthetic PR per tier (ready-green, lockfile-fail, conflicting, review-required, draft, broken), the head-verdict rows (`ready-unarmed`, pending-full / decided / awaiting-approval, resolver error), an empty-list case, and the tier-grouped JSON output shape.
+Covers: one synthetic PR per tier (ready-green, lockfile-fail, conflicting, review-required, draft, broken, parked, including a parked conflicting PR with failing checks and a `parked-old` decoy label), the head-verdict rows (`ready-unarmed`, pending-full / decided / awaiting-approval, resolver error), an empty-list case, and the tier-grouped JSON output shape.

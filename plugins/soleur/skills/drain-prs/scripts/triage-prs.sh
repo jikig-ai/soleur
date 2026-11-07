@@ -165,6 +165,7 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
         end
       )
     }
+    | if .tier == "parked" then . + { recovery: "held for the operator, do nothing here: the operator removes the parked label in the GitHub UI or their own terminal; a draft PR is the real hold (GitHub refuses to merge a draft)" } else . end
     | if .tier == "ready-unarmed" then . + { recovery: "if no session is still inside wait-ready-run for it: gh pr ready --undo \(.number) && gh pr ready \(.number)  (user token, never GITHUB_TOKEN), then re-run the whole ship step 6 block (read ready-count first, arm only after wait-ready-run exits 0)" } else . end
   ]' <<<"$PR_JSON")"
 

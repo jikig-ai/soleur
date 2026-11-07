@@ -199,8 +199,12 @@ assert_eq "ready-green"  "$(tier_of "$pjson" 9302)" "9302: the same PR without t
 assert_eq "parked"       "$(tier_of "$pjson" 9303)" "9303: parked and CONFLICTING → parked (not needs-conflict-resolution: hands off)"
 assert_eq "drafts"       "$(tier_of "$pjson" 9304)" "9304: a parked draft stays in drafts (drafts are classified first)"
 assert_eq "parked"       "$(tier_of "$pjson" 9305)" "9305: parked and awaiting review → parked (not needs-review)"
-assert_eq "3"            "$(jq -r '.parked | length' <<<"$pjson")" "three PRs in the parked tier"
+assert_eq "parked"       "$(tier_of "$pjson" 9306)" "9306: parked, CONFLICTING and 3 failing checks → parked (it is classified BEFORE broken: a held PR is never surfaced as broken)"
+assert_eq "ready-green"  "$(tier_of "$pjson" 9307)" "9307: a decoy label 'parked-old' does not hold the PR (exact label match, not a substring) → ready-green"
+assert_eq "4"            "$(jq -r '.parked | length' <<<"$pjson")" "four PRs in the parked tier (9301, 9303, 9305, 9306)"
+assert_contains "$(jq -r '.parked[] | select(.number == 9301) | .recovery' <<<"$pjson")" "do nothing here" "9301: the parked tier carries a recovery line that says to do nothing"
 ptext=$(bash "$HELPER" --fixture "$FIXTURE_DIR/parked.json")
-assert_contains "$ptext" "## parked (3)" "text: parked header with count"
+assert_contains "$ptext" "## parked (4)" "text: parked header with count"
+assert_contains "$(grep -c 'seven tiers' "$SCRIPT_DIR/../skills/drain-prs/SKILL.md" || true)" "0" "SKILL.md no longer says 'seven tiers' (there are eight, parked included)"
 
-print_results 54
+print_results 58

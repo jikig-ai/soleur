@@ -220,13 +220,19 @@ GH_STUB_LOG="$STUB_DIR/calls.log"
 GH_STUB_BAD="$STUB_DIR/unexpected.log"
 GH_STUB_BODY="$STUB_DIR/body.md"
 GH_STUB_LABELS="$STUB_DIR/labels.txt"
+GH_STUB_CURPR="$STUB_DIR/curpr.txt"        # the current branch's PR number (`gh pr view --json number`)
+GH_STUB_PARKED="$STUB_DIR/parked-count.txt" # how many open PRs carry `parked` (`gh pr list --label parked`)
 cat > "$STUB_DIR/gh" <<'STUB'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$GH_STUB_LOG"
 case "$*" in
   "pr view 7 --json body --jq .body") cat "$GH_STUB_BODY" ;;
-  "pr view 7 --json labels --jq .labels[].name") cat "$GH_STUB_LABELS" ;;
+  "pr view 7 --json labels --jq .labels[].name"|"pr view 7 --repo o/r --json labels --jq .labels[].name") cat "$GH_STUB_LABELS" ;;
   "pr view 8 --json labels --jq .labels[].name") exit 1 ;;
+  "pr view 9 --json labels --jq .labels[].name") exec sleep 5 ;;
+  "pr view "[0-9]*" --json labels --jq .labels[].name") : ;;   # any other PR: unlabelled (prints nothing)
+  "pr view --json number --jq .number") cat "$GH_STUB_CURPR" ;;
+  "pr list --label parked --state open --json number --jq length") cat "$GH_STUB_PARKED" ;;
   "issue view 5 --json state --jq .state") echo OPEN ;;
   "issue view 5 --json body --jq .body") echo "deferred-automation backlog item" ;;
   "issue view 6 --json state --jq .state") echo CLOSED ;;
@@ -244,6 +250,9 @@ LABELS_CALL="pr view 7 --json labels --jq .labels[].name"
 LABELS=""
 FORBID=""
 HOOK_ENV=""
+CURPR=""          # the current branch's PR number the stub reports (default 99, an unlabelled PR)
+PARKED_COUNT=""   # open PRs carrying `parked` the stub reports (default 0)
+CWD_OVERRIDE=""   # the hook payload's cwd (default: the stub dir, a valid absolute directory)
 
 # h <label> <expected: allow|deny> <PR body (may be multi-line)> [command] [required log line ...]
 #   command defaults to `gh pr ready 7`. Required log lines default to the PR-body call;
@@ -257,12 +266,15 @@ h() {
   [[ ${#required[@]} -gt 0 ]] || required=("$PR_BODY_CALL")
   printf '%s\n' "$body" > "$GH_STUB_BODY"
   printf '%s' "$LABELS" > "$GH_STUB_LABELS"
+  printf '%s' "${CURPR:-99}" > "$GH_STUB_CURPR"
+  printf '%s' "${PARKED_COUNT:-0}" > "$GH_STUB_PARKED"
   : > "$GH_STUB_LOG"; : > "$GH_STUB_BAD"
-  json=$(jq -nc --arg c "$cmd" --arg d "$STUB_DIR" \
+  json=$(jq -nc --arg c "$cmd" --arg d "${CWD_OVERRIDE:-$STUB_DIR}" \
     '{tool_name: "Bash", tool_input: {command: $c}, cwd: $d}')
   # shellcheck disable=SC2086 # HOOK_ENV is zero or one NAME=value word, deliberately unquoted
   out=$(env -u SOLEUR_SKIP_OPERATOR_STEP_GATE $HOOK_ENV PATH="$STUB_DIR:$PATH" \
     GH_STUB_LOG="$GH_STUB_LOG" GH_STUB_BAD="$GH_STUB_BAD" GH_STUB_BODY="$GH_STUB_BODY" GH_STUB_LABELS="$GH_STUB_LABELS" \
+    GH_STUB_CURPR="$GH_STUB_CURPR" GH_STUB_PARKED="$GH_STUB_PARKED" \
     bash "$HOOK" <<<"$json" 2>/dev/null || true)
   [[ "$(jq -r '.decision // empty' <<<"$out" 2>/dev/null || true)" == "deny" ]] && got="deny"
   if [[ "${required[0]}" == "--none" ]]; then
@@ -274,7 +286,7 @@ h() {
   fi
   [[ ! -s "$GH_STUB_BAD" ]] || why="${why}stub saw an unexpected argv: $(head -1 "$GH_STUB_BAD"); "
   if [[ -n "$FORBID" ]] && grep -qxF "$FORBID" "$GH_STUB_LOG"; then why="${why}stub saw '$FORBID', which this row forbids; "; fi
-  LABELS=""; FORBID=""; HOOK_ENV=""
+  LABELS=""; FORBID=""; HOOK_ENV=""; CURPR=""; PARKED_COUNT=""; CWD_OVERRIDE=""
   if [[ "$got" == "$expected" && -z "$why" ]]; then
     PASS=$((PASS + 1))
     echo "PASS: $label"
@@ -353,6 +365,69 @@ HOOK_ENV="SOLEUR_SKIP_OPERATOR_STEP_GATE=1"
 h "REAL hook: parked: the override env var, set in the hook's own environment, does NOT lift the barrier" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
 HOOK_ENV="SOLEUR_SKIP_OPERATOR_STEP_GATE=1"
 h "REAL hook (control): the same override env var DOES lift the body gate on an unlabelled PR, so the row above tested the barrier and not an unset variable" allow "- Operator confirms the dashboard" "gh pr ready 7" --none
+
+# --- Review round 1 (CTO ruling T2, 2026-11-08): the evasion shapes the panel reproduced against the first barrier ---------------
+# Every row here was ALLOWED by the first version. PR 7 is the parked PR; PR 99 (the stub's current-branch PR) and every other
+# number are unlabelled, so a deny can only come from the barrier reading the right PR. The LABELS_CALL lines prove the read.
+PARKED_LAB=$'parked'
+# quoted / wrapped forms: the barrier now reads quoted text, because `bash -c "gh pr merge 7"` is a command
+LABELS=$PARKED_LAB; h "REAL hook: parked: 'bash -c \"gh pr merge 7 --squash\"' is denied (quoted payload is a command)" deny "$CLEAN" 'bash -c "gh pr merge 7 --squash"' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: 'eval \"gh pr merge 7\"' is denied" deny "$CLEAN" 'eval "gh pr merge 7"' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: a quoted number ('gh pr merge \"7\"') is denied" deny "$CLEAN" 'gh pr merge "7" --squash' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: a parenthesised '(gh pr merge 7)' is denied" deny "$CLEAN" '(gh pr merge 7)' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: a command substitution 'x=\$(gh pr merge 7)' is denied" deny "$CLEAN" 'x=$(gh pr merge 7)' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: an absolute path '/usr/bin/gh pr merge 7' is denied" deny "$CLEAN" '/usr/bin/gh pr merge 7' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: a pipe-adjacent 'true|gh pr merge 7' is denied" deny "$CLEAN" 'true|gh pr merge 7' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: the number glued to a pipe ('gh pr merge 7|cat') is denied" deny "$CLEAN" 'gh pr merge 7|cat' "$LABELS_CALL"
+LABELS=$'bug'; h "REAL hook: an UNLABELLED PR inside 'bash -c' merges past the barrier (control: the denial above is the label, not the quotes)" allow "$CLEAN" 'bash -c "gh pr merge 7 --squash"' "$LABELS_CALL"
+# the target PR is read from the invocation, not from the current branch
+LABELS=$PARKED_LAB; h "REAL hook: parked: a PR URL ('gh pr merge https://github.com/o/r/pull/7') is denied (the number is read from the URL)" deny "$CLEAN" 'gh pr merge https://github.com/o/r/pull/7 --squash' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: 'gh -R o/r pr merge 7' is denied and the label read carries --repo" deny "$CLEAN" 'gh -R o/r pr merge 7 --squash' "pr view 7 --repo o/r --json labels --jq .labels[].name"
+LABELS=$PARKED_LAB; FORBID="pr view 712 --json labels --jq .labels[].name"
+h "REAL hook: parked: two numbers ('gh pr merge 7 --subject 12') are two candidates, never fused into 712" deny "$CLEAN" 'gh pr merge 7 --subject 12' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: the parked PR is the SECOND number ('gh pr merge -t 1234 7')" deny "$CLEAN" 'gh pr merge -t 1234 7' "pr view 1234 --json labels --jq .labels[].name" "$LABELS_CALL"
+# the --disable-auto exemption is a whole flag, not a substring
+LABELS=$PARKED_LAB; h "REAL hook: parked: a merge chained AFTER a '--disable-auto' statement ('&&') is denied (the statements are split)" deny "$CLEAN" 'gh pr merge 7 --disable-auto && gh pr merge 7 --squash' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: the same chained with ';' is denied" deny "$CLEAN" 'gh pr merge 7 --disable-auto; gh pr merge 7 --squash' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: '--disable-auto' in a trailing comment does not exempt the merge" deny "$CLEAN" 'gh pr merge 7 --squash # --disable-auto' "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: '--subject=--disable-auto' is a flag VALUE, not the flag" deny "$CLEAN" 'gh pr merge 7 --subject=--disable-auto' "$LABELS_CALL"
+# a decoy label is not the label
+LABELS=$'parked-old'; h "REAL hook: a PR labelled 'parked-old' is NOT held (exact label match; control: the labels were read)" allow "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+LABELS=$'Parked'; h "REAL hook: parked: the label match is case-insensitive ('Parked' holds)" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+# un-parking by other means
+h "REAL hook: parked: a QUOTED removal ('--remove-label \"parked\"') is denied, stub never called" deny "$CLEAN" 'gh pr edit 7 --remove-label "parked"' --none
+h "REAL hook: parked: a quoted removal among others (\"bug,parked\") is denied" deny "$CLEAN" "gh pr edit 7 --remove-label 'bug,parked'" --none
+h "REAL hook: parked: '--remove-label=parked' is denied" deny "$CLEAN" 'gh pr edit 7 --remove-label=parked' --none
+h "REAL hook: parked: '--remove-label Parked' (case) is denied" deny "$CLEAN" 'gh pr edit 7 --remove-label Parked' --none
+h "REAL hook: parked: 'gh label delete parked --yes' is denied" deny "$CLEAN" 'gh label delete parked --yes' --none
+h "REAL hook: parked: 'gh label edit parked --name held' is denied" deny "$CLEAN" 'gh label edit parked --name held' --none
+h "REAL hook: another label is untouched ('gh label delete other') and allowed, stub never called" allow "$CLEAN" 'gh label delete other --yes' --none
+LABELS=$PARKED_LAB; h "REAL hook: parked: replacing the whole label set ('gh api -X PUT .../issues/7/labels') is denied" deny "$CLEAN" "gh api -X PUT repos/o/r/issues/7/labels -f 'labels[]=bug'" "$LABELS_CALL"
+LABELS=$PARKED_LAB; h "REAL hook: parked: clearing the label set ('gh api -X DELETE .../issues/7/labels') is denied" deny "$CLEAN" 'gh api -X DELETE repos/o/r/issues/7/labels' "$LABELS_CALL"
+LABELS=$'bug'; h "REAL hook: a label write on an UNLABELLED PR is allowed (control: the labels were read)" allow "$CLEAN" "gh api -X PUT repos/o/r/issues/7/labels -f 'labels[]=bug'" "$LABELS_CALL"
+# a merge whose target is not a literal number is held while ANY PR is parked
+PARKED_COUNT=1; h "REAL hook: parked: 'gh pr merge \"\$N\"' (a variable target) is denied while a PR is parked" deny "$CLEAN" 'gh pr merge "$N" --squash --auto' "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=0; h "REAL hook: a variable target is allowed when NO PR is parked (control: the list was read)" allow "$CLEAN" 'gh pr merge "$N" --squash' "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=1; h "REAL hook: parked: a branch-name target ('gh pr merge feat-x') is denied while a PR is parked" deny "$CLEAN" 'gh pr merge feat-x --squash' "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=1; h "REAL hook: parked: a variable inside the api path ('gh api -X PUT .../pulls/\$PR/merge') is denied while a PR is parked" deny "$CLEAN" 'gh api -X PUT repos/o/r/pulls/$PR/merge' "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=1; h "REAL hook: parked: a GraphQL 'mergePullRequest' mutation is denied while a PR is parked" deny "$CLEAN" "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"X\"}) { clientMutationId } }'" "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=0; h "REAL hook: a GraphQL read ('query { viewer { login } }') is allowed (control: no merge mutation, stub never called)" allow "$CLEAN" "gh api graphql -f query='query { viewer { login } }'" --none
+PARKED_COUNT=1; h "REAL hook: a redirection token is not a target ('gh pr merge --squash 2>&1' reads the current-branch PR only, never the parked list)" allow "$CLEAN" 'gh pr merge --squash 2>&1' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"
+# a bare merge targets the current branch's PR
+CURPR=7; LABELS=$PARKED_LAB; h "REAL hook: parked: a bare 'gh pr merge --squash' on the parked PR's own branch is denied (current-branch PR read)" deny "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "$LABELS_CALL"
+CURPR=99; h "REAL hook: a bare merge on an unlabelled branch is allowed (control: the current-branch PR and its labels were read)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"
+# fail closed: a hung label read, a missing cwd
+LABELS=$PARKED_LAB; HOOK_ENV="SOLEUR_PARKED_GH_TIMEOUT=1"; h "REAL hook: parked: a label read that HANGS is bounded by the timeout and denied" deny "$CLEAN" 'gh pr merge 9 --squash' "pr view 9 --json labels --jq .labels[].name"
+LABELS=$PARKED_LAB; CWD_OVERRIDE="relative/dir"; h "REAL hook: parked: a relative cwd does not skip the barrier (it runs in the current directory)" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+LABELS=$PARKED_LAB; CWD_OVERRIDE="/nonexistent-soleur-dir"; h "REAL hook: parked: a missing cwd does not skip the barrier" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+# the incident row: a deny leaves a record in the (sandboxed) ledger
+INC_BEFORE=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
+LABELS=$PARKED_LAB; h "REAL hook: parked: a deny (control for the incident row below)" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+INC_AFTER=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
+TOTAL=$((TOTAL + 1))
+if (( INC_AFTER > INC_BEFORE )); then PASS=$((PASS + 1)); echo "PASS: a parked-barrier deny writes an incident row ($INC_BEFORE -> $INC_AFTER)"
+else FAIL=$((FAIL + 1)); echo "FAIL: a parked-barrier deny wrote no incident row ($INC_BEFORE -> $INC_AFTER)"; fi
+
 rm -rf "$STUB_DIR"
 
 # --- Hook script syntax check (no real invocation; lacks gh + PR context) --
@@ -370,8 +445,8 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
-# added, derived from a green run's TOTAL (41 at the second-round review edit).
-ROW_FLOOR=59
+# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1).
+ROW_FLOOR=102
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1

@@ -142,5 +142,68 @@
         "conclusion": "SUCCESS"
       }
     ]
+  },
+  {
+    "number": 9306,
+    "title": "parked conflicting pr with many failing checks",
+    "headRefName": "feat-9306",
+    "isDraft": false,
+    "mergeable": "CONFLICTING",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "parked"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE"
+      },
+      {
+        "name": "lint",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE"
+      }
+    ]
+  },
+  {
+    "number": 9307,
+    "title": "decoy label parked-old, green and ready",
+    "headRefName": "feat-9307",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "parked-old"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
   }
 ]
