@@ -1,0 +1,336 @@
+---
+title: "feat: first founder legal text draft, founder-acceptance-record (counsel-review draft, HOLD)"
+date: 2026-11-07
+slug: founder-acceptance-record-text-draft
+branch: feat-one-shot-12197-founder-acceptance-record-text-draft
+issue: 12197
+type: feat
+priority: p2
+domain: legal
+lane: cross-domain
+brand_survival_threshold: single-user incident
+requires_cpo_signoff: true
+status: DRAFT pending counsel sign-off
+---
+
+# feat: first founder legal text draft, `founder-acceptance-record`
+
+> **DRAFT, HOLD.** This plan produces a counsel-review draft only. The draft PR (#12342) is never marked ready, never merged and never enqueued until counsel signs off the wording and the retention period. Merging deploys the file to production, where it becomes answerable once the `approval-queue` flag is on. Refs #12197 and #12011; never `Closes`.
+
+## Overview
+
+Add the first committed text to the legal-acceptance registry (ADR-319, #12011): key `founder-acceptance-record`, file `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`, front-matter `version: 2026-11-07`, no `valid_until`, LF only, ASCII only. The subject, chosen by the operator, is an acknowledgement of how the founder's decisions are recorded and kept. It says only what the shipped system does and binds the founder to nothing beyond the record itself.
+
+The byte-exact proposal lives at `knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/founder-acceptance-record.proposed.md` and is reproduced under "Exact file content" below. The work phase copies it to the registry path unchanged.
+
+Nothing in this plan records an acceptance, touches the `approval-queue` flag, or acts on production.
+
+## Research Reconciliation: spec vs. codebase
+
+| Brief claim | Reality (checked) | Plan response |
+|---|---|---|
+| "check ... whether any test asserts the texts directory is empty" | No test asserts emptiness. One test reads the real directory: `test/legal-acceptance/canonical.test.ts` ("the committed registry loads without error (it is EMPTY until counsel signs off ...)"). It passes with one parseable file; only its title and comment go stale. | Rename the title (CTO ruling). |
+| "Dockerfile COPY and registry-embedding test needs" | Dockerfile runner stage already has `COPY --from=builder /app/server/legal-acceptance/texts ./server/legal-acceptance/texts`; `.dockerignore` already has `!server/legal-acceptance/texts/*.md`; `registry-embedding.test.ts` uses its own fixture (`fixtures/hash-fixture.md`) and a temp tree, so it neither needs nor is affected by a real text. | No Dockerfile or `.dockerignore` change. |
+| "which index/page tests change when the first key exists" | None. `page.test.tsx`, `routes.test.ts`, `verify-route.test.ts`, `ack-reconciliation.test.ts` mock `loadLegalTexts` / `getLegalText` or point at a fixture directory. The index page (`app/(dashboard)/dashboard/approvals/legal/page.tsx`) reads the real directory at runtime only: with the flag on it lists every key; with the flag off it lists only keys the founder already has a row for and is not-found when there are none. | No page test changes. Runtime exposure is covered by the HOLD. |
+| "note up to 1000 characters" | True in all three layers, counted in code points: SQL `requested_edit ... char_length BETWEEN 1 AND 1000` (migration 184), `REQUEST_CHANGES_MAX = 1000` (`lib/legal-acceptance-wire.ts`), `normaliseNote` in `server/legal-acceptance/service.ts` (trims, counts the untrimmed code points). | Keep "up to 1000 characters"; the new test asserts the number against `REQUEST_CHANGES_MAX`. |
+| "what is stored per decision" (the operator's list) | Matches DSAR note section (b). The table also holds `method`, `reauth_method`, `surface` (fixed labels) and `event_id` (the consumed intent). | One extra sentence in the text states them (CLO: otherwise "what is stored" would be untrue); flagged for the Art. 30 register (PA-40). |
+| "who can read it" | Founder reads own rows via RLS with an `authenticated`-audience token; database-owner credential held by the operator and the production migration pipeline (a CI secret), rule not control; the check endpoint returns exactly `status`, `text_hash`, `decided_at`, `row_ok`, never the note; no `service_role` path returns the note. | Text says so, using "release process" (CLO: do not name the CI secret; ADR says what else that credential set can mint is not assessed). |
+| "texts README forbids adding a text without counsel's sign-off" | True: `texts/README.md` "Do not add a text here without counsel's sign-off on its wording." The file is also not shown to be linted-exempt: `.markdownlintignore` has no entry for `apps/web-platform/server/legal-acceptance/texts/`, so markdownlint runs on it (lefthook and CI). | Draft PR and HOLD; proposal passes markdownlint (rc=0) after blank lines around lists and `<legal@jikigai.com>`. |
+| Pipeline stop: "CI green" | `gh variable list` shows `CI_DRAFT_LIGHT=on` (ADR-276 Option R): on a draft push the heavy families are skipped and the `test` aggregator is RED by design. | CTO ruling: light-set green; local vitest and markdownlint output cited in the PR body (see Acceptance Criteria). |
+
+## Research Insights
+
+**Premise Validation (Phase 0.6).** Checked: #12197 OPEN (title "chore: first real legal acceptance verified by the hold gate and registry smoke"), #12011 OPEN, #12080 OPEN (retention/deletion path), PR #12342 OPEN and draft; collision pre-check reports only our own PR #12342. Cited files exist on this branch: `canonical.ts`, `texts/README.md`, `texts/.gitattributes` (`*.md text eol=lf`), `lib/legal-acceptance-copy.ts`, `test/legal-acceptance/legal-copy.test.ts`, the DSAR note, ADR-319. ADR corpus: ADR-319 is the only ADR on the mechanism; its PR-C/PR-D amendments already decided COPY (not embed), the dark flag, and "A recorded Yes authorizes no production act". Nothing here contradicts or re-opens it.
+
+**Property List (Phase 0.6b).**
+
+1. A committed, hash-stable text exists for key `founder-acceptance-record` that the loader parses and the hold gate can hash from the committed blob.
+2. Every sentence in the text is true of the shipped system (ADR-319, migrations 184/185, DSAR note), and the text claims no legal identity, enforceability, compliance or tamper-proofness.
+3. Nothing can be answered or recorded before counsel signs off (draft PR, HOLD, flag untouched).
+4. A later edit that fills the retention period or changes any fact is loud (a test flips) and is a new, separately reviewed change.
+
+**Cut List.** (mechanism -> property -> what already covers it)
+
+- Front-matter `status: draft` key in the file -> property 3 -> the in-body retention placeholder plus PR state already cover it; the parser ignores unknown keys and the card never shows front matter (CTO ruling).
+- A pinned sha256 literal in a test now -> property 4 -> the hold gate hashes the committed blob; the literal would be rewritten at sign-off (CTO ruling). Pin lands in the sign-off PR.
+- A `sha256sum` child process in the new test -> property 1 -> `registry-embedding.test.ts` already proves bundle and `sha256sum` parity.
+- Any Dockerfile, `.dockerignore`, page, route, flag or migration change -> none of the properties -> already in place (see Reconciliation).
+- Rewording the card copy deck -> property 2 -> pinned by `legal-copy.test.ts` and PROVISIONAL; deferred as #12344.
+
+**Learnings applied.** Registry bytes are the hash input, so the file must be written exactly (no editor re-wrap, no BOM, final LF). `.gitattributes` pins LF in the working tree. markdownlint: lists need blank lines (MD032), bare addresses need angle brackets (MD034).
+
+## Exact file content (what the work phase writes)
+
+Target path: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`. The block between the fences is the whole file; the card renders only the part after the closing front-matter line, in a `whitespace-pre-wrap` block with no markdown rendering, so each paragraph is one line and lists are plain dashes.
+
+```text
+---
+version: 2026-11-07
+---
+How your decisions are recorded and kept
+
+This text describes how Soleur records and keeps the decisions you give on legal texts. Saying Yes here records that you acknowledge this description. Your answer covers this text only: it does not accept any other text and is not given for any other purpose.
+
+What is stored for each decision
+
+- The identifier of your account. It is a random number, not your name or email address.
+- The name (key) and the version of the text.
+- A fingerprint of the exact text you were shown.
+- Your choice: Yes, No or Request changes.
+- The time of the decision.
+- An identifier of the sign-in session you decided in.
+- For a Yes, the time you confirmed the code sent to your email.
+- A checksum of the record.
+- If you chose Request changes, the note you wrote, up to 1000 characters.
+
+The record also holds fixed technical labels (a web session, and for a Yes the email code method) and the identifier of the request the decision answers.
+
+How a decision is given
+
+To give a Yes, you enter a code that Jikigai emails to your account address, in your signed-in web session. The code is not stored. No and Request changes are given in your signed-in web session without a code. The record shows that a decision was submitted through a signed-in web session of your account.
+
+An answer is final for this text. To change it, a new version of the text has to be published. Your answer to the earlier version stays on record as you gave it.
+
+How long it is kept
+
+The record is kept after you delete your account. Jikigai relies on its legitimate interest (Article 6(1)(f) GDPR) in being able to show later what was decided; Article 17(3)(e) GDPR lets it keep data that may be needed for legal claims. The account identifier is not anonymous: someone who holds other Jikigai records could link it to you, so Jikigai treats it as personal data. How long the record is kept: [period to be confirmed by counsel].
+
+Who can read it
+
+- You, for your own records, when you are signed in to the web app.
+- Direct access to the stored records is held by the database administrator role. It is held by the operator and by Jikigai's release process. No automated agent session is meant to use it; that is a rule, not a technical block.
+- A Jikigai check that holds a step until a decision is recorded can ask whether a decision was made. It receives only the status, the text fingerprint, the time and the checksum result, never your note.
+
+Jikigai's check recomputes the checksum and flags a record that no longer matches. The checksum is not a seal and not proof of who acted: a holder of production credentials could write or change a record and its checksum.
+
+Your note
+
+If you choose Request changes, the note is saved with your decision and kept even if you later delete your account. Please do not write names, email addresses or private details about yourself or anyone else in it. The note is not sent anywhere; it can be read by those who hold the database administrator credential, as described above.
+
+Your rights
+
+You can ask what Jikigai holds, or object, by writing to <legal@jikigai.com> (Articles 15 and 21 GDPR), and you can complain to the CNIL.
+```
+
+**sha256 of the final bytes (this draft):** `886f3f446f24db2ddf296a3b8df6c2bf08f6b852cd2cce12c07242861ced9e21` (3207 bytes). Verified two ways on the proposal: `sha256sum` and `loadLegalTexts()` / `textHash` over a temp directory returned the same value, `version` `2026-11-07`, `validUntil` null. This value is for review only. It is NOT pinned in a test, and the hash changes the moment counsel replaces the retention placeholder; the work phase recomputes it after copying and reports it in the PR body. The hold gate and the recorded `text_hash` always come from the committed blob.
+
+### Sentence-by-sentence ground truth
+
+| Text says | True because (source) |
+|---|---|
+| account identifier is a random number, not name or email | `founder_id` is a plain uuid, no foreign key (ADR-319 Decision; DSAR note (b)) |
+| name (key) and version | `key`, `version` columns (migration 184) |
+| fingerprint of the exact text | `text_hash`, sha256 of the file's raw bytes (`canonical.ts`) |
+| choice Yes / No / Request changes | `choice` in `accept`, `decline`, `request_changes` |
+| time of the decision | `created_at` |
+| identifier of the sign-in session | `session_id` (1..128 chars) |
+| for a Yes, time the emailed code was confirmed | `reauth_at`, set only for `accept` (constraints `legal_acceptance_reauth_only_for_yes`, `_yes_has_reauth`) |
+| checksum of the record | `row_hash`, computed by the database (ADR-319 Checksum) |
+| note up to 1000 characters for Request changes | `requested_edit` 1..1000 only with `request_changes`; code-point cap in `REQUEST_CHANGES_MAX` and `normaliseNote` |
+| fixed technical labels and the request identifier | `method = 'web-session'`, `surface = 'web'`, `reauth_method = 'email-code'`, `event_id` |
+| a Yes needs an emailed code in the signed-in web session; the code is not stored | ADR-319 Email-code step-up ("never stored here"); PR-C amendment |
+| No and Request changes need no code, only a web session | `reauth_only_for_yes` constraint; ADR PR-C ("decline and request_changes have no email step") |
+| the record shows a decision was submitted through a signed-in web session | ADR-319 property 3 and Context ("must not say who the person is in law") |
+| answer is final; a change is a new version; earlier answer stays | ADR-319 Record ("A new version of a text is a new row ... terminal for its text hash"); deck `replaced.earlierAnswer` |
+| kept after account deletion; Art. 6(1)(f) interest; Art. 17(3)(e) lets it keep data that may be needed for claims | ADR-319 Retention and erasure; DSAR note (b). CLO: 17(3)(e) is an exception to erasure, not a basis |
+| identifier not anonymous, treated as personal data | DSAR note (b) ("do not describe the identifier as anonymous") |
+| retention: `[period to be confirmed by counsel]` | same placeholder string as `LEGAL_COPY.cardNotice`; ADR "unconfirmed by counsel"; #12080 |
+| founder reads own rows when signed in | RLS policy `legal_acceptance_founder_select`, `aud = authenticated` |
+| DB administrator role held by the operator and the release process; agent use is a rule | ADR-319 PR-D "Residual risk" supersession: owner credential held by the operator and the production migration pipeline; "a rule and not a control" |
+| a check can ask whether a decision was made; receives only status, fingerprint, time, checksum result, never the note | `GET /api/internal/legal-acceptance/[key]`: four keys `status`, `text_hash`, `decided_at`, `row_ok`; hold gate `web-acceptance` |
+| the check recomputes the checksum and flags a mismatch; not a seal; a credential holder could write or change a record and its checksum | `verify_legal_acceptance` returns `invalid`; ADR-319 Residual risk |
+| note not sent anywhere; readable by those with the DB admin credential | ADR-319 PR-D "Note delivery: pull-only"; no `service_role` path returns it |
+| asks / object at the legal address; complain to the CNIL | `LEGAL_COPY.cardNotice`; DSAR note (b) |
+
+Deliberate omissions (not in the text, listed for counsel): the short-lived code-request records (`legal_reauth_event`, purged when older than 30 days at the next request; DSAR note (b) has a bracketed sentence for them); the `legal_acceptance_ack` table (no founder id; pseudonymous through the row id); the five-minute window of a confirmed code; the retention proposal "life of the instrument plus five years, capped at ten" (unconfirmed, not quoted, per the DSAR note rule).
+
+## Files to Create
+
+- `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` (copy of the proposal, byte for byte)
+- `apps/web-platform/test/legal-acceptance/founder-acceptance-record.test.ts` (structural assertions; see Guard Contract)
+- Already created by planning: `knowledge-base/project/specs/feat-one-shot-12197-founder-acceptance-record-text-draft/{founder-acceptance-record.proposed.md,decision-challenges.md,tasks.md}`
+
+## Files to Edit
+
+- `apps/web-platform/test/legal-acceptance/canonical.test.ts`: rename the test "the committed registry loads without error (it is EMPTY until ...)" to say it proves the loader, the directory and that every committed text parses (CTO ruling).
+- `apps/web-platform/test/legal-acceptance/routes.test.ts`: refresh the comment "The registry directory is a fixture dir (the real one holds no legal text yet)".
+- `apps/web-platform/server/legal-acceptance/README.md`: replace the sentence "no text is committed, so every key answers 404 and there is nothing to load (#12197)" with the draft-held state (a draft text is proposed, held for counsel; the smoke stays open until it is published and answered).
+
+No change to: `Dockerfile`, `.dockerignore`, `canonical.ts`, `legal-acceptance-copy.ts`, any page or route, migrations, flags, workflows, ADR-319 (its dated "no text is committed" lines are history; status stays `adopting`).
+
+## Test inventory (grep of `apps/web-platform/test`, `e2e`, `plugins/soleur/test`)
+
+| Test / file | Reads the real `texts/`? | Effect of one real text |
+|---|---|---|
+| `canonical.test.ts` (committed registry loads) | yes, `loadLegalTexts()` | still passes if the file parses; title renamed |
+| `registry-embedding.test.ts` | no, temp tree and `fixtures/hash-fixture.md`; one case asserts `TEXTS_DIR` exists | none |
+| `page.test.tsx`, `routes.test.ts`, `verify-route.test.ts`, `ack-reconciliation.test.ts`, `service.test.ts` | no, mocked or fixture dir | none |
+| `verify-route-census.test.ts`, `cross-layer-limits.test.ts`, `legal-copy.test.ts` | no | none |
+| `plugins/soleur/test/hold-gate-eval.test.sh` | no, builds its own repo with `wa-key.md` | none |
+| e2e | no reference to `approvals/legal` | none |
+| Any "texts directory is empty" assertion | none found (grep `no texts`, `empty registry`, `no legal text`, `holds no legal text`) | not applicable |
+
+## Guard Contract
+
+### Guard 1 — founder-acceptance-record structural test
+
+**Property.** The committed `founder-acceptance-record.md` parses through the production loader, contains only LF and ASCII bytes, carries the retention placeholder, claims none of the forbidden words, and states the note limit the code enforces.
+
+**Assembly.** One file (`texts/founder-acceptance-record.md`) read through the same chokepoint as production (`parseLegalText` over the file's bytes via `getLegalText`/`loadLegalTexts` from `server/legal-acceptance/canonical.ts`); the limit is compared with the single source `REQUEST_CHANGES_MAX` in `lib/legal-acceptance-wire.ts` and with the SQL literal in `supabase/migrations/184_legal_acceptance.sql`. The assertions quantify over every committed `*.md` key in the directory for the format checks (so a second text cannot dodge the format rules), and over this key for the content checks.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|---|---|
+| 1 | Insert a CR byte, a non-ASCII character (curly quote or em dash) or a BOM into the text | RED |
+| 2 | Point the test at an empty temp directory, or delete the file (a guard reporting "0 texts checked" and exiting 0 is vacuous) | RED (an explicit `>= 1 key` and key-present assertion) |
+| 3 | Add a second committed key with a CR byte after the compliant first | RED (format checks loop over all keys) |
+| 4 | Replace the placeholder with a period (the sign-off edit) | RED until the test is flipped in the same PR |
+| 5 | Add the word "compliant" or "legally binding" to the text | RED |
+| 6 | Change "1000" in the text, or `REQUEST_CHANGES_MAX`, or the SQL `BETWEEN 1 AND 1000` | RED (three-way equality) |
+| 7 | Remove or rename `version: 2026-11-07`, or add `valid_until` | RED |
+
+**Harness rows:** (a) editing the test so the forbidden-word regex is `/$^/` must make a planted-string control case fail (negative control, as in `legal-copy.test.ts`); (b) a must-PASS input that is not the canonical: a synthesized text with a different version and no placeholder passes the format checks (the format rules do not depend on this file's content).
+
+**Anchor.** There is deliberately no stored hash to anchor here (CTO ruling: pin at sign-off). The anchor for integrity is outside the commit: the hold gate recomputes the hash from the committed blob and `registry-embedding.test.ts` proves bundle and `sha256sum` parity. The sign-off PR adds the literal pin together with set identity (the exact key list), so a floor on the count cannot be satisfied by a substitution.
+
+## Observability
+
+Pure data and test change: the Files lists contain one markdown text under `server/legal-acceptance/texts/` and tests, no new code, route, job or infrastructure surface (Phase 2.9 skip: no code-class file edited). The existing signals already cover the registry read: `store_failed` with `stage=registry` (and `extra.code`) when a committed text cannot be read or is malformed, and `page_read_failed` for the founder pages. Local discoverability check for the work phase: `sha256sum apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` compared with the PR-body value, and the new vitest file.
+
+## Encryption Posture
+
+Skipped: no persistent store and no new connection are introduced. (The text describes the existing store; it does not alter it.)
+
+## Architecture Decision (ADR/C4)
+
+No architectural decision is made. ADR-319 already decided the registry, the COPY path and the dark flag; this adds data to the registry. C4 completeness check: read `knowledge-base/engineering/architecture/diagrams/{model.c4,views.c4,spec.c4}` scope for this feature: external actors (the founder, the operator) and the `legalAcceptanceStore` container with `webapp -> legalAcceptanceStore` are already modeled; no new vendor, store or access relationship appears; the cardinality gate `plugins/soleur/test/c4-count-parity.test.sh` is run in the work phase to confirm it stays green. No ADR amendment: status stays `adopting`.
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** the operator opens `/dashboard/approvals/legal` (flag on) and sees a card titled "Accept the updated Founder acceptance record?" whose text still contains the bracketed retention placeholder or misstates what is kept, then gives a Yes that is final for that version and cannot be taken back from the card; or the card copy's "treats these terms as accepted" line shows on a text that accepts no terms (#12344).
+- **If this leaks, the user's data is exposed via:** the text itself holds no personal data; the exposure vector is the Request changes note and the pseudonymous account uuid described by the text. A text that understates who can read them (the database-owner credential held by the operator and the release pipeline; the check endpoint's four fields) would mislead the data subject about that exposure. The plan keeps the text conservative and records the residual (a credential holder can write a row and its checksum).
+- **Brand-survival threshold:** `single-user incident`
+- **Threshold decision (challengeable):** carried from ADR-319 (`single-user incident`): the first and only reader is the operator, and a final, unretractable Yes on a text that misdescribes the record is a one-person data-protection (Art. 13) failure and a trust failure for the product's legal-acceptance feature; it is not `aggregate pattern` because there is no population yet, and not `none` because the text is a legal notice.
+
+CPO plan-time sign-off, 2026-11-07: approved with conditions. (A) the PR stays draft; merging requires counsel's wording with the retention period filled in and a new version date if the text changes. (B) before any merge, confirm the `approval-queue` flag state in prd: if on, merging puts an unfinished text in front of the operator as "Needs your answer". (C) #12197 stays open; the roadmap CP2 wording stays "In progress (legal-acceptance slice)", never Done. (D) do not change the card in this PR; file a follow-up so the confirmation copy depends on the text key (filed as #12344) and note the mismatch in the PR description. Product note: the subject is sound as a first text but does not exercise a long, multi-clause terms text; label the #12197 outcome "path verified with an acknowledgement text", not "terms acceptance verified". `soleur:engineering:review:user-impact-reviewer` runs at review time.
+
+## GDPR / compliance
+
+Trigger (b) of Phase 2.7 fires (single-user incident declared). The substantive assessment was obtained from the CLO agent (Art. 6(1)(f) vs 17(3)(e) framing, over-disclosure of access paths, the retention placeholder) and is applied to the proposal; the deterministic `soleur:gdpr-gate` pass is run by deepen-plan. Register items to flag for counsel (not changed here): PA-40 gains the sentence listing `method`, `surface`, `reauth_method` and `event_id`; the text discloses access roles in more detail than DSAR note (b); the published Privacy Policy / GDPR Policy / Data Protection Disclosure remain owed in final form before any non-operator founder. This PR edits no published document.
+
+## Domain Review
+
+**Domains relevant:** Legal, Product, Engineering
+
+### Legal
+
+**Status:** reviewed (CLO agent, advisory; real sign-off is counsel's)
+**Assessment:** Sentence edits applied: describe the Yes step rather than guarantee it; "release process" instead of the CI secret; checksum sentence rewritten (only the check recomputes it; not a seal, not proof of who acted; production-credential holders can write a row and its checksum); Art. 17(3)(e) presented as an exception to erasure with 6(1)(f) as the basis, "may be needed"; "is not given for any other purpose" instead of "does not authorize" (the hold-gate lexical-binding residual means a hold naming this key could be discharged by a Yes, ADR-319 PR-D). The sentence "Saying Yes here records that you acknowledge this description" is the one counsel must approve: the stored value is `accepted`. No objection to the retention placeholder while the file sits in `specs/` as a proposal; objection would arise if it landed in the registry directory, got a hash pin, or went live with the bracket, which is exactly why the PR is on HOLD.
+
+### Product
+
+**Status:** reviewed (CPO agent). Conditions A to D recorded in User-Brand Impact. No UI file is created or edited (the existing card renders the body), so the Product/UX Gate is NONE and no wireframe is owed.
+
+### Engineering
+
+**Status:** reviewed (CTO agent). Rulings are in `decision-challenges.md`: no in-file marker, structural test without a hash pin, no CI gate keys on `texts/*.md`, draft-light CI reading.
+
+## Scope Check
+
+### Ask Mapping
+
+| # | User ask (verbatim) | Plan item | Status |
+|---|---|---|---|
+| 1 | "Draft the first founder legal text for the legal-acceptance registry" | Exact file content; Files to Create (text) | mapped |
+| 2 | "front-matter `version: 2026-11-07`, LF only, plain ASCII-safe wording, no `valid_until`" | Exact file content; Guard 1 rows 1, 7 | mapped |
+| 3 | "It must say only what is true of the shipped system" | Sentence-by-sentence ground truth | mapped |
+| 4 | "Do not claim legal identity, enforceability or compliance" | Guard 1 row 5; CLO edits | mapped |
+| 5 | "Mark the file clearly as a DRAFT pending counsel sign-off in the PR and in the plan, and open the PR as DRAFT with a HOLD" | Plan banner; Operator Holds; the retention placeholder; PR body (work phase) | mapped (file marker ruled out by the CTO; the in-file marker is the placeholder) |
+| 6 | "Check what tests and the Dockerfile COPY/registry-embedding test need" | Research Reconciliation; Test inventory | mapped |
+| 7 | "sha256sum equals the recorded hash" | Exact file content (hash); AC 4 | mapped |
+| 8 | "whether any test asserts the texts directory is empty" | Test inventory (none found; one title renamed) | mapped |
+| 9 | "Ref #12197 and Ref #12011, never Closes" | AC 9 | mapped |
+| 10 | "Do not record an acceptance, do not touch the approval-queue flag, no production actions" | Operator Holds; Non-goals | mapped |
+| 11 | "stop after the draft PR is open with CI green; do not run ship's merge phase, do not mark ready, do not enqueue" | AC 8, 10; Operator Holds | mapped |
+| 12 | "Include a ## User-Brand Impact section and `## Operator Holds`" | both sections | mapped |
+
+### Plan-Item Provenance
+
+| Plan item | User words cited (verbatim quote) | Verdict |
+|-----------|-----------------------------------|---------|
+| text file | "file `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md`" | asked |
+| structural test `founder-acceptance-record.test.ts` | "Check what tests ... need so the new text loads and hashes correctly" | asked (CTO ruled structural, no pin) |
+| rename of the `canonical.test.ts` title | "whether any test asserts the texts directory is empty" | asked (the one stale title found) |
+| refresh of two stale comments (routes test, server README) | "say only what is true of the shipped system" | inferred - justification: both state "no text is committed", which the PR makes false if merged; tiny, docs-only |
+| follow-up issue #12344 (card copy) | "bind the founder to nothing beyond the record itself" | inferred - justification: CLO and CPO found the deck's "these terms" line contradicts it; the deck is test-pinned so it is deferred, per `wg-when-deferring-a-capability-create-a` |
+| Guard Contract | "Check what tests ... need so the new text loads and hashes correctly" | inferred - justification: the structural test is an assertion-based check |
+
+### Split Assessment
+
+- Subsystems touched: 2 (`apps/web-platform`, `knowledge-base`)
+- Planned files: 6 (3 product files + 1 new text + 1 new test counted once each; spec artifacts excluded) | Estimated changed lines: about 120
+- Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
+- Recommendation: single PR
+
+## Open Code-Review Overlap
+
+None. Checked open `code-review` issues for `legal-acceptance/texts`, `legal-acceptance/canonical`, `test/legal-acceptance`, `legal-acceptance/README`, `legal-acceptance-copy`: no matches.
+
+## Acceptance Criteria
+
+<!-- founder-stated check: see plan-founder-check.md -->
+
+- [ ] AC1: `apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md` is byte-identical to the proposal (`cmp` against `founder-acceptance-record.proposed.md` exits 0), starts with `---`, `version: 2026-11-07`, `---`, has no `valid_until`, ends with one LF.
+- [ ] AC2: `LC_ALL=C grep -c -P '[^\x00-\x7F]'` and `grep -c $'\r'` on the file both print 0; `git check-attr eol` for the path reports `lf`.
+- [ ] AC3: `markdownlint` with the repo `.markdownlint.json` run on the committed path (not only on a copy) exits 0.
+- [ ] AC4: `sha256sum` of the committed file equals `textHash` from `loadLegalTexts()` and the value printed in the PR body; the plan's value is `886f3f44...9e21` (recomputed and updated in the PR body if counsel's edits changed the bytes before the work phase).
+- [ ] AC5: `apps/web-platform/test/legal-acceptance/` passes locally under vitest, including the new `founder-acceptance-record.test.ts` (Guard 1 rows 1 to 7, harness rows a and b); output is cited in the PR body.
+- [ ] AC6: `canonical.test.ts` title renamed; `routes.test.ts` comment and `server/legal-acceptance/README.md` sentence refreshed; no other source file changed (`git diff --stat` shows only the files listed above).
+- [ ] AC7: no test, doc or text claims "verified", "reviewed", "legally binding", "audit-ready" or "compliant" about the text (the deck test and the new test both pass).
+- [ ] AC8: PR #12342 is converted from `WIP:` to a real title (for example `feat(legal-acceptance): DRAFT founder-acceptance-record text, HOLD for counsel`) and remains a DRAFT. Its body leads with a HOLD banner, lists the counsel items (the sentence "Saying Yes here records that you acknowledge this description", the retention period, the card-copy mismatch #12344, the register note for PA-40, the Art. 17(3)(e) framing), states `Ref #12197` and `Ref #12011` (no `Closes`), and cites CTO/CLO/CPO rulings.
+- [ ] AC9: the PR body contains no `Closes`, `Fixes` or `Resolves`.
+- [ ] AC10: "CI green" means, per the CTO ruling, every light-set check green on the draft with the `test` aggregator red by design (ADR-276 Option R, `CI_DRAFT_LIGHT=on`); the PR body names the red aggregator as expected. The PR is never marked ready, never merged, never enqueued; `ship` merge phase is not run.
+- [ ] AC11: `approval-queue` flag, Doppler, Supabase production, migrations and `legal_acceptance` rows are untouched (no command in the work phase targets them).
+
+## Test Scenarios
+
+1. Loader: copy the committed file to a temp directory, `loadLegalTexts(temp)` returns exactly `["founder-acceptance-record"]` with version `2026-11-07` and `validUntil === null`.
+2. Format: every `*.md` key in the real directory (README excluded by `KEY_RE`) is LF-only, ASCII-only, UTF-8, with front matter.
+3. Content: the body contains `[period to be confirmed by counsel]` (the tripwire the sign-off PR flips), contains `up to ${REQUEST_CHANGES_MAX} characters`, contains none of the forbidden words, no em dash.
+4. Limit parity: the SQL literal in migration 184 (`char_length(requested_edit) BETWEEN 1 AND 1000`) equals `REQUEST_CHANGES_MAX`.
+5. Index runtime check (manual-free, local only): with the loader pointed at the real directory, `loadLegalTexts()` yields one entry whose `legalTextLabel` is "Founder acceptance record".
+6. Negative controls: planted forbidden word; empty directory; CR byte; second key with a CR.
+
+## Operator Holds
+
+- Hold: Operator-reserved: counsel's sign-off of the wording of `founder-acceptance-record`, in particular the sentence "Saying Yes here records that you acknowledge this description", the Art. 6(1)(f) / 17(3)(e) framing, the access-role disclosures, and the retention period (#12080), before this text is merged, marked ready, enqueued or answered. [Text name (added by the plan's author): founder-acceptance-record]
+- Hold: Operator-reserved: merging or marking PR #12342 ready (merge deploys the file to production, where it becomes answerable once the `approval-queue` flag is on; CPO condition B: confirm the prd flag state first).
+- Hold: Operator-reserved: the first real acceptance of this text, the registry smoke and the roadmap CP2 wording (#12197 stays open; wording stays "In progress (legal-acceptance slice)").
+
+These are Operator-reserved by category: legal-risk (the wording of a legal text is reserved for counsel) and irreversible / production-mutating authorization. No recorded Yes for any key discharges them (ADR-319: "A recorded Yes authorizes no production act").
+
+## HOLD procedure
+
+1. The draft PR #12342 stays DRAFT for its whole life in this pipeline. Do not run `gh pr ready`, `gh pr merge`, `gh pr merge --auto`, or enqueue it.
+2. On sign-off (a separate, later change, by counsel's text): replace the placeholder with the confirmed period (and bump `version` if the published wording changes), pin the sha256 literal and the exact key set in the test, flip the placeholder assertion, run the full CI battery on that PR, then decide the flag state (CPO condition B) before merge.
+3. Do not touch the `approval-queue` flag or record any decision at any step.
+
+## Non-goals
+
+No change to the card, copy deck, routes, migrations, Dockerfile, flag, published legal documents, Art. 30 register or ADR-319. No retention decision (#12080). No hash pin yet. No acceptance recorded. The card-copy follow-up is #12344.
+
+## Risks
+
+- Counsel rewrites the text: expected; the hash changes; nothing is recorded yet so no recorded hash is invalidated. The structural test (not a pin) survives.
+- Someone merges the draft: nothing mechanical prevents it (no CODEOWNERS entry was verified, no gate keys on `texts/*.md`). Mitigations: draft state, the `Operator-reserved:` holds, the PR banner, and the placeholder that makes an accidental Yes visibly unfinished.
+- A Yes on this text is read as acceptance of terms: the text says it is not; the deck line is #12344.
+- The text lists access roles in more detail than the DSAR note (b): flagged for counsel; easy to cut.
+
+## Sharp Edges
+
+- A plan whose `## User-Brand Impact` section is empty, contains only placeholder text, or omits the threshold fails `deepen-plan` Phase 4.6; this one is filled.
+- The text file is hashed as raw bytes: never let an editor, formatter or `markdownlint --fix` rewrite it (the repo says `--fix` corrupts prose). Copy with `cp`, then `cmp`.
+- The file name is the key and the card title (`legalTextLabel`): renaming it later is a new key and a new row set.
+- Do not cite the `1000` limit from memory in any future edit: it is asserted against the code.
+- The local-only evidence: with `CI_DRAFT_LIGHT=on` the new vitest file does not run in CI on the draft, so the PR body must carry the local output.
