@@ -594,6 +594,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_REF: ${{ github.event.merge_group.head_ref }}
           HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           BASE_REF: ${{ github.event.merge_group.base_ref }}
@@ -601,7 +602,27 @@ jobs:
         run: |
           out="$RUNNER_TEMP/oracle-review.out"
           rc=0
-          bash scripts/ci-oracle-review.sh > "$out" || rc=$?
+          # The base-sourced driver guarantee lives HERE, not in the driver: a PR
+          # editing scripts/ci-oracle-review.sh cannot remove the re-exec that
+          # judges it (precedent: merge-queue-cla-synthetics.yml checks the
+          # verifier out from default_branch). On pull_request, when the base
+          # commit carries the driver, the base copy renders the verdict — a
+          # base without the file (pre-PR3b) runs the HEAD copy; on merge_group
+          # the candidate copy is trusted because the members' verdicts were
+          # rendered under their own pull_request arms.
+          driver="$RUNNER_TEMP/oracle-review-driver.sh"
+          if [ "${EVENT_NAME}" = pull_request ] \
+            && git cat-file -e "${PR_BASE_SHA}:scripts/ci-oracle-review.sh" 2>/dev/null; then
+            git show "${PR_BASE_SHA}:scripts/ci-oracle-review.sh" > "$driver" || rc=$?
+            if [ "$rc" -eq 0 ] && [ -s "$driver" ] && bash -n "$driver"; then
+              bash "$driver" > "$out" || rc=$?
+            else
+              rc=1
+              echo "oracle-review-required: base driver present but unreadable/unparseable — failing closed" >&2
+            fi
+          else
+            bash scripts/ci-oracle-review.sh > "$out" || rc=$?
+          fi
           cat "$out"
           reason="$(sed -n 's/^SOLEUR_ORACLE_REVIEW .*reason=\([a-z-]*\)$/\1/p' "$out" | tail -n 1)"
           if [ -z "$reason" ]; then

@@ -100,38 +100,12 @@ die() {
   finish fail "$tok"
 }
 
-# ---- base-sourced driver on pull_request (before any verdict) --------------------------------------------------
-# A PR editing this file must not weaken the check that judges it: when the BASE commit carries the driver, the base
-# copy renders the verdict. A base without the file (every pre-PR3b base) runs the HEAD copy — the classification
-# list below is still read from the base. ORACLE_REVIEW_REEXEC stops the re-exec from recursing.
-if [ "$event" = pull_request ] && [ "${ORACLE_REVIEW_REEXEC:-}" != 1 ]; then
-  _work=""
-  for _tmpd in "${RUNNER_TEMP:-}" "${TMPDIR:-}" /tmp; do
-    [ -n "$_tmpd" ] && [ -d "$_tmpd" ] || continue
-    _work="$(mktemp -d "$_tmpd/oracle-review.XXXXXX" 2>/dev/null)" && break
-  done
-  unset _tmpd
-  if [ -n "$_work" ] && [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ && "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
-    _rl="$(git rev-list --parents -n 1 HEAD 2>/dev/null)" || _rl=""
-    read -r -a _parts <<< "$_rl"
-    if [ "${#_parts[@]}" -eq 3 ] && git cat-file -e "${_parts[1]}:$ORACLE_DRIVER" 2>/dev/null; then
-      # The base carries the driver: extract + re-exec it. Any failure here is a
-      # fail-closed exit, NOT a silent fall-through to the HEAD copy — only a
-      # base that genuinely lacks the file may fall back to judging with HEAD's.
-      if git show "${_parts[1]}:$ORACLE_DRIVER" > "$_work/driver-base" 2>/dev/null \
-        && [ -s "$_work/driver-base" ] && bash -n "$_work/driver-base" 2>/dev/null; then
-        ORACLE_REVIEW_REEXEC=1 RUNNER_TEMP="$_work" bash "$_work/driver-base"
-        _rc=$?
-        rm -rf "$_work"
-        exit "$_rc"
-      fi
-      rm -rf "$_work"
-      echo "oracle-review-required: base driver present but unreadable/unparseable — failing closed" >&2
-      exit 1
-    fi
-  fi
-  [ -z "$_work" ] || rm -rf "$_work"
-fi
+# ---- base-sourced driver on pull_request ----------------------------------------------------------------------
+# The re-exec lives in the ci.yml STEP (a PR editing this file cannot remove code it does not
+# contain — the merge-queue-cla-synthetics.yml precedent). On pull_request the step extracts this
+# driver from the base commit when the base carries it; a base without the file (pre-PR3b) and the
+# merge_group arm run this HEAD copy. Residual (platform-inherent): the workflow definition itself
+# is PR-mutable — bounded because ci.yml is RATCHET_ORACLE surface and this same check then gates it.
 
 # gh_read <label> <gh api args...> : the reply lands in $REPLY_JSON. Not a command substitution, because die inside
 # one would print into the captured variable and be swallowed. A gh failure is retried ONCE after a short pause (a
@@ -233,7 +207,7 @@ mg_arm() {
   embedded="${BASH_REMATCH[2]}"
 
   # --- group membership enumeration (#11678, ADR-270 raise checklist) -----------
-    # PARITY-PINNED COPY of scripts/merge-queue-cla-verify.sh:89-181 — the only permitted divergence is the context
+    # PARITY-PINNED COPY of scripts/merge-queue-cla-verify.sh:89-184 — the only permitted divergence is the context
     # list `cla-check cla-evidence` -> `oracle-review-required` (pinned byte-for-byte by scripts/ci-oracle-review.test.sh).
   # The candidate HEAD_SHA is the cumulative merge commit built for the DEEPEST
   # member of the group it verifies: with merge_method SQUASH each queue position

@@ -698,6 +698,9 @@ t_rsc_order_insensitive() {
 # into the three umbrella contexts guards-ruleset / quality-guards /
 # secret-guards in the same PR that produced them — ADR-032 amendment
 # 2026-11-06; per-member history above records each member's lineage).
+# bumped 10->12 by #10859 (PR3b: affected-index-ratchet flipped advisory->required
+# and the new oracle-review-required context — ADR-276 rulings (a)/(b)
+# 2026-11-06, budget-owner go-ahead 2026-11-07).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #

@@ -13,7 +13,7 @@
 # ── THE FIXTURES ─────────────────────────────────────────────────────────────────────────────
 # Every row is a jq edit of ONE real-shape base captured read-only from GitHub
 # (test/fixtures/admin-merge-ready/, provenance in its README): 15 required contexts across two
-# rulesets (the 16 folded names swapped for the 3 umbrella contexts, #12276), 66 check runs,
+# rulesets (the 16 folded names swapped for the 3 umbrella contexts, #12276), 68 check runs,
 # all required contexts green. No hand-written required set exists.
 #
 # ── MUTATION ROWS ────────────────────────────────────────────────────────────────────────────
@@ -390,10 +390,10 @@ row_R35() { local d; d=$(mkrow R35); assert_fixture_dir "$d"
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "ABSENT  CodeQL" && tailis "$d" 'required=16 absent=["CodeQL"] pending=[] failed=[]'; }
 # R36/R37 (#9454): the POST-ADOPTION live rule shape -- the CI Required ruleset gains a
 # `merge_queue` rule and LOSES its `CodeQL` required context (CodeQL is advisory: it cannot report on
-# `merge_group`). The base capture above is the PRE-adoption shape (13 contexts incl. CodeQL/57789 —
+# `merge_group`). The base capture above is the PRE-adoption shape (15 contexts incl. CodeQL/57789 —
 # the 16 folded names already swapped for the 3 umbrella contexts per #12276), so
 # these rows derive the new shape from it rather than hand-writing a required set.
-#   R36: merge_queue present + CodeQL not required -> READY with required=14 (11 CI Required minus
+#   R36: merge_queue present + CodeQL not required -> READY with required=14 (13 CI Required minus
 #        CodeQL = 10, plus the 2 CLA contexts); a FAILED advisory CodeQL run must not block.
 #        Before the fix the script errored `unsupported-rule` on the `merge_queue` type, so every
 #        admin-merge gate would have failed closed the moment the queue went live.
