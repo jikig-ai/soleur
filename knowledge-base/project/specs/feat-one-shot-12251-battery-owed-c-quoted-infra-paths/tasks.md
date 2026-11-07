@@ -10,7 +10,8 @@ Standing constraints: file-selected suites only (this one suite; no affected bat
 - 1.2 Add the local helper `t20_commit <work> <relpath>` (special bytes travel as an argv element) and the T20 header comment naming #12251.
 - 1.3 T20a: a shape loop over four names (`é`, tab, `"`, `\`), a fresh fixture each: control `Zcontrol-20/<name>.md` is SKIPPABLE; commit infra `apps/web-platform/infra/<name>.tf`; precondition (`grep -c '^"apps/web-platform/infra/'` over the plain `git diff --name-only` equals 1); infra is OWED plus `assert_reason` "diff touches the infra surface". No loop counter (the floor catches an empty table).
 - 1.4 T20b: `diff.ignoreSubmodules=all` fixture; gitlink via `git update-index --add --cacheinfo 160000,<sha>,<path>`; precondition (zero `sub20` lines in plain diff), control `Zcontrol-20/sub` SKIPPABLE, `apps/web-platform/infra/sub20` OWED plus reason.
-- 1.5 T20c: `diff.relative=true` set first; control from `plugins` SKIPPABLE; commit `apps/web-platform/infra/rel20.tf`; precondition (zero `rel20` lines in the plain diff run in `plugins`); `run_gate_sub ... plugins` OWED plus reason.
+- 1.4b T20b variant 2 (committed `.gitmodules` with `ignore = all`): reuse the existing T18x `git submodule add` one-liner; control at `Zcontrol-20/sub`, infra at `apps/web-platform/infra/sub`, precondition zero plain-diff lines matching `infra/sub$`.
+- 1.5 T20c: `diff.relative=true` set first; control from `plugins` SKIPPABLE; commit `apps/web-platform/infra/rel20.tf`; precondition (zero `rel20` lines in the plain diff run in `plugins`); `run_gate_sub ... plugins` OWED, and a local `t20_reason_sub` helper (mirrors `run_gate_out` run from the subdirectory, ends in `return 0`) for the reason assert, because `assert_reason` always runs from the fixture root. Write every precondition count as `$(... | grep -c ... || true)` (errexit).
 - 1.6 Run `bash plugins/soleur/test/ship-battery-owed.test.sh` against the UNFIXED script: confirm every infra/reason row is RED and every control and precondition row is GREEN; record the failing labels. Do not bump the floor yet.
 
 ## Phase 2 - GREEN (one production edit)
@@ -18,7 +19,7 @@ Standing constraints: file-selected suites only (this one suite; no affected bat
 - 2.1 In `plugins/soleur/skills/ship/scripts/battery-owed.sh` replace the `CHANGED=` assignment with `git -C "${_tp:-.}" diff -z --no-renames --ignore-submodules=none --name-only refs/remotes/origin/main...HEAD -- 2>/dev/null | tr '\0' '\n'`; leave `rc=$?`, the empty-diff check, `INFRA_RE` and the final grep untouched.
 - 2.2 Rewrite the comment block above it in about 6 lines (point at the token arm's rationale; add only `-C`/`diff.relative`, the `core.quotePath=false` caveat and the COPY note) and DELETE the "shares the C-quoted-path blind spot (#12251)" sentence. Name no new real file path in the comments.
 - 2.3 In the suite, replace the single T5g/T5h comment line about `tr '\t' '\n'` with a same-length line about `--no-renames` (file line count above 1114 unchanged).
-- 2.4 Re-run the suite: all green; set the `print_results` floor to the exact PASS count reported (expected 415; re-count).
+- 2.4 Re-run the suite: all green; set the `print_results` floor to the exact PASS count reported (expected 419; re-count).
 
 ## Phase 3 - mutation battery (scratchpad driver `mut-12251-battery-owed.sh`)
 

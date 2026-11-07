@@ -15,6 +15,22 @@ lane: single-domain
 
 # fix: battery-owed.sh infra refusal reads C-quoted paths and submodule gitlinks (Closes #12251)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-07
+**Sections enhanced:** Guard Contract (matrix expected sets), Phase 1 (rows and helpers), Risks, Property List
+**Agents used:** plan-review panel (DHH, Kieran, code-simplicity), a sharp-edges verifier over the full catalogue, `soleur:engineering:review:security-sentinel`, `soleur:engineering:review:test-design-reviewer`; mechanical gates 4.6-4.8, 4.11, 4.12 run directly (all pass); gates 4.9, 4.10, 4.13 do not fire (no UI, no store, no new task surface). The 40-agent catch-all fan-out was not run: a one-line change in one script with a ruled design does not repay it, and six independent seats plus live probes already covered correctness, simplicity, tests and security.
+
+### Key improvements
+1. A second, PR-carriable submodule hide (a committed `.gitmodules` `ignore = all`) is now a row of its own, alongside the repo-config spelling; matrix row 4 expects both RED.
+2. The `diff.relative` row's verdict-line assertion could not go red as first written (`assert_reason` runs from the fixture root); a sub-directory helper is now specified.
+3. Four mutation-matrix expected sets (rows 2, 6, 9, 10) were corrected against the script and the existing T5 rows; the SIGPIPE caveat on the `head` mutant is recorded.
+
+### New considerations discovered
+- `refs/replace/*` and a missing sentinel on the final here-string grep are pre-existing residuals; recorded in Risks, deliberately not fixed here.
+- The suite already carries a real-submodule fixture (the T18x gitlink row) that the new variant reuses.
+- Every cited PR, issue and rule id was verified live; `#12247` is a closed issue, `#12294` is the merged PR, `#12246` is a merged PR.
+
 ## Overview
 
 `plugins/soleur/skills/ship/scripts/battery-owed.sh` decides whether `soleur:ship` Phase 4 still owes a local test run. Its no-token infra refusal (the block headed "Condition 3" in the script, evaluated after condition 4 at the final `grep -qE "$INFRA_RE" <<<"$CHANGED"`) builds `CHANGED` with `git diff --name-status -M ... | cut -f2- | tr '\t' '\n'`. That line has two blind spots, both measured on a probe repo in this planning session:
@@ -44,7 +60,7 @@ Closing mechanism (stated honestly): #12251 is a `deferred-scope-out` issue, not
 
 **Property List (Phase 0.6b).**
 - P-a: a changed path under the infra surface refuses the skip whatever bytes its name holds.
-- P-b: a changed gitlink under the infra surface refuses the skip when the repo config sets `diff.ignoreSubmodules` to hide submodules (the per-submodule `.gitmodules` spelling is the same flag's effect and is not given its own row).
+- P-b: a changed gitlink under the infra surface refuses the skip whatever hides it: the repo config key `diff.ignoreSubmodules` OR a per-submodule `ignore = all` in a committed `.gitmodules` (the second is the spelling a PR can carry in its own commit; measured by the security seat: the old form printed only the `.gitmodules` entry, the new form printed the gitlink too).
 - P-c: the answer does not depend on the caller's cwd or on `diff.relative`.
 - P-d: renames still count on both sides (old path and new path).
 - P-e: the exit contract and `INFRA_RE` are unchanged.
@@ -154,13 +170,13 @@ The probe proves the reader is present and speaks its contract without network o
 | 1 | Revert the `CHANGED=` line to the pre-fix pipeline (`--name-status -M ... cut -f2- ... tr '\t' '\n'`) | RED: the infra assertions of all four name shapes, the gitlink row and the `diff.relative` row; every control row stays GREEN |
 | 2 | Keep the old pipeline but add `-c core.quotePath=false` (the partial fix the ruling rejects) | RED: tab, quote and backslash infra rows, plus the gitlink row and the `diff.relative` row (the old pipeline has neither fix); GREEN: the `é` infra row and every control (proves the partial fix is partial) |
 | 3 | Drop `-z` and keep `tr '\0' '\n'` | RED: all four name-shape infra rows (paths come back quoted) |
-| 4 | Drop `--ignore-submodules=none` | RED: the gitlink infra row only |
+| 4 | Drop `--ignore-submodules=none` | RED: the gitlink infra rows of BOTH T20b variants (config key and committed `.gitmodules`) |
 | 5 | Drop `--no-renames` | RED: T5f and T5h (a rename-detected diff prints only the new path) |
 | 6 | Replace `tr '\0' '\n'` with `tr -d '\0'` (second member glued onto the first) | RED: the four T20a infra rows and the T20b gitlink row (the control path `Zcontrol-20/...` sorts before `apps/` and glues in front of it), plus T5b and T5h (the glued workflow literal loses its `$` anchor); GREEN: T20c, T5, T5f, T5g (`apps/` sorts first) |
-| 7 | Append `| head -n 1` to the `CHANGED=` pipeline (check stops at the first member) | RED: the four T20a infra rows and the T20b gitlink row (the control path is first); GREEN: T20c and the existing T5 rows. Under `pipefail` a `head` can SIGPIPE the writer, so the driver compares failing row LABELS, never exit codes |
+| 7 | Append `\| head -n 1` to the `CHANGED=` pipeline (check stops at the first member) | RED: the four T20a infra rows and the T20b gitlink row (the control path is first); GREEN: T20c and the existing T5 rows. Under `pipefail` a `head` can SIGPIPE the writer, so the driver compares failing row LABELS, never exit codes |
 | 8 | Drop `-C "${_tp:-.}"` | RED: the `diff.relative` row only |
 | 9 | Insert an unconditional `owed` immediately BEFORE the `if ! jq -e ... infra-validate-required` block (inside the block T5c would stay green) | RED: every SKIPPABLE-asserting non-token row (T1, T5c, T5e, the T4 family, every T20 control) - only a SKIPPABLE control can see a guard that refuses everything |
-| 10 | Rewrite the `CHANGED=` line to `CHANGED=""` (guard reads nothing, "0 checked") | RED: the empty-diff check exits 2 before condition 3 is reached, so every row asserting 42 or 0 goes RED (T1, controls, T5*, T20 infra rows, and the token-arm SKIPPABLE rows, since that check precedes the token arm) |
+| 10 | Rewrite the `CHANGED=` line to `CHANGED=""` (guard reads nothing, "0 checked") | RED: the empty-diff check exits 2 before condition 3 is reached, so every row that reaches that check and asserts 42 or 0 goes RED (T1, the T20 controls and infra rows, T5, T5b, T5f-T5h, and the token-arm SKIPPABLE rows, since that check precedes the token arm); rows that refuse earlier at condition 1 or 2 (T2, T2b, T2c, T5d) stay GREEN |
 
 **Harness rows.**
 
@@ -170,6 +186,8 @@ The probe proves the reader is present and speaks its contract without network o
 | H2 | Empty the T20 shape table (the loop iterates nothing) | RED: the `print_results` floor (16 asserts missing); no separate loop counter is kept |
 | H3 | Make a shape's file name ASCII (`e.tf`) so its precondition no longer sees a C-quoted INFRA line | RED: the per-shape precondition row (the plain `git diff --name-only` must hold exactly one line starting `"apps/web-platform/infra/`, which the also-quoted control path cannot satisfy), so a row cannot pass vacuously on an unquoted name |
 | H4 | Change a control's expected value from SKIPPABLE to OWED | RED: the control (proves the must-PASS rows are asserted, not only the RED rows) |
+
+Note on the gitlink control: a gitlink at `Zcontrol-20/sub` is SKIPPABLE on the unfixed script too; it proves the control state is reachable, and the discrimination is carried by the infra row plus its precondition (zero `sub20` lines in the plain diff).
 
 Must-PASS inputs that are NOT the canonical fixture: the four outside-infra special-character paths (`Zcontrol-20/<name>.md`) and a gitlink outside infra, each expected SKIPPABLE with every required check green.
 
@@ -183,6 +201,7 @@ Insert one new section at the END of the suite, immediately before the trailing 
 
 Section shape (named helpers are the suite's own: `new_fixture_root`, `build_fixture`, `in_fixture`, `make_stub`, `head_sha_of`, `run_gate`, `run_gate_sub`, `assert_eq`, `assert_reason`):
 
+- Every precondition count is written `assert_eq 1 "$(... | grep -c ... || true)"`: a bare `grep -c` assignment that counts 0 exits 1 and, under the helpers' `errexit` plus `pipefail`, kills the suite silently instead of recording a FAIL row (as T19 does).
 - `T20` header comment: says what is pinned (the C-quote and gitlink and cwd hides), names `#12251`, and states the mutation list in one line (Guard Contract rows 1-10 and H1-H4 are the full list, kept in the plan).
 - A small local helper `t20_commit <work> <relpath>`: `in_fixture "$work" bash -c 'mkdir -p "$(dirname "$1")" && printf x > "$1" && git add -A && git commit --quiet -m t20' _ "$relpath"`, so the special bytes travel as an argv element, not through a nested quote layer.
 - `T20a` shape loop over a table of four names built with ANSI-C quoting: `é` (`$'\303\251'`), tab (`$'t\tb'`), double quote (`$'q"x'`), backslash (`$'b\\s'`). Per shape, a fresh fixture, then:
@@ -190,9 +209,10 @@ Section shape (named helpers are the suite's own: `new_fixture_root`, `build_fix
   2. commit `apps/web-platform/infra/<name>.tf`, then the precondition: the plain `git diff --name-only refs/remotes/origin/main...HEAD` (default config) holds exactly one line starting `"apps/web-platform/infra/` (counted with `grep -c`; the C-quoted control path must not satisfy it, so the row exercises C-quoting and fails loudly if the fixture env ever unquotes);
   3. re-stub for the new head, assert OWED and `assert_reason ... "diff touches the infra surface"` (condition 3 specifically, not an accidental refusal).
   One fresh fixture per shape is deliberate: sharing one fixture would let the first infra file make every later row OWED, so the shapes could not be told apart.
-- `T20b` gitlink: fresh fixture; `git config diff.ignoreSubmodules all`; add each gitlink with `git update-index --add --cacheinfo 160000,<head sha>,<path>` and commit; precondition: after the infra gitlink commit, the plain `git diff --name-only` output holds zero lines matching `sub20` (counted with `grep -c`, so the fixture's other changed file does not make the check vacuous); control with the gitlink at `Zcontrol-20/sub` asserts SKIPPABLE; the same gitlink at `apps/web-platform/infra/sub20` asserts OWED plus the reason. If the first RED run shows condition 1 refusing on the absent gitlink directory, `mkdir -p` the empty directory.
-- `T20c` cwd: fresh fixture; set `git config diff.relative true` first; control: run from the subdirectory `plugins` with no infra change, assert SKIPPABLE; then commit an ASCII `apps/web-platform/infra/rel20.tf`; precondition: the plain `git diff --name-only` run in `plugins` holds zero lines matching `rel20` (the fixture's `plugins/soleur/thing.md` still shows, relative, so count the infra name, not the whole output); then `run_gate_sub` from `plugins` asserts OWED plus the reason.
-- `print_results` floor: run the suite once after the rows land and set the number to the exact PASS count it reports (the existing rule: equal, never below). Expected: 391 + 24 = 415 (4 shapes x 4 asserts, gitlink 4, cwd 4; re-count from the suite's own output, do not trust this figure).
+- `T20b` gitlink: fresh fixture; `git config diff.ignoreSubmodules all`; add each gitlink with `git update-index --add --cacheinfo 160000,<head sha>,<path>` and commit; precondition: after the infra gitlink commit, the plain `git diff --name-only` output holds zero lines matching `sub20` (counted with `grep -c`, so the fixture's other changed file does not make the check vacuous); control with the gitlink at `Zcontrol-20/sub` asserts SKIPPABLE; the same gitlink at `apps/web-platform/infra/sub20` asserts OWED plus the reason.
+- `T20b` second variant (the committed spelling): a fresh fixture that reuses the existing T18x one-liner (the row "a gitlink under the infra surface hidden by ignore=all" in this suite: `git init ../subsrc`, an empty commit, `git submodule add` with `protocol.file.allow=always`, `git config -f .gitmodules submodule.<path>.ignore all`, `git add -A`, commit) with the submodule at `Zcontrol-20/sub` for the SKIPPABLE control and at `apps/web-platform/infra/sub` for the OWED row plus reason, and a precondition of zero plain-diff lines matching `infra/sub$`. `.gitmodules` is not a tracked file of this repo, so mentioning it creates no audit pair. Variant 1 (config key) uses `update-index --cacheinfo` as above.
+- `T20c` cwd: fresh fixture; set `git config diff.relative true` first; control: run from the subdirectory `plugins` with no infra change, assert SKIPPABLE; then commit an ASCII `apps/web-platform/infra/rel20.tf`; precondition: the plain `git diff --name-only` run in `plugins` holds zero lines matching `rel20` (the fixture's `plugins/soleur/thing.md` still shows, relative, so count the infra name, not the whole output); then `run_gate_sub` from `plugins` asserts OWED. The reason assert needs a sub-directory VERDICT-LINE helper: `assert_reason` goes through `run_gate_out`, which always runs from the fixture root where `diff.relative` has no effect, so it would pass on the unfixed script (measured by the test-design seat). Add a local `t20_reason_sub <work> <stub> <subdir> <needle> <label>` that mirrors `run_gate_out` with `cd "$work/$subdir"`, ends in `return 0` (errexit) and reports through `assert_eq` like `assert_reason`.
+- `print_results` floor: run the suite once after the rows land and set the number to the exact PASS count it reports (the existing rule: equal, never below). Expected: 391 + 28 = 419 (4 shapes x 4 asserts, gitlink variant 1: 4, variant 2: 4, cwd 4; re-count from the suite's own output, do not trust this figure).
 
 Run: `bash plugins/soleur/test/ship-battery-owed.test.sh` (this one file; the operator constraint forbids the full or affected battery). Expected at this point: the T20 infra and reason rows FAIL against the unfixed script, controls PASS. That RED state is the evidence of `cq-write-failing-tests-before`; record the failing row labels in the work log.
 
@@ -293,6 +313,7 @@ No cross-domain implications detected — an engineering-only fix to a plugin ga
 - `git_fixture_env` may already set a quoting config; the per-shape precondition (plain diff prints a leading `"`) turns that into a loud failure rather than a vacuous pass. Work must confirm it on the first RED run.
 - Git sorts the diff by path bytes; the glue and first-member mutations (rows 6 and 7) only bite because the control path begins with `Z` (0x5a) and sorts before `apps/` (0x61). A rename of the control directory to a lower-case name silently disarms those rows; H3-style review of the first RED run must confirm each of rows 6 and 7 turns red.
 - `${_tp:-.}`: `_tp` is a physical path from `pwd -P`; `git -C` with it is safe in a linked worktree. The gate's existing `unset GIT_DIR ...` line runs before the `CHANGED=` assignment, so inherited git-location variables cannot redirect it.
+- Residuals recorded, not fixed (security seat, 2026-11-07; probed in a scratch repo): (a) `refs/replace/*` can make `HEAD` look like main's tree for every `git diff` and `merge-base --is-ancestor` call in this script (`git --no-replace-objects diff` showed the infra paths); it needs a local ref write, the same class as the already-accepted assume-unchanged residual, and the required `test` check plus the merge queue still gate the merge. Adding `--no-replace-objects` to this one call would cover only this call, so it is not added. (b) The final `grep -qE ... <<<"$CHANGED"` has no sentinel like the token arm's; a here-string whose temp-file write fails (bash older than 5.1, for example the stock macOS bash) could read as no match. Could not be reproduced on bash 5.3; recorded, not changed, to keep one edit site.
 - A newline inside a changed path makes `tr '\0' '\n'` split it into two lines; that can only add lines, so it fails toward OWED (the safe direction). Not worth a row.
 - A plan or PR body naming a repo file path in plain prose that is not in the diff turns `quality-advisory` red; backtick it or omit it.
 - A `## User-Brand Impact` section that is empty or lacks the threshold fails deepen-plan Phase 4.6; this one carries all three lines.

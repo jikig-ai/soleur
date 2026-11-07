@@ -3,7 +3,7 @@
 ## Plan Phase
 
 - Plan file: knowledge-base/project/plans/2026-11-07-fix-battery-owed-c-quoted-infra-paths-plan.md
-- Status: in progress (skeleton written, research persisted next)
+- Status: complete (plan reviewed and deepened)
 
 ## Operator Constraints
 
