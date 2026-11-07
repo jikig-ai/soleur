@@ -68,11 +68,11 @@ Work Phase 2 (step 9 and the fan-out lead's consolidation run) and review's lead
 `plugins/soleur/scripts/gate-or-skip.sh`, not `affected-tests.sh`. On a bare invocation it runs
 `battery-owed.sh --token-only` (exit contract in that script's header). Reader exit 42 is the only skip: the
 wrapper prints the reader's verdict, then `affected gate: SKIPPED (NOT run, NOT passed); CI test is the gate` and
-`AFFECTED_GATE_SKIPPED reason=operator-ci-is-the-gate`, and exits 0. **A SKIPPED line is not a pass**: report it as
+`AFFECTED_GATE_SKIPPED reason=operator-ci-is-the-gate`, and exits 0. **An `AFFECTED_GATE_SKIPPED` line is not a pass**: report it as
 "affected gate NOT run; operator declared CI the gate", never as "tests passed". Every other reader status, a missing
 reader, and any argument (`--full`, `--explain`, `--base`) run `affected-tests.sh` verbatim and return its rc from the
 table above. Consumers: work step 9, work's fan-out lead gate, review's lead gate; `grok-pre-push-gate.sh` makes the same
-`--token-only` call inline and waives only its affected-tests step. Non-consumers: `soleur:ship` Phase 4 (calls the reader
+`--token-only` call inline and waives only its affected-tests step (a waive also makes grok-fidelity run the AGENTS rule-budget lint, which it otherwise skips because the affected gate ran test-all; an affected step that ends rc 6 or 7 can leave that lint unrun locally, CI `test-scripts` is the backstop). Non-consumers: `soleur:ship` Phase 4 (calls the reader
 bare), `soleur:test-fix-loop` (a fix loop must run tests), `lefthook.yml` (#12297) and the opt-in
 `scripts/hooks/pre-push` hook (active only after `git config core.hooksPath scripts/hooks`). The
 reader's `battery-owed: OWED` line printed before a normal run is its no-token verdict; the gate then runs. The wrapper is the same

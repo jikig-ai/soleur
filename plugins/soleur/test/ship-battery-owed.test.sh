@@ -1520,6 +1520,39 @@ assert_eq "ok" "$([[ "$WAIVED_IN" -ge 3 ]] && echo ok || echo "only $WAIVED_IN")
 GROK_EXPORT_LINE="$(grep -E '^export GROK_FIDELITY_SKIP_BUDGET=' "$GROKS" || true)"
 assert_eq 'export GROK_FIDELITY_SKIP_BUDGET="$FIDELITY_SKIP_BUDGET"' "$GROK_EXPORT_LINE" "T19g the fidelity-budget export is derived from the waiver-aware variable (a literal 1 would hide the rule-budget lint on a waived push)"
 
+# The waiver's other names: _tok_rc must not exist outside the blocks, and FIDELITY_SKIP_BUDGET exactly once (the export line).
+for nm in _tok_rc FIDELITY_SKIP_BUDGET; do
+  OUT_N="$(grep -v '^[[:space:]]*#' "$GROKS" | grep -c "$nm" || true)"
+  IN_N="$( { printf '%s\n' "$G19_DISPATCH"; printf '%s\n' "$G19_BANNER"; } | grep -v '^[[:space:]]*#' | grep -c "$nm" || true)"
+  WANT_OUT=0; [[ "$nm" == FIDELITY_SKIP_BUDGET ]] && WANT_OUT=1
+  assert_eq "$WANT_OUT" "$(( OUT_N - IN_N ))" "T19g $nm is referenced outside the sentinel blocks exactly $WANT_OUT time(s)"
+done
+# Executable: the REAL script from the dispatch block through the export line, stubs for the reader and run_step.
+run_grok_export() { # <reader-rc>
+  local rrc="$1" gd
+  new_fixture_root gd
+  assert_fixture_dir "$gd"
+  printf '#!/usr/bin/env bash\nexit %s\n' "$rrc" > "$gd/reader.sh"
+  {
+    printf 'set -euo pipefail\nBATTERY_OWED=%q\nGATE=/nonexistent/gate.sh\nSKIP_BUILD=1\nrun_step() { :; }\nstep() { :; }\nnpm() { echo NPM-CALLED >&2; exit 99; }\n' "$gd/reader.sh"
+    awk '/^# grok-token-dispatch:start$/ {f=1} f {print} /^export GROK_FIDELITY_SKIP_BUDGET=/ {exit}' "$GROKS"
+    printf 'echo "EXPORTED=${GROK_FIDELITY_SKIP_BUDGET:-unset}"\n'
+  } > "$gd/harness.sh"
+  GX_OUT="$(env -u GROK_FIDELITY_SKIP_BUDGET -u FIDELITY_SKIP_BUDGET bash "$gd/harness.sh" 2>&1)" || GX_OUT="rc!=0: $GX_OUT"
+  return 0
+}
+run_grok_export 42
+assert_has "$GX_OUT" "EXPORTED=0" "T19g the REAL script exports 0 after a waive (the value grok-fidelity sees, with anything between the block and the export included)"
+for rrc in 0 2 43; do
+  run_grok_export "$rrc"
+  assert_has "$GX_OUT" "EXPORTED=1" "T19g the REAL script exports 1 when the affected step runs (reader $rrc)"
+done
+FIDELITY_GATE="$HERE/../scripts/grok-fidelity-gate.sh"
+assert_has "$(grep -F 'GROK_FIDELITY_SKIP_BUDGET' "$FIDELITY_GATE" || true)" '!= "1"' "T19g grok-fidelity skips its rule-budget lint ONLY on the literal 1, so 0 runs it"
+GATE_LINE="$(grep -E '^GATE=' "$GROKS" || true)"
+GATE_PATH="$(bash -c 'line=${2//\$\{BASH_SOURCE\[0\]\}/$1}; eval "$line"; printf %s "$GATE"' _ "$GROKS" "$GATE_LINE" 2>/dev/null || true)"
+assert_eq "readable" "$([[ -n "$GATE_PATH" && -r "$GATE_PATH" ]] && echo readable || echo unreadable)" "T19g the Grok script's real GATE path resolves to a readable affected-tests.sh"
+
 # --- T19h: the call sites ----------------------------------------------------
 FENCE19="$(awk '/Affected-Test Exit Gate/ {h=1} h && /^ *```bash/ {o=1; next} o && /^ *```/ {exit} o' "$WORK_SKILL" 2>/dev/null || true)"
 FENCE19_CODE="$(grep -v '^[[:space:]]*#' <<<"$FENCE19" || true)"
@@ -1539,6 +1572,7 @@ assert_has "$REVIEW_LEAD" '${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh' "T19h 
 assert_has "$WORK_LEAD" 'AFFECTED_GATE_SKIPPED' "T19h work's fan-out lead names the unique skip token"
 assert_has "$REVIEW_LEAD" 'AFFECTED_GATE_SKIPPED' "T19h review's lead gate names the unique skip token"
 assert_has "$FENCE19_SENT" 'AFFECTED_GATE_SKIPPED' "T19h work step 9 names the unique skip token"
+assert_has "$FENCE19_SENT" 'was NOT run' "T19h work step 9 says the gate was NOT run (not just that the token exists)"
 # The gates that must stay token-blind: a fix loop and the commit hook run tests, and the executables never read the token.
 for f in "$HERE/../skills/test-fix-loop/SKILL.md" "$HERE/../../../lefthook.yml"; do
   assert_eq "readable" "$([[ -s "$f" ]] && echo readable || echo unreadable)" "T19h negative: $(basename "$f") is readable"
@@ -1549,6 +1583,9 @@ for f in "$HERE/../scripts/affected-tests.sh" "$HERE/../skills/ship/scripts/batt
   assert_eq "readable" "$([[ -s "$f" ]] && echo readable || echo unreadable)" "T19h negative: $(basename "$f") is readable"
   assert_eq "0" "$(grep -cE 'gate-or-skip|--token-only|ci-is-the-gate' "$f" 2>/dev/null || true)" "T19h negative: $(basename "$f") never reads the token"
 done
+CALLERS19="$(cd "$HERE/../../.." && grep -rlE 'gate-or-skip|--token-only' plugins/soleur/skills plugins/soleur/scripts .github/workflows 2>/dev/null | sort | tr '\n' ' ' || true)"
+WANT_CALLERS19="plugins/soleur/scripts/gate-or-skip.sh plugins/soleur/scripts/grok-pre-push-gate.sh plugins/soleur/skills/one-shot/references/operator-constraints.md plugins/soleur/skills/review/SKILL.md plugins/soleur/skills/ship/references/affected-gate-contract.md plugins/soleur/skills/ship/scripts/battery-owed.sh plugins/soleur/skills/work/SKILL.md "
+assert_eq "$WANT_CALLERS19" "$CALLERS19" "T19h the set of files naming the wrapper or the flag is CLOSED (a new caller must be added here on purpose)"
 OC_ITEM4="$(grep -E '^4\. ' "$REF18" 2>/dev/null || true)"
 assert_has "$OC_ITEM4" "--token-only" "T19h the writer reference's item 4 names the --token-only readers"
 assert_has "$OC_ITEM4" "gate-or-skip.sh" "T19h the writer reference's item 4 names the wrapper"
@@ -1556,4 +1593,4 @@ assert_has "$OC_ITEM4" "gate-or-skip.sh" "T19h the writer reference's item 4 nam
 # The floor counts the instrument self-test's two rows plus every row above.
 # Set EQUAL to the current count, not below it: slack is budget for a silently
 # deleted row.
-print_results 381
+print_results 391

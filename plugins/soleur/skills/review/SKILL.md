@@ -201,7 +201,7 @@ proceeds. Agents must not run the runner unscoped,
 `apps/web-platform/infra/run-registered-suites.sh`, or any other full-gate runner: this panel is
 the densest concurrency in the whole pipeline, and concurrent full-gate runs inflate each other's
 timings and corrupt the measurement (860→1675 s, 2026-08-11). The lead runs the gate ONCE after the
-panel returns — the bounded default `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"` (token-aware
+panel returns — the bounded default `bash "${CLAUDE_PLUGIN_ROOT}/scripts/gate-or-skip.sh"` (token-aware wrapper over
 `affected-tests.sh`: here it delegates `--affected` to the [runner](../../../../scripts/test-all.sh), its sole scope
 absent one — [contract](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/affected-gate-contract.md); rc 6, 7 and `AFFECTED_GATE_SKIPPED` are not a pass),
 previewed by `bash scripts/test-all.sh --print-selection` and reported with the `selected N of M`:

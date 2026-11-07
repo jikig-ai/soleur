@@ -212,7 +212,7 @@ fi
 # (sliced by plugins/soleur/test/ship-battery-owed.test.sh T19: keep both sentinel lines)
 # grok-token-dispatch:start
 AFFECTED_GATE_WAIVED=0
-FIDELITY_SKIP_BUDGET=1   # grok-fidelity may skip its rule-budget lint only because the affected gate ran test-all
+FIDELITY_SKIP_BUDGET=1   # grok-fidelity may skip its rule-budget lint because the affected gate ran test-all (rc 6/7 pass-with-note can leave it unrun; CI test-scripts backstops)
 _tok_rc=0
 "$BASH" "$BATTERY_OWED" --token-only || _tok_rc=$?
 if (( _tok_rc == 42 )); then

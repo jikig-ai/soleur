@@ -1,13 +1,16 @@
 # Session State
 
 ## Plan Phase
+
 - Plan file: knowledge-base/project/plans/2026-11-07-feat-ci-is-the-gate-token-reaches-work-review-grok-gate-plan.md
 - Status: complete
 
 ### Errors
+
 None blocking. Brief byte ceiling for ship/SKILL.md (273781) matches nothing in the repo; measured ceilings are planned as byte deltas. #12030 is open and the queue is currently green (last 8 merge_group runs succeeded).
 
 ### Decisions
+
 - Ruled by CTO agent, 2026-11-07: #12251 does not fold into this PR; this PR carries Ref #12251 (separate PR, fix is -z plus --ignore-submodules=none).
 - battery-owed.sh gets a --token-only flag (no token returns OWED immediately); new thin wrapper plugins/soleur/scripts/gate-or-skip.sh serves work step 9, work fan-out lead gate and review lead gate; Grok pre-push gate gets an inline --token-only branch.
 - test-fix-loop, ship Phase 4 and lefthook stay token-blind; lefthook deferral tracked as #12297.
@@ -15,6 +18,7 @@ None blocking. Brief byte ceiling for ship/SKILL.md (273781) matches nothing in 
 - Closing mechanism: PR body Closes #12247, Ref #12251, Ref #12297, Ref #12246.
 
 ### Components Invoked
+
 soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto (1 spawn), research and review agents per the plan.
 
 ## Operator Constraints
@@ -47,3 +51,7 @@ dedup: 72 raw -> 22 unique. Tier: none (source: plan). Seats: 8 panel + 1 covera
 | same-commit edit of the gate scripts plus token (S2), BASH_ENV, symlinked wrapper (P3) | security | accepted: no new capability, CI required check and merge queue gate the merge; symlink fails closed |
 | near-copy helpers (run_gate_args etc.), sentinel/BASH naming, header shape (P3) | pattern, code-quality | wontfix: cosmetic, keeps the existing helpers above the accept-row cites untouched |
 | token lifetime across branch reuse | consult | design residual, operator-constraints item 5 |
+
+### Fix round 1 (targeted: test-design, architecture, security, agent-native)
+
+No P1 or P2 except test-design P2 (waiver footprint and export value unpinned outside the sentinel blocks): fixed with an executable slice of the real script through the export line, a footprint over all three waiver names, a consumer pin, a GATE path row, a prose pin and a closed caller-set row. Declared edge for the lib directory, contract and ADR wording (grok-fidelity runs the budget lint on a waive; rc 6/7 residual with CI backstop), unique-token wording and a deep link in work step 9. Accepted: rc 6/7 lint skip is pre-existing and pinned by workflow-fidelity.test.ts; BASH_ENV; consumer-side wording of one-shot line 25.
