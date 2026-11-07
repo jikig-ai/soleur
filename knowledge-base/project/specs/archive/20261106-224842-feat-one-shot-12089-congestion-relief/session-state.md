@@ -86,3 +86,9 @@
 - leg8 (90/91): test-all-fast-tier-budget — weight budget pin
 - leg4 (92/93): ci-pr-affected-replay-c (374s) — edge/replay pin
 - Pattern: mechanical pin updates for the new ABI. Next: fix each pin (run each suite locally to see expected-vs-actual), commit, push, wait CI green, then admin-merge.
+
+## Ship CI fix round 3 — LAST real failure (in progress)
+- Round-2 pins pushed (subagent, fbb8b4a94e): ci-pr-affected-replay abc, apply-github-infra-mint-shape, constraint-scaffold parity, TSV manifests restored to measured (merge regen had flattened to floor).
+- Round-3 cycle (head after doc pushes): webplat 1/2 + 2/2 were CANCELED (my doc push canceled in-flight legs — "operation was canceled"/"1 killed", NOT real failures; they rerun on newest head).
+- REAL remaining: leg6 `plugins/soleur/test/gitleaks-merge-commit.test.sh` — 5 fails locally, all same root cause: secret-scan.yml gitleaks now runs as a MEMBER STEP inside `secret-guards` umbrella, so the test's "full-tree step" assertions can't find it for PR/merge_group/push:main/weekly + the "--cc silent-no-op trap" doc anchor. FIX: update the test's workflow-parsing to find the gitleaks member step inside the umbrella job (pin-update, like the other rounds).
+- After this green: `gh pr merge --admin` → apply-github-infra watch → queue inspect → merge_group canary → census delta on #12089 → postmerge → DONE.
