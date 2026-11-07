@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1251
-# generated-at=2026-11-06T14:44:37Z
+# generated-at=2026-11-07T00:40:49Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -541,6 +541,7 @@ scripts/lint-shell-trace-credential-refusal-repo	7359	measured
 scripts/lint-skill-body-budget	1430	measured
 scripts/lint-supabase-deprecated-endpoints-unit	6692	measured
 scripts/lint-trap-tempfile-ownership	18875	measured
+scripts/lint-umbrella-aggregate	1251	floor
 scripts/lint-window-closure-assertion	964	measured
 scripts/lint-window-closure-assertion-live	1039	measured
 scripts/lint-workflow-errexit-capture	8846	measured

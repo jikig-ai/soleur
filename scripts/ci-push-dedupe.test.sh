@@ -141,7 +141,7 @@ ORASEL_IF="\${{ $ORASEL_EV && $ORASEL_VAR }}"
 AGG_DIGEST="224a3a10a36457d4e37b1ca257646d9b3297fbd83cfedd07e0012855982b970d"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
-UNGATED_PINNED="adr-ordinals affected-index-ratchet credential-path-guard critical-css-gate detect-changes draft-light encryption-posture grok-fidelity harness-discovery lint-bot-statuses lint-webplat lockfile-sync marketplace-manifest-guard oracle-index-check oracle-selection plugin-root-propagation-gate pr-selection rule-body-lint sandbox-canary-capture-gate service-role-allowlist-gate tc-document-sha-guard"
+UNGATED_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-selection pr-selection"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success page_truncated no_test_job legs_incomplete switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -1450,10 +1450,10 @@ mutate_yml y-census-matrix-exclude "        shard: [\"1/2\", \"2/2\"]
           - shard: \${{ needs.pr-selection.outputs.skip_legs }}
 " prcensus C-REF:test-webplat.strategy
 # the ungated-required-job escape: any job other than the three PR-gated ones and `test` that needs pr-selection
-mutate_yml y-prneeds-extra "  lockfile-sync:
-    # 15m — measured max 1.4m" "  lockfile-sync:
-    needs: [pr-selection]
-    # 15m — measured max 1.4m" gated G-PRNEEDS-EXTRA:lockfile-sync
+mutate_yml y-prneeds-extra "  guards-ruleset:
+    name: guards-ruleset" "  guards-ruleset:
+    name: guards-ruleset
+    needs: [pr-selection]" gated G-PRNEEDS-EXTRA:guards-ruleset
 # leg-set parity: edit ONE copy of the three-leg set and the parity row must name it
 mutate_yml y-leg-skipre-first-group "skip_re='^(test-webplat|test-bun|test-scripts-heavy)(" "skip_re='^(test-webplat|test-scripts-heavy)(" legparity L-SET:skip_re
 mutate_yml y-leg-skipre-second-group "(,(test-webplat|test-bun|test-scripts-heavy))*\$'" "(,(test-webplat|test-bun|test-scripts-heavy|test-scripts))*\$'" legparity L-SET:skip_re
@@ -1586,17 +1586,17 @@ mutate_yml y-xtrace-off-gone "          set +x
           elide=false" "          emit() { printf '%s\\n' \"\$1\" >> \"\$GITHUB_OUTPUT\"; }
           elide=false" wrapper W-NOXTRACEOFF
 mutate_yml y-unclassified "
-  credential-path-guard:
+  guards-ruleset:
 " "
   new-heavy-job:
     runs-on: ubuntu-latest
     steps:
       - run: true
 
-  credential-path-guard:
+  guards-ruleset:
 " gated G-UNCLASSIFIED:new-heavy-job
 mutate_yml y-dependent "
-  credential-path-guard:
+  guards-ruleset:
 " "
   dep-job:
     needs: [test-bun]
@@ -1604,10 +1604,10 @@ mutate_yml y-dependent "
     steps:
       - run: true
 
-  credential-path-guard:
+  guards-ruleset:
 " gated G-DEPENDENT:dep-job
 mutate_yml y-reexport "
-  credential-path-guard:
+  guards-ruleset:
 " "
   reexport-job:
     runs-on: ubuntu-latest
@@ -1616,13 +1616,13 @@ mutate_yml y-reexport "
     steps:
       - run: true
 
-  credential-path-guard:
+  guards-ruleset:
 " gated G-REEXPORT:reexport-job
 mutate_yml y-ungated-gone "
-  credential-path-guard:
-" "
-  credential-path-guard-renamed:
-" gated G-GONE:credential-path-guard
+  guards-ruleset:
+    name: guards-ruleset" "
+  guards-ruleset-renamed:
+    name: guards-ruleset" gated G-GONE:guards-ruleset
 
 # the coupling row itself must go red when the aggregator tolerates a skipped leg
 cp "$SANDBOX/live/agg.sh" "$SANDBOX/mut/agg-tol.sh" 2>/dev/null
