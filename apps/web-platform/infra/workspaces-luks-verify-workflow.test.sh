@@ -2013,7 +2013,7 @@ PY
   g3_dbin_pipeline='doppler run --preserve-env -p soleur -c prd -- '"$g3_dbin_cmd"
   g3_dbin_ok() { # <cf-lb-overlay.yml copy> -> 0 when the §(c) step hands the wrapper the exact DOPPLER_BIN
     local code
-    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ')"
+    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ')" || true  # an all-comment/empty file yields no code: the counts below then read 0 and the check returns non-zero
     [[ "$(grep -cF -- "$g3_dbin_pipeline" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -cF -- "$g3_dbin_cmd" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -oF 'lb-weight-gate-with-marker.sh' <<<"$code" | wc -l)" -eq 1 ]] \
