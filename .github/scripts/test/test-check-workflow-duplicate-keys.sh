@@ -696,8 +696,9 @@ stray_actions() {
 # paths_has_github <file>: does GITHUB_SCRIPTS_SUITE_PATHS still name `.github` (the relevance gate
 # that makes run-all.sh, hence this suite and its real-tree row, run on a workflow-only diff)?
 paths_has_github() {
-  awk '/^GITHUB_SCRIPTS_SUITE_PATHS=\(/ { inb = 1; next } inb && /^\)/ { inb = 0 } inb' "$1" \
-    | grep -qE '^[[:space:]]+"\.github"([[:space:]]|$)'
+  local blk
+  blk="$(awk '/^GITHUB_SCRIPTS_SUITE_PATHS=\(/ { inb = 1; next } inb && /^\)/ { inb = 0 } inb' "$1")"
+  grep -qE '^[[:space:]]+"\.github"([[:space:]]|$)' <<<"$blk"
 }
 
 # Predicates over G_RC/G_OUT for the rows that run under BOTH loaders.

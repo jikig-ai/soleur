@@ -385,7 +385,7 @@ JQ_ERR_LOG="$WORK/jq-err.log"; STREAM_LOG="$WORK/streams.log"; : > "$JQ_ERR_LOG"
 # A run that printed any of these produced a CRASH, not a verdict about the property a mutant targets.
 CRASH_RE='jq: error|unbound variable|syntax error|command not found|Traceback|NameError'
 crash_reset() { : > "$JQ_ERR_LOG"; : > "$STREAM_LOG"; }
-crash_scan() { cat "$STREAM_LOG" "$JQ_ERR_LOG" 2>/dev/null | grep -m1 -E "$CRASH_RE" || true; }
+crash_scan() { local cs; cs="$(cat "$STREAM_LOG" "$JQ_ERR_LOG" 2>/dev/null)"; grep -m1 -E "$CRASH_RE" <<<"$cs" || true; }
 
 iso_ago() { date -u -d "-$1 minutes" +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -728,7 +728,8 @@ lookup_ran() {
   nm="$(grep -c 'actions/runs.*-f event=merge_group' "$WORK/gh.log" 2>/dev/null || true)"
   [[ "${np:-0}" -eq "$k" && "${nm:-0}" -eq "$k" ]] \
     || { REASON="$l: the lookup did not run (push lists=${np:-0}, merge_group lists=${nm:-0}, wanted $k each): a broken lookup would also look suspected"; return 1; }
-  ! cat "$WORK/out.txt" "$WORK/err.txt" | grep -q 'could not read' \
+  oe_all="$(cat "$WORK/out.txt" "$WORK/err.txt")"
+  ! grep -q 'could not read' <<<"$oe_all" \
     || { REASON="$l: the lookup warned (could not read): the suspected form came from a failed lookup, not from the evidence"; return 1; }
   return 0
 }
@@ -1072,7 +1073,8 @@ lrow23() { # a rejected cause-form title is retried ONCE with the plain title; a
   title_anchors_ok "$t" 101 && [[ "$t" == "TITLE:merge-queue stall: PR #101 pending >${THR_REAL}m (suspected, verify first)" ]] \
     || { REASON="L23: the retry did not use the plain suspected title ('$t')"; return 1; }
   [[ "$b" == "LIKELY CAUSE"* && "$b" == *"${WF_PATH_CI}"* ]] || { REASON="L23: the retry dropped the cause paragraph from the body"; return 1; }
-  cat "$WORK/out.txt" "$WORK/err.txt" | grep -q 'retrying once with the plain title' || { REASON="L23: the retry is not announced"; return 1; }
+  oe_all="$(cat "$WORK/out.txt" "$WORK/err.txt")"
+  grep -q 'retrying once with the plain title' <<<"$oe_all" || { REASON="L23: the retry is not announced"; return 1; }
   # both attempts rejected: the step fails LOUDLY after exactly one retry
   set_ever 111; CASE_CREATE_MAX=10; one_entry "$wf" 101 "$rf"; reset_runs
   [[ "$CASE_RC" -ne 0 && "$CASE_ATTEMPTS" -eq 2 && "$CASE_CREATES" -eq 0 ]] \
