@@ -393,6 +393,7 @@
 1	plugins/soleur/test/c4-model-freshness.test.sh
 2	plugins/soleur/test/check-deps-adapter-drift.test.sh
 3	plugins/soleur/test/ci-head-verdict.test.sh
+1	plugins/soleur/test/ci-pr-affected-replay.test.sh
 1	plugins/soleur/test/claude-code-action-auth.test.sh
 1	plugins/soleur/test/collision-precheck.test.sh
 1	plugins/soleur/test/compaction-state-hook.test.sh
