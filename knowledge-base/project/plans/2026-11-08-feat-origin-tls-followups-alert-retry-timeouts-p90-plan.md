@@ -13,6 +13,23 @@ pr: 12434
 brand_survival_threshold: aggregate pattern
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Sections enhanced:** 7 (Research Reconciliation, Observability, Phase 1/2/3 test specs, Guard Contracts, Network-Outage Deep-Dive, Sharp Edges, ADR list)
+**Agents used:** repo-research-analyst, learnings-researcher, functional-discovery, CTO (x2), code-simplicity-reviewer, architecture-strategist (plan review); observability-coverage-reviewer, test-design-reviewer, security-sentinel (deepen). Halts 4.6, 4.7, 4.8, 4.10, 4.11, 4.12 evaluated mechanically (all pass; 4.9 UI and 4.13 task-design not triggered; 4.55 downtime not triggered). The "run ALL agents" fan-out was scoped to the three reviewers whose lenses touch this change (observability, test design, security); the remaining review agents have no surface here (no UI, data model, migrations, performance path).
+
+### Key Improvements
+1. Plan review found that the alert would miss the events it exists for (`exit(1)` without a Sentry flush); CTO ruled a bounded `exitAfterFlush` in, with six test cases.
+2. Seven gitleaks copies (not four) plus actionlint; behaviour arm and raw-count over-engineering cut; scanner hygiene rules added (exact-token match, comment stripping, `set -e` capture, POSIX awk).
+3. Failure modes now cite observability layers (pino/vector/release); the Vector error-level forwarding caveat is closed against `vector.toml`.
+4. Runbook spec: `/health` includes a Supabase round trip; candidate 4 and a Supabase-free control added; commands must reuse the stdin-config bearer pattern.
+
+### New Considerations Discovered
+- `--retry-all-errors` also retries a 404 (a removed release takes about 31 s to fail instead of failing at once): still loud.
+- If the 2.25 s hard timer fires before the Sentry flush completes, only the Better Stack pino line survives: accepted residual, no alert covers it.
+- Three more ADR-321 sentences go stale (container-start signals, decision 7 "alert is still deferred", R-A "unchanged in effect").
+
 ## Overview
 
 Four follow-ups owed to the Cloudflare-to-origin TLS work (ADR-321, epic #10205, issue #10479), shipped as ONE PR that
@@ -32,7 +49,7 @@ All forks were ruled by the CTO agent on 2026-11-08; the rulings are rows in
 
 | Brief claim | Reality (verified in the worktree at HEAD `3e3e721944`; `origin/main` = `4fba0d512e`) | Plan response |
 |---|---|---|
-| gitleaks bare `curl -sSLo` at ci.yml ~1915/~2045 and main-health-monitor.yml ~367/~461; "grep for any other copy" | Line drift only (ci.yml 1926/2056). **Three more copies**: `secret-scan.yml` twice (the folded `scan-install` member step and the step near line 533) and `.github/actions/bot-pr-with-synthetic-checks/action.yml` (different shape: `"${GITLEAKS_DIR}/gitleaks.tgz"`, no `set -e` header in view). Total **7 gitleaks copies**. Same-class sibling: `ci.yml` actionlint install (~833). Out: `apply-web-platform-infra.yml` crane (2 sites) | Harden 7 + actionlint (CTO ruling); crane and the wider release-download class go to one tracking issue |
+| gitleaks bare `curl -sSLo` at ci.yml ~1915/~2045 and main-health-monitor.yml ~367/~461; "grep for any other copy" | Line drift only (ci.yml 1926/2056). **Three more copies**: `secret-scan.yml` twice (the folded `scan-install` member step and the step near line 533) and `.github/actions/bot-pr-with-synthetic-checks/action.yml` (different shape: `"${GITLEAKS_DIR}/gitleaks.tgz"`; its run body sets `set -eo pipefail`, verified in the deepen pass; the other six copies set `set -euo pipefail`). Total **7 gitleaks copies**. Same-class sibling: `ci.yml` actionlint install (~833). Out: `apply-web-platform-infra.yml` crane (2 sites) | Harden 7 + actionlint (CTO ruling); crane and the wider release-download class go to one tracking issue |
 | "Follow the repo's existing Sentry-alert-as-code pattern if one exists" | It exists and is heavy: `apps/web-platform/infra/sentry/issue-alerts.tf` (55 `sentry_alert` blocks, plus `cron-monitor-failure` in `cron-monitor-alerts.tf` = 56 rules), `alert-reference.json` (gated by `scripts/sentry-alert-reference-gate.sh` in `plan_pr`), one `sentry-*-alert-op-contract.test.ts` per rule family, a README rule count tied to the `.tf` by two tests, unique `frequency_minutes` (Sentry POST-time dedup) | No mechanism fork; CTO ruled only the shape |
 | ADR-321 item 11: "There is no committed Sentry alert rule ... belongs in a separate infra change" | True at HEAD; this PR is that change | Update the ADR sentence in the same PR |
 | Test "that pins the flags in every copy" | `required-checks-canonical-parity.test.sh` Test 5 pins only the version/SHA declarations ("all 4 sites" in its title, "three install sites" in its header) and never reads the `curl` lines | Add a scanning arm; fix the stale site counts in the header |
@@ -97,6 +114,19 @@ append-only (supersede with a new row).
 file and does not restructure it; the extraction is its own cycle.
 
 **Functional overlap.** No community skill or agent covers any of the four items (functional-discovery run, 2026-11-08).
+
+## Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+The trigger words (`timeout`, `502`/`503`/`504`, `handshake`) appear because the plan concerns CDN 5xx on CI downloads, Node
+timeouts and TLS handshakes; it diagnoses no SSH or connectivity fault and proposes no sshd/fail2ban fix. The four layers anyway,
+each with its artifact or an explicit "not verified":
+
+| Layer | Status | Artifact |
+|---|---|---|
+| L3 firewall allow-list | verified from code, not from the live vendor API | `apps/web-platform/infra/firewall.tf`: ports 80 and 443 accept only the Cloudflare edge IPv4/IPv6 ranges. `hcloud firewall describe` was not run (no token in this session; read-only vendor read is the work-phase option if the claim is ever load-bearing, which it is not here: the :80 tightening changes no reachability) |
+| L3 DNS / routing | not verified (not load-bearing) | `dig` is absent in this environment; resolution is implied by the L7 row below, which reached Cloudflare |
+| L7 TLS / proxy | verified read-only, 2026-11-08 deepen pass | `curl -sI https://app.soleur.ai/health?l=<rand>` -> `HTTP/2 200`, `server: cloudflare`, `cf-ray: ...-CDG`, `x-origin-transport: TLSv1.3` (the app's own header naming the Cloudflare-to-origin protocol), `cache-control: no-store`; one-request timing `time_connect` 0.014 s, `time_appconnect` 0.041 s, `time_starttransfer` 0.203 s (a single sample, not evidence for the p90 question) |
+| L7 application | measured locally | Node header-phase semantics and idle keep-alive behaviour measured in the planning pass (see "Local measurements"); the CDN-5xx behaviour of `curl --retry-all-errors` is documented curl behaviour, not re-measured here |
 
 ## Scope Check
 
@@ -241,22 +271,22 @@ error_reporting:
   fail_loud: the rule emails on first_seen, reappeared, regression and every event (event_frequency_count 1h/0); declared in this change, live after the merge-triggered apply
 failure_modes:
   - mode: dead :443 listener after bind (unexpected close, or runtime listener error)
-    detection: Sentry event feature=origin_tls op=listen phase=runtime (reason=unexpected-close is fatal under REQUIRED, the container restarts)
-    alert_route: sentry_alert.origin_tls_event -> email (the event is flushed for up to 2 s before the REQUIRED exit)
+    detection: pino error line (layer 2, mirrored to Sentry; shipped by vector, level >= 40 passes app_container_warn_filter) plus Sentry event feature=origin_tls op=listen phase=runtime (reason=unexpected-close is fatal under REQUIRED, the container restarts); the event is flushed for up to 2 s before the exit
+    alert_route: sentry_alert.origin_tls_event -> email (Sentry-side rule). Accepted residual - if the 2.25 s hard timer fires before the flush completes the page is lost and only the pino line in Better Stack remains, which no alert covers
   - mode: rejected or absent certificate at start (op=load / op=create)
-    detection: Sentry event; under REQUIRED the candidate container fails its health gate and the old one keeps serving
+    detection: pino error line (vector) and Sentry event; under REQUIRED the candidate container fails its health gate (release gate) and the old one keeps serving
     alert_route: sentry_alert.origin_tls_event -> email
   - mode: certificate under 90 days (op=cert_expiry, warning)
-    detection: Sentry warning event once per start (silent today: about 5474 days left)
+    detection: pino warn line (vector) and Sentry warning event once per start (silent today: about 5474 days left)
     alert_route: sentry_alert.origin_tls_event -> email
   - mode: dead :443 that raises no event (docker-proxy or iptables failure)
-    detection: NOT detectable in-process (ADR-321 R-B); Better Stack app/app_health monitors and the https LB monitor remain the detectors
+    detection: NOT detectable in-process (ADR-321 R-B); the Better Stack app/app_health monitors (vector -> Better Stack, a page after roughly 4 to 6 minutes of failures) and the https LB monitor remain the detectors
     alert_route: Better Stack monitors (unchanged, stated plainly in the ADR sentence)
   - mode: slow-header client dropped by the new 60 s bound on :80 (408 written by Node)
-    detection: no in-app event (Node answers the 408 itself); a systemic break shows in the deploy canary and the Better Stack app monitor; per-client drops are the intended behaviour
-    alert_route: none new (accepted in the CTO ruling; Cloudflare 408 counts need the analytics token, tracked)
+    detection: ACCEPTED GAP - no layer sees it (Node answers the 408 itself and raises no event); a systemic break shows in the release deploy canary (GET /health) and the Better Stack app monitor (vector); per-client drops are the intended behaviour; Cloudflare 408 counts need the analytics token (tracked)
+    alert_route: none new (accepted in the CTO ruling)
 logs:
-  where: Better Stack (pino, Vector forwards warn and above) and Sentry
+  where: Better Stack (pino; apps/web-platform/infra/vector.toml app_container_warn_filter passes level >= 40, so error lines ship) and Sentry
   retention: vendor defaults, unchanged
 discoverability_test:
   command: grep -c 'resource "sentry_alert" "origin_tls_event"' apps/web-platform/infra/sentry/issue-alerts.tf
@@ -311,6 +341,7 @@ all items is written once in Phase 5 to avoid conflicting edits.
    - Floors: gitleaks copies found >= 7, actionlint >= 1, and scanner count == an independent raw count taken on NON-comment lines with the variable-form fragment (`/usr/bin/grep -a -E '^[^#]*releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}'`; the literal-version URL in the `secret-scan.yml` comment must not be counted), so a scanner that mis-joins cannot pass with zero.
    - In-suite mutation self-test: strip one flag from a temp copy of a real workflow, expect the scanner to FAIL it; plus a must-PASS variant with the flags in a different order.
    - Fix the stale wording only where it is stale: the header's "three install sites" (line ~21) and the comment above Test 5 (line ~257); Test 5's own title ("all 4 sites") is correct and stays.
+   Bash hygiene (test-design review): the suite runs `set -euo pipefail`, so capture the scanner result with `out=$(scan_curl_flags ...) || rc=$?` and assert on it, otherwise a failing scan aborts the suite before any FAIL is counted; match tokens exactly (`(^|[[:space:]])--retry[[:space:]]+5([[:space:]]|$)`, so `--retry 50`, `--retry-all-errors` alone and `--fail-with-body` do not satisfy the other flags; state whether `-f`/`-fsSL` counts: it does NOT, the owner named `--fail`); drop whole-line `#` comments before joining; POSIX awk only (no `gensub`, `IGNORECASE`, `{n}` intervals: the runner may have mawk); pass a floor to `print_results`.
    Run it; it must FAIL on the 8 unhardened lines.
 2. GREEN: change only the `curl` line in each of the eight places to `curl --fail --retry 5 --retry-all-errors -sSLo ...` (keep the `\` continuation and the URL line; keep `echo "${GITLEAKS_SHA256}  ..." | sha256sum -c -`).
 3. Run `actionlint` (installed locally) over the four touched files and `bash plugins/soleur/test/required-checks-canonical-parity.test.sh`; run `scripts/lint-workflow-run-body-syntax.py` if it takes paths.
@@ -319,13 +350,14 @@ all items is written once in Phase 5 to avoid conflicting edits.
 
 1. RED: `apps/web-platform/test/http-timeouts.test.ts` with `http.createServer({ connectionsCheckingInterval: 100 })`:
    (a) after `applyPlainHttpTimeouts(server, { headersMs: 500, requestMs: 2500 })` a client that never finishes its headers gets a 408 or close at about 0.5 s (< 2 s), not 2.5 s; (b) the helper throws when `headersMs > requestMs`; (c) source pins: `index.ts` (comments stripped) contains `applyPlainHttpTimeouts(server);` and no longer contains `server.headersTimeout =`; the exported defaults are 60_000 and 300_000. (The `origin-tls.ts` absence of both assignments is already pinned at `origin-tls.test.ts` lines ~459-462; do not duplicate it. The idle keep-alive behaviour is measured in ADR-321 R-A and re-tests Node, so it is not repeated.)
+   Timing hygiene (test-design review): real timers, port 0, close client and server in `finally`; assert the cutoff lands in `[~400, ~1500]` ms (Node can be late by up to `connectionsCheckingInterval`), never exact equality; use `headersMs` far below `requestMs` (500 vs 2500) so swapping the assignments is caught; hardcode 60_000/300_000 independently in the constants test (not by importing the same values); comment why the 0.5 s wait is intentional.
    Update `origin-tls.test.ts`: replace the exact-line pin at ~line 760 for the 910 s assignment (keep the `keepAliveTimeout` pin) with the wiring pin; the :443 tests are unchanged.
 2. GREEN: create `server/http-timeouts.ts` (no server imports; exports the two constants and `applyPlainHttpTimeouts(server, t = {headersMs, requestMs})` assigning both properties and throwing on `headersMs > requestMs`); wire it in `index.ts`; rewrite the `index.ts` comment to state the truth (header phase 60 s, request window 300 s, :443 keeps Node defaults for the same header value, real cutoff up to timeout + 30 s); correct the `origin-tls.ts` comment only.
 3. Run `apps/web-platform/test/http-timeouts.test.ts`, `origin-tls.test.ts`, `server-index-boot-pin-line.test.ts` (it imports `index.ts` with mocks; its fake `createServer` returns a plain object, so the two property assignments need no change) and the web-platform typecheck (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`, not the npm workspace script).
 
 ### Phase 3 - Item 1: Sentry rule (Guard 2)
 
-0. RED then GREEN, first: `exitAfterFlush` in `origin-tls.ts` with cases in `origin-tls.test.ts` using fake deps: (1) order: `flush` (deferred) is called with 2000 and `exit` has not run; after resolving, `exit(1)` runs once, after `flush` (`invocationCallOrder`); (2) flush rejects -> `exit(1)` still runs; (3) flush throws synchronously -> `exit(1)` still runs; (4) flush never settles -> with fake timers, `exit(1)` runs after 2250 ms; (5) two calls -> one `exit`; (6) wiring: with `vi.mock("@sentry/nextjs")` and an explicit `process.exit` spy (vitest traps it), a REQUIRED start with absent material and NO injected `exit` calls `Sentry.flush` before the spy. The idempotence flag must not leak between tests (per-listener closure or an exported reset).
+0. RED then GREEN, first: `exitAfterFlush` in `origin-tls.ts` with cases in `origin-tls.test.ts` using fake deps: (1) order: `flush` (deferred) is called with 2000 and `exit` has not run; after resolving, `exit(1)` runs once, after `flush` (`invocationCallOrder`); (2) flush rejects -> `exit(1)` still runs; (3) flush throws synchronously -> `exit(1)` still runs; (4) flush never settles -> with fake timers, `exit(1)` runs after 2250 ms; (5) two calls -> one `exit`; (6) wiring: with `vi.mock("@sentry/nextjs")` and an explicit `process.exit` spy (vitest traps it), a REQUIRED start with absent material and NO injected `exit` calls `Sentry.flush` before the spy. The idempotence flag must not leak between tests (per-listener closure or an exported reset). `vi.mock("@sentry/nextjs")` automocks `flush` to return `undefined`: `exitAfterFlush` must tolerate a non-promise return and the case sets `flush.mockResolvedValue(undefined)`; use `vi.advanceTimersByTimeAsync(2250)` for the hang case and assert `exit` has NOT run at 2249 ms; in the wiring case assert the `process.exit` spy WAS called and that `flush`'s `invocationCallOrder` is lower than the spy's (otherwise vitest's trap makes it vacuous).
 1. RED: `sentry-origin-tls-alert-op-contract.test.ts`, modelled on the approval-gate and legal-acceptance tests (comments stripped before any match; literals derived from source, never kept in the test): derive the `feature` literal from every `reportSilentFallback`/`warnSilentFallback` site in `origin-tls.ts` (all equal `origin_tls`; derived site count floor); assert the rule block exists; its ONLY `tagged_event` condition is `feature eq origin_tls` (no `op`, `phase`, `reason` filter, so a future op is covered by default); the four triggers (`first_seen_event`, `reappeared_event`, `regression_event`, `event_frequency_count {1h, 0}`); the action is `email` `issue_owners` + `ActiveMembers`; `frequency_minutes` distinct across ALL root `.tf` files (copy `assertFrequenciesDistinct`, with its own negative control); the `alert-reference.json` entry equals the `.tf`(the graceful-shutdown suppression of the `unexpected-close` report is already pinned by `origin-tls.test.ts` ~lines 665-682 and is not repeated).
 2. GREEN: add the `sentry_alert` block (comment header explaining the any-event choice, the `cert_expiry` inclusion, the re-page triggers, the unique frequency, and "DECLARED until applied"); hand-write the `alert-reference.json` entry from the nearest sibling (`legal-acceptance-row-without-event` shape) and prove it is normalised: `jq -S . alert-reference.json | diff - alert-reference.json`; bump the README (counts, list, subsection).
 3. Run the new test, `sentry-git-data-pin-fault-alert-op-contract.test.ts` (README census), `apps/web-platform/scripts/sentry-monitors-audit.test.sh` (T25 counts), `terraform fmt -check` on the root and `terraform validate` if `init` works without credentials (otherwise note it; CI `plan_pr` plus `sentry-alert-reference-gate.sh` is the authority for the projection).
@@ -455,8 +487,10 @@ New section "/health p90 after the strict flip: evidence and isolation procedure
 - `frequency_minutes` is root-wide and siblings take free values between plan and merge: re-check after every merge of `origin/main` (the README records a lost race, 38 -> 39).
 - The new rule is DECLARED until `apply-sentry-infra.yml` runs on merge; never write "live" or "paging" in the ADR/runbook before the apply is read. Vendor-default Sentry workflows (not managed here) may also email on an `origin_tls` issue; the rule does not claim to be the only channel.
 - `index.ts` starts a server and is imported only by `server-index-boot-pin-line.test.ts` with mocks; the new behavioural test imports `http-timeouts.ts`, never `index.ts`.
-- The retry budget is about 31 s; do not write that the change would have survived the 80-minute outage.
+- The retry budget is about 31 s; do not write that the change would have survived the 80-minute outage. `--retry-all-errors` also retries a 404 or a certificate error, so a removed release now takes about 31 s to fail instead of failing at once: still loud, only slower. Optional hardening `--proto-redir =https` is NOT added (the owner named three flags).
 - Do not touch the :443 server's timeouts; the R-A test forbids `headersTimeout =`/`requestTimeout =` in `origin-tls.ts` even in code added "for symmetry". The only `origin-tls.ts` code change is the flush-before-exit helper.
-- `exitAfterFlush` delays the REQUIRED exit by up to about 2 s; `failClosed()` still returns immediately. The pino error mirror is itself mirrored to Sentry (`logger.ts` pino-mirror, per the CTO read), so Better Stack holds the record but does not send the page; the Vector error-level forwarding was not verified here.
+- `exitAfterFlush` delays the REQUIRED exit by up to about 2 s; `failClosed()` still returns immediately. The pino error mirror is itself mirrored to Sentry (`logger.ts` pino-mirror, per the CTO read), so Better Stack holds the record but does not send the page (verified in the deepen pass: `vector.toml` `app_container_warn_filter` passes `level >= 40`, so the pino error line ships to Better Stack).
+- Runbook commands for Steps B and C must reuse the existing pattern in the runbook's Sentry check (`doppler run -p soleur -c <config> -- bash -c 'curl --disable --noproxy "*" ... --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "$TOKEN")'`): the token or the `apikey` header is never in argv, response headers and the request config are never printed, and the schema-discovery `jq` prints field names only.
+- A test (or the op-contract) should pin that no `origin_tls` emit site interpolates `err.message` into the event message (the `cert_expiry` path passes an `Error`; its message is static today).
 - The runbook is read by agents: no `ssh`, no values, `UNVERIFIED` on every claim not measured here (`hr-no-ssh-fallback-in-runbooks`).
 - `grep` is a shell function in this environment; use `/usr/bin/grep -a`.
