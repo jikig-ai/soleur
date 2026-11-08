@@ -34,15 +34,21 @@ keeps serving while the edge is still `flexible`: nobody sees anything.
   (good), but a host that restarts for another reason (reboot, crash loop) with bad material and no candidate gate can come up unable to serve TLS.
 - The **WebSocket upgrade path**, which has never crossed the edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only).
 
-Until the image with the 2026-11-08 hardening is deployed, the startup line does not print whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ORDERING (the Doppler write precedes a green redeploy,
-which precedes fresh per-host lines), not read directly. From that image on, the `origin-tls: listening` line carries `required: true|false`, a direct per-host read.
+Until the release carrying PR #12388 is deployed, the startup line does not print whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ORDERING (the Doppler write precedes a green redeploy,
+which precedes fresh per-host lines), not read directly. From that release on, the `origin-tls: listening` line carries `required: true|false` (read it with the `required=` command below; production rows that predate it print `required=null`).
+
+**Listener events after the bind (ADR-321 item 11, ruled 2026-11-08).** Before the bind, a listener `error` is fatal under REQUIRED (the candidate container fails). After it: an unexpected `close` of the https server is reported
+(`tags.reason=unexpected-close`) and is fatal under REQUIRED, so `--restart unless-stopped` restarts the container; a server `error` is reported at most once a minute (`extra.suppressed` counts the rest) and the process keeps serving.
+**A dead :443 that raises neither event** (a docker-proxy or iptables failure, a rejected certificate) is not detected in-process. The detectors are the Better Stack `app`/`app_health` monitors (a page after roughly 4 to 6 minutes) and the
+https LB monitor (an "Unhealthy" email only; web-1 is never drained). **There is no committed Sentry alert rule for `feature:origin_tls`**, so a Sentry event is a pull-based check until one is added (separate infra change). Recovery for a dead
+:443 is a redeploy.
 
 ## Act 0 - read-only preconditions before act 3 (anyone; all runnable)
 
 | Check | Command | Expected |
 |---|---|---|
 | Doppler names only | `doppler secrets --only-names -p soleur -c prd \| grep ORIGIN_TLS` and `doppler secrets --only-names -p soleur -c prd_terraform \| grep ENABLE_ORIGIN_TLS` | `ORIGIN_TLS_CERT_B64`, `ORIGIN_TLS_KEY_B64`, `ORIGIN_TLS_REQUIRED`; and only `ENABLE_ORIGIN_TLS_CANARY_RULE` (strict absent). Never print values |
-| Both hosts listening on the minted certificate | `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 6h --grep 'origin-tls: listening' --limit 300 \| jq -r '.raw \| fromjson \| select(has("CONTAINER_NAME")) \| select(tostring \| contains("origin-tls: listening")) \| "\(.SYSLOG_TIMESTAMP) host=\(.host)"' \| sort \| tail` | fresh lines for `soleur-web-platform` AND `soleur-web-2` after the act 2 redeploy; (the same rows carry `fingerprint256` 7B:E5:11:D0... and `daysLeft` about 5474 inside the pino message) |
+| Both hosts listening on the minted certificate, and `required` per host | `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 6h --grep 'origin-tls: listening' --limit 300 \| jq -r '.raw \| fromjson \| select(has("CONTAINER_NAME")) \| select(tostring \| contains("origin-tls: listening")) \| "\(.SYSLOG_TIMESTAMP) host=\(.host) required=\(.message.required)"' \| sort \| tail` (the pino fields are an OBJECT at `.message`, verified against production rows on 2026-11-08; rows from before PR #12388 print `required=null`) | fresh lines for `soleur-web-platform` AND `soleur-web-2` after the act 2 redeploy, and `required=true` on both once the release carrying PR #12388 is live; (the same rows carry `fingerprint256` 7B:E5:11:D0... and `daysLeft` about 5474 inside the pino message) |
 | No origin-TLS errors in Sentry | see "Sentry check" below | 0 events (and the control query returns rows) |
 | Canary still proves the strict handshake | `bash apps/web-platform/infra/origin-tls-probe.sh --canary` | exit 0, `mode=canary result=TLS-ON-ORIGIN-HOP`, TLSv1.3 |
 | Normal traffic still plain | `bash apps/web-platform/infra/origin-tls-probe.sh` | `PLAIN-ORIGIN-HOP` (the pre-flip truth) |
@@ -67,11 +73,17 @@ Sentry check (GET only; token NAME `SENTRY_ISSUE_RO_TOKEN`, Doppler `soleur/prd`
 
 ```bash
 doppler run -p soleur -c prd -- bash -c 'curl --disable --noproxy "*" -s --max-time 30 -G "https://jikigai-eu.sentry.io/api/0/organizations/jikigai-eu/events/" \
-  --data-urlencode "field=timestamp" --data-urlencode "field=message" --data-urlencode "field=host_name" --data-urlencode "query=feature:origin_tls" \
+  --data-urlencode "field=timestamp" --data-urlencode "field=message" --data-urlencode "field=host_name" --data-urlencode "field=phase" --data-urlencode "query=feature:origin_tls" \
   --data-urlencode "statsPeriod=24h" --data-urlencode "dataset=errors" --data-urlencode "per_page=20" \
   --config - < <(printf "header = \"Authorization: Bearer %s\"\n" "$SENTRY_ISSUE_RO_TOKEN") | jq -c "{n:(.data|length), err:(.detail // null)}"'
 # control (must return rows, or the zero above means nothing): swap the query for "has:feature"
 ```
+
+Reading a Sentry event: `feature=origin_tls`, `op` is `load`, `create` or `listen`; `tags.reason` names the cause; `tags.phase` (listen events only) is `startup` (the bind failed: fatal under REQUIRED, the candidate container
+fails) or `runtime` (after the bind). A `phase:runtime` event means the listener was up and then raised a server `error` (reported at most once a minute; the process continues) or closed unexpectedly (`reason=unexpected-close`; fatal under
+REQUIRED, so the container restarts): look at the host's restart count and its `origin-tls: listening` rows. The query `feature:origin_tls phase:runtime` and `field=phase` were accepted by the API (HTTP 200) on 2026-11-08, but
+**no event carrying `phase` exists yet, so the tag path is not verified against a real event** (a `has:phase` control returned 0).
+
 
 Owner acts (no probe exists): the `web_lb_health` "Unhealthy" notification mail (inbox), pool health (the sanctioned Cloudflare reader has no pool-health subcommand; the
 `ga-monitor-https` run summary is the existing instrument), and the signed-in WebSocket connect.
