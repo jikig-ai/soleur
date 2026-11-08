@@ -8,6 +8,7 @@
 //   3. every workflow that vendors the plugin into `_plugin-vendored` deletes `.mcp.json` after the copy;
 //   4. `buildAgentQueryOptions` (legacy + cc-shaped args, web egress on) emits no playwright mcpServers/allowedTools entry;
 //   5. no server source outside server/inngest/ mentions playwright at all.
+// Leg 3 is a TEXTUAL check (a bare `rm` line in the same list item as the vendoring cp): it does not execute the step.
 // A regression in any link turns this red. The test reads OUTSIDE apps/web-platform, so it is registered in
 // `repo-wide-suites.ts` (repo-wide-containment.test.ts recomputes membership).
 

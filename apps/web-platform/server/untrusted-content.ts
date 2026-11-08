@@ -985,12 +985,15 @@ type GhFrameCtx = Omit<UntrustedContentHookOptions, "wrap">;
  * The tokenizer reads quotes by parity, and it does not understand comments or heredoc bodies. A multi-line
  * script whose comments/heredocs carry an EVEN number of apostrophes (or an ANSI-C quoted string) therefore ends
  * balanced and can hide a real gh read as `none` (an earlier `gh` command in the same script does not change that).
- * A newline plus a quote character is the cheap signature of that shape; single-line commands such as
+ * A newline plus a quote character or a backslash-newline is the cheap signature of that shape; single-line commands such as
  * `echo "gh issue view 1"` stay precise. A multi-line command that merely mentions `gh` and a read noun in prose
  * is over-framed by the fallback (harmless, and counted as `fallback: true`).
  */
 function commentQuoteRisk(command: string): boolean {
-  return command.indexOf("\n") !== -1 && (command.indexOf("'") !== -1 || command.indexOf('"') !== -1);
+  if (command.indexOf("\n") === -1) return false;
+  // A quote character, or a backslash-newline (a comment line ending in a backslash joins the next line into the
+  // comment segment, which hides a real gh read on that line).
+  return command.indexOf("'") !== -1 || command.indexOf('"') !== -1 || command.indexOf("\\\n") !== -1;
 }
 
 interface GhFrameFields {

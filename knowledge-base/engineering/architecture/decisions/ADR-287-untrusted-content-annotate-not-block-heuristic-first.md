@@ -248,9 +248,9 @@ WebFetch scorer off also removes this note.
      (not independently measured). The log line carries no `subagent` field, so subagent coverage cannot be observed for `gh`.
 
    The tokenizer reads quotes by parity and does not understand comments or heredoc bodies. A command it cannot decide (an unterminated quote, a
-   command over 8192 characters, or a multi-line script containing a quote character, whether or not an earlier `gh` command appears in it) goes
+   command over 8192 characters, or a multi-line script containing a quote character or a backslash-newline, whether or not an earlier `gh` command appears in it) goes
    to a bounded 64 KiB fallback scan that frames it when a
-   `gh` token (separators split tokens) is followed by a read noun within three tokens. That scan is a heuristic: it can miss a `gh` hidden by
+   `gh` token (separators split tokens) is followed by a read noun within three tokens. That scan is a heuristic (its handling of backslash-newline pairs is approximate): it can miss a `gh` hidden by
    the shapes above, and it frames any command longer than 64 KiB, `gh` or not, logged as `annotated` with `fallback: true`.
 5. **"Oversized" is read as "bound the work".** Acceptance criterion (d) is met by not tokenizing a command over 8192 characters and by bounding
    the fallback scan at 64 KiB. Output size never suppresses the note.
@@ -262,7 +262,8 @@ WebFetch scorer off also removes this note.
 7. **Telemetry volume.** Every `gh` command that matches no read verb logs one WARN `skipped` line, which the default logger also mirrors as a
    breadcrumb. The volume is bounded by the number of Bash calls and carries hashed ids, a verb enum and lengths only. For a bare-string or text-block
    response `stdoutLength` is the combined output and `stderrLength` is null. The fallback also frames a multi-line command that merely mentions
-   `gh` and a read noun in prose (a commit message, for example); rates should exclude `fallback: true` lines from the `annotated` denominator.
+   `gh` and a read noun in prose (a commit message, for example) and a multi-line gh WRITE such as `gh pr create --body "..."` or
+   `gh issue comment`; rates should exclude `fallback: true` lines from the `annotated` denominator.
 8. **Prd enablement stays an operator action** gated on written, checkable preconditions: the liveness alerts (#10195), a PA-8(c) Article 30
    amendment that covers the new `untrusted-gh-frame` op including the `skipped` volume (the register already records the Better Stack retention
    period), a measured under-action comparison that includes founder-authored issues, and one flag-on capture proving delivery. None of that is in

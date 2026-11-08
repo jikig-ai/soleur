@@ -846,6 +846,7 @@ describe("createGhBashFramingHook", () => {
       { name: "a CR-glued gh behind an unterminated quote", cmd: "echo it's\rgh issue view 1", expect: "annotated-fallback" },
       { name: "a backslash inside the gh word is stripped by the fallback", cmd: "echo it's g\\h issue view 1", expect: "annotated-fallback" },
       { name: "a backslash-newline inside the gh word is a continuation in the fallback", cmd: "echo it's\ng\\\nh issue view 1", expect: "annotated-fallback" },
+      { name: "a comment line ending in a backslash joins the next line, hiding a real gh read (no quote anywhere)", cmd: "# note \\\ngh issue view 1", expect: "annotated-fallback" },
       { name: "an undecidable command between the cap and the 64 KiB window with no gh stays silent", cmd: `echo it's ${pad(9000)}`, expect: "none" },
     ];
     let registered = 0;
@@ -870,7 +871,7 @@ describe("createGhBashFramingHook", () => {
       });
     }
     it("registered every fallback row", () => {
-      expect(registered).toBe(26);
+      expect(registered).toBe(27);
     });
   });
 
