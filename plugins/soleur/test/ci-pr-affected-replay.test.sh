@@ -370,7 +370,7 @@ fx_err "$(checkruns_path "${C[1]}")"
 # C[0] idx6: non-empty -> head-sha
 runs_body "${C[0]}" "8000:push:success" | fx "$(runs_path "${C[0]}")"
 run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R4" >/dev/null 2>&1; RC4=$?
-CU="$OUT/units-commits-1-of-1.jsonl"; REPO_NAME=""
+CU="$OUT/units-commits-1-of-1.jsonl"   # REPO_NAME stays "$R4" until the reqs() calls below are done
 [[ "$RC4" -eq 0 && -s "$CU" ]] && pass "the corroboration collect wrote seven units" || fail "corroboration collect (rc=$RC4)"
 [[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean && "$(unit_field "$CU" "${C[4]}" .runs_via)" = check-runs && "$(unit_field "$CU" "${C[4]}" .run.id)" = 9001 ]] \
   && pass "an index-dropped unit resolves through the run check-runs proves (runs_via=check-runs)" || fail "index-dropped unit (got $(unit_field "$CU" "${C[4]}" '.cls+" "+(.runs_via//"-")'))"
@@ -387,6 +387,7 @@ CU="$OUT/units-commits-1-of-1.jsonl"; REPO_NAME=""
 [[ "$(unit_field "$CU" "${C[5]}" .runs_via)" = head-sha && "$(reqs "$(runs_path "${C[5]}")")" -eq 1 && "$(reqs "$(checkruns_path "${C[5]}")")" -eq 0 ]] \
   && pass "a non-empty first read costs no retry and no check-runs call" || fail "common path (got via=$(unit_field "$CU" "${C[5]}" .runs_via))"
 ! grep -q STUB-MISS "$GHLOG" && pass "corroboration made no request the stub does not know" || fail "corroboration unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
+REPO_NAME=""
 
 corr_run() {  # rerun the corroboration collect into a fresh dir with the SUT under test; sets CU
   REPO_NAME="$R4"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
@@ -4367,7 +4368,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1110   # 1104 + 6 net unconditional assertions from the PR3b accept-bound and job-wiring rows (measured full run 2026-11-07: 1110 passed, 476 gated sites); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1122   # 1110 + 12 net unconditional assertions from the #10862 corroboration rows (measured full run 2026-11-08: 1122 assertions, 479 gated sites); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
