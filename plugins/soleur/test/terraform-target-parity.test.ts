@@ -120,7 +120,10 @@ const REPO_ROOT = resolve(import.meta.dir, "../../..");
 // Guard-5 satellite derivation rows (the must-PASS satellite conformance + three mutation rows).
 // 366 -> 367 (#12167 PR-G, +1): the nonlocal_bind_sysctl pair test (both resources SSH-provisioned and targeted by the SSH stage of
 // apply-web-platform-infra.yml). This change adds exactly one test row, so the floor moves by exactly one.
-const TEST_FLOOR = 367;
+// 367 -> 376 (#12363 A-0, +9): main declared 372 against this floor of 367 (5 rows of slack, absorbed here so it is exact again) and this change adds
+// 4 rows for the relay hello-signing pair (count gate, saved-plan membership, shape and no-output pin, two-mutant battery).
+// Exact: grep -cE '^\s*test\(' = 376.
+const TEST_FLOOR = 376;
 const INFRA_DIR = resolve(REPO_ROOT, "apps/web-platform/infra");
 const WEB_PLATFORM_WORKFLOW = resolve(
   REPO_ROOT,
@@ -6620,6 +6623,61 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     const dispatchTargets = extractAllTargets(dispatchJobs.map((j) => extractJobBlock(wf, j)).join("\n"));
     expect(dispatchTargets.has("hcloud_server.web")).toBe(true); // non-vacuity
     expect(presentIn(quartet, dispatchTargets)).toEqual([]);
+  });
+
+  // The relay hello-signing secret pair (#12289, A-0 of #12363). Predicates take the source text so the
+  // in-test mutation battery (T4) can drive the same code on mutated copies.
+  const HMAC_PAIR: Array<[string, string]> = [
+    ["random_bytes", "proxy_hello_hmac"],
+    ["doppler_secret", "proxy_hello_hmac_key"],
+  ];
+  const hmacBlock = (src: string, type: string, name: string): string =>
+    block(src, new RegExp(`^resource\\s+"${type}"\\s+"${name}"\\s*\\{`, "m"));
+  const hmacUngated = (src: string): string[] =>
+    HMAC_PAIR.filter(([type, name]) => !/^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/m.test(hmacBlock(src, type, name)))
+      .map(([type, name]) => `${type}.${name}`);
+  const hmacShapeProblems = (src: string): string[] => {
+    const rb = hmacBlock(src, "random_bytes", "proxy_hello_hmac");
+    const ds = hmacBlock(src, "doppler_secret", "proxy_hello_hmac_key");
+    const problems: string[] = [];
+    const want = (ok: boolean, what: string) => { if (!ok) problems.push(what); };
+    want(/^\s*length\s*=\s*32\s*$/m.test(rb), "random_bytes length = 32");
+    want(/^\s*project\s*=\s*"soleur"\s*$/m.test(ds), 'project = "soleur"');
+    want(/^\s*config\s*=\s*"prd"\s*$/m.test(ds), 'config = "prd"');
+    want(/^\s*name\s*=\s*"PROXY_HELLO_HMAC_KEY"\s*$/m.test(ds), 'name = "PROXY_HELLO_HMAC_KEY"');
+    want(/^\s*visibility\s*=\s*"masked"\s*$/m.test(ds), 'visibility = "masked"');
+    want(/^\s*value\s*=\s*random_bytes\.proxy_hello_hmac\[0\]\.hex\s*$/m.test(ds), "value = random_bytes.proxy_hello_hmac[0].hex exactly");
+    want(!/^\s*output\s+"/m.test(src), "the file declares no output (nothing may print the key)");
+    return problems;
+  };
+
+  test("the relay hello-signing pair is count-gated on host_proxy_tls_enabled like the proxy-TLS quartet (#12289)", () => {
+    expect(hmacUngated(tf("proxy-hello-hmac.tf"))).toEqual([]);
+  });
+
+  test("the relay hello-signing pair rides the per-merge saved plan, out of the exclusion set and the dispatch jobs (#12289)", () => {
+    const pair = HMAC_PAIR.map(([type, name]) => `${type}.${name}`);
+    expect(missingFrom(pair, planTargets)).toEqual([]);
+    expect(presentIn(pair, OPERATOR_APPLIED_EXCLUSIONS)).toEqual([]);
+    const dispatchJobs = ["web_host_create", "web_host_replace"];
+    const dispatchTargets = extractAllTargets(dispatchJobs.map((j) => extractJobBlock(wf, j)).join("\n"));
+    expect(dispatchTargets.has("hcloud_server.web")).toBe(true); // non-vacuity
+    expect(presentIn(pair, dispatchTargets)).toEqual([]);
+  });
+
+  test("the relay hello-signing pair is 32 random bytes in masked prd Doppler, from .hex, with no output (#12289)", () => {
+    expect(hmacShapeProblems(tf("proxy-hello-hmac.tf"))).toEqual([]);
+  });
+
+  test("T4 mutation battery: an ungated pair and a wrong length each turn T1/T3 red, and each mutation landed", () => {
+    const src = tf("proxy-hello-hmac.tf");
+    expect(src.length).toBeGreaterThan(0); // non-vacuity: a missing file reds here, not below
+    const ungated = src.replace(/^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/m, "");
+    expect(ungated).not.toBe(src);
+    expect(hmacUngated(ungated).length).toBeGreaterThan(0);
+    const short = src.replace(/^(\s*length\s*=\s*)32(\s*)$/m, "$116$2");
+    expect(short).not.toBe(src);
+    expect(hmacShapeProblems(short).length).toBeGreaterThan(0);
   });
 
   test("no workflow targets the still-gated resources or overrides any gate variable", () => {

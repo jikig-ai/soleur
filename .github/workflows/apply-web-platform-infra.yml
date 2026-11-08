@@ -679,6 +679,8 @@ jobs:
               -target=tls_self_signed_cert.proxy_server \
               -target=doppler_secret.proxy_tls_key \
               -target=doppler_secret.proxy_tls_cert \
+              -target=random_bytes.proxy_hello_hmac \
+              -target=doppler_secret.proxy_hello_hmac_key \
               -target=random_password.inngest_redis_luks \
               -target=doppler_secret.inngest_redis_luks_key \
               -target=tls_private_key.inngest_link \
