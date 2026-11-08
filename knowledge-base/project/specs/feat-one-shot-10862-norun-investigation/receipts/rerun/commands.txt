@@ -1,0 +1,9 @@
+# Command invocations and return codes (window: last 300 first-parent commits of origin/main @ f0c3bb8656, run 2026-11-08)
+
+chunk4 rc=0
+chunk2 rc=0
+chunk1 rc=0
+chunk3 rc=0
+ejections rc=0
+aggregate rc=0
+verdict rc=0 (output: computed=NO-GO reason=criterion-failed)
