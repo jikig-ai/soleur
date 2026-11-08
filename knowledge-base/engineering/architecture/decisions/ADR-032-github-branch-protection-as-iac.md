@@ -1070,3 +1070,63 @@ required context only through the `member workflow-yaml-strict` row of the
 - **PyYAML.** PyYAML is assumed preinstalled on `ubuntu-latest`, not verified. The guard prints
   `pyyaml=<version>` on every summary line (that run output is the evidence), exits 2 if it is missing,
   and has no pip fallback.
+
+## Amendment — 2026-11-08 (#12396): `parked-hold`, a server-side member step for the `parked` label
+
+Status: the `parked` merge hold (the label, the `.claude/hooks/ship-operator-step-gate.sh` text matcher and the
+drain-prs triage tier from #12197/#12342) was a best-effort local guardrail. This amendment adds the server-side
+check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision record). Append-only.
+
+- **Decision.** Two member steps join the `secret-guards` umbrella in `.github/workflows/secret-scan.yml`:
+  `parked-hold` (runs `scripts/ci-parked-hold.sh`) and `parked-hold-selftest` (runs
+  `scripts/ci-parked-hold.test.sh` against a stubbed `gh`, no `GH_TOKEN`, no network). Each carries the
+  step-level condition `!cancelled() && (pull_request || merge_group)` exactly as `waiver-discipline` does,
+  and each has its own `member ... 'pull_request,merge_group'` line in the `aggregate` step
+  (`scripts/lint-umbrella-aggregate.sh` check (a) is satisfied; the lint was run, unchanged). No job-level
+  `if:`. No Terraform, ruleset, canonical-JSON or `required-checks.txt` list change: the required context is
+  still the umbrella `secret-guards`, so this PR applies nothing to production.
+- **Why hosted in `secret-guards`.** `secret-scan.yml` already triggers on `labeled`/`unlabeled`; `ci.yml` does
+  not, and adding the types there would re-run the whole suite on every label event under
+  `cancel-in-progress`. A new top-level required context would need a ruleset apply, a canonical-JSON edit and a
+  bot synthetic for no gain over a member of an existing umbrella. The semantic misfit (a label hold inside a
+  secret scanner) is accepted and recorded in `scripts/required-checks.txt`.
+- **Evaluation.** The labels are read LIVE (`gh api repos/<repo>/pulls/<n>`), never from the event payload
+  (a re-run reuses a stale payload). Label names compare case-insensitively. The response body must name the
+  expected PR number and carry a label array, or the check fails closed. One bounded retry (two attempts) so a
+  single transient API 5xx does not stall the queue; a persistent failure, an unparseable body, a missing PR or a
+  non-matching queue ref fails closed with a fixed annotation (never label text or a body). On `merge_group` the
+  PR number comes from `github.event.merge_group.head_ref` with the `mg_arm` regex of
+  `scripts/ci-oracle-review.sh`. Unlike `mg_arm`, the check does not enumerate queue entries: with SQUASH each
+  position runs its own `merge_group` build, and each build judges the PR named by its own ref.
+- **What "server-side enforced" means.** The check binds auto-merge, the merge queue and every identity subject
+  to the required checks, including Actions tokens and the `schedule` skill's `gh pr merge --squash --auto`.
+  Draft status stays the first hold (`gh pr ready` flips it with no check; this check covers parked-and-ready).
+  `admin-merge-ready.sh` grades every required context, so a parked PR is red there with no edit.
+- **Stated residuals (not hidden).**
+  1. Any identity with triage access can run `gh pr edit --remove-label parked`; that fires `unlabeled`, and the
+     re-run is green. An allowlist of the last unlabeling actor (`issues/N/events`) was considered and left out
+     as scope.
+  2. The ruleset's bypass actors (OrganizationAdmin and Admin role, `pull_request` mode) are not bound: an
+     admin-credentialed `gh pr merge --admin` passes. `admin-merge-ready.sh` is the shipped gate for that path.
+  3. A `parked` label applied by an Actions actor with `GITHUB_TOKEN` fires no `labeled` run (a GitHub rule), so
+     a parked bot PR keeps its fabricated-green `secret-guards` synthetic until its `merge_group` run. The only
+     live bot-PR producer today (`weakness-miner.yml` through `bot-pr-with-synthetic-checks`) passes no labels.
+     A later HUMAN label fires a real `labeled` run that supersedes the synthetic; for a `GITHUB_TOKEN`-created PR
+     that is unverified, and the flip evidence is defined in `scripts/required-checks.txt`.
+  4. Each queue entry is judged by its own `merge_group` build (queue grouping `ALLGREEN`,
+     `max_entries_to_merge = 3`): a label added to an entry AFTER its build ran is not seen. Mitigation is dequeue
+     per `merge-queue-dequeue.md`.
+  5. CODEOWNERS rows for `scripts/ci-parked-hold.sh`, `scripts/ci-parked-hold.test.sh` and
+     `scripts/lib/umbrella-member.sh` route review but are advisory until branch protection enforces code-owner
+     review (the ruleset has no `require_code_owner_review`). A PR that removes the member is judged by its own
+     weakened workflow file; that is the limit of any in-repo check, and review is the control.
+  6. An unreadable GitHub API fails closed: a transient outage is cleared by a re-run, a prolonged one by an
+     admin bypass.
+- **Local hook.** `.claude/hooks/ship-operator-step-gate.sh` stays as defence in depth; its header and the
+  drain-prs skill no longer call the hold best-effort-only but point at this check. The follow-through probe
+  `scripts/followthroughs/parked-merge-hold-enforcement-12342.sh` (it re-evaluated this very route) is deleted.
+- **Hook cost measured (item 5, 2026-11-08).** The hook with a PATH-stubbed `gh`, `gh pr merge <n> --squash`
+  statements chained with `;`, median of five runs on a host at load average about 41 (so absolute numbers are
+  inflated): 1 statement 218 ms, 10 statements 577 ms, 100 statements 4954 ms (about 47 ms per statement, one
+  stubbed `gh pr view` per statement). The 100-statement run exceeds the 200 ms threshold ruled in T3, so the
+  per-statement cost is tracked as a separate follow-up issue rather than fixed here.
