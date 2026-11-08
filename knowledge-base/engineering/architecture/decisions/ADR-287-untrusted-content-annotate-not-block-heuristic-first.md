@@ -198,3 +198,41 @@ ADR-029 key-rename boundary, because that boundary (`formatters.log` and the Vec
 `sessionId` key. This pulls the hashing ahead of the prd-enablement gate where an earlier spec had deferred it; the PA-8(c) half of that
 gate stays open. Lines emitted before this change keep the raw id until log retention expires; no backfill scrub is part of this change.
 The Article 30 register amendment (PA-8(c)) is still owed and is operator and CLO work, tracked with #10195.
+
+## Addendum 2026-11-08 (Ref #9601, #11076): gh output framing through Bash
+
+This addendum extends the 2026-10-25 static-framing amendment to `gh` output that reaches the model through the Bash tool. The decisions above
+are unchanged.
+
+1. **What the hook does.** One `PostToolUse(Bash)` hook adds the static `github` preamble from `UNTRUSTED_PREAMBLES` as `additionalContext`
+   after a read-style `gh` command. It is registered under the same predicate as the WebFetch hook (web egress and the classify flag), as a
+   separate Bash entry beside the git-lock hook. It does no scoring and never rewrites output; the single-rewriter rule (decision 7) holds, and
+   only the WebFetch hook may emit `updatedToolOutput`.
+2. **The framing is unmeasured and delivery is unverified.** No experiment shows that the note changes model behavior, and it could make a
+   legitimate "work this issue" request under-act, including on a founder's own issues. An `annotated` log line proves the hook returned a note,
+   not that the model received it. The control is inactive in prd until the flag is enabled. This is an annotation, not a claim of protection, and
+   no public claim follows from it.
+3. **Coverage is limited and stated by name.** The hook annotates only `gh` read commands invoked through Bash and recognised by a closed verb
+   table, in sessions with web egress and the classify flag on. Several bypasses are reachable by an injected model, not incidental: `bash -c`,
+   a wrapper, redirect-then-`cat`, output padding that lands in the persisted file, or a forced non-zero exit. Not covered:
+   - cron Bash output; Read of attachments and KB files (including the file the SDK writes for oversized output: the oversized output itself is
+     annotated, the later Read is not); leader PDF text; Playwright;
+   - `bash -c "gh ..."`, `xargs gh` and `gh` inside a double-quoted command substitution (documented false negatives); backgrounded commands whose
+     output is read later; output redirected to a file and read later;
+   - a session with a minted gh token but no web egress (the classify flag is only resolved when egress exists);
+   - `gist` and `workflow` verbs;
+   - commands that exit non-zero: the SDK delivers those through `PostToolUseFailure`, whose payload is `error` text rather than `stdout` and
+     `stderr`, so a failed `gh api` or `gh pr checks` can print third-party text unframed;
+   - commands over 8192 characters (not tokenized; a bounded 64 KiB fallback scan frames them if it finds a `gh` read command);
+   - `timeout`, `sudo`, `nohup`, `exec` and `env -u` wrappers; `curl` or `wget` to the GitHub API; `gh alias`;
+   - whether the hook fires inside Task subagents (unverified, as for WebFetch);
+   - the SDK's own merge of two Bash hooks' `additionalContext` (not independently measured).
+
+   Rollback latency: a flag flip reaches the next cold conversation start, and a live conversation keeps its hooks until it is reaped (about 10
+   minutes idle, decision 6 above).
+4. **"Oversized" is read as "bound the work".** Acceptance criterion (d) is met by not tokenizing a command over 8192 characters and by bounding
+   the fallback scan at 64 KiB, which frames anyway when the command is longer than the window. Output size never suppresses the note.
+5. **Prd enablement stays an operator action** gated on written, checkable preconditions: the liveness alerts (#10195), the PA-8(c) Article 30
+   amendment with a stated Better Stack retention period, and a measured under-action comparison that includes founder-authored issues. None of
+   that is in this change. Two follow-ups are recorded, not done here: a `PostToolUseFailure` registration, and a preamble counter-framing clause
+   (output text that retracts the note).
