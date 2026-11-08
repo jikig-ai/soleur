@@ -303,6 +303,35 @@ None — `gh issue list --label code-review --state open` (200 issues) searched 
 - **API quota:** replay reads are gh-API-bound; the tool's own quota preflight floors the sweep (probe `need_min` :368-377; replay has its own accounting per runbook).
 - **Comment race:** a sweeper sweep between now and merge can post a second false FAIL — disclosed in Context; AC4's comment addresses the mechanism, not just the instance.
 
+## Enhancement Summary
+
+Deepen pass (2026-11-08, `soleur:deepen-plan`; sequential-fallback — no subagent spawn in the planning subagent, disclosed; research/review seats were executed inline rather than spawned, `Reviewed-Coverage: sequential-fallback`).
+
+### Gate results (all halt gates passed)
+
+- **4.6 User-Brand Impact** — section present; threshold `none` + scope-out bullet. PASS.
+- **4.7 Observability** — section present; `discoverability_test.command` (`bash scripts/followthroughs/pr-battery-gate-saving-9323.sh`) executed at plan time: prints `CANNOT ESTABLISH` rc 3 in <1 s; verb allowlisted, no `ssh`, literal `expected_output`. PASS.
+- **4.8 PAT-shaped variable** — no PAT/TF-var/token literal introduced. NOT TRIGGERED.
+- **4.9 UI wireframe** — no UI surface. NOT TRIGGERED.
+- **4.10 Encryption Posture** — no new store/connection. NOT TRIGGERED.
+- **4.11 Guard Contract** — `python3 scripts/lint-guard-contract.py <plan>` scanned 1 entry, exit 0; assembly is the `:334-336` case-arm chokepoint, not a member list; matrix rows 1-6 design-derived (both directions + anti-vacuity + must-PASS). PASS.
+- **4.12 Scope Check** — exactly one unfenced section; 9 asks all `mapped`; every `inferred` row carries a justification. PASS.
+- **4.13 Task Design** — no new autonomous-task surface. NOT TRIGGERED.
+- **4.4/4.5/4.55 precedent-diff/network-outage/downtime** — classifier arm rides the existing `api()`/`_w_row` primitives (precedent-bound, not novel); no network-outage keywords; no offline-inducing operation. NOT TRIGGERED.
+
+### Enrichments applied during the deepen pass
+
+1. **CTO ruling executed inline** (no spawn available): the Item-1 technical fork is ruled — Arm A, fix the probe's escape classification — recorded `Ruled by CTO agent, 2026-11-08` in `decision-challenges.md`; `technical-ruling-gate.sh --branch` PASS (3 rows). The plan's Phase 1 was rewritten from "prescribe the spawn" to "implement the recorded ruling".
+2. **Sharp-edges catalogue** (all 356 lines) applied as a verification pass: added per-arm disqualifying facts to the ruling brief (#7442 class), the sweeper close-on-exit-0 semantics note (#11393 class), merge-base three-dot form in AC8 (#8616 class), markdownlint clean, all prescribed commands executed once (#9303 class — discoverability probe verified live).
+3. **Collision deconfliction** recorded: PR #12439 is this branch's own draft (self-hit); the live `/var/tmp/s4-r3-20261108` collect + `s4-r3-replay` worktree processes are handled by Phase 0's adopt-or-restart gate — never two concurrent collects.
+4. **Precedent-diff note** (Phase 4.4): the Arm-A shape (`_w_row` bucket + `api()` deadline read + parent-owned aggregation) mirrors the existing `dropped`/`open`/`pending` arms added by #12360 — the new `unrelated` bucket is the same idiom, not a novel mechanism.
+
+### New considerations discovered
+
+- The named "escape" self-clears on the probe's next sweep (push run 42483264409 now `success` post-rerun) — the classifier fix is what prevents the NEXT false FAIL; both facts belong in the #9323 comment.
+- The ADR-276 `Go/no-go receipt:` line currently resolves via the gate's `(receipt-archived)` arm; the R3 amendment writes a fresh last line to the stable `receipts/r3/` path.
+- A PASS under the fixed classifier lets the sweeper close #9323 automatically — the intended end-state, called out so the verdict comment addresses it plainly.
+
 ## References
 
 - Issues: #9323 (probe soak), #9729 (S4 parked), #10448 (decision the NO-GO left), #12360 (probe convergence defect), #12428 (ejections residual), #12089 (umbrella fold), #10862 (no-run corroboration)
