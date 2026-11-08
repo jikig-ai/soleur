@@ -51,3 +51,5 @@ were caught only by a fresh-eyes seat on the fix range.
 
 category: logic-errors
 module: web-platform/legal-acceptance
+
+> **Superseded 2026-11-08 (#12197; review round 1), as to the Solution section:** the guard described there (`heldFindings()`, the CI-only test and the non-CI control) was deleted in commit `2be52e2190` when the CLO-agent sign-off landed, and replaced by an always-on unfinished-marker check over every served text and the two notices, plus the registry-wide `{version: sha256}` pin (`registry-pins.test.ts`). The Key insight stands: a merge guard detects the draft state, never the sign-off. The `counsel` token the old detector carried was dropped in that commit and is restored in the new one, scoped to served texts and notices.
