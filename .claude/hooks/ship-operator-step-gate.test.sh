@@ -231,8 +231,16 @@ case "$*" in
   "pr view 8 --json labels --jq .labels[].name") exit 1 ;;
   "pr view 9 --json labels --jq .labels[].name") exec sleep 5 ;;
   "pr view "[0-9]*" --json labels --jq .labels[].name") : ;;   # any other PR: unlabelled (prints nothing)
-  "pr view --json number --jq .number") cat "$GH_STUB_CURPR" ;;
-  "pr list --label parked --state open --json number --jq length") cat "$GH_STUB_PARKED" ;;
+  "pr view --json number --jq .number")
+    v=$(cat "$GH_STUB_CURPR")
+    if [[ "$v" == FAIL ]]; then echo "gh: HTTP 502" >&2; exit 1; fi
+    if [[ "$v" == NONE ]]; then echo 'no pull requests found for branch "x"' >&2; exit 1; fi
+    printf '%s' "$v" ;;
+  "pr list --label parked --state open --json number --jq length"|"pr list --label parked --state open --repo o/r --json number --jq length")
+    v=$(cat "$GH_STUB_PARKED")
+    if [[ "$v" == fail ]]; then echo "gh: HTTP 502" >&2; exit 1; fi
+    if [[ "$v" == garbage ]]; then echo "not-a-number"; exit 0; fi
+    printf '%s' "$v" ;;
   "issue view 5 --json state --jq .state") echo OPEN ;;
   "issue view 5 --json body --jq .body") echo "deferred-automation backlog item" ;;
   "issue view 6 --json state --jq .state") echo CLOSED ;;
@@ -385,7 +393,8 @@ LABELS=$PARKED_LAB; h "REAL hook: parked: a PR URL ('gh pr merge https://github.
 LABELS=$PARKED_LAB; h "REAL hook: parked: 'gh -R o/r pr merge 7' is denied and the label read carries --repo" deny "$CLEAN" 'gh -R o/r pr merge 7 --squash' "pr view 7 --repo o/r --json labels --jq .labels[].name"
 LABELS=$PARKED_LAB; FORBID="pr view 712 --json labels --jq .labels[].name"
 h "REAL hook: parked: two numbers ('gh pr merge 7 --subject 12') are two candidates, never fused into 712" deny "$CLEAN" 'gh pr merge 7 --subject 12' "$LABELS_CALL"
-LABELS=$PARKED_LAB; h "REAL hook: parked: the parked PR is the SECOND number ('gh pr merge -t 1234 7')" deny "$CLEAN" 'gh pr merge -t 1234 7' "pr view 1234 --json labels --jq .labels[].name" "$LABELS_CALL"
+LABELS=$PARKED_LAB; FORBID="pr view 1234 --json labels --jq .labels[].name"
+h "REAL hook: parked: the parked PR is the number AFTER a flag value ('gh pr merge -t 1234 7'); the 1234 is a subject, never read as a PR" deny "$CLEAN" 'gh pr merge -t 1234 7' "$LABELS_CALL"
 # the --disable-auto exemption is a whole flag, not a substring
 LABELS=$PARKED_LAB; h "REAL hook: parked: a merge chained AFTER a '--disable-auto' statement ('&&') is denied (the statements are split)" deny "$CLEAN" 'gh pr merge 7 --disable-auto && gh pr merge 7 --squash' "$LABELS_CALL"
 LABELS=$PARKED_LAB; h "REAL hook: parked: the same chained with ';' is denied" deny "$CLEAN" 'gh pr merge 7 --disable-auto; gh pr merge 7 --squash' "$LABELS_CALL"
@@ -420,6 +429,69 @@ CURPR=99; h "REAL hook: a bare merge on an unlabelled branch is allowed (control
 LABELS=$PARKED_LAB; HOOK_ENV="SOLEUR_PARKED_GH_TIMEOUT=1"; h "REAL hook: parked: a label read that HANGS is bounded by the timeout and denied" deny "$CLEAN" 'gh pr merge 9 --squash' "pr view 9 --json labels --jq .labels[].name"
 LABELS=$PARKED_LAB; CWD_OVERRIDE="relative/dir"; h "REAL hook: parked: a relative cwd does not skip the barrier (it runs in the current directory)" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
 LABELS=$PARKED_LAB; CWD_OVERRIDE="/nonexistent-soleur-dir"; h "REAL hook: parked: a missing cwd does not skip the barrier" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
+
+# --- Fix round 1 (security seat P1-1/P2-1/P2-2/P3, test-design seat survivors; 2026-11-08) -----------------------------------
+# The barrier reads only what the shell would RUN. Quoted text that merely MENTIONS a merge is not a command (the first rewrite denied
+# `git commit -m "... gh pr merge 7 ..."` while any PR was parked, which blocked ordinary work on this very feature); the quoted
+# argument of `bash -c` / `eval` is a command. LABELS=parked everywhere below, so an ALLOW can only come from the parse, and `--none`
+# proves the stub was never asked (nothing was mistaken for a merge).
+PL=$'parked'
+LABELS=$PL; h "REAL hook: parked: a commit message that MENTIONS the merge is allowed ('git commit -m \"... gh pr merge 7 ...\"')" allow "$CLEAN" 'git commit -m "docs: the hook denies gh pr merge 7 on parked PRs"' --none
+LABELS=$PL; h "REAL hook: parked: a single-quoted commit message that mentions the merge is allowed" allow "$CLEAN" "git commit -m 'harden gh pr merge 7 barrier'" --none
+LABELS=$PL; h "REAL hook: parked: an echo that mentions the merge is allowed" allow "$CLEAN" 'echo "never gh pr merge 7 a parked pr"' --none
+LABELS=$PL; h "REAL hook: parked: a grep for the merge text is allowed" allow "$CLEAN" "grep -n 'gh pr merge' README.md" --none
+LABELS=$PL; h "REAL hook: parked: 'grep -c \"gh pr merge 7\" f' is NOT a shell -c payload, so it is allowed" allow "$CLEAN" 'grep -c "gh pr merge 7" f' --none
+LABELS=$PL; h "REAL hook: parked: a PR body that mentions the merge is allowed ('gh pr edit 99 --body \"... gh pr merge 7 ...\"')" allow "$CLEAN" 'gh pr edit 99 --body "see gh pr merge 7 docs"' --none
+LABELS=$PL; h "REAL hook: parked: an issue body that mentions an un-park is allowed ('gh issue create --body \"... --remove-label parked ...\"')" allow "$CLEAN" 'gh issue create --body "gh pr edit 1 --remove-label parked is denied"' --none
+LABELS=$PL; h "REAL hook: parked: a PR comment that mentions the merge is allowed" allow "$CLEAN" 'gh pr comment 7 --body "do not run gh pr merge 7"' --none
+LABELS=$PL; h "REAL hook: parked: a heredoc commit message (-F - <<EOF) that mentions the merge is allowed (heredoc bodies are stripped)" allow "$CLEAN" $'git commit -F - <<\'EOF\'\nfix: x\ngh pr merge 7 is blocked\nEOF' --none
+LABELS=$PL; h "REAL hook: parked: a \$(cat <<EOF) commit message that mentions the merge is allowed" allow "$CLEAN" $'git commit -m "$(cat <<\'EOF\'\ngh pr merge 7 is blocked\nEOF\n)"' --none
+# the quoted payload of -c / eval, a command substitution in double quotes, and wrapper words are commands
+LABELS=$PL; h "REAL hook: parked: 'sh -c \\'gh pr merge 7\\'' is denied" deny "$CLEAN" "sh -c 'gh pr merge 7'" "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a double-quoted command substitution (echo \"\$(gh pr merge 7)\") is denied" deny "$CLEAN" 'echo "$(gh pr merge 7)"' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a backtick substitution is denied" deny "$CLEAN" '`gh pr merge 7`' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: 'timeout 60 gh pr merge 7' is denied" deny "$CLEAN" 'timeout 60 gh pr merge 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: 'env X=1 gh pr merge 7' is denied" deny "$CLEAN" 'env X=1 gh pr merge 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: 'with_lock merge-main 600 -- gh pr merge 7 --squash --auto' is denied" deny "$CLEAN" 'with_lock merge-main 600 -- gh pr merge 7 --squash --auto' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: 'find . -exec gh pr merge 7 \;' is denied" deny "$CLEAN" 'find . -exec gh pr merge 7 \;' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a backslash-newline continuation ('gh pr \\<newline> merge 7') is denied" deny "$CLEAN" $'gh pr \\\n merge 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a redirection before the number ('gh pr merge 2>&1 7') still reads the 7" deny "$CLEAN" 'gh pr merge 2>&1 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a quoted '#7' target is read as PR 7" deny "$CLEAN" "gh pr merge '#7' --squash" "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a '#1' subject does not hide the target ('--subject \"#1\" 7')" deny "$CLEAN" 'gh pr merge --subject "#1" 7' "$LABELS_CALL"
+# a flag value is never a target, so an ordinary merge is not falsely denied while some OTHER PR is parked
+PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
+h "REAL hook: another PR is parked, this one is not: 'gh pr merge 99 --subject \"fix: x\"' is allowed (the literal 99 is read; the list is never needed)" allow "$CLEAN" 'gh pr merge 99 --subject "fix: x"' "pr view 99 --json labels --jq .labels[].name"
+PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
+h "REAL hook: a subject on a bare merge ('gh pr merge --squash --subject \"feat: x\"') reads the current-branch PR and allows" allow "$CLEAN" 'gh pr merge --squash --subject "feat: x"' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"
+PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
+h "REAL hook: '--match-head-commit abc123' is a flag value, not a branch-name target" allow "$CLEAN" 'gh pr merge --squash --match-head-commit abc123' "pr view --json number --jq .number" "pr view 99 --json labels --jq .labels[].name"
+PARKED_COUNT=1; h "REAL hook: parked: a variable target is still held while a PR is parked ('--match-head-commit \"\$SHA\" \"\$PR_URL\"')" deny "$CLEAN" 'gh pr merge --squash --match-head-commit "$SHA" "$PR_URL"' "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=1; h "REAL hook: parked: a hidden target ('gh pr merge 7\$(echo 2)') is held while a PR is parked" deny "$CLEAN" 'gh pr merge 7$(echo 2)' "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=1; h "REAL hook: parked: a repo-scoped variable target ('gh pr merge -R o/r \"\$N\"') lists the parked PRs of that repo" deny "$CLEAN" 'gh pr merge -R o/r "$N"' "pr list --label parked --state open --repo o/r --json number --jq length"
+LABELS=$PL; h "REAL hook: parked: the long '--repo' form before the subcommand ('gh --repo o/r pr merge 7') is denied" deny "$CLEAN" 'gh --repo o/r pr merge 7' "pr view 7 --repo o/r --json labels --jq .labels[].name"
+LABELS=$PL; h "REAL hook: parked: 'gh pr merge 7 --repo o/r' (the flag after) is denied" deny "$CLEAN" 'gh pr merge 7 --repo o/r' "pr view 7 --repo o/r --json labels --jq .labels[].name"
+LABELS=$PL
+h "REAL hook: parked: the single '&' is a statement separator ('gh pr merge 99 & gh pr merge 7': both statements are read)" deny "$CLEAN" 'gh pr merge 99 & gh pr merge 7' "pr view 99 --json labels --jq .labels[].name" "$LABELS_CALL"
+# listing the parked PRs fails closed
+PARKED_COUNT=fail; h "REAL hook: parked: a failed parked-PR list is denied (fail closed)" deny "$CLEAN" 'gh pr merge "$N"' "pr list --label parked --state open --json number --jq length"
+PARKED_COUNT=garbage; h "REAL hook: parked: an unreadable parked-PR list is denied (fail closed)" deny "$CLEAN" 'gh pr merge "$N"' "pr list --label parked --state open --json number --jq length"
+# the current-branch read fails closed unless the branch simply has no PR
+CURPR=FAIL; PARKED_COUNT=1; h "REAL hook: parked: a bare merge whose current-branch read FAILS is held while a PR is parked" deny "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr list --label parked --state open --json number --jq length"
+CURPR=FAIL; PARKED_COUNT=0; h "REAL hook: a bare merge whose current-branch read FAILS is allowed when no PR is parked (control: the list was read)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number" "pr list --label parked --state open --json number --jq length"
+CURPR=NONE; PARKED_COUNT=1; FORBID="pr list --label parked --state open --json number --jq length"
+h "REAL hook: a bare merge on a branch with NO pull request is not held by the list ('no pull requests found' is an answer, not a failed read)" allow "$CLEAN" 'gh pr merge --squash' "pr view --json number --jq .number"
+# gh api: label writes, issue writes and GraphQL, one probe per name
+LABELS=$PL; h "REAL hook: parked: 'gh api --method DELETE .../issues/7/labels/parked' is denied, stub never called" deny "$CLEAN" 'gh api --method DELETE repos/o/r/issues/7/labels/parked' --none
+LABELS=$PL; h "REAL hook: parked: 'gh api -X PATCH .../issues/7/labels' (replaces the label set) is denied" deny "$CLEAN" "gh api -X PATCH repos/o/r/issues/7/labels -f 'labels[]=bug'" "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: 'gh api --method=PATCH .../issues/7' (an edit of the parked object) is denied" deny "$CLEAN" 'gh api --method=PATCH repos/o/r/issues/7 -f state=closed' "$LABELS_CALL"
+PARKED_COUNT=1; h "REAL hook: parked: a variable inside an issue path ('gh api -X PUT .../issues/\$N/labels') is held while a PR is parked" deny "$CLEAN" 'gh api -X PUT repos/o/r/issues/$N/labels' "pr list --label parked --state open --json number --jq length"
+h "REAL hook: parked: renaming the label object ('gh api -X PATCH .../labels/parked -f new_name=held') is denied" deny "$CLEAN" 'gh api -X PATCH repos/o/r/labels/parked -f new_name=held' --none
+h "REAL hook: renaming ANOTHER label ('gh api -X PATCH .../labels/other') is allowed, stub never called" allow "$CLEAN" 'gh api -X PATCH repos/o/r/labels/other -f new_name=x' --none
+h "REAL hook: a GET of the issue labels ('gh api .../issues/7/labels') is allowed, stub never called" allow "$CLEAN" 'gh api repos/o/r/issues/7/labels' --none
+h "REAL hook: a comment POST on a PR ('gh api .../issues/7/comments -f body=x') is allowed, stub never called" allow "$CLEAN" 'gh api repos/o/r/issues/7/comments -f body=x' --none
+for gq in mergePullRequest enablePullRequestAutoMerge enqueuePullRequest removeLabelsFromLabelable clearLabelsFromLabelable updateIssue updatePullRequest deleteLabel updateLabel; do
+  PARKED_COUNT=1; h "REAL hook: parked: a GraphQL '$gq' mutation is denied while a PR is parked" deny "$CLEAN" "gh api graphql -f query='mutation { $gq(input: {}) { clientMutationId } }'" "pr list --label parked --state open --json number --jq length"
+done
 # the incident row: a deny leaves a record in the (sandboxed) ledger
 INC_BEFORE=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
 LABELS=$PARKED_LAB; h "REAL hook: parked: a deny (control for the incident row below)" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
@@ -445,8 +517,8 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
-# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1).
-ROW_FLOOR=102
+# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 154 after the fix round).
+ROW_FLOOR=154
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1
