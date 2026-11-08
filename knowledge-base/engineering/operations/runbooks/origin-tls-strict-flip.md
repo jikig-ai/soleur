@@ -34,8 +34,8 @@ keeps serving while the edge is still `flexible`: nobody sees anything.
   (good), but a host that restarts for another reason (reboot, crash loop) with bad material and no candidate gate can come up unable to serve TLS.
 - The **WebSocket upgrade path**, which has never crossed the edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only).
 
-The startup line does not print whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ORDERING (the Doppler write precedes a green redeploy,
-which precedes fresh per-host lines), not read directly.
+Until the image with the 2026-11-08 hardening is deployed, the startup line does not print whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ORDERING (the Doppler write precedes a green redeploy,
+which precedes fresh per-host lines), not read directly. From that image on, the `origin-tls: listening` line carries `required: true|false`, a direct per-host read.
 
 ## Act 0 - read-only preconditions before act 3 (anyone; all runnable)
 

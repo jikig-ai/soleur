@@ -57,7 +57,7 @@ here and this change must not touch it.
 
    A rejected certificate is reported to Sentry as `feature=origin_tls`, `op=load`, `tags.reason=<enum>`; a context that
    cannot be built as `op=create`; a bind error as `op=listen`. The once-per-start line
-   `origin-tls: listening ... certificate loaded` is emitted at warn so it reaches Better Stack (Vector drops INFO).
+   `origin-tls: listening ... certificate loaded` is emitted at warn so it reaches Better Stack (Vector drops INFO). From the image that carries the 2026-11-08 hardening it also states `required` (a boolean: whether `ORIGIN_TLS_REQUIRED=1` was in effect in that process), so "REQUIRED is live on this host" is a direct per-host read. A server `error` after the bind (for example an accept failure under fd pressure) is reported with `tags.phase=runtime` and the process continues; before the bind (`phase=startup`) it is fatal under REQUIRED.
 3. **The strict flip is staged, and its lever is the app-host Configuration Rule** (the mechanism is amended by item 10 of the 2026-11-07 amendments below; R6 and R8 are defined in the archived plan, `knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md`): listener inert and deployed to both
    hosts, certificate loaded and checked per host, load balancer health check to HTTPS/443, a header-scoped canary rule
    that runs only the probe request in `strict`, probe passes, then the rule is changed host-wide. Roll forward only:
@@ -250,7 +250,7 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     docker-run sites and an https/443 LB monitor) is now asserted unconditionally in `apps/web-platform/test/seo-config-rules.test.ts` for the monitor half, and the publish half was already mutation-pinned
     by `infra/docker-run-tuple.test.sh` (K24e, K27i). Not built: the mutation-of-the-suite rows and the merge-base anchor the plan described, because the strict rule is present in every tree from now on
     (so there is no tree "with and without" to diff) and the per-merge anchor adds a `git` read to a vitest file for no extra property.
-    **Unverified / gaps:** the app's startup line does not state whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ordering (the Doppler write precedes a green redeploy whose
-    per-host `origin-tls: listening` lines follow it), not read directly; adding a `required` field is an app change that would itself redeploy, so it is not bundled. WebSocket upgrades have never crossed the
+    **Unverified / gaps:** until the image with the 2026-11-08 hardening is deployed, the app's startup line does not state whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ordering (the Doppler write precedes a green redeploy whose
+    per-host `origin-tls: listening` lines follow it), not read directly; from that image on the line carries `required` and the read is direct. WebSocket upgrades have never crossed the
     edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only). The apply job auto-approves its own plan, so the human look at the plan is a local read-only plan before the dispatch
     (runbook Act 0). The flip's whole-list update replaces the entire `http_config_settings` entrypoint; a rule added in the dashboard would be deleted, which the read-only `entrypoint-audit` dispatch checks beforehand.
