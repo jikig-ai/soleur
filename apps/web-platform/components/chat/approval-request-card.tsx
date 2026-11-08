@@ -446,8 +446,8 @@ export function ApprovalRequestCard(props: ApprovalRequestCardProps) {
       break;
   }
 
-  // A withheld card can still be handed a non-pending status: reattach skips approved rows for such a viewer, but a status
-  // frame also reaches a non-Owner member whose own decide was refused (`decider_not_owner`). Say nothing about the agent,
+  // A withheld card can still be handed a non-pending status: reattach skips approved rows for such a viewer, but the gate
+  // also emits `approval_status` to the proposing user (gate-flow `emitStatus`) after a reattach redacted that user's card. Say nothing about the agent,
   // the action or an outcome.
   const withheldSettled = withheld && state !== "pending_member";
   if (withheldSettled) {

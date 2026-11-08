@@ -277,13 +277,25 @@ describe("a member who is not the requester gets a redacted waiting frame", () =
     expect(cards).toHaveLength(1);
     expect(cards[0].view).toBeNull();
     expect(cards[0].toolName).toBe("redacted");
+    // RA5: the redacted frame carries no requester key at all (an empty string is not a verified requester).
+    expect(Object.hasOwn(cards[0], "requester")).toBe(false);
   });
 
-  it("a runtime-garbage role is not an Owner: redacted, and the frame says member", async () => {
-    const { cards } = await run({ viewer: MEMBER_ID, role: "garbage", rows: [{}] });
+  it("a runtime-garbage role is a FAILED read, not a member: no frame for a non-requester, reported once", async () => {
+    const { cards, sent } = await run({ viewer: MEMBER_ID, role: "garbage", rows: [{}, { id: ROW_B }] });
+    expect(cards).toHaveLength(0);
+    expect(sent).toBe(0);
+    expect(reportKeys().filter((k) => k === "viewerRoleFailed")).toHaveLength(1);
+  });
+
+  it("a runtime-garbage role and the verified requester: the full read-only card as a member, the failure reported", async () => {
+    const { cards, label } = await run({ viewer: MEMBER_ID, role: "garbage", rows: [{ requestedBy: MEMBER_ID }] });
     expect(cards).toHaveLength(1);
-    expect(cards[0].view).toBeNull();
+    expect(cards[0].view).not.toBeNull();
     expect(cards[0].viewerRole).toBe("member");
+    expect(cards[0].requester).toBe("you");
+    expect(label).not.toHaveBeenCalled();
+    expect(reportKeys()).toContain("viewerRoleFailed");
   });
 });
 
@@ -474,19 +486,27 @@ describe("with the real labeler over the strict fake", () => {
   });
 });
 
-describe("two or more live requests: the non-self label is suppressed (the one label would be ambiguous)", () => {
-  it("an Owner viewer and another member's request with count 2: no requester key and the labeler is not called", async () => {
+describe("request_count plays no part in the label (it counts rows of any status; requested_by_user_id is immutable per row)", () => {
+  it("an Owner viewer and another member's request with count 2: the label is still asked and sent", async () => {
     const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ requestCount: 2 }] });
     expect(cards).toHaveLength(1);
     expect(cards[0].view).not.toBeNull();
-    expect(Object.hasOwn(cards[0], "requester")).toBe(false);
-    expect(label).not.toHaveBeenCalled();
+    expect(cards[0].requester).toBe(REQUESTER_EMAIL);
+    expect(cards[0].requestCount).toBe(2);
+    expect(label).toHaveBeenCalledTimes(1);
   });
 
-  it("a NULL requester with count 2 is suppressed too (the fallback literal is a label)", async () => {
-    const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ requestCount: 2, requestedBy: null }] });
-    expect(Object.hasOwn(cards[0], "requester")).toBe(false);
-    expect(label).not.toHaveBeenCalled();
+  it("count 2 because of a prior DENIED row: the Owner still gets the label of THIS row's requester", async () => {
+    // The row list holds one live (pending) row; its request_count is 2 because an earlier row was denied.
+    const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ requestCount: 2, requestedBy: REQUESTER_ID }] });
+    expect(cards[0].requester).toBe(REQUESTER_EMAIL);
+    expect(label).toHaveBeenCalledWith(WORKSPACE_ID, OWNER_ID, REQUESTER_ID);
+  });
+
+  it("a NULL requester with count 2 gets the labeler's value too (the fixed fallback from the real labeler)", async () => {
+    const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ requestCount: 2, requestedBy: null }], label: async () => FALLBACK });
+    expect(cards[0].requester).toBe(FALLBACK);
+    expect(label).toHaveBeenCalledTimes(1);
   });
 
   it("the verified requester with count 2 still gets the literal you, with no lookup", async () => {
@@ -498,10 +518,10 @@ describe("two or more live requests: the non-self label is suppressed (the one l
     expect(member.label).not.toHaveBeenCalled();
   });
 
-  it("count 1 still looks up; the count of each row decides for that row", async () => {
-    const { cards, label } = await run({ viewer: OWNER_ID, role: "owner", rows: [{ id: ROW_A, requestCount: 1 }, { id: ROW_B, requestCount: 2 }] });
-    expect(cards.map((c) => c.requester)).toEqual([REQUESTER_EMAIL, undefined]);
-    expect(label).toHaveBeenCalledTimes(1);
+  it("a member viewer who is not the requester never triggers a lookup, whatever the count", async () => {
+    const { cards, label } = await run({ viewer: MEMBER_ID, role: "member", rows: [{ requestCount: 1 }, { id: ROW_B, requestCount: 2 }] });
+    expect(cards.every((c) => !Object.hasOwn(c, "requester"))).toBe(true);
+    expect(label).not.toHaveBeenCalled();
   });
 });
 

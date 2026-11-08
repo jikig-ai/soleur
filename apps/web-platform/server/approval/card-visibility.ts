@@ -2,8 +2,9 @@
  * Who may see the action text of an approval card (#9601, ADR-309 flip item 1).
  *
  * Pure and synchronous on purpose. `canSeeAction` is the chokepoint for the REATTACH emit site (reattach.ts): one function
- * with a truth table (test/approval/card-visibility.test.ts), and the whole-`server/` sink scan
- * (test/approval/render-sink-scan.test.ts) pins who calls the renderer. The FIRST send (gate-flow.ts) does not go through
+ * with a truth table (test/approval/card-visibility.test.ts), and the sink scan
+ * (test/approval/render-sink-scan.test.ts) pins who calls the renderer across its scan roots (`server`, `app`, `lib`,
+ * `components`, `hooks`). Root-level files and `scripts/` are NOT scanned: an unscanned residual. The FIRST send (gate-flow.ts) does not go through
  * it: that frame goes to the proposing session user, who sees their own freshly canonicalised action, and it carries no
  * label other than the literal "you" (`isVerifiedRequester`). The call sites do their own single `await`.
  *

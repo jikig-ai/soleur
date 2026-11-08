@@ -223,6 +223,19 @@ describe("the shape of the stored address", () => {
     }
   });
 
+  it("a bidi override (U+202E) or a zero-width space (U+200B) anywhere in the address (format characters, Cf): the fallback", async () => {
+    for (const bad of ["jane\u202Egnp.@example.com", "jane\u200B@example.com", "jane@exam\u200Bple.com", "\u202Ejane@example.com"]) {
+      expect(await labelFor(bad), JSON.stringify(bad)).toBe(FALLBACK);
+    }
+  });
+
+  it("an address with an empty local or domain part ('@', 'a@', '@b'): the fallback", async () => {
+    for (const bad of ["@", "a@", "@b"]) {
+      expect(await labelFor(bad), bad).toBe(FALLBACK);
+    }
+    expect(await labelFor("a@b")).toBe("a@b");
+  });
+
   it("a quoted-local-part address that carries a space or a second @ is the fallback", async () => {
     expect(await labelFor('"jane doe"@example.com')).toBe(FALLBACK);
     expect(await labelFor('"jane@x"@example.com')).toBe(FALLBACK);
@@ -293,6 +306,8 @@ describe("the deadline", () => {
     expect(await p).toBeUndefined();
     expect(reportCalls()).toHaveLength(1);
     expect(serialized(h.report.mock.calls)).not.toContain(REQUESTER_EMAIL);
+    // The deadline error carries code "timeout", so telemetry tells it apart from a read error.
+    expect((reportCalls()[0][1] as { extra: { code?: string } }).extra.code).toBe("timeout");
   });
 
   it("a timeout trips the instance: a later lookup in the same instance omits at once with no query", async () => {

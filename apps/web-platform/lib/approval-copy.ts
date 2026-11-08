@@ -67,7 +67,7 @@ export const APPROVAL_COPY = {
   memberWaitingRedacted: "An action in this conversation is waiting for an Owner's approval.",
   /** The verified requester's own card. */
   memberWaitingOwn: "You requested this. Waiting for an Owner's approval.",
-  /** A card whose action is withheld from the viewer and whose status is no longer pending (a refused non-Owner decide settles it). */
+  /** A card whose action is withheld from the viewer and whose status is no longer pending (the gate's `approval_status` frame to the proposing user, after a reattach redacted their card, settles it). */
   withheldSettledTitle: "This request is no longer waiting",
   conversationClosed: "This conversation is closed",
   detailsRemoved: "Details removed per retention policy",

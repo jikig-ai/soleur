@@ -32,8 +32,9 @@ export interface StoredApprovalRow {
 
 /**
  * The row as the Owner landing page reads it: it also selects `requested_by_user_id` (#9601). The key is REQUIRED so a
- * `ROW_COLUMNS` that loses the column fails type-check; a runtime row without the key (an older select) omits the label
- * instead of rendering the "left or erased" fallback. `inbox-enrich.ts` stays on the base type.
+ * `ROW_COLUMNS` that loses the column fails type-check; a runtime row without the key (`undefined`, an older select) gets NO
+ * label (the page does not call the labeler), while an explicit `null` (an erased account) gets the labeler's fixed
+ * fallback "a workspace member". `inbox-enrich.ts` stays on the base type.
  */
 export interface StoredApprovalRowWithRequester extends StoredApprovalRow {
   requested_by_user_id: string | null;

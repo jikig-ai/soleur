@@ -28,6 +28,8 @@ const h = vi.hoisted(() => ({
   row: { value: null as Record<string, unknown> | null },
   rowError: { value: null as unknown },
   count: { value: 1 },
+  /** When set, the count read awaits this instead of answering at once (proves the label read does not wait for it). */
+  countOverride: { value: null as null | (() => Promise<{ count: number; error: null }>) },
   countError: { value: null as unknown },
   fromCalls: [] as string[],
   /** Columns of every select on approval_request (#9601: the row read must include requested_by_user_id). */
@@ -62,7 +64,7 @@ vi.mock("@/lib/supabase/server", () => ({
       const chain = {
         select: (_c: string, opts?: { head?: boolean }) => {
           if (table === "approval_request" && !opts?.head) h.selectCols.push(_c);
-          if (opts?.head) return { eq: () => ({ eq: async () => ({ count: h.count.value, error: h.countError.value }) }) };
+          if (opts?.head) return { eq: () => ({ eq: async () => (h.countOverride.value ? h.countOverride.value() : { count: h.count.value, error: h.countError.value }) }) };
           return {
             eq: () => ({
               maybeSingle: async () =>
@@ -127,6 +129,7 @@ beforeEach(() => {
   h.rowError.value = null;
   h.count.value = 1;
   h.countError.value = null;
+  h.countOverride.value = null;
   h.fromCalls.length = 0;
   h.selectCols.length = 0;
   h.serviceClient.value = null;
@@ -374,38 +377,47 @@ describe("the requester line (#9601)", () => {
     expect(fake.queries).toHaveLength(0);
   });
 
-  it("a row read that carries no requested_by_user_id value behaves as an erased requester (the fixed fallback, no query)", async () => {
+  it("a row read that carries no requested_by_user_id key at all (undefined, not null) renders NO line and never calls the labeler", async () => {
     const fake = useWorld(world());
     const row = stored();
     expect("requested_by_user_id" in row).toBe(false);
     h.row.value = row;
     render(await run());
-    expect(line()?.textContent).toBe("Requested by a workspace member");
+    expect(line()).toBeNull();
     expect(fake.queries).toHaveLength(0);
+    expect(h.serviceCalls.value).toBe(0);
+    expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
   });
 
-  describe("two or more requests for the conversation and action", () => {
-    it("another member's request with count 2: no line and the labeler is not asked (no service-role read)", async () => {
+  describe("two or more requests for the conversation and action: the label never depends on the count", () => {
+    it("another member's request with count 2: the Owner still gets the requester's auth email", async () => {
       h.count.value = 2;
       const fake = useWorld(world());
       h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
       render(await run());
-      expect(line()).toBeNull();
-      expect(fake.queries).toHaveLength(0);
-      expect(fake.authCalls).toEqual([]);
-      expect(h.serviceCalls.value).toBe(0);
-      expect(screen.getByRole("button", { name: "Approve" })).toBeTruthy();
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
+      expect(fake.queries).toHaveLength(1);
+      expect(screen.getByTestId("approval-request-count").textContent).toContain("request 2");
     });
 
-    it("an erased requester with count 2: no line either (the fallback literal is a label too)", async () => {
+    it("count 2 because of a prior DENIED row (the count is any status): the Owner still gets the label", async () => {
+      // The head count read covers every status; a denied earlier row is one of the 2. The label names THIS row's requester.
+      h.count.value = 2;
+      useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID, status: "pending" });
+      render(await run());
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
+    });
+
+    it("an erased requester with count 3: the fixed fallback", async () => {
       h.count.value = 3;
       useWorld(world());
       h.row.value = stored({ requested_by_user_id: null });
       render(await run());
-      expect(line()).toBeNull();
+      expect(line()?.textContent).toBe("Requested by a workspace member");
     });
 
-    it("the Owner is the requester with count 2: the literal you stays", async () => {
+    it("the Owner is the requester with count 2: the literal you stays, with no lookup", async () => {
       h.count.value = 2;
       useWorld(world());
       h.row.value = stored({ requested_by_user_id: USER_ID });
@@ -414,14 +426,14 @@ describe("the requester line (#9601)", () => {
       expect(h.serviceCalls.value).toBe(0);
     });
 
-    it("an unavailable count (read error) is suppress-safe: no line for another member, the error is reported", async () => {
+    it("an unavailable count (read error): the label is unaffected and the error is reported", async () => {
       h.countError.value = { code: "57014" };
-      const fake = useWorld(world());
+      useWorld(world());
       h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
       render(await run());
-      expect(line()).toBeNull();
-      expect(fake.queries).toHaveLength(0);
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
       expect(h.report.mock.calls.some((c) => c[0] === "landingReadFailed")).toBe(true);
+      expect(screen.queryByTestId("approval-request-count")).toBeNull();
     });
 
     it("an unavailable count still shows 'you' for the requester", async () => {
@@ -430,6 +442,19 @@ describe("the requester line (#9601)", () => {
       h.row.value = stored({ requested_by_user_id: USER_ID });
       render(await run());
       expect(line()?.textContent).toBe("Requested by you");
+    });
+
+    it("the label read starts without waiting for the count read (both are in flight together)", async () => {
+      let releaseCount: (v: { count: number; error: null }) => void = () => {};
+      const countGate = new Promise<{ count: number; error: null }>((r) => (releaseCount = r));
+      h.countOverride.value = () => countGate;
+      const fake = useWorld(world());
+      h.row.value = stored({ requested_by_user_id: REQUESTER_ID });
+      const pending = run();
+      await vi.waitFor(() => expect(fake.queries).toHaveLength(1));
+      releaseCount({ count: 2, error: null });
+      render(await pending);
+      expect(line()?.textContent).toBe(`Requested by ${REQUESTER_EMAIL}`);
     });
   });
 
@@ -447,6 +472,16 @@ describe("the requester line (#9601)", () => {
     const at = sql.indexOf("CREATE POLICY approval_request_owner_select");
     expect(at).toBeGreaterThan(-1);
     expect(sql.slice(at, at + 400)).toContain("is_workspace_owner(workspace_id, auth.uid())");
+  });
+
+  it("is_workspace_owner (what the Owner policy calls) is defined only in 098_workspace_logos.sql", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = join(__dirname, "../../supabase/migrations");
+    const defining = readdirSync(dir)
+      .filter((f) => f.endsWith(".sql"))
+      .filter((f) => /\bCREATE\s+(OR\s+REPLACE\s+)?FUNCTION\s+(public\.)?"?is_workspace_owner\b/i.test(readFileSync(join(dir, f), "utf8")));
+    expect(defining).toEqual(["098_workspace_logos.sql"]);
   });
 
   it("migration 180 is the ONLY migration that defines approval_request_owner_select (a later redefinition would silently move the Owner gate)", async () => {

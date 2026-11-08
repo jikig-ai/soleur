@@ -443,12 +443,19 @@ describe("createApprovalGateDeps: viewerRole", () => {
     expect(tenant.rpcCalls).toEqual([{ fn: "is_workspace_owner", args: { p_workspace_id: WORKSPACE_ID, p_user_id: USER_ID } }]);
   });
 
-  it("is 'member' for false, null and any non-true answer", async () => {
+  it("is 'member' for false, null and any non-true answer: a clean `false` is a member, every other non-true answer (null, undefined, 'true', 1, an object) is a failed read", async () => {
     const { deps, tenant } = makeDeps();
-    for (const data of [false, null, undefined, "true", 1, { owner: true }]) {
+    tenant.rpcAnswer = { data: false, error: null };
+    expect(await deps.viewerRole()).toBe("member");
+    for (const data of [null, undefined, "true", 1, { owner: true }]) {
       tenant.rpcAnswer = { data, error: null };
-      expect(await deps.viewerRole(), String(data)).toBe("member");
+      await expect(deps.viewerRole(), String(data)).rejects.toThrow("viewer role read failed");
     }
+  });
+
+  it("a null tenant (a denied principal) is a failed read, never a silent member", async () => {
+    const { deps } = makeDeps({ tenantClient: async () => null as never });
+    await expect(deps.viewerRole()).rejects.toThrow("viewer role read failed");
   });
 
   it("a read error is thrown (the gate reports it and shows the read-only card); it is never an owner", async () => {

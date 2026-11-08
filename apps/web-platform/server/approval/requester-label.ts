@@ -15,7 +15,7 @@
  *     requester left, or was never a member of that workspace).
  *   - source of the address: the AUTHORITATIVE auth record (`auth.admin.getUserById`), NOT `public.users.email`, which any
  *     authenticated member can overwrite (migrations 006 and 178) and so could make the Owner's card say anything.
- *   - shape: kept only when a string of 1 to 320 characters with exactly one `@` and no whitespace or control characters
+ *   - shape: kept only when a string of 1 to 320 characters with exactly one `@` (a non-empty part on each side) and no whitespace, control or format characters
  *     (320 is the wire cap, shared via REQUESTER_LABEL_MAX_LENGTH; the exactly-one-`@` shape is what makes a real label
  *     collision-free with the in-band literals, since neither "you" nor "a workspace member" contains an `@`).
  *   - bounded: one deadline of 2 seconds per `label()` call covers both reads (the PostgREST read carries the abort
@@ -68,16 +68,20 @@ export interface RequesterLabelerOptions {
 
 /** One lookup, both reads. */
 export const REQUESTER_LABEL_DEADLINE_MS = 2000;
-const UNSAFE_CHARS = /[\s\p{Cc}]/u;
+/** Whitespace, control characters (Cc) and format characters (Cf: bidi overrides such as U+202E, zero-width U+200B). */
+const UNSAFE_CHARS = /[\s\p{Cc}\p{Cf}]/u;
+
+/** The error a deadline rejects with; `code` lets `requesterLabelFailed` telemetry tell a timeout from a read error. */
+const deadlineError = (): Error => Object.assign(new Error("requester label deadline"), { code: "timeout" });
 
 /** Race a read against the lookup's signal (`auth.admin.getUserById` has no abort support); the listener is removed on settle. */
 function withDeadline<T>(read: PromiseLike<T>, signal: AbortSignal): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     if (signal.aborted) {
-      reject(new Error("requester label deadline"));
+      reject(deadlineError());
       return;
     }
-    const onAbort = () => reject(new Error("requester label deadline"));
+    const onAbort = () => reject(deadlineError());
     signal.addEventListener("abort", onAbort, { once: true });
     Promise.resolve(read).then(
       (v) => {
@@ -95,7 +99,9 @@ function withDeadline<T>(read: PromiseLike<T>, signal: AbortSignal): Promise<T> 
 function usableAddress(v: unknown): v is string {
   if (typeof v !== "string" || v.length === 0 || v.length > REQUESTER_LABEL_MAX_LENGTH) return false;
   if (UNSAFE_CHARS.test(v)) return false;
-  return v.split("@").length === 2;
+  // Exactly one `@`, with a non-empty local part and a non-empty domain part.
+  const parts = v.split("@");
+  return parts.length === 2 && parts[0].length > 0 && parts[1].length > 0;
 }
 
 export function createRequesterLabeler(getClient?: () => RequesterQueryClient, opts: RequesterLabelerOptions = {}): RequesterLabelFn {

@@ -24,6 +24,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
 import { decideApproval } from "./approval/decide";
+import { isVerifiedRequester } from "./approval/card-visibility";
 import { reemitLiveApprovals } from "./approval/reattach";
 import { createRequesterLabeler, type RequesterQueryClient } from "./approval/requester-label";
 import { logApprovalMarker, reportApprovalOp } from "./approval/ops";
@@ -136,12 +137,14 @@ const log = createChildLogger("ws");
 type ServiceClient = ReturnType<typeof createServiceClient>;
 let _supabase: ServiceClient | null = null;
 // PR-C §2.10 (#3244): the module-level `supabase` Proxy is RETAINED —
-// it's PERMANENT, used only for the `supabase.auth.getUser(token)` HTTP
-// Bearer validation at the WS handshake (around `:1812`, after Phase 2.10).
-// That call must run BEFORE userId exists (auth-domain bootstrap,
-// structurally pre-tenant-JWT). The 13 tenant data sites in this file
-// migrate to per-call `getFreshTenantClient(userId)` via the
-// `tenantFor(userId)` helper below.
+// it's PERMANENT. Its original reason is the `supabase.auth.getUser(token)`
+// HTTP Bearer validation at the WS handshake (around `:1812`, after Phase 2.10),
+// which must run BEFORE userId exists (auth-domain bootstrap, structurally
+// pre-tenant-JWT). It ALSO serves the service-role-only
+// `list_live_approvals` read on session attach and the requester labeler's
+// cross-tenant reads (workspace_members and auth.admin.getUserById, #9601).
+// The 13 tenant data sites in this file migrate to per-call
+// `getFreshTenantClient(userId)` via the `tenantFor(userId)` helper below.
 const supabase = new Proxy({} as ServiceClient, {
   get(_target, prop) {
     _supabase ??= createServiceClient();
@@ -2979,7 +2982,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         };
         sendToClient(userId, { ...statusFrame, outcome: result.outcome });
         // The requester (possibly a different user than the deciding Owner) sees the card settle too.
-        if (row.requested_by_user_id && row.requested_by_user_id !== userId) {
+        if (row.requested_by_user_id && !isVerifiedRequester(userId, row.requested_by_user_id)) {
           sendToClient(row.requested_by_user_id, statusFrame);
         }
       } catch (err) {

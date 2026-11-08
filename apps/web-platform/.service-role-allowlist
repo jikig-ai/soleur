@@ -84,7 +84,10 @@ apps/web-platform/server/agent-runner.ts
 # PERMANENT — WS auth handshake (server/ws-handler.ts:1947
 # supabase.auth.getUser(token)) validates the operator-supplied token
 # BEFORE userId exists. Auth-domain bootstrap, structurally pre-tenant-
-# JWT. All 13 tenant data sites in this file migrated in PR-C §2.10.
+# JWT. The same service-role proxy also serves list_live_approvals (a
+# service-only RPC) on session attach and the approval requester labeler's
+# cross-tenant reads (workspace_members, auth.admin.getUserById; #9601).
+# All 13 tenant data sites in this file migrated in PR-C §2.10.
 apps/web-platform/server/ws-handler.ts
 
 # PERMANENT — HTTP Bearer-token validation (server/api-messages.ts:36

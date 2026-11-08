@@ -12,8 +12,8 @@
  * Who sees the action (#9601, ADR-309 flip item 1): the full card goes only to a verified Owner or to the row's verified
  * requester (`canSeeAction`). A redacted waiting frame (`view: null`, `toolName: "redacted"`, no requester key, no field
  * value) is sent for PENDING rows only; an approved row, and a row whose viewer role could not be read, send NO frame to a
- * viewer who cannot see the action. An Owner's card names the requester (`requester`) unless two or more live requests
- * share the conversation and action (the one label would then be ambiguous: only the literal "you" stays). Attach is
+ * viewer who cannot see the action. A viewer who is the verified requester gets the literal "you"; an Owner gets the
+ * labeler's value for the row's requester. Attach is
  * conversation-creator-only today, so for a non-Owner non-requester this is a defence-in-depth invariant that becomes
  * reachable with shared conversations; test/approval/render-sink-scan.test.ts pins that this file has exactly one gate and
  * one render call.
@@ -36,7 +36,7 @@ export interface ReemitArgs {
   send: (userId: string, payload: WSMessage) => boolean;
   /** Service-role client (list_live_approvals is service-only). */
   client: () => ApprovalRpcClient;
-  /** Role of the viewing user in the approval's workspace; failure = member (read-only). Read once per workspace per attach. */
+  /** Role of the viewing user in the approval's workspace; a failure is a member (read-only). Read once per workspace per attach. */
   viewerRole: (workspaceId: string) => Promise<"owner" | "member">;
   /**
    * The workspace of the session that is attaching (REQUIRED: the flag is evaluated per workspace, so reading it with no
@@ -88,8 +88,10 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
       if (!p) {
         p = (async () => {
           try {
-            // Only a literal "owner" is an Owner; any other value (a runtime garbage role included) is a member.
-            return { role: (await a.viewerRole(row.workspace_id)) === "owner" ? ("owner" as const) : ("member" as const), failed: false };
+            // Only a literal "owner" or "member" is a role; any other value (a runtime garbage role included) is a failed read.
+            const role = await a.viewerRole(row.workspace_id);
+            if (role !== "owner" && role !== "member") throw new Error("viewer role read failed");
+            return { role, failed: false };
           } catch (err) {
             reportApprovalOp("viewerRoleFailed", err, { approvalId: row.id, toolName: row.tool_name, conversationId: a.conversationId });
             return { role: "member" as const, failed: true };
@@ -150,13 +152,13 @@ export async function reemitLiveApprovals(a: ReemitArgs): Promise<number> {
       // their role could not be read: a redacted "waiting" card shown to an Owner we could not identify would mislead. The
       // next attach recovers; the inbox row and the landing page remain.
       if (!mayView && (roleReadFailed || approval.status === "approved")) continue;
-      // The requester line: "you" for the verified requester (no read); an Owner viewer gets the labeler's value only while ONE
-      // live request exists (two or more make a single label ambiguous); everyone else gets no key.
+      // The requester line: "you" for the verified requester (no read); an Owner viewer gets the labeler's value for the row's
+      // own requester; everyone else gets no key. `requestCount` is a row count of any status and plays no part here.
       let requester: string | undefined;
       try {
         requester = isVerifiedRequester(a.userId, approval.requested_by_user_id)
           ? REQUESTER_SELF
-          : viewerRole === "owner" && requestCount <= 1
+          : viewerRole === "owner"
             ? await a.requesterLabel(approval.workspace_id, a.userId, approval.requested_by_user_id)
             : undefined;
       } catch {
