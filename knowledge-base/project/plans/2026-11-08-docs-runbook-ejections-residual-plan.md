@@ -5,7 +5,6 @@ date: 2026-11-08
 slug: docs-runbook-ejections-residual
 branch: feat-one-shot-12428-runbook-ejections-residual
 issue: 12428
-closes: 12428
 priority: p3-low
 domain: engineering
 lane: cross-domain
@@ -265,9 +264,11 @@ greps in the ACs:
 
 - The §4 residual is **recorded, not fixed**: the 2026-11-08 CTO ruling (archived
   #10862 spec dir, `decision-challenges.md` row 4) chose record-over-build because no
-  per-sha non-search read exists to pin a window listing against. #12428's
-  re-evaluation criterion — reopen before the next §4 evidence re-run feeds the
-  go/no-go re-ruling — stands after this PR closes it.
+  per-sha non-search read exists to pin a window listing against. #12428 stays
+  OPEN — it tracks the still-open corroborate-vs-accept decision per its
+  re-evaluation criteria (the #10949 precedent: a ruled-residual tracker closes
+  when its criteria fire, not when the record lands). The PR body cites
+  `Ref #12428`, never `Closes`.
 - Nothing in this change re-runs evidence, re-rules the verdict, or touches
   `CI_PR_AFFECTED`; those stay operator-owned (#10448 / ADR-276 amendment).
 
