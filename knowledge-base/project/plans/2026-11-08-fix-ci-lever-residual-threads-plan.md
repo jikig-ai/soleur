@@ -70,6 +70,27 @@ Two decoupled CI-lever residual threads shipped as one PR. Thread 1 (#12360): th
 - #12360 (thread 1), #9729 (thread 2, SCHEDULE 2026-11-08), #9323 (parent soak), #12089/#12250 (umbrella fold), #10448 (retire-vs-schedule, now resolved SCHEDULE), #10862/PR #12377 (adjacent norun hardening — disjoint hunks), #5780/#9454 (merge-queue CLA synthetics origin), #11038 (test-merge sha evidence), #12283 (`workflow-yaml-strict` member added 2026-11-07 — member set still moving).
 - Prior plan context: `knowledge-base/project/plans/2026-10-12-feat-ci-pr-affected-only-gating-plan.md`, spec `knowledge-base/project/specs/feat-ci-path-filtering/`, runbook `knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`, receipts `knowledge-base/project/specs/archive/20261108-080602-feat-one-shot-ci-lever-residuals/receipts/`.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Coverage:** `sequential-fallback` — plugin subagents are unavailable on this harness surface; every prescribed agent/skill role (research, learnings, spec-flow, cto, review lenses) ran inline sequentially with the same definitions.
+**Gates verified (deepen-plan §4.x):** 4.6 user-brand PASS (threshold `none`, no sensitive-path files); 4.7 observability PASS (5 fields, `grep`-verb discoverability command, literal `observability-ok`); 4.8 PAT sweep PASS (0 hits); 4.9 non-UI skip; 4.10 no-store skip; 4.11 Guard Contract lint green (1 entry, 5-row matrix); 4.12 Scope Check pass (one unfenced section, all rows mapped/justified); 4.13 no new autonomous surface; 4.5 fired lexically on `unreachable`/`timeout` — false positive (verdict reachability + wall-budget words, no network-connectivity hypothesis).
+**Halt-gate result:** all pass; no halts.
+
+### Key Improvements (deepen pass)
+
+1. **Precedent-diff (§4.4):** the bounded-parallel pool is NOT novel — `scripts/test-all.sh` `_pj_fill`/`_pj_reap`/`wait -n -p` (~:2196-2411) is the in-repo canonical form, including its bash≥5.1 serial-degrade gate (:2230); atomic result-file writes mirror the replay tool's own `.part` + `os.replace` pattern (`fail_suites`, ~:455). No new precedent class created.
+2. **Verify-the-negative (§4.45):** the plan's load-bearing negatives verified live — "open PR's merge_commit_sha can never carry a `push` run" (test-merge sha semantics, evidenced on #11038 per the script header); "member names cannot go in `ALWAYS_RUN_JOBS`" (the `:646` parity row asserts exact equality with ci.yml job keys — read directly); "`FOLDED_JOBS ∩ ALWAYS_RUN = ∅`" (the two name sets enumerated: 11 member tokens vs 17 always-run names + 4 suite families — disjoint).
+3. **Post-edit self-audit:** no dropped/renamed symbols — every plan-prescribed name (`FOLDED_JOBS`, `PBG_JOBS`, `open` bucket, `cut`/`fail`/`qual`/`skip` worker row vocabulary) is new-introduced, not a reference to removed machinery; pre-existing names (`cut_ny`, `fail_api`, `api`, `api_bin`, `green_prs`, `green_ids`, `run_partial`, `evidence_absent`, `ART_READ_CAP`, `EXAMINE_CAP`, `MAX_RUNS`, `MIN_RUNS`, `PAGE_CAP`, `SETTLED`, `SUITE_JOB`, `ALWAYS_RUN_JOBS`, `suites_failed_in`, `failing_jobs`, `classify`, `member`) each verified at their cited locations by direct read during research.
+4. **Cited-issue verification:** #12360, #9729, #9323, #12089, #12377 states + bodies read live via `gh`; fold commit `bb3c83b9bf` and its job-removal diff verified via `git show`; the 30 `member` tokens re-extracted from the three umbrella workflow files; `cla-check`/`cla-evidence` confirmed at `scripts/required-checks.txt:273-274`.
+5. **PR #12377 adjacency:** diff hunks enumerated and confirmed disjoint (its edits: docstring/`ci_runs`/`cmd_collect`/`main` + test fixture-key helpers; ours: `ALWAYS_RUN_JOBS` region + `suites_failed_in` + parity rows). Rebase-order note carried into tasks.md 3.4.
+
+### New Considerations Discovered
+
+- The merge_group census (`receipts/census-w2.txt` STEM rows) empirically bounds which names reach a ci.yml run's job listing — the basis for the 13-name `FOLDED_JOBS` default rather than the wider 30-member or all-merge_group-workflows sets (decision-challenges row 5).
+- bash `( )`/`&` subshells share the parent's `SECONDS` epoch (verified locally 2026-11-08) — the `api()`/`api_bin()` `END-SECONDS-5` deadline contract is worker-safe unchanged; a `bash -c`/`xargs -P` child restarts `SECONDS` and would silently break it (one reason the pool is `&`-based).
+- Pending-ruling rows for the parent's batched technical-ruling CTO live in `knowledge-base/project/specs/feat-one-shot-12360-ci-lever-threads/decision-challenges.md` (8 rows; one operator-ruled scope row, seven `pending - assumed:` technical rows).
+
 ## Problem Statement / Motivation
 
 **Thread 1 (#12360).** `scripts/followthroughs/pr-battery-gate-saving-9323.sh` cannot produce a verdict — not inside the sweeper's 300 s per-probe kill, and not even under the `PBG_UNBOUNDED=1` operator seam (~11 min wall measured 2026-11-07: `qualifying_runs=40 evidenced_runs=21 candidates_examined=73 pages=6`). Two stacked causes: (a) ~600+ serial `gh api` reads exceed any sweep-sized wall; (b) the escape arm's `pending` bucket is absorbing — an open PR's `merge_commit_sha` is a test-merge sha that can never carry a `push` run, so at ~30 open PRs of repo volume `pending > 0` is near-permanent and `NOT YET` never clears. Until it clears, #9323's measurement arm cannot close.
