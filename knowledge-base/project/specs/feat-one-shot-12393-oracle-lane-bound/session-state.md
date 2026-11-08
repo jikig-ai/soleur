@@ -33,3 +33,15 @@
 - In flight: `test-all.sh --affected` gate (log /var/tmp/soleur-logs/affected-12393.log, rc file .rc).
 - Next: soleur:review → resolve findings → soleur:qa → soleur:compound → soleur:ship → postmerge.
 - Post-merge (runbook §Activation, operator-authorized): `gh variable set CI_ORACLE_LANE --body on`, docs-only canary PR, then comment on #12274 verified-fixed + recommend close. Rollback: `gh variable delete CI_ORACLE_LANE`.
+
+## Affected Gate Disposition (2026-11-08)
+
+`bash scripts/test-all.sh --affected` completed rc=1 with exactly 2 suite failures, both
+confirmed environmental (not diff-caused):
+- `plugins/soleur` redirect-tombstones census — local bare clone is SHALLOW
+  (`git rev-parse --is-shallow-repository`=true; docs history truncated to 12 commits).
+  The suite's own never-vacuous guard fails loudly by design.
+- `apps/cla-evidence/test/ccla-add.test.sh` — 18 rows, all rc=4 (unresolved/env:
+  live `gh` account resolution + instrument hashing; webplat toolchain-bound).
+  Zero paths in this diff feed it.
+Every oracle-manifest suite and the sentinel (4899/4899) are green.
