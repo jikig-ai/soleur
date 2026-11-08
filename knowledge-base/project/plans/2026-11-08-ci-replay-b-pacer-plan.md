@@ -10,6 +10,49 @@ lane: cross-domain
 
 # ci: re-price replay arm -a post-#12296 and pace arm -b
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Sections enhanced:** Observability (probe re-verified live), Technical
+Considerations (precedent note), Research Insights (gate ledger).
+
+### Deepen-plan gate ledger (all resolved at deepen time)
+
+- **4.5 network-outage:** `timeout` tokens fired the checklist trigger;
+  evaluated and N/A — every `timeout` in this plan is a bash bound on a
+  synthesized fixture (run_sut `timeout 30`, `REPLAY_SUT_TIMEOUT`), never a
+  network-connectivity hypothesis. Telemetry emitted.
+- **4.6 User-Brand Impact:** present, threshold `none` + scope-out reason;
+  no Files-to-Edit path matches the sensitive-path regex — PASS.
+- **4.7 Observability:** section present; `discoverability_test.command`
+  re-verified live (`grep -c 'replay-a' scripts/suite-durations.tsv` → `1`,
+  allowlisted verb, <1 s, no banned metacharacters, no suite/test-shaped
+  tokens) — PASS.
+- **4.8 PAT:** no PAT-shaped variable/literal — PASS.
+- **4.9 UI wireframe:** no UI-surface files — skip.
+- **4.10 Encryption posture:** no store/connection introduced — skip.
+- **4.11 Guard Contract:** `scripts/lint-guard-contract.py` green (3 guard
+  entries, matrices ≥3 rows); adequacy read: assemblies name chokepoints
+  (`mutate`/`mutant_outcome` dispatch, `check_corpus`, `run_sut:249`), not
+  member snapshots — PASS.
+- **4.12 Scope Check:** exactly one unfenced section; all asks mapped; the
+  two `inferred` items carry justifications — PASS.
+- **4.13 Task Design:** no new autonomous-task surface — skip.
+- **4.4 precedent-diff:** `REPLAY_SUT_TIMEOUT` follows the file's own
+  env-knob family (`PR_AFFECTED_REPLAY_GH_TIMEOUT`,
+  `PR_AFFECTED_REPLAY_GIT_TIMEOUT`, `PR_AFFECTED_REPLAY_SELECT_TIMEOUT`) —
+  same "env var consulted at the bounded call" pattern; no novel shape.
+- **4.45 verify-the-negative:** negative claims re-grepped —
+  `REPLAY_SUT_TIMEOUT` setters confined to `run_sut` + `row_sym` (matrix row
+  3 enforces it); pristine-vs-give_up headroom verified by the instrumented
+  local run (RATIOS 0.29–1.01 vs 3x bounds).
+- **Subagent fan-out:** this environment exposes no Task/spawn tool; skill
+  agents, learnings agents, and the Phase 5 review-agent panel could not be
+  spawned. Research ran inline (site-cost table, instrumented row timing,
+  ledger-code read, PR #12412 diff inspection, sharp-edges catalogue pass).
+  Residual risk is bounded to the pending technical rulings in
+  `decision-challenges.md`.
+
 ## Overview
 
 Epic #11556 (cut PR required-check time toward 20 min) residual work after the
@@ -259,8 +302,8 @@ logs:
   where: suite-timings artifacts on merge_group runs; the leg's stdout log
   retention: GitHub artifact retention for the workflow
 discoverability_test:
-  command: grep -P '^plugins/soleur/test/ci-pr-affected-replay-a\t' scripts/suite-durations.tsv
-  expected_output: ci-pr-affected-replay-a
+  command: grep -c 'replay-a' scripts/suite-durations.tsv
+  expected_output: 1
 ```
 
 ## Architecture Decision (ADR/C4)
