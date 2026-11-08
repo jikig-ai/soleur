@@ -5,20 +5,20 @@ One PR carries both items. Stage 4 stays NON-ACTIVATED throughout (AC8).
 
 ## Phase 0 — Coordination snapshot (blocking, cheap)
 
-- [ ] 0.1 `gh run view 42483264409 --json status,conclusion` and `gh run view 42483264452 --json status,conclusion`; record terminal states for the #9323 comment (plan-time readings: `success` / `in_progress`).
-- [ ] 0.2 Inventory `/var/tmp/s4-r3-20261108/` and the `s4-r3-replay` worktree processes. If the collect is alive: adopt it as the R3 evidence base (record in `receipts/r3/adoption-note.md`). If dead/stale: rerun `collect` against the same `--out` (resumable) or a fresh `OUT=/var/tmp/s4-r3-<date>`. Never run two concurrent collects.
+- [x] 0.1 `gh run view 42483264409 --json status,conclusion` and `gh run view 42483264452 --json status,conclusion`; record terminal states for the #9323 comment (plan-time readings: `success` / `in_progress`).
+- [x] 0.2 Inventory `/var/tmp/s4-r3-20261108/` and the `s4-r3-replay` worktree processes. If the collect is alive: adopt it as the R3 evidence base (record in `receipts/r3/adoption-note.md`). If dead/stale: rerun `collect` against the same `--out` (resumable) or a fresh `OUT=/var/tmp/s4-r3-<date>`. Never run two concurrent collects.
 
 ## Phase 1 — Item 1: #9323 escape triage
 
-- [ ] 1.1 Ruling already taken at plan time (Arm A — fix the probe's escape classification; `decision-challenges.md` row 1, sequential-fallback CTO execution, disclosed). Verify the row survives the parent's batched technical-ruling gate unchanged; if the gate re-adjudicates and changes the arm, implement the new ruling instead (AC1).
-- [ ] 1.2 Confirm `decision-challenges.md` carries the `Ruled by CTO agent, 2026-11-08:` row (AC1).
-- [ ] 1.3 Implement the ruled arm (AC2):
+- [x] 1.1 Ruling already taken at plan time (Arm A — fix the probe's escape classification; `decision-challenges.md` row 1, sequential-fallback CTO execution, disclosed). Verify the row survives the parent's batched technical-ruling gate unchanged; if the gate re-adjudicates and changes the arm, implement the new ruling instead (AC1).
+- [x] 1.2 Confirm `decision-challenges.md` carries the `Ruled by CTO agent, 2026-11-08:` row (AC1).
+- [x] 1.3 Implement the ruled arm (AC2):
   - Arm A: `_pbg_w_esc` in `scripts/followthroughs/pr-battery-gate-saving-9323.sh` — on red push-run conclusions read the run's jobs via the existing `api()` primitive; escape iff ≥1 failed job matches `test-scripts*` (:281 prefix); all-failed-outside-gated-set → unrelated bucket (reported, never counted); jobs-read failure → `pending`, never `ok`; update header + `need_min` comments.
   - Arm B: widen `scripts/lib/test-relevance-paths.sh` per ADR-262 R1.
   - Arm C: revert the PR-9324 gate machinery.
-- [ ] 1.4 (Arm A) Extend `scripts/followthroughs/pr-battery-gate-saving-9323.test.sh` with Guard Contract matrix rows 1-6 (AC3).
-- [ ] 1.5 `GH_TOKEN=… PBG_UNBOUNDED=1 bash scripts/followthroughs/pr-battery-gate-saving-9323.sh`; post the corrected verdict comment on #9323 quoting rerun terminal states, the disposition, and the honest output verbatim (AC4). State plainly whether the corrected classifier makes PASS reachable and a sweeper close on PASS warranted.
-- [ ] 1.6 Sweep the probe RETIREMENT block (:80-82) for instructions the change falsifies.
+- [x] 1.4 (Arm A) Extend `scripts/followthroughs/pr-battery-gate-saving-9323.test.sh` with Guard Contract matrix rows 1-6 (AC3).
+- [x] 1.5 `GH_TOKEN=… PBG_UNBOUNDED=1 bash scripts/followthroughs/pr-battery-gate-saving-9323.sh`; post the corrected verdict comment on #9323 quoting rerun terminal states, the disposition, and the honest output verbatim (AC4). State plainly whether the corrected classifier makes PASS reachable and a sweeper close on PASS warranted.
+- [x] 1.6 Sweep the probe RETIREMENT block (:80-82) for instructions the change falsifies.
 
 ## Phase 2 — Item 2: #9729 R3 re-ruling
 
