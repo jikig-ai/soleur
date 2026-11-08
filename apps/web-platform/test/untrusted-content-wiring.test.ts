@@ -2,8 +2,17 @@
 // session-type, exact matcher string, single output rewriter, dispatcher forwarding.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+
+// A fixed pepper, set before any import reads it (observability reads it once at load), so the
+// forwarded session id can be proven by VALUE: with the pepper unset every id hashes to the
+// same sentinel and a wrong forward would be invisible.
+const WIRING_PEPPER = vi.hoisted(() => {
+  process.env.SENTRY_USERID_PEPPER = "wiring-test-pepper";
+  return "wiring-test-pepper";
+});
 
 vi.mock("@/server/agent-env", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/agent-env")>();
@@ -102,12 +111,18 @@ describe("PostToolUse WebFetch registration matrix", () => {
       untrustedContentTelemetry: { workspaceId: "ws-forwarded", sessionId: "sess-forwarded" },
     });
     const hook = webFetchEntries(opts)[0]!.hooks[0]!;
+    log.warn.mockClear(); // earlier cases in this file also log untrusted-classify lines
     await hook(
       { hook_event_name: "PostToolUse", tool_name: "WebFetch", tool_input: {}, tool_response: "plain page", tool_use_id: "t" },
       "t",
       { signal: new AbortController().signal },
     );
-    expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "sess-forwarded" }), expect.anything());
+    const fields = log.warn.mock.calls.map((c) => c[0] as Record<string, unknown>).find((f) => f?.op === "untrusted-classify");
+    expect(fields, "no untrusted-classify line was logged").toBeDefined();
+    expect(fields!.sessionIdHash).toBe(createHmac("sha256", WIRING_PEPPER).update("sess-forwarded").digest("hex"));
+    expect(fields!.workspaceIdHash).toBe(createHmac("sha256", WIRING_PEPPER).update("ws-forwarded").digest("hex"));
+    expect(fields).not.toHaveProperty("sessionId");
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("sess-forwarded");
   });
 
   it("the existing Bash git-lock hook is still registered", () => {

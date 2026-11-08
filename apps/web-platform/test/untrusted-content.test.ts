@@ -378,10 +378,15 @@ describe("createUntrustedContentHook", () => {
     }
     // The workspace id is logged only as a hash (it equals the user id for sole-owned workspaces).
     const fields = log.warn.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(fields).toMatchObject({ op: "untrusted-classify", flagged: true, source: "web_fetch", sessionId: "se1", rewriteEmitted: false });
+    expect(fields).toMatchObject({ op: "untrusted-classify", flagged: true, source: "web_fetch", rewriteEmitted: false });
     expect(fields).not.toHaveProperty("workspaceId");
     expect(typeof fields.workspaceIdHash).toBe("string");
     expect(fields.workspaceIdHash).not.toBe("ws1");
+    // The session id is hashed the same way (#9601): no raw key, no raw value. The full
+    // pepper-state matrix over every emit path lives in untrusted-content-session-hash.test.ts.
+    expect(fields).not.toHaveProperty("sessionId");
+    expect(typeof fields.sessionIdHash).toBe("string");
+    expect(fields.sessionIdHash).not.toBe("se1");
   });
 
   // #10194: whether the hook fires for WebFetch calls made inside Task subagents is NOT
