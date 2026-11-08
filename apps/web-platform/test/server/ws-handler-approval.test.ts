@@ -827,6 +827,45 @@ describe("reattach role read: a non-boolean is_workspace_owner answer is a faile
     expect(h.warn.mock.calls.filter((c) => (c[1] as { op?: string }).op === "approval-viewer-role-failed")).toHaveLength(1);
   });
 
+  const roleCalls = () => h.tenantRpc.mock.calls.filter((c) => c[0] === "is_workspace_owner").map((c) => c[1]);
+
+  it("the role RPC asks about the attaching user and the row's workspace (the arguments, not just the call)", async () => {
+    h.tenantRpc.mockClear();
+    roleAnswers(true);
+    h.serviceRpc.mockResolvedValue({ data: [live({ id: ROW_VISIBLE, requested_by_user_id: OTHER_USER })], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    sessions.set(USER_ID, s);
+    await send(USER_ID, { type: "resume_stream", conversationId: CONVERSATION_ID, ackSeq: 0 });
+    await vi.waitFor(() => expect(cards(s)).toHaveLength(1));
+    expect(h.tenantRpc).toHaveBeenCalledWith("is_workspace_owner", { p_workspace_id: WORKSPACE_ID, p_user_id: USER_ID });
+    expect(roleCalls()).toEqual([{ p_workspace_id: WORKSPACE_ID, p_user_id: USER_ID }]);
+    expect(cards(s)[0].viewerRole).toBe("owner");
+  });
+
+  it("two workspaces: the answer is keyed on p_workspace_id, so each row is judged by ITS workspace's role", async () => {
+    h.tenantRpc.mockClear();
+    // Owner of WORKSPACE_ID only; a member of OTHER_WORKSPACE_ID.
+    h.tenantRpc.mockImplementation(async (fn: string, args: { p_workspace_id?: string }) =>
+      fn === "is_workspace_owner" ? { data: args.p_workspace_id === WORKSPACE_ID, error: null } : { data: null, error: null },
+    );
+    const inWorkspace = (workspaceId: string, id: string) => {
+      const action = canonicalizeAction(TOOLS.emailSend, input, undefined);
+      const hash = computeActionHash({ toolName: TOOLS.emailSend, workspaceId, conversationId: CONVERSATION_ID, action });
+      return { approval: row({ id, workspace_id: workspaceId, status: "pending", decided_at: null, decided_by: null, requested_by_user_id: OTHER_USER, canonical_action: action, action_sha256: hash }), request_count: 1 };
+    };
+    h.flagWorkspace.value = null;
+    h.serviceRpc.mockResolvedValue({ data: [inWorkspace(WORKSPACE_ID, ROW_SKIPPED), inWorkspace(OTHER_WORKSPACE_ID, ROW_VISIBLE)], error: null });
+    const s = makeSession(CONVERSATION_ID);
+    sessions.set(USER_ID, s);
+    await send(USER_ID, { type: "resume_stream", conversationId: CONVERSATION_ID, ackSeq: 0 });
+    await vi.waitFor(() => expect(cards(s)).toHaveLength(2));
+    expect(h.tenantRpc).toHaveBeenCalledWith("is_workspace_owner", { p_workspace_id: WORKSPACE_ID, p_user_id: USER_ID });
+    expect(h.tenantRpc).toHaveBeenCalledWith("is_workspace_owner", { p_workspace_id: OTHER_WORKSPACE_ID, p_user_id: USER_ID });
+    expect(new Set(roleCalls().map((a) => (a as { p_workspace_id: string }).p_workspace_id))).toEqual(new Set([WORKSPACE_ID, OTHER_WORKSPACE_ID]));
+    expect(cards(s).find((c) => c.approvalId === ROW_SKIPPED)).toMatchObject({ viewerRole: "owner" });
+    expect(cards(s).find((c) => c.approvalId === ROW_VISIBLE)).toMatchObject({ viewerRole: "member", view: null });
+  });
+
   it("a clean true is an Owner and a clean false is a member (no failed-read report for either)", async () => {
     for (const [data, expected] of [[true, "owner"], [false, "member"]] as const) {
       h.warn.mockClear();

@@ -10,15 +10,21 @@
  * `unclassified` bucket.
  *
  * The allow-lists below are literals: changing them is a reviewed edit in the same diff as the source they name.
- * Named residual: a computed-name access and a dynamic `import(expr)` with a non-literal specifier are invisible to a
- * static scan.
+ *
+ * What the scan does NOT cover (probed by seeding a sink; each of these evades it today, so none is claimed):
+ *   - any file named `*.test.*` or `*.spec.*` (or under `__tests__`) beneath a scan root: the filter drops it, so a production
+ *     module that carries such an infix and is imported from server code is unscanned;
+ *   - everything outside the five roots: `scripts/`, `infra/`, `e2e/`, `public/`, and the root-level files (`middleware.ts`,
+ *     `instrumentation.ts`, `sentry.*.config.ts`);
+ *   - a computed-name access (`R["render" + "ApprovalView"]`, `a["send" + "ToClient"]`) and a dynamic `import(expr)` with a
+ *     non-literal specifier (including a template with a substitution), `require.resolve`, `createRequire(...)(...)`.
  */
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { callSites, censusSource, codeOffsets, type CensusHit } from "./source-scan";
+import { callSites, censusSource, codeOffsets, frameLiterals, sinkCensus, stringLiteralSites, stripComments, type CensusHit } from "./source-scan";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCAN_DIRS = ["server", "app", "lib", "components", "hooks"];
@@ -164,11 +170,54 @@ describe("the scanner itself (inline sources)", () => {
   });
 });
 
+describe("stripComments (shared by the decide-boundary, runner, tools, cc-push, workspace-head and git-auth sentinels)", () => {
+  it("a // comment after a JSX apostrophe is stripped (the hand-rolled lexer's phantom string kept it)", () => {
+    const out = stripComments(`const a = <p>Don't</p>;\n// SECRET_COMMENT\nfoo();`);
+    expect(out).not.toContain("SECRET_COMMENT");
+    expect(out).toContain("foo();");
+    expect(out.split("\n")).toHaveLength(3);
+  });
+
+  it("a regex literal containing // does not swallow the real code after it (the lexer's fail-open)", () => {
+    const out = stripComments("const r = /https?:\\/\\//; call();");
+    expect(out).toContain("call();");
+    expect(out).toContain("https?:");
+  });
+
+  it("a regex literal with a quote does not open a phantom string; a comment after it is still stripped", () => {
+    const out = stripComments("if (x) /re'/.test(y); keep(); // gone\nmore();");
+    expect(out).toContain("keep();");
+    expect(out).toContain("more();");
+    expect(out).not.toContain("gone");
+  });
+
+  it("JSX text that looks like a comment is text, not a comment", () => {
+    expect(stripComments("const a = <p>// not a comment</p>; /* real */ x();")).toContain("// not a comment");
+  });
+
+  it("strings, templates and URLs keep their // and /*; line and block comments are blanked; offsets and newlines are preserved", () => {
+    const src = 'const u = "https://a/b"; const t = `/* x */ ${1}`; // c1\n/* c2\nc3 */ ok();';
+    const out = stripComments(src);
+    expect(out).toContain('"https://a/b"');
+    expect(out).toContain("`/* x */ ${1}`");
+    expect(out).not.toMatch(/c1|c2|c3/);
+    expect(out).toHaveLength(src.length);
+    expect(out.split("\n")).toHaveLength(src.split("\n").length);
+  });
+
+  it("a comment right before a closing brace or paren is found (leading trivia of punctuation)", () => {
+    expect(stripComments("f(a /* gone */);\nfunction g() { x(); /* gone2 */ }")).not.toMatch(/gone/);
+  });
+
+  it("an explicit file name picks the language variant", () => {
+    expect(stripComments(`const a = <p>Don't</p>;\n// c\nz();`, "y.tsx")).not.toContain("// c");
+  });
+});
+
 describe("the scan covers the tree (instrument controls)", () => {
-  it("scans at least every known server/approval source file, and every root is present", () => {
+  it("scans at least every known server/approval source file", () => {
     const approvalDir = readdirSync(join(ROOT, "server/approval")).filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"));
     expect(files.filter((f) => f.startsWith("server/approval/")).length).toBeGreaterThanOrEqual(approvalDir.length);
-    for (const d of SCAN_DIRS) expect(files.some((f) => f.startsWith(`${d}/`)), d).toBe(true);
   });
 
   it(`the file count is at least the absolute floor (${FILES_FLOOR}); a walk that skips a directory or an extension fails here`, () => {
@@ -179,18 +228,48 @@ describe("the scan covers the tree (instrument controls)", () => {
     expect(files.some((f) => f.endsWith(".mjs"))).toBe(true);
   });
 
-  it("conservation: every file git tracks under the scan roots that passes the filter is in the walked set", () => {
+  it("the roots and the extension set are exactly these literals (not a count, and not read back from the array under test)", () => {
+    expect(SCAN_DIRS).toEqual(["server", "app", "lib", "components", "hooks"]);
+    expect(SCAN_EXT.source).toBe("\\.(ts|tsx|js|jsx|mjs|cjs|mts|cts)$");
+    for (const ext of ["ts", "tsx", "js", "jsx", "mjs", "cjs", "mts", "cts"]) expect(SCAN_EXT.test(`x/y.${ext}`), ext).toBe(true);
+    for (const ext of ["json", "md", "css", "sql", "sh", "map"]) expect(SCAN_EXT.test(`x/y.${ext}`), ext).toBe(false);
+  });
+
+  it("every root, spelled as a literal here, contributes at least one walked file", () => {
+    for (const d of ["server", "app", "lib", "components", "hooks"]) expect(files.some((f) => f.startsWith(`${d}/`)), d).toBe(true);
+  });
+
+  it("conservation: every file git tracks under the literal roots, with an independently spelled extension list, is walked", (ctx) => {
     let tracked: string[];
     try {
-      tracked = execFileSync("git", ["ls-files", "-z", "--", ...SCAN_DIRS], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
+      tracked = execFileSync("git", ["ls-files", "-z", "--", "server", "app", "lib", "components", "hooks"], { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
         .split("\0")
         .filter(Boolean);
-    } catch {
-      // No git metadata (an exported source tree): the absolute floor above still holds the line.
+    } catch (e) {
+      // No git metadata (an exported source tree). CI always has it: fail there rather than skip, so the check cannot be lost silently.
+      if (process.env.CI) throw new Error(`conservation check cannot run under CI: git ls-files failed (${String(e)})`);
+      ctx.skip("git metadata unavailable: the conservation check did not run");
       return;
     }
-    const expected = tracked.filter(eligible);
+    // Independent of `eligible` and `SCAN_EXT`: a different spelling of the same rules, so a narrowing of either shows up here.
+    const EXTS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"];
+    const expected = tracked.filter((f) => {
+      const segs = f.split("/");
+      const base = segs[segs.length - 1];
+      return (
+        EXTS.some((e) => f.endsWith(e)) &&
+        !base.includes(".test.") &&
+        !base.includes(".spec.") &&
+        !/\.d\.[mc]?ts$/.test(base) &&
+        !segs.includes("__tests__") &&
+        !segs.includes("node_modules")
+      );
+    });
     expect(expected.length).toBeGreaterThanOrEqual(FILES_FLOOR);
+    // Per-extension: each extension the repo tracks under the roots is walked at least once.
+    for (const e of EXTS) {
+      if (expected.some((f) => f.endsWith(e))) expect(files.some((f) => f.endsWith(e)), e).toBe(true);
+    }
     const walked = new Set(files);
     expect(expected.filter((f) => !walked.has(f))).toEqual([]);
   });
@@ -245,16 +324,121 @@ describe("renderApprovalView: callers are exactly the allowed ones", () => {
   });
 });
 
+describe("the send census itself (inline sources: every shape that could hide a second send is detected)", () => {
+  const census = (src: string, name = "sendToClient", file = "server/approval/x.ts") => sinkCensus(src, file, name);
+  const frames = (src: string, name = "sendToClient") => census(src, name).calls.map((c) => c.frame);
+  const REQ = "approval_request";
+
+  it("baseline: a direct send with a plain double-quoted type", () => {
+    const c = census(`a.sendToClient(a.userId, { type: "approval_request", view: v });`);
+    expect(c.calls.map((x) => [x.target, x.frame, x.via])).toEqual([["a.userId", REQ, "direct"]]);
+    expect(c.refs).toBe(0);
+  });
+
+  it("the type is read from the AST literal: single quote, template literal, `as const`, parentheses, satisfies, string key, computed literal key", () => {
+    for (const t of [`'approval_request'`, "`approval_request`", `"approval_request" as const`, `("approval_request")`, `"approval_request" satisfies string`]) {
+      expect(frames(`a.sendToClient(u, { type: ${t} });`), t).toEqual([REQ]);
+    }
+    expect(frames(`a.sendToClient(u, { "type": "approval_request" });`)).toEqual([REQ]);
+    expect(frames(`a.sendToClient(u, { ['type']: 'approval_request' });`)).toEqual([REQ]);
+    expect(frames("a.sendToClient(u, { [`type`]: `approval_request` });")).toEqual([REQ]);
+  });
+
+  it("a frame the census cannot read is reported as ? (a variable, a call result, a spread that may carry type, a computed non-literal key, a non-literal type)", () => {
+    expect(frames(`const frame = { type: "approval_request" }; a.sendToClient(a.userId, frame);`)).toEqual(["?"]);
+    expect(frames(`a.sendToClient(u, build());`)).toEqual(["?"]);
+    expect(frames(`a.sendToClient(u, { ...base, view });`)).toEqual(["?"]);
+    expect(frames(`a.sendToClient(u, { type: "approval_request", ...base });`)).toEqual(["?"]);
+    expect(frames(`a.sendToClient(u, { [k]: "approval_request" });`)).toEqual(["?"]);
+    expect(frames(`a.sendToClient(u, { type: KIND });`)).toEqual(["?"]);
+    expect(frames(`a.sendToClient(u, { type });`)).toEqual(["?"]);
+  });
+
+  it("a conditional spread of keyless object literals (the real requester spread) does not blur the type", () => {
+    expect(frames(`a.sendToClient(u, { type: "approval_request", ...(s ? { requester: "you" } : {}) });`)).toEqual([REQ]);
+    expect(frames(`a.sendToClient(u, { type: "approval_request", ...(s ? { type: "x" } : {}) });`)).toEqual(["?"]);
+  });
+
+  it("every callee spelling is a counted call", () => {
+    const frame = `{ type: "approval_request" }`;
+    const shapes = [
+      `a["sendToClient"](u, ${frame});`,
+      `a[\`sendToClient\`](u, ${frame});`,
+      `(a.sendToClient as any)(u, ${frame});`,
+      `(a.sendToClient)(u, ${frame});`,
+      `a.sendToClient!(u, ${frame});`,
+      `a.sendToClient?.(u, ${frame});`,
+      `a?.sendToClient(u, ${frame});`,
+      `(<any>a.sendToClient)(u, ${frame});`,
+      `a.sendToClient.call(a, u, ${frame});`,
+      `(a.sendToClient as Function).call(a, u, ${frame});`,
+      `const { sendToClient } = a; sendToClient(u, ${frame});`,
+    ];
+    for (const sh of shapes) {
+      const c = census(sh, "sendToClient", "server/approval/x.ts");
+      expect(c.calls.map((x) => x.frame), sh).toContain(REQ);
+      expect(c.calls, sh).toHaveLength(1);
+    }
+  });
+
+  it("`.call` strips the this-argument: the target and the frame are the 2nd and 3rd arguments", () => {
+    const c = census(`a.sendToClient.call(a, a.userId, { type: "approval_request" });`);
+    expect(c.calls).toMatchObject([{ target: "a.userId", frame: REQ, via: "call" }]);
+  });
+
+  it(".apply is a counted call whose frame is unknowable", () => {
+    expect(census(`a.sendToClient.apply(a, [u, { type: "approval_request" }]);`).calls).toMatchObject([{ target: null, frame: "?", via: "apply" }]);
+  });
+
+  it("an alias, a destructure, a bind, a comma callee and a pass-through are refs (a sink that escapes the call-site view)", () => {
+    expect(census(`const s = a.sendToClient; s(u, { type: "approval_request" });`).refs).toBe(1);
+    expect(census(`const s = a["sendToClient"]; s(u, f);`).refs).toBe(1);
+    expect(census(`const { sendToClient } = a;`).refs).toBe(1);
+    expect(census(`const s = a.sendToClient.bind(a);`).refs).toBe(1);
+    expect(census(`(0, a.sendToClient)(u, f);`).refs).toBe(1);
+    expect(census(`other({ sendToClient: a.sendToClient });`).refs).toBe(2);
+    expect(census(`other({ sendToClient });`).refs).toBe(1);
+    expect(census(`other({ ["sendToClient"]: x });`).refs).toBe(1);
+  });
+
+  it("the type-member declaration is a declaration, not a use; a comment, a string and an unrelated name are nothing", () => {
+    expect(census(`interface D { sendToClient: (u: string, p: W) => boolean }`)).toEqual({ calls: [], refs: 0, declarations: 1 });
+    expect(census(`// a.sendToClient(u, f)\nconst s = "sendToClient"; a.sendToClientX(u, f);`)).toEqual({ calls: [], refs: 0, declarations: 0 });
+  });
+
+  it("the same shapes are caught for the reattach sink name `send`", () => {
+    expect(frames(`a["send"](a.userId, { type: 'approval_request' });`, "send")).toEqual([REQ]);
+    expect(census(`const s = a.send; s(1);`, "send").refs).toBe(1);
+  });
+
+  it("frameLiterals and stringLiteralSites find an approval_request literal in any quote style, key style or wrapping, and never in a comment", () => {
+    for (const lit of [`{ type: "approval_request" }`, `{ type: 'approval_request' }`, "{ type: `approval_request` }", `{ "type": "approval_request" }`, `{ ["type"]: "approval_request" }`, `{ type: "approval_request" as const }`]) {
+      expect(frameLiterals(`const f = ${lit};`, "x.ts", REQ), lit).toHaveLength(1);
+    }
+    expect(frameLiterals(`// { type: "approval_request" }\nconst f = { type: "approval_status" };`, "x.ts", REQ)).toEqual([]);
+    expect(stringLiteralSites(`const t = 'approval_request'; const u = "approval_request"; const v = \`approval_request\`; // "approval_request"`, "x.ts", REQ)).toHaveLength(3);
+  });
+});
+
 describe("the emit sites of an approval_request frame", () => {
-  it("under server/, exactly gate-flow.ts and reattach.ts build one (ws-handler only receives the type)", () => {
-    const re = /type:\s*["'`]approval_request["'`]/g;
-    const emitters = files
-      .filter((f) => f.startsWith("server/"))
-      .map((f) => [f, (source(f).match(re) ?? []).length] as const)
-      .filter(([, n]) => n > 0);
+  const serverFiles = files.filter((f) => f.startsWith("server/"));
+
+  it("under server/, exactly gate-flow.ts and reattach.ts build an object literal with that type (any quote style, key style or wrapping)", () => {
+    const emitters = serverFiles.map((f) => [f, frameLiterals(source(f), f, "approval_request").length] as const).filter(([, n]) => n > 0);
     expect(emitters).toEqual([
       ["server/approval/gate-flow.ts", 1],
       ["server/approval/reattach.ts", 1],
+    ]);
+  });
+
+  it("the string literal approval_request appears in exactly these server files (a frame built from a constant or a variable still shows up here)", () => {
+    const where = serverFiles.map((f) => [f, stringLiteralSites(source(f), f, "approval_request").length] as const).filter(([, n]) => n > 0);
+    // gate-flow.ts and reattach.ts: the two frames. inbox-enrich.ts: the table name. ws-handler.ts: the message-type dispatch, a consumer.
+    expect(where).toEqual([
+      ["server/approval/gate-flow.ts", 1],
+      ["server/approval/inbox-enrich.ts", 1],
+      ["server/approval/reattach.ts", 1],
+      ["server/ws-handler.ts", 1],
     ]);
   });
 });
@@ -262,14 +446,20 @@ describe("the emit sites of an approval_request frame", () => {
 describe("the first send goes to the proposing session user", () => {
   const GATE = "server/approval/gate-flow.ts";
   const gate = source(GATE);
+  const gateSinks = sinkCensus(gate, GATE, "sendToClient");
   const sends = callSites(gate, GATE, "sendToClient").filter((c) => c.args[1]?.props.type === '"approval_request"');
 
-  it("gate-flow.ts has exactly ONE sendToClient of an approval_request, and it targets a.userId", () => {
-    expect(sends).toHaveLength(1);
-    expect(sends[0].args[0].text).toBe("a.userId");
+  it("gate-flow.ts: every sendToClient mention is a direct call with a literal frame, one approval_status and exactly ONE approval_request, both to a.userId", () => {
+    expect(gateSinks.refs).toBe(0);
+    expect(gateSinks.declarations).toBe(1);
+    expect(gateSinks.calls.map((c) => [c.frame, c.target, c.via])).toEqual([
+      ["approval_status", "a.userId", "direct"],
+      ["approval_request", "a.userId", "direct"],
+    ]);
   });
 
   it("that frame's requester key is the literal REQUESTER_SELF behind isVerifiedRequester, appended after agentWaiting", () => {
+    expect(sends).toHaveLength(1);
     const props = Object.keys(sends[0].args[1].props);
     // The conditional spread is not a named property: the last named key is agentWaiting, and the spread follows it.
     expect(props.at(-1)).toBe("agentWaiting");
@@ -277,11 +467,12 @@ describe("the first send goes to the proposing session user", () => {
     expect(callSites(gate, GATE, "isVerifiedRequester")).toHaveLength(1);
   });
 
-  it("reattach.ts has exactly ONE send of an approval_request, and it targets a.userId", () => {
+  it("reattach.ts: every send mention is one direct call, an approval_request to a.userId (no alias, no second send, no unreadable frame)", () => {
     const f = "server/approval/reattach.ts";
-    const re = callSites(source(f), f, "send").filter((c) => c.args[1]?.props.type === '"approval_request"');
-    expect(re).toHaveLength(1);
-    expect(re[0].args[0].text).toBe("a.userId");
+    const c = sinkCensus(source(f), f, "send");
+    expect(c.refs).toBe(0);
+    expect(c.declarations).toBe(1);
+    expect(c.calls.map((x) => [x.frame, x.target, x.via])).toEqual([["approval_request", "a.userId", "direct"]]);
   });
 });
 

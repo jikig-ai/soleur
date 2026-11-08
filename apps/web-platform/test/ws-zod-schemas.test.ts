@@ -541,6 +541,12 @@ describe("approval frames (#4672)", () => {
     expect(parseWSMessage({ ...request, requester: "" }).ok).toBe(false);
   });
 
+  test("the requester label is capped at exactly 320 characters on the wire: 320 accepted, 321 rejected (literal numbers)", () => {
+    expect(parseWSMessage({ ...request, requester: "a".repeat(320) }).ok).toBe(true);
+    expect(parseWSMessage({ ...request, requester: "a".repeat(321) }).ok).toBe(false);
+    expect(parseWSMessage({ ...request, requester: "a" }).ok).toBe(true);
+  });
+
   test("the card view carries a non-empty noun (the client never parses a display sentence)", () => {
     const { noun: _n, ...withoutNoun } = view;
     expect(parseWSMessage({ ...request, view: withoutNoun }).ok).toBe(false);

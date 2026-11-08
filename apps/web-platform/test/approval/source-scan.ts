@@ -1,52 +1,56 @@
 /**
  * Shared source-scanning helpers for the approval sentinels.
  *
- *   - `stripComments` (decide-boundary, runner-census, tools-census, cc-push-boundaries, workspace-head): a comment stripper
- *     that keeps string/template content intact (a URL with `//` inside a string is code, not a comment).
- *   - `censusSource`, `callSites`, `codeOffsets` (render-sink-scan, #9601): a role-classified census of module edges and call
- *     sites built on the TypeScript parser (`ts.createSourceFile`, parse only, no program). A hand-rolled lexer desynced on
- *     an apostrophe in JSX text and on a regex literal after `)`, so comments, strings, templates, JSX text and regexes are
- *     now whatever the real grammar says they are.
+ *   - `stripComments` (decide-boundary, runner-census, tools-census, cc-push-boundaries, workspace-head, git-auth-hardened-env):
+ *     a comment blanker on the TypeScript parser (a URL with `//` inside a string is code, a JSX apostrophe or a regex literal
+ *     containing `//` cannot desync it).
+ *   - `censusSource`, `callSites`, `codeOffsets`, `sinkCensus`, `frameLiterals`, `stringLiteralSites` (render-sink-scan, #9601):
+ *     a role-classified census of module edges, call sites and frame literals built on the TypeScript parser
+ *     (`ts.createSourceFile`, parse only, no program), so comments, strings, templates, JSX text and regexes are whatever the
+ *     real grammar says they are.
  */
 import ts from "typescript";
 
-/** Blank out comments, keeping string/template/regex-free-enough code intact. Newlines are preserved. */
-export function stripComments(src: string): string {
-  let out = "";
-  let i = 0;
-  const n = src.length;
-  while (i < n) {
-    const c = src[i];
-    const d = src[i + 1];
-    if (c === "/" && d === "/") {
-      while (i < n && src[i] !== "\n") i++;
-    } else if (c === "/" && d === "*") {
-      i += 2;
-      while (i < n && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] === "\n") out += "\n";
-        i++;
-      }
-      i += 2;
-    } else if (c === '"' || c === "'" || c === "`") {
-      const quote = c;
-      out += c;
-      i++;
-      while (i < n && src[i] !== quote) {
-        if (src[i] === "\\") {
-          out += src[i];
-          i++;
-        }
-        if (i < n) out += src[i];
-        i++;
-      }
-      if (i < n) out += quote;
-      i++;
-    } else {
-      out += c;
-      i++;
-    }
+/**
+ * Blank out every comment (each comment character becomes a space; newlines are kept, so offsets, columns and line numbers
+ * still match the file). Comment ranges come from the TypeScript parser, not a hand-rolled lexer: an apostrophe in JSX text,
+ * a regex literal containing `//` or a quote, a template string and a URL inside a string are whatever the real grammar says
+ * they are. `file` picks the language variant; when it is omitted the source is parsed as `.ts` and, if that parse reports
+ * syntax errors, re-parsed as `.tsx` (JSX) and the cleaner parse wins.
+ */
+export function stripComments(src: string, file?: string): string {
+  const errors = (sf: ts.SourceFile) => ((sf as unknown as { parseDiagnostics?: unknown[] }).parseDiagnostics ?? []).length;
+  let sf: ts.SourceFile;
+  if (file !== undefined) sf = parseSource(src, file);
+  else {
+    const asTs = parseSource(src, "x.ts");
+    sf = errors(asTs) === 0 ? asTs : (() => {
+      const asTsx = parseSource(src, "x.tsx");
+      return errors(asTsx) < errors(asTs) ? asTsx : asTs;
+    })();
   }
-  return out;
+  const ranges = new Map<number, number>();
+  // Every token's leading AND trailing trivia (a comment on the same line as the previous token is only "trailing" to the
+  // parser's trivia API), so a comment right before a closing `}` or `)` is found. JSX text is not trivia:
+  // `<p>// not a comment</p>` is text, but the trailing-trivia scan of the `>` before it would read it as a comment, so any
+  // range that starts inside a JsxText node is dropped.
+  const jsxText: Array<[number, number]> = [];
+  const visit = (node: ts.Node): void => {
+    if (node.kind === ts.SyntaxKind.JsxText) {
+      jsxText.push([node.pos, node.end]);
+      return;
+    }
+    for (const r of ts.getLeadingCommentRanges(src, node.pos) ?? []) ranges.set(r.pos, r.end);
+    for (const r of ts.getTrailingCommentRanges(src, node.end) ?? []) ranges.set(r.pos, r.end);
+    for (const child of node.getChildren(sf)) visit(child);
+  };
+  visit(sf);
+  const chars = src.split("");
+  for (const [pos, end] of ranges) {
+    if (jsxText.some(([a, b]) => pos >= a && pos < b)) continue;
+    for (let i = pos; i < end; i++) if (chars[i] !== "\n" && chars[i] !== "\r") chars[i] = " ";
+  }
+  return chars.join("");
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -241,4 +245,162 @@ export function callSites(src: string, file: string, name: string): CallSite[] {
 /** Offsets of the real call sites of `ident` (structural ordering checks). */
 export function codeOffsets(src: string, ident: string, file = "x.ts"): number[] {
   return callSites(src, file, ident).map((c) => c.pos);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// #9601: the send census. A pin of the form "exactly one approval_request send" must not be evadable by the SHAPE of the
+// second send. `sinkCensus` finds EVERY mention of the sink name (`sendToClient`, `send`) in a file and classifies it:
+//   - `calls`: a call through any spelling of the callee: `a.sendToClient(...)`, `a["sendToClient"](...)`,
+//     `(a.sendToClient as any)(...)`, `a.sendToClient!(...)`, `a.sendToClient?.(...)`, `a.sendToClient.call(t, ...)`,
+//     `.apply(t, [...])`, and a bare `sendToClient(...)` (a destructured or aliased binding). Each call records the target
+//     (argument 0, whitespace removed) and `frame`: the frame's `type` read from the AST literal's `.text` (single, double or
+//     template quotes, `as const`, parentheses and `satisfies` unwrapped, a string-literal or computed-literal key), or `"?"`
+//     when the frame is a variable, a call result, a spread of something that may carry a `type`, a computed non-literal key,
+//     or a non-literal `type`.
+//   - `refs`: any other mention (an alias `const s = a.sendToClient`, a destructure, `.bind`, a comma-expression callee, an
+//     object-property pass-through): a sink that escapes the call-site view. Callers pin it to zero.
+//   - `declarations`: the name as a type member (`sendToClient: (...) => boolean`).
+// Named residual: a computed non-literal access (`a["send" + "ToClient"]`) and a callee fetched through `Reflect.get`.
+// ---------------------------------------------------------------------------------------------------------------------
+
+export interface SinkCall {
+  pos: number;
+  /** Argument 0 (the target user), whitespace removed; null for an `.apply` call. */
+  target: string | null;
+  /** The frame's literal `type`, or `"?"` when it cannot be read statically. */
+  frame: string;
+  via: "direct" | "call" | "apply";
+}
+export interface SinkCensus {
+  calls: SinkCall[];
+  refs: number;
+  declarations: number;
+}
+
+/** Strip parentheses, `as`, `satisfies`, `!` and angle-bracket assertions. */
+function unwrapExpr(e: ts.Expression): ts.Expression {
+  let cur = e;
+  while (ts.isParenthesizedExpression(cur) || ts.isAsExpression(cur) || ts.isNonNullExpression(cur) || ts.isTypeAssertionExpression(cur) || ts.isSatisfiesExpression(cur)) {
+    cur = cur.expression;
+  }
+  return cur;
+}
+
+const literalText = (e: ts.Expression | undefined): string | null => (e ? stringValue(unwrapExpr(e)) : null);
+
+/** A property key's literal name, or null for a computed non-literal key. */
+function keyName(n: ts.PropertyName): string | null {
+  if (ts.isIdentifier(n) || ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isNumericLiteral(n) || ts.isPrivateIdentifier(n)) return n.text;
+  if (ts.isComputedPropertyName(n)) return literalText(n.expression);
+  return null;
+}
+
+/** True when a spread operand provably cannot carry a `type` key: an object literal without one, through a conditional. */
+function spreadCannotCarryType(e: ts.Expression): boolean {
+  const u = unwrapExpr(e);
+  if (ts.isConditionalExpression(u)) return spreadCannotCarryType(u.whenTrue) && spreadCannotCarryType(u.whenFalse);
+  if (!ts.isObjectLiteralExpression(u)) return false;
+  return u.properties.every((p) => {
+    if (ts.isSpreadAssignment(p)) return spreadCannotCarryType(p.expression);
+    if (!p.name) return false;
+    const k = keyName(p.name);
+    return k !== null && k !== "type";
+  });
+}
+
+/** The `type` literal of an object-literal frame, or `"?"` when the argument is not an object literal or `type` is not a literal. */
+function frameType(e: ts.Expression | undefined): string {
+  if (!e) return "?";
+  const u = unwrapExpr(e);
+  if (!ts.isObjectLiteralExpression(u)) return "?";
+  let type: string | null = null;
+  for (const p of u.properties) {
+    if (ts.isSpreadAssignment(p)) {
+      if (!spreadCannotCarryType(p.expression)) return "?";
+      continue;
+    }
+    if (!p.name) return "?";
+    const k = keyName(p.name);
+    if (k === null) return "?";
+    if (k !== "type") continue;
+    if (!ts.isPropertyAssignment(p)) return "?";
+    const t = literalText(p.initializer);
+    if (t === null) return "?";
+    type = t;
+  }
+  return type ?? "?";
+}
+
+export function sinkCensus(src: string, file: string, name: string): SinkCensus {
+  const sf = parseSource(src, file);
+  const out: SinkCensus = { calls: [], refs: 0, declarations: 0 };
+  const isWrapper = (n: ts.Node): n is ts.ParenthesizedExpression | ts.AsExpression | ts.NonNullExpression | ts.TypeAssertion | ts.SatisfiesExpression =>
+    ts.isParenthesizedExpression(n) || ts.isAsExpression(n) || ts.isNonNullExpression(n) || ts.isTypeAssertionExpression(n) || ts.isSatisfiesExpression(n);
+
+  const classify = (mention: ts.Node): void => {
+    // The name as a type member is a declaration, not a use.
+    if (ts.isIdentifier(mention) && (ts.isPropertySignature(mention.parent) || ts.isMethodSignature(mention.parent)) && mention.parent.name === mention) {
+      out.declarations++;
+      return;
+    }
+    let cur: ts.Node = mention;
+    if (ts.isIdentifier(mention) && ts.isPropertyAccessExpression(mention.parent) && mention.parent.name === mention) cur = mention.parent;
+    while (cur.parent && isWrapper(cur.parent) && cur.parent.expression === cur) cur = cur.parent;
+    const parent = cur.parent;
+    // `.call(...)`, `.apply(...)`, `.bind(...)` on the sink.
+    if (parent && ts.isPropertyAccessExpression(parent) && parent.expression === cur && ["call", "apply", "bind"].includes(parent.name.text)) {
+      const call = parent.parent;
+      if (parent.name.text !== "bind" && ts.isCallExpression(call) && call.expression === parent) {
+        if (parent.name.text === "call") {
+          out.calls.push({ pos: call.getStart(sf), target: call.arguments[1] ? squash(call.arguments[1].getText(sf)) : null, frame: frameType(call.arguments[2]), via: "call" });
+        } else out.calls.push({ pos: call.getStart(sf), target: null, frame: "?", via: "apply" });
+        return;
+      }
+      out.refs++;
+      return;
+    }
+    if (parent && ts.isCallExpression(parent) && parent.expression === cur) {
+      out.calls.push({ pos: parent.getStart(sf), target: parent.arguments[0] ? squash(parent.arguments[0].getText(sf)) : null, frame: frameType(parent.arguments[1]), via: "direct" });
+      return;
+    }
+    out.refs++;
+  };
+
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === name) classify(node);
+    else if (ts.isElementAccessExpression(node) && literalText(node.argumentExpression) === name) classify(node);
+    else if (ts.isComputedPropertyName(node) && literalText(node.expression) === name) out.refs++;
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  out.calls.sort((a, b) => a.pos - b.pos);
+  return out;
+}
+
+/** Offsets of every string / no-substitution-template literal whose value is `text` (any quote style; comments never match). */
+export function stringLiteralSites(src: string, file: string, text: string): number[] {
+  const sf = parseSource(src, file);
+  const out: number[] = [];
+  const visit = (node: ts.Node): void => {
+    if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && node.text === text) out.push(node.getStart(sf));
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** Offsets of every object literal whose `type` key (identifier, string or literal computed) holds the literal `typeText`. */
+export function frameLiterals(src: string, file: string, typeText: string): number[] {
+  const sf = parseSource(src, file);
+  const out: number[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isObjectLiteralExpression(node)) {
+      for (const p of node.properties) {
+        if (ts.isPropertyAssignment(p) && keyName(p.name) === "type" && literalText(p.initializer) === typeText) out.push(node.getStart(sf));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
 }
