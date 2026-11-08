@@ -50,6 +50,7 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from "n
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { TLSSocket } from "node:tls";
 import { performance } from "node:perf_hooks";
+import * as Sentry from "@sentry/nextjs";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -206,6 +207,45 @@ const TLS_CLIENT_ERROR_LOG_INTERVAL_MS = 60_000;
 /** Post-bind server 'error' reports: one a minute, with a suppressed count (same pattern as the client-error log). */
 const RUNTIME_ERROR_REPORT_INTERVAL_MS = 60_000;
 
+/** Bound on the Sentry flush before a REQUIRED-mode exit (the same 2 s as crash-handlers FATAL_FLUSH_MS). */
+export const EXIT_FLUSH_MS = 2_000;
+/** Hard stop: exit even if the flush neither resolves nor rejects, so a wedged transport cannot keep a dead listener alive. */
+const EXIT_HARD_TIMER_MS = EXIT_FLUSH_MS + 250;
+
+/**
+ * Builds an exit that first gives the Sentry SDK up to EXIT_FLUSH_MS to send what the report just queued (the SDK sends
+ * asynchronously, so a bare process.exit can drop the very event the origin_tls alert rule exists for). It always exits:
+ * on resolve, on reject, on a synchronous throw, on a non-promise return, or when the hard timer fires first. Idempotent per
+ * returned function, so a second fatal during the flush window neither re-flushes nor exits twice. The pino error line
+ * (shipped to Better Stack) is the second sink if the hard timer wins.
+ */
+export function createExitAfterFlush(
+  deps: { flush?: (timeoutMs: number) => unknown; exit?: (code: number) => void } = {},
+): (code: number) => void {
+  const flush = deps.flush ?? ((ms: number) => Sentry.flush(ms));
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
+  let exiting = false;
+  return (code: number): void => {
+    if (exiting) return;
+    exiting = true;
+    let done = false;
+    // eslint-disable-next-line prefer-const -- assigned after finish is defined; finish only runs after the assignment.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      if (timer !== undefined) clearTimeout(timer);
+      exit(code);
+    };
+    timer = setTimeout(finish, EXIT_HARD_TIMER_MS);
+    try {
+      Promise.resolve(flush(EXIT_FLUSH_MS)).then(finish, finish);
+    } catch {
+      finish();
+    }
+  };
+}
+
 /**
  * Start the origin TLS listener next to `httpServer`, or return null when it must not run (no
  * material, invalid material, or the port could not be bound). Never throws: the plain-HTTP
@@ -217,12 +257,12 @@ export function startOriginTlsListener(params: {
   /** 0 asks the OS for a free port (tests). */
   port?: number;
   onListening?: (port: number) => void;
-  /** Injected in tests; defaults to process.exit. Only called in REQUIRED mode. */
+  /** Injected in tests; defaults to a Sentry flush (bounded) then process.exit. Only called in REQUIRED mode. */
   exit?: (code: number) => void;
 }): OriginTlsListener | null {
   const env = params.env ?? process.env;
   const required = env[ORIGIN_TLS_REQUIRED_ENV] === "1";
-  const exit = params.exit ?? ((code: number) => process.exit(code));
+  const exit = params.exit ?? createExitAfterFlush();
   const failClosed = (): null => {
     if (required) exit(1);
     return null;
