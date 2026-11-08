@@ -193,7 +193,8 @@ plugins/soleur/test/ci-e2e-skip-anchors.test.sh	111	measured
 plugins/soleur/test/ci-head-verdict.test.sh	276015	measured
 plugins/soleur/test/ci-path-gating.test.sh	205	measured
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1222	floor
-plugins/soleur/test/ci-pr-affected-replay-a	1033094	measured
+# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)
+plugins/soleur/test/ci-pr-affected-replay-a	160004	measured
 plugins/soleur/test/ci-pr-affected-replay-b	399378	measured
 plugins/soleur/test/ci-pr-affected-replay-c	326172	measured
 plugins/soleur/test/ci-shard-totality-skip.test.sh	1222	floor
