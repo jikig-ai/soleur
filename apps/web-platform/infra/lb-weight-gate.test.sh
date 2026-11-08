@@ -44,7 +44,6 @@ reset_def() {
   DEF=(
     [SOLEUR_WEB2_SERVING_WEIGHT]='1'
     [SOLEUR_SERVING_ROTATION]='web-1,web-2'
-    [SOLEUR_PROXY_BIND]='10.0.1.10'
     [SOLEUR_PROXY_PEER_ALLOWLIST]='10.0.1.11'
     [SOLEUR_HOST_ROSTER]='{"web-1":"10.0.1.10","web-2":"10.0.1.11"}'
     [GIT_DATA_STORE_ENABLED]='true'
@@ -64,7 +63,7 @@ run_with_def() {
   for k in "${!DEF[@]}"; do args+=("${k}=${DEF[$k]}"); done
   local out errfile
   errfile=$(mktemp)
-  trap 'rm -f "$errfile"' RETURN  # owning trap (ADR-129): errfile cleaned on every function return, even if `cat` fails
+  trap 'rm -f "$errfile"; trap - RETURN' RETURN  # (self-clearing: a RETURN trap is global, so an outer function returning later would otherwise re-fire it with $errfile out of scope) owning trap (ADR-129): errfile cleaned on every function return, even if `cat` fails
   out=$(env -i PATH="$PATH" "${args[@]}" bash "$GATE" 2>"$errfile") && GATE_RC=0 || GATE_RC=$?
   GATE_OUT="$out"
   GATE_ERR="$(cat "$errfile")"
@@ -99,7 +98,7 @@ echo "=== lb-weight-gate.sh test suite (rebuilt #6575 / ADR-143 D3) ==="
 reset_def
 DEF[SOLEUR_WEB2_SERVING_WEIGHT]='0'
 DEF[SOLEUR_SERVING_ROTATION]=''            # explicit empty = "no rotation" (a SET, valid state)
-unset 'DEF[SOLEUR_PROXY_BIND]' 'DEF[SOLEUR_PROXY_PEER_ALLOWLIST]' 'DEF[SOLEUR_HOST_ROSTER]'
+unset 'DEF[SOLEUR_PROXY_PEER_ALLOWLIST]' 'DEF[SOLEUR_HOST_ROSTER]'
 unset 'DEF[GIT_DATA_STORE_ENABLED]' 'DEF[GIT_DATA_LUKS_CUTOVER_AT]' 'DEF[WORKSPACES_LUKS_CUTOVER_AT]'
 run_with_def
 assert_zero "standby (weight=0, empty rotation, NO flip env) → exit 0 (fixes #6575 flaw)"
@@ -170,10 +169,23 @@ assert_stdout_contains "success prints SHAPE-ONLY banner" "SHAPE-ONLY"
 # =============================================================================
 # §2-5 — Condition A (owner-side relay config-shape). Reached because DEF pools web-2.
 # =============================================================================
-reset_def; unset 'DEF[SOLEUR_PROXY_BIND]'; run_with_def
-assert_rejects_with "SOLEUR_PROXY_BIND missing" "A_proxy_bind_empty"
+# A.1 (SOLEUR_PROXY_BIND non-empty) was DELETED (CTO ruling, #12167 / #8211, run 42418102446): the bind is
+# not a Doppler value (the app container binds 0.0.0.0 via a literal in ci-deploy.sh, pinned by
+# docker-run-tuple.py), so a Doppler "declared intent" proved nothing and refused a correctly configured
+# fleet. The real bind proof is the relay_probe / relay_peer_probe evidence, not this shape gate. These rows
+# pin that the gate neither reads nor refuses on it.
+reset_def; run_with_def
+assert_zero "SOLEUR_PROXY_BIND absent (the shipped relay design) does not refuse the pooled flip"
+assert_stdout_contains "SOLEUR_PROXY_BIND absent: the pooled-flip path reaches the SHAPE-ONLY marker" "requires_runtime_bind_probe=true"
+reset_def; DEF[SOLEUR_PROXY_BIND]=''; run_with_def
+assert_zero "SOLEUR_PROXY_BIND set-but-empty does not refuse the pooled flip"
+assert_stdout_contains "SOLEUR_PROXY_BIND set-but-empty: the pooled-flip path reaches the SHAPE-ONLY marker" "requires_runtime_bind_probe=true"
 reset_def; DEF[SOLEUR_PROXY_BIND]='   '; run_with_def
-assert_rejects_with "SOLEUR_PROXY_BIND whitespace-only" "A_proxy_bind_empty"
+assert_zero "SOLEUR_PROXY_BIND whitespace-only does not refuse the pooled flip"
+assert_stdout_contains "SOLEUR_PROXY_BIND whitespace-only: the pooled-flip path reaches the SHAPE-ONLY marker" "requires_runtime_bind_probe=true"
+reset_def; DEF[SOLEUR_PROXY_BIND]='10.0.1.10'; run_with_def
+assert_zero "SOLEUR_PROXY_BIND set to a value is ignored (exit 0, same as absent)"
+assert_stdout_contains "SOLEUR_PROXY_BIND set to a value: the pooled-flip path reaches the SHAPE-ONLY marker" "requires_runtime_bind_probe=true"
 
 reset_def; unset 'DEF[SOLEUR_PROXY_PEER_ALLOWLIST]'; run_with_def
 assert_rejects_with "SOLEUR_PROXY_PEER_ALLOWLIST missing" "A_peer_allowlist_empty"
@@ -503,8 +515,124 @@ c3_fixture nested_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
 assert_c3 "C.3-fixture: nested block + hot web-2 member still → red" "1 1 0"
 rm -rf "$C3_TMP"
 
+# =============================================================================
+# §A1 — A.1 stays deleted, and NOTHING keyed on SOLEUR_PROXY_BIND may creep back in.
+#   Matrix: every row runs the gate with SOLEUR_PROXY_BIND set / empty / absent COMBINED with one invalid A or B
+#     input and asserts the SPECIFIC sub_condition (so a bypass keyed on the bind, which would exit 0 on
+#     bind-set while the pristine gate refuses, is caught), plus the OK rows (no bind -> SHAPE-ONLY marker).
+#   Static: no non-comment line of the gate mentions PROXY_BIND (with or without the SOLEUR_ prefix) and the
+#     retired sub-condition id is gone. (An indirect form such as v=SOLEUR_PROXY_; ${v}BIND is NOT detected
+#     statically; the matrix rows are the behavioral backstop for it.)
+#   Mutation: copies of the gate with (a) an A.1-style refusal re-introduced, (b) a bind-keyed exit-0 bypass and
+#     (c) an unprefixed PROXY_BIND read are graded by the SAME matrix / static helpers the pristine gate is; each
+#     mutation is asserted to have LANDED (differs from the pristine gate and carries the injected text) and
+#     each must turn a helper RED.
+# =============================================================================
+# a1_apply <bind: a value | EMPTY | ABSENT> <var|-> <val|__UNSET__> — set DEF and run the gate
+a1_apply() {
+  reset_def
+  case "$1" in
+    ABSENT) ;;
+    EMPTY) DEF[SOLEUR_PROXY_BIND]='' ;;
+    *) DEF[SOLEUR_PROXY_BIND]="$1" ;;
+  esac
+  if [[ "$2" != "-" ]]; then
+    if [[ "$3" == "__UNSET__" ]]; then unset "DEF[$2]"; else DEF[$2]="$3"; fi
+  fi
+  run_with_def
+}
+# bind|var|val|expected (OK = exit 0 with the marker, else the refusing sub_condition)
+A1_MATRIX='10.0.1.10|-|-|OK
+ABSENT|-|-|OK
+EMPTY|-|-|OK
+   |-|-|OK
+10.0.1.10|GIT_DATA_STORE_ENABLED|false|B_git_data_store_disabled
+ABSENT|GIT_DATA_STORE_ENABLED|false|B_git_data_store_disabled
+EMPTY|GIT_DATA_STORE_ENABLED|false|B_git_data_store_disabled
+10.0.1.10|SOLEUR_HOST_ROSTER|{"web-1":"10.0.1.10"}|A_web2_not_in_roster
+10.0.1.10|SOLEUR_PROXY_PEER_ALLOWLIST|__UNSET__|A_peer_allowlist_empty
+EMPTY|SOLEUR_PROXY_PEER_ALLOWLIST|__UNSET__|A_peer_allowlist_empty
+10.0.1.10|WORKSPACES_LUKS_CUTOVER_AT|__UNSET__|B_workspaces_luks_marker_absent'
+# a1_row_ok <bind> <var> <val> <expected> — 0 iff the current $GATE behaves as expected for the row
+a1_row_ok() {
+  a1_apply "$1" "$2" "$3"
+  if [[ "$4" == "OK" ]]; then
+    [[ "$GATE_RC" -eq 0 && "$GATE_OUT" == *"requires_runtime_bind_probe=true"* ]]
+  else
+    [[ "$GATE_RC" -ne 0 && "$GATE_ERR" == *"sub_condition=$4"* ]]
+  fi
+}
+# a1_matrix_mismatches — how many matrix rows the current $GATE fails (silent)
+a1_matrix_mismatches() {
+  local n=0 b v val exp
+  while IFS='|' read -r b v val exp; do
+    a1_row_ok "$b" "$v" "$val" "$exp" || n=$((n + 1))
+  done <<<"$A1_MATRIX"
+  echo "$n"
+}
+# a1_static_hits <file> — non-comment lines mentioning PROXY_BIND in any spelling
+a1_static_hits() {
+  local n=0 l
+  while IFS= read -r l || [[ -n "$l" ]]; do
+    [[ "$l" =~ ^[[:space:]]*# ]] && continue
+    [[ "$l" == *PROXY_BIND* ]] && n=$((n + 1))
+  done <"$1"
+  echo "$n"
+}
+
+# --- matrix rows against the pristine gate (each is its own reported assertion) ---
+while IFS='|' read -r a1_b a1_v a1_val a1_exp; do
+  a1_apply "$a1_b" "$a1_v" "$a1_val"
+  if [[ "$a1_exp" == "OK" ]]; then
+    assert_zero "A1-matrix: bind='${a1_b}' + valid A/B -> exit 0"
+    assert_stdout_contains "A1-matrix: bind='${a1_b}' + valid A/B -> SHAPE-ONLY marker" "requires_runtime_bind_probe=true"
+  else
+    assert_rejects_with "A1-matrix: bind='${a1_b}' + ${a1_v}=${a1_val} refuses" "$a1_exp"
+  fi
+done <<<"$A1_MATRIX"
+
+# --- static rows ---
+TOTAL=$((TOTAL + 1))
+a1_hits="$(a1_static_hits "$GATE")"
+if [[ "$a1_hits" -eq 0 ]]; then PASS=$((PASS + 1)); echo "  PASS: A1-static: no non-comment line of lb-weight-gate.sh mentions PROXY_BIND (any spelling)"
+else FAIL=$((FAIL + 1)); echo "  FAIL: A1-static: $a1_hits non-comment line(s) of lb-weight-gate.sh mention PROXY_BIND"; fi
+assert_no_grep "A1-static: the retired A_proxy_bind_empty sub-condition id is gone from the gate" lb-weight-gate.sh \
+  'A_proxy_bind_empty'
+
+# --- mutation rows ---
+A1_TMP="$(mktemp -d)"
+trap 'rm -rf "$A1_TMP"' EXIT
+GATE_PRISTINE="$GATE"
+# a1_mutate <label> <injected-line> <red-by: matrix|static> — copy the gate with <injected-line> before the PARITY
+# POINTER, assert it LANDED, then require the named helper to go RED on the copy. The pristine gate is the control.
+a1_mutate() {
+  local label="$1" inject="$2" redby="$3" mut="$A1_TMP/lb-weight-gate.sh" got
+  sed "/^# PARITY POINTER:/i $inject" "$GATE_PRISTINE" > "$mut"
+  TOTAL=$((TOTAL + 1))
+  if cmp -s "$mut" "$GATE_PRISTINE" || [[ "$(cat "$mut")" != *"$inject"* ]]; then
+    FAIL=$((FAIL + 1)); echo "  FAIL: A1-mutation $label: the mutation did NOT land (byte-identical to the pristine gate)"; return
+  fi
+  PASS=$((PASS + 1)); echo "  PASS: A1-mutation $label: the mutation LANDED"
+  TOTAL=$((TOTAL + 1))
+  if [[ "$redby" == "matrix" ]]; then GATE="$mut"; got="$(a1_matrix_mismatches)"; GATE="$GATE_PRISTINE"
+  else got="$(a1_static_hits "$mut")"; fi
+  if [[ "$got" -gt 0 ]]; then PASS=$((PASS + 1)); echo "  PASS: A1-mutation $label: the $redby check goes RED ($got)"
+  else FAIL=$((FAIL + 1)); echo "  FAIL: A1-mutation $label: the $redby check stayed green — the guard is vacuous"; fi
+}
+# control: the pristine gate is green under both helpers
+TOTAL=$((TOTAL + 1))
+if [[ "$(a1_matrix_mismatches)" -eq 0 && "$(a1_static_hits "$GATE_PRISTINE")" -eq 0 ]]; then
+  PASS=$((PASS + 1)); echo "  PASS: A1-control: the pristine gate is green under the matrix and the static helper"
+else
+  FAIL=$((FAIL + 1)); echo "  FAIL: A1-control: the pristine gate is not green under the A1 helpers"
+fi
+a1_mutate "re-introduced refusal" '[[ -n "${SOLEUR_PROXY_BIND-}" ]] || fail "A_proxy_bind_empty"' matrix
+a1_mutate "bind-keyed exit-0 bypass" '[[ -z "${SOLEUR_PROXY_BIND-}" ]] || { echo requires_runtime_bind_probe=true; echo SHAPE-ONLY; exit 0; }' matrix
+a1_mutate "unprefixed PROXY_BIND read" '[[ -n "${PROXY_BIND-}" ]] || fail "A_unprefixed_bind"' static
+GATE="$GATE_PRISTINE"
+
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=72
+MIN_CASES=150
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

@@ -588,12 +588,13 @@ _untg="$(comm -23 <(printf '%s\n' "$_enum" | sed '/^$/d') <(printf '%s\n' "$_tgt
 # #11631: the two once-a-day dead-man alerts were retired (replaced by archive-fed heartbeats). Their four bare
 # -target= lines were kept in the apply workflow until the first verified apply (a bare -target on an address with no
 # configuration plans its DELETE) and were removed with their census rows after it (#11672). The list below is
-# read from the census's INTENDED_DESTROYS, whose only logtail_* entries are the two egress_gw_probe_silent_canary
-# addresses (#12189) until the follow-up that removes their kept targets (#12270): any other bare -target=logtail_* line naming no
-# declared resource is a stray and fails the check, so a re-added retired line goes red here too.
+# read from the census's INTENDED_DESTROYS. The two egress_gw_probe_silent_canary addresses (#12189) sat there for one
+# apply and left with their kept targets (#12270), so the dict now holds no logtail_* entry (the same end state as after
+# #11672): any bare -target=logtail_* line naming no declared resource is a stray and fails the check, so a re-added
+# retired line goes red here too.
 # ONE source of truth (#11631 review): the list is READ from the census's INTENDED_DESTROYS, never retyped here, so the
 # two cannot drift. Only the logtail_* addresses count (the other entries are not this suite's business). A missing or
-# unreadable census is fatal; an empty result is a legitimate end state (the follow-up removed the entries) and then the
+# unreadable census is fatal; an empty result is a legitimate end state (the state after #12270, as after #11672) and then the
 # stray check below turns red on any leftover bare -target line, so a broken extraction fails loud, never green.
 CENSUS_SH="$REPO/tests/scripts/test-infra-privileged-tier-census.sh"
 [ -r "$CENSUS_SH" ] || { printf 'FATAL: census %s unreadable (the retired-destroy-target list is read from it)\n' "$CENSUS_SH" >&2; exit 2; }

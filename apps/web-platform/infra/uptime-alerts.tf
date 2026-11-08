@@ -631,6 +631,34 @@ resource "betteruptime_heartbeat" "claude_cost_capture" {
   }
 }
 
+# #12230 (window ledger c1, ADR-282 ruling D12 + CTO ruling 2026-11-07): the key-continuity
+# probe's dead-man. The measured d-probe showed every alert-form window refused
+# (2592000/604800/97200 -> 422; 900 -> 201), so this is the heartbeat form the ruling
+# chose: fed from the Logs archive by scripts/deadman-heartbeat-feeder.sh
+# (target inngest-luks-key-probe, window 93600 s, measured rows only), born paused and
+# armed by the owner after two consecutive qualifying_row_heartbeat_paused observations
+# — the count-variable form's owner-act arming, which is also c1's recorded re-arm step.
+# It is NOT live coverage until the owner unpauses it post-promotion (#11266).
+resource "betteruptime_heartbeat" "inngest_luks_key_probe_deadman" {
+  name      = "soleur-inngest-luks-key-probe-deadman-prd"
+  period    = 3600
+  grace     = 7200
+  call      = false
+  sms       = false
+  email     = true
+  push      = true
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Armed out-of-band by the owner after observed qualifying rows; a later apply
+    # MUST NOT revert the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
+
 resource "betteruptime_team_member" "ops" {
   email     = "ops@jikigai.com"
   role      = "responder"

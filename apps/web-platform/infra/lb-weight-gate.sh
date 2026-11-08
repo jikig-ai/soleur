@@ -44,9 +44,11 @@
 #   Top-guard (ADR-143 D3): SOLEUR_WEB2_SERVING_WEIGHT (explicit integer ≥0; absent/non-int/negative
 #     → FAIL CLOSED) + SOLEUR_SERVING_ROTATION (present, comma-set; absent → FAIL CLOSED). PASS iff
 #     weight==0 AND web-2 ∉ rotation. Otherwise → Conditions A + B.
-#   Condition A (owner-side relay config-shape): SOLEUR_PROXY_BIND non-empty; SOLEUR_PROXY_PEER_
-#     ALLOWLIST parses to non-empty set; SOLEUR_HOST_ROSTER JSON object with web-2 present, allowlist
-#     ⊆ roster addrs (outbound dial), web-2 addr ∈ allowlist (inbound accept).
+#   Condition A (owner-side relay config-shape): SOLEUR_PROXY_PEER_ALLOWLIST parses to non-empty set;
+#     SOLEUR_HOST_ROSTER JSON object with web-2 present, allowlist ⊆ roster addrs (outbound dial),
+#     web-2 addr ∈ allowlist (inbound accept). The relay BIND is deliberately not checked here: it is a
+#     literal in ci-deploy.sh, not a Doppler value. Bind/reachability evidence is the serve arm's
+#     relay-evidence step (#12168), NOT this gate.
 #   Condition B (cut-over config-shape): GIT_DATA_STORE_ENABLED=="true"; GIT_DATA_LUKS_CUTOVER_AT
 #     AND WORKSPACES_LUKS_CUTOVER_AT (ADR-143 D3 coupling #2) each ISO-8601, parseable, ≥epoch, not
 #     future, now-marker ≥ <soak>_SOAK_DAYS(3)*86400. The WORKSPACES_LUKS marker is what keeps a web-2 whose
@@ -120,11 +122,13 @@ fi
 # Condition A — owner-side relay config-shape
 # =============================================================================
 
-# A.1 — SOLEUR_PROXY_BIND non-empty (trimmed).
-PROXY_BIND="${SOLEUR_PROXY_BIND-}"
-PROXY_BIND="${PROXY_BIND#"${PROXY_BIND%%[![:space:]]*}"}"
-PROXY_BIND="${PROXY_BIND%"${PROXY_BIND##*[![:space:]]}"}"
-[[ -n "$PROXY_BIND" ]] || fail "A_proxy_bind_empty"
+# A.1 — RETIRED (CTO ruling, #12167 / #8211): the relay bind is NOT a gate input. SOLEUR_PROXY_BIND is not a
+# Doppler value; the app container binds 0.0.0.0 via a literal in ci-deploy.sh (pinned by docker-run-tuple.py).
+# A Doppler "declared intent" proved nothing (any non-empty string passed). This gate proves ONLY the
+# weight/rotation shape and the cut-over config shape; it carries NO bind or reachability evidence. That evidence
+# is the serve arm's relay-evidence step (#12168: relay_probe proxy_state=listening and relay_peer_probe
+# result=ok from Better Stack), NOT this gate. The sub-condition ids A.2+ keep their numbers so the structured
+# gate_fail contract does not shift.
 
 # PARITY POINTER: the roster/allowlist parsing below intentionally MIRRORS (and is stricter than)
 # the two TypeScript loaders it gates for:
