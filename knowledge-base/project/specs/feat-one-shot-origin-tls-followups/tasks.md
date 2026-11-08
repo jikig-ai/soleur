@@ -29,7 +29,7 @@ Hard limits: no apply, dispatch, merge, arm or mark-ready. `Ref` only; `closingI
 
 ## Phase 3: Sentry rule (item 1)
 
-- 3.0 RED/GREEN: `exitAfterFlush` in `origin-tls.ts` (default `exit` flushes Sentry, bounded 2 s + hard timer) with six cases in `origin-tls.test.ts`; also rename the 'unchanged from main' test, fix the stale ~452 comment
+- 3.0 RED/GREEN: `exitAfterFlush` in `origin-tls.ts` (default `exit` flushes Sentry, bounded 2 s + hard timer) with the cases in the new `origin-tls-exit-flush.test.ts` (12 after review); also rename the 'unchanged from main' test, fix the stale ~452 comment
 - 3.1 RED: `apps/web-platform/test/sentry-origin-tls-alert-op-contract.test.ts` (derive feature + op set from `origin-tls.ts`; feature-only filter; 4 triggers; email route; root-unique frequency with a negative control; reference equals `.tf`; shutdown-suppression guard pinned)
 - 3.2 GREEN: `sentry_alert.origin_tls_event` in `issue-alerts.tf`; key-sorted entry in `alert-reference.json` (`jq -S . f | diff - f`); README 57/57, 55 owned, issue list, subsection
 - 3.3 Run the new test, the README census test (`sentry-git-data-pin-fault-alert-op-contract.test.ts`), `apps/web-platform/scripts/sentry-monitors-audit.test.sh`, `terraform fmt -check`
@@ -45,7 +45,7 @@ Hard limits: no apply, dispatch, merge, arm or mark-ready. `Ref` only; `closingI
 
 ## Phase 5: ADR, issues, verification, PR body
 
-- 5.1 ADR-321 (also: the three stale sentences — signals at container start, decision 7 'alert is still deferred', R-A 'unchanged in effect'; and the flush sentence): replace the item-11 "no committed Sentry alert rule" sentences; correct the keep-alive paragraph and R-A "pre-existing" sentence; add item 12 with the three CTO rulings (use the `architecture` skill)
+- 5.1 ADR-321 (also: the three stale sentences — signals at container start, decision 7 'alert is still deferred', R-A 'unchanged in effect'; and the flush sentence): replace the item-11 "no committed Sentry alert rule" sentences; correct the keep-alive paragraph and R-A "pre-existing" sentence; add item 12 with the four CTO rulings (a to d) (use the `architecture` skill)
 - 5.2 File the two tracking issues (release-download curl class incl. crane; analytics token + wrapper subcommand) with roadmap milestones; link them
 - 5.3 Verify: `c4-count-parity.test.sh`, `scripts/lint-guard-contract.py` on the plan, touched vitest files, bash suite, `git diff --stat origin/main` inside the Files lists
 - 5.4 PR body: `Ref #10479`, `Ref #10205`, "merge applies the Sentry rule", Node cutoff + 30 s caveat, 31 s retry budget honesty; check `gh pr view 12434 --json closingIssuesReferences` prints `[]` before saving; stop (no ready, no merge, no dispatch)

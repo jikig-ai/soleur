@@ -45,6 +45,10 @@
 // SCOPE. No client-certificate check (Authenticated Origin Pulls) here: ruled out for this
 // change in the plan (knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md).
 
+// Every Sentry report in this file tags `feature: "origin_tls"` as an INLINE literal on purpose: the alert rule
+// `sentry_alert.origin_tls_event` (apps/web-platform/infra/sentry/issue-alerts.tf) filters on that tag alone, and
+// test/sentry-origin-tls-alert-op-contract.test.ts derives the literal from these call sites. Hoisting it into a constant or
+// reporting through another helper hides it from that contract and silently un-pages the events.
 import { X509Certificate, createPrivateKey } from "node:crypto";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
@@ -229,13 +233,17 @@ export function createExitAfterFlush(
     if (exiting) return;
     exiting = true;
     let done = false;
-    // `finish` is only ever invoked after `timer` is initialised (the timer fires later; flush's callbacks are asynchronous).
+    // `finish` is declared right after `timer` and before the try block, so every path that can call it (timer, flush callbacks, the sync-throw catch) sees both.
     const timer = setTimeout(() => finish(), EXIT_HARD_TIMER_MS);
     const finish = (): void => {
       if (done) return;
       done = true;
       clearTimeout(timer);
-      exit(code);
+      try {
+        exit(code);
+      } catch {
+        // process.exit does not return; an injected exit that throws must not become an unhandled rejection or a crash loop
+      }
     };
     try {
       Promise.resolve(flush(EXIT_FLUSH_MS)).then(finish, finish);
@@ -261,7 +269,20 @@ export function startOriginTlsListener(params: {
 }): OriginTlsListener | null {
   const env = params.env ?? process.env;
   const required = env[ORIGIN_TLS_REQUIRED_ENV] === "1";
-  const exit = params.exit ?? createExitAfterFlush();
+  // The default exit first stops the plain :80 server accepting (the flush below can take up to 2.25 s, and a dying REQUIRED
+  // start must not look healthy to the deploy canary in that window), then flushes Sentry, then exits.
+  const flushThenExit = createExitAfterFlush();
+  const exit =
+    params.exit ??
+    ((code: number): void => {
+      try {
+        params.httpServer.close();
+        params.httpServer.closeAllConnections?.();
+      } catch {
+        // a server that cannot close must not stop the exit
+      }
+      flushThenExit(code);
+    });
   const failClosed = (): null => {
     if (required) exit(1);
     return null;

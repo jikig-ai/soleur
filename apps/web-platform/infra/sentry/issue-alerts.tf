@@ -3297,7 +3297,7 @@ resource "sentry_alert" "git_data_erasure_redrive_no_progress" {
 # (#10479, ADR-321 items 11 and 12) origin-tls-event: ANY Sentry event tagged feature=origin_tls pages. server/origin-tls.ts is the
 # only emitter: op=listen (phase=runtime, reason=unexpected-close, which is FATAL under ORIGIN_TLS_REQUIRED=1 and restarts the
 # container; and the rate-limited post-bind server-error report), op=load / op=create (rejected, absent or unbuildable certificate
-# material at start), and op=cert_expiry (a warning once per start while under 90 days remain; silent today, about 5474 days left).
+# material at start), and op=cert_expiry (a warning once per start while under 90 days remain; silent until about 90 days before the 2041 expiry).
 # Before this rule nothing paged on any of them: a Sentry event was a pull-based check (ADR-321 R-B).
 #
 # Filter = the feature tag ALONE, on purpose. An `op`, `phase` or `reason` filter would make a future op (or a renamed tag) silently

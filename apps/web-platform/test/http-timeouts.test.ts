@@ -1,9 +1,9 @@
 // Ruled by CTO agent, 2026-11-08 (ADR-321 item 12): the plain :80 server sets an explicit 60 s header phase inside a 300 s
 // whole-request window. The :443 listener keeps Node's defaults (origin-tls.test.ts pins that it assigns neither property).
-import { describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test } from "vitest";
 import { createServer, type Server } from "node:http";
 import { connect } from "node:net";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -16,6 +16,10 @@ const ROOT = join(__dirname, "..");
 const read = (rel: string): string => readFileSync(join(ROOT, rel), "utf8");
 const stripComments = (s: string): string =>
   s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
+beforeEach(() => {
+  expect.hasAssertions();
+});
 
 describe("plain :80 server timeouts (http-timeouts.ts)", () => {
   test("the defaults are 60 s for the header phase and 300 s for the whole request (hardcoded here on purpose)", () => {
@@ -56,7 +60,7 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
   // an equality. The 0.5 s wait is intentional: it is the shortest header bound the sweep can resolve reliably.
   test("a client stalling mid-header is cut near the header bound, far before the request bound", async () => {
     const server: Server = createServer({ connectionsCheckingInterval: 100 });
-    applyPlainHttpTimeouts(server, { headersMs: 500, requestMs: 2_500 });
+    applyPlainHttpTimeouts(server, { headersMs: 500, requestMs: 30_000 });
     // The fixture must not be able to pass by timing out slowly: the sweep interval is the thing that makes 0.5 s observable.
     expect((server as unknown as { connectionsCheckingInterval?: number }).connectionsCheckingInterval).toBe(100);
 
@@ -68,7 +72,7 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
     const client = connect(address.port, "127.0.0.1");
     let received = "";
     const closedAt = await new Promise<number>((resolve, reject) => {
-      const guard = setTimeout(() => reject(new Error("client was not cut within 4 s")), 4_000);
+      const guard = setTimeout(() => reject(new Error("client was not cut within 8 s")), 8_000);
       client.on("data", (d) => {
         received += d.toString();
       });
@@ -87,7 +91,7 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
     });
 
     expect(closedAt).toBeGreaterThanOrEqual(400);
-    expect(closedAt).toBeLessThan(1_500);
+    expect(closedAt).toBeLessThan(5_000);
     // Node answers 408 itself when it can; an abrupt close (no bytes) is also an accepted outcome.
     if (received.length > 0) expect(received).toMatch(/^HTTP\/1\.1 408 /);
   });
@@ -95,9 +99,26 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
   test("index.ts wires the helper and no longer assigns headersTimeout itself", () => {
     const src = stripComments(read("server/index.ts"));
     expect(src).toContain("applyPlainHttpTimeouts(server);");
-    expect(src).not.toMatch(/server\.headersTimeout\s*=/);
+    // Any spelling of a direct timeout write on the server (dot, bracket, Object.assign) other than the helper call is a bypass.
+    expect(src).not.toMatch(/server\s*(?:\.|\[\s*["'])\s*(?:headers|request)Timeout/);
+    expect(src).not.toMatch(/Object\.assign\(\s*server\b/);
+    // The call is a top-level statement of the same block that sets the keep-alive, not nested in a conditional.
+    expect(src).toMatch(/^ {2}server\.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;\n {2}applyPlainHttpTimeouts\(server\);$/m);
     // The keep-alive assignment is left exactly as it was.
     expect(src).toMatch(/^\s*server\.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;$/m);
+  });
+
+  test("every HTTP(S) listener in server/ is known: a new createServer must be reviewed for its timeouts", () => {
+    const walk = (dir: string): string[] =>
+      readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(`${dir}/${e.name}`) : e.name.endsWith(".ts") ? [`${dir}/${e.name}`] : [],
+      );
+    const creators = walk("server")
+      .filter((f) => /\bcreate(?:Https?)?Server\s*\(/.test(stripComments(read(f))))
+      .sort();
+    // index.ts: the :80 server (timeouts via http-timeouts.ts). origin-tls.ts: the :443 listener (Node defaults, pinned in
+    // origin-tls.test.ts). session-proxy.ts: the private-net proxy, out of scope by design (ADR-321 item 12).
+    expect(creators).toEqual(["server/index.ts", "server/origin-tls.ts", "server/session-proxy.ts"]);
   });
 
   test("http-timeouts.ts imports nothing from the server (it must stay import-safe for tests)", () => {

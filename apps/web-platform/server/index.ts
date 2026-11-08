@@ -10,7 +10,7 @@ import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
 import { logProxyCertExpiryAtStartup } from "./proxy-tls";
-import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, startOriginTlsListener } from "./origin-tls";
+import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, ORIGIN_TLS_REQUIRED_ENV, startOriginTlsListener } from "./origin-tls";
 import { applyPlainHttpTimeouts } from "./http-timeouts";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
@@ -329,6 +329,9 @@ app.prepare().then(() => {
 
   server.listen(port, () => {
     originTls = startOriginTlsListener({ httpServer: server });
+    // A REQUIRED start whose material is absent or invalid has already begun exiting (flush, then process.exit): do not run the
+    // rest of boot (ready log, startup event, reaper, probes) on a process that is dying.
+    if (originTls === null && process.env[ORIGIN_TLS_REQUIRED_ENV] === "1") return;
     // #9534 — reap orphaned forwarder processes + their gateway tokens before
     // serving dispatches (best-effort, never throws). Only on the owning
     // dispatcher — see the import comment.

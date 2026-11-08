@@ -459,8 +459,8 @@ describe("startOriginTlsListener", () => {
   });
   test("origin-tls.ts never assigns headersTimeout (a loosening needs a demonstrated need and an explicit requestTimeout)", () => {
     const src = readFileSync(join(__dirname, "..", "server/origin-tls.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    expect(src).not.toMatch(/headersTimeout\s*=/);
-    expect(src).not.toMatch(/requestTimeout\s*=/);
+    expect(src).not.toMatch(/headersTimeout\s*[:=]/);
+    expect(src).not.toMatch(/requestTimeout\s*[:=]/);
   });
 
   // The once-per-start line is the per-host proof; `required` makes "REQUIRED is live on this host" a direct read.

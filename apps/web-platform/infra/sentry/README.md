@@ -146,7 +146,7 @@ not step 2 has happened.
 
 `sentry_alert.origin_tls_event` (`issue-alerts.tf`, `frequency_minutes = 47`) emails the issue owners (`ActiveMembers` fallthrough) on
 ANY event tagged `feature=origin_tls`, which `server/origin-tls.ts` is the only emitter of (`op=listen` incl. `phase=runtime` /
-`reason=unexpected-close`, `op=load`, `op=create`, `op=cert_expiry`). Its only filter is the feature tag, so a future op is paged by
+`reason=unexpected-close`, `op=load`, `op=create`, `op=cert_expiry`, which fires only at a container start within 90 days of expiry). Its only filter is the feature tag, so a future op is paged by
 default; `test/sentry-origin-tls-alert-op-contract.test.ts` derives the literal from the emitter. The rule is DECLARED in the change
 that added it and takes effect only once `apply-sentry-infra.yml` has applied it on merge. A dead `:443` that raises no event (docker-proxy
 or iptables failure) is not covered: the Better Stack monitors remain the detectors for that. Resolve the Sentry issue after the cause is fixed,

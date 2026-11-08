@@ -17,6 +17,7 @@ vi.mock("@/server/observability", async (importOriginal) => ({
   warnSilentFallback: vi.fn(),
 }));
 
+import { FATAL_FLUSH_MS } from "@/server/crash-handlers";
 import {
   EXIT_FLUSH_MS,
   ORIGIN_TLS_REQUIRED_ENV,
@@ -25,6 +26,7 @@ import {
 } from "@/server/origin-tls";
 
 beforeEach(() => {
+  expect.hasAssertions();
   flush.mockReset();
 });
 afterEach(() => {
@@ -33,8 +35,9 @@ afterEach(() => {
 });
 
 describe("createExitAfterFlush", () => {
-  test("the flush window is 2 s (the same bound as crash-handlers FATAL_FLUSH_MS)", () => {
+  test("the flush window is 2 s, and equals crash-handlers FATAL_FLUSH_MS (one bound, two modules)", () => {
     expect(EXIT_FLUSH_MS).toBe(2_000);
+    expect(EXIT_FLUSH_MS).toBe(FATAL_FLUSH_MS);
   });
 
   test("flushes first with the bound, and exits only after the flush settled", async () => {
@@ -101,6 +104,28 @@ describe("createExitAfterFlush", () => {
     expect(flush).toHaveBeenCalledTimes(1);
   });
 
+  test("a flush that resolves AFTER the hard timer already fired does not exit a second time", async () => {
+    vi.useFakeTimers();
+    let release!: (v: boolean) => void;
+    flush.mockReturnValue(new Promise<boolean>((r) => (release = r)));
+    const exit = vi.fn();
+    createExitAfterFlush({ flush, exit })(1);
+    await vi.advanceTimersByTimeAsync(2_250);
+    expect(exit).toHaveBeenCalledTimes(1);
+    release(true);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(exit).toHaveBeenCalledTimes(1);
+  });
+
+  test("an exit that throws is contained (no unhandled rejection, no crash)", async () => {
+    flush.mockResolvedValue(true);
+    const exit = vi.fn(() => {
+      throw new Error("injected exit failure");
+    });
+    createExitAfterFlush({ flush, exit })(1);
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledTimes(1));
+  });
+
   test("the idempotence flag is per instance, so one test cannot leak a suppressed exit into the next", async () => {
     flush.mockResolvedValue(true);
     const exitA = vi.fn();
@@ -116,14 +141,20 @@ describe("startOriginTlsListener default exit", () => {
   test("a REQUIRED start with absent material and NO injected exit flushes Sentry before process.exit", async () => {
     flush.mockResolvedValue(true);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const close = vi.fn();
+    const closeAllConnections = vi.fn();
     const result = startOriginTlsListener({
-      httpServer: { on: vi.fn() } as never,
+      httpServer: { on: vi.fn(), close, closeAllConnections } as never,
       env: { [ORIGIN_TLS_REQUIRED_ENV]: "1" },
     });
     expect(result).toBeNull();
 
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
     expect(flush).toHaveBeenCalledWith(2_000);
+    // The :80 server stops accepting BEFORE the flush starts, so a dying REQUIRED start cannot answer the deploy canary's /health.
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(flush.mock.invocationCallOrder[0]);
     // Without this the vitest process.exit trap could make the assertion vacuous: flush must come strictly first.
     expect(flush.mock.invocationCallOrder[0]).toBeLessThan(exitSpy.mock.invocationCallOrder[0]);
   });

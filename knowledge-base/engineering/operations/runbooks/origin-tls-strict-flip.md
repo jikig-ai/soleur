@@ -87,7 +87,7 @@ No pre-flip server-wait decomposition exists, so the 0.154 s cannot be split int
 
 | # | Candidate | Predicts | Status |
 |---|---|---|---|
-| 1 | Redeploys: a cold Cloudflare-to-origin connection pool and a cold Supabase leg right after each restart (the app warms the Supabase edge, #8978, which bounds this but does not remove it) | The slow tail clusters in the minutes after an `origin-tls: listening` pair and recovers between restarts | UNVERIFIED |
+| 1 | Redeploys: a cold Cloudflare-to-origin connection pool and a cold Supabase leg right after each restart (`/health` makes one Supabase round trip per request, so a cold connection right after a restart adds to the first requests; how long that lasts is UNVERIFIED) | The slow tail clusters in the minutes after an `origin-tls: listening` pair and recovers between restarts | UNVERIFIED |
 | 2 | TLS termination CPU in the Node process | p50 and CPU move together. Judged unlikely at sub-millisecond per keep-alive request, but that figure is an estimate, not a measurement | UNVERIFIED |
 | 3 | Handshakes on new Cloudflare-to-origin connections: under `flexible` a new origin connection costs a TCP handshake; under `strict` it adds a TLS 1.3 handshake and certificate validation (about one extra round trip between the Cloudflare colo and the origin) | A step at 23:43Z that is stable across restarts, present on every path to the same origin (including the Supabase-free control), and visible per Cloudflare colo | UNVERIFIED |
 | 4 | `/health` awaits one PostgREST round trip on every request (`users?select=id&limit=1`, 2 s abort, `checkSupabase()` in `server/health.ts`), so its server wait contains a database call whose variance is independent of TLS. The original brief omitted this candidate | The tail follows Supabase latency, the same shape appears on any other path that also calls Supabase, and a Supabase-free same-origin path stays flat regardless of TLS | UNVERIFIED |
@@ -96,7 +96,7 @@ No pre-flip server-wait decomposition exists, so the 0.154 s cannot be split int
 
 Steps A and B need no Cloudflare token. Step C is blocked until the token and subcommand below exist. Nothing here changes production, and no step may be answered by borrowing another token.
 
-**Step A: interleaved A/B against a Supabase-free same-origin control (no token).** At least 100 requests per path over at least 10 minutes, alternating the two paths. The control candidate is `/robots.txt?cb=<rand>`; it is served through Next, so it also passes the Next middleware (an imperfect control), and it is UNVERIFIED that it makes no Supabase call. The control is valid only when `cf-cache-status` is not `HIT` (the random query string is meant to prevent that; check, do not assume). `%header{}` in `curl -w` needs curl 7.84 or newer.
+**Step A: interleaved A/B against a Supabase-free same-origin control (no token).** At least 100 requests per path over at least 10 minutes, alternating the two paths. The control candidate is `/robots.txt?cb=<rand>`; it is served through Next, so it also passes the Next middleware (an imperfect control), and it is UNVERIFIED that it makes no Supabase call. The control is valid only when `cf-cache-status` is not `HIT` (the random query string is meant to prevent that; check, do not assume). `%header{}` in `curl -w` needs curl 7.84 or newer. **Run time:** 100 requests at one per 6 s take about 11 minutes, longer than one foreground shell call: write the loop to a script, run it in the background and read the output file once it exits (the file, not stdout, is the artifact; do not delete it before the summary step has run).
 
 ```bash
 OUT=$(mktemp)
@@ -135,7 +135,7 @@ awk '$1==200{print $5-$4}' "$OUT_B" | sort -n | awk '{a[NR]=$1} END{print "supab
 rm -f "$OUT_B"
 ```
 
-**Step C: Cloudflare analytics by hour (needs the token below; blocked until it exists).** A GraphQL POST to `https://api.cloudflare.com/client/v4/graphql` with `Authorization: Bearer`, dataset `httpRequestsAdaptiveGroups`, filter `datetime_geq` and `datetime_lt`, `clientRequestHTTPHost: "app.soleur.ai"`, `clientRequestPath: "/health"`, `requestSource: "eyeball"`, `orderBy: [datetimeHour_ASC]`, dimension `datetimeHour`, and quantiles of the origin response duration. The dataset and those filter keys are documented; the **exact origin-duration quantile field names are UNVERIFIED**, and so is the **per-plan time-range cap** (slice requests to at most 24 h and treat even that as unverified). The `count` selection and the variable type names are likewise UNVERIFIED. First run a schema-discovery query and take the field names from its output, never from this page. The request shape below is what the future subcommand must send; until it exists, running it by hand is not the sanctioned path.
+**Step C: Cloudflare analytics by hour (needs the token below; blocked until it exists). The block below is the REQUEST SHAPE for the future subcommand, not a command to run: it wraps `bash -c` in `doppler run`, which the wrapper script's contract forbids, and the token and subcommand do not exist yet. It is an HTTP POST that only reads (an analytics query).** A GraphQL POST to `https://api.cloudflare.com/client/v4/graphql` with `Authorization: Bearer`, dataset `httpRequestsAdaptiveGroups`, filter `datetime_geq` and `datetime_lt`, `clientRequestHTTPHost: "app.soleur.ai"`, `clientRequestPath: "/health"`, `requestSource: "eyeball"`, `orderBy: [datetimeHour_ASC]`, dimension `datetimeHour`, and quantiles of the origin response duration. The dataset and those filter keys are documented; the **exact origin-duration quantile field names are UNVERIFIED**, and so is the **per-plan time-range cap** (slice requests to at most 24 h and treat even that as unverified). The `count` selection and the variable type names are likewise UNVERIFIED. First run a schema-discovery query and take the field names from its output, never from this page. The request shape below is what the future subcommand must send; until it exists, running it by hand is not the sanctioned path.
 
 ```bash
 # 1. Schema discovery (no secret in the query). The jq filter prints type and field NAMES only.
@@ -209,14 +209,22 @@ If revived, the shape is: a `warn`-level line (Vector drops INFO, so an info mar
 - The Sentry `feature:origin_tls` read and the `pagerules-ssl` check: last read at about 19:58Z on 2026-11-07 (0 events; 0 active page rules; reported in PR #12341), not re-run immediately before the flip.
 - Doppler activity log, `prd_terraform` writes in the window (account `ops@jikigai.com` for every entry, secret names not shown): 22:54:34Z (1 updated), 23:41:47Z (1 added, discussed above) and 00:13:25Z (1 updated). The 22:54:34Z and 00:13:25Z writes are **not attributed** here.
 
+##### Verify `origin-tls-event` is live (read-only; run after the merge-triggered apply)
+
+1. `gh run list --workflow apply-sentry-infra.yml --branch main --limit 3 --json databaseId,conclusion,headSha,createdAt`. Expected: a run with `conclusion: success` whose `headSha` is the merge commit of PR #12434 or a later one on `main`.
+2. `gh run view <databaseId> --log | /usr/bin/grep -a -i 'live fidelity'`. Expected: a passing fidelity line and no divergence that names `origin-tls-event` (the step diffs every declared rule against live Sentry).
+3. The next `scheduled-sentry-alert-drift.yml` run is green (no drift issue). The workflows-endpoint read in `apps/web-platform/infra/sentry/README.md` (section "Audit") may print `{name, enabled, frequency}` for the rule: expected one row, `enabled: true`, `frequency: 47`.
+
+If step 1 shows no successful run, or step 2 names the rule, the state stays **DECLARED** (a merge commit message carrying `[skip-sentry-apply]` skips the apply). Do not write "live" anywhere until step 1 and step 2 pass.
+
 ### Open checks (plainly)
 
 | Check | Owner of the check | State |
 |---|---|---|
 | Signed-in WebSocket connects through the edge under `strict` (the upgrade path has never been exercised through the TLS hop by a probe) | **owner** (no probe exists) | open |
 | +1 h and +24 h rechecks (the 30-request loop and the Sentry query), rollback kept armed for the whole window | whoever runs the soak | pending |
-| Sentry `feature:origin_tls` | anyone with the read token | not re-read after the flip. The alert rule `origin-tls-event` (any `feature=origin_tls` event, `frequency_minutes` 47) is **DECLARED** in the follow-ups PR; it is live only after the merge-triggered `apply-sentry-infra.yml` run has been read. Until then the pull-based query in "Sentry check" is the only check |
-| Real 502/520 rate over a fixed window (Cloudflare analytics) | **owner** (no sanctioned reader) | open. A read-only reader needs the `CF_API_TOKEN_ANALYTICS_READ` token and a `cloudflare-readonly.sh` subcommand (with a documented read-only-POST exception), tracked in `#12441`; see "/health p90 after the strict flip" Step C |
+| Sentry `feature:origin_tls` | anyone with the read token | not re-read after the flip. The alert rule `origin-tls-event` (any `feature=origin_tls` event, `frequency_minutes` 47) is **DECLARED** in the follow-ups PR; it is live only after the merge-triggered `apply-sentry-infra.yml` run has been read (see "Verify the rule is live" below). Until then the pull-based query in "Sentry check" is the only check |
+| Real 502/520 rate over a fixed window (Cloudflare analytics) | **owner** mints the token, then the **agent** runs it (no sanctioned reader until then) | open. A read-only reader needs the `CF_API_TOKEN_ANALYTICS_READ` token and a `cloudflare-readonly.sh` subcommand (with a documented read-only-POST exception), tracked in `#12441`; see "/health p90 after the strict flip" Step C |
 | Port 80 | stays OPEN until the bake passes (CLO condition 3); the post-flip probe passing is necessary, not sufficient | open |
 | Rollback time-to-effect at the edge | | **unmeasured**: the apply run took 109 to 370 s on this workflow; the flip's own upper bound (about 55 s from the ruleset write to the first passing probe) is the only edge figure |
 
@@ -268,7 +276,7 @@ awk '$2!=200{b++} END{print "non200=" b+0}' /tmp/lat.$$; cut -d' ' -f1 /tmp/lat.
 ```
 
 This is a client-side sample of `/health`, not the real 502/520 rate: no sanctioned reader of Cloudflare edge analytics exists in the repo tooling, so the true rate over a fixed
-window is an **owner act** (Cloudflare dashboard, Analytics, status codes 502 and 520-526 for `app.soleur.ai`, same window before and after).
+window is an **owner act** (Cloudflare dashboard, Analytics, status codes 502 and 520-526 for `app.soleur.ai`, same window before and after) until `#12441` lands, after which the agent reads it through the subcommand.
 
 Sentry check (GET only; token NAME `SENTRY_ISSUE_RO_TOKEN`, Doppler `soleur/prd`; `scripts/sentry-issue.sh` has no feature-search mode, so this is the exact call):
 

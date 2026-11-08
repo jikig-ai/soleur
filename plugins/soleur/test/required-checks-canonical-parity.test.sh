@@ -591,27 +591,31 @@ scan_curl_flags() {
   local f scan_rc=0
   for f in "$@"; do
     awk -v file="$f" '
-      function finish(   kind, miss) {
-        if (buf ~ /(^|[[:space:]])curl[[:space:]]/) {
+      function finish(   kind, miss, n, i, seg, parts) {
+        n = split(buf, parts, /(;|&&|\|\|)/)
+        for (i = 1; i <= n; i++) {
+          seg = parts[i]
+          if (seg !~ /(^|[[:space:]])curl[[:space:]]/) continue
           kind = ""
-          if (index(buf, "gitleaks/gitleaks/releases/download")) kind = "gitleaks"
-          else if (index(buf, "rhysd/actionlint/releases/download")) kind = "actionlint"
-          if (kind != "") {
-            miss = ""
-            if (buf !~ /(^|[[:space:]])--fail([[:space:]]|$)/) miss = miss " --fail"
-            if (buf !~ /(^|[[:space:]])--retry[[:space:]]+5([[:space:]]|$)/) miss = miss " --retry-5"
-            if (buf !~ /(^|[[:space:]])--retry-all-errors([[:space:]]|$)/) miss = miss " --retry-all-errors"
-            if (miss != "") bad = 1
-            printf "%s|%d|%s|%s\n", file, start, kind, (miss == "" ? "OK" : "MISSING" miss)
-          }
+          if (index(seg, "gitleaks/gitleaks/releases/download")) kind = "gitleaks"
+          else if (index(seg, "rhysd/actionlint/releases/download")) kind = "actionlint"
+          if (kind == "") continue
+          miss = ""
+          if (seg !~ /(^|[[:space:]])--fail([[:space:]]|$)/) miss = miss " --fail"
+          if (seg !~ /(^|[[:space:]])--retry[[:space:]]+5([[:space:]]|$)/) miss = miss " --retry-5"
+          if (seg !~ /(^|[[:space:]])--retry-all-errors([[:space:]]|$)/) miss = miss " --retry-all-errors"
+          if (miss != "") bad = 1
+          printf "%s|%d|%s|%s\n", file, start, kind, (miss == "" ? "OK" : "MISSING" miss)
         }
         buf = ""
       }
       /^[[:space:]]*#/ { next }
       {
         if (buf == "") start = NR
-        if ($0 ~ /\\$/) { line = $0; sub(/\\$/, " ", line); buf = buf " " line; next }
-        buf = buf " " $0
+        phys = $0
+        sub(/[[:space:]]+#.*$/, "", phys)   # a trailing comment is not part of the command
+        if (phys ~ /\\$/) { sub(/\\$/, " ", phys); buf = buf " " phys; next }
+        buf = buf " " phys
         finish()
       }
       END { if (buf != "") finish(); exit bad }
@@ -640,7 +644,9 @@ strip_flag_once() {
 
 echo "Test 10: gitleaks/actionlint release-download curls carry --fail --retry 5 --retry-all-errors"
 shopt -s nullglob
-CURL_SCAN_FILES=("$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/actions/*/action.yml)
+shopt -s nullglob
+CURL_SCAN_FILES=("$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/workflows/*.yaml "$REPO_ROOT"/.github/actions/*/action.yml "$REPO_ROOT"/.github/actions/*/action.yaml)
+shopt -u nullglob
 shopt -u nullglob
 
 scan_rc=0
@@ -741,6 +747,19 @@ neg_check flags-in-comment-and-echo " --fail" <<'YML'
         curl -sSLo a.tgz \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
 YML
+neg_check flags-in-trailing-comment " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" # --fail --retry 5 --retry-all-errors
+YML
+neg_check flags-in-chained-echo " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" && echo --fail --retry 5 --retry-all-errors
+YML
+neg_check hardened-curl-masks-second-on-one-line " --retry-all-errors" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz "https://example.invalid/x"; curl --fail --retry 5 -sSLo b.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check standalone-f-with-retry " --fail" <<'YML'
+        curl -f --retry 5 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
 neg_check second-copy-unhardened " --retry-all-errors" <<'YML'
         curl --fail --retry 5 --retry-all-errors -sSLo a.tgz \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
@@ -749,4 +768,4 @@ neg_check second-copy-unhardened " --retry-all-errors" <<'YML'
 YML
 echo ""
 
-print_results 77
+print_results 81
