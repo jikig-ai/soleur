@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ci-oracle-lane.sh — the `oracle-selection` job's driver (#12156, ADR-276 amendment: DARK AND LOCKED).
+# ci-oracle-lane.sh — the `oracle-selection` job's driver (#12156, ADR-276 amendment; activation lock removed — the lane arms when CI_ORACLE_LANE=on).
 #
 # WHAT IT DECIDES. For a pull_request or merge_group run it answers one question: is EVERY changed path inside the
 # oracle surface? When it is, the five heavy `test` legs (test-webplat, test-bun, test-scripts, test-scripts-heavy,
@@ -15,6 +15,8 @@
 # INPUTS ARE ENV ONLY (the workflow passes them through `env:`; nothing is interpolated into the script):
 #   EVENT_NAME           github.event_name                          (pull_request | merge_group; anything else is full)
 #   SWITCH               vars.CI_ORACLE_LANE                        (only the exact string `on` classifies; compared in bash)
+#   ORACLE_LANE_LOCKED   env re-lock (dark-mode revert path)         (=1 keeps active=false; no ci.yml env wires it —
+#                                                                     wiring is itself an excluded-path code edit)
 #   PR_HEAD_SHA          github.event.pull_request.head.sha         (pull_request)
 #   HEAD_REPO            github.event.pull_request.head.repo.full_name  (pull_request; a fork head is full)
 #   MERGE_GROUP_HEAD_SHA github.event.merge_group.head_sha          (merge_group; the whole queued batch is diffed)
@@ -31,9 +33,8 @@
 #   oracle_only  ^(true|false)$       every changed path is inside the oracle surface AND, when
 #                                     scripts/lib/test-affected-paths.sh changed, every changed hunk line lies inside
 #                                     an `^AFFECTED_[A-Z0-9_]+_PATHS=(` … `^)` extent in BOTH the base and head images
-#   active       ^(true|false)$       oracle_only AND the switch is exactly `on` AND the activation lock is absent —
-#                                     NEVER true while `readonly ORACLE_LANE_LOCKED=1` stands (the lane is dark:
-#                                     `would_skip` is annotated instead)
+#   active       ^(true|false)$       oracle_only AND the switch is exactly `on` AND no env re-lock —
+#                                     `ORACLE_LANE_LOCKED=1` in env keeps it false (`would_skip` is annotated instead)
 #   skip_legs    a comma list over    {test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build};
 #                                     written ONLY when active
 #   head_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^2 of the merge ref; merge_group: MERGE_GROUP_HEAD_SHA
@@ -69,8 +70,6 @@
 # Verdicts and annotations are literals only; every value that reaches an output is re-validated against its grammar
 # at the final block. No tool beyond bash, git and coreutils (timeout unused; mktemp, wc, tr, rm) is used.
 set -uo pipefail
-
-readonly ORACLE_LANE_LOCKED=1  # ACTIVATION LOCK (#12156): the activation PR removes this line after the observation window
 
 export LC_ALL=C
 export GIT_TERMINAL_PROMPT=0
@@ -370,7 +369,8 @@ run() {
   oracle_only=true
   would_skip="$ORACLE_SKIP_SET"
   # The diagrams carve-out (ported from ci-pr-selection.sh: diagrams paths feed the web-platform surface, so a doc
-  # class that includes one keeps test-webplat running even when the lane otherwise qualifies).
+  # class that includes one keeps test-webplat running even when the lane otherwise qualifies). Per-run skip reach
+  # is this list plus shard-totality-mutations, which is gated on `active` alone — by design (ci-push-dedupe.test.sh SHARD_TERM).
   [ "$diagrams" = 1 ] && would_skip="test-bun,test-scripts,test-scripts-heavy,web-platform-build"
   return 0
 }
