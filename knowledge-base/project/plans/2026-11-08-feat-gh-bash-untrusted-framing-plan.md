@@ -61,7 +61,7 @@ verification is the targeted vitest files named below plus the anchor check; the
 | "the existing createUntrustedContentHook registration is near ~546, PostToolUse list ~529" | Confirmed (`agent-runner-query-options.ts` lines 529 and 541-553, single-rewriter comment 224-240). | Register next to the git-lock Bash entry, same predicate as WebFetch. |
 | "Playwright MCP not wired in hosted sessions" (pin test) | Hosted sessions load `plugins: [{ type: "local", path: trustedPluginPath }]`. `plugins/soleur/.mcp.json` DOES declare `playwright`, but `plugin.json` `mcpServers` has only `context7, cloudflare, vercel, stripe`, `apps/web-platform/.dockerignore` excludes `_plugin-vendored/.mcp.json`, and `ci.yml` + `reusable-release.yml` `rm -f "$DEST/.mcp.json"` when vendoring. Server code outside `server/inngest/` never mentions Playwright. | The pin asserts that whole chain (four legs, Guard 2), not a single string. |
 | "ADR addendum dated 2026-11-08 already exists" | Confirmed (`## Addendum 2026-11-08 (Ref #9601 slice 2)`, sessionIdHash). | Append a second addendum below it; edit no existing line. |
-| Producer check (learning 2026-10-25: a guard on a channel nobody feeds ships inert) | The producer exists: `safe-bash.ts` auto-approves `gh issue|pr view|list|status|diff|checks` and `gh repo view`; `gh api` and `gh run view` pass the approval gate; `GH_TOKEN` is minted into the sandbox env (`agent-env.ts`); the image installs `gh` (Dockerfile `SOLEUR_GH_INSTALLED`). | The hook is fed by real hosted traffic. A test pins the verb table to the safe-bash set (Guard 3). |
+| Producer check (learning 2026-10-25: a guard on a channel nobody feeds ships inert) | The producer exists: `safe-bash.ts` auto-approves `gh issue|pr view|list|status|diff|checks` and `gh repo view`; `gh api` and `gh run view` reach the review gate; `GH_TOKEN` is minted into the sandbox env (`agent-env.ts`) for sessions WITHOUT web egress only — with web egress the env deny census removes it (review correction 2026-11-08: the hook's registered population is the one where in-sandbox gh is denied its token; see the ADR addendum item 3); the image installs `gh` (Dockerfile `SOLEUR_GH_INSTALLED`). | The hook is fed by real hosted traffic. A test pins the verb table to the safe-bash set (Guard 3). |
 
 ## Research Insights
 
@@ -117,7 +117,7 @@ test); (b) a hook bug stalls or alters a turn that runs `gh` (the hook is fail-o
 (c) the framing note shows up in the chat UI or persisted history (a grep test pins that `includeHookEvents` is never set; hook output otherwise goes to the model only).
 
 **If this leaks, the user's workflow/data is exposed via:** telemetry. The new log line carries a pepper-keyed hash of the workspace id and of the
-conversation id, a closed `verb` enum, byte lengths and an outcome enum; it never carries the command text, paths, output or matched text. A leak would need a future edit to add a
+conversation id, a closed `verb` enum, character-count lengths and an outcome enum; it never carries the command text, paths, output or matched text. A leak would need a future edit to add a
 free-text field; the closed field set is pinned by an exact-key-set test and a canary test. The framing itself is a partial, unmeasured control:
 a user who reads "the agent is protected from GitHub text" would be misled, so no public claim is made (ADR addendum, PR body, commit messages use "framing" and "annotation", never "protects" or "secured").
 
@@ -403,8 +403,8 @@ Creating or flipping the classify flag or any environment, prd enablement, the P
 
 ### Legal
 
-**Status:** reviewed (self-assessed; no CLO spawn)
-**Assessment:** No new field class: `workspaceIdHash`/`sessionIdHash` are the same pseudonymous fields the existing `untrusted-classify` line already carries; the issue's CLO constraint (closed field set, no paths, filenames or matched text) is implemented and pinned. No legal wording, no public claim, no `docs/legal` change. The PA-8(c) Article 30 amendment remains owed (operator and CLO) and is not touched. Gate (b) of the GDPR gate (single-user-incident threshold) is the trigger; advisory gate run is left to `deepen-plan`/review since this plan touches none of the regulated-data code surfaces.
+**Status:** not CLO-reviewed (self-assessed only; legal sign-off is the operator's)
+**Assessment:** One new log op (`untrusted-gh-frame`); no new field class: `workspaceIdHash`/`sessionIdHash` are the same pseudonymous fields the existing `untrusted-classify` line already carries; the issue's CLO constraint (closed field set, no paths, filenames or matched text) is implemented and pinned. No legal wording, no public claim, no `docs/legal` change. The PA-8(c) Article 30 amendment remains owed (operator and CLO) and is not touched. Gate (b) of the GDPR gate (single-user-incident threshold) is the trigger; advisory gate run is left to `deepen-plan`/review since this plan touches none of the regulated-data code surfaces.
 
 ### Product/UX Gate
 

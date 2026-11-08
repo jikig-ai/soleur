@@ -1604,6 +1604,20 @@ Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/bett
 (counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
 lines is the expected state. The alerts themselves are tracked on #10195.
 
+## `op:"untrusted-gh-frame"` (gh Bash framing note, ADR-287 addendum 2026-11-08 / #11076)
+
+One WARN line per `gh` command the framing hook sees through the Bash tool, in sessions with web egress and the `untrusted-content-classify`
+flag on. The pino payload sits under `.message` in the stored row, with fields `op`, `source` (always `github`), `outcome`
+(`annotated`, `skipped`, `shape` or `error`), `verb` (a closed enum, absent when none was parsed), `stdoutLength`, `stderrLength` (null when
+not measured), `persisted`, `fallback`, `workspaceIdHash`, `sessionIdHash`. Never the command, the output or any path. `annotated` means the
+hook returned a note, not that the model saw it; `skipped` is a `gh` command with no read verb; `fallback: true` means the bounded scan decided.
+A `shape` or `error` line comes with a debounced Sentry event (ops `gh-frame-shape`, `gh-frame-error`) and means the hook did nothing for that call.
+
+Read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-gh-frame` (counts only). With the flag
+off (the default) zero lines is the expected state. Zero lines while flag-on sessions run `gh` is NOT an all-clear: in web-egress sessions the
+sandbox is denied its gh credentials (see the ADR addendum, item 3), so few `gh` reads happen there. The alerts are not provisioned; they are
+tracked with #10195.
+
 ## Egress audit rollup markers (#9545, ADR-288)
 
 The egress gateway's decision log is also rolled up in Vector into per-workspace 15-minute buckets and posted to the app (dark until the

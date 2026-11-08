@@ -1,13 +1,15 @@
 // Untrusted-content classification + data-only framing (#4671, ADR-287).
 //
 // Hosted agents read text an attacker can write: fetched web pages, inbound email,
-// CRM notes, GitHub issue/PR/CI text. This module is the single source of truth for two things:
+// CRM notes, GitHub issue/PR/CI text. This module is the single source of truth for these things:
 //
 //   1. `envelope()` / the per-source preamble table — the data-only framing that
 //      travels ahead of third-party rows (previously three copy-pasted strings).
 //   2. `classify()` — a deterministic, synchronous heuristic scorer that flags
 //      instruction-shaped content, plus `createUntrustedContentHook()`, a fail-open
 //      PostToolUse hook that applies it to WebFetch results.
+//   3. `createGhBashFramingHook()` — a static, annotate-only note after read-style `gh` commands run
+//      through Bash (#11076, see the section near the end of this file).
 //
 // Design invariants (CTO rulings R1-R7, see the plan + ADR-287):
 //   - Heuristic only, no LLM call in the hot path. Annotate, never block.
@@ -755,7 +757,8 @@ export function createUntrustedContentHook(opts: UntrustedContentHookOptions = {
 // exists): `BashOutput` = { stdout: string; stderr: string; interrupted: boolean;
 // persistedOutputPath?: string; backgroundTaskId?: string; ... } and `BashInput.command: string`;
 // `PostToolUseHookInput.tool_input` / `.tool_response` are typed `unknown`. `persistedOutputPath`
-// is set when the output is too large to inline (the model later reads that file). Hook input is
+// is set when the output is too large to inline (typings: the persisted full output in the tool-results
+// directory). Hook input is
 // model/SDK-controlled (ADR-156): every field is type-checked and anything unrecognised returns
 // `{}` and is made observable. This is unmeasured framing, not a claim of protection (see the ADR).
 
@@ -767,8 +770,9 @@ const GH_FALLBACK_SCAN_CHARS = 64 * 1024;
 /**
  * The closed table of read-style gh commands that get a framing note. An empty verb list means
  * the noun alone is the read channel (`gh api` takes arbitrary args). `gist` and `workflow` are
- * deliberately absent (one row plus one test each to add later). Guard 3 pins this table to the
- * verbs `isBashCommandSafe` auto-admits.
+ * deliberately absent (one row plus one test each to add later). Guard 3 pins a ONE-WAY subset: every gh
+ * verb `isBashCommandSafe` auto-admits is in this table (the table also holds `api`, `run`, `release` and
+ * `search`, which safe-bash does not admit). A new noun here must not widen past what the ADR lists.
  */
 export const GH_READ_VERBS: Readonly<Record<string, readonly string[]>> = {
   issue: ["view", "list", "status"],
@@ -813,7 +817,7 @@ function isAssignmentWord(w: string): boolean {
 const LEADING_NON_COMMAND = new Set(["command", "time", "{", "!", "if", "then", "else", "elif", "do", "while", "until"]);
 
 /** Decide one shell segment: does its command word invoke `gh` with a read verb? */
-function gh_segment(words: string[]): { verb?: string; ghSeen: boolean } {
+function ghSegment(words: string[]): { verb?: string; ghSeen: boolean } {
   let i = 0;
   const n = words.length;
   while (i < n) {
@@ -832,7 +836,17 @@ function gh_segment(words: string[]): { verb?: string; ghSeen: boolean } {
   if (!isReadNoun(noun)) return { ghSeen: true };
   const verbs = GH_READ_VERBS[noun]!;
   if (verbs.length === 0) return { verb: noun, ghSeen: true };
-  const verb = words[i + 2];
+  // `-R <repo>`, `--repo <repo>`, `--repo=<repo>` and `-R<repo>` are valid between the noun and the verb.
+  let j = i + 2;
+  while (j < n) {
+    const f = words[j]!;
+    if (f === "-R" || f === "--repo") j += 2;
+    else if (f.startsWith("--repo=") || (f.startsWith("-R") && f.length > 2)) j += 1;
+    else break;
+  }
+  const word = words[j];
+  // `ls` is gh's alias of `list`.
+  const verb = word === "ls" && verbs.includes("list") ? "list" : word;
   return verb !== undefined && verbs.includes(verb) ? { verb: `${noun} ${verb}`, ghSeen: true } : { ghSeen: true };
 }
 
@@ -840,7 +854,7 @@ function gh_segment(words: string[]): { verb?: string; ghSeen: boolean } {
  * Quote-aware, single forward pass over `charCodeAt` (no regex over the command text), hard length
  * cap. Single/double quotes and backslash make text opaque; unquoted `; & | ( ) backtick` and
  * newline end a segment (`&&`, `||`, `$(` fall out of the single-character splits); a
- * backslash-newline is whitespace. The first segment whose command word is `gh` with a table verb
+ * backslash-newline is a line continuation (both characters are dropped, as bash does). The first segment whose command word is `gh` with a table verb
  * wins; several gh segments still yield one verb and therefore one note. Comments and heredoc
  * bodies are not understood (an apostrophe inside one lands in `shape`, which the caller hands to
  * the bounded fallback). Never throws. `bash -c`, `xargs gh` and wrapper commands are documented
@@ -863,7 +877,7 @@ export function ghReadVerbOf(command: string): GhVerbResult {
   };
   const endSegment = (): string | undefined => {
     flushWord();
-    const r = gh_segment(words);
+    const r = ghSegment(words);
     words = [];
     if (r.ghSeen) ghSeen = true;
     return r.verb;
@@ -894,8 +908,7 @@ export function ghReadVerbOf(command: string): GhVerbResult {
       case 92:
         if (i + 1 < len) {
           if (command.charCodeAt(i + 1) === 10) {
-            i++;
-            flushWord();
+            i++; // line continuation: bash drops both characters, so `g\<nl>h` is `gh`
           } else {
             word += command[++i];
             inWord = true;
@@ -907,7 +920,7 @@ export function ghReadVerbOf(command: string): GhVerbResult {
         flushWord();
         break;
       case 10:
-      case 13:
+      case 13: // bash does not split on CR; treating it as a separator can only over-frame
       case 59:
       case 38:
       case 124:
@@ -941,7 +954,9 @@ function ghFallbackScan(command: string): { frame: boolean; ghSeen: boolean } {
   let tok = "";
   for (let i = 0; i < limit; i++) {
     const c = command.charCodeAt(i);
-    if (c === 32 || c === 9 || c === 10 || c === 13) {
+    // Whitespace AND the tokenizer's own separators (`; & | ( )` and backtick): a `gh` glued to one of
+    // them (`x;gh ...`, `$(gh ...)`) must still be a token of its own.
+    if (c === 32 || c === 9 || c === 10 || c === 13 || c === 59 || c === 38 || c === 124 || c === 40 || c === 41 || c === 96) {
       if (tok !== "") tokens.push(tok);
       tok = "";
     } else if (c !== 39 && c !== 34 && c !== 92) {
@@ -958,6 +973,18 @@ function ghFallbackScan(command: string): { frame: boolean; ghSeen: boolean } {
   return { frame: command.length > limit, ghSeen };
 }
 
+type GhFrameCtx = Omit<UntrustedContentHookOptions, "wrap">;
+
+/**
+ * The tokenizer reads quotes by parity, and it does not understand comments or heredoc bodies. A multi-line
+ * script whose comments/heredocs carry an EVEN number of apostrophes (or an ANSI-C quoted string) therefore ends
+ * balanced and can hide a real gh read as `none`. A newline plus an apostrophe is the cheap signature of that
+ * shape; single-line commands such as `echo "gh issue view 1"` stay precise.
+ */
+function commentQuoteRisk(command: string): boolean {
+  return command.indexOf("\n") !== -1 && command.indexOf("'") !== -1;
+}
+
 interface GhFrameFields {
   outcome: "annotated" | "skipped" | "shape" | "error";
   verb?: string;
@@ -972,7 +999,7 @@ interface GhFrameFields {
  * Optional keys are omitted, never undefined-valued; `op` is written last so no field can override
  * it. A distinct op keeps the WebFetch flagged-rate numbers undiluted.
  */
-function emitGhFrame(f: GhFrameFields, ctx: { workspaceId?: string; sessionId?: string }): void {
+function emitGhFrame(f: GhFrameFields, ctx: GhFrameCtx): void {
   try {
     const line: Record<string, unknown> = { source: "github", outcome: f.outcome };
     if (f.verb !== undefined) line.verb = f.verb;
@@ -989,14 +1016,45 @@ function emitGhFrame(f: GhFrameFields, ctx: { workspaceId?: string; sessionId?: 
   }
 }
 
-const NO_RESPONSE = { stdoutLength: null, stderrLength: null, persisted: false } as const;
+const NO_LENGTHS = { stdoutLength: null, stderrLength: null, persisted: false } as const;
+
+/**
+ * Lengths of a Bash `tool_response`, or null when the shape is not one we can measure. Known shapes:
+ * the SDK's `BashOutput` object `{ stdout: string, stderr: string, ... }` (typings), a bare string and an
+ * array of `{ text: string }` content blocks (the shapes `toolResponseToText` in the git-lock hook also
+ * coerces). Lengths use `.length`, never `Buffer.byteLength`, which would scan multi-MB output.
+ */
+function measureBashResponse(
+  r: unknown,
+): { stdoutLength: number; stderrLength: number | null; persisted: boolean } | null {
+  if (typeof r === "string") return { stdoutLength: r.length, stderrLength: null, persisted: false };
+  if (Array.isArray(r)) {
+    let total = 0;
+    for (const b of r) {
+      const text = b && typeof b === "object" ? (b as { text?: unknown }).text : undefined;
+      if (typeof text !== "string") return null;
+      total += text.length;
+    }
+    return { stdoutLength: total, stderrLength: null, persisted: false };
+  }
+  if (r && typeof r === "object") {
+    const o = r as { stdout?: unknown; stderr?: unknown; persistedOutputPath?: unknown };
+    if (typeof o.stdout !== "string" || typeof o.stderr !== "string") return null;
+    return {
+      stdoutLength: o.stdout.length,
+      stderrLength: o.stderr.length,
+      persisted: typeof o.persistedOutputPath === "string" && o.persistedOutputPath !== "",
+    };
+  }
+  return null;
+}
 
 /**
  * PostToolUse(Bash) hook: after a read-style `gh` command, add the static `github` preamble as
  * `additionalContext`. Fail open: every error path returns `{}` and is telemetered. The only field
  * it can set is `hookSpecificOutput.additionalContext`; the input is never mutated.
  */
-export function createGhBashFramingHook(opts: { workspaceId?: string; sessionId?: string } = {}): HookCallback {
+export function createGhBashFramingHook(opts: GhFrameCtx = {}): HookCallback {
   return async (input) => {
     try {
       const i = input as Partial<PostToolUseHookInput> | null | undefined;
@@ -1005,7 +1063,7 @@ export function createGhBashFramingHook(opts: { workspaceId?: string; sessionId?
       const ti = i.tool_input;
       const command = ti && typeof ti === "object" ? (ti as { command?: unknown }).command : undefined;
       if (typeof command !== "string") {
-        emitGhFrame({ outcome: "shape", ...NO_RESPONSE, fallback: false }, opts);
+        emitGhFrame({ outcome: "shape", ...NO_LENGTHS, fallback: false }, opts);
         mirrorOnce("gh-frame-shape", "untrusted-content-gh-frame-shape", opts);
         return {};
       }
@@ -1015,48 +1073,32 @@ export function createGhBashFramingHook(opts: { workspaceId?: string; sessionId?
       let fallback = false;
       if (parsed.kind === "verb") {
         verb = parsed.verb;
-      } else if (parsed.kind === "none") {
-        if (parsed.ghSeen) emitGhFrame({ outcome: "skipped", ...NO_RESPONSE, fallback: false }, opts);
+      } else if (parsed.kind === "none" && !(!parsed.ghSeen && commentQuoteRisk(command))) {
+        if (parsed.ghSeen) emitGhFrame({ outcome: "skipped", ...NO_LENGTHS, fallback: false }, opts);
         return {};
       } else {
         const fb = ghFallbackScan(command);
         if (!fb.frame) {
-          if (fb.ghSeen) emitGhFrame({ outcome: "skipped", ...NO_RESPONSE, fallback: true }, opts);
+          if (fb.ghSeen) emitGhFrame({ outcome: "skipped", ...NO_LENGTHS, fallback: true }, opts);
           return {};
         }
         fallback = true;
       }
 
-      const r = i.tool_response;
-      if (
-        !r ||
-        typeof r !== "object" ||
-        Array.isArray(r) ||
-        typeof (r as { stdout?: unknown }).stdout !== "string" ||
-        typeof (r as { stderr?: unknown }).stderr !== "string"
-      ) {
-        emitGhFrame({ outcome: "shape", verb, ...NO_RESPONSE, fallback }, opts);
+      const m = measureBashResponse(i.tool_response);
+      if (m === null) {
+        emitGhFrame({ outcome: "shape", verb, ...NO_LENGTHS, fallback }, opts);
         mirrorOnce("gh-frame-shape", "untrusted-content-gh-frame-shape", opts);
         return {};
       }
-      const out = r as { stdout: string; stderr: string; persistedOutputPath?: unknown };
-      emitGhFrame(
-        {
-          outcome: "annotated",
-          verb,
-          stdoutLength: out.stdout.length,
-          stderrLength: out.stderr.length,
-          persisted: typeof out.persistedOutputPath === "string" && out.persistedOutputPath !== "",
-          fallback,
-        },
-        opts,
-      );
+      emitGhFrame({ outcome: "annotated", verb, ...m, fallback }, opts);
       return {
         hookSpecificOutput: { hookEventName: "PostToolUse" as const, additionalContext: UNTRUSTED_PREAMBLES.github },
       };
-    } catch {
-      emitGhFrame({ outcome: "error", ...NO_RESPONSE, fallback: false }, opts);
-      mirrorOnce("gh-frame-error", "untrusted-content-gh-frame-error", opts);
+    } catch (err) {
+      emitGhFrame({ outcome: "error", ...NO_LENGTHS, fallback: false }, opts);
+      // `cause` is the error CLASS NAME only (metadata, like the WebFetch hook); never the message.
+      mirrorOnce("gh-frame-error", "untrusted-content-gh-frame-error", opts, err instanceof Error ? err.name : "non-error");
       return {};
     }
   };

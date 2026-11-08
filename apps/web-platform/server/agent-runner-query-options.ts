@@ -517,14 +517,14 @@ export function buildAgentQueryOptions(
       // PostToolUse hooks (all fail-open; none touches the tool floor. All but the
       // optional WebFetch hook below are observe/additive-only; that one may also, behind a
       // flag, REWRITE a flagged WebFetch result via updatedToolOutput — ADR-287):
-      //   - Flag-gated (web egress AND the classify flag): a second matcher "Bash" entry that adds
-      //     the static github data-only note after read-style `gh` commands (#11076). Additive
-      //     `additionalContext` only; it never rewrites, so the single-rewriter rule below holds.
       //   - ALWAYS: the #4826 git-lock marker mirror (matcher "Bash"). Observe-only;
       //     re-emits the in-sandbox SOLEUR_GIT_LOCK_*/"worktree wedge" markers to the
       //     server-side logger (→ Better Stack + Sentry breadcrumb), closing ADR-081's
       //     "blind sandbox stdout, not mirrored to any queryable sink" gap. Path-agnostic
       //     (a wedge can happen on any dispatch), so it is unconditional, not opt-in.
+      //   - Flag-gated (web egress AND the classify flag): a second matcher "Bash" entry that adds
+      //     the static github data-only note after read-style `gh` commands (#11076). Additive
+      //     `additionalContext` only; it never rewrites, so the single-rewriter rule below holds.
       //   - Per-caller opt-ins (matcher "Skill"), each additive `additionalContext`:
       //     the L3 phase-surface hint (#5772 lever 1, ADR-070) and the declarative
       //     context_queries injection (#6046, ADR-086). Both use matcher "Skill"; the SDK

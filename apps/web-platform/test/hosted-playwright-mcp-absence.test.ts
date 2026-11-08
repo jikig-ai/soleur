@@ -24,10 +24,10 @@ const PLAYWRIGHT = /playwright/i;
 
 const read = (p: string): string => readFileSync(p, "utf-8");
 
-// Collection-time census: every row below is registered through `row()`, and the floor at the end
+// Collection-time census: every row below is registered through `row()`, and the exact count at the end
 // of the file fails if a refactor silently drops rows (a table that loses rows stays green otherwise).
 let registered = 0;
-const REGISTERED_FLOOR = 8;
+const REGISTERED_ROWS = 15;
 function row(name: string, fn: () => void): void {
   registered += 1;
   it(name, fn);
@@ -35,9 +35,9 @@ function row(name: string, fn: () => void): void {
 
 // ---------------------------------------------------------------- leg 1: plugin.json
 const PLUGIN_JSON = resolve(REPO_ROOT, "plugins/soleur/.claude-plugin/plugin.json");
-const pluginMcpServerNames = Object.keys(
-  (JSON.parse(read(PLUGIN_JSON)) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {},
-);
+const pluginMcpServers =
+  (JSON.parse(read(PLUGIN_JSON)) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {};
+const pluginMcpServerNames = Object.keys(pluginMcpServers);
 
 describe("leg 1: plugin.json mcpServers", () => {
   row("declares at least one MCP server (so the scan below is not vacuous)", () => {
@@ -46,44 +46,96 @@ describe("leg 1: plugin.json mcpServers", () => {
   row("no mcpServers key matches /playwright/i", () => {
     expect(pluginMcpServerNames.filter((k) => PLAYWRIGHT.test(k))).toEqual([]);
   });
+  row("no mcpServers DEFINITION (command, args, url) mentions playwright, whatever the server is named", () => {
+    const offenders = pluginMcpServerNames.filter((k) => PLAYWRIGHT.test(JSON.stringify(pluginMcpServers[k])));
+    expect(offenders).toEqual([]);
+  });
 });
 
-// ---------------------------------------------------------------- leg 2: .dockerignore ordering
-describe("leg 2: apps/web-platform/.dockerignore", () => {
-  const lines = read(join(APP_ROOT, ".dockerignore")).split("\n").map((l) => l.trim());
-  // Content anchors, not line numbers: the position of each pattern is found by exact line text.
-  const jsonBang = lines.lastIndexOf("!_plugin-vendored/**/*.json");
-  const mcpExclude = lines.lastIndexOf("_plugin-vendored/.mcp.json");
+// ---------------------------------------------------------------- leg 2: .dockerignore, last match wins
+/** Docker's .dockerignore matching (the subset this file uses): `**` spans dirs, `*`/`?` stay in a segment,
+ *  and a pattern that matches a directory also covers everything below it. */
+function dockerPatternMatches(pattern: string, path: string): boolean {
+  const body = pattern.replace(/^\//, "").replace(/\/$/, "");
+  let re = "";
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!;
+    if (c === "*" && body[i + 1] === "*") {
+      re += ".*";
+      i += body[i + 2] === "/" ? 2 : 1;
+    } else if (c === "*") re += "[^/]*";
+    else if (c === "?") re += "[^/]";
+    else re += c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${re}(/.*)?$`).test(path);
+}
+/** True when the file is EXCLUDED from the build context after evaluating every rule in order. */
+function dockerIgnored(rules: string[], path: string): boolean {
+  let ignored = false;
+  for (const rule of rules) {
+    const negated = rule.startsWith("!");
+    const pattern = negated ? rule.slice(1) : rule;
+    if (dockerPatternMatches(pattern, path)) ignored = !negated;
+  }
+  return ignored;
+}
 
-  row("re-includes vendored json (anchor present, so the ordering check is meaningful)", () => {
-    expect(jsonBang).toBeGreaterThanOrEqual(0);
+describe("leg 2: apps/web-platform/.dockerignore (last matching rule wins)", () => {
+  const rules = read(join(APP_ROOT, ".dockerignore"))
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "" && !l.startsWith("#"));
+
+  row("the vendored plugin's other json IS re-included (control: the evaluator can say 'kept')", () => {
+    expect(dockerIgnored(rules, "_plugin-vendored/plugins/soleur/.claude-plugin/plugin.json")).toBe(false);
   });
-  row("excludes _plugin-vendored/.mcp.json AFTER the **/*.json bang (last match wins)", () => {
-    expect(mcpExclude).toBeGreaterThanOrEqual(0);
-    expect(mcpExclude).toBeGreaterThan(jsonBang);
+  row("the evaluator can say 'excluded' (control: node_modules and .env files are excluded by their rules)", () => {
+    expect(dockerIgnored(rules, "node_modules/x/index.js")).toBe(true);
+    expect(dockerIgnored(rules, ".env.local")).toBe(true);
+  });
+  row("_plugin-vendored/.mcp.json is EXCLUDED after every rule is applied (a later re-include would flip this)", () => {
+    expect(dockerIgnored(rules, "_plugin-vendored/.mcp.json")).toBe(true);
   });
 });
 
 // ---------------------------------------------------------------- leg 3: vendoring workflows
 const WORKFLOWS_DIR = resolve(REPO_ROOT, ".github/workflows");
 // The vendoring copy: `cp -a [flags] plugins/soleur "$DEST"` (derived by grep, not a hard-coded list).
-const VENDOR_CP = /^\s*cp -a\b[^\n]*\bplugins\/soleur\s+"\$DEST"/m;
+const VENDOR_CP = /^\s*cp -a\b[^\n]*\bplugins\/soleur\s+"\$DEST"/gm;
 const RM_MCP = 'rm -f "$DEST/.mcp.json"';
+const RM_WINDOW_LINES = 40;
+/** Workflow text without whole-line YAML/shell comments: a comment that merely QUOTES the rm must not satisfy the check. */
+const stripComments = (t: string): string =>
+  t
+    .split("\n")
+    .filter((l) => !l.trimStart().startsWith("#"))
+    .join("\n");
 const vendoringWorkflows = readdirSync(WORKFLOWS_DIR)
   .filter((f) => /\.ya?ml$/.test(f))
-  .map((f) => ({ file: f, text: read(join(WORKFLOWS_DIR, f)) }))
-  .filter(({ text }) => VENDOR_CP.test(text));
+  .map((f) => ({ file: f, text: stripComments(read(join(WORKFLOWS_DIR, f))) }))
+  .filter(({ text }) => new RegExp(VENDOR_CP.source, "m").test(text));
+// A workflow that names the vendored dir in code but matched none of the cp shapes above would be invisible
+// to this leg; the allow-list below makes that a loud failure instead of a silent gap.
+const mentionsVendoredDir = readdirSync(WORKFLOWS_DIR)
+  .filter((f) => /\.ya?ml$/.test(f))
+  .filter((f) => stripComments(read(join(WORKFLOWS_DIR, f))).includes("_plugin-vendored"));
 
 describe("leg 3: workflows vendoring the plugin delete .mcp.json", () => {
   row("finds at least 2 vendoring workflows (ci.yml + reusable-release.yml today)", () => {
     expect(vendoringWorkflows.length).toBeGreaterThanOrEqual(2);
   });
+  row("every workflow that names the vendored dir in code is one of the vendoring workflows found", () => {
+    expect(mentionsVendoredDir.sort()).toEqual(vendoringWorkflows.map((w) => w.file).sort());
+  });
   for (const { file, text } of vendoringWorkflows) {
-    row(`${file}: rm -f of $DEST/.mcp.json follows the vendoring cp`, () => {
-      const cpAt = text.search(VENDOR_CP);
-      const rmAt = text.indexOf(RM_MCP, cpAt);
-      expect(cpAt).toBeGreaterThanOrEqual(0);
-      expect(rmAt).toBeGreaterThan(cpAt);
+    row(`${file}: EVERY vendoring cp is followed by the rm -f of $DEST/.mcp.json within ${RM_WINDOW_LINES} lines`, () => {
+      const lines = text.split("\n");
+      const cpLines = lines.map((l, i) => (new RegExp(VENDOR_CP.source).test(l) ? i : -1)).filter((i) => i >= 0);
+      expect(cpLines.length).toBeGreaterThanOrEqual(1);
+      for (const at of cpLines) {
+        const window = lines.slice(at + 1, at + 1 + RM_WINDOW_LINES);
+        expect(window.some((l) => l.includes(RM_MCP)), `no ${RM_MCP} after the vendoring cp at line ${at + 1}`).toBe(true);
+      }
     });
   }
 });
@@ -183,7 +235,7 @@ describe("leg 5: server source outside server/inngest/", () => {
 
 // ---------------------------------------------------------------- census
 describe("census", () => {
-  it(`registered at least ${REGISTERED_FLOOR} rows at collection time`, () => {
-    expect(registered).toBeGreaterThanOrEqual(REGISTERED_FLOOR);
+  it(`registered exactly ${REGISTERED_ROWS} rows at collection time (a dropped describe fails here)`, () => {
+    expect(registered).toBe(REGISTERED_ROWS);
   });
 });

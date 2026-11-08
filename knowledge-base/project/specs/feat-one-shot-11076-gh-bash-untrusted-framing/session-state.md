@@ -29,3 +29,24 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; agents: learnings-researche
 - constraint: After merge run deploy-arm.sh find wait and served from a detached origin main worktree with the full sha, then postmerge. Emit DONE only after merge and postmerge with pipeline-tally show.
 - ci-is-the-gate: Record in the PR test plan that the slow local affected battery was not awaited because CI is the ship gate.
 - cto_spawns=1 (one-shot batched ruling for six planner-resolved rows; planning subagent spawns tracked in its own run)
+- cto_spawns=2 (second: batched ruling on six review findings; rows 24-29 in decision-challenges.md)
+
+## Review Phase (PANEL_SHA 2bda41f85b, tier single-user incident, 12 seats + coverage consult)
+
+structural-cause roll-up: (1) the fallback scan's grammar was narrower than the tokenizer's (separators, even quote parity); (2) the ADR's statement of the hook's reach and uncovered channels was incomplete. dedup: about 60 raw items -> 20 unique.
+
+| raw finding | canonical defect key | reporting seat(s) | planned fix commit |
+|---|---|---|---|
+| fallback tokens split on whitespace only; separator-glued gh missed | fallback-scan-separator-grammar | history, security, architecture, code-quality | review: fix 1 |
+| even-parity comment/heredoc apostrophes hide a gh read | tokenizer-quote-parity-desync | security | review: fix 1 |
+| predicate registers only where gh is auth-denied | reach-narrower-than-hazard (operator scope, row 30) | agent-native, architecture, structural | ADR + plan wording (review: fix 1) |
+| note gated on a typings-only response shape | response-shape-gate | security | review: fix 1 |
+| third hand-rolled shell lexer | tokenizer-reuse (ruled keep, row 26) | pattern | ADR follow-up |
+| no subagent field | subagent-observability (ruled leave out, row 27) | pattern, history | ADR follow-up |
+| error mirror without cause | catch-cause | pattern | review: fix 1 |
+| rollback latency claim wrong | adr-rollback-latency | user-impact | review: fix 1 |
+| backslash-newline treated as whitespace | line-continuation | code-quality | review: fix 1 |
+| alias ls, -R between noun and verb, unlisted nouns | verb-table-extras (row 29) | structural, security, code-quality | review: fix 1 |
+| surviving mutants and slack floors, Guard 3 grid, pin legs | test-fixture-gaps | test-design, security, code-quality | review: fix 1 |
+| naming, comment, plan wording, runbook entry, ADR departure | docs-and-nits | pattern, code-quality, history, data-integrity | review: fix 1 |
+| per-call note may cause under-action; PostToolUseFailure routine non-zero | accepted-and-documented | user-impact, agent-native | ADR items 2 and 4 |

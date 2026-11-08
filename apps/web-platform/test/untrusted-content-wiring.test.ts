@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { createHmac } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
 // A fixed pepper, set before any import reads it (observability reads it once at load), so the
@@ -277,9 +278,12 @@ describe("PostToolUse Bash gh-framing registration matrix", () => {
   }
   it("registered every row", () => expect(registered).toBe(6));
 
-  it("the matcher is exactly the string Bash, the git-lock entry stays first and the WebFetch entry count is unchanged", () => {
+  it("the matcher is exactly the string Bash, the git-lock entry stays first (by behaviour) and the WebFetch entry count is unchanged", async () => {
     const opts = buildAgentQueryOptions({ ...minArgs, webEgress: egress, enableUntrustedContentClassify: true });
     expect(matchers(opts)[0]).toBe("Bash");
+    // Entry 0 is the git-lock hook (silent on a gh read), entry 1 is the framing hook (adds the note).
+    expect(await bashEntries(opts)[0]!.hooks[0]!(ghInput, "t", sig())).toEqual({});
+    expect(isNote(await bashEntries(opts)[1]!.hooks[0]!(ghInput, "t", sig()))).toBe(true);
     expect(bashEntries(opts)).toHaveLength(2);
     expect(webFetchEntries(opts)).toHaveLength(1);
     // The framing entry is its own entry: the git-lock entry's hook list is untouched.
@@ -330,7 +334,10 @@ describe("options identity: the flags change nothing but the extra Bash entry", 
     const onHooks = on.hooks.PostToolUse;
     expect(onHooks).toHaveLength(offHooks.length + 2);
     // Removing the two flag-gated entries (the second Bash and the WebFetch one) recovers the off arm exactly.
-    const stripped = (onHooks as Array<{ matcher: string }>).filter((_e, idx) => idx !== 1 && (onHooks as Array<{ matcher: string }>)[idx]!.matcher !== "WebFetch");
+    const onEntries = onHooks as Array<{ matcher: string }>;
+    const framingIdx = onEntries.findIndex((e, idx) => idx > 0 && e.matcher === "Bash"); // the second Bash entry
+    expect(framingIdx).toBeGreaterThan(0);
+    const stripped = onEntries.filter((e, idx) => idx !== framingIdx && e.matcher !== "WebFetch");
     expect(stripped).toEqual(offHooks);
     expect(JSON.stringify({ ...on, hooks: { ...on.hooks, PostToolUse: [] } })).toBe(JSON.stringify({ ...off, hooks: { ...off.hooks, PostToolUse: [] } }));
   });
@@ -406,7 +413,6 @@ describe("hosted PostToolUse hook census (Guard 1)", () => {
   });
 
   it("hook lifecycle events (which would carry the note) are never streamed to the client: includeHookEvents is set nowhere", () => {
-    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
     const root = join(__dirname, "..");
     let out = "";
     try {

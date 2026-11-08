@@ -202,37 +202,61 @@ The Article 30 register amendment (PA-8(c)) is still owed and is operator and CL
 ## Addendum 2026-11-08 (Ref #9601, #11076): gh output framing through Bash
 
 This addendum extends the 2026-10-25 static-framing amendment to `gh` output that reaches the model through the Bash tool. The decisions above
-are unchanged.
+are unchanged, with one departure stated plainly: the 2026-10-25 amendment says the classify and wrap flags are "not involved" in static framing
+and that it has no runtime kill switch. This hook IS gated by the classify flag, so it has one, and the kill switch is shared: turning the
+WebFetch scorer off also removes this note.
 
 1. **What the hook does.** One `PostToolUse(Bash)` hook adds the static `github` preamble from `UNTRUSTED_PREAMBLES` as `additionalContext`
-   after a read-style `gh` command. It is registered under the same predicate as the WebFetch hook (web egress and the classify flag), as a
-   separate Bash entry beside the git-lock hook. It does no scoring and never rewrites output; the single-rewriter rule (decision 7) holds, and
-   only the WebFetch hook may emit `updatedToolOutput`.
+   after a read-style `gh` command (closed verb table: `issue`, `pr`, `run`, `api`, `repo view`, `release`, `search`; `ls` is read as `list`;
+   `-R <repo>` and `--repo` are skipped between the noun and the verb). It is registered under the same predicate as the WebFetch hook (web
+   egress and the classify flag), as a separate Bash entry beside the git-lock hook. It does no scoring and never rewrites output; the
+   single-rewriter rule (decision 7) holds, and only the WebFetch hook may emit `updatedToolOutput`. The Bash `tool_response` is measured in
+   three shapes (the object `{ stdout, stderr }` from the SDK typings, a bare string, an array of text blocks); any other shape returns `{}`,
+   logs a `shape` outcome and raises one debounced Sentry event.
 2. **The framing is unmeasured and delivery is unverified.** No experiment shows that the note changes model behavior, and it could make a
-   legitimate "work this issue" request under-act, including on a founder's own issues. An `annotated` log line proves the hook returned a note,
-   not that the model received it. The control is inactive in prd until the flag is enabled. This is an annotation, not a claim of protection, and
-   no public claim follows from it.
-3. **Coverage is limited and stated by name.** The hook annotates only `gh` read commands invoked through Bash and recognised by a closed verb
-   table, in sessions with web egress and the classify flag on. Several bypasses are reachable by an injected model, not incidental: `bash -c`,
-   a wrapper, redirect-then-`cat`, output padding that lands in the persisted file, or a forced non-zero exit. Not covered:
+   legitimate "work this issue" request under-act, including on a founder's own issues; the note repeats after every matching call. An
+   `annotated` log line proves the hook returned a note, not that the model received it, and the `tool_response` shape rests on the SDK typings
+   with no live capture. The control is inactive in prd until the flag is enabled. This is an annotation, not a claim of protection, and no
+   public claim follows from it.
+3. **Reach, stated first.** In a session with web egress the sandbox is denied its gh credentials (`GH_TOKEN` and the git auth set are in the
+   web-egress env deny census, and the session prompt tells the model that in-sandbox `gh` fails at auth). The sessions that satisfy the
+   registration predicate are therefore the sessions where an in-sandbox `gh` read cannot normally authenticate, and the sessions where `gh`
+   does authenticate (a minted installation token, no web-egress grant) get no hook, because the classify flag is resolved only when egress
+   exists. As specified, the practical reach of this control today is narrow. Widening registration to sessions that hold a minted gh token needs
+   a flag-resolution change in the dispatcher and is a scope decision for the operator, not made here. A flag-on capture of one real annotated
+   `gh` read is a precondition for enablement.
+4. **Coverage is limited and stated by name.** The hook annotates only `gh` read commands invoked through Bash and recognised by the closed verb
+   table, with the classify flag on. Several bypasses are reachable by an injected model, not incidental: `bash -c`, a wrapper, redirect-then-
+   `cat`, output padding that lands in the persisted file, or a forced non-zero exit. Not covered:
    - cron Bash output; Read of attachments and KB files (including the file the SDK writes for oversized output: the oversized output itself is
      annotated, the later Read is not); leader PDF text; Playwright;
-   - `bash -c "gh ..."`, `xargs gh` and `gh` inside a double-quoted command substitution (documented false negatives); backgrounded commands whose
-     output is read later; output redirected to a file and read later;
-   - a session with a minted gh token but no web egress (the classify flag is only resolved when egress exists);
-   - `gist` and `workflow` verbs;
+   - `bash -c "gh ..."`, `eval`, `xargs gh` and `gh` inside a double-quoted command substitution; capture-then-echo (`body="$(gh ...)"; echo "$body"`);
+     backgrounded commands whose output is read later through another tool; output redirected to a file and read later; the Task result a
+     subagent hands back to its parent;
+   - wrappers the tokenizer does not unwrap: `timeout`, `sudo`, `nohup`, `exec`, `nice`, `watch`, `command -p`, `time -p`, `env -u`, `env -C`;
+     a redirection or a variable in the command-word position; `curl` or `wget` to the GitHub API; `gh alias`; ANSI-C quoted strings;
+   - read commands outside the verb table: `gist`, `workflow`, `gh status`, `repo list`, `label list`, `project item-list`, `discussion view`,
+     `run watch`, `run download`; and other GitHub text reachable through safe-admitted commands such as `git log` and `git show`;
    - commands that exit non-zero: the SDK delivers those through `PostToolUseFailure`, whose payload is `error` text rather than `stdout` and
-     `stderr`, so a failed `gh api` or `gh pr checks` can print third-party text unframed;
-   - commands over 8192 characters (not tokenized; a bounded 64 KiB fallback scan frames them if it finds a `gh` read command);
-   - `timeout`, `sudo`, `nohup`, `exec` and `env -u` wrappers; `curl` or `wget` to the GitHub API; `gh alias`;
-   - whether the hook fires inside Task subagents (unverified, as for WebFetch);
-   - the SDK's own merge of two Bash hooks' `additionalContext` (not independently measured).
+     `stderr`. That includes ROUTINE cases, for example `gh pr checks` while checks fail or are pending, not only a forced non-zero exit;
+   - whether the hook fires inside Task subagents (unverified, as for WebFetch) and the SDK's own merge of two Bash hooks' `additionalContext`
+     (not independently measured). The log line carries no `subagent` field, so subagent coverage cannot be observed for `gh`.
 
-   Rollback latency: a flag flip reaches the next cold conversation start, and a live conversation keeps its hooks until it is reaped (about 10
-   minutes idle, decision 6 above).
-4. **"Oversized" is read as "bound the work".** Acceptance criterion (d) is met by not tokenizing a command over 8192 characters and by bounding
-   the fallback scan at 64 KiB, which frames anyway when the command is longer than the window. Output size never suppresses the note.
-5. **Prd enablement stays an operator action** gated on written, checkable preconditions: the liveness alerts (#10195), the PA-8(c) Article 30
-   amendment with a stated Better Stack retention period, and a measured under-action comparison that includes founder-authored issues. None of
-   that is in this change. Two follow-ups are recorded, not done here: a `PostToolUseFailure` registration, and a preamble counter-framing clause
-   (output text that retracts the note).
+   The tokenizer reads quotes by parity and does not understand comments or heredoc bodies. A command it cannot decide (an unterminated quote, a
+   command over 8192 characters, or a multi-line script containing an apostrophe) goes to a bounded 64 KiB fallback scan that frames it when a
+   `gh` token (separators split tokens) is followed by a read noun within three tokens. That scan is a heuristic: it can miss a `gh` hidden by
+   the shapes above, and it frames any command longer than 64 KiB, `gh` or not, logged as `annotated` with `fallback: true`.
+5. **"Oversized" is read as "bound the work".** Acceptance criterion (d) is met by not tokenizing a command over 8192 characters and by bounding
+   the fallback scan at 64 KiB. Output size never suppresses the note.
+6. **Rollback latency.** A flag flip reaches the next cold conversation start. An idle conversation is reaped between 10 and 15 minutes after its
+   last activity (a 10-minute idle limit checked on a 5-minute tick), and a conversation in continuous use keeps its hooks until it goes idle or the
+   process restarts, so the rollback bound for an active conversation is the conversation itself.
+7. **Telemetry volume.** Every `gh` command that matches no read verb logs one WARN `skipped` line, which the default logger also mirrors as a
+   breadcrumb. The volume is bounded by the number of Bash calls and carries hashed ids, a verb enum and lengths only.
+8. **Prd enablement stays an operator action** gated on written, checkable preconditions: the liveness alerts (#10195), a PA-8(c) Article 30
+   amendment that covers the new `untrusted-gh-frame` op including the `skipped` volume (the register already records the Better Stack retention
+   period), a measured under-action comparison that includes founder-authored issues, and one flag-on capture proving delivery. None of that is in
+   this change. Follow-ups are recorded, not done here and not yet filed as issues: a `PostToolUseFailure` registration; a preamble
+   counter-framing clause (output text that retracts the note); consolidating the tokenizer with the shell lexer in the destroy-ask classifier
+   (the purpose-built tokenizer was kept to avoid coupling an annotate-only hook to that classifier); an optional `subagent` boolean on the log
+   line; and widening registration per item 3.
