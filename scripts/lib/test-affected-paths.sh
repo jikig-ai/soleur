@@ -1237,6 +1237,20 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_REFUSAL_WAIT_TEST_SH_PATHS=(
   "scripts/test-all.sh"  # the suite renders the refusal text from, and pins the infra literals against, the live runner
   "scripts/lib/test-affected-paths.sh"
 )
+AFFECTED_PLUGINS_SOLEUR_TEST_CHANGED_PATH_READERS_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/changed-paths.sh"
+  "plugins/soleur/test/changed-path-readers.test.sh"
+  ".github/workflows/"  # the steps section extracts run: bodies and the sentinel scans every workflow
+  "apps/web-platform/.github/workflows/constraint-gates.yml"
+  "plugins/soleur/skills/constraint-scaffold/references/constraint-gates-workflow.template"
+  ".claude/hooks/ship-cmo-content-gate.sh"
+  ".claude/hooks/ship-runbook-ssh-gate.sh"
+  "plugins/soleur/skills/preflight/SKILL.md"  # the sentinel pins each skill's spelling of the helper call
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/review/SKILL.md"
+  "scripts/test-all.sh"
+  "scripts/lib/test-affected-paths.sh"
+)
 AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_PHASE_7_POLL_FIXTURES_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/SKILL.md"
   "plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh"

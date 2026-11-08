@@ -63,7 +63,9 @@ fi
 git fetch --quiet --no-tags origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
 mb=$(git merge-base "origin/${BASE_REF}" HEAD)
 
-changed_files=$(git diff --name-only "${mb}...HEAD")
+# --no-renames: a watched file renamed AWAY lists only its new path under default rename detection, so the
+# gate would decline as NO-OP; with it the old (watched) path is listed too (#12332).
+changed_files=$(git diff --no-renames --name-only "${mb}...HEAD")
 # Here-string, not a pipe: `producer | grep -q` fails open under pipefail when
 # the producer still has unwritten data at grep's early exit (#6992).
 watched_hit=""

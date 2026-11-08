@@ -265,6 +265,9 @@ rc=$?
 if [[ -z "${CHANGED//[[:space:]]/}" ]] && ! git merge-base --is-ancestor HEAD refs/remotes/origin/main 2>/dev/null; then
   undecidable "${OPERATOR_CI_WORDS:+operator ci-is-the-gate set but }the branch diff is empty but HEAD is not an ancestor of origin/main; cannot scope the infra check"
 fi
+# INFRA_RE is deliberately NARROWER than infra-validation.yml's trigger set (#12332): it tracks what the LOCAL infra shard
+# can test (apps/web-platform/infra/run-registered-suites.sh globs only apps/web-platform/infra/) plus the apply workflow;
+# widening it would demand a local battery that cannot exercise the added paths. The wider trigger set is #6480's concern.
 INFRA_RE='^(apps/web-platform/infra/|\.github/workflows/apply-web-platform-infra\.yml$)'
 
 # The operator-token arm. Condition 1 no longer guarantees a clean tree, so it builds its OWN path list from four

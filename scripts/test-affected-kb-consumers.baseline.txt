@@ -48,6 +48,8 @@
 .claude/hooks/pre-merge-rebase-parity.test.sh	knowledge-base/product/roadmap.md
 .claude/hooks/prod-write-defer-gate.test.sh	knowledge-base/legal/tenant-dpa-register.md
 .claude/hooks/rule-incident-marker-capture.test.sh	knowledge-base/project
+.claude/hooks/ship-cmo-content-gate.test.sh	knowledge-base/marketing
+.claude/hooks/ship-runbook-ssh-gate.test.sh	knowledge-base/engineering/operations/runbooks
 .claude/hooks/skill-context-queries.test.sh	knowledge-base
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing
 .claude/hooks/skill-context-queries.test.sh	knowledge-base/marketing/brand-guide.md
@@ -91,6 +93,11 @@ plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	knowledge-
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
 plugins/soleur/test/bot-synthetic-unreachability.test.sh	knowledge-base/project/weakness-digest.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
+plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/engineering/operations/runbooks
+plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/legal/compliance-posture.md
+plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/marketing
+plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/marketing/content-strategy.md
+plugins/soleur/test/changed-path-readers.test.sh	knowledge-base/project/learnings
 plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base/project/learnings
