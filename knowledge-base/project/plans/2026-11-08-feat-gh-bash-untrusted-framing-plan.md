@@ -375,17 +375,17 @@ observable; the single event carries `outcome`, `verb`, both lengths and `persis
 
 ### Pre-merge (PR)
 
-- [ ] AC1 (a). Classify off, or no `webEgress` => no Bash framing hook registered; the PostToolUse structure and the options object (functions mapped to a token) are identical to a baseline build; the existing drift snapshot (`agent-runner-query-options.test.ts` T4) is unchanged. Test: options-identity rows against same-egress twins (Phase 3).
-- [ ] AC2 (b). Flag on + egress: a `gh issue view` Bash result yields exactly one `additionalContext` equal to `UNTRUSTED_PREAMBLES.github`; non-gh Bash and non-read gh commands yield none and no log line.
-- [ ] AC3 (c). The hook never emits `updatedToolOutput` or `classifierContext`; the input object is not mutated (frozen-input test); output text is never touched.
-- [ ] AC4 (d). Throw, unknown response shape, non-string command => `{}` + a content-free outcome line (`error`/`shape`) + a debounced Sentry op; a tokenizer `shape`/`oversize` runs the bounded fallback (hit => note with `fallback: true`; padding past 64 KiB is framed); output size never suppresses the note. The turn is never blocked.
-- [ ] AC5 (e). The log line has exactly the closed key set `op, source, outcome, verb, stdoutLength, stderrLength, persisted, fallback, workspaceIdHash, sessionIdHash` (`verb` absent unless parsed; outcome in `annotated|skipped|shape|error`); `sessionIdHash` is `hashUserId(sessionId)`; canary strings from command/output/paths never appear in any log or mirror payload.
-- [ ] AC6 (f). The census test lists every registered PostToolUse hook (ordered matchers) across the arg matrix and sweeps all of them for rewriting; counters and `expect` shapes present; the sweep catches per hook, asserts each hook returned, and a throwing hook does not count as "not rewriting".
-- [ ] AC7. The Playwright absence pin passes (4+ legs) and is listed in `repo-wide-suites.ts`; `repo-wide-containment.test.ts` passes.
-- [ ] AC8 (g). ADR-287 has the second 2026-11-08 addendum stating: unmeasured framing; covers only `gh` invoked through Bash; cron Bash, Read/attachments, PDF and Playwright remain uncovered (plus the other named limits); existing ADR lines are unedited (`git diff` for the ADR shows additions only).
-- [ ] AC9 (h). No public claim anywhere in the diff; `dsar-export-allowlist.ts`, `cc-dispatcher.ts`, `.github/**`, `docs/legal/**`, `plugins/soleur/docs/**`, migrations are not in the diff.
-- [ ] AC10. `bash apps/web-platform/test/approval-guard1-mutation.test.sh --check-anchors` prints `anchors: all 356 rows apply`; the eslint `no-control-regex` baseline stays 19.
-- [ ] AC11. C4 sentence edited; `plugins/soleur/test/c4-count-parity.test.sh`, `c4-code-syntax.test.ts`, `c4-render.test.ts` pass.
+- [x] AC1 (a). Classify off, or no `webEgress` => no Bash framing hook registered; the PostToolUse structure and the options object (functions mapped to a token) are identical to a baseline build; the existing drift snapshot (`agent-runner-query-options.test.ts` T4) is unchanged. Test: options-identity rows against same-egress twins (Phase 3).
+- [x] AC2 (b). Flag on + egress: a `gh issue view` Bash result yields exactly one `additionalContext` equal to `UNTRUSTED_PREAMBLES.github`; non-gh Bash and non-read gh commands yield none and no log line.
+- [x] AC3 (c). The hook never emits `updatedToolOutput` or `classifierContext`; the input object is not mutated (frozen-input test); output text is never touched.
+- [x] AC4 (d). Throw, unknown response shape, non-string command => `{}` + a content-free outcome line (`error`/`shape`) + a debounced Sentry op; a tokenizer `shape`/`oversize` runs the bounded fallback (hit => note with `fallback: true`; padding past 64 KiB is framed); output size never suppresses the note. The turn is never blocked.
+- [x] AC5 (e). The log line has exactly the closed key set `op, source, outcome, verb, stdoutLength, stderrLength, persisted, fallback, workspaceIdHash, sessionIdHash` (`verb` absent unless parsed; outcome in `annotated|skipped|shape|error`); `sessionIdHash` is `hashUserId(sessionId)`; canary strings from command/output/paths never appear in any log or mirror payload.
+- [x] AC6 (f). The census test lists every registered PostToolUse hook (ordered matchers) across the arg matrix and sweeps all of them for rewriting; counters and `expect` shapes present; the sweep catches per hook, asserts each hook returned, and a throwing hook does not count as "not rewriting".
+- [x] AC7. The Playwright absence pin passes (4+ legs) and is listed in `repo-wide-suites.ts`; `repo-wide-containment.test.ts` passes.
+- [x] AC8 (g). ADR-287 has the second 2026-11-08 addendum stating: unmeasured framing; covers only `gh` invoked through Bash; cron Bash, Read/attachments, PDF and Playwright remain uncovered (plus the other named limits); existing ADR lines are unedited (`git diff` for the ADR shows additions only).
+- [x] AC9 (h). No public claim anywhere in the diff; `dsar-export-allowlist.ts`, `cc-dispatcher.ts`, `.github/**`, `docs/legal/**`, `plugins/soleur/docs/**`, migrations are not in the diff.
+- [x] AC10. `bash apps/web-platform/test/approval-guard1-mutation.test.sh --check-anchors` prints `anchors: all 356 rows apply`; the eslint `no-control-regex` baseline stays 19.
+- [x] AC11. C4 sentence edited; `plugins/soleur/test/c4-count-parity.test.sh`, `c4-code-syntax.test.ts`, `c4-render.test.ts` pass.
 - [ ] AC12. Both restricted-token greps (above) print nothing before every push; PR body uses `Ref #11076` only and `closingIssuesReferences` is `[]`; none of the brief's forbidden words appear in PR-bound text.
 
 ### Operator-owned, not in this PR (no action by the agent)
