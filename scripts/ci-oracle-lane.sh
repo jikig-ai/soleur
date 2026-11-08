@@ -178,6 +178,7 @@ is_excluded_path() {
     scripts/ci-oracle-lane.sh) return 0 ;;
     scripts/ci-oracle-lane.test.sh) return 0 ;;
     scripts/ci-oracle-lane-suites.txt) return 0 ;;
+    scripts/ci-oracle-lane-legs.tsv) return 0 ;;
   esac
   return 1
 }
