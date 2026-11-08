@@ -161,7 +161,9 @@ app.prepare().then(() => {
 
   // #10479 (review of #12181): idle keep-alive must outlast Cloudflare's reuse of pooled origin connections.
   // Node's 5 s default closes them first, and Cloudflare then reuses a dead socket (intermittent 502/520) or
-  // re-handshakes constantly. Same constant as the :443 listener; headersTimeout stays above it. The
+  // re-handshakes constantly. Same keep-alive constant as the :443 listener. headersTimeout is set above it, but Node bounds the
+  // header phase by requestTimeout (default 300 s, measured), so 300 s is the operative slow-header cutoff on THIS server; the
+  // :443 listener deliberately keeps Node's 60 s headersTimeout default (ADR-321, ruling R-A of 2026-11-08). The
   // canary is a health gate and does not exercise Cloudflare's connection reuse, so watch the 502/520
   // rate after the deploy.
   server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;
