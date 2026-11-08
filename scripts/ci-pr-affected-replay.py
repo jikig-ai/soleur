@@ -20,7 +20,19 @@ TWO POPULATIONS (a recorded limit, read it before trusting a rate):
              reading CTO ruling R2 names, so it is computed and reported.
   ejections  every merge_group run of ci.yml between the oldest and the newest commit's date (the same window) that is not a
              success: failure, timed_out, startup_failure, an unfinished run and cancelled (a cancelled shard fails the aggregate). These are the
-             candidates the full battery refused: the population that can actually hold an escape.
+             candidates the full battery refused: the population that can actually hold an escape. The search-indexed
+             ?event=merge_group listing is corroborated two ways (#12428): every merge_group run whose head_sha is a landed
+             first-parent commit of the window is enumerated through the commit-keyed check-suites -> check-runs join
+             (queue-branch github-actions suites only), and the refused count is bounded below by a per-PR queue-event
+             oracle (in-window added_to_merge_queue timeline events vs distinct gh-readonly-queue head_branch names).
+             A corroborated success is a by_pr/cleared() witness only — never a unit; a corroborated non-success is a
+             refused unit with runs_via=check-runs-window; each oracle shortfall and each failed corroboration/oracle
+             read is one not-evaluable synthetic unit, and aggregate checks the unit count against expected_units.
+             THREE RECORDED RESIDUALS of the oracle's count bound: (a) an add removed before the queue spawned a run
+             over-counts expected — the conservative direction, it feeds worst_case; (b) a queued PR whose EVERY run
+             the index dropped is invisible to both arms (events cannot name a branch nobody listed); (c) observed
+             can exceed in-window adds at a window edge — a pre-window add whose run landed in-window — so
+             max(0, added - observed) can mask a partial index drop there: the bound is necessary, not sufficient.
 Both run against TODAY's index and selector (the replay of an older diff uses the current edges).
 
 CLASSES (per unit; a unit is a commit or an ejected queue run):
@@ -35,7 +47,10 @@ CLASSES (per unit; a unit is a commit or an ejected queue run):
   unverified         a would-skip suite failed and nothing proves it a flake or deterministic
   not-evaluable      an API read failed, timed out or was truncated, no run exists, a failed shard has no [FAIL] or
                      [KILLED] line, a job is cancelled/timed out/unfinished with no would-skip hit, or the diff
-                     could not be listed. A failed READ is never "no failure".
+                     could not be listed. An unsettled leg (a cancelled job, a mid-termination log, a hosted-runner
+                     comms loss) clears to flake-cleared only when the identical tree demonstrably ran that leg to
+                     success (a later same-PR identical-content run, an earlier attempt, or a same-sha sibling);
+                     with no witness it stays here. A failed READ is never "no failure".
 
 Every remote read goes through `gh api` (a PATH seam for tests); the selector is PR_AFFECTED_REPLAY_TEST_ALL
 (default scripts/test-all.sh); durations come from scripts/suite-durations{,-heavy}.tsv. `collect` never takes
@@ -221,7 +236,10 @@ FOLDED_JOBS = frozenset((
     "sandbox-canary-capture-gate", "service-role-allowlist-gate", "tc-document-sha-guard",
     "cla-check", "cla-evidence",
 ))
-FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")
+# The label is lazy printable ASCII: labels carry spaces and brackets (`apps/web-platform
+# [repo-wide+component]`), while a control byte (an OSC title sequence the ANSI strip does not touch)
+# can never be part of one.
+FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([ -~]+?) \((?:\d+ms|exit=)")
 FULL_EVENTS = ("merge_group", "push")
 COMMIT_FILES_CAP = 3000
 ANSI = re.compile(r"\x1b\[[0-9;]*[mGKHF]")
@@ -446,24 +464,36 @@ def head_sha_runs(repo, sha):
     return runs
 
 
-def corroborating_runs(repo, sha):
-    """-> the ci.yml FULL_EVENTS runs on this sha, proven by the commit-keyed check-runs read
-    (not the search index). [] means the corroborating read found none either — a corroborated
-    no-run. Ids come only from details_url values inside this repo's namespace: an external app's
-    check-run links elsewhere and its run id could collide with a real run id of this repo."""
-    ids, seen, total = set(), 0, None
+def check_runs_for(repo, sha):
+    """-> the commit's check_runs, paginated, with the count guard every consumer shares: a silently
+    truncated list would under-enumerate whatever census is built on it, so it is a failed read."""
+    check_runs, seen, total = [], 0, None
     for d in gh_pages("repos/%s/commits/%s/check-runs?per_page=100" % (repo, sha)):
         if total is None:
             total = d.get("total_count")
         for c in d.get("check_runs", []):
             seen += 1
-            m = re.search(r"^https://github\.com/%s/actions/runs/(\d+)" % re.escape(repo), c.get("details_url") or "", re.IGNORECASE)
-            if m:
-                ids.add(int(m.group(1)))
+            check_runs.append(c)
     if total is None:
         raise ReadError("uncounted check-runs list for %s" % sha[:10])
     if total != seen:
         raise ReadError("truncated check-runs list for %s (%d of %s)" % (sha[:10], seen, total))
+    return check_runs
+
+
+def check_run_run_id(repo, c):
+    """-> the actions run id a check-run's details_url points at, inside this repo's namespace only:
+    an external app's check-run links elsewhere and its run id could collide with a real run id of
+    this repo."""
+    m = re.search(r"^https://github\.com/%s/actions/runs/(\d+)" % re.escape(repo), c.get("details_url") or "", re.IGNORECASE)
+    return int(m.group(1)) if m else None
+
+
+def corroborating_runs(repo, sha):
+    """-> the ci.yml FULL_EVENTS runs on this sha, proven by the commit-keyed check-runs read
+    (not the search index). [] means the corroborating read found none either — a corroborated
+    no-run."""
+    ids = {rid for c in check_runs_for(repo, sha) if (rid := check_run_run_id(repo, c)) is not None}
     if len(ids) > 200:
         raise ReadError("implausible run-id fan-out for %s (%d ids)" % (sha[:10], len(ids)))
     runs = []
@@ -472,6 +502,44 @@ def corroborating_runs(repo, sha):
         if r.get("head_sha") == sha and r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH:
             runs.append(r)
     runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+    return runs
+
+
+QUEUE_BRANCH = "gh-readonly-queue/"
+
+
+def merge_group_runs_on(repo, sha):
+    """-> the merge_group ci.yml runs whose head_sha is this LANDED first-parent commit, proven by
+    commit-keyed reads — never the search index (#12428). The enumeration is bounded by the
+    check-suites -> check-runs join: only github-actions suites on a gh-readonly-queue branch can
+    hold queue runs, and only check-runs inside those suites contribute run ids (a verbatim
+    corroborating_runs pass over every commit's ~40 ids was measured ~12k reads/window). [] is a
+    corroborated zero — a commit that bypassed the queue legitimately has no queue suites. Every
+    paginated read carries the same total_count == seen refusal as corroborating_runs: a silently
+    truncated suite or check-run list would under-enumerate the census."""
+    suite_ids, seen, total = set(), 0, None
+    for d in gh_pages("repos/%s/commits/%s/check-suites?per_page=100" % (repo, sha)):
+        if total is None:
+            total = d.get("total_count")
+        for s in d.get("check_suites", []):
+            seen += 1
+            if (s.get("app") or {}).get("slug") == "github-actions" and (s.get("head_branch") or "").startswith(QUEUE_BRANCH):
+                suite_ids.add(s.get("id"))
+    if total is None:
+        raise ReadError("uncounted check-suites list for %s" % sha[:10])
+    if seen != total:
+        raise ReadError("truncated check-suites list for %s (%d of %s)" % (sha[:10], seen, total))
+    if not suite_ids:
+        return []
+    ids = {rid for c in check_runs_for(repo, sha)
+           if (c.get("check_suite") or {}).get("id") in suite_ids and (rid := check_run_run_id(repo, c)) is not None}
+    if len(ids) > 200:
+        raise ReadError("implausible run-id fan-out for %s (%d ids)" % (sha[:10], len(ids)))
+    runs = []
+    for rid in sorted(ids):
+        r = json.loads(gh_text("repos/%s/actions/runs/%d" % (repo, rid)))
+        if r.get("head_sha") == sha and r.get("event") == "merge_group" and r.get("path") == CI_WORKFLOW_PATH:
+            runs.append(r)
     return runs
 
 
@@ -498,9 +566,9 @@ def ci_runs(repo, sha):
 SETTLED = ("success", "failure", "skipped", "neutral")
 
 
-def failing_jobs(repo, run_id, attempt=None):
-    """-> (failing [(id, name)], unsettled [name]). A job that is cancelled, timed out or has no conclusion has not
-    said whether a would-skip suite failed in it, so the caller cannot class the run on the failures it did read."""
+def run_jobs(repo, run_id, attempt=None):
+    """-> the jobs list of one run (latest attempt) or of a named attempt. The read guards every jobs
+    consumer shares: an empty list and a total_count-short list are failed reads, never shorter lists."""
     path = ("repos/%s/actions/runs/%s/attempts/%s/jobs?per_page=100" % (repo, run_id, attempt) if attempt
             else "repos/%s/actions/runs/%s/jobs?per_page=100&filter=latest" % (repo, run_id))
     docs = gh_pages(path)
@@ -511,11 +579,36 @@ def failing_jobs(repo, run_id, attempt=None):
         raise ReadError("empty jobs list for run %s" % run_id)
     if docs and docs[0].get("total_count") is not None and docs[0]["total_count"] != len(jobs):
         raise ReadError("truncated jobs list for run %s (%s of %s)" % (run_id, len(jobs), docs[0]["total_count"]))
+    return jobs
+
+
+def failing_jobs(repo, run_id, attempt=None):
+    """-> (failing [(id, name)], unsettled [name]). A job that is cancelled, timed out or has no conclusion has not
+    said whether a would-skip suite failed in it, so the caller cannot class the run on the failures it did read."""
+    jobs = run_jobs(repo, run_id, attempt)
     return ([(j["id"], j["name"]) for j in jobs if j.get("conclusion") == "failure" and j["name"] != "test"],
             [j["name"] for j in jobs if j.get("conclusion") not in SETTLED and j["name"] != "test"])
 
 
+def run_leg_green(repo, run_id, names, attempt=None):
+    """-> the subset of `names` that concluded success in the read attempt's jobs list: the identical-tree
+    leg witness (an earlier attempt of the same run, or a same-sha sibling run's latest attempt). A failed
+    or truncated read raises, and the caller counts it as no witness, never as a green one."""
+    jobs = run_jobs(repo, run_id, attempt)
+    return {j["name"] for j in jobs if j.get("conclusion") == "success"} & set(names)
+
+
+# A suite-shard log that carries a runner-shutdown line but NO [FAIL]/[KILLED] verdict is a mid-termination:
+# the job's recorded failure is an unsettled leg, not a suite verdict the tree produced. Either error string
+# marks it; a log with ANY verdict line keeps the normal path (the shutdown then happened on a later suite).
+SHUTDOWN = ("##[error]The runner has received a shutdown signal", "##[error]The operation was canceled")
+IN_FLIGHT = re.compile(r"Last suite started: (.+)")
+COMMS_LOSS = "hosted runner lost communication"
+
+
 def fail_suites(repo, job_id, cache_dir):
+    """-> (suites, sig): the sorted [FAIL]/[KILLED] labels, plus a `mid-termination` signature dict
+    ({"signature","in_flight"}) when the log shows a runner shutdown and no verdict line."""
     path = os.path.join(cache_dir, "job-%d.log" % int(job_id))
     if os.path.exists(path):
         with open(path, errors="replace") as fh:
@@ -528,18 +621,30 @@ def fail_suites(repo, job_id, cache_dir):
             fh.write(text)
         os.replace(part, path)
     suites = []
-    for line in ANSI.sub("", text).splitlines():
-        m = FAIL_LINE.match(STAMP.sub("", line))
+    lines = [STAMP.sub("", ANSI.sub("", line)) for line in text.splitlines()]
+    for line in lines:
+        m = FAIL_LINE.match(line)
         if m:
             suites.append(m.group(1))
-    return sorted(set(suites))
+    sig = None
+    if not suites and any(tok in line for line in lines for tok in SHUTDOWN):
+        sig = {"signature": "mid-termination", "in_flight": None}
+        for line in lines:
+            m2 = IN_FLIGHT.search(line)
+            if m2:
+                sig["in_flight"] = m2.group(1).strip()
+                break
+    return sorted(set(suites)), sig
 
 
 def suites_failed_in(repo, fj, cache_dir):
-    """-> (suites, failing rows, unread) over the failing jobs of one attempt. A suite-shard job whose log cannot be read
-    or names no [FAIL]/[KILLED] line, and a failing job in neither the suite-shard family nor ALWAYS_RUN_JOBS, set
-    `unread`: they are notes, never an empty answer."""
-    suites, failing, ne = set(), [], False
+    """-> (suites, failing rows, unread, extra-unsettled) over the failing jobs of one attempt. A suite-shard
+    job whose log cannot be read is probed once against its check-run annotations — a hosted-runner comms-loss
+    string makes the job UNSETTLED (extra-unsettled, signature runner-comms-loss), as does a mid-termination
+    signature (no verdict line, a shutdown error): the job's recorded failure is then an unsettled leg, not a
+    suite verdict. A job in neither the suite-shard family nor ALWAYS_RUN_JOBS, and a no-verdict log without a
+    signature, set `unread`: they are notes, never an empty answer."""
+    suites, failing, ne, extra = set(), [], False, {}
     for jid, name in fj:
         if not SUITE_JOB.match(name):
             if name.split(" (")[0] in ALWAYS_RUN_JOBS:
@@ -551,18 +656,33 @@ def suites_failed_in(repo, fj, cache_dir):
                 ne = True
             continue
         try:
-            got = fail_suites(repo, jid, cache_dir)
+            got, sig = fail_suites(repo, jid, cache_dir)
         except ReadError:
-            failing.append({"job": name, "suites": [], "note": "log-read"})
-            ne = True
+            haystack = ""
+            try:
+                anns = gh_pages("repos/%s/check-runs/%s/annotations?per_page=100" % (repo, jid))
+                haystack = " ".join(str(a.get("message") or "") for d in anns
+                                    for a in (d if isinstance(d, list) else []))
+            except ReadError:
+                pass   # a failed probe is not evidence either: the log-read note stands
+            if COMMS_LOSS in haystack.lower():
+                failing.append({"job": name, "suites": [], "note": "runner-comms-loss"})
+                extra[name] = {"signature": "runner-comms-loss"}
+            else:
+                failing.append({"job": name, "suites": [], "note": "log-read"})
+                ne = True
             continue
         if not got:
-            failing.append({"job": name, "suites": [], "note": "no-fail-line"})
-            ne = True
+            if sig:
+                failing.append({"job": name, "suites": [], "note": "mid-termination"})
+                extra[name] = sig
+            else:
+                failing.append({"job": name, "suites": [], "note": "no-fail-line"})
+                ne = True
             continue
         failing.append({"job": name, "suites": got})
         suites |= set(got)
-    return suites, failing, ne
+    return suites, failing, ne, extra
 
 
 def escape_confirmed(unit, repo, cache_dir, hit):
@@ -570,14 +690,20 @@ def escape_confirmed(unit, repo, cache_dir, hit):
     evidence about which suite failed in the earlier attempt, so attempt 1's jobs and logs are read."""
     try:
         fj1, _ = failing_jobs(repo, unit["run"]["id"], attempt=1)
-        s1, _, _ = suites_failed_in(repo, fj1, cache_dir)
+        s1, _, _, _ = suites_failed_in(repo, fj1, cache_dir)
     except ReadError:
         return False
     return bool(s1 & set(hit))
 
 
-def classify(unit, repo, cache_dir, same_tree_green):
-    """Fill unit['cls'] and unit['reason'] from the unit's run record and its would-skip set."""
+def classify(unit, repo, cache_dir, same_tree_green, leg_green=None):
+    """Fill unit['cls'] and unit['reason'] from the unit's run record and its would-skip set.
+
+    leg_green(unit, leg_name) is the identical-tree leg witness consulted by the unsettled arm: it
+    reports whether the cancelled/mid-termination/comms-loss leg demonstrably ran to success on the
+    identical tree (earlier attempt of the same run, same-sha sibling run). The consult fires only
+    where `unsettled-jobs` fired before — a real would_skip_hit or ne still decides first — and the
+    unit clears only when EVERY unsettled leg has a witness (or same_tree_green clears it wholesale)."""
     r = unit.get("run")
     if r is None:
         unit["cls"], unit["reason"] = "not-evaluable", unit.get("reason") or "no-run"
@@ -598,7 +724,10 @@ def classify(unit, repo, cache_dir, same_tree_green):
     except ReadError as e:
         unit["cls"], unit["reason"] = "not-evaluable", "jobs-read: %s" % e
         return
-    names, unit["failing"], ne = suites_failed_in(repo, fj, cache_dir)
+    names, unit["failing"], ne, extra = suites_failed_in(repo, fj, cache_dir)
+    if extra:
+        unit["unsettled_detail"] = extra
+        unsettled = sorted(set(unsettled) | set(extra))
     would_skip_hit = sorted(s for s in names if s in skipped)
     if would_skip_hit:
         unit["would_skip_failures"] = would_skip_hit
@@ -613,7 +742,11 @@ def classify(unit, repo, cache_dir, same_tree_green):
         unit["cls"], unit["reason"] = "not-evaluable", ("unclassified-job: %s" % ",".join(odd)[:120] if odd
                                                        else "failed-job-without-fail-line")
     elif unsettled:
-        unit["cls"], unit["reason"] = "not-evaluable", "unsettled-jobs: %s" % ",".join(sorted(unsettled))[:120]
+        unit["unsettled_legs"] = sorted(unsettled)
+        if same_tree_green(unit) or (leg_green is not None and all(leg_green(unit, leg) for leg in unsettled)):
+            unit["cls"], unit["reason"] = "flake-cleared", "identical-tree-green"
+        else:
+            unit["cls"], unit["reason"] = "not-evaluable", "unsettled-jobs: %s" % ",".join(sorted(unsettled))[:120]
     elif not unit["failing"]:
         unit["cls"], unit["reason"] = "not-evaluable", "failure-without-failed-job"
     else:
@@ -702,7 +835,26 @@ def cmd_collect(a):
                     u["runs_n"] = len(runs)
                     u["attempts_failed"] = pick["run_attempt"] if pick["conclusion"] != "success" else 0
                 # a success run is picked first and classes `clean`, so a failed commit unit never has a same-sha success to clear it
-                classify(u, a.repo, cache, lambda unit: False)
+                def leg_green(unit, leg):
+                    # the identical-tree leg witness: an earlier attempt of the picked run (same run,
+                    # same tree) or another FULL_EVENTS run on the same sha whose latest jobs list the
+                    # leg green. An unreadable witness read is not evidence — the leg stays unsettled.
+                    for a_ in range(1, unit["run"].get("attempt") or 1):
+                        try:
+                            if leg in run_leg_green(a.repo, unit["run"]["id"], (leg,), attempt=a_):
+                                return True
+                        except ReadError:
+                            continue
+                    for o in runs:
+                        if o["id"] == unit["run"]["id"]:
+                            continue
+                        try:
+                            if leg in run_leg_green(a.repo, o["id"], (leg,)):
+                                return True
+                        except ReadError:
+                            continue
+                    return False
+                classify(u, a.repo, cache, lambda unit: False, leg_green)
             if u["cls"] == "not-evaluable" and not u["reason"]:
                 u["reason"] = "no-run"
             out.write(json.dumps(u, sort_keys=True) + "\n")
@@ -728,23 +880,76 @@ def cmd_ejections(a):
         if val and not ISO_UTC.match(val):
             # GitHub's created= filter silently matches nothing for an offset such as +02:00
             raise ValueError("%s must be UTC, YYYY-MM-DDTHH:MM:SSZ" % flag)
+    # the corroboration anchor set is the window's first-parent commits either way; explicit
+    # --since/--until still bounds created_at membership of listed and corroborated runs
+    shas = run(["git", "rev-list", "--first-parent", "-n", str(a.commits), a.base], cwd=root).stdout.split()
+    if not shas:
+        raise ReadError("no first-parent commits reachable from %s" % a.base)
     if not since or not until:
         # the window is the commit window: oldest and newest committer time of the last N first-parent commits of --base
-        shas = run(["git", "rev-list", "--first-parent", "-n", str(a.commits), a.base], cwd=root).stdout.split()
-        if not shas:
-            raise ReadError("no first-parent commits reachable from %s" % a.base)
         iso = lambda sha: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(int(run(["git", "log", "-1", "--format=%ct", sha], cwd=root).stdout.strip())))
         since = since or iso(shas[-1])
         until = until or iso(shas[0])
     docs = gh_pages("repos/%s/actions/workflows/ci.yml/runs?event=merge_group&created=%s..%s&per_page=100"
                     % (a.repo, since, until))
-    runs = [r for d in docs for r in d.get("workflow_runs", [])]
+    listed = [r for d in docs for r in d.get("workflow_runs", [])]
     total = docs[0].get("total_count") if docs else None
-    if not runs:
+    if not listed:
         raise ReadError("no merge_group runs in %s..%s: an empty window is a failed read, not a clean one" % (since, until))
-    if total is None or total != len(runs) or total >= SEARCH_CAP:
+    if total is None or total != len(listed) or total >= SEARCH_CAP:
         raise ReadError("merge_group run list is truncated or uncounted (total_count=%s, read %d, cap %d): narrow --since"
-                        % (total, len(runs), SEARCH_CAP))
+                        % (total, len(listed), SEARCH_CAP))
+    # Corroboration (#12428): the listing is search-indexed, so its own total_count cannot see a run
+    # the index dropped. Every merge_group run whose head_sha is a landed window commit is enumerated
+    # through the commit-keyed check-suites -> check-runs join; a listed-id miss whose created_at is
+    # in-window joins the union. A corroborated SUCCESS run is a by_pr/cleared() witness only — never
+    # a unit (a clean unit inflates n and dilutes the cp95 bound); a corroborated non-success run is a
+    # refused unit like any other, marked runs_via=check-runs-window. A per-commit read failure is one
+    # counted synthetic unit (corroboration-read:<sha>), never a silent skip.
+    listed_ids = {r["id"] for r in listed}
+    found, corr_failed = [], []
+    for sha in shas:
+        try:
+            found += merge_group_runs_on(a.repo, sha)
+        except ReadError:
+            corr_failed.append(sha)
+    missing = [r for r in found if r["id"] not in listed_ids and since <= (r.get("created_at") or "") <= until]
+    missing_refused = len([r for r in missing if r.get("conclusion") != "success"])
+    for r in missing:
+        r["_corrob"] = True
+    runs = listed + missing
+    # Queue-event oracle: per PR, added_to_merge_queue timeline events in-window bound below the
+    # number of queue entries the listing should hold (distinct pr-N-* head_branch names — re-runs
+    # share a branch, so branch names, not run ids, are the observed side). Each shortfall is one
+    # synthetic not-evaluable unit; a failed timeline read is one more (queue-oracle-read:pr-<N>).
+    oracle = {"prs": 0, "added": 0, "removed": 0, "distinct_branches": 0, "shortfall": 0, "read_failures": 0}
+    oracle_units = []
+    prs = sorted({pr_of(r.get("head_branch")) for r in runs} - {""}, key=int)
+    oracle["prs"] = len(prs)
+    for pr in prs:
+        observed = len({r.get("head_branch") for r in runs if pr_of(r.get("head_branch")) == pr})
+        try:
+            added = removed = 0
+            for d in gh_pages("repos/%s/issues/%s/timeline?per_page=100" % (a.repo, pr)):
+                for ev in d:
+                    if not isinstance(ev, dict) or not (since <= (ev.get("created_at") or "") <= until):
+                        continue
+                    if ev.get("event") == "added_to_merge_queue":
+                        added += 1
+                    elif ev.get("event") == "removed_from_merge_queue":
+                        removed += 1
+        except ReadError:
+            oracle["read_failures"] += 1
+            oracle_units.append(("queue-oracle-read: pr-%s" % pr, pr, "queue-oracle-read: pr-%s" % pr))
+            continue
+        oracle["added"] += added
+        oracle["removed"] += removed
+        oracle["distinct_branches"] += observed
+        shortfall = max(0, added - observed)
+        oracle["shortfall"] += shortfall
+        for i in range(shortfall):
+            oracle_units.append(("queue-oracle:pr-%s-%d" % (pr, i + 1), pr,
+                                 "queue-oracle-shortfall: pr-%s added=%d branches=%d" % (pr, added, observed)))
     os.makedirs(a.out, exist_ok=True)
     path = os.path.join(a.out, "units-ejections.jsonl")
     done = read_done(path, a.redo_unevaluable, a.reclassify)
@@ -759,17 +964,18 @@ def cmd_ejections(a):
             files_of[r["head_sha"]] = api_commit_files(a.repo, r["head_sha"])
         return files_of[r["head_sha"]]
 
+    # Every conclusion except `success` is a queue run the full battery REFUSED or could not finish (`failure`, `timed_out`,
+    # `startup_failure`, an unfinished run, and `cancelled`: a cancelled shard fails the aggregate `test`, so the run is
+    # classed from its jobs, where an unsettled shard makes it not-evaluable). None is dropped. The conclusion histogram
+    # below names the whole union population.
+    fail_runs = sorted([r for r in runs if r["conclusion"] != "success"], key=lambda r: r["created_at"])
+    hist = {}
+    for r in runs:
+        k = r["conclusion"] or "in-progress"
+        hist[k] = hist.get(k, 0) + 1
+    nidx = len(fail_runs)
     with open(path, "a") as out:
         n = 0
-        # Every conclusion except `success` is a queue run the full battery REFUSED or could not finish (`failure`, `timed_out`,
-        # `startup_failure`, an unfinished run, and `cancelled`: a cancelled shard fails the aggregate `test`, so the run is
-        # classed from its jobs, where an unsettled shard makes it not-evaluable). None is dropped. The conclusion histogram
-        # below names the whole population.
-        fail_runs = sorted([r for r in runs if r["conclusion"] != "success"], key=lambda r: r["created_at"])
-        hist = {}
-        for r in runs:
-            k = r["conclusion"] or "in-progress"
-            hist[k] = hist.get(k, 0) + 1
         for idx, r in enumerate(fail_runs):
             if ("ejection", r["head_sha"]) in done:
                 continue
@@ -778,6 +984,8 @@ def cmd_ejections(a):
                         "attempt": r["run_attempt"]}
             u["attempts_failed"] = r["run_attempt"]
             u["pr"] = pr_of(r.get("head_branch"))
+            if r.get("_corrob"):
+                u["runs_via"] = "check-runs-window"
             try:
                 pairs = files_for(r)
                 u["content_key"] = content_key(pairs)
@@ -794,7 +1002,8 @@ def cmd_ejections(a):
                     continue
 
             def cleared(unit, r=r):
-                # a LATER queue run of the SAME PR whose changed files are the identical (name, blob) set and succeeded.
+                # a LATER queue run of the SAME PR whose changed files are the identical (name, blob) set and succeeded —
+                # corroborated successes sit in by_pr too, so an index-dropped green run can clear it.
                 # A run whose branch names no PR cannot be tied to one, so nothing clears it.
                 pr = pr_of(r.get("head_branch"))
                 if not pr or not unit.get("content_key"):
@@ -807,15 +1016,57 @@ def cmd_ejections(a):
                         except ReadError:
                             return False
                 return False
-            classify(u, a.repo, cache, cleared)
+
+            def leg_green(unit, leg, r=r):
+                # the attempt witness: an earlier attempt of the same run (identical tree by
+                # construction) whose jobs list the unsettled leg green. The same-PR later-run
+                # witness is the wholesale cleared() above.
+                for a_ in range(1, r.get("run_attempt") or 1):
+                    try:
+                        if leg in run_leg_green(a.repo, r["id"], (leg,), attempt=a_):
+                            return True
+                    except ReadError:
+                        continue
+                return False
+            classify(u, a.repo, cache, cleared, leg_green)
             out.write(json.dumps(u, sort_keys=True) + "\n")
             out.flush()
             n += 1
+        for usha, reason in (("corroboration-read: %s" % sha, "corroboration-read: %s" % sha[:10]) for sha in corr_failed):
+            if ("ejection", usha) in done:
+                continue
+            u = base_unit("ejection", nidx, usha)
+            nidx += 1
+            u["reason"] = reason
+            classify(u, a.repo, cache, lambda unit: False)
+            out.write(json.dumps(u, sort_keys=True) + "\n")
+            out.flush()
+            n += 1
+        for usha, pr, reason in oracle_units:
+            if ("ejection", usha) in done:
+                continue
+            u = base_unit("ejection", nidx, usha)
+            nidx += 1
+            u["pr"] = pr
+            u["reason"] = reason
+            classify(u, a.repo, cache, lambda unit: False)
+            out.write(json.dumps(u, sort_keys=True) + "\n")
+            out.flush()
+            n += 1
+    expected_units = len(fail_runs) + len(corr_failed) + len(oracle_units)
     with open(os.path.join(a.out, "ejections-window.json"), "w") as fh:
-        json.dump({"since": since, "until": until, "runs": len(runs), "refused": len(fail_runs), "conclusions": hist}, fh, sort_keys=True)
+        json.dump({"since": since, "until": until, "runs": len(listed), "refused": len(fail_runs), "conclusions": hist,
+                   "corroborated": {"commits": len(shas), "merge_group_on_landed": len(found),
+                                    "missing_ids": sorted(r["id"] for r in missing), "missing_refused": missing_refused,
+                                    "read_failures": len(corr_failed)},
+                   "queue_oracle": oracle,
+                   "expected_units": expected_units}, fh, sort_keys=True)
     print("replay ejections: wrote %d units to %s (window %s..%s, %d merge_group runs, %d failed)"
-          % (n, path, since, until, len(runs), len(fail_runs)))
+          % (n, path, since, until, len(listed), len(fail_runs)))
     print("replay ejections: conclusions %s" % json.dumps(hist, sort_keys=True))
+    print("replay ejections: corroborated commits=%d merge_group_on_landed=%d missing=%d refused=%d read_failures=%d"
+          % (len(shas), len(found), len(missing), missing_refused, len(corr_failed)))
+    print("replay ejections: queue_oracle %s expected_units=%d" % (json.dumps(oracle, sort_keys=True), expected_units))
     return 0
 
 
@@ -876,8 +1127,10 @@ def check_complete(units, expect_commits, commits_only, d):
         with open(meta_path) as fh:
             meta = json.load(fh)
         have = len([u for u in units if u["kind"] == "ejection"])
-        if have != meta["refused"]:
-            raise ValueError("%d ejection units, but the window held %d refused runs: the population is short or stale" % (have, meta["refused"]))
+        expected = meta.get("expected_units", meta["refused"])   # old-shape manifests check against the refused count
+        if have != expected:
+            raise ValueError("%d ejection units, but the window expects %d units (refused %d plus the corroboration and "
+                             "oracle bound): the population is short or stale" % (have, expected, meta.get("refused")))
 
 
 def mark_multi_unit_flakes(units):
