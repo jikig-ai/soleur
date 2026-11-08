@@ -26,8 +26,8 @@
 # into sha256sum (kr_hash); only booleans leave that function.
 #
 # FAILURE SEMANTICS (plan table "Failure semantics"). A refusal before any write prints one fixed verdict token and writes
-# nothing. A failure after a write prints ONE stop sentence with the exact `converge` command (it needs the owner's own
-# per-command, in-session go - an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated), files one action-required issue, and exits non-zero. There is no automatic retry, no
+# nothing. A failure after a write prints ONE stop sentence with the exact `converge` command (it needs a fresh,
+# per-command, in-session owner go - an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated), files one action-required issue, and exits non-zero. There is no automatic retry, no
 # hard reset and no second reboot POST. `converge` never mints a key.
 #
 # Environment (supplied by the workflow; nothing is echoed):

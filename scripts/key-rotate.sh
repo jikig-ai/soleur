@@ -365,8 +365,8 @@ kk_stop_tail() {
   local k="${EFF_KEY:-}"
   case "${KR_VERDICT:-}:$k" in
     owner_step_pending:*) printf ' Read the verdict: %s' "$(kr_verdict_recipe)" ;;
-    partial_absent_state:kb_drift_ingest_signing_key) printf ' Only after the missing copy is recreated, re-dispatch under a fresh, per-command owner go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
-    *) printf ' Re-dispatching is the owner'"'"'s own decision under a fresh, per-command go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
+    partial_absent_state:kb_drift_ingest_signing_key) printf ' Only after the missing copy is recreated, re-dispatch under a fresh, per-command, in-session owner go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
+    *) printf ' Re-dispatching is the owner'"'"'s own decision under a fresh, per-command, in-session go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
   esac
 }
 
