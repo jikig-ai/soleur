@@ -124,6 +124,13 @@ Read the output with these limits in mind (they are in the receipt too):
 - A failed or truncated read is `not-evaluable` and counts in the worst-case numerator. It is never "no failure". A failing job that is
   in neither the suite-shard family nor ci.yml's job list is `unclassified-job`, also `not-evaluable`.
 - `scripts/test-all-orphan-log-retention` is a known flake (more than 20 queue-run failures); expect `flake-cleared` rows for it.
+- A `no-run` reason is **corroborated** (#10862, H4): the `?head_sha=` run listing is search-backed and has
+  dropped existing runs at collect time (~30% of 300 on 2026-10-22). `ci_runs` retries an empty listing once,
+  then proves absence through the commit-keyed `commits/{sha}/check-runs` + `actions/runs/{id}` reads; the
+  unit's `runs_via` says which read answered (`head-sha`, `head-sha-retry`, `check-runs`,
+  `corroborated-no-run`). A unit resolved via `check-runs` is real evidence — the run was recovered from a
+  dropped index, not inferred. The cause receipt is in this branch's spec dir
+  (`knowledge-base/project/specs/feat-one-shot-10862-norun-investigation/receipts/cause.md`).
 
 ## 5. The four criteria and the verdict
 
