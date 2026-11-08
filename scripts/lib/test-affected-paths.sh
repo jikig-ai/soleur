@@ -481,6 +481,23 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_COMMUNITY_TEST_COMMUNITY_ARGV_TEST_SH_PATHS=(
   "plugins/soleur/skills/community/test/community-argv.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CVE_EXPOSURE_TEST_HOST_STATE_TEST_SH_PATHS=(
+  "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/cloud-init-registry.yml"
+  "apps/web-platform/infra/inngest-bootstrap.sh"
+  "apps/web-platform/infra/server.tf"
+  "apps/web-platform/infra/variables.tf"
+  "plugins/soleur/skills/cve-exposure/SKILL.md"
+  "plugins/soleur/skills/cve-exposure/references/component-map.md"
+  "plugins/soleur/skills/cve-exposure/references/disclosure-and-verdicts.md"
+  "plugins/soleur/skills/cve-exposure/scripts/file-gap-issue.sh"
+  "plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
+  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
+  "scripts/betterstack-query.sh"
+  "scripts/image-cve-scan.sh"
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_BITE_PROOF_TEST_SH_PATHS=(
   "package.json"  # plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:21
   "plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh"
