@@ -26,14 +26,14 @@ Rulings of record: decision-challenges.md; CLO wording: clo-wording-rulings.md. 
 - 3.1 Migration 186 + down + verify; static test; tenant-isolation row
 - 3.2 service.ts hashCounts parser; ops.ts STORE_FAILED_STAGES gains counts
 - 3.3 counts route + route test; census unchanged
-- 3.4 scripts/legal-acceptance-counts.sh + test
+- 3.4 scripts/legal-acceptance-counts.sh + test (key validation, hardcoded host, jq -e, status line)
 - 3.5 Runbook, CLO L8 marker, ADR-319 amendment, C4 text, routes.ts comment, PA-40 addendum
 
 ## Phase 4 Inbox entry
 - 4.1 Tests first (inbox-rows, severity, surface, badge, bulk handler, tools, no-service-client, route)
 - 4.2 Evaluate the fallback trigger (end of 4.1)
 - 4.3 ux-design-lead: variance frame in approval-request.pen (AC16)
-- 4.4 inbox-rows.ts, union widening sweep, legal-inbox-row.tsx, badge switch, wire key regex
+- 4.4 inbox-rows.ts (user-context client, founder_id and key filters; accepted-row fixture), union widening sweep (sortTime ternary; locate keyOf), legal-inbox-row.tsx, badge switch, wire key regex
 - 4.5 SWR refresh, state transitions, keyboard no-op
 
 ## Phase 5 CPO sign-off (after Phase 4)
@@ -43,7 +43,7 @@ Rulings of record: decision-challenges.md; CLO wording: clo-wording-rulings.md. 
 ## Phase 6 parked-hold (#12396)
 - 6.1 scripts/ci-parked-hold.test.sh first
 - 6.2 scripts/ci-parked-hold.sh (live read, retry, fail closed, mg_arm semantics)
-- 6.3 secret-scan.yml member steps (step-level event condition), aggregate lines, CODEOWNERS rows
+- 6.3 secret-scan.yml member steps (step-level event condition, env-hoisted inputs, selftest without GH_TOKEN, header comment), aggregate lines, CODEOWNERS rows (advisory caveat)
 - 6.4 required-checks.txt comments; bot-PR sweep
 - 6.5 Reword drain-prs SKILL.md and hook header; delete the follow-through probe after rg; ADR-032 amendment
 - 6.6 Hook-cost measurement (1/10/100 statements)
