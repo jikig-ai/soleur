@@ -54,3 +54,5 @@ Plan's decision rule → H3/H4 arm: **re-read through the true run; keep the win
 `total_count == len(runs)` guard cannot see a dropped entry (the count is index-computed too).
 There is no per-sha non-search read to pin a merge_group window listing against, so this arm is
 documented here rather than patched in this PR. — CTO ruling, decision-challenges.md row 4.
+
+Residual (added at review): the same completeness caveat holds on the collect side — corroboration fires only on an empty filtered listing, so a partial drop under a non-empty listing is undetectable by construction (conservative direction: kept failures only grow the worst-case numerator).

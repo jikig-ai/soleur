@@ -129,7 +129,9 @@ Read the output with these limits in mind (they are in the receipt too):
   then proves absence through the commit-keyed `commits/{sha}/check-runs` + `actions/runs/{id}` reads; the
   unit's `runs_via` says which read answered (`head-sha`, `head-sha-retry`, `check-runs`,
   `corroborated-no-run`). A unit resolved via `check-runs` is real evidence — the run was recovered from a
-  dropped index, not inferred. The cause receipt is in this branch's spec dir
+  dropped index, not inferred. Residual: corroboration proves existence-on-empty, not completeness-on-non-empty —
+  a listing that keeps >=1 FULL_EVENTS run is trusted as-is (partial drops are undetectable there). The cause
+  receipt is in this branch's spec dir
   (`knowledge-base/project/specs/feat-one-shot-10862-norun-investigation/receipts/cause.md`).
 
 ## 5. The four criteria and the verdict

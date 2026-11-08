@@ -444,33 +444,39 @@ def corroborating_runs(repo, sha):
             total = d.get("total_count")
         for c in d.get("check_runs", []):
             seen += 1
-            m = re.search(r"github\.com/%s/actions/runs/(\d+)" % re.escape(repo), c.get("details_url") or "")
+            m = re.search(r"^https://github\.com/%s/actions/runs/(\d+)" % re.escape(repo), c.get("details_url") or "", re.IGNORECASE)
             if m:
                 ids.add(int(m.group(1)))
-    if total is not None and total != seen:
+    if total is None:
+        raise ReadError("uncounted check-runs list for %s" % sha[:10])
+    if total != seen:
         raise ReadError("truncated check-runs list for %s (%d of %s)" % (sha[:10], seen, total))
+    if len(ids) > 200:
+        raise ReadError("implausible run-id fan-out for %s (%d ids)" % (sha[:10], len(ids)))
     runs = []
     for rid in sorted(ids):
         r = json.loads(gh_text("repos/%s/actions/runs/%d" % (repo, rid)))
         if r.get("head_sha") == sha and r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH:
             runs.append(r)
+    runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     return runs
 
 
 def ci_runs(repo, sha):
-    """-> (runs, via). An empty filtered listing is never taken at face value: it is retried once
-    (the index may simply have lagged), then corroborated through check-runs. `via` names the read
-    that answered: head-sha, head-sha-retry, check-runs, corroborated-no-run."""
+    """-> (runs, via). A listing holding no FULL_EVENTS run on this sha is never taken at face
+    value: it is retried once (a second draw on the index — catches replica variance, not true
+    lag; the corroborating read is what carries the fix), then corroborated through check-runs.
+    `via` names the read that answered: head-sha, head-sha-retry, check-runs, corroborated-no-run."""
     try:
         runs, via = head_sha_runs(repo, sha), "head-sha"
-        if not any(r.get("event") in FULL_EVENTS for r in runs):
+        if not any(r.get("event") in FULL_EVENTS and r.get("head_sha") == sha for r in runs):
             runs, via = head_sha_runs(repo, sha), "head-sha-retry"
-            if not any(r.get("event") in FULL_EVENTS for r in runs):
+            if not any(r.get("event") in FULL_EVENTS and r.get("head_sha") == sha for r in runs):
                 runs = corroborating_runs(repo, sha)
                 via = "check-runs" if runs else "corroborated-no-run"
     except ValueError as e:
         raise ReadError("unparseable run read for %s: %s" % (sha[:10], e))
-    return [r for r in runs if r.get("event") in FULL_EVENTS], via
+    return [r for r in runs if r.get("event") in FULL_EVENTS and r.get("head_sha") == sha], via
 
 
 SETTLED = ("success", "failure", "skipped", "neutral")
@@ -667,7 +673,7 @@ def cmd_collect(a):
             try:
                 runs, via = ci_runs(a.repo, sha)
             except ReadError as e:
-                runs, via, u["reason"] = None, "", "runs-read: %s" % e
+                runs, u["reason"] = None, "runs-read: %s" % e
             if runs is not None:
                 u["runs_via"] = via
                 if runs:
@@ -2669,6 +2675,9 @@ def main(argv):
     a = ap.parse_args(argv)
     if a.cmd == "collect" and not re.match(r"^[1-9][0-9]*/[1-9][0-9]*$", a.chunk):
         print("replay: --chunk must be I/K with I,K >= 1", file=sys.stderr)
+        return 2
+    if getattr(a, "repo", None) is not None and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", a.repo):
+        print("replay: --repo must be OWNER/REPO", file=sys.stderr)
         return 2
     try:
         return {"collect": cmd_collect, "ejections": cmd_ejections, "aggregate": cmd_aggregate, "verdict": cmd_verdict,

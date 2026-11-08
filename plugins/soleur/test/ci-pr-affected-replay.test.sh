@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=479   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=482   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -222,7 +222,7 @@ runs_body() {  # runs_body <sha> then id:event:conclusion[:attempt]
   for item in "$@"; do
     IFS=: read -r id ev concl att <<<"$item"
     [ "$first" = 1 ] || printf ','; first=0
-    printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-0%sT00:00:00Z","head_sha":"%s"}' "$id" "$ev" "$concl" "${att:-1}" "${id: -1}" "$sha"
+    printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-%02dT00:00:00Z","head_sha":"%s"}' "$id" "$ev" "$concl" "${att:-1}" "$(( ${id: -1} + 1 ))" "$sha"
   done
   printf ']}'
 }
@@ -361,9 +361,11 @@ printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[3]}")"
 checkruns_body | fx "$(checkruns_path "${C[3]}")"
 # C[2] idx4: check-runs names only an other-workflow run on this sha and a ci.yml run on a DIFFERENT sha -> still no-run
 printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[2]}")"
-checkruns_body "https://github.com/$R4/actions/runs/9002/job/1" "https://github.com/$R4/actions/runs/9003/job/1" | fx "$(checkruns_path "${C[2]}")"
+checkruns_body "https://github.com/$R4/actions/runs/9002/job/1" "https://github.com/$R4/actions/runs/9003/job/1" "https://github.com/$R4/actions/runs/9004/job/1" "https://github.com/foreign-repo/other/actions/runs/9005/job/1" | fx "$(checkruns_path "${C[2]}")"
 rundetail_body 9002 push success "${C[2]}" .github/workflows/other.yml | fx "$(rundetail_path 9002)"
 rundetail_body 9003 push success "0000000000000000000000000000000000000000" .github/workflows/ci.yml | fx "$(rundetail_path 9003)"
+rundetail_body 9004 pull_request success "${C[2]}" .github/workflows/ci.yml | fx "$(rundetail_path 9004)"
+rundetail_body 9005 push success "${C[2]}" .github/workflows/ci.yml | fx "$(rundetail_path 9005)"
 # C[1] idx5: the corroborating read itself fails -> runs-read, never no-run
 printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[1]}")"
 fx_err "$(checkruns_path "${C[1]}")"
@@ -386,16 +388,27 @@ CU="$OUT/units-commits-1-of-1.jsonl"   # REPO_NAME stays "$R4" until the reqs() 
   && pass "a listing that heals on the retry skips check-runs entirely" || fail "retry-heals (got via=$(unit_field "$CU" "${C[6]}" .runs_via) reqs=$(reqs "$(checkruns_path "${C[6]}")"))"
 [[ "$(unit_field "$CU" "${C[5]}" .runs_via)" = head-sha && "$(reqs "$(runs_path "${C[5]}")")" -eq 1 && "$(reqs "$(checkruns_path "${C[5]}")")" -eq 0 ]] \
   && pass "a non-empty first read costs no retry and no check-runs call" || fail "common path (got via=$(unit_field "$CU" "${C[5]}" .runs_via))"
+[[ "$(reqs "$(rundetail_path 9004)")" -eq 0 && "$(reqs "$(rundetail_path 9005)")" -eq 0 ]] \
+  && pass "a pull_request event and a foreign-repo link never reach the run-detail read" || fail "detail reads (9004=$(reqs "$(rundetail_path 9004)") 9005=$(reqs "$(rundetail_path 9005)"))"
 ! grep -q STUB-MISS "$GHLOG" && pass "corroboration made no request the stub does not know" || fail "corroboration unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
 REPO_NAME=""
 
 corr_run() {  # rerun the corroboration collect into a fresh dir with the SUT under test; sets CU
   REPO_NAME="$R4"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
   run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R4" >/dev/null 2>&1; CU="$OUT/units-commits-1-of-1.jsonl"; REPO_NAME=""
-}
+}   # note: C[6]'s ONCE_ fixture is spent by the first collect above; reruns take the head-sha path
 row_corr_dropped() { corr_run; [[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean ]]; }
 row_corr_sha() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
 row_corr_path() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_event() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_foreign() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_trunc() {  # a check-runs page claiming more than it carries is runs-read, never resolved
+  printf '{"total_count":5,"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
+  rundetail_body 9007 push success "${C[3]}" .github/workflows/ci.yml | fx "$(rundetail_path 9007)"
+  corr_run
+  checkruns_body | fx "$(checkruns_path "${C[3]}")"
+  [[ "$(unit_field "$CU" "${C[3]}" .reason)" == runs-read:* ]]
+}
 
 echo "== collect: resumability and chunking"
 before="$(wc -l < "$U")"
@@ -3551,10 +3564,13 @@ row_accept_dir() { audit "$SANDBOX/audit-dir.rows" --accept "$SANDBOX/accept-dir
 row_accept_ok() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-ok.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=2' <<<"$AOUT"; }
 row_accept_badreason() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-badreason.tsv"; [[ "$RC" -eq 2 ]]; }
 mutate always-on-skippable 'elif f[2] == "0" and f[3] != "always_on":' 'elif f[2] == "0":' row_always_on
-mutate read-error-as-no-run 'runs, via, u["reason"] = None, "", "runs-read: %s" % e' 'runs, via, u["reason"] = [], "", ""' row_read_error
+mutate read-error-as-no-run 'runs, u["reason"] = None, "runs-read: %s" % e' 'runs, u["reason"] = [], "", ""' row_read_error
 mutate corroboration-dropped 'runs = corroborating_runs(repo, sha)' 'runs = []' row_corr_dropped
 mutate corroboration-sha-filter-dropped 'r.get("head_sha") == sha and r.get("event") in FULL_EVENTS' 'r.get("event") in FULL_EVENTS' row_corr_sha
 mutate corroboration-path-filter-dropped 'and r.get("path") == CI_WORKFLOW_PATH' '' row_corr_path
+mutate corroboration-event-filter-dropped 'r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH' 'r.get("path") == CI_WORKFLOW_PATH' row_corr_event
+mutate corroboration-namespace-ignored 'github\.com/%s/actions/runs/' 'github\.com/[^/]+/[^/]+/actions/runs/' row_corr_foreign
+mutate corroboration-truncation-ignored 'if total != seen:' 'if False:' row_corr_trunc
 mutate bound-on-point-numerator 'cp_upper(attributable + unverified + ne, n)' 'cp_upper(attributable + unverified, n)' row_worst_bound
 mutate flake-needs-two-file-sets 'len({x["files_hash"] for x in us}) >= 2' 'len({x["files_hash"] for x in us}) >= 1' row_flake_same_files
 mutate flake-distinct-prs-dropped 'and len({x.get("pr") or x["sha"] for x in us}) >= 3}' 'and True}' row_flake_same_pr
@@ -4368,7 +4384,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1122   # 1110 + 12 net unconditional assertions from the #10862 corroboration rows (measured full run 2026-11-08: 1122 assertions, 479 gated sites); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1123   # kept equal to the measured full-run pass count (measured 2026-11-08 after the #10862 corroboration block + review-round pins)
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
