@@ -2,7 +2,7 @@
  * #12011 PR-C task B1/B2 (AC12): the legal-acceptance copy deck.
  *   - no string reachable from the module says "verified", "reviewed", "legally binding", "audit-ready" or "compliant";
  *   - the two notices are carried word for word from the counsel note (sections (c) and (c-2));
- *   - the deck is PROVISIONAL (CLO-agent v1 sign-off of 2026-11-07 only; no human lawyer, the CPO has not signed off), exactly like approval-copy.ts;
+ *   - the deck is PROVISIONAL (CLO-agent v1 sign-off of 2026-11-07, CPO sign-off of 2026-11-08; no human lawyer review), exactly like approval-copy.ts;
  *   - the deck has two deck-owned wordings, terms and acknowledgement, picked by the kind declared for a text key (#12344).
  *     The acknowledgement wording and the shared deck never say "terms", "accept..." or "updated"; no allowlist, no negation stripping.
  */
@@ -66,7 +66,11 @@ function noticeFromNote(heading: string): string {
 const all = collect(copy);
 const ackStrings = collect(copy.LEGAL_KIND_COPY.acknowledgement, NEUTRAL_PROBES);
 const termsStrings = collect(copy.LEGAL_KIND_COPY.terms, NEUTRAL_PROBES);
-const sharedStrings = collect(copy.LEGAL_COPY, NEUTRAL_PROBES);
+// `signOff` is an internal record of who ruled on the deck, never rendered on a card, and it names the text key
+// ("founder-acceptance-record"), which would trip the terms-presuming words by name alone. The forbidden-claims and em-dash walks
+// above still cover it (they walk the whole module).
+const { signOff: _signOffRecord, ...renderedSharedDeck } = copy.LEGAL_COPY;
+const sharedStrings = collect(renderedSharedDeck, NEUTRAL_PROBES);
 
 describe("legal-acceptance copy (AC12)", () => {
   it("walks a non-trivial set of strings (the check is not vacuous)", () => {
@@ -108,10 +112,26 @@ describe("the notices are word for word from the counsel note", () => {
   });
 });
 
-describe("the deck is PROVISIONAL (CLO-agent v1 stand-in for counsel; CPO sign-off outstanding)", () => {
-  it("is flagged provisional; the CLO field records the stand-in, the CPO field stays empty", () => {
+describe("the deck is PROVISIONAL (CPO signed 2026-11-08; human lawyer review owed)", () => {
+  const CPO_SIGN_OFF =
+    "Ruled by CPO agent, 2026-11-08: card deck wording, states and wireframe variances (structure and copy; no rendered export) for the founder-acceptance-record text; entry point ruled separately";
+
+  it("is flagged provisional; both sign-offs are recorded and the constant stays true while a human lawyer review is owed", () => {
     expect(copy.LEGAL_COPY.PROVISIONAL).toBe(true);
-    expect(copy.LEGAL_COPY.signOff).toEqual({ cpo: null, clo: "Ruled by CLO agent, 2026-11-07: v1 internal sign-off, not external counsel" });
+    expect(copy.LEGAL_COPY.signOff).toEqual({
+      cpo: CPO_SIGN_OFF,
+      clo: "Ruled by CLO agent, 2026-11-07: v1 internal sign-off, not external counsel",
+    });
+  });
+
+  it("the CPO sign-off says only what was ruled: it names its scope and the caveats, and claims none of the forbidden words", () => {
+    const cpo = copy.LEGAL_COPY.signOff.cpo;
+    expect(cpo).not.toBeNull();
+    expect(cpo as string).not.toMatch(FORBIDDEN);
+    expect(cpo as string).not.toContain("\u2014");
+    expect(cpo).toMatch(/^Ruled by CPO agent, 2026-11-08: /);
+    expect(cpo).toContain("structure and copy; no rendered export");
+    expect(cpo).toContain("entry point ruled separately");
   });
 });
 

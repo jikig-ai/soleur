@@ -9,8 +9,9 @@
  *
  * PROVISIONAL: the CLO agent signed off the wording and the retention period on 2026-11-07 as a v1 internal position that
  * stands in for counsel on the operator's instruction (ruling persisted in
- * knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md). No human lawyer has reviewed it and the
- * CPO has not signed off the deck, so `PROVISIONAL` stays true. The two notices below are carried WORD FOR WORD from
+ * knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md). The CPO agent signed off the deck on
+ * 2026-11-08 (`signOff.cpo`; the ruling is in knowledge-base/project/specs/feat-one-shot-founder-acceptance-followups-12365/decision-challenges.md).
+ * CPO signed 2026-11-08; human lawyer review owed: no human lawyer has reviewed it, so `PROVISIONAL` stays true. The two notices below are carried WORD FOR WORD from
  * knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md, sections (c) and (c-2), and carry
  * the ruled period. `test/legal-acceptance/legal-copy.test.ts` pins the notices to that file byte for byte, pins
  * `PROVISIONAL` and `signOff`, pins every kind wording word for word, and fails on any string that claims more than
@@ -71,7 +72,10 @@ const CHOICE_WORDS = {
 
 export const LEGAL_COPY = {
   PROVISIONAL: true,
-  signOff: { cpo: null as string | null, clo: "Ruled by CLO agent, 2026-11-07: v1 internal sign-off, not external counsel" as string | null },
+  signOff: {
+    cpo: "Ruled by CPO agent, 2026-11-08: card deck wording, states and wireframe variances (structure and copy; no rendered export) for the founder-acceptance-record text; entry point ruled separately" as string | null,
+    clo: "Ruled by CLO agent, 2026-11-07: v1 internal sign-off, not external counsel" as string | null,
+  },
 
   /** (c) of the counsel note: shown with the Request changes text box, visible without scrolling or clicking. */
   requestChangesNotice:
