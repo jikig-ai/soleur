@@ -147,7 +147,9 @@ checkout HEAD^1 is just the previous local commit, so those are not meaningful t
          at least one suite and one file read), then the base (resolved with git, its lint-ratchet.py loaded from the BASE commit, not the PR tree: a PR cannot weaken
          the helper and the baseline together; a base without the file, or one that does not compile, is internal). Then the verdicts, each class printed and the first one named in the marker: unaudited suite; a `*`
          accept row for a readable suite; a stale or invalid accept row; a baseline re-introduced after strict zero (baseline-reintroduced); a new pair (or baseline-deleted); a stale baseline line; a duplicate baseline
-         line; a baseline not in C-locale order or without its final newline; a baseline line the base does not have (grown).
+         line; a baseline not in C-locale order or without its final newline; a baseline line the base does not have (grown). Diff-scoped (#10859 PR3b ruling b):
+         a pair whose accept row-set differs base->HEAD without the diff touching the path, a file that references it or an oracle input (accept-unattributed),
+         and a head-side row added or kind-changed without one of the six typed kinds (accept-bad-kind).
   BASELINE STATE  base absent / HEAD present: exit 1 unconditionally (baseline-reintroduced) — a baseline re-added after strict zero never adopts, whatever it covers. Base present / HEAD absent: passes only when nothing is live
          (the strict-zero end state), else baseline-deleted. Absent at both: strict zero (a live pair is a new pair). Present at both: equality, plus the
          growth rule as a GLOBAL pair-set check (`head lines - base lines` must be empty, so a swap, a new suite and a count that did not move are all refused).
@@ -159,7 +161,7 @@ checkout HEAD^1 is just the previous local commit, so those are not meaningful t
   (exit 2, census-degraded) when the census is degraded (an unaudited suite, a stale or malformed accept row): a file printed from it would lose live pairs.
   --report FILE also writes the full, uncapped failure text (stdout prints the first 25 entries of each class and a count): on a verdict, on an exit-2 stop (the reason line and
   the marker) and under --print-baseline (the notice and the marker); a path that cannot be written is one stderr line, never the verdict. The last stdout line is
-  `SOLEUR_PR_AFFECTED_RATCHET exit=<0|1|2> reason=<token> live=<n> baseline=<n>`; `oracle-inputs-changed: <files>` is printed, non-blocking, when the diff to the base
+  `SOLEUR_PR_AFFECTED_RATCHET exit=<0|1|2> reason=<token> live=<n> baseline=<n> accept=<n>`; `oracle-inputs-changed: <files>` is printed, non-blocking, when the diff to the base
   touches the check's own oracle: .github/workflows/ci.yml, this script, plugins/soleur/scripts/lint-ratchet.py, the accept file, scripts/lib/test-affected-paths.sh,
   scripts/test-all.sh or the baseline. A new accept row is therefore announced, and is the drain tool, not a verdict.
   EXIT-2 REASONS  selector-failed, selector-timeout, floor-summary, floor-fallback, floor-extra, floor-short-row, floor-bad-row, floor-rows-vs-of, floor-unreadable,
@@ -201,6 +203,7 @@ ALWAYS_RUN_JOBS = frozenset((
     "encryption-posture", "guards-advisory",
     "lint-webplat", "web-platform-build", "shard-totality-mutations", "test", "e2e",
     "critical-css-gate", "affected-index-ratchet", "oracle-selection", "oracle-index-check",
+    "oracle-review-required",
 ))
 FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")
 FULL_EVENTS = ("merge_group", "push")
@@ -1530,6 +1533,21 @@ def load_accept(path, base=None):
     return acc
 
 
+def accept_rows(text, where):
+    """The raw (suite, path, anchor, ordinal, reason) rows of an accept-file TEXT — for the base side of the
+    row-set diff, where the committed file's grammar is trusted (a wrong column count is still a ValueError so a
+    corrupt object can never read as an empty set)."""
+    rows = []
+    for n, line in enumerate(text.split("\n"), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split("\t")
+        if len(f) != 5:
+            raise ValueError("%s:%d: %d column(s), want 5" % (where, n, len(f)))
+        rows.append(tuple(f))
+    return rows
+
+
 class Census:
     """What one audit run found; cmd_audit only formats it, and a later ratchet reads it instead of parsing stdout. The unit is the
     suite LABEL: selector rows that share a label are one suite (texts, gaps, accept rows and the always_on decision are merged),
@@ -1548,6 +1566,7 @@ class Census:
         self.suites = self.accepted = self.refs = 0
         self.gaps, self.miss, self.registered, self.pair_texts = {}, {}, {}, {}
         self.labels, self.short_rows, self.always_on_labels, self.accepted_unread_labels = set(), set(), set(), set()
+        self.miss_texts = {}   # {label: {path: reach_texts() of the rows that left it undeclared}} for EVERY miss pair, gaps and accepted alike
         self.unaudited, self.stale, self.extra = [], [], []
         self.grammar = []   # (selected flag, reason, column count) of every row with at least five columns, for the ratchet's row-grammar floor
 
@@ -1703,6 +1722,7 @@ def audit_census(root, rows, accept):
                 have = {t[0] for t in texts_of[path]}
                 texts_of[path].extend(t for t in texts if t[0] not in have)
         c.miss[label] = miss
+        c.miss_texts[label] = texts_of
         if rules:
             stale, accepted, kept = judge_rules(label, rules, miss, texts_of, index.tracked,
                                                 "star-row-unreadable-members" if bad else "star-row-readable-suite", partial=bool(bad))
@@ -1755,7 +1775,12 @@ RATCHET_CAP = 25
 # helper (its merge-base copy decides the base text, but the PR-tree copy is what a later run trusts), the accept file (a new row exempts a new pair), the path
 # library and the runner (they decide what the selector prints, so what is "live") and the baseline.
 RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-affected-replay.py", RATCHET_LINT, RATCHET_ACCEPT, RATCHET_PATHS_LIB, RATCHET_TEST_ALL, RATCHET_BASELINE,
-                  "scripts/ci-oracle-lane.sh", "scripts/ci-oracle-lane.test.sh", "scripts/ci-oracle-lane-suites.txt")
+                  "scripts/ci-oracle-lane.sh", "scripts/ci-oracle-lane.test.sh", "scripts/ci-oracle-lane-suites.txt",
+                  "scripts/ci-oracle-review.sh", "scripts/ci-oracle-review.test.sh")
+# The six typed reason kinds an accept row added after PR3b must carry (ruling (b) of 2026-11-06, the canonical
+# list of runbook ci-pr-affected-activation.md; legacy rows are never re-litigated — the verdicts are diff-scoped).
+ACCEPT_KINDS = ("message", "JSDoc/comment", "PR-body string", "help/menu text",
+                "data row not fed to a read loop", "code line in a file read only as text")
 STAR_WHYS = ("star-row-readable-suite", "star-row-unreadable-members", "star-row-tracked-suite")
 RATCHET_REMEDY_NEW = (
     "remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file, "
@@ -1764,8 +1789,8 @@ RATCHET_REMEDY_NEW = (
     "into a scratch tree, a negative-test string); the reason names the line kind",
     "remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)",
     "remedy: an accept row on a file the suite really reads or whose state feeds its verdict is a false negative once the lever flips; no automated "
-    "control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required "
-    "review exists in this repository's ruleset",
+    "control checks that the suite does not read this file, this check does not verify it — the automated bounds are the accept-unattributed/"
+    "accept-bad-kind verdicts on the row-set delta and the oracle-review-required context, which demands a bound owner review of oracle-surface diffs",
     "remedy: a baseline row cannot be added",
 )
 # Control bytes a field may not carry raw: C0 minus TAB (the column
@@ -1865,22 +1890,35 @@ def ratchet_load(root, sha, env):
     return mod
 
 
-def ratchet_base(root, ref, rel):
-    """-> (sha, the baseline text at the base or None when the base has no such file). An unresolvable base is exit 2, never an adoption."""
+def ratchet_base_env():
     env = dict(os.environ)
     for k in GIT_LOCATION_VARS:
         env.pop(k, None)   # the helpers' git calls ignore any inherited git location, like run() does
+    return env
+
+
+def ratchet_file_at(root, sha, rel, env=None):
+    """The file's text at `sha`, or None when that commit has no such path — the same confined reader
+    (merge-base-loaded lint-ratchet.py baseline_at) ratchet_base uses for the baseline. An existing file it cannot
+    read is exit 2, never an empty set."""
+    env = env if env is not None else ratchet_base_env()
+    mod = ratchet_load(root, sha, env)
+    try:
+        return mod.baseline_at(root, sha, rel, env)
+    except mod.InfraError as e:
+        raise RatchetInfra("base-unresolved", "%s" % quote_field(str(e)))
+
+
+def ratchet_base(root, ref, rel):
+    """-> (sha, the baseline text at the base or None when the base has no such file). An unresolvable base is exit 2, never an adoption."""
+    env = ratchet_base_env()
     if ref.startswith("-"):
         raise RatchetInfra("base-unresolved", "--base %s looks like an option, not a ref" % quote_field(ref))
     p = run(["git", "rev-parse", "--verify", "--end-of-options", ref + "^{commit}"], cwd=root, env=env, check=False, timeout=GIT_TIMEOUT)
     sha = p.stdout.strip() if p.returncode == 0 else ""
     if not sha:
         raise RatchetInfra("base-unresolved", "%s does not resolve to a commit (a root commit or a shallow clone): fetch more history, fetch-depth: 2 is the minimum" % quote_field(ref))
-    mod = ratchet_load(root, sha, env)
-    try:
-        return sha, mod.baseline_at(root, sha, rel, env)
-    except mod.InfraError as e:
-        raise RatchetInfra("base-unresolved", "%s" % quote_field(str(e)))
+    return sha, ratchet_file_at(root, sha, rel, env)
 
 
 def ratchet_changed(root, sha):
@@ -1948,7 +1986,8 @@ def ratchet_new_entry(c, pair, added, touched):
 
 
 def ratchet_marker(code, reason, st):
-    return "%s exit=%d reason=%s live=%d baseline=%d" % (RATCHET_MARKER, code, reason, st["live"], st["baseline"])
+    return "%s exit=%d reason=%s live=%d baseline=%d accept=%d" % (RATCHET_MARKER, code, reason,
+                                                                 st["live"], st["baseline"], st["accept"])
 
 
 def ratchet_report(a, lines):
@@ -1974,7 +2013,7 @@ def ratchet_infra(a, st, reason, message):
 
 def cmd_ratchet(a):
     """See RATCHET in --help. The four arms below are distinct on purpose and every one maps to exit 2 (never 3 or 4): a failure of the check is not a verdict."""
-    st = {"stage": "root", "live": 0, "baseline": 0}
+    st = {"stage": "root", "live": 0, "baseline": 0, "accept": 0}
     try:
         return ratchet_run(a, st)
     except RatchetInfra as e:
@@ -2003,6 +2042,7 @@ def ratchet_run(a, st):
             accept = load_accept(apath, None if a.accept else root)
         except ValueError as e:
             accept_err = str(e)
+    st["accept"] = sum(len(es) for ps in accept.values() for es in ps.values())
     st["stage"] = "rows"
     rows = load_rows(a.list, root)
     st["stage"] = "census"
@@ -2054,6 +2094,50 @@ def ratchet_run(a, st):
         stales.append(["stale-accept\t-\t-\t-\t%s" % q(accept_err)])
     if stales:
         findings.append(("stale-accept", stales, ["remedy: delete the accept row: the tree no longer backs it, or it is malformed"]))
+    # Diff-scoped accept verdicts (#10859 PR3b ruling b): every pair whose row-set differs base->HEAD must
+    # attribute to this diff — the named path touched, a file that references the pair touched, or an oracle input
+    # OTHER than the accept file itself touched (the accept file is in RATCHET_ORACLE and is in the diff whenever a
+    # row changes, so counting it would make the verdict vacuous). Every head-side row that is new or whose reason
+    # changed must carry one of the six typed kinds — legacy rows are never re-litigated. The verdicts judge the
+    # TRACKED accept file's committed diff: a --accept that names a scratch file is a simulation, never the file
+    # under version control, so its rows are exempted from the row-set comparison (there is no base for it).
+    diff_accept = not a.accept or os.path.realpath(a.accept) == os.path.realpath(default_accept)
+    if diff_accept:
+        base_accept_text = ratchet_file_at(root, sha, RATCHET_ACCEPT, ratchet_base_env())
+        try:
+            base_rows = accept_rows(base_accept_text or "", RATCHET_ACCEPT + "@base")
+        except ValueError as e:
+            raise RatchetInfra("internal", "the accept file at the base does not parse: %s" % e)
+        bmap = {(r[0], r[1], r[2], r[3]): r[4] for r in base_rows}
+        hmap = {(s, p, a2, "-" if not o else str(o)): r
+                for s, ps in accept.items() for p, es in ps.items() for a2, o, r in es}
+        oracle_rest = [p for p in oracle if p != RATCHET_ACCEPT]
+        top = os.path.realpath(root)
+        unattributed, bad_kind = [], []
+        for s, p in sorted({(k[0], k[1]) for k in list(bmap) + list(hmap)}):
+            brows = {k: v for k, v in bmap.items() if (k[0], k[1]) == (s, p)}
+            hrows = {k: v for k, v in hmap.items() if (k[0], k[1]) == (s, p)}
+            if brows == hrows:
+                continue
+            refs = {os.path.relpath(t[0], top) for t in c.miss_texts.get(s, {}).get(p, [])}
+            if p not in touched and not (refs & touched) and not oracle_rest:
+                unattributed.append(["accept-unattributed\t%s\t%s\tits row-set differs base->HEAD but the diff touched neither the path, "
+                                     "a file that names it, nor an oracle input" % (q(s), q(p))])
+            for k in sorted(hrows):
+                v = hrows[k]
+                if k not in brows or brows[k] != v:
+                    kind = v[len("false-positive: "):].split(":", 1)[0].strip() if v.startswith("false-positive: ") else ""
+                    if kind not in ACCEPT_KINDS:
+                        bad_kind.append(["accept-bad-kind\t%s\t%s\t%s/%s\t%s" % (q(s), q(p), k[2], k[3], q(kind or "<none>"))])
+        if unattributed:
+            findings.append(("accept-unattributed", unattributed,
+                             ["remedy: an accept row-set change must attribute to this diff — the named path, a file that references "
+                              "the pair, or an oracle input must be among the touched files (an accept edit that arrives with none of "
+                              "them is an off-diff growth bound violation; declare the provenance or drop the row)"]))
+        if bad_kind:
+            findings.append(("accept-bad-kind", bad_kind,
+                             ["remedy: every accept row this diff adds or rewrites must carry one of the six typed kinds after "
+                              "`false-positive: ` — %s — followed by the evidence (file:line); a free-form reason is refused" % ", ".join(ACCEPT_KINDS)]))
     new = [line for line in live if line not in head_set]
     if head_text is not None and base_text is None:
         findings.append(("baseline-reintroduced", [["baseline-reintroduced\t%s\ta baseline file absent at the base cannot be adopted: strict zero retired it" % q(rel)]],

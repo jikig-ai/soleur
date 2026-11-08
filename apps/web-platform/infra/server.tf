@@ -624,8 +624,8 @@ resource "hcloud_server" "web" {
   # separate runtime-bind probe passes. The rebuilt gate is a fail-closed serving-weight TOP-GUARD:
   # web-2 weight==0/not-in-rotation PASSES (the standby state a correct pre-flip config is in — the
   # #6575 polarity flaw is fixed); web-2 weight>0 pre-flip runs the flip-authorization shape and
-  # FAILS unless (1) owner-side relay active (SOLEUR_PROXY_BIND / SOLEUR_PROXY_PEER_ALLOWLIST /
-  # SOLEUR_HOST_ROSTER), (2) git-data store cut over (GIT_DATA_STORE_ENABLED==true + GIT_DATA_LUKS
+  # FAILS unless (1) owner-side relay config-shape holds (SOLEUR_PROXY_PEER_ALLOWLIST /
+  # SOLEUR_HOST_ROSTER; the bind is a literal in ci-deploy.sh, not a gate input), (2) git-data store cut over (GIT_DATA_STORE_ENABLED==true + GIT_DATA_LUKS
   # soak marker), AND (3) web-2 /workspaces LUKS-backed (WORKSPACES_LUKS soak marker — ADR-143 D3
   # coupling #2, so a plaintext web-2 cannot be pooled). Pooling web-2 before all three = a request
   # lands on a host without that user's /workspaces → empty workspace → "workspace-gone" single-user

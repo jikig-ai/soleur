@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# (#11631) Feeder for the two archive-fed dead-man heartbeats that replaced the native logs alerts
+# (#11631) Feeder for the archive-fed dead-man heartbeats that replaced the native logs alerts
 # `luks_monitor_host_timer_dark` (window 97200 s, once-a-day row) and `claude_cost_capture_dark` (window 86400 s):
 #
 #   luks-monitor-host-timer -> betteruptime_heartbeat.luks_monitor_host_timer  (soleur-luks-monitor-host-timer-prd)
@@ -34,7 +34,7 @@
 # narrow what counts (tag, unit, host, message; marker key, component, source) but cannot tell a forged row from a
 # real one. This control detects a dark emitter or shipper, not a hostile writer.
 #
-# BEAT BUDGET. Both heartbeats use period 3600 + grace 7200: the page threshold is 10800 s. The workflow runs this
+# BEAT BUDGET. Each heartbeat uses period 3600 + grace 7200: the page threshold is 10800 s. The workflow runs this
 # hourly WHEN the web watchdog clock delivers it (WATCHDOG_DISPATCH_TABLE); the `schedule:` fallback alone
 # (one run every 2-7 h, measured) cannot hold the budget, and a dark clock shows as a missed Sentry check-in.
 #
@@ -117,7 +117,7 @@ export LC_ALL=C
 # ── THE TARGET TABLE ─────────────────────────────────────────────────────────────────────────────
 # Predicates are the retired alerts' WHERE conjuncts, moved verbatim minus the window conjunct (the window is
 # the SQL's own, below). Each is ONE physical line. They are read by name by the harness.
-TARGETS="luks-monitor-host-timer claude-cost-capture"
+TARGETS="luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe"
 
 # luks-monitor.service's own passing row: tag (luks-monitor.sh LOG_TAG / the unit's SyslogIdentifier), the unit
 # journald stamps (the verify job's rows carry session-N.scope or no unit, so they can never keep this fed), the
@@ -140,6 +140,13 @@ EOF
 def_pred LUKS_FAIL_PRED <<'EOF'
 JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND JSONExtractString(raw, 'message') LIKE 'FAIL (%'
 EOF
+# The LUKS key-continuity probe's MEASURED rows on either channel (#12230 / ADR-282 D12 dead-man): the
+# journald channel anchors the marker at message position 1 like the paging SQL, and the phone-home
+# channel carries it in .detail under shipper=cloud-init-phone-home stage=luks-key-probe. Only verdict=ok
+# and verdict=fail_* count as health — an indeterminate-only stream is NOT health (ADR-282 ruling D12).
+def_pred KEYPROBE_PRED <<'EOF'
+(JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'inngest-cutover-flip' AND position(JSONExtractString(raw, 'message'), 'SOLEUR_INNGEST_LUKS_KEY_PROBE') = 1 AND (position(JSONExtractString(raw, 'message'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'message'), 'verdict=fail_') > 0)) OR (JSONExtractString(raw, 'shipper') = 'cloud-init-phone-home' AND JSONExtractString(raw, 'stage') = 'luks-key-probe' AND (position(JSONExtractString(raw, 'detail'), 'verdict=ok') > 0 OR position(JSONExtractString(raw, 'detail'), 'verdict=fail_') > 0))
+EOF
 
 # The target is matched by LITERAL EQUALITY against the table and never interpolated: the matched arm assigns
 # constants (T, W, NAME, PRED), and nothing else of $1 reaches SQL, a marker, a path or a curl config.
@@ -150,6 +157,8 @@ select_target() {
       T="luks-monitor-host-timer"; W=97200; NAME="soleur-luks-monitor-host-timer-prd"; PRED="$LUKS_PRED" ;;
     claude-cost-capture)
       T="claude-cost-capture"; W=86400; NAME="soleur-claude-cost-capture-prd"; PRED="$COST_PRED" ;;
+    inngest-luks-key-probe)
+      T="inngest-luks-key-probe"; W=93600; NAME="soleur-inngest-luks-key-probe-deadman-prd"; PRED="$KEYPROBE_PRED" ;;
     *) return 1 ;;
   esac
   return 0
@@ -313,6 +322,9 @@ withhold_no_row() {
   fmarker "no_qualifying_row"
   if [[ "$T" == "luks-monitor-host-timer" ]]; then
     echo "CANNOT BEAT: no qualifying row for $T in the last ${W}s (hot plus archive). The checked host, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+  elif [[ "$T" == "inngest-luks-key-probe" ]]; then
+    echo "CANNOT BEAT: no SOLEUR_INNGEST_LUKS_KEY_PROBE verdict row for $T in the last ${W}s (hot plus archive, either channel). The key-continuity probe, the log shipper or the Logs source is dark; that is what this heartbeat exists to report."
+    echo "CANNOT BEAT: next action for $T: see knowledge-base/engineering/operations/runbooks/inngest-luks-cutover-6894.md."
   else
     echo "CANNOT BEAT: no cost marker or credit-probe RED row for $T in the last ${W}s (hot plus archive). The cron cost-capture path, the log shipper or the Logs source may be dark; this line does not say which."
     echo "CANNOT BEAT: next action for $T: see the cost-marker section (Querying Anthropic cost markers) of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md."

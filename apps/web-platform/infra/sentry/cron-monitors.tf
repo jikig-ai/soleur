@@ -460,9 +460,10 @@ resource "sentry_cron_monitor" "scheduled_inngest_probe_heartbeat" {
 
 # #11631: GHA-fired via .github/workflows/scheduled-deadman-heartbeat-feeder.yml (on.schedule '0 * * * *' is the
 # FALLBACK; the PRIMARY trigger is the web server's watchdog dispatch clock, ADR-248, one workflow_dispatch per
-# hourly UTC slot — see WATCHDOG_DISPATCH_TABLE). The workflow is the repo-side feeder for the two archive-fed
-# dead-man heartbeats betteruptime_heartbeat.luks_monitor_host_timer and betteruptime_heartbeat.claude_cost_capture
-# that replaced two native logs alerts (the luks one waited for a once-a-day row and read `Current value: 0`
+# hourly UTC slot — see WATCHDOG_DISPATCH_TABLE). The workflow is the repo-side feeder for the archive-fed
+# dead-man heartbeats betteruptime_heartbeat.luks_monitor_host_timer, betteruptime_heartbeat.claude_cost_capture
+# and betteruptime_heartbeat.inngest_luks_key_probe_deadman (#12230 c1), the first two of which
+# replaced two native logs alerts (the luks one waited for a once-a-day row and read `Current value: 0`
 # through 33 healthy nights, #11048; the cost one fires a few times a day, n=4 in 24 h): it beats a heartbeat
 # only while a qualifying row exists in the Logs hot-plus-archive window of the retired alert. A MISSED check-in
 # here means the feeder went dark (clock + fallback both dead, workflow disabled), and the heartbeats then time

@@ -223,6 +223,7 @@
 1	apps/web-platform/infra/inngest-wiped-volume-verify.sh
 1	apps/web-platform/infra/inngest-wiped-volume-verify.test.sh
 112	apps/web-platform/infra/key-rotate-workflow.test.sh
+25	apps/web-platform/infra/lb-weight-gate-with-marker.test.sh
 5	apps/web-platform/infra/luks-monitor.test.sh
 1	apps/web-platform/infra/nic-wait-gate.test.sh
 1	apps/web-platform/infra/orphan-reaper.sh
@@ -458,6 +459,7 @@
 5	scripts/ci-draft-push-census.test.sh
 8	scripts/ci-oracle-lane.sh
 2	scripts/ci-oracle-lane.test.sh
+8	scripts/ci-oracle-review.sh
 8	scripts/ci-pr-selection.sh
 2	scripts/close-superseded-dependabot-prs.sh
 3	scripts/compound-promote.test.sh

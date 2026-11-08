@@ -1286,6 +1286,12 @@ kk_cmd_clear() {
   mapfile -t targets < <(kr_gate_targets B "$key" | grep "=$pa\$")
   mapfile -t repls < <(kr_gate_replaces B "$key" | grep "=$pa\$")
   want="$(jq -cn --arg a "$pa" '[{address:$a,actions:["delete","create"],recovery:false,replace:true,recover:false}]')"
+  # the TF_VAR shadow (the kk_egress_previous_feed precedent, env only, never argv): kr_tf wraps every call in
+  # `doppler run --name-transformer tf-var`, which injects EVERY name of soleur/prd_terraform as TF_VAR_*; a stale
+  # EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS copy there would feed the OLD token to the PREVIOUS variable and the replace
+  # create would rewrite it (#12299). Under --preserve-env an exported name wins even when empty, so the clear
+  # exports the cleared sentinel itself.
+  export TF_VAR_egress_audit_ingest_token_previous=""
   rc=0
   kr_tf "plan-clear" plan -no-color -input=false -out="$KR_TMP/tfplan-clear" -var="ssh_key_path=${KR_TMP}/ci_ssh_key.pub" \
     "${targets[@]}" "${repls[@]}" || rc=$?
