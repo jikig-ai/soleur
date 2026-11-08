@@ -225,3 +225,28 @@ recorded in `knowledge-base/project/specs/feat-one-shot-12007-host-kernel-marker
    per-host-class carrier, precondition and expected drift are in one table, the delivery matrix in the host-kernel section of
    `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`; this ADR, the C4 prose and the query
    runbook refer to it and do not restate it.
+
+## Addendum 2026-11-08 (#12007 fix round)
+
+Append-only: the earlier addenda are not rewritten. Where this section disagrees with them, this section governs. The ruling is
+recorded in `knowledge-base/project/specs/feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
+
+1. **The registry emitter is deferred to an owner-approved follow-up PR.** The earlier addendum of this date (item 1, "the registry posts it
+   directly through its existing disk-heartbeat sender") states that the registry
+   emits the marker. That statement is superseded by this addendum: the registry does not emit the marker in the change that
+   introduces it, and no registry emitter edit is in that change.
+2. **Why.** Merging a change to the registry host's cloud-init auto-fires the registry-host-replace dispatcher
+   (`.github/workflows/registry-host-replace-dispatch.yml`). The dispatcher renders the registry user_data offline and, when it
+   differs from the merge base, emits deliver=true and, after a read-only preflight, runs the registry-host-replace apply with no
+   reviewer gate and no confirm token (ADR-190: the merge is the intent to deliver). That replaces the production registry host,
+   the sole pull path, with no rollback if the create fails after the destroy. The follow-up PR is therefore merged only with the
+   owner's explicit go-ahead and never ahead of the owner; it is tracked in #12386.
+3. **What stays in the first change.** The collector's `--role registry` support, the helper and feeder registry decode (the
+   identity rule of the earlier addenda, `role=registry` plus the trailing `host=<registry host id>`), and the paused
+   `host-kernel-registry` heartbeat. They are inert for the registry until the follow-up merges.
+4. **Expected state.** The registry reads `unknown` in the skill output until the follow-up merges and the host is replaced. That
+   is the honest state, not a defect, and it is never read as clean. Until the heartbeats are armed, the only read for any host is
+   the credentialed query or the credentialed helper (`host-state.sh`).
+5. **Decisions 1 to 5 and the other addendum items are unchanged.** The journald-path residual, the registry-path residual (the
+   holder of the shared ingest token) and the freshness-clock residual of the review addendum stand; the registry-path residual
+   applies from the day the follow-up delivers a row.

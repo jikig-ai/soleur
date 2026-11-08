@@ -159,13 +159,14 @@ declare -A E_NAME=([$T_LUKS]="soleur-luks-monitor-host-timer-prd" [$T_COST]="sol
 # The host-kernel predicates, frozen here independently of the script (one physical line each). The kernel shape is
 # delimited by its trailing space (no end-of-string anchor: build_sql refuses every dollar sign but its two table tokens).
 HK_KSHAPE='[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ '
-# Every predicate leads with position(raw, 'SOLEUR_HOST_KERNEL') > 0 (the full-window scan short-circuits); the journald ones
-# pin the exact _SYSTEMD_UNIT beside the SYSLOG_IDENTIFIER (the luks precedent) and refuse ANY 'host=' substring.
+# Every predicate leads with position(raw, 'SOLEUR_HOST_KERNEL') > 0 (intended to prune the scan; evaluation order is not
+# guaranteed); the journald ones pin the exact _SYSTEMD_UNIT beside the SYSLOG_IDENTIFIER (the luks precedent) and refuse
+# ANY 'host=' substring; the registry one requires EXACTLY ONE 'host=' in the message (countSubstrings = 1).
 HK_LEAD="position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND "
 HK_ID_JOURNALD="${HK_LEAD}JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = "
 HK_ROLE_WEB="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
 HK_ROLE_INGEST="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), 'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
-HK_REG_HOSTID_ARM="(endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0)"
+HK_REG_HOSTID_ARM="(endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0) AND countSubstrings(JSONExtractString(raw, 'message'), 'host=') = 1"
 declare -A E_PRED=(
   [$T_LUKS]="JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'"
   [$T_COST]="((raw LIKE '%\"SOLEUR_CLAUDE_COST\":true%' AND JSONExtractString(raw, 'message', 'component') = 'claude-cost' AND JSONExtractString(raw, 'message', 'source') LIKE 'cron:%' AND JSONExtract(raw, 'message', 'cost_usd', 'Nullable(Float64)') IS NOT NULL) OR (JSONExtractString(raw, 'message', 'feature') = 'cron-anthropic-credit-probe' AND JSONExtractString(raw, 'message', 'op') IN ('anthropic-credit-exhausted', 'anthropic-key-invalid')))"
@@ -358,6 +359,8 @@ class Parser:
             return lambda row: re.search(str(args[1](row)), str(args[0](row))) is not None
         if name == "position":
             return lambda row: str(args[0](row)).find(str(args[1](row))) + 1
+        if name == "countsubstrings":
+            return lambda row: str(args[0](row)).count(str(args[1](row)))
         raise Unsupported("function %r" % name)
 
     # boolean expressions ----------------------------------------------------------------
@@ -1639,6 +1642,13 @@ HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registr
 expect "registry: a row stamped with a SYSLOG_IDENTIFIER withholds" 3 no_qualifying_row
 HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registry "$HK_OK_KERNEL" "host=soleur-registry extra=1")" "")" | fx hk-reg-trail)"; C_BEATS=1; C_APIS=1
 expect "registry: must-PASS (non-canonical): host= followed by trailing fields beats" 0 beat
+# A message with more than one `host=` is refused: the registry identity must be exactly one host= (same rule as the helper's registry arm).
+HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registry "$HK_OK_KERNEL" "host=evil host=soleur-registry")" "")" | fx hk-reg-twohost-a)"
+expect "registry: 'host=evil host=soleur-registry' (two host= fields) withholds" 3 no_qualifying_row
+HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registry "$HK_OK_KERNEL" "host=soleur-registry host=evil")" "")" | fx hk-reg-twohost-b)"
+expect "registry: 'host=soleur-registry host=evil' (two host= fields) withholds" 3 no_qualifying_row
+HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registry "$HK_OK_KERNEL" "host=soleur-registry host=soleur-registry")" "")" | fx hk-reg-twohost-c)"
+expect "registry: the registry id repeated (two host= fields) withholds" 3 no_qualifying_row
 # The window is a literal in the SQL text: no caller environment changes it.
 HKP "$T_HK1"; C_ENVX="W=1 WINDOW=1 HOST_KERNEL_WINDOW=1 HOST_KERNEL_WINDOW_S=1 DEADMAN_WINDOW=1 FEEDER_WINDOW=1"
 C_ROWS="$(row s3 "$((20 * H))" "$(hk_good "$T_HK1")" | fx hk-envwin)"; C_BEATS=1; C_APIS=1
@@ -1657,12 +1667,16 @@ import re, sys
 feeder, tf, hs, wf = open(sys.argv[1]).read(), open(sys.argv[2]).read(), open(sys.argv[3]).read(), open(sys.argv[4]).read()
 bad = []
 fh = re.search(r'^readonly FRESH_HOURS=([0-9]+)\s*$', hs, re.M)
-cr = re.search(r"^\s*-\s*cron:\s*'([0-9]+) \* \* \* \*'\s*$", wf, re.M)
+cr = re.search(r"^\s*-\s*cron:\s*'([0-9]+) (\*|\*/[0-9]+) \* \* \*'\s*$", wf, re.M)
 if not fh: bad.append("hk-fresh-hours-not-found-in-helper")
 if not cr: bad.append("hk-feeder-period-not-hourly")
 if not fh or not cr:
     print("\n".join(bad)); sys.exit(0)
-bound, fperiod = int(fh.group(1)) * 3600, 3600
+# The feeder period is DERIVED from the cron's hour field: `*` is every hour, `*/N` every N hours.
+hf = cr.group(2)
+fperiod = 3600 * (1 if hf == "*" else int(hf[2:]))
+if fperiod <= 0: bad.append("hk-feeder-period-not-positive"); print("\n".join(bad)); sys.exit(0)
+bound = int(fh.group(1)) * 3600
 for role in ("web-1", "web-2", "inngest", "registry"):
     t = "host-kernel-" + role
     m = re.search(r'select_target\(\) \{.*?\n\s*' + re.escape(t) + r'\)(.*?);;', feeder, re.S)
@@ -2014,8 +2028,11 @@ wf_marker_violations() { # <workflow-file> -> one line per marker the workflow's
   cond="${line#*'=~ '}"; re="${cond%' ]]; then'*}"
   printf '%s\n' 'safe="$1"' "if [[ \"\$safe\" =~ $re ]]; then exit 0; fi" 'exit 1' > "$out"
   local tg; tg="$(grep -E '^TARGETS=' "$FEEDER_SRC" | head -1)"; tg="${tg#TARGETS=\"}"; tg="${tg%\"}"
+  # The verdict set is DERIVED from the feeder's own marker/fmarker calls, so it cannot drift from what the feeder emits.
+  local verdicts; verdicts="$(grep -oE '\bf?marker "[a-z_]+"' "$FEEDER_SRC" | sed -E 's/^.*"([a-z_]+)"$/\1/' | sort -u)"
+  if [[ -z "$verdicts" ]]; then bad+=$'no-verdicts-derived-from-the-feeder\n'; fi
   for t in $tg none; do
-    for v in qualifying_row_beaten qualifying_row_heartbeat_paused no_qualifying_row query_failed beat_failed; do
+    for v in $verdicts; do
       for m in "deadman-feeder: target=$t verdict=$v" "deadman-feeder: target=$t verdict=$v reason=curl_28 elapsed_ms=12"; do
         bash "$out" "$m" || bad+="marker-not-matched-$t-$v"$'\n'
       done
@@ -2042,10 +2059,47 @@ _mv="$(wf_marker_violations "$WORK/mut/wf-marker-narrow.yml")"
 if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-marker-narrow.yml" && grep -qx 'marker-not-matched-host-kernel-web-1-beat_failed' <<<"$_mv" && grep -qx 'marker-not-matched-host-kernel-web-2-query_failed' <<<"$_mv" && ! grep -q 'marker-not-matched-luks-monitor-host-timer' <<<"$_mv"; then pass "mutation row WF-M is RED: the capture reverted to [a-z-]+ rejects exactly the digit-bearing web-1/web-2 markers"
 else fail "mutation row WF-M: the narrowed target capture was not noticed (or did not land): [$(paste -sd, - <<<"$_mv" | head -c 300)]"; fi
 # The feeder's next-action pointer for a host-kernel withhold must resolve: the runbook and its section heading exist.
+# ONE regex on the host-kernel echo line captures the runbook filename (the cost-marker echo line also names a runbook, so a
+# file-wide grep cannot tell the two apart); the captured name must be a file under the runbooks directory and carry the heading.
+RB_DIR="$REPO/knowledge-base/engineering/operations/runbooks"
+hk_runbook_violations() { # <feeder> <runbooks-dir> -> one line per violation
+  local feeder="$1" dir="$2" line n=0 name=""
+  while IFS= read -r line; do
+    n=$((n + 1))
+    if [[ "$line" =~ ^[[:space:]]*echo\ \"CANNOT\ BEAT:\ next\ action\ for\ \$T:\ see\ the\ Querying\ SOLEUR_HOST_KERNEL\ section\ of\ knowledge-base/engineering/operations/runbooks/([A-Za-z0-9._-]+\.md)\.\"$ ]]; then name="${BASH_REMATCH[1]}"; fi
+  done < <(grep -F 'Querying SOLEUR_HOST_KERNEL section' "$feeder")
+  if (( n != 1 )); then echo "hk-pointer-lines-$n"; fi
+  if [[ -z "$name" ]]; then echo "hk-pointer-shape-or-runbook-name-not-captured"; return; fi
+  if [[ ! -f "$dir/$name" ]]; then echo "hk-pointer-runbook-missing-$name"; return; fi
+  if ! grep -qE '^## Querying `?SOLEUR_HOST_KERNEL`?( |$)' "$dir/$name"; then echo "hk-pointer-heading-missing-in-$name"; fi
+}
 cases=$((cases + 1))
-_rb="$REPO/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
-if grep -qF 'betterstack-log-query.md' "$FEEDER_SRC" && grep -qF 'Querying SOLEUR_HOST_KERNEL section' "$FEEDER_SRC" && [[ -f "$_rb" ]] && grep -qE '^## Querying `?SOLEUR_HOST_KERNEL`?( |$)' "$_rb"; then pass "the feeder's host-kernel runbook pointer resolves: betterstack-log-query.md exists and has its 'Querying SOLEUR_HOST_KERNEL' heading"
-else fail "the feeder's host-kernel runbook pointer (betterstack-log-query.md, 'Querying SOLEUR_HOST_KERNEL') does not resolve"; fi
+_rv="$(hk_runbook_violations "$FEEDER_SRC" "$RB_DIR")"
+if [[ -z "$_rv" ]]; then pass "the feeder's host-kernel runbook pointer resolves: the filename captured from the host-kernel echo line exists under runbooks/ and has its 'Querying SOLEUR_HOST_KERNEL' heading"
+else fail "the feeder's host-kernel runbook pointer does not resolve: $(paste -sd, - <<<"$_rv")"; fi
+# Mutation-proved: the host-kernel line pointed at a runbook that does not exist (the cost line still names a real one), and
+# the heading renamed away in a copy of the runbook.
+mkdir -p "$WORK/mut/rb"
+"$PY" -I - "$FEEDER_SRC" "$WORK/mut/rb-feeder.sh" "$RB_DIR" "$WORK/mut/rb" <<'PYR'
+import sys, re, shutil, os
+s = open(sys.argv[1]).read()
+old = "section of knowledge-base/engineering/operations/runbooks/betterstack-log-query.md.\""
+anchor = "Querying SOLEUR_HOST_KERNEL " + old
+assert s.count(anchor) == 1
+open(sys.argv[2], "w").write(s.replace(anchor, "Querying SOLEUR_HOST_KERNEL section of knowledge-base/engineering/operations/runbooks/no-such-runbook.md.\""))
+rb = open(os.path.join(sys.argv[3], "betterstack-log-query.md")).read()
+head = re.compile(r'^## Querying `?SOLEUR_HOST_KERNEL`?( |$)', re.M)
+assert len(head.findall(rb)) >= 1
+open(os.path.join(sys.argv[4], "betterstack-log-query.md"), "w").write(head.sub("## Querying something else ", rb))
+PYR
+cases=$((cases + 1))
+_rv="$(hk_runbook_violations "$WORK/mut/rb-feeder.sh" "$RB_DIR")"
+if ! cmp -s "$FEEDER_SRC" "$WORK/mut/rb-feeder.sh" && grep -qx 'hk-pointer-runbook-missing-no-such-runbook.md' <<<"$_rv"; then pass "mutation row RB-1 is RED: the host-kernel line pointed at no-such-runbook.md is a violation although the cost line still names a real runbook"
+else fail "mutation row RB-1: a dangling host-kernel runbook pointer was not noticed (or did not land): [$(paste -sd, - <<<"$_rv")]"; fi
+cases=$((cases + 1))
+_rv="$(hk_runbook_violations "$FEEDER_SRC" "$WORK/mut/rb")"
+if ! cmp -s "$RB_DIR/betterstack-log-query.md" "$WORK/mut/rb/betterstack-log-query.md" && grep -qx 'hk-pointer-heading-missing-in-betterstack-log-query.md' <<<"$_rv"; then pass "mutation row RB-2 is RED: the 'Querying SOLEUR_HOST_KERNEL' heading renamed away in a copy of the runbook is a violation"
+else fail "mutation row RB-2: a missing runbook heading was not noticed (or did not land): [$(paste -sd, - <<<"$_rv")]"; fi
 
 echo "== workflow step behaviour (the real run: block against a stubbed feeder) =="
 WF_RUN="$WORK/wf.run.sh"
@@ -2646,6 +2700,9 @@ expect_red HK2-7a "_SYSTEMD_UNIT dropped from the web-2 predicate: a row under s
 land hk2-7b "'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0" "'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), ' host=') = 0"; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_HKI"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw soleur-inngest-prd "$(hk_msg inngest "$HK_OK_KERNEL")"$'\nhost=')" | fx hkm7b)"; C_BEATS=1; C_APIS=1
 expect_red HK2-7b "the host= refusal narrowed back to ' host=' on the inngest predicate: a newline-separated host= row beats" 3 no_qualifying_row 0 beat
+land hk2-7d " > 0) AND countSubstrings(JSONExtractString(raw, 'message'), 'host=') = 1" " > 0)"; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registry "$HK_OK_KERNEL" "host=evil host=soleur-registry")" "")" | fx hkm7d)"; C_BEATS=1; C_APIS=1
+expect_red HK2-7d "the exactly-one host= conjunct dropped from the registry predicate: 'host=evil host=soleur-registry' beats" 3 no_qualifying_row 0 beat
 land hk2-7c "def_pred HK_WEB1_PRED <<'EOF'
 position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND " "def_pred HK_WEB1_PRED <<'EOF'
 "; _m="$M"
@@ -3147,8 +3204,8 @@ fi
 # case AND adding one both trip it (a `<` floor lets a suite grow, or swap a deleted case for an unrelated one,
 # unnoticed). A runtime-derived floor falls with the case. Changing a case means setting them to the counts printed
 # on the "=== N passed ... M beat-call assertions ===" line above.
-MIN_PASSES=717
-MIN_BEAT_ASSERTS=251
+MIN_PASSES=724
+MIN_BEAT_ASSERTS=254
 if (( passes != MIN_PASSES )); then
   printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; a 0-failure tally proves nothing until the floor is re-derived.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

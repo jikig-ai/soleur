@@ -1619,13 +1619,15 @@ enabling collection (ADR-288).
 Each running prod host reports its kernel every 6 hours and once per boot as one plain-text line. The marker feeds the
 `soleur:cve-exposure` host-state helper (`observed` / `stale` / `unknown`) and the per-host dead-man heartbeats
 `soleur-host-kernel-<role>-prd` (`<role>` is `web-1`, `web-2`, `inngest` or `registry`). It rides the log path each host already
-has: journald through Vector for the web hosts and the inngest host, a direct post for the registry, all into the shared Logs
-source. Rollout is operator-held (#12386): until a host has been delivered it emits nothing and reads as `unknown`, which is the
+has: journald through Vector for the web hosts and the inngest host, all into the shared Logs source. The registry's direct post
+is future state: its emitter ships in a separate owner-approved follow-up PR (#12386, because that merge replaces the registry
+host), so until then the registry has no rows and reads `unknown`. Rollout is operator-held (#12386): until a host has been delivered it emits nothing and reads as `unknown`, which is the
 expected state and not a fault. How the marker reaches each host class (carrier, precondition, expected drift) is one table, the
 delivery matrix in the host-kernel section of `workspaces-luks-cutover-6604.md`; it is not restated here.
 
 **Interim state.** Until the arming change (#12386) no feeder verdict line and no page can exist for these hosts: the four
-targets are not in the feeder loop and the four heartbeats are paused. The only read is the credentialed query below.
+targets are not in the feeder loop and the four heartbeats are paused. Interim: the only read is the credentialed query below or
+the credentialed helper (`host-state.sh`).
 
 ```bash
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 12h --grep SOLEUR_HOST_KERNEL --limit 20
@@ -1647,7 +1649,7 @@ journald host (web or inngest), decoded object:
   _SYSTEMD_UNIT       = host-kernel-marker.service
   message             = SOLEUR_HOST_KERNEL v=1 role=<web|inngest> kernel=<uname -r> uptime_s=<n|unknown> reboot_required=<0|1|unknown> sec_updates=<n|unknown>
 
-registry row (posted directly, no Vector stamp, so no host_name and an empty SYSLOG_IDENTIFIER):
+registry row (future state once the follow-up PR delivers it; posted directly, no Vector stamp, so no host_name and an empty SYSLOG_IDENTIFIER):
   message             = SOLEUR_HOST_KERNEL v=1 role=registry kernel=<uname -r> uptime_s=<n|unknown> reboot_required=<0|1|unknown> sec_updates=<n|unknown> host=<registry host id>
 ```
 
@@ -1664,8 +1666,9 @@ registry row (posted directly, no Vector stamp, so no host_name and an empty SYS
   `logger -t`, not the unit). There is no `_HOSTNAME` requirement, an accepted residual. `role=` is only a cross-check: if it
   disagrees with the `host_name`, the row is dropped and the host stays `unknown`. A journald-path row whose message contains the
   substring `host=` anywhere is rejected outright, in both readers.
-- **Registry**: no Vector stamp exists, so the identity is the in-message pair `role=registry` plus `host=<registry host id>`. Both
-  must match; either one alone does not qualify.
+- **Registry** (future state; the readers already decode it, no row exists until the follow-up PR delivers the emitter): no Vector
+  stamp exists, so the identity is the in-message pair `role=registry` plus `host=<registry host id>`. Both must match; either one
+  alone does not qualify.
 - Both the helper and the feeder apply the same table, and a test pins the two copies together.
 - The residuals are the ones the ADR-322 addendum of 2026-11-08 (#12007 review) states. Journald path: with the unit pin a local
   process cannot forge a row, so what remains is root on the host. Registry path: the identity is declared inside the message, so

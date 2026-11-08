@@ -133,6 +133,17 @@ OUT
   none) printf 'Reading package lists...\n'; exit 0 ;;
   fail) printf 'Inst libfixture1 [1.0] (1.1 Fixture:24.04/fixture-security [amd64])\n'; exit 100 ;;
   hang) exec sleep 30 ;;
+  # A hang that IGNORES TERM (the signal `timeout` sends first; `trap ''` is inherited as ignore by the sleeps): only the `timeout -k 2` KILL ends it, so
+  # dropping `-k` leaves this running for the full 25 s and the elapsed-time row below goes RED.
+  hangterm) trap '' TERM; end=$((SECONDS + 25)); while [ "$SECONDS" -lt "$end" ]; do sleep 1; done; exit 0 ;;
+  # One real security-pocket line plus a package NAME containing "-security" on a NON-security pocket (see the pkgname row for the rule it pins).
+  pkgname)
+    cat <<'OUT'
+Reading package lists...
+Inst libfixture1 [1.0] (1.1 Fixture:24.04/fixture-security [amd64])
+Inst foo-security-bar [1] (2 Fixture:24.04/fixture-updates [amd64])
+OUT
+    exit 0 ;;
 esac
 exit 0
 STUB
@@ -190,12 +201,12 @@ eq "web: exact line" "$OUT" "SOLEUR_HOST_KERNEL v=1 role=web kernel=9.9.9-1-gene
 eq "web: stderr empty" "$ERR" ""
 grammar_ok web "$OUT"; ok "web: grammar" $?
 eq "web: exactly one line" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" "1"
-no "web: no host= token" "$([[ "$OUT" == *" host="* ]]; echo $?)"
+no "web: no host= token" "$([[ "$OUT" == *" host="* ]] && echo 0 || echo 1)"
 
 run_hkm --role inngest
 eq "inngest: exit 0" "$RC" "0"
 eq "inngest: exact line" "$OUT" "SOLEUR_HOST_KERNEL v=1 role=inngest kernel=9.9.9-1-generic uptime_s=12345 reboot_required=0 sec_updates=2"
-no "inngest: no host= token" "$([[ "$OUT" == *" host="* ]]; echo $?)"
+no "inngest: no host= token" "$([[ "$OUT" == *" host="* ]] && echo 0 || echo 1)"
 
 run_hkm --role registry
 eq "registry: exit 0" "$RC" "0"
@@ -206,7 +217,7 @@ echo "=== collector: kernel= is followed by one space then uptime_s= ==="
 for k in 9.9.9-1-generic 9.9.9-123-amd64 9.9.9-12-cloud-arm64; do
   reset_fx; printf '%s\n' "$k" > "$FX/uname.out"
   run_hkm --role web
-  [[ "$OUT" == *" kernel=$k uptime_s="* ]]; ok "kernel $k is delimited by a single space and uptime_s=" $?
+  [[ "$OUT" == *" kernel=$k uptime_s="* ]] && R=0 || R=1; ok "kernel $k is delimited by a single space and uptime_s=" "$R"
   grammar_ok web "$OUT"; ok "kernel $k: grammar" $?
 done
 
@@ -229,7 +240,7 @@ odd_kernel leading-space ' 9.9.9-1-generic\n'
 reset_fx; printf '9.9.9-1-generic\n' > "$FX/uname.out"; printf '1\n' > "$FX/uname.rc"
 run_hkm --role web
 eq "uname failing with output: exit 0" "$RC" "0"
-[[ "$OUT" == *" kernel=unreadable uptime_s="* ]]; ok "uname exit 1: kernel=unreadable (no trust in a failed read)" $?
+[[ "$OUT" == *" kernel=unreadable uptime_s="* ]] && R=0 || R=1; ok "uname exit 1: kernel=unreadable (no trust in a failed read)" "$R"
 
 echo "=== collector: uptime_s ==="
 uptime_row() { # <label> <content-or-@missing> <expected>
@@ -250,45 +261,63 @@ uptime_row negative '-5.0 1\n' unknown
 echo "=== collector: reboot_required ==="
 reset_fx; : > "$FX/reboot-required"
 run_hkm --role web
-[[ "$OUT" == *" reboot_required=1 sec_updates="* ]]; ok "reboot-required present -> 1" $?
+[[ "$OUT" == *" reboot_required=1 sec_updates="* ]] && R=0 || R=1; ok "reboot-required present -> 1" "$R"
 reset_fx
 run_hkm --role web
-[[ "$OUT" == *" reboot_required=0 sec_updates="* ]]; ok "reboot-required absent in a readable dir -> 0" $?
+[[ "$OUT" == *" reboot_required=0 sec_updates="* ]] && R=0 || R=1; ok "reboot-required absent in a readable dir -> 0" "$R"
 reset_fx
 HKM_REBOOT_FILE_OVERRIDE="$FX/no-such-dir/reboot-required" run_hkm --role web
-[[ "$OUT" == *" reboot_required=unknown sec_updates="* ]]; ok "unreadable parent dir -> unknown" $?
+[[ "$OUT" == *" reboot_required=unknown sec_updates="* ]] && R=0 || R=1; ok "unreadable parent dir -> unknown" "$R"
 eq "unreadable parent dir: exit 0" "$RC" "0"
 
 echo "=== collector: sec_updates and apt ==="
 reset_fx
 run_hkm --role web
-[[ "$OUT" == *" sec_updates=2" ]]; ok "two '-security' Inst lines counted (updates-only, mixed-pocket and a security-named package on a non-security pocket handled)" $?
+[[ "$OUT" == *" sec_updates=2" ]] && R=0 || R=1; ok "two '-security' Inst lines counted (updates-only, mixed-pocket and a security-named package on a non-security pocket handled)" "$R"
 CALLS="$(cat "$FX/apt.calls" 2>/dev/null || true)"
 eq "apt-get argv is EXACTLY '-s -o Debug::NoLocking=1 upgrade' (simulate, no lock, local lists), invoked once" "$(grep '^ARGS=' <<<"$CALLS" | sort | uniq -c | sed -E 's/^ +//')" "1 ARGS=-s -o Debug::NoLocking=1 upgrade"
-no "apt-get never runs 'update' (local lists only)" "$([[ "$CALLS" == *"ARGS="*" update"* || "$CALLS" == *"ARGS=update"* ]]; echo $?)"
-ok "the PATH apt-get sees includes /usr/sbin" "$([[ "$CALLS" == *"PATH="*"/usr/sbin"* ]]; echo $?)"
-no "the caller's PATH is not inherited" "$([[ "$CALLS" == *"nonexistent-caller-path"* ]]; echo $?)"
-ok "LC_ALL is forced to C" "$([[ "$CALLS" == *"LC_ALL=C"* ]]; echo $?)"
-ok "script source pins the system-only PATH (/usr/sbin:/usr/bin:/sbin:/bin, no /usr/local) and exports LC_ALL=C" "$(grep -qxE 'export PATH=/usr/sbin:/usr/bin:/sbin:/bin' "$SUT" && grep -qE '^export LC_ALL=C$' "$SUT"; echo $?)"
-no "script never puts /usr/local on the PATH it runs apt-get/uname/timeout under" "$(grep -E '^(export )?PATH=' "$SUT" | grep -q '/usr/local'; echo $?)"
+no "apt-get never runs 'update' (local lists only)" "$([[ "$CALLS" == *"ARGS="*" update"* || "$CALLS" == *"ARGS=update"* ]] && echo 0 || echo 1)"
+SEEN_PATH="$(sed -n 's/^PATH=//p' <<<"$CALLS" | sort -u)"
+eq "the PATH apt-get sees is the stub dir followed by EXACTLY /usr/sbin:/usr/bin:/sbin:/bin (recorded by the stub, not a source grep)" "${SEEN_PATH#"$STUBS:"}" "/usr/sbin:/usr/bin:/sbin:/bin"
+no "the caller's PATH is not inherited" "$([[ "$CALLS" == *"nonexistent-caller-path"* ]] && echo 0 || echo 1)"
+ok "LC_ALL is forced to C" "$([[ "$CALLS" == *"LC_ALL=C"* ]] && echo 0 || echo 1)"
+ok "script source exports LC_ALL=C" "$(grep -qE '^export LC_ALL=C$' "$SUT"; echo $?)"
+no "script never puts /usr/local on the PATH it runs apt-get/uname/timeout under" "$(grep -E '^(export )?PATH=.*/usr/local' "$SUT" > /dev/null; echo $?)"
 
 reset_fx; printf 'none\n' > "$FX/apt.mode"
 run_hkm --role web
-[[ "$OUT" == *" sec_updates=0" ]]; ok "apt with nothing pending -> 0 (a zero is a measurement, not unknown)" $?
+[[ "$OUT" == *" sec_updates=0" ]] && R=0 || R=1; ok "apt with nothing pending -> 0 (a zero is a measurement, not unknown)" "$R"
 
 reset_fx; printf 'fail\n' > "$FX/apt.mode"
 run_hkm --role web
 eq "failing apt: exit 0" "$RC" "0"
-[[ "$OUT" == *" sec_updates=unknown" ]]; ok "failing apt -> sec_updates=unknown even with Inst lines on stdout" $?
+[[ "$OUT" == *" sec_updates=unknown" ]] && R=0 || R=1; ok "failing apt -> sec_updates=unknown even with Inst lines on stdout" "$R"
 
 reset_fx; printf 'hang\n' > "$FX/apt.mode"
 START="$SECONDS"
 run_hkm --role web
 ELAPSED=$((SECONDS - START))
 eq "timing-out apt: exit 0" "$RC" "0"
-[[ "$OUT" == *" sec_updates=unknown" ]]; ok "timing-out apt -> sec_updates=unknown" $?
-ok "timing-out apt is bounded (well under the stub's 30 s sleep)" "$([[ "$ELAPSED" -lt 15 ]]; echo $?)"
+[[ "$OUT" == *" sec_updates=unknown" ]] && R=0 || R=1; ok "timing-out apt -> sec_updates=unknown" "$R"
+ok "timing-out apt is bounded (well under the stub's 30 s sleep)" "$([[ "$ELAPSED" -lt 15 ]] && echo 0 || echo 1)"
 grammar_ok web "$OUT"; ok "timing-out apt: the line is still grammatical" $?
+
+# A hang that ignores TERM: bounded only by `timeout -k 2` (KILL after 2 s). Without -k the stub runs its full 25 s, far past the bound below.
+reset_fx; printf 'hangterm\n' > "$FX/apt.mode"
+START="$SECONDS"
+run_hkm --role web
+ELAPSED=$((SECONDS - START))
+eq "TERM-ignoring apt: exit 0" "$RC" "0"
+[[ "$OUT" == *" sec_updates=unknown" ]] && R=0 || R=1; ok "TERM-ignoring apt -> sec_updates=unknown" "$R"
+ok "TERM-ignoring apt is bounded by the KILL escalation (elapsed ${ELAPSED}s, bound 10 s; the stub itself runs 25 s)" "$([[ "$ELAPSED" -lt 10 ]] && echo 0 || echo 1)"
+grammar_ok web "$OUT"; ok "TERM-ignoring apt: the line is still grammatical" $?
+
+# The count rule is the collector's current one: a substring match of -security on the WHOLE Inst line (not the pocket field). A package NAME containing
+# -security on a non-security pocket is therefore counted: 2 here (1 real + 1 by name). sec_updates is display only (never feeds kernel_state), so the
+# overcount is accepted and pinned; tightening the rule is a deliberate edit of the collector (and its three copies) plus this row.
+reset_fx; printf 'pkgname\n' > "$FX/apt.mode"
+run_hkm --role web
+[[ "$OUT" == *" sec_updates=2" ]] && R=0 || R=1; ok "package name foo-security-bar on a non-security pocket: counted by the current whole-line rule (display-only overcount, documented)" "$R"
 
 echo "=== collector: nothing measurable still exits 0 ==="
 reset_fx; printf '1\n' > "$FX/uname.rc"; : > "$FX/uname.out"; rm -f "$FX/uptime"; printf 'fail\n' > "$FX/apt.mode"
@@ -298,7 +327,7 @@ eq "all four measurements failing: every token says so" "$OUT" "SOLEUR_HOST_KERN
 
 echo "=== collector: registry host= ==="
 KM_REGID="$(sed -n "s/^readonly REGISTRY_HOST_ID='\(.*\)'$/\1/p" "$SUT")"
-[[ -n "$KM_REGID" ]]; ok "the collector carries a registry id constant" $?
+[[ -n "$KM_REGID" ]] && R=0 || R=1; ok "the collector carries a registry id constant" "$R"
 reg_host() { # <label> <printf-content-or-@fail>: whatever hostname prints, host= is the constant
   reset_fx
   if [[ "$2" == "@fail" ]]; then printf '1\n' > "$FX/hostname.rc"; : > "$FX/hostname.out"; else printf "$2" > "$FX/hostname.out"; fi
@@ -341,7 +370,7 @@ SEAM_OUT="$(env -i PATH=/usr/bin:/bin HKM_FX="$FX" HKM_STUB_BIN_DIR="$STUBS" HKM
   HKM_APT_TIMEOUT_S=1 "$BASH" "$SUT" --role web 2> /dev/null)"
 SEAM_RC=$?
 eq "seams off: exit 0" "$SEAM_RC" "0"
-no "seams off: the stubbed kernel is not used" "$([[ "$SEAM_OUT" == *"9.9.9"* ]]; echo $?)"
+no "seams off: the stubbed kernel is not used" "$([[ "$SEAM_OUT" == *"9.9.9"* ]] && echo 0 || echo 1)"
 grammar_ok web "$SEAM_OUT"; ok "seams off: the real read still has the exact grammar" $?
 
 echo "=== units: plain service and timer (no systemd template) ==="
@@ -354,6 +383,7 @@ no "service: the test seam is never set by the unit" "$(grep -q 'HKM_' "$SVC"; e
 ok "service: TimeoutStartSec=60 (above the collector's own 20 s apt bound)" "$(grep -qxE 'TimeoutStartSec=60' "$SVC"; echo $?)"
 ok "service: IOSchedulingClass=idle" "$(grep -qxE 'IOSchedulingClass=idle' "$SVC"; echo $?)"
 ok "service: CPUSchedulingPolicy=idle" "$(grep -qxE 'CPUSchedulingPolicy=idle' "$SVC"; echo $?)"
+ok "service: OOMPolicy=continue (an OOM kill of apt degrades sec_updates to unknown, it must not stop the unit before the line prints)" "$(grep -qxE 'OOMPolicy=continue' "$SVC"; echo $?)"
 ok "service: MemoryMax=256M (a kill degrades the row to unknown tokens)" "$(grep -qxE 'MemoryMax=256M' "$SVC"; echo $?)"
 no "service: no Restart= (a oneshot is re-run by its timer only)" "$(grep -qE '^Restart=' "$SVC"; echo $?)"
 ok "timer: OnBootSec=2min" "$(grep -qxE 'OnBootSec=2min' "$TMR"; echo $?)"
@@ -364,7 +394,7 @@ no "timer: no AccuracySec override (the 1min default is what it would restate)" 
 ok "timer: WantedBy=timers.target" "$(grep -qxE 'WantedBy=timers\.target' "$TMR"; echo $?)"
 no "timer: no OnUnitActiveSec (cadence is the calendar, not drift)" "$(grep -qE '^OnUnitActiveSec=' "$TMR"; echo $?)"
 no "timer: no template specifier" "$(grep -qE '%[iIn]' "$TMR"; echo $?)"
-ok "no file in the set is a systemd template (no '@' in a name)" "$([[ "$(basename "$SUT")$(basename "$SVC")$(basename "$TMR")" != *@* ]]; echo $?)"
+ok "no file in the set is a systemd template (no '@' in a name)" "$([[ "$(basename "$SUT")$(basename "$SVC")$(basename "$TMR")" != *@* ]] && echo 0 || echo 1)"
 
 echo "=== sandbox copy: the four files run green from an empty directory ==="
 if [[ "${HKM_TEST_SANDBOXED:-0}" != 1 ]]; then
@@ -377,19 +407,19 @@ if [[ "${HKM_TEST_SANDBOXED:-0}" != 1 ]]; then
   ok "sandbox copy: reports its own pass line" "$(grep -q '^host-kernel-marker: PASS' "$WORK/sandbox.log"; echo $?)"
 else
   # Sandbox child: same row count as the parent, so one literal floor covers both. These two rows prove the child really ran the COPIES, alone in its directory.
-  no "sandbox child: the collector under test is a copy, not the repo original" "$([[ -n "${HKM_ORIG_SUT:-}" && "$SUT" -ef "$HKM_ORIG_SUT" ]]; echo $?)"
+  no "sandbox child: the collector under test is a copy, not the repo original" "$([[ -n "${HKM_ORIG_SUT:-}" && "$SUT" -ef "$HKM_ORIG_SUT" ]] && echo 0 || echo 1)"
   eq "sandbox child: the directory holds exactly the four files" "$(cd "$SCRIPT_DIR" && ls | tr '\n' ' ')" "host-kernel-marker.service host-kernel-marker.sh host-kernel-marker.test.sh host-kernel-marker.timer "
 fi
 
 echo "=== static: no durable real-world strings ==="
 no "suite/script carry no kernel-shaped string outside the synthesized 9.9.9 family" \
-  "$(grep -hoE '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z]+' "$SUT" "$SVC" "$TMR" "${BASH_SOURCE[0]}" | grep -vE '^9\.9\.9-' | grep -q .; echo $?)"
+  "$(grep -hoE '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z]+' "$SUT" "$SVC" "$TMR" "${BASH_SOURCE[0]}" | grep -vE '^9\.9\.9-' > /dev/null; echo $?)"
 
 echo
 # MIN_CASES is the EXACT measured count, parent and sandbox child alike (the child runs two sandbox-only rows where the parent runs the two sandbox-copy
 # rows, so one literal holds for both: no slack for an assertion to vanish into). A literal bound directly above its floor (the vacuity ratchet builds its
 # mutant from that shape); the floor is a direct printf + exit 1, never routed through fail().
-MIN_CASES=168
+MIN_CASES=174
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'host-kernel-marker: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

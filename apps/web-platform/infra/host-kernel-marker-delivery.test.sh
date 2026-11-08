@@ -6,15 +6,19 @@
 #                                 fresh-boot-parity.test.sh section 13d pins their shape). HELD: operator-applied, see terraform-target-parity.test.ts.
 #   web fresh hosts               image bake (server.tf host_script_files, Dockerfile COPY, .dockerignore) -> soleur-host-bootstrap.sh -> cloud-init.yml
 #   inngest dedicated host        inngest-bootstrap.sh writes the collector and its OWN unit pair from quoted heredocs. This suite extracts the three
-#                                 heredocs and compares them byte-for-byte to the repo files (the unit differs ONLY in `--role inngest`).
+#                                 heredocs and compares them byte-for-byte to the repo files (the unit differs ONLY in `--role inngest`), pins that the
+#                                 destination assignments equal the web installers' destination paths, and pins that every install step is guarded
+#                                 (set -euo pipefail) AND reports a failure through a shipped journald line. Whole-line `#` comments are stripped from the
+#                                 install block before any check, so a commented-out step cannot satisfy a pin.
 #                                 The OCI bootstrap image already carries inngest-bootstrap.sh, so cloud-init-inngest.yml (its STAGED list) and
 #                                 build-inngest-bootstrap-image.yml stay unchanged; the host receives the script only through the digest-pinned bootstrap
 #                                 image, so a replaced host gets the emitter after a new bootstrap tag is minted and the pin is bumped.
-#   registry host                 cloud-init-registry.yml write_files, a plain inline `content: |` entry (like zot-disk-heartbeat.sh in the same file): a copy of the
-#                                 repo file indented 6 spaces with each dollar-brace doubled for templatefile. This suite compares the entry to the file BEFORE the render
-#                                 (unescape + dedent == file) and, when terraform is on PATH, AFTER it: the stored form goes through registry-userdata-budget.sh and the
-#                                 whole-line comment strip (local.registry_rationale_strip, extracted from zot-registry.tf), and must equal the file with that strip applied.
-#                                 zot-disk-heartbeat.sh calls it at most once per 6 h AFTER its own post, reusing that script's post() and token judge.
+#   registry host                 EXEMPT, keyed to #12386. A merged change to cloud-init-registry.yml auto-fires registry-host-replace-dispatch.yml (deliver=true when the
+#                                 offline-rendered user_data differs from the merge base), which REPLACES the production registry host with no reviewer gate, so the
+#                                 registry emitter ships in a follow-up PR. Until then cloud-init-registry.yml, zot-registry.tf and registry-userdata-budget.sh carry NO
+#                                 collector (the R rows pin that), the collector already accepts `--role registry`, and its registry id constant equals the id host-state.sh
+#                                 pins (the Y rows). The follow-up PR flips this exemption ON PURPOSE: the R ratchet goes RED the moment a collector token enters the registry
+#                                 cloud-init, and that PR replaces the R rows with the delivery pins.
 #
 # APPLY PATH (nothing applied by a merge). Neither hcloud_server.registry nor hcloud_server.inngest may appear in any per-merge job of
 # apply-web-platform-infra.yml (only the *_host_replace dispatch jobs name them; the host_creates HALT counts create-or-replace and cannot be bypassed
@@ -29,10 +33,9 @@ WORKFLOW="${SOLEUR_APPLY_WORKFLOW:-$ROOT/.github/workflows/apply-web-platform-in
 HELPER="${SOLEUR_HOST_STATE_SH:-$ROOT/plugins/soleur/skills/cve-exposure/scripts/host-state.sh}"
 
 python3 - "$INFRA" "$WORKFLOW" "$HELPER" <<'PYEOF'
-import base64, gzip, os, re, shutil, subprocess, sys, tempfile
+import os, re, shutil, subprocess, sys, tempfile
 
 INFRA, WORKFLOW, HELPER = sys.argv[1], sys.argv[2], sys.argv[3]
-FLOOR_CHECKS = 0  # assigned below (43 with terraform on PATH, 42 without); EXACT (a checker that evaluates fewer ids has lost a family, more has gained one unpinned)
 
 npass = nfail = 0
 def ok(m):
@@ -53,6 +56,7 @@ def load():
         "cloud-init-registry.yml": read(d("cloud-init-registry.yml")),
         "zot-registry.tf": read(d("zot-registry.tf")),
         "registry-userdata-budget.sh": read(d("registry-userdata-budget.sh")),
+        "server.tf": read(d("server.tf")),
         "helper": read(HELPER),
         "workflow": read(WORKFLOW),
     }
@@ -64,10 +68,6 @@ def heredocs(text):
     for m in re.finditer(r"""cat > "?\$?\{?(\w+)\}?"? <<'(HKM\w*EOF)'[^\n]*\n(.*?)\n\2\n""", text, re.S):
         out[m.group(2)] = m.group(3) + "\n"
     return out
-
-def yaml_entry(yml, path):
-    m = re.search(r"^  - path: " + re.escape(path) + r"\n(.*?)(?=^  - path: |^  # ---|\Z)", yml, re.S | re.M)
-    return m.group(1) if m else None
 
 def workflow_jobs(wf):
     head = re.search(r"^jobs:\n", wf, re.M)
@@ -83,27 +83,16 @@ def job_needs(block):
     m = re.search(r"^    needs:(.*?)(?=^    [A-Za-z_-]+:|\Z)", block, re.S | re.M)
     return re.findall(r"[A-Za-z0-9_-]+", m.group(1)) if m else []
 
-def render_registry(files):
-    """Render cloud-init-registry.yml through the REAL budget script; the stripped render, None without terraform, ("ERR", text) on failure."""
-    if shutil.which("terraform") is None: return None
-    d = tempfile.mkdtemp(prefix="hkmdeliv.")
-    try:
-        mirror = os.path.join(d, "infra"); os.makedirs(mirror)
-        for n, key in (("zot-registry.tf", "zot-registry.tf"), ("cloud-init-registry.yml", "cloud-init-registry.yml"),
-                       ("registry-userdata-budget.sh", "registry-userdata-budget.sh")):
-            with open(os.path.join(mirror, n), "w") as f: f.write(files[key])
-        out = os.path.join(d, "rendered.yml")
-        r = subprocess.run(["bash", os.path.join(mirror, "registry-userdata-budget.sh"), out], capture_output=True, text=True, cwd=d)
-        if not os.path.exists(out): return ("ERR", r.stdout + r.stderr)
-        return read(out)
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
+def strip_whole_line_comments(text):
+    """Drop every line whose first non-blank character is `#`, so a commented-out step cannot satisfy a pin."""
+    return "".join(l for l in text.splitlines(True) if not l.lstrip().startswith("#"))
 
-def entry_body(ent):
-    """The dedented lines of a `content: |` block scalar (6-space indent, blank lines kept), or None."""
-    m = re.search(r"^    content: \|\n((?:      [^\n]*\n|\n)+)", ent, re.M)
+def web_dests(tf, res):
+    """{extension: destination} of the three provisioner "file" destinations of one web installer resource, or None."""
+    m = re.search(r'resource "terraform_data" "' + re.escape(res) + r'" \{\n(.*?)^\}', tf, re.S | re.M)
     if not m: return None
-    return "".join(l[6:] if l.startswith("      ") else l for l in m.group(1).splitlines(True))
+    dests = re.findall(r'^\s*destination\s*=\s*"([^"]+)"', strip_whole_line_comments(m.group(1)), re.M)
+    return {d.rsplit(".", 1)[1]: d for d in dests} if len(dests) == 3 else None
 
 def collector_host(col, name):
     """Run the REAL collector with a stub `hostname` printing <name>; return its trailing host= token."""
@@ -121,21 +110,9 @@ def collector_host(col, name):
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
-def strip_comments(text, tf):
-    """Apply local.registry_rationale_strip, EXTRACTED from zot-registry.tf (Go RE2 and Python agree on this shape), to the collector."""
-    m = re.search(r'^\s*registry_rationale_strip\s*=\s*"/(\(\?m\).*?)/"', tf, re.M)
-    assert m, "registry_rationale_strip not found"
-    pat = m.group(1).replace("(?m)", "", 1).replace("\\t", "\t").replace("\\n", "\n")
-    return re.sub(pat, "", text, flags=re.M)
-
-HB_PATH = "/usr/local/bin/zot-disk-heartbeat.sh"
-HKM_RE_EXPECTED = "HKM_RE='^SOLEUR_HOST_KERNEL v=1 role=registry kernel=[0-9a-z.-]+ uptime_s=[0-9a-z]+ reboot_required=[0-9a-z]+ sec_updates=[0-9a-z]+ host=soleur-registry$'"
-HKM_DEGRADED_EXPECTED = 'HKM_LINE="SOLEUR_HOST_KERNEL v=1 role=registry kernel=unreadable uptime_s=unknown reboot_required=unknown sec_updates=unknown host=soleur-registry"'
-# the reader's kernel shape (host-state.sh / the feeder qualify a row only on it); the degraded line must NOT match it
-KERNEL_SHAPE = re.compile(r"kernel=[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z0-9-]+ ")
 EVAL_COUNT = 0
 
-def check(files, with_render=True):
+def check(files):
     """Return the list of failing check ids."""
     global EVAL_COUNT
     bad = []
@@ -154,74 +131,48 @@ def check(files, with_render=True):
     chk("I-timer", hd.get("HKMTIMEREOF") == files["timer"])
     chk("I-identifier", re.search(r"^SyslogIdentifier=host-kernel-marker$", hd.get("HKMUNITEOF", ""), re.M) is not None)
     m = re.search(r"# host-kernel-marker:begin\n(.*?)# host-kernel-marker:end", ib, re.S)
-    blk = m.group(1) if m else ""
+    # EVERY pin below reads the block with whole-line comments stripped: a step commented out must not satisfy it.
+    blk = strip_whole_line_comments(m.group(1)) if m else ""
     chk("I-block", bool(blk))
     chk("I-gated-on-dedicated-host", re.match(r'\s*if \[\[ "\$DOPPLER_PROJECT" == "soleur-inngest" \]\]; then\n', blk) is not None)
-    chk("I-enable", "systemctl enable --now host-kernel-marker.timer" in blk and re.search(r"systemctl start host-kernel-marker\.service \|\| log ", blk) is not None)
+    chk("I-enable", "systemctl enable --now host-kernel-marker.timer" in blk and re.search(r"systemctl start host-kernel-marker\.service \|\| hkm_warn oneshot_start ", blk) is not None)
     chk("I-reload-before-enable", 0 <= blk.find("systemctl daemon-reload") < blk.find("systemctl enable --now host-kernel-marker.timer"))
     chk("I-script-mode-0755", re.search(r"chmod 0755 \"?\$\{?HKM_SCRIPT\}?\"?", blk) is not None)
-    # Observability, never a gate: inngest-bootstrap.sh is `set -euo pipefail`, so every step of the block must log-and-continue on failure.
-    chk("I-guarded-writes", len(re.findall(r"""cat > "\$HKM_(?:SCRIPT|UNIT|TIMER)" <<'HKM\w*EOF' \|\| log "warn: """, blk)) == 3
-        and re.search(r'chmod 0755 "\$HKM_SCRIPT" \|\| log "warn: ', blk) is not None)
-    chk("I-guarded-reload", re.search(r'^  systemctl daemon-reload \|\| log "warn: ', blk, re.M) is not None)
+    # Observability, never a gate: inngest-bootstrap.sh is `set -euo pipefail`, so every step of the block must report-and-continue on failure.
+    chk("I-guarded-writes", len(re.findall(r"""cat > "\$HKM_(?:SCRIPT|UNIT|TIMER)" <<'HKM\w*EOF' \|\| hkm_warn write_(?:script|unit|timer) \"""", blk)) == 3
+        and re.search(r'chmod 0755 "\$HKM_SCRIPT" \|\| hkm_warn chmod_script "', blk) is not None)
+    chk("I-guarded-reload", re.search(r'^  systemctl daemon-reload \|\| hkm_warn daemon_reload "', blk, re.M) is not None)
+    chk("I-guarded-enable", re.search(r'^  systemctl enable --now host-kernel-marker\.timer \|\| hkm_warn timer_enable "', blk, re.M) is not None)
+    # Every guarded failure is ALSO a shipped journald line (`log` goes to the bootstrap's stderr only, which is not shipped): one helper, seven call sites.
+    chk("I-warn-logger", re.search(r'^  hkm_warn\(\) \{\n    log "warn: host-kernel-marker \$2"\n    logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=\$1" \|\| true\n  \}$', blk, re.M) is not None)
+    logger_lines = [l for l in blk.splitlines() if l.lstrip().startswith("logger ")]
+    chk("I-warn-not-a-marker", len(logger_lines) == 1 and "SOLEUR_HOST_KERNEL" not in logger_lines[0])
+    chk("I-warn-call-sites", len(re.findall(r" \|\| hkm_warn [a-z_]+ \"", blk)) == 7)
+    # The destination assignments equal the web installers' destination paths (a rename here installs a second, unreviewed copy that the web pair does not own).
+    w1 = web_dests(files["server.tf"], "host_kernel_marker_install")
+    w2 = web_dests(files["server.tf"], "host_kernel_marker_install_web2")
+    chk("I-dest-web-pair-found", w1 is not None and w1 == w2 and set(w1) == {"sh", "service", "timer"})
+    for var, ext in (("HKM_SCRIPT", "sh"), ("HKM_UNIT", "service"), ("HKM_TIMER", "timer")):
+        a = re.findall(r'^  ' + var + r'="([^"]+)"$', blk, re.M)
+        chk(f"I-dest-{ext}-equals-web-installer", w1 is not None and a == [w1.get(ext)])
 
-    # ── R: registry ───────────────────────────────────────────────────────────────────────────────────────────────
+    # ── R: registry host is EXEMPT (#12386) ───────────────────────────────────────────────────────────────────────
+    # A merged cloud-init-registry.yml change auto-fires the production registry host REPLACE (registry-host-replace-dispatch.yml), so this PR must carry NO registry
+    # emitter. The follow-up PR flips the exemption on purpose; these rows go RED the moment a collector token enters the registry cloud-init / render inputs.
     ci = files["cloud-init-registry.yml"]
-    ent = yaml_entry(ci, "/usr/local/bin/host-kernel-marker.sh")
-    chk("R-entry", ent is not None)
-    e = ent or ""
-    body = entry_body(e)
-    chk("R-entry-shape", "encoding:" not in e and body is not None and body.startswith("#!/usr/bin/env bash\n")
-        and "permissions: '0755'" in e and "owner: root:root" in e)
-    chk("R-no-gz-var", "host_kernel_marker_gz_b64" not in files["zot-registry.tf"] and "host_kernel_marker_gz_b64" not in files["registry-userdata-budget.sh"]
-        and "host_kernel_marker_gz_b64" not in ci)
-    chk("R-no-unescaped-interpolation", body is not None and re.search(r"(?<!\$)\$\{", body) is None and "%{" not in body)
-    # the pre-render copy: unescape the template escape, and the entry must be the repo file byte for byte (comments included)
-    chk("R-inline-copy-equals-collector", body is not None and body.replace("$${", "${") == col)
-    if with_render:
-        rendered = render_registry(files)
-        if rendered is None:
-            if os.environ.get("CI"):
-                bad.append("R-render-unmeasurable"); EVAL_COUNT += 1
-            else:
-                print("[skip] R-render: terraform not on PATH (local dev; fails closed in CI)")
-        elif isinstance(rendered, tuple):
-            bad.append("R-render-failed:" + rendered[1][-300:]); EVAL_COUNT += 1
-        else:
-            # the stored form: comments stripped by the SAME expression the real render uses; the shebang (`#!`) must survive it
-            rbody = entry_body(yaml_entry(rendered, "/usr/local/bin/host-kernel-marker.sh") or "")
-            chk("R-render-bytes-equal-collector", rbody is not None and rbody == strip_comments(col, files["zot-registry.tf"]) and rbody.startswith("#!/usr/bin/env bash\n"))
-
-    # zot-disk-heartbeat.sh call site
-    hb = yaml_entry(ci, HB_PATH) or ""
-    hb_m = re.search(r"# hkm:begin\n(.*?)# hkm:end", hb, re.S)
-    call = hb_m.group(1) if hb_m else ""
-    chk("H-block", bool(call))
-    chk("H-single-post-and-judge", hb.count("post() {") == 1 and hb.count("_bs_ok() {") == 1)
-    i_post = hb.find("post || post ||"); i_call = hb.find("# hkm:begin"); i_elif = hb.find('elif [ -n "$TOKEN" ]')
-    chk("H-after-existing-post-inside-token-branch", 0 <= i_post < i_call < i_elif)
-    chk("H-collector-role-registry", "/usr/local/bin/host-kernel-marker.sh --role registry" in call)
-    chk("H-bounded", re.search(r"timeout -k 2 [0-9]+ ", call) is not None)
-    chk("H-stamp-in-run", re.search(r"HKM_STAMP=/run/[A-Za-z0-9._-]+\n", call) is not None and "-mmin +359" in call)
-    chk("H-retry-stamp-in-run", re.search(r"HKM_RETRY=/run/[A-Za-z0-9._-]+\n", call) is not None and "-mmin +29" in call
-        and re.search(r'touch "\$HKM_RETRY"', call) is not None)
-    # the collector runs under an ALLOWLISTED environment (env -i + a fixed PATH); a denylist of seam names is open-ended and was replaced.
-    chk("H-env-allowlisted", "env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin timeout -k 2 45 /usr/local/bin/host-kernel-marker.sh --role registry" in call and "env -u" not in call)
-    chk("H-whole-line-judge", HKM_RE_EXPECTED in call and re.search(r'\[\[ "\$HKM_LINE" =~ \$HKM_RE \]\]', call) is not None)
-    chk("H-output-judged", "SOLEUR_HOST_KERNEL v=1 role=registry " in call and re.search(r'LINE="\$\{?HKM_LINE\}?"', call.replace("$$", "$")) is not None)
-    # a collector that yields nothing valid posts a degraded line that FAILS the reader's kernel shape and names the state
-    chk("H-degraded-line", HKM_DEGRADED_EXPECTED in call)
-    chk("H-failure-swallowed", not re.search(r"^\s*set -[a-z]*e", hb, re.M) and 'HKM_LINE=""' in call and re.search(r"\n      exit 0\n    owner: root:root", hb) is not None)
+    chk("R-exempt-no-collector-path", "host-kernel-marker" not in ci)
+    chk("R-exempt-no-marker-token", "SOLEUR_HOST_KERNEL" not in ci)
+    chk("R-exempt-render-inputs-untouched", all(x not in files[f] for f in ("zot-registry.tf", "registry-userdata-budget.sh") for x in ("host_kernel_marker", "host-kernel-marker", "SOLEUR_HOST_KERNEL")))
+    chk("R-collector-accepts-role-registry", re.search(r"^  web \| inngest \| registry\) :", col, re.M) is not None)
 
     # ── Y: registry host identity ─────────────────────────────────────────────────────────────────────────────────
     helper_id = re.search(r"^readonly REGISTRY_HOST_ID='([^']+)'$", files["helper"], re.M)
+    coll_id = re.search(r"^readonly REGISTRY_HOST_ID='([^']+)'$", col, re.M)
     tf_name = re.search(r'resource "hcloud_server" "registry" \{\s*\n\s*name\s*=\s*"([^"]+)"', files["zot-registry.tf"])
-    chk("Y-id-found", helper_id is not None and tf_name is not None)
+    chk("Y-id-found", helper_id is not None and tf_name is not None and coll_id is not None)
     chk("Y-helper-id-equals-server-name", helper_id is not None and tf_name is not None and helper_id.group(1) == tf_name.group(1))
+    chk("Y-collector-id-constant-equals-helper-id", helper_id is not None and coll_id is not None and helper_id.group(1) == coll_id.group(1))
     chk("Y-no-hostname-override", re.search(r"^\s*(preserve_hostname|hostname|fqdn):", ci, re.M) is None)
-    if helper_id is not None:
-        # The two host literals in the call site (the whole-line judge and the degraded line) are the registry id the helper pins.
-        chk("Y-call-site-host-literals-equal-helper-id", len(re.findall(r" host=" + re.escape(helper_id.group(1)) + r"""["'$]""", call)) == 2 and call.count("host=") == 2)
     if helper_id is not None and tf_name is not None:
         # The host's hostname is the Terraform server name (no cloud-init override, Y-no-hostname-override); the collector's host= for the registry role must
         # equal the id the helper pins, or the helper rejects every registry row as unattributable and the host stays unknown forever.
@@ -245,103 +196,23 @@ def check(files, with_render=True):
     chk("A-ssh-stage-found", "-target=terraform_data.egress_gateway_web2" in ssh_stage and "-target=terraform_data.nonlocal_bind_sysctl_web2" in ssh_stage)
     return bad
 
-# ── behaviour of the registry call site (the REAL snippet, absolute paths pointed at a sandbox) ───────────────────────
-GOOD_LINE = "SOLEUR_HOST_KERNEL v=1 role=registry kernel=9.9.9-1-test uptime_s=1 reboot_required=0 sec_updates=0 host=soleur-registry"
-DEGRADED = "SOLEUR_HOST_KERNEL v=1 role=registry kernel=unreadable uptime_s=unknown reboot_required=unknown sec_updates=unknown host=soleur-registry"
-SECRET = "doppler-injected-secret-sentinel"
-def run_call_site(files, collector, stamp=None, retry=None, post_fails=False):
-    """stamp/retry: None (absent) | "fresh" | "mid" (10 min old) | "old" (40 min old for retry, ancient for stamp)."""
-    hb = yaml_entry(files["cloud-init-registry.yml"], HB_PATH) or ""
-    m = re.search(r"# hkm:begin\n(.*?)# hkm:end", hb, re.S)
-    if not m: return None
-    snippet = m.group(1).replace("$$", "$")
-    d = tempfile.mkdtemp(prefix="hkmcall.")
-    try:
-        coll = os.path.join(d, "collector.sh"); stampf = os.path.join(d, "stamp"); retryf = os.path.join(d, "retry")
-        posted = os.path.join(d, "posted"); ran = os.path.join(d, "ran"); seen = os.path.join(d, "seenenv")
-        pre = f'touch "{ran}"; env > "{seen}"; '
-        body = {"ok": f'echo "{GOOD_LINE}"',
-                "trailing": f'echo "{GOOD_LINE} t=1"',
-                "otherhost": f'echo "{GOOD_LINE.replace("host=soleur-registry", "host=other-host")}"',
-                "multiline": f'echo "{GOOD_LINE}"; echo "{GOOD_LINE}"',
-                "uppercase": f'echo "{GOOD_LINE.replace("kernel=9.9.9-1-test", "kernel=9.9.9-1-Test")}"',
-                "garbage": 'echo "not a marker"', "fail": "exit 7", "empty": ":", "missing": None}[collector]
-        if body is not None:
-            with open(coll, "w") as f: f.write("#!/bin/sh\n" + pre + body + "\n")
-            os.chmod(coll, 0o755)
-        snippet = snippet.replace("/usr/local/bin/host-kernel-marker.sh", coll)
-        snippet = re.sub(r"HKM_STAMP=/run/[A-Za-z0-9._-]+", "HKM_STAMP=" + stampf, snippet)
-        snippet = re.sub(r"HKM_RETRY=/run/[A-Za-z0-9._-]+", "HKM_RETRY=" + retryf, snippet)
-        now = __import__("time").time()
-        for path, kind, old in ((stampf, stamp, 1.0), (retryf, retry, now - 2400)):
-            if kind is None: continue
-            open(path, "w").close()
-            if kind == "mid": os.utime(path, (now - 600, now - 600))
-            if kind == "old": os.utime(path, (old, old))
-        post_body = "return 1" if post_fails else f"printf '%s\\n' \"$LINE\" >> '{posted}'"
-        prog = f"set -u\nTOKEN=tok\nLINE=original\n_bs_ok() {{ return 0; }}\npost() {{ {post_body}; }}\n{snippet}\necho done-rc=$?\n"
-        env = dict(os.environ, HKM_TEST="1", HKM_STUB_BIN_DIR="/nonexistent", DOPPLER_SENTINEL=SECRET)
-        r = subprocess.run(["bash", "-c", prog], capture_output=True, text=True, env=env, timeout=90)
-        posts = read(posted).splitlines() if os.path.exists(posted) else []
-        out = r.stdout.strip().splitlines()
-        seen_env = read(seen) if os.path.exists(seen) else None
-        return {"rc_line": out[-1] if out else "", "posts": posts, "stamp": os.path.exists(stampf), "retry": os.path.exists(retryf),
-                "ran": os.path.exists(ran), "seen_env": seen_env, "err": r.stderr[-200:]}
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
-
 real = load()
 
 # ── 1. the real tree is clean ─────────────────────────────────────────────────────────────────────────────────────────
 before = EVAL_COUNT
 got = check(real)
 n_eval = EVAL_COUNT - before
-HAVE_TF = shutil.which("terraform") is not None
-FLOOR_CHECKS = 43 if HAVE_TF else 42
 if not got: ok(f"real tree: all {n_eval} delivery checks hold")
 else: no(f"real tree: failing checks {got}")
 # The id-count floor is EXACT and reported by a direct print + exit 1, never through no(): a family lost (or one added without moving this number)
-# must fail even if the verdict helpers were neutered. Without terraform the render arm is skipped, hence one fewer.
+# must fail even if the verdict helpers were neutered. No check depends on terraform or the CI environment.
+FLOOR_CHECKS = 37
 if n_eval != FLOOR_CHECKS:
     print(f"host-kernel-marker-delivery: FAIL (checker evaluated {n_eval} ids, expected exactly {FLOOR_CHECKS}: a check family was lost or added without moving the floor)")
     sys.exit(1)
 ok(f"checker evaluated exactly {n_eval} ids (floor {FLOOR_CHECKS})")
 
-# ── 2. behaviour of the registry call site ────────────────────────────────────────────────────────────────────────────
-def fmt(r):
-    return "None" if r is None else {k: r[k] for k in ("posts", "stamp", "retry", "ran", "rc_line")}
-def good(r, stamped): return bool(r) and r["posts"] == [GOOD_LINE] and r["stamp"] == stamped and r["retry"] and r["rc_line"] == "done-rc=0"
-r = run_call_site(real, "ok")
-(ok if good(r, True) else no)(f"call site: no stamp -> posts the collector line once through post(), writes the 6 h stamp and the retry stamp, rc 0 ({fmt(r)})")
-(ok if r and r["seen_env"] is not None and SECRET not in r["seen_env"] and "HKM_TEST" not in r["seen_env"] and "HKM_STUB_BIN_DIR" not in r["seen_env"]
-    and "PATH=/usr/sbin:/usr/bin:/sbin:/bin" in r["seen_env"] else no)(
-    f"call site: the collector sees ONLY the allowlisted environment (no inherited secret, no test seam; fixed system PATH) ({r and r['seen_env'] and r['seen_env'].replace(chr(10), ' ')[-120:]})")
-r = run_call_site(real, "ok", stamp="fresh")
-(ok if r and r["posts"] == [] and not r["ran"] and r["rc_line"] == "done-rc=0" else no)(f"call site: fresh 6 h stamp -> the collector does not even run ({fmt(r)})")
-r = run_call_site(real, "ok", stamp="old")
-(ok if good(r, True) else no)(f"call site: 6 h stamp older than 6 h, no retry stamp -> posts again ({fmt(r)})")
-r = run_call_site(real, "ok", stamp="old", retry="fresh")
-(ok if r and r["posts"] == [] and not r["ran"] and r["rc_line"] == "done-rc=0" else no)(f"call site: stale 6 h stamp but a fresh retry stamp -> the collector does not run (retry throttle) ({fmt(r)})")
-r = run_call_site(real, "ok", stamp="old", retry="mid")
-(ok if r and r["posts"] == [] and not r["ran"] else no)(f"call site: retry stamp 10 min old -> still throttled ({fmt(r)})")
-r = run_call_site(real, "ok", stamp="old", retry="old")
-(ok if good(r, True) else no)(f"call site: retry stamp 40 min old -> runs again ({fmt(r)})")
-r = run_call_site(real, "ok", retry="fresh")
-(ok if r and r["posts"] == [] and not r["ran"] else no)(f"call site: no 6 h stamp but a fresh retry stamp (a failed first attempt) -> throttled, not re-run on the next 5-min tick ({fmt(r)})")
-for what in ("garbage", "fail", "empty", "missing", "trailing", "otherhost", "multiline", "uppercase"):
-    r = run_call_site(real, what)
-    (ok if r and r["posts"] == [DEGRADED] and not r["stamp"] and r["retry"] and r["rc_line"] == "done-rc=0" else no)(
-        f"call site: collector '{what}' -> exactly the degraded line is posted, no 6 h stamp, retry stamp written, rc 0 ({fmt(r)})")
-(ok if KERNEL_SHAPE.search(DEGRADED) is None and "kernel=unreadable" in DEGRADED and DEGRADED.endswith(" host=soleur-registry") else no)(
-    "call site: the degraded line fails the reader's kernel shape and names the state")
-r = run_call_site(real, "ok", post_fails=True)
-(ok if r and r["posts"] == [] and not r["stamp"] and r["retry"] and r["rc_line"] == "done-rc=0" else no)(
-    f"call site: a failing post() is swallowed (rc 0), writes no 6 h stamp, but DOES write the retry stamp so ingest trouble costs at most one collector run per 30 min ({fmt(r)})")
-r = run_call_site(real, "garbage", post_fails=True)
-(ok if r and r["posts"] == [] and not r["stamp"] and r["retry"] and r["rc_line"] == "done-rc=0" else no)(
-    f"call site: a broken collector AND a failing post() still ends rc 0 with the retry stamp ({fmt(r)})")
-
-# ── 3. mutation battery ───────────────────────────────────────────────────────────────────────────────────────────────
+# ── 2. mutation battery ───────────────────────────────────────────────────────────────────────────────────────────────
 def on(name, fn):
     def mut(files):
         out = dict(files); new = fn(files[name]); assert new != files[name], "mutation did not land"; out[name] = new; return out
@@ -354,55 +225,43 @@ def resub(pat, rep):
     def f(s):
         new, n = re.subn(pat, rep, s, count=1, flags=re.M | re.S); assert n == 1, f"pattern {pat!r} did not match"; return new
     return f
-def hoist(s):
-    m = re.search(r"      # hkm:begin\n.*?      # hkm:end\n", s, re.S)
-    assert m, "no hkm block"
-    blk = m.group(0)
-    s2 = s.replace(blk, "", 1)
-    assert "        post() {" in s2
-    return s2.replace("        post() {", blk + "        post() {", 1)
 
 SSH_TAIL = "-target=terraform_data.egress_gateway_web2 2>&1"
+ENABLE_LINE = '  systemctl enable --now host-kernel-marker.timer || hkm_warn timer_enable "timer enable failed (#12007)"'
 MUTANTS = [
     ("inngest: collector copy drifts one byte", on("inngest-bootstrap.sh", resub(r"(<<'HKMSCRIPTEOF'[^\n]*\n.*?)exit 0\n", r"\1exit 1\n")), ["I-script"]),
     ("inngest: unit loses --role inngest", on("inngest-bootstrap.sh", sub("host-kernel-marker.sh --role inngest", "host-kernel-marker.sh --role web")), ["I-service"]),
+    ("inngest: unit loses OOMPolicy=continue (the service and its heredoc copy drift)", on("inngest-bootstrap.sh", sub("OOMPolicy=continue\n", "")), ["I-service"]),
     ("inngest: SyslogIdentifier changed", on("inngest-bootstrap.sh", resub(r"(<<'HKMUNITEOF'[^\n]*\n.*?)SyslogIdentifier=host-kernel-marker\n", r"\1SyslogIdentifier=host-kernel-markerX\n")), ["I-identifier", "I-service"]),
     ("inngest: timer cadence drifts", on("inngest-bootstrap.sh", resub(r"(<<'HKMTIMEREOF'[^\n]*\n.*?)OnBootSec=2min", r"\1OnBootSec=9min")), ["I-timer"]),
     ("inngest: install not gated on the dedicated host", on("inngest-bootstrap.sh", resub(r'(# host-kernel-marker:begin\n)if \[\[ "\$DOPPLER_PROJECT" == "soleur-inngest" \]\]; then', r"\1if true; then")), ["I-gated-on-dedicated-host"]),
-    ("inngest: timer never enabled", on("inngest-bootstrap.sh", sub("systemctl enable --now host-kernel-marker.timer", "true")), ["I-enable"]),
+    ("inngest: timer never enabled", on("inngest-bootstrap.sh", sub("systemctl enable --now host-kernel-marker.timer ||", "true ||")), ["I-enable", "I-guarded-enable"]),
+    ("inngest: the timer enable is COMMENTED OUT (a whole-line comment must not satisfy the pin)", on("inngest-bootstrap.sh", sub(ENABLE_LINE, "  # " + ENABLE_LINE.lstrip())), ["I-enable", "I-guarded-enable", "I-reload-before-enable"]),
+    ("inngest: the timer enable is unguarded under set -e", on("inngest-bootstrap.sh", sub(' || hkm_warn timer_enable "timer enable failed (#12007)"', "")), ["I-guarded-enable", "I-warn-call-sites"]),
+    ("inngest: the oneshot start is unguarded under set -e", on("inngest-bootstrap.sh", sub(' || hkm_warn oneshot_start "oneshot non-zero (timer will retry in 6h)"', "")), ["I-enable", "I-warn-call-sites"]),
     ("inngest: unit gains a second --role web mention (the role rewrite is no longer a single swap)", on("service", lambda s: s + "# --role web\n"), ["I-service-has-role-web-once"]),
     ("inngest: collector not made executable", on("inngest-bootstrap.sh", sub('chmod 0755 "$HKM_SCRIPT"', 'chmod 0644 "$HKM_SCRIPT"')), ["I-script-mode-0755"]),
-    ("inngest: collector write unguarded under set -e", on("inngest-bootstrap.sh", sub(" || log \"warn: host-kernel-marker collector write failed (#12007)\"", "")), ["I-guarded-writes"]),
-    ("inngest: chmod unguarded under set -e", on("inngest-bootstrap.sh", sub('chmod 0755 "$HKM_SCRIPT" || log "warn: host-kernel-marker chmod failed (#12007)"', 'chmod 0755 "$HKM_SCRIPT"')), ["I-guarded-writes"]),
-    ("inngest: daemon-reload unguarded under set -e", on("inngest-bootstrap.sh", sub(' || log "warn: host-kernel-marker daemon-reload failed (#12007)"', "")), ["I-guarded-reload"]),
+    ("inngest: collector write unguarded under set -e", on("inngest-bootstrap.sh", sub(' || hkm_warn write_script "collector write failed (#12007)"', "")), ["I-guarded-writes"]),
+    ("inngest: chmod unguarded under set -e", on("inngest-bootstrap.sh", sub('chmod 0755 "$HKM_SCRIPT" || hkm_warn chmod_script "chmod failed (#12007)"', 'chmod 0755 "$HKM_SCRIPT"')), ["I-guarded-writes"]),
+    ("inngest: daemon-reload unguarded under set -e", on("inngest-bootstrap.sh", sub(' || hkm_warn daemon_reload "daemon-reload failed (#12007)"', "")), ["I-guarded-reload"]),
     ("inngest: daemon-reload dropped", on("inngest-bootstrap.sh", resub(r"(# host-kernel-marker:begin\n.*?)systemctl daemon-reload", r"\1true")), ["I-reload-before-enable"]),
-    ("registry: write_files entry removed", on("cloud-init-registry.yml", sub("- path: /usr/local/bin/host-kernel-marker.sh", "- path: /usr/local/bin/other.sh")), ["R-entry"]),
-    ("registry: entry grows an encoding key (the retired gz+b64 form)", on("cloud-init-registry.yml", sub("- path: /usr/local/bin/host-kernel-marker.sh\n", "- path: /usr/local/bin/host-kernel-marker.sh\n    encoding: gz+b64\n")), ["R-entry-shape"]),
-    ("registry: shebang lost from the entry", on("cloud-init-registry.yml", resub(r"(host-kernel-marker\.sh\n    content: \|\n)      #!/usr/bin/env bash\n", r"\1")), ["R-entry-shape", "R-inline-copy-equals-collector"]),
-    ("registry: the retired gz var returns in zot-registry.tf", on("zot-registry.tf", sub("private_ip = local.registry_private_ip\n", "private_ip = local.registry_private_ip\n    host_kernel_marker_gz_b64 = \"x\"\n")), ["R-no-gz-var"]),
-    ("registry: the retired gz var returns in the budget script", on("registry-userdata-budget.sh", sub("betterstack_ingest_url = \"${BS_INGEST_URL}\"\n", "betterstack_ingest_url = \"${BS_INGEST_URL}\"\n    host_kernel_marker_gz_b64 = \"x\"\n")), ["R-no-gz-var"]),
-    ("registry: inline copy drifts from the collector (code line changed)", on("cloud-init-registry.yml", resub(r"(host-kernel-marker\.sh\n    content: \|\n.*?)      exit 0\n", r"\1      exit 1\n")), ["R-inline-copy-equals-collector"]),
-    ("registry: a dollar-brace left unescaped in the entry (templatefile would interpolate it)", on("cloud-init-registry.yml", resub(r"(host-kernel-marker\.sh\n    content: \|\n.*?)\$\$\{HKM_TEST", r"\1${HKM_TEST")), ["R-no-unescaped-interpolation"]),
-    ("registry: heartbeat call removed", on("cloud-init-registry.yml", resub(r"      # hkm:begin\n.*?      # hkm:end\n", "")), ["H-block"]),
-    ("registry: heartbeat call precedes the existing post", on("cloud-init-registry.yml", hoist), ["H-after-existing-post-inside-token-branch"]),
-    ("registry: a fifth copy of the token judge", on("cloud-init-registry.yml", resub(r"(      # hkm:begin\n)", r"\1      _bs_ok() { return 0; }\n")), ["H-single-post-and-judge"]),
-    ("registry: a second post() definition", on("cloud-init-registry.yml", resub(r"(      # hkm:begin\n)", r"\1      post() { :; }\n")), ["H-single-post-and-judge"]),
-    ("registry: no timeout bound", on("cloud-init-registry.yml", resub(r"timeout -k 2 [0-9]+ ", "")), ["H-bounded"]),
-    ("registry: env allowlist dropped (inherits the doppler environment)", on("cloud-init-registry.yml", sub("env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin timeout", "timeout")), ["H-env-allowlisted"]),
-    ("registry: allowlist reverted to a seam denylist", on("cloud-init-registry.yml", sub("env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin timeout", "env -u HKM_TEST timeout")), ["H-env-allowlisted"]),
-    ("registry: collector role drifts", on("cloud-init-registry.yml", resub(r"(# hkm:begin.*?host-kernel-marker\.sh --role )registry", r"\1web")), ["H-collector-role-registry"]),
-    ("registry: posted line no longer the judged one", on("cloud-init-registry.yml", resub(r'(# hkm:begin.*?)LINE="\$HKM_LINE"', r'\1LINE="$HKM_RAW"')), ["H-output-judged"]),
-    ("registry: whole-line judge loses its end anchor", on("cloud-init-registry.yml", sub("host=soleur-registry$'", "host=soleur-registry'")), ["H-whole-line-judge"]),
-    ("registry: whole-line judge no longer applied", on("cloud-init-registry.yml", sub("if ! [[ \"$HKM_LINE\" =~ $HKM_RE ]]; then", "if false; then")), ["H-whole-line-judge"]),
-    ("registry: degraded line would qualify as a kernel", on("cloud-init-registry.yml", sub("kernel=unreadable uptime_s=unknown reboot_required=unknown sec_updates=unknown host=soleur-registry\"\n", "kernel=9.9.9-1-x uptime_s=unknown reboot_required=unknown sec_updates=unknown host=soleur-registry\"\n")), ["H-degraded-line"]),
-    ("registry: degraded line carries another host id", on("cloud-init-registry.yml", sub("sec_updates=unknown host=soleur-registry\"\n", "sec_updates=unknown host=soleur-registry2\"\n")), ["H-degraded-line", "Y-call-site-host-literals-equal-helper-id"]),
-    ("registry: retry stamp never written", on("cloud-init-registry.yml", sub('touch "$HKM_RETRY" 2>/dev/null || true', "true")), ["H-retry-stamp-in-run"]),
-    ("registry: retry stamp moved out of /run", on("cloud-init-registry.yml", sub("HKM_RETRY=/run/", "HKM_RETRY=/var/lib/")), ["H-retry-stamp-in-run"]),
-    ("registry: retry throttle window removed", on("cloud-init-registry.yml", sub("-mmin +29", "-mmin +0")), ["H-retry-stamp-in-run"]),
+    ("inngest: the shipped logger line is dropped from the failure helper", on("inngest-bootstrap.sh", resub(r'    logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=\$1" \|\| true\n', "")), ["I-warn-logger"]),
+    ("inngest: the logger line loses its '|| true' (a missing logger would abort the bootstrap)", on("inngest-bootstrap.sh", sub('step=$1" || true', 'step=$1"')), ["I-warn-logger"]),
+    ("inngest: the logger message becomes a SOLEUR_HOST_KERNEL row (a failed install would read as a kernel row)", on("inngest-bootstrap.sh", sub("HOST_KERNEL_MARKER_INSTALL_WARN step=", "SOLEUR_HOST_KERNEL v=1 step=")), ["I-warn-logger", "I-warn-not-a-marker"]),
+    ("inngest: a failure path reverts to a bare log (not shipped)", on("inngest-bootstrap.sh", sub('|| hkm_warn timer_enable "timer enable failed (#12007)"', '|| log "warn: host-kernel-marker timer enable failed (#12007)"')), ["I-guarded-enable", "I-warn-call-sites"]),
+    ("inngest: collector destination renamed (a second, unowned copy)", on("inngest-bootstrap.sh", sub('HKM_SCRIPT="/usr/local/bin/host-kernel-marker.sh"', 'HKM_SCRIPT="/usr/local/bin/host-kernel-marker2.sh"')), ["I-dest-sh-equals-web-installer"]),
+    ("inngest: service destination renamed", on("inngest-bootstrap.sh", sub('HKM_UNIT="/etc/systemd/system/host-kernel-marker.service"', 'HKM_UNIT="/etc/systemd/system/host-kernel-marker2.service"')), ["I-dest-service-equals-web-installer"]),
+    ("inngest: timer destination moved", on("inngest-bootstrap.sh", sub('HKM_TIMER="/etc/systemd/system/host-kernel-marker.timer"', 'HKM_TIMER="/run/systemd/system/host-kernel-marker.timer"')), ["I-dest-timer-equals-web-installer"]),
+    ("web installer: the web-2 collector destination drifts from web-1's", on("server.tf", resub(r'(resource "terraform_data" "host_kernel_marker_install_web2" \{.*?destination\s*=\s*")/usr/local/bin/host-kernel-marker\.sh"', r'\1/usr/local/bin/hkm.sh"')), ["I-dest-web-pair-found"]),
+    # R: the registry exemption is a ratchet. Each mutation is what the follow-up PR would do; it must go RED so flipping the exemption is deliberate.
+    ("registry ratchet: the collector path appears in cloud-init-registry.yml", on("cloud-init-registry.yml", lambda s: s + "\n# /usr/local/bin/host-kernel-marker.sh\n"), ["R-exempt-no-collector-path"]),
+    ("registry ratchet: the SOLEUR_HOST_KERNEL token appears in cloud-init-registry.yml", on("cloud-init-registry.yml", lambda s: s + "\n# SOLEUR_HOST_KERNEL\n"), ["R-exempt-no-marker-token"]),
+    ("registry ratchet: a collector var appears in zot-registry.tf", on("zot-registry.tf", lambda s: s + "\n# host_kernel_marker_gz_b64\n"), ["R-exempt-render-inputs-untouched"]),
+    ("registry ratchet: a collector var appears in the budget script", on("registry-userdata-budget.sh", lambda s: s + "\n# host_kernel_marker_gz_b64\n"), ["R-exempt-render-inputs-untouched"]),
+    ("registry: the collector stops accepting --role registry", on("collector", sub("web | inngest | registry) :", "web | inngest) :")), ["R-collector-accepts-role-registry"]),
     ("registry: a hostname override is introduced", on("cloud-init-registry.yml", lambda s: s + "\npreserve_hostname: true\n"), ["Y-no-hostname-override"]),
-    ("registry: stamp moved out of /run", on("cloud-init-registry.yml", sub("HKM_STAMP=/run/", "HKM_STAMP=/var/lib/")), ["H-stamp-in-run"]),
-    ("registry: heartbeat script gains set -e", on("cloud-init-registry.yml", sub("      set -u\n      # (#8386) cron's own PATH", "      set -eu\n      # (#8386) cron's own PATH")), ["H-failure-swallowed"]),
-    ("identity: helper id drifts", on("helper", sub("readonly REGISTRY_HOST_ID='soleur-registry'", "readonly REGISTRY_HOST_ID='soleur-registry2'")), ["Y-helper-id-equals-server-name", "Y-collector-host-equals-helper-id"]),
+    ("identity: helper id drifts", on("helper", sub("readonly REGISTRY_HOST_ID='soleur-registry'", "readonly REGISTRY_HOST_ID='soleur-registry2'")), ["Y-helper-id-equals-server-name", "Y-collector-id-constant-equals-helper-id", "Y-collector-host-equals-helper-id"]),
+    ("identity: the collector's id constant drifts", on("collector", sub("readonly REGISTRY_HOST_ID='soleur-registry'", "readonly REGISTRY_HOST_ID='soleur-registry2'")), ["Y-collector-id-constant-equals-helper-id", "Y-collector-host-equals-helper-id"]),
     ("identity: server renamed", on("zot-registry.tf", resub(r'(resource "hcloud_server" "registry" \{\s*\n\s*name\s*=\s*"soleur-registry)"', r'\1-b"')), ["Y-helper-id-equals-server-name"]),
     ("apply: registry replace added to the per-merge apply job", on("workflow", sub(SSH_TAIL, "-target=terraform_data.egress_gateway_web2 -target=hcloud_server.registry 2>&1")), ["A-hcloud_server.registry-in-no-per-merge-job"]),
     ("apply: inngest replace added to the per-merge apply job", on("workflow", sub(SSH_TAIL, "-target=terraform_data.egress_gateway_web2 -replace=hcloud_server.inngest 2>&1")), ["A-hcloud_server.inngest-in-no-per-merge-job"]),
@@ -412,11 +271,12 @@ MUTANTS = [
     ("apply: web-2 installer enters the SSH stage", on("workflow", sub(SSH_TAIL, "-target=terraform_data.egress_gateway_web2 -target=terraform_data.host_kernel_marker_install_web2 2>&1")), ["A-terraform_data.host_kernel_marker_install_web2-in-no-target-list"]),
     ("apply: the dispatch jobs stop naming the registry (vacuity)", on("workflow", lambda s: s.replace("hcloud_server.registry'", "hcloud_server.registry_gone'")), ["A-hcloud_server.registry-named-by-a-dispatch-job"]),
     ("HARMLESS: comment appended to the helper", on("helper", lambda s: s + "\n# harmless\n"), []),
+    ("HARMLESS: a whole-line comment added inside the inngest install block", on("inngest-bootstrap.sh", sub("# host-kernel-marker:end", "# a harmless extra comment mentioning systemctl enable --now host-kernel-marker.timer\n# host-kernel-marker:end")), []),
 ]
 
 for label, mut, expect in MUTANTS:
     try:
-        got = check(mut(real), with_render=False)
+        got = check(mut(real))
     except AssertionError as e:
         no(f"mutant '{label}': mutation did not land ({e}) -- fix the anchor, a vacuous mutant proves nothing")
         continue
@@ -426,18 +286,6 @@ for label, mut, expect in MUTANTS:
         ok(f"mutant '{label}' killed by {expect}")
     else:
         no(f"mutant '{label}' NOT killed by {expect} (failing: {got})")
-
-# The render arm: a collector CODE edit that is not mirrored into the inngest heredocs and the registry entry must be caught by all three members, the registry one
-# both before the render (inline copy) and after it (stored form). A comment-only edit is invisible to the stored form by design (the strip), but not to the others.
-if HAVE_TF:
-    mut = dict(real); mut["collector"] = real["collector"] + ":\n"
-    got = check(mut, with_render=True)
-    (ok if all(x in got for x in ("I-script", "R-inline-copy-equals-collector", "R-render-bytes-equal-collector")) else no)(
-        f"mutant 'collector code edited, no copy re-synced': inngest parity, the inline registry copy and the stored form all fire (failing: {got})")
-    mut = dict(real); mut["collector"] = real["collector"] + "# drift\n"
-    got = check(mut, with_render=True)
-    (ok if "R-inline-copy-equals-collector" in got and "I-script" in got and "R-render-bytes-equal-collector" not in got else no)(
-        f"mutant 'collector comment edited, no copy re-synced': both byte copies fire, the comment-stripped stored form does not (failing: {got})")
 
 print(f"=== host-kernel-marker-delivery: {npass} passed, {nfail} failed ===")
 sys.exit(1 if nfail else 0)

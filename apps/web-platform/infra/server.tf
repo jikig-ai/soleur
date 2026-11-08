@@ -271,9 +271,9 @@ locals {
     "web-bash-synthetic.timer",
     "sdk-bash-verdict.sh",
     # SOLEUR_HOST_KERNEL periodic marker (#12007): the collector and its plain (non-template) unit pair. Baked for the same reason as the
-    # probes above (the SSH installers below reach running hosts only); the inngest and registry hosts carry their own copies of the
-    # collector (inngest-bootstrap.sh heredocs, cloud-init-registry.yml inline entry), pinned to this file by host-kernel-marker-delivery.test.sh (the registry copy
-    # byte-equal modulo the template escapes and the render-time whole-line comment strip).
+    # probes above (the SSH installers below reach running hosts only); the inngest host carries its own copy of the collector
+    # (inngest-bootstrap.sh heredocs), pinned byte-equal to this file by host-kernel-marker-delivery.test.sh. The registry host is EXEMPT from
+    # this PR (#12386): a cloud-init-registry.yml change auto-fires the registry host replace, so its emitter ships in a follow-up PR.
     "host-kernel-marker.sh",
     "host-kernel-marker.service",
     "host-kernel-marker.timer",
@@ -1140,7 +1140,7 @@ resource "terraform_data" "web_bash_synthetic_install_web2" {
 # host-kernel dead-man feeder). Shape of web_bash_synthetic_install, minus any credential: the collector needs no env file and no token.
 # A fresh host gets the same files from the image bake (host_script_files) + soleur-host-bootstrap.sh + cloud-init.yml.
 # OPERATOR_APPLIED_EXCLUSIONS (terraform-target-parity.test.ts) and NOT in the SSH-stage -target list of apply-web-platform-infra.yml:
-# a merge installs nothing on a running host. No dispatch mode targets the installers either: delivery requires an operator edit to the SSH-stage -target list
+# a merge installs no collector on a running web host (the merge still re-delivers vector.toml). No dispatch mode targets the installers either: delivery requires an operator edit to the SSH-stage -target list
 # of apply-web-platform-infra.yml AND to both exclusion sets (EXCLUSION_ALLOWLIST and OPERATOR_APPLIED_EXCLUSIONS in terraform-target-parity.test.ts), then an apply (#12386,
 # decision-challenges.md last operator row).
 resource "terraform_data" "host_kernel_marker_install" {
@@ -1188,7 +1188,7 @@ resource "terraform_data" "host_kernel_marker_install" {
       "systemctl daemon-reload",
       "systemctl enable --now host-kernel-marker.timer",
       # OnBootSec does not refire on an already-booted host: start the oneshot once so the first row ships now, not at the next slot.
-      "systemctl start host-kernel-marker.service",
+      "systemctl start host-kernel-marker.service || echo \"warn: host-kernel-marker first run non-zero (the timer retries in 6h)\"",
       "systemctl list-timers host-kernel-marker.timer --no-pager",
     ]
   }
@@ -1242,7 +1242,7 @@ resource "terraform_data" "host_kernel_marker_install_web2" {
       "systemctl daemon-reload",
       "systemctl enable --now host-kernel-marker.timer",
       # OnBootSec does not refire on an already-booted host: start the oneshot once so the first row ships now, not at the next slot.
-      "systemctl start host-kernel-marker.service",
+      "systemctl start host-kernel-marker.service || echo \"warn: host-kernel-marker first run non-zero (the timer retries in 6h)\"",
       "systemctl list-timers host-kernel-marker.timer --no-pager",
     ]
   }

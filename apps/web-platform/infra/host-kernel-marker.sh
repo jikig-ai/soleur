@@ -18,7 +18,7 @@
 #     (^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z0-9-]+$); anything else (empty, multi-line, upper-case flavour, shell
 #     metacharacters, a failed read) is the literal `unreadable`. No raw host-controlled string ever reaches the line.
 #   - A measurement failure is a token value (`unknown` / `unreadable`), NEVER a non-zero exit: this runs from a timer
-#     and a cron wrapper, and a failing unit would turn a missing apt list into a journal storm. The only non-zero
+#     (and, once the registry emitter ships in its follow-up PR, #12386, from a cron wrapper), and a failing unit would turn a missing apt list into a journal storm. The only non-zero
 #     exit is 64 (usage: bad or missing role), which prints nothing on stdout.
 #
 # sec_updates is DISPLAY ONLY. It counts `^Inst .*-security` lines of a SIMULATED `apt-get -s upgrade` over the LOCAL

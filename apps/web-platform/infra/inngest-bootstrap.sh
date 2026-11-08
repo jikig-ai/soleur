@@ -1962,7 +1962,15 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   HKM_SCRIPT="/usr/local/bin/host-kernel-marker.sh"
   HKM_UNIT="/etc/systemd/system/host-kernel-marker.service"
   HKM_TIMER="/etc/systemd/system/host-kernel-marker.timer"
-  cat > "$HKM_SCRIPT" <<'HKMSCRIPTEOF' || log "warn: host-kernel-marker collector write failed (#12007)"
+  # hkm_warn <step> <message>: every guarded failure below goes through it. `log` writes to the bootstrap's stderr only, which is NOT shipped off-box, so a
+  # failed install would be invisible without SSH (hr-no-ssh-fallback-in-runbooks); the `logger` line reaches journald under the allowlisted tag
+  # (vector.toml Source 4) and so Better Stack. It is deliberately NOT a SOLEUR_HOST_KERNEL row (readers parse only that prefix), and `|| true` keeps
+  # a missing logger from aborting the bootstrap under set -euo pipefail.
+  hkm_warn() {
+    log "warn: host-kernel-marker $2"
+    logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=$1" || true
+  }
+  cat > "$HKM_SCRIPT" <<'HKMSCRIPTEOF' || hkm_warn write_script "collector write failed (#12007)"
 #!/usr/bin/env bash
 # host-kernel-marker.sh --role <web|inngest|registry>
 #
@@ -1983,7 +1991,7 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
 #     (^[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z0-9-]+$); anything else (empty, multi-line, upper-case flavour, shell
 #     metacharacters, a failed read) is the literal `unreadable`. No raw host-controlled string ever reaches the line.
 #   - A measurement failure is a token value (`unknown` / `unreadable`), NEVER a non-zero exit: this runs from a timer
-#     and a cron wrapper, and a failing unit would turn a missing apt list into a journal storm. The only non-zero
+#     (and, once the registry emitter ships in its follow-up PR, #12386, from a cron wrapper), and a failing unit would turn a missing apt list into a journal storm. The only non-zero
 #     exit is 64 (usage: bad or missing role), which prints nothing on stdout.
 #
 # sec_updates is DISPLAY ONLY. It counts `^Inst .*-security` lines of a SIMULATED `apt-get -s upgrade` over the LOCAL
@@ -2073,8 +2081,8 @@ fi
 printf '%s\n' "$line"
 exit 0
 HKMSCRIPTEOF
-  chmod 0755 "$HKM_SCRIPT" || log "warn: host-kernel-marker chmod failed (#12007)"
-  cat > "$HKM_UNIT" <<'HKMUNITEOF' || log "warn: host-kernel-marker unit write failed (#12007)"
+  chmod 0755 "$HKM_SCRIPT" || hkm_warn chmod_script "chmod failed (#12007)"
+  cat > "$HKM_UNIT" <<'HKMUNITEOF' || hkm_warn write_unit "unit write failed (#12007)"
 [Unit]
 Description=Report the running kernel to the host log (SOLEUR_HOST_KERNEL, #12007)
 Documentation=https://github.com/jikig-ai/soleur/issues/12007
@@ -2090,14 +2098,17 @@ SyslogIdentifier=host-kernel-marker
 # and no EnvironmentFile. It exits 0 on every measurement failure (the failure is a token value in the line).
 TimeoutStartSec=60
 Nice=10
-# Background work: the simulated apt upgrade must never compete with the workload on the host. A MemoryMax kill degrades the
-# row to unknown tokens (the collector never fails the unit), it does not take the host down.
+# Background work: the simulated apt upgrade must never compete with the workload on the host. A MemoryMax OOM kill of apt must degrade
+# sec_updates to `unknown`, not stop the unit before the line prints: systemd's default OOMPolicy (stop) would tear the whole unit down on
+# the first kill in the cgroup, and the collector's contract is a printed line with token values, never a non-zero exit.
+# OOMPolicy=continue keeps the unit running so the collector prints its row. It does not take the host down either way.
+OOMPolicy=continue
 IOSchedulingClass=idle
 CPUSchedulingPolicy=idle
 MemoryMax=256M
 ExecStart=/usr/local/bin/host-kernel-marker.sh --role inngest
 HKMUNITEOF
-  cat > "$HKM_TIMER" <<'HKMTIMEREOF' || log "warn: host-kernel-marker timer write failed (#12007)"
+  cat > "$HKM_TIMER" <<'HKMTIMEREOF' || hkm_warn write_timer "timer write failed (#12007)"
 [Unit]
 Description=Report the running kernel every 6 hours and shortly after boot (SOLEUR_HOST_KERNEL, #12007)
 
@@ -2113,11 +2124,11 @@ RandomizedDelaySec=15min
 [Install]
 WantedBy=timers.target
 HKMTIMEREOF
-  systemctl daemon-reload || log "warn: host-kernel-marker daemon-reload failed (#12007)"
+  systemctl daemon-reload || hkm_warn daemon_reload "daemon-reload failed (#12007)"
   # Observability, never a gate: `enable --now` arms the timer (OnBootSec does not refire on an already-booted host), and the immediate `start` ships
   # the first row now. Source 4 (vector.toml host_scripts_journald) allowlists the SyslogIdentifier.
-  systemctl enable --now host-kernel-marker.timer || log "warn: host-kernel-marker timer enable failed (#12007)"
-  systemctl start host-kernel-marker.service || log "warn: host-kernel-marker oneshot non-zero (timer will retry in 6h)"
+  systemctl enable --now host-kernel-marker.timer || hkm_warn timer_enable "timer enable failed (#12007)"
+  systemctl start host-kernel-marker.service || hkm_warn oneshot_start "oneshot non-zero (timer will retry in 6h)"
 fi
 # host-kernel-marker:end
 

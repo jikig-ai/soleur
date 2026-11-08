@@ -301,13 +301,7 @@ const GIT_DATA_FLOOR = 20_000;
 // 8,000 B headroom POLICY (24,767 B ceiling) is unchanged. This node-zlib model can differ from
 // terraform's base64gzip by a few hundred bytes, so the figure above is the authority and CI's
 // registry-userdata-budget job is the check.
-// (#12007, 2026-11-08) 21_600 -> 22_400. The registry host now writes the SOLEUR_HOST_KERNEL collector as a plain inline write_files entry (a copy of the repo file,
-// whole-line comments stripped at render time, ~2.3 KB raw) and zot-disk-heartbeat.sh gains the at-most-once-per-6h call site (reusing its post() and token judge;
-// 30 min retry stamp, whole-line grammar judge, degraded line). registry-userdata-budget.sh measures 22,888 B stored (was 21,552 B; +1,336 B), this node-zlib model
-// 22,276 B, so the tripwire slack over the model is 124 B and 9,880 B of real headroom remains under HETZNER_CAP, above the 8,000 B headroom POLICY
-// (24,767 B ceiling), which is unchanged. THE NEXT REGISTRY-HOST ADDITION MUST SHRINK SOMETHING FIRST: there is no slack left to spend, and raising this constant
-// again without a structural shrink is how the earlier raises (#8714, #9373, this one) accumulated.
-const REGISTRY_GZIP_BUDGET = 22_400;
+const REGISTRY_GZIP_BUDGET = 21_600;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;

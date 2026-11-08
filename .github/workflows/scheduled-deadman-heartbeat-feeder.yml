@@ -77,8 +77,13 @@ jobs:
           # an hourly run would report a dark host as a feeder fault and train the operator to ignore this monitor. The
           # arming change adds the four names here in the same change that stages their unpause (tracked in #12386); the
           # harness pins this list to the script's target table minus the harness's DEFERRED_TARGETS set (that set lives
-          # only in the test, not in the script). The job timeout (6 minutes) must be revisited at arming: 7 sequential targets
-          # have a worst case of about 665 s, which does not fit in 6 minutes.
+          # only in the test, not in the script). TIMEOUT CHECKLIST (revisit the job timeout of 6 minutes at arming, #12386). The
+          # per-target worst case is the 60 s query plus the 20 s API read and the 15 s beat (95 s), except the luks no-row
+          # path, which adds two 60 s counts-only diagnostic queries to its 60 s query (180 s). CURRENT worst case with the
+          # 3 armed targets: 180 + 95 + 95 = about 370 s, ALREADY over the 360 s timeout (a run that hits every worst case
+          # at once is cancelled before the last target). With the four host-kernel names added, 7 sequential targets have
+          # a worst case of about 665 s, which does not fit in 6 minutes either. The harness does not assert this
+          # arithmetic (it would be red today); the arming change must raise the timeout or split the loop.
           all_decided=true
           for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do
             rc=0

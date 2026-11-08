@@ -31,8 +31,8 @@ Holds (never in this run, each needs an explicit per-command go-ahead): apply, h
 
 - 3.1 Web: `server.tf` bake list, installers (web-1 and web-2 twin, sibling shape), `OPERATOR_APPLIED_EXCLUSIONS` entries, `.dockerignore`, `Dockerfile` COPY, `soleur-host-bootstrap.sh`, `cloud-init.yml`, parity tests (`W2_ALLOWED`), `fresh-boot-parity.test.sh`, user-data size test
 - 3.2 Inngest: `inngest-bootstrap.sh` writes and enables its own unit pair; bootstrap image build carries the collector; byte-parity test; `inngest-userdata-budget.sh`
-- 3.3 Registry: `cloud-init-registry.yml` collector, `zot-disk-heartbeat.sh` once-per-6h call after the existing post, stamp in `/run`, registry id constant; `registry-userdata-budget.sh`; budget and sweep batteries
-- 3.4 Apply-path assertions: heartbeat `-target` lines in the main list; registry/inngest absent from per-merge targets
+- 3.3 Registry: collector support only (`--role registry`, helper and feeder decode, the paused `host-kernel-registry` heartbeat). The registry emitter (`cloud-init-registry.yml`, the once-per-6h call in `zot-disk-heartbeat.sh`, `registry-userdata-budget.sh`) is a follow-up PR the owner approves before it merges, because its merge auto-fires `registry-host-replace-dispatch.yml` and replaces the production registry host (#12386). Registry stays `unknown` until then
+- 3.4 Apply-path assertions: heartbeat `-target` lines in the main list; registry/inngest absent from per-merge targets; `cloud-init-registry.yml` unchanged against the merge base, so the dispatcher's render gate emits deliver=false
 
 ## Phase 4: Alert and runbooks
 

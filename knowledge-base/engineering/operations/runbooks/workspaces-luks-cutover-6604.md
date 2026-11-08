@@ -1180,11 +1180,11 @@ is named in the Precondition column.
 
 | Host class | Carrier | Precondition | Expected drift until delivered |
 |---|---|---|---|
-| web-1 (running) | `terraform_data.host_kernel_marker_install` (SSH provisioner over the tunnel) | the owner releases the hold: the installer leaves `OPERATOR_APPLIED_EXCLUSIONS` and joins the SSH-stage target list, or a dispatched run applies it | a standing create on the twice-daily plan |
+| web-1 (running) | `terraform_data.host_kernel_marker_install` (SSH provisioner over the tunnel) | the owner releases the hold by editing the SSH-stage `-target` list and both exclusion sets (`EXCLUSION_ALLOWLIST`, `OPERATOR_APPLIED_EXCLUSIONS`), then applying; no dispatch mode targets the installers (`server.tf` and `terraform-target-parity.test.ts` say so) | a standing create on the twice-daily plan |
 | web-2 (running) | `terraform_data.host_kernel_marker_install_web2` (same forward through the web-1 bastion as the other web-2 twins) | the same release as web-1 | a standing create on the twice-daily plan |
 | a freshly born web host | cloud-init bake of the collector and the timer | none: it ships with the image the host is born from | none |
 | inngest host | the emitter embedded in `inngest-bootstrap.sh`, delivered ONLY through the digest-pinned bootstrap OCI image | a new bootstrap tag is minted and the pin is bumped. A replaced host boots with whatever the pin names, and a routine bootstrap-version bump re-runs the bootstrap on the RUNNING host and installs the emitter too, so the pin bump itself is the delivery event | none until the pin moves; the pin bump then shows as its own change |
-| registry host | the 6-hourly stamp-gated block in `zot-disk-heartbeat.sh`, baked through `cloud-init-registry.yml`; reaches the host only by a registry-host replace | the owner schedules the replace (verify target-type stock first) | a pending ForceNew in untargeted plans and the drift detector (the registry already carried one) |
+| registry host | the registry emitter is not in the change that introduces the marker: it is a separate follow-up PR (6-hourly stamp-gated block in `zot-disk-heartbeat.sh`, baked through `cloud-init-registry.yml`) | its merge auto-fires `registry-host-replace-dispatch.yml` (ADR-190) and replaces the production registry host (the sole pull path, no rollback if the create fails): merge only with the owner's explicit go-ahead; do not merge ahead of the owner (verify target-type stock first) | none from the marker change (the registry user_data is unchanged, so the dispatcher emits deliver=false); the follow-up PR's merge IS the delivery event |
 | git-data host, grok-dogfood host | none | git-data is tracked in #12385; grok-dogfood is a census exemption (default off, no shipper) | none; both read `unknown` by design |
 
 Until a host class above is delivered, the marker for it does not exist and the host reads `unknown`; that is the honest
@@ -1198,7 +1198,7 @@ replace for the marker, so this does not apply to them. Scheduling a replace is 
 
 **`unknown` in the skill output is the expected rollout state.** Until a host has been delivered and has produced its first valid
 row, the `soleur:cve-exposure` host-state output prints `unknown` for it. For the registry and the inngest host that is the
-long-lived state, because each is delivered by the carrier in the delivery matrix above (a registry replace, or a bootstrap pin
+long-lived state, because each is delivered by the carrier in the delivery matrix above (the separate registry-emitter PR, or a bootstrap pin
 bump for the inngest host), not by being replaced for an unrelated reason. It is the honest answer and
 not a bug; a host that reads `unknown` is never read as clean. The git-data host (#12385) and the default-off grok-dogfood host
 have no heartbeat here and read `unknown` by design.
