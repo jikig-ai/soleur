@@ -133,6 +133,8 @@ Tests first (`cq-write-failing-tests-before`): Phase 0 lands red; every later ph
 
 ### Phase 0 — RED tests (no source change)
 
+> **Superseded (2026-11-08, dated record, text below unchanged):** The `requesterKind` truth table (item 2), `gate-flow-requester.test.ts` first-send lookup scenarios (item 5) and the gate-side `requesterLabel` dep are superseded: the first send carries only the literal "you" or no `requester` key and performs no lookup. Superseded by the CTO first-send ruling of 2026-11-07 (Rule B) and the CTO rulings of 2026-11-08; see `decision-challenges.md` and the ADR-309 addendum for the current design.
+
 Seams that must exist before the tests can mean anything: `test/server/ws-handler-approval.test.ts` mocks `createServiceClient()` as `{ rpc, from: vi.fn(), auth }`, so `from()` returns `undefined` and a never-throwing labeler would silently produce no `requester` key; add a hoisted `h.serviceFrom` returning the membership and users rows. The handler wires the labeler as `createRequesterLabeler(() => supabase as unknown as RequesterQueryClient)`, reusing the file's existing lazy `supabase` proxy (the same shape as the adjacent `client: () => supabase` line). The end-to-end cases seed a conversation owned by the viewing member (attach is `conversations.user_id`-scoped).
 
 Write the new test files and the additions below; run them against the unchanged tree and record which fail (expected: all new assertions on redaction, label, wire nullability, card states, reducer, scan) in the PR test plan.
@@ -163,6 +165,8 @@ Write the new test files and the additions below; run them against the unchanged
 - `lib/approval-card-state.ts`: no signature change; the card computes the new `detailsRemoved`. If a table test shows a clearer home, the helper `isViewWithheld(view, viewerRole)` lives here.
 
 ### Phase 2 — Server
+
+> **Superseded (2026-11-08, dated record, text below unchanged):** The `gate-types.ts` / `gate.ts` `requesterLabel` dep and `requesterQueryClient` seam, the `gate-flow.ts` first-send lookup with a deadline, and `requesterKind` are superseded (no gate-side lookup exists; `gate.ts` is not an importer of `requester-label.ts`). Also superseded: the gate-side `viewerRole` read is now strict like reattach (it throws on a non-boolean), the deadline error carries code `timeout`, and `UNSAFE_CHARS` also rejects `\p{Cf}`. Superseded by the CTO first-send ruling of 2026-11-07 (Rule B) and the CTO rulings of 2026-11-08; see `decision-challenges.md` and the ADR-309 addendum for the current design.
 
 - `server/approval/card-visibility.ts` (new, pure and synchronous): `canSeeAction(viewerUserId, isOwner, requestedBy)` returns true when `isOwner === true` OR (both ids satisfy `typeof id === "string" && id.length > 0` and `viewerUserId === requestedBy`, strict `===`; `undefined` counts as absent); `requesterKind(viewerUserId, isOwner, requestedBy)` returns `"self"` when the verified-requester comparison passes (any role), `"lookup"` for an Owner who is not the requester, `"none"` otherwise. Each call site does the single `await` itself (`"self"` -> `REQUESTER_SELF`, `"lookup"` -> the labeler, `"none"` -> no key), so the truth table stays synchronous. Export one shared type `RequesterLabelFn = (workspaceId: string, viewerUserId: string, requestedBy: string | null | undefined) => Promise<string | undefined>`, used by `ReemitArgs` and `ApprovalGateDeps`; the workspace is the ROW's `workspace_id` (reattach passes `approval.workspace_id`, gate-flow passes `submitted.approval.workspace_id`), never the attaching session's workspace, and a test drives the real `reemitLiveApprovals` with `a.workspaceId` = A and a row in B and asserts the labeler received B.
 - `server/approval/requester-label.ts` (new): `createRequesterLabeler(getClient?: () => RequesterQueryClient)` (a small interface matching the REAL call chain `from(table).select(cols).eq(col, v)[.eq(col, v)].abortSignal(sig).maybeSingle()`, and `createRequesterLabeler(getClient?, opts?: { signal?: () => AbortSignal })` with the default `() => AbortSignal.timeout(2000)` so tests can inject an `AbortController`; the default resolves `createServiceClient()` on the FIRST `label()` call, never at construction or import) returns `label(workspaceId, viewerUserId, requestedBy)`: every id passes `isUuid` (`lib/is-uuid.ts`) before any query (a non-uuid requester -> `REQUESTER_FALLBACK` with no query and no report; a non-uuid viewer or workspace -> `undefined`); NULL, `undefined` or empty requester -> `REQUESTER_FALLBACK`; ONE `workspace_members` query for `(workspace_id = w) AND user_id in (viewer, requester)` selecting `user_id, role`: the labeler proceeds only if the VIEWER row has `role = 'owner'` (otherwise `undefined`, so the Owner-only property is proven inside the labeler, not left to caller discipline) and the requester row exists (otherwise `REQUESTER_FALLBACK`); then the email comes from the AUTHORITATIVE auth record, `client.auth.admin.getUserById(requestedBy)` -> `data.user.email` (precedent `server/notifications.ts`, `lib/supabase/tenant.ts`), NOT `public.users.email`, because migrations 006 and 178 grant `UPDATE (email)` on `public.users` to `authenticated`, so any member can write that column and make the Owner's card say "Requested by <colleague or a persuasive sentence>"; the value is returned only when it is a string of 1 to 320 characters with exactly one `@` and no whitespace or control characters (the zod cap and the guarantee that a real label can never collide with the in-band `"you"` and `"a workspace member"`), else fallback; any error -> report `requesterLabelFailed` (ids only, never the email) and return `undefined` (the key is omitted, because the fallback would assert a membership fact the code could not check). Memoises success AND failure per labeler instance (one instance per attach / per landing render) keyed by `${workspaceId}:${requestedBy}` (a conversation's rows can sit in different workspaces; an id-only key would show a member's email on another workspace's row), so a repeated pair is one read and one report. Never throws. One overall deadline of 2 seconds per `label()` call covers both reads: the PostgREST read carries `.abortSignal(<that signal>)` (precedent `lib/feature-flags/identity.ts`) and the `auth.admin` call, which has no abort support, is raced against a 2 second timer cleared on settle, so reattach's sequential row loop and the landing page's server render are bounded; a timeout takes the report-and-omit path and trips the labeler instance (later lookups in the same instance omit at once, so reattach's sequential loop costs at most one 2 second wait per attach; test rows: a never-resolving client that honours the abort signal, a reattach with three distinct requesters under one total deadline, a landing render that times out and still renders Approve and Deny, a gate-flow timeout through `boundedByAbort`, a homoglyph address and a quoted-local-part address handled per the shape rule). Both failure paths route through ONE report helper. A contract comment states the labeler is Owner-only by caller discipline; the importer-pin test below enforces who may call it.
@@ -255,6 +259,8 @@ No new suite reads outside `apps/web-platform` (the sink scan reads `server/` on
 
 ## Guard Contract
 
+> **Superseded (2026-11-08, dated record, text below unchanged):** Mutation row M16 (gate-flow computes `requesterKind` with the owner flag hard-coded true) is superseded: `requesterKind` and the first-send lookup do not exist. Superseded by the CTO first-send ruling of 2026-11-07 (Rule B) and the CTO rulings of 2026-11-08; see `decision-challenges.md` and the ADR-309 addendum for the current design.
+
 ### Guard 1 — approval-frame redaction and requester-label scope
 
 **Property.** An `approval_request` WebSocket frame carries a field value, an action title or the real tool name only when its recipient is a verified Owner, the verified `requested_by_user_id` of that row, or (first send only) the socket user whose own agent proposed this exact action; and it carries a requester label only when the recipient is an Owner (or the literal `"you"` when the recipient is the verified requester).
@@ -294,6 +300,8 @@ No new suite reads outside `apps/web-platform` (the sink scan reads `server/` on
 
 ## Observability
 
+> **Superseded (2026-11-08, dated record, text below unchanged):** The "each of its two queries is bounded by a 2 second timeout" design is superseded: there is ONE 2 second deadline per `label()` call covering both reads (the labeler instance trips on a timeout). The non-self label is no longer suppressed at `request_count >= 2` (CTO ruling of 2026-11-08: `request_count` counts rows of any status and does not gate the label). Superseded by the CTO first-send ruling of 2026-11-07 (Rule B) and the CTO rulings of 2026-11-08; see `decision-challenges.md` and the ADR-309 addendum for the current design.
+
 ```yaml
 liveness_signal:
   what: approval-requester-label-failed Sentry op (warn, feature=approval-queue); absence is the healthy state, and the op is the only runtime signal because the label is a display nicety
@@ -319,7 +327,7 @@ logs:
 discoverability_test:
   command: grep -c approval-requester-label-failed apps/web-platform/server/approval/ops.ts
   expected_output: "1"
-  # second probe, same shape: grep -c requesterLabelFailed apps/web-platform/server/approval/requester-label.ts (both failure paths route through ONE report helper, so the count is the single known number 1; the first probe proves the op is defined, the second that the labeler emits it)
+  # second probe, same shape: grep -c requesterLabelFailed apps/web-platform/server/approval/requester-label.ts (both failure paths route through ONE report helper; the first probe proves the op is defined, the second that the labeler emits it. Corrected 2026-11-08: the bare `grep -c requesterLabelFailed` does NOT print 1, because the header and doc comments of `requester-label.ts` also match (3 at HEAD 030d4c2733); use `grep -c 'reportApprovalOp("requesterLabelFailed"'`, which matches only the report call and prints 1)
 ```
 
 ## GDPR / Compliance Gate
@@ -350,6 +358,8 @@ Suggestions (no `Critical`, no `Important`):
 ## Scope Check
 
 ### Ask Mapping
+
+> **Superseded (2026-11-08, dated record, text below unchanged):** Ask 2 ("both the first send ... and the reattach send carry a minimised requester label") and the `gate-flow.ts`, `gate-types.ts`, `gate.ts` rows of Plan-Item Provenance are superseded for the first send: it carries only the literal "you" (or no key). The reattach send and the away-user landing page carry another member's address, for an Owner viewer only. Superseded by the CTO first-send ruling of 2026-11-07 (Rule B) and the CTO rulings of 2026-11-08; see `decision-challenges.md` and the ADR-309 addendum for the current design.
 
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
@@ -416,6 +426,8 @@ Suggestions (no `Critical`, no `Important`):
 - None. No flag, environment, migration, secret or deploy step is part of this change; the flag stays dark and the single-member cohort rule stays in force.
 
 ## Test Scenarios
+
+> **Superseded (2026-11-08, dated record, text below unchanged):** The `requesterKind` and first-send lookup scenarios, and any scenario asserting label suppression at `request_count >= 2`, are superseded (see the banners above). Superseded by the CTO first-send ruling of 2026-11-07 (Rule B) and the CTO rulings of 2026-11-08; see `decision-challenges.md` and the ADR-309 addendum for the current design.
 
 Reattach (`reattach-redaction.test.ts`, real `reemitLiveApprovals`, rows hashed with the real canonical code):
 

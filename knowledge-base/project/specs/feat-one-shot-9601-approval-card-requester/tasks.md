@@ -2,6 +2,8 @@
 
 Plan: `knowledge-base/project/plans/2026-11-07-feat-approval-card-requester-and-reattach-redaction-plan.md`. All paths under `apps/web-platform/` unless stated. Run commands from `apps/web-platform`.
 
+> **Superseded (2026-11-08, dated record, task text unchanged):** tasks 0.1 (`requesterKind` truth table), 0.4 (`gate-flow-requester.test.ts` first-send lookup), 2.1 (`requesterKind`), and 2.6 (inject the labeler into `gate-types.ts` / `gate.ts` / `gate-flow.ts` with a first-send lookup deadline) are superseded by the CTO first-send ruling of 2026-11-07 (Rule B) and the CTO rulings of 2026-11-08: the first send carries only the literal "you" or no key; there is no gate-side labeler or `requesterQueryClient`; the gate-side role read is strict; the `request_count >= 2` label suppression is dropped. See `decision-challenges.md`.
+
 ## Phase 0: Setup and RED tests (no source change)
 
 - 0.0 Land signature-only, deliberately fail-open stubs first (`canSeeAction = () => true`, labeler returns `undefined`, `RequesterLabelFn` exported, `ReemitArgs.requesterLabel` optional until Phase 2) so the new tests are red on assertions; add the strict PostgREST fake to `test/approval/fixtures.ts`.
