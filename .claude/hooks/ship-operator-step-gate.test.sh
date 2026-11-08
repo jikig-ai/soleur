@@ -494,6 +494,62 @@ h "REAL hook: a comment POST on a PR ('gh api .../issues/7/comments -f body=x') 
 for gq in mergePullRequest enablePullRequestAutoMerge enqueuePullRequest removeLabelsFromLabelable clearLabelsFromLabelable updateIssue updatePullRequest deleteLabel updateLabel; do
   PARKED_COUNT=1; h "REAL hook: parked: a GraphQL '$gq' mutation is denied while a PR is parked" deny "$CLEAN" "gh api graphql -f query='mutation { $gq(input: {}) { clientMutationId } }'" "pr list --label parked --state open --json number --jq length"
 done
+# --- Final bounded hook patch (security verification pass, 2026-11-08; no further hardening rounds are planned) ----------------------
+# PR 7 is the parked PR (LABELS=parked); every other number is unlabelled. This is a best-effort guardrail: the shapes below are fixed,
+# and the ACCEPTED LIMITS at the end are deliberate allows (server-side enforcement is tracked in #12396).
+PARKED_LIST="pr list --label parked --state open --json number --jq length"
+# nested double quotes inside a command substitution inside double quotes no longer end the outer span early
+LABELS=$PL; h "REAL hook: parked: nested quotes in a substitution (out=\"\$(gh pr merge \"7\" --squash)\") are denied" deny "$CLEAN" 'out="$(gh pr merge "7" --squash)"' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: echo \"\$(gh pr merge \"7\") is denied" deny "$CLEAN" 'echo "$(gh pr merge "7")"' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a substitution holding two statements (echo \"\$(echo \"x\" ; gh pr merge 7)\") is denied" deny "$CLEAN" 'echo "$(echo "x" ; gh pr merge 7)"' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: a backtick substitution with nested quotes is denied" deny "$CLEAN" 'echo "`gh pr merge "7"`"' "$LABELS_CALL"
+PARKED_COUNT=1; h "REAL hook: parked: a variable target inside a nested-quote substitution is held while a PR is parked" deny "$CLEAN" 'N=7; out="$(gh pr merge "$N" --squash)"' "$PARKED_LIST"
+PARKED_COUNT=1; h "REAL hook: parked: a substitution that cannot be balanced fails closed while a PR is parked" deny "$CLEAN" 'echo "$(gh pr merge 7"' "$PARKED_LIST"
+PARKED_COUNT=0; h "REAL hook: an unbalanced substitution is allowed when NO PR is parked (control: the list was read)" allow "$CLEAN" 'echo "$(gh pr merge 7"' "$PARKED_LIST"
+LABELS=$PL; h "REAL hook: parked: a substitution that only ECHOES the merge text ('git commit -m \"\$(echo \"gh pr merge 7\")\"') is allowed" allow "$CLEAN" 'git commit -m "$(echo "gh pr merge 7")"' --none
+LABELS=$PL; h "REAL hook: parked: an ordinary read in a substitution ('r=\$(gh pr view 5 --json state)') is allowed" allow "$CLEAN" 'r=$(gh pr view 5 --json state)' --none
+# escaped backticks and \$( in double quotes are literal text
+LABELS=$PL; h "REAL hook: parked: an ESCAPED backtick span in a PR comment is literal text and allowed" allow "$CLEAN" 'gh pr comment 99 --body "run \`gh pr merge 7\` later"' --none
+LABELS=$PL; h "REAL hook: parked: an escaped backtick span in a commit message is allowed" allow "$CLEAN" 'git commit -m "docs: never \`gh pr merge 7\`"' --none
+LABELS=$PL; h "REAL hook: parked: an escaped \\\$( in a PR comment is literal text and allowed" allow "$CLEAN" 'gh pr comment 99 --body "run \$(gh pr merge 7) later"' --none
+# the wrapper test reads the basename (/usr/bin/env), and an assignment keeps its slash
+LABELS=$PL; h "REAL hook: parked: '/bin/bash -c \"gh pr merge 7\"' is denied (basename wrapper)" deny "$CLEAN" '/bin/bash -c "gh pr merge 7"' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: '/usr/bin/env gh pr merge 7' is denied" deny "$CLEAN" '/usr/bin/env gh pr merge 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: '/usr/bin/timeout 5 gh pr merge 7' is denied" deny "$CLEAN" '/usr/bin/timeout 5 gh pr merge 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: '/usr/bin/sudo gh pr merge 7' is denied" deny "$CLEAN" '/usr/bin/sudo gh pr merge 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: an assignment with a slash ('FOO=/usr/bin gh pr merge 7') is still a prefix and denied" deny "$CLEAN" 'FOO=/usr/bin gh pr merge 7' "$LABELS_CALL"
+# --disable-auto is the flag, never the value of a value-taking flag; -h/--help only prints help
+LABELS=$PL; h "REAL hook: parked: '--subject --disable-auto' (a flag VALUE) does not disarm" deny "$CLEAN" 'gh pr merge 7 --subject --disable-auto' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: '-b --disable-auto' does not disarm" deny "$CLEAN" 'gh pr merge 7 -b --disable-auto' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: '--match-head-commit --disable-auto' does not disarm" deny "$CLEAN" 'gh pr merge 7 --match-head-commit --disable-auto' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: the real flag after a value ('--disable-auto --subject x') still disarms, stub never called" allow "$CLEAN" 'gh pr merge 7 --disable-auto --subject x' --none
+LABELS=$PL; h "REAL hook: parked: 'gh pr merge 7 --help' only prints help and is allowed, stub never called" allow "$CLEAN" 'gh pr merge 7 --help' --none
+LABELS=$PL; h "REAL hook: parked: 'gh pr merge 7 -h' is allowed, stub never called" allow "$CLEAN" 'gh pr merge 7 -h' --none
+# a leading zero is the same PR
+LABELS=$PL; h "REAL hook: parked: 'gh pr merge 07' is PR 7 (the label read names 7, not 07)" deny "$CLEAN" 'gh pr merge 07 --squash' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: 'gh pr merge 007' is PR 7" deny "$CLEAN" 'gh pr merge 007' "$LABELS_CALL"
+# GraphQL names are read only for a graphql call; a query kept in a file or on stdin holds
+PARKED_COUNT=1; FORBID="$PARKED_LIST"
+h "REAL hook: a REST comment whose BODY says 'mergePullRequest' is text and is allowed, the parked list is never read" allow "$CLEAN" 'gh api -X POST repos/o/r/issues/99/comments -f body="mergePullRequest"' --none
+PARKED_COUNT=1; FORBID="$PARKED_LIST"
+h "REAL hook: a REST issue create whose TITLE says 'updateIssue' is text and is allowed" allow "$CLEAN" 'gh api -X POST repos/o/r/issues -f title=updateIssue' --none
+PARKED_COUNT=1; FORBID="$PARKED_LIST"
+h "REAL hook: a REST body that merely CONTAINS the word graphql ('body=graphql_mergePullRequest') is not a GraphQL call, allowed" allow "$CLEAN" 'gh api -X POST repos/o/r/issues/99/comments -f body=graphql_mergePullRequest' --none
+PARKED_COUNT=1; h "REAL hook: parked: a GraphQL query read from a file ('-f query=@q.graphql') is held while a PR is parked" deny "$CLEAN" 'gh api graphql -f query=@q.graphql' "$PARKED_LIST"
+PARKED_COUNT=1; h "REAL hook: parked: a GraphQL call with '--input q.json' is held while a PR is parked" deny "$CLEAN" 'gh api graphql --input q.json' "$PARKED_LIST"
+PARKED_COUNT=0; h "REAL hook: a GraphQL query read from a file is allowed when NO PR is parked (control: the list was read)" allow "$CLEAN" 'gh api graphql -f query=@q.graphql' "$PARKED_LIST"
+# xargs takes its targets from stdin: a gh write after it holds while any PR is parked; a gh read does not
+PARKED_COUNT=1; h "REAL hook: parked: 'echo 7 | xargs gh pr merge' is held while a PR is parked" deny "$CLEAN" 'echo 7 | xargs gh pr merge' "$PARKED_LIST"
+PARKED_COUNT=1; h "REAL hook: parked: 'xargs -n1 gh pr merge' is held" deny "$CLEAN" 'xargs -n1 gh pr merge' "$PARKED_LIST"
+PARKED_COUNT=1; h "REAL hook: parked: 'xargs -I{} gh pr merge {}' is held ({} is a word, not a brace group)" deny "$CLEAN" 'echo 7 | xargs -I{} gh pr merge {}' "$PARKED_LIST"
+PARKED_COUNT=1; h "REAL hook: 'echo 7 | xargs gh pr view' (a read) is allowed, stub never called" allow "$CLEAN" 'echo 7 | xargs gh pr view' --none
+# ACCEPTED LIMITS (deliberate allows; superseded by the server-side route in #12396, no further hardening planned)
+LABELS=$PL; h "REAL hook: ACCEPTED LIMIT: a wrapper with an option value ('env -u X gh pr merge 7') is not read" allow "$CLEAN" 'env -u X gh pr merge 7' --none
+LABELS=$PL; h "REAL hook: ACCEPTED LIMIT: an unlisted wrapper ('doppler run -- gh pr merge 7') is not read" allow "$CLEAN" 'doppler run -- gh pr merge 7' --none
+LABELS=$PL; h "REAL hook: ACCEPTED LIMIT: text piped into a shell ('echo \"gh pr merge 7\" | bash') is not read" allow "$CLEAN" 'echo "gh pr merge 7" | bash' --none
+LABELS=$PL; h "REAL hook: ACCEPTED LIMIT: a heredoc fed to a shell ('bash <<EOF ... EOF') is not read" allow "$CLEAN" $'bash <<\'EOF\'\ngh pr merge 7\nEOF' --none
+LABELS=$PL; h "REAL hook: ACCEPTED LIMIT: ANSI-C quoting with an escaped quote hides the next statement" allow "$CLEAN" $'git commit -m $\'it\\\'s done\' && gh pr merge 7' --none
+
 # the incident row: a deny leaves a record in the (sandboxed) ledger
 INC_BEFORE=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null || echo 0)
 LABELS=$PARKED_LAB; h "REAL hook: parked: a deny (control for the incident row below)" deny "$CLEAN" "gh pr merge 7 --squash" "$LABELS_CALL"
@@ -523,8 +579,8 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
-# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 157 after the fix round).
-ROW_FLOOR=157
+# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 157 after the fix round, 197 after the final bounded patch).
+ROW_FLOOR=197
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1
