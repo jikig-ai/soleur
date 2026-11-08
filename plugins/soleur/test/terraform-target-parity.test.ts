@@ -3519,12 +3519,22 @@ describe("host-key pinning: per-PR list, merge-time probe, pin redeploy (#7226)"
       ]);
     });
 
-    test("PL2: the pin-load reads webhook creds from prd_terraform only, and fans out to every web host", () => {
+    test("PL2: the pin-load takes the webhook trio from the Tier-B loader's env (no prd_terraform read), and fans out to every web host", () => {
       for (const job of gitDataJobs) {
+        const steps = (wfd.jobs?.[job]?.steps ?? []) as any[];
         const s = pinLoad(wfd, job)[0];
         const run = String(s.run ?? "");
-        expect(run).toContain("-p soleur -c prd_terraform");
-        expect(run).toContain("WEBHOOK_DEPLOY_SECRET");
+        // #9294 G1: the loader step runs earlier in the same job and exports the trio into the job env;
+        // the step itself reads no store, so a job without the Tier-B seam gets track.sh's credential-absent refusal.
+        const loaderIdx = steps.findIndex((x) => String(x.uses ?? "") === "./.github/actions/infra-credentials");
+        expect(loaderIdx, `${job}: the Tier-B loader step`).toBeGreaterThanOrEqual(0);
+        expect(loaderIdx, `${job}: the loader runs before the pin-load`).toBeLessThan(steps.indexOf(s));
+        // A disabled or unprivileged loader exports no trio: the step must run unconditionally and be fed the Tier-B read token.
+        expect(steps[loaderIdx].if, `${job}: the loader step has no if:`).toBeUndefined();
+        expect(String(steps[loaderIdx].with?.["doppler-token-infra-privileged"] ?? ""), `${job}: the loader is fed the Tier-B token`).toContain("secrets.DOPPLER_TOKEN_INFRA_PRIVILEGED");
+        expect(run).not.toContain("prd_terraform");
+        expect(run).not.toContain("doppler secrets get");
+        expect(run).not.toContain("CI_SSH_ACCESS_TOKEN");
         // The peers CSV must be present — a single-host swap leaves the fleet MIXED.
         expect(String((s.env as any)?.WEB_HOST_PRIVATE_IPS ?? "")).toBe("10.0.1.10,10.0.1.11");
       }
@@ -5986,6 +5996,7 @@ describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering 
     ["staging_record", ["cloudflare_record.lb_staging"]],
     ["ga_overlay", ["cloudflare_load_balancer_monitor.web", "cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app"]],
     ["ga_monitor_fix", ["cloudflare_load_balancer_monitor.web"]],
+    ["ga_monitor_https", ["cloudflare_load_balancer_monitor.web"]],
     ["ga_pool_update", ["cloudflare_load_balancer_pool.web_1", "cloudflare_load_balancer.app", "cloudflare_notification_policy.web_lb_health"]],
   ];
 
@@ -6003,6 +6014,55 @@ describe("cf-lb-overlay arms: -target ⊆ gate allow-set, invocation + ordering 
     expect([...extractAllTargets(job("ga_monitor_fix"))]).toEqual([
       "cloudflare_load_balancer_monitor.web",
     ]);
+  });
+
+  test("the https monitor arm -targets ONLY the monitor (ADR-321 R7, #10479)", () => {
+    expect([...extractAllTargets(job("ga_monitor_https"))]).toEqual([
+      "cloudflare_load_balancer_monitor.web",
+    ]);
+  });
+
+  test("ga_monitor_https is dispatch-only, reviewer-gated, and grades the saved plan with the https grader BEFORE the apply", () => {
+    const raw = job("ga_monitor_https");
+    expect(raw, "ga_monitor_https job must exist").not.toEqual("");
+    const block = stripComments(raw);
+    expect(block).toContain("github.event_name == 'workflow_dispatch' && inputs.arm == 'ga-monitor-https'");
+    expect(block).toMatch(/^\s*environment: web-platform-infra-apply\s*$/m);
+    expect(block).toContain("MOVE-GA-LB-MONITOR-HTTPS");
+    const CALL = /cf_lb_gate_ga_monitor_https "\$RUNNER_TEMP\/ga-monitor-https-plan\.json"/;
+    expect(block).toMatch(CALL);
+    // The http grader must NOT be what grades this arm (it would refuse the https shape, but a swap would be silent).
+    expect(block).not.toContain("cf_lb_gate_ga_monitor_update");
+    const applyAt = block.indexOf("terraform apply -no-color -input=false -auto-approve tfplan");
+    expect(applyAt).toBeGreaterThan(-1);
+    expect(block.search(CALL)).toBeGreaterThan(-1);
+    expect(block.search(CALL)).toBeLessThan(applyAt);
+  });
+
+  test("ga_monitor_https baseline gate precedes the plan and its Plan gate step carries NO `if:`", () => {
+    const block = job("ga_monitor_https");
+    const pre = extractStep(block, /Pre-gate - both pool origins healthy/);
+    expect(pre).not.toBeNull();
+    expect(pre!).not.toMatch(/^\s*if:/m);
+    const plan = extractStep(block, /Terraform plan \(GA monitor only, https shape\)/);
+    expect(plan).not.toBeNull();
+    expect(block.indexOf(plan!)).toBeGreaterThan(block.indexOf(pre!));
+    const gate = extractStep(block, /Plan gate/);
+    expect(gate).not.toBeNull();
+    expect(gate!).not.toMatch(/^\s*if:/m);
+  });
+
+  test("ga_monitor_https requires BOTH origins healthy after the apply (a one-origin read is not a verdict)", () => {
+    const block = stripComments(job("ga_monitor_https"));
+    expect(block).toContain('if [[ "$ORIGINS" -ge 2 && "$HEALTH" == "true" ]]; then');
+    expect(block).toContain('if [[ "$ORIGINS" -lt 2 ]]; then');
+  });
+
+  test("the arm is a workflow_dispatch option and the workflow has no push/schedule trigger (merge cannot apply the monitor)", () => {
+    expect(wf).toMatch(/^\s*- ga-monitor-https\s*$/m);
+    const onBlock = wf.slice(wf.indexOf("\non:\n"), wf.indexOf("\nconcurrency:"));
+    expect(onBlock).toContain("workflow_dispatch:");
+    expect(onBlock).not.toMatch(/^\s*(push|schedule|pull_request|workflow_run):/m);
   });
 
   test("staging-overlay/teardown carry NO -target (whole-root plan / -destroy)", () => {

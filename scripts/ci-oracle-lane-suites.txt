@@ -28,6 +28,9 @@
 #   tests/scripts/lint-ratchet                    the ratchet LINTER's suite — adjacent machinery (the ratchet's own
 #                                                 affected-index-ratchet job already runs on the reduced set)
 #   scripts/pre-push-ratchet-lane                 local pre-push lane, not part of the hosted oracle validation
+#   plugins/soleur/test/bot-synthetic-unreachability.test.sh   SUT is the bot-PR fabrication bound
+#                                                 (ALLOWED_PATHS x RATCHET_ORACLE disjointness), adjacent
+#                                                 machinery — the #6049 ceiling, not the index oracle
 #   plugins/soleur/test/ci-path-gating.test.sh     path-gating classifier, adjacent machinery
 #   scripts/ci-oracle-lane                        SUT is the lane driver itself, unreachable by a lane-eligible diff
 #                                                 (the driver, its sentinel and this manifest are all in the
@@ -42,8 +45,9 @@ scripts/test-all-group-affected	bash scripts/test-all-group-affected.test.sh
 scripts/test-affected-derive	bash scripts/test-affected-derive.test.sh
 scripts/test-affected-derive-cache	bash scripts/test-affected-derive-cache.test.sh
 scripts/test-affected-kb-consumers	bash scripts/test-affected-kb-consumers.test.sh
-plugins/soleur/test/ci-pr-affected-replay-a	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-193
-plugins/soleur/test/ci-pr-affected-replay-b	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 194-386
-plugins/soleur/test/ci-pr-affected-replay-c	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 387-602
+plugins/soleur/test/ci-pr-affected-replay-a	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-158
+plugins/soleur/test/ci-pr-affected-replay-b	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 159-316
+plugins/soleur/test/ci-pr-affected-replay-c	bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-476
 scripts/ci-pr-selection	bash scripts/ci-pr-selection.test.sh
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	bash plugins/soleur/test/ci-pr-affected-preactivation.test.sh
+scripts/ci-oracle-review	bash scripts/ci-oracle-review.test.sh

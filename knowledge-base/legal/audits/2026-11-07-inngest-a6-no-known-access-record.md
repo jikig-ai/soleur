@@ -1,8 +1,8 @@
 ---
 title: "A6 \"no known access\" record — Hetzner project holding the Inngest sole-copy volume"
-status: draft-unsigned
-date: 2026-10-30
-refreshed: 2026-11-06
+status: signed-relayed-and-attested
+date: 2026-11-07
+refreshed: 2026-11-07
 related: [9927, 10382, 10136, 11218]
 related_adrs: [ADR-282]
 brand_survival_threshold: single-user incident
@@ -10,12 +10,15 @@ brand_survival_threshold: single-user incident
 
 # A6 "no known access" record — Hetzner project holding the Inngest sole-copy volume
 
-unsigned, owner sentence pending
+owner sentence relayed 2026-11-07T17:31Z on #10136 (S6-A6-RELAYED, own words, Agent-drafted text: no); attested by soleur:legal:clo 2026-11-07 (#10382 comment 6711794462)
 
-> **DRAFT, NOT SIGNED, NOT ATTESTED.** This file is prepared for the owner. It is not a record until the
-> owner signs it and `soleur:legal:clo` attests it separately. No agent signs it or sends it. The file name
-> carries the UTC date of signing; if signing happens on another day, rename the file to that date before
-> filing. Counts and roles only: no names, no email addresses, no token values.
+> **SIGNED BY RELAY AND ATTESTED.** The owner's sentence was relayed on #10136 at
+> 2026-11-07T17:31:48Z under the 2026-11-02 signing route (`S6-A6-RELAYED`, `Agent-drafted text: no`,
+> not typed by the owner into the thread; this second relay supersedes a 13:31Z relay whose disclosed
+> drafted flag the CLO refused — see "Owner's own sentence"), and `soleur:legal:clo` attested it on
+> #10382 at 2026-11-07 (comment 6711794462; v1 internal attestation, not external counsel advice).
+> The file name carries the UTC date of signing. Counts and roles only: no names, no email addresses,
+> no token values.
 
 > **Superseded 2026-11-02 (CLO and CTO rulings; ruled in session, recorded in
 > `plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md`, section 9, and in the A5/A6/A7 rows of
@@ -71,21 +74,27 @@ Read on 2026-10-29 through the owner's own signed-in browser session; the figure
 | Prerequisite | State (cells updated 2026-11-06) | Owner fills in |
 |---|---|---|
 | A5 complete | recorded complete on #10136 (updated 2026-11-06): `S5-A5-DONE` 2026-11-02T14:28:00Z (agent-posted at owner delegation) and `S5-A5-RELAYED` 2026-11-02T21:51:04Z (owner's words). It covers the dedicated Inngest key pair only; the other exposed keys are still rotating, see `knowledge-base/legal/audits/2026-11-02-a6-no-known-access-record-inngest-keys.md` and the CLO re-assessment due 2026-11-08 | owner re-checks A5 at signing |
-| Measured re-read from the deployed #10405 emit | PR #10405 merged 2026-10-19; the 2026-11-02 keys record holds a tls-health re-read (`nft_rules=7`, `legacy_8288_packets=0`) that is available as evidence (updated 2026-11-06) | owner links one or marks "n/a" |
+| Measured re-read from the deployed #10405 emit | PR #10405 merged 2026-10-19; the 2026-11-02 keys record holds a tls-health re-read (`nft_rules=7`, `legacy_8288_packets=0`) that is available as evidence (updated 2026-11-06) | n/a (owner, in session 2026-11-07) |
 | Hetzner support answer on delete protection versus project delete and account closure | received 2026-11-02: a paraphrase of the support reply is in #9927 comment 6577564178 (updated 2026-11-06); a support reply, not a contract term | owner links the answer |
 
 Superseded 2026-11-06: the three cells above read as follows on 2026-10-31, kept as history. A5: "no, as of 2026-10-31: `S5-A5-DONE` is not on #10136, and the #11218 sweeper reports NOT YET because #11215 is open; the earliest 48-hour point of the new-link soak (#11215, window opened 2026-10-30T15:15:48Z) is 2026-11-01T15:15:48Z". Measured re-read: "PR #10405 merged 2026-10-19; no comment on #9927 or #10136 records a read of the deployed ruleset". Hetzner answer: "question reported sent on #9927 at 2026-10-29 17:28 UTC; no answer on #9927 as of 2026-10-31: pending".
 
 ## Owner's own sentence
 
-[EMPTY: only the owner's words, with a provenance block, per the 2026-11-02 route]
+Posted by Devin (agent) at 2026-11-07T17:31:48Z on the owner's instruction given in session at 2026-11-07T17:31:00Z. Owner's words, verbatim:
+
+> I'm not aware of any external access to the Inngest host's LUKS key material
+
+Agent-drafted text: no (the sentence is the owner's own composition in session; no agent proposed or supplied it). Not typed by the owner into this thread. Relayed on #10136 as `S6-A6-RELAYED`: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6710705414>.
+
+Superseded 2026-11-07: an earlier relay (comment 6707582642, 13:31:17Z) carried a sentence the agent had proposed as an example (`Agent-drafted text: yes`), which failed resubmission condition 1 (`Agent-drafted text: no`); the CLO refused attestation on #10382 (comment 6709536378). The owner then composed the sentence above in their own words. The earlier block is kept as history.
 
 An agent-written evidence-framing block stood here from 2026-10-30 until 2026-11-06. It was removed because an agent never drafts the owner's knowledge sentence. It is recoverable from git history (commit b959fe4b84).
 
 ## Signature block
 
-- Signed by the owner (human, not an agent), by their own GitHub comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: ____________________ (comment URL)   UTC date and time: ____________Z
-- Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the owner's own sentence and the claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: ____________________   date: ____________
+- Signed by the owner (human, not an agent) through the 2026-11-02 agent-relay route, by the `S6-A6-RELAYED` comment on #10136 that posts the owner's own sentence (see "Owner's own sentence"), in the owner's words: <https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6710705414>   UTC date and time: 2026-11-07T17:31:48Z
+- Attested by `soleur:legal:clo` (v1 internal attestation, separate from the owner's signature; not external counsel advice), scope limited to the owner's own sentence and the claim limits above; it does not discharge the 2026-11-12 re-review, A5 or the TLS rows: attested via <https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6711794462>, conditions in #10382 comment 6680610653 verified; anchored to the 2026-10-29 console figures (owner console re-read pending)   date: 2026-11-07
 
 Superseded 2026-11-06: the two lines above used to refer to a "statement above"; that block was removed. They now point at the owner's own sentence field, which stays empty until the owner gives it in their own words.
 
@@ -97,7 +106,41 @@ DO NOT ATTEST YET. An in-session instruction transcribed by an agent is not the 
 signature (this record and the A6 row of the runbook both exclude it), and A5 is not complete. The CLO attests on
 resubmission once the owner's own comment exists and A5 is done.
 
-Superseded in part 2026-11-06: the A5 reason is resolved for the dedicated Inngest key pair only (see the A5 cell; the other exposed keys are still rotating); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. The conditions for resubmission are posted on #10382 (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653>).
+Superseded in part 2026-11-06: the A5 reason is resolved for the dedicated Inngest key pair only (see the A5 cell; the other exposed keys are still rotating); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. Superseded 2026-11-07 by the attestation section above on the merge of the PR that carries it. The conditions for resubmission are posted on #10382 (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653>).
+
+## CLO attestation, 2026-11-07
+
+`soleur:legal:clo` attests the owner's own sentence and the claim limits below (v1 internal
+attestation, separate from the owner's signature; not external counsel advice). This attestation
+takes effect on the merge of the PR that carries it; until that merge it is a record in an
+unmerged branch.
+
+Checked against the seven resubmission conditions posted on #10382
+(<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653>) and the 2026-11-07
+refusal (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6709536378>):
+
+- Condition 1 — holds. The owner's sentence was composed by the owner in session and relayed on
+  #10136 at 2026-11-07T17:31:48Z under the 2026-11-02 provenance route with `Agent-drafted
+  text: no` (<https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6710705414>), quoted
+  verbatim in "Owner's own sentence". The superseded 13:31Z relay (`Agent-drafted text: yes`)
+  is kept as history.
+- Condition 2 — holds. "I'm not aware of any external access to the Inngest host's LUKS key
+  material" is a bounded knowledge claim; the claim limits keep Hetzner staff access, retention
+  and post-closure outcomes outside what this record establishes.
+- Condition 3 — holds at its fallback. The console re-read cell remains PENDING, so this
+  attestation is anchored only to the dated 2026-10-29 console figures. Under the fallback the
+  two API tokens are also not reconciled to known purposes — this record does not establish
+  what either token is for.
+- Condition 4 — holds. The measured-re-read cell reads `n/a (owner, in session 2026-11-07)`.
+- Conditions 5–7 — hold. The claim-limit paragraphs are present; no "signed" or "attested"
+  wording predates this attestation; the 2026-11-12 re-review, A5 and the TLS rows are not
+  discharged by this record.
+
+This attestation does not perform the owner-side steps in "After signing (owner)": linking the
+record from #10382 and #10136 and posting `S6-A6-DONE:` remain the owner's option under the
+2026-11-02 route (an agent never posts `S6-A6-DONE:`). The console re-read cell also remains
+owner-fillable: a post-2026-11-02 read would move the anchor off the 2026-10-29 figures in a new
+record.
 
 ## After signing (owner)
 

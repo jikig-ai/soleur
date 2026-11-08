@@ -236,6 +236,10 @@ on:
       # a stale row reads green) would skip the guard whose job is to turn that red.
       - "scripts/lib/web2-luks-rows.sh"
       - "scripts/betterstack-query.sh"
+      # (#12167) The cf-lb-overlay serve arm's relay bind probe judges web-2's relay report with this helper
+      # (and reuses web2-luks-rows.sh's query); lb-weight-gate.test.sh EXECUTES the step against it, so a
+      # PR editing ONLY the helper (loosening the grammar, say) must still run that suite.
+      - "scripts/lib/web2-relay-rows.sh"
       # (#9879) The shared HCL effective-text lexer sourced by workspaces-luks.test.sh (Guard B4) and
       # inngest-luks-sole-copy.test.sh (Guard 1). It sits under tests/scripts/lib/, outside every glob
       # above, so a lexer-ONLY edit (weakening strip_comments, say) would skip both consuming suites.
@@ -993,9 +997,9 @@ jobs:
 
       # (#9534 review) The egress-gateway Logs alerts: deny-spike shape, the
       # host-attributed probe-silent predicate (missing-host count over DISTINCT
-      # host_name, the host-mask fix, inverted in #12180), its throwaway canary
-      # pair, the probe-fail paging alert, every -target line, and the mutation
-      # rows that each require this guard to red.
+      # host_name, the host-mask fix, inverted in #12180; its throwaway canary pair
+      # was retired in #12189), the probe-fail paging alert, every -target line,
+      # and the mutation rows that each require this guard to red.
       - name: Run egress gateway alerts drift guard (#9534 host-mask + fail paging)
         run: bash apps/web-platform/test/infra/egress-gw-alert.test.sh
 
@@ -1010,6 +1014,12 @@ jobs:
       # standing-alarms rows, this suite's own dispatch, and its mutation rows.
       - name: Run Inngest cutover-flip silence alert drift guard (#11820)
         run: bash apps/web-platform/test/infra/inngest-cutover-flip-silent-alert.test.sh
+
+      # (#12167) The session-relay probe Logs alerts (listener down, probe silent, deploy-time peer dial failed):
+      # the needles read from the two emitters, the predicates compared whole, the paging windows, every -target
+      # line, the runbook rows, this suite's own dispatch, and its mutation rows.
+      - name: Run session-relay probe alerts drift guard (#12167)
+        run: bash apps/web-platform/test/infra/relay-probe-alerts.test.sh
 
       # (#8611) The Anthropic-spend Logs alerts (inngest-step 524, daily burn, capture-dark): each
       # queries the emitter's real shape and field path, aggregates only, every -target line, and

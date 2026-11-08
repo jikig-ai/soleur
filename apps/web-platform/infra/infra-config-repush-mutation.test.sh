@@ -337,8 +337,9 @@ elif case == 'S4':
     # It is also the more realistic mutation: signing with a real-but-wrong secret is what a
     # copy-paste from the sibling CF_ACCESS lookups four lines above would produce, and it 401s
     # in production while every presence-only check stays green.
-    sub(VERIFY, 'doppler secrets get WEBHOOK_DEPLOY_SECRET --plain',
-                'doppler secrets get CF_ACCESS_CLIENT_SECRET --plain')
+    # (#9294: the key is the Tier-B loader's env export now, so the swap is which trio variable feeds the signature.)
+    sub(VERIFY, 'WEBHOOK_SECRET="${WEBHOOK_DEPLOY_SECRET?',
+                'WEBHOOK_SECRET="${CF_ACCESS_CLIENT_SECRET?')
 
 elif case == 'S5':
     # RETRY / SLEEP CARDINALITY. `sleep` was stubbed to a bare `exit 0`, so the documented 8 s

@@ -53,12 +53,12 @@ here and this change must not touch it.
    |---|---|---|
    | `ORIGIN_TLS_KEY_B64` | base64 of the private key PEM | `base64 -w0 < key.pem` (one line: the env-file is line-oriented). Deleted from `process.env` after boot. |
    | `ORIGIN_TLS_CERT_B64` | base64 of the certificate PEM, **leaf first**, then any intermediates | Must be a leaf (not a CA), inside its validity window, cover `app.soleur.ai` (a `*.soleur.ai` + apex certificate does), match the key, and every block must parse. |
-   | `ORIGIN_TLS_REQUIRED` | `1` or unset | Unset: absent/invalid material is inert. `1`: it is fatal (decision 6). Set only by the flip PR. |
+   | `ORIGIN_TLS_REQUIRED` | `1` or unset | Unset: absent/invalid material is inert. `1`: it is fatal (decision 6). Set in Doppler `prd` by the owner as act 1 of the flip order (item 10), before the edge flips; it takes effect at the next container start. |
 
    A rejected certificate is reported to Sentry as `feature=origin_tls`, `op=load`, `tags.reason=<enum>`; a context that
    cannot be built as `op=create`; a bind error as `op=listen`. The once-per-start line
    `origin-tls: listening ... certificate loaded` is emitted at warn so it reaches Better Stack (Vector drops INFO).
-3. **The strict flip is staged, and its lever is the app-host Configuration Rule**: listener inert and deployed to both
+3. **The strict flip is staged, and its lever is the app-host Configuration Rule** (the mechanism is amended by item 10 of the 2026-11-07 amendments below; R6 and R8 are defined in the archived plan, `knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md`): listener inert and deployed to both
    hosts, certificate loaded and checked per host, load balancer health check to HTTPS/443, a header-scoped canary rule
    that runs only the probe request in `strict`, probe passes, then the rule is changed host-wide. Roll forward only:
    rollback is putting the rule back to `flexible`, never a `git revert`. Port 80 stays open until the post-flip probe
@@ -191,3 +191,66 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    fails closed as `no_provider_token`. (c) Cloudflare's exact response shape was read from current documentation, not from a live call.
 7. **Expiry alert: deferred, documented here, not filed.** See Consequences. Trigger to build it: the strict flip landing (PR-5) plus a
    decision that 15-year expiry needs an external signal; or Cloudflare shortening Origin CA validity.
+
+8. **LB monitor move (R7), amended 2026-11-07.** `cloudflare_load_balancer_monitor.web` becomes https/:443, `Host: app.soleur.ai`,
+   `allow_insecure = false` (certificate validated), applied only by the dispatch-only `ga-monitor-https` arm of `cf-lb-overlay.yml`, whose
+   grader (`cf_lb_gate_ga_monitor_https`) pins that exact shape, whose pre-gate refuses unless both origins are healthy under the current
+   probe, and whose post-apply gate fails red unless both origins read healthy under the new one. A merge applies nothing. Cloudflare's
+   monitor documentation does not say whether the monitor trusts an Origin CA certificate or uses `Host` as SNI (both unverified); the
+   post-apply gate is the measurement, and a red result with both listeners proven is the evidence that would justify a separate,
+   deliberate `allow_insecure = true` decision. Rollback is a revert PR plus the existing `ga-monitor-fix` arm (http/:80). A healthy
+   https monitor proves a listener answers TLS on each origin with a certificate Cloudflare's monitor accepts; it does not prove the
+   edge-to-origin traffic hop uses TLS (still `flexible` until the strict flip).
+9. **The canary rule (decision 3, step 4), amended 2026-11-07.** `seo-config-rules.tf` carries one static `rules` block, ALWAYS present, appended after the adopted
+   `flexible` rule (last match wins): for a request to `/health` on `app.soleur.ai` that carries `x-origin-tls-probe: 1`, `set_config { ssl = "strict" }`; every other request
+   to the host stays `flexible`. Its `enabled` flag is `var.enable_origin_tls_canary_rule` (default false, Doppler `prd_terraform` `ENABLE_ORIGIN_TLS_CANARY_RULE`, lowercase
+   `true`/`false` only), so merge adds an inert rule and turning the canary on or off is an in-place update (the rule count never changes; see item 10 for why that matters). Proof:
+   `origin-tls-probe.sh --canary` (implies `--require-tls`) exits 0 only when the rule applied AND Cloudflare accepted the Origin CA certificate under strict for that request; exit 1
+   (525/526) means it applied and the certificate was refused; exit 3 means the rule did not apply. The edge canary reaches the host that carries traffic (web-1) only; web-2
+   (weight 0) is covered by the https LB monitor with certificate validation (item 8) and by its `origin-tls: listening` line. The `http_config_settings` phase did accept a
+   request-header field (applied 2026-11-07, canary probe exit 0). *Amended again by item 10: the first shape of this rule was a `dynamic "rules"` block that came and went, which
+   made the rollback a rule REMOVAL.*
+10. **The strict flip (decision 3, step 6; R6(6) amended 2026-11-07).**
+    *Ruled by CTO agent, 2026-11-07 (variance from R6(6); there was no earlier ruling for it) and amended the same day by the review round.*
+    **Decision.** R6 described the flip as an in-place edit of the `flexible` rule with the canary removed in the same change. Because the per-merge apply targets the whole
+    ruleset resource, that edit would flip production at MERGE, before `ORIGIN_TLS_REQUIRED=1` is proven live on both hosts. The flip is therefore ADDITIVE and GATED: a second static
+    `rules` block (`ssl = "strict"`, expression `(http.host eq "app.soleur.ai")`, appended last so it wins over `flexible`) that is ALWAYS present and whose `enabled` is
+    `var.enable_origin_tls_strict` (default false; Doppler `prd_terraform` `ENABLE_ORIGIN_TLS_STRICT`, lowercase `true`/`false` only). Merge adds one inert (disabled) rule and changes no edge
+    behaviour. The adopted `flexible` rule, the canary, the apex/www `full` rule (ADR-194) and the lb-staging host are untouched.
+    **Why always-present and not a `dynamic` block (the review-round ruling).** The first shape made the rule come and go with the switch. Removing a rule shrinks `.rules`; the
+    destroy guard (`tests/scripts/lib/destroy-guard-filter-web-platform.jq`) counts that as `nested_deletes`, and `apply-web-platform-infra.yml` refuses the apply unless the HEAD commit
+    message carries an `[ack-destroy]` line, which exists only on a push (`github.event.head_commit.message` is empty on `workflow_dispatch`). So "unset the switch and re-dispatch" could not roll
+    anything back. Options weighed: (a) keep the rule always present and toggle only a value; (b) teach the guard a dispatch-safe ack for `ORIGIN-TLS` removals (modifies a safety guard,
+    needs its own tests); (c) document the slower real path (a push with `[ack-destroy]`). Chosen: (a), as `enabled` rather than as the `ssl` value, because a disabled rule matches
+    nothing, so it cannot override the canary or `flexible` whatever its position. **Measured, not asserted:** real `terraform plan` and `terraform show -json` documents, planned against a prior
+    state built from the "before" configuration's own planned values (no live apply, no credentials), replayed through the real filter (committed as fixtures, asserted by T65 in
+    `tests/scripts/test-destroy-guard-counter-web-platform.sh`, empty head message = a dispatch):
+
+    | Scenario (before to after) | rules before/after | resource_deletes / nested_deletes | dispatch outcome |
+    |---|---|---|---|
+    | first design, rollback (dynamic block removed) | 5 to 4 | 0 / **1** | REFUSED (the hazard) |
+    | merge: live 4 rules (canary on) to the new code (strict rule added disabled) | 4 to 5 | 0 / 0 | passes |
+    | flip on (`enabled` false to true) | 5 to 5 | 0 / 0 | passes |
+    | rollback (strict off) | 5 to 5 | 0 / 0 | passes |
+    | canary off | 5 to 5 | 0 / 0 | passes |
+    | canary off while strict stays on | 5 to 5 | 0 / 0 | passes |
+    | cleanup (flexible edited to strict, both ORIGIN-TLS rules removed) | 5 to 3 | 0 / **2** | needs a PUSH with `[ack-destroy]` (correct for a deliberate removal) |
+
+    The merge-time write is one extra DISABLED rule in the live entrypoint (a whole-list update, like every rule addition here). Its edge behaviour is unchanged by construction (a disabled rule
+    matches nothing); the rule count therefore moves 4 to 5 at merge, and `cloudflare-readonly.sh` documents `rule_count` 5 and `enabled_ssl_rules` 2 + one per switch that is on.
+    **Order of the production acts (each the owner's go):** (1) `ORIGIN_TLS_REQUIRED=1` in Doppler `prd`; (2) restart both hosts on it (same-version redeploy), so a bad certificate
+    makes the candidate container fail, the redeploy fail and the old container keep serving while the edge is still `flexible`; (3) only then the Doppler switch plus an apply dispatch.
+    **Scope of the step-2 guarantee.** It covers certificate-material failures caught at the candidate container. It does not cover a production-start failure after the candidate passes (decision 7:
+    the previous image is not restored and the host stays down), an older image without the listener deployed later (525/526 under `strict`), or a restart with bad material that has no candidate gate.
+    Rollback is `enabled` true to false (delete or set false the Doppler switch, re-dispatch the apply), measured at 109 to 370 s of apply on this workflow; the edge propagation time is not measured.
+    **Break-glass is owner-only and not agent-runnable** (the entrypoint PUT of R8 needs a full-body GET and a write token the sanctioned reader does not provide, and a whole-list PUT can drop the
+    apex `full` rule or reorder `flexible`); the runbook says so rather than giving an untested recipe. The cleanup change after the flip has baked edits the `flexible` rule to `strict`, removes both
+    ORIGIN-TLS rules and both variables, and the owner deletes the two Doppler switches.
+    **The planned "Guard 1 strict-flip precondition test" (archived plan, Guard Contract) was built only in part.** Its property (a tree with an app-host strict rule also contains the 443 publish at the
+    docker-run sites and an https/443 LB monitor) is now asserted unconditionally in `apps/web-platform/test/seo-config-rules.test.ts` for the monitor half, and the publish half was already mutation-pinned
+    by `infra/docker-run-tuple.test.sh` (K24e, K27i). Not built: the mutation-of-the-suite rows and the merge-base anchor the plan described, because the strict rule is present in every tree from now on
+    (so there is no tree "with and without" to diff) and the per-merge anchor adds a `git` read to a vitest file for no extra property.
+    **Unverified / gaps:** the app's startup line does not state whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ordering (the Doppler write precedes a green redeploy whose
+    per-host `origin-tls: listening` lines follow it), not read directly; adding a `required` field is an app change that would itself redeploy, so it is not bundled. WebSocket upgrades have never crossed the
+    edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only). The apply job auto-approves its own plan, so the human look at the plan is a local read-only plan before the dispatch
+    (runbook Act 0). The flip's whole-list update replaces the entire `http_config_settings` entrypoint; a rule added in the dashboard would be deleted, which the read-only `entrypoint-audit` dispatch checks beforehand.

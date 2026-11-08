@@ -622,8 +622,10 @@ Phase 4b (continuous checkpoint).
 > claim — verify against CF docs + a staging convert before the GA window. The LB is a
 > paid add-on (~$5/mo) — record the recurring expense. web-2 sits in the pool at
 > **weight 0** (drained) until GA. **(c) Hard invariant.** NO live LB weight to web-2
-> before BOTH the owner-side relay is active (`SOLEUR_PROXY_BIND`/`PEER_ALLOWLIST`/
-> `HOST_ROSTER` set → `session-proxy.ts createProxyServer` binds) AND the git-data store
+> before BOTH the owner-side relay is active (`PEER_ALLOWLIST`/`HOST_ROSTER` set AND
+> `session-proxy.ts createProxyServer` binds; the bind address is the literal
+> `-e SOLEUR_PROXY_BIND=0.0.0.0` in `ci-deploy.sh`, NOT a Doppler value, and
+> `createProxyServer` refuses to bind without it) AND the git-data store
 > is cut over (`isGitDataStoreEnabled()` true, 3.C write-boundary sentinel merged, 3.D
 > LUKS cutover soak-verified). Rationale: with the router gated off (default) each host
 > serves purely locally on its own `/workspaces` volume, so any live request round-robined
@@ -780,8 +782,12 @@ Phase 4b (continuous checkpoint).
 > paragraph below describes what it DID, retained because the contract it encoded (especially the
 > `GIT_DATA_LUKS_CUTOVER_AT` soak-marker semantics) still binds any future implementation.
 >
+> *Amendment 2026-11-07 (#12167):* the rebuilt gate no longer shape-checks `SOLEUR_PROXY_BIND` (the
+> bind is a literal in `ci-deploy.sh`, not a Doppler value). Bind/reachability evidence is the serve
+> arm's relay-evidence step (#12168), not the gate.
+>
 > As deleted, it verified the config-shape of BOTH §(c) conditions
-> over injected env (owner-side relay: `SOLEUR_PROXY_BIND` + `SOLEUR_PROXY_PEER_ALLOWLIST` +
+> over injected env (owner-side relay: `SOLEUR_PROXY_PEER_ALLOWLIST` +
 > `SOLEUR_HOST_ROSTER` with web-2 in-roster and allowlist ⊆ roster, parser-parity with
 > `parseProxyPeerAllowlist`/`loadHostRoster`; git-data cut-over: `GIT_DATA_STORE_ENABLED=="true"`
 >
@@ -1525,7 +1531,7 @@ Two corrections against §(b) as-shipped 2026-11-01, both verified live before t
    zero traffic — until the #6027 window flips 0→1 behind the §(c) gate chain
    (`lb-weight-gate-with-marker.sh`, run fail-closed by the new `ga-pool-update` arm in
    `mode=serve` BEFORE plan). Live gate state 2026-11-01: `GIT_DATA_STORE_ENABLED=false`,
-   `GIT_DATA_LUKS_CUTOVER_AT` and `SOLEUR_PROXY_BIND` absent — the flip is not authorized
+   `GIT_DATA_LUKS_CUTOVER_AT` absent (a `SOLEUR_PROXY_BIND` absence was also read as unmet until 2026-11-07, when that gate input was retired: #12167 — the bind is a literal in `ci-deploy.sh`, not a Doppler value) — the flip is not authorized
    today. LB `steering_policy` stays `"off"` (it selects between POOLS — one default
    pool); origin selection is pinned as `origin_steering { policy = "random" }` on the
    pool (CTO ruling: `hash` is de facto session affinity contradicting

@@ -928,7 +928,7 @@ rulesets is 25 → 12):
 | Umbrella context | Producer job | Folded members (former contexts / job names) |
 | --- | --- | --- |
 | `guards-ruleset` | `.github/workflows/ci.yml` job `guards-ruleset` (`name: guards-ruleset`) | `adr-ordinals`, `rule-body-lint`, `tc-document-sha-guard`, `marketplace-manifest-guard`, `service-role-allowlist-gate`, `credential-path-guard`, `lockfile-sync`, `grok-fidelity` |
-| `quality-guards` | `.github/workflows/pr-quality-guards.yml` job `quality-guards` (`name: quality-guards`) | `enforce`, `markdown-lint`, `guard-script-fixture-tests` (context `Bash fixture tests for guard scripts`) |
+| `quality-guards` | `.github/workflows/pr-quality-guards.yml` job `quality-guards` (`name: quality-guards`) | `enforce`, `markdown-lint`, `guard-script-fixture-tests` (context `Bash fixture tests for guard scripts`), `workflow-yaml-strict` (step `workflow-duplicate-keys`, added 2026-11-07, #12283) |
 | `secret-guards` | `.github/workflows/secret-scan.yml` job `secret-guards` (`name: secret-guards`) | `scan` (`gitleaks scan`), `lint-fixture-content` (`lint fixture content`), `waiver-discipline` (`waiver discipline (issue:#NNN trailer)`), `rename-guard` (`rename-guard (allowlist destinations)`), `allowlist-diff` (`allowlist-diff (.gitleaks.toml paths surface)`) |
 
 Each folded guard is a **member step** of its umbrella: it keeps its step
@@ -1013,3 +1013,60 @@ candidates are evaluated against the restored 16-name set.
 `sentry-destroy-required` (apply-sentry-infra.yml);
 `vendor-pin-required` (vendor-pin-verify.yml). The CLA Required ruleset
 (`cla-check`, `cla-evidence`) is unchanged.
+
+## Addendum 2026-11-07 (#12283, Ref #9927): `quality-guards` gains a fourth member, `workflow-yaml-strict`
+
+The `quality-guards` umbrella (2026-11-06 amendment above) now has four member
+guards: `enforce`, `markdown-lint`, `guard-script-fixture-tests` and
+**`workflow-yaml-strict`** (step id `workflow-duplicate-keys`, run by
+`.github/scripts/check-workflow-duplicate-keys.py`). The member is a strict
+duplicate-key parse of every `.github/workflows/*.{yml,yaml}` and
+`.github/actions/**/action.{yml,yaml}`. It exists because a merge candidate
+whose `ci.yml` carried two `fetch-depth` keys in one `with:` mapping merged
+cleanly in git, could not be loaded by GitHub Actions (a failed `push` run on
+the queue temp ref, no `merge_group` run, the required `test` context never
+reported) and stalled the queue for 175 minutes (#12283). `quality-guards`
+already reports on `merge_group` and does not depend on `ci.yml` loading, so a
+red member there ejects the candidate in minutes (except for a duplicate in the
+host file itself, which takes tens of minutes; see the host-file residual below).
+
+No required context is added or renamed and no ruleset, Terraform or canonical
+JSON changes, so the Sharp Edge 1 paired-edit contract is not triggered; the
+three-umbrella inventory table above changes only by its `quality-guards`
+member list. The #6049 per-member disposition for the new member (CONTENT-SCOPED,
+UNREACHABLE from the bot `ALLOWED_PATHS = {weakness-digest.md}`: the scan
+surface is `.github/workflows` and `.github/actions`, intersection empty) is
+recorded in `scripts/required-checks.txt`. The member's verdict reaches the
+required context only through the `member workflow-yaml-strict` row of the
+`aggregate` step, which `scripts/lint-umbrella-aggregate.sh` enforces.
+
+### Review rulings on the guard (PR #12295, 2026-11-07)
+
+- **Key identity.** GitHub compares mapping keys as case-insensitive strings on every mapping
+  (actions/runner `TemplateReader.cs` builds an `OrdinalIgnoreCase` key set per mapping; verified
+  2026-11-07 against lines 180 and 307 of that file), so the
+  guard's identity for a scalar key is its text with ASCII letters folded to upper case: `Fetch-Depth`
+  and `fetch-depth` collide, `on` and `"true"` do not, and the merge key `<<` is an ordinary key. The
+  earlier residual limited to `with:` and `env:` input names was wrong and is withdrawn. The fold is
+  ASCII-only (Python `upper()` would equate sharp-s with `SS`, which `OrdinalIgnoreCase` does not), so
+  non-ASCII case variants and non-scalar keys remain a stated false-GREEN residual. Plain scalar keys
+  that read as a YAML 1.2 core null, bool, int or float (`1`, `1.0`, `0xA`, `~`, `null`, `true`, an
+  empty key) are converted to strings by GitHub before its duplicate check, so the guard does not
+  compare them: each is itself a finding (quote it or rename it), no canonicalization is emulated, and
+  `on`, `off`, `yes`, `no` (plain strings in YAML 1.2) are untouched. A lone numeric key is flagged
+  although GitHub would accept it (deliberate over-strictness; the real tree has none).
+- **File set.** The `yml` and `yaml` suffixes are matched case-insensitively; a dangling or unreadable
+  entry named like a workflow is an unparseable finding (only directories are skipped). Composite
+  actions outside `.github/actions` stay unscanned, with a suite tripwire row asserting none is tracked.
+- **Host-file residual.** The guard cannot protect its own host file: a duplicate key in
+  `pr-quality-guards.yml` stops `quality-guards` from reporting at all. The host file's own duplicate
+  is caught by this script's real-tree row in `ci.yml` `test`, not by `quality-guards`; that residual
+  reopens if `ci.yml`'s gate is narrowed. The latency differs from the other members: the red reaches
+  `test` through the heavy leg (`timeout-minutes: 60`), so it arrives in tens of minutes, not minutes
+  (still well under the 175-minute incident). No ruleset change and no new required workflow. A PR that
+  edits the script, the step or the aggregate row is caught by review, not by the guard (the same trust
+  model as the other three members); the CODEOWNERS rows added for the script and its suite are routing
+  text only (the ruleset has no `require_code_owner_review`), not a second reviewer.
+- **PyYAML.** PyYAML is assumed preinstalled on `ubuntu-latest`, not verified. The guard prints
+  `pyyaml=<version>` on every summary line (that run output is the evidence), exits 2 if it is missing,
+  and has no pip fallback.

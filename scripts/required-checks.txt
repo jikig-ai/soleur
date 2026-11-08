@@ -89,12 +89,13 @@ skill-security-scan PR gate
 #         BOTH over the bot diff in its Phase-4 "Secret-safety ceiling" before
 #         posting any synthetic (action.yml); the greens are earned, not
 #         fabricated. (#6049)
-#       - waiver-discipline: reachable only if a bot diff adds a `gitleaks:allow`
-#         waiver line. The one file a bot PR may write is
-#         knowledge-base/project/weakness-digest.md, emitted verbatim by
-#         weakness-miner.sh — a digest listing that contains no `gitleaks:allow`
-#         token, so the member is vacuously clean over every bot diff
-#         (unreachability-by-construction, re-derived here).
+#       - waiver-discipline: EARNED — the composite action reproduces the
+#         member's own predicate over the staged diff (added `gitleaks:allow`
+#         lines must carry an `issue:#NNN <reason>` trailer) in the same
+#         Phase-4 ceiling as the gitleaks / lint-fixture-content arms
+#         (action.yml). Replaces the earlier unreachability note, which
+#         leaned on weakness-digest.md's current output format — a
+#         generator-emitted file is not a bound on the format. (#12276)
 #       - rename-guard / allowlist-diff: CONTENT-SCOPED, sound by
 #         UNREACHABILITY — their guarded surfaces (renames into allowlist
 #         destinations under apps/web-platform/**, and the .gitleaks.toml paths
@@ -103,7 +104,8 @@ skill-security-scan PR gate
 #   quality-guards (.github/workflows/pr-quality-guards.yml job
 #     `quality-guards`)
 #     members: enforce, markdown-lint, guard-script-fixture-tests (context was
-#     `Bash fixture tests for guard scripts`).
+#     `Bash fixture tests for guard scripts`), workflow-yaml-strict (step
+#     `workflow-duplicate-keys`, added 2026-11-07, #12283).
 #       - enforce: CONTENT-SCOPED, UNREACHABLE — its DSAR surface patterns +
 #         the four required legal docs are all outside ALLOWED_PATHS (∅).
 #       - markdown-lint: CONTENT-SCOPED, UNREACHABLE — the whole-corpus sweep
@@ -125,6 +127,15 @@ skill-security-scan PR gate
 #       - guard-script-fixture-tests: CONTENT-SCOPED, UNREACHABLE — it executes
 #         the fixture battery under .github/scripts/**; ALLOWED_PATHS ∩ that
 #         tree = ∅.
+#       - workflow-yaml-strict (step `workflow-duplicate-keys`): CONTENT-SCOPED,
+#         UNREACHABLE — it strict-parses (duplicate-key aware, keys compared
+#         case-insensitively as GitHub does) only .github/workflows/*.{yml,yaml}
+#         (suffix any case) and .github/actions/**/action.{yml,yaml};
+#         ALLOWED_PATHS = {weakness-digest.md} ∩ that scan surface = ∅. Re-derive
+#         on ANY change to the guard's file set
+#         (.github/scripts/check-workflow-duplicate-keys.py). Comment-only
+#         disposition: no ruleset, .tf or canonical-JSON change (the umbrella
+#         context `quality-guards` is unchanged).
 #   guards-ruleset (.github/workflows/ci.yml job `guards-ruleset`)
 #     members: adr-ordinals, rule-body-lint, tc-document-sha-guard,
 #     marketplace-manifest-guard, service-role-allowlist-gate,
@@ -225,6 +236,38 @@ sentry-destroy-required
 #      binding result on exactly the re-vendor PRs the gate exists to
 #      protect. Do not add it.
 vendor-pin-required
+
+# #10859 — ci.yml `affected-index-ratchet` (PR3b flip, ADR-276 ruling (a) of
+# 2026-11-06): the affected-index audit as a strict-zero ratchet, advisory since
+# PR3a, required now that the observation window certified PASS and the budget
+# owner ruled. The job runs on pull_request and merge_group only (written
+# positively) — a required context must report on every PR.
+#
+# ⚠ CONTENT-SCOPED — UNREACHABLE by the composite action: ALLOWED_PATHS =
+# {knowledge-base/project/weakness-digest.md} and the ratchet's live set is
+# computed from suite files and their named paths; a bot PR touches no suite
+# file, so live minus accepted is unchanged and the synthetic green equals the
+# real verdict (ADR-139 per-gate rule; re-derive if ALLOWED_PATHS widens).
+affected-index-ratchet
+
+# #10859 — ci.yml `oracle-review-required` (PR3b, ADR-276 ruling (a) of
+# 2026-11-06): the bound owner-review sentinel for the affected-index oracle
+# surface — the only arm of this feature's oracle control. pull_request: the
+# BASE commit's RATCHET_ORACLE ∩ diff must be empty, the author deruelle, or a
+# deruelle APPROVED review bound to the head SHA must exist; merge_group: every
+# member's queued head must show its LATEST oracle-review-required check-run
+# completed/success (the self-loop is closed by member enumeration, never
+# self-report). Fail-closed on every unknown.
+#
+# ⚠ CONTENT-SCOPED — UNREACHABLE by the composite action: the pull_request arm
+# classifies on the BASE commit's RATCHET_ORACLE, and ALLOWED_PATHS ∩
+# RATCHET_ORACLE = ∅ (pinned by
+# plugins/soleur/test/bot-synthetic-unreachability.test.sh), so every bot PR is
+# verdict `not-oracle` and the synthetic green asserts exactly that — never a
+# fabricated review act. The residual goes LIVE the instant an oracle path is
+# added to ALLOWED_PATHS: a bot PR could then reach the surface this sentinel
+# gates, and the synthetic green would fabricate the review act (#6049 ceiling).
+oracle-review-required
 
 # CLA Required ruleset
 cla-check

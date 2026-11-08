@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1251
-# generated-at=2026-11-07T00:40:49Z
+# default-weight-ms=1261
+# generated-at=2026-11-08T03:56:53Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -124,6 +124,8 @@ plugins/soleur/skills/constraint-scaffold/test/emit-fix-constraints.test.sh	412	
 plugins/soleur/skills/constraint-scaffold/test/generator.test.sh	97	measured
 plugins/soleur/skills/constraint-scaffold/test/parity.test.sh	147	measured
 plugins/soleur/skills/constraint-scaffold/test/refresh-stage-a.test.sh	1261	floor
+plugins/soleur/skills/cve-exposure/test/file-gap-issue.test.sh	1261	floor
+plugins/soleur/skills/cve-exposure/test/host-state.test.sh	1261	floor
 plugins/soleur/skills/drain-prs/test/argv-ceiling.test.sh	82	measured
 plugins/soleur/skills/eval-harness/test/eval-gate.test.sh	886	measured
 plugins/soleur/skills/eval-harness/test/extract-block.test.sh	217	measured
@@ -174,6 +176,8 @@ plugins/soleur/test/approval-card-wording.test.sh	150	measured
 plugins/soleur/test/audit-flag-flip.test.sh	152	measured
 plugins/soleur/test/auto-close-scanner.test.sh	271	measured
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1222	floor
+plugins/soleur/test/bearer-fetch.test.sh	4000	floor
+plugins/soleur/test/bot-synthetic-unreachability.test.sh	1261	floor
 plugins/soleur/test/boundary-prefix.test.sh	718	measured
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	13	measured
 plugins/soleur/test/c4-count-parity.test.sh	1120	measured
@@ -390,6 +394,7 @@ scripts/ci-draft-light	87009	measured
 scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
+scripts/ci-oracle-review	1261	floor
 scripts/ci-pr-selection	1222	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
@@ -491,6 +496,7 @@ scripts/lib/test-suite-lanes.test.sh	1222	floor
 scripts/lib/trusted-verdict.test.sh	386	measured
 scripts/lib/tweet-eligibility.test.sh	763	measured
 scripts/lib/validate-tweet-draft.test.sh	324	measured
+scripts/lib/web2-relay-rows.test.sh	1261	floor
 scripts/lint-agents-compound-sync-live	93	measured
 scripts/lint-agents-compound-sync-unit	1672	measured
 scripts/lint-agents-enforcement-tags-live	49	measured
@@ -661,6 +667,7 @@ tests/scripts/betterstack-read-classify	210	measured
 tests/scripts/betterstack-roundtrip-latency	165085	measured
 tests/scripts/cf-lb-overlay-gate	1222	floor
 tests/scripts/cleanup-merged-space	9398	measured
+tests/scripts/deploy-access-token-forget	2001	measured
 tests/scripts/destroy-guard-counter-github	70	measured
 tests/scripts/destroy-guard-counter-sentry	267	measured
 tests/scripts/destroy-guard-counter-web-platform	8291	measured

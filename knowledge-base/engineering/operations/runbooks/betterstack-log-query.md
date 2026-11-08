@@ -329,13 +329,13 @@ Live standing alarms over this source:
   incident 1031046761 stayed open for 24 days (rows measured arriving 2026-11-02). **The zero-fill mechanism is an INFERENCE** (a step the
   evaluator cannot evaluate is read as 0): the query is proven read-only (healthy 0, one host 1,
   unknown identifier 2), the vendor evaluator is not, and the evaluated value is not exposed by the
-  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, runs the same
-  query against an identifier no host emits; it must fire. Until it has fired, a green production
-  alert is not evidence of health, and an evaluator error also reads 0 (a quiet failure here; the
+  read-only API. A throwaway canary alert, `soleur-egress-gw-probe-silent-canary-prd`, ran the same
+  query against an identifier no host emits; it fired (2026-11-06) and was retired by #12189. An
+  evaluator error also reads 0 (a quiet failure here; the
   sibling Sentry detectors cover only a fleet-wide dead timer and a failing probe, not one host's Vector
   or journal).
-  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary decision
-  table:
+  Defined in `apps/web-platform/infra/betterstack-logs-alerts.tf`. Decode and the canary's retirement
+  record:
   [`cron-egress-blocked.md`](./cron-egress-blocked.md#egress-gateway-better-stack-alerts).
   An open incident does not by itself mean a host is silent: read `rows_in_window` from
   `scripts/followthroughs/egress-gw-probe-silent-12180.sh` (the exact `doppler run` form, which
@@ -419,6 +419,69 @@ Live standing alarms over this source:
     egress so every other signal here stays green.
 - **`scheduled-followthrough-sweeper.yml`** — one-shot soak follow-throughs (e.g.
   `scripts/followthroughs/zot-restart-plateau-6288.sh`) recur the same query+decode shape.
+- **`logtail_exploration_alert.relay_listener_down`** (#12167 / epic #8211, `higher_than 3` over 300 s, checked every 60 s,
+  missing data counts as zero): `soleur-relay-listener-down-prd`. Emails (team email on the free tier) when four or more
+  `relay_probe proxy_state=<X>` lines in the window have X other than `listening` (`disabled`, `no_bind`, `no_allowlist`,
+  `error`) on either web host. Decode and the host-attributed query: [Session relay probe alerts (#12167)](#session-relay-probe-alerts-12167).
+- **`logtail_exploration_alert.relay_probe_silent`** (#12167, `higher_than 0` over 600 s, checked every 300 s, missing data
+  counts as zero): `soleur-relay-probe-silent-prd`. The value is the number of roster hosts that did NOT ship a `relay_probe`
+  line in 10 minutes (the `egress_gw_probe_silent` shape). Same section for the decode, including what a silent host means.
+- **`logtail_exploration_alert.relay_peer_probe_failed`** (#12167, `higher_than 0` over 300 s, checked every 60 s, missing data
+  counts as zero): `soleur-relay-peer-probe-failed-prd`. Emails on the FIRST `ci-deploy` row `relay_peer_probe peer=<ip>
+  result=<R>` with R in `refused`, `timeout`, `tls`, `denied`. `result=ok` and `skipped=` never match. Deploy-time only. Same
+  section for the decode.
+
+## Session relay probe alerts (#12167)
+
+Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts.tf`, drift guard
+`apps/web-platform/test/infra/relay-probe-alerts.test.sh`) read the session relay's own evidence off-host, with no SSH. The
+`host_name` field separates the hosts: `soleur-web-platform` is web-1, `soleur-web-2` is web-2.
+
+- **The listener line.** `server/proxy-listener-status.ts` logs ONE warn-level pino line per minute per host:
+  `relay_probe proxy_state=<listening|disabled|no_bind|no_allowlist|error> addr=<ip|none> port=<n> workspaces_populated=<0|1>`.
+  `addr=0.0.0.0` is the expected bound address now. `disabled` is a relay switched off, `no_bind` and `no_allowlist` are a
+  missing `SOLEUR_PROXY_BIND` / peer allowlist, `error` is a recorded server that is not listening (the listen failed or the
+  server closed). It is an app-container row: `CONTAINER_NAME = 'soleur-web-platform'` and the sentence is in
+  `message.msg`, with `message.proxyState` / `message.addr` / `message.port` alongside.
+- **The peer line.** `ci-deploy.sh` `relay_peer_probe` journals `relay_peer_probe peer=<10.0.1.x> result=<ok|refused|timeout|tls|denied>`
+  (`SYSLOG_IDENTIFIER = 'ci-deploy'`) once per peer after this host's prod swap. `refused` is nothing listening or unreachable,
+  `tls` is a failed handshake or certificate pin, `timeout` is no answer in time, `denied` is a peer that closed right after the
+  upgrade (its allowlist does not carry this host). `skipped=no_bind|no_roster|no_peers|exec_failed` is "nothing to dial" or "the
+  probe could not run" and never pages.
+- **Reading a page (counts and enum words only, no secrets in these rows).** Per host, last hour, with the delivery control first:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host,
+            JSONExtractString(raw,'message','msg') AS line, count() AS rows, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 HOUR
+       AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'
+       AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_probe proxy_state=')
+     GROUP BY host, line ORDER BY host, last DESC FORMAT JSONEachRow"
+  ```
+
+  The same query with `JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'` and `startsWith(JSONExtractString(raw,'message'),
+  'relay_peer_probe peer=')` over a day reads the peer dials. A host with ~60 rows an hour and only `proxy_state=listening` is healthy.
+- **`relay_listener_down` fired.** Read the host and the state. `disabled` / `no_bind` / `no_allowlist` mean the relay was never
+  configured on that host: `disabled` is no TLS material (`PROXY_TLS_CERT` / `PROXY_TLS_KEY` absent or unparseable), `no_bind` is no
+  `SOLEUR_PROXY_BIND`, `no_allowlist` is no `SOLEUR_PROXY_PEER_ALLOWLIST`; read the host's `ci-deploy` lines for the same deploy
+  (`relay_publish degraded=...`), not SSH; `error` means the listener failed or closed after boot. It sums rows across BOTH hosts, so confirm one host carries
+  the four rows. It auto-resolves after 10 quiet minutes, which does not mean the relay was fixed.
+- **`relay_probe_silent` fired.** The value is the count of silent hosts. Read the query above: no row for a host means its app
+  container is down, runs a build older than #12167 (no reporter yet), or its app-container log path is broken (Vector or journald
+  on that host). Rows from every host in the window while the alert is open means suspect the evaluator (the
+  `egress_gw_probe_silent` open question, #12190), not the fleet; verify with the query before acting.
+- **`relay_peer_probe_failed` fired.** Read `peer` and `result`. A `refused` or `timeout` seconds after the peer's own deploy can be
+  its container mid-swap: re-read the peer's `relay_probe` line (it must say `listening`) and the next deploy's peer line before
+  treating it as a defect. A `denied` is an allowlist that lacks this host's source address; `tls` is the pinned certificate.
+- **Verified when this shipped.** The nested `message.msg` row shape of the relay line and the plain-string peer row were
+  live-probed 2026-11-07 (rows from both hosts, `CONTAINER_NAME` = `soleur-web-platform`).
+- **Not verified when this shipped (REQUIRED post-merge check).** That the evaluator delivers a value for the silence shape
+  (`relay_probe_silent`, the `egress_gw_probe_silent` open question #12190) was not measured, and this change ships no canary for
+  it. After the merge's apply, read the alert in Better Stack: with both hosts reporting its value must be 0 and it must not be
+  open. If it is open while the query above shows rows from every host, the evaluator is the suspect (#12190), not the fleet.
 
 ## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
 

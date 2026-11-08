@@ -177,7 +177,7 @@ assert_eq "" "$missing_from_config" "(1b) no canonical-15368 context missing fro
 # Sanity: the set is non-empty (a both-empty parse would pass vacuously).
 n_ci=$(parse_ci_required "$CONFIG_FILE" | wc -l | tr -d ' ')
 n_canon=$(canonical_15368 "$CANONICAL" | wc -l | tr -d ' ')
-if [[ "$n_ci" -ge 10 && "$n_canon" -ge 10 ]]; then
+if [[ "$n_ci" -ge 12 && "$n_canon" -ge 12 ]]; then
   echo "  PASS: (1c) non-vacuous — $n_ci CI names, $n_canon canonical-15368 contexts"
   PASS=$((PASS + 1))
 else
@@ -499,6 +499,77 @@ if [[ -n "$preflight_line" && -n "$postrun_line" && "$preflight_line" -lt "$post
   PASS=$((PASS + 1))
 else
   echo "  FAIL: (8e) preflight does not precede the synthetic check-run POST (preflight=$preflight_line post=$postrun_line)"
+  FAIL=$((FAIL + 1))
+fi
+
+# --- Test 9: waiver-discipline green is EARNED, not fabricated (#12276) ------
+#
+# `waiver-discipline` is a member of the required `secret-guards` context, so
+# the composite action posts an unconditional green synthetic for it on every
+# bot PR. The pre-fold justification argued unreachability: the only file a bot
+# PR may write, knowledge-base/project/weakness-digest.md, contains no
+# `gitleaks:allow` token. But that file is emitted verbatim by
+# weakness-miner.sh — the argument was a claim about a GENERATOR's current
+# output format, not a bound on the format. The action now mirrors the member's
+# own predicate over the staged diff, so the green is earned whatever the
+# digest's format becomes.
+#
+# Same anchor discipline as Test 8: the presence anchor is syntactic
+# (`^\s*violations=$(git diff --cached`), never a bare token — the arm's own
+# comment names `gitleaks:allow`, and a mention-grep would pass against a
+# deleted arm. The enforcement leg walks the `if [[ -n ... ]]` line to its `fi`
+# requiring a non-zero exit, same defang class as (8d).
+
+echo "Test 9: action.yml EARNS the waiver-discipline green (#12276)"
+waiver_scan_line=$(grep -nE '^[[:space:]]*violations=\$\(git diff --cached --unified=0' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+waiver_gate_line=$(grep -nE '^[[:space:]]*if \[\[ -n "\$violations" \]\]; then' "$ACTION_YML" | head -1 | cut -d: -f1 || true)
+
+if [[ -n "$waiver_scan_line" && -n "$waiver_gate_line" ]]; then
+  echo "  PASS: (9a) action.yml reproduces the waiver-discipline scan over the staged diff (scan=$waiver_scan_line gate=$waiver_gate_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (9a) action.yml does NOT reproduce the waiver-discipline scan/gate."
+  echo "        Without it the synthetic green for 'waiver discipline (issue:#NNN trailer)' is"
+  echo "        unearned — defensible only by an argument about a generated file's format. See #12276."
+  FAIL=$((FAIL + 1))
+fi
+
+# (9b) the predicate must actually mirror the member's: the trailer grep
+# `issue:#[0-9]+` inside the pipeline is the discriminating stage — without it
+# any gitleaks:allow mention trips the arm (a false-positive gate), and the
+# member would still red what the synthetic greened.
+waiver_pred=$(awk -v s="$waiver_scan_line" 'NR > s && /issue:#\[0-9\]/ { print "yes"; exit } NR > s && /\|\| true\)/ { exit }' "$ACTION_YML" || true)
+if [[ "$waiver_pred" == "yes" ]]; then
+  echo "  PASS: (9b) the staged-diff pipeline carries the issue:#NNN trailer predicate"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (9b) the staged-diff pipeline lacks the issue:#NNN trailer predicate."
+  echo "        A bare gitleaks:allow grep does not mirror the member's trailer requirement."
+  FAIL=$((FAIL + 1))
+fi
+
+# (9c) ENFORCEMENT LEG — the then-body must fail the step, same defang class as (8d).
+waiver_enforce=""
+if [[ -n "$waiver_gate_line" ]]; then
+  waiver_enforce=$(awk -v s="$waiver_gate_line" '
+    NR > s && /^[[:space:]]*fi[[:space:]]*$/ { exit }
+    NR > s && /^[[:space:]]*exit[[:space:]]+[1-9]/ { print "yes"; exit }
+  ' "$ACTION_YML" || true)
+fi
+if [[ "$waiver_enforce" == "yes" ]]; then
+  echo "  PASS: (9c) the waiver-discipline then-body exits non-zero (guard is enforcing, not inert)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (9c) the waiver-discipline then-body does NOT exit non-zero before its closing 'fi'."
+  FAIL=$((FAIL + 1))
+fi
+
+# (9d) ordering — the scan must precede the branch push (anchors resolved in Test 8).
+if [[ -n "$waiver_scan_line" && -n "$sideeffect_line" && "$waiver_scan_line" -lt "$sideeffect_line" ]]; then
+  echo "  PASS: (9d) waiver scan runs BEFORE the branch is pushed ($waiver_scan_line < $sideeffect_line)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (9d) waiver scan does not precede the branch push (scan=$waiver_scan_line push=$sideeffect_line)"
   FAIL=$((FAIL + 1))
 fi
 echo ""

@@ -13,7 +13,7 @@ non_blocking:
   - "N2 — statutory-response-catalog.md#dsar routes a Web Platform account holder to the self-serve export or the DSAR worker and has no route for rows held in tables excluded from both (the PA-40 email route). It also has no Art. 21 section (already acknowledged in the LIA). Owed before the first erasure request or objection."
   - "N3 — Art. 20 is cited next to Art. 15 in register (h). The basis is Art. 6(1)(f), so Art. 20 does not apply; harmless, left as drafted."
 open_follow_ups: ["deletion path for a retained row at the end of the retention period, including redaction of the free-text note (not built; tracked in #12080)", "external anchor for the row checksum (deferred; ADR-319 says no issue tracks it)", "deletion of legal_reauth_event rows on erasure (not built; the 30-day opportunistic purge is built)", "Register Maintenance item 17 (a) to (g) (external counsel)"]
-addenda: ["2026-11-05 PR-C addendum (PR #12148, fires on its merge): see the section 'Addendum 2026-11-05 (PR-C)' at the end; it does not change this PR-B disposition"]
+addenda: ["2026-11-05 PR-C addendum (PR #12148, fires on its merge): see the section 'Addendum 2026-11-05 (PR-C)' at the end; it does not change this PR-B disposition", "2026-11-05 PR-D enforcement-read trigger (PR #12187, fires on its merge): recorded as met in the LIA Addendum 2026-11-05; balancing outcome unchanged; no change to the PR-B or PR-C dispositions", "2026-11-06 PR-D ship-time CLO-attestation (PR #12187, fires on its merge): DISCHARGED for the merge of the dark endpoint and the draft-marked disclosures; see the section 'Addendum 2026-11-06 (PR-D, ship-time attestation)' at the end; CLO-agent-attested, draft, pending counsel for #12080"]
 re_evaluation_triggers: "First arms-length user (any founder other than the Jikigai operator) OR EEA-out data subject OR regulated-industry user OR any component that reads the table to enforce something (PR-D wired into a gate) OR the external anchor built OR the retention period confirmed or changed OR a first erasure request or objection from a founder whose row is kept OR a second free-text field or a change to the note cap."
 ---
 
@@ -164,5 +164,70 @@ Conditions (enabling gates, not the merge):
 3. The Request changes note must either have a delivery path (PR-D) or the card copy must stop implying the team will read it, before the first real Request changes.
 4. The ADR-319 enabling conditions stand, including confirming the Supabase single-session-per-user setting is off.
 5. Open items from the PR-B audit (N2, #12080, item 17 (a) to (g)) are unchanged.
+
+*Draft material for internal attestation; not legal advice. External counsel re-review follows the frontmatter triggers and counsel item 17.*
+
+---
+
+## Addendum 2026-11-06 (PR-D, ship-time attestation)
+
+Status: CLO-agent-attested, draft, pending counsel for #12080 (PA-40 item 17). v1 internal counsel-review attestation under the ship Phase 5.5 gate for PR #12187 (PR-D of #12011: migration 185, the read-only check endpoint, the hold gate). The plan declares `brand_survival_threshold: single-user incident`. Authority and limits as stated above: CLO agent function, **not external counsel**, operator veto retained, external counsel reserved for the frontmatter triggers and item 17. This addendum is conditioned on the merge of PR #12187; the text above is unchanged. It strips no `[DRAFT` marker, edits no `Last Updated` line and leaves the sign-off block of the attestation record blank. Draft material, not legal advice.
+
+**Scope of the disposition.** It is about publishing the draft-marked disclosures and records with the endpoint shipped dark (route answers 503 until the token and the founder uuid are configured; the `approval-queue` flag stays off). It is not about enabling processing.
+
+**Method.** The prose of the published documents (Privacy Policy 4.17 and Amended paragraph, GDPR Policy 3.19 and Amended paragraph, Data Protection Disclosure 2.3(aj) and Amended paragraph, canonical and mirror), the register PA-40 cells and Addendum, the LIA addendum, the attestation supersession markers, the DSAR and notice note addendum, the statutory-response catalog and the `DSAR_TABLE_EXCLUSIONS` entry were read against migration 185 (`legal_acceptance_ack`, `ack_legal_acceptance`, `legal_acceptance_ack_state`), the route under `app/api/internal/legal-acceptance/[key]/`, `verifyAcceptance`, `ackState`, `ackWhenFlushed` and `ackAcceptance` in `server/legal-acceptance/service.ts`, and `LEGAL_OPS` and `reportLegalOp` in `server/approval/ops.ts`, with the user-id pseudonymisation in `server/observability.ts`.
+
+### Facts checked
+
+| Fact | Finding |
+|---|---|
+| Third table holds an acceptance id and a time only | TRUE. `acceptance_id` (primary key, no foreign key) and `acked_at`; no founder id, choice or note. Pseudonymous personal data through the join to `legal_acceptance`, as the documents now say. |
+| RPC-only, excluded from the self-serve export for the privilege reason | TRUE. RLS on, every privilege revoked including `service_role`; both functions refuse a caller with a user identity. The allowlist reason matches. |
+| Status check returns status, text fingerprint, time, checksum result; never the note | TRUE. The route rebuilds the body from `{status, text_hash, decided_at, row_ok}`. |
+| Takes no account identifier from the caller; answers about one configured account; "not available" until configured | TRUE. The founder id comes only from `LEGAL_ACCEPTANCE_FOUNDER_ID`; unset or malformed token or id answers 503 `Not available`, before any lookup. |
+| Monitoring events and their content | TRUE as a union across event types. Payloads are key, version, choice, text hash, status, age and a user id that `reportSilentFallback` renames to `userIdHash` (HMAC) at the emit boundary; never the note, the code, the address or the text. The verify route emits `row_without_event`, `record_invalid` and `store_failed` without a user id. |
+| Marker written only after the event flush is confirmed; kept with the row; no separate deletion | TRUE. `ackWhenFlushed` writes the marker only when the flush returns true; no sweep or scrub touches the table; L5 (delete ack rows with the decision rows by `acceptance_id`, no cascade) is recorded as part of the #12080 path. |
+| Nothing writes the third table until the decision screens run | TRUE. Only `ackWhenFlushed` calls `ack_legal_acceptance`, from the decide route behind the flag, which stays off. |
+| Database-owner credential holders | As ruled P2-a: the operator and the production migration pipeline; "no AI-assistant session is meant to use either" is a rule, not a control, and every sentence says so. |
+
+**Correction made in this attestation (one-line prose, six surfaces).** The italic "written ahead of the processing" parenthetical in Privacy Policy 4.17, GDPR Policy 3.19 and Data Protection Disclosure 2.3(aj) (canonical and mirror) said the screens and the write path "ship separately and are not deployed" and that "the two tables" exist. Since PR-C (#12148) merged the screens and the write path are in the codebase behind the flag, and since migration 185 there are three tables. The sentence now reads "the tables that hold the record exist ... the screens and the write path that record a decision are built but switched off ... The record applies from the date those screens are switched on." The `[DRAFT` marker inside the parenthetical is untouched. SHA pins in `legal-doc-shas.ts` regenerated for the three documents; `check-tc-document-sha.sh`, the mirror-drift baseline lint and the scope-block lint exit 0, and `legal-doc-consistency.test.ts` passes.
+
+### Per-artifact verdicts
+
+| Artifact | Verdict |
+|---|---|
+| Privacy Policy 4.17 and Amended paragraph (canonical, mirror) | Accurate after the correction above. Draft-marked; `Last Updated` untouched. |
+| GDPR Policy 3.19 and Amended paragraph (canonical, mirror) | Accurate after the correction above. Draft-marked; `Last Updated` untouched. |
+| Data Protection Disclosure 2.3(aj) and Amended paragraph (canonical, mirror) | Accurate after the correction above. Draft-marked; `Last Updated` untouched. |
+| `legal-doc-shas.ts` pins | Match the canonical raw bytes. |
+| Art. 30 register PA-40 (Scope note, cells, Addendum) | Accurate against migration 185 and the code as ruled L2, X1, L3, L5, P2-a, P2-c; superseded markers sit under the superseded sentences. |
+| LIA Addendum 2026-11-05 (PR-D) | Accurate; trigger recorded as met; balancing outcome unchanged for the operator-first stage. |
+| Attestation record (supersession markers) | Accurate; sign-off block stays blank. |
+| DSAR and notice note (Addendum 2026-11-06) | Accurate; the join query matches the table definitions; produces the ack rows on request for a live and a deleted account. |
+| Statutory-response catalog | Accurate; names the record as a requester class. |
+| `DSAR_TABLE_EXCLUSIONS` entry | Accurate; one stated reason (privilege), pseudonymous-personal-data position stated. |
+| Compliance-posture row | Accurate; the "check endpoint is PR-D" sentence is marked superseded in-cell. |
+
+### Non-blocking observations
+
+- **N5.** The monitoring sentence in the three documents lists "a decision is recorded or refused, a check fails, a decision record has no marker". The email-code step failure (`reauth_failed`), the page read failure and the integrity failure (`record_invalid`) are covered only by "a check fails" read broadly. The recipient (Sentry) and the data are the same as already described; wording to be tightened in the final-form rewrite owed before any non-operator founder.
+- **N6.** The sentence that the final-form documents are owed before any founder other than the operator, and that the operator's AI-assistant working session is a counsel question (item 17(h)), stand as written.
+
+### Determinations
+
+- **Lawful basis and balancing.** Unchanged for the operator-first stage (LIA Addendum). The third table adds no recipient, processor or transfer.
+- **Retention and erasure.** Unchanged and undecided (item 17(a), (b); #12080). Not decided here.
+- **Published drafts.** Publishing these draft-marked paragraphs ahead of the processing is supportable because they state, in the present tense and with dates, what is not yet switched on, and mark themselves pending counsel.
+
+### Disposition
+
+**DISCHARGED for the merge of PR #12187** (dark endpoint, flag off, draft-marked publications). Not external counsel.
+
+Conditions (enabling gates, not the merge):
+
+1. The PR-B and PR-C conditions stand, in particular: no real row, and no `approval-queue` flag on in production, before the retention period is decided by counsel (#12080) or the operator records an express deferral.
+2. The final-form Privacy Policy, GDPR Policy and Data Protection Disclosure (with N5 tightened) are owed before any founder other than the operator.
+3. Before the verify token and founder uuid are applied in production, the Terraform change (#12196) and the operator's Doppler entry are the operator's act; this attestation authorises no production action.
+4. Per D7: before the flag is on in the production project, `select count(*) from legal_acceptance` there must be 0, else the matching ack rows are inserted per the runbook.
 
 *Draft material for internal attestation; not legal advice. External counsel re-review follows the frontmatter triggers and counsel item 17.*

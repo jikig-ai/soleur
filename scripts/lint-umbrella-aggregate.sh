@@ -22,6 +22,14 @@
 #   (e) CENSUS: UMBRELLAS below must equal the set of jobs containing an
 #       `- id: aggregate` step across .github/workflows/*.yml — a new
 #       umbrella added outside the census fails until registered.
+#   (f) CANONICAL-SOURCE: member() exists ONCE, in
+#       scripts/lib/umbrella-member.sh (#12276 — the five inline copies were
+#       one shared arbiter's worth of drift waiting to happen). Each
+#       aggregate run block must source it exactly once via the
+#       `${GITHUB_WORKSPACE:?}` form and must NOT carry an inline
+#       `member() {` redefinition — a shadow body after the source line
+#       silently re-opens the five-way drift the dedup closed. The semantics
+#       tokens of (d) are pinned against the lib file, once, not per block.
 #
 # Text-parse lint: `- id:` and `member(` tokens only, no YAML library. The
 # member(...) call's THIRD argument is the single-quoted CSV of step ids.
@@ -37,6 +45,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 python3 - <<'PYEOF'
+import os
 import re
 import sys
 
@@ -158,7 +167,7 @@ for path, jobs in UMBRELLAS.items():
         if not members:
             fail(f"{path} `{job}`: no member steps found (anti-vacuity floor)")
 
-        # (d) verdict-flow — the verdict→exit edge and member() semantics
+        # (d) verdict-flow — the verdict→exit edge; (f) canonical-source pin
         rb = "\n".join(run_block(agg[0]))
         for tok in ("failed=0", 'if [ "$failed" -ne 0 ]', "exit 1"):
             if tok not in rb:
@@ -166,9 +175,26 @@ for path, jobs in UMBRELLAS.items():
         for mline in run_block(agg[0]):
             if member_re.match(mline) and "|| failed=1" not in mline:
                 fail(f"{path} `{job}` aggregate: member() call lacks `|| failed=1`")
-        for tok in ("skipped) ;;", "*) any_fail=1", "owed a verdict", "return 1", "return 0"):
-            if tok not in rb:
-                fail(f"{path} `{job}` aggregate: member() semantics token `{tok}` missing")
+        src_n = rb.count('source "${GITHUB_WORKSPACE:?}/scripts/lib/umbrella-member.sh"')
+        if src_n != 1:
+            fail(f"{path} `{job}` aggregate: canonical member() source line present {src_n}x (want 1)")
+        if "member() {" in rb:
+            fail(f"{path} `{job}` aggregate: inline member() redefinition shadows the canonical lib")
+
+# (d-continued) member() semantics, pinned ONCE against the canonical lib —
+# they used to be checked per run block when each umbrella carried its own
+# copy. A missing lib means every umbrella's source line fails at CI time;
+# report it here first with the file it cannot source.
+lib_path = "scripts/lib/umbrella-member.sh"
+if os.path.isfile(lib_path):
+    lib = open(lib_path, encoding="utf-8").read()
+    if "member() {" not in lib:
+        fail(f"{lib_path}: no member() definition")
+    for tok in ("skipped) ;;", "*) any_fail=1", "owed a verdict", "return 1", "return 0"):
+        if tok not in lib:
+            fail(f"{lib_path}: member() semantics token `{tok}` missing")
+else:
+    fail(f"{lib_path}: canonical member() library absent — umbrellas cannot source it")
 
 # (e) census — every `- id: aggregate` step in the tree must be a registered umbrella
 import glob

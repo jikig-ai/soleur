@@ -481,6 +481,23 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_COMMUNITY_TEST_COMMUNITY_ARGV_TEST_SH_PATHS=(
   "plugins/soleur/skills/community/test/community-argv.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CVE_EXPOSURE_TEST_HOST_STATE_TEST_SH_PATHS=(
+  "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/cloud-init-registry.yml"
+  "apps/web-platform/infra/inngest-bootstrap.sh"
+  "apps/web-platform/infra/server.tf"
+  "apps/web-platform/infra/variables.tf"
+  "plugins/soleur/skills/cve-exposure/SKILL.md"
+  "plugins/soleur/skills/cve-exposure/references/component-map.md"
+  "plugins/soleur/skills/cve-exposure/references/disclosure-and-verdicts.md"
+  "plugins/soleur/skills/cve-exposure/scripts/file-gap-issue.sh"
+  "plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
+  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
+  "scripts/betterstack-query.sh"
+  "scripts/image-cve-scan.sh"
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_BITE_PROOF_TEST_SH_PATHS=(
   "package.json"  # plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:21
   "plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh"
@@ -495,6 +512,12 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_EVAL_HARNESS_TEST_EVAL_GATE_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_SKILLS_LINEAR_FETCH_TEST_PARITY_TEST_SH_PATHS=(
   ".github/workflows/pr-quality-guards.yml"  # plugins/soleur/skills/linear-fetch/test/parity.test.sh:26
   "plugins/soleur/skills/linear-fetch/test/parity.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_BEARER_FETCH_TEST_SH_PATHS=(
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # SUT (plugins/soleur/test/bearer-fetch.test.sh:32)
+  "plugins/soleur/test/bearer-fetch.test.sh"
+  "scripts/lib/bearer-curl.sh"  # real read: the env -u list parity test (plugins/soleur/test/bearer-fetch.test.sh:292)
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_HEAD_VERDICT_TEST_SH_PATHS=(
@@ -552,6 +575,13 @@ AFFECTED_PLUGINS_SOLEUR_TEST_DESTRUCTIVE_COMMAND_GUARD_MUTATION_TEST_SH_PATHS=(
 AFFECTED_PLUGINS_SOLEUR_TEST_GITLEAKS_RULES_TEST_SH_PATHS=(
   ".gitleaks.toml"  # plugins/soleur/test/gitleaks-rules.test.sh:2
   "plugins/soleur/test/gitleaks-rules.test.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+AFFECTED_PLUGINS_SOLEUR_TEST_HOLD_GATE_EVAL_TEST_SH_PATHS=(
+  "knowledge-base/engineering/operations/runbooks/legal-acceptance-note-read.md"  # real read: the runbook wording pin (plugins/soleur/test/hold-gate-eval.test.sh:914)
+  "plugins/soleur/scripts/lib/bearer-fetch.sh"  # sourced by the SUT and copied into the mutant sandboxes (plugins/soleur/test/hold-gate-eval.test.sh:1375)
+  "plugins/soleur/skills/ship/scripts/hold-gate-eval.sh"  # SUT
+  "plugins/soleur/test/hold-gate-eval.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
 AFFECTED_PLUGINS_SOLEUR_TEST_LEFTHOOK_TYPECHECK_HEAP_TEST_SH_PATHS=(
@@ -1183,6 +1213,17 @@ AFFECTED_PLUGINS_SOLEUR_TEST_SHIP_BATTERY_OWED_TEST_SH_PATHS=(
   "plugins/soleur/skills/ship/scripts/battery-owed.sh"
   "plugins/soleur/skills/one-shot/references/operator-constraints.md"  # T18p derives the writer strings from it
   "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/scripts/gate-or-skip.sh"                             # T19 runs the wrapper against a fake tree
+  "plugins/soleur/scripts/grok-pre-push-gate.sh"                       # T19 slices its two sentinel blocks
+  "plugins/soleur/skills/work/SKILL.md"                                # T19 call-site pin (step 9 fence, fan-out lead)
+  "plugins/soleur/skills/review/SKILL.md"                              # T19 call-site pin (lead gate)
+  "plugins/soleur/skills/test-fix-loop/SKILL.md"                       # T19 negative: stays token-blind
+  "lefthook.yml"                                                       # T19 negative: stays token-blind
+  "plugins/soleur/scripts/affected-tests.sh"                           # T19 negative: the gate itself never reads the token
+  "plugins/soleur/skills/ship/scripts/battery-refusal-wait.sh"         # T19 negative: its own exit-42 contract
+  "scripts/hooks/pre-push"                                             # T19 negative: opt-in hook stays token-blind
+  "plugins/soleur/scripts/lib/affected-tests/"                         # T19 negative: sourced libs stay token-blind
+  "plugins/soleur/scripts/grok-fidelity-gate.sh"                       # T19 pins its rule-budget skip comparison
   "plugins/soleur/test/ship-battery-owed.test.sh"
   "scripts/lib/test-affected-paths.sh"
 )
@@ -2047,6 +2088,31 @@ AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
   "scripts/ci-oracle-lane.test.sh"
   "scripts/ci-pr-selection.sh"  # ci-oracle-lane.test.sh:1050 reads is_doc_path live for the O-DOCPARITY byte-equality check
   "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/ci-oracle-review (#10859, PR3b) — the suite executes the driver scripts/ci-oracle-review.sh under
+# PATH stubs, reads scripts/merge-queue-cla-verify.sh for the enumeration parity pin, and reads
+# .github/workflows/ci.yml for the job-wiring pins (the awk extraction of the oracle-review-required job
+# block the review fix round added at scripts/ci-oracle-review.test.sh:426). Naming-only paths
+# (scripts/ci-pr-affected-replay.py — a fixture's RATCHET_ORACLE text and the stub-git dispatch glob) carry
+# accept rows; the suite never opens them.
+AFFECTED_SCRIPTS_CI_ORACLE_REVIEW_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-oracle-review.sh"
+  "scripts/ci-oracle-review.test.sh"
+  "scripts/merge-queue-cla-verify.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+
+# plugins/soleur/test/bot-synthetic-unreachability.test.sh (#10859, PR3b) — reads the composite action's
+# ALLOWED_PATHS, imports RATCHET_ORACLE from the live replay module, and pins the two new required contexts in
+# required-checks.txt. Edge set = the files it opens.
+AFFECTED_PLUGINS_SOLEUR_TEST_BOT_SYNTHETIC_UNREACHABILITY_TEST_SH_PATHS=(
+  ".github/actions/bot-pr-with-synthetic-checks/action.yml"
+  "scripts/ci-pr-affected-replay.py"
+  "scripts/required-checks.txt"
+  "scripts/lib/test-affected-paths.sh"
+  "plugins/soleur/test/bot-synthetic-unreachability.test.sh"
 )
 
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
@@ -3704,6 +3770,7 @@ AFFECTED_SCRIPTS_LINT_TRAP_TEMPFILE_OWNERSHIP_PATHS=(
 AFFECTED_SCRIPTS_LINT_UMBRELLA_AGGREGATE_PATHS=(
   ".github/workflows/"
   "scripts/lint-umbrella-aggregate.sh"
+  "scripts/lib/umbrella-member.sh"  # the canonical member() the (f) pin sources
   "scripts/lib/test-affected-paths.sh"
 )
 
@@ -4873,13 +4940,12 @@ AFFECTED_APPS_WEB_PLATFORM_INFRA_INNGEST_LUKS_SOLE_COPY_PATHS=(
 
 # plugins/soleur/test/ci-pr-affected-replay-{a,b,c} (#11562 --rows arms of one suite file) — the rows
 # grep, awk and cp REAL files (the sibling test scripts for the pin row, the preactivation script for
-# the GIT_ var census, the required-checks fixture copy) and EXECUTE the observation-window probe under
-# a stub gh; the suite file is shared by all three labels, so all three arrays carry the same edges.
+# the GIT_ var census, the required-checks fixture copy); the suite file is shared by all three
+# labels, so all three arrays carry the same edges.
 AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_A_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4888,7 +4954,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_B_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"
@@ -4897,7 +4962,6 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
   "scripts/ci-draft-light.test.sh"
   "scripts/ci-pr-affected-preactivation.sh"
   "scripts/ci-push-dedupe.test.sh"
-  "scripts/followthroughs/ratchet-observation-window-10865.sh"
   "scripts/required-checks.txt"
   "plugins/soleur/test/ci-pr-affected-replay.test.sh"
   "scripts/lib/test-affected-paths.sh"

@@ -230,9 +230,11 @@ printf 'extracted %d rules block(s) from cloudflare_ruleset.seo_config_settings\
 # present. The app.soleur.ai rule also sets ssl, so prefer a rule naming the apex when
 # one exists and fall back to the first ssl rule, which is what makes a mis-scoped
 # mitigation visible rather than silently unselected.
-MITIGATION=$(awk -F'\t' '$4 != "ssl=-" && $5 ~ /\\"soleur\.ai\\"/ { print; exit }' "$RULES")
+MITIGATION=$(awk -F'\t' '$4 != "ssl=-" && $5 ~ /\\"soleur\.ai\\"/ && $5 !~ /http\.host eq/ { print; exit }' "$RULES")
+# Fallback excludes the adopted app rule AND the two app-host ORIGIN-TLS rules (ADR-321; exact `http.host eq` forms), so deleting
+# the mitigation block cannot be masked by one of them being picked up in its place.
 [[ -n "$MITIGATION" ]] || MITIGATION=$(awk -F'\t' '
-  $4 != "ssl=-" && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" { print; exit }
+  $4 != "ssl=-" && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" && $5 !~ /http\.host eq/ { print; exit }
 ' "$RULES")
 
 if [[ "$STAGE" == "pre-cutover" ]]; then
@@ -267,21 +269,26 @@ if [[ "$STAGE" == "pre-cutover" ]]; then
     # second `ssl` rule for apex/www declared below this one silently overwrites it.
     # Asserting cardinality rather than position catches it from either side, and does
     # not depend on the reader remembering which direction applies to which rule type.
-    # Today the only other ssl rule is scoped to app.soleur.ai, which cannot match —
-    # the host anchors below are quote-delimited so that subdomain is not miscounted.
+    # The other ssl rules are the adopted app rule and the two ORIGIN-TLS rules (ADR-321 canary and strict flip), each
+    # excluded here by its EXACT expression (not by a host-literal predicate), so editing any of them turns this red.
+    # Their own scope, setting and order are pinned in apps/web-platform/test/seo-config-rules.test.ts.
     # Counts by the PRESENCE of an ssl key, not by what the expression spells. An
     # expression need not name a host to match it — `(http.host ne "app.soleur.ai")`
     # and `(true)` both match the apex — so any host-literal predicate is bypassable
     # by a rule that is still perfectly able to overwrite this one.
     ssl_rules=$(awk -F'\t' '
-      $4 != "ssl=-" && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" { n++ } END { print n + 0 }
+      $4 != "ssl=-" \
+        && $5 != "expr=\"(http.host in {\\\"app.soleur.ai\\\" \\\"lb-staging.soleur.ai\\\"})\"" \
+        && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\")\"" \
+        && $5 != "expr=\"(http.host eq \\\"app.soleur.ai\\\" and http.request.uri.path eq \\\"/health\\\" and any(http.request.headers[\\\"x-origin-tls-probe\\\"][*] eq \\\"1\\\"))\"" { n++ } END { print n + 0 }
     ' "$RULES")
     rc=1; [[ "$ssl_rules" == "1" ]] && rc=0
     verdict "$rc" "exactly one rule in this ruleset sets ssl outside the app.soleur.ai scope (a second one overwrites this via last-match-wins, whatever its expression spells; found: ${ssl_rules})"
     # --- 6. the RESOURCE cannot be conditionally destroyed --------------------------
-    # `count = 0` or a `for_each` over an empty set removes the whole ruleset — all
-    # three rules, including this mitigation — while every assertion above still reads
-    # a perfectly correct rule block in the file.
+    # `count = 0` or a `for_each` over an empty set removes the whole ruleset — every
+    # rule, including this mitigation — while every assertion above still reads
+    # a perfectly correct rule block in the file. Matched ANYWHERE in the resource body, so a `dynamic "rules"` block
+    # (whose for_each makes a rule come and go, the shape ADR-321 item 10 retired) is red here too.
     rc=0
     grep -qE '^(count|for_each)=present' "$RESMETA" && rc=1
     verdict "$rc" "the ruleset resource carries no count/for_each (either can destroy every rule in it while the block still reads correctly)"
