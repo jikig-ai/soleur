@@ -1955,12 +1955,14 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   # bake with `--role web` under the same unit names, so writing this pair there would overwrite it. The three heredocs below are BYTE COPIES
   # of apps/web-platform/infra/host-kernel-marker.{sh,service,timer} (the unit differing only in `--role inngest`); host-kernel-marker-delivery.test.sh
   # extracts them and fails on any drift. To re-sync after an edit to a source file, re-paste it between the delimiters. Embedded here, rather than as a
-  # new staged asset, because the OCI bootstrap image already carries this script: cloud-init-inngest.yml's STAGED list, its digest pin and the image
-  # build are unchanged by this feature. Quoted delimiters: the bodies are fully literal.
+  # new staged asset, because the OCI bootstrap image already carries this script: cloud-init-inngest.yml's STAGED list and the image build are
+  # unchanged by this feature. DELIVERY: the inngest host receives inngest-bootstrap.sh and vector.toml ONLY through the digest-pinned bootstrap OCI image,
+  # so the emitter reaches a replaced host only after a new bootstrap tag is minted and the digest pin is bumped. Quoted delimiters: the bodies are fully literal.
+  # Observability, never a gate: every step below is guarded so a failure logs a warning and does not abort the bootstrap (set -euo pipefail).
   HKM_SCRIPT="/usr/local/bin/host-kernel-marker.sh"
   HKM_UNIT="/etc/systemd/system/host-kernel-marker.service"
   HKM_TIMER="/etc/systemd/system/host-kernel-marker.timer"
-  cat > "$HKM_SCRIPT" <<'HKMSCRIPTEOF'
+  cat > "$HKM_SCRIPT" <<'HKMSCRIPTEOF' || log "warn: host-kernel-marker collector write failed (#12007)"
 #!/usr/bin/env bash
 # host-kernel-marker.sh --role <web|inngest|registry>
 #
@@ -1988,15 +1990,17 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
 # package lists (no `apt-get update`, no network, no lock), so a stale list undercounts; it never feeds kernel_state.
 # It is bounded by `timeout` (default 20 s) and is `unknown` on any failure or timeout.
 #
-# ENVIRONMENT. PATH is set explicitly and includes /usr/sbin: cron and systemd both start without it (the 2026-07-15
-# blind-host learning), and a bare `command not found` would read as a dark host. LC_ALL=C pins apt's output.
+# ENVIRONMENT. PATH is set explicitly to the system directories only (no /usr/local: this runs as root and a planted
+# /usr/local/bin/{uname,apt-get,timeout} must not be picked up) and includes /usr/sbin: cron and systemd both start
+# without it (the 2026-07-15 blind-host learning), and a bare `command not found` would read as a dark host. LC_ALL=C
+# pins apt's output.
 #
 # TEST SEAM. Honoured ONLY when HKM_TEST=1 (no unit sets it): HKM_STUB_BIN_DIR (prepended to PATH), HKM_PROC_UPTIME,
 # HKM_REBOOT_FILE, HKM_APT_TIMEOUT_S. host-kernel-marker.test.sh proves the seam is inert without HKM_TEST=1.
 
 export LC_ALL=C
 readonly REGISTRY_HOST_ID='soleur-registry'
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 UPTIME_FILE=/proc/uptime
 REBOOT_FILE=/var/run/reboot-required
@@ -2069,8 +2073,8 @@ fi
 printf '%s\n' "$line"
 exit 0
 HKMSCRIPTEOF
-  chmod 0755 "$HKM_SCRIPT"
-  cat > "$HKM_UNIT" <<'HKMUNITEOF'
+  chmod 0755 "$HKM_SCRIPT" || log "warn: host-kernel-marker chmod failed (#12007)"
+  cat > "$HKM_UNIT" <<'HKMUNITEOF' || log "warn: host-kernel-marker unit write failed (#12007)"
 [Unit]
 Description=Report the running kernel to the host log (SOLEUR_HOST_KERNEL, #12007)
 Documentation=https://github.com/jikig-ai/soleur/issues/12007
@@ -2086,26 +2090,30 @@ SyslogIdentifier=host-kernel-marker
 # and no EnvironmentFile. It exits 0 on every measurement failure (the failure is a token value in the line).
 TimeoutStartSec=60
 Nice=10
+# Background work: the simulated apt upgrade must never compete with the workload on the host. A MemoryMax kill degrades the
+# row to unknown tokens (the collector never fails the unit), it does not take the host down.
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+MemoryMax=256M
 ExecStart=/usr/local/bin/host-kernel-marker.sh --role inngest
 HKMUNITEOF
-  cat > "$HKM_TIMER" <<'HKMTIMEREOF'
+  cat > "$HKM_TIMER" <<'HKMTIMEREOF' || log "warn: host-kernel-marker timer write failed (#12007)"
 [Unit]
 Description=Report the running kernel every 6 hours and shortly after boot (SOLEUR_HOST_KERNEL, #12007)
 
 [Timer]
 # One row shortly after every boot, then 00:00/06:00/12:00/18:00 plus a randomized delay: at least one row per day
-# survives a missed slot, and the reader's 48 h trust window keeps two missed slots of slack. Persistent=true replays
+# survives a missed slot, and the 36 h dead-man tolerates five missed 6 h slots. Persistent=true replays
 # one missed slot after downtime; the oneshot service cannot overlap itself.
 OnBootSec=2min
 OnCalendar=*-*-* 00/6:00:00
 Persistent=true
 RandomizedDelaySec=15min
-AccuracySec=1min
 
 [Install]
 WantedBy=timers.target
 HKMTIMEREOF
-  systemctl daemon-reload
+  systemctl daemon-reload || log "warn: host-kernel-marker daemon-reload failed (#12007)"
   # Observability, never a gate: `enable --now` arms the timer (OnBootSec does not refire on an already-booted host), and the immediate `start` ships
   # the first row now. Source 4 (vector.toml host_scripts_journald) allowlists the SyslogIdentifier.
   systemctl enable --now host-kernel-marker.timer || log "warn: host-kernel-marker timer enable failed (#12007)"

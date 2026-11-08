@@ -76,7 +76,9 @@ jobs:
           # list below: their heartbeats are born paused and the emitter reaches running hosts only through held steps, so
           # an hourly run would report a dark host as a feeder fault and train the operator to ignore this monitor. The
           # arming change adds the four names here in the same change that stages their unpause (tracked in #12386); the
-          # harness pins this list to the script's target table minus its DEFERRED_TARGETS set.
+          # harness pins this list to the script's target table minus the harness's DEFERRED_TARGETS set (that set lives
+          # only in the test, not in the script). The job timeout (6 minutes) must be revisited at arming: 7 sequential targets
+          # have a worst case of about 665 s, which does not fit in 6 minutes.
           all_decided=true
           for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do
             rc=0
@@ -93,7 +95,7 @@ jobs:
               safe="$(strip_log_injection "$line")"
               case "$safe" in
                 "deadman-feeder: "*)
-                  if [[ "$safe" =~ ^deadman-feeder:\ target=([a-z-]+)\ verdict=([a-z_]+)(\ [a-z_]+=[A-Za-z0-9:._-]{0,40})*$ ]]; then
+                  if [[ "$safe" =~ ^deadman-feeder:\ target=([a-z0-9-]+)\ verdict=([a-z_]+)(\ [a-z_]+=[A-Za-z0-9:._-]{0,40})*$ ]]; then
                     printf '%s\n' "$safe"
                     if [[ "${BASH_REMATCH[1]}" == "$t" || "${BASH_REMATCH[1]}" == "none" ]]; then
                       verdict="${BASH_REMATCH[2]}"

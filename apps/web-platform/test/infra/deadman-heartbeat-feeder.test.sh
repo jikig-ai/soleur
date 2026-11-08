@@ -159,9 +159,12 @@ declare -A E_NAME=([$T_LUKS]="soleur-luks-monitor-host-timer-prd" [$T_COST]="sol
 # The host-kernel predicates, frozen here independently of the script (one physical line each). The kernel shape is
 # delimited by its trailing space (no end-of-string anchor: build_sql refuses every dollar sign but its two table tokens).
 HK_KSHAPE='[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ '
-HK_ID_JOURNALD="JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, 'host_name') = "
-HK_ROLE_WEB="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), ' host=') = 0"
-HK_ROLE_INGEST="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), 'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), ' host=') = 0"
+# Every predicate leads with position(raw, 'SOLEUR_HOST_KERNEL') > 0 (the full-window scan short-circuits); the journald ones
+# pin the exact _SYSTEMD_UNIT beside the SYSLOG_IDENTIFIER (the luks precedent) and refuse ANY 'host=' substring.
+HK_LEAD="position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND "
+HK_ID_JOURNALD="${HK_LEAD}JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = "
+HK_ROLE_WEB="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
+HK_ROLE_INGEST="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), 'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
 HK_REG_HOSTID_ARM="(endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0)"
 declare -A E_PRED=(
   [$T_LUKS]="JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'"
@@ -170,7 +173,7 @@ declare -A E_PRED=(
   [$T_HK1]="${HK_ID_JOURNALD}'soleur-web-platform' AND ${HK_ROLE_WEB}"
   [$T_HK2]="${HK_ID_JOURNALD}'soleur-web-2' AND ${HK_ROLE_WEB}"
   [$T_HKI]="${HK_ID_JOURNALD}'soleur-inngest-prd' AND ${HK_ROLE_INGEST}"
-  [$T_HKR]="JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '' AND JSONExtractString(raw, 'host_name') = '' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), 'role=registry kernel=${HK_KSHAPE}') AND ${HK_REG_HOSTID_ARM}"
+  [$T_HKR]="${HK_LEAD}JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '' AND JSONExtractString(raw, 'host_name') = '' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), 'role=registry kernel=${HK_KSHAPE}') AND ${HK_REG_HOSTID_ARM}"
 )
 expect_sql() { # <target> <predicate> -> the SQL the feeder must send (frozen shape)
   local w="${E_WINDOW[$1]}" win
@@ -1530,9 +1533,9 @@ HK_OK_KERNEL="9.9.9-1-generic"
 hk_msg() { # <role> <kernel> [fields after sec_updates]
   printf 'SOLEUR_HOST_KERNEL v=1 role=%s kernel=%s uptime_s=86400 reboot_required=0 sec_updates=2%s' "$1" "$2" "${3:+ $3}"
 }
-hk_raw() { # <host_name|__none__> <message> [SYSLOG_IDENTIFIER, empty = absent]
-  jq -cn --arg h "$1" --arg m "$2" --arg id "${3-host-kernel-marker}" \
-    '{message: $m} + (if $id == "" then {} else {SYSLOG_IDENTIFIER: $id} end) + (if $h == "__none__" then {} else {host_name: $h} end)'
+hk_raw() { # <host_name|__none__> <message> [SYSLOG_IDENTIFIER, empty = absent] [_SYSTEMD_UNIT, default host-kernel-marker.service when the id is set; __none__ = absent]
+  jq -cn --arg h "$1" --arg m "$2" --arg id "${3-host-kernel-marker}" --arg u "${4-host-kernel-marker.service}" \
+    '{message: $m} + (if $id == "" then {} else {SYSLOG_IDENTIFIER: $id} end) + (if $id == "" or $u == "__none__" then {} else {_SYSTEMD_UNIT: $u} end) + (if $h == "__none__" then {} else {host_name: $h} end)'
 }
 hk_good() { # <target> [kernel] [extra trailing fields] -> a row's raw JSON that qualifies for <target>
   local t="$1" k="${2:-$HK_OK_KERNEL}" x="${3:-}"
@@ -1609,6 +1612,18 @@ for t in $T_HK1 $T_HK2 $T_HKI; do
   HKP "$t"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw "${HK_HOST[$t]}" "$(hk_msg "${HK_ROLE[$t]}" "$HK_OK_KERNEL" "host=soleur-registry")")" | fx hk-jhost-$t)"
   expect "$t: a journald-path row carrying ' host=' withholds" 3 no_qualifying_row
 done
+# (CTO ruling) The journald hosts' rows are also pinned to the exact _SYSTEMD_UNIT, and ANY 'host=' substring is refused
+# (a leading space is not the only separator: end of message, newline and tab all slipped a ' host=' test).
+for t in $T_HK1 $T_HK2 $T_HKI; do
+  HKP "$t"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw "${HK_HOST[$t]}" "$(hk_msg "${HK_ROLE[$t]}" "$HK_OK_KERNEL")" host-kernel-marker session-1.scope)" | fx hk-unit-scope-$t)"
+  expect "$t: the right SYSLOG_IDENTIFIER and host_name under another _SYSTEMD_UNIT (session-1.scope) withholds" 3 no_qualifying_row "n=0"
+  HKP "$t"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw "${HK_HOST[$t]}" "$(hk_msg "${HK_ROLE[$t]}" "$HK_OK_KERNEL")" host-kernel-marker __none__)" | fx hk-unit-none-$t)"
+  expect "$t: the right SYSLOG_IDENTIFIER and host_name with NO _SYSTEMD_UNIT withholds" 3 no_qualifying_row "n=0"
+  for _hv in "end-of-message: host=" "newline:"$'\n'"host=" "tab:"$'\t'"host=" "glued:host="; do
+    HKP "$t"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw "${HK_HOST[$t]}" "$(hk_msg "${HK_ROLE[$t]}" "$HK_OK_KERNEL")${_hv#*:}")" | fx "hk-hostvar-${_hv%%:*}-$t")"
+    expect "$t: a message carrying a ${_hv%%:*} host= variant withholds" 3 no_qualifying_row "n=0"
+  done
+done
 # Registry identity: role=registry AND host=<the registry id>; a different host=, no host=, a prefix decoy, or a stamped identity never qualify.
 HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registry "$HK_OK_KERNEL" "host=soleur-web-platform")" "")" | fx hk-reg-wronghost)"
 expect "registry: role=registry with a different host= withholds" 3 no_qualifying_row
@@ -1632,12 +1647,22 @@ cases=$((cases + 1))
 if [[ "$(head -1 "$SQLLOG" | grep -oF "INTERVAL $HK_WINDOW SECOND" | wc -l)" == 2 ]]; then pass "host-kernel: the sent SQL carries INTERVAL $HK_WINDOW SECOND in both arms under a hostile environment"
 else fail "host-kernel: the sent SQL window was changed by the environment"; fi
 
-# Derived bounds: the worst-case alert time W + one feeder period + heartbeat period + grace must stay under the 48 h trust bound.
-hk_bound_violations() { # <feeder> <uptime-tf> -> one line per violated bound
-  "$PY" -I - "$1" "$2" <<'PYB'
+# Derived bounds: the worst-case alert time W + one feeder period + heartbeat period + grace must stay under the trust
+# bound, which is FRESH_HOURS in the helper (host-state.sh stops calling a kernel `observed` past it); the feeder period
+# is the workflow's own hourly cron. Neither is hardcoded here.
+HOST_STATE_SH="$REPO/plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
+hk_bound_violations() { # <feeder> <uptime-tf> <host-state.sh> <workflow> -> one line per violated bound
+  "$PY" -I - "$1" "$2" "$3" "$4" <<'PYB'
 import re, sys
-feeder, tf = open(sys.argv[1]).read(), open(sys.argv[2]).read()
+feeder, tf, hs, wf = open(sys.argv[1]).read(), open(sys.argv[2]).read(), open(sys.argv[3]).read(), open(sys.argv[4]).read()
 bad = []
+fh = re.search(r'^readonly FRESH_HOURS=([0-9]+)\s*$', hs, re.M)
+cr = re.search(r"^\s*-\s*cron:\s*'([0-9]+) \* \* \* \*'\s*$", wf, re.M)
+if not fh: bad.append("hk-fresh-hours-not-found-in-helper")
+if not cr: bad.append("hk-feeder-period-not-hourly")
+if not fh or not cr:
+    print("\n".join(bad)); sys.exit(0)
+bound, fperiod = int(fh.group(1)) * 3600, 3600
 for role in ("web-1", "web-2", "inngest", "registry"):
     t = "host-kernel-" + role
     m = re.search(r'select_target\(\) \{.*?\n\s*' + re.escape(t) + r'\)(.*?);;', feeder, re.S)
@@ -1652,18 +1677,19 @@ for role in ("web-1", "web-2", "inngest", "registry"):
     per = re.search(r'^\s*period\s*=\s*([0-9]+)\s*$', b.group(1), re.M)
     gr = re.search(r'^\s*grace\s*=\s*([0-9]+)\s*$', b.group(1), re.M)
     if not per or not gr: bad.append("hk-tf-period-or-grace-missing-" + res); continue
-    worst = int(w.group(1)) + 3600 + int(per.group(1)) + int(gr.group(1))
-    if worst >= 48 * 3600: bad.append("hk-worst-case-reaches-48h-" + t)
+    worst = int(w.group(1)) + fperiod + int(per.group(1)) + int(gr.group(1))
+    if worst >= bound: bad.append("hk-worst-case-reaches-the-fresh-bound-" + t)
 print("\n".join(bad))
 PYB
 }
 cases=$((cases + 1))
-_hb="$(hk_bound_violations "$FEEDER_SRC" "$UPTIME_TF" 2>&1)"
-if [[ -z "$_hb" ]]; then pass "derived bound: W + 3600 + period + grace < 48 h for all four host-kernel targets, and W is the literal 129600 (no expansion)"
+_hb="$(hk_bound_violations "$FEEDER_SRC" "$UPTIME_TF" "$HOST_STATE_SH" "$WORKFLOW" 2>&1)"
+if [[ -z "$_hb" ]]; then pass "derived bound: W + feeder period + period + grace < FRESH_HOURS (read from host-state.sh) for all four host-kernel targets, and W is the literal 129600 (no expansion)"
 else fail "host-kernel bound violations: $(paste -sd, - <<<"$_hb")"; fi
 cases=$((cases + 1))
-if [[ "$((HK_WINDOW + 3600 + 3600 + 7200))" -lt "$((48 * 3600))" && "$((HK_WINDOW + 3600 + 3600 + 7200))" == 144000 ]]; then pass "the suite's own arithmetic: the worst case is 144000 s (40 h), under the 48 h trust bound"
-else fail "the worst-case arithmetic is wrong"; fi
+HS_FRESH_HOURS="$(grep -E '^readonly FRESH_HOURS=[0-9]+$' "$HOST_STATE_SH" | head -1 | cut -d= -f2)"
+if [[ "$HS_FRESH_HOURS" =~ ^[0-9]+$ && "$((HK_WINDOW + 3600 + 3600 + 7200))" -lt "$((HS_FRESH_HOURS * 3600))" && "$((HK_WINDOW + 3600 + 3600 + 7200))" == 144000 ]]; then pass "the suite's own arithmetic: the worst case is 144000 s (40 h), under the ${HS_FRESH_HOURS} h trust bound read from host-state.sh"
+else fail "the worst-case arithmetic is wrong (FRESH_HOURS='${HS_FRESH_HOURS}')"; fi
 
 # The five-place name parity (feeder table, Terraform, manifest, this suite; the runbook names them in prose): a fifth
 # host-kernel heartbeat in any one place without the others is RED.
@@ -1701,7 +1727,6 @@ else fail "host-kernel name parity violations: $(paste -sd, - <<<"$_hp")"; fi
 
 # The helper's identity table and the feeder's literals must agree (the feeder runs in CI, the helper from an operator
 # checkout, so neither can source the other: the suite reads the helper's ROLE_TABLE and REGISTRY_HOST_ID and compares).
-HOST_STATE_SH="$REPO/plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
 hk_identity_pin() { # <feeder> <host-state.sh> -> one line per disagreement
   "$PY" -I - "$1" "$2" <<'PYI'
 import re, sys
@@ -1978,6 +2003,49 @@ else fail "workflow file missing: $WORKFLOW"; fi
 cases=$((cases + 1))
 if [[ "$(grep -cE '^[^#]*bash scripts/deadman-heartbeat-feeder\.sh' "$WORKFLOW" 2>/dev/null || true)" == 1 ]]; then pass "the manifest evidence pattern appears once, on the run line"
 else fail "the evidence pattern must appear exactly once outside comments"; fi
+
+# (#12007) The workflow's OWN marker-shape regex, extracted from the yml and run in bash on one marker per target name in
+# TARGETS and per verdict shape. A target capture that cannot match a digit (host-kernel-web-1) would count every web-1 /
+# web-2 marker as dropped and read as 'FEEDER FAULT (no_marker)' the moment those names enter the loop.
+wf_marker_violations() { # <workflow-file> -> one line per marker the workflow's regex does not accept (or wrongly accepts)
+  local yml="$1" line cond re t v m out="$WORK/mut/marker-re.sh" bad=""
+  line="$(grep -F 'deadman-feeder:\ target=' "$yml" | head -1)"
+  if [[ -z "$line" || "$line" != *'=~ '*' ]]; then'* ]]; then echo "marker-regex-line-not-found"; return; fi
+  cond="${line#*'=~ '}"; re="${cond%' ]]; then'*}"
+  printf '%s\n' 'safe="$1"' "if [[ \"\$safe\" =~ $re ]]; then exit 0; fi" 'exit 1' > "$out"
+  local tg; tg="$(grep -E '^TARGETS=' "$FEEDER_SRC" | head -1)"; tg="${tg#TARGETS=\"}"; tg="${tg%\"}"
+  for t in $tg none; do
+    for v in qualifying_row_beaten qualifying_row_heartbeat_paused no_qualifying_row query_failed beat_failed; do
+      for m in "deadman-feeder: target=$t verdict=$v" "deadman-feeder: target=$t verdict=$v reason=curl_28 elapsed_ms=12"; do
+        bash "$out" "$m" || bad+="marker-not-matched-$t-$v"$'\n'
+      done
+    done
+  done
+  # The shape must still refuse a target with an uppercase letter or a space, so widening did not turn it into a wildcard.
+  bash "$out" "deadman-feeder: target=Host-kernel-web-1 verdict=beat" && bad+=$'marker-regex-accepts-uppercase-target\n'
+  bash "$out" "deadman-feeder: target=a b verdict=beat" && bad+=$'marker-regex-accepts-spaced-target\n'
+  printf '%s' "$bad"
+}
+cases=$((cases + 1))
+_mv="$(wf_marker_violations "$WORKFLOW")"
+if [[ -z "$_mv" ]]; then pass "workflow marker regex: the workflow's own pattern accepts one marker per TARGETS name (digit-bearing host-kernel-web-1/-web-2 included) and per verdict shape, and still refuses uppercase and spaced targets"
+else fail "workflow marker regex violations: $(paste -sd, - <<<"$_mv")"; fi
+"$PY" -I - "$WORKFLOW" "$WORK/mut/wf-marker-narrow.yml" <<'PYL'
+import sys
+s = open(sys.argv[1]).read()
+old = r"target=([a-z0-9-]+)\ verdict="
+assert s.count(old) == 1
+open(sys.argv[2], "w").write(s.replace(old, r"target=([a-z-]+)\ verdict="))
+PYL
+cases=$((cases + 1))
+_mv="$(wf_marker_violations "$WORK/mut/wf-marker-narrow.yml")"
+if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-marker-narrow.yml" && grep -qx 'marker-not-matched-host-kernel-web-1-beat_failed' <<<"$_mv" && grep -qx 'marker-not-matched-host-kernel-web-2-query_failed' <<<"$_mv" && ! grep -q 'marker-not-matched-luks-monitor-host-timer' <<<"$_mv"; then pass "mutation row WF-M is RED: the capture reverted to [a-z-]+ rejects exactly the digit-bearing web-1/web-2 markers"
+else fail "mutation row WF-M: the narrowed target capture was not noticed (or did not land): [$(paste -sd, - <<<"$_mv" | head -c 300)]"; fi
+# The feeder's next-action pointer for a host-kernel withhold must resolve: the runbook and its section heading exist.
+cases=$((cases + 1))
+_rb="$REPO/knowledge-base/engineering/operations/runbooks/betterstack-log-query.md"
+if grep -qF 'betterstack-log-query.md' "$FEEDER_SRC" && grep -qF 'Querying SOLEUR_HOST_KERNEL section' "$FEEDER_SRC" && [[ -f "$_rb" ]] && grep -qE '^## Querying `?SOLEUR_HOST_KERNEL`?( |$)' "$_rb"; then pass "the feeder's host-kernel runbook pointer resolves: betterstack-log-query.md exists and has its 'Querying SOLEUR_HOST_KERNEL' heading"
+else fail "the feeder's host-kernel runbook pointer (betterstack-log-query.md, 'Querying SOLEUR_HOST_KERNEL') does not resolve"; fi
 
 echo "== workflow step behaviour (the real run: block against a stubbed feeder) =="
 WF_RUN="$WORK/wf.run.sh"
@@ -2538,8 +2606,8 @@ expect "HK2-1 control: the same mutant still beats web-2's OWN row (the mutation
 # Row 2: widen W past the 48 h trust bound; the derived bound must go RED.
 land hk2-2 'W=129600; NAME="soleur-host-kernel-web-1-prd"' 'W=200000; NAME="soleur-host-kernel-web-1-prd"'; _m="$M"
 cases=$((cases + 1))
-_hv="$(hk_bound_violations "$_m" "$UPTIME_TF" 2>&1)"
-if grep -qx 'hk-worst-case-reaches-48h-host-kernel-web-1' <<<"$_hv" && grep -qx 'hk-window-not-129600-host-kernel-web-1' <<<"$_hv"; then pass "mutation row HK2-2 is RED: W=200000 breaks the derived 48 h bound and the literal-129600 pin"
+_hv="$(hk_bound_violations "$_m" "$UPTIME_TF" "$HOST_STATE_SH" "$WORKFLOW" 2>&1)"
+if grep -qx 'hk-worst-case-reaches-the-fresh-bound-host-kernel-web-1' <<<"$_hv" && grep -qx 'hk-window-not-129600-host-kernel-web-1' <<<"$_hv"; then pass "mutation row HK2-2 is RED: W=200000 breaks the derived FRESH_HOURS bound and the literal-129600 pin"
 else fail "mutation row HK2-2: expected the derived-bound violations, got [$(paste -sd, - <<<"$_hv")]"; fi
 cases=$((cases + 1))
 reset_case; C_SRC="$_m"; C_TARGET="$T_HK1"; C_ROWS="$(printf '' | fx hkm2)"; _g="$(run_feeder)"
@@ -2547,8 +2615,44 @@ if [[ "$(head -1 "$SQLLOG")" != "$(expect_sql "$T_HK1" "${E_PRED[$T_HK1]}")" ]];
 else fail "HK2-2: the frozen-SQL pin did not notice the widened window"; fi
 land hk2-2b 'W=129600; NAME="soleur-host-kernel-web-1-prd"' 'W="${HOST_KERNEL_WINDOW:-129600}"; NAME="soleur-host-kernel-web-1-prd"'; _m="$M"
 cases=$((cases + 1))
-if grep -qx 'hk-window-not-a-literal-host-kernel-web-1' < <(hk_bound_violations "$_m" "$UPTIME_TF" 2>&1); then pass "mutation row HK2-2b is RED: a window read from the environment is no longer a literal"
+if grep -qx 'hk-window-not-a-literal-host-kernel-web-1' < <(hk_bound_violations "$_m" "$UPTIME_TF" "$HOST_STATE_SH" "$WORKFLOW" 2>&1); then pass "mutation row HK2-2b is RED: a window read from the environment is no longer a literal"
 else fail "mutation row HK2-2b: an environment-sourced window was not noticed"; fi
+# Row 2c: the trust bound is READ from host-state.sh FRESH_HOURS, not hardcoded. Lowering it to the worst case (40 h) breaks
+# the invariant (RED); raising it keeps the invariant (must-PASS, proving the bound is derived); renaming it away is RED.
+fh_mut() { # <row> <sed-replacement for the FRESH_HOURS line> -> $WORK/mut/hs-<row>.sh
+  "$PY" -I - "$HOST_STATE_SH" "$WORK/mut/hs-$1.sh" "$2" <<'PYX'
+import sys
+s = open(sys.argv[1]).read()
+old = "readonly FRESH_HOURS=48\n"
+assert s.count(old) == 1
+open(sys.argv[2], "w").write(s.replace(old, sys.argv[3] + "\n"))
+PYX
+}
+fh_mut fh40 "readonly FRESH_HOURS=40"; fh_mut fh72 "readonly FRESH_HOURS=72"; fh_mut fhgone "readonly FRESH_WINDOW=48"
+cases=$((cases + 1))
+if ! cmp -s "$HOST_STATE_SH" "$WORK/mut/hs-fh40.sh" && grep -qx 'hk-worst-case-reaches-the-fresh-bound-host-kernel-web-1' < <(hk_bound_violations "$FEEDER_SRC" "$UPTIME_TF" "$WORK/mut/hs-fh40.sh" "$WORKFLOW" 2>&1); then pass "mutation row HK2-2c is RED: FRESH_HOURS lowered to 40 in a sandbox copy of host-state.sh breaks the derived bound"
+else fail "mutation row HK2-2c: a lowered FRESH_HOURS was not noticed (or did not land)"; fi
+cases=$((cases + 1))
+if ! cmp -s "$HOST_STATE_SH" "$WORK/mut/hs-fh72.sh" && [[ -z "$(hk_bound_violations "$FEEDER_SRC" "$UPTIME_TF" "$WORK/mut/hs-fh72.sh" "$WORKFLOW" 2>&1)" ]]; then pass "must-PASS (non-canonical): FRESH_HOURS raised to 72 keeps the derived bound green (the bound is read, not hardcoded)"
+else fail "FRESH_HOURS raised to 72 should keep the derived bound green"; fi
+cases=$((cases + 1))
+if ! cmp -s "$HOST_STATE_SH" "$WORK/mut/hs-fhgone.sh" && grep -qx 'hk-fresh-hours-not-found-in-helper' < <(hk_bound_violations "$FEEDER_SRC" "$UPTIME_TF" "$WORK/mut/hs-fhgone.sh" "$WORKFLOW" 2>&1); then pass "mutation row HK2-2d is RED: FRESH_HOURS renamed away in a sandbox copy of host-state.sh is a violation, never a silent pass"
+else fail "mutation row HK2-2d: a missing FRESH_HOURS was not noticed (or did not land)"; fi
+# Row 2e (CTO ruling): the journald predicates pin the exact _SYSTEMD_UNIT and refuse ANY 'host=' substring, and lead with the
+# position(raw, ...) short-circuit. Each guard is dropped in turn; the escape fixtures (or the frozen SQL) must go RED.
+land hk2-7a "AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-2'" "AND JSONExtractString(raw, 'host_name') = 'soleur-web-2'"; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_HK2"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw soleur-web-2 "$(hk_msg web "$HK_OK_KERNEL")" host-kernel-marker session-1.scope)" | fx hkm7a)"; C_BEATS=1; C_APIS=1
+expect_red HK2-7a "_SYSTEMD_UNIT dropped from the web-2 predicate: a row under session-1.scope beats" 3 no_qualifying_row 0 beat
+land hk2-7b "'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0" "'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), ' host=') = 0"; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_HKI"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw soleur-inngest-prd "$(hk_msg inngest "$HK_OK_KERNEL")"$'\nhost=')" | fx hkm7b)"; C_BEATS=1; C_APIS=1
+expect_red HK2-7b "the host= refusal narrowed back to ' host=' on the inngest predicate: a newline-separated host= row beats" 3 no_qualifying_row 0 beat
+land hk2-7c "def_pred HK_WEB1_PRED <<'EOF'
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND " "def_pred HK_WEB1_PRED <<'EOF'
+"; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_HK1"; C_ROWS="$(printf '' | fx hkm7c)"; _g="$(run_feeder)"
+cases=$((cases + 1))
+if [[ "$(head -1 "$SQLLOG")" != "$(expect_sql "$T_HK1" "${E_PRED[$T_HK1]}")" ]]; then pass "mutation row HK2-7c is RED: dropping the position(raw, 'SOLEUR_HOST_KERNEL') lead changes the sent SQL away from the frozen shape"
+else fail "mutation row HK2-7c: the frozen-SQL pin did not notice the dropped short-circuit lead"; fi
 # Row 3: remove one target from TARGETS (and, separately, one arm from select_target); --selftest must go non-zero.
 land hk2-3 ' host-kernel-registry"' '"'; _m="$M"
 reset_case; C_SRC="$_m"; C_ARGS="--selftest"; C_Q=0; _rc="$(run_feeder)"
@@ -3043,8 +3147,8 @@ fi
 # case AND adding one both trip it (a `<` floor lets a suite grow, or swap a deleted case for an unrelated one,
 # unnoticed). A runtime-derived floor falls with the case. Changing a case means setting them to the counts printed
 # on the "=== N passed ... M beat-call assertions ===" line above.
-MIN_PASSES=687
-MIN_BEAT_ASSERTS=233
+MIN_PASSES=717
+MIN_BEAT_ASSERTS=251
 if (( passes != MIN_PASSES )); then
   printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; a 0-failure tally proves nothing until the floor is re-derived.\n' "$passes" "$MIN_PASSES" >&2
   exit 1

@@ -25,15 +25,17 @@
 # package lists (no `apt-get update`, no network, no lock), so a stale list undercounts; it never feeds kernel_state.
 # It is bounded by `timeout` (default 20 s) and is `unknown` on any failure or timeout.
 #
-# ENVIRONMENT. PATH is set explicitly and includes /usr/sbin: cron and systemd both start without it (the 2026-07-15
-# blind-host learning), and a bare `command not found` would read as a dark host. LC_ALL=C pins apt's output.
+# ENVIRONMENT. PATH is set explicitly to the system directories only (no /usr/local: this runs as root and a planted
+# /usr/local/bin/{uname,apt-get,timeout} must not be picked up) and includes /usr/sbin: cron and systemd both start
+# without it (the 2026-07-15 blind-host learning), and a bare `command not found` would read as a dark host. LC_ALL=C
+# pins apt's output.
 #
 # TEST SEAM. Honoured ONLY when HKM_TEST=1 (no unit sets it): HKM_STUB_BIN_DIR (prepended to PATH), HKM_PROC_UPTIME,
 # HKM_REBOOT_FILE, HKM_APT_TIMEOUT_S. host-kernel-marker.test.sh proves the seam is inert without HKM_TEST=1.
 
 export LC_ALL=C
 readonly REGISTRY_HOST_ID='soleur-registry'
-export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
 UPTIME_FILE=/proc/uptime
 REBOOT_FILE=/var/run/reboot-required

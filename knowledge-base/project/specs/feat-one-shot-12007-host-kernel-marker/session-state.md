@@ -22,6 +22,7 @@ soleur:plan, soleur:deepen-plan, soleur:plan-review, CTO agent, terraform-archit
 ## Operator Constraints
 
 - constraint: Commit with LEFTHOOK_EXCLUDE=bun-test and git commit -F file using the Co-Authored-By trailer; never git stash; PR bodies end with the Claude Code attribution line; batch commits before pushing.
-- constraint: CI is the merge gate unless the operator asks for a local battery; ship through the merge queue and run postmerge verification before reporting done.
-- constraint: Production-mutating steps such as reboots and applies need the operator explicit per-command go-ahead.
-- ci-is-the-gate: CI is the merge gate unless the operator asks for a local battery
+- constraint: CI is the merge gate unless the operator asks for a local battery; ship through the merge queue and finish the post-merge check before reporting done.
+- constraint: Production-changing steps need the operator explicit per-command go-ahead.
+- ci-is-the-gate: CI is the merge gate unless the operator asks for a local battery.
+cto_spawns=1 (dissent batch)

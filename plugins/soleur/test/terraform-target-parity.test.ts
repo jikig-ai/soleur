@@ -148,8 +148,9 @@ const INNGEST_KEY_ROTATE_WORKFLOW = resolve(
 // #12007 (decision-challenges.md, last operator row): the two SOLEUR_HOST_KERNEL collector installers are SSH-provisioned but
 // HELD. Installing the emitter on a RUNNING web host is a production mutation reserved to the operator (#12386), so a merge must
 // not deliver it. They are therefore here (SSH union) AND in OPERATOR_APPLIED_EXCLUSIONS (all-resources union), and are absent
-// from the SSH-stage `-target` list of apply-web-platform-infra.yml. Releasing the hold is a deliberate edit of BOTH sets plus
-// that list (the pin test "host-kernel-marker installers are held" fails until all three agree).
+// from the SSH-stage `-target` list of apply-web-platform-infra.yml. No dispatch mode targets them either, so nothing delivers them
+// until the hold is released: a deliberate edit of BOTH sets plus that list (the pin test "host-kernel-marker installers are held"
+// fails until all three agree), followed by an apply.
 const HOST_KERNEL_MARKER_INSTALLERS = ["host_kernel_marker_install", "host_kernel_marker_install_web2"] as const;
 const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys", ...HOST_KERNEL_MARKER_INSTALLERS]);
 
@@ -1325,8 +1326,8 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume_attachment.workspaces",
   "terraform_data.root_authorized_keys",
   // #12007 — the SOLEUR_HOST_KERNEL collector installers for the RUNNING web hosts: SSH-provisioned but HELD by the owner's
-  // ruling (a merge must not mutate a running host; delivered by a later operator-authorized run, #12386). Releasing the hold
-  // moves both into the SSH stage of apply-web-platform-infra.yml and out of this set and EXCLUSION_ALLOWLIST.
+  // ruling (a merge must not mutate a running host, #12386); no dispatch mode targets them, so delivery needs an operator edit.
+  // Releasing the hold moves both into the SSH stage of apply-web-platform-infra.yml and out of this set and EXCLUSION_ALLOWLIST.
   "terraform_data.host_kernel_marker_install",
   "terraform_data.host_kernel_marker_install_web2",
   // #5274 Phase 2 (ADR-068) — the git-data host + its private network are a

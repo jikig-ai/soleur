@@ -272,7 +272,8 @@ locals {
     "sdk-bash-verdict.sh",
     # SOLEUR_HOST_KERNEL periodic marker (#12007): the collector and its plain (non-template) unit pair. Baked for the same reason as the
     # probes above (the SSH installers below reach running hosts only); the inngest and registry hosts carry their own copies of the
-    # collector (inngest-bootstrap.sh, cloud-init-registry.yml), pinned byte-equal to this file by host-kernel-marker.test.sh.
+    # collector (inngest-bootstrap.sh heredocs, cloud-init-registry.yml inline entry), pinned to this file by host-kernel-marker-delivery.test.sh (the registry copy
+    # byte-equal modulo the template escapes and the render-time whole-line comment strip).
     "host-kernel-marker.sh",
     "host-kernel-marker.service",
     "host-kernel-marker.timer",
@@ -1139,15 +1140,21 @@ resource "terraform_data" "web_bash_synthetic_install_web2" {
 # host-kernel dead-man feeder). Shape of web_bash_synthetic_install, minus any credential: the collector needs no env file and no token.
 # A fresh host gets the same files from the image bake (host_script_files) + soleur-host-bootstrap.sh + cloud-init.yml.
 # OPERATOR_APPLIED_EXCLUSIONS (terraform-target-parity.test.ts) and NOT in the SSH-stage -target list of apply-web-platform-infra.yml:
-# a merge installs nothing on a running host; a dispatched run delivers it later (#12386, decision-challenges.md last operator row).
+# a merge installs nothing on a running host. No dispatch mode targets the installers either: delivery requires an operator edit to the SSH-stage -target list
+# of apply-web-platform-infra.yml AND to both exclusion sets (EXCLUSION_ALLOWLIST and OPERATOR_APPLIED_EXCLUSIONS in terraform-target-parity.test.ts), then an apply (#12386,
+# decision-challenges.md last operator row).
 resource "terraform_data" "host_kernel_marker_install" {
   depends_on = [terraform_data.journald_persistent]
 
-  triggers_replace = sha256(join(",", [
-    file("${path.module}/host-kernel-marker.sh"),
-    file("${path.module}/host-kernel-marker.service"),
-    file("${path.module}/host-kernel-marker.timer"),
-  ]))
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/host-kernel-marker.sh"),
+      file("${path.module}/host-kernel-marker.service"),
+      file("${path.module}/host-kernel-marker.timer"),
+    ]))
+    # Re-fires on a replaced VM (hr-fresh-host-provisioning), as the nonlocal_bind_sysctl pair does.
+    server_id = hcloud_server.web["web-1"].id
+  }
 
   connection {
     type        = "ssh"
@@ -1175,7 +1182,9 @@ resource "terraform_data" "host_kernel_marker_install" {
   provisioner "remote-exec" {
     inline = [
       "set -e",
-      "chmod +x /usr/local/bin/host-kernel-marker.sh",
+      "chown root:root /usr/local/bin/host-kernel-marker.sh /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
+      "chmod 0755 /usr/local/bin/host-kernel-marker.sh",
+      "chmod 0644 /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
       "systemctl daemon-reload",
       "systemctl enable --now host-kernel-marker.timer",
       # OnBootSec does not refire on an already-booted host: start the oneshot once so the first row ships now, not at the next slot.
@@ -1190,11 +1199,15 @@ resource "terraform_data" "host_kernel_marker_install" {
 resource "terraform_data" "host_kernel_marker_install_web2" {
   depends_on = [terraform_data.journald_persistent_web2]
 
-  triggers_replace = sha256(join(",", [
-    file("${path.module}/host-kernel-marker.sh"),
-    file("${path.module}/host-kernel-marker.service"),
-    file("${path.module}/host-kernel-marker.timer"),
-  ]))
+  triggers_replace = {
+    config_hash = sha256(join(",", [
+      file("${path.module}/host-kernel-marker.sh"),
+      file("${path.module}/host-kernel-marker.service"),
+      file("${path.module}/host-kernel-marker.timer"),
+    ]))
+    # Re-fires on a replaced VM (hr-fresh-host-provisioning), as the nonlocal_bind_sysctl pair does.
+    server_id = hcloud_server.web["web-2"].id
+  }
 
   connection {
     type        = "ssh"
@@ -1223,7 +1236,9 @@ resource "terraform_data" "host_kernel_marker_install_web2" {
   provisioner "remote-exec" {
     inline = [
       "set -e",
-      "chmod +x /usr/local/bin/host-kernel-marker.sh",
+      "chown root:root /usr/local/bin/host-kernel-marker.sh /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
+      "chmod 0755 /usr/local/bin/host-kernel-marker.sh",
+      "chmod 0644 /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",
       "systemctl daemon-reload",
       "systemctl enable --now host-kernel-marker.timer",
       # OnBootSec does not refire on an already-booted host: start the oneshot once so the first row ships now, not at the next slot.

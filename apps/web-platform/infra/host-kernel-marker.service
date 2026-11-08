@@ -13,4 +13,9 @@ SyslogIdentifier=host-kernel-marker
 # and no EnvironmentFile. It exits 0 on every measurement failure (the failure is a token value in the line).
 TimeoutStartSec=60
 Nice=10
+# Background work: the simulated apt upgrade must never compete with the workload on the host. A MemoryMax kill degrades the
+# row to unknown tokens (the collector never fails the unit), it does not take the host down.
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+MemoryMax=256M
 ExecStart=/usr/local/bin/host-kernel-marker.sh --role web

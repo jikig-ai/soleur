@@ -594,8 +594,9 @@ include_matches.SYSLOG_IDENTIFIER = [
   # #12007: the periodic SOLEUR_HOST_KERNEL marker (host-kernel-marker.service, a plain 6-hourly
   # oneshot, SyslogIdentifier=host-kernel-marker on web-1, web-2 and the inngest host; the registry
   # posts the same line directly and ships nothing through this source). One line per run, so
-  # the typical cost is about 4 rows/day/host plus one per boot (OnBootSec=2min), about 5 rows/day/host
-  # across three Vector hosts: this IS the fresh quota decision the note above demands. The
+  # the ESTIMATED cost is about 4 rows/day/host plus one per boot (OnBootSec=2min), about 5 rows/day/host
+  # across three Vector hosts (an estimate from the timer cadence, NOT measured: measure the real rate in
+  # Better Stack after delivery, as the sshd entry above did): this IS the fresh quota decision the note above demands. The
   # cve-exposure helper (host-state.sh) reads it to ground a kernel as `observed`, and the
   # per-host dead-man heartbeats (scripts/deadman-heartbeat-feeder.sh host-kernel-* targets) page
   # when a host stops reporting. Exact-value match: the unit sets this literal SyslogIdentifier=,

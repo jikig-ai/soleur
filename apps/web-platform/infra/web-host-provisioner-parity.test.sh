@@ -1374,7 +1374,7 @@ else:
        "inherit an EXT_RESIDENCE member's exemption: " + ", ".join(dup_addrs))
 
 ssh_blocks = [(loc, b, a) for loc, b, a, _k in blocks if not is_winrm(b)]
-FLOOR_BLOCKS = 31  # +2 #12007 (host_kernel_marker_install + _web2); +2 #12167 PR-G (nonlocal_bind_sysctl + _web2; the pre-existing one-block slack is preserved, measured 30 vs floor 29). floor = census: 23 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151/#9529/#10455); slack below census lets blocks vanish unflagged
+FLOOR_BLOCKS = 31  # +2 #12007 (host_kernel_marker_install + _web2); +2 #12167 PR-G (nonlocal_bind_sysctl + _web2; the pre-existing one-block slack is preserved, measured 32 vs floor 31 after both). floor = census: 23 server.tf + 1 ci-ssh-key.tf + 3 workspaces-luks.tf (#8632/#8706/#9123/#9151/#9529/#10455); slack below census lets blocks vanish unflagged
 if len(ssh_blocks) >= FLOOR_BLOCKS:
     ok(f"G2: swept {len(ssh_blocks)} SSH connection blocks (floor {FLOOR_BLOCKS})")
 else:

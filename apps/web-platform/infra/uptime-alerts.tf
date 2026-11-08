@@ -702,7 +702,8 @@ resource "betteruptime_team_member" "ops" {
 # valid marker row exists inside a literal 36 h window (129600 s, hot UNION archive); with none the beat is withheld, so
 # the heartbeat times out and pages. Worst case from a dead emitter to a page is about 40 h (36 h + the hourly feeder +
 # period 3600 + grace 7200), inside the 48 h bound after which host-state.sh stops calling a kernel `observed`. A native
-# logs alert cannot do this: the 900 s query_period ceiling (incident 1023423999) makes it blind to rows this sparse.
+# logs alert cannot do this: newly created alerts with a query_period above 900 s have been refused with a 422 (the repo
+# sentinel logs-alert-query-period-ceiling.test.sh enforces 900 s), so one is blind to rows this sparse (incident 1023423999).
 #
 # paused = true until the owner arms them (#12386): the emitter is delivered to running hosts only by held steps, and the
 # four names are not in the feeder workflow loop yet, so an unpaused heartbeat would page falsely. ignore_changes =

@@ -176,3 +176,52 @@ tracked in #12386. Until a host emits, it stays `unknown` in the skill output, w
   (runbook `workspaces-luks-cutover-6604.md`, arming section).
 - No new ordinal, container, store or link is introduced. The C4 edge prose in `model.c4` is extended for the existing edges
   to `betterstack`; no element or relationship is added.
+
+## Addendum 2026-11-08 (#12007 review)
+
+Append-only: the addendum above is not rewritten. Where this section disagrees with it, this section governs. The rulings are
+recorded in `knowledge-base/project/specs/feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
+
+1. **Item 3 is amended (unreadable newest row).** The newest mapped periodic row of a host decides. If that row is unreadable,
+   `kernel_state` is capped at `stale`: the kernel string and the age of the older valid row stay visible and never ground
+   `Affected=no`. The sentence "a newest row with an unreadable kernel does not shadow an older valid one" is withdrawn, as is
+   the matching G1 wording. The `LIMIT 6 BY` bound on the kernel bucket is unchanged: eviction can only lose the older kernel
+   shown in a `stale` display and cannot create a false `observed`, because the newest rows are the ones kept.
+2. **What "decisions 1 to 5 are unchanged" does not cover.** The Consequences bullet "Telemetry rows are trusted as written",
+   whose second sentence reads "The skill never lets a single marker ground `Affected=no`", is superseded for the periodic
+   marker. A single valid periodic row at most 48 hours old may ground `Affected=no` on the kernel question, because that is
+   the point of the marker; the matching clause "one marker still never grounds `no` on a path it cannot observe" in the
+   addendum's consequences is withdrawn in the same sense. The bullet stands for everything else the skill reads.
+3. **Residuals, stated for each path.**
+   - *Freshness clock.* Freshness is measured on Better Stack ingestion time (`dt`), not on a time the host wrote, and there is
+     no `ts=` field. A delayed delivery makes a row look younger than it is. Accepted and documented; evidence that would flip
+     it is Vector's journald events carrying the original `__REALTIME_TIMESTAMP` in `raw` (unverified, a follow-up).
+   - *Journald path.* Identity additionally pins `_SYSTEMD_UNIT` to `host-kernel-marker.service` in the helper and in the three
+     feeder journald predicates. A local process can forge `SYSLOG_IDENTIFIER` with `logger -t`; it cannot choose the systemd
+     unit of its message, so local-process forgery is closed. What remains on this path is root on the host. There is no
+     `_HOSTNAME` requirement, recorded as an accepted residual; evidence that would flip it is `host_name` proving not constant
+     per host. Both readers also reject any occurrence of the substring `host=` in a journald-path message, not only a trailing
+     token.
+   - *Registry path.* The registry has no Vector stamp, so its identity (`role=registry` plus a trailing `host=<registry host
+     id>`) is declared inside the message itself. The residual is the holder of the shared Logs ingest token, who can post a
+     row that satisfies both checks. The runbook sentence that a marker never grounds `Affected=no` by itself on a path it
+     cannot observe is read as this residual and nothing wider; it does not promise more than the registry can give.
+4. **The 900 second figure is a repo policy ceiling, not an incident cause.** The sentinel test
+   `logs-alert-query-period-ceiling.test.sh` enforces 900 seconds for new native logs alerts, and a 2026-11-07 vendor
+   measurement (see the logs-alert comments near the dead-man heartbeats in `uptime-alerts.tf`) found newly created alerts above
+   900 seconds refused with a 422. ADR-218 records a contrary read-back of 97200, so the vendor limit is not treated as a
+   stable fact. Incident 1023423999 is not evidence of a cap: it was a 97200 second window reading 0 on a once-daily row. The
+   decision rests on the cadence argument, which holds either way: a window shorter than 6 hours cannot see a 6-hourly row, so
+   a native alert is blind to this marker. Where the earlier text above attributes the choice to a "900 second cap", read it as
+   this.
+5. **Identity safety across a host rename.** Until 2026-09-19 Vector stamped web-1's rows with the inngest host's `host_name`
+   (see the comment on the shared-predicate alerts in `betterstack-logs-alerts.tf`). The `role=` cross-check and the 36 hour
+   window keep identity safe: a stale row under the wrong stamp is outside the window, and a current row whose `role=`
+   disagrees with its `host_name` is dropped.
+6. **Delivery caveat and what "held" means for the inngest host.** The inngest host receives the emitter only through the
+   digest-pinned bootstrap OCI image. A new bootstrap tag must be minted and the pin bumped before a replaced host boots with
+   it, and a routine bootstrap-version bump re-runs the bootstrap on the running inngest host, which would also install the
+   emitter. So for the inngest host "held" means the pin bump is itself the delivery event, and #12386 must say so. The
+   per-host-class carrier, precondition and expected drift are in one table, the delivery matrix in the host-kernel section of
+   `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`; this ADR, the C4 prose and the query
+   runbook refer to it and do not restate it.

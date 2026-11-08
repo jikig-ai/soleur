@@ -388,7 +388,11 @@ hkm_pin_bad() { # <tf-file> <resource> <depends_on target> -> space-joined label
     grep -qF "file(\"\${path.module}/$f\")," <<<"$blk" || out="$out trigger:$f"
   done
   [[ "$(grep -m1 -F '"' <<<"$(awk '/inline[[:space:]]*=[[:space:]]*\[/{f=1;next} f{print; exit}' <<<"$blk")")" == *'"set -e",'* ]] || out="$out set-e-first"
-  grep -qF '"chmod +x /usr/local/bin/host-kernel-marker.sh",' <<<"$blk" || out="$out chmod-x"
+  grep -qF '"chown root:root /usr/local/bin/host-kernel-marker.sh /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",' <<<"$blk" || out="$out chown"
+  grep -qF '"chmod 0755 /usr/local/bin/host-kernel-marker.sh",' <<<"$blk" || out="$out chmod-script"
+  grep -qF '"chmod 0644 /etc/systemd/system/host-kernel-marker.service /etc/systemd/system/host-kernel-marker.timer",' <<<"$blk" || out="$out chmod-units"
+  grep -qF '"systemctl daemon-reload",' <<<"$blk" || out="$out daemon-reload"
+  grep -qE 'server_id[[:space:]]*=[[:space:]]*hcloud_server\.web\["web-[12]"\]\.id' <<<"$blk" || out="$out server_id"
   grep -qF '"systemctl enable --now host-kernel-marker.timer",' <<<"$blk" || out="$out enable"
   grep -qF '"systemctl start host-kernel-marker.service",' <<<"$blk" || out="$out start-once"
   grep -qE "^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[terraform_data\.$3\]" <<<"$blk" || out="$out depends_on"
@@ -411,6 +415,10 @@ hkm_mut() { # <name> <resource> <depends> <expected-label> <sed-expr limited to 
 hkm_mut "web-1 drops the timer enable" host_kernel_marker_install journald_persistent enable 's#systemctl enable --now host-kernel-marker\.timer#systemctl list-timers#'
 hkm_mut "web-2 drops the one-shot start" host_kernel_marker_install_web2 journald_persistent_web2 start-once 's#systemctl start host-kernel-marker\.service#true#'
 hkm_mut "web-2 drops the collector from triggers_replace" host_kernel_marker_install_web2 journald_persistent_web2 trigger:host-kernel-marker.sh 's#^[[:space:]]*file\("\$\{path\.module\}/host-kernel-marker\.sh"\),$#    "x",#'
+hkm_mut "web-1 drops set -e" host_kernel_marker_install journald_persistent set-e-first 's#^[[:space:]]*"set -e",$#      "true",#'
+hkm_mut "web-2 loosens the script mode" host_kernel_marker_install_web2 journald_persistent_web2 chmod-script 's#chmod 0755 /usr/local/bin/host-kernel-marker\.sh#chmod +x /usr/local/bin/host-kernel-marker.sh#'
+hkm_mut "web-1 drops the daemon-reload" host_kernel_marker_install journald_persistent daemon-reload 's#"systemctl daemon-reload",#"true",#'
+hkm_mut "web-2 drops the server_id re-fire trigger" host_kernel_marker_install_web2 journald_persistent_web2 server_id 's|^[[:space:]]*server_id[[:space:]]*=.*$|    gone = 1|'
 hkm_mut "web-1 ships the collector to the wrong path" host_kernel_marker_install journald_persistent file:host-kernel-marker.sh 's#(destination[[:space:]]*=[[:space:]]*")/usr/local/bin/host-kernel-marker\.sh"#\1/usr/local/bin/hkm.sh"#'
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -723,7 +731,7 @@ mut_ddir "the provisioner's detail dir default drifted" prov 's#(DETAIL_DIR=.*)/
 mut_ddir "ONE emitter's detail dir default drifted" boot '0,/DDIR="\$\{SOLEUR_STAGE_DETAIL_DIR:-\/run\/soleur-stage-detail\.d\}"/s##DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail2.d}"#'
 
 # ── Anti-vacuity: an exact assertion count (deleting sections 14-21 leaves a lower one) ──
-EXPECTED_ASSERTIONS=247  # 225 + 22 for #12007 (measured: the three host-kernel-marker files join the PROBE sections 7/8/9, plus the 13d enable/.dockerignore/installer pins and four mutations); before that 199 + 26 for the #10078 env-file conditioning pins: §12b = 5 units x 5 arms (extract / set-identity / unprefixed / no-reset-lines / SKIP-VS-FAIL comment) + 1 mutation control
+EXPECTED_ASSERTIONS=251  # 225 + 26 for #12007 (measured: the three host-kernel-marker files join the PROBE sections 7/8/9, plus the 13d enable/.dockerignore/installer pins and eight mutations); before that 199 + 26 for the #10078 env-file conditioning pins: §12b = 5 units x 5 arms (extract / set-identity / unprefixed / no-reset-lines / SKIP-VS-FAIL comment) + 1 mutation control
 if [[ "$((pass + fail))" -ne "$EXPECTED_ASSERTIONS" ]]; then no "floor: ran $((pass + fail)) assertions, expected exactly $EXPECTED_ASSERTIONS (a section was deleted or added without moving the floor)"; fi
 
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="

@@ -599,9 +599,6 @@ resource "hcloud_server" "registry" {
     # Single-sourced with hcloud_server_network.registry.ip (network.tf) — see the drift
     # rationale there; a drifted copy would reboot a healthy host.
     private_ip = local.registry_private_ip
-    # #12007 — the SOLEUR_HOST_KERNEL collector, gzip+base64 of the single-source repo file with its whole-line comments removed by the SAME local.registry_rationale_strip every inline script in this template goes through (the host copy is the repo file minus comment lines, byte-for-byte; a base64 line is untouched by the strip applied to the template). Stripping before encoding keeps the stored user_data under the 8,000 B headroom policy.
-    # registry-userdata-budget.sh restates this var in its map; host-kernel-marker-delivery.test.sh pins both and renders the template to compare bytes.
-    host_kernel_marker_gz_b64 = base64gzip(replace(file("${path.module}/host-kernel-marker.sh"), local.registry_rationale_strip, ""))
   }), local.registry_rationale_strip, ""))
 
   # Deliberately NO lifecycle.ignore_changes=[user_data]. A FRESH host has no spurious diff,

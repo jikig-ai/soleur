@@ -57,6 +57,25 @@ no() { # <name> <rc-of-a-condition>: non-zero = the bad thing is absent
   if [[ "$2" -ne 0 ]]; then pass "$1"; else fail "$1"; fi
 }
 
+# INSTRUMENT SELF-TEST (comparison helpers): drive eq/ok/no once each with a comparison that MUST fail and once with one that must pass,
+# then require the counters to have moved by exactly that much. A helper rewritten to always say ok (or never count) is caught here; the
+# floor alone cannot catch it. The counters are unwound so the real totals stay exact; the verdict is reported by printf + exit.
+ST_P="$passes"; ST_F="$fails"; ST_C="$cases"
+{
+  eq "selftest eq (must fail)" "a" "b"
+  ok "selftest ok (must fail)" 1
+  no "selftest no (must fail)" 0
+  eq "selftest eq (must pass)" "a" "a"
+  ok "selftest ok (must pass)" 0
+  no "selftest no (must pass)" 1
+} > /dev/null 2>&1
+if [[ "$fails" -ne $((ST_F + 3)) || "$passes" -ne $((ST_P + 3)) || "$cases" -ne $((ST_C + 6)) ]]; then
+  printf '[FATAL] INSTRUMENT BROKEN: eq/ok/no self-test left passes=%d fails=%d cases=%d (from %d/%d/%d), expected +3/+3/+6.\n' \
+    "$passes" "$fails" "$cases" "$ST_P" "$ST_F" "$ST_C" >&2
+  exit 2
+fi
+passes="$ST_P"; fails="$ST_F"; cases="$ST_C"
+
 [[ -f "$SUT" && -f "$SVC" && -f "$TMR" ]] || {
   printf '[FATAL] host-kernel-marker.{sh,service,timer} must sit beside this suite (resolved by basename)\n' >&2
   exit 2
@@ -107,6 +126,7 @@ Reading package lists...
 Inst libfixture1 [1.0] (1.1 Fixture:24.04/fixture-security [amd64])
 Inst fixture-tools [2] (3 Fixture:24.04/fixture-updates [amd64])
 Inst fixture-core [1] (2 Fixture:24.04/fixture-security, Fixture:24.04/fixture-updates [amd64])
+Inst security-tools [1] (2 Fixture:24.04/fixture-updates [amd64])
 Conf libfixture1 (1.1 Fixture:24.04/fixture-security [amd64])
 OUT
     exit 0 ;;
@@ -242,14 +262,15 @@ eq "unreadable parent dir: exit 0" "$RC" "0"
 echo "=== collector: sec_updates and apt ==="
 reset_fx
 run_hkm --role web
-[[ "$OUT" == *" sec_updates=2" ]]; ok "two '-security' Inst lines counted (updates-only and mixed-pocket lines handled)" $?
+[[ "$OUT" == *" sec_updates=2" ]]; ok "two '-security' Inst lines counted (updates-only, mixed-pocket and a security-named package on a non-security pocket handled)" $?
 CALLS="$(cat "$FX/apt.calls" 2>/dev/null || true)"
-ok "apt-get is a simulate-only upgrade (-s ... upgrade)" "$([[ "$CALLS" == *"ARGS="*"-s"*"upgrade"* ]]; echo $?)"
+eq "apt-get argv is EXACTLY '-s -o Debug::NoLocking=1 upgrade' (simulate, no lock, local lists), invoked once" "$(grep '^ARGS=' <<<"$CALLS" | sort | uniq -c | sed -E 's/^ +//')" "1 ARGS=-s -o Debug::NoLocking=1 upgrade"
 no "apt-get never runs 'update' (local lists only)" "$([[ "$CALLS" == *"ARGS="*" update"* || "$CALLS" == *"ARGS=update"* ]]; echo $?)"
 ok "the PATH apt-get sees includes /usr/sbin" "$([[ "$CALLS" == *"PATH="*"/usr/sbin"* ]]; echo $?)"
 no "the caller's PATH is not inherited" "$([[ "$CALLS" == *"nonexistent-caller-path"* ]]; echo $?)"
 ok "LC_ALL is forced to C" "$([[ "$CALLS" == *"LC_ALL=C"* ]]; echo $?)"
-ok "script source pins PATH with /usr/sbin and exports LC_ALL=C" "$(grep -qE '^(export )?PATH=.*/usr/sbin' "$SUT" && grep -qE '^export LC_ALL=C$' "$SUT"; echo $?)"
+ok "script source pins the system-only PATH (/usr/sbin:/usr/bin:/sbin:/bin, no /usr/local) and exports LC_ALL=C" "$(grep -qxE 'export PATH=/usr/sbin:/usr/bin:/sbin:/bin' "$SUT" && grep -qE '^export LC_ALL=C$' "$SUT"; echo $?)"
+no "script never puts /usr/local on the PATH it runs apt-get/uname/timeout under" "$(grep -E '^(export )?PATH=' "$SUT" | grep -q '/usr/local'; echo $?)"
 
 reset_fx; printf 'none\n' > "$FX/apt.mode"
 run_hkm --role web
@@ -330,12 +351,16 @@ ok "service: ExecStart runs the installed collector with --role web" "$(grep -qx
 no "service: no template specifier (%i / %I / %n)" "$(grep -qE '%[iIn]' "$SVC"; echo $?)"
 no "service: no EnvironmentFile (the marker needs no credential)" "$(grep -qE '^EnvironmentFile=' "$SVC"; echo $?)"
 no "service: the test seam is never set by the unit" "$(grep -q 'HKM_' "$SVC"; echo $?)"
+ok "service: TimeoutStartSec=60 (above the collector's own 20 s apt bound)" "$(grep -qxE 'TimeoutStartSec=60' "$SVC"; echo $?)"
+ok "service: IOSchedulingClass=idle" "$(grep -qxE 'IOSchedulingClass=idle' "$SVC"; echo $?)"
+ok "service: CPUSchedulingPolicy=idle" "$(grep -qxE 'CPUSchedulingPolicy=idle' "$SVC"; echo $?)"
+ok "service: MemoryMax=256M (a kill degrades the row to unknown tokens)" "$(grep -qxE 'MemoryMax=256M' "$SVC"; echo $?)"
 no "service: no Restart= (a oneshot is re-run by its timer only)" "$(grep -qE '^Restart=' "$SVC"; echo $?)"
 ok "timer: OnBootSec=2min" "$(grep -qxE 'OnBootSec=2min' "$TMR"; echo $?)"
 ok "timer: 6-hourly OnCalendar" "$(grep -qxE 'OnCalendar=\*-\*-\* 00/6:00:00' "$TMR"; echo $?)"
 ok "timer: Persistent=true" "$(grep -qxE 'Persistent=true' "$TMR"; echo $?)"
 ok "timer: RandomizedDelaySec set" "$(grep -qE '^RandomizedDelaySec=[0-9]+(s|min|m)?$' "$TMR"; echo $?)"
-ok "timer: AccuracySec set" "$(grep -qE '^AccuracySec=[0-9]+(s|min|m)?$' "$TMR"; echo $?)"
+no "timer: no AccuracySec override (the 1min default is what it would restate)" "$(grep -qE '^AccuracySec=' "$TMR"; echo $?)"
 ok "timer: WantedBy=timers.target" "$(grep -qxE 'WantedBy=timers\.target' "$TMR"; echo $?)"
 no "timer: no OnUnitActiveSec (cadence is the calendar, not drift)" "$(grep -qE '^OnUnitActiveSec=' "$TMR"; echo $?)"
 no "timer: no template specifier" "$(grep -qE '%[iIn]' "$TMR"; echo $?)"
@@ -346,10 +371,14 @@ if [[ "${HKM_TEST_SANDBOXED:-0}" != 1 ]]; then
   SBX="$WORK/sandbox"; assert_fixture_dir "$SBX"; mkdir -p "$SBX"
   cp "$SUT" "$SVC" "$TMR" "$SBX/"
   cp "${BASH_SOURCE[0]}" "$SBX/host-kernel-marker.test.sh"
-  ( cd "$SBX" && HKM_TEST_SANDBOXED=1 TMPDIR="$WORK" bash ./host-kernel-marker.test.sh > "$WORK/sandbox.log" 2>&1 )
+  ( cd "$SBX" && HKM_TEST_SANDBOXED=1 HKM_ORIG_SUT="$SUT" TMPDIR="$WORK" bash ./host-kernel-marker.test.sh > "$WORK/sandbox.log" 2>&1 )
   SBX_RC=$?
   eq "sandbox copy: exit 0" "$SBX_RC" "0"
   ok "sandbox copy: reports its own pass line" "$(grep -q '^host-kernel-marker: PASS' "$WORK/sandbox.log"; echo $?)"
+else
+  # Sandbox child: same row count as the parent, so one literal floor covers both. These two rows prove the child really ran the COPIES, alone in its directory.
+  no "sandbox child: the collector under test is a copy, not the repo original" "$([[ -n "${HKM_ORIG_SUT:-}" && "$SUT" -ef "$HKM_ORIG_SUT" ]]; echo $?)"
+  eq "sandbox child: the directory holds exactly the four files" "$(cd "$SCRIPT_DIR" && ls | tr '\n' ' ')" "host-kernel-marker.service host-kernel-marker.sh host-kernel-marker.test.sh host-kernel-marker.timer "
 fi
 
 echo "=== static: no durable real-world strings ==="
@@ -357,8 +386,10 @@ no "suite/script carry no kernel-shaped string outside the synthesized 9.9.9 fam
   "$(grep -hoE '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z]+' "$SUT" "$SVC" "$TMR" "${BASH_SOURCE[0]}" | grep -vE '^9\.9\.9-' | grep -q .; echo $?)"
 
 echo
-# MIN_CASES is the guaranteed-minimum run (the sandbox child skips the two sandbox rows: 161 of 163); a literal bound adjacent to its floor; the floor is a direct printf + exit 1, never routed through fail().
-MIN_CASES=161
+# MIN_CASES is the EXACT measured count, parent and sandbox child alike (the child runs two sandbox-only rows where the parent runs the two sandbox-copy
+# rows, so one literal holds for both: no slack for an assertion to vanish into). A literal bound directly above its floor (the vacuity ratchet builds its
+# mutant from that shape); the floor is a direct printf + exit 1, never routed through fail().
+MIN_CASES=168
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'host-kernel-marker: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

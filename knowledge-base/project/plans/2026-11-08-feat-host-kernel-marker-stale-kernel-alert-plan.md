@@ -25,7 +25,7 @@ brand_survival_threshold: aggregate pattern
 4. Plain unit files replaced the systemd template.
 
 ### New considerations discovered
-- Pending ForceNew drift on the registry and inngest hosts shows in untargeted plans and the drift detector until rollout.
+- Pending ForceNew drift on the registry and inngest hosts shows in untargeted plans and the drift detector until rollout; the two held `terraform_data` installer creates (`host_kernel_marker_install`, `host_kernel_marker_install_web2`) also stand as drift on the twice-daily plan until #12386.
 - Planned replaces of those hosts go dark for up to the 36 h window, so the runbook pauses their heartbeat first.
 
 Spec lacks a valid `lane:` (no spec.md exists for this branch): defaulted to `cross-domain` (fail-closed).
@@ -94,7 +94,7 @@ User-data stays under the Hetzner cap (2026-07-06). Estimate quota for the new a
 2 open scope-outs mention files this plan edits; neither concerns this change.
 
 - #2197 (billing: SubscriptionStatus type) names `server.tf` only incidentally. **Acknowledge:** unrelated concern.
-- #10462 (rename the zot fill-rate probe) names `cloud-init-registry.yml`. **Acknowledge:** the registry edit here is additive and does not touch that probe's name; the issue stays open.
+- #10462 (rename the zot fill-rate probe) names `cloud-init-registry.yml`. **Acknowledge:** the registry edit here is additive and does not touch that probe's name; the issue stays open. Its re-evaluation trigger (a commit touching `zot-registry.tf` or `cloud-init-registry.yml` after #10444) fires at this PR; the rename stays deferred because it is orthogonal to the marker.
 
 ## Hypotheses
 
@@ -283,20 +283,21 @@ error_reporting:
   fail_loud: verdict=no_qualifying_row (exit 3) names the dark host's target; a marker line outside the feeder's shapes is counted, not printed
 failure_modes:
   - mode: a host stops emitting (timer dead, unit failed, Vector or allowlist broken on one host)
-    detection: no qualifying row for that host in 36 h -> the feeder withholds the beat -> the heartbeat times out
+    detection: layer 3 (vector journald shipper) row absent from the Logs warehouse; registry: direct POST absent. No qualifying row for that host in 36 h -> the feeder withholds the beat -> the heartbeat times out
     alert_route: Better Stack heartbeat incident to the operator policy
   - mode: the marker ships but its kernel is unreadable or the role/host is wrong
-    detection: the predicate requires the anchored kernel shape and the exact identity, so the row does not qualify and the beat is withheld; host-state.sh prints unknown
+    detection: layer 3 (vector journald shipper) row in the Logs warehouse, or the registry's direct POST row; the predicate requires the anchored kernel shape and the exact identity (journald: host_name, SYSLOG_IDENTIFIER and the systemd unit), so the row does not qualify and the beat is withheld; host-state.sh prints unknown (or stale when an older valid periodic row exists)
     alert_route: same heartbeat
   - mode: the warehouse read itself fails (credentials, transport, unparseable answer)
-    detection: the feeder exits 3 or 4 with query_failed or beat_failed, distinct from no_qualifying_row; the Sentry check-in goes error
+    detection: workflow run log (layer: the GitHub Actions run of scheduled-deadman-heartbeat-feeder.yml) and the Sentry cron check-in; the feeder exits 3 or 4 with query_failed or beat_failed, distinct from no_qualifying_row; the Sentry check-in goes error
     alert_route: Sentry monitor scheduled-deadman-heartbeat-feeder
   - mode: a forged row from a holder of the ingest token keeps a heartbeat fed
-    detection: not detected (residual accepted in ADR-322); the helper never lets one marker ground no on a path it cannot observe
+    detection: not detected (residual accepted in the ADR-322 addendum of 2026-11-08: root on the host for the journald path, the shared ingest-token holder for the registry)
     alert_route: none (documented residual)
 logs:
   where: Better Stack Logs shared source; journald on the host (SyslogIdentifier=host-kernel-marker); the registry row is posted directly
   retention: the source's retention; the 7-day helper window reads hot UNION archive
+interim_state: until the arming change no alert is armed (the four targets are outside the feeder loop and the four heartbeats are paused); the only read is the credentialed query below
 discoverability_test:
   command: bash scripts/deadman-heartbeat-feeder.sh --selftest
   expected_output: selftest=ok
@@ -489,7 +490,7 @@ Shell `*.test.sh` suites, synthesized fixtures only (`cq-test-fixtures-synthesiz
 - **Interim state.** Until the held apply, the four heartbeats are paused and the feeder loop excludes them, so nothing pages and the helper prints `silent` or `unknown` for hosts not yet rolled: correct, but the skill's answers stay mostly `unknown` until the operator rolls out. Tracked in #12386.
 - **User-data replace.** Editing the registry or inngest cloud-init is ForceNew on those hosts. The pre-merge AC makes the replace gate explicit before merge.
 - **Forged rows.** A holder of the ingest token can forge a marker and keep a heartbeat fed; accepted in ADR-322 and restated in the amendment.
-- **Pending ForceNew drift.** After merge the registry and inngest hosts show a pending replace in untargeted plans and the drift detector until the owner rolls out (the registry already carried one). The `host_creates` HALT and the dispatch-only targets keep a merge from replacing them; the rollout issue carries an expiry for the interim.
+- **Pending ForceNew drift.** After merge the registry and inngest hosts show a pending replace in untargeted plans and the drift detector until the owner rolls out (the registry already carried one). The two held `terraform_data` installer creates (`host_kernel_marker_install` and `host_kernel_marker_install_web2`) are standing drift on the twice-daily plan until #12386 releases or applies them. Review correction (2026-11-08, appended): the inngest host is delivered through the digest-pinned bootstrap OCI image, so its marker arrives with a pin bump rather than a ForceNew from this change; the delivery matrix in `workspaces-luks-cutover-6604.md` is the reference. The `host_creates` HALT and the dispatch-only targets keep a merge from replacing them; the rollout issue carries an expiry for the interim.
 - **Quota.** About 4 rows per day per host plus one per boot across four hosts: negligible against the 2026-06 host-metrics finding; the measured number is recorded after rollout, not before.
 - **Reboot recovery.** This change names no reboot as a recovery step; the report refreshes within minutes of any future boot (`OnBootSec`), which #12008 will rely on.
 

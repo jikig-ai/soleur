@@ -1174,6 +1174,23 @@ authorize that exact command, as above.
    owner arms each heartbeat with steps 2 to 4 above (`TARGET=host-kernel-<role>`), and the `feeder` rows for the four targets in
    `plugins/soleur/lib/heartbeat-manifest.ts` flip from `kind: "none"` to the cron form in one batched change.
 
+**Delivery matrix (the single source for how the marker reaches each host class).** The ADR-322 addendum, the C4 prose and
+the query runbook refer to this table and do not restate it. Every row is held (#12386); the nearest thing to a delivery event
+is named in the Precondition column.
+
+| Host class | Carrier | Precondition | Expected drift until delivered |
+|---|---|---|---|
+| web-1 (running) | `terraform_data.host_kernel_marker_install` (SSH provisioner over the tunnel) | the owner releases the hold: the installer leaves `OPERATOR_APPLIED_EXCLUSIONS` and joins the SSH-stage target list, or a dispatched run applies it | a standing create on the twice-daily plan |
+| web-2 (running) | `terraform_data.host_kernel_marker_install_web2` (same forward through the web-1 bastion as the other web-2 twins) | the same release as web-1 | a standing create on the twice-daily plan |
+| a freshly born web host | cloud-init bake of the collector and the timer | none: it ships with the image the host is born from | none |
+| inngest host | the emitter embedded in `inngest-bootstrap.sh`, delivered ONLY through the digest-pinned bootstrap OCI image | a new bootstrap tag is minted and the pin is bumped. A replaced host boots with whatever the pin names, and a routine bootstrap-version bump re-runs the bootstrap on the RUNNING host and installs the emitter too, so the pin bump itself is the delivery event | none until the pin moves; the pin bump then shows as its own change |
+| registry host | the 6-hourly stamp-gated block in `zot-disk-heartbeat.sh`, baked through `cloud-init-registry.yml`; reaches the host only by a registry-host replace | the owner schedules the replace (verify target-type stock first) | a pending ForceNew in untargeted plans and the drift detector (the registry already carried one) |
+| git-data host, grok-dogfood host | none | git-data is tracked in #12385; grok-dogfood is a census exemption (default off, no shipper) | none; both read `unknown` by design |
+
+Until a host class above is delivered, the marker for it does not exist and the host reads `unknown`; that is the honest
+state and not a fault. For the inngest host, #12386 must say that the pin bump is the delivery event, so nobody bumps the pin
+for another reason and installs the emitter by accident.
+
 **Replacing the inngest or registry host.** A planned replace of either host takes its emitter dark for up to the 36 hour window
 (the collector only runs again after the replacement boots and its first timer or post fires). Pause that host's heartbeat BEFORE
 the window opens and arm it again after the first row from the new host is visible, so the replace does not page. Web hosts need no
@@ -1181,6 +1198,7 @@ replace for the marker, so this does not apply to them. Scheduling a replace is 
 
 **`unknown` in the skill output is the expected rollout state.** Until a host has been delivered and has produced its first valid
 row, the `soleur:cve-exposure` host-state output prints `unknown` for it. For the registry and the inngest host that is the
-long-lived state, because they receive the emitter only when they are next replaced for any reason. It is the honest answer and
+long-lived state, because each is delivered by the carrier in the delivery matrix above (a registry replace, or a bootstrap pin
+bump for the inngest host), not by being replaced for an unrelated reason. It is the honest answer and
 not a bug; a host that reads `unknown` is never read as clean. The git-data host (#12385) and the default-off grok-dogfood host
 have no heartbeat here and read `unknown` by design.

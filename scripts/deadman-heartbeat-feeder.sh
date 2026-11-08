@@ -10,9 +10,10 @@
 #                              threshold" rehearsal is the offline fixture suite. Born paused; their names are not yet in the
 #                              workflow loop (the arming change adds them, #12386).
 #
-# A heartbeat is beaten ONLY while the target's own predicate (moved verbatim from the retired alert, minus its
-# window conjunct) finds a qualifying row inside the old window in the Better Stack Logs HOT arm (remote()) UNION
-# the ARCHIVE arm (s3Cluster). The native luks alert could not see its once-a-day row (incident 1023423999, #11048,
+# A heartbeat is beaten ONLY while the target's own predicate (for the luks and cost targets, the retired alert's WHERE
+# conjuncts minus the window conjunct; for the host-kernel targets, a new predicate with no retired alert) finds a
+# qualifying row inside the target's window in the Better Stack Logs HOT arm (remote()) UNION the ARCHIVE arm (s3Cluster).
+# The native luks alert could not see its once-a-day row (incident 1023423999, #11048,
 # read `Current value: 0` through 33 healthy nights; the cost marker is NOT once-a-day: it fires a few times a day,
 # n=4 in 24 h), so this reads the archive itself. A spurious beat hides exactly
 # what the control exists to find, so a withheld beat is the signal: the heartbeat times out and pages.
@@ -120,8 +121,9 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME HOSTALIA
 export LC_ALL=C
 
 # ── THE TARGET TABLE ─────────────────────────────────────────────────────────────────────────────
-# Predicates are the retired alerts' WHERE conjuncts, moved verbatim minus the window conjunct (the window is
-# the SQL's own, below). Each is ONE physical line. They are read by name by the harness.
+# The luks, cost and key-probe predicates are the retired alerts' WHERE conjuncts, moved verbatim minus the window
+# conjunct (the window is the SQL's own, below); the four host-kernel predicates (#12007) are new and have no retired
+# alert. Each is ONE physical line. They are read by name by the harness.
 TARGETS="luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe host-kernel-web-1 host-kernel-web-2 host-kernel-inngest host-kernel-registry"
 
 # luks-monitor.service's own passing row: tag (luks-monitor.sh LOG_TAG / the unit's SyslogIdentifier), the unit
@@ -156,8 +158,10 @@ EOF
 # (#12007) The host-kernel marker rows. The collector prints ONE line:
 #   SOLEUR_HOST_KERNEL v=1 role=<web|inngest|registry> kernel=<uname -r|unreadable> uptime_s=... reboot_required=... sec_updates=...[ host=<id>]
 # Identity is transport-stamped, never self-declared. The journald hosts (web-1, web-2, inngest) ship through Vector,
-# which stamps host_name; the exact SYSLOG_IDENTIFIER keeps every other unit's rows out, role= is only a cross-check
-# (web-1 and web-2 are both role=web) and a journald row carrying ` host=` is refused. The registry posts directly, so its
+# which stamps host_name; the exact SYSLOG_IDENTIFIER AND the exact _SYSTEMD_UNIT (host-kernel-marker.service, the luks
+# precedent) keep every other unit's rows out, role= is only a cross-check (web-1 and web-2 are both role=web) and a
+# journald row carrying ANY `host=` substring (leading space, newline, tab or end of message) is refused. Each predicate
+# leads with position(raw, 'SOLEUR_HOST_KERNEL') > 0 so the full-window scan short-circuits (host-state.sh does the same). The registry posts directly, so its
 # rows have an EMPTY SYSLOG_IDENTIFIER and host_name; there the identity is in the message: role=registry plus host=<the
 # registry id the SOLEUR_ZOT_DISK path uses>. The host_name and registry-id literals are cross-pinned by the harness to
 # ROLE_TABLE / REGISTRY_HOST_ID in plugins/soleur/skills/cve-exposure/scripts/host-state.sh (the feeder runs in CI, the
@@ -165,16 +169,16 @@ EOF
 # build_sql refuses every dollar sign but its two table tokens, so there is no end anchor; an `unreadable` or malformed
 # kernel therefore never qualifies. Bracket classes stand in for backslash escapes so the text needs none.
 def_pred HK_WEB1_PRED <<'EOF'
-JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), ' host=') = 0
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
 EOF
 def_pred HK_WEB2_PRED <<'EOF'
-JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, 'host_name') = 'soleur-web-2' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), ' host=') = 0
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-2' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
 EOF
 def_pred HK_INNGEST_PRED <<'EOF'
-JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), 'role=inngest kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), ' host=') = 0
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), 'role=inngest kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
 EOF
 def_pred HK_REGISTRY_PRED <<'EOF'
-JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '' AND JSONExtractString(raw, 'host_name') = '' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), 'role=registry kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND (endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0)
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '' AND JSONExtractString(raw, 'host_name') = '' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), 'role=registry kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND (endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0)
 EOF
 
 # The target is matched by LITERAL EQUALITY against the table and never interpolated: the matched arm assigns
