@@ -402,7 +402,7 @@ new = "| 2099-01-02 | synthetic event B | no breach | see the determination pros
 io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
 PYMS3
 r="$(run_out "$D")"
-if [[ "$r" == "2" ]] && grep -q 'emits NO canonical-source candidate' "$LINT_OUT" \
+if [[ "$r" == "2" ]] && grep -q 'row dated 2099-01-02 emits NO canonical-source candidate' "$LINT_OUT" \
    && grep -q 'emitted candidates for 2 row(s) but the delegated guard counted 3 rows' "$LINT_OUT"; then
   pass "(b) a dated row with NO backticked span is refused by name AND by the row reconciliation"
 else fail "(b) a zero-candidate row did not refuse as designed (rc=$r): $(grep -m1 '^::error' "$LINT_OUT" | head -c 160)"; fi
@@ -428,6 +428,40 @@ if [[ "$r" == "0" ]] && grep -q 'all 4 canonical-source pointer(s) resolve' "$LI
    && grep -q 'all 5 determination-shaped audits/ file(s) are indexed or waived' "$LINT_OUT"; then
   pass "(b) single-source + composite rows: a file cited ONLY by a second span counts as indexed"
 else fail "(b) a second-span-only citation was not counted as indexed (rc=$r): $(grep -m1 '^::error' "$LINT_OUT" | head -c 160)"; fi
+
+# The label guard (P2 review): every NON-FIRST span must be preceded by an unbackticked
+# `; <YYYY-MM-DD> re-assessment|addendum|correction|closing:` label. Both arms point the
+# second span at a RESOLVING path so the label check alone decides the verdict; the
+# labeled arm uses `addendum` to exercise the kind alternation beyond `re-assessment`.
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PYMS5' || exit 2
+import io, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+old = "| 2099-01-02 | synthetic event B | no breach | `knowledge-base/legal/audits/2099-01-02-syn-determination-b.md` |"
+assert s.count(old) == 1, "anchor"
+new = ("| 2099-01-02 | synthetic event B | no breach | "
+       "`knowledge-base/legal/audits/2099-01-02-syn-determination-b.md`; "
+       "2099-01-04 addendum: `knowledge-base/legal/audits/2099-01-01-syn-determination-a.md` |")
+io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYMS5
+r="$(run_out "$D")"
+if [[ "$r" == "0" ]]; then
+  pass "(b) a second span preceded by a '; <YYYY-MM-DD> <kind>:' label is accepted"
+else fail "(b) a labeled second span was rejected (rc=$r): $(grep -m1 '^::error' "$LINT_OUT" | head -c 160)"; fi
+
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PYMS6' || exit 2
+import io, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+old = "| 2099-01-02 | synthetic event B | no breach | `knowledge-base/legal/audits/2099-01-02-syn-determination-b.md` |"
+assert s.count(old) == 1, "anchor"
+new = ("| 2099-01-02 | synthetic event B | no breach | "
+       "`knowledge-base/legal/audits/2099-01-02-syn-determination-b.md`; "
+       "`knowledge-base/legal/audits/2099-01-01-syn-determination-a.md` |")
+io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYMS6
+reject_because "(b) a second span with NO '; <YYYY-MM-DD> <kind>:' label is refused by name" "$D" \
+  "no '; <YYYY-MM-DD> <kind>:' label"
 
 # --- the guard's own operands -------------------------------------------------------------
 D="$(mkcorpus)" || exit 2
@@ -672,7 +706,7 @@ ccla_fixture "$D" "$(two_reg "$HASH_A" "$HASH_A")" "$(roster_two_hashes "$HASH_A
 reject_because "DI-F7 two coverage-map rows sharing one executed-instrument hash are REFUSED" "$D" \
   "share an executed-instrument hash"
 
-MIN_ASSERTIONS=59  # 34 -> 55: block (f) join arms, the review-driven fail-closed arms, the reason-substring conversion, TD7 and DI-F7 (#7909); 55 -> 59: the four multi-source canonical-cell arms (#11294)
+MIN_ASSERTIONS=61  # 34 -> 55: block (f) join arms, the review-driven fail-closed arms, the reason-substring conversion, TD7 and DI-F7 (#7909); 55 -> 59: the four multi-source canonical-cell arms (#11294); 59 -> 61: the labeled/unlabeled second-span pair (#11294 review)
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2

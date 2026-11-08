@@ -53,7 +53,9 @@
 #       canonical-source cell carries ONLY backticked repo-relative paths, >= 1 per row, and
 #       may carry MORE THAN ONE -- a re-assessment or addendum record joins the determination
 #       under an unbackticked label (cell shape: `path-a`; <date> re-assessment: `path-b`).
-#       The producer emits
+#       Every NON-FIRST span must be preceded by an unbackticked `; <YYYY-MM-DD>
+#       re-assessment|addendum|correction|closing:` label -- a span without one is a named
+#       fail (#11294 review). The producer emits
 #       one candidate per backtick-enclosed span; every candidate runs the same
 #       contained/tracked/non-symlink/`..` gauntlet; a row emitting zero candidates fails by
 #       name; and the row reconciliation counts EMITTING ROWS, not resolved paths, because a
@@ -273,30 +275,41 @@ pass "(b) breach-register index is decidable: $row_count determination row(s)"
 # backticked path, so `print trim($(NF-1))` sufficed. The contract widened to "only backticked
 # repo-relative paths, >= 1 per dated row" (see the header): the producer now emits ONE
 # CANDIDATE PER BACKTICK-ENCLOSED SPAN inside $(NF-1) -- unbackticked text (a `; <date>
-# re-assessment:` label) is not a candidate. The scan stream carries three line kinds:
+# re-assessment:` label) is not a candidate. The scan stream carries four line kinds:
 #   p:<path>   one emitted candidate, fed to the gauntlet and the (c) joins unchanged
 #   e:         the row emitted >= 1 candidate
 #   z:<date>   the row emitted ZERO candidates -- fails by name below
+#   u:<date>   a NON-FIRST span carried no `; <YYYY-MM-DD> <kind>:` label -- fails by name below
+# KNOWN LIMIT: `-F'|'` splits on every pipe -- this producer does not protect `\|` the way the
+# delegate does, so an escaped pipe in an EARLIER cell would shift `$(NF-1)` off the
+# canonical-source cell. Accepted today: the register carries no `\|`; landing one revisits this.
 cited_scan="$(awk -F'|' '
   function trim(s) { gsub(/^[ \t`]+|[ \t`]+$/, "", s); return s }
   /^##[ \t]/ { inblk = ($0 ~ /^##[ \t]+Index of determinations[ \t]*$/) }
   inblk && /^\|[ \t]*20[0-9][0-9]-/ {
     n = split($(NF-1), seg, "`")
-    e = 0
+    e = 0; unlabeled = 0
     for (i = 2; i <= n; i += 2) {
       c = trim(seg[i])
-      if (c != "") { print "p:" c; e++ }
+      if (c != "") {
+        print "p:" c; e++
+        if (i > 2 && seg[i-1] !~ /;[ \t]*20[0-9][0-9]-[0-9][0-9]-[0-9][0-9][ \t]+(re-assessment|addendum|correction|closing)[ \t]*:[ \t]*$/) unlabeled = 1
+      }
     }
+    if (unlabeled) print "u:" trim($2)
     if (e > 0) { print "e:" } else { print "z:" trim($2) }
   }
 ' "$BREACH_REGISTER")"
 [[ -n "$cited_scan" ]] || die2 "no determination rows parsed from the breach register index"
 cited_paths="$(printf '%s\n' "$cited_scan" | sed -n 's/^p://p')"
 zero_span_rows="$(printf '%s\n' "$cited_scan" | sed -n 's/^z://p')"
+unlabeled_span_rows="$(printf '%s\n' "$cited_scan" | sed -n 's/^u://p')"
 rows_emitting="$(printf '%s\n' "$cited_scan" | grep -c '^e:$' || true)"
 
 # A dated row whose canonical-source cell yields NO backticked span is not a citation the
 # register can produce -- named here, distinctly from the unresolvable-path failures below.
+# Deliberate BOTH: a named fail here AND the reconciliation die2 below exits 2, because a
+# zero-candidate row emits no `e:` and the row count cannot reconcile.
 if [[ -n "$zero_span_rows" ]]; then
   while IFS= read -r zr; do
     [[ -n "$zr" ]] || continue
@@ -304,6 +317,20 @@ if [[ -n "$zero_span_rows" ]]; then
            Every dated row's canonical-source cell must carry >= 1 backticked repo-relative
            path; prose alone is not a pointer a supervisory authority can be shown."
   done <<< "$zero_span_rows"
+fi
+
+# LABEL GUARD (#11294 review). A cell emitting more than one backticked span must carry,
+# before every non-first span, an unbackticked `; <YYYY-MM-DD> re-assessment|addendum|
+# correction|closing:` label -- an unlabeled second span is indistinguishable from cell
+# prose and is outside the widened contract, so it fails by name like the zero-span row.
+if [[ -n "$unlabeled_span_rows" ]]; then
+  while IFS= read -r ur; do
+    [[ -n "$ur" ]] || continue
+    fail "(b) breach-register row dated $ur carries a second canonical-source span with no '; <YYYY-MM-DD> <kind>:' label
+           Every non-first backticked span must be preceded by an unbackticked label of the
+           form '; 20XX-XX-XX re-assessment|addendum|correction|closing:' -- an unlabeled
+           span cannot be told apart from cell prose and is outside the widened contract."
+  done <<< "$unlabeled_span_rows"
 fi
 
 # CONTAINED, TRACKED, AND NOT A SYMLINK -- `-f` alone was three fail-opens. Assertion (b)'s
