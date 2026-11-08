@@ -13,7 +13,7 @@
 
 import type { LegalChoiceWire, LegalDecideResult } from "@/lib/legal-acceptance-wire";
 import { codePointLength, REQUEST_CHANGES_MAX } from "@/lib/legal-acceptance-wire";
-import { isCurrent, type LegalTextEntry } from "./canonical";
+import { isCurrent, TEXT_HASH_RE, type LegalTextEntry } from "./canonical";
 import { reportLegalOp } from "@/server/approval/ops";
 import { createChildLogger } from "@/server/logger";
 
@@ -282,6 +282,54 @@ export async function ackState(
     throw new LegalServiceError(fn, "bad_payload");
   }
   return { outcome: "row", acked: out.acked, age_seconds: age };
+}
+
+// ── legal_acceptance_hash_counts (service; read-only aggregate, #12429) ──────────────────────────────────────────
+
+/** The most distinct hashes the RPC will answer; it refuses (54000) beyond this rather than truncate. Equal to the SQL cap. */
+export const HASH_COUNTS_MAX_ROWS = 20;
+
+/** A key's total and the count per text hash: nothing about WHO decided or WHAT they decided, never the note. */
+export interface HashCountsResult {
+  total: number;
+  by_hash: Array<{ text_hash: string; count: number }>;
+}
+
+/**
+ * The per-hash counts of one key. This RPC answers `{total, by_hash}` with NO `outcome` key, so it has its own strict
+ * validation (an unknown shape is never success). Anything outside the documented shape throws `bad_payload`:
+ *  - the object has exactly the keys `total` and `by_hash`; each row exactly `text_hash` and `count`;
+ *  - `total` is a non-negative safe integer, each `count` an integer >= 1, each `text_hash` 64 lowercase hex;
+ *  - at most HASH_COUNTS_MAX_ROWS rows, strictly ascending by `text_hash` (so no duplicate), and the counts sum to `total`.
+ * The result is rebuilt from those fields, so an extra column the database might one day return cannot reach a caller.
+ */
+export async function hashCounts(service: LegalRpcClient, a: { key: string }): Promise<HashCountsResult> {
+  const fn = "legal_acceptance_hash_counts";
+  const out = await rpcData(service, fn, { p_key: a.key });
+  const bad = () => new LegalServiceError(fn, "bad_payload");
+  const closed = (o: Record<string, unknown>, keys: string[]): boolean => {
+    const k = Object.keys(o);
+    return k.length === keys.length && keys.every((x) => k.includes(x));
+  };
+  if (!isObj(out) || !closed(out, ["total", "by_hash"])) throw bad();
+  const total = out.total;
+  const rows = out.by_hash;
+  if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) throw bad();
+  if (!Array.isArray(rows) || rows.length > HASH_COUNTS_MAX_ROWS) throw bad();
+  const by_hash: HashCountsResult["by_hash"] = [];
+  let sum = 0;
+  let prev = "";
+  for (const r of rows) {
+    if (!isObj(r) || !closed(r, ["text_hash", "count"])) throw bad();
+    const { text_hash, count } = r;
+    if (typeof text_hash !== "string" || !TEXT_HASH_RE.test(text_hash) || text_hash <= prev) throw bad();
+    if (typeof count !== "number" || !Number.isSafeInteger(count) || count < 1) throw bad();
+    prev = text_hash;
+    sum += count;
+    by_hash.push({ text_hash, count });
+  }
+  if (sum !== total) throw bad();
+  return { total, by_hash };
 }
 
 // ── decide orchestration ─────────────────────────────────────────────────────────────────────────────────────────

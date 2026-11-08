@@ -243,7 +243,7 @@ describe("legal-acceptance alert op contract", () => {
    * The storeFailed census: every `reportLegalOp("storeFailed", ...)` carries `tags: { stage: "<literal>" }` with the literal in
    * the closed set, or the shorthand `tags: { stage }` where `stage` is a parameter DECLARED `stage: StoreFailedStage` by the
    * nearest enclosing function (a mention of the type elsewhere in the file does not count). Stages reachable from code are the
-   * literals plus the literal first arguments of every call to such a function; all five must be reachable.
+   * literals plus the literal first arguments of every call to such a function; all six must be reachable.
    */
   const stageCensus = (files: SrcFile[]): { sites: number; problems: string[]; reachable: string[] } => {
     const problems: string[] = [];
@@ -303,12 +303,12 @@ describe("legal-acceptance alert op contract", () => {
     expect(registrySrc.slice(fnStart).search(FEATURE_EMISSION)).toBeGreaterThan(0);
   });
 
-  it("every storeFailed report carries a tags.stage from the closed set, and all five stages are reachable from code", () => {
-    expect([...STORE_FAILED_STAGES]).toEqual(["verify", "ack_state", "ack", "registry", "config"]);
+  it("every storeFailed report carries a tags.stage from the closed set, and all six stages are reachable from code", () => {
+    expect([...STORE_FAILED_STAGES]).toEqual(["verify", "ack_state", "ack", "registry", "config", "counts"]);
     const c = stageCensus(sourceFiles());
     expect(c.problems).toEqual([]);
     expect(c.sites, "storeFailed call sites found").toBeGreaterThanOrEqual(3);
-    // ack and config are literals; verify, ack_state and registry come through the typed shorthand of the route's storeFailed().
+    // ack, config and counts are literals (counts: the aggregate read behind [key]/counts, #12429); verify, ack_state and registry come through the typed shorthand of the route's storeFailed().
     expect(c.reachable).toEqual([...STORE_FAILED_STAGES].sort());
   });
 
@@ -335,7 +335,7 @@ describe("legal-acceptance alert op contract", () => {
       expect(featureEmitters([{ rel: "server/approval/ops.ts", src: 'feature: "legal-acceptance"' }])).toEqual([]);
     });
     const GOOD_FILES: SrcFile[] = [
-      { rel: "server/svc.ts", src: 'function f() { reportLegalOp("storeFailed", err, { tags: { stage: "ack" }, extra: {} }); reportLegalOp("storeFailed", e, { tags: { stage: "config" } }); }' },
+      { rel: "server/svc.ts", src: 'function f() { reportLegalOp("storeFailed", err, { tags: { stage: "ack" }, extra: {} }); reportLegalOp("storeFailed", e, { tags: { stage: "config" } }); reportLegalOp("storeFailed", c, { tags: { stage: "counts" }, extra: {} }); }' },
       {
         rel: "app/route.ts",
         src: [
@@ -360,6 +360,8 @@ describe("legal-acceptance alert op contract", () => {
       ["the registry call deleted (a stage no longer reachable)", mutate("app/route.ts", ' storeFailed("registry", c);', ""), 'stage "registry" is not reachable'],
       ["the ack_state call deleted", mutate("app/route.ts", ' storeFailed("ack_state", b);', ""), 'stage "ack_state" is not reachable'],
       ["the config literal deleted", mutate("server/svc.ts", ' reportLegalOp("storeFailed", e, { tags: { stage: "config" } });', ""), 'stage "config" is not reachable'],
+      ["the counts literal deleted (#12429: the aggregate route no longer reports)", mutate("server/svc.ts", ' reportLegalOp("storeFailed", c, { tags: { stage: "counts" }, extra: {} });', ""), 'stage "counts" is not reachable'],
+      ["a counts report that names a stage outside the set", mutate("server/svc.ts", 'stage: "counts"', 'stage: "count"'), 'stage "count" is not in STORE_FAILED_STAGES'],
       ["a shorthand call with a stage outside the set", mutate("app/route.ts", 'storeFailed("registry", c)', 'storeFailed("regsitry", c)'), "not in STORE_FAILED_STAGES"],
     ])("stage census: %s", (_label, files, want) => {
       expect(stageCensus(files).problems.join("|")).toContain(want);

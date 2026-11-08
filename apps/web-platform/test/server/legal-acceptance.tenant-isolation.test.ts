@@ -745,3 +745,97 @@ describe.skipIf(!ENABLED)("migration 185 behaviour (rolled-back real rows)", () 
     });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Migration 186 (#12429, ADR-319 amendment 2026-11-08): the credential-free pre-flag aggregate (Guard 2).
+// ---------------------------------------------------------------------------------------------------------------
+const countsFn = (t: Txn, key: string = KEY) =>
+  as(t, "service_role", null, async () => {
+    const [r] = await t<{ r: any }[]>`select public.legal_acceptance_hash_counts(${key}::text) as r`;
+    return r.r;
+  });
+
+describe.skipIf(!ENABLED)("migration 186 behaviour (rolled-back real rows)", () => {
+  test("a key with no rows answers total 0 and an empty by_hash", async () => {
+    await scenario(async (t) => {
+      expect(await countsFn(t, "no-rows-for-this-key")).toEqual({ total: 0, by_hash: [] });
+    });
+  });
+
+  test("two founders on two hashes are both counted, ordered by hash, and the answer carries no per-row field", async () => {
+    await scenario(async (t, c) => {
+      const sessionB = randomUUID();
+      await verifiedIntent(t, c.userA, c.sessionA, { hash: H1 });
+      await record(t, web(c), { hash: H1 });
+      await verifiedIntent(t, c.userB, sessionB, { hash: H2 });
+      await record(t, web(c, c.userB, sessionB), { hash: H2 });
+      const out = await countsFn(t);
+      expect(out).toEqual({
+        total: 2,
+        by_hash: [
+          { text_hash: H1, count: 1 },
+          { text_hash: H2, count: 1 },
+        ],
+      });
+      // Guard 2 row 4: nothing about who decided, what they decided, when, or the note.
+      expect(Object.keys(out).sort()).toEqual(["by_hash", "total"]);
+      for (const r of out.by_hash) expect(Object.keys(r).sort()).toEqual(["count", "text_hash"]);
+      expect(JSON.stringify(out)).not.toMatch(new RegExp(`${c.userA}|${c.userB}|accept|decline|request_changes|requested_edit`));
+    });
+  });
+
+  test("a different key's rows are not counted", async () => {
+    await scenario(async (t, c) => {
+      await verifiedIntent(t, c.userA, c.sessionA);
+      await record(t, web(c));
+      expect(await countsFn(t, "some-other-key")).toEqual({ total: 0, by_hash: [] });
+      expect((await countsFn(t)).total).toBe(1);
+    });
+  });
+
+  test("a user identity is refused (42501) and so are anon; EXECUTE is service_role only", async () => {
+    await scenario(async (t, c) => {
+      await failsWith(t, /42501|service role only|permission denied/, () =>
+        as(t, "authenticated", { sub: c.userA }, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [KEY])));
+      await failsWith(t, /permission denied/, () => as(t, "anon", null, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [KEY])));
+    });
+  });
+
+  test("a malformed key raises 22023 with a static message that does not echo the key", async () => {
+    await scenario(async (t) => {
+      for (const k of ["Bad Key", "", "UPPER", "a".repeat(64)]) {
+        let err: { code?: string; message?: string } | null = null;
+        try {
+          await t.savepoint(async () => {
+            await as(t, "service_role", null, () => t.unsafe("select public.legal_acceptance_hash_counts($1::text)", [k]));
+          });
+        } catch (e) {
+          err = e as { code?: string; message?: string };
+        }
+        expect(err?.code).toBe("22023");
+        if (k.length > 0) expect(err?.message ?? "").not.toContain(k);
+      }
+      await failsWith(t, /22023|invalid input/, () => as(t, "service_role", null, () => t.unsafe("select public.legal_acceptance_hash_counts(null::text)")));
+    });
+  });
+
+  test("the 186 verify sentinel reports bad = 0 on the live catalog", async () => {
+    await scenario(async (t) => {
+      const verify = readFileSync(path.join(__dirname, "../../supabase/verify/186_legal_acceptance_hash_counts.sql"), "utf8");
+      const out = (await t.unsafe(verify)) as any[];
+      expect(out.length).toBeGreaterThanOrEqual(6);
+      expect(out.filter((r) => Number(r.bad) !== 0).map((r) => r.check_name)).toEqual([]);
+    });
+  });
+
+  test("the 186 down file drops only the function: the record table and the 185 objects remain", async () => {
+    await scenario(async (t) => {
+      const down = readFileSync(path.join(__dirname, "../../supabase/migrations/186_legal_acceptance_hash_counts.down.sql"), "utf8");
+      await t.unsafe(down);
+      const [f] = await t`select count(*)::int n from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'legal_acceptance_hash_counts'`;
+      expect(f.n).toBe(0);
+      const [kept] = await t`select count(*)::int n from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname in ('legal_acceptance_ack_state', 'ack_legal_acceptance', 'verify_legal_acceptance')`;
+      expect(kept.n).toBe(3);
+    });
+  });
+});

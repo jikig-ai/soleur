@@ -349,3 +349,35 @@ AP-021 (Diagnostic honesty): Aligned. The card says "acknowledged" for an acknow
 ### Diagram
 
 No change. `platform.infra.legalAcceptanceStore` already names the three tables with no retention period, the `webapp -> legalAcceptanceStore` edge is unchanged, and the founder gate and the null-kind guard add no element.
+
+## Amendment 2026-11-08 (#12429)
+
+The credential-free pre-flag aggregate. Before the `approval-queue` flag is turned on, or before a text change is published, the operator has to know whether any decision row exists for a key under a text hash other than the registry hash. Until now that question needed the database-owner credential (the runbook's owner-SQL step), which the runbook reserves and which no agent session may hold. This amendment answers it with the verify bearer alone. Ruled by CTO agent, 2026-11-08 (R2: RPC plus sibling route; T5: no small-cell floor).
+
+### Decisions
+
+- **One new `service_role` RPC, `public.legal_acceptance_hash_counts(p_key text)` (migration 186),** function-only (no table, no column, no change to migrations 184 or 185). It returns `{total, by_hash: [{text_hash, count}]}` ordered by `text_hash`, and `{total: 0, by_hash: []}` for a key with no rows. It selects no founder id, choice, timestamp or note (`requested_edit`); the note stays owner-only (the runbook). It follows the 185 pattern: `SECURITY DEFINER`, `SET search_path = public, pg_temp`, `auth.uid() IS NOT NULL` raises 42501, the key shape predicate raises 22023 with a static message (the caller's key never reaches an exception text), `FROM ONLY public.legal_acceptance`, `REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role` then `GRANT EXECUTE ... TO service_role`. `by_hash` is capped at 20 distinct hashes and the RPC refuses (54000) beyond that rather than truncate, because a truncated list would no longer sum to the total. The jti-deny predicate is not re-asserted: no user token can execute the function (it is revoked from `authenticated` and refuses any caller with `auth.uid()` set).
+- **A sibling route, `GET /api/internal/legal-acceptance/[key]/counts`,** not a mode flag on the verify route: that route's contract is "exactly four keys, one configured founder" and `hold-gate-eval.sh` asserts it. The new route answers a closed `{key, registry_hash, total, by_hash, ok_to_flag}`; `ok_to_flag` is true iff every hash in `by_hash` equals `registry_hash` (vacuously true at `total` 0). It needs no founder id. Check order: 503 token unset or malformed, 401, 400, 404 (key not in the registry), 503 (registry unreadable or RPC failed or missing), 502 (undocumented payload shape, rejected by a strict parser: closed keys, 64-hex hashes, integer counts of at least 1, sorted, summing to `total`). Never a partial 200; `Cache-Control: no-store`.
+- **The verify bearer now also grants aggregate reads** (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`): a scope widening of one token, not a new credential. The holder already learns "accepted" for the founder from the verify route, and now learns the count per hash for a key. It reveals no identity, no choice, no time and no note.
+- **No small-cell floor.** With one data subject today a count of 1 is the answer to the question; a floor would hide the n=0 and n=1 answer that the check exists to give.
+- **A helper, `scripts/legal-acceptance-counts.sh <key>`,** replaces the runbook's owner-SQL pre-flag step and the CLO ruling's "Pre-flag check, addition (L8)" read (that paragraph carries a superseded marker, append-only). It validates the key, hardcodes `https://app.soleur.ai`, refuses under `set -x`, parses with `jq -e`, and prints `ok_to_flag=<bool> total=<n> measured=production-table-only` and nothing else; any failure exits non-zero with no `ok_to_flag=` line. It lives outside `plugins/soleur` (a production URL does not belong in the tree that ships to customers).
+- **What the number measures.** Only the production table for that key. It does not measure database backups, the Sentry `accepted` count, or dev and preview. `ok_to_flag` is advisory and never authorizes a flag flip (an exact-command go from the operator is still required).
+- **Observability.** `STORE_FAILED_STAGES` gains `counts`: a failed, thrown or malformed counts call emits one `store_failed` (stage `counts`), including migration 186 not applied (the route answers 503, never 500). Recorded in Sentry, not paged (`store_failed` is in `UNPAGED_OPS`; #12195 tracks a paging rule): accepted for a sole-operator surface.
+- **Apply path.** `web-platform-release.yml` runs `resolve-target, migrate, verify-migrations, deploy`, so 186 lands before the code. Rollback: the down file is a plain `DROP FUNCTION IF EXISTS` (hot-rollback safe; the route then answers 503 until the code is reverted).
+
+### Superseded by this amendment
+
+- The runbook's owner-SQL pre-flag step (`select count(*) from public.legal_acceptance`, run in the SQL editor with a database-owner login) and the CLO ruling's L8 read ("the one read that needs the database owner"): replaced by the helper. The note read, the unacknowledged-rows query and the acknowledgement insert stay owner-only.
+- PR-D's "exactly four keys" description of the endpoint is unchanged for the verify route; the new route is a separate contract.
+
+### Still open
+
+- **Records of processing and the legitimate-interests assessment.** The Art. 30 entry (PA-40) and the LIA wording for the aggregate read (counts by hash, no identifier per row, `service_role` only) are owed to the CLO. This amendment does not edit the register; the migration's `COMMENT ON FUNCTION` names the same Art. 6(1)(f) basis so the function is traceable until the CLO wording lands.
+
+### Principle Alignment
+
+AP-021 (Diagnostic honesty): Aligned. The helper labels its number `measured=production-table-only` so a zero is not read as "nothing exists anywhere". No principle in tension.
+
+### Diagram
+
+The `legalAcceptanceStore` element description in `model.c4` is updated (the agent-readable set is no longer only "four fields about ONE decision"; the counts RPC is one more `service_role` read on the existing `webapp -> legalAcceptanceStore` edge, and the owner-level pre-flag read leaves the `founder -> legalAcceptanceStore` edge). No new element or edge.

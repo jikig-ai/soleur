@@ -81,6 +81,7 @@ the hold). Do not edit the row. Treat it as a possible integrity incident: escal
 | `ack` | The decide path could not write the acknowledgement (the flush threw, or the write failed) | The decision itself is recorded. The row will show as `row_without_event` when verified; reconcile it as above. |
 | `registry` | The legal text file could not be read, or is malformed | Read the error `code` on the event (`extra.code`). `read_failed`: the texts directory is missing or unreadable in the image; redeploy a build that contains `server/legal-acceptance/texts`. Any other code: the committed text file is malformed; edit the file. Nothing is wrong with the database either way. |
 | 401 (no event) | A caller sent a wrong or missing token | Unthrottled by design and not an event; paging is #12195. A burst of 401s in the request logs is the signal; rotate nothing unless the token is believed leaked. |
+| `counts` | The aggregate read behind `scripts/legal-acceptance-counts.sh` (the `[key]/counts` route) failed, threw, or answered an undocumented shape | The helper exited non-zero with `counts: HTTP 503 store_failed` or `HTTP 502 bad_gateway`. Check that migration 186 is applied in prd (a missing function answers 503) and that Supabase is up. Recorded in Sentry, not paged. |
 | `config` | The token or the founder id is set but malformed (once per process; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
 
 After you have dealt with an event, resolve (never archive) its Sentry issue.
@@ -90,14 +91,26 @@ flush not confirmed`), the row stays unacknowledged, and the next verify surface
 
 ## Before the `approval-queue` flag is on in prd
 
-There is no backfill migration, so check once, in the production project, before the flag is on for anyone:
+There is no backfill migration, so check once, before the flag is on for anyone, and again before any text change is published.
+The check needs no database credential (#12429, ADR-319 amendment 2026-11-08): it asks the web app through the verify bearer.
 
-```sql
-select count(*) from public.legal_acceptance;
+```bash
+scripts/legal-acceptance-counts.sh founder-acceptance-record
 ```
 
-It must be 0. If it is not, insert the acknowledgement rows for those rows first (the insert above, once per row, scoped by
-founder id), or each of them raises a false `row_without_event` when verified.
+On success it prints exactly one line, `ok_to_flag=<true|false> total=<n> measured=production-table-only`, and nothing else.
+`ok_to_flag=true` means every decision row for that key is under the registry hash (vacuously true at `total=0`);
+`ok_to_flag=false` means a row exists under another hash, so bump the version first. Any failure (401, 404, 502, 503, an
+unreadable token) exits non-zero and prints no `ok_to_flag=` line and one status line such as `counts: HTTP 503 store_failed`;
+a 503 usually means migration 186 is not applied or the token is unset, so read the `store_failed` event (`stage=counts`). The
+helper reads `LEGAL_ACCEPTANCE_VERIFY_TOKEN` from Doppler `prd` itself, hardcodes `https://app.soleur.ai`, and refuses to run
+under `set -x`. Run it from a checkout of `main`; do not paste the token anywhere.
+
+What the number is and is not: it counts only the production table for that key. It does not measure database backups, the
+Sentry `accepted` count, or dev and preview. `ok_to_flag` is advisory and never authorizes a flag flip; a flip still needs the
+operator's exact go. Rows that exist before the flag is on (`total` above 0) each need an acknowledgement (the insert above,
+once per row, scoped by founder id, run in the production SQL editor with your own login), or each raises a false
+`row_without_event` when verified.
 
 When the secrets (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`, `LEGAL_ACCEPTANCE_FOUNDER_ID`) are applied (#12196): the container receives them
 through an env file that is frozen when the container is created, so a restart is not enough and a redeploy is needed. While the

@@ -307,7 +307,9 @@ export const LEGAL_OPS = {
    * A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is one of
    * STORE_FAILED_STAGES: `verify` (the verify RPC), `ack_state` (the reconciliation RPC), `ack` (the decide path's flush or
    * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; verify endpoint step 4) or `config` (a token or founder id
-   * that is SET but malformed; once per process, names only the variable). No paging rule yet (#12195).
+   * that is SET but malformed; once per process, names only the variable) or `counts` (the aggregate read behind
+   * GET /api/internal/legal-acceptance/[key]/counts failed, threw, or answered an undocumented shape, including migration 186
+   * not applied; #12429). No paging rule yet (#12195).
    */
   storeFailed: {
     op: "store_failed",
@@ -319,7 +321,7 @@ export const LEGAL_OPS = {
 export type LegalOpKey = keyof typeof LEGAL_OPS;
 
 /** The closed set of `store_failed` `tags.stage` values; every storeFailed report carries exactly one (the contract test pins it). */
-export const STORE_FAILED_STAGES = ["verify", "ack_state", "ack", "registry", "config"] as const;
+export const STORE_FAILED_STAGES = ["verify", "ack_state", "ack", "registry", "config", "counts"] as const;
 export type StoreFailedStage = (typeof STORE_FAILED_STAGES)[number];
 
 export function reportLegalOp(key: LegalOpKey, err: unknown, ctx: ApprovalOpContext = {}): void {
