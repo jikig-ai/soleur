@@ -40,7 +40,7 @@ gate was executed inline against the repo (see gate ledger below)
 
 ### New considerations discovered
 
-- PR #8626 touches `breach-register.md` at ~line 128 (2026-09-03 row) — disjoint from our edits;
+- PR #8626 touches `breach-register.md` at ~line 128 (2026-09-23 row) — disjoint from our edits;
   cell re-greps remain gated at work time anyway (AC-3).
 - The new record matches `DETERMINATION_PATTERN` (produced=43 after landing) so it MUST be
   index-cited — the waiver alternative was semantically wrong, not merely heavier.
@@ -174,8 +174,9 @@ Four deliverables, one fork resolved at plan time:
    verbatim, composite cell now parseable; (d) append `## Corrections — 2026-11-08 (#11294
    re-assessment)` at file end with `> **Superseded 2026-11-08 (#11294) — applied in-cell:**`
    markers quoting each superseded clause, closing on a `**Determination unchanged.**` line. Plus
-   one `inferred` edit: append the new record to the frontmatter `related:` list — convention
-   measured at commit `45df1eef3f` (the 2026-10-29 determination landing added its record there).
+   one `inferred` edit: append the new record to the frontmatter `related:` list — recent
+   landings append the record to `related:` (precedent `45df1eef3f`); two older cited records
+   predate the convention.
 4. **Post-merge runbook step.** Post the brief's verbatim comment on #11294 after merge —
    recorded in the plan/tasks and the PR body, executed post-merge (not a plan-phase action).
 
@@ -414,7 +415,7 @@ None — 94 open `code-review`-labeled issues queried; zero bodies name any plan
 | Corrections section | "Append at file end a `## Corrections — 2026-11-08 (#11294 re-assessment)` section …" | asked |
 | Post-merge comment | "AFTER the PR merges … post this comment verbatim on #11294" | asked |
 | `lint-legal-registers.sh` parser change + test fixtures | — | inferred — justification: the prescribed canonical-cell append is unparseable by the guard's single-path `trim($(NF-1))` extraction; without this change the blocking lint fails on (b) and (c) and the deliverables cannot merge. Minimal in-scope repair, recorded `pending - assumed:` in decision-challenges.md |
-| `related:` frontmatter append | — | inferred — justification: convention measured at commit 45df1eef3f — every index-cited audits/ record lands in `related:`; omitting it leaves the frontmatter list stale relative to the row it indexes |
+| `related:` frontmatter append | — | inferred — justification: recent landings append the record to `related:` (precedent 45df1eef3f); two older cited records predate the convention; omitting it leaves the frontmatter list stale relative to the row it indexes |
 | tasks.md / decision-challenges.md | — | inferred — justification: soleur pipeline artifacts (Save Tasks + ADR-084 headless ruling channel) |
 
 ### Split Assessment
