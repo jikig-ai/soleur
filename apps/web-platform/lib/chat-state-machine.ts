@@ -13,6 +13,7 @@ import type {
   ApprovalWireStatus,
 } from "./types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { APPROVAL_COPY } from "@/lib/approval-copy";
 
 /**
  * Pure streaming state machine for the chat message lifecycle.
@@ -214,11 +215,14 @@ export interface ChatApprovalMessage extends ChatMessageBase {
   approvalId: string;
   conversationId: string;
   toolName: string;
-  view: ApprovalCardView;
+  /** `null` = the action text is withheld from this viewer (#9601): the card shows the waiting copy and nothing else. */
+  view: ApprovalCardView | null;
   status: ApprovalWireStatus;
   expiresAt: string;
   requestCount: number;
   viewerRole: "owner" | "member";
+  /** Who raised the request (#9601): "you", an email for an Owner viewer, or "a workspace member". Absent = no label. */
+  requester?: string;
   /** True while the agent is still inside its in-session wait; false once it stopped waiting. */
   agentWaiting: boolean;
   /** Set on the reply to this socket's own `approval_decide` (conflict / expired / closed explain a refusal). */
@@ -1580,7 +1584,8 @@ export function applyStreamEvent(
       const card: ChatApprovalMessage = {
         id: cardId,
         role: "assistant",
-        content: event.view.title,
+        // A withheld view (null) carries the fixed waiting copy: the same string the card shows.
+        content: event.view?.title ?? APPROVAL_COPY.memberWaitingRedacted,
         type: "approval_request",
         approvalId: event.approvalId,
         conversationId: event.conversationId,
@@ -1590,6 +1595,10 @@ export function applyStreamEvent(
         expiresAt: event.expiresAt,
         requestCount: event.requestCount,
         viewerRole: event.viewerRole,
+        // Copied explicitly (an optional field is dropped silently at any explicit destructure hop), and only when present:
+        // the upsert below writes this FRESH card object over the entry (the old entry is not spread), so a later frame
+        // without a label clears a stale one.
+        ...(event.requester !== undefined ? { requester: event.requester } : {}),
         agentWaiting: event.agentWaiting === true,
       };
       if (existingIdx !== -1) {

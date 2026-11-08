@@ -123,7 +123,15 @@ jobs:
           # ci.yml additionally self-triggers on ci.yml, which deploy-docs.yml
           # does not: edits to the gate workflow must run the gate. Keep this
           # list in sync with deploy-docs.yml's paths: when adding docs trees.
-          CHANGED=$(git diff --name-only "origin/${BASE_REF}...HEAD")
+          # (#12332) NUL-delimited, rename-free and submodule-honest: a name git would C-quote still
+          # starts with the anchor, a rename AWAY from the docs trees lists its old path, and a git
+          # failure is a failure (the pipefail is scoped to the substitution; this step carries none).
+          # A failed diff runs the docs gate, never skips it.
+          if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "origin/${BASE_REF}...HEAD" | tr '\0' '\n'); then
+            echo "::warning::git diff against origin/${BASE_REF} failed; running the docs gate (fail-safe)"
+            printf 'docs=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if printf '%s\n' "$CHANGED" | grep -cE '^(plugins/soleur/(docs|skills|agents|commands)/|eleventy\.config\.js$|\.github/workflows/(ci|deploy-docs)\.yml$)' >/dev/null; then
             printf 'docs=true\n' >> "$GITHUB_OUTPUT"
           else
@@ -1256,7 +1264,7 @@ jobs:
         name: Detect capture-input changes
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
-          CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
+          CHANGED="$(git diff --no-renames --name-only origin/main...HEAD 2>/dev/null || true)"
           if printf '%s\n' "$CHANGED" | grep -cE 'apps/web-platform/(package-lock\.json|Dockerfile|server/agent-runner-sandbox-config\.ts|server/agent-auth-env-vars\.ts|server/c4-staging-root\.ts|server/agent-outer-wrap\.ts|server/agent-runner-query-options\.ts|scripts/sandbox-canary\.mjs|scripts/sandbox-canary-verify-in-image\.sh|scripts/tenant-isolation-inner-probe\.sh|infra/sandbox-canary-argv\.json|infra/agent-outer-wrap-argv\.json)' >/dev/null; then
             echo "hit=1" >> "$GITHUB_OUTPUT"
           else
@@ -1284,7 +1292,7 @@ jobs:
         name: Detect propagation-input changes
         run: |
           git fetch --no-tags origin main 2>/dev/null || true  # NOT --depth=1: a shallow base has no merge base, so `git log base..HEAD` exits 128 and the ack scan silently reads empty
-          CHANGED="$(git diff --name-only origin/main...HEAD 2>/dev/null || true)"
+          CHANGED="$(git diff --no-renames --name-only origin/main...HEAD 2>/dev/null || true)"
           # Trigger set = the probe's ACTUAL inputs: it imports buildAgentEnv
           # (agent-env.ts) + buildAgentSandboxConfig (agent-runner-sandbox-config.ts)
           # + the SDK (package-lock.json) + the probe itself. Deliberately NOT

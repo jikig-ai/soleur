@@ -166,3 +166,76 @@ describe("agentWaiting (honest approved states, wireframes 04C vs 04D)", () => {
     expect(c.messages[0]).toMatchObject({ decideOutcome: "conflict" });
   });
 });
+
+describe("approval_request: withheld view and requester label (#9601)", () => {
+  const WAITING = "An action in this conversation is waiting for an Owner's approval.";
+  const redacted = (over: Partial<Req> = {}): Req => req({ view: null, toolName: "redacted", viewerRole: "member", ...over });
+  const cardOf = (r: { messages: ChatMessage[] }) => r.messages.find((m) => m.type === "approval_request") as Extract<ChatMessage, { type: "approval_request" }>;
+
+  test("a null view builds a card whose content is the fixed waiting copy (no action text)", () => {
+    const r = applyStreamEvent([], streams(), redacted());
+    const c = cardOf(r);
+    expect(c.view).toBeNull();
+    expect(c.content).toBe(WAITING);
+    expect(c.toolName).toBe("redacted");
+    expect(c.viewerRole).toBe("member");
+    expect(JSON.stringify(c)).not.toContain("maria@example.test");
+  });
+
+  test("a full frame still uses the view title as content", () => {
+    expect(cardOf(applyStreamEvent([], streams(), req())).content).toBe(view.title);
+  });
+
+  test("the requester label survives the reducer into the message (fresh card)", () => {
+    expect(cardOf(applyStreamEvent([], streams(), req({ requester: "jane@example.com" }))).requester).toBe("jane@example.com");
+    expect(cardOf(applyStreamEvent([], streams(), req({ requester: "you" }))).requester).toBe("you");
+  });
+
+  test("a frame without a requester carries no requester key", () => {
+    expect(Object.hasOwn(cardOf(applyStreamEvent([], streams(), req())), "requester")).toBe(false);
+  });
+
+  test("the requester label survives an upsert, and a later frame without one clears the stale label", () => {
+    const first = applyStreamEvent([], streams(), req({ requester: "jane@example.com" }));
+    const second = applyStreamEvent(first.messages, first.activeStreams, req({ requester: "a workspace member" }));
+    expect(cardOf(second).requester).toBe("a workspace member");
+    const third = applyStreamEvent(second.messages, second.activeStreams, req());
+    expect(cardOf(third).requester).toBeUndefined();
+    expect(Object.hasOwn(cardOf(third), "requester")).toBe(false);
+  });
+
+  test("a redacted card is upgraded in place by a later full frame (one card, Approve-able Owner state)", () => {
+    const first = applyStreamEvent([], streams(), redacted());
+    const upgraded = applyStreamEvent(first.messages, first.activeStreams, req({ requester: "jane@example.com" }));
+    expect(upgraded.messages.filter((m) => m.type === "approval_request")).toHaveLength(1);
+    const c = cardOf(upgraded);
+    expect(c.view).toEqual(view);
+    expect(c.viewerRole).toBe("owner");
+    expect(c.toolName).toBe(view.tool);
+    expect(c.content).toBe(view.title);
+    expect(c.requester).toBe("jane@example.com");
+  });
+
+  test("a full card replaced by a later redacted frame equals a freshly built redacted card (server's latest word wins; no leftover view, content or requester)", () => {
+    const first = applyStreamEvent([], streams(), req({ requester: "jane@example.com" }));
+    const replaced = applyStreamEvent(first.messages, first.activeStreams, redacted());
+    const fresh = applyStreamEvent([], streams(), redacted());
+    expect(cardOf(replaced)).toEqual(cardOf(fresh));
+    expect(JSON.stringify(cardOf(replaced))).not.toContain("maria@example.test");
+    expect(JSON.stringify(cardOf(replaced))).not.toContain("jane@example.com");
+  });
+
+  test("a redacted card stays pending after a decided request until expiry: no status frame reaches it, and a re-send of a redacted frame keeps it pending", () => {
+    const first = applyStreamEvent([], streams(), redacted());
+    const again = applyStreamEvent(first.messages, first.activeStreams, redacted());
+    expect(cardOf(again).status).toBe("pending");
+    expect(cardOf(again).content).toBe(WAITING);
+  });
+
+  test("two redacted cards share the toolName 'redacted', so the newer-request match is true; the banner itself renders only in pending_owner (card test)", async () => {
+    const { hasNewerPendingRequest } = await import("../lib/approval-card-state");
+    const a = applyStreamEvent([], streams(), redacted({ approvalId: "00000000-0000-4000-8000-0000000000b1" }));
+    const b = applyStreamEvent(a.messages, a.activeStreams, redacted({ approvalId: "00000000-0000-4000-8000-0000000000b2" }));
+    expect(hasNewerPendingRequest(b.messages, 0)).toBe(true);
+  });
+});

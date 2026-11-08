@@ -41,11 +41,17 @@ export function ApprovalLanding({
   view,
   initial,
   requestCount,
+  requester,
 }: {
   approvalId: string;
   view: ApprovalCardView | null;
   initial: ApprovalLandingRow;
   requestCount: number;
+  /**
+   * Who raised the request (#9601), computed by the server component (this client component never imports the labeler,
+   * which would drag the service-role client into the browser bundle). Absent when none applies or the lookup failed.
+   */
+  requester?: string;
 }) {
   const [row, setRow] = useState(initial);
   const [outcome, setOutcome] = useState<ApprovalDecideOutcomeWire | undefined>(undefined);
@@ -93,6 +99,7 @@ export function ApprovalLanding({
       expiresAt={row.expiresAt}
       requestCount={requestCount}
       viewerRole="owner"
+      requester={requester}
       // The landing page has no live socket and cannot see the agent's wait: it never claims the agent is waiting or
       // continuing. An approved request is "ask your agent again" until the row says it was used (`consumed`).
       agentWaiting={false}

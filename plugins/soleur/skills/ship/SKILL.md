@@ -936,7 +936,7 @@ SIGNAL=$(grep -niE "$SIGNAL_RE" "$PR_BODY_FILE" || true)
 **Detection:**
 
 ```bash
-gdpr_gate_touch=$(git diff main...HEAD --name-only | grep -E '^plugins/soleur/skills/gdpr-gate/' | head -n 1)
+gdpr_gate_touch=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^plugins/soleur/skills/gdpr-gate/' origin/main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }
 sui_plan=$(gh pr view --json body --jq .body \
   | grep -oE 'knowledge-base/project/(plans|specs)/[^[:space:])]+' | head -n 1 || true)
 sui_threshold=""
@@ -945,12 +945,12 @@ if [[ -n "$sui_plan" && -f "$sui_plan" ]]; then
 fi
 ```
 
-**If triggered AND PR is not already labeled `compliance/critical`:**
+**If triggered (`unknown` counts as triggered) AND PR is not already labeled `compliance/critical`:**
 
 1. Apply the label: `gh pr edit <N> --add-label compliance/critical` (idempotent — `gh` silently no-ops if already applied).
-2. Announce: "Auto-applied `compliance/critical` to PR #<N> (gdpr-gate diff match) — `soleur:engineering:review:user-impact-reviewer` will be invoked at PR-review time per `review/SKILL.md` conditional-agent block."
+2. Announce: "Auto-applied `compliance/critical` to PR #<N> (gdpr-gate diff match); `soleur:engineering:review:user-impact-reviewer` runs at PR-review time."
 
-**Why:** AC10 of any `single-user incident` plan requires PR co-label. Operator-attested labels are a workflow-gap class (see #3521 review user-impact #7) — auto-application closes the gap. Idempotent + reversible (operator can remove if false-positive).
+**Why:** AC10 of any `single-user incident` plan requires the PR co-label; operator-attested labels are a workflow-gap class (#3521).
 
 ### gdpr-gate Critical-Finding Acknowledgment Gate
 
@@ -960,13 +960,13 @@ fi
 
 ```bash
 CANONICAL_REGEX='^(apps/web-platform/supabase/migrations/|apps/web-platform/lib/auth/|apps/web-platform/server/.*auth.*\.(ts|tsx|js)|apps/web-platform/app/api/.*\.(ts|tsx)$|.*\.sql$)'
-diff_match=$(git diff main...HEAD --name-only | grep -E "$CANONICAL_REGEX" | head -n 1)
+diff_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }
 crit_refs=$(gh pr view --json body --jq .body | grep -oE '(Closes|Ref) #[0-9]+' | head -n 5)
 ```
 
 For each `crit_ref`, check `gh issue view <N> --json labels --jq '.labels[].name'` for `compliance/critical`.
 
-**If triggered:**
+**If triggered (`unknown` counts as triggered):**
 
 1. Verify each `compliance/critical` issue referenced has a corresponding row in `knowledge-base/legal/compliance-posture.md` Active Items.
 2. **Interactive mode:** Ask "Critical finding #N has no Active Items row. File the row now via `soleur:compound`, or proceed with operator acknowledgment recorded inline?" Options: (a) File row, (b) Acknowledge inline, (c) Halt.
@@ -1044,18 +1044,18 @@ DEPLOY_PIPELINE_FIX_TRIGGERS=(
 )
 DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|ci-deploy-wrapper\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl|deploy-inngest-bootstrap\.sudoers|infra-config-apply\.sh|infra-config-install\.sh|push-infra-config\.sh|cat-infra-config-state\.sh|inngest-enumerate-reminders\.sh|inngest-rearm-reminders\.sh|inngest-wiped-volume-verify\.sh|cat-inngest-verify-state\.sh|inngest-inventory\.sh|git-lock-chardevice-sweep\.sh|inngest-registry-probe\.sh|inngest-doublefire-probe\.sh|inngest-redis-bootstrap\.sh|inngest-cutover-flip\.sh|inngest-server-flip-guard\.sh|cat-inngest-cutover-state\.sh|soleur-doppler-token\.tmpl|10-vector-doppler-token\.conf|10-inngest-heartbeat-doppler-token\.conf|10-inngest-server-doppler-token\.conf|10-inngest-redis-doppler-token\.conf)$'
 
-git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
+dpf_match=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || dpf_match=unknown; }
 ```
 
-If the grep matches at least one path, the gate fires. Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
+If `dpf_match` is non-empty, the gate fires; `unknown` (rc 2/127) also fires it (fail closed). Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
 
 **If triggered:**
 
-The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply.
+The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` by design: `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (`#967`), so cloud-init can't re-apply.
 
-**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any trigger file changes. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies the post-apply `files_written == files_total` invariant, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge — the PR review is the human authorization. Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
+**Auto-apply on merge.** The [`apply-deploy-pipeline-fix.yml`](../../../../.github/workflows/apply-deploy-pipeline-fix.yml) workflow auto-fires on push to `main` when any trigger file changes. It runs the targeted `terraform apply` from Doppler `prd_terraform`, verifies the post-apply `files_written == files_total` invariant, and auto-closes any open `infra: drift detected in web-platform` issue. **Zero operator action required** post-merge (the PR review is the authorization). Kill switch: include `[skip-deploy-fix-apply]` in any commit message on the PR to suppress the apply for that merge.
 
-**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect (the CI path cannot self-apply `root_authorized_keys` — same firewall reason).
+**Both resources auto-apply (#4829).** The workflow's `-target=` set now lists BOTH `terraform_data.deploy_pipeline_fix` (HTTPS webhook push) AND `terraform_data.infra_config_handler_bootstrap` (the root-SSH bridge that delivers the handler + the `infra-config-install` escalation helper + the sudoers grant). The runner reaches the SSH bridge over the existing Cloudflare Tunnel SSH route — it opens a `cloudflared access tcp` localhost forward authenticated by the CF Access `ci_ssh` service token. The firewall `admin_ips` allowlist is unchanged (the tunnel is the access path, not an IP grant). A handler/helper/sudoers change therefore lands on prod with **zero operator `terraform apply`** — eliminating the manual step that left #4827 dormant. **One-time precondition:** the live host must already trust the current CI key (`terraform_data.root_authorized_keys`, applied on the operator's most recent full `terraform apply`); a first-apply `Permission denied (publickey)` means the key is not on-host, not a bridge defect.
 
 **In-session apply (operator-machine fallback, #4829).** When `soleur:ship` runs on the operator's own machine rather than CI — detect via `[[ -z "${CI:-}" && -z "${GITHUB_ACTIONS:-}" ]]` AND `ssh-add -l` listing a key — the agent CAN apply the bridge in-session over the operator's direct SSH (their IP is in `admin_ips`, their ssh-agent key is in root's `authorized_keys`) instead of deferring to the CI auto-apply. This is the rare fallback (transient CI failure, or shipping a handler change you want live immediately); the CI auto-apply above is the default. Run:
 
@@ -2176,7 +2176,7 @@ K=$(bash "${CLAUDE_PLUGIN_ROOT}/scripts/ci-head-verdict.sh" ready-count PR_NUMBE
 
 Arm (`gh pr merge --squash --auto`) ONLY on exit 0; else report "readied but unarmed" with the last stdout line and follow [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md) (a failed `ready-count` or `api-error` needs no undo). A non-draft PR goes straight to the arm.
 
-If `git diff --no-renames --name-only origin/main...HEAD | grep -E '^\.github/(workflows|actions)/'` prints anything, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
+If `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '^\.github/(workflows|actions)/' origin/main...HEAD` prints anything or exits 2/127, tell the operator in chat now: auto-merge is queued and polled as usual, but this PR has no agent `--admin` fallback (`UNTRUSTED-CI`), so if a BEHIND livelock sets in they will be asked to merge it. See [settle-then-admin-merge.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/settle-then-admin-merge.md). **Why:** #8611.
 
 Wrap the `gh pr merge` call in the merge-main lock so parallel sessions don't queue auto-merges in the same window:
 

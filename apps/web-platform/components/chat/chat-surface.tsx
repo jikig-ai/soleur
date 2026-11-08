@@ -1356,6 +1356,7 @@ export function ChatSurface({
                       expiresAt={msg.expiresAt}
                       requestCount={msg.requestCount}
                       viewerRole={msg.viewerRole}
+                      requester={msg.requester}
                       agentWaiting={msg.agentWaiting}
                       decideOutcome={msg.decideOutcome}
                       approvalUnusable={msg.approvalUnusable}

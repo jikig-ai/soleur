@@ -21,6 +21,7 @@
 import type { PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import type { WSMessage } from "@/lib/types";
 import type { ApprovalWireStatus } from "@/lib/approval-wire";
+import { REQUESTER_SELF } from "@/lib/approval-copy";
 import {
   ApprovalCanonicalError,
   canonicalizeAction,
@@ -28,6 +29,7 @@ import {
   type CanonicalAction,
   type CanonicalValue,
 } from "./canonical";
+import { isVerifiedRequester } from "./card-visibility";
 import type { ApprovalGateDeps } from "./gate-types";
 import { putGrant } from "./grants";
 import { logApprovalMarker, reportApprovalOp, type ApprovalOpContext } from "./ops";
@@ -391,6 +393,10 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
         reportApprovalOp("viewerRoleFailed", err, ctx);
         viewerRole = "member"; // read-only card is the safe default
       }
+      // The requester line (#9601): ONLY the literal "you", and only for the verified requester. This first send goes to the
+      // proposing session user (their own agent's freshly canonicalised action) and never reads another member's identity:
+      // a label for someone else is the reattach and landing surfaces' job, behind their Owner proof.
+      const isSelf = isVerifiedRequester(a.userId, submitted.approval.requested_by_user_id);
       try {
         a.sendToClient(a.userId, {
           type: "approval_request",
@@ -403,6 +409,7 @@ export async function runApprovalGate(a: RunApprovalGateArgs): Promise<Permissio
           requestCount: submitted.requestCount,
           viewerRole,
           agentWaiting: true,
+          ...(isSelf ? { requester: REQUESTER_SELF } : {}),
         });
       } catch (err) {
         reportApprovalOp("notifyFailed", err, { ...ctx, extra: { channel: "ws-card" } });

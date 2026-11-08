@@ -149,6 +149,28 @@ run_sut "$S/a9" release
 if [[ "$RC" -eq 0 ]]; then ok "A9: GITHUB_BASE_REF override resolves the named base"
 else no "A9: BASE_REF override (rc=$RC) $(<"$S/a9/err")"; fi
 
+# A10: a watched LIB file renamed AWAY (100% rename, hook untouched). Default rename detection lists only the
+# new path, so the gate would decline as NO-OP; --no-renames lists the old watched path -> gate fires -> RED
+# on the unchanged marker (#12332).
+cases=$((cases + 1))
+mk_pr "$S/a10" 5
+git -C "$S/a10/work" mv "$LIB" .claude/hooks/lib/moved-away.sh
+git -C "$S/a10/work" -c user.email=t@t -c user.name=t commit --quiet -m rename-away
+run_sut "$S/a10"
+if [[ "$RC" -ne 0 && "$(<"$S/a10/out")" != *NO-OP* ]]; then ok "A10: watched lib renamed away without a bump -> RED (rename source is seen)"
+else no "A10: rename-away was invisible (rc=$RC) $(<"$S/a10/out") $(<"$S/a10/err")"; fi
+
+# A11: control OUTSIDE the surface: an unrelated file renamed -> still NO-OP green.
+cases=$((cases + 1))
+mk_pr "$S/a11" 5
+printf 'doc\n' > "$S/a11/work/README.md" && git -C "$S/a11/work" add -A \
+  && git -C "$S/a11/work" -c user.email=t@t -c user.name=t commit --quiet -m readme
+git -C "$S/a11/work" mv README.md MOVED.md
+git -C "$S/a11/work" -c user.email=t@t -c user.name=t commit --quiet -m rename-unrelated
+run_sut "$S/a11"
+if [[ "$RC" -eq 0 && "$(<"$S/a11/out")" == *NO-OP* ]]; then ok "A11: unrelated rename stays NO-OP green (control)"
+else no "A11: unrelated rename (rc=$RC) $(<"$S/a11/out") $(<"$S/a11/err")"; fi
+
 echo
 echo "RESULT: $pass passed, $fail failed ($cases cases)"
 [[ "$fail" -eq 0 ]]

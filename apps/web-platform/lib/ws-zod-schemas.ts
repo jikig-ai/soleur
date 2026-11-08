@@ -21,6 +21,7 @@ import { z, type ZodError } from "zod";
 import { CREDENTIAL_SCHEMES } from "@/lib/auth-scheme";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { APPROVAL_WIRE_DECIDE_OUTCOMES, APPROVAL_WIRE_STATUSES } from "@/lib/approval-wire";
+import { REQUESTER_LABEL_MAX_LENGTH } from "@/lib/approval-copy";
 import {
   type WSMessage,
   WORKFLOW_END_STATUSES,
@@ -421,12 +422,14 @@ const approvalRequestSchema = z.strictObject({
   approvalId: z.uuid(),
   conversationId: z.string(),
   toolName: z.string(),
-  view: approvalCardViewSchema,
+  view: approvalCardViewSchema.nullable(),
   status: z.enum(["pending", "approved"]),
   expiresAt: z.string(),
   requestCount: z.number().int().nonnegative(),
   viewerRole: z.enum(["owner", "member"]),
   agentWaiting: z.boolean().optional(),
+  // The longest label the server sends: 320 = 64 (local part) + "@" + 255 (domain). Shared with the labeler.
+  requester: z.string().min(1).max(REQUESTER_LABEL_MAX_LENGTH).optional(),
 });
 const approvalStatusSchema = z.strictObject({
   type: z.literal("approval_status"),
