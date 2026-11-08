@@ -45,3 +45,11 @@
 - Suites: generator 145/145, watch 31/31, probe 50/50 — all green post-resolution.
 - PR body updated: Closes #12016, Ref #9323, Ref #9729.
 - Affected gate (test-all.sh --affected) still running at time of note — lock-queued behind sibling worktrees earlier; wide selection via shared machinery edges.
+
+## Ship Phase Position
+
+- Review trailer emitted: Reviewed-By-Soleur + Reviewed-Coverage: full 9/9 (commit 7ef0eed9a3).
+- QA: skipped per skill rule (Test Scenarios are prose-only, no Browser:/API verify: steps; no UI files touched).
+- Compound: learning committed knowledge-base/project/learnings/2026-11-08-review-seats-reported-committed-suite-red-on-reconstructed-fixtures.md.
+- Affected gate: still running all-green at ship time (wide selection via machinery edges); CI merge_group is the authoritative full battery.
+- REMAINING: archive spec dir → knowledge-base/project/specs/archive/<ts>-feat-one-shot-ci-lever-residuals/; commit+push; gh pr ready 12354; verify mergeable; merge per repo convention; poll CI + release workflows; postmerge verification; then DONE.
