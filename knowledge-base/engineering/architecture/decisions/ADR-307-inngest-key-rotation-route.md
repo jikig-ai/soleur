@@ -93,8 +93,9 @@ Corrections to the record above, found by reading `scripts/inngest-key-rotate.sh
 - **R4, the converge source.** `converge` derives `keys` and `rotated_at` from the newest earlier `rotate` run only (never an older one; a run titled `converge` and any `plan` run are skipped), and that run's `apply1` job must have concluded `success`. It is **not** unbounded in age: a source whose first apply finished more than 24 hours ago is refused as `converge_stale`. A `rotate` whose first apply failed is not resumable (`converge_source_missing`); its recovery is a fresh `rotate` under a fresh go, and the stop sentence says so. The earlier wording "no age limit" in R4 is superseded.
 - **Re-run wording.** See Decision item 5: the guard refuses "Re-run all jobs", every write job refuses "Re-run failed jobs".
 - **The link flag read and the host pin** are as stated in Decision items 4 and 5 (the earlier text named a `doppler run` read and a `host_role` pin that the script does not use).
+- **Unverified at merge time, disclosed.** (a) Whether `-replace` on a `doppler_secret` carrying `ignore_changes = [value]` recreates it with the new value (the premise of Decision item 2; `value_unchanged` is the detector). (b) A production reboot of the dedicated host with its LUKS volume and live scheduler. (c) The `host` field on the live `tls-health` rows. (d) The no-SSH hard-reset verb does not exist: a `host_silent` host has no automated next lever, tracked as #11484.
 
-### 2026-11-08 (agent-dispatch ruling, recorded after the eight-key rotation completed)
+### 2026-11-08 (agent-dispatch ruling, recorded after the eight exposed key-groups completed rotation; `tunnel_secret` excluded — its own mechanism)
 
 Ruled by CTO agent: an agent may dispatch `key-rotate.yml` / `inngest-key-rotate.yml` `rotate`|`converge` ONLY under a
 fresh, per-command, in-session owner go naming the exact full command; the reviewer click on the `key-rotate-approval`
@@ -108,7 +109,6 @@ agent-posted; and the reviewer click stays owner-human. Environment split, live-
 park at `key-rotate-approval` (required reviewer `deruelle`, main branch policy); `mode=plan` and the apply path
 (`apply`/`clear`; `apply1`/`reboot`/`apply2`) bind `infra-privileged` (branch policy, zero required reviewers, no park);
 `guard`/`redeploy`/`notify` bind no environment.
-- **Unverified at merge time, disclosed.** (a) Whether `-replace` on a `doppler_secret` carrying `ignore_changes = [value]` recreates it with the new value (the premise of Decision item 2; `value_unchanged` is the detector). (b) A production reboot of the dedicated host with its LUKS volume and live scheduler. (c) The `host` field on the live `tls-health` rows. (d) The no-SSH hard-reset verb does not exist: a `host_silent` host has no automated next lever, tracked as #11484.
 
 ## Cost Impacts
 

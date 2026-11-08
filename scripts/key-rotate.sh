@@ -292,7 +292,7 @@ kr_verdict_recipe() {
   printf "gh run view %s --log | grep 'key-rotate verdict='" "${GITHUB_RUN_ID:-<run id>}"
 }
 
-# kr_converge_cmd: the exact re-dispatch command the stop sentence and the issue carry (it runs under a fresh, per-command owner go - an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated).
+# kr_converge_cmd: the exact re-dispatch command the stop sentence and the issue carry (it runs under a fresh, per-command, in-session owner go naming the exact command - an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated).
 kr_converge_cmd() {
   local k="${EFF_KEY:-}" v ok=1 extra=""
   for v in "${KK_KEYS[@]}"; do [[ "$k" == "$v" ]] && ok=0; done
@@ -365,8 +365,8 @@ kk_stop_tail() {
   local k="${EFF_KEY:-}"
   case "${KR_VERDICT:-}:$k" in
     owner_step_pending:*) printf ' Read the verdict: %s' "$(kr_verdict_recipe)" ;;
-    partial_absent_state:kb_drift_ingest_signing_key) printf ' Only after the missing copy is recreated, re-dispatch under a fresh typed confirm (no agent dispatches a rotate): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
-    *) printf ' Re-dispatching is the owner'"'"'s own decision under a fresh typed confirm (no agent dispatches a rotate): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
+    partial_absent_state:kb_drift_ingest_signing_key) printf ' Only after the missing copy is recreated, re-dispatch under a fresh, per-command owner go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
+    *) printf ' Re-dispatching is the owner'"'"'s own decision under a fresh, per-command go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
   esac
 }
 

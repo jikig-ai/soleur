@@ -9,6 +9,8 @@
 # write job (a re-run reuses the first attempt's guard outputs and would bypass the go).
 # RULING (2026-11-08, CTO): an agent may dispatch mode=rotate or mode=converge ONLY under a fresh, per-command,
 # in-session owner go naming the exact full command; the reviewer click on key-rotate-approval is NEVER delegated.
+# Tap the approval inside a measured release-quiet stretch: the apply path re-checks in-flight runs itself, so a run
+# parked at approve CAN still refuse post-approval.
 # Environment split: rotate/converge park at key-rotate-approval; plan and apply1/reboot/apply2 bind infra-privileged
 # (branch policy, zero required reviewers, no park); guard/redeploy/notify bind none.
 # The push trigger below exists SOLELY to register the workflow in the Actions UI; every job is gated on workflow_dispatch.

@@ -5,8 +5,7 @@
 # (.github/workflows/inngest-key-rotate.yml, ADR-307, #10540): the read-only plan rehearsal, the rotate line, and the converge line
 # that finishes a failed run. Rotate and converge run under a fresh, per-command, in-session owner go naming the exact
 # line; under the 2026-11-08 ruling an agent may run that dispatch under the go - the key-rotate-approval reviewer click is
-# never delegated;
-# the route prints the S5-A5-DONE line and never posts it. The owner has two ways to record A5 and A6, and the ask offers the easy
+# never delegated. The route prints the S5-A5-DONE line and never posts it. The owner has two ways to record A5 and A6, and the ask offers the easy
 # one first: ONE reply in their own session ("continue A5" / "continue A6", with their own sentence), after which the agent
 # measures, drafts and posts the evidence and a RELAYED line quoting that reply (technical-ruling-delegation.md, section 9). Or the
 # owner posts the DONE line themselves. A DONE line posted by an agent, or one posted by the workflow, does not satisfy the record.
@@ -310,7 +309,7 @@ main() {
     say "The legal bridge date is $BRIDGE (it can be extended once, to $LAPSE), so this is time-sensitive."
   fi
   [ -z "$bad_note" ] || say "$bad_note"
-  say "The rotation is one dispatch of the rotation workflow, run under your go in a session that names the exact line - your agent may run the dispatch itself under that go; the approval click on key-rotate-approval is yours. A go on another issue does not count."
+  say "The rotation is one dispatch of the rotation workflow, run under your fresh, per-command go in this session naming the exact line - your agent may run the dispatch itself under that go; the approval click on key-rotate-approval is yours. A go on another issue does not count."
   say "Rehearsal (read-only, any session may run it; its verdict is plan_ok only when every check the rotation needs, except your confirm and attestation, passes, otherwise plan_blocked naming the first failing check): $PLAN_LINE"
   say "Rotation (your go must name this line; the date is the UTC date of the dispatch; keys=signing is the A5 set, keys=both is a superset that also rotates the event key in the same window): $ROTATE_LINE"
   say "If a job after the first apply fails, do not retry the rotation. Finish it with this line, which needs its own go from you (the confirm date is the UTC date of that dispatch): $CONVERGE_LINE"

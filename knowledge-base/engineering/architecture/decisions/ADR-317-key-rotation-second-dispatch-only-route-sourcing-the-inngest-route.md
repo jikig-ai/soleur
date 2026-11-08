@@ -154,8 +154,7 @@ Amendment (2026-11-08): the agent-dispatch ruling. Ruled by CTO agent: an agent 
 command; the reviewer click on the `key-rotate-approval` environment (approver: deruelle) is NEVER delegated; the approval
 tap should land inside a measured release-quiet stretch — the apply path re-checks in-flight runs itself, so a run parked
 at `approve` CAN still refuse post-approval. G6/H2's "an agent never dispatches rotate" is superseded accordingly; the
-environment split is unchanged and live-verified 2026-11-08 (`key-rotate-approval`: required reviewer `deruelle`;
-`infra-privileged`: branch policy, zero required reviewers).
+environment split is unchanged and live-verified 2026-11-08 — see ADR-307's 2026-11-08 amendment for the canonical table.
 
 ## Consequences
 

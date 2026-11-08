@@ -58,3 +58,15 @@
 - Artifacts: repo-level endpoint still HTTP 500 — per-run probe needed (inngest-provision-rehearsal only)
 - CTO ruling spawned for inngest-host dedicated pair (agent_id=49c594db)
 - Deletions NOT yet executed — operator per-command go required; census-11294.tsv NOT found on this filesystem (operator scratch)
+
+## Review Round 1 — seats returned (as of this entry)
+- Seats returned: architecture (58ded3b2), code-simplicity (462335b2), data-integrity (707d58ec), pattern-recognition (15cb243d), security-sentinel (b5bac131), performance-oracle (9db050d8)
+- Seat died on harness rate-limit: test-design (f197054e) — check covered inline by lead (expect-rows verified byte-exact; suite 180/180)
+- Seat still running: git-history (26f5e16e)
+- P1 (4 seats converged): scripts/key-rotate.sh kk_stop_tail (:368-369) still printed "(no agent dispatches a rotate)" into stop sentences + filed action-required issues — FIXED (both arms reworded to the ruling convention)
+- P1 (pattern-recognition): plugins/soleur/skills/brainstorm-techniques/references/technical-ruling-delegation.md:188 taught "credential-rotation dispatch stays the owner's own" — FIXED with the 2026-11-08 carve-out
+- P2 (3 seats): ADR-307 amendment heading inserted inside the Corrections bullet list — FIXED (heading moved below the unverified bullet)
+- P2 (security): actor_not_owner remediation cell is an identity check — FIXED ("dispatch as the owner's login (the committed allowlist)")
+- P3s taken: inngest-key-rotate.yml header tap clause added; standing-delegation.md:446 tightened to ruling conditions; qualifier alignment (fresh/per-command/in-session/exact) on stop sentences + probe ask; ADR-317 env-split reduced to pointer; converge-route qualifier in key-rotation.md env split; model.c4 :814 (apply AND clear jobs; ADR-314→ADR-317) + :596 ruling clause
+- P3s declined: collapse ADR-317 verbatim ruling quote (ADRs stand alone; plan prescribed verbatim), de-duplicate key-rotation.md restatements (runbook belt-and-suspenders convention), learnings-file dated claim (verbatim history)
+- AC1 grep widened (added no-agent-dispatch/agent-dispatches/only-you-dispatch/required-reviewer-approval variants + case-insensitive superseded check); residual hits all intentional supersession quotes, test unwant-needle, or unrelated subjects
