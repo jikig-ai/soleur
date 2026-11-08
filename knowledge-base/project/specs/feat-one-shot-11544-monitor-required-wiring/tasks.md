@@ -14,7 +14,7 @@ Refs: #11544 (monitor half only), #9927. PR body uses "Ref", never "Closes".
 - 1.1 Add the W section to the monitor suite before the T7 block: resolver stub on `CI_HEAD_VERDICT_BIN` (replays the real `required` contract), `mkgate` helper (re-installs the argv-logging `gh` wrapper after every `mkqstub`).
   - 1.1.1 W1 happy path (with `--repo`), W2 hold (dwell 10, interval 10, max-polls 3)
   - 1.1.2 W3 to W5 gates, table-driven (auto-merge off, queue unknown, verdict not full-decided)
-  - 1.1.3 W6 marker not exit code, W7 no marker and the timeout bound (detached `setsid` holder), W8 timeout argv shape and absent binary
+  - 1.1.3 W6 marker not exit code, W7 no marker and the timeout bound (detached `setsid sleep 8 &` holder that INHERITS stdout; a holder redirecting to /dev/null holds nothing), W8 timeout argv shape and absent binary
   - 1.1.4 W9 print-only (sentinel payload), W10 filter, candidate cap, decoy marker
   - 1.1.5 W11 budget shorter than the hold (default dwell), W12 unknown mid-hold keeps the hold and default resolver path, W13 seam validation
 - 1.2 Run the suite: every W row red for the intended reason, T rows still green.

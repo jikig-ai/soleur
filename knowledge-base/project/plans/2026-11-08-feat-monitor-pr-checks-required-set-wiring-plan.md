@@ -13,6 +13,23 @@ brand_survival_threshold: aggregate pattern
 
 # feat: wire monitor-pr-checks.sh to ci-head-verdict.sh required (monitor half of #11544)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Sections enhanced:** Research Insights (measurements), Test Scenarios (W7), Risks
+**Research agents used:** none spawned in the deepen pass; the pass ran the skill's halting gates mechanically and measured the load-bearing bash claims directly (the plan-phase `learnings-researcher`, `repo-research-analyst` and the three-agent plan-review panel already covered the agent fan-out for a single-script change)
+
+### Key Improvements
+
+1. The file-redirect decision is now backed by a measurement instead of an argument (see "Deepen-pass measurements").
+2. W7's holder had to inherit stdout to discriminate; a holder that redirects to `/dev/null` held nothing (measured), so the row would have been vacuous.
+3. Every halting gate (4.6 user-brand impact, 4.7 observability, 4.8 PAT sweep, 4.9 UI wireframe, 4.12 scope check) was run and passed; 4.10, 4.11 and 4.13 do not fire.
+
+### New Considerations Discovered
+
+- `grep -c ... || echo 0` yields two lines on no match (measured); the plan's `n=$(grep -c ...) || true` form is the one that works.
+- A leading-zero dwell (`08`) must be rejected before `$(( ))` sees it; the planned regexes were exercised against `0`, `08`, `600`, `abc`, empty.
+
 ## Overview
 
 `plugins/soleur/scripts/monitor-pr-checks.sh` ends a watch with `CHECKS GREEN BUT BLOCKED` when every check is green, nothing
@@ -87,6 +104,34 @@ Cut List (mechanism -> property -> what already covers it):
 
 Applied (mechanical): marker taken as the LAST matching line (a decoy row in W10); a hold the poll budget cannot finish is not started, so exit 1 never becomes exit 2 (W11); an unknown read mid-hold carries the dwell (W12 a); `blocked_since` initialised under `set -u`; `TIMEOUT_S` rejects `0`, `DWELL_S` rejects leading zeros (W13); W9 uses a sentinel payload so a mutated `eval` is visible; W7 uses a detached holder; non-candidate `RECOVERY` lines are never capped; 300-character cut and control-character strip dropped (the child does it, R15/R16); the three prose fallbacks merged into one degraded line; test rows cut from 16 to 13 with the gate arms table-driven; mutation checks run on a scratch copy cut to the W section.
 Rejected simplifications, with reason: cutting the `MONITOR_REQUIRED_TIMEOUT_BIN` seam (the suite wraps itself in `timeout 90`, so shadowing `timeout` on PATH shadows the harness, and an absent binary cannot be produced by editing PATH); cutting the stdout temp file in favour of `$(...)` (a descendant that leaves the process group keeps the pipe open and would silence the watch, the failure this script exists to prevent). No finding argued a change to the operator's stated scope, so there are no taste or user-challenge rows beyond the CTO row already recorded.
+
+### Deepen-pass gate results (2026-11-08)
+
+| Gate | Result |
+|---|---|
+| 4.6 User-Brand Impact | heading present, threshold `aggregate pattern`, concrete artifact and vector: pass |
+| 4.7 Observability | five fields present and non-empty; `command` starts with `grep` (allowlisted), no `ssh`, no pipe or shell-active character, finishes well inside 15 s; `expected_output` is a literal. Run today the probe prints nothing (the seam does not exist until Phase 2); the block is new in this run and the Work phase re-runs it as part of AC-1 |
+| 4.8 PAT sweep | 0 hits |
+| 4.9 UI wireframe | no UI-surface path in Files to Edit/Create: skip |
+| 4.10 Encryption posture | no store, no connection, none of `.tf`/migration/cloud-init/compose paths: skip |
+| 4.11 Guard Contract | `lint-guard-contract.py` scanned 1 plan, 0 guard entries; the deliverable is wiring plus tests, and the gate preconditions are exercised by W3 to W5 and the mutation table rather than being a standalone guard: skip |
+| 4.12 Scope Check | 1 unfenced section, all three subsections, 0 `unmapped` cells, no `status: BLOCKED`: pass |
+| 4.13 Task design | no new autonomous-task surface: skip |
+| Cited numbers | #11542 MERGED, #11789 CLOSED, #9454 CLOSED, #9728 OPEN, #10924 OPEN, #11312 OPEN, ADR-270 and ADR-276 files exist, `cq-write-failing-tests-before` is an active rule id (`grep -c` over AGENTS.md returns 1) |
+
+### Deepen-pass measurements (bash realism, run on this host: GNU bash 5.3.20, GNU coreutils timeout 9.12)
+
+```text
+timeout -k 5 1 bash holder.sh, stdout to a file, holder = `setsid sleep 6 &` inheriting stdout:   elapsed=1.00
+out="$(timeout -k 5 1 bash holder.sh)", same holder:                                                elapsed=6.01   <- blocked by the detached holder
+out="$(timeout -k 5 1 bash holder2.sh)", holder in the SAME process group (`sleep 8 &`):           elapsed=1.01   <- group kill reaches it
+holder that redirects its own stdout to /dev/null, `$(...)` form:                                  elapsed=1.00   <- holds nothing: a vacuous test
+n=$(grep -c '^RECOVERY' <<<"$x") || true   -> n=0   ;   n=$(grep -c ... || echo 0) -> two lines "0" and "0"
+[[ $v =~ ^(0|[1-9][0-9]*)$ ]]: 0 ok, 08 bad, 600 ok, abc bad, empty bad ; [[ $v =~ ^[1-9][0-9]*$ ]]: 0 bad, 120 ok, 08 bad
+set -u; a=(); echo "${a[@]}"  -> no error on bash 5.3 (the script already relies on it for REPO_ARG)
+```
+
+Reading: plan review's split on `$(...)` versus a file is settled by the third and second lines together. A same-group descendant (the real `admin-merge-ready.sh` and its `gh` calls) is killed by `timeout`, so `$(...)` would also have worked for today's child; the file form is kept because it is robust to a descendant that leaves the group, at the cost of a lazy `mktemp`. This is a defensive choice, stated as such, not a measured defect of the child.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -316,7 +361,7 @@ New section W in `monitor-pr-checks.test.sh`, placed before the `T7` block. Pyra
 | W4 gate: queue unknown on the first sighting | queue read `fail` -> unchanged terminal (rc 1), no `required`, no HOLDING line |
 | W5 gate: verdict not full-decided | arms `n/a`, `pending-full`, resolver error (`state=error`, exit 3) -> each: unchanged terminal, no `required` |
 | W6 marker, not exit code | required stub: `state=absent` exit 0, `state=pending` exit 0, `state=error` exit 3 -> each marker printed verbatim as the last line; the watch rc stays 1 |
-| W7 no marker and the timeout bound | arm a: stub prints nothing, exit 2 -> one degraded line `REQUIRED-SET READ — no marker (exit 2)` and zero lines starting `SOLEUR_CI_REQUIRED_SET` (count). Arm b: `MONITOR_REQUIRED_TIMEOUT_S=1`; stub starts `setsid sleep 8` (a detached holder of stdout) and then sleeps -> the watch returns within 6 s of wall time, the degraded line names the timeout, rc 1 |
+| W7 no marker and the timeout bound | arm a: stub prints nothing, exit 2 -> one degraded line `REQUIRED-SET READ — no marker (exit 2)` and zero lines starting `SOLEUR_CI_REQUIRED_SET` (count). Arm b: `MONITOR_REQUIRED_TIMEOUT_S=1`; stub starts `setsid sleep 8 &` WITHOUT redirecting its stdout (a detached holder that inherits the capture pipe; a holder that redirects to `/dev/null` does not hold anything and the row would be vacuous, measured below) and then sleeps -> the watch returns within 5 s of wall time (the `$(...)` form measured 6.01 s with a 6 s holder), the degraded line names the timeout, rc 1. `setsid` is util-linux (present on the CI runner and dev hosts); where it is absent the arm records one counted `ok` marked skipped so the exact-count floor stays stable |
 | W8 timeout shape and absent binary | a logging `MONITOR_REQUIRED_TIMEOUT_BIN` stub records argv: equals `-k 5 120 bash <resolver> required 7778` (default TIMEOUT_S, 120 asserted literally). `MONITOR_REQUIRED_TIMEOUT_BIN=<nonexistent>` -> degraded line `skipped: no timeout binary`, no `required` call, rc 1 |
 | W9 print-only | the stub `basis=workflow` line carries a sentinel payload before its real tail (`ctx="x" wf="$(touch SENT)": gh run rerun 4242`) and a `; touch SENT` variant: after the run, `SENT` does not exist (count of files == 0), the gh log has zero `run` subcommands, and the line itself WAS printed (positive control) |
 | W10 filter, caps, marker choice | stub prints noise lines, a decoy `SOLEUR_CI_REQUIRED_SET state=complete ...` BEFORE the real marker, 2 `RECOVERY pointer` lines and 30 `basis=candidate` lines, then the real marker -> noise absent; both pointer lines shown; exactly 20 candidate lines shown plus one "10 more candidate lines not shown"; the last line is the REAL marker (`state=absent`) and the decoy is not the one printed |
