@@ -61,7 +61,7 @@ verification is the targeted vitest files named below plus the anchor check; the
 | "the existing createUntrustedContentHook registration is near ~546, PostToolUse list ~529" | Confirmed (`agent-runner-query-options.ts` lines 529 and 541-553, single-rewriter comment 224-240). | Register next to the git-lock Bash entry, same predicate as WebFetch. |
 | "Playwright MCP not wired in hosted sessions" (pin test) | Hosted sessions load `plugins: [{ type: "local", path: trustedPluginPath }]`. `plugins/soleur/.mcp.json` DOES declare `playwright`, but `plugin.json` `mcpServers` has only `context7, cloudflare, vercel, stripe`, `apps/web-platform/.dockerignore` excludes `_plugin-vendored/.mcp.json`, and `ci.yml` + `reusable-release.yml` `rm -f "$DEST/.mcp.json"` when vendoring. Server code outside `server/inngest/` never mentions Playwright. | The pin asserts that whole chain (four legs, Guard 2), not a single string. |
 | "ADR addendum dated 2026-11-08 already exists" | Confirmed (`## Addendum 2026-11-08 (Ref #9601 slice 2)`, sessionIdHash). | Append a second addendum below it; edit no existing line. |
-| Producer check (learning 2026-10-25: a guard on a channel nobody feeds ships inert) | The producer exists: `safe-bash.ts` auto-approves `gh issue|pr view|list|status|diff|checks` and `gh repo view`; `gh api` and `gh run view` reach the review gate; `GH_TOKEN` is minted into the sandbox env (`agent-env.ts`) for sessions WITHOUT web egress only — with web egress the env deny census removes it (review correction 2026-11-08: the hook's registered population is the one where in-sandbox gh is denied its token; see the ADR addendum item 3); the image installs `gh` (Dockerfile `SOLEUR_GH_INSTALLED`). | The hook is fed by real hosted traffic. A test pins the verb table to the safe-bash set (Guard 3). |
+| Producer check (learning 2026-10-25: a guard on a channel nobody feeds ships inert) | The producer exists: `safe-bash.ts` auto-approves `gh issue|pr view|list|status|diff|checks` and `gh repo view`; `gh api` and `gh run view` reach the review gate; `GH_TOKEN` is minted into the sandbox env (`agent-env.ts`) for sessions WITHOUT web egress only — with web egress the env deny census removes it (review correction 2026-11-08: the hook's registered population is the one where in-sandbox gh is denied its token; see the ADR addendum item 3); the image installs `gh` (Dockerfile `SOLEUR_GH_INSTALLED`). | CORRECTED at review: the producer exists, but the registered population is narrow (in-sandbox gh is denied its token there; see the ADR addendum item 3), so the hook is expected to see little real traffic until registration is widened. A test pins the verb table to the safe-bash set (Guard 3). |
 
 ## Research Insights
 
@@ -74,7 +74,7 @@ Held: all premises. Stale: none. One brief detail was already done (dispatcher f
 
 ### Property List
 
-- P1. After a read-style `gh` command in a flag-on, web-egress hosted session, the model's transcript carries exactly one UNTRUSTED data note adjacent to that result.
+- P1. After a read-style `gh` command whose result the hook receives (in a flag-on, web-egress hosted session; a narrow population, see the ADR addendum item 3), the model's transcript carries exactly one UNTRUSTED data note adjacent to that result.
 - P2. The command output the model receives is never altered, blocked, or delayed by this hook.
 - P3. With the flag off, or without web egress, nothing changes: no Bash framing hook is registered and the options are structurally identical to today.
 - P4. A failure of the hook (throw, unknown shape, oversize command) degrades to "no note" and is observable without SSH, with no content in the telemetry.
@@ -416,7 +416,7 @@ Creating or flipping the classify flag or any environment, prd enablement, the P
 
 ## Test Scenarios
 
-1. Agent runs `gh issue view 12 --json title,body` in a flag-on egress session: result unchanged; one note follows it.
+1. Agent runs `gh issue view 12 --json title,body` in a flag-on egress session and the result reaches the hook as a success (illustrative: in real egress sessions `gh` normally fails at auth, ADR item 3): result unchanged; one note follows it.
 2. Agent runs `cd repo && gh pr view 3 | head -50`: one note (compound/pipe).
 3. Agent runs `for n in 4 5 6; do gh issue view $n; done`: one note for the single tool result.
 4. Agent runs `echo "gh issue view 1"` or `git commit -m "gh pr view"`: no note, no log line.

@@ -892,8 +892,10 @@ export function ghReadVerbOf(command: string): GhVerbResult {
     }
     if (double) {
       if (c === 34) double = false;
-      else if (c === 92 && i + 1 < len) word += command[++i];
-      else word += command[i];
+      else if (c === 92 && i + 1 < len) {
+        if (command.charCodeAt(i + 1) === 10) i++; // line continuation also inside double quotes
+        else word += command[++i];
+      } else word += command[i];
       continue;
     }
     switch (c) {
@@ -920,7 +922,7 @@ export function ghReadVerbOf(command: string): GhVerbResult {
         flushWord();
         break;
       case 10:
-      case 13: // bash does not split on CR; treating it as a separator can only over-frame
+      case 13: // bash does not split on CR; treating it as a separator almost always over-frames
       case 59:
       case 38:
       case 124:
@@ -954,6 +956,10 @@ function ghFallbackScan(command: string): { frame: boolean; ghSeen: boolean } {
   let tok = "";
   for (let i = 0; i < limit; i++) {
     const c = command.charCodeAt(i);
+    if (c === 92 && command.charCodeAt(i + 1) === 10) {
+      i++; // line continuation: drop both characters, as bash does
+      continue;
+    }
     // Whitespace AND the tokenizer's own separators (`; & | ( )` and backtick): a `gh` glued to one of
     // them (`x;gh ...`, `$(gh ...)`) must still be a token of its own.
     if (c === 32 || c === 9 || c === 10 || c === 13 || c === 59 || c === 38 || c === 124 || c === 40 || c === 41 || c === 96) {
@@ -978,11 +984,13 @@ type GhFrameCtx = Omit<UntrustedContentHookOptions, "wrap">;
 /**
  * The tokenizer reads quotes by parity, and it does not understand comments or heredoc bodies. A multi-line
  * script whose comments/heredocs carry an EVEN number of apostrophes (or an ANSI-C quoted string) therefore ends
- * balanced and can hide a real gh read as `none`. A newline plus an apostrophe is the cheap signature of that
- * shape; single-line commands such as `echo "gh issue view 1"` stay precise.
+ * balanced and can hide a real gh read as `none` (an earlier `gh` command in the same script does not change that).
+ * A newline plus a quote character is the cheap signature of that shape; single-line commands such as
+ * `echo "gh issue view 1"` stay precise. A multi-line command that merely mentions `gh` and a read noun in prose
+ * is over-framed by the fallback (harmless, and counted as `fallback: true`).
  */
 function commentQuoteRisk(command: string): boolean {
-  return command.indexOf("\n") !== -1 && command.indexOf("'") !== -1;
+  return command.indexOf("\n") !== -1 && (command.indexOf("'") !== -1 || command.indexOf('"') !== -1);
 }
 
 interface GhFrameFields {
@@ -1019,14 +1027,15 @@ function emitGhFrame(f: GhFrameFields, ctx: GhFrameCtx): void {
 const NO_LENGTHS = { stdoutLength: null, stderrLength: null, persisted: false } as const;
 
 /**
- * Lengths of a Bash `tool_response`, or null when the shape is not one we can measure. Known shapes:
- * the SDK's `BashOutput` object `{ stdout: string, stderr: string, ... }` (typings), a bare string and an
- * array of `{ text: string }` content blocks (the shapes `toolResponseToText` in the git-lock hook also
- * coerces). Lengths use `.length`, never `Buffer.byteLength`, which would scan multi-MB output.
+ * Lengths of a Bash `tool_response`, or null when the shape is not one we can measure. Known shapes (the
+ * ones `toolResponseToText` in the git-lock hook also coerces): the SDK's `BashOutput` object with `stdout` and/or
+ * `stderr` strings (typings), a bare string, an array of `{ text: string }` content blocks, and an object whose
+ * `content` is a string or such an array. For a bare string or blocks, `stdoutLength` is the combined output and
+ * `stderrLength` is null. Lengths use `.length`, never `Buffer.byteLength`, which would scan multi-MB output.
  */
 function measureBashResponse(
   r: unknown,
-): { stdoutLength: number; stderrLength: number | null; persisted: boolean } | null {
+): { stdoutLength: number | null; stderrLength: number | null; persisted: boolean } | null {
   if (typeof r === "string") return { stdoutLength: r.length, stderrLength: null, persisted: false };
   if (Array.isArray(r)) {
     let total = 0;
@@ -1038,11 +1047,14 @@ function measureBashResponse(
     return { stdoutLength: total, stderrLength: null, persisted: false };
   }
   if (r && typeof r === "object") {
-    const o = r as { stdout?: unknown; stderr?: unknown; persistedOutputPath?: unknown };
-    if (typeof o.stdout !== "string" || typeof o.stderr !== "string") return null;
+    const o = r as { stdout?: unknown; stderr?: unknown; content?: unknown; persistedOutputPath?: unknown };
+    if (typeof o.content === "string" || Array.isArray(o.content)) return measureBashResponse(o.content);
+    // Each of stdout/stderr must be absent or a string (a wrong type is shape drift); at least one must be present.
+    if ((o.stdout !== undefined && typeof o.stdout !== "string") || (o.stderr !== undefined && typeof o.stderr !== "string")) return null;
+    if (o.stdout === undefined && o.stderr === undefined) return null;
     return {
-      stdoutLength: o.stdout.length,
-      stderrLength: o.stderr.length,
+      stdoutLength: typeof o.stdout === "string" ? o.stdout.length : null,
+      stderrLength: typeof o.stderr === "string" ? o.stderr.length : null,
       persisted: typeof o.persistedOutputPath === "string" && o.persistedOutputPath !== "",
     };
   }
@@ -1073,7 +1085,7 @@ export function createGhBashFramingHook(opts: GhFrameCtx = {}): HookCallback {
       let fallback = false;
       if (parsed.kind === "verb") {
         verb = parsed.verb;
-      } else if (parsed.kind === "none" && !(!parsed.ghSeen && commentQuoteRisk(command))) {
+      } else if (parsed.kind === "none" && !commentQuoteRisk(command)) {
         if (parsed.ghSeen) emitGhFrame({ outcome: "skipped", ...NO_LENGTHS, fallback: false }, opts);
         return {};
       } else {

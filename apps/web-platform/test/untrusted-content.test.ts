@@ -502,6 +502,7 @@ const VERB_ROWS: VerbRow[] = [
   verbRow("gh issue view 1 > f", "issue view"),
   verbRow("gh \\\nissue view 1", "issue view", "backslash-newline continuation after a space"),
   verbRow("g\\\nh issue view 1", "issue view", "backslash-newline inside a word joins it (bash drops both characters)"),
+  verbRow("gh issue \"vi\\\new\" 1", "issue view", "backslash-newline inside double quotes is a continuation too"),
   verbRow("gh issue ls", "issue list", "ls is gh's alias of list"),
   verbRow("gh pr ls --state open", "pr list", "ls alias on pr"),
   verbRow("gh issue -R o/r view 1", "issue view", "-R <repo> between noun and verb"),
@@ -560,7 +561,7 @@ const VERB_ROWS: VerbRow[] = [
   { name: "unterminated single quote", cmd: "echo it's", expect: { kind: "shape" } },
   { name: "over the cap", cmd: "x".repeat(GH_COMMAND_MAX_CHARS + 1), expect: { kind: "oversize" } },
 ];
-const VERB_ROWS_EXPECTED = 87;
+const VERB_ROWS_EXPECTED = 88;
 
 describe("ghReadVerbOf", () => {
   let registered = 0;
@@ -716,7 +717,7 @@ describe("createGhBashFramingHook", () => {
     expect(out).toEqual(NOTE);
   });
 
-  describe("known tool_response shapes (the same ones the git-lock hook coerces)", () => {
+  describe("known tool_response shapes (the shapes the git-lock hook's coercer also accepts)", () => {
     it("a bare string response is framed; stdout length is the string length, stderr is unmeasured", async () => {
       log.warn.mockClear();
       expect(await call(ghHook(), bashInput("gh issue view 1", "hello"))).toEqual(NOTE);
@@ -727,6 +728,19 @@ describe("createGhBashFramingHook", () => {
       const resp = [{ type: "text", text: "ab" }, { type: "text", text: "cde" }];
       expect(await call(ghHook(), bashInput("gh pr view 2", resp))).toEqual(NOTE);
       expect(ghLines()[0]).toMatchObject({ outcome: "annotated", stdoutLength: 5, stderrLength: null });
+    });
+    it("an object with only stdout, only stderr, or a content string/array is framed (shapes the git-lock coercer accepts)", async () => {
+      log.warn.mockClear();
+      expect(await call(ghHook(), bashInput("gh issue view 1", { stdout: "abc" }))).toEqual(NOTE);
+      expect(await call(ghHook(), bashInput("gh issue view 1", { stderr: "ab" }))).toEqual(NOTE);
+      expect(await call(ghHook(), bashInput("gh issue view 1", { content: "abcd" }))).toEqual(NOTE);
+      expect(await call(ghHook(), bashInput("gh issue view 1", { content: [{ type: "text", text: "xy" }] }))).toEqual(NOTE);
+      expect(ghLines().map((l) => [l.stdoutLength, l.stderrLength])).toEqual([[3, null], [null, 2], [4, null], [2, null]]);
+    });
+    it("an empty block array is a known shape: framed with length 0", async () => {
+      log.warn.mockClear();
+      expect(await call(ghHook(), bashInput("gh issue view 1", []))).toEqual(NOTE);
+      expect(ghLines()[0]).toMatchObject({ outcome: "annotated", stdoutLength: 0 });
     });
     it("stderr text and an interrupted flag never change the result (still exactly the note)", async () => {
       expect(await call(ghHook(), bashInput("gh run view 9", okResp({ stderr: "boom", interrupted: true })))).toEqual(NOTE);
@@ -745,7 +759,8 @@ describe("createGhBashFramingHook", () => {
       ["an array of non-objects", ["x"]],
       ["an object with neither stdout nor stderr", { content: 5 }],
       ["a number stdout", { stdout: 1, stderr: "" }],
-      ["a missing stderr", { stdout: "x" }],
+      ["a stdout of the wrong type with a string stderr", { stdout: 1, stderr: "x" }],
+      ["an array holding null", [null]],
       ["undefined", undefined],
     ];
     for (const [name, resp] of BAD_RESPONSES) {
@@ -822,6 +837,16 @@ describe("createGhBashFramingHook", () => {
       { name: "an even number of apostrophes in heredoc bodies hides a real gh read from the tokenizer", cmd: "cat <<EOF\nit's\nEOF\ngh pr view 2\ncat <<EOF\ncan't\nEOF", expect: "annotated-fallback" },
       { name: "a multi-line command with no apostrophe takes the normal path and stays silent", cmd: "echo hi\nls", expect: "none" },
       { name: "a single-line quoted mention with an apostrophe stays precise (no newline, no fallback)", cmd: `echo "it's gh issue view 1"`, expect: "none" },
+      { name: "an EARLIER non-read gh does not switch the multi-line fallback off", cmd: "gh auth status\n# it's\ngh issue view 1\n# can't", expect: "annotated-fallback" },
+      { name: "unbalanced DOUBLE quotes in comments hide a real gh read from the tokenizer too", cmd: '# say "hi\ngh issue view 1\n# say "bye', expect: "annotated-fallback" },
+      { name: "an ampersand-glued gh behind an unterminated quote", cmd: "echo it's&gh issue view 1", expect: "annotated-fallback" },
+      { name: "a pipe-glued gh behind an unterminated quote", cmd: "echo it's|gh issue view 1", expect: "annotated-fallback" },
+      { name: "a close-paren-glued gh behind an unterminated quote", cmd: "echo it's)gh issue view 1", expect: "annotated-fallback" },
+      { name: "a backtick-glued gh behind an unterminated quote", cmd: "echo it's`gh issue view 1", expect: "annotated-fallback" },
+      { name: "a CR-glued gh behind an unterminated quote", cmd: "echo it's\rgh issue view 1", expect: "annotated-fallback" },
+      { name: "a backslash inside the gh word is stripped by the fallback", cmd: "echo it's g\\h issue view 1", expect: "annotated-fallback" },
+      { name: "a backslash-newline inside the gh word is a continuation in the fallback", cmd: "echo it's\ng\\\nh issue view 1", expect: "annotated-fallback" },
+      { name: "an undecidable command between the cap and the 64 KiB window with no gh stays silent", cmd: `echo it's ${pad(9000)}`, expect: "none" },
     ];
     let registered = 0;
     for (const row of FB_ROWS) {
@@ -845,7 +870,7 @@ describe("createGhBashFramingHook", () => {
       });
     }
     it("registered every fallback row", () => {
-      expect(registered).toBe(16);
+      expect(registered).toBe(26);
     });
   });
 
@@ -908,7 +933,7 @@ describe("createGhBashFramingHook", () => {
 // SAFE_BASH_PATTERNS cannot silently open an unframed read channel. The table is a SUPERSET of
 // safe-bash (gh api and gh run view are gated, not auto-admitted, yet framed).
 describe("verb table is pinned to the safe-bash lane (Guard 3)", () => {
-  const NOUNS = ["issue", "pr", "repo", "run", "release", "gist", "workflow", "search", "api", "label", "auth", "project", "variable", "secret", "discussion", "cache", "ruleset", "codespace"];
+  const NOUNS = ["issue", "pr", "repo", "run", "release", "gist", "workflow", "search", "api", "label", "auth", "project", "variable", "secret", "discussion", "cache", "ruleset", "codespace", "org", "ssh-key", "extension", "config", "alias", "browse"];
   const VERBS = ["view", "list", "status", "diff", "checks", "create", "edit", "comment", "close", "merge", "delete", "ls", "watch", "download", "item-list", "develop"];
   const POSITIVE_CONTROLS = ["issue view", "issue list", "issue status", "pr view", "pr list", "pr status", "pr diff", "pr checks", "repo view"];
 

@@ -27,7 +27,7 @@ const read = (p: string): string => readFileSync(p, "utf-8");
 // Collection-time census: every row below is registered through `row()`, and the exact count at the end
 // of the file fails if a refactor silently drops rows (a table that loses rows stays green otherwise).
 let registered = 0;
-const REGISTERED_ROWS = 15;
+const REGISTERED_ROWS = 16;
 function row(name: string, fn: () => void): void {
   registered += 1;
   it(name, fn);
@@ -96,6 +96,11 @@ describe("leg 2: apps/web-platform/.dockerignore (last matching rule wins)", () 
   row("_plugin-vendored/.mcp.json is EXCLUDED after every rule is applied (a later re-include would flip this)", () => {
     expect(dockerIgnored(rules, "_plugin-vendored/.mcp.json")).toBe(true);
   });
+  row("no negation rule of ANY spelling follows the exclude rule (bracket, escape, ./ and // forms that the evaluator may misread)", () => {
+    const at = rules.lastIndexOf("_plugin-vendored/.mcp.json");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(rules.slice(at + 1).filter((r) => r.startsWith("!"))).toEqual([]);
+  });
 });
 
 // ---------------------------------------------------------------- leg 3: vendoring workflows
@@ -128,13 +133,17 @@ describe("leg 3: workflows vendoring the plugin delete .mcp.json", () => {
     expect(mentionsVendoredDir.sort()).toEqual(vendoringWorkflows.map((w) => w.file).sort());
   });
   for (const { file, text } of vendoringWorkflows) {
-    row(`${file}: EVERY vendoring cp is followed by the rm -f of $DEST/.mcp.json within ${RM_WINDOW_LINES} lines`, () => {
+    row(`${file}: EVERY vendoring cp is followed by a bare \`${RM_MCP}\` command line in the same step`, () => {
       const lines = text.split("\n");
       const cpLines = lines.map((l, i) => (new RegExp(VENDOR_CP.source).test(l) ? i : -1)).filter((i) => i >= 0);
       expect(cpLines.length).toBeGreaterThanOrEqual(1);
       for (const at of cpLines) {
-        const window = lines.slice(at + 1, at + 1 + RM_WINDOW_LINES);
-        expect(window.some((l) => l.includes(RM_MCP)), `no ${RM_MCP} after the vendoring cp at line ${at + 1}`).toBe(true);
+        // Same step: stop at the next `- name:` / `- uses:` list item, and never look further than the window.
+        const rest = lines.slice(at + 1, at + 1 + RM_WINDOW_LINES);
+        const stop = rest.findIndex((l) => /^\s*-\s+(name|uses):/.test(l));
+        const window = stop === -1 ? rest : rest.slice(0, stop);
+        // A command line of its own: not an echo, a comment, a `:` no-op or an `if false` body that merely quotes it.
+        expect(window.some((l) => l.trim() === RM_MCP), `no bare ${RM_MCP} line in the same step after the vendoring cp at line ${at + 1}`).toBe(true);
       }
     });
   }

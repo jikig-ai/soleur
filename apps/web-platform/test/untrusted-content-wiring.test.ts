@@ -321,11 +321,15 @@ describe("options identity: the flags change nothing but the extra Bash entry", 
   const shape = (opts: unknown) => JSON.stringify(opts, fnToken);
   const base = (extra: Record<string, unknown>) => buildAgentQueryOptions({ ...minArgs, ...extra });
 
+  // Identity 1 and 2 alone would pass against a hook registered unconditionally (both arms get the entry), so each
+  // also pins the absolute Bash-entry count; the registration matrix and identity 3 are the other backstops.
   it("no egress + classify on is structurally identical to the plain baseline", () => {
     expect(shape(base({ enableUntrustedContentClassify: true }))).toBe(shape(base({})));
+    expect(bashEntries(base({ enableUntrustedContentClassify: true }))).toHaveLength(1);
   });
   it("egress + classify off ignores wrap (same-egress twins)", () => {
     expect(shape(base({ webEgress: egress }))).toBe(shape(base({ webEgress: egress, enableUntrustedContentWrap: true })));
+    expect(bashEntries(base({ webEgress: egress }))).toHaveLength(1);
   });
   it("egress + classify on differs from egress + classify off ONLY by the Bash framing entry and the WebFetch entry", () => {
     const off = JSON.parse(shape(base({ webEgress: egress }))) as { hooks: { PostToolUse: unknown[] } };
