@@ -34,9 +34,9 @@ assert_fixture_dir() {
 assert_fixture_dir "$TMP"
 trap 'rm -rf -- "$TMP"' EXIT
 
-PASS=0; FAIL=0
-ok() { PASS=$((PASS + 1)); }
-bad() { FAIL=$((FAIL + 1)); printf '  FAIL: %s\n' "$1"; }
+PASS=0; FAIL=0; TOTAL=0
+ok() { TOTAL=$((TOTAL + 1)); PASS=$((PASS + 1)); }
+bad() { TOTAL=$((TOTAL + 1)); FAIL=$((FAIL + 1)); printf '  FAIL: %s\n' "$1"; }
 check() { # <label> <command...>: pass when the command succeeds
   local label="$1"; shift
   if "$@"; then ok; else bad "$label"; fi
@@ -312,6 +312,9 @@ echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"
 FLOOR=205
-if [ $((PASS + FAIL)) -lt "$FLOOR" ]; then echo "ANTI-VACUITY FLOOR TRIPPED: $((PASS + FAIL)) assertion(s) ran, expected at least $FLOOR."; exit 1; fi
+if [ "$TOTAL" -lt "$FLOOR" ]; then
+  echo "assertion floor tripped: only $TOTAL assertions ran, expected at least $FLOOR."
+  exit 1
+fi
 if [ "$FAIL" -gt 0 ]; then echo "SOME TESTS FAILED"; exit 1; fi
 echo "ALL TESTS PASSED"
