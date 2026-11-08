@@ -70,6 +70,7 @@
   "logtail_exploration",
   "logtail_exploration_alert",
   "null_resource",
+  "random_bytes",
   "random_id",
   "random_password",
   "sentry_alert",

@@ -22,7 +22,8 @@
 #                     baseline both-origins-healthy gate before the plan, both-origins-healthy gate after the apply.
 #                     ga-monitor-fix stays the rollback lever (the code must be http/:80 again first)
 #   ga-pool-update    update the GA pool/LB (+ web_lb_health policy) — mode=drain pins
-#                     web-2 at weight 0; mode=serve is the #6027 window 0→1 flip and
+#                     web-2 at weight 0 (an explicit -var); mode=serve grades web-2 at
+#                     weight 1 (the 0→1 flip, or a no-op re-proof against live {1,1}) and
 #                     runs the §(c) gate chain fail-closed BEFORE plan
 #
 # Authorization model: per-command operator go-ahead at dispatch (the epic's fresh
@@ -52,7 +53,7 @@ on:
         required: true
         type: string
       mode:
-        description: "ga-pool-update only: drain = web-2 stays weight 0 (pre-flip); serve = the #6027 window 0→1 flip behind the §(c) gate chain"
+        description: "ga-pool-update only: drain = web-2 set to weight 0 (explicit); serve = grade and apply web-2 weight 1 behind the §(c) gate chain (already 1 after the 2026-11-08 serve flip, so a re-run is a no-op re-proof)"
         required: false
         type: choice
         options:
@@ -499,9 +500,12 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/tf-redact-random-ids.sh"
           set +e
           ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q  # hcloud_ssh_key default file() never consumed by these targets
+          # The web-2 weight variable defaults to 1 (live). A fresh GA3 create must stay the drained
+          # two-member shape cf_lb_gate_ga pins, so it passes an EXPLICIT 0 (lb-weight-gate.test.sh C.4-F8).
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -var="web2_lb_weight=0" \
               -target=cloudflare_load_balancer_monitor.web \
               -target=cloudflare_load_balancer_pool.web_1 \
               -target=cloudflare_load_balancer.app 2>&1 | tf_redact_random_ids
@@ -702,8 +706,8 @@ jobs:
     # fails closed at both ends: BEFORE the plan, both pool origins must read healthy under the current probe (so a
     # red result afterwards is attributable to the switch, and a pool already down is not made to look like a
     # TLS failure); AFTER the apply, BOTH origins must read healthy under the https probe within ~5 min or the job
-    # fails red. Rollback: a revert PR, then the `ga-monitor-fix` arm (http/:80). Traffic is never at risk: web-2 is
-    # weight 0 and the B1 fallback serves web-1 even if every origin reads down.
+    # fails red. Rollback: a revert PR, then the `ga-monitor-fix` arm (http/:80). Traffic is never at risk: both
+    # origins serve (web-2 is weight 1) and the B1 fallback serves web-1 even if every origin reads down.
     environment: web-platform-infra-apply
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -876,8 +880,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # REVIEWER-GATED like ga-overlay. mode=drain lands the drained shape (web-2 at
-    # weight 0, health-monitored). mode=serve is the #6027 maintenance-window 0→1
-    # flip — it runs the §(c) gate chain (lb-weight-gate-with-marker.sh) fail-closed
+    # weight 0, health-monitored; an explicit -var, the variable's default is 1).
+    # mode=serve grades web-2 at weight 1 (the 0→1 flip, or a no-op re-proof against live)
+    # and runs the §(c) gate chain (lb-weight-gate-with-marker.sh) fail-closed
     # BEFORE plan, so an unauthorized flip never reaches a grader.
     environment: web-platform-infra-apply
     steps:
@@ -909,8 +914,8 @@ jobs:
           [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
           echo "- Reason: ${REASON_RAW} (arm=ga-pool-update, mode=${MODE_RAW}, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
           echo "POOL_UPDATE_MODE=${MODE_RAW}" >> "$GITHUB_ENV"
-          # web-2's LB weight for THIS dispatch: 1 only for mode=serve, else 0 (the variable's
-          # default). One number feeds both the gate (SOLEUR_WEB2_SERVING_WEIGHT) and the plan
+          # web-2's LB weight for THIS dispatch: 1 only for mode=serve, else 0 (an explicit pass;
+          # the variable's default is 1). One number feeds both the gate (SOLEUR_WEB2_SERVING_WEIGHT) and the plan
           # (-var), so the gate always evaluates exactly the weight that is planned. Serve still
           # cannot plan before the gate-chain step below passes (it is an earlier, fail-closed step).
           if [[ "$MODE_RAW" == "serve" ]]; then WEB2_LB_WEIGHT=1; else WEB2_LB_WEIGHT=0; fi
