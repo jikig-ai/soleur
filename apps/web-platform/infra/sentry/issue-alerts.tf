@@ -3293,3 +3293,55 @@ resource "sentry_alert" "git_data_erasure_redrive_no_progress" {
     ignore_changes = [environment]
   }
 }
+
+# (#10479, ADR-321 items 11 and 12) origin-tls-event: ANY Sentry event tagged feature=origin_tls pages. server/origin-tls.ts is the
+# only emitter: op=listen (phase=runtime, reason=unexpected-close, which is FATAL under ORIGIN_TLS_REQUIRED=1 and restarts the
+# container; and the rate-limited post-bind server-error report), op=load / op=create (rejected, absent or unbuildable certificate
+# material at start), and op=cert_expiry (a warning once per start while under 90 days remain; silent today, about 5474 days left).
+# Before this rule nothing paged on any of them: a Sentry event was a pull-based check (ADR-321 R-B).
+#
+# Filter = the feature tag ALONE, on purpose. An `op`, `phase` or `reason` filter would make a future op (or a renamed tag) silently
+# un-paged, which is the class this rule exists to close; the interesting tuples (phase=runtime, reason=unexpected-close) are
+# covered by default. The op-contract test derives the feature literal from the emitter and asserts there is no second filter.
+#
+# Triggers copy legal_acceptance_row_without_event: the events are message events with static messages (few issue groups), so the
+# three transition triggers alone would email once and stay silent while the issue is open; `event_frequency_count {1h, 0}` fires on
+# every event. `frequency_minutes = 47` (unused elsewhere in the root) is the per-issue throttle, so a deploy that keeps restarting
+# under REQUIRED with bad material re-pages at most once every 47 minutes per issue group until it is resolved. Resolve the Sentry
+# issue after the cause is fixed, never archive it (an archived issue fires no trigger).
+#
+# DECLARED in this change; live only after apply-sentry-infra.yml has applied it on merge. A dead :443 that raises NO event
+# (docker-proxy or iptables failure) is not covered here: the Better Stack app/app_health monitors and the https LB monitor remain
+# the detectors for that (ADR-321 R-B). The REQUIRED fatal paths flush Sentry for up to 2 s before exiting (createExitAfterFlush), so
+# the events above are sent before the container restarts; if the 2.25 s hard timer wins, only the pino line in Better Stack remains.
+# Pinned against the emitter by apps/web-platform/test/sentry-origin-tls-alert-op-contract.test.ts.
+resource "sentry_alert" "origin_tls_event" {
+  organization      = var.sentry_org
+  name              = "origin-tls-event"
+  enabled           = true
+  frequency_minutes = 47
+  monitor_ids       = [data.sentry_project_issue_stream_monitor.web_platform.id]
+
+  trigger_conditions = [
+    { first_seen_event = {} },
+    { reappeared_event = {} },
+    { regression_event = {} },
+    { event_frequency_count = { interval = "1h", value = 0 } },
+  ]
+
+  action_filters = [
+    {
+      logic_type = "all"
+      conditions = [
+        { tagged_event = { key = "feature", match = "eq", value = "origin_tls" } },
+      ]
+      actions = [
+        { email = { target_type = "issue_owners", fallthrough_type = "ActiveMembers" } },
+      ]
+    },
+  ]
+
+  lifecycle {
+    ignore_changes = [environment]
+  }
+}
