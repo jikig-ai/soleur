@@ -23,3 +23,10 @@ soleur:plan (subagent, inline), soleur:deepen-plan (subagent, inline gates), CTO
 ## Operator Constraints
 - The 2026-11-07 budget-owner go-ahead covered only the #10862 criterion-a evidence re-run; it does NOT authorize the go/no-go re-ruling, criteria b/c/d measurement, `CI_PR_AFFECTED` activation, or ruleset changes — those stay operator-owned (ADR-276).
 - This run is docs-only: runbook prose recording the re-run evidence and the ejections-listing residual. It authorizes nothing beyond the edit itself.
+
+## Review/Compound Phase
+- Review: 4-seat non-code panel (git-history, pattern-recognition, security-sentinel, code-quality) as report-only subagents + consolidated fix-round verifier. FIX-ROUND: PASS.
+- Findings: 1 P2 (re-run provenance — ran inside #12377, not "after ship") + 5 P3, all fixed inline (`5d89f596f1`).
+- Compound assessment: the P2 class (inherited provenance phrasing; in-PR evidence vs post-merge verification — "shipped" means merged in runbook vocabulary) is already covered by `learnings/2026-09-18-three-sentences-i-pasted-from-the-plan-were-inherited-not-measured.md`; no new learning/rule — the constraint was discovered via a visible review finding (discoverability exit).
+- QA: docs-only — AC1–AC6 greps + markdown-lint all green post-fix.
+- Ship: #12428 filed as residual tracker (stays OPEN); PR #12430 ready, auto-merge armed, merge queue.
