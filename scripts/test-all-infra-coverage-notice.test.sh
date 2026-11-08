@@ -878,8 +878,8 @@ SHIM
   fi
   for _read in 'diff --cached --name-only' 'diff --cached --name-status -M' 'diff --name-only HEAD' \
                'diff --name-only origin/main...HEAD' 'diff --name-status -M HEAD' 'diff --name-status -M origin/main...HEAD'; do
-    if grep -F -- "$_read" "$SHIM_LOG" | grep -vqF -- '--ignore-submodules=none' \
-       || ! grep -F -- "$_read" "$SHIM_LOG" | grep -qF -- '--ignore-submodules=none'; then
+    _read_lines="$(grep -F -- "$_read" "$SHIM_LOG" || true)"
+    if [[ -z "$_read_lines" ]] || grep -vqF -- '--ignore-submodules=none' <<<"$_read_lines"; then
       fail "the read '$_read' is issued without --ignore-submodules=none (a config- or ignore=all-hidden gitlink would be invisible)"
     else
       pass "the read '$_read' carries --ignore-submodules=none"
