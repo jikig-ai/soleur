@@ -30,8 +30,8 @@ batch that mixes a code PR in, a malformed diff — yields the full battery.
 | State | Condition | Behaviour |
 |---|---|---|
 | **dark** | `CI_ORACLE_LANE` unset or empty | the `oracle-selection` job is SKIPPED — no runner, no checkout, zero cost; every leg runs; `oracle-index-check` prints `not-oracle-only` and exits 0 inside a minute |
-| **locked-telemetry** | `CI_ORACLE_LANE=on` AND `readonly ORACLE_LANE_LOCKED=1` in the driver | the job runs and classifies; `active` is NEVER `true`; each oracle-classified run emits a `SOLEUR_ORACLE_LANE … would_skip=<leg list>` notice instead of skipping — five legs normally, four when the diff touched `knowledge-base/engineering/architecture/diagrams/*` (`test-webplat` is retained: diagrams feed its surface) — this stream is the blocking pre-activation audit evidence |
-| **active** | `CI_ORACLE_LANE=on` AND the lock literal removed by a separate authorized PR | the five legs in `skip_legs` skip on `pull_request`/`merge_group`, tolerated by the `test` aggregator's `ORACLE-ONLY-SKIP` arm; `shard-totality-mutations` skips; `oracle-index-check` runs the manifest |
+| **locked-telemetry** | `CI_ORACLE_LANE=on` AND `ORACLE_LANE_LOCKED=1` in env (the driver's `O-LOCK-READ` re-lock — the committed `readonly` literal was removed by #12300; no `ci.yml` env wires it today, so reaching it is an excluded-path edit) | the job runs and classifies; `active` is NEVER `true`; each oracle-classified run emits a `SOLEUR_ORACLE_LANE … would_skip=<leg list>` notice instead of skipping — five legs normally, four when the diff touched `knowledge-base/engineering/architecture/diagrams/*` (`test-webplat` is retained: diagrams feed its surface) — this stream is the blocking pre-activation audit evidence |
+| **active** | `CI_ORACLE_LANE=on` AND the lock literal removed by a separate authorized PR (#12300, merged 2026-11-08) | the five legs in `skip_legs` skip on `pull_request`/`merge_group`, tolerated by the `test` aggregator's `ORACLE-ONLY-SKIP` arm; `shard-totality-mutations` skips; `oracle-index-check` runs the manifest |
 
 A non-empty value that is not exactly `on` (`off`, `ON`, `on ` with whitespace) is NONE of these: the job runs <!-- markdownlint-disable-line MD038 -->
 but the driver stops at `reason=switch_off` with `switch=invalid` — telemetry for a mistyped value, never an off
@@ -45,7 +45,7 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
 |---|---|
 | `event` | `pull_request`, `merge_group`, or whatever `github.event_name` carried |
 | `switch` | `on`, `invalid` (non-empty, not `on`); `unset` exists in the grammar but is unreachable in CI — the job only schedules while the variable is non-empty; `unreadable` only on the `no_base_driver` fallback (the base-sourced driver could not be produced, so the switch was never evaluated) |
-| `locked` | `true` while `ORACLE_LANE_LOCKED=1` stands in the driver; `na` only on the `no_base_driver` fallback (the base driver's lock state is unobservable when it cannot be read) |
+| `locked` | `true` when `ORACLE_LANE_LOCKED=1` is in env (the committed `readonly` literal is gone since #12300); `na` only on the `no_base_driver` fallback (the base driver's lock state is unobservable when it cannot be read) |
 | `attempt` | `github.run_attempt`; only `1` can ever reach `oracle` |
 | `files` | changed-path count in the diff listing — set before the per-path loop, so a mid-loop `malformed_diff` abort still reports the total count (0 on pre-listing exits) |
 | `reason` | the verdict token — enum below |
