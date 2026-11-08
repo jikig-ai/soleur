@@ -10,10 +10,7 @@
 #      and assert cron / workflow_dispatch / numeric threshold / threshold < the .tf's
 #      check_response_timeout_minutes / the position filter equals the .tf's
 #      max_entries_to_build / least-privilege permissions / no continue-on-error / label set /
-#      no `${{ }}` interpolation inside any run body, and (#12362) the issue-body Triage step 2
-#      `gh run list --event merge_group --json <list>` command lists the field headSha (membership of
-#      the comma list, not a substring: the prose on that line already says "by headSha/createdAt";
-#      rows MT1-MT5 and PT1). The two .tf numbers are DERIVED from
+#      no `${{ }}` interpolation inside any run body. The two .tf numbers are DERIVED from
 #      infra/github/ruleset-ci-required.tf (comments stripped), never hand-written here.
 #   2. BEHAVIOUR: extract the real run body of the detection step, put a `gh` stub on PATH that
 #      serves canned GraphQL JSON, and EXECUTE it for: head entry old -> files; entry deeper than
@@ -33,6 +30,10 @@
 #    does is UNRESOLVED and FAILS the suite: a typo in a jq literal or an unbound variable on the naming path
 #    otherwise turns every named row red for the wrong reason. CTL-i..j2 prove the criterion on those classes and
 #    CTL-k proves lookup_ran is what kills C26 (both run-list fetches skipped).
+# 4. TRIAGE FIELD LIST (#12362): the last arm of the STRUCTURE check asserts that the issue-body Triage step 2
+#    `gh run list --event merge_group --json <list>` command lists the field headSha. It tests MEMBERSHIP of the
+#    comma list, never a substring, because the prose on that same line already says "by headSha/createdAt".
+#    Rows MT1-MT5 (each mutates only the list) and the must-pass row PT1 (headSha last) pin it.
 # Every structural/behavioural arm is proven live by a mutation row run against a SANDBOX COPY of
 # the workflow (the mutation is diffed against the pristine copy first, then the guard must go
 # RED for the expected reason), with an unmutated sandbox copy as the positive control. The

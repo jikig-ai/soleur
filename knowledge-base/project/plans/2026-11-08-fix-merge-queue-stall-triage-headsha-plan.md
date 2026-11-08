@@ -44,6 +44,14 @@ that kept the template byte-identical in #12350 (merged as 10e66d9ab8).
 One PR, three files: the one-token workflow edit, one new membership assertion in the stall-check suite
 (written and proven red first), and deletion of the now-redundant follow-through probe.
 
+> **Scope amended at review, 2026-11-08 (see the addendum at the end of this plan and
+> `decision-challenges.md`):** review found four sibling files that print the same command with the
+> same defect, and the CTO ruled twice to include them. The final PR is the three files above plus
+> `plugins/soleur/scripts/monitor-pr-checks.sh`, `plugins/soleur/scripts/sync-pr-behind.sh`,
+> `plugins/soleur/skills/drain-prs/SKILL.md`, `plugins/soleur/skills/ship/references/merge-queue-dequeue.md`
+> (one token each) and two re-keyed rows in `scripts/ci-pr-affected-audit.accept.tsv`. Statements below
+> that say "three files" or "do not widen" describe the plan as drafted, not the shipped scope.
+
 PR body: `Closes #12362` and `Ref #9927` only. #9927 is an open epic and must never appear after a closing
 keyword; `closingIssuesReferences` must be exactly `[#12362]`. Keep every other closing verb out of the PR
 body prose (learning `2026-06-05-followthrough-pr-body-prose-closes-keyword-autocloses-tracker.md`).
@@ -309,7 +317,7 @@ Run each as its own Bash call (read the exit code of each; no pipes that mask it
 - [ ] The old probe exits 0 (PASS) on the fixed tree before it is deleted; `git ls-files scripts/followthroughs/stall-triage-headsha-12350.sh` returns nothing after `git rm`.
 - [ ] Census recorded: no content reference to `stall-triage-headsha` in scripts/plugins/tests/.github/knowledge-base/engineering; no closed `follow-through` issue in the last 14 days names the script.
 - [ ] `python3 -I scripts/ci-pr-affected-replay.py ratchet`, `bash plugins/soleur/test/fixture-env-adoption.test.sh`, `bash .claude/hooks/grep-q-pipe-guard.test.sh` (re-run on flake), `bash plugins/soleur/test/scripts-shard-totality.test.sh`, `python3 .github/scripts/check-workflow-duplicate-keys.py` all exit 0.
-- [ ] PR diff paths are a subset of: the three product files, the plan, `specs/feat-one-shot-12362-stall-triage-headsha/{tasks.md,decision-challenges.md,session-state.md}`, `knowledge-base/INDEX.md` (if regenerated), and `scripts/ci-pr-affected-audit.accept.tsv` (only if the ratchet requires it). No path under `apps/web-platform/infra/`, no `apply-web-platform-infra.yml`, no `ci.yml`, no `ci-head-verdict.sh`.
+- [ ] PR diff paths are a subset of: the three product files, the plan, `specs/feat-one-shot-12362-stall-triage-headsha/{tasks.md,decision-challenges.md,session-state.md}`, `knowledge-base/INDEX.md` (if regenerated), and `scripts/ci-pr-affected-audit.accept.tsv` (only if the ratchet requires it). **Amended at review:** plus the four sibling files and the two accept-row re-keys listed in the addendum. No path under `apps/web-platform/infra/`, no `apply-web-platform-infra.yml`, no `ci.yml`, no `ci-head-verdict.sh`.
 - [ ] `gh pr view 12378 --json closingIssuesReferences` is exactly `[#12362]`; the body contains `Closes #12362` and `Ref #9927` and no other closing keyword.
 - [ ] Merged by the queue without `--admin`; Guard 1 evidence is a `merge_group` `test`-leg run (or dispatch run) on the SHA, recorded in the PR.
 
@@ -345,4 +353,12 @@ Run each as its own Bash call (read the exit code of each; no pipes that mask it
 - The new engine must not use `grep -q` after a pipe; the suite has a registry row in `.claude/hooks/grep-q-pipe-guard.test.sh` that exempts only the existing jq wrapper shape.
 - Do not run `git stash`; commit WIP instead. `git add` and `git commit` are separate Bash calls; no `git add -A`.
 - `hr-when-a-plan-specifies-relative-paths-e-g`: every path above was verified to exist (`git ls-files`) except `plugins/soleur/test/run-all.sh`, which the brief names and which does not exist - see Research Reconciliation.
-- Do not widen to the `--jq`, the prose, or the jq near line 222; the next reader of this PR will diff the workflow against the one-token expectation.
+- Do not widen to the `--jq`, the prose, or the jq near line 222; the next reader of this PR will diff the workflow against the one-token expectation. (Still true of the WORKFLOW file. The sibling files added at review are separate files, each a one-token insertion; see the addendum.)
+
+## Addendum - review-phase scope and outcome (2026-11-08)
+
+- **Final scope:** the three planned files, plus four sibling files that print `gh run list --event merge_group --limit 100 --json databaseId,headBranch,conclusion,url ...` next to prose telling the reader to correlate by `headSha`/`createdAt` (`headSha,` inserted right after `headBranch,`, nothing else changed), plus two accept-row re-keys in `scripts/ci-pr-affected-audit.accept.tsv` (the `sync-pr-behind.sh` edit changed the hash of the line that names `merge-queue-dequeue.md`; the ratchet requires the rows to follow it). The test-suite header gained a four-line item 4 and no existing header line moved, because `scripts/lib/test-affected-paths.sh` cites the suite's lines 2 and 14.
+- **Rulings:** both recorded as `Ruled by CTO agent, 2026-11-08` in `decision-challenges.md` (widen to three siblings; then a fourth, after the lead's premise that the dequeue recipe made no headSha claim was shown wrong by a command).
+- **MT3 changed:** the planned MT3 (break the selector) was killed by the older `agent-runnable` check before the new arm ran, so it exercised no new code; the shipped MT3 is a left-extended lookalike (`xheadSha`). The pass floor is still 166.
+- **Ratchet invocation:** locally run `python3 -I scripts/ci-pr-affected-replay.py ratchet --base origin/main`; the bare form defaults to `HEAD^1` and reads `accept-unattributed` on a commit that touches only the accept file.
+- **Known reach, accepted:** the guard reads one physical line of the stall template; a wrapped or `--json=<list>` form fails closed with an accurate message, and the four sibling surfaces carry no `headSha` pin (the CTO kept a new pin out of this PR).
