@@ -205,5 +205,90 @@
         "conclusion": "SUCCESS"
       }
     ]
+  },
+  {
+    "number": 9308,
+    "title": "parked dependencies pr with a failing check",
+    "headRefName": "feat-9308",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "parked"
+      },
+      {
+        "name": "dependencies"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE"
+      }
+    ]
+  },
+  {
+    "number": 9309,
+    "title": "parked pr whose only red row is the draft-era test (verdict no-run)",
+    "headRefName": "feat-9309",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "parked"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "FAILURE"
+      }
+    ]
+  },
+  {
+    "number": 9310,
+    "title": "capitalised Parked label on a green pr",
+    "headRefName": "feat-9310",
+    "isDraft": false,
+    "mergeable": "MERGEABLE",
+    "reviewDecision": "APPROVED",
+    "labels": [
+      {
+        "name": "Parked"
+      }
+    ],
+    "author": {
+      "login": "octocat"
+    },
+    "createdAt": "2026-06-30T10:00:00Z",
+    "statusCheckRollup": [
+      {
+        "name": "test",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      },
+      {
+        "name": "build",
+        "status": "COMPLETED",
+        "conclusion": "SUCCESS"
+      }
+    ]
   }
 ]

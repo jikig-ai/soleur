@@ -141,7 +141,7 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
                | select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT") ] | length;
   def pending($v): [ counted($v)[] | (.status // .state)
                | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING") ] | length;
-  def haslabel($n): any(.labels[]?; .name == $n);
+  def haslabel($n): any(.labels[]?; ((.name // "") | ascii_downcase) == ($n | ascii_downcase));
   [ .[] | . as $pr | ($verdicts[(.number | tostring)] // "") as $v
     | ($pr | fails($v)) as $f | ($pr | pending($v)) as $p |
     {
@@ -152,6 +152,7 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
       failing: $f,
       pending: $p,
       ci: $v,
+      parked: ($pr | haslabel("parked")),
       tier: (
         if .isDraft == true then "drafts"
         elif ($pr | haslabel("parked")) then "parked"
@@ -190,7 +191,7 @@ jq -r --argjson order "$TIER_ORDER" '
   | $order[] as $t
   | ([ $prs[] | select(.tier == $t) ]) as $g
   | "## \($t) (\($g | length))",
-    ( $g[] | "  #\(.number)  \(.title)  [@\(.author), mergeable=\(.mergeable), fail=\(.failing), pending=\(.pending)\(if .ci != "" then ", ci=\(.ci)" else "" end)]",
+    ( $g[] | "  #\(.number)  \(.title)  [@\(.author), mergeable=\(.mergeable), fail=\(.failing), pending=\(.pending)\(if .ci != "" then ", ci=\(.ci)" else "" end)\(if .parked and .tier != "parked" then ", PARKED label (held for the operator)" else "" end)]",
              (if .recovery then "      recovery: \(.recovery)" else empty end) ),
     ""
 ' <<<"$CLASSIFIED"

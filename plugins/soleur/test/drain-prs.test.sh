@@ -193,7 +193,7 @@ assert_eq "ready-green" "$(tier_of "$wjson" 9202)" "9202: a rerun of the same wo
 # every mergeable tier (a green ready PR, a conflicting one, one awaiting review), and only a draft is classified before it.
 echo ""
 echo "--- T10: parked tier ---"
-pjson=$(bash "$HELPER" --fixture "$FIXTURE_DIR/parked.json" --format json)
+pjson=$(VMAP="$FIXTURE_DIR/parked-verdicts-states.json" CI_HEAD_VERDICT_BIN="$VTMP/verdict.sh" bash "$HELPER" --fixture "$FIXTURE_DIR/parked.json" --format json)
 assert_eq "parked"       "$(tier_of "$pjson" 9301)" "9301: a green, ready, mergeable PR with the parked label → parked (never ready-green)"
 assert_eq "ready-green"  "$(tier_of "$pjson" 9302)" "9302: the same PR without the label → ready-green (control: the label is what moved it)"
 assert_eq "parked"       "$(tier_of "$pjson" 9303)" "9303: parked and CONFLICTING → parked (not needs-conflict-resolution: hands off)"
@@ -201,10 +201,19 @@ assert_eq "drafts"       "$(tier_of "$pjson" 9304)" "9304: a parked draft stays 
 assert_eq "parked"       "$(tier_of "$pjson" 9305)" "9305: parked and awaiting review → parked (not needs-review)"
 assert_eq "parked"       "$(tier_of "$pjson" 9306)" "9306: parked, CONFLICTING and 3 failing checks → parked (it is classified BEFORE broken: a held PR is never surfaced as broken)"
 assert_eq "ready-green"  "$(tier_of "$pjson" 9307)" "9307: a decoy label 'parked-old' does not hold the PR (exact label match, not a substring) → ready-green"
-assert_eq "4"            "$(jq -r '.parked | length' <<<"$pjson")" "four PRs in the parked tier (9301, 9303, 9305, 9306)"
+assert_eq "parked"       "$(tier_of "$pjson" 9308)" "9308: parked AND dependencies with a failing check → parked (classified BEFORE needs-lockfile-fix: a held PR is never surfaced as actionable)"
+assert_eq "parked"       "$(tier_of "$pjson" 9309)" "9309: parked, a ready PR whose only red row is the draft-era test and whose head verdict is no-run → parked (classified BEFORE ready-unarmed)"
+assert_eq "no-run"       "$(jq -r '.parked[] | select(.number == 9309) | .ci' <<<"$pjson")" "9309: the head verdict was really read (control: ready-unarmed would have claimed it)"
+assert_eq "parked"       "$(tier_of "$pjson" 9310)" "9310: the label match is case-insensitive ('Parked' holds, as in the hook)"
+assert_eq "true"         "$(jq -r '[.drafts[] | select(.number == 9304) | .parked][0]' <<<"$pjson")" "9304: a parked DRAFT carries parked=true (visible even though the tier stays drafts)"
+assert_eq "false"        "$(jq -r '[.["ready-green"][] | select(.number == 9302) | .parked][0]' <<<"$pjson")" "9302: an unlabelled PR carries parked=false (control for the flag)"
+assert_eq "false"        "$(jq -r '[.["ready-green"][] | select(.number == 9307) | .parked][0]' <<<"$pjson")" "9307: the parked-old decoy carries parked=false"
+assert_eq "7"            "$(jq -r '.parked | length' <<<"$pjson")" "seven PRs in the parked tier (9301, 9303, 9305, 9306, 9308, 9309, 9310)"
+assert_eq ""             "$(jq -r '.["ready-green"][] | select(.number == 9302) | .recovery // ""' <<<"$pjson")" "9302: the recovery line belongs to the parked tier only (a green PR carries none)"
 assert_contains "$(jq -r '.parked[] | select(.number == 9301) | .recovery' <<<"$pjson")" "do nothing here" "9301: the parked tier carries a recovery line that says to do nothing"
-ptext=$(bash "$HELPER" --fixture "$FIXTURE_DIR/parked.json")
-assert_contains "$ptext" "## parked (4)" "text: parked header with count"
-assert_contains "$(grep -c 'seven tiers' "$SCRIPT_DIR/../skills/drain-prs/SKILL.md" || true)" "0" "SKILL.md no longer says 'seven tiers' (there are eight, parked included)"
+ptext=$(VMAP="$FIXTURE_DIR/parked-verdicts-states.json" CI_HEAD_VERDICT_BIN="$VTMP/verdict.sh" bash "$HELPER" --fixture "$FIXTURE_DIR/parked.json")
+assert_contains "$ptext" "## parked (7)" "text: parked header with count"
+assert_contains "$ptext" "PARKED label (held for the operator)" "text: a parked draft is flagged on its drafts line"
+assert_eq "0" "$(grep -c 'seven tiers' "$SCRIPT_DIR/../skills/drain-prs/SKILL.md" || true)" "SKILL.md no longer says 'seven tiers' (there are eight, parked included; an exact zero, not a substring)"
 
-print_results 58
+print_results 67
