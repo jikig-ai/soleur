@@ -1,11 +1,13 @@
 # ci-oracle-lane-suites.txt — the oracle-validation manifest (#12156, ADR-276 amendment).
 #
-# The `oracle-index-check` job in .github/workflows/ci.yml runs EVERY non-comment line below, serially, when — and only
+# The `oracle-index-check` job in .github/workflows/ci.yml runs the members below across K=5 matrix legs
+# (strategy.matrix.leg; scripts/ci-oracle-lane-legs.tsv assigns each member to one leg) when — and only
 # when — the `oracle-selection` job classifies a pull_request/merge_group diff as `oracle_only`. Lines are
 #   <registration-label><TAB><argv>
 # where the label is the enumerate-EXACT registration label (`scripts/test-all.sh --enumerate` prints
-# `SUITE_REGISTRATION<TAB><label>`) and argv is the command the job executes from the checkout root. A suite's non-zero
-# exit propagates into the leg verdict; zero members would be a vacuous leg, so the job also reds on an empty manifest.
+# `SUITE_REGISTRATION<TAB><label>`) and argv is the command the job executes from the checkout root. Every member
+# runs on exactly one leg; a suite's non-zero exit propagates into that leg's verdict, and a leg that ran zero
+# members is a vacuous gate and reds.
 #
 # MEMBERSHIP (decision-challenges T3): every registration whose SUT is the oracle/selector machinery — the affected-set
 # index, its derive path, the audit replay battery, the census linter that is the AFFECTED_*_PATHS census authority,

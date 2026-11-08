@@ -45,3 +45,19 @@ confirmed environmental (not diff-caused):
   live `gh` account resolution + instrument hashing; webplat toolchain-bound).
   Zero paths in this diff feed it.
 Every oracle-manifest suite and the sentinel (4899/4899) are green.
+
+## Review Disposition (2026-11-08)
+
+5-seat panel (security, code-quality, architecture, history+conventions, test-design): no P1.
+- P2 fixed inline: `assigned` grammar validation in run block (silent-skip class);
+  ORACLE_LEG validator rewrite (per-field grammar on `${ORACLE_LEG:-}`, enumerated
+  digits, /5 and 5/ holes closed); discriminating reason pins on all sandbox arms;
+  ex_oracle_legs exclusion fixture.
+- P3 batch fixed inline: manifest header "serially", ci.yml job comment, aggregator
+  failure arm names oracle-index-check + R1k suite row, LEG-BAD-VALUE/LEG-BAD-FIELDS
+  pins + mutants, LEG-BUDGET mechanised rebalance trigger (suite-durations join),
+  DECLARED_MEMBERS +ci-oracle-review, permuted land-check, runbook omissions,
+  legs.tsv regen line, GUARD4 header mapping.
+- Scope-out: RATCHET_ORACLE parity (legs file in the advisory oracle-inputs notice
+  set) deferred to #12375 — new-file touch + census pins, advisory-only.
+- Sentinel after fixes: 4957/4957 rows green, 31/31 mutants killed.

@@ -37,7 +37,11 @@
 # row 4 → row_index_job (the extracted oracle-index-check step must propagate a member's non-zero
 # exit into the leg verdict); row 4b → the leg's checkout declares fetch-depth 0 and is gated on
 # oracle_only (a static pin of ci.yml); row 5 → check_manifest reordered copy (a different member
-# order is a PASS). The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
+# order is a PASS). Legs rows → check_legs mutants (unassigned, stale row, out-of-matrix, vacant leg,
+# missing legs file, duplicate, malformed value, stray third field, repacked, reordered) and the
+# sandbox arms over the extracted step body: ORACLE_LEG unset/malformed sweep, foreign leg, k==n
+# green, malformed legs value, missing legs file, unassigned member, vacuous leg — each with a
+# reason pin. The pin is BI-DIRECTIONAL: every manifest member must be a live `test-all.sh --enumerate`
 # registration, and every live registration whose label matches the declared oracle-SUT name class
 # (affected|lint-orphan-test-suites|ci-pr|ci-path-gating) must be a member OR named in a commented
 # exclusion line — a NEW oracle-machinery registration cannot silently escape the leg.
@@ -455,6 +459,7 @@ fx_case ex_lib; fx_op ex_lib M "$ACCEPT"; fx_op ex_lib M "scripts/lib/zzleak-oth
 fx_case ex_oracle_sh; fx_op ex_oracle_sh M "$ACCEPT"; fx_op ex_oracle_sh M "scripts/ci-oracle-lane.sh"; fx_done ex_oracle_sh
 fx_case ex_oracle_test; fx_op ex_oracle_test M "$ACCEPT"; fx_op ex_oracle_test M "scripts/ci-oracle-lane.test.sh"; fx_done ex_oracle_test
 fx_case ex_oracle_suites; fx_op ex_oracle_suites M "$ACCEPT"; fx_op ex_oracle_suites M "scripts/ci-oracle-lane-suites.txt"; fx_done ex_oracle_suites
+fx_case ex_oracle_legs; fx_op ex_oracle_legs M "$ACCEPT"; fx_op ex_oracle_legs M "scripts/ci-oracle-lane-legs.tsv"; fx_done ex_oracle_legs
 fx_case ex_tap; fx_op ex_tap M "$ACCEPT"; fx_tap ex_tap always_on; fx_done ex_tap
 fx_case ex_code; fx_op ex_code M "$ACCEPT"; fx_op ex_code M "apps/web-platform/zzleak-app.ts"; fx_done ex_code
 fx_case ex_mk; fx_op ex_mk M "$ACCEPT"; fx_op ex_mk M Makefile; fx_done ex_mk
@@ -757,6 +762,8 @@ row_exclusions() {  # Guard 1 rows 1-2: the load-bearing exclusion list plus eve
   check_eq "O-EXC ci-oracle-lane.test.sh: reason" "$N_REASON" "excluded"
   drive ex_oracle_suites "$d"; expect_full "O-EXC the validation manifest"
   check_eq "O-EXC ci-oracle-lane-suites.txt: reason" "$N_REASON" "excluded"
+  drive ex_oracle_legs "$d";  expect_full "O-EXC the leg assignment"
+  check_eq "O-EXC ci-oracle-lane-legs.tsv: reason" "$N_REASON" "excluded"
   drive ex_tap "$d";      expect_full "O-EXC accept + out-of-extent hunk"
   check_eq "O-EXC out-of-extent hunk: reason" "$N_REASON" "extent_miss"
   drive ex_code "$d";     expect_full "O-EXC apps/web-platform ts"
@@ -1105,6 +1112,7 @@ DECLARED_MEMBERS=(
   "plugins/soleur/test/ci-pr-affected-replay-a" "plugins/soleur/test/ci-pr-affected-replay-b" "plugins/soleur/test/ci-pr-affected-replay-c"
   "scripts/ci-pr-selection"
   "plugins/soleur/test/ci-pr-affected-preactivation.test.sh"
+  "scripts/ci-oracle-review"
 )
 DECLARED_EXCLUSIONS=(
   "scripts/lint-orphan-test-suites-mutations-a" "scripts/lint-orphan-test-suites-mutations-b"
@@ -1199,6 +1207,11 @@ check_legs() {  # $1=legs path $2=manifest path $3=space-separated live matrix l
     case "$line" in ''|'#'*) continue ;; esac
     label="${line%%[[:space:]]*}"
     leg="$(printf '%s\n' "$line" | awk -F'\t' '{print $2}')"
+    # exactly label<TAB>leg like the manifest's MEMBER-BAD-FIELDS doctrine — a stray
+    # third column is silently truncated by both this suite and the runtime awk.
+    local lnf
+    lnf="$(printf '%s\n' "$line" | awk -F'\t' '{print NF}')"
+    [ "$lnf" = "2" ] || printf 'LEG-BAD-FIELDS:%s:%s\n' "$label" "$lnf"
     case "$seen" in *" $label "*) printf 'LEG-DUPLICATE:%s\n' "$label" ;; esac
     seen="$seen$label "
     case "$leg" in
@@ -1221,6 +1234,24 @@ check_legs() {  # $1=legs path $2=manifest path $3=space-separated live matrix l
     awk -F'\t' -v leg="$k" '!/^[[:space:]]*#/ && NF && $2==leg{f=1} END{exit !f}' "$lf" \
       || printf 'LEG-VACANT:%s\n' "$k"
   done
+  # the rebalance trigger, mechanised (arch P3-3): join each row to committed
+  # scripts/suite-durations.tsv and red when a leg's projected serial total comes within
+  # ~5 min of the 30-min bound (1500000 ms) — a duration drift otherwise surfaces only as
+  # a timeout kill. A member with no measured row is LEG-UNMEASURED (never 0-min).
+  local durs="$REPO_ROOT/scripts/suite-durations.tsv"
+  if [ -f "$durs" ]; then
+    awk -F'\t' -v durfile="$durs" '
+      NR==FNR { if ($1 !~ /^[[:space:]]*#/ && NF >= 2) dur[$1]=$2; next }
+      /^[[:space:]]*#/ || !NF { next }
+      {
+        if (!($1 in dur)) { printf "LEG-UNMEASURED:%s\n", $1; next }
+        sum[$2] += dur[$1]
+      }
+      END { for (l in sum) if (sum[l] > 1500000) printf "LEG-OVER-BUDGET:%s:%d\n", l, sum[l] }
+    ' "$durs" "$lf"
+  else
+    printf 'LEG-DURATIONS-MISSING\n'
+  fi
 }
 
 OIC_LEGS="$(python3 - "$CI_YML" <<'PYX' || true
@@ -1303,7 +1334,15 @@ if [ -f "$LEGS_FILE" ]; then
   { cat "$LEGS_FILE"; printf 'scripts/ci-pr-selection\t2/5\n'; } > "$_lm/dup.tsv"
   _mt=$(check_legs "$_lm/dup.tsv" "$MANIFEST" "$OIC_LEGS")
   check_contains "G4 legs row6 a double-assigned member is caught" "$_mt" "LEG-DUPLICATE:scripts/ci-pr-selection"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-pr-selection\tbogus\n'; } > "$_lm/badval.tsv"
+  _mt=$(check_legs "$_lm/badval.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row6b a malformed leg value is caught" "$_mt" "LEG-BAD-VALUE:scripts/ci-pr-selection:bogus"
+  { cat "$LEGS_FILE"; printf 'scripts/ci-pr-selection\t5/5\tjunk\n'; } > "$_lm/threecol.tsv"
+  _mt=$(check_legs "$_lm/threecol.tsv" "$MANIFEST" "$OIC_LEGS")
+  check_contains "G4 legs row6c a stray third field is caught" "$_mt" "LEG-BAD-FIELDS:scripts/ci-pr-selection:3"
   awk 'BEGIN{FS=OFS="\t"} !/^[[:space:]]*#/ && NF && $1=="scripts/lint-orphan-test-suites" {print $1,"5/5"; next} {print}' "$LEGS_FILE" > "$_lm/permuted.tsv"
+  grep -qF $'scripts/lint-orphan-test-suites\t5/5' "$_lm/permuted.tsv" \
+    || fail "G4 legs row7 mutant did not land (label match produced a pristine copy)"
   _mt=$(check_legs "$_lm/permuted.tsv" "$MANIFEST" "$OIC_LEGS")
   check_eq "G4 legs row7 a repacked-but-complete assignment stays clean" "$_mt" ""
   { grep -E '^[[:space:]]*#' "$LEGS_FILE"; grep -vE '^[[:space:]]*#|^[[:space:]]*$' "$LEGS_FILE" | tac; } > "$_lm/reordered.tsv"
@@ -1360,12 +1399,44 @@ PYX
     ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/noleg.out" 2>&1
     _rc_noleg=$?
     check_true "G4 legs unset ORACLE_LEG fails closed" "$(rc_of test "$_rc_noleg" -ne 0)"
-    ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=x/y GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/badleg.out" 2>&1
-    _rc_badleg=$?
-    check_true "G4 legs malformed ORACLE_LEG fails closed" "$(rc_of test "$_rc_badleg" -ne 0)"
-    ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=3/3 GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/vacleg.out" 2>&1
+    check_contains "G4 legs unset ORACLE_LEG names the malformed-ORACLE_LEG arm" "$(cat "$_oic/noleg.out")" "unset or malformed"
+    for _badleg in "" "15" "1/5/2" "0/5" "5/0" "/5" "5/" "1/5 " "x/y"; do
+      ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG="$_badleg" GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/badleg.out" 2>&1
+      _rc_badleg=$?
+      check_true "G4 legs malformed ORACLE_LEG='${_badleg}' fails closed" "$(rc_of test "$_rc_badleg" -ne 0)"
+      check_contains "G4 legs malformed ORACLE_LEG='${_badleg}' names the arm" "$(cat "$_oic/badleg.out")" "unset or malformed"
+    done
+    # a well-formed leg outside the live matrix set needs no dedicated arm — every member's
+    # assignment fails the n==K check (or matches nothing), so the vacuous-leg arm reds it.
+    for _forleg in 9/9 5/9; do
+      ( cd "$_oic" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG="$_forleg" GITHUB_OUTPUT="$_oic/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic/forleg.out" 2>&1
+      _rc_forleg=$?
+      check_true "G4 legs a well-formed foreign leg ($_forleg) fails closed" "$(rc_of test "$_rc_forleg" -ne 0)"
+      check_contains "G4 legs foreign leg $_forleg names the n==K arm" "$(cat "$_oic/forleg.out")" "malformed leg value"
+    done
+    # k==n green arm: a leg equal to K still runs its own members to green.
+    _oic3="$_oic-kn"
+    assert_fixture_dir "$_oic3"
+    mkdir -p "$_oic3/scripts"
+    { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-also-pass\ttrue\n'; } > "$_oic3/scripts/ci-oracle-lane-suites.txt"
+    { printf 'scripts/fake-pass\t2/2\n'; printf 'scripts/fake-also-pass\t2/2\n'; } > "$_oic3/scripts/ci-oracle-lane-legs.tsv"
+    ( cd "$_oic3" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=2/2 GITHUB_OUTPUT="$_oic3/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic3/kn.out" 2>&1
+    _rc_kn=$?
+    check_eq "G4 legs a k==n leg runs its members to green" "$_rc_kn" "0"
+    check_eq "G4 legs the k==n leg ran both members" "$(grep -c '── oracle-index-check:' "$_oic3/kn.out")" "2"
+    # a malformed legs-file row value is not a silent skip: it reds naming the row
+    { printf 'scripts/fake-pass\t1/5 \n'; printf 'scripts/fake-also-pass\t1/2\n'; } > "$_oic3/scripts/ci-oracle-lane-legs.tsv"
+    ( cd "$_oic3" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=1/2 GITHUB_OUTPUT="$_oic3/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic3/mallegs.out" 2>&1
+    _rc_mallegs=$?
+    check_true "G4 legs a malformed legs-file value fails closed" "$(rc_of test "$_rc_mallegs" -ne 0)"
+    check_contains "G4 legs a malformed legs-file value names the row" "$(cat "$_oic3/mallegs.out")" "malformed leg value"
+    # the vacuous arm needs a leg that is VALID for its K but owns zero members — assign
+    # the stub members to 1/3 and 2/3, then ask for 3/3.
+    { printf 'scripts/fake-pass\t1/3\n'; printf 'scripts/fake-also-pass\t2/3\n'; } > "$_oic3/scripts/ci-oracle-lane-legs.tsv"
+    ( cd "$_oic3" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=3/3 GITHUB_OUTPUT="$_oic3/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic3/vacleg.out" 2>&1
     _rc_vacleg=$?
     check_true "G4 legs a leg owning zero members fails closed" "$(rc_of test "$_rc_vacleg" -ne 0)"
+    check_contains "G4 legs the vacuous leg names the zero-member arm" "$(cat "$_oic3/vacleg.out")" "zero manifest members"
     _oic2="$_oic-nofile"
     assert_fixture_dir "$_oic2"
     mkdir -p "$_oic2/scripts"
@@ -1373,11 +1444,16 @@ PYX
     ( cd "$_oic2" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=1/2 GITHUB_OUTPUT="$_oic2/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic2/nofile.out" 2>&1
     _rc_nofile=$?
     check_true "G4 legs a missing legs file fails closed" "$(rc_of test "$_rc_nofile" -ne 0)"
+    check_contains "G4 legs the missing file names the legs-file arm" "$(cat "$_oic2/nofile.out")" "legs file"
     { printf 'scripts/fake-pass\ttrue\n'; printf 'scripts/fake-stray\ttrue\n'; } > "$_oic2/scripts/ci-oracle-lane-suites.txt"
     cp "$_oic/scripts/ci-oracle-lane-legs.tsv" "$_oic2/scripts/"
     ( cd "$_oic2" && env -i PATH=/usr/bin:/bin ORACLE_ONLY=true ORACLE_LEG=1/2 GITHUB_OUTPUT="$_oic2/gh.out" bash --noprofile --norc -eo pipefail "$OIC_BODY" ) > "$_oic2/stray.out" 2>&1
     _rc_stray=$?
     check_true "G4 legs an unassigned manifest member fails closed" "$(rc_of test "$_rc_stray" -ne 0)"
+    check_contains "G4 legs the unassigned member names its arm" "$(cat "$_oic2/stray.out")" "no legs-file row"
+    check_eq "G4 legs the failing-member leg ran only up to the failure" "$(grep -c '── oracle-index-check:' "$_oic/fail.out")" "1"
+    check_contains "G4 legs leg 1/2 names the member it ran" "$(cat "$_oic/pass.out")" "scripts/fake-also-pass"
+    check_eq "G4 legs leg 1/2 never saw the leg-2 failing member" "$(grep -c 'fake-fail' "$_oic/pass.out")" "0"
   else
     fail "G4 row4 the oracle-index-check manifest step could not be extracted from ci.yml ($(head -c 120 "$SANDBOX/oic.err"))"
   fi

@@ -10,7 +10,7 @@ date: 2026-11-05
 **Decision record:** ADR-276, `## Amendment 2026-11-05 (oracle-only fast lane, #12156)` (rulings:
 `knowledge-base/project/specs/feat-one-shot-12156-oracle-fast-lane/decision-challenges.md`, T1–T6 + O1/O2)
 **Tooling:** `scripts/ci-oracle-lane.sh` (the driver), `scripts/ci-oracle-lane-suites.txt` (the validation
-manifest), `scripts/ci-oracle-lane.test.sh` (the sentinel)
+manifest), `scripts/ci-oracle-lane-legs.tsv` (the K=5 leg assignment), `scripts/ci-oracle-lane.test.sh` (the sentinel)
 
 ## What the lane is
 
@@ -68,7 +68,8 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
   outside {000000,100644,100755}, or a non-printable/`::`/`,`-containing path.
 - `excluded` — a committed exclusion-list path (`scripts/ci-pr-affected-replay.py`, `scripts/test-all.sh`,
   `plugins/soleur/scripts/lint-ratchet.py`, `.github/workflows/ci.yml`, other `scripts/lib/**`, and the lane's own
-  machinery: `scripts/ci-oracle-lane.sh`, `scripts/ci-oracle-lane.test.sh`, `scripts/ci-oracle-lane-suites.txt`).
+  machinery: `scripts/ci-oracle-lane.sh`, `scripts/ci-oracle-lane.test.sh`, `scripts/ci-oracle-lane-suites.txt`,
+  `scripts/ci-oracle-lane-legs.tsv`).
 - `outside_surface` — a path outside the surface.
 - `extent_parse` / `extent_miss` — the `AFFECTED_*_PATHS` extent walk failed on a base/head image, or a
   `test-affected-paths.sh` hunk line fell outside extents, was a non-data line (the element grammar rejects

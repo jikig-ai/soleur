@@ -2204,7 +2204,8 @@ jobs:
   # job classifies a pull_request or merge_group diff as `oracle_only` — every changed path is oracle data — the five
   # heavy `test` legs may skip, and THIS leg is what keeps the oracle's own edit gated: it runs the committed
   # oracle-validation manifest (scripts/ci-oracle-lane-suites.txt — the AFFECTED_*_PATHS census authority, the
-  # affected-index derive/replay batteries and the selection-lever sentinels) serially, propagating exit codes. On a
+  # affected-index derive/replay batteries and the selection-lever sentinels) across K=5 matrix legs, each leg
+  # running its ci-oracle-lane-legs.tsv-assigned members serially and propagating exit codes. On a
   # merge_group it is the check that blocks a malformed oracle edit from reaching main under the reduced battery.
   # Off the lane it prints not-oracle-only and exits 0 inside a minute.
   #
@@ -2273,11 +2274,16 @@ jobs:
           # not exist on a non-oracle runner, and unset/malformed can only mean matrix env
           # wiring drifted — a leg that cannot name itself reds rather than silently running
           # all or no members (the SCRIPTS_SHARD malformed-validator doctrine).
-          _leg_k="${ORACLE_LEG%/*}"; _leg_n="${ORACLE_LEG#*/}"
           _leg_bad=""
-          case "${ORACLE_LEG:-}" in */*) ;; *) _leg_bad=1 ;; esac
-          case "${ORACLE_LEG:-}" in */*/*) _leg_bad=1 ;; esac
-          case "${_leg_k}${_leg_n}" in ''|*[!0-9]*) _leg_bad=1 ;; esac
+          case "${ORACLE_LEG:-}" in
+            */*) _leg_k="${ORACLE_LEG%/*}"; _leg_n="${ORACLE_LEG#*/}" ;;
+            *) _leg_bad=1 ;;
+          esac
+          if [ -z "$_leg_bad" ]; then
+            case "$ORACLE_LEG" in */*/*) _leg_bad=1 ;; esac
+            case "$_leg_k" in ''|*[!0123456789]*) _leg_bad=1 ;; esac
+            case "$_leg_n" in ''|*[!0123456789]*) _leg_bad=1 ;; esac
+          fi
           if [ -z "$_leg_bad" ] && { [ "$_leg_k" -lt 1 ] || [ "$_leg_k" -gt "$_leg_n" ]; }; then _leg_bad=1; fi
           if [ -n "$_leg_bad" ]; then
             printf '::error title=oracle-index-check::ORACLE_LEG unset or malformed (%s) — matrix env wiring drifted\n' "${ORACLE_LEG:-empty}"
@@ -2299,6 +2305,21 @@ jobs:
             assigned="$(awk -F'\t' -v l="$label" '!/^[[:space:]]*#/ && NF && $1==l{print $2; exit}' "$legs")"
             if [ -z "$assigned" ]; then
               printf '::error title=oracle-index-check::manifest member %s has no legs-file row — an unassigned member cannot silently skip\n' "$label"
+              exit 1
+            fi
+            # A non-empty but malformed assignment must NOT read as "another leg's member" — validate the same
+            # k/N grammar with n == this matrix's K, else a bogus or foreign-leg value silently skips the member
+            # on EVERY leg while all legs stay green (the check_legs sentinel is the pre-merge backstop; this arm
+            # keeps the runtime self-consistent with the fail-closed doctrine).
+            _a_bad=""
+            _a_k="${assigned%/*}"; _a_n="${assigned#*/}"
+            case "$assigned" in */*) ;; *) _a_bad=1 ;; esac
+            case "$assigned" in */*/*) _a_bad=1 ;; esac
+            case "$_a_k" in ''|*[!0123456789]*) _a_bad=1 ;; esac
+            case "$_a_n" in ''|*[!0123456789]*) _a_bad=1 ;; esac
+            if [ -z "$_a_bad" ] && { [ "$_a_k" -lt 1 ] || [ "$_a_k" -gt "$_a_n" ] || [ "$_a_n" != "$_leg_n" ]; }; then _a_bad=1; fi
+            if [ -n "$_a_bad" ]; then
+              printf '::error title=oracle-index-check::legs-file row for %s carries malformed leg value (%s)\n' "$label" "$assigned"
               exit 1
             fi
             if [ "$assigned" != "$ORACLE_LEG" ]; then
@@ -2516,7 +2537,7 @@ jobs:
                 # The comment above claims the classifier is correct whether a
                 # timed-out leg reads `cancelled` or `failure`; this arm is where
                 # that claim has to be honoured.
-                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" ]]; then
+                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" || "$shard" == "oracle-index-check" ]]; then
                   # A matrix rollup: "the job log" is not one log.
                   echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions." >&2
                 else

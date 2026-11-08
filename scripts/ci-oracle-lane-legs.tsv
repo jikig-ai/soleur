@@ -15,6 +15,8 @@
 # a member's measured duration moves any leg's projected total within ~5 min of the bound,
 # or when the manifest gains a member. The manifest stays label<TAB>argv (2 fields) — leg
 # assignment lives ONLY here; do not add a manifest column (check_manifest MEMBER-BAD-FIELDS).
+# regen: manual — repack by editing this file from scripts/suite-durations.tsv totals (see
+# Provenance); check_legs() pins legs ≡ manifest parity, matrix coverage and per-leg budget.
 plugins/soleur/test/ci-pr-affected-replay-a	1/5
 scripts/test-all-affected-d	2/5
 scripts/test-affected-kb-consumers	2/5
