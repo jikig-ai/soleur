@@ -25,3 +25,11 @@
 ## Operator Constraints
 
 - constraint: start the work on both in one PR
+
+## WORK phase (this session)
+- Implemented plan phases 1-4: merge_group_runs_on check-suites→check-runs join (queue-branch github-actions only), ejections union + queue-event oracle + expected_units in ejections-window.json, check_complete expected_units fallback; FAIL_LINE widened to ([ -~]+?), mid-termination + runner-comms-loss signatures into the unsettled set, per-leg identical-tree witness (attempt + same-sha sibling) with unsettled_legs/unsettled_detail recorded.
+- Test suite: +14 mutate sites (DECLARED_TOTAL 485→499), FLOOR_ASSERTIONS 1135→1178, registered --rows re-split 1-167/168-333/334-499; R5 corroboration window, R6 classifier window, R7 sibling-witness collect scenarios.
+- Runbook §4 rewritten: built semantics + the THREE documented residuals.
+- ratchet rc=0. Arms a (167) and b (166) clean; arm-c rerun after one mid-run-edit artifact.
+- Live smoke rc=0: 20 commits corroborated, merge_group_on_landed=20, 0 dropped runs, oracle found one REAL shortfall (pr-12410: 2 adds vs 1 observed branch) -> expected_units=8, aggregate rc=0. Receipt: receipts/s4-corrob-smoke.md.
+- Full 300-commit §4 evidence rerun + GO/NO-GO re-ruling remain out of scope (post-merge sequencing).

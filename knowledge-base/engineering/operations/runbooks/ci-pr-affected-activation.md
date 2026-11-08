@@ -160,12 +160,23 @@ Read the output with these limits in mind (they are in the receipt too):
   (`knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/cause.md`).
 - The ejections window listing `?event=merge_group&created=…` is the same GitHub search-index class as
   `?head_sha=`, and its `total_count` self-check cannot see a dropped run — the count is index-computed from
-  the same listing. A refused run the index dropped is absent from both the ejections file and the window
-  count, so the refused-merge_group population can be silently under-counted; the ejections are the only
-  population that can hold an escape, so an under-count biases the cp95 bound toward a false GO. Tracked as
-  #12428; recorded-not-built per the 2026-11-08 CTO ruling (row 4 of
-  `knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/decision-challenges.md`),
-  because no per-sha non-search read exists to pin a window listing against.
+  the same listing. Built per the 2026-11-08 CTO ruling (#12428): `ejections` corroborates the listing two
+  ways. (i) The **landed-sha arm** enumerates every merge_group ci.yml run whose `head_sha` is a landed
+  first-parent commit of the window through the commit-keyed `commits/{sha}/check-suites` → `check-runs`
+  join (github-actions suites on `gh-readonly-queue/` branches only, `total_count == seen` guarded), then
+  unions the runs the index dropped into the population — a corroborated `success` is a `by_pr`/cleared()
+  witness only (never a unit, or n would inflate), a corroborated non-success is a refused unit marked
+  `runs_via=check-runs-window`. (ii) The **queue-event oracle** bounds the refused count below per PR:
+  in-window `added_to_merge_queue` issue-timeline events vs distinct `pr-N-*` `head_branch` names observed;
+  each shortfall and each failed corroboration/timeline read is one `not-evaluable` synthetic unit
+  (`queue-oracle:`/`corroboration-read:`/`queue-oracle-read:`). `ejections-window.json` records
+  `corroborated`, `queue_oracle` and `expected_units`, and `aggregate` refuses (rc 2) a unit count that
+  does not match — old manifests still check against `refused`. THREE recorded residuals remain: an
+  `added_to_merge_queue` entry removed before the queue spawned a run over-counts expected (the
+  conservative worst_case direction); a queued PR whose EVERY run the index dropped is invisible to both
+  arms (events cannot name a branch nobody listed); and at a window edge `observed` can exceed in-window
+  adds — a pre-window add whose run landed in-window — so `max(0, added - observed)` can mask a partial
+  index drop there (CTO AMEND: the bound is necessary, not sufficient).
 
 ## 5. The four criteria and the verdict
 
