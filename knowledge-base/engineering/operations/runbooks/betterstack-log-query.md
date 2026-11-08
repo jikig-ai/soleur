@@ -1592,7 +1592,9 @@ One WARN line per WebFetch result in sessions with web egress and the `untrusted
 `contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionIdHash`. Never
 content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it. `sessionIdHash` is `hashUserId` of
 the conversation id (the app's `conversationId`, passed verbatim, no trimming or re-casing), the same keyed hash as `workspaceIdHash`. With the
-pepper unset it is the literal `pepper_unset` for every session, so per-session lookup is then impossible (a miss is not "no such session").
+pepper unset it is the literal `pepper_unset` for every session, so per-session lookup is then impossible (a filter on that literal matches every
+session, and a miss is not "no such session"). A pepper rotation changes the hash of every id, so lines emitted before the rotation need the
+previous pepper.
 To find one session, follow `recover-userid-from-pino-stdout.md` Flow 1 steps 2 and 3 with the conversation id in place of `$UUID`,
 including its `prd`-config check (the helper needs the `prd` config for the pepper, in addition to the `prd_terraform` read credentials); its
 `jq` filter already matches `.sessionIdHash`. Never put the pepper on a command line. Lines emitted by builds from before this change was
