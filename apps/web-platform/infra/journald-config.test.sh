@@ -306,7 +306,7 @@ assert "HKM-2: the unit sets SyslogIdentifier=host-kernel-marker (anchored; the 
 assert "HKM-3: vector.toml carries the identifier in exactly three arrays (one include, two excludes)" \
   "[[ \"\$(grep -cE '^[[:space:]]*\"host-kernel-marker\",?\$' '$SCRIPT_DIR/vector.toml')\" -eq 3 ]]"
 assert "HKM-4: 'systemd' is still absent from every SYSLOG_IDENTIFIER array (the marker joined Source 4 by its own tag, never via the PID-1 identifier)" \
-  "! sed 's/#.*\$//' \"$SCRIPT_DIR/vector.toml\" | grep -qE '^[[:space:]]*\"systemd\",?\$'"
+  "! grep -qE '^[[:space:]]*\"systemd\",?\$' < <(sed 's/#.*\$//' \"$SCRIPT_DIR/vector.toml\")"
 
 # --- #6617c (A5): the dedicated-host tag trio, asserted on BOTH sides of the join ---
 # Source 4's include_matches.SYSLOG_IDENTIFIER is sd_journal_add_match EXACT-VALUE equality,
