@@ -11,7 +11,7 @@
  * stands in for counsel on the operator's instruction (ruling persisted in
  * knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md). The CPO agent signed off the deck on
  * 2026-11-08 (`signOff.cpo`; the ruling is in knowledge-base/project/specs/feat-one-shot-founder-acceptance-followups-12365/decision-challenges.md).
- * CPO signed 2026-11-08; human lawyer review owed: no human lawyer has reviewed it, so `PROVISIONAL` stays true. The two notices below are carried WORD FOR WORD from
+ * Human lawyer review is still owed: no human lawyer has reviewed it, so `PROVISIONAL` stays true. The two notices below are carried WORD FOR WORD from
  * knowledge-base/legal/audits/2026-11-founder-legal-acceptance-dsar-and-notice-note.md, sections (c) and (c-2), and carry
  * the ruled period. `test/legal-acceptance/legal-copy.test.ts` pins the notices to that file byte for byte, pins
  * `PROVISIONAL` and `signOff`, pins every kind wording word for word, and fails on any string that claims more than

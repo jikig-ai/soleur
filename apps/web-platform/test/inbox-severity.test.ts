@@ -251,4 +251,28 @@ describe("mergeAndRank - legal rows", () => {
     expect(part.needsYouVisible.map((m) => m.id)).toEqual(["founder-acceptance-record"]);
     expect(part.goodToKnow.map((m) => m.id)).toEqual(["other-text"]);
   });
+
+  it("a pending legal row is ALWAYS visible: 25 newer action_required items cannot push it into 'N more' (the cap exemption)", () => {
+    // The legal row sorts by the registry version (2026-11-07); every inbox row below is newer, so it ranks LAST in NEEDS YOU.
+    const newer = Array.from({ length: NEEDS_YOU_CAP + 5 }, (_, i) =>
+      inbox({ id: `n${i}`, severity: "action_required", created_at: `2026-12-${String((i % 28) + 1).padStart(2, "0")}T10:00:00.000Z` }),
+    );
+    const merged = mergeAndRank(newer, [], [legalRow()]);
+    expect(merged[merged.length - 1].kind).toBe("legal");
+
+    const { needsYouVisible, needsYouOverflow } = partitionForDisplay(merged);
+    expect(needsYouVisible.some((m) => m.kind === "legal" && m.id === "founder-acceptance-record")).toBe(true);
+    // The legal row takes its share of the cap: 19 others + 1 legal = 20 visible; 6 overflow.
+    expect(needsYouVisible).toHaveLength(NEEDS_YOU_CAP);
+    expect(needsYouOverflow).toBe(newer.length - (NEEDS_YOU_CAP - 1));
+  });
+
+  it("an answered legal row (FYI) is not affected: it is GOOD TO KNOW and never in the NEEDS YOU cap", () => {
+    const newer = Array.from({ length: NEEDS_YOU_CAP + 1 }, (_, i) => inbox({ id: `n${i}`, severity: "action_required" }));
+    const merged = mergeAndRank(newer, [], [legalRow({ state: "accepted", severity: "info", outstanding: false })]);
+    const part = partitionForDisplay(merged);
+    expect(part.needsYouVisible).toHaveLength(NEEDS_YOU_CAP);
+    expect(part.needsYouOverflow).toBe(1);
+    expect(part.goodToKnow.map((m) => m.kind)).toEqual(["legal"]);
+  });
 });

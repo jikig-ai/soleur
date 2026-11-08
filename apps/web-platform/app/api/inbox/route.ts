@@ -23,7 +23,7 @@ import { loadLegalInboxRows } from "@/server/legal-acceptance/inbox-rows";
  * co-Owners). A source-grep gate (test) asserts no createServiceClient under
  * app/api/inbox/**.
  *
- * Founder legal texts (Ref #12197): for the ACTIVE view only, `loadLegalInboxRows` adds one derived row per declared legal text
+ * Founder legal texts (Ref #12197): for the ACTIVE view only (read concurrently with the other sources), `loadLegalInboxRows` adds one derived row per declared legal text
  * behind `isLegalSurfaceEnabled` (flag AND founder). It reads through THIS request's user-context client (RLS) and never
  * throws: a failure omits the legal rows, reports pageReadFailed, and the other items still return 200.
  *
@@ -44,6 +44,11 @@ async function getHandler(req: Request, user: VerifiedUser) {
 
   const supabase = await createClient();
 
+  // The archived view never carries a legal row (it has no archive state). For the active view the legal read starts NOW, before
+  // the two source reads and the enrichment, and is awaited after them: it is independent of both, and it never rejects (the
+  // loader gates, reports and returns [] on any failure), so an early 500 below leaves no unhandled rejection behind.
+  const legalRowsPromise = archived ? Promise.resolve([]) : loadLegalInboxRows(supabase, user.id);
+
   try {
     const { inboxRows, emailRows } = await fetchInboxSources(supabase, {
       archived,
@@ -53,8 +58,7 @@ async function getHandler(req: Request, user: VerifiedUser) {
       supabase as unknown as Parameters<typeof enrichApprovalInboxRows>[0],
       inboxRows,
     );
-    // The archived view never carries a legal row (it has no archive state); the loader gates and never throws.
-    const legalRows = archived ? [] : await loadLegalInboxRows(supabase, user.id);
+    const legalRows = await legalRowsPromise;
     return NextResponse.json({ items: mergeAndRank(enriched, emailRows, legalRows) });
   } catch (error) {
     // No PII: never log sender/subject/title — only the pseudonymous id.

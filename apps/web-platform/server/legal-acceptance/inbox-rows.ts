@@ -14,18 +14,23 @@
  *     depth on top of RLS.
  *   - Only `pending` is `action_required` (and outstanding). Every other state, `expired` included, is `info`.
  *   - Never throws. A failed gate, a failed or malformed read, or an unreadable registry omits the legal rows and reports
- *     `pageReadFailed` (`read: legal_acceptance_inbox`); the other inbox items are unaffected. Recorded, not paged (#12195).
+ *     `pageReadFailed` (`read: legal_acceptance_inbox`, plus a static `step`: gate | registry | read | shape | state); the other
+ *     inbox items are unaffected. Recorded, not paged (#12195).
+ *   - The registry is read PER DECLARED KEY with `getLegalText`, never with `loadLegalTexts`: one malformed or missing sibling
+ *     text loses only its own row (and reports `pageReadFailed` with `step: registry` and its key), it cannot take every legal row
+ *     down. A registry text with no declared kind is left out and reported (`kindUndeclared`, `tags.key`), as the card pages do.
  *
  * The payload carries `{key, label, version, validUntil, state}` and the derived severity: no text hash, no note, no
  * timestamp, no account id.
  */
 
+import { readdirSync } from "node:fs";
 import { deriveLegalCardState } from "@/lib/approval-card-state";
 import type { LegalInboxRowData } from "@/lib/inbox-severity";
 import { LEGAL_TEXT_KIND, legalDisplayLabel, legalTextKind, type LegalTextKind } from "@/lib/legal-acceptance-copy";
 import { isLegalChoice, type LegalChoiceWire } from "@/lib/legal-acceptance-wire";
 import { reportLegalOp } from "@/server/approval/ops";
-import { loadLegalTexts, type LegalTextEntry } from "@/server/legal-acceptance/canonical";
+import { KEY_RE, TEXTS_DIR, getLegalText, type LegalTextEntry } from "@/server/legal-acceptance/canonical";
 import { isLegalSurfaceEnabled } from "@/server/legal-acceptance/surface";
 
 /** The columns read from `legal_acceptance`. Deliberately NOT `LEGAL_ROW_COLUMNS` (which includes the Request-changes note). */
@@ -47,10 +52,22 @@ interface LegalInboxClient {
 
 export interface LegalInboxOptions {
   now?: Date;
-  /** Test seam: the registry. */
-  texts?: () => Map<string, LegalTextEntry>;
+  /** Test seam: read ONE registry text (default `getLegalText`, which throws for a missing or malformed file). */
+  getText?: (key: string) => LegalTextEntry;
+  /** Test seam: every key in the registry (default: a tolerant listing of the texts directory; it parses nothing). */
+  listKeys?: () => string[];
   /** Test seam: the declared kinds. */
   declared?: Readonly<Record<string, LegalTextKind>>;
+}
+
+/** Where the single catch stopped. Static labels only (an enum in Sentry `extra`, never text from the store). */
+type InboxStep = "gate" | "registry" | "read" | "shape" | "state";
+
+/** The `<key>.md` file names in the texts directory that are valid keys. Parses nothing, so a malformed sibling cannot throw here. */
+function listRegistryKeys(): string[] {
+  return readdirSync(TEXTS_DIR)
+    .filter((f) => f.endsWith(".md") && KEY_RE.test(f.slice(0, -3)))
+    .map((f) => f.slice(0, -3));
 }
 
 interface StoredDecision {
@@ -75,17 +92,34 @@ export async function loadLegalInboxRows(
   userId: string,
   opts: LegalInboxOptions = {},
 ): Promise<LegalInboxRowData[]> {
+  let step: InboxStep = "gate";
   try {
     if (!(await isLegalSurfaceEnabled(userId))) return [];
 
+    step = "registry";
     const declared = opts.declared ?? LEGAL_TEXT_KIND;
-    const entries = [...(opts.texts ?? loadLegalTexts)().values()].sort((a, b) => a.key.localeCompare(b.key));
-    const declaredEntries = entries.flatMap((e) => {
-      const kind = legalTextKind(e.key, declared);
-      return kind === null ? [] : [{ entry: e, kind }];
-    });
+    const readText = opts.getText ?? getLegalText;
+    const declaredEntries: { entry: LegalTextEntry; kind: LegalTextKind }[] = [];
+    for (const key of Object.keys(declared).sort((a, b) => a.localeCompare(b))) {
+      const kind = legalTextKind(key, declared);
+      if (kind === null) continue;
+      try {
+        declaredEntries.push({ entry: readText(key), kind });
+      } catch (err) {
+        // One malformed or missing sibling loses only its own row.
+        reportLegalOp("pageReadFailed", err, { userId, extra: { read: LEGAL_INBOX_READ_LABEL, step, key } });
+      }
+    }
+    try {
+      for (const key of (opts.listKeys ?? listRegistryKeys)()) {
+        if (legalTextKind(key, declared) === null) reportLegalOp("kindUndeclared", null, { userId, tags: { key } });
+      }
+    } catch (err) {
+      reportLegalOp("pageReadFailed", err, { userId, extra: { read: LEGAL_INBOX_READ_LABEL, step } });
+    }
     if (declaredEntries.length === 0) return [];
 
+    step = "read";
     const { data, error } = await (supabase as LegalInboxClient)
       .from("legal_acceptance")
       .select(LEGAL_INBOX_COLUMNS)
@@ -95,9 +129,11 @@ export async function loadLegalInboxRows(
         declaredEntries.map((d) => d.entry.key),
       );
     if (error) throw error;
+    step = "shape";
     const decisions = parseDecisions(data);
     if (decisions === null) throw new Error("legal acceptance inbox read returned an unrecognised shape");
 
+    step = "state";
     const now = opts.now ?? new Date();
     return declaredEntries.map(({ entry, kind }) => {
       const state = deriveLegalCardState({
@@ -122,8 +158,8 @@ export async function loadLegalInboxRows(
     });
   } catch (err) {
     // The other inbox items still return; the founder sees no legal row and no hint (Sentry is the signal, and the card page
-    // stays reachable by URL).
-    reportLegalOp("pageReadFailed", err, { userId, extra: { read: LEGAL_INBOX_READ_LABEL } });
+    // stays reachable by URL). `step` says where it stopped; it is a static label.
+    reportLegalOp("pageReadFailed", err, { userId, extra: { read: LEGAL_INBOX_READ_LABEL, step } });
     return [];
   }
 }

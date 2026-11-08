@@ -88,8 +88,9 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
       })
     : props.state;
 
-  // The Inbox row and the nav badge share one SWR key and stay mounted while the founder is on this page: refresh it once a
-  // decision is recorded so the row turns FYI and the badge clears without a reload (Ref #12197). Only a recorded decision calls this.
+  // The nav badge (mounted in the dashboard shell, so it stays mounted on this page) and the Inbox list share one SWR key:
+  // refresh it once a decision is recorded so the badge clears without a reload (Ref #12197). The Inbox list itself
+  // (InboxSurface) is mounted only on the Inbox page, so it re-reads that key when the founder opens it. Only a recorded decision calls this.
   const { mutate } = useSWRConfig();
   const onRecorded = useCallback(
     (r: LegalRowFacts, already: boolean) => {

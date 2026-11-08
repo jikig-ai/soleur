@@ -29,6 +29,26 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: (...args: unknown[]) => reportSilentFallback(...args),
 }));
 
+// The founder-legal surface is ON for this user, and a legal_acceptance read would succeed: if the tool ever asked for legal rows
+// they would be derived (pending), so "never carries a legal row" cannot pass by the gate being closed.
+const isLegalSurfaceEnabled = vi.fn(async (_userId: string) => true);
+vi.mock("@/server/legal-acceptance/surface", () => ({
+  isLegalSurfaceEnabled: (userId: string) => isLegalSurfaceEnabled(userId),
+}));
+const legalReads: string[] = [];
+function tenantWithFounderLegalRows() {
+  const b: Record<string, unknown> = {};
+  b.select = () => b;
+  b.eq = () => b;
+  b.in = () => Promise.resolve({ data: [], error: null });
+  return {
+    from: (t: string) => {
+      legalReads.push(t);
+      return b;
+    },
+  };
+}
+
 import { buildInboxTools } from "@/server/inbox-tools";
 
 type ToolStub = {
@@ -79,7 +99,9 @@ const NATIVE: InboxItemRowData = {
 describe("inbox_list agent tool (agent-native parity)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getFreshTenantClient.mockResolvedValue({});
+    legalReads.length = 0;
+    isLegalSurfaceEnabled.mockResolvedValue(true);
+    getFreshTenantClient.mockResolvedValue(tenantWithFounderLegalRows());
     fetchInboxSources.mockResolvedValue({
       inboxRows: [NATIVE],
       emailRows: [STATUTORY],
@@ -98,11 +120,20 @@ describe("inbox_list agent tool (agent-native parity)", () => {
     expect(items.map((i) => i.id)).toContain("native");
   });
 
-  it("never carries a legal row: the agent output is built from the two-source merge only (the founder's legal rows are not agent data)", async () => {
-    const res = await getListTool().handler({});
+  it("never carries a legal row, even with the founder surface ON and a pending text: the founder's legal rows are not agent data", async () => {
+    const res = await getListTool("founder-id").handler({});
     const items = JSON.parse(res.content[1].text) as Array<{ kind: string }>;
     expect(items.map((i) => i.kind).sort()).toEqual(["email", "inbox"]);
     expect(JSON.stringify(items)).not.toContain("legal_acceptance");
+    // Neither the gate nor the table was touched: the tool does not ask for legal rows at all.
+    expect(isLegalSurfaceEnabled).not.toHaveBeenCalled();
+    expect(legalReads).toEqual([]);
+  });
+
+  it("tells the agent the legal rows are not its data, and where to send the founder when the badge shows more", () => {
+    const t = buildInboxTools({ userId: "u1" }).find((x) => (x as unknown as ToolStub).name === "inbox_list") as unknown as { description: string };
+    expect(t.description).toMatch(/legal-text rows are deliberately not agent data/i);
+    expect(t.description).toMatch(/badge shows more than this list.*open the Inbox/i);
   });
 
   it("passes archived through to the shared fetch helper", async () => {

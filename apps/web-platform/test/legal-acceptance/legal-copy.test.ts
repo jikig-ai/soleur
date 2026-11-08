@@ -395,30 +395,12 @@ describe("terms wording is true for a first-ever text and for an update (#12366 
   });
 });
 
-describe("the acknowledgement kind is byte-identical in behavior (the founder's card is untouched)", () => {
+describe("the acknowledgement kind renders exactly the pinned set of strings (WORDING.acknowledgement): none added, none dropped, none changed", () => {
   it("the full set of strings it can render, with the label L and the version V, is exactly the pinned set", () => {
+    // WORDING.acknowledgement is the one literal pin (also checked field by field above). An inline snapshot of the same
+    // strings would only repeat it, and `vitest -u` regenerates a snapshot silently, so it is not kept.
     const rendered = collect(copy.LEGAL_KIND_COPY.acknowledgement, [["L", "V"]]).sort();
     expect(rendered).toEqual(Object.values(WORDING.acknowledgement).sort());
-    expect(rendered).toMatchInlineSnapshot(`
-      [
-        "Acknowledge "L", version V. Nothing is recorded until your code is checked.",
-        "Acknowledge "L"?",
-        "Acknowledged",
-        "Answering is not available yet. Nothing has been acknowledged.",
-        "Nothing changed. Your No is recorded and the text stays as it is. This answer is final: to change it, your team sends a new version of the text.",
-        "Nothing has been acknowledged.",
-        "Nothing is acknowledged by saving this. Your note is saved with your decision.",
-        "Nothing is acknowledged. Your note is saved with your decision. This answer is final: to change it, your team sends a new version of the text.",
-        "Nothing was acknowledged. Ask your team to send it again if you still want it.",
-        "You acknowledged "L"",
-        "You acknowledged it",
-        "You said No to "L"",
-        "Your No is recorded as your answer. The text stays as it is and nothing is acknowledged. Final once recorded.",
-        "Your Yes is recorded as your acknowledgement that you were shown this text. That is all it means: it is not consent and it agrees to nothing. Clicking again does not undo it. To change it later you would ask for a new version.",
-        "Your Yes is recorded as your acknowledgement that you were shown this version. That is all it means: it is not consent and it agrees to nothing. To change this later, ask for a new version.",
-        "Your note is saved with your decision. Nothing is acknowledged by asking for changes. Final once recorded.",
-      ]
-    `);
   });
 });
 

@@ -13,21 +13,10 @@
 import { usePendingRouter } from "@/hooks/use-pending-router";
 import { LEGAL_KEY_RE } from "@/lib/legal-acceptance-wire";
 import { legalInboxWords } from "@/lib/legal-inbox-copy";
-import type { InboxItemSeverity, MergedInboxItem } from "@/lib/inbox-severity";
+import type { MergedInboxItem } from "@/lib/inbox-severity";
+import { CONTAINER_CLASS, DOT_CLASS } from "@/components/inbox/inbox-item-row";
 
 export type LegalInboxItem = Extract<MergedInboxItem, { kind: "legal" }>;
-
-const DOT_CLASS: Record<InboxItemSeverity, string> = {
-  action_required: "bg-red-500",
-  attention: "bg-amber-500",
-  info: "bg-soleur-text-muted",
-};
-
-const CONTAINER_CLASS: Record<InboxItemSeverity, string> = {
-  action_required: "border-red-500/30 bg-red-500/[0.06] hover:bg-red-500/[0.1]",
-  attention: "border-amber-500/30 bg-amber-500/[0.06] hover:bg-amber-500/[0.1]",
-  info: "border-soleur-border-default bg-soleur-bg-surface-1/50 hover:bg-soleur-bg-surface-2/50",
-};
 
 /** Where the row leads, or null for a key that is not registry-shaped. */
 export function legalInboxHref(key: string): string | null {

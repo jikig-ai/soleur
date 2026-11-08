@@ -1,7 +1,10 @@
 /**
- * AC9 (Ref #12197): after a recorded decision the Inbox row turns FYI and the nav dot clears WITHOUT a reload. The nav badge
- * stays mounted while the founder is on the card page and revalidates only on focus, so the card refreshes the shared inbox key
- * itself when (and only when) a decision is recorded.
+ * AC9 (Ref #12197), the card's half: a recorded decision asks SWR to revalidate the shared inbox key, `swrKeys.inbox("active")`,
+ * and a refused one does not. The nav badge (mounted in the dashboard shell) revalidates only on focus, so without this call it
+ * would keep showing the outstanding dot until the founder refocused the window. That the badge and the Inbox list then turn
+ * FYI is SWR's own behavior for that key (they read it through `fetchMergedInbox`), covered where the badge and surface are
+ * tested (`inbox-nav-badge.test.tsx`, `inbox-surface-legal.test.tsx`); this file pins only that `mutate` is called, with that key,
+ * once, and only after a recorded decision.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
@@ -44,7 +47,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("a recorded decision refreshes the shared inbox key", () => {
+describe("the card revalidates the shared inbox key on a recorded decision, and only then", () => {
   it("refreshes swrKeys.inbox('active') once the decision is recorded", async () => {
     stubDecide({ body: { outcome: "recorded", choice: "decline", decidedAt: "2026-11-09T10:42:00Z" } });
     const user = userEvent.setup();
@@ -53,6 +56,7 @@ describe("a recorded decision refreshes the shared inbox key", () => {
     expect(h.mutate).not.toHaveBeenCalled(); // asking to confirm records nothing
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.decline.confirm }));
     await waitFor(() => expect(screen.getByText(LEGAL_COPY.declined.badge)).toBeInTheDocument());
+    expect(h.mutate).toHaveBeenCalledTimes(1);
     expect(h.mutate).toHaveBeenCalledWith(swrKeys.inbox("active"));
   });
 

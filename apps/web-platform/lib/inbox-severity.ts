@@ -1,9 +1,13 @@
 // Shared severity + merge contract for the unified inbox (feat-severity-ranked-inbox
-// #6007). The SINGLE source of truth consumed by:
+// #6007). The shared severity/merge contract consumed by:
 //   (a) GET /api/inbox (server route),
 //   (b) the inbox_list agent tool (agent-native parity AP-004),
 //   (c) the nav badge (must run the SAME clock/severity logic — a naive
 //       status='new' count would drift).
+// NOT a single source of truth for the founder's legal-text rows (Ref #12197):
+// the route and the nav badge (which reads the route) carry them; the agent
+// tool deliberately NEVER does (it calls mergeAndRank with two arguments and
+// never loads legal rows), so the badge can show more than the agent's list.
 //
 // PURE + client-safe: no server imports (no supabase, no pino). The DB fetch
 // lives in server/inbox-sources.ts; this module only ranks already-fetched rows.
@@ -105,7 +109,7 @@ export type MergedInboxItem =
       legal: Omit<LegalInboxRowData, "severity" | "outstanding">;
     };
 
-/** Visible NEEDS YOU cap (banner-blindness guard). Pinned statutory is exempt. */
+/** Visible NEEDS YOU cap (banner-blindness guard). Pinned statutory and an outstanding legal row are exempt (they count against it, never hidden by it). */
 export const NEEDS_YOU_CAP = 20;
 
 const SEVERITY_RANK: Record<InboxItemSeverity, number> = {
@@ -203,7 +207,12 @@ function toMergedLegal(row: LegalInboxRowData): MergedInboxItem {
   };
 }
 
-/** The ISO timestamp (or date) a row sorts by. A legal row has no event time; the registry's `version` is an ISO date. */
+/**
+ * The ISO timestamp (or date) a row sorts by. A legal row has no event time of its own, so it sorts by the registry's `version`
+ * (an ISO date, the day the text was published): a pending legal row therefore ranks by how NEW the text is among the other
+ * NEEDS YOU rows, and an old text can sit behind many newer action_required items. That is why `partitionForDisplay` exempts an
+ * outstanding legal row from the visible cap.
+ */
 function sortIso(m: MergedInboxItem): string {
   switch (m.kind) {
     case "email":
@@ -258,8 +267,11 @@ export function countOutstandingActionRequired(items: MergedInboxItem[]): number
 
 /**
  * Partition the merged list into the two UI groups and apply the visible
- * NEEDS YOU cap. Pinned (statutory) items are ALWAYS visible — only non-pinned
- * action_required rows overflow. Preserves the merged order within each group.
+ * NEEDS YOU cap. Pinned (statutory) items and an outstanding founder legal row
+ * are ALWAYS visible (a legal row sorts by the registry version date, so it can
+ * rank behind many newer items and must not fall into "N more") — only the
+ * other action_required rows overflow. Preserves the merged order within each
+ * group.
  */
 export function partitionForDisplay(items: MergedInboxItem[]): {
   needsYouVisible: MergedInboxItem[];
@@ -271,8 +283,15 @@ export function partitionForDisplay(items: MergedInboxItem[]): {
 
   const pinned = needsYou.filter((m) => m.pinned);
   const unpinned = needsYou.filter((m) => !m.pinned);
-  const room = Math.max(0, NEEDS_YOU_CAP - pinned.length);
-  const unpinnedVisible = unpinned.slice(0, room);
+  const isOutstandingLegal = (m: MergedInboxItem) => m.kind === "legal" && m.outstanding;
+  // The always-visible rows take their share of the cap first; the rest fill what is left, in merged order.
+  const room = Math.max(0, NEEDS_YOU_CAP - pinned.length - unpinned.filter(isOutstandingLegal).length);
+  let used = 0;
+  const unpinnedVisible = unpinned.filter((m) => {
+    if (isOutstandingLegal(m)) return true;
+    used += 1;
+    return used <= room;
+  });
   const needsYouOverflow = unpinned.length - unpinnedVisible.length;
 
   return {

@@ -196,7 +196,7 @@ describe("row-state transitions", () => {
     expect(screen.getByText("GOOD TO KNOW")).toBeTruthy();
   });
 
-  it("a replaced text (new hash, no answer for it) is a pending row for the new version", async () => {
+  it("a pending row shows the registry version it was derived for (the server turns a replaced text into a pending row for the new version; see inbox-rows.test.ts)", async () => {
     const item = legal("pending");
     if (item.kind !== "legal") throw new Error("fixture");
     item.legal.version = "2026-12-01";
