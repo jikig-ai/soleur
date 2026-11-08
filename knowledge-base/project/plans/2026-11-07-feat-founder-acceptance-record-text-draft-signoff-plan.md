@@ -496,6 +496,22 @@ Three seats (security, test design, data integrity) re-read the round-1 fixes. O
 | Data integrity P2-1, P2-2 | DSAR "Who can see it" and compliance-posture markers (append-only) |
 | Data integrity P3 | markers, the PA-40 cross-reference, the verbatim L2 strings in the ruling file; P3-1 and P3-2 (wording) accepted with no text change |
 
+### Final bounded hook patch (2026-11-08): the one verification pass over the rewritten barrier
+
+One verification pass re-drove the rewritten hook (about 480 command variants, stub `gh`). Every fix-round-1 item held. It found one P2 fail-open, one P2 false deny and eight P3 shapes. The patch below is the LAST hook-hardening round: the hook is a best-effort guardrail, server-side enforcement and the other merge sites are tracked in #12396, and no further hardening rounds are planned.
+
+| Finding | Disposition |
+|---|---|
+| P2-1: a nested double quote inside `"$(...)"` or a backtick span ended the outer span early, so `out="$(gh pr merge "7" --squash)"` was allowed | the walker scans a substitution to its matching `)` (nested quotes included) or backtick, queues the body, and an unbalanced span fails closed while any PR is parked |
+| P2-2: an escaped backtick or `\$(` inside double quotes (markdown code spans in a commit or PR text) was denied | a backslash pair is literal text and is never read as a substitution |
+| P3-1 wrapper basename (`/bin/bash -c`, `/usr/bin/env gh`) | the prefix test accepts the word or its basename |
+| P3-3 `--disable-auto` as the value of a value-taking flag | one pass skips flag values before it looks for the disarm flag |
+| P3-4 leading-zero PR number (`012342`) | normalised before the label read |
+| P3-7 GraphQL mutation names matched inside REST body fields; a query read from a file or stdin unreadable | names are read only for a `graphql` call; `query=@file` and `--input` hold while any PR is parked |
+| P3-8 `xargs` before a gh write (targets come from stdin) | held while any PR is parked; `xargs gh pr view` (a read) is not held |
+| P3-9 `gh pr merge N --help` | allowed |
+| P3-2, P3-5, P3-6, P3-10 (unlisted or option-valued wrappers, a shell fed from a heredoc or `<(...)`, ANSI-C quoting with an escaped quote, the raw 200-character incident snippet) | ACCEPTED LIMITS, stated in the hook header and pinned as deliberate allows in the test suite; superseded by #12396 |
+
 ## Observability
 
 No new route or infrastructure. Server-side code added in this PR: the founder gate (`server/legal-acceptance/surface.ts`) and the null-kind guard in `guardLegalRequest` (`hr-observability-as-plan-quality-gate`, `hr-observability-layer-citation`). The runtime signals, all through `reportLegalOp` (pino line mirrored to Sentry, feature `legal-acceptance`):
