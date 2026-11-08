@@ -308,16 +308,16 @@ Run each as its own Bash call (read the exit code of each; no pipes that mask it
 
 ### Pre-merge (PR)
 
-- [ ] `git diff -U0 origin/main -- .github/workflows/merge-queue-stall-check.yml` shows exactly one removed and one added line, and the only character difference is the inserted `headSha,` after `headBranch,` inside the `--json` list of the single `--event merge_group --limit 100 --json ` line (`--jq`, prose, steps 1/3/4 and the jq near line 222 byte-identical).
-- [ ] RED proven before the fix: the captured run of the suite against the unmodified workflow shows `S0` failing with a reason naming `headSha`, and the old probe printed `exit 5` on that tree (record both in the PR description).
-- [ ] `bash plugins/soleur/test/merge-queue-stall-check.test.sh` exits 0 on the fixed tree; the final line reports the exact new pass count and `EXPECTED_PASSES` equals it.
-- [ ] Mutation proof: each of MT1-MT5 passes (goes RED for its own reason, no crash signature) and PT1 passes; the must-pass row would fail if the arm rejected a non-canonical position.
-- [ ] A bare-token regression is impossible: replacing the arm's membership test with `grep -F headSha` on the line makes MT1 report "guard stayed GREEN" (run once by hand at work time and note it in the PR description).
-- [ ] `gh run list ... --json databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,url --limit 1` exits 0 against the live CLI.
-- [ ] The old probe exits 0 (PASS) on the fixed tree before it is deleted; `git ls-files scripts/followthroughs/stall-triage-headsha-12350.sh` returns nothing after `git rm`.
-- [ ] Census recorded: no content reference to `stall-triage-headsha` in scripts/plugins/tests/.github/knowledge-base/engineering; no closed `follow-through` issue in the last 14 days names the script.
-- [ ] `python3 -I scripts/ci-pr-affected-replay.py ratchet`, `bash plugins/soleur/test/fixture-env-adoption.test.sh`, `bash .claude/hooks/grep-q-pipe-guard.test.sh` (re-run on flake), `bash plugins/soleur/test/scripts-shard-totality.test.sh`, `python3 .github/scripts/check-workflow-duplicate-keys.py` all exit 0.
-- [ ] PR diff paths are a subset of: the three product files, the plan, `specs/feat-one-shot-12362-stall-triage-headsha/{tasks.md,decision-challenges.md,session-state.md}`, `knowledge-base/INDEX.md` (if regenerated), and `scripts/ci-pr-affected-audit.accept.tsv` (only if the ratchet requires it). **Amended at review:** plus the four sibling files and the two accept-row re-keys listed in the addendum. No path under `apps/web-platform/infra/`, no `apply-web-platform-infra.yml`, no `ci.yml`, no `ci-head-verdict.sh`.
+- [x] `git diff -U0 origin/main -- .github/workflows/merge-queue-stall-check.yml` shows exactly one removed and one added line, and the only character difference is the inserted `headSha,` after `headBranch,` inside the `--json` list of the single `--event merge_group --limit 100 --json ` line (`--jq`, prose, steps 1/3/4 and the jq near line 222 byte-identical).
+- [x] RED proven before the fix: the captured run of the suite against the unmodified workflow shows `S0` failing with a reason naming `headSha`, and the old probe printed `exit 5` on that tree (record both in the PR description).
+- [x] `bash plugins/soleur/test/merge-queue-stall-check.test.sh` exits 0 on the fixed tree; the final line reports the exact new pass count and `EXPECTED_PASSES` equals it.
+- [x] Mutation proof: each of MT1-MT5 passes (goes RED for its own reason, no crash signature) and PT1 passes; the must-pass row would fail if the arm rejected a non-canonical position.
+- [x] A bare-token regression is impossible: replacing the arm's membership test with `grep -F headSha` on the line makes MT1 report "guard stayed GREEN" (run once by hand at work time and note it in the PR description).
+- [x] `gh run list ... --json databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,url --limit 1` exits 0 against the live CLI.
+- [x] The old probe exits 0 (PASS) on the fixed tree before it is deleted; `git ls-files scripts/followthroughs/stall-triage-headsha-12350.sh` returns nothing after `git rm`.
+- [x] Census recorded: no content reference to `stall-triage-headsha` in scripts/plugins/tests/.github/knowledge-base/engineering; no closed `follow-through` issue in the last 14 days names the script.
+- [x] `python3 -I scripts/ci-pr-affected-replay.py ratchet`, `bash plugins/soleur/test/fixture-env-adoption.test.sh`, `bash .claude/hooks/grep-q-pipe-guard.test.sh` (re-run on flake), `bash plugins/soleur/test/scripts-shard-totality.test.sh`, `python3 .github/scripts/check-workflow-duplicate-keys.py` all exit 0.
+- [x] PR diff paths are a subset of: the three product files, the plan, `specs/feat-one-shot-12362-stall-triage-headsha/{tasks.md,decision-challenges.md,session-state.md}`, `knowledge-base/INDEX.md` (if regenerated), and `scripts/ci-pr-affected-audit.accept.tsv` (only if the ratchet requires it). **Amended at review:** plus the four sibling files and the two accept-row re-keys listed in the addendum. No path under `apps/web-platform/infra/`, no `apply-web-platform-infra.yml`, no `ci.yml`, no `ci-head-verdict.sh`.
 - [ ] `gh pr view 12378 --json closingIssuesReferences` is exactly `[#12362]`; the body contains `Closes #12362` and `Ref #9927` and no other closing keyword.
 - [ ] Merged by the queue without `--admin`; Guard 1 evidence is a `merge_group` `test`-leg run (or dispatch run) on the SHA, recorded in the PR.
 
@@ -329,10 +329,10 @@ Run each as its own Bash call (read the exit code of each; no pipes that mask it
 
 ## Test Scenarios
 
-1. Unfixed tree: the arm -> 1 (`S0` red), reason `Triage step 2 --json field list lacks headSha` (the prose `by headSha/createdAt` on that line does not satisfy it).
+1. Unfixed tree: the arm -> 1 (`S0` red), reason `Triage step 2 gh run list --json field list lacks headSha` (the prose `by headSha/createdAt` on that line does not satisfy it).
 2. Fixed tree: the arm -> 0.
 3. `headShaX` lookalike -> 1 (whole-field equality).
-4. Selector no longer matches (command renamed) -> 1, `found 0` (no vacuous pass).
+4. Left-extended lookalike `xheadSha` -> 1, `lacks headSha` (whole-field equality on the left boundary too). *(Amended at review: the drafted "selector no longer matches -> `found 0`" case is caught by the older `agent-runnable` check before the new arm runs, so it is not a scenario of this arm.)*
 5. A second, indented `gh run list ... --event merge_group` line inside the heredoc -> 1, `found 2`.
 5b. Selector matches but no `--json` list -> 1 with its own reason (not an empty-output GREEN).
 6. `headSha` last in the list -> 0 (position-independent).
