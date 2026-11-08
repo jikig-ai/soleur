@@ -290,11 +290,11 @@ export function startOriginTlsListener(params: {
   // the WebSocket upgrade listener (ws-handler.ts) are registered on `httpServer`, and ws accepts
   // any duplex socket, so a TLS socket upgrades like a plain one. Server-level options (timeouts,
   // maxHeaderSize) are per server instance and are NOT shared. This listener sets keepAliveTimeout and
-  // leaves headersTimeout at Node's 60 s default on purpose: the plain :80 server in index.ts also sets
-  // headersTimeout, but Node bounds the header phase by requestTimeout (default 300 s), so mirroring it
-  // here would LOOSEN the :443 slow-header cutoff from 60 s to 300 s for no demonstrated need (an idle
-  // keep-alive socket was measured open at 75 s with the default). Any OTHER option later set on the plain
-  // server in index.ts must be applied here too, deliberately.
+  // leaves headersTimeout and requestTimeout at Node's defaults (60 s / 300 s) on purpose. The plain :80
+  // server in index.ts states the same two numbers explicitly through ./http-timeouts (ADR-321 item 12),
+  // so both listeners cut a stalled client at the same bound; assigning either property here would risk
+  // LOOSENING it for no demonstrated need (an idle keep-alive socket was measured open at 75 s with the
+  // default). Any OTHER option later set on the plain server in index.ts must be applied here too, deliberately.
   httpsServer.on("request", (req, res) => {
     if (isHealthPath(req.url)) {
       res.setHeader(ORIGIN_TRANSPORT_HEADER, negotiatedProtocol(req));
