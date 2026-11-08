@@ -22,7 +22,7 @@ Closes #12360 (thread 1); Refs #9729 (schedule term 1 — issue stays open for t
 
 ## Phase 3 — Verification + bookkeeping
 
-- [ ] 3.1 Run both suites + `scripts/test-all-pr-battery-gate.test.sh`; run the `test-all.sh` shard legs covering the two edited suites.
+- [x] 3.1 Run both suites + `scripts/test-all-pr-battery-gate.test.sh`; run the `test-all.sh` shard legs covering the two edited suites.
 - [ ] 3.2 Post-merge: `PBG_UNBOUNDED=1 bash scripts/followthroughs/pr-battery-gate-saving-9323.sh` locally → record the PASS/FAIL verdict line as a comment on #9323 (resolves its measurement arm).
 - [ ] 3.3 PR body: `Closes #12360`, `Refs #9729`, `## Changelog` section; expected semver label `patch`.
 - [ ] 3.4 Do NOT edit or comment on PR #12377; if it lands first, rebase and re-key the new fake-gh fixtures to its `keyof`/`fx_err` scheme.
