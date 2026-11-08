@@ -319,7 +319,7 @@ logs:
   retention: 90 days
 
 discoverability_test:
-  command: bash -c "grep -rE 'agent never dispatch|agents never dispatch|no agent runs it|dispatched only by the owner|only the owner dispatches' knowledge-base/engineering/operations/runbooks/key-rotation.md knowledge-base/engineering/operations/runbooks/inngest-server.md knowledge-base/engineering/architecture/decisions/ADR-307-inngest-key-rotation-route.md knowledge-base/engineering/architecture/decisions/ADR-317-key-rotation-second-dispatch-only-route-sourcing-the-inngest-route.md .github/workflows/key-rotate.yml .github/workflows/inngest-key-rotate.yml scripts/key-rotate.sh scripts/inngest-key-rotate.sh scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh | grep -vc 'Superseded'"
+  command: bash -c "grep -rniE 'agent never dispatch|agents never dispatch|no agent runs it|no agent dispatches|dispatched only by the owner|only the owner dispatches|only you dispatch' knowledge-base/engineering/operations/runbooks/key-rotation.md knowledge-base/engineering/operations/runbooks/inngest-server.md knowledge-base/engineering/architecture/decisions/ADR-307-inngest-key-rotation-route.md knowledge-base/engineering/architecture/decisions/ADR-317-key-rotation-second-dispatch-only-route-sourcing-the-inngest-route.md .github/workflows/key-rotate.yml .github/workflows/inngest-key-rotate.yml scripts/key-rotate.sh scripts/inngest-key-rotate.sh scripts/followthroughs/inngest-a5-a6-owner-ask-10136.sh | grep -vic 'superseded'"
   expected_output: "0"
 ```
 
