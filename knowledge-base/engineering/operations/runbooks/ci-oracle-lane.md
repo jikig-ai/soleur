@@ -87,8 +87,12 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
 
 ## When `oracle-index-check` fails
 
-The leg runs every non-comment line of `scripts/ci-oracle-lane-suites.txt` serially and propagates the first
-non-zero exit. On a PR or queue entry its failure is inside the required `test` aggregator and blocks merge.
+The job runs the manifest across K=5 parallel matrix legs (`oracle-index-check (k/5)`): each leg executes only
+the `scripts/ci-oracle-lane-suites.txt` members its `scripts/ci-oracle-lane-legs.tsv` row assigns to `ORACLE_LEG`,
+serially, and propagates the first non-zero exit. Leg assignment is committed data (ADR-240 shape);
+`check_legs()` in the sentinel pins legs ≡ manifest parity bi-directionally — a member added to the manifest
+without a legs row reds the sentinel, and fails the leg closed at runtime. On a PR or queue entry a leg failure
+rolls up into the required `test` aggregator and blocks merge.
 
 1. Read the `::error title=oracle-index-check::manifest suite <label> exited <rc>` annotation — the named label
    is the suite that reds. Re-run it locally with the argv on its manifest line (labels are enumerate-exact

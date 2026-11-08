@@ -1,0 +1,32 @@
+# ci-oracle-lane-legs.tsv — leg assignment for the oracle-index-check matrix (#12393; the
+# ADR-240 checked-in-assignment shape, same grammar as scripts/suite-shard-legs.tsv).
+#
+# Grammar: <registration-label><TAB><leg> where leg is a member of the ci.yml
+# `oracle-index-check` `strategy.matrix.leg` set (currently K=5, values 1/5..5/5). The job's
+# manifest loop runs ONLY the members whose leg equals ORACLE_LEG; every member executes
+# exactly once across the leg set. scripts/ci-oracle-lane.test.sh's check_legs() pins
+# legs ≡ manifest parity bi-directionally, every matrix leg non-vacant, leg values ⊆ the
+# live matrix set, and no duplicate assignment — membership changes need a row here or the
+# sentinel reds.
+#
+# Provenance: LPT-packed from scripts/suite-durations.tsv measured 2026-11-08 — serial total
+# 65.4 min; worst leg is leg 1 (ci-pr-affected-replay-a alone, 17.2 min measured) + ~1.5 min
+# checkout/fetch ≈ 19 min wall, ~37% under the 30-min bound. Rebalance trigger: re-pack when
+# a member's measured duration moves any leg's projected total within ~5 min of the bound,
+# or when the manifest gains a member. The manifest stays label<TAB>argv (2 fields) — leg
+# assignment lives ONLY here; do not add a manifest column (check_manifest MEMBER-BAD-FIELDS).
+plugins/soleur/test/ci-pr-affected-replay-a	1/5
+scripts/test-all-affected-d	2/5
+scripts/test-affected-kb-consumers	2/5
+scripts/lint-orphan-test-suites	2/5
+scripts/ci-oracle-review	2/5
+scripts/test-all-affected-c	3/5
+plugins/soleur/test/ci-pr-affected-replay-c	3/5
+plugins/soleur/test/ci-pr-affected-preactivation.test.sh	3/5
+scripts/test-all-affected-b	4/5
+scripts/test-all-group-affected	4/5
+scripts/test-affected-derive-cache	4/5
+plugins/soleur/test/ci-pr-affected-replay-b	5/5
+scripts/test-all-affected-a	5/5
+scripts/test-affected-derive	5/5
+scripts/ci-pr-selection	5/5

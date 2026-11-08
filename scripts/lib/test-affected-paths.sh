@@ -2084,6 +2084,7 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
 AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
   ".github/workflows/ci.yml"
   "scripts/ci-oracle-lane-suites.txt"
+  "scripts/ci-oracle-lane-legs.tsv"
   "scripts/ci-oracle-lane.sh"
   "scripts/ci-oracle-lane.test.sh"
   "scripts/ci-pr-selection.sh"  # ci-oracle-lane.test.sh:1050 reads is_doc_path live for the O-DOCPARITY byte-equality check
