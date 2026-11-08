@@ -336,6 +336,12 @@ fi
 expect "PBG_JOBS=abc is not an integer: CANNOT ESTABLISH" 3 "PBG_JOBS is not an integer" "$TMP/s4" PBG_JOBS=abc
 expect "PBG_JOBS=99 clamps to the 16-worker ceiling and the sweep still converges" 0 "16-worker ceiling" "$TMP/s1" PBG_JOBS=99
 expect "PBG_JOBS=0 clamps to the serial floor and still converges" 0 "PASS" "$TMP/s1" PBG_JOBS=0
+# 08/09 are VALID per the ^[0-9]+$ accept but octal-ambiguous in (( )): the normalize step must make them width 8, never a silent serial degrade
+expect "PBG_JOBS=08 normalizes to width 8 (no octal trap) and converges" 0 "PASS" "$TMP/s1" PBG_JOBS=08
+out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x PBG_JOBS=08 bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 0 && "$out" != *"value too great for base"* && "$out" != *"serial fallback"* ]]; then
+  pass "PBG_JOBS=08 emits no octal error and no serial-fallback banner (it runs the pool at width 8)"
+else fail "PBG_JOBS=08 octal normalization: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 
 printf 'pr-battery-gate-saving-9323: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 PBGS_MIN_ASSERTIONS=50

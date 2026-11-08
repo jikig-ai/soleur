@@ -101,7 +101,7 @@ PAGE_CAP=6           # list calls: 6 pages x 100 completed pull_request runs ~= 
 EXAMINE_CAP=220      # detail calls: <=3 reads per candidate (head lookup, files, jobs), ~660 worst case
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-for need in gh jq unzip mktemp awk sed grep sort date timeout comm paste cut cat; do
+for need in gh jq unzip mktemp awk sed grep sort date timeout comm paste cut cat seq head xargs mv; do
   command -v "$need" >/dev/null 2>&1 || { echo "CANNOT ESTABLISH: $need is not installed"; exit 3; }
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
@@ -135,6 +135,7 @@ fi
 # on macOS bash 3.2; the sweeper runs ubuntu-24.04 bash 5.2).
 JOBS="${PBG_JOBS:-8}"
 [[ "$JOBS" =~ ^[0-9]+$ ]] || { echo "CANNOT ESTABLISH: PBG_JOBS is not an integer"; exit 3; }
+JOBS=$((10#$JOBS))   # strip leading zeros: 08/09 would hit the octal trap in every later (( )) (PBG_BUDGET_S's regex refuses them outright; this knob accepts then normalizes)
 if (( JOBS > 16 )); then echo "[pbg] PBG_JOBS=$JOBS exceeds the 16-worker ceiling — clamped to 16"; JOBS=16; fi
 (( JOBS < 1 )) && JOBS=1
 _pbg_pool_on=0
@@ -248,7 +249,7 @@ _pbg_w_page() {
 # `qual <pr> <id> <run_min> <qwait_sum> <qwait_n>` for a qualifying run, `skip` for every serial
 # `continue`, and the same cut/fail details the serial loop emitted (the parent replays them).
 _pbg_w_exam() {
-  local idx="$1" pl="$2" rf="$WORK/exam-$1" id pr branch hrepo rest rc=0 files m touches=0 jobs_json ran run_min qw
+  local pl="$2" rf="$WORK/exam-$1" id pr branch hrepo rest rc=0 files m touches=0 jobs_json ran run_min qw
   id="${pl%%$'\t'*}"; rest="${pl#*$'\t'}"
   pr="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
   branch="${rest%%$'\t'*}"; hrepo="${rest#*$'\t'}"
@@ -363,8 +364,10 @@ rl_rem="$(jq -r '.resources.core.remaining // 0' <<<"$rl" 2>/dev/null)"
 [[ "$rl_rem" =~ ^[0-9]+$ ]] || fail_api "rate_limit preflight (malformed body)"
 # a quota cut is NOT YET — the sweep is retried when the hourly window rolls; never a failed read, never a verdict.
 # need_min is the real worst case: 3 reads per examined candidate, the listing pages, the artifact cap, and 2 reads
-# (pull + push-run) per qualifying run in the escape check.
-need_min=$(( 3 * EXAMINE_CAP + PAGE_CAP + ART_READ_CAP + 2 * MAX_RUNS + 20 ))
+# (pull + push-run) per qualifying run in the escape check. The parallel Stage-A wave lists ALL qualifying runs
+# unconditionally — runs past the ART_READ_CAP replay bound had their listing fetched where serial never did —
+# so the model carries one extra MAX_RUNS of listing prefetch on top of the cap.
+need_min=$(( 3 * EXAMINE_CAP + PAGE_CAP + ART_READ_CAP + 3 * MAX_RUNS + 20 ))
 if (( rl_rem < need_min )); then
   echo "NOT YET: API quota remaining=$rl_rem under the $need_min-request floor for a full sweep; the sweeper retries"; exit 2
 fi
@@ -427,7 +430,7 @@ done < <(jq -r '.[] | "\(.id) \(.conclusion) \(.pr) \(.branch) \(.hrepo)"' <<<"$
 _pbg_pool "$WORK/cand.list" _pbg_w_exam
 
 n=0; sum_min=0; green_prs=""; green_ids=""; qwait_sum=0; qwait_n=0; examined=0
-while IFS=$'\t' read -r ckey cpl; do
+while IFS=$'\t' read -r ckey _; do
   [ -n "$ckey" ] || continue
   (( n < MAX_RUNS )) || break
   examined=$((examined + 1))
