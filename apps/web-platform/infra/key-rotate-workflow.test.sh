@@ -570,6 +570,13 @@ refuse() { echo "doppler REFUSED: $*" >> "$STUB/refusals.log"; exit 64; }
 if [[ "$1" == run ]]; then
   [[ "$*" == "run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- "* ]] || refuse "$@"
   shift; while [[ $# -gt 0 && "$1" != -- ]]; do shift; done; shift
+  # the tf-var transformer exposes EVERY name of soleur/prd_terraform as TF_VAR_*; the config carries a STALE
+  # EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS copy (#12299). --preserve-env: an exported name wins even when empty, so the
+  # injection fills only a slot the caller left unset (apply-A's previous feed and the clear's shadow export close it).
+  if [[ -z "${TF_VAR_egress_audit_ingest_token_previous+x}" ]]; then
+    echo "doppler-run injected stale TF_VAR_egress_audit_ingest_token_previous" >> "$STUB/injected.log"
+    export TF_VAR_egress_audit_ingest_token_previous="stale-prd_terraform-copy"
+  fi
   exec "$@"
 fi
 [[ "${DOPPLER_TOKEN:-}" == dp.tffixture ]] || refuse "copy call with token class '${DOPPLER_TOKEN:-}': $*"
@@ -1539,6 +1546,13 @@ eq "C9.4b a clear that leaves PREVIOUS populated reports previous_not_cleared" \
 fresh; run_g clear a_env rotate inngest_signing_key_dev
 eq "C9.4c the clear refuses a non-egress key" "$RC|$(verdict_of)" '1|internal_error'
 
+# #12299: the doppler-run stub injects a stale TF_VAR_egress_audit_ingest_token_previous for every unset call (the live
+# prd_terraform config carries such a copy). The clear's shadow export closes the slot before the first value-bearing
+# call, so only the pre-export init logs an injection and the -replace create writes the emptied var.
+fresh; set_state copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS stale-previous-value; run_g clear a_env rotate egress_audit_ingest_token
+eq "C9.4d the clear env carries the emptied TF_VAR (the kk_egress_previous_feed precedent): the stale prd_terraform tf-var injection fires only at the pre-export init, never at plan, show or apply, and PREVIOUS reads back empty" \
+  "$RC|$(verdict_of)|$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")|$(nlog "$D/injected.log" .)" '0|rotate_ok||1'
+
 fresh; run_g apply a_env rotate egress_audit_ingest_token
 CUR="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN")"; PRV="$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")"
 eq "C9.5 apply-A: CURRENT is new and PREVIOUS carries the old CURRENT" \
@@ -2040,6 +2054,11 @@ eq "D6.12b mutant: a scan_streams that inlines a global (not stop-line-scoped) n
 # N12: the kb budget pin sees a missing Re-checks term
 mut_ok "$TMP/m/bud.body" "$BODY" 'KK_RECHECK_STEP_S=600' 'KK_RECHECK_STEP_S=0' && eq "D6.13 N12 mutant: dropping the Re-checks term from the budget turns B31b" "$([[ "$(bud2_of "$(ptree bud "$TMP/m/bud.body")")" != '8100 6900 600 6300' ]] && echo differs)" 'differs'
 
+# N13 (#12299): the fixture's stale prd_terraform injection is load-bearing on the clear leg — drop the shadow export and
+# the injected OLD token reaches the plan, show and apply calls; the -replace create rewrites it and the read-back refuses.
+sc_clear_shadow() { fresh; set_state copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS stale-previous-value; run_g clear a_env rotate egress_audit_ingest_token; printf '%s:%s:inj%s' "$(v)" "$(cat "$D/state/copy_soleur_prd_EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS")" "$(nlog "$D/injected.log" .)"; }
+M D6.14 "N13 the clear's empty TF_VAR shadow export removed: the stale prd_terraform tf-var injection reaches terraform at every call and the -replace create rewrites the OLD token" sc_clear_shadow body "rotate_ok::inj1" "previous_not_cleared:stale-prd_terraform-copy:inj4" $'  export TF_VAR_egress_audit_ingest_token_previous=""\n' '' kk_cmd_clear
+
 # --- final accounting for the whole run
 sleep 0.2
 SCAN_N="$(wc -l < "$TMP/scans.cnt" | tr -d ' ')"; RUN_N="$(wc -l < "$TMP/runs.cnt" | tr -d ' ')"
@@ -2049,7 +2068,7 @@ eq "D9.4 N10 every run on a non-mutant tree, section D included, is free of fake
 [[ -z "$MUT_FAIL" ]] && ok "D9.3 every mutation landed (exactly-once anchor, bash -n, inside the target function)" || bad "D9.3 mutations that did not land" "$MUT_FAIL"
 
 printf '\n=== %d passed, %d failed ===\n' "$PASS" "$FAIL"
-FLOOR=645
+FLOOR=647
 if (( PASS + FAIL < FLOOR )); then
   printf 'FAIL ANTI-VACUITY: %d assertions ran, floor is %d\n' $((PASS + FAIL)) "$FLOOR" >&2
   exit 1

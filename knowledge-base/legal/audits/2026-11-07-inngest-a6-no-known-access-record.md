@@ -106,7 +106,41 @@ DO NOT ATTEST YET. An in-session instruction transcribed by an agent is not the 
 signature (this record and the A6 row of the runbook both exclude it), and A5 is not complete. The CLO attests on
 resubmission once the owner's own comment exists and A5 is done.
 
-Superseded in part 2026-11-06: the A5 reason is resolved for the dedicated Inngest key pair only (see the A5 cell; the other exposed keys are still rotating); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. The conditions for resubmission are posted on #10382 (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653>).
+Superseded in part 2026-11-06: the A5 reason is resolved for the dedicated Inngest key pair only (see the A5 cell; the other exposed keys are still rotating); the signing-route reason was superseded by the 2026-11-02 rulings. This refusal was not an attestation, and no attestation exists. Superseded 2026-11-07 by the attestation section above on the merge of the PR that carries it. The conditions for resubmission are posted on #10382 (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653>).
+
+## CLO attestation, 2026-11-07
+
+`soleur:legal:clo` attests the owner's own sentence and the claim limits below (v1 internal
+attestation, separate from the owner's signature; not external counsel advice). This attestation
+takes effect on the merge of the PR that carries it; until that merge it is a record in an
+unmerged branch.
+
+Checked against the seven resubmission conditions posted on #10382
+(<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6680610653>) and the 2026-11-07
+refusal (<https://github.com/jikig-ai/soleur/issues/10382#issuecomment-6709536378>):
+
+- Condition 1 — holds. The owner's sentence was composed by the owner in session and relayed on
+  #10136 at 2026-11-07T17:31:48Z under the 2026-11-02 provenance route with `Agent-drafted
+  text: no` (<https://github.com/jikig-ai/soleur/issues/10136#issuecomment-6710705414>), quoted
+  verbatim in "Owner's own sentence". The superseded 13:31Z relay (`Agent-drafted text: yes`)
+  is kept as history.
+- Condition 2 — holds. "I'm not aware of any external access to the Inngest host's LUKS key
+  material" is a bounded knowledge claim; the claim limits keep Hetzner staff access, retention
+  and post-closure outcomes outside what this record establishes.
+- Condition 3 — holds at its fallback. The console re-read cell remains PENDING, so this
+  attestation is anchored only to the dated 2026-10-29 console figures. Under the fallback the
+  two API tokens are also not reconciled to known purposes — this record does not establish
+  what either token is for.
+- Condition 4 — holds. The measured-re-read cell reads `n/a (owner, in session 2026-11-07)`.
+- Conditions 5–7 — hold. The claim-limit paragraphs are present; no "signed" or "attested"
+  wording predates this attestation; the 2026-11-12 re-review, A5 and the TLS rows are not
+  discharged by this record.
+
+This attestation does not perform the owner-side steps in "After signing (owner)": linking the
+record from #10382 and #10136 and posting `S6-A6-DONE:` remain the owner's option under the
+2026-11-02 route (an agent never posts `S6-A6-DONE:`). The console re-read cell also remains
+owner-fillable: a post-2026-11-02 read would move the anchor off the 2026-10-29 figures in a new
+record.
 
 ## After signing (owner)
 
