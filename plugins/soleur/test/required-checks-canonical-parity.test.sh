@@ -18,8 +18,8 @@
 #      drift #6049 fixed and this test catches it (the action is exempt from
 #      lint-bot-synthetic-completeness.sh by construction).
 #   3. PIN-PARITY: the gitleaks version + SHA256 pin is identical across all
-#      three install sites (secret-scan.yml, ci.yml test-scripts, and the
-#      action) — a silent divergence would scan the bot diff with a different
+#      four install files (secret-scan.yml, ci.yml, main-health-monitor.yml, and
+#      the action) — a silent divergence would scan the bot diff with a different
 #      engine than the required `gitleaks scan` job.
 #
 # The CLA contexts {cla-check, cla-evidence} live in required-checks.txt AND now
@@ -254,7 +254,7 @@ else
 fi
 echo ""
 
-# --- Test 5: gitleaks pin-parity across all three install sites -------------
+# --- Test 5: gitleaks pin-parity across all four install files --------------
 
 echo "Test 5: gitleaks version + SHA256 pin is identical across all 4 sites"
 extract_version() {
@@ -574,4 +574,179 @@ else
 fi
 echo ""
 
-print_results
+# --- Test 10: pinned release-download curls carry --fail/--retry 5/--retry-all-errors
+#
+# Every `curl` that downloads a pinned gitleaks or actionlint release in a workflow
+# or composite action must carry `--fail`, `--retry 5` and `--retry-all-errors` as
+# exact tokens on the logical command (continuation lines joined, whole-line `#`
+# comments dropped). `-f`/`-fsSL` does NOT satisfy `--fail` (the owner named the long
+# flag), and `--retry 50` / `--fail-with-body` / a bare `--retry-all-errors` do not
+# satisfy the others. Flags in a comment or an `echo` line near the curl are not on it.
+# The retry budget is about 31 s: this survives a blip, not a multi-hour outage.
+#
+# scan_curl_flags prints one line per matching curl: FILE|LINE|KIND|OK or
+# FILE|LINE|KIND|MISSING <flags>, and exits 1 if any command is missing a flag.
+# POSIX awk only (the runner may have mawk): no gensub, IGNORECASE or {n} intervals.
+scan_curl_flags() {
+  local f scan_rc=0
+  for f in "$@"; do
+    awk -v file="$f" '
+      function finish(   kind, miss) {
+        if (buf ~ /(^|[[:space:]])curl[[:space:]]/) {
+          kind = ""
+          if (index(buf, "gitleaks/gitleaks/releases/download")) kind = "gitleaks"
+          else if (index(buf, "rhysd/actionlint/releases/download")) kind = "actionlint"
+          if (kind != "") {
+            miss = ""
+            if (buf !~ /(^|[[:space:]])--fail([[:space:]]|$)/) miss = miss " --fail"
+            if (buf !~ /(^|[[:space:]])--retry[[:space:]]+5([[:space:]]|$)/) miss = miss " --retry-5"
+            if (buf !~ /(^|[[:space:]])--retry-all-errors([[:space:]]|$)/) miss = miss " --retry-all-errors"
+            if (miss != "") bad = 1
+            printf "%s|%d|%s|%s\n", file, start, kind, (miss == "" ? "OK" : "MISSING" miss)
+          }
+        }
+        buf = ""
+      }
+      /^[[:space:]]*#/ { next }
+      {
+        if (buf == "") start = NR
+        if ($0 ~ /\\$/) { line = $0; sub(/\\$/, " ", line); buf = buf " " line; next }
+        buf = buf " " $0
+        finish()
+      }
+      END { if (buf != "") finish(); exit bad }
+    ' "$f" || scan_rc=1
+  done
+  return "$scan_rc"
+}
+
+# strip_flag_once SRC DST FLAG: copy SRC to DST, removing the first occurrence of FLAG
+# (with its leading space) from the line directly above a gitleaks/actionlint download
+# URL line, i.e. from the curl command line of that download, never from another curl.
+strip_flag_once() {
+  awk -v flag=" $3" '
+    { l[NR] = $0 }
+    END {
+      for (i = 1; i < NR; i++) {
+        if (!done && l[i+1] ~ /releases\/download\/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}/ && (p = index(l[i], flag))) {
+          l[i] = substr(l[i], 1, p - 1) substr(l[i], p + length(flag))
+          done = 1
+        }
+      }
+      for (i = 1; i <= NR; i++) print l[i]
+    }
+  ' "$1" > "$2"
+}
+
+echo "Test 10: gitleaks/actionlint release-download curls carry --fail --retry 5 --retry-all-errors"
+shopt -s nullglob
+CURL_SCAN_FILES=("$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/actions/*/action.yml)
+shopt -u nullglob
+
+scan_rc=0
+scan_out=$(scan_curl_flags "${CURL_SCAN_FILES[@]}") || scan_rc=$?
+n_gl=$(printf '%s\n' "$scan_out" | grep -c '|gitleaks|' || true)
+n_al=$(printf '%s\n' "$scan_out" | grep -c '|actionlint|' || true)
+n_bad=$(printf '%s\n' "$scan_out" | grep -c '|MISSING' || true)
+# Independent raw count: NON-comment lines carrying the variable-form URL fragment
+# (the literal-version URL in a secret-scan.yml comment must not be counted).
+n_raw=$({ grep -h -E '^[^#]*releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "${CURL_SCAN_FILES[@]}" || true; } | wc -l | tr -d ' ')
+
+assert_eq "0" "$n_bad" "(10a) no gitleaks/actionlint download curl is missing a hardening flag"
+if [[ "$n_bad" -ne 0 ]]; then printf '%s\n' "$scan_out" | grep '|MISSING' | sed 's/^/        /'; fi
+assert_eq "0" "$scan_rc" "(10b) scanner exits 0 on the real tree"
+if [[ "$n_gl" -ge 7 ]]; then
+  echo "  PASS: (10c) non-vacuous — $n_gl gitleaks download curls scanned (floor 7)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (10c) only $n_gl gitleaks download curls scanned (floor 7)"
+  FAIL=$((FAIL + 1))
+fi
+if [[ "$n_al" -ge 1 ]]; then
+  echo "  PASS: (10d) non-vacuous — $n_al actionlint download curls scanned (floor 1)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (10d) only $n_al actionlint download curls scanned (floor 1)"
+  FAIL=$((FAIL + 1))
+fi
+assert_eq "$n_raw" "$((n_gl + n_al))" "(10e) scanner count == independent raw count of non-comment download URL lines"
+
+# (10f) mutation self-test: removing ONE flag from the curl line of the first download in a
+# temp copy of each scanned file must make the scanner FAIL it and name the missing flag.
+# A mutation that changed nothing (cmp equal) fails the arm instead of passing vacuously.
+for f in "${CURL_SCAN_FILES[@]}"; do
+  grep -qE 'releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "$f" || continue
+  base="${f##*/}"
+  [[ "$base" == "action.yml" ]] && base="bot-pr-action.yml"
+  for flag in --fail "--retry 5" --retry-all-errors; do
+    mut="$TMP/mut-${base}-${flag// /_}"
+    strip_flag_once "$f" "$mut" "$flag"
+    if cmp -s "$f" "$mut"; then
+      echo "  FAIL: (10f) mutation of '$flag' in $base changed nothing (flag absent on the curl line)"
+      FAIL=$((FAIL + 1))
+      continue
+    fi
+    m_rc=0
+    m_out=$(scan_curl_flags "$mut") || m_rc=$?
+    if [[ "$m_rc" -ne 0 && "$m_out" == *"|MISSING"* ]]; then
+      echo "  PASS: (10f) scanner FAILS $base with '$flag' stripped"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: (10f) scanner did not flag $base with '$flag' stripped (rc=$m_rc)"
+      FAIL=$((FAIL + 1))
+    fi
+  done
+done
+
+# (10g) synthesized fixtures. Must-PASS: flags in a different order, `-sSL` before them,
+# the output file given via `-o` after them.
+cat > "$TMP/curl-pass.yml" <<'YML'
+      run: |
+        curl -sSL --retry-all-errors --retry 5 --fail -o gitleaks.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+YML
+p_rc=0; p_out=$(scan_curl_flags "$TMP/curl-pass.yml") || p_rc=$?
+assert_eq "0" "$p_rc" "(10g) flags in a different order still PASS"
+assert_contains "$p_out" "|gitleaks|OK" "(10g) the reordered command is counted as one gitleaks curl"
+
+# Must-FAIL fixtures, one defect each.
+neg_check() {  # neg_check NAME EXPECTED-MISSING-FLAG  (fixture body on stdin)
+  local name="$1" want="$2" nrc=0 nout
+  cat > "$TMP/neg-$name.yml"
+  nout=$(scan_curl_flags "$TMP/neg-$name.yml") || nrc=$?
+  if [[ "$nrc" -ne 0 && "$nout" == *"|MISSING"*"$want"* ]]; then
+    echo "  PASS: (10h) $name is rejected (missing$want)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: (10h) $name was not rejected for $want (rc=$nrc out=$nout)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+neg_check short-f " --fail" <<'YML'
+        curl -fsSL --retry 5 --retry-all-errors -o gitleaks.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check fail-with-body " --fail" <<'YML'
+        curl --fail-with-body --retry 5 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+YML
+neg_check retry-50 " --retry-5" <<'YML'
+        curl --fail --retry 50 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check flags-in-comment-and-echo " --fail" <<'YML'
+        # curl --fail --retry 5 --retry-all-errors
+        echo "--fail --retry 5 --retry-all-errors"
+        curl -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check second-copy-unhardened " --retry-all-errors" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        curl --fail --retry 5 -sSLo b.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+echo ""
+
+print_results 77

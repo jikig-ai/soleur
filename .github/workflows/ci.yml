@@ -830,7 +830,7 @@ jobs:
       - name: Install actionlint (pinned, sha-verified)
         run: |
           set -euo pipefail
-          curl -sSLo actionlint.tgz \
+          curl --fail --retry 5 --retry-all-errors -sSLo actionlint.tgz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           echo "${ACTIONLINT_SHA256}  actionlint.tgz" | sha256sum -c -
           tar -xzf actionlint.tgz actionlint
@@ -1923,7 +1923,7 @@ jobs:
       - name: Install gitleaks (pinned, sha-verified)
         run: |
           set -euo pipefail
-          curl -sSLo gitleaks.tgz \
+          curl --fail --retry 5 --retry-all-errors -sSLo gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks
@@ -2053,7 +2053,7 @@ jobs:
       - name: Install gitleaks (pinned, sha-verified)
         run: |
           set -euo pipefail
-          curl -sSLo gitleaks.tgz \
+          curl --fail --retry 5 --retry-all-errors -sSLo gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks
