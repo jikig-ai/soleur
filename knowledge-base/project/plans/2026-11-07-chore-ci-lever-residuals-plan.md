@@ -26,7 +26,8 @@ demand-reduction epic (#11556 / ADR-276):
    the `--drift-report` emission contract in `scripts/regenerate-shard-manifest.py` only
    reports `src=floor`/`estimate` rows, so a stale *measured* price is invisible to the
    weekly shard-balance watch. Add a `PRICE_DRIFT_ROW` emission + watch finding.
-2. **#9323 (Lever A residual).** Its implementing PRs (#9324, #11088, #11767, #11495) are
+2. **#9323 (Lever A residual).** Its implementing PRs (#9324, #11088, #11767; #11495 is the
+   sweeper-cap PR that set the 300 s kill, not a #9323 implementation) are
    merged; the only open acceptance box is the post-merge re-measure, whose soak probe
    `scripts/followthroughs/pr-battery-gate-saving-9323.sh` cannot converge inside its 270 s
    wall deadline (four consecutive `NOT YET` sweeps ending "during the artifact downloads").
@@ -52,7 +53,8 @@ demand-reduction epic (#11556 / ADR-276):
   authoritative (audit: `knowledge-base/engineering/audits/2026-11-03-suite-time-top-15-report.md`
   finding 2). Post-refresh predicted leg totals: leg 4 26.4 min, leg 6 29.9 min, max/mean
   ratio 1.26 — real imbalance, still under the watch's 1.30 flag bound.
-- #9323's re-measure has been structurally starved for ~4 weeks: the probe needs ≥20
+- #9323's re-measure has been unconverged for ~4 weeks (deadline-starved since #11495's
+  300 s sweeper cap; earlier NOT YETs were insufficient-qualifying-runs): the probe needs ≥20
   qualifying runs × ~13 artifact reads inside 270 s, and the artifact phase alone exceeds
   the deadline. Every sweep exits 2 `NOT YET`; the issue carries `needs-attention`.
 - #9729's NO-GO rested on criterion (b), index completeness, which is now satisfied. The

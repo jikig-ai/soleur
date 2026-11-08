@@ -44,8 +44,10 @@ PR: #12354 (draft)
 - 2.4 Branch on the verdict output:
   - PASS → `gh issue comment 9323` with the verbatim output; `gh issue close 9323`;
     retire per the probe's RETIREMENT block (delete `.sh` + `.test.sh`,
-    `run_suite` line at `scripts/test-all.sh:7091`, `suite-shard-legs.tsv:438`,
-    `suite-durations.tsv:436`, ADR-262 Consequences :132 mention).
+    `run_suite` line in `scripts/test-all.sh`, the
+    `scripts/followthroughs/pr-battery-gate-saving-9323` rows in
+    `suite-shard-legs.tsv` and `suite-durations.tsv`, and the ADR-262
+    Consequences mention — all label-anchored, not line-numbered).
   - FAIL → comment the output on #9323; leave open; record the widen-vs-revert
     decision on the issue (operator scope call).
   - NOT YET → comment the attempt numbers on #9323; file the starvation fix

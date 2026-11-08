@@ -682,11 +682,16 @@ def drift_report_group(group, manifest_path, durations_path, dirs,
                        if src == "measured"}
     for label in sorted(measured_labels & set(fresh)):
         committed, f = rows[label][0], fresh[label]
-        if (timed_n[label] >= PRICE_DRIFT_MIN_TIMED and committed > 0
-                and max(committed, f) / min(committed, f) >= PRICE_DRIFT_RATIO
+        # Delta first: it is the cheap conjunct and a base-0 row is only
+        # ever an under/overflow when the delta alone already exceeds the
+        # bound (committed=0→big or big→0 is an unbounded ratio — emit it,
+        # never divide by it).
+        if (timed_n[label] >= PRICE_DRIFT_MIN_TIMED
                 and abs(f - committed) >= PRICE_DRIFT_ABS_MS):
-            print(f"PRICE_DRIFT_ROW {group} {label} {committed} "
-                  f"{f} {timed_n[label]}/{sampled}")
+            base = min(committed, f)
+            if base == 0 or max(committed, f) / base >= PRICE_DRIFT_RATIO:
+                print(f"PRICE_DRIFT_ROW {group} {label} {committed} "
+                      f"{f} {timed_n[label]}/{sampled}")
 
     # Predicted: every committed row prices its incumbent leg (floor rows
     # included — the manifest's own accounting).

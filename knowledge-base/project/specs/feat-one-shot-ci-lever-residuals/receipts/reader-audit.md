@@ -28,4 +28,4 @@ the column carries a human reason.
 
 **Status for criterion (d): `pass`**, with the blind spots above recorded. It is not a proof: the census checks the
 documentation tree only; other root files (README.md, `.claude/settings.json`, AGENTS.md) are covered by criterion (b)'s
-index audit, which this re-run reports strict-zero (`index-audit-fresh.out`).
+index audit, which this re-run reports strict-zero (`index-audit.out`).

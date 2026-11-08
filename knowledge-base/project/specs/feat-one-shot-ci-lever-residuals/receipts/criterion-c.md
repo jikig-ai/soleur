@@ -21,7 +21,7 @@ job-minutes per pull_request run**, so the bar is **24.03** (20%).
 Leg-execution shares from the same STEM rows (why the second reading below exists): `test-scripts` ran on
 80 of 203 PR runs (39.4%), `test-scripts-heavy` 79 (38.9%), `test-webplat` 79 (38.9%), `test-bun` 144 (70.9%);
 the rest were gate-skipped or runner-less — light runs already pay nothing on those legs, so the lever's
-marginal saving on them is ~0. `affected-index-ratchet` billed 403.0 + ~110.8 min over the two windows
+marginal saving on them is ~0. `affected-index-ratchet` billed ~125.2 + 403.0 min over the two windows
 (~2.6–3.8 min per PR run, consistent with the ~3.4 debit below).
 
 ## Saving leg (the prescribed measurement)
@@ -67,7 +67,7 @@ Two PRs edit the runner (`scripts/test-all.sh` / `scripts/lib/test-affected-path
 
 - **Reading 1 (the sample as drawn — full-battery runs):** mean gross **87.41** suite-min/run (se 10.58);
   net of the ~1 billed min `pr-selection` job and the ~3.4 billed min/run advisory-ratchet debit the
-  2026-10-22 amendment counts against this criterion: **83.01** ≥ 24.03. Even mean − 2se − debits = 65.8.
+  2026-10-22 amendment counts against this criterion: **83.01** ≥ 24.03. Even mean − 2se − debits ≈ 61.9.
 - **Reading 2 (all pull_request runs, the bar's own denominator):** the priced axis is the `test-scripts`
   leg (~99.8% of every row's skipped minutes), which ran on 39.4% of the window's PR runs; runs where the
   light gate already skipped the leg yield ~0 marginal saving. Population estimate ≈ 0.394 × 87.4 − 4.4

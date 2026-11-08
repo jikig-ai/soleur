@@ -97,7 +97,7 @@ run() {
   OUT=""; ERR=""; RC=0
   local o="$MOCKD/stdout" e="$MOCKD/stderr"
   ( cd "$REPO_ROOT" && env "PATH=$MOCKD:$PATH" "MOCKD=$MOCKD" GH_REPO=jikig-ai/soleur \
-      WATCH_DRIFT_GROUP=light WATCH_DURATIONS="$BASE/durations.tsv" WATCH_MANIFEST="$BASE/manifest.tsv" \
+      WATCH_DRIFT_GROUP=light WATCH_DURATIONS="${SCENE_DUR:-$BASE/durations.tsv}" WATCH_MANIFEST="${SCENE_MAN:-$BASE/manifest.tsv}" \
       bash "$SUT" "$@" ) > "$o" 2> "$e"
   RC=$?; OUT="$(cat "$o")"; ERR="$(cat "$e")"
 }
@@ -433,6 +433,33 @@ run
 [[ "$RC" -eq 0 && "$(ncalls 'issue comment')" -eq 0 && "$(ncalls 'issue create')" -eq 0 ]] \
   && pass "S22 magnitude slide inside a persistent price-drift episode does not repost" || fail "S22 (comments=$(ncalls 'issue comment'))"
 
+# ---- S23: multi-word label carrying $(cmd) -> never arithmetic-evaluated -----
+# A registered label like `a b c[$(cmd)]` shifts `read -r` fields so the
+# `c[$(cmd)]` fragment lands in $fresh — `(( fresh >= BOUND ))` would evaluate
+# it, a command-injection primitive inside the issues:write workflow. The
+# numeric gate must skip the row without evaluating the fragment. The ${IFS}
+# inside $() keeps the label whitespace-free so it survives as one field
+# through the tsvs and the emitted report line.
+mkscene
+SCENE_DUR="$MOCKD/durations.tsv"; SCENE_MAN="$MOCKD/manifest.tsv"
+cp "$BASE/durations.tsv" "$SCENE_DUR"; cp "$BASE/manifest.tsv" "$SCENE_MAN"
+evil="a b c[\$(touch\${IFS}$MOCKD/pwned)]"
+printf '%s\t1000\tfloor\n' "$evil" >> "$SCENE_DUR"
+printf '%s\t1\n' "$evil" >> "$SCENE_MAN"
+seed 101 suite-timings-scripts-0 <<EOF
+$evil	2000000
+f-meas-x	5000
+f-meas-y	5000
+f-floor-big	1222
+f-floor-big2	1222
+f-floor-sub	1222
+EOF
+run
+unset SCENE_DUR SCENE_MAN
+[[ "$RC" -eq 0 && ! -e "$MOCKD/pwned" ]] \
+  && pass "S23 label fragment carrying \$(cmd): skipped, never evaluated" \
+  || fail "S23 (rc=$RC pwned=$(test -e "$MOCKD/pwned" && echo yes || echo no))"
+
 # ---- S10: workflow contract --------------------------------------------------
 [[ -s "$WF" ]] || fatal "workflow missing: $WF"
 wf="$(grep -vE '^[[:space:]]*#' "$WF")"
@@ -471,7 +498,7 @@ else
 fi
 
 echo; echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
-MIN_ASSERTIONS=29
+MIN_ASSERTIONS=30
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 2
 fi
