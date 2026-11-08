@@ -181,6 +181,7 @@ plugins/soleur/test/c4-count-parity.test.sh	1120	measured
 plugins/soleur/test/c4-from-components.test.sh	14478	measured
 plugins/soleur/test/c4-model-freshness.test.sh	6694	measured
 plugins/soleur/test/cf-token-scope.test.sh	899	measured
+plugins/soleur/test/changed-path-readers.test.sh	14000	measured
 plugins/soleur/test/check-deps-adapter-drift.test.sh	2115	measured
 plugins/soleur/test/check-red-on-main.test.sh	2109	measured
 plugins/soleur/test/ci-classify-step-exec.test.sh	1222	floor
