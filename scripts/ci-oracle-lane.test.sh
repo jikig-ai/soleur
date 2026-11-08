@@ -45,7 +45,8 @@
 # THE ACTIVATION LOCK (removed): `readonly ORACLE_LANE_LOCKED=1` used to keep active=false forever —
 # the activation PR (#12156 follow-up) deleted it, so the driver ARMS on an oracle-only diff with
 # SWITCH=on: active=true and skip_legs carries the five heavy legs. The env-read at O-LOCK-READ
-# remains as the dark-mode revert path (ORACLE_LANE_LOCKED=1 in env re-locks without a code edit);
+# remains as the dark-mode revert path (ORACLE_LANE_LOCKED=1 in env re-locks — no ci.yml env wires it
+# today, so reaching it is an excluded-path code edit; covered here because O-LOCK-READ is live machinery);
 # row_lock covers it. The lock-neutralized copy (same edit recipe as ci-pr-selection.test.sh) is now
 # identical to the pristine driver, which is itself the pinned absence check.
 #
@@ -905,7 +906,7 @@ row_mg() {  # the merge_group arm: whole-batch diff over MERGE_GROUP_BASE_SHA..M
   drive accept "$d" "EVENT_NAME=merge_group" "MERGE_GROUP_BASE_SHA="
   expect_full "O-MG empty base sha"
 }
-row_switch() {  # the switch is compared EXACTLY (driven against the lock-neutralized copy)
+row_switch() {  # the switch is compared EXACTLY (the lock-neutralized copy is now byte-identical to the driver — the recipe is the pinned no-op)
   local d="$1" v
   drive accept "$d" "SWITCH=on"
   check_eq "O-SWITCH SWITCH=on, unlocked, oracle diff: active" "$O_ACTIVE" "true"
@@ -929,8 +930,9 @@ row_switch() {  # the switch is compared EXACTLY (driven against the lock-neutra
   check_eq "O-SWITCH SWITCH=on on a code diff: oracle_only stays false" "$O_OO" "false"
 }
 row_lock() {  # post-activation: SWITCH=on classifies, annotates AND arms; the env-read
-  # ORACLE_LANE_LOCKED remains as the dark-mode revert path (a runner env can re-lock the lane
-  # without a code change — O-LOCK-READ is still live machinery, so it is covered here).
+  # ORACLE_LANE_LOCKED remains as the dark-mode revert path (a mapped env can re-lock the lane —
+  # no step env wires it today, so wiring is itself an excluded-path edit; O-LOCK-READ is still
+  # live machinery, so it is covered here).
   local d="$1"
   drive accept "$d" "SWITCH=on"
   check_eq "O-ARM unlocked + SWITCH=on: active" "$O_ACTIVE" "true"
