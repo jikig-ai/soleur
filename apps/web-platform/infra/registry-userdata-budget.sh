@@ -247,6 +247,8 @@ locals {
     disk_heartbeat_url     = join("/", ["https://uptime.betterstack.com/api/v1/heartbeat", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     liveness_heartbeat_url = join("/", ["https://uptime.betterstack.com/api/v1/heartbeat", "STUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUBSTUB"])
     betterstack_ingest_url = "${BS_INGEST_URL}"
+    # #12007: the collector rides as gzip+base64 of the repo file minus its whole-line comments (same expression as zot-registry.tf), so the measured payload carries its real size.
+    host_kernel_marker_gz_b64 = base64gzip(replace(file("${DIR}/host-kernel-marker.sh"), local.registry_rationale_strip, ""))
   }
 
   registry_rationale_strip = ${STRIP_EXPR}

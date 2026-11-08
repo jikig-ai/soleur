@@ -144,7 +144,14 @@ const INNGEST_KEY_ROTATE_WORKFLOW = resolve(
 // CI public key to root's authorized_keys, so it cannot be applied via the very
 // bridge that key authorizes (firewall chicken-and-egg). See ci-ssh-key.tf and
 // apply-web-platform-infra.yml's header.
-const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
+//
+// #12007 (decision-challenges.md, last operator row): the two SOLEUR_HOST_KERNEL collector installers are SSH-provisioned but
+// HELD. Installing the emitter on a RUNNING web host is a production mutation reserved to the operator (#12386), so a merge must
+// not deliver it. They are therefore here (SSH union) AND in OPERATOR_APPLIED_EXCLUSIONS (all-resources union), and are absent
+// from the SSH-stage `-target` list of apply-web-platform-infra.yml. Releasing the hold is a deliberate edit of BOTH sets plus
+// that list (the pin test "host-kernel-marker installers are held" fails until all three agree).
+const HOST_KERNEL_MARKER_INSTALLERS = ["host_kernel_marker_install", "host_kernel_marker_install_web2"] as const;
+const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys", ...HOST_KERNEL_MARKER_INSTALLERS]);
 
 // Sentinel: 8 in server.tf (7 hardening siblings + infra_config_handler_bootstrap)
 // + root_authorized_keys in ci-ssh-key.tf. `>=` (not `===`) so adding a new
@@ -162,7 +169,8 @@ const EXCLUSION_ALLOWLIST = new Set<string>(["root_authorized_keys"]);
 // #9534-review: raised 19 -> 20 for terraform_data.journald_persistent_web2 (server.tf).
 // #10455 b: raised 20 -> 22 for terraform_data.web_bash_synthetic_install and terraform_data.web_bash_synthetic_install_web2 (server.tf).
 // #12167 PR-G: raised 22 -> 24 for terraform_data.nonlocal_bind_sysctl and terraform_data.nonlocal_bind_sysctl_web2 (server.tf).
-const MIN_SSH_PROVISIONED = 24;
+// #12007: raised 24 -> 26 for terraform_data.host_kernel_marker_install and terraform_data.host_kernel_marker_install_web2 (server.tf).
+const MIN_SSH_PROVISIONED = 26;
 
 /** Strip `#` and `//` line comments, quote-aware, leaving string contents intact. */
 function stripLineComment(line: string): string {
@@ -341,6 +349,17 @@ describe("terraform -target parity — current state is covered", () => {
     for (const n of ["nonlocal_bind_sysctl", "nonlocal_bind_sysctl_web2"]) {
       expect(sshProvisioned).toContain(n);
       expect(webPlatformTargets.has(n)).toBe(true);
+    }
+  });
+
+  // #12007 — the held pair. Both exist and are SSH-provisioned (so a rename or removal reds), neither is in ANY per-merge or
+  // dispatch `-target` list (a merge installs nothing on a running host), and both are operator-applied exclusions.
+  test("host-kernel-marker installers are held: SSH-provisioned, in no workflow -target list, operator-applied (#12007)", () => {
+    for (const n of HOST_KERNEL_MARKER_INSTALLERS) {
+      expect(sshProvisioned).toContain(n);
+      expect(webPlatformTargets.has(n), `${n} must not be in apply-web-platform-infra.yml -target lines while held`).toBe(false);
+      expect(deployPipelineFixTargets.has(n), `${n} must not be in apply-deploy-pipeline-fix.yml -target lines while held`).toBe(false);
+      expect(OPERATOR_APPLIED_EXCLUSIONS.has(`terraform_data.${n}`)).toBe(true);
     }
   });
 
@@ -1305,6 +1324,11 @@ const OPERATOR_APPLIED_EXCLUSIONS = new Set<string>([
   "hcloud_volume.workspaces",
   "hcloud_volume_attachment.workspaces",
   "terraform_data.root_authorized_keys",
+  // #12007 — the SOLEUR_HOST_KERNEL collector installers for the RUNNING web hosts: SSH-provisioned but HELD by the owner's
+  // ruling (a merge must not mutate a running host; delivered by a later operator-authorized run, #12386). Releasing the hold
+  // moves both into the SSH stage of apply-web-platform-infra.yml and out of this set and EXCLUSION_ALLOWLIST.
+  "terraform_data.host_kernel_marker_install",
+  "terraform_data.host_kernel_marker_install_web2",
   // #5274 Phase 2 (ADR-068) — the git-data host + its private network are a
   // one-time operator initial-apply, exactly like `hcloud_server.web` above. The
   // per-PR CI `-target` path bridges over SSH to the EXISTING web host; it cannot

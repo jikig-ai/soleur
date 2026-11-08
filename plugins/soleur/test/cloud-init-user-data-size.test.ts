@@ -301,7 +301,11 @@ const GIT_DATA_FLOOR = 20_000;
 // 8,000 B headroom POLICY (24,767 B ceiling) is unchanged. This node-zlib model can differ from
 // terraform's base64gzip by a few hundred bytes, so the figure above is the authority and CI's
 // registry-userdata-budget job is the check.
-const REGISTRY_GZIP_BUDGET = 21_600;
+// (#12007, 2026-11-08) 21_600 -> 23_600. The registry host now writes the SOLEUR_HOST_KERNEL collector (gzip+base64 of the comment-stripped repo file,
+// ~1.8 KB incompressible) and zot-disk-heartbeat.sh gains the once-per-6h call site (reusing its post() and token judge). registry-userdata-budget.sh measures
+// 23,552 B stored (was 21,552 B; +2,000 B), this node-zlib model 22,980 B, so the slack is 620 B (the #8714/#9373 precedent) and 9,216 B of real headroom
+// remains under HETZNER_CAP, above the 8,000 B headroom POLICY (24,767 B ceiling), which is unchanged.
+const REGISTRY_GZIP_BUDGET = 23_600;
 const REGISTRY_GZIP_FLOOR = 4_000;
 const GROK_DOGFOOD_GZIP_BUDGET = 8_000;
 const GROK_DOGFOOD_GZIP_FLOOR = 500;
@@ -480,6 +484,14 @@ function modeledLen(
 ): number {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return b64len(readFileSync(join(INFRA, fileMatch[1])).byteLength);
+  // #12007 — base64gzip(<file-backed expr>) (the registry's host-kernel-marker collector var, a comment-stripped file): the ACTUAL gzip+base64 of the
+  // resolved text, level 9 like terraform's base64gzip. Real bytes, never an x-run, which gzips ~1000:1 and would read as headroom.
+  const gzInner = /^base64gzip\((.*)\)$/.exec(expr);
+  if (gzInner) {
+    const text = resolveFileBackedValue(gzInner[1], tfSrc, name);
+    if (text === null) throw new Error(`unrecognized base64gzip(...) argument for ${name}: ${expr}`);
+    return gzipSync(Buffer.from(text, "utf8"), { level: 9 }).toString("base64").length;
+  }
   // Guard: any other base64encode(file(...)) shape must be recognized, else the model would
   // silently under-count a large blob and mask a re-inlining regression.
   if (/base64encode\(file\(/.test(expr)) {
@@ -614,6 +626,12 @@ function modeledValue(
 ): string {
   const fileMatch = /^base64encode\(file\("\$\{path\.module\}\/([^"]+)"\)\)$/.exec(expr);
   if (fileMatch) return readFileSync(join(INFRA, fileMatch[1])).toString("base64");
+  const gzInner = /^base64gzip\((.*)\)$/.exec(expr);
+  if (gzInner) {
+    const text = resolveFileBackedValue(gzInner[1], tfSrc, name);
+    if (text === null) throw new Error(`unrecognized base64gzip(...) argument for ${name}: ${expr}`);
+    return gzipSync(Buffer.from(text, "utf8"), { level: 9 }).toString("base64");
+  }
   if (/base64encode\(file\(/.test(expr)) {
     throw new Error(`unrecognized base64encode(file()) for ${name}: ${expr}`);
   }
@@ -1893,7 +1911,8 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // soleur-egress-gw; the forwarder rides the image for the PR-B dispatcher.
     // +4 (=67): the runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22) — web-bash-synthetic.{sh,service,timer} plus
     // sdk-bash-verdict.sh, the verdict mapping it shares with ci-deploy.sh (installed beside it, sourced not executed).
-    expect(serverTfBakedSet().length).toBe(67);
+    // +3 (=70): the SOLEUR_HOST_KERNEL collector (#12007) — host-kernel-marker.{sh,service,timer}, plain (non-template) unit names.
+    expect(serverTfBakedSet().length).toBe(70);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

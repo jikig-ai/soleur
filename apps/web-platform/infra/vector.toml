@@ -154,6 +154,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "inngest-nftables",
   "inngest-server-probe",
   "sshd",
+  "host-kernel-marker",
 ]
 exclude_matches.CONTAINER_NAME = ["soleur-web-platform", "soleur-egress-gw"]
 journal_directory = "/var/log/journal"
@@ -222,6 +223,7 @@ exclude_matches.SYSLOG_IDENTIFIER = [
   "inngest-nftables",
   "inngest-server-probe",
   "sshd",
+  "host-kernel-marker",
 ]
 journal_directory = "/var/log/journal"
 batch_size = 16
@@ -589,6 +591,18 @@ include_matches.SYSLOG_IDENTIFIER = [
   # registered in vector-pii-scrub.test.sh's SYSTEMD_UNIT_IDENTIFIERS (same mechanism as
   # `webhook`), NOT derivable by AC3 — the two must stay in lockstep.
   "sshd",
+  # #12007: the periodic SOLEUR_HOST_KERNEL marker (host-kernel-marker.service, a plain 6-hourly
+  # oneshot, SyslogIdentifier=host-kernel-marker on web-1, web-2 and the inngest host; the registry
+  # posts the same line directly and ships nothing through this source). One line per run, so
+  # the typical cost is about 4 rows/day/host plus one per boot (OnBootSec=2min), about 5 rows/day/host
+  # across three Vector hosts: this IS the fresh quota decision the note above demands. The
+  # cve-exposure helper (host-state.sh) reads it to ground a kernel as `observed`, and the
+  # per-host dead-man heartbeats (scripts/deadman-heartbeat-feeder.sh host-kernel-* targets) page
+  # when a host stops reporting. Exact-value match: the unit sets this literal SyslogIdentifier=,
+  # and the AC3 derived-tag test in vector-pii-scrub.test.sh derives it from the unit file. The
+  # line carries a kernel string, uptime and role, no credential and no personal data. `systemd`
+  # stays OUT (see below).
+  "host-kernel-marker",
   # DELIBERATELY ABSENT: `systemd` (#9963). PID-1 rows already ship through the
   # partitioned PRIORITY arms — Failed/CRIT-and-worse via Source 2 at PRIORITY
   # {0..2}, ERR/WARN via Source 1 at {3,4} — so the exact-tag entry would add only

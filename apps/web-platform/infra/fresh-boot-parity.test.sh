@@ -107,11 +107,12 @@ fi
 # `printf`, the fresh-boot path writes it via the baked `web-probe-envwrite.sh` invoked by
 # cloud-init. The env-content parity guard (section 12) pins the KEY SET of the two writers equal.
 # (#10455 b) web-bash-synthetic rides the same machinery, plus sdk-bash-verdict.sh, the verdict lib it shares with ci-deploy.sh.
-PROBE_SCRIPTS="web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh web-probe-envwrite.sh web-bash-synthetic.sh sdk-bash-verdict.sh"
+PROBE_SCRIPTS="web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh web-probe-envwrite.sh web-bash-synthetic.sh sdk-bash-verdict.sh host-kernel-marker.sh"
 PROBE_UNITS="web-private-nic-guard.service web-private-nic-guard.timer \
              web-zot-consumer-probe.service web-zot-consumer-probe.timer \
              web-git-data-probe.service web-git-data-probe.timer \
-             web-bash-synthetic.service web-bash-synthetic.timer"
+             web-bash-synthetic.service web-bash-synthetic.timer \
+             host-kernel-marker.service host-kernel-marker.timer"
 PROBE_DESTS="web-private-nic-guard web-zot-consumer-probe web-git-data-probe web-bash-synthetic"
 
 # ── 7. Repo files exist (the probe scripts + the baked env-writer + the shared verdict lib + the probe units) ──
@@ -360,6 +361,57 @@ wbs_mut "web-1 drops the timer enable" web_bash_synthetic_install journald_persi
 wbs_mut "web-1 drops the journald ordering" web_bash_synthetic_install journald_persistent depends_on 's#depends_on = \[terraform_data\.journald_persistent\]#depends_on = []#'
 wbs_mut "web-1 drops the env file chmod 600" web_bash_synthetic_install journald_persistent chmod-env 's#chmod 600 /etc/default/web-bash-synthetic#chmod 644 /etc/default/web-bash-synthetic#'
 wbs_mut "web-2 stops shipping the verdict lib" web_bash_synthetic_install_web2 journald_persistent_web2 file:sdk-bash-verdict.sh 's#(destination[[:space:]]*=[[:space:]]*")/usr/local/bin/sdk-bash-verdict\.sh"#\1/tmp/sdk-bash-verdict.sh"#'
+
+# ── 13d. SOLEUR_HOST_KERNEL collector (#12007): PLAIN unit names (no systemd template -- the parity loops above key on <name>.timer),
+#         no env file, no credential. Sections 7/8/9 already pin presence, bake, Dockerfile COPY and bootstrap install for the three files
+#         (PROBE_SCRIPTS / PROBE_UNITS); this section pins the rest: the fresh-boot enable line, .dockerignore allow lines, and the
+#         per-resource installer shape on BOTH running-host paths (the web-1 installer and its web-2 twin). ──
+HKM_FILES="host-kernel-marker.sh host-kernel-marker.service host-kernel-marker.timer"
+DOCKERIGNORE="$DIR/../.dockerignore"
+if grep -qE '^[[:space:]]*-[[:space:]]+systemctl enable --now host-kernel-marker\.timer[[:space:]]*$' "$CI"; then
+  ok "13d: cloud-init enables host-kernel-marker.timer on a fresh boot"
+else
+  no "13d: cloud-init does not enable host-kernel-marker.timer (a fresh host would never emit)"
+fi
+for f in $HKM_FILES; do
+  if grep -qxF "!infra/$f" "$DOCKERIGNORE"; then ok "13d: .dockerignore allows infra/$f"; else no "13d: .dockerignore does not allow infra/$f (the image would not carry it)"; fi
+done
+hkm_pin_bad() { # <tf-file> <resource> <depends_on target> -> space-joined labels of pins that do not hold (empty == all hold)
+  local blk out="" f pairs pair
+  blk="$(res_block "$1" "$2")"
+  [[ -n "$blk" ]] || { echo "block-missing"; return; }
+  pairs="$(awk '/provisioner "file" \{/ {f=1; src=""; dst=""} f && /source[[:space:]]*=/ {s=$0; sub(/^.*\$\{path\.module\}\//,"",s); sub(/".*$/,"",s); src=s} f && /destination[[:space:]]*=/ {d=$0; sub(/^[^"]*"/,"",d); sub(/".*$/,"",d); dst=d} f && /^  \}/ {print src "|" dst; f=0}' <<<"$blk")"
+  for pair in "host-kernel-marker.sh|/usr/local/bin/host-kernel-marker.sh" "host-kernel-marker.service|/etc/systemd/system/host-kernel-marker.service" "host-kernel-marker.timer|/etc/systemd/system/host-kernel-marker.timer"; do
+    [[ "$(grep -cxF -- "$pair" <<<"$pairs")" == 1 ]] || out="$out file:${pair%%|*}"
+  done
+  for f in $HKM_FILES; do
+    grep -qF "file(\"\${path.module}/$f\")," <<<"$blk" || out="$out trigger:$f"
+  done
+  [[ "$(grep -m1 -F '"' <<<"$(awk '/inline[[:space:]]*=[[:space:]]*\[/{f=1;next} f{print; exit}' <<<"$blk")")" == *'"set -e",'* ]] || out="$out set-e-first"
+  grep -qF '"chmod +x /usr/local/bin/host-kernel-marker.sh",' <<<"$blk" || out="$out chmod-x"
+  grep -qF '"systemctl enable --now host-kernel-marker.timer",' <<<"$blk" || out="$out enable"
+  grep -qF '"systemctl start host-kernel-marker.service",' <<<"$blk" || out="$out start-once"
+  grep -qE "^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[terraform_data\.$3\]" <<<"$blk" || out="$out depends_on"
+  grep -qE 'script_path[[:space:]]*=.*%RAND%' <<<"$blk" || out="$out rand"
+  if grep -qiE 'doppler|token|/etc/default/' <<<"$blk"; then out="$out credential-material"; fi
+  printf '%s' "${out# }"
+}
+for r in "host_kernel_marker_install journald_persistent" "host_kernel_marker_install_web2 journald_persistent_web2"; do
+  set -- $r
+  got="$(hkm_pin_bad "$SRV" "$1" "$2")"
+  if [[ -z "$got" ]]; then ok "13d: terraform_data.$1 ships the three files, hashes them, set -e first, enables the timer, starts the oneshot, orders after $2"; else no "13d: terraform_data.$1 install block lost a pin: $got"; fi
+done
+hkm_mut() { # <name> <resource> <depends> <expected-label> <sed-expr limited to the resource block>
+  local m="$PAR_SCR/hkm.mut" got
+  sed -E "/^resource \"terraform_data\" \"$2\" \{/,/^\}/ $5" "$SRV" > "$m"
+  if cmp -s "$SRV" "$m"; then no "13d mutation: $1 -- did not land"; return; fi
+  got="$(hkm_pin_bad "$m" "$2" "$3")"
+  if [[ " $got " == *" $4 "* ]]; then ok "13d mutation: $1 is caught as '$4'"; else no "13d mutation: $1 SURVIVED (got '${got:-green}', wanted '$4')"; fi
+}
+hkm_mut "web-1 drops the timer enable" host_kernel_marker_install journald_persistent enable 's#systemctl enable --now host-kernel-marker\.timer#systemctl list-timers#'
+hkm_mut "web-2 drops the one-shot start" host_kernel_marker_install_web2 journald_persistent_web2 start-once 's#systemctl start host-kernel-marker\.service#true#'
+hkm_mut "web-2 drops the collector from triggers_replace" host_kernel_marker_install_web2 journald_persistent_web2 trigger:host-kernel-marker.sh 's#^[[:space:]]*file\("\$\{path\.module\}/host-kernel-marker\.sh"\),$#    "x",#'
+hkm_mut "web-1 ships the collector to the wrong path" host_kernel_marker_install journald_persistent file:host-kernel-marker.sh 's#(destination[[:space:]]*=[[:space:]]*")/usr/local/bin/host-kernel-marker\.sh"#\1/usr/local/bin/hkm.sh"#'
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 # #6931 PART 3 — guest-side fresh-boot LUKS (ADR-263). A fresh cattle host never receives web-1's SSH
@@ -671,7 +723,7 @@ mut_ddir "the provisioner's detail dir default drifted" prov 's#(DETAIL_DIR=.*)/
 mut_ddir "ONE emitter's detail dir default drifted" boot '0,/DDIR="\$\{SOLEUR_STAGE_DETAIL_DIR:-\/run\/soleur-stage-detail\.d\}"/s##DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail2.d}"#'
 
 # ── Anti-vacuity: an exact assertion count (deleting sections 14-21 leaves a lower one) ──
-EXPECTED_ASSERTIONS=225  # 199 + 26 for the #10078 env-file conditioning pins: §12b = 5 units x 5 arms (extract / set-identity / unprefixed / no-reset-lines / SKIP-VS-FAIL comment) + 1 mutation control
+EXPECTED_ASSERTIONS=247  # 225 + 22 for #12007 (measured: the three host-kernel-marker files join the PROBE sections 7/8/9, plus the 13d enable/.dockerignore/installer pins and four mutations); before that 199 + 26 for the #10078 env-file conditioning pins: §12b = 5 units x 5 arms (extract / set-identity / unprefixed / no-reset-lines / SKIP-VS-FAIL comment) + 1 mutation control
 if [[ "$((pass + fail))" -ne "$EXPECTED_ASSERTIONS" ]]; then no "floor: ran $((pass + fail)) assertions, expected exactly $EXPECTED_ASSERTIONS (a section was deleted or added without moving the floor)"; fi
 
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="

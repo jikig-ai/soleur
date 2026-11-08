@@ -72,6 +72,11 @@ jobs:
           # `shell:` key, so Actions runs it under `bash -e {0}`, and `set -uo pipefail` above does NOT clear -e;
           # a bare `out="$(...)"; rc=$?` would abort the step at the assignment. The loop never stops on a failing
           # target: one dark check must not hide the other.
+          # (#12007) The four host-kernel targets (host-kernel-web-1, -web-2, -inngest, -registry) are deliberately NOT in the
+          # list below: their heartbeats are born paused and the emitter reaches running hosts only through held steps, so
+          # an hourly run would report a dark host as a feeder fault and train the operator to ignore this monitor. The
+          # arming change adds the four names here in the same change that stages their unpause (tracked in #12386); the
+          # harness pins this list to the script's target table minus its DEFERRED_TARGETS set.
           all_decided=true
           for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do
             rc=0

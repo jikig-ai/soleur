@@ -953,10 +953,12 @@ match; the listing's `url` attribute is deliberately not selected):
 
 ```bash
 set -uo pipefail
-: "${TARGET:?set TARGET=luks-monitor-host-timer or claude-cost-capture}"
+: "${TARGET:?set TARGET=luks-monitor-host-timer, claude-cost-capture or host-kernel-<web-1|web-2|inngest|registry>}"
 case "$TARGET" in
   luks-monitor-host-timer) HB_NAME=soleur-luks-monitor-host-timer-prd; INCIDENT=1023423999; ISSUE=11048 ;;
   claude-cost-capture)     HB_NAME=soleur-claude-cost-capture-prd;     INCIDENT=1020832712; ISSUE=11049 ;;
+  host-kernel-web-1|host-kernel-web-2|host-kernel-inngest|host-kernel-registry)
+                           HB_NAME="soleur-${TARGET}-prd";             INCIDENT=none;       ISSUE=12386 ;;
   *) echo "unknown target" >&2; exit 64 ;;
 esac
 WORKFLOW=scheduled-deadman-heartbeat-feeder.yml
@@ -1141,3 +1143,44 @@ incident mirror (`scheduled-betterstack-incident-mirror.yml`, ADR-298) comments 
 (`gh issue view <ISSUE> --json state`, with `<ISSUE>` 11048 for luks or 11049 for cost).
 
 <!-- lint-infra-ignore end -->
+
+### Host-kernel heartbeats (#12007, tracked in #12386)
+
+Four more dead-man heartbeats ship born paused, one per host that reports the periodic kernel marker
+`SOLEUR_HOST_KERNEL v=1` (how the marker is read: the "Querying `SOLEUR_HOST_KERNEL`" section of
+`betterstack-log-query.md`):
+
+| Feeder target | Heartbeat |
+|---|---|
+| `host-kernel-web-1` | `soleur-host-kernel-web-1-prd` |
+| `host-kernel-web-2` | `soleur-host-kernel-web-2-prd` |
+| `host-kernel-inngest` | `soleur-host-kernel-inngest-prd` |
+| `host-kernel-registry` | `soleur-host-kernel-registry-prd` |
+
+Each is period 3600, grace 7200, fed only while that host's own valid row exists inside a literal 36 hour window, so a dark host
+pages after about 40 hours at worst. The helpers block above accepts these four targets (`INCIDENT=none`: there is no retired
+logs alert behind them, so the incident GET in step 2 and the whole of step 5 do not apply to them). Everything in this section is
+an operator-reserved hold tracked in #12386: nothing here is run by an agent, and each production write needs the owner to
+authorize that exact command, as above.
+
+**Two-stage arming order.** Arming is staged so no step waits on itself, and each stage is ONE batched change, not one per host.
+
+1. **Stage 1 (loop membership while still paused).** After the owner's rollout shows a first qualifying row for a host, a small
+   change adds that host's target name to the loop in `scheduled-deadman-heartbeat-feeder.yml` while its heartbeat is still
+   paused. The feeder then reports `verdict=qualifying_row_heartbeat_paused` for it (healthy, no paging surface), and nothing goes
+   red. Until this stage the four names stay out of the loop on purpose, so the feeder does not file an hourly error check-in for a
+   deliberate interim.
+2. **Stage 2 (arm).** After TWO consecutive `qualifying_row_heartbeat_paused` runs for a target (step 1 above, per target), the
+   owner arms each heartbeat with steps 2 to 4 above (`TARGET=host-kernel-<role>`), and the `feeder` rows for the four targets in
+   `plugins/soleur/lib/heartbeat-manifest.ts` flip from `kind: "none"` to the cron form in one batched change.
+
+**Replacing the inngest or registry host.** A planned replace of either host takes its emitter dark for up to the 36 hour window
+(the collector only runs again after the replacement boots and its first timer or post fires). Pause that host's heartbeat BEFORE
+the window opens and arm it again after the first row from the new host is visible, so the replace does not page. Web hosts need no
+replace for the marker, so this does not apply to them. Scheduling a replace is the owner's call, tracked in #12386.
+
+**`unknown` in the skill output is the expected rollout state.** Until a host has been delivered and has produced its first valid
+row, the `soleur:cve-exposure` host-state output prints `unknown` for it. For the registry and the inngest host that is the
+long-lived state, because they receive the emitter only when they are next replaced for any reason. It is the honest answer and
+not a bug; a host that reads `unknown` is never read as clean. The git-data host (#12385) and the default-off grok-dogfood host
+have no heartbeat here and read `unknown` by design.

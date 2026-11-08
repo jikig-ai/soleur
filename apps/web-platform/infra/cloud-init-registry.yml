@@ -262,6 +262,16 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # (#12007) SOLEUR_HOST_KERNEL collector: one line describing the running kernel, printed to stdout and posted by zot-disk-heartbeat.sh once per
+  # 6 h through its own post() (this host ships no journald identity). The content is a gzip+base64 templatefile var built from the repo file
+  # (apps/web-platform/infra/host-kernel-marker.sh, the single source of truth) with its whole-line comments removed by the same strip every inline script here goes through (done BEFORE encoding, so it is exact and the base64 line is untouched afterwards);
+  # host-kernel-marker-delivery.test.sh renders this template and compares the decoded bytes to that file with the strip applied.
+  - path: /usr/local/bin/host-kernel-marker.sh
+    encoding: gz+b64
+    content: ${host_kernel_marker_gz_b64}
+    owner: root:root
+    permissions: '0755'
+
   - path: /usr/local/bin/zot-disk-heartbeat.sh
     content: |
       #!/usr/bin/env bash
@@ -1028,6 +1038,21 @@ write_files:
         # the payload so an egress failure is itself observable in the NEXT successful post.
         post() { curl --disable --noproxy '*' -fsS -m 10 -H 'Content-Type: application/json' --config - "${betterstack_ingest_url}" --data-raw "{\"message\":\"$LINE\"}" < <(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN") >/dev/null 2>&1; }
         post || post || echo "[zot] SOLEUR_ZOT_DISK egress to Better Stack Logs FAILED: $LINE" >&2
+        # hkm:begin
+        # (#12007) SOLEUR_HOST_KERNEL: at most once per 6 h, AFTER the disk row above so a slow apt call can never delay it. This reuses the post()
+        # and the token judge above (no second copy). The stamp lives in /run (tmpfs), so the first cron tick after every boot also reports.
+        # The collector's test seams are scrubbed from the environment (doppler injects every secret of the config as an env var), the call is
+        # time-bounded, and any failure is swallowed: this script always exits 0.
+        HKM_STAMP=/run/soleur-host-kernel-marker.stamp
+        if [ ! -e "$HKM_STAMP" ] || [ -n "$(find "$HKM_STAMP" -mmin +359 2>/dev/null)" ]; then
+          HKM_LINE=$(env -u HKM_TEST -u HKM_STUB_BIN_DIR -u HKM_PROC_UPTIME -u HKM_REBOOT_FILE -u HKM_APT_TIMEOUT_S timeout -k 2 45 /usr/local/bin/host-kernel-marker.sh --role registry 2>/dev/null) || HKM_LINE=""
+          case "$HKM_LINE" in
+            "SOLEUR_HOST_KERNEL v=1 role=registry "*)
+              LINE="$HKM_LINE"
+              if post || post; then touch "$HKM_STAMP" 2>/dev/null || true; else echo "[zot] SOLEUR_HOST_KERNEL egress to Better Stack Logs FAILED: $LINE" >&2; fi ;;
+          esac
+        fi
+        # hkm:end
       elif [ -n "$TOKEN" ]; then
         printf 'SOLEUR_CREDENTIAL_REFUSED script=zot-disk-heartbeat reason=%s\n' "$(case "$TOKEN" in *[[:cntrl:]]*) echo control_char ;; *) echo token_shape ;; esac)" >&2
         echo "[zot] WARN: BETTERSTACK_LOGS_TOKEN refused (outside the token alphabet) — SOLEUR_ZOT_DISK not shipped: $LINE" >&2

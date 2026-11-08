@@ -604,6 +604,10 @@ jobs:
               -target=betteruptime_heartbeat.inngest_server_probe \
               -target=doppler_secret.inngest_server_probe_heartbeat_url \
               -target=betteruptime_heartbeat.luks_monitor_host_timer \
+              -target=betteruptime_heartbeat.host_kernel_web_1 \
+              -target=betteruptime_heartbeat.host_kernel_web_2 \
+              -target=betteruptime_heartbeat.host_kernel_inngest \
+              -target=betteruptime_heartbeat.host_kernel_registry \
               -target=betteruptime_heartbeat.claude_cost_capture \
               -target=betteruptime_heartbeat.inngest_luks_key_probe_deadman \
               -target=betteruptime_heartbeat.git_data_prd \
