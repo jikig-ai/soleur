@@ -220,7 +220,9 @@ jobs:
           git diff -z --name-only "${diff_base}"...HEAD > "$changed_nul"
           changed_files=$(tr '\0' '\n' < "$changed_nul")
           echo "Changed files in PR:"
-          echo "$changed_files" | sed 's/^/  /'
+          # Control bytes become `?` for the log only: a raw name is attacker-chosen and a CR/LF in it could start a
+          # workflow command on its own log line. The matches below read the untouched NUL file.
+          LC_ALL=C tr -c '[:print:]\0' '?' < "$changed_nul" | tr '\0' '\n' | sed 's/^/  /'
 
           surface_hit=false
           for pat in "${surface_patterns[@]}"; do

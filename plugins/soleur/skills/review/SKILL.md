@@ -110,11 +110,11 @@ Proceed once the tree is ready (worktree or current branch).
 
 Before spawning review agents, classify the PR to right-size the panel.
 
-1. Run the helper below (NUL-safe `git diff --name-only`) to write the list of changed files; show `head -n 200 "$REVIEW_TMP/review-changed.txt"`. Also capture status letters and line counts. Resolve the tmp path with `git rev-parse --git-dir` (in a worktree `.git` is a file, so `> .git/review-*.txt` fails with `Not a directory`):
+1. Run the helper below (NUL-delimited, rename-free, submodule-honest; rc 2 on failure) to write the list of changed files; show `head -n 200 "$REVIEW_TMP/review-changed.txt"`. Also capture status letters and line counts. Resolve the tmp path with `git rev-parse --git-dir` (in a worktree `.git` is a file, so `> .git/review-*.txt` fails with `Not a directory`):
 
    ```bash
    REVIEW_TMP="$(git rev-parse --git-dir)"
-   bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$?"; }
+   bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }
    git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
    git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```

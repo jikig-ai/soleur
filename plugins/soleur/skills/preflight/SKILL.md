@@ -42,7 +42,7 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ### Step 0.1: Compute changed-file path-set (diff classifier)
 
-Run the helper below (NUL-safe `git diff --name-only`) ONCE up-front and cache the result so each path-gated check re-uses the same path-set instead of re-running diff. Skill convention forbids `$()` command substitution — write the diff to a tmpfile so checks can `grep -E` the predicate they care about.
+Run the helper below (NUL-delimited, rename-free, submodule-honest; rc 2 on failure) ONCE up-front and cache the result so each path-gated check re-uses the same path-set instead of re-running diff. Skill convention forbids `$()` command substitution — write the diff to a tmpfile so checks can `grep -E` the predicate they care about.
 
 Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/<filename>` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
 
@@ -53,7 +53,7 @@ bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$P
 
 All downstream `cat .git/<filename>` references in the predicates below must use `"$PREFLIGHT_TMP/<filename>"` instead. The pre-existing `.git/...` literals worked in non-worktree checkouts but silently broke in worktrees (where every preflight increasingly happens by default).
 
-**Cache-missing rule.** On helper failure (offline, no remote) the cache file is removed and `PREFLIGHT-CACHE-MISSING` printed; a MISSING cache means RUN every path-gated check, never SKIP (an existing empty file is a real empty diff). Every SKIP predicate below and each Check's "Otherwise return SKIP" applies only when the cache file exists. Between Phase 0 and Phase 1 nothing mutates the working tree or fetches `origin/main`, so the cache is valid for the duration of one preflight invocation. The cache lives under the per-worktree gitdir (user-owned, scoped to one worktree) — this isolates concurrent preflight runs across sibling worktrees and avoids the `/tmp/` symlink-clobber class that affects fixed-name shared paths on multi-user hosts.
+**Cache-missing rule.** On helper failure (offline, no remote) the cache file is removed and `PREFLIGHT-CACHE-MISSING` printed; a MISSING cache means RUN every path-gated check, never SKIP (an existing empty file is a real empty diff). Every SKIP predicate below reads: cache file absent => RUN; `grep` rc 1 => SKIP; rc 2 (or any other) => RUN. Never SKIP on "non-zero" or on empty output of a read that errored. Between Phase 0 and Phase 1 nothing mutates the working tree or fetches `origin/main`, so the cache is valid for the duration of one preflight invocation. The cache lives under the per-worktree gitdir (user-owned, scoped to one worktree) — this isolates concurrent preflight runs across sibling worktrees and avoids the `/tmp/` symlink-clobber class that affects fixed-name shared paths on multi-user hosts.
 
 **Fast-path SKIP overview.** For diffs whose path-set matches a recognized "guaranteed-SKIP" shape, the relevant check returns SKIP at its first step without further work. The predicates below are the existing inner predicates of each check — only the diff source is changed.
 
@@ -129,9 +129,9 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `_v=$(mktemp -d -t soleur-run.$$.XXXXXXXX) && a=$(mktemp -p "$_v") && b=$(mktemp -p "$_v") && git diff --name-only origin/main...HEAD -- '*/supabase/migrations/*.sql' supabase/migrations/*.sql > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `_v=$(mktemp -d -t soleur-run.$$.XXXXXXXX) && a=$(mktemp -p "$_v") && b=$(mktemp -p "$_v") && bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" --match '(^|/)supabase/migrations/.*\.sql$' origin/main...HEAD > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
-If no migration files are found (grep rc=1), return **SKIP**.
+If the cache file is absent, RUN the check. Otherwise `grep` rc 1 (no migration files) => return **SKIP**; rc 2 => RUN.
 
 **Step 1.1b: Detect documented prd-apply deferral (early SKIP).**
 
@@ -228,7 +228,7 @@ curl --disable --proto '=https' -m 30 -fsS --config - "${SUPABASE_URL}/rest/v1/<
 
 **Step 2.1: Detect relevant file changes.**
 
-Re-use the cached path-set from Phase 0 Step 0.1:
+Re-use the cached path-set from Phase 0 Step 0.1. If the cache file is absent, RUN the check (skip Step 2.1's read); otherwise:
 
 ```bash
 cat "$PREFLIGHT_TMP/preflight-diff-files.txt"
@@ -236,7 +236,7 @@ cat "$PREFLIGHT_TMP/preflight-diff-files.txt"
 
 Check if any changed files match these patterns: `.tsx`, `.css`, `.html`, `middleware.ts`, `next.config.*`, `.tf`, `Dockerfile`, `nginx*`, `.github/workflows/*`.
 
-If no relevant files changed, return **SKIP** (fast-path — no Doppler fetch needed when the diff has no client-bundle, infra, or workflow surface).
+If the cache exists, `cat` succeeded, and no relevant files changed, return **SKIP** (fast-path — no Doppler fetch needed when the diff has no client-bundle, infra, or workflow surface).
 
 **Step 2.2: Get production URL from Doppler.**
 
@@ -385,7 +385,7 @@ Otherwise **PASS**.
 
 ### Check 5: Production Bundle Supabase Host
 
-**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/lib/supabase/validate-anon-key.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise return **SKIP** with note: "No build-arg surface changes detected." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
+**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/lib/supabase/validate-anon-key.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise (cache file present, `grep` rc 1) return **SKIP** with note: "No build-arg surface changes detected." A missing cache or `grep` rc 2 => RUN. The path set is the helper's exact-name list (NUL-delimited, rename-free, submodule-honest).
 
 **Note:** Complements Check 4. Check 4 enforces Doppler dev/prd isolation; Check 5 covers the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` and `secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY` in `reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md` (URL class) and `knowledge-base/project/learnings/bug-fixes/2026-04-28-anon-key-test-fixture-leaked-into-prod-build.md` (anon-key class).
 
@@ -510,9 +510,9 @@ set -uo pipefail
 grep -E "$SENSITIVE_PATH_RE" "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-Run as two separate Bash calls (assignment, then the `grep`). The path-set comes from the cached file written by Phase 0 Step 0.1 — the regex itself is byte-identical to the form previously consumed by `git diff --name-only origin/main...HEAD | grep -E "$SENSITIVE_PATH_RE"`. The regex covers every Next.js attack surface (`middleware.ts`, every `app/api/**` route, security/CSP/auth/session/legal libraries, infra Terraform under `apps/*/infra/`, all Doppler-aware shell scripts, and every credential-handling workflow even when `doppler` is not in the filename).
+Run as two separate Bash calls (assignment, then the `grep`). The path-set comes from the cached file written by Phase 0 Step 0.1 — the helper's list is exact (NUL-delimited, rename-free, submodule-honest), so the `^`-anchored regex sees real names. The regex covers every Next.js attack surface (`middleware.ts`, every `app/api/**` route, security/CSP/auth/session/legal libraries, infra Terraform under `apps/*/infra/`, all Doppler-aware shell scripts, and every credential-handling workflow even when `doppler` is not in the filename).
 
-If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive paths touched."
+If the cache file is absent, RUN. Otherwise `grep` rc 1 (no match) => return **SKIP** with note: "No sensitive paths touched."; rc 2 => RUN.
 
 **Step 6.2: Resolve the canonical compliance source (Shared Plan-File Resolution).**
 
@@ -582,7 +582,7 @@ If `RESULT=PASS_INCIDENT` or `RESULT=PASS_AGGREGATE`: **PASS**.
 
 ### Check 8: Service Worker Cache Bump on Client-Bundle Regression Fix
 
-**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) AND the commit log together satisfy BOTH a regression-fix marker (a commit subject starting with `fix(`, `fix:`, or `hotfix`) AND any file under `apps/web-platform/lib/supabase/`, `apps/web-platform/sentry.client.config.ts`, `apps/web-platform/lib/auth/`, `apps/web-platform/lib/byok/`, or `apps/web-platform/components/error-boundary-view.tsx`. Otherwise return **SKIP** with note: "No client-bundle regression-fix surface detected." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
+**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) AND the commit log together satisfy BOTH a regression-fix marker (a commit subject starting with `fix(`, `fix:`, or `hotfix`) AND any file under `apps/web-platform/lib/supabase/`, `apps/web-platform/sentry.client.config.ts`, `apps/web-platform/lib/auth/`, `apps/web-platform/lib/byok/`, or `apps/web-platform/components/error-boundary-view.tsx`. Otherwise return **SKIP** with note: "No client-bundle regression-fix surface detected." A missing cache => RUN the path half (never SKIP on it). The path set is the helper's exact-name list.
 
 **Rationale:** Content-hashed Next.js chunks normally invalidate cache automatically — new content → new filename → SW cache miss → fresh fetch. But the SW at `apps/web-platform/public/sw.js` uses a cache-first strategy under a single `CACHE_NAME` for `/_next/static/**`, and old broken chunks remain cached under their old filenames until either (a) browser eviction, or (b) the activate handler purges them via a `CACHE_NAME` bump. After PR #3014 deployed v0.58.0 with a corrected validator, users still saw the dashboard error.tsx because their SW was serving cached PR #3007 chunks. Without bumping `CACHE_NAME`, a regression fix to the inlined client bundle relies on every user manually clearing site data — unacceptable for an auth-tree outage.
 
@@ -602,7 +602,7 @@ Re-use the cached path-set from Phase 0 Step 0.1:
 grep -E '^apps/web-platform/(lib/(supabase|auth|byok)/|sentry\.client\.config\.ts|components/error-boundary-view\.tsx)' "$PREFLIGHT_TMP/preflight-diff-files.txt" | head -1
 ```
 
-The regex is byte-identical to the form previously piped from `git diff --name-only origin/main...HEAD`. If empty, return **SKIP** with note: "No client-bundle surface touched."
+If the cache file is absent, RUN. If present and `grep` rc is 1, return **SKIP** with note: "No client-bundle surface touched."; rc 2 => RUN.
 
 **Step 8.3: Compare `CACHE_NAME` against `origin/main`.**
 
@@ -694,7 +694,7 @@ SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)
 grep -E "$SENSITIVE_PATH_RE" "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-If `grep` exits non-zero, return **SKIP** with note: "No sensitive paths touched."
+If the cache file is absent, RUN. Otherwise `grep` rc 1 => return **SKIP** with note: "No sensitive paths touched."; rc 2 => RUN.
 
 **Step 10.2: Resolve the plan file (Shared Plan-File Resolution).**
 
@@ -1345,7 +1345,7 @@ On **FAIL**, present the failure reason + sanitized command + diagnostic and off
 
 ### Check 7: Canary Probe Set Covers Authenticated Surface
 
-**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched." The path predicate is identical to the original `git diff --name-only origin/main...HEAD` form — only the diff source is changed.
+**Path-gated:** only runs when the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-diff-files.txt"`) contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise (cache file present, no match) return **SKIP** with note: "ci-deploy.sh untouched." A missing cache => RUN. The path set is the helper's exact-name list.
 
 **Rationale:** The legacy canary probed only `/health`, which is middleware-bypassed and never imports `lib/supabase/client.ts`. A broken inlined `NEXT_PUBLIC_SUPABASE_*` value would pass canary and ship to prod (PR #3014 incident class). The canary contract — documented in `knowledge-base/engineering/operations/runbooks/canary-probe-set.md` — requires probes for every public route (`/login`) AND auth-gated entry (`/dashboard`) PLUS a body-content sentinel rejection.
 
@@ -1394,9 +1394,10 @@ that no longer resolves). Consumes the deterministic analyzer `domain-model-drif
 ```bash
 DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
 # Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
-if [[ ! -s "$DIFF" ]]; then bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
-if [[ -s "$DIFF" ]] && ! grep -qE '(^|/)apps/web-platform/supabase/migrations/.*\.sql$|(^|/)apps/web-platform/server/workspace-resolver\.ts$|(^|/)knowledge-base/engineering/architecture/domain-model\.md$' "$DIFF"; then
-  echo "SKIP — no business-rule surface (migration/workspace-resolver/register) in diff"; exit 0
+if [[ ! -s "$DIFF" ]]; then if bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF.new" 2>/dev/null; then mv -f "$DIFF.new" "$DIFF"; else rm -f "$DIFF.new" "$DIFF"; fi; fi
+if [[ -s "$DIFF" ]]; then
+  grep -qE '(^|/)apps/web-platform/supabase/migrations/.*\.sql$|(^|/)apps/web-platform/server/workspace-resolver\.ts$|(^|/)knowledge-base/engineering/architecture/domain-model\.md$' "$DIFF"; rc=$?
+  if [[ $rc -eq 1 ]]; then echo "SKIP — no business-rule surface (migration/workspace-resolver/register) in diff"; exit 0; fi   # rc 1 = no match => SKIP; rc 2 (grep error) => run
 fi
 ```
 
@@ -1448,9 +1449,10 @@ prose; it shells out and relays the exit code.
 ```bash
 DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
 # Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
-if [[ ! -s "$DIFF" ]]; then bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
-if [[ -s "$DIFF" ]] && ! grep -qE '\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-compose.*\.ya?ml$' "$DIFF"; then
-  echo "SKIP — no store-class or connection-class surface (*.tf / migration / cloud-init / docker-compose) in diff"; exit 0
+if [[ ! -s "$DIFF" ]]; then if bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF.new" 2>/dev/null; then mv -f "$DIFF.new" "$DIFF"; else rm -f "$DIFF.new" "$DIFF"; fi; fi
+if [[ -s "$DIFF" ]]; then
+  grep -qE '\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-compose.*\.ya?ml$' "$DIFF"; rc=$?
+  if [[ $rc -eq 1 ]]; then echo "SKIP — no store-class or connection-class surface (*.tf / migration / cloud-init / docker-compose) in diff"; exit 0; fi   # rc 1 = no match => SKIP; rc 2 (grep error) => run
 fi
 ```
 

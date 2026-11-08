@@ -107,14 +107,30 @@ python3 -c 'import yaml' 2>/dev/null || { echo "FATAL: PyYAML missing; the steps
 REAL_GIT="$(command -v git)"
 export REAL_GIT
 
+# LOCALE PROBE. Every UTF-8 row below (the Latin-1 name rows, the secret-scan rows) is only meaningful if C.UTF-8 really behaves as a UTF-8
+# locale on THIS host: GNU grep must reject an invalid UTF-8 byte (count 0) where the byte locale accepts it (count 1). On a host without the
+# locale the Latin-1 rows would pass VACUOUSLY, so this is a FATAL (printf + exit, never fail()), not a row.
+HELPER_LC=C.UTF-8
+# A child bash records the LC_ALL it STARTED under (BASH_ENV is read by every non-interactive bash, --norc or not), so a row that claims
+# "ran under C.UTF-8" is checked against what the helper or step RECEIVED, not against what this harness meant to pass.
+LC_RECORDER="$WORK_ROOT/lc-recorder.sh"
+printf '%s\n' 'printf "%s\n" "${LC_ALL-<unset>}" >> "${LC_RECORD:-/dev/null}"' > "$LC_RECORDER"
+_lc_utf8="$(printf '\351\n' | LC_ALL="$HELPER_LC" grep -c . 2>/dev/null)"
+_lc_byte="$(printf '\351\n' | LC_ALL=C grep -c . 2>/dev/null)"
+if [ "$_lc_utf8" != 0 ] || [ "$_lc_byte" != 1 ]; then
+  printf 'FATAL: locale probe: LC_ALL=%s grep -c . on an invalid UTF-8 byte gave %s (want 0) and LC_ALL=C gave %s (want 1); the UTF-8 rows would pass vacuously on this host\n' \
+    "$HELPER_LC" "$_lc_utf8" "$_lc_byte" >&2
+  exit 1
+fi
+
 # The names git C-quotes (the point of every row), plus a glob-looking one.
 NAME_E=$'\303\251.tf'
 NAME_TAB=$'tab\ttwo.tf'
 NAME_Q='q"uote.tf'
 NAME_BS='back\slash.tf'
 NAME_GLOB='glob[1].tf'
-NAME_NL=$'nl-a\nb.tf'
 NL=$'\n'
+CR=$'\r'
 
 fg() { local d="$1"; shift; assert_fixture_dir "$d"; git -C "$d" "$@"; }
 
@@ -211,12 +227,15 @@ run_helper() { # <dir> <args...>   (cwd = dir)
   H_OUT="$(cat "$WORK_ROOT/io/h.out")"
   H_ERR="$(cat "$WORK_ROOT/io/h.err")"
 }
-run_helper_env() { # <dir> <NAME=value> <args...>   (cwd = dir; one env assignment for the helper only)
-  local d="$1" e="$2"; shift 2
+H_LC_SEEN=""
+run_helper_env() { # <dir> <NAME=value> <args...>   (cwd = dir; one env assignment for the helper only; H_LC_SEEN = the LC_ALL the helper's bash started under)
+  local d="$1" e="$2" lcrec="$WORK_ROOT/io/h.lc"; shift 2
   assert_fixture_dir "$d"
   mkdir -p "$WORK_ROOT/io"
+  : > "$lcrec"
   H_RC=0
-  (cd "$d" && env "$e" bash "$HELPER" "$@") > "$WORK_ROOT/io/h.out" 2> "$WORK_ROOT/io/h.err" || H_RC=$?
+  (cd "$d" && env "$e" BASH_ENV="$LC_RECORDER" LC_RECORD="$lcrec" bash "$HELPER" "$@") > "$WORK_ROOT/io/h.out" 2> "$WORK_ROOT/io/h.err" || H_RC=$?
+  H_LC_SEEN="$(head -n 1 "$lcrec")"
   H_OUT="$(cat "$WORK_ROOT/io/h.out")"
   H_ERR="$(cat "$WORK_ROOT/io/h.err")"
 }
@@ -229,15 +248,44 @@ h_expect_line() { # <label> <exact line>
 h_expect_rc() { # <label> <rc>
   if [ "$H_RC" -eq "$2" ]; then h_ok "$1"; else h_bad "$1 (want rc=$2 got rc=$H_RC; err='$(printf '%s' "$H_ERR" | cut -c1-120)')"; fi
 }
+h_expect_refused() { # <label>: the helper refused (rc 2) AND printed no list on stdout
+  if [ "$H_RC" -eq 2 ] && [ -z "$H_OUT" ]; then h_ok "$1"; else h_bad "$1 (want rc=2 and an empty stdout; got rc=$H_RC out='$(printf '%s' "$H_OUT" | tr '\n' '|' | cut -c1-120)')"; fi
+}
+h_expect_lc() { # <label> <want>: the helper's bash really started under this LC_ALL
+  if [ "$H_LC_SEEN" = "$2" ]; then h_ok "$1: the helper started under LC_ALL=$2"; else h_bad "$1: the helper started under LC_ALL='$H_LC_SEEN', want '$2'"; fi
+}
+h_expect_final_lf() { # <label> <file>: the file ends with a line feed (a `$(cat)` capture strips it, so this reads the file itself)
+  if [ -s "$2" ] && [ "$(tail -c 1 "$2" | od -An -tx1 | tr -d ' \n')" = 0a ]; then h_ok "$1"; else h_bad "$1 (the last byte is not LF)"; fi
+}
 selftest_helper_verdicts() {
-  local o_out="$H_OUT" o_err="$H_ERR" o_rc="$H_RC"
+  mkdir -p "$WORK_ROOT/io"
+  local o_out="$H_OUT" o_err="$H_ERR" o_rc="$H_RC" o_lc="$H_LC_SEEN"
   H_OUT=$'alpha\nbeta'; H_ERR=""; H_RC=0
   selftest_moved "h_expect_line accepts a listed line" pass h_expect_line "selftest" "beta"
   selftest_moved "h_expect_line rejects an absent line" fail h_expect_line "selftest" "gamma"
   selftest_moved "h_expect_line rejects a mere substring" fail h_expect_line "selftest" "alph"
   selftest_moved "h_expect_rc accepts the right rc" pass h_expect_rc "selftest" 0
   selftest_moved "h_expect_rc rejects a wrong rc" fail h_expect_rc "selftest" 2
-  H_OUT="$o_out"; H_ERR="$o_err"; H_RC="$o_rc"
+  # A HIGHER wrong rc and a LOWER wrong rc: an `-eq` weakened to `-ge` or `-le` accepts one of them.
+  H_RC=2
+  selftest_moved "h_expect_rc rejects a higher rc than expected (2 where 1 wanted)" fail h_expect_rc "selftest" 1
+  H_RC=1
+  selftest_moved "h_expect_rc rejects a lower rc than expected (1 where 2 wanted)" fail h_expect_rc "selftest" 2
+  H_RC=2; H_OUT=""
+  selftest_moved "h_expect_refused accepts rc 2 with an empty stdout" pass h_expect_refused "selftest"
+  H_RC=2; H_OUT="a-list-line"
+  selftest_moved "h_expect_refused rejects rc 2 with a list on stdout" fail h_expect_refused "selftest"
+  H_RC=0; H_OUT=""
+  selftest_moved "h_expect_refused rejects rc 0 with an empty stdout" fail h_expect_refused "selftest"
+  H_RC=1; H_OUT=""
+  selftest_moved "h_expect_refused rejects rc 1 (a different failure)" fail h_expect_refused "selftest"
+  printf 'a\nb\n' > "$WORK_ROOT/io/lf-yes.txt"; printf 'a\nb' > "$WORK_ROOT/io/lf-no.txt"
+  selftest_moved "h_expect_final_lf accepts a file ending in LF" pass h_expect_final_lf "selftest" "$WORK_ROOT/io/lf-yes.txt"
+  selftest_moved "h_expect_final_lf rejects a file whose last byte is not LF" fail h_expect_final_lf "selftest" "$WORK_ROOT/io/lf-no.txt"
+  H_LC_SEEN="C"
+  selftest_moved "h_expect_lc accepts the locale the helper started under" pass h_expect_lc "selftest" C
+  selftest_moved "h_expect_lc rejects another locale" fail h_expect_lc "selftest" C.UTF-8
+  H_OUT="$o_out"; H_ERR="$o_err"; H_RC="$o_rc"; H_LC_SEEN="$o_lc"
 }
 precondition_quoted() { # <label> <dir> <range> <raw path>: the PLAIN diff must C-quote this name (else the row below proves nothing)
   local plain
@@ -426,10 +474,16 @@ section_helper() {
   put_in "$d" "$P/"$'\351'".tf"
   commit_row || { h_bad "could not commit latin-1 row"; return; }
   precondition_quoted "latin-1" "$d" origin/main...HEAD "$P/"$'\351'".tf"
-  run_helper_env "$d" LC_ALL=C.UTF-8 --match '^apps/web-platform/infra/' origin/main...HEAD
+  local naive_lc
+  naive_lc="$(printf '%s\n' "$P/"$'\351'".tf" | LC_ALL="$HELPER_LC" grep -E -e '^apps/' 2>/dev/null || true)"
+  if [ "$naive_lc" != "$P/"$'\351'".tf" ]; then h_ok "precondition latin-1: a plain grep under LC_ALL=$HELPER_LC does NOT print the invalid-UTF-8 name (the rows below are not vacuous)"
+  else h_bad "precondition latin-1: a plain grep under LC_ALL=$HELPER_LC printed the invalid-UTF-8 name, so the UTF-8 rows prove nothing"; fi
+  run_helper_env "$d" LC_ALL="$HELPER_LC" --match '^apps/web-platform/infra/' origin/main...HEAD
+  h_expect_lc "--match locale row" "$HELPER_LC"
   h_expect_rc "--match under LC_ALL=C.UTF-8 with an invalid-UTF-8 name exits 0" 0
   h_expect_line "--match under LC_ALL=C.UTF-8 prints the invalid-UTF-8 name raw" "$P/"$'\351'".tf"
-  run_helper_env "$d" LC_ALL=C.UTF-8 origin/main...HEAD
+  run_helper_env "$d" LC_ALL="$HELPER_LC" origin/main...HEAD
+  h_expect_lc "plain locale row" "$HELPER_LC"
   h_expect_line "plain mode under LC_ALL=C.UTF-8 prints the invalid-UTF-8 name raw" "$P/"$'\351'".tf"
   free_row
 
@@ -445,6 +499,75 @@ section_helper() {
   h_expect_rc "--match over a >64 KiB list exits 0" 0
   if [ "$(wc -c < "$WORK_ROOT/io/h.out")" -gt 65536 ]; then h_ok "precondition large: the matched output is larger than a 64 KiB pipe buffer"; else h_bad "precondition large: output only $(wc -c < "$WORK_ROOT/io/h.out") bytes"; fi
   if [ "$(grep -c . <<<"$H_OUT")" -eq 1200 ]; then h_ok "--match over a >64 KiB list prints all 1200 matches"; else h_bad "--match over a large list printed $(grep -c . <<<"$H_OUT") lines, want 1200"; fi
+  free_row
+  # Row set 11: the option ALLOWLIST. Only `--cached`, `--staged`, `--merge-base`, `--diff-filter=*` and everything after `--` pass; every
+  # other option is refused with rc 2 and an empty stdout, because a flag appended after the baked-in ones wins in git (`-M`, `-C`,
+  # `--find-renames`, `--ignore-submodules=all`, `--no-renames`) or corrupts the list (`-ps`, `-sz`).
+  new_row || { h_bad "could not build allowlist row"; return; }
+  d="$ROW_DIR"
+  put_in "$d" "$P/allow-new.tf"; put_in "$d" "$P/keep.tf" "edited"
+  commit_row || { h_bad "could not commit allowlist row"; return; }
+  local fl
+  for fl in -ps -sz -M -C --find-renames --ignore-submodules=all --no-renames --diff-filter; do
+    run_helper "$d" "$fl" origin/main...HEAD
+    h_expect_refused "allowlist: option $fl before the range is refused"
+  done
+  for fl in -ps -M --ignore-submodules=all --no-renames; do
+    run_helper "$d" origin/main...HEAD "$fl"
+    h_expect_refused "allowlist: option $fl after the range is refused"
+  done
+  run_helper "$d" origin/main...HEAD -- -s
+  h_expect_rc "allowlist: everything after -- is a pathspec, never an option (a pathspec named -s)" 0
+  run_helper "$d" --diff-filter=A origin/main...HEAD
+  h_expect_rc "allowlist: --diff-filter=A is accepted" 0
+  h_expect_line "allowlist: --diff-filter=A lists the added file" "$P/allow-new.tf"
+  if h_has_line "$P/keep.tf"; then h_bad "allowlist: --diff-filter=A listed the modified file"; else h_ok "allowlist: --diff-filter=A leaves the modified file out"; fi
+  run_helper "$d" --merge-base origin/main HEAD
+  h_expect_rc "allowlist: --merge-base is accepted" 0
+  h_expect_line "allowlist: --merge-base lists the changed file" "$P/allow-new.tf"
+  free_row
+  new_row || { h_bad "could not build staged row"; return; }
+  d="$ROW_DIR"
+  put_in "$d" "$P/staged-new.tf"
+  fg "$d" add -A
+  run_helper "$d" --cached
+  h_expect_rc "allowlist: --cached is accepted" 0
+  h_expect_line "allowlist: --cached lists the staged file" "$P/staged-new.tf"
+  run_helper "$d" --staged
+  h_expect_rc "allowlist: --staged is accepted" 0
+  h_expect_line "allowlist: --staged lists the staged file" "$P/staged-new.tf"
+  free_row
+
+  # Row set 12: output integrity. A closed or full stdout is rc 2 (a truncated list at rc 0 reads as a shorter diff), a successful plain
+  # list ends in a line feed, and no mode leaves its temp file behind.
+  new_row || { h_bad "could not build output row"; return; }
+  d="$ROW_DIR"
+  put_in "$d" "$P/out.tf"
+  commit_row || { h_bad "could not commit output row"; return; }
+  if [ -w /dev/full ]; then
+    H_RC=0
+    (cd "$d" && bash "$HELPER" origin/main...HEAD) > /dev/full 2> "$WORK_ROOT/io/h.err" || H_RC=$?
+    h_expect_rc "plain mode with stdout on a full device exits 2" 2
+  else
+    h_bad "plain mode to a full device: /dev/full is not writable on this host, the row cannot run"
+  fi
+  run_helper "$d" origin/main...HEAD
+  h_expect_final_lf "plain mode output ends with a line feed (read from the file, a capture strips it)" "$WORK_ROOT/io/h.out"
+  run_helper "$d" --match '^apps/' origin/main...HEAD
+  h_expect_final_lf "--match output ends with a line feed" "$WORK_ROOT/io/h.out"
+  local priv="$WORK_ROOT/priv-tmp" probe_t
+  mkdir -p "$priv"
+  probe_t="$(TMPDIR="$priv" mktemp)"
+  if [ -n "$probe_t" ] && [ -e "$probe_t" ] && [ "$(dirname "$probe_t")" = "$priv" ]; then h_ok "precondition tmp: mktemp honours TMPDIR=$priv (so an empty dir afterwards means something)"; else h_bad "precondition tmp: mktemp ignored TMPDIR"; fi
+  rm -f -- "$probe_t"
+  run_helper_env "$d" TMPDIR="$priv" origin/main...HEAD
+  if [ -z "$(ls -A "$priv")" ]; then h_ok "plain mode leaves no temp file in TMPDIR"; else h_bad "plain mode left $(ls -A "$priv" | head -3 | tr '\n' ' ') in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
+  run_helper_env "$d" TMPDIR="$priv" --match '^apps/' origin/main...HEAD
+  if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (a match) leaves no temp file in TMPDIR"; else h_bad "--match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
+  run_helper_env "$d" TMPDIR="$priv" --match '^zzz-no-such-prefix/' origin/main...HEAD
+  if [ -z "$(ls -A "$priv")" ]; then h_ok "--match (no match, rc 1) leaves no temp file in TMPDIR"; else h_bad "--match with no match left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
+  run_helper_env "$d" TMPDIR="$priv" origin/no-such-ref...HEAD
+  if [ -z "$(ls -A "$priv")" ]; then h_ok "a git failure (rc 2) leaves no temp file in TMPDIR"; else h_bad "a git failure left a temp file in TMPDIR"; rm -rf -- "$priv"; mkdir -p "$priv"; fi
   free_row
   mkdir -p "$WORK_ROOT/nogit"
   run_helper "$WORK_ROOT/nogit" origin/main...HEAD
@@ -533,13 +656,14 @@ default_env_val() { # <arm: pr|push|mg> <KEY>  -> DEV
   return 0
 }
 
-S_RC=0; S_LOG=""; S_OUT=""
+S_RC=0; S_LOG=""; S_OUT=""; S_LC_SEEN=""
 # STEP_LC (default C, the weakest locale the harness pins) is the LC_ALL the step starts under: `STEP_LC=C.UTF-8 run_step ...`.
 run_step() { # <step key> <arm> [fail verbs]   (cwd = $ROW_DIR; sets S_RC, S_LOG, S_OUT)
   local key="$1" arm="$2" verbs="${3:-}" k envargs=() path="$SHIM_NODE_DIR:$PATH"
   local outf="$WORK_ROOT/io/gh-output-$ROW_SEQ" logf="$WORK_ROOT/io/log-$ROW_SEQ" tmpd="$WORK_ROOT/io/tmp-$ROW_SEQ"
   [ -s "$STEP_DIR/$key.sh" ] || { fail "$key: no extracted body"; S_RC=99; return; }
-  mkdir -p "$tmpd"; : > "$outf"
+  local lcrec="$WORK_ROOT/io/lc-$ROW_SEQ"
+  mkdir -p "$tmpd"; : > "$outf"; : > "$lcrec"
   while IFS= read -r k; do
     [ -n "$k" ] || continue
     if default_env_val "$arm" "$k"; then envargs+=("$k=$DEV"); else fail "$key: step declares env key $k not in DEFAULT_ENV: add $k to DEFAULT_ENV"; fi
@@ -548,11 +672,43 @@ run_step() { # <step key> <arm> [fail verbs]   (cwd = $ROW_DIR; sets S_RC, S_LOG
   assert_fixture_dir "$ROW_DIR"
   S_RC=0
   (cd "$ROW_DIR" && env -i PATH="$path" HOME="$WORK_ROOT/io" LC_ALL="${STEP_LC:-C}" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
-      GITHUB_OUTPUT="$outf" RUNNER_TEMP="$tmpd" NODE_ARGV_FILE="$WORK_ROOT/io/argv-$ROW_SEQ" "${envargs[@]}" \
+      GITHUB_OUTPUT="$outf" RUNNER_TEMP="$tmpd" BASH_ENV="$LC_RECORDER" LC_RECORD="$lcrec" NODE_ARGV_FILE="$WORK_ROOT/io/argv-$ROW_SEQ" "${envargs[@]}" \
       bash --noprofile --norc -e "$STEP_DIR/$key.sh") > "$logf" 2>&1 || S_RC=$?
   S_LOG="$(cat "$logf")"
   S_OUT="$(cat "$outf")"
+  S_LC_SEEN="$(head -n 1 "$lcrec")"
   STEP_ROWS=$((STEP_ROWS + 1))
+  if [ "$S_LC_SEEN" != "${STEP_LC:-C}" ]; then fail "$key: the step started under LC_ALL='$S_LC_SEEN', the row asked for '${STEP_LC:-C}' (STEP_LC was not honoured)"; fi
+}
+expect_step_lc() { # <label> <want>: the step's bash really started under this LC_ALL
+  if [ "$S_LC_SEEN" = "$2" ]; then s_ok "$1: the step started under LC_ALL=$2"; else fail "$1: the step started under LC_ALL='$S_LC_SEEN', want '$2'"; fi
+}
+nul_set_eq() { # <file> <names...>: the NUL-delimited records of <file> are EXACTLY these names (any order)
+  local f="$1" g w found; shift
+  local -a got=() want=("$@")
+  [ -f "$f" ] || return 1
+  mapfile -d '' -t got < "$f"
+  [ "${#got[@]}" -eq "${#want[@]}" ] || return 1
+  for w in "${want[@]}"; do
+    found=0
+    for g in "${got[@]}"; do if [ "$g" = "$w" ]; then found=1; break; fi; done
+    [ "$found" -eq 1 ] || return 1
+  done
+  return 0
+}
+expect_nul_set() { # <label> <file> <names...>
+  local lbl="$1" f="$2"; shift 2
+  local -a got=()
+  if nul_set_eq "$f" "$@"; then s_ok "$lbl"
+  else
+    [ -f "$f" ] && mapfile -d '' -t got < "$f"
+    fail "$lbl: records differ: got ${#got[@]} [$(printf '%s|' "${got[@]}" | tr '\n\r' '~^' | cut -c1-200)] want ${#} [$(printf '%s|' "$@" | tr '\n\r' '~^' | cut -c1-200)]"
+  fi
+}
+expect_no_wfcmd() { # <label>: no line of the step log, after trimming leading blanks (CR counts as a line break), starts with `::`
+  local bad
+  bad="$(tr '\r' '\n' <<<"$S_LOG" | grep -c -E '^[[:space:]]*::' || true)"
+  if [ "$bad" -eq 0 ]; then s_ok "$1: no log line starts with a workflow command"; else fail "$1: $bad log line(s) start with '::' (a workflow-command injection): $(tr '\r\n' '^~' <<<"$S_LOG" | cut -c1-240)"; fi
 }
 flag_of() { printf '%s\n' "$S_OUT" | sed -n "s/^$1=//p" | tail -1; }
 has_flag() { grep -q "^$1=" <<<"$S_OUT"; }
@@ -568,7 +724,7 @@ expect_closed() { # <label> <flag>: the step fails (non-zero) and emitted NO val
 }
 
 selftest_step_verdicts() {
-  local o_out="$S_OUT" o_log="$S_LOG" o_rc="$S_RC"
+  local o_out="$S_OUT" o_log="$S_LOG" o_rc="$S_RC" o_lc="$S_LC_SEEN"
   S_OUT=$'other=1\nflag=on'; S_LOG=""; S_RC=0
   selftest_moved "expect_flag accepts the right value" pass expect_flag "selftest" flag on
   selftest_moved "expect_flag rejects a wrong value" fail expect_flag "selftest" flag off
@@ -580,7 +736,24 @@ selftest_step_verdicts() {
   selftest_moved "expect_closed rejects a zero rc" fail expect_closed "selftest" flag
   S_OUT="flag=on"; S_RC=1
   selftest_moved "expect_closed rejects an emitted value" fail expect_closed "selftest" flag
-  S_OUT="$o_out"; S_LOG="$o_log"; S_RC="$o_rc"
+  # Exact, never a substring: a longer value that CONTAINS the wanted one must be rejected (a `[[ $got == *$want* ]]` mutant accepts it).
+  S_OUT=$'flag=onward'; S_RC=0
+  selftest_moved "expect_flag rejects a longer value containing the wanted one" fail expect_flag "selftest" flag on
+  S_OUT=$'flag=on'; S_LC_SEEN=C
+  selftest_moved "expect_step_lc accepts the locale the step started under" pass expect_step_lc "selftest" C
+  selftest_moved "expect_step_lc rejects a step that started under another locale" fail expect_step_lc "selftest" C.UTF-8
+  printf 'a\0b\nc\0d\0' > "$WORK_ROOT/io/nul-set.bin"
+  selftest_moved "expect_nul_set accepts exactly the recorded names" pass expect_nul_set "selftest" "$WORK_ROOT/io/nul-set.bin" d $'b\nc' a
+  selftest_moved "expect_nul_set rejects a missing name" fail expect_nul_set "selftest" "$WORK_ROOT/io/nul-set.bin" a $'b\nc'
+  selftest_moved "expect_nul_set rejects an extra name" fail expect_nul_set "selftest" "$WORK_ROOT/io/nul-set.bin" a $'b\nc' d e
+  selftest_moved "expect_nul_set rejects names that are only line-split fragments of a record" fail expect_nul_set "selftest" "$WORK_ROOT/io/nul-set.bin" a b c
+  S_LOG=$'ok line\n  ::error::spoofed'
+  selftest_moved "expect_no_wfcmd rejects an indented workflow command" fail expect_no_wfcmd "selftest"
+  S_LOG=$'ok line\r::warning::spoofed'
+  selftest_moved "expect_no_wfcmd rejects a workflow command after a CR" fail expect_no_wfcmd "selftest"
+  S_LOG=$'ok line\n  zz?::error::neutralised'
+  selftest_moved "expect_no_wfcmd accepts a neutralised log" pass expect_no_wfcmd "selftest"
+  S_OUT="$o_out"; S_LOG="$o_log"; S_RC="$o_rc"; S_LC_SEEN="$o_lc"
 }
 
 # Scenario preconditions (H1): the plain diff must really hide what the row claims the converted step now sees.
@@ -652,7 +825,7 @@ advisory_rows() { # <key> <keep>
   run_step "$key" pr; expect_flag "$lbl (control outside the surface)" hit 0; free_row
   lbl="$key/pr/gitfail"
   new_row && apply_scn rename x "$keep" && commit_row || { fail "$lbl: setup"; return; }
-  run_step "$key" pr diff; expect_flag "$lbl (hit=0 on a git failure is this step's existing `|| true`, UNCHANGED by this PR)" hit 0; free_row
+  run_step "$key" pr diff; expect_flag "$lbl (hit=0 on a git failure is this step's existing || true, UNCHANGED by this PR)" hit 0; free_row
 }
 
 infra_shape_rows() { # arm
@@ -684,8 +857,10 @@ infra_extra_rows() { # arm
   if ! plain="$(fg "$ROW_DIR" diff --name-only "$ROW_BASE"..."$ROW_HEAD")"; then fail "$lbl: precondition: the plain diff failed"
   elif LC_ALL=C grep -Fxq -e "$raw" <<<"$plain"; then fail "$lbl: precondition: git did NOT C-quote the Latin-1 name; the row would pass vacuously"
   else
-    run_step infra-dirs "$arm"; expect_flag "$lbl (control, LC_ALL=C)" directories '["apps/web-platform/infra"]'
-    STEP_LC=C.UTF-8 run_step infra-dirs "$arm"; expect_flag "$lbl (step started under LC_ALL=C.UTF-8)" directories '["apps/web-platform/infra"]'
+    run_step infra-dirs "$arm"; expect_step_lc "$lbl (control)" C
+    expect_flag "$lbl (control, LC_ALL=C)" directories '["apps/web-platform/infra"]'
+    STEP_LC=C.UTF-8 run_step infra-dirs "$arm"; expect_step_lc "$lbl" C.UTF-8
+    expect_flag "$lbl (step started under LC_ALL=C.UTF-8)" directories '["apps/web-platform/infra"]'
   fi
   free_row
   if [ "$arm" != pr ]; then return; fi
@@ -722,7 +897,7 @@ infra_extra_rows() { # arm
 }
 
 legal_rows() {
-  local d lbl
+  local d lbl doc ok
   lbl="legal-lockstep/pr/control-no-surface"
   new_row && put_in "$ROW_DIR" docs/other.md "edited" && commit_row || { fail "$lbl: setup"; return; }
   run_step legal-lockstep pr
@@ -794,6 +969,53 @@ legal_rows() {
   commit_row || { fail "$lbl: commit"; return; }
   run_step legal-lockstep pr
   if [ "$S_RC" -eq 0 ] && grep -qF 'Gate passes' <<<"$S_LOG"; then s_ok "$lbl: control: the four real documents present passes even beside LF-named twins"; else fail "$lbl: want rc=0 + 'Gate passes' got rc=$S_RC ($(printf '%s' "$S_LOG" | tr '\n' ' ' | cut -c1-200))"; fi
+  free_row
+  # (#12332) The required-doc match is a FIXED-string exact record match (`grep -zFxc`): near-miss names that a REGEX reading of
+  # `docs/legal/privacy-policy.md` would accept (the `.` matches any byte) must NOT satisfy a required document.
+  local ch tw
+  lbl="legal-lockstep/pr/near-miss-X-twins"
+  new_row || { fail "$lbl: setup"; return; }
+  d="$ROW_DIR"
+  put_in "$d" apps/web-platform/server/dsar-export.ts "edited"
+  for doc in docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md knowledge-base/legal/compliance-posture.md; do
+    put_in "$d" "${doc%.md}Xmd" "edited"
+  done
+  commit_row || { fail "$lbl: commit"; return; }
+  run_step legal-lockstep pr
+  ok=1
+  for doc in docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md knowledge-base/legal/compliance-posture.md; do
+    grep -qF "::error::  - $doc" <<<"$S_LOG" || ok=0
+  done
+  if [ "$S_RC" -eq 1 ] && [ "$ok" -eq 1 ]; then s_ok "$lbl: four near-miss twins named *Xmd (the . read as any byte) satisfy none of the required documents"
+  else fail "$lbl: want rc=1 with all four documents reported missing, got rc=$S_RC ($(printf '%s' "$S_LOG" | tr '\n' ' ' | cut -c1-240))"; fi
+  free_row
+  lbl="legal-lockstep/pr/near-miss-metachar-twins"
+  new_row || { fail "$lbl: setup"; return; }
+  d="$ROW_DIR"
+  put_in "$d" apps/web-platform/server/dsar-export.ts "edited"
+  ok=1
+  for tw in 'docs/legal/privacy-policy.md|*' 'docs/legal/gdpr-policy.md|?' 'docs/legal/data-protection-disclosure.md|[' 'knowledge-base/legal/compliance-posture.md|\'; do
+    doc="${tw%%|*}"; ch="${tw#*|}"
+    put_in "$d" "${doc%.md}${ch}md" "edited"
+  done
+  commit_row || { fail "$lbl: commit"; return; }
+  run_step legal-lockstep pr
+  for doc in docs/legal/privacy-policy.md docs/legal/gdpr-policy.md docs/legal/data-protection-disclosure.md knowledge-base/legal/compliance-posture.md; do
+    grep -qF "::error::  - $doc" <<<"$S_LOG" || ok=0
+  done
+  if [ "$S_RC" -eq 1 ] && [ "$ok" -eq 1 ]; then s_ok "$lbl: regex-metacharacter twins (* ? [ \\ in the dot position) satisfy none of the required documents"
+  else fail "$lbl: want rc=1 with all four documents reported missing, got rc=$S_RC ($(printf '%s' "$S_LOG" | tr '\n' ' ' | cut -c1-240))"; fi
+  free_row
+  # (#12332) The "Changed files in PR" log is attacker-chosen text: a LF or CR in a name could start a workflow command on its own line.
+  lbl="legal-lockstep/pr/log-neutralises-control-bytes"
+  new_row || { fail "$lbl: setup"; return; }
+  d="$ROW_DIR"
+  put_in "$d" "zz${NL}::error::spoofed" "edited"; put_in "$d" "cr${CR}::warning::spoofed2" "edited"; put_in "$d" docs/other.md "edited"
+  commit_row || { fail "$lbl: commit"; return; }
+  run_step legal-lockstep pr
+  if [ "$S_RC" -eq 0 ] && grep -qF 'trivially passes' <<<"$S_LOG"; then s_ok "$lbl: the control-byte names do not change the verdict (no DSAR surface: trivially passes)"; else fail "$lbl: want rc=0 + 'trivially passes' got rc=$S_RC ($(printf '%s' "$S_LOG" | tr '\n' ' ' | cut -c1-200))"; fi
+  expect_no_wfcmd "$lbl"
+  if grep -qF 'zz?::error::spoofed' <<<"$S_LOG" && grep -qF 'cr?::warning::spoofed2' <<<"$S_LOG"; then s_ok "$lbl: both names are still listed, with the control byte shown as ?"; else fail "$lbl: the neutralised names are missing from the log ($(printf '%s' "$S_LOG" | tr '\n\r' '|~' | cut -c1-240))"; fi
   free_row
   lbl="legal-lockstep/pr/gitfail"
   new_row && put_in "$ROW_DIR" docs/other.md "edited" && commit_row || { fail "$lbl: setup"; return; }
@@ -872,6 +1094,45 @@ secret_scan_rows() {
   run_step ss-files-nonpr push ls-files
   if [ "$S_RC" -ne 0 ]; then s_ok "$lbl: a failed ls-files fails the push/schedule selection step"; else fail "$lbl: want a non-zero exit, got rc=0"; fi
   free_row
+  secret_scan_ctrl_rows
+}
+
+# (#12332) Names the `[[:cntrl:]]*$` end anchors and the `LC_ALL=C` on `grep --null-data` exist for, in BOTH selection steps, run under a
+# UTF-8 locale (the harness default is C, which would hide the missing `LC_ALL=C`): a `.snap` name ending in CR, a learnings `.md` name
+# ending in LF, and a fixture named by an invalid UTF-8 byte (UTF-8 grep would answer "Binary file matches" instead of printing it).
+# The selected list (lint-files.txt) AND the linter argv must hold exactly these names, byte for byte; the control stays out.
+secret_scan_ctrl_rows() {
+  local d lbl arm key keep pdir='apps/web-platform/test/fixtures'
+  local n_snap="x.snap${CR}" n_md="knowledge-base/project/learnings/a.md${NL}" n_ff="$pdir/"$'\377'".json" n_ctl="docs/${NAME_E}.json"
+  local lf argvf
+  for arm in pr push; do
+    if [ "$arm" = pr ]; then key=ss-files-pr; else key=ss-files-nonpr; fi
+    lbl="secret-scan/$arm/ctrl-and-invalid-utf8-names"
+    new_row || { fail "$lbl: setup"; continue; }
+    d="$ROW_DIR"
+    put_in "$d" "$n_snap"; put_in "$d" "$n_md"; put_in "$d" "$n_ff"; put_in "$d" "$n_ctl"
+    commit_row || { fail "$lbl: commit"; free_row; continue; }
+    lf="$WORK_ROOT/io/tmp-$ROW_SEQ/lint-files.txt"; argvf="$WORK_ROOT/io/argv-$ROW_SEQ"
+    # Preconditions: the names are really in the repository and git prints them NUL-delimited (so the fixtures are what the row claims).
+    if [ "$(fg "$d" ls-files -z -- "$n_snap" "$n_md" "$n_ff" | tr -cd '\0' | wc -c)" -eq 3 ]; then pass "$lbl: precondition: the CR, LF and 0xFF names are tracked"; else fail "$lbl: precondition: the control-byte fixtures were not created"; fi
+    STEP_LC=C.UTF-8 run_step "$key" "$arm"
+    expect_step_lc "$lbl (selection)" C.UTF-8
+    if [ "$S_RC" -ne 0 ]; then fail "$lbl: the selection step failed rc=$S_RC ($(printf '%s' "$S_LOG" | tr '\n' ' ' | cut -c1-200))"; else
+      if [ "$arm" = pr ]; then
+        expect_nul_set "$lbl: lint-files.txt holds exactly the .snap<CR>, learnings .md<LF> and 0xFF names (control excluded)" "$lf" "$n_snap" "$n_md" "$n_ff"
+      else
+        expect_nul_set "$lbl: lint-files.txt holds exactly the tracked fixture, .snap<CR>, learnings .md<LF> and 0xFF names (control excluded)" "$lf" "$pdir/keep.json" "$n_snap" "$n_md" "$n_ff"
+      fi
+      STEP_LC=C.UTF-8 run_step ss-lint "$arm"
+      expect_step_lc "$lbl (linter step)" C.UTF-8
+      if [ "$arm" = pr ]; then
+        expect_nul_set "$lbl: the linter argv holds the same names byte for byte" "$argvf" "$n_snap" "$n_md" "$n_ff"
+      else
+        expect_nul_set "$lbl: the linter argv holds the same names byte for byte" "$argvf" "$pdir/keep.json" "$n_snap" "$n_md" "$n_ff"
+      fi
+    fi
+    free_row
+  done
 }
 
 section_steps() {
@@ -955,9 +1216,13 @@ for ln in open(table_path, encoding="utf-8").read().split("\n"):
         continue
     f, a, r = ln.split("\t", 2)
     rows.append([f, a, r, False])
-# A segment is cut only at `|`, `;`, `&` and a newline: NOT at `)`, so `git diff "$(git merge-base a b)"...HEAD --name-only` is one site.
-GIT = re.compile(r"\bgit(?:\s+(?:-c\s+\S+|-C\s+(?:\"[^\"]*\"|'[^']*'|\S+)|--no-pager|-P|--git-dir=\S+|--work-tree=\S+))*\s+(?:diff|log|show|diff-tree)\b[^|;&\n]*")
-GH = re.compile(r"\bgh\s+pr\s+diff\b[^|;&\n]*")
+# A segment is cut at `|` (so `||` too), `;`, `&&` and a newline: NOT at a single `&` (the `&` of `2>&1`), NOT at `)`, so
+# `git diff "$(git merge-base a b)"...HEAD --name-only` is one site. Between the launcher and the verb ANY option words are accepted
+# (`--no-optional-locks`, `--literal-pathspecs`, `--git-dir "$X"`, `-C"$d"`, `-c k=v`), the launcher may be `git`, `$GIT` or `"${GIT[@]}"`,
+# and the verb may be quoted (`git "diff"`).
+SEG = r"(?:[^|;\n&]|&(?!&))"
+GIT = re.compile(r"(?:\bgit\b|\"?\$\{GIT\[@\]\}\"?|\"?\$GIT\b\"?)" + SEG + r"*?\s[\"']?(?:diff|log|show|diff-tree)\b" + SEG + r"*")
+GH = re.compile(r"\bgh\s+pr\s+diff\b" + SEG + r"*")
 # A trailing `# comment` is not part of the command: `... --name-only a...b # was -z )` is still UNCONVERTED.
 COMMENT = re.compile(r"(?:^|\s)#.*$")
 NAMES = re.compile(r"--name-only|--name-status")
@@ -1020,33 +1285,186 @@ sent_run() { # <table text> <files...>  -> SENT_OUT
 sent_n() { printf '%s\n' "$SENT_OUT" | sed -n "s/^$1 //p" | head -1; }
 
 # One pinned row: comment lines are stripped first (a `# git diff -z ...` comment must not satisfy the pin), then the line regex must match.
+PIN_ROOT="$REPO_ROOT"   # the tree the pins read; the self-tests point it at a synthetic tree, never at a live file
 pinned_z_check() { # <file> <regex>
   local f="$1" rx="$2" body
-  if [ ! -f "$REPO_ROOT/$f" ]; then fail "sentinel pinned: $f is missing"; return; fi
-  body="$(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f")"
+  if [ ! -f "$PIN_ROOT/$f" ]; then fail "sentinel pinned: $f is missing"; return; fi
+  body="$(grep -v '^[[:space:]]*#' "$PIN_ROOT/$f")"
   if grep -Eq -e "$rx" <<<"$body"; then pass "sentinel pinned: $f keeps its NUL-delimited read ($rx)"; else fail "sentinel pinned: $f lost its read (expected a non-comment line matching: $rx)"; fi
 }
 
 selftest_pinned() {
-  selftest_moved "pinned_z_check accepts a pinned line that exists" pass pinned_z_check plugins/soleur/scripts/changed-paths.sh 'diff -z --no-renames'
-  selftest_moved "pinned_z_check rejects a regex no line matches" fail pinned_z_check plugins/soleur/scripts/changed-paths.sh 'selftest-no-such-line-zzz'
-  selftest_moved "pinned_z_check rejects a pin only a comment line satisfies" fail pinned_z_check plugins/soleur/scripts/changed-paths.sh '^# changed-paths.sh -- print the changed-path list'
+  # The positive control is a SYNTHETIC file: reverting a pinned token in the live helper must fail its own pinned row, not abort the run
+  # here with a misleading "helper is inert" FATAL that hides every later row.
+  local o_root="$PIN_ROOT"
+  PIN_ROOT="$WORK_ROOT/pin-selftest"
+  mkdir -p "$PIN_ROOT" || { printf 'FATAL: cannot create %s\n' "$PIN_ROOT" >&2; exit 1; }
+  printf '%s\n' '# synthetic: git diff -z --no-renames only in this comment line' 'git diff -z --no-renames --name-only "$@"' > "$PIN_ROOT/synthetic.sh"
+  selftest_moved "pinned_z_check accepts a pinned line that exists" pass pinned_z_check synthetic.sh 'diff -z --no-renames'
+  selftest_moved "pinned_z_check rejects a regex no line matches" fail pinned_z_check synthetic.sh 'selftest-no-such-line-zzz'
+  selftest_moved "pinned_z_check rejects a pin only a comment line satisfies" fail pinned_z_check synthetic.sh '^# synthetic: git diff -z'
+  selftest_moved "pinned_z_check rejects a missing file" fail pinned_z_check no-such-file.sh 'diff'
+  PIN_ROOT="$o_root"
 }
 
-# Skill prose is not executed here; this pins its SPELLING: every `changed-paths.sh` in a skill is the whole call form
-# `bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"` (a bare or doubled name resolves against the wrong cwd or an unset root).
+# Skill prose is not executed here; this pins its SPELLING and its FAIL-CLOSED SHAPE, on comment-stripped text (a `# ...` line or a
+# markdown heading never satisfies a pin), anchored on the call forms:
+#   spelling   every `changed-paths.sh` is the whole call form `bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"` (a bare or doubled
+#              name resolves against the wrong cwd or an unset root);
+#   range      every line naming the helper names `origin/main...HEAD` (the PR's own diff, never a default target);
+#   ship       each gdpr/DPF/canonical `--match` assignment keeps `|| { [ $? -eq 1 ] || VAR=unknown; }` (rc 1 = no match; any other rc is
+#              unknown and the gate runs);
+#   preflight  the Step 0.1 cache line keeps `|| { rm -f <cache>; echo "PREFLIGHT-CACHE-MISSING..." }`, the Cache-missing rule keeps
+#              `cache file absent => RUN`, and the SKIP predicate of Checks 1, 2, 6, 8 and 10 each says `cache file is absent, RUN`;
+#   review     the classify call keeps `|| { ...REVIEW-CLASSIFY-UNKNOWN... }`.
 SKILL_CALL='bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"'
-skill_prose_pins() {
-  local sk f body total good
-  for sk in preflight ship review; do
-    f="plugins/soleur/skills/$sk/SKILL.md"
-    if [ ! -f "$REPO_ROOT/$f" ]; then fail "skill pin: $f is missing"; continue; fi
-    body="$(grep -v '^[[:space:]]*#' "$REPO_ROOT/$f")"
-    total="$(grep -o -- 'changed-paths\.sh' <<<"$body" | wc -l)"
-    good="$(grep -oF -- "$SKILL_CALL" <<<"$body" | wc -l)"
-    if [ "$total" -ge 1 ] && [ "$total" -eq "$good" ]; then pass "skill pin: every changed-paths.sh in $sk/SKILL.md is the call form $SKILL_CALL ($good of $total)"
-    else fail "skill pin: $f has $total changed-paths.sh mention(s) but only $good in the call form $SKILL_CALL"; fi
+RX_CALL='bash "\$\{CLAUDE_PLUGIN_ROOT:-\}/scripts/changed-paths\.sh"'
+SKILL_ROOT="$REPO_ROOT"   # the tree the skill pins read; the self-tests point it at a synthetic tree
+skill_body() { # <sk> -> comment-stripped SKILL.md on stdout (rc 1 when the file is missing)
+  local f="$SKILL_ROOT/plugins/soleur/skills/$1/SKILL.md"
+  [ -f "$f" ] || return 1
+  grep -v '^[[:space:]]*#' "$f"
+}
+skill_section() { # <sk> <heading ERE> -> comment-stripped body of the `##`/`###` section opening at that heading (code fences respected)
+  awk -v pat="$2" '
+    /^```/ { fence = !fence }
+    !fence && ($0 ~ /^## / || $0 ~ /^### /) { if (on) exit; if ($0 ~ pat) { on = 1; next } }
+    on && $0 !~ /^[[:space:]]*#/ { print }
+  ' "$SKILL_ROOT/plugins/soleur/skills/$1/SKILL.md"
+}
+skill_spelling_pin() { # <sk>
+  local sk="$1" body total good
+  if ! body="$(skill_body "$sk")"; then fail "skill pin: plugins/soleur/skills/$sk/SKILL.md is missing"; return; fi
+  total="$(grep -o -- 'changed-paths\.sh' <<<"$body" | wc -l)"
+  good="$(grep -oF -- "$SKILL_CALL" <<<"$body" | wc -l)"
+  if [ "$total" -ge 1 ] && [ "$total" -eq "$good" ]; then pass "skill pin: every changed-paths.sh in $sk/SKILL.md is the call form $SKILL_CALL ($good of $total)"
+  else fail "skill pin: $sk/SKILL.md has $total changed-paths.sh mention(s) but only $good in the call form $SKILL_CALL"; fi
+}
+skill_range_pin() { # <sk>
+  local sk="$1" body total ranged
+  if ! body="$(skill_body "$sk")"; then fail "skill pin: $sk/SKILL.md is missing"; return; fi
+  total="$(grep -c -- 'changed-paths\.sh' <<<"$body" || true)"
+  ranged="$(grep -- 'changed-paths\.sh' <<<"$body" | grep -c -F -- 'origin/main...HEAD' || true)"
+  if [ "$total" -ge 1 ] && [ "$total" -eq "$ranged" ]; then pass "skill pin: every changed-paths.sh line in $sk/SKILL.md names origin/main...HEAD ($ranged of $total)"
+  else fail "skill pin: $sk/SKILL.md has $total changed-paths.sh line(s), only $ranged name origin/main...HEAD"; fi
+}
+skill_ship_handler_pin() {
+  local body calls good v missing=""
+  if ! body="$(skill_body ship)"; then fail "skill pin: ship/SKILL.md is missing"; return; fi
+  calls="$(grep -c -E -- "=\\\$\\($RX_CALL --match " <<<"$body" || true)"
+  good="$(grep -c -E -- "^([a-z_]+)=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 1 \\] \\|\\| \\1=unknown; \\}\$" <<<"$body" || true)"
+  for v in gdpr_gate_touch diff_match dpf_match; do
+    grep -q -E -- "^$v=\\\$\\($RX_CALL --match .+ origin/main\\.\\.\\.HEAD\\) \\|\\| \\{ \\[ \\\$\\? -eq 1 \\] \\|\\| $v=unknown; \\}\$" <<<"$body" || missing="$missing $v"
   done
+  if [ -z "$missing" ] && [ "$calls" -ge 3 ] && [ "$calls" -eq "$good" ]; then pass "skill pin: the $calls ship --match assignments keep the fail-closed handler (|| { [ \$? -eq 1 ] || VAR=unknown; }) and origin/main...HEAD"
+  else fail "skill pin: ship/SKILL.md --match assignments: $calls found, $good with the fail-closed handler + origin/main...HEAD; missing or malformed:${missing:- none by name}"; fi
+}
+skill_preflight_pin() {
+  local body missing="" sec c
+  if ! body="$(skill_body preflight)"; then fail "skill pin: preflight/SKILL.md is missing"; return; fi
+  if grep -q -E -- "^$RX_CALL origin/main\\.\\.\\.HEAD > \"\\\$PREFLIGHT_TMP/[^\"]+\" \\|\\| \\{ rm -f \"\\\$PREFLIGHT_TMP/[^\"]+\"; echo \"PREFLIGHT-CACHE-MISSING" <<<"$body"; then
+    pass "skill pin: the preflight Step 0.1 call writes the cache and, on failure, rm -f's it and prints PREFLIGHT-CACHE-MISSING"
+  else fail "skill pin: preflight/SKILL.md lost the Step 0.1 form: $RX_CALL origin/main...HEAD > \"\$PREFLIGHT_TMP/...\" || { rm -f \"\$PREFLIGHT_TMP/...\"; echo \"PREFLIGHT-CACHE-MISSING..."; fi
+  if grep -q -F -- 'cache file absent => RUN; `grep` rc 1 => SKIP' <<<"$body"; then pass "skill pin: the Cache-missing rule keeps 'cache file absent => RUN; grep rc 1 => SKIP'"
+  else fail "skill pin: preflight/SKILL.md lost the Cache-missing rule wording 'cache file absent => RUN; \`grep\` rc 1 => SKIP'"; fi
+  for c in 1 2 6 8 10; do
+    sec="$(skill_section preflight "^### Check $c: ")"
+    if [ -z "$sec" ]; then missing="$missing $c(no such section)"; continue; fi
+    grep -q -F -- 'cache file is absent, RUN' <<<"$sec" || missing="$missing $c"
+    grep -q -F -- 'SKIP' <<<"$sec" || missing="$missing $c(no SKIP)"
+  done
+  if [ -z "$missing" ]; then pass "skill pin: the SKIP predicate of preflight Checks 1, 2, 6, 8 and 10 each says 'cache file is absent, RUN'"
+  else fail "skill pin: preflight Checks missing the 'cache file is absent, RUN' wording or a SKIP predicate:$missing"; fi
+}
+skill_review_pin() {
+  local body
+  if ! body="$(skill_body review)"; then fail "skill pin: review/SKILL.md is missing"; return; fi
+  if grep -q -E -- "^[[:space:]]*$RX_CALL origin/main\\.\\.\\.HEAD > \"[^\"]+\" \\|\\| \\{ .*REVIEW-CLASSIFY-UNKNOWN" <<<"$body"; then pass "skill pin: the review classify call keeps its || { ... REVIEW-CLASSIFY-UNKNOWN ... } handler"
+  else fail "skill pin: review/SKILL.md lost the classify form: $RX_CALL origin/main...HEAD > \"...\" || { ...REVIEW-CLASSIFY-UNKNOWN..."; fi
+}
+skill_prose_pins() {
+  local sk
+  for sk in preflight ship review; do skill_spelling_pin "$sk"; done
+  for sk in preflight ship review; do skill_range_pin "$sk"; done
+  skill_ship_handler_pin
+  skill_preflight_pin
+  skill_review_pin
+}
+
+# Self-tests for the skill pins: a SYNTHETIC skills tree is the positive control (every pin passes, none fails), and each single defect
+# below must move the FAIL counter. The whole of skill_prose_pins is run on each tree; counters are unwound like selftest_moved.
+skill_fixture() { # <root>
+  local r="$1/plugins/soleur/skills" call='bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"'
+  mkdir -p "$r/preflight" "$r/ship" "$r/review" || return 1
+  {
+    printf '## Phase 0\n\n```bash\n'
+    printf '%s origin/main...HEAD > "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }\n' "$call"
+    printf '```\n\n**Cache-missing rule.** Every SKIP predicate below reads: cache file absent => RUN; `grep` rc 1 => SKIP; rc 2 => RUN.\n\n'
+    local c
+    for c in 1 2 3 6 8 10; do
+      printf '### Check %s: name\n\n# a comment line\nFor Check %s the cache file is absent, RUN. Otherwise `grep` rc 1 => return **SKIP**.\n\n' "$c" "$c"
+    done
+    printf '### Check 11: tail\n\nbody\n'
+  } > "$r/preflight/SKILL.md"
+  {
+    printf '```bash\n'
+    printf 'gdpr_gate_touch=$(%s --match '"'"'^plugins/x/'"'"' origin/main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }\n' "$call"
+    printf 'diff_match=$(%s --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }\n' "$call"
+    printf 'dpf_match=$(%s --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || dpf_match=unknown; }\n' "$call"
+    printf '```\n'
+  } > "$r/ship/SKILL.md"
+  printf '   %s origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\n' "$call" > "$r/review/SKILL.md"
+}
+skill_defect() { # <root> <sk> <python old> <python new>: apply ONE defect to the fixture (must apply exactly once)
+  python3 -I - "$1/plugins/soleur/skills/$2/SKILL.md" "$3" "$4" <<'PY'
+import sys
+p, old, new = sys.argv[1:4]
+s = open(p, encoding="utf-8").read()
+if s.count(old) != 1:
+    print("DEFECT NOT APPLIED: %d occurrences of %r" % (s.count(old), old)); sys.exit(1)
+open(p, "w", encoding="utf-8").write(s.replace(old, new.replace("\\n", "\n")))
+PY
+}
+selftest_skill_tree() { # <name> <good|bad> <root>: skill_prose_pins on a synthetic tree; FAIL must move iff bad
+  local name="$1" want="$2" root="$3" p0=$PASS f0=$FAIL o_root="$SKILL_ROOT" dp df
+  SKILL_ROOT="$root"
+  skill_prose_pins >/dev/null
+  SKILL_ROOT="$o_root"
+  dp=$((PASS - p0)); df=$((FAIL - f0)); PASS=$p0; FAIL=$f0
+  if [ "$want" = bad ] && [ "$df" -lt 1 ]; then printf 'FATAL: self-test skill_prose_pins %s: a defective skills tree did not move the FAIL counter (pass+%s fail+%s); the pins are inert\n' "$name" "$dp" "$df" >&2; exit 1; fi
+  if [ "$want" = good ] && { [ "$df" -ne 0 ] || [ "$dp" -lt 1 ]; }; then printf 'FATAL: self-test skill_prose_pins %s: the compliant synthetic tree did not pass cleanly (pass+%s fail+%s)\n' "$name" "$dp" "$df" >&2; exit 1; fi
+  SELFTESTS=$((SELFTESTS + 1))
+}
+selftest_skill_pins() {
+  local base="$WORK_ROOT/skill-selftest" t
+  rm -rf -- "$base"; mkdir -p "$base" || { printf 'FATAL: cannot create %s\n' "$base" >&2; exit 1; }
+  skill_fixture "$base/good" || { printf 'FATAL: cannot build the skill fixture\n' >&2; exit 1; }
+  selftest_skill_tree "compliant tree" good "$base/good"
+  # The spelling pin on its own: a bare helper name that DOES name the range (so only the spelling pin can object) must move its FAIL counter.
+  local o_root="$SKILL_ROOT"
+  t="$base/bad-bare-spelling-only"; mkdir -p "$t" && cp -a "$base/good/plugins" "$t/" || { printf 'FATAL: cannot copy the skill fixture\n' >&2; exit 1; }
+  printf 'run changed-paths.sh origin/main...HEAD from the repo root\n' >> "$t/plugins/soleur/skills/review/SKILL.md"
+  SKILL_ROOT="$t"
+  selftest_moved "skill_spelling_pin rejects a bare helper name" fail skill_spelling_pin review
+  SKILL_ROOT="$base/good"
+  selftest_moved "skill_spelling_pin accepts the whole call form" pass skill_spelling_pin review
+  SKILL_ROOT="$o_root"
+  # name|skill|old|new  (the defect each pin exists to catch)
+  local spec nm sk old new
+  while IFS=$'\t' read -r nm sk old new; do
+    [ -n "$nm" ] || continue
+    t="$base/bad-$nm"; mkdir -p "$t" && cp -a "$base/good/plugins" "$t/" || { printf 'FATAL: cannot copy the skill fixture\n' >&2; exit 1; }
+    skill_defect "$t" "$sk" "$old" "$new" || { printf 'FATAL: self-test defect %s did not apply\n' "$nm" >&2; exit 1; }
+    selftest_skill_tree "$nm" bad "$t"
+  done <<'DEFECTS'
+a bare helper name on its own line	review	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\nsee changed-paths.sh for the details
+the ship fail-closed handler dropped	ship	{ [ $? -eq 1 ] || dpf_match=unknown; }	{ dpf_match=unknown; }
+a ship --match not on origin/main...HEAD	ship	--match "$DPF_REGEX" origin/main...HEAD)	--match "$DPF_REGEX" HEAD~1)
+preflight PREFLIGHT-CACHE-MISSING dropped	preflight	echo "PREFLIGHT-CACHE-MISSING: helper failed"	echo "helper failed"
+preflight cache rm -f dropped	preflight	{ rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo	{ echo
+preflight Check 6 cache-absent wording dropped	preflight	For Check 6 the cache file is absent, RUN.	For Check 6 the cache is simply read.
+review REVIEW-CLASSIFY-UNKNOWN dropped	review	echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"	echo "helper rc=$rc"
+DEFECTS
 }
 
 section_sentinel() {
@@ -1122,6 +1540,21 @@ git -C "$d" diff~X=$(git -C "$d" diff --name-only a...b)
 git --no-pager diff~X=$(git --no-pager diff --name-only a...b)
 git diff with a nested $(...) in the range~X=$(git diff "$(git merge-base a b)"...HEAD --name-only)
 a trailing comment naming -z~X=$(git diff --name-only a...b # was -z )
+git --no-optional-locks~X=$(git --no-optional-locks diff --name-only a...b)
+git --literal-pathspecs~X=$(git --literal-pathspecs diff --name-only a...b)
+git --git-dir "$X" (space form)~X=$(git --git-dir "$GD" diff --name-only a...b)
+git --git-dir=X --work-tree=Y~X=$(git --git-dir="$GD" --work-tree="$WT" diff --name-only a...b)
+git -C"$d" (no space)~X=$(git -C"$d" diff --name-only a...b)
+a $GIT launcher~X=$($GIT diff --name-only a...b)
+a "${GIT[@]}" launcher~X=$("${GIT[@]}" diff --name-only a...b)
+a quoted verb~X=$(git "diff" --name-only a...b)
+a 2>&1 before the flag (single & is not a segment cut)~X=$(git diff a...b 2>&1 --name-only)
+a bundled -zs is not a standalone -z~X=$(git diff --name-only -zs a...b)
+git log with --name-only~X=$(git log --format= --name-only a..b)
+a -z after && belongs to another command~X=$(git diff --name-only a...b) && echo -z
+a -z after || belongs to another command~X=$(git diff --name-only a...b) || echo -z
+a -z after ; belongs to another command~X=$(git diff --name-only a...b); echo -z
+git diff-tree with --name-status~X=$(git diff-tree --no-commit-id --name-status -r HEAD)
 SPELLINGS
   local sc_i=0 sc_label sc_body
   while IFS='~' read -r sc_label sc_body; do
@@ -1136,6 +1569,21 @@ git -C "$d" diff~X=$(git -C "$d" diff -z --name-only a...b | tr '\0' '\n')
 git --no-pager diff~X=$(git --no-pager diff -z --name-only a...b | tr '\0' '\n')
 git diff with a nested $(...) in the range~X=$(git diff -z "$(git merge-base a b)"...HEAD --name-only | tr '\0' '\n')
 a trailing comment~X=$(git diff -z --name-only a...b | tr '\0' '\n') # note
+git --no-optional-locks~X=$(git --no-optional-locks diff -z --name-only a...b | tr '\0' '\n')
+git --literal-pathspecs~X=$(git --literal-pathspecs diff -z --name-only a...b | tr '\0' '\n')
+git --git-dir "$X" (space form)~X=$(git --git-dir "$GD" diff -z --name-only a...b | tr '\0' '\n')
+git --git-dir=X --work-tree=Y~X=$(git --git-dir="$GD" --work-tree="$WT" diff -z --name-only a...b | tr '\0' '\n')
+git -C"$d" (no space)~X=$(git -C"$d" diff -z --name-only a...b | tr '\0' '\n')
+a $GIT launcher~X=$($GIT diff -z --name-only a...b | tr '\0' '\n')
+a "${GIT[@]}" launcher~X=$("${GIT[@]}" diff -z --name-only a...b | tr '\0' '\n')
+a quoted verb~X=$(git "diff" -z --name-only a...b | tr '\0' '\n')
+a 2>&1 before the flag~X=$(git diff -z a...b 2>&1 --name-only | tr '\0' '\n')
+a standalone -z next to a bundled-looking word~X=$(git diff --name-only -z a...b | tr '\0' '\n')
+git log with --name-only~X=$(git log -z --format= --name-only a..b | tr '\0' '\n')
+a -z before && stays in the segment~X=$(git diff -z --name-only a...b) && echo done
+a -z before || stays in the segment~X=$(git diff -z --name-only a...b) || echo done
+a -z before ; stays in the segment~X=$(git diff -z --name-only a...b); echo done
+git diff-tree with --name-status~X=$(git diff-tree -z --no-commit-id --name-status -r HEAD | tr '\0' '\n')
 CONTROLS
 
   # The live scan over the TRACKED workflows.
@@ -1156,6 +1604,7 @@ CONTROLS
   echo "census: ${sites:-0} sites, $nunl unlisted, $nstale stale ($exempt exempt)"
   # The pinned must-keep-`-z` list.
   selftest_pinned
+  selftest_skill_pins
   local row
   while IFS= read -r row; do
     pinned_z_check "${row%%$'\t'*}" "${row#*$'\t'}"
@@ -1173,15 +1622,15 @@ esac
 # Assertion floors: a green run that executed nothing is the failure this block exists to refuse (H3).
 total=$((PASS + FAIL))
 if [ "$SECTION" = all ] || [ "$SECTION" = helper ]; then
-  if [ "$HELPER_ROWS" -lt 76 ]; then printf '[FATAL] helper floor: only %s helper rows ran, want >=76\n' "$HELPER_ROWS" >&2; exit 1; fi
+  if [ "$HELPER_ROWS" -lt 109 ]; then printf '[FATAL] helper floor: only %s helper rows ran, want >=109\n' "$HELPER_ROWS" >&2; exit 1; fi
 fi
 if [ "$SECTION" = all ] || [ "$SECTION" = steps ]; then
-  if [ "$STEP_ROWS" -lt 99 ]; then printf '[FATAL] steps floor: only %s step executions ran, want >=99\n' "$STEP_ROWS" >&2; exit 1; fi
+  if [ "$STEP_ROWS" -lt 106 ]; then printf '[FATAL] steps floor: only %s step executions ran, want >=106\n' "$STEP_ROWS" >&2; exit 1; fi
 fi
-# Exact current totals (the floors are the full count, not a margin below it): helper 76 + steps 116 + sentinel 30.
-case "$SECTION" in all) floor=222 ;; helper) floor=76 ;; steps) floor=116 ;; sentinel) floor=30 ;; esac
+# Exact current totals (the floors are the full count, not a margin below it): helper 109 + steps 135 + sentinel 68.
+case "$SECTION" in all) floor=312 ;; helper) floor=109 ;; steps) floor=135 ;; sentinel) floor=68 ;; esac
 # Every positive control must have run (an inert verdict helper is caught inside selftest_moved; a skipped self-test is caught here).
-case "$SECTION" in all) want_self=14 ;; helper) want_self=5 ;; steps) want_self=6 ;; sentinel) want_self=3 ;; esac
+case "$SECTION" in all) want_self=45 ;; helper) want_self=15 ;; steps) want_self=16 ;; sentinel) want_self=14 ;; esac
 if [ "$SELFTESTS" -ne "$want_self" ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want %s\n' "$SELFTESTS" "$want_self" >&2; exit 1; fi
 if [ "$total" -lt "$floor" ]; then printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$floor" >&2; exit 1; fi
 echo

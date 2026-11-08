@@ -53,12 +53,16 @@ if [ "${1:-}" = "--match" ]; then
   shift 2
 fi
 
-# Flags this helper owns and does not support, plus output-format flags that would corrupt the name list.
+# ALLOWLIST of options: revs and paths (anything not starting with `-`), `--cached`/`--staged`/`--merge-base`/`--diff-filter=*`,
+# and everything after `--`. Every other option is refused (exit 2): output-format flags leave stdout empty or corrupt the
+# list at rc 0 (-s, --output, -q, --exit-code, bundled `-ps`), and flags appended after the baked-in ones win in git, so
+# `-M`/`-C`/`--find-renames`/`--ignore-submodules=all` would silently re-enable the rename and submodule hiding this helper
+# exists to remove.
 for a in "$@"; do
   case "$a" in
     --) break ;;
-    --match|--match=*|-h|--help|-z|--name-only|--name-status|--raw|--stat|--stat=*|--numstat|--shortstat|--summary|-p|-u|--patch|--no-relative|--relative|--relative=*) usage ;;
-    -s|--no-patch|--output|--output=*|-q|--quiet|--exit-code|--check|--dirstat|--dirstat=*|--compact-summary|--patch-with-stat|--patch-with-raw|--ext-diff|--textconv) usage ;;
+    --cached|--staged|--merge-base|--diff-filter=*) ;;
+    -*) usage ;;
   esac
 done
 
@@ -88,7 +92,8 @@ fi
 out="$(LC_ALL=C tr '\0' '\n' <"$tmp")"
 
 if [ "$have_match" -eq 0 ]; then
-  [ -z "$out" ] || printf '%s\n' "$out"
+  # A failed write (full disk, closed pipe) is a failure: a truncated list at rc 0 reads as a shorter diff.
+  [ -z "$out" ] || printf '%s\n' "$out" || exit 2
   exit 0
 fi
 
