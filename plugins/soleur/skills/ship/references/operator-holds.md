@@ -102,6 +102,7 @@ What each reason means (the evaluator prints these words, and only these):
 | `this wait does not name the legal text it is about; ask the plan's author to put the text name <key> in the hold's words` | the `Hold:` line does not contain the gate's key as a whole word | 2 |
 | `The file holds a control character I cannot read safely…` (no per-hold line) | a NUL or other control byte in the plan or envelope file | 2 |
 | `a recorded decision on a legal text cannot back a production step` | a `web-acceptance` gate in an envelope (`--file` mode) | 2 |
+| `this key is an acknowledgement; its decision cannot back a production step` | the gate's key is a registry text whose declared kind is not `terms` (listed in `WA_NON_TERMS_KEYS` in the evaluator; a test cross-checks the list with the registry pins): a Yes on it records only that the founder was shown the text | 2 |
 
 **What ship does with each.** Exit 0 for a web-acceptance hold: record the `Done:` line (it carries the decision date) in the PR
 body. Exit 1 with `no decision recorded`: print the full card link `https://app.soleur.ai/dashboard/approvals/legal/<key>` (not a
@@ -112,7 +113,7 @@ that the operator, not an agent session, reads the note by the path on the line.
 check was written`: the plan's gate must be rewritten for the committed text (compute the new hash with the one-liner above),
 by the plan's author. Exit 2: the hold stands, named in one plain sentence from the table, and never retried into a pass.
 
-**What a web-acceptance gate is for, and not for.** It discharges a hold like any other gate: the hold stands until the
+**What a web-acceptance gate is for, and not for.** A `web-acceptance` gate is valid only for a registry key whose kind is `terms`: a Yes on an acknowledgement text records only that the founder was shown it and agrees to nothing, so the evaluator refuses such a key (`Could not check`, exit 2). It discharges a hold like any other gate: the hold stands until the
 founder's recorded decision on exactly that text is `accepted`, and then the hold is cleared. It grants no authority of its own:
 a recorded Yes is not a merge approval, a deploy approval or a spend approval, and it does not stand in for an
 `Operator-reserved:` hold (those always stand). The canonical use is a hold of the form "do not ship until the founder has

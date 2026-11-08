@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=476   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=485   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -185,6 +185,7 @@ if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
 if [ -f "$GH_FIX/HANG_$key" ]; then command -p sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi   # HANG_ answers an empty run list, so a delayed unit would vanish
+if [ -f "$GH_FIX/ONCE_$key" ]; then cat "$GH_FIX/ONCE_$key"; rm -f "$GH_FIX/ONCE_$key"; exit 0; fi
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
 GHSTUB
@@ -199,7 +200,19 @@ fx_err() { : > "$GHFIX/ERR_$(keyof "$1")"; }
 fx_err404() { : > "$GHFIX/ERR404_$(keyof "$1")"; }
 fx_hang() { : > "$GHFIX/HANG_$(keyof "$1")"; }
 fx_err403rl() { : > "$GHFIX/ERR403RL_$(keyof "$1")"; }
+fx_once() { local k; k="$(keyof "$1")"; cat > "$GHFIX/ONCE_$k"; }   # first call returns the body, then deletes it
 runs_path() { printf 'repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100' "${REPO_NAME:-$R}" "$1"; }
+checkruns_path() { printf 'repos/%s/commits/%s/check-runs?per_page=100' "${REPO_NAME:-$R}" "$1"; }
+rundetail_path() { printf 'repos/%s/actions/runs/%s' "${REPO_NAME:-$R}" "$1"; }
+checkruns_body() {  # checkruns_body then one details_url per arg
+  local first=1 u
+  printf '{"total_count":%s,"check_runs":[' "$#"
+  for u in "$@"; do [ "$first" = 1 ] || printf ','; first=0; printf '{"details_url":"%s"}' "$u"; done
+  printf ']}'
+}
+rundetail_body() {  # rundetail_body <id> <event> <conclusion> <head_sha> <path>
+  printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":1,"created_at":"2031-01-05T00:00:00Z","head_sha":"%s","path":"%s"}' "$1" "$2" "$3" "$4" "$5"
+}
 jobs_path() { printf 'repos/%s/actions/runs/%s/jobs?per_page=100&filter=latest' "${REPO_NAME:-$R}" "$1"; }
 jobs1_path() { printf 'repos/%s/actions/runs/%s/attempts/1/jobs?per_page=100' "${REPO_NAME:-$R}" "$1"; }
 log_path() { printf 'repos/%s/actions/jobs/%s/logs' "${REPO_NAME:-$R}" "$1"; }
@@ -209,7 +222,7 @@ runs_body() {  # runs_body <sha> then id:event:conclusion[:attempt]
   for item in "$@"; do
     IFS=: read -r id ev concl att <<<"$item"
     [ "$first" = 1 ] || printf ','; first=0
-    printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-0%sT00:00:00Z","head_sha":"%s"}' "$id" "$ev" "$concl" "${att:-1}" "${id: -1}" "$sha"
+    printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-%02dT00:00:00Z","head_sha":"%s"}' "$id" "$ev" "$concl" "${att:-1}" "$(( ${id: -1} + 1 ))" "$sha"
   done
   printf ']}'
 }
@@ -330,6 +343,85 @@ run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" >/dev/null 2>&1
 jq -c . "$OUT/units-commits-1-of-1.jsonl" >/dev/null 2>&1 && [[ "$(jq -s length "$OUT/units-commits-1-of-1.jsonl")" -eq 7 ]] \
   && pass "a torn last line (a write cut off by a kill) is dropped and the file stays valid JSON lines" || fail "a torn last line corrupted the units file"
 
+echo "== collect: an empty head_sha listing is corroborated through check-runs (#10862)"
+R4=jikig-ai/fourth
+REPO_NAME="$R4"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
+EMPTYRUNS='{"total_count":0,"workflow_runs":[]}'
+# C[6] idx0 (newest): the retry heals the listing -> head-sha-retry, no check-runs read
+printf '%s' "$EMPTYRUNS" | fx_once "$(runs_path "${C[6]}")"
+runs_body "${C[6]}" "8060:push:success" | fx "$(runs_path "${C[6]}")"
+# C[5] idx1: non-empty on the first read -> head-sha, no retry, no check-runs read
+runs_body "${C[5]}" "8050:push:success" | fx "$(runs_path "${C[5]}")"
+# C[4] idx2: index-dropped twice, but check-runs names a ci.yml push run on this sha -> resolved, check-runs
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[4]}")"
+checkruns_body "https://github.com/$R4/actions/runs/9001/job/1" "https://github.com/$R4/actions/runs/9008/job/1" | fx "$(checkruns_path "${C[4]}")"
+rundetail_body 9001 push success "${C[4]}" .github/workflows/ci.yml | fx "$(rundetail_path 9001)"
+# 9008 qualifies too and is NEWER (created_at 01-09 vs 9001's 01-05): the corroborated pick must take the newest, matching the listing path's newest-first contract
+printf '{"id":9008,"event":"push","conclusion":"success","run_attempt":1,"created_at":"2031-01-09T00:00:00Z","head_sha":"%s","path":".github/workflows/ci.yml"}' "${C[4]}" | fx "$(rundetail_path 9008)"
+# C[3] idx3: dropped listing AND corroborated-empty check-runs -> a real no-run
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[3]}")"
+checkruns_body | fx "$(checkruns_path "${C[3]}")"
+# C[2] idx4: check-runs names only an other-workflow run on this sha and a ci.yml run on a DIFFERENT sha -> still no-run
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[2]}")"
+checkruns_body "https://github.com/$R4/actions/runs/9002/job/1" "https://github.com/$R4/actions/runs/9003/job/1" "https://github.com/$R4/actions/runs/9004/job/1" "https://github.com/foreign-repo/other/actions/runs/9005/job/1" | fx "$(checkruns_path "${C[2]}")"
+rundetail_body 9002 push success "${C[2]}" .github/workflows/other.yml | fx "$(rundetail_path 9002)"
+rundetail_body 9003 push success "0000000000000000000000000000000000000000" .github/workflows/ci.yml | fx "$(rundetail_path 9003)"
+rundetail_body 9004 pull_request success "${C[2]}" .github/workflows/ci.yml | fx "$(rundetail_path 9004)"
+rundetail_body 9005 push success "${C[2]}" .github/workflows/ci.yml | fx "$(rundetail_path 9005)"
+# C[1] idx5: the corroborating read itself fails -> runs-read, never no-run
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[1]}")"
+fx_err "$(checkruns_path "${C[1]}")"
+# C[0] idx6: non-empty -> head-sha
+runs_body "${C[0]}" "8000:push:success" | fx "$(runs_path "${C[0]}")"
+run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R4" >/dev/null 2>&1; RC4=$?
+CU="$OUT/units-commits-1-of-1.jsonl"   # REPO_NAME stays "$R4" until the reqs() calls below are done
+[[ "$RC4" -eq 0 && -s "$CU" ]] && pass "the corroboration collect wrote seven units" || fail "corroboration collect (rc=$RC4)"
+[[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean && "$(unit_field "$CU" "${C[4]}" .runs_via)" = check-runs && "$(unit_field "$CU" "${C[4]}" .run.id)" = 9008 ]] \
+  && pass "an index-dropped unit resolves through the newest run check-runs proves (runs_via=check-runs)" || fail "index-dropped unit (got $(unit_field "$CU" "${C[4]}" '.cls+" "+(.runs_via//"-")'))"
+[[ "$(reqs "$(runs_path "${C[4]}")")" -eq 2 && "$(reqs "$(checkruns_path "${C[4]}")")" -eq 1 && "$(reqs "$(rundetail_path 9001)")" -eq 1 ]] \
+  && pass "the empty listing is retried once, then corroborated once" || fail "read counts (runs=$(reqs "$(runs_path "${C[4]}")") cr=$(reqs "$(checkruns_path "${C[4]}")") rd=$(reqs "$(rundetail_path 9001)"))"
+[[ "$(unit_field "$CU" "${C[3]}" .reason)" = no-run && "$(unit_field "$CU" "${C[3]}" .runs_via)" = corroborated-no-run ]] \
+  && pass "an empty listing AND corroborated-empty check-runs is a real no-run" || fail "corroborated-empty (got $(unit_field "$CU" "${C[3]}" '.reason+" "+(.runs_via//"-")'))"
+[[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run && "$(unit_field "$CU" "${C[2]}" .runs_via)" = corroborated-no-run ]] \
+  && pass "runs on the wrong sha or the wrong workflow do not corroborate" || fail "wrong-run corroboration (got $(unit_field "$CU" "${C[2]}" '.reason+" "+(.runs_via//"-")'))"
+[[ "$(unit_field "$CU" "${C[1]}" .reason)" == runs-read:* && "$(unit_field "$CU" "${C[1]}" .runs_via)" = null ]] \
+  && pass "a failed corroborating read is runs-read not-evaluable, never no-run" || fail "failed corroboration (got $(unit_field "$CU" "${C[1]}" '.reason+" "+(.runs_via//"-")'))"
+[[ "$(unit_field "$CU" "${C[6]}" .runs_via)" = head-sha-retry && "$(reqs "$(checkruns_path "${C[6]}")")" -eq 0 ]] \
+  && pass "a listing that heals on the retry skips check-runs entirely" || fail "retry-heals (got via=$(unit_field "$CU" "${C[6]}" .runs_via) reqs=$(reqs "$(checkruns_path "${C[6]}")"))"
+[[ "$(unit_field "$CU" "${C[5]}" .runs_via)" = head-sha && "$(reqs "$(runs_path "${C[5]}")")" -eq 1 && "$(reqs "$(checkruns_path "${C[5]}")")" -eq 0 ]] \
+  && pass "a non-empty first read costs no retry and no check-runs call" || fail "common path (got via=$(unit_field "$CU" "${C[5]}" .runs_via))"
+[[ "$(reqs "$(rundetail_path 9004)")" -eq 1 && "$(reqs "$(rundetail_path 9005)")" -eq 0 ]] \
+  && pass "a pull_event run is fetched then event-filtered; a foreign-repo link never reaches the read" || fail "detail reads (9004=$(reqs "$(rundetail_path 9004)") 9005=$(reqs "$(rundetail_path 9005)"))"
+! grep -q STUB-MISS "$GHLOG" && pass "corroboration made no request the stub does not know" || fail "corroboration unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
+REPO_NAME=""
+
+corr_run() {  # rerun the corroboration collect into a fresh dir with the SUT under test; sets CU
+  REPO_NAME="$R4"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
+  run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R4" >/dev/null 2>&1; CU="$OUT/units-commits-1-of-1.jsonl"; REPO_NAME=""
+}   # note: C[6]'s ONCE_ fixture is spent by the first collect above; reruns take the head-sha path
+row_corr_dropped() { corr_run; [[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean ]]; }
+row_corr_sha() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_path() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_event() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_foreign() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_order() { corr_run; [[ "$(unit_field "$CU" "${C[4]}" .run.id)" = 9008 ]]; }
+row_corr_uncount() {  # a check-runs page carrying no total_count is uncounted -> runs-read, never resolved
+  REPO_NAME="$R4"
+  printf '{"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
+  rundetail_body 9007 push success "${C[3]}" .github/workflows/ci.yml | fx "$(rundetail_path 9007)"
+  corr_run
+  REPO_NAME="$R4"; checkruns_body | fx "$(checkruns_path "${C[3]}")"; REPO_NAME=""
+  [[ "$(unit_field "$CU" "${C[3]}" .reason)" == "runs-read: uncounted"* ]]
+}
+row_corr_trunc() {  # a check-runs page claiming more than it carries is runs-read, never resolved
+  REPO_NAME="$R4"
+  printf '{"total_count":5,"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
+  rundetail_body 9007 push success "${C[3]}" .github/workflows/ci.yml | fx "$(rundetail_path 9007)"
+  corr_run
+  REPO_NAME="$R4"; checkruns_body | fx "$(checkruns_path "${C[3]}")"; REPO_NAME=""
+  [[ "$(unit_field "$CU" "${C[3]}" .reason)" == runs-read:* ]]
+}
+
 echo "== collect: resumability and chunking"
 before="$(wc -l < "$U")"
 run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" >/dev/null 2>&1
@@ -443,8 +535,8 @@ SHA() { printf '%040d' "$1"; }
 mgr2() { printf '{"id":%s,"event":"merge_group","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-0%sT00:00:00Z","head_sha":"%s","head_branch":"%s"}' "$1" "$2" "$5" "$3" "$4" "$6"; }
 qb() { printf 'gh-readonly-queue/main/pr-%s-base' "$1"; }
 REPO_NAME="$R2"
-RUNS2="$(mgr2 8101 failure 1 "$(SHA 101)" 2 "$(qb 21)"),$(mgr2 8102 failure 1 "$(SHA 102)" 2 "$(qb 22)"),$(mgr2 8103 failure 1 "$(SHA 103)" 2 "$(qb 23)"),$(mgr2 8104 failure 1 "$(SHA 104)" 1 "$(qb 24)"),$(mgr2 8105 success 2 "$(SHA 105)" 1 "$(qb 24)"),$(mgr2 8106 failure 1 "$(SHA 106)" 1 "$(qb 25)"),$(mgr2 8107 success 2 "$(SHA 107)" 1 "$(qb 25)"),$(mgr2 8108 success 1 "$(SHA 108)" 1 "$(qb 26)"),$(mgr2 8109 failure 2 "$(SHA 109)" 1 "$(qb 26)"),$(mgr2 8110 failure 3 "$(SHA 110)" 1 gh-readonly-queue/main/weird),$(mgr2 8111 success 4 "$(SHA 111)" 1 gh-readonly-queue/main/weird2),$(mgr2 8112 failure 1 "$(SHA 112)" 1 "$(qb 27)"),$(mgr2 8113 failure 1 "$(SHA 113)" 1 "$(qb 28)"),$(mgr2 8114 failure 1 "$(SHA 114)" 1 "$(qb 29)"),$(mgr2 8115 failure 1 "$(SHA 115)" 1 "$(qb 31)"),$(mgr2 8116 failure 1 "$(SHA 116)" 1 "$(qb 32)"),$(mgr2 8117 failure 1 "$(SHA 117)" 1 "$(qb 33)"),$(mgr2 8118 failure 1 "$(SHA 118)" 1 "$(qb 34)"),$(mgr2 8119 failure 1 "$(SHA 119)" 1 "$(qb 35)"),$(mgr2 8120 failure 2 "$(SHA 120)" 1 "$(qb 35)"),$(mgr2 8121 failure 1 "$(SHA 121)" 1 "$(qb 36)"),$(mgr2 8122 success 2 "$(SHA 122)" 1 "$(qb 36)"),$(mgr2 8123 failure 1 "$(SHA 123)" 1 "$(qb 37)"),$(mgr2 8124 failure 1 "$(SHA 124)" 1 "$(qb 38)"),$(mgr2 8125 failure 1 "$(SHA 125)" 1 "$(qb 39)"),$(mgr2 8127 timed_out 1 "$(SHA 127)" 1 "$(qb 42)"),$(mgr2 8128 cancelled 1 "$(SHA 128)" 1 "$(qb 43)"),$(mgr2 8129 failure 1 "$(SHA 129)" 1 "$(qb 40)"),$(mgr2 8130 failure 1 "$(SHA 130)" 1 "$(qb 41)"),$(mgr2 8131 failure 1 "$(SHA 131)" 1 "$(qb 44)"),$(mgr2 8132 failure 1 "$(SHA 132)" 1 "$(qb 45)")"
-mg_runs "$RUNS2" 31 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+RUNS2="$(mgr2 8101 failure 1 "$(SHA 101)" 2 "$(qb 21)"),$(mgr2 8102 failure 1 "$(SHA 102)" 2 "$(qb 22)"),$(mgr2 8103 failure 1 "$(SHA 103)" 2 "$(qb 23)"),$(mgr2 8104 failure 1 "$(SHA 104)" 1 "$(qb 24)"),$(mgr2 8105 success 2 "$(SHA 105)" 1 "$(qb 24)"),$(mgr2 8106 failure 1 "$(SHA 106)" 1 "$(qb 25)"),$(mgr2 8107 success 2 "$(SHA 107)" 1 "$(qb 25)"),$(mgr2 8108 success 1 "$(SHA 108)" 1 "$(qb 26)"),$(mgr2 8109 failure 2 "$(SHA 109)" 1 "$(qb 26)"),$(mgr2 8110 failure 3 "$(SHA 110)" 1 gh-readonly-queue/main/weird),$(mgr2 8111 success 4 "$(SHA 111)" 1 gh-readonly-queue/main/weird2),$(mgr2 8112 failure 1 "$(SHA 112)" 1 "$(qb 27)"),$(mgr2 8113 failure 1 "$(SHA 113)" 1 "$(qb 28)"),$(mgr2 8114 failure 1 "$(SHA 114)" 1 "$(qb 29)"),$(mgr2 8115 failure 1 "$(SHA 115)" 1 "$(qb 31)"),$(mgr2 8116 failure 1 "$(SHA 116)" 1 "$(qb 32)"),$(mgr2 8117 failure 1 "$(SHA 117)" 1 "$(qb 33)"),$(mgr2 8118 failure 1 "$(SHA 118)" 1 "$(qb 34)"),$(mgr2 8119 failure 1 "$(SHA 119)" 1 "$(qb 35)"),$(mgr2 8120 failure 2 "$(SHA 120)" 1 "$(qb 35)"),$(mgr2 8121 failure 1 "$(SHA 121)" 1 "$(qb 36)"),$(mgr2 8122 success 2 "$(SHA 122)" 1 "$(qb 36)"),$(mgr2 8123 failure 1 "$(SHA 123)" 1 "$(qb 37)"),$(mgr2 8124 failure 1 "$(SHA 124)" 1 "$(qb 38)"),$(mgr2 8125 failure 1 "$(SHA 125)" 1 "$(qb 39)"),$(mgr2 8127 timed_out 1 "$(SHA 127)" 1 "$(qb 42)"),$(mgr2 8128 cancelled 1 "$(SHA 128)" 1 "$(qb 43)"),$(mgr2 8129 failure 1 "$(SHA 129)" 1 "$(qb 40)"),$(mgr2 8130 failure 1 "$(SHA 130)" 1 "$(qb 41)"),$(mgr2 8131 failure 1 "$(SHA 131)" 1 "$(qb 44)"),$(mgr2 8132 failure 1 "$(SHA 132)" 1 "$(qb 45)"),$(mgr2 8133 failure 1 "$(SHA 133)" 1 "$(qb 46)")"
+mg_runs "$RUNS2" 32 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
 f2() { cfiles "$(cfile "$2" "$3")" | fx "repos/$R2/commits/$(SHA "$1")?per_page=100"; }   # f2 <n> <path> <blob>
 suitey_fail() { jobs_body "$1" "$2:test-scripts (1/8):failure" "$3:test:failure" | fx "$(jobs_path "$1")"; printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path "$2")"; }
 f2 101 doc/q1.md aaa111; suitey_fail 8101 95101 95102
@@ -496,11 +588,13 @@ import json
 print(json.dumps({'files': [{'filename': 'big/f%d.md' % i, 'sha': 's%d' % i} for i in range(3000)]}))" | fx "repos/$R2/commits/$(SHA 131)?per_page=100"
 # a failing job this tool has not classified (in neither the shard family nor ci.yml's job list)
 f2 130 doc/m.md blobM2; jobs_body 8130 "95341:mystery-job:failure" | fx "$(jobs_path 8130)"
+# a failing job the #12089 umbrella fold removed from ci.yml (an aggregate member token): classified via FOLDED_JOBS, never unclassified
+f2 133 doc/fj.md blobFJ; jobs_body 8133 "95343:rule-body-lint:failure" | fx "$(jobs_path 8133)"
 rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
 run_sut ejections --out "$OUT" --since "$since" --repo "$R2" > "$SANDBOX/ej2.out" 2>&1; rc=$?
 E2="$OUT/units-ejections.jsonl"
 cls_of() { unit_field "$E2" "$(SHA "$1")" '.cls+" "+.reason'; }
-[[ "$rc" -eq 0 && "$(wc -l < "$E2")" -eq 26 ]] && pass "twenty-six non-success queue runs (failure, timed_out and cancelled) become twenty-six units" || fail "second window (rc=$rc, lines=$(wc -l < "$E2" 2>/dev/null)): $(tail -3 "$SANDBOX/ej2.out")"
+[[ "$rc" -eq 0 && "$(wc -l < "$E2")" -eq 27 ]] && pass "twenty-seven non-success queue runs (failure, timed_out and cancelled) become twenty-seven units" || fail "second window (rc=$rc, lines=$(wc -l < "$E2" 2>/dev/null)): $(tail -3 "$SANDBOX/ej2.out")"
 [[ "$(cls_of 101)" = "escape deterministic" ]] && pass "ESC: the would-skip suite failed in attempt 2 AND attempt 1 (read from attempt 1's jobs and log) is a deterministic escape" || fail "ESC: $(cls_of 101)"
 [[ "$(cls_of 102 | cut -d' ' -f1)" = unverified ]] && pass "attempt 1 failed a DIFFERENT suite: run_attempt is a counter, not evidence, so the unit is unverified" || fail "attempt-1 different suite: $(cls_of 102)"
 [[ "$(cls_of 103 | cut -d' ' -f1)" = unverified ]] && pass "attempt 1's jobs could not be read: the unit is unverified, never an escape and never cleared" || fail "attempt-1 unread: $(cls_of 103)"
@@ -524,6 +618,7 @@ done
 [[ "$(cls_of 132)" == "not-evaluable files: "* ]] && pass "a commit file entry without a blob sha is a failed read: a name-only comparison is not an identical-content claim" || fail "no blob sha: $(cls_of 132)"
 [[ "$(cls_of 129 | cut -d' ' -f1)" = not-evaluable ]] && pass "a log line whose label carries a control byte is not a [FAIL] line: the shard has no fail line, so not-evaluable" || fail "control byte in label: $(cls_of 129)"
 [[ "$(cls_of 130)" == "not-evaluable unclassified-job: mystery-job" ]] && pass "a failing job in neither the shard family nor ci.yml's job list is unclassified, so the unit is not-evaluable" || fail "unclassified job: $(cls_of 130)"
+[[ "$(cls_of 133 | cut -d' ' -f1)" = rule-irrelevant && "$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')" = folded-job ]] && pass "a failing folded job name (an umbrella member token) is classified folded-job and lands rule-irrelevant, never not-evaluable" || fail "folded job: $(cls_of 133) note=$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')"
 [[ "$(cls_of 131)" == "not-evaluable files: "* ]] && pass "a changed-file list of exactly 3000 files is the API's cap: truncated, so the unit is not-evaluable (never a shortened selector input)" || fail "3000-file cap: $(cls_of 131)"
 ! grep -q STUB-MISS "$GHLOG" && pass "the second window made no request the stub does not know" || fail "second window unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
 REPO_NAME=""
@@ -647,6 +742,24 @@ print("\n".join(sorted(m.ALWAYS_RUN_JOBS | {"test-webplat", "test-bun", "test-sc
 PY
 )"
 [[ -n "$ci_jobs" && "$ci_jobs" = "$py_jobs" ]] && pass "the always-run job set plus the four shard families is exactly ci.yml's job list (a new job there must be classified here)" || fail "job parity: ci-only='$(LC_ALL=C comm -23 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')' tool-only='$(LC_ALL=C comm -13 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')'"
+member_tokens="$(grep -oE '^[[:space:]]*member [a-zA-Z0-9_-]+' "$SCRIPT_DIR/../../../.github/workflows/ci.yml" | awk '{print $2}' | sort -u)"
+py_folded="$(python3 - "$SUT" <<'PY'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location('m', sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+print("\n".join(sorted(m.FOLDED_JOBS - {"cla-check", "cla-evidence"})))
+PY
+)"
+[[ -n "$member_tokens" && "$member_tokens" = "$py_folded" ]] && pass "the folded set minus the posted CLA names is exactly the umbrella member tokens in ci.yml's aggregate steps" || fail "folded parity: ci-only='$(LC_ALL=C comm -23 <(echo "$member_tokens") <(echo "$py_folded") | tr '\n' ' ')' tool-only='$(LC_ALL=C comm -13 <(echo "$member_tokens") <(echo "$py_folded") | tr '\n' ' ')'"
+grep -qxF 'cla-check' "$SCRIPT_DIR/../../../scripts/required-checks.txt" && grep -qxF 'cla-evidence' "$SCRIPT_DIR/../../../scripts/required-checks.txt" \
+  && pass "cla-check and cla-evidence are whole lines in required-checks.txt (the posted check names the folded set also carries)" || fail "cla names not whole lines in required-checks.txt"
+py_overlap="$(python3 - "$SUT" <<'PY'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location('m', sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+suits = {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy"}
+print("\n".join(sorted(m.FOLDED_JOBS & (m.ALWAYS_RUN_JOBS | suits))))
+PY
+)"
+[[ -z "$py_overlap" ]] && pass "the folded set is disjoint from the always-run jobs and the four shard families" || fail "folded/always-run overlap: $py_overlap"
 gate_git="$(awk '/^git_ro\(\)/,/^}/' "$SCRIPT_DIR/../../../scripts/ci-pr-affected-preactivation.sh" | grep -o 'GIT_[A-Z_]*' | sort -u)"
 lib_git="$(printf '%s\n' "${GIT_LOCATION_VARS[@]}" | sort -u)"
 py_git="$(python3 - "$SUT" <<'PY'
@@ -3404,7 +3517,7 @@ mutate() {  # mutate <name> <old> <new> <row>
 }
 ej2_run() {  # re-run the second ejection window into a fresh dir with the SUT under test; sets E2
   REPO_NAME="$R2"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
-  mg_runs "$RUNS2" 31 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+  mg_runs "$RUNS2" 32 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
   run_sut ejections --out "$OUT" --since "$since" --repo "$R2" >/dev/null 2>&1; E2="$OUT/units-ejections.jsonl"; REPO_NAME=""
 }
 row_always_on() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[0]}" '.skipped_suites|join(",")')" = "scripts/suitex,scripts/suitey" ]]; }
@@ -3458,6 +3571,7 @@ row_timed_out() { ej2_run; [[ -n "$(unit_field "$E2" "$(SHA 127)" .cls)" && "$(u
 row_no_sha() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 132)" .reason)" == files:* ]]; }
 row_ctrl_label() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 129)" .cls)" = not-evaluable ]]; }
 row_unclassified() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 130)" .reason)" == "unclassified-job: mystery-job" ]]; }
+row_folded() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 133)" .cls)" = rule-irrelevant && "$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')" = folded-job ]]; }
 row_file_cap() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 131)" .reason)" == files:* ]]; }
 row_full_events() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[1]}" .cls)" = rule-irrelevant ]]; }
 row_window() { local o; o="$(run_sut ejections --out "$SANDBOX/ej-win" --commits 7 --repo "$R" 2>&1)"; grep -q 'window 2031-01-02T12:00:00Z\.\.2031-01-08T12:00:00Z' <<<"$o"; }
@@ -3484,7 +3598,15 @@ row_accept_dir() { audit "$SANDBOX/audit-dir.rows" --accept "$SANDBOX/accept-dir
 row_accept_ok() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-ok.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=2' <<<"$AOUT"; }
 row_accept_badreason() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-badreason.tsv"; [[ "$RC" -eq 2 ]]; }
 mutate always-on-skippable 'elif f[2] == "0" and f[3] != "always_on":' 'elif f[2] == "0":' row_always_on
-mutate read-error-as-no-run 'runs, u["reason"] = None, "runs-read: %s" % e' 'runs, u["reason"] = [], ""' row_read_error
+mutate read-error-as-no-run 'runs, u["reason"] = None, "runs-read: %s" % e' 'runs, u["reason"] = [], "", ""' row_read_error
+mutate corroboration-dropped 'runs = corroborating_runs(repo, sha)' 'runs = []' row_corr_dropped
+mutate corroboration-sha-filter-dropped 'r.get("head_sha") == sha and r.get("event") in FULL_EVENTS' 'r.get("event") in FULL_EVENTS' row_corr_sha
+mutate corroboration-path-filter-dropped 'and r.get("path") == CI_WORKFLOW_PATH' '' row_corr_path
+mutate corroboration-event-filter-dropped 'r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH' 'r.get("path") == CI_WORKFLOW_PATH' row_corr_event
+mutate corroboration-namespace-ignored 'r"^https://github\.com/%s/actions/runs/(\d+)" % re.escape(repo)' 'r"^https://github\.com/[^/]+/[^/]+/actions/runs/(\d+)"' row_corr_foreign
+mutate corroboration-truncation-ignored 'if total != seen:' 'if False:' row_corr_trunc
+mutate corroboration-order-dropped 'runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)' '' row_corr_order
+mutate corroboration-uncount-ignored 'raise ReadError("uncounted check-runs list for %s" % sha[:10])' 'pass' row_corr_uncount
 mutate bound-on-point-numerator 'cp_upper(attributable + unverified + ne, n)' 'cp_upper(attributable + unverified, n)' row_worst_bound
 mutate flake-needs-two-file-sets 'len({x["files_hash"] for x in us}) >= 2' 'len({x["files_hash"] for x in us}) >= 1' row_flake_same_files
 mutate flake-distinct-prs-dropped 'and len({x.get("pr") or x["sha"] for x in us}) >= 3}' 'and True}' row_flake_same_pr
@@ -3567,6 +3689,7 @@ mutate timed-out-not-a-unit 'r["conclusion"] != "success"' 'r["conclusion"] == "
 mutate blob-sha-optional '            if not x.get("sha"):' '            x.setdefault("sha", "")
             if False:' row_no_sha
 mutate unclassified-job-reassuring '            if name.split(" (")[0] in ALWAYS_RUN_JOBS:' '            if True:' row_unclassified
+mutate folded-jobs-unclassified '            elif name.split(" (")[0] in FOLDED_JOBS:' '            elif False:' row_folded
 mutate window-ends-swapped '        since = since or iso(shas[-1])
         until = until or iso(shas[0])' '        since = since or iso(shas[0])
         until = until or iso(shas[-1])' row_window
@@ -4298,7 +4421,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1110   # 1104 + 6 net unconditional assertions from the PR3b accept-bound and job-wiring rows (measured full run 2026-11-07: 1110 passed, 476 gated sites); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1132   # 1127 (#12377 base) + 5 folded-job additions (4 unconditional rows + 1 gated site); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))

@@ -449,6 +449,47 @@ describe("startOriginTlsListener", () => {
     expect(tls!.server.keepAliveTimeout).toBeGreaterThan(900_000);
   });
 
+  // headersTimeout is deliberately NOT set on the :443 server (ADR-321, ruling R-A of 2026-11-08): the plain server's assignment is
+  // bounded by Node's requestTimeout (300 s), so mirroring it would loosen the :443 slow-header cutoff from Node's 60 s default to
+  // 300 s for no demonstrated need (an idle keep-alive socket stays open at 75 s with the default, measured on Node 22.23.4 and 26).
+  test("the HTTPS server keeps Node's 60 s headersTimeout (the slow-header cutoff is not loosened)", async () => {
+    await boot(envOf(good));
+    expect(tls!.server.headersTimeout).toBeLessThanOrEqual(60_000);
+  });
+  test("origin-tls.ts never assigns headersTimeout (a loosening needs a demonstrated need and an explicit requestTimeout)", () => {
+    const src = readFileSync(join(__dirname, "..", "server/origin-tls.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).not.toMatch(/headersTimeout\s*=/);
+    expect(src).not.toMatch(/requestTimeout\s*=/);
+  });
+
+  // The once-per-start line is the per-host proof; `required` makes "REQUIRED is live on this host" a direct read.
+  const listeningLine = () => logged.find((a) => String(a[1]).startsWith("origin-tls: listening"));
+  test("the startup line states the REQUIRED mode as a boolean: true under REQUIRED=1", async () => {
+    http = createHttpServer();
+    await new Promise<number>((resolve) => {
+      tls = startOriginTlsListener({ httpServer: http!, env: { [ORIGIN_TLS_REQUIRED_ENV]: "1", ...envOf(good) }, port: 0, onListening: resolve, exit: vi.fn() });
+    });
+    expect((listeningLine()![0] as { required: unknown }).required).toBe(true);
+  });
+  test("the startup line states the REQUIRED mode as a boolean: false without it", async () => {
+    await boot(envOf(good));
+    expect((listeningLine()![0] as { required: unknown }).required).toBe(false);
+  });
+  test("required is written AFTER the certificate facts in the startup line (the later key wins in an object spread)", () => {
+    const src = readFileSync(join(__dirname, "..", "server/origin-tls.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(src).toMatch(/\{\s*port:\s*boundPort,\s*\.\.\.loaded\.info,\s*required\s*\}/);
+  });
+  test("the startup line adds only that boolean: no key, certificate or PEM text reaches it", async () => {
+    await boot(envOf(good));
+    const fields = listeningLine()![0] as Record<string, unknown>;
+    expect(typeof fields.required).toBe("boolean");
+    const text = JSON.stringify(fields);
+    expect(text).not.toContain("PRIVATE KEY");
+    expect(text).not.toContain("BEGIN CERTIFICATE");
+    expect(text).not.toContain(b64(good.key));
+    expect(text).not.toContain(b64(good.cert));
+  });
+
   test("a real process.env is scrubbed of the key and cert after boot; a plain env object is not", async () => {
     const plain = envOf(good) as Record<string, string | undefined>;
     await boot(plain);
@@ -523,6 +564,135 @@ describe("startOriginTlsListener", () => {
       }
     });
 
+    const takenPort = async () => {
+      const blocker = createServer();
+      await new Promise<void>((r) => blocker.listen(0, r));
+      return { blocker, taken: (blocker.address() as { port: number }).port };
+    };
+
+    test("a startup bind failure under REQUIRED is reported with phase startup and is fatal", async () => {
+      const { blocker, taken } = await takenPort();
+      try {
+        const exit = vi.fn();
+        http = createHttpServer();
+        tls = startOriginTlsListener({ httpServer: http, env: { ...required, ...envOf(good) }, port: taken, exit });
+        await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+        expect(reportSilentFallback).toHaveBeenCalledWith(
+          null,
+          expect.objectContaining({ op: "listen", tags: { reason: "EADDRINUSE", phase: "startup" } }),
+        );
+      } finally {
+        blocker.close();
+      }
+    });
+
+    // The fixture direction the other way round, with an INJECTED exit (vitest traps process.exit, so an un-injected check
+    // would pass for the wrong reason): without REQUIRED a startup bind failure is reported and the process keeps going.
+    test("a startup bind failure WITHOUT REQUIRED is reported and never calls exit", async () => {
+      const { blocker, taken } = await takenPort();
+      try {
+        const exit = vi.fn();
+        http = createHttpServer();
+        tls = startOriginTlsListener({ httpServer: http, env: envOf(good), port: taken, exit });
+        await vi.waitFor(() =>
+          expect(reportSilentFallback).toHaveBeenCalledWith(
+            null,
+            expect.objectContaining({ tags: { reason: "EADDRINUSE", phase: "startup" } }),
+          ),
+        );
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        blocker.close();
+      }
+    });
+
+    // After the bind a server 'error' (an accept failure) leaves the listener open in Node, and exit(1) would kill the whole
+    // process, including every WebSocket on the plain listener, over a transient condition: report (throttled) and continue.
+    const bootListening = async (env: OriginTlsEnv) => {
+      const exit = vi.fn();
+      http = createHttpServer((_req, res) => res.end("plain-handler"));
+      const port = await new Promise<number>((resolve) => {
+        tls = startOriginTlsListener({ httpServer: http!, env, port: 0, onListening: resolve, exit });
+      });
+      return { exit, port };
+    };
+    // A fixture code only: whether libuv surfaces EMFILE through the server's 'error' event is unverified.
+    const runtimeError = () => Object.assign(new Error("accept failed"), { code: "EMFILE" });
+    const runtimeReports = () =>
+      reportSilentFallback.mock.calls.filter((c) => (c[1] as { tags?: { phase?: string } }).tags?.phase === "runtime");
+
+    test("a runtime error AFTER the bind under REQUIRED is reported with phase runtime and is NOT fatal", async () => {
+      const { exit, port } = await bootListening({ ...required, ...envOf(good) });
+      tls!.server.emit("error", runtimeError());
+      expect(exit).not.toHaveBeenCalled();
+      expect(reportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({ feature: "origin_tls", op: "listen", tags: { reason: "EMFILE", phase: "runtime" } }),
+      );
+      expect((await get(port, "/anything")).status).toBe(200); // the listener still serves
+    });
+
+    test("a runtime error after the bind without REQUIRED is reported with phase runtime and never exits", async () => {
+      const { exit } = await bootListening(envOf(good));
+      tls!.server.emit("error", runtimeError());
+      expect(exit).not.toHaveBeenCalled();
+      expect(reportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({ tags: { reason: "EMFILE", phase: "runtime" } }),
+      );
+    });
+
+    test("a burst of runtime errors is reported once a minute, with the suppressed count on the next report", async () => {
+      const { exit } = await bootListening({ ...required, ...envOf(good) });
+      let now = 1_000_000;
+      const spy = vi.spyOn(performance, "now").mockImplementation(() => now);
+      try {
+        for (let i = 0; i < 5; i++) tls!.server.emit("error", runtimeError());
+        expect(runtimeReports()).toHaveLength(1);
+        now += 59_000;
+        tls!.server.emit("error", runtimeError());
+        expect(runtimeReports()).toHaveLength(1); // still inside the window
+        now += 2_000;
+        tls!.server.emit("error", runtimeError());
+        expect(runtimeReports()).toHaveLength(2);
+        expect((runtimeReports()[1][1] as { extra: { suppressed: number } }).extra.suppressed).toBe(5);
+        expect(exit).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    // The one in-process sign of a dead listener: the https server closing when nobody asked it to.
+    test("an UNEXPECTED close of the listener under REQUIRED is reported and fatal (the container restarts)", async () => {
+      const { exit } = await bootListening({ ...required, ...envOf(good) });
+      tls!.server.close(); // not through the returned close(): nobody "asked" for this
+      await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
+      expect(reportSilentFallback).toHaveBeenCalledWith(
+        null,
+        expect.objectContaining({ tags: { reason: "unexpected-close", phase: "runtime" } }),
+      );
+    });
+
+    test("an unexpected close without REQUIRED is reported and never exits", async () => {
+      const { exit } = await bootListening(envOf(good));
+      tls!.server.close();
+      await vi.waitFor(() =>
+        expect(reportSilentFallback).toHaveBeenCalledWith(
+          null,
+          expect.objectContaining({ tags: { reason: "unexpected-close", phase: "runtime" } }),
+        ),
+      );
+      expect(exit).not.toHaveBeenCalled();
+    });
+
+    test("an INTENTIONAL close() (shutdown) is neither reported nor fatal, even under REQUIRED", async () => {
+      const { exit } = await bootListening({ ...required, ...envOf(good) });
+      tls!.close();
+      await new Promise((r) => setTimeout(r, 100));
+      expect(exit).not.toHaveBeenCalled();
+      expect(runtimeReports()).toHaveLength(0);
+    });
+
     test("valid material under REQUIRED starts normally and never exits", async () => {
       const exit = vi.fn();
       http = createHttpServer();
@@ -559,7 +729,7 @@ describe("startOriginTlsListener", () => {
           expect.objectContaining({
             feature: "origin_tls",
             op: "listen",
-            tags: { reason: "EADDRINUSE" },
+            tags: { reason: "EADDRINUSE", phase: "startup" },
           }),
         ),
       );
@@ -584,10 +754,10 @@ describe("wiring and contract pins", () => {
     expect(src).toContain("originTls?.closeAllConnections()");
   });
 
-  test("the plain :80 server uses the same keep-alive constant, with headersTimeout above it", () => {
+  test("the plain :80 server uses the same keep-alive constant, with headersTimeout above it (unchanged from main)", () => {
     const src = stripComments(read("server/index.ts"));
-    expect(src).toContain("server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS");
-    expect(src).toContain("server.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS + 5_000");
+    expect(src).toMatch(/^\s*server\.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;$/m);
+    expect(src).toMatch(/^\s*server\.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS \+ 5_000;$/m);
   });
 
   test("the default container port equals the port the run sites publish as host :443", () => {

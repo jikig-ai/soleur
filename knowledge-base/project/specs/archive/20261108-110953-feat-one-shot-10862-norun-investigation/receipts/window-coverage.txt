@@ -1,0 +1,5 @@
+$ git rev-list --first-parent --since=2026-10-09T23:23:34Z --until=2026-10-22T13:23:40Z origin/main | wc -l
+300
+$ gh api --paginate "repos/jikig-ai/soleur/actions/workflows/ci.yml/runs?event=push&branch=main&created=2026-10-09T00:00:00Z..2026-10-22T23:59:59Z&per_page=100" --jq .workflow_runs[].head_sha | sort > push-shas.txt; wc -l; comm -12 win300-sorted push-shas | wc -l
+353
+300

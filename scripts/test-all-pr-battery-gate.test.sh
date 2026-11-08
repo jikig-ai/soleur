@@ -318,10 +318,10 @@ prepare_arm() {  # <id> <fx> <mods>
     case "$op" in
       noref) (cd "$fx" && gitq update-ref -d refs/remotes/origin/main) ;;
       headfail)
-        # a git shim that fails ONLY `diff --name-only HEAD` — the one read that sees uncommitted work
+        # a git shim that fails ONLY `diff --name-only HEAD` (with or without the trailing --ignore-submodules=none, #12332) — the one read that sees uncommitted work
         mkdir -p "$TMP/shim-$id"
         local real; real="$(command -v git)"
-        printf '#!/bin/sh\ncase "$*" in *"diff --name-only HEAD") exit 128 ;; esac\nexec "%s" "$@"\n' "$real" > "$TMP/shim-$id/git"
+        printf '#!/bin/sh\ncase "$*" in *"diff --name-only HEAD"|*"diff --name-only HEAD "*) exit 128 ;; esac\nexec "%s" "$@"\n' "$real" > "$TMP/shim-$id/git"
         chmod +x "$TMP/shim-$id/git" ;;
       stacked)
         # origin/main stays BEHIND: the PR branch carries an earlier commit that touches the SUT,
@@ -571,7 +571,7 @@ if [[ "$(derive_sites "$SIXTH_DIR/scripts/test-all.sh")" != "$want_sites" ]]; th
 else fail "mutant sixth-site: SURVIVED — a sixth --pr-gated site is invisible to the dispatch check"; fi
 
 # row 9: rename-only slips the predicate when the rename-source append is dropped
-mutant rename-sources-dropped 's = sub_once(s, "$(git -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null || true)\n$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null || true)", "")' rename-only
+mutant rename-sources-dropped 's = sub_once(s, "$(git -c core.quotePath=false diff --name-status -M HEAD --ignore-submodules=none 2>/dev/null || true)\n$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD --ignore-submodules=none 2>/dev/null || true)", "")' rename-only
 
 # row 10: enumerate gated — drop the _ENUMERATE inertness. Graded on the enumerate stream, not on a
 # recorded arm: the recorder replaces run_suite, which is what the enumerate path drives.

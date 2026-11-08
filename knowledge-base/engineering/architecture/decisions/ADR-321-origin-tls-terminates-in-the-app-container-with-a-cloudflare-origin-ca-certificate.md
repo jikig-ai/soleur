@@ -57,7 +57,7 @@ here and this change must not touch it.
 
    A rejected certificate is reported to Sentry as `feature=origin_tls`, `op=load`, `tags.reason=<enum>`; a context that
    cannot be built as `op=create`; a bind error as `op=listen`. The once-per-start line
-   `origin-tls: listening ... certificate loaded` is emitted at warn so it reaches Better Stack (Vector drops INFO).
+   `origin-tls: listening ... certificate loaded` is emitted at warn so it reaches Better Stack (Vector drops INFO). From the release that carries PR #12388 it also states `required` (a boolean: whether `ORIGIN_TLS_REQUIRED=1` was in effect in that process), so "REQUIRED is live on this host" is a direct per-host read. Post-bind listener events follow the policy of decision 6 as amended by item 11.
 3. **The strict flip is staged, and its lever is the app-host Configuration Rule** (the mechanism is amended by item 10 of the 2026-11-07 amendments below; R6 and R8 are defined in the archived plan, `knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md`): listener inert and deployed to both
    hosts, certificate loaded and checked per host, load balancer health check to HTTPS/443, a header-scoped canary rule
    that runs only the probe request in `strict`, probe passes, then the rule is changed host-wide. Roll forward only:
@@ -77,9 +77,10 @@ here and this change must not touch it.
    code: `0` TLS (or plain without `--require-tls`), `1` non-200, `2` unreachable, `3` `--require-tls` not satisfied,
    `64` usage. Today `--require-tls` exits 3 and that is the correct pre-flip answer.
 6. **Fail closed at the flip.** With `ORIGIN_TLS_REQUIRED=1`, absent or invalid material, an unbuildable TLS context, or
-   a listener error is reported and then fatal at startup, so the canary container (same env-file) exits, its health
+   a listener error BEFORE the bind completes is reported and then fatal, so the canary container (same env-file) exits, its health
    gate fails and the old container keeps serving. Without it a bad deploy would pass the canary and Cloudflare, in
-   `strict`, would answer 525/526 to every user.
+   `strict`, would answer 525/526 to every user. *Amended by item 11 (PR #12388):* after the bind, an unexpected `close` of the
+   https server is also fatal under REQUIRED, and a server `error` is reported at most once a minute and the process continues.
 7. **Deploy safety for the new publish.** The canary does not publish host 443, so `ci-deploy.sh` checks that host 443
    is free (`host_443_preflight`) before the canary starts, refusing with `host_443_in_use` or
    `host_443_check_unavailable` while the old container still serves. Restoring the previous image when the production
@@ -117,8 +118,10 @@ here and this change must not touch it.
   after its deploy means no listener there), and a rejected certificate shows in Sentry as `feature:origin_tls`. Do not
   claim per-host proof before this has been read. `apps/web-platform/.env.example` carries no `ORIGIN_TLS_*` entry
   (editing it is blocked for agents); the variable table in decision 2 is the contract.
-- Idle keep-alive is set above Cloudflare's reuse window (905 s, `headersTimeout` 910 s) on BOTH servers, from one shared
-  constant. The ~900 s figure is unverified; a larger value only narrows the 502/520 race (Node closing first), so it is
+- Idle keep-alive is set above Cloudflare's reuse window (`keepAliveTimeout` 905 s) on BOTH servers, from one shared
+  constant. `headersTimeout` is a separate matter (item 11, R-A): the plain :80 server sets 910 s, but Node bounds the header phase by
+  `requestTimeout` (default 300 s, measured), so 300 s is its operative slow-header cutoff; the :443 listener sets none and keeps
+  Node's 60 s default. The ~900 s figure is unverified; a larger value only narrows the 502/520 race (Node closing first), so it is
   conservative if the real window is lower. The canary is a health gate and does not exercise Cloudflare's connection
   reuse, so the 502/520 rate is watched after the deploy.
 - Unverified preconditions carried forward from the plan: legacy page rules may override SSL for the app host (the
@@ -260,7 +263,26 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     docker-run sites and an https/443 LB monitor) is now asserted unconditionally in `apps/web-platform/test/seo-config-rules.test.ts` for the monitor half, and the publish half was already mutation-pinned
     by `infra/docker-run-tuple.test.sh` (K24e, K27i). Not built: the mutation-of-the-suite rows and the merge-base anchor the plan described, because the strict rule is present in every tree from now on
     (so there is no tree "with and without" to diff) and the per-merge anchor adds a `git` read to a vitest file for no extra property.
-    **Unverified / gaps:** the app's startup line does not state whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ordering (the Doppler write precedes a green redeploy whose
-    per-host `origin-tls: listening` lines follow it), not read directly; adding a `required` field is an app change that would itself redeploy, so it is not bundled. WebSocket upgrades have never crossed the
+    **Unverified / gaps:** until the release carrying PR #12388 is deployed, the app's startup line does not state whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ordering (the Doppler write precedes a green redeploy whose
+    per-host `origin-tls: listening` lines follow it), not read directly; from that release on the line carries `required` and the read is direct. WebSocket upgrades have never crossed the
     edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only). The apply job auto-approves its own plan, so the human look at the plan is a local read-only plan before the dispatch
     (runbook Act 0). The flip's whole-list update replaces the entire `http_config_settings` entrypoint; a rule added in the dashboard would be deleted, which the read-only `entrypoint-audit` dispatch checks beforehand.
+11. **Origin TLS hardening rulings (PR #12388).** *Ruled by CTO agent, 2026-11-08 (review round), two technical forks.*
+    **R-A. The :443 server does not set `headersTimeout`.** The PR first mirrored the plain server's `headersTimeout` (910 s) onto :443. Measured: Node does not validate
+    `headersTimeout` against `keepAliveTimeout` on property assignment; the operative header-phase bound is `requestTimeout` (default 300 s, nothing sets it), so the assignment
+    would have LOOSENED the :443 slow-header cutoff from Node's 60 s default to 300 s; and the stated reason (an idle keep-alive socket closed at 60 s) did not reproduce: with the default,
+    an idle socket stayed open at 75 s and the second request was answered on the same socket, on Node 22.23.4 and 26.13.0. Nothing demonstrates a need, so nothing is loosened: the assignment
+    and its shared constant are removed, `index.ts` is unchanged in effect from main (comment corrected), and a test pins that `origin-tls.ts` assigns neither `headersTimeout` nor `requestTimeout`.
+    Pre-existing and out of scope: the plain :80 server's partial-header window has been 300 s (not 60 s) since the slice-1 deploy, because of the same assignment.
+    **R-B. Post-bind policy.** Three options were weighed: keep report-and-continue for every post-bind event; exit under REQUIRED on any `error` (the old behaviour); or exit only on an unexpected `close`.
+    Facts: Node's `net` layer emits a server `error` from its connection handler and leaves the listener open, so a post-bind `error` is not a dead listener and `exit(1)` would drop every WebSocket on the
+    plain listener for a transient condition; the realistic ways :443 dies (docker-proxy or iptables failure, a rejected certificate) raise neither `error` nor `close`; a server `close` that nobody requested is the
+    one in-process sign of a dead listener. **Chosen: (c).** Before the bind: `error` is fatal under REQUIRED (the canary gate, unchanged). After it: a server `error` is reported to Sentry (`feature=origin_tls`,
+    `op=listen`, `tags.phase=runtime`) at most once a minute with a suppressed count, and the process continues; an unexpected `close` is reported (`tags.reason=unexpected-close`) and is fatal under REQUIRED, so the
+    container's `--restart unless-stopped` restarts it. A `close` requested by our own `close()` (shutdown) is neither. Whether libuv surfaces EMFILE through the server `error` event is unverified (the tests use it only as a
+    fixture code).
+    **What detects and what recovers a dead :443 after this ruling (truthfully).** Detected in-process and recovered automatically: an unexpected `close` (under REQUIRED). Detected only outside the process, recovered by a
+    human redeploy: a dead :443 that raises no event (docker-proxy or iptables failure, a rejected certificate). The real detectors for those are the Better Stack `app`/`app_health` monitors (a page after roughly 4 to 6 minutes of
+    failures) and the https LB monitor, which only emails ("Unhealthy") and does not drain web-1 (the B1 fallback pool is web-1 itself). There is **no committed Sentry alert rule for `feature:origin_tls`**: a Sentry event is a
+    pull-based check today. A Sentry alert on `feature:origin_tls` (any event; `phase:runtime` and `reason:unexpected-close` are the interesting ones) is warranted, is production-effecting, and belongs in a separate infra
+    change; it is not bundled here.

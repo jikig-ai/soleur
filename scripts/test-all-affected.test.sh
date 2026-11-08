@@ -175,7 +175,7 @@ s = s.replace(old, (
 #     set stands in for a successful index read, so both detection arms set;
 #     a real failure path is exercised through SANDBOX_DETECT_OK instead.
 #     Never shipped inline — the shipped staged branch documents the anchor.
-staged_anchor = '$(git -c core.quotePath=false diff --cached --name-status -M 2>/dev/null || true)"'
+staged_anchor = '$(git -c core.quotePath=false diff --cached --name-status -M --ignore-submodules=none 2>/dev/null || true)"'
 assert s.count(staged_anchor) == 1, f"expected exactly one staged -M anchor, found {s.count(staged_anchor)}"
 s = s.replace(staged_anchor, staged_anchor + '''
   [[ -n "${SANDBOX_STAGED_NAMES+x}" ]] \\

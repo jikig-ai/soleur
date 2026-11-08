@@ -7,7 +7,7 @@ import { isLegalChoice } from "@/lib/legal-acceptance-wire";
 import { TEXT_HASH_RE } from "@/server/legal-acceptance/canonical";
 import type { VerifiedUser } from "@/server/request-auth";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
-import { isApprovalQueueEnabled } from "@/server/approval/flag";
+import { isLegalSurfaceEnabled } from "@/server/legal-acceptance/surface";
 import { reportLegalOp } from "@/server/approval/ops";
 import { ACK_FLUSH_TIMEOUT_MS, decideLegal, LegalServiceError, normaliseNote, type LegalRpcClient } from "@/server/legal-acceptance/service";
 import { runOffRequestPath } from "@/server/legal-acceptance/off-path";
@@ -19,8 +19,8 @@ import { guardLegalRequest, type IdentityClient } from "@/server/legal-acceptanc
  * Body: {choice, textHash, note?}. `textHash` is the hash the page showed; the route compares it with the registry and
  * never accepts text. Responses: 200 LegalDecideResult (recorded, already_recorded, replaced, expired, code_expired:
  * the last three mean nothing was recorded) · 400 malformed body · 401 · 403 `{error:"reverify"}` when no live intent /
- * email code counts (SQLSTATE 42501), 403 `{error:"Forbidden"}` for CSRF or a non-web token · 404 flag off or unknown
- * key · 413 body over 8 KiB · 415 · 429 · 500.
+ * email code counts (SQLSTATE 42501), 403 `{error:"Forbidden"}` for CSRF or a non-web token · 404 flag off, not the founder, unknown
+ * key or a key with no declared card kind · 413 body over 8 KiB · 415 · 429 · 500.
  *
  * The decision is recorded by `record_legal_acceptance` on the USER-context client (the actor is `auth.uid()`); the
  * service client only opens the intent for Decline and Request changes. Thin HTTP-only export.
@@ -39,7 +39,7 @@ async function decideHandler(req: Request, user: VerifiedUser): Promise<Response
     const supabase = await createClient();
     const g = await guardLegalRequest(req, user.id, {
       supabase: supabase as unknown as IdentityClient,
-      isEnabled: (userId) => isApprovalQueueEnabled({ userId, workspaceId: null }),
+      isEnabled: (userId) => isLegalSurfaceEnabled(userId),
     });
     if (!g.ok) return NextResponse.json({ error: g.error }, { status: g.status });
 

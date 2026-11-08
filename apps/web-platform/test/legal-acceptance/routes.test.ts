@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
   clientFails: { value: false },
   flush: vi.fn(),
   after: vi.fn(),
+  // The card kinds declared for the fixture keys (the real map declares only the committed text).
+  declared: { value: { "fixture-terms": "terms", "fixture-other": "terms" } as Record<string, "terms" | "acknowledgement"> },
 }));
 
 // `after` is spied and then delegated to the real one (which throws outside a request scope, so the helper's fallback runs the task).
@@ -87,6 +89,11 @@ vi.mock("@supabase/supabase-js", () => ({
   }),
 }));
 vi.mock("@/server/approval/flag", () => ({ isApprovalQueueEnabled: async () => h.flag.value }));
+// The fixture keys are not in the real LEGAL_TEXT_KIND, so the kind lookup the guard uses reads the per-test map instead.
+vi.mock("@/lib/legal-acceptance-copy", async (orig) => {
+  const real = await orig<typeof import("@/lib/legal-acceptance-copy")>();
+  return { ...real, legalKindCopy: (key: string) => real.legalKindCopy(key, h.declared.value) };
+});
 vi.mock("@/server/approval/ops", async (orig) => ({
   ...(await orig<typeof import("@/server/approval/ops")>()),
   reportLegalOp: (...a: unknown[]) => h.report(...a),
@@ -102,7 +109,7 @@ vi.mock("@/server/legal-acceptance/reauth", async (orig) => {
       real.sendReauthCode({ ...deps, sendFailures: h.failures.value as InstanceType<typeof real.SendFailureMemory> }, a),
   };
 });
-// The registry directory is a fixture dir (the real one holds no legal text yet).
+// The registry directory is a fixture dir, so these route tests do not depend on whatever the real texts directory holds.
 vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
   const real = await orig<typeof import("@/server/legal-acceptance/canonical")>();
   return { ...real, getLegalText: (key: string) => real.getLegalText(key, h.texts.dir) };
@@ -141,6 +148,8 @@ const issued = { data: { outcome: "issued", reused: false, event_id: EVENT, expi
 
 beforeEach(() => {
   vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
+  h.declared.value = { "fixture-terms": "terms", "fixture-other": "terms" };
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "anon-key-fixture");
   h.verified.value = USER;
   h.flag.value = true;
@@ -182,6 +191,40 @@ describe.each(["reauth", "decide"] as const)("%s: request guards", (action) => {
     expect((await json(await post(req(action, ok, { key: "no-such-key" })))).status).toBe(404);
     expect((await json(await post(req(action, ok, { key: "Bad_Key" })))).status).toBe(404);
     expect(h.serviceRpc).not.toHaveBeenCalled();
+  });
+
+  it("founder gate: with the flag ON only the configured founder gets through; another user, an unset variable and a malformed variable are the same 404 and nothing is called (AC13)", async () => {
+    const post = action === "reauth" ? reauth : decide;
+    const notFound = { status: 404, body: { error: "Not found" } };
+    const OTHER = "00000000-0000-4000-8000-0000000000bb";
+    h.flag.value = true;
+    h.verified.value = OTHER;
+    h.getUserUser.value = { id: OTHER, email: EMAIL };
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+    h.verified.value = USER;
+    h.getUserUser.value = { id: USER, email: EMAIL };
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    expect(h.userRpc).not.toHaveBeenCalled();
+    // the founder, flag on, variable equal: enabled (the request proceeds past the guard)
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
+    expect((await json(await post(req(action, ok)))).status).not.toBe(404);
+    // flag off with the variable equal: disabled
+    h.flag.value = false;
+    expect(await json(await post(req(action, ok)))).toEqual(notFound);
+  });
+
+  it("a registered text with no declared card kind is the same 404 (no default kind), and nothing is called", async () => {
+    const post = action === "reauth" ? reauth : decide;
+    h.declared.value = {};
+    expect(await json(await post(req(action, ok)))).toEqual({ status: 404, body: { error: "Not found" } });
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    expect(h.userRpc).not.toHaveBeenCalled();
+    h.declared.value = { "fixture-terms": "acknowledgement" };
+    expect((await json(await post(req(action, ok)))).status).not.toBe(404);
   });
 
   it("requires application/json and a JSON object body", async () => {
@@ -326,6 +369,23 @@ describe("decide", () => {
   const recorded = (choice: string) => ({
     data: { outcome: "recorded", choice, text_hash: HASH, decided_at: "2026-11-05T10:00:00Z", reauth_at: choice === "accept" ? "2026-11-05T09:58:00Z" : null },
     error: null,
+  });
+
+  it("a founder who already holds a live intent cannot record once the gate is off: 404, and neither client is called (CTO ruling T4)", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    const notFound = { status: 404, body: { error: "Not found" } };
+    h.flag.value = false; // the operator turned the flag off after the intent was issued
+    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual(notFound);
+    h.flag.value = true;
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", ""); // or the founder variable went away
+    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual(notFound);
+    expect(h.userRpc).not.toHaveBeenCalled();
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    // control: with the gate open the same request does record (so the 404s above were the gate, not a broken fixture)
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    expect(h.userRpc).toHaveBeenCalledTimes(1);
   });
 
   it("accept records on the USER client only and returns the typed result; the service client is not used", async () => {
