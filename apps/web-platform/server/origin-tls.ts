@@ -229,15 +229,14 @@ export function createExitAfterFlush(
     if (exiting) return;
     exiting = true;
     let done = false;
-    // eslint-disable-next-line prefer-const -- assigned after finish is defined; finish only runs after the assignment.
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    // `finish` is only ever invoked after `timer` is initialised (the timer fires later; flush's callbacks are asynchronous).
+    const timer = setTimeout(() => finish(), EXIT_HARD_TIMER_MS);
     const finish = (): void => {
       if (done) return;
       done = true;
-      if (timer !== undefined) clearTimeout(timer);
+      clearTimeout(timer);
       exit(code);
     };
-    timer = setTimeout(finish, EXIT_HARD_TIMER_MS);
     try {
       Promise.resolve(flush(EXIT_FLUSH_MS)).then(finish, finish);
     } catch {

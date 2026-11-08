@@ -34,6 +34,14 @@ queue entry received no `merge_group` runs (PR 10013, 2026-10-11).
   run body, env, shell, inputs and defaults: an edit to any of them re-pins `WM_COMPOSITE_PIN` there in the same
   PR. The earned-green blocks, the allowlist and the off-main refusal are unchanged.
 
+## 2026-11-08 — retry the pinned gitleaks download (Ref #10479)
+
+The gitleaks install `curl` gains `--fail --retry 5 --retry-all-errors` (same three flags as the other six pinned gitleaks
+copies and the actionlint install; the `sha256sum -c` check is unchanged). Behaviour is otherwise identical; the retry
+budget is about 31 s, which rides out a transient release-CDN 5xx and not an hour-long outage. The run body changed, so
+`WM_COMPOSITE_PIN` in `tests/scripts/test-weakness-miner.sh` moved `5f736544…40fe` → `5f6a943e…71c1` in the same PR
+(ADR-285). Scanner: `plugins/soleur/test/required-checks-canonical-parity.test.sh` Test 10.
+
 ## 2026-11-07 — waiver-discipline earned green (#12276)
 
 The staged-diff lint chain gains a `waiver-discipline` reproduction: added `gitleaks:allow` lines
