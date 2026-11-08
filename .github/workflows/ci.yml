@@ -19,8 +19,8 @@ on:
   # them or that required context never reports → the queue entry stalls pending
   # forever. Since ADR-276 S2 (#9512) the heavy jobs, incl. `test` and `e2e`, DO carry an event-aware `if:` whose
   # condition names merge_group positively and is true on every event except an elided push (see `push-dedupe`);
-  # all others run unconditionally, except `affected-index-ratchet` (S4 index completion PR3a, #10448), the one ADVISORY job with a positive
-  # `pull_request || merge_group` `if:` (it never runs on push, see its own comment). The example list above is non-exhaustive and not the authority;
+  # all others run unconditionally, except `affected-index-ratchet` and `oracle-review-required` (S4 index completion PR3a/PR3b, #10448/#10859) — REQUIRED contexts with a positive
+  # `pull_request || merge_group` `if:` (they never run on push, see their own comments). The example list above is non-exhaustive and not the authority;
   # required-checks.txt is.
   # ADR-276 S3 (#9728): while the repository variable CI_DRAFT_LIGHT is exactly `on`, a push to a DRAFT pull request skips the four
   # heavy families (see `draft-light`) and the `test` aggregator then concludes RED by design (Option R), so a light run can never
@@ -502,23 +502,18 @@ jobs:
   # strict zero: no committed baseline exists — `ratchet` is green exactly when the audit is (the live set of (suite, undeclared
   # tracked path) pairs is empty), and red the moment a suite names a path that is neither declared nor accepted (a re-added baseline file
   # is baseline-reintroduced, never adopted). Runbook:
-  # knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md#ratchet-red-on-a-pr-or-queue-entry. NOT in scripts/required-checks.txt,
-  # the canonical ruleset JSON or infra/github: making it a required context is PR3b (#10859) and waits for an observation window and the budget
-  # owner's go-ahead. It runs on pull_request and merge_group only, written positively (the form scripts/probe-merge-group-coverage.sh accepts):
+  # knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md#ratchet-red-on-a-pr-or-queue-entry. REQUIRED since PR3b (#10859): the
+  # name `affected-index-ratchet` is in scripts/required-checks.txt, the canonical ruleset JSON and infra/github, per ADR-032's paired-edit contract.
+  # It runs on pull_request and merge_group only, written positively (the form scripts/probe-merge-group-coverage.sh accepts):
   # a push run would spend about 3.4 billed minutes re-proving a tree the merge_group run of the same SHA already proved. The job is always on for
-  # pull_request (drafts, docs-only and bot PRs included): the observation window needs those shapes, and its cost is bounded by the 30-day review trigger.
-  # continue-on-error is meant to keep the pull_request and merge_group RUN conclusions green while the context is not required; that is GitHub's documented
-  # behaviour and it is NOT confirmed here (the canary run was red from other jobs). Measured on the throwaway canary (PR 10899, run 39937846319): a failing
-  # job-level continue-on-error job still concludes `failure` in the jobs API and shows as a red check on the PR check list, with its ::error annotation
-  # (runbook observation log); nothing here relies on the run conclusion, and the harness-discovery job below states its own view. The deploy coupling
-  # (web-platform-release.yml acts on a PUSH run and refuses a non-success `CI` conclusion) is not live today because this job never runs on push; adding
-  # `push` to the `if:` re-activates it. PR3b MUST remove the continue-on-error line in the commit that makes the context required (#8574 says the same
-  # for harness-discovery).
+  # pull_request (drafts, docs-only and bot PRs included): a required context must report on every PR.
+  # The deploy coupling (web-platform-release.yml acts on a PUSH run and refuses a non-success `CI` conclusion) is not live because this job never
+  # runs on push; adding `push` to the `if:` re-activates it. The continue-on-error advisory line was removed in the commit that made the context
+  # required — a required job's failure must conclude the check red, not green-wash it.
   # fetch-depth: 2 is what the growth rule needs (HEAD^1 on a merge ref); 200 s of selector timeout leaves a hung selector an exit 2 with an
   # annotation, well inside the 300 s job timeout (the pre-pass alone is about 146 s cold). No secrets, and no ${{ }} inside run:.
   affected-index-ratchet:
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -566,6 +561,85 @@ jobs:
               echo
               echo "(truncated at 900000 bytes: the first 25 entries of every class are in the job log above)"
             fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
+  # oracle-review-required (PR3b, #10859; ADR-276 ruling (a) of 2026-11-06): the bound owner-review gate for the
+  # affected-index oracle surface, REQUIRED from its first commit (paired-edit contract, ADR-032). pull_request: the
+  # merge-ref diff's intersection with the BASE commit's RATCHET_ORACLE must be empty, or the author is deruelle, or a
+  # deruelle APPROVED review bound to the head SHA exists. merge_group: every member's queued head must show its
+  # LATEST oracle-review-required check-run completed/success — the self-loop is closed by enumerating members, never
+  # by self-report. Fail-closed on every unknown (API failure, truncated enumeration, unbindable anchor, missing
+  # member context, unreadable base list). Runs on pull_request and merge_group only, written positively — a required
+  # context must report on every PR. pull-requests: read is what the reviews read needs.
+  oracle-review-required:
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Oracle-review gate
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          BASE_REF: ${{ github.event.merge_group.base_ref }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          out="$RUNNER_TEMP/oracle-review.out"
+          rc=0
+          # The base-sourced driver guarantee lives HERE, not in the driver: a PR
+          # editing scripts/ci-oracle-review.sh cannot remove the re-exec that
+          # judges it (precedent: merge-queue-cla-synthetics.yml checks the
+          # verifier out from default_branch). On pull_request, when the base
+          # commit carries the driver, the base copy renders the verdict — a
+          # base without the file (pre-PR3b) runs the HEAD copy; on merge_group
+          # the candidate copy is trusted because the members' verdicts were
+          # rendered under their own pull_request arms.
+          driver="$RUNNER_TEMP/oracle-review-driver.sh"
+          # Derive the base from the FETCHED merge ref's first parent, not the
+          # payload's base.sha — a payload SHA can go stale when the base branch
+          # advances between event and ref rebuild, and a miss would silently
+          # run the PR-controlled HEAD copy (fix-round P2, #12329).
+          base_sha="$(git rev-parse HEAD^1 2>/dev/null || true)"
+          if [ "${EVENT_NAME}" = pull_request ] && [ -n "$base_sha" ] \
+            && git cat-file -e "${base_sha}:scripts/ci-oracle-review.sh" 2>/dev/null; then
+            git show "${base_sha}:scripts/ci-oracle-review.sh" > "$driver" || rc=$?
+            if [ "$rc" -eq 0 ] && [ -s "$driver" ] && bash -n "$driver"; then
+              bash "$driver" > "$out" || rc=$?
+            else
+              rc=1
+              echo "oracle-review-required: base driver present but unreadable/unparseable — failing closed" >&2
+            fi
+          else
+            bash scripts/ci-oracle-review.sh > "$out" || rc=$?
+          fi
+          cat "$out" 2>/dev/null || :
+          reason="$(sed -n 's/^SOLEUR_ORACLE_REVIEW .*reason=\([a-z-]*\)$/\1/p' "$out" 2>/dev/null | tail -n 1)"
+          if [ -z "$reason" ]; then
+            rc=1
+            reason=no-marker
+          fi
+          if [ "$rc" -ne 0 ]; then
+            echo "::error title=oracle-review-required::exit=$rc reason=$reason"
+          fi
+          {
+            echo "### oracle-review-required"
+            echo
+            sed 's/^/    /' "$out"
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
 

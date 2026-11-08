@@ -1213,10 +1213,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 #   ci-head-verdict.sh     the resolver itself
 #   audit-bot-codeql-coverage.sh, codeql-main-alert-gate.sh   CodeQL rows only, never `test`
 #   merge-queue-cla-verify.sh                                  CLA contexts only, never `test`
+#   ci-oracle-review.sh                                        merge_group member check-runs for the oracle-review-required context only, never `test` (#10859)
 #   watch-wallclock-p90-11774.sh                               reads check-run started/completed timestamps by commit sha for p50/p90 wall-clock stats; it grades no PR's `test` verdict
 # What this census cannot see (named, not hidden): apps/**, .github/**, .claude/hooks (none grade `test`; the web-platform
 # route has its own draft filter and the ruleset is the merge authority), and prose-only recipes under references/.
-LINT_EXEMPT='plugins/soleur/skills/ship/scripts/battery-owed.sh plugins/soleur/scripts/check-red-on-main.sh plugins/soleur/scripts/ci-head-verdict.sh scripts/audit-bot-codeql-coverage.sh scripts/codeql-main-alert-gate.sh scripts/merge-queue-cla-verify.sh scripts/watch-wallclock-p90-11774.sh'
+LINT_EXEMPT='plugins/soleur/skills/ship/scripts/battery-owed.sh plugins/soleur/scripts/check-red-on-main.sh plugins/soleur/scripts/ci-head-verdict.sh scripts/audit-bot-codeql-coverage.sh scripts/codeql-main-alert-gate.sh scripts/merge-queue-cla-verify.sh scripts/ci-oracle-review.sh scripts/watch-wallclock-p90-11774.sh'
 calls_resolver() { local body; body=$(grep -v '^[[:space:]]*#' "$1"); grep -q 'ci-head-verdict' <<<"$body"; }
 row_L1() { local f bad="" hits skills
   hits=$(cd "$REPO_ROOT" && { find plugins/soleur -name '*.sh' ! -name '*.test.sh' -print0 | xargs -0 grep -lE 'required_failed|statusCheckRollup|gh pr checks|check-runs\?'

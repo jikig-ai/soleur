@@ -177,7 +177,7 @@ assert_eq "" "$missing_from_config" "(1b) no canonical-15368 context missing fro
 # Sanity: the set is non-empty (a both-empty parse would pass vacuously).
 n_ci=$(parse_ci_required "$CONFIG_FILE" | wc -l | tr -d ' ')
 n_canon=$(canonical_15368 "$CANONICAL" | wc -l | tr -d ' ')
-if [[ "$n_ci" -ge 10 && "$n_canon" -ge 10 ]]; then
+if [[ "$n_ci" -ge 12 && "$n_canon" -ge 12 ]]; then
   echo "  PASS: (1c) non-vacuous — $n_ci CI names, $n_canon canonical-15368 contexts"
   PASS=$((PASS + 1))
 else

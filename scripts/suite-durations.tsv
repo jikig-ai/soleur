@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1261
-# generated-at=2026-11-08T02:28:16Z
+# generated-at=2026-11-08T03:56:53Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -177,6 +177,7 @@ plugins/soleur/test/audit-flag-flip.test.sh	152	measured
 plugins/soleur/test/auto-close-scanner.test.sh	271	measured
 plugins/soleur/test/bare-root-cwd-plugin-guard.test.sh	1222	floor
 plugins/soleur/test/bearer-fetch.test.sh	4000	floor
+plugins/soleur/test/bot-synthetic-unreachability.test.sh	1261	floor
 plugins/soleur/test/boundary-prefix.test.sh	718	measured
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	13	measured
 plugins/soleur/test/c4-count-parity.test.sh	1120	measured
@@ -393,6 +394,7 @@ scripts/ci-draft-light	87009	measured
 scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
+scripts/ci-oracle-review	1261	floor
 scripts/ci-pr-selection	1222	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
