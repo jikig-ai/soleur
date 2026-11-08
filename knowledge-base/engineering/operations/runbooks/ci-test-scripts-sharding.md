@@ -165,11 +165,13 @@ and runs `python3 scripts/regenerate-shard-manifest.py --drift-report
 --timings-dir <run-dir> ...` — a read-only mode that emits `DRIFT_ROW` (a
 `src=floor` or `src=estimate` durations row that finally measured —
 `FLOOR_UNMEASURED` counts both src classes; the token stays literal because
-the watcher greps it), `LEG_PREDICTED`,
+the watcher greps it), `PRICE_DRIFT_ROW` (a `src=measured` row whose fresh
+median diverges >=4x committed in either direction AND |delta| >= 120000 ms,
+timed >=3 sampled runs — the bound lives generator-side, #12016), `LEG_PREDICTED`,
 `LEG_OBSERVED` (light only — heavy legs are atomic one-suite floors),
 `BOUND_PERFECT` (light only), and `FLOOR_UNMEASURED` rows against the committed tables.
 `scripts/watch-shard-balance-11564.sh` thresholds them (floor rows >= 300 s,
-leg ratio > 1.30) and manages ONE watch-owned tracker issue
+leg ratio > 1.30; `PRICE_DRIFT_ROW` arrives pre-gated) and manages ONE watch-owned tracker issue
 (`ci-shard-balance-watch: manifest drift findings`, sentinel
 `<!-- shard-balance-watch:v1 drift=<set-sha1> -->`): comment only when the
 flagged-set hash changes, resolution comment + close on all-clear.

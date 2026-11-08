@@ -1,0 +1,14 @@
+SOLEUR_PR_AFFECTED_REPLAY rule_sha256=ad9e6916307c65de162a5e151641d30449471242b4c62f11344c37d7b43d2cec
+rule=skip a suite iff AFFECTED_SELECTED sel=0 and reason is not always_on and AFFECTED_SUMMARY fallback=none and the diff is evaluable (no comma or non-printable path byte, list at most 100000 bytes)
+ejection_units=82 commit_units=300
+ejection_window=2026-10-28T17:49:22Z..2026-11-07T21:23:59Z runs=423 refused=82 conclusions={"cancelled": 24, "failure": 58, "success": 341}
+population=commits n=300 classes={"clean": 298, "not-evaluable": 1, "rule-irrelevant": 1}
+  routes={"clean:-": 298, "not-evaluable:unsettled-jobs: test-webplat (2/2)": 1, "rule-irrelevant:-": 1}
+  attributable=0/300 unverified_as_escape=0/300 (point 0.00%) worst_case=1/300 cp95_upper_on_worst_case=1.57%
+population=commits+ejections n=382 classes={"clean": 298, "flake-cleared": 7, "not-evaluable": 59, "rule-irrelevant": 16, "unverified": 2}
+  routes={"clean:-": 298, "flake-cleared:identical-tree-green": 7, "not-evaluable:failed-job-without-fail-line": 5, "not-evaluable:unclassified-job: adr-ordinals": 4, "not-evaluable:unclassified-job: cla-check,cla-evidence": 1, "not-evaluable:unclassified-job: grok-fidelity,harness-discovery": 2, "not-evaluable:unclassified-job: harness-discovery,grok-fidelity": 2, "not-evaluable:unclassified-job: rule-body-lint": 20, "not-evaluable:unsettled-jobs: affected-index-ratchet": 2, "not-evaluable:unsettled-jobs: test-scripts (6/8)": 2, "not-evaluable:unsettled-jobs: test-scripts (8/8)": 1, "not-evaluable:unsettled-jobs: test-webplat (1/2)": 7, "not-evaluable:unsettled-jobs: test-webplat (1/2),test-webplat (2/2)": 3, "not-evaluable:unsettled-jobs: test-webplat (2/2)": 10, "rule-irrelevant:-": 16, "unverified:would-skip-suite-failed": 2}
+  attributable=0/382 unverified_as_escape=2/382 (point 0.52%) worst_case=61/382 cp95_upper_on_worst_case=19.38%
+attributable means: a would-skip suite failed on >= 2 attempts of the identical tree and attempt 1 failed the same suite (deterministic, uncleared). Everything else a would-skip suite did is unverified or cleared above.
+multi_unit_flake_suites=none
+saving commits=300 evaluable=224 mean_skipped_suite_min=66.34 se=2.68 selector_min=1.29 net_mean=65.05 net_mean_plus_2se=70.42 baseline_min=99.80 bar_min=19.96
+fallbacks={"none": 224, "not-evaluable": 2, "runner-changed": 74}

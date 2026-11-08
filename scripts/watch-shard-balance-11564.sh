@@ -4,7 +4,7 @@
 # SAMPLE green merge_group ci.yml runs, asks
 # scripts/regenerate-shard-manifest.py --drift-report (the measurement
 # authority — it alone implements the verdict exclusions and per-group artifact
-# filters) for fresh floor-row medians and leg-balance rows, then thresholds the
+# filters) for fresh floor-row medians, stale measured prices and leg-balance rows, then thresholds the
 # findings and manages ONE watch-owned tracker issue:
 #   `ci-shard-balance-watch: manifest drift findings`
 # carrying the sentinel `<!-- shard-balance-watch:v1 drift=<sha1-of-ids> -->`.
@@ -120,21 +120,39 @@ report="$(python3 "$GEN" "${gargs[@]}" 2>"$WORK/err")" || {
   echo "::error::--drift-report refused: $(tail -1 "$WORK/err")" >&2; exit 3; }
 
 # ---- (4) threshold ------------------------------------------------------------
-# Flagged findings: over-bound floor rows + leg-balance breaches. Each finding
+# Flagged findings: over-bound floor rows + leg-balance breaches + stale
+# measured prices (#12016). Each finding
 # is one stable line in the sentinel-hashed set — the sentinel identity is
 # DERIVED from these lines at hash time (step 5), never carried in a parallel
 # array that could silently desync from what the comment reports.
+# Strip label bytes that could carry a forged sentinel (`drift=<40hex>`,
+# `<!--`) or markdown (@mentions, ![](url) beacons) into the tracker body:
+# the allowlist drops =, <, >, !, @, so a label can never form either shape.
+sanitize_label() { printf '%s' "$1" | tr -cd '[:alnum:]._/-'; }
+
 findings=(); unmeasured_lines=()
 : > "$WORK/legs.txt"
 while IFS= read -r line; do
   case "$line" in
     DRIFT_ROW\ *)
       read -r _ g label committed fresh ts <<<"$line"
+      # A multi-word label shifts the fields so attacker text lands in $fresh;
+      # (( )) would evaluate it — a `a[$(cmd)]` fragment is a command-injection
+      # primitive inside the issues:write workflow. Numeric-gate both fields
+      # before any arithmetic.
+      [[ "$committed" =~ ^[0-9]+$ && "$fresh" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+/[0-9]+$ ]] || continue
       if (( fresh >= FLOOR_DRIFT_BOUND_MS )); then
-        findings+=("floor-row $g $label committed=${committed}ms median=${fresh}ms timed=${ts}")
+        findings+=("floor-row $g $(sanitize_label "$label") committed=${committed}ms median=${fresh}ms timed=${ts}")
       fi ;;
+    PRICE_DRIFT_ROW\ *)
+      # A committed src=measured price gone stale past the generator's bound
+      # (#12016) — the generator already applied ratio/|delta|/timed gates.
+      read -r _ g label committed fresh ts <<<"$line"
+      [[ "$committed" =~ ^[0-9]+$ && "$fresh" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+/[0-9]+$ ]] || continue
+      findings+=("price-drift $g $(sanitize_label "$label") committed=${committed}ms median=${fresh}ms timed=${ts}") ;;
     LEG_PREDICTED\ *|LEG_OBSERVED\ *) printf '%s\n' "$line" >> "$WORK/legs.txt" ;;
-    BOUND_PERFECT\ *) bound_light="${line##* }" ;;
+    BOUND_PERFECT\ *) bound_light="${line##* }"
+      [[ "$bound_light" =~ ^[0-9]+$ ]] || bound_light="" ;;
     FLOOR_UNMEASURED\ *) unmeasured_lines+=("$line") ;;
   esac
 done <<<"$report"
@@ -185,7 +203,7 @@ sentinel="${SENTINEL_PREFIX}drift=${set_sha} -->"
 {
   printf '### shard-balance-watch: manifest drift findings\n\n'
   printf 'Sample: last %s green `merge_group` `ci.yml` runs (%s artifact-bearing).\n' "$SAMPLE" "${#run_dirs[@]}"
-  printf 'Bounds: floor rows >= %sms (5 min); leg ratio > %s.\n\n' "$FLOOR_DRIFT_BOUND_MS" "$LEG_DRIFT_RATIO"
+  printf 'Bounds: floor rows >= %sms (5 min); leg ratio > %s; measured prices >=4x committed in either direction AND |delta| >= 120000ms (timed >= 3, applied generator-side).\n\n' "$FLOOR_DRIFT_BOUND_MS" "$LEG_DRIFT_RATIO"
   if [[ "${#findings[@]}" -gt 0 ]]; then
     printf '%s\n' "${findings[@]}" | sed 's/^/- /'
   else
@@ -249,7 +267,7 @@ fi
 
 if [[ "${#findings[@]}" -eq 0 ]]; then
   if [[ -n "$tracker" ]]; then
-    printf 'All-clear: no floor-row or leg-balance drift in the sampled runs. Closing this tracker; the watch files a fresh one if drift returns.\n' \
+    printf 'All-clear: no floor-row, price-drift or leg-balance drift in the sampled runs. Closing this tracker; the watch files a fresh one if drift returns.\n' \
       | gh issue comment "$tracker" --body-file - >/dev/null 2>"$WORK/err" \
       && gh issue close "$tracker" >/dev/null 2>>"$WORK/err" || {
         echo "::error::resolution post/close on #${tracker} failed" >&2; exit 1; }
