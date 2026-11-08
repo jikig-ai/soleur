@@ -128,7 +128,7 @@ report="$(python3 "$GEN" "${gargs[@]}" 2>"$WORK/err")" || {
 # Strip label bytes that could carry a forged sentinel (`drift=<40hex>`,
 # `<!--`) or markdown (@mentions, ![](url) beacons) into the tracker body:
 # the allowlist drops =, <, >, !, @, so a label can never form either shape.
-sanitize_label() { printf '%s' "$1" | tr -cd '[:alnum:]_.-/()[]-'; }
+sanitize_label() { printf '%s' "$1" | tr -cd '[:alnum:]._/-'; }
 
 findings=(); unmeasured_lines=()
 : > "$WORK/legs.txt"
@@ -140,7 +140,7 @@ while IFS= read -r line; do
       # (( )) would evaluate it — a `a[$(cmd)]` fragment is a command-injection
       # primitive inside the issues:write workflow. Numeric-gate both fields
       # before any arithmetic.
-      [[ "$committed" =~ ^[0-9]+$ && "$fresh" =~ ^[0-9]+$ ]] || continue
+      [[ "$committed" =~ ^[0-9]+$ && "$fresh" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+/[0-9]+$ ]] || continue
       if (( fresh >= FLOOR_DRIFT_BOUND_MS )); then
         findings+=("floor-row $g $(sanitize_label "$label") committed=${committed}ms median=${fresh}ms timed=${ts}")
       fi ;;
@@ -148,10 +148,11 @@ while IFS= read -r line; do
       # A committed src=measured price gone stale past the generator's bound
       # (#12016) — the generator already applied ratio/|delta|/timed gates.
       read -r _ g label committed fresh ts <<<"$line"
-      [[ "$committed" =~ ^[0-9]+$ && "$fresh" =~ ^[0-9]+$ ]] || continue
+      [[ "$committed" =~ ^[0-9]+$ && "$fresh" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+/[0-9]+$ ]] || continue
       findings+=("price-drift $g $(sanitize_label "$label") committed=${committed}ms median=${fresh}ms timed=${ts}") ;;
     LEG_PREDICTED\ *|LEG_OBSERVED\ *) printf '%s\n' "$line" >> "$WORK/legs.txt" ;;
-    BOUND_PERFECT\ *) bound_light="${line##* }" ;;
+    BOUND_PERFECT\ *) bound_light="${line##* }"
+      [[ "$bound_light" =~ ^[0-9]+$ ]] || bound_light="" ;;
     FLOOR_UNMEASURED\ *) unmeasured_lines+=("$line") ;;
   esac
 done <<<"$report"

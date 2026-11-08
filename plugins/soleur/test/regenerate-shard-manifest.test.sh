@@ -1351,28 +1351,29 @@ done
 # past the bound: ratio >=4x in EITHER direction, |delta| >= 120000 ms, timed
 # in >=3 sampled runs.
 FZ8="$WORK/Z8"; mkdir -p "$FZ8"; assert_fixture_dir "$FZ8"
-printf 'm-under-a\t3000\tmeasured\nm-over-b\t400000\tmeasured\nm-under-c\t7000\tmeasured\nm-band-d\t100000\tmeasured\nm-thin-e\t5000\tmeasured\nm-stable-f\t2000\tmeasured\nm-small-g\t30000\tmeasured\nm-zero-h\t297100\tmeasured\n' \
+printf 'm-under-a\t3000\tmeasured\nm-over-b\t400000\tmeasured\nm-under-c\t7000\tmeasured\nm-band-d\t100000\tmeasured\nm-thin-e\t5000\tmeasured\nm-stable-f\t2000\tmeasured\nm-small-g\t30000\tmeasured\nm-zero-h\t297100\tmeasured\nm-bound-i\t40000\tmeasured\n' \
   > "$FZ8/durations.tsv"
 { printf '# fixture incumbent\n# n=2\n'
-  printf 'm-under-a\t1\nm-over-b\t2\nm-under-c\t1\nm-band-d\t2\nm-thin-e\t1\nm-stable-f\t2\nm-small-g\t1\nm-zero-h\t2\n'; } \
+  printf 'm-under-a\t1\nm-over-b\t2\nm-under-c\t1\nm-band-d\t2\nm-thin-e\t1\nm-stable-f\t2\nm-small-g\t1\nm-zero-h\t2\nm-bound-i\t1\n'; } \
   > "$FZ8/manifest.tsv"
 for i in 1 2 3 4 5; do
   mkdir -p "$FZ8/run$i/suite-timings-scripts-$i"; assert_fixture_dir "$FZ8/run$i"
 done
 # m-under-a drifts 3000->350000 (~117x, |d|=347000) — emits.
 # m-small-g drifts exactly 4.0x (30000->120000) but |d|=90000 <120000 — the
-# delta conjunct must suppress it; also pins the inclusive >=4.0 boundary.
-# m-zero-h times 0 in every run (base==0, |d|=297100) — the unbounded-ratio
-# case the divisor guard must emit, never crash on.
-printf 'm-under-a\t350000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-thin-e\t300000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\n' \
+# delta conjunct must suppress it. m-zero-h times 0 in every run (base==0,
+# |d|=297100) — the unbounded-ratio case the divisor guard must emit, never
+# crash on. m-bound-i sits exactly on both inclusive bounds (4.0x, |d|=120000)
+# — must emit.
+printf 'm-under-a\t350000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-thin-e\t300000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
   > "$FZ8/run1/suite-timings-scripts-1/suite-timings.tsv"
-printf 'm-under-a\t340000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-thin-e\t300000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\n' \
+printf 'm-under-a\t340000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-thin-e\t300000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
   > "$FZ8/run2/suite-timings-scripts-2/suite-timings.tsv"
-printf 'm-under-a\t360000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\n' \
+printf 'm-under-a\t360000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
   > "$FZ8/run3/suite-timings-scripts-3/suite-timings.tsv"
-printf 'm-under-a\t350000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\n' \
+printf 'm-under-a\t350000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
   > "$FZ8/run4/suite-timings-scripts-4/suite-timings.tsv"
-printf 'm-under-a\t355000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\n' \
+printf 'm-under-a\t355000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
   > "$FZ8/run5/suite-timings-scripts-5/suite-timings.tsv"
 if python3 "$GEN" --drift-report --group light --manifest "$FZ8/manifest.tsv" \
      --durations "$FZ8/durations.tsv" \
@@ -1403,6 +1404,11 @@ if grep -qxF 'PRICE_DRIFT_ROW light m-zero-h 297100 0 5/5' "$FZ8/out.txt"; then
 else
   check fail "Z8: m-zero-h PRICE_DRIFT_ROW missing — base==0 must emit, not crash: $(grep m-zero-h "$FZ8/out.txt")"
 fi
+if grep -qxF 'PRICE_DRIFT_ROW light m-bound-i 40000 160000 5/5' "$FZ8/out.txt"; then
+  check pass "Z8: exactly 4.0x and exactly |d|=120000 emits (both bounds inclusive)"
+else
+  check fail "Z8: m-bound-i boundary case missing or wrong: $(grep m-bound-i "$FZ8/out.txt")"
+fi
 if ! grep -q 'PRICE_DRIFT_ROW.*m-small-g' "$FZ8/out.txt"; then
   check pass "Z8: 4.0x ratio with |d|=90s <120s emits nothing (delta conjunct binds)"
 else
@@ -1429,7 +1435,7 @@ fi
 # --- ASSERTION FLOOR (ADR-193) -------------------------------------------------------------
 # printf + exit, NEVER through fail(). MIN_CASES sits on the line directly above its
 # `if` so guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=60
+MIN_CASES=61
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1

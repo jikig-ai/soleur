@@ -282,12 +282,13 @@ if [[ "$rc" =~ ^[0-2]$ && -n "$out" ]]; then pass "PBG_UNBOUNDED=1 runs the slow
 build_fx "$TMP/u2" 5 40
 expect "PBG_UNBOUNDED=1 bypasses budget validation: PBG_BUDGET_S=301 proceeds to a verdict" 2 "NOT YET: 5" "$TMP/u2" PBG_UNBOUNDED=1 PBG_BUDGET_S=301
 expect "the sweeper contract still guards: PBG_BUDGET_S=301 without PBG_UNBOUNDED is CANNOT ESTABLISH" 3 "PBG_BUDGET_S is not an integer" "$TMP/u2" PBG_UNBOUNDED= PBG_BUDGET_S=301
+expect "the seam refuses under the sweeper channel: SOLEUR_FT_EARLIEST set-but-empty still reads sweeper-side" 3 "operator-local only" "$TMP/u2" PBG_UNBOUNDED=1 SOLEUR_FT_EARLIEST=
 if grep -q 'rate_limit' "$TMP/s1/requests.log"; then pass "the quota preflight reads rate_limit"; else fail "no rate_limit preflight issued"; fi
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
 
 printf 'pr-battery-gate-saving-9323: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
-PBGS_MIN_ASSERTIONS=49
+PBGS_MIN_ASSERTIONS=50
 if (( asserted < PBGS_MIN_ASSERTIONS )); then
   printf '[FATAL] assertion floor: executed %d < PBGS_MIN_ASSERTIONS=%d\n' "$asserted" "$PBGS_MIN_ASSERTIONS" >&2
   exit 1

@@ -460,6 +460,31 @@ unset SCENE_DUR SCENE_MAN
   && pass "S23 label fragment carrying \$(cmd): skipped, never evaluated" \
   || fail "S23 (rc=$RC pwned=$(test -e "$MOCKD/pwned" && echo yes || echo no))"
 
+# ---- S24: numeric-word label shifting payload into timed= -> skipped ---------
+# `x 1 2 <payload>` passes the committed/fresh numeric gates (words 2-3 ARE
+# digits) but leaves the free-text tail in $ts — without the ts-shape gate it
+# lands verbatim in the finding's timed= field on the issues:write body.
+mkscene
+SCENE_DUR="$MOCKD/durations.tsv"; SCENE_MAN="$MOCKD/manifest.tsv"
+cp "$BASE/durations.tsv" "$SCENE_DUR"; cp "$BASE/manifest.tsv" "$SCENE_MAN"
+evil2='x 1 2 ![b](http://e.example/x)'
+printf '%s\t1000\tfloor\n' "$evil2" >> "$SCENE_DUR"
+printf '%s\t1\n' "$evil2" >> "$SCENE_MAN"
+seed 101 suite-timings-scripts-0 <<EOF
+$evil2	2000000
+f-meas-x	5000
+f-meas-y	5000
+f-floor-big	1222
+f-floor-big2	1222
+f-floor-sub	1222
+EOF
+run
+unset SCENE_DUR SCENE_MAN
+body="$(cat "$MOCKD/created")"
+[[ "$RC" -eq 0 && "$body" != *'![b](http://e.example/x)'* && "$body" != *'timed=2000000'* ]] \
+  && pass "S24 free-text tail in the timed= channel: row skipped, payload never posted" \
+  || fail "S24 (rc=$RC)"
+
 # ---- S10: workflow contract --------------------------------------------------
 [[ -s "$WF" ]] || fatal "workflow missing: $WF"
 wf="$(grep -vE '^[[:space:]]*#' "$WF")"
@@ -498,7 +523,7 @@ else
 fi
 
 echo; echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
-MIN_ASSERTIONS=30
+MIN_ASSERTIONS=31
 if [[ "$TOTAL" -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: assertion floor breached (TOTAL=%s < %s)\n' "$TOTAL" "$MIN_ASSERTIONS" >&2; exit 2
 fi

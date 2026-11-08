@@ -103,7 +103,7 @@ T0=$SECONDS
 # stalled gh api call dies in place as a read failure, never hangs the
 # operator's shell.
 if [[ "${PBG_UNBOUNDED:-}" = 1 ]]; then
-  [[ -z "${SOLEUR_FT_EARLIEST:-}" ]] || { echo "CANNOT ESTABLISH: PBG_UNBOUNDED is operator-local only — the sweeper channel must never see it"; exit 3; }
+  [[ -z "${SOLEUR_FT_EARLIEST+x}" ]] || { echo "CANNOT ESTABLISH: PBG_UNBOUNDED is operator-local only — the sweeper channel must never see it"; exit 3; }
   END=$((T0 + 86400))
   echo "[operator-local] wall deadline overridden by PBG_UNBOUNDED=1 (END=+86400s, per-call 60s caps still bind)"
 else
