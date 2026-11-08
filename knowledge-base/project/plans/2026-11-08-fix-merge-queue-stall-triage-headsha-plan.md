@@ -231,8 +231,8 @@ The deliverable includes an assertion-based CI check, so the contract applies.
 |---|---|---|
 | MT1 | drop `headSha` from the field list, leave the prose `by headSha/createdAt` intact (`headBranch,headSha,status` -> `headBranch,status`) | membership, not substring: a bare grep for `headSha` on the line still passes here |
 | MT2 | lookalike: `headBranch,headSha,status` -> `headBranch,headShaX,status` | whole-field equality, not prefix/substring |
-| MT3 | own dispatch: make the command line stop matching the selector (`gh run list --repo @REPO@ --event merge_group` -> `gh run view --repo @REPO@ --event merge_group`) | zero members must fail ("exactly one ... found 0"), never "0 checked, exit 0" |
-| MT4 | second member after a compliant first: insert, INDENTED to the block-scalar level (10 spaces) inside the same `tmpl` heredoc, a second `gh run list ... --event merge_group --json databaseId,url` line (a column-0 line breaks the YAML, and a real YAML comment is stripped by the loader and would never count) | count must be exactly 1 ("found 2"); a check that stops at the first member is the defect |
+| MT3 | left-extended lookalike: `headBranch,headSha,status` -> `headBranch,xheadSha,status` (**amended at review, 2026-11-08**: the original MT3, which broke the selector, was killed by the older `agent-runnable` check at the top of `structural_check` before the new arm ran, so it exercised no new code; the zero-members case is unreachable from the new arm for that reason) | whole-field equality on BOTH sides: a right-boundary-only test (`headSha(,\|$)`) survives MT2 and is caught only here |
+| MT4 | second member after a compliant first: insert, INDENTED to the block-scalar level (10 spaces) inside the same `tmpl` heredoc, a second `gh run list --event merge_group --json id` line (as built; the draft said `--json databaseId,url`) (a column-0 line breaks the YAML, and a real YAML comment is stripped by the loader and would never count) | count must be exactly 1 ("found 2"); a check that stops at the first member is the defect |
 | MT5 | selector still matches but the `--json ` list is gone (`--json databaseId,...,url` removed from the line) | a missing list must fail with its own reason, not an empty-output GREEN |
 
 **Harness rows.**
@@ -336,7 +336,7 @@ Run each as its own Bash call (read the exit code of each; no pipes that mask it
 - **Exact pass floor.** A miscounted `EXPECTED_PASSES` exits 1. Mitigation: set it from the observed run, then re-run.
 - **Suite runtime / flake.** ~20 s, runs under load in a multi-worktree machine; four foreign `test-all.sh` processes were seen. Mitigation: re-run before blaming the diff; the suite is deterministic (stubbed `gh`).
 - **Queue ejection.** Workflow-editing PRs cannot use the agent `--admin` hatch. Mitigation: read the failing context, fix forward; no bypass.
-- **Sweeper race.** Between merge and the sweeper's next pass the tracker is already closed by the merge keyword, and the label is removed post-merge; the closed-set pass would otherwise report a missing script as TRANSIENT noise. Low impact.
+- **Sweeper race.** Between merge and the sweeper's next pass the tracker is already closed by the merge keyword, and the label is removed post-merge; the closed-set pass would otherwise log `ERROR: ... missing in repo HEAD - leaving issue open` once per daily run for the 14-day closed lookback (`scripts/sweep-followthroughs.sh`, `CLOSED_LOOKBACK_DAYS`), with no comment and no change to the run's exit code (corrected at review: the draft called this "TRANSIENT noise"; the code does `fail` + `return 0`). Removing the label silences it at once. Low impact.
 
 ## Sharp Edges
 

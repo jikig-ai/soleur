@@ -10,7 +10,10 @@
 #      and assert cron / workflow_dispatch / numeric threshold / threshold < the .tf's
 #      check_response_timeout_minutes / the position filter equals the .tf's
 #      max_entries_to_build / least-privilege permissions / no continue-on-error / label set /
-#      no `${{ }}` interpolation inside any run body. The two .tf numbers are DERIVED from
+#      no `${{ }}` interpolation inside any run body, and (#12362) the issue-body Triage step 2
+#      `gh run list --event merge_group --json <list>` command lists the field headSha (membership of
+#      the comma list, not a substring: the prose on that line already says "by headSha/createdAt";
+#      rows MT1-MT5 and PT1). The two .tf numbers are DERIVED from
 #      infra/github/ruleset-ci-required.tf (comments stripped), never hand-written here.
 #   2. BEHAVIOUR: extract the real run body of the detection step, put a `gh` stub on PATH that
 #      serves canned GraphQL JSON, and EXECUTE it for: head entry old -> files; entry deeper than
@@ -190,12 +193,14 @@ structural_check() {
   # The issue-body prose tells the reader to correlate merge_group runs "by headSha/createdAt", so the
   # token headSha is present on that line whether or not the --json field list carries it. Assert
   # MEMBERSHIP of the comma list after `--json `, never a bare substring (cq-assert-anchor-not-bare-token).
-  jq -e '[.runs[] | split("\n")[] | select(contains("gh run list ") and contains("--event merge_group"))] | length == 1' <<<"$f" >/dev/null \
+  # One selector for all three checks, so an edit to it cannot desynchronise them.
+  local sel='[.runs[] | split("\n")[] | select(contains("gh run list ") and contains("--event merge_group"))]'
+  jq -e "$sel"' | length == 1' <<<"$f" >/dev/null \
     || { REASON="Triage step 2 gh run list --event merge_group line is not present exactly once"; return 1; }
-  jq -e '[.runs[] | split("\n")[] | select(contains("gh run list ") and contains("--event merge_group")) | capture("--json (?<f>[^ ]+)")] | length == 1' <<<"$f" >/dev/null \
-    || { REASON="Triage step 2 gh run list line has no --json field list"; return 1; }
-  jq -e '[.runs[] | split("\n")[] | select(contains("gh run list ") and contains("--event merge_group")) | capture("--json (?<f>[^ ]+)") | .f | split(",")[]] | any(. == "headSha")' <<<"$f" >/dev/null \
-    || { REASON="Triage step 2 gh run list --json field list lacks headSha (the prose says to correlate by headSha)"; return 1; }
+  jq -e "$sel"' | [.[] | capture("--json (?<f>[^ ]+)")] | length == 1' <<<"$f" >/dev/null \
+    || { REASON="Triage step 2 gh run list line has no single-line --json <list> (keep the command on one line; a wrapped or --json=<list> form is not recognised)"; return 1; }
+  jq -e "$sel"' | [.[] | capture("--json (?<f>[^ ]+)") | .f | split(",")[]] | any(. == "headSha")' <<<"$f" >/dev/null \
+    || { REASON="Triage step 2 gh run list --json field list lacks headSha"; return 1; }
   return 0
 }
 
@@ -1580,11 +1585,11 @@ mutate "MT1 headSha dropped from the --json list, prose kept -> RED" structural 
   "s.replace('headBranch,headSha,status', 'headBranch,status', 1)"
 mutate "MT2 headSha becomes a lookalike field (headShaX) -> RED" structural 'lacks headSha' \
   "s.replace('headBranch,headSha,status', 'headBranch,headShaX,status', 1)"
-mutate "MT3 the selector no longer matches (--event merge-group) -> RED" structural 'agent-runnable|exactly once' \
-  "s.replace('--event merge_group --limit 100', '--event merge-group --limit 100', 1)"
+mutate "MT3 headSha becomes a left-extended lookalike (xheadSha) -> RED" structural 'lacks headSha' \
+  "s.replace('headBranch,headSha,status', 'headBranch,xheadSha,status', 1)"
 mutate "MT4 a second indented gh run list --event merge_group line inside the heredoc -> RED" structural 'exactly once' \
   "s.replace('2. List the merge_group runs', 'gh run list --event merge_group --json id' + chr(10) + '          2. List the merge_group runs', 1)"
-mutate "MT5 the selector matches but the --json list is gone -> RED" structural 'no --json field list' \
+mutate "MT5 the selector matches but the --json list is gone -> RED" structural 'no single-line --json' \
   "s.replace(' --json databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,url', '', 1)"
 # PT1 (must pass): the position of headSha in the list is irrelevant; membership is what the guard reads.
 MUT_EXPR="s.replace('headBranch,headSha,status,conclusion,createdAt,url', 'headBranch,status,conclusion,createdAt,url,headSha', 1)" \
