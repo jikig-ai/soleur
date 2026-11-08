@@ -555,16 +555,20 @@ variable "terraform_version" {
 # web-2's serving weight in the GA LB pool (cloudflare-lb.tf, ADR-068 §(c)). DEFAULT 1 = the live
 # serving shape since the 2026-11-08 serve flip (#12167, #12363): every plan that does not name this
 # variable (routine apply, scheduled drift plan, laptop plan) plans web-2 at weight 1, which equals
-# live, so those plans are clean. DRAIN is an explicit act: cf-lb-overlay `ga-pool-update mode=drain`
-# and `ga-overlay` (a fresh GA3 create) each pass an explicit `-var=web2_lb_weight=0`. The 0-to-1 flip
-# is only ever fed by the `ga_pool_update` plan step (1 solely for mode=serve, after its fail-closed
-# §(c) gate-chain step passed). lb-weight-gate.test.sh C.4 pins the feeder census, the ordering and the
-# default. Never set this in Doppler / tfvars: a TF_VAR_ route would bypass the gate chain. Only 0 and 1
-# are admitted. An untargeted apply that CREATES or REPLACES hcloud_server.web["web-2"] (or the pool)
-# MUST pass `-var=web2_lb_weight=0`: at the default an empty replacement host would enter the pool at
-# weight 1 before the serve gate chain runs. A drain is not durable until this default is changed back.
+# live, so those plans are clean. A drain is an explicit act: cf-lb-overlay `ga-pool-update mode=drain`
+# passes `-var=web2_lb_weight=0`, and `ga-overlay` passes the same 0 so a FRESH GA3 create stays the
+# drained shape (its grader is create-only, so it cannot drain a live pool). The gated 0-to-1 act is
+# `ga-pool-update mode=serve` (1 solely there, after its fail-closed §(c) gate-chain step passed).
+# lb-weight-gate.test.sh C.4 pins the feeder census, the ordering and the default. The structural
+# "only the serve arm can set weight 1" guarantee holds while the default is 0 and ENDS at the first
+# drain: after an intentional drain, any later full-root plan or apply that omits the variable restores
+# weight 1 outside the gate chain, so a drain is not durable until this default is changed back.
+# Never set this in Doppler / tfvars: a TF_VAR_ route would bypass the gate chain. Only 0 and 1 are
+# admitted. An untargeted apply that CREATES or REPLACES hcloud_server.web["web-2"] (or the pool) MUST
+# pass `-var=web2_lb_weight=0`: at the default an empty replacement host would enter the pool at weight 1
+# before the serve gate chain runs.
 variable "web2_lb_weight" {
-  description = "web-2 origin weight in the GA LB pool (0 = drained, 1 = serving). Default 1 = the live serving shape after the #12167 serve flip; drain is explicit via cf-lb-overlay ga-pool-update mode=drain and ga-overlay (both pass 0). Do not set via Doppler or tfvars."
+  description = "web-2 origin weight in the GA LB pool (0 = drained, 1 = serving). Default 1 = the live serving shape after the #12167 serve flip; drain is explicit via cf-lb-overlay ga-pool-update mode=drain (passes 0); ga-overlay passes 0 for a fresh create only. Do not set via Doppler or tfvars."
   type        = number
   default     = 1
 
@@ -712,7 +716,7 @@ variable "git_data_betterstack_logs_token" {
 }
 
 variable "host_proxy_tls_enabled" {
-  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert) and the relay hello-signing key pair in proxy-hello-hmac.tf (random_bytes.proxy_hello_hmac, doppler_secret.proxy_hello_hmac_key). Default true since the multi-host flip (#12167, ADR-118 amendment 2026-09-27): the per-merge saved plan in apply-web-platform-infra.yml targets all six addresses, key and cert together (a cert in prd without its key is unusable), and the SANs derive from every var.web_hosts private IP. SOLEUR_PROXY_BIND is NOT a Doppler prd value: ci-deploy.sh resolve_proxy_bind resolves each host's own private IP at deploy time, and SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER are operator-class prd writes; a host with PROXY_TLS_* but no bind fails closed and reports createProxyServer.no-bind. There is deliberately no TF_VAR or workflow-input route to this variable. Set false to retire the material: the six resources then plan as destroys, which needs [ack-destroy], and setting it true again mints a DIFFERENT hello-signing key."
+  description = "Instantiate the host-to-host session-proxy TLS material in proxy-tls.tf (tls_private_key.proxy_server, tls_self_signed_cert.proxy_server, doppler_secret.proxy_tls_key, doppler_secret.proxy_tls_cert) and the relay hello-signing key pair in proxy-hello-hmac.tf (random_bytes.proxy_hello_hmac, doppler_secret.proxy_hello_hmac_key). Default true since the multi-host flip (#12167, 31c8a232fe / #12203; the count gate itself is the ADR-118 amendment of 2026-09-27): the per-merge saved plan in apply-web-platform-infra.yml targets all six addresses, key and cert together (a cert in prd without its key is unusable), and the SANs derive from every var.web_hosts private IP. SOLEUR_PROXY_BIND is NOT a Doppler prd value: ci-deploy.sh resolve_proxy_bind resolves each host's own private IP at deploy time, and SOLEUR_PROXY_PEER_ALLOWLIST / SOLEUR_HOST_ROSTER are operator-class prd writes; a host with PROXY_TLS_* but no bind fails closed and reports createProxyServer.no-bind. There is deliberately no TF_VAR or workflow-input route to this variable. Set false to retire the material: the six resources then plan as destroys, which needs [ack-destroy], and setting it true again mints a DIFFERENT hello-signing key."
   type        = bool
   default     = true
 }

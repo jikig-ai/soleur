@@ -316,9 +316,10 @@ assert_grep    "C.2: server.tf tunnel connector predicate is each.key == \"web-2
   'web_tunnel_connector[[:space:]]*=[[:space:]]*each\.key[[:space:]]*==[[:space:]]*"web-2"'
 
 # C.3 — DRAINED-SHAPE invariant (2026-11-01 rewrite, replaces structural absence;
-#       pairing/anchoring hardened PR #11766). With web-2 pooled as a drained member
-#       (ADR-068 §(b) — weight 0, health-checked, zero traffic until the #6027 window
-#       flip), the assertion is BLOCK-SCOPE over the .tf files that declare a
+#       pairing/anchoring hardened PR #11766). With web-2 pooled as a GATED member
+#       (ADR-068 §(b); live serves at weight 1 since the 2026-11-08 serve flip, so the
+#       member's weight is the literal 0 or exactly the gated variable, never another
+#       expression), the assertion is BLOCK-SCOPE over the .tf files that declare a
 #       cloudflare_load_balancer* resource:
 #         * every `origins {}` block that points at web-2 — by `name = "web-2"` OR by
 #           an `hcloud_server.web["web-2"]` reference ANYWHERE in the block (so a
@@ -413,11 +414,11 @@ TOTAL=$((TOTAL + 1))
 if [[ "$tf_seen" -lt 1 ]]; then
   FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no .tf files found under $SCRIPT_DIR (fail-closed — dir moved?)"
 elif [[ "$web2_blocks" -lt 1 ]]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no origins block names web-2 — the drained member is missing (or a resource label was renamed; assertions must not vacuously pass)"
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: no origins block names web-2 — the web-2 member is missing (or a resource label was renamed; assertions must not vacuously pass)"
 elif [[ "$web2_bad_blocks" -gt 0 || "$web2_stray" -gt 0 ]]; then
-  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_bad_blocks web-2 origins block(s) without 'weight = 0' + $web2_stray stray web-2 reference(s) outside origins blocks — web-2 must stay a drained member pre-flip"
+  FAIL=$((FAIL + 1)); echo "  FAIL: C.3-sweep: $web2_bad_blocks web-2 origins block(s) without 'weight = 0' or exactly var.web2_lb_weight + $web2_stray stray web-2 reference(s) outside origins blocks — web-2's weight must stay the literal 0 or the gated variable"
 else
-  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: $web2_blocks web-2 origins block(s) at weight = 0, no stray web-2 references — drained member holds"
+  PASS=$((PASS + 1)); echo "  PASS: C.3-sweep: $web2_blocks web-2 origins block(s) at weight = 0 or var.web2_lb_weight, no stray web-2 references — gated member holds"
 fi
 
 # C.3-fixtures — synthetic .tf driving the SHIPPED c3_scan_file (PR #11766 review:
@@ -585,8 +586,8 @@ V_BLOCK=""
   on && /^\}/ { exit }
 ' "$VARS_TF")"
 c4_assert "C.4-V1: variables.tf declares variable \"web2_lb_weight\"" "$([[ -n "$V_BLOCK" ]] && echo 1 || echo 0)"
-c4_assert "C.4-V2: web2_lb_weight is type = number with default = 1 (the live serving shape; default plan is a no-op against live)" \
-  "$(grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*number[[:space:]]*$' <<<"$V_BLOCK" && grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
+c4_assert "C.4-V2: web2_lb_weight is type = number with exactly ONE default attribute, equal to 1 (the live serving shape; a duplicate or heredoc 'default = 1' line cannot stand in for it)" \
+  "$(grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*number[[:space:]]*$' <<<"$V_BLOCK" && [[ "$(grep -cE '^[[:space:]]*default[[:space:]]*=' <<<"$V_BLOCK" || true)" -eq 1 ]] && grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
 c4_assert "C.4-V3: web2_lb_weight has a validation admitting ONLY 0 or 1" \
   "$(grep -qE 'validation[[:space:]]*\{' <<<"$V_BLOCK" && grep -qE 'condition[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*0[[:space:]]*\|\|[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
 c4_assert "C.4-V4: web2_lb_weight is declared exactly once in the tree's .tf files" \
@@ -626,7 +627,7 @@ c4_assert "C.4-F4: WEB2_LB_WEIGHT is 1 ONLY when mode=serve, else 0 (the pin ste
 c4_assert "C.4-F5: the plan step passes -var=web2_lb_weight from WEB2_LB_WEIGHT, exactly once" \
   "$([[ "$(c4_nocomment <(printf '%s\n' "$PLAN_STEP") | grep -cE -- '-var="web2_lb_weight=\$\{WEB2_LB_WEIGHT\}"')" -eq 1 ]] && echo 1 || echo 0)"
 c4_assert "C.4-F6: web2_lb_weight appears on exactly TWO non-comment lines of cf-lb-overlay.yml: the ga_pool_update plan step (\${WEB2_LB_WEIGHT}) and the ga_overlay plan step (literal 0); no other arm / job feeds it" \
-  "$([[ "$(c4_nocomment "$WF" | grep -c 'web2_lb_weight')" -eq 2 ]] && echo 1 || echo 0)"
+  "$([[ "$(c4_nocomment "$WF" | grep -o 'web2_lb_weight' | wc -l)" -eq 2 ]] && echo 1 || echo 0)"
 c4_assert "C.4-F7: no other workflow names web2_lb_weight (routine apply, drift and validation plans ride the default, 1 = live)" \
   "$([[ -z "$(cd "$REPO_ROOT" && grep -lE 'web2_lb_weight|WEB2_LB_WEIGHT' .github/workflows/*.yml | grep -v 'cf-lb-overlay.yml')" ]] && echo 1 || echo 0)"
 
@@ -640,14 +641,19 @@ gao_plan_of() { # $1 = workflow file -> the "Terraform plan (GA LB trio only)" s
        job && /^      - / { if (on) exit; if ($0 ~ /^      - name: Terraform plan \(GA LB trio only\)/) on = 1 }
        job && on { print }' "$1" 2>/dev/null || true
 }
-gao_guard() { # $1 = workflow file -> 0 iff the ga_overlay plan step passes -var="web2_lb_weight=0" exactly once, non-comment
-  local step; step="$(gao_plan_of "$1")"
+gao_guard() { # $1 = workflow file -> 0 iff the token -var="web2_lb_weight=0" sits INSIDE the terraform-plan continuation chain, once, and nothing else in the step names the variable
+  local step nc chain; step="$(gao_plan_of "$1")"
   [[ -n "$step" ]] || return 1
-  [[ "$(c4_nocomment <(printf '%s\n' "$step") | grep -cE -- '-var="web2_lb_weight=0"')" -eq 1 ]] || return 1
-  [[ "$(c4_nocomment <(printf '%s\n' "$step") | grep -c 'web2_lb_weight')" -eq 1 ]] || return 1
+  nc="$(c4_nocomment <(printf '%s\n' "$step"))"
+  # the chain: from the `terraform plan` line through the last line that ends in a continuation backslash
+  chain="$(awk '/terraform plan/ {on=1} on {print} on && !/\\[[:space:]]*$/ {exit}' <<<"$nc")"
+  [[ -n "$chain" ]] || return 1
+  [[ "$(grep -o -- '-var="web2_lb_weight=0"' <<<"$chain" | wc -l)" -eq 1 ]] || return 1
+  # occurrences (not lines) anywhere in the step: a dead-line, echo or duplicate -var (last value wins) is a second one
+  [[ "$(grep -o 'web2_lb_weight' <<<"$nc" | wc -l)" -eq 1 ]] || return 1
   return 0
 }
-c4_assert "C.4-F8: the ga_overlay plan step passes -var=\"web2_lb_weight=0\" exactly once (literal 0, non-comment): a fresh GA3 create stays drained under default 1" \
+c4_assert "C.4-F8: the ga_overlay plan command carries -var=\"web2_lb_weight=0\" exactly once inside its terraform-plan argument chain, and nothing else in the step names the variable: a fresh GA3 create stays drained under default 1" \
   "$(gao_guard "$WF" && echo 1 || echo 0)"
 F8_WORK="$(mktemp -d)"
 f8mut() { # f8mut <label> <awk-program> — mutate a copy of the workflow; it must LAND and F8's guard must go red
@@ -658,6 +664,8 @@ f8mut() { # f8mut <label> <awk-program> — mutate a copy of the workflow; it mu
 }
 f8mut "C.4-F8m1 mutant: the ga_overlay -var carries weight 1 (a fresh create would pool web-2 hot)" '/^  ga_overlay:/ {job=1} job && /-var="web2_lb_weight=0"/ {sub(/web2_lb_weight=0/, "web2_lb_weight=1")} {print}'
 f8mut "C.4-F8m2 mutant: the ga_overlay -var line is deleted (default 1 would apply)" '/^  ga_overlay:/ {job=1} job && /-var="web2_lb_weight=0"/ {next} {print}'
+f8mut "C.4-F8m3 mutant: the real -var is deleted and the literal moves to an echo BEFORE the plan (token present in the step, absent from the chain)" '/^  ga_overlay:/ {job=1} job && /-var="web2_lb_weight=0"/ {next} job && /^          doppler run --preserve-env/ && !done {print "          echo -var=\"web2_lb_weight=0\""; done=1} {print}'
+f8mut "C.4-F8m4 mutant: a second -var=1 follows the 0 (the last value wins, one line per -var)" '/^  ga_overlay:/ {job=1} {print} job && /-var="web2_lb_weight=0"/ {print "              -var=\"web2_lb_weight=1\" \\"}'
 rm -rf "$F8_WORK"
 
 # --- W: the drain invariant by EFFECT, not by text (T-P2-1) -----------------------------------------
@@ -1087,7 +1095,7 @@ a1_mutate "unprefixed PROXY_BIND read" '[[ -n "${PROXY_BIND-}" ]] || fail "A_unp
 GATE="$GATE_PRISTINE"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=285
+MIN_CASES=287
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

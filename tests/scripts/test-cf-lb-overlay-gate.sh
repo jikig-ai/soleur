@@ -353,39 +353,66 @@ mk pn6 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_REPLACE},${POLICY_CREATE}]
 run cf_lb_gate_ga_pool_update "$TMP/pn6.json" serve; ok "pool-update: serve with a replace verb on the pool refused" $? 1
 mk pn7 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn7.json" drain; ok "pool-update: drain with only a no-op pool refused (empty change set; drain unchanged)" $? 1
-# pn8/pn9: the normalised copy is created in TMPDIR and removed on EVERY path. A mktemp shim
-# records each path it hands out (positive control: a wrapper that ignores TMPDIR or never
-# builds a copy cannot satisfy "the shim saw exactly one file created there").
-PN_DIR="$TMP/pn-tmpdir"; PN_LOG="$TMP/pn-shim.log"
-mkdir -p "$PN_DIR"; : > "$PN_LOG"
+# pn8/pn9: the normalised copy is written BESIDE the plan file and removed on EVERY path. An rm shim records each
+# removal naming the copy (positive control: a wrapper that never builds a copy cannot satisfy "the shim saw exactly one
+# removal of a .serve-norm. file"), and the plan's directory must hold only the plan afterwards.
+PN_DIR="$TMP/pn-plan-dir"; PN_LOG="$TMP/pn-shim.log"
+mkdir -p "$PN_DIR"; cp "$TMP/pn1.json" "$PN_DIR/plan.json"; : > "$PN_LOG"
 (
-  unset RUNNER_TEMP
-  export TMPDIR="$PN_DIR"
-  mktemp() { local p; p="$(command mktemp "$@")" || return 1; printf '%s\n' "$p" >> "$PN_LOG"; printf '%s\n' "$p"; }
-  cf_lb_gate_ga_pool_update "$TMP/pn1.json" serve >/dev/null 2>&1
+  rm() { printf '%s\n' "$*" >> "$PN_LOG"; command rm "$@"; }
+  cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve >/dev/null 2>&1
 )
-if [[ -z "$(ls -A "$PN_DIR")" ]]; then ok "pool-update: serve no-op leaves no normalised temp copy behind" 0 0; else ok "pool-update: serve no-op leaves no normalised temp copy behind" 1 0; fi
-if [[ "$(wc -l < "$PN_LOG")" -eq 1 && "$(dirname "$(head -1 "$PN_LOG")")" == "$PN_DIR" ]]; then ok "pool-update: serve no-op built exactly one copy, inside TMPDIR (instrument sees it)" 0 0; else ok "pool-update: serve no-op built exactly one copy, inside TMPDIR (instrument sees it)" 1 0; fi
-: > "$PN_LOG"
+if [[ "$(ls -A "$PN_DIR")" == "plan.json" ]]; then ok "pool-update: serve no-op leaves no normalised copy behind" 0 0; else ok "pool-update: serve no-op leaves no normalised copy behind" 1 0; fi
+if [[ "$(grep -c '\.serve-norm\.' "$PN_LOG")" -eq 1 ]]; then ok "pool-update: serve no-op built and removed exactly one copy (instrument sees it)" 0 0; else ok "pool-update: serve no-op built and removed exactly one copy (instrument sees it)" 1 0; fi
+cp "$TMP/pn4.json" "$PN_DIR/plan.json"; : > "$PN_LOG"
 pn9rc=0
 (
-  unset RUNNER_TEMP
-  export TMPDIR="$PN_DIR"
-  mktemp() { local p; p="$(command mktemp "$@")" || return 1; printf '%s\n' "$p" >> "$PN_LOG"; printf '%s\n' "$p"; }
-  cf_lb_gate_ga_pool_update "$TMP/pn4.json" serve >/dev/null 2>&1
+  rm() { printf '%s\n' "$*" >> "$PN_LOG"; command rm "$@"; }
+  cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve >/dev/null 2>&1
 ) || pn9rc=$?
-if [[ "$pn9rc" -eq 1 && "$(wc -l < "$PN_LOG")" -eq 1 ]]; then ok "pool-update: a REFUSED no-op serve is refused (rc 1) after building its copy (instrument sees it)" 0 0; else ok "pool-update: a REFUSED no-op serve is refused (rc 1) after building its copy (instrument sees it)" 1 0; fi
-if [[ -z "$(ls -A "$PN_DIR")" ]]; then ok "pool-update: a REFUSED no-op serve still removes its temp copy (dir empty)" 0 0; else ok "pool-update: a REFUSED no-op serve still removes its temp copy (dir empty)" 1 0; fi
+if [[ "$pn9rc" -eq 1 && "$(grep -c '\.serve-norm\.' "$PN_LOG")" -eq 1 ]]; then ok "pool-update: a REFUSED no-op serve is refused (rc 1) after building its copy (instrument sees it)" 0 0; else ok "pool-update: a REFUSED no-op serve is refused (rc 1) after building its copy (instrument sees it)" 1 0; fi
+if [[ "$(ls -A "$PN_DIR")" == "plan.json" ]]; then ok "pool-update: a REFUSED no-op serve still removes its copy (directory holds only the plan)" 0 0; else ok "pool-update: a REFUSED no-op serve still removes its copy (directory holds only the plan)" 1 0; fi
+# an existing path (file, then dangling symlink) at the copy's name is refused, not overwritten or followed
+cp "$TMP/pn1.json" "$PN_DIR/plan.json"
+: > "$PN_DIR/plan.json.serve-norm.$$"
+pn9brc=0; cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve >/dev/null 2>&1 || pn9brc=$?
+if [[ "$pn9brc" -eq 1 && ! -s "$PN_DIR/plan.json.serve-norm.$$" ]]; then ok "pool-update: an existing file at the copy's name is refused and left untouched" 0 0; else ok "pool-update: an existing file at the copy's name is refused and left untouched" 1 0; fi
+rm -f "$PN_DIR/plan.json.serve-norm.$$"; ln -s "$TMP/pn-nonexistent-target" "$PN_DIR/plan.json.serve-norm.$$"
+pn9crc=0; cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve >/dev/null 2>&1 || pn9crc=$?
+if [[ "$pn9crc" -eq 1 && ! -e "$TMP/pn-nonexistent-target" ]]; then ok "pool-update: a symlink at the copy's name is refused and not followed" 0 0; else ok "pool-update: a symlink at the copy's name is refused and not followed" 1 0; fi
+rm -f "$PN_DIR/plan.json.serve-norm.$$"
 mk pn10 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_MOVED},${POLICY_CREATE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn10.json" serve; ok "pool-update: serve no-op pool entry carrying previous_address refused (exact normalisation predicate)" $? 1
+# Each term of the plain-no-op predicate is pinned at the SERVING shape {1,1}, where the entry would otherwise be admitted.
+PN_MODADDR="${POOL_NOOP_SERVE/cloudflare_load_balancer_pool.web_1/module.m.cloudflare_load_balancer_pool.web_1}"
+mk pn11 "{\"resource_changes\":[${WEB1},${WEB2},${PN_MODADDR},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn11.json" serve; ok "pool-update: a module-addressed no-op pool at the serving shape refused (exact-address term)" $? 1
+PN_SECOND="${POOL_NOOP_SERVE/cloudflare_load_balancer_pool.web_1/cloudflare_load_balancer_pool.web_1[0]}"
+mk pn12 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_SERVE},${PN_SECOND},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn12.json" serve; ok "pool-update: two pool entries (update plus an indexed no-op) refused" $? 1
+out=$(cf_lb_gate_ga_pool_update "$TMP/pn12.json" serve 2>&1); rc=$?
+if [[ $rc -eq 1 && "$out" == *"web_1: ambiguous,"* ]]; then ok "pool-update: two pool entries get the ambiguous verdict, not the absent one" 0 0; else ok "pool-update: two pool entries get the ambiguous verdict, not the absent one" 1 0; fi
+PN_READ="${POOL_NOOP/\[\"no-op\"\]/[\"read\"]}"
+mk pn13 "{\"resource_changes\":[${WEB1},${WEB2},${PN_READ},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn13.json" serve; ok "pool-update: a read-verb pool entry refused (the default arm is load-bearing: the graded function drops reads)" $? 1
+PN_DEPOSED="$(sed 's/^{"address"/{"deposed":"abc","address"/' <<<"$POOL_NOOP_SERVE")"
+mk pn14 "{\"resource_changes\":[${WEB1},${WEB2},${PN_DEPOSED},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn14.json" serve; ok "pool-update: a deposed no-op pool at the serving shape refused (deposed term)" $? 1
+PN_IMPORTING="$(sed 's/"change":{"actions":\["no-op"\]/"change":{"importing":{"id":"x"},"actions":["no-op"]/' <<<"$POOL_NOOP_SERVE")"
+mk pn15 "{\"resource_changes\":[${WEB1},${WEB2},${PN_IMPORTING},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn15.json" serve; ok "pool-update: an importing no-op pool at the serving shape refused (importing term)" $? 1
 
-# The graded inner function has exactly ONE caller, the public wrapper: a workflow step or a suite calling the inner name
-# would bypass the serve normalisation and its pool-absent refusal. (Name split so this file does not contain the literal.)
+# The graded inner function has exactly ONE caller, the public wrapper: anything else calling the inner name would bypass
+# the serve normalisation and its pool-absent refusal. Scan the whole tree (minus vendored and archived text), not a subset.
+# (Name split so this file does not contain the literal.)
 pn_inner="_cf_lb_gate_ga_pool_update""_graded"
-if [[ -z "$(grep -rlF "$pn_inner" "$HERE/../../.github/workflows" 2>/dev/null)" && -z "$(grep -lF "$pn_inner" "$HERE"/*.sh 2>/dev/null)" && -n "$(grep -lF "$pn_inner" "$LIB")" ]]; then
-  ok "pool-update: no workflow or suite calls the graded inner function directly (the wrapper is the only chokepoint; the lib still defines it)" 0 0
+pn_root="$(cd "$HERE/../.." && pwd)"
+pn_hits="$(grep -rlF --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=knowledge-base --exclude-dir=.worktrees "$pn_inner" "$pn_root" 2>/dev/null | grep -vxF "$LIB" || true)"
+if [[ -z "$pn_hits" ]] && grep -qF "$pn_inner" "$LIB"; then
+  ok "pool-update: nothing in the tree but the lib mentions the graded inner function (the wrapper is the only chokepoint; the lib still defines it)" 0 0
 else
-  ok "pool-update: no workflow or suite calls the graded inner function directly (the wrapper is the only chokepoint; the lib still defines it)" 1 0
+  echo "  inner-function mentions outside the lib: ${pn_hits:-none}"
+  ok "pool-update: nothing in the tree but the lib mentions the graded inner function (the wrapper is the only chokepoint; the lib still defines it)" 1 0
 fi
 
 # --- malformed ---
@@ -395,6 +422,6 @@ mk m2 '{"resource_changes":[{"address":"x.y","change":{"actions":42}}]}'
 run cf_lb_gate_ga "$TMP/m2.json"; ok "unclassifiable actions refused" $? 1
 
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
-if [[ "$checks" -lt 125 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
+if [[ "$checks" -lt 133 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ($checks assertions)"; else echo "FAILURES PRESENT"; exit 1; fi

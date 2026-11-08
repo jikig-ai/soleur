@@ -6665,19 +6665,43 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(presentIn(pair, dispatchTargets)).toEqual([]);
   });
 
-  test("the relay hello-signing pair is 32 random bytes in masked prd Doppler, from .hex, with no output (#12289)", () => {
+  test("the relay hello-signing pair is 32 random bytes in masked prd Doppler, from .hex, with no output anywhere (#12289)", () => {
     expect(hmacShapeProblems(tf("proxy-hello-hmac.tf"))).toEqual([]);
+    // Nothing outside proxy-hello-hmac.tf may reference the pair: an `output` (or a local, or another resource's
+    // attribute) in a sibling file would print or forward the key without tripping the one-file shape pin above.
+    const strays = listInfraTfFiles()
+      .filter((f) => {
+        if (f.endsWith("/proxy-hello-hmac.tf")) return false;
+        // a variable's `description = "..."` may NAME the addresses (host_proxy_tls_enabled lists what it gates); that is prose, not a reference
+        const code = stripComments(readFileSync(f, "utf8")).split("\n").filter((l) => !/^\s*description\s*=/.test(l)).join("\n");
+        return /proxy_hello_hmac/.test(code);
+      });
+    expect(strays).toEqual([]);
   });
 
-  test("T4 mutation battery: an ungated pair and a wrong length each turn T1/T3 red, and each mutation landed", () => {
+  test("mutation battery over the hello-pair predicates: every clause and both pair members turn the guard red, and each mutation landed", () => {
     const src = tf("proxy-hello-hmac.tf");
     expect(src.length).toBeGreaterThan(0); // non-vacuity: a missing file reds here, not below
-    const ungated = src.replace(/^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/m, "");
-    expect(ungated).not.toBe(src);
-    expect(hmacUngated(ungated).length).toBeGreaterThan(0);
-    const short = src.replace(/^(\s*length\s*=\s*)32(\s*)$/m, "$116$2");
-    expect(short).not.toBe(src);
-    expect(hmacShapeProblems(short).length).toBeGreaterThan(0);
+    const nth = (text: string, re: RegExp, n: number, to: string): string => {
+      let i = -1;
+      return text.replace(new RegExp(re.source, "gm"), (m) => (++i === n ? to : m));
+    };
+    const COUNT = /^\s*count\s*=\s*var\.host_proxy_tls_enabled\s*\?\s*1\s*:\s*0\s*$/;
+    const mutants: Array<[string, string, (t: string) => string[]]> = [
+      ["random_bytes loses its count gate", nth(src, COUNT, 0, ""), (t) => hmacUngated(t)],
+      ["doppler_secret loses its count gate", nth(src, COUNT, 1, ""), (t) => hmacUngated(t)],
+      ["length 16", src.replace(/^(\s*length\s*=\s*)32(\s*)$/m, "$116$2"), (t) => hmacShapeProblems(t)],
+      ["visibility unmasked", src.replace(/^(\s*visibility\s*=\s*)"masked"(\s*)$/m, '$1"unmasked"$2'), (t) => hmacShapeProblems(t)],
+      ["value from .base64", src.replace(/\[0\]\.hex\b/, "[0].base64"), (t) => hmacShapeProblems(t)],
+      ["config dev", src.replace(/^(\s*config\s*=\s*)"prd"(\s*)$/m, '$1"dev"$2'), (t) => hmacShapeProblems(t)],
+      ["project changed", src.replace(/^(\s*project\s*=\s*)"soleur"(\s*)$/m, '$1"other"$2'), (t) => hmacShapeProblems(t)],
+      ["name changed", src.replace(/PROXY_HELLO_HMAC_KEY/, "PROXY_HELLO_KEY"), (t) => hmacShapeProblems(t)],
+      ["an output exposes the value", `${src}\noutput "k" {\n  value = random_bytes.proxy_hello_hmac[0].hex\n}\n`, (t) => hmacShapeProblems(t)],
+    ];
+    for (const [label, mutated, problems] of mutants) {
+      expect(mutated, `${label}: the mutation did not land`).not.toBe(src);
+      expect(problems(mutated).length, `${label}: the predicate stayed green`).toBeGreaterThan(0);
+    }
   });
 
   test("no workflow targets the still-gated resources or overrides any gate variable", () => {

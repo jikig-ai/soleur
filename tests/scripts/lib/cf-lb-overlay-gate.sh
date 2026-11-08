@@ -564,20 +564,26 @@ _cf_lb_gate_ga_pool_update_graded() {
 
 
 # Public entry point (the only function cf-lb-overlay.yml calls). A thin wrapper so
-# the 17 pool selectors inside the graded function stay byte-identical:
+# the pool selectors inside the graded function stay byte-identical:
 #   drain  -> the graded function, untouched (a no-op-only pool is the existing
 #             "empty change set" refusal; a policy-only remnant keeps its path);
-#   serve  -> the pool entry is COUNTED in the raw .resource_changes[] (the
-#             graded function's _CF_LB_CHANGES drops no-ops, so it cannot see a
-#             no-op pool at all). Three-way dispatch whose DEFAULT arm refuses:
-#               zero or several pool entries -> refuse (absent/ambiguous);
-#               ["update"]                   -> the graded function, original file;
-#               exact ["no-op"]              -> normalise in a temp copy, grade, remove;
-#               anything else                -> refuse.
-# The normalised copy is {resource_changes} ONLY (the graded function reads nothing
-# else), so a leaked copy holds no state values; it is created 0600 under TMPDIR (mktemp -t), removed on
-# every path, and rc is returned explicitly (the call site runs under set -e but
-# errexit is suppressed inside a function called in an || list).
+#   serve  -> ONE read of the RAW .resource_changes[] (the graded function's
+#             _CF_LB_CHANGES drops no-ops and reads, so it cannot see a no-op or
+#             read pool at all) yields a verdict token, and a `case` whose DEFAULT
+#             arm refuses dispatches on it:
+#               absent | ambiguous (0 or >1 pool entries) -> refuse;
+#               update                                    -> the graded function, original file;
+#               plain-noop (exact address, no previous_address / deposed / importing)
+#                                                         -> normalise in a copy, grade, remove;
+#               unplain-noop | anything else (replace, read, forget, unknown) -> refuse.
+# The normalised copy holds the plan's resource_changes only (the graded function
+# reads nothing else): the same content as the plan JSON already on the runner. It is
+# written beside the plan file (no mktemp: a sourced lib must not own the caller's
+# EXIT trap, and the census of trap-less tempfile owners only ratchets down) under
+# umask 077, an existing path or symlink is refused, and it is removed on every
+# normal return path (a SIGKILL mid-grade leaves one file on an ephemeral runner).
+# rc is returned explicitly: the call site runs under set -e, and errexit is
+# suppressed inside a function called in an || list.
 cf_lb_gate_ga_pool_update() {
   local plan_json="$1" mode="${2:-drain}"
   plan_gate_assert_readable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
@@ -590,40 +596,52 @@ cf_lb_gate_ga_pool_update() {
     _cf_lb_gate_ga_pool_update_graded "$plan_json" "$mode"
     return $?
   fi
-  local pool_n pool_actions pool_exact old_umask tmp rc=0
-  pool_n=$(jq -r '[.resource_changes[] | select(.address | contains("cloudflare_load_balancer_pool.web_1"))] | length' "$plan_json") || return 1
-  if [[ "$pool_n" != "1" ]]; then
-    echo "::error::ga-pool-update gate[serve]: pool absent from, or ambiguous in, the plan (cloudflare_load_balancer_pool.web_1 has ${pool_n:-unreadable} entries, exactly 1 required) — serve grades the pool and a plan that carries none (or several) approves nothing about it. NOTHING applied."
-    return 1
-  fi
-  pool_actions=$(jq -r '[.resource_changes[] | select(.address | contains("cloudflare_load_balancer_pool.web_1")) | (.change.actions | join("+"))] | .[0] // ""' "$plan_json") || return 1
-  case "$pool_actions" in
+  local verdict tmp rc=0
+  verdict=$(jq -r '
+    [.resource_changes[] | select((.address // "") | contains("cloudflare_load_balancer_pool.web_1"))] as $p
+    | if ($p | length) == 0 then "absent"
+      elif ($p | length) > 1 then "ambiguous"
+      elif $p[0].change.actions == ["update"] then "update"
+      elif $p[0].change.actions == ["no-op"] then
+        (if $p[0].address == "cloudflare_load_balancer_pool.web_1"
+            and ($p[0] | has("previous_address") | not)
+            and ($p[0] | has("deposed") | not)
+            and ($p[0].change | has("importing") | not)
+         then "plain-noop" else "unplain-noop" end)
+      else "other" end' "$plan_json") || return 1
+  case "$verdict" in
     update)
       _cf_lb_gate_ga_pool_update_graded "$plan_json" "$mode"
       return $?
       ;;
-    no-op)
-      # Normalise ONLY a provably plain no-op: the exact address, no state move, no import,
-      # no deposed object. Anything else is a shape this arm has never graded.
-      pool_exact=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["no-op"] and (has("previous_address") | not) and (has("deposed") | not) and (.change | has("importing") | not))] | length' "$plan_json") || return 1
-      if [[ "$pool_exact" != "1" ]]; then
-        echo "::error::ga-pool-update gate[serve]: the pool no-op entry carries a state move, import or deposed marker (or a non-exact address) — only a plain no-op against live is normalised. NOTHING applied."
+    plain-noop)
+      tmp="${plan_json}.serve-norm.$$"
+      if [[ -e "$tmp" || -L "$tmp" ]]; then
+        echo "::error::ga-pool-update gate[serve]: cannot allocate the normalised plan copy (${tmp} already exists). NOTHING applied."
         return 1
       fi
-      old_umask="$(umask)"
-      umask 077
-      tmp="$(mktemp -t ga-pool-serve.XXXXXXXX.json)" || { umask "$old_umask"; return 1; }  # lint-trap-ownership: ok a sourced lib must not own the caller's EXIT trap; every path below removes the copy
-      umask "$old_umask"
-      jq '{resource_changes: [.resource_changes[] | if .address == "cloudflare_load_balancer_pool.web_1" then (.change.actions = ["update"]) else . end]}' "$plan_json" > "$tmp" || { rm -f "$tmp"; return 1; }
+      ( set -o pipefail; umask 077; jq '{resource_changes: [.resource_changes[] | if .address == "cloudflare_load_balancer_pool.web_1" then (.change.actions = ["update"]) else . end]}' "$plan_json" | tee -- "$tmp" > /dev/null ) || {
+        rm -f "$tmp"
+        echo "::error::ga-pool-update gate[serve]: cannot write the normalised plan copy. NOTHING applied."
+        return 1
+      }
       _cf_lb_gate_ga_pool_update_graded "$tmp" "$mode" || rc=$?
       rm -f "$tmp"
       if [[ "$rc" -eq 0 ]]; then
-        echo "cf-lb-overlay gate[ga-pool-update:serve]: pool already {web-1:1, web-2:1} (no-op against live; the pass line above counts the normalized pool as one change)"
+        echo "cf-lb-overlay gate[ga-pool-update:serve]: pool already {web-1:1, web-2:1} (no-op against live, graded as the equivalent update)"
       fi
       return "$rc"
       ;;
+    absent | ambiguous)
+      echo "::error::ga-pool-update gate[serve]: pool absent from, or ambiguous in, the plan (cloudflare_load_balancer_pool.web_1: ${verdict}, exactly 1 entry required) — serve grades the pool and a plan that carries none (or several) approves nothing about it. NOTHING applied."
+      return 1
+      ;;
+    unplain-noop)
+      echo "::error::ga-pool-update gate[serve]: the pool no-op entry carries a state move, import or deposed marker (or a non-exact address) — only a plain no-op against live is normalised. NOTHING applied."
+      return 1
+      ;;
     *)
-      echo "::error::ga-pool-update gate[serve]: the pool entry carries actions '${pool_actions:-none}', not update or a plain no-op. NOTHING applied."
+      echo "::error::ga-pool-update gate[serve]: the pool entry is neither an update nor a plain no-op (verdict '${verdict:-none}') — a replace, read, forget or unknown verb has never been graded by this arm. NOTHING applied."
       return 1
       ;;
   esac

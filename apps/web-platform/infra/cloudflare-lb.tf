@@ -10,7 +10,8 @@
 #   B2 web-2 is a gated pool member (weight = var.web2_lb_weight, default 1 = serving, live
 #      since the 2026-11-08 serve flip, #12167): the 0→1 flip rode the ga-pool-update serve arm
 #      behind the §(c) gate chain + runtime-bind probe. DRAIN is an explicit act: ga-pool-update
-#      mode=drain and ga-overlay (the GA3 fresh create) each pass -var=web2_lb_weight=0.
+#      mode=drain passes -var=web2_lb_weight=0, and ga-overlay passes the same 0 so a fresh GA3 create
+#      stays drained (ga-overlay is create-only: it cannot drain a live pool).
 #   B3 relay-is-safety: LB weight must not be flipped to web-2 before owner-side relay active.
 #
 # Zone plan is Free Website; Load Balancing is a separately-billed add-on (~$5/mo, approved).
@@ -87,7 +88,7 @@ resource "cloudflare_load_balancer_pool" "web_1" {
   # B2: gated member — weight 0 means health is still checked but no traffic is routed
   # (provider drained semantic); weight 1 serves. var.web2_lb_weight DEFAULTS to 1
   # (variables.tf) = live, so plans that do not name it are clean; DRAIN is an explicit
-  # -var=web2_lb_weight=0 (cf-lb-overlay `ga-pool-update mode=drain` and `ga-overlay`), and the
+  # -var=web2_lb_weight=0 (cf-lb-overlay `ga-pool-update mode=drain`; `ga-overlay` passes it for a fresh create), and the
   # 0→1 flip rode `mode=serve` behind the §(c) gate chain + lb-weight-gate-with-marker.sh.
   # lb-weight-gate.test.sh C.3/C.4 pin all of this.
   origins {
@@ -157,6 +158,9 @@ resource "cloudflare_load_balancer" "app" {
 
   session_affinity = "none"
 
+  # NOTE: this description is deliberately stale (web-2 has served at weight 1 since the 2026-11-08 serve flip):
+  # editing an attribute value plans a standing in-place LB update, so it changes together with an intended
+  # `ga-pool-update` apply (follow-up issue: stale web-2 weight-0 wording).
   description = "ADR-068 §(b) multi-host GA overlay (web-2 drained at weight 0 until the #6027 window flip)"
 }
 

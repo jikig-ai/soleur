@@ -236,6 +236,10 @@ enrolled by #10585 — locate via `gh issue list -l follow-through`): a proven-f
 lands no Deploy-succeeded-class journald row within 2 days of its boot surfaces there as
 ACTION REQUIRED.
 
+### After replacing web-2: reconcile the load-balancer origin address
+
+The replace is a targeted apply whose `-target` list never names the load-balancer pool, and the server declares no pinned `primary_ip`, so a replaced web-2 can come back with a NEW public IPv4 while the Cloudflare pool origin still carries the old one (`cloudflare-lb.tf` feeds the origin address from the server's `ipv4_address`). Web-2 now serves at weight 1, so after the host is verified (boot trail and first deploy above), re-run `cf-lb-overlay` `arm=ga-pool-update mode=serve`: its plan shows the origin address update, the gate chain re-proves the relay, and the pool converges. Until then Cloudflare's monitor marks the stale origin unhealthy and traffic falls back to web-1 (B1), so this is a capacity gap, not an outage.
+
 ### web-2 boot failed — how to read it
 
 On a host born with the guest-side LUKS path (ADR-263) a fatal provisioner step, or `/mnt/data` not

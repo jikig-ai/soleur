@@ -141,7 +141,7 @@ ROW G3.mp a comment-only edit stays GREEN (must-PASS)
 ROW G3.4 add the address to web_host_create -target: RED [saved plan] (run by hand in the sandbox after the scripted row failed to land)
 ```
 
-Row G1.7 (the dispatch default arm falls through to the inner grader) SURVIVES and is EQUIVALENT: the arm is reached only for actions that are neither update nor a plain no-op, and the inner grader's per-verb allow-set refuses every such verb on its own. The arm is defence in depth; no fixture can distinguish it.
+Row G1.7 (the dispatch default arm falls through to the inner grader) SURVIVED the first battery and was labelled equivalent. **That label was wrong** (test-design review): a pool entry with `["read"]` is dropped by the grader's change filter, so with POLICY_CREATE present it passes through the remnant branch; the default arm is load-bearing. Fixed by fixture pn13; re-driven in the post-review battery below.
 
 ## Floors (exact, measured)
 
@@ -158,3 +158,12 @@ fixture-relative-assert 63/63, lint-shell-capture-exit (baseline), lint-trap-tem
 ## Open pre-merge precondition (Phase 3.8)
 
 No scheduled drift run exists yet after the 14:40Z serve flip (latest at 06:01Z). The 18:00Z run or later must show no pool change before this merges; read-only check.
+
+## Post-review rework (review of bb10ba32d8)
+
+- The wrapper no longer uses mktemp (the tempfile census ratchet only moves down: 36 stays 36). The normalised copy is written beside the plan file under umask 077 in a subshell, an existing path or symlink is refused, and it is removed on every normal return path.
+- One jq read yields a verdict token (absent | ambiguous | update | plain-noop | unplain-noop | other) with null-safe addresses; every refusal prints an `::error::` line.
+- New fixtures: pn11 (module-addressed no-op pool), pn12 (two pool entries, ambiguous verdict), pn13 (read verb), pn14 (deposed), pn15 (importing), the existing-path and symlink refusals; pn8/pn9 reworked to observe the sibling copy. Gate suite floor 133.
+- Mutation re-drive on a /var/tmp copy (control green first, every mutation asserted to land): exact-address term, deposed term, importing term, previous_address term, default arm falling through, ambiguous collapsed to absent, copy leaked, existing path not refused, symlink not refused: 9 of 9 RED for the named reason.
+- lb-weight-gate: F8 now requires the literal inside the `terraform plan` continuation chain and counts occurrences (two more in-suite mutants: literal moved to an echo before the plan, a second `-var=1`); F6 counts occurrences; V2 requires exactly one top-level `default`; MIN_CASES 287.
+- Parity: T3 also asserts no other .tf file references the pair; T4 is a nine-clause table (both pair members, every shape clause, an output); TEST_FLOOR stays 376 (same four rows).

@@ -23,8 +23,10 @@
 # both resources ride the per-merge saved plan in apply-web-platform-infra.yml together. The gate also
 # couples this key's lifecycle to the TLS flag on purpose: setting host_proxy_tls_enabled false
 # destroys this pair, and setting it true again mints a DIFFERENT key, which a fail-closed hello would
-# turn into a relay outage. A later count-to-for_each or rename refactor needs a moved {} block or it
-# replaces the key.
+# turn into a relay outage. A later count-to-for_each or rename refactor needs a moved {} block: for the
+# random_bytes it REPLACES the key, and for the doppler_secret (Doppler keys a secret by NAME) the orphan
+# address's destroy deletes PROXY_HELLO_HMAC_KEY from prd while the new address upserts it, in an undefined
+# order, so a later full-root plan can leave the secret absent. The -target lists hide the orphan until then.
 #
 # NO auto-rotation, and no replace or taint of random_bytes.proxy_hello_hmac until the verifier accepts
 # a previous key: each host reads the secret at container start, so a rotation splits web-1 and web-2
