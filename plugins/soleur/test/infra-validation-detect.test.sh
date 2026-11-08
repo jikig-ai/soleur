@@ -98,7 +98,8 @@ echo ""
 echo "TS8: real-commit baseline against 7e6f6726 (uptime-alerting motivating commit)"
 if git -C "$REPO_ROOT" rev-parse --verify --quiet '7e6f6726^{commit}' >/dev/null; then
   EXPECTED='["apps/web-platform/infra"]'
-  ACTUAL=$(git -C "$REPO_ROOT" diff --name-only 7e6f6726^..7e6f6726 | detect_infra_dirs)
+  # The shipped construction (#12332): NUL-delimited, rename-free, submodule-honest, then the same chain the step runs.
+  ACTUAL=$(git -C "$REPO_ROOT" diff -z --no-renames --ignore-submodules=none --name-only 7e6f6726^..7e6f6726 | tr '\0' '\n' | detect_infra_dirs)
   assert_eq "$EXPECTED" "$ACTUAL" "real-commit 7e6f6726 → [apps/web-platform/infra]"
 else
   echo "  SKIP: commit 7e6f6726 not present (shallow clone) — TS1-TS7 cover the shape matrix"
@@ -196,6 +197,14 @@ assert_contains "$DIRS_STEP" 'plan_directories=' "dirs step emits plan_directori
 assert_contains "$DIRS_STEP" 'printf '"'"'directories=%s\n'"'"' "$DIRS"' "directories ← \$DIRS"
 assert_contains "$DIRS_STEP" 'printf '"'"'plan_directories=%s\n'"'"' "$PLAN_DIRS"' "plan_directories ← \$PLAN_DIRS"
 assert_contains "$DIRS_STEP" 'is_plan_skipped() { [ -f "$1/.pr-plan-skip" ] && [ -s "$1/.pr-plan-skip" ]; }' "predicate is -f && -s"
+echo ""
+
+echo "TS15b: the dirs step reads its diff through the NUL construction in BOTH arms, with the scoped pipefail (#12332)"
+# Executed behaviour (C-quoted names, rename-away, gitlink, failing git) is pinned by changed-path-readers.test.sh; this row pins that the
+# construction is present where THIS suite extracts the step, once per arm (the pull_request arm and the push arm).
+NUL_READS=$(printf '%s\n' "$DIRS_STEP" | grep -cF 'CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only' || true)
+assert_eq "2" "$NUL_READS" "push arm and pull_request arm each capture the NUL-delimited diff first"
+assert_eq "0" "$(printf '%s\n' "$DIRS_STEP" | grep -cE '^[[:space:]]*DIRS=\$\(git diff' || true)" "no arm pipes a bare git diff into the chain"
 echo ""
 
 echo "TS16: empty input → empty plan matrix [] (parity with TS7)"

@@ -186,6 +186,7 @@ plugins/soleur/test/c4-count-parity.test.sh	2
 plugins/soleur/test/c4-from-components.test.sh	5
 plugins/soleur/test/c4-model-freshness.test.sh	1
 plugins/soleur/test/cf-token-scope.test.sh	3
+plugins/soleur/test/changed-path-readers.test.sh	4
 plugins/soleur/test/check-deps-adapter-drift.test.sh	3
 plugins/soleur/test/check-red-on-main.test.sh	2
 plugins/soleur/test/ci-classify-step-exec.test.sh	1

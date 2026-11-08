@@ -385,10 +385,19 @@ jobs:
           # under any future `set -o pipefail`. Downstream `sort -u | jq`
           # collapses empty input to `[]`. Mirror unit test:
           # plugins/soleur/test/infra-validation-detect.test.sh. See #4012.
+          # Every infra root, as the JSON array the matrix consumes: the workflow_dispatch answer and the
+          # fail-safe answer of every arm below that cannot resolve its diff.
+          # The path list is raw bytes now (NUL-delimited, not C-quoted): under a UTF-8 locale GNU grep
+          # reports a name holding an invalid UTF-8 byte as "binary file matches" instead of printing it,
+          # and sed's `.*` stops at it, so pin the byte locale for every filter in this step.
+          export LC_ALL=C
+          all_infra_roots() {
+            { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
+              find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
+              | jq -R -s -c 'split("\n") | map(select(. != ""))'
+          }
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
-                       find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
-                    | jq -R -s -c 'split("\n") | map(select(. != ""))')
+            DIRS=$(all_infra_roots)
           elif [[ "$EVENT_NAME" == "push" ]]; then
             # (#7299) BASE_REF is EMPTY on push events, so the PR-diff branch below would
             # expand to the malformed `origin/...HEAD`. git resolves that to nothing, DIRS
@@ -412,23 +421,40 @@ jobs:
             # push-side job here touches a production credential (`plan` is pull_request-only),
             # so the blast radius of over-validating is zero.
             if [ -n "$BEFORE_SHA" ] && git rev-parse --verify --quiet "${BEFORE_SHA}^{commit}" >/dev/null; then
-              DIRS=$(git diff --name-only "$BEFORE_SHA" HEAD \
+              # (#12332) The list is captured FIRST, NUL-delimited, so (1) a name git would C-quote (a
+              # non-ASCII byte, tab, `"` or `\`) still starts with the anchored prefix, (2) `--no-renames`
+              # lists a rename's OLD path (a rename away from an infra root is a change to that root),
+              # (3) `--ignore-submodules=none` lists a gitlink that configuration hides, and (4) a git
+              # failure is a failure: the pipefail is scoped to the substitution (this step carries no
+              # step-level pipefail), and the fail arm validates every root, never an empty list.
+              if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "$BEFORE_SHA" HEAD | tr '\0' '\n'); then
+                echo "::notice::git diff $BEFORE_SHA..HEAD failed; validating all infra roots (fail-safe)"
+                DIRS=$(all_infra_roots)
+              else
+                DIRS=$(printf '%s\n' "$CHANGED" \
+                  | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
+                  | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
+                  | sort -u \
+                  | jq -R -s -c 'split("\n") | map(select(. != ""))')
+              fi
+            else
+              echo "::notice::push base '$BEFORE_SHA' is unresolvable; validating all infra roots (fail-safe)"
+              DIRS=$(all_infra_roots)
+            fi
+          else
+            # (#12332) Same capture-first construction as the push arm above. A failed diff validates
+            # every root: running too much costs CI minutes, running nothing costs the guarantee.
+            if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "origin/${BASE_REF}...HEAD" | tr '\0' '\n'); then
+              echo "::notice::git diff against origin/${BASE_REF} failed; validating all infra roots (fail-safe)"
+              DIRS=$(all_infra_roots)
+              DIFF_FAILED=1
+            else
+              DIRS=$(printf '%s\n' "$CHANGED" \
                 | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
                 | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
                 | sort -u \
                 | jq -R -s -c 'split("\n") | map(select(. != ""))')
-            else
-              echo "::notice::push base '$BEFORE_SHA' is unresolvable; validating all infra roots (fail-safe)"
-              DIRS=$( { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
-                         find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
-                      | jq -R -s -c 'split("\n") | map(select(. != ""))')
             fi
-          else
-            DIRS=$(git diff --name-only "origin/${BASE_REF}...HEAD" \
-              | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
-              | sed -E 's|^(apps/[^/]+/infra)/.*|\1|; s|^(infra/[^/]+)/.*|\1|' \
-              | sort -u \
-              | jq -R -s -c 'split("\n") | map(select(. != ""))')
           fi
           printf 'directories=%s\n' "$DIRS" >> "$GITHUB_OUTPUT"
 
@@ -445,14 +471,21 @@ jobs:
           # non-empty — a directory or special file satisfies `-s` but is not
           # a regular file, and `-s` requires the justification content.
           is_plan_skipped() { [ -f "$1/.pr-plan-skip" ] && [ -s "$1/.pr-plan-skip" ]; }
+          # A failed pull_request diff validates every root (offline, safe) but must NOT fan a live
+          # `terraform plan` out to every root under the Tier-A credential set: `plan` is the one
+          # job here that touches a credential, so the fail-safe for it is the EMPTY matrix.
           PLAN_DIRS=$(printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
             is_plan_skipped "$d" || printf '%s\n' "$d"
           done | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          # (a list, not an if/fi: the mirror unit test slices this block up to its first column-10 `fi`)
+          [ "${DIFF_FAILED:-0}" = 1 ] && { echo "::warning::git diff failed; terraform-plan matrix left empty (validate still covers every root)"; PLAN_DIRS='[]'; }
           printf 'plan_directories=%s\n' "$PLAN_DIRS" >> "$GITHUB_OUTPUT"
           # Emit the exclusion on real stdout so it registers as a run
           # annotation — inside the $() above it could only reach stderr.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
+              # A directory name carrying a control byte (CR, ESC) must not reach a workflow command.
+              case "$d" in *[[:cntrl:]]*) continue ;; esac
               if is_plan_skipped "$d"; then
                 echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
               fi

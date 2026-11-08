@@ -1,0 +1,24 @@
+== runs_via (commit units, n=300) ==
+    300 head-sha
+
+== commit-unit classes ==
+    298 clean | 
+      1 rule-irrelevant | 
+      1 not-evaluable | unsettled-jobs: test-webplat (2/2)
+
+== ejection-unit classes (n=82) ==
+     20 not-evaluable | unclassified-job: rule-body-lint
+     16 rule-irrelevant | 
+      9 not-evaluable | unsettled-jobs: test-webplat (2/2)
+      7 not-evaluable | unsettled-jobs: test-webplat (1/2)
+      7 flake-cleared | identical-tree-green
+      5 not-evaluable | failed-job-without-fail-line
+      4 not-evaluable | unclassified-job: adr-ordinals
+      3 not-evaluable | unsettled-jobs: test-webplat (1/2),test-webplat (2/2)
+      2 unverified | would-skip-suite-failed
+      2 not-evaluable | unsettled-jobs: affected-index-ratchet
+      2 not-evaluable | unclassified-job: harness-discovery,grok-fidelity
+      2 not-evaluable | unclassified-job: grok-fidelity,harness-discovery
+      1 not-evaluable | unsettled-jobs: test-scripts (8/8)
+      1 not-evaluable | unsettled-jobs: test-scripts (6/8)
+      1 not-evaluable | unclassified-job: cla-check,cla-evidence

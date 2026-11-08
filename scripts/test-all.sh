@@ -2698,14 +2698,14 @@ _diff_names=""
 # sweep — so a new lefthook env var is a re-check obligation, not a covered
 # case.
 if [[ "${_AFF_SCOPE:-branch}" == "staged" ]]; then
-  if _diff_out="$(git -c core.quotePath=false diff --cached --name-only 2>/dev/null)"; then
+  if _diff_out="$(git -c core.quotePath=false diff --cached --name-only --ignore-submodules=none 2>/dev/null)"; then
     _diff_head_ok=1
     _diff_detect_ok=1
     _diff_names="${_diff_names}
 ${_diff_out}"
   fi
   _diff_names="${_diff_names}
-$(git -c core.quotePath=false diff --cached --name-status -M 2>/dev/null || true)"
+$(git -c core.quotePath=false diff --cached --name-status -M --ignore-submodules=none 2>/dev/null || true)"
   # The SANDBOX_STAGED_NAMES seam is INJECTED HERE by
   # test-all-affected.test.sh's build_sandbox — never shipped inline (#9197
   # security seat: an env-readable substitution in production is the first
@@ -2715,12 +2715,12 @@ $(git -c core.quotePath=false diff --cached --name-status -M 2>/dev/null || true
   # of the substituted set. The anchor is the `diff --cached --name-status`
   # line above — the injection asserts exactly one.
 fi
-if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only HEAD 2>/dev/null)"; then
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only HEAD --ignore-submodules=none 2>/dev/null)"; then
   _diff_head_ok=1
   _diff_names="${_diff_names}
 ${_diff_out}"
 fi
-if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD 2>/dev/null)"; then
+if [[ "${_AFF_SCOPE:-branch}" != "staged" ]] && _diff_out="$(git -c core.quotePath=false diff --name-only origin/main...HEAD --ignore-submodules=none 2>/dev/null)"; then
   _diff_detect_ok=1
   _diff_names="${_diff_names}
 ${_diff_out}"
@@ -2733,12 +2733,15 @@ fi
 # by an unanchored edge AND by an anchored one. (The narrow window this closes is a rename WITHOUT a matching
 # array update; `lint-orphan-test-suites.sh` already reds loudly in the same run for that case, so
 # it was never a silent green — this just stops the suite declining while that error prints.)
+# Every `git diff` read of this assembly ends in --ignore-submodules=none (#12332): a gitlink hidden by
+# `diff.ignoreSubmodules` or a committed `ignore=all` is still listed. The flag goes LAST in each read's argv, before the
+# redirect; the NUL form is deliberately not used (the matchers are unanchored or unwrap C-quotes themselves).
 # Skipped under staged scope: the staged branch above emits the --cached form
 # of this same rename-source pairing.
 if [[ "${_AFF_SCOPE:-branch}" != "staged" ]]; then
 _diff_names="${_diff_names}
-$(git -c core.quotePath=false diff --name-status -M HEAD 2>/dev/null || true)
-$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD 2>/dev/null || true)"
+$(git -c core.quotePath=false diff --name-status -M HEAD --ignore-submodules=none 2>/dev/null || true)
+$(git -c core.quotePath=false diff --name-status -M origin/main...HEAD --ignore-submodules=none 2>/dev/null || true)"
 fi
 # WIDENED from `-- apps/web-platform/infra` to the union of every prefix the relevance
 # predicates declare. The narrow form was correct while the only consumer was the infra notice;
@@ -5647,7 +5650,7 @@ if want_scripts; then
   # battery from the run_suite command token and dies on <unresolved>.
   run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-158
   run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 159-316
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-477
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-485
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
