@@ -393,19 +393,19 @@ Instrument checks: W rows use the file's existing `ok` / `no` helpers (the self-
 
 ## Acceptance Criteria
 
-- [ ] AC-1: on the BLOCKED exit, with verdict `full-decided`, auto-merge armed and a positive not-queued read held for `MONITOR_REQUIRED_DWELL_S`, the output ends with the `SOLEUR_CI_REQUIRED_SET` marker line preceded by the `RECOVERY` lines and one read note; the BLOCKED line text is byte-identical to today's. (W1, W2)
-- [ ] AC-2: when any precondition fails (auto-merge off, queue unknown on the first sighting, queued, verdict not `full-decided`), behaviour is unchanged from today and `required` is never called. (W3 to W5)
-- [ ] AC-3: the call is bounded: `timeout -k 5 120 bash <resolver> required <PR>`; a missing `timeout` binary skips the read; stdout goes to a file so a detached descendant cannot hold the watch past the bound; worst case 125 s. (W7, W8)
-- [ ] AC-4: the monitor reads the marker, never the exit code, and never forges a marker; the watch exit code stays 1 on this path. (W6, W7)
-- [ ] AC-5: no `RECOVERY` line is executed (a sentinel payload in a hint never fires); the `gh` call log has no `run` subcommand. (W9)
-- [ ] AC-6: only `RECOVERY` lines and the marker pass; non-candidate RECOVERY lines are never dropped; candidate lines are capped at 20 with a count of the rest; the printed marker is the last one. (W10)
-- [ ] AC-7: `ready-run-wait.md` states that the monitor performs this read, what a marker-less BLOCKED ending means, and that Phase 7 does not yet; `ci-head-verdict.test.sh` stays green (R11, L1, L2); the `ci-head-verdict.sh` header no longer says the read is hand-run only.
-- [ ] AC-8: the three gates are green on the final tree: `python3 -I scripts/ci-pr-affected-replay.py ratchet --base origin/main` (no new accept row), `bash plugins/soleur/test/fixture-env-adoption.test.sh`, `bash .claude/hooks/grep-q-pipe-guard.test.sh`; `monitor-pr-checks.test.sh` and `ci-head-verdict.test.sh` green with the floor set to the exact count. The local affected-tests gate may not finish under contention; the CI `test` leg of the merge_group run is the authority.
-- [ ] AC-9: `git diff --name-only origin/main...HEAD` lists only: the four Files-to-Edit paths, the plan, `tasks.md` and `decision-challenges.md`; nothing under `.github/`, `ship/SKILL.md`, `ship-phase-7-poll-fixtures.test.sh`, `scripts/ci-pr-affected-audit.accept.tsv`, and none of the operator-held items. Checked with `git diff --name-only` plus a positive control (the monitor script path must be in the list).
+- [x] AC-1: on the BLOCKED exit, with verdict `full-decided`, auto-merge armed and a positive not-queued read held for `MONITOR_REQUIRED_DWELL_S`, the output ends with the `SOLEUR_CI_REQUIRED_SET` marker line preceded by the `RECOVERY` lines and one read note; the BLOCKED line text is byte-identical to today's. (W1, W2)
+- [x] AC-2: when any precondition fails (auto-merge off, queue unknown on the first sighting, queued, verdict not `full-decided`), behaviour is unchanged from today and `required` is never called. (W3 to W5)
+- [x] AC-3: the call is bounded: `timeout -k 5 120 bash <resolver> required <PR>`; a missing `timeout` binary skips the read; stdout goes to a file so a detached descendant cannot hold the watch past the bound; worst case 125 s. (W7, W8)
+- [x] AC-4: the monitor reads the marker, never the exit code, and never forges a marker; the watch exit code stays 1 on this path. (W6, W7)
+- [x] AC-5: no `RECOVERY` line is executed (a sentinel payload in a hint never fires); the `gh` call log has no `run` subcommand. (W9)
+- [x] AC-6: only `RECOVERY` lines and the marker pass; non-candidate RECOVERY lines are never dropped; candidate lines are capped at 20 with a count of the rest; the printed marker is the last one. (W10)
+- [x] AC-7: `ready-run-wait.md` states that the monitor performs this read, what a marker-less BLOCKED ending means, and that Phase 7 does not yet; `ci-head-verdict.test.sh` stays green (R11, L1, L2); the `ci-head-verdict.sh` header no longer says the read is hand-run only.
+- [x] AC-8: the three gates are green on the final tree: `python3 -I scripts/ci-pr-affected-replay.py ratchet --base origin/main` (no new accept row), `bash plugins/soleur/test/fixture-env-adoption.test.sh`, `bash .claude/hooks/grep-q-pipe-guard.test.sh`; `monitor-pr-checks.test.sh` and `ci-head-verdict.test.sh` green with the floor set to the exact count. The local affected-tests gate may not finish under contention; the CI `test` leg of the merge_group run is the authority.
+- [x] AC-9: `git diff --name-only origin/main...HEAD` lists only: the four Files-to-Edit paths, the plan, `tasks.md` and `decision-challenges.md`; nothing under `.github/`, `ship/SKILL.md`, `ship-phase-7-poll-fixtures.test.sh`, `scripts/ci-pr-affected-audit.accept.tsv`, and none of the operator-held items. Checked with `git diff --name-only` plus a positive control (the monitor script path must be in the list).
 - [ ] AC-10: the PR body says `Ref #11544` and `Ref #9927` and contains no `Closes` / `Fixes` / `Resolves` for either; it carries the `## Changelog` section; the CTO row is rendered from `decision-challenges.md`.
-- [ ] AC-11: every mutation in the Mutation Checks table was observed red on the named row, then reverted.
-- [ ] AC-12: a watch whose poll budget cannot cover the hold keeps today's timing and exit code (rc 1, no TIMEOUT line); the hold never produces exit 2 on a BLOCKED PR. (W11)
-- [ ] AC-13: env seams reject `0` (timeout), a leading-zero dwell and non-numerics with exit 3. (W13)
+- [x] AC-11: every mutation in the Mutation Checks table was observed red on the named row, then reverted.
+- [x] AC-12: a watch whose poll budget cannot cover the hold keeps today's timing and exit code (rc 1, no TIMEOUT line); the hold never produces exit 2 on a BLOCKED PR. (W11)
+- [x] AC-13: env seams reject `0` (timeout), a leading-zero dwell and non-numerics with exit 3. (W13)
 
 ## Domain Review
 
