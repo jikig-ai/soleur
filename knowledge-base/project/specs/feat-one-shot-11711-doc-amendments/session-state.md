@@ -40,3 +40,21 @@
 ## Technical-Ruling Gate
 - technical-ruling-gate.sh --branch: PASS (6 rows; fixed one bad-ruling-shape — missing date on the dispatch ruling row)
 - cto_spawns=0 (rulings recorded inline via sequential-fallback; dispatch ruling itself predates this PR)
+
+## Work Phase Complete (2026-11-08)
+- All tasks.md items done; 14 files changed, +683/-31, commit 0efcdeda84 pushed
+- AC1 stale-claim grep: clean (2 hits are the supersession notices themselves)
+- Suites: followthroughs test 180/180, key-rotate-workflow 647/647, inngest-key-rotate-workflow 478/478 — all green
+- Env split re-verified live: key-rotate-approval=[required_reviewers,branch_policy]; infra-privileged=[branch_policy]
+- Draft PR #12391; branch feat-one-shot-11711-doc-amendments
+
+## Review Phase (in progress)
+- Class: code (.sh files in diff -> 8-seat panel); design-risk: no (prose-only, no new mechanism)
+- Seats spawning on pushed sha 0efcdeda84
+
+## Main-context parallel work (#11711 residual items 2-6)
+- #12392 filed (readback race, meta/machinery)
+- Rescan findings so far: 4 comments on #10835 carry RAW random_id values (missed by 2026-11-01 redaction: comments 6504678183, 6508410298, 6516152486, 6529976974); 28+ post-census run logs show HIT-REFRESH raw lines (list: /tmp/rescan-11294/hits.txt); drift-scan v2 re-running (v1 stdin-consumption bug)
+- Artifacts: repo-level endpoint still HTTP 500 — per-run probe needed (inngest-provision-rehearsal only)
+- CTO ruling spawned for inngest-host dedicated pair (agent_id=49c594db)
+- Deletions NOT yet executed — operator per-command go required; census-11294.tsv NOT found on this filesystem (operator scratch)
