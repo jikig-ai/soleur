@@ -56,6 +56,153 @@ Release run 42426213123 (Web Platform Release) deployed v0.395.7: `deploy` job 2
 
 Both pre-flip samples agree within 4 ms at p50 and 6 ms at p90. The value 0.194 s appears twice: as the earlier pre-flip p50 (CTO agent's session, about 21:2xZ) and as the p50 right after the flip (flip-running session, about 23:45Z); they are different samples. The 0.190 s / 0.239 s sample taken minutes before the flip is used as the baseline. p50 is essentially unchanged (0.190 to 0.194 to 0.212 s); **p90 rose from about 0.24 s to 0.33 s right after the flip and 0.39 s at the 00:15Z recheck, and the rise is unexplained.** Candidates, none established: the full redeploys after the flip (23:48 to 23:50Z and 00:14 to 00:15Z, with new Cloudflare-to-origin TLS connections after each restart), TLS termination CPU in the Node process, a longer handshake on new origin connections, or small-sample noise. "Fine" is not a finding: the +30 min recheck (p50 0.212 s, p90 0.393 s, the highest p90 so far) is a rise, not a recovery.
 
+#### /health p90 after the strict flip: evidence and isolation procedure
+
+**Status: unexplained.** The p90 rise after the flip is not explained, and the effect of `strict` on user-facing latency is **unmeasured**. A flat p50 is not evidence that users are unaffected: do not read "fine" into it. Everything below is a procedure and a list of candidates, not a finding. Every claim not measured in the dated samples is marked UNVERIFIED.
+
+##### Evidence (client-side unless a row says otherwise; 2026-11-08 unless stated; names, counts and timestamps only)
+
+| Evidence | n | Measure | Result |
+|---|---|---|---|
+| Pre-flip baseline, 2026-11-07 about 23:40Z (table above) | 30 | `GET /health`, `time_starttransfer` | p50 0.190 s, p90 0.239 s |
+| All post-flip samples in the table above, plus the two below | 30 each | same | p50 0.193 to 0.225 s, p90 0.318 to 0.393 s |
+| Pair 1, about 16:35Z | 30 | same | p50 0.218 s, p90 0.359 s |
+| Pair 2, about 16:35Z | 30 | same | p50 0.193 s, p90 0.318 s |
+| Server wait (`time_starttransfer` minus `time_pretransfer`) for `app.soleur.ai/health`, about 16:37Z, interleaved with the apex | 30 | server wait | p50 0.154 s, p90 0.285 s |
+| Server wait for the apex `soleur.ai/` (a different origin), about 16:37Z, interleaved with the row above | 30 | server wait | p50 0.082 s, p90 0.111 s |
+| `origin-tls: listening` restart pairs, `soleur-web-platform` and `soleur-web-2` | 11 pairs | Better Stack rows between 01:05Z and 16:17Z (count and range only; the restart table above lists pairs only through 00:15Z, and no per-pair times are recorded here) | 11 |
+| Better Stack handshake-failure (`a client failed the TLS handshake`) or unexpected-close lines | since 00:20Z | line search | none found |
+| `origin-tls-probe.sh --require-tls`, about 16:35Z | 1 | exit and transport | passes, TLSv1.3 |
+
+No pre-flip server-wait decomposition exists, so the 0.154 s cannot be split into before and after.
+
+##### Reading the evidence honestly
+
+- With n=30, p90 is roughly the third-slowest value, so run-to-run spread is large: the two 16:35Z samples, taken minutes apart, already differ by 0.04 s at p90 (0.359 versus 0.318).
+- p50 moved little (0.190 s before; 0.193 to 0.225 s after). The movement is in the tail, which is exactly what n=30 measures worst.
+- The apex control is a different origin. It shares only the client network with `app.soleur.ai`. It does not share the Node process, the Supabase leg or the Cloudflare-to-origin hop, so 0.154 s versus 0.082 s is **not a TLS number**.
+- The p90 rise is therefore not attributed to the flip. The post-flip samples are consistently above the pre-flip baseline (five of five p90 values at or above 0.318 s, against 0.239 s and 0.245 s before), but they are small, were taken by several sessions, and the baseline pair is itself only two samples.
+
+##### Candidates and what each predicts (all UNVERIFIED)
+
+| # | Candidate | Predicts | Status |
+|---|---|---|---|
+| 1 | Redeploys: a cold Cloudflare-to-origin connection pool and a cold Supabase leg right after each restart (the app warms the Supabase edge, #8978, which bounds this but does not remove it) | The slow tail clusters in the minutes after an `origin-tls: listening` pair and recovers between restarts | UNVERIFIED |
+| 2 | TLS termination CPU in the Node process | p50 and CPU move together. Judged unlikely at sub-millisecond per keep-alive request, but that figure is an estimate, not a measurement | UNVERIFIED |
+| 3 | Handshakes on new Cloudflare-to-origin connections: under `flexible` a new origin connection costs a TCP handshake; under `strict` it adds a TLS 1.3 handshake and certificate validation (about one extra round trip between the Cloudflare colo and the origin) | A step at 23:43Z that is stable across restarts, present on every path to the same origin (including the Supabase-free control), and visible per Cloudflare colo | UNVERIFIED |
+| 4 | `/health` awaits one PostgREST round trip on every request (`users?select=id&limit=1`, 2 s abort, `checkSupabase()` in `server/health.ts`), so its server wait contains a database call whose variance is independent of TLS. The original brief omitted this candidate | The tail follows Supabase latency, the same shape appears on any other path that also calls Supabase, and a Supabase-free same-origin path stays flat regardless of TLS | UNVERIFIED |
+
+##### Isolation procedure (read-only, in order)
+
+Steps A and B need no Cloudflare token. Step C is blocked until the token and subcommand below exist. Nothing here changes production, and no step may be answered by borrowing another token.
+
+**Step A: interleaved A/B against a Supabase-free same-origin control (no token).** At least 100 requests per path over at least 10 minutes, alternating the two paths. The control candidate is `/robots.txt?cb=<rand>`; it is served through Next, so it also passes the Next middleware (an imperfect control), and it is UNVERIFIED that it makes no Supabase call. The control is valid only when `cf-cache-status` is not `HIT` (the random query string is meant to prevent that; check, do not assume). `%header{}` in `curl -w` needs curl 7.84 or newer.
+
+```bash
+OUT=$(mktemp)
+FMT='%{http_code}|%{time_connect}|%{time_appconnect}|%{time_pretransfer}|%{time_starttransfer}|%header{cf-ray}|%header{cf-cache-status}\n'
+for i in $(seq 1 100); do
+  for p in health robots; do
+    case $p in health) u="https://app.soleur.ai/health?l=$i-$RANDOM";; robots) u="https://app.soleur.ai/robots.txt?cb=$i-$RANDOM";; esac
+    printf '%s|' "$p" >> "$OUT"
+    curl --disable --noproxy "*" -s -o /dev/null --max-time 10 -w "$FMT" "$u" >> "$OUT"
+  done
+  sleep 6
+done
+# fields: 1 path, 2 status, 3 connect, 4 appconnect, 5 pretransfer, 6 starttransfer, 7 cf-ray, 8 cf-cache-status
+for p in health robots; do
+  awk -F'|' -v p="$p" '$1==p && $2==200 && $8!="HIT"{print $6-$5}' "$OUT" | sort -n | awk -v p="$p" '{a[NR]=$1} END{print p " server-wait n=" NR " p50=" a[int(NR*0.5)] "s p90=" a[int(NR*0.9)] "s p99=" a[int(NR*0.99)] "s"}'
+  awk -F'|' -v p="$p" '$1==p{n=split($7,r,"-"); print r[n]}' "$OUT" | sort | uniq -c | sort -rn | head
+done
+awk -F'|' '$2!=200{b[$1]++} END{for(k in b) print k " non200=" b[k]}' "$OUT"
+rm -f "$OUT"
+```
+
+Record `time_connect`, `time_appconnect`, `time_pretransfer`, `time_starttransfer`, the `cf-ray` colo suffix (the second command's counts) and the status; report p50, p90 and p99 per path and per colo. At n=100 the p99 is the second-slowest value, so it is a spread indicator, not a stable estimate.
+
+**Step B: the Supabase leg alone, from a client, over the same hours (no Cloudflare token).** It uses the public anon key, never the service-role key, and the key and the URL go through curl's stdin config so neither appears in argv. The variable NAMES `SUPABASE_URL` (preferred by the server over the custom domain, see `serverUrl()`), `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` come from `apps/web-platform/.env.example` and the server code; that they exist in Doppler `soleur/prd` is UNVERIFIED (check with `doppler secrets --only-names -p soleur -c prd`, names only). It is also UNVERIFIED that `/rest/v1/` answers 200 for the anon key; if it does not, record the status and stop, do not escalate to another key. This measures the client-to-Supabase path, not the origin-to-Supabase path that `/health` actually uses, so it bounds how variable the database leg can be; it does not measure the leg inside `/health`.
+
+```bash
+OUT_B=$(mktemp)
+doppler run -p soleur -c prd -- bash -c 'for i in $(seq 1 100); do
+  printf "url = \"%s/rest/v1/?l=%s\"\nheader = \"apikey: %s\"\n" "${SUPABASE_URL:-$NEXT_PUBLIC_SUPABASE_URL}" "$i" "$NEXT_PUBLIC_SUPABASE_ANON_KEY" \
+    | curl --disable --noproxy "*" -s -o /dev/null --max-time 10 --config - -w "%{http_code} %{time_connect} %{time_appconnect} %{time_pretransfer} %{time_starttransfer}\n"
+  sleep 6
+done' > "$OUT_B"
+# fields: 1 status, 2 connect, 3 appconnect, 4 pretransfer, 5 starttransfer
+awk '$1!=200{b++} END{print "non200=" b+0}' "$OUT_B"
+awk '$1==200{print $5-$4}' "$OUT_B" | sort -n | awk '{a[NR]=$1} END{print "supabase server-wait n=" NR " p50=" a[int(NR*0.5)] "s p90=" a[int(NR*0.9)] "s p99=" a[int(NR*0.99)] "s"}'
+rm -f "$OUT_B"
+```
+
+**Step C: Cloudflare analytics by hour (needs the token below; blocked until it exists).** A GraphQL POST to `https://api.cloudflare.com/client/v4/graphql` with `Authorization: Bearer`, dataset `httpRequestsAdaptiveGroups`, filter `datetime_geq` and `datetime_lt`, `clientRequestHTTPHost: "app.soleur.ai"`, `clientRequestPath: "/health"`, `requestSource: "eyeball"`, `orderBy: [datetimeHour_ASC]`, dimension `datetimeHour`, and quantiles of the origin response duration. The dataset and those filter keys are documented; the **exact origin-duration quantile field names are UNVERIFIED**, and so is the **per-plan time-range cap** (slice requests to at most 24 h and treat even that as unverified). The `count` selection and the variable type names are likewise UNVERIFIED. First run a schema-discovery query and take the field names from its output, never from this page. The request shape below is what the future subcommand must send; until it exists, running it by hand is not the sanctioned path.
+
+```bash
+# 1. Schema discovery (no secret in the query). The jq filter prints type and field NAMES only.
+QF=$(mktemp); BF=$(mktemp); export QF BF
+echo '{ __schema { types { name fields { name } } } }' > "$QF"
+jq -n --rawfile q "$QF" '{query:$q}' > "$BF"
+doppler run -p soleur -c prd_terraform -- bash -c 'curl --disable --noproxy "*" -s --max-time 30 --config - < <(printf "url = \"https://api.cloudflare.com/client/v4/graphql\"\nheader = \"Content-Type: application/json\"\nheader = \"Authorization: Bearer %s\"\ndata-binary = \"@%s\"\n" "$CF_API_TOKEN_ANALYTICS_READ" "$BF") \
+  | jq -c "{types:[.data.__schema.types[]? | select(.name|test(\"httpRequestsAdaptiveGroups\";\"i\")) | {type:.name, fields:[.fields[]?.name | select(test(\"origin|quantile|duration\";\"i\"))]}], err:(.errors // null)}"'
+
+# 2. The hourly read, after replacing <FIELDS_FROM_DISCOVERY> with names printed above.
+cat > "$QF" <<'EOF'
+query ($zone: String!, $from: Time!, $to: Time!) {
+  viewer { zones(filter: {zoneTag: $zone}) {
+    httpRequestsAdaptiveGroups(limit: 100, orderBy: [datetimeHour_ASC],
+      filter: {datetime_geq: $from, datetime_lt: $to, clientRequestHTTPHost: "app.soleur.ai", clientRequestPath: "/health", requestSource: "eyeball"}) {
+      dimensions { datetimeHour }
+      count
+      <FIELDS_FROM_DISCOVERY>
+    }
+  } }
+}
+EOF
+export FROM=2026-11-07T12:00:00Z TO=2026-11-07T23:43:00Z
+doppler run -p soleur -c prd_terraform -- bash -c 'jq -n --rawfile q "$QF" --arg z "$CF_ZONE_ID" --arg f "$FROM" --arg t "$TO" "{query:\$q,variables:{zone:\$z,from:\$f,to:\$t}}" > "$BF"
+  curl --disable --noproxy "*" -s --max-time 30 --config - < <(printf "url = \"https://api.cloudflare.com/client/v4/graphql\"\nheader = \"Content-Type: application/json\"\nheader = \"Authorization: Bearer %s\"\ndata-binary = \"@%s\"\n" "$CF_API_TOKEN_ANALYTICS_READ" "$BF") \
+  | jq -c "(.errors // empty), (.data.viewer.zones[0].httpRequestsAdaptiveGroups[]? | {hour:.dimensions.datetimeHour, n:.count})"'
+rm -f "$QF" "$BF"
+```
+
+The zone identifier is an identifier, not a credential, so passing it to `jq --arg` is acceptable; the bearer token only ever travels through curl's stdin config, response headers and the request config are never printed, and the discovery `jq` prints names only. Run the hourly read for the windows 2026-11-07T12:00Z to 23:43Z (pre-flip) and 23:44Z to now (post-flip), once for `/health` and once for a Supabase-free path (the Step A control), and compare the quantile fields hour by hour.
+
+**Token prerequisite (a separate change, tracked in #TRACKING-TOKEN).** Step C needs a new token, `CF_API_TOKEN_ANALYTICS_READ` (permissions Analytics:Read and Zone:Read), bound to a **new subcommand** of `plugins/soleur/scripts/cloudflare-readonly.sh`, with **no fallback to any other token** (CTO ruling). State this plainly: the wrapper is a closed, **GET-only** subcommand set, and GraphQL analytics is a **POST** endpoint, so the new subcommand needs a **documented read-only-POST exception** to the wrapper's GET-only contract. Neither the token nor the subcommand exists in this change; creating the token is a credential change that belongs to the owner. The commands above are the request shape the subcommand must reproduce, not a sanctioned manual path.
+
+##### Interpretation (what each outcome would mean; none has been observed)
+
+| Observation | Reads as | Supports |
+|---|---|---|
+| Step A: the control's p90 is also elevated against its own earlier sample, while `/health` is elevated too | An edge or connection effect shared by every path to this origin | Candidate 3 (or 1, if the tail clusters after restarts) |
+| Step A: only `/health` is elevated and the control is flat | App-side or Supabase variance | Candidate 4 |
+| Step A re-run now: neither path differs from the pre-flip baseline | Small-sample noise (n=30 spread) | None; close the item |
+| Step A: the tail clusters in the minutes after an `origin-tls: listening` pair | Post-restart warm-up | Candidate 1 |
+| Step B: the Supabase leg alone shows the same tail shape as `/health` | The database leg dominates the tail regardless of TLS | Candidate 4 |
+| Step C: a step in origin duration at 23:43Z, stable across restarts and across colos | The flip itself | Candidate 3 (or 2 if it tracks CPU) |
+| Step C: no step at 23:43Z, but the tail follows restarts | Redeploy warm-up | Candidate 1 |
+| Step C: a `/health`-only step with a flat control path | App-side or Supabase variance | Candidate 4 |
+
+Step A cannot prove the flip caused anything: no pre-flip control sample exists, so it localizes the effect (edge versus app) rather than attributing it. The only decisive test of the strict-mode effect would be a controlled flip-back, which is production-mutating, is the owner's decision, and is not proposed here.
+
+##### Marker ruling: no in-app `SOLEUR_HEALTH_TIMING` marker now
+
+Ruled by the CTO agent, 2026-11-08: the procedure above answers the question without a code change, so no timing marker is added in the follow-ups PR. Revive the marker if any one of these happens: (1) the Supabase-free control also regresses by more than 50 ms at p90; (2) Cloudflare origin duration shows a step change aligned with the flip; (3) a user-facing latency complaint arrives.
+
+If revived, the shape is: a `warn`-level line (Vector drops INFO, so an info marker would never reach Better Stack) named `SOLEUR_HEALTH_TIMING` with the fields `total_ms`, `supabase_ms`, `tls` and `protocol`; emitted AFTER the response is written, inside try/catch; only when `total_ms > 500`, plus a 1-in-50 sample; at most 6 lines per minute; the response body and status unchanged (`health-keyword-monitor-contract.test.ts` pins the body the monitors read).
+
+##### Still unverified (do NOT record as verified)
+
+- The cause of the p90 rise after the flip; whether it is a regression at all rather than n=30 noise.
+- That `strict` changes user-facing latency in either direction.
+- Every candidate in the table: redeploy warm-up, TLS CPU in Node, new-connection handshakes under `strict`, and the per-request Supabase round trip in `/health`.
+- That `/robots.txt` makes no Supabase call and is never served from the Cloudflare cache; that it is a fair Supabase-free control.
+- That `/rest/v1/` answers 200 for the public anon key, and that the three variable names exist in Doppler `soleur/prd`.
+- The exact origin-duration quantile field names, the `count` selection, the variable type names, and the per-plan time-range cap of the Cloudflare GraphQL analytics API; that schema introspection is permitted for the future token.
+- That the sub-millisecond-per-request TLS CPU figure holds on these hosts.
+- Per-colo behaviour: no per-colo data has been collected.
+- Whether the 11 restart pairs between 01:05Z and 16:17Z coincide with any tail samples (no per-pair times are recorded here).
+- That the token `CF_API_TOKEN_ANALYTICS_READ` and its wrapper subcommand will be accepted (the POST exception is a design change, not yet reviewed).
+
 #### What was NOT run before the flip
 
 - The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.
@@ -68,8 +215,8 @@ Both pre-flip samples agree within 4 ms at p50 and 6 ms at p90. The value 0.194 
 |---|---|---|
 | Signed-in WebSocket connects through the edge under `strict` (the upgrade path has never been exercised through the TLS hop by a probe) | **owner** (no probe exists) | open |
 | +1 h and +24 h rechecks (the 30-request loop and the Sentry query), rollback kept armed for the whole window | whoever runs the soak | pending |
-| Sentry `feature:origin_tls` | anyone with the read token | not re-read after the flip |
-| Real 502/520 rate over a fixed window (Cloudflare analytics) | **owner** (no sanctioned reader) | open |
+| Sentry `feature:origin_tls` | anyone with the read token | not re-read after the flip. The alert rule `origin-tls-event` (any `feature=origin_tls` event, `frequency_minutes` 47) is **DECLARED** in the follow-ups PR; it is live only after the merge-triggered `apply-sentry-infra.yml` run has been read. Until then the pull-based query in "Sentry check" is the only check |
+| Real 502/520 rate over a fixed window (Cloudflare analytics) | **owner** (no sanctioned reader) | open. A read-only reader needs the `CF_API_TOKEN_ANALYTICS_READ` token and a `cloudflare-readonly.sh` subcommand (with a documented read-only-POST exception), tracked in `#TRACKING-TOKEN`; see "/health p90 after the strict flip" Step C |
 | Port 80 | stays OPEN until the bake passes (CLO condition 3); the post-flip probe passing is necessary, not sufficient | open |
 | Rollback time-to-effect at the edge | | **unmeasured**: the apply run took 109 to 370 s on this workflow; the flip's own upper bound (about 55 s from the ruleset write to the first passing probe) is the only edge figure |
 
@@ -94,7 +241,7 @@ which precedes fresh per-host lines), not read directly. From that release on, t
 **Listener events after the bind (ADR-321 item 11, ruled 2026-11-08).** Before the bind, a listener `error` is fatal under REQUIRED (the candidate container fails). After it: an unexpected `close` of the https server is reported
 (`tags.reason=unexpected-close`) and is fatal under REQUIRED, so `--restart unless-stopped` restarts the container; a server `error` is reported at most once a minute (`extra.suppressed` counts the rest) and the process keeps serving.
 **A dead :443 that raises neither event** (a docker-proxy or iptables failure, a rejected certificate) is not detected in-process. The detectors are the Better Stack `app`/`app_health` monitors (a page after roughly 4 to 6 minutes) and the
-https LB monitor (an "Unhealthy" email only; web-1 is never drained). **There is no committed Sentry alert rule for `feature:origin_tls`**, so a Sentry event is a pull-based check until one is added (separate infra change). Recovery for a dead
+https LB monitor (an "Unhealthy" email only; web-1 is never drained). **No Sentry alert rule for `feature:origin_tls` is live**: the rule `origin-tls-event` is DECLARED in the follow-ups PR and is live only after the merge-triggered `apply-sentry-infra.yml` run is read, so a Sentry event is a pull-based check until then. Recovery for a dead
 :443 is a redeploy.
 
 ## Act 0 - read-only preconditions before act 3 (anyone; all runnable; the Expected column is the PRE-FLIP state)
