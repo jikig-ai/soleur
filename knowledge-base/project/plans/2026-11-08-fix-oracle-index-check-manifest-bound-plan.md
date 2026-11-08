@@ -14,6 +14,30 @@ brand_survival_threshold: none
 
 # fix(ci): oracle-validation manifest exceeds oracle-index-check's 30-min bound — activation rolled back
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Sections enhanced:** Hypotheses (Network-Outage Deep-Dive), Acceptance Criteria (pre/post-merge split)
+**Research agents used:** none spawnable in this environment — the deepen pass ran its halt-gates
+and verification greps inline (4.6 user-brand, 4.7 observability, 4.8 PAT, 4.11 guard-contract
+lint, 4.12 scope-check, 4.5 network-outage telemetry); the fan-out phases (skills, learnings,
+review agents) are recorded as unspawned under References.
+
+### Key Improvements
+1. Network-Outage Deep-Dive subsection: layer-by-layer verdict confirming the measured cause is
+   workload duration vs. bound, not connectivity (Phase 4.5 gate, trigger `timeout`).
+2. Acceptance Criteria split into `### Pre-merge (PR)` / `### Post-merge (operator)` with the
+   automation-feasibility note (sharp-edge: post-merge subsections + automation gate).
+3. Mechanical verification: `lint-guard-contract.py` green (1 guard entry, 8 mutation rows);
+   Scope Check single unfenced section, all asks mapped; no sensitive paths under the
+   `none` threshold; no PAT-shaped references.
+
+### New Considerations Discovered
+- `check_manifest()` pins the manifest at exactly 2 fields (`MEMBER-BAD-FIELDS`), foreclosing the
+  leg-column variant — recorded in the Cut List.
+- `oracle-index-check` is not a required context (`scripts/required-checks.txt`); the matrix's
+  per-leg check-run names therefore orphan nothing — verified against the ruleset ledger.
+
 ## Overview
 
 The first post-unlock oracle-only canary (run 42458135078, PR #12382) cancelled
@@ -57,6 +81,16 @@ below is opted out per the checklist's opt-out clause, citing the run-log artifa
 5. **H1 (accepted): serial manifest runtime exceeds the 30-min bound.** Measured 65.4 min from
    `scripts/suite-durations.tsv`; canary order-of-completion matches the first five manifest
    members' durations (~28.6 min) — the suite set is healthy, the serial topology is the defect.
+
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Layer-by-layer verification status against the checklist: L3 firewall — opted out (GitHub-hosted
+runner, no host/SSH surface; run-log artifact 42458135078). L3 DNS/routing — opted out
+(`git fetch origin main` and in-suite `gh` reads succeeded in the same log). L7 TLS — opted out
+(intra-runner test loop, no HTTPS endpoint). L7 application — verified (5/15 `[ok]` in 29m53s
+before the bound kill). Verdict: no lower-layer signal exists to explain; the measured cause is
+workload duration vs. `timeout-minutes`, and the remediation (parallel legs) is matched to that
+cause, not to a connectivity hypothesis.
 
 ## Research Insights
 
