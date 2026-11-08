@@ -254,3 +254,9 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     per-host `origin-tls: listening` lines follow it), not read directly; adding a `required` field is an app change that would itself redeploy, so it is not bundled. WebSocket upgrades have never crossed the
     edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only). The apply job auto-approves its own plan, so the human look at the plan is a local read-only plan before the dispatch
     (runbook Act 0). The flip's whole-list update replaces the entire `http_config_settings` entrypoint; a rule added in the dashboard would be deleted, which the read-only `entrypoint-audit` dispatch checks beforehand.
+    **Status of item 10 (dated 2026-11-08).** Acts 1, 2 and 3 are DONE (2026-11-07): `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` about 20:55Z, both hosts restarted on it about 21:01Z, the merge
+    apply added the strict rule disabled (run 42425987199, 4 to 5 rules), the entrypoint audit found no dashboard-added rules (run 42426216807, live 5 == declared 5), and the flip apply (run 42426416266,
+    plan 0/1/0) finished 23:43:45Z with `origin-tls-probe.sh --require-tls` passing on its first poll at 23:44:39Z (TLSv1.3; time-to-effect about 55 s). Live: 5 rules, 4 enabled ssl rules. After the flip
+    40 of 40 `/health` requests returned 200, p50 stayed 0.19 to 0.21 s and p90 rose from 0.24 s to 0.33 to 0.39 s on small samples; **that p90 rise is unexplained**. Open: the signed-in WebSocket check
+    (owner), the +1 h and +24 h rechecks, Sentry `feature:origin_tls` not re-read after the flip, the real 502/520 rate (owner), port 80 stays open until the bake passes, and the time-to-effect of a rollback
+    is still unmeasured at the edge (apply run 109 to 370 s). The cleanup change has not been made.

@@ -11,13 +11,35 @@ Makes Cloudflare validate the Origin CA certificate on EVERY request to `app.sol
 (`flexible`). The code is merged inert: the strict rule is ALWAYS in the ruleset but `enabled = var.enable_origin_tls_strict`, which defaults to false, so
 merging adds one disabled rule and changes no edge behaviour. The flip is the owner's three ordered acts. **The order is the safety property.**
 
-## Status (dated; re-verify before relying on it)
+## Status (dated; acts 1 and 2 evidence read 2026-11-07 21:22Z, act 3 record below; re-verify before relying on it)
 
 | Act | State | Evidence (read-only, 2026-11-07 21:22Z) |
 |---|---|---|
 | 1. `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` | **DONE** about 20:55Z. Do NOT set it again | `doppler secrets --only-names -p soleur -c prd` lists `ORIGIN_TLS_REQUIRED` |
 | 2. Restart both hosts on it | **DONE**, redeploy of v0.395.3 completed about 21:01Z | `/health` version 0.395.3; fresh `origin-tls: listening` lines 21:00:04Z / 21:01:04Z (`soleur-web-platform`) and 21:00:35Z / 21:01:32Z (`soleur-web-2`); `origin-tls-probe.sh --canary` exit 0 `TLS-ON-ORIGIN-HOP` TLSv1.3 |
-| 3. The flip | **NOT DONE** | `ENABLE_ORIGIN_TLS_STRICT` absent from Doppler `prd_terraform`; only `ENABLE_ORIGIN_TLS_CANARY_RULE` is present |
+| 3. The flip | **DONE** 2026-11-07, effective 23:43:45Z (apply) / 23:44:39Z (first passing probe). Do NOT dispatch it again | see "Act 3 record" below |
+
+### Act 3 record (2026-11-07, UTC; dated facts only)
+
+- `ENABLE_ORIGIN_TLS_STRICT` was set in Doppler `prd_terraform` on 2026-11-07 (lowercase `true`).
+- Merge apply, run 42425987199: added the strict rule DISABLED, so the live entrypoint went from 4 to 5 rules with no edge behaviour change.
+- Entrypoint audit (`apply_target=entrypoint-audit`), run 42426216807: no dashboard-added rules; live 5 rules == declared 5.
+- Flip apply, run 42426416266: finished **23:43:45Z**, plan 0 to add, 1 to change, 0 to destroy (the `ORIGIN-TLS STRICT` rule's `enabled` false to true).
+- `origin-tls-probe.sh --require-tls`: passed on the first poll at **23:44:39Z**, TLSv1.3. **Time-to-effect of the flip: about 55 s** after the apply finished (this replaces the earlier "not measured").
+- Live ruleset after the flip: 5 rules, 4 enabled ssl rules (flexible, apex `full`, canary `strict`, strict).
+- `/health` samples through the edge after the flip: 40 of 40 returned 200. Latency on small samples: p50 0.19 to 0.21 s (baseline 0.194 s); **p90 rose from 0.24 s to 0.33 to 0.39 s. The rise is unexplained** (small samples; it could be TLS termination CPU in the Node process, a longer Cloudflare-to-origin handshake on new connections, or noise; no cause has been established).
+- +30 min recheck at 00:15Z (2026-11-08): fine.
+
+### Open checks (plainly)
+
+| Check | Owner of the check | State |
+|---|---|---|
+| Signed-in WebSocket connects through the edge under `strict` (the upgrade path has never been exercised through the TLS hop by a probe) | **owner** (no probe exists) | open |
+| +1 h and +24 h rechecks (the 30-request loop and the Sentry query), rollback kept armed for the whole window | whoever runs the soak | pending |
+| Sentry `feature:origin_tls` | anyone with the read token | not re-read after the flip |
+| Real 502/520 rate over a fixed window (Cloudflare analytics) | **owner** (no sanctioned reader) | open |
+| Port 80 | stays OPEN until the bake passes (CLO condition 3) | open |
+| Rollback time-to-effect at the edge | | **still unmeasured**: the apply run took 109 to 370 s on this workflow; edge propagation of a rollback has not been timed (the flip's own ~55 s is the only edge figure) |
 
 ## Why this order
 
@@ -107,7 +129,7 @@ gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-r
 ```
 
 Time to effect: the apply run. Measured on this workflow in this repository: the canary enabling dispatch (run 42407585597) took 302 s wall clock with the apply job 111 s; recent push
-applies took 109 to 370 s. Edge propagation after the apply is **not measured** (record it at the flip with the 10-second poll above). Plan on 2 to 6 minutes plus propagation.
+applies took 109 to 370 s. Edge propagation after the FLIP apply was measured once (about 55 s to the first passing probe, 2026-11-07); propagation of a ROLLBACK has not been timed. Plan on 2 to 6 minutes plus about a minute of propagation.
 Real traffic is never in the canary's scope, but a bad flip hits every user until this lands.
 
 What users see if the flip goes wrong: Cloudflare error pages on every page, API call and WebSocket of `app.soleur.ai`, 525 (SSL handshake failed) or 526 (invalid SSL
