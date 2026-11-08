@@ -431,6 +431,19 @@ span to the NEXT registered mark.
   artifact); evidence posted as an issue comment. 1 floor row in the
   measured table: `tests/scripts/cf-lb-overlay-gate` (registered after the
   staged runs — no CI timing yet).
+- **2026-11-08 post-#12296 re-price (replay-a only, exemption dropped):**
+  after the observation-window retirement, 3 green merge_group runs
+  42447940669 / 42442159415 / 42439386564 carried arm medians (ms):
+  replay-a **160004** (was 1033094 — now the fastest arm), replay-b
+  225993, replay-c 165824. Committed: `-a` re-seated 1033094→160004 with a
+  provenance comment naming the run ids; the `-a`
+  `suite-weight-exemptions.tsv` row (cap 1343022) was DELETED — 160004
+  fits the default 600000 cap, so both the minimal-ledger and the ~1.3x
+  slack invariants forbade keeping or adjusting it. `-b`/`-c` rows are
+  stale the same direction but violate no invariant; their re-price is
+  deferred to the #11679 umbrella. Headers refreshed by a real
+  `--incremental --durations` pass (no `--runs 5`: same drifter trap as
+  the 2026-10-31 entry).
 
 ## Runner-availability data (why extra legs are not free)
 
