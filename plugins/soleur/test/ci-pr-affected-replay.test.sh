@@ -258,8 +258,10 @@ printf '[FAIL] instrument self-test: the FAIL arm records (EXPECTED — subtract
 RUN_ENV=()
 RCLOG="$SANDBOX/rc.log"; : > "$RCLOG"
 run_sut() {  # run_sut <args...>; the repo is the cwd, the selector and gh are stubs; prints stdout. Every exit code is appended to $RCLOG, so a mutant that CRASHES (rc 4) is told apart from one that merely changes an answer
-  local rc
-  ( cd "$REPO" && env PATH="$BIN:$PATH" PR_AFFECTED_REPLAY_TEST_ALL="$BIN/sel.sh" PR_AFFECTED_REPLAY_RETRY_SLEEP=0 HOME="$FIXHOME" "${RUN_ENV[@]}" timeout 30 python3 "$SUT" "$@" ); rc=$?   # a hang (a FIFO opened blocking) is rc 124, a red row
+  local rc tmo="${REPLAY_SUT_TIMEOUT:-30}"
+  [[ "$tmo" =~ ^[1-9][0-9]*$ ]] || tmo=30
+  (( tmo > 30 )) && tmo=30   # the override can only shrink the bound, never widen or disable it: unset, empty, 0, negative, non-numeric and oversized values all clamp to the default
+  ( cd "$REPO" && env PATH="$BIN:$PATH" PR_AFFECTED_REPLAY_TEST_ALL="$BIN/sel.sh" PR_AFFECTED_REPLAY_RETRY_SLEEP=0 HOME="$FIXHOME" "${RUN_ENV[@]}" timeout "$tmo" python3 "$SUT" "$@" ); rc=$?   # a hang (a FIFO opened blocking) is rc 124, a red row
   printf '%s\n' "$rc" >> "$RCLOG"
   return "$rc"
 }
@@ -866,6 +868,29 @@ audit "$SANDBOX/audit-dir.rows" --accept "$SANDBOX/accept-dir.tsv"
 run_sut audit --root "$AREPO" --list "$SANDBOX/audit-empty.rows" >/dev/null 2>&1; rc=$?
 [[ "$rc" -eq 2 ]] && pass "an audit that examined zero suites exits non-zero (anti-vacuity)" || fail "an audit that examined zero suites exits non-zero (rc=$rc)"
 
+# run_sut's wall bound is an env knob with a floor: the override can shrink it, and unset/invalid values
+# fall back to the default -- the bound is never widened or disabled. The stub `timeout` records each argv
+# so the default and fallback arms are read off the command line itself instead of a 30 s wait.
+mkdir -p "$BIN/tmostub"
+printf '#!/usr/bin/env bash\n[ -z "${REPLAY_TMO_STUBLOG:-}" ] || printf "%%s\\n" "$*" >> "$REPLAY_TMO_STUBLOG"\nexec /usr/bin/timeout "$@"\n' > "$BIN/tmostub/timeout"
+chmod +x "$BIN/tmostub/timeout"
+printf 'import time\ntime.sleep(60)\n' > "$SANDBOX/hang.py"
+row_sut_timeout() {
+  local log="$SANDBOX/tmo-stub.log" rc
+  : > "$log"
+  RUN_ENV=(PATH="$BIN/tmostub:$BIN:$PATH" REPLAY_TMO_STUBLOG="$log")
+  REPLAY_SUT_TIMEOUT=2 SUT="$SANDBOX/hang.py" run_sut >/dev/null 2>&1; rc=$?   # a real hang, killed at the override's seconds
+  [[ "$rc" -eq 124 ]] || { RUN_ENV=(); echo "override hang rc=$rc" >&2; return 1; }
+  run_sut cp-upper 0 10 >/dev/null 2>&1 || true                              # unset: the default reaches argv
+  REPLAY_SUT_TIMEOUT=0 run_sut cp-upper 0 10 >/dev/null 2>&1 || true         # 0 is invalid, never "no bound"
+  REPLAY_SUT_TIMEOUT=garbage run_sut cp-upper 0 10 >/dev/null 2>&1 || true   # non-numeric falls back, never an unparseable argv
+  REPLAY_SUT_TIMEOUT=2 run_sut cp-upper 0 10 >/dev/null 2>&1 || true
+  RUN_ENV=()
+  [[ "$(grep -cE '^2 ' "$log")" -eq 2 && "$(grep -cE '^30 ' "$log")" -eq 3 && "$(grep -cE '^[0-9]+ ' "$log")" -eq 5 ]] || { echo "stub saw: $(cat "$log")" >&2; return 1; }
+}
+row_sut_timeout && pass "the run_sut wall bound: the override kills a hang at its own seconds (rc 124); unset, zero and non-numeric all reach argv seconds=30 (the fallback, never disabled)" || fail "run_sut timeout knob"
+[[ "$(grep -E '^[[:space:]]*REPLAY_SUT_TIMEOUT=' "${BASH_SOURCE[0]}" | grep -oE 'REPLAY_SUT_TIMEOUT=[^ ]+' | sort -u | tr '\n' ' ')" = "REPLAY_SUT_TIMEOUT=0 REPLAY_SUT_TIMEOUT=10 REPLAY_SUT_TIMEOUT=2 REPLAY_SUT_TIMEOUT=garbage " ]] && pass "every knob assignment in this file is a declared site (run_sut's default read, row_sym's 10 s override, the row_sut_timeout probes): a new setter elsewhere would widen or disable a bound silently" || fail "an undeclared REPLAY_SUT_TIMEOUT setter exists: $(grep -nE 'REPLAY_SUT_TIMEOUT=' "${BASH_SOURCE[0]}" | tr '\n' ' ')"
+
 # ---------------------------------------------------------------------------------------------------------------------
 # PR1 of the S4 index completion (#9729, #10448): the audit's match is a path-component-boundary scan with per-file
 # memoisation (it replaces the every-tracked-path `f in blob` scan, 53 s on 19,367 paths), directory suites are audited
@@ -1140,7 +1165,7 @@ class _SetProbe:          # wraps index.tracked — a set interface, never a set
 def traced(tracked, text):
     idx = m.PathIndex(tracked)
     idx.paths, idx.tracked = _SeqProbe(idx.paths), _SetProbe(idx.tracked)   # a scan may never materialize a tracked-path collection
-    ev, cap = [0], 40 * len(text) + 20000
+    ev, cap = [0], 16 * len(text) + 5000                                  # bounds a runaway under settrace: 2x the asserted 8*len bound and ~1.3x hb's pristine 12.1/byte; ~2.5x less cap-burn than 40*len+20000
     def local(frame, event, arg):
         if event == "line":
             ev[0] += 1
@@ -1162,6 +1187,10 @@ def cpu(tracked, text, reps=10, give_up=None):
         t0 = time.process_time()
         for _ in range(reps):
             m.scan_text(idx, text)
+            if give_up is not None and time.process_time() - t0 > give_up * reps:
+                # every remaining scan counted as free still leaves the average over give_up, so the
+                # abort returns the elapsed-per-rep lower bound: strictly over the bound, never a pass
+                return (time.process_time() - t0) / reps
         d = (time.process_time() - t0) / reps
         best = d if best is None else min(best, d)
         if give_up is not None and best > give_up:   # already far past any bound: do not spend two more runs on it
@@ -1210,20 +1239,36 @@ if g250 is None or o250 > 2 * o2l or e250 > 2 * e2l:
 if bad:
     print("; ".join(bad)); sys.exit(0)
 FLOOR = 0.001                                            # CPU time: best of 3, 3x slack, and a 1 ms floor under the baseline
-bs, _ = blob(1000)                                       # 400k paths: an O(paths) C call per scan (a join, a find) is ~4-20 ms -- past the bound on any host; at 100k it was ~1-3 ms and fit under 3*max(t2, PFLOOR) on a fast runner (#10404's merge-group survivor)
+bs, _ = blob(1000)
 PFLOOR = 0.0003
+# Legs run cheapest-condemner first with a checkpoint after each: a mutant the counters missed dies at the
+# first leg that can see it instead of paying every later one. The width axis is first because the
+# flat-alternation class (regex cost grows with the NAME count) is killed by a ~1 s leg here; later legs
+# let it spend far more on the same kill.
+tw40 = cpu(w40, wb)
+tw4k = cpu(w4k, wb, give_up=30 * max(tw40, FLOOR))
+if tw4k > 3 * max(tw40, FLOOR):
+    bad.append("cpu: 4000/40 names %.4f/%.4f s" % (tw4k, tw40))
+if bad:
+    print("; ".join(bad)); sys.exit(0)
+b48, _ = blob(49152); b768, _ = blob(786432)             # the TEXT axis in CPU time: per byte, 768 KB may cost at most 3x what 48 KB costs -- the same 16x window at ~1/16 the quadratic-mutant bill; the small leg stays ~3x above FLOOR so max() cannot mask a real breach
+c48 = cpu(T, b48, reps=6)
+c768 = cpu(T, b768, reps=1, give_up=3 * max(c48, FLOOR) * (len(b768) / len(b48)))
+if c768 / len(b768) > 3 * max(c48, FLOOR) / len(b48):
+    bad.append("cpu text axis: 48 KB %.4f s, 768 KB %.4f s (%.1fx per byte)" % (c48, c768, (c768 / len(b768)) / (c48 / len(b48))))
+if bad:
+    print("; ".join(bad)); sys.exit(0)
+tl2 = cpu(l2, hb)
+tl250 = cpu(l250, hb, give_up=30 * max(tl2, FLOOR))
+if tl250 > 3 * max(tl2, FLOOR):
+    bad.append("cpu: 250/2 name lengths %.4f/%.4f s" % (tl250, tl2))
+if bad:
+    print("; ".join(bad)); sys.exit(0)
 t2 = cpu(tree(2000), bs, reps=200)
-t400k = cpu(tree(400000), bs, reps=200, give_up=30 * max(t2, PFLOOR))
-tw40, tw4k = cpu(w40, wb), cpu(w4k, wb)
-tl2, tl250 = cpu(l2, hb), cpu(l250, hb)
-if t400k > 3 * max(t2, PFLOOR) or tw4k > 3 * max(tw40, FLOOR) or tl250 > 3 * max(tl2, FLOOR):
-    bad.append("cpu: 400k/2k paths %.4f/%.4f s, 4000/40 names %.4f/%.4f s, 250/2 name lengths %.4f/%.4f s" % (t400k, t2, tw4k, tw40, tl250, tl2))
-b64, _ = blob(65536); b1m, _ = blob(1048576)             # the TEXT axis in CPU time: per byte, 1 MB may cost at most 3x what 64 KB costs
-c64 = cpu(T, b64, reps=6)
-c1m = cpu(T, b1m, reps=1, give_up=3 * c64 * (len(b1m) / len(b64)))
-if c1m / len(b1m) > 3 * max(c64, FLOOR) / len(b64):
-    bad.append("cpu text axis: 64 KB %.4f s, 1 MB %.4f s (%.1fx per byte)" % (c64, c1m, (c1m / len(b1m)) / (c64 / len(b64))))
-print("RATIOS paths=%.2f width=%.2f lengths=%.2f text=%.2f" % (t400k / max(t2, PFLOOR), tw4k / max(tw40, FLOOR), tl250 / max(tl2, FLOOR), (c1m / len(b1m)) / (max(c64, FLOOR) / len(b64))), file=sys.stderr)
+t400k = cpu(tree(400000), bs, reps=200, give_up=30 * max(t2, PFLOOR))     # 400k paths: an O(paths) C call per scan (a join, a find) is ~4-20 ms -- past the bound on any host; at 100k it was ~1-3 ms and fit under 3*max(t2, PFLOOR) on a fast runner (#10404's merge-group survivor)
+if t400k > 3 * max(t2, PFLOOR):
+    bad.append("cpu: 400k/2k paths %.4f/%.4f s" % (t400k, t2))
+print("RATIOS paths=%.2f width=%.2f lengths=%.2f text=%.2f" % (t400k / max(t2, PFLOOR), tw4k / max(tw40, FLOOR), tl250 / max(tl2, FLOOR), (c768 / len(b768)) / (max(c48, FLOOR) / len(b48))), file=sys.stderr)
 print("; ".join(bad) or "ok")
 PY
 )" || { echo "$out" >&2; return 1; }
@@ -1521,6 +1566,7 @@ row_cr && pass "a lone carriage return is an ordinary character (bash does not s
 row_crl && pass "a CRLF --list file: the last edge of each row still hits (the trailing CR is dropped from the row)" || fail "CRLF rows file (rc=$RC): $AOUT"
 printf 'AFFECTED_SELECTED\tdsym\t0\tedge:declared\t^dsym/\n' > "$SANDBOX/s-dsym.rows"
 row_sym() (
+  REPLAY_SUT_TIMEOUT=10   # the read-opens-blocking mutant's FIFO hang is killed at 10 s here (the pristine dsym audit is ~1 s); every other run_sut caller keeps the default
   ulimit -v 1500000 2>/dev/null || true   # a reader that follows /dev/zero dies of MemoryError here instead of taking the machine
   saudit "$SANDBOX/s-dsym.rows"
   [[ "$RC" -eq 1 ]] && grep -qxF -- $'unaudited\tdsym\tunreadable:dsym/big.test.ts,dsym/fifo.test.ts,dsym/loop.test.ts,dsym/out.test.ts,dsym/sib.test.ts,dsym/zero.test.ts' <<<"$AOUT" && grep -qxF -- $'gap\tdsym\t1\tdata/sy.txt' <<<"$AOUT" && ! grep -q 'data/out.txt\|data/sib.txt' <<<"$AOUT" || { printf 'rc=%s %s\n' "$RC" "$AOUT" >&2; return 1; }
@@ -4421,7 +4467,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1132   # 1127 (#12377 base) + 5 folded-job additions (4 unconditional rows + 1 gated site); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1135   # measured post-#12412-merge: 650 unconditional + 485 gated sites (bounded --rows 1-10 run measured 660 = 650+10); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
