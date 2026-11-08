@@ -84,7 +84,6 @@ fails) or `runtime` (after the bind). A `phase:runtime` event means the listener
 REQUIRED, so the container restarts): look at the host's restart count and its `origin-tls: listening` rows. The query `feature:origin_tls phase:runtime` and `field=phase` were accepted by the API (HTTP 200) on 2026-11-08, but
 **no event carrying `phase` exists yet, so the tag path is not verified against a real event** (a `has:phase` control returned 0).
 
-
 Owner acts (no probe exists): the `web_lb_health` "Unhealthy" notification mail (inbox), pool health (the sanctioned Cloudflare reader has no pool-health subcommand; the
 `ga-monitor-https` run summary is the existing instrument), and the signed-in WebSocket connect.
 
