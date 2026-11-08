@@ -30,7 +30,7 @@ batch that mixes a code PR in, a malformed diff — yields the full battery.
 | State | Condition | Behaviour |
 |---|---|---|
 | **dark** | `CI_ORACLE_LANE` unset or empty | the `oracle-selection` job is SKIPPED — no runner, no checkout, zero cost; every leg runs; `oracle-index-check` prints `not-oracle-only` and exits 0 inside a minute |
-| **locked-telemetry** | `CI_ORACLE_LANE=on` AND `ORACLE_LANE_LOCKED=1` in env (the driver's `O-LOCK-READ` re-lock — the committed `readonly` literal was removed by #12300; no `ci.yml` env wires it today, so reaching it is an excluded-path edit) | the job runs and classifies; `active` is NEVER `true`; each oracle-classified run emits a `SOLEUR_ORACLE_LANE … would_skip=<leg list>` notice instead of skipping — five legs normally, four when the diff touched `knowledge-base/engineering/architecture/diagrams/*` (`test-webplat` is retained: diagrams feed its surface) — this stream is the blocking pre-activation audit evidence |
+| **locked-telemetry** | `CI_ORACLE_LANE=on` AND `ORACLE_LANE_LOCKED=1` in env (the driver's `O-LOCK-READ` re-lock — the committed `readonly` literal was removed by #12300; no `ci.yml` env wires it today, so reaching it is an excluded-path edit) | the job runs and classifies; `active` is NEVER `true`; each oracle-classified run emits a `SOLEUR_ORACLE_LANE … would_skip=<leg list>` notice instead of skipping — five legs normally, four when the diff touched `knowledge-base/engineering/architecture/diagrams/*` (`test-webplat` is retained: diagrams feed its surface) — this stream was the blocking pre-activation audit evidence (satisfied on #10865); post-unlock it is the re-lock/rollback telemetry stream |
 | **active** | `CI_ORACLE_LANE=on` AND the lock literal removed by a separate authorized PR (#12300, merged 2026-11-08) | the five legs in `skip_legs` skip on `pull_request`/`merge_group`, tolerated by the `test` aggregator's `ORACLE-ONLY-SKIP` arm; `shard-totality-mutations` skips; `oracle-index-check` runs the manifest |
 
 A non-empty value that is not exactly `on` (`off`, `ON`, `on ` with whitespace) is NONE of these: the job runs <!-- markdownlint-disable-line MD038 -->
@@ -50,7 +50,7 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
 | `files` | changed-path count in the diff listing — set before the per-path loop, so a mid-loop `malformed_diff` abort still reports the total count (0 on pre-listing exits) |
 | `reason` | the verdict token — enum below |
 | `oracle_only` | `true` iff every changed path is in the surface |
-| `would_skip` | `none`, or the leg list while locked — five legs, or four when a diagrams path was in the diff (the audit datum) |
+| `would_skip` | `none`, or the leg list on any oracle-classified run — emitted while locked AND when `active=true` — five legs, or four when a diagrams path was in the diff (the audit datum) |
 | `active` | `true` only when oracle_only AND `on` AND unlocked — never while locked |
 
 `reason=` enum (`oracle` is the only lane verdict; everything else is a fail-closed full battery):
@@ -78,11 +78,12 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
   base that lacks the file fails closed with the defaults. Seen on pre-#12156 trees and on this lane's own
   introduction PR.
 - `signalled` / `lever_error` — the EXIT-trap exits (HUP/INT/TERM, or an internal abort); both exit 0 with the
-  fail-closed defaults. No notice at all on a job that did not conclude `skipped` means the classifier died  — and a job that died AT the job level (checkout failure, runner loss, the 3-minute cap) shows as a red
-  `oracle-selection` check beside a green `test` (measured canary shape: job-level `continue-on-error` still
-  concludes `failure` in the jobs API). Empty outputs = full battery, so the red is advisory; the remediation is
-  re-running the workflow, not reverting.
-  before emitting (SIGKILL, runner loss) — that absence is itself the failure signal.
+  fail-closed defaults. No notice at all on a job that did not conclude `skipped` means the classifier died
+  before emitting (SIGKILL, runner loss) — that absence is itself the failure signal — and a job that died AT
+  the job level (checkout failure, runner loss, the 3-minute cap) shows as a red `oracle-selection` check
+  beside a green `test` (measured canary shape: job-level `continue-on-error` still concludes `failure` in the
+  jobs API). Empty outputs = full battery, so the red is advisory; the remediation is re-running the workflow,
+  not reverting.
 
 ## When `oracle-index-check` fails
 
@@ -109,6 +110,13 @@ Activation is operator row O2 — a separate, explicitly authorized step, never 
 mechanism and never implied by this runbook existing. The dark-phase `would_skip` audit is BLOCKING evidence
 (ruling T1), not advisory.
 
+**Status 2026-11-08:** steps 1–3 were executed — telemetry armed, audit satisfied on #10865, activation PR
+#12300 merged. The first live canary (run 42458135078) was CANCELLED: `oracle-index-check` ran its serial
+manifest 29m53s and hit `timeout-minutes: 30` (5 of 15 suites completed, zero failures — the suites are too
+slow for the bound, not broken). `CI_ORACLE_LANE` was deleted per the rollback rule, so the lane is dark
+today. Re-activation is gated on #12393 (manifest must fit the bound); then re-arm per step 1 and re-run the
+canary per step 3.
+
 1. **Arm the telemetry** (authorized): `gh variable set CI_ORACLE_LANE --body on --repo jikig-ai/soleur` —
    the value goes via `--body`; an `=` in the positional is read as part of the variable name and 422s. Verify:
    `gh api repos/jikig-ai/soleur/actions/variables/CI_ORACLE_LANE` returns the variable with `"value": "on"`
@@ -132,12 +140,14 @@ mechanism and never implied by this runbook existing. The dark-phase `would_skip
    `AFFECTED_*_PATHS` hunk, or a doc path. The expected `would_skip` list is the FIVE legs, or the FOUR-leg
    variant (`test-webplat` retained) when the diff touched `knowledge-base/engineering/architecture/diagrams/*`
    — the diagrams carve-out, which keeps the web-platform leg because diagrams feed its surface.
-3. **Authorized activation PR**: remove the `readonly ORACLE_LANE_LOCKED=1` line from
-   `scripts/ci-oracle-lane.sh` (the comment marks it `ACTIVATION LOCK`), run
-   `bash scripts/ci-oracle-lane.test.sh`, and attach the audit evidence from step 2 to #10865. First live run
-   canary: watch the first `pull_request` run that goes `active=true` — the `test` aggregator should print
-   `ORACLE-ONLY-SKIP` lines naming exactly the legs the notice put in `would_skip`, and `oracle-index-check`
-   must be `success`. If either fails, roll back immediately.
+3. **Authorized activation PR** (executed by #12300, merged 2026-11-08): remove the
+   `readonly ORACLE_LANE_LOCKED=1` line from `scripts/ci-oracle-lane.sh` (the comment marks it
+   `ACTIVATION LOCK`), run `bash scripts/ci-oracle-lane.test.sh`, and attach the audit evidence from step 2
+   to #10865. First live run canary: watch the first `pull_request` run that goes `active=true` — the `test`
+   aggregator should print `ORACLE-ONLY-SKIP` lines naming exactly the legs the notice put in `would_skip`,
+   and `oracle-index-check` must be `success`. If either fails, roll back immediately. (The 2026-11-08
+   canary failed the second condition — `oracle-index-check` cancelled at `timeout-minutes: 30`; rolled
+   back per §Rollback.)
 4. The activation PR appends its own dated line under `### Stage status` in ADR-276 (append-only convention).
 
 ## Rollback
@@ -147,6 +157,8 @@ gh variable delete CI_ORACLE_LANE --repo jikig-ai/soleur
 ```
 
 New runs skip the `oracle-selection` job at zero runner cost and every leg runs — fail closed by construction.
+A softer revert path is the `ORACLE_LANE_LOCKED=1` env re-lock (`O-LOCK-READ`): it restores locked-telemetry
+without deleting the variable, but no `ci.yml` env wires it today so it requires an excluded-path edit.
 A run whose `oracle-selection` already completed keeps its cached outputs; "Re-run all jobs" re-executes the
 driver at `run_attempt` 2, which the attempt guard turns into a full run. Structural rollback is a revert of the
 PR, which also removes the job, the leg `if:` conjuncts, the tolerance arm, the six-leg proof term, the manifest
