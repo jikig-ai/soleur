@@ -856,16 +856,18 @@ if [[ "$rc" -eq 1 && "$out" == *"$BLK"* && "$out" == *"REQUIRED-SET READ — not
   ok "W11 default dwell with a 1-poll budget: the BLOCKED ending with one 'not due' note, rc 1, no TIMEOUT, no read (pins the default dwell as non-zero)"
 else no "W11 budget shorter than the hold" "rc=$rc out=[$out]"; fi
 
-# W12 (a) an unknown queue read in the middle of a hold keeps the accrued dwell; (b) the production default resolver path.
-mkgate 'OPEN|BLOCKED|true' 'not_queued,fail,not_queued'
+# W12 (a) an unknown queue read in the middle of a hold is NOT a positive answer: the watch ends with today's BLOCKED ending and no read
+# (the hold continues only across polls that each prove the gates); (b) the production default resolver path.
 # PR_QUEUE_ATTEMPTS=1: the queue read retries a failed call once by default, and the retry would consume the next sequence item and
-# answer "not queued", so poll 2 would never be unknown (measured: this row survived its own mutation until the retry was pinned off).
-# The gql call count is the positive control that poll 2 really made a failing read: one call per poll, three polls.
+# answer "not queued", so poll 2 would never be unknown. The gql call count is the positive control that poll 2 really made a failing read.
+mkgate 'OPEN|BLOCKED|true' 'not_queued,fail,not_queued'
+_s0=$SECONDS
 out="$(PR_QUEUE_ATTEMPTS=1 MONITOR_REQUIRED_DWELL_S=20 run 7778 --interval 10 --max-polls 5)"; rc=$?
-if [[ "$rc" -eq 1 && "$(cnt 'HOLDING' <(printf '%s\n' "$out"))" -eq 1 && "$(cnt '^required 7778$' "$STUB/req-calls")" -eq 1 \
-      && "$(cnt '^api graphql' "$STUB/gql-calls")" -eq 3 && "$out" == *"$M_ABS" ]]; then
-  ok "W12a an unknown queue read mid-hold is a blip: the dwell carries, one HOLDING line, one required call at the end"
-else no "W12a unknown mid-hold" "rc=$rc calls=[$(cat "$STUB/req-calls" 2>/dev/null)] out=[$out]"; fi
+_el=$(( SECONDS - _s0 ))
+if [[ "$rc" -eq 1 && "$(cnt 'HOLDING' <(printf '%s\n' "$out"))" -eq 1 && "$(cnt "$BLK" <(printf '%s\n' "$out"))" -eq 1 && "$(cnt '^required' "$STUB/req-calls")" -eq 0 \
+      && "$(cnt '^api graphql' "$STUB/gql-calls")" -eq 2 && "$_el" -ge 10 && "$_el" -lt 20 && "$out" != *"REQUIRED-SET READ"* ]]; then
+  ok "W12a an unknown queue read mid-hold ends the watch with today's BLOCKED ending: one HOLDING line, no required call, no read note"
+else no "W12a unknown mid-hold" "rc=$rc elapsed=${_el}s calls=[$(cat "$STUB/req-calls" 2>/dev/null)] out=[$out]"; fi
 _sd="$STUB/prod"; mkdir -p "$_sd"
 for _f in "$(dirname "$SUT")"/*; do [[ -f "$_f" && "$(basename "$_f")" != ci-head-verdict.sh ]] && ln -s "$_f" "$_sd/$(basename "$_f")"; done
 ln -s "$(dirname "$SUT")/lib" "$_sd/lib"
@@ -885,6 +887,15 @@ done
 mkgate
 out="$(MONITOR_REQUIRED_DWELL_S=0 MONITOR_REQUIRED_TIMEOUT_S=1 run 7778 --interval 10 --max-polls 3)"; rc=$?
 [[ "$rc" -eq 1 && "$out" == *"$M_ABS" ]] && ok "W13 control: dwell 0 and timeout 1 are accepted and the read happens" || no "W13 control" "rc=$rc out=[$out]"
+
+# W14 coupling to the real resolver: the monitor's marker prefix and its candidate-line shape are the RESOLVER's, and both suites run
+# against stubs, so a rename on either side would otherwise leave the monitor printing only degraded lines with everything green.
+_rsv="$(dirname "$SUT")/ci-head-verdict.sh"
+_mk="$(sed -n 's/^readonly REQUIRED_MARKER="\(.*\)"$/\1/p' "$_rsv")"
+if [[ -n "$_mk" && "$(cnt "'^${_mk} '" "$SUT")" -ge 1 && "$(cnt 'RECOVERY rerun run=%s basis=candidate ' "$_rsv")" -ge 1 \
+      && "$(cnt 'basis=candidate ' "$SUT")" -ge 1 ]]; then
+  ok "W14 the monitor's marker prefix (${_mk}) and basis=candidate line shape match the resolver's own emitters"
+else no "W14 resolver coupling" "marker=[${_mk}] monitor-prefix=$(cnt "'^${_mk} '" "$SUT") resolver-candidate=$(cnt 'RECOVERY rerun run=%s basis=candidate ' "$_rsv")"; fi
 unset CI_HEAD_VERDICT_BIN MONITOR_REQUIRED_DWELL_S
 
 # ── T7 a gh failure must not kill the loop ───────────────────────────────────────
@@ -912,9 +923,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 95 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 95.\n' "$_ran" >&2
+if [[ "$_ran" -lt 96 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 96.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 95)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 96)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1
