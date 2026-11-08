@@ -152,6 +152,8 @@ wrr_peer_dir() {
 # although result=ok rows existed hours back. Rows past the hot window are readable ONLY through the s3Cluster archive,
 # so the FROM is the runbook's UNION ALL of both (betterstack-log-query.md "Hot vs archive"). A row present in both arms
 # is harmless: same dt, same age_s, same verdict (the judge's newest-row/tie rules are pinned for duplicates by JP11j-m).
+# ORDER BY dt DESC puts the newest row first and LIMIT 50 (WRR_PEER_LIMIT) stays enough with overlap doubling it: the
+# judge reads only the newest age, so 50 rows still cover >= 25 distinct probes. Both lines are pinned by the test's guard.
 # The own-line read (wrr_sql) is one row a minute over 180 s and stays hot-only. `$BS_TABLE_S3` is substituted by the
 # query script, derived from the default hot table, so the three BETTERSTACK_QUERY_* variables are all it needs.
 wrr_peer_sql() {

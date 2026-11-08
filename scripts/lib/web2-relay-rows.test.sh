@@ -161,6 +161,7 @@ sqlg_own() { # sqlg_own <sql> -> 0 iff every own-line guard line is present exac
     && grep -qxF "  AND JSONExtractString(raw,'host_name') = 'soleur-web-2'" <<<"$c" \
     && grep -qxF "  AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'" <<<"$c" \
     && grep -qxF "  AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_probe proxy_state=')" <<<"$c" \
+    && grep -qxF 'FROM remote($BS_TABLE)' <<<"$c" \
     && ! grep -qE 'position[(]raw|extract[(]raw' <<<"$c"
 }
 sqlg_peer() { # sqlg_peer <sql> <dialing-host> <peer-ip>
@@ -170,6 +171,7 @@ sqlg_peer() { # sqlg_peer <sql> <dialing-host> <peer-ip>
     && grep -qxF "  AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'" <<<"$c" \
     && grep -qxF "  AND startsWith(JSONExtractString(raw,'message'), 'relay_peer_probe peer=$3 ')" <<<"$c" \
     && grep -qxF 'FROM (SELECT dt, raw FROM remote($BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)' <<<"$c" \
+    && grep -qxF 'ORDER BY dt DESC LIMIT 50' <<<"$c" \
     && ! grep -qE 'position[(]raw|extract[(]raw' <<<"$c"
 }
 # The peer row is written ONCE per web-1/web-2 deploy (sparse), so it is usually OLDER than the ~40-minute hot window:
@@ -217,6 +219,17 @@ smut "SM11 peer: widen the identifier to another unit" peer "s/= 'ci-deploy'/= '
 smut "SM12 peer: drop the peer-address anchor from the prefix" peer "s/peer=$PEERIP '/peer='/"
 smut "SM13 reverse: drop the SYSLOG_IDENTIFIER filter" rev "/SYSLOG_IDENTIFIER/d"
 smut "SM14 reverse: revert the prefix filter to position(raw, ...)" rev "s/^  AND startsWith.*\$/  AND position(raw, 'relay_peer_probe peer=$W1IP ') > 0/"
+# ORDER BY dt DESC is what puts the NEWEST probe row first; LIMIT 50 is the page. UNION ALL may return an overlap twice, so 50
+# rows cover >= 25 distinct probes, far more than the judge reads (it reads only the newest age). An ASC order would hide the
+# newest row behind the 50 oldest in the 24 h window; a tiny LIMIT could cut a tied newest row off.
+smut "SM24 peer: ORDER BY dt ASC (the 50 OLDEST rows, newest hidden)" peer "s/^ORDER BY dt DESC/ORDER BY dt ASC/"
+smut "SM25 peer: LIMIT 1 (a tied newest row can be cut off)" peer "s/LIMIT 50\$/LIMIT 1/"
+smut "SM26 reverse: ORDER BY dt ASC" rev "s/^ORDER BY dt DESC/ORDER BY dt ASC/"
+smut "SM27 reverse: LIMIT 1" rev "s/LIMIT 50\$/LIMIT 1/"
+# the own-line read is hot-only on purpose: pin its exact FROM so an archive-only or union form reds
+smut "SM28 own: read remote(\$BS_TABLE_S3) instead of the hot table" own "s/^FROM .*\$/FROM remote(\\\$BS_TABLE_S3)/"
+smut "SM29 own: archive-only FROM s3Cluster(primary, \$BS_TABLE_S3)" own "s/^FROM .*\$/FROM s3Cluster(primary, \\\$BS_TABLE_S3)/"
+smut "SM30 own: a hot+archive union FROM (own line is pinned hot-only)" own "s/^FROM .*\$/FROM (SELECT dt, raw FROM remote(\\\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \\\$BS_TABLE_S3) WHERE _row_type = 1)/"
 smut "SM15 peer: drop the archive arm (hot arm only, still wrapped in the subquery)" peer "s/ UNION ALL SELECT dt, raw FROM s3Cluster[(]primary, \\\$BS_TABLE_S3[)] WHERE _row_type = 1//"
 smut "SM16 peer: drop _row_type = 1 from the archive arm (every archive row type, incl. non-log rows)" peer "s/ WHERE _row_type = 1[)]/)/"
 smut "SM17 peer: hot-only revert of the whole FROM (remote(\$BS_TABLE) alone)" peer "s/^FROM .*\$/FROM remote(\\\$BS_TABLE)/"
@@ -308,12 +321,12 @@ QMODE=peer QPEER=$W1IP QHOST=soleur-web-9 q "QP12 an unknown dialing host is ref
 echo ""
 echo "=== web2-relay-rows.test.sh: ${pass} passed, ${fail} failed ==="
 _ran=$((pass + fail))
-if [ "$_ran" -lt 150 ]; then
-  printf 'GUARD FAIL: ran only %d assertion(s) (floor 150) — the suite did not execute fully\n' "$_ran" >&2
+if [ "$_ran" -lt 157 ]; then
+  printf 'GUARD FAIL: ran only %d assertion(s) (floor 157) — the suite did not execute fully\n' "$_ran" >&2
   exit 2
 fi
-if [ "$_ran" -gt 150 ]; then
-  printf 'GUARD FAIL: ran %d assertion(s), more than the declared 150 — raise BOTH halves of the floor to the new exact count\n' "$_ran" >&2
+if [ "$_ran" -gt 157 ]; then
+  printf 'GUARD FAIL: ran %d assertion(s), more than the declared 157 — raise BOTH halves of the floor to the new exact count\n' "$_ran" >&2
   exit 2
 fi
 [[ "$fail" -eq 0 ]]
