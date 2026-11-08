@@ -398,6 +398,8 @@ scripts/ci-draft-push-census	3
 scripts/ci-leg-balance-9232	8
 scripts/ci-oracle-lane	4
 scripts/ci-oracle-review	5
+scripts/ci-parked-hold	5
+scripts/legal-acceptance-counts	5
 scripts/ci-pr-selection	2
 scripts/ci-push-dedupe	1
 scripts/classify-workflow-transitions	5

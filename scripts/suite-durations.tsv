@@ -396,6 +396,8 @@ scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
 scripts/ci-oracle-review	1261	floor
+scripts/ci-parked-hold	7000	floor
+scripts/legal-acceptance-counts	5000	floor
 scripts/ci-pr-selection	1222	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
