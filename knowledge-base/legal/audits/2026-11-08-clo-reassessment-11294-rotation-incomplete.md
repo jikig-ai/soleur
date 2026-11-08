@@ -3,11 +3,11 @@ title: "CLO re-assessment — #11294 rotation state at the fired 2026-11-08 trig
 type: clo-attestation
 date: 2026-11-08
 issue: 11294
-related_issues: "11711, 10205, 11293, 11922, 12299"
+related_issues: "10205, 11293, 11711, 11922, 12299"
 attestation-authority: clo
 status: "DRAFT v1 — internal CLO attestation (Soleur-as-tenant-zero v1), NOT external counsel advice. SIGNED-OFF PROVISIONAL by the CLO agent on 2026-11-08; operator retains an optional veto."
 disposition: "RE-ASSESSMENT at the fired 2026-11-08 trigger: the 2026-10-29 determination STANDS — a security incident, not a presumed notifiable personal-data breach; the Art. 4(12) second limb remains not established and Art. 33/34 remain not engaged. Rotation is recorded complete for 7 of the 12 exposed values and the prd signing/event pair is retired as dead values; two printed values remain usable (the previous `egress_audit_ingest_token` value is still accepted and `github_webhook_secret` is unrotated) and `tunnel_secret` awaits the owner's decision. PROVISIONAL continues; no limb is certified clean."
-disposition_history: "2026-10-29 SIGNED-OFF PROVISIONAL on open evidentiary limbs E1–E4; 2026-11-01 CLO position in the evidence record — the cleanup residual does not change the determination, re-assessment trigger set for 2026-11-08; 2026-11-08 re-assessment at the fired trigger — determination stands, next trigger set."
+disposition_history: "2026-10-29 SIGNED-OFF PROVISIONAL on open evidentiary limbs E1–E4; 2026-11-01 CLO position in the evidence record — the cleanup residual does not change the determination, re-assessment trigger set for 2026-11-08; 2026-11-08 re-assessment at the fired trigger — determination stands, next trigger set; 2026-11-08 addendum — rotation completed during the assessment window (9 of 12 complete, no printed value usable; see Addendum)."
 signed_off_at: 2026-11-08
 signed_off_by: "CLO agent (attestation authority for the Soleur-as-tenant-zero v1 posture; operator retains an optional veto)"
 awareness_anchor: "2026-10-27T09:31:36Z — issue #11294 filed (unchanged from the 2026-10-29 determination)."
@@ -41,6 +41,15 @@ engaged. What has changed is the exposure surface, which is narrower but not clo
 values, while two printed values remain usable — the previous `egress_audit_ingest_token`
 value is still accepted because its clear leg has not completed, and `github_webhook_secret`
 is unrotated — and `tunnel_secret` awaits the owner's decision on its roll-forward window.
+
+> **Superseded 2026-11-08 (#11711):** the rotation tally in the sentence above — "7 of the
+> 12 exposed values are rotated complete" and "two printed values remain usable" was the
+> state at this record's 07:09Z read of #11711. Two completion receipts posted on #11711
+> during the assessment window moved it to 9 of 12 rotated complete with no printed value
+> usable: `egress_audit_ingest_token` COMPLETE 2026-11-08T07:24Z (run `42457579433`) and
+> `github_webhook_secret` COMPLETE 2026-11-08T07:34Z (run `42458754890`). See the
+> 2026-11-08 addendum.
+
 The PROVISIONAL posture therefore continues; the matter is not ready for closure.
 
 ## The trigger and what fired it
@@ -77,6 +86,25 @@ dates and run ids only — no value was read for this record and none appears in
 | eleven `random_password` resources | **Not exposed** by this mechanism (`id` prints `none`) | 2026-10-29 determination |
 | rehearsal `random_id` resources | **Ephemeral** — no rotation owed by this vector | `rotation-census-11711.md` |
 
+<!-- -->
+> **Superseded 2026-11-08 (#11711):** the `egress_audit_ingest_token` row's "six further
+> attempts on 11-07/11-08 each failed at a different leg or in flight" — the dispatch
+> ledger shows **four** further dispatches (`42409823622`, `42412554558`, `42413387208`,
+> `42457579433`), not six, and `42457579433`'s rotation was verified COMPLETE at
+> 2026-11-08T07:24Z: the run concluded `failure` on a readback that raced Doppler
+> propagation while the rotation itself succeeded.
+
+<!-- -->
+> **Superseded 2026-11-08 (#11711):** the `github_webhook_secret` row's "Not yet
+> dispatched. Blocked on the bounded grace-window prerequisite (#11922, open)" — the
+> rotation completed 2026-11-08T07:34Z (run `42458754890`), and #11922 is a deferral, not
+> a gate: the actual gate was #11923, closed 2026-11-06.
+
+<!-- -->
+> **Superseded 2026-11-08 (#11711):** the "eleven `random_password` resources" count — the
+> census carries 13 rows and the live tree 15 (two minted 2026-11-07 via #12307). Not
+> exposed either way.
+
 ## Evidence of use — checked, none found
 
 The fired trigger's second clause is the one that matters most: *evidence of use of a key
@@ -89,6 +117,10 @@ starts a fresh 72h clock at once.* For this re-assessment the following were rea
   issues created since that date for unauthorized-use terms. Nothing found. The open rotation
   trackers (#12299, the closed run_in_flight trackers #12241/#12249, the egress clear-leg fix
   #12353) record mechanical rotation failures, not use.
+
+> **Superseded 2026-11-08 (#11711):** #12299 is listed above among the open trackers — it
+> CLOSED 2026-11-08T07:24Z.
+
 - The measured use-signal already on file: the 2026-11-02 A6 record's 85 "event key not
   recognized" rows (Better Stack, 12:59Z–13:29Z), attributed to Jikigai's own web app still
   holding the old key during the dedicated-pair rotation; 0 rows after redeploy. A legitimate
@@ -109,6 +141,11 @@ alert rules that would make some of these limbs continuously instrumented are tr
 | E2 — use-of-key signals | NOT RUN | **Partly run** (dedicated pair, 2026-11-02 A6 record); the remaining signals not run; INCONCLUSIVE |
 | E3 — who viewed the logs | NO INSTRUMENT | Unchanged — **INCONCLUSIVE BY NATURE** |
 | E4 — copies outside the run logs | RUN FOR ISSUES; not yet contained | **Contained, not erased.** 498 PR bot comments deleted, 74 issue bodies and 234 issue comments redacted in place 2026-11-01; their edit history stays publicly readable. The artifact surface is unscanned |
+
+<!-- -->
+> **Superseded 2026-11-08 (#11711):** the E4 row's "their edit history stays publicly
+> readable" — only the **redacted** items (the 74 issue bodies and 234 issue comments)
+> retain a publicly readable edit history; the 498 deleted PR bot comments are gone.
 
 ## Notification posture — unchanged
 
@@ -131,6 +168,13 @@ alert rules that would make some of these limbs continuously instrumented are tr
   `egress_audit_ingest_token` clear leg has retired the previous value; `github_webhook_secret`
   is rotated and its post-rotation owner step done or explicitly deferred by decision; and the
   owner has decided the `tunnel_secret` window (rotate or accept the weak ground).
+
+> **Superseded 2026-11-08 (#11711):** the "complete" definition above — its first two
+> clauses are now satisfied (the `egress_audit_ingest_token` clear leg verified the
+> previous value absent 2026-11-08T07:24Z; `github_webhook_secret` rotated and its
+> post-rotation owner step done under the delegation ruling 2026-11-08T07:34Z). Only the
+> `tunnel_secret` owner decision remains.
+
 - **Immediate re-opener (unchanged):** evidence of use of an exposed key by a party outside
   its holders starts a fresh 72h clock **at once**, on any date.
 - **Closing condition:** when every exposed value is retired, rotated-and-cleared, or ruled
@@ -144,6 +188,17 @@ This record is **append-only** after merge. A limb result, a changed disposition
 decision or a correction is added as a dated addendum below, citing the text it annotates; a
 superseded sentence gets a `> **Superseded <date> (#N): …**` marker beneath it. Code and
 records are cited by function, constant, section or anchor name, never by line number.
+
+## Addendum — 2026-11-08 (rotation completed during the assessment window)
+
+Two completion receipts posted on #11711 during this record's own assessment window — after its #11711 read closed at 07:09Z and before this record committed (~08:00Z) — supersede the rotation-state claims below. The determination and notification posture are unchanged; this addendum corrects state only.
+
+- **2026-11-08T07:24Z (#11711; run `42457579433`):** `egress_audit_ingest_token` rotation COMPLETE — new token live in CURRENT and containers, PREVIOUS verified absent by direct Doppler read. The run's own readback raced Doppler propagation and reported a false failure (the run concluded `failure` at 07:22Z; the rotation itself succeeded). Three real defects fixed en route: #12257, #12304, #12353.
+- **2026-11-08T07:34Z (#11711; run `42458754890`):** `github_webhook_secret` rotation COMPLETE — apply+redeploy green (`verdict=owner_step_pending` by design), App webhook secret patched agent-side under the operator's App-key delegation ruling, 26 gap-window deliveries redelivered, post-patch deliveries 200; #12389 closed. The receipt records: "All exposed keys in scope are now rotated — remaining: `random_id.tunnel_secret` (web-2 rebuild) and the dedicated inngest-host pair (own ruling)."
+
+Corrected tally at commit: **9 of the 12 exposed values rotated complete, 2 retired as dead values (the prd signing/event pair, #11293), 1 — `tunnel_secret` — awaiting the owner's roll-forward decision; no printed value remains usable.**
+
+**2026-11-15 re-assessment:** STANDS, narrowed — rotation is still not recorded complete in #11294 because the `tunnel_secret` decision is outstanding. If the owner rules before 2026-11-15, the closing condition governs and the CLO records the closing record on the decision date; the 11-15 re-assessment then does not run.
 
 ## Related
 
