@@ -13,10 +13,10 @@
 - technical-ruling-gate.sh flagged class names in decision-challenges.md; rewritten to the closed category list.
 
 ### Decisions
-- Text `founder-acceptance-record.md`: no in-file DRAFT marker; the unresolved retention placeholder is the in-file marker. Snapshot sha256 acd38414ce35e9aff7ccb1a0fee3719f9f65628cbfe4097d1a30dcffe465c9db (3556 bytes), not pinned until sign-off.
-- New structural test file plus a CI-only guard that fails while a bracketed placeholder remains; SQL 1000-literal leg in cross-layer-limits.test.ts.
-- HOLD: counsel sign-off and merge are Operator-reserved; draft PR #12342 is never marked ready, merged or enqueued.
-- Merge preconditions: #12344 (card copy "these terms") and the global `approval-queue` flag.
+- Text `founder-acceptance-record.md`: no in-file DRAFT marker; the unresolved retention placeholder is the in-file marker. Snapshot sha256 acd38414ce35e9aff7ccb1a0fee3719f9f65628cbfe4097d1a30dcffe465c9db (3556 bytes), not pinned until sign-off. **[SUPERSEDED 2026-11-08: the placeholder is replaced and the text is pinned; the current sha256 is in the Review round 1 section below.]**
+- New structural test file plus a CI-only guard that fails while a bracketed placeholder remains; SQL 1000-literal leg in cross-layer-limits.test.ts. **[SUPERSEDED 2026-11-08: the CI-only guard was deleted; the unfinished-marker check is always on.]**
+- HOLD: counsel sign-off and merge are Operator-reserved; draft PR #12342 is never marked ready, merged or enqueued. **[SUPERSEDED 2026-11-08: counsel sign-off is met by the CLO-agent stand-in (v1, human review owed); merge, enqueue and the flag stay Operator-reserved; the end state is DRAFT with the `parked` label per CTO T1.]**
+- Merge preconditions: #12344 (card copy "these terms") and the global `approval-queue` flag. **[SUPERSEDED 2026-11-08: #12344 is fixed in this PR; the founder gate limits the surface to the founder.]**
 
 ### Components Invoked
 soleur:plan, soleur:deepen-plan, soleur:gdpr-gate; agents cto x2, clo x2, cpo, user-impact-reviewer, spec-flow-analyzer, code-simplicity-reviewer, test-design-reviewer.
@@ -31,7 +31,7 @@ soleur:plan, soleur:deepen-plan, soleur:gdpr-gate; agents cto x2, clo x2, cpo, u
 
 ## Pipeline state (HOLD)
 
-Draft PR #12342 open, HOLD for counsel. Not marked ready, not merged, not enqueued. Stopped before ship's merge phase by design.
+**[SUPERSEDED 2026-11-08 by the Review round 1 section at the end of this file.]** Draft PR #12342 open, HOLD for counsel. Not marked ready, not merged, not enqueued. Stopped before ship's merge phase by design.
 
 ## Sign-off planning phase (2026-11-07)
 - Plan file: knowledge-base/project/plans/2026-11-07-feat-founder-acceptance-record-text-draft-signoff-plan.md (supersedes the draft-phase plan's holds)
@@ -47,3 +47,11 @@ Draft PR #12342 open, HOLD for counsel. Not marked ready, not merged, not enqueu
 - Filed: #12365 (published trio), #12366 (terms wording, code lifetime wording, base-SHA pin guard); commented on #12080.
 - Verified locally: the three node-only files, routes, surface, ops contract, card, card-ack and page suites one file at a time (single worker), the hook suite (59 rows) and the drain-prs suite (54 assertions); 18 mutation rows on the app suites and 4 on the hook all RED.
 - Unverified locally: full tsc, the repo-wide ratchet suites, the full CI battery, the Sentry `accepted` count.
+
+## Review round 1 (2026-11-08)
+- Status: 13-seat review of a22578f5ad done (no P1 in the text; one P1 on the merge barrier, ruled by the CTO), CTO rulings T1-T5 and CLO rulings L1-L8 applied (rows in decision-challenges.md; table in the sign-off plan).
+- Commits: 771b43e130 (hook, triage, hold-gate-eval), bacb389d16 (text, notices, surface, tests), f29e061bb1 (records).
+- Text sha256: 10d283e02d4543d291468750655bbaf4375f807a585cd5138724a362b993a287 (6496 bytes), pinned in `registry-pins.test.ts`; version `2026-11-07` unchanged (never on main).
+- Verified locally, one file at a time: hook suite 102 rows (25 mutants killed), drain-prs 58, hold-gate-eval 2028 assertions (wa-kind mutants killed), 31 app mutation rows killed.
+- Unverified locally: the repo-wide ratchet suites, the full CI battery, full tsc, the Sentry `accepted` count.
+- Next: phase 7 of tasks.md (merge origin/main, push, CI dispatch with a watch, the `parked` label added and verified BEFORE any ready flip, end state DRAFT per CTO T1), then compound and ship. Merge, enqueue and the flag stay Operator-reserved.

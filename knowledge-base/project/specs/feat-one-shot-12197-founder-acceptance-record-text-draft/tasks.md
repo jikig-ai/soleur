@@ -20,7 +20,7 @@ Supersedes the draft-phase task list (all done). The CLO agent's ruling stands i
 ## Phase 4: tests
 - 4.1 Delete the merge guard describe, its real-data control, the retention-clause test, the CI-visible test, the registry tripwire.
 - 4.2 `legal-copy.test.ts`: both variants walked, ban regex, identity, null cases, signOff pins, notices byte for byte without placeholder.
-- 4.3 `card.test.tsx`, `page.test.tsx`: `declared` mock for `customer-terms`/`other-terms`; new `card-ack.test.tsx`, `card-kind.test.tsx`.
+- 4.3 `card.test.tsx`, `page.test.tsx`: `declared` mock for `customer-terms`/`other-terms`; new `card-ack.test.tsx` (the kind tests were folded into `card.test.tsx` and `card-ack.test.tsx`; there is no `card-kind.test.tsx`).
 - 4.4 Run mutation rows (node-side once each; jsdom one file at a time, single worker) and cite.
 
 ## Phase 5: records
@@ -46,3 +46,12 @@ Supersedes the draft-phase task list (all done). The CLO agent's ruling stands i
 - 6.3 Hold mechanism (commit group 4): `ship-operator-step-gate.sh` merge branch + tests, `triage-prs.sh` `parked` tier + test; old-plan superseded banners; verify `hold-gate-eval.sh` rc 0 on the old plan and rc 3 on the new plan.
 - 6.5 `soleur:review` on the delta before the final push.
 - 7.0 Add and verify the `parked` label BEFORE `gh pr ready`; pre-ready head and `origin/main` assertions.
+
+## Review round 1 (2026-11-08)
+
+- R1 Hook: `parked_barrier` hardened per CTO T2 (102 rows, 25 mutants killed); header states the real strength.
+- R2 `hold-gate-eval.sh` refuses `WA_NON_TERMS_KEYS`; cross-check in `registry-pins.test.ts`; `operator-holds.md` line; ADR-319 reworded.
+- R3 `surface.ts`: founder first, once-per-process config report; decide route pinned (T4).
+- R4 Text: CLO L1, L2, L5; notice and DSAR (c): L4; records and markers: L6; no edit of the published trio (L7); residual risk 13 (L8).
+- R5 Tests: T5 items (kind pin, every-text loops with scanned-count controls, one probe per alternative, shared TERMS_PRESUMING, dated rows, data-kind/data-key, ops-table row).
+- R6 Phase 7 stays: merge origin/main, push, dispatch, `parked` label before any ready flip, end state DRAFT (CTO T1).

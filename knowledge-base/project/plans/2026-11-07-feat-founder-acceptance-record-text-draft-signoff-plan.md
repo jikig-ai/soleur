@@ -238,7 +238,7 @@ Delete from `LEGAL_COPY` the 16 moved members (so `tsc` finds every unmigrated c
 Label (follow-up ruling): `legalDisplayLabel` for `acknowledgement` returns the first non-empty body line, trimmed, if 1 to 120 characters, else `legalTextLabel(key)`; for `terms` it returns `legalTextLabel(key)` (pinned wording unchanged). Derived server-side (both pages already hold the entry body) and passed as a required `label` prop on `LegalAcceptanceCard`; the card stops calling `legalTextLabel`. The "replaced" cards (empty body) get the current entry's label, computed once. Anchor test: the real text gives `How your decisions are recorded and kept`; mutation row: change the text's first line, anchor and pin go red.
 
 Consumers:
-- `apps/web-platform/app/(dashboard)/dashboard/approvals/legal/[key]/page.tsx`: if `legalKindCopy(key)` is null, `reportLegalOp("pageReadFailed", null, {extra:{read:"legal_kind_undeclared"}})` then `notFound()`; compute the label and pass it.
+- `apps/web-platform/app/(dashboard)/dashboard/approvals/legal/[key]/page.tsx`: if `legalKindCopy(key)` is null, `reportLegalOp("pageReadFailed", null, {extra:{read:"legal_kind_undeclared"}})` then `notFound()`; compute the label and pass it. **[Superseded 2026-11-08: the implemented op is `kindUndeclared` (`kind_undeclared`, warn level, unpaged, `tags.key`), as the Observability block states; it fires on every render, after the surface gate.]**
 - `.../legal/page.tsx` (index): filter out undeclared keys before building items, mirror to Sentry; use `legalIndexState(i.key, i.state)` and `legalDisplayLabel`.
 - `components/approvals/legal-acceptance-card.tsx`: `const kc = legalKindCopy(keyName)`; return `null` after the hooks if null (no on-card string). Replace the uses of the 16 moved strings and the `[yesRow, noRow, changesRow]` row builder.
 - `components/approvals/legal-reauth-dialog.tsx`: new required prop `answerDetail: string` resolved by the card; the dialog does no kind lookup.
@@ -320,7 +320,7 @@ Corrections: the CTO withdrew its earlier suggestions of a plural `Refs #12197` 
 2. `plugins/soleur/skills/drain-prs/scripts/triage-prs.sh` classifies a `parked` PR into a new tier `parked`, never merged, evaluated before the `needs-review` and green tiers; test row with a green ready PR carrying `parked`.
 3. Order: `gh pr edit 12342 --add-label parked`, verify with `gh pr view 12342 --json labels`, THEN `gh pr ready 12342`. Auto-merge stays off; never run `gh pr merge` on this PR. AGENTS rule `wg-after-marking-a-pr-ready-run-gh-pr-merge` is expressly overridden for this PR by the operator's hold: say so in the PR body and in the resume prompt.
 4. PR body banner: "Parked: merge and enqueue are reserved for the operator (label `parked`)." Clearing: the operator removes the label (UI or their own terminal); then the CTO rewrites the hold line.
-5. Limit, stated plainly: this stops accidental merges by agent sessions and by drain-prs. It does not stop a human or an admin UI merge.
+5. Limit, stated plainly: this stops accidental merges by agent sessions and by drain-prs. It does not stop a human or an admin UI merge. **[Superseded 2026-11-08 by CTO rulings T1 and T2: the barrier is a best-effort guardrail on a branch that carries it, not an access control; it is absent from origin/main (0 occurrences), so a session on a main-based checkout and the drain-prs run from the plugin root do not have it; the DRAFT status of the PR is the real hold; the bypasses (script files, `$GH`, `xargs`, `schedule` in Actions, the other merge sites) are listed in one follow-up issue. Do not claim it "stops drain-prs" without that scope.]**
 6. Old plan: replace its whole `## Operator Holds` section (the three `- Hold:` lines and the "Operator-reserved by category" paragraph) with exactly: heading `## Superseded hold record` and the body "Superseded 2026-11-07. The live holds for PR #12342 are in knowledge-base/project/plans/2026-11-07-feat-founder-acceptance-record-text-draft-signoff-plan.md. Nothing in this plan is evaluated as a hold."; replace its whole `## HOLD procedure` section with heading `## Superseded procedure` and the body "Superseded 2026-11-07 by the sign-off plan (see above); the draft-hold steps no longer apply." Verify: `bash plugins/soleur/skills/ship/scripts/hold-gate-eval.sh --plan <old plan>` shows no holds (rc 0); the same on this plan returns rc 3 (no `Delegation:` line; the prose path; holds listed standing). In a headless run the prose path files ONE `action-required` issue naming "approve the merge of PR #12342, which deploys the signed-off text; the card stays dark until the operator turns the flag on and the founder-only gate applies": that issue is expected, not an error; no delegation covers an `Operator-reserved:` line.
 
 **B. Flag scope.**
@@ -456,35 +456,61 @@ None. Queried open `code-review` issues for every file path above (deck, card, d
 
 **Anchor.** The wording is pinned word for word in `legal-copy.test.ts` against the CLO table; changing wording needs a CLO ruling (header comment) and the test edit in the same diff, so the anchor is review plus the persisted ruling file, not an automated external source.
 
+## Review round 1 rulings (2026-11-08)
+
+A thirteen-seat review of `a22578f5ad` found no P1 in the text and one P1 on the merge barrier. The CTO and the CLO ruled every finding that was a decision (`Ruled by CTO agent, 2026-11-08` / `Ruled by CLO agent, 2026-11-08`); the rows are in `decision-challenges.md` and the CLO's in the ruling file. Strength of the sign-off is unchanged: a v1 internal position standing in for counsel on the operator's instruction, human review owed.
+
+| Item | Ruling |
+|---|---|
+| T1 | The barrier exists only on this branch (origin/main: 0 occurrences), so DRAFT with the `parked` label is the end state; a ready flip only inside a CI window, back to draft once green (the dispatch route also gives the full battery without leaving draft); the PR body calls the label a guardrail, not an access control |
+| T2 | Harden the hook's text matcher inline (quoted payloads, `gh` boundary, case, unfused numbers, `/pull/N`, `--repo`, whole-token `--disable-auto`, unresolved targets held while any PR is parked, label delete/PUT/graphql, `timeout` and fail closed, no-cwd, incident row); the rest goes to ONE follow-up |
+| T3 | `hold-gate-eval.sh` refuses `web-acceptance` gates on `WA_NON_TERMS_KEYS`; cross-checked in `registry-pins.test.ts`; ADR-319 says what is enforced |
+| T4 | Founder compared first, once-per-process config report, decide route re-checks the gate per request, README says `service.ts` is deliberately ungated |
+| T5 | Kind pinned per key, comments say every render, `data-kind`/`data-key`, `counsel` token restored, texts README how-to, every-text loops, one probe per alternative, shared `TERMS_PRESUMING`, dated rows |
+| L1 | A5 points at "the 5 years stated under How long it is kept" |
+| L2 | The text discloses the monitoring copies and says they are outside the 5 years (90 days only as the Privacy Policy's statement; on-host copy unmeasured) |
+| L3 | Scope sentence unchanged |
+| L4 | Hold clause in `requestChangesNotice` and DSAR note (c) |
+| L5 | Ack marker: "finished trying to send ... (it does not show that monitoring received it)" |
+| L6 | The 30-day purge runs on every intent; markers across the records; register 17(b), (c), (f) closed in the cell as v1 positions |
+| L7 | Published trio unchanged, disclosed in the PR body; #12365 stays the precondition for any non-operator founder |
+| L8 | Residual risk 13 and a per-hash pre-flag query in the ruling file |
+
 ## Observability
 
-No new server-side surface, route or infrastructure. The only runtime observability added is the CTO-ruled Sentry mirror for an undeclared kind: `reportLegalOp("pageReadFailed", null, {extra:{read:"legal_kind_undeclared"}})` in the `[key]` page and the index (`hr-observability-as-plan-quality-gate`).
+No new route or infrastructure. Server-side code added in this PR: the founder gate (`server/legal-acceptance/surface.ts`) and the null-kind guard in `guardLegalRequest` (`hr-observability-as-plan-quality-gate`, `hr-observability-layer-citation`). The runtime signals, all through `reportLegalOp` (pino line mirrored to Sentry, feature `legal-acceptance`):
+
+- `kindUndeclared` (op `kind_undeclared`, warn, unpaged, `tags.key` = the registry key): a registered text with no declared card kind. Fires on every render of the card page or the index, after the surface gate. The routes (decide, reauth) answer the same oracle-free 404 without an event.
+- `storeFailed` with `tags.stage = config` (the existing op the check endpoint raises for a malformed value): fires once per process from `isLegalSurfaceEnabled` when the `approval-queue` flag is ON and `LEGAL_ACCEPTANCE_FOUNDER_ID` is unset or not a UUID (CTO ruling T4, 2026-11-08). Never carries the user id or the variable's value. This, not `kind_undeclared`, is the detector for a missing founder id: `kind_undeclared` fires only after the gate has passed.
 
 ```yaml
 liveness_signal:
-  what: the legal-acceptance copy and registry guards run in CI on every PR touching apps/web-platform
+  what: the legal-acceptance copy, registry and surface guards run in CI on every PR touching apps/web-platform
   cadence: per PR (test-webplat shards)
   alert_target: CI check status on the PR
   configured_in: .github/workflows/ci.yml
 error_reporting:
-  destination: Sentry via reportLegalOp (feature legal-acceptance), op kindUndeclared (kind_undeclared, level warn), tags.key = the registry key
-  fail_loud: the page calls notFound() after the Sentry mirror, so an undeclared key is a 404 plus an event, never a silent card
+  destination: Sentry via reportLegalOp (feature legal-acceptance); ops kind_undeclared (warn, tags.key) and store_failed (stage config)
+  fail_loud: the page calls notFound() after the Sentry mirror, so an undeclared key is a 404 plus an event, never a silent card; a closed surface with the flag on reports the config fault once per process
 failure_modes:
   - mode: a registered text has no declared card kind
-    detection: registry-pins.test.ts red in CI; at runtime the Sentry event above
-    alert_route: CI red on the PR; Sentry issue for feature legal-acceptance
-  - mode: the founder gate or the null-kind guard hides the surface from a real user by mistake
-    detection: `surface.test.ts` rows (env unset, not a UUID, equal, flag off) in CI; Sentry `kind_undeclared` warn event only after the gate passes
+    detection: layer 2 (pino to Sentry breadcrumb mirror) and layer 5 (Sentry release context): the kind_undeclared event, tagged feature legal-acceptance and op; at build time registry-pins.test.ts red in CI
+    alert_route: Sentry issue for feature legal-acceptance (unpaged by design: founder-only volume); CI red on the PR
+  - mode: the flag is on but LEGAL_ACCEPTANCE_FOUNDER_ID is unset or malformed, so the founder gets a 404 and the surface looks dormant
+    detection: layer 2 and layer 5: the store_failed event with tags.stage config, once per process (surface.test.ts pins the once-per-process report, the no-user-id payload and the silent flag-off case)
+    alert_route: Sentry issue for feature legal-acceptance, op store_failed
+  - mode: the null-kind guard or the founder gate hides the surface from the founder by mistake
+    detection: surface.test.ts, routes.test.ts and page.test.tsx rows in CI (env unset, not a UUID, equal, flag off, live intent after the gate is off); a real fault is the two events above
     alert_route: CI red on the PR; Sentry issue for feature legal-acceptance
   - mode: text bytes changed with no pin or version change
-    detection: registry-pins.test.ts red
+    detection: registry-pins.test.ts red (loader hash and independent file hash)
     alert_route: CI red on the PR
 logs:
-  where: CI run logs; Sentry
-  retention: GitHub Actions default; Sentry plan default
+  where: CI run logs; Sentry (feature legal-acceptance)
+  retention: GitHub Actions default; Sentry plan default (90 days stated in the register, unmeasured for this organisation)
 discoverability_test:
-  command: bash plugins/soleur/scripts/ci-head-verdict.sh verdict 12342
-  expected_output: full-decided
+  command: grep -c kind_undeclared apps/web-platform/server/approval/ops.ts
+  expected_output: "1"
 ```
 
 ## Encryption Posture
