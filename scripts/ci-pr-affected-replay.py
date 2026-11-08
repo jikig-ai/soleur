@@ -205,6 +205,19 @@ ALWAYS_RUN_JOBS = frozenset((
     "critical-css-gate", "affected-index-ratchet", "oracle-selection", "oracle-index-check",
     "oracle-review-required",
 ))
+# Job names the #12089 umbrella fold removed from ci.yml: the aggregate steps' `member <name>` tokens
+# (guards-ruleset + guards-advisory) plus the posted `cla-check`/`cla-evidence` check names (both surface
+# on a refused merge_group run's job listing — the census in receipts/census-w2.txt measured it). A
+# failing folded name is as rule-irrelevant as an always-run one — classified, never not-evaluable.
+# A parity test pins this set to `.github/workflows/ci.yml` member tokens and to the two cla-* whole
+# lines of `scripts/required-checks.txt`; it stays disjoint from ALWAYS_RUN_JOBS (a returned job name
+# must classify as live, not folded).
+FOLDED_JOBS = frozenset((
+    "adr-ordinals", "credential-path-guard", "grok-fidelity", "harness-discovery", "lockfile-sync",
+    "marketplace-manifest-guard", "plugin-root-propagation-gate", "rule-body-lint",
+    "sandbox-canary-capture-gate", "service-role-allowlist-gate", "tc-document-sha-guard",
+    "cla-check", "cla-evidence",
+))
 FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")
 FULL_EVENTS = ("merge_group", "push")
 COMMIT_FILES_CAP = 3000
@@ -477,6 +490,8 @@ def suites_failed_in(repo, fj, cache_dir):
         if not SUITE_JOB.match(name):
             if name.split(" (")[0] in ALWAYS_RUN_JOBS:
                 failing.append({"job": name, "suites": [], "note": "always-run-job"})
+            elif name.split(" (")[0] in FOLDED_JOBS:
+                failing.append({"job": name, "suites": [], "note": "folded-job"})
             else:
                 failing.append({"job": name, "suites": [], "note": "unclassified-job"})
                 ne = True

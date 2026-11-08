@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=476   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=477   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -443,8 +443,8 @@ SHA() { printf '%040d' "$1"; }
 mgr2() { printf '{"id":%s,"event":"merge_group","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-0%sT00:00:00Z","head_sha":"%s","head_branch":"%s"}' "$1" "$2" "$5" "$3" "$4" "$6"; }
 qb() { printf 'gh-readonly-queue/main/pr-%s-base' "$1"; }
 REPO_NAME="$R2"
-RUNS2="$(mgr2 8101 failure 1 "$(SHA 101)" 2 "$(qb 21)"),$(mgr2 8102 failure 1 "$(SHA 102)" 2 "$(qb 22)"),$(mgr2 8103 failure 1 "$(SHA 103)" 2 "$(qb 23)"),$(mgr2 8104 failure 1 "$(SHA 104)" 1 "$(qb 24)"),$(mgr2 8105 success 2 "$(SHA 105)" 1 "$(qb 24)"),$(mgr2 8106 failure 1 "$(SHA 106)" 1 "$(qb 25)"),$(mgr2 8107 success 2 "$(SHA 107)" 1 "$(qb 25)"),$(mgr2 8108 success 1 "$(SHA 108)" 1 "$(qb 26)"),$(mgr2 8109 failure 2 "$(SHA 109)" 1 "$(qb 26)"),$(mgr2 8110 failure 3 "$(SHA 110)" 1 gh-readonly-queue/main/weird),$(mgr2 8111 success 4 "$(SHA 111)" 1 gh-readonly-queue/main/weird2),$(mgr2 8112 failure 1 "$(SHA 112)" 1 "$(qb 27)"),$(mgr2 8113 failure 1 "$(SHA 113)" 1 "$(qb 28)"),$(mgr2 8114 failure 1 "$(SHA 114)" 1 "$(qb 29)"),$(mgr2 8115 failure 1 "$(SHA 115)" 1 "$(qb 31)"),$(mgr2 8116 failure 1 "$(SHA 116)" 1 "$(qb 32)"),$(mgr2 8117 failure 1 "$(SHA 117)" 1 "$(qb 33)"),$(mgr2 8118 failure 1 "$(SHA 118)" 1 "$(qb 34)"),$(mgr2 8119 failure 1 "$(SHA 119)" 1 "$(qb 35)"),$(mgr2 8120 failure 2 "$(SHA 120)" 1 "$(qb 35)"),$(mgr2 8121 failure 1 "$(SHA 121)" 1 "$(qb 36)"),$(mgr2 8122 success 2 "$(SHA 122)" 1 "$(qb 36)"),$(mgr2 8123 failure 1 "$(SHA 123)" 1 "$(qb 37)"),$(mgr2 8124 failure 1 "$(SHA 124)" 1 "$(qb 38)"),$(mgr2 8125 failure 1 "$(SHA 125)" 1 "$(qb 39)"),$(mgr2 8127 timed_out 1 "$(SHA 127)" 1 "$(qb 42)"),$(mgr2 8128 cancelled 1 "$(SHA 128)" 1 "$(qb 43)"),$(mgr2 8129 failure 1 "$(SHA 129)" 1 "$(qb 40)"),$(mgr2 8130 failure 1 "$(SHA 130)" 1 "$(qb 41)"),$(mgr2 8131 failure 1 "$(SHA 131)" 1 "$(qb 44)"),$(mgr2 8132 failure 1 "$(SHA 132)" 1 "$(qb 45)")"
-mg_runs "$RUNS2" 31 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+RUNS2="$(mgr2 8101 failure 1 "$(SHA 101)" 2 "$(qb 21)"),$(mgr2 8102 failure 1 "$(SHA 102)" 2 "$(qb 22)"),$(mgr2 8103 failure 1 "$(SHA 103)" 2 "$(qb 23)"),$(mgr2 8104 failure 1 "$(SHA 104)" 1 "$(qb 24)"),$(mgr2 8105 success 2 "$(SHA 105)" 1 "$(qb 24)"),$(mgr2 8106 failure 1 "$(SHA 106)" 1 "$(qb 25)"),$(mgr2 8107 success 2 "$(SHA 107)" 1 "$(qb 25)"),$(mgr2 8108 success 1 "$(SHA 108)" 1 "$(qb 26)"),$(mgr2 8109 failure 2 "$(SHA 109)" 1 "$(qb 26)"),$(mgr2 8110 failure 3 "$(SHA 110)" 1 gh-readonly-queue/main/weird),$(mgr2 8111 success 4 "$(SHA 111)" 1 gh-readonly-queue/main/weird2),$(mgr2 8112 failure 1 "$(SHA 112)" 1 "$(qb 27)"),$(mgr2 8113 failure 1 "$(SHA 113)" 1 "$(qb 28)"),$(mgr2 8114 failure 1 "$(SHA 114)" 1 "$(qb 29)"),$(mgr2 8115 failure 1 "$(SHA 115)" 1 "$(qb 31)"),$(mgr2 8116 failure 1 "$(SHA 116)" 1 "$(qb 32)"),$(mgr2 8117 failure 1 "$(SHA 117)" 1 "$(qb 33)"),$(mgr2 8118 failure 1 "$(SHA 118)" 1 "$(qb 34)"),$(mgr2 8119 failure 1 "$(SHA 119)" 1 "$(qb 35)"),$(mgr2 8120 failure 2 "$(SHA 120)" 1 "$(qb 35)"),$(mgr2 8121 failure 1 "$(SHA 121)" 1 "$(qb 36)"),$(mgr2 8122 success 2 "$(SHA 122)" 1 "$(qb 36)"),$(mgr2 8123 failure 1 "$(SHA 123)" 1 "$(qb 37)"),$(mgr2 8124 failure 1 "$(SHA 124)" 1 "$(qb 38)"),$(mgr2 8125 failure 1 "$(SHA 125)" 1 "$(qb 39)"),$(mgr2 8127 timed_out 1 "$(SHA 127)" 1 "$(qb 42)"),$(mgr2 8128 cancelled 1 "$(SHA 128)" 1 "$(qb 43)"),$(mgr2 8129 failure 1 "$(SHA 129)" 1 "$(qb 40)"),$(mgr2 8130 failure 1 "$(SHA 130)" 1 "$(qb 41)"),$(mgr2 8131 failure 1 "$(SHA 131)" 1 "$(qb 44)"),$(mgr2 8132 failure 1 "$(SHA 132)" 1 "$(qb 45)"),$(mgr2 8133 failure 1 "$(SHA 133)" 1 "$(qb 46)")"
+mg_runs "$RUNS2" 32 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
 f2() { cfiles "$(cfile "$2" "$3")" | fx "repos/$R2/commits/$(SHA "$1")?per_page=100"; }   # f2 <n> <path> <blob>
 suitey_fail() { jobs_body "$1" "$2:test-scripts (1/8):failure" "$3:test:failure" | fx "$(jobs_path "$1")"; printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path "$2")"; }
 f2 101 doc/q1.md aaa111; suitey_fail 8101 95101 95102
@@ -496,11 +496,13 @@ import json
 print(json.dumps({'files': [{'filename': 'big/f%d.md' % i, 'sha': 's%d' % i} for i in range(3000)]}))" | fx "repos/$R2/commits/$(SHA 131)?per_page=100"
 # a failing job this tool has not classified (in neither the shard family nor ci.yml's job list)
 f2 130 doc/m.md blobM2; jobs_body 8130 "95341:mystery-job:failure" | fx "$(jobs_path 8130)"
+# a failing job the #12089 umbrella fold removed from ci.yml (an aggregate member token): classified via FOLDED_JOBS, never unclassified
+f2 133 doc/fj.md blobFJ; jobs_body 8133 "95343:rule-body-lint:failure" | fx "$(jobs_path 8133)"
 rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
 run_sut ejections --out "$OUT" --since "$since" --repo "$R2" > "$SANDBOX/ej2.out" 2>&1; rc=$?
 E2="$OUT/units-ejections.jsonl"
 cls_of() { unit_field "$E2" "$(SHA "$1")" '.cls+" "+.reason'; }
-[[ "$rc" -eq 0 && "$(wc -l < "$E2")" -eq 26 ]] && pass "twenty-six non-success queue runs (failure, timed_out and cancelled) become twenty-six units" || fail "second window (rc=$rc, lines=$(wc -l < "$E2" 2>/dev/null)): $(tail -3 "$SANDBOX/ej2.out")"
+[[ "$rc" -eq 0 && "$(wc -l < "$E2")" -eq 27 ]] && pass "twenty-seven non-success queue runs (failure, timed_out and cancelled) become twenty-seven units" || fail "second window (rc=$rc, lines=$(wc -l < "$E2" 2>/dev/null)): $(tail -3 "$SANDBOX/ej2.out")"
 [[ "$(cls_of 101)" = "escape deterministic" ]] && pass "ESC: the would-skip suite failed in attempt 2 AND attempt 1 (read from attempt 1's jobs and log) is a deterministic escape" || fail "ESC: $(cls_of 101)"
 [[ "$(cls_of 102 | cut -d' ' -f1)" = unverified ]] && pass "attempt 1 failed a DIFFERENT suite: run_attempt is a counter, not evidence, so the unit is unverified" || fail "attempt-1 different suite: $(cls_of 102)"
 [[ "$(cls_of 103 | cut -d' ' -f1)" = unverified ]] && pass "attempt 1's jobs could not be read: the unit is unverified, never an escape and never cleared" || fail "attempt-1 unread: $(cls_of 103)"
@@ -524,6 +526,7 @@ done
 [[ "$(cls_of 132)" == "not-evaluable files: "* ]] && pass "a commit file entry without a blob sha is a failed read: a name-only comparison is not an identical-content claim" || fail "no blob sha: $(cls_of 132)"
 [[ "$(cls_of 129 | cut -d' ' -f1)" = not-evaluable ]] && pass "a log line whose label carries a control byte is not a [FAIL] line: the shard has no fail line, so not-evaluable" || fail "control byte in label: $(cls_of 129)"
 [[ "$(cls_of 130)" == "not-evaluable unclassified-job: mystery-job" ]] && pass "a failing job in neither the shard family nor ci.yml's job list is unclassified, so the unit is not-evaluable" || fail "unclassified job: $(cls_of 130)"
+[[ "$(cls_of 133 | cut -d' ' -f1)" = rule-irrelevant && "$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')" = folded-job ]] && pass "a failing folded job name (an umbrella member token) is classified folded-job and lands rule-irrelevant, never not-evaluable" || fail "folded job: $(cls_of 133) note=$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')"
 [[ "$(cls_of 131)" == "not-evaluable files: "* ]] && pass "a changed-file list of exactly 3000 files is the API's cap: truncated, so the unit is not-evaluable (never a shortened selector input)" || fail "3000-file cap: $(cls_of 131)"
 ! grep -q STUB-MISS "$GHLOG" && pass "the second window made no request the stub does not know" || fail "second window unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
 REPO_NAME=""
@@ -647,6 +650,24 @@ print("\n".join(sorted(m.ALWAYS_RUN_JOBS | {"test-webplat", "test-bun", "test-sc
 PY
 )"
 [[ -n "$ci_jobs" && "$ci_jobs" = "$py_jobs" ]] && pass "the always-run job set plus the four shard families is exactly ci.yml's job list (a new job there must be classified here)" || fail "job parity: ci-only='$(LC_ALL=C comm -23 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')' tool-only='$(LC_ALL=C comm -13 <(echo "$ci_jobs") <(echo "$py_jobs") | tr '\n' ' ')'"
+member_tokens="$(grep -oE '^[[:space:]]*member [a-zA-Z0-9_-]+' "$SCRIPT_DIR/../../../.github/workflows/ci.yml" | awk '{print $2}' | sort -u)"
+py_folded="$(python3 - "$SUT" <<'PY'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location('m', sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+print("\n".join(sorted(m.FOLDED_JOBS - {"cla-check", "cla-evidence"})))
+PY
+)"
+[[ -n "$member_tokens" && "$member_tokens" = "$py_folded" ]] && pass "the folded set minus the posted CLA names is exactly the umbrella member tokens in ci.yml's aggregate steps" || fail "folded parity: ci-only='$(LC_ALL=C comm -23 <(echo "$member_tokens") <(echo "$py_folded") | tr '\n' ' ')' tool-only='$(LC_ALL=C comm -13 <(echo "$member_tokens") <(echo "$py_folded") | tr '\n' ' ')'"
+grep -qxF 'cla-check' "$SCRIPT_DIR/../../../scripts/required-checks.txt" && grep -qxF 'cla-evidence' "$SCRIPT_DIR/../../../scripts/required-checks.txt" \
+  && pass "cla-check and cla-evidence are whole lines in required-checks.txt (the posted check names the folded set also carries)" || fail "cla names not whole lines in required-checks.txt"
+py_overlap="$(python3 - "$SUT" <<'PY'
+import importlib.util, sys
+sp = importlib.util.spec_from_file_location('m', sys.argv[1]); m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m)
+suits = {"test-webplat", "test-bun", "test-scripts", "test-scripts-heavy"}
+print("\n".join(sorted(m.FOLDED_JOBS & (m.ALWAYS_RUN_JOBS | suits))))
+PY
+)"
+[[ -z "$py_overlap" ]] && pass "the folded set is disjoint from the always-run jobs and the four shard families" || fail "folded/always-run overlap: $py_overlap"
 gate_git="$(awk '/^git_ro\(\)/,/^}/' "$SCRIPT_DIR/../../../scripts/ci-pr-affected-preactivation.sh" | grep -o 'GIT_[A-Z_]*' | sort -u)"
 lib_git="$(printf '%s\n' "${GIT_LOCATION_VARS[@]}" | sort -u)"
 py_git="$(python3 - "$SUT" <<'PY'
@@ -3404,7 +3425,7 @@ mutate() {  # mutate <name> <old> <new> <row>
 }
 ej2_run() {  # re-run the second ejection window into a fresh dir with the SUT under test; sets E2
   REPO_NAME="$R2"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
-  mg_runs "$RUNS2" 31 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+  mg_runs "$RUNS2" 32 | fx "repos/$R2/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
   run_sut ejections --out "$OUT" --since "$since" --repo "$R2" >/dev/null 2>&1; E2="$OUT/units-ejections.jsonl"; REPO_NAME=""
 }
 row_always_on() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[0]}" '.skipped_suites|join(",")')" = "scripts/suitex,scripts/suitey" ]]; }
@@ -3458,6 +3479,7 @@ row_timed_out() { ej2_run; [[ -n "$(unit_field "$E2" "$(SHA 127)" .cls)" && "$(u
 row_no_sha() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 132)" .reason)" == files:* ]]; }
 row_ctrl_label() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 129)" .cls)" = not-evaluable ]]; }
 row_unclassified() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 130)" .reason)" == "unclassified-job: mystery-job" ]]; }
+row_folded() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 133)" .cls)" = rule-irrelevant && "$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')" = folded-job ]]; }
 row_file_cap() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 131)" .reason)" == files:* ]]; }
 row_full_events() { collect_once; [[ "$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[1]}" .cls)" = rule-irrelevant ]]; }
 row_window() { local o; o="$(run_sut ejections --out "$SANDBOX/ej-win" --commits 7 --repo "$R" 2>&1)"; grep -q 'window 2031-01-02T12:00:00Z\.\.2031-01-08T12:00:00Z' <<<"$o"; }
@@ -3567,6 +3589,7 @@ mutate timed-out-not-a-unit 'r["conclusion"] != "success"' 'r["conclusion"] == "
 mutate blob-sha-optional '            if not x.get("sha"):' '            x.setdefault("sha", "")
             if False:' row_no_sha
 mutate unclassified-job-reassuring '            if name.split(" (")[0] in ALWAYS_RUN_JOBS:' '            if True:' row_unclassified
+mutate folded-jobs-unclassified '            elif name.split(" (")[0] in FOLDED_JOBS:' '            elif False:' row_folded
 mutate window-ends-swapped '        since = since or iso(shas[-1])
         until = until or iso(shas[0])' '        since = since or iso(shas[0])
         until = until or iso(shas[-1])' row_window
@@ -4298,7 +4321,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1110   # 1104 + 6 net unconditional assertions from the PR3b accept-bound and job-wiring rows (measured full run 2026-11-07: 1110 passed, 476 gated sites); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1115   # 1110 + 4 folded-job unconditional rows + 1 gated site (measured --rows 62-62: 638 unconditional + 1 dispatched = 639); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
