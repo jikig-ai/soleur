@@ -714,6 +714,7 @@ chmod +x "$STUB/req.sh"
 M_ABS='SOLEUR_CI_REQUIRED_SET state=absent pr=7778 sha=0123456789abcdef0123456789abcdef01234567 required=3 reason=context-absent absent=["cla-evidence"] pending=[] failed=[]'
 M_PEND='SOLEUR_CI_REQUIRED_SET state=pending pr=7778 sha=0123456789abcdef0123456789abcdef01234567 required=3 reason=context-pending absent=[] pending=["cla-evidence"] failed=[]'
 M_COMP='SOLEUR_CI_REQUIRED_SET state=complete pr=7778 sha=0123456789abcdef0123456789abcdef01234567 required=3 reason=all-green absent=[] pending=[] failed=[]'
+M_FAIL='SOLEUR_CI_REQUIRED_SET state=failed pr=7778 sha=0123456789abcdef0123456789abcdef01234567 required=3 reason=context-failed absent=[] pending=[] failed=["CLA check"]'
 M_ERR='SOLEUR_CI_REQUIRED_SET state=error pr=7778 sha=- required=- reason=api-error absent=- pending=- failed=-'
 M_DECOY='SOLEUR_CI_REQUIRED_SET state=complete pr=7778 sha=0123456789abcdef0123456789abcdef01234567 required=3 reason=decoy absent=[] pending=[] failed=[]'
 R_HINT='RECOVERY rerun run=4242 basis=workflow ctx="cla-evidence" wf="CLA": gh run rerun 4242'
@@ -739,7 +740,7 @@ mkgate
 out="$(run 7778 --interval 10 --max-polls 3 --repo acme/widgets)"; rc=$?
 _after="${out#*"$BLK"}"; _last="${out##*$'\n'}"
 if [[ "$rc" -eq 1 && "$(cnt "$BLK" <(printf '%s\n' "$out"))" -eq 1 && "$out" != *"TIMEOUT"* \
-      && "$_after" == *"READ — running (up to 125s)"*"READ — read-only"*"$R_HINT"*"$M_ABS"* && "$_last" == "$M_ABS" \
+      && "$_after" == *"READ — running (up to 125s)"*"wait for the exit, do not stop or re-arm it"*"READ — read-only"*"$R_HINT"*"$M_ABS"* && "$_last" == "$M_ABS" \
       && "$(cnt '^required 7778 --repo acme/widgets$' "$STUB/req-calls")" -eq 1 ]]; then
   ok "W1 green + BLOCKED + armed + not queued + full-decided: BLOCKED line, read note, hint, marker LAST; one required call with --repo"
 else no "W1 happy path" "rc=$rc calls=[$(cat "$STUB/req-calls" 2>/dev/null)] out=[$out]"; fi
@@ -752,8 +753,8 @@ out="$(MONITOR_REQUIRED_DWELL_S=15 run 7778 --interval 10 --max-polls 5)"; rc=$?
 _el=$(( SECONDS - _s0 ))
 if [[ "$rc" -eq 1 && "$(cnt 'HOLDING' <(printf '%s\n' "$out"))" -eq 1 && "$(cnt "$BLK" <(printf '%s\n' "$out"))" -eq 1 \
       && "$(cnt '^required 7778$' "$STUB/req-calls")" -eq 1 && "$(cnt '^verdict ' "$STUB/req-calls")" -eq 2 \
-      && "$_el" -ge 20 && "$out" != *"TIMEOUT"* && "$out" == *"$M_ABS" ]]; then
-  ok "W2 the hold: one HOLDING line over two hold polls, verdict read at start and expiry only, the read after >= 20 s (${_el}s), one required call"
+      && "$_el" -ge 20 && "$(cnt '^pr view' "$STUB/gh-argv")" -eq 3 && "$out" != *"TIMEOUT"* && "$out" == *"$M_ABS" ]]; then
+  ok "W2 the hold: one HOLDING line over exactly three polls (a doubled dwell takes more), verdict read at start and expiry only, the read after >= 20 s (${_el}s), one required call"
 else no "W2 hold" "rc=$rc elapsed=${_el}s calls=[$(cat "$STUB/req-calls" 2>/dev/null)] out=[$out]"; fi
 
 # W3 gate: auto-merge off. Today's terminal, and the resolver is never asked anything.
@@ -782,12 +783,12 @@ for _v in n/a pending-full ERROR; do
 done
 
 # W6 the marker is read, never the exit code: absent/0, pending/0, error/3 all print their own marker LAST; the watch stays rc 1.
-for _row in "absent|0|$M_ABS" "pending|0|$M_PEND" "complete|0|$M_COMP" "error|3|$M_ERR"; do
+for _row in "absent|0|$M_ABS" "pending|0|$M_PEND" "complete|0|$M_COMP" "failed|0|$M_FAIL" "error|3|$M_ERR"; do
   IFS='|' read -r _st _xc _mk <<<"$_row"
   mkgate; printf '%s\n' "$_mk" > "$STUB/req-body"; printf '%s' "$_xc" > "$STUB/req-rc"
   out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
   _last="${out##*$'\n'}"
-  if [[ "$rc" -eq 1 && "$_last" == "$_mk" && ( "$_st" != complete || "$out" == *"NOT that the PR is mergeable"* ) ]]; then ok "W6 state=${_st} (resolver exit ${_xc}): its own marker is printed verbatim as the last line, the watch exit stays 1"
+  if [[ "$rc" -eq 1 && "$_last" == "$_mk" && ( "$_st" != complete || "$out" == *"NOT that the PR is mergeable"*"counts as the first of the 3"* ) ]]; then ok "W6 state=${_st} (resolver exit ${_xc}): its own marker is printed verbatim as the last line, the watch exit stays 1"
   else no "W6 state=${_st}" "rc=$rc last=[$_last] out=[$out]"; fi
 done
 
@@ -836,9 +837,19 @@ if [[ "$rc" -eq 1 && "$(cat "$STUB/targv" 2>/dev/null)" == "-k 5 120 bash $STUB/
 else no "W8a timeout argv" "rc=$rc argv=[$(cat "$STUB/targv" 2>/dev/null)] out=[$out]"; fi
 mkgate
 out="$(MONITOR_REQUIRED_TIMEOUT_BIN="$STUB/no-such-timeout" run 7778 --interval 10 --max-polls 3)"; rc=$?
-if [[ "$rc" -eq 1 && "$out" == *"skipped: no timeout binary"* && "$(cnt '^required' "$STUB/req-calls")" -eq 0 ]]; then
+if [[ "$rc" -eq 1 && "$out" == *"skipped: no timeout binary"* && "$out" != *"READ — running"* && "$(cnt '^required' "$STUB/req-calls")" -eq 0 ]]; then
   ok "W8b no timeout binary: the read is skipped with one degraded line, never made unbounded"
 else no "W8b absent timeout binary" "rc=$rc out=[$out]"; fi
+
+# W8c the verdict call is bounded too: a logging timeout shim in front of PATH sees `-k 5 60 bash <resolver> verdict <PR>`.
+REAL_TIMEOUT="$(command -v timeout)"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s/tlog"\nexec "%s" "$@"\n' "$STUB" "$REAL_TIMEOUT" > "$STUB/timeout"; chmod +x "$STUB/timeout"
+mkgate; rm -f "$STUB/tlog"
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+rm -f "$STUB/timeout"
+if [[ "$rc" -eq 1 && "$(cnt "^-k 5 60 bash $STUB/req.sh verdict 7778\$" "$STUB/tlog")" -ge 1 ]]; then
+  ok "W8c the verdict resolver runs as: timeout -k 5 60 bash <resolver> verdict <PR>"
+else no "W8c verdict timeout" "rc=$rc tlog=[$(cat "$STUB/tlog" 2>/dev/null)] out=[$out]"; fi
 
 # W9 print-only: a hint carrying a command-substitution payload and a `; touch` payload is PRINTED and never executed.
 mkgate
@@ -855,6 +866,8 @@ mkgate
 { echo "noise line one"; echo "WARNING: stray"; echo "see the RECOVERY note above"; printf '%s\n' "$M_DECOY"
   for _i in $(seq 1001 1022); do printf 'RECOVERY rerun run=%s basis=workflow ctx="c" wf="w": gh run rerun %s\n' "$_i" "$_i"; done
   echo 'RECOVERY pointer reason=stale-row ctx="test": see the doc'; echo 'RECOVERY pointer failed=["a"]: read the failing checks'
+  echo 'RECOVERY owner not determined (read failed) ctx="o1"'; echo 'RECOVERY no cancelled run at this head ctx="o2"'
+  echo 'RECOVERY owner not determined, read the run before re-running ctx="o3"'
   for _i in $(seq 1 30); do printf 'RECOVERY rerun run=%s basis=candidate ctx="c" wf="w%s"\n' "$_i" "$_i"; done
   printf '%s\n' "$M_ABS"; } > "$STUB/req-body"
 out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
@@ -863,7 +876,8 @@ _last="${out##*$'\n'}"
 if [[ "$rc" -eq 1 && "$out" != *"noise line one"* && "$out" != *"WARNING: stray"* && "$out" != *"reason=decoy"* \
       && "$out" == *"reason=stale-row"* && "$out" == *'failed=["a"]'* && "${_cands:-0}" -eq 20 \
       && "$out" == *"10 more candidate lines not shown"* && "$_last" == "$M_ABS" && "$out" != *"RECOVERY note above"* \
-      && "$(grep -c 'basis=workflow' <<<"$out")" -eq 22 && "${out%%run=1002 *}" == *"run=1001 "* ]]; then
+      && "$(grep -c 'basis=workflow' <<<"$out")" -eq 22 && "${out%%run=1002 *}" == *"run=1001 "* \
+      && "$out" == *'ctx="o1"'*'ctx="o2"'*'ctx="o3"'* && "${out%%reason=stale-row*}" == *"run=1022 "* && "${out#*reason=stale-row}" == *"basis=candidate"* ]]; then
   ok "W10 noise, a mid-line RECOVERY mention and the decoy marker dropped, pointers kept, 22 workflow hints uncapped and in order, exactly 20 candidates plus a count of the other 10, the REAL marker last"
 else no "W10 filter and caps" "rc=$rc candidates=${_cands:-?} last=[$_last] out=[${out:0:1500}]"; fi
 
@@ -872,7 +886,7 @@ unset MONITOR_REQUIRED_DWELL_S   # the shipped default (600) is the subject of t
 mkgate
 out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
 export MONITOR_REQUIRED_DWELL_S=0
-if [[ "$rc" -eq 1 && "$out" == *"$BLK"* && "$out" == *"REQUIRED-SET READ — not due"* && "$out" != *"TIMEOUT"* && "$out" != *"HOLDING"* && "$(cnt '^required' "$STUB/req-calls")" -eq 0 ]]; then
+if [[ "$rc" -eq 1 && "$out" == *"$BLK"* && "$out" == *"REQUIRED-SET READ — not due"* && "$out" == *"before the 600s hold"* && "$out" != *"TIMEOUT"* && "$out" != *"HOLDING"* && "$(cnt '^required' "$STUB/req-calls")" -eq 0 ]]; then
   ok "W11 default dwell with a 1-poll budget: the BLOCKED ending with one 'not due' note, rc 1, no TIMEOUT, no read (pins the default dwell as non-zero)"
 else no "W11 budget shorter than the hold" "rc=$rc out=[$out]"; fi
 
@@ -906,6 +920,17 @@ out="$(MONITOR_REQUIRED_DWELL_S=10 run 7778 --interval 10 --max-polls 6)"; rc=$?
 if [[ "$rc" -eq 1 && "$(cnt 'HOLDING' <(printf '%s\n' "$out"))" -eq 2 && "$out" == *"IN MERGE QUEUE"* && "$(cnt '^required 7778$' "$STUB/req-calls")" -eq 1 && "$(cnt '^verdict ' "$STUB/req-calls")" -eq 3 && "$out" == *"$M_ABS" ]]; then
   ok "W12e a queued poll mid-hold restarts the hold: two HOLDING lines, one read at the end of the second hold"
 else no "W12e queue flip mid-hold" "rc=$rc calls=[$(cat "$STUB/req-calls" 2>/dev/null)] out=[$out]"; fi
+# W12f an unreadable verdict at the expiry poll is NOT the cached full-decided; W12g a hold restarted without the budget to finish ends "not due".
+mkgate; printf 'full-decided,garbage' > "$STUB/req-verdict-seq"
+out="$(MONITOR_REQUIRED_DWELL_S=10 run 7778 --interval 10 --max-polls 4)"; rc=$?
+if [[ "$rc" -eq 1 && "$(cnt "$BLK" <(printf '%s\n' "$out"))" -eq 1 && "$(cnt '^required' "$STUB/req-calls")" -eq 0 && "$(cnt '^verdict ' "$STUB/req-calls")" -eq 2 ]]; then
+  ok "W12f a verdict that cannot be read at the expiry poll ends the watch without a read (the cached full-decided is not reused)"
+else no "W12f unreadable verdict at expiry" "rc=$rc calls=[$(cat "$STUB/req-calls" 2>/dev/null)] out=[$out]"; fi
+mkgate 'OPEN|BLOCKED|true' 'not_queued,queued,not_queued'
+out="$(MONITOR_REQUIRED_DWELL_S=40 run 7778 --interval 10 --max-polls 6)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" == *"REQUIRED-SET READ — not due"* && "$out" != *"TIMEOUT"* && "$(cnt '^required' "$STUB/req-calls")" -eq 0 ]]; then
+  ok "W12g a hold restarted after a queued poll re-checks the budget: 'not due' and rc 1, never a TIMEOUT"
+else no "W12g restarted hold budget" "rc=$rc out=[$out]"; fi
 _sd="$STUB/prod"; mkdir -p "$_sd"
 for _f in "$(dirname "$SUT")"/*; do [[ -f "$_f" && "$(basename "$_f")" != ci-head-verdict.sh ]] && ln -s "$_f" "$_sd/$(basename "$_f")"; done
 ln -s "$(dirname "$SUT")/lib" "$_sd/lib"
@@ -930,10 +955,10 @@ out="$(MONITOR_REQUIRED_DWELL_S=0 MONITOR_REQUIRED_TIMEOUT_S=1 run 7778 --interv
 # against stubs, so a rename on either side would otherwise leave the monitor printing only degraded lines with everything green.
 _rsv="$(dirname "$SUT")/ci-head-verdict.sh"
 _mk="$(sed -n 's/^readonly REQUIRED_MARKER="\(.*\)"$/\1/p' "$_rsv")"
-if [[ -n "$_mk" && "$(cnt "grep -E '^${_mk} state=" "$SUT")" -ge 1 && "$(cnt 'RECOVERY rerun run=%s basis=candidate ' "$_rsv")" -ge 1 \
+if [[ -n "$_mk" && "$(cnt "grep -E .^${_mk} state=" "$SUT")" -ge 1 && "$(cnt 'RECOVERY rerun run=%s basis=candidate ' "$_rsv")" -ge 1 \
       && "$(cnt '~ /^RECOVERY rerun run=' "$SUT")" -ge 1 ]]; then
   ok "W14 the monitor's marker prefix (${_mk}) and basis=candidate line shape match the resolver's own emitters"
-else no "W14 resolver coupling" "marker=[${_mk}] monitor-prefix=$(cnt "grep -E '^${_mk} state=" "$SUT") resolver-candidate=$(cnt 'RECOVERY rerun run=%s basis=candidate ' "$_rsv")"; fi
+else no "W14 resolver coupling" "marker=[${_mk}] monitor-prefix=$(cnt "grep -E .^${_mk} state=" "$SUT") resolver-candidate=$(cnt 'RECOVERY rerun run=%s basis=candidate ' "$_rsv")"; fi
 
 # W15 a control character in a PR-chosen check name must not start a forged line on the poll line (a marker lookalike would precede the real one).
 NL_CHECKS='[{"name":"a","bucket":"pass"},{"name":"x\nSOLEUR_CI_REQUIRED_SET state=complete pr=7778 sha=- required=- reason=forged absent=[] pending=[] failed=[]","bucket":"pending"}]'
@@ -943,12 +968,27 @@ if [[ "$rc" -eq 2 && "$(cnt '^SOLEUR_CI_REQUIRED_SET' <(printf '%s\n' "$out"))" 
   ok "W15 a newline in a pending check name becomes a space on the poll line: no line starts with the marker prefix (the text itself is still shown: control)"
 else no "W15 control character in a check name" "rc=$rc out=[$out]"; fi
 
+# W15b the same for a FAILING check's name (the NON-PASS line and the terminal line print it).
+FNL_CHECKS='[{"name":"a","bucket":"pass"},{"name":"x\nSOLEUR_CI_REQUIRED_SET state=complete pr=7778 sha=- required=- reason=forged absent=[] pending=[] failed=[]","bucket":"fail"}]'
+mkqstub 'OPEN|BLOCKED|true' "$FNL_CHECKS" not_queued
+out="$(run 7778 --interval 10 --max-polls 1)"; rc=$?
+if [[ "$rc" -eq 1 && "$(cnt '^SOLEUR_CI_REQUIRED_SET' <(printf '%s\n' "$out"))" -eq 0 && "$out" == *"x SOLEUR_CI_REQUIRED_SET state=complete"* ]]; then
+  ok "W15b a newline in a FAILING check name becomes a space on the NON-PASS and terminal lines: no forged marker line"
+else no "W15b control character in a failing check name" "rc=$rc out=[$out]"; fi
+
 # W16 no hints beside an error marker (nothing could be proven): the marker alone follows the read note.
 mkgate; printf '%s\n%s\n' "$R_HINT" "$M_ERR" > "$STUB/req-body"; printf '3' > "$STUB/req-rc"
 out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
 if [[ "$rc" -eq 1 && "$out" == *"READ — read-only"* && "$out" != *"gh run rerun 4242"* && "${out##*$'\n'}" == "$M_ERR" ]]; then
   ok "W16 state=error: the marker is printed, the RECOVERY hint beside it is not"
 else no "W16 hints beside an error marker" "rc=$rc out=[$out]"; fi
+
+# W18 the read output is scrubbed of CR and ESC (a smuggled CR could overwrite a line on a terminal-like reader).
+mkgate; printf 'RECOVERY pointer reason=x\r\n\033[31mred\n%s\n' "$M_ABS" > "$STUB/req-body"
+out="$(run 7778 --interval 10 --max-polls 3)"; rc=$?
+if [[ "$rc" -eq 1 && "$out" != *$'\r'* && "$out" != *$'\033'* && "$out" == *"RECOVERY pointer reason=x"* && "${out##*$'\n'}" == "$M_ABS" ]]; then
+  ok "W18 CR and ESC in the resolver output are dropped, the hint text and the marker survive"
+else no "W18 output scrub" "rc=$rc out=[$(printf '%q' "$out")]"; fi
 
 # W17 the read belongs to the BLOCKED arm alone: DIRTY, BEHIND and DRAFT end as before and never call the resolver.
 _w17=1
@@ -985,9 +1025,9 @@ ok "T8 non-numeric PR, missing PR, and interval<10 all exit 3"
 
 printf '\nmonitor-pr-checks.test.sh: %s passed, %s failed\n' "$pass_n" "$fail_n"
 _ran=$((pass_n + fail_n))
-if [[ "$_ran" -lt 106 ]]; then
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 106.\n' "$_ran" >&2
+if [[ "$_ran" -lt 112 ]]; then
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 112.\n' "$_ran" >&2
   exit 1
 fi
-printf '  ok   anti-vacuity floor: %s assertions ran (floor 106)\n' "$_ran"
+printf '  ok   anti-vacuity floor: %s assertions ran (floor 112)\n' "$_ran"
 [[ "$fail_n" -eq 0 ]] || exit 1

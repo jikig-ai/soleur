@@ -332,7 +332,7 @@ read_required_set() {
   # Keep the TAIL (the marker is the last line) and drop control characters other than newline, so a smuggled CR or escape cannot
   # reshape a line; the resolver cleans its own output already (its rows R15/R16), this is the second layer.
   out="$(tail -c 262144 "$REQ_OUT" 2>/dev/null | tr -d '\000-\011\013-\037\177')"
-  marker="$(grep -E '^SOLEUR_CI_REQUIRED_SET state=(complete|absent|pending|failed|error) pr=[0-9]+ ' <<<"$out" | tail -n 1)" || true
+  marker="$(grep -E "^SOLEUR_CI_REQUIRED_SET state=(complete|absent|pending|failed|error) pr=${PR} sha=[^ ]+ required=[^ ]+ reason=[^ ]+ absent=.* pending=.* failed=.*\$" <<<"$out" | tail -n 1)" || true
   if [[ -z "$marker" ]]; then
     err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '[:cntrl:]' ' ')"
     case "$rc" in
@@ -403,7 +403,7 @@ while :; do
   skip=$(jq '[.[]|select(.bucket=="skipping")]|length'      <<<"$checks" 2>/dev/null || echo 0)
   # The denominator is what CAN pass. Skipped checks are reported separately rather than folded in.
   gradable=$(( tot - skip ))
-  # A check name is PR-chosen text: control characters (a newline would start a forged line, e.g. a marker) become spaces before the
+  # A check name is PR-chosen text: ASCII control characters (a newline would start a forged line, e.g. a marker) become spaces before the
   # cut, as annotate_red_on_main refuses them for the same reason (jq -j: no trailing newline to turn into a space).
   waiting=$(jq -j '[.[]|select(.bucket=="pending")|.name]|join(",")' <<<"$checks" 2>/dev/null | tr '[:cntrl:]' ' ' | cut -c1-90)
   red=$(jq -j '[.[]|select(.bucket=="fail" or .bucket=="cancel")|"\(.bucket):\(.name)"]|join(" ")' <<<"$checks" 2>/dev/null | tr '[:cntrl:]' ' ' | cut -c1-160)
@@ -578,8 +578,9 @@ while :; do
         #
         # THE REQUIRED-SET READ (#11544; contract in the header). The read needs the gates proven on THIS poll: an armed PR, a POSITIVE
         # not-queued answer (an unknown read is not one: the cheap probes come first) and a verdict of full-decided. The verdict is read on
-        # the poll that starts the hold and on the poll where the dwell has elapsed, and reused in between: it can only leave full-decided
-        # through a new head (checks go pending, which never reaches this arm and clears the hold) or a draft toggle (a DRAFT state). While
+        # the poll that starts the hold and on the poll where the dwell has elapsed, and reused in between: it normally leaves full-decided
+        # only through a new head (checks go pending, which usually never reaches this arm and clears the hold; the re-read at expiry covers the
+        # rest) or a draft toggle (a DRAFT state). While
         # the gates hold, blocked_since keeps the hold's start; any poll that reaches this arm without proving them ends the watch with
         # today's immediate BLOCKED line, and a poll that never reaches it (checks pending again) restarts the hold. A hold the poll
         # budget cannot finish is not started: it would end in TIMEOUT (exit 2) where today's ending is exit 1. This arm is the only
