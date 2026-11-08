@@ -180,7 +180,7 @@ tracked in #12386. Until a host emits, it stays `unknown` in the skill output, w
 ## Addendum 2026-11-08 (#12007 review)
 
 Append-only: the addendum above is not rewritten. Where this section disagrees with it, this section governs. The rulings are
-recorded in `knowledge-base/project/specs/feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
+recorded in `knowledge-base/project/specs/archive/20261108-210325-feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
 
 1. **Item 3 is amended (unreadable newest row).** The newest mapped periodic row of a host decides. If that row is unreadable,
    `kernel_state` is capped at `stale`: the kernel string and the age of the older valid row stay visible and never ground
@@ -229,7 +229,7 @@ recorded in `knowledge-base/project/specs/feat-one-shot-12007-host-kernel-marker
 ## Addendum 2026-11-08 (#12007 fix round)
 
 Append-only: the earlier addenda are not rewritten. Where this section disagrees with them, this section governs. The ruling is
-recorded in `knowledge-base/project/specs/feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
+recorded in `knowledge-base/project/specs/archive/20261108-210325-feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
 
 1. **The registry emitter is deferred to an owner-approved follow-up PR.** The earlier addendum of this date (item 1, "the registry posts it
    directly through its existing disk-heartbeat sender") states that the registry

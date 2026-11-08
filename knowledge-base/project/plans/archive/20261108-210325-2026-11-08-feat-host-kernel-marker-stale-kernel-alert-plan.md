@@ -452,23 +452,23 @@ PR body: `Closes #12007`, `Ref #12385`, `Ref #12386`; a Holds block naming the o
 
 ### Pre-merge (PR)
 
-- [ ] `host-state.test.sh`, the feeder rehearsal suite, `host-kernel-marker.test.sh`, `journald-config.test.sh`, `vector-admission.test.sh`, `vector-pii-scrub.test.sh`, `web-host-provisioner-parity*.test.sh` and the new census pass in CI, and every Guard 1-3 mutation row is committed and goes RED when applied.
-- [ ] `host-state.sh` prints `observed` only for a valid periodic row at most 48 hours old attributed under the identity rules; the canary-only and over-48-hour cases print `stale`; the old canary `observed` assertions are rewritten, not deleted.
-- [ ] `bash scripts/deadman-heartbeat-feeder.sh --selftest` prints `deadman-feeder: selftest=ok` and fails when a target is removed; the window constant is a literal in the SQL text.
-- [ ] Four heartbeats exist in `uptime-alerts.tf`, born paused with `ignore_changes = [paused]`, and four `heartbeat-manifest.ts` rows agree with them; `heartbeat-reprovision-parity.test.ts` is green; the workflow loop contains none of the four names.
-- [ ] The `vector.toml` allowlist entry and its inngest-source mirror are set-equal; `systemd` is not added anywhere; the quota note names the expected row rate.
-- [ ] Ratchets green: `inngest-probe-row.test.sh` with no allowlist edit, `guard-vacuity-floor.test.sh`, `image-cve-public-claim-guard.test.sh`, `test-affected-kb-consumers.test.sh` (any baseline delta is a deliberate, explained row), `git-lock-marker-telemetry.test.ts`, `betterstack-alert-structure.test.sh`, `c4-count-parity.test.sh`, `lint-orphan-test-suites.sh`, and the user-data size and budget checks (web, inngest; the registry budget is unchanged because its cloud-init is untouched).
-- [ ] `git grep` over the diff finds no kernel-shaped string or host literal outside synthesized fixtures, and neither SKILL.md nor the runbook carries a version, host, kernel or "not affected" wording (the runbook uses placeholders).
-- [ ] The ADR-322 amendment, the `model.c4` edge prose (including the corrected SSH-provisioner count), `SKILL.md`, `component-map.md` and the runbook section are in the diff; `c4-code-syntax.test.ts` and `c4-render.test.ts` pass.
-- [ ] A routine merge apply does not replace the registry or inngest host (a read-only check recorded in the PR), `cloud-init-registry.yml` is byte-identical to the merge base so `registry-host-replace-dispatch.yml` emits deliver=false, and the PR states both gates.
-- [ ] The PR body has `Closes #12007`, `Ref #12385`, `Ref #12386`, the Holds block, and ends with the Claude Code attribution line; this run applied, rebooted and connected to nothing.
+- [ ] `host-state.test.sh`, the feeder rehearsal suite, `host-kernel-marker.test.sh`, `journald-config.test.sh`, `vector-admission.test.sh`, `vector-pii-scrub.test.sh`, `web-host-provisioner-parity*.test.sh` and the new census pass in CI, and every Guard 1-3 mutation row is committed and goes RED when applied. Verified locally on the merged tree except `vector-pii-scrub.test.sh`, which needs a Vector binary and runs in CI only, so this box stays open until CI is green.
+- [x] `host-state.sh` prints `observed` only for a valid periodic row at most 48 hours old attributed under the identity rules; the canary-only and over-48-hour cases print `stale`; the old canary `observed` assertions are rewritten, not deleted.
+- [x] `bash scripts/deadman-heartbeat-feeder.sh --selftest` prints `deadman-feeder: selftest=ok` and fails when a target is removed; the window constant is a literal in the SQL text.
+- [x] Four heartbeats exist in `uptime-alerts.tf`, born paused with `ignore_changes = [paused]`, and four `heartbeat-manifest.ts` rows agree with them; `heartbeat-reprovision-parity.test.ts` is green; the workflow loop contains none of the four names.
+- [x] The `vector.toml` allowlist entry and its inngest-source mirror are set-equal; `systemd` is not added anywhere; the quota note names the expected row rate.
+- [x] Ratchets green: `inngest-probe-row.test.sh` with no allowlist edit, `guard-vacuity-floor.test.sh`, `image-cve-public-claim-guard.test.sh`, `test-affected-kb-consumers.test.sh` (any baseline delta is a deliberate, explained row), `git-lock-marker-telemetry.test.ts`, `betterstack-alert-structure.test.sh`, `c4-count-parity.test.sh`, `lint-orphan-test-suites.sh`, and the user-data size and budget checks (web, inngest; the registry budget is unchanged because its cloud-init is untouched).
+- [x] `git grep` over the diff finds no kernel-shaped string or host literal outside synthesized fixtures, and neither SKILL.md nor the runbook carries a version, host, kernel or "not affected" wording (the runbook uses placeholders).
+- [x] The ADR-322 amendment, the `model.c4` edge prose (including the corrected SSH-provisioner count), `SKILL.md`, `component-map.md` and the runbook section are in the diff; `c4-code-syntax.test.ts` and `c4-render.test.ts` pass.
+- [x] A routine merge apply does not replace the registry or inngest host (a read-only check recorded in the PR), `cloud-init-registry.yml` is byte-identical to the merge base so `registry-host-replace-dispatch.yml` emits deliver=false, and the PR states both gates.
+- [x] The PR body has `Closes #12007`, `Ref #12385`, `Ref #12386`, the Holds block, and ends with the Claude Code attribution line; this run applied, rebooted and connected to nothing.
 
 ### Post-merge (operator)
 
 All held; each needs the operator's explicit per-command go-ahead. Tracked in #12386. Automation: not feasible in this run because each step mutates production or arms a paging surface.
 
 - [ ] Web first (cheapest, no re-provision): the dispatch that applies the two installers to web-1 and web-2.
-- [ ] Then the inngest `-replace` or bootstrap pin bump. Last, the separate follow-up PR that carries the registry emitter: its merge auto-fires the registry host replace (no rollback if its create fails), so it merges only with the owner's explicit go-ahead and never ahead of the owner; post-replace NIC check, in the order the owner chooses.
+- [ ] Then the inngest `-replace` or bootstrap pin bump. Last, the separate follow-up PR that carries the registry emitter: its merge auto-fires the registry host replace (no rollback if its create fails), so it merges only with the operator's explicit go-ahead (operator: production-mutating); post-replace NIC check, in the order the operator chooses.
 - [ ] A first row per host is visible: `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 12h --grep SOLEUR_HOST_KERNEL --limit 20`, and the helper prints `observed` for each rolled host.
 - [ ] Stage 1 change: add the four names to the workflow loop (heartbeats still paused). Stage 2, after two consecutive `qualifying_row_heartbeat_paused` runs per target: arm each heartbeat (runbook), flip the manifest `feeder` rows to the cron form and drop `arming_pending`, in one batched change.
 
