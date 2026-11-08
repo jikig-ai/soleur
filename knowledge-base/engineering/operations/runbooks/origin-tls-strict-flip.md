@@ -48,13 +48,13 @@ Release run 42426213123 (Web Platform Release) deployed v0.395.7: `deploy` job 2
 
 | Sample | n | non-200 | p50 | p90 |
 |---|---|---|---|---|
-| Pre-flip baseline (reviewer-measured; sample size not stated) | not stated | not stated | 0.190 s | 0.239 s |
-| The author's own 30-request sample, about 21:2xZ on 2026-11-07 (this session's clock; 2 h 20 min before the flip) | 30 | 0 | 0.194 s | 0.245 s |
-| Post-flip samples reported 2026-11-07 | 40 | 0 | 0.19 to 0.21 s | 0.33 to 0.39 s (one sample as high as 0.393 s) |
-| +30 min recheck, 2026-11-08 00:15Z | not stated | not stated | reported without figures | reported without figures |
-| Later sample, 2026-11-08 07:37Z (unpaired) | not stated | not stated | 0.225 s | 0.368 s |
+| Pre-flip baseline, taken by the session that ran the flip, about 23:40Z on 2026-11-07 (before the flip dispatch at 23:41Z) | 30 | 0 | 0.190 s | 0.239 s |
+| An earlier pre-flip sample taken by the CTO agent's session, about 21:2xZ on 2026-11-07 | 30 | 0 | 0.194 s | 0.245 s |
+| Post-flip, right after the flip (the flip-running session, about 23:45Z) | 30 | 0 | 0.194 s | 0.332 s |
+| +30 min recheck, 2026-11-08 00:15Z (the flip-running session) | 30 | 0 | 0.212 s | 0.393 s |
+| Later sample, 2026-11-08 07:37Z, taken by a review seat (unpaired) | 30 | not stated | 0.225 s | 0.368 s |
 
-Both pre-flip samples agree within 4 ms at p50 and 6 ms at p90. A review note calls 0.194 s a POST-flip p50; this session's own record puts that sample at about 21:2xZ on 2026-11-07, BEFORE the flip, and the two accounts are not reconciled here. The reviewer-measured 0.190 s / 0.239 s is used as the baseline. p50 is essentially unchanged; **p90 rose from about 0.24 s to 0.33 to 0.39 s and the rise is unexplained.** Candidates, none established: the full redeploys after the flip (23:48 to 23:50Z and 00:14 to 00:15Z, with new Cloudflare-to-origin TLS connections after each restart), TLS termination CPU in the Node process, a longer handshake on new origin connections, or small-sample noise. "Fine" is not a finding: the +30 min recheck is reported here without numbers.
+Both pre-flip samples agree within 4 ms at p50 and 6 ms at p90. The value 0.194 s appears twice: as the earlier pre-flip p50 (CTO agent's session, about 21:2xZ) and as the p50 right after the flip (flip-running session, about 23:45Z); they are different samples. The 0.190 s / 0.239 s sample taken minutes before the flip is used as the baseline. p50 is essentially unchanged (0.190 to 0.194 to 0.212 s); **p90 rose from about 0.24 s to 0.33 s right after the flip and 0.39 s at the 00:15Z recheck, and the rise is unexplained.** Candidates, none established: the full redeploys after the flip (23:48 to 23:50Z and 00:14 to 00:15Z, with new Cloudflare-to-origin TLS connections after each restart), TLS termination CPU in the Node process, a longer handshake on new origin connections, or small-sample noise. "Fine" is not a finding: the +30 min recheck (p50 0.212 s, p90 0.393 s, the highest p90 so far) is a rise, not a recovery.
 
 #### What was NOT run before the flip
 
@@ -107,7 +107,7 @@ which precedes fresh per-host lines), not read directly.
 | Latency baseline | the 30-request loop below | record p50/p90 |
 | Edge error baseline | the 30-request loop below (client-side) | 30 of 30 200 |
 
-Latency and error loop (run before, right after, at +1 h and +24 h; the baseline measured in the author's session was non200=0, p50 0.194 s, p90 0.245 s):
+Latency and error loop (run before, right after, at +1 h and +24 h; the baseline measured minutes before the flip was non200=0, p50 0.190 s, p90 0.239 s):
 
 ```bash
 for i in $(seq 1 30); do curl -s -o /dev/null -w '%{time_starttransfer} %{http_code}\n' --max-time 10 "https://app.soleur.ai/health?l=$i-$RANDOM"; sleep 1; done > /tmp/lat.$$
