@@ -431,3 +431,13 @@ makes `ci-head-verdict.sh` the one resolver), no cron or workflow.
 - `ci-head-verdict.test.sh` row L1 requires `monitor-pr-checks.sh` to keep calling the resolver in non-comment code; the change adds a second call and removes none.
 - The audit ratchet blanks whole-line comments but counts code lines and string literals: new test lines name resolver and doc paths through variables, never as `plugins/...` literals.
 - `git add` and `git commit` are separate Bash calls; never `git stash`.
+
+## Amendment 2026-11-09 (review outcome, appended; the text above is unchanged)
+
+The nine-seat panel, the two design-validity seats, three fix-round seats and one verification seat (head `a438fe5c82`) changed the plan in these ways:
+
+- **AC-9 superseded.** The changed-file list also includes `plugins/soleur/lib/harness.ts` (one sentence in the Claude `pollInstructions` branch saying BLOCKED is not the last line on the read path) and `plugins/soleur/skills/drain-prs/SKILL.md` (the monitor's endings list and the Monitor arming wording), both added on agent-native and architecture findings. Still excluded: anything under `.github/`, `ship/SKILL.md`, `ship-phase-7-poll-fixtures.test.sh`, the audit accept file, and every operator-held item (checked with `git diff --name-only origin/main...HEAD`).
+- **Design changes.** The mid-hold "blip carry" was deleted (the hold continues only across polls that each prove the gates); the verdict is read at hold start and at expiry and reused between; `ci_verdict` is bounded by `timeout -k 5 60`; a "running (up to 125s)" line precedes the read; the marker check is full-shape and bound to this PR's number; the read output is tail-capped and scrubbed of control characters; no hints are printed beside a `state=error` marker; a `state=complete` note says it is NOT mergeable.
+- **Tests.** The suite floor is 112 (rows W1..W18). The mutation battery is now 33 mutations (the plan's 11 plus the panel's survivors), each observed red on a named row with the control green.
+- **Known unpinned.** A zero-padded PR number (`007`) degrades to a benign "no marker" line because the resolver normalizes it.
+- **Still open on #11544.** The inline poll loop in ship Phase 7 is not wired; the issue stays open for it.
