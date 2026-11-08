@@ -575,7 +575,7 @@ _cf_lb_gate_ga_pool_update_graded() {
 #               exact ["no-op"]              -> normalise in a temp copy, grade, remove;
 #               anything else                -> refuse.
 # The normalised copy is {resource_changes} ONLY (the graded function reads nothing
-# else), so a leaked copy holds no state values; it is created 0600, removed on
+# else), so a leaked copy holds no state values; it is created 0600 under TMPDIR (mktemp -t), removed on
 # every path, and rc is returned explicitly (the call site runs under set -e but
 # errexit is suppressed inside a function called in an || list).
 cf_lb_gate_ga_pool_update() {
@@ -612,7 +612,7 @@ cf_lb_gate_ga_pool_update() {
       fi
       old_umask="$(umask)"
       umask 077
-      tmp="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ga-pool-serve.XXXXXXXX.json")" || { umask "$old_umask"; return 1; }
+      tmp="$(mktemp -t ga-pool-serve.XXXXXXXX.json)" || { umask "$old_umask"; return 1; }  # lint-trap-ownership: ok a sourced lib must not own the caller's EXIT trap; every path below removes the copy
       umask "$old_umask"
       jq '{resource_changes: [.resource_changes[] | if .address == "cloudflare_load_balancer_pool.web_1" then (.change.actions = ["update"]) else . end]}' "$plan_json" > "$tmp" || { rm -f "$tmp"; return 1; }
       _cf_lb_gate_ga_pool_update_graded "$tmp" "$mode" || rc=$?

@@ -379,6 +379,15 @@ if [[ -z "$(ls -A "$PN_DIR")" ]]; then ok "pool-update: a REFUSED no-op serve st
 mk pn10 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_MOVED},${POLICY_CREATE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn10.json" serve; ok "pool-update: serve no-op pool entry carrying previous_address refused (exact normalisation predicate)" $? 1
 
+# The graded inner function has exactly ONE caller, the public wrapper: a workflow step or a suite calling the inner name
+# would bypass the serve normalisation and its pool-absent refusal. (Name split so this file does not contain the literal.)
+pn_inner="_cf_lb_gate_ga_pool_update""_graded"
+if [[ -z "$(grep -rlF "$pn_inner" "$HERE/../../.github/workflows" 2>/dev/null)" && -z "$(grep -lF "$pn_inner" "$HERE"/*.sh 2>/dev/null)" && -n "$(grep -lF "$pn_inner" "$LIB")" ]]; then
+  ok "pool-update: no workflow or suite calls the graded inner function directly (the wrapper is the only chokepoint; the lib still defines it)" 0 0
+else
+  ok "pool-update: no workflow or suite calls the graded inner function directly (the wrapper is the only chokepoint; the lib still defines it)" 1 0
+fi
+
 # --- malformed ---
 mk m1 'not json'
 run cf_lb_gate_record "$TMP/m1.json"; ok "malformed json refused" $? 1
@@ -386,6 +395,6 @@ mk m2 '{"resource_changes":[{"address":"x.y","change":{"actions":42}}]}'
 run cf_lb_gate_ga "$TMP/m2.json"; ok "unclassifiable actions refused" $? 1
 
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
-if [[ "$checks" -lt 124 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
+if [[ "$checks" -lt 125 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ($checks assertions)"; else echo "FAILURES PRESENT"; exit 1; fi
