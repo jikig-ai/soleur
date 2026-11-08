@@ -42,22 +42,22 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ### Step 0.1: Compute changed-file path-set (diff classifier)
 
-Run `changed-paths.sh origin/main...HEAD` (NUL-safe `git diff --name-only`) ONCE up-front and cache the result so each path-gated check re-uses the same path-set instead of re-running diff. Skill convention forbids `$()` command substitution — write the diff to a tmpfile so checks can `grep -E` the predicate they care about.
+Run the helper below (NUL-safe `git diff --name-only`) ONCE up-front and cache the result so each path-gated check re-uses the same path-set instead of re-running diff. Skill convention forbids `$()` command substitution — write the diff to a tmpfile so checks can `grep -E` the predicate they care about.
 
 Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/<filename>` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
 
 ```bash
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
-bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$PREFLIGHT_TMP/preflight-diff-files.txt"
+bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }
 ```
 
 All downstream `cat .git/<filename>` references in the predicates below must use `"$PREFLIGHT_TMP/<filename>"` instead. The pre-existing `.git/...` literals worked in non-worktree checkouts but silently broke in worktrees (where every preflight increasingly happens by default).
 
-If the command fails (e.g., offline, no remote), every path-gated check falls back to its existing `git diff` form — operators do not need to handle this case explicitly. Between Phase 0 and Phase 1 nothing mutates the working tree or fetches `origin/main`, so the cache is valid for the duration of one preflight invocation. The cache lives under the per-worktree gitdir (user-owned, scoped to one worktree) — this isolates concurrent preflight runs across sibling worktrees and avoids the `/tmp/` symlink-clobber class that affects fixed-name shared paths on multi-user hosts.
+**Cache-missing rule.** On helper failure (offline, no remote) the cache file is removed and `PREFLIGHT-CACHE-MISSING` printed; a MISSING cache means RUN every path-gated check, never SKIP (an existing empty file is a real empty diff). Every SKIP predicate below and each Check's "Otherwise return SKIP" applies only when the cache file exists. Between Phase 0 and Phase 1 nothing mutates the working tree or fetches `origin/main`, so the cache is valid for the duration of one preflight invocation. The cache lives under the per-worktree gitdir (user-owned, scoped to one worktree) — this isolates concurrent preflight runs across sibling worktrees and avoids the `/tmp/` symlink-clobber class that affects fixed-name shared paths on multi-user hosts.
 
 **Fast-path SKIP overview.** For diffs whose path-set matches a recognized "guaranteed-SKIP" shape, the relevant check returns SKIP at its first step without further work. The predicates below are the existing inner predicates of each check — only the diff source is changed.
 
-| Check | Fast-path SKIP predicate (against `"$PREFLIGHT_TMP/preflight-diff-files.txt"`) |
+| Check | Fast-path SKIP predicate (against `"$PREFLIGHT_TMP/preflight-diff-files.txt"`; cache-missing rule: missing = RUN) |
 | --- | --- |
 | 1 (Migrations) | Zero matches for `(^\|/)supabase/migrations/.*\.sql$`. |
 | 2 (Sec headers) | Zero matches for `\.(tsx\|css\|html)$`, `middleware\.ts$`, `next\.config\.`, `\.tf$`, `Dockerfile`, `nginx`, `\.github/workflows/`. |
@@ -1394,7 +1394,7 @@ that no longer resolves). Consumes the deterministic analyzer `domain-model-drif
 ```bash
 DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
 # Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
-if [[ ! -s "$DIFF" ]]; then bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
+if [[ ! -s "$DIFF" ]]; then bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
 if [[ -s "$DIFF" ]] && ! grep -qE '(^|/)apps/web-platform/supabase/migrations/.*\.sql$|(^|/)apps/web-platform/server/workspace-resolver\.ts$|(^|/)knowledge-base/engineering/architecture/domain-model\.md$' "$DIFF"; then
   echo "SKIP — no business-rule surface (migration/workspace-resolver/register) in diff"; exit 0
 fi
@@ -1448,7 +1448,7 @@ prose; it shells out and relays the exit code.
 ```bash
 DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
 # Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
-if [[ ! -s "$DIFF" ]]; then bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
+if [[ ! -s "$DIFF" ]]; then bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF" 2>/dev/null || true; fi
 if [[ -s "$DIFF" ]] && ! grep -qE '\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-compose.*\.ya?ml$' "$DIFF"; then
   echo "SKIP — no store-class or connection-class surface (*.tf / migration / cloud-init / docker-compose) in diff"; exit 0
 fi

@@ -25,7 +25,10 @@
 # make the names cwd-relative), and `set -o pipefail` so a git failure is a failure. In `--match` mode git runs FIRST and
 # its status is checked, then grep reads a here-string: never `grep -q` on a pipe (SIGPIPE 141 would read as failure).
 #
-# A name holding a newline splits into extra lines; that can only add a false positive, never hide the prefix line.
+# A name holding a newline cannot be one line of a one-name-per-line list (it would split into extra "paths", and a
+# gate that ALLOWS on a match can be satisfied by a fragment), so such a diff exits 2: callers treat 2 as unknown and
+# fail closed. Output-format flags (-s, --output, -q, --exit-code, ...) are refused for the same reason: they leave
+# stdout empty at rc 0, which a caller would read as "nothing changed".
 #
 # WHEN TO USE THIS VERSUS THE INLINE FORM. Skill prose (preflight, ship, review) calls this helper: the inline form costs
 # about twice the body bytes against ceilings that only ratchet down. Workflow steps and hooks stay INLINE
@@ -55,6 +58,7 @@ for a in "$@"; do
   case "$a" in
     --) break ;;
     --match|--match=*|-h|--help|-z|--name-only|--name-status|--raw|--stat|--stat=*|--numstat|--shortstat|--summary|-p|-u|--patch|--no-relative|--relative|--relative=*) usage ;;
+    -s|--no-patch|--output|--output=*|-q|--quiet|--exit-code|--check|--dirstat|--dirstat=*|--compact-summary|--patch-with-stat|--patch-with-raw|--ext-diff|--textconv) usage ;;
   esac
 done
 
@@ -63,10 +67,25 @@ if ! top="$(git rev-parse --show-toplevel 2>/dev/null)" || [ -z "$top" ]; then
   exit 2
 fi
 
-if ! out="$(set -o pipefail; git -C "$top" diff -z --no-renames --ignore-submodules=none --name-only "$@" | tr '\0' '\n')"; then
+# The raw NUL stream goes to a temp file FIRST, so a git failure is a failure (never an empty list) and the bytes can be
+# inspected before any LF-splitting. An unwritable TMPDIR is also rc 2: unknown, never "none match".
+if ! tmp="$(mktemp 2>/dev/null)" || [ -z "$tmp" ]; then
+  printf 'changed-paths: cannot create a temp file\n' >&2
+  exit 2
+fi
+trap 'rm -f "$tmp"' EXIT
+if ! git -C "$top" diff -z --no-renames --ignore-submodules=none --name-only "$@" >"$tmp"; then
   printf 'changed-paths: git diff failed\n' >&2
   exit 2
 fi
+
+# Byte locale throughout: the list is raw bytes now, and under a UTF-8 locale GNU grep reports a name holding an
+# invalid UTF-8 byte as "binary file matches" instead of printing it.
+if [ "$(LC_ALL=C tr -dc '\n' <"$tmp" | wc -c)" -gt 0 ]; then
+  printf 'changed-paths: a changed path contains a newline; it cannot be listed one per line\n' >&2
+  exit 2
+fi
+out="$(LC_ALL=C tr '\0' '\n' <"$tmp")"
 
 if [ "$have_match" -eq 0 ]; then
   [ -z "$out" ] || printf '%s\n' "$out"
@@ -74,5 +93,7 @@ if [ "$have_match" -eq 0 ]; then
 fi
 
 [ -n "$out" ] || exit 1
-grep -E -e "$match" <<<"$out"
+# printf into grep (no -q, so grep reads everything and never SIGPIPEs the writer); a here-string would spill to a
+# temp file for a large list and an unwritable TMPDIR would skip grep entirely and read as rc 1.
+printf '%s\n' "$out" | LC_ALL=C grep -E -e "$match"
 exit $?

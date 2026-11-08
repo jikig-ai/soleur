@@ -77,7 +77,8 @@ git fetch origin main 2>/dev/null || true
 BASE=$(git merge-base "origin/main" HEAD 2>/dev/null || true)
 [[ -z "$BASE" ]] && exit 0
 
-# Files in scope: runbook .md added or modified.
+# Files in scope: every runbook .md the diff touches (`--no-renames` also lists deletions and a rename's old path;
+# the per-file re-diff below finds no added line in those, so they are inert).
 # NUL-delimited into an array (#12332): plain `--name-only` C-quotes a non-ASCII, tab, `"` or `\` name, and the
 # quoted string then reached the per-file re-diff below as a pathspec that matches nothing, so `added` was empty
 # and the gate passed a runbook that adds an ssh step. `--no-renames` also lists the OLD path of a rename.

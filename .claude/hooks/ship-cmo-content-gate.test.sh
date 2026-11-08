@@ -175,14 +175,14 @@ assert_eq "control: a diff outside the marketing surface is denied" "deny" "$(de
 
 # 12. A non-ASCII marketing path (git C-quotes it, so a ^-anchored regex over the plain list misses it).
 make_gate_repo "$TMPDIR/g-utf8" "printf 'n\\n' > \$'knowledge-base/marketing/caf\\xc3\\xa9-plan.md'"
-precond=$(git -C "$TMPDIR/g-utf8" diff --name-only main...HEAD)
+precond=$(git -C "$TMPDIR/g-utf8" diff --name-only main...HEAD) || { echo "FATAL: the g-utf8 fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
 assert_eq "precondition: the plain name-only list C-quotes the non-ASCII marketing path" "1" "$([[ "$precond" == '"'* ]] && echo 1 || echo 0)"
 res=$(run_hook_in "$TMPDIR/g-utf8" "feat: new capability")
 assert_eq "a non-ASCII marketing path counts as a marketing change (passes)" "" "$res"
 
 # 13. A quote-and-backslash marketing path (core.quotePath=false would not unquote these).
 make_gate_repo "$TMPDIR/g-quote" "printf 'n\\n' > \$'knowledge-base/marketing/q\"uote\\\\slash.md'"
-precond=$(git -C "$TMPDIR/g-quote" diff --name-only main...HEAD)
+precond=$(git -C "$TMPDIR/g-quote" diff --name-only main...HEAD) || { echo "FATAL: the g-quote fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
 assert_eq "precondition: the plain list C-quotes a quote-and-backslash marketing path" "1" "$([[ "$precond" == '"'* ]] && echo 1 || echo 0)"
 res=$(run_hook_in "$TMPDIR/g-quote" "feat: new capability")
 assert_eq "a quote-and-backslash marketing path counts as a marketing change (passes)" "" "$res"
@@ -196,10 +196,26 @@ assert_eq "a rename away from knowledge-base/marketing/ counts as a marketing ch
 #    in .gitmodules plus a local diff.ignoreSubmodules=all. Without --ignore-submodules=none the diff omits the
 #    gitlink, the marketing list is empty and the gate wrongly denies.
 make_gate_repo "$TMPDIR/g-gitlink" "printf '[submodule \"sm\"]\\n\\tpath = knowledge-base/marketing/sm\\n\\turl = https://example.invalid/sm.git\\n\\tignore = all\\n' > .gitmodules; mkdir -p knowledge-base/marketing/sm; git update-index --add --cacheinfo 160000,\$(git rev-parse HEAD),knowledge-base/marketing/sm; git config diff.ignoreSubmodules all"
-precond=$(git -C "$TMPDIR/g-gitlink" diff --name-only main...HEAD)
+# Capture FIRST and refuse to continue on a failed or EMPTY fixture diff: a `grep -c ... || true` over an empty capture is "0"
+# and would make the omission precondition pass vacuously. `.gitmodules` is in the same commit, so a working fixture lists it.
+precond=$(git -C "$TMPDIR/g-gitlink" diff --name-only main...HEAD) || { echo "FATAL: the g-gitlink fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
+assert_eq "precondition: the fixture diff is non-empty (it lists .gitmodules)" "1" "$(printf '%s\n' "$precond" | grep -Fxc '.gitmodules' || true)"
 assert_eq "precondition: the config-hidden plain diff omits the marketing gitlink" "0" "$(printf '%s\n' "$precond" | grep -Fxc 'knowledge-base/marketing/sm' || true)"
 res=$(run_hook_in "$TMPDIR/g-gitlink" "feat: new capability")
 assert_eq "a config-hidden gitlink under knowledge-base/marketing/ counts as a marketing change (passes)" "" "$res"
+
+# 16. A DIRECTORY name holding a newline: `zz<LF>knowledge-base/marketing/x` is NOT a marketing path. The hook filters the NUL stream
+#    (`grep -z`); an LF-split would turn the tail into a line that satisfies the prefix, and here a match ALLOWS. The only changed
+#    file is that one, so the gate must still deny.
+make_gate_repo "$TMPDIR/g-lf" "mkdir -p \$'zz\\nknowledge-base/marketing' && printf 'n\\n' > \$'zz\\nknowledge-base/marketing/x'"
+lf_split=$(git -C "$TMPDIR/g-lf" diff -z --name-only main...HEAD | tr '\0' '\n') || { echo "FATAL: the g-lf fixture diff failed; the precondition cannot be evaluated" >&2; exit 1; }
+assert_eq "precondition: an LF-split of the changed list WOULD yield the line knowledge-base/marketing/x" "1" "$(printf '%s\n' "$lf_split" | grep -Fxc 'knowledge-base/marketing/x' || true)"
+res=$(run_hook_in "$TMPDIR/g-lf" "feat: new capability")
+assert_eq "a newline-named directory fragment is not a marketing change (denied)" "deny" "$(decision_of "$res")"
+# Control for the same fixture shape: the same file WITHOUT the newline prefix passes.
+make_gate_repo "$TMPDIR/g-lf-ctl" "mkdir -p knowledge-base/marketing && printf 'n\\n' > knowledge-base/marketing/x"
+res=$(run_hook_in "$TMPDIR/g-lf-ctl" "feat: new capability")
+assert_eq "control: knowledge-base/marketing/x without the newline prefix is a marketing change (passes)" "" "$res"
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

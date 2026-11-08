@@ -213,7 +213,12 @@ jobs:
           # legal document would list its old path and count as "updated", weakening the gate. Both are
           # NUL-delimited (a C-quoted name never matches) and pipefail is on (`set -euo pipefail` above).
           surface_files=$(git diff -z --no-renames --ignore-submodules=none --name-only "${diff_base}"...HEAD | tr '\0' '\n')
-          changed_files=$(git diff -z --name-only "${diff_base}"...HEAD | tr '\0' '\n')
+          # The exact-line legal-docs match runs over the NUL stream (`grep -z`), never the LF-split text: a
+          # name holding a newline would otherwise split into extra "lines", and a directory such as
+          # `zz<LF>docs/legal/privacy-policy.md` would then satisfy a required-doc match it does not own.
+          changed_nul="$(mktemp "${RUNNER_TEMP:-/tmp}/changed-nul.XXXXXX")"
+          git diff -z --name-only "${diff_base}"...HEAD > "$changed_nul"
+          changed_files=$(tr '\0' '\n' < "$changed_nul")
           echo "Changed files in PR:"
           echo "$changed_files" | sed 's/^/  /'
 
@@ -233,7 +238,7 @@ jobs:
           echo "DSAR surface file detected; verifying all required legal docs are updated…"
           missing=()
           for legal in "${required_legal_files[@]}"; do
-            if ! echo "$changed_files" | grep -Fxc "$legal" >/dev/null; then
+            if ! grep -zFxc -- "$legal" "$changed_nul" >/dev/null; then
               missing+=("$legal")
             fi
           done

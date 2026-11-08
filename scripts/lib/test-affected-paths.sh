@@ -1228,6 +1228,9 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CHANGED_PATH_READERS_TEST_SH_PATHS=(
   "plugins/soleur/skills/constraint-scaffold/references/constraint-gates-workflow.template"
   ".claude/hooks/ship-cmo-content-gate.sh"
   ".claude/hooks/ship-runbook-ssh-gate.sh"
+  "plugins/soleur/skills/preflight/SKILL.md"  # the sentinel pins each skill's spelling of the helper call
+  "plugins/soleur/skills/ship/SKILL.md"
+  "plugins/soleur/skills/review/SKILL.md"
   "scripts/test-all.sh"
   "scripts/lib/test-affected-paths.sh"
 )

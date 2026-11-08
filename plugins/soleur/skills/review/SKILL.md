@@ -110,16 +110,18 @@ Proceed once the tree is ready (worktree or current branch).
 
 Before spawning review agents, classify the PR to right-size the panel.
 
-1. Run `changed-paths.sh origin/main...HEAD | head -n 200` (NUL-safe `git diff --name-only`) to get the list of changed files. Also capture status letters and line counts. Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both regular checkouts and worktrees: in a worktree `.git` is a file (gitdir pointer), not a directory, so `> .git/review-*.txt` fails with `Not a directory (os error 20)`. The resolver returns the worktree's actual gitdir (e.g., `<bare>/worktrees/<name>/`):
+1. Run the helper below (NUL-safe `git diff --name-only`) to write the list of changed files; show `head -n 200 "$REVIEW_TMP/review-changed.txt"`. Also capture status letters and line counts. Resolve the tmp path with `git rev-parse --git-dir` (in a worktree `.git` is a file, so `> .git/review-*.txt` fails with `Not a directory`):
 
    ```bash
    REVIEW_TMP="$(git rev-parse --git-dir)"
-   bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt"
+   bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$?"; }
    git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
    git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```
 
-   All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead. The pre-existing `.git/...` literals work in non-worktree checkouts but silently break in worktrees (where every PR review increasingly happens by default).
+   If the helper fails (rc 2/127; marker printed, file removed), skip the decision tree: class = code (full panel) and run gdpr-gate (fail toward more review).
+
+   All downstream `cat .git/review-*.txt` references in the predicates below must use `"$REVIEW_TMP/review-*.txt"` instead.
 
 2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
 3. Apply the four-class decision tree below in order; **first match wins** (override always trumps):
@@ -380,7 +382,7 @@ Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](refer
 
 **When to run gdpr-gate at review time:**
 
-- `changed-paths.sh --match "$CANONICAL_REGEX" main...HEAD` returns at least one match (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
+- `bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD` exits 0 (a match) or 2/127 (unknown: treat as a match) (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
 
 **What this agent checks:**
 

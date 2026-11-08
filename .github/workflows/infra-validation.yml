@@ -383,6 +383,10 @@ jobs:
           # plugins/soleur/test/infra-validation-detect.test.sh. See #4012.
           # Every infra root, as the JSON array the matrix consumes: the workflow_dispatch answer and the
           # fail-safe answer of every arm below that cannot resolve its diff.
+          # The path list is raw bytes now (NUL-delimited, not C-quoted): under a UTF-8 locale GNU grep
+          # reports a name holding an invalid UTF-8 byte as "binary file matches" instead of printing it,
+          # and sed's `.*` stops at it, so pin the byte locale for every filter in this step.
+          export LC_ALL=C
           all_infra_roots() {
             { find apps/*/infra -maxdepth 0 -type d 2>/dev/null ; \
               find infra/* -maxdepth 0 -type d 2>/dev/null ; } \
@@ -439,6 +443,7 @@ jobs:
             if ! CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "origin/${BASE_REF}...HEAD" | tr '\0' '\n'); then
               echo "::notice::git diff against origin/${BASE_REF} failed; validating all infra roots (fail-safe)"
               DIRS=$(all_infra_roots)
+              DIFF_FAILED=1
             else
               DIRS=$(printf '%s\n' "$CHANGED" \
                 | { grep -E '^(apps/[^/]+/infra|infra/[^/]+)/' || true; } \
@@ -462,14 +467,21 @@ jobs:
           # non-empty — a directory or special file satisfies `-s` but is not
           # a regular file, and `-s` requires the justification content.
           is_plan_skipped() { [ -f "$1/.pr-plan-skip" ] && [ -s "$1/.pr-plan-skip" ]; }
+          # A failed pull_request diff validates every root (offline, safe) but must NOT fan a live
+          # `terraform plan` out to every root under the Tier-A credential set: `plan` is the one
+          # job here that touches a credential, so the fail-safe for it is the EMPTY matrix.
           PLAN_DIRS=$(printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
             is_plan_skipped "$d" || printf '%s\n' "$d"
           done | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          # (a list, not an if/fi: the mirror unit test slices this block up to its first column-10 `fi`)
+          [ "${DIFF_FAILED:-0}" = 1 ] && { echo "::warning::git diff failed; terraform-plan matrix left empty (validate still covers every root)"; PLAN_DIRS='[]'; }
           printf 'plan_directories=%s\n' "$PLAN_DIRS" >> "$GITHUB_OUTPUT"
           # Emit the exclusion on real stdout so it registers as a run
           # annotation — inside the $() above it could only reach stderr.
           if [ "$EVENT_NAME" = "pull_request" ]; then
             printf '%s' "$DIRS" | jq -r '.[]' | while IFS= read -r d; do
+              # A directory name carrying a control byte (CR, ESC) must not reach a workflow command.
+              case "$d" in *[[:cntrl:]]*) continue ;; esac
               if is_plan_skipped "$d"; then
                 echo "::warning::excluding ${d} from the terraform-plan matrix (.pr-plan-skip present)"
               fi
