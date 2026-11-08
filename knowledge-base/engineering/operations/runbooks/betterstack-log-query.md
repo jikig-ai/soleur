@@ -1593,10 +1593,10 @@ One WARN line per WebFetch result in sessions with web egress and the `untrusted
 content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it. `sessionIdHash` is `hashUserId` of
 the conversation id (the app's `conversationId`, passed verbatim, no trimming or re-casing), the same keyed hash as `workspaceIdHash`. With the
 pepper unset it is the literal `pepper_unset` for every session, so per-session lookup is then impossible (a miss is not "no such session").
-To find one session, run the hash helper exactly as `recover-userid-from-pino-stdout.md` Flow 1 does (`doppler run -p soleur -c prd --
-npm run --silent hash-user-id -- "$CONVERSATION_ID"` from `apps/web-platform`; it needs the `prd` config for the pepper in addition to the
-`prd_terraform` read credentials) and match `.sessionIdHash` in that flow's `jq` filter. Never put the pepper on a command line. Lines
-emitted by builds before this change deployed (merged 2026-11-08) carry the raw `sessionId` key until retention expires.
+To find one session, follow `recover-userid-from-pino-stdout.md` Flow 1 steps 2 and 3 with the conversation id in place of `$UUID`,
+including its `prd`-config check (the helper needs the `prd` config for the pepper, in addition to the `prd_terraform` read credentials); its
+`jq` filter already matches `.sessionIdHash`. Never put the pepper on a command line. Lines emitted by builds from before this change was
+deployed carry the raw `sessionId` key until retention expires.
 
 Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
 (counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero

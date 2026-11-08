@@ -13,6 +13,13 @@
 import { createHmac } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+// The real-logger case needs the pino `warn` level and the Sentry breadcrumb level at their defaults:
+// a developer shell with LOG_LEVEL=error (or silent) would otherwise turn the logMethod hook into a no-op.
+vi.hoisted(() => {
+  delete process.env.LOG_LEVEL;
+  delete process.env.SENTRY_BREADCRUMB_LEVEL;
+});
+
 const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 const state = vi.hoisted(() => ({ useRealLogger: false }));
 vi.mock("@/server/logger", async (importOriginal) => {
@@ -82,7 +89,7 @@ let registered = 0;
 // Error instances stringify to {} (message and stack are non-enumerable), so unpack them: a raw id
 // interpolated into an Error message would otherwise be invisible to the sink scan.
 const errorAware = (_key: string, value: unknown) =>
-  value instanceof Error ? { name: value.name, message: value.message, stack: value.stack } : value;
+  value instanceof Error ? { name: value.name, message: value.message, stack: value.stack, cause: value.cause } : value;
 
 function serializedSinks(): string {
   // NOT lowercased: a mixed-case sentinel must stay findable.
@@ -186,6 +193,9 @@ describe("pepper set: the keyed hash, never the raw id", () => {
     expect(a.sessionIdHash).toBe(oracle(SESSION_ID));
     expect(b.sessionIdHash).toBe(oracle(OTHER_SESSION_ID));
     expect(a.sessionIdHash).not.toBe(b.sessionIdHash);
+    // The workspace hash is a different key over a different input, not a copy of the session hash.
+    expect(a.workspaceIdHash).toBe(oracle("ws1"));
+    expect(a.workspaceIdHash).not.toBe(a.sessionIdHash);
   });
 
   it("a session id with no workspace id is still hashed (the two hashes are independent)", async () => {
@@ -208,6 +218,7 @@ describe("pepper set: the keyed hash, never the raw id", () => {
     expect(await run(mod.createUntrustedContentHook({ workspaceId: "ws1", sessionId: SESSION_ID }), hostile)).toEqual({});
     // Positive control: the catch block reached Sentry, so the scan below looked at something.
     expect(sentry.captureMessage.mock.calls.length + sentry.captureException.mock.calls.length).toBeGreaterThan(0);
+    expect(serializedSinks()).toContain("hook-error"); // reached via the catch block, not the shape path
     expect(serializedSinks()).not.toContain(SESSION_ID);
   });
 });

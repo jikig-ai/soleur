@@ -196,5 +196,5 @@ fallback. The hook option and the dispatcher call site still pass the raw id; th
 behaviour or other field changes, and the decision above is unchanged. The hash is applied locally in `emit()` rather than by extending the
 ADR-029 key-rename boundary, because that boundary (`formatters.log` and the Vector scrub) is keyed on `userId` and would not catch a
 `sessionId` key. This pulls the hashing ahead of the prd-enablement gate where an earlier spec had deferred it; the PA-8(c) half of that
-gate stays open. Lines emitted before this change keep the raw id until log retention expires; no backfill scrub is part of this change. The Article 30 register amendment (PA-8(c)) is still owed and is operator and CLO work,
-tracked with #10195.
+gate stays open. Lines emitted before this change keep the raw id until log retention expires; no backfill scrub is part of this change.
+The Article 30 register amendment (PA-8(c)) is still owed and is operator and CLO work, tracked with #10195.
