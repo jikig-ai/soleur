@@ -126,8 +126,11 @@ check_not "G7: a stray Access-token forget is refused even WITH the ack" gate 0 
 check_not "G8: a counter that is not a non-negative integer is refused (a jq failure must not read as 0)" deploy_policy_gate '{"deploy_policy_changes":"x","deploy_policy_unsafe":0,"access_token_stray_forgets":0}' ""
 check_not "G9: a missing counter is refused" deploy_policy_gate '{"deploy_policy_changes":0,"deploy_policy_unsafe":0}' ""
 check     "G10: the workflow sources the gate and calls it before the destroy_count sum, without [ack-destroy]" bash -c '
-  w="$(grep -vE "^[[:space:]]*#" "$1")"; a="$(grep -n "deploy_policy_gate \"\$counts\" \"\$HEAD_MSG\" || exit 1" <<<"$w" | head -1 | cut -d: -f1)"; d="$(grep -n "^[[:space:]]*destroy_count=" <<<"$w" | head -1 | cut -d: -f1)"
+  w="$(grep -vE "^[[:space:]]*#" "$1")"; a="$(grep -nE "deploy_policy_gate \"\\\$counts\" \"\\\$[A-Z_]+\" \|\| exit 1" <<<"$w" | head -1 | cut -d: -f1)"; d="$(grep -n "^[[:space:]]*destroy_count=" <<<"$w" | head -1 | cut -d: -f1)"
   [[ -n "$a" && -n "$d" && "$a" -lt "$d" ]] && grep -qF "tests/scripts/lib/deploy-policy-gate.sh" <<<"$w"' _ "$WF"
+check     "G11: the gate input is fed from event.commits messages, not the tip alone (coalesced-merge ack)" bash -c '
+  w="$(grep -vE "^[[:space:]]*#" "$1")"
+  grep -qF "EVENT_MSGS_JSON: \${{ toJSON(github.event.commits.*.message) }}" <<<"$w" && grep -qF "deploy_policy_gate \"\$counts\" \"\$POLICY_MSGS\" || exit 1" <<<"$w"' _ "$WF"
 
 # ── source mutants: every predicate above must be able to fail ─────────────────────────────────────────────────────────────
 cp "$TF" "$SBX/orig.tf"
