@@ -374,8 +374,8 @@ excluded from current burn until then.
 Two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` cover UPDATE semantics on the live GA trio — `ga-overlay` keeps create-only semantics.
 
 - `arm=ga-monitor-fix` — confirm `FIX-GA-LB-MONITOR`. Updates `cloudflare_load_balancer_monitor.web` only; grader `cf_lb_gate_ga_monitor_update` pins the after-state to `{type:http, port:80, path:/health, expected_codes:200}` (the https/:443 create shape probed a port nothing listens on and reported every origin permanently down, hidden by the B1 self-fallback). Post-apply asserts every pool origin reports `healthy:true` one monitor interval later. Deployable immediately — needs no flip authorization.
-- `arm=ga-pool-update -f mode=drain` — confirm `UPDATE-GA-LB-POOL`. Updates the GA pool + LB + `cloudflare_notification_policy.web_lb_health`; grader `cf_lb_gate_ga_pool_update` confines changes to that set, resolves every origin address from the plan's `hcloud_server.web[*]` no-op entries (never a literal), and pins web-2's after-weight to `0`.
-- `arm=ga-pool-update -f mode=serve` — the #6027 maintenance-window 0→1 flip ONLY: the job runs `lb-weight-gate-with-marker.sh` (the §(c) gate chain) fail-closed BEFORE plan, so an unauthorized flip never reaches a grader. Requires the window sequence per #6027 (weight flip → drain → `ignore_changes` removal → drained-host reboot).
+- `arm=ga-pool-update -f mode=drain` — confirm `UPDATE-GA-LB-POOL`. Updates the GA pool + LB + `cloudflare_notification_policy.web_lb_health`; grader `cf_lb_gate_ga_pool_update` confines changes to that set, resolves every origin address from the plan's `hcloud_server.web[*]` no-op entries (never a literal), and pins web-2's after-weight to `0` (the arm passes an explicit `-var=web2_lb_weight=0`; the variable's default is 1).
+- `arm=ga-pool-update -f mode=serve` — grades web-2 at weight 1 and applies it. The pool counts as graded whether the plan carries it as the 0→1 update or, once web-2 already serves (live {web-1:1, web-2:1}, the default), as a plain no-op: the grader normalises a provably plain no-op pool entry into an update in a private temp copy and applies the same pins, and it refuses a plan with no pool entry. The job runs `lb-weight-gate-with-marker.sh` (the §(c) gate chain) and the relay evidence step fail-closed BEFORE plan, so a serve dispatch against live {1,1} is a re-proof ending in a no-op apply and the 90-sample continuity check, not a state change. The original 0→1 flip required the window sequence per #6027 (weight flip → drain → `ignore_changes` removal → drained-host reboot).
 
 ### Before dispatching `mode=serve`: the evidence the `relay bind probe (serve only)` step reads (#12167)
 
@@ -383,17 +383,17 @@ The step runs after the §(c) gate chain and before the plan, and refuses (exit 
 
 **Accepted residual (structural):** web-1's probe is journaled at web-1's deploy BEFORE it fans the deploy out to web-2, so it exercises web-2's PREVIOUS container and cannot prove web-2's newest one. There is no SSH at serve time to close that. The fresh evidence is web-2's own 60 s line and the reverse probe written by web-2's own deploy. Practice: dispatch serve right after a release deploy, so all three rows describe the same build.
 
-### After a successful serve: the flip is one-way until the variable default changes (#8211, #6027)
+### After the serve: the tree and live agree on web-2 = 1 (#12363)
 
-`web2_lb_weight` keeps its default `0` on purpose (every non-serve plan and the per-merge apply keep web-2 drained). So once a serve has applied, Terraform STATE and the live pool say web-2 = 1 while the configuration default says 0. What that means in practice:
+The rule, in one sentence: **the `web2_lb_weight` default is 1 (live web-2 serves); drain is an explicit `-var=web2_lb_weight=0`.** The serve flip applied on 2026-11-08 (run 42488889045) and #12363 moved the default to 1 with the pins that encoded 0, so Terraform state, the live pool and the configuration agree. What that means in practice:
 
-- The scheduled full-root drift plan (`scheduled-terraform-drift.yml`, untargeted, detect-only) reports `cloudflare_load_balancer_pool.web_1` updating web-2 `1 -> 0` on every run. It never applies, so it is noise and a reminder, not a drain. A drift read that must show the real drift passes `-var=web2_lb_weight=1`.
-- A full-root apply outside CI (the ADR-096 exclusions-contract path) without `-var=web2_lb_weight=1` would plan `1 -> 0` and silently drain web-2, so it must not happen after a serve.
-- `arm=ga-overlay` cannot drain: its grader `cf_lb_gate_ga` accepts creates only, so a pool plan that is an UPDATE (`1 -> 0`) is refused ("change(s) outside the GA3 create set"). `arm=ga-monitor-fix` and `arm=ga-monitor-https` plan the monitor only.
-- `arm=ga-pool-update -f mode=drain` DOES apply web-2 = 0 (that is its purpose, behind the `UPDATE-GA-LB-POOL` confirm). Run it only to drain on purpose.
-- The per-merge `apply-web-platform-infra.yml` plans hard `-target` lists that name no `cloudflare_load_balancer*` address, so it cannot flip the pool either way.
+- The scheduled full-root drift plan (`scheduled-terraform-drift.yml`, untargeted, detect-only, no `-var`) is clean for the pool. A full-root plan that proposes `cloudflare_load_balancer_pool.web_1` changing web-2 `1 -> 0` means someone drained web-2 on purpose (see below) or the tree regressed; treat it as a signal, never as noise.
+- The per-merge `apply-web-platform-infra.yml` plans hard `-target` lists that name no `cloudflare_load_balancer*` address, and no targeted resource references the pool, so it cannot touch the pool either way.
+- `arm=ga-pool-update -f mode=drain` applies web-2 = 0 (its purpose, behind the `UPDATE-GA-LB-POOL` confirm, with an explicit `-var=web2_lb_weight=0`). **A drain is not durable until the default is changed back:** the next unrelated full-root apply restores weight 1, and a full-root plan after an intentional drain proposes `0 -> 1` (the standing drift signal until a PR returns the default to 0 or `mode=serve` is re-run). To make a drain persist, drain with the arm, then merge a PR that sets the default to 0 together with the pins that encode 1.
+- `arm=ga-overlay` (a fresh GA3 create) passes an explicit `-var=web2_lb_weight=0`, so its create shape stays the drained two-member pool its grader pins. It still cannot drain a live pool: `cf_lb_gate_ga` accepts creates only, so a pool plan that is an UPDATE is refused ("change(s) outside the GA3 create set"). `arm=ga-monitor-fix` and `arm=ga-monitor-https` plan the monitor only.
+- **MUST:** any untargeted apply that CREATES or REPLACES `hcloud_server.web["web-2"]` (or the pool) passes `-var=web2_lb_weight=0`. At the default, an empty replacement host would enter the pool at weight 1 before the serve gate chain (health precondition, relay evidence, bind probe) runs. After the host is rebuilt and proven, re-serve with `mode=serve`.
 
-**Follow-up PR (required after a successful serve):** change the `web2_lb_weight` default to `1` and the pins that encode `0` together: `apps/web-platform/infra/variables.tf`, `lb-weight-gate.test.sh` (C.3 / C.4 default and feeder pins, the W-series), the `Typo-guard + mode pin` step in `cf-lb-overlay.yml`, and this section. Until that PR merges, treat the rules above as in force.
+Done in #12363.
 
 **ForceNew caveat:** a `cloudflare_load_balancer_monitor.type` change may plan `["delete","create"]` (replace) on some provider versions — every arm's grader fails closed on replace verbs by design, so verify with a `terraform plan` dry-run at window time before dispatching.
 
@@ -421,7 +421,7 @@ gh workflow run cf-lb-overlay.yml --ref main -f arm=ga-monitor-https -f confirm=
 The reviewer-gated environment (`web-platform-infra-apply`) waits for approval. The arm plans only `cloudflare_load_balancer_monitor.web`, grades
 the saved plan against the pinned https shape, applies it, then polls the pool health for ~5 minutes and fails red unless BOTH origins read healthy.
 
-If it ends red (an origin unhealthy or a one-origin read): traffic is unaffected (web-2 is weight 0, the B1 fallback serves web-1), but the
+If it ends red (an origin unhealthy or a one-origin read): traffic is unaffected (both origins serve, and an unhealthy origin falls back via B1 to web-1), but the
 Cloudflare notification policy `web_lb_health` will mail "Unhealthy". Roll back: revert the PR that changed `cloudflare-lb.tf`, then dispatch
 `-f arm=ga-monitor-fix -f confirm=FIX-GA-LB-MONITOR` (http/:80). Do not set `allow_insecure = true` as a reflex: ADR-321 R7 requires the
 trust to be shown, and a red result with both listeners proven is the evidence to decide that deliberately.

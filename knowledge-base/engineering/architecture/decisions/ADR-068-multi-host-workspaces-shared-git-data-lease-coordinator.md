@@ -1546,3 +1546,15 @@ Apply path unchanged in kind, widened in set: `ga-monitor-fix` and `ga-pool-upda
 two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` (per-arm confirm literals,
 `environment: web-platform-infra-apply`, saved-plan graders `cf_lb_gate_ga_monitor_update` +
 `cf_lb_gate_ga_pool_update`) — the `ga-overlay` gate keeps create-only semantics.
+
+## Addendum — 2026-11-08 (#12363): web-2 serves at weight 1 and `web2_lb_weight` defaults to 1
+
+The 2026-11-01 addendum above records web-2 as a pool member at weight 0 "until the #6027 window flips 0→1". That is now history: the serve flip applied on 2026-11-08 (`cf-lb-overlay.yml` `arm=ga-pool-update mode=serve`, run 42488889045), so web-2 serves at pool weight 1 and live is `{web-1:1, web-2:1}`. This addendum is the dated record of what changes in the tree because of it.
+
+- **The Terraform default follows live.** `variable "web2_lb_weight"` defaults to `1`. Before this change the tree said 0 while live said 1, so the scheduled full-root drift plan reported web-2 `1 -> 0` on every run and any full-root plan or `ga-overlay` run would have proposed a silent drain.
+- **Drain is an explicit act.** `ga-pool-update mode=drain` already passed `-var=web2_lb_weight=0`; `ga-overlay` now passes the same explicit `0`, so a fresh GA3 create stays the drained two-member shape its grader (`cf_lb_gate_ga`) pins. The 0-to-1 feeder is still only the `ga_pool_update` plan step, 1 solely for `mode=serve` after the §(c) gate chain.
+- **Serve accepts a no-op plan.** Against live `{1,1}` the pool plans as a no-op. `cf_lb_gate_ga_pool_update` is now a thin wrapper around the unchanged grader: serve requires exactly one pool entry, grades an update as before, and normalises a provably plain no-op pool entry into an update in a private temp copy so every origins and weight pin grades it on the same terms; an absent, duplicated or oddly-shaped pool entry refuses. Drain is untouched.
+- **Operational rules that follow from the new default.** (1) An untargeted apply that creates or replaces `hcloud_server.web["web-2"]` (or the pool) MUST pass `-var=web2_lb_weight=0`, because at the default an empty replacement host would enter the pool at weight 1 before the serve gate chain runs; the same rule is in the runbooks. (2) A drain is not durable until the default is changed back: the next unrelated full-root apply restores weight 1, and a full-root plan after an intentional drain proposes `0 -> 1`.
+- **Rejected option: keep the default at 0 and pass `-var=web2_lb_weight=1` in every non-serve plan.** Rejected because the drift workflow, the PR plan and every ad-hoc plan would each need the variable, and a forgotten variable drains web-2; it also makes the committed tree disagree with the live pool permanently.
+
+The one-way language and the "only feeder is the serve arm" invariant live in the `cf-lb-a-record-gaplessness-verify.md` runbook, the `variables.tf` comment and `lb-weight-gate.test.sh` C.4, not in this ADR (which never names the variable); they were rewritten with this change.
