@@ -133,7 +133,10 @@ pins every API path the tool reads; `DECLARED_TOTAL` counts gated `mutate` sites
    `total_count == seen` truncation refusal, fan-out cap):
    - `gh_pages("repos/%s/commits/%s/check-suites?per_page=100")` — paginated; collect
      `QUEUE_SUITE_IDS = {s["id"] for s in check_suites if s["app"]["slug"] == "github-actions"
-     and (s["head_branch"] or "").startswith("gh-readonly-queue/")}`.
+     and (s["head_branch"] or "").startswith("gh-readonly-queue/")}` — the check-suites
+     listing read carries the same `total_count == seen` truncation refusal as
+     check-runs (CTO advisory 2026-11-08: a silently truncated suite list would
+     under-enumerate the census).
    - `gh_pages("repos/%s/commits/%s/check-runs?per_page=100")` — paginated; take
      `details_url` run ids only from check_runs whose `check_suite.id ∈ QUEUE_SUITE_IDS`
      (the join that bounds run reads to queue-branch suites).
@@ -144,14 +147,17 @@ pins every API path the tool reads; `DECLARED_TOTAL` counts gated `mutate` sites
      github-actions queue suites is a recorded zero, not an error (a commit whose main
      landing bypassed the queue legitimately has none — it is still reported in the
      corroboration block).
-3. **Union the population.** `listed_ids = {r["id"] for r in runs}`;
+3. **Union the population (CTO pin 2026-11-08).** `listed_ids = {r["id"] for r in runs}`;
    `missing = [r for found in per_commit if r["id"] not in listed_ids and
    since <= r["created_at"] <= until]`; `runs = listed + missing` — `by_pr`, `fail_runs`,
    the conclusion histogram and `cleared()` all see the union (a dropped SUCCESS run
-   clearing units via `cleared()` is desired). Corroborated units carry
-   `u["runs_via"] = "check-runs-window"` for receipt provenance; missing runs are
-   classified by the identical pipeline (`files_for`, `fill_selection`, `cleared`,
-   `classify`) — they are real runs, not synthetic placeholders.
+   clearing units via `cleared()` is desired). **Corroborated SUCCESS runs are
+   `by_pr`/histogram clearing witnesses only — they are never written as ejection
+   units** (a clean unit would inflate n and dilute the cp95 bound); corroborated
+   **non-success** runs are units counted inside `refused`. Corroborated units carry
+   `u["runs_via"] = "check-runs-window"` for receipt provenance; missing non-success
+   runs are classified by the identical pipeline (`files_for`, `fill_selection`,
+   `cleared`, `classify`) — they are real runs, not synthetic placeholders.
 4. **Queue-event oracle.** `prs = {pr_of(r["head_branch"]) for r in runs} - {""}`;
    per PR, `gh_pages("repos/%s/issues/%s/timeline?per_page=100")` (paginated array docs)
    → `added = #{added_to_merge_queue with created_at ∈ window}`,
@@ -186,11 +192,15 @@ pins every API path the tool reads; `DECLARED_TOTAL` counts gated `mutate` sites
    invocation). A shortfall that SHRINKS between invocations leaves stale keys →
    `expected_units` mismatch at `aggregate` → fail-loud (rc 2), never a silent pass.
 7. **Docstring** (`ejections` section, :21, :48, `not-evaluable` :36, DECLARED LIMITS):
-   name the corroboration arms, the oracle's count-bound nature, and the two documented
+   name the corroboration arms, the oracle's count-bound nature, and the THREE documented
    residuals — (a) an `added_to_merge_queue` entry removed before the queue spawned a run
    over-counts expected (worst_case direction, per the conservative rule); (b) a queued PR
    whose EVERY run the index dropped is invisible to both arms (the ruling's own
-   documented residual — events can't name a branch nobody listed).
+   documented residual — events can't name a branch nobody listed); (c) observed can
+   exceed in-window adds at window edges — a pre-window add whose run landed in-window
+   makes observed > in-window added (verified live: pr-12390 4 adds vs 6 distinct
+   branches), so `max(0, added - observed)` can mask a partial index drop at the edges
+   (CTO AMEND 2026-11-08 — count bound is necessary-not-sufficient by construction).
 
 ### Phase 2 — classifier coverage (#12444)
 
@@ -268,8 +278,8 @@ New fixtures + assertion rows (the stub is path-keyed; new paths get `fx`/`fx_er
 
 - `ci-pr-affected-activation.md` §4: replace the recorded-residual bullet (:161-168) with
   the built semantics — the landed-sha arm, the queue-event count bound, `expected_units`,
-  and the two documented residuals (pre-processing adds over-count; all-dropped unmerged
-  PRs invisible).
+  and the three documented residuals (pre-processing adds over-count; all-dropped unmerged
+  PRs invisible; window-edge observed>added masking a partial drop — CTO AMEND).
 - Live smoke (bounded): `ejections --out /var/tmp/s4-corrob-smoke --commits 20
   --base origin/main` — exercises the join + oracle against the real repo; receipts
   (command, rc, corroboration block, oracle counts, per-unit `runs_via`) committed under
@@ -467,9 +477,11 @@ credentials, same trust level. No `.c4` edit required.
 
 - AC1: `cmd_ejections` enumerates the window's `--commits`/`--base` first-parent commits
   unconditionally and, per commit, resolves merge_group ci.yml run ids via commit-keyed
-  check-suites (github-actions + `gh-readonly-queue/` head_branch) joined to check-runs;
-  every such run absent from the listing and created in-window is classified through the
-  normal pipeline with `runs_via=check-runs-window`.
+  check-suites (github-actions + `gh-readonly-queue/` head_branch, `total_count == seen`
+  guarded) joined to check-runs; every such run absent from the listing and created
+  in-window joins the union — a corroborated SUCCESS run feeds `by_pr`/histogram and
+  `cleared()` only (never a unit), while a corroborated non-success run is classified
+  through the normal pipeline as a unit with `runs_via=check-runs-window`.
 - AC2: The per-PR oracle counts `added_to_merge_queue` timeline events in-window vs
   distinct `pr-N-*` head_branch names in the union; each shortfall and each failed
   corroboration/oracle read yields exactly one `not-evaluable` synthetic unit, and

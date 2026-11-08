@@ -20,6 +20,7 @@
 
 ### Components Invoked
 - soleur:plan, soleur:deepen-plan (inline), CTO rulings on #12428/#10448 (binding inputs), collision-precheck.sh, lint-guard-contract.py, gh read-only probes
+- cto_spawns=1 (batched 11-row ruling of the plan's decision-challenges; adopted 9, AMENDS on the oracle expected-side and expected_units schema, 1 advisory guard)
 
 ## Operator Constraints
 
