@@ -35,5 +35,15 @@ dedup: ~28 raw -> 9 unique (structural-cause roll-up: the new guard reads one ph
 | issue #12362 attributes the gap to #12295; code-quality said the plan's #11681 is stale | git-history, code-quality | git-history is right (full-history check; the shallow clone made #11784 look earliest): plan correct, noted in PR body |
 | pre-existing `[^#\n]` ERE in the drain check at the existing line 187 can never fire | pattern | out of scope, noted for the PR body |
 
+### Fix round 1 (FIX_PANEL_SHA 4a0fd0d68e, 7 seats: code-quality, pattern, architecture, performance, agent-native, test-design, structural-enumeration)
+
+| canonical defect key | reporting seat(s) | disposition |
+|---|---|---|
+| first-panel fixes (MT3, shared selector, REASON strings, header, sibling edits, accept re-key) | all seven | verified closed; no fix introduced a defect |
+| `merge-queue-dequeue.md:28` prints the same list and says "correlate by headSha/createdAt" (the lead's earlier "no headSha claim" premise was wrong) | architecture, structural-enumeration (code-quality noted it) | CTO re-ruling: add `headSha,` in this PR (fifth site of ADR-270's "five pr-N triage sites") |
+| the four sibling surfaces carry no headSha pin (a future removal passes every suite) | structural-enumeration | declined for this PR per the CTO (separate concern); noted here |
+| `createdAt` is named as a correlation key but not requested in the printed lists | agent-native | accepted: the ruling covered headSha only |
+| ratchet needs `--base origin/main` locally (default `HEAD^1` reads accept-unattributed on an accept-only commit) | code-quality, structural-enumeration | noted: use `--base origin/main` |
+
 ## Operator Constraints
 - Ref #9927 only, never Closes; operator-held items untouched; no operator technical forks.
