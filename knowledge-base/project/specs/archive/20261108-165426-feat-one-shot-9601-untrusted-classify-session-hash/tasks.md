@@ -34,10 +34,10 @@ Ref #9601 (epic, slice 2), Ref #4671, Ref #10195. Single small PR; no flag, scor
 - [x] 4.1 Runbook `betterstack-log-query.md`, `op:"untrusted-classify"` section: `sessionId` becomes `sessionIdHash` in the field list, plus the one-sentence lookup note.
 - [x] 4.2 Append the dated addendum to the end of ADR-287 (text in the plan, Phase 4); change no earlier line.
 - [x] 4.3 Run `bash scripts/markdown-lint.sh --repo-sweep` and `npx markdownlint-cli2` on the plan and this file.
-- [ ] 4.4 Run the ship skill's `technical-ruling-gate.sh --branch`.
+- [x] 4.4 Run the ship skill's `technical-ruling-gate.sh --branch`.
 
 ## Phase 5: Ship
 
-- [ ] 5.1 Verify the diff scope against the merge-base is the planned file set (plan AC7).
-- [ ] 5.2 PR body: `Ref #9601`, `Ref #4671`, `Ref #10195`; state that the Article 30 PA-8(c) amendment is still owed and is operator/CLO-class, not part of this PR; state that lines already shipped keep the raw id until log retention expires; make no public security claim.
+- [x] 5.1 Verify the diff scope against the merge-base is the planned file set (plan AC7).
+- [x] 5.2 PR body: `Ref #9601`, `Ref #4671`, `Ref #10195`; state that the Article 30 PA-8(c) amendment is still owed and is operator/CLO-class, not part of this PR; state that lines already shipped keep the raw id until log retention expires; make no public security claim.
 - [ ] 5.3 Hand off to CI as the ship gate; no flag, environment or production action.
