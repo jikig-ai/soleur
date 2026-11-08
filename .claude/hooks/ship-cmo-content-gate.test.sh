@@ -192,6 +192,15 @@ make_gate_repo "$TMPDIR/g-rename" "git mv knowledge-base/marketing/old-plan.md d
 res=$(run_hook_in "$TMPDIR/g-rename" "feat: new capability")
 assert_eq "a rename away from knowledge-base/marketing/ counts as a marketing change (passes)" "" "$res"
 
+# 15. A gitlink (submodule pointer) under the marketing surface that configuration hides: a committed `ignore = all`
+#    in .gitmodules plus a local diff.ignoreSubmodules=all. Without --ignore-submodules=none the diff omits the
+#    gitlink, the marketing list is empty and the gate wrongly denies.
+make_gate_repo "$TMPDIR/g-gitlink" "printf '[submodule \"sm\"]\\n\\tpath = knowledge-base/marketing/sm\\n\\turl = https://example.invalid/sm.git\\n\\tignore = all\\n' > .gitmodules; mkdir -p knowledge-base/marketing/sm; git update-index --add --cacheinfo 160000,\$(git rev-parse HEAD),knowledge-base/marketing/sm; git config diff.ignoreSubmodules all"
+precond=$(git -C "$TMPDIR/g-gitlink" diff --name-only main...HEAD)
+assert_eq "precondition: the config-hidden plain diff omits the marketing gitlink" "0" "$(printf '%s\n' "$precond" | grep -Fxc 'knowledge-base/marketing/sm' || true)"
+res=$(run_hook_in "$TMPDIR/g-gitlink" "feat: new capability")
+assert_eq "a config-hidden gitlink under knowledge-base/marketing/ counts as a marketing change (passes)" "" "$res"
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [[ "$FAIL" -eq 0 ]] || exit 1

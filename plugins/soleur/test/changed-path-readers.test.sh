@@ -694,7 +694,11 @@ SENT_SITE_FLOOR=15
 # The hooks and scripts this PR converts keep `-z` (file<TAB>diff-line regex).
 PINNED_Z='.claude/hooks/ship-cmo-content-gate.sh	diff[^|]* -z( |$)
 .claude/hooks/ship-runbook-ssh-gate.sh	diff[^|]* -z( |$)
-plugins/soleur/scripts/changed-paths.sh	diff -z --no-renames --ignore-submodules=none --name-only'
+plugins/soleur/scripts/changed-paths.sh	diff -z --no-renames --ignore-submodules=none --name-only
+apps/web-platform/.github/workflows/constraint-gates.yml	changed_files=.*git diff -z --no-renames --ignore-submodules=none --name-only
+.github/workflows/pr-quality-guards.yml	surface_files=.*git diff -z --no-renames --ignore-submodules=none --name-only
+.github/workflows/pr-quality-guards.yml	changed_files=.*git diff -z --name-only
+.github/workflows/secret-scan.yml	CHANGED=.*git diff -z --name-only'
 
 SENT_PY="$WORK_ROOT/sentinel.py"
 cat > "$SENT_PY" <<'PY'
@@ -837,11 +841,11 @@ YML
   if [ "${scanned:-0}" -ge "$SENT_FILE_FLOOR" ]; then pass "sentinel: scanned $scanned tracked workflow files (floor $SENT_FILE_FLOOR)"; else fail "sentinel: scanned only ${scanned:-0} workflow files, floor $SENT_FILE_FLOOR (the scan glob went stale)"; fi
   if [ "${sites:-0}" -ge "$SENT_SITE_FLOOR" ]; then pass "sentinel: found $sites reader sites (floor $SENT_SITE_FLOOR)"; else fail "sentinel: found only ${sites:-0} reader sites, floor $SENT_SITE_FLOOR (the classifier stopped matching)"; fi
   if [ "$nunl" -eq 0 ]; then pass "sentinel: 0 unlisted sites"; else
-    printf '%s\n' "$SENT_OUT" | grep '^UNLISTED' | while IFS= read -r l; do
+    while IFS= read -r l; do
       fail "sentinel: ${l#UNLISTED } -- every changed-path reader must carry a standalone -z (git diff -z --no-renames --ignore-submodules=none --name-only ... | tr '\\0' '\\n'): add -z or add a row to EXEMPT_TABLE"
-    done
+    done < <(printf '%s\n' "$SENT_OUT" | grep '^UNLISTED')
   fi
-  if [ "$nstale" -eq 0 ]; then pass "sentinel: 0 stale exemption entries"; else printf '%s\n' "$SENT_OUT" | grep '^STALE' | while IFS= read -r l; do fail "sentinel: stale exemption entry ${l#STALE }"; done; fi
+  if [ "$nstale" -eq 0 ]; then pass "sentinel: 0 stale exemption entries"; else while IFS= read -r l; do fail "sentinel: stale exemption entry ${l#STALE }"; done < <(printf '%s\n' "$SENT_OUT" | grep '^STALE'); fi
   echo "census: ${sites:-0} sites, $nunl unlisted, $nstale stale ($exempt exempt)"
   # The pinned must-keep-`-z` list.
   local row f rx
@@ -868,7 +872,7 @@ if [ "$SECTION" = all ] || [ "$SECTION" = steps ]; then
   if [ "$STEP_ROWS" -lt 85 ]; then printf '[FATAL] steps floor: only %s step executions ran, want >=85\n' "$STEP_ROWS" >&2; exit 1; fi
 fi
 floor=10
-[ "$SECTION" = all ] && floor=150
+[ "$SECTION" = all ] && floor=160
 if [ "$total" -lt "$floor" ]; then printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$floor" >&2; exit 1; fi
 echo
 echo "helper rows: $HELPER_ROWS, executed steps: $STEP_ROWS"
