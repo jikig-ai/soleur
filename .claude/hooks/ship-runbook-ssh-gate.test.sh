@@ -115,7 +115,7 @@ tc() { # <label> <expected> <actual>
 # snippet applied and committed (the hook diffs origin/main...HEAD).
 make_rb_repo() {
   local root work
-  root="$(mktemp -d "${TMPDIR:-/var/tmp}/runbook-gate-fx.XXXXXX")" || return 1
+  root="$(mktemp -d -t runbook-gate-fx.XXXXXX)" || return 1
   FX_ROOTS+=("$root")
   assert_fixture_dir "$root"
   work="$root/work"

@@ -62,7 +62,9 @@ assert_fixture_dir() {
 }
 
 # One owning root for every fixture, removed on ANY exit path. The EXIT trap is registered BEFORE the fixture library is sourced.
-WORK_ROOT="$(mktemp -d "${TMPDIR:-/var/tmp}/changed-path-readers.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+WORK_ROOT="$(mktemp -d -t changed-path-readers.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+# A relative TMPDIR would make every path below relative; refuse it here so the root is provably absolute.
+case "$WORK_ROOT" in /*) : ;; *) echo "FATAL: WORK_ROOT is not absolute: $WORK_ROOT" >&2; exit 2 ;; esac
 assert_fixture_dir "$WORK_ROOT"
 trap 'rm -rf "$WORK_ROOT"' EXIT
 # shellcheck source=./lib/git-fixture-env.sh
@@ -1395,25 +1397,26 @@ skill_prose_pins() {
 # below must move the FAIL counter. The whole of skill_prose_pins is run on each tree; counters are unwound like selftest_moved.
 skill_fixture() { # <root>
   local r="$1/plugins/soleur/skills" call='bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"'
+  case "$1" in /*) : ;; *) return 1 ;; esac
   mkdir -p "$r/preflight" "$r/ship" "$r/review" || return 1
   {
     printf '## Phase 0\n\n```bash\n'
-    printf '%s origin/main...HEAD > "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }\n' "$call"
+    printf '%s origin/main...HEAD %s "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }\n' "$call" '>'
     printf '```\n\n**Cache-missing rule.** Every SKIP predicate below reads: cache file absent => RUN; `grep` rc 1 => SKIP; rc 2 => RUN.\n\n'
     local c
     for c in 1 2 3 6 8 10; do
       printf '### Check %s: name\n\n# a comment line\nFor Check %s the cache file is absent, RUN. Otherwise `grep` rc 1 => return **SKIP**.\n\n' "$c" "$c"
     done
     printf '### Check 11: tail\n\nbody\n'
-  } > "$r/preflight/SKILL.md"
+  } > "$1/plugins/soleur/skills/preflight/SKILL.md"
   {
     printf '```bash\n'
     printf 'gdpr_gate_touch=$(%s --match '"'"'^plugins/x/'"'"' origin/main...HEAD) || { [ $? -eq 1 ] || gdpr_gate_touch=unknown; }\n' "$call"
     printf 'diff_match=$(%s --match "$CANONICAL_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || diff_match=unknown; }\n' "$call"
     printf 'dpf_match=$(%s --match "$DPF_REGEX" origin/main...HEAD) || { [ $? -eq 1 ] || dpf_match=unknown; }\n' "$call"
     printf '```\n'
-  } > "$r/ship/SKILL.md"
-  printf '   %s origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\n' "$call" > "$r/review/SKILL.md"
+  } > "$1/plugins/soleur/skills/ship/SKILL.md"
+  printf '   %s origin/main...HEAD %s "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }\n' "$call" '>' > "$1/plugins/soleur/skills/review/SKILL.md"
 }
 skill_defect() { # <root> <sk> <python old> <python new>: apply ONE defect to the fixture (must apply exactly once)
   python3 -I - "$1/plugins/soleur/skills/$2/SKILL.md" "$3" "$4" <<'PY'
@@ -1620,19 +1623,34 @@ case "$SECTION" in
 esac
 
 # Assertion floors: a green run that executed nothing is the failure this block exists to refuse (H3).
+# A single section (helper | steps | sentinel) is a developer aid; the floors below bind the FULL run that CI executes, and each is a
+# literal bound adjacent to its test so the meta-guard (scripts/guard-vacuity-floor.test.sh) can construct a mutant for it.
 total=$((PASS + FAIL))
-if [ "$SECTION" = all ] || [ "$SECTION" = helper ]; then
-  if [ "$HELPER_ROWS" -lt 109 ]; then printf '[FATAL] helper floor: only %s helper rows ran, want >=109\n' "$HELPER_ROWS" >&2; exit 1; fi
+if [ "$SECTION" != all ]; then
+  echo
+  echo "helper rows: $HELPER_ROWS, executed steps: $STEP_ROWS"
+  echo "Guard ($SECTION only, floors not applied): $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ]
+  exit
 fi
-if [ "$SECTION" = all ] || [ "$SECTION" = steps ]; then
-  if [ "$STEP_ROWS" -lt 106 ]; then printf '[FATAL] steps floor: only %s step executions ran, want >=106\n' "$STEP_ROWS" >&2; exit 1; fi
+MIN_HELPER_ROWS=109
+if [ "$HELPER_ROWS" -lt "$MIN_HELPER_ROWS" ]; then
+  printf '[FATAL] helper floor: only %s helper rows ran, want >=%s\n' "$HELPER_ROWS" "$MIN_HELPER_ROWS" >&2
+  exit 1
 fi
-# Exact current totals (the floors are the full count, not a margin below it): helper 109 + steps 135 + sentinel 68.
-case "$SECTION" in all) floor=312 ;; helper) floor=109 ;; steps) floor=135 ;; sentinel) floor=68 ;; esac
+MIN_STEP_ROWS=106
+if [ "$STEP_ROWS" -lt "$MIN_STEP_ROWS" ]; then
+  printf '[FATAL] steps floor: only %s step executions ran, want >=%s\n' "$STEP_ROWS" "$MIN_STEP_ROWS" >&2
+  exit 1
+fi
+# Exact current total (the floor is the full count, not a margin below it): helper 109 + steps 135 + sentinel 68.
+MIN_TOTAL=312
+if [ "$total" -lt "$MIN_TOTAL" ]; then
+  printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$MIN_TOTAL" >&2
+  exit 1
+fi
 # Every positive control must have run (an inert verdict helper is caught inside selftest_moved; a skipped self-test is caught here).
-case "$SECTION" in all) want_self=45 ;; helper) want_self=15 ;; steps) want_self=16 ;; sentinel) want_self=14 ;; esac
-if [ "$SELFTESTS" -ne "$want_self" ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want %s\n' "$SELFTESTS" "$want_self" >&2; exit 1; fi
-if [ "$total" -lt "$floor" ]; then printf '[FATAL] assertion floor: only %s assertions ran, want >=%s\n' "$total" "$floor" >&2; exit 1; fi
+if [ "$SELFTESTS" -ne 45 ]; then printf '[FATAL] self-test count: ran %s verdict-helper self-tests, want 45\n' "$SELFTESTS" >&2; exit 1; fi
 echo
 echo "helper rows: $HELPER_ROWS, executed steps: $STEP_ROWS"
 echo "Guard: $PASS passed, $FAIL failed"
