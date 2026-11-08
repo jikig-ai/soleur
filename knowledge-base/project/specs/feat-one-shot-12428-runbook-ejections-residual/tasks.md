@@ -24,5 +24,5 @@ Issue: #12428 (tracks; stays OPEN — `Ref`, never `Closes`) — docs-only runbo
 - [x] 3.2 Run `bash scripts/markdown-lint.sh knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md`
   — expect `clean`.
 - [x] 3.3 Run `git diff --check` and confirm AC5's append-only single-file diff holds.
-- [ ] 3.4 Commit the runbook edit (message: `docs(runbook): record post-corroboration
+- [x] 3.4 Commit the runbook edit (message: `docs(runbook): record post-corroboration
   criterion-a re-run and ejections-listing residual (#12428)`).
