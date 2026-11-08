@@ -11,6 +11,25 @@ lane: cross-domain
 
 # fix(ci): add headSha to the merge-queue stall issue's Triage step 2 field list
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Method:** gate sweep (4.6 User-Brand present with threshold `none`; 4.7/4.10/4.13 not triggered - no file under `apps/*/server|src|infra`, `plugins/*/scripts`, no store or connection, no new workflow; 4.8 PAT sweep: no hits; 4.9 no UI surface; 4.11 `lint-guard-contract.py` green, 1 guard entry; 4.12 exactly one unfenced `## Scope Check`) plus live citation verification and the Phase 3 plan-review panel (code-simplicity and correctness seats).
+
+### Key Improvements
+
+1. Plan review folded the new assertion into the existing `structural_check` (exercised by `S0`, already inside the `M0` chain) instead of a new engine, S-row and M0 edit - fewer moving parts and a smaller header/line-citation blast radius.
+2. Label collision fixed: `M15` already names an existing row, so the new rows are `MT1`-`MT5` and `PT1`.
+3. Vacuous-GREEN hole closed: the assertion runs as `jq -e` over a boolean-valued program, with a distinct REASON and a mutation row (`MT5`) for a selector hit that carries no `--json` list; the second-member decoy must be indented to the block-scalar level inside the heredoc or it breaks (column 0) or never counts (a real YAML comment).
+
+### New Considerations Discovered
+
+- Suite runtime on a loaded machine exceeded 110 s (measured ~20 s in `suite-durations.tsv`): run it with the 600000 ms cap or under Monitor, never sleep.
+- `check-workflow-duplicate-keys.py` scans every workflow and takes no per-file argument.
+- Verified live: `10e66d9ab8` is a commit on `origin/main`; `follow-through` label exists; rule ids `cq-assert-anchor-not-bare-token`, `hr-monitor-not-run-in-background-for-polling`, `hr-when-a-plan-specifies-relative-paths-e-g`, `rf-after-merging-read-files-from-the-merged` are active; `plugins/soleur/test/run-all.sh` does not exist (registration is by `SUITE_GLOBS` + shard-leg tsv rows).
+- Precedent learning `2026-11-08-a-locale-ordered-regex-range-and-a-probe-...` prescribes exactly the controls used here (lookalike, decoy, absent line) and the run-against-the-unfixed-tree discipline.
+
+
 Spec lacks valid `lane:` (no spec.md for this branch) - defaulted to cross-domain (TR2 fail-closed).
 
 ## Overview
@@ -18,7 +37,7 @@ Spec lacks valid `lane:` (no spec.md for this branch) - defaulted to cross-domai
 The stall issue body filed by `.github/workflows/merge-queue-stall-check.yml` tells its reader, in
 Triage step 2, to "correlate recent merge_group runs by headSha/createdAt". The `gh run list ... --json`
 field list on the same line does not request `headSha`, so the instruction cannot be followed from that
-command's output. Pre-existing since PR #12295; raised in the PR #12350 review (agent-native seat, P3) and
+command's output. Pre-existing on main (the issue body attributes it to PR #12295; `git log -S'by headSha/createdAt'` shows that prose entering with the batching change #11681 - attribution is immaterial to the fix); raised in the PR #12350 review (agent-native seat, P3) and
 filed as #12362 with a follow-through probe. A CTO ruling (Ruled by CTO agent, 2026-11-08) lifted the hold
 that kept the template byte-identical in #12350 (merged as 10e66d9ab8).
 
