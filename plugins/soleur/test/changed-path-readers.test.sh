@@ -1309,7 +1309,7 @@ selftest_pinned() {
 
 # Skill prose is not executed here; this pins its SPELLING and its FAIL-CLOSED SHAPE, on comment-stripped text (a `# ...` line or a
 # markdown heading never satisfies a pin), anchored on the call forms:
-#   spelling   every `changed-paths.sh` is the whole call form `bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"` (a bare or doubled
+#   spelling   every `changed-paths.sh` is the whole call form `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"` (a bare or doubled
 #              name resolves against the wrong cwd or an unset root);
 #   range      every line naming the helper names `origin/main...HEAD` (the PR's own diff, never a default target);
 #   ship       each gdpr/DPF/canonical `--match` assignment keeps `|| { [ $? -eq 1 ] || VAR=unknown; }` (rc 1 = no match; any other rc is
@@ -1317,8 +1317,8 @@ selftest_pinned() {
 #   preflight  the Step 0.1 cache line keeps `|| { rm -f <cache>; echo "PREFLIGHT-CACHE-MISSING..." }`, the Cache-missing rule keeps
 #              `cache file absent => RUN`, and the SKIP predicate of Checks 1, 2, 6, 8 and 10 each says `cache file is absent, RUN`;
 #   review     the classify call keeps `|| { ...REVIEW-CLASSIFY-UNKNOWN... }`.
-SKILL_CALL='bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"'
-RX_CALL='bash "\$\{CLAUDE_PLUGIN_ROOT:-\}/scripts/changed-paths\.sh"'
+SKILL_CALL='bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"'
+RX_CALL='bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/changed-paths\.sh"'
 SKILL_ROOT="$REPO_ROOT"   # the tree the skill pins read; the self-tests point it at a synthetic tree
 skill_body() { # <sk> -> comment-stripped SKILL.md on stdout (rc 1 when the file is missing)
   local f="$SKILL_ROOT/plugins/soleur/skills/$1/SKILL.md"
@@ -1394,7 +1394,7 @@ skill_prose_pins() {
 # Self-tests for the skill pins: a SYNTHETIC skills tree is the positive control (every pin passes, none fails), and each single defect
 # below must move the FAIL counter. The whole of skill_prose_pins is run on each tree; counters are unwound like selftest_moved.
 skill_fixture() { # <root>
-  local r="$1/plugins/soleur/skills" call='bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh"'
+  local r="$1/plugins/soleur/skills" call='bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh"'
   mkdir -p "$r/preflight" "$r/ship" "$r/review" || return 1
   {
     printf '## Phase 0\n\n```bash\n'

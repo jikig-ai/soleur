@@ -114,7 +114,7 @@ Before spawning review agents, classify the PR to right-size the panel.
 
    ```bash
    REVIEW_TMP="$(git rev-parse --git-dir)"
-   bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }
+   bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$REVIEW_TMP/review-changed.txt" || { rc=$?; rm -f "$REVIEW_TMP/review-changed.txt"; echo "REVIEW-CLASSIFY-UNKNOWN: helper rc=$rc"; }
    git diff --name-status origin/main...HEAD > "$REVIEW_TMP/review-status.txt"
    git diff --numstat origin/main...HEAD > "$REVIEW_TMP/review-numstat.txt"
    ```
@@ -382,7 +382,7 @@ Tier resolution + the no-double-invoke rule: [risk-tier-and-fix-rounds.md](refer
 
 **When to run gdpr-gate at review time:**
 
-- `bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD` exits 0 (a match) or 2/127 (unknown: treat as a match) (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
+- `bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match "$CANONICAL_REGEX" origin/main...HEAD` exits 0 (a match) or 2/127 (unknown: treat as a match) (mirrored regex source: `plugins/soleur/skills/gdpr-gate/SKILL.md` §"Path globs (canonical)").
 
 **What this agent checks:**
 

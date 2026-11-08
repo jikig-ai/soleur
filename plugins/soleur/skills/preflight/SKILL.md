@@ -48,7 +48,7 @@ Use `git rev-parse --git-dir` to resolve a writable tmp path that works in both 
 
 ```bash
 PREFLIGHT_TMP="$(git rev-parse --git-dir)"
-bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$PREFLIGHT_TMP/preflight-diff-files.txt" || { rm -f "$PREFLIGHT_TMP/preflight-diff-files.txt"; echo "PREFLIGHT-CACHE-MISSING: helper failed"; }
 ```
 
 All downstream `cat .git/<filename>` references in the predicates below must use `"$PREFLIGHT_TMP/<filename>"` instead. The pre-existing `.git/...` literals worked in non-worktree checkouts but silently broke in worktrees (where every preflight increasingly happens by default).
@@ -129,7 +129,7 @@ Re-use the cached path-set from Phase 0 Step 0.1 (`"$PREFLIGHT_TMP/preflight-dif
 grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt"
 ```
 
-The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `_v=$(mktemp -d -t soleur-run.$$.XXXXXXXX) && a=$(mktemp -p "$_v") && b=$(mktemp -p "$_v") && bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" --match '(^|/)supabase/migrations/.*\.sql$' origin/main...HEAD > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
+The regex anchors are intentional: `(^|/)` accepts both top-level (`supabase/migrations/X.sql`) and nested-under-app-dir paths (`apps/web-platform/supabase/migrations/X.sql`); `.*\.sql$` accepts files at any depth under the migrations directory (matching git pathspec's `*` which crosses `/`). Verify at edit time via `_v=$(mktemp -d -t soleur-run.$$.XXXXXXXX) && a=$(mktemp -p "$_v") && b=$(mktemp -p "$_v") && bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" --match '(^|/)supabase/migrations/.*\.sql$' origin/main...HEAD > "$a" && grep -E '(^|/)supabase/migrations/.*\.sql$' "$PREFLIGHT_TMP/preflight-diff-files.txt" > "$b" && diff -u "$a" "$b"`.
 
 If the cache file is absent, RUN the check. Otherwise `grep` rc 1 (no migration files) => return **SKIP**; rc 2 => RUN.
 
@@ -1394,7 +1394,7 @@ that no longer resolves). Consumes the deterministic analyzer `domain-model-drif
 ```bash
 DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
 # Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
-if [[ ! -s "$DIFF" ]]; then if bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF.new" 2>/dev/null; then mv -f "$DIFF.new" "$DIFF"; else rm -f "$DIFF.new" "$DIFF"; fi; fi
+if [[ ! -s "$DIFF" ]]; then if bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF.new" 2>/dev/null; then mv -f "$DIFF.new" "$DIFF"; else rm -f "$DIFF.new" "$DIFF"; fi; fi
 if [[ -s "$DIFF" ]]; then
   grep -qE '(^|/)apps/web-platform/supabase/migrations/.*\.sql$|(^|/)apps/web-platform/server/workspace-resolver\.ts$|(^|/)knowledge-base/engineering/architecture/domain-model\.md$' "$DIFF"; rc=$?
   if [[ $rc -eq 1 ]]; then echo "SKIP — no business-rule surface (migration/workspace-resolver/register) in diff"; exit 0; fi   # rc 1 = no match => SKIP; rc 2 (grep error) => run
@@ -1449,7 +1449,7 @@ prose; it shells out and relays the exit code.
 ```bash
 DIFF="$PREFLIGHT_TMP/preflight-diff-files.txt"
 # Fail-safe: never SKIP on a missing/empty cache — recompute inline, then run if still empty.
-if [[ ! -s "$DIFF" ]]; then if bash "${CLAUDE_PLUGIN_ROOT:-}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF.new" 2>/dev/null; then mv -f "$DIFF.new" "$DIFF"; else rm -f "$DIFF.new" "$DIFF"; fi; fi
+if [[ ! -s "$DIFF" ]]; then if bash "${CLAUDE_PLUGIN_ROOT}/scripts/changed-paths.sh" origin/main...HEAD > "$DIFF.new" 2>/dev/null; then mv -f "$DIFF.new" "$DIFF"; else rm -f "$DIFF.new" "$DIFF"; fi; fi
 if [[ -s "$DIFF" ]]; then
   grep -qE '\.tf$|supabase/migrations/.*\.sql$|cloud-init.*\.ya?ml$|docker-compose.*\.ya?ml$' "$DIFF"; rc=$?
   if [[ $rc -eq 1 ]]; then echo "SKIP — no store-class or connection-class surface (*.tf / migration / cloud-init / docker-compose) in diff"; exit 0; fi   # rc 1 = no match => SKIP; rc 2 (grep error) => run
