@@ -25,7 +25,6 @@ computed=NO-GO on the bound arm, driven by the not-evaluable bucket, not dropped
 and (2) a limits-list bullet in §4 recording the ejections-side residual (silent
 under-count biases the cp95 bound toward a false GO; recorded-not-built per the
 2026-11-08 CTO ruling, decision-challenges.md row 4 of the archived #10862 spec dir).
-Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
 ## Enhancement Summary
 
@@ -233,7 +232,7 @@ the diff is prose in a runbook, and markdown-lint is the file's only mechanical 
 - [ ] AC2 — `awk '/Read the output with these limits/,/^## 5\./' knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md | grep -c '#12428'` returns >= 1, and the same region `grep -c 'merge_group'` returns >= 1.
 - [ ] AC3 — every statistic in the new §2 entry matches the receipts verbatim: `grep -F 'worst_case=60/382 cp95_upper_on_worst_case=19.10%' knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/rerun/replay-summary.txt` exits 0 AND `grep -c '60/382'` on the runbook returns >= 1.
 - [ ] AC4 — `bash scripts/markdown-lint.sh knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md` prints `clean` (baseline verified clean 2026-11-08).
-- [ ] AC5 — append-only single-file diff: `git diff origin/main...HEAD -- knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md | grep -cE '^-[^-]'` returns 0, and `git diff --name-only origin/main...HEAD | grep -v -e '^knowledge-base/project/' -e '^knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md$' | wc -l` returns 0.
+- [ ] AC5 — single-file runbook diff, additions-only except the one-line receipt-path repair for the archived `feat-one-shot-ci-lever-residuals` receipt (review fix): `git diff origin/main...HEAD -- knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md | grep -cE '^-[^-]'` returns ≤ 1 (the stale-path line), and `git diff --name-only origin/main...HEAD | grep -v -e '^knowledge-base/project/' -e '^knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md$' | wc -l` returns 0.
 - [ ] AC6 — the new §2 entry states the re-ruling stays operator-owned: `awk '/^## 2\./,/^## 3\./' knowledge-base/engineering/operations/runbooks/ci-pr-affected-activation.md | grep -c 'operator'` returns >= 2 (the 2026-11-07 entry already carries one).
 
 ## Domain Review

@@ -1,7 +1,7 @@
 # Tasks — feat-one-shot-12428-runbook-ejections-residual
 
 Plan: `knowledge-base/project/plans/2026-11-08-docs-runbook-ejections-residual-plan.md`
-Issue: #12428 (tracks; stays OPEN — `Ref`, never `Closes`) — docs-only runbook edit; no code, tests, or workflow changes.
+Issue: #12428 (tracks; stays OPEN — `Ref`, never `Closes`) | PR: #12430 — docs-only runbook edit; no code, tests, or workflow changes.
 
 ## Phase 1 — §2 dated ledger entry
 
