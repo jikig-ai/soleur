@@ -909,6 +909,12 @@ jobs:
           [[ -n "${REASON_RAW//[[:space:]]/}" ]] || { echo "::error::reason is required."; exit 1; }
           echo "- Reason: ${REASON_RAW} (arm=ga-pool-update, mode=${MODE_RAW}, run ${GITHUB_RUN_ID})" >> "$GITHUB_STEP_SUMMARY"
           echo "POOL_UPDATE_MODE=${MODE_RAW}" >> "$GITHUB_ENV"
+          # web-2's LB weight for THIS dispatch: 1 only for mode=serve, else 0 (the variable's
+          # default). One number feeds both the gate (SOLEUR_WEB2_SERVING_WEIGHT) and the plan
+          # (-var), so the gate always evaluates exactly the weight that is planned. Serve still
+          # cannot plan before the gate-chain step below passes (it is an earlier, fail-closed step).
+          if [[ "$MODE_RAW" == "serve" ]]; then WEB2_LB_WEIGHT=1; else WEB2_LB_WEIGHT=0; fi
+          echo "WEB2_LB_WEIGHT=${WEB2_LB_WEIGHT}" >> "$GITHUB_ENV"
       - name: §(c) gate chain (serve mode only — fail-closed BEFORE plan)
         if: inputs.mode == 'serve'
         env:
@@ -940,6 +946,13 @@ jobs:
           # injected; the wrapper accepts ONLY that exact path and fails closed
           # (exit 3, bad_doppler_bin) on anything else -- it never falls back to PATH.
           #
+          # TWO gate inputs are not in Doppler prd and are injected by the inner `env`
+          # (after `doppler run`, so they override any ambient value):
+          #   SOLEUR_WEB2_SERVING_WEIGHT  the weight this dispatch will plan (1 in serve).
+          #   SOLEUR_SERVING_ROTATION     the target rotation {web-1,web-2}.
+          # The gate no longer reads or allowlists any relay-bind input (Condition A.1 was
+          # deleted); the real relay evidence is the `relay bind probe (serve only)` step.
+          #
           # BARE EXIT 0 IS NOT THE PROOF. The gate has TWO exit-0 branches
           # (lb-weight-gate.sh): the web2_standby branch prints "SHAPE-ONLY — NOT
           # weight-flip authorization" and exits 0 WITHOUT evaluating Conditions
@@ -951,6 +964,8 @@ jobs:
           GATE_OUT=""
           GATE_OUT="$(env DOPPLER_TOKEN="$DOPPLER_TOKEN_PRD" doppler run --preserve-env -p soleur -c prd -- \
             env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
+              SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" \
+              SOLEUR_SERVING_ROTATION="web-1,web-2" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
             echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
             exit 1
@@ -1019,6 +1034,101 @@ jobs:
       - name: Terraform init (parent root)
         working-directory: ${{ env.INFRA_DIR }}
         run: terraform init -input=false -lockfile=readonly
+      - name: relay bind probe (serve only)
+        if: inputs.mode == 'serve'
+        working-directory: ${{ env.INFRA_DIR }}
+        env:
+          # The three Better Stack ClickHouse READ credentials (mirror Doppler soleur/prd_terraform), the same
+          # secrets workspaces-luks-verify.yml binds. They ride the environment only; scripts/lib/web2-relay-rows.sh
+          # hands the query child exactly these three and withholds every other credential-shaped variable.
+          BETTERSTACK_QUERY_HOST: ${{ secrets.BETTERSTACK_QUERY_HOST }}
+          BETTERSTACK_QUERY_USERNAME: ${{ secrets.BETTERSTACK_QUERY_USERNAME }}
+          BETTERSTACK_QUERY_PASSWORD: ${{ secrets.BETTERSTACK_QUERY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
+          # WHY THIS STEP. The gate chain no longer checks the relay bind at all (Condition A.1 was deleted) and the
+          # pool-health read proves origin HEALTH, not that the relay is reachable on web-2's private
+          # address. The runner cannot reach web-2 and does not need to: it reads the fleet's own reports from Better
+          # Stack. Three pieces of evidence, ALL required (contract and judges: scripts/lib/web2-relay-rows.sh):
+          #   (1) web-2's app reports its own listener (WARN, every 60 s): proxy_state=listening addr=${WRR_BIND_ADDR}
+          #       port=${WRR_PORT}. The app binds the wildcard INSIDE its container; docker publishes 8443 on the
+          #       host's private IP, so the app can never report that IP itself.
+          #   (2) web-1's deploy-time peer probe dialled web-2's published private address (from state) and the
+          #       newest relay_peer_probe row for it in the last 24 h says result=ok (web-1 -> web-2).
+          #   (3) the REVERSE direction: web-2's own deploy journals host_name soleur-web-2; its newest row about web-1's
+          #       private address (from state) must say result=ok too (web-2 -> web-1). When the LB sends users to web-2,
+          #       existing sessions are owned by web-1, so web-2's relay client must reach web-1:${WRR_PORT}. The
+          #       owner-recorded gate is "ok in both directions"; a missing row in either direction refuses.
+          # Every refusal below is exit 1 BEFORE any plan exists. An unanswered read, an empty or unparseable
+          # answer and a missing credential are refusals, never passes.
+          for v in BETTERSTACK_QUERY_HOST BETTERSTACK_QUERY_USERNAME BETTERSTACK_QUERY_PASSWORD; do
+            if [[ -z "${!v:-}" ]]; then
+              echo "::error::${v} is not configured — web-2's relay state cannot be read, so the serve flip is refused. NOTHING planned, NOTHING applied."
+              echo "- relay bind probe: REFUSED (credential absent: ${v})" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
+          # The private address web-1's peer probe must have dialled is the one Terraform STATE holds for web-2,
+          # never a literal here.
+          STATE_JSON="$(terraform show -json)" \
+            || { echo "::error::terraform show -json failed — web-2's private address cannot be resolved. NOTHING planned, NOTHING applied."; exit 1; }
+          WEB2_PRIVATE="$(printf '%s' "$STATE_JSON" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server_network.web[\"web-2\"]") | .values.ip // empty')" \
+            || { echo "::error::could not read web-2's private address from state. NOTHING planned, NOTHING applied."; exit 1; }
+          [[ "$WEB2_PRIVATE" =~ ^10\.0\.1\.[0-9]{1,3}$ ]] \
+            || { echo "::error::web-2's private IPv4 is absent from state (hcloud_server_network.web[\"web-2\"].ip) — nothing to match web-1's peer probe against. NOTHING planned, NOTHING applied."; exit 1; }
+          WEB1_PRIVATE="$(printf '%s' "$STATE_JSON" | jq -r \
+            '.values.root_module.resources[]? | select(.address == "hcloud_server_network.web[\"web-1\"]") | .values.ip // empty')" \
+            || { echo "::error::could not read web-1's private address from state. NOTHING planned, NOTHING applied."; exit 1; }
+          [[ "$WEB1_PRIVATE" =~ ^10\.0\.1\.[0-9]{1,3}$ && "$WEB1_PRIVATE" != "$WEB2_PRIVATE" ]] \
+            || { echo "::error::web-1's private IPv4 is absent from state or equals web-2's (hcloud_server_network.web[\"web-1\"].ip) — nothing to match web-2's peer probe against. NOTHING planned, NOTHING applied."; exit 1; }
+          # shellcheck source=scripts/lib/web2-relay-rows.sh
+          source "${GITHUB_WORKSPACE}/scripts/lib/web2-relay-rows.sh"
+          # The helper defines these constants; a helper that stopped defining one must refuse here, not blank a host pin.
+          [[ -n "${WRR_PORT:-}" && -n "${WRR_BIND_ADDR:-}" && -n "${WRR_HOST_NAME:-}" && -n "${WRR_PEER_HOST_NAME:-}" ]] \
+            || { echo "::error::scripts/lib/web2-relay-rows.sh did not define its host/port constants — the relay evidence cannot be read. NOTHING planned, NOTHING applied."; exit 1; }
+          RELAY_TMP="$(mktemp -d)"
+          trap 'rm -rf "$RELAY_TMP"' EXIT
+          wrr_fetch "$RELAY_TMP/rows.jsonl" || {
+            echo "::error::the Better Stack read for web-2's relay report FAILED (class above) — the bind cannot be proven. NOTHING planned, NOTHING applied."
+            echo "- relay bind probe: REFUSED (query failed)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          VERDICT="$(wrr_judge "$RELAY_TMP/rows.jsonl")"
+          {
+            echo "### relay bind probe (serve only)"
+            echo "- web-2 own line (expect addr=${WRR_BIND_ADDR} port=${WRR_PORT}): ${VERDICT}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "relay bind probe (own line): ${VERDICT}"
+          if [[ "$VERDICT" != GREEN\ * ]]; then
+            echo "::error::web-2's relay does not report a listener (${VERDICT}). Need >= 2 reports in the last 180 s, newest <= 120 s, all proxy_state=listening addr=${WRR_BIND_ADDR} port=${WRR_PORT}. workspaces_populated is recorded, not judged. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+          wrr_peer_fetch "$RELAY_TMP/peer.jsonl" "$WRR_PEER_HOST_NAME" "$WEB2_PRIVATE" || {
+            echo "::error::the Better Stack read for web-1's peer probe of web-2 FAILED (class above) — reachability on the private address cannot be proven. NOTHING planned, NOTHING applied."
+            echo "- relay bind probe: REFUSED (peer query failed)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          PEER_VERDICT="$(wrr_peer_judge "$RELAY_TMP/peer.jsonl" "$WRR_PEER_HOST_NAME" "$WEB2_PRIVATE")"
+          echo "- web-1 -> web-2 peer probe of ${WEB2_PRIVATE}:${WRR_PORT} (newest row in 24 h must be result=ok; accepted residual: written before web-1's fan-out, so it describes web-2's previous container): ${PEER_VERDICT}" >> "$GITHUB_STEP_SUMMARY"
+          echo "relay bind probe (peer line web-1 -> web-2): ${PEER_VERDICT}"
+          if [[ "$PEER_VERDICT" != GREEN\ * ]]; then
+            echo "::error::web-2's relay is not provably reachable on ${WEB2_PRIVATE}:${WRR_PORT} from web-1 (${PEER_VERDICT}). The newest relay_peer_probe row from web-1 for this peer in the last 24 h must say result=ok; redeploy web-1 to re-probe after fixing. Known residual: this row is written at web-1's deploy BEFORE the deploy fans out to web-2, so it exercises web-2's PREVIOUS container; the fresh evidence is web-2's own line and the reverse probe below, so dispatch serve right after a release deploy. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
+          wrr_peer_fetch "$RELAY_TMP/peer-rev.jsonl" "$WRR_HOST_NAME" "$WEB1_PRIVATE" || {
+            echo "::error::the Better Stack read for web-2's peer probe of web-1 FAILED (class above) — the reverse direction (web-2 -> web-1) cannot be proven. NOTHING planned, NOTHING applied."
+            echo "- relay bind probe: REFUSED (reverse peer query failed)" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          PEER_VERDICT_REV="$(wrr_peer_judge "$RELAY_TMP/peer-rev.jsonl" "$WRR_HOST_NAME" "$WEB1_PRIVATE")"
+          echo "- web-2 -> web-1 peer probe of ${WEB1_PRIVATE}:${WRR_PORT} (newest row in 24 h must be result=ok): ${PEER_VERDICT_REV}" >> "$GITHUB_STEP_SUMMARY"
+          echo "relay bind probe (peer line web-2 -> web-1): ${PEER_VERDICT_REV}"
+          if [[ "$PEER_VERDICT_REV" != GREEN\ * ]]; then
+            echo "::error::web-1's relay is not provably reachable on ${WEB1_PRIVATE}:${WRR_PORT} from web-2 (${PEER_VERDICT_REV}). The newest relay_peer_probe row from web-2 for this peer in the last 24 h must say result=ok (the gate is ok in BOTH directions); redeploy web-2 to re-probe after fixing. NOTHING planned, NOTHING applied."
+            exit 1
+          fi
       - name: Terraform plan (GA pool + LB + health policy)
         working-directory: ${{ env.INFRA_DIR }}
         env:
@@ -1036,6 +1146,7 @@ jobs:
           doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- \
             terraform plan -no-color -input=false -out=tfplan \
               -var="ssh_key_path=/tmp/ci_ssh_key.pub" \
+              -var="web2_lb_weight=${WEB2_LB_WEIGHT}" \
               -target=cloudflare_load_balancer_pool.web_1 \
               -target=cloudflare_load_balancer.app \
               -target=cloudflare_notification_policy.web_lb_health 2>&1 | tf_redact_random_ids

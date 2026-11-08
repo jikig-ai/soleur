@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1261
-# generated-at=2026-11-07T20:45:52Z
+# generated-at=2026-11-08T02:28:16Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -496,6 +496,7 @@ scripts/lib/test-suite-lanes.test.sh	4
 scripts/lib/trusted-verdict.test.sh	4
 scripts/lib/tweet-eligibility.test.sh	6
 scripts/lib/validate-tweet-draft.test.sh	1
+scripts/lib/web2-relay-rows.test.sh	5
 scripts/lint-agents-compound-sync-live	2
 scripts/lint-agents-compound-sync-unit	3
 scripts/lint-agents-enforcement-tags-live	3

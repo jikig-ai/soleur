@@ -377,6 +377,24 @@ Two new purpose-scoped dispatch arms of `cf-lb-overlay.yml` cover UPDATE semanti
 - `arm=ga-pool-update -f mode=drain` — confirm `UPDATE-GA-LB-POOL`. Updates the GA pool + LB + `cloudflare_notification_policy.web_lb_health`; grader `cf_lb_gate_ga_pool_update` confines changes to that set, resolves every origin address from the plan's `hcloud_server.web[*]` no-op entries (never a literal), and pins web-2's after-weight to `0`.
 - `arm=ga-pool-update -f mode=serve` — the #6027 maintenance-window 0→1 flip ONLY: the job runs `lb-weight-gate-with-marker.sh` (the §(c) gate chain) fail-closed BEFORE plan, so an unauthorized flip never reaches a grader. Requires the window sequence per #6027 (weight flip → drain → `ignore_changes` removal → drained-host reboot).
 
+### Before dispatching `mode=serve`: the evidence the `relay bind probe (serve only)` step reads (#12167)
+
+The step runs after the §(c) gate chain and before the plan, and refuses (exit 1, nothing planned) unless ALL THREE hold, each read from Better Stack by structured fields (never a whole-row text match): (1) web-2's own `relay_probe proxy_state=listening addr=0.0.0.0 port=8443` line, at least 2 rows in the last 180 s (`CONTAINER_NAME = soleur-web-platform`, `host_name = soleur-web-2`); (2) web-1's newest `relay_peer_probe peer=<web-2 ip> result=ok` in the last 24 h (`SYSLOG_IDENTIFIER = ci-deploy`, `host_name = soleur-web-platform`); (3) the reverse: web-2's newest `relay_peer_probe peer=<web-1 ip> result=ok` in the last 24 h (`host_name = soleur-web-2`). Both private addresses come from Terraform state. A refusal names its direction (`dir=w1_to_w2` or `dir=w2_to_w1`).
+
+**Accepted residual (structural):** web-1's probe is journaled at web-1's deploy BEFORE it fans the deploy out to web-2, so it exercises web-2's PREVIOUS container and cannot prove web-2's newest one. There is no SSH at serve time to close that. The fresh evidence is web-2's own 60 s line and the reverse probe written by web-2's own deploy. Practice: dispatch serve right after a release deploy, so all three rows describe the same build.
+
+### After a successful serve: the flip is one-way until the variable default changes (#8211, #6027)
+
+`web2_lb_weight` keeps its default `0` on purpose (every non-serve plan and the per-merge apply keep web-2 drained). So once a serve has applied, Terraform STATE and the live pool say web-2 = 1 while the configuration default says 0. What that means in practice:
+
+- The scheduled full-root drift plan (`scheduled-terraform-drift.yml`, untargeted, detect-only) reports `cloudflare_load_balancer_pool.web_1` updating web-2 `1 -> 0` on every run. It never applies, so it is noise and a reminder, not a drain. A drift read that must show the real drift passes `-var=web2_lb_weight=1`.
+- A full-root apply outside CI (the ADR-096 exclusions-contract path) without `-var=web2_lb_weight=1` would plan `1 -> 0` and silently drain web-2, so it must not happen after a serve.
+- `arm=ga-overlay` cannot drain: its grader `cf_lb_gate_ga` accepts creates only, so a pool plan that is an UPDATE (`1 -> 0`) is refused ("change(s) outside the GA3 create set"). `arm=ga-monitor-fix` and `arm=ga-monitor-https` plan the monitor only.
+- `arm=ga-pool-update -f mode=drain` DOES apply web-2 = 0 (that is its purpose, behind the `UPDATE-GA-LB-POOL` confirm). Run it only to drain on purpose.
+- The per-merge `apply-web-platform-infra.yml` plans hard `-target` lists that name no `cloudflare_load_balancer*` address, so it cannot flip the pool either way.
+
+**Follow-up PR (required after a successful serve):** change the `web2_lb_weight` default to `1` and the pins that encode `0` together: `apps/web-platform/infra/variables.tf`, `lb-weight-gate.test.sh` (C.3 / C.4 default and feeder pins, the W-series), the `Typo-guard + mode pin` step in `cf-lb-overlay.yml`, and this section. Until that PR merges, treat the rules above as in force.
+
 **ForceNew caveat:** a `cloudflare_load_balancer_monitor.type` change may plan `["delete","create"]` (replace) on some provider versions — every arm's grader fails closed on replace verbs by design, so verify with a `terraform plan` dry-run at window time before dispatching.
 
 ## Moving the GA monitor to https/:443 (ADR-321 R7, #10479)
