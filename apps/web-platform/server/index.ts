@@ -10,7 +10,7 @@ import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
 import { logProxyCertExpiryAtStartup } from "./proxy-tls";
-import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, startOriginTlsListener } from "./origin-tls";
+import { ORIGIN_TLS_HEADERS_TIMEOUT_MS, ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, startOriginTlsListener } from "./origin-tls";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -165,7 +165,7 @@ app.prepare().then(() => {
   // canary is a health gate and does not exercise Cloudflare's connection reuse, so watch the 502/520
   // rate after the deploy.
   server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;
-  server.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS + 5_000;
+  server.headersTimeout = ORIGIN_TLS_HEADERS_TIMEOUT_MS;
 
   const wss = setupWebSocket(server, dev);
 
