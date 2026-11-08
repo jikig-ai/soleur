@@ -38,7 +38,10 @@ CLASSES (per unit; a unit is a commit or an ejected queue run):
                      could not be listed. A failed READ is never "no failure".
 
 Every remote read goes through `gh api` (a PATH seam for tests); the selector is PR_AFFECTED_REPLAY_TEST_ALL
-(default scripts/test-all.sh); durations come from scripts/suite-durations{,-heavy}.tsv.
+(default scripts/test-all.sh); durations come from scripts/suite-durations{,-heavy}.tsv. `collect` never takes
+an empty `?head_sha=` listing at face value: it retries once, then corroborates through the commit-keyed
+`commits/{sha}/check-runs` + `actions/runs/{id}` reads before `no-run` stands; `runs_via` on the unit names
+the read that answered.
 
 SUBCOMMANDS
   collect      --out DIR [--commits N] [--chunk I/K] [--repo R] [--base REF] [--redo-unevaluable] [--reclassify]
@@ -417,15 +420,57 @@ def content_key(pairs):
     return hashlib.sha256("\n".join("%s %s" % (n, b) for n, b in pairs).encode()).hexdigest()[:16]
 
 
-def ci_runs(repo, sha):
-    try:
-        d = json.loads(gh_text("repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100" % (repo, sha)))
-    except ValueError as e:
-        raise ReadError("unparseable run list for %s: %s" % (sha[:10], e))
+CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+
+
+def head_sha_runs(repo, sha):
+    """The workflow-scoped ?head_sha= listing. It is search-backed: a well-formed EMPTY answer is
+    not authoritative (#10862 — the index omitted ~30% of existing runs at one collect time)."""
+    d = json.loads(gh_text("repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100" % (repo, sha)))
     runs = d.get("workflow_runs", [])
     if d.get("total_count") != len(runs):
         raise ReadError("truncated run list for %s" % sha[:10])
-    return [r for r in runs if r.get("event") in FULL_EVENTS]
+    return runs
+
+
+def corroborating_runs(repo, sha):
+    """-> the ci.yml FULL_EVENTS runs on this sha, proven by the commit-keyed check-runs read
+    (not the search index). [] means the corroborating read found none either — a corroborated
+    no-run. Ids come only from details_url values inside this repo's namespace: an external app's
+    check-run links elsewhere and its run id could collide with a real run id of this repo."""
+    ids, seen, total = set(), 0, None
+    for d in gh_pages("repos/%s/commits/%s/check-runs?per_page=100" % (repo, sha)):
+        if total is None:
+            total = d.get("total_count")
+        for c in d.get("check_runs", []):
+            seen += 1
+            m = re.search(r"github\.com/%s/actions/runs/(\d+)" % re.escape(repo), c.get("details_url") or "")
+            if m:
+                ids.add(int(m.group(1)))
+    if total is not None and total != seen:
+        raise ReadError("truncated check-runs list for %s (%d of %s)" % (sha[:10], seen, total))
+    runs = []
+    for rid in sorted(ids):
+        r = json.loads(gh_text("repos/%s/actions/runs/%d" % (repo, rid)))
+        if r.get("head_sha") == sha and r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH:
+            runs.append(r)
+    return runs
+
+
+def ci_runs(repo, sha):
+    """-> (runs, via). An empty filtered listing is never taken at face value: it is retried once
+    (the index may simply have lagged), then corroborated through check-runs. `via` names the read
+    that answered: head-sha, head-sha-retry, check-runs, corroborated-no-run."""
+    try:
+        runs, via = head_sha_runs(repo, sha), "head-sha"
+        if not any(r.get("event") in FULL_EVENTS for r in runs):
+            runs, via = head_sha_runs(repo, sha), "head-sha-retry"
+            if not any(r.get("event") in FULL_EVENTS for r in runs):
+                runs = corroborating_runs(repo, sha)
+                via = "check-runs" if runs else "corroborated-no-run"
+    except ValueError as e:
+        raise ReadError("unparseable run read for %s: %s" % (sha[:10], e))
+    return [r for r in runs if r.get("event") in FULL_EVENTS], via
 
 
 SETTLED = ("success", "failure", "skipped", "neutral")
@@ -620,10 +665,11 @@ def cmd_collect(a):
                 u["sel_error"] = str(e)
                 u["fallback"] = "selection-error"
             try:
-                runs = ci_runs(a.repo, sha)
+                runs, via = ci_runs(a.repo, sha)
             except ReadError as e:
-                runs, u["reason"] = None, "runs-read: %s" % e
+                runs, via, u["reason"] = None, "", "runs-read: %s" % e
             if runs is not None:
+                u["runs_via"] = via
                 if runs:
                     ok = [r for r in runs if r["conclusion"] == "success"]
                     pick = ok[0] if ok else sorted(runs, key=lambda r: r["created_at"])[-1]
