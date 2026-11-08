@@ -24,6 +24,7 @@ import {
   formatLegalDate,
   formatLegalUtc,
   legalKindCopy,
+  legalTextKind,
   type LegalKindCopy,
 } from "@/lib/legal-acceptance-copy";
 import { interpretDecide, postLegalDecide, type LegalRowFacts } from "@/lib/legal-acceptance-client";
@@ -89,11 +90,12 @@ export function LegalAcceptanceCard(props: LegalAcceptanceCardProps) {
 
   // A text with no declared kind has no wording, so no card (CTO ruling 2026-11-07, no default). Placed after the last hook.
   const kc = legalKindCopy(keyName);
+  const kind = legalTextKind(keyName);
   if (kc === null) return null;
   const style = STATE_STYLE[state];
 
   return (
-    <article data-testid="legal-card" data-state={state} aria-label={label} className={`${BOX} ${style.box}`}>
+    <article data-testid="legal-card" data-state={state} data-key={keyName} data-kind={kind ?? undefined} aria-label={label} className={`${BOX} ${style.box}`}>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className={`${BADGE} ${style.badge}`}>{badgeFor(state, kc)}</span>
         <span className="text-xs text-soleur-text-secondary">{metaFor(state, validUntil, row)}</span>

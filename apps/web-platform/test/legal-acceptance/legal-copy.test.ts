@@ -12,6 +12,7 @@ import { join } from "node:path";
 import * as copy from "@/lib/legal-acceptance-copy";
 import { getLegalText } from "@/server/legal-acceptance/canonical";
 import { FORBIDDEN_CLAIMS } from "./forbidden-claims";
+import { TERMS_PRESUMING } from "./terms-presuming";
 
 const NOTE = join(__dirname, "..", "..", "..", "..", "knowledge-base", "legal", "audits", "2026-11-founder-legal-acceptance-dsar-and-notice-note.md");
 const FORBIDDEN = FORBIDDEN_CLAIMS; // one list for the deck and the committed texts (forbidden-claims.ts)
@@ -49,7 +50,6 @@ function collect(v: unknown, probes: unknown[][] = WIDE_PROBES, out: string[] = 
 }
 
 /** Words that presume an accepted set of terms. The acknowledgement wording and the shared deck must not contain any. */
-const TERMS_PRESUMING = /\bterms?\b|\baccept(ed|s|ance)?\b|accept the|\bupdated\b/i;
 
 /** The text of the blockquote that follows a heading starting with `heading`, without the surrounding bold markers. */
 function noticeFromNote(heading: string): string {
@@ -103,7 +103,7 @@ describe("the notices are word for word from the counsel note", () => {
 
   it("the Request changes notice states the same period", () => {
     expect(copy.LEGAL_COPY.requestChangesNotice).toBe(
-      "Say only what you want changed in the text. Please do not write names, email addresses or private details about yourself or anyone else here: this note is saved with your decision, up to 1000 characters, and is kept for 5 years from the date of the decision, even if you later delete your account.",
+      "Say only what you want changed in the text. Please do not write names, email addresses or private details about yourself or anyone else here: this note is saved with your decision, up to 1000 characters, and is kept for 5 years from the date of the decision (longer only while a legal claim, a complaint or an official inquiry about it is open), even if you later delete your account.",
     );
   });
 });
@@ -287,6 +287,18 @@ describe("kind-keyed card copy (#12344)", () => {
     expect(TERMS_PRESUMING.test("Accept the updated X")).toBe(true);
     expect(TERMS_PRESUMING.test("It does not accept any terms")).toBe(true);
     expect(TERMS_PRESUMING.test("You acknowledged it")).toBe(false);
+    // one probe per alternative of the shared regex (terms-presuming.ts), each worded to trip that alternative alone, so deleting any
+    // alternative reds this row
+    const probes: Record<string, string> = {
+      "term": "Read your term sheet",
+      "terms": "Read the terms",
+      "accept": "You accept it",
+      "accepted": "It was accepted",
+      "accepts": "Soleur accepts it",
+      "acceptance": "Your acceptance is noted",
+      "updated": "The updated text is here",
+    };
+    for (const [alt, probe] of Object.entries(probes)) expect(TERMS_PRESUMING.test(probe), `${alt}: ${probe}`).toBe(true);
     expect(termsStrings.some((s) => TERMS_PRESUMING.test(s))).toBe(true);
   });
 

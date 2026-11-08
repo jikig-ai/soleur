@@ -371,6 +371,23 @@ describe("decide", () => {
     error: null,
   });
 
+  it("a founder who already holds a live intent cannot record once the gate is off: 404, and neither client is called (CTO ruling T4)", async () => {
+    h.userRpc.mockResolvedValue(recorded("accept"));
+    h.serviceRpc.mockResolvedValue({ data: { outcome: "acked" }, error: null });
+    const notFound = { status: 404, body: { error: "Not found" } };
+    h.flag.value = false; // the operator turned the flag off after the intent was issued
+    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual(notFound);
+    h.flag.value = true;
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", ""); // or the founder variable went away
+    expect(await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).toEqual(notFound);
+    expect(h.userRpc).not.toHaveBeenCalled();
+    expect(h.serviceRpc).not.toHaveBeenCalled();
+    // control: with the gate open the same request does record (so the 404s above were the gate, not a broken fixture)
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER);
+    expect((await json(await decide(req("decide", { choice: "accept", textHash: HASH })))).body.outcome).toBe("recorded");
+    expect(h.userRpc).toHaveBeenCalledTimes(1);
+  });
+
   it("accept records on the USER client only and returns the typed result; the service client is not used", async () => {
     h.userRpc.mockResolvedValue(recorded("accept"));
     const out = await json(await decide(req("decide", { choice: "accept", textHash: HASH })));

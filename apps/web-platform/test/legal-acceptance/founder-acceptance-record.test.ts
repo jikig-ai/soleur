@@ -65,7 +65,9 @@ function alteringMigrations(files: Record<string, string>): string[] {
 }
 
 /** Anything that reads as an unfinished retention period or other open item. Not a wording check: an unfinished-marker detector. */
-const UNFINISHED = /\[[^\]]*\]|\b(?:TBD|TBC|TODO)\b|\bX{2,}\b|_{3,}|to be (?:confirmed|decided|determined)/gi;
+// `counsel` is scanned in the SERVED texts and notices only (the sign-off line in the deck legitimately says it is not external counsel): a
+// notice reading "counsel to decide" is an open item, not a finished sentence.
+const UNFINISHED = /\[[^\]]*\]|\b(?:TBD|TBC|TODO)\b|\bX{2,}\b|_{3,}|to be (?:confirmed|decided|determined)|\bcounsel\b/gi;
 /** Every unfinished marker in a text (empty when finished). */
 const unfinishedIn = (text: string): string[] => [...text.matchAll(UNFINISHED)].map((m) => m[0]);
 
@@ -157,16 +159,42 @@ describe("founder-acceptance-record: what the loader sees", () => {
 describe("founder-acceptance-record: what the text says", () => {
   const body = (): string => getLegalText(KEY).body;
 
-  it("never claims more than happened (the shared forbidden words, applied to the whole file, front matter included)", () => {
+  it("never claims more than happened (the shared forbidden words, applied to EVERY served file, front matter included)", () => {
     expect.hasAssertions();
-    expect(getLegalText(KEY).raw).not.toMatch(FORBIDDEN_CLAIMS);
+    expect(loadLegalTexts().size).toBeGreaterThan(0);
+    let scanned = 0;
+    for (const [key, entry] of loadLegalTexts()) {
+      scanned++;
+      expect(entry.raw, `served text ${key}`).not.toMatch(FORBIDDEN_CLAIMS);
+    }
+    expect(scanned, "the loop must scan every served text (an emptied loop is a vacuous pass)").toBe(loadLegalTexts().size);
   });
 
-  it("the forbidden-word check bites (planted strings are caught, a plain sentence is not)", () => {
+  it("the forbidden-word check bites: ONE probe per alternative, so deleting any alternative reds (planted strings are caught, a plain sentence is not)", () => {
     expect.hasAssertions();
-    for (const s of ["This was Verified", "Legally binding", "legally-binding", "audit ready", "certified", "verifies compliance"]) {
-      expect(FORBIDDEN_CLAIMS.test(s), s).toBe(true);
-    }
+    // One probe per alternative of FORBIDDEN_CLAIMS (forbidden-claims.ts), each worded to trip that alternative alone.
+    const probes: Record<string, string> = {
+      "verified": "This was Verified by us",
+      "verifies": "It verifies the answer",
+      "verify": "We verify it",
+      "reviewed": "A lawyer reviewed it",
+      "certified": "It is certified",
+      "enforceable": "An enforceable promise",
+      "legally binding": "This is Legally binding",
+      "legally-binding": "a legally-binding record",
+      "audit-ready": "an audit ready log",
+      "compliant": "It is compliant",
+      "compliance": "full compliance",
+      "guarantee": "we guarantee it",
+      "guaranteed": "this is guaranteed",
+      "guarantees": "Jikigai guarantees it",
+      "tamper-proof": "a tamper-proof record",
+      "tamper evident": "a tamper evident record",
+      "attested": "an attested copy",
+      "attests": "Jikigai attests the answer",
+      "attestation": "an attestation of the answer",
+    };
+    for (const [alt, s] of Object.entries(probes)) expect(FORBIDDEN_CLAIMS.test(s), `${alt}: ${s}`).toBe(true);
     expect(FORBIDDEN_CLAIMS.test("Confirmed with an email code")).toBe(false);
   });
 
@@ -218,6 +246,8 @@ describe("founder-acceptance-record: no unfinished marker (always on, every run)
       "kept for ___ years",
       "kept for TODO.",
       "the period is to be confirmed.",
+      "kept for 5 years, counsel to decide.",
+      "Counsel must still confirm it.",
     ]) {
       expect(unfinishedIn(s).length, s).toBeGreaterThan(0);
     }
@@ -225,9 +255,15 @@ describe("founder-acceptance-record: no unfinished marker (always on, every run)
     expect(unfinishedIn("write to <legal@jikigai.com> and you can complain to the CNIL.")).toEqual([]);
   });
 
-  it("the text body, the card notice and the request-changes notice carry no unfinished marker", () => {
+  it("EVERY served text, the card notice and the request-changes notice carry no unfinished marker", () => {
     expect.hasAssertions();
-    expect(unfinishedIn(getLegalText(KEY).body), "text body").toEqual([]);
+    expect(loadLegalTexts().size).toBeGreaterThan(0);
+    let scanned = 0;
+    for (const [key, entry] of loadLegalTexts()) {
+      scanned++;
+      expect(unfinishedIn(entry.body), `text body of ${key}`).toEqual([]);
+    }
+    expect(scanned, "the loop must scan every served text (an emptied loop is a vacuous pass)").toBe(loadLegalTexts().size);
     expect(unfinishedIn(LEGAL_COPY.cardNotice), "card notice").toEqual([]);
     expect(unfinishedIn(LEGAL_COPY.requestChangesNotice), "request-changes notice").toEqual([]);
   });
@@ -251,10 +287,14 @@ describe("founder-acceptance-record: the retention period has one source (CLO B)
     expect(durationsIn("kept for the decision")).toEqual([]);
   });
 
-  it("the text states the period exactly twice, and every duration in the body is 5 years (x4) or 30 days (x2)", () => {
+  it("the text states the period exactly twice, and every duration in the body is 5 years (x5), 30 days (x2) or the one 90 days the monitoring sentence quotes", () => {
     expect.hasAssertions();
     expect(count(body(), RETENTION_PERIOD), "the retention phrase in the text body").toBe(2);
-    expect(durationsIn(body()), "every duration token in the text body").toEqual(["30 days", "30 days", "5 years", "5 years", "5 years", "5 years"]);
+    // 90 days (CLO ruling L2, 2026-11-08) is NOT the record's retention: it is the period the Privacy Policy states for the monitoring
+    // copies held by Sentry and Better Stack, and the text says in the same sentence that those copies are outside the 5 years. Any
+    // other new duration still reds this row.
+    expect(durationsIn(body()), "every duration token in the text body").toEqual(["30 days", "30 days", "5 years", "5 years", "5 years", "5 years", "5 years", "90 days"]);
+    expect(body()).toContain("The monitoring copies described under Who can read it are not part of the record and are not covered by the 5 years. Jikigai's Privacy Policy states 90 days");
   });
 
   it("30 days appears only in the request-record paragraph, and that paragraph is not covered by the 5 years", () => {
@@ -262,7 +302,8 @@ describe("founder-acceptance-record: the retention period has one source (CLO B)
     const p = requestRecordParagraph();
     expect(durationsIn(p)).toEqual(["30 days", "30 days", "5 years"]);
     expect(body().replace(p, ""), "a 30-day figure outside the request-record paragraph").not.toMatch(/30 days/);
-    expect(p).toContain("is not covered by the 5 years above");
+    expect(p).toContain("is not covered by the 5 years stated under How long it is kept");
+    expect(p, "the period is stated BELOW this paragraph, so it must not point 'above'").not.toContain("5 years above");
     expect(p, "the text must never promise a hard 30-day bound for request records").toContain("so one can last longer than 30 days");
   });
 
@@ -286,10 +327,15 @@ describe("founder-acceptance-record: the retention period has one source (CLO B)
 
   it("the dated safeguard: from 2030-11-07 the text must no longer say the deletion step is not built (#12080)", () => {
     expect.hasAssertions();
+    expect(NOT_BUILT_DEADLINE, "the CLO ruled 2030-11-07; moving this date moves the safeguard").toBe("2030-11-07T00:00:00Z");
+    expect(notBuiltOverdue(new Date("2030-11-07T00:00:00Z"), "x has not yet built y")).toContain("#12080");
     expect(notBuiltOverdue(new Date(NOT_BUILT_DEADLINE), "x has not yet built y")).toContain("#12080");
     expect(notBuiltOverdue(new Date("2030-11-06T23:59:59Z"), "x has not yet built y")).toBeNull();
     expect(notBuiltOverdue(new Date("2031-01-01T00:00:00Z"), "the step is built")).toBeNull();
     expect(notBuiltOverdue(new Date(), body()), "#12080 must be built, and the text re-published without 'has not yet built'").toBeNull();
+    // The alarm above only works while the sentence is there: a reword would silently disarm it. When #12080 ships and the text is
+    // re-published without the sentence (a new version), delete this assertion in the same change.
+    expect(body(), "the text no longer says the deletion step is not built: if #12080 shipped, remove this assertion with the new version").toContain("has not yet built");
   });
 });
 

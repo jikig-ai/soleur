@@ -104,6 +104,7 @@ vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
 
 import Page from "@/app/(dashboard)/dashboard/approvals/legal/[key]/page";
 import IndexPage from "@/app/(dashboard)/dashboard/approvals/legal/page";
+import { resetSurfaceConfigReport } from "@/server/legal-acceptance/surface";
 
 const HASH = createHash("sha256").update(RAW).digest("hex");
 const OLD = "d".repeat(64);
@@ -128,6 +129,7 @@ beforeEach(() => {
   h.rowsError.value = null;
   h.flag.mockReset().mockResolvedValue(true);
   h.report.mockReset();
+  resetSurfaceConfigReport(); // the once-per-process config report must not leak between tests
   h.lookups.length = 0;
   h.from.length = 0;
   h.secondKey.value = false;
@@ -217,7 +219,10 @@ describe("what the card shows", () => {
     vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
     await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
     await expect(IndexPage()).rejects.toBeInstanceOf(NotFound);
-    expect(h.report).not.toHaveBeenCalled();
+    // An unset or malformed founder id with the flag ON is a FAULT the operator must hear about (CTO ruling T4): exactly ONE
+    // config report across the three requests above, never a user id or the variable's value, and no kind_undeclared event.
+    expect(h.report.mock.calls.map((c) => c[0])).toEqual(["storeFailed"]);
+    expect(h.report.mock.calls[0][2]).toEqual({ tags: { stage: "config" }, extra: { step: "config", variables: ["LEGAL_ACCEPTANCE_FOUNDER_ID"] } });
   });
 
   it("reads the flag first, for the signed-in user with no workspace (effectively global)", async () => {

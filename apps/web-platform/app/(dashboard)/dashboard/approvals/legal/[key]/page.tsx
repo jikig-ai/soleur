@@ -56,8 +56,8 @@ export default async function LegalAcceptancePage({ params }: { params: Promise<
     throw new Error("legal text read failed");
   }
 
-  // A registered text with no declared card kind has no wording and no card: a 404, mirrored to Sentry once the surface gate
-  // has passed (a user who may not see the surface generates no event). Before the database read.
+  // A registered text with no declared card kind has no wording and no card: a 404, mirrored to Sentry on every render once the
+  // surface gate has passed (a user who may not see the surface generates no event). Before the database read.
   const kc = legalKindCopy(key);
   const kind = legalTextKind(key);
   if (kc === null || kind === null) {

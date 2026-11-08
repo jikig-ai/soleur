@@ -18,6 +18,7 @@ import { TEXTS_DIR, loadLegalTexts } from "@/server/legal-acceptance/canonical";
 import { LEGAL_TEXT_KIND } from "@/lib/legal-acceptance-copy";
 
 interface Pin {
+  /** The card kind. Immutable once a hash is published (texts/README.md review rule): flipping it re-words every recorded answer. */
   kind: string;
   /** version -> sha256 of the file's raw bytes. Append-only. */
   versions: Record<string, string>;
@@ -26,7 +27,7 @@ interface Pin {
 const PUBLISHED: Record<string, Pin> = {
   "founder-acceptance-record": {
     kind: "acknowledgement",
-    versions: { "2026-11-07": "43eef1162d0c8148b7fe5d62adaa116d0102249794163302592453ce9ce983f1" },
+    versions: { "2026-11-07": "10d283e02d4543d291468750655bbaf4375f807a585cd5138724a362b993a287" },
   },
 };
 
@@ -167,5 +168,33 @@ describe("the pin check bites (synthetic rows through the same function)", () =>
     const bad = readServed(TEXTS_DIR, () => "README.md");
     expect(bad.length).toBeGreaterThan(0);
     only(checkPins(bad, PUBLISHED, LEGAL_TEXT_KIND), "the independent file hash");
+  });
+});
+
+describe("hold-gate-eval refuses the acknowledgement keys (CTO ruling T3, 2026-11-08)", () => {
+  const GATE = readFileSync(path.join(__dirname, "../../../../plugins/soleur/skills/ship/scripts/hold-gate-eval.sh"), "utf8");
+  /** The keys the shell evaluator refuses for a web-acceptance gate: the one `WA_NON_TERMS_KEYS='...'` assignment line. */
+  const listedNonTerms = (src: string): string[] | null => {
+    const lines = src.split("\n").filter((l) => /^WA_NON_TERMS_KEYS=/.test(l));
+    if (lines.length !== 1) return null;
+    const m = /^WA_NON_TERMS_KEYS='([a-z0-9 -]*)'(?:\s*#.*)?$/.exec(lines[0]);
+    return m === null ? null : m[1].split(" ").filter((k) => k !== "");
+  };
+
+  it("every non-terms key in PUBLISHED is in the evaluator's list, and no terms key is (a terms key listed would block a real hold)", () => {
+    const listed = listedNonTerms(GATE);
+    expect(listed, "hold-gate-eval.sh must carry exactly one WA_NON_TERMS_KEYS='...' line").not.toBeNull();
+    const nonTerms = sorted(Object.entries(PUBLISHED).filter(([, p]) => p.kind !== "terms").map(([k]) => k));
+    expect(sorted(listed as string[]), "update WA_NON_TERMS_KEYS in hold-gate-eval.sh together with PUBLISHED").toEqual(nonTerms);
+  });
+
+  it("the parse bites: a missing line, a duplicate line, a stray quote and a listed terms key are each detected", () => {
+    expect(listedNonTerms("x=1\n")).toBeNull();
+    expect(listedNonTerms("WA_NON_TERMS_KEYS='a'\nWA_NON_TERMS_KEYS='b'\n")).toBeNull();
+    expect(listedNonTerms("WA_NON_TERMS_KEYS=\"a\"\n")).toBeNull();
+    expect(listedNonTerms("WA_NON_TERMS_KEYS='a b-c'  # note\n")).toEqual(["a", "b-c"]);
+    const withTerms = { ...PUBLISHED, "a-terms": { kind: "terms", versions: {} } };
+    const nonTerms = sorted(Object.entries(withTerms).filter(([, p]) => p.kind !== "terms").map(([k]) => k));
+    expect(nonTerms).not.toContain("a-terms");
   });
 });

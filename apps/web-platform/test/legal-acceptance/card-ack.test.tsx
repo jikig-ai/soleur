@@ -14,11 +14,11 @@ import { LegalAcceptanceCard, type LegalAcceptanceCardProps, type LegalRowFacts 
 import { LEGAL_COPY, LEGAL_KIND_COPY, legalDisplayLabel } from "@/lib/legal-acceptance-copy";
 import { getLegalText } from "@/server/legal-acceptance/canonical";
 import type { LegalChoiceWire } from "@/lib/legal-acceptance-wire";
+import { TERMS_PRESUMING } from "./terms-presuming";
 
 const KEY = "founder-acceptance-record";
 const entry = getLegalText(KEY);
 const KC = LEGAL_KIND_COPY.acknowledgement;
-const TERMS_PRESUMING = /\bterms?\b|\baccept(ed|s|ance)?\b|accept the|\bupdated\b/i;
 
 const props = (over: Partial<LegalAcceptanceCardProps> = {}): LegalAcceptanceCardProps => ({
   keyName: KEY,
@@ -98,6 +98,9 @@ describe("the real acknowledgement text: the DOM presumes no terms", () => {
   ] as const)("resolved state %s", (state, choice, extra) => {
     render(<LegalAcceptanceCard {...props({ state, row: state === "expired" ? null : row(choice, extra), body: state === "replaced" ? "" : entry.body, currentVersion: state === "replaced" ? entry.version : entry.version })} />);
     expect(screen.getByTestId("legal-card")).toHaveAttribute("data-state", state);
+    // machine-readable key and kind, so an agent-browser run can tell the card kind apart without reading the wording
+    expect(screen.getByTestId("legal-card")).toHaveAttribute("data-key", KEY);
+    expect(screen.getByTestId("legal-card")).toHaveAttribute("data-kind", "acknowledgement");
     expect(cardWords()).not.toMatch(TERMS_PRESUMING);
   });
 

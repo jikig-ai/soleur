@@ -3,7 +3,7 @@
 //
 // The surface gate is read first: the `approval-queue` flag (effectively global: `workspaceId: null`) AND the founder
 // (`LEGAL_ACCEPTANCE_FOUNDER_ID`); anyone else behaves as if the flag were off. A text with no declared card kind is left out
-// (and reported once, after the gate). With the gate off the page lists only the
+// (and reported on every render, after the gate). With the gate off the page lists only the
 // keys the founder already has a recorded row for, and is not-found when there is none: an unreleased key is never listed.
 
 import { notFound, redirect } from "next/navigation";
@@ -36,7 +36,7 @@ export default async function LegalAcceptanceIndexPage() {
     throw new Error("legal text read failed");
   }
 
-  // A text with no declared card kind has no wording and no card: leave it out, and report each one once after the gate.
+  // A text with no declared card kind has no wording and no card: leave it out, and report each one on every render after the gate (not debounced: the surface is founder-only, so the volume is a few events).
   const declaredEntries = entries.flatMap((e) => {
     const kind = legalTextKind(e.key);
     const kc = legalKindCopy(e.key);

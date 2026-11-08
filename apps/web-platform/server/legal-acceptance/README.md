@@ -8,6 +8,13 @@ Server side of the founder legal-acceptance card (#12011, ADR-319).
 
 Routes: `app/api/legal-acceptance/[key]/reauth` and `.../decide`.
 
+**Who gates what.** The `service.ts` exports (`issueIntent`, `claimAttempt`, `markVerified`, `recordAcceptance`, `decideLegal`) are
+deliberately UNGATED: they check neither the surface gate (`surface.ts`: the `approval-queue` flag AND `LEGAL_ACCEPTANCE_FOUNDER_ID`) nor the
+declared card kind. Only the two routes gate, through `guardLegalRequest` (surface gate first, then key, registry, kind). A new caller of these
+functions (an Inngest function, a script) bypasses the gate; route every new entry point through `guardLegalRequest`. The database does not
+check founder, flag or kind either: `record_legal_acceptance` needs a live server-issued intent, and a founder who holds one (30 minutes) cannot
+record through the route once the gate is off (the decide route re-checks the gate on every request; a test pins it).
+
 ## How the texts reach the production image
 
 The server is bundled with esbuild into `dist/server/index.cjs` and the route handlers run from the Next build, so a
@@ -39,7 +46,7 @@ operator's act.
 
 The card's wording depends on the kind declared for the text key in `LEGAL_TEXT_KIND` (`lib/legal-acceptance-copy.ts`): `terms` or
 `acknowledgement`. There is no default. A registered text with no declared kind renders no card, is a 404 on the card page, the decide route
-and the reauth route (`guardLegalRequest`), is left out of the index, and is reported once as `kind_undeclared` after the surface gate.
+and the reauth route (`guardLegalRequest`), is left out of the index, and is reported as `kind_undeclared` on every render of the card page or the index, after the surface gate (not debounced: the surface is founder-only).
 `test/legal-acceptance/registry-pins.test.ts` requires the served keys, the pinned keys and the declared kinds to be the same set.
 
 ## Sentry ops

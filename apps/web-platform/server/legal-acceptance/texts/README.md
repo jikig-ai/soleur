@@ -8,8 +8,26 @@ Do not add a text here without a recorded sign-off on its wording. Today the sig
 2026-11-07, which stands in for counsel on the operator's instruction (a v1 internal position; a human lawyer's review is
 still owed), persisted in `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`. A text has
 three obligations before it merges: a declared card kind in `LEGAL_TEXT_KIND` (`lib/legal-acceptance-copy.ts`; a text with no
-declared kind renders no card), a row in the published pin (`PUBLISHED` in `test/legal-acceptance/registry-pins.test.ts`), and
-no unfinished marker in its body or in the notices that restate its retention period.
+declared kind renders no card), a row in the published pin (`PUBLISHED` in `test/legal-acceptance/registry-pins.test.ts`, shaped
+`{ kind, versions: { "<version>": "<sha256>" } }` with the `kind` equal to the `LEGAL_TEXT_KIND` entry), and no unfinished marker in its
+body or in the notices that restate its retention period (the always-on marker check and the forbidden-claims check run over EVERY text
+the loader serves, not only the first one).
+
+Adding a second text, step by step:
+
+1. Write `<key>.md`. `version` is an ISO calendar date (`YYYY-MM-DD`): the pin test picks the highest version by string order, so a free-form
+   label such as `v10` sorts below `v9`. The first body line is the title; for an acknowledgement text it is shown in quotes on the card, so it
+   starts with a letter or digit, has no double quote and is at most 120 characters (otherwise the card falls back to a label derived from the
+   key).
+2. Declare the kind in `LEGAL_TEXT_KIND` and add the `PUBLISHED` row with the sha256 of the final bytes (`sha256sum`).
+3. The card notice and the request-changes notice (`LEGAL_COPY.cardNotice`, `requestChangesNotice`) are shared by every text and state the
+   5-year retention ruled for this record. A text with a different period needs its own ruling and a change to those pinned notices first.
+4. If the kind is not `terms`, add the key to `WA_NON_TERMS_KEYS` in `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh`: a recorded Yes on an
+   acknowledgement cannot back a production hold (a test cross-checks the list with `PUBLISHED`).
+5. The records (Art. 30 register, LIA, attestation, ADR-319) are per text; see the CLO ruling file for the shape.
+
+The `kind` of a key is immutable once a hash is published: flipping `acknowledgement` to `terms` would re-word the founder's recorded Yes as
+"You accepted the updated ...". Changing it is a review-blocking change that needs a CLO ruling.
 
 ## The pin rule
 

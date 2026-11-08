@@ -5,15 +5,20 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const h = vi.hoisted(() => ({ flag: { value: true }, calls: [] as unknown[] }));
+const h = vi.hoisted(() => ({ flag: { value: true }, calls: [] as unknown[], reports: [] as unknown[][] }));
 vi.mock("@/server/approval/flag", () => ({
   isApprovalQueueEnabled: async (id: unknown) => {
     h.calls.push(id);
     return h.flag.value;
   },
 }));
+vi.mock("@/server/approval/ops", () => ({
+  reportLegalOp: (...args: unknown[]) => {
+    h.reports.push(args);
+  },
+}));
 
-import { isLegalSurfaceEnabled, legalFounderId } from "@/server/legal-acceptance/surface";
+import { isLegalSurfaceEnabled, legalFounderId, resetSurfaceConfigReport } from "@/server/legal-acceptance/surface";
 
 const FOUNDER = "00000000-0000-4000-8000-0000000000aa";
 const OTHER = "00000000-0000-4000-8000-0000000000bb";
@@ -21,6 +26,8 @@ const OTHER = "00000000-0000-4000-8000-0000000000bb";
 beforeEach(() => {
   h.flag.value = true;
   h.calls.length = 0;
+  h.reports.length = 0;
+  resetSurfaceConfigReport();
   vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", FOUNDER);
 });
 afterEach(() => vi.unstubAllEnvs());
@@ -68,5 +75,56 @@ describe("isLegalSurfaceEnabled", () => {
 
   it("the comparison ignores the case of the user id", async () => {
     expect(await isLegalSurfaceEnabled(FOUNDER.toUpperCase())).toBe(true);
+  });
+});
+
+describe("the surface order and its one report (CTO ruling T4, review round 1)", () => {
+  const CONFIG_REPORT = [
+    "storeFailed",
+    null,
+    { tags: { stage: "config" }, extra: { step: "config", variables: ["LEGAL_ACCEPTANCE_FOUNDER_ID"] } },
+  ];
+
+  it("a non-founder with the founder id set returns false WITHOUT reading the flag", async () => {
+    expect(await isLegalSurfaceEnabled(OTHER)).toBe(false);
+    expect(h.calls).toEqual([]);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("the founder with the flag on is enabled; with the flag off is disabled, and neither reports", async () => {
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(true);
+    h.flag.value = false;
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("flag ON and the id UNSET: closed for everyone, and ONE config report across three calls", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    for (const u of [FOUNDER, OTHER, FOUNDER]) expect(await isLegalSurfaceEnabled(u)).toBe(false);
+    expect(h.reports).toEqual([CONFIG_REPORT]);
+  });
+
+  it("flag ON and the id MALFORMED: the same single report", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+    expect(h.reports).toEqual([CONFIG_REPORT]);
+  });
+
+  it("flag OFF and the id unset: closed and silent (a dormant feature is not a fault)", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    h.flag.value = false;
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("the report carries neither the user id nor the variable's value, and re-arms after the reset seam", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
+    await isLegalSurfaceEnabled(FOUNDER);
+    expect(JSON.stringify(h.reports)).not.toContain(FOUNDER);
+    expect(JSON.stringify(h.reports)).not.toContain("not-a-uuid");
+    resetSurfaceConfigReport();
+    await isLegalSurfaceEnabled(FOUNDER);
+    expect(h.reports.length).toBe(2);
   });
 });
