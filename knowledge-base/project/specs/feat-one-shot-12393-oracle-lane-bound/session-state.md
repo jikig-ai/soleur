@@ -23,3 +23,13 @@
 - constraint: shrink scripts/ci-oracle-lane-suites.txt serial runtime under timeout-minutes:30 (parallelize legs or cut mutation-matrix case cost ~11s each) or raise the bound with evidence
 - constraint: then gh variable set CI_ORACLE_LANE --body on and re-run a docs-only canary per runbook section Activation
 - cto_spawns=1 (batched 4 technical rows → all upheld as assumed; see decision-challenges.md)
+
+## Pipeline Position (2026-11-08)
+
+- Plan+deepen: complete (subagent, all fan-outs inline).
+- Technical-ruling gate: PASS rc=0 — 4 technical rows Ruled by CTO agent (batched spawn, upheld); 2 operator rows settled.
+- Implementation: committed 131f7c5fce — legs.tsv + ci.yml K=5 matrix + fail-closed run block + check_legs() sentinel + wiring (driver exclusion, AFFECTED edge set, CODEOWNERS, pr-fanout-ledger note, runbook, ADR-276 stage line, tasks.md).
+- Sentinel: `bash scripts/ci-oracle-lane.test.sh` green — 4899/4899, 31/31 mutants.
+- In flight: `test-all.sh --affected` gate (log /var/tmp/soleur-logs/affected-12393.log, rc file .rc).
+- Next: soleur:review → resolve findings → soleur:qa → soleur:compound → soleur:ship → postmerge.
+- Post-merge (runbook §Activation, operator-authorized): `gh variable set CI_ORACLE_LANE --body on`, docs-only canary PR, then comment on #12274 verified-fixed + recommend close. Rollback: `gh variable delete CI_ORACLE_LANE`.
