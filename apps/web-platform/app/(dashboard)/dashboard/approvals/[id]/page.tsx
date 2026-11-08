@@ -13,15 +13,17 @@
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { reportApprovalOp } from "@/server/approval/ops";
-import { readStoredApproval, type StoredApprovalRow } from "@/server/approval/view-model";
+import { isVerifiedRequester } from "@/server/approval/card-visibility";
+import { createRequesterLabeler } from "@/server/approval/requester-label";
+import { readStoredApproval, type StoredApprovalRowWithRequester } from "@/server/approval/view-model";
 import { ApprovalLanding } from "@/components/approvals/approval-landing";
-import { APPROVAL_LANDING_COPY } from "@/lib/approval-copy";
+import { APPROVAL_LANDING_COPY, REQUESTER_SELF } from "@/lib/approval-copy";
 import { isUuid } from "@/lib/is-uuid";
 
 export const dynamic = "force-dynamic";
 
 const ROW_COLUMNS =
-  "id, workspace_id, conversation_id, tool_name, action_sha256, status, expires_at, created_at, decided_at, decided_by, consumed_at, revoked_at, canonical_action";
+  "id, workspace_id, conversation_id, tool_name, action_sha256, status, expires_at, created_at, decided_at, decided_by, consumed_at, revoked_at, requested_by_user_id, canonical_action";
 
 export default async function ApprovalPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -40,18 +42,32 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
     throw new Error("approval read failed");
   }
   if (!data) notFound();
-  const row = data as unknown as StoredApprovalRow;
+  const row = data as unknown as StoredApprovalRowWithRequester;
 
   const read = readStoredApproval(row);
 
   // Request count (header from request 2): every status for the same conversation and action, read under the same RLS.
   // A failed read is reported and the count line is omitted (the card shows it from 2 up): never a silent "1".
+  //
+  // Who raised the request (#9601). Only after the Owner-only RLS read above succeeded (`approval_request_owner_select` is
+  // `is_workspace_owner(workspace_id, auth.uid())`) and only when there is a card to label; it starts in parallel with the
+  // count read and has no dependency on it. The literal "you" for the verified requester, else the row's requester label for
+  // this Owner; a failed lookup omits the line. A row that lacks the `requested_by_user_id` key entirely (an older select)
+  // gets no label at all; an explicit NULL (an erased account) gets the labeler's fixed fallback.
+  const labelRequester = async (): Promise<string | undefined> => {
+    if (read.kind !== "ok" || row.requested_by_user_id === undefined) return undefined;
+    if (isVerifiedRequester(user.id, row.requested_by_user_id)) return REQUESTER_SELF;
+    return createRequesterLabeler()(row.workspace_id, user.id, row.requested_by_user_id);
+  };
+  const [counted, requester] = await Promise.all([
+    supabase
+      .from("approval_request")
+      .select("id", { count: "exact", head: true })
+      .eq("conversation_id", row.conversation_id)
+      .eq("action_sha256", row.action_sha256),
+    labelRequester(),
+  ]);
   let requestCount = 1;
-  const counted = await supabase
-    .from("approval_request")
-    .select("id", { count: "exact", head: true })
-    .eq("conversation_id", row.conversation_id)
-    .eq("action_sha256", row.action_sha256);
   if (counted.error) {
     reportApprovalOp("landingReadFailed", counted.error, { approvalId: id, userId: user.id, extra: { read: "request-count" } });
   } else if (typeof counted.count === "number" && counted.count > 0) {
@@ -74,6 +90,7 @@ export default async function ApprovalPage({ params }: { params: Promise<{ id: s
           approvalId={row.id}
           view={read.kind === "ok" ? read.view : null}
           requestCount={requestCount}
+          requester={requester}
           initial={{
             status: row.status,
             expiresAt: row.expires_at,

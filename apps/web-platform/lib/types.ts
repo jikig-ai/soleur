@@ -495,13 +495,24 @@ export type WSMessage =
       approvalId: string;
       conversationId: string;
       toolName: string;
-      view: ApprovalCardView;
+      /**
+       * The server-built card view. `null` means the action text is WITHHELD from this viewer (a member who is neither an
+       * Owner nor the row's requester, #9601) and nothing else: the retention scrub is a separate state the viewer's own
+       * Owner surfaces derive. A withheld frame carries no field value anywhere.
+       */
+      view: ApprovalCardView | null;
       status: "pending" | "approved";
       expiresAt: string;
       requestCount: number;
       viewerRole: "owner" | "member";
       /** True while the agent is still inside its in-session wait for this request. Absent = not waiting. */
       agentWaiting?: boolean;
+      /**
+       * Who raised the request, for the card (#9601). The literal "you" for the verified requester, an Owner viewer sees
+       * the requester's email (or "a workspace member"); absent when no label applies or the lookup failed. Message level,
+       * never part of the hashed view.
+       */
+      requester?: string;
     }
   // #4672 — a status change of an approval request (server→client). `outcome` is set only on the reply to the socket
   // that sent `approval_decide`.

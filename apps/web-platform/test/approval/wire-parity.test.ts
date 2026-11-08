@@ -54,3 +54,50 @@ describe("the card view carries its own noun", () => {
     }
   });
 });
+
+describe("approval_request wire: withheld view and requester label (#9601)", () => {
+  const frame = (over: Record<string, unknown> = {}) => {
+    const s = SAMPLES["mcp__soleur_platform__email_send"];
+    return {
+      type: "approval_request",
+      approvalId: ID,
+      conversationId: "c",
+      toolName: "mcp__soleur_platform__email_send",
+      view: renderApprovalView(canonicalizeAction("mcp__soleur_platform__email_send", s.input, s.server)),
+      status: "pending",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      requestCount: 1,
+      viewerRole: "owner",
+      ...over,
+    };
+  };
+
+  test("a null view is accepted (the only representation of 'withheld from this viewer')", () => {
+    expect(parseWSMessage(frame({ view: null, toolName: "redacted", viewerRole: "member" })).ok).toBe(true);
+  });
+
+  test("a missing view is still rejected", () => {
+    const { view: _v, ...without } = frame();
+    expect(parseWSMessage(without).ok).toBe(false);
+  });
+
+  test("a requester label is accepted; an empty or over-320-character one is not", () => {
+    expect(parseWSMessage(frame({ requester: "jane@example.com" })).ok).toBe(true);
+    expect(parseWSMessage(frame({ requester: "you" })).ok).toBe(true);
+    expect(parseWSMessage(frame({ requester: "a".repeat(320) })).ok).toBe(true);
+    expect(parseWSMessage(frame({ requester: "" })).ok).toBe(false);
+    expect(parseWSMessage(frame({ requester: "a".repeat(321) })).ok).toBe(false);
+    expect(parseWSMessage(frame({ requester: 7 })).ok).toBe(false);
+  });
+
+  test("the object stays strict: an unknown key next to a null view is still rejected", () => {
+    expect(parseWSMessage(frame({ view: null, requesterEmail: "jane@example.com" })).ok).toBe(false);
+  });
+
+  test("the requester is a message-level field: ApprovalView (the hashed action's rendering) has no requester key", () => {
+    for (const tool of Object.keys(SAMPLES)) {
+      const v = renderApprovalView(canonicalizeAction(tool, SAMPLES[tool].input, SAMPLES[tool].server));
+      expect(Object.keys(v), tool).not.toContain("requester");
+    }
+  });
+});
