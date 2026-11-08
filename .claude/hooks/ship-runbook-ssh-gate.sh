@@ -71,7 +71,7 @@ if [[ "${SOLEUR_SKIP_RUNBOOK_SSH_GATE:-}" == "1" ]]; then exit 0; fi
 # sibling gate hooks; falls open if HEAD is detached or base is unknown.
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 [[ -z "$BRANCH" || "$BRANCH" == "HEAD" ]] && exit 0
-git fetch origin main 2>/dev/null || true
+git fetch --no-tags origin main 2>/dev/null || true
 
 # Pull the diff against origin/main. If the merge-base lookup fails, fail-open.
 BASE=$(git merge-base "origin/main" HEAD 2>/dev/null || true)

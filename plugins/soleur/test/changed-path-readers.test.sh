@@ -62,7 +62,7 @@ assert_fixture_dir() {
 }
 
 # One owning root for every fixture, removed on ANY exit path. The EXIT trap is registered BEFORE the fixture library is sourced.
-WORK_ROOT="$(mktemp -d /var/tmp/changed-path-readers.XXXXXXXX)" || { echo "FATAL: mktemp failed" >&2; exit 2; }
+WORK_ROOT="$(mktemp -d "${TMPDIR:-/var/tmp}/changed-path-readers.XXXXXXXX")" || { echo "FATAL: mktemp failed" >&2; exit 2; }
 assert_fixture_dir "$WORK_ROOT"
 trap 'rm -rf "$WORK_ROOT"' EXIT
 # shellcheck source=./lib/git-fixture-env.sh

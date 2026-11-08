@@ -100,7 +100,7 @@ if [[ -n "$PR_HEAD" ]] && git rev-parse --verify --quiet "origin/${PR_HEAD}" >/d
   TIP="origin/${PR_HEAD}"
 elif git rev-parse --verify --quiet "refs/pull/${PR_NUM}/head" >/dev/null 2>&1; then
   TIP="refs/pull/${PR_NUM}/head"
-elif git fetch --quiet origin "pull/${PR_NUM}/head" 2>/dev/null; then
+elif git fetch --quiet --no-tags origin "pull/${PR_NUM}/head" 2>/dev/null; then
   TIP="FETCH_HEAD"  # fetched just above; covers pruned/deleted head branches
 else
   TIP="HEAD"
