@@ -5650,7 +5650,7 @@ if want_scripts; then
   # battery from the run_suite command token and dies on <unresolved>.
   run_suite "plugins/soleur/test/ci-pr-affected-replay-a" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 1-158
   run_suite "plugins/soleur/test/ci-pr-affected-replay-b" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 159-316
-  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-473
+  run_suite "plugins/soleur/test/ci-pr-affected-replay-c" bash plugins/soleur/test/ci-pr-affected-replay.test.sh --rows 317-476
   run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
   run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
   # Registered explicitly (#8322): tests/hooks/ has no auto-discovery glob, and the
@@ -7181,6 +7181,11 @@ if want_scripts; then
   # `aggregate` step exists. Live lint (no .test.sh wrapper); appended LAST in
   # the block so no earlier registration's positional-shard ordinal moves.
   run_suite "scripts/lint-umbrella-aggregate" bash scripts/lint-umbrella-aggregate.sh
+  # #10859 (PR3b, ADR-276 ruling (a) of 2026-11-06): the oracle-review-required driver EXECUTED (stub gh/git
+  # battery over the real driver — bound-approval, author, stale-SHA, member-enumeration and fail-closed rows,
+  # a mutation battery on the binding/latest-run/missing axes, and the cla-verify enumeration parity pin).
+  # Same explicit-registration and LAST-in-block reasons as above. Declared edge set, not always-on.
+  run_suite "scripts/ci-oracle-review" bash scripts/ci-oracle-review.test.sh
 fi
 
 # Named bun-test entries — bun shard.

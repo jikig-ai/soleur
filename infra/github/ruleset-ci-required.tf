@@ -194,6 +194,22 @@ resource "github_repository_ruleset" "ci_required" {
         context        = "vendor-pin-required"
         integration_id = var.actions_integration_id
       }
+
+      # --- PR3b (#10859, ADR-276 ruling (a) of 2026-11-06): the affected-index ratchet flips advisory->required and ---
+      # --- the oracle-review sentinel lands REQUIRED, in the same commit as their ci.yml producers (ADR-032).      ---
+      # affected-index-ratchet: a bot PR's diff (ALLOWED_PATHS = {weakness-digest.md}) touches no suite file, so the
+      #   live pair set is unchanged and the synthetic green equals the real verdict — unreachability, per ADR-139.
+      # oracle-review-required: the sentinel's own pull_request arm classifies on the BASE commit's RATCHET_ORACLE;
+      #   ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅ (pinned by plugins/soleur/test/bot-synthetic-unreachability.test.sh), so
+      #   every bot PR is verdict not-oracle and the synthetic green asserts exactly that.
+      required_check {
+        context        = "affected-index-ratchet"
+        integration_id = var.actions_integration_id
+      }
+      required_check {
+        context        = "oracle-review-required"
+        integration_id = var.actions_integration_id
+      }
     }
 
     # Merge queue (#9454). Re-adopted to remove the merge-train tax: with

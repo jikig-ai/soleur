@@ -89,6 +89,7 @@ plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowled
 plugins/soleur/skills/incident/test/pull-card.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 plugins/soleur/skills/skill-security-scan/test/parse-override.test.sh	knowledge-base/engineering/security/skill-overrides
 plugins/soleur/test/_base-notice-frontmatter.test.sh	knowledge-base/engineering/policies/content-vendoring.md
+plugins/soleur/test/bot-synthetic-unreachability.test.sh	knowledge-base/project/weakness-digest.md
 plugins/soleur/test/brand-workshop-pen-commit-after-save.test.sh	knowledge-base/product/design
 plugins/soleur/test/ci-classify-step-exec.test.sh	knowledge-base
 plugins/soleur/test/ci-e2e-skip-anchors.test.sh	knowledge-base
@@ -213,6 +214,7 @@ scripts/lib/incidents-roots.test.sh	knowledge-base/project
 scripts/lib/inngest-probe-row.test.sh	knowledge-base
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
+scripts/lib/web2-relay-rows.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings

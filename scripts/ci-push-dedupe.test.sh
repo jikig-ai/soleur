@@ -141,7 +141,7 @@ ORASEL_IF="\${{ $ORASEL_EV && $ORASEL_VAR }}"
 AGG_DIGEST="224a3a10a36457d4e37b1ca257646d9b3297fbd83cfedd07e0012855982b970d"
 # The jobs that are deliberately NOT gated (cheap guards that keep the push run's conclusion `success` when the heavy
 # jobs are skipped). A NEW job must be classified: add it to GATED_PINNED (heavy) or here (cheap), never neither.
-UNGATED_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-selection pr-selection"
+UNGATED_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection pr-selection"
 REASONS="not_push not_main rerun bad_sha proof_error no_mg_success page_truncated no_test_job legs_incomplete switch_off ok"
 SHA_A="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 SHA_B="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

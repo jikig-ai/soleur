@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=473   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=476   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -2263,7 +2263,12 @@ rt_p_grow() { bl scripts/g-new.tsv "$B_BAD$B_NEWS"; bl scripts/g-swap.tsv "$B_SW
 rt_b_cs1() { bl scripts/bl-empty.tsv ''; }; rt_p_cs1() { printf 't\n' > data/new.txt; }
 rt_b_cs2() { bl scripts/bl-empty.tsv ''; }; rt_p_cs2() { printf 'true\ncat data/gap.txt\n' > scripts/edit.test.sh; }
 rt_b_cs3() { bl scripts/bl-empty.tsv ''; }
-rt_b_acc() { bl scripts/bl-empty.tsv ''; }; rt_p_acc() { printf 'scripts/bad\tdata/gap.txt\t%s\t1\tfalse-positive: line 1 is a cat of a scratch fixture\n' "$(anchor_of 'cat data/gap.txt')" > scripts/ci-pr-affected-audit.accept.tsv; }
+rt_b_acc() { bl scripts/bl-empty.tsv ''; }; rt_p_acc() { printf 'scripts/bad\tdata/gap.txt\t%s\t1\tfalse-positive: message: scripts/bad.test.sh:1: line 1 is a cat of a scratch fixture\n' "$(anchor_of 'cat data/gap.txt')" > scripts/ci-pr-affected-audit.accept.tsv; printf 'm\n' >> data/gap.txt; }
+rt_b_accx() { bl scripts/bl-empty.tsv ''; printf 'scripts/bad\tdata/gap.txt\t%s\t1\tfalse-positive: message: scripts/bad.test.sh:1: existing row\n' "$(anchor_of 'cat data/gap.txt')" > scripts/ci-pr-affected-audit.accept.tsv; }
+rt_p_unattr() { printf 'scripts/swp\tdata/gap2.txt\t%s\t1\tfalse-positive: message: scripts/swp.test.sh:1: added row\n' "$(anchor_of 'cat data/gap2.txt')" >> scripts/ci-pr-affected-audit.accept.tsv; }
+rt_p_accx() { rt_p_unattr; sed -i 's/false-positive: message: scripts\/bad.test.sh:1: existing row/false-positive: data row not fed to a read loop: scripts\/bad.test.sh:1: rewritten row/' scripts/ci-pr-affected-audit.accept.tsv; }   # TWO pairs differ (added + reason-rewritten), both unattributed: a loop that stops at the first is the defect
+rt_p_badkind() { rt_p_unattr; sed -i 's/false-positive: message: scripts\/swp.test.sh:1: added row/false-positive: a free-form reason with no typed kind/' scripts/ci-pr-affected-audit.accept.tsv; printf 'm\n' >> data/gap2.txt; }
+rt_p_accattr() { rt_p_unattr; printf 'm\n' >> data/gap2.txt; }
 rt_b_oracle() { :; }; rt_p_oracle() { printf 'ci2\n' >> .github/workflows/ci.yml; printf 'py2\n' >> scripts/ci-pr-affected-replay.py; bl scripts/ci-pr-affected-audit.baseline.tsv "$B_BAD"; }
 rt_b_renamed() { rt_variants; printf '\ndel baseline_at\n' >> plugins/soleur/scripts/lint-ratchet.py; }
 rt_b_raises() { rt_variants; printf '\ndef baseline_at(root, sha, path, env=None):\n    raise RuntimeError("boom")\n' >> plugins/soleur/scripts/lint-ratchet.py; }
@@ -2288,7 +2293,7 @@ RT_OTOUCH=(ci:.github/workflows/ci.yml replay:scripts/ci-pr-affected-replay.py l
 for ot in "${RT_OTOUCH[@]}"; do eval "rt_p_ot_${ot%%:*}() { printf '# touched\n' >> '${ot#*:}'; }"; done
 rt_mk ok rt_variants rt_touch
 rt_mk adopt rt_b_adopt rt_p_adopt; rt_mk del rt_b_del rt_p_del; rt_mk none rt_none rt_touch; rt_mk grow rt_b_grow rt_p_grow
-rt_mk acc rt_b_acc rt_p_acc; rt_mk cs1 rt_b_cs1 rt_p_cs1; rt_mk cs2 rt_b_cs2 rt_p_cs2; rt_mk cs3 rt_b_cs3 rt_touch; rt_mk oracle rt_b_oracle rt_p_oracle
+rt_mk acc rt_b_acc rt_p_acc; rt_mk accx rt_b_accx rt_p_accx; rt_mk accbad rt_b_accx rt_p_badkind; rt_mk accattr rt_b_accx rt_p_accattr; rt_mk cs1 rt_b_cs1 rt_p_cs1; rt_mk cs2 rt_b_cs2 rt_p_cs2; rt_mk cs3 rt_b_cs3 rt_touch; rt_mk oracle rt_b_oracle rt_p_oracle
 rt_mk renamed rt_b_renamed rt_touch; rt_mk raises rt_b_raises rt_touch; rt_mk single rt_variants; rt_mk noparent rt_variants
 rt_mk weak rt_b_weak rt_p_weak; rt_mk nolint rt_b_nolint rt_p_nolint; rt_mk badlint rt_b_badlint rt_p_badlint; rt_mk noclass rt_b_noclass rt_touch; rt_mk noalways rt_b_noalways rt_touch
 rt_mk notestall rt_b_notestall rt_touch; rt_mk untrk rt_b_untrk rt_touch; rt_mk lnkall rt_b_lnkall rt_touch; rt_mk um rt_b_um rt_touch; rt_mk tsx rt_b_tsx rt_touch; rt_mk cs4 rt_b_cs1 rt_p_cs4; rt_mk cs5 rt_b_cs1 rt_p_cs5; rt_mk cs6 rt_b_cs6 rt_p_cs6; rt_mk accln rt_b_accln rt_touch
@@ -2300,7 +2305,7 @@ printf 'scripts/not\tdata/in-the-baseline\n' > "$RT/outside.tsv"
   && gitq checkout -q -b pr && bl scripts/bl-st.tsv "$B_SWP" && gitq add -A && gitq commit -qm pr && gitq checkout -q main && gitq merge -q --no-ff pr -m merge ) \
   || { echo "[FATAL] ratchet fixture stack" >&2; exit 2; }   # entry 1 drained (c1), entry 2 swaps a pair: HEAD^1 = c1, while origin/main is the OLDER c0
 gitq clone -q --depth 1 "file://$RT/ok" "$RT/shallow" 2>/dev/null || { echo "[FATAL] ratchet shallow clone" >&2; exit 2; }
-RT_FIX_OK=1; for d in acc ok adopt del none grow cs1 cs2 cs3 cs4 cs5 cs6 oracle renamed raises single noparent stack shallow weak nolint badlint noclass noalways notestall accln untrk lnkall um tsx ot_ci ot_replay ot_lint ot_tpaths ot_tall; do [[ -d "$RT/$d/.git" ]] || RT_FIX_OK=0; done
+RT_FIX_OK=1; for d in acc accx accbad accattr ok adopt del none grow cs1 cs2 cs3 cs4 cs5 cs6 oracle renamed raises single noparent stack shallow weak nolint badlint noclass noalways notestall accln untrk lnkall um tsx ot_ci ot_replay ot_lint ot_tpaths ot_tall; do [[ -d "$RT/$d/.git" ]] || RT_FIX_OK=0; done
 [[ "$RT_FIX_OK" -eq 1 && "$(gitq -C "$RT/ok" rev-list --parents -n1 HEAD | wc -w)" -eq 3 && "$(gitq -C "$RT/single" rev-list --parents -n1 HEAD | wc -w)" -eq 2 \
   && "$(gitq -C "$RT/noparent" rev-list --parents -n1 HEAD | wc -w)" -eq 1 && "$(gitq -C "$RT/stack" rev-parse origin/main)" != "$(gitq -C "$RT/stack" rev-parse HEAD^1)" ]] \
   && pass "the ratchet fixtures landed (a merge HEAD, a one-parent HEAD, a root commit, a stack whose origin/main is older than HEAD^1, a depth-1 clone)" || fail "the ratchet fixtures are malformed"
@@ -2329,8 +2334,8 @@ rt_go() {   # rt_go <ratchet args...>: RC, ROUT (stdout), RERR (stderr), ROUTALL
   [[ "$RERR" != *'replay: internal error'* ]] || printf '4\n' >> "$RCLOG"   # the SUT maps every exception to rc 2, so the harness's rc-4 crash detector would be blind to a crash in this block
   return 0
 }
-rt_marker() {   # rt_marker <exit> <reason> [live baseline]: exactly one marker line, on stdout, and it is the LAST line
-  local want="SOLEUR_PR_AFFECTED_RATCHET exit=$1 reason=$2 live=${3:-[0-9]+} baseline=${4:-[0-9]+}"
+rt_marker() {   # rt_marker <exit> <reason> [live baseline [accept]]: exactly one marker line, on stdout, and it is the LAST line
+  local want="SOLEUR_PR_AFFECTED_RATCHET exit=$1 reason=$2 live=${3:-[0-9]+} baseline=${4:-[0-9]+} accept=${5:-[0-9]+}"
   [[ "$(grep -cE '^SOLEUR_PR_AFFECTED_RATCHET ' <<<"$ROUT")" -eq 1 ]] && [[ "$(tail -n1 <<<"$ROUT")" =~ ^$want$ ]]
 }
 rt_is() { local ex="$1" why="$2"; shift 2; rt_go "$@"; [[ "$RC" -eq "$ex" ]] && rt_marker "$ex" "$why"; }   # rt_is <exit> <reason> <ratchet args...>
@@ -2371,7 +2376,7 @@ if any(re.match(r"\s*(::|##\[)", l) for l in t.split("\n")): sys.exit(2)
 }
 
 # the comparison (exit 0 / 1), a compliant suite first and the offender second -------------------------------
-row_rt_pass() { rt_in std ok 0 pass --baseline scripts/bl-ok.tsv && grep -qE 'live=1 baseline=1$' <<<"$ROUT"; }
+row_rt_pass() { rt_in std ok 0 pass --baseline scripts/bl-ok.tsv && grep -qE 'live=1 baseline=1 accept=0$' <<<"$ROUT"; }
 row_rt_newpair() { rt_in std ok 1 new-pair --baseline scripts/bl-empty.tsv && grep -qxF -- $'new-pair\tscripts/bad\tdata/gap.txt\tscripts/bad.test.sh:1' <<<"$ROUT" && ! grep -q 'scripts/good' <<<"$ROUT"; }
 row_rt_stale() { rt_in std ok 1 stale-line --baseline scripts/bl-stale.tsv && grep -qxF -- $'stale-line\tscripts/bl-stale.tsv\tscripts/zgone\tdata/gone.txt' <<<"$ROUT"; }
 row_rt_dup() { rt_in std ok 1 baseline-dup --baseline scripts/bl-dup.tsv; }
@@ -2383,20 +2388,23 @@ printf 'scripts/bad\t*\t-\t-\tfalse-positive: a readable suite is not accepted w
 printf 'scripts/bad\tdata/gap.txt\t%s\t1\tfalse-positive: line 1 is a cat of a scratch fixture\n' "$(anchor_of 'cat data/gap.txt')" > "$RT/acc-ok.tsv"
 row_rt_stale_accept() { rt_in std ok 1 stale-accept --baseline scripts/bl-ok.tsv --accept "$RT/acc-stale.tsv" && grep -qE '^stale-accept'$'\t''scripts/swp'$'\t''data/gap2.txt'$'\t''[0-9a-f]{12}/1'$'\t''suite-unregistered$' <<<"$ROUT"; }
 row_rt_star() { rt_in std ok 1 star-row --baseline scripts/bl-ok.tsv --accept "$RT/acc-star.tsv"; }
-row_rt_accept_ok() { rt_in std ok 0 pass --baseline scripts/bl-empty.tsv --accept "$RT/acc-ok.tsv" && grep -qE 'live=0 baseline=0$' <<<"$ROUT"; }   # live minus accepted equals the baseline
+row_rt_accept_ok() { rt_in std ok 0 pass --baseline scripts/bl-empty.tsv --accept "$RT/acc-ok.tsv" && grep -qE 'live=0 baseline=0 accept=1$' <<<"$ROUT"; }   # live minus accepted equals the baseline
 row_rt_accept_listed() { rt_in std ok 1 stale-line --baseline scripts/bl-ok.tsv --accept "$RT/acc-ok.tsv"; }   # an accepted pair still in the baseline: that line is stale
 # must-PASS non-canonical inputs
-row_rt_accept_default() { rt_in std acc 0 pass --baseline scripts/bl-empty.tsv && grep -qE 'live=0 baseline=0$' <<<"$ROUT"; }   # no --accept: the file at its default path in the checkout is read
+row_rt_accept_default() { rt_in std acc 0 pass --baseline scripts/bl-empty.tsv && grep -qE 'live=0 baseline=0 accept=1$' <<<"$ROUT"; }   # no --accept: the file at its default path in the checkout is read
 printf 'scripts/bad\tdata/gap.txt\tnot-hex\t1\tfalse-positive: x\n' > "$RT/acc-bad.tsv"
 row_rt_accept_invalid() { rt_in std ok 1 stale-accept --baseline scripts/bl-ok.tsv --accept "$RT/acc-bad.tsv"; }   # a malformed accept file is a verdict about the tree, not a crash
 row_rt_accept_unreadable() { rt_in std ok 2 accept-unreadable --baseline scripts/bl-ok.tsv --accept "$RT"; }
 row_rt_accept_symlink() { rt_in std accln 2 accept-unreadable --baseline scripts/bl-ok.tsv && ! grep -q 'false-positive' <<<"$ROUTALL"; }   # the default accept file is a symlink that leaves the tree: refused, never read
+row_rt_accept_unattr() { rt_in two accx 1 accept-unattributed --baseline scripts/bl-empty.tsv && grep -qF -- "$(printf 'accept-unattributed\tscripts/swp\tdata/gap2.txt')" <<<"$ROUT" && grep -qF -- "$(printf 'accept-unattributed\tscripts/bad\tdata/gap.txt')" <<<"$ROUT"; }   # a row-set delta with no path/ref/oracle touch is off-diff growth (exit 1); BOTH differing pairs print
+row_rt_accept_badkind() { rt_in two accbad 1 accept-bad-kind --baseline scripts/bl-empty.tsv && grep -qF -- "$(printf 'accept-bad-kind\tscripts/swp\tdata/gap2.txt')" <<<"$ROUT"; }   # an attributed row whose reason carries no typed kind (exit 1)
+row_rt_accept_attrib() { rt_in two accattr 0 pass --baseline scripts/bl-empty.tsv && grep -qE 'live=0 baseline=0 accept=2$' <<<"$ROUT"; }   # must-PASS: the added row is typed AND the diff touches the named path
 row_rt_crlf() { rt_in crlf ok 0 pass --baseline scripts/bl-ok.tsv; }
-row_rt_empty_ok() { rt_in good ok 0 pass --baseline scripts/bl-empty.tsv && grep -qE 'live=0 baseline=0$' <<<"$ROUT"; }
+row_rt_empty_ok() { rt_in good ok 0 pass --baseline scripts/bl-empty.tsv && grep -qE 'live=0 baseline=0 accept=0$' <<<"$ROUT"; }
 row_rt_label_twice() { rt_in dup ok 0 pass --baseline scripts/bl-ok.tsv; }
 row_rt_always_on() { rt_in always ok 0 pass --baseline scripts/bl-empty.tsv; }
 row_rt_glob() { rt_in glob ok 0 pass --baseline scripts/bl-empty.tsv; }
-row_rt_odd_names() { rt_in odd ok 0 pass --baseline scripts/bl-odd.tsv && grep -qE 'live=3 baseline=3$' <<<"$ROUT"; }
+row_rt_odd_names() { rt_in odd ok 0 pass --baseline scripts/bl-odd.tsv && grep -qE 'live=3 baseline=3 accept=0$' <<<"$ROUT"; }
 row_rt_blank_line() { rt_in std ok 1 stale-line --baseline scripts/bl-blank.tsv; }
 row_rt_nonl() { rt_in std ok 1 baseline-order --baseline scripts/bl-nonl.tsv; }
 row_rt_conflict() { rt_in std ok 1 stale-line --baseline scripts/bl-conflict.tsv; }
@@ -2535,12 +2543,12 @@ rt_remedy_new() {   # the five remedy lines of a new pair (an independent copy o
   printf '%s\n' 'remedy: declare the path in AFFECTED_<LABEL>_PATHS in scripts/lib/test-affected-paths.sh only when the suite really reads or executes the file, or the file'"'"'s state feeds its verdict (that is what the selector must know); editing that file runs the full battery once' \
     'remedy: or add an anchor-keyed accept row to scripts/ci-pr-affected-audit.accept.tsv only when the suite merely names the file (a message, a fixture it writes into a scratch tree, a negative-test string); the reason names the line kind' \
     'remedy: accept row shape: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason> (anchor and ordinal are on the ref line above)' \
-    'remedy: an accept row on a file the suite really reads or whose state feeds its verdict is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it, and a CODEOWNERS entry routes the review but no required review exists in this repository'"'"'s ruleset' \
+    'remedy: an accept row on a file the suite really reads or whose state feeds its verdict is a false negative once the lever flips; no automated control checks that the suite does not read this file, this check does not verify it — the automated bounds are the accept-unattributed/accept-bad-kind verdicts on the row-set delta and the oracle-review-required context, which demands a bound owner review of oracle-surface diffs' \
     'remedy: a baseline row cannot be added'
 }
 rt_golden() {   # rt_golden <repo> <list> <cause line> <suite> <path> <ref text> <live> <baseline> [ref line]: compare the WHOLE stdout
   local want a; a="$(anchor_of "$6")"
-  want="$(printf 'new-pair\t%s\t%s\t%s.test.sh:%s\n  cause: %s\n  ref\t%s.test.sh:%s\t%s/1\t%s\n' "$4" "$5" "$4" "${9:-1}" "$3" "$4" "${9:-1}" "$a" "$6"; rt_remedy_new; printf 'SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=%s baseline=%s\n' "$7" "$8")"
+  want="$(printf 'new-pair\t%s\t%s\t%s.test.sh:%s\n  cause: %s\n  ref\t%s.test.sh:%s\t%s/1\t%s\n' "$4" "$5" "$4" "${9:-1}" "$3" "$4" "${9:-1}" "$a" "$6"; rt_remedy_new; printf 'SOLEUR_PR_AFFECTED_RATCHET exit=1 reason=new-pair live=%s baseline=%s accept=0\n' "$7" "$8")"
   rt_go --root "$RT/$1" --list "$RT/L-$2" --baseline scripts/bl-empty.tsv; [[ "$RC" -eq 1 && "$ROUT" == "$want" ]]
 }
 row_rt_cause_added() { rt_golden cs1 c1 'your change added file data/new.txt, which suite scripts/c1 names' scripts/c1 data/new.txt 'cat data/new.txt' 1 0; }
@@ -2551,7 +2559,7 @@ row_rt_cause_added_beats_edited() { rt_golden cs5 c1 'your change added file dat
 row_rt_cause_rename() { rt_golden cs6 c1 'your change added file data/new.txt, which suite scripts/c1 names' scripts/c1 data/new.txt 'cat data/new.txt' 1 0; }   # a rename sorted before the add must not shift the status/path pairs
 row_rt_refs_cap() { rt_in refs4 ok 1 new-pair --baseline scripts/bl-empty.tsv && [[ "$(grep -c '^  ref'$'\t' <<<"$ROUT")" -eq 3 ]]; }   # four identical lines name the pair: three ref lines print
 row_rt_text_stale() {
-  local want; want="$(printf 'stale-line\tscripts/bl-stale.tsv\tscripts/zgone\tdata/gone.txt\nremedy: confirm the pair is really gone on a clean checkout; if the selector output was partial or this run exited 2, do not prune: rerun\nremedy: delete the offending line(s) above from scripts/bl-stale.tsv; if the file is in conflict, restore main'"'"'s copy with git checkout origin/main -- scripts/bl-stale.tsv, then run: python3 -I scripts/ci-pr-affected-replay.py ratchet --print-baseline > scripts/bl-stale.tsv.new && mv scripts/bl-stale.tsv.new scripts/bl-stale.tsv\nSOLEUR_PR_AFFECTED_RATCHET exit=1 reason=stale-line live=1 baseline=2\n')"
+  local want; want="$(printf 'stale-line\tscripts/bl-stale.tsv\tscripts/zgone\tdata/gone.txt\nremedy: confirm the pair is really gone on a clean checkout; if the selector output was partial or this run exited 2, do not prune: rerun\nremedy: delete the offending line(s) above from scripts/bl-stale.tsv; if the file is in conflict, restore main'"'"'s copy with git checkout origin/main -- scripts/bl-stale.tsv, then run: python3 -I scripts/ci-pr-affected-replay.py ratchet --print-baseline > scripts/bl-stale.tsv.new && mv scripts/bl-stale.tsv.new scripts/bl-stale.tsv\nSOLEUR_PR_AFFECTED_RATCHET exit=1 reason=stale-line live=1 baseline=2 accept=0\n')"
   rt_go --root "$RT/ok" --list "$RT/L-std" --baseline scripts/bl-stale.tsv; [[ "$RC" -eq 1 && "$ROUT" == "${want%$'\n'}" ]]
 }
 row_rt_text_no_add() { rt_in std cs3 1 new-pair --baseline scripts/bl-empty.tsv && ! grep -q -- '--print-baseline' <<<"$ROUTALL" && ! grep -qiE 'append|>> *scripts/ci-pr-affected-audit.baseline' <<<"$ROUTALL" && grep -qxF -- 'remedy: a baseline row cannot be added' <<<"$ROUT"; }
@@ -2581,7 +2589,7 @@ row_rt_text_inject_infra() {   # raw fallback= text, a raw stray selector line a
   rt_is 2 base-unresolved --root "$RT/ok" --list "$RT/L-std" --baseline scripts/bl-ok.tsv --base "$(printf 'no\033such')" && rt_clean && grep -qF -- 'no\x1bsuch' <<<"$RERR"
 }
 row_rt_ctl_helpers() {
-  local m='SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=1 baseline=1'
+  local m='SOLEUR_PR_AFFECTED_RATCHET exit=0 reason=pass live=1 baseline=1 accept=0'
   ROUT="$m"; rt_marker 0 pass || return 1
   ROUT="x"$'\n'"$m"; rt_marker 0 pass || return 1
   ROUT="$m"$'\n'"$m"; ! rt_marker 0 pass || return 1   # exactly one marker
@@ -2659,9 +2667,9 @@ row_rt_report_paths() {   # --report: an exit-2 run and --print-baseline write i
 
 # ---- the marker, oracle-inputs-changed and the helper load -----------------------------------------------------
 row_rt_marker_fields() {   # exactly the pinned field list, on a pass, a verdict and an infrastructure exit
-  rt_in std ok 0 pass --baseline scripts/bl-ok.tsv && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=0\ reason=pass\ live=1\ baseline=1$ ]] || return 1
-  rt_in std ok 1 new-pair --baseline scripts/bl-empty.tsv && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=1\ reason=new-pair\ live=1\ baseline=0$ ]] || return 1
-  rt_sel_is "$RT/fl-below.txt" 2 floor-rows-vs-of && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=2\ reason=floor-rows-vs-of\ live=[0-9]+\ baseline=[0-9]+$ ]]
+  rt_in std ok 0 pass --baseline scripts/bl-ok.tsv && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=0\ reason=pass\ live=1\ baseline=1\ accept=0$ ]] || return 1
+  rt_in std ok 1 new-pair --baseline scripts/bl-empty.tsv && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=1\ reason=new-pair\ live=1\ baseline=0\ accept=0$ ]] || return 1
+  rt_sel_is "$RT/fl-below.txt" 2 floor-rows-vs-of && [[ "$(tail -n1 <<<"$ROUT")" =~ ^SOLEUR_PR_AFFECTED_RATCHET\ exit=2\ reason=floor-rows-vs-of\ live=[0-9]+\ baseline=[0-9]+\ accept=[0-9]+$ ]]
 }
 row_rt_usage() { rt_in std ok 0 pass --baseline scripts/bl-ok.tsv || return 1; rt_go --root "$RT/ok" --no-such-flag; [[ "$RC" -eq 2 ]] && ! grep -q SOLEUR_PR_AFFECTED_RATCHET <<<"$ROUTALL"; }   # a usage error prints no marker (the control: a run does)
 row_rt_oracle() {   # the oracle fixture writes a baseline at the canonical path absent at base: baseline-reintroduced since strict zero, and the notice still names all three oracle inputs
@@ -2700,7 +2708,7 @@ row_wf_extractor() {   # the job-block extractor, with a known positive and a kn
 }
 row_wf_no_needs() { local w="${1:-$RT/wf/ci.yml}"; [[ -n "$(wf_block "$w" $RJOB)" ]] && ! wf_has "$w" $RJOB '^    needs:'; }
 row_wf_if() { local w="${1:-$RT/wf/ci.yml}"; [[ "$(wf_block "$w" $RJOB | grep -cxF -- "    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'")" -eq 1 && "$(wf_block "$w" $RJOB | grep -cE '^    if:')" -eq 1 ]]; }
-row_wf_coe() { wf_coe "${1:-$RT/wf/ci.yml}" $RJOB; }
+row_wf_coe() { ! wf_coe "${1:-$RT/wf/ci.yml}" $RJOB; }   # PR3b (#10859): the required context carries NO job-level continue-on-error
 row_wf_timeout() { local w="${1:-$RT/wf/ci.yml}"; [[ "$(wf_block "$w" $RJOB | grep -cE '^    timeout-minutes:[[:space:]]*5[[:space:]]*$')" -eq 1 && "$(wf_block "$w" $RJOB | grep -c 'timeout-minutes')" -eq 1 ]]; }
 row_wf_checkout() { local w="${1:-$RT/wf/ci.yml}"; wf_has "$w" $RJOB '^          fetch-depth: 2[[:space:]]*$' && wf_has "$w" $RJOB '^          persist-credentials: false[[:space:]]*$'; }
 row_wf_select_timeout() {   # the selector timeout is below the job timeout (numeric)
@@ -2711,8 +2719,8 @@ row_wf_step() {   # one run step that calls the subcommand, with no ${{ }} insid
   local b; b="$(wf_block "${1:-$RT/wf/ci.yml}" $RJOB | sed -n '/^        run:/,$p')"
   [[ -n "$b" ]] && grep -q 'python3 -I scripts/ci-pr-affected-replay.py ratchet' <<<"$b" && ! grep -qF '${{' <<<"$b"
 }
-row_wf_dark() {   # the name is absent from scripts/required-checks.txt, after proving the file is read: it exists, is non-empty and holds a known control
-  local r="${1:-$RT/wf/required-checks.txt}"; [[ -s "$r" ]] && grep -qxF test < <(wf_names "$r") && ! grep -qxF "$RJOB" < <(wf_names "$r")
+row_wf_dark() {   # the name is present in scripts/required-checks.txt (required since PR3b), after proving the file is read: it exists, is non-empty and holds a known control
+  local r="${1:-$RT/wf/required-checks.txt}"; [[ -s "$r" ]] && grep -qxF test < <(wf_names "$r") && grep -qxF "$RJOB" < <(wf_names "$r")
 }
 row_wf_bicond() {   # job-level continue-on-error IFF the job is not a required context (PR3b passes by removing the line AND adding the name)
   local w="${1:-$RT/wf/ci.yml}" r="${2:-$RT/wf/required-checks.txt}" req=0 coe=0
@@ -2747,7 +2755,7 @@ rt_real_marker() {   # rt_real_marker <exit> <reason> [live baseline]: a marker 
   python3 - "$SUT" "$1" "$2" "${3:-3}" "${4:-2}" <<'PY'
 import importlib.util, sys
 spec = importlib.util.spec_from_file_location("sut", sys.argv[1]); m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
-print(m.ratchet_marker(int(sys.argv[2]), sys.argv[3], {"live": int(sys.argv[4]), "baseline": int(sys.argv[5])}))
+print(m.ratchet_marker(int(sys.argv[2]), sys.argv[3], {"live": int(sys.argv[4]), "baseline": int(sys.argv[5]), "accept": 0}))
 PY
 }
 wf_step_run() {   # wf_step_run <workflow> <stub rc> <stub stdout> [report bytes]: runs the step's run: body as GitHub does (bash -eo pipefail) -> SRC (its exit), SOUT, SSUM (the summary file), SARGS (python3's argv)
@@ -2807,16 +2815,15 @@ open(dst, "w").write(t[:m.start()] + b.replace(old, new) + t[m.end():])
 PY
   "$4" "$w" && return 1 || return 0
 }
-row_wf_pr3b_rehearsal() {   # the PR3b shape: the line removed AND the name added is green; only one of the two is red
-  local w="$RT/wf/mut-coe.yml" r="$RT/wf/req-added.txt"
-  wf_mut coe $'\n    continue-on-error: true\n' $'\n' row_wf_coe || return 1
-  cp "$RT/wf/required-checks.txt" "$r"; printf '%s\n' "$RJOB" >> "$r"
-  row_wf_bicond "$w" "$r" || return 1                      # both changed: consistent
-  ! row_wf_bicond "$RT/wf/ci.yml" "$r" || return 1          # the name added, the line kept
-  ! row_wf_bicond "$w" "$RT/wf/required-checks.txt" || return 1   # the line removed, the name absent
-  row_wf_bicond "$RT/wf/ci.yml" "$RT/wf/required-checks.txt"
+row_wf_pr3b_rehearsal() {   # the post-PR3b shape is consistent; reverting either half reds the biconditional
+  local w="$RT/wf/mut-coe-add.yml" r="$RT/wf/req-removed.txt"
+  wf_mut coe-add $'\n    runs-on: ubuntu-latest\n' $'\n    continue-on-error: true\n    runs-on: ubuntu-latest\n' row_wf_bicond || return 1
+  cp "$RT/wf/required-checks.txt" "$r"; grep -vxF "$RJOB" "$r" > "$r.tmp" && mv "$r.tmp" "$r"
+  ! row_wf_bicond "$RT/wf/ci.yml" "$r" || return 1          # the name dropped, the line stays out: inconsistent
+  ! row_wf_bicond "$w" "$RT/wf/required-checks.txt" || return 1   # the line back, the name still in: inconsistent
+  row_wf_bicond "$RT/wf/ci.yml" "$RT/wf/required-checks.txt"    # the real files: consistent post-PR3b
 }
-row_wf_dark_mutant() { local r="$RT/wf/req-dark.txt"; cp "$RT/wf/required-checks.txt" "$r"; printf '%s\n' "$RJOB" >> "$r"; ! row_wf_dark "$r"; }
+row_wf_dark_mutant() { local r="$RT/wf/req-dark.txt"; cp "$RT/wf/required-checks.txt" "$r"; grep -vxF "$RJOB" "$r" > "$r.tmp" && mv "$r.tmp" "$r"; ! row_wf_dark "$r"; }
 
 # ---- the selection driver still classifies the ratchet's files (CTO row 5): the REAL stage-1 predicates, extracted ----
 SELDRV="$SCRIPT_DIR/../../../scripts/ci-pr-selection.sh"
@@ -2848,6 +2855,9 @@ chk "ratchet: a * accept row for a readable suite is star-row (exit 1)" row_rt_s
 chk "ratchet: an accept row exempts its pair (live minus accepted equals the baseline: exit 0)" row_rt_accept_ok
 chk "ratchet: an accepted pair that is still in the baseline is a stale baseline line (exit 1)" row_rt_accept_listed
 chk "ratchet: the accept file at its default path in the checkout is read when --accept is not given" row_rt_accept_default
+chk "ratchet accept bound: a row-set delta with no path/ref/oracle touch is accept-unattributed (exit 1)" row_rt_accept_unattr
+chk "ratchet accept bound: an attributed row added without a typed kind is accept-bad-kind (exit 1)" row_rt_accept_badkind
+chk "ratchet accept bound: a typed row added with its path in the diff is a pass (must-pass row)" row_rt_accept_attrib
 chk "ratchet: a malformed accept file is stale-accept (exit 1)" row_rt_accept_invalid
 chk "ratchet: an unreadable accept file is baseline-unreadable (exit 2)" row_rt_accept_unreadable
 chk "ratchet: a rows file with CRLF endings and trailing blank lines passes" row_rt_crlf
@@ -2941,18 +2951,18 @@ chk "ratchet helpers: a merge-base copy that does not compile is exit 2 internal
 chk "job wiring: the job-block extractor has a known positive (push-dedupe's continue-on-error), a known negative (guards-ruleset) and a size floor" row_wf_extractor
 chk "job wiring: affected-index-ratchet has no needs:" row_wf_no_needs
 chk "job wiring: its if: is exactly the positive pull_request || merge_group form" row_wf_if
-chk "job wiring: it has job-level continue-on-error: true (advisory: it cannot red the CI run a deploy waits on)" row_wf_coe
+chk "job wiring: it has NO job-level continue-on-error (required since PR3b: a red must conclude the check red)" row_wf_coe
 chk "job wiring: timeout-minutes: 5 is alone on its own line at 4-space indent (the release CI-budget awk shape)" row_wf_timeout
 chk "job wiring: the checkout is fetch-depth: 2 with persist-credentials: false" row_wf_checkout
 chk "job wiring: PR_AFFECTED_REPLAY_SELECT_TIMEOUT is numerically below the job timeout" row_wf_select_timeout
 chk "job wiring: one run step calls the subcommand and holds no \${{ }}" row_wf_step
-chk "job wiring: the name is absent from scripts/required-checks.txt (dark), after proving the file is read" row_wf_dark
+chk "job wiring: the name is present in scripts/required-checks.txt (required since PR3b), after proving the file is read" row_wf_dark
 chk "job wiring: continue-on-error exists if and only if the name is not a required context" row_wf_bicond
 chk "job wiring: no required context that is a ci.yml job carries continue-on-error, over at least 3 mapped names" row_wf_required_not_coe
 chk "job wiring: the job is in ALWAYS_RUN_JOBS, UNGATED_PINNED and LIGHT_PINNED" row_wf_pins
-chk "job wiring mutant: the PR3b shape (the line removed AND the name added) is consistent, only one of the two is red" row_wf_pr3b_rehearsal
-chk "job wiring mutant: a required-checks copy that lists the name reds the dark pin" row_wf_dark_mutant
-chk "job wiring mutant: removing continue-on-error reds the biconditional" wf_mut coe-gone $'\n    continue-on-error: true\n' $'\n' row_wf_bicond
+chk "job wiring mutant: the post-PR3b shape (the line out AND the name in) is consistent; reverting either half is red" row_wf_pr3b_rehearsal
+chk "job wiring mutant: a required-checks copy WITHOUT the name reds the required pin" row_wf_dark_mutant
+chk "job wiring mutant: re-adding continue-on-error reds the biconditional" wf_mut coe-add $'\n    runs-on: ubuntu-latest\n' $'\n    continue-on-error: true\n    runs-on: ubuntu-latest\n' row_wf_bicond
 chk "job wiring mutant: an if: of != push reds the exact-form row" wf_mut if-not-push "    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'" "    if: github.event_name != 'push'" row_wf_if
 chk "job wiring mutant: push added to the if: reds the exact-form row" wf_mut if-push "    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'" "    if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push'" row_wf_if
 chk "job wiring mutant: the if: removed reds the exact-form row" wf_mut if-gone $'\n    if: github.event_name == \'pull_request\' || github.event_name == \'merge_group\'\n' $'\n' row_wf_if
@@ -3666,13 +3676,21 @@ mutate accept-stale-lines-unsorted 'c.stale = sorted(set(c.stale))' 'c.stale = l
 mutate accept-missing-file-is-an-error '    if not os.path.exists(path):' '    if False:' row_acc_missing
 mutate accept-missing-file-silent '        print("replay: --accept %s does not exist: no exemptions" % path, file=sys.stderr)' '        pass' row_acc_missing
 mutate accept-os-error-unmapped '        raise ReadError("cannot read the accept file %s: %s" % (path, e.strerror or e))' '        raise' row_acc_isdir
-mutate accept-comment-lines-are-rows '        if not line.strip() or line.startswith("#"):' '        if not line.strip():' row_acc_comments
+mutate accept-comment-lines-are-rows '        if not line.strip() or line.startswith("#"):
+            continue
+        f = line.split("\t")
+        where = "%s:%d" % (path, n)' '        if not line.strip():
+            continue
+        f = line.split("\t")
+        where = "%s:%d" % (path, n)' row_acc_comments
 mutate accept-duplicate-row-tolerated '        if tuple(f[:4]) in seen:' '        if False:' row_acc_dupe
 mutate accept-duplicate-key-needs-the-same-reason '        if tuple(f[:4]) in seen:' '        if tuple(f[:5]) in seen:' row_acc_dupe2
 mutate accept-ordinal-zero-tolerated 're.match(r"^[1-9][0-9]*$", f[3])' 're.match(r"^[0-9]+$", f[3])' row_acc_ord0
 mutate accept-anchor-not-hex 're.match(r"^[0-9a-f]{12}$", f[2])' 'f[2]' row_acc_nothex
 mutate accept-star-needs-no-dashes '            if f[2:4] != ["-", "-"]:' '            if False:' row_acc_starkey
-mutate accept-extra-columns-tolerated '        if len(f) != 5:' '        if len(f) < 5:' row_acc_six
+mutate accept-extra-columns-tolerated '        if len(f) != 5:
+            raise ValueError("%s: %d column(s), want 5: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>; the 3-column "' '        if len(f) < 5:
+            raise ValueError("%s: %d column(s), want 5: suite<TAB>path<TAB>anchor<TAB>ordinal<TAB>false-positive: <reason>; the 3-column "' row_acc_six
 mutate accept-empty-reason-tolerated 'if not re.match(r"^false-positive: \S", f[4]):' 'if not re.match(r"^false-positive:", f[4]):' row_acc_emptyreason
 mutate accept-blank-reason-tolerated 'if not re.match(r"^false-positive: \S", f[4]):' 'if not re.match(r"^false-positive: ", f[4]):' row_acc_trailing
 
@@ -4036,8 +4054,13 @@ mutate ratchet-helper-compile-error-uncaught '    except Exception as e:
         raise RatchetInfra("internal", "the merge-base copy of' '    except KeyError as e:
         raise RatchetInfra("internal", "the merge-base copy of' row_rt_helper_base_uncompilable
 mutate ratchet-helper-names-unchecked '    for name in ("baseline_at", "InfraError"):' '    for name in ():' row_rt_helper_renamed
-mutate ratchet-marker-reason-hardcoded '    return "%s exit=%d reason=%s live=%d baseline=%d" % (RATCHET_MARKER, code, reason, st["live"], st["baseline"])' '    return "%s exit=%d reason=%s live=%d baseline=%d" % (RATCHET_MARKER, code, "pass", st["live"], st["baseline"])' row_rt_marker_fields
-mutate ratchet-marker-counts-dropped '    return "%s exit=%d reason=%s live=%d baseline=%d" % (RATCHET_MARKER, code, reason, st["live"], st["baseline"])' '    return "%s exit=%d reason=%s live=%d baseline=%d" % (RATCHET_MARKER, code, reason, 0, 0)' row_rt_pass
+mutate ratchet-marker-reason-hardcoded '    return "%s exit=%d reason=%s live=%d baseline=%d accept=%d" % (RATCHET_MARKER, code, reason,' '    return "%s exit=%d reason=%s live=%d baseline=%d accept=%d" % (RATCHET_MARKER, code, "pass",' row_rt_marker_fields
+mutate ratchet-marker-counts-dropped '                                                                 st["live"], st["baseline"], st["accept"])' '                                                                 0, 0, 0)' row_rt_pass
+# diff-scoped accept bounds (#10859 PR3b ruling b): the attribution arm and the typed-kind arm, each killed by its
+# fixture row; a loop that stops at the first member would let the second row of a pair delta through unchecked
+mutate ratchet-accept-attribution-dropped '            if p not in touched and not (refs & touched) and not oracle_rest:' '            if False:' row_rt_accept_unattr
+mutate ratchet-accept-kind-unchecked '                    if kind not in ACCEPT_KINDS:' '                    if False:' row_rt_accept_badkind
+mutate ratchet-accept-diff-loop-first-only '        for s, p in sorted({(k[0], k[1]) for k in list(bmap) + list(hmap)}):' '        for s, p in sorted({(k[0], k[1]) for k in list(bmap) + list(hmap)})[:1]:' row_rt_accept_unattr
 
 # the row grammar (CTO ruling 2): the flag, the reason set derived from the selector's own literals, the column count, and the derivation itself
 mutate ratchet-grammar-validation-skipped '    if bad:
@@ -4275,7 +4298,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1104   # 1313 minus the retired observation-window section's 209 assertions (129 gated ow_mutate sites + 80 of unconditional floor share; 86 chk calls removed — the old floor carried 6 of slack; probe retired 2026-11-07 with #10865 closed); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1110   # 1104 + 6 net unconditional assertions from the PR3b accept-bound and job-wiring rows (measured full run 2026-11-07: 1110 passed, 476 gated sites); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))

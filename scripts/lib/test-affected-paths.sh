@@ -481,6 +481,23 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_COMMUNITY_TEST_COMMUNITY_ARGV_TEST_SH_PATHS=(
   "plugins/soleur/skills/community/test/community-argv.test.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )
+AFFECTED_PLUGINS_SOLEUR_SKILLS_CVE_EXPOSURE_TEST_HOST_STATE_TEST_SH_PATHS=(
+  "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/cloud-init-registry.yml"
+  "apps/web-platform/infra/inngest-bootstrap.sh"
+  "apps/web-platform/infra/server.tf"
+  "apps/web-platform/infra/variables.tf"
+  "plugins/soleur/skills/cve-exposure/SKILL.md"
+  "plugins/soleur/skills/cve-exposure/references/component-map.md"
+  "plugins/soleur/skills/cve-exposure/references/disclosure-and-verdicts.md"
+  "plugins/soleur/skills/cve-exposure/scripts/file-gap-issue.sh"
+  "plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
+  "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
+  "scripts/betterstack-query.sh"
+  "scripts/image-cve-scan.sh"
+  "scripts/lib/betterstack-read-classify.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
 AFFECTED_PLUGINS_SOLEUR_SKILLS_CONSTRAINT_SCAFFOLD_TEST_BITE_PROOF_TEST_SH_PATHS=(
   "package.json"  # plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh:21
   "plugins/soleur/skills/constraint-scaffold/test/bite-proof.test.sh"
@@ -2085,6 +2102,31 @@ AFFECTED_SCRIPTS_CI_ORACLE_LANE_PATHS=(
   "scripts/ci-oracle-lane.test.sh"
   "scripts/ci-pr-selection.sh"  # ci-oracle-lane.test.sh:1050 reads is_doc_path live for the O-DOCPARITY byte-equality check
   "scripts/lib/test-affected-paths.sh"
+)
+
+# scripts/ci-oracle-review (#10859, PR3b) — the suite executes the driver scripts/ci-oracle-review.sh under
+# PATH stubs, reads scripts/merge-queue-cla-verify.sh for the enumeration parity pin, and reads
+# .github/workflows/ci.yml for the job-wiring pins (the awk extraction of the oracle-review-required job
+# block the review fix round added at scripts/ci-oracle-review.test.sh:426). Naming-only paths
+# (scripts/ci-pr-affected-replay.py — a fixture's RATCHET_ORACLE text and the stub-git dispatch glob) carry
+# accept rows; the suite never opens them.
+AFFECTED_SCRIPTS_CI_ORACLE_REVIEW_PATHS=(
+  ".github/workflows/ci.yml"
+  "scripts/ci-oracle-review.sh"
+  "scripts/ci-oracle-review.test.sh"
+  "scripts/merge-queue-cla-verify.sh"
+  "scripts/lib/test-affected-paths.sh"  # THIS FILE
+)
+
+# plugins/soleur/test/bot-synthetic-unreachability.test.sh (#10859, PR3b) — reads the composite action's
+# ALLOWED_PATHS, imports RATCHET_ORACLE from the live replay module, and pins the two new required contexts in
+# required-checks.txt. Edge set = the files it opens.
+AFFECTED_PLUGINS_SOLEUR_TEST_BOT_SYNTHETIC_UNREACHABILITY_TEST_SH_PATHS=(
+  ".github/actions/bot-pr-with-synthetic-checks/action.yml"
+  "scripts/ci-pr-affected-replay.py"
+  "scripts/required-checks.txt"
+  "scripts/lib/test-affected-paths.sh"
+  "plugins/soleur/test/bot-synthetic-unreachability.test.sh"
 )
 
 # plugins/soleur/test/ci-shard-totality-skip (#9729, ADR-276 amendment) — the suite pins the shard-totality classify step in
