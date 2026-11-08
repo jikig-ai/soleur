@@ -472,6 +472,8 @@ LABELS=$PL; h "REAL hook: parked: the long '--repo' form before the subcommand (
 LABELS=$PL; h "REAL hook: parked: 'gh pr merge 7 --repo o/r' (the flag after) is denied" deny "$CLEAN" 'gh pr merge 7 --repo o/r' "pr view 7 --repo o/r --json labels --jq .labels[].name"
 LABELS=$PL
 h "REAL hook: parked: the single '&' is a statement separator ('gh pr merge 99 & gh pr merge 7': both statements are read)" deny "$CLEAN" 'gh pr merge 99 & gh pr merge 7' "pr view 99 --json labels --jq .labels[].name" "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: an earlier statement joined by a single '&' does not hide the merge ('echo go & gh pr merge 7')" deny "$CLEAN" 'echo go & gh pr merge 7' "$LABELS_CALL"
+LABELS=$PL; h "REAL hook: parked: an UNQUOTED mention after a word that is not a wrapper ('echo gh pr merge 7') is not a command" allow "$CLEAN" 'echo gh pr merge 7' --none
 # listing the parked PRs fails closed
 PARKED_COUNT=fail; h "REAL hook: parked: a failed parked-PR list is denied (fail closed)" deny "$CLEAN" 'gh pr merge "$N"' "pr list --label parked --state open --json number --jq length"
 PARKED_COUNT=garbage; h "REAL hook: parked: an unreadable parked-PR list is denied (fail closed)" deny "$CLEAN" 'gh pr merge "$N"' "pr list --label parked --state open --json number --jq length"
@@ -499,6 +501,10 @@ INC_AFTER=$(wc -l < "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2
 TOTAL=$((TOTAL + 1))
 if (( INC_AFTER > INC_BEFORE )); then PASS=$((PASS + 1)); echo "PASS: a parked-barrier deny writes an incident row ($INC_BEFORE -> $INC_AFTER)"
 else FAIL=$((FAIL + 1)); echo "FAIL: a parked-barrier deny wrote no incident row ($INC_BEFORE -> $INC_AFTER)"; fi
+TOTAL=$((TOTAL + 1))
+LAST_ID=$(tail -1 "$SOLEUR_TEST_INCIDENT_ROOT/.claude/.rule-incidents.jsonl" 2>/dev/null | jq -r '.rule_id // empty' 2>/dev/null || true)
+if [[ "$LAST_ID" == "parked-merge-barrier" ]]; then PASS=$((PASS + 1)); echo "PASS: the incident row carries the barrier's own id ($LAST_ID), not another rule's"
+else FAIL=$((FAIL + 1)); echo "FAIL: the incident row id is '$LAST_ID', expected parked-merge-barrier"; fi
 
 rm -rf "$STUB_DIR"
 
@@ -517,8 +523,8 @@ echo "=== $PASS/$TOTAL pass ($FAIL fail) ==="
 
 # Anti-vacuity floor: a suite that silently stops running rows (a sourced helper that
 # exits early, a deleted block) must not read as green. Raise this whenever rows are
-# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 154 after the fix round).
-ROW_FLOOR=154
+# added, derived from a green run's TOTAL (41 at the second-round review edit, 59 after the first parked barrier, 102 after review round 1, 157 after the fix round).
+ROW_FLOOR=157
 if (( TOTAL < ROW_FLOOR )); then
   echo "FAIL: only $TOTAL rows ran; the floor is $ROW_FLOOR (rows were dropped or never ran)"
   exit 1
