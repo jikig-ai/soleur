@@ -4444,7 +4444,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1129   # 1127 + 2 net unconditional assertions from the run_sut timeout-knob rows (main measured 1127 after #10862 corroboration + review-round pins, 484 gated sites); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1130   # measured 2026-11-08 full-run pass count post-merge (main's 1127 + this branch's rows + merge deltas, 484 gated sites); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
