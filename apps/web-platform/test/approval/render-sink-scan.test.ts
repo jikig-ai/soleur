@@ -212,6 +212,16 @@ describe("stripComments (shared by the decide-boundary, runner, tools, cc-push, 
   it("an explicit file name picks the language variant", () => {
     expect(stripComments(`const a = <p>Don't</p>;\n// c\nz();`, "y.tsx")).not.toContain("// c");
   });
+
+  it("a one-line JSDoc whose tag text contains // does not swallow the real code after it", () => {
+    const one = "/** @type {string} // note */ danger();";
+    const out = stripComments(one);
+    expect(out).toContain("danger();");
+    expect(out).not.toContain("note");
+    expect(out).toHaveLength(one.length);
+    const two = "/** @param {string} x // y */ function f(){ danger(); }";
+    expect(stripComments(two)).toContain("danger();");
+  });
 });
 
 describe("the scan covers the tree (instrument controls)", () => {

@@ -40,6 +40,10 @@ export function stripComments(src: string, file?: string): string {
       jsxText.push([node.pos, node.end]);
       return;
     }
+    // A JSDoc node ends INSIDE its own comment, so the trailing-trivia scan from its end would read `// ...` inside a one-line
+    // `/** @tag x // y */` as a line comment running past the `*/` and blank real code after it. The comment itself is already
+    // found as the leading trivia of the node it documents, so never descend into JSDoc.
+    if (node.kind >= ts.SyntaxKind.FirstJSDocNode && node.kind <= ts.SyntaxKind.LastJSDocNode) return;
     for (const r of ts.getLeadingCommentRanges(src, node.pos) ?? []) ranges.set(r.pos, r.end);
     for (const r of ts.getTrailingCommentRanges(src, node.end) ?? []) ranges.set(r.pos, r.end);
     for (const child of node.getChildren(sf)) visit(child);
