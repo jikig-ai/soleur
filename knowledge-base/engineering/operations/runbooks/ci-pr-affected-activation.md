@@ -131,8 +131,8 @@ Read the output with these limits in mind (they are in the receipt too):
   `corroborated-no-run`). A unit resolved via `check-runs` is real evidence — the run was recovered from a
   dropped index, not inferred. Residual: corroboration proves existence-on-empty, not completeness-on-non-empty —
   a listing that keeps >=1 FULL_EVENTS run is trusted as-is (partial drops are undetectable there, and a dropped lone failure under a kept success reads clean — under-counting, not over). The cause
-  receipt is in this branch's spec dir
-  (`knowledge-base/project/specs/feat-one-shot-10862-norun-investigation/receipts/cause.md`).
+  receipt is in the archived spec dir
+  (`knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/cause.md`).
 
 ## 5. The four criteria and the verdict
 
