@@ -212,6 +212,7 @@ scripts/lib/incidents-roots.test.sh	knowledge-base/project
 scripts/lib/inngest-probe-row.test.sh	knowledge-base
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lib/inngest-probe-row.test.sh	knowledge-base/engineering/operations/runbooks/inngest-server.md
+scripts/lib/web2-relay-rows.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/engineering/operations/runbooks/compound-promote-runbook.md
 scripts/lint-agents-compound-sync-unit	knowledge-base/project
 scripts/lint-agents-compound-sync-unit	knowledge-base/project/learnings

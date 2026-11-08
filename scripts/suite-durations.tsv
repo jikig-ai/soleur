@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1251
-# generated-at=2026-11-07T00:40:49Z
+# default-weight-ms=1261
+# generated-at=2026-11-08T01:50:34Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -492,6 +492,7 @@ scripts/lib/test-suite-lanes.test.sh	1222	floor
 scripts/lib/trusted-verdict.test.sh	386	measured
 scripts/lib/tweet-eligibility.test.sh	763	measured
 scripts/lib/validate-tweet-draft.test.sh	324	measured
+scripts/lib/web2-relay-rows.test.sh	1261	floor
 scripts/lint-agents-compound-sync-live	93	measured
 scripts/lint-agents-compound-sync-unit	1672	measured
 scripts/lint-agents-enforcement-tags-live	49	measured
