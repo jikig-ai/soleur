@@ -386,7 +386,7 @@ observable; the single event carries `outcome`, `verb`, both lengths and `persis
 - [x] AC9 (h). No public claim anywhere in the diff; `dsar-export-allowlist.ts`, `cc-dispatcher.ts`, `.github/**`, `docs/legal/**`, `plugins/soleur/docs/**`, migrations are not in the diff.
 - [x] AC10. `bash apps/web-platform/test/approval-guard1-mutation.test.sh --check-anchors` prints `anchors: all 356 rows apply`; the eslint `no-control-regex` baseline stays 19.
 - [x] AC11. C4 sentence edited; `plugins/soleur/test/c4-count-parity.test.sh`, `c4-code-syntax.test.ts`, `c4-render.test.ts` pass.
-- [ ] AC12. Both restricted-token greps (above) print nothing before every push; PR body uses `Ref #11076` only and `closingIssuesReferences` is `[]`; none of the brief's forbidden words appear in PR-bound text.
+- [x] AC12. Both restricted-token greps (above) print nothing before every push; PR body uses `Ref #11076` only and `closingIssuesReferences` is `[]`; none of the brief's forbidden words appear in PR-bound text.
 
 ### Operator-owned, not in this PR (no action by the agent)
 
