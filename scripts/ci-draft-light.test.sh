@@ -107,7 +107,7 @@ OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
 SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
-LIGHT_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-selection pr-selection push-dedupe"
+LIGHT_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection pr-selection push-dedupe"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'
 REASONS="bad_pr ready fork read_error not_draft switch_off ok"
 REPO_SLUG="jikig-ai/soleur"
@@ -946,7 +946,9 @@ mutate_yml y-dl-needs-heavy "    timeout-minutes: 3
     timeout-minutes: 3
     permissions:
       pull-requests: read" wrapper W-JOBNEEDS
-mutate_yml y-dl-perm "      pull-requests: read" "      pull-requests: write" wrapper W-PERM
+mutate_yml y-dl-perm "    permissions:
+      pull-requests: read" "    permissions:
+      pull-requests: write" wrapper W-PERM
 mutate_yml y-dl-timeout "    timeout-minutes: 3
     permissions:
       pull-requests: read" "    timeout-minutes: 5
@@ -1085,7 +1087,9 @@ live_control() { # <label> <mode> <old> <new> <want-prefix: TAGS:… | CRASH>
   v=$(live_verdict "$mode" "$f")
   case "$v" in "$want"*) pass ;; *) fail "LIVE CONTROL $label: live_verdict said '${v:0:120}', wanted $want" ;; esac
 }
-live_control wrapper wrapper "      pull-requests: read" "      pull-requests: write" "TAGS:"
+live_control wrapper wrapper "    permissions:
+      pull-requests: read" "    permissions:
+      pull-requests: write" "TAGS:"
 live_control trigger trigger "    types: [opened, synchronize, reopened, ready_for_review]" "    types: [opened, synchronize, reopened]" "TAGS:T-TYPES"
 live_control gated gated "  e2e:
     needs: [push-dedupe]" "  e2e:

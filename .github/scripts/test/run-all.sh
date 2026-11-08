@@ -176,8 +176,9 @@ suite_exit_class() {
 # test-vinngest-digest-freshness.sh, #10272). Raise it when suites are added; lower
 # it deliberately, with a reason. 17 with test-rls-fuzz-ghcr-resilience.sh
 # (#10868) — the floor also lagged the real count by one before this suite
-# landed (16 suites vs floor 15).
-MIN_SUITES=17
+# landed (16 suites vs floor 15). 18 with test-check-workflow-duplicate-keys.sh
+# (2026-11-07, #12283) — the strict duplicate-key guard's own battery.
+MIN_SUITES=18
 
 for t in "$DIR"/test-*.sh; do
   [[ -e "$t" ]] || continue

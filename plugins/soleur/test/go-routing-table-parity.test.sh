@@ -167,6 +167,14 @@ for r in "${ROWS[@]}"; do
       else
         bad "skill row '$intent' has NO GO_SKILL_ROUTES entry — resolveGoSkillRoute falls through '?? default' and silently runs ${target#soleur:}'s place-holder, brainstorm"
       fi
+      # The target must also be a real skill directory: a table cell and a dispatch-map value can agree
+      # with each other and both name a skill that does not exist (the dispatch then fails at invoke time).
+      ck
+      if [[ -f "$ROOT/plugins/soleur/skills/${want}/SKILL.md" ]]; then
+        ok "skill row '$intent' target '$want' resolves to plugins/soleur/skills/${want}/SKILL.md"
+      else
+        bad "skill row '$intent' targets '$target' but plugins/soleur/skills/${want}/SKILL.md does not exist — the route names a skill that is not there"
+      fi
       ;;
     *)
       ck
@@ -207,10 +215,16 @@ done
 #
 # DERIVED, never hand-summed. Every row executes exactly two assertions (enum membership, plus its
 # target — dispatch value for a skill row, agent existence for an agent row), and each converse
-# direction executes one per member. So the expected count is a function of the three populations and
+# direction executes one per member (plus one skill-directory check per skill row). So the expected count is a function of the three populations and
 # needs no literal that could rot as the table grows.
-EXPECTED_ASSERTIONS=$(( 2 * ${#ROWS[@]} + ${#ENUM_TOKENS[@]} + ${#SKILL_MAP[@]} ))
-EXPECTED_BREAKDOWN="2x${#ROWS[@]} rows + ${#ENUM_TOKENS[@]} enum + ${#SKILL_MAP[@]} map"
+# A skill row (two-part target) executes one further assertion: its target resolves to a SKILL.md.
+SKILL_ROW_COUNT=0
+for r in "${ROWS[@]}"; do
+  _t="${r#*$'\t'}"
+  case "$_t" in soleur:*:*) ;; soleur:*) SKILL_ROW_COUNT=$((SKILL_ROW_COUNT + 1)) ;; esac
+done
+EXPECTED_ASSERTIONS=$(( 2 * ${#ROWS[@]} + SKILL_ROW_COUNT + ${#ENUM_TOKENS[@]} + ${#SKILL_MAP[@]} ))
+EXPECTED_BREAKDOWN="2x${#ROWS[@]} rows + ${SKILL_ROW_COUNT} skill-dir + ${#ENUM_TOKENS[@]} enum + ${#SKILL_MAP[@]} map"
 # The `:-1` is not a second threshold. `scripts/guard-vacuity-floor.test.sh` mutation-tests this floor
 # by slicing the block below into a standalone script, widened backward only over contiguous simple
 # assignments — so the array lengths above are NOT carried, and a bare `$EXPECTED_ASSERTIONS` there is

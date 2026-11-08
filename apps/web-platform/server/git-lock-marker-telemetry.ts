@@ -166,6 +166,12 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // report an overlap decision, and the dominant non-zero cause is a real overlap the operator
 // is told about on the terminal. The drift guard in test/git-lock-marker-telemetry.test.ts
 // walks skills/*/scripts/*.sh and found it unmirrored.
+// MIRRORED-NOT-PAGED (#12006): SOLEUR_CVE_HOST_STATE hosts=<n> fresh=<n> stale=<n> silent=<n> unknown=<n>
+// (and the image-scan variant `mode=image-scan state=<s> match=<m>`). Emitted as the last line by
+// plugins/soleur/skills/cve-exposure/scripts/host-state.sh, an operator-invoked read of Better Stack
+// host telemetry. The line carries counts and fixed state words only: no hostname, version or kernel.
+// It is the verdict line the skill requires before it believes a host answer; its absence makes
+// every host unknown. Not a wedge, so not in WEDGE_RE.
 // MIRRORED-NOT-PAGED (PR #11867): SOLEUR_LAUNCH_CHECK_REPORT_INVALID. Emitted by
 // plugins/soleur/skills/launch-check/scripts/launch-check.sh `verify-report` when an existing
 // readiness report fails its state-block grammar. The line carries `reason=` only (a fixed
@@ -182,7 +188,7 @@ const log = createChildLogger("git-lock-marker-telemetry");
 // executed Art. 28(3) instrument first), so no entry here, no WEDGE_RE change and no exempt-set
 // change. The suite in launch-check/test/issues-guards.test.sh asserts no scripts/*.sh file emits them.
 const MARKER_RE =
-  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_CLEANUP_SPACE\b.*|SOLEUR_DOCKER_PRUNE\b.*|SOLEUR_OVERLAP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|SOLEUR_BARE_ROOT_CWD\b.*|SOLEUR_LAUNCH_CHECK_REPORT_INVALID\b.*|SOLEUR_INCIDENT_PULL\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
+  /^(?:\[[a-z]+\]\s)?(?:SOLEUR_GIT_LOCK_(?:DIAG|UNREMOVABLE|TEMP_WEDGED)\b.*|SOLEUR_GIT_LOCK_IDENTITY_(?:WEDGED|DIAG)\b.*|SOLEUR_GIT_CONFIG_(?:TARGET_MASKED|MASK_SKIP)\b.*|SOLEUR_GIT_BARE_(?:POISON|SELFHEAL|SEED)\b.*|SOLEUR_GIT_WORKTREE_VERIFY_FAILED\b.*|SOLEUR_GIT_REPO_DIAG\b.*|SOLEUR_ORPHAN_(?:UNREMOVABLE|REGISTRY_UNAVAILABLE|SKIP_DESCENDANT)\b.*|SOLEUR_FEATURE_PUSH_FAILED\b.*|SOLEUR_WORKTREE_LEASE_LIB_MISSING\b.*|SOLEUR_WORKTREE_LEASE_ACQUIRE_FAILED\b.*|SOLEUR_SESSION_STATE_UNAVAILABLE\b.*|SOLEUR_WORKTREE_REAPER_ARMED\b.*|SOLEUR_WORKTREE_REAPED\b.*|SOLEUR_WORKTREE_REAP_PARTIAL\b.*|SOLEUR_CLEANUP_GH_QUERY_FAILED\b.*|SOLEUR_WORKTREE_SLUG_COLLISION\b.*|SOLEUR_WORKTREE_INSTALL_(?:SKIPPED|UNBOUNDED)\b.*|SOLEUR_REAP_ARCHIVE_(?:COMMITTED|STAGED|DEFERRED)\b.*|SOLEUR_(?:FLAG_LIST|INCIDENT|LEGAL_GENERATE|LINEAR_FETCH|PRECOMMIT_GUARD|QUESTIONNAIRE|SHIP_PIR_GATE|SNAPSHOT|TRIGGER_CRON)_HALT\b.*|SOLEUR_TMP_SWEEP\b.*|SOLEUR_CLEANUP_SPACE\b.*|SOLEUR_DOCKER_PRUNE\b.*|SOLEUR_OVERLAP\b.*|SOLEUR_TRANSPORT_DIAG\b.*|SOLEUR_CREDENTIAL_REFUSED\b.*|SOLEUR_BOOTSTRAP_[A-Z_]+\b.*|SOLEUR_BARE_ROOT_CWD\b.*|SOLEUR_LAUNCH_CHECK_REPORT_INVALID\b.*|SOLEUR_INCIDENT_PULL\b.*|SOLEUR_CVE_HOST_STATE\b.*|NO_GIT_REPOSITORY\b.*|worktree wedge:.*)$/;
 
 // MIRRORED-NOT-PAGED: SOLEUR_INCIDENT_PULL. The incident skill prints one stdout
 // line per source. The only extractor is the agent PostToolUse(Bash) hook, not a

@@ -66,6 +66,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 - 2026-11-05 S4 index completion PR5z strict zero (#10861): the drain series ended at strict zero — `scripts/ci-pr-affected-audit.baseline.tsv` deleted, the adoption arm replaced by the unconditional `baseline-reintroduced` verdict; audit exits 0, ratchet strict; replay and go/no-go re-ruling pending
 - 2026-11-05 oracle-only fast lane amended (#12156; see `## Amendment 2026-11-05 (oracle-only fast lane, #12156)` below): the `oracle-selection` classifier, the `oracle-index-check` validation leg, the `ORACLE-ONLY-SKIP` aggregator tolerance and the push-dedupe six-leg proof ship DARK and LOCKED (`readonly ORACLE_LANE_LOCKED=1` keeps `active=false` whatever `CI_ORACLE_LANE` says); no stage changes state, `S4 live` is NOT recorded, and activation waits for a separate authorized PR gated on the blocking `would_skip` audit of at least one real oracle-repair merge
 - 2026-11-06 guard-umbrella consolidation recorded (#12089; see `## Amendment 2026-11-06 (guard-umbrella consolidation, #12089)` below): the 16→3 required-context rename is classified as a topology change under #11556 demand reduction, not a Decision-3(a) battery cut — every folded gate still reports as a member verdict; no stage changes state
+- 2026-11-07 oracle-only fast lane unlock staged (this PR): the `readonly ORACLE_LANE_LOCKED=1` activation lock is removed from `scripts/ci-oracle-lane.sh` and the sentinel is flipped to post-activation expectations, but the lane stays dark until `CI_ORACLE_LANE=on` is re-armed — the variable was rolled back on 2026-11-06/07 while the `oracle-index-check` fetch-depth defect (#12274) is in flight on #12275, and a re-arm before that fix lands reds every oracle-only run (the dark-phase manifest leg is gated on `oracle_only`, not `active`). Re-arm is also held until the #12089 post-merge census window completes so the after-measurement stays comparable to the pre-window baseline, which had no `oracle-selection` job. The blocking `would_skip` audit is satisfied: runs 42234955850 (files=4) and 42236806402 (files=3) both classified `oracle_only=true` with the five-leg `would_skip` on diffs verified oracle-only by reconstruction (all `knowledge-base/**/*.md` adds); run 42291022886 (PR #12245, files=6, docs-only) is a third consistent classification; evidence attached to #10865. `S4 live` is NOT recorded — activation completes when the variable is re-armed and the first `active=true` run canaries green, not when this PR merges.
 
 ## Context
 
@@ -607,3 +608,28 @@ Status stays `adopting`. This amendment is non-activating: it records the classi
 - **Classification (Decision 3(a)).** The 16-required-context → 3-umbrella-context rename (`guards-ruleset`, `quality-guards`, `secret-guards`) is a TOPOLOGY change under epic #11556's demand-reduction work — runner slots and queued-context count drop because folded guards now share a job — NOT a Decision-3(a) "PR-level reduction of the required battery". No gate was cut: every folded guard still runs and still reports, now as a member verdict inside its umbrella's `aggregate` step (skipped-≠-success is enforced per member). The required CHECK NAME surface changed (the point of the exercise); the required VERDICT surface did not. This satisfies the 3(a) consumer-record intent: the only consumers that can read a difference are name-readers (ruleset, `required-checks.txt`, bot-PR synthetics, `admin-merge-ready.sh`), and each was updated or had its transition behavior documented in the same PR.
 - **Battery authority unchanged (Decision 2).** `merge_group` still executes the full battery against the candidate tree: umbrella members carry the folded jobs' merge_group arms (`if: ${{ !cancelled() }}` plus the transplanted event conditions), and `scripts/probe-merge-group-coverage.sh` audits that every required context reports on the queue ref.
 - **Record (Decision 3(g)).** This entry is the dated-amendment record the rename's stage owes; no measurement amendment is attached because the change is behavioural-neutral on verdicts — the demand delta (runner-slot concurrency) is reported under #11556's census, not here.
+
+## Amendment 2026-11-07 (PR3b required-context flip + oracle-review sentinel + accept-row growth bound, #10859)
+
+Status stays `adopting`. This amendment records the PR3b rulings and what landed; nothing here is a new decision.
+
+- **Ruling (a), the oracle control — REAL, not "review" (entry condition 9(a)).** Rather than a
+  `required_approving_review_count` ruleset (which cannot bind an approval to a SHA), the control is a required
+  check-run `oracle-review-required` (`scripts/ci-oracle-review.sh`, job in `.github/workflows/ci.yml`) enforcing a
+  BOUND owner-review act: on `pull_request`, the merge-ref diff's intersection with the BASE commit's
+  `RATCHET_ORACLE` must be empty OR the author is `deruelle` (self-approval is barred on GitHub, so authorship is
+  the release valve for owner-authored oracle repairs) OR a `deruelle` APPROVED review whose `commit_id` is the PR
+  head SHA exists — an approval bound to the reviewed tree, not a blanket approval; on `merge_group`, every member's
+  queued head must show its LATEST `oracle-review-required` check-run (app 15368, highest id) completed/success —
+  the self-loop is closed by member enumeration (the `merge-queue-cla-verify.sh` machinery, parity-pinned), never by
+  self-report. Classification uses the BASE commit's `RATCHET_ORACLE` and the driver re-execs from base when the base
+  carries it, so no PR can shrink the list that judges it. Fail-closed on every unknown.
+- **Ruling (b), accept-row growth (entry condition 9(b)).** Diff-scoped, not cumulative-only: every pair whose accept
+  row-set differs base→HEAD must attribute to the diff — the named path, a file that references the pair, or an
+  oracle input OTHER than the accept file itself touched — else `accept-unattributed` (exit 1); every head-side row
+  added or re-reasoned must carry one of the six typed kinds (the runbook's canonical list) else `accept-bad-kind`
+  (exit 1). Legacy rows are never re-litigated. The marker line carries `accept=<n>` (parsed row count).
+- **The flip.** `affected-index-ratchet` is a required context: `continue-on-error` dropped in the same commit
+  (ADR-032 paired edit: every required name lands with its producer), `required-checks.txt`, the canonical JSON and
+  `infra/github` all carry both names (CI Required 10→12), and the bot-PR synthetics are sound by unreachability —
+  `ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅`, pinned by `plugins/soleur/test/bot-synthetic-unreachability.test.sh`.
