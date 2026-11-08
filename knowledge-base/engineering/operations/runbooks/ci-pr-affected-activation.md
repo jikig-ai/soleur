@@ -63,6 +63,14 @@ path the index does not declare for them, on the pinned tree `abbd36a696` (a tre
 a re-run on a later tree will not print 190). The receipts are in the PR C spec directory (`receipts/`, archived at ship under
 `specs/archive/<timestamp>-feat-one-shot-9729-ci-pr-c-affected-only/receipts/`, leaf names kept).
 
+- 2026-11-07: the re-ruling this runbook's §3/§4 prescribes was computed on a fresh window — `computed=NO-GO
+  reason=criterion-failed`: (b) now passes (strict-zero audit on the pinned tree, exit 0), (c) passes
+  (net 83.01 sampled / ≈30.0 population-weighted vs the 24.03 bar off a fresh 120.17 baseline), (d) passes,
+  but (a) fails on the worst-case bound (61 of 382 → 19.38% ≥ 12%; the not-evaluable bucket is mostly
+  cancelled-run unsettled legs and pre-umbrella job names the classifier's allowlist does not know). Receipt:
+  `knowledge-base/project/specs/feat-one-shot-ci-lever-residuals/receipts/go-no-go.md`. Still nothing activated;
+  the retire-vs-schedule call is the operator's per #10448.
+
 ## 3. Entry condition for a re-attempt (CTO ruling, ADR-276 amendment item 5)
 
 All of these, in this order:
