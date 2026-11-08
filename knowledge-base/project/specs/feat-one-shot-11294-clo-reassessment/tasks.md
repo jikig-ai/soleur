@@ -34,9 +34,9 @@ Draft PR: #12387. Tier-1 internal record; `docs/legal/` untouched.
 
 ## 4. Commit and PR
 
-- [ ] 4.1 Commit `docs(legal): land the 2026-11-08 CLO re-assessment record for #11294 (Ref #11294, Ref #11711, Ref #9927, Ref #11922)` — `Ref` keywords only.
-- [ ] 4.2 Push; update draft PR #12387 body: summary, `Ref` lines, and this post-merge runbook verbatim.
-- [ ] 4.3 Verify no `Closes|Fixes|Resolves` token for any cited issue anywhere in commit message or PR body (AC-7).
+- [x] 4.1 Commit `docs(legal): land the 2026-11-08 CLO re-assessment record for #11294 (Ref #11294, Ref #11711, Ref #9927, Ref #11922)` — `Ref` keywords only. (55a5853fa1)
+- [x] 4.2 Push; update draft PR #12387 body: summary, `Ref` lines, and this post-merge runbook verbatim.
+- [x] 4.3 Verify no `Closes|Fixes|Resolves` token for any cited issue anywhere in commit message or PR body (AC-7).
 
 ## 5. Post-merge (runbook — execute AFTER the PR merges, never before)
 
