@@ -291,6 +291,12 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
     level: "error",
   },
+  /** A registered text has no declared card kind (LEGAL_TEXT_KIND), so the page renders nothing for it. Reported on every render, once the founder surface gate has passed; `tags.key` names the text. */
+  kindUndeclared: {
+    op: "kind_undeclared",
+    message: "Legal acceptance: a registry text has no declared card kind",
+    level: "warn",
+  },
   /** The check endpoint read a row whose checksum no longer matches (status `invalid`). Recorded in Sentry; no paging rule yet (#12195). `extra` carries `key` and the public `textHash`. */
   recordInvalid: {
     op: "record_invalid",

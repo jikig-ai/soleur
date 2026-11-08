@@ -144,7 +144,7 @@ describe("registry loading", () => {
     expect(code(() => getLegalText("absent", d))).toBe("unknown_key");
     expect(code(() => getLegalText("absent", path.join(d, "no-such-dir")))).toBe("unknown_key");
   });
-  it("the committed registry loads without error (it is EMPTY until counsel signs off a real text, so this proves the loader and the directory, not any text)", () => {
+  it("the committed registry loads without error (this proves the loader, the directory and that every committed text parses; it says nothing about what a text states, see founder-acceptance-record.test.ts)", () => {
     expect(() => loadLegalTexts()).not.toThrow();
   });
 });

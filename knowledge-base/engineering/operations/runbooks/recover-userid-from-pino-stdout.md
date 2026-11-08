@@ -104,7 +104,7 @@ This runbook covers two operator flows:
        | select(.CONTAINER_NAME == "soleur-web-platform")
        | (.message | if type == "string" then (fromjson? // empty) else . end)
        | select(type == "object")
-       | select(.userIdHash == $h or .workspaceIdHash == $h or .worktreeIdHash == $h)
+       | select(.userIdHash == $h or .workspaceIdHash == $h or .worktreeIdHash == $h or .sessionIdHash == $h)
        | "\((.time/1000|todate))  level=\(.level)  \(.msg)"'
    ```
 
@@ -115,7 +115,7 @@ This runbook covers two operator flows:
    app-container rows in 24h were non-JSON). The `if type == "string"` arm keeps
    the query correct if that ingest-side parse ever changes, and `fromjson? //
    empty` drops a crash line instead of aborting the whole run on it. The
-   three-key test is spelled as an explicit `or` and **not** as
+   four-key test is spelled as an explicit `or` and **not** as
    `.a // .b // .c == $h`: jq's `//` is a falsy-default that short-circuits on
    the first non-null key, so a record carrying `userIdHash` for one actor and
    `workspaceIdHash` for the target would be silently skipped — the exact false
@@ -174,7 +174,7 @@ This runbook covers two operator flows:
    `apps/web-platform/server/git-data-replication.ts`.
 
    That broke the old form in BOTH directions, which is why the query above
-   tests all three keys explicitly against the decoded record, rather than
+   tests every identity key explicitly against the decoded record, rather than
    narrowing twice on substrings:
 
    - **False negatives.** A record carrying only `workspaceIdHash` or
@@ -193,7 +193,9 @@ This runbook covers two operator flows:
 
    If you add a new 64-hex pino emission, add its key to the `or` chain in the
    query above in the same PR — or give it a key prefix that cannot be confused
-   with an identity field.
+   with an identity field. `sessionIdHash` (the `untrusted-classify` line, a
+   conversation id hashed with the same pepper) is in the chain for that reason:
+   hash a conversation id here instead of a user UUID to follow one session.
 
 ### Load-bearing primitive distinction
 

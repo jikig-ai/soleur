@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Enumerates open remote GitHub PRs and classifies each into one of seven drain
+# Enumerates open remote GitHub PRs and classifies each into one of eight drain
 # tiers (ready-green, ready-unarmed, needs-lockfile-fix, needs-conflict-resolution,
-# needs-review, drafts, broken), emitting a tier-grouped report.
+# needs-review, parked, drafts, broken), emitting a tier-grouped report.
 #
 # Usage:
 #   triage-prs.sh [--format text|json] [--fixture <path>]
@@ -12,6 +12,8 @@
 #
 # Classification is first-match-wins in this priority order:
 #   1. drafts                     isDraft == true            (author-owned WIP)
+#   1b. parked                    has the `parked` label     (reviewed and held for the operator: never merged,
+#                                 never armed, never "fixed" by a drain; #12197). Only a draft is classified before it.
 #   2. broken                     CONFLICTING AND >=3 failing checks
 #   3. needs-conflict-resolution  CONFLICTING
 #   4. needs-lockfile-fix         has `dependencies` label AND >0 failing checks
@@ -139,7 +141,7 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
                | select(. == "FAILURE" or . == "ERROR" or . == "CANCELLED" or . == "TIMED_OUT") ] | length;
   def pending($v): [ counted($v)[] | (.status // .state)
                | select(. == "IN_PROGRESS" or . == "QUEUED" or . == "PENDING" or . == "WAITING") ] | length;
-  def haslabel($n): any(.labels[]?; .name == $n);
+  def haslabel($n): any(.labels[]?; ((.name // "") | ascii_downcase) == ($n | ascii_downcase));
   [ .[] | . as $pr | ($verdicts[(.number | tostring)] // "") as $v
     | ($pr | fails($v)) as $f | ($pr | pending($v)) as $p |
     {
@@ -150,8 +152,10 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
       failing: $f,
       pending: $p,
       ci: $v,
+      parked: ($pr | haslabel("parked")),
       tier: (
         if .isDraft == true then "drafts"
+        elif ($pr | haslabel("parked")) then "parked"
         elif .mergeable == "CONFLICTING" and $f >= 3 then "broken"
         elif .mergeable == "CONFLICTING" then "needs-conflict-resolution"
         elif ($pr | haslabel("dependencies")) and $f > 0 then "needs-lockfile-fix"
@@ -162,12 +166,13 @@ CLASSIFIED="$(jq --argjson verdicts "$VERDICTS" '
         end
       )
     }
+    | if .tier == "parked" then . + { recovery: "held for the operator, do nothing here: the operator removes the parked label in the GitHub UI or their own terminal; a draft PR is the real hold (GitHub refuses to merge a draft)" } else . end
     | if .tier == "ready-unarmed" then . + { recovery: "if no session is still inside wait-ready-run for it: gh pr ready --undo \(.number) && gh pr ready \(.number)  (user token, never GITHUB_TOKEN), then re-run the whole ship step 6 block (read ready-count first, arm only after wait-ready-run exits 0)" } else . end
   ]' <<<"$PR_JSON")"
 
 # --- Emit -------------------------------------------------------------------
 # Stable tier order for the grouped output.
-TIER_ORDER='["ready-green","ready-unarmed","needs-lockfile-fix","needs-conflict-resolution","needs-review","broken","drafts"]'
+TIER_ORDER='["ready-green","ready-unarmed","needs-lockfile-fix","needs-conflict-resolution","needs-review","broken","parked","drafts"]'
 
 if [[ "$FORMAT" == "json" ]]; then
   jq -n --argjson prs "$CLASSIFIED" --argjson order "$TIER_ORDER" '
@@ -186,7 +191,7 @@ jq -r --argjson order "$TIER_ORDER" '
   | $order[] as $t
   | ([ $prs[] | select(.tier == $t) ]) as $g
   | "## \($t) (\($g | length))",
-    ( $g[] | "  #\(.number)  \(.title)  [@\(.author), mergeable=\(.mergeable), fail=\(.failing), pending=\(.pending)\(if .ci != "" then ", ci=\(.ci)" else "" end)]",
+    ( $g[] | "  #\(.number)  \(.title)  [@\(.author), mergeable=\(.mergeable), fail=\(.failing), pending=\(.pending)\(if .ci != "" then ", ci=\(.ci)" else "" end)\(if .parked and .tier != "parked" then ", PARKED label (held for the operator)" else "" end)]",
              (if .recovery then "      recovery: \(.recovery)" else empty end) ),
     ""
 ' <<<"$CLASSIFIED"

@@ -17,3 +17,5 @@ plugins/soleur/scripts/resolve-regenerable-conflicts.test.sh	W	p=$(awk '{print $
 plugins/soleur/test/roadmap-reconcile.test.sh	W	top=$p; p=$(awk '{print $4}' "/proc/$p/stat")
 plugins/soleur/test/ship-battery-refusal-wait.test.sh	P	if (( n > 400 )); then kill -KILL "$PPID"; exit 0; fi
 plugins/soleur/test/ship-battery-refusal-wait.test.sh	P	if [[ -f "$d/die_after" && "$n" -ge "$(cat "$d/die_after")" ]]; then kill -KILL "$PPID"; exit 0; fi
+scripts/followthroughs/pr-battery-gate-saving-9323.test.sh	P	[[ "$wp" =~ ^[0-9]+$ && "$wp" != "$SOLEUR_TEST_SUITE_PID" ]] && kill -KILL "$wp" 2>/dev/null
+scripts/followthroughs/pr-battery-gate-saving-9323.test.sh	W	hops=$((hops + 1)); wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"

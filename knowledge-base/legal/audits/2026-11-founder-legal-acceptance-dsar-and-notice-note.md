@@ -37,6 +37,8 @@ Scope: tables `legal_acceptance` and `legal_reauth_event` (migration 184). Data 
 
 To be used in the reply to an account-deletion or Art. 17 request from a founder who has a row. Square brackets are filled in by the person answering; the period is a placeholder until counsel confirms it.
 
+> **Superseded 2026-11-07 (#12197; fires on the merge of the pull request that carries it), as to "For how long" and the bracketed sign-in code table sentence below:** the CLO agent ruled on 2026-11-07, as a v1 internal position standing in for counsel on the operator's instruction (a human lawyer's review is still owed), that the period for the decision record and for the Request changes note is 5 years from the date of the decision, extended only while a legal claim, a complaint or an official inquiry about the record is open. The proposal below (life of the text plus 5 years, no more than 10) is withdrawn. The code request records are deleted when the next request for a decision is made and they are older than 30 days, so one can last longer than 30 days; they are not deleted on erasure and are not covered by the 5 years. Ruling: `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`.
+
 > **What we keep after you delete your account**
 >
 > We have deleted your account and the data linked to it, with one exception. When you accepted, declined or asked for changes to a legal text, we recorded that decision. That record stays after your account is gone.
@@ -48,16 +50,22 @@ To be used in the reply to an account-deletion or Art. 17 request from a founder
 > **For how long.** [Period to be confirmed by counsel. Proposed: for as long as the text is in force, plus 5 years, and no more than 10 years in total.]
 >
 > **Who can see it.** Access is limited to the database administrator role and, once it is switched on, to the Jikigai service that checks whether a decision was made before a legal step goes ahead (it reads the status, not your note); it is not shown to anyone else.
+
+> **Superseded 2026-11-08 (#12197; fires on the merge of the pull request that carries it), as to "Who can see it" (CLO ruling L2, review round 1):** the person answering adds that keyed-hash monitoring copies of each decision event (a keyed hash of the account identifier, the name of the text, the choice, the time, and the version or the refusal reason; never the note, the code or the fingerprint) are readable by the people who run Jikigai's monitoring and by Sentry and Better Stack, that they are not part of the record and are not removed individually, and that the Privacy Policy states 90 days for the Sentry and Better Stack copies while the copy in the logs on Jikigai's own servers is limited by disk space (a shared 1 GB cap), not by time, and has not been measured. A v1 CLO-agent position; human review owed. The sentence "it is not shown to anyone else" in the block above is therefore not to be sent unqualified.
 >
 > **Your rights.** You can object to this processing on grounds relating to your situation (Article 21 GDPR); we will tell you our decision. You can ask us what we hold (Article 15 GDPR) by writing to <legal@jikigai.com>. You can also complain to the CNIL (Commission Nationale de l'Informatique et des Libertés, <https://www.cnil.fr>) or to your own data protection authority.
 
-Notes for the person answering: do not describe the identifier as anonymous; do not say the record is deleted; do not quote the retention figure until counsel has decided it; if the founder wrote a note, say that it is part of what is kept; the block says "with one exception" about this record, so reconcile it with any other data Jikigai keeps for that account (for example records kept under a legal obligation, per the Privacy Policy) before sending.
+Notes for the person answering: do not describe the identifier as anonymous; do not say the record is deleted; do not quote the retention figure until counsel has decided it **[Superseded 2026-11-08 (#12197; fires on the merge of the pull request that carries it), as to "do not quote the retention figure until counsel has decided it": the CLO agent ruled the period on 2026-11-07 as a v1 internal position (not counsel); it may be quoted as 5 years from the date of the decision, extended while a claim, a complaint or an official inquiry is open, and the person answering must add that the deletion step is not yet built (#12080) and that monitoring copies (Sentry, Better Stack, server logs) are not part of the record, expire under their own periods and are not removed individually]**; if the founder wrote a note, say that it is part of what is kept; the block says "with one exception" about this record, so reconcile it with any other data Jikigai keeps for that account (for example records kept under a legal obligation, per the Privacy Policy) before sending.
 
 ## (c) Notice for the Request changes field (exact text, proposed)
 
 Shown directly above or below the text box, before the founder types. Plain words, two sentences:
 
-> **Say only what you want changed in the text. Please do not write names, email addresses or private details about yourself or anyone else here: this note is saved with your decision, up to 1000 characters, and is kept even if you later delete your account.**
+> **Say only what you want changed in the text. Please do not write names, email addresses or private details about yourself or anyone else here: this note is saved with your decision, up to 1000 characters, and is kept for 5 years from the date of the decision (longer only while a legal claim, a complaint or an official inquiry about it is open), even if you later delete your account.**
+
+> **Superseded 2026-11-07 (#12197; fires on the merge of the pull request that carries it), as to the wording above:** the notice previously ended "...and is kept even if you later delete your account." with no period. It now states the ruled period (CLO agent v1 ruling of 2026-11-07, not counsel). `LEGAL_COPY.requestChangesNotice` is pinned to the line above byte for byte.
+
+> **Superseded 2026-11-08 (#12197; fires on the merge of the pull request that carries it), as to the (c) line above:** the notice now carries the hold clause, as the card notice and the text do. `LEGAL_COPY.requestChangesNotice` is pinned to the amended line (CLO ruling L4).
 
 Constraints the screen (PR-C) must match: counter or hard stop at 1000 characters; the stored note is trimmed; the field is empty-not-allowed for Request changes and absent for Yes and No (migration checks); the notice is visible without scrolling or clicking.
 
@@ -65,9 +73,11 @@ Constraints the screen (PR-C) must match: counter or hard stop at 1000 character
 
 The Request changes notice in (c) covers one field. Art. 13 information is also owed at the point the decision is made, for every choice, and the LIA (Balancing iii) relies on the founder being told what is kept before deciding. Proposed wording, shown on the card above the choices:
 
-> **Your decision is saved with your account identifier, the text's version and fingerprint, the time, and (for Yes) the time you confirmed the emailed code. Jikigai keeps this record to be able to show later what was decided, even if you delete your account, for [period to be confirmed by counsel]. You can ask what we hold or object by writing to <legal@jikigai.com>, and you can complain to the CNIL.**
+> **Your decision is saved with your account identifier, the text's version and fingerprint, the time, and (for Yes) the time you confirmed the emailed code. Jikigai keeps this record to be able to show later what was decided, even if you delete your account, for 5 years from the date of the decision (longer only while a legal claim, a complaint or an official inquiry about it is open). You can ask what we hold, ask for erasure or restriction, or object by writing to <legal@jikigai.com>, and you can complain to the CNIL.**
 
-Not approved for display until counsel has decided the retention period. Operator first: if the operator is the only founder, Art. 13(4) (the data subject already has the information) is the fallback, but it does not carry over to any other founder.
+> **Superseded 2026-11-07 (#12197; fires on the merge of the pull request that carries it), as to "Not approved for display until counsel has decided the retention period" and the wording above:** the placeholder is replaced by the ruled period and the rights sentence now names erasure and restriction (CLO agent v1 ruling of 2026-11-07, standing in for counsel on the operator's instruction; a human lawyer's review is still owed). `LEGAL_COPY.cardNotice` is pinned to the line above byte for byte.
+
+Operator first: if the operator is the only founder, Art. 13(4) (the data subject already has the information) is the fallback, but it does not carry over to any other founder.
 
 ---
 

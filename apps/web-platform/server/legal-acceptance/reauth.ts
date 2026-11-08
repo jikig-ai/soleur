@@ -18,6 +18,7 @@ import {
 } from "@/lib/legal-acceptance-wire";
 import { reportLegalOp } from "@/server/approval/ops";
 import { serverUrl } from "@/lib/supabase/service";
+import { legalKindCopy } from "@/lib/legal-acceptance-copy";
 import { boundedAuthGetSession, boundedAuthGetUser } from "@/server/request-auth";
 import { isCurrent, KEY_RE, getLegalText, LegalTextError, type LegalTextEntry } from "./canonical";
 import { claimAttempt, issueIntent, markVerified, type LegalRpcClient } from "./service";
@@ -435,7 +436,7 @@ export interface GuardDeps {
 
 /**
  * Everything both routes check before touching a challenge, in this order: flag, key, content type, body, identity.
- * Flag off, a malformed key and an unknown key are all the same 404 (no oracle for which keys exist).
+ * Flag off (or not the founder), a malformed key, an unknown key and a key with no declared card kind are all the same 404 (no oracle for which keys exist).
  */
 export async function guardLegalRequest(req: Request, userId: string, deps: GuardDeps): Promise<Guarded> {
   if (!(await deps.isEnabled(userId))) return { ok: false, status: 404, error: "Not found" };
@@ -449,6 +450,9 @@ export async function guardLegalRequest(req: Request, userId: string, deps: Guar
     if (err instanceof LegalTextError && err.code === "unknown_key") return { ok: false, status: 404, error: "Not found" };
     throw err;
   }
+  // A registered text with no declared card kind has no wording and no card (CTO ruling 2026-11-07, no default): the same
+  // oracle-free 404. No Sentry here; the page reports it (kind_undeclared) once the surface gate has passed.
+  if (legalKindCopy(key) === null) return { ok: false, status: 404, error: "Not found" };
 
   if (!/^application\/json(\s*;|$)/i.test(req.headers.get("content-type") ?? "")) {
     return { ok: false, status: 415, error: "Content-Type must be application/json" };

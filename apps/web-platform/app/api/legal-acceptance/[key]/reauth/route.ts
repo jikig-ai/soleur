@@ -4,7 +4,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { rejectCsrf, validateOrigin } from "@/lib/auth/validate-origin";
 import type { VerifiedUser } from "@/server/request-auth";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
-import { isApprovalQueueEnabled } from "@/server/approval/flag";
+import { isLegalSurfaceEnabled } from "@/server/legal-acceptance/surface";
 import { reportLegalOp } from "@/server/approval/ops";
 import { LegalServiceError, type LegalRpcClient } from "@/server/legal-acceptance/service";
 import {
@@ -21,7 +21,7 @@ import {
  *
  * Body: {step:"send", resend?:boolean} or {step:"verify", code}. Responses (wire types in lib/legal-acceptance-wire.ts):
  * 200 LegalReauthSendResult | LegalReauthVerifyResult · 400 malformed body · 401 unauthenticated or no web session ·
- * 403 CSRF (absent or foreign Origin) or a non-web (runtime-audience) token · 404 flag off or unknown key · 413 body over
+ * 403 CSRF (absent or foreign Origin) or a non-web (runtime-audience) token · 404 flag off, not the founder, unknown key or a key with no declared card kind · 413 body over
  * 8 KiB · 415 not JSON · 429 (wrapper) · 500.
  *
  * Auth posture: cookie session (NOT a PUBLIC_PATHS entry). The founder id and address come from `getUser()` on the
@@ -37,7 +37,7 @@ async function reauthHandler(req: Request, user: VerifiedUser): Promise<Response
     const supabase = await createClient();
     const g = await guardLegalRequest(req, user.id, {
       supabase: supabase as unknown as IdentityClient,
-      isEnabled: (userId) => isApprovalQueueEnabled({ userId, workspaceId: null }),
+      isEnabled: (userId) => isLegalSurfaceEnabled(userId),
     });
     if (!g.ok) return NextResponse.json({ error: g.error }, { status: g.status });
 

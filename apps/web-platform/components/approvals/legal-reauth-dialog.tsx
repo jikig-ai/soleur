@@ -24,8 +24,9 @@ export type { LegalRowFacts };
 export interface LegalReauthDialogProps {
   keyName: string;
   textHash: string;
-  label: string;
   version: string;
+  /** The sentence that says what the Yes is for, resolved by the card from the text's declared kind (the dialog does no kind lookup). */
+  answerDetail: string;
   /** The account email shown in the start step; null falls back to wording without an address. */
   email: string | null;
   /** Go back, Escape: nothing was recorded. Never called while a request is in flight. */
@@ -34,7 +35,7 @@ export interface LegalReauthDialogProps {
   onRecorded: (row: LegalRowFacts, already: boolean) => void;
 }
 
-export function LegalReauthDialog({ keyName, textHash, label, version, email, onClose, onRecorded }: LegalReauthDialogProps) {
+export function LegalReauthDialog({ keyName, textHash, version, answerDetail, email, onClose, onRecorded }: LegalReauthDialogProps) {
   const titleId = useId();
   const [step, setStep] = useState<"start" | "code">("start");
   const [code, setCode] = useState("");
@@ -170,7 +171,7 @@ export function LegalReauthDialog({ keyName, textHash, label, version, email, on
             <p className="text-sm text-soleur-text-secondary">{LEGAL_COPY.dialog.startBody(email)}</p>
             <div className="rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 p-3 text-sm">
               <p className="font-medium text-soleur-text-primary">{LEGAL_COPY.dialog.answerSummary}</p>
-              <p className="mt-1 text-soleur-text-secondary">{LEGAL_COPY.dialog.answerDetail(label, version)}</p>
+              <p className="mt-1 text-soleur-text-secondary">{answerDetail}</p>
             </div>
           </>
         ) : (
