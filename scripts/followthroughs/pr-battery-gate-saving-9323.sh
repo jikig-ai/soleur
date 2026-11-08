@@ -192,6 +192,7 @@ _pbg_need_row() {
 _pbg_reap() {  # reap one finished pool worker; drops it from _pbg_pids/_pbg_live (test-all.sh _pj_reap shape)
   local rp="" j
   wait -n -p rp -- "${_pbg_pids[@]}" 2>/dev/null
+  rp="${rp:-}"  # wait -p leaves rp unset (not empty) when the finished child is already out of the job table — `set -u` then dies on the test below
   local -a np=()
   for j in "${_pbg_pids[@]}"; do
     if [ -n "$rp" ]; then
