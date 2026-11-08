@@ -152,6 +152,8 @@ O3="$TMP/origin3.git"; W6="$TMP/work6"
   sed '1,4d' "$FXH/web-acceptance-text.md" > "$WAT/wa-nofm.md"
   printf '# Example envelope (synthesized fixture)\n\n## Production Envelope - web\n\nPreconditions:\n- Gate: web-acceptance wa-key %s\n' "$(sha256sum < "$FXH/web-acceptance-text.md" | cut -c1-64)" > "$W/env-wa.md"
   ln -s wa-key.md "$WAT/wa-link.md"
+  # the acknowledgement key and its look-alikes have a committed text too (arm nt): the only thing that can then refuse the key is its KIND
+  for nk in founder-acceptance-record founder-acceptance-record-two founder-acceptance acceptance-record; do cp "$FXH/web-acceptance-text.md" "$WAT/$nk.md"; done
   git -C "$W" add -A && git -C "$W" commit -q -m "base" && git -C "$W" push -q origin main
   git -C "$W" rev-parse HEAD > "$TMP/sha-merged"
   git -C "$W" checkout -q -b side && printf 'x\n' > "$W/side.txt" && git -C "$W" add side.txt && git -C "$W" commit -q -m "side"
@@ -1235,7 +1237,15 @@ assert_eq "0" "$(wa_calls doppler-argv.log doppler)" "NT1d: and no token was rea
 scn; wa_init; mkhold1 nt2 "Wait for wa-key to be accepted"; run_h --plan "$PLAN"
 wexpect "NT2: control, an ordinary key is still cleared by its decision (the refusal is the key, not the gate)" 0 "holds: 1 discharged: 1 standing: 0"
 scn; wa_init; mkhold1 nt3 "Wait for founder-acceptance-record-two to be accepted" "founder-acceptance-record-two" "$WA_H"; run_h --plan "$PLAN"
-assert_eq "0" "$(has_line "$NTWHY")" "NT3: a key that merely CONTAINS the listed key is not refused as an acknowledgement (whole-word match)"
+wexpect "NT3: a key that merely CONTAINS the listed key is not refused as an acknowledgement (whole-word match); with its text committed it is cleared by its decision" 0 "holds: 1 discharged: 1 standing: 0"
+assert_eq "0" "$(has_line "$NTWHY")" "NT3b: and the refusal words are not printed"
+scn; wa_init; mkhold1 nt4 "Wait for acceptance-record to be accepted" "acceptance-record" "$WA_H"; run_h --plan "$PLAN"
+wexpect "NT4: a key that is a SUFFIX of the listed key (acceptance-record) is not refused; it is cleared by its decision" 0 "holds: 1 discharged: 1 standing: 0"
+scn; wa_init; mkhold1 nt5 "Wait for founder-acceptance to be accepted" "founder-acceptance" "$WA_H"; run_h --plan "$PLAN"
+wexpect "NT5: a key that is a PREFIX of the listed key (founder-acceptance) is not refused; it is cleared by its decision" 0 "holds: 1 discharged: 1 standing: 0"
+scn; wa_init; mkhold1 nt1d "Wait for founder-acceptance-record to be accepted" "founder-acceptance-record" "$WA_H"; run_h --plan "$PLAN"
+assert_eq "2" "$(last_rc)" "NT6: instrument: the acknowledgement key HAS a committed text and an accepted answer in this fixture, so the refusal in NT1 is its kind and not a missing text"
+assert_eq "1" "$(git -C "$W" cat-file -e "HEAD:apps/web-platform/server/legal-acceptance/texts/founder-acceptance-record.md" 2>/dev/null && echo 1 || echo 0)" "NT6b: the text is committed in the fixture repo"
 arm_end nt
 arm_begin tab
 echo "--- A tab inside a Gate line cannot split the record (E3) ---"
@@ -1584,6 +1594,9 @@ w_badvu5() { wa_init; local h; h="$(blobhash wa-badvu5)"; WA_KEY=wa-badvu5 WA_HA
 w_badvu6() { wa_init; local h; h="$(blobhash wa-badvu6)"; WA_KEY=wa-badvu6 WA_HASH="$h" mkwa mbvu6; wabody accepted "$h" "$WA_DATE_JSON" true; }
 w_bindus() { wa_init; mkhold1 mbus "Wait for wa-key_x"; }
 w_ntkey() { wa_init; mkhold1 mnt1 "Wait for founder-acceptance-record to be accepted" "founder-acceptance-record" "$WA_H"; }
+w_ntsuf() { wa_init; mkhold1 mnt2 "Wait for acceptance-record to be accepted" "acceptance-record" "$WA_H"; }
+w_ntpre() { wa_init; mkhold1 mnt3 "Wait for founder-acceptance to be accepted" "founder-acceptance" "$WA_H"; }
+w_ntord() { wa_init; mkhold1 mnt4 "Wait for wa-key to be accepted"; }
 w_bindc1() { wa_init; mkhold1 mbc1 "Wait for wa-ke"$'\xc2\x85'"y to be accepted"; }
 w_bind200() { wa_init; mkhold1 mb200 "$(printf 'x%.0s' $(seq 1 200)) wa-key"; }
 w_bind2() { wa_init; PLAN="$TMP/plans/mb2.md"; mkdir -p "$TMP/plans"; printf '# Plan\n\n## Operator Holds\n\n- Hold: Wait for wa-key to be accepted\n  Gate: web-acceptance wa-key %s\n- Hold: Deploy the payments migration to production\n  Gate: web-acceptance wa-key %s\n\n## Next\n' "$WA_H" "$WA_H" > "$PLAN"; }
@@ -1666,6 +1679,10 @@ mutate wa-valid-fm 's/NR == 1 \{ if \(\$0 == "---"\) \{ f = 1; next \} else exit
 if day_stable; then mutate wa-today-utc 's/date -u \+%F/date +%F/' && killed wa-today-utc "0|holds: x rcs=0 1" w_tz r_tz; else day_skip wa-today-utc; fi
 mutate wa-kind "$(noop wa-kind)" && killed wa-kind "2|holds: x 1 discharged: 0 standing: 1 why=$NTWHY" w_ntkey r_wa
 mutate wa-kind-substr '/# mut:wa-kind$/ s/ \$key / *\$key* /' && killed wa-kind-substr "2|holds: x 1 discharged: 0 standing: 1 why=$NTWHY" w_ntkey r_wa
+mutate wa-kind-lead '/# mut:wa-kind$/ s/\*" \$key "\*/*"\$key "*/' && killed wa-kind-lead "0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance acceptance-record $(blobhash acceptance-record) (decided DATE)" w_ntsuf r_wa
+mutate wa-kind-trail '/# mut:wa-kind$/ s/\*" \$key "\*/*" \$key"*/' && killed wa-kind-trail "0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance founder-acceptance $(blobhash founder-acceptance) (decided DATE)" w_ntpre r_wa
+# the refusal list is a VARIABLE the case consumes: widen it by one key and an ordinary key must be refused (a literal pasted into the case would not notice)
+mutate wa-kind-var "s/^WA_NON_TERMS_KEYS=.*/WA_NON_TERMS_KEYS='founder-acceptance-record wa-key'/" && killed wa-kind-var "0|holds: x 1 discharged: 1 standing: 0 why=checked: web-acceptance wa-key $(blobhash wa-key) (decided DATE)" w_ntord r_wa
 mutate wa-bind-case '/# mut:wa-bind$/ s/ \| tr .A-Z. .a-z.//' && killed wa-bind-case "$P_OK" w_bindcase r_wa
 mutate wa-file "$(noop wa-file)" && killed wa-file "2|holds: x 1 discharged: 0 standing: 1 why=a recorded decision on a legal text cannot back a production step" s_filepath r_wafile
 mutate tab-val 's~gsub\(/\\t/, " ", s\); ~~' && killed tab-val "$PSHAPE" w_tab r_wa
@@ -1684,15 +1701,15 @@ mutate_lib stdin-doppler 's# 2>/dev/null </dev/null\)" \|\| return 1# 2>/dev/nul
 
 echo "=== Floor: the SUT answered every row ==="
 n_calls="$(cat "$TMP"/scn*/calls.log 2>/dev/null | wc -l | tr -d ' ')"
-# Floors, committed from a green run (2028 assertions after review round 1; 2009 before, 1000 gh stub calls, per-arm counts below) within 0.5%: a FLOOR, never equality. Re-measure and raise them when rows are added; a lower number is a deleted row.
+# Floors, committed from a green run (2051 assertions after fix round 1; 2028 after review round 1; 2009 before, 1000 gh stub calls, per-arm counts below) within 0.5%: a FLOOR, never equality. Re-measure and raise them when rows are added; a lower number is a deleted row.
 if (( n_calls >= 995 )); then
   echo "  PASS: gh stub calls $n_calls >= 995"; PASS=$((PASS + 1))
 else
   echo "  FAIL: gh stub calls $n_calls < 995 -- the rows did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-for armrow in "wa:1270:the whole of Arm 14" "nser:405:answers that cannot be understood, escapes, repeats and dates" "bind:145:the hold must name its text" "tab:11:a tab cannot split a gate" "vu:40:valid_until" "bind2:13:what the binding reads" "chg:26:who reads the note" "vu2:51:valid_until, the day before, zones, calendar" "nt:14:an acknowledgement key cannot back a production step"; do
+for armrow in "wa:1270:the whole of Arm 14" "nser:405:answers that cannot be understood, escapes, repeats and dates" "bind:145:the hold must name its text" "tab:11:a tab cannot split a gate" "vu:40:valid_until" "bind2:13:what the binding reads" "chg:26:who reads the note" "vu2:51:valid_until, the day before, zones, calendar" "nt:30:an acknowledgement key cannot back a production step"; do
   arm_floor "${armrow%%:*}" "$(printf '%s' "$armrow" | cut -d: -f2)" "${armrow#*:*:}"
 done
 
-print_results 2025
+print_results 2045

@@ -108,6 +108,8 @@ Apply each edit as exact OLD to exact NEW. Each OLD must match exactly once befo
 **A5. Code-request records (name them).** Insert this paragraph immediately after the paragraph beginning `The record also holds fixed technical labels`:
 `Each decision also uses a short-lived request record, kept apart from the decision record. It holds your account identifier, the name, version and fingerprint of the text, the identifier of the sign-in session, the number of attempts, and the times of the request. It never holds the code. Jikigai deletes request records older than 30 days when the next request for a decision is made, so one can last longer than 30 days. A request record is not deleted when you delete your account, and it is not covered by the 5 years above.`
 
+> **Superseded 2026-11-08 (CLO ruling L1, review round 1), as to "it is not covered by the 5 years above":** the served text now reads "it is not covered by the 5 years stated under How long it is kept", because the period is stated further down the text, not above this paragraph. The pinned text carries the amended sentence; this paragraph keeps the original wording as the record of what was first ruled.
+
 **A6. Ack marker.**
 - OLD: `A separate marker, linked to the record's identifier, may note when the web service reported the decision to Jikigai's monitoring; it can be missing.`
 - NEW: `A separate marker, linked to the record's identifier, may note the time the web service reported the decision to Jikigai's monitoring; it can be missing. Because it can be linked to your record, it is personal data too, and it is kept and deleted together with the record.`
@@ -145,6 +147,8 @@ Consequential records (edit in place with `> **Superseded 2026-11-07 (#12197; fi
 ### CLO agent, C: card deck wording (#12344)
 
 Two deck-owned wordings selected by a declared kind. A single neutral wording for all texts is not acceptable (CLO). Heading for both kinds: `exactTextHeading` becomes `The exact text your answer covers` (the old heading overstates: only the sha256 is stored, never the text; ADR-319 property 4).
+
+> **Superseded 2026-11-08 (CLO follow-up 6, same ruling):** ADR-319 has Properties 1 to 3 only; the heading is grounded on property 4 of the ATTESTATION RECORD (verbatim text not stored, only its sha256), not on an ADR-319 property 4. The citation in this line is superseded by follow-up item 6 below.
 
 | Field (current `LEGAL_COPY` path) | terms kind | acknowledgement kind |
 |---|---|---|
@@ -311,6 +315,8 @@ Panel run in deepen-plan: `soleur:engineering:review:user-impact-reviewer`, `sol
 9. Shared `dialog.codeBody` and the `answerDetail` code sentence: "Nothing is recorded until your code is checked." in both kinds (first-round follow-up, already in the table above). The CTO notes the emailed code expires in 10 minutes (shared sign-in template) while the card says "a few minutes"; reconciling is a wording call left as a known leftover (S6), not changed here.
 10. A5 (request records): the migration's 30-day DELETE runs only inside `issue_legal_reauth`, when someone asks for a code. A5 already says "so one can last longer than 30 days"; the text must never promise a hard 30-day upper bound.
 
+    > **Superseded 2026-11-08 (CLO ruling L6, review round 1), as to "runs only inside `issue_legal_reauth`, when someone asks for a code":** `issue_legal_reauth` runs its 30-day DELETE before any outcome branch and `decideLegal` calls `issueIntent` for Decline and Request changes too, so the purge runs on EVERY intent issuance (verified in migration 184). A5's "so one can last longer than 30 days" and the rule that the text never promises a hard 30-day bound both stand.
+
 ### CTO agent, third round (verbatim rulings; corrections to the CTO's own earlier text come first)
 
 Corrections: the CTO withdrew its earlier suggestions of a plural `Refs #12197` in the PR body and of per-user flag targeting (the flag identifier is `role:prd` or `org:..:role`, never a user id, `lib/feature-flags/server.ts`).
@@ -475,6 +481,20 @@ A thirteen-seat review of `a22578f5ad` found no P1 in the text and one P1 on the
 | L6 | The 30-day purge runs on every intent; markers across the records; register 17(b), (c), (f) closed in the cell as v1 positions |
 | L7 | Published trio unchanged, disclosed in the PR body; #12365 stays the precondition for any non-operator founder |
 | L8 | Residual risk 13 and a per-hash pre-flag query in the ruling file |
+
+### Fix round 2 (2026-11-08): the fix-commit round over `a22578f5ad..9f3cb5fba3`
+
+Three seats (security, test design, data integrity) re-read the round-1 fixes. One P1 and the findings below, all fixed in the commits after `9f3cb5fba3`; the text bytes and the sha256 `10d283e0...` did not change.
+
+| Finding | Disposition |
+|---|---|
+| Security P1-1: the rewritten hook denied commit messages, echoes, greps and `--body` text that only MENTION `gh pr merge N` | `gh` is recognised at command position only (awk statement splitter); the quoted payload of `bash -c` / `eval` still denies; 52 new rows (floor 154) |
+| Security P2-1: flag values read as targets | value-taking flags and their values are skipped; a variable or branch-name target is still held while any PR is parked |
+| Security P2-2: `gh api` PATCH/PUT/DELETE on `issues/N` or `pulls/N`, `labels/parked`, four more GraphQL names | covered |
+| Security P3 (continuations, `2>&1`, `#N`, failed current-branch read, `$` targets, incident id, triage case and `parked` flag) | fixed; the incident id is `parked-merge-barrier` |
+| Test design: 21 survivors | rows added (hook, hold-gate, drain-prs, TS); three accepted as equivalent (timeout shape check, redundant wrapper group, `\b` after `verif`) |
+| Data integrity P2-1, P2-2 | DSAR "Who can see it" and compliance-posture markers (append-only) |
+| Data integrity P3 | markers, the PA-40 cross-reference, the verbatim L2 strings in the ruling file; P3-1 and P3-2 (wording) accepted with no text change |
 
 ## Observability
 

@@ -117,7 +117,7 @@ Register Maintenance item 17 in the Article 30 register carries the list; LIA "O
 
 **Expressly deferred (the operator's act under Condition 3 of the 2026-11-04 audit, not the CLO's):** 17(d), 17(e), 17(g), the DPIA screening and the final-form published Privacy Policy, GDPR Policy and Data Protection Disclosure (tracked in #12365). A human lawyer's review of every position above is still owed before any non-Jikigai founder.
 
-**What this addendum does not change.** Section 2 still holds: nothing was measured on a running system, and the card wording stays PROVISIONAL (`LEGAL_COPY.PROVISIONAL` is true; the CPO has not signed off the deck). The twelve residual risks of an agent standing in for counsel are listed in the ruling file.
+**What this addendum does not change.** Section 2 still holds: nothing was measured on a running system, and the card wording stays PROVISIONAL (`LEGAL_COPY.PROVISIONAL` is true; the CPO has not signed off the deck). The twelve residual risks of an agent standing in for counsel are listed in the ruling file. **[Superseded 2026-11-08 (review round 1): the ruling file now lists thirteen; residual risk 13 (same-label hash drift, with its per-hash pre-flight query) was added after the panel review.]**
 
 ---
 
