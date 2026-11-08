@@ -202,7 +202,7 @@ echo ""
 echo "TS15b: the dirs step reads its diff through the NUL construction in BOTH arms, with the scoped pipefail (#12332)"
 # Executed behaviour (C-quoted names, rename-away, gitlink, failing git) is pinned by changed-path-readers.test.sh; this row pins that the
 # construction is present where THIS suite extracts the step, once per arm (the pull_request arm and the push arm).
-NUL_READS=$(printf '%s\n' "$DIRS_STEP" | grep -cF 'CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only')
+NUL_READS=$(printf '%s\n' "$DIRS_STEP" | grep -cF 'CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only' || true)
 assert_eq "2" "$NUL_READS" "push arm and pull_request arm each capture the NUL-delimited diff first"
 assert_eq "0" "$(printf '%s\n' "$DIRS_STEP" | grep -cE '^[[:space:]]*DIRS=\$\(git diff' || true)" "no arm pipes a bare git diff into the chain"
 echo ""
