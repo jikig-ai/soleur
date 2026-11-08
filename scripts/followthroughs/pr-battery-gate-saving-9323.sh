@@ -55,6 +55,12 @@
 #   3 = CANNOT ESTABLISH  gh/jq/GH_TOKEN missing, or a GitHub API read failed (the sweeper retries)
 #   78 = refused to run under xtrace while GH_TOKEN is set (#7797)
 #
+# Env: GH_TOKEN required (declared secrets=GH_TOKEN on the tracker directive);
+#   PBG_UNBOUNDED=1 is an operator-local verdict seam — replaces the wall
+#   deadline with END=T0+86400 so one local run can converge; refused under
+#   the sweeper channel (SOLEUR_FT_EARLIEST set). PBG_BUDGET_S is the
+#   budgeted-path deadline test seam (integer 1..300, sweeper contract).
+#
 # RETIREMENT: when #9323 closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
 # the `scripts/followthroughs/pr-battery-gate-saving-9323` rows in scripts/suite-shard-legs.tsv and
 # scripts/suite-durations.tsv, and its mention in ADR-262's Consequences.
@@ -84,9 +90,26 @@ for need in gh jq unzip mktemp awk sed grep sort date timeout comm paste cut cat
 done
 [ -n "${GH_TOKEN:-}" ] || { echo "CANNOT ESTABLISH: GH_TOKEN is not set (the tracker directive must declare secrets=GH_TOKEN)"; exit 3; }
 BUDGET="${PBG_BUDGET_S:-270}"   # the ONE wall deadline END=T0+BUDGET covering listing, examine, artifacts and the escape check (default 30 s under the sweeper's 300 s per-probe kill; test seam, cap 300)
-[[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 300 ]] || { echo "CANNOT ESTABLISH: PBG_BUDGET_S is not an integer from 1 to 300"; exit 3; }
 T0=$SECONDS
-END=$((T0 + BUDGET))
+# PBG_UNBOUNDED=1 is the operator-local verdict seam (#9323): the probe starves
+# inside the sweeper's 300 s kill (~20 qualifying runs x ~13 artifact reads
+# cannot fit 270 s), so a local run overrides the wall deadline with a
+# far-future bound — the bound is REPLACED, never removed (api()'s
+# rem=$((END-SECONDS-5)) would crash under `set -u` on an unset END). The
+# sweeper never sets the variable, so sweep behaviour is byte-identical: the
+# PBG_BUDGET_S<=300 contract still guards the budgeted path and stays
+# irrelevant on the unbounded one (an irrelevant PBG_BUDGET_S cannot refuse a
+# run it no longer bounds). Per-call 60 s caps still bound every read: a
+# stalled gh api call dies in place as a read failure, never hangs the
+# operator's shell.
+if [[ "${PBG_UNBOUNDED:-}" = 1 ]]; then
+  [[ -z "${SOLEUR_FT_EARLIEST+x}" ]] || { echo "CANNOT ESTABLISH: PBG_UNBOUNDED is operator-local only — the sweeper channel must never see it"; exit 3; }
+  END=$((T0 + 86400))
+  echo "[operator-local] wall deadline overridden by PBG_UNBOUNDED=1 (END=+86400s, per-call 60s caps still bind)"
+else
+  [[ "$BUDGET" =~ ^[1-9][0-9]*$ && "$BUDGET" -le 300 ]] || { echo "CANNOT ESTABLISH: PBG_BUDGET_S is not an integer from 1 to 300"; exit 3; }
+  END=$((T0 + BUDGET))
+fi
 
 # the gate-machinery paths, single-sourced from the lib that declares them
 # shellcheck source=scripts/lib/test-relevance-paths.sh
@@ -115,7 +138,7 @@ api_bin() {
   return "$rc"
 }
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
-cut_ny() { echo "NOT YET: the wall deadline (${BUDGET}s) ended during $1 — the sweep retries next run"; exit 2; }
+cut_ny() { echo "NOT YET: the wall deadline ($((END - T0))s) ended during $1 — the sweep retries next run"; exit 2; }
 
 # Arm (a) verdict input is the lever's own realized saving, drift-immune (the 2026-10-28 investigation on the tracker:
 # whole-run billable means measure suite growth, not the gate — same-shape pre-gate control ~113 vs post-gate ~266,

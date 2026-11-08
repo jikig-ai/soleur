@@ -136,6 +136,10 @@ known_kind() { case "$1" in pr-merged|no-inflight-run|web-acceptance) return 0 ;
 # these two lines and compares them with those sources: change all of them together or none.
 WA_KEY_RE='^[a-z0-9][a-z0-9-]{0,62}$'
 WA_HASH_RE='^[0-9a-f]{64}$'
+# Registry keys whose declared kind is NOT "terms" (an acknowledgement text): the founder's Yes on one of them records that they were
+# shown the text and agrees to nothing, so it cannot back a production step. A test cross-checks this list with the registry pins in
+# apps/web-platform/test/legal-acceptance/registry-pins.test.ts (every non-terms key listed, no terms key listed). Space-separated.
+WA_NON_TERMS_KEYS='founder-acceptance-record'
 WA_TEXTS='apps/web-platform/server/legal-acceptance/texts'
 WA_BASE='https://app.soleur.ai/api/internal/legal-acceptance' # mut:base-url
 WA_TOKEN_NAME='LEGAL_ACCEPTANCE_VERIFY_TOKEN'
@@ -208,6 +212,7 @@ gate_web_acceptance() {
   if [[ "$rest" != *" "* ]] || ! [[ "$key" =~ $WA_KEY_RE ]] || ! [[ "$hash" =~ $WA_HASH_RE ]]; then GRES=UNEVAL; GWHY="the web acceptance is not written as a plain text name and fingerprint"; return; fi # mut:wa-shape
   # CTO ruling D1: the hold's own words (cleaned of control and bidi characters, but NOT cut at the 160-character display limit, so a key beyond that limit still binds; accepted residual of the lexical rule) must name this text's key as a whole
   # token, so a decision about one text cannot clear a wait about another thing. A letter, digit, hyphen or underscore beside the key makes it part of a longer word.
+  case " $WA_NON_TERMS_KEYS " in *" $key "*) GRES=UNEVAL; GWHY="this key is an acknowledgement; its decision cannot back a production step"; return ;; esac # mut:wa-kind
   grep -Eq "(^|[^a-z0-9_-])${key}([^a-z0-9_-]|\$)" < <(clean_uncut "$WA_HOLD_TEXT" | tr 'A-Z' 'a-z') || { GRES=UNEVAL; GWHY="this wait does not name the legal text it is about; ask the plan's author to put the text name $key in the hold's words"; return; } # mut:wa-bind
   WA_HASH="$hash"
   path="$WA_TEXTS/$key.md"

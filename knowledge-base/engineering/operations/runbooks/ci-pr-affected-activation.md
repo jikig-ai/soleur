@@ -63,6 +63,14 @@ path the index does not declare for them, on the pinned tree `abbd36a696` (a tre
 a re-run on a later tree will not print 190). The receipts are in the PR C spec directory (`receipts/`, archived at ship under
 `specs/archive/<timestamp>-feat-one-shot-9729-ci-pr-c-affected-only/receipts/`, leaf names kept).
 
+- 2026-11-07: the re-ruling this runbook's §3/§4 prescribes was computed on a fresh window — `computed=NO-GO
+  reason=criterion-failed`: (b) now passes (strict-zero audit on the pinned tree, exit 0), (c) passes
+  (net 83.01 sampled / ≈30.0 population-weighted vs the 24.03 bar off a fresh 120.17 baseline), (d) passes,
+  but (a) fails on the worst-case bound (61 of 382 → 19.38% ≥ 12%; the not-evaluable bucket is mostly
+  cancelled-run unsettled legs and pre-umbrella job names the classifier's allowlist does not know). Receipt:
+  `knowledge-base/project/specs/feat-one-shot-ci-lever-residuals/receipts/go-no-go.md`. Still nothing activated;
+  the retire-vs-schedule call is the operator's per #10448.
+
 ## 3. Entry condition for a re-attempt (CTO ruling, ADR-276 amendment item 5)
 
 All of these, in this order:
@@ -124,6 +132,15 @@ Read the output with these limits in mind (they are in the receipt too):
 - A failed or truncated read is `not-evaluable` and counts in the worst-case numerator. It is never "no failure". A failing job that is
   in neither the suite-shard family nor ci.yml's job list is `unclassified-job`, also `not-evaluable`.
 - `scripts/test-all-orphan-log-retention` is a known flake (more than 20 queue-run failures); expect `flake-cleared` rows for it.
+- A `no-run` reason is **corroborated** (#10862, H4): the `?head_sha=` run listing is search-backed and has
+  dropped existing runs at collect time (~30% of 300 on 2026-10-22). `ci_runs` retries an empty listing once,
+  then proves absence through the commit-keyed `commits/{sha}/check-runs` + `actions/runs/{id}` reads; the
+  unit's `runs_via` says which read answered (`head-sha`, `head-sha-retry`, `check-runs`,
+  `corroborated-no-run`). A unit resolved via `check-runs` is real evidence — the run was recovered from a
+  dropped index, not inferred. Residual: corroboration proves existence-on-empty, not completeness-on-non-empty —
+  a listing that keeps >=1 FULL_EVENTS run is trusted as-is (partial drops are undetectable there, and a dropped lone failure under a kept success reads clean — under-counting, not over). The cause
+  receipt is in the archived spec dir
+  (`knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/cause.md`).
 
 ## 5. The four criteria and the verdict
 

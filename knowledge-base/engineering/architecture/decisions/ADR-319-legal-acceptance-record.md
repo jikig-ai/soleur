@@ -4,7 +4,7 @@ status: adopting
 date: 2026-11-04
 supersedes: none
 issue: 12011
-related: [12011, 12012, 12020, 12021, 12022, 12023, 12031, 4672]
+related: [12011, 12012, 12020, 12021, 12022, 12023, 12031, 4672, 12197, 12344, 12080]
 related_adrs: [ADR-060, ADR-289, ADR-309]
 tags: [security, legal, approval, rls, write-once, gdpr]
 brand_survival_threshold: single-user incident
@@ -299,7 +299,7 @@ this PR; the draft rules are tracked in #12195 and are an enabling condition bef
 ### Still open after PR-D
 
 - The founder-page state for `invalid` (#12193), the sweep (#12194), paging for the two new ops (#12195), the founder uuid and the web app redeploy (#12196; the Terraform secrets landed 2026-11-07, see the Update in the Decisions list above).
-- The first real acceptance verified end to end by the gate, the post-deploy registry smoke (no text is committed, so every key answers 404) and the roadmap wording (#12197). Status moves to `accepted` only after the first.
+- The first real acceptance verified end to end by the gate, the post-deploy registry smoke (no text is committed, so every key answers 404 **[Superseded 2026-11-08 (#12197; fires on the merge of PR #12342, which commits the first text), as to "no text is committed, so every key answers 404": from that merge the key `founder-acceptance-record` is served and no longer answers 404; an unknown key still does.]**) and the roadmap wording (#12197). Status moves to `accepted` only after the first.
 - Published documents: amended in this PR for the third table and the status check; still owed before any non-operator founder: the final-form rewrite (the handling of the status check's output in an operator session, which is a counsel question and not a recorded processing activity, the retention period, the reader role for the note).
 - #12195 (paging for `record_invalid` and `store_failed`) should use per-stage fingerprints: `store_failed` has a single static message, so an alert rule that groups by message would merge the stages; group by `tags.stage`.
 - The deletion path for `legal_acceptance` (#12080) must delete the `legal_acceptance_ack` row of every deleted `legal_acceptance` row, by `acceptance_id`, in the same operation. The ack table has no foreign key, so no cascade does it, and an ack row left behind keeps a
@@ -314,3 +314,38 @@ this PR; the draft rules are tracked in #12195 and are an enabling condition bef
 The C4 model gains three edges: the ship component to the web application (read-only HTTPS bearer to the check endpoint), the ship component to Doppler (read of the one token, once configured under #12196), and the founder to the legal-acceptance store (the operator's
 owner-level read of the note; operator-only by policy). The statement that no edge reaches the store from the agent side is replaced: the agent can read four fields about one decision through the endpoint; the note is not readable through the endpoint or any
 `service_role` path (a database-owner credential could read it; it is held by the operator and by the production migration pipeline, a CI secret, and no agent session is meant to use either). That is a policy and a design choice, not an absolute control.
+
+## Amendment 2026-11-07 (#12197)
+
+The first registry text, `founder-acceptance-record`, is signed off as a v1 internal position. The dated text above is not edited; this amendment records what the sign-off decided and lists exactly what it supersedes. Status stays `adopting`: nothing here is a measured production claim and no real row has been recorded.
+
+**Stand-in, stated plainly.** The company has no external counsel. On 2026-11-07 the operator ruled that the CLO agent's ruling stands in for counsel sign-off. The enabling condition "counsel's retention decision is made" is met ONLY by that stand-in, as a v1 position. A human lawyer's review is still owed and is a precondition for widening the surface beyond the operator. The ruling is persisted in `knowledge-base/legal/audits/2026-11-07-clo-ruling-founder-acceptance-record-12197.md`; no decision here rests on a chat message.
+
+### Decisions
+
+- **Retention period.** 5 years from the date of the decision, extended only while a legal claim, a complaint or an official inquiry about the record is open, for the decision record and for the Request changes note alike (the note cannot be separated from the row). Basis: Code civil art. 2224, Art. 5(1)(e) and Art. 13(2)(a) GDPR. Rejected: a variable start (the life of the instrument), because registry texts have no `valid_until`, the database has no text lifecycle and `created_at` is the row's own column; 10 years (Art. 17(3)(b) is not claimed); 7 years (the precedent is business-to-business terms); anything under 5.
+- **The period is a commitment, not a control.** The text states in plain words that the deletion step is not yet built, and a dated test fails from 2030-11-07 while it still says so. #12080 is the hard stop: build it before the first non-Jikigai founder or before any row is 4 years old.
+- **The card has two deck-owned wordings, terms and acknowledgement,** selected by a kind declared per text key (`LEGAL_TEXT_KIND` in the copy leaf). Rejected: a `meaning:` line in the text's front matter (the front matter is inside the hashed bytes, the loader would ignore an unknown line silently, and every cosmetic deck change would force a new text version). A text with no declared kind renders no card: the page is a 404 with a Sentry event, and the decide and reauth routes answer the same oracle-free 404. This is an amendment decision, not a record property (Properties 1 to 3 are record invariants).
+- **The registry is pinned.** `registry-pins.test.ts` holds an append-only `{version: sha256}` history and requires the served keys, the pinned keys and the declared kinds to be the same set. It proves consistency, not integrity; an in-place edit of a pin row is visible in review, and `UNIQUE (founder_id, key, text_hash)` keeps the hash of every decision actually recorded.
+- **The card surface is founder-only while the flag is global.** The `approval-queue` flag is read with `workspaceId: null` and cannot target one user, so the pages and both routes require the flag AND `LEGAL_ACCEPTANCE_FOUNDER_ID`, failing closed. Turning the flag on remains the operator's act.
+- **Stored `accept` on an acknowledgement text** means only that the founder answered Yes to an acknowledgement of that exact text version; it records no acceptance of terms and no consent. What enforces this today is narrow and named: `hold-gate-eval.sh` refuses a `web-acceptance` gate on any key listed in its `WA_NON_TERMS_KEYS`, and `registry-pins.test.ts` requires that list to hold every non-`terms` key in `PUBLISHED` and no `terms` key (CTO ruling T3, 2026-11-08). The check endpoint still returns exactly four keys and no kind, so any FUTURE consumer of a decision row or a check result must read the kind pinned for that text key first; none exists besides the hold evaluator.
+- **AP-009 (never delete user data, advisory) is in tension with deleting after five years.** A bounded, documented deviation, with the same documentation shape as ADR-119's AP-009 deviations (a stray-copy carve-out, not the same operation): only expired `legal_acceptance` rows together with their `legal_acceptance_ack` row and the founder's `legal_reauth_event` rows, in one controlled database-owner action, hold-aware. It is recorded here and built under #12080.
+
+### Superseded by this amendment
+
+- Decision "Retention and erasure": the period (the proposal of the life of the instrument plus five years, capped at ten, "unconfirmed by counsel" is replaced as stated above).
+- Consequences: the counsel gate for the wording and the period (met by the stand-in only, as a v1 position).
+- PR-C Decisions: the bullet saying the retention period inside the card-level notice is "to be confirmed by counsel".
+- PR-C Enabling conditions: "Counsel's retention decision is made and the (c-2) notice placeholder is replaced" (met by the stand-in only; the placeholder is replaced).
+- PR-C Still open: "Retention and redaction" and "Counsel review" (as to the retention period and the notice wording only; the deletion path stays open under #12080 and a human lawyer's review stays owed).
+- PR-D Still open: the retention clause in "Published documents" (the final-form rewrite stays owed; tracked in #12365).
+- PR-D Still open, "no text is committed, so every key answers 404": superseded on the merge of PR #12342, as marked in place.
+- Amendment bullet "Stored `accept` on an acknowledgement text" (this amendment, first version): restated above to say what is enforced today (the `WA_NON_TERMS_KEYS` guard), not that every consumer reads the kind.
+
+### Principle Alignment
+
+AP-021 (Diagnostic honesty): Aligned. The card says "acknowledged" for an acknowledgement text and never "accepted terms"; the text says the deletion step is not built. AP-009 (Never delete user data): tension, recorded above as a bounded deviation.
+
+### Diagram
+
+No change. `platform.infra.legalAcceptanceStore` already names the three tables with no retention period, the `webapp -> legalAcceptanceStore` edge is unchanged, and the founder gate and the null-kind guard add no element.

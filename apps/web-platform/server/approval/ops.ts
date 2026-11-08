@@ -137,6 +137,12 @@ export const APPROVAL_OPS = {
     message: "Approval gate: the viewer role could not be read; the card shows the read-only view",
     level: "warn",
   },
+  /** The requester label (who raised the request) could not be read; the card shows no requester line. Ids only, never the address. */
+  requesterLabelFailed: {
+    op: "approval-requester-label-failed",
+    message: "Approval card: the requester label could not be read; the card shows no requester line",
+    level: "warn",
+  },
   /** The `approval-queue` flag read threw; the flag is treated as OFF. Debounced to one report per 10 minutes per process (flag.ts). */
   flagReadFailed: {
     op: "approval-flag-read-failed",
@@ -284,6 +290,12 @@ export const LEGAL_OPS = {
     op: "page_read_failed",
     message: "Legal acceptance: the page could not read the founder's decisions or the legal text",
     level: "error",
+  },
+  /** A registered text has no declared card kind (LEGAL_TEXT_KIND), so the page renders nothing for it. Reported on every render, once the founder surface gate has passed; `tags.key` names the text. */
+  kindUndeclared: {
+    op: "kind_undeclared",
+    message: "Legal acceptance: a registry text has no declared card kind",
+    level: "warn",
   },
   /** The check endpoint read a row whose checksum no longer matches (status `invalid`). Recorded in Sentry; no paging rule yet (#12195). `extra` carries `key` and the public `textHash`. */
   recordInvalid: {

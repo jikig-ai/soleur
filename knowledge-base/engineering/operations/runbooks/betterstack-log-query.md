@@ -447,7 +447,8 @@ Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts
   (`SYSLOG_IDENTIFIER = 'ci-deploy'`) once per peer after this host's prod swap. `refused` is nothing listening or unreachable,
   `tls` is a failed handshake or certificate pin, `timeout` is no answer in time, `denied` is a peer that closed right after the
   upgrade (its allowlist does not carry this host). `skipped=no_bind|no_roster|no_peers|exec_failed` is "nothing to dial" or "the
-  probe could not run" and never pages.
+  probe could not run" and never pages. The serve-evidence reader (`scripts/lib/web2-relay-rows.sh` `wrr_peer_sql`) reads this row from the hot table
+  UNION ALL the S3 archive, because it is written once per deploy and is usually older than the ~40-minute hot window.
 - **Reading a page (counts and enum words only, no secrets in these rows).** Per host, last hour, with the delivery control first:
 
   ```bash
@@ -1588,8 +1589,16 @@ confirm it emits metrics and to drive the resize-or-keep-`cx23` decision
 
 One WARN line per WebFetch result in sessions with web egress and the `untrusted-content-classify` flag on. The pino payload sits under
 `.message` in the stored row (see the extraction note above), with fields `op`, `source`, `score`, `flagged`, `reasonCodes`,
-`contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionId`. Never
-content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it.
+`contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionIdHash`. Never
+content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it. `sessionIdHash` is `hashUserId` of
+the conversation id (the app's `conversationId`, passed verbatim, no trimming or re-casing), the same keyed hash as `workspaceIdHash`. With the
+pepper unset it is the literal `pepper_unset` for every session, so per-session lookup is then impossible (a filter on that literal matches every
+session, and a miss is not "no such session"). A pepper rotation changes the hash of every id, so lines emitted before the rotation need the
+previous pepper.
+To find one session, follow `recover-userid-from-pino-stdout.md` Flow 1 steps 2 and 3 with the conversation id in place of `$UUID`,
+including its `prd`-config check (the helper needs the `prd` config for the pepper, in addition to the `prd_terraform` read credentials); its
+`jq` filter already matches `.sessionIdHash`. Never put the pepper on a command line. Lines emitted by builds from before this change was
+deployed carry the raw `sessionId` key until retention expires.
 
 Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
 (counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero

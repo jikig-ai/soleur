@@ -126,9 +126,13 @@ export function createApprovalGateDeps(args: CreateApprovalGateDepsArgs): Approv
 
     async viewerRole() {
       const t = await tenant();
+      // A null tenant (a denied principal) is a failed role read, exactly as in the reattach closure.
+      if (!t) throw new Error("viewer role read failed");
       const { data, error } = await t.rpc("is_workspace_owner", { p_workspace_id: args.workspaceId, p_user_id: args.userId });
-      // A read error is thrown (the gate reports it and shows the read-only card); only a clean `true` is an owner.
+      // A read error is thrown (the gate reports it and shows the read-only card); only a boolean answer is a role: a null /
+      // undefined / garbage payload is a failed read, never a silent "member".
       if (error) throw new Error("viewer role read failed");
+      if (typeof data !== "boolean") throw new Error("viewer role read failed");
       return data === true ? "owner" : "member";
     },
   };

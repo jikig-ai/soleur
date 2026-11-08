@@ -4,14 +4,16 @@
  *   - a malformed key and an unknown key are the SAME not-found;
  *   - the text on the card is the registry body, and its hash is the registry hash (what is shown is what is hashed);
  *   - the founder's rows give the state; older rows render as "replaced" cards;
- *   - the approval-queue flag is read first (userId, workspaceId null); with it off the pages return not-found unless the
- *     founder has a recorded row for that key, and a pending card or an unreleased key never renders;
+ *   - the surface gate (the approval-queue flag AND the configured founder) is read first (userId, workspaceId null); with it off the
+ *     pages return not-found unless the founder has a recorded row for that key, and a pending card or an unreleased key never renders;
+ *   - a registry text with no declared card kind is a not-found (and one Sentry event, after the gate) on the card page, and is left
+ *     out of the index (#12344, CTO ruling 2026-11-07: no default kind);
  *   - a failed or malformed read is reported and throws, never an empty page.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { createHash } from "node:crypto";
-import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
+import { LEGAL_COPY, LEGAL_KIND_COPY } from "@/lib/legal-acceptance-copy";
 
 const h = vi.hoisted(() => ({
   user: { value: { id: "00000000-0000-4000-8000-000000000007", email: "dana@example.com" } as { id: string; email: string } | null },
@@ -22,8 +24,25 @@ const h = vi.hoisted(() => ({
   lookups: [] as string[],
   from: [] as string[],
   secondKey: { value: false },
+  noKindKey: { value: false },
+  declared: { value: {} as Record<string, "terms" | "acknowledgement"> },
   textFailure: { value: null as unknown },
 }));
+
+const USER_ID = "00000000-0000-4000-8000-000000000007";
+/** The terms wording: today's strings, moved into the kind map. */
+const KC = LEGAL_KIND_COPY.terms;
+
+// `customer-terms` and `other-terms` are not in the real LEGAL_TEXT_KIND (only the committed text is), so the kind lookup the
+// pages use reads a per-test map. No fixture key is registered on the real (Readonly) map.
+vi.mock("@/lib/legal-acceptance-copy", async (orig) => {
+  const real = await orig<typeof import("@/lib/legal-acceptance-copy")>();
+  return {
+    ...real,
+    legalKindCopy: (key: string) => real.legalKindCopy(key, h.declared.value),
+    legalTextKind: (key: string) => real.legalTextKind(key, h.declared.value),
+  };
+});
 
 class NotFound extends Error {}
 class Redirect extends Error {
@@ -59,6 +78,7 @@ vi.mock("@/server/approval/ops", async (orig) => ({
 
 const RAW = "---\nversion: 3\nvalid_until: 2099-12-31\n---\nCUSTOMER TERMS\n\n1. Who these terms are between.\n\nEnd of version 3.\n";
 const RAW_B = "---\nversion: 9\nvalid_until: 2099-12-31\n---\nOTHER TERMS\n\nEnd of version 9.\n";
+const RAW_C = "---\nversion: 5\nvalid_until: 2099-12-31\n---\nNO KIND\n\nEnd of version 5.\n";
 vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
   const real = await orig<typeof import("@/server/legal-acceptance/canonical")>();
   return {
@@ -66,6 +86,8 @@ vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
     getLegalText: (key: string) => {
       h.lookups.push(key);
       if (h.textFailure.value) throw h.textFailure.value;
+      if (key === "no-kind" && h.noKindKey.value) return real.parseLegalText(key, RAW_C);
+      if (key === "other-terms" && h.secondKey.value) return real.parseLegalText(key, RAW_B);
       if (key !== "customer-terms") throw new real.LegalTextError("unknown_key", "no such legal text");
       return real.parseLegalText(key, RAW);
     },
@@ -74,6 +96,7 @@ vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
       const m = new Map([["customer-terms", real.parseLegalText("customer-terms", RAW)]]);
       // A second registry key, only when a test asks for it (keeps the single-key tests above unchanged).
       if (h.secondKey.value) m.set("other-terms", real.parseLegalText("other-terms", RAW_B));
+      if (h.noKindKey.value) m.set("no-kind", real.parseLegalText("no-kind", RAW_C));
       return m;
     },
   };
@@ -81,6 +104,7 @@ vi.mock("@/server/legal-acceptance/canonical", async (orig) => {
 
 import Page from "@/app/(dashboard)/dashboard/approvals/legal/[key]/page";
 import IndexPage from "@/app/(dashboard)/dashboard/approvals/legal/page";
+import { resetSurfaceConfigReport } from "@/server/legal-acceptance/surface";
 
 const HASH = createHash("sha256").update(RAW).digest("hex");
 const OLD = "d".repeat(64);
@@ -97,17 +121,24 @@ const row = (over: Record<string, unknown> = {}) => ({
 const call = (key: string) => Page({ params: Promise.resolve({ key }) });
 
 beforeEach(() => {
-  h.user.value = { id: "00000000-0000-4000-8000-000000000007", email: "dana@example.com" };
+  vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", USER_ID);
+  h.declared.value = { "customer-terms": "terms", "other-terms": "terms" };
+  h.noKindKey.value = false;
+  h.user.value = { id: USER_ID, email: "dana@example.com" };
   h.rows.value = [];
   h.rowsError.value = null;
   h.flag.mockReset().mockResolvedValue(true);
   h.report.mockReset();
+  resetSurfaceConfigReport(); // the once-per-process config report must not leak between tests
   h.lookups.length = 0;
   h.from.length = 0;
   h.secondKey.value = false;
   h.textFailure.value = null;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllEnvs();
+});
 
 describe("auth gate and key handling", () => {
   it("signed out: redirects to sign-in with this path, reads no registry text and no rows", async () => {
@@ -139,7 +170,7 @@ describe("what the card shows", () => {
   it("the current row gives the state: accepted", async () => {
     h.rows.value = [row()];
     render(await call("customer-terms"));
-    expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument();
+    expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument();
     expect(screen.getByText("Confirmed with an email code, Wed 4 Nov 2026, 10:42 UTC")).toBeInTheDocument();
   });
 
@@ -177,6 +208,23 @@ describe("what the card shows", () => {
     expect(screen.queryByRole("button")).toBeNull();
   });
 
+  it("founder gate: with the flag ON, a signed-in user who is not the configured founder gets the same not-found, and no event", async () => {
+    h.user.value = { id: "00000000-0000-4000-8000-0000000000bb", email: "other@example.com" };
+    await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
+    await expect(IndexPage()).rejects.toBeInstanceOf(NotFound);
+    expect(h.report).not.toHaveBeenCalled();
+    h.user.value = { id: USER_ID, email: "dana@example.com" };
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "not-a-uuid");
+    await expect(call("customer-terms")).rejects.toBeInstanceOf(NotFound);
+    await expect(IndexPage()).rejects.toBeInstanceOf(NotFound);
+    // An unset or malformed founder id with the flag ON is a FAULT the operator must hear about (CTO ruling T4): exactly ONE
+    // config report across the three requests above, never a user id or the variable's value, and no kind_undeclared event.
+    expect(h.report.mock.calls.map((c) => c[0])).toEqual(["storeFailed"]);
+    expect(h.report.mock.calls[0][2]).toEqual({ tags: { stage: "config" }, extra: { step: "config", variables: ["LEGAL_ACCEPTANCE_FOUNDER_ID"] } });
+  });
+
   it("reads the flag first, for the signed-in user with no workspace (effectively global)", async () => {
     h.rows.value = [];
     render(await call("customer-terms"));
@@ -186,7 +234,48 @@ describe("what the card shows", () => {
   it("flag on: the pending card is open for answers", async () => {
     render(await call("customer-terms"));
     expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
-    expect(screen.queryByText(LEGAL_COPY.pending.notAvailable)).toBeNull();
+    expect(screen.queryByText(KC.pendingNotAvailable)).toBeNull();
+  });
+});
+
+describe("a registry text with no declared card kind (no default)", () => {
+  it("the card page is a not-found and reports kindUndeclared exactly once, before any row is read", async () => {
+    h.noKindKey.value = true;
+    await expect(call("no-kind")).rejects.toBeInstanceOf(NotFound);
+    expect(h.report).toHaveBeenCalledTimes(1);
+    expect(h.report).toHaveBeenCalledWith("kindUndeclared", null, expect.objectContaining({ userId: USER_ID, tags: { key: "no-kind" } }));
+    expect(h.from).toEqual([]);
+  });
+
+  it("an unknown or malformed key is a plain not-found with no Sentry event", async () => {
+    h.noKindKey.value = true;
+    await expect(call("no-such-text")).rejects.toBeInstanceOf(NotFound);
+    await expect(call("Bad Key!")).rejects.toBeInstanceOf(NotFound);
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it("flag off: the same not-found and no event (the gate runs first)", async () => {
+    h.noKindKey.value = true;
+    h.flag.mockResolvedValue(false);
+    await expect(call("no-kind")).rejects.toBeInstanceOf(NotFound);
+    expect(h.report).not.toHaveBeenCalled();
+  });
+
+  it("the index leaves the undeclared key out and reports it once; the declared keys are listed", async () => {
+    h.noKindKey.value = true;
+    render(await IndexPage());
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.queryByText(/No kind|no-kind/i)).toBeNull();
+    expect(h.report.mock.calls.filter((c) => c[0] === "kindUndeclared")).toHaveLength(1);
+    expect(h.report).toHaveBeenCalledWith("kindUndeclared", null, expect.objectContaining({ tags: { key: "no-kind" } }));
+  });
+
+  it("a declared acknowledgement text is labelled by its own first line and uses the acknowledgement wording", async () => {
+    h.declared.value = { "customer-terms": "acknowledgement" };
+    h.rows.value = [row()];
+    const { container } = render(await call("customer-terms"));
+    expect(screen.getByText(LEGAL_KIND_COPY.acknowledgement.acceptedBadge)).toBeInTheDocument();
+    expect(container.textContent).toContain('You acknowledged "CUSTOMER TERMS"');
   });
 });
 
@@ -246,7 +335,7 @@ describe("index page", () => {
     h.flag.mockResolvedValue(false);
     render(await IndexPage());
     expect(screen.getAllByRole("link")).toHaveLength(1);
-    expect(screen.getByRole("link")).toHaveTextContent(LEGAL_COPY.index.state.accepted);
+    expect(screen.getByRole("link")).toHaveTextContent(KC.indexAccepted);
   });
 
   it("flag off with a row only for an older text: listed, and the current pending text is 'not available yet'", async () => {

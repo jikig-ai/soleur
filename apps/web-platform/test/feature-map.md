@@ -91,7 +91,7 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 
 - route: `/dashboard/approvals/[id]`
 - entry: deep link from an approval push or email, or the inbox row of an `approval_required` item
-- selectors: `data-testid="approval-request-card"` (the card), `data-testid="approval-badge"`, `data-testid="approval-expiry"`, `data-testid="approval-bound-block"` (the exact bound action)
+- selectors: `data-testid="approval-request-card"` (the card), `data-testid="approval-badge"`, `data-testid="approval-expiry"`, `data-testid="approval-bound-block"` (the exact bound action), `data-testid="approval-requester"` (the "Requested by ..." line: the requester's email, "you", or "a workspace member")
 - expects: an Owner of the request's workspace sees the stored action and the Approve/Deny (or Revoke) controls; a signed-out visitor is redirected to `/login?redirectTo=...`; a non-Owner, an unknown id and a malformed id all end in the same 404
 - auth: bot
 - gotchas: needs a seeded `approval_request` row, which exists only while the `approval-queue` flag has been on for the workspace (the page itself renders regardless of the flag); with no fixture the only reachable state is the 404
@@ -101,9 +101,9 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - route: `/dashboard/approvals/legal`
 - entry: direct URL; the list of legal texts the founder has already answered
 - selectors: the list of linked text names with their version and answered state; with no rows the page ends in the not-found view
-- expects: a signed-in founder sees one link per text they have a recorded answer for (with the `approval-queue` flag on, every released text); a signed-out visitor is redirected to `/login?redirectTo=...`
+- expects: a signed-in founder sees one link per text they have a recorded answer for (with the `approval-queue` flag on and the signed-in user being the configured founder, every released text that has a declared card kind); a signed-out visitor is redirected to `/login?redirectTo=...`
 - auth: bot
-- gotchas: reads registry texts from the server texts directory, which holds no real text yet, so the only reachable state is the not-found view; with the flag off only texts the founder already answered are listed
+- gotchas: reads registry texts from the server texts directory (whichever texts are committed and deployed; a deployed text is answerable at once, but only by the configured founder (`LEGAL_ACCEPTANCE_FOUNDER_ID`) while the flag is on, so a text is merged only after a recorded sign-off and with a declared card kind); with the flag off only texts the founder already answered are listed, and a not-found view when there are none
 
 ## `/dashboard/approvals/legal/[key]`
 
@@ -112,7 +112,7 @@ User-POV inventory of every navigable route in `app/`. Consumers: `test-browser`
 - selectors: `data-testid="legal-card"` (the card), `data-testid="legal-reauth-dialog"` (the email-code dialog opened by Yes)
 - expects: a signed-in founder sees the text, the notices, the three choices (none preselected) and a Yes that stays locked until the text is scrolled to the end and ticked; an unknown, malformed or unreleased key ends in the same not-found view; a signed-out visitor is redirected to `/login?redirectTo=...`
 - auth: bot
-- gotchas: needs a registry text, and none is committed yet, so the only reachable state is the not-found view; the Yes path sends a real email code and records a row, so never drive it against a shared database
+- gotchas: needs a registry text with a declared card kind (until the sign-off pull request merges none is committed, so the only reachable state is the not-found view; a signed-in user who is not the configured founder also gets the not-found view); the Yes path sends a real email code and records a row, so never drive it against a shared database
 
 ## `/dashboard/kb`
 

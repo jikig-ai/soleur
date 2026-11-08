@@ -126,8 +126,11 @@ check_not "G7: a stray Access-token forget is refused even WITH the ack" gate 0 
 check_not "G8: a counter that is not a non-negative integer is refused (a jq failure must not read as 0)" deploy_policy_gate '{"deploy_policy_changes":"x","deploy_policy_unsafe":0,"access_token_stray_forgets":0}' ""
 check_not "G9: a missing counter is refused" deploy_policy_gate '{"deploy_policy_changes":0,"deploy_policy_unsafe":0}' ""
 check     "G10: the workflow sources the gate and calls it before the destroy_count sum, without [ack-destroy]" bash -c '
-  w="$(grep -vE "^[[:space:]]*#" "$1")"; a="$(grep -n "deploy_policy_gate \"\$counts\" \"\$HEAD_MSG\" || exit 1" <<<"$w" | head -1 | cut -d: -f1)"; d="$(grep -n "^[[:space:]]*destroy_count=" <<<"$w" | head -1 | cut -d: -f1)"
+  w="$(grep -vE "^[[:space:]]*#" "$1")"; a="$(grep -nE "deploy_policy_gate \"\\\$counts\" \"\\\$[A-Z_]+\" \|\| exit 1" <<<"$w" | head -1 | cut -d: -f1)"; d="$(grep -n "^[[:space:]]*destroy_count=" <<<"$w" | head -1 | cut -d: -f1)"
   [[ -n "$a" && -n "$d" && "$a" -lt "$d" ]] && grep -qF "tests/scripts/lib/deploy-policy-gate.sh" <<<"$w"' _ "$WF"
+check     "G11: the gate input is fed from event.commits messages, not the tip alone (coalesced-merge ack)" bash -c '
+  w="$(grep -vE "^[[:space:]]*#" "$1")"
+  grep -qF "EVENT_MSGS_JSON: \${{ toJSON(github.event.commits.*.message) }}" <<<"$w" && grep -qF "deploy_policy_gate \"\$counts\" \"\$POLICY_MSGS\" || exit 1" <<<"$w"' _ "$WF"
 
 # ── source mutants: every predicate above must be able to fail ─────────────────────────────────────────────────────────────
 cp "$TF" "$SBX/orig.tf"
@@ -150,9 +153,9 @@ mtf m_output 's += "\noutput \"access_service_token_client_secret\" {\n  value =
 check_not "M4: re-adding a deploy-token output fails S5" p_no_outputs "$SBX/m_output.tf"
 mtf m_ref 's = s.replace("local.deploy_service_token_ids\n  }\n\n  lifecycle", "local.deploy_service_token_ids == null ? [] : []\n  }\n\n  lifecycle", 1)' || bad "M-landing: m_ref"
 check_not "M5: a policy include that is not exactly the local fails S3" p_policy_local "$SBX/m_ref.tf"
-mtf m_uuid 's = s.replace("deploy_service_token_ids = [\"baa7825d-c52a-4cc4-bfe4-300140ed6bcb\"]", "deploy_service_token_ids = [\"00000000-0000-4000-8000-000000000001\"]", 1)' || bad "M-landing: m_uuid"
+mtf m_uuid 'import re; s = re.sub(r"deploy_service_token_ids = \[[^]]*\]", "deploy_service_token_ids = [\"00000000-0000-4000-8000-000000000001\"]", s, count=1)' || bad "M-landing: m_uuid"
 check     "M6: a UUID in the local satisfies S7 (the positive control: S7 can pass)" p_locals_uuid "$SBX/m_uuid.tf"
-mtf m_baduuid 's = s.replace("deploy_service_token_ids = [\"baa7825d-c52a-4cc4-bfe4-300140ed6bcb\"]", "deploy_service_token_ids = [\"not-a-uuid\"]", 1)' || bad "M-landing: m_baduuid"
+mtf m_baduuid 'import re; s = re.sub(r"deploy_service_token_ids = \[[^]]*\]", "deploy_service_token_ids = [\"not-a-uuid\"]", s, count=1)' || bad "M-landing: m_baduuid"
 check_not "M7: a non-UUID entry fails S7" p_locals_uuid "$SBX/m_baduuid.tf"
 mkdir -p "$SBX/rootcopy"; cp "$INFRA"/*.tf "$SBX/rootcopy/"
 printf 'variable "deploy_service_token_ids" {\n  type    = list(string)\n  default = ["x"]\n}\n' > "$SBX/rootcopy/zz-extra.tf"
