@@ -9,6 +9,7 @@ import {
   NEEDS_YOU_CAP,
   type InboxItemRowData,
   type InboxItemSeverity,
+  type LegalInboxRowData,
 } from "@/lib/inbox-severity";
 
 function email(overrides: Partial<EmailTriageItem>): EmailTriageItem {
@@ -178,5 +179,76 @@ describe("buildInboxDeepLink — from source_ref ids, null when target absent", 
   });
   it("not-yet-shipped autopilot_run is non-navigating", () => {
     expect(buildInboxDeepLink("autopilot_run", { any: "x" })).toBeNull();
+  });
+});
+
+// ---- legal rows (CTO ruling T7, Ref #12197): a third merged variant. The sort-time ternary, the badge count and the
+// partition must all treat it as a first-class item, never as an `inbox` row (m.inbox is undefined on it).
+function legalRow(overrides: Partial<LegalInboxRowData> = {}): LegalInboxRowData {
+  return {
+    key: "founder-acceptance-record",
+    label: "How your decisions are recorded and kept",
+    version: "2026-11-07",
+    validUntil: null,
+    state: "pending",
+    severity: "action_required",
+    outstanding: true,
+    ...overrides,
+  };
+}
+
+describe("mergeAndRank - legal rows", () => {
+  it("wraps a legal row as kind:legal, unpinned, with the row facts under `legal` only", () => {
+    const [m] = mergeAndRank([], [], [legalRow()]);
+    expect(m).toEqual({
+      kind: "legal",
+      id: "founder-acceptance-record",
+      severity: "action_required",
+      pinned: false,
+      outstanding: true,
+      legal: {
+        key: "founder-acceptance-record",
+        label: "How your decisions are recorded and kept",
+        version: "2026-11-07",
+        validUntil: null,
+        state: "pending",
+      },
+    });
+  });
+
+  it("does not crash sorting a legal row beside inbox rows (sort time is the version date)", () => {
+    const older = inbox({ id: "i-old", severity: "action_required", created_at: "2026-06-01T00:00:00.000Z" });
+    const newer = inbox({ id: "i-new", severity: "action_required", created_at: "2026-12-01T00:00:00.000Z" });
+    const merged = mergeAndRank([older, newer], [], [legalRow()]);
+    // recency DESC inside NEEDS YOU: newer inbox (Dec) > legal (2026-11-07) > older inbox (Jun)
+    expect(merged.map((m) => m.id)).toEqual(["i-new", "founder-acceptance-record", "i-old"]);
+  });
+
+  it("a statutory email stays pinned above a pending legal row", () => {
+    const merged = mergeAndRank([], [email({ id: "e1", statutory_class: "breach" })], [legalRow()]);
+    expect(merged.map((m) => m.kind)).toEqual(["email", "legal"]);
+  });
+
+  it("an unparseable version sorts as time 0 instead of throwing", () => {
+    const merged = mergeAndRank([inbox({ id: "i", severity: "action_required" })], [], [legalRow({ version: "not-a-date" })]);
+    expect(merged.map((m) => m.id)).toEqual(["i", "founder-acceptance-record"]);
+  });
+
+  it("a pending legal row counts toward the badge; an answered one does not", () => {
+    const pending = mergeAndRank([], [], [legalRow()]);
+    expect(countOutstandingActionRequired(pending)).toBe(1);
+    const answered = mergeAndRank([], [], [legalRow({ state: "accepted", severity: "info", outstanding: false })]);
+    expect(countOutstandingActionRequired(answered)).toBe(0);
+  });
+
+  it("partitions a pending legal row under NEEDS YOU and an answered one under GOOD TO KNOW", () => {
+    const merged = mergeAndRank(
+      [],
+      [],
+      [legalRow(), legalRow({ key: "other-text", state: "declined", severity: "info", outstanding: false })],
+    );
+    const part = partitionForDisplay(merged);
+    expect(part.needsYouVisible.map((m) => m.id)).toEqual(["founder-acceptance-record"]);
+    expect(part.goodToKnow.map((m) => m.id)).toEqual(["other-text"]);
   });
 });

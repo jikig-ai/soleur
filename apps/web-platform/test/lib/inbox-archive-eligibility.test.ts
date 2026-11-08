@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   archiveEligibility,
+  isArchiveCandidate,
   emailRowEligibility,
   inboxRowEligibility,
   keyOf,
   REASON_COPY,
+  type ArchivableInboxItem,
   type ArchiveEligibilityReason,
 } from "@/lib/inbox-archive-eligibility";
 import type { MergedInboxItem } from "@/lib/inbox-severity";
@@ -32,7 +34,7 @@ const email = (
 const mergedEmail = (
   status: string,
   statutory_class: string | null,
-): MergedInboxItem => ({
+): ArchivableInboxItem => ({
   kind: "email",
   id: "e1",
   severity: statutory_class ? "action_required" : "info",
@@ -45,7 +47,7 @@ const mergedInbox = (
   severity: "action_required" | "attention" | "info",
   acted_at: string | null,
   status: "unread" | "read" | "archived" = "read",
-): MergedInboxItem => ({
+): ArchivableInboxItem => ({
   kind: "inbox",
   id: "i1",
   severity,
@@ -139,5 +141,22 @@ describe("REASON_COPY", () => {
     }
     // No copy for the archivable case — it has no disabled state.
     expect("ok" in REASON_COPY).toBe(false);
+  });
+});
+
+describe("isArchiveCandidate (legal rows are never archivable, Ref #12197)", () => {
+  const legal: MergedInboxItem = {
+    kind: "legal",
+    id: "founder-acceptance-record",
+    severity: "info",
+    pinned: false,
+    outstanding: false,
+    legal: { key: "founder-acceptance-record", label: "L", version: "2026-11-07", validUntil: null, state: "accepted" },
+  };
+
+  it("is false for a legal row and true for an email or inbox row", () => {
+    expect(isArchiveCandidate(legal)).toBe(false);
+    expect(isArchiveCandidate(mergedEmail("new", null))).toBe(true);
+    expect(isArchiveCandidate(mergedInbox("info", null))).toBe(true);
   });
 });

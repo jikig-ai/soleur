@@ -98,6 +98,13 @@ describe("inbox_list agent tool (agent-native parity)", () => {
     expect(items.map((i) => i.id)).toContain("native");
   });
 
+  it("never carries a legal row: the agent output is built from the two-source merge only (the founder's legal rows are not agent data)", async () => {
+    const res = await getListTool().handler({});
+    const items = JSON.parse(res.content[1].text) as Array<{ kind: string }>;
+    expect(items.map((i) => i.kind).sort()).toEqual(["email", "inbox"]);
+    expect(JSON.stringify(items)).not.toContain("legal_acceptance");
+  });
+
   it("passes archived through to the shared fetch helper", async () => {
     await getListTool().handler({ status: "archived" });
     expect(fetchInboxSources).toHaveBeenCalledWith(expect.anything(), {

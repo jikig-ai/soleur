@@ -18,6 +18,9 @@ const SERVER_MODULES = [
   "../server/inbox-tools.ts",
   "../server/inbox-state-handler.ts",
   "../server/inbox-bulk-archive-handler.ts",
+  // The founder's legal rows are read through the request's user-context client (RLS: migration 184 gives `authenticated` a
+  // founder-only SELECT); the service key has no grant on the table. Ref #12197.
+  "../server/legal-acceptance/inbox-rows.ts",
 ].map((p) => path.join(__dirname, p));
 
 function walk(dir: string): string[] {
