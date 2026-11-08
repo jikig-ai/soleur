@@ -6,15 +6,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { LegalAcceptanceCard, type LegalAcceptanceCardProps, type LegalRowFacts } from "@/components/approvals/legal-acceptance-card";
-import { LEGAL_COPY } from "@/lib/legal-acceptance-copy";
+import { LEGAL_COPY, LEGAL_KIND_COPY } from "@/lib/legal-acceptance-copy";
+import { FORBIDDEN_CLAIMS } from "./forbidden-claims";
 import { OTP_RESEND_COOLDOWN_MS } from "@/lib/auth/constants";
 import type { LegalChoiceWire, LegalDecideResult, LegalReauthSendResult, LegalReauthVerifyResult } from "@/lib/legal-acceptance-wire";
+
+// `customer-terms` and `other-terms` are not in the real LEGAL_TEXT_KIND (only the committed text is), so the kind lookup the card
+// uses reads a per-test map. Each describe sets what it needs; no fixture key is registered on the real (Readonly) map.
+const k = vi.hoisted(() => ({ declared: {} as Record<string, "terms" | "acknowledgement"> }));
+vi.mock("@/lib/legal-acceptance-copy", async (orig) => {
+  const real = await orig<typeof import("@/lib/legal-acceptance-copy")>();
+  return { ...real, legalKindCopy: (key: string) => real.legalKindCopy(key, k.declared), legalTextKind: (key: string) => real.legalTextKind(key, k.declared) };
+});
+/** The terms wording: today's strings, moved into the kind map. */
+const KC = LEGAL_KIND_COPY.terms;
 
 const HASH = "c".repeat(64);
 const BODY = "CUSTOMER TERMS\n\n1. Who these terms are between.\n\n2. What we provide.\n\nEnd of version 3.\n";
 
 const baseProps: LegalAcceptanceCardProps = {
   keyName: "customer-terms",
+  label: "Customer terms",
   version: "3",
   body: BODY,
   textHash: HASH,
@@ -33,6 +45,7 @@ function renderCard(over: Partial<LegalAcceptanceCardProps> = {}) {
 // ---- layout stubs: happy-dom has no layout, so the text viewport is faked ---------------------------------------------
 let layout = { scrollHeight: 0, clientHeight: 0 };
 beforeEach(() => {
+  k.declared = { "customer-terms": "terms", "other-terms": "terms" };
   layout = { scrollHeight: 0, clientHeight: 0 };
   Object.defineProperty(HTMLElement.prototype, "scrollHeight", { configurable: true, get: () => layout.scrollHeight });
   Object.defineProperty(HTMLElement.prototype, "clientHeight", { configurable: true, get: () => layout.clientHeight });
@@ -107,14 +120,21 @@ describe("the six card states (AC14, wireframe 16)", () => {
   it("pending: needs your answer, open until the valid-until date, nothing accepted", () => {
     renderCard();
     expect(screen.getByText(LEGAL_COPY.pending.badge)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: LEGAL_COPY.pending.title("Customer terms") })).toBeInTheDocument();
-    expect(screen.getByText(LEGAL_COPY.pending.nothingAccepted)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: KC.pendingTitle("Customer terms") })).toBeInTheDocument();
+    expect(screen.getByText(KC.pendingNothing)).toBeInTheDocument();
     expect(screen.getByText(LEGAL_COPY.pending.openUntil("2026-11-14"))).toBeInTheDocument();
+  });
+
+  it("exposes the declared kind and the key on the article for agent-browser parity (the terms kind here; card-ack.test.tsx pins the acknowledgement kind)", () => {
+    renderCard();
+    const card = screen.getByTestId("legal-card");
+    expect(card).toHaveAttribute("data-kind", "terms");
+    expect(card).toHaveAttribute("data-key", "customer-terms");
   });
 
   it("accepted: says how the answer was given, with the UTC time of the email code", () => {
     renderCard({ state: "accepted", row: row("accept", { reauthAt: "2026-11-04T10:42:00Z" }) });
-    expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument();
+    expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument();
     expect(screen.getByText("Confirmed with an email code, Wed 4 Nov 2026, 10:42 UTC")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Yes/ })).toBeNull();
   });
@@ -123,7 +143,7 @@ describe("the six card states (AC14, wireframe 16)", () => {
     renderCard({ state: "declined", row: row("decline") });
     expect(screen.getByText(LEGAL_COPY.declined.badge)).toBeInTheDocument();
     expect(screen.getByText(LEGAL_COPY.signedInLine)).toBeInTheDocument();
-    expect(screen.getByText(LEGAL_COPY.declined.body)).toBeInTheDocument();
+    expect(screen.getByText(KC.declinedBody)).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -132,7 +152,7 @@ describe("the six card states (AC14, wireframe 16)", () => {
     expect(screen.getByText(LEGAL_COPY.changesRequested.badge)).toBeInTheDocument();
     expect(screen.getByText("Please shorten section 5.")).toBeInTheDocument();
     expect(screen.getByText(LEGAL_COPY.signedInLine)).toBeInTheDocument();
-    expect(screen.getByText(LEGAL_COPY.changesRequested.body)).toBeInTheDocument();
+    expect(screen.getByText(KC.changesRequestedBody)).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -148,7 +168,7 @@ describe("the six card states (AC14, wireframe 16)", () => {
     renderCard({ state: "expired", validUntil: "2026-11-01" });
     expect(screen.getByText(LEGAL_COPY.expired.badge)).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: LEGAL_COPY.expired.title })).toBeInTheDocument();
-    expect(screen.getByText(LEGAL_COPY.expired.body)).toBeInTheDocument();
+    expect(screen.getByText(KC.expiredBody)).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
   });
 
@@ -162,7 +182,7 @@ describe("the six card states (AC14, wireframe 16)", () => {
       ["expired", null],
     ] as const) {
       const { container, unmount } = renderCard({ state, row: r });
-      expect(container.textContent ?? "").not.toMatch(/verified|reviewed|legally binding|audit-ready|compliant/i);
+      expect(container.textContent ?? "").not.toMatch(FORBIDDEN_CLAIMS);
       unmount();
     }
   });
@@ -179,7 +199,7 @@ describe("pending card: the notices and the read-only mode", () => {
 
   it("with the approval-queue flag off the text still renders but there are no actions and a plain 'not available yet'", () => {
     renderCard({ flagEnabled: false });
-    expect(screen.getByText(LEGAL_COPY.pending.notAvailable)).toBeInTheDocument();
+    expect(screen.getByText(KC.pendingNotAvailable)).toBeInTheDocument();
     expect(screen.getByText(/End of version 3/)).toBeInTheDocument();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("textbox")).toBeNull();
@@ -464,7 +484,7 @@ describe("the in-place email check (AC10, AC11)", () => {
     await openDialogAndSendCode(user);
     await enterCode(user);
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
-    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument());
     expect(f.calls.map((c) => `${c.url.split("/").pop()}:${String(c.body.step ?? c.body.choice)}`)).toEqual(["reauth:send", "reauth:verify", "decide:accept"]);
     expect(f.calls[1].body).toEqual({ step: "verify", code: "481902" });
     expect(f.calls[2].body).toEqual({ choice: "accept", textHash: HASH });
@@ -541,7 +561,7 @@ describe("the in-place email check (AC10, AC11)", () => {
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
     expect(await screen.findByRole("alert")).toHaveTextContent(LEGAL_COPY.dialog.verifyError[reason]);
     expect(f.decides()).toHaveLength(0);
-    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
+    expect(screen.queryByText(KC.acceptedBadge)).toBeNull();
   });
 
   it("Send me a new code sends with resend:true (once the cooldown has passed)", async () => {
@@ -580,7 +600,7 @@ describe("the in-place email check (AC10, AC11)", () => {
     await enterCode(user);
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
     expect(await screen.findByRole("alert")).toHaveTextContent(message);
-    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
+    expect(screen.queryByText(KC.acceptedBadge)).toBeNull();
   });
 
   it("a failed decide after a good code shows an error, never success, and a retry sends decide only (not verify again)", async () => {
@@ -599,9 +619,9 @@ describe("the in-place email check (AC10, AC11)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(LEGAL_COPY.errors.unknownResult);
     expect(alert).not.toHaveTextContent("Nothing was recorded");
-    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
+    expect(screen.queryByText(KC.acceptedBadge)).toBeNull();
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
-    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument());
     expect(f.calls.filter((c) => c.body.step === "verify")).toHaveLength(1);
     expect(f.decides()).toHaveLength(2);
   });
@@ -614,7 +634,7 @@ describe("the in-place email check (AC10, AC11)", () => {
     await enterCode(user);
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
     expect(await screen.findByRole("alert")).toHaveTextContent(LEGAL_COPY.errors.unknownResult);
-    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
+    expect(screen.queryByText(KC.acceptedBadge)).toBeNull();
   });
 
   it("two tabs: already_recorded on the Yes path shows the accepted state from the server's answer", async () => {
@@ -628,7 +648,7 @@ describe("the in-place email check (AC10, AC11)", () => {
     await openDialogAndSendCode(user);
     await enterCode(user);
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
-    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument());
     expect(screen.getByText("Confirmed with an email code, Wed 4 Nov 2026, 10:41 UTC")).toBeInTheDocument();
   });
 
@@ -681,7 +701,7 @@ describe("the email code no longer counts: 403 reverify (contract 1)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(LEGAL_COPY.dialog.reverify);
     expect(alert).not.toHaveTextContent(LEGAL_COPY.errors.unknownResult);
-    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
+    expect(screen.queryByText(KC.acceptedBadge)).toBeNull();
     // Back on the send step: the code box is gone and a fresh code is the only way forward.
     expect(screen.queryByLabelText(LEGAL_COPY.dialog.codeLabel)).toBeNull();
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.sendCode }));
@@ -689,7 +709,7 @@ describe("the email code no longer counts: 403 reverify (contract 1)", () => {
     expect(screen.getByLabelText(LEGAL_COPY.dialog.codeLabel)).toHaveValue("");
     await enterCode(user, "123456");
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
-    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument());
     expect(f.calls.filter((c) => c.body.step === "verify")).toHaveLength(2);
   });
 
@@ -711,7 +731,7 @@ describe("the email code no longer counts: 403 reverify (contract 1)", () => {
     expect(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord })).toBeDisabled();
     await enterCode(user, "654321");
     await user.click(screen.getByRole("button", { name: LEGAL_COPY.dialog.confirmAndRecord }));
-    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument());
     expect(f.calls.filter((c) => c.body.step === "verify")).toHaveLength(2);
   });
 });
@@ -747,7 +767,7 @@ describe("a decide in flight cannot be discarded (Go back, Escape)", () => {
       release(null);
       await gate;
     });
-    await waitFor(() => expect(screen.getByText(LEGAL_COPY.accepted.badge)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(KC.acceptedBadge)).toBeInTheDocument());
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
@@ -985,6 +1005,6 @@ describe("No / Request changes have no code step: how the card words a 403 rever
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(LEGAL_COPY.errors.unknownResult);
     expect(alert).not.toHaveTextContent("Nothing was recorded");
-    expect(screen.queryByText(LEGAL_COPY.accepted.badge)).toBeNull();
+    expect(screen.queryByText(KC.acceptedBadge)).toBeNull();
   });
 });

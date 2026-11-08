@@ -29,6 +29,30 @@
 # Fail-closed conditions (deny + emit_incident):
 #   - PR body contains operator-step accretions without OPEN
 #     `deferred-automation` / `automation gap` companion issues
+#
+# The `parked` barrier (#12197, CTO rulings 2026-11-07 and 2026-11-08), a SEPARATE branch that runs first. It is a BEST-EFFORT
+# GUARDRAIL against accidental merges by agent sessions working in a checkout that carries this file. It is NOT an access
+# control: the real hold on a parked PR is its DRAFT status (GitHub refuses to merge a draft; drain-prs excludes drafts), and this
+# hook is absent from origin/main until the pull request that adds it merges, so a session on a main-based checkout does not run
+# it. While a PR carries the existing `parked` label ("Reviewed draft held until an approved window; do not merge or arm
+# auto-merge"), a `gh pr merge` that is not `--disable-auto` (plain, --auto, --admin, chained, quoted, wrapped in `bash -c`, a
+# PR URL, `-R/--repo`, a `gh api` merge or a GraphQL merge/enqueue mutation) is denied, and so is anything that removes or
+# replaces the label (`gh pr|issue edit --remove-label`, `gh label delete|edit`, a `gh api` write on the labels). A merge whose
+# target cannot be read as a literal PR number (a shell variable, a branch name) is denied while ANY open PR is parked, and a
+# failed or hung label read (bounded by `timeout`, default 10 s) fails CLOSED. `gh pr ready` is not blocked. The override
+# SOLEUR_SKIP_OPERATOR_STEP_GATE does not lift it: the operator clears the label in the UI or in their own terminal, then the
+# hold line is rewritten. Limits, stated plainly: it matches command TEXT, so a merge hidden in a script file, built from `$GH`,
+# run from a GitHub Actions job (schedule), or made by a human or an admin UI merge is not seen; the other merge sites in skills
+# and scripts do not check `parked`. `xargs` before a gh write holds while ANY PR is parked (its targets come from stdin).
+# Accepted limits, deliberate and not planned for further hardening (server-side enforcement in #12396 supersedes all of them):
+#   - wrappers that take an option value or are not in the prefix list (`env -u X gh ...`, `sudo -u root gh ...`, `doppler run --
+#     gh ...`, `stdbuf`, `ionice`, `script -c`, `ssh host gh ...`);
+#   - a shell fed from a heredoc, process substitution or a pipe (`bash <<EOF ... EOF`, `bash <(...)`, `source <(...)`,
+#     `echo "gh pr merge 7" | bash`), and a script file (`bash run.sh`);
+#   - ANSI-C quoting with an escaped quote (`$'it\'s'`), which the walker reads as closing the span early;
+#   - the incident row records the first 200 characters of the command, unredacted, in the gitignored .claude/.rule-incidents* ledger.
+# A command substitution inside double quotes that cannot be balanced holds while ANY PR is parked (fail closed). Escaped backticks
+# and `\$(` inside double quotes are literal text and are not read as commands.
 
 set -eo pipefail
 
@@ -80,6 +104,360 @@ if command -v strip_command_bodies >/dev/null 2>&1; then
 else
   SCAN="$CMD"
 fi
+# ---- the parked barrier (see the header) ---------------------------------------------------------------------------------
+# Runs BEFORE the ready / merge --auto trigger below, which stays exactly as it was. Only heredoc BODIES are blanked here
+# (strip_heredocs); the statement splitter below (PARKED_AWK) then decides what is a command and what is only text, so that
+# `bash -c "gh pr merge 7"` is read and `git commit -m "docs: gh pr merge 7"` is not.
+if command -v strip_heredocs >/dev/null 2>&1; then
+  PSCAN=$(strip_heredocs "$CMD")
+else
+  PSCAN="$CMD"
+fi
+PARKED_GH_TIMEOUT="${SOLEUR_PARKED_GH_TIMEOUT:-10}"
+[[ "$PARKED_GH_TIMEOUT" =~ ^[0-9]+$ ]] || PARKED_GH_TIMEOUT=10
+parked_incident() {
+  declare -f emit_incident >/dev/null 2>&1 || return 0
+  emit_incident parked-merge-barrier deny "parked barrier blocked a merge, enqueue or un-park" "${CMD:0:200}" 2>/dev/null || true
+}
+parked_deny() {
+  local why="$1"
+  parked_incident
+  jq -nc --arg r "$why" '{decision: "deny", reason: $r}'
+  exit 0
+}
+# Every gh READ the barrier makes is bounded: a hung gh must read as "could not read" (deny), not as a hook timeout the
+# harness may treat as non-blocking.
+parked_gh() {
+  if command -v timeout >/dev/null 2>&1; then timeout "$PARKED_GH_TIMEOUT" gh "$@"; else gh "$@"; fi
+}
+# parked_check_pr <n> [repo]: deny when PR n carries the label (any case) or its labels cannot be read.
+parked_check_pr() {
+  local n="$1" repo="${2:-}" labels
+  local -a ra=()
+  [[ -n "$repo" ]] && ra=(--repo "$repo")
+  if ! labels=$(parked_gh pr view "$n" "${ra[@]}" --json labels --jq '.labels[].name' 2>/dev/null); then
+    parked_deny "Could not read the labels of PR #${n}, so the 'parked' barrier fails closed: merge and enqueue of a held PR are reserved for the operator. Retry once gh answers."
+  fi
+  if grep -qixF 'parked' <<<"$labels"; then
+    parked_deny "PR #${n} carries the 'parked' label: merge and enqueue of this PR are reserved for the operator. Agent sessions on this branch and drain-prs do not merge or arm auto-merge on it; the PR's DRAFT status is the real hold. The operator removes the label (GitHub UI or their own terminal), then the hold line in the plan is rewritten. This is not overridable by SOLEUR_SKIP_OPERATOR_STEP_GATE."
+  fi
+}
+# parked_any_hold <why> [repo]: deny when ANY open PR carries the label, for a command whose target is not a literal PR number.
+parked_any_hold() {
+  local why="$1" repo="${2:-}" c
+  local -a ra=()
+  [[ -n "$repo" ]] && ra=(--repo "$repo")
+  if ! c=$(parked_gh pr list --label parked --state open "${ra[@]}" --json number --jq length 2>/dev/null) || [[ ! "$c" =~ ^[0-9]+$ ]]; then
+    parked_deny "Could not list the open 'parked' PRs, so the barrier fails closed for ${why}. Retry once gh answers."
+  fi
+  if (( c > 0 )); then
+    parked_deny "${why} cannot be matched to a literal PR number, and ${c} open PR(s) carry the 'parked' label: merge, enqueue and label changes on a held PR are reserved for the operator. Use the literal PR number (the barrier then checks that PR only)."
+  fi
+}
+# The statement splitter. gh is recognised only at COMMAND POSITION, so a commit message, an echo or a grep that merely MENTIONS
+# `gh pr merge 7` is not a command. The shell grammar this has to respect is small, and an awk character walker reads it once:
+#   - a quoted span is one word; its content is hidden from the command-position view (B, the span becomes `Q`) and kept for the
+#     argument view (P, spaces inside it become \001, an empty span becomes \004), so both views have the SAME words;
+#   - EXCEPT the quoted argument of `bash|sh|zsh|dash|ksh -c` or of `eval`: that text IS a command, so it is spliced into the stream
+#     as if it were unquoted;
+#   - a command substitution inside double quotes ("$(gh pr merge "7")") is scanned to its matching ) or backtick, nested quotes
+#     included (they do not end the outer span), queued, and walked as its own text; a backslash pair (\` or \$() is literal;
+#   - ; | & && || ( ) { } and a backtick end a statement, except the & of a redirection (2>&1, &>) and the braces of ${...};
+#   - a backslash-newline joins lines, and an UNQUOTED # starts a comment.
+# Input: the command with newlines turned into \002. Output: one `B<TAB>P` line per non-empty statement.
+read -r -d '' PARKED_AWK <<'AWK' || true
+function flush(   b, p) {
+  b = B; p = P; B = ""; P = ""
+  if (b ~ /^[ ]*$/) return
+  gsub(/\t/, " ", b); gsub(/\t/, " ", p)
+  print b "\t" p
+}
+function add(x) { B = B x; P = P x }
+function lastword(   t) { t = B; sub(/[ ]+$/, "", t); sub(/^.*[ ]/, "", t); return t }
+function ispayload(   lw) {
+  lw = lastword()
+  if (lw == "eval") return 1
+  if (lw ~ /^-[A-Za-z]*c$/ && B ~ /(^|[ \/])(bash|sh|zsh|dash|ksh)[ ]/) return 1
+  return 0
+}
+function subend(s, p, L,   k, d, ch) {
+  # Index of the ")" that closes a "$(" whose body starts at p, skipping backslash pairs and nested '..' / ".." spans; 0 = unbalanced.
+  d = 1; k = p
+  while (k <= L) {
+    ch = substr(s, k, 1)
+    if (ch == "\\") { k += 2; continue }
+    if (ch == "'") { k++; while (k <= L && substr(s, k, 1) != "'") k++; k++; continue }
+    if (ch == "\"") {
+      k++
+      while (k <= L && substr(s, k, 1) != "\"") { if (substr(s, k, 1) == "\\") k++; k++ }
+      k++; continue
+    }
+    if (ch == "(") d++
+    else if (ch == ")") { d--; if (d == 0) return k }
+    k++
+  }
+  return 0
+}
+function btend(s, p, L,   k) {
+  # Index of the backtick that closes a backtick substitution whose body starts at p (a backslash pair is skipped); 0 = unbalanced.
+  k = p
+  while (k <= L) {
+    if (substr(s, k, 1) == "\\") { k += 2; continue }
+    if (substr(s, k, 1) == "`") return k
+    k++
+  }
+  return 0
+}
+function endq(content) {
+  gsub("[ \t\002]", "\001", content)
+  if (content == "") content = "\004"
+  B = B "Q"; P = P content
+}
+function walk(s,   L, i, c, nx, q, qc, pd, j) {
+  L = length(s); i = 1; q = ""; qc = ""; pd = ""
+  while (i <= L) {
+    c = substr(s, i, 1); nx = substr(s, i + 1, 1)
+    if (q == "'") {
+      if (c == "'") { endq(qc); q = ""; qc = "" } else qc = qc c
+      i++; continue
+    }
+    if (q == "\"") {
+      # A backslash pair is literal text (so \` and \$( are not substitutions). An UNESCAPED $( or backtick is a command
+      # substitution: its whole span, nested quotes included, stays inside this word and its body is queued to be walked as a
+      # command. A span that cannot be balanced is reported (UNB) and the shell side fails closed.
+      if (c == "\\" && i < L) { qc = qc c nx; i += 2; continue }
+      if (c == "\"") { endq(qc); q = ""; qc = ""; i++; continue }
+      if (c == "$" && nx == "(") {
+        j = subend(s, i + 2, L)
+        if (j == 0) { UNB = 1; qc = qc c; i++; continue }
+        QUEUE[++QT] = substr(s, i + 2, j - i - 2); qc = qc substr(s, i, j - i + 1); i = j + 1; continue
+      }
+      if (c == "`") {
+        j = btend(s, i + 1, L)
+        if (j == 0) { UNB = 1; qc = qc c; i++; continue }
+        QUEUE[++QT] = substr(s, i + 1, j - i - 1); qc = qc substr(s, i, j - i + 1); i = j + 1; continue
+      }
+      qc = qc c; i++; continue
+    }
+    if (c == "\\") {
+      if (nx == "\002") { add(" "); i += 2; continue }
+      if (i < L) { add(c nx); i += 2; continue }
+      add(c); i++; continue
+    }
+    if (c == " " || c == "\t") { add(" "); i++; continue }
+    if (c == "\002") { flush(); i++; continue }
+    if (c == "#") {
+      if (B == "" || B ~ /[ ]$/) { while (i <= L && substr(s, i, 1) != "\002") i++; continue }
+      add(c); i++; continue
+    }
+    if (c == "'" || c == "\"") {
+      if (c == pd) { pd = ""; i++; continue }
+      if (pd == "" && ispayload()) { pd = c; i++; continue }
+      q = c; qc = ""; i++; continue
+    }
+    if (c == "$" && nx == "{") {
+      j = index(substr(s, i), "}")
+      if (j > 0) { add(substr(s, i, j)); i += j; continue }
+    }
+    if (c == "{" && nx == "}") { add("{}"); i += 2; continue }   # the literal word {} (xargs -I{}, find -exec ... {}), not a brace group
+    if (c == ";" || c == "|" || c == "(" || c == ")" || c == "`" || c == "{" || c == "}") { flush(); i++; continue }
+    if (c == "&") {
+      if (nx == "&") { flush(); i += 2; continue }
+      if (nx == ">" || substr(s, i - 1, 1) == ">" || substr(s, i - 1, 1) == "<") { add(c); i++; continue }
+      flush(); i++; continue
+    }
+    add(c); i++
+  }
+  if (q != "") endq(qc)
+  flush()
+}
+BEGIN { B = ""; P = ""; QT = 0; UNB = 0 }
+{ walk($0) }
+END { h = 1; while (h <= QT) { walk(QUEUE[h]); h++ }; if (UNB) print "!UNB\t!UNB" }
+AWK
+# The words that may stand BEFORE `gh` in a command (wrappers, assignments, flags, keywords). Anything else before it means `gh`
+# is an argument of some other command (git commit -m ..., echo, grep) and is not run.
+PARKED_PREFIX_RE='^([A-Za-z_][A-Za-z0-9_]*=.*|env|sudo|command|nice|nohup|time|timeout|watch|xargs|rtk|run|err|test|proxy|bypass|summary|exec|builtin|eval|bash|sh|zsh|dash|ksh|if|then|do|else|elif|while|until|!|-.*|[0-9][0-9.]*[smhd]?)$'
+# parked_is_parked <word>: the word names the label (any case, \001 spaces dropped).
+parked_is_parked() {
+  local v=${1//$'\001'/}
+  v=${v//[[:space:]]/}
+  grep -qixF 'parked' <<<"$v"
+}
+# parked_removes_label <args...>: a --remove-label (or =) value that lists the label, among others or alone.
+parked_removes_label() {
+  local -a a=("$@") items=()
+  local i v item
+  for ((i = 0; i < ${#a[@]}; i++)); do
+    v=""
+    case "${a[i]}" in
+      --remove-label) v=${a[i+1]:-} ;;
+      --remove-label=*) v=${a[i]#--remove-label=} ;;
+    esac
+    [[ -n "$v" ]] || continue
+    IFS=',' read -ra items <<<"$v" || true
+    for item in "${items[@]}"; do
+      if parked_is_parked "$item"; then return 0; fi
+    done
+  done
+  return 1
+}
+# parked_statement <B view> <P view>: judge one statement.
+parked_num() { local v="$1"; while [[ "$v" == 0?* ]]; do v=${v#0}; done; printf '%s' "$v"; }
+parked_statement() {
+  local -a bt=() pt=() rest=() args=() prs=()
+  local nb i gi=-1 t base wl=0 fx=0 k=0 nr c1 c2 repo="" tok skip=0 nonflag=0 n cur rc=0 method="" mu txt hasfield=0 xa=0 isgql=0 disarm=0 help=0
+  if [[ "$1" == '!UNB' ]]; then
+    # A command substitution inside double quotes that the walker could not balance: fail closed while any PR is parked.
+    parked_any_hold "A command substitution the barrier cannot balance"
+    return 0
+  fi
+  read -ra bt <<<"$1" || true
+  read -ra pt <<<"$2" || true
+  nb=${#bt[@]}
+  (( nb > 0 )) || return 0
+  [[ ${#pt[@]} -eq $nb ]] || pt=("${bt[@]}")
+  for ((i = 0; i < nb; i++)); do
+    t=${bt[i]}; base=${t##*/}; base=${base#\\}
+    if [[ "$base" == gh ]]; then gi=$i; break; fi
+    if (( wl )); then [[ "$t" == -- ]] && wl=0; continue; fi
+    if (( fx )); then [[ "$t" == -exec || "$t" == -execdir ]] && fx=0; continue; fi
+    case "$t" in
+      with_lock) wl=1; continue ;;
+      find) fx=1; continue ;;
+    esac
+    [[ "$base" == xargs ]] && xa=1
+    # The word itself (an assignment like FOO=/usr/bin keeps its slash) or its basename (/usr/bin/env, /bin/bash) names a wrapper.
+    [[ "$t" =~ $PARKED_PREFIX_RE || "$base" =~ $PARKED_PREFIX_RE ]] || return 0
+  done
+  (( gi >= 0 )) || return 0
+  rest=("${pt[@]:gi+1}"); nr=${#rest[@]}
+  for ((i = 0; i < nr; i++)); do
+    case "${rest[i]}" in
+      -R|--repo) repo=${rest[i+1]:-} ;;
+      --repo=*) repo=${rest[i]#--repo=} ;;
+    esac
+  done
+  repo=${repo//$'\001'/}
+  while (( k < nr )); do
+    case "${rest[k]}" in
+      -R|--repo) k=$((k + 2)) ;;
+      -*) k=$((k + 1)) ;;
+      *) break ;;
+    esac
+  done
+  c1=${rest[k]:-}; c2=${rest[k+1]:-}
+  args=("${rest[@]:k+2}")
+  # A write fed by xargs takes its targets from stdin, which the text does not show: hold it while ANY PR is parked.
+  if (( xa )) && { [[ "$c1" == pr && ( "$c2" == merge || "$c2" == edit ) ]] || [[ "$c1" == issue && "$c2" == edit ]] || [[ "$c1" == label || "$c1" == api ]]; }; then
+    parked_any_hold "A gh write fed by xargs (its targets come from stdin)" "$repo"
+  fi
+  # Removing or renaming the label: never allowed from an agent session, whatever the PR carries.
+  if [[ "$c1" == pr || "$c1" == issue ]] && [[ "$c2" == edit ]] && parked_removes_label "${args[@]}"; then
+    parked_deny "Removing, renaming or deleting the 'parked' label is reserved for the operator: PR merge and enqueue are held by that label. The operator changes it in the GitHub UI or from their own terminal; then the hold line in the plan is rewritten."
+  fi
+  if [[ "$c1" == label && ( "$c2" == delete || "$c2" == edit ) ]]; then
+    for tok in "${args[@]}"; do
+      [[ "$tok" == -* ]] && continue
+      if parked_is_parked "$tok"; then
+        parked_deny "Removing, renaming or deleting the 'parked' label is reserved for the operator: PR merge and enqueue are held by that label. The operator changes it in the GitHub UI or from their own terminal; then the hold line in the plan is rewritten."
+      fi
+      break
+    done
+  fi
+  if [[ "$c1" == api ]]; then
+    args=("${rest[@]:k+1}")
+    for ((i = 0; i < ${#args[@]}; i++)); do
+      case "${args[i]}" in
+        -X|--method) method=${args[i+1]:-} ;;
+        --method=*) method=${args[i]#--method=} ;;
+        -X?*) method=${args[i]#-X} ;;
+        -f|-F|--field|--raw-field|--input) hasfield=1 ;;
+      esac
+    done
+    if [[ -z "$method" ]]; then if (( hasfield )); then method=POST; else method=GET; fi; fi
+    mu=$(printf '%s' "$method" | tr '[:lower:]' '[:upper:]')
+    txt="${args[*]}"
+    # A write to the label object itself (rename, delete) or to a label on the parked name.
+    if [[ "$mu" != GET ]] && grep -qiE 'labels/parked([[:space:]]|$)' <<<"$txt"; then
+      parked_deny "Removing, renaming or deleting the 'parked' label is reserved for the operator: PR merge and enqueue are held by that label. The operator changes it in the GitHub UI or from their own terminal; then the hold line in the plan is rewritten."
+    fi
+    # Replacing or clearing the label set (or editing the issue/PR object) can drop `parked`: judge it by the PR it is aimed at.
+    if [[ "$mu" == PUT || "$mu" == PATCH || "$mu" == DELETE ]]; then
+      if [[ "$txt" =~ (issues|pulls)/([0-9]+)(/labels)?([[:space:]]|$) ]]; then
+        parked_check_pr "${BASH_REMATCH[2]}" "$repo"
+      elif [[ "$txt" =~ (issues|pulls)/[^[:space:]/]*[\$\`][^[:space:]]* ]]; then
+        parked_any_hold "A label or issue write on a PR" "$repo"
+      fi
+    fi
+    if grep -qE 'pulls/[^[:space:]/]+/merge' <<<"$txt"; then
+      if [[ "$txt" =~ pulls/([0-9]+)/merge ]]; then parked_check_pr "${BASH_REMATCH[1]}" "$repo"; else parked_any_hold "A merge through gh api" "$repo"; fi
+    fi
+    # GraphQL only: the endpoint word is exactly `graphql`. A mutation NAME in a REST body field (a comment that says
+    # "mergePullRequest") is text, not a mutation. A query read from a file or stdin cannot be read here, so it holds.
+    for tok in "${args[@]}"; do [[ "$tok" == graphql ]] && { isgql=1; break; }; done
+    if (( isgql )); then
+      if grep -qiE 'mergePullRequest|enablePullRequestAutoMerge|enqueuePullRequest|removeLabelsFromLabelable|clearLabelsFromLabelable|updateIssue|updatePullRequest|deleteLabel|updateLabel' <<<"$txt"; then
+        parked_any_hold "A GraphQL merge, enqueue or label mutation" "$repo"
+      elif grep -qE 'query=@|(^|[[:space:]])--input([[:space:]=]|$)' <<<"$txt"; then
+        parked_any_hold "A GraphQL query read from a file or stdin (its mutations cannot be read)" "$repo"
+      fi
+    fi
+    return 0
+  fi
+  [[ "$c1" == pr && "$c2" == merge ]] || return 0
+  # --disable-auto only un-arms an auto-merge, and --help/-h only prints help: both allowed. They must be the FLAG, not the value
+  # of a value-taking flag (`--subject --disable-auto` merges: gh reads the next word as the subject), so one pass skips values.
+  for tok in "${args[@]}"; do
+    if (( skip )); then skip=0; continue; fi
+    case "$tok" in
+      -t|--subject|-b|--body|-F|--body-file|--match-head-commit|-A|--author-email|-R|--repo) skip=1; continue ;;
+      --disable-auto) disarm=1; continue ;;
+      -h|--help) help=1; continue ;;
+      -*) continue ;;
+    esac
+    tok=${tok#\#}
+    if [[ "$tok" =~ ^[0-9]+$ ]]; then prs+=("$(parked_num "$tok")")
+    elif [[ "$tok" =~ pull/([0-9]+) ]]; then prs+=("$(parked_num "${BASH_REMATCH[1]}")")
+    elif [[ "$tok" =~ ^[0-9]*[\<\>] ]]; then :   # a redirection (2>, >/dev/null) is not a target
+    else nonflag=1
+    fi
+  done
+  if (( disarm || help )); then return 0; fi
+  for n in "${prs[@]}"; do parked_check_pr "$n" "$repo"; done
+  if [[ ${#prs[@]} -eq 0 ]]; then
+    # No literal number: the current branch's PR is the target of a bare merge; any other word (a variable, a branch name, a
+    # token with $ or a backtick) makes the target unknowable, so any parked PR holds it. A current-branch read that fails for any
+    # reason but "no pull requests found" is a failed read: it fails closed.
+    cur=$(parked_gh pr view --json number --jq .number 2>&1) || rc=$?
+    if (( rc == 0 )); then
+      if [[ "$cur" =~ ^[0-9]+$ ]]; then parked_check_pr "$cur" "$repo"; else parked_any_hold "The current branch's PR (unreadable answer)" "$repo"; fi
+    elif ! grep -qi 'no pull requests found' <<<"$cur"; then
+      parked_any_hold "The current branch's PR (the read failed)" "$repo"
+    fi
+    if (( nonflag )); then parked_any_hold "This merge" "$repo"; fi
+  fi
+  return 0
+}
+parked_barrier() {
+  local bstr pstr
+  if ! command -v awk >/dev/null 2>&1; then
+    # No statement splitter: judge the whole command coarsely rather than let it through unread.
+    if grep -qiE 'gh[[:space:]]+(pr[[:space:]]+(merge|edit)|issue[[:space:]]+edit|label|api)' <<<"$PSCAN"; then
+      parked_any_hold "A command the barrier cannot parse (no awk)"
+    fi
+    return 0
+  fi
+  while IFS=$'\t' read -r bstr pstr; do
+    parked_statement "$bstr" "$pstr"
+  done < <(printf '%s' "$PSCAN" | tr '\n' '\002' | awk "$PARKED_AWK")
+  return 0
+}
+if [[ "$WORK_DIR" == /* && -d "$WORK_DIR" ]]; then cd "$WORK_DIR" 2>/dev/null || true; fi
+if grep -qE '(^|[^[:alnum:]_-])gh[[:space:]]' <<<"$PSCAN"; then
+  parked_barrier
+fi
+
 if ! grep -qE '(^|&&|\|\||;)\s*('"${SOLEUR_BOUNDARY_PFX:-}"'[[:space:]]+)*gh\s+pr\s+(ready|merge\s+.*--auto)(\s|$|&&|\|\||;)' <<<"$SCAN"; then
   exit 0
 fi
