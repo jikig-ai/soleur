@@ -706,7 +706,8 @@ ccla_fixture "$D" "$(two_reg "$HASH_A" "$HASH_A")" "$(roster_two_hashes "$HASH_A
 reject_because "DI-F7 two coverage-map rows sharing one executed-instrument hash are REFUSED" "$D" \
   "share an executed-instrument hash"
 
-MIN_ASSERTIONS=61  # 34 -> 55: block (f) join arms, the review-driven fail-closed arms, the reason-substring conversion, TD7 and DI-F7 (#7909); 55 -> 59: the four multi-source canonical-cell arms (#11294); 59 -> 61: the labeled/unlabeled second-span pair (#11294 review)
+# Floor history: 34 -> 55 (block (f) join arms, the review-driven fail-closed arms, the reason-substring conversion, TD7 and DI-F7, #7909), 55 -> 59 (the four multi-source canonical-cell arms, #11294), 59 -> 61 (the labeled/unlabeled second-span pair, #11294 review). The assignment below stays comment-free: guard-vacuity-floor's backward widening rejects assignment lines containing `;`, so a semicolon in a trailing comment would unbind this threshold and score the floor CONSTRUCTION.
+MIN_ASSERTIONS=61
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2
