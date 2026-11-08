@@ -108,6 +108,14 @@ prow 100 "" | jv "JP10d an empty extracted line -> malformed" "RED reason=peer_r
 { prow 100 "$(pline "$PEERIP" skipped=exec_failed)"; prow 100 "$(pline)"; } | jv "JP11g tied: skipped first, ok second -> refused" "RED reason=peer_skipped" "peer:$W1H:$PEERIP"
 { prow 100 "$(pline)"; prow 100 "$(pline "$PEERIP" skipped=exec_failed)"; } | jv "JP11h tied: ok first, skipped second -> refused" "RED reason=peer_skipped" "peer:$W1H:$PEERIP"
 { prow 100 "$(pline)"; prow 100 "$(pline)"; } | jv "JP11i two tied ok rows -> GREEN (the tie rule refuses only on a bad tied row)" "GREEN peer_age_s=100" "peer:$W1H:$PEERIP"
+# A HOT/ARCHIVE overlap returns the same row twice (UNION ALL does not dedupe). Same dt -> same server-computed age_s.
+{ prow 100 "$(pline)"; prow 100 "$(pline)"; } | jv "JP11j a hot+archive DUPLICATE of the newest ok row is GREEN (age and verdict identical)" "GREEN peer_age_s=100 peer=$PEERIP dir=w1_to_w2" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline)"; prow 101 "$(pline)"; } | jv "JP11k a duplicate whose age differs by 1 s (skew between arms) is still GREEN at the newer age" "GREEN peer_age_s=100 peer=$PEERIP dir=w1_to_w2" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline)"; prow 100 "$(pline)"; prow 5000 "$(pline)"; prow 5000 "$(pline)"; } | jv "JP11l two duplicated ok pairs (newest, and older) -> GREEN at the newest age" "GREEN peer_age_s=100 peer=$PEERIP dir=w1_to_w2" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline "$PEERIP" result=refused)"; prow 100 "$(pline "$PEERIP" result=refused)"; } | jv "JP11m a duplicated REFUSED newest row is still refused (a duplicate never launders a bad verdict)" "RED reason=peer_refused dir=w1_to_w2" "peer:$W1H:$PEERIP"
+{ prow 100 "$(pline "$W1IP")" "$W2H"; prow 100 "$(pline "$W1IP")" "$W2H"; } | jv "JR13 a duplicated web-2 -> web-1 ok row is GREEN under the web-2 dialer" "GREEN peer_age_s=100 peer=$W1IP dir=w2_to_w1" "peer:$W2H:$W1IP"
+# the live defect, as rows: only an OLD (archive-only) ok row exists. The judge GREENs it; the SQL (S05) is what must reach it.
+prow 20000 "$(pline)" | jv "JP11n an ok row 5.5 h old (archive-only) judges GREEN: the judge has no hot-window assumption" "GREEN peer_age_s=20000 peer=$PEERIP dir=w1_to_w2" "peer:$W1H:$PEERIP"
 printf '<html>502</html>\n' | jv "JP12 an HTML body -> unparseable" "RED reason=body_unparseable" "peer:$W1H:$PEERIP"
 jq -cn '{age_s:"abc",host_name:"soleur-web-platform",line:"x"}' | jv "JP13 a non-numeric age -> refused" "RED reason=peer_row_age_malformed" "peer:$W1H:$PEERIP"
 for bad in "::" "0.0.0.0" "none" "web-2" "10.0.1" "10.0.1.11 " "192.168.1.5" ""; do
@@ -135,7 +143,7 @@ out="$(printf '%s\n' "$(row 20 "relay_probe SECRET-LOOKING-TEXT")" "$(row 30 "$(
 if [[ "$out" != *SECRET* ]]; then ok "J20 a malformed row's text is not echoed in the verdict"; else no "J20 verdict echoed row text: $out"; fi
 
 while IFS=$'\t' read -r st msg; do if [[ "$st" == ok ]]; then ok "$msg"; else no "$msg"; fi; done < "$WORK/jlog"
-J_EXPECTED=86   # recomputed from the green run: the exact number of judge fixtures logged
+J_EXPECTED=92   # recomputed from the green run: the exact number of judge fixtures logged
 J_LOGGED="$(wc -l < "$WORK/jlog")"
 if [[ "$J_LOGGED" -eq "$J_EXPECTED" ]]; then ok "J99 the judge fixtures ran exactly as many times as declared ($J_LOGGED)"; else no "J99 $J_LOGGED judge fixtures logged, $J_EXPECTED declared"; fi
 
@@ -161,24 +169,38 @@ sqlg_peer() { # sqlg_peer <sql> <dialing-host> <peer-ip>
     && grep -qxF "  AND JSONExtractString(raw,'host_name') = '$2'" <<<"$c" \
     && grep -qxF "  AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'" <<<"$c" \
     && grep -qxF "  AND startsWith(JSONExtractString(raw,'message'), 'relay_peer_probe peer=$3 ')" <<<"$c" \
+    && grep -qxF 'FROM (SELECT dt, raw FROM remote($BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)' <<<"$c" \
     && ! grep -qE 'position[(]raw|extract[(]raw' <<<"$c"
+}
+# The peer row is written ONCE per web-1/web-2 deploy (sparse), so it is usually OLDER than the ~40-minute hot window:
+# a remote()-only read answers zero rows and the serve evidence step refuses RED reason=peer_rows_none (measured live, run
+# 42457219868). sqlg_peer_arms checks each arm of the union on its own, so a mutant names WHICH arm it lost.
+sqlg_peer_arms() { # sqlg_peer_arms <sql> -> 0 iff the comment-stripped SQL has the hot arm, the archive arm and its _row_type filter
+  local c; c="$(sql_clean "$1")"
+  grep -qF 'SELECT dt, raw FROM remote($BS_TABLE)' <<<"$c" \
+    && grep -qF 'UNION ALL SELECT dt, raw FROM s3Cluster(primary, $BS_TABLE_S3) WHERE _row_type = 1)' <<<"$c"
 }
 S_OWN="$(wrr_sql)"; S_PEER="$(wrr_peer_sql "$W1H" "$PEERIP")"; S_REV="$(wrr_peer_sql "$W2H" "$W1IP")"
 if sqlg_own "$S_OWN"; then ok "S01 control: the own-line SQL carries the structured filters (host_name, CONTAINER_NAME, startsWith on message.msg) and no whole-row matcher"; else no "S01 own-line SQL fails its own guard: $S_OWN"; fi
 if sqlg_peer "$S_PEER" "$W1H" "$PEERIP"; then ok "S02 control: the web-1 -> web-2 peer SQL carries SYSLOG_IDENTIFIER = 'ci-deploy' and startsWith on message, and no whole-row matcher"; else no "S02 forward peer SQL fails its own guard: $S_PEER"; fi
 if sqlg_peer "$S_REV" "$W2H" "$W1IP"; then ok "S03 control: the web-2 -> web-1 peer SQL passes the same guard under the web-2 dialer"; else no "S03 reverse peer SQL fails its own guard: $S_REV"; fi
+if sqlg_peer_arms "$S_PEER" && sqlg_peer_arms "$S_REV"; then ok "S05 control: BOTH peer SQLs read the hot remote(\$BS_TABLE) arm AND the s3Cluster(primary, \$BS_TABLE_S3) archive arm with _row_type = 1"; else no "S05 a peer SQL lacks the hot or the archive arm: $S_PEER"; fi
+# the OWN-LINE read is one row a minute over 180 s, far inside the hot window: it stays hot-only and cheap
+if [[ "$(sql_clean "$S_OWN")" != *s3Cluster* ]]; then ok "S06 the own-line SQL stays hot-only (180 s window)"; else no "S06 the own-line SQL grew an archive arm"; fi
 # a comment cannot stand in for a guard line (comment-stripped before matching)
 c_own="$(sed "s|^  AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'\$|  -- AND JSONExtractString(raw,'CONTAINER_NAME') = 'soleur-web-platform'|" <<<"$S_OWN")"
 if [[ "$c_own" != "$S_OWN" ]] && ! sqlg_own "$c_own"; then ok "S04 a COMMENTED-OUT CONTAINER_NAME line does not satisfy the guard"; else no "S04 commented-out guard line accepted (or the edit did not land)"; fi
 smut() { # smut <label> <which: own|peer|rev> <sed-expr> — mutate the SQL text, verify the mutation LANDED, require the guard to go red
   local label="$1" which="$2" expr="$3" pristine mutant
-  case "$which" in own) pristine="$S_OWN" ;; peer) pristine="$S_PEER" ;; rev) pristine="$S_REV" ;; esac
+  case "$which" in own) pristine="$S_OWN" ;; peer|peerarms) pristine="$S_PEER" ;; rev) pristine="$S_REV" ;; esac
   mutant="$(sed -E "$expr" <<<"$pristine")"
   if [[ "$mutant" == "$pristine" ]]; then no "$label: the mutation did not land (text identical to pristine)"; return; fi
   case "$which" in
     own) sqlg_own "$mutant" && no "$label stayed GREEN: the own-line guard cannot see this defect" || ok "$label -> RED" ;;
     peer) sqlg_peer "$mutant" "$W1H" "$PEERIP" && no "$label stayed GREEN: the peer guard cannot see this defect" || ok "$label -> RED" ;;
     rev) sqlg_peer "$mutant" "$W2H" "$W1IP" && no "$label stayed GREEN: the reverse peer guard cannot see this defect" || ok "$label -> RED" ;;
+    # arm-level guard: it must see the defect on its own, not only the whole-text guard
+    peerarms) sqlg_peer_arms "$mutant" && no "$label stayed GREEN: the arm guard cannot see this defect" || ok "$label -> RED (arm guard)" ;;
   esac
 }
 smut "SM01 own: drop the CONTAINER_NAME filter" own "/CONTAINER_NAME/d"
@@ -195,6 +217,17 @@ smut "SM11 peer: widen the identifier to another unit" peer "s/= 'ci-deploy'/= '
 smut "SM12 peer: drop the peer-address anchor from the prefix" peer "s/peer=$PEERIP '/peer='/"
 smut "SM13 reverse: drop the SYSLOG_IDENTIFIER filter" rev "/SYSLOG_IDENTIFIER/d"
 smut "SM14 reverse: revert the prefix filter to position(raw, ...)" rev "s/^  AND startsWith.*\$/  AND position(raw, 'relay_peer_probe peer=$W1IP ') > 0/"
+smut "SM15 peer: drop the archive arm (hot arm only, still wrapped in the subquery)" peer "s/ UNION ALL SELECT dt, raw FROM s3Cluster[(]primary, \\\$BS_TABLE_S3[)] WHERE _row_type = 1//"
+smut "SM16 peer: drop _row_type = 1 from the archive arm (every archive row type, incl. non-log rows)" peer "s/ WHERE _row_type = 1[)]/)/"
+smut "SM17 peer: hot-only revert of the whole FROM (remote(\$BS_TABLE) alone)" peer "s/^FROM .*\$/FROM remote(\\\$BS_TABLE)/"
+smut "SM18 reverse: hot-only revert of the whole FROM" rev "s/^FROM .*\$/FROM remote(\\\$BS_TABLE)/"
+smut "SM19 reverse: drop the archive arm" rev "s/ UNION ALL SELECT dt, raw FROM s3Cluster[(]primary, \\\$BS_TABLE_S3[)] WHERE _row_type = 1//"
+smut "SM20 peer-arms: drop the archive arm" peerarms "s/ UNION ALL SELECT dt, raw FROM s3Cluster[(]primary, \\\$BS_TABLE_S3[)] WHERE _row_type = 1//"
+smut "SM21 peer-arms: drop _row_type = 1" peerarms "s/ WHERE _row_type = 1[)]/)/"
+smut "SM22 peer-arms: drop the hot arm (archive only)" peerarms "s/SELECT dt, raw FROM remote[(]\\\$BS_TABLE[)] UNION ALL //"
+# the archive arm moved into a COMMENT does not count (comment-stripped before matching)
+c_arm="$(sed -E "s/^FROM .*\$/FROM remote(\\\$BS_TABLE) -- UNION ALL SELECT dt, raw FROM s3Cluster(primary, \\\$BS_TABLE_S3) WHERE _row_type = 1/" <<<"$S_PEER")"
+if [[ "$c_arm" != "$S_PEER" ]] && ! sqlg_peer "$c_arm" "$W1H" "$PEERIP" && ! sqlg_peer_arms "$c_arm"; then ok "SM23 an archive arm hidden in a trailing COMMENT satisfies neither guard"; else no "SM23 a commented-out archive arm was accepted (or the edit did not land)"; fi
 
 # --- Q: the query function ----------------------------------------------------------------------------------
 BIN="$WORK/bin"; mkdir -p "$BIN"
@@ -254,6 +287,11 @@ sql="$(cat "$WORK/sql")"
 [[ "$sql" == *"INTERVAL 86400 SECOND"* ]] && ok "QP03 the peer SQL asks for the last 24 h" || no "QP03 peer SQL lacks the 24 h window: $sql"
 [[ "$sql" == *"relay_peer_probe peer=$PEERIP "* ]] && ok "QP04 the peer SQL selects on the state address" || no "QP04 peer SQL lacks the peer address: $sql"
 [[ "$sql" == *'$BS_TABLE'* || "$sql" == *remote* ]] && ok "QP05 the peer SQL reads the hot table" || no "QP05 peer SQL lacks the table: $sql"
+# As SENT by the REAL scripts/betterstack-query.sh from the three BETTERSTACK_QUERY_* variables alone (no BS_TABLE /
+# BS_TABLE_S3 in the env): both tokens substituted, the archive name derived from the default hot table.
+[[ "$sql" == *"remote(t520508_soleur_inngest_vector_prd_3_logs)"* ]] && ok "QP05b the sent peer SQL reads the hot table remote(<default>_logs)" || no "QP05b sent SQL lacks the substituted hot table: $sql"
+[[ "$sql" == *"s3Cluster(primary, t520508_soleur_inngest_vector_prd_3_s3) WHERE _row_type = 1"* ]] && ok "QP05c the sent peer SQL reads the ARCHIVE arm s3Cluster(primary, <default>_s3) WHERE _row_type = 1, derived with no BS_TABLE_S3 in the env" || no "QP05c sent SQL lacks the archive arm: $sql"
+[[ "$sql" != *'$BS_TABLE'* ]] && ok "QP05d no unsubstituted \$BS_TABLE token reached the wire" || no "QP05d an unsubstituted token reached the wire: $sql"
 printf '503' > "$FX/mode"; QMODE=peer QPEER=$PEERIP q "QP06 a peer 5xx is a failed read: rc 1" 1
 : > "$FX/mode"
 QMODE=peer QPEER="x' OR 1=1 --" q "QP07 a non-IPv4 peer address is refused before any query: rc 1" 1
@@ -270,12 +308,12 @@ QMODE=peer QPEER=$W1IP QHOST=soleur-web-9 q "QP12 an unknown dialing host is ref
 echo ""
 echo "=== web2-relay-rows.test.sh: ${pass} passed, ${fail} failed ==="
 _ran=$((pass + fail))
-if [ "$_ran" -lt 130 ]; then
-  printf 'GUARD FAIL: ran only %d assertion(s) (floor 130) — the suite did not execute fully\n' "$_ran" >&2
+if [ "$_ran" -lt 150 ]; then
+  printf 'GUARD FAIL: ran only %d assertion(s) (floor 150) — the suite did not execute fully\n' "$_ran" >&2
   exit 2
 fi
-if [ "$_ran" -gt 130 ]; then
-  printf 'GUARD FAIL: ran %d assertion(s), more than the declared 130 — raise BOTH halves of the floor to the new exact count\n' "$_ran" >&2
+if [ "$_ran" -gt 150 ]; then
+  printf 'GUARD FAIL: ran %d assertion(s), more than the declared 150 — raise BOTH halves of the floor to the new exact count\n' "$_ran" >&2
   exit 2
 fi
 [[ "$fail" -eq 0 ]]

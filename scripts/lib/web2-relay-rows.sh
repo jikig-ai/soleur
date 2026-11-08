@@ -35,6 +35,8 @@
 #      This is the only evidence that web-2's relay is reachable on its PRIVATE address (publish bound, sysctl, source
 #      allowlist, pinned TLS). It is emitted once per web-1 deploy, not per minute, so it is judged by the NEWEST row
 #      for web-2's state address from web-1 (host_name soleur-web-platform) within 24 h: GREEN iff that row is result=ok.
+#      Because it is sparse, the peer read spans the hot window AND the S3 archive (see wrr_peer_sql; a hot-only read
+#      silently misses it, measured 2026-11-08).
 #      No row, a malformed newest row, or any other result refuses. A refused/denied/tls/timeout newest row means: fix
 #      it, then redeploy web-1 (which re-probes) before dispatching. The peer SQL filters on SYSLOG_IDENTIFIER = 'ci-deploy' and
 #      startsWith(message, 'relay_peer_probe peer=<ip> '), and selects the line from that same field.
@@ -77,7 +79,7 @@ WRR_PEER_LOOKBACK_S=86400
 WRR_PEER_LIMIT=50
 
 # wrr_sql — raw SQL (betterstack-query.sh mode 1). The host predicate is an explicit AND, the window is the
-# hot table only (180 s is far inside it). `$BS_TABLE` is substituted by the query script, so it stays literal.
+# hot table only (180 s is far inside it; the sparse PEER read is hot + archive, see wrr_peer_sql). `$BS_TABLE` is substituted by the query script, so it stays literal.
 # No output alias reuses a source column name (`dt`, `raw`).
 wrr_sql() {
   cat <<SQL
@@ -145,10 +147,17 @@ wrr_peer_dir() {
 
 # wrr_peer_sql <dialing_host_name> <ipv4> — the dialing host's newest peer-probe rows about the given peer address.
 # Both arguments are validated by the caller (wrr_peer_fetch) before they reach the SQL text.
+# HOT + ARCHIVE (2026-11-08, run 42457219868). This row is written once per deploy, so it is usually OLDER than the
+# ~40-minute hot window: a remote()-only read answered zero rows and the serve step refused RED reason=peer_rows_none
+# although result=ok rows existed hours back. Rows past the hot window are readable ONLY through the s3Cluster archive,
+# so the FROM is the runbook's UNION ALL of both (betterstack-log-query.md "Hot vs archive"). A row present in both arms
+# is harmless: same dt, same age_s, same verdict (the judge's newest-row/tie rules are pinned for duplicates by JP11j-m).
+# The own-line read (wrr_sql) is one row a minute over 180 s and stays hot-only. `$BS_TABLE_S3` is substituted by the
+# query script, derived from the default hot table, so the three BETTERSTACK_QUERY_* variables are all it needs.
 wrr_peer_sql() {
   cat <<SQL
 SELECT dateDiff('second', dt, now()) AS age_s, JSONExtractString(raw,'host_name') AS host_name, JSONExtractString(raw,'message') AS line
-FROM remote(\$BS_TABLE)
+FROM (SELECT dt, raw FROM remote(\$BS_TABLE) UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
 WHERE dt > now() - INTERVAL ${WRR_PEER_LOOKBACK_S} SECOND
   AND JSONExtractString(raw,'host_name') = '$1'
   AND JSONExtractString(raw,'SYSLOG_IDENTIFIER') = 'ci-deploy'
