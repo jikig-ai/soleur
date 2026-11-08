@@ -77,6 +77,105 @@ t "commit-body gh pr ready stripped → CMD_RE no-match (#5192)" "$CMD_RE" "$FP_
 REAL_SCAN=$(strip_command_bodies $'git commit -F - <<EOF\nbody\nEOF\n && gh pr merge 7 --squash --auto')
 t "real gh pr merge --auto after heredoc still fires (#5192)" "$CMD_RE" "$REAL_SCAN" match
 
+# --- Behavioural rows (#12332): the changed-runbook list is read NUL-delimited and each runbook is re-diffed
+#     by its RAW name with --literal-pathspecs. Plain `--name-only` C-quotes a non-ASCII/tab/quote/backslash name;
+#     the quoted string then reaches the per-file re-diff as a pathspec that matches nothing, `added` is empty and
+#     the gate passes a runbook that adds an ssh step.
+FX_ROOTS=()
+# Canonical fixture-dir guard (byte-identical to plugins/soleur/test/test-helpers.sh); the relative-path
+# ratchet recognises only this executed statement before a write into a fixture root.
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+cleanup_fx_roots() {
+  local d
+  for d in "${FX_ROOTS[@]:-}"; do
+    [[ -n "$d" && -d "$d" ]] || continue
+    assert_fixture_dir "$d"
+    rm -rf "$d"
+  done
+  return 0
+}
+trap cleanup_fx_roots EXIT INT TERM
+
+tc() { # <label> <expected> <actual>
+  TOTAL=$((TOTAL + 1))
+  if [[ "$2" == "$3" ]]; then PASS=$((PASS + 1)); echo "PASS: $1"
+  else FAIL=$((FAIL + 1)); echo "FAIL: $1  (expected '$2', got '$3')"; fi
+}
+
+# make_rb_repo <out-var> <mutating-shell-snippet>: a bare origin with main, a clone on a feature branch with the
+# snippet applied and committed (the hook diffs origin/main...HEAD).
+make_rb_repo() {
+  local root work
+  root="$(mktemp -d /var/tmp/runbook-gate-fx.XXXXXX)" || return 1
+  FX_ROOTS+=("$root")
+  assert_fixture_dir "$root"
+  work="$root/work"
+  git init -q --bare "$root/origin.git"
+  git clone -q "$root/origin.git" "$work" 2>/dev/null
+  git -C "$work" config user.email "test@example.com"
+  git -C "$work" config user.name "Test User"
+  git -C "$work" config commit.gpgsign false
+  mkdir -p "$work/knowledge-base/engineering/operations/runbooks"
+  printf 'seed\n' > "$work/README.md"
+  git -C "$work" add -A
+  git -C "$work" commit -q -m seed
+  git -C "$work" branch -M main
+  git -C "$work" push -q -u origin main 2>/dev/null
+  git -C "$work" checkout -q -b feat-fixture
+  ( cd "$work" && bash -c "$2" )
+  git -C "$work" add -A
+  git -C "$work" commit -q -m change
+  printf -v "$1" '%s' "$work"
+}
+RB_DIR='knowledge-base/engineering/operations/runbooks'
+rb_run() { # <work>: runs the hook for `gh pr ready` in that checkout; sets RB_DEC (decision) and RB_REASON
+  local out
+  out="$(jq -nc --arg d "$1" '{tool_name:"Bash", tool_input:{command:"gh pr ready 7"}, cwd:$d}' \
+    | bash "$HOOK" 2>/dev/null)" || true
+  RB_DEC="$(printf '%s' "$out" | jq -r '.decision // empty' 2>/dev/null || true)"
+  RB_REASON="$(printf '%s' "$out" | jq -r '.reason // empty' 2>/dev/null || true)"
+}
+rb_decision() { rb_run "$1"; printf '%s' "$RB_DEC"; }
+SSH_STEP="printf '## What to do\n\n- ssh prod-host\n'"
+
+make_rb_repo RB_ASCII "$SSH_STEP > $RB_DIR/plain.md"
+tc "row: an ASCII runbook adding an ssh step blocks (the fixture can say deny)" "deny" "$(rb_decision "$RB_ASCII")"
+
+make_rb_repo RB_OK "printf '## What to do\n\n- gh run view 12345\n' > $RB_DIR/ok.md"
+tc "control: a runbook whose first step is not ssh passes" "" "$(rb_decision "$RB_OK")"
+
+make_rb_repo RB_OUT "printf 'x\n' > README2.md; mkdir -p docs; $SSH_STEP > docs/not-a-runbook.md"
+tc "control: an ssh step OUTSIDE the runbooks directory is not this gate's surface" "" "$(rb_decision "$RB_OUT")"
+
+make_rb_repo RB_UTF8 "$SSH_STEP > $RB_DIR/caf\$'\\xc3\\xa9'.md"
+RB_PRE="$(git -C "$RB_UTF8" diff --name-only origin/main...HEAD -- "$RB_DIR/*.md")"
+tc "precondition: the plain name-only list C-quotes the non-ASCII runbook name" "1" "$([[ "$RB_PRE" == '"'* ]] && echo 1 || echo 0)"
+tc "row: a non-ASCII-named runbook adding an ssh step blocks" "deny" "$(rb_decision "$RB_UTF8")"
+
+make_rb_repo RB_QUOTE "$SSH_STEP > \$'$RB_DIR/q\"uote.md'"
+RB_PRE="$(git -C "$RB_QUOTE" diff --name-only origin/main...HEAD -- "$RB_DIR/*.md")"
+tc "precondition: the plain list C-quotes a runbook name holding a double quote" "1" "$([[ "$RB_PRE" == '"'* ]] && echo 1 || echo 0)"
+tc "row: a quote-named runbook adding an ssh step blocks" "deny" "$(rb_decision "$RB_QUOTE")"
+
+# A bracket name (git matches a pathspec literally first, so this row alone does not separate the flag; the star row below does).
+make_rb_repo RB_BRACKET "$SSH_STEP > '$RB_DIR/glob[1].md'"
+tc "row: a bracket-named runbook adding an ssh step blocks (--literal-pathspecs)" "deny" "$(rb_decision "$RB_BRACKET")"
+
+# A star name must not over-match a sibling: the CLEAN `a*b.md` would glob onto the ssh-bearing `aXb.md`.
+make_rb_repo RB_STAR "printf '## What to do\n\n- gh run view 1\n' > '$RB_DIR/a*b.md'; $SSH_STEP > $RB_DIR/aXb.md"
+rb_run "$RB_STAR"
+tc "row: the ssh-bearing sibling still blocks" "deny" "$RB_DEC"
+tc "row: the clean star-named runbook is not reported (no glob over-match)" "0" "$([[ "$RB_REASON" == *'a*b.md:'* ]] && echo 1 || echo 0)"
+
 # --- Hook syntax ---
 if bash -n "$HOOK"; then
   PASS=$((PASS + 1)); TOTAL=$((TOTAL + 1)); echo "PASS: hook syntax OK"

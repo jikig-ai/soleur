@@ -78,15 +78,20 @@ BASE=$(git merge-base "origin/main" HEAD 2>/dev/null || true)
 [[ -z "$BASE" ]] && exit 0
 
 # Files in scope: runbook .md added or modified.
-RUNBOOK_FILES=$(git diff --name-only "$BASE"...HEAD -- 'knowledge-base/engineering/operations/runbooks/*.md' 2>/dev/null || true)
-[[ -z "$RUNBOOK_FILES" ]] && exit 0
+# NUL-delimited into an array (#12332): plain `--name-only` C-quotes a non-ASCII, tab, `"` or `\` name, and the
+# quoted string then reached the per-file re-diff below as a pathspec that matches nothing, so `added` was empty
+# and the gate passed a runbook that adds an ssh step. `--no-renames` also lists the OLD path of a rename.
+# A git failure leaves the array empty (the same fail-open as an unknown base, above).
+RUNBOOK_FILES=()
+mapfile -d '' -t RUNBOOK_FILES < <(git diff -z --no-renames --ignore-submodules=none --name-only "$BASE"...HEAD -- 'knowledge-base/engineering/operations/runbooks/*.md' 2>/dev/null || true)
+[[ ${#RUNBOOK_FILES[@]} -eq 0 ]] && exit 0
 
 # SSH-class regex — match the verb at the start of a content line.
 # Bullets/numbered-list/code-fence content. Bash ERE.
 SSH_RE='^[[:space:]]*([-*]|[0-9]+\.)?[[:space:]]*`?(ssh\b|docker\s+exec\b|journalctl\s+.*(-f\b|--follow\b)|systemctl\s+(restart|stop|start|kill)\b|kill\b|systemd-run\b)'
 
 VIOLATIONS=()
-for f in $RUNBOOK_FILES; do
+for f in "${RUNBOOK_FILES[@]}"; do
   # Get ADDED lines only (lines starting with `+` in unified diff, minus the
   # `+++` file headers).
   # `--no-color --no-ext-diff` are load-bearing (#8263 class): under a user's
@@ -99,7 +104,8 @@ for f in $RUNBOOK_FILES; do
   # what consumes it), but under this file's `set -eo pipefail` a no-match `grep`
   # makes the pipeline exit 1 and kills the whole gate mid-loop — so a runbook
   # touched with only deletions would abort the check rather than pass it.
-  added=$(git diff --unified=0 --no-color --no-ext-diff "$BASE"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]' | sed 's/^+//') || true
+  # `--literal-pathspecs`: the raw name is a path, never a glob, so `a*b.md` cannot over-match `aXb.md`.
+  added=$(git --literal-pathspecs diff --unified=0 --no-color --no-ext-diff "$BASE"...HEAD -- "$f" 2>/dev/null | grep -E '^\+[^+]' | sed 's/^+//') || true
   [[ -z "$added" ]] && continue
   # Match against the SSH regex.
   hits=$(printf '%s\n' "$added" | grep -niE "$SSH_RE" 2>/dev/null || true)

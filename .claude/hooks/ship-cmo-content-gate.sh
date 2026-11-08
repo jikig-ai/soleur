@@ -113,7 +113,10 @@ if [[ -n "$TRAILER_CMO" ]]; then
 fi
 
 # Check if diff touches marketing, content strategy, or blog
-CHANGED_MARKETING=$(git diff --name-only "${BASE_REF}...${TIP}" 2>/dev/null | grep -E '^(plugins/soleur/docs/blog/|knowledge-base/marketing/)' || true)
+# NUL-delimited and rename-free (#12332): plain `--name-only` C-quotes a non-ASCII, tab, `"` or `\` name (the
+# `^`-anchored regex then misses it) and lists only a rename's NEW path (a rename away from the surface is
+# invisible). A git failure leaves the list empty, which denies (fail-closed, as before).
+CHANGED_MARKETING=$(git diff -z --no-renames --ignore-submodules=none --name-only "${BASE_REF}...${TIP}" 2>/dev/null | tr '\0' '\n' | grep -E '^(plugins/soleur/docs/blog/|knowledge-base/marketing/)' || true)
 if [[ -n "$CHANGED_MARKETING" ]]; then
   exit 0
 fi
