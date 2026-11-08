@@ -49,6 +49,15 @@
 #       source still exists, so a floor would uniquely cover only the single out-of-`audits/`
 #       post-mortem row. That one path is asserted literally instead -- cheaper, and it names
 #       what it protects.
+#       CANONICAL-SOURCE CELL CONTRACT, widened 2026-11-08 (#11294): a dated row's
+#       canonical-source cell carries ONLY backticked repo-relative paths, >= 1 per row, and
+#       may carry MORE THAN ONE -- a re-assessment or addendum record joins the determination
+#       under an unbackticked label (cell shape: `path-a`; <date> re-assessment: `path-b`).
+#       The producer emits
+#       one candidate per backtick-enclosed span; every candidate runs the same
+#       contained/tracked/non-symlink/`..` gauntlet; a row emitting zero candidates fails by
+#       name; and the row reconciliation counts EMITTING ROWS, not resolved paths, because a
+#       composite cell legitimately resolves more pointers than there are rows.
 #
 #   (c) DECLARED-SET INTEGRITY, not discovered-set coverage.
 #       Asserting coverage of a DISCOVERED set is not implementable here: 104 post-mortems
@@ -260,12 +269,42 @@ pass "(b) breach-register index is decidable: $row_count determination row(s)"
 # that column is last, which the reconciliation below turns into a loud failure rather than a
 # silent one. Scoping to the index section stops a dated row elsewhere in the file (a reformatted
 # §Excluded records table, say) from being read as an indexed determination.
-cited_paths="$(awk -F'|' '
+# MULTI-SOURCE CELLS (#11294). Until 2026-11-08 every canonical-source cell held exactly one
+# backticked path, so `print trim($(NF-1))` sufficed. The contract widened to "only backticked
+# repo-relative paths, >= 1 per dated row" (see the header): the producer now emits ONE
+# CANDIDATE PER BACKTICK-ENCLOSED SPAN inside $(NF-1) -- unbackticked text (a `; <date>
+# re-assessment:` label) is not a candidate. The scan stream carries three line kinds:
+#   p:<path>   one emitted candidate, fed to the gauntlet and the (c) joins unchanged
+#   e:         the row emitted >= 1 candidate
+#   z:<date>   the row emitted ZERO candidates -- fails by name below
+cited_scan="$(awk -F'|' '
   function trim(s) { gsub(/^[ \t`]+|[ \t`]+$/, "", s); return s }
   /^##[ \t]/ { inblk = ($0 ~ /^##[ \t]+Index of determinations[ \t]*$/) }
-  inblk && /^\|[ \t]*20[0-9][0-9]-/ { print trim($(NF-1)) }
+  inblk && /^\|[ \t]*20[0-9][0-9]-/ {
+    n = split($(NF-1), seg, "`")
+    e = 0
+    for (i = 2; i <= n; i += 2) {
+      c = trim(seg[i])
+      if (c != "") { print "p:" c; e++ }
+    }
+    if (e > 0) { print "e:" } else { print "z:" trim($2) }
+  }
 ' "$BREACH_REGISTER")"
-[[ -n "$cited_paths" ]] || die2 "no determination rows parsed from the breach register index"
+[[ -n "$cited_scan" ]] || die2 "no determination rows parsed from the breach register index"
+cited_paths="$(printf '%s\n' "$cited_scan" | sed -n 's/^p://p')"
+zero_span_rows="$(printf '%s\n' "$cited_scan" | sed -n 's/^z://p')"
+rows_emitting="$(printf '%s\n' "$cited_scan" | grep -c '^e:$' || true)"
+
+# A dated row whose canonical-source cell yields NO backticked span is not a citation the
+# register can produce -- named here, distinctly from the unresolvable-path failures below.
+if [[ -n "$zero_span_rows" ]]; then
+  while IFS= read -r zr; do
+    [[ -n "$zr" ]] || continue
+    fail "(b) breach-register row dated $zr emits NO canonical-source candidate
+           Every dated row's canonical-source cell must carry >= 1 backticked repo-relative
+           path; prose alone is not a pointer a supervisory authority can be shown."
+  done <<< "$zero_span_rows"
+fi
 
 # CONTAINED, TRACKED, AND NOT A SYMLINK -- `-f` alone was three fail-opens. Assertion (b)'s
 # stated purpose is that the documentation "exists AND can be produced", and a bare `-f` satisfies
@@ -299,8 +338,10 @@ while IFS= read -r p; do
     fail "(b) breach-register cites a canonical source that does not resolve: $p"
   fi
 done <<< "$cited_paths"
-[[ $((resolved + broken)) -eq $row_count ]] \
-  || die2 "parsed $((resolved + broken)) canonical-source cells but the delegated guard counted $row_count rows"
+# Reconciliation counts EMITTING ROWS, not resolved paths: a composite cell emits one
+# candidate per span, so resolved+broken can exceed row_count on a healthy register.
+[[ "$rows_emitting" -eq $row_count ]] \
+  || die2 "canonical-source cells emitted candidates for $rows_emitting row(s) but the delegated guard counted $row_count rows"
 [[ $broken -eq 0 ]] && pass "(b) all $resolved canonical-source pointer(s) resolve on disk"
 
 # ANCHORED ON THE PARSED INDEX COLUMN, not on the path appearing anywhere in the file. A

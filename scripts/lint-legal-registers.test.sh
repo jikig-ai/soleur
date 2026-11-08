@@ -355,6 +355,80 @@ io.open(p, "w", encoding="utf-8").write(s)
 PY4
 expect "(c) a file BOTH indexed and waived is caught (additive, not redirected)" 1 "$D"
 
+# --- (b) multi-source canonical cells (#11294) ---------------------------------------------
+# A canonical-source cell may carry MORE THAN ONE backticked repo-relative path -- a
+# re-assessment record joins its determination under an UNBACKTICKED label. The widened cell
+# contract is "only backticked repo-relative paths, >= 1 per dated row": the producer emits
+# one candidate per backticked span, every candidate runs the same gauntlet, a row emitting
+# zero candidates fails, and the reconciliation counts EMITTING ROWS rather than resolved
+# paths (a composite cell resolves more pointers than there are rows).
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PYMS1' || exit 2
+import io, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+old = "| 2099-01-02 | synthetic event B | no breach | `knowledge-base/legal/audits/2099-01-02-syn-determination-b.md` |"
+assert s.count(old) == 1, "anchor"
+new = ("| 2099-01-02 | synthetic event B | no breach | "
+       "`knowledge-base/legal/audits/2099-01-02-syn-determination-b.md`; "
+       "2099-01-03 re-assessment: `knowledge-base/legal/audits/2099-01-01-syn-determination-a.md` |")
+io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYMS1
+r="$(run_out "$D")"
+if [[ "$r" == "0" ]] && grep -q 'all 4 canonical-source pointer(s) resolve' "$LINT_OUT"; then
+  pass "(b) a composite canonical cell emits BOTH backticked spans and both resolve"
+else fail "(b) a composite canonical cell did not pass clean (rc=$r): $(grep -m1 '^::error' "$LINT_OUT" | head -c 160)"; fi
+
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PYMS2' || exit 2
+import io, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+old = "| 2099-01-02 | synthetic event B | no breach | `knowledge-base/legal/audits/2099-01-02-syn-determination-b.md` |"
+assert s.count(old) == 1, "anchor"
+new = ("| 2099-01-02 | synthetic event B | no breach | "
+       "`knowledge-base/legal/audits/2099-01-02-syn-determination-b.md`; "
+       "2099-01-03 re-assessment: `knowledge-base/legal/audits/2099-01-02-GONE.md` |")
+io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYMS2
+reject_because "(b) an unresolvable SECOND span is flagged against itself, not the whole cell" "$D" \
+  "not TRACKED: knowledge-base/legal/audits/2099-01-02-GONE.md"
+
+D="$(mkcorpus)" || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PYMS3' || exit 2
+import io, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+old = "| 2099-01-02 | synthetic event B | no breach | `knowledge-base/legal/audits/2099-01-02-syn-determination-b.md` |"
+assert s.count(old) == 1, "anchor"
+new = "| 2099-01-02 | synthetic event B | no breach | see the determination prose |"
+io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYMS3
+r="$(run_out "$D")"
+if [[ "$r" == "2" ]] && grep -q 'emits NO canonical-source candidate' "$LINT_OUT" \
+   && grep -q 'emitted candidates for 2 row(s) but the delegated guard counted 3 rows' "$LINT_OUT"; then
+  pass "(b) a dated row with NO backticked span is refused by name AND by the row reconciliation"
+else fail "(b) a zero-candidate row did not refuse as designed (rc=$r): $(grep -m1 '^::error' "$LINT_OUT" | head -c 160)"; fi
+
+# A file cited ONLY as the second span of a composite cell must count as INDEXED for (c):
+# row 1 stays single-source, row 2 carries `b`; label: `c`, and c is otherwise unindexed.
+D="$(mkcorpus)" || exit 2
+printf -- '---\ntitle: "synthetic determination C"\n---\n\nArt. 4(12) assessed; no breach.\n' \
+  > "$D/knowledge-base/legal/audits/2099-01-06-syn-determination-c.md" || exit 2
+( cd "$D" && git add -A && git commit -qm c ) >/dev/null 2>&1 || exit 2
+python3 - "$D/knowledge-base/legal/breach-register.md" <<'PYMS4' || exit 2
+import io, sys
+p = sys.argv[1]; s = io.open(p, encoding="utf-8").read()
+old = "| 2099-01-02 | synthetic event B | no breach | `knowledge-base/legal/audits/2099-01-02-syn-determination-b.md` |"
+assert s.count(old) == 1, "anchor"
+new = ("| 2099-01-02 | synthetic event B | no breach | "
+       "`knowledge-base/legal/audits/2099-01-02-syn-determination-b.md`; "
+       "2099-01-03 re-assessment: `knowledge-base/legal/audits/2099-01-06-syn-determination-c.md` |")
+io.open(p, "w", encoding="utf-8").write(s.replace(old, new, 1))
+PYMS4
+r="$(run_out "$D")"
+if [[ "$r" == "0" ]] && grep -q 'all 4 canonical-source pointer(s) resolve' "$LINT_OUT" \
+   && grep -q 'all 5 determination-shaped audits/ file(s) are indexed or waived' "$LINT_OUT"; then
+  pass "(b) single-source + composite rows: a file cited ONLY by a second span counts as indexed"
+else fail "(b) a second-span-only citation was not counted as indexed (rc=$r): $(grep -m1 '^::error' "$LINT_OUT" | head -c 160)"; fi
+
 # --- the guard's own operands -------------------------------------------------------------
 D="$(mkcorpus)" || exit 2
 sed -i 's|^REPO_ROOT="\$(cd .*|REPO_ROOT=""|' "$D/scripts/lint-legal-registers.sh" || exit 2
@@ -598,7 +672,7 @@ ccla_fixture "$D" "$(two_reg "$HASH_A" "$HASH_A")" "$(roster_two_hashes "$HASH_A
 reject_because "DI-F7 two coverage-map rows sharing one executed-instrument hash are REFUSED" "$D" \
   "share an executed-instrument hash"
 
-MIN_ASSERTIONS=55  # 34 -> 55: block (f) join arms, the review-driven fail-closed arms, the reason-substring conversion, TD7 and DI-F7 (#7909)
+MIN_ASSERTIONS=59  # 34 -> 55: block (f) join arms, the review-driven fail-closed arms, the reason-substring conversion, TD7 and DI-F7 (#7909); 55 -> 59: the four multi-source canonical-cell arms (#11294)
 if [[ $checks -lt $MIN_ASSERTIONS ]]; then
   printf '::error::lint-legal-registers.test.sh: only %d assertion(s) ran, expected >= %d\n' \
     "$checks" "$MIN_ASSERTIONS" >&2
