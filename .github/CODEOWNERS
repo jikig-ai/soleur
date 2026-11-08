@@ -29,6 +29,7 @@
 /scripts/ci-oracle-lane.sh                              @deruelle
 /scripts/ci-oracle-lane.test.sh                         @deruelle
 /scripts/ci-oracle-lane-suites.txt                      @deruelle
+/scripts/ci-oracle-lane-legs.tsv                        @deruelle
 /scripts/ci-parked-hold.sh                              @deruelle
 /scripts/ci-parked-hold.test.sh                         @deruelle
 /scripts/lib/umbrella-member.sh                         @deruelle

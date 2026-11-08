@@ -2212,7 +2212,8 @@ jobs:
   # job classifies a pull_request or merge_group diff as `oracle_only` — every changed path is oracle data — the five
   # heavy `test` legs may skip, and THIS leg is what keeps the oracle's own edit gated: it runs the committed
   # oracle-validation manifest (scripts/ci-oracle-lane-suites.txt — the AFFECTED_*_PATHS census authority, the
-  # affected-index derive/replay batteries and the selection-lever sentinels) serially, propagating exit codes. On a
+  # affected-index derive/replay batteries and the selection-lever sentinels) across K=5 matrix legs, each leg
+  # running its ci-oracle-lane-legs.tsv-assigned members serially and propagating exit codes. On a
   # merge_group it is the check that blocks a malformed oracle edit from reaching main under the reduced battery.
   # Off the lane it prints not-oracle-only and exits 0 inside a minute.
   #
@@ -2222,14 +2223,19 @@ jobs:
   # output reads as not-oracle-only. The event conjunct keeps the leg absent on push/workflow_dispatch — the `test`
   # aggregator tolerates that one structural absence only (a skipped oracle-index-check on pull_request or
   # merge_group is NEVER tolerated; Guard 2). `timeout-minutes` is alone on its line for the release-workflow budget
-  # awk; 30 bounds the serial manifest with headroom over the ~10-20 min the oracle/selector batteries measure
-  # together. Least-privilege (contents: read); the manifest itself is not in the oracle surface, so a lane-eligible
+  # awk; 30 bounds each matrix leg — the committed legs file packs the measured members so
+  # the worst leg sits ~19 min (the ci-pr-affected-replay-a floor), ~37% headroom under the
+  # bound. Least-privilege (contents: read); the manifest itself is not in the oracle surface, so a lane-eligible
   # diff can never weaken its own validation.
   oracle-index-check:
     if: ${{ always() && !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
     needs: [oracle-selection]
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: ["1/5", "2/5", "3/5", "4/5", "5/5"]
     permissions:
       contents: read
     steps:
@@ -2262,6 +2268,7 @@ jobs:
         shell: bash
         env:
           ORACLE_ONLY: ${{ needs.oracle-selection.outputs.oracle_only }}
+          ORACLE_LEG: ${{ matrix.leg }}
           # Same shape as the test-scripts legs: several manifest suites read PR/run metadata via gh when it is present.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -2270,13 +2277,62 @@ jobs:
             printf 'oracle-index-check: not-oracle-only (oracle_only=%s) — the validation manifest does not run on this diff\n' "${ORACLE_ONLY:-empty}"
             exit 0
           fi
+          # ORACLE_LEG=k/K is fail-closed, checked after the not-oracle-only exit and before
+          # the legs-file read: the checkout step is itself oracle-gated, so the legs file does
+          # not exist on a non-oracle runner, and unset/malformed can only mean matrix env
+          # wiring drifted — a leg that cannot name itself reds rather than silently running
+          # all or no members (the SCRIPTS_SHARD malformed-validator doctrine).
+          _leg_bad=""
+          case "${ORACLE_LEG:-}" in
+            */*) _leg_k="${ORACLE_LEG%/*}"; _leg_n="${ORACLE_LEG#*/}" ;;
+            *) _leg_bad=1 ;;
+          esac
+          if [ -z "$_leg_bad" ]; then
+            case "$ORACLE_LEG" in */*/*) _leg_bad=1 ;; esac
+            case "$_leg_k" in ''|*[!0123456789]*) _leg_bad=1 ;; esac
+            case "$_leg_n" in ''|*[!0123456789]*) _leg_bad=1 ;; esac
+          fi
+          if [ -z "$_leg_bad" ] && { [ "$_leg_k" -lt 1 ] || [ "$_leg_k" -gt "$_leg_n" ]; }; then _leg_bad=1; fi
+          if [ -n "$_leg_bad" ]; then
+            printf '::error title=oracle-index-check::ORACLE_LEG unset or malformed (%s) — matrix env wiring drifted\n' "${ORACLE_LEG:-empty}"
+            exit 1
+          fi
+          legs="scripts/ci-oracle-lane-legs.tsv"
+          if [ ! -f "$legs" ]; then
+            printf '::error title=oracle-index-check::legs file %s absent — a leg cannot run without an assignment\n' "$legs"
+            exit 1
+          fi
           manifest="scripts/ci-oracle-lane-suites.txt"
           ran=0
           rc=0
-          # label<TAB>argv per line; `#` and blank lines are the committed exclusion-list header. Every member is run
-          # serially from the checkout root; the first non-zero exit propagates into the leg verdict (Guard 4).
+          # label<TAB>argv per line; `#` and blank lines are the committed exclusion-list header. This leg runs only
+          # the members its ci-oracle-lane-legs.tsv row assigns to ORACLE_LEG; an unassigned member fails closed, and
+          # the first non-zero suite exit propagates into the leg verdict (Guard 4).
           while IFS=$'\t' read -r label argv || [ -n "$label" ]; do
             case "$label" in ''|'#'*) continue ;; esac
+            assigned="$(awk -F'\t' -v l="$label" '!/^[[:space:]]*#/ && NF && $1==l{print $2; exit}' "$legs")"
+            if [ -z "$assigned" ]; then
+              printf '::error title=oracle-index-check::manifest member %s has no legs-file row — an unassigned member cannot silently skip\n' "$label"
+              exit 1
+            fi
+            # A non-empty but malformed assignment must NOT read as "another leg's member" — validate the same
+            # k/N grammar with n == this matrix's K, else a bogus or foreign-leg value silently skips the member
+            # on EVERY leg while all legs stay green (the check_legs sentinel is the pre-merge backstop; this arm
+            # keeps the runtime self-consistent with the fail-closed doctrine).
+            _a_bad=""
+            _a_k="${assigned%/*}"; _a_n="${assigned#*/}"
+            case "$assigned" in */*) ;; *) _a_bad=1 ;; esac
+            case "$assigned" in */*/*) _a_bad=1 ;; esac
+            case "$_a_k" in ''|*[!0123456789]*) _a_bad=1 ;; esac
+            case "$_a_n" in ''|*[!0123456789]*) _a_bad=1 ;; esac
+            if [ -z "$_a_bad" ] && { [ "$_a_k" -lt 1 ] || [ "$_a_k" -gt "$_a_n" ] || [ "$_a_n" != "$_leg_n" ]; }; then _a_bad=1; fi
+            if [ -n "$_a_bad" ]; then
+              printf '::error title=oracle-index-check::legs-file row for %s carries malformed leg value (%s)\n' "$label" "$assigned"
+              exit 1
+            fi
+            if [ "$assigned" != "$ORACLE_LEG" ]; then
+              continue
+            fi
             ran=$((ran + 1))
             printf -- '── oracle-index-check: %s\n' "$label"
             read -r -a cmd <<< "$argv"
@@ -2297,10 +2353,10 @@ jobs:
             exit "$rc"
           fi
           if [ "$ran" -eq 0 ]; then
-            printf '::error title=oracle-index-check::manifest %s carried no suites — a vacuous leg cannot gate an oracle edit\n' "$manifest"
+            printf '::error title=oracle-index-check::leg %s ran zero manifest members — a vacuous leg cannot gate an oracle edit\n' "$ORACLE_LEG"
             exit 1
           fi
-          printf 'oracle-index-check: %d manifest suites green\n' "$ran"
+          printf 'oracle-index-check: %d manifest suites green on leg %s\n' "$ran" "$ORACLE_LEG"
 
   # Synthetic aggregator.
   #
@@ -2489,7 +2545,7 @@ jobs:
                 # The comment above claims the classifier is correct whether a
                 # timed-out leg reads `cancelled` or `failure`; this arm is where
                 # that claim has to be honoured.
-                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" ]]; then
+                if [[ "$shard" == "test-scripts" || "$shard" == "test-scripts-heavy" || "$shard" == "oracle-index-check" ]]; then
                   # A matrix rollup: "the job log" is not one log.
                   echo "$shard: FAILED — one or more matrix legs concluded failure. GitHub reports an assertion failure and a timeout-minutes kill identically here; open the failing leg and check for a timeout annotation before assuming assertions." >&2
                 else
