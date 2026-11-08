@@ -187,3 +187,12 @@ exist (#10195).
 One place to change the framing text; a measured, reversible, observe-first control on the one surface with web egress today (the scorer; the 2026-10-25 amendment adds unmeasured, unconditional static framing for GitHub text); and a
 documented, partial coverage boundary. Cost: a second PostToolUse hook on the WebFetch path, a corpus to maintain, and one extra
 tenant read per cold web-egress conversation.
+
+## Addendum 2026-11-08 (Ref #9601 slice 2): `untrusted-classify` logs `sessionIdHash`, not `sessionId`
+
+The `untrusted-classify` line carried the raw conversation id next to the hashed workspace id. It now carries `sessionIdHash`, the same
+pepper-keyed HMAC as `workspaceIdHash` (`hashUserId`); with the pepper unset the value is the literal `pepper_unset` and the raw id is never a
+fallback. The hook option and the dispatcher call site still pass the raw id; the hash is applied only inside `emit()`. No flag, scorer
+behaviour or other field changes, and the decision above is unchanged. Lines emitted before this change keep the raw id until log retention
+expires; no backfill scrub is part of this change. The Article 30 register amendment (PA-8(c)) is still owed and is operator and CLO work,
+tracked with #10195.
