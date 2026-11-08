@@ -30,6 +30,10 @@
 #    does is UNRESOLVED and FAILS the suite: a typo in a jq literal or an unbound variable on the naming path
 #    otherwise turns every named row red for the wrong reason. CTL-i..j2 prove the criterion on those classes and
 #    CTL-k proves lookup_ran is what kills C26 (both run-list fetches skipped).
+# 4. TRIAGE FIELD LIST (#12362): the last arm of the STRUCTURE check asserts that the issue-body Triage step 2
+#    `gh run list --event merge_group --json <list>` command lists the field headSha. It tests MEMBERSHIP of the
+#    comma list, never a substring, because the prose on that same line already says "by headSha/createdAt".
+#    Rows MT1-MT5 (each mutates only the list) and the must-pass row PT1 (headSha last) pin it.
 # Every structural/behavioural arm is proven live by a mutation row run against a SANDBOX COPY of
 # the workflow (the mutation is diffed against the pristine copy first, then the guard must go
 # RED for the expected reason), with an unmutated sandbox copy as the positive control. The
@@ -186,6 +190,18 @@ structural_check() {
   # anchored to the command so a comment mentioning `--jq` cannot false-hit.
   ! grep -qE 'gh issue list[^#\n]*--jq[ =]' <<<"$drain_run" \
     || { REASON="drain pushes a filter through gh --jq (use standalone jq — gh --jq does not forward --arg)"; return 1; }
+  # ---- Triage step 2 field list (#12362) --------------------------------------
+  # The issue-body prose tells the reader to correlate merge_group runs "by headSha/createdAt", so the
+  # token headSha is present on that line whether or not the --json field list carries it. Assert
+  # MEMBERSHIP of the comma list after `--json `, never a bare substring (cq-assert-anchor-not-bare-token).
+  # One selector for all three checks, so an edit to it cannot desynchronise them.
+  local sel='[.runs[] | split("\n")[] | select(contains("gh run list ") and contains("--event merge_group"))]'
+  jq -e "$sel"' | length == 1' <<<"$f" >/dev/null \
+    || { REASON="Triage step 2 gh run list --event merge_group line is not present exactly once"; return 1; }
+  jq -e "$sel"' | [.[] | capture("--json (?<f>[^ ]+)")] | length == 1' <<<"$f" >/dev/null \
+    || { REASON="Triage step 2 gh run list line has no single-line --json <list> (keep the command on one line; a wrapped or --json=<list> form is not recognised)"; return 1; }
+  jq -e "$sel"' | [.[] | capture("--json (?<f>[^ ]+)") | .f | split(",")[]] | any(. == "headSha")' <<<"$f" >/dev/null \
+    || { REASON="Triage step 2 gh run list --json field list lacks headSha"; return 1; }
   return 0
 }
 
@@ -1564,6 +1580,29 @@ mutate "M14 dedupe anchor broken -> RED (behavioural)" behav 'not deduped' \
 cp "$WF_REAL" "$SB/m15.yml"; printf '# an entry stuck from minute 0 is reported by about minute 55 at the latest\n' >> "$SB/m15.yml"
 if grep -q 'reported by about minute 55' "$SB/m15.yml" && ! cmp -s "$SB/m15.yml" "$WF_REAL"; then pass "M15 minute-55 claim is detectable by the S11 text arm"; else fail "M15 minute-55 claim detectable"; fi
 
+# ---- Triage step 2 --json field list (#12362). The prose on the same line says "by headSha/createdAt", so every row
+# below leaves that prose in place: only the field LIST moves, and the guard must read the list, not the token.
+mutate "MT1 headSha dropped from the --json list, prose kept -> RED" structural 'lacks headSha' \
+  "s.replace('headBranch,headSha,status', 'headBranch,status', 1)"
+mutate "MT2 headSha becomes a lookalike field (headShaX) -> RED" structural 'lacks headSha' \
+  "s.replace('headBranch,headSha,status', 'headBranch,headShaX,status', 1)"
+mutate "MT3 headSha becomes a left-extended lookalike (xheadSha) -> RED" structural 'lacks headSha' \
+  "s.replace('headBranch,headSha,status', 'headBranch,xheadSha,status', 1)"
+mutate "MT4 a second indented gh run list --event merge_group line inside the heredoc -> RED" structural 'exactly once' \
+  "s.replace('2. List the merge_group runs', 'gh run list --event merge_group --json id' + chr(10) + '          2. List the merge_group runs', 1)"
+mutate "MT5 the selector matches but the --json list is gone -> RED" structural 'no single-line --json' \
+  "s.replace(' --json databaseId,workflowName,headBranch,headSha,status,conclusion,createdAt,url', '', 1)"
+# PT1 (must pass): the position of headSha in the list is irrelevant; membership is what the guard reads.
+MUT_EXPR="s.replace('headBranch,headSha,status,conclusion,createdAt,url', 'headBranch,status,conclusion,createdAt,url,headSha', 1)" \
+  python3 - "$WF_REAL" "$SB/pt1.yml" <<'PY'
+import os, sys
+s = open(sys.argv[1]).read()
+open(sys.argv[2], "w").write(eval(os.environ["MUT_EXPR"]))
+PY
+if cmp -s "$WF_REAL" "$SB/pt1.yml"; then fail "PT1 headSha last in the list (mutation did not land)"
+elif structural_check "$SB/pt1.yml"; then pass "PT1 headSha last in the --json list still passes (membership, not position)"
+else fail "PT1 headSha last in the --json list ($REASON)"; fi
+
 # ---- query / issue-list mutations (F4): the stub serves RAW data and applies what the workflow passes, so
 # each of these changes what the real projection produces and must turn the behavioural engine RED.
 Q="                        "
@@ -1827,7 +1866,7 @@ printf '=== %s passed, %s failed ===\n' "$passes" "$fails"
 if [[ "$fails" -ne 0 ]]; then
   printf '[FAIL] rows failed:\n' >&2; printf '  %s\n' "${FAILED[@]}" >&2; exit 1
 fi
-EXPECTED_PASSES=160
+EXPECTED_PASSES=166
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then
   printf '[FAIL] pass count %s != exact floor %s (a row was dropped or added)\n' "$passes" "$EXPECTED_PASSES" >&2; exit 1
 fi
