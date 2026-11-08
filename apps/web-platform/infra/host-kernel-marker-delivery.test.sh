@@ -135,16 +135,22 @@ def check(files):
     blk = strip_whole_line_comments(m.group(1)) if m else ""
     chk("I-block", bool(blk))
     chk("I-gated-on-dedicated-host", re.match(r'\s*if \[\[ "\$DOPPLER_PROJECT" == "soleur-inngest" \]\]; then\n', blk) is not None)
-    chk("I-enable", "systemctl enable --now host-kernel-marker.timer" in blk and re.search(r"systemctl start host-kernel-marker\.service \|\| hkm_warn oneshot_start ", blk) is not None)
+    # Every command pin anchors at COMMAND POSITION (`^[ \t]*` under re.M): the whole-line-comment strip does not cover a trailing `: # <same text>` mutant.
+    chk("I-enable", re.search(r"^[ \t]*systemctl enable --now host-kernel-marker\.timer ", blk, re.M) is not None
+        and re.search(r"^[ \t]*systemctl start host-kernel-marker\.service \|\| hkm_warn oneshot_start ", blk, re.M) is not None)
     chk("I-reload-before-enable", 0 <= blk.find("systemctl daemon-reload") < blk.find("systemctl enable --now host-kernel-marker.timer"))
-    chk("I-script-mode-0755", re.search(r"chmod 0755 \"?\$\{?HKM_SCRIPT\}?\"?", blk) is not None)
+    chk("I-script-mode-0755", re.search(r"^[ \t]*chmod 0755 \"?\$\{?HKM_SCRIPT\}?\"?", blk, re.M) is not None)
     # Observability, never a gate: inngest-bootstrap.sh is `set -euo pipefail`, so every step of the block must report-and-continue on failure.
-    chk("I-guarded-writes", len(re.findall(r"""cat > "\$HKM_(?:SCRIPT|UNIT|TIMER)" <<'HKM\w*EOF' \|\| hkm_warn write_(?:script|unit|timer) \"""", blk)) == 3
-        and re.search(r'chmod 0755 "\$HKM_SCRIPT" \|\| hkm_warn chmod_script "', blk) is not None)
+    chk("I-guarded-writes", len(re.findall(r"""^[ \t]*cat > "\$HKM_(?:SCRIPT|UNIT|TIMER)" <<'HKM\w*EOF' \|\| hkm_warn write_(?:script|unit|timer) \"""", blk, re.M)) == 3
+        and re.search(r'^[ \t]*chmod 0755 "\$HKM_SCRIPT" \|\| hkm_warn chmod_script "', blk, re.M) is not None)
     chk("I-guarded-reload", re.search(r'^  systemctl daemon-reload \|\| hkm_warn daemon_reload "', blk, re.M) is not None)
     chk("I-guarded-enable", re.search(r'^  systemctl enable --now host-kernel-marker\.timer \|\| hkm_warn timer_enable "', blk, re.M) is not None)
     # Every guarded failure is ALSO a shipped journald line (`log` goes to the bootstrap's stderr only, which is not shipped): one helper, seven call sites.
-    chk("I-warn-logger", re.search(r'^  hkm_warn\(\) \{\n    log "warn: host-kernel-marker \$2"\n    logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=\$1" \|\| true\n  \}$', blk, re.M) is not None)
+    # ORDER is pinned: the shipped `logger` line first, `log ... || true` last (a failing stderr write makes `log` return 1, and under set -e that exits the bootstrap
+    # before the off-box line is written; reproduced with `2>&-`).
+    chk("I-warn-logger", re.search(r'^  hkm_warn\(\) \{\n    logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=\$1" \|\| true\n    log "warn: host-kernel-marker \$2" \|\| true\n  \}$', blk, re.M) is not None)
+    # The helper is DEFINED before its first use (a call before the definition is command-not-found under set -e on a real run).
+    chk("I-warn-defined-before-use", 0 <= blk.find("hkm_warn() {") < blk.find('cat > "$HKM_SCRIPT"'))
     logger_lines = [l for l in blk.splitlines() if l.lstrip().startswith("logger ")]
     chk("I-warn-not-a-marker", len(logger_lines) == 1 and "SOLEUR_HOST_KERNEL" not in logger_lines[0])
     chk("I-warn-call-sites", len(re.findall(r" \|\| hkm_warn [a-z_]+ \"", blk)) == 7)
@@ -206,7 +212,7 @@ if not got: ok(f"real tree: all {n_eval} delivery checks hold")
 else: no(f"real tree: failing checks {got}")
 # The id-count floor is EXACT and reported by a direct print + exit 1, never through no(): a family lost (or one added without moving this number)
 # must fail even if the verdict helpers were neutered. No check depends on terraform or the CI environment.
-FLOOR_CHECKS = 37
+FLOOR_CHECKS = 38
 if n_eval != FLOOR_CHECKS:
     print(f"host-kernel-marker-delivery: FAIL (checker evaluated {n_eval} ids, expected exactly {FLOOR_CHECKS}: a check family was lost or added without moving the floor)")
     sys.exit(1)
@@ -235,6 +241,9 @@ MUTANTS = [
     ("inngest: SyslogIdentifier changed", on("inngest-bootstrap.sh", resub(r"(<<'HKMUNITEOF'[^\n]*\n.*?)SyslogIdentifier=host-kernel-marker\n", r"\1SyslogIdentifier=host-kernel-markerX\n")), ["I-identifier", "I-service"]),
     ("inngest: timer cadence drifts", on("inngest-bootstrap.sh", resub(r"(<<'HKMTIMEREOF'[^\n]*\n.*?)OnBootSec=2min", r"\1OnBootSec=9min")), ["I-timer"]),
     ("inngest: install not gated on the dedicated host", on("inngest-bootstrap.sh", resub(r'(# host-kernel-marker:begin\n)if \[\[ "\$DOPPLER_PROJECT" == "soleur-inngest" \]\]; then', r"\1if true; then")), ["I-gated-on-dedicated-host"]),
+    ("inngest: the timer enable is neutered to `: # <same text>` (trailing-comment mutant)", on("inngest-bootstrap.sh", sub(ENABLE_LINE, "  : # " + ENABLE_LINE.lstrip())), ["I-enable", "I-guarded-enable"]),
+    ("inngest: the oneshot start is neutered to `: # <same text>` (trailing-comment mutant)", on("inngest-bootstrap.sh", sub("  systemctl start host-kernel-marker.service ||", "  : # systemctl start host-kernel-marker.service ||")), ["I-enable"]),
+    ("inngest: the chmod is neutered to `: # <same text>` (trailing-comment mutant)", on("inngest-bootstrap.sh", sub('  chmod 0755 "$HKM_SCRIPT" ||', '  : # chmod 0755 "$HKM_SCRIPT" ||')), ["I-script-mode-0755", "I-guarded-writes"]),
     ("inngest: timer never enabled", on("inngest-bootstrap.sh", sub("systemctl enable --now host-kernel-marker.timer ||", "true ||")), ["I-enable", "I-guarded-enable"]),
     ("inngest: the timer enable is COMMENTED OUT (a whole-line comment must not satisfy the pin)", on("inngest-bootstrap.sh", sub(ENABLE_LINE, "  # " + ENABLE_LINE.lstrip())), ["I-enable", "I-guarded-enable", "I-reload-before-enable"]),
     ("inngest: the timer enable is unguarded under set -e", on("inngest-bootstrap.sh", sub(' || hkm_warn timer_enable "timer enable failed (#12007)"', "")), ["I-guarded-enable", "I-warn-call-sites"]),
@@ -246,6 +255,9 @@ MUTANTS = [
     ("inngest: daemon-reload unguarded under set -e", on("inngest-bootstrap.sh", sub(' || hkm_warn daemon_reload "daemon-reload failed (#12007)"', "")), ["I-guarded-reload"]),
     ("inngest: daemon-reload dropped", on("inngest-bootstrap.sh", resub(r"(# host-kernel-marker:begin\n.*?)systemctl daemon-reload", r"\1true")), ["I-reload-before-enable"]),
     ("inngest: the shipped logger line is dropped from the failure helper", on("inngest-bootstrap.sh", resub(r'    logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=\$1" \|\| true\n', "")), ["I-warn-logger"]),
+    ("inngest: hkm_warn runs `log` BEFORE `logger` (a failing stderr write would exit the bootstrap before the off-box line)", on("inngest-bootstrap.sh", resub(r'(  hkm_warn\(\) \{\n)(    logger -t [^\n]*\n)(    log [^\n]*\n)', r"\1\3\2")), ["I-warn-logger"]),
+    ("inngest: hkm_warn's `log` loses its '|| true' (a failing stderr write aborts the bootstrap)", on("inngest-bootstrap.sh", sub('host-kernel-marker $2" || true', 'host-kernel-marker $2"')), ["I-warn-logger"]),
+    ("inngest: hkm_warn is defined BELOW its first use", on("inngest-bootstrap.sh", lambda s: (lambda m: s.replace(m.group(0), "", 1).replace("# host-kernel-marker:end", m.group(0) + "# host-kernel-marker:end", 1))(re.search(r"  hkm_warn\(\) \{\n.*?\n  \}\n", s, re.S))), ["I-warn-defined-before-use"]),
     ("inngest: the logger line loses its '|| true' (a missing logger would abort the bootstrap)", on("inngest-bootstrap.sh", sub('step=$1" || true', 'step=$1"')), ["I-warn-logger"]),
     ("inngest: the logger message becomes a SOLEUR_HOST_KERNEL row (a failed install would read as a kernel row)", on("inngest-bootstrap.sh", sub("HOST_KERNEL_MARKER_INSTALL_WARN step=", "SOLEUR_HOST_KERNEL v=1 step=")), ["I-warn-logger", "I-warn-not-a-marker"]),
     ("inngest: a failure path reverts to a bare log (not shipped)", on("inngest-bootstrap.sh", sub('|| hkm_warn timer_enable "timer enable failed (#12007)"', '|| log "warn: host-kernel-marker timer enable failed (#12007)"')), ["I-guarded-enable", "I-warn-call-sites"]),

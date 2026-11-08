@@ -273,7 +273,7 @@ eq "unreadable parent dir: exit 0" "$RC" "0"
 echo "=== collector: sec_updates and apt ==="
 reset_fx
 run_hkm --role web
-[[ "$OUT" == *" sec_updates=2" ]] && R=0 || R=1; ok "two '-security' Inst lines counted (updates-only, mixed-pocket and a security-named package on a non-security pocket handled)" "$R"
+[[ "$OUT" == *" sec_updates=2" ]] && R=0 || R=1; ok "two '-security' Inst lines counted (security-only and mixed-pocket count; updates-only fixture-tools and security-tools do not: security-tools has no leading hyphen, so it is NOT the foo-security-bar name case, which the pkgname row below characterizes)" "$R"
 CALLS="$(cat "$FX/apt.calls" 2>/dev/null || true)"
 eq "apt-get argv is EXACTLY '-s -o Debug::NoLocking=1 upgrade' (simulate, no lock, local lists), invoked once" "$(grep '^ARGS=' <<<"$CALLS" | sort | uniq -c | sed -E 's/^ +//')" "1 ARGS=-s -o Debug::NoLocking=1 upgrade"
 no "apt-get never runs 'update' (local lists only)" "$([[ "$CALLS" == *"ARGS="*" update"* || "$CALLS" == *"ARGS=update"* ]] && echo 0 || echo 1)"
@@ -312,12 +312,13 @@ eq "TERM-ignoring apt: exit 0" "$RC" "0"
 ok "TERM-ignoring apt is bounded by the KILL escalation (elapsed ${ELAPSED}s, bound 10 s; the stub itself runs 25 s)" "$([[ "$ELAPSED" -lt 10 ]] && echo 0 || echo 1)"
 grammar_ok web "$OUT"; ok "TERM-ignoring apt: the line is still grammatical" $?
 
-# The count rule is the collector's current one: a substring match of -security on the WHOLE Inst line (not the pocket field). A package NAME containing
-# -security on a non-security pocket is therefore counted: 2 here (1 real + 1 by name). sec_updates is display only (never feeds kernel_state), so the
-# overcount is accepted and pinned; tightening the rule is a deliberate edit of the collector (and its three copies) plus this row.
+# CHARACTERIZATION PIN (documents current behaviour, NOT a statement that the behaviour is right). The collector counts by NAME: a substring match of
+# -security on the WHOLE Inst line (not the pocket field), so a package NAME containing -security on a non-security pocket is counted: 2 here (1 real + 1 by
+# name), an overcount. sec_updates is display only (never feeds kernel_state), so the overcount is tolerated for now. TIGHTEN LATER: match the pocket field
+# only; that is a deliberate edit of the collector (and its three copies) plus a flip of this row to expect 1.
 reset_fx; printf 'pkgname\n' > "$FX/apt.mode"
 run_hkm --role web
-[[ "$OUT" == *" sec_updates=2" ]] && R=0 || R=1; ok "package name foo-security-bar on a non-security pocket: counted by the current whole-line rule (display-only overcount, documented)" "$R"
+[[ "$OUT" == *" sec_updates=2" ]] && R=0 || R=1; ok "CHARACTERIZATION (known overcount, tighten later): package name foo-security-bar on a non-security pocket IS counted by the whole-line rule -> 2" "$R"
 
 echo "=== collector: nothing measurable still exits 0 ==="
 reset_fx; printf '1\n' > "$FX/uname.rc"; : > "$FX/uname.out"; rm -f "$FX/uptime"; printf 'fail\n' > "$FX/apt.mode"
@@ -383,7 +384,15 @@ no "service: the test seam is never set by the unit" "$(grep -q 'HKM_' "$SVC"; e
 ok "service: TimeoutStartSec=60 (above the collector's own 20 s apt bound)" "$(grep -qxE 'TimeoutStartSec=60' "$SVC"; echo $?)"
 ok "service: IOSchedulingClass=idle" "$(grep -qxE 'IOSchedulingClass=idle' "$SVC"; echo $?)"
 ok "service: CPUSchedulingPolicy=idle" "$(grep -qxE 'CPUSchedulingPolicy=idle' "$SVC"; echo $?)"
-ok "service: OOMPolicy=continue (an OOM kill of apt degrades sec_updates to unknown, it must not stop the unit before the line prints)" "$(grep -qxE 'OOMPolicy=continue' "$SVC"; echo $?)"
+# OOMPolicy is only honoured inside [Service]: the same line under [Install] (or any other section) is silently ignored by systemd, so the pin is section-aware.
+in_section() { # <file> <section> <exact-line>: rc 0 iff the line sits inside [<section>] (the section header opens it, the next header closes it)
+  awk -v sec="[$2]" -v want="$3" '/^\[/ { cur = $0 } cur == sec && $0 == want { found = 1 } END { exit found ? 0 : 1 }' "$1"
+}
+ok "service: OOMPolicy=continue sits in [Service] (an OOM kill of apt degrades sec_updates to unknown, it must not stop the unit before the line prints)" "$(in_section "$SVC" Service 'OOMPolicy=continue'; echo $?)"
+OOM_MUT="$WORK/oom-in-install.service"
+{ grep -vxF 'OOMPolicy=continue' "$SVC"; printf '\n[Install]\nOOMPolicy=continue\n'; } > "$OOM_MUT"
+ok "mutant landed: the OOMPolicy line moved out of [Service] (control: the file still carries the line)" "$(grep -qxF 'OOMPolicy=continue' "$OOM_MUT"; echo $?)"
+no "mutant: OOMPolicy=continue moved to [Install] is NOT accepted as in [Service]" "$(in_section "$OOM_MUT" Service 'OOMPolicy=continue'; echo $?)"
 ok "service: MemoryMax=256M (a kill degrades the row to unknown tokens)" "$(grep -qxE 'MemoryMax=256M' "$SVC"; echo $?)"
 no "service: no Restart= (a oneshot is re-run by its timer only)" "$(grep -qE '^Restart=' "$SVC"; echo $?)"
 ok "timer: OnBootSec=2min" "$(grep -qxE 'OnBootSec=2min' "$TMR"; echo $?)"
@@ -416,10 +425,11 @@ no "suite/script carry no kernel-shaped string outside the synthesized 9.9.9 fam
   "$(grep -hoE '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+-[a-z]+' "$SUT" "$SVC" "$TMR" "${BASH_SOURCE[0]}" | grep -vE '^9\.9\.9-' > /dev/null; echo $?)"
 
 echo
-# MIN_CASES is the EXACT measured count, parent and sandbox child alike (the child runs two sandbox-only rows where the parent runs the two sandbox-copy
-# rows, so one literal holds for both: no slack for an assertion to vanish into). A literal bound directly above its floor (the vacuity ratchet builds its
+# MIN_CASES is the measured count, parent and sandbox child alike (the child runs two sandbox-only rows where the parent runs the two sandbox-copy
+# rows, so one literal holds for both). It is a `-lt` floor, so only a REMOVED assertion trips it (an added one does not): it bounds shrinkage, not growth,
+# and must be moved up by hand when rows are added. A literal bound directly above its floor (the vacuity ratchet builds its
 # mutant from that shape); the floor is a direct printf + exit 1, never routed through fail().
-MIN_CASES=174
+MIN_CASES=176
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf 'host-kernel-marker: FAIL (only %d assertions ran; floor %d - the suite may have been truncated)\n' "$cases" "$MIN_CASES" >&2
   exit 1

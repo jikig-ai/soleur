@@ -163,24 +163,28 @@ EOF
 # journald row carrying ANY `host=` substring (leading space, newline, tab or end of message) is refused. Each predicate
 # leads with position(raw, 'SOLEUR_HOST_KERNEL') > 0, intended to prune the scan; ClickHouse does not guarantee AND
 # evaluation order, so it is a cost hint and never a correctness guard. The registry posts directly, so its
-# rows have an EMPTY SYSLOG_IDENTIFIER and host_name; there the identity is in the message: role=registry plus host=<the
+# rows carry NO SYSLOG_IDENTIFIER or host_name key; there the identity is in the message: role=registry plus host=<the
 # registry id the SOLEUR_ZOT_DISK path uses>, and the message must carry EXACTLY ONE `host=` (a registry message with
 # more than one `host=` is refused, so `host=evil host=soleur-registry` never feeds). The host_name and registry-id literals are cross-pinned by the harness to
 # ROLE_TABLE / REGISTRY_HOST_ID in plugins/soleur/skills/cve-exposure/scripts/host-state.sh (the feeder runs in CI, the
-# helper from an operator checkout, so neither can source the other). The kernel shape is delimited by its trailing space:
-# build_sql refuses every dollar sign but its two table tokens, so there is no end anchor; an `unreadable` or malformed
-# kernel therefore never qualifies. Bracket classes stand in for backslash escapes so the text needs none.
+# helper from an operator checkout, so neither can source the other). The kernel shape is START-anchored
+# (`^SOLEUR_HOST_KERNEL v=1 role=<r> kernel=<shape> `) because the helper reads the FIRST kernel= token (host-state.sh
+# kv): an unanchored search let a later `role=<r> kernel=<valid> ` occurrence feed the dead-man while the helper reported
+# `unreadable`. It is delimited by its trailing space: build_sql refuses every dollar sign but its two table tokens, so
+# there is no end anchor; an `unreadable` or malformed kernel therefore never qualifies. Bracket classes stand in for
+# backslash escapes so the text needs none. The registry's transport fields must be ABSENT (JSONHas = 0), not merely
+# empty: JSONExtractString returns '' for a numeric or null value too, so an `= ''` test would pass a non-string field.
 def_pred HK_WEB1_PRED <<'EOF'
-position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
 EOF
 def_pred HK_WEB2_PRED <<'EOF'
-position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-2' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-2' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=web kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
 EOF
 def_pred HK_INNGEST_PRED <<'EOF'
-position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), 'role=inngest kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-inngest-prd' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=inngest kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND position(JSONExtractString(raw, 'message'), 'host=') = 0
 EOF
 def_pred HK_REGISTRY_PRED <<'EOF'
-position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '' AND JSONExtractString(raw, 'host_name') = '' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), 'role=registry kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND (endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0) AND countSubstrings(JSONExtractString(raw, 'message'), 'host=') = 1
+position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND JSONHas(raw, 'SYSLOG_IDENTIFIER') = 0 AND JSONHas(raw, 'host_name') = 0 AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=registry kernel=[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ ') AND (endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0) AND countSubstrings(JSONExtractString(raw, 'message'), 'host=') = 1
 EOF
 
 # The target is matched by LITERAL EQUALITY against the table and never interpolated: the matched arm assigns

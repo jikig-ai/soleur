@@ -405,6 +405,11 @@ hkm_pin_bad() { # <tf-file> <resource> <depends_on target> -> space-joined label
     if [[ "$n" -le "$prev" ]]; then out="$out order"; break; fi
     prev="$n"
   done
+  # file-before-exec: all three `provisioner "file"` blocks precede the `provisioner "remote-exec"` (the exec would otherwise chmod/enable files that are not there
+  # yet). The ORDER pin above covers the inline list only; Terraform runs provisioners in declaration order.
+  n="$(awk '/provisioner "file" \{/ {c++; last=NR} /provisioner "remote-exec" \{/ && !ex {ex=NR} END {print c+0 ":" last+0 ":" ex+0}' <<<"$blk")"
+  IFS=: read -r nf lastf fex <<<"$n"
+  { [[ "$nf" == 3 && "$fex" -gt 0 && "$lastf" -lt "$fex" ]]; } || out="$out file-before-exec"
   grep -qE "^[[:space:]]*depends_on[[:space:]]*=[[:space:]]*\[terraform_data\.$3\]" <<<"$blk" || out="$out depends_on"
   grep -qE 'script_path[[:space:]]*=.*%RAND%' <<<"$blk" || out="$out rand"
   if grep -qiE 'doppler|token|/etc/default/' <<<"$blk"; then out="$out credential-material"; fi
@@ -434,6 +439,8 @@ hkm_mut "web-1 runs daemon-reload AFTER enable --now" host_kernel_marker_install
 hkm_mut "web-2 starts the oneshot BEFORE the daemon-reload and enable" host_kernel_marker_install_web2 journald_persistent_web2 order 's#^([[:space:]]*)("systemctl daemon-reload",)#\1"systemctl start host-kernel-marker.service || echo \\"warn: early\\"",\n\1\2#'
 hkm_mut "web-2 re-fires on web-1's server id (cross-wired)" host_kernel_marker_install_web2 journald_persistent_web2 server_id 's#(server_id[[:space:]]*=[[:space:]]*hcloud_server\.web\[")web-2("\]\.id)#\1web-1\2#'
 hkm_mut "web-1 re-fires on web-2's server id (cross-wired)" host_kernel_marker_install journald_persistent server_id 's#(server_id[[:space:]]*=[[:space:]]*hcloud_server\.web\[")web-1("\]\.id)#\1web-2\2#'
+hkm_mut "web-1 declares its remote-exec BEFORE the three file provisioners (the three file blocks moved below it: the exec would run on files not yet shipped)" host_kernel_marker_install journald_persistent file-before-exec '{/provisioner "file" \{/,/^  \}/{H;d};/^\}/{x;s/^\n//;p;x}}'
+hkm_mut "web-2 declares its remote-exec BEFORE the three file provisioners (the three file blocks moved below it)" host_kernel_marker_install_web2 journald_persistent_web2 file-before-exec '{/provisioner "file" \{/,/^  \}/{H;d};/^\}/{x;s/^\n//;p;x}}'
 hkm_mut "web-1 ships the collector to the wrong path" host_kernel_marker_install journald_persistent file:host-kernel-marker.sh 's#(destination[[:space:]]*=[[:space:]]*")/usr/local/bin/host-kernel-marker\.sh"#\1/usr/local/bin/hkm.sh"#'
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -746,7 +753,7 @@ mut_ddir "the provisioner's detail dir default drifted" prov 's#(DETAIL_DIR=.*)/
 mut_ddir "ONE emitter's detail dir default drifted" boot '0,/DDIR="\$\{SOLEUR_STAGE_DETAIL_DIR:-\/run\/soleur-stage-detail\.d\}"/s##DDIR="${SOLEUR_STAGE_DETAIL_DIR:-/run/soleur-stage-detail2.d}"#'
 
 # ── Anti-vacuity: an exact assertion count (deleting sections 14-21 leaves a lower one) ──
-EXPECTED_ASSERTIONS=256  # 251 + 5 (#12007 fix round: 13d order pin and own-key server_id pin, five mutations: unguarded first run, reload after enable, start before reload, two cross-wired server_id); 225 + 26 for #12007 (measured: the three host-kernel-marker files join the PROBE sections 7/8/9, plus the 13d enable/.dockerignore/installer pins and eight mutations); before that 199 + 26 for the #10078 env-file conditioning pins: §12b = 5 units x 5 arms (extract / set-identity / unprefixed / no-reset-lines / SKIP-VS-FAIL comment) + 1 mutation control
+EXPECTED_ASSERTIONS=258  # 256 + 2 (13d file-before-exec pin: file-blocks-moved-below-exec mutation on each installer); 256 = 251 + 5 (#12007 fix round: 13d order pin and own-key server_id pin, five mutations: unguarded first run, reload after enable, start before reload, two cross-wired server_id); 225 + 26 for #12007 (measured: the three host-kernel-marker files join the PROBE sections 7/8/9, plus the 13d enable/.dockerignore/installer pins and eight mutations); before that 199 + 26 for the #10078 env-file conditioning pins: §12b = 5 units x 5 arms (extract / set-identity / unprefixed / no-reset-lines / SKIP-VS-FAIL comment) + 1 mutation control
 if [[ "$((pass + fail))" -ne "$EXPECTED_ASSERTIONS" ]]; then no "floor: ran $((pass + fail)) assertions, expected exactly $EXPECTED_ASSERTIONS (a section was deleted or added without moving the floor)"; fi
 
 echo "=== fresh-boot-parity: $pass passed, $fail failed ==="

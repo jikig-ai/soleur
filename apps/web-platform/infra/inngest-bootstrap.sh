@@ -1965,10 +1965,11 @@ if [[ "$DOPPLER_PROJECT" == "soleur-inngest" ]]; then
   # hkm_warn <step> <message>: every guarded failure below goes through it. `log` writes to the bootstrap's stderr only, which is NOT shipped off-box, so a
   # failed install would be invisible without SSH (hr-no-ssh-fallback-in-runbooks); the `logger` line reaches journald under the allowlisted tag
   # (vector.toml Source 4) and so Better Stack. It is deliberately NOT a SOLEUR_HOST_KERNEL row (readers parse only that prefix), and `|| true` keeps
-  # a missing logger from aborting the bootstrap under set -euo pipefail.
+  # a missing logger from aborting the bootstrap under set -euo pipefail. ORDER MATTERS: the shipped `logger` line runs FIRST and `log` runs last with its own `|| true`, because `log`
+  # writes to stderr and a closed or failing stderr makes it return 1, which under set -e would exit the bootstrap BEFORE the off-box line was ever written.
   hkm_warn() {
-    log "warn: host-kernel-marker $2"
     logger -t host-kernel-marker "HOST_KERNEL_MARKER_INSTALL_WARN step=$1" || true
+    log "warn: host-kernel-marker $2" || true
   }
   cat > "$HKM_SCRIPT" <<'HKMSCRIPTEOF' || hkm_warn write_script "collector write failed (#12007)"
 #!/usr/bin/env bash

@@ -709,6 +709,11 @@ resource "betteruptime_team_member" "ops" {
 # four names are not in the feeder workflow loop yet, so an unpaused heartbeat would page falsely. ignore_changes =
 # [paused] so a later apply never reverts the owner's unpause. No doppler_secret: the feeder resolves the ping URL
 # through the read-only API by exact name. policy_id is gated on var.betterstack_paid_tier exactly as the luks sibling.
+#
+# REGISTRY: this PR ships NO registry emitter. The host_kernel_registry heartbeat below stays PAUSED, and the registry emitter is a separate owner-approved
+# follow-up PR (#12386): merging a change to cloud-init-registry.yml auto-fires registry-host-replace-dispatch.yml, which REPLACES the production registry host,
+# so that PR is the owner's decision, not a side effect of this one. Arming (unpausing) host-kernel-registry before that PR has shipped and the replaced host
+# has emitted would page falsely, because no registry row can exist until then.
 resource "betteruptime_heartbeat" "host_kernel_web_1" {
   name      = "soleur-host-kernel-web-1-prd"
   period    = 3600
@@ -769,6 +774,8 @@ resource "betteruptime_heartbeat" "host_kernel_inngest" {
   }
 }
 
+# PAUSED, and it must stay paused until the registry emitter ships: that emitter is a separate owner-approved follow-up PR (#12386) because its merge triggers
+# the registry host replace (registry-host-replace-dispatch.yml). No registry row exists before it, so unpausing this earlier would page falsely.
 resource "betteruptime_heartbeat" "host_kernel_registry" {
   name      = "soleur-host-kernel-registry-prd"
   period    = 3600

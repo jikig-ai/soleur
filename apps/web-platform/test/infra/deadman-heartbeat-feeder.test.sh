@@ -164,8 +164,8 @@ HK_KSHAPE='[0-9]+[.][0-9]+[.][0-9]+-[0-9]+-[a-z0-9-]+ '
 # ANY 'host=' substring; the registry one requires EXACTLY ONE 'host=' in the message (countSubstrings = 1).
 HK_LEAD="position(raw, 'SOLEUR_HOST_KERNEL') > 0 AND "
 HK_ID_JOURNALD="${HK_LEAD}JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'host-kernel-marker' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = "
-HK_ROLE_WEB="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
-HK_ROLE_INGEST="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), 'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
+HK_ROLE_WEB="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=web kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
+HK_ROLE_INGEST="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=inngest ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0"
 HK_REG_HOSTID_ARM="(endsWith(JSONExtractString(raw, 'message'), ' host=soleur-registry') OR position(JSONExtractString(raw, 'message'), ' host=soleur-registry ') > 0) AND countSubstrings(JSONExtractString(raw, 'message'), 'host=') = 1"
 declare -A E_PRED=(
   [$T_LUKS]="JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = 'luks-monitor' AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'luks-monitor.service' AND JSONExtractString(raw, 'message') LIKE '%OK: /mnt/data is LUKS-backed%' AND JSONExtractString(raw, 'host_name') = 'soleur-web-platform'"
@@ -174,7 +174,7 @@ declare -A E_PRED=(
   [$T_HK1]="${HK_ID_JOURNALD}'soleur-web-platform' AND ${HK_ROLE_WEB}"
   [$T_HK2]="${HK_ID_JOURNALD}'soleur-web-2' AND ${HK_ROLE_WEB}"
   [$T_HKI]="${HK_ID_JOURNALD}'soleur-inngest-prd' AND ${HK_ROLE_INGEST}"
-  [$T_HKR]="${HK_LEAD}JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '' AND JSONExtractString(raw, 'host_name') = '' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), 'role=registry kernel=${HK_KSHAPE}') AND ${HK_REG_HOSTID_ARM}"
+  [$T_HKR]="${HK_LEAD}JSONHas(raw, 'SYSLOG_IDENTIFIER') = 0 AND JSONHas(raw, 'host_name') = 0 AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=registry ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=registry kernel=${HK_KSHAPE}') AND ${HK_REG_HOSTID_ARM}"
 )
 expect_sql() { # <target> <predicate> -> the SQL the feeder must send (frozen shape)
   local w="${E_WINDOW[$1]}" win
@@ -359,6 +359,19 @@ class Parser:
             return lambda row: re.search(str(args[1](row)), str(args[0](row))) is not None
         if name == "position":
             return lambda row: str(args[0](row)).find(str(args[1](row))) + 1
+        if name == "jsonhas":
+            hk = [a(None) for a in args[1:]]
+
+            def h(row):
+                o = json.loads(row["rawtext"])
+                for k in hk:
+                    if isinstance(o, dict) and k in o:
+                        o = o[k]
+                    else:
+                        return 0
+                return 1
+
+            return h
         if name == "countsubstrings":
             return lambda row: str(args[0](row)).count(str(args[1](row)))
         raise Unsupported("function %r" % name)
@@ -1649,6 +1662,27 @@ HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registr
 expect "registry: 'host=soleur-registry host=evil' (two host= fields) withholds" 3 no_qualifying_row
 HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw __none__ "$(hk_msg registry "$HK_OK_KERNEL" "host=soleur-registry host=soleur-registry")" "")" | fx hk-reg-twohost-c)"
 expect "registry: the registry id repeated (two host= fields) withholds" 3 no_qualifying_row
+# The kernel token is START-anchored (the helper reads the FIRST kernel= token): a message whose first kernel= is unreadable
+# and whose LATER role=<r> kernel=<valid> occurrence would satisfy an unanchored search must not feed any target, and
+# neither must a message with another field between role= and kernel=.
+for t in $DEFERRED_TARGETS; do
+  _r="${HK_ROLE[$t]}"; _x=""; [[ "$t" == "$T_HKR" ]] && _x=" host=soleur-registry"
+  _m1="SOLEUR_HOST_KERNEL v=1 role=${_r} kernel=unreadable uptime_s=1 role=${_r} kernel=${HK_OK_KERNEL} reboot_required=0 sec_updates=2${_x}"
+  _m2="SOLEUR_HOST_KERNEL v=1 role=${_r} foo=1 kernel=${HK_OK_KERNEL} uptime_s=1 reboot_required=0 sec_updates=2${_x}"
+  if [[ "$t" == "$T_HKR" ]]; then _h=__none__; _id=""; else _h="${HK_HOST[$t]}"; _id=host-kernel-marker; fi
+  HKP "$t"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw "$_h" "$_m1" "$_id")" | fx "hk-anchor-later-$t")"
+  expect "$t: first kernel=unreadable then a LATER role=${_r} kernel=<valid> withholds (start-anchored kernel token)" 3 no_qualifying_row "n=0"
+  HKP "$t"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw "$_h" "$_m2" "$_id")" | fx "hk-anchor-foo-$t")"
+  expect "$t: another field between role= and kernel= withholds (start-anchored kernel token)" 3 no_qualifying_row "n=0"
+done
+# The registry's transport fields must be ABSENT, not merely empty or non-string: a numeric SYSLOG_IDENTIFIER and a
+# present-but-empty host_name both make JSONExtractString return '' and must not feed.
+HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_good "$T_HKR" | jq -c '. + {SYSLOG_IDENTIFIER: 5}')" | fx hk-reg-numtag)"
+expect "registry: a numeric SYSLOG_IDENTIFIER (5) withholds (the transport field must be absent)" 3 no_qualifying_row "n=0"
+HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_good "$T_HKR" | jq -c '. + {host_name: ""}')" | fx hk-reg-emptyhost)"
+expect "registry: a present-but-empty host_name withholds (the transport field must be absent)" 3 no_qualifying_row "n=0"
+HKP "$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_good "$T_HKR" | jq -c '. + {SYSLOG_IDENTIFIER: ""}')" | fx hk-reg-emptytag)"
+expect "registry: a present-but-empty SYSLOG_IDENTIFIER withholds (the transport field must be absent)" 3 no_qualifying_row "n=0"
 # The window is a literal in the SQL text: no caller environment changes it.
 HKP "$T_HK1"; C_ENVX="W=1 WINDOW=1 HOST_KERNEL_WINDOW=1 HOST_KERNEL_WINDOW_S=1 DEADMAN_WINDOW=1 FEEDER_WINDOW=1"
 C_ROWS="$(row s3 "$((20 * H))" "$(hk_good "$T_HK1")" | fx hk-envwin)"; C_BEATS=1; C_APIS=1
@@ -2021,16 +2055,20 @@ else fail "the evidence pattern must appear exactly once outside comments"; fi
 # (#12007) The workflow's OWN marker-shape regex, extracted from the yml and run in bash on one marker per target name in
 # TARGETS and per verdict shape. A target capture that cannot match a digit (host-kernel-web-1) would count every web-1 /
 # web-2 marker as dropped and read as 'FEEDER FAULT (no_marker)' the moment those names enter the loop.
-wf_marker_violations() { # <workflow-file> -> one line per marker the workflow's regex does not accept (or wrongly accepts)
-  local yml="$1" line cond re t v m out="$WORK/mut/marker-re.sh" bad=""
+wf_marker_violations() { # <workflow-file> [feeder] -> one line per marker the workflow's regex does not accept (or wrongly accepts)
+  local yml="$1" fsrc="${2:-$FEEDER_SRC}" line cond re t v m out="$WORK/mut/marker-re.sh" bad=""
   line="$(grep -F 'deadman-feeder:\ target=' "$yml" | head -1)"
   if [[ -z "$line" || "$line" != *'=~ '*' ]]; then'* ]]; then echo "marker-regex-line-not-found"; return; fi
   cond="${line#*'=~ '}"; re="${cond%' ]]; then'*}"
   printf '%s\n' 'safe="$1"' "if [[ \"\$safe\" =~ $re ]]; then exit 0; fi" 'exit 1' > "$out"
-  local tg; tg="$(grep -E '^TARGETS=' "$FEEDER_SRC" | head -1)"; tg="${tg#TARGETS=\"}"; tg="${tg%\"}"
+  local tg; tg="$(grep -E '^TARGETS=' "$fsrc" | head -1)"; tg="${tg#TARGETS=\"}"; tg="${tg%\"}"
   # The verdict set is DERIVED from the feeder's own marker/fmarker calls, so it cannot drift from what the feeder emits.
-  local verdicts; verdicts="$(grep -oE '\bf?marker "[a-z_]+"' "$FEEDER_SRC" | sed -E 's/^.*"([a-z_]+)"$/\1/' | sort -u)"
+  # xtrace_refused is a literal printf with target=none (not a marker call), so it is added EXPLICITLY; the workflow-made
+  # no_marker is the workflow's own log line, never parsed by this regex. A MINIMUM derived count (8 calls + xtrace_refused
+  # = 9) keeps a collapsed derivation (a renamed helper, a changed call shape) from passing on a shrunken verdict set.
+  local verdicts; verdicts="$({ grep -oE '\bf?marker "[a-z_]+"' "$fsrc" | sed -E 's/^.*"([a-z_]+)"$/\1/'; echo xtrace_refused; } | sort -u)"
   if [[ -z "$verdicts" ]]; then bad+=$'no-verdicts-derived-from-the-feeder\n'; fi
+  if (( $(wc -l <<<"$verdicts") < 9 )); then bad+=$'verdicts-derived-below-minimum-9\n'; fi
   for t in $tg none; do
     for v in $verdicts; do
       for m in "deadman-feeder: target=$t verdict=$v" "deadman-feeder: target=$t verdict=$v reason=curl_28 elapsed_ms=12"; do
@@ -2058,6 +2096,17 @@ cases=$((cases + 1))
 _mv="$(wf_marker_violations "$WORK/mut/wf-marker-narrow.yml")"
 if ! cmp -s "$WORKFLOW" "$WORK/mut/wf-marker-narrow.yml" && grep -qx 'marker-not-matched-host-kernel-web-1-beat_failed' <<<"$_mv" && grep -qx 'marker-not-matched-host-kernel-web-2-query_failed' <<<"$_mv" && ! grep -q 'marker-not-matched-luks-monitor-host-timer' <<<"$_mv"; then pass "mutation row WF-M is RED: the capture reverted to [a-z-]+ rejects exactly the digit-bearing web-1/web-2 markers"
 else fail "mutation row WF-M: the narrowed target capture was not noticed (or did not land): [$(paste -sd, - <<<"$_mv" | head -c 300)]"; fi
+# Mutation-proved: a collapsed derivation (the marker calls renamed away) and a dropped xtrace_refused literal both fall below
+# the minimum derived verdict count (9), where before they passed on a shrunken set.
+sed -E 's/\bmarker "(unreachable|usage)"/note "\1"/g' "$FEEDER_SRC" > "$WORK/mut/feeder-collapsed.sh"
+cases=$((cases + 1))
+_mv="$(wf_marker_violations "$WORKFLOW" "$WORK/mut/feeder-collapsed.sh")"
+if ! cmp -s "$FEEDER_SRC" "$WORK/mut/feeder-collapsed.sh" && grep -qx 'verdicts-derived-below-minimum-9' <<<"$_mv"; then pass "mutation row WF-V is RED: two marker calls renamed away drop the derived verdict set below the minimum of 9"
+else fail "mutation row WF-V: the collapsed verdict derivation was not noticed (or did not land): [$(paste -sd, - <<<"$_mv" | head -c 300)]"; fi
+cases=$((cases + 1))
+_mv="$(wf_marker_violations "$WORKFLOW")"
+if [[ "$(grep -oE '\bf?marker "[a-z_]+"' "$FEEDER_SRC" | sort -u | wc -l)" == 8 ]] && [[ -z "$_mv" ]]; then pass "the derived verdicts are exactly the 8 marker calls plus the explicit xtrace_refused (9), and the workflow regex accepts all of them"
+else fail "the derived marker-call count is not 8 (or the regex rejects one): [$(paste -sd, - <<<"$_mv" | head -c 300)]"; fi
 # The feeder's next-action pointer for a host-kernel withhold must resolve: the runbook and its section heading exist.
 # ONE regex on the host-kernel echo line captures the runbook filename (the cost-marker echo line also names a runbook, so a
 # file-wide grep cannot tell the two apart); the captured name must be a file under the runbooks directory and carry the heading.
@@ -2697,7 +2746,7 @@ else fail "mutation row HK2-2d: a missing FRESH_HOURS was not noticed (or did no
 land hk2-7a "AND JSONExtractString(raw, '_SYSTEMD_UNIT') = 'host-kernel-marker.service' AND JSONExtractString(raw, 'host_name') = 'soleur-web-2'" "AND JSONExtractString(raw, 'host_name') = 'soleur-web-2'"; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_HK2"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw soleur-web-2 "$(hk_msg web "$HK_OK_KERNEL")" host-kernel-marker session-1.scope)" | fx hkm7a)"; C_BEATS=1; C_APIS=1
 expect_red HK2-7a "_SYSTEMD_UNIT dropped from the web-2 predicate: a row under session-1.scope beats" 3 no_qualifying_row 0 beat
-land hk2-7b "'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0" "'role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), ' host=') = 0"; _m="$M"
+land hk2-7b "'^SOLEUR_HOST_KERNEL v=1 role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), 'host=') = 0" "'^SOLEUR_HOST_KERNEL v=1 role=inngest kernel=${HK_KSHAPE}') AND position(JSONExtractString(raw, 'message'), ' host=') = 0"; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_HKI"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw soleur-inngest-prd "$(hk_msg inngest "$HK_OK_KERNEL")"$'\nhost=')" | fx hkm7b)"; C_BEATS=1; C_APIS=1
 expect_red HK2-7b "the host= refusal narrowed back to ' host=' on the inngest predicate: a newline-separated host= row beats" 3 no_qualifying_row 0 beat
 land hk2-7d " > 0) AND countSubstrings(JSONExtractString(raw, 'message'), 'host=') = 1" " > 0)"; _m="$M"
@@ -2757,14 +2806,37 @@ _hp="$(hk_parity_violations "$FEEDER_SRC" "$WORK/mut/uptime-renamed.tf" "$MANIFE
 if grep -qx 'hk-parity-tf-name-host_kernel_registry' <<<"$_hp"; then pass "mutation row HK2-4c is RED: a Terraform heartbeat name that differs from the feeder's NAME fails the parity pin"
 else fail "mutation row HK2-4c: expected hk-parity-tf-name, got [$(paste -sd, - <<<"$_hp")]"; fi
 # Row 5: an unreadable-kernel row, alone in the window, must withhold; a predicate that lost its kernel-shape conjunct beats it.
-land hk2-5a "match(JSONExtractString(raw, 'message'), 'role=inngest kernel=${HK_KSHAPE}') AND " ''; _m="$M"
+land hk2-5a "match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=inngest kernel=${HK_KSHAPE}') AND " ''; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_HKI"; C_ROWS="$(row hot 60 "$(hk_good "$T_HKI" unreadable)" | fx hkm5a)"; C_BEATS=1; C_APIS=1
 expect_red HK2-5a "the kernel-shape conjunct dropped from the inngest predicate: an unreadable-kernel row (a minute old) beats" 3 no_qualifying_row 0 beat
 reset_case; C_TARGET="$T_HKI"; C_ROWS="$(row hot 60 "$(hk_good "$T_HKI")" | fx hkm5a-ok)"; C_BEATS=1; C_APIS=1
 expect "HK2-5a control: the shipped feeder beats the same target on a compliant row a minute old" 0 beat
-land hk2-5b "'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), 'role=web kernel=${HK_KSHAPE}') AND " "'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND "; _m="$M"
+land hk2-5b "'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND match(JSONExtractString(raw, 'message'), '^SOLEUR_HOST_KERNEL v=1 role=web kernel=${HK_KSHAPE}') AND " "'soleur-web-platform' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=web ') AND "; _m="$M"
 reset_case; C_SRC="$_m"; C_TARGET="$T_HK1"; C_ROWS="$(row hot 60 "$(hk_good "$T_HK1" unreadable)" | fx hkm5b)"; C_BEATS=1; C_APIS=1
 expect_red HK2-5b "the kernel-shape conjunct dropped from the web-1 predicate: an unreadable-kernel row beats" 3 no_qualifying_row 0 beat
+# Row 8 (start anchor): reverting any predicate to the unanchored search lets a later role=<r> kernel=<valid> occurrence feed it.
+for _row in "$T_HK1:soleur-web-platform:web" "$T_HK2:soleur-web-2:web" "$T_HKI:soleur-inngest-prd:inngest" "$T_HKR::registry"; do
+  _t="${_row%%:*}"; _rest="${_row#*:}"; _hn="${_rest%%:*}"; _r="${_rest#*:}"
+  if [[ -n "$_hn" ]]; then _ctx="'${_hn}' AND startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=${_r} ') AND match(JSONExtractString(raw, 'message'), "
+  else _ctx="startsWith(JSONExtractString(raw, 'message'), 'SOLEUR_HOST_KERNEL v=1 role=${_r} ') AND match(JSONExtractString(raw, 'message'), "; fi
+  land "hk2-8-$_t" "${_ctx}'^SOLEUR_HOST_KERNEL v=1 role=${_r} kernel=" "${_ctx}'role=${_r} kernel="; _m="$M"
+  _x=""; [[ "$_t" == "$T_HKR" ]] && _x=" host=soleur-registry"
+  if [[ "$_t" == "$T_HKR" ]]; then _h=__none__; _id=""; else _h="$_hn"; _id=host-kernel-marker; fi
+  reset_case; C_SRC="$_m"; C_TARGET="$_t"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_raw "$_h" "SOLEUR_HOST_KERNEL v=1 role=${_r} kernel=unreadable uptime_s=1 role=${_r} kernel=${HK_OK_KERNEL} reboot_required=0 sec_updates=2${_x}" "$_id")" | fx "hkm8-$_t")"; C_BEATS=1; C_APIS=1
+  expect_red "HK2-8-$_t" "the kernel token un-anchored on $_t: a later role=${_r} kernel=<valid> after kernel=unreadable beats" 3 no_qualifying_row 0 beat
+done
+# Row 9 (registry transport fields ABSENT): each JSONHas conjunct dropped in turn, and both reverted to the old '' test.
+land hk2-9a "JSONHas(raw, 'SYSLOG_IDENTIFIER') = 0 AND JSONHas(raw, 'host_name') = 0 AND startsWith" "JSONHas(raw, 'host_name') = 0 AND startsWith"; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_good "$T_HKR" | jq -c '. + {SYSLOG_IDENTIFIER: 5}')" | fx hkm9a)"; C_BEATS=1; C_APIS=1
+expect_red HK2-9a "the SYSLOG_IDENTIFIER absence conjunct dropped from the registry predicate: a numeric SYSLOG_IDENTIFIER row beats" 3 no_qualifying_row 0 beat
+land hk2-9b "JSONHas(raw, 'SYSLOG_IDENTIFIER') = 0 AND JSONHas(raw, 'host_name') = 0 AND startsWith" "JSONHas(raw, 'SYSLOG_IDENTIFIER') = 0 AND startsWith"; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_good "$T_HKR" | jq -c '. + {host_name: ""}')" | fx hkm9b)"; C_BEATS=1; C_APIS=1
+expect_red HK2-9b "the host_name absence conjunct dropped from the registry predicate: a present-but-empty host_name row beats" 3 no_qualifying_row 0 beat
+land hk2-9c "JSONHas(raw, 'SYSLOG_IDENTIFIER') = 0 AND JSONHas(raw, 'host_name') = 0 AND startsWith" "JSONExtractString(raw, 'SYSLOG_IDENTIFIER') = '' AND JSONExtractString(raw, 'host_name') = '' AND startsWith"; _m="$M"
+reset_case; C_SRC="$_m"; C_TARGET="$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_good "$T_HKR" | jq -c '. + {SYSLOG_IDENTIFIER: 5}')" | fx hkm9c)"; C_BEATS=1; C_APIS=1
+expect_red HK2-9c "the registry predicate reverted to the = '' test: a numeric SYSLOG_IDENTIFIER row beats" 3 no_qualifying_row 0 beat
+reset_case; C_SRC="$_m"; C_TARGET="$T_HKR"; C_ROWS="$(row s3 "$((2 * H))" "$(hk_good "$T_HKR")" | fx hkm9c-ok)"; C_BEATS=1; C_APIS=1
+expect "HK2-9c control: the reverted mutant still beats the registry's OWN row (the mutation only widened it)" 0 beat
 # Row 6: add the four names to the workflow loop while they are still deferred (loop = TARGETS minus DEFERRED_TARGETS).
 "$PY" -I - "$WORKFLOW" "$WORK/mut/wf-addhk.yml" <<'PYL'
 import sys
@@ -3204,8 +3276,8 @@ fi
 # case AND adding one both trip it (a `<` floor lets a suite grow, or swap a deleted case for an unrelated one,
 # unnoticed). A runtime-derived floor falls with the case. Changing a case means setting them to the counts printed
 # on the "=== N passed ... M beat-call assertions ===" line above.
-MIN_PASSES=724
-MIN_BEAT_ASSERTS=254
+MIN_PASSES=752
+MIN_BEAT_ASSERTS=266
 if (( passes != MIN_PASSES )); then
   printf 'FATAL: %s passes, the exact floor is %s -- the suite was truncated or extended; a 0-failure tally proves nothing until the floor is re-derived.\n' "$passes" "$MIN_PASSES" >&2
   exit 1
