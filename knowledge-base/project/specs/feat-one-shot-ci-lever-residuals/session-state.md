@@ -36,3 +36,12 @@
 - Phase 2 #9323: DONE+committed `4591c12e39` — PBG_UNBOUNDED seam + 5 seam test rows (49/49 green); local verdict run = NOT YET (7 open PRs lack merge-commit push runs — structural pending); 2 comments on #9323, filed #12360; probe NOT retired.
 - Phase 3 #9729: IN FLIGHT via subagent 19aaddab — collect chunks /var/tmp/s4-replay/units-commits-{1..4}-of-4.jsonl (~34/300 units); audit done /var/tmp/s4-audit.out; ejections+aggregate+criteria+verdict+receipts+ADR-276 amendment+#9729 comment pending; subagent does NOT commit — lead commits at phase end.
 - Remaining: Phase 4 consolidate; exit gates = gdpr-gate on full diff + affected-test gate + `lefthook run pre-commit` (core.hooksPath=/dev/null so hooks bypassed all commits); then review→resolve→qa→compound→ship→merge→postmerge.
+
+## Review Phase Complete
+
+- Panel: 9 seats (8 + design-pass simplicity). 2 fix-round seats verified closure.
+- Real findings resolved (bcb70663df + e53d011985): div-by-zero in PRICE_DRIFT_ROW (delta-first, base==0 emits); spaced-label arithmetic-injection (numeric + ts-shape gates); label sanitize allowlist [:alnum:]._/- (drops =<>!@()[]space — sentinel/markdown forge dead); bound_light numeric gate; PBG sweeper-channel refusal keyed on set-ness (+x); operator-local marker; cut_ny effective-bound text; Env header; u1 test distinguishing power (PBG_BUDGET_S=1 + marker + rc∈{0,1,2}); doc corrections (ADR/go-no-go PR3b-flip-stale, routes 15/58/24, criterion-c 61.9/125.2+403.0, reader-audit leaf ref, runbook enumeration, tasks.md anchors, plan nits).
+- Rejected with evidence: 2 seats' P1 that Z8 m-thin-e was seeded in all 5 runs — it is in run1+run2 only (timed 2/5; suite green 145/145).
+- Suites: generator 145/145, watch 31/31, probe 50/50 — all green post-resolution.
+- PR body updated: Closes #12016, Ref #9323, Ref #9729.
+- Affected gate (test-all.sh --affected) still running at time of note — lock-queued behind sibling worktrees earlier; wide selection via shared machinery edges.
