@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=482   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=483   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -354,8 +354,10 @@ runs_body "${C[6]}" "8060:push:success" | fx "$(runs_path "${C[6]}")"
 runs_body "${C[5]}" "8050:push:success" | fx "$(runs_path "${C[5]}")"
 # C[4] idx2: index-dropped twice, but check-runs names a ci.yml push run on this sha -> resolved, check-runs
 printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[4]}")"
-checkruns_body "https://github.com/$R4/actions/runs/9001/job/1" | fx "$(checkruns_path "${C[4]}")"
+checkruns_body "https://github.com/$R4/actions/runs/9001/job/1" "https://github.com/$R4/actions/runs/9008/job/1" | fx "$(checkruns_path "${C[4]}")"
 rundetail_body 9001 push success "${C[4]}" .github/workflows/ci.yml | fx "$(rundetail_path 9001)"
+# 9008 qualifies too and is NEWER (created_at 01-09 vs 9001's 01-05): the corroborated pick must take the newest, matching the listing path's newest-first contract
+printf '{"id":9008,"event":"push","conclusion":"success","run_attempt":1,"created_at":"2031-01-09T00:00:00Z","head_sha":"%s","path":".github/workflows/ci.yml"}' "${C[4]}" | fx "$(rundetail_path 9008)"
 # C[3] idx3: dropped listing AND corroborated-empty check-runs -> a real no-run
 printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[3]}")"
 checkruns_body | fx "$(checkruns_path "${C[3]}")"
@@ -374,8 +376,8 @@ runs_body "${C[0]}" "8000:push:success" | fx "$(runs_path "${C[0]}")"
 run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R4" >/dev/null 2>&1; RC4=$?
 CU="$OUT/units-commits-1-of-1.jsonl"   # REPO_NAME stays "$R4" until the reqs() calls below are done
 [[ "$RC4" -eq 0 && -s "$CU" ]] && pass "the corroboration collect wrote seven units" || fail "corroboration collect (rc=$RC4)"
-[[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean && "$(unit_field "$CU" "${C[4]}" .runs_via)" = check-runs && "$(unit_field "$CU" "${C[4]}" .run.id)" = 9001 ]] \
-  && pass "an index-dropped unit resolves through the run check-runs proves (runs_via=check-runs)" || fail "index-dropped unit (got $(unit_field "$CU" "${C[4]}" '.cls+" "+(.runs_via//"-")'))"
+[[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean && "$(unit_field "$CU" "${C[4]}" .runs_via)" = check-runs && "$(unit_field "$CU" "${C[4]}" .run.id)" = 9008 ]] \
+  && pass "an index-dropped unit resolves through the newest run check-runs proves (runs_via=check-runs)" || fail "index-dropped unit (got $(unit_field "$CU" "${C[4]}" '.cls+" "+(.runs_via//"-")'))"
 [[ "$(reqs "$(runs_path "${C[4]}")")" -eq 2 && "$(reqs "$(checkruns_path "${C[4]}")")" -eq 1 && "$(reqs "$(rundetail_path 9001)")" -eq 1 ]] \
   && pass "the empty listing is retried once, then corroborated once" || fail "read counts (runs=$(reqs "$(runs_path "${C[4]}")") cr=$(reqs "$(checkruns_path "${C[4]}")") rd=$(reqs "$(rundetail_path 9001)"))"
 [[ "$(unit_field "$CU" "${C[3]}" .reason)" = no-run && "$(unit_field "$CU" "${C[3]}" .runs_via)" = corroborated-no-run ]] \
@@ -388,8 +390,8 @@ CU="$OUT/units-commits-1-of-1.jsonl"   # REPO_NAME stays "$R4" until the reqs() 
   && pass "a listing that heals on the retry skips check-runs entirely" || fail "retry-heals (got via=$(unit_field "$CU" "${C[6]}" .runs_via) reqs=$(reqs "$(checkruns_path "${C[6]}")"))"
 [[ "$(unit_field "$CU" "${C[5]}" .runs_via)" = head-sha && "$(reqs "$(runs_path "${C[5]}")")" -eq 1 && "$(reqs "$(checkruns_path "${C[5]}")")" -eq 0 ]] \
   && pass "a non-empty first read costs no retry and no check-runs call" || fail "common path (got via=$(unit_field "$CU" "${C[5]}" .runs_via))"
-[[ "$(reqs "$(rundetail_path 9004)")" -eq 0 && "$(reqs "$(rundetail_path 9005)")" -eq 0 ]] \
-  && pass "a pull_request event and a foreign-repo link never reach the run-detail read" || fail "detail reads (9004=$(reqs "$(rundetail_path 9004)") 9005=$(reqs "$(rundetail_path 9005)"))"
+[[ "$(reqs "$(rundetail_path 9004)")" -eq 1 && "$(reqs "$(rundetail_path 9005)")" -eq 0 ]] \
+  && pass "a pull_event run is fetched then event-filtered; a foreign-repo link never reaches the read" || fail "detail reads (9004=$(reqs "$(rundetail_path 9004)") 9005=$(reqs "$(rundetail_path 9005)"))"
 ! grep -q STUB-MISS "$GHLOG" && pass "corroboration made no request the stub does not know" || fail "corroboration unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
 REPO_NAME=""
 
@@ -402,11 +404,13 @@ row_corr_sha() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]
 row_corr_path() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
 row_corr_event() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
 row_corr_foreign() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_order() { corr_run; [[ "$(unit_field "$CU" "${C[4]}" .run.id)" = 9008 ]]; }
 row_corr_trunc() {  # a check-runs page claiming more than it carries is runs-read, never resolved
+  REPO_NAME="$R4"
   printf '{"total_count":5,"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
   rundetail_body 9007 push success "${C[3]}" .github/workflows/ci.yml | fx "$(rundetail_path 9007)"
   corr_run
-  checkruns_body | fx "$(checkruns_path "${C[3]}")"
+  REPO_NAME="$R4"; checkruns_body | fx "$(checkruns_path "${C[3]}")"; REPO_NAME=""
   [[ "$(unit_field "$CU" "${C[3]}" .reason)" == runs-read:* ]]
 }
 
@@ -3571,6 +3575,7 @@ mutate corroboration-path-filter-dropped 'and r.get("path") == CI_WORKFLOW_PATH'
 mutate corroboration-event-filter-dropped 'r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH' 'r.get("path") == CI_WORKFLOW_PATH' row_corr_event
 mutate corroboration-namespace-ignored 'github\.com/%s/actions/runs/' 'github\.com/[^/]+/[^/]+/actions/runs/' row_corr_foreign
 mutate corroboration-truncation-ignored 'if total != seen:' 'if False:' row_corr_trunc
+mutate corroboration-order-dropped 'runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)' '' row_corr_order
 mutate bound-on-point-numerator 'cp_upper(attributable + unverified + ne, n)' 'cp_upper(attributable + unverified, n)' row_worst_bound
 mutate flake-needs-two-file-sets 'len({x["files_hash"] for x in us}) >= 2' 'len({x["files_hash"] for x in us}) >= 1' row_flake_same_files
 mutate flake-distinct-prs-dropped 'and len({x.get("pr") or x["sha"] for x in us}) >= 3}' 'and True}' row_flake_same_pr
