@@ -317,9 +317,13 @@ _pbg_w_artdl() {
 # _pbg_w_esc <pr>: $WORK/esc-<pr> = `dropped` (closed unmerged), `open` (state=="open" — #12360:
 # an unmerged PR's absent merge-commit push run is EXPECTED, not missing evidence; `state` rides
 # the same pulls/N meta read, so the bucket costs zero extra reads), `ok`, `escape <detail>`,
-# `pending` (merged PR with absent/incomplete push run — semantics unchanged), `cut`/`fail`.
+# `unrelated <detail>` (red push run whose failed jobs are ALL outside the gated test-scripts*
+# family — ADR-262 R1's escape is a battery breaking on an undeclared path; a curl(56) infra flake
+# in a job the path-gate cannot skip is not that, so it is reported in the note line, never counted
+# — 2026-11-08 #9323 verdict), `pending` (merged PR with absent/incomplete push run, or a red run
+# whose jobs read cannot be established — semantics unchanged), `cut`/`fail`.
 _pbg_w_esc() {
-  local pr="$1" rf="$WORK/esc-$1" meta rc=0 sha rest pstate pm concl
+  local pr="$1" rf="$WORK/esc-$1" meta rc=0 sha rest pstate pm run_meta rid concl jnames gated gated_inc unrel jn jc
   meta="$(api "repos/$REPO/pulls/$pr" --jq '"\(.merge_commit_sha // "") \(.state // "") \(.merged_at // "")"')" || rc=$?
   if (( rc == 46 )); then _w_row "$rf" "cut the pull read of PR $pr"; return 0; fi
   if (( rc != 0 )); then _w_row "$rf" "fail pull $pr merge sha"; return 0; fi
@@ -327,11 +331,39 @@ _pbg_w_esc() {
   if [[ "$pstate" == "closed" && -z "$pm" ]]; then _w_row "$rf" "dropped"; return 0; fi
   if [[ "$pstate" == "open" ]]; then _w_row "$rf" "open"; return 0; fi
   [ -n "$sha" ] || { _w_row "$rf" "pending"; return 0; }
-  concl="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=push&head_sha=$sha" --jq '.workflow_runs[0].conclusion // empty')" || rc=$?
+  run_meta="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=push&head_sha=$sha" --jq '"\(.workflow_runs[0].id // "") \(.workflow_runs[0].conclusion // "")"')" || rc=$?
   if (( rc == 46 )); then _w_row "$rf" "cut the push-run read for $sha"; return 0; fi
   if (( rc != 0 )); then _w_row "$rf" "fail push run for $sha"; return 0; fi
+  rid="${run_meta%% *}"; concl="${run_meta#* }"
   case "$concl" in
-    failure|timed_out|startup_failure|action_required) _w_row "$rf" "escape PR $pr was green but its merge-commit push run on $sha is $concl" ;;
+    failure|timed_out|startup_failure|action_required)
+      # a red push run is an escape only when >=1 FAILED job is a gated battery leg — the same
+      # test-scripts* prefix the qual arm derives (:281), not a second enumeration that can drift.
+      # A jobs read that cannot be established (missing run id, transport failure, empty/non-failed
+      # job list, or a gated job left cancelled/inconclusive) is `pending`, never `ok`.
+      [ -n "$rid" ] || { _w_row "$rf" "pending"; return 0; }
+      jnames="$(api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" --jq '.jobs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | "\(.name)\t\(.conclusion)"')" || rc=$?
+      if (( rc == 46 )); then _w_row "$rf" "cut the jobs read of push run $rid for $sha"; return 0; fi
+      if (( rc != 0 )) || [ -z "$jnames" ]; then _w_row "$rf" "pending"; return 0; fi
+      gated=""; gated_inc=""; unrel=""
+      while IFS=$'\t' read -r jn jc; do
+        [ -n "$jn" ] || continue
+        case "$jn" in
+          test-scripts*)
+            case "$jc" in
+              failure|timed_out|action_required|startup_failure) gated="${gated:+$gated, }$jn" ;;
+              *) gated_inc=1 ;;
+            esac ;;
+          *) unrel="${unrel:+$unrel, }$jn" ;;
+        esac
+      done <<< "$jnames"
+      if [ -n "$gated" ]; then
+        _w_row "$rf" "escape PR $pr was green but its merge-commit push run on $sha is $concl (failed gated job(s): $gated)"
+      elif [ -n "$gated_inc" ]; then
+        _w_row "$rf" "pending"
+      else
+        _w_row "$rf" "unrelated PR $pr push run on $sha is $concl on non-gated job(s): ${unrel:-names-unreadable}"
+      fi ;;
     success) _w_row "$rf" "ok" ;;
     *) _w_row "$rf" "pending" ;;   # absent or not yet complete: not evidence of "no escape"
   esac
@@ -365,7 +397,8 @@ rl_rem="$(jq -r '.resources.core.remaining // 0' <<<"$rl" 2>/dev/null)"
 [[ "$rl_rem" =~ ^[0-9]+$ ]] || fail_api "rate_limit preflight (malformed body)"
 # a quota cut is NOT YET — the sweep is retried when the hourly window rolls; never a failed read, never a verdict.
 # need_min is the real worst case: 3 reads per examined candidate, the listing pages, the artifact cap, and 2 reads
-# (pull + push-run) per qualifying run in the escape check. The parallel Stage-A wave lists ALL qualifying runs
+# (pull + push-run) per qualifying run in the escape check — the classifier's jobs read lands only on red push
+# runs (rare; a green push run needs no third read), so the bound keeps 2. The parallel Stage-A wave lists ALL qualifying runs
 # unconditionally — runs past the ART_READ_CAP replay bound had their listing fetched where serial never did —
 # so the model carries one extra MAX_RUNS of listing prefetch on top of the cap.
 need_min=$(( 3 * EXAMINE_CAP + PAGE_CAP + ART_READ_CAP + 3 * MAX_RUNS + 20 ))
@@ -540,7 +573,7 @@ echo "qualifying_runs=$n evidenced_runs=$evidenced mean_runner_min=$mean require
 # TEST-merge sha there for open and closed-unmerged PRs alike (verified on #11038: state=closed,
 # merged_at=null, sha set) — it is null only before the test merge is computed. The discriminator is
 # `state` itself, read off the pulls/N meta read the arm already made — zero extra reads.
-escapes=0; pending=0; dropped=0; open_prs=0
+escapes=0; pending=0; dropped=0; open_prs=0; unrelated=0
 : > "$WORK/prs.list"
 for pr in $green_prs; do printf '%s\n' "$pr" >> "$WORK/prs.list"; done
 _pbg_pool "$WORK/prs.list" _pbg_w_esc
@@ -552,6 +585,7 @@ for pr in $green_prs; do
     open) open_prs=$((open_prs + 1)) ;;
     pending) pending=$((pending + 1)) ;;
     ok) : ;;
+    unrelated) unrelated=$((unrelated + 1)) ;;
     escape) echo "ESCAPE: ${srow#* }"; escapes=$((escapes + 1)) ;;
     cut) cut_ny "${srow#* }" ;;
     fail) fail_api "${srow#* }" ;;
@@ -561,6 +595,7 @@ done
 
 if (( dropped > 0 )); then echo "note: $dropped qualifying PR(s) closed unmerged — no merge commit exists; excluded from the escape check"; fi
 if (( open_prs > 0 )); then echo "note: $open_prs qualifying PR(s) still open — no merge commit exists; excluded from the escape check"; fi
+if (( unrelated > 0 )); then echo "note: $unrelated qualifying PR(s) have red merge-commit push runs only on jobs outside the gated test-scripts* family — reported, never an escape"; fi
 if (( escapes > 0 )); then echo "FAIL: $escapes escape(s); widen the declaring array (ADR-262 R1) or revert the PR arm"; exit 1; fi
 if (( pending > 0 )); then echo "NOT YET: $pending qualifying PR(s) have no completed push run on their merge commit"; exit 2; fi
 echo "realized_saving_min=$real_mean over $evidenced evidenced runs (mean_runner_min=$mean is informational: whole-run billing drifts with suite growth, the verdict prices only the gate's own skips)"
