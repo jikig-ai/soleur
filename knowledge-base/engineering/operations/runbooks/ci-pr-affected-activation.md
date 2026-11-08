@@ -71,6 +71,21 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
   `knowledge-base/project/specs/feat-one-shot-ci-lever-residuals/receipts/go-no-go.md`. Still nothing activated;
   the retire-vs-schedule call is the operator's per #10448.
 
+- 2026-11-08: criterion a re-run on a fresh window after the `ci_runs` corroboration fix (PR #12377) shipped —
+  300 commit units (298 clean / 1 rule-irrelevant / 1 not-evaluable) and 82 ejection units on window
+  2026-10-29T06:39:56Z..2026-11-08T04:43:01Z (421 merge_group runs seen, 82 refused). `computed=NO-GO
+  reason=criterion-failed` on the bound arm: attributable=0/382, unverified_as_escape=2/382 (point 0.52%,
+  passes the ≤ 2% leg), worst_case=60/382, cp95_upper_on_worst_case=19.10% ≥ the 12% bar. Every commit unit
+  resolved `runs_via=head-sha` (300/300, no index drop this window), so the corroboration path was not
+  exercised by a live drop here and the bound is now driven by the not-evaluable bucket (58 of 382 —
+  dominated by unclassified rule-body-lint (20) and unsettled test-webplat legs (20 incl. the 1 commit unit),
+  with failed-job-without-fail-line (5), unclassified adr-ordinals (4), harness-discovery/grok-fidelity (4),
+  cla-check (1), and unsettled affected-index-ratchet (2) and test-scripts (2)) plus 2 unverified — not by
+  dropped runs: the fix for criterion-a pressure is classifier coverage, not more reads. Criteria b/c/d stayed
+  `unmeasured` (the run measured criterion a only); the go/no-go re-ruling and `CI_PR_AFFECTED` activation
+  stay operator-owned. Receipts:
+  `knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/rerun/`.
+
 ## 3. Entry condition for a re-attempt (CTO ruling, ADR-276 amendment item 5)
 
 All of these, in this order:
@@ -141,6 +156,13 @@ Read the output with these limits in mind (they are in the receipt too):
   a listing that keeps >=1 FULL_EVENTS run is trusted as-is (partial drops are undetectable there, and a dropped lone failure under a kept success reads clean — under-counting, not over). The cause
   receipt is in the archived spec dir
   (`knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/cause.md`).
+- The ejections window listing `?event=merge_group&created=…` is the same GitHub search-index class as
+  `?head_sha=`, and its `total_count` self-check cannot see a dropped run — the count is index-computed from
+  the same listing. A refused run the index dropped is absent from both the ejections file and the window
+  count, so the refused-merge_group population can be silently under-counted; the ejections are the only
+  population that can hold an escape, so an under-count biases the cp95 bound toward a false GO. Tracked as
+  #12428; recorded-not-built per the 2026-11-08 CTO ruling (`decision-challenges.md` row 4 of the archived
+  #10862 spec dir), because no per-sha non-search read exists to pin a window listing against.
 
 ## 5. The four criteria and the verdict
 
