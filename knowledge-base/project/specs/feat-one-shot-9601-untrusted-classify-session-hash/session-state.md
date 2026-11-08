@@ -21,3 +21,4 @@ soleur:plan, soleur:deepen-plan, CTO, learnings-researcher, code-simplicity-revi
 - Never reference the egress-audit enablement issue (112xx other than 11258); pre-push grep gates.
 - Merge via session-state with_lock merge-main; no queue syncs when armed; Review-Evidence comment per head.
 - Slow local --affected battery not awaited; CI is the ship gate.
+- ci-is-the-gate: operator brief says rely on CI required checks, the slow local affected battery is not awaited
