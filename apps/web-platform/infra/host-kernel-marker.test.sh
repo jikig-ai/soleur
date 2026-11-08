@@ -408,8 +408,8 @@ ok "no file in the set is a systemd template (no '@' in a name)" "$([[ "$(basena
 echo "=== sandbox copy: the four files run green from an empty directory ==="
 if [[ "${HKM_TEST_SANDBOXED:-0}" != 1 ]]; then
   SBX="$WORK/sandbox"; assert_fixture_dir "$SBX"; mkdir -p "$SBX"
-  cp "$SUT" "$SVC" "$TMR" "$SBX/"
-  cp "${BASH_SOURCE[0]}" "$SBX/host-kernel-marker.test.sh"
+  cp "$SUT" "$SBX/"; cp "$SVC" "$SBX/"; cp "$TMR" "$SBX/"
+  cp "$SCRIPT_DIR/host-kernel-marker.test.sh" "$SBX/host-kernel-marker.test.sh"
   ( cd "$SBX" && HKM_TEST_SANDBOXED=1 HKM_ORIG_SUT="$SUT" TMPDIR="$WORK" bash ./host-kernel-marker.test.sh > "$WORK/sandbox.log" 2>&1 )
   SBX_RC=$?
   eq "sandbox copy: exit 0" "$SBX_RC" "0"
