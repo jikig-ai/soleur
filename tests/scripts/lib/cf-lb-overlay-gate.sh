@@ -307,10 +307,19 @@ cf_lb_gate_ga_monitor_https() {
 #
 # `drain` pins EVERY origin at web-1's resolved IP to weight 1 and every origin
 # at web-2's resolved IP to weight 0 — name-independent, so a renamed origin
-# block cannot dodge the pin. `serve` is the #6027 window arm: the §(c) gate
-# chain ran in the job BEFORE plan, and the grader pins the declared post-flip
+# block cannot dodge the pin. `serve` is the web-2 serving arm: the §(c) gate
+# chain ran in the job BEFORE plan, and the grader pins the declared serving
 # shape — the web-1-named AND web-2-named origins at weight 1 AND every origin at
 # EITHER resolved IP at weight 1 (weights compared as numbers, not strings).
+# `serve` grades the pool whether the plan carries it as an `update` (the 0-to-1
+# flip) or as a `no-op` (live is already {web-1:1, web-2:1} since the 2026-11-08
+# serve flip, #12363): the public wrapper `cf_lb_gate_ga_pool_update` normalises
+# a provably-plain no-op pool entry into an update in a temp copy, then hands it
+# to the unchanged grader `_cf_lb_gate_ga_pool_update_graded`, so every origins,
+# enabled, monitor, resolved-IP and weight pin grades the no-op exactly as it
+# grades a 0-to-1 update. `serve` never skips the pool: a plan with no pool entry
+# (or several) is refused, because the pool-less remnant branch below is
+# drain-only.
 #
 # REMNANT-ONLY plans: a graded set with NO pool.web_1 update is admitted iff the
 # per-verb allow-set + the attribute pins below pass on whichever entries exist —
@@ -328,7 +337,7 @@ cf_lb_gate_ga_monitor_https() {
 # the signal the monitor-fix arm repairs); policy enabled==false, and on
 # ["create"] OR ["update"] a present alert_type must be
 # load_balancing_health_alert.
-cf_lb_gate_ga_pool_update() {
+_cf_lb_gate_ga_pool_update_graded() {
   local plan_json="$1" mode="${2:-drain}"
   plan_gate_assert_readable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
   plan_gate_assert_classifiable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
@@ -551,4 +560,71 @@ cf_lb_gate_ga_pool_update() {
   else
     echo "cf-lb-overlay gate[ga-pool-update:${mode}]: $updates change(s) within the pool/LB/policy set, origins ⊆ {web-1:${web1_ip},web-2:${web2_ip}}${suffix} — pass"
   fi
+}
+
+
+# Public entry point (the only function cf-lb-overlay.yml calls). A thin wrapper so
+# the 17 pool selectors inside the graded function stay byte-identical:
+#   drain  -> the graded function, untouched (a no-op-only pool is the existing
+#             "empty change set" refusal; a policy-only remnant keeps its path);
+#   serve  -> the pool entry is COUNTED in the raw .resource_changes[] (the
+#             graded function's _CF_LB_CHANGES drops no-ops, so it cannot see a
+#             no-op pool at all). Three-way dispatch whose DEFAULT arm refuses:
+#               zero or several pool entries -> refuse (absent/ambiguous);
+#               ["update"]                   -> the graded function, original file;
+#               exact ["no-op"]              -> normalise in a temp copy, grade, remove;
+#               anything else                -> refuse.
+# The normalised copy is {resource_changes} ONLY (the graded function reads nothing
+# else), so a leaked copy holds no state values; it is created 0600, removed on
+# every path, and rc is returned explicitly (the call site runs under set -e but
+# errexit is suppressed inside a function called in an || list).
+cf_lb_gate_ga_pool_update() {
+  local plan_json="$1" mode="${2:-drain}"
+  plan_gate_assert_readable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
+  plan_gate_assert_classifiable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
+  if [[ "$mode" != "drain" && "$mode" != "serve" ]]; then
+    echo "::error::ga-pool-update gate: mode must be drain|serve, got '${mode}'. Refusing."
+    return 1
+  fi
+  if [[ "$mode" == "drain" ]]; then
+    _cf_lb_gate_ga_pool_update_graded "$plan_json" "$mode"
+    return $?
+  fi
+  local pool_n pool_actions pool_exact old_umask tmp rc=0
+  pool_n=$(jq -r '[.resource_changes[] | select(.address | contains("cloudflare_load_balancer_pool.web_1"))] | length' "$plan_json") || return 1
+  if [[ "$pool_n" != "1" ]]; then
+    echo "::error::ga-pool-update gate[serve]: pool absent from, or ambiguous in, the plan (cloudflare_load_balancer_pool.web_1 has ${pool_n:-unreadable} entries, exactly 1 required) — serve grades the pool and a plan that carries none (or several) approves nothing about it. NOTHING applied."
+    return 1
+  fi
+  pool_actions=$(jq -r '[.resource_changes[] | select(.address | contains("cloudflare_load_balancer_pool.web_1")) | (.change.actions | join("+"))] | .[0] // ""' "$plan_json") || return 1
+  case "$pool_actions" in
+    update)
+      _cf_lb_gate_ga_pool_update_graded "$plan_json" "$mode"
+      return $?
+      ;;
+    no-op)
+      # Normalise ONLY a provably plain no-op: the exact address, no state move, no import,
+      # no deposed object. Anything else is a shape this arm has never graded.
+      pool_exact=$(jq -r '[.resource_changes[] | select(.address == "cloudflare_load_balancer_pool.web_1" and .change.actions == ["no-op"] and (has("previous_address") | not) and (has("deposed") | not) and (.change | has("importing") | not))] | length' "$plan_json") || return 1
+      if [[ "$pool_exact" != "1" ]]; then
+        echo "::error::ga-pool-update gate[serve]: the pool no-op entry carries a state move, import or deposed marker (or a non-exact address) — only a plain no-op against live is normalised. NOTHING applied."
+        return 1
+      fi
+      old_umask="$(umask)"
+      umask 077
+      tmp="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ga-pool-serve.XXXXXXXX.json")" || { umask "$old_umask"; return 1; }
+      umask "$old_umask"
+      jq '{resource_changes: [.resource_changes[] | if .address == "cloudflare_load_balancer_pool.web_1" then (.change.actions = ["update"]) else . end]}' "$plan_json" > "$tmp" || { rm -f "$tmp"; return 1; }
+      _cf_lb_gate_ga_pool_update_graded "$tmp" "$mode" || rc=$?
+      rm -f "$tmp"
+      if [[ "$rc" -eq 0 ]]; then
+        echo "cf-lb-overlay gate[ga-pool-update:serve]: pool already {web-1:1, web-2:1} (no-op against live; the pass line above counts the normalized pool as one change)"
+      fi
+      return "$rc"
+      ;;
+    *)
+      echo "::error::ga-pool-update gate[serve]: the pool entry carries actions '${pool_actions:-none}', not update or a plain no-op. NOTHING applied."
+      return 1
+      ;;
+  esac
 }

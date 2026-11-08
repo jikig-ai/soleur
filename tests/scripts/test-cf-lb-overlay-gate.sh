@@ -322,6 +322,63 @@ out=$(cf_lb_gate_ga_pool_update "$TMP/pc2.json" serve 2>/dev/null); rc=$?
 # guards against).
 [[ $rc -eq 0 && "$out" == *"ga-pool-update:serve"*"pass"* && "$out" != *"web-2 weight=0"* && "$out" != *"}serve"* ]]; ok "pool-update: serve pass message carries NO drain suffix and no }serve garble" $? 0
 
+# --- serve against live {web-1:1, web-2:1} (#12363): the pool is a NO-OP, not a 0->1 update ---
+# After the serve flip applied, web-2's weight variable defaults to 1 and a re-dispatched serve
+# plans the pool as ["no-op"]. The wrapper grades it (normalised to an update in a temp
+# copy) on the SAME pins as a 0->1 flip, and refuses every shape it cannot prove. Every
+# defect fixture carries POLICY_CREATE so the pre-wrapper lib (which skipped the origins
+# pins for a pool-less change set) passed it vacuously: these rows are RED before the
+# wrapper exists, not merely green after.
+POOL_NOOP_SERVE='{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["no-op"],"before":{"id":"0123abcd"},"after":{"id":"0123abcd","origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}'
+POOL_NOOP_W1ZERO='{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["no-op"],"before":{"id":"0123abcd"},"after":{"id":"0123abcd","origins":[{"name":"web-1","address":"203.0.113.10","weight":0},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}'
+POOL_NOOP_MOVED='{"address":"cloudflare_load_balancer_pool.web_1","previous_address":"cloudflare_load_balancer_pool.old","change":{"actions":["no-op"],"before":{"id":"0123abcd"},"after":{"id":"0123abcd","origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}'
+POOL_REPLACE='{"address":"cloudflare_load_balancer_pool.web_1","change":{"actions":["delete","create"],"before":{"id":"0123abcd"},"after":{"id":"0123abcd","origins":[{"name":"web-1","address":"203.0.113.10","weight":1},{"name":"web-2","address":"203.0.113.20","weight":1}]}}}'
+LB_NOOP='{"address":"cloudflare_load_balancer.app","change":{"actions":["no-op"],"after":{"name":"app.soleur.ai","enabled":true,"proxied":true,"session_affinity":"none","default_pool_ids":["0123abcd"],"fallback_pool_id":"0123abcd"}}}'
+POLICY_NOOP='{"address":"cloudflare_notification_policy.web_lb_health","change":{"actions":["no-op"],"after":{"enabled":true,"alert_type":"load_balancing_health_alert"}}}'
+mk pn1 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_SERVE},${LB_NOOP},${POLICY_NOOP}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn1.json" serve; ok "pool-update: serve with everything no-op against live {1,1} passes" $? 0
+out=$(cf_lb_gate_ga_pool_update "$TMP/pn1.json" serve 2>&1); rc=$?
+if [[ $rc -eq 0 && "$out" == *"pool already {web-1:1, web-2:1}"* ]]; then ok "pool-update: serve no-op names the already-{1,1} notice" 0 0; else ok "pool-update: serve no-op names the already-{1,1} notice" 1 0; fi
+mk pn2 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_SERVE},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn2.json" serve; ok "pool-update: serve no-op pool + policy create passes" $? 0
+mk pn3 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn3.json" serve; ok "pool-update: serve no-op pool at web-2 weight 0 refused (not a serving shape)" $? 1
+mk pn4 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_W1ZERO},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn4.json" serve; ok "pool-update: serve no-op pool with web-1 at weight 0 refused (origins pins reach the no-op path)" $? 1
+mk pn5 "{\"resource_changes\":[${WEB1},${WEB2},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn5.json" serve; ok "pool-update: serve with the pool entry absent refused" $? 1
+out=$(cf_lb_gate_ga_pool_update "$TMP/pn5.json" serve 2>&1); rc=$?
+if [[ $rc -eq 1 && "$out" == *"pool absent from, or ambiguous in, the plan"* ]]; then ok "pool-update: serve pool-absent refusal carries its own distinct message" 0 0; else ok "pool-update: serve pool-absent refusal carries its own distinct message" 1 0; fi
+mk pn6 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_REPLACE},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn6.json" serve; ok "pool-update: serve with a replace verb on the pool refused" $? 1
+mk pn7 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn7.json" drain; ok "pool-update: drain with only a no-op pool refused (empty change set; drain unchanged)" $? 1
+# pn8/pn9: the normalised copy is created in TMPDIR and removed on EVERY path. A mktemp shim
+# records each path it hands out (positive control: a wrapper that ignores TMPDIR or never
+# builds a copy cannot satisfy "the shim saw exactly one file created there").
+PN_DIR="$TMP/pn-tmpdir"; PN_LOG="$TMP/pn-shim.log"
+mkdir -p "$PN_DIR"; : > "$PN_LOG"
+(
+  unset RUNNER_TEMP
+  export TMPDIR="$PN_DIR"
+  mktemp() { local p; p="$(command mktemp "$@")" || return 1; printf '%s\n' "$p" >> "$PN_LOG"; printf '%s\n' "$p"; }
+  cf_lb_gate_ga_pool_update "$TMP/pn1.json" serve >/dev/null 2>&1
+)
+if [[ -z "$(ls -A "$PN_DIR")" ]]; then ok "pool-update: serve no-op leaves no normalised temp copy behind" 0 0; else ok "pool-update: serve no-op leaves no normalised temp copy behind" 1 0; fi
+if [[ "$(wc -l < "$PN_LOG")" -eq 1 && "$(dirname "$(head -1 "$PN_LOG")")" == "$PN_DIR" ]]; then ok "pool-update: serve no-op built exactly one copy, inside TMPDIR (instrument sees it)" 0 0; else ok "pool-update: serve no-op built exactly one copy, inside TMPDIR (instrument sees it)" 1 0; fi
+: > "$PN_LOG"
+pn9rc=0
+(
+  unset RUNNER_TEMP
+  export TMPDIR="$PN_DIR"
+  mktemp() { local p; p="$(command mktemp "$@")" || return 1; printf '%s\n' "$p" >> "$PN_LOG"; printf '%s\n' "$p"; }
+  cf_lb_gate_ga_pool_update "$TMP/pn4.json" serve >/dev/null 2>&1
+) || pn9rc=$?
+if [[ "$pn9rc" -eq 1 && "$(wc -l < "$PN_LOG")" -eq 1 ]]; then ok "pool-update: a REFUSED no-op serve is refused (rc 1) after building its copy (instrument sees it)" 0 0; else ok "pool-update: a REFUSED no-op serve is refused (rc 1) after building its copy (instrument sees it)" 1 0; fi
+if [[ -z "$(ls -A "$PN_DIR")" ]]; then ok "pool-update: a REFUSED no-op serve still removes its temp copy (dir empty)" 0 0; else ok "pool-update: a REFUSED no-op serve still removes its temp copy (dir empty)" 1 0; fi
+mk pn10 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_MOVED},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn10.json" serve; ok "pool-update: serve no-op pool entry carrying previous_address refused (exact normalisation predicate)" $? 1
+
 # --- malformed ---
 mk m1 'not json'
 run cf_lb_gate_record "$TMP/m1.json"; ok "malformed json refused" $? 1
@@ -329,6 +386,6 @@ mk m2 '{"resource_changes":[{"address":"x.y","change":{"actions":42}}]}'
 run cf_lb_gate_ga "$TMP/m2.json"; ok "unclassifiable actions refused" $? 1
 
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
-if [[ "$checks" -lt 98 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
+if [[ "$checks" -lt 124 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ($checks assertions)"; else echo "FAILURES PRESENT"; exit 1; fi

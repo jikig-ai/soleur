@@ -514,7 +514,7 @@ c3_fixture nested_hot 'resource "cloudflare_load_balancer_pool" "web_1" {
 }'
 assert_c3 "C.3-fixture: nested block + hot web-2 member still → red" "1 1 0"
 # Gated-variable weight term (serve-arm prep): web-2's weight may be the literal 0 OR exactly
-# var.web2_lb_weight (whose default is 0 and whose only feeder is the serve arm — C.4 below).
+# var.web2_lb_weight (whose default is 1 = live and whose explicit-0 feeders are the drain arm and ga-overlay — C.4 below).
 # Any other expression is not a drained member.
 c3_fixture varok 'resource "cloudflare_load_balancer_pool" "web_1" {
   origins {
@@ -522,7 +522,7 @@ c3_fixture varok 'resource "cloudflare_load_balancer_pool" "web_1" {
     weight  = var.web2_lb_weight
   }
 }'
-assert_c3 "C.3-fixture: weight = var.web2_lb_weight scans clean (default-0 gated variable)" "0 1 0"
+assert_c3 "C.3-fixture: weight = var.web2_lb_weight scans clean (gated variable: validation admits only 0 or 1)" "0 1 0"
 c3_fixture varsuffix 'resource "cloudflare_load_balancer_pool" "web_1" {
   origins {
     name    = "web-2"
@@ -556,10 +556,11 @@ rm -rf "$C3_TMP"
 # cloudflare-lb.tf feeds web-2's origin weight from var.web2_lb_weight so the cf-lb-overlay.yml
 # `ga-pool-update mode=serve` arm CAN succeed (a hard-coded 0 made the arm structurally unable to
 # flip). The invariants that keep this exactly as safe as the literal 0 was:
-#   V   the variable's DEFAULT is 0 (the default plan is a no-op) and it admits only {0,1};
-#   F   the ONLY feeder in the whole tree is the ga_pool_update plan step of cf-lb-overlay.yml, and
-#       its value is 1 only when mode=serve; every other path (routine apply, drift plan, laptop
-#       plan, drain mode) therefore sees 0;
+#   V   the variable's DEFAULT is 1 (the live serving shape; the default plan is a no-op against live) and it admits only {0,1};
+#   F   the only feeders in the whole tree are the two plan steps of cf-lb-overlay.yml: ga_pool_update
+#       (1 only when mode=serve, else an explicit 0) and ga_overlay (an explicit literal 0, so a fresh
+#       GA3 create stays drained); every other path (routine apply, drift plan, laptop plan) rides the
+#       default, which equals live (1);
 #   O   the serve value can only be planned AFTER the §(c) gate chain step passed (fail-closed
 #       step, `if: serve`, no continue-on-error), and the gate is evaluated on the SAME number
 #       that is planned (SOLEUR_WEB2_SERVING_WEIGHT=$WEB2_LB_WEIGHT);
@@ -584,8 +585,8 @@ V_BLOCK=""
   on && /^\}/ { exit }
 ' "$VARS_TF")"
 c4_assert "C.4-V1: variables.tf declares variable \"web2_lb_weight\"" "$([[ -n "$V_BLOCK" ]] && echo 1 || echo 0)"
-c4_assert "C.4-V2: web2_lb_weight is type = number with default = 0 (default plan is a no-op)" \
-  "$(grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*number[[:space:]]*$' <<<"$V_BLOCK" && grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*0[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
+c4_assert "C.4-V2: web2_lb_weight is type = number with default = 1 (the live serving shape; default plan is a no-op against live)" \
+  "$(grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*number[[:space:]]*$' <<<"$V_BLOCK" && grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
 c4_assert "C.4-V3: web2_lb_weight has a validation admitting ONLY 0 or 1" \
   "$(grep -qE 'validation[[:space:]]*\{' <<<"$V_BLOCK" && grep -qE 'condition[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*0[[:space:]]*\|\|[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
 c4_assert "C.4-V4: web2_lb_weight is declared exactly once in the tree's .tf files" \
@@ -624,10 +625,40 @@ c4_assert "C.4-F4: WEB2_LB_WEIGHT is 1 ONLY when mode=serve, else 0 (the pin ste
   "$(grep -qE 'if \[\[ "\$MODE_RAW" == "serve" \]\]; then WEB2_LB_WEIGHT=1; else WEB2_LB_WEIGHT=0; fi' <<<"$PIN_STEP" && grep -qE 'echo "WEB2_LB_WEIGHT=\$\{WEB2_LB_WEIGHT\}" >> "\$GITHUB_ENV"' <<<"$PIN_STEP" && echo 1 || echo 0)"
 c4_assert "C.4-F5: the plan step passes -var=web2_lb_weight from WEB2_LB_WEIGHT, exactly once" \
   "$([[ "$(c4_nocomment <(printf '%s\n' "$PLAN_STEP") | grep -cE -- '-var="web2_lb_weight=\$\{WEB2_LB_WEIGHT\}"')" -eq 1 ]] && echo 1 || echo 0)"
-c4_assert "C.4-F6: web2_lb_weight appears on exactly ONE non-comment line of cf-lb-overlay.yml (no other arm / job feeds it)" \
-  "$([[ "$(c4_nocomment "$WF" | grep -c 'web2_lb_weight')" -eq 1 ]] && echo 1 || echo 0)"
-c4_assert "C.4-F7: no other workflow names web2_lb_weight (routine apply, drift and validation plans stay at default 0)" \
+c4_assert "C.4-F6: web2_lb_weight appears on exactly TWO non-comment lines of cf-lb-overlay.yml: the ga_pool_update plan step (\${WEB2_LB_WEIGHT}) and the ga_overlay plan step (literal 0); no other arm / job feeds it" \
+  "$([[ "$(c4_nocomment "$WF" | grep -c 'web2_lb_weight')" -eq 2 ]] && echo 1 || echo 0)"
+c4_assert "C.4-F7: no other workflow names web2_lb_weight (routine apply, drift and validation plans ride the default, 1 = live)" \
   "$([[ -z "$(cd "$REPO_ROOT" && grep -lE 'web2_lb_weight|WEB2_LB_WEIGHT' .github/workflows/*.yml | grep -v 'cf-lb-overlay.yml')" ]] && echo 1 || echo 0)"
+
+# --- F8: ga_overlay (GA3 fresh create) passes an EXPLICIT web2_lb_weight=0 (#12363) ---------------------
+# The default is 1, so without this line a fresh ga-overlay create would plan web-2 at weight 1 and its own
+# grader (cf_lb_gate_ga, which pins the drained two-member shape) would refuse the plan. F8 reads the ga_overlay
+# plan step through its OWN extractor (the ga_pool_update helpers above are keyed on a different job) and
+# pins a literal 0, exactly once, on a non-comment line.
+gao_plan_of() { # $1 = workflow file -> the "Terraform plan (GA LB trio only)" step of the ga_overlay job
+  awk '/^  ga_overlay:/ {job=1; next} job && /^  [A-Za-z0-9_-]+:/ {exit}
+       job && /^      - / { if (on) exit; if ($0 ~ /^      - name: Terraform plan \(GA LB trio only\)/) on = 1 }
+       job && on { print }' "$1" 2>/dev/null || true
+}
+gao_guard() { # $1 = workflow file -> 0 iff the ga_overlay plan step passes -var="web2_lb_weight=0" exactly once, non-comment
+  local step; step="$(gao_plan_of "$1")"
+  [[ -n "$step" ]] || return 1
+  [[ "$(c4_nocomment <(printf '%s\n' "$step") | grep -cE -- '-var="web2_lb_weight=0"')" -eq 1 ]] || return 1
+  [[ "$(c4_nocomment <(printf '%s\n' "$step") | grep -c 'web2_lb_weight')" -eq 1 ]] || return 1
+  return 0
+}
+c4_assert "C.4-F8: the ga_overlay plan step passes -var=\"web2_lb_weight=0\" exactly once (literal 0, non-comment): a fresh GA3 create stays drained under default 1" \
+  "$(gao_guard "$WF" && echo 1 || echo 0)"
+F8_WORK="$(mktemp -d)"
+f8mut() { # f8mut <label> <awk-program> — mutate a copy of the workflow; it must LAND and F8's guard must go red
+  local label="$1" prog="$2" f="$F8_WORK/wf-mut.yml"
+  awk "$prog" "$WF" > "$f"
+  if cmp -s "$WF" "$f"; then c4_bad "$label: the mutation did not land (copy identical to pristine)"; return; fi
+  if gao_guard "$f"; then c4_bad "$label stayed GREEN: F8 cannot see this defect"; else c4_ok "$label -> RED"; fi
+}
+f8mut "C.4-F8m1 mutant: the ga_overlay -var carries weight 1 (a fresh create would pool web-2 hot)" '/^  ga_overlay:/ {job=1} job && /-var="web2_lb_weight=0"/ {sub(/web2_lb_weight=0/, "web2_lb_weight=1")} {print}'
+f8mut "C.4-F8m2 mutant: the ga_overlay -var line is deleted (default 1 would apply)" '/^  ga_overlay:/ {job=1} job && /-var="web2_lb_weight=0"/ {next} {print}'
+rm -rf "$F8_WORK"
 
 # --- W: the drain invariant by EFFECT, not by text (T-P2-1) -----------------------------------------
 # F4-F6 pin the pin step's WORDING. They cannot see a second, later writer: a `WEB2_LB_WEIGHT: "1"` in the plan step's env or a
@@ -1056,7 +1087,7 @@ a1_mutate "unprefixed PROXY_BIND read" '[[ -n "${PROXY_BIND-}" ]] || fail "A_unp
 GATE="$GATE_PRISTINE"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=282
+MIN_CASES=285
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then
