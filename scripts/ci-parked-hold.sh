@@ -29,7 +29,7 @@
 # enumerate. With merge_method SQUASH each queue position runs its OWN merge_group build, and each
 # build's `secret-guards` evaluates the PR named by its own head_ref; a lower entry is judged by its
 # own build. Residual: a label added to an entry AFTER its build ran is not seen (dequeue per
-# knowledge-base/engineering/operations/runbooks/merge-queue-dequeue.md).
+# plugins/soleur/skills/ship/references/merge-queue-dequeue.md).
 #
 # Output: one fixed annotation per failure. Label text, response bodies and the ref are never echoed.
 # Exit: 0 not parked (or no PR on this event); 1 parked or unreadable; 78 refused under set -x with a
@@ -89,21 +89,21 @@ while [ "$attempt" -lt 2 ]; do
   code="$(grep -oE 'HTTP [0-9]{3}' "$errfile" | head -n1 | cut -d' ' -f2)"
   [ "$attempt" -lt 2 ] && sleep "$sleep_s"
 done
-[ "$fetched" -eq 1 ] || fail "label state unreadable (HTTP ${code:-unknown})"
+[ "$fetched" -eq 1 ] || fail "label state unreadable (HTTP ${code:-unknown}); re-run the check (this is not a parked hold)"
 
 # A wrong or partial body must never pass as "not parked".
 jq -e --argjson pr "$pr" '(.number == $pr) and (.labels | type == "array")' <<<"$payload" >/dev/null 2>&1 \
-  || fail "label state unreadable (unexpected response body)"
+  || fail "label state unreadable (unexpected response body); re-run the check (this is not a parked hold)"
 
 jq -e '[.labels[] | ((.name // "") | tostring | ascii_downcase)] | any(. == "parked")' <<<"$payload" >/dev/null 2>&1
 case "$?" in
   0)
-    printf '::error::PR #%s carries parked. Remove the label (maintainers) or keep the PR a draft\n' "$pr"
+    printf '::error::PR #%s is held for the operator (label parked). Do not remove the label, merge or arm auto-merge; the operator removes it. A draft PR is held anyway.\n' "$pr"
     exit 1
     ;;
   1)
     printf 'parked-hold: PR #%s does not carry parked\n' "$pr"
     exit 0
     ;;
-  *) fail "label state unreadable (label list could not be evaluated)" ;;
+  *) fail "label state unreadable (label list could not be evaluated); re-run the check (this is not a parked hold)" ;;
 esac

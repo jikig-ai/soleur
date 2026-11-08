@@ -1082,7 +1082,7 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
   `scripts/ci-parked-hold.test.sh` against a stubbed `gh`, no `GH_TOKEN`, no network). Each carries the
   step-level condition `!cancelled() && (pull_request || merge_group)` exactly as `waiver-discipline` does,
   and each has its own `member ... 'pull_request,merge_group'` line in the `aggregate` step
-  (`scripts/lint-umbrella-aggregate.sh` check (a) is satisfied; the lint was run, unchanged). No job-level
+  (`scripts/lint-umbrella-aggregate.sh` check (a) is satisfied; the lint gained rule (g), see the structural invariant below). No job-level
   `if:`. No Terraform, ruleset, canonical-JSON or `required-checks.txt` list change: the required context is
   still the umbrella `secret-guards`, so this PR applies nothing to production.
 - **Why hosted in `secret-guards`.** `secret-scan.yml` already triggers on `labeled`/`unlabeled`; `ci.yml` does
@@ -1098,6 +1098,18 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
   PR number comes from `github.event.merge_group.head_ref` with the `mg_arm` regex of
   `scripts/ci-oracle-review.sh`. Unlike `mg_arm`, the check does not enumerate queue entries: with SQUASH each
   position runs its own `merge_group` build, and each build judges the PR named by its own ref.
+  The failure annotation is fixed text that tells a reader not to lift the hold (`PR #N is held for the operator
+  (label parked). Do not remove the label, merge or arm auto-merge; the operator removes it. A draft PR is held
+  anyway.`); the three "label state unreadable" annotations end `re-run the check (this is not a parked hold)`.
+  Neither carries label text or a response body.
+- **Structural invariant (continue-on-error).** `scripts/lib/umbrella-member.sh` `member()` reads each step's
+  `conclusion`, and `continue-on-error: true` makes a failed step's conclusion `success` (the failure survives
+  only in `outcome`, which `member()` prints but does not judge). On either parked-hold step that would disarm the
+  hold with the umbrella still green. It is pinned twice: `scripts/ci-parked-hold.test.sh` rejects any
+  `continue-on-error` key on both steps and on the job (mutation-proven, including a key placed after an in-step
+  comment), and `scripts/lint-umbrella-aggregate.sh` rule (g) rejects it class-wide in every required umbrella.
+  The tree was swept: the only umbrella that uses it is the advisory `guards-advisory` (not a required context),
+  which rule (g) exempts by name.
 - **What "server-side enforced" means.** The check binds auto-merge, the merge queue and every identity subject
   to the required checks, including Actions tokens and the `schedule` skill's `gh pr merge --squash --auto`.
   Draft status stays the first hold (`gh pr ready` flips it with no check; this check covers parked-and-ready).
@@ -1115,13 +1127,27 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
      that is unverified, and the flip evidence is defined in `scripts/required-checks.txt`.
   4. Each queue entry is judged by its own `merge_group` build (queue grouping `ALLGREEN`,
      `max_entries_to_merge = 3`): a label added to an entry AFTER its build ran is not seen. Mitigation is dequeue
-     per `merge-queue-dequeue.md`.
+     per `plugins/soleur/skills/ship/references/merge-queue-dequeue.md`.
   5. CODEOWNERS rows for `scripts/ci-parked-hold.sh`, `scripts/ci-parked-hold.test.sh` and
      `scripts/lib/umbrella-member.sh` route review but are advisory until branch protection enforces code-owner
      review (the ruleset has no `require_code_owner_review`). A PR that removes the member is judged by its own
      weakened workflow file; that is the limit of any in-repo check, and review is the control.
   6. An unreadable GitHub API fails closed: a transient outage is cleared by a re-run, a prolonged one by an
      admin bypass.
+  7. A seconds-wide window between the label write and the new check-run: until the `labeled` run reports, the
+     previous green `secret-guards` run is still the latest, so an auto-merge that fires inside that window is
+     not held.
+  8. Renaming or deleting the `parked` label disarms the check: it matches the literal name, so a renamed label
+     is no longer seen and a deleted one is gone. (The local hook also blocks `gh label delete|edit` on a
+     checkout that carries it, which is defence in depth only.)
+  9. A stacked PR whose base is not `main` is outside the ruleset (it targets `main` only), so neither the
+     required context nor this check binds it.
+- **ASSUMPTION to re-check (ADR-270 per-position build).** The decision not to enumerate queue entries rests on
+  this premise: each `merge_group` entry pays its own cumulative build under `ALLGREEN`, and a grouped `head_ref`
+  names only the deepest member. If `grouping_strategy` (or `max_entries_to_merge`) changes so that one build
+  covers several entries, a lower entry's label is no longer judged by its own build and this check must
+  enumerate the entries as `mg_arm` does. The queue-ref regex is parity-pinned to the one in
+  `scripts/ci-oracle-review.sh` and `scripts/merge-queue-cla-verify.sh` by `scripts/ci-parked-hold.test.sh`.
 - **Local hook.** `.claude/hooks/ship-operator-step-gate.sh` stays as defence in depth; its header and the
   drain-prs skill no longer call the hold best-effort-only but point at this check. The follow-through probe
   `scripts/followthroughs/parked-merge-hold-enforcement-12342.sh` (it re-evaluated this very route) is deleted.
@@ -1129,4 +1155,4 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
   statements chained with `;`, median of five runs on a host at load average about 41 (so absolute numbers are
   inflated): 1 statement 218 ms, 10 statements 577 ms, 100 statements 4954 ms (about 47 ms per statement, one
   stubbed `gh pr view` per statement). The 100-statement run exceeds the 200 ms threshold ruled in T3, so the
-  per-statement cost is tracked as a separate follow-up issue rather than fixed here.
+  per-statement cost is tracked in #12449 rather than fixed here.

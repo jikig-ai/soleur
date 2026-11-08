@@ -5,13 +5,20 @@
 # step of the `secret-guards` umbrella in .github/workflows/secret-scan.yml. This suite RUNS it
 # (no grep of its text) with a stubbed `gh` on a PRIVATE PATH prefix: no network, no credential, no
 # real PR is touched. It also
-#   * extracts the workflow step's `run:` block and executes it exactly as the runner does
-#     (`bash --noprofile --norc -eo pipefail`), with the step's env supplied by this suite;
-#   * pins the workflow SHAPE (events, aggregate membership, step-level event condition, no
-#     job-level `if:`, env hoisting, permissions) with a text parser, then proves the parser is not
-#     vacuous by feeding it mutated copies of the workflow that it must reject;
-#   * mutates the evaluator itself (case-sensitive match, fail-open, loose queue ref, no retry) and
-#     requires the same rows to go RED on each mutant.
+#   * extracts the workflow step's `run:` block and executes it under `bash --noprofile --norc -eo
+#     pipefail`, with the step's env supplied by this suite. The runner itself uses `bash -e {0}`
+#     (the steps carry no `shell:` key, so no pipefail): this is STRICTER than the runner, never looser;
+#   * pins the workflow SHAPE with a text parser (events: labeled/unlabeled and merge_group; aggregate
+#     membership; step-level event condition; no job-level `if:`; env hoisting; the umbrella's
+#     `pull-requests: write`; no `continue-on-error` on either step or the job) and proves the parser is
+#     not vacuous by feeding it one mutated copy of the workflow per pinned category, each of which it
+#     must reject (section D);
+#   * mutates the evaluator itself (case-sensitive match, fail-open, loose queue ref, no retry, extra gh
+#     flags, the unevaluable-label arm, the leading-zero normalisation, queue-ref drift) and runs ONE
+#     targeted probe per mutant, which must see correct behaviour on the pristine script and wrong
+#     behaviour on the mutant (section C);
+#   * runs scripts/lint-umbrella-aggregate.sh against a scratch copy of the workflows with
+#     `continue-on-error` injected into a required umbrella, which must fail (section F).
 #
 # Guard Contract rows (plan 2026-11-08-feat-founder-acceptance-record-followups-plan.md, Guard 1):
 #   1 mixed-case label        -> rows "Parked"/"PARKED"      (mutant: case-sensitive)
@@ -22,7 +29,13 @@
 #   9 empty call list         -> the anti-vacuity floor below
 #  10 bounded retry           -> rows "one 5xx then 200" / "persistent 5xx" (mutant: no retry)
 #
-# Prints exactly the final line `parked-hold selftest ok` on success. Needs bash, jq, python3.
+# Prints a row count and then the final line `parked-hold selftest ok` on success. Needs bash, jq,
+# python3, git.
+#
+# SC2046 (word splitting of `$(pr_env N)`) is disabled file-wide below: pr_env and mg_env print fixed
+# `KEY=value` words whose values are digits or a queue ref, never whitespace or glob characters, and
+# the word split is exactly how they hand several `env` assignments to run_hold.
+# shellcheck disable=SC2046
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -47,8 +60,16 @@ cat >"$STUB/gh" <<'STUBEOF'
 #!/usr/bin/env bash
 # Stub gh: logs argv, serves numbered canned responses from $STUB_DIR (resp.N, falling back to
 # resp.last). A response file is: line 1 = exit code, line 2 = stderr text, the rest = stdout body.
+# It accepts EXACTLY `api repos/jikig-ai/soleur/pulls/<N>` with N canonical, no leading zero (the one call
+# the evaluator makes: no flags, no --jq, no --cache). Any other argv is refused with exit 64 and a line in refused.log,
+# which every happy-path row asserts is empty (expect_pass), so an extra flag cannot slip through.
 : "${STUB_DIR:?}"
 printf '%s\n' "$*" >>"$STUB_DIR/calls.log"
+if [ "$#" -ne 2 ] || [ "$1" != "api" ] || ! [[ "$2" =~ ^repos/jikig-ai/soleur/pulls/[1-9][0-9]*$ ]]; then
+  printf 'refused argv: %s\n' "$*" >>"$STUB_DIR/refused.log"
+  echo "stub gh: unexpected argv" >&2
+  exit 64
+fi
 n=$(cat "$STUB_DIR/count" 2>/dev/null || echo 0)
 n=$((n + 1))
 printf '%s' "$n" >"$STUB_DIR/count"
@@ -64,7 +85,7 @@ chmod +x "$STUB/gh"
 
 # set_resp <n|last> <rc> <stderr> <body>
 set_resp() { printf '%s\n%s\n%s\n' "$2" "$3" "$4" >"$STUB_DIR/resp.$1"; }
-reset_stub() { rm -f "$STUB_DIR"/resp.* "$STUB_DIR/count" "$STUB_DIR/calls.log"; }
+reset_stub() { rm -f "$STUB_DIR"/resp.* "$STUB_DIR/count" "$STUB_DIR/calls.log" "$STUB_DIR/refused.log"; }
 STUB_DIR="$WORK/state"
 mkdir -p "$STUB_DIR"
 export STUB_DIR
@@ -89,7 +110,8 @@ run_hold() {
 expect_fail() { # expect_fail <label> ; uses RC/OUT
   if [ "$RC" -ne 0 ]; then ok "$1"; else bad "$1 (expected non-zero, got 0: $OUT)"; fi
 }
-expect_pass() {
+expect_pass() { # also requires that the stub refused nothing (the evaluator made only the pinned gh call)
+  if [ -s "$STUB_DIR/refused.log" ]; then bad "$1 (stub gh refused an argv: $(head -n1 "$STUB_DIR/refused.log"))"; return; fi
   if [ "$RC" -eq 0 ]; then ok "$1"; else bad "$1 (expected 0, got $RC: $OUT)"; fi
 }
 expect_out() { # expect_out <label> <fixed substring>
@@ -114,7 +136,8 @@ behaviour_rows() {
   # parked -> fail, with the fixed annotation and nothing else
   reset_stub; set_resp last 0 "" "$(body 77 'parked')"
   run_hold "$S" $(pr_env 77); expect_fail "parked fails"
-  expect_out "parked annotation names the PR" '::error::PR #77 carries parked. Remove the label (maintainers) or keep the PR a draft'
+  expect_out "parked annotation names the PR" '::error::PR #77 is held for the operator (label parked). Do not remove the label, merge or arm auto-merge; the operator removes it. A draft PR is held anyway.'
+  expect_no_out "parked annotation does not invite lifting the hold" 'Remove the label'
 
   # Guard row 1: mixed-case label
   for a in Parked PARKED pArKeD; do
@@ -143,7 +166,7 @@ behaviour_rows() {
   # Guard row 2: gh fails -> closed, with the fixed unreadable annotation and the HTTP code only
   reset_stub; set_resp last 1 "gh: Server Error (HTTP 500)" ""
   run_hold "$S" $(pr_env 83); expect_fail "gh exits non-zero (persistent 5xx) fails"
-  expect_out "unreadable annotation carries the HTTP code" '::error::parked-hold: label state unreadable (HTTP 500)'
+  expect_out "unreadable annotation carries the HTTP code" '::error::parked-hold: label state unreadable (HTTP 500); re-run the check (this is not a parked hold)'
   reset_stub; set_resp last 1 "gh: Not Found (HTTP 404)" ""
   run_hold "$S" $(pr_env 84); expect_fail "missing PR (404) fails"
   reset_stub; set_resp last 1 "connection reset by peer" ""
@@ -171,6 +194,17 @@ behaviour_rows() {
   run_hold "$S" $(pr_env 92); expect_fail "labels missing fails"
   reset_stub; set_resp last 0 "" ''
   run_hold "$S" $(pr_env 93); expect_fail "empty body fails"
+
+  # The jq error mapping: a label list that parses as an array but cannot be evaluated (an element that
+  # is not an object) is neither "parked" nor "not parked", so it fails closed with its own annotation.
+  reset_stub; set_resp last 0 "" '{"number":5,"labels":[1]}'
+  run_hold "$S" $(pr_env 5); expect_fail "label element that is not an object fails"
+  expect_out "unevaluable label list carries its annotation" '::error::parked-hold: label state unreadable (label list could not be evaluated); re-run the check (this is not a parked hold)'
+
+  # A zero-padded PR_NUMBER is normalised: the API is asked for pulls/77 and the body number 77 matches.
+  reset_stub; set_resp last 0 "" "$(body 77 'enhancement')"
+  run_hold "$S" $(pr_env 0077); expect_pass "zero-padded PR_NUMBER 0077 matches body number 77"
+  if grep -qx 'api repos/jikig-ai/soleur/pulls/77' "$STUB_DIR/calls.log" 2>/dev/null; then ok "zero-padded PR_NUMBER reads pulls/77"; else bad "zero-padded PR_NUMBER reads pulls/77"; fi
 
   # Input validation happens before any gh call
   for a in "" "abc" "12x" "1;id" '$(id)' "-1"; do
@@ -263,15 +297,24 @@ else:
 if any(re.match(r"^    if:", l) for l in head):
     err("secret-guards carries a JOB-level if: (a required context must report on every event)")
 if not any(re.match(r"^      pull-requests: write", l) for l in head):
-    err("secret-guards lacks pull-requests: write (live label read)")
+    err("secret-guards lacks pull-requests: write (inherited from the umbrella; the label read itself needs only read)")
+if any(re.match(r"^    continue-on-error\s*:", l) for l in head):
+    err("secret-guards carries a JOB-level continue-on-error (a failed member would conclude success)")
 
 def step_block(sid):
+    # A step runs from its `- id:` line to the next step (`      - `) or the job boundary. A 6-space
+    # comment INSIDE the step does not end it (keys after it must stay visible); the comment and blank
+    # lines that merely precede the NEXT step are trimmed off the end.
     for i, l in enumerate(job):
         if l == f"      - id: {sid}":
+            end = len(job)
             for j in range(i + 1, len(job)):
-                if re.match(r"^      - ", job[j]) or re.match(r"^      #", job[j]):
-                    return job[i:j]
-            return job[i:]
+                if re.match(r"^      - ", job[j]):
+                    end = j
+                    break
+            while end > i + 1 and (job[end - 1].strip() == "" or re.match(r"^      #", job[end - 1])):
+                end -= 1
+            return job[i:end]
     return None
 
 COND = "if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}"
@@ -282,6 +325,8 @@ for sid in ("parked-hold", "parked-hold-selftest"):
     if not any(l.strip() == COND for l in b):
         err(f"step {sid} lacks the step-level event condition")
     txt = "\n".join(b)
+    if any(re.match(r"^\s+continue-on-error\s*:", l) for l in b):
+        err(f"step {sid} carries continue-on-error (member() reads conclusion, which it would turn into success)")
     run = re.search(r"\n        run: (.*)", txt)
     if not run:
         err(f"step {sid} has no run:")
@@ -370,6 +415,9 @@ probe_case()     { reset_stub; set_resp last 0 "" "$(body 31 'Parked')"; run_hol
 probe_failopen() { reset_stub; set_resp last 1 "gh: Server Error (HTTP 500)" ""; run_hold "$1" $(pr_env 32); [ "$RC" -ne 0 ]; }
 probe_ref()      { reset_stub; set_resp last 0 "" "$(body 33 'enhancement')"; run_hold "$1" $(mg_env "refs/heads/gh-readonly-queue/main/pr-33-abc"); [ "$RC" -ne 0 ]; }
 probe_retry()    { reset_stub; set_resp 1 1 "gh: Bad Gateway (HTTP 502)" ""; set_resp last 0 "" "$(body 34 'enhancement')"; run_hold "$1" $(pr_env 34); [ "$RC" -eq 0 ]; }
+probe_argv()     { reset_stub; set_resp last 0 "" "$(body 35 'enhancement')"; run_hold "$1" $(pr_env 35); [ "$RC" -eq 0 ] && [ ! -s "$STUB_DIR/refused.log" ]; }
+probe_evalarm()  { reset_stub; set_resp last 0 "" '{"number":36,"labels":[1]}'; run_hold "$1" $(pr_env 36); [ "$RC" -ne 0 ]; }
+probe_zeropad()  { reset_stub; set_resp last 0 "" "$(body 37 'enhancement')"; run_hold "$1" $(pr_env 0037); [ "$RC" -eq 0 ] && [ ! -s "$STUB_DIR/refused.log" ]; }
 
 mutant() { # mutant <name> <probe> <sed expression>: the probe must see correct behaviour on the pristine script and wrong behaviour on the mutant
   local name="$1" probe="$2" expr="$3" f="$WORK/mutant-$1.sh"
@@ -382,6 +430,37 @@ mutant case-sensitive probe_case 's/\| ascii_downcase//'
 mutant fail-open probe_failopen 's/exit 1 # GUARD:fail-closed/exit 0/'
 mutant loose-queue-ref probe_ref 's/\[0-9a-f\]\{40\}\$/.*/'
 mutant no-retry probe_retry 's/(while \[ "\$attempt") -lt 2/\1 -lt 1/'
+mutant extra-gh-flag probe_argv 's/gh api "repos/gh api --cache 1h "repos/'
+mutant eval-arm-passes probe_evalarm 's/(\*\)) fail "[^"]*"/\1 exit 0/'
+mutant no-leading-zero-normalisation probe_zeropad 's/^pr=\$\(\(10#\$pr\)\).*$//'
+
+# The queue-ref regex is a parity-pinned copy of the one in the two sibling scripts (ADR-270 mg_arm). What is
+# compared: the whole anchored literal `^refs/heads/gh-readonly-queue/main/pr-([0-9]+)-<sha>$`, extracted from
+# each file, with the SIBLINGS' parentheses around the SHA group removed (they capture the embedded oid; this
+# script does not need it). The PR-number group, the `main` base, the 40-hex length and both anchors are compared.
+QREF_RE='\^refs/heads/gh-readonly-queue/main/pr-\(\[0-9\]\+\)-\(?\[0-9a-f\]\{40\}\)?\$'
+qref_of() { # <file> -> the distinct queue-ref literals in it, SHA capture group parens removed; empty when none
+  { grep -oE "$QREF_RE" "$1" || true; } | sed -E 's/-\((\[0-9a-f\]\{40\})\)\$/-\1$/' | sort -u
+}
+qref_parity() { # qref_parity <this script> <oracle copy> <cla copy>: 0 iff all three carry the same non-empty literal
+  local a b c
+  a="$(qref_of "$1")"; b="$(qref_of "$2")"; c="$(qref_of "$3")"
+  [ -n "$a" ] && [ "$(printf '%s\n' "$a" | wc -l)" -eq 1 ] && [ "$a" = "$b" ] && [ "$a" = "$c" ]
+}
+ORACLE="$ROOT/scripts/ci-oracle-review.sh"; CLA="$ROOT/scripts/merge-queue-cla-verify.sh"
+if qref_parity "$SCRIPT" "$ORACLE" "$CLA"; then ok "queue-ref regex matches ci-oracle-review.sh and merge-queue-cla-verify.sh"; else bad "queue-ref regex matches ci-oracle-review.sh and merge-queue-cla-verify.sh"; fi
+qref_mutant() { # qref_mutant <name> <which: script|oracle|cla>: one file's regex drifts; the parity row must go RED
+  local name="$1" which="$2" f="$WORK/qref-$1.sh" src
+  case "$which" in script) src="$SCRIPT" ;; oracle) src="$ORACLE" ;; cla) src="$CLA" ;; esac
+  sed -E 's/pr-\(\[0-9\]\+\)-/pr-([0-9]*)-/' "$src" >"$f"
+  if cmp -s "$src" "$f"; then bad "queue-ref mutant $name did not change $which (anchor drifted)"; return; fi
+  local s="$SCRIPT" o="$ORACLE" c="$CLA"
+  case "$which" in script) s="$f" ;; oracle) o="$f" ;; cla) c="$f" ;; esac
+  if qref_parity "$s" "$o" "$c"; then bad "queue-ref mutant $name survived"; else ok "queue-ref mutant $name rejected"; fi
+}
+qref_mutant drift-in-script script
+qref_mutant drift-in-oracle oracle
+qref_mutant drift-in-cla cla
 
 # ─── D. workflow shape ──────────────────────────────────────────────────────────────────────────
 SHAPE_OUT=$(shape_check "$WORKFLOW" 2>&1) && ok "workflow shape holds" || bad "workflow shape: $SHAPE_OUT"
@@ -399,11 +478,26 @@ PYEOF
 }
 # the sub arguments: PATTERN REPL (python re, MULTILINE)
 shape_mutant drop-unlabeled 'types: \[opened, synchronize, reopened, labeled, unlabeled\]' 'types: [opened, synchronize, reopened, labeled]'
+shape_mutant drop-merge-group '^  merge_group:' '  merge_group_disabled:'
 shape_mutant drop-aggregate-member "^          member parked-hold 'pull_request,merge_group'.*\$" ''
 shape_mutant job-level-if '^    timeout-minutes: 15$' "    timeout-minutes: 15\n    if: \${{ github.event_name == 'pull_request' }}"
 shape_mutant drop-step-condition "^        if: \\\${{ !cancelled\\(\\) && \\(github.event_name == 'pull_request' \\|\\| github.event_name == 'merge_group'\\) }}\n        name: parked-hold" "        if: \${{ !cancelled() }}\n        name: parked-hold"
+shape_mutant drop-permission '^      pull-requests: write.*$' '      pull-requests: read'
+shape_mutant interpolated-run '^        run: bash scripts/ci-parked-hold.sh$' '        run: bash scripts/ci-parked-hold.sh ${{ github.event.pull_request.number }}'
+shape_mutant drop-env-repo '^          REPO: \${{ github.repository }}\n          GH_TOKEN: \${{ github.token }}\n        run: bash scripts/ci-parked-hold.sh' '          GH_TOKEN: ${{ github.token }}\n        run: bash scripts/ci-parked-hold.sh'
+# continue-on-error turns a red step's conclusion into success, so the PR would never be blocked
+shape_mutant coe-parked-hold '^(      - id: parked-hold\n)' '\1        continue-on-error: true\n'
+shape_mutant coe-selftest '^(      - id: parked-hold-selftest\n)' '\1        continue-on-error: true\n'
+shape_mutant coe-expression '^(      - id: parked-hold\n)' '\1        continue-on-error: ${{ always() }}\n'
+shape_mutant coe-job-level '^    timeout-minutes: 15$' '    timeout-minutes: 15\n    continue-on-error: true'
+# a key placed AFTER a 6-space comment inside the step must still be seen (step_block does not stop at it)
+shape_mutant coe-after-comment '^(        name: parked-hold \(fail while[^\n]*\n)' '\1      # a comment inside the step\n        continue-on-error: true\n'
+shape_mutant coe-selftest-after-comment '^(        name: parked-hold selftest[^\n]*\n)' '\1      # a comment inside the step\n        continue-on-error: true\n'
+# ...and when every OTHER required key sits BEFORE the comment, so only the hidden key distinguishes the verdict
+shape_mutant coe-last-key-after-comment '^(        run: bash scripts/ci-parked-hold.sh\n)' '\1      # a comment inside the step\n        continue-on-error: true\n'
+shape_mutant coe-selftest-last-key-after-comment '^(        run: bash scripts/ci-parked-hold.test.sh\n)' '\1      # a comment inside the step\n        continue-on-error: true\n'
 
-# ─── E. the workflow step's run: block, executed as the runner does ──────────────────────────────
+# ─── E. the workflow step's run: block, executed under bash -eo pipefail (stricter than the runner's bash -e) ─
 RUN_BLOCK=$(extract_run "$WORKFLOW" parked-hold) && ok "extracted the parked-hold run: block" || bad "extract the parked-hold run: block"
 SELF_BLOCK=$(extract_run "$WORKFLOW" parked-hold-selftest) && ok "extracted the parked-hold-selftest run: block" || bad "extract the parked-hold-selftest run: block"
 if [ -n "${RUN_BLOCK:-}" ]; then
@@ -427,14 +521,61 @@ fi
 case "${SELF_BLOCK:-}" in *GH_TOKEN*) bad "selftest run: block must not reference GH_TOKEN" ;; *) ok "selftest run: block references no GH_TOKEN" ;; esac
 
 # ─── F. the evaluator is wired to the dispositions recorded for it ───────────────────────────────
-grep -q 'parked-hold' "$ROOT/scripts/required-checks.txt" && ok "required-checks.txt records the member" || bad "required-checks.txt records the member"
+# anchored on the two comment lines that record the member's disposition, not the bare token (any comment satisfies that)
+rc_pin() { grep -qE '^#.*, parked-hold and parked-hold-selftest \(added 2026-11-08,' "$1" && grep -qE '^#       - parked-hold / parked-hold-selftest: NOT content-scoped' "$1"; }
+if rc_pin "$ROOT/scripts/required-checks.txt"; then ok "required-checks.txt records the member and its disposition"; else bad "required-checks.txt records the member and its disposition"; fi
+for m in 's/parked-hold and parked-hold-selftest/parked-hold/' 's/NOT content-scoped/content-scoped/'; do
+  sed -E "$m" "$ROOT/scripts/required-checks.txt" >"$WORK/rc-mut.txt"
+  if cmp -s "$ROOT/scripts/required-checks.txt" "$WORK/rc-mut.txt"; then bad "required-checks mutant '$m' did not change the file"
+  elif rc_pin "$WORK/rc-mut.txt"; then bad "required-checks mutant '$m' survived"; else ok "required-checks mutant '$m' rejected"; fi
+done
 for f in scripts/ci-parked-hold.sh scripts/ci-parked-hold.test.sh scripts/lib/umbrella-member.sh; do
   grep -qE "^/${f//./\\.}[[:space:]]+@deruelle" "$ROOT/.github/CODEOWNERS" && ok "CODEOWNERS row for $f" || bad "CODEOWNERS row for $f"
 done
 
+# ─── G. lint-umbrella-aggregate.sh rejects continue-on-error in a REQUIRED umbrella (class-wide rule (g)) ──────
+LINTREPO="$WORK/lintrepo"
+mkdir -p "$LINTREPO/scripts/lib" "$LINTREPO/.github/workflows"
+cp "$ROOT"/.github/workflows/*.yml "$LINTREPO/.github/workflows/"
+cp "$ROOT/scripts/lint-umbrella-aggregate.sh" "$LINTREPO/scripts/"
+cp "$ROOT/scripts/lib/umbrella-member.sh" "$LINTREPO/scripts/lib/"
+git -C "$LINTREPO" init -q 2>/dev/null
+run_lint() { reset_stub; OUT=$(cd "$LINTREPO" && env -i HOME="$WORK" PATH="$ORIG_PATH" bash scripts/lint-umbrella-aggregate.sh 2>&1); RC=$?; }
+run_lint; expect_pass "lint-umbrella-aggregate passes on the unmutated workflow copies"
+lint_mutant() { # lint_mutant <name> <workflow> <umbrella job> <step id | JOB>: inject continue-on-error: true
+  local name="$1" wf="$2" job="$3" at="$4"
+  cp "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"
+  python3 -I - "$LINTREPO/.github/workflows/$wf" "$job" "$at" <<'PYEOF'
+import re, sys
+path, job, at = sys.argv[1:4]
+lines = open(path, encoding="utf-8").read().split("\n")
+i = lines.index(f"  {job}:")
+if at == "JOB":
+    k = next(j for j in range(i, len(lines)) if lines[j].startswith("    runs-on:"))
+    lines.insert(k, "    continue-on-error: true")
+else:
+    k = next(j for j in range(i, len(lines)) if lines[j] == f"      - id: {at}")
+    lines.insert(k + 1, "        continue-on-error: true")
+open(path, "w", encoding="utf-8").write("\n".join(lines))
+PYEOF
+  if cmp -s "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"; then bad "lint mutant $name did not change $wf"; else
+    run_lint
+    if [ "$RC" -ne 0 ] && [[ "$OUT" == *"continue-on-error"* ]]; then ok "lint mutant $name rejected"; else bad "lint mutant $name survived (rc $RC)"; fi
+  fi
+  cp "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"
+}
+lint_mutant coe-on-parked-hold secret-scan.yml secret-guards parked-hold
+lint_mutant coe-on-secret-guards-job secret-scan.yml secret-guards JOB
+lint_mutant coe-on-guards-ruleset-step ci.yml guards-ruleset "$(sed -n '/^  guards-ruleset:/,/^  guards-advisory:/p' "$ROOT/.github/workflows/ci.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
+lint_mutant coe-on-quality-guards-step pr-quality-guards.yml quality-guards "$(sed -n '/^  quality-guards:/,/^  quality-advisory:/p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
+run_lint; expect_pass "lint-umbrella-aggregate passes again once the mutated copies are restored"
+
 # ─── anti-vacuity floor (Guard row 9): an emptied call list must not report ok ───────────────────
-MIN_ROWS=70
-if [ "$rows" -lt "$MIN_ROWS" ]; then bad "anti-vacuity floor: only $rows rows ran (minimum $MIN_ROWS)"; fi
+# The floor exits directly: it must not run THROUGH bad()/fails, which a neutered assertion machinery silences
+# (scripts/guard-vacuity-floor.test.sh). MIN_ROWS is the actual row count (106) minus two; it stays on the line
+# directly above the `if` so the meta-guard can bind it when it builds its neutered mutant.
+MIN_ROWS=104
+if [ "$rows" -lt "$MIN_ROWS" ]; then printf 'parked-hold selftest FAILED: anti-vacuity floor: only %d rows ran (minimum %d)\n' "$rows" "$MIN_ROWS" >&2; exit 1; fi
 
 if [ "$fails" -ne 0 ]; then
   printf 'parked-hold selftest FAILED: %d of %d rows\n' "$fails" "$rows" >&2

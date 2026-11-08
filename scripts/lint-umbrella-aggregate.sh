@@ -31,6 +31,17 @@
 #       silently re-opens the five-way drift the dedup closed. The semantics
 #       tokens of (d) are pinned against the lib file, once, not per block.
 #
+#   (g) NO CONTINUE-ON-ERROR (REQUIRED umbrellas): no step, and not the job,
+#       of a required umbrella may carry a `continue-on-error:` key, whatever
+#       its value. `member()` reads `conclusion`, and `continue-on-error: true`
+#       turns a failed step's conclusion into `success` (the failure survives
+#       only in `outcome`, which member() merely prints): the member goes green
+#       and the PR is never blocked, with (a)-(f) all still satisfied. Measured
+#       against the tree: the ONLY umbrella that legitimately uses it is the
+#       advisory `guards-advisory` (harness-discovery et al.: its verdicts are
+#       non-blocking by design and it is not a required context), so the rule
+#       is scoped to every umbrella NOT in ADVISORY_UMBRELLAS below.
+#
 # Text-parse lint: `- id:` and `member(` tokens only, no YAML library. The
 # member(...) call's THIRD argument is the single-quoted CSV of step ids.
 #
@@ -54,6 +65,9 @@ UMBRELLAS = {
     ".github/workflows/pr-quality-guards.yml": ["quality-guards", "quality-advisory"],
     ".github/workflows/secret-scan.yml": ["secret-guards"],
 }
+
+# Umbrellas that are NOT required contexts and may carry continue-on-error (see (g)).
+ADVISORY_UMBRELLAS = {"guards-advisory", "quality-advisory"}
 
 failures = []
 
@@ -126,6 +140,16 @@ for path, jobs in UMBRELLAS.items():
             continue
         if len(agg) > 1:
             fail(f"{path} `{job}`: {len(agg)} `aggregate` steps (want 1)")
+
+        # (g) no continue-on-error key anywhere in a required umbrella (job level or any step,
+        # including the id-less checkout step). A comment line starts with `#`, so it never matches.
+        if job not in ADVISORY_UMBRELLAS:
+            for ln in body:
+                if re.match(r"\s+continue-on-error\s*:", ln):
+                    fail(
+                        f"{path} `{job}`: `continue-on-error` in a required umbrella turns a red member "
+                        f"into conclusion=success ({ln.strip()})"
+                    )
 
         # (b) every member step's if: contains !cancelled()
         for sid, block in steps:
