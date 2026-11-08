@@ -58,6 +58,17 @@ case "$ep" in
   *) exit 64 ;;
 esac
 [ -f "$f" ] || exit 1
+# KILL-JOBS: kill the WORKER unit behind this read to simulate a worker dying mid-flight with no
+# result file (the missing-row → CANNOT ESTABLISH contract). Verified tree on bash 5.3:
+# gh -> timeout -> `$(api)` cmdsub -> `( fn )`-spawned subshells -> worker — the row-owning unit is
+# THREE /proc/<pid>/stat field-4 hops above gh's parent (fewer hops only kill the api read, which
+# correctly surfaces as a `fail` row instead). Linux-only (/proc); the row is pool-mode only.
+if [ -f "$FX/KILL-JOBS" ] && [[ "$ep" == */jobs\?* ]]; then
+  wp="$(cut -d' ' -f4 "/proc/$PPID/stat" 2>/dev/null)"
+  [[ "$wp" =~ ^[0-9]+$ ]] && wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"
+  [[ "$wp" =~ ^[0-9]+$ ]] && wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"
+  [[ "$wp" =~ ^[0-9]+$ ]] && kill -KILL "$wp" 2>/dev/null
+fi
 if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
 FAKE
 chmod +x "$TMP/bin/gh"
@@ -227,11 +238,20 @@ build_fx "$TMP/d1" 20 40
 printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"closed"}\n' > "$TMP/d1/pr-105.json"
 expect "a closed-unmerged qualifying PR drops out of the escape check" 0 "closed unmerged" "$TMP/d1"
 build_fx "$TMP/d2" 20 40
-# the twin state that must NOT drop: an OPEN qualifying PR — its merge_commit_sha is the test merge, no
-# push run can exist for it yet, so it pends (it may merge) rather than disappearing from the arm.
+# the twin state that must NOT drop and (#12360) must NOT pend either: an OPEN qualifying PR — its
+# merge_commit_sha is the test merge and no push run can exist for it, but that absence is EXPECTED
+# for an unmerged PR, not missing evidence. It lands in the `open` bucket mirroring `dropped`: a
+# note line, pending==0, the verdict stays reachable — and it costs ZERO extra reads (state rides
+# the same pulls/N meta read), so no push-run request may be issued for it.
 printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"open"}\n' > "$TMP/d2/pr-105.json"
-printf '{"workflow_runs":[]}\n' > "$TMP/d2/push-tms105.json"
-expect "an open qualifying PR still pends on its future merge-commit push run" 2 "no completed push run" "$TMP/d2"
+expect "an open qualifying PR lands in the open bucket (note line, pending==0) and the sweep still PASSes" 0 "qualifying PR(s) still open" "$TMP/d2"
+out="$(env FX="$TMP/d2" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 0 && "$out" == *"note: 1 qualifying PR(s) still open"* && "$out" != *"no completed push run"* ]]; then
+  pass "the open bucket removes the PR from pending entirely (no NOT YET line for open PRs)"
+else fail "open-PR re-scope: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+if grep -q 'head_sha=tms105' "$TMP/d2/requests.log"; then
+  fail "an open PR must not issue a push-run read — its merge_commit_sha is a test merge"
+else pass "an open PR issues no push-run read (state rides the existing pulls/N meta read)"; fi
 if grep -qE 'page=[2-9]' "$TMP/s1/requests.log"; then fail "a short page 1 must not trigger a second-page fetch"; else pass "a short page 1 (<100 runs) does not paginate"; fi
 # --- realized-skip evidence arms (the re-instrument) ----------------------------------------------------
 build_fx "$TMP/q1" 25 40; printf '{"resources":{"core":{"remaining":5}}}' > "$TMP/q1/rate_limit.json"
@@ -286,6 +306,36 @@ expect "the seam refuses under the sweeper channel: SOLEUR_FT_EARLIEST set-but-e
 if grep -q 'rate_limit' "$TMP/s1/requests.log"; then pass "the quota preflight reads rate_limit"; else fail "no rate_limit preflight issued"; fi
 out="$(env FX="$TMP/s1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash -x "$PROBE" 2>&1)"; rc=$?
 if [[ "$rc" == 78 ]]; then pass "xtrace with a live GH_TOKEN is refused (rc=78)"; else fail "xtrace refusal: rc=$rc"; fi
+# --- #12360: open-bucket composition + the bounded-parallel read phases --------------------------------
+build_fx "$TMP/d3" 20 40
+# an open qualifying PR beside a MERGED one whose push run is absent: the open bucket must not mask
+# real pending — the merged PR still NOT YETs while the open one only notes.
+printf '{"merged_at":null,"merge_commit_sha":"tms105","state":"open"}\n' > "$TMP/d3/pr-105.json"
+printf '{"workflow_runs":[]}\n' > "$TMP/d3/push-sha106.json"
+expect "open bucket does not mask pending: a merged PR with an absent push run still NOT YETs beside an open PR" 2 "no completed push run" "$TMP/d3"
+out="$(env FX="$TMP/d3" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"qualifying PR(s) still open"* && "$out" == *"no completed push run"* ]]; then
+  pass "the open note prints beside a real pending NOT YET (open excluded, merged still pends)"
+else fail "d3 open+pending mix: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+# parallel-mode wall row: the SLOW fixture (1 s per fake-gh call) is ~123 serial reads — serial cannot
+# fit 60 s; the bounded pool must converge to a real verdict inside the same budget, and the forced-
+# serial control (PBG_JOBS=1) must still die on the deadline as NOT YET.
+build_fx "$TMP/pw1" 20 40; : > "$TMP/pw1/SLOW"
+expect "parallel reads converge under the budget where serial cannot: SLOW fixture PASSes inside PBG_BUDGET_S=60" 0 "PASS" "$TMP/pw1" PBG_BUDGET_S=60 SLOW_S=1
+expect "the same fixture forced serial (PBG_JOBS=1) still hits the wall deadline: NOT YET, never a partial verdict" 2 "wall deadline" "$TMP/pw1" PBG_BUDGET_S=60 SLOW_S=1 PBG_JOBS=1
+expect "forced serial (PBG_JOBS=1) aggregates identically to the pool: same qualifying/evidenced counts" 0 "qualifying_runs=25 evidenced_runs=25" "$TMP/s1" PBG_JOBS=1
+# a worker killed mid-read leaves no result file: the parent must CANNOT ESTABLISH, never silently
+# treat the unit as skipped/absent evidence.
+build_fx "$TMP/mr1" 20 40; : > "$TMP/mr1/KILL-JOBS"
+if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+  expect "a worker dying without writing its result row is CANNOT ESTABLISH, never a silent skip" 3 "produced no result" "$TMP/mr1"
+else
+  pass "worker-kill row not applicable on this bash: the pool needs bash>=5.1 (wait -n -p); serial path runs the worker in-process"
+fi
+# --- PBG_JOBS knob: integer validation (same refuse shape as PBG_BUDGET_S) + the 1-16 clamp -----------
+expect "PBG_JOBS=abc is not an integer: CANNOT ESTABLISH" 3 "PBG_JOBS is not an integer" "$TMP/s4" PBG_JOBS=abc
+expect "PBG_JOBS=99 clamps to the 16-worker ceiling and the sweep still converges" 0 "16-worker ceiling" "$TMP/s1" PBG_JOBS=99
+expect "PBG_JOBS=0 clamps to the serial floor and still converges" 0 "PASS" "$TMP/s1" PBG_JOBS=0
 
 printf 'pr-battery-gate-saving-9323: %d passed, %d failed, %d assertion(s) executed\n' "$passes" "$fails" "$asserted"
 PBGS_MIN_ASSERTIONS=50

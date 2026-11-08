@@ -38,16 +38,29 @@
 # HEAD-BRANCH RESOLUTION (measured 2026-10-25): the runs API only populates `pull_requests` while the PR
 # is still OPEN — 2 of 13 successful human runs on the latest page carried one. A merged PR's run (the
 # exact set the escape check needs) reports the field EMPTY, and an open-PR candidate reaches the escape
-# arm with no merge commit and lands in `pending` — so the pre-resolution probe could never converge at
-# any page count: the candidates it could see were the ones that could never satisfy arm (b). A run
-# whose `pull_requests` is empty is therefore resolved through `pulls?head=<owner>:<head_branch>` —
-# `.[0]`, the newest PR on that branch — before the machinery filter. Residual: a branch reused for a
-# second PR resolves to the newer one, so the machinery filter reads the newer PR's file set — a touch
-# present only in the newer diff over-includes (conservative: the candidate drops out), a touch present
-# only in the older under-includes (a wrong-direction miss, priced as rare; the alternative — no
-# resolution — is the deadlock above). Only runs whose head_repository is THIS repo are resolved:
-# a fork PR's run carries the fork's branch name, which can collide with a same-repo branch, and
-# head=<owner>:<branch> can never name the fork's own PR anyway.
+# arm with no merge-commit evidence to check (the `open` bucket today — see the escape arm) — so the
+# pre-resolution probe could never converge at any page count: the candidates it could see were the ones
+# that could never satisfy arm (b). A run whose `pull_requests` is empty is therefore resolved through
+# `pulls?head=<owner>:<head_branch>` — `.[0]`, the newest PR on that branch — before the machinery filter.
+# Residual: a branch reused for a second PR resolves to the newer one, so the machinery filter reads the
+# newer PR's file set — a touch present only in the newer diff over-includes (conservative: the candidate
+# drops out), a touch present only in the older under-includes (a wrong-direction miss, priced as rare;
+# the alternative — no resolution — is the deadlock above). Only runs whose head_repository is THIS repo
+# are resolved: a fork PR's run carries the fork's branch name, which can collide with a same-repo branch,
+# and head=<owner>:<branch> can never name the fork's own PR anyway.
+#
+# BOUNDED-PARALLEL READS (#12360): the four serial read phases (runs pages, candidate examine, artifact
+# listings+downloads, escape arm) starved inside every wall the probe can occupy (~11 min measured
+# 2026-11-07 under PBG_UNBOUNDED=1 for qualifying_runs=40 evidenced_runs=21). Each phase now runs its
+# independent units through a bounded `&`-worker pool (wait -n -p reap, width PBG_JOBS) whose workers
+# write per-unit result FILES under $WORK; the parent aggregates the rows in candidate order, so the
+# verdict path is bit-identical to the serial one. Workers never exit, never print probe output and
+# never call cut_ny/fail_api — the parent owns every verdict emission; a worker that dies without its
+# row file is CANNOT ESTABLISH, never a skipped unit. The api()/api_bin() per-call deadline contract is
+# unchanged: `( )`/`&` subshells share the parent's SECONDS epoch, so the min(60, END-SECONDS-5) cap
+# works inside workers exactly as before (a `bash -c`/xargs child would restart SECONDS and silently
+# break it — one reason the pool is `&`-based, mirroring scripts/test-all.sh's _pj_fill/_pj_reap idiom
+# ~:2342-2419, including its bash<5.1 serial-degrade gate at :2229-2231).
 #
 # Exit semantics (sweep-followthroughs.sh contract):
 #   0 = PASS    soak holds        1 = FAIL   mean saving too small, or an escape was found
@@ -60,6 +73,9 @@
 #   deadline with END=T0+86400 so one local run can converge; refused under
 #   the sweeper channel (SOLEUR_FT_EARLIEST set). PBG_BUDGET_S is the
 #   budgeted-path deadline test seam (integer 1..300, sweeper contract).
+#   PBG_JOBS is the read-pool width — integer, clamped to 1-16, default 8;
+#   1 forces the serial path and bash<5.1 serial-degrades (announced), so the
+#   sweeper's env -i contract needs no forwarding to stay byte-identical.
 #
 # RETIREMENT: when #9323 closes, delete this file, its .test.sh, the run_suite line in scripts/test-all.sh,
 # the `scripts/followthroughs/pr-battery-gate-saving-9323` rows in scripts/suite-shard-legs.tsv and
@@ -111,6 +127,25 @@ else
   END=$((T0 + BUDGET))
 fi
 
+# PBG_JOBS: the read-pool width (#12360) — integer, clamped to 1-16, default 8. Validated
+# unconditionally (it binds the unbounded operator seam too — a tunable there was the ruling's
+# point); the refuse shape mirrors PBG_BUDGET_S's. `wait -n -p` needs bash>=5.1 — older bash
+# serial-degrades, announced, mirroring the test-all.sh:2229-2231 gate: the probe must keep
+# producing NOT YET, never crash, on an old bash (the PBG_UNBOUNDED local-verdict path may run
+# on macOS bash 3.2; the sweeper runs ubuntu-24.04 bash 5.2).
+JOBS="${PBG_JOBS:-8}"
+[[ "$JOBS" =~ ^[0-9]+$ ]] || { echo "CANNOT ESTABLISH: PBG_JOBS is not an integer"; exit 3; }
+if (( JOBS > 16 )); then echo "[pbg] PBG_JOBS=$JOBS exceeds the 16-worker ceiling — clamped to 16"; JOBS=16; fi
+(( JOBS < 1 )) && JOBS=1
+_pbg_pool_on=0
+if (( JOBS > 1 )); then
+  if (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+    _pbg_pool_on=1
+  else
+    echo "[pbg] serial fallback — bash<5.1 (wait -n -p unavailable); reads run serially"
+  fi
+fi
+
 # the gate-machinery paths, single-sourced from the lib that declares them
 # shellcheck source=scripts/lib/test-relevance-paths.sh
 source "$HERE/../lib/test-relevance-paths.sh" 2>/dev/null || { echo "CANNOT ESTABLISH: cannot read test-relevance-paths.sh"; exit 3; }
@@ -139,6 +174,166 @@ api_bin() {
 }
 fail_api() { echo "CANNOT ESTABLISH: GitHub API read failed ($1)"; exit 3; }
 cut_ny() { echo "NOT YET: the wall deadline ($((END - T0))s) ended during $1 — the sweep retries next run"; exit 2; }
+
+# --- the bounded-parallel worker pool ----------------------------------------------------------------
+# _w_row: the worker's ONLY result channel — one atomic write (.part + mv, the replay tool's
+# fail_suites pattern) so the parent never reads a torn row. Worker stdout/stderr never carries
+# verdict data; _pbg_pool redirects it to a per-unit wlog for postmortems only.
+_w_row() {
+  local f="$1"; shift
+  printf '%s\n' "$*" > "$f.part" && mv "$f.part" "$f"
+}
+# a dispatched unit MUST produce its row: missing/empty = a worker died silently = CANNOT ESTABLISH,
+# never a skipped unit (partial evidence is worse than no verdict).
+_pbg_need_row() {
+  [ -s "$1" ] || { echo "CANNOT ESTABLISH: a probe worker produced no result for ${1##*/} — a worker dying silently is a defect, never a skipped unit"; exit 3; }
+}
+_pbg_reap() {  # reap one finished pool worker; drops it from _pbg_pids/_pbg_live (test-all.sh _pj_reap shape)
+  local rp="" j
+  wait -n -p rp -- "${_pbg_pids[@]}" 2>/dev/null
+  local -a np=()
+  for j in "${_pbg_pids[@]}"; do
+    if [ -n "$rp" ]; then
+      [ "$j" != "$rp" ] && np+=("$j")
+    else
+      # torn reap: a completed child can leave the job table before wait -n reaches it (rp empty);
+      # kill -0 on a reaped-away pid fails, which is the drop condition.
+      kill -0 "$j" 2>/dev/null && np+=("$j")
+    fi
+  done
+  _pbg_pids=(); ((${#np[@]})) && _pbg_pids=("${np[@]}")
+  _pbg_live=${#_pbg_pids[@]}
+}
+# _pbg_pool <listfile> <worker-fn>: one `key<TAB>payload` line per unit; at most JOBS `&` workers
+# live at once, reaped with `wait -n -p`. Serial path (JOBS=1 or bash<5.1) runs the same worker
+# function inline — one code path for unit logic either way. Result FILES are the contract: the
+# pool returns after the drain and the parent aggregates rows in ITS chosen order.
+_pbg_pool() {
+  local list="$1" fn="$2" key payload
+  if (( _pbg_pool_on == 0 )); then
+    while IFS=$'\t' read -r key payload; do
+      [ -n "$key" ] || continue
+      "$fn" "$key" "$payload" >> "$WORK/wlog-$fn-$key" 2>&1
+    done < "$list"
+    return 0
+  fi
+  _pbg_pids=(); _pbg_live=0
+  while IFS=$'\t' read -r key payload; do
+    [ -n "$key" ] || continue
+    ( "$fn" "$key" "$payload" ) >> "$WORK/wlog-$fn-$key" 2>&1 &
+    _pbg_pids+=("$!"); _pbg_live=$((_pbg_live + 1))
+    (( _pbg_live < JOBS )) || _pbg_reap
+  done < "$list"
+  while (( _pbg_live > 0 )); do _pbg_reap; done
+}
+
+# --- the workers: each writes one row file and returns; cut_ny/fail_api exist only in the parent ----
+# _pbg_w_page <page>: $WORK/page-<p> = `ok <raw_n>` + page-<p>.chunk (filtered candidates);
+# `cut <detail>` on the deadline, `fail <detail>` on a failed/empty/malformed read.
+_pbg_w_page() {
+  local p="$1" rf="$WORK/page-$1" resp rc=0 raw_n chunk
+  resp="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=pull_request&status=completed&per_page=100&created=%3E$merged_at&page=$p")" || rc=$?
+  if (( rc == 46 )); then _w_row "$rf" "cut the runs list (page $p)"; return 0; fi
+  if (( rc != 0 )) || [ -z "$resp" ]; then _w_row "$rf" "fail ci.yml runs (page $p)"; return 0; fi
+  raw_n="$(jq -r '.workflow_runs | length' <<<"$resp" 2>/dev/null)"
+  [[ "$raw_n" =~ ^[0-9]+$ ]] || { _w_row "$rf" "fail ci.yml runs (page $p, malformed body)"; return 0; }
+  chunk="$(jq '[.workflow_runs[] | select(.conclusion == "success" and (.actor.type // "") != "Bot")
+               | {id, conclusion, pr: (.pull_requests[0].number // "-"), branch: (.head_branch // "-"),
+                  hrepo: (.head_repository.full_name // "-")}]' <<<"$resp")" \
+    || { _w_row "$rf" "fail ci.yml runs (page $p, filter failed)"; return 0; }
+  printf '%s\n' "$chunk" > "$WORK/page-$p.chunk" || { _w_row "$rf" "fail ci.yml runs (page $p, chunk write)"; return 0; }
+  _w_row "$rf" "ok $raw_n"
+}
+# _pbg_w_exam <idx> <id<TAB>pr<TAB>branch<TAB>hrepo>: $WORK/exam-<idx> =
+# `qual <pr> <id> <run_min> <qwait_sum> <qwait_n>` for a qualifying run, `skip` for every serial
+# `continue`, and the same cut/fail details the serial loop emitted (the parent replays them).
+_pbg_w_exam() {
+  local idx="$1" pl="$2" rf="$WORK/exam-$1" id pr branch hrepo rest rc=0 files m touches=0 jobs_json ran run_min qw
+  id="${pl%%$'\t'*}"; rest="${pl#*$'\t'}"
+  pr="${rest%%$'\t'*}"; rest="${rest#*$'\t'}"
+  branch="${rest%%$'\t'*}"; hrepo="${rest#*$'\t'}"
+  # `pull_requests` is empty once the PR merges (see HEAD-BRANCH RESOLUTION above): resolve the run's
+  # head_branch back to its PR — `state=all`, because the merged set is exactly what the escape arm
+  # needs. Only same-repo heads: a fork run's head_branch can collide with a same-repo branch name and
+  # would misresolve to the wrong PR (head=<owner>:<branch> cannot see the fork's PR).
+  if [[ "$pr" == "-" || -z "$pr" ]]; then
+    if [[ "$branch" == "-" || -z "$branch" || "$hrepo" != "$REPO" || ! "$branch" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+      _w_row "$rf" "skip"; return 0
+    fi
+    pr="$(api "repos/$REPO/pulls?head=${REPO%%/*}:$branch&state=all&per_page=1" --jq '.[0].number // empty')" || rc=$?
+    if (( rc == 46 )); then _w_row "$rf" "cut the head-branch lookup ($branch)"; return 0; fi
+    if (( rc != 0 )); then _w_row "$rf" "fail head-branch PR lookup ($branch)"; return 0; fi
+    [ -n "$pr" ] || { _w_row "$rf" "skip"; return 0; }
+  fi
+  files="$(api "repos/$REPO/pulls/$pr/files?per_page=100" --jq '.[].filename')" || rc=$?
+  if (( rc == 46 )); then _w_row "$rf" "cut the files read of PR $pr"; return 0; fi
+  if (( rc != 0 )); then _w_row "$rf" "fail pull $pr files"; return 0; fi
+  for m in "${MACHINERY[@]}"; do
+    case "$files" in *"$m"*) touches=1 ;; esac
+  done
+  (( touches == 0 )) || { _w_row "$rf" "skip"; return 0; }
+  jobs_json="$(api "repos/$REPO/actions/runs/$id/jobs?per_page=100")" || rc=$?
+  if (( rc == 46 )); then _w_row "$rf" "cut the jobs read of run $id"; return 0; fi
+  if (( rc != 0 )); then _w_row "$rf" "fail run $id jobs"; return 0; fi
+  # a run that never executed a test-scripts* job measures nothing about the batteries
+  ran="$(jq '[.jobs[] | select((.name | startswith("test-scripts")) and .conclusion != "skipped")] | length' <<<"$jobs_json")"
+  [ "${ran:-0}" -gt 0 ] 2>/dev/null || { _w_row "$rf" "skip"; return 0; }
+  run_min="$(jq -r '[.jobs[] | select(.conclusion != "skipped" and .started_at and .completed_at)
+                    | ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))] | add // 0 | . / 60' <<<"$jobs_json")"
+  [ -n "$run_min" ] || { _w_row "$rf" "fail run $id duration"; return 0; }
+  qw="$(jq -r '[.jobs[] | select(.name | startswith("test-scripts")) | select(.started_at and .created_at)
+                | ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601)) / 60]
+               | "\(add // 0) \(length)"' <<<"$jobs_json")"
+  _w_row "$rf" "qual $pr $id $run_min ${qw:-0 0}"
+}
+# _pbg_w_artlist <rid>: $WORK/arts-<rid> = the run's suite-timings-* aid list (one per line),
+# `none` when it carries none, `cut <detail>`/`fail <detail>` on the deadline/transport paths
+# (a failed LIST stays a transport failure — the parent fail_apis, never folds it into absent).
+_pbg_w_artlist() {
+  local rid="$1" rf="$WORK/arts-$1" arts rc=0 aids
+  arts="$(api "repos/$REPO/actions/runs/$rid/artifacts?per_page=100")" || rc=$?
+  if (( rc == 46 )); then _w_row "$rf" "cut the artifact listing of run $rid"; return 0; fi
+  if (( rc != 0 )); then _w_row "$rf" "fail run $rid artifacts"; return 0; fi
+  aids="$(jq -r '.artifacts[]? | select(.name | test("^suite-timings-(scripts|scripts-heavy)-[0-9]+$")) | .id' <<<"$arts" 2>/dev/null)"
+  if [ -n "$aids" ]; then _w_row "$rf" "$aids"; else _w_row "$rf" "none"; fi
+}
+# _pbg_w_artdl <rid>-<aid> <rid<TAB>aid>: $WORK/dl-<rid>-<aid> = `ok` (+ the extracted
+# $WORK/tsv-<rid>-<aid>), `cut` on the deadline, `partial` on any download/extract failure — the
+# serial run_partial arm, folded to evidence_absent by the parent (never a transport fatal).
+_pbg_w_artdl() {
+  local key="$1" pl="$2" rf="$WORK/dl-$1" rid aid dlrc=0
+  rid="${pl%%$'\t'*}"; aid="${pl#*$'\t'}"
+  api_bin "repos/$REPO/actions/artifacts/$aid/zip" > "$WORK/art-$rid-$aid.zip" || dlrc=$?
+  if (( dlrc == 46 )); then _w_row "$rf" "cut the artifact downloads of run $rid"; return 0; fi
+  if (( dlrc != 0 )); then _w_row "$rf" "partial"; return 0; fi
+  unzip -p "$WORK/art-$rid-$aid.zip" suite-timings.tsv 2>/dev/null > "$WORK/tsv-$rid-$aid" \
+    || unzip -p "$WORK/art-$rid-$aid.zip" 2>/dev/null > "$WORK/tsv-$rid-$aid" \
+    || { _w_row "$rf" "partial"; return 0; }
+  [ -s "$WORK/tsv-$rid-$aid" ] || { _w_row "$rf" "partial"; return 0; }
+  _w_row "$rf" "ok"
+}
+# _pbg_w_esc <pr>: $WORK/esc-<pr> = `dropped` (closed unmerged), `open` (state=="open" — #12360:
+# an unmerged PR's absent merge-commit push run is EXPECTED, not missing evidence; `state` rides
+# the same pulls/N meta read, so the bucket costs zero extra reads), `ok`, `escape <detail>`,
+# `pending` (merged PR with absent/incomplete push run — semantics unchanged), `cut`/`fail`.
+_pbg_w_esc() {
+  local pr="$1" rf="$WORK/esc-$1" meta rc=0 sha rest pstate pm concl
+  meta="$(api "repos/$REPO/pulls/$pr" --jq '"\(.merge_commit_sha // "") \(.state // "") \(.merged_at // "")"')" || rc=$?
+  if (( rc == 46 )); then _w_row "$rf" "cut the pull read of PR $pr"; return 0; fi
+  if (( rc != 0 )); then _w_row "$rf" "fail pull $pr merge sha"; return 0; fi
+  sha="${meta%% *}"; rest="${meta#* }"; pstate="${rest%% *}"; pm="${rest##* }"
+  if [[ "$pstate" == "closed" && -z "$pm" ]]; then _w_row "$rf" "dropped"; return 0; fi
+  if [[ "$pstate" == "open" ]]; then _w_row "$rf" "open"; return 0; fi
+  [ -n "$sha" ] || { _w_row "$rf" "pending"; return 0; }
+  concl="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=push&head_sha=$sha" --jq '.workflow_runs[0].conclusion // empty')" || rc=$?
+  if (( rc == 46 )); then _w_row "$rf" "cut the push-run read for $sha"; return 0; fi
+  if (( rc != 0 )); then _w_row "$rf" "fail push run for $sha"; return 0; fi
+  case "$concl" in
+    failure|timed_out|startup_failure|action_required) _w_row "$rf" "escape PR $pr was green but its merge-commit push run on $sha is $concl" ;;
+    success) _w_row "$rf" "ok" ;;
+    *) _w_row "$rf" "pending" ;;   # absent or not yet complete: not evidence of "no escape"
+  esac
+}
 
 # Arm (a) verdict input is the lever's own realized saving, drift-immune (the 2026-10-28 investigation on the tracker:
 # whole-run billable means measure suite growth, not the gate — same-shape pre-gate control ~113 vs post-gate ~266,
@@ -179,63 +374,77 @@ merged_at="$(api "repos/$REPO/pulls/$GATE_PR" --jq '.merged_at // empty')" || { 
 [ -n "$merged_at" ] || { echo "NOT YET: PR $GATE_PR is not merged"; exit 2; }
 
 # Paginate the runs list: a page is 100 completed pull_request runs, so PAGE_CAP bounds the scan to
-# ~PAGE_CAP days of history at current volume. A short page (< 100 raw runs) is the last one — filtering
-# happens client-side, so the raw length, not the filtered count, decides whether another page exists.
-runs="[]"
-pages=0
-while (( pages < PAGE_CAP )); do
+# ~PAGE_CAP days of history at current volume. Page 1 goes alone because the short-page rule (< 100
+# raw runs — filtering is client-side, so the RAW length decides whether another page exists)
+# decides whether later pages exist at all: a tail wave (pages 2..PAGE_CAP in one pool wave) is
+# dispatched only for a FULL page 1 — serial-identical reads, a short page never triggers page>=2.
+# Aggregation walks rows in page order and stops at the first short page, so a cut/fail on a page
+# the serial loop would never have fetched cannot fire.
+_pbg_take_page() {  # _pbg_take_page <n> — consume one page row in page order (mutates runs/pages/_pbg_raw_n)
+  local p="$1" row kind chunk
+  _pbg_need_row "$WORK/page-$p"
+  row="$(cat "$WORK/page-$p")"
+  kind="${row%% *}"
+  case "$kind" in
+    ok) ;;
+    cut) cut_ny "${row#* }" ;;
+    fail) fail_api "${row#* }" ;;
+    *) echo "CANNOT ESTABLISH: malformed worker row page-$p"; exit 3 ;;
+  esac
   pages=$((pages + 1))
-  resp="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=pull_request&status=completed&per_page=100&created=%3E$merged_at&page=$pages")" \
-    || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the runs list (page $pages)"; fail_api "ci.yml runs (page $pages)"; }
-  [ -n "$resp" ] || fail_api "ci.yml runs (page $pages, empty body)"
-  raw_n="$(jq -r '.workflow_runs | length' <<<"$resp" 2>/dev/null)"
-  [[ "$raw_n" =~ ^[0-9]+$ ]] || fail_api "ci.yml runs (page $pages, malformed body)"
-  chunk="$(jq '[.workflow_runs[] | select(.conclusion == "success" and (.actor.type // "") != "Bot")
-               | {id, conclusion, pr: (.pull_requests[0].number // "-"), branch: (.head_branch // "-"),
-                  hrepo: (.head_repository.full_name // "-")}]' <<<"$resp")" \
-    || fail_api "ci.yml runs (page $pages, filter failed)"
-  runs="$(jq --argjson c "$chunk" '. + $c' <<<"$runs")" || fail_api "ci.yml runs (page $pages, merge failed)"
-  (( raw_n < 100 )) && break
-done
+  [ -s "$WORK/page-$p.chunk" ] || { echo "CANNOT ESTABLISH: worker row ok for page $p but its chunk file is missing"; exit 3; }
+  chunk="$(cat "$WORK/page-$p.chunk")"
+  runs="$(jq --argjson c "$chunk" '. + $c' <<<"$runs")" || fail_api "ci.yml runs (page $p, merge failed)"
+  _pbg_raw_n="${row#* }"
+}
+runs="[]"; pages=0
+printf '1\n' > "$WORK/pages.list"
+_pbg_pool "$WORK/pages.list" _pbg_w_page
+_pbg_take_page 1
+if (( _pbg_raw_n >= 100 )); then
+  seq 2 "$PAGE_CAP" > "$WORK/pages.list"
+  _pbg_pool "$WORK/pages.list" _pbg_w_page
+  _pbg_p=1
+  while (( ++_pbg_p <= PAGE_CAP )); do
+    _pbg_take_page "$_pbg_p"
+    (( _pbg_raw_n < 100 )) && break
+  done
+fi
 
-n=0; sum_min=0; green_prs=""; green_ids=""; qwait_sum=0; qwait_n=0; examined=0
+# the candidate list in page order — the parent's serial-exact replay order. Workers may finish in
+# any order; verdict-relevant order is restored by reading exam rows in candidate sequence, so
+# green_prs/green_ids/sum_min/qwait_* aggregate exactly as the serial loop did (first MAX_RUNS
+# qualifying candidates win; a cut/fail fires at the same candidate position serial would hit it).
+cand_n=0
+: > "$WORK/cand.list"
 while read -r id _ pr branch hrepo; do
   [ -n "$id" ] || continue
-  (( n < MAX_RUNS && examined < EXAMINE_CAP )) || break
-  examined=$((examined + 1))
-  # `pull_requests` is empty once the PR merges (see HEAD-BRANCH RESOLUTION above): resolve the run's
-  # head_branch back to its PR — `state=all`, because the merged set is exactly what the escape arm needs.
-  # Only same-repo heads: a fork run's head_branch can collide with a same-repo branch name and would
-  # misresolve to the wrong PR (head=<owner>:<branch> cannot see the fork's PR).
-  if [[ "$pr" == "-" || -z "$pr" ]]; then
-    [[ "$branch" != "-" && -n "$branch" && "$hrepo" == "$REPO" ]] || continue
-    [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || continue   # the branch name is interpolated into the pulls?head= URL — never an unvalidated payload
-    pr="$(api "repos/$REPO/pulls?head=${REPO%%/*}:$branch&state=all&per_page=1" --jq '.[0].number // empty')" \
-      || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the head-branch lookup ($branch)"; fail_api "head-branch PR lookup ($branch)"; }
-    [ -n "$pr" ] || continue
-  fi
-  files="$(api "repos/$REPO/pulls/$pr/files?per_page=100" --jq '.[].filename')" || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the files read of PR $pr"; fail_api "pull $pr files"; }
-  touches=0
-  for m in "${MACHINERY[@]}"; do
-    case "$files" in *"$m"*) touches=1 ;; esac
-  done
-  (( touches == 0 )) || continue
-  jobs_json="$(api "repos/$REPO/actions/runs/$id/jobs?per_page=100")" || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the jobs read of run $id"; fail_api "run $id jobs"; }
-  # a run that never executed a test-scripts* job measures nothing about the batteries
-  ran_scripts="$(jq '[.jobs[] | select((.name | startswith("test-scripts")) and .conclusion != "skipped")] | length' <<<"$jobs_json")"
-  [ "${ran_scripts:-0}" -gt 0 ] 2>/dev/null || continue
-  run_min="$(jq -r '[.jobs[] | select(.conclusion != "skipped" and .started_at and .completed_at)
-                    | ((.completed_at | fromdateiso8601) - (.started_at | fromdateiso8601))] | add // 0 | . / 60' <<<"$jobs_json")"
-  [ -n "$run_min" ] || fail_api "run $id duration"
-  sum_min="$(awk -v a="$sum_min" -v b="$run_min" 'BEGIN { print a + b }')"
-  while read -r qw; do
-    [ -n "$qw" ] || continue
-    qwait_sum="$(awk -v a="$qwait_sum" -v b="$qw" 'BEGIN { print a + b }')"; qwait_n=$((qwait_n + 1))
-  done < <(jq -r '.jobs[] | select(.name | startswith("test-scripts")) | select(.started_at and .created_at)
-                  | ((.started_at | fromdateiso8601) - (.created_at | fromdateiso8601)) / 60' <<<"$jobs_json")
-  n=$((n + 1))
-  green_prs="$green_prs $pr"; green_ids="$green_ids $id"
+  (( cand_n < EXAMINE_CAP )) || break
+  printf '%s\t%s\t%s\t%s\t%s\n' "$cand_n" "$id" "$pr" "$branch" "$hrepo" >> "$WORK/cand.list"
+  cand_n=$((cand_n + 1))
 done < <(jq -r '.[] | "\(.id) \(.conclusion) \(.pr) \(.branch) \(.hrepo)"' <<<"$runs")
+
+_pbg_pool "$WORK/cand.list" _pbg_w_exam
+
+n=0; sum_min=0; green_prs=""; green_ids=""; qwait_sum=0; qwait_n=0; examined=0
+while IFS=$'\t' read -r ckey cpl; do
+  [ -n "$ckey" ] || continue
+  (( n < MAX_RUNS )) || break
+  examined=$((examined + 1))
+  _pbg_need_row "$WORK/exam-$ckey"
+  erow="$(cat "$WORK/exam-$ckey")"
+  case "${erow%% *}" in
+    skip) continue ;;
+    qual) ;;
+    cut) cut_ny "${erow#* }" ;;
+    fail) fail_api "${erow#* }" ;;
+    *) echo "CANNOT ESTABLISH: malformed worker row exam-$ckey"; exit 3 ;;
+  esac
+  set -- $erow   # qual <pr> <id> <run_min> <qwait_sum> <qwait_n>
+  sum_min="$(awk -v a="$sum_min" -v b="$4" 'BEGIN { print a + b }')"
+  qwait_sum="$(awk -v a="$qwait_sum" -v b="$5" 'BEGIN { print a + b }')"; qwait_n=$((qwait_n + ${6:-0}))
+  n=$((n + 1)); green_prs="$green_prs $2"; green_ids="$green_ids $3"
+done < "$WORK/cand.list"
 
 if (( n < MIN_RUNS )); then
   echo "NOT YET: $n qualifying run(s) in $examined candidate(s) across $pages page(s) since $merged_at (need >= $MIN_RUNS)"; exit 2
@@ -247,37 +456,65 @@ fi
 # is a transport failure (CANNOT ESTABLISH), distinct from absent evidence (NOT YET). Within a run, ALL of its
 # artifacts' TSVs are priced in ONE awk pass so a `skip=relevance` row listed in two artifacts counts once —
 # and a cap-cut, failed or unparseable artifact marks the run run_partial: it counts as evidence_absent, never a
-# deflated run_saved that could manufacture a FAIL.
-real_sum=0; evidence_absent=0; art_reads=0
+# deflated run_saved that could manufacture a FAIL. Stage A lists every run in parallel; the parent then replays
+# the SERIAL read sequence on a virtual counter `vc` — a run's listing counts in its serial position, its aids
+# queue while vc < ART_READ_CAP, a mid-run cap hit marks the run absent exactly like serial's run_partial break,
+# and runs past the cap are absent without their rows being consulted (serial never fetched them). Downloads the
+# replay queued run in a second parallel wave; the pricing pass itself stays serial per run.
+real_sum=0; evidence_absent=0
+: > "$WORK/runs.list"
+for rid in $green_ids; do printf '%s\n' "$rid" >> "$WORK/runs.list"; done
+_pbg_pool "$WORK/runs.list" _pbg_w_artlist
+
+vc=0; : > "$WORK/dlq"; : > "$WORK/priced.list"
 for rid in $green_ids; do
-  (( art_reads < ART_READ_CAP )) || { evidence_absent=$((evidence_absent + 1)); continue; }
-  arts="$(api "repos/$REPO/actions/runs/$rid/artifacts?per_page=100")" \
-    || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the artifact listing of run $rid"; fail_api "run $rid artifacts"; }
-  art_reads=$((art_reads + 1))
-  aids="$(jq -r '.artifacts[]? | select(.name | test("^suite-timings-(scripts|scripts-heavy)-[0-9]+$")) | .id' <<<"$arts" 2>/dev/null)"
-  [ -n "$aids" ] || { evidence_absent=$((evidence_absent + 1)); continue; }
-  run_partial=0; rm -f "$WORK"/tsv-*; ntsv=0
+  if (( vc >= ART_READ_CAP )); then evidence_absent=$((evidence_absent + 1)); continue; fi
+  vc=$((vc + 1))   # the listing read, in its serial position
+  _pbg_need_row "$WORK/arts-$rid"
+  afirst="$(head -1 "$WORK/arts-$rid")"
+  case "${afirst%% *}" in
+    cut) cut_ny "${afirst#* }" ;;
+    fail) fail_api "${afirst#* }" ;;
+    none) evidence_absent=$((evidence_absent + 1)); continue ;;
+    *) ;;   # an aid-list row: the file itself is the run's aid list
+  esac
+  run_ok=1; : > "$WORK/q-$rid"
   while IFS= read -r aid; do
-    (( art_reads < ART_READ_CAP )) || { run_partial=1; break; }
-    art_reads=$((art_reads + 1))
-    dlrc=0; api_bin "repos/$REPO/actions/artifacts/$aid/zip" > "$WORK/art-$aid.zip" || dlrc=$?
-    [ "$dlrc" -eq 46 ] && cut_ny "the artifact downloads of run $rid"
-    [ "$dlrc" -eq 0 ] || { run_partial=1; break; }
-    unzip -p "$WORK/art-$aid.zip" suite-timings.tsv 2>/dev/null > "$WORK/tsv-$aid" \
-      || unzip -p "$WORK/art-$aid.zip" 2>/dev/null > "$WORK/tsv-$aid" \
-      || { run_partial=1; break; }
-    [ -s "$WORK/tsv-$aid" ] || { run_partial=1; break; }
-    ntsv=$((ntsv + 1))
-  done <<<"$aids"
-  (( run_partial == 0 && ntsv > 0 )) || { evidence_absent=$((evidence_absent + 1)); continue; }
-  run_saved="$(cat "$WORK"/tsv-* | awk -F'\t' -v gs="$GATED_SUITES" -v P="$PRICE" '
+    [ -n "$aid" ] || continue
+    if (( vc >= ART_READ_CAP )); then run_ok=0; break; fi
+    vc=$((vc + 1))
+    printf '%s\t%s\n' "$rid" "$aid" >> "$WORK/q-$rid"
+    printf '%s-%s\t%s\t%s\n' "$rid" "$aid" "$rid" "$aid" >> "$WORK/dlq"
+  done < "$WORK/arts-$rid"
+  if (( run_ok == 0 )); then evidence_absent=$((evidence_absent + 1)); continue; fi
+  printf '%s\n' "$rid" >> "$WORK/priced.list"
+done
+
+_pbg_pool "$WORK/dlq" _pbg_w_artdl
+
+while IFS= read -r rid; do
+  [ -n "$rid" ] || continue
+  run_partial=0
+  while IFS=$'\t' read -r qr qaid; do
+    [ -n "$qr" ] || continue
+    _pbg_need_row "$WORK/dl-$qr-$qaid"
+    drow="$(cat "$WORK/dl-$qr-$qaid")"
+    case "${drow%% *}" in
+      ok) ;;
+      cut) cut_ny "${drow#* }" ;;
+      partial) run_partial=1; break ;;
+      *) echo "CANNOT ESTABLISH: malformed worker row dl-$qr-$qaid"; exit 3 ;;
+    esac
+  done < "$WORK/q-$rid"
+  (( run_partial == 0 )) || { evidence_absent=$((evidence_absent + 1)); continue; }
+  run_saved="$(sed 's/\t/-/g;s|^|'"$WORK"'/tsv-|' "$WORK/q-$rid" | xargs cat | awk -F'\t' -v gs="$GATED_SUITES" -v P="$PRICE" '
     BEGIN { ng = split(gs, g, "\n"); for (i = 1; i <= ng; i++) gate[g[i]] = 1
             np = split(P, pl, "\n"); for (i = 1; i <= np; i++) { split(pl[i], kv, "\t"); price[kv[1]] = kv[2] } }
     $2 == 0 && $3 == "skip=relevance" && ($1 in gate) && !seen[$1]++ { s += price[$1] }
     END { printf "%.4f", s + 0 }')"
   [[ "$run_saved" =~ ^[0-9.]+$ ]] || { evidence_absent=$((evidence_absent + 1)); continue; }
   real_sum="$(awk -v a="$real_sum" -v b="$run_saved" 'BEGIN{print a+b}')"
-done
+done < "$WORK/priced.list"
 evidenced=$((n - evidence_absent))
 if (( evidenced < MIN_RUNS )); then
   echo "NOT YET: $evidence_absent of $n qualifying runs lack readable suite-timings-* artifact evidence ($evidenced evidenced, need >= $MIN_RUNS)"; exit 2
@@ -288,28 +525,38 @@ mean="$(awk -v s="$sum_min" -v n="$n" 'BEGIN { printf "%.1f", s / n }')"
 qmean="n/a"; (( qwait_n > 0 )) && qmean="$(awk -v s="$qwait_sum" -v n="$qwait_n" 'BEGIN { printf "%.1f", s / n }')"
 echo "qualifying_runs=$n evidenced_runs=$evidenced mean_runner_min=$mean required_saving=$REQUIRED_SAVING_MIN baseline_runner_min=$BASELINE_RUNNER_MIN unpriced=${UNPRICED:-none} test_scripts_mean_queue_wait_min=$qmean (queue wait is informational only) candidates_examined=$examined pages=$pages"
 
-# A qualifying PR in one of three states: merged (state closed + merged_at set — the escape arm checks
-# its push run), open (a merge commit may exist as a test merge, but no main-side push run can —
-# pending, NOT YET), or CLOSED UNMERGED (head-branch resolution admits these; no merge commit will ever
-# exist — dropped, never pending: the PR's verdict was never committed to main, so there is nothing to
-# catch). merge_commit_sha CANNOT be the discriminator: the API reports the TEST-merge sha there for
-# open and closed-unmerged PRs alike (verified on #11038: state=closed, merged_at=null, sha set) — it is
-# null only before the test merge is computed. state=closed + merged_at=null is the drop condition.
-escapes=0; pending=0; dropped=0
+# A qualifying PR in one of four states: MERGED (state closed + merged_at set — the escape arm checks
+# its push run), OPEN (#12360 — a merge_commit_sha exists as a TEST merge but no main-side push run
+# can; the absence is EXPECTED for an unmerged PR, not missing evidence → the `open` bucket, a note
+# mirroring `dropped`, never pending: at ~30 open PRs of repo volume pending>0 was near-permanent and
+# NOT YET never cleared), or CLOSED UNMERGED (no merge commit will ever exist → dropped). Residual
+# accepted for `open` (same shape as `dropped`): a qualifying PR open at verdict time that later
+# merges with a red push run is an escape this probe never sees — main-side red is separately paged
+# by notify-main-failure. merge_commit_sha CANNOT be the discriminator: the API reports the
+# TEST-merge sha there for open and closed-unmerged PRs alike (verified on #11038: state=closed,
+# merged_at=null, sha set) — it is null only before the test merge is computed. The discriminator is
+# `state` itself, read off the pulls/N meta read the arm already made — zero extra reads.
+escapes=0; pending=0; dropped=0; open_prs=0
+: > "$WORK/prs.list"
+for pr in $green_prs; do printf '%s\n' "$pr" >> "$WORK/prs.list"; done
+_pbg_pool "$WORK/prs.list" _pbg_w_esc
 for pr in $green_prs; do
-  meta="$(api "repos/$REPO/pulls/$pr" --jq '"\(.merge_commit_sha // "") \(.state // "") \(.merged_at // "")"')" || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the pull read of PR $pr"; fail_api "pull $pr merge sha"; }
-  sha="${meta%% *}"; rest="${meta#* }"; pstate="${rest%% *}"; pr_merged_at="${rest##* }"
-  if [[ "$pstate" == "closed" && -z "$pr_merged_at" ]]; then dropped=$((dropped + 1)); continue; fi
-  [ -n "$sha" ] || { pending=$((pending + 1)); continue; }
-  concl="$(api "repos/$REPO/actions/workflows/ci.yml/runs?event=push&head_sha=$sha" --jq '.workflow_runs[0].conclusion // empty')" || { rc=$?; [ "$rc" -eq 46 ] && cut_ny "the push-run read for $sha"; fail_api "push run for $sha"; }
-  case "$concl" in
-    failure|timed_out|startup_failure|action_required) echo "ESCAPE: PR $pr was green but its merge-commit push run on $sha is $concl"; escapes=$((escapes + 1)) ;;
-    success) : ;;
-    *) pending=$((pending + 1)) ;;   # absent or not yet complete: not evidence of "no escape"
+  _pbg_need_row "$WORK/esc-$pr"
+  srow="$(cat "$WORK/esc-$pr")"
+  case "${srow%% *}" in
+    dropped) dropped=$((dropped + 1)) ;;
+    open) open_prs=$((open_prs + 1)) ;;
+    pending) pending=$((pending + 1)) ;;
+    ok) : ;;
+    escape) echo "ESCAPE: ${srow#* }"; escapes=$((escapes + 1)) ;;
+    cut) cut_ny "${srow#* }" ;;
+    fail) fail_api "${srow#* }" ;;
+    *) echo "CANNOT ESTABLISH: malformed worker row esc-$pr"; exit 3 ;;
   esac
 done
 
 if (( dropped > 0 )); then echo "note: $dropped qualifying PR(s) closed unmerged — no merge commit exists; excluded from the escape check"; fi
+if (( open_prs > 0 )); then echo "note: $open_prs qualifying PR(s) still open — no merge commit exists; excluded from the escape check"; fi
 if (( escapes > 0 )); then echo "FAIL: $escapes escape(s); widen the declaring array (ADR-262 R1) or revert the PR arm"; exit 1; fi
 if (( pending > 0 )); then echo "NOT YET: $pending qualifying PR(s) have no completed push run on their merge commit"; exit 2; fi
 echo "realized_saving_min=$real_mean over $evidenced evidenced runs (mean_runner_min=$mean is informational: whole-run billing drifts with suite growth, the verdict prices only the gate's own skips)"
