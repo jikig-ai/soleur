@@ -80,6 +80,7 @@ plugins/soleur/skills/archive-kb/test/archive-kb-partial-run.test.sh	knowledge-b
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	knowledge-base/engineering/operations/post-mortems/dashboard-error-postmortem.md
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	knowledge-base/product
 plugins/soleur/skills/code-to-prd/test/code-to-prd.test.sh	knowledge-base/project/learnings/2026-05-15-fail-closed-redaction-enables-committed-default-output.md
+plugins/soleur/skills/cve-exposure/test/host-state.test.sh	knowledge-base/engineering/operations/runbooks/betterstack-log-query.md
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/brainstorms
 plugins/soleur/skills/git-worktree/test/reap-archive-persistence.test.sh	knowledge-base/project/brainstorms/archive

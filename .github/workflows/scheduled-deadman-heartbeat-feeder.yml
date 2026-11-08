@@ -11,12 +11,15 @@
 # (measured: one run every 2-7 h, which cannot hold the heartbeats' 10800 s page budget on its own); keep
 # workflow_dispatch and the concurrency group (cancel-in-progress: false) and no other trigger
 # (sentry-monitor-iac-parity.test.ts).
-# UNARMED: both heartbeats are born paused. While one is paused its target reports
+# UNARMED: each heartbeat is born paused. While one is paused its target reports
 # `qualifying_row_heartbeat_paused`; this run then emits an UNARMED ::warning:: annotation and a line in the step
 # summary every hour. That is the whole surface: an unarmed state is visible only on the run page, and NOTHING PAGES
 # for it until the owner unpauses the heartbeat. Arming is the owner's (runbook:
 # knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md, "Arming the dead-man heartbeats
 # (#11631)").
+# EXPECTED INTERIM STATE: until the #11266 bundle promotion lands, the probe is inert and every
+# inngest-luks-key-probe run exits no_qualifying_row / SOURCE DARK — expected, not a feeder fault
+# (seat finding, PR #12331).
 # RUN CONCLUSION. The step succeeds by design whatever the feeder decided: the feeder's exit status is data, read
 # into the annotations, the marker lines and all_decided. The signals are the Sentry check-in (`ok` only when every
 # target beat or is unarmed; `error` when a target was withheld or failed; `missed` when the feeder went dark, clock
@@ -70,7 +73,7 @@ jobs:
           # a bare `out="$(...)"; rc=$?` would abort the step at the assignment. The loop never stops on a failing
           # target: one dark check must not hide the other.
           all_decided=true
-          for t in luks-monitor-host-timer claude-cost-capture; do
+          for t in luks-monitor-host-timer claude-cost-capture inngest-luks-key-probe; do
             rc=0
             out="$(bash scripts/deadman-heartbeat-feeder.sh "$t" 2>&1)" || rc=$?
 

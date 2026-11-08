@@ -458,7 +458,7 @@ describe("soleur-cloud-mode marker fleet", () => {
   // Adding a union member means adding it HERE AND marking its SKILL.md —
   // the two halves of this test pin both directions of drift.
   const UNION = [
-    "admin-ip-refresh", "cf-token-scope", "deploy", "flag-create",
+    "admin-ip-refresh", "cf-token-scope", "cve-exposure", "deploy", "flag-create",
     "flag-delete", "flag-list", "flag-set-role", "incident", "operator-digest",
     "postmerge", "provision-cloudflare", "provision-doppler",
     "provision-github", "provision-hetzner", "qa", "registry-breakglass-mirror",
@@ -493,8 +493,8 @@ describe("soleur-cloud-mode marker fleet", () => {
         expect(markerBlock(p)).toBe(canonical);
       }
     }
-    // 65 plugin skills + 3 devin shims.
-    expect(marked.length).toBe(68);
+    // 66 plugin skills + 3 devin shims.
+    expect(marked.length).toBe(69);
   });
 
   test("every FR4 union member is marked", () => {
@@ -507,7 +507,7 @@ describe("soleur-cloud-mode marker fleet", () => {
 
   // SET IDENTITY, alongside the cardinality (#8402).
   //
-  // `expect(marked.length).toBe(68)` is a stored value, and any `== N` floor survives every
+  // `expect(marked.length).toBe(69)` is a stored value, and any `== N` floor survives every
   // substitution that keeps N — an add-one-delete-one diff satisfies it exactly. So the
   // sorted member list is pinned too: swapping one member for another has to edit a list a
   // reviewer reads.
@@ -533,7 +533,7 @@ describe("soleur-cloud-mode marker fleet", () => {
     expect(marked.sort()).toEqual(MARKED_SET);
     // Cross-check against the cardinality the sibling test pins, so the two cannot drift
     // apart into a pair that each pass while disagreeing about the population.
-    expect(marked.length).toBe(68);
+    expect(marked.length).toBe(69);
   });
 });
 
@@ -544,9 +544,9 @@ describe("soleur-cloud-mode marker fleet", () => {
 // executable in the Devin plugin cache BY FILENAME. Every such instruction selects by
 // `.claude-plugin/plugin.json` identity, `[ -d ]`-gated, over both documented cache paths.
 //
-// ASSEMBLY — and this is the part that matters. The 68-member marker list is a SNAPSHOT, not
+// ASSEMBLY — and this is the part that matters. The 69-member marker list is a SNAPSHOT, not
 // the population. The property quantifies over every file under `plugins/soleur/` that names
-// a Devin plugin-cache path, DERIVED at test time. Measured today that is 72 files: the 68
+// a Devin plugin-cache path, DERIVED at test time. Measured today that is 73 files: the 69
 // marker blocks plus `devin/INSTRUCTIONS.md`, `commands/go.md`, `test/go-session-gates.test.sh`
 // and THIS FILE — four sites the marker-block test structurally cannot see, because it only
 // opens `*/SKILL.md`. That membership is NOT the one an earlier draft of this comment carried:
@@ -890,7 +890,7 @@ const MARKED_SET: string[] = [
   "skills/agent-native-architecture", "skills/agent-native-audit", "skills/atdd-developer",
   "skills/brainstorm", "skills/cf-token-scope", "skills/code-to-prd", "skills/community",
   "skills/competitive-analysis", "skills/compound", "skills/compound-capture",
-  "skills/content-writer", "skills/deepen-plan", "skills/deploy",
+  "skills/content-writer", "skills/cve-exposure", "skills/deepen-plan", "skills/deploy",
   "skills/drain-labeled-backlog", "skills/drain-prs", "skills/eval-harness",
   "skills/fix-issue", "skills/flag-create", "skills/flag-delete", "skills/flag-list",
   "skills/flag-set-role", "skills/frontend-design", "skills/gdpr-gate", "skills/go",

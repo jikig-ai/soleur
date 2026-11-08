@@ -75,6 +75,7 @@ const SKILL_CATEGORIES = {
   "archive-kb": "Workflow",
   deploy: "Workflow",
   "drain-labeled-backlog": "Workflow",
+  "cve-exposure": "Workflow",
   "flag-create": "Workflow",
   "flag-delete": "Workflow",
   "flag-list": "Workflow",

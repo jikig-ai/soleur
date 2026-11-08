@@ -141,6 +141,7 @@ declare -A ALLOW=(
   [".github/workflows/infra-validation.yml"]="pull_request paths: filter naming the lib"
   ["scripts/lib/bs-emitter-row.sh"]="the #8875 sibling lib — its header names this lib for contract lineage; it selects nothing itself (its own def is bs_emitter_row)"
   ["scripts/lib/test-affected-paths.sh"]="the AFFECTED_*_PATHS declaration index — it names this lib as a feeder-read edge member and selects nothing"
+  ["plugins/soleur/skills/cve-exposure/scripts/host-state.sh"]="reads the probe marker only for per-host freshness and uptime (ADR-322); it makes no Inngest-liveness claim and gates nothing on a probe row"
 )
 
 # Files that MUST be discovered (#8873 review: a `>= N` count floor let the discovery drop the
