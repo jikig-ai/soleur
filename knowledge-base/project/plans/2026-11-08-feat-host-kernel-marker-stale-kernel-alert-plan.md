@@ -14,6 +14,20 @@ brand_survival_threshold: aggregate pattern
 
 # feat(infra): SOLEUR_HOST_KERNEL marker + stale-kernel alert on every prod host
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08. **Passes:** repo research, learnings research, two CTO ruling rounds (18 forks), terraform-architect review of the IaC section, plan-review panel (DHH, Kieran, code-simplicity, CTO devex), deepen-plan gates 4.5, 4.55, 4.6, 4.7, 4.10-4.13.
+
+### Key improvements
+1. The alert is a per-host dead-man heartbeat with a literal 36 h beat window, not a native alert (the 900 s `query_period` ceiling makes a native alert blind to this cadence).
+2. Merge-time behavior is stated, not implied: a merge creates the four heartbeats paused and re-delivers `vector.toml` through the standing provisioners, but the web installers are held via the exclusion list by default; the inngest and registry hosts are never in a per-merge target.
+3. Verified defects fixed from review: the feeder's `$`-refusal, the existing loop-equals-`TARGETS` pin, the heartbeat `-target` and `want_res` wiring pins, the image-bake `.dockerignore`/Dockerfile sites, the `W2_ALLOWED` parity set, the vacuous Guard 1 reorder row, the circular arming prerequisite, and the "kernel blanked unless observed" rule in `classify_host`.
+4. Plain unit files replaced the systemd template.
+
+### New considerations discovered
+- Pending ForceNew drift on the registry and inngest hosts shows in untargeted plans and the drift detector until rollout.
+- Planned replaces of those hosts go dark for up to the 36 h window, so the runbook pauses their heartbeat first.
+
 Spec lacks a valid `lane:` (no spec.md exists for this branch): defaulted to `cross-domain` (fail-closed).
 
 ## Overview
@@ -92,6 +106,28 @@ connectivity symptom, so there is nothing to diagnose; the checklist is recorded
 - L7 TLS / proxy: not applicable (SSH, not HTTPS).
 - L7 service layer (`sshd`, `fail2ban`): not hypothesized before L3 is verified, per `hr-ssh-diagnosis-verify-firewall`.
 
+### Network-Outage Deep-Dive (deepen-plan Phase 4.5)
+
+Trigger: the plan adds `terraform_data` resources with `file` / `remote-exec` provisioners (SSH is a hard apply-time dependency). Status by layer, in L3 to L7 order, for the HELD installer apply only (nothing is dialed in this run):
+
+| Layer | Status | Artifact to cite at apply time |
+|---|---|---|
+| L3 firewall allow-list vs the runner egress IP | not verified here (live read out of scope) | the apply workflow's pre-apply admin-IP step output, pasted into #12386 before the dispatch |
+| L3 DNS / routing | not verified here | provisioners dial `hcloud_server` addresses; web-2 goes through the web-1 bastion forward, so a web-1 failure also blocks web-2: apply web-1 first |
+| L7 TLS / proxy | not applicable (SSH) | none |
+| L7 service (`sshd`, `fail2ban`) | only after L3 is verified | `journalctl` is not used; the Better Stack `sshd` rows (already allowlisted) are the no-SSH read |
+
+## Downtime & Cutover
+
+Trigger: the held rollout replaces `hcloud_server.inngest` (the sole scheduler) and `hcloud_server.registry` (the sole pull path). This PR replaces neither; the section records the default so the owner's window decision starts from the zero-downtime-first answer.
+
+<!-- lint-infra-ignore start: records the held, owner-scheduled replace and its zero-downtime-first default; prescribes no step to run now -->
+- **Offline-inducing operations.** Inngest replace: the scheduler is offline for the replace window (exactly-one-scheduler, ADR-100, forbids a parallel second host, so blue-green is unavailable by design). Registry replace: the sole pull path is offline from destroy to a healthy create, with no rollback if the create fails.
+- **Zero-downtime evaluation, default first.** (1) Do not schedule a dedicated replace: the emitter is in each host's cloud-init / bootstrap image, so it lands the next time the host is replaced for any other reason; until then that host stays `unknown` in the skill, which is the honest state. (2) Web hosts need no replace at all (provisioner install, no reboot). (3) The ADR-135 signed config-refresh channel delivers host scripts to the inngest host in place, but its refresh set is scripts only and its membership rules exclude units and timers, so it can carry the collector but not the timer that runs it: rejected as a sole path. (4) Registry blue-green is not available (single private-IP host behind a tunnel ingress).
+- **Residual downtime** is accepted only if a dedicated window is chosen for either host, which is a schedule decision (operator-only) tracked in #12386 with host-class checkboxes (web first, inngest next, registry last), a stock check beforehand, and the heartbeat paused before the window opens.
+- **Per-stage verification and rollback.** Web: first row visible by query, rollback = remove the timer through the same twin installer. Inngest / registry: first row after the replace, NIC check, rollback = the existing replace dispatch's own preflight; no new rollback is introduced by this plan.
+<!-- lint-infra-ignore end -->
+
 ## Scope Check
 
 ### Ask Mapping
@@ -137,7 +173,7 @@ connectivity symptom, so there is nothing to diagnose; the checklist is recorded
 ### Split Assessment
 
 - Subsystems touched: 6 — `apps/web-platform`, `plugins/soleur`, `scripts`, `.github`, `knowledge-base`, `tests`
-- Planned files: 36 | Estimated changed lines: 1,700 (about 700 of them tests and fixtures)
+- Planned files: 41 (4 created, 37 edited) | Estimated changed lines: 1,700 (about 700 of them tests and fixtures)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: single PR — the pieces are coupled by contracts that a split would leave red: the collector's line format is read by the helper, the feeder predicates and the producer-contract tests, so shipping the emitter without the reader (or the reader without the emitter) leaves the helper's tests asserting a producer that does not exist. Every file is additive or a one-row edit to a census the new rows must join, and no step applies anything. If review wants a seam, the only clean one is "emitter + Vector + delivery" vs "helper + alert + docs", at the cost of the producer-contract rows landing one PR late.
 
@@ -211,12 +247,12 @@ The heartbeats follow the existing paid-tier gate (`var.betterstack_paid_tier ? 
 ```yaml
 at_rest:
   - store:             Better Stack Logs shared source (existing; no new store)
-    mechanism:         provider-managed:vendor Logs retention on the existing source, unchanged by this plan
-    evidence:          the existing posture row for the Logs source (ADR-198 amendment); this plan adds one marker to it, not a store
+    mechanism:         provider-managed:betterstack-encrypted-at-rest (the existing ledger row for store `betterstack.logs` in scripts/encryption-posture-ledger.json; source 2457081)
+    evidence:          Better Stack security documentation, attestation_url https://betterstack.com/security, as recorded in that ledger row; this plan adds one marker to the source, not a store
     defends_against:   a seized disk at the vendor; a casual vendor-side read of unrelated tenants' data
     does_not_defend:   a holder of the Logs ingest token forging a marker row; a holder of the read credential reading it; a compromise of the vendor account
     disclosed_as:      not-publicly-claimed
-    live_verification: unavailable:no read-back of vendor-side encryption exists from the repository
+    live_verification: unavailable:named SOC 2 attestation formalization pending; tracked #6911 (same reason as the ledger row)
 in_transit:
   - connection:        registry host -> Better Stack Logs ingest (existing curl POST in zot-disk-heartbeat.sh, now also carrying one more marker line)
     enforced_at:       apps/web-platform/infra/cloud-init-registry.yml (https URL pinned from zot-registry.tf; existing)
@@ -263,7 +299,7 @@ logs:
   retention: the source's retention; the 7-day helper window reads hot UNION archive
 discoverability_test:
   command: bash scripts/deadman-heartbeat-feeder.sh --selftest
-  expected_output: deadman-feeder: selftest=ok
+  expected_output: selftest=ok
 ```
 
 The credentialed read of the marker itself is `doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 12h --grep SOLEUR_HOST_KERNEL --limit 20` (one grep per term; it needs the Logs read credential and has no unauthenticated substitute), documented in the runbook section Phase 4 adds. The selftest above runs offline in under a second and fails if any of the four targets is missing from the feeder table.
