@@ -14,6 +14,55 @@ Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). No `sp
 
 # docs(legal): land the 2026-11-08 CLO re-assessment record for #11294 and update the breach-register row
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Sections enhanced:** Observability (skip → real 5-field block), Encryption Posture (skip
+reworded off the literal trigger phrase), Acceptance Criteria (Pre-merge/Post-merge split),
+Scope Check (ask provenance completed), Guard Contract (marker + matrix + anchor per
+lint-guard-contract.py)
+**Research agents used:** none — no Task/Agent tool in this subagent context; every deepen-plan
+gate was executed inline against the repo (see gate ledger below)
+
+### Key improvements
+
+1. Observability converted from a skip to a real block — `scripts/lint-legal-registers.sh` is a
+   non-docs path, so deepen-plan Phase 4.7's detection fires; the lint's own pass/fail output is
+   its surface and `bash scripts/lint-legal-registers.sh` → `all assertions passed` is the
+   discoverability probe (allowlisted verb, <15 s, literal match).
+2. Premise validation surfaced the plan's one real fork: the CLO-prescribed composite
+   canonical-source cell is unparseable by `lint-legal-registers.sh`'s single-path extraction —
+   the plan carries the forced parser extension plus the Guard Contract it requires, recorded as
+   a `pending - assumed:` technical ruling in `decision-challenges.md` for ship-time CTO
+   conversion (no Agent tool here).
+3. All issue/PR citations verified live (4 issues OPEN, PRs #12387/#8626 checked); no
+   `Closes|Fixes|Resolves` anywhere.
+
+### New considerations discovered
+
+- PR #8626 touches `breach-register.md` at ~line 128 (2026-09-03 row) — disjoint from our edits;
+  cell re-greps remain gated at work time anyway (AC-3).
+- The new record matches `DETERMINATION_PATTERN` (produced=43 after landing) so it MUST be
+  index-cited — the waiver alternative was semantically wrong, not merely heavier.
+- `technical-ruling-gate.sh` fails a `technical` row carrying `pending - assumed` — that is the
+  designed headless fallback: ship/work converts it via a CTO spawn (≤2 attempts) else drafts +
+  files an issue. Mechanical choices were classified `taste` to keep the pending set minimal.
+
+### Gate ledger (deepen-plan, run inline 2026-11-08)
+
+- 4.6 User-Brand Impact — PASS (threshold `none`; zero sensitive-path hits on the diff)
+- 4.7 Observability — PASS after the §Observability fill-in (5 fields, allowlisted verb, literal expected_output)
+- 4.8 PAT-shaped variables — PASS (no hits)
+- 4.9 UI wireframe — SKIP (no UI-surface file)
+- 4.10 Encryption Posture — SKIP (no store/connection file or trigger prose)
+- 4.11 Guard Contract — PASS (`lint-guard-contract.py`: 1 entry, matrix rows counted)
+- 4.12 Scope Check — PASS (exactly 1 unfenced section; all asks mapped, inferred items justified)
+- 4.13 Task Design — SKIP (no new autonomous surface)
+- 4.4 Precedent-diff — the parser extension's precedent is the same file's existing single-path
+  extraction block; contract diff is described inline under Technical Considerations
+- 4.45/4.5/4.55 — SKIP (no negative-security claims to verify, no SSH/outage triggers, no
+  downtime-inducing operation)
+
 ## Overview
 
 The `soleur:legal:clo` agent ran its statutory re-assessment of the #11294 incident on 2026-11-08
@@ -232,12 +281,45 @@ Four deliverables, one fork resolved at plan time:
 
 ## Observability
 
-Skipped — no `apps/*/server|src|infra` or `plugins/*/scripts` file touched and no new
-infrastructure surface (Phase 2.9 skip conditions: pure-docs + a `scripts/` lint parser edit).
+The only non-docs file in the diff is `scripts/lint-legal-registers.sh` — a blocking CI guard,
+whose own pass/fail output IS its observability surface. There is no daemon or endpoint to
+probe; the smallest command that prints its health signal is the lint itself.
+
+```yaml
+liveness_signal:
+  what:            "lint-legal-registers exits 0 with 'all assertions passed' (blocking suite, scripts/test-all.sh:6158)"
+  cadence:         "every PR + merge CI run and local `test-all.sh` affected run"
+  alert_target:    "red required check on the PR; ::error:: annotations in the job log"
+  configured_in:   "scripts/test-all.sh:6158"
+
+error_reporting:
+  destination:     "CI job log / local stdout"
+  fail_loud:       "::error::lint-legal-registers … lines plus a non-zero exit (1 = assertion failed, 2 = cannot decide)"
+
+failure_modes:
+  - mode:          "a canonical-source cell's cited path no longer resolves (composite cell parses as one string)"
+    detection:     "assertion (b) 'breach-register cites a canonical source that does not resolve' / 'not TRACKED'"
+    alert_route:   "CI red — lint-legal-registers-live suite"
+  - mode:          "a determination-shaped audits/ file lands neither indexed nor waived"
+    detection:     "assertion (c) 'determination-shaped file is neither indexed nor waived'"
+    alert_route:   "CI red — lint-legal-registers-live suite"
+  - mode:          "a row emits zero parseable citations and slips past a weakened parser"
+    detection:     "row-emission reconciliation (rows_emitting vs delegated row count)"
+    alert_route:   "CI red — lint-legal-registers-live suite"
+
+logs:
+  where:           "GitHub Actions job log; local stdout"
+  retention:       "Actions run retention (90d)"
+
+discoverability_test:
+  command:         "bash scripts/lint-legal-registers.sh"
+  expected_output: "all assertions passed"
+```
 
 ## Encryption Posture
 
-Skipped — no persistent store and no new cross-component connection.
+Skipped — the diff creates no `.tf`, `.sql`, `cloud-init.*` or `docker-compose.*` file and opens
+nothing new between components (the lint parser edit stays inside one local script).
 
 ## Task Design
 
