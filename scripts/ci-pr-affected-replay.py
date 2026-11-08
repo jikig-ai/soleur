@@ -476,7 +476,10 @@ def ci_runs(repo, sha):
                 via = "check-runs" if runs else "corroborated-no-run"
     except ValueError as e:
         raise ReadError("unparseable run read for %s: %s" % (sha[:10], e))
-    return [r for r in runs if r.get("event") in FULL_EVENTS and r.get("head_sha") == sha], via
+    # the listing is trusted only for this sha's FULL_EVENTS runs; the corroborating path filters at corroborating_runs
+    if via in ("head-sha", "head-sha-retry"):
+        runs = [r for r in runs if r.get("event") in FULL_EVENTS and r.get("head_sha") == sha]
+    return runs, via
 
 
 SETTLED = ("success", "failure", "skipped", "neutral")

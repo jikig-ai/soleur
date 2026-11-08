@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=483   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=484   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -405,6 +405,14 @@ row_corr_path() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run 
 row_corr_event() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
 row_corr_foreign() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
 row_corr_order() { corr_run; [[ "$(unit_field "$CU" "${C[4]}" .run.id)" = 9008 ]]; }
+row_corr_uncount() {  # a check-runs page carrying no total_count is uncounted -> runs-read, never resolved
+  REPO_NAME="$R4"
+  printf '{"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
+  rundetail_body 9007 push success "${C[3]}" .github/workflows/ci.yml | fx "$(rundetail_path 9007)"
+  corr_run
+  REPO_NAME="$R4"; checkruns_body | fx "$(checkruns_path "${C[3]}")"; REPO_NAME=""
+  [[ "$(unit_field "$CU" "${C[3]}" .reason)" == "runs-read: uncounted"* ]]
+}
 row_corr_trunc() {  # a check-runs page claiming more than it carries is runs-read, never resolved
   REPO_NAME="$R4"
   printf '{"total_count":5,"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
@@ -3573,9 +3581,10 @@ mutate corroboration-dropped 'runs = corroborating_runs(repo, sha)' 'runs = []' 
 mutate corroboration-sha-filter-dropped 'r.get("head_sha") == sha and r.get("event") in FULL_EVENTS' 'r.get("event") in FULL_EVENTS' row_corr_sha
 mutate corroboration-path-filter-dropped 'and r.get("path") == CI_WORKFLOW_PATH' '' row_corr_path
 mutate corroboration-event-filter-dropped 'r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH' 'r.get("path") == CI_WORKFLOW_PATH' row_corr_event
-mutate corroboration-namespace-ignored 'github\.com/%s/actions/runs/' 'github\.com/[^/]+/[^/]+/actions/runs/' row_corr_foreign
+mutate corroboration-namespace-ignored 'r"^https://github\.com/%s/actions/runs/(\d+)" % re.escape(repo)' 'r"^https://github\.com/[^/]+/[^/]+/actions/runs/(\d+)"' row_corr_foreign
 mutate corroboration-truncation-ignored 'if total != seen:' 'if False:' row_corr_trunc
 mutate corroboration-order-dropped 'runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)' '' row_corr_order
+mutate corroboration-uncount-ignored 'raise ReadError("uncounted check-runs list for %s" % sha[:10])' 'pass' row_corr_uncount
 mutate bound-on-point-numerator 'cp_upper(attributable + unverified + ne, n)' 'cp_upper(attributable + unverified, n)' row_worst_bound
 mutate flake-needs-two-file-sets 'len({x["files_hash"] for x in us}) >= 2' 'len({x["files_hash"] for x in us}) >= 1' row_flake_same_files
 mutate flake-distinct-prs-dropped 'and len({x.get("pr") or x["sha"] for x in us}) >= 3}' 'and True}' row_flake_same_pr
@@ -4389,7 +4398,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1123   # kept equal to the measured full-run pass count (measured 2026-11-08 after the #10862 corroboration block + review-round pins)
+FLOOR_ASSERTIONS=1127   # kept equal to the measured full-run pass count (measured 2026-11-08 after the #10862 corroboration block + review-round pins)
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
