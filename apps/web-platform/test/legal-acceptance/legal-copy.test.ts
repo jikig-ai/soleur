@@ -121,7 +121,9 @@ describe("the exact-text heading and the code sentence (CLO C)", () => {
   });
 
   it("the code sentence says the code is checked, for both kinds", () => {
-    expect(copy.LEGAL_COPY.dialog.codeBody).toBe("The code works for a few minutes. Nothing is recorded until your code is checked.");
+    expect(copy.LEGAL_COPY.dialog.codeBody).toBe(
+      "The code works for about 10 minutes. The email may say the code is for signing in: use it here. Nothing is recorded until your code is checked.",
+    );
     expect(copy.LEGAL_KIND_COPY.terms.answerDetail("L", "V")).toMatch(/Nothing is recorded until your code is checked\.$/);
     expect(copy.LEGAL_KIND_COPY.acknowledgement.answerDetail("L", "V")).toMatch(/Nothing is recorded until your code is checked\.$/);
   });
@@ -187,21 +189,21 @@ const EXPECTED_FIELDS = [
 /** Every field of both kinds, word for word (CLO C; the terms-kind answerDetail tail is the one deliberate deviation, "checked"). */
 const WORDING: Record<"terms" | "acknowledgement", Record<string, string>> = {
   terms: {
-    pendingTitle: "Accept the updated L?",
+    pendingTitle: "Accept the L?",
     yesBody: "Soleur treats these terms as accepted by you, starting today. Clicking again does not undo it. To change it later you would ask for a new version.",
-    noBody: "Nothing changes. The current terms stay in place. Final once recorded.",
+    noBody: "Nothing changes. Nothing is accepted. Final once recorded.",
     changesBody: "Your note is saved with your decision. Nothing is accepted by asking for changes. Final once recorded.",
     changesFooter: "Nothing is accepted by saving this. Your note is saved with your decision.",
     pendingNothing: "Nothing has been accepted.",
     pendingNotAvailable: "Answering is not available yet. Nothing has been accepted.",
     acceptedBadge: "Accepted",
-    acceptedTitle: "You accepted the updated L",
+    acceptedTitle: "You accepted the L",
     acceptedBody: "Soleur now treats this version as accepted by you. To change this later, ask for a new version.",
-    declinedTitle: "You said No to the updated L",
-    declinedBody: "Nothing changed. The current terms stay in place. This answer is final: to change it, your team sends a new version of the text.",
+    declinedTitle: "You said No to the L",
+    declinedBody: "Nothing changed. Nothing was accepted. This answer is final: to change it, your team sends a new version of the text.",
     changesRequestedBody: "Nothing is accepted. Your note is saved with your decision. This answer is final: to change it, your team sends a new version of the text.",
     expiredBody: "Nothing was accepted. Ask your team to send it again if you still want it.",
-    answerDetail: "Accept the updated L, version V. Nothing is recorded until your code is checked.",
+    answerDetail: "Accept the L, version V. Nothing is recorded until your code is checked.",
     indexAccepted: "You accepted it",
   },
   acknowledgement: {
@@ -313,6 +315,90 @@ describe("kind-keyed card copy (#12344)", () => {
   it("an acknowledgement string quotes its label and says nothing about consent being given", () => {
     expect(copy.LEGAL_KIND_COPY.acknowledgement.pendingTitle("My title")).toBe('Acknowledge "My title"?');
     expect(copy.LEGAL_KIND_COPY.acknowledgement.yesBody).toContain("it is not consent");
+  });
+});
+
+describe("code lifetime wording (#12366 item 2, CLO ruling 6)", () => {
+  it("the dialog and the wrong-code error say about 10 minutes, and the code line neutralises the sign-in sentence of the shared email", () => {
+    expect(copy.LEGAL_COPY.dialog.codeBody).toContain("about 10 minutes");
+    expect(copy.LEGAL_COPY.dialog.codeBody).toContain("The email may say the code is for signing in: use it here.");
+    expect(copy.LEGAL_COPY.dialog.verifyError.wrong_code).toBe(
+      "That code is wrong or has expired. Codes only work for about 10 minutes. Check it, or send a new one. Nothing was recorded.",
+    );
+  });
+
+  it("no code-lifetime string says 'a few minutes' any more; the lockout wording keeps it (a lockout, not a lifetime)", () => {
+    for (const s of [copy.LEGAL_COPY.dialog.codeBody, copy.LEGAL_COPY.dialog.verifyError.wrong_code]) expect(s, s).not.toMatch(/a few minutes/i);
+    expect(copy.LEGAL_COPY.dialog.verifyError.locked).toMatch(/wait a few minutes/i);
+    expect(copy.LEGAL_COPY.dialog.codeHint).toBe("6 to 8 digits");
+  });
+
+  // Repo-intent pins, NOT proof of the live lifetime: the live project value (mailer_otp_exp) was not measured by this test. The
+  // template is shared with the sign-in email, so editing it breaks the card pin on purpose: change the card wording with it.
+  it("the shared sign-in template still says the code expires in 10 minutes (the lifetime the card claims)", () => {
+    const tpl = readFileSync(join(__dirname, "..", "..", "supabase", "templates", "magic-link.html"), "utf8");
+    expect(tpl).toContain("expires in 10 minutes");
+    expect(tpl).toContain("Enter this code to sign in to your Soleur account");
+  });
+
+  it("the auth config script still sets mailer_otp_exp to 600 seconds (10 minutes)", () => {
+    const sh = readFileSync(join(__dirname, "..", "..", "supabase", "scripts", "configure-auth.sh"), "utf8");
+    expect(sh).toContain('"mailer_otp_exp": 600');
+  });
+});
+
+describe("terms wording is true for a first-ever text and for an update (#12366 item 1, CLO ruling 7)", () => {
+  const t = copy.LEGAL_KIND_COPY.terms;
+  /** Words that presume an earlier text exists. Narrower than TERMS_PRESUMING: the terms kind legitimately says "accept". */
+  const PRESUMES_EARLIER = /\bupdated\b|\bcurrent terms\b|\bstay in place\b/i;
+
+  it("no terms string presumes an earlier text", () => {
+    for (const s of termsStrings) expect(s, s).not.toMatch(PRESUMES_EARLIER);
+    for (const f of EXPECTED_FIELDS) expect(render(t, f), f).not.toMatch(PRESUMES_EARLIER);
+  });
+
+  it("the presumption check bites (the old wording is caught)", () => {
+    for (const old of ["Accept the updated L?", "Nothing changes. The current terms stay in place. Final once recorded."]) expect(PRESUMES_EARLIER.test(old), old).toBe(true);
+  });
+
+  it("the ruled titles, details and bodies", () => {
+    expect(t.pendingTitle("L")).toBe("Accept the L?");
+    expect(t.acceptedTitle("L")).toBe("You accepted the L");
+    expect(t.declinedTitle("L")).toBe("You said No to the L");
+    expect(t.answerDetail("L", "V")).toBe("Accept the L, version V. Nothing is recorded until your code is checked.");
+    expect(t.noBody).toBe("Nothing changes. Nothing is accepted. Final once recorded.");
+    expect(t.declinedBody).toBe("Nothing changed. Nothing was accepted. This answer is final: to change it, your team sends a new version of the text.");
+  });
+
+  it("the terms strings still pass the forbidden-claims walk", () => {
+    for (const s of termsStrings) expect(s, s).not.toMatch(FORBIDDEN);
+  });
+});
+
+describe("the acknowledgement kind is byte-identical in behavior (the founder's card is untouched)", () => {
+  it("the full set of strings it can render, with the label L and the version V, is exactly the pinned set", () => {
+    const rendered = collect(copy.LEGAL_KIND_COPY.acknowledgement, [["L", "V"]]).sort();
+    expect(rendered).toEqual(Object.values(WORDING.acknowledgement).sort());
+    expect(rendered).toMatchInlineSnapshot(`
+      [
+        "Acknowledge "L", version V. Nothing is recorded until your code is checked.",
+        "Acknowledge "L"?",
+        "Acknowledged",
+        "Answering is not available yet. Nothing has been acknowledged.",
+        "Nothing changed. Your No is recorded and the text stays as it is. This answer is final: to change it, your team sends a new version of the text.",
+        "Nothing has been acknowledged.",
+        "Nothing is acknowledged by saving this. Your note is saved with your decision.",
+        "Nothing is acknowledged. Your note is saved with your decision. This answer is final: to change it, your team sends a new version of the text.",
+        "Nothing was acknowledged. Ask your team to send it again if you still want it.",
+        "You acknowledged "L"",
+        "You acknowledged it",
+        "You said No to "L"",
+        "Your No is recorded as your answer. The text stays as it is and nothing is acknowledged. Final once recorded.",
+        "Your Yes is recorded as your acknowledgement that you were shown this text. That is all it means: it is not consent and it agrees to nothing. Clicking again does not undo it. To change it later you would ask for a new version.",
+        "Your Yes is recorded as your acknowledgement that you were shown this version. That is all it means: it is not consent and it agrees to nothing. To change this later, ask for a new version.",
+        "Your note is saved with your decision. Nothing is acknowledged by asking for changes. Final once recorded.",
+      ]
+    `);
   });
 });
 

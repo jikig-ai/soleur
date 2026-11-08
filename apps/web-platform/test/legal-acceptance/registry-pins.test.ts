@@ -11,7 +11,7 @@
  * of the file bytes, so a wrong loader and a wrong pin cannot agree by accident.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { TEXTS_DIR, loadLegalTexts } from "@/server/legal-acceptance/canonical";
@@ -76,6 +76,26 @@ export function checkPins(served: Served[], pins: Record<string, Pin>, declared:
     if (kind !== undefined && kind !== pin.kind) out.push(`${e.key}: declared kind ${kind} differs from the pinned kind ${pin.kind}`);
   }
   return out;
+}
+
+/** Repo-root-relative path of the base-SHA pin guard that must exist once a second text is served (CTO ruling T6, #12366 item 3). */
+export const BASE_GUARD_PATH = "scripts/check-registry-pin-base.sh";
+
+/**
+ * The deferral of the base-SHA pin guard (#12366 item 3) ends when a second text is served. Pure: `served` is what the registry serves,
+ * `guardExists` whether `BASE_GUARD_PATH` exists. Empty when fine; one problem with the guard shape when two or more texts are served
+ * and the guard is absent. Zero texts are not this check's concern (`checkPins` reports an empty registry).
+ */
+export function needsBaseGuard(served: readonly Served[], guardExists: boolean): string[] {
+  if (served.length < 2 || guardExists) return [];
+  return [
+    `${served.length} texts are served and ${BASE_GUARD_PATH} does not exist: the one-text deferral of the base-SHA pin guard (#12366 item 3) has ended. ` +
+      "Build the guard as a member step of the `guards-ruleset` umbrella in `.github/workflows/ci.yml`: " +
+      "resolve the base with `git merge-base origin/main HEAD` on a pull request and from `MERGE_GROUP_BASE_SHA` on a merge_group run; " +
+      "hard-fail on an unresolvable base (never fall through to exit 0); " +
+      "for each served text compare the sha256 of `git show <base>:<file>` with the working file; " +
+      "when the bytes differ, require a changed `version`, a retained old pin row (the old `version: sha256` entry still in PUBLISHED) and a new row.",
+  ];
 }
 
 /** What the registry serves, with an independent hash of the file bytes. `fileFor` lets a harness row point the independent read at the wrong file. */
@@ -168,6 +188,50 @@ describe("the pin check bites (synthetic rows through the same function)", () =>
     const bad = readServed(TEXTS_DIR, () => "README.md");
     expect(bad.length).toBeGreaterThan(0);
     only(checkPins(bad, PUBLISHED, LEGAL_TEXT_KIND), "the independent file hash");
+  });
+});
+
+describe("tripwire: a second served text needs the base-SHA pin guard (#12366 item 3, CTO ruling T6)", () => {
+  const h = (c: string): string => c.repeat(64);
+  const one: Served[] = [{ key: "a-text", version: "2026-11-07", textHash: h("a"), fileHash: h("a") }];
+  const two: Served[] = [...one, { key: "b-text", version: "2026-12-01", textHash: h("b"), fileHash: h("b") }];
+
+  it("row 1: one served text and no guard passes (the deferral still holds)", () => {
+    expect(needsBaseGuard(one, false)).toEqual([]);
+  });
+
+  it("row 2: two served texts and no guard fails, and the message carries the guard shape", () => {
+    const problems = needsBaseGuard(two, false);
+    expect(problems.length).toBe(1);
+    const msg = problems.join("\n");
+    expect(msg).toContain(BASE_GUARD_PATH);
+    for (const part of [
+      "guards-ruleset",
+      "git merge-base origin/main HEAD",
+      "MERGE_GROUP_BASE_SHA",
+      "hard-fail",
+      "unresolvable",
+      "git show <base>:<file>",
+      "sha256",
+      "changed `version`",
+      "retained old pin row",
+      "new row",
+    ]) {
+      expect(msg, part).toContain(part);
+    }
+  });
+
+  it("row 3: two served texts with the guard present passes", () => {
+    expect(needsBaseGuard(two, true)).toEqual([]);
+  });
+
+  it("zero served texts do not trip it (that is the registry-empty check's job)", () => {
+    expect(needsBaseGuard([], false)).toEqual([]);
+  });
+
+  it("the real registry: today's served texts and the real presence of the guard script agree with the tripwire", () => {
+    const guardExists = existsSync(path.join(__dirname, "../../../..", BASE_GUARD_PATH));
+    expect(needsBaseGuard(readServed(), guardExists)).toEqual([]);
   });
 });
 

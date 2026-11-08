@@ -187,7 +187,8 @@ export const LEGAL_COPY = {
     goBack: "Go back. Do not record anything.",
     codeKicker: "Check your email",
     codeTitle: "Enter the code we emailed you",
-    codeBody: "The code works for a few minutes. Nothing is recorded until your code is checked.",
+    codeBody:
+      "The code works for about 10 minutes. The email may say the code is for signing in: use it here. Nothing is recorded until your code is checked.",
     codeSent: "If that address can receive email, a code is on its way.",
     codeLabel: "Code from your email",
     codeHint: "6 to 8 digits",
@@ -200,7 +201,7 @@ export const LEGAL_COPY = {
       unavailable: "We could not send the code. Nothing was recorded, try again shortly.",
     },
     verifyError: {
-      wrong_code: "That code is wrong or has expired. Codes only work for a few minutes. Check it, or send a new one. Nothing was recorded.",
+      wrong_code: "That code is wrong or has expired. Codes only work for about 10 minutes. Check it, or send a new one. Nothing was recorded.",
       locked: "Too many tries. Please wait a few minutes before asking for a new code. Nothing was recorded.",
       expired: "That code has expired. Send a new one. Nothing was recorded.",
       replaced: "A new version of this text exists, so nothing was recorded. Reload this page to read the new version.",
@@ -262,25 +263,25 @@ export interface LegalKindCopy {
 
 export const LEGAL_KIND_COPY = {
   terms: {
-    pendingTitle: (label: string) => `Accept the updated ${label}?`,
+    pendingTitle: (label: string) => `Accept the ${label}?`,
     yesBody:
       "Soleur treats these terms as accepted by you, starting today. Clicking again does not undo it. To change it later you would ask for a new version.",
-    noBody: "Nothing changes. The current terms stay in place. Final once recorded.",
+    noBody: "Nothing changes. Nothing is accepted. Final once recorded.",
     changesBody: "Your note is saved with your decision. Nothing is accepted by asking for changes. Final once recorded.",
     changesFooter: "Nothing is accepted by saving this. Your note is saved with your decision.",
     pendingNothing: "Nothing has been accepted.",
     pendingNotAvailable: "Answering is not available yet. Nothing has been accepted.",
     acceptedBadge: "Accepted",
-    acceptedTitle: (label: string) => `You accepted the updated ${label}`,
+    acceptedTitle: (label: string) => `You accepted the ${label}`,
     acceptedBody: "Soleur now treats this version as accepted by you. To change this later, ask for a new version.",
-    declinedTitle: (label: string) => `You said No to the updated ${label}`,
+    declinedTitle: (label: string) => `You said No to the ${label}`,
     declinedBody:
-      "Nothing changed. The current terms stay in place. This answer is final: to change it, your team sends a new version of the text.",
+      "Nothing changed. Nothing was accepted. This answer is final: to change it, your team sends a new version of the text.",
     changesRequestedBody:
       "Nothing is accepted. Your note is saved with your decision. This answer is final: to change it, your team sends a new version of the text.",
     expiredBody: "Nothing was accepted. Ask your team to send it again if you still want it.",
     answerDetail: (label: string, version: string) =>
-      `Accept the updated ${label}, version ${version}. Nothing is recorded until your code is checked.`,
+      `Accept the ${label}, version ${version}. Nothing is recorded until your code is checked.`,
     indexAccepted: "You accepted it",
   },
   acknowledgement: {
