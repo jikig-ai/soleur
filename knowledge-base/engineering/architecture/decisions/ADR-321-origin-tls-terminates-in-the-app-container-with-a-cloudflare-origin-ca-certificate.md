@@ -61,8 +61,8 @@ here and this change must not touch it.
 3. **The strict flip is staged, and its lever is the app-host Configuration Rule** (the mechanism is amended by item 10 of the 2026-11-07 amendments below; R6 and R8 are defined in the archived plan, `knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md`): listener inert and deployed to both
    hosts, certificate loaded and checked per host, load balancer health check to HTTPS/443, a header-scoped canary rule
    that runs only the probe request in `strict`, probe passes, then the rule is changed host-wide. Roll forward only:
-   rollback is putting the rule back to `flexible`, never a `git revert`. Port 80 stays open until the post-flip probe
-   passes. The apex/`www` rule is untouched (ADR-194).
+   rollback is putting the rule back to `flexible`, never a `git revert`. Port 80 stays open until the post-flip bake
+   passes (CLO condition 3; the post-flip probe passing is necessary, not sufficient, and is recorded in item 10). The apex/`www` rule is untouched (ADR-194).
 4. **Authenticated Origin Pulls are not adopted now.** The residual risk they close already exists on port 80, and they
    add an outage risk inside the deadline window. The original premise "the app authenticates every request itself"
    was false for the loopback-gated internal endpoints, a gap this change closes separately: `/internal/metrics` and
@@ -190,7 +190,8 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    written. (b) That `DOPPLER_TOKEN_TF` is present in `soleur-infra-privileged/prd` (the loader exports it from there); a missing one
    fails closed as `no_provider_token`. (c) Cloudflare's exact response shape was read from current documentation, not from a live call.
 7. **Expiry alert: deferred, documented here, not filed.** See Consequences. Trigger to build it: the strict flip landing (PR-5) plus a
-   decision that 15-year expiry needs an external signal; or Cloudflare shortening Origin CA validity.
+   decision that 15-year expiry needs an external signal; or Cloudflare shortening Origin CA validity. *Status 2026-11-08:* the first half of the trigger has occurred (the flip landed 2026-11-07); the decision that
+   an external expiry signal is needed has NOT been made, so the alert is still deferred.
 
 8. **LB monitor move (R7), amended 2026-11-07.** `cloudflare_load_balancer_monitor.web` becomes https/:443, `Host: app.soleur.ai`,
    `allow_insecure = false` (certificate validated), applied only by the dispatch-only `ga-monitor-https` arm of `cf-lb-overlay.yml`, whose
@@ -200,7 +201,7 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    post-apply gate is the measurement, and a red result with both listeners proven is the evidence that would justify a separate,
    deliberate `allow_insecure = true` decision. Rollback is a revert PR plus the existing `ga-monitor-fix` arm (http/:80). A healthy
    https monitor proves a listener answers TLS on each origin with a certificate Cloudflare's monitor accepts; it does not prove the
-   edge-to-origin traffic hop uses TLS (still `flexible` until the strict flip).
+   edge-to-origin traffic hop uses TLS (this was `flexible` until the strict flip of 2026-11-07, item 10; the hop is `strict` now, and the monitor's result is still not evidence of that).
 9. **The canary rule (decision 3, step 4), amended 2026-11-07.** `seo-config-rules.tf` carries one static `rules` block, ALWAYS present, appended after the adopted
    `flexible` rule (last match wins): for a request to `/health` on `app.soleur.ai` that carries `x-origin-tls-probe: 1`, `set_config { ssl = "strict" }`; every other request
    to the host stays `flexible`. Its `enabled` flag is `var.enable_origin_tls_canary_rule` (default false, Doppler `prd_terraform` `ENABLE_ORIGIN_TLS_CANARY_RULE`, lowercase
@@ -212,6 +213,15 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
    made the rollback a rule REMOVAL.*
 10. **The strict flip (decision 3, step 6; R6(6) amended 2026-11-07).**
     *Ruled by CTO agent, 2026-11-07 (variance from R6(6); there was no earlier ruling for it) and amended the same day by the review round.*
+    **Status of item 10 (dated 2026-11-08; all times UTC).** Acts 1, 2 and 3 are DONE on 2026-11-07: `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` about 20:55Z and both hosts restarted on it about 21:01Z (web release v0.395.3 by
+    publish order; further restart pairs followed at about 21:46Z, 22:10Z and 22:55Z, so v0.395.6 was live at the flip); the merge apply added the strict rule disabled (run 42425987199, 4 to 5 rules); the entrypoint audit
+    reported no dashboard-added rules (run 42426216807; it prints a live count only, so the flip plan's single enabled change is the better evidence); the flip apply (run 42426416266, plan 0/1/0) wrote the ruleset at
+    23:43:43.9Z (Cloudflare `last_updated`), ended 23:44:26Z, and `origin-tls-probe.sh --require-tls` passed on its first poll at 23:44:39Z (TLSv1.3): **about 55 s from the write is an UPPER BOUND on the time-to-effect**
+    (no earlier poll). The probe would also pass under `full` and reaches web-1 only; the live strict rule being enabled and last is the stronger evidence. Release run 42426213123 then deployed v0.395.7 to both hosts
+    (23:47:12Z to 23:49:53Z; listening rows 23:48:28Z, 23:49:43Z): the flip survived a full redeploy under `strict` with `REQUIRED=1`. Live: 5 rules, 4 enabled ssl rules. `/health` samples: 40 of 40 returned 200, p50
+    0.19 to 0.21 s, p90 0.33 to 0.39 s against a pre-flip baseline of 0.190 s / 0.239 s; **the p90 rise is unexplained** (candidates: the post-flip redeploys, TLS termination in the Node process, new-connection
+    handshakes, small samples). Open: the signed-in WebSocket check (owner), the +1 h and +24 h rechecks, Sentry `feature:origin_tls` not re-read after the flip, the real 502/520 rate (owner), port 80 stays open until the
+    bake passes, and the time-to-effect of a ROLLBACK is unmeasured at the edge (apply run 109 to 370 s). The cleanup change has not been made. Detail and the restart table: runbook `origin-tls-strict-flip.md`.
     **Decision.** R6 described the flip as an in-place edit of the `flexible` rule with the canary removed in the same change. Because the per-merge apply targets the whole
     ruleset resource, that edit would flip production at MERGE, before `ORIGIN_TLS_REQUIRED=1` is proven live on both hosts. The flip is therefore ADDITIVE and GATED: a second static
     `rules` block (`ssl = "strict"`, expression `(http.host eq "app.soleur.ai")`, appended last so it wins over `flexible`) that is ALWAYS present and whose `enabled` is
@@ -242,7 +252,7 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     makes the candidate container fail, the redeploy fail and the old container keep serving while the edge is still `flexible`; (3) only then the Doppler switch plus an apply dispatch.
     **Scope of the step-2 guarantee.** It covers certificate-material failures caught at the candidate container. It does not cover a production-start failure after the candidate passes (decision 7:
     the previous image is not restored and the host stays down), an older image without the listener deployed later (525/526 under `strict`), or a restart with bad material that has no candidate gate.
-    Rollback is `enabled` true to false (delete or set false the Doppler switch, re-dispatch the apply), measured at 109 to 370 s of apply on this workflow; the edge propagation time is not measured.
+    Rollback is `enabled` true to false (delete or set false the Doppler switch, re-dispatch the apply), measured at 109 to 370 s of apply on this workflow; the edge propagation time of a ROLLBACK is not measured.
     **Break-glass is owner-only and not agent-runnable** (the entrypoint PUT of R8 needs a full-body GET and a write token the sanctioned reader does not provide, and a whole-list PUT can drop the
     apex `full` rule or reorder `flexible`); the runbook says so rather than giving an untested recipe. The cleanup change after the flip has baked edits the `flexible` rule to `strict`, removes both
     ORIGIN-TLS rules and both variables, and the owner deletes the two Doppler switches.
@@ -254,9 +264,3 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     per-host `origin-tls: listening` lines follow it), not read directly; adding a `required` field is an app change that would itself redeploy, so it is not bundled. WebSocket upgrades have never crossed the
     edge-to-origin TLS hop under `strict` (the canary exercises `GET /health` only). The apply job auto-approves its own plan, so the human look at the plan is a local read-only plan before the dispatch
     (runbook Act 0). The flip's whole-list update replaces the entire `http_config_settings` entrypoint; a rule added in the dashboard would be deleted, which the read-only `entrypoint-audit` dispatch checks beforehand.
-    **Status of item 10 (dated 2026-11-08).** Acts 1, 2 and 3 are DONE (2026-11-07): `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` about 20:55Z, both hosts restarted on it about 21:01Z, the merge
-    apply added the strict rule disabled (run 42425987199, 4 to 5 rules), the entrypoint audit found no dashboard-added rules (run 42426216807, live 5 == declared 5), and the flip apply (run 42426416266,
-    plan 0/1/0) finished 23:43:45Z with `origin-tls-probe.sh --require-tls` passing on its first poll at 23:44:39Z (TLSv1.3; time-to-effect about 55 s). Live: 5 rules, 4 enabled ssl rules. After the flip
-    40 of 40 `/health` requests returned 200, p50 stayed 0.19 to 0.21 s and p90 rose from 0.24 s to 0.33 to 0.39 s on small samples; **that p90 rise is unexplained**. Open: the signed-in WebSocket check
-    (owner), the +1 h and +24 h rechecks, Sentry `feature:origin_tls` not re-read after the flip, the real 502/520 rate (owner), port 80 stays open until the bake passes, and the time-to-effect of a rollback
-    is still unmeasured at the edge (apply run 109 to 370 s). The cleanup change has not been made.

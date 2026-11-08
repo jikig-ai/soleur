@@ -11,24 +11,56 @@ Makes Cloudflare validate the Origin CA certificate on EVERY request to `app.sol
 (`flexible`). The code is merged inert: the strict rule is ALWAYS in the ruleset but `enabled = var.enable_origin_tls_strict`, which defaults to false, so
 merging adds one disabled rule and changes no edge behaviour. The flip is the owner's three ordered acts. **The order is the safety property.**
 
-## Status (dated; acts 1 and 2 evidence read 2026-11-07 21:22Z, act 3 record below; re-verify before relying on it)
+## Status (dated; all times UTC; verified 2026-11-08 unless a row says otherwise)
 
-| Act | State | Evidence (read-only, 2026-11-07 21:22Z) |
+| Act | State | Evidence |
 |---|---|---|
-| 1. `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` | **DONE** about 20:55Z. Do NOT set it again | `doppler secrets --only-names -p soleur -c prd` lists `ORIGIN_TLS_REQUIRED` |
-| 2. Restart both hosts on it | **DONE**, redeploy of v0.395.3 completed about 21:01Z | `/health` version 0.395.3; fresh `origin-tls: listening` lines 21:00:04Z / 21:01:04Z (`soleur-web-platform`) and 21:00:35Z / 21:01:32Z (`soleur-web-2`); `origin-tls-probe.sh --canary` exit 0 `TLS-ON-ORIGIN-HOP` TLSv1.3 |
-| 3. The flip | **DONE** 2026-11-07, effective 23:43:45Z (apply) / 23:44:39Z (first passing probe). Do NOT dispatch it again | see "Act 3 record" below |
+| 0. Read-only preconditions | **DONE before act 3**, with three exceptions stated in "What was NOT run" below | the Act 0 table's expectations are the PRE-FLIP state (they are historical now; see "Act 0" for what holds today) |
+| 1. `ORIGIN_TLS_REQUIRED=1` in Doppler `prd` | **DONE** about 20:55Z on 2026-11-07. Do NOT set it again | `doppler secrets --only-names -p soleur -c prd` lists `ORIGIN_TLS_REQUIRED` |
+| 2. Restart both hosts on it | **DONE**: redeploy completed about 21:01Z (the 21:00:04Z / 21:01:04Z `soleur-web-platform` and 21:00:35Z / 21:01:32Z `soleur-web-2` `origin-tls: listening` pairs; web release v0.395.3 by publish order). It is NOT the last restart before the flip: see "Restarts before and after the flip" | `origin-tls-probe.sh --canary` exit 0 `TLS-ON-ORIGIN-HOP` TLSv1.3 at 21:22Z |
+| 3. The flip | **DONE** on 2026-11-07: ruleset written at 23:43:43.9Z (Cloudflare `last_updated`), apply job ended 23:44:26Z, first passing probe 23:44:39Z. Do NOT dispatch it again while strict is live | see "Act 3 record" below |
 
-### Act 3 record (2026-11-07, UTC; dated facts only)
+### Act 3 record (dated facts only)
 
-- `ENABLE_ORIGIN_TLS_STRICT` was set in Doppler `prd_terraform` on 2026-11-07 (lowercase `true`).
-- Merge apply, run 42425987199: added the strict rule DISABLED, so the live entrypoint went from 4 to 5 rules with no edge behaviour change.
-- Entrypoint audit (`apply_target=entrypoint-audit`), run 42426216807: no dashboard-added rules; live 5 rules == declared 5.
-- Flip apply, run 42426416266: finished **23:43:45Z**, plan 0 to add, 1 to change, 0 to destroy (the `ORIGIN-TLS STRICT` rule's `enabled` false to true).
-- `origin-tls-probe.sh --require-tls`: passed on the first poll at **23:44:39Z**, TLSv1.3. **Time-to-effect of the flip: about 55 s** after the apply finished (this replaces the earlier "not measured").
-- Live ruleset after the flip: 5 rules, 4 enabled ssl rules (flexible, apex `full`, canary `strict`, strict).
-- `/health` samples through the edge after the flip: 40 of 40 returned 200. Latency on small samples: p50 0.19 to 0.21 s (baseline 0.194 s); **p90 rose from 0.24 s to 0.33 to 0.39 s. The rise is unexplained** (small samples; it could be TLS termination CPU in the Node process, a longer Cloudflare-to-origin handshake on new connections, or noise; no cause has been established).
-- +30 min recheck at 00:15Z (2026-11-08): fine.
+- `ENABLE_ORIGIN_TLS_STRICT` was set in Doppler `prd_terraform` (lowercase `true`) on 2026-11-07. The Doppler activity log shows a `prd_terraform` write ("1 added") at 23:41:47Z, 7 s before the flip dispatch was created (23:41:54Z); the log names the account (`ops@jikigai.com`), not the secret, so that match is consistent with, not proof of, the switch write.
+- Merge apply, run 42425987199 (23:36:03Z to 23:38:12Z): added the strict rule DISABLED, 4 to 5 rules, no edge behaviour change.
+- Entrypoint audit (`apply_target=entrypoint-audit`), run 42426216807 (23:39:13Z to 23:40:49Z): no dashboard-added rules reported. The audit prints a live rule count only; "declared 5" is the author's count of `seo-config-rules.tf`, so the audit alone does not prove live == declared. The better evidence is the flip's own plan, which changed exactly one thing.
+- Flip apply, run 42426416266: apply job 23:42:34Z to 23:44:26Z; plan 0 to add, 1 to change, 0 to destroy (the `ORIGIN-TLS STRICT` rule's `enabled` false to true); the Terraform log line "cloudflare_ruleset.seo_config_settings: Modifications complete" is stamped 23:43:44.97Z; Cloudflare reports the live ruleset (version 7) `last_updated` 23:43:43.865Z.
+- `origin-tls-probe.sh --require-tls`: **passed on the first poll, at 23:44:39Z** (TLSv1.3), 13 s after the apply run ended and about 55 s after the ruleset write. **There was no earlier poll, so about 55 s is an UPPER BOUND on the flip's time-to-effect**, not a measurement of when it took effect. Before 23:44:39Z the flip was not proven effective.
+- Live ruleset, read 2026-11-08: 5 rules, 4 enabled ssl rules (flexible app, apex `full`, canary `strict`, strict), version 7 (`cloudflare-readonly.sh config-entrypoint`). Per its header, `enabled_ssl_rules` is 2 plus one per ORIGIN-TLS switch that is on (both are), hence 4.
+- **What the probe proves.** `TLS-ON-ORIGIN-HOP` shows the hop used TLS for a request through the edge to web-1 (the only weighted origin; web-2 has weight 0). It would also pass under `full`, which does not validate the certificate. The stronger evidence that the mode is `strict` is the live rule itself: enabled, and last in the list (last match wins). The canary rule is still enabled, so `--canary` no longer discriminates anything.
+
+#### Restarts before and after the flip
+
+The flip survived full redeploys under `strict` and `ORIGIN_TLS_REQUIRED=1`. Restart pairs (`origin-tls: listening` rows, Better Stack, web-1 then web-2; the web release version is inferred from publish order, not read from `/health` at that time):
+
+| Restart pair (web-1 / web-2) | Relative to the flip | Release (by publish order) |
+|---|---|---|
+| 20:32:54Z / 20:34:03Z, 20:53:47Z / 20:55:00Z | before act 2 | earlier |
+| 21:00:04Z / 21:00:35Z, 21:01:04Z / 21:01:32Z | act 2 | v0.395.3 |
+| 21:46:45Z / 21:47:57Z, 22:10:27Z / 22:11:42Z, 22:55:45Z / 22:56:58Z | between act 2 and the flip (not recorded earlier) | v0.395.4, v0.395.5, v0.395.6 (v0.395.6 was live when the flip was applied) |
+| **23:48:28Z / 23:49:43Z** | **after the flip** | v0.395.7 |
+| 00:13:58Z / 00:15:11Z | after the flip | v0.395.8 |
+
+Release run 42426213123 (Web Platform Release) deployed v0.395.7: `deploy` job 23:47:12Z to 23:48:34Z, `verify-peer-deploy` 23:48:45Z to 23:49:53Z, i.e. 3 to 6 minutes AFTER the flip. Both hosts restarted and logged `origin-tls: listening` (23:48:28Z, 23:49:43Z), so the flip survived a full redeploy under `strict` with `REQUIRED=1`. The 00:13:58Z / 00:15:11Z pair coincides with the +30 min recheck.
+
+#### Latency and error samples (small, client-side `GET /health`; each figure names its sample)
+
+| Sample | n | non-200 | p50 | p90 |
+|---|---|---|---|---|
+| Pre-flip baseline (reviewer-measured; sample size not stated) | not stated | not stated | 0.190 s | 0.239 s |
+| The author's own 30-request sample, about 21:2xZ on 2026-11-07 (this session's clock; 2 h 20 min before the flip) | 30 | 0 | 0.194 s | 0.245 s |
+| Post-flip samples reported 2026-11-07 | 40 | 0 | 0.19 to 0.21 s | 0.33 to 0.39 s (one sample as high as 0.393 s) |
+| +30 min recheck, 2026-11-08 00:15Z | not stated | not stated | reported without figures | reported without figures |
+| Later sample, 2026-11-08 07:37Z (unpaired) | not stated | not stated | 0.225 s | 0.368 s |
+
+Both pre-flip samples agree within 4 ms at p50 and 6 ms at p90. A review note calls 0.194 s a POST-flip p50; this session's own record puts that sample at about 21:2xZ on 2026-11-07, BEFORE the flip, and the two accounts are not reconciled here. The reviewer-measured 0.190 s / 0.239 s is used as the baseline. p50 is essentially unchanged; **p90 rose from about 0.24 s to 0.33 to 0.39 s and the rise is unexplained.** Candidates, none established: the full redeploys after the flip (23:48 to 23:50Z and 00:14 to 00:15Z, with new Cloudflare-to-origin TLS connections after each restart), TLS termination CPU in the Node process, a longer handshake on new origin connections, or small-sample noise. "Fine" is not a finding: the +30 min recheck is reported here without numbers.
+
+#### What was NOT run before the flip
+
+- The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.
+- The Sentry `feature:origin_tls` read and the `pagerules-ssl` check: last read at about 19:58Z on 2026-11-07 (0 events; 0 active page rules; reported in PR #12341), not re-run immediately before the flip.
+- Doppler activity log, `prd_terraform` writes in the window (account `ops@jikigai.com` for every entry, secret names not shown): 22:54:34Z (1 updated), 23:41:47Z (1 added, discussed above) and 00:13:25Z (1 updated). The 22:54:34Z and 00:13:25Z writes are **not attributed** here.
 
 ### Open checks (plainly)
 
@@ -38,8 +70,8 @@ merging adds one disabled rule and changes no edge behaviour. The flip is the ow
 | +1 h and +24 h rechecks (the 30-request loop and the Sentry query), rollback kept armed for the whole window | whoever runs the soak | pending |
 | Sentry `feature:origin_tls` | anyone with the read token | not re-read after the flip |
 | Real 502/520 rate over a fixed window (Cloudflare analytics) | **owner** (no sanctioned reader) | open |
-| Port 80 | stays OPEN until the bake passes (CLO condition 3) | open |
-| Rollback time-to-effect at the edge | | **still unmeasured**: the apply run took 109 to 370 s on this workflow; edge propagation of a rollback has not been timed (the flip's own ~55 s is the only edge figure) |
+| Port 80 | stays OPEN until the bake passes (CLO condition 3); the post-flip probe passing is necessary, not sufficient | open |
+| Rollback time-to-effect at the edge | | **unmeasured**: the apply run took 109 to 370 s on this workflow; the flip's own upper bound (about 55 s from the ruleset write to the first passing probe) is the only edge figure |
 
 ## Why this order
 
@@ -59,7 +91,7 @@ keeps serving while the edge is still `flexible`: nobody sees anything.
 The startup line does not print whether `ORIGIN_TLS_REQUIRED` was in effect, so "REQUIRED is live" is proven by ORDERING (the Doppler write precedes a green redeploy,
 which precedes fresh per-host lines), not read directly.
 
-## Act 0 - read-only preconditions before act 3 (anyone; all runnable)
+## Act 0 - read-only preconditions before act 3 (anyone; all runnable; the Expected column is the PRE-FLIP state)
 
 | Check | Command | Expected |
 |---|---|---|
@@ -69,8 +101,8 @@ which precedes fresh per-host lines), not read directly.
 | Canary still proves the strict handshake | `bash apps/web-platform/infra/origin-tls-probe.sh --canary` | exit 0, `mode=canary result=TLS-ON-ORIGIN-HOP`, TLSv1.3 |
 | Normal traffic still plain | `bash apps/web-platform/infra/origin-tls-probe.sh` | `PLAIN-ORIGIN-HOP` (the pre-flip truth) |
 | No page rule can override the Configuration Rule | `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh pagerules-ssl` | `active_rule_count` 0 |
-| Live ruleset matches the code | `... cloudflare-readonly.sh config-entrypoint` | `rule_count` 5, `enabled_ssl_rules` 3 (flexible app, apex `full`, canary `strict`); the app-host strict rule present with `enabled` false once the merge apply has run |
-| Dashboard-added rules would be deleted by the whole-list update | `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=entrypoint-audit -f reason="pre-flip entrypoint audit (ADR-321)"` then read the run and #6767 | no drift finding for `http_config_settings` (a read-only enumeration; it posts its findings to #6767) |
+| Live ruleset matches the code | `... cloudflare-readonly.sh config-entrypoint` | `rule_count` 5, `enabled_ssl_rules` 2 plus one per ORIGIN-TLS switch that is on (3 before the flip: flexible app, apex `full`, canary `strict`; 4 after it); the app-host strict rule present with `enabled` false once the merge apply has run |
+| Dashboard-added rules would be deleted by the whole-list update | `gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=entrypoint-audit -f reason="pre-flip entrypoint audit (ADR-321)"` then read the run and #6767 | no finding for `http_config_settings`. The audit prints a LIVE rule count only (it does not compare against the declared count), so also compare that count with the rule blocks in `seo-config-rules.tf`; the apply plan's single enabled change is the better evidence |
 | The plan the flip will execute | local read-only plan, from `apps/web-platform/infra` with the init and variable set the apply job uses (`doppler run --preserve-env -p soleur -c prd_terraform --name-transformer tf-var -- terraform plan -no-color -input=false -var="ssh_key_path=/tmp/ci_ssh_key.pub" -target=cloudflare_ruleset.seo_config_settings`), with `TF_VAR_enable_origin_tls_strict=true` set for that one command | exactly one in-place change to `cloudflare_ruleset.seo_config_settings`, `enabled` false to true on the `ORIGIN-TLS STRICT` rule, no `+`/`-` rule lines. **Not run by the author** (it needs the Tier-B loader's variables); the apply job AUTO-APPROVES its own plan, so this local plan is the only human look before the flip |
 | Latency baseline | the 30-request loop below | record p50/p90 |
 | Edge error baseline | the 30-request loop below (client-side) | 30 of 30 200 |
@@ -129,7 +161,7 @@ gh workflow run apply-web-platform-infra.yml --ref main -f apply_target=manual-r
 ```
 
 Time to effect: the apply run. Measured on this workflow in this repository: the canary enabling dispatch (run 42407585597) took 302 s wall clock with the apply job 111 s; recent push
-applies took 109 to 370 s. Edge propagation after the FLIP apply was measured once (about 55 s to the first passing probe, 2026-11-07); propagation of a ROLLBACK has not been timed. Plan on 2 to 6 minutes plus about a minute of propagation.
+applies took 109 to 370 s. For the FLIP the first passing probe came about 55 s after the ruleset write (an upper bound: it was the first poll); propagation of a ROLLBACK has not been timed. Plan on 2 to 6 minutes plus about a minute of propagation.
 Real traffic is never in the canary's scope, but a bad flip hits every user until this lands.
 
 What users see if the flip goes wrong: Cloudflare error pages on every page, API call and WebSocket of `app.soleur.ai`, 525 (SSL handshake failed) or 526 (invalid SSL
