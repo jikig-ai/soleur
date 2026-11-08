@@ -64,10 +64,11 @@ esac
 # THREE /proc/<pid>/stat field-4 hops above gh's parent (fewer hops only kill the api read, which
 # correctly surfaces as a `fail` row instead). Linux-only (/proc); the row is pool-mode only.
 if [ -f "$FX/KILL-JOBS" ] && [[ "$ep" == */jobs\?* ]]; then
-  wp="$(cut -d' ' -f4 "/proc/$PPID/stat" 2>/dev/null)"
-  [[ "$wp" =~ ^[0-9]+$ ]] && wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"
-  [[ "$wp" =~ ^[0-9]+$ ]] && wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"
-  [[ "$wp" =~ ^[0-9]+$ ]] && kill -KILL "$wp" 2>/dev/null
+  wp="$PPID"; hops=0
+  while [[ "$wp" =~ ^[0-9]+$ && "$wp" != "$SOLEUR_TEST_SUITE_PID" ]] && (( hops < 3 )); do
+    hops=$((hops + 1)); wp="$(cut -d' ' -f4 "/proc/$wp/stat" 2>/dev/null)"
+  done
+  [[ "$wp" =~ ^[0-9]+$ && "$wp" != "$SOLEUR_TEST_SUITE_PID" ]] && kill -KILL "$wp" 2>/dev/null
 fi
 if [ -n "$jqx" ]; then jq -r "$jqx" "$f"; else cat "$f"; fi
 FAKE
