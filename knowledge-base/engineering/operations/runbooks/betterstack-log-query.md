@@ -447,7 +447,8 @@ Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts
   (`SYSLOG_IDENTIFIER = 'ci-deploy'`) once per peer after this host's prod swap. `refused` is nothing listening or unreachable,
   `tls` is a failed handshake or certificate pin, `timeout` is no answer in time, `denied` is a peer that closed right after the
   upgrade (its allowlist does not carry this host). `skipped=no_bind|no_roster|no_peers|exec_failed` is "nothing to dial" or "the
-  probe could not run" and never pages.
+  probe could not run" and never pages. The serve-evidence reader (`scripts/lib/web2-relay-rows.sh` `wrr_peer_sql`) reads this row from the hot table
+  UNION ALL the S3 archive, because it is written once per deploy and is usually older than the ~40-minute hot window.
 - **Reading a page (counts and enum words only, no secrets in these rows).** Per host, last hour, with the delivery control first:
 
   ```bash

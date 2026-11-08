@@ -1343,6 +1343,85 @@ for tok in 'DRIFT_SUITE_FACTOR = 1.5' 'DRIFT_ABS_MS = 10000' 'DRIFT_TOTAL_PCT = 
     || check fail "pin: $tok missing — a threshold or ack edit silently demoted the gate"
 done
 
+# === Fixture Z8: PRICE_DRIFT_ROW — stale src=measured rows (#12016) ===========
+# The drift hole this arm closes: DRIFT_ROW reports floor/estimate rows that
+# finally measured, but a committed `measured` price gone stale is invisible —
+# a wrong-but-present price looks authoritative and corrupts the balance math.
+# The arm emits PRICE_DRIFT_ROW for a measured row whose fresh median diverges
+# past the bound: ratio >=4x in EITHER direction, |delta| >= 120000 ms, timed
+# in >=3 sampled runs.
+FZ8="$WORK/Z8"; mkdir -p "$FZ8"; assert_fixture_dir "$FZ8"
+printf 'm-under-a\t3000\tmeasured\nm-over-b\t400000\tmeasured\nm-under-c\t7000\tmeasured\nm-band-d\t100000\tmeasured\nm-thin-e\t5000\tmeasured\nm-stable-f\t2000\tmeasured\nm-small-g\t30000\tmeasured\nm-zero-h\t297100\tmeasured\nm-bound-i\t40000\tmeasured\n' \
+  > "$FZ8/durations.tsv"
+{ printf '# fixture incumbent\n# n=2\n'
+  printf 'm-under-a\t1\nm-over-b\t2\nm-under-c\t1\nm-band-d\t2\nm-thin-e\t1\nm-stable-f\t2\nm-small-g\t1\nm-zero-h\t2\nm-bound-i\t1\n'; } \
+  > "$FZ8/manifest.tsv"
+for i in 1 2 3 4 5; do
+  mkdir -p "$FZ8/run$i/suite-timings-scripts-$i"; assert_fixture_dir "$FZ8/run$i"
+done
+# m-under-a drifts 3000->350000 (~117x, |d|=347000) — emits.
+# m-small-g drifts exactly 4.0x (30000->120000) but |d|=90000 <120000 — the
+# delta conjunct must suppress it. m-zero-h times 0 in every run (base==0,
+# |d|=297100) — the unbounded-ratio case the divisor guard must emit, never
+# crash on. m-bound-i sits exactly on both inclusive bounds (4.0x, |d|=120000)
+# — must emit.
+printf 'm-under-a\t350000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-thin-e\t300000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
+  > "$FZ8/run1/suite-timings-scripts-1/suite-timings.tsv"
+printf 'm-under-a\t340000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-thin-e\t300000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
+  > "$FZ8/run2/suite-timings-scripts-2/suite-timings.tsv"
+printf 'm-under-a\t360000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
+  > "$FZ8/run3/suite-timings-scripts-3/suite-timings.tsv"
+printf 'm-under-a\t350000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
+  > "$FZ8/run4/suite-timings-scripts-4/suite-timings.tsv"
+printf 'm-under-a\t355000\nm-over-b\t90000\nm-under-c\t350000\nm-band-d\t260000\nm-stable-f\t2000\nm-small-g\t120000\nm-zero-h\t0\nm-bound-i\t160000\n' \
+  > "$FZ8/run5/suite-timings-scripts-5/suite-timings.tsv"
+if python3 "$GEN" --drift-report --group light --manifest "$FZ8/manifest.tsv" \
+     --durations "$FZ8/durations.tsv" \
+     --timings-dir "$FZ8/run1" --timings-dir "$FZ8/run2" --timings-dir "$FZ8/run3" \
+     --timings-dir "$FZ8/run4" --timings-dir "$FZ8/run5" \
+     > "$FZ8/out.txt" 2> "$FZ8/err.txt"; then
+  check pass "Z8: --drift-report exits 0 with measured-price fixtures"
+else
+  check fail "Z8: drift-report refused measured-price fixtures: $(tail -2 "$FZ8/err.txt")"
+fi
+if grep -qxF 'PRICE_DRIFT_ROW light m-under-a 3000 350000 5/5' "$FZ8/out.txt"; then
+  check pass "Z8: under-priced measured row emits PRICE_DRIFT_ROW (~117x)"
+else
+  check fail "Z8: m-under-a PRICE_DRIFT_ROW missing or wrong: $(grep m-under-a "$FZ8/out.txt")"
+fi
+if grep -qxF 'PRICE_DRIFT_ROW light m-over-b 400000 90000 5/5' "$FZ8/out.txt"; then
+  check pass "Z8: over-priced measured row emits PRICE_DRIFT_ROW (staleness is symmetric)"
+else
+  check fail "Z8: m-over-b PRICE_DRIFT_ROW missing or wrong: $(grep m-over-b "$FZ8/out.txt")"
+fi
+if grep -qxF 'PRICE_DRIFT_ROW light m-under-c 7000 350000 5/5' "$FZ8/out.txt"; then
+  check pass "Z8: every qualifying member emits (no break-after-first)"
+else
+  check fail "Z8: m-under-c PRICE_DRIFT_ROW missing — a break-after-first emits only the first member: $(grep PRICE_DRIFT_ROW "$FZ8/out.txt")"
+fi
+if grep -qxF 'PRICE_DRIFT_ROW light m-zero-h 297100 0 5/5' "$FZ8/out.txt"; then
+  check pass "Z8: zero fresh median emits (unbounded ratio, no div-by-zero)"
+else
+  check fail "Z8: m-zero-h PRICE_DRIFT_ROW missing — base==0 must emit, not crash: $(grep m-zero-h "$FZ8/out.txt")"
+fi
+if grep -qxF 'PRICE_DRIFT_ROW light m-bound-i 40000 160000 5/5' "$FZ8/out.txt"; then
+  check pass "Z8: exactly 4.0x and exactly |d|=120000 emits (both bounds inclusive)"
+else
+  check fail "Z8: m-bound-i boundary case missing or wrong: $(grep m-bound-i "$FZ8/out.txt")"
+fi
+if ! grep -q 'PRICE_DRIFT_ROW.*m-small-g' "$FZ8/out.txt"; then
+  check pass "Z8: 4.0x ratio with |d|=90s <120s emits nothing (delta conjunct binds)"
+else
+  check fail "Z8: m-small-g emitted — ratio-only pass must not fire without the delta"
+fi
+if ! grep -q 'PRICE_DRIFT_ROW.*m-band-d' "$FZ8/out.txt" \
+   && ! grep -q 'PRICE_DRIFT_ROW.*m-thin-e' "$FZ8/out.txt" \
+   && ! grep -q 'PRICE_DRIFT_ROW.*m-stable-f' "$FZ8/out.txt"; then
+  check pass "Z8: under-bound (2.6x), under-sampled (2/5) and stable rows emit nothing"
+else
+  check fail "Z8: bound/timed discrimination failed: $(grep PRICE_DRIFT_ROW "$FZ8/out.txt")"
+fi
+
 # --- Accounting conservation (ADR-193) -----------------------------------------------------
 # Ordered BEFORE the floor — a neutered helper deflates the verdict counters, and this
 # reports "a verdict was discarded" rather than the misleading "rows were deleted".
@@ -1356,7 +1435,7 @@ fi
 # --- ASSERTION FLOOR (ADR-193) -------------------------------------------------------------
 # printf + exit, NEVER through fail(). MIN_CASES sits on the line directly above its
 # `if` so guard-vacuity-floor's backward slice-widening binds it.
-MIN_CASES=53
+MIN_CASES=61
 if [[ "$cases" -lt "$MIN_CASES" ]]; then
   printf '[FATAL] anti-vacuity floor: only %d check(s) ran, expected >= %d. The suite did not run to completion.\n' "$cases" "$MIN_CASES" >&2
   exit 1
