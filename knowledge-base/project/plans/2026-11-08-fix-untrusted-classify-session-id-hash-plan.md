@@ -11,6 +11,23 @@ brand_survival_threshold: aggregate pattern
 
 # fix: hash the sessionId on the untrusted-classify log line
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Sections enhanced:** Phase 2 test design, Guard 1 assembly, Files to Edit entry 3
+**Research agents used:** security-sentinel (code-grounded), code-simplicity-reviewer (at plan time), CTO agent (four forks), learnings-researcher; deepen-plan halt gates 4.6, 4.7, 4.8, 4.11, 4.12 all passed.
+
+### Key Improvements
+
+1. Test haystack must not be lowercased: the existing test lowercases its serialized haystack, so a mixed-case sentinel would make a raw-id leak undetectable. The new suite keeps case and adds a positive control per row.
+2. One real-logger case so the redaction formatter, `REDACT_PATHS` and the Sentry breadcrumb mirror are actually exercised (every other case swaps the logger for a spy).
+3. The distinct-id must-PASS case moved into the pepper-set graph; under the pepper-unset graph both ids collapse to the sentinel. `afterEach` resets stubbed env and modules.
+
+### New Considerations Discovered
+
+- Security review confirmed `emit()` is the single write site of the raw id on this op and that the Sentry `extra` and `hook-error` paths never carry it.
+- With the pepper missing in production every session shows `pepper_unset` and per-session correlation is lost; the only signal is the existing module-load boot warning. Stated in the plan and left as is (no new alert; out of scope).
+
 Ref #9601 (epic, slice 2 precondition). Precondition for the untrusted-data work in Ref #4671 and its Article 30 follow-up Ref #10195. The PR body uses `Ref`, never `Closes`: the epic and both trackers stay open.
 
 Spec lacks valid `lane:` (one-shot path, no spec.md) - defaulted to cross-domain (fail-closed).
@@ -104,7 +121,7 @@ None. `gh issue list --label code-review --state open` bodies were checked for t
 
 1. `apps/web-platform/server/untrusted-content.ts` - in `emit()` replace `sessionId: ctx.sessionId,` with `sessionIdHash: ctx.sessionId ? hashUserId(ctx.sessionId) : undefined,`; update the `emit()` doc comment ("`workspaceId` is logged as a hash ..." gains the session id) and the `sessionId?: string` option comment (raw in, hashed at the log boundary).
 2. `apps/web-platform/test/untrusted-content.test.ts` - in "telemetry carries metadata only", drop `sessionId: "se1"` from the `toMatchObject`, add `expect(fields).not.toHaveProperty("sessionId")` and a `sessionIdHash` string check that is not the raw id.
-3. `apps/web-platform/test/untrusted-content-wiring.test.ts` - in "forwards the telemetry context", hoist a fixed `SENTRY_USERID_PEPPER` in `vi.hoisted` (so a wrong or missing forward is visible; with the pepper unset every id hashes to the same sentinel and the value cannot be told apart), assert `sessionIdHash` equals an independently computed HMAC of `"sess-forwarded"`, and add the negative `sessionId` assertion.
+3. `apps/web-platform/test/untrusted-content-wiring.test.ts` - in "forwards the telemetry context", set a fixed `SENTRY_USERID_PEPPER` inside the `vi.hoisted` block, before any import of `observability` (the `importOriginal` mock loads the real module, which reads the pepper once, so a late assignment is ignored) (so a wrong or missing forward is visible; with the pepper unset every id hashes to the same sentinel and the value cannot be told apart), assert `sessionIdHash` equals an independently computed HMAC of `"sess-forwarded"`, and add the negative `sessionId` assertion.
 4. `knowledge-base/engineering/operations/runbooks/betterstack-log-query.md` - field list: `sessionId` becomes `sessionIdHash`; one sentence that it is `hashUserId` of the conversation id (`pepper_unset` when the pepper is unset) and how to compute it for a lookup.
 5. `knowledge-base/engineering/architecture/decisions/ADR-287-untrusted-content-annotate-not-block-heuristic-first.md` - append one dated addendum at the end of the file (text in Phase 4).
 
@@ -131,9 +148,10 @@ sessionIdHash: ctx.sessionId ? hashUserId(ctx.sessionId) : undefined,
 New `untrusted-content-session-hash.test.ts` (synthetic fixtures only, per `cq-test-fixtures-synthesized-only`; sentinel id longer than 12 characters and not a substring of any field name or value, for example `"sess-SENTINEL-9c41e7d2"`, with a precondition assertion on its length):
 
 - Mocks as in `untrusted-content.test.ts`: `@/server/logger` (`createChildLogger` returning a spy object with `info`/`warn`/`error`/`debug`) and `mirrorWithDebounce`.
-- Describe A, pepper unset: `vi.hoisted(() => { delete process.env.SENTRY_USERID_PEPPER })` (precedent `observability-pepper-unset.test.ts`). Table-driven over six hook inputs, one per emit path: flagged (synthetic override phrase), unflagged (benign text), truncated-only (benign filler longer than `SCORE_MAX_CHARS`), flagged and truncated, unscored `shape` (`{ weird: true }`), unscored `error` (`vi.spyOn(String.prototype, "normalize")` throwing once, as the existing scorer-error test does). For each: exactly one `log.warn` call; `fields` has no `sessionId` own key; `fields.sessionIdHash === "pepper_unset"`; `JSON.stringify` of all four logger spies plus `mirrorWithDebounce.mock.calls` does not contain the sentinel; a floor that the table produced six emits (a vacuity guard on the test's own dispatch).
-- Describe B, pepper set: `vi.resetModules()`, `vi.stubEnv("SENTRY_USERID_PEPPER", "<fixed test pepper>")`, dynamic import of the module under test, then the same six paths: `sessionIdHash` equals `createHmac("sha256", pepper).update(id).digest("hex")` computed in the test with `node:crypto` (an independent oracle, not the production `hashUserId`), is 64 hex characters, is not the raw id, and serialized sinks do not contain the raw id.
-- Describe C, absent id: `createUntrustedContentHook({ workspaceId: "ws1" })` and `sessionId: ""` give no `sessionIdHash` value and no `sessionId` key; a second distinct sentinel id (must-PASS, differs from the canonical) yields a different hash from the first (pepper set), proving the field is per-session.
+- Describe A, pepper unset: `vi.hoisted(() => { delete process.env.SENTRY_USERID_PEPPER })` (precedent `observability-pepper-unset.test.ts`). Table-driven over six hook inputs, one per emit path: flagged (synthetic override phrase), unflagged (benign text), truncated-only (benign filler longer than `SCORE_MAX_CHARS`), flagged and truncated, unscored `shape` (`{ weird: true }`), unscored `error` (`vi.spyOn(String.prototype, "normalize")` throwing once, as the existing scorer-error test does). For each: exactly one `log.warn` call; `fields` has no `sessionId` own key; `fields.sessionIdHash === "pepper_unset"`; `JSON.stringify` of all four logger spies plus `mirrorWithDebounce.mock.calls` does not contain the sentinel, in a haystack that is NOT lowercased (the existing test lowercases its haystack, which would make an upper-case sentinel unfindable and any leak invisible), with a positive control in the same row that the serialized sink does contain `sessionIdHash`; a floor that the table produced six emits (a vacuity guard on the test's own dispatch).
+- Describe B, pepper set: `vi.resetModules()`, `vi.stubEnv("SENTRY_USERID_PEPPER", "<fixed test pepper>")`, dynamic import of the module under test, then the same six paths: `sessionIdHash` equals `createHmac("sha256", pepper).update(id).digest("hex")` computed in the test with `node:crypto` (an independent oracle, not the production `hashUserId`), is 64 hex characters, is not the raw id, and serialized sinks do not contain the raw id. A second sentinel id (the must-PASS case, differing from the canonical) yields a different hash from the first, proving the field is per-session; this can only be asserted here, because under the static pepper-unset graph both ids collapse to the sentinel. `afterEach` calls `vi.unstubAllEnvs()` and `vi.resetModules()` so the stubbed pepper cannot leak into later cases.
+- Describe C, absent id (static pepper-unset graph): `createUntrustedContentHook({ workspaceId: "ws1" })` and `sessionId: ""` give no `sessionIdHash` value and no `sessionId` key.
+- One real-logger case (pepper-unset graph, `@sentry/nextjs` mocked with an `addBreadcrumb` spy, real `createChildLogger`, pino output captured by spying on stdout): the pino line and the breadcrumb payload contain `sessionIdHash` and not the raw sentinel. Every other case swaps the logger for a spy, so `redactLogArgs`, `formatters.log`, `REDACT_PATHS` and the breadcrumb mirror would otherwise never be exercised, and `sessionId` is not in `SENSITIVE_KEY_NAMES` (`server/sensitive-keys.ts`), so the redaction layer would not catch a regression; the tests are the only guard.
 
 Edits to the two existing tests as listed under Files to Edit; the existing "telemetry carries metadata only" serialization already covers `log.warn` and the mirror, the new file widens it to every logger level.
 
@@ -163,7 +181,7 @@ PR body: `Ref #9601`, `Ref #4671`, `Ref #10195` (no `Closes`); states that the A
 
 **Property.** No `untrusted-classify` log call, and no sink the same hook invocation reaches, contains a `sessionId` key or the raw session id string, on any emit path.
 
-**Assembly.** The chokepoint is `emit()` in `apps/web-platform/server/untrusted-content.ts`; its callers are the five `emitHere`/`emit` sites inside `createUntrustedContentHook` (shape-unscored, scorer-error unscored, unflagged, flagged and/or truncated), exercised as six fixtures. Sinks: the four pino methods of the child logger, `mirrorWithDebounce` calls (`extra`), and the breadcrumb mirror, which receives the same object as the `warn` call. The wiring test covers the one forwarding path (`agent-runner-query-options.ts` spreads `untrustedContentTelemetry` into the hook options). If a new emit site is added later it must go through `emit()`, and the table's emit-count floor makes an unexercised path visible instead of silently green.
+**Assembly.** The chokepoint is `emit()` in `apps/web-platform/server/untrusted-content.ts`; its callers are the five `emitHere`/`emit` sites inside `createUntrustedContentHook` (shape-unscored, scorer-error unscored, unflagged, flagged and/or truncated), exercised as six fixtures. Sinks: the four pino methods of the child logger, `mirrorWithDebounce` calls (`extra`), and the breadcrumb mirror, which receives the same object as the `warn` call (exercised by the one real-logger case). The wiring test covers the one forwarding path (`agent-runner-query-options.ts` spreads `untrustedContentTelemetry` into the hook options). If a new emit site is added later it must go through `emit()`, and the table's emit-count floor makes an unexercised path visible instead of silently green.
 
 **Mutation matrix.**
 

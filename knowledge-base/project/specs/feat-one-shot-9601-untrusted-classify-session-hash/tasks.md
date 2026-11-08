@@ -13,8 +13,10 @@ Ref #9601 (epic, slice 2), Ref #4671, Ref #10195. Single small PR; no flag, scor
 - [ ] 2.1 Create `apps/web-platform/test/untrusted-content-session-hash.test.ts` with the logger and `mirrorWithDebounce` mocks.
   - [ ] 2.1.1 Pepper-unset describe (`SENTRY_USERID_PEPPER` deleted in `vi.hoisted`): six emit paths (flagged, unflagged, truncated-only, flagged and truncated, unscored shape, unscored error); assert no `sessionId` own key, `sessionIdHash === "pepper_unset"`, raw sentinel absent from every serialized sink (four logger methods and `mirrorWithDebounce` calls), and an emit-count floor of six.
   - [ ] 2.1.2 Pepper-set describe (`vi.resetModules` + `vi.stubEnv` + dynamic import): same six paths; `sessionIdHash` equals an HMAC computed in the test with `node:crypto`; 64 hex characters; not the raw id.
-  - [ ] 2.1.3 Absent-id and distinct-id cases: empty or missing session id gives no `sessionIdHash` value and no `sessionId` key; a second sentinel id gives a different hash.
+  - [ ] 2.1.3 Absent-id case (pepper-unset graph): empty or missing session id gives no `sessionIdHash` value and no `sessionId` key; the distinct-id must-PASS case (second sentinel gives a different hash) belongs in the pepper-set describe.
   - [ ] 2.1.4 Sentinel precondition assertion (length and distinctiveness).
+  - [ ] 2.1.5 Haystack is NOT lowercased and each row carries a positive control (the serialized sink contains `sessionIdHash`); `afterEach` runs `vi.unstubAllEnvs()` and `vi.resetModules()`.
+  - [ ] 2.1.6 One real-logger case (real `createChildLogger`, `@sentry/nextjs` `addBreadcrumb` spy, stdout capture): pino line and breadcrumb carry `sessionIdHash` and not the raw sentinel.
 - [ ] 2.2 Edit `apps/web-platform/test/untrusted-content.test.ts` ("telemetry carries metadata only"): remove the `sessionId: "se1"` pin, add `expect(fields).not.toHaveProperty("sessionId")` and a `sessionIdHash` string-not-raw check.
 - [ ] 2.3 Edit `apps/web-platform/test/untrusted-content-wiring.test.ts` ("forwards the telemetry context"): hoist a fixed `SENTRY_USERID_PEPPER` in `vi.hoisted`, assert `sessionIdHash` equals the independently computed HMAC of `"sess-forwarded"`, add the negative `sessionId` assertion.
 - [ ] 2.4 Run the three test files and confirm 2.1 to 2.3 fail against the unchanged `emit()`.
