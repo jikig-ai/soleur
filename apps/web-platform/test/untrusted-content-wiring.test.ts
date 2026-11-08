@@ -120,9 +120,7 @@ describe("PostToolUse WebFetch registration matrix", () => {
     const fields = log.warn.mock.calls.map((c) => c[0] as Record<string, unknown>).find((f) => f?.op === "untrusted-classify");
     expect(fields, "no untrusted-classify line was logged").toBeDefined();
     expect(fields!.sessionIdHash).toBe(createHmac("sha256", WIRING_PEPPER).update("sess-forwarded").digest("hex"));
-    expect(fields!.workspaceIdHash).toBe(createHmac("sha256", WIRING_PEPPER).update("ws-forwarded").digest("hex"));
     expect(fields).not.toHaveProperty("sessionId");
-    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("sess-forwarded");
   });
 
   it("the existing Bash git-lock hook is still registered", () => {

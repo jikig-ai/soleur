@@ -104,7 +104,7 @@ This runbook covers two operator flows:
        | select(.CONTAINER_NAME == "soleur-web-platform")
        | (.message | if type == "string" then (fromjson? // empty) else . end)
        | select(type == "object")
-       | select(.userIdHash == $h or .workspaceIdHash == $h or .worktreeIdHash == $h)
+       | select(.userIdHash == $h or .workspaceIdHash == $h or .worktreeIdHash == $h or .sessionIdHash == $h)
        | "\((.time/1000|todate))  level=\(.level)  \(.msg)"'
    ```
 
@@ -193,7 +193,9 @@ This runbook covers two operator flows:
 
    If you add a new 64-hex pino emission, add its key to the `or` chain in the
    query above in the same PR — or give it a key prefix that cannot be confused
-   with an identity field.
+   with an identity field. `sessionIdHash` (the `untrusted-classify` line, a
+   conversation id hashed with the same pepper) is in the chain for that reason:
+   hash a conversation id here instead of a user UUID to follow one session.
 
 ### Load-bearing primitive distinction
 

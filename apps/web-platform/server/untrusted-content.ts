@@ -590,7 +590,7 @@ export interface UntrustedContentHookOptions {
   /** When true AND the result is flagged, rewrite the output into the data-only envelope. */
   wrap?: boolean;
   workspaceId?: string;
-  /** Raw conversation id. Never logged as-is: emit() writes only its pepper-keyed hash. */
+  /** Raw conversation id. Never logged as-is: emit() writes only its pepper-keyed hash (or the pepper_unset sentinel). */
   sessionId?: string;
 }
 
@@ -616,8 +616,7 @@ const getLog = () => (_log ??= createChildLogger("untrusted-content"));
  * Better Stack and the liveness check and the prd soak would have nothing to read. The pino
  * logger also mirrors warn+ to a Sentry breadcrumb. `workspaceId` is logged as a hash: for
  * sole-owned workspaces it equals the user id (ADR-029). `sessionId` (the conversation id) is
- * logged as a hash too, under the key `sessionIdHash`; the raw id enters through the hook
- * options and is hashed here, at the log boundary, and nowhere else (ADR-287 addendum 2026-11-08).
+ * logged as `sessionIdHash`: hashed here, at the log boundary (ADR-287 addendum 2026-11-08).
  */
 function emit(fields: Record<string, unknown>, ctx: UntrustedContentHookOptions): void {
   try {

@@ -1590,10 +1590,13 @@ confirm it emits metrics and to drive the resize-or-keep-`cx23` decision
 One WARN line per WebFetch result in sessions with web egress and the `untrusted-content-classify` flag on. The pino payload sits under
 `.message` in the stored row (see the extraction note above), with fields `op`, `source`, `score`, `flagged`, `reasonCodes`,
 `contentLength`, `truncated`, `unscored`, `unscoredReason`, `scorerMs`, `mode`, `rewriteEmitted`, `workspaceIdHash`, `sessionIdHash`. Never
-content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it. `sessionIdHash` is `hashUserId`
-of the conversation id (the same keyed hash as `workspaceIdHash`; the literal `pepper_unset` when the pepper is unset, never the raw id). To find
-one session, compute the HMAC-SHA256 of the conversation id keyed with `SENTRY_USERID_PEPPER` from Doppler `prd` and filter on that value; never
-put the pepper on a command line. Lines emitted before 2026-11-08 carry the raw `sessionId` key until log retention expires.
+content, URLs or addresses. `rewriteEmitted` means the hook returned a rewrite, not that the model saw it. `sessionIdHash` is `hashUserId` of
+the conversation id (the app's `conversationId`, passed verbatim, no trimming or re-casing), the same keyed hash as `workspaceIdHash`. With the
+pepper unset it is the literal `pepper_unset` for every session, so per-session lookup is then impossible (a miss is not "no such session").
+To find one session, run the hash helper exactly as `recover-userid-from-pino-stdout.md` Flow 1 does (`doppler run -p soleur -c prd --
+npm run --silent hash-user-id -- "$CONVERSATION_ID"` from `apps/web-platform`; it needs the `prd` config for the pepper in addition to the
+`prd_terraform` read credentials) and match `.sessionIdHash` in that flow's `jq` filter. Never put the pepper on a command line. Lines
+emitted by builds before this change deployed (merged 2026-11-08) carry the raw `sessionId` key until retention expires.
 
 Soak/liveness read: `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 7d --grep untrusted-classify`
 (counts only). Zero lines for 24 h while web-egress sessions exist is an alert, not a quiet window; with the flag off (the default) zero
