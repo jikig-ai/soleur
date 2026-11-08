@@ -28,6 +28,33 @@ under-count biases the cp95 bound toward a false GO; recorded-not-built per the
 2026-11-08 CTO ruling, decision-challenges.md row 4 of the archived #10862 spec dir).
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-08
+**Sections enhanced:** Scope Check (verbatim ask rows, conventions ask added), this section
+**Research agents used:** none — `Reviewed-Coverage: sequential-fallback` (no Task/subagent
+spawn in this harness; the deepen halt gates and review lenses ran inline in the pipeline
+runner and are disclosed as such, matching the archived #10862 spec's precedent).
+
+### Key Improvements
+
+1. Ask Mapping quotes tightened to verbatim substrings of the brief; the
+   "keeping the file's existing dated-ledger and limits-list conventions" ask is now
+   mapped to Phases 1–2 and AC5.
+2. Deepen halt gates verified: 4.6 User-Brand Impact (present, threshold `none`, no
+   sensitive-path match), 4.7 Observability (pure-docs skip), 4.8 PAT-shaped variables
+   (no hits), 4.9 UI wireframe (no UI surface), 4.10 Encryption Posture (no
+   store/connection), 4.11 Guard Contract (no guard deliverable), 4.12 Scope Check (one
+   unfenced compliant section), 4.13 Task Design (no new autonomous task).
+3. Every statistic re-verified verbatim against `receipts/rerun/replay-summary.txt` and
+   `receipts/rerun/histograms.txt` — including the 58-of-382 not-evaluable split (57
+   ejection units + 1 commit unit) the brief elides.
+
+### New Considerations Discovered
+
+None — premise, receipts, conventions and ledger placement all verified at plan time;
+the deepen pass surfaced no additional defects or asks.
+
 ## Research Insights
 
 **Relevant files:**
@@ -178,17 +205,20 @@ the diff is prose in a runbook, and markdown-lint is the file's only mechanical 
 
 | # | User ask (verbatim) | Plan item | Status |
 |---|---------------------|-----------|--------|
-| 1 | "In §2 \"Where things stand\": add a dated 2026-11-08 entry recording the fresh-window criterion-a evidence re-run that ran after the ci_runs corroboration fix shipped" | Phase 1 / Files-to-Edit entry | mapped |
-| 2 | "In §4's limits list … Extend it or add a sibling bullet recording the ejections-side residual" | Phase 2 / Files-to-Edit entry | mapped |
+| 1 | "In §2 "Where things stand": add a dated 2026-11-08 entry recording the fresh-window criterion-a evidence re-run that ran after the ci_runs corroboration fix shipped" | Phase 1 / Files-to-Edit entry | mapped |
+| 2 | "Extend it or add a sibling bullet recording the ejections-side residual" | Phase 2 / Files-to-Edit entry | mapped |
 | 3 | "Docs-only runbook edit — no code, tests, or workflow changes" | AC5 (append-only, single-file diff) | mapped |
 | 4 | "Still nothing activated; the go/no-go re-ruling and CI_PR_AFFECTED activation stay operator-owned" | Phase 1 proposed text + AC6 | mapped |
+| 5 | "Two additions, keeping the file's existing dated-ledger and limits-list conventions" | Phases 1–2 proposed text (dated bullet, sibling bullet) + AC5 | mapped |
 
 ### Plan-Item Provenance
 
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
-| §2 ledger bullet (Phase 1) | asks 1–2 quote above | asked |
-| §4 residual bullet (Phase 2) | ask 3 quote above | asked |
+| §2 ledger bullet (Phase 1) | asks 1, 5 | asked |
+| §4 residual bullet (Phase 2) | asks 2, 5 | asked |
+| AC5 append-only / single-file guard | asks 3, 5 | asked |
+| AC6 operator-ownership assertion | ask 4 | asked |
 | Verification greps + markdown-lint (Phase 3) | — | inferred — justification: the runbook's only mechanical gate is markdown-lint; receipt-token greps are the check that keeps added sentences true (learnings above) |
 
 ### Split Assessment
