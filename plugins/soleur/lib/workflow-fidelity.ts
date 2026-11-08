@@ -88,6 +88,7 @@ export function isHandoffSkill(skill: string): skill is HandoffSkill {
 
 /** Map /go routing labels to soleur skill names (soleur: prefix stripped at dispatch). */
 export const GO_SKILL_ROUTES: Record<string, string> = {
+  "cve-exposure": "cve-exposure",
   fix: "one-shot",
   implement: "one-shot",
   drain: "drain-labeled-backlog",
