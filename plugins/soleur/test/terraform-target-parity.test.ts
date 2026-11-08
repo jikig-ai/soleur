@@ -6648,8 +6648,20 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     want(/^\s*visibility\s*=\s*"masked"\s*$/m.test(ds), 'visibility = "masked"');
     want(/^\s*value\s*=\s*random_bytes\.proxy_hello_hmac\[0\]\.hex\s*$/m.test(ds), "value = random_bytes.proxy_hello_hmac[0].hex exactly");
     want(!/^\s*output\s+"/m.test(src), "the file declares no output (nothing may print the key)");
+    want((src.match(/random_bytes\.proxy_hello_hmac/g) ?? []).length === 1, "the key is referenced exactly once in its own file (the doppler_secret value line)");
     return problems;
   };
+
+  // A reference to the pair from any file but its own. The one exemption: a `description = "plain string"` (no `${`, so it cannot
+  // interpolate an address), which is how host_proxy_tls_enabled legitimately NAMES what it gates. A description that
+  // is an expression (`description = random_bytes....hex`) is a forward of the key and is NOT exempt.
+  const strayHelloReferences = (files: Array<[string, string]>): string[] =>
+    files
+      .filter(([, text]) => {
+        const code = text.split("\n").filter((l) => !/^\s*description\s*=\s*"[^"$]*"\s*$/.test(l)).join("\n");
+        return /proxy_hello_hmac/.test(code);
+      })
+      .map(([f]) => f);
 
   test("the relay hello-signing pair is count-gated on host_proxy_tls_enabled like the proxy-TLS quartet (#12289)", () => {
     expect(hmacUngated(tf("proxy-hello-hmac.tf"))).toEqual([]);
@@ -6669,14 +6681,7 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(hmacShapeProblems(tf("proxy-hello-hmac.tf"))).toEqual([]);
     // Nothing outside proxy-hello-hmac.tf may reference the pair: an `output` (or a local, or another resource's
     // attribute) in a sibling file would print or forward the key without tripping the one-file shape pin above.
-    const strays = listInfraTfFiles()
-      .filter((f) => {
-        if (f.endsWith("/proxy-hello-hmac.tf")) return false;
-        // a variable's `description = "..."` may NAME the addresses (host_proxy_tls_enabled lists what it gates); that is prose, not a reference
-        const code = stripComments(readFileSync(f, "utf8")).split("\n").filter((l) => !/^\s*description\s*=/.test(l)).join("\n");
-        return /proxy_hello_hmac/.test(code);
-      });
-    expect(strays).toEqual([]);
+    expect(strayHelloReferences(listInfraTfFiles().filter((f) => !f.endsWith("/proxy-hello-hmac.tf")).map((f) => [f, stripComments(readFileSync(f, "utf8"))]))).toEqual([]);
   });
 
   test("mutation battery over the hello-pair predicates: every clause and both pair members turn the guard red, and each mutation landed", () => {
@@ -6696,8 +6701,20 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
       ["config dev", src.replace(/^(\s*config\s*=\s*)"prd"(\s*)$/m, '$1"dev"$2'), (t) => hmacShapeProblems(t)],
       ["project changed", src.replace(/^(\s*project\s*=\s*)"soleur"(\s*)$/m, '$1"other"$2'), (t) => hmacShapeProblems(t)],
       ["name changed", src.replace(/PROXY_HELLO_HMAC_KEY/, "PROXY_HELLO_KEY"), (t) => hmacShapeProblems(t)],
+      ["a local forwards the value from the file itself", `${src}\nlocals {\n  k = random_bytes.proxy_hello_hmac[0].hex\n}\n`, (t) => hmacShapeProblems(t)],
       ["an output exposes the value", `${src}\noutput "k" {\n  value = random_bytes.proxy_hello_hmac[0].hex\n}\n`, (t) => hmacShapeProblems(t)],
     ];
+    // control rows for the stray-reference predicate: it must bite on a forward through a resource description, a local and an
+    // output in a sibling file, and must stay quiet for the plain-string description that names the pair
+    const strayBites: Array<[string, string]> = [
+      ["description expression", 'resource "x" "y" {\n  description = random_bytes.proxy_hello_hmac[0].hex\n}'],
+      ["local", "locals { k = random_bytes.proxy_hello_hmac[0].hex }"],
+      ["output", 'output "k" {\n  value = random_bytes.proxy_hello_hmac[0].hex\n}'],
+    ];
+    for (const [label, text] of strayBites) {
+      expect(strayHelloReferences([["sibling.tf", text]]), `stray predicate must bite on: ${label}`).toEqual(["sibling.tf"]);
+    }
+    expect(strayHelloReferences([["vars.tf", '  description = "gates random_bytes.proxy_hello_hmac and the secret"']])).toEqual([]);
     for (const [label, mutated, problems] of mutants) {
       expect(mutated, `${label}: the mutation did not land`).not.toBe(src);
       expect(problems(mutated).length, `${label}: the predicate stayed green`).toBeGreaterThan(0);

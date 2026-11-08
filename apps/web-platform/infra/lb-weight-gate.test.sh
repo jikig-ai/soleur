@@ -586,8 +586,13 @@ V_BLOCK=""
   on && /^\}/ { exit }
 ' "$VARS_TF")"
 c4_assert "C.4-V1: variables.tf declares variable \"web2_lb_weight\"" "$([[ -n "$V_BLOCK" ]] && echo 1 || echo 0)"
+v2_guard() { # $1 = the variable block text -> 0 iff type number AND exactly one top-level default attribute AND it is 1
+  grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*number[[:space:]]*$' <<<"$1" || return 1
+  [[ "$(grep -cE '^[[:space:]]*default[[:space:]]*=' <<<"$1" || true)" -eq 1 ]] || return 1
+  grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*1[[:space:]]*$' <<<"$1"
+}
 c4_assert "C.4-V2: web2_lb_weight is type = number with exactly ONE default attribute, equal to 1 (the live serving shape; a duplicate or heredoc 'default = 1' line cannot stand in for it)" \
-  "$(grep -qE '^[[:space:]]*type[[:space:]]*=[[:space:]]*number[[:space:]]*$' <<<"$V_BLOCK" && [[ "$(grep -cE '^[[:space:]]*default[[:space:]]*=' <<<"$V_BLOCK" || true)" -eq 1 ]] && grep -qE '^[[:space:]]*default[[:space:]]*=[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
+  "$(v2_guard "$V_BLOCK" && echo 1 || echo 0)"
 c4_assert "C.4-V3: web2_lb_weight has a validation admitting ONLY 0 or 1" \
   "$(grep -qE 'validation[[:space:]]*\{' <<<"$V_BLOCK" && grep -qE 'condition[[:space:]]*=[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*0[[:space:]]*\|\|[[:space:]]*var\.web2_lb_weight[[:space:]]*==[[:space:]]*1[[:space:]]*$' <<<"$V_BLOCK" && echo 1 || echo 0)"
 c4_assert "C.4-V4: web2_lb_weight is declared exactly once in the tree's .tf files" \
@@ -626,8 +631,9 @@ c4_assert "C.4-F4: WEB2_LB_WEIGHT is 1 ONLY when mode=serve, else 0 (the pin ste
   "$(grep -qE 'if \[\[ "\$MODE_RAW" == "serve" \]\]; then WEB2_LB_WEIGHT=1; else WEB2_LB_WEIGHT=0; fi' <<<"$PIN_STEP" && grep -qE 'echo "WEB2_LB_WEIGHT=\$\{WEB2_LB_WEIGHT\}" >> "\$GITHUB_ENV"' <<<"$PIN_STEP" && echo 1 || echo 0)"
 c4_assert "C.4-F5: the plan step passes -var=web2_lb_weight from WEB2_LB_WEIGHT, exactly once" \
   "$([[ "$(c4_nocomment <(printf '%s\n' "$PLAN_STEP") | grep -cE -- '-var="web2_lb_weight=\$\{WEB2_LB_WEIGHT\}"')" -eq 1 ]] && echo 1 || echo 0)"
-c4_assert "C.4-F6: web2_lb_weight appears on exactly TWO non-comment lines of cf-lb-overlay.yml: the ga_pool_update plan step (\${WEB2_LB_WEIGHT}) and the ga_overlay plan step (literal 0); no other arm / job feeds it" \
-  "$([[ "$(c4_nocomment "$WF" | grep -o 'web2_lb_weight' | wc -l)" -eq 2 ]] && echo 1 || echo 0)"
+f6_guard() { [[ "$(c4_nocomment "$1" | grep -o 'web2_lb_weight' | wc -l)" -eq 2 ]]; }
+c4_assert "C.4-F6: web2_lb_weight appears TWICE in the non-comment text of cf-lb-overlay.yml: the ga_pool_update plan step (\${WEB2_LB_WEIGHT}) and the ga_overlay plan step (literal 0); no other arm / job feeds it" \
+  "$(f6_guard "$WF" && echo 1 || echo 0)"
 c4_assert "C.4-F7: no other workflow names web2_lb_weight (routine apply, drift and validation plans ride the default, 1 = live)" \
   "$([[ -z "$(cd "$REPO_ROOT" && grep -lE 'web2_lb_weight|WEB2_LB_WEIGHT' .github/workflows/*.yml | grep -v 'cf-lb-overlay.yml')" ]] && echo 1 || echo 0)"
 
@@ -645,10 +651,13 @@ gao_guard() { # $1 = workflow file -> 0 iff the token -var="web2_lb_weight=0" si
   local step nc chain; step="$(gao_plan_of "$1")"
   [[ -n "$step" ]] || return 1
   nc="$(c4_nocomment <(printf '%s\n' "$step"))"
-  # the chain: from the `terraform plan` line through the last line that ends in a continuation backslash
-  chain="$(awk '/terraform plan/ {on=1} on {print} on && !/\\[[:space:]]*$/ {exit}' <<<"$nc")"
+  # exactly ONE terraform-plan COMMAND (a line that STARTS with it; an echo or a second plan is not "the" plan)
+  [[ "$(grep -cE '^[[:space:]]*terraform plan' <<<"$nc" || true)" -eq 1 ]] || return 1
+  # the chain: from that line through the last line that ends in a continuation backslash; the literal must sit
+  # before the first pipe (an argument of terraform, not of the redactor that follows it)
+  chain="$(awk '/^[[:space:]]*terraform plan/ {on=1} on {print} on && !/\\[[:space:]]*$/ {exit}' <<<"$nc")"
   [[ -n "$chain" ]] || return 1
-  [[ "$(grep -o -- '-var="web2_lb_weight=0"' <<<"$chain" | wc -l)" -eq 1 ]] || return 1
+  [[ "$(grep -o -- '-var="web2_lb_weight=0"' <<<"${chain%%|*}" | wc -l)" -eq 1 ]] || return 1
   # occurrences (not lines) anywhere in the step: a dead-line, echo or duplicate -var (last value wins) is a second one
   [[ "$(grep -o 'web2_lb_weight' <<<"$nc" | wc -l)" -eq 1 ]] || return 1
   return 0
@@ -666,7 +675,23 @@ f8mut "C.4-F8m1 mutant: the ga_overlay -var carries weight 1 (a fresh create wou
 f8mut "C.4-F8m2 mutant: the ga_overlay -var line is deleted (default 1 would apply)" '/^  ga_overlay:/ {job=1} job && /-var="web2_lb_weight=0"/ {next} {print}'
 f8mut "C.4-F8m3 mutant: the real -var is deleted and the literal moves to an echo BEFORE the plan (token present in the step, absent from the chain)" '/^  ga_overlay:/ {job=1} job && /-var="web2_lb_weight=0"/ {next} job && /^          doppler run --preserve-env/ && !done {print "          echo -var=\"web2_lb_weight=0\""; done=1} {print}'
 f8mut "C.4-F8m4 mutant: a second -var=1 follows the 0 (the last value wins, one line per -var)" '/^  ga_overlay:/ {job=1} {print} job && /-var="web2_lb_weight=0"/ {print "              -var=\"web2_lb_weight=1\" \\"}'
+f8mut "C.4-F8m5 mutant: the real -var is deleted and the literal rides the redactor AFTER the pipe (terraform itself gets no -var)" '/^  ga_overlay:/ {job=1} job && /^ *-var="web2_lb_weight=0"/ {next} job && /tf_redact_random_ids/ && !done {sub(/tf_redact_random_ids/, "tf_redact_random_ids -var=\"web2_lb_weight=0\""); done=1} {print}'
+f8mut "C.4-F8m6 mutant: an echo decoy named terraform plan carries the literal and the real -var is deleted" '/^  ga_overlay:/ {job=1} job && /^ *-var="web2_lb_weight=0"/ {next} job && /^          doppler run --preserve-env/ && !done {print "          echo terraform plan \\"; print "            -var=\"web2_lb_weight=0\" \\"; done=1} {print}'
+f8mut "C.4-F8m7 mutant: a SECOND terraform plan command without the var follows the first" '/^  ga_overlay:/ {job=1} {print} job && /tf_redact_random_ids/ && !done {print "          terraform plan -no-color -input=false -out=tfplan2 -target=cloudflare_load_balancer_pool.web_1"; done=1}'
+f8mut "C.4-F8m8 mutant: a SAME-LINE duplicate -var=1 follows the 0 (a line count sees one line; an occurrence count sees two)" '/^  ga_overlay:/ {job=1} job && /^ *-var="web2_lb_weight=0"/ {sub(/-var="web2_lb_weight=0"/, "-var=\"web2_lb_weight=0\" -var=\"web2_lb_weight=1\"")} {print}'
 rm -rf "$F8_WORK"
+# F6 / V2 each get a same-line / heredoc mutant so the "count occurrences, one default" hardening is shown red
+F6_WORK="$(mktemp -d)"
+awk '/^ *-var="web2_lb_weight=0"/ {sub(/-var="web2_lb_weight=0"/, "-var=\"web2_lb_weight=0\" -var=\"web2_lb_weight=1\"")} {print}' "$WF" > "$F6_WORK/wf.yml"
+if cmp -s "$WF" "$F6_WORK/wf.yml"; then c4_bad "C.4-F6m1: the mutation did not land"; elif f6_guard "$F6_WORK/wf.yml"; then c4_bad "C.4-F6m1 stayed GREEN: a same-line duplicate -var escapes the occurrence count"; else c4_ok "C.4-F6m1 mutant: a same-line duplicate -var=1 -> RED"; fi
+V2_BAD1="$V_BLOCK"$'\n''  description = <<EOT'$'\n''  default = 1'$'\n''EOT'
+V2_BAD2="$(sed -E 's/^([[:space:]]*)default([[:space:]]*)=([[:space:]]*)1/\1default\2=\31\n\1default = 1/' <<<"$V_BLOCK")"
+V2_BAD3="$(sed -E 's/^([[:space:]]*)default([[:space:]]*)=([[:space:]]*)1[[:space:]]*$/\1default\2=\30\n\1# default = 1/' <<<"$V_BLOCK")"
+for tag in 1 2 3; do
+  v="V2_BAD$tag"
+  if [[ "${!v}" == "$V_BLOCK" ]]; then c4_bad "C.4-V2m$tag: the mutation did not land"; elif v2_guard "${!v}"; then c4_bad "C.4-V2m$tag stayed GREEN: the single-default guard cannot see this variant"; else c4_ok "C.4-V2m$tag mutant (heredoc default / duplicate default / default 0 with a commented 1) -> RED"; fi
+done
+rm -rf "$F6_WORK"
 
 # --- W: the drain invariant by EFFECT, not by text (T-P2-1) -----------------------------------------
 # F4-F6 pin the pin step's WORDING. They cannot see a second, later writer: a `WEB2_LB_WEIGHT: "1"` in the plan step's env or a
@@ -1095,7 +1120,7 @@ a1_mutate "unprefixed PROXY_BIND read" '[[ -n "${PROXY_BIND-}" ]] || fail "A_unp
 GATE="$GATE_PRISTINE"
 
 # --- Minimum-cardinality guard (an empty loop must not GREEN with zero coverage) ---
-MIN_CASES=287
+MIN_CASES=295
 echo ""
 echo "=== Results: ${PASS} passed, ${FAIL} failed, ${TOTAL} total ==="
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

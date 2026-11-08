@@ -580,8 +580,9 @@ _cf_lb_gate_ga_pool_update_graded() {
 # reads nothing else): the same content as the plan JSON already on the runner. It is
 # written beside the plan file (no mktemp: a sourced lib must not own the caller's
 # EXIT trap, and the census of trap-less tempfile owners only ratchets down) under
-# umask 077, an existing path or symlink is refused, and it is removed on every
-# normal return path (a SIGKILL mid-grade leaves one file on an ephemeral runner).
+# umask 077, opened O_EXCL so an existing path or symlink is refused atomically, and
+# removed on every normal return path (a SIGKILL or a cancelled run mid-grade leaves
+# one file on an ephemeral runner).
 # rc is returned explicitly: the call site runs under set -e, and errexit is
 # suppressed inside a function called in an || list.
 cf_lb_gate_ga_pool_update() {
@@ -615,14 +616,13 @@ cf_lb_gate_ga_pool_update() {
       return $?
       ;;
     plain-noop)
+      # A path beside the plan, opened O_EXCL (dd conv=excl): an existing path or a symlink planted at the name,
+      # even one planted after a check, fails the write instead of being followed or truncated. No redirect and no
+      # mktemp: a sourced lib must not own the caller's EXIT trap, and the census of trap-less tempfile owners only
+      # ratchets down.
       tmp="${plan_json}.serve-norm.$$"
-      if [[ -e "$tmp" || -L "$tmp" ]]; then
-        echo "::error::ga-pool-update gate[serve]: cannot allocate the normalised plan copy (${tmp} already exists). NOTHING applied."
-        return 1
-      fi
-      ( set -o pipefail; umask 077; jq '{resource_changes: [.resource_changes[] | if .address == "cloudflare_load_balancer_pool.web_1" then (.change.actions = ["update"]) else . end]}' "$plan_json" | tee -- "$tmp" > /dev/null ) || {
-        rm -f "$tmp"
-        echo "::error::ga-pool-update gate[serve]: cannot write the normalised plan copy. NOTHING applied."
+      ( set -o pipefail; umask 077; jq '{resource_changes: [.resource_changes[] | if .address == "cloudflare_load_balancer_pool.web_1" then (.change.actions = ["update"]) else . end]}' "$plan_json" | dd of="$tmp" conv=excl status=none ) || {
+        echo "::error::ga-pool-update gate[serve]: cannot write the normalised plan copy (${tmp} already exists, or the plan directory is not writable). NOTHING applied."
         return 1
       }
       _cf_lb_gate_ga_pool_update_graded "$tmp" "$mode" || rc=$?

@@ -560,9 +560,10 @@ variable "terraform_version" {
 # drained shape (its grader is create-only, so it cannot drain a live pool). The gated 0-to-1 act is
 # `ga-pool-update mode=serve` (1 solely there, after its fail-closed §(c) gate-chain step passed).
 # lb-weight-gate.test.sh C.4 pins the feeder census, the ordering and the default. The structural
-# "only the serve arm can set weight 1" guarantee holds while the default is 0 and ENDS at the first
-# drain: after an intentional drain, any later full-root plan or apply that omits the variable restores
-# weight 1 outside the gate chain, so a drain is not durable until this default is changed back.
+# "only the serve arm can set weight 1" guarantee that held while the default was 0 is vacuous while
+# live is 1 and is gone at the first drain: after an intentional drain, any later full-root plan or
+# apply that omits the variable restores weight 1 outside the gate chain (as does a pool re-create), so
+# a drain is not durable until this default is changed back.
 # Never set this in Doppler / tfvars: a TF_VAR_ route would bypass the gate chain. Only 0 and 1 are
 # admitted. An untargeted apply that CREATES or REPLACES hcloud_server.web["web-2"] (or the pool) MUST
 # pass `-var=web2_lb_weight=0`: at the default an empty replacement host would enter the pool at weight 1

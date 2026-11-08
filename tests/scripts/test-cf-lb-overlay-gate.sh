@@ -363,7 +363,7 @@ mkdir -p "$PN_DIR"; cp "$TMP/pn1.json" "$PN_DIR/plan.json"; : > "$PN_LOG"
   cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve >/dev/null 2>&1
 )
 if [[ "$(ls -A "$PN_DIR")" == "plan.json" ]]; then ok "pool-update: serve no-op leaves no normalised copy behind" 0 0; else ok "pool-update: serve no-op leaves no normalised copy behind" 1 0; fi
-if [[ "$(grep -c '\.serve-norm\.' "$PN_LOG")" -eq 1 ]]; then ok "pool-update: serve no-op built and removed exactly one copy (instrument sees it)" 0 0; else ok "pool-update: serve no-op built and removed exactly one copy (instrument sees it)" 1 0; fi
+if [[ "$(grep -c '\.serve-norm\.' "$PN_LOG")" -eq 1 ]] && grep -qE -- "^-f ${PN_DIR//./\\.}/plan\.json\.serve-norm\.[0-9]+\$" "$PN_LOG"; then ok "pool-update: serve no-op built and removed exactly one copy, BESIDE the plan file (instrument sees where)" 0 0; else ok "pool-update: serve no-op built and removed exactly one copy, BESIDE the plan file (instrument sees where)" 1 0; fi
 cp "$TMP/pn4.json" "$PN_DIR/plan.json"; : > "$PN_LOG"
 pn9rc=0
 (
@@ -374,28 +374,56 @@ if [[ "$pn9rc" -eq 1 && "$(grep -c '\.serve-norm\.' "$PN_LOG")" -eq 1 ]]; then o
 if [[ "$(ls -A "$PN_DIR")" == "plan.json" ]]; then ok "pool-update: a REFUSED no-op serve still removes its copy (directory holds only the plan)" 0 0; else ok "pool-update: a REFUSED no-op serve still removes its copy (directory holds only the plan)" 1 0; fi
 # an existing path (file, then dangling symlink) at the copy's name is refused, not overwritten or followed
 cp "$TMP/pn1.json" "$PN_DIR/plan.json"
-: > "$PN_DIR/plan.json.serve-norm.$$"
-pn9brc=0; cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve >/dev/null 2>&1 || pn9brc=$?
-if [[ "$pn9brc" -eq 1 && ! -s "$PN_DIR/plan.json.serve-norm.$$" ]]; then ok "pool-update: an existing file at the copy's name is refused and left untouched" 0 0; else ok "pool-update: an existing file at the copy's name is refused and left untouched" 1 0; fi
+printf 'planted\n' > "$PN_DIR/plan.json.serve-norm.$$"
+pn9brc=0; pn9bout="$(cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve 2>&1)" || pn9brc=$?
+if [[ "$pn9brc" -eq 1 && "$(cat "$PN_DIR/plan.json.serve-norm.$$")" == "planted" && "$pn9bout" == *"cannot write the normalised plan copy"* ]]; then ok "pool-update: an existing file at the copy's name is refused and left untouched" 0 0; else ok "pool-update: an existing file at the copy's name is refused and left untouched" 1 0; fi
 rm -f "$PN_DIR/plan.json.serve-norm.$$"; ln -s "$TMP/pn-nonexistent-target" "$PN_DIR/plan.json.serve-norm.$$"
 pn9crc=0; cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve >/dev/null 2>&1 || pn9crc=$?
 if [[ "$pn9crc" -eq 1 && ! -e "$TMP/pn-nonexistent-target" ]]; then ok "pool-update: a symlink at the copy's name is refused and not followed" 0 0; else ok "pool-update: a symlink at the copy's name is refused and not followed" 1 0; fi
 rm -f "$PN_DIR/plan.json.serve-norm.$$"
+if [[ "$(id -u)" -ne 0 ]]; then
+  chmod a-w "$PN_DIR"
+  pn9drc=0; pn9dout="$(cf_lb_gate_ga_pool_update "$PN_DIR/plan.json" serve 2>&1)" || pn9drc=$?
+  chmod u+w "$PN_DIR"
+  if [[ "$pn9drc" -eq 1 && "$pn9dout" == *"cannot write the normalised plan copy"* && "$(ls -A "$PN_DIR")" == "plan.json" ]]; then ok "pool-update: an unwritable plan directory refuses (fail closed, not approve) and leaves nothing behind" 0 0; else ok "pool-update: an unwritable plan directory refuses (fail closed, not approve) and leaves nothing behind" 1 0; fi
+else
+  ok "pool-update: an unwritable plan directory refuses (skipped as root: chmod does not bind root; counted so the floor is stable)" 0 0
+fi
+# The post-replace flow the web-host-replace runbook relies on: web-2 comes back on a NEW address and the pool UPDATE moves the origin
+# to it (web-2 server entry no-op at .99). Drain admits it at weight 0 and serve at weight 1; if this ever refuses, the runbook is wrong.
+WEB2_NEWIP='{"address":"hcloud_server.web[\"web-2\"]","change":{"actions":["no-op"],"after":{"ipv4_address":"203.0.113.99"}}}'
+PN_MOVED_SERVE="${POOL_SERVE//203.0.113.20/203.0.113.99}"
+PN_MOVED_DRAIN="${POOL_DRAIN//203.0.113.20/203.0.113.99}"
+mk pn16a "{\"resource_changes\":[${WEB1},${WEB2_NEWIP},${PN_MOVED_DRAIN},${GA_LB_UPD},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn16a.json" drain; ok "pool-update: drain admits a pool update that re-points web-2's origin to its new address (post-replace flow)" $? 0
+mk pn16b "{\"resource_changes\":[${WEB1},${WEB2_NEWIP},${PN_MOVED_SERVE},${GA_LB_UPD},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn16b.json" serve; ok "pool-update: serve admits a pool update that re-points web-2's origin to its new address at weight 1" $? 0
+mk pn16c "{\"resource_changes\":[${WEB1},${WEB2},${PN_MOVED_SERVE},${GA_LB_UPD},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn16c.json" serve; ok "pool-update: an origin at an address that is NOT web-2's planned address is refused (the repoint bound still bites)" $? 1
 mk pn10 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_MOVED},${POLICY_CREATE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn10.json" serve; ok "pool-update: serve no-op pool entry carrying previous_address refused (exact normalisation predicate)" $? 1
 # Each term of the plain-no-op predicate is pinned at the SERVING shape {1,1}, where the entry would otherwise be admitted.
 PN_MODADDR="${POOL_NOOP_SERVE/cloudflare_load_balancer_pool.web_1/module.m.cloudflare_load_balancer_pool.web_1}"
 mk pn11 "{\"resource_changes\":[${WEB1},${WEB2},${PN_MODADDR},${POLICY_CREATE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn11.json" serve; ok "pool-update: a module-addressed no-op pool at the serving shape refused (exact-address term)" $? 1
+PN_IDX="${POOL_NOOP_SERVE/cloudflare_load_balancer_pool.web_1/cloudflare_load_balancer_pool.web_1[0]}"
+mk pn11b "{\"resource_changes\":[${WEB1},${WEB2},${PN_IDX},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn11b.json" serve; ok "pool-update: a single count-indexed no-op pool at the serving shape refused (exact-address term, suffix form)" $? 1
 PN_SECOND="${POOL_NOOP_SERVE/cloudflare_load_balancer_pool.web_1/cloudflare_load_balancer_pool.web_1[0]}"
 mk pn12 "{\"resource_changes\":[${WEB1},${WEB2},${POOL_SERVE},${PN_SECOND},${POLICY_CREATE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn12.json" serve; ok "pool-update: two pool entries (update plus an indexed no-op) refused" $? 1
 out=$(cf_lb_gate_ga_pool_update "$TMP/pn12.json" serve 2>&1); rc=$?
 if [[ $rc -eq 1 && "$out" == *"web_1: ambiguous,"* ]]; then ok "pool-update: two pool entries get the ambiguous verdict, not the absent one" 0 0; else ok "pool-update: two pool entries get the ambiguous verdict, not the absent one" 1 0; fi
+out=$(cf_lb_gate_ga_pool_update "$TMP/pn10.json" serve 2>&1); rc=$?
+if [[ $rc -eq 1 && "$out" == *"::error::ga-pool-update gate[serve]: the pool no-op entry carries a state move"* ]]; then ok "pool-update: the unplain-noop arm prints its own ::error:: line" 0 0; else ok "pool-update: the unplain-noop arm prints its own ::error:: line" 1 0; fi
 PN_READ="${POOL_NOOP/\[\"no-op\"\]/[\"read\"]}"
 mk pn13 "{\"resource_changes\":[${WEB1},${WEB2},${PN_READ},${POLICY_CREATE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn13.json" serve; ok "pool-update: a read-verb pool entry refused (the default arm is load-bearing: the graded function drops reads)" $? 1
+mk pn13b "{\"resource_changes\":[${WEB1},${WEB2},${POOL_NOOP_SERVE},{\"change\":{\"actions\":[\"no-op\"]}},${POLICY_CREATE}]}"
+run cf_lb_gate_ga_pool_update "$TMP/pn13b.json" serve; ok "pool-update: an entry with no address key does not crash the verdict (null-safe) and the plan still grades" $? 0
 PN_DEPOSED="$(sed 's/^{"address"/{"deposed":"abc","address"/' <<<"$POOL_NOOP_SERVE")"
+out=$(cf_lb_gate_ga_pool_update "$TMP/pn13.json" serve 2>&1); rc=$?
+if [[ $rc -eq 1 && "$out" == *"::error::ga-pool-update gate[serve]: the pool entry is neither an update nor a plain no-op"* ]]; then ok "pool-update: the default arm prints its own ::error:: line" 0 0; else ok "pool-update: the default arm prints its own ::error:: line" 1 0; fi
 mk pn14 "{\"resource_changes\":[${WEB1},${WEB2},${PN_DEPOSED},${POLICY_CREATE}]}"
 run cf_lb_gate_ga_pool_update "$TMP/pn14.json" serve; ok "pool-update: a deposed no-op pool at the serving shape refused (deposed term)" $? 1
 PN_IMPORTING="$(sed 's/"change":{"actions":\["no-op"\]/"change":{"importing":{"id":"x"},"actions":["no-op"]/' <<<"$POOL_NOOP_SERVE")"
@@ -407,8 +435,11 @@ run cf_lb_gate_ga_pool_update "$TMP/pn15.json" serve; ok "pool-update: an import
 # (Name split so this file does not contain the literal.)
 pn_inner="_cf_lb_gate_ga_pool_update""_graded"
 pn_root="$(cd "$HERE/../.." && pwd)"
-pn_hits="$(grep -rlF --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=knowledge-base --exclude-dir=.worktrees "$pn_inner" "$pn_root" 2>/dev/null | grep -vxF "$LIB" || true)"
-if [[ -z "$pn_hits" ]] && grep -qF "$pn_inner" "$LIB"; then
+pn_all="$(grep -rlF --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=knowledge-base --exclude-dir=.worktrees "$pn_inner" "$pn_root" 2>/dev/null || true)"
+pn_hits="$(grep -vxF "$LIB" <<<"$pn_all" || true)"
+# the scan must have SEEN the lib (positive control: an empty root or a failed grep would otherwise read as "no callers"),
+# and the lib must DEFINE the function (anchored on the definition line, not a comment mention)
+if [[ -z "$pn_hits" ]] && grep -qxF "$LIB" <<<"$pn_all" && grep -qE "^${pn_inner}\(\) \{" "$LIB"; then
   ok "pool-update: nothing in the tree but the lib mentions the graded inner function (the wrapper is the only chokepoint; the lib still defines it)" 0 0
 else
   echo "  inner-function mentions outside the lib: ${pn_hits:-none}"
@@ -422,6 +453,6 @@ mk m2 '{"resource_changes":[{"address":"x.y","change":{"actions":42}}]}'
 run cf_lb_gate_ga "$TMP/m2.json"; ok "unclassifiable actions refused" $? 1
 
 # anti-vacuity floor: the suite must have exercised a real battery, not a stubbed one.
-if [[ "$checks" -lt 133 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
+if [[ "$checks" -lt 141 ]]; then echo "FAIL: anti-vacuity — only $checks assertions ran"; fail=1; fi
 
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ($checks assertions)"; else echo "FAILURES PRESENT"; exit 1; fi
