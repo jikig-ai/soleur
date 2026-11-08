@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=476   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=484   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -185,6 +185,7 @@ if [ -f "$GH_FIX/ERR_$key" ]; then echo "gh: HTTP 502" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR404_$key" ]; then echo "gh: Not Found (HTTP 404)" >&2; exit 1; fi
 if [ -f "$GH_FIX/ERR403RL_$key" ]; then echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1; fi
 if [ -f "$GH_FIX/HANG_$key" ]; then command -p sleep 2; echo '{"total_count":0,"workflow_runs":[]}'; exit 0; fi   # HANG_ answers an empty run list, so a delayed unit would vanish
+if [ -f "$GH_FIX/ONCE_$key" ]; then cat "$GH_FIX/ONCE_$key"; rm -f "$GH_FIX/ONCE_$key"; exit 0; fi
 if [ -f "$GH_FIX/$key" ]; then cat "$GH_FIX/$key"; exit 0; fi
 echo "STUB-MISS $key" >> "$GH_LOG"; exit 64
 GHSTUB
@@ -199,7 +200,19 @@ fx_err() { : > "$GHFIX/ERR_$(keyof "$1")"; }
 fx_err404() { : > "$GHFIX/ERR404_$(keyof "$1")"; }
 fx_hang() { : > "$GHFIX/HANG_$(keyof "$1")"; }
 fx_err403rl() { : > "$GHFIX/ERR403RL_$(keyof "$1")"; }
+fx_once() { local k; k="$(keyof "$1")"; cat > "$GHFIX/ONCE_$k"; }   # first call returns the body, then deletes it
 runs_path() { printf 'repos/%s/actions/workflows/ci.yml/runs?head_sha=%s&per_page=100' "${REPO_NAME:-$R}" "$1"; }
+checkruns_path() { printf 'repos/%s/commits/%s/check-runs?per_page=100' "${REPO_NAME:-$R}" "$1"; }
+rundetail_path() { printf 'repos/%s/actions/runs/%s' "${REPO_NAME:-$R}" "$1"; }
+checkruns_body() {  # checkruns_body then one details_url per arg
+  local first=1 u
+  printf '{"total_count":%s,"check_runs":[' "$#"
+  for u in "$@"; do [ "$first" = 1 ] || printf ','; first=0; printf '{"details_url":"%s"}' "$u"; done
+  printf ']}'
+}
+rundetail_body() {  # rundetail_body <id> <event> <conclusion> <head_sha> <path>
+  printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":1,"created_at":"2031-01-05T00:00:00Z","head_sha":"%s","path":"%s"}' "$1" "$2" "$3" "$4" "$5"
+}
 jobs_path() { printf 'repos/%s/actions/runs/%s/jobs?per_page=100&filter=latest' "${REPO_NAME:-$R}" "$1"; }
 jobs1_path() { printf 'repos/%s/actions/runs/%s/attempts/1/jobs?per_page=100' "${REPO_NAME:-$R}" "$1"; }
 log_path() { printf 'repos/%s/actions/jobs/%s/logs' "${REPO_NAME:-$R}" "$1"; }
@@ -209,7 +222,7 @@ runs_body() {  # runs_body <sha> then id:event:conclusion[:attempt]
   for item in "$@"; do
     IFS=: read -r id ev concl att <<<"$item"
     [ "$first" = 1 ] || printf ','; first=0
-    printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-0%sT00:00:00Z","head_sha":"%s"}' "$id" "$ev" "$concl" "${att:-1}" "${id: -1}" "$sha"
+    printf '{"id":%s,"event":"%s","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-%02dT00:00:00Z","head_sha":"%s"}' "$id" "$ev" "$concl" "${att:-1}" "$(( ${id: -1} + 1 ))" "$sha"
   done
   printf ']}'
 }
@@ -246,7 +259,8 @@ RUN_ENV=()
 RCLOG="$SANDBOX/rc.log"; : > "$RCLOG"
 run_sut() {  # run_sut <args...>; the repo is the cwd, the selector and gh are stubs; prints stdout. Every exit code is appended to $RCLOG, so a mutant that CRASHES (rc 4) is told apart from one that merely changes an answer
   local rc tmo="${REPLAY_SUT_TIMEOUT:-30}"
-  [[ "$tmo" =~ ^[1-9][0-9]*$ ]] || tmo=30   # the override can only shrink the bound, never widen or disable it: unset, empty, 0, negative and non-numeric all fall back to the default
+  [[ "$tmo" =~ ^[1-9][0-9]*$ ]] || tmo=30
+  (( tmo > 30 )) && tmo=30   # the override can only shrink the bound, never widen or disable it: unset, empty, 0, negative, non-numeric and oversized values all clamp to the default
   ( cd "$REPO" && env PATH="$BIN:$PATH" PR_AFFECTED_REPLAY_TEST_ALL="$BIN/sel.sh" PR_AFFECTED_REPLAY_RETRY_SLEEP=0 HOME="$FIXHOME" "${RUN_ENV[@]}" timeout "$tmo" python3 "$SUT" "$@" ); rc=$?   # a hang (a FIFO opened blocking) is rc 124, a red row
   printf '%s\n' "$rc" >> "$RCLOG"
   return "$rc"
@@ -330,6 +344,85 @@ printf '{"kind": "commit", "sha": "torn' >> "$OUT/units-commits-1-of-1.jsonl"
 run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R" >/dev/null 2>&1
 jq -c . "$OUT/units-commits-1-of-1.jsonl" >/dev/null 2>&1 && [[ "$(jq -s length "$OUT/units-commits-1-of-1.jsonl")" -eq 7 ]] \
   && pass "a torn last line (a write cut off by a kill) is dropped and the file stays valid JSON lines" || fail "a torn last line corrupted the units file"
+
+echo "== collect: an empty head_sha listing is corroborated through check-runs (#10862)"
+R4=jikig-ai/fourth
+REPO_NAME="$R4"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
+EMPTYRUNS='{"total_count":0,"workflow_runs":[]}'
+# C[6] idx0 (newest): the retry heals the listing -> head-sha-retry, no check-runs read
+printf '%s' "$EMPTYRUNS" | fx_once "$(runs_path "${C[6]}")"
+runs_body "${C[6]}" "8060:push:success" | fx "$(runs_path "${C[6]}")"
+# C[5] idx1: non-empty on the first read -> head-sha, no retry, no check-runs read
+runs_body "${C[5]}" "8050:push:success" | fx "$(runs_path "${C[5]}")"
+# C[4] idx2: index-dropped twice, but check-runs names a ci.yml push run on this sha -> resolved, check-runs
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[4]}")"
+checkruns_body "https://github.com/$R4/actions/runs/9001/job/1" "https://github.com/$R4/actions/runs/9008/job/1" | fx "$(checkruns_path "${C[4]}")"
+rundetail_body 9001 push success "${C[4]}" .github/workflows/ci.yml | fx "$(rundetail_path 9001)"
+# 9008 qualifies too and is NEWER (created_at 01-09 vs 9001's 01-05): the corroborated pick must take the newest, matching the listing path's newest-first contract
+printf '{"id":9008,"event":"push","conclusion":"success","run_attempt":1,"created_at":"2031-01-09T00:00:00Z","head_sha":"%s","path":".github/workflows/ci.yml"}' "${C[4]}" | fx "$(rundetail_path 9008)"
+# C[3] idx3: dropped listing AND corroborated-empty check-runs -> a real no-run
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[3]}")"
+checkruns_body | fx "$(checkruns_path "${C[3]}")"
+# C[2] idx4: check-runs names only an other-workflow run on this sha and a ci.yml run on a DIFFERENT sha -> still no-run
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[2]}")"
+checkruns_body "https://github.com/$R4/actions/runs/9002/job/1" "https://github.com/$R4/actions/runs/9003/job/1" "https://github.com/$R4/actions/runs/9004/job/1" "https://github.com/foreign-repo/other/actions/runs/9005/job/1" | fx "$(checkruns_path "${C[2]}")"
+rundetail_body 9002 push success "${C[2]}" .github/workflows/other.yml | fx "$(rundetail_path 9002)"
+rundetail_body 9003 push success "0000000000000000000000000000000000000000" .github/workflows/ci.yml | fx "$(rundetail_path 9003)"
+rundetail_body 9004 pull_request success "${C[2]}" .github/workflows/ci.yml | fx "$(rundetail_path 9004)"
+rundetail_body 9005 push success "${C[2]}" .github/workflows/ci.yml | fx "$(rundetail_path 9005)"
+# C[1] idx5: the corroborating read itself fails -> runs-read, never no-run
+printf '%s' "$EMPTYRUNS" | fx "$(runs_path "${C[1]}")"
+fx_err "$(checkruns_path "${C[1]}")"
+# C[0] idx6: non-empty -> head-sha
+runs_body "${C[0]}" "8000:push:success" | fx "$(runs_path "${C[0]}")"
+run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R4" >/dev/null 2>&1; RC4=$?
+CU="$OUT/units-commits-1-of-1.jsonl"   # REPO_NAME stays "$R4" until the reqs() calls below are done
+[[ "$RC4" -eq 0 && -s "$CU" ]] && pass "the corroboration collect wrote seven units" || fail "corroboration collect (rc=$RC4)"
+[[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean && "$(unit_field "$CU" "${C[4]}" .runs_via)" = check-runs && "$(unit_field "$CU" "${C[4]}" .run.id)" = 9008 ]] \
+  && pass "an index-dropped unit resolves through the newest run check-runs proves (runs_via=check-runs)" || fail "index-dropped unit (got $(unit_field "$CU" "${C[4]}" '.cls+" "+(.runs_via//"-")'))"
+[[ "$(reqs "$(runs_path "${C[4]}")")" -eq 2 && "$(reqs "$(checkruns_path "${C[4]}")")" -eq 1 && "$(reqs "$(rundetail_path 9001)")" -eq 1 ]] \
+  && pass "the empty listing is retried once, then corroborated once" || fail "read counts (runs=$(reqs "$(runs_path "${C[4]}")") cr=$(reqs "$(checkruns_path "${C[4]}")") rd=$(reqs "$(rundetail_path 9001)"))"
+[[ "$(unit_field "$CU" "${C[3]}" .reason)" = no-run && "$(unit_field "$CU" "${C[3]}" .runs_via)" = corroborated-no-run ]] \
+  && pass "an empty listing AND corroborated-empty check-runs is a real no-run" || fail "corroborated-empty (got $(unit_field "$CU" "${C[3]}" '.reason+" "+(.runs_via//"-")'))"
+[[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run && "$(unit_field "$CU" "${C[2]}" .runs_via)" = corroborated-no-run ]] \
+  && pass "runs on the wrong sha or the wrong workflow do not corroborate" || fail "wrong-run corroboration (got $(unit_field "$CU" "${C[2]}" '.reason+" "+(.runs_via//"-")'))"
+[[ "$(unit_field "$CU" "${C[1]}" .reason)" == runs-read:* && "$(unit_field "$CU" "${C[1]}" .runs_via)" = null ]] \
+  && pass "a failed corroborating read is runs-read not-evaluable, never no-run" || fail "failed corroboration (got $(unit_field "$CU" "${C[1]}" '.reason+" "+(.runs_via//"-")'))"
+[[ "$(unit_field "$CU" "${C[6]}" .runs_via)" = head-sha-retry && "$(reqs "$(checkruns_path "${C[6]}")")" -eq 0 ]] \
+  && pass "a listing that heals on the retry skips check-runs entirely" || fail "retry-heals (got via=$(unit_field "$CU" "${C[6]}" .runs_via) reqs=$(reqs "$(checkruns_path "${C[6]}")"))"
+[[ "$(unit_field "$CU" "${C[5]}" .runs_via)" = head-sha && "$(reqs "$(runs_path "${C[5]}")")" -eq 1 && "$(reqs "$(checkruns_path "${C[5]}")")" -eq 0 ]] \
+  && pass "a non-empty first read costs no retry and no check-runs call" || fail "common path (got via=$(unit_field "$CU" "${C[5]}" .runs_via))"
+[[ "$(reqs "$(rundetail_path 9004)")" -eq 1 && "$(reqs "$(rundetail_path 9005)")" -eq 0 ]] \
+  && pass "a pull_event run is fetched then event-filtered; a foreign-repo link never reaches the read" || fail "detail reads (9004=$(reqs "$(rundetail_path 9004)") 9005=$(reqs "$(rundetail_path 9005)"))"
+! grep -q STUB-MISS "$GHLOG" && pass "corroboration made no request the stub does not know" || fail "corroboration unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
+REPO_NAME=""
+
+corr_run() {  # rerun the corroboration collect into a fresh dir with the SUT under test; sets CU
+  REPO_NAME="$R4"; rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
+  run_sut collect --out "$OUT" --commits 7 --chunk 1/1 --repo "$R4" >/dev/null 2>&1; CU="$OUT/units-commits-1-of-1.jsonl"; REPO_NAME=""
+}   # note: C[6]'s ONCE_ fixture is spent by the first collect above; reruns take the head-sha path
+row_corr_dropped() { corr_run; [[ "$(unit_field "$CU" "${C[4]}" .cls)" = clean ]]; }
+row_corr_sha() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_path() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_event() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_foreign() { corr_run; [[ "$(unit_field "$CU" "${C[2]}" .reason)" = no-run ]]; }
+row_corr_order() { corr_run; [[ "$(unit_field "$CU" "${C[4]}" .run.id)" = 9008 ]]; }
+row_corr_uncount() {  # a check-runs page carrying no total_count is uncounted -> runs-read, never resolved
+  REPO_NAME="$R4"
+  printf '{"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
+  rundetail_body 9007 push success "${C[3]}" .github/workflows/ci.yml | fx "$(rundetail_path 9007)"
+  corr_run
+  REPO_NAME="$R4"; checkruns_body | fx "$(checkruns_path "${C[3]}")"; REPO_NAME=""
+  [[ "$(unit_field "$CU" "${C[3]}" .reason)" == "runs-read: uncounted"* ]]
+}
+row_corr_trunc() {  # a check-runs page claiming more than it carries is runs-read, never resolved
+  REPO_NAME="$R4"
+  printf '{"total_count":5,"check_runs":[{"details_url":"https://github.com/%s/actions/runs/9007/job/1"}]}' "$R4" | fx "$(checkruns_path "${C[3]}")"
+  rundetail_body 9007 push success "${C[3]}" .github/workflows/ci.yml | fx "$(rundetail_path 9007)"
+  corr_run
+  REPO_NAME="$R4"; checkruns_body | fx "$(checkruns_path "${C[3]}")"; REPO_NAME=""
+  [[ "$(unit_field "$CU" "${C[3]}" .reason)" == runs-read:* ]]
+}
 
 echo "== collect: resumability and chunking"
 before="$(wc -l < "$U")"
@@ -765,7 +858,7 @@ row_sut_timeout() {
   local log="$SANDBOX/tmo-stub.log" rc
   : > "$log"
   RUN_ENV=(PATH="$BIN/tmostub:$BIN:$PATH" REPLAY_TMO_STUBLOG="$log")
-  SUT="$SANDBOX/hang.py" REPLAY_SUT_TIMEOUT=2 run_sut >/dev/null 2>&1; rc=$?   # a real hang, killed at the override's seconds
+  REPLAY_SUT_TIMEOUT=2 SUT="$SANDBOX/hang.py" run_sut >/dev/null 2>&1; rc=$?   # a real hang, killed at the override's seconds
   [[ "$rc" -eq 124 ]] || { RUN_ENV=(); echo "override hang rc=$rc" >&2; return 1; }
   run_sut cp-upper 0 10 >/dev/null 2>&1 || true                              # unset: the default reaches argv
   REPLAY_SUT_TIMEOUT=0 run_sut cp-upper 0 10 >/dev/null 2>&1 || true         # 0 is invalid, never "no bound"
@@ -775,7 +868,7 @@ row_sut_timeout() {
   [[ "$(grep -cE '^2 ' "$log")" -eq 2 && "$(grep -cE '^30 ' "$log")" -eq 3 && "$(grep -cE '^[0-9]+ ' "$log")" -eq 5 ]] || { echo "stub saw: $(cat "$log")" >&2; return 1; }
 }
 row_sut_timeout && pass "the run_sut wall bound: the override kills a hang at its own seconds (rc 124); unset, zero and non-numeric all reach argv seconds=30 (the fallback, never disabled)" || fail "run_sut timeout knob"
-[[ "$(grep -oE 'REPLAY_SUT_TIMEOUT=[0-9A-Za-z]+' "${BASH_SOURCE[0]}" | sort -u | tr '\n' ' ')" = "REPLAY_SUT_TIMEOUT=0 REPLAY_SUT_TIMEOUT=10 REPLAY_SUT_TIMEOUT=2 REPLAY_SUT_TIMEOUT=garbage " ]] && pass "every knob assignment in this file is a declared site (run_sut's default read, row_sym's 10 s override, the row_sut_timeout probes): a new setter elsewhere would widen or disable a bound silently" || fail "an undeclared REPLAY_SUT_TIMEOUT setter exists: $(grep -nE 'REPLAY_SUT_TIMEOUT=' "${BASH_SOURCE[0]}" | tr '\n' ' ')"
+[[ "$(grep -E '^[[:space:]]*REPLAY_SUT_TIMEOUT=' "${BASH_SOURCE[0]}" | grep -oE 'REPLAY_SUT_TIMEOUT=[^ ]+' | sort -u | tr '\n' ' ')" = "REPLAY_SUT_TIMEOUT=0 REPLAY_SUT_TIMEOUT=10 REPLAY_SUT_TIMEOUT=2 REPLAY_SUT_TIMEOUT=garbage " ]] && pass "every knob assignment in this file is a declared site (run_sut's default read, row_sym's 10 s override, the row_sut_timeout probes): a new setter elsewhere would widen or disable a bound silently" || fail "an undeclared REPLAY_SUT_TIMEOUT setter exists: $(grep -nE 'REPLAY_SUT_TIMEOUT=' "${BASH_SOURCE[0]}" | tr '\n' ' ')"
 
 # ---------------------------------------------------------------------------------------------------------------------
 # PR1 of the S4 index completion (#9729, #10448): the audit's match is a path-component-boundary scan with per-file
@@ -3529,7 +3622,15 @@ row_accept_dir() { audit "$SANDBOX/audit-dir.rows" --accept "$SANDBOX/accept-dir
 row_accept_ok() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-ok.tsv"; [[ "$RC" -eq 0 ]] && grep -q 'accepted=2' <<<"$AOUT"; }
 row_accept_badreason() { audit "$SANDBOX/audit-bad.rows" --accept "$SANDBOX/accept-badreason.tsv"; [[ "$RC" -eq 2 ]]; }
 mutate always-on-skippable 'elif f[2] == "0" and f[3] != "always_on":' 'elif f[2] == "0":' row_always_on
-mutate read-error-as-no-run 'runs, u["reason"] = None, "runs-read: %s" % e' 'runs, u["reason"] = [], ""' row_read_error
+mutate read-error-as-no-run 'runs, u["reason"] = None, "runs-read: %s" % e' 'runs, u["reason"] = [], "", ""' row_read_error
+mutate corroboration-dropped 'runs = corroborating_runs(repo, sha)' 'runs = []' row_corr_dropped
+mutate corroboration-sha-filter-dropped 'r.get("head_sha") == sha and r.get("event") in FULL_EVENTS' 'r.get("event") in FULL_EVENTS' row_corr_sha
+mutate corroboration-path-filter-dropped 'and r.get("path") == CI_WORKFLOW_PATH' '' row_corr_path
+mutate corroboration-event-filter-dropped 'r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH' 'r.get("path") == CI_WORKFLOW_PATH' row_corr_event
+mutate corroboration-namespace-ignored 'r"^https://github\.com/%s/actions/runs/(\d+)" % re.escape(repo)' 'r"^https://github\.com/[^/]+/[^/]+/actions/runs/(\d+)"' row_corr_foreign
+mutate corroboration-truncation-ignored 'if total != seen:' 'if False:' row_corr_trunc
+mutate corroboration-order-dropped 'runs.sort(key=lambda r: r.get("created_at") or "", reverse=True)' '' row_corr_order
+mutate corroboration-uncount-ignored 'raise ReadError("uncounted check-runs list for %s" % sha[:10])' 'pass' row_corr_uncount
 mutate bound-on-point-numerator 'cp_upper(attributable + unverified + ne, n)' 'cp_upper(attributable + unverified, n)' row_worst_bound
 mutate flake-needs-two-file-sets 'len({x["files_hash"] for x in us}) >= 2' 'len({x["files_hash"] for x in us}) >= 1' row_flake_same_files
 mutate flake-distinct-prs-dropped 'and len({x.get("pr") or x["sha"] for x in us}) >= 3}' 'and True}' row_flake_same_pr
@@ -4343,7 +4444,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1112   # 1110 + 2 net unconditional assertions from the run_sut timeout-knob rows (measured 2026-11-07 baseline 1110 passed, 476 gated sites); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1129   # 1127 + 2 net unconditional assertions from the run_sut timeout-knob rows (main measured 1127 after #10862 corroboration + review-round pins, 484 gated sites); kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
