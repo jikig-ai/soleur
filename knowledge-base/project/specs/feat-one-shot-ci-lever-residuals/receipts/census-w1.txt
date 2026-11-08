@@ -1,0 +1,118 @@
+REPO=jikig-ai/soleur
+WINDOW_START=2026-11-06T20:00:00Z
+WINDOW_END=2026-11-07T08:00:00Z
+FETCHED_AT=2026-11-07T22:31:56Z
+WORKFLOW_FILTER=ci.yml
+TOTAL_JOB_MINUTES=19681.9
+TOTAL_JOB_SECONDS=1180916
+RUNS_COMPLETED=89
+RUNS_NOT_COMPLETED=0
+RUNS_RERUN=9
+RUNS_NOJOBS=5
+JOBS_COUNTED=2262
+JOBS_SKIPPED=426
+JOBS_RUNNERLESS=157
+JOBS_UNTIMED=0
+BY_WORKFLOW	ci.yml	merge_group	29	1007	11097.2
+BY_WORKFLOW	ci.yml	pull_request	47	1099	7749.8
+BY_WORKFLOW	ci.yml	push	13	156	835.0
+STEM	ci.yml	merge_group	adr-ordinals	21	0	0	21	6.0	0.21
+STEM	ci.yml	merge_group	affected-index-ratchet	29	0	0	29	110.8	3.82
+STEM	ci.yml	merge_group	cla-check	0	0	7	0	0.0	0.00
+STEM	ci.yml	merge_group	cla-evidence	0	0	7	0	0.0	0.00
+STEM	ci.yml	merge_group	credential-path-guard	21	0	0	21	6.9	0.24
+STEM	ci.yml	merge_group	critical-css-gate	29	0	0	29	30.2	1.04
+STEM	ci.yml	merge_group	detect-changes	29	0	0	29	9.5	0.33
+STEM	ci.yml	merge_group	draft-light	0	16	13	0	0.0	0.00
+STEM	ci.yml	merge_group	e2e	29	0	0	29	115.4	3.98
+STEM	ci.yml	merge_group	encryption-posture	29	0	0	29	8.0	0.28
+STEM	ci.yml	merge_group	grok-fidelity	21	0	0	21	8.7	0.30
+STEM	ci.yml	merge_group	guards-advisory	8	0	0	8	5.5	0.19
+STEM	ci.yml	merge_group	guards-ruleset	8	0	0	8	7.1	0.24
+STEM	ci.yml	merge_group	harness-discovery	21	0	0	21	13.3	0.46
+STEM	ci.yml	merge_group	lint-bot-statuses	29	0	0	29	67.6	2.33
+STEM	ci.yml	merge_group	lint-webplat	29	0	0	29	55.3	1.91
+STEM	ci.yml	merge_group	lockfile-sync	21	0	0	21	12.8	0.44
+STEM	ci.yml	merge_group	marketplace-manifest-guard	21	0	0	21	6.1	0.21
+STEM	ci.yml	merge_group	oracle-index-check	29	0	0	29	1.4	0.05
+STEM	ci.yml	merge_group	oracle-selection	19	7	3	19	6.8	0.23
+STEM	ci.yml	merge_group	plugin-root-propagation-gate	0	9	12	0	0.0	0.00
+STEM	ci.yml	merge_group	pr-selection	0	16	13	0	0.0	0.00
+STEM	ci.yml	merge_group	push-dedupe	0	16	13	0	0.0	0.00
+STEM	ci.yml	merge_group	rule-body-lint	21	0	0	21	7.5	0.26
+STEM	ci.yml	merge_group	sandbox-canary-capture-gate	0	9	12	0	0.0	0.00
+STEM	ci.yml	merge_group	service-role-allowlist-gate	21	0	0	21	5.4	0.19
+STEM	ci.yml	merge_group	shard-totality-mutations	29	0	0	87	363.1	12.52
+STEM	ci.yml	merge_group	tc-document-sha-guard	21	0	0	21	6.8	0.23
+STEM	ci.yml	merge_group	test	29	0	0	29	1.5	0.05
+STEM	ci.yml	merge_group	test-bun	29	0	0	29	116.6	4.02
+STEM	ci.yml	merge_group	test-scripts	29	0	0	232	7906.9	272.65
+STEM	ci.yml	merge_group	test-scripts-heavy	29	0	0	87	864.0	29.79
+STEM	ci.yml	merge_group	test-webplat	29	0	0	58	1272.7	43.89
+STEM	ci.yml	merge_group	web-platform-build	29	0	0	29	81.3	2.80
+STEM	ci.yml	pull_request	adr-ordinals	18	0	3	18	4.7	0.10
+STEM	ci.yml	pull_request	affected-index-ratchet	38	0	5	38	125.2	2.66
+STEM	ci.yml	pull_request	credential-path-guard	18	0	3	18	5.9	0.13
+STEM	ci.yml	pull_request	critical-css-gate	20	10	13	20	20.5	0.44
+STEM	ci.yml	pull_request	detect-changes	40	0	3	40	13.4	0.29
+STEM	ci.yml	pull_request	draft-light	39	0	4	39	2.8	0.06
+STEM	ci.yml	pull_request	e2e	37	0	6	37	145.6	3.10
+STEM	ci.yml	pull_request	encryption-posture	37	0	6	37	10.1	0.22
+STEM	ci.yml	pull_request	grok-fidelity	18	0	3	18	7.1	0.15
+STEM	ci.yml	pull_request	guards-advisory	20	0	2	20	14.7	0.31
+STEM	ci.yml	pull_request	guards-ruleset	18	0	4	18	15.2	0.32
+STEM	ci.yml	pull_request	harness-discovery	18	0	3	18	11.3	0.24
+STEM	ci.yml	pull_request	lint-bot-statuses	38	0	5	38	72.4	1.54
+STEM	ci.yml	pull_request	lint-webplat	36	0	7	36	61.6	1.31
+STEM	ci.yml	pull_request	lockfile-sync	18	0	3	18	11.0	0.23
+STEM	ci.yml	pull_request	marketplace-manifest-guard	18	0	3	18	4.9	0.10
+STEM	ci.yml	pull_request	oracle-index-check	35	0	8	35	5.9	0.13
+STEM	ci.yml	pull_request	oracle-selection	31	4	8	31	11.6	0.25
+STEM	ci.yml	pull_request	plugin-root-propagation-gate	18	0	3	18	6.3	0.13
+STEM	ci.yml	pull_request	pr-selection	0	19	24	0	0.0	0.00
+STEM	ci.yml	pull_request	push-dedupe	0	19	24	0	0.0	0.00
+STEM	ci.yml	pull_request	rule-body-lint	17	0	4	17	6.1	0.13
+STEM	ci.yml	pull_request	sandbox-canary-capture-gate	17	0	4	17	6.3	0.13
+STEM	ci.yml	pull_request	service-role-allowlist-gate	18	0	3	18	4.8	0.10
+STEM	ci.yml	pull_request	shard-totality-mutations	25	8	10	75	269.3	5.73
+STEM	ci.yml	pull_request	tc-document-sha-guard	19	0	2	19	6.3	0.13
+STEM	ci.yml	pull_request	test	43	0	0	43	2.2	0.05
+STEM	ci.yml	pull_request	test-bun	35	0	8	35	137.5	2.92
+STEM	ci.yml	pull_request	test-scripts	25	8	10	200	5236.9	111.42
+STEM	ci.yml	pull_request	test-scripts-heavy	25	8	10	75	454.5	9.67
+STEM	ci.yml	pull_request	test-webplat	25	8	10	50	978.4	20.82
+STEM	ci.yml	pull_request	web-platform-build	35	0	8	35	97.3	2.07
+STEM	ci.yml	push	adr-ordinals	4	0	0	4	1.1	0.08
+STEM	ci.yml	push	affected-index-ratchet	0	10	1	0	0.0	0.00
+STEM	ci.yml	push	cla-check	0	0	1	0	0.0	0.00
+STEM	ci.yml	push	cla-evidence	0	0	1	0	0.0	0.00
+STEM	ci.yml	push	credential-path-guard	4	0	0	4	1.3	0.10
+STEM	ci.yml	push	critical-css-gate	11	0	0	11	11.1	0.86
+STEM	ci.yml	push	detect-changes	11	0	0	11	3.6	0.27
+STEM	ci.yml	push	draft-light	0	10	1	0	0.0	0.00
+STEM	ci.yml	push	e2e	2	9	0	2	8.1	0.62
+STEM	ci.yml	push	encryption-posture	11	0	0	11	3.2	0.24
+STEM	ci.yml	push	grok-fidelity	4	0	0	4	1.6	0.12
+STEM	ci.yml	push	guards-advisory	7	0	0	7	4.5	0.35
+STEM	ci.yml	push	guards-ruleset	7	0	0	7	5.8	0.45
+STEM	ci.yml	push	harness-discovery	4	0	0	4	2.6	0.20
+STEM	ci.yml	push	lint-bot-statuses	11	0	0	11	23.9	1.83
+STEM	ci.yml	push	lint-webplat	11	0	0	11	20.4	1.57
+STEM	ci.yml	push	lockfile-sync	4	0	0	4	2.2	0.17
+STEM	ci.yml	push	marketplace-manifest-guard	4	0	0	4	1.2	0.09
+STEM	ci.yml	push	oracle-index-check	0	10	1	0	0.0	0.00
+STEM	ci.yml	push	oracle-selection	0	10	1	0	0.0	0.00
+STEM	ci.yml	push	plugin-root-propagation-gate	0	4	0	0	0.0	0.00
+STEM	ci.yml	push	pr-selection	0	10	1	0	0.0	0.00
+STEM	ci.yml	push	push-dedupe	11	0	0	11	0.9	0.07
+STEM	ci.yml	push	rule-body-lint	4	0	0	4	1.4	0.11
+STEM	ci.yml	push	sandbox-canary-capture-gate	0	4	0	0	0.0	0.00
+STEM	ci.yml	push	service-role-allowlist-gate	4	0	0	4	1.1	0.09
+STEM	ci.yml	push	shard-totality-mutations	2	9	0	6	27.1	2.08
+STEM	ci.yml	push	tc-document-sha-guard	4	0	0	4	1.4	0.11
+STEM	ci.yml	push	test	2	9	0	2	0.1	0.01
+STEM	ci.yml	push	test-bun	2	9	0	2	7.9	0.61
+STEM	ci.yml	push	test-scripts	2	9	0	16	555.9	42.76
+STEM	ci.yml	push	test-scripts-heavy	2	9	0	6	61.9	4.76
+STEM	ci.yml	push	test-webplat	2	9	0	4	81.0	6.23
+STEM	ci.yml	push	web-platform-build	2	9	0	2	5.7	0.44
