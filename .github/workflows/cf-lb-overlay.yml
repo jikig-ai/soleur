@@ -946,17 +946,12 @@ jobs:
           # injected; the wrapper accepts ONLY that exact path and fails closed
           # (exit 3, bad_doppler_bin) on anything else -- it never falls back to PATH.
           #
-          # THREE gate inputs are not in Doppler prd and are injected by the inner `env`
+          # TWO gate inputs are not in Doppler prd and are injected by the inner `env`
           # (after `doppler run`, so they override any ambient value):
           #   SOLEUR_WEB2_SERVING_WEIGHT  the weight this dispatch will plan (1 in serve).
           #   SOLEUR_SERVING_ROTATION     the target rotation {web-1,web-2}.
-          #   SOLEUR_PROXY_BIND           a SYNTHETIC non-empty value for the gate's A.1
-          #     shape check ONLY. The real value is per-host (the host's own 10.0.1.x,
-          #     resolved on-host by ci-deploy.sh resolve_proxy_bind) and must never become
-          #     a fleet-wide Doppler value; this one reaches only the `env -i` gate child,
-          #     is never exported to GITHUB_ENV and never written to Doppler. It therefore
-          #     proves NOTHING about the real relay bind: A.1 is vacuous here.
-          #     requires_runtime_bind_probe=true is exactly the gate saying so.
+          # The gate no longer reads or allowlists any relay-bind input (Condition A.1 was
+          # deleted); the real relay evidence is the `relay bind probe (serve only)` step.
           #
           # BARE EXIT 0 IS NOT THE PROOF. The gate has TWO exit-0 branches
           # (lb-weight-gate.sh): the web2_standby branch prints "SHAPE-ONLY — NOT
@@ -971,7 +966,6 @@ jobs:
             env DOPPLER_TOKEN="$DOPPLER_TOKEN_LUKS_MARKER" DOPPLER_BIN="${RUNNER_TEMP}/doppler-cli/doppler" \
               SOLEUR_WEB2_SERVING_WEIGHT="$WEB2_LB_WEIGHT" \
               SOLEUR_SERVING_ROTATION="web-1,web-2" \
-              SOLEUR_PROXY_BIND="synthetic-gate-shape-input-not-a-bind-address" \
             bash "${GITHUB_WORKSPACE}/apps/web-platform/infra/lb-weight-gate-with-marker.sh")" || {
             echo "::error::§(c) gate chain refused the flip — the preconditions are not met (or could not be proven). NOTHING planned, NOTHING applied."
             exit 1
@@ -1053,8 +1047,8 @@ jobs:
         run: |
           set -euo pipefail
           case "$-" in *x*) echo "::error::xtrace refused on a credential-bearing step (#7797)"; exit 78;; esac
-          # WHY THIS STEP. The gate chain's bind check is fed a synthetic value (it proves nothing about the real
-          # relay) and the pool-health read proves origin HEALTH, not that the relay is reachable on web-2's private
+          # WHY THIS STEP. The gate chain no longer checks the relay bind at all (Condition A.1 was deleted) and the
+          # pool-health read proves origin HEALTH, not that the relay is reachable on web-2's private
           # address. The runner cannot reach web-2 and does not need to: it reads the fleet's own reports from Better
           # Stack. Three pieces of evidence, ALL required (contract and judges: scripts/lib/web2-relay-rows.sh):
           #   (1) web-2's app reports its own listener (WARN, every 60 s): proxy_state=listening addr=${WRR_BIND_ADDR}

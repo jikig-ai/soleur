@@ -2,9 +2,10 @@
 // process (#12167, ADR-068 section (c)(3)).
 //
 // The cf-lb-overlay serve arm flips web-2's load-balancer weight 0 -> 1, but its
-// gate chain only shape-checks SOLEUR_PROXY_BIND (the real value is per-host and
-// resolved on-host by ci-deploy.sh), and the bind log line in session-proxy.ts is
-// info-level and does not reach Better Stack. So bind was unprovable off-host.
+// gate chain does not check the bind at all (SOLEUR_PROXY_BIND is not a gate input:
+// it is a literal -e SOLEUR_PROXY_BIND=0.0.0.0 in ci-deploy.sh, not a Doppler value),
+// and the bind log line in session-proxy.ts is info-level and does not reach Better
+// Stack. So bind was unprovable off-host.
 // This module records what `createProxyServer` decided (the server, or WHY there
 // is none) and a reporter emits one fixed-grammar warn-level line per minute that
 // a separate step reads from Better Stack by host_name. No new HTTP endpoint.
