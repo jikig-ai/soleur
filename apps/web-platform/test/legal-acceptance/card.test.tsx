@@ -16,7 +16,7 @@ import type { LegalChoiceWire, LegalDecideResult, LegalReauthSendResult, LegalRe
 const k = vi.hoisted(() => ({ declared: {} as Record<string, "terms" | "acknowledgement"> }));
 vi.mock("@/lib/legal-acceptance-copy", async (orig) => {
   const real = await orig<typeof import("@/lib/legal-acceptance-copy")>();
-  return { ...real, legalKindCopy: (key: string) => real.legalKindCopy(key, k.declared) };
+  return { ...real, legalKindCopy: (key: string) => real.legalKindCopy(key, k.declared), legalTextKind: (key: string) => real.legalTextKind(key, k.declared) };
 });
 /** The terms wording: today's strings, moved into the kind map. */
 const KC = LEGAL_KIND_COPY.terms;
@@ -123,6 +123,13 @@ describe("the six card states (AC14, wireframe 16)", () => {
     expect(screen.getByRole("heading", { name: KC.pendingTitle("Customer terms") })).toBeInTheDocument();
     expect(screen.getByText(KC.pendingNothing)).toBeInTheDocument();
     expect(screen.getByText(LEGAL_COPY.pending.openUntil("2026-11-14"))).toBeInTheDocument();
+  });
+
+  it("exposes the declared kind and the key on the article for agent-browser parity (the terms kind here; card-ack.test.tsx pins the acknowledgement kind)", () => {
+    renderCard();
+    const card = screen.getByTestId("legal-card");
+    expect(card).toHaveAttribute("data-kind", "terms");
+    expect(card).toHaveAttribute("data-key", "customer-terms");
   });
 
   it("accepted: says how the answer was given, with the UTC time of the email code", () => {

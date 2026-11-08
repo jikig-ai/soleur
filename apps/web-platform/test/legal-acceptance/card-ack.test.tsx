@@ -1,7 +1,7 @@
 /**
  * #12344 / #12197: the card for the REAL committed key `founder-acceptance-record` (a text of kind acknowledgement).
  *   - nothing a founder can see presumes terms: the DOM (document.body, so the portalled dialog is included) has zero matches for
- *     /terms|accepted|accept the|updated/ in every card state and both dialog steps, with no negation stripping and no allowlist.
+ *     /terms|accept(ed|s|ance)?|updated/ in every card state and both dialog steps, with no negation stripping and no allowlist.
  *     The committed text itself is excluded from the scan: it is the thing being acknowledged, not the card's wording;
  *   - the retention notice, the finality clause and the exact-text region are all shown before the Yes button (CPO C2);
  *   - a key with no declared kind renders nothing.

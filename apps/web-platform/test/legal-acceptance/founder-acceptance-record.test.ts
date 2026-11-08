@@ -71,6 +71,23 @@ const UNFINISHED = /\[[^\]]*\]|\b(?:TBD|TBC|TODO)\b|\bX{2,}\b|_{3,}|to be (?:con
 /** Every unfinished marker in a text (empty when finished). */
 const unfinishedIn = (text: string): string[] => [...text.matchAll(UNFINISHED)].map((m) => m[0]);
 
+/**
+ * The per-text checks EVERY served text must pass, in one function so a synthetic registry can prove they bite (an emptied or
+ * narrowed loop, or a deleted per-entry assertion, would otherwise be a vacuous pass over the one real text).
+ */
+function scanServed(entries: Iterable<[string, { raw: string; body: string }]>): { scanned: number; forbidden: string[]; unfinished: string[] } {
+  let scanned = 0;
+  const forbidden: string[] = [];
+  const unfinished: string[] = [];
+  for (const [key, e] of entries) {
+    scanned++;
+    if (FORBIDDEN_CLAIMS.test(e.raw)) forbidden.push(key);
+    const open = unfinishedIn(e.body);
+    if (open.length > 0) unfinished.push(`${key}: ${open.join(", ")}`);
+  }
+  return { scanned, forbidden, unfinished };
+}
+
 /** Any retention-shaped duration: digits or a number word, then a unit; plus a bare "decade". Generic on purpose (CLO B, CTO 4). */
 const DURATION =
   /\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty)[\s-]*(?:years?|months?|weeks?|days?|decades?)\b|\bdecades?\b/gi;
@@ -162,12 +179,22 @@ describe("founder-acceptance-record: what the text says", () => {
   it("never claims more than happened (the shared forbidden words, applied to EVERY served file, front matter included)", () => {
     expect.hasAssertions();
     expect(loadLegalTexts().size).toBeGreaterThan(0);
-    let scanned = 0;
-    for (const [key, entry] of loadLegalTexts()) {
-      scanned++;
-      expect(entry.raw, `served text ${key}`).not.toMatch(FORBIDDEN_CLAIMS);
-    }
-    expect(scanned, "the loop must scan every served text (an emptied loop is a vacuous pass)").toBe(loadLegalTexts().size);
+    const r = scanServed(loadLegalTexts());
+    expect(r.forbidden, "served texts that use a forbidden claim").toEqual([]);
+    expect(r.scanned, "the loop must scan every served text (an emptied loop is a vacuous pass)").toBe(loadLegalTexts().size);
+  });
+
+  it("the per-text scan bites: a SECOND served text with a forbidden claim or an unfinished marker is reported, a clean one is not", () => {
+    expect.hasAssertions();
+    const synthetic = new Map([
+      ["clean-text", { raw: "---\nversion: 2026-11-07\n---\nKept for 5 years.", body: "Kept for 5 years." }],
+      ["claims-text", { raw: "This record is legally binding.", body: "This record is fine." }],
+      ["open-text", { raw: "Kept for a while.", body: "Kept for TBD years." }],
+    ]);
+    const r = scanServed(synthetic);
+    expect(r.scanned).toBe(3);
+    expect(r.forbidden).toEqual(["claims-text"]);
+    expect(r.unfinished).toEqual(["open-text: TBD"]);
   });
 
   it("the forbidden-word check bites: ONE probe per alternative, so deleting any alternative reds (planted strings are caught, a plain sentence is not)", () => {
@@ -193,6 +220,7 @@ describe("founder-acceptance-record: what the text says", () => {
       "attested": "an attested copy",
       "attests": "Jikigai attests the answer",
       "attestation": "an attestation of the answer",
+      "attest (bare)": "We attest it",
     };
     for (const [alt, s] of Object.entries(probes)) expect(FORBIDDEN_CLAIMS.test(s), `${alt}: ${s}`).toBe(true);
     expect(FORBIDDEN_CLAIMS.test("Confirmed with an email code")).toBe(false);
@@ -258,12 +286,9 @@ describe("founder-acceptance-record: no unfinished marker (always on, every run)
   it("EVERY served text, the card notice and the request-changes notice carry no unfinished marker", () => {
     expect.hasAssertions();
     expect(loadLegalTexts().size).toBeGreaterThan(0);
-    let scanned = 0;
-    for (const [key, entry] of loadLegalTexts()) {
-      scanned++;
-      expect(unfinishedIn(entry.body), `text body of ${key}`).toEqual([]);
-    }
-    expect(scanned, "the loop must scan every served text (an emptied loop is a vacuous pass)").toBe(loadLegalTexts().size);
+    const r = scanServed(loadLegalTexts());
+    expect(r.unfinished, "served texts with an unfinished marker").toEqual([]);
+    expect(r.scanned, "the loop must scan every served text (an emptied loop is a vacuous pass)").toBe(loadLegalTexts().size);
     expect(unfinishedIn(LEGAL_COPY.cardNotice), "card notice").toEqual([]);
     expect(unfinishedIn(LEGAL_COPY.requestChangesNotice), "request-changes notice").toEqual([]);
   });

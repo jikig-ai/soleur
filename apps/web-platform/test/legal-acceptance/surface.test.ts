@@ -73,8 +73,9 @@ describe("isLegalSurfaceEnabled", () => {
     expect(await isLegalSurfaceEnabled(OTHER)).toBe(false);
   });
 
-  it("the comparison ignores the case of the user id", async () => {
+  it("the comparison ignores the case of the user id, and the flag is read with the CALLER's own spelling of it", async () => {
     expect(await isLegalSurfaceEnabled(FOUNDER.toUpperCase())).toBe(true);
+    expect(h.calls).toEqual([{ userId: FOUNDER.toUpperCase(), workspaceId: null }]);
   });
 });
 
@@ -116,6 +117,16 @@ describe("the surface order and its one report (CTO ruling T4, review round 1)",
     h.flag.value = false;
     expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
     expect(h.reports).toEqual([]);
+  });
+
+  it("flag OFF first and then ON, with the id unset: the dormant first call does not use up the one report", async () => {
+    vi.stubEnv("LEGAL_ACCEPTANCE_FOUNDER_ID", "");
+    h.flag.value = false;
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+    expect(h.reports).toEqual([]);
+    h.flag.value = true;
+    expect(await isLegalSurfaceEnabled(FOUNDER)).toBe(false);
+    expect(h.reports).toEqual([CONFIG_REPORT]);
   });
 
   it("the report carries neither the user id nor the variable's value, and re-arms after the reset seam", async () => {
