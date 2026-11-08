@@ -286,7 +286,11 @@ export async function ackState(
 
 // ── legal_acceptance_hash_counts (service; read-only aggregate, #12429) ──────────────────────────────────────────
 
-/** The most distinct hashes the RPC will answer; it refuses (54000) beyond this rather than truncate. Equal to the SQL cap. */
+/**
+ * The most distinct hashes the RPC will answer; it refuses (54000) beyond this rather than truncate. Equal to the SQL cap:
+ * migration 186 selects `LIMIT HASH_COUNTS_MAX_ROWS + 1` groups and refuses on `> HASH_COUNTS_MAX_ROWS`
+ * (migration-186-legal-acceptance-hash-counts.test.ts extracts both numbers from the SQL and pins them to this constant).
+ */
 export const HASH_COUNTS_MAX_ROWS = 20;
 
 /** A key's total and the count per text hash: nothing about WHO decided or WHAT they decided, never the note. */
@@ -299,7 +303,7 @@ export interface HashCountsResult {
  * The per-hash counts of one key. This RPC answers `{total, by_hash}` with NO `outcome` key, so it has its own strict
  * validation (an unknown shape is never success). Anything outside the documented shape throws `bad_payload`:
  *  - the object has exactly the keys `total` and `by_hash`; each row exactly `text_hash` and `count`;
- *  - `total` is a non-negative safe integer, each `count` an integer >= 1, each `text_hash` 64 lowercase hex;
+ *  - `total` is a safe integer (non-negative follows from the sum rule), each `count` an integer >= 1, each `text_hash` 64 lowercase hex;
  *  - at most HASH_COUNTS_MAX_ROWS rows, strictly ascending by `text_hash` (so no duplicate), and the counts sum to `total`.
  * The result is rebuilt from those fields, so an extra column the database might one day return cannot reach a caller.
  */
@@ -314,7 +318,8 @@ export async function hashCounts(service: LegalRpcClient, a: { key: string }): P
   if (!isObj(out) || !closed(out, ["total", "by_hash"])) throw bad();
   const total = out.total;
   const rows = out.by_hash;
-  if (typeof total !== "number" || !Number.isSafeInteger(total) || total < 0) throw bad();
+  // No `total < 0` clause: the counts are validated >= 1 below, so the sum is >= 0 and a negative total fails `sum !== total`.
+  if (typeof total !== "number" || !Number.isSafeInteger(total)) throw bad();
   if (!Array.isArray(rows) || rows.length > HASH_COUNTS_MAX_ROWS) throw bad();
   const by_hash: HashCountsResult["by_hash"] = [];
   let sum = 0;

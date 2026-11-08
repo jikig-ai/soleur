@@ -79,20 +79,51 @@ the hold). Do not edit the row. Treat it as a possible integrity incident: escal
 | `verify` | The lookup call in the endpoint | Check that migrations 184 and 185 are applied in prd and that Supabase is up; the gate shows "not available right now" and retries cleanly. |
 | `ack_state` | The reconciliation read in the endpoint | Same check; a "function not found" answer means the migration or the schema cache; the endpoint answered 503 and no 200. |
 | `ack` | The decide path could not write the acknowledgement (the flush threw, or the write failed) | The decision itself is recorded. The row will show as `row_without_event` when verified; reconcile it as above. |
-| `registry` | The legal text file could not be read, or is malformed | Read the error `code` on the event (`extra.code`). `read_failed`: the texts directory is missing or unreadable in the image; redeploy a build that contains `server/legal-acceptance/texts`. Any other code: the committed text file is malformed; edit the file. Nothing is wrong with the database either way. |
+| `registry` | The legal text file could not be read, or is malformed (emitted by the verify route and by the counts route) | Read the error `code` on the event (`extra.code`). `read_failed`: the texts directory is missing or unreadable in the image; redeploy a build that contains `server/legal-acceptance/texts`. Any other code: the committed text file is malformed; edit the file. Nothing is wrong with the database either way. |
+| `counts` | The aggregate read behind `scripts/legal-acceptance-counts.sh` (the `[key]/counts` route) failed, threw, or answered an undocumented shape | The helper exited non-zero with `counts: HTTP 503 store_failed` or `HTTP 502 bad_gateway`. Read `extra.code` (the SQLSTATE) and `extra.reason`; the full triage is in "The counts route answered 503" below. Recorded in Sentry, not paged. |
 | 401 (no event) | A caller sent a wrong or missing token | Unthrottled by design and not an event; paging is #12195. A burst of 401s in the request logs is the signal; rotate nothing unless the token is believed leaked. |
-| `counts` | The aggregate read behind `scripts/legal-acceptance-counts.sh` (the `[key]/counts` route) failed, threw, or answered an undocumented shape | The helper exited non-zero with `counts: HTTP 503 store_failed` or `HTTP 502 bad_gateway`. Check that migration 186 is applied in prd (a missing function answers 503) and that Supabase is up. Recorded in Sentry, not paged. |
-| `config` | The token or the founder id is set but malformed (once per process; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
+| `config` | The token or the founder id is set but malformed (once per route module, so the verify and the counts route each report it once; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
 
 After you have dealt with an event, resolve (never archive) its Sentry issue.
+
+### The counts route answered 503 (or the helper printed `counts: HTTP 503 store_failed`)
+
+The counts route has four different causes for the same generic 503 body; tell them apart by the Sentry event, not by the body:
+
+| Cause | The event | What to do |
+|---|---|---|
+| The token is unset (the dark state) | None at all: this is deliberately silent | Apply `LEGAL_ACCEPTANCE_VERIFY_TOKEN` in Doppler `prd` and redeploy (the container's env file is frozen at creation). |
+| The token is set but malformed | `store_failed`, `stage=config`, once per route module | Fix the value in Doppler (48 to 256 characters of `A-Za-z0-9._~+/=-`) and redeploy. |
+| The registry text could not be read | `store_failed`, `stage=registry`; read `extra.code` | As the `registry` row above (the key is the one asked about; the text file is in the deployed image). |
+| The aggregate RPC failed | `store_failed`, `stage=counts`; read `extra.code` (the SQLSTATE) | `42883`: the function does not exist, so migration 186 is not applied in prd; apply it. `54000` with `extra.reason=too_many_hashes`: the key has more distinct text hashes than the cap (20), which is an operator condition, not a missing migration; inspect the rows in the production SQL editor (distinct `text_hash` values for that key) before anything else. Any other code: Supabase or the service key; check that Supabase is up. |
+
+A 502 (`bad_gateway`) means the database answered something that is not the documented shape: treat it as a bug in 186 or in
+the parser and escalate; do not retry in a loop.
+
+### The helper printed HTTP 401 or HTTP 404
+
+`counts: HTTP 401 unauthorized`: the bearer the helper read from Doppler `prd` is not the one the running container holds.
+Either the token was rotated and the container was not redeployed yet (redeploy; the env file is frozen at container
+creation), or the helper read a different Doppler config than the one the container was deployed from. Check the config is
+`prd` and compare the deploy time with the last rotation. Rotate nothing unless the token is believed leaked.
+
+`counts: HTTP 404 not_found`: the key is not in the registry (check the spelling against `server/legal-acceptance/texts/`), or
+the text file for that key is not in the deployed image (the build predates the file; redeploy a build that contains it).
+
+### Who may run the counts step
+
+An agent session may run `scripts/legal-acceptance-counts.sh`, because it needs only the verify bearer from Doppler and no
+database-owner credential. Reading a note (above) stays operator-only.
 
 A flush that is slow or answers false is not a Sentry event: it writes one warning log line (`legal acceptance ack skipped:
 flush not confirmed`), the row stays unacknowledged, and the next verify surfaces it.
 
-## Before the `approval-queue` flag is on in prd
+## The decision-row count for a key (`legal-acceptance-counts.sh`)
 
-There is no backfill migration, so check once, before the flag is on for anyone, and again before any text change is published.
-The check needs no database credential (#12429, ADR-319 amendment 2026-11-08): it asks the web app through the verify bearer.
+The `approval-queue` flag is already on in production. This count is therefore a report of the current state, not a go signal:
+`ok_to_flag=true total=1` is the normal state today (one row, under the registry hash). Run it before publishing a text change
+(a new text hash makes every earlier row stale) and whenever you need to know whether any row sits under another hash. The
+check needs no database credential (#12429, ADR-319 amendment 2026-11-08): it asks the web app through the verify bearer.
 
 ```bash
 scripts/legal-acceptance-counts.sh founder-acceptance-record
@@ -100,17 +131,23 @@ scripts/legal-acceptance-counts.sh founder-acceptance-record
 
 On success it prints exactly one line, `ok_to_flag=<true|false> total=<n> measured=production-table-only`, and nothing else.
 `ok_to_flag=true` means every decision row for that key is under the registry hash (vacuously true at `total=0`);
-`ok_to_flag=false` means a row exists under another hash, so bump the version first. Any failure (401, 404, 502, 503, an
-unreadable token) exits non-zero and prints no `ok_to_flag=` line and one status line such as `counts: HTTP 503 store_failed`;
-a 503 usually means migration 186 is not applied or the token is unset, so read the `store_failed` event (`stage=counts`). The
+`ok_to_flag=false` means a row exists under another hash, so bump the version first. The helper does not trust the route's
+verdict: it recomputes `ok_to_flag` from the per-hash counts and refuses a body where the two disagree. Any failure (401,
+404, 502, 503, an unreadable token, a body that is not the documented shape) exits non-zero and prints no `ok_to_flag=` line
+and one status line such as `counts: HTTP 503 store_failed`; the triage for each is above. The
 helper reads `LEGAL_ACCEPTANCE_VERIFY_TOKEN` from Doppler `prd` itself, hardcodes `https://app.soleur.ai`, and refuses to run
 under `set -x`. Run it from a checkout of `main`; do not paste the token anywhere.
 
 What the number is and is not: it counts only the production table for that key. It does not measure database backups, the
-Sentry `accepted` count, or dev and preview. `ok_to_flag` is advisory and never authorizes a flag flip; a flip still needs the
-operator's exact go. Rows that exist before the flag is on (`total` above 0) each need an acknowledgement (the insert above,
-once per row, scoped by founder id, run in the production SQL editor with your own login), or each raises a false
-`row_without_event` when verified.
+Sentry `accepted` count, or dev and preview. `ok_to_flag` is advisory and never authorizes a flag flip or any other
+production write; those still need the operator's exact go.
+
+The zero-rows precondition is separate from `ok_to_flag`, and `ok_to_flag=true` does not subsume it: any row that exists
+before the flag is turned on for it (`total` above 0, even `total=1` under the registry hash) needs its own acknowledgement
+(the insert above, once per row, scoped by founder id, run in the production SQL editor with your own login), or it raises a
+false `row_without_event` when verified. Read `total`, not only `ok_to_flag`.
+
+The rollout order below is the original first-enable sequence; keep it for re-provisioning (a new environment or a rotated secret).
 
 When the secrets (`LEGAL_ACCEPTANCE_VERIFY_TOKEN`, `LEGAL_ACCEPTANCE_FOUNDER_ID`) are applied (#12196): the container receives them
 through an env file that is frozen when the container is created, so a restart is not enough and a redeploy is needed. While the

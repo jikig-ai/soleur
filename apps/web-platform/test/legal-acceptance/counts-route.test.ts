@@ -104,7 +104,7 @@ describe("503: dark and fail-closed", () => {
     }
     expect(h.rpc).not.toHaveBeenCalled();
   });
-  it("a malformed token is reported once per process (store_failed stage config, variable name only)", async () => {
+  it("a malformed token is reported once per route module (store_failed stage config, variable name only)", async () => {
     vi.resetModules();
     const { GET: fresh } = await import("@/app/api/internal/legal-acceptance/[key]/counts/route");
     vi.stubEnv("LEGAL_ACCEPTANCE_VERIFY_TOKEN", "x".repeat(47));
@@ -185,6 +185,17 @@ describe("200: the closed payload and ok_to_flag", () => {
     h.rpc.mockResolvedValue(counts([[OTHER, 2], [HASH, 1]].sort((a, b) => (a[0] < b[0] ? -1 : 1)) as Array<[string, number]>));
     expect((await read(await call())).body).toMatchObject({ total: 3, ok_to_flag: false });
   });
+  it("ok_to_flag is judged over EVERY entry: a foreign hash that sorts before, after, or between registry rows is still false", async () => {
+    const BEFORE = "0".repeat(64);
+    const AFTER = "f".repeat(64);
+    expect([BEFORE < HASH, HASH < AFTER]).toEqual([true, true]); // the fixture really orders the foreign hashes around the registry hash
+    for (const by of [[[BEFORE, 1], [HASH, 1]], [[HASH, 1], [AFTER, 1]], [[BEFORE, 1], [HASH, 1], [AFTER, 1]], [[BEFORE, 1]], [[AFTER, 1]]] as Array<Array<[string, number]>>) {
+      h.rpc.mockResolvedValue(counts(by));
+      expect((await read(await call())).body.ok_to_flag, by.map(([x]) => x.slice(0, 2)).join(",")).toBe(false);
+    }
+    h.rpc.mockResolvedValue(counts([[HASH, 5]]));
+    expect((await read(await call())).body.ok_to_flag).toBe(true);
+  });
   it("the response has exactly the five documented keys, whatever the database returns", async () => {
     h.rpc.mockResolvedValue(counts([[HASH, 1]]));
     expect(Object.keys((await read(await call())).body).sort()).toEqual(KEYS);
@@ -216,6 +227,26 @@ describe("failures are never a partial 200 (store_failed stage counts)", () => {
     expect(countsEvents()[0].level).toBe("error");
     expect(countsEvents()[0].extra).toMatchObject({ key: "fixture-terms", step: "counts" });
     expect(JSON.stringify(out.body)).not.toContain("boom");
+  });
+  it("the 54000 'too many distinct hashes' refusal is the same 503 body, but its report carries the static reason too_many_hashes (and nothing else distinguishes it)", async () => {
+    h.rpc.mockResolvedValue({ data: null, error: { message: "legal acceptance: too many distinct hashes p_key=fixture-terms", code: "54000" } });
+    const out = await read(await call());
+    expect(out).toMatchObject({ status: 503, body: { error: "Not available" } });
+    expect(countsEvents()).toHaveLength(1);
+    expect(countsEvents()[0].extra).toMatchObject({ key: "fixture-terms", step: "counts", code: "54000", reason: "too_many_hashes" });
+    expect(JSON.stringify(events())).not.toMatch(/p_key|too many distinct/);
+    // every other failure keeps no reason: migration-not-applied (42883), a thrown call, a bad payload
+    for (const res of [{ data: null, error: { message: "x", code: "42883" } }, { data: { total: -1, by_hash: [] }, error: null }]) {
+      h.errSink.mockReset();
+      h.rpc.mockResolvedValue(res);
+      await call();
+      expect(countsEvents()).toHaveLength(1);
+      expect(countsEvents()[0].extra).not.toHaveProperty("reason");
+    }
+    h.errSink.mockReset();
+    h.rpc.mockRejectedValue(new Error("network"));
+    await call();
+    expect(countsEvents()[0].extra).not.toHaveProperty("reason");
   });
   it("an RPC that throws, and a service client that cannot be built, are 503 with one report", async () => {
     h.rpc.mockRejectedValue(new Error("network"));
@@ -270,6 +301,16 @@ describe("hashCounts parser (service.ts)", () => {
     const rows = (n: number) => Array.from({ length: n }, (_, i) => ({ text_hash: i.toString(16).padStart(64, "0"), count: 1 }));
     await expect(hashCounts(client({ total: HASH_COUNTS_MAX_ROWS, by_hash: rows(HASH_COUNTS_MAX_ROWS) }), { key: "k" })).resolves.toMatchObject({ total: HASH_COUNTS_MAX_ROWS });
     await expect(hashCounts(client({ total: HASH_COUNTS_MAX_ROWS + 1, by_hash: rows(HASH_COUNTS_MAX_ROWS + 1) }), { key: "k" })).rejects.toMatchObject({ code: "bad_payload" });
+  });
+  it("refuses numbers that are integers only by arithmetic accident: a fractional count pair summing to total, and a total above 2^53 formed from safe counts", async () => {
+    // 1.5 + 1.5 === 3: the sum check alone would pass; the per-count integer guard must refuse.
+    await expect(hashCounts(client({ total: 3, by_hash: [{ text_hash: OTHER, count: 1.5 }, { text_hash: OTHER2, count: 1.5 }] }), { key: "k" })).rejects.toMatchObject({ code: "bad_payload" });
+    // (2^53 - 1) + 1 === 2^53: every count is a safe integer and the sum matches, so only the total's own guard refuses.
+    await expect(hashCounts(client({ total: 2 ** 53, by_hash: [{ text_hash: OTHER, count: 2 ** 53 - 1 }, { text_hash: OTHER2, count: 1 }] }), { key: "k" })).rejects.toMatchObject({ code: "bad_payload" });
+    await expect(hashCounts(client({ total: 2 ** 53 - 1, by_hash: [{ text_hash: OTHER, count: 2 ** 53 - 2 }, { text_hash: OTHER2, count: 1 }] }), { key: "k" })).resolves.toMatchObject({ total: 2 ** 53 - 1 });
+  });
+  it("a negative total over an empty list is refused (the sum check already covers it, so no separate sign clause exists)", async () => {
+    await expect(hashCounts(client({ total: -1, by_hash: [] }), { key: "k" })).rejects.toMatchObject({ code: "bad_payload" });
   });
   it("an RPC error carries the SQLSTATE and a static message (never database text)", async () => {
     const err = await hashCounts(client(null, { message: "secret row text founder_id=abc", code: "42501" }), { key: "k" }).catch((e) => e);

@@ -784,6 +784,54 @@ describe.skipIf(!ENABLED)("migration 186 behaviour (rolled-back real rows)", () 
     });
   });
 
+  // One fresh founder per decision row: the shape is what the product writes (a founder decides once per key and hash).
+  const decideAsNewFounder = async (t: Txn, hash: string) => {
+    const user = randomUUID();
+    const session = randomUUID();
+    await t`insert into auth.users (id, email) values (${user}, ${`n-${user}@example.test`})`;
+    await verifiedIntent(t, user, session, { hash });
+    await record(t, { sub: user, session_id: session }, { hash });
+  };
+
+  test("two rows under H1 and one under H2 are counted 2 and 1 (total 3), ordered by hash, with no per-row field", async () => {
+    await scenario(async (t) => {
+      await decideAsNewFounder(t, H2);
+      await decideAsNewFounder(t, H1);
+      await decideAsNewFounder(t, H1);
+      const out = await countsFn(t);
+      expect(out).toEqual({
+        total: 3,
+        by_hash: [
+          { text_hash: H1, count: 2 },
+          { text_hash: H2, count: 1 },
+        ],
+      });
+      expect(Object.keys(out).sort()).toEqual(["by_hash", "total"]);
+    });
+  });
+
+  test("exactly 20 distinct hashes are answered in full; a 21st is refused (54000) with a static message, never truncated", async () => {
+    await scenario(async (t) => {
+      const hashes = Array.from({ length: 21 }, (_, i) => (i + 1).toString(16).padStart(64, "0"));
+      for (const h of hashes.slice(0, 20)) await decideAsNewFounder(t, h);
+      const full = await countsFn(t);
+      expect(full.total).toBe(20);
+      expect(full.by_hash.map((r: { text_hash: string }) => r.text_hash)).toEqual(hashes.slice(0, 20));
+      await decideAsNewFounder(t, hashes[20]);
+      let err: { code?: string; message?: string } | null = null;
+      try {
+        await t.savepoint(async () => {
+          await countsFn(t);
+        });
+      } catch (e) {
+        err = e as { code?: string; message?: string };
+      }
+      expect(err?.code).toBe("54000");
+      expect(err?.message ?? "").toMatch(/too many distinct hashes/);
+      expect(err?.message ?? "").not.toContain(KEY);
+    });
+  });
+
   test("a different key's rows are not counted", async () => {
     await scenario(async (t, c) => {
       await verifiedIntent(t, c.userA, c.sessionA);

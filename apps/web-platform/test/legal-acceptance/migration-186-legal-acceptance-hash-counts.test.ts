@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { KEY_RE } from "@/server/legal-acceptance/canonical";
 
 // Static shape tests for migration 186 (#12429, ADR-319 amendment 2026-11-08): the credential-free pre-flag aggregate,
 // `legal_acceptance_hash_counts(p_key)`. The BEHAVIOURAL proof (service_role succeeds, authenticated gets 42501, two
@@ -15,8 +16,17 @@ const UP = path.join(DIR, "migrations/186_legal_acceptance_hash_counts.sql");
 const DOWN = path.join(DIR, "migrations/186_legal_acceptance_hash_counts.down.sql");
 const VERIFY = path.join(DIR, "verify/186_legal_acceptance_hash_counts.sql");
 
+const SERVICE = path.join(__dirname, "../../server/legal-acceptance/service.ts");
+
 const read = (p: string): string => (existsSync(p) ? readFileSync(p, "utf8") : "");
 const rawUp = read(UP);
+
+/** HASH_COUNTS_MAX_ROWS read from the service source (importing service.ts would pull the logger and Sentry into a static test). */
+const MAX_ROWS = (() => {
+  const m = /^export const HASH_COUNTS_MAX_ROWS = (\d+);$/m.exec(read(SERVICE));
+  if (!m) throw new Error("extraction found nothing: HASH_COUNTS_MAX_ROWS in service.ts");
+  return Number(m[1]);
+})();
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 
 /** Remove line and block comments; single-quoted literals (with '' escapes) are copied through intact. (Same lexer as the 185 test; importing that file would re-register its tests.) */
@@ -70,13 +80,14 @@ function fnBody(stripped: string, name: string): string {
 
 const FN = "legal_acceptance_hash_counts";
 const SIG = "public.legal_acceptance_hash_counts(text)";
-const SHAPE_KEY = "p_key IS NULL OR p_key !~ '^[a-z0-9][a-z0-9-]{0,62}$'";
+/** The 184 shape predicate, built from the canonical regex (never a restated literal): a drifted key shape in 186 must go red here. */
+const SHAPE_KEY = `p_key IS NULL OR p_key !~ '${KEY_RE.source}'`;
 
 /** Columns the function must never read or name: who decided, what they decided, when, and the note. */
 const FORBIDDEN_COLUMNS = /\b(founder_id|choice|created_at|requested_edit|row_hash|session_id|event_id|reauth_at|reauth_method)\b/i;
 
 /** Every problem the checker finds in one candidate migration text. Empty means the privacy boundary holds. */
-export function shapeProblems(sqlText: string): string[] {
+export function shapeProblems(sqlText: string, maxRows: number = MAX_ROWS): string[] {
   const p: string[] = [];
   const s = stripSql(sqlText);
   const flat = norm(s);
@@ -101,6 +112,11 @@ export function shapeProblems(sqlText: string): string[] {
   if (!/'total'/.test(b) || !/'by_hash'/.test(b) || !/'text_hash'/.test(b) || !/'count'/.test(b)) p.push("must answer exactly total and by_hash [{text_hash, count}]");
   if (!/ORDER BY text_hash/i.test(b)) p.push("by_hash must be ordered by text_hash");
   if (!/LIMIT \d+/i.test(b) || !/ERRCODE = '54000'/i.test(b)) p.push("by_hash must be capped (LIMIT + a static 54000 refusal)");
+  // The cap is one number in two layers: the SQL selects MAX + 1 groups and refuses on `> MAX`; service.ts refuses `> MAX` rows.
+  const limits = [...b.matchAll(/\bLIMIT (\d+)\b/gi)].map((m) => Number(m[1]));
+  const refusals = [...b.matchAll(/\bIF v_groups > (\d+) THEN RAISE EXCEPTION '[^']*' USING ERRCODE = '54000'/gi)].map((m) => Number(m[1]));
+  if (limits.length !== 1 || limits[0] !== maxRows + 1) p.push(`the group LIMIT must be HASH_COUNTS_MAX_ROWS + 1 = ${maxRows + 1} (found ${JSON.stringify(limits)})`);
+  if (refusals.length !== 1 || refusals[0] !== maxRows) p.push(`the 54000 refusal must be v_groups > HASH_COUNTS_MAX_ROWS = ${maxRows} (found ${JSON.stringify(refusals)})`);
   // p_key must never reach an exception message (it is caller text).
   for (const m of b.matchAll(/RAISE EXCEPTION\s+('(?:[^']|'')*')([^;]*);/gi)) {
     if (/%/.test(m[1])) p.push("exception text must be static: no format placeholders");
@@ -147,6 +163,19 @@ describe("migration 186 files", () => {
     expect((d.match(/DROP /gi) ?? []).length).toBe(1);
   });
 
+  it("the down file's header says how to roll back: revert the code, leave 186 in place, and a deliberate drop also deletes the ledger row", () => {
+    const raw = read(DOWN);
+    expect(raw).toMatch(/ROLLBACK IS BY CODE/);
+    expect(raw).toMatch(/-- {3}2\. DELETE FROM public\._schema_migrations WHERE filename = '186_legal_acceptance_hash_counts\.sql';/);
+    // ...as comments only: the executable text is the single DROP and no DELETE.
+    expect(norm(stripSql(raw))).not.toMatch(/DELETE|_schema_migrations/i);
+  });
+
+  it("the cap extracted from service.ts is a positive integer, so the SQL cap rows below compare against a real number", () => {
+    expect(Number.isInteger(MAX_ROWS) && MAX_ROWS > 0).toBe(true);
+    expect(shapeProblems(rawUp, MAX_ROWS)).toEqual([]);
+  });
+
   it("the verify file asserts the live catalog with a bad column", () => {
     const v = norm(stripSql(read(VERIFY)));
     expect(v).toMatch(/_security_definer_search_path_pinned.*proconfig @> ARRAY\[.search_path=public, pg_temp.\]/);
@@ -185,8 +214,18 @@ describe("MUTATIONS: each static mutant of the migration is caught", () => {
     ["5b pin search_path without pg_temp", () => mutate(/SET search_path = public, pg_temp/, "SET search_path = public"), /search_path/],
     ["6 read through the children", () => mutate(/FROM ONLY public\.legal_acceptance/g, "FROM public.legal_acceptance"), /ONLY/],
     ["7 drop the key validation", () => mutate(/p_key IS NULL OR p_key !~ '\^\[a-z0-9\]\[a-z0-9-\]\{0,62\}\$'/, "p_key IS NULL"), /validate p_key/],
+    ["7b widen the key shape to 64 characters", () => mutate(/\{0,62\}\$'/, "{0,63}$'"), /validate p_key/],
+    ["7c loosen the key shape to uppercase", () => mutate(/\^\[a-z0-9\]\[a-z0-9-\]\{0,62\}\$/, "^[a-zA-Z0-9][a-zA-Z0-9-]{0,62}$"), /validate p_key/],
     ["8 put p_key in an exception", () => mutate(/RAISE EXCEPTION 'legal acceptance: invalid input'/, "RAISE EXCEPTION 'legal acceptance: invalid input %', p_key"), /exception|validate p_key/],
+    ["8b p_key concatenated into the 54000 refusal text (no placeholder)", () => mutate(/RAISE EXCEPTION 'legal acceptance: too many distinct hashes' USING/, "RAISE EXCEPTION 'legal acceptance: too many distinct hashes' || p_key USING"), /p_key must not appear in an exception/],
+    ["8d a format placeholder in the 54000 text (no p_key involved)", () => mutate(/'legal acceptance: too many distinct hashes'/, "'legal acceptance: too many distinct hashes %'"), /no format placeholders/],
+    ["8c p_key in a DETAIL clause after the refusal's ERRCODE", () => mutate(/USING ERRCODE = '54000'/, "USING ERRCODE = '54000', DETAIL = p_key"), /p_key must not appear in an exception/],
     ["9 drop the row cap", () => mutate(/ERRCODE = '54000'/, "ERRCODE = '22023'"), /capped/],
+    ["9b the group LIMIT drifts above the cap + 1 (LIMIT 31)", () => mutate(/LIMIT 21\b/, "LIMIT 31"), /LIMIT must be HASH_COUNTS_MAX_ROWS \+ 1/],
+    ["9c the group LIMIT equals the cap (LIMIT 20: a 21st group could never be seen)", () => mutate(/LIMIT 21\b/, "LIMIT 20"), /LIMIT must be HASH_COUNTS_MAX_ROWS \+ 1/],
+    ["9d the refusal threshold drifts (> 30)", () => mutate(/IF v_groups > 20 THEN/, "IF v_groups > 30 THEN"), /refusal must be v_groups > HASH_COUNTS_MAX_ROWS/],
+    ["9e the refusal threshold drops to the LIMIT (> 21)", () => mutate(/IF v_groups > 20 THEN/, "IF v_groups > 21 THEN"), /refusal must be v_groups > HASH_COUNTS_MAX_ROWS/],
+    ["9f the refusal is removed (no IF v_groups > N)", () => mutate(/IF v_groups > 20 THEN/, "IF false THEN"), /refusal must be v_groups > HASH_COUNTS_MAX_ROWS/],
     ["10 write the table", () => mutate(/(CREATE OR REPLACE FUNCTION public\.legal_acceptance_hash_counts\([\s\S]*?BEGIN)/, "$1 UPDATE public.legal_acceptance SET key = key;"), /read-only/],
     ["11 open the write door", () => mutate(/(CREATE OR REPLACE FUNCTION public\.legal_acceptance_hash_counts\([\s\S]*?BEGIN)/, "$1 PERFORM set_config('app.legal_acceptance_rpc', 'on', true);"), /write-door/],
     ["12 make it VOLATILE", () => mutate(/\bSTABLE\b/, "VOLATILE"), /STABLE/],
@@ -199,7 +238,7 @@ describe("MUTATIONS: each static mutant of the migration is caught", () => {
   ];
 
   it("the battery is not silently shrunk (a floor on the number of rows)", () => {
-    expect(rows.length).toBeGreaterThanOrEqual(24);
+    expect(rows.length).toBeGreaterThanOrEqual(34);
   });
 
   for (const [name, build, expected] of rows) {
@@ -209,6 +248,13 @@ describe("MUTATIONS: each static mutant of the migration is caught", () => {
       expect(problems.join(" | ")).toMatch(expected);
     });
   }
+
+  it("a changed HASH_COUNTS_MAX_ROWS (service.ts) against the unchanged SQL is a problem in both directions", () => {
+    for (const drifted of [MAX_ROWS + 10, MAX_ROWS - 5, MAX_ROWS + 1]) {
+      expect(shapeProblems(rawUp, drifted).join(" | "), `maxRows ${drifted}`).toMatch(/LIMIT must be HASH_COUNTS_MAX_ROWS \+ 1/);
+      expect(shapeProblems(rawUp, drifted).join(" | "), `maxRows ${drifted}`).toMatch(/refusal must be v_groups > HASH_COUNTS_MAX_ROWS/);
+    }
+  });
 
   it("instrument self-test: an empty text and the real text give different answers", () => {
     expect(shapeProblems("").length).toBeGreaterThan(0);

@@ -26,6 +26,8 @@ import { reportLegalOp } from "@/server/approval/ops";
  *
  * Observability: a registry read failure, a failed counts call and a set-but-malformed token each emit ONE `store_failed`
  * (tags.stage registry | counts | config). Recorded, not paged (#12195). An unset token stays silent: that is the dark state.
+ * A counts call refused with 54000 (too many distinct hashes) adds the static `extra.reason: "too_many_hashes"` to its
+ * report so it is not mistaken for "migration 186 not applied"; the response body is unchanged.
  *
  * Auth: the same bearer as the verify route (LEGAL_ACCEPTANCE_VERIFY_TOKEN through lib/internal-auth-named.ts; a scope
  * widening of one token, not a new credential). PUBLIC_PATHS has a prefix entry for this tree; the bearer check is the first
@@ -37,7 +39,7 @@ export const dynamic = "force-dynamic";
 /** The same shape as the verify route's token guard (counts-route.test.ts pins the two lines byte for byte). */
 const TOKEN_RE = /^[A-Za-z0-9._~+/=-]{48,256}$/;
 
-/** One configuration report per process: the 503 itself repeats on every call, the Sentry event must not. */
+/** One configuration report per route module (the verify route has its own flag, so a malformed token yields one event from each route): the 503 itself repeats on every call, the Sentry event must not. */
 let configReported = false;
 function reportBadConfig(variables: string[]): void {
   if (configReported) return;
@@ -89,7 +91,13 @@ export async function GET(req: Request, ctx: { params: Promise<{ key: string }> 
       ok_to_flag: by_hash.every((r) => r.text_hash === registryHash),
     });
   } catch (err) {
-    reportLegalOp("storeFailed", err, { tags: { stage: "counts" }, extra: { key, step: "counts" } });
+    // 54000 is the RPC's own "more distinct hashes than the cap" refusal: an operator condition (investigate the rows), not a
+    // missing migration. The response stays the same generic 503; only the report carries the static reason.
+    const tooManyHashes = err instanceof LegalServiceError && err.code === "54000";
+    reportLegalOp("storeFailed", err, {
+      tags: { stage: "counts" },
+      extra: { key, step: "counts", ...(tooManyHashes ? { reason: "too_many_hashes" } : {}) },
+    });
     // An answer that is not a documented shape is a bad gateway; a failed or thrown call is unavailable. Never a 200.
     return err instanceof LegalServiceError && err.code === "bad_payload" ? respond(502, { error: "Bad gateway" }) : unavailable();
   }

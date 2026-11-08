@@ -3,8 +3,9 @@
  *
  * The shapes are EXTRACTED from the source of every layer, never restated here:
  *  - TypeScript: `KEY_RE` and `TEXT_HASH_RE` in server/legal-acceptance/canonical.ts (imported AND parsed from the source);
- *  - SQL: the CHECK constraints of migration 184 and the argument checks of the RPCs in 184 and 185;
- *  - bash: the `=~` patterns inside `gate_web_acceptance` in plugins/soleur/skills/ship/scripts/hold-gate-eval.sh.
+ *  - SQL: the CHECK constraints of migration 184 and the argument checks of the RPCs in 184, 185 and 186;
+ *  - bash: the `=~` patterns inside `gate_web_acceptance` in plugins/soleur/skills/ship/scripts/hold-gate-eval.sh, and the
+ *    `KEY_RE='...'` of scripts/legal-acceptance-counts.sh (the pre-flag helper, #12429: the assignment AND its `=~ $KEY_RE` use).
  * The bearer token length is the same kind of shared limit: `TOKEN_RE` in the verify route and the two `bc_shape_ok` length
  * lines in plugins/soleur/scripts/lib/bearer-fetch.sh are extracted and both must say 48 to 256.
  * The minted bearer token (#12196, apps/web-platform/infra/legal-acceptance-secrets.tf) is the same kind of shared limit: its
@@ -28,6 +29,8 @@ const read = (p: string): string => readFileSync(p, "utf8");
 const CANONICAL_SRC = read(path.join(WEB, "server/legal-acceptance/canonical.ts"));
 const M184 = read(path.join(WEB, "supabase/migrations/184_legal_acceptance.sql"));
 const M185 = read(path.join(WEB, "supabase/migrations/185_legal_acceptance_ack.sql"));
+const M186 = read(path.join(WEB, "supabase/migrations/186_legal_acceptance_hash_counts.sql"));
+const COUNTS_HELPER_SRC = read(path.join(REPO, "scripts/legal-acceptance-counts.sh"));
 const GATE_PATH = path.join(REPO, "plugins/soleur/skills/ship/scripts/hold-gate-eval.sh");
 const GATE_SRC = read(GATE_PATH);
 const ROUTE_SRC = read(path.join(WEB, "app/api/internal/legal-acceptance/[key]/route.ts"));
@@ -94,6 +97,20 @@ export function extractBashPatterns(src: string): { key: string[]; hash: string[
   nonEmpty("bash =~ $WA_KEY_RE inside gate_web_acceptance", body.match(/=~ \$WA_KEY_RE\b/g) ?? []);
   nonEmpty("bash =~ $WA_HASH_RE inside gate_web_acceptance", body.match(/=~ \$WA_HASH_RE\b/g) ?? []);
   return { key, hash };
+}
+
+/**
+ * bash: the key pattern of scripts/legal-acceptance-counts.sh. One single-quoted ERE assignment `KEY_RE='...'` at the start of
+ * a line (a trailing `# comment` is stripped first), and the script must APPLY it with `[[ ... =~ $KEY_RE ]]` outside
+ * comments: a pattern that is defined and never applied is not a layer. Both facts throw when absent.
+ */
+export function extractHelperKeyRe(src: string): string {
+  const code = stripBashComments(src);
+  const assigned = [...code.matchAll(/^KEY_RE='([^']+)'\s*$/gm)].map((m) => m[1]);
+  nonEmpty("helper KEY_RE assignment", assigned);
+  if (assigned.length !== 1) throw new Error(`expected exactly one KEY_RE assignment in the helper, found ${assigned.length}`);
+  nonEmpty("helper =~ $KEY_RE application", code.match(/\[\[ "\$KEY" =~ \$KEY_RE \]\]/g) ?? []);
+  return assigned[0];
 }
 
 /** The route's `const TOKEN_RE = /^[...]{min,max}$/;` -> {min, max}. */
@@ -169,6 +186,11 @@ describe("extractors fail loudly on an empty extraction", () => {
     expect(
       extractBashPatterns("WA_KEY_RE='^a#$'\nWA_HASH_RE='^b$'\ngate_web_acceptance() {\n  [[ $k =~ $WA_KEY_RE ]] && [[ $h =~ $WA_HASH_RE ]] # ok\n}\n"),
     ).toEqual({ key: ["^a#$"], hash: ["^b$"] });
+    expect(() => extractHelperKeyRe("nothing here")).toThrow(/found nothing/);
+    expect(() => extractHelperKeyRe("KEY_RE='^a$'\n")).toThrow(/found nothing/); // defined, never applied
+    expect(() => extractHelperKeyRe("# KEY_RE='^a$'\n# [[ \"$KEY\" =~ $KEY_RE ]]\n")).toThrow(/found nothing/); // only in comments
+    expect(() => extractHelperKeyRe("KEY_RE='^a$'\nKEY_RE='^b$'\n[[ \"$KEY\" =~ $KEY_RE ]]\n")).toThrow(/exactly one/);
+    expect(extractHelperKeyRe("KEY_RE='^a#$' # note\n[[ \"$KEY\" =~ $KEY_RE ]] || exit 1\n")).toBe("^a#$");
     expect(() => extractRouteTokenBounds("const TOKEN_RE = /^[a-z]+$/;")).toThrow(/found nothing/);
     expect(() => extractHelperTokenBounds("nothing here")).toThrow(/bc_shape_ok is not in the helper/);
     expect(() => extractHelperTokenBounds("bc_shape_ok() {\n  :\n}\n")).toThrow(/found nothing/);
@@ -186,6 +208,12 @@ describe("negative controls on the REAL sources", () => {
     expect(bashAccepts(upperHash, "A".repeat(64))).toBe(true);
     const wideSql = extractSqlPatterns(M184.replaceAll("{0,62}", "{0,63}"), "key", "p_key")[0];
     expect(wideSql).not.toBe(KEY_RE.source);
+    const wide186 = extractSqlPatterns(M186.replaceAll("{0,62}", "{0,63}"), "key", "p_key")[0];
+    expect(wide186).not.toBe(KEY_RE.source);
+    expect(jsAccepts(wide186, k(64))).toBe(true);
+    const wideHelper = extractHelperKeyRe(COUNTS_HELPER_SRC.replace("{0,62}$'", () => "{0,63}$'"));
+    expect(wideHelper).not.toBe(KEY_RE.source);
+    expect(bashAccepts(wideHelper, k(64))).toBe(true);
   });
 });
 
@@ -225,6 +253,28 @@ describe("SQL (migration 184 CHECKs, 184 and 185 RPC argument checks)", () => {
     for (const p of [...hashPatterns["184"], ...hashPatterns["185"]]) {
       for (const [v, ok] of HASH_PROBES) expect(jsAccepts(p, v), `${p} ${JSON.stringify(v)}`).toBe(ok);
     }
+  });
+});
+
+describe("SQL (migration 186, legal_acceptance_hash_counts)", () => {
+  const p186 = extractSqlPatterns(M186, "key", "p_key");
+  it("the one key predicate in 186 equals KEY_RE character for character", () => {
+    expect(p186).toHaveLength(1);
+    expect(p186[0]).toBe(KEY_RE.source);
+  });
+  it("it accepts a 63-character key and refuses 64, uppercase and a leading hyphen", () => {
+    for (const [v, ok] of KEY_PROBES) expect(jsAccepts(p186[0], v), JSON.stringify(v)).toBe(ok);
+  });
+});
+
+describe("bash (scripts/legal-acceptance-counts.sh, KEY_RE)", () => {
+  // Extraction is unconditional: a helper that loses its KEY_RE assignment or its use throws at collection time.
+  const helperKey = extractHelperKeyRe(COUNTS_HELPER_SRC);
+  it("the helper's pattern is KEY_RE character for character", () => {
+    expect(helperKey).toBe(KEY_RE.source);
+  });
+  it("bash accepts a 63-character key and refuses 64, a leading hyphen and uppercase", () => {
+    for (const [v, ok] of KEY_PROBES) expect(bashAccepts(helperKey, v), JSON.stringify(v)).toBe(ok);
   });
 });
 

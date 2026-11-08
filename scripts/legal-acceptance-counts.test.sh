@@ -99,6 +99,8 @@ body() {
   local key="$1" ok="$2" total="$3" by="${4:-[]}"
   printf '{"key":"%s","registry_hash":"%s","total":%s,"by_hash":%s,"ok_to_flag":%s}' "$key" "$HASH_A" "$total" "$by" "$ok" > "$STUB_DIR/curl-body"
 }
+# mk_body <key> <ok> <total> <by_hash json>: the same JSON as body(), on stdout (for mal rows)
+mk_body() { printf '{"key":"%s","registry_hash":"%s","total":%s,"by_hash":%s,"ok_to_flag":%s}' "$1" "$HASH_A" "$3" "$4" "$2"; }
 # run <script> <args...>: hermetic env, captured streams
 run() {
   local script="$1"; shift
@@ -187,6 +189,22 @@ mal "total a string" "{\"key\":\"$KEY\",\"registry_hash\":\"$HASH_A\",\"total\":
 mal "counts do not sum to total" "{\"key\":\"$KEY\",\"registry_hash\":\"$HASH_A\",\"total\":5,\"by_hash\":[{\"text_hash\":\"$HASH_A\",\"count\":1}],\"ok_to_flag\":true}"
 mal "answer is about another key" "{\"key\":\"other-key\",\"registry_hash\":\"$HASH_A\",\"total\":0,\"by_hash\":[],\"ok_to_flag\":true}"
 mal "registry_hash malformed" "{\"key\":\"$KEY\",\"registry_hash\":\"zz\",\"total\":0,\"by_hash\":[],\"ok_to_flag\":true}"
+mal "total null" "{\"key\":\"$KEY\",\"registry_hash\":\"$HASH_A\",\"total\":null,\"by_hash\":[],\"ok_to_flag\":true}"
+mal "total 1.5 (fractional, by_hash empty)" "{\"key\":\"$KEY\",\"registry_hash\":\"$HASH_A\",\"total\":1.5,\"by_hash\":[],\"ok_to_flag\":true}"
+mal "total 3 with fractional counts 1.5+1.5" "$(mk_body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":1.5},{\"text_hash\":\"$HASH_A\",\"count\":1.5}]")"
+mal "a foreign hash with ok_to_flag true (the route's verdict is not trusted)" "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_B\",\"count\":1}]")"
+mal "the registry hash plus a foreign hash with ok_to_flag true" "$(mk_body "$KEY" true 2 "[{\"text_hash\":\"$HASH_A\",\"count\":1},{\"text_hash\":\"$HASH_B\",\"count\":1}]")"
+mal "only the registry hash but ok_to_flag false" "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$HASH_A\",\"count\":1}]")"
+mal "zero rows but ok_to_flag false (vacuously true)" "$(mk_body "$KEY" false 0 "[]")"
+mal "a count of zero" "$(mk_body "$KEY" true 0 "[{\"text_hash\":\"$HASH_A\",\"count\":0}]")"
+mal "a negative count" "$(mk_body "$KEY" true 0 "[{\"text_hash\":\"$HASH_A\",\"count\":-1},{\"text_hash\":\"$HASH_A\",\"count\":1}]")"
+mal "a count that is a string" "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_A\",\"count\":\"1\"}]")"
+mal "a count that is missing" "$(mk_body "$KEY" true 0 "[{\"text_hash\":\"$HASH_A\"}]")"
+mal "an entry that is not an object" "$(mk_body "$KEY" true 1 "[1]")"
+mal "a text_hash that is not hex (foreign, ok_to_flag false)" "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"zz\",\"count\":1}]")"
+mal "an uppercase text_hash (foreign, ok_to_flag false)" "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$(printf 'A%.0s' $(seq 1 64))\",\"count\":1}]")"
+mal "a text_hash that is missing" "$(mk_body "$KEY" false 1 "[{\"count\":1}]")"
+mal "a text_hash that is a number" "$(mk_body "$KEY" false 1 "[{\"text_hash\":7,\"count\":1}]")"
 mal "by_hash not an array" "{\"key\":\"$KEY\",\"registry_hash\":\"$HASH_A\",\"total\":0,\"by_hash\":{},\"ok_to_flag\":true}"
 
 echo "=== Key validation: before any request ==="
@@ -240,8 +258,32 @@ pristine_ok() { # the probe set: a pristine run satisfies every probe; a caught 
   scn; body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":1}]"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || v=1
   scn; : > "$STUB_DIR/doppler-fail"; run "$script" "$KEY"; { rc_nonzero && no_flag_line && grep -q '^counts: token unreadable' "$TMP/run.err"; } || v=1
   scn; RUN_ENV="APP_URL=http://evil.example" run "$script" "$KEY"; [ "$(cat "$STUB_DIR/curl-url.log" 2>/dev/null)" = "$URL" ] || v=1
+  local b
+  for b in "${PROBE_BODIES[@]}"; do
+    scn; printf '%s' "$b" > "$STUB_DIR/curl-body"; run "$script" "$KEY"; { rc_nonzero && no_flag_line && out_empty; } || v=1
+  done
+  # ...and accepts the two honest answers (a verdict recomputed to the wrong value would refuse these).
+  scn; body "$KEY" false 2 "[{\"text_hash\":\"$HASH_A\",\"count\":1},{\"text_hash\":\"$HASH_B\",\"count\":1}]"; run "$script" "$KEY"
+  out_is "ok_to_flag=false total=2 measured=production-table-only" || v=1
+  scn; body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":3}]"; run "$script" "$KEY"
+  out_is "ok_to_flag=true total=3 measured=production-table-only" || v=1
   return "$v"
 }
+# Bodies a pristine helper must REFUSE (one per jq clause of the shape check; each is killed by exactly the mutant that drops that clause).
+PROBE_BODIES=(
+  "$(mk_body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":1.5},{\"text_hash\":\"$HASH_A\",\"count\":1.5}]")" # count == floor
+  "$(mk_body "$KEY" true 0 "[{\"text_hash\":\"$HASH_A\",\"count\":0}]")"                                                    # count >= 1
+  "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_A\",\"count\":\"1\"}]")"                                                 # count type (a string count: floor errors, so the refusal is jq's error)
+  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"zz\",\"count\":1}]")"                                                         # text_hash hex
+  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$(printf 'A%.0s' $(seq 1 64))\",\"count\":1}]")"                              # text_hash lowercase
+  "$(mk_body "$KEY" false 1 "[{\"count\":1}]")"                                                                                  # text_hash present
+  "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_B\",\"count\":1}]")"                                                       # ok_to_flag recomputed: foreign only
+  "$(mk_body "$KEY" true 2 "[{\"text_hash\":\"$HASH_A\",\"count\":1},{\"text_hash\":\"$HASH_B\",\"count\":1}]")"             # ok_to_flag recomputed: mixed
+  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$HASH_A\",\"count\":1}]")"                                                      # ok_to_flag recomputed: all-registry but false
+  "$(mk_body "$KEY" false 0 "[]")"                                                                                                 # ok_to_flag recomputed: vacuous true
+  "$(mk_body "$KEY" true 1.5 "[]")" "$(mk_body "$KEY" true -1 "[]")" "$(mk_body "$KEY" true '"1"' "[]")" "$(mk_body "$KEY" true null "[]")" # total, via the sum
+  "$(mk_body "$KEY" true 0 "{}")"                                                                                                  # by_hash type
+)
 check "MC control: the pristine script satisfies every probe" pristine_ok "$SUT"
 mutant m1 's/^\[\[ "\$KEY" =~ \$KEY_RE \]\].*$/true/'
 mutant m2 's/^case "\$-" in$/case "none" in/'
@@ -251,7 +293,17 @@ mutant m5 's#^jq -e --arg k "\$KEY" '"'"'$#jq -e --arg k "$KEY" '"'"'true or#'
 mutant m6 's#^HOST="https://app\.soleur\.ai"#HOST="${APP_URL:-https://app.soleur.ai}"#'
 mutant m7 's#^bc_read_token (.*) \|\| fail .*$#bc_read_token \1 || true#'
 mutant m8 's#and \(\[\.by_hash\[\] \| \.count\] \| add // 0\) == \.total#and true#'
-for m in m1 m2 m3 m4 m5 m6 m7 m8; do
+# m9: each clause of the by_hash / verdict check, dropped or weakened on its own line.
+mutant m9a 's#^  and \(\.by_hash \| all\(\.count .*$#  and true#'
+mutant m9b 's#all\(\.count \| \. == floor and \. >= 1\)#all(.count | . >= 1)#'
+mutant m9c 's#and \. >= 1\)\)$#and . >= 0))#'
+mutant m9e 's#^  and \(\.by_hash \| all\(\.text_hash .*$#  and true#'
+mutant m9f 's#all\(\.text_hash \| type == "string" and test\(.*$#all(.text_hash | type == "string")) #'
+mutant m9g 's#(all\(\.text_hash .*)\[0-9a-f\]#\1[0-9a-fA-F]#'
+mutant m9h 's#^  and \.ok_to_flag == .*$#  and true#'
+mutant m9i 's#\| all\)$#| any)#'
+mutant m9j 's#\[\.by_hash\[\] \| \.text_hash == \$r\]#[.by_hash[0] | .text_hash == $r]#'
+for m in m1 m2 m3 m4 m5 m6 m7 m8 m9a m9b m9c m9e m9f m9g m9h m9i m9j; do
   check_not "M-$m the mutant is caught by a probe" pristine_ok "$MUT/scripts/$m.sh"
 done
 
@@ -259,7 +311,7 @@ echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"
-FLOOR=120
+FLOOR=205
 if [ $((PASS + FAIL)) -lt "$FLOOR" ]; then echo "ANTI-VACUITY FLOOR TRIPPED: $((PASS + FAIL)) assertion(s) ran, expected at least $FLOOR."; exit 1; fi
 if [ "$FAIL" -gt 0 ]; then echo "SOME TESTS FAILED"; exit 1; fi
 echo "ALL TESTS PASSED"

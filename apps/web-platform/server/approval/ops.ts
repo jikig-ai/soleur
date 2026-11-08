@@ -306,10 +306,12 @@ export const LEGAL_OPS = {
   /**
    * A store call on the verify or ack path failed, threw or answered an unrecognised payload; `tags.stage` is one of
    * STORE_FAILED_STAGES: `verify` (the verify RPC), `ack_state` (the reconciliation RPC), `ack` (the decide path's flush or
-   * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; verify endpoint step 4) or `config` (a token or founder id
-   * that is SET but malformed; once per process, names only the variable) or `counts` (the aggregate read behind
-   * GET /api/internal/legal-acceptance/[key]/counts failed, threw, or answered an undocumented shape, including migration 186
-   * not applied; #12429). No paging rule yet (#12195).
+   * ack write), `registry` (the legal text could not be read, or the committed text is malformed: bad_bytes, no_front_matter, bad_version, bad_valid_until; the on-call reads extra.code; the verify route's step 4 and the counts route's step 4, so both
+   * routes emit it) or `config` (a token or founder id that is SET but malformed; once per route module, so a malformed
+   * token yields one event from each of the verify and counts routes; names only the variable) or `counts` (the aggregate
+   * read behind GET /api/internal/legal-acceptance/[key]/counts failed, threw, or answered an undocumented shape, including
+   * migration 186 not applied; extra.code is the SQLSTATE and extra.reason is "too_many_hashes" when the RPC refused with
+   * 54000; #12429). No paging rule yet (#12195).
    */
   storeFailed: {
     op: "store_failed",

@@ -398,7 +398,6 @@ scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
 scripts/ci-oracle-review	1261	floor
 scripts/ci-parked-hold	7000	floor
-scripts/legal-acceptance-counts	5000	floor
 scripts/ci-pr-selection	1222	floor
 scripts/ci-push-dedupe	92114	measured
 scripts/classify-workflow-transitions	2409	measured
@@ -481,6 +480,7 @@ scripts/inngest-zot-boot-7462	426	measured
 scripts/inngest-zot-client-authz-6500	499	measured
 scripts/jobs1-stopgap-7432	1222	floor
 scripts/learning-retrieval-bench	922	measured
+scripts/legal-acceptance-counts	5000	floor
 scripts/lib/bearer-curl.test.sh	3576	measured
 scripts/lib/frontmatter-strip.test.sh	197	measured
 scripts/lib/git-data-rotate-stamp.test.sh	1222	floor

@@ -34,7 +34,7 @@ fail() { printf 'counts: %s\n' "$1" >&2; exit "${2:-1}"; }
 [ "$#" -eq 1 ] || fail "usage: scripts/legal-acceptance-counts.sh <key>" 64
 
 KEY="$1"
-KEY_RE='^[a-z0-9][a-z0-9-]{0,62}$' # the same shape as KEY_RE in server/legal-acceptance/canonical.ts (cross-layer-limits.test.ts)
+KEY_RE='^[a-z0-9][a-z0-9-]{0,62}$' # KEY_RE of server/legal-acceptance/canonical.ts; test/legal-acceptance/cross-layer-limits.test.ts extracts THIS line and compares it
 [[ "$KEY" =~ $KEY_RE ]] || fail "key must match ^[a-z0-9][a-z0-9-]{0,62}\$" 64
 
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)" || fail "cannot resolve the script directory"
@@ -70,15 +70,24 @@ esac
 
 [ -n "$BC_BODY" ] && [ -f "$BC_BODY" ] || fail "empty response"
 
-# The documented shape, checked field by field: a missing or mistyped field never defaults to true.
+# The documented shape, checked field by field: a missing or mistyped field never defaults to true. The route's verdict is
+# NOT trusted: `ok_to_flag` must equal "every by_hash entry is under the registry hash", recomputed here from the same body,
+# so a body that says true over a foreign hash is refused rather than printed (the equality also forces `ok_to_flag` to be a
+# boolean: a string, a null or a missing field never equals the recomputed true/false). Every by_hash entry must carry an integer
+# count >= 1 and a 64-lowercase-hex text_hash, and the counts must sum to `total`. That equality, over validated counts, is the
+# whole `total` check: only a non-negative integer can equal such a sum (a null, string, fractional or negative total never
+# does), so a separate type/floor/sign clause on `.total` would be dead code that no probe could kill. A non-number or
+# non-object count or entry makes `floor` / `.count` error in jq, and an error is a refusal under `jq -e` (so no separate
+# type clause: it would be dead code).
 jq -e --arg k "$KEY" '
   type == "object"
   and .key == $k
-  and (.ok_to_flag | type == "boolean")
-  and (.total | type == "number" and . == floor and . >= 0)
   and (.registry_hash | type == "string" and test("^[0-9a-f]{64}$"))
   and (.by_hash | type == "array")
+  and (.by_hash | all(.count | . == floor and . >= 1))
+  and (.by_hash | all(.text_hash | type == "string" and test("^[0-9a-f]{64}$")))
   and ([.by_hash[] | .count] | add // 0) == .total
+  and .ok_to_flag == (.registry_hash as $r | [.by_hash[] | .text_hash == $r] | all)
 ' "$BC_BODY" >/dev/null 2>&1 || fail "response is not the documented shape"
 
 OK="$(jq -r '.ok_to_flag' "$BC_BODY")" || fail "response is not the documented shape"
