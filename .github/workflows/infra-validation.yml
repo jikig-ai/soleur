@@ -236,6 +236,10 @@ on:
       # a stale row reads green) would skip the guard whose job is to turn that red.
       - "scripts/lib/web2-luks-rows.sh"
       - "scripts/betterstack-query.sh"
+      # (#12167) The cf-lb-overlay serve arm's relay bind probe judges web-2's relay report with this helper
+      # (and reuses web2-luks-rows.sh's query); lb-weight-gate.test.sh EXECUTES the step against it, so a
+      # PR editing ONLY the helper (loosening the grammar, say) must still run that suite.
+      - "scripts/lib/web2-relay-rows.sh"
       # (#9879) The shared HCL effective-text lexer sourced by workspaces-luks.test.sh (Guard B4) and
       # inngest-luks-sole-copy.test.sh (Guard 1). It sits under tests/scripts/lib/, outside every glob
       # above, so a lexer-ONLY edit (weakening strip_comments, say) would skip both consuming suites.

@@ -1919,7 +1919,7 @@ root = sys.argv[1]
 WRITER = ".github/workflows/workspaces-luks-verify.yml"
 READERS = {"scripts/lib/web2-luks-rows.sh", "apps/web-platform/infra/lb-weight-gate.sh", "apps/web-platform/infra/lb-weight-gate-with-marker.sh",
            ".github/workflows/infra-validation.yml", "scripts/followthroughs/web2-luks-live-6931.sh",
-           "scripts/lib/test-affected-paths.sh"}
+           "scripts/lib/test-affected-paths.sh", "scripts/lib/web2-relay-rows.sh"}
 KEY = re.compile(r"workspaces_luks_cutover[\"'_]*at\b|w2l_marker_name|web2-luks-rows", re.I)
 VERB = re.compile(r"doppler(?:_call)?\b[^\n]*\bsecrets\b[^\n]*\b(set|delete|upload)\b|resource\s+[\"']doppler_secret[\"']|api\.doppler\.com"
                   r"|/secrets?/(set|delete|upload)\b|/configs/config/secrets\b"
@@ -2013,7 +2013,9 @@ PY
   g3_dbin_pipeline='doppler run --preserve-env -p soleur -c prd -- '"$g3_dbin_cmd"
   g3_dbin_ok() { # <cf-lb-overlay.yml copy> -> 0 when the §(c) step hands the wrapper the exact DOPPLER_BIN
     local code
-    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ')" || true  # an all-comment/empty file yields no code: the counts below then read 0 and the check returns non-zero
+    # The serve arm (#12167) injects exactly two more gate inputs through the same inner env; strip those two
+    # exact assignments (and nothing else) so the pin below still sees the wrapper hand-off in its exact form.
+    code="$(grep -v '^[[:space:]]*#' "$1" | sed -e ':a' -e '/\\$/N; s/\\\n[[:space:]]*/ /; ta' | tr -s ' ' | sed -e 's/ SOLEUR_WEB2_SERVING_WEIGHT="[^"]*"//' -e 's/ SOLEUR_SERVING_ROTATION="web-1,web-2"//')" || true  # an all-comment/empty file yields no code: the counts below then read 0 and the check returns non-zero
     [[ "$(grep -cF -- "$g3_dbin_pipeline" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -cF -- "$g3_dbin_cmd" <<<"$code")" -eq 1 ]] \
       && [[ "$(grep -oF 'lb-weight-gate-with-marker.sh' <<<"$code" | wc -l)" -eq 1 ]] \
