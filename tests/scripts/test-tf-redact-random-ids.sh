@@ -398,10 +398,32 @@ UNTERM2="$UNTERM
 UT2OUT="$(tf_redact_random_ids <<<"$UNTERM2")"
 contains "$UT2OUT" '~ id          = "<redacted>" -> "<redacted>"'; check "stuck-state unterminated block: a later id attribute line is over-redacted (fail-safe direction, documented)" "$?"
 
+# --- the counted relay hello-signing key (#12289, A-0 of #12363): random_bytes.proxy_hello_hmac[0] -----------------
+# random_bytes.hex is Sensitive, so the real plan prints `(sensitive value)`; the second block is the defence-in-depth
+# case (a provider that printed the hex in clear), which must still be blanked at a COUNTED address. HEX64 is synthesized.
+HEX64="${HEX32}${HEX32}"
+HMAC_SENS='  # random_bytes.proxy_hello_hmac[0] will be created
+  + resource "random_bytes" "proxy_hello_hmac" {
+      + base64 = (sensitive value)
+      + hex    = (sensitive value)
+      + length = 32
+    }'
+HMAC_CLEAR="  # random_bytes.proxy_hello_hmac[0] will be created
+  + resource \"random_bytes\" \"proxy_hello_hmac\" {
+      + hex    = \"$HEX64\"
+      + length = 32
+    }"
+HMAC_SENS_OUT="$(tf_redact_random_ids <<<"$HMAC_SENS")"
+HMAC_CLEAR_OUT="$(tf_redact_random_ids <<<"$HMAC_CLEAR")"
+[ "$(tf_redact_random_ids <<<"$HMAC_CLEAR")" != "$HMAC_CLEAR" ] && contains "$HMAC_CLEAR" "$HEX64"; check "positive control: the clear-hex counted block is changed by the filter and the raw block carries the 64-hex token" "$?"
+absent "$HMAC_CLEAR_OUT" "$HEX64" && contains "$HMAC_CLEAR_OUT" 'hex    = "<redacted>"'; check "counted random_bytes[0] block: a clear 64-hex value is blanked and the attribute line keeps its shape" "$?"
+[ "$HMAC_SENS_OUT" = "$HMAC_SENS" ]; check "counted random_bytes[0] block: the (sensitive value) form passes through byte-identical (nothing to lose, nothing over-redacted)" "$?"
+[ "$(nlines "$HMAC_CLEAR_OUT")" = "$(nlines "$HMAC_CLEAR")" ] && contains "$HMAC_CLEAR_OUT" 'random_bytes.proxy_hello_hmac[0] will be created'; check "counted random_bytes[0] block: address and line count preserved" "$?"
+
 printf '\n%s passed, %s failed\n' "$PASSES" "$FAILS"
 # Gate. Conservation first, WITHOUT routing through pass()/fail() (neutering either must not disarm it): every check()
 # lands in exactly one bucket. MIN_ASSERTIONS is a FLOOR (never -eq), raised deliberately with the suite.
-MIN_ASSERTIONS=327
+MIN_ASSERTIONS=331
 if [ "$((PASSES + FAILS))" -ne "$CHECKS" ]; then printf 'FATAL: assertion conservation broken: passes+fails=%s checks=%s\n' "$((PASSES + FAILS))" "$CHECKS" >&2; exit 1; fi
 if [ "$CHECKS" -lt "$MIN_ASSERTIONS" ]; then printf 'FATAL: only %s assertions ran, floor is %s\n' "$CHECKS" "$MIN_ASSERTIONS" >&2; exit 1; fi
 [ "$FAILS" -eq 0 ] || exit 1

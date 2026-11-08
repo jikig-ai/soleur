@@ -308,3 +308,7 @@ offline with `proxy-tls.tf` and the real `var.web_hosts`: `ip_addresses ["10.0.1
   private IP is absent from the SANs and a proxy dial to it fails verification, which is the
   fail-closed direction. Teaching the birth gate to admit exactly one cert replace is a follow-up if
   the ordering proves unacceptable.
+
+## Amendment — 2026-11-08 (#12363): the relay hello-signing key joins the count gate
+
+`apps/web-platform/infra/proxy-hello-hmac.tf` adds two resources behind the same `var.host_proxy_tls_enabled` gate and on the same per-merge saved plan: `random_bytes.proxy_hello_hmac` (32 bytes) and the masked `doppler_secret.proxy_hello_hmac_key` (`PROXY_HELLO_HMAC_KEY`, `soleur/prd`). The proxy-TLS family is therefore six addresses (the four above plus the pair), and setting the flag false plans six destroys under `[ack-destroy]`. The key is read by nothing until the signed-hello change lands; the coupling is deliberate (the relay does not exist without TLS) and has one sharp consequence recorded in the file header: toggling the flag false then true mints a DIFFERENT key. Unlike the LUKS passphrases, the key is not yet in the destroy guard's no-ack rotation set; that belongs with the change that makes the verifier fail closed. A new ADR waits for the handshake itself.

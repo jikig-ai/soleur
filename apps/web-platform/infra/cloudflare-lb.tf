@@ -7,10 +7,11 @@
 #
 # HARD BLOCKERS:
 #   B1 fallback_pool_id = web-1 pool (so a disabled LB degrades to web-1, not NXDOMAIN).
-#   B2 web-2 is a DRAINED pool member (weight = var.web2_lb_weight, default 0):
-#      health-monitored but zero serving weight until the #6027 maintenance window flips
-#      0→1 after the GIT_DATA_LUKS_CUTOVER_AT soak marker (the §(c) gate chain +
-#      runtime-bind probe), via the ga-pool-update serve arm — its only feeder.
+#   B2 web-2 is a gated pool member (weight = var.web2_lb_weight, default 1 = serving, live
+#      since the 2026-11-08 serve flip, #12167): the 0→1 flip rode the ga-pool-update serve arm
+#      behind the §(c) gate chain + runtime-bind probe. DRAIN is an explicit act: ga-pool-update
+#      mode=drain passes -var=web2_lb_weight=0, and ga-overlay passes the same 0 so a fresh GA3 create
+#      stays drained (ga-overlay is create-only: it cannot drain a live pool).
 #   B3 relay-is-safety: LB weight must not be flipped to web-2 before owner-side relay active.
 #
 # Zone plan is Free Website; Load Balancing is a separately-billed add-on (~$5/mo, approved).
@@ -45,7 +46,7 @@
 # SNI, so the handshake does not depend on it.
 #
 # Rollback is a revert PR plus the `ga-monitor-fix` arm (http/:80, graded by cf_lb_gate_ga_monitor_update).
-# Traffic is not at risk either way: web-2 is weight 0 and the B1 fallback serves web-1 if every origin reads down.
+# Traffic is not at risk either way: both origins serve (web-2 is weight 1) and the B1 fallback serves web-1 if every origin reads down.
 resource "cloudflare_load_balancer_monitor" "web" {
   account_id       = var.cf_account_id
   type             = "https"
@@ -67,9 +68,9 @@ resource "cloudflare_load_balancer_monitor" "web" {
   }
 }
 
-# Origin pool: web-1 serving at weight 1, web-2 drained at weight 0 (B2) — a drained
-# member is health-checked but receives no traffic, so the pool reports truthful
-# per-origin health for BOTH hosts pre-flip without web-2 serving a single request.
+# Origin pool: web-1 serving at weight 1, web-2 gated by var.web2_lb_weight (B2; default 1 =
+# serving). A drained member (weight 0, via the explicit drain act) is health-checked but
+# receives no traffic, so the pool reports truthful per-origin health for BOTH hosts.
 resource "cloudflare_load_balancer_pool" "web_1" {
   account_id    = var.cf_account_id
   name          = "web-1"
@@ -84,12 +85,12 @@ resource "cloudflare_load_balancer_pool" "web_1" {
     weight  = 1
   }
 
-  # B2: drained member — weight 0 means health is still checked but no traffic is
-  # routed (provider drained semantic). The 0→1 flip is the #6027 window act, gated
-  # by the §(c) gate chain + lb-weight-gate-with-marker.sh — never a config edit.
-  # var.web2_lb_weight DEFAULTS to 0 (variables.tf), so every plan that does not name it
-  # keeps web-2 drained; only the cf-lb-overlay.yml `ga-pool-update mode=serve` arm passes 1,
-  # after its fail-closed gate-chain step. lb-weight-gate.test.sh C.3/C.4 pin all of this.
+  # B2: gated member — weight 0 means health is still checked but no traffic is routed
+  # (provider drained semantic); weight 1 serves. var.web2_lb_weight DEFAULTS to 1
+  # (variables.tf) = live, so plans that do not name it are clean; DRAIN is an explicit
+  # -var=web2_lb_weight=0 (cf-lb-overlay `ga-pool-update mode=drain`; `ga-overlay` passes it for a fresh create), and the
+  # 0→1 flip rode `mode=serve` behind the §(c) gate chain + lb-weight-gate-with-marker.sh.
+  # lb-weight-gate.test.sh C.3/C.4 pin all of this.
   origins {
     name    = "web-2"
     address = hcloud_server.web["web-2"].ipv4_address
@@ -101,7 +102,7 @@ resource "cloudflare_load_balancer_pool" "web_1" {
   # steering_policy selects BETWEEN pools — one default pool makes it vacuous).
   # "random" is the provider default made explicit; "hash" is client-IP-stable
   # selection = de facto session affinity contradicting session_affinity="none";
-  # least_* policies are meaningless at a {1,0} drained shape.
+  # least_* policies are meaningless at a two-member weighted pool (weights are 1/web2_lb_weight).
   origin_steering {
     policy = "random"
   }
@@ -149,7 +150,7 @@ resource "cloudflare_notification_policy" "web_lb_health" {
 resource "cloudflare_load_balancer" "app" {
   zone_id = var.cf_zone_id
   name    = "app.soleur.ai"
-  # default_pool_ids contains ONLY web-1's pool; web-2 rides inside it drained (B2).
+  # default_pool_ids contains ONLY web-1's pool; web-2 rides inside it as a gated member (B2).
   default_pool_ids = [cloudflare_load_balancer_pool.web_1.id]
   fallback_pool_id = cloudflare_load_balancer_pool.web_1.id
   steering_policy  = "off" # pool-level knob; one default pool — origin selection lives in the pool's origin_steering
@@ -157,6 +158,9 @@ resource "cloudflare_load_balancer" "app" {
 
   session_affinity = "none"
 
+  # NOTE: this description is deliberately stale (web-2 has served at weight 1 since the 2026-11-08 serve flip):
+  # editing an attribute value plans a standing in-place LB update, so it changes together with an intended
+  # `ga-pool-update` apply (follow-up issue: stale web-2 weight-0 wording).
   description = "ADR-068 §(b) multi-host GA overlay (web-2 drained at weight 0 until the #6027 window flip)"
 }
 
