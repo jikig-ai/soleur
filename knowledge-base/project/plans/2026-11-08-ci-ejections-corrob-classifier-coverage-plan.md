@@ -417,6 +417,34 @@ whose cancelled leg is green in a sibling PUSH run clears correctly.
 
 **Anchor.** None — witness reads are live evidence; nothing stored is compared.
 
+## Observability
+
+The surface is an operator-run evidence tool: its observability IS its exit codes, its
+stdout ledger and the `ejections-window.json` manifest it writes — there is no daemon to
+lose. Every new read path reports through the same `ReadError` fail-loud seam.
+
+```yaml
+liveness_signal:
+  what: "rc 0 + `replay ejections: wrote N units` + `corroborated`/`queue_oracle` blocks in ejections-window.json"
+  cadence: per invocation (operator-run, §4 runbook)
+  alert_target: operator reading the receipt
+  configured_in: scripts/ci-pr-affected-replay.py (cmd_ejections print lines)
+error_reporting:
+  destination: stderr + ReadError → not-evaluable synthetic unit
+  fail_loud: yes — a failed read is a counted unit, never a silent pass
+failure_modes:
+  - {mode: "index-dropped merge_group run", detection: "corroborated.missing_ids non-empty", alert_route: "ejections-window.json + expected_units census"}
+  - {mode: "truncated/uncounted corroboration read", detection: "total_count != seen ReadError → corroboration-read: unit", alert_route: "unit in units-ejections.jsonl"}
+  - {mode: "timeline oracle read failure", detection: "queue_oracle.read_failures > 0", alert_route: "queue-oracle-read: unit + window json"}
+  - {mode: "population short/stale", detection: "units != expected_units", alert_route: "aggregate rc 2"}
+logs:
+  where: invocation stdout/stderr; units JSONL + ejections-window.json under --out; committed receipts under the spec dir
+  retention: repo-committed receipts
+discoverability_test:
+  command: "python3 -I scripts/ci-pr-affected-replay.py verdict --a pass --b pass --c pass --d pass"
+  expected_output: "computed=GO"
+```
+
 ## Architecture Decision (ADR/C4)
 
 Detection review: no ownership/tenancy boundary move, no new substrate, no new trust
@@ -520,6 +548,16 @@ credentials, same trust level. No `.c4` edit required.
   `filter=latest`, already read).
 - The `test` aggregate job is in `ALWAYS_RUN_JOBS` — its presence in `failing` notes
   `always-run-job` and never makes a unit not-evaluable by itself.
+- The widened `[ -~]+?` charset admits any printable label — including a noise line like
+  `[FAIL] freeform words (90ms)`; a spurious capture is harmless because extraction only
+  matters through the `skipped_suites` membership intersection, but the suite rows must
+  prove the control-byte row and the `(EXPECTED)` lines still do not match.
+- Deepen-pass compat check (Phase 4.45): `refused` semantics are preserved — new key is
+  additive (`expected_units`), `mkmeta` fixtures and old manifests stay valid via the
+  fallback; the unsettled consult never moves before `would_skip_hit`/`ne`, so no
+  existing verdict class changes meaning. A commit landing outside the queue
+  (direct push / `--admin`) legitimately has zero queue-branch suites — a recorded zero,
+  not a read failure (ADR-276's own keying measurement: such shas exist).
 - A `flake-cleared` unit counts toward neither attributable nor worst_case — the clearing
   route is what moves the bound; do not confuse "fewer not-evaluable" with "cheaper
   evidence" when writing the receipt.
