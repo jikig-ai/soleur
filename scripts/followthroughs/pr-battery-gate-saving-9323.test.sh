@@ -104,7 +104,13 @@ build_fx() {
     printf '%s\n' "$files" > "$fx/files-$pr.json"
     printf '{"merged_at":"2026-10-02T00:00:00Z","merge_commit_sha":"%s","state":"closed"}\n' "$sha" > "$fx/pr-$pr.json"
     conc="success"; [ "$esc" = "$pr" ] && conc="failure"
-    printf '{"workflow_runs":[{"conclusion":"%s"}]}\n' "$conc" > "$fx/push-$sha.json"
+    # the push run carries an id so the escape arm can read its jobs (a distinct id from the
+    # pull_request run $i — the jobs fixtures are keyed by run id and the two runs are different)
+    printf '{"workflow_runs":[{"id":%s,"conclusion":"%s"}]}\n' "$((500000 + i))" "$conc" > "$fx/push-$sha.json"
+    # an escape fixture's push run is red on a GATED job — the classifier must find it
+    if [ "$esc" = "$pr" ]; then
+      jq -n '{jobs:[{name:"test-scripts (3/7)",conclusion:"failure",created_at:"2026-10-02T00:00:00Z",started_at:"2026-10-02T00:00:00Z",completed_at:"2026-10-02T00:30:00Z"}]}' > "$fx/jobs-$((500000 + i)).json"
+    fi
     # the run's artifact listing: an empty one for tsv-mode none (evidence_absent), else <arts_n> exactly-named
     # suite-timings-(scripts|scripts-heavy)-N artifacts (the strict selector the probe shares with watch-shard-balance)
     local aj="" an anm
@@ -133,6 +139,7 @@ expect() {
 }
 
 build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~49.3 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
+if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the classifier's third read is red-only"; else pass "a green push run issues no jobs read (the need_min 2-read bound holds)"; fi
 build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.24 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
 build_fx "$TMP/s3" 25 40 0 0 110;   expect "FAIL: a green PR whose merge-commit push run is red is an escape" 1 "ESCAPE: PR 110" "$TMP/s3"
 build_fx "$TMP/s4" 5 40;            expect "NOT YET: 5 qualifying runs (< 20)" 2 "NOT YET" "$TMP/s4"
@@ -153,8 +160,28 @@ build_fx "$TMP/b5" 25 40; for i in $(seq 1 25); do sed -i 's/test-scripts (1\/7)
                                     expect "a run with no test-scripts job measures nothing and is excluded" 2 "NOT YET: 0" "$TMP/b5"
 build_fx "$TMP/b6" 25 40; rm -f "$TMP/b6/push-sha101.json"; printf '{"workflow_runs":[]}\n' > "$TMP/b6/push-sha101.json"
                                     expect "an absent push run is NOT YET, never 'no escape'" 2 "no completed push run" "$TMP/b6"
-build_fx "$TMP/b7" 25 40; printf '{"workflow_runs":[{"conclusion":"timed_out"}]}\n' > "$TMP/b7/push-sha102.json"
+build_fx "$TMP/b7" 25 40; printf '{"workflow_runs":[{"id":500777,"conclusion":"timed_out"}]}\n' > "$TMP/b7/push-sha102.json"
+printf '{"jobs":[{"name":"test-scripts (5/7)","conclusion":"timed_out"}]}' > "$TMP/b7/jobs-500777.json"
                                     expect "a timed_out push run on a green PR is an escape" 1 "ESCAPE: PR 102" "$TMP/b7"
+# --- Guard Contract rows 2-5 (#9323, Arm A ruling 2026-11-08): a red push run is an ADR-262 R1
+# escape only when >=1 failed job is a gated test-scripts* leg; a run red solely on unrelated
+# infra jobs is reported, never counted; a jobs read that cannot be established is pending, never ok.
+build_fx "$TMP/e2" 25 40 0 0 112; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"tenant-integration","conclusion":"failure"}]}' > "$TMP/e2/jobs-500012.json"
+                                    expect "a red push run on unrelated jobs only is reported, never an escape" 0 "never an escape" "$TMP/e2"
+build_fx "$TMP/e3" 25 40 0 0 115; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (2/7)","conclusion":"failure"}]}' > "$TMP/e3/jobs-500015.json"
+                                    expect "a gated test-scripts failure beside unrelated reds is still an escape" 1 "ESCAPE: PR 115" "$TMP/e3"
+build_fx "$TMP/e4" 25 40 0 0 113; rm -f "$TMP/e4/jobs-500013.json"
+                                    expect "a red push run whose jobs read fails is NOT YET, never ok" 2 "no completed push run" "$TMP/e4"
+build_fx "$TMP/e5" 25 40 0 0 114; printf '{"jobs":[]}' > "$TMP/e5/jobs-500014.json"
+                                    expect "a red push run with an empty jobs read is NOT YET, never ok" 2 "no completed push run" "$TMP/e5"
+build_fx "$TMP/e6" 25 40 0 0 116; printf '{"workflow_runs":[{"conclusion":"failure"}]}\n' > "$TMP/e6/push-sha116.json"
+                                    expect "a red push run with no run id is NOT YET, never ok" 2 "no completed push run" "$TMP/e6"
+build_fx "$TMP/e7" 25 40 0 0 117; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":"cancelled"}]}' > "$TMP/e7/jobs-500017.json"
+                                    expect "a red push run whose gated job is cancelled (inconclusive) is NOT YET, never ok and never an escape" 2 "no completed push run" "$TMP/e7"
+out="$(env FX="$TMP/e7" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"cancelled/inconclusive"* ]]; then pass "the inconclusive-gated pending row echoes its detail"; else fail "inconclusive-gated pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
+build_fx "$TMP/e8" 25 40 0 0 118; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":null}]}' > "$TMP/e8/jobs-500018.json"
+                                    expect "a red push run whose gated job has null conclusion (still in flight at read) is NOT YET, never ok" 2 "no completed push run" "$TMP/e8"
 build_fx "$TMP/b8" 25 40; bash -c 'FX="'"$TMP/b8"'" PATH="'"$TMP/bin"':$PATH" GH_TOKEN=x bash "'"$PROBE"'"' >/dev/null 2>&1
 if grep -q 'created=%3E2026-10-01T00:00:00Z' "$TMP/b8/requests.log" && grep -q 'status=completed' "$TMP/b8/requests.log" && grep -q 'event=pull_request' "$TMP/b8/requests.log"; then
   pass "the runs query is windowed after the merge time, completed and pull_request-only"
