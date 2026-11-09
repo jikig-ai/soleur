@@ -320,7 +320,6 @@ export async function gitWithInstallationAuth(
   const scriptPath = hardened ? writeAskpassScriptTo(hardened.gitDir) : writeAskpassScript();
 
   try {
-    const fullArgs = [...HELPER_RESET, ...(hardened ? HARDENED_GIT_ARGS : []), ...args];
     const authEnv = {
       GIT_ASKPASS: scriptPath,
       GIT_INSTALLATION_TOKEN: token,
@@ -333,10 +332,27 @@ export async function gitWithInstallationAuth(
       // unexpected `$HOME` sibling ever becomes writeable.
       GIT_CONFIG_GLOBAL: "/dev/null",
     };
-    // Hardened: an allowlisted environment, never the server's. Legacy: unchanged.
-    const env: NodeJS.ProcessEnv = hardened
-      ? buildIsolatedGitEnv(hardened, authEnv)
-      : { ...process.env, ...authEnv };
+    // Hardened: an allowlisted environment, never the server's (unchanged). Legacy: the shared host-git invocation
+    // (hardening arguments before the credential-helper reset, a scrubbed environment plus this arm's own auth
+    // variables). `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_NOSYSTEM` are NOT forwarded from `authEnv` on this arm: the
+    // helper owns them (the image identity file), and `/dev/null` there would drop the fallback identity.
+    let fullArgs: string[];
+    let env: NodeJS.ProcessEnv;
+    if (hardened) {
+      fullArgs = [...HELPER_RESET, ...HARDENED_GIT_ARGS, ...args];
+      env = buildIsolatedGitEnv(hardened, authEnv);
+    } else {
+      const { GIT_CONFIG_GLOBAL: _global, GIT_CONFIG_NOSYSTEM: _nosystem, ...legacyAuthEnv } = authEnv;
+      void _global;
+      void _nosystem;
+      const h = hostGitInvocation([...HELPER_RESET, ...args], {
+        cwd: execOpts.cwd,
+        extraEnv: legacyAuthEnv,
+        allowProtocol: LEGACY_ALLOW_PROTOCOL,
+      });
+      fullArgs = h.args;
+      env = h.env;
+    }
 
     // Async exec (non-blocking) — critical for Next.js route handlers
     // that invoke this helper on the request path (kb/upload pull,

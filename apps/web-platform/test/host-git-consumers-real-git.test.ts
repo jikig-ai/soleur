@@ -34,6 +34,7 @@ const H = vi.hoisted(() => ({
   fetchImpl: (async (_a: { workspacePath: string }) => {}) as (a: { workspacePath: string }) => Promise<void>,
   reportSilentFallback: vi.fn(),
   logWarn: vi.fn(),
+  keepProductionProtocol: false,
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -71,6 +72,21 @@ vi.mock("@/lib/supabase/tenant", () => {
   return {
     RuntimeAuthError: FakeRuntimeAuthError,
     getFreshTenantClient: async () => ({ from: () => ({ select: () => ({ eq: () => chain }) }) }),
+  };
+});
+
+// Fixtures use a local file:// remote while production pins https / ssh. Widen through the helper's OWN parameter
+// (`allowProtocol`), never a separate seam; the uploadpack rows keep the production value on purpose.
+vi.mock("@/server/host-git", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/host-git")>();
+  return {
+    ...actual,
+    hostGitInvocation: (args: readonly string[], opts: import("@/server/host-git").HostGitOpts = {}) =>
+      actual.hostGitInvocation(args, {
+        ...opts,
+        allowProtocol:
+          opts.allowProtocol !== undefined && !H.keepProductionProtocol ? `${opts.allowProtocol}:file` : opts.allowProtocol,
+      }),
   };
 });
 
@@ -200,7 +216,8 @@ const overlayDriver: Driver = {
     mkdirSync(join(w.root, "workspaces"));
     H.fetchImpl = async ({ workspacePath }) => {
       const fetch = gitDataFetchRefspecs(H.WT);
-      w.git(workspacePath, "fetch", "-q", "--update-shallow", `file://${store}`, fetch.heads, fetch.negativeRescue, fetch.tags);
+      // The fixture's OWN fetch runs after the carrier is planted: keep it from tripping the carrier itself.
+      w.git(workspacePath, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "fetch", "-q", "--update-shallow", `file://${store}`, fetch.heads, fetch.negativeRescue, fetch.tags);
     };
     return { ws, upstream: origin, storeTip, note: origin };
   },
@@ -305,6 +322,7 @@ const DRIVERS: Driver[] = [syncPushDriver, overlayDriver, keyAuthPushDriver, leg
 let currentPlanters: Planter[] = [];
 
 async function runCell(d: Driver, p: Planter): Promise<{ tags: string[]; ctx: Ctx }> {
+  H.keepProductionProtocol = p.id === "uploadpack-local-remote";
   const ctx = await d.prepare();
   currentPlanters = [p];
   if (d !== overlayDriver) plant(p, ctx.ws, w);
@@ -501,11 +519,123 @@ describe("RESIDUAL rows: measured open items, not controls", () => {
   });
 });
 
+describe("key-auth arm: transport pinning survives repo-config rewriting (RESIDUAL: the dial still goes to the rewritten host)", () => {
+  // A fake `ssh` first on PATH records its argv and fails like a refused handshake. The helper's scrubbed env keeps PATH.
+  function fakeSsh(): { bin: string; argvFile: string } {
+    const bin = join(w.root, "bin");
+    mkdirSync(bin);
+    const argvFile = join(w.root, "ssh-argv");
+    writeFileSync(join(bin, "ssh"), `#!/bin/sh\necho "$@" >> '${argvFile}'\nexit 255\n`, { mode: 0o755 });
+    return { bin, argvFile };
+  }
+
+  it("a repo-config core.sshCommand does not run for the key-auth arm (GIT_SSH_COMMAND wins) [pre-existing control / regression pin]", async () => {
+    const { bin } = fakeSsh();
+    const { ws } = newWorkspace(w);
+    w.git(ws, "remote", "add", "git-data", "ssh://git@git-data.invalid/repo.git");
+    w.git(ws, "config", "core.sshCommand", w.helper("ssh-command", "exit 255"));
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    try {
+      await gitWithPrivateKeyAuth(["ls-remote", "git-data"], "-----BEGIN OPENSSH PRIVATE KEY-----\nZmFrZQ==\n-----END OPENSSH PRIVATE KEY-----", makeEd25519Pin(), { cwd: ws, timeout: 20_000 }).catch(() => {});
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    expect(w.tags()).not.toContain("ssh-command");
+  });
+
+  it("RESIDUAL: a repo-config url.<x>.insteadOf makes the key-auth arm dial the rewritten host, with the host-key pin options still on the command", async () => {
+    const { bin, argvFile } = fakeSsh();
+    const { ws } = newWorkspace(w);
+    w.git(ws, "remote", "add", "git-data", "ssh://git@git-data.invalid/repo.git");
+    w.git(ws, "config", "url.ssh://git@evil.invalid/.insteadOf", "ssh://git@git-data.invalid/");
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    try {
+      await gitWithPrivateKeyAuth(["ls-remote", "git-data"], "-----BEGIN OPENSSH PRIVATE KEY-----\nZmFrZQ==\n-----END OPENSSH PRIVATE KEY-----", makeEd25519Pin(), { cwd: ws, timeout: 20_000 }).catch(() => {});
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    const argv = readFileSync(argvFile, "utf8");
+    residualRows++;
+    // measured open item, not a control: the rewritten host IS dialled ...
+    expect(argv).toContain("evil.invalid");
+    // ... and the pinned options that keep the key from authenticating to an unpinned host are on the same command
+    expect(argv).toContain("HostKeyAlias=git-data");
+    expect(argv).toContain("StrictHostKeyChecking=yes");
+    expect(argv).toMatch(/UserKnownHostsFile=\S+\.known_hosts/);
+    expect(argv).not.toContain("StrictHostKeyChecking=no");
+  });
+});
+
+describe("census: every host-side git exec site is classified (consistency with the source, not integrity)", () => {
+  // The census proves the classification table agrees with the source IN THE SAME COMMIT; a diff can edit both. The
+  // behavioural rows above are the integrity half. A sixth in-scope site in any file reddens the unclassified check.
+  const SERVER = join(__dirname, "..", "server");
+  const IN_SCOPE = ["session-sync.ts", "ensure-workspace-repo.ts", "git-data-replication.ts", "git-auth.ts", "inflight-checkpoint.ts"];
+  const CENSUS_ONLY: Record<string, string> = {
+    "compound-promote-create-gates.ts": "own scrubbed env + hardening (the model for the helper); async closed-evidence",
+    "context-queries-hook.ts": "read-only context queries",
+    "git-config-atomic.ts": "census item: atomic config writes into the workspace (follow-up)",
+    "git-worktree-validity.ts": "own minimal env, rev-parse probe only",
+    "push-branch.ts": "legacy branch census-only; the isolated-GIT_DIR path is operator-held and untouched",
+    "workspace.ts": "fresh `git init` / clone into a new directory",
+    "worktree-config-seed.ts": "census item: seeds worktree config",
+  };
+  const CRON_DIR = join("inngest", "functions");
+
+  /** Code only: a doc comment that quotes an exec call is not an exec site. */
+  const code = (path: string): string =>
+    readFileSync(path, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+  function walk(dir: string, out: string[] = []): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p, out);
+      else if (e.name.endsWith(".ts")) out.push(p);
+    }
+    return out;
+  }
+
+  const GIT_EXEC = /(?:execFile|execFileSync|spawn|spawnSync|execFileAsync|execFileP)\(\s*"git"/g;
+
+  it("no unclassified file execs git, and every in-scope file reaches git through the helper", () => {
+    const hits: Record<string, number> = {};
+    for (const f of walk(SERVER)) {
+      const rel = f.slice(SERVER.length + 1);
+      const n = (code(f).match(GIT_EXEC) ?? []).length;
+      if (n > 0) hits[rel] = n;
+    }
+    const unclassified = Object.keys(hits).filter(
+      (rel) => !IN_SCOPE.includes(rel) && !(rel in CENSUS_ONLY) && !rel.startsWith(CRON_DIR),
+    );
+    expect(unclassified, "a host-side git exec site is not classified: add it to IN_SCOPE (and route it through hostGitInvocation) or to CENSUS_ONLY with a reason").toEqual([]);
+    for (const rel of IN_SCOPE) {
+      const src = code(join(SERVER, rel));
+      expect(src, `${rel} does not use hostGitInvocation`).toContain("hostGitInvocation(");
+      // every exec of git in an in-scope file passes an env: no bare `execFile*("git", args)` with the server environment
+      for (const m of src.matchAll(/(?:execFile|execFileSync|execFileAsync|execFileP)\(\s*"git"/g)) {
+        const window = src.slice(m.index, m.index + 500);
+        expect(window, `${rel}: a git exec without an explicit env: ${window.slice(0, 80)}`).toMatch(/env/);
+      }
+    }
+  });
+
+  it("production call sites pass only the two arm constants as allowProtocol", () => {
+    const sites: string[] = [];
+    for (const f of walk(SERVER)) {
+      if (f.endsWith("host-git.ts")) continue;
+      for (const m of code(f).matchAll(/allowProtocol:\s*([A-Za-z_]+)/g)) sites.push(m[1]);
+    }
+    expect(sites.sort()).toEqual(["KEY_AUTH_ALLOW_PROTOCOL", "LEGACY_ALLOW_PROTOCOL"]);
+  });
+});
+
 describe("floor", () => {
   it("the battery executed one canary-checked run per closable cell (derived, not a literal)", () => {
     const expected = DRIVERS.reduce((n, d) => n + d.closable.length, 0);
     expect(canaryCheckedRuns).toBe(expected);
-    const residualExpected = DRIVERS.reduce((n, d) => n + d.residual.length, 0) + 2;
+    const residualExpected = DRIVERS.reduce((n, d) => n + d.residual.length, 0) + 3; // + merge-driver/token, insteadOf, rewritten-host
     expect(residualRows).toBe(residualExpected);
     expect(PLANTERS.length).toBeGreaterThan(0);
   });

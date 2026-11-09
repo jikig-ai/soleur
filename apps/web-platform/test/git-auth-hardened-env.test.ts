@@ -4,6 +4,7 @@
  * BEFORE a token is minted. The legacy form is asserted unchanged next to it, so "opt-in" is a tested claim.
  */
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { hostGitInvocation } from "../server/host-git";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -339,13 +340,17 @@ describe("gitWithInstallationAuth child env and argv", () => {
     expect(args.slice(-3)).toEqual(["push", "u", `${"c".repeat(40)}:refs/heads/x`]);
   });
 
-  test("legacy form (field unset): no hardening args, no GIT_DIR, process.env still inherited", async () => {
+  test("legacy form (field unset): the shared host-git block precedes the credential reset, the env is scrubbed, no GIT_DIR", async () => {
     await gitWithInstallationAuth(["push", "u", "HEAD:refs/heads/x"], 1, { cwd: "/ws/parent/work" });
     const { args, opts } = calls[0] as Call;
-    expect(args).toEqual(["-c", "credential.helper=", "push", "u", "HEAD:refs/heads/x"]);
-    expect(args).not.toContain("--no-replace-objects");
-    expect(args).not.toContain("core.hooksPath=/dev/null");
-    expect(opts.env?.SOLEUR_TEST_SECRET_CANARY).toBe("canary-value");
+    const block = hostGitInvocation([]).args;
+    expect(args).toEqual([...block, "-c", "credential.helper=", "push", "u", "HEAD:refs/heads/x"]);
+    expect(args).toContain("--no-replace-objects");
+    expect(args).toContain("core.hooksPath=/dev/null");
+    // the server's process.env is no longer inherited by the legacy form
+    expect(opts.env?.SOLEUR_TEST_SECRET_CANARY).toBeUndefined();
     expect(opts.env?.GIT_DIR).toBeUndefined();
+    expect(opts.env?.GIT_ALLOW_PROTOCOL).toBe("https");
+    expect(opts.env?.GIT_WORK_TREE).toBe("/ws/parent/work");
   });
 });

@@ -57,7 +57,7 @@ export function fixtureGitEnv(home: string): NodeJS.ProcessEnv {
     GIT_TERMINAL_PROMPT: "0",
     GIT_ALLOW_PROTOCOL: "file:https:ssh",
     ...IDENT,
-  };
+  } as unknown as NodeJS.ProcessEnv;
 }
 
 export interface World {

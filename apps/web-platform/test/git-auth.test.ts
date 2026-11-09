@@ -270,7 +270,8 @@ describe("gitWithInstallationAuth", () => {
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
     expect(env.GIT_TERMINAL_PROGRESS).toBe("0");
     expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
-    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    // the helper owns the global config: the image identity file, never /dev/null (a workspace with no local identity must commit)
+    expect(env.GIT_CONFIG_GLOBAL).toBe(AGENT_GIT_GLOBAL_CONFIG);
     expect(env.GIT_INSTALLATION_TOKEN).toBe(fakeToken);
     expect(env.GIT_USERNAME).toBe("x-access-token");
   });
@@ -289,8 +290,12 @@ describe("gitWithInstallationAuth", () => {
 
     expect(capturedCalls.length).toBe(1);
     const args = capturedCalls[0].args;
-    // The FIRST flags must reset credential.helper BEFORE the user's args
-    expect(args.slice(0, 2)).toEqual(["-c", "credential.helper="]);
+    // The shared host-git hardening block comes first (computed from the helper, not a copied literal), then the
+    // credential.helper reset, then the caller's args.
+    const block = hostGitInvocation([]).args;
+    expect(args.slice(0, block.length)).toEqual(block);
+    expect(args.slice(block.length, block.length + 2)).toEqual(["-c", "credential.helper="]);
+    expect(args.slice(block.length + 2)).toEqual(["push", "origin", "main"]);
     expect(args).toContain("push");
     expect(args).toContain("origin");
     expect(args).toContain("main");
