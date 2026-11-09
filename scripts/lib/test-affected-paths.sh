@@ -1383,6 +1383,7 @@ AFFECTED_PLUGINS_SOLEUR_PATHS=(
   "apps/web-platform/infra/modules/git-data-userdata/main.tf"  # plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts:198
   "apps/web-platform/lib/c4-canonical.mjs"
   "apps/web-platform/package.json"  # plugins/soleur/scripts/merge-effect-class.test.sh:99
+  "apps/web-platform/scripts/verify-required-secrets.sh"  # plugins/soleur/test/terraform-target-parity.test.ts:6622
   "apps/web-platform/server/auto-sync-trigger.ts"
   "apps/web-platform/server/c4-render.ts"
   "apps/web-platform/server/inngest/cron-manifest.ts"
