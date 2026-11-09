@@ -810,14 +810,33 @@ describe.skipIf(!ENABLED)("migration 186 behaviour (rolled-back real rows)", () 
     });
   });
 
+  // Set-based seeding for the cap case: the question there is how the counts function behaves over 21 distinct hashes, not how
+  // a decision is made (the cases above drive the product write path). Twenty-one product-path decisions are about 130 round
+  // trips to the dev database and exceeded the runner's 16 s default. The write-door setting is the one the product function
+  // sets around its own INSERT, and each row gets the consumed, confirmed intent the guard trigger demands (same user, key,
+  // hash, version, session; verified_at = reauth_at). The trigger still computes row_hash. now() is fixed inside the
+  // transaction, so verified_at and reauth_at match.
+  const seedRows = async (t: Txn, hashes: string[]) => {
+    const csv = hashes.join(",");
+    await t`insert into public.legal_reauth_event (id, user_id, key, text_hash, version, session_id, expires_at, verified_at, consumed_at)
+            select md5('e' || h)::uuid, md5('u' || h)::uuid, ${KEY}::text, h, 'v-seed', 'seed-session',
+                   now() + interval '30 minutes', now(), now()
+              from unnest(string_to_array(${csv}::text, ',')) as h`;
+    await t`select set_config('app.legal_acceptance_rpc', 'on', true)`;
+    await t`insert into public.legal_acceptance (founder_id, key, text_hash, version, choice, reauth_method, reauth_at, session_id, event_id)
+            select md5('u' || h)::uuid, ${KEY}::text, h, 'v-seed', 'accept', 'email-code', now(), 'seed-session', md5('e' || h)::uuid
+              from unnest(string_to_array(${csv}::text, ',')) as h`;
+    await t`select set_config('app.legal_acceptance_rpc', 'off', true)`;
+  };
+
   test("exactly 20 distinct hashes are answered in full; a 21st is refused (54000) with a static message, never truncated", async () => {
     await scenario(async (t) => {
       const hashes = Array.from({ length: 21 }, (_, i) => (i + 1).toString(16).padStart(64, "0"));
-      for (const h of hashes.slice(0, 20)) await decideAsNewFounder(t, h);
+      await seedRows(t, hashes.slice(0, 20));
       const full = await countsFn(t);
       expect(full.total).toBe(20);
       expect(full.by_hash.map((r: { text_hash: string }) => r.text_hash)).toEqual(hashes.slice(0, 20));
-      await decideAsNewFounder(t, hashes[20]);
+      await seedRows(t, [hashes[20]]);
       let err: { code?: string; message?: string } | null = null;
       try {
         await t.savepoint(async () => {
@@ -830,9 +849,7 @@ describe.skipIf(!ENABLED)("migration 186 behaviour (rolled-back real rows)", () 
       expect(err?.message ?? "").toMatch(/too many distinct hashes/);
       expect(err?.message ?? "").not.toContain(KEY);
     });
-    // 21 founders x (user, intent, record) round trips to the dev database exceed the 16 s default on a CI runner (measured:
-    // timed out at 16 000 ms, and the open transaction then starved the next two tests of a connection).
-  }, 180_000);
+  }, 60_000);
 
   test("a different key's rows are not counted", async () => {
     await scenario(async (t, c) => {
