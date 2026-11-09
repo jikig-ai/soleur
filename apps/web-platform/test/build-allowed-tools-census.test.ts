@@ -229,7 +229,7 @@ describe("buildAllowedTools: unit census", () => {
   });
 
   test("the booted legacy session registers every hand-listed tool except the cc-only ones (a deleted or renamed tool shows here)", () => {
-    const ccOnly = new Set(["edit_c4_diagram", "narrate", "summarize", "auth_revocation_status"].map(fqn));
+    const ccOnly = new Set(["edit_c4_diagram", "narrate", "summarize", "auth_revocation_status", "github_list_pull_requests"].map(fqn));
     const expectedRegistered = [...EXPECTED_GATED_FQNS, ...EXPECTED_AUTO_FQNS].filter((n) => !ccOnly.has(n));
     for (const n of expectedRegistered) expect(booted.platformToolNames, `expected registered: ${n}`).toContain(n);
   });

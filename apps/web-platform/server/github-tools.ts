@@ -17,7 +17,11 @@ import {
   readIssueComments,
   readPullRequest,
   listPullRequestComments,
+  listPullRequests,
 } from "./github-read-tools";
+import { GitHubApiError, type GithubGetOpts } from "./github-api";
+import { hardenReadResult } from "./github-read-sanitize";
+import { SAFE_SEGMENT_RE } from "./resolve-protected-branches";
 import { triggerWorkflow, type createRateLimiter } from "./trigger-workflow";
 import { pushBranch } from "./push-branch";
 import { checkGrant, grantRefusalResponse, reportGrantRefused, type ExecutionGrants } from "./approval/grants";
@@ -191,6 +195,245 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
   );
 }
 
+/** Fixed agent-visible text for a GitHub access fault (401/403). Names the real remedy and rules out Agent web access as the cause. */
+export const GITHUB_ACCESS_NEEDS_RECONNECT =
+  "GitHub access for this workspace needs reconnecting in Settings; this is not caused by Agent web access";
+/** Fixed text for GitHub rate limiting (429, or a 403 whose GitHub message names a rate limit): not a reconnect case. */
+export const GITHUB_RATE_LIMITED = "GitHub is rate limiting this workspace; retry shortly";
+/** Fixed refusal when the workspace's connected repo or installation no longer matches the one the tools were built with. */
+export const GITHUB_REPO_CHANGED = "the connected repository changed; start a new conversation";
+const GITHUB_REDIRECT_REFUSED = "GitHub redirected this request; the redirect was not followed";
+
+/** A sanitized tool fault handed to the registrar's mirror: the tool name, the error class name and the HTTP status ONLY. */
+export interface GithubReadFault {
+  tool: string;
+  errName?: string;
+  status?: number;
+}
+
+/**
+ * The cc-only hardening of the read tools. Present => the tools are built for an entitled Command Center session:
+ * results are redacted per field (title/body), stripped of invisible format characters, capped per field and per response;
+ * any 3xx fails closed; every call first re-confirms the connected repo/installation; faults are mirrored (class name and
+ * status only); 401/403 and the PR/issue 404 get the fixed texts below. Absent => the legacy tools, byte-for-byte unchanged.
+ */
+export interface GithubReadHardening {
+  /** Called for faults worth a Sentry event (5xx, network, 401/403, 3xx, rate limit, repo changed). Never for plain 404/422. */
+  onFault: (fault: GithubReadFault) => void;
+  /** Resolves true while the workspace's connected repo and installation still match the values the tools were built with. */
+  revalidate: () => Promise<boolean>;
+  /** Redact `title`/`body` per field (data minimisation, not an exfiltration control). Default true. */
+  redact?: boolean;
+}
+
+export interface BuildGithubReadToolsOpts {
+  installationId: number;
+  owner: string;
+  repo: string;
+  hardening?: GithubReadHardening;
+}
+
+/** The soleur_platform FQNs of the six cc read tools, in builder order. The registrar's literal list is kept equal to this by a test. */
+export const GITHUB_READ_TOOL_NAMES = [
+  "github_list_pull_requests",
+  "github_read_pr",
+  "github_read_issue",
+  "github_read_issue_comments",
+  "github_list_pr_comments",
+  "github_read_ci_status",
+] as const;
+
+function readFault(err: unknown, tool: string): GithubReadFault {
+  const status = err instanceof GitHubApiError ? err.statusCode : undefined;
+  return { tool, errName: err instanceof Error ? err.name : undefined, ...(typeof status === "number" ? { status } : {}) };
+}
+
+/** Client-input outcomes that are a normal answer, not a fault worth a Sentry event. */
+function isPlainClientOutcome(status: number | undefined): boolean {
+  return status === 400 || status === 404 || status === 410 || status === 422;
+}
+
+function makeReadTools(opts: BuildGithubReadToolsOpts) {
+  const { installationId, owner, repo, hardening } = opts;
+  if (hardening && (!SAFE_SEGMENT_RE.test(owner) || !SAFE_SEGMENT_RE.test(repo))) {
+    throw new Error("buildGithubReadTools: unsafe owner or repo segment");
+  }
+  // Scoped to the hardened tools: any 3xx is refused instead of followed with the installation token attached.
+  const fetchOpts: GithubGetOpts | undefined = hardening ? { redirect: "manual" } : undefined;
+  const extra = (fetchOpts ? [fetchOpts] : []) as [] | [GithubGetOpts];
+  const redact = hardening?.redact !== false;
+
+  /** One read: legacy => the historical wrapper; hardened => revalidate, run, harden, frame; faults get the fixed texts. */
+  const run = async <T>(
+    toolName: string,
+    errorPrefix: string,
+    fn: () => Promise<T>,
+    on404?: () => Promise<string | null>,
+  ): Promise<ToolTextResponse> => {
+    if (!hardening) return wrapGithubRead(errorPrefix, fn);
+    const refuse = (text: string): ToolTextResponse => ({ content: [{ type: "text", text }], isError: true });
+    let stillCurrent = false;
+    try {
+      stillCurrent = (await hardening.revalidate()) === true;
+    } catch {
+      stillCurrent = false; // fail closed: a revalidation fault is a refusal, never a pass
+    }
+    if (!stillCurrent) {
+      hardening.onFault({ tool: toolName, errName: "RepoChanged" });
+      return refuse(`${errorPrefix}: ${GITHUB_REPO_CHANGED}`);
+    }
+    try {
+      const result = await fn();
+      if (result === undefined) throw new Error("reader returned no result");
+      return untrustedRowsResponse("github", hardenReadResult(result, { redact }));
+    } catch (err) {
+      const status = err instanceof GitHubApiError ? err.statusCode : undefined;
+      const message = err instanceof Error ? err.message : "";
+      if (status === 429 || (status === 403 && /rate limit/i.test(message))) {
+        hardening.onFault(readFault(err, toolName));
+        return refuse(`${errorPrefix}: ${GITHUB_RATE_LIMITED}`);
+      }
+      if (status === 401 || status === 403) {
+        hardening.onFault(readFault(err, toolName));
+        return refuse(GITHUB_ACCESS_NEEDS_RECONNECT);
+      }
+      if (typeof status === "number" && status >= 300 && status < 400) {
+        hardening.onFault(readFault(err, toolName));
+        return refuse(`${errorPrefix}: ${GITHUB_REDIRECT_REFUSED}`);
+      }
+      if (status === 404 && on404) {
+        let hint: string | null = null;
+        try {
+          hint = await on404();
+        } catch {
+          hint = null; // the probe is best-effort: fall through to the plain 404 text
+        }
+        if (hint) return refuse(hint);
+      }
+      if (!isPlainClientOutcome(status)) hardening.onFault(readFault(err, toolName));
+      return refuse(`${errorPrefix}: ${message}`);
+    }
+  };
+
+  const listPrs = tool(
+    "github_list_pull_requests",
+    "List pull requests on the connected repository, newest-updated first. Returns metadata only " +
+      "(number, title, state, author login, label names, updated_at, html_url, draft, head_ref) and has_more; " +
+      "use github_read_pr for one PR's details. state is open (default), closed or all.",
+    {
+      state: z.enum(["open", "closed", "all"]).default("open").describe("Which pull requests to list: open (default), closed or all"),
+      per_page: z.number().int().min(1).max(50).default(10).describe("Number of pull requests to return (max 50)"),
+    },
+    async (args): Promise<ToolTextResponse> =>
+      run("github_list_pull_requests", "Error listing pull requests", () =>
+        listPullRequests(installationId, owner, repo, { state: args.state, per_page: args.per_page }, ...extra),
+      ),
+  );
+
+  const readCi = tool(
+    "github_read_ci_status",
+    "Read recent CI workflow run statuses for the connected repository. " +
+      "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
+      "and workflow name/ID. Optionally filter by branch.",
+    {
+      branch: z.string().optional().describe("Filter runs by branch name"),
+      per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
+    },
+    async (args): Promise<ToolTextResponse> =>
+      run("github_read_ci_status", "Error reading CI status", () =>
+        readCiStatus(installationId, owner, repo, { branch: args.branch, per_page: Math.min(args.per_page, 30) }, ...extra),
+      ),
+  );
+
+  const readIssueTool = tool(
+    "github_read_issue",
+    "Read a single issue from the connected repository by number. " +
+      "Returns number, title, state, body (truncated at 10 KB), labels, " +
+      "assignees, milestone title, timestamps, author login, and html_url.",
+    {
+      issue_number: z.number().int().positive().describe("The issue number to read"),
+    },
+    async (args): Promise<ToolTextResponse> =>
+      run(
+        "github_read_issue",
+        "Error reading issue",
+        () => readIssue(installationId, owner, repo, args.issue_number, ...extra),
+        async () => {
+          await readPullRequest(installationId, owner, repo, args.issue_number, ...extra);
+          return `#${args.issue_number} is a pull request; use github_read_pr`;
+        },
+      ),
+  );
+
+  const readIssueCommentsTool = tool(
+    "github_read_issue_comments",
+    "Read conversation comments on an issue. Returns id, author login, " +
+      "body (truncated at 4 KB), created_at, and html_url. Results are " +
+      "tagged kind=\"conversation\" for symmetry with github_list_pr_comments.",
+    {
+      issue_number: z.number().int().positive().describe("The issue number to read comments from"),
+      per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments to return (max 50)"),
+    },
+    async (args): Promise<ToolTextResponse> =>
+      run("github_read_issue_comments", "Error reading issue comments", () =>
+        readIssueComments(installationId, owner, repo, args.issue_number, { per_page: args.per_page }, ...extra),
+      ),
+  );
+
+  const readPrTool = tool(
+    "github_read_pr",
+    "Read a pull request from the connected repository by number. Returns " +
+      "the issue fields plus PR-specific review state: draft, merged, " +
+      "mergeable, mergeable_state, head_ref, base_ref, merged_at. Use this " +
+      "to decide whether a PR needs another push or is already merged.",
+    {
+      pull_number: z.number().int().positive().describe("The pull request number to read"),
+    },
+    async (args): Promise<ToolTextResponse> =>
+      run(
+        "github_read_pr",
+        "Error reading PR",
+        () => readPullRequest(installationId, owner, repo, args.pull_number, ...extra),
+        async () => {
+          await readIssue(installationId, owner, repo, args.pull_number, ...extra);
+          return `#${args.pull_number} is an issue; use github_read_issue`;
+        },
+      ),
+  );
+
+  const listPrCommentsTool = tool(
+    "github_list_pr_comments",
+    "List both review comments (line-specific) and conversation comments on " +
+      "a pull request. Each entry is tagged kind=\"review\" or " +
+      "kind=\"conversation\" so you can filter. Review comments come from " +
+      "/pulls/:n/comments; conversation comments from /issues/:n/comments.",
+    {
+      pull_number: z.number().int().positive().describe("The pull request number to list comments for"),
+      per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments per kind to return (max 50)"),
+    },
+    async (args): Promise<ToolTextResponse> =>
+      run("github_list_pr_comments", "Error listing PR comments", () =>
+        listPullRequestComments(installationId, owner, repo, args.pull_number, { per_page: args.per_page }, ...extra),
+      ),
+  );
+
+  return { listPrs, readCi, readIssue: readIssueTool, readIssueComments: readIssueCommentsTool, readPr: readPrTool, listPrComments: listPrCommentsTool };
+}
+
+/**
+ * The six read-only GitHub tools of the Command Center (#12469): list pull requests, read a PR, read an issue, read issue
+ * comments, list PR comments, read CI status. Exported so the cc dispatcher can register exactly these (through
+ * `cc-github-read.ts`, which lazy-imports this module) without taking the write tools, the workflow-logs tool or the push
+ * tool. Owner, repo and installation are CLOSED OVER and are not schema keys. `hardening` is what makes the set safe next to
+ * open web egress; the registrar always passes it. `buildGithubTools` composes its five legacy reads from the same code with
+ * no hardening.
+ */
+export function buildGithubReadTools(opts: BuildGithubReadToolsOpts): BuildGithubToolsResult {
+  const t = makeReadTools(opts);
+  const tools = [t.listPrs, t.readPr, t.readIssue, t.readIssueComments, t.listPrComments, t.readCi];
+  return { tools, toolNames: GITHUB_READ_TOOL_NAMES.map((n) => `mcp__soleur_platform__${n}`) };
+}
+
 export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsResult {
   const { installationId, owner, repo, defaultBranch, workspacePath, workflowRateLimiter, grants } = opts;
 
@@ -230,23 +473,6 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     async (args): Promise<ToolTextResponse> => wrapToolHandler("Error creating issue", () =>
       createIssue(installationId, owner, repo, args.title, args.body, args.labels),
     /* pretty */ false),
-  );
-
-  const readCi = tool(
-    "github_read_ci_status",
-    "Read recent CI workflow run statuses for the connected repository. " +
-      "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
-      "and workflow name/ID. Optionally filter by branch.",
-    {
-      branch: z.string().optional().describe("Filter runs by branch name"),
-      per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
-    },
-    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading CI status", () =>
-      readCiStatus(
-        installationId, owner, repo,
-        { branch: args.branch, per_page: Math.min(args.per_page, 30) },
-      ),
-    ),
   );
 
   const readLogs = tool(
@@ -290,71 +516,14 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     requireGrant: false,
   });
 
-  // ---------------------------------------------------------------------------
-  // Read-only issue/PR tools (#2843). Matching pattern: readCi/readLogs —
-  // auto-approve, JSON-stringified narrowed output, isError on exception.
-  // Response narrowing + body truncation lives in github-read-tools.ts.
-  // ---------------------------------------------------------------------------
-
-  const readIssueTool = tool(
-    "github_read_issue",
-    "Read a single issue from the connected repository by number. " +
-      "Returns number, title, state, body (truncated at 10 KB), labels, " +
-      "assignees, milestone title, timestamps, author login, and html_url.",
-    {
-      issue_number: z.number().int().positive().describe("The issue number to read"),
-    },
-    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading issue", () =>
-      readIssue(installationId, owner, repo, args.issue_number),
-    ),
-  );
-
-  const readIssueCommentsTool = tool(
-    "github_read_issue_comments",
-    "Read conversation comments on an issue. Returns id, author login, " +
-      "body (truncated at 4 KB), created_at, and html_url. Results are " +
-      "tagged kind=\"conversation\" for symmetry with github_list_pr_comments.",
-    {
-      issue_number: z.number().int().positive().describe("The issue number to read comments from"),
-      per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments to return (max 50)"),
-    },
-    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading issue comments", () =>
-      readIssueComments(
-        installationId, owner, repo, args.issue_number, { per_page: args.per_page },
-      ),
-    ),
-  );
-
-  const readPrTool = tool(
-    "github_read_pr",
-    "Read a pull request from the connected repository by number. Returns " +
-      "the issue fields plus PR-specific review state: draft, merged, " +
-      "mergeable, mergeable_state, head_ref, base_ref, merged_at. Use this " +
-      "to decide whether a PR needs another push or is already merged.",
-    {
-      pull_number: z.number().int().positive().describe("The pull request number to read"),
-    },
-    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error reading PR", () =>
-      readPullRequest(installationId, owner, repo, args.pull_number),
-    ),
-  );
-
-  const listPrCommentsTool = tool(
-    "github_list_pr_comments",
-    "List both review comments (line-specific) and conversation comments on " +
-      "a pull request. Each entry is tagged kind=\"review\" or " +
-      "kind=\"conversation\" so you can filter. Review comments come from " +
-      "/pulls/:n/comments; conversation comments from /issues/:n/comments.",
-    {
-      pull_number: z.number().int().positive().describe("The pull request number to list comments for"),
-      per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments per kind to return (max 50)"),
-    },
-    async (args): Promise<ToolTextResponse> => wrapGithubRead("Error listing PR comments", () =>
-      listPullRequestComments(
-        installationId, owner, repo, args.pull_number, { per_page: args.per_page },
-      ),
-    ),
-  );
+  // Read-only issue/PR/CI tools (#2843): built by the shared read builder below, placed at their historical positions.
+  // No hardening is passed, so the legacy runner's tools, bodies and error text are exactly what they were.
+  const reads = makeReadTools({ installationId, owner, repo });
+  const readCi = reads.readCi;
+  const readIssueTool = reads.readIssue;
+  const readIssueCommentsTool = reads.readIssueComments;
+  const readPrTool = reads.readPr;
+  const listPrCommentsTool = reads.listPrComments;
 
   return {
     tools: [

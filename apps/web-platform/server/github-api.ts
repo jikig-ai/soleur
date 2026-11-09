@@ -103,6 +103,12 @@ async function fetchWithRetry(
   throw lastError;
 }
 
+/** Options of `githubApiGet`. `redirect: "manual"` makes any 3xx fail closed (see the call body). */
+export interface GithubGetOpts {
+  signal?: AbortSignal;
+  redirect?: "manual";
+}
+
 /**
  * Make an authenticated GET request to the GitHub API.
  * Handles 403 (permission upgrade needed) with a descriptive message.
@@ -111,7 +117,7 @@ async function fetchWithRetry(
 export async function githubApiGet<T = unknown>(
   installationId: number,
   path: string,
-  opts?: { signal?: AbortSignal },
+  opts?: GithubGetOpts,
 ): Promise<T> {
   const url = resolveApiUrl(path);
   const token = await generateInstallationToken(installationId);
@@ -124,6 +130,9 @@ export async function githubApiGet<T = unknown>(
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
+      // Opt-in (cc read tools): a 3xx is returned as-is, so `!response.ok` below fails closed instead of following a
+      // redirect with the installation token attached. Absent => default fetch behaviour, unchanged for legacy callers.
+      ...(opts?.redirect === "manual" ? { redirect: "manual" as const } : {}),
     },
     opts?.signal,
   );

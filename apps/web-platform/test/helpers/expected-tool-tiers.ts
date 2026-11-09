@@ -15,6 +15,7 @@ export const EXPECTED_AUTO_APPROVE: readonly string[] = [
   "github_read_issue_comments",
   "github_read_pr",
   "github_list_pr_comments",
+  "github_list_pull_requests",
   "kb_share_list",
   "kb_share_preview",
   "auth_revocation_status",

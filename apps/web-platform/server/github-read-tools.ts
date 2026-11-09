@@ -13,7 +13,9 @@
  */
 
 import type { BoardIssueInput } from "@/lib/workstream";
-import { githubApiGet, githubApiPost, GitHubApiError } from "./github-api";
+import { githubApiGet, githubApiPost, GitHubApiError, type GithubGetOpts } from "./github-api";
+import { SAFE_SEGMENT_RE } from "./resolve-protected-branches";
+import { capChars } from "./github-read-sanitize";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
 
@@ -161,6 +163,15 @@ function clampPerPage(requested: number | undefined): number {
   return Math.min(Math.trunc(n), PER_PAGE_MAX);
 }
 
+
+/**
+ * `githubApiGet` with optional per-call fetch options. When none are given the call has EXACTLY two arguments, so legacy
+ * callers (and tests that pin the argument list) see no change.
+ */
+function apiGet<T>(installationId: number, path: string, fetchOpts?: GithubGetOpts): Promise<T> {
+  return fetchOpts ? githubApiGet<T>(installationId, path, fetchOpts) : githubApiGet<T>(installationId, path);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -174,10 +185,12 @@ export async function readIssue(
   owner: string,
   repo: string,
   issueNumber: number,
+  fetchOpts?: GithubGetOpts,
 ): Promise<IssueSummary> {
-  const raw = await githubApiGet<GhIssueResponse>(
+  const raw = await apiGet<GhIssueResponse>(
     installationId,
     `/repos/${owner}/${repo}/issues/${issueNumber}`,
+    fetchOpts,
   );
   return narrowIssue(raw);
 }
@@ -193,11 +206,13 @@ export async function readIssueComments(
   repo: string,
   issueNumber: number,
   options?: { per_page?: number },
+  fetchOpts?: GithubGetOpts,
 ): Promise<CommentSummary[]> {
   const perPage = clampPerPage(options?.per_page);
-  const raw = await githubApiGet<GhCommentResponse[]>(
+  const raw = await apiGet<GhCommentResponse[]>(
     installationId,
     `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=${perPage}`,
+    fetchOpts,
   );
   return raw.map((c) => narrowComment(c, "conversation"));
 }
@@ -212,10 +227,12 @@ export async function readPullRequest(
   owner: string,
   repo: string,
   pullNumber: number,
+  fetchOpts?: GithubGetOpts,
 ): Promise<PullRequestSummary> {
-  const raw = await githubApiGet<GhPullRequestResponse>(
+  const raw = await apiGet<GhPullRequestResponse>(
     installationId,
     `/repos/${owner}/${repo}/pulls/${pullNumber}`,
+    fetchOpts,
   );
   return {
     ...narrowIssue(raw),
@@ -247,14 +264,15 @@ export async function listPullRequestComments(
   repo: string,
   pullNumber: number,
   options?: { per_page?: number },
+  fetchOpts?: GithubGetOpts,
 ): Promise<CommentSummary[]> {
   const perPage = clampPerPage(options?.per_page);
   const reviewPath = `/repos/${owner}/${repo}/pulls/${pullNumber}/comments?per_page=${perPage}`;
   const convoPath = `/repos/${owner}/${repo}/issues/${pullNumber}/comments?per_page=${perPage}`;
 
   const [reviewResult, convoResult] = await Promise.allSettled([
-    githubApiGet<GhCommentResponse[]>(installationId, reviewPath),
-    githubApiGet<GhCommentResponse[]>(installationId, convoPath),
+    apiGet<GhCommentResponse[]>(installationId, reviewPath, fetchOpts),
+    apiGet<GhCommentResponse[]>(installationId, convoPath, fetchOpts),
   ]);
 
   // Both endpoints failed — surface one error rather than silently returning [].
@@ -295,6 +313,98 @@ export async function listPullRequestComments(
   }
 
   return [...review, ...convo];
+}
+
+// ---------------------------------------------------------------------------
+// Pull request list reader (cc read tools; metadata only, no bodies)
+// ---------------------------------------------------------------------------
+
+/** The closed set of `state` filters the list reader accepts. */
+export const PR_LIST_STATES = ["open", "closed", "all"] as const;
+export type PullRequestListState = (typeof PR_LIST_STATES)[number];
+
+// Attacker-controlled metadata (a PR title, a branch name, a label, a login) is length-capped in CHARACTERS (code points).
+const LIST_TITLE_CAP = 300;
+const LIST_REF_CAP = 255;
+const LIST_NAME_CAP = 100;
+const LIST_LABELS_MAX = 20;
+
+export interface PullRequestListItem {
+  number: number;
+  title: string;
+  state: string;
+  user: string;
+  labels: string[];
+  updated_at: string;
+  html_url: string;
+  draft: boolean;
+  head_ref: string;
+}
+
+export interface PullRequestListResult {
+  /** Always present, so an empty list is an explicit statement and not a bare `[]`. */
+  summary: string;
+  has_more: boolean;
+  pull_requests: PullRequestListItem[];
+}
+
+interface GhPullListItem {
+  number: number;
+  title: string;
+  state: string;
+  user: GhUser | null;
+  labels: Array<GhLabel | string>;
+  updated_at: string;
+  html_url: string;
+  draft?: boolean;
+  head?: { ref?: string } | null;
+}
+
+/**
+ * List pull requests, metadata only (no `body`), newest-updated first. `per_page` is clamped to 1..50 (default 10);
+ * one extra row is fetched to compute `has_more` exactly. `state` is a closed set; owner and repo are validated here
+ * (the existing readers do not) because they are interpolated into the API path. The query string is built with
+ * `URLSearchParams`, never by concatenation.
+ */
+export async function listPullRequests(
+  installationId: number,
+  owner: string,
+  repo: string,
+  options?: { state?: string; per_page?: number },
+  fetchOpts?: GithubGetOpts,
+): Promise<PullRequestListResult> {
+  if (!SAFE_SEGMENT_RE.test(owner) || !SAFE_SEGMENT_RE.test(repo)) {
+    throw new Error("listPullRequests: unsafe owner or repo segment");
+  }
+  const state = options?.state ?? "open";
+  if (!(PR_LIST_STATES as readonly string[]).includes(state)) {
+    throw new Error("listPullRequests: state must be one of open, closed, all");
+  }
+  const perPage = clampPerPage(options?.per_page);
+  const params = new URLSearchParams({
+    state,
+    sort: "updated",
+    direction: "desc",
+    per_page: String(perPage + 1),
+  });
+  const raw = await apiGet<GhPullListItem[]>(installationId, `/repos/${owner}/${repo}/pulls?${params.toString()}`, fetchOpts);
+  const rows = Array.isArray(raw) ? raw : [];
+  const hasMore = rows.length > perPage;
+  const pull_requests = rows.slice(0, perPage).map(
+    (r): PullRequestListItem => ({
+      number: r.number,
+      title: capChars(String(r.title ?? ""), LIST_TITLE_CAP),
+      state: r.state,
+      user: capChars(r.user?.login ?? "", LIST_NAME_CAP),
+      labels: (r.labels ?? []).slice(0, LIST_LABELS_MAX).map((l) => capChars(normalizeLabel(l), LIST_NAME_CAP)),
+      updated_at: r.updated_at,
+      html_url: r.html_url,
+      draft: r.draft === true,
+      head_ref: capChars(r.head?.ref ?? "", LIST_REF_CAP),
+    }),
+  );
+  const summary = `${pull_requests.length} pull request${pull_requests.length === 1 ? "" : "s"} (state=${state})${hasMore ? ", more available" : ""}`;
+  return { summary, has_more: hasMore, pull_requests };
 }
 
 // ---------------------------------------------------------------------------

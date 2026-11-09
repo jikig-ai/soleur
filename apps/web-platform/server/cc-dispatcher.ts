@@ -311,6 +311,13 @@ import {
   ccPushPromptAddendum,
   resolveCcGithubPushRegistration,
 } from "./cc-github-push";
+import {
+  ccGithubReadPromptAddendum,
+  ccGithubReadUnavailableLine,
+  emitCcGithubReadOutcome,
+  resolveCcGithubReadRegistration,
+  type CcGithubReadRegistration,
+} from "./cc-github-read";
 
 // Sentry mirror debounce (`mirrorWithDebounce`) lives in `./observability`
 // (#3369). Per-(userId, errorClass) 5-minute TTL prevents a misconfigured
@@ -1412,6 +1419,19 @@ export function getCcRegisteredApprovalTools(userId: string, conversationId: str
   return _ccRegisteredApprovalTools.get(makeAckPostureKey(userId, conversationId)) ?? [];
 }
 
+// #12469 — the read-only GitHub tool FQNs the factory registered for each live conversation (the six read tools, when their
+// registrar said yes). Same lifecycle as `_ccRegisteredApprovalTools` above, and written at the same publish site: the warm-path
+// unregistered-tool mirror must not false-positive on a registered read call, and it must NOT re-resolve entitlement to find out
+// (a re-resolve cannot see repo, installation, persona or repo visibility, so it could advertise tools the cold factory never
+// registered). NEVER an input to `canUseTool`'s `platformToolNames` (that comes from the registrar's result) and NEVER seeded
+// into `CC_REGISTERED_PLATFORM_TOOL_NAMES`.
+const _ccRegisteredReadTools = new Map<string, readonly string[]>();
+
+/** The read-tool FQNs registered for this conversation's live Query (empty when none). Exported for the warm-path mirror and tests. */
+export function getCcRegisteredReadTools(userId: string, conversationId: string): readonly string[] {
+  return _ccRegisteredReadTools.get(makeAckPostureKey(userId, conversationId)) ?? [];
+}
+
 // #10455 (a) — which seccomp artifact each live conversation's sandbox config is PAIRED with, so the classified
 // bash-tool-result mirror event can carry it (the only seccompArtifact surface that reaches Sentry / Better Stack).
 // The factory (`realSdkQueryFactory`) and the tool_result observer (`dispatchSoleurGo`) are different scopes, hence a
@@ -1795,6 +1815,7 @@ export function cleanupCcBashGatesForConversation(
   _ccAutonomousAckPosture.delete(makeAckPostureKey(userId, conversationId));
   _ccSeccompArtifact.delete(makeAckPostureKey(userId, conversationId));
   _ccRegisteredApprovalTools.delete(makeAckPostureKey(userId, conversationId));
+  _ccRegisteredReadTools.delete(makeAckPostureKey(userId, conversationId));
 }
 
 /**
@@ -1884,6 +1905,7 @@ export function handleCcCloseQuery({
 /**
  * Tool list passed to the soleur_platform `createSdkMcpServer`. Narration,
  * then c4, then the gated push tool (only when its registrar registered it),
+ * then the read-only GitHub tools (only when their registrar registered them),
  * then crm_* only when `crmLead` is true. `userId` stays in the
  * builder closure — it is not a schema key.
  */
@@ -1893,12 +1915,15 @@ export function soleurPlatformToolsForTests(args: {
   c4Tools?: readonly { name: string }[];
   /** #11636: the gated registrar's tools (the push tool), placed after `c4Tools`. Absent or empty => identical output. */
   approvalTools?: readonly { name: string }[];
+  /** #12469: the read registrar's tools (the six read-only GitHub tools), placed after `approvalTools`. Absent or empty => identical output. */
+  readTools?: readonly { name: string }[];
 }): { name: string }[] {
   const narration = buildNarrationTools({ userId: args.userId });
   const c4 = args.c4Tools ?? [];
   const approval = args.approvalTools ?? [];
+  const reads = args.readTools ?? [];
   const crm = args.crmLead ? buildCrmTools({ userId: args.userId }) : [];
-  return [...narration, ...c4, ...approval, ...crm];
+  return [...narration, ...c4, ...approval, ...reads, ...crm];
 }
 
 /** FQNs canUseTool will tier. Empty unless this dispatch is a crm-lead chat.
@@ -2635,6 +2660,7 @@ export const realSdkQueryFactory: QueryFactory = async (
   const connectedRepoSlug = connectedOwner && connectedRepo ? `${connectedOwner}/${connectedRepo}` : "";
   // #11636 — forget a stale published set from an unclean earlier build of this conversation before deciding afresh.
   _ccRegisteredApprovalTools.delete(makeAckPostureKey(args.userId, args.conversationId));
+  _ccRegisteredReadTools.delete(makeAckPostureKey(args.userId, args.conversationId));
   const c4McpServers = readCcMcpAllowlist();
   let c4ToolName: string | undefined;
   let c4PromptAddendum: string | undefined;
@@ -2642,6 +2668,11 @@ export const realSdkQueryFactory: QueryFactory = async (
   let approvalTools: readonly { name: string }[] = [];
   let approvalToolNames: readonly string[] = [];
   let pushPromptAddendum: string | undefined;
+  // #12469 — the read-only GitHub tools (entitlement + non-support persona + connected PUBLIC repo + installation). The registrar
+  // always runs (it is called OUTSIDE the repo/installation block below) so the "entitled, no tools" states are observable.
+  let readTools: readonly { name: string }[] = [];
+  let readToolNames: readonly string[] = [];
+  let readRegistration: CcGithubReadRegistration | undefined;
   {
     // feat-reasoning-chat-boxes (#5370): the `soleur_platform` server is now
     // built UNCONDITIONALLY so the always-on narrate/summarize tools are
@@ -2790,6 +2821,45 @@ export const realSdkQueryFactory: QueryFactory = async (
       }
     }
 
+    // #12469: the read-only GitHub tools. Outside the repo/installation block on purpose: a session with no repo must still get a
+    // reason (`no-repo-or-installation`), not silence. The registrar is fail-closed (public repos only) and never throws into the
+    // Query build: a defect leaves the tool set empty and is reported once.
+    try {
+      readRegistration = await resolveCcGithubReadRegistration({
+        userId: args.userId,
+        persona: args.persona,
+        owner: connectedOwner,
+        repo: connectedRepo,
+        installationId: effectiveInstallationId,
+        webEgressEntitled,
+        // Per-call revalidation: the tools are closed over this Query's repo and installation, so a mid-conversation repo switch
+        // must fail closed. A degraded read (a transient blip) is a refusal too, never a pass.
+        revalidate: async () => {
+          const [current, currentInstallation] = await Promise.all([
+            readCurrentRepoUrlResult(args.userId, activeWorkspaceId),
+            resolveInstallationId(args.userId, activeWorkspaceId),
+          ]);
+          if (current.degraded) return false;
+          const parsed = parseConnectedRepo(current.url);
+          return parsed?.owner === connectedOwner && parsed?.repo === connectedRepo && currentInstallation === installationId;
+        },
+      });
+      if (readRegistration.registered) {
+        readTools = readRegistration.tools;
+        readToolNames = readRegistration.toolNames;
+      }
+    } catch (err) {
+      readTools = [];
+      readToolNames = [];
+      readRegistration = undefined;
+      reportSilentFallback(null, {
+        feature: "cc-dispatcher",
+        op: "cc-github-read-registration-failed",
+        extra: { userId: args.userId, errName: err instanceof Error ? err.name : undefined },
+        message: "cc github read tools registration threw; tools not registered",
+      });
+    }
+
     // The wired-set guard again, on the PUBLISHED set (not only the registrar result): a second writer of `approvalTools` /
     // `approvalToolNames` after the registrar block would otherwise reach the SDK server and `canUseTool` unchecked.
     assertCcApprovalSetWired(approvalTools, approvalToolNames);
@@ -2803,6 +2873,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         crmLead: args.crmLead === true,
         c4Tools,
         approvalTools,
+        readTools,
       }) as NonNullable<Parameters<typeof createSdkMcpServer>[0]["tools"]>,
     });
     (c4McpServers as Record<string, unknown>).soleur_platform = platformServer;
@@ -3154,6 +3225,10 @@ export const realSdkQueryFactory: QueryFactory = async (
   if (approvalToolNames.length > 0) {
     _ccRegisteredApprovalTools.set(makeAckPostureKey(args.userId, args.conversationId), approvalToolNames);
   }
+  // #12469: the same for the read-only GitHub tools, published beside it so the warm path advertises exactly what was built.
+  if (readToolNames.length > 0) {
+    _ccRegisteredReadTools.set(makeAckPostureKey(args.userId, args.conversationId), readToolNames);
+  }
 
   try {
     // Build SDK options through the shared `buildAgentQueryOptions`
@@ -3295,6 +3370,31 @@ export const realSdkQueryFactory: QueryFactory = async (
     // `bindOptions` / `tapAgentAuthFailure` never throw by construction: a defect in the diagnostic can neither break a
     // dispatch nor be misreported as a sandbox failure. `bindOptions` is an identity wrapper around the FINAL options
     // (after the seccomp recorder) and must stay INSIDE the `sdkQuery({...})` literal (agent-sandbox-seccomp-selector.test.ts A6a).
+    // #12469 — the GitHub-read half of the web-egress prompt, decided HERE because the live forwarder (`webEgress`) is now known:
+    // the sandbox credential deny census is keyed on it (`allowWebEgress: args.webEgress !== undefined`), so a granted-but-degraded
+    // session still has a working `gh` and must not be told otherwise. The registrar's outcome is emitted exactly once per cold
+    // dispatch of an entitled session, carrying `forwarderLive`. Tools registered + live forwarder => the tool addendum; entitled,
+    // live forwarder, no tools => a one-line truthful remedy; anything else => nothing (non-entitled prompts stay byte-identical).
+    let githubReadPromptSuffix = "";
+    if (readRegistration) {
+      try {
+        emitCcGithubReadOutcome(readRegistration, {
+          userId: args.userId,
+          persona: args.persona,
+          entitled: webEgressEntitled,
+          forwarderLive: webEgress !== undefined,
+        });
+      } catch {
+        // Telemetry must never break a dispatch.
+      }
+      if (webEgress !== undefined && webEgressEntitled) {
+        const text = readRegistration.registered
+          ? ccGithubReadPromptAddendum()
+          : ccGithubReadUnavailableLine(readRegistration.reason);
+        if (text) githubReadPromptSuffix = `\n\n${text}`;
+      }
+    }
+
     let authProbe: AgentAuthFailureProbe = NOOP_AGENT_AUTH_PROBE;
     try {
       authProbe = createAgentAuthFailureProbe({
@@ -3336,7 +3436,8 @@ export const realSdkQueryFactory: QueryFactory = async (
         // addendum claiming egress.
         systemPrompt:
           effectiveSystemPrompt +
-          (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : ""),
+          (webEgress ? `\n\n${WEB_EGRESS_PROMPT_ADDENDUM}` : "") +
+          githubReadPromptSuffix,
         resumeSessionId: safeResumeSessionId,
         // feat-open-web-egress (#9534) — live forwarder handle. Presence IS
         // the entitlement+spawn-verified condition (fail-closed: undefined
@@ -3427,6 +3528,8 @@ export const realSdkQueryFactory: QueryFactory = async (
             // #11636: ONLY the registrar's result (never a separate re-resolve). The tier map keeps it gated, so `canUseTool`
             // routes it to the approval gate; it never enters `allowedTools`.
             ...approvalToolNames,
+            // #12469: the read-only GitHub tools (all `auto-approve` in the tier map); never in `allowedTools`.
+            ...readToolNames,
             ...crmLeadPermissionToolNames(args.crmLead === true),
           ],
           pluginMcpServerNames: [],
@@ -3481,6 +3584,7 @@ export const realSdkQueryFactory: QueryFactory = async (
     _ccSeccompArtifact.delete(makeAckPostureKey(args.userId, args.conversationId));
     // #11636 — same leak class: the published registered-approval-tool set belongs to a Query that never entered `activeQueries`.
     _ccRegisteredApprovalTools.delete(makeAckPostureKey(args.userId, args.conversationId));
+    _ccRegisteredReadTools.delete(makeAckPostureKey(args.userId, args.conversationId));
     // No askpass cleanup needed here: the helper is a fixed-name, token-free
     // file reused per workspace (written into `.git/`), so a startup throw
     // leaves nothing to leak (item 1).
@@ -4785,6 +4889,8 @@ async function dispatchSoleurGoInner(
         shouldMirrorUnregisteredPlatformToolUse(block.name, [
           ...registeredPlatformToolNames,
           ...getCcRegisteredApprovalTools(userId, conversationId),
+          // #12469: the fourth source, the read-only GitHub tools the cold factory published for this conversation.
+          ...getCcRegisteredReadTools(userId, conversationId),
         ])
       ) {
         const safeToolName = sanitizeToolNameForLog(block.name);
@@ -5566,6 +5672,7 @@ export function __resetDispatcherForTests(): void {
   _ccAutonomousAckPosture.clear();
   _ccSeccompArtifact.clear();
   _ccRegisteredApprovalTools.clear();
+  _ccRegisteredReadTools.clear();
   // Held worktree-lease records registered via the
   // `__registerCcWorktreeLeaseForTests` seam must not leak across tests.
   _ccWorktreeLeases.clear();

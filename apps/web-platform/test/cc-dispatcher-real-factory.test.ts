@@ -973,6 +973,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
     const HEAD = "d".repeat(40);
     const REPO_URL = "https://github.com/acme/kb-repo";
+    // #12469: the read registrar's repository-visibility lookup goes through the same mocked `githubApiGet` (it is the only caller
+    // passing `redirect: "manual"`). The push assertions below count the DEFAULT-BRANCH lookup only, so they filter it out; the
+    // mock's answer has no `private` field, which the read registrar treats as private, so no read tool registers in these cases.
+    const pushLookupCalls = () =>
+      mockGithubApiGet.mock.calls.filter((c) => (c as unknown[])[2] === undefined || ((c as unknown[])[2] as { redirect?: string }).redirect !== "manual");
     // The default branch the mocked lookup answers with (see the hoisted `mockGithubApiGet` default).
     const ADDENDUM = ccPushPromptAddendum("trunk");
 
@@ -1027,7 +1032,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       eligible({ flag: false });
       await realSdkQueryFactory(makeArgs());
       expectDarkPath();
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
       expect(prompt().startsWith("system\n\n## GitHub `gh` errors")).toBe(true);
       const deps = ccCtx().deps;
       expect(deps.approval.grants).toBeInstanceOf(ExecutionGrants);
@@ -1042,7 +1047,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       await realSdkQueryFactory(makeArgs());
       expectDarkPath();
       expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-flag-resolve")).toBe(true);
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
     });
 
     it.each([
@@ -1054,7 +1059,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       row.set();
       await realSdkQueryFactory(makeArgs());
       expectDarkPath();
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
     });
 
     it("a registrar that THROWS never breaks Query construction: the Query is built on the dark path and the failure is reported", async () => {
@@ -1121,7 +1126,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       eligible();
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
       expectDarkPath();
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
     });
 
     it("default-branch lookup fails: not registered (fail closed, never a 'main' fallback), reported under cc-push-default-branch-resolve", async () => {
@@ -1147,7 +1152,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
       // ADR-305: a gated tool never enters allowedTools (canUseTool, i.e. the gate, is its only allow source).
       expect(mockQuery.mock.calls.at(-1)![0].options.allowedTools).not.toContain(PUSH_FQN);
-      expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
+      expect(pushLookupCalls()).toHaveLength(1);
       expect(registrationEvents()[0][1]).toMatchObject({ tags: { reason: "registered" } });
     });
 
@@ -1277,8 +1282,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockApprovalFlag.mock.calls[0]).toEqual([{ userId: "user-1", workspaceId: TEAM }]);
       expect(ccCtx().deps.approval.workspaceId).toBe(TEAM);
       // The default-branch lookup: the effective installation id, owner/repo in order, and an abort signal.
-      expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
-      expect(mockGithubApiGet).toHaveBeenCalledWith(987654, "/repos/acme/kb-repo", { signal: expect.any(AbortSignal) });
+      expect(pushLookupCalls()).toHaveLength(1);
+      expect(pushLookupCalls()[0]).toEqual([987654, "/repos/acme/kb-repo", { signal: expect.any(AbortSignal) }]);
       // The handler pushes with that same installation.
       const deps = ccCtx().deps;
       deps.approval.grants.enforcing = true;

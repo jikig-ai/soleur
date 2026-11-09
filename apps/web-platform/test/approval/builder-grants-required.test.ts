@@ -64,6 +64,14 @@ function optsNameFor(fn: string): string {
  * the builder's own parameter: the "takes its options as <iface>" check below must be able to fail when the parameter type
  * is changed.
  */
+/**
+ * Exported `build*` functions that live in a grant-importing file but read NO grants by design (#12469): the six read-only
+ * GitHub tools. They take no `grants` option and cannot write, so the requirement does not apply; the test below proves each
+ * one is really grant-free (its options interface declares no `grants` and no `requireGrant`), so this list cannot become a
+ * way to hide a grant-reading builder.
+ */
+const GRANT_FREE_READ_BUILDERS: ReadonlySet<string> = new Set(["buildGithubReadTools"]);
+
 function deriveBuilders(): Array<{ file: string; fn: string; iface: string }> {
   const out: Array<{ file: string; fn: string; iface: string }> = [];
   for (const full of listTs(SERVER)) {
@@ -78,6 +86,7 @@ function deriveBuilders(): Array<{ file: string; fn: string; iface: string }> {
     );
     const ifaces = grantsInterfaces(sf);
     for (const f of fns) {
+      if (GRANT_FREE_READ_BUILDERS.has(f.name!.text)) continue;
       const named = ifaces.find((i) => i.name.text === optsNameFor(f.name!.text));
       const iface = named ?? (ifaces.length === 1 ? ifaces[0] : undefined);
       out.push({ file: relative(SERVER, full), fn: f.name!.text, iface: iface?.name.text ?? "" });
@@ -153,6 +162,20 @@ describe("grants is a REQUIRED option of every grant-reading tool builder", () =
       buildGithubTools: "BuildGithubToolsOpts",
       buildGithubPushBranchTool: "BuildGithubPushBranchToolOpts",
     });
+  });
+
+  it("every grant-free read builder is really grant-free (its options interface declares no `grants` and no `requireGrant`)", () => {
+    for (const fn of GRANT_FREE_READ_BUILDERS) {
+      const sf = parse("github-tools.ts");
+      const decl = findFunction(sf, fn);
+      expect(decl, `${fn} not found in github-tools.ts`).toBeDefined();
+      const ifaceName = decl!.parameters[0].type?.getText() ?? "";
+      const iface = findInterface(sf, ifaceName);
+      expect(iface, `${ifaceName} not found`).toBeDefined();
+      const names = iface!.members.filter((m): m is ts.PropertySignature => ts.isPropertySignature(m)).map((m) => m.name.getText());
+      expect(names).not.toContain("grants");
+      expect(names).not.toContain("requireGrant");
+    }
   });
 
   it("the cc push builder takes a REQUIRED boolean `requireGrant` (a forgotten wiring does not compile)", () => {
