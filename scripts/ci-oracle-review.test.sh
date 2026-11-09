@@ -257,9 +257,10 @@ want() {
     return 1
   fi
   [ -n "$marker" ] || { printf 'row %s: no SOLEUR_ORACLE_REVIEW marker (out=%s)\n' "$label" "$OUT" >&2; return 1; }
-  [[ "$marker" =~ ^SOLEUR_ORACLE_REVIEW\ event=[a-z_]+\ oracle_diff=[01]\ author=[A-Za-z0-9-]+\ approved=[01]\ members=[0-9]+\ verdict=(pass|fail)\ reason=([a-z-]+)$ ]] \
+  [[ "$marker" =~ ^SOLEUR_ORACLE_REVIEW\ event=[a-z_]+\ oracle_diff=[01]\ author=[A-Za-z0-9-]+(\[bot\])?\ approved=[01]\ members=[0-9]+\ verdict=(pass|fail)\ reason=([a-z-]+)$ ]] \
     || { printf 'row %s: marker off grammar: %s\n' "$label" "$marker" >&2; return 1; }
-  gverdict="${BASH_REMATCH[1]}"; greason="${BASH_REMATCH[2]}"
+  # POSIX ERE has no non-capturing groups: 1=(\[bot\])? author suffix, 2=verdict, 3=reason.
+  gverdict="${BASH_REMATCH[2]}"; greason="${BASH_REMATCH[3]}"
   [[ "$greason" =~ ^$wreason$ ]] || { printf 'row %s: reason=%s, want %s\n' "$label" "$greason" "$wreason" >&2; return 1; }
   [ "$(grep -cE '^SOLEUR_ORACLE_REVIEW ' <<<"$OUT")" -eq 1 ] || { printf 'row %s: marker not unique\n' "$label" >&2; return 1; }
   if { [ "$wrc" = 0 ] && [ "$gverdict" != pass ]; } || { [ "$wrc" != 0 ] && [ "$gverdict" != fail ]; }; then
@@ -296,6 +297,25 @@ row_not_oracle() {
   STUB_GIT_DIFF="$FX/diff-docs.txt" \
     run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR=alice
   want not-oracle 0 'not-oracle'
+}
+# #12509: a GitHub-App login ends in the literal suffix `[bot]`; the pre-fix PR_AUTHOR regex
+# rejected it at input validation (verdict=fail reason=input on a required context).
+row_bot_author() {
+  STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_REVIEWS="$FX/reviews-none.json" \
+    run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR='soleur-infra[bot]'
+  want bot-author 1 'review-required'
+}
+row_bot_not_oracle() {
+  STUB_GIT_DIFF="$FX/diff-docs.txt" \
+    run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR='dependabot[bot]'
+  want bot-not-oracle 0 'not-oracle'
+}
+# A bot whose slug equals the owner must NOT take the author arm — `deruelle[bot]` is a login,
+# never `deruelle` (the exact-string compare at the driver is what keeps it so; this row pins it).
+row_bot_owner_spoof() {
+  STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_REVIEWS="$FX/reviews-none.json" \
+    run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR='deruelle[bot]'
+  want bot-owner-spoof 1 'review-required'
 }
 row_api_fail() {
   STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_FAIL=1 \
@@ -351,6 +371,7 @@ chk() {  # chk <label> <cmd...> — runs the whole argv, never just $2 (fix-roun
 }
 
 for row in row_review_required row_stale_approval row_approved row_author row_not_oracle \
+           row_bot_author row_bot_not_oracle row_bot_owner_spoof \
            row_api_fail row_api_malformed row_oracle_list_unreadable \
            row_mg_ok row_mg_missing_ctx row_mg_red_ctx row_mg_paginated row_mg_zero \
            row_mg_anchor row_mg_api_fail row_event_guard; do

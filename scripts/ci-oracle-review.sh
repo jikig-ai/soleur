@@ -42,7 +42,7 @@
 # VERDICT GRAMMAR (pinned by scripts/ci-oracle-review.test.sh):
 #   event      ^[a-z_]+$          (unset renders `unset`)
 #   oracle_diff^(0|1)$            pull_request only; merge_group always 0
-#   author     ^[A-Za-z0-9-]+$|-  merge_group renders `-`
+#   author     ^[A-Za-z0-9-]+(\[bot\])?$|-  merge_group renders `-`
 #   approved   ^(0|1)$
 #   members    ^[0-9]+$           merge_group member count; pull_request 0
 #   verdict    ^(pass|fail)$
@@ -130,7 +130,7 @@ pr_arm() {
   [[ "${PR_NUMBER:-}" =~ ^[0-9]+$ ]] || finish fail input
   [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || finish fail input
   [[ "${GITHUB_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || finish fail input
-  [[ "${PR_AUTHOR:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || finish fail input
+  [[ "${PR_AUTHOR:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || finish fail input
   author="$PR_AUTHOR"
 
   # The merge-ref shape: HEAD is GITHUB_SHA, has exactly two parents, HEAD^2 is the PR head. All 40-hex.
