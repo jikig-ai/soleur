@@ -11,10 +11,15 @@ the wrong picture; any poll that treats a FAILURE line on the head as "not queue
 the other direction.
 
 The same observation run showed a second non-equivalence: the queue entry's state was `UNMERGEABLE`
-with `mergeable: UNKNOWN` — GitHub had admitted the PR to the queue and still had not finished
-deciding whether it could merge. `UNMERGEABLE` persisted across two queries ~15 minutes apart, so
-admission ≠ merged-eventually either; the entry's cause was unresolved at write time (a watch was
-armed on it).
+with `mergeable: UNKNOWN`, and it sat that way for the full ~69 minutes it was queued — GitHub never
+dispatched a `pr-12520-*` group build for it. The instant the queue-front PR (#12513) merged at
+23:29:03Z, the entry was ejected: `mergeQueueEntry` went null, the issue timeline recorded
+`removed_from_merge_queue`, and `mergeStateStatus` flipped to `DIRTY` — the signature of a merge
+conflict against the new main (here: `tests/scripts/test-audit-ruleset-bypass.sh`, where #12495 and
+#12520 had each applied the same `|| true` fix at different positions inside/outside the `$(...)`).
+So admission ≠ merged-eventually: an `UNMERGEABLE` entry does not wait out the queue, it is ejected
+the first time main advances. Recovery was mechanical — merge `origin/main`, resolve, push, re-arm
+`auto_merge` (23:31:25Z `auto_merge_enabled`); no re-queue verb exists beyond that.
 
 ## Solution
 
@@ -32,6 +37,11 @@ Read the queue state and the check state as two independent signals and never co
    `skill-security-scan PR gate`, `tenant-integration-required`, `test`, `vendor-pin-required`).
    The three failing `deploy-script-tests*` contexts are not in it, which is *why* the PR was
    admissible — but an outsider reading the rollup alone would not know that.
+3. Ejection recovery: `mergeQueueEntry` null + PR still OPEN + `mergeStateStatus: DIRTY` (and a
+   `removed_from_merge_queue` timeline event at the moment the queue-front entry merged) means a
+   conflict ejection, not a CI failure. Fix: `git merge origin/main` in the branch's worktree,
+   resolve, push, `gh pr merge <N> --squash --auto` — a merge commit avoids the force-push a rebase
+   would need and is squashed away anyway.
 
 ## Key Insight
 
