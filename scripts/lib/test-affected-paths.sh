@@ -2122,13 +2122,20 @@ AFFECTED_SCRIPTS_CI_ORACLE_REVIEW_PATHS=(
 
 # scripts/ci-parked-hold (#12396) — the suite runs scripts/ci-parked-hold.sh under a stubbed gh, extracts the
 # parked-hold steps from .github/workflows/secret-scan.yml, and reads scripts/lib/umbrella-member.sh,
-# .github/CODEOWNERS and scripts/required-checks.txt for the wiring pins. Edge set = the files it opens.
+# .github/CODEOWNERS and scripts/required-checks.txt for the wiring pins. Section G copies EVERY file under
+# .github/workflows/ into a scratch repo and runs scripts/lint-umbrella-aggregate.sh there (the lint's census
+# reads all of them; ci.yml and pr-quality-guards.yml carry the other required umbrellas it mutates), and the
+# queue-ref parity pin reads scripts/ci-oracle-review.sh and scripts/merge-queue-cla-verify.sh.
+# Edge set = the files it opens.
 AFFECTED_SCRIPTS_CI_PARKED_HOLD_PATHS=(
-  ".github/workflows/secret-scan.yml"
+  ".github/workflows/"
   ".github/CODEOWNERS"
   "scripts/ci-parked-hold.sh"
   "scripts/ci-parked-hold.test.sh"
+  "scripts/ci-oracle-review.sh"
+  "scripts/lint-umbrella-aggregate.sh"
   "scripts/lib/umbrella-member.sh"
+  "scripts/merge-queue-cla-verify.sh"
   "scripts/required-checks.txt"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
 )

@@ -84,6 +84,27 @@ the hold). Do not edit the row. Treat it as a possible integrity incident: escal
 | 401 (no event) | A caller sent a wrong or missing token | Unthrottled by design and not an event; paging is #12195. A burst of 401s in the request logs is the signal; rotate nothing unless the token is believed leaked. |
 | `config` | The token or the founder id is set but malformed (once per route module, so the verify and the counts route each report it once; names only the variable) | Fix the value in Doppler (token: 48 to 256 characters of `A-Za-z0-9._~+/=-`; founder id: a uuid) and redeploy. |
 
+Read with the `ack` row above: a flush that is slow or answers false is not a Sentry event. It writes one warning log line
+(`legal acceptance ack skipped: flush not confirmed`), the row stays unacknowledged, and the next verify surfaces it.
+
+### A Sentry event `op=page_read_failed` with `read=legal_acceptance_inbox` (the Inbox legal row)
+
+The Inbox row fails closed: on any failure the loader returns no legal row, the other Inbox items still load, and the founder
+sees neither a row nor a hint. This event is the only signal (recorded, not paged). Read `extra.step`
+(`apps/web-platform/server/legal-acceptance/inbox-rows.ts`); the other `read` labels (`legal_text`, `legal_acceptance`,
+`legal_acceptance_index`) come from the card pages and have no `step`.
+
+| `extra.step` | What stopped | What to do |
+|---|---|---|
+| `gate` | The founder-surface gate threw: the flag read or the `LEGAL_ACCEPTANCE_FOUNDER_ID` check (a refusal is not an event; only a throw is) | Check that the flag provider and the configuration are reachable; read `extra.code` and `extra.errName`. |
+| `registry` | A declared legal text could not be read (the event carries `extra.key`), or the list of registry keys could not be read (no `extra.key`) | As the `registry` row of the `store_failed` table: the text file is missing, unreadable or malformed in the deployed image; read `extra.code`. Only that key's row is lost. |
+| `read` | The user-session read of `legal_acceptance` (row-level security, columns `key, text_hash, choice`) returned an error | Supabase availability or a policy or grant drift on migration 184; read `extra.code` (the SQLSTATE) and check that Supabase is up. |
+| `shape` | The read answered rows of an unrecognised shape | Treat as a bug or schema drift in migration 184; escalate, do not retry in a loop. |
+| `state` | Deriving the card state threw | A bug in the loader; escalate with the event. |
+
+`op=kind_undeclared` (warn, `tags.key`) is a related event: a registry text has no entry in `LEGAL_TEXT_KIND`, so no card and
+no Inbox row exist for it. Declare its kind in the copy leaf. It repeats on every Inbox load and card render while it stands.
+
 After you have dealt with an event, resolve (never archive) its Sentry issue.
 
 ### The counts route answered 503 (or the helper printed `counts: HTTP 503 store_failed`)
@@ -110,18 +131,27 @@ creation), or the helper read a different Doppler config than the one the contai
 `counts: HTTP 404 not_found`: the key is not in the registry (check the spelling against `server/legal-acceptance/texts/`), or
 the text file for that key is not in the deployed image (the build predates the file; redeploy a build that contains it).
 
+`counts: response is not the documented shape` on a 200: the helper refused the body (a field missing or of the wrong type, a hash
+that is not 64 hex, counts that do not sum to `total`, or an `ok_to_flag` that disagrees with the one it recomputed). The route
+answered 200, so it emitted nothing and there is no Sentry event to find; the refusal exists only in the helper's exit status. Treat it as the 502 case: the
+body was altered on the way or the route and the helper have drifted; escalate and do not retry in a loop.
+
 ### Who may run the counts step
 
 An agent session may run `scripts/legal-acceptance-counts.sh`, because it needs only the verify bearer from Doppler and no
 database-owner credential. Reading a note (above) stays operator-only.
 
-A flush that is slow or answers false is not a Sentry event: it writes one warning log line (`legal acceptance ack skipped:
-flush not confirmed`), the row stays unacknowledged, and the next verify surfaces it.
+Residual, accepted: the helper reads `LEGAL_ACCEPTANCE_VERIFY_TOKEN` from Doppler `prd` itself, so an agent session that runs it
+(or reads the same secret by the same Doppler path) can use the production verify bearer. That bearer reads the configured
+founder's status (`accepted` or not, with the hash and time of the decision) and the per-hash counts of a key, never the note and never a
+write, and the same secret is already readable from the `prd_terraform` Doppler config and the Terraform state by a Tier-A reader (ADR-319, Update
+2026-11-07). The widening is accepted because the alternative was the database-owner credential, which is not accepted for any agent session.
+It is a rule and not a control: nothing technical stops an agent session from reading the secret by another route.
 
 ## The decision-row count for a key (`legal-acceptance-counts.sh`)
 
 The `approval-queue` flag is already on in production. This count is therefore a report of the current state, not a go signal:
-`ok_to_flag=true total=1` is the normal state today (one row, under the registry hash). Run it before publishing a text change
+`ok_to_flag=true total=1` is the expected value (one recorded decision, under the registry hash); the first run records it, since the route had not run when this was written. Run it before publishing a text change
 (a new text hash makes every earlier row stale) and whenever you need to know whether any row sits under another hash. The
 check needs no database credential (#12429, ADR-319 amendment 2026-11-08): it asks the web app through the verify bearer.
 
@@ -131,7 +161,10 @@ scripts/legal-acceptance-counts.sh founder-acceptance-record
 
 On success it prints exactly one line, `ok_to_flag=<true|false> total=<n> measured=production-table-only`, and nothing else.
 `ok_to_flag=true` means every decision row for that key is under the registry hash (vacuously true at `total=0`);
-`ok_to_flag=false` means a row exists under another hash, so bump the version first. The helper does not trust the route's
+`ok_to_flag=false` means a row exists under another hash, so bump the version first.
+`total=0` after the published documents have gone out is a STOP: those documents say that a record exists, so a count of zero
+means the published statement is untrue. Escalate to the CLO and treat it as a docs rollback decision before anything else;
+`total` above 1, or `ok_to_flag=false`, also means investigate before anything else. The helper does not trust the route's
 verdict: it recomputes `ok_to_flag` from the per-hash counts and refuses a body where the two disagree. Any failure (401,
 404, 502, 503, an unreadable token, a body that is not the documented shape) exits non-zero and prints no `ok_to_flag=` line
 and one status line such as `counts: HTTP 503 store_failed`; the triage for each is above. The
@@ -143,9 +176,11 @@ Sentry `accepted` count, or dev and preview. `ok_to_flag` is advisory and never 
 production write; those still need the operator's exact go.
 
 The zero-rows precondition is separate from `ok_to_flag`, and `ok_to_flag=true` does not subsume it: any row that exists
-before the flag is turned on for it (`total` above 0, even `total=1` under the registry hash) needs its own acknowledgement
-(the insert above, once per row, scoped by founder id, run in the production SQL editor with your own login), or it raises a
-false `row_without_event` when verified. Read `total`, not only `ok_to_flag`.
+(`total` above 0, even `total=1` under the registry hash) needs its own acknowledgement (the insert above, once per row, scoped by
+founder id, run in the production SQL editor with your own login), or it raises a false `row_without_event` when verified.
+The flag is already on in production, so this is not a step before turning it on: to see whether an existing row has its
+acknowledgement, run the "Rows with no acknowledgement" query above (the counts route cannot see acknowledgement state). Read
+`total`, not only `ok_to_flag`.
 
 The rollout order below is the original first-enable sequence; keep it for re-provisioning (a new environment or a rotated secret).
 
@@ -166,7 +201,7 @@ The session that performs the redeploy arms the pulls (they are not left to memo
 doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 24h --grep "flush not confirmed"
 ```
 
-and a Sentry Discover query over the last 24 hours, `feature:legal-acceptance op:[record_invalid,store_failed,row_without_event]`
+and a Sentry Discover query over the last 24 hours, `feature:legal-acceptance op:[record_invalid,store_failed,row_without_event,page_read_failed,kind_undeclared]`
 (read one issue with `scripts/sentry-issue.sh <issue id>`), and the unacknowledged-rows query above in the production SQL editor.
 All three must be empty, or each hit must be explained.
 

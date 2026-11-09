@@ -5,7 +5,8 @@
 -- ROLLBACK IS BY CODE, NOT BY THIS FILE. Revert the code (the route GET /api/internal/legal-acceptance/[key]/counts, its
 -- service wrapper and the helper script) and LEAVE migration 186 applied: the function is inert after a code revert
 -- (service_role only, no caller). Deleting the migration file is not possible: the migration-immutability lint forbids
--- removing an on-main migration, so a squash revert of the PR cannot be paired with deleting 186.
+-- removing an on-main migration, so a literal git revert of the whole PR (which deletes the up file, this file and verify/186) fails
+-- that lint: restore those three paths before committing. The legal documents are forward-fix only. See ADR-319, "Rollback".
 --
 -- To drop the function deliberately, BOTH steps are required, in this order, as the database owner:
 --   1. psql -v ON_ERROR_STOP=1 -f 186_legal_acceptance_hash_counts.down.sql

@@ -101,6 +101,8 @@ body() {
 }
 # mk_body <key> <ok> <total> <by_hash json>: the same JSON as body(), on stdout (for mal rows)
 mk_body() { printf '{"key":"%s","registry_hash":"%s","total":%s,"by_hash":%s,"ok_to_flag":%s}' "$1" "$HASH_A" "$3" "$4" "$2"; }
+# mk_body_r <key> <registry_hash> <ok> <total> <by_hash json>: the same JSON with an explicit registry_hash (length / anchor probes)
+mk_body_r() { printf '{"key":"%s","registry_hash":"%s","total":%s,"by_hash":%s,"ok_to_flag":%s}' "$1" "$2" "$4" "$5" "$3"; }
 # run <script> <args...>: hermetic env, captured streams
 run() {
   local script="$1"; shift
@@ -205,6 +207,11 @@ mal "a text_hash that is not hex (foreign, ok_to_flag false)" "$(mk_body "$KEY" 
 mal "an uppercase text_hash (foreign, ok_to_flag false)" "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$(printf 'A%.0s' $(seq 1 64))\",\"count\":1}]")"
 mal "a text_hash that is missing" "$(mk_body "$KEY" false 1 "[{\"count\":1}]")"
 mal "a text_hash that is a number" "$(mk_body "$KEY" false 1 "[{\"text_hash\":7,\"count\":1}]")"
+H63="$(printf 'a%.0s' $(seq 1 63))"; H65="$(printf 'a%.0s' $(seq 1 65))"
+mal "a 63-char text_hash (foreign, ok_to_flag false)" "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$H63\",\"count\":1}]")"
+mal "a 65-char text_hash (foreign, ok_to_flag false)" "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$H65\",\"count\":1}]")"
+mal "a 63-char registry_hash" "$(mk_body_r "$KEY" "$H63" true 0 "[]")"
+mal "a 65-char registry_hash" "$(mk_body_r "$KEY" "$H65" true 0 "[]")"
 mal "by_hash not an array" "{\"key\":\"$KEY\",\"registry_hash\":\"$HASH_A\",\"total\":0,\"by_hash\":{},\"ok_to_flag\":true}"
 
 echo "=== Key validation: before any request ==="
@@ -242,48 +249,68 @@ check "X6 SHELLOPTS=xtrace is refused too" rc_nonzero; check "X6b the token is n
 echo "=== MUTATIONS: each weakening of the script must be caught by a probe ==="
 MUT="$TMP/mut"; assert_fixture_dir "$MUT"; rm -rf -- "$MUT"; mkdir -p "$MUT/scripts" "$MUT/plugins/soleur/scripts/lib"
 cp "$LIB" "$MUT/plugins/soleur/scripts/lib/bearer-fetch.sh"
+DEFINED=() # every mutant() call appends its name: the loop below must name exactly this set
 mutant() { # <name> <sed expression>: write the mutated script to $MUT/scripts/<name>.sh and fail the suite if the sed did not land
+  DEFINED+=("$1")
   cp "$SUT" "$MUT/scripts/$1.sh"
   sed -i -E "$2" "$MUT/scripts/$1.sh"
   if cmp -s "$SUT" "$MUT/scripts/$1.sh"; then bad "mutation $1 did not land"; fi
 }
-pristine_ok() { # the probe set: a pristine run satisfies every probe; a caught mutant violates at least one
-  local script="$1" v=0
-  scn; run "$script" "$KEY"; out_is "ok_to_flag=true total=0 measured=production-table-only" || v=1
-  scn; printf '{"key":"%s"}' "$KEY" > "$STUB_DIR/curl-body"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || v=1
-  scn; echo 503 > "$STUB_DIR/curl-status"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || v=1
-  scn; echo 404 > "$STUB_DIR/curl-status"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || v=1
-  scn; run "$script" 'a?x=1'; { rc_nonzero && [ "$(curl_calls)" = "0" ]; } || v=1
-  scn; RUN_FLAGS="-x" run "$script" "$KEY"; { rc_nonzero && [ ! -s "$STUB_DIR/doppler-argv.log" ] && grep -q '^counts: refusing to run under xtrace' "$TMP/run.err"; } || v=1
-  scn; body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":1}]"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || v=1
-  scn; : > "$STUB_DIR/doppler-fail"; run "$script" "$KEY"; { rc_nonzero && no_flag_line && grep -q '^counts: token unreadable' "$TMP/run.err"; } || v=1
-  scn; RUN_ENV="APP_URL=http://evil.example" run "$script" "$KEY"; [ "$(cat "$STUB_DIR/curl-url.log" 2>/dev/null)" = "$URL" ] || v=1
-  local b
-  for b in "${PROBE_BODIES[@]}"; do
-    scn; printf '%s' "$b" > "$STUB_DIR/curl-body"; run "$script" "$KEY"; { rc_nonzero && no_flag_line && out_empty; } || v=1
+VIOL=""
+pv() { VIOL="$VIOL $1"; } # record the NAME of a violated probe
+pristine_ok() { # the probe set: a pristine run satisfies every probe; a caught mutant violates NAMED probes (VIOL)
+  local script="$1" b i
+  VIOL=""
+  scn; run "$script" "$KEY"; out_is "ok_to_flag=true total=0 measured=production-table-only" || pv control
+  scn; printf '{"key":"%s"}' "$KEY" > "$STUB_DIR/curl-body"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || pv shape-missing
+  scn; echo 503 > "$STUB_DIR/curl-status"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || pv s503
+  scn; echo 404 > "$STUB_DIR/curl-status"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || pv s404
+  scn; run "$script" 'a?x=1'; { rc_nonzero && [ "$(curl_calls)" = "0" ]; } || pv key-inject
+  scn; RUN_FLAGS="-x" run "$script" "$KEY"; { rc_nonzero && [ ! -s "$STUB_DIR/doppler-argv.log" ] && grep -q '^counts: refusing to run under xtrace' "$TMP/run.err"; } || pv xtrace
+  scn; body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":1}]"; run "$script" "$KEY"; { rc_nonzero && no_flag_line; } || pv sum
+  scn; : > "$STUB_DIR/doppler-fail"; run "$script" "$KEY"; { rc_nonzero && no_flag_line && grep -q '^counts: token unreadable' "$TMP/run.err"; } || pv token
+  scn; RUN_ENV="APP_URL=http://evil.example" run "$script" "$KEY"; [ "$(cat "$STUB_DIR/curl-url.log" 2>/dev/null)" = "$URL" ] || pv host
+  for i in "${!PROBE_BODIES[@]}"; do
+    b="${PROBE_BODIES[$i]}"
+    scn; printf '%s' "$b" > "$STUB_DIR/curl-body"; run "$script" "$KEY"; { rc_nonzero && no_flag_line && out_empty; } || pv "body:${PROBE_LABELS[$i]}"
   done
   # ...and accepts the two honest answers (a verdict recomputed to the wrong value would refuse these).
   scn; body "$KEY" false 2 "[{\"text_hash\":\"$HASH_A\",\"count\":1},{\"text_hash\":\"$HASH_B\",\"count\":1}]"; run "$script" "$KEY"
-  out_is "ok_to_flag=false total=2 measured=production-table-only" || v=1
+  out_is "ok_to_flag=false total=2 measured=production-table-only" || pv honest-false
   scn; body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":3}]"; run "$script" "$KEY"
-  out_is "ok_to_flag=true total=3 measured=production-table-only" || v=1
-  return "$v"
+  out_is "ok_to_flag=true total=3 measured=production-table-only" || pv honest-true
+  [ -z "$VIOL" ]
 }
-# Bodies a pristine helper must REFUSE (one per jq clause of the shape check; each is killed by exactly the mutant that drops that clause).
-PROBE_BODIES=(
-  "$(mk_body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":1.5},{\"text_hash\":\"$HASH_A\",\"count\":1.5}]")" # count == floor
-  "$(mk_body "$KEY" true 0 "[{\"text_hash\":\"$HASH_A\",\"count\":0}]")"                                                    # count >= 1
-  "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_A\",\"count\":\"1\"}]")"                                                 # count type (a string count: floor errors, so the refusal is jq's error)
-  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"zz\",\"count\":1}]")"                                                         # text_hash hex
-  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$(printf 'A%.0s' $(seq 1 64))\",\"count\":1}]")"                              # text_hash lowercase
-  "$(mk_body "$KEY" false 1 "[{\"count\":1}]")"                                                                                  # text_hash present
-  "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_B\",\"count\":1}]")"                                                       # ok_to_flag recomputed: foreign only
-  "$(mk_body "$KEY" true 2 "[{\"text_hash\":\"$HASH_A\",\"count\":1},{\"text_hash\":\"$HASH_B\",\"count\":1}]")"             # ok_to_flag recomputed: mixed
-  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$HASH_A\",\"count\":1}]")"                                                      # ok_to_flag recomputed: all-registry but false
-  "$(mk_body "$KEY" false 0 "[]")"                                                                                                 # ok_to_flag recomputed: vacuous true
-  "$(mk_body "$KEY" true 1.5 "[]")" "$(mk_body "$KEY" true -1 "[]")" "$(mk_body "$KEY" true '"1"' "[]")" "$(mk_body "$KEY" true null "[]")" # total, via the sum
-  "$(mk_body "$KEY" true 0 "{}")"                                                                                                  # by_hash type
-)
+# Bodies a pristine helper must REFUSE (one per jq clause / regex axis of the shape check; each is killed by the mutant that drops that clause).
+# PROBE_LABELS is parallel: a mutant must violate ITS OWN named probe, so a mutant that merely crashes the script is not "caught".
+PROBE_BODIES=(); PROBE_LABELS=()
+probe_body() { PROBE_LABELS+=("$1"); PROBE_BODIES+=("$2"); }
+HEX_A_UP="$(printf 'A%.0s' $(seq 1 64))"
+probe_body count-floor  "$(mk_body "$KEY" true 3 "[{\"text_hash\":\"$HASH_A\",\"count\":1.5},{\"text_hash\":\"$HASH_A\",\"count\":1.5}]")"
+probe_body count-ge1    "$(mk_body "$KEY" true 0 "[{\"text_hash\":\"$HASH_A\",\"count\":0}]")"
+probe_body count-type   "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_A\",\"count\":\"1\"}]")" # a string count: floor errors, so the refusal is jq's error
+probe_body hash-hex     "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"zz\",\"count\":1}]")"
+probe_body hash-lower   "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$HEX_A_UP\",\"count\":1}]")"
+probe_body hash-present "$(mk_body "$KEY" false 1 "[{\"count\":1}]")"
+probe_body hash-len63   "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$H63\",\"count\":1}]")"                  # {1,64} instead of {64}
+probe_body hash-len65   "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$H65\",\"count\":1}]")"                  # {64,} / a dropped anchor
+probe_body hash-prefix  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"zz$HASH_A\",\"count\":1}]")"             # the ^ anchor
+probe_body hash-suffix  "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"${HASH_A}zz\",\"count\":1}]")"           # the $ anchor
+probe_body reg-len63    "$(mk_body_r "$KEY" "$H63" true 0 "[]")"                                              # registry_hash {1,64}
+probe_body reg-len65    "$(mk_body_r "$KEY" "$H65" true 0 "[]")"
+probe_body reg-prefix   "$(mk_body_r "$KEY" "zz$HASH_A" true 0 "[]")"                                         # registry_hash ^ anchor
+probe_body reg-suffix   "$(mk_body_r "$KEY" "${HASH_A}zz" true 0 "[]")"                                       # registry_hash $ anchor
+probe_body ok-foreign   "$(mk_body "$KEY" true 1 "[{\"text_hash\":\"$HASH_B\",\"count\":1}]")"                # ok_to_flag recomputed: foreign only
+probe_body ok-mixed     "$(mk_body "$KEY" true 2 "[{\"text_hash\":\"$HASH_A\",\"count\":1},{\"text_hash\":\"$HASH_B\",\"count\":1}]")"
+probe_body ok-all-false "$(mk_body "$KEY" false 1 "[{\"text_hash\":\"$HASH_A\",\"count\":1}]")"                # all-registry but false
+probe_body ok-vacuous   "$(mk_body "$KEY" false 0 "[]")"                                                      # zero rows, false: vacuous true
+probe_body total-frac   "$(mk_body "$KEY" true 1.5 "[]")"
+probe_body total-neg    "$(mk_body "$KEY" true -1 "[]")"
+probe_body total-str    "$(mk_body "$KEY" true '"1"' "[]")"
+probe_body total-null   "$(mk_body "$KEY" true null "[]")"
+probe_body total-16dig  "$(mk_body "$KEY" true 1000000000000000 "[{\"text_hash\":\"$HASH_A\",\"count\":1000000000000000}]")" # the {1,15} digit cap
+probe_body by-type      "$(mk_body "$KEY" true 0 "{}")"
+check "MP the probe bodies and their labels are parallel arrays" test "${#PROBE_BODIES[@]}" -eq "${#PROBE_LABELS[@]}"
 check "MC control: the pristine script satisfies every probe" pristine_ok "$SUT"
 mutant m1 's/^\[\[ "\$KEY" =~ \$KEY_RE \]\].*$/true/'
 mutant m2 's/^case "\$-" in$/case "none" in/'
@@ -303,15 +330,56 @@ mutant m9g 's#(all\(\.text_hash .*)\[0-9a-f\]#\1[0-9a-fA-F]#'
 mutant m9h 's#^  and \.ok_to_flag == .*$#  and true#'
 mutant m9i 's#\| all\)$#| any)#'
 mutant m9j 's#\[\.by_hash\[\] \| \.text_hash == \$r\]#[.by_hash[0] | .text_hash == $r]#'
-for m in m1 m2 m3 m4 m5 m6 m7 m8 m9a m9b m9c m9e m9f m9g m9h m9i m9j; do
-  check_not "M-$m the mutant is caught by a probe" pristine_ok "$MUT/scripts/$m.sh"
+# m9k..m9r: the LENGTH and ANCHOR halves of the two hash regexes (the text_hash line and the registry_hash line are addressed by their own head)
+mutant m9k 's#(\.text_hash \| type == "string" and test\("\^\[0-9a-f\])\{64\}#\1{1,64}#'
+mutant m9l 's#(\.registry_hash \| type == "string" and test\("\^\[0-9a-f\])\{64\}#\1{1,64}#'
+mutant m9m 's#(\.text_hash \| type == "string" and test\(")\^#\1#'
+mutant m9n 's#(\.text_hash \| type == "string" and test\("\^\[0-9a-f\]\{64\})\$"#\1"#'
+mutant m9o 's#(\.registry_hash \| type == "string" and test\(")\^#\1#'
+mutant m9p 's#(\.registry_hash \| type == "string" and test\("\^\[0-9a-f\]\{64\})\$"#\1"#'
+mutant m9q 's#\^\[0-9\]\{1,15\}\$#^[0-9]+$#'
+# crash control: a mutant that merely BREAKS the script must not count as caught (it does not parse)
+mutant mX 's#^set -uo pipefail#set -uo pipefail; this is not bash )(#'
+# <mutant> <the probe it must violate>. A mutant is caught only when it violates ITS OWN named probe (see caught_by for what a crash can and cannot fake).
+EXPECT=(
+  "m1 key-inject" "m2 xtrace" "m3 s503" "m4 s404" "m5 sum" "m6 host" "m7 token" "m8 sum"
+  "m9a body:count-floor" "m9b body:count-floor" "m9c body:count-ge1" "m9e body:hash-hex" "m9f body:hash-hex" "m9g body:hash-lower"
+  "m9h body:ok-foreign" "m9i body:ok-mixed" "m9j body:ok-mixed"
+  "m9k body:hash-len63" "m9l body:reg-len63" "m9m body:hash-prefix" "m9n body:hash-suffix" "m9o body:reg-prefix" "m9p body:reg-suffix" "m9q body:total-16dig"
+)
+caught_by() { # <mutant> <probe name>
+  local m="$1" want="$2" w
+  if [ ! -f "$MUT/scripts/$m.sh" ]; then bad "M-$m is named in the expectation list but was never defined"; return; fi
+  if ! "$BASH_BIN" -n "$MUT/scripts/$m.sh" 2>/dev/null; then bad "M-$m does not parse: a mutant that crashes the script is not a caught weakening"; return; fi
+  pristine_ok "$MUT/scripts/$m.sh" || true
+  # A REFUSAL probe (body:*, s503, s404, key-inject, sum) is violated only when the mutant ACCEPTS what it must refuse, which a script that
+  # fails for any other reason never does. xtrace / host / token are violated by a script that merely prints nothing, so for those the
+  # mutant must also still pass the honest probes (a jq-syntax or runtime crash fails them).
+  case "$want" in
+    xtrace|host|token)
+      for w in control honest-false honest-true; do
+        case " $VIOL " in *" $w "*) bad "M-$m broke the script (it violates the honest probe '$w'), which is a crash, not a caught weakening"; return ;; esac
+      done ;;
+  esac
+  case " $VIOL " in *" $want "*) ok ;; *) bad "M-$m survived: it does not violate its own probe '$want' (violated:${VIOL:- none})" ;; esac
+}
+# the expectation list and the defined mutants must be the same set (a name with no definition, or a definition with no expectation, is a FAIL)
+want_names=" "; for e in "${EXPECT[@]}"; do want_names="$want_names${e%% *} "; done
+for m in "${DEFINED[@]}"; do
+  [ "$m" = mX ] && continue
+  case "$want_names" in *" $m "*) ;; *) bad "mutant $m is defined but has no expected probe in EXPECT" ;; esac
 done
+for e in "${EXPECT[@]}"; do caught_by "${e%% *}" "${e#* }"; done
+# the crash control itself: mX must be refused as a script that does not parse, so it can never be counted as caught
+if "$BASH_BIN" -n "$MUT/scripts/mX.sh" 2>/dev/null; then bad "MX the crash mutant parses (the crash guard is vacuous)"; else ok; fi
 
 echo ""
 echo "=== Results ==="
 echo "Passed: $PASS"
 echo "Failed: $FAIL"
-FLOOR=205
+# FLOOR is EXACTLY the green run's assertion count (228): every assertion runs through ok()/bad() and the count has no
+# data-dependent branch, so there is no slack to hide a deleted row in; adding or removing an assertion means moving this number.
+FLOOR=228
 if [ "$TOTAL" -lt "$FLOOR" ]; then
   echo "assertion floor tripped: only $TOTAL assertions ran, expected at least $FLOOR."
   exit 1

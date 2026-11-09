@@ -8,9 +8,10 @@
 #   * extracts the workflow step's `run:` block and executes it under `bash --noprofile --norc -eo
 #     pipefail`, with the step's env supplied by this suite. The runner itself uses `bash -e {0}`
 #     (the steps carry no `shell:` key, so no pipefail): this is STRICTER than the runner, never looser;
-#   * pins the workflow SHAPE with a text parser (events: labeled/unlabeled and merge_group; aggregate
+#   * pins the workflow SHAPE (events: labeled/unlabeled and merge_group; aggregate
 #     membership; step-level event condition; no job-level `if:`; env hoisting; the umbrella's
-#     `pull-requests: write`; no `continue-on-error` on either step or the job) and proves the parser is
+#     `pull-requests: write`; the job's and both parked-hold steps' keys against an allow-list read from the
+#     PARSED YAML, so no spelling of `continue-on-error`, `shell:` or `defaults:` gets past it) and proves the checker is
 #     not vacuous by feeding it one mutated copy of the workflow per pinned category, each of which it
 #     must reject (section D);
 #   * mutates the evaluator itself (case-sensitive match, fail-open, loose queue ref, no retry, extra gh
@@ -18,7 +19,9 @@
 #     targeted probe per mutant, which must see correct behaviour on the pristine script and wrong
 #     behaviour on the mutant (section C);
 #   * runs scripts/lint-umbrella-aggregate.sh against a scratch copy of the workflows with
-#     `continue-on-error` injected into a required umbrella, which must fail (section F).
+#     every neutraliser the lint's rules name injected into a required umbrella (any spelling of
+#     `continue-on-error`, `shell:`, a job-level `if:`, a constant or foreign verdict argument, an early
+#     `exit`, ...), each of which must fail with the finding that names its rule (section G).
 #
 # Guard Contract rows (plan 2026-11-08-feat-founder-acceptance-record-followups-plan.md, Guard 1):
 #   1 mixed-case label        -> rows "Parked"/"PARKED"      (mutant: case-sensitive)
@@ -190,10 +193,20 @@ behaviour_rows() {
   run_hold "$S" $(pr_env 90); expect_fail "body for a different PR number fails"
   reset_stub; set_resp last 0 "" '{"number":91,"labels":null}'
   run_hold "$S" $(pr_env 91); expect_fail "labels not an array fails"
+  expect_out "labels null carries the body-shape annotation" '::error::parked-hold: label state unreadable (unexpected response body); re-run the check (this is not a parked hold)'
   reset_stub; set_resp last 0 "" '{"number":92}'
   run_hold "$S" $(pr_env 92); expect_fail "labels missing fails"
+  expect_out "labels missing carries the body-shape annotation" '::error::parked-hold: label state unreadable (unexpected response body); re-run the check (this is not a parked hold)'
   reset_stub; set_resp last 0 "" ''
   run_hold "$S" $(pr_env 93); expect_fail "empty body fails"
+  # A labels value that is an OBJECT or a STRING is not a label list. `{}` iterates as zero labels, so only the
+  # `.labels | type == "array"` clause stops it passing as "does not carry parked".
+  reset_stub; set_resp last 0 "" '{"number":94,"labels":{}}'
+  run_hold "$S" $(pr_env 94); expect_fail "labels is an empty object fails"
+  expect_out "labels object carries the body-shape annotation" '::error::parked-hold: label state unreadable (unexpected response body); re-run the check (this is not a parked hold)'
+  reset_stub; set_resp last 0 "" '{"number":95,"labels":"parked"}'
+  run_hold "$S" $(pr_env 95); expect_fail "labels is a string fails"
+  expect_out "labels string carries the body-shape annotation" '::error::parked-hold: label state unreadable (unexpected response body); re-run the check (this is not a parked hold)'
 
   # The jq error mapping: a label list that parses as an array but cannot be evaluated (an element that
   # is not an object) is neither "parked" nor "not parked", so it fails closed with its own annotation.
@@ -248,7 +261,7 @@ behaviour_rows() {
   done
 }
 
-# ─── the workflow-shape checker (text parse, no YAML library; mirrors lint-umbrella-aggregate.sh) ─
+# ─── the workflow-shape checker (text pins plus a PyYAML key allow-list; companion of lint-umbrella-aggregate.sh) ─
 shape_check() { # shape_check <workflow file>  -> 0 iff every shape assertion holds
   python3 -I - "$1" <<'PYEOF'
 import re
@@ -298,8 +311,22 @@ if any(re.match(r"^    if:", l) for l in head):
     err("secret-guards carries a JOB-level if: (a required context must report on every event)")
 if not any(re.match(r"^      pull-requests: write", l) for l in head):
     err("secret-guards lacks pull-requests: write (inherited from the umbrella; the label read itself needs only read)")
-if any(re.match(r"^    continue-on-error\s*:", l) for l in head):
-    err("secret-guards carries a JOB-level continue-on-error (a failed member would conclude success)")
+
+# The key rules below read the PARSED workflow, not the text: YAML spells one key many ways (bare, "quoted",
+# 'quoted', first key after `- `, flow mapping), and a text match sees only the spelling it was written for.
+try:
+    import yaml
+    parsed = yaml.safe_load(open(sys.argv[1], encoding="utf-8").read())
+    pjob = parsed["jobs"]["secret-guards"]
+    psteps = {x.get("id"): x for x in pjob["steps"] if isinstance(x, dict) and x.get("id")}
+except Exception as e:  # PyYAML absent or the file unparseable: this pin cannot hold, so it fails
+    err(f"cannot parse the workflow as YAML ({type(e).__name__}); the key allow-list pins cannot run")
+    pjob, psteps = {}, {}
+JOB_ALLOWED = {"name", "runs-on", "timeout-minutes", "permissions", "steps"}
+STEP_ALLOWED = {"id", "if", "name", "env", "run"}
+for k in pjob:
+    if k not in JOB_ALLOWED:
+        err(f"secret-guards job key `{k}` is outside the allow-list (continue-on-error, if and defaults would each neutralise a required context)")
 
 def step_block(sid):
     # A step runs from its `- id:` line to the next step (`      - `) or the job boundary. A 6-space
@@ -325,8 +352,9 @@ for sid in ("parked-hold", "parked-hold-selftest"):
     if not any(l.strip() == COND for l in b):
         err(f"step {sid} lacks the step-level event condition")
     txt = "\n".join(b)
-    if any(re.match(r"^\s+continue-on-error\s*:", l) for l in b):
-        err(f"step {sid} carries continue-on-error (member() reads conclusion, which it would turn into success)")
+    for k in psteps.get(sid, {}):
+        if k not in STEP_ALLOWED:
+            err(f"step {sid} carries the key `{k}` (continue-on-error would turn a red step's conclusion into success; shell: would stop the command running)")
     run = re.search(r"\n        run: (.*)", txt)
     if not run:
         err(f"step {sid} has no run:")
@@ -417,6 +445,8 @@ probe_ref()      { reset_stub; set_resp last 0 "" "$(body 33 'enhancement')"; ru
 probe_retry()    { reset_stub; set_resp 1 1 "gh: Bad Gateway (HTTP 502)" ""; set_resp last 0 "" "$(body 34 'enhancement')"; run_hold "$1" $(pr_env 34); [ "$RC" -eq 0 ]; }
 probe_argv()     { reset_stub; set_resp last 0 "" "$(body 35 'enhancement')"; run_hold "$1" $(pr_env 35); [ "$RC" -eq 0 ] && [ ! -s "$STUB_DIR/refused.log" ]; }
 probe_evalarm()  { reset_stub; set_resp last 0 "" '{"number":36,"labels":[1]}'; run_hold "$1" $(pr_env 36); [ "$RC" -ne 0 ]; }
+probe_labelsobj() { reset_stub; set_resp last 0 "" '{"number":38,"labels":{}}'; run_hold "$1" $(pr_env 38); [ "$RC" -ne 0 ]; }
+probe_bodyann()  { reset_stub; set_resp last 0 "" '{"number":39,"labels":null}'; run_hold "$1" $(pr_env 39); [ "$RC" -ne 0 ] && [[ "$OUT" == *'::error::parked-hold: label state unreadable (unexpected response body); re-run the check (this is not a parked hold)'* ]]; }
 probe_zeropad()  { reset_stub; set_resp last 0 "" "$(body 37 'enhancement')"; run_hold "$1" $(pr_env 0037); [ "$RC" -eq 0 ] && [ ! -s "$STUB_DIR/refused.log" ]; }
 
 mutant() { # mutant <name> <probe> <sed expression>: the probe must see correct behaviour on the pristine script and wrong behaviour on the mutant
@@ -432,6 +462,8 @@ mutant loose-queue-ref probe_ref 's/\[0-9a-f\]\{40\}\$/.*/'
 mutant no-retry probe_retry 's/(while \[ "\$attempt") -lt 2/\1 -lt 1/'
 mutant extra-gh-flag probe_argv 's/gh api "repos/gh api --cache 1h "repos/'
 mutant eval-arm-passes probe_evalarm 's/(\*\)) fail "[^"]*"/\1 exit 0/'
+mutant drop-labels-array-clause probe_labelsobj 's/ and \(\.labels \| type == "array"\)//'
+mutant drop-body-annotation-suffix probe_bodyann 's/(\(unexpected response body\)); re-run the check \(this is not a parked hold\)/\1/'
 mutant no-leading-zero-normalisation probe_zeropad 's/^pr=\$\(\(10#\$pr\)\).*$//'
 
 # The queue-ref regex is a parity-pinned copy of the one in the two sibling scripts (ADR-270 mg_arm). What is
@@ -439,13 +471,16 @@ mutant no-leading-zero-normalisation probe_zeropad 's/^pr=\$\(\(10#\$pr\)\).*$//
 # each file, with the SIBLINGS' parentheses around the SHA group removed (they capture the embedded oid; this
 # script does not need it). The PR-number group, the `main` base, the 40-hex length and both anchors are compared.
 QREF_RE='\^refs/heads/gh-readonly-queue/main/pr-\(\[0-9\]\+\)-\(?\[0-9a-f\]\{40\}\)?\$'
-qref_of() { # <file> -> the distinct queue-ref literals in it, SHA capture group parens removed; empty when none
-  { grep -oE "$QREF_RE" "$1" || true; } | sed -E 's/-\((\[0-9a-f\]\{40\})\)\$/-\1$/' | sort -u
+# Comments are stripped BEFORE the literal is extracted: a `# was: <old literal>` line must not be able to supply the
+# matching literal for a loosened live regex. A whole-line comment goes, and so does a `<space># ...` tail.
+qref_of() { # <file> -> the queue-ref literals in its CODE, one per occurrence, SHA capture group parens removed; empty when none
+  sed -E -e '/^[[:space:]]*#/d' -e 's/[[:space:]]#.*$//' "$1" | { grep -oE "$QREF_RE" || true; } | sed -E 's/-\((\[0-9a-f\]\{40\})\)\$/-\1$/'
 }
-qref_parity() { # qref_parity <this script> <oracle copy> <cla copy>: 0 iff all three carry the same non-empty literal
+qref_parity() { # qref_parity <this script> <oracle copy> <cla copy>: 0 iff each carries exactly ONE literal and all three are equal
   local a b c
   a="$(qref_of "$1")"; b="$(qref_of "$2")"; c="$(qref_of "$3")"
-  [ -n "$a" ] && [ "$(printf '%s\n' "$a" | wc -l)" -eq 1 ] && [ "$a" = "$b" ] && [ "$a" = "$c" ]
+  [ -n "$a" ] && [ "$(printf '%s\n' "$a" | wc -l)" -eq 1 ] && [ "$(printf '%s\n' "$b" | wc -l)" -eq 1 ] && [ "$(printf '%s\n' "$c" | wc -l)" -eq 1 ] \
+    && [ "$a" = "$b" ] && [ "$a" = "$c" ]
 }
 ORACLE="$ROOT/scripts/ci-oracle-review.sh"; CLA="$ROOT/scripts/merge-queue-cla-verify.sh"
 if qref_parity "$SCRIPT" "$ORACLE" "$CLA"; then ok "queue-ref regex matches ci-oracle-review.sh and merge-queue-cla-verify.sh"; else bad "queue-ref regex matches ci-oracle-review.sh and merge-queue-cla-verify.sh"; fi
@@ -461,6 +496,28 @@ qref_mutant() { # qref_mutant <name> <which: script|oracle|cla>: one file's rege
 qref_mutant drift-in-script script
 qref_mutant drift-in-oracle oracle
 qref_mutant drift-in-cla cla
+# A comment that still carries the ORIGINAL literal above a loosened live regex must not satisfy the parity row.
+qref_carrier_mutant() { # qref_carrier_mutant <name> <which: oracle|cla>
+  local name="$1" which="$2" f="$WORK/qref-$1.sh" src o="$ORACLE" c="$CLA"
+  case "$which" in oracle) src="$ORACLE" ;; cla) src="$CLA" ;; esac
+  python3 -I - "$src" "$f" <<'PYEOF'
+import re, sys
+lit = re.compile(r"\^refs/heads/gh-readonly-queue/main/pr-\(\[0-9\]\+\)-\(?\[0-9a-f\]\{40\}\)?\$")
+out = []
+for l in open(sys.argv[1], encoding="utf-8").read().split("\n"):
+    if lit.search(l) and not l.lstrip().startswith("#"):
+        out.append("# was: " + l.strip())  # the original literal survives, as a comment only
+        l = l.replace("pr-([0-9]+)-", "pr-([0-9]*)-")
+    out.append(l)
+open(sys.argv[2], "w", encoding="utf-8").write("\n".join(out))
+PYEOF
+  if cmp -s "$src" "$f"; then bad "queue-ref carrier mutant $name did not change $which (anchor drifted)"; return; fi
+  if ! grep -qE '^# was: .*pr-\(\[0-9\]\+\)-' "$f"; then bad "queue-ref carrier mutant $name did not plant the comment carrier"; return; fi
+  case "$which" in oracle) o="$f" ;; cla) c="$f" ;; esac
+  if qref_parity "$SCRIPT" "$o" "$c"; then bad "queue-ref carrier mutant $name survived (a comment supplied the literal)"; else ok "queue-ref carrier mutant $name rejected"; fi
+}
+qref_carrier_mutant comment-carrier-in-oracle oracle
+qref_carrier_mutant comment-carrier-in-cla cla
 
 # ─── D. workflow shape ──────────────────────────────────────────────────────────────────────────
 SHAPE_OUT=$(shape_check "$WORKFLOW" 2>&1) && ok "workflow shape holds" || bad "workflow shape: $SHAPE_OUT"
@@ -496,6 +553,14 @@ shape_mutant coe-selftest-after-comment '^(        name: parked-hold selftest[^\
 # ...and when every OTHER required key sits BEFORE the comment, so only the hidden key distinguishes the verdict
 shape_mutant coe-last-key-after-comment '^(        run: bash scripts/ci-parked-hold.sh\n)' '\1      # a comment inside the step\n        continue-on-error: true\n'
 shape_mutant coe-selftest-last-key-after-comment '^(        run: bash scripts/ci-parked-hold.test.sh\n)' '\1      # a comment inside the step\n        continue-on-error: true\n'
+# other spellings and neighbours of the same neutraliser: only the PARSED allow-list sees these
+shape_mutant coe-double-quoted-key '^(      - id: parked-hold\n)' '\1        "continue-on-error": true\n'
+shape_mutant coe-single-quoted-key '^(      - id: parked-hold-selftest\n)' "\\1        'continue-on-error': true\\n"
+shape_mutant coe-list-item-first-key '^      - id: parked-hold-selftest\n' '      - continue-on-error: true\n        id: parked-hold-selftest\n'
+shape_mutant shell-key-on-parked-hold '^(      - id: parked-hold\n)' '\1        shell: "echo {0}"\n'
+shape_mutant shell-key-on-selftest '^(      - id: parked-hold-selftest\n)' '\1        shell: "echo {0}"\n'
+shape_mutant coe-double-quoted-job-key '^    timeout-minutes: 15$' '    timeout-minutes: 15\n    "continue-on-error": true'
+shape_mutant job-defaults-shell '^    timeout-minutes: 15$' '    timeout-minutes: 15\n    defaults:\n      run:\n        shell: "echo {0}"'
 
 # ─── E. the workflow step's run: block, executed under bash -eo pipefail (stricter than the runner's bash -e) ─
 RUN_BLOCK=$(extract_run "$WORKFLOW" parked-hold) && ok "extracted the parked-hold run: block" || bad "extract the parked-hold run: block"
@@ -568,13 +633,62 @@ lint_mutant coe-on-parked-hold secret-scan.yml secret-guards parked-hold
 lint_mutant coe-on-secret-guards-job secret-scan.yml secret-guards JOB
 lint_mutant coe-on-guards-ruleset-step ci.yml guards-ruleset "$(sed -n '/^  guards-ruleset:/,/^  guards-advisory:/p' "$ROOT/.github/workflows/ci.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
 lint_mutant coe-on-quality-guards-step pr-quality-guards.yml quality-guards "$(sed -n '/^  quality-guards:/,/^  quality-advisory:/p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
+# Every other spelling or route by which a member is neutralised while rules (a)-(f) still hold. Each mutant is a
+# python re.sub (MULTILINE, count=1) on one workflow copy; it must change the copy, the lint must exit non-zero, and
+# its output must carry the finding that names THAT rule (a crash or an unrelated finding does not count as caught).
+lint_resub() { # lint_resub <name> <workflow> <pattern> <replacement> <fixed substring the lint output must contain>
+  local name="$1" wf="$2" pat="$3" rep="$4" want="$5"
+  cp "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"
+  python3 -I - "$LINTREPO/.github/workflows/$wf" "$pat" "$rep" <<'PYEOF'
+import re, sys
+path, pat, rep = sys.argv[1:4]
+src = open(path, encoding="utf-8").read()
+open(path, "w", encoding="utf-8").write(re.sub(pat, rep, src, count=1, flags=re.M))
+PYEOF
+  if cmp -s "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"; then bad "lint mutant $name did not change $wf (anchor drifted)"; else
+    run_lint
+    if [ "$RC" -ne 0 ] && [[ "$OUT" == *"$want"* ]]; then ok "lint mutant $name rejected"; else bad "lint mutant $name survived or was caught by another rule (rc $RC, wanted '$want')"; fi
+  fi
+  cp "$ROOT/.github/workflows/$wf" "$LINTREPO/.github/workflows/$wf"
+}
+SS=secret-scan.yml
+# the key class: any spelling of continue-on-error, and the other one-key neutraliser (shell:)
+lint_resub coe-double-quoted-key $SS '^(      - id: parked-hold\n)' '\1        "continue-on-error": true\n' 'disallowed step key `continue-on-error`'
+lint_resub coe-single-quoted-key $SS '^(      - id: waiver-discipline\n)' "\\1        'continue-on-error': true\\n" 'disallowed step key `continue-on-error`'
+lint_resub coe-list-item-first-key $SS '^      - id: parked-hold\n' '      - continue-on-error: true\n        id: parked-hold\n' 'disallowed step key `continue-on-error`'
+lint_resub coe-flow-mapping-step $SS '^      - id: parked-hold-selftest\n        if: [^\n]*\n        name: [^\n]*\n        run: bash scripts/ci-parked-hold.test.sh\n' \
+  "      - {id: parked-hold-selftest, if: \"\${{ !cancelled() }}\", name: x, run: \"bash scripts/ci-parked-hold.test.sh\", continue-on-error: true}\n" 'disallowed step key `continue-on-error`'
+lint_resub coe-double-quoted-job-key $SS '^    timeout-minutes: 15$' '    timeout-minutes: 15\n    "continue-on-error": true' 'job key `continue-on-error`'
+lint_resub shell-key-on-member $SS '^(      - id: waiver-discipline\n)' '\1        shell: "echo {0}"\n' 'disallowed step key `shell`'
+lint_resub job-defaults-shell $SS '^    timeout-minutes: 15$' '    timeout-minutes: 15\n    defaults:\n      run:\n        shell: "echo {0}"' 'job key `defaults`'
+lint_resub job-if-false-secret-guards $SS '^(  secret-guards:\n)' '\1    if: ${{ false }}\n' 'job key `if`'
+lint_resub job-if-false-guards-ruleset ci.yml '^(  guards-ruleset:\n)' '\1    if: ${{ false }}\n' 'job key `if`'
+lint_resub job-if-false-quality-guards pr-quality-guards.yml '^(  quality-guards:\n)' '\1    if: ${{ false }}\n' 'job key `if`'
+lint_resub local-composite-action $SS '^(      - name: Checkout \(full history for diff scans\)\n        uses: )[^\n]*\n' '\1./.github/actions/x\n' '`uses` must be an owner/repo@<40-hex sha> action'
+# quality-advisory is NOT exempt from the continue-on-error rule (it has no use of it); guards-advisory still is
+lint_mutant coe-on-quality-advisory-step pr-quality-guards.yml quality-advisory "$(sed -n '/^  quality-advisory:/,$p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')"
+# the step `if:` grammar
+lint_resub if-and-false $SS '^(      - id: waiver-discipline\n        if: [^\n]*?) \}\}\n' '\1 && false }}\n' 'term outside the allow-listed comparison atoms'
+lint_resub if-trailing-comment-names-cancelled $SS '^(      - id: waiver-discipline\n)        if: [^\n]*\n' '\1        if: ${{ success() }} # !cancelled()\n' 'does not start with ${{ !cancelled() &&'
+lint_resub if-top-level-or $SS '^(      - id: waiver-discipline\n)        if: [^\n]*\n' "\\1        if: \${{ !cancelled() && github.event_name == 'pull_request' || github.event_name == 'merge_group' }}\n" 'top-level `||`'
+lint_resub aggregate-if-weakened $SS '^(      - id: aggregate\n        if: )\$\{\{ !cancelled\(\) \}\}' '\1${{ success() }}' 'aggregate `if:` must be exactly'
+# the member call: arguments 4 and 5 pinned to the ids' own conclusions/outcomes, and the whole line
+lint_resub member-constant-verdict $SS "'\\$\\{\\{ steps.waiver-discipline.conclusion \\}\\}' '\\$\\{\\{ steps.waiver-discipline.outcome \\}\\}'" "'success' 'success'" '4th argument is not exactly'
+lint_resub member-foreign-step-verdict $SS "(member parked-hold 'pull_request,merge_group' 'parked-hold' '\\$\\{\\{ steps\\.)parked-hold(\\.conclusion)" '\1parked-hold-selftest\2' '4th argument is not exactly'
+lint_resub member-constant-outcome $SS "'\\$\\{\\{ steps.waiver-discipline.outcome \\}\\}' \\|\\| failed=1" "'success' || failed=1" '5th argument is not exactly'
+lint_resub member-or-true-between-links $SS "^(          member waiver-discipline [^\\n]*?) \\|\\| failed=1" '\1 || true || failed=1' 'malformed member call'
+lint_resub member-trailing-comment $SS "^(          member waiver-discipline [^\\n]*? \\|\\| failed=1)" '\1 # ok' 'malformed member call'
+# the aggregate shape: the tail is the last statement
+lint_resub early-exit-before-tail $SS '^(          if \[ "\$failed" -ne 0 \]; then\n)' '          exit 0\n\1' 'statement outside the allowed sequence before the tail'
+lint_resub statement-after-closing-echo $SS '^(          echo "secret-guards: all member guards green \(or out-of-scope\)")' '\1\n          exit 0' 'statement after the closing echo'
+lint_resub tail-cut-before-exit $SS '^            exit 1\n          fi\n          echo "secret-guards: all' '          fi\n          echo "secret-guards: all' 'tail must be echo lines then `exit 1`'
 run_lint; expect_pass "lint-umbrella-aggregate passes again once the mutated copies are restored"
 
 # ─── anti-vacuity floor (Guard row 9): an emptied call list must not report ok ───────────────────
 # The floor exits directly: it must not run THROUGH bad()/fails, which a neutered assertion machinery silences
-# (scripts/guard-vacuity-floor.test.sh). MIN_ROWS is the actual row count (106) minus two; it stays on the line
+# (scripts/guard-vacuity-floor.test.sh). MIN_ROWS is the actual row count (147) minus two; it stays on the line
 # directly above the `if` so the meta-guard can bind it when it builds its neutered mutant.
-MIN_ROWS=104
+MIN_ROWS=145
 if [ "$rows" -lt "$MIN_ROWS" ]; then printf 'parked-hold selftest FAILED: anti-vacuity floor: only %d rows ran (minimum %d)\n' "$rows" "$MIN_ROWS" >&2; exit 1; fi
 
 if [ "$fails" -ne 0 ]; then

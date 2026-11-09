@@ -31,19 +31,41 @@
 #       silently re-opens the five-way drift the dedup closed. The semantics
 #       tokens of (d) are pinned against the lib file, once, not per block.
 #
-#   (g) NO CONTINUE-ON-ERROR (REQUIRED umbrellas): no step, and not the job,
-#       of a required umbrella may carry a `continue-on-error:` key, whatever
-#       its value. `member()` reads `conclusion`, and `continue-on-error: true`
-#       turns a failed step's conclusion into `success` (the failure survives
-#       only in `outcome`, which member() merely prints): the member goes green
-#       and the PR is never blocked, with (a)-(f) all still satisfied. Measured
-#       against the tree: the ONLY umbrella that legitimately uses it is the
-#       advisory `guards-advisory` (harness-discovery et al.: its verdicts are
-#       non-blocking by design and it is not a required context), so the rule
-#       is scoped to every umbrella NOT in ADVISORY_UMBRELLAS below.
+#   (g) PARSED STEP/JOB KEYS (every umbrella): the workflow is loaded with a real YAML parser (PyYAML,
+#       fail-closed when absent: exit 2) and every job and every step is checked against an ALLOW-LIST
+#       of keys, so no spelling of a neutraliser gets past a text match: `continue-on-error` (bare,
+#       "quoted", 'quoted', first key after `- `, flow style, job level), `shell:` (a custom shell
+#       template never runs the command), `defaults:`, a job-level `if:` (a skipped required job reads
+#       as passing) and a local `uses: ./...` composite action (its inner steps are not scanned) are all
+#       outside the allow-list. `member()` reads `conclusion`, and `continue-on-error: true` turns a
+#       failed step's conclusion into `success`. Measured against the tree: only `guards-advisory`
+#       legitimately uses `continue-on-error` (8 of its steps; its verdicts are non-blocking by design
+#       and it is not a required context), and only `quality-advisory` carries a job-level `if`/`needs`
+#       (it is not a required context either); `quality-advisory` has NO continue-on-error, so it is not
+#       exempt from that rule. See POLICY below.
+#   (h) STEP `if:` GRAMMAR (every umbrella step with an `id`): the parsed value is
+#       `${{ !cancelled() }}` or `${{ !cancelled() && <expr> }}`, where <expr> is built ONLY from the
+#       allow-listed comparison atoms below joined by `&&`, `||` and parentheses, with no `||` at depth
+#       0. A `&& false`, a trailing YAML comment naming `!cancelled()`, `success()` and a literal are
+#       rejected. The aggregate step's `if:` must be exactly `${{ !cancelled() }}`.
+#   (i) MEMBER LINES: every line of the aggregate that starts with `member ` must match ONE strict
+#       shape, and its 4th and 5th arguments must be exactly the `conclusion` / `outcome` expressions
+#       of the ids named in the 3rd, in order. A constant, another step's verdict, `|| true ||`
+#       between the links, a trailing comment or `&& false` do not match.
+#   (j) AGGREGATE SHAPE: the aggregate run block is a fixed statement sequence (set, failed=0, source,
+#       member lines, the `if [ "$failed" -ne 0 ]` tail, at most one closing echo); the tail is the
+#       last statement (an `exit`, `return`, `set +e` or any other statement anywhere else is rejected).
 #
-# Text-parse lint: `- id:` and `member(` tokens only, no YAML library. The
-# member(...) call's THIRD argument is the single-quoted CSV of step ids.
+# RESIDUALS this lint does not close (ADR-032): a member group is an OR over its arms (a dead arm
+# next to a live sibling stays green); the `run:` bodies of member steps are not inspected here
+# (the parked-hold steps' bodies are executed by scripts/ci-parked-hold.test.sh section E); a
+# never-true event comparison in an `if:` atom is not detectable; a second producer of the context
+# name `secret-guards` is not checked.
+#
+# Parsing: PyYAML (the same dependency the required quality-guards member `workflow-duplicate-keys`
+# has, assumed preinstalled on ubuntu-24.04: its summary line prints `pyyaml=<version>` as the
+# evidence). A missing PyYAML fails this lint (exit 2) rather than skipping it.
+# The member(...) call's THIRD argument is the single-quoted CSV of step ids.
 #
 # Umbrella census (three files, five jobs):
 #   ci.yml                 guards-ruleset, guards-advisory
@@ -55,10 +77,26 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-python3 - <<'PYEOF'
+python3 -I - <<'PYEOF'
+import glob
 import os
 import re
 import sys
+
+try:
+    import yaml
+except ImportError:
+    print("::error::lint-umbrella-aggregate: PyYAML is required to parse the workflows (python3 -c 'import yaml' failed); failing closed", file=sys.stderr)
+    sys.exit(2)
+
+# CSafeLoader when PyYAML was built with libyaml (about 10x faster), the pure-python SafeLoader otherwise.
+LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
+def load_yaml(path):
+    with open(path, encoding="utf-8") as fh:
+        return yaml.load(fh, Loader=LOADER)
+
 
 UMBRELLAS = {
     ".github/workflows/ci.yml": ["guards-ruleset", "guards-advisory"],
@@ -66,8 +104,14 @@ UMBRELLAS = {
     ".github/workflows/secret-scan.yml": ["secret-guards"],
 }
 
-# Umbrellas that are NOT required contexts and may carry continue-on-error (see (g)).
-ADVISORY_UMBRELLAS = {"guards-advisory", "quality-advisory"}
+# Allow-listed keys (rule (g)). A key outside the list is a finding, whatever its spelling or value.
+STEP_KEYS = {"id", "if", "name", "env", "run", "uses", "with", "working-directory"}
+JOB_KEYS = {"name", "runs-on", "timeout-minutes", "permissions", "env", "steps"}
+POLICY = {
+    # job -> (allowed job keys, allowed step keys). Required contexts take the defaults.
+    "guards-advisory": (JOB_KEYS, STEP_KEYS | {"continue-on-error"}),  # 8 steps use it today
+    "quality-advisory": (JOB_KEYS | {"if", "needs"}, STEP_KEYS),  # job-level if/needs today, no continue-on-error
+}
 
 failures = []
 
@@ -77,133 +121,224 @@ def fail(msg):
     print(f"::error::lint-umbrella-aggregate: {msg}", file=sys.stderr)
 
 
-def job_body(lines, job):
-    """Return the line list for `  <job>:` up to the next `  <key>:` job or EOF."""
-    start = None
-    for i, l in enumerate(lines):
-        if l == f"  {job}:":
-            start = i + 1
-            break
-    if start is None:
+# ---- rule (h): step `if:` grammar ---------------------------------------------------------------
+IF_ATOMS = [
+    r"github\.event_name (?:==|!=) '[a-z_]+'",
+    r"github\.event\.pull_request\.head\.repo\.full_name == github\.repository",
+    r"steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_]+ (?:==|!=) '[^']*'",
+    r"needs\.[A-Za-z0-9_-]+\.result (?:==|!=) '[a-z]+'",
+    r"needs\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_]+ (?:==|!=) '[^']*'",
+]
+ATOM_RE = re.compile("|".join(f"(?:{a})" for a in IF_ATOMS))
+IF_HEAD = "${{ !cancelled()"
+
+
+def if_problem(value, is_aggregate):
+    """None when the parsed `if:` value satisfies rule (h), else the reason."""
+    if not isinstance(value, str):
+        return f"`if:` is not a string expression ({value!r})"
+    v = value.strip()
+    if is_aggregate:
+        return None if v == "${{ !cancelled() }}" else "aggregate `if:` must be exactly ${{ !cancelled() }}"
+    if v == "${{ !cancelled() }}":
         return None
-    end = len(lines)
-    for j in range(start, len(lines)):
-        if re.match(r"^  [A-Za-z0-9_-]+:\s*$", lines[j]):
-            end = j
-            break
-    return lines[start:end]
+    m = re.fullmatch(r"\$\{\{ !cancelled\(\) && (.+) \}\}", v)
+    if not m:
+        return "`if:` does not start with ${{ !cancelled() && ...}} (a comment, success(), a literal or a different head)"
+    rest = m.group(1)
+    skeleton = ATOM_RE.sub("A", rest)
+    if not re.fullmatch(r"[A()&| ]+", skeleton) or "A" not in skeleton:
+        return f"`if:` has a term outside the allow-listed comparison atoms ({rest})"
+    depth = 0
+    toks = re.findall(r"\(|\)|\|\||&&|A", skeleton)
+    for t in toks:
+        if t == "(":
+            depth += 1
+        elif t == ")":
+            depth -= 1
+        elif t == "||" and depth == 0:
+            return "`if:` has a top-level `||`: it would run the step when !cancelled() is false"
+    if depth != 0:
+        return "`if:` has unbalanced parentheses"
+    return None
 
 
-def step_blocks(body):
-    """Yield (id, block_lines) for each `      - id: <x>` step."""
-    idx = [i for i, l in enumerate(body) if re.match(r"\s+- id: \S+\s*$", l)]
-    for k, i in enumerate(idx):
-        end = idx[k + 1] if k + 1 < len(idx) else len(body)
-        sid = re.match(r"\s+- id: (\S+)", body[i]).group(1)
-        yield sid, body[i:end]
+# ---- rules (i)/(j): the aggregate run block --------------------------------------------------------
+MEMBER_RE = re.compile(
+    r"member (?P<name>[A-Za-z0-9._-]+) '(?P<scope>\*|-|[a-z_]+(?:,[a-z_]+)*)' "
+    r"'(?P<ids>[A-Za-z0-9_-]+(?:,[A-Za-z0-9_-]+)*)' '(?P<conc>[^']*)' '(?P<out>[^']*)' \|\| failed=1"
+)
+SOURCE_PREFIX = 'source "${GITHUB_WORKSPACE:?}/scripts/lib/umbrella-member.sh" || { echo "::error::'
+SOURCE_SUFFIX = '"; exit 1; }'
 
 
-def run_block(block):
-    """The step's `run: |` literal body (indented past the `run:` line)."""
-    for i, l in enumerate(block):
-        if re.match(r"\s+run:\s*\|", l):
-            base = re.match(r"(\s*)run:", l).group(1)
-            out = []
-            for m in block[i + 1 :]:
-                if m.strip() == "":
-                    out.append(m)
+def stmt_lines(run):
+    out = []
+    for raw in run.split("\n"):
+        t = raw.strip()
+        if t == "" or t.startswith("#"):
+            continue
+        out.append(t)
+    return out
+
+
+def check_aggregate(where, run):
+    """Rules (i), (j). Returns the list of member id lists in the block."""
+    stmts = stmt_lines(run)
+    member_ids = []
+    state = "set"
+    for t in stmts:
+        if state == "set":
+            if t != "set -uo pipefail":
+                fail(f"{where} aggregate: first statement must be `set -uo pipefail` ({t})")
+                return member_ids
+            state = "failed0"
+        elif state == "failed0":
+            if t != "failed=0":
+                fail(f"{where} aggregate: second statement must be `failed=0` ({t})")
+                return member_ids
+            state = "source"
+        elif state == "source":
+            if not (t.startswith(SOURCE_PREFIX) and t.endswith(SOURCE_SUFFIX) and '"' not in t[len(SOURCE_PREFIX):-len(SOURCE_SUFFIX)]):
+                fail(f"{where} aggregate: third statement must be the canonical source line ({t[:80]})")
+                return member_ids
+            state = "members"
+        elif state == "members":
+            if t.startswith("member "):
+                m = MEMBER_RE.fullmatch(t)
+                if not m:
+                    fail(f"{where} aggregate: malformed member call (must match the strict shape, ending ` || failed=1` exactly): {t[:120]}")
+                    member_ids.append([])
                     continue
-                if not m.startswith(base + "  "):
-                    break
-                out.append(m)
-            return out
-    return []
-
-
-member_re = re.compile(r"^\s*member\s+(\S+)\s+(\S+)\s+'([^']*)'")
+                ids = m.group("ids").split(",")
+                want_c = ",".join("${{ steps.%s.conclusion }}" % i for i in ids)
+                want_o = ",".join("${{ steps.%s.outcome }}" % i for i in ids)
+                if m.group("conc") != want_c:
+                    fail(f"{where} aggregate: member `{m.group('name')}` 4th argument is not exactly the conclusion expressions of its ids ({','.join(ids)})")
+                if m.group("out") != want_o:
+                    fail(f"{where} aggregate: member `{m.group('name')}` 5th argument is not exactly the outcome expressions of its ids ({','.join(ids)})")
+                member_ids.append(ids)
+            elif t == 'if [ "$failed" -ne 0 ]; then':
+                if not member_ids:
+                    fail(f"{where} aggregate: no member call before the tail")
+                state = "tail-echo"
+            else:
+                fail(f"{where} aggregate: statement outside the allowed sequence before the tail ({t[:100]})")
+                return member_ids
+        elif state == "tail-echo":
+            if re.fullmatch(r'echo "[^"]*"', t):
+                continue
+            if t == "exit 1":
+                state = "tail-fi"
+            else:
+                fail(f"{where} aggregate: tail must be echo lines then `exit 1` ({t[:100]})")
+                return member_ids
+        elif state == "tail-fi":
+            if t != "fi":
+                fail(f"{where} aggregate: tail must close with `fi` right after `exit 1` ({t[:100]})")
+                return member_ids
+            state = "closing"
+        elif state == "closing":
+            if re.fullmatch(r'echo "[^"]*"', t):
+                state = "done"
+            else:
+                fail(f"{where} aggregate: the `if [ \"$failed\" -ne 0 ]` tail must be the last statement (only one closing echo may follow): {t[:100]}")
+                return member_ids
+        elif state == "done":
+            fail(f"{where} aggregate: statement after the closing echo ({t[:100]})")
+            return member_ids
+    if state not in ("closing", "done"):
+        fail(f"{where} aggregate: the block ends before the complete `if [ \"$failed\" -ne 0 ]` tail (state {state})")
+    return member_ids
 
 
 for path, jobs in UMBRELLAS.items():
-    lines = open(path, encoding="utf-8").read().splitlines()
+    try:
+        doc = load_yaml(path)
+    except Exception as e:  # unreadable or unparseable: fail closed
+        fail(f"{path}: cannot be parsed as YAML ({type(e).__name__})")
+        continue
+    all_jobs = doc.get("jobs", {}) if isinstance(doc, dict) else {}
     for job in jobs:
-        body = job_body(lines, job)
-        if body is None:
+        jb = all_jobs.get(job)
+        where = f"{path} `{job}`"
+        if not isinstance(jb, dict):
             fail(f"{path}: umbrella job `{job}` not found")
             continue
-        steps = list(step_blocks(body))
-        agg = [b for sid, b in steps if sid == "aggregate"]
-        members = [sid for sid, _ in steps if sid != "aggregate"]
+        job_keys, step_keys = POLICY.get(job, (JOB_KEYS, STEP_KEYS))
+        for k in jb:
+            if k not in job_keys:
+                fail(f"{where}: job key `{k}` is outside the allow-list ({', '.join(sorted(job_keys))}); a `continue-on-error`, `if`, `defaults` or similar job key can turn a red member into a pass")
+        steps = jb.get("steps")
+        if not isinstance(steps, list):
+            fail(f"{where}: no steps list")
+            continue
+
+        ided = []
+        for n, s in enumerate(steps):
+            if not isinstance(s, dict):
+                fail(f"{where}: step #{n} is not a mapping")
+                continue
+            label = s.get("id") or s.get("name") or f"#{n}"
+            for k in s:
+                if k not in step_keys:
+                    fail(f"{where} step `{label}`: disallowed step key `{k}` (allow-list: {', '.join(sorted(step_keys))})")
+            u = s.get("uses")
+            if u is not None and not (isinstance(u, str) and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}", u)):
+                fail(f"{where} step `{label}`: `uses` must be an owner/repo@<40-hex sha> action (a local or docker action's inner steps are not scanned): {u}")
+            if "id" in s:
+                ided.append(s)
 
         # (c) aggregate exists
+        agg = [s for s in ided if s["id"] == "aggregate"]
+        members = [s["id"] for s in ided if s["id"] != "aggregate"]
         if not agg:
-            fail(f"{path} `{job}`: no `aggregate` step")
+            fail(f"{where}: no `aggregate` step")
             continue
         if len(agg) > 1:
-            fail(f"{path} `{job}`: {len(agg)} `aggregate` steps (want 1)")
+            fail(f"{where}: {len(agg)} `aggregate` steps (want 1)")
 
-        # (g) no continue-on-error key anywhere in a required umbrella (job level or any step,
-        # including the id-less checkout step). A comment line starts with `#`, so it never matches.
-        if job not in ADVISORY_UMBRELLAS:
-            for ln in body:
-                if re.match(r"\s+continue-on-error\s*:", ln):
-                    fail(
-                        f"{path} `{job}`: `continue-on-error` in a required umbrella turns a red member "
-                        f"into conclusion=success ({ln.strip()})"
-                    )
-
-        # (b) every member step's if: contains !cancelled()
-        for sid, block in steps:
-            ifline = next(
-                (l.strip() for l in block if re.match(r"\s+if:", l)), None
-            )
-            if ifline is None:
-                fail(f"{path} `{job}` step `{sid}`: no `if:` line")
-            elif "!cancelled()" not in ifline:
-                fail(
-                    f"{path} `{job}` step `{sid}`: if: lacks !cancelled() ({ifline})"
-                )
-
-        # (a) coverage — every non-aggregate step id in exactly one member() call
-        counted = {}
-        for mline in run_block(agg[0]):
-            m = member_re.match(mline)
-            if not m:
+        # (b)/(h) every id'd step's if: is in the grammar
+        for s in ided:
+            if "if" not in s:
+                fail(f"{where} step `{s['id']}`: no `if:`")
                 continue
-            for sid in m.group(3).split(","):
-                sid = sid.strip()
-                if sid:
-                    counted[sid] = counted.get(sid, 0) + 1
+            why = if_problem(s["if"], s["id"] == "aggregate")
+            if why:
+                fail(f"{where} step `{s['id']}`: {why}")
+
+        agg_run = agg[0].get("run")
+        if not isinstance(agg_run, str):
+            fail(f"{where} aggregate: no `run:` string")
+            continue
+
+        # (a) coverage — every non-aggregate step id in exactly one member() call; (i)/(j) shape
+        counted = {}
+        for ids in check_aggregate(where, agg_run):
+            for sid in ids:
+                counted[sid] = counted.get(sid, 0) + 1
         for sid in members:
             n = counted.get(sid, 0)
             if n == 0:
-                fail(
-                    f"{path} `{job}` step `{sid}`: absent from every member() call"
-                )
+                fail(f"{where} step `{sid}`: absent from every member() call")
             elif n > 1:
-                fail(
-                    f"{path} `{job}` step `{sid}`: in {n} member() calls (want 1)"
-                )
+                fail(f"{where} step `{sid}`: in {n} member() calls (want 1)")
         for sid, n in counted.items():
             if sid not in members:
-                fail(
-                    f"{path} `{job}`: member() call names step id `{sid}` that has no `- id:` step"
-                )
+                fail(f"{where}: member() call names step id `{sid}` that has no `- id:` step")
         if not members:
-            fail(f"{path} `{job}`: no member steps found (anti-vacuity floor)")
+            fail(f"{where}: no member steps found (anti-vacuity floor)")
 
-        # (d) verdict-flow — the verdict→exit edge; (f) canonical-source pin
-        rb = "\n".join(run_block(agg[0]))
+        # (d) verdict-flow tokens, (f) canonical-source pin
+        rb = agg_run
         for tok in ("failed=0", 'if [ "$failed" -ne 0 ]', "exit 1"):
             if tok not in rb:
-                fail(f"{path} `{job}` aggregate: verdict-flow token `{tok}` missing")
-        for mline in run_block(agg[0]):
-            if member_re.match(mline) and "|| failed=1" not in mline:
-                fail(f"{path} `{job}` aggregate: member() call lacks `|| failed=1`")
+                fail(f"{where} aggregate: verdict-flow token `{tok}` missing")
         src_n = rb.count('source "${GITHUB_WORKSPACE:?}/scripts/lib/umbrella-member.sh"')
         if src_n != 1:
-            fail(f"{path} `{job}` aggregate: canonical member() source line present {src_n}x (want 1)")
+            fail(f"{where} aggregate: canonical member() source line present {src_n}x (want 1)")
         if "member() {" in rb:
-            fail(f"{path} `{job}` aggregate: inline member() redefinition shadows the canonical lib")
+            fail(f"{where} aggregate: inline member() redefinition shadows the canonical lib")
 
 # (d-continued) member() semantics, pinned ONCE against the canonical lib —
 # they used to be checked per run block when each umbrella carried its own
@@ -220,22 +355,24 @@ if os.path.isfile(lib_path):
 else:
     fail(f"{lib_path}: canonical member() library absent — umbrellas cannot source it")
 
-# (e) census — every `- id: aggregate` step in the tree must be a registered umbrella
-import glob
-
+# (e) census — every job with an `id: aggregate` step in the tree must be a registered umbrella
 discovered = set()
-for path in glob.glob(".github/workflows/*.yml"):
-    lines = open(path, encoding="utf-8").read().splitlines()
-    for i, l in enumerate(lines):
-        if re.match(r"\s+- id: aggregate\s*$", l):
-            job = None
-            for j in range(i, -1, -1):
-                m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", lines[j])
-                if m:
-                    job = m.group(1)
-                    break
-            if job:
-                discovered.add((path, job))
+for path in sorted(glob.glob(".github/workflows/*.yml")):
+    if "aggregate" not in open(path, encoding="utf-8").read():
+        continue  # no step can be named `aggregate` in a file that never says the word: skip the parse
+    try:
+        doc = load_yaml(path)
+    except Exception as e:
+        fail(f"{path}: cannot be parsed as YAML ({type(e).__name__}); the census cannot read it")
+        continue
+    for jname, jb in (doc.get("jobs") or {}).items() if isinstance(doc, dict) else []:
+        for s in (jb.get("steps") or []) if isinstance(jb, dict) else []:
+            # an umbrella aggregate is the one that sources the canonical member() lib or calls member
+            # (scheduled-integration-suites.yml has an unrelated step that is also named `aggregate`)
+            if isinstance(s, dict) and s.get("id") == "aggregate" and isinstance(s.get("run"), str) and (
+                "umbrella-member.sh" in s["run"] or re.search(r"^\s*member ", s["run"], re.M)
+            ):
+                discovered.add((path, jname))
 census = {(p, j) for p, jobs in UMBRELLAS.items() for j in jobs}
 for path, job in sorted(discovered - census):
     fail(f"{path}: `- id: aggregate` in unregistered umbrella `{job}` — add to UMBRELLAS")

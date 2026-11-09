@@ -285,7 +285,11 @@ export const LEGAL_OPS = {
     message: "Legal acceptance: a legal acceptance row has no recorded acknowledgement",
     level: "error",
   },
-  /** A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged. */
+  /**
+   * A legal-acceptance page could not read the founder's decisions or the registry text (a read error, not "no rows"). Recorded, not paged.
+   * `extra.read` names the read. The Inbox legal row (`read: legal_acceptance_inbox`, server/legal-acceptance/inbox-rows.ts) adds a static
+   * `extra.step` saying where it stopped: gate | registry | read | shape | state. The registry step also carries `extra.key`.
+   */
   pageReadFailed: {
     op: "page_read_failed",
     message: "Legal acceptance: the page could not read the founder's decisions or the legal text",

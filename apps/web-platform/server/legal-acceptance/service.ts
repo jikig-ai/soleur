@@ -305,7 +305,7 @@ export interface HashCountsResult {
  *  - the object has exactly the keys `total` and `by_hash`; each row exactly `text_hash` and `count`;
  *  - `total` is a safe integer (non-negative follows from the sum rule), each `count` an integer >= 1, each `text_hash` 64 lowercase hex;
  *  - at most HASH_COUNTS_MAX_ROWS rows, strictly ascending by `text_hash` (so no duplicate), and the counts sum to `total`.
- * The result is rebuilt from those fields, so an extra column the database might one day return cannot reach a caller.
+ * An extra column the database might one day return is therefore REFUSED (`bad_payload`), never stripped or passed through to a caller.
  */
 export async function hashCounts(service: LegalRpcClient, a: { key: string }): Promise<HashCountsResult> {
   const fn = "legal_acceptance_hash_counts";

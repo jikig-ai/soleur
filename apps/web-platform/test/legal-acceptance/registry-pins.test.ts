@@ -14,7 +14,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { TEXTS_DIR, loadLegalTexts } from "@/server/legal-acceptance/canonical";
 import { LEGAL_TEXT_KIND } from "@/lib/legal-acceptance-copy";
 
@@ -82,14 +82,14 @@ export function checkPins(served: Served[], pins: Record<string, Pin>, declared:
 /** Repo-root-relative path of the base-SHA pin guard that must exist once a second text is served (CTO ruling T6, #12366 item 3). */
 export const BASE_GUARD_PATH = "scripts/check-registry-pin-base.sh";
 
-/** The workflow that must run the guard (a member step of the `guards-ruleset` umbrella). */
+/** The workflow that must name the guard. Intended home: a member step of the `guards-ruleset` umbrella; the probe checks only that the script is NAMED on a non-comment line. */
 export const BASE_GUARD_CI_PATH = ".github/workflows/ci.yml";
 
 /** What is on disk for the guard: null when there is no regular file at `BASE_GUARD_PATH`. */
 export interface GuardProbe {
   size: number;
   mode: number;
-  /** `ci.yml` names the script on a line that is not a comment. */
+  /** `ci.yml` names the script on a line that is not a comment (naming, not step membership: the probe does not parse the workflow). */
   referencedByCi: boolean;
 }
 
@@ -119,7 +119,7 @@ function guardDefect(g: GuardProbe | null): string | null {
   if (g === null) return "does not exist";
   if (g.size === 0) return "is empty (a zero-byte file is not a guard)";
   if ((g.mode & 0o111) === 0) return "is not executable (chmod +x)";
-  if (!g.referencedByCi) return `is not referenced by ${BASE_GUARD_CI_PATH} (a guard CI never runs guards nothing)`;
+  if (!g.referencedByCi) return `is not named on a non-comment line of ${BASE_GUARD_CI_PATH} (a guard CI never runs guards nothing)`;
   return null;
 }
 
@@ -135,7 +135,8 @@ export function needsBaseGuard(served: readonly Served[], guard: GuardProbe | nu
   if (defect === null) return [];
   return [
     `${served.length} texts are served and ${BASE_GUARD_PATH} ${defect}: the one-text deferral of the base-SHA pin guard (#12366 item 3) has ended. ` +
-      "Build the guard as a member step of the `guards-ruleset` umbrella in `.github/workflows/ci.yml`: " +
+      "Build the guard as a member step of the `guards-ruleset` umbrella in `.github/workflows/ci.yml` " +
+      "(this check only requires that file to name the script on a non-comment line; that the step belongs to the umbrella is for review to confirm): " +
       "resolve the base with `git merge-base origin/main HEAD` on a pull request and from `MERGE_GROUP_BASE_SHA` on a merge_group run; " +
       "hard-fail on an unresolvable base (never fall through to exit 0); " +
       "for each served text compare the sha256 of `git show <base>:<file>` with the working file; " +
@@ -276,7 +277,7 @@ describe("tripwire: a second served text needs the base-SHA pin guard (#12366 it
   it.each([
     ["a zero-byte file (touch)", { ...GOOD, size: 0 }, "is empty"],
     ["a non-executable file", { ...GOOD, mode: 0o100644 }, "is not executable"],
-    ["a guard ci.yml never runs", { ...GOOD, referencedByCi: false }, "is not referenced by .github/workflows/ci.yml"],
+    ["a guard ci.yml never runs", { ...GOOD, referencedByCi: false }, "is not named on a non-comment line of .github/workflows/ci.yml"],
   ])("row 4: two served texts and %s fails, naming the defect", (_n, probe, defect) => {
     const problems = needsBaseGuard(two, probe);
     expect(problems).toHaveLength(1);
@@ -289,7 +290,13 @@ describe("tripwire: a second served text needs the base-SHA pin guard (#12366 it
   });
 
   describe("probeGuard reads the real file system state (a touched file is not a guard)", () => {
-    const tmp = mkdtempSync(path.join(tmpdir(), "pin-guard-"));
+    let tmp = "";
+    beforeAll(() => {
+      tmp = mkdtempSync(path.join(tmpdir(), "pin-guard-"));
+    });
+    afterAll(() => {
+      if (tmp) rmSync(tmp, { recursive: true, force: true });
+    });
     const mk = (name: string, o: { content?: string | null; mode?: number; ci?: string | null }) => {
       const root = path.join(tmp, name);
       mkdirSync(path.join(root, "scripts"), { recursive: true });
@@ -307,18 +314,21 @@ describe("tripwire: a second served text needs the base-SHA pin guard (#12366 it
       expect(problemsFor(mk("absent", { content: null }))[0]).toContain("does not exist");
       expect(problemsFor(mk("empty", { content: "" }))[0]).toContain("is empty");
       expect(problemsFor(mk("noexec", { mode: 0o644 }))[0]).toContain("is not executable");
-      expect(problemsFor(mk("noci", { ci: null }))[0]).toContain("is not referenced by");
+      expect(problemsFor(mk("noci", { ci: null }))[0]).toContain("is not named on a non-comment line of");
     });
     it("a comment in ci.yml naming the script is not a reference", () => {
       const ci = "# run scripts/check-registry-pin-base.sh later\njobs:\n  guards:\n    steps:\n      - run: echo hi # check-registry-pin-base.sh\n";
-      expect(problemsFor(mk("comment", { ci }))[0]).toContain("is not referenced by");
+      expect(problemsFor(mk("comment", { ci }))[0]).toContain("is not named on a non-comment line of");
+    });
+    it("LIMIT: a bare mention on a non-comment line counts as naming (the probe does not check step membership of the umbrella)", () => {
+      const ci = "jobs:\n  other:\n    steps:\n      - run: echo scripts/check-registry-pin-base.sh\n";
+      expect(problemsFor(mk("echo-only", { ci }))).toEqual([]);
     });
     it("a directory at the guard path is not a guard", () => {
       const root = mk("dir", { content: null });
       mkdirSync(path.join(root, BASE_GUARD_PATH));
       expect(problemsFor(root)[0]).toContain("does not exist");
     });
-    it("cleanup", () => rmSync(tmp, { recursive: true, force: true }));
   });
 
   it("the real registry: today's served texts and the real guard script (if any) agree with the tripwire", () => {

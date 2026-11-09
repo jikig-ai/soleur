@@ -36,7 +36,8 @@ vi.mock("@/server/legal-acceptance/surface", () => ({
   isLegalSurfaceEnabled: (userId: string) => isLegalSurfaceEnabled(userId),
 }));
 const legalReads: string[] = [];
-function tenantWithFounderLegalRows() {
+// A tenant client whose legal-acceptance read answers with no rows (the founder has decided nothing), and which records every table read.
+function tenantWithNoLegalDecisions() {
   const b: Record<string, unknown> = {};
   b.select = () => b;
   b.eq = () => b;
@@ -101,7 +102,7 @@ describe("inbox_list agent tool (agent-native parity)", () => {
     vi.clearAllMocks();
     legalReads.length = 0;
     isLegalSurfaceEnabled.mockResolvedValue(true);
-    getFreshTenantClient.mockResolvedValue(tenantWithFounderLegalRows());
+    getFreshTenantClient.mockResolvedValue(tenantWithNoLegalDecisions());
     fetchInboxSources.mockResolvedValue({
       inboxRows: [NATIVE],
       emailRows: [STATUTORY],

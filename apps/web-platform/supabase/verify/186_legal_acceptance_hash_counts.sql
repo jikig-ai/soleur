@@ -1,8 +1,11 @@
 -- verify/186_legal_acceptance_hash_counts.sql
 -- Runtime catalog sentinel for the credential-free pre-flag aggregate (#12429, ADR-319 amendment 2026-11-08). The
 -- migration-shape test (test/legal-acceptance/migration-186-legal-acceptance-hash-counts.test.ts) asserts the SQL TEXT;
--- this asserts the LIVE catalog after apply. Each row returns bad=1 on a drift; run-verify.sh fails the deploy if any
--- bad=1 (precedent: verify/185).
+-- this asserts the LIVE catalog after apply. Each row returns bad=1 on a drift (precedent: verify/185). NOTE: the release
+-- pipeline does NOT run this file today. The `verify-migrations` job is skipped on `workflow_run` deploys (its `if:` lacks
+-- `always()`; trackers #9825 and #9471), so nothing fails a deploy on a bad=1 here. The compensating post-deploy check for
+-- the anon/authenticated EXECUTE rows below is an anonymous POST to the Supabase REST rpc endpoint with the public anon key
+-- (ADR-319, amendment 2026-11-08, "Apply path"); run this file by hand with run-verify.sh when the catalog must be proven.
 --
 -- Invariants: the function is SECURITY DEFINER with a pinned search_path, STABLE, EXECUTE-able by service_role only, reads
 -- ONLY the record table, refuses a user identity, and its source names no per-row column (founder id, choice, timestamp,

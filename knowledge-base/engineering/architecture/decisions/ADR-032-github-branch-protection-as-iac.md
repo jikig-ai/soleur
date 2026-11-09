@@ -1082,7 +1082,7 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
   `scripts/ci-parked-hold.test.sh` against a stubbed `gh`, no `GH_TOKEN`, no network). Each carries the
   step-level condition `!cancelled() && (pull_request || merge_group)` exactly as `waiver-discipline` does,
   and each has its own `member ... 'pull_request,merge_group'` line in the `aggregate` step
-  (`scripts/lint-umbrella-aggregate.sh` check (a) is satisfied; the lint gained rule (g), see the structural invariant below). No job-level
+  (`scripts/lint-umbrella-aggregate.sh` check (a) is satisfied; the lint gained the parsed key allow-list and the aggregate-shape rules, see the structural invariant below). No job-level
   `if:`. No Terraform, ruleset, canonical-JSON or `required-checks.txt` list change: the required context is
   still the umbrella `secret-guards`, so this PR applies nothing to production.
 - **Why hosted in `secret-guards`.** `secret-scan.yml` already triggers on `labeled`/`unlabeled`; `ci.yml` does
@@ -1102,14 +1102,34 @@ check. Ruled by CTO agent, 2026-11-08 (R1, T1 to T3 in the feature's decision re
   (label parked). Do not remove the label, merge or arm auto-merge; the operator removes it. A draft PR is held
   anyway.`); the three "label state unreadable" annotations end `re-run the check (this is not a parked hold)`.
   Neither carries label text or a response body.
-- **Structural invariant (continue-on-error).** `scripts/lib/umbrella-member.sh` `member()` reads each step's
-  `conclusion`, and `continue-on-error: true` makes a failed step's conclusion `success` (the failure survives
-  only in `outcome`, which `member()` prints but does not judge). On either parked-hold step that would disarm the
-  hold with the umbrella still green. It is pinned twice: `scripts/ci-parked-hold.test.sh` rejects any
-  `continue-on-error` key on both steps and on the job (mutation-proven, including a key placed after an in-step
-  comment), and `scripts/lint-umbrella-aggregate.sh` rule (g) rejects it class-wide in every required umbrella.
-  The tree was swept: the only umbrella that uses it is the advisory `guards-advisory` (not a required context),
-  which rule (g) exempts by name.
+- **Structural invariant (member step keys and the aggregate).** `scripts/lib/umbrella-member.sh` `member()` reads
+  each step's `conclusion`, and `continue-on-error: true` makes a failed step's conclusion `success` (the failure
+  survives only in `outcome`, which `member()` prints but does not judge); a `shell:` template that never runs the
+  command is a second one-key neutraliser. On either parked-hold step either would disarm the hold with the
+  umbrella still green. It is pinned twice, from the PARSED workflow (PyYAML), not from a text match, so no YAML
+  spelling of a key (bare, double-quoted, single-quoted, first key of a list item, flow mapping, job level) gets past
+  it. `scripts/lint-umbrella-aggregate.sh` allow-lists the job keys and step keys of every umbrella (a required
+  umbrella may carry no `continue-on-error`, `shell`, `defaults` or job-level `if`; a `uses:` must be an
+  `owner/repo@<40-hex>` action, so a local composite action cannot hide a step); restricts each member step's
+  `if:` to `!cancelled()` plus an allow-listed set of comparison atoms (a `&& false`, a trailing comment naming
+  `!cancelled()` and a top-level `||` are rejected); requires every `member` call to match one strict shape whose
+  4th and 5th arguments are exactly the `conclusion` and `outcome` expressions of the ids in the 3rd (a constant
+  or another step's verdict is rejected); and requires the aggregate to be a fixed statement sequence ending in
+  the `if [ "$failed" -ne 0 ]` tail (an early `exit`, a statement after the tail, `|| true` between the `||` links
+  are rejected). `scripts/ci-parked-hold.test.sh` re-pins the two parked-hold steps and the job by the same
+  parsed allow-list and feeds the lint one mutated copy of the workflows per rule (sections D and G, each
+  mutation-proven in a sandbox copy). The tree was swept: the only umbrella that uses `continue-on-error` is the
+  advisory `guards-advisory` (8 steps; not a required context), which the lint exempts by name from that one key.
+  `quality-advisory` is NOT exempt from it (it has none); it is allowed only its job-level `if`/`needs`.
+  PyYAML is a dependency of the lint and of the suite that runs it in the `secret-guards` job: it is assumed
+  preinstalled on `ubuntu-24.04`, exactly as the required `workflow-duplicate-keys` member already assumes (its
+  summary line prints `pyyaml=<version>` as the evidence), and a missing PyYAML fails the lint (exit 2) rather
+  than skipping it.
+  Residuals this does NOT close: (i) a member group is an OR over its arms, so a dead arm next to a live sibling of
+  the same member (for example `scan-install`, which runs on every event) stays green; (ii) the `run:` bodies of
+  member steps are not inspected by the lint (the parked-hold steps' bodies are executed by section E of the
+  suite, the others are not); (iii) a never-true event comparison inside an allow-listed `if:` atom cannot be
+  detected; (iv) there is no check that `secret-guards` has a single producer.
 - **What "server-side enforced" means.** The check binds auto-merge, the merge queue and every identity subject
   to the required checks, including Actions tokens and the `schedule` skill's `gh pr merge --squash --auto`.
   Draft status stays the first hold (`gh pr ready` flips it with no check; this check covers parked-and-ready).

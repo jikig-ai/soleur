@@ -267,6 +267,33 @@ describe("mergeAndRank - legal rows", () => {
     expect(needsYouOverflow).toBe(newer.length - (NEEDS_YOU_CAP - 1));
   });
 
+  it("an outstanding legal row keeps its merged position: it is not appended after the other visible rows", () => {
+    // 4 newer inbox rows, then the legal row (2026-11-07), then 22 older ones: the legal row ranks 5th (index 4) and the cap cuts the tail.
+    const day = (m: string, d: number) => `2026-${m}-${String(d).padStart(2, "0")}T10:00:00.000Z`;
+    const newer = Array.from({ length: 4 }, (_, i) => inbox({ id: `new${i}`, severity: "action_required", created_at: day("12", 30 - i) }));
+    const older = Array.from({ length: 22 }, (_, i) => inbox({ id: `old${i}`, severity: "action_required", created_at: day("06", 28 - i) }));
+    const merged = mergeAndRank([...older, ...newer], [], [legalRow()]);
+    expect(merged.findIndex((m) => m.kind === "legal")).toBe(4);
+
+    const { needsYouVisible, needsYouOverflow } = partitionForDisplay(merged);
+    // The visible rows are exactly the first CAP of the merged order (4 newer, the legal row, then 15 older): same ids, same sequence.
+    expect(needsYouVisible.map((m) => m.id)).toEqual(merged.slice(0, NEEDS_YOU_CAP).map((m) => m.id));
+    expect(needsYouVisible[4].id).toBe("founder-acceptance-record");
+    expect(needsYouOverflow).toBe(merged.length - NEEDS_YOU_CAP);
+  });
+
+  it("every outstanding legal row is visible and takes its own slot of the cap, not one slot for all", () => {
+    const newer = Array.from({ length: NEEDS_YOU_CAP + 5 }, (_, i) =>
+      inbox({ id: `n${i}`, severity: "action_required", created_at: `2026-12-${String((i % 28) + 1).padStart(2, "0")}T10:00:00.000Z` }),
+    );
+    const merged = mergeAndRank(newer, [], [legalRow(), legalRow({ key: "second-text", version: "2026-11-01" })]);
+    const { needsYouVisible, needsYouOverflow } = partitionForDisplay(merged);
+    expect(needsYouVisible.filter((m) => m.kind === "legal").map((m) => m.id)).toEqual(["founder-acceptance-record", "second-text"]);
+    // Two legal rows plus CAP - 2 others fill the cap exactly; everything else overflows.
+    expect(needsYouVisible).toHaveLength(NEEDS_YOU_CAP);
+    expect(needsYouOverflow).toBe(newer.length - (NEEDS_YOU_CAP - 2));
+  });
+
   it("an answered legal row (FYI) is not affected: it is GOOD TO KNOW and never in the NEEDS YOU cap", () => {
     const newer = Array.from({ length: NEEDS_YOU_CAP + 1 }, (_, i) => inbox({ id: `n${i}`, severity: "action_required" }));
     const merged = mergeAndRank(newer, [], [legalRow({ state: "accepted", severity: "info", outstanding: false })]);
