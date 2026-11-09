@@ -255,7 +255,8 @@ else
                '[ship.phase7.required_set]' 'RS_SH="$SYNC_ROOT/scripts/required-set-report.sh"' 'done < <(bash "$RS_SH" "$PR" 2>/dev/null)' \
                'RS_AFTER=10; RS_MAX=3' '"$qs" == "not_queued OPEN armed "*' 'rs_to="timeout -k 5 60"' 'absent|failed)' \
                '"$VERDICT_OK" -eq 1 ]] && (( rs_reads < RS_MAX ))' 'rs_hold >= RS_AFTER && rs_reads < RS_MAX' \
-               'read budget spent' 'reason=untrusted-ci' 'rs_state=""; rs_reason=""; rs_own=0' '[[ -z "$rs_state" && "$rs_own" -eq 0 ]]'; do
+               'read budget spent' 'reason=untrusted-ci' 'rs_state=""; rs_reason=""; rs_own=0' '[[ -z "$rs_state" && "$rs_own" -eq 0 ]]' \
+               'if (( rs_reads < RS_MAX )); then echo "$rs_t' 'rs_hold=$((rs_hold+1)); else rs_hold=0'; do
     for qf in "$BLOCK_FILE" "$MIRROR_FILE"; do
       if ! grep -qF -- "$token" "$qf"; then
         fail "queue-mode token missing from $([[ "$qf" == "$BLOCK_FILE" ]] && echo ship || echo merge-pr): $token"
@@ -2371,7 +2372,7 @@ r_mocks "$(rsm pending)" MOCK_MERGED_AT=50
 ONCE="\[14/90\] $R_HEAD.*required-set read 1/3
 \[24/90\] $R_HEAD.*required-set read 2/3
 \[34/90\] $R_HEAD.*required-set read 3/3
-\[34/90\] \[ship\.phase7\.required_set\] state=pending — read budget spent \(3/3\), no more reads: state this marker and the --queue-state output in your next status message; polling continues\.
+\[34/90\] \[ship\.phase7\.required_set\] state=pending — read budget spent \(3/3\), no more reads: state this marker and the --queue-state output \(ready-run-wait\.md, Bound\) in your next status message; polling continues\.
 \[24/90\] \[ship\.phase7\.required_set\] state=pending — polling on \(1 required-set reads left\)" X_RS_CALLS=3 X_V_CALLS=6 r_both "R5-three-reads-ten-ticks-apart-and-no-fourth" "$QF" \
   "MERGED CLEAN
 \[scenario exit rc=0\]" \
@@ -2505,8 +2506,10 @@ MERGED CLEAN
   "required_set\]|REQUIRED-SET|SOLEUR_CI_REQUIRED_SET|Merge poll timed out|$R_FORBID"
 rm -f "$QF"
 
-# R13 — BEHIND auto-sync disabled (not in a worktree): the queue and verdict samples live inside the sync-snapshot guard, so the
-# dwell never starts. The poll says so through the precondition line only; no read, no verdict call.
+# R13 — BEHIND auto-sync disabled (not in a worktree): there is no sync snapshot, so the queue read comes back empty, the
+# `not_queued OPEN armed` conjunct fails and the dwell never starts. The poll says so through the precondition line only; no read, no
+# verdict call. (This pins that outcome, not the `-n "$SYNC_SNAP"` guard text: with the guard removed the unguarded call fails and
+# gives the same empty read, so the guard itself is not observable here.)
 Q_TAIL='git() { case "$1 ${2:-}" in "rev-parse --is-inside-work-tree") echo false ;; *) _git_base "$@" ;; esac; }'
 r_mocks "$(rsm complete)" MOCK_MERGED_AT=40
 X_RS_CALLS=0 X_NO_FILE=vcalls X_NO_RE='^verdict ' r_both "R13-sync-disabled-means-the-required-set-is-never-read" "$QF" \
@@ -2574,7 +2577,7 @@ MERGED CLEAN" \
 rm -f "$QF"
 
 # R15 — RECOVERY text is printed and NEVER executed, at the FENCE: the real script prints grammar-valid lines whose untrusted fields (and a
-# prefix-matched pointer tail) carry command substitutions; a `touch` shim first in PATH logs any call and a sentinel file would appear.
+# pointer's JSON array) carry command substitutions; a `touch` shim first in PATH logs any call and a sentinel file would appear.
 # Control first: the shim logs a direct call, so an empty log means "not called", not "cannot log".
 R15D="$(mktemp -d)"
 _TMP_OWNED+=("$R15D")
@@ -2588,11 +2591,11 @@ rm -f "$R15D/log" "$R15D/control"
 R15_BODY="$(printf '%s\n' \
   "RECOVERY rerun run=1 basis=workflow ctx=\"\$(touch $R15D/S1)\" wf=\"\`touch $R15D/S2\`\": gh run rerun 1" \
   "RECOVERY rerun run=2 basis=candidate ctx=\"a;touch $R15D/S3\" wf=\"W\"" \
-  "RECOVERY pointer failed=\$(touch $R15D/S4)" \
+  "RECOVERY pointer failed=[\"\$(touch $R15D/S4)\"]: read the failing checks with gh pr checks 4387" \
   "$(rsm complete)")"
 r_mocks "$R15_BODY" MOCK_MERGED_AT=16 "PATH=\"$R15D/shim:\$PATH\""
 SCEN_ROOT="$RREAL" ONCE="^RECOVERY rerun run=1 basis=workflow ctx=\"\\\$\\(touch .*/S1\\)\"
-^RECOVERY pointer failed=\\\$\\(touch .*/S4\\)
+^RECOVERY pointer failed=\\[\"\\\$\\(touch .*/S4\\)\"\\]: read the failing checks with gh pr checks 4387\$
 ^SOLEUR_CI_REQUIRED_SET state=complete pr=4387" r_both "R15-recovery-text-is-printed-and-never-executed" "$QF" \
   "\[14/90\] \[ship\.phase7\.required_set\] state=complete — polling on \(2 required-set reads left\)
 MERGED CLEAN" \

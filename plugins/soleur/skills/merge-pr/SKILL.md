@@ -415,7 +415,8 @@ if [[ "$sync_ok" -eq 1 ]]; then
     sync_ok=0
   fi
 fi
-# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP (mirror of ship Phase 7).
+# ADR-276 S3 (#9728): the head-verdict resolver is read independent of sync_ok/SYNC_SNAP (mirror of ship Phase 7). (The required-set dwell
+# below is the exception: its samples sit inside the SYNC_SNAP guard.)
 VERDICT_OK=0
 if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
    && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
@@ -509,7 +510,7 @@ while true; do
         [[ -z "$rs_state" && "$rs_own" -eq 0 ]] && echo "REQUIRED-SET READ — no marker: the report script printed nothing (state=error); by-hand read: ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md"
         rs_state="${rs_state:-error}"; rs_t="$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_set] state=${rs_state}"
         if (( rs_reads < RS_MAX )); then echo "$rs_t — polling on ($((RS_MAX - rs_reads)) required-set reads left)."
-        else echo "$rs_t — read budget spent (${RS_MAX}/${RS_MAX}), no more reads: state this marker and the --queue-state output in your next status message; polling continues."; fi
+        else echo "$rs_t — read budget spent (${RS_MAX}/${RS_MAX}), no more reads: state this marker and the --queue-state output (ready-run-wait.md, Bound) in your next status message; polling continues."; fi
         [[ "$rs_state" == error && "$rs_reason" == untrusted-ci ]] && echo "$rs_t reason=untrusted-ci: a PR that edits workflows has no agent --admin hatch; tell the operator in chat." ;;
     esac
   fi
