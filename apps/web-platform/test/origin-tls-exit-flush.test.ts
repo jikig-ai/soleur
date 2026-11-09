@@ -4,6 +4,19 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const flush = vi.fn();
+const warnLog = vi.fn();
+vi.mock("@/server/logger", async (importOriginal) => {
+  const m = await importOriginal<typeof import("@/server/logger")>();
+  return {
+    ...m,
+    createChildLogger: (name: string) => {
+      const real = m.createChildLogger(name) as unknown as Record<string, unknown>;
+      return new Proxy(real, {
+        get: (t, k) => (k === "warn" ? (...a: unknown[]) => warnLog(...a) : t[k as string]),
+      });
+    },
+  };
+});
 vi.mock("@sentry/nextjs", () => ({
   flush: (...a: unknown[]) => flush(...a),
   captureException: vi.fn(),
@@ -28,6 +41,7 @@ import {
 beforeEach(() => {
   expect.hasAssertions();
   flush.mockReset();
+  warnLog.mockReset();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -177,6 +191,10 @@ describe("startOriginTlsListener default exit", () => {
     await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
     expect(close).toHaveBeenCalledTimes(1);
     expect(flush).toHaveBeenCalledTimes(1);
+    // The swallowed failure is still visible (pino -> Better Stack), as a warn carrying the error.
+    expect(warnLog).toHaveBeenCalledTimes(1);
+    expect(warnLog.mock.calls[0][0]).toMatchObject({ err: expect.any(Error) });
+    expect(String(warnLog.mock.calls[0][1])).toContain("could not close the plain HTTP server");
   });
 
   test("an injected exit replaces the whole default path: no close, no flush", () => {

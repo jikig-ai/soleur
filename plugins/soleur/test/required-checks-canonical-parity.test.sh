@@ -593,8 +593,20 @@ scan_curl_flags() {
     awk -v file="$f" '
       # Quote-aware: a `#`, `;`, `|` or `&` inside a quoted string (a header value, a URL query) is data, not shell syntax.
       # \047 is a single quote (the whole program is single-quoted for bash).
-      function strip_comment(s,   i, n, c, q, p) {
-        n = length(s); q = ""; p = " "
+      function open_quote(s,   i, n, c, q) {
+        n = length(s); q = ""
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (q == "") {
+            if (c == "\\") i++
+            else if (c == "\"" || c == "\047") q = c
+          } else if (q == "\"" && c == "\\") i++
+          else if (c == q) q = ""
+        }
+        return q
+      }
+      function strip_comment(s, q0,   i, n, c, q, p) {
+        n = length(s); q = q0; p = " "
         for (i = 1; i <= n; i++) {
           c = substr(s, i, 1)
           if (q == "") {
@@ -647,11 +659,12 @@ scan_curl_flags() {
         }
         buf = ""
       }
-      /^[[:space:]]*#/ { next }
+      # A line inside a quoted string that began on an earlier continuation line is data, even if it starts with `#`.
+      /^[[:space:]]*#/ { if (buf == "" || open_quote(buf) == "") next }
       {
         if (buf == "") start = NR
         phys = $0
-        phys = strip_comment(phys)   # a trailing comment (a `#` outside quotes) is not part of the command
+        phys = strip_comment(phys, (buf == "" ? "" : open_quote(buf)))   # a trailing comment (a `#` outside quotes) is not part of the command
         if (phys ~ /\\$/) { sub(/\\$/, " ", phys); buf = buf " " phys; next }
         buf = buf " " phys
         finish()
@@ -698,8 +711,10 @@ n_al=$(printf '%s\n' "$scan_out" | grep -c '|actionlint|' || true)
 n_bad=$(printf '%s\n' "$scan_out" | grep -c '|MISSING' || true)
 # Independent raw count: NON-comment lines carrying the variable-form URL fragment
 # (the literal-version URL in a secret-scan.yml comment must not be counted).
-# Whole-line comments are skipped, but a `#` inside a quoted header earlier on the line must not hide the URL from this count.
-n_raw=$({ grep -h -E '^[[:space:]]*[^#[:space:]].*releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "${CURL_SCAN_FILES[@]}" || true; } | wc -l | tr -d ' ')
+# Counts EVERY line carrying the variable-form URL, comment or not: a `#` inside a quoted header (even one that starts a
+# continuation line) must not hide a URL from this cross-check. A commented-out variable-form URL would make this
+# disagree loudly, which is the cheap direction to fail.
+n_raw=$({ grep -h -E 'releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "${CURL_SCAN_FILES[@]}" || true; } | wc -l | tr -d ' ')
 
 assert_eq "0" "$n_bad" "(10a) no gitleaks/actionlint download curl is missing a hardening flag"
 if [[ "$n_bad" -ne 0 ]]; then printf '%s\n' "$scan_out" | grep '|MISSING' | sed 's/^/        /'; fi
@@ -826,6 +841,10 @@ YML
 neg_check command-substitution " --fail" <<'YML'
         x=$(curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz")
 YML
+neg_check hash-line-inside-continued-quote " --fail" <<'YML'
+        curl -sSL -H "X: a \
+          #b" -o a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
 cat > "$TMP/curl-pass-query.yml" <<'YML'
         curl --fail --retry 5 --retry-all-errors -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz?a=1;b=2&c=3"
 YML
@@ -852,4 +871,4 @@ n_find=$({ find "$REPO_ROOT/.github/workflows" -maxdepth 1 -type f \( -name '*.y
 assert_eq "$n_find" "${#CURL_SCAN_FILES[@]}" "(10j) the real scan covers every workflow and action file find sees"
 echo ""
 
-print_results 94
+print_results 95

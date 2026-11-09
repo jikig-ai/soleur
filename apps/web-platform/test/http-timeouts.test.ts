@@ -6,6 +6,8 @@ import { connect } from "node:net";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { stripComments as stripCommentsAst } from "./helpers/strip-comments";
+
 import {
   PLAIN_HTTP_HEADERS_TIMEOUT_MS,
   PLAIN_HTTP_REQUEST_TIMEOUT_MS,
@@ -14,8 +16,7 @@ import {
 
 const ROOT = join(__dirname, "..");
 const read = (rel: string): string => readFileSync(join(ROOT, rel), "utf8");
-const stripComments = (s: string): string =>
-  s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+const stripComments = (s: string): string => stripCommentsAst(s);
 
 beforeEach(() => {
   expect.hasAssertions();
@@ -116,16 +117,22 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
       readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
         e.isDirectory() ? walk(`${dir}/${e.name}`) : /\.[cm]?[jt]sx?$/.test(e.name) ? [`${dir}/${e.name}`] : [],
       );
-    // Only block comments and whole-line comments are removed: stripComments would mis-read a string such as "a//b" and hide the
-    // rest of its line. Any mention counts, so an aliased import (`createServer as mk`) and a bracket access
+    // Comments are removed by the TypeScript parser (test/helpers/strip-comments.ts), so a string such as "a//b" or "src/*.ts"
+    // cannot hide code. Any mention counts, so an aliased import (`createServer as mk`) and a bracket access
     // (`http["createServer"]`) are seen as well as a call.
-    const uncommented = (f: string): string => read(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const uncommented = (f: string): string => stripCommentsAst(read(f), f);
     const creatorMention = /\bcreate(?:Secure|Https?)?Server\b|\bnew\s+(?:\w+\.)?Server\s*\(/;
     const valueHttpImport = /^\s*import\s+(?!type\b)(?:\w+|\*\s+as\s+\w+)\s*(?:,[^;]*)?from\s+["'](?:node:)?(?:https?|http2)["']|require\(\s*["'](?:node:)?(?:https?|http2)["']\s*\)/m;
+    // `import { Server as S } from "node:http"; new S()`: the constructor under any alias (a type-only use is not a listener).
+    const aliasedConstructor = (src: string): boolean =>
+      [...src.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?(?:https?|http2)["']/g)].some((m) => {
+        const spec = m[1].match(/(?:^|,)\s*(?:Server|Http2Server|Http2SecureServer)(?:\s+as\s+(\w+))?\s*(?:,|$)/);
+        return spec !== null && new RegExp(`\\bnew\\s+${spec[1] ?? "(?:Server|Http2Server|Http2SecureServer)"}\\s*\\(`).test(src);
+      });
     const creators = walk("server")
       .filter((f) => {
         const src = uncommented(f);
-        return creatorMention.test(src) || valueHttpImport.test(src);
+        return creatorMention.test(src) || valueHttpImport.test(src) || aliasedConstructor(src);
       })
       .sort();
     // index.ts: the :80 server (timeouts via http-timeouts.ts). origin-tls.ts: the :443 listener (Node defaults, pinned in
