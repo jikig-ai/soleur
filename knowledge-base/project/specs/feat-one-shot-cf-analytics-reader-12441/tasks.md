@@ -12,7 +12,7 @@ Hard limits: no production write, dispatch, apply, merge, arm or mark-ready; no 
 
 ## Phase 1: Tests first (RED) in `plugins/soleur/test/cloudflare-readonly.test.sh`
 
-- 1.1 Take RED evidence from `CF_RO_GROUPS=<groups>` runs (the pristine control fails while RED and voids the battery)
+- 1.1 Take RED evidence from `CF_RO_GROUPS=<groups>` runs (the pristine control fails while RED and voids the battery); mutation rows are authored in RED and first validated after GREEN; run the instrument control once per distinct group-set
 - 1.2 Stub: compute `url` first; `-X GET` refused for the GraphQL URL; `-X POST` only for it; POST stdin has exactly Authorization, Content-Type and `data-raw` lines
 - 1.3 Wire: parameterise `check_wire` by vector (`EXP` / `EXP_POST`); controls (duplicated `-X`, glued `-XPOST`, no URL); keep the one-line-stdin row on the GET subcommands only
 - 1.4 `env -i` on every `"$CURL"` site: per-site census equals site count; `env[analytics]` row
@@ -29,16 +29,16 @@ Hard limits: no production write, dispatch, apply, merge, arm or mark-ready; no 
 
 - 2.1 `GQL_URL`, `cf_graphql` (own call site, `/usr/bin/env -i "$CURL"`, closed POST vector, three stdin config lines), fixed-prefix and control-character pre-flight
 - 2.2 Two compiled-in templates (query 2 `datetimeHour_DESC`), epoch-arithmetic window, `guard_gql`, projections, `no-zone-access`, bounded `graphql:` message (token-copy check in bash)
-- 2.3 Arity and hours grammar with `if` or `case "$1"` (not a second `case "$SUB"`); six `SUBCOMMANDS`; two dispatcher arms; `CF_API_TOKEN_ANALYTICS_READ` in the xtrace list; `--list`
+- 2.3 Arity and hours grammar through one shared `need_hours "$@"` called by each analytics arm, written with `if` or `case "$1"` (not a second `case "$SUB"`); `cf_graphql` calls `preflight()`; six `SUBCOMMANDS`; two dispatcher arms; `CF_API_TOKEN_ANALYTICS_READ` in the xtrace list; `--list`
 - 2.4 `project()` takes a per-query limit through its own `--argjson` name
 - 2.5 Header: subcommands, token binding, POST exception paragraph, message departure, unverified list (status dimension, range operators, `_DESC`), Records F and G with the reason-to-next-action table, expiry 2027-02-07, terse
-- 2.6 Run the suite to green; sweep `anchor matched 2 times`; `git grep -n -i -E 'four (read|sub|name|check)|the four'` sweep; confirm `cto.md` does not enumerate subcommands
+- 2.6 Run the suite to green; sweep `anchor matched 2 times`; scoped census `git grep -n -i -w -E 'four|4' -- <the five subject files>` (classify every hit; exempt the ADR-289 historical addenda); confirm `cto.md` does not enumerate subcommands
 
 ## Phase 3: Doc parity and records
 
-- 3.1 `standing-delegation.md` section 9: apply the CLO text (Boundary sentence, item 2 clause with the inserted message sentence and amended hours parenthetical, Credentials clause)
+- 3.1 `standing-delegation.md` section 9: apply the CLO text from `knowledge-base/project/specs/feat-one-shot-cf-analytics-reader-12441/clo-ruling-text.md` (sections A, B, C) without re-wording
 - 3.2 `components.test.ts`: six-name slice, five-token set equality, PAIRS rows, REQUIRED and clause `GET only` markers, new pins, `VENDOR_SENTENCE`, `hostTokens` host set, polarity test re-run
-- 3.3 ADR-289 addendum 2026-11-09 (with the CLO message sentence) and frontmatter pointer key
+- 3.3 ADR-289 addendum `## Addendum 2026-11-09 (Ref #12441, #10479, #10205)` (CLO text from `clo-ruling-text.md`, with the CLO message sentence); append 12441 to `related:`; no pointer key
 - 3.4 `bun test plugins/soleur/test/components.test.ts`, the cloudflare suite, `bash plugins/soleur/test/c4-count-parity.test.sh`
 
 ## Phase 4: Runbook addendum (append-only)
@@ -59,8 +59,9 @@ Hard limits: no production write, dispatch, apply, merge, arm or mark-ready; no 
 - 6.1 Run the suites, markdown lint, `technical-ruling-gate.sh` on `decision-challenges.md`
 - 6.2 `prepush-secret-scan.sh`, push, update the draft PR #12515 body (`Ref` only; `closingIssuesReferences` is `[]`; four owner-review items; descoped 5xx histogram first; justification lines for any filed issue, none expected)
 - 6.3 Comment on #12441 with the expiry date 2027-02-07 and the post-merge handoff
-- 6.4 Run the review panel; do NOT mark ready, arm auto-merge or merge
+- 6.4 After GREEN measure the suite wall time and update `scripts/suite-durations.tsv` through `scripts/regenerate-shard-manifest.py` (`--allow-growth` if needed)
+- 6.5 Run the review panel; do NOT mark ready, arm auto-merge or merge
 
 ## Post-merge (after the owner's typed go on the merge; tracked by #12441)
 
-- P.1 From a fresh checkout with `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` empty, run both subcommands at 216 hours; record `Checked:`/`Unverified:`; commit the evidence files and the 5xx histogram in a docs-only follow-up; at most two fix PRs on an `api-error`
+- P.1 From a fresh checkout with `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` empty, run both subcommands at 216 hours; record `Checked:`/`Unverified:`; append a SECOND dated addendum with the 5xx histogram (never edit the first addendum's `not yet read` row); commit the evidence files only on exit 0, line 2 only (line 1 must equal `cloudflare-readonly: <sub> ok`, line 2 must parse with `jq -e .`, no stderr); at most two fix PRs in total across both queries
