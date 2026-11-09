@@ -195,6 +195,19 @@ describe("github-api fetch wrapper", () => {
       expect(err.message).toMatch(/cannot access this resource/);
     });
 
+    test("the default (unscrubbed) mode keeps its behaviour: a body stream that aborts propagates", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => {
+          throw new TypeError("terminated");
+        },
+      });
+      await expect(githubApiGet(installationId, "/repos/a/b")).rejects.toThrow(/terminated/);
+    });
+
     test("scrubbed mode: retry breadcrumbs carry no url (it embeds owner/repo); the default mode still logs it", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout"] });
       try {

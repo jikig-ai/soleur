@@ -256,14 +256,19 @@ async function handleErrorResponse(
   path: string,
   scrub = false,
 ): Promise<never> {
-  // A body stream that aborts mid-read must not turn an HTTP answer into "could not be reached": in scrubbed mode the
-  // status alone is enough, so a failed read degrades to an empty body.
-  let bodyText = "";
-  try {
+  // Scrubbed mode (the cc read tools): a body stream that aborts mid-read must not turn an HTTP answer into "could not be
+  // reached" because the status alone is enough, so a failed read degrades to an empty body. The legacy callers keep the
+  // historical behaviour (the abort propagates).
+  let bodyText: string;
+  if (scrub) {
+    try {
+      bodyText = await response.text();
+    } catch {
+      // review: swallowed — the status is the signal; the body is only sniffed for the rate-limit phrase
+      bodyText = "";
+    }
+  } else {
     bodyText = await response.text();
-  } catch {
-    // review: swallowed — the status is the signal; the body is only sniffed for the rate-limit phrase
-    bodyText = "";
   }
 
   if (scrub) {
