@@ -25,3 +25,9 @@
 - constraint: Issues close not-planned at ship (#9729, #10414, #10415 + those the plan names); PR body uses Ref #N, never Closes for them.
 
 no ci-is-the-gate token written (silent brief)
+
+## Review Phase
+- Panel: 4 seats spawned from pipeline session (security-sentinel, git-history-analyzer, code-simplicity, architecture-strategist — deletion-dominated class + design-validity pass). Reviewed-Coverage: sequential-fallback n/a (seats ran in parallel).
+- Findings applied: P1 stale PR_AFFECTED_WEBPLAT_IF usages (c4-likec4-version-pin.test.ts → ReferenceError) → fixed as RETIRED refusal fixture; P2 python3 cwd shadowing in legacy arm → python3 -I; P3 surface shape guard → self-member check; LOW pr-fanout-ledger jobs 22→20; LOW surface-grammar nit → documented. c4 58/58 + oracle-review 31/31 green.
+- architecture-strategist seat still running at archive time — any late findings → fix round.
+- KB artifacts archived in-PR (wg gate).
