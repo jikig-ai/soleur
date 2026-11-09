@@ -19,7 +19,14 @@
 #                                                                     wiring is itself an excluded-path code edit)
 #   PR_HEAD_SHA          github.event.pull_request.head.sha         (pull_request)
 #   PR_BASE_REF          github.event.pull_request.base.ref         (pull_request; the live base ref to fetch —
-#                                                                     branch-name grammar only, never a refspec)
+#                                                                     branch-name grammar only, never a refspec.
+#                                                                     Trust model: a real refs/heads/ base tip is
+#                                                                     attacker-influenceable only to the degree
+#                                                                     GitHub's own three-dot Files view is — a
+#                                                                     base containing PR-side commits hides them
+#                                                                     identically in both. The pin kills only the
+#                                                                     EXTRA surface: hex/tags/ resolving outside
+#                                                                     the named branch)
 #   HEAD_REPO            github.event.pull_request.head.repo.full_name  (pull_request; a fork head is full)
 #   MERGE_GROUP_HEAD_SHA github.event.merge_group.head_sha          (merge_group; the whole queued batch is diffed)
 #   MERGE_GROUP_BASE_SHA github.event.merge_group.base_sha          (merge_group)

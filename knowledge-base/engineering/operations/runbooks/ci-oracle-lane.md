@@ -64,9 +64,9 @@ One `::notice title=ci-oracle-lane::` line per executed job, also in the step su
 - `switch_off` — `SWITCH` was not exactly `on` (check `switch=` for the value class).
 - `bad_base_ref` / `base_fetch` / `no_merge_base` — the pull_request live-base resolution (#12418) failed
   closed after the switch gate: `PR_BASE_REF` failed branch-name grammar (never a refspec), `git fetch origin
-  <base.ref>` failed (deleted/renamed base branch or an unreachable remote), or the fetched base shares no
-  merge-base with the PR head. Seen on base branches deleted between event and run; on a fork, `fork` fires
-  first.
+  refs/heads/<base.ref>` failed (deleted/renamed base branch, an unreachable remote, or an anonymous fetch on
+  a private repo — fail-closed but inert), or the fetched base shares no merge-base with the PR head. Seen on
+  base branches deleted between event and run; on a fork, `fork` fires first.
 - `diff_error`, `empty_diff`, `malformed_diff`, `too_many_files` — the diff listing could not be produced or
   parsed safely (>500 files is `too_many_files`).
 - `non_oracle_status`, `non_oracle_mode`, `odd_path` — a changed entry carried a status outside M/A/D, a mode
