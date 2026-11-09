@@ -138,6 +138,8 @@ KK_APPROVAL_ENV_BOUND=true
 KK_AUTH_MAX_AGE_S=3600
 KK_RETRIES=3
 KK_RETRY_SLEEP_S=20
+KK_CLEAR_VERIFY_RETRIES=8
+KK_CLEAR_VERIFY_SLEEP_S=30
 KK_MAIN_REF="refs/heads/main"
 KK_WALKER_WORKFLOW="kb-drift-walker.yml"
 KK_OWN_WORKFLOW="key-rotate.yml"
@@ -292,7 +294,7 @@ kr_verdict_recipe() {
   printf "gh run view %s --log | grep 'key-rotate verdict='" "${GITHUB_RUN_ID:-<run id>}"
 }
 
-# kr_converge_cmd: the exact re-dispatch command the stop sentence and the issue carry (the owner types a fresh confirm; no agent runs it).
+# kr_converge_cmd: the exact re-dispatch command the stop sentence and the issue carry (it runs under a fresh, per-command, in-session owner go naming the exact command - an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated).
 kr_converge_cmd() {
   local k="${EFF_KEY:-}" v ok=1 extra=""
   for v in "${KK_KEYS[@]}"; do [[ "$k" == "$v" ]] && ok=0; done
@@ -365,8 +367,8 @@ kk_stop_tail() {
   local k="${EFF_KEY:-}"
   case "${KR_VERDICT:-}:$k" in
     owner_step_pending:*) printf ' Read the verdict: %s' "$(kr_verdict_recipe)" ;;
-    partial_absent_state:kb_drift_ingest_signing_key) printf ' Only after the missing copy is recreated, re-dispatch under a fresh typed confirm (no agent dispatches a rotate): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
-    *) printf ' Re-dispatching is the owner'"'"'s own decision under a fresh typed confirm (no agent dispatches a rotate): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
+    partial_absent_state:kb_drift_ingest_signing_key) printf ' Only after the missing copy is recreated, re-dispatch under a fresh, per-command, in-session owner go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
+    *) printf ' Re-dispatching is the owner'"'"'s own decision under a fresh, per-command, in-session go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated): %s Read the verdict: %s' "$(kr_converge_cmd)" "$(kr_verdict_recipe)" ;;
   esac
 }
 
@@ -1324,15 +1326,18 @@ kk_cmd_clear() {
     return 1
   fi
   # post-verify (the value is read through a pipe into sha256sum only): PREVIOUS must be absent or empty. Doppler reads
-  # can lag the write, so the same retry shape as the post-state read applies.
-  for ((try = 1; try <= KK_RETRIES; try++)); do
+  # can lag the write. A DELETE propagates slower than a value change (#12392): name removal lagged the shared
+  # KK_RETRIES x KK_RETRY_SLEEP_S window (~60 s) and a landed clear verdicted previous_not_cleared, so this loop carries
+  # its own budget (KK_CLEAR_VERIFY_RETRIES x KK_CLEAR_VERIFY_SLEEP_S, ~4 min) rather than the post-state read's.
+  for ((try = 1; try <= KK_CLEAR_VERIFY_RETRIES; try++)); do
     s="$(kk_copy_state soleur prd EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS)"
     case "$s" in
       absent|unknown:read_empty|unknown:listing_empty)
         kr_ok rotate_ok "key=${key}; the PREVIOUS clear applied and EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS reads empty or absent"
         return 0 ;;
     esac
-    (( try < KK_RETRIES )) && kr_sleep "$KK_RETRY_SLEEP_S"
+    kk_say "key-rotate: clear verify try ${try}/${KK_CLEAR_VERIFY_RETRIES} reads ${s:-unknown} (still propagating)"
+    (( try < KK_CLEAR_VERIFY_RETRIES )) && kr_sleep "$KK_CLEAR_VERIFY_SLEEP_S"
   done
   kr_post_write_failure previous_not_cleared "after the clear apply, EGRESS_AUDIT_INGEST_TOKEN_PREVIOUS still reads ${s:-unknown}; the old token stays accepted" "The PREVIOUS clear applied but the token did not empty."
   return 1

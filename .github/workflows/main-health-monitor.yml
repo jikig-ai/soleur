@@ -367,7 +367,7 @@ jobs:
       - name: Install gitleaks (pinned, sha-verified)
         run: |
           set -euo pipefail
-          curl -sSLo gitleaks.tgz \
+          curl --fail --retry 5 --retry-all-errors -sSLo gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks
@@ -461,7 +461,7 @@ jobs:
       - name: Install gitleaks (pinned, sha-verified)
         run: |
           set -euo pipefail
-          curl -sSLo gitleaks.tgz \
+          curl --fail --retry 5 --retry-all-errors -sSLo gitleaks.tgz \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
           tar -xzf gitleaks.tgz gitleaks

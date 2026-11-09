@@ -100,8 +100,8 @@ Build ONE dispatch-only workflow, `.github/workflows/key-rotate.yml`, with body 
   ref rung, a bot-actor refusal, a committed exact-match owner-login allowlist checked against both `github.actor` and
   `github.triggering_actor`. Residual, stated plainly: a personal-access-token dispatch still STARTS the run, but it now parks at
   `approve` — the reviewer gate bounds it to a distinct human act; a PAT *approval* of that job remains the owner's click by
-  design. "An agent never dispatches rotate" remains policy, now backed by a mechanism that does not trust the dispatch. The dev
-  keys follow parity with ADR-307.
+  design. The "an agent never dispatches rotate" policy is superseded by the 2026-11-08 ruling below; the reviewer-gate mechanism
+  still does not trust the dispatch. The dev keys follow parity with ADR-307.
 - **F3, the `_dev` keys redeploy too.** A dev rotation is the shakedown of the whole route and does not count unless `track.sh`
   reports success; a dev rotation that skips the redeploy would not exercise the route's last leg. The production redeploy gives a
   dev key no pickup (no production container reads `soleur/dev`); making it skippable once the route has run is #11927.
@@ -148,6 +148,13 @@ the Tier-B env secret onto a second environment the TF GitHub App cannot write. 
 grammar plus the live `DROPIN_TRY_RESTART` sudoers argv — a new webhook hook, a new sudoers alias and an SSH-delivered provisioner were
 all considered and rejected (the whole point is zero SSH-delivered artifacts). `infra-privileged` keeps zero reviewers: its
 reviewerlessness is load-bearing for the unattended apply-on-merge and scheduled drift paths.
+
+Amendment (2026-11-08): the agent-dispatch ruling. Ruled by CTO agent: an agent may dispatch `key-rotate.yml` /
+`inngest-key-rotate.yml` `rotate`|`converge` ONLY under a fresh, per-command, in-session owner go naming the exact full
+command; the reviewer click on the `key-rotate-approval` environment (approver: deruelle) is NEVER delegated; the approval
+tap should land inside a measured release-quiet stretch — the apply path re-checks in-flight runs itself, so a run parked
+at `approve` CAN still refuse post-approval. G6/H2's "an agent never dispatches rotate" is superseded accordingly; the
+environment split is unchanged and live-verified 2026-11-08 — see ADR-307's 2026-11-08 amendment for the canonical table.
 
 ## Consequences
 
