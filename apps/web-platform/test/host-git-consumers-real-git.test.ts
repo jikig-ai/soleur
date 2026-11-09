@@ -10,10 +10,8 @@
 // direction fails them on purpose.
 //
 // No `child_process` mock anywhere in this file. Fixtures are synthesized (cq-test-fixtures-synthesized-only).
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   PLANTERS,
@@ -123,9 +121,6 @@ afterEach(() => {
   else process.env[SENTINEL_VAR] = saved[SENTINEL_VAR];
   w.cleanup();
 });
-
-/** Allow protocol widening for fixtures that use a local file:// remote (production arms pin https / ssh). */
-const LOCAL_REMOTE_OK = true;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Drivers: the REAL code path of each consumer. `closable`/`residual` name the planter ids each driver is run with.
@@ -442,6 +437,31 @@ describe("closable carriers stay silent on every consumer (A1, A2, A3)", () => {
   }
 });
 
+describe("git-data ensureGitDataRemote (local config of the git-data remote) under planted carriers", () => {
+  for (const id of ["fsmonitor-in-git-config", "fsmonitor-via-commondir", "hook-reference-transaction", "core-worktree-foreign"]) {
+    it(`${id}: the remote is added then re-pointed, no canary runs, the real workspace config is what changed`, async () => {
+      const p = planterById(id);
+      expect(rawTwin(p), `carrier ${id} is not live on ${gitVersion}`).toBe(true);
+      const { ws } = newWorkspace(w);
+      plant(p, ws, w);
+      const savedHost = process.env.GIT_DATA_SSH_HOST;
+      process.env.GIT_DATA_SSH_HOST = "git-data.invalid";
+      try {
+        ensureGitDataRemote(ws, WS_ID);
+        process.env.GIT_DATA_SSH_HOST = "git-data-2.invalid";
+        ensureGitDataRemote(ws, WS_ID); // second call takes the set-url path
+      } finally {
+        if (savedHost === undefined) delete process.env.GIT_DATA_SSH_HOST;
+        else process.env.GIT_DATA_SSH_HOST = savedHost;
+      }
+      expect(w.tags().filter((t) => t === p.tag)).toEqual([]);
+      if (id === "core-worktree-foreign") victimUntouched();
+      const url = w.git(ws, "-c", "core.fsmonitor=false", "config", "--local", "remote.git-data.url");
+      expect(url).toContain("git-data-2.invalid");
+    });
+  }
+});
+
 describe("clean repository: every consumer's operation succeeds with no carrier (must-PASS input)", () => {
   for (const d of DRIVERS) {
     it(`${d.id}`, async () => {
@@ -668,12 +688,4 @@ describe("floor", () => {
     expect(residualRows).toBe(residualExpected);
     expect(PLANTERS.length).toBeGreaterThan(0);
   });
-});
-
-afterAll(() => {
-  void LOCAL_REMOTE_OK;
-  void mkdtempSync;
-  void tmpdir;
-  void rmSync;
-  void execFileSync;
 });
