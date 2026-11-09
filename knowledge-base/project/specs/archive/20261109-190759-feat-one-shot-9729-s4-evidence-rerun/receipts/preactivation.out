@@ -1,0 +1,9 @@
+variable=absent
+org_variables=0
+lock=present
+artifacts=missing:full-verified admin-merge-ready-call audit-script
+verdict=NO-GO-confirmed
+prereq5=skippable-set-empty
+tree=head-is-not-main(head=af76400,main=5990a56)
+ac9c=observed
+SOLEUR_PR_AFFECTED_PREACTIVATION ready=false missing=lock,artifacts,verdict,prereq5,tree

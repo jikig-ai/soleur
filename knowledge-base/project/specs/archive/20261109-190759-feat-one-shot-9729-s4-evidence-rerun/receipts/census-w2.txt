@@ -1,0 +1,91 @@
+census: data dir: /var/tmp/ci-demand-census.UJuPHA1h
+census: jobs fetched for 50 of 186 runs
+census: jobs fetched for 100 of 186 runs
+census: jobs fetched for 150 of 186 runs
+REPO=jikig-ai/soleur
+WINDOW_START=2026-11-08T10:00:00Z
+WINDOW_END=2026-11-08T22:00:00Z
+FETCHED_AT=2026-11-09T11:09:57Z
+WORKFLOW_FILTER=ci.yml
+TOTAL_JOB_MINUTES=25298.8
+TOTAL_JOB_SECONDS=1517925
+RUNS_COMPLETED=186
+RUNS_NOT_COMPLETED=0
+RUNS_RERUN=8
+RUNS_NOJOBS=9
+JOBS_COUNTED=3552
+JOBS_SKIPPED=1125
+JOBS_RUNNERLESS=197
+JOBS_UNTIMED=0
+BY_WORKFLOW	ci.yml	merge_group	29	878	10344.9
+BY_WORKFLOW	ci.yml	pull_request	140	2538	14827.4
+BY_WORKFLOW	ci.yml	push	17	136	126.5
+STEM	ci.yml	merge_group	affected-index-ratchet	29	0	0	29	104.3	3.60
+STEM	ci.yml	merge_group	cla-check	0	0	4	0	0.0	0.00
+STEM	ci.yml	merge_group	cla-evidence	0	0	4	0	0.0	0.00
+STEM	ci.yml	merge_group	critical-css-gate	29	0	0	29	31.6	1.09
+STEM	ci.yml	merge_group	detect-changes	29	0	0	29	11.1	0.38
+STEM	ci.yml	merge_group	draft-light	0	29	0	0	0.0	0.00
+STEM	ci.yml	merge_group	e2e	29	0	0	29	116.4	4.01
+STEM	ci.yml	merge_group	encryption-posture	29	0	0	29	8.8	0.30
+STEM	ci.yml	merge_group	guards-advisory	29	0	0	29	22.0	0.76
+STEM	ci.yml	merge_group	guards-ruleset	29	0	0	29	26.2	0.90
+STEM	ci.yml	merge_group	lint-bot-statuses	29	0	0	29	65.1	2.25
+STEM	ci.yml	merge_group	lint-webplat	29	0	0	29	55.2	1.90
+STEM	ci.yml	merge_group	oracle-index-check	29	0	0	37	1.8	0.06
+STEM	ci.yml	merge_group	oracle-review-required	29	0	0	29	9.4	0.33
+STEM	ci.yml	merge_group	oracle-selection	0	29	0	0	0.0	0.00
+STEM	ci.yml	merge_group	pr-selection	0	29	0	0	0.0	0.00
+STEM	ci.yml	merge_group	push-dedupe	0	29	0	0	0.0	0.00
+STEM	ci.yml	merge_group	shard-totality-mutations	29	0	0	87	378.4	13.05
+STEM	ci.yml	merge_group	test	29	0	0	29	1.5	0.05
+STEM	ci.yml	merge_group	test-bun	29	0	0	29	119.5	4.12
+STEM	ci.yml	merge_group	test-scripts	29	0	0	232	6908.9	238.24
+STEM	ci.yml	merge_group	test-scripts-heavy	29	0	0	87	840.0	28.97
+STEM	ci.yml	merge_group	test-webplat	29	0	0	58	1561.1	53.83
+STEM	ci.yml	merge_group	web-platform-build	29	0	0	29	83.6	2.88
+STEM	ci.yml	pull_request	affected-index-ratchet	125	0	6	125	404.2	2.89
+STEM	ci.yml	pull_request	critical-css-gate	38	54	39	38	37.4	0.27
+STEM	ci.yml	pull_request	detect-changes	122	0	9	122	45.7	0.33
+STEM	ci.yml	pull_request	draft-light	124	0	7	124	8.6	0.06
+STEM	ci.yml	pull_request	e2e	122	0	9	122	406.4	2.90
+STEM	ci.yml	pull_request	encryption-posture	121	0	10	121	35.9	0.26
+STEM	ci.yml	pull_request	guards-advisory	121	0	10	121	100.0	0.71
+STEM	ci.yml	pull_request	guards-ruleset	124	0	7	124	102.5	0.73
+STEM	ci.yml	pull_request	lint-bot-statuses	122	0	9	122	238.4	1.70
+STEM	ci.yml	pull_request	lint-webplat	119	0	12	119	203.5	1.45
+STEM	ci.yml	pull_request	oracle-index-check	122	0	9	162	8.5	0.06
+STEM	ci.yml	pull_request	oracle-review-required	123	0	8	123	36.0	0.26
+STEM	ci.yml	pull_request	oracle-selection	0	78	53	0	0.0	0.00
+STEM	ci.yml	pull_request	pr-selection	0	78	53	0	0.0	0.00
+STEM	ci.yml	pull_request	push-dedupe	0	78	53	0	0.0	0.00
+STEM	ci.yml	pull_request	shard-totality-mutations	48	44	39	142	539.0	3.85
+STEM	ci.yml	pull_request	test	129	0	2	129	6.6	0.05
+STEM	ci.yml	pull_request	test-bun	120	0	11	120	430.5	3.07
+STEM	ci.yml	pull_request	test-scripts	48	44	39	370	9042.3	64.59
+STEM	ci.yml	pull_request	test-scripts-heavy	48	44	39	139	708.7	5.06
+STEM	ci.yml	pull_request	test-webplat	48	44	39	95	2161.7	15.44
+STEM	ci.yml	pull_request	web-platform-build	120	0	11	120	311.6	2.23
+STEM	ci.yml	push	affected-index-ratchet	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	critical-css-gate	17	0	0	17	18.4	1.08
+STEM	ci.yml	push	detect-changes	17	0	0	17	6.0	0.35
+STEM	ci.yml	push	draft-light	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	e2e	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	encryption-posture	17	0	0	17	5.1	0.30
+STEM	ci.yml	push	guards-advisory	17	0	0	17	12.0	0.70
+STEM	ci.yml	push	guards-ruleset	17	0	0	17	15.2	0.90
+STEM	ci.yml	push	lint-bot-statuses	17	0	0	17	36.5	2.15
+STEM	ci.yml	push	lint-webplat	17	0	0	17	32.0	1.88
+STEM	ci.yml	push	oracle-index-check	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	oracle-review-required	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	oracle-selection	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	pr-selection	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	push-dedupe	17	0	0	17	1.4	0.08
+STEM	ci.yml	push	shard-totality-mutations	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	test	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	test-bun	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	test-scripts	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	test-scripts-heavy	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	test-webplat	0	17	0	0	0.0	0.00
+STEM	ci.yml	push	web-platform-build	0	17	0	0	0.0	0.00
+census: remove fetched data with: rm -rf /var/tmp/ci-demand-census.UJuPHA1h
