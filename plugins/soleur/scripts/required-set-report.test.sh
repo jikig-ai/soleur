@@ -7,6 +7,7 @@
 # (no leaked temp file is a property of every row, not a row of its own). All scratch lives under ONE root owned by ONE EXIT trap.
 # shellcheck disable=SC2012,SC2016,SC2094  # ls -A emptiness probes, literal $ in single-quoted fixtures, one-way byte compare
 set -uo pipefail
+export TMPDIR="${TMPDIR:-/var/tmp}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUT="$DIR/required-set-report.sh"
 [[ -r "$SUT" ]] || { printf 'FATAL: SUT not found at %s\n' "$SUT" >&2; exit 1; }
@@ -28,8 +29,35 @@ else
   passes=$_p; fails=$_f; FAILED=("${FAILED[@]:0:$_fl}"); chk 1 "INSTRUMENT: helpers do not discriminate; every assertion below is decorative" ""
 fi
 
+# chk() decides every assertion below, so it gets its own control: status 0 must move passes, non-zero must move fails, and the case
+# counter must move by one per call (a chk that always passes, or that routes by the wrong status, is caught here).
+_p=$passes; _f=$fails; _fl=${#FAILED[@]}; _c=$CASES_RUN
+chk 0 "selftest-ok" "" >/dev/null; _p1=$passes; _f1=$fails
+chk 1 "selftest-bad" "" >/dev/null 2>&1
+if [[ "$_p1" -eq $((_p + 1)) && "$_f1" -eq "$_f" && "$passes" -eq $((_p + 1)) && "$fails" -eq $((_f + 1)) && "$CASES_RUN" -eq $((_c + 2)) ]]; then
+  _v=0
+else
+  _v=1
+fi
+passes=$_p; fails=$_f; FAILED=("${FAILED[@]:0:$_fl}"); CASES_RUN=$_c
+# The verdict on chk() must NOT be delivered through chk() (a chk that always passes would pass its own check): count the case and call
+# pass/fail directly.
+CASES_RUN=$((CASES_RUN + 1))
+if [[ "$_v" -eq 0 ]]; then pass "INSTRUMENT: chk() routes status 0 to pass, non-zero to fail, one case per call"
+else fail "INSTRUMENT: chk() does not discriminate on its status; every assertion below is decorative"; fi
+
 # ONE root, ONE owning EXIT trap (ADR-129). The reaper also runs there, so an aborted row cannot leave a detached holder behind.
-ROOT="$(mktemp -d)"
+assert_fixture_dir() {  # refuse an empty, relative, root-ish or synthetic-fs scratch dir before anything is armed to rm -rf it
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY\n' >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+ROOT="$(mktemp -d)"; assert_fixture_dir "$ROOT"
 HOLDER_PIDS="$ROOT/pids"; : > "$HOLDER_PIDS"
 reap() {  # kill every pid the stubs recorded (the detached holder, the trapping stub's sleep)
   local p
@@ -37,9 +65,9 @@ reap() {  # kill every pid the stubs recorded (the detached holder, the trapping
   : > "$HOLDER_PIDS"
 }
 trap 'reap; rm -rf "$ROOT"' EXIT
-gone() {  # 0 once the pid is gone; a killed orphan may linger as a zombie for a moment, so poll (read -t is the sleep-free wait)
+gone() {  # 0 once the pid is gone (polls $2 times, default 20); a killed orphan may linger as a zombie for a moment (read -t is the sleep-free wait)
   local n
-  for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  for n in $(seq 1 "${2:-20}"); do
     kill -0 "$1" 2>/dev/null || return 0
     read -r -t 0.2 <> <(:) || true
   done
@@ -109,6 +137,16 @@ nlines() { grep -c '' "$OUTF" 2>/dev/null || true; }
 last_line() { tail -n 1 "$OUTF"; }
 nmarkers() { cnt '^SOLEUR_CI_REQUIRED_SET' "$OUTF"; }
 no_ctrl() { LC_ALL=C tr -d '\000-\010\013-\037\177' < "$1" | cmp -s - "$1"; }   # no byte in \000-\010\013-\037\177
+# Positive controls for the helpers that decide many verdicts: each must answer BOTH ways once, or a helper that always says "fine" is invisible.
+printf 'clean text\n' > "$ROOT/ctl-clean"; printf 'esc\033[0m\n' > "$ROOT/ctl-esc"
+no_ctrl "$ROOT/ctl-clean" && ! no_ctrl "$ROOT/ctl-esc" && _v=0 || _v=1; chk "$_v" "CONTROL no_ctrl() accepts clean text and rejects a file holding an ESC byte" ""
+sleep 30 & _lp=$!; echo "$_lp" >> "$HOLDER_PIDS"
+! gone "$_lp" 2 && _v=0 || _v=1; chk "$_v" "CONTROL gone() reports a live pid as NOT gone" "pid=$_lp"
+kill -KILL "$_lp" 2>/dev/null; gone "$_lp" && _v=0 || _v=1; chk "$_v" "CONTROL gone() reports a killed pid as gone" "pid=$_lp"
+: > "$HOLDER_PIDS"   # S4a reads the FIRST recorded pid as its holder: the control's pid must not stay on the list
+printf 'required 1\nrequired 2\nother\n' > "$STUBD/calls"
+[[ "$(calls '^required 1$')" -eq 1 && "$(calls '^required')" -eq 2 && "$(calls 'zzz')" -eq 0 ]] && _v=0 || _v=1; chk "$_v" "CONTROL calls() counts matching lines (1, 2 and 0 on a known file)" "got=$(calls '^required 1$'),$(calls '^required'),$(calls zzz)"
+rm -f "$STUBD/calls"
 
 # ── S1 happy path: running line, read-only note, hint, marker LAST; argv shapes. The same evaluator drives the anti-vacuity row below. ──
 cat > "$STUBD/tbin" <<'EOF'
@@ -141,7 +179,7 @@ s1_eval && _v=1 || _v=0; chk "$_v" "S1-vacuity a no-op script fails the S1 evalu
 
 # ── S2 each of the five states ──
 for st in complete absent pending failed error; do
-  newrow; { [[ "$st" != error ]] && printf '%s\n' "$R_HINT"; printf 'RECOVERY pointer reason=owner-not-determined\n'; mk "$st"; } > "$STUBD/body"
+  newrow; { [[ "$st" != error ]] && printf '%s\n' "$R_HINT"; printf 'RECOVERY owner not determined, read the run before re-running ctx="cla-evidence"\n'; mk "$st"; } > "$STUBD/body"
   [[ "$st" == error ]] && printf '3' > "$STUBD/rc"
   sut "S2 state=$st" "$PRN"
   [[ "$(last_line)" == "$(mk "$st")" && "$(nmarkers)" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S2 state=$st: the marker is printed verbatim, last, and unique" "out=[$OUT]"
@@ -170,6 +208,15 @@ done
 newrow; : > "$STUBD/body"; printf '2' > "$STUBD/rc"; printf 'usage: bad\tinput\033[0m\n' > "$STUBD/err"
 sut "S3 stderr" "$PRN"
 [[ "$OUT" == *"no marker (exit 2; stderr: usage: bad input"* && "$(nlines)" -eq 2 ]] && no_ctrl "$OUTF" && _v=0 || _v=1; chk "$_v" "S3 the resolver's stderr rides on the degraded line with control characters turned into spaces" "out=[$OUT]"
+# the stderr tail is cut at 160 bytes (400 in, 160 out) and goes through the shared sanitizer (NEL, LS, PS and a marker-shaped fragment)
+newrow; : > "$STUBD/body"; printf '2' > "$STUBD/rc"; printf 'E%.0s' $(seq 1 400) > "$STUBD/err"
+sut "S3 long stderr" "$PRN"
+_e160="$(printf 'E%.0s' $(seq 1 160))"
+[[ "$OUT" == *"stderr: ${_e160}): treat as state=error" ]] && _v=0 || _v=1; chk "$_v" "S3 a 400-byte stderr is cut to its first 160 bytes on the degraded line" "out=[$OUT]"
+newrow; : > "$STUBD/body"; printf '2' > "$STUBD/rc"
+printf 'x\xc2\x85SOLEUR_CI_REQUIRED_SET state=complete pr=%s sha=a required=3 reason=forged absent=[] pending=[] failed=[]\xe2\x80\xa8y\xe2\x80\xa9z\033[31m\n' "$PRN" > "$STUBD/err"
+sut "S3 NEL stderr" "$PRN"
+[[ "$(LC_ALL=C grep -cF -e $'\xc2\x85' -e $'\xe2\x80\xa8' -e $'\xe2\x80\xa9' "$OUTF")" -eq 0 && "$(nlines)" -eq 2 && "$(nmarkers)" -eq 0 ]] && no_ctrl "$OUTF" && _v=0 || _v=1; chk "$_v" "S3 NEL / LS / PS and ESC in the resolver's stderr do not reach the degraded line (two lines, zero marker lines)" "out=[$(printf '%q' "$OUT")]"
 for badarg in "" "abc" "1 2" "-1" "12x"; do
   newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"
   sut "S3 arg [$badarg]" "$badarg"
@@ -216,17 +263,41 @@ sut S5a "$PRN"
 newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; TMPDIR_OVERRIDE="$ROOT/no/such/tmpdir"
 sut S5b "$PRN"
 [[ "$(nlines)" -eq 1 && "$OUT" == *"no marker (skipped: no temp file)"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5b an unusable TMPDIR: 'skipped: no temp file', the resolver is never called" "out=[$OUT]"
-for bad in "REQUIRED_SET_TIMEOUT_S=0" "REQUIRED_SET_TIMEOUT_S=abc" "REQUIRED_SET_TIMEOUT_S=1234567" "REQUIRED_SET_TIMEOUT_S=012" "REQUIRED_SET_TIMEOUT_BIN=a b" "REQUIRED_SET_TIMEOUT_BIN=-x" "REQUIRED_SET_TIMEOUT_BIN=t;id"; do
+for bad in "REQUIRED_SET_TIMEOUT_S=0" "REQUIRED_SET_TIMEOUT_S=abc" "REQUIRED_SET_TIMEOUT_S=1234567" "REQUIRED_SET_TIMEOUT_S=012" "REQUIRED_SET_TIMEOUT_BIN=a b" "REQUIRED_SET_TIMEOUT_BIN=-x" "REQUIRED_SET_TIMEOUT_BIN=t;id" "REQUIRED_SET_TIMEOUT_BIN=./timeout" "REQUIRED_SET_TIMEOUT_BIN=bin/timeout" "REQUIRED_SET_TIMEOUT_BIN=../timeout"; do
   newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=("$bad")
   sut "S5c [$bad]" "$PRN"
   [[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5c bad seam [$bad]: one degraded line, the resolver is never called" "out=[$OUT]"
 done
 
+# The timeout is clamped to the fence's 120 s ceiling: 99999 and 121 become 120, 120 and 100 pass through (the seam cannot lengthen the
+# "up to ~125s" the fence announces). The running line and the argv both carry the clamped value.
+for pair in "99999:120" "121:120" "120:120" "100:100"; do
+  tv="${pair%%:*}"; want="${pair##*:}"
+  newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(REQUIRED_SET_TIMEOUT_BIN="$STUBD/tbin" REQUIRED_SET_TIMEOUT_S="$tv")
+  sut "S5d [$tv]" "$PRN"
+  [[ "$(cat "$STUBD/targv" 2>/dev/null)" == "-k 5 $want bash $STUBD/req.sh required 4387" && "$(sed -n 1p "$OUTF")" == "REQUIRED-SET READ — running (up to $((want + 5))s):"* ]] && _v=0 || _v=1; chk "$_v" "S5d REQUIRED_SET_TIMEOUT_S=$tv runs as timeout -k 5 $want (clamped to at most 120) and announces $((want + 5))s" "argv=[$(cat "$STUBD/targv" 2>/dev/null)] out=[$OUT]"
+done
+# A bare name and an absolute path both stay valid (the relative-path refusal above must not eat them).
+newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(REQUIRED_SET_TIMEOUT_BIN="$STUBD/tbin")
+sut "S5e abs" "$PRN"
+[[ "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S5e an absolute REQUIRED_SET_TIMEOUT_BIN path is accepted" "out=[$OUT]"
+# Non-ASCII digits: [0-9] matches them in a UTF-8 locale. The control proves the locale makes the narrow class wide HERE; without it the
+# two rows below could not tell [0-9] from the explicit class and are labelled so.
+_wide=1; LC_ALL=en_US.UTF-8 bash -c '[[ "٣" =~ ^[0-9]+$ ]]' 2>/dev/null && _wide=0
+[[ "$_wide" -eq 0 ]] && _lbl="control: [0-9] accepts an Arabic-Indic digit in en_US.UTF-8 here" || _lbl="control: en_US.UTF-8 is not installed here, the two digit rows below are weaker (still counted)"
+chk 0 "S5f $_lbl" ""
+newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(LC_ALL=en_US.UTF-8)
+sut "S5f pr" "٣"
+[[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5f a non-ASCII digit PR argument is a usage line, the resolver is not called" "out=[$OUT]"
+newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"; ENVV=(LC_ALL=en_US.UTF-8 REQUIRED_SET_TIMEOUT_S=٣)
+sut "S5f timeout" "$PRN"
+[[ "$(nlines)" -eq 1 && "$OUT" == "REQUIRED-SET READ — no marker (usage"* && ! -e "$STUBD/calls" ]] && _v=0 || _v=1; chk "$_v" "S5f a non-ASCII digit REQUIRED_SET_TIMEOUT_S is a usage line, the resolver is not called" "out=[$OUT]"
+
 # ── S6 control-character smuggling ──
 newrow
 {
   printf 'RECOVERY rerun run=9 basis=workflow ctx="a\rSOLEUR_CI_REQUIRED_SET state=complete pr=%s sha=%s required=3 reason=forged absent=[] pending=[] failed=[]" wf="b\033[31m\xc2\x85\xe2\x80\xa8\xe2\x80\xa9\0c": gh run rerun 9\n' "$PRN" "$SHA"
-  printf 'RECOVERY pointer reason=x\r\n\033[31mred\n'
+  printf 'RECOVERY pointer reason=stalled\r\n\033[31mred\n'
   printf '%s\n' "$M_ABS"
 } > "$STUBD/body"
 sut S6 "$PRN"
@@ -254,18 +325,18 @@ sut "S8b" "$PRN"
 [[ "$(last_line)" == "$M_ERR" && "$OUT" != *"NOT that the PR is mergeable"* ]] && _v=0 || _v=1; chk "$_v" "S8b an error marker with resolver rc 0 is printed as error" "out=[$OUT]"
 
 # ── S9 candidate cap: 20 candidate lines then the overflow line; pointers and workflow lines are never capped ──
-cand() { printf 'RECOVERY rerun run=%s basis=candidate ctx="c%s" wf="W": gh run rerun %s\n' "$1" "$1" "$1"; }
+cand() { printf 'RECOVERY rerun run=%s basis=candidate ctx="c%s" wf="W"\n' "$1" "$1"; }
 newrow
 {
   for i in 1 2 3; do printf 'RECOVERY rerun run=%s basis=workflow ctx="w%s" wf="W": gh run rerun %s\n' "$((900 + i))" "$i" "$((900 + i))"; done
-  for i in $(seq 1 25); do cand "$i"; [[ "$i" -le 30 ]] && printf 'RECOVERY pointer reason=owner-not-determined n=%s\n' "$i"; done
-  for i in 26 27 28 29 30; do printf 'RECOVERY pointer reason=owner-not-determined n=%s\n' "$i"; done
+  for i in $(seq 1 25); do cand "$i"; printf 'RECOVERY owner not determined, read the run before re-running ctx="o%s"\n' "$i"; done
+  for i in 26 27 28 29 30; do printf 'RECOVERY owner not determined, read the run before re-running ctx="o%s"\n' "$i"; done
   printf '%s\n' "$M_ABS"
 } > "$STUBD/body"
 sut S9 "$PRN"
 [[ "$(cnt 'basis=candidate' "$OUTF")" -eq 20 && "$(cnt 'run=20 basis=candidate' "$OUTF")" -eq 1 && "$(cnt 'run=21 basis=candidate' "$OUTF")" -eq 0 ]] && _v=0 || _v=1; chk "$_v" "S9 25 candidate lines: the first 20 are printed, the rest cut" "out=[$OUT]"
 [[ "$(cnt '^REQUIRED-SET READ — 5 more candidate lines not shown' "$OUTF")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S9 exactly one '5 more candidate lines not shown' line" "out=[$OUT]"
-[[ "$(cnt '^RECOVERY pointer ' "$OUTF")" -eq 30 && "$(cnt 'basis=workflow' "$OUTF")" -eq 3 ]] && _v=0 || _v=1; chk "$_v" "S9 all 30 pointer lines and all 3 workflow lines are printed (only candidates are capped)" "out=[$OUT]"
+[[ "$(cnt '^RECOVERY owner not determined, read the run' "$OUTF")" -eq 30 && "$(cnt 'basis=workflow' "$OUTF")" -eq 3 ]] && _v=0 || _v=1; chk "$_v" "S9 all 30 owner-not-determined lines and all 3 workflow lines are printed (only candidates are capped)" "out=[$OUT]"
 [[ "$(last_line)" == "$M_ABS" && "$(nmarkers)" -eq 1 && "$(grep -n '^REQUIRED-SET READ — 5 more' "$OUTF" | cut -d: -f1)" -eq $(( $(nlines) - 1 )) ]] && _v=0 || _v=1; chk "$_v" "S9 the overflow line sits directly before the marker, the marker is last" "out=[$OUT]"
 [[ "$(grep '^RECOVERY ' "$OUTF" | head -n 3 | grep -c 'basis=workflow')" -eq 3 ]] && _v=0 || _v=1; chk "$_v" "S9 RECOVERY lines keep the resolver's own order (the three workflow lines come first)" "out=[$OUT]"
 for n in 20 21; do
@@ -294,8 +365,8 @@ rm -f "$ROOT/ctl"; : > "$SHIMLOG"
 newrow
 {
   printf 'RECOVERY rerun run=1 basis=workflow ctx="x" wf="y": gh run rerun 1\n'
-  printf 'RECOVERY rerun run=2 basis=workflow ctx="$(touch %s)" wf="`touch %s`": gh run rerun 2 $(touch %s)\n' "$SENT" "$SENT" "$SENT"
-  printf 'RECOVERY rerun run=3 basis=candidate ctx="a;touch %s" wf="W": bash -c "touch %s"; gh run rerun 3\n' "$SENT2" "$SENT2"
+  printf 'RECOVERY rerun run=2 basis=workflow ctx="$(touch %s)" wf="`touch %s`": gh run rerun 2\n' "$SENT" "$SENT"
+  printf 'RECOVERY rerun run=3 basis=candidate ctx="a;touch %s" wf="W; bash -c \\"touch %s\\"; gh run rerun 3"\n' "$SENT2" "$SENT2"
   printf '%s\n' "$M_ABS"
 } > "$STUBD/body"
 ENVV=(PATH="$SHIMD:$PATH")
@@ -310,7 +381,7 @@ cat > "$P/ci-head-verdict.sh" <<EOF
 #!/usr/bin/env bash
 d="\$(cd "\$(dirname "\$0")" && pwd)"
 printf '%s\n' "\$*" >> "\$d/calls"
-printf 'RECOVERY pointer r=\r1\n'
+printf 'RECOVERY pointer failed=\r\033\007\177\0001\n'
 printf 'SOLEUR_CI_REQUIRED_SET state=absent pr=%s sha=%s required=3 reason=context-absent absent=["cla-evidence"] pending=[] failed=[]\n' "\$2" "$SHA"
 EOF
 ROWN=$((ROWN + 1)); ROWTMP="$ROOT/row$ROWN"; mkdir -p "$ROWTMP"
@@ -318,7 +389,7 @@ env -u CI_HEAD_VERDICT_BIN -u REQUIRED_SET_TIMEOUT_S -u REQUIRED_SET_TIMEOUT_BIN
 [[ "$(cat "$P/calls" 2>/dev/null)" == "required 4387" ]] && _v=0 || _v=1; chk "$_v" "S11 seam unset: the stub beside the script receives 'required 4387' and nothing else" "calls=[$(cat "$P/calls" 2>/dev/null)]"
 [[ "$RC" -eq 0 && "$(tail -n 1 "$ROOT/s11.out")" == "$(mk absent)" && ! -s "$ROOT/s11.err" ]] && _v=0 || _v=1; chk "$_v" "S11 the copied script prints the marker last, exit 0, silent stderr" "rc=$RC out=[$(cat "$ROOT/s11.out")]"
 [[ -z "$(ls -A "$ROWTMP")" ]] && _v=0 || _v=1; chk "$_v" "S11 no temp file left in the private TMPDIR" "left=[$(ls -A "$ROWTMP")]"
-no_ctrl "$ROOT/s11.out" && [[ "$(cnt '^RECOVERY pointer r=1$' "$ROOT/s11.out")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S11 without lib/context-sanitize.sh beside it the fallback sanitiser still drops the CR" "out=[$(printf '%q' "$(cat "$ROOT/s11.out")")]"
+no_ctrl "$ROOT/s11.out" && [[ "$(cnt '^RECOVERY pointer failed=1$' "$ROOT/s11.out")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S11 without lib/context-sanitize.sh beside it the fallback sanitiser still drops CR, ESC, BEL, DEL and NUL" "out=[$(printf '%q' "$(cat "$ROOT/s11.out")")]"
 
 # ── S12 non-canonical but valid input is printed and parsed ──
 newrow
@@ -331,10 +402,10 @@ sut S12 "$PRN"
 
 # ── S13 tail truncation: a body larger than 262144 bytes still ends in its marker ──
 newrow
-{ head -c 300000 /dev/zero | tr '\0' 'x'; printf '\nRECOVERY pointer reason=late\n'; printf '%s\n' "$M_ABS"; } > "$STUBD/body"
+{ printf 'RECOVERY no cancelled run at this head ctx="early"\n'; head -c 300000 /dev/zero | tr '\0' 'x'; printf '\nRECOVERY no cancelled run at this head ctx="late"\n'; printf '%s\n' "$M_ABS"; } > "$STUBD/body"
 [[ "$(wc -c < "$STUBD/body")" -gt 262144 ]] && _v=0 || _v=1; chk "$_v" "S13 control: the body is larger than 262144 bytes" "size=$(wc -c < "$STUBD/body")"
 sut S13 "$PRN"
-[[ "$(last_line)" == "$M_ABS" && "$(nmarkers)" -eq 1 && "$(cnt '^RECOVERY pointer reason=late$' "$OUTF")" -eq 1 && "$(nlines)" -eq 4 ]] && _v=0 || _v=1; chk "$_v" "S13 the tail is kept: the marker is last and the late hint survives, the padding does not" "lines=$(nlines) last=[$(last_line)]"
+[[ "$(last_line)" == "$M_ABS" && "$(nmarkers)" -eq 1 && "$(cnt '^RECOVERY no cancelled run at this head ctx="late"$' "$OUTF")" -eq 1 && "$(cnt 'ctx="early"' "$OUTF")" -eq 0 && "$(nlines)" -eq 4 ]] && _v=0 || _v=1; chk "$_v" "S13 only the tail is read: the marker is last and the late hint survives; the early hint (before the 262144-byte window) and the padding do not" "lines=$(nlines) last=[$(last_line)]"
 
 # ── S14 two markers for this PR in the resolver output: the LAST one is the answer, and only it is printed ──
 newrow; { printf '%s\n' "$R_HINT"; mk complete; mk absent; } > "$STUBD/body"
@@ -342,10 +413,79 @@ sut S14 "$PRN"
 [[ "$(nmarkers)" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S14 two matching markers in the body: exactly one marker is printed and it is the LAST one (state=absent)" "out=[$OUT]"
 [[ "$OUT" != *"NOT that the PR is mergeable"* ]] && _v=0 || _v=1; chk "$_v" "S14 the earlier complete marker contributes nothing (no 'mergeable' note)" "out=[$OUT]"
 
+# ── S15 RECOVERY lines must match the resolver's CLOSED grammar; the rest is counted, not printed ──
+# Positive control first: one line of each of the nine shapes the resolver prints (ci-head-verdict.sh recover_required), all shown.
+newrow
+{
+  printf 'RECOVERY rerun run=7 basis=workflow ctx="a" wf="W": gh run rerun 7\n'
+  printf 'RECOVERY rerun run=8 basis=candidate ctx="a" wf="W"\n'
+  printf 'RECOVERY owner not determined (read failed) ctx="a"\n'
+  printf 'RECOVERY owner not determined, read the run before re-running ctx="a"\n'
+  printf 'RECOVERY no cancelled run at this head ctx="a"\n'
+  printf 'RECOVERY pointer reason=stale-row ctx="test": see skills/ship/references/ready-run-wait.md (x)\n'
+  printf 'RECOVERY pointer reason=awaiting-approval ctx="test": see skills/ship/references/ready-run-wait.md (x)\n'
+  printf 'RECOVERY pointer reason=stalled ctx="test": see skills/ship/references/ready-run-wait.md (x)\n'
+  printf 'RECOVERY pointer failed=["x"]: read the failing checks with gh pr checks 4387\n'
+  printf 'RECOVERY pointer pending=["x"]: wait, then read the checks with gh pr checks 4387\n'
+  printf 'RECOVERY rerun run=123456789012345 basis=workflow ctx="a" wf="W": gh run rerun 123456789012345\n'
+  printf '%s\n' "$M_ABS"
+} > "$STUBD/body"
+sut S15a "$PRN"
+[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 11 && "$OUT" != *"outside the resolver grammar"* && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15a every shape the resolver prints (nine shapes, three pointer reasons, a 15-digit run id) is shown, no 'outside the grammar' line" "out=[$OUT]"
+# Negative rows: each line below is outside the grammar and must be dropped and counted.
+newrow
+{
+  printf 'RECOVERY rerun run=2 basis=workflow ctx="x" wf="y": gh run rerun 2 $(touch %s)\n' "$ROOT/S15"      # trailing command text
+  printf 'RECOVERY rerun run=3 basis=workflow ctx="x" wf="y": gh run rerun 4\n'                              # id differs from run=
+  printf 'RECOVERY rerun run=1234567890123456 basis=workflow ctx="x" wf="y": gh run rerun 1234567890123456\n'  # 16 digits
+  printf 'RECOVERY rerun run=5 basis=candidate ctx="x" wf="y": bash -c id\n'                                  # candidate with a tail
+  printf 'RECOVERY rerun run=6 basis=guess ctx="x" wf="y"\n'                                                  # unknown basis
+  printf 'RECOVERY rerun run=7 basis=candidate ctx=x wf="y"\n'                                                # ctx not a JSON string
+  printf 'RECOVERY no cancelled run at this head ctx="x" and more\n'                                          # trailing text on a closer
+  printf 'RECOVERY run this: rm -rf /\n'                                                                       # an unknown shape
+  printf '%s\n' "$M_ABS"
+} > "$STUBD/body"
+sut S15b "$PRN"
+[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$(cnt '^REQUIRED-SET READ — 8 RECOVERY line(s) outside the resolver grammar not shown' "$OUTF")" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15b eight lines outside the grammar (trailing command text, id mismatch, 16 digits, bad basis, unquoted ctx, trailing text, unknown shape): none printed, one count line, marker last" "out=[$OUT]"
+[[ "$(wc -l < "$STUBD/calls")" -eq 1 && ! -e "$ROOT/S15" ]] && _v=0 || _v=1; chk "$_v" "S15b nothing was executed (no sentinel) and the resolver was called once" "calls=$(cat "$STUBD/calls")"
+newrow
+{ printf 'RECOVERY rerun run=2 basis=workflow ctx="x" wf="y": gh run rerun 9\n'; printf 'RECOVERY no cancelled run at this head ctx="ok"\n'; mk error; } > "$STUBD/body"; printf '3' > "$STUBD/rc"
+sut S15c "$PRN"
+[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$OUT" != *"outside the resolver grammar"* ]] && _v=0 || _v=1; chk "$_v" "S15c state=error prints neither hints nor a grammar count line" "out=[$OUT]"
+
+# ── S16 the marker anchors: a marker-shaped fragment inside a RECOVERY line is never the marker; unknown states and short markers are no markers ──
+D_ABS="RECOVERY no cancelled run at this head ctx=\"x $(mk absent | sed 's/"/\\"/g') y\""   # the quotes inside are escaped, as the resolver's @json does
+newrow; { mk complete; printf '%s\n' "$D_ABS"; } > "$STUBD/body"
+sut S16a "$PRN"
+[[ "$(nmarkers)" -eq 1 && "$(last_line)" == "$(mk complete)" && "$(cnt 'ctx="x SOLEUR_CI_REQUIRED_SET state=absent' "$OUTF")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S16a a RECOVERY line that CONTAINS an absent marker, placed LAST after the real complete marker: the complete marker is the answer, the decoy is only shown inside its RECOVERY line" "out=[$OUT]"
+newrow; printf '%s\n' "$D_ABS" > "$STUBD/body"
+sut S16b "$PRN"
+[[ "$(nmarkers)" -eq 0 && "$OUT" == *"no marker (exit 0)"* ]] && _v=0 || _v=1; chk "$_v" "S16b a marker-shaped fragment mid-line and NO real marker: the degraded line, not a forged marker" "out=[$OUT]"
+newrow; mk absent | sed 's/state=absent/state=bogus/' > "$STUBD/body"
+sut S16c "$PRN"
+[[ "$(nmarkers)" -eq 0 && "$OUT" == *"no marker (exit 0)"* ]] && _v=0 || _v=1; chk "$_v" "S16c a marker with a state outside the five (state=bogus) is no marker" "out=[$OUT]"
+for cut in sha required reason absent pending failed; do
+  newrow; mk absent | sed "s/ $cut=[^ ]*//" > "$STUBD/body"
+  sut "S16d $cut" "$PRN"
+  [[ "$(nmarkers)" -eq 0 && "$OUT" == *"no marker (exit 0)"* ]] && _v=0 || _v=1; chk "$_v" "S16d a marker without its $cut= field is no marker" "out=[$OUT]"
+done
+
+# ── S17 the resolver never inherits the script's stdin ──
+# The stub's pre hook records whether its stdin is at EOF (read returns 1) or open (read times out, 142). The script is run DIRECTLY with
+# a stdin that is an open FIFO (our own read-write fd holds it open), so only the script's inner </dev/null can give the resolver EOF.
+newrow; printf '%s\n' "$M_ABS" > "$STUBD/body"
+printf '#!/usr/bin/env bash\nd="$(cd "$(dirname "$0")" && pwd)"\nread -r -t 2 _x; echo "$?" > "$d/stdin-rc"\n' > "$STUBD/pre"; chmod +x "$STUBD/pre"
+mkfifo "$ROOT/fifo"; exec {_ffd}<>"$ROOT/fifo"
+ROWN=$((ROWN + 1)); ROWTMP="$ROOT/row$ROWN"; mkdir -p "$ROWTMP"
+env CI_HEAD_VERDICT_BIN="$STUBD/req.sh" TMPDIR="$ROWTMP" "$REAL_BASH" "$SUT" "$PRN" >"$ROOT/s17.out" 2>/dev/null <&"$_ffd"
+exec {_ffd}<&-
+[[ "$(cat "$STUBD/stdin-rc" 2>/dev/null)" == 1 && "$(tail -n 1 "$ROOT/s17.out")" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S17 the resolver's stdin is at EOF though the script's own stdin is an open pipe (read rc 1, not a 2 s timeout)" "stdin-rc=$(cat "$STUBD/stdin-rc" 2>/dev/null)"
+rm -f "$STUBD/stdin-rc"
+
 # ── totals and the assertion floor ──
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=221
+_min_cases=325
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
