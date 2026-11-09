@@ -6,7 +6,7 @@
 // no captured-real workspace state.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync as writeFileSyncFs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -307,3 +307,29 @@ describe("AC6: checkpoint failure is non-fatal", () => {
 // restore CONSUMES its ref (asserted in RED-B above), and account deletion's
 // `deleteWorkspace` removes the whole clone (and thus all checkpoint refs) for
 // the solo case. The orphan-TTL prune is deferred (plan-review consensus).
+
+// #9600: the checkpoint runs `git status` in a workspace an agent has used, on EVERY session abort, in the
+// server process (outside the sandbox, with the server's env). A planted core.fsmonitor / core.hooksPath
+// in the workspace's own .git/config must not execute there.
+describe("host-side hardening: a planted core.fsmonitor helper does not run during checkpoint (#9600)", () => {
+  it("a core.fsmonitor helper planted in .git/config is not executed (the shared hardening args also null core.hooksPath/attributesFile, which this checkpoint's plumbing verbs never reach)", async () => {
+    const repo = await newRepo();
+    const marker = join(repo, "..", `ckpt-marker-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const helper = join(repo, "..", `ckpt-helper-${Date.now()}-${Math.random().toString(36).slice(2)}.sh`);
+    writeFileSyncFs(helper, `#!/bin/sh\necho ran >> '${marker}'\nprintf '/\\0'\n`);
+    chmodSync(helper, 0o755);
+    await git(repo, "config", "--local", "core.fsmonitor", helper);
+    await writeFile(join(repo, "feature.ts"), "export const x = 1;\n");
+
+    // control: UNHARDENED git (the pre-fix call shape) DOES run the planted fsmonitor on `status`
+    await git(repo, "status", "--porcelain");
+    const controlRan = existsSync(marker) && readFileSync(marker, "utf8").includes("ran");
+    expect(controlRan, "fixture is vacuous: the planted fsmonitor did not run for plain git status").toBe(true);
+    await rm(marker, { force: true });
+
+    await checkpointInflightWork(repo, "conv-hard", "user-H");
+    expect(existsSync(marker), "checkpoint executed a planted core.fsmonitor helper").toBe(false);
+    expect(await refExists(repo, "conv-hard")).toBe(true); // and it still checkpointed
+    await rm(helper, { force: true });
+  });
+});

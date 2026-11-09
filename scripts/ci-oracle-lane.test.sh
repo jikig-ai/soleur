@@ -82,6 +82,9 @@
 #   O-BINARY-INDEX    a `Binary files` verdict on the index diff returns 1 (zero hunks must not pass vacuously)
 #   O-ELEM-GRAMMAR    every +/- line inside an index hunk must match the element grammar
 #   O-EMPTY-DIFF      a zero-path diff is NOT oracle-only (the vacuity arm)
+#   O-BASE-REF        PR_BASE_REF is branch-name grammar before any fetch (pull_request, #12418)
+#   O-BASE-FETCH      the live-base fetch must succeed (refs/heads/ pinned)
+#   O-NO-MERGE-BASE   the fetched base must share an ancestor with HEAD^2
 #   O-LOCK-READ       the driver reads ORACLE_LANE_LOCKED
 #   O-ARM             active=true only when unlocked AND switch `on` AND oracle_only
 #   O-GRAMMAR         the output-grammar revalidation at the final printf
@@ -524,6 +527,54 @@ unset _long _long2
 # an empty diff: a genuine merge commit whose tree equals the base tree
 fx_case empty; fx_done empty
 
+# STALE BASE (#12418): the merge ref's HEAD^1 froze at a base tip BEFORE the main-side commit the PR head
+# already merged. `diff HEAD^1..HEAD` re-counts that main-side change; merge-base(HEAD^2, live base) does not.
+# fx_stale <name> <pr-file> <pr-content>: that topology — main advanced an outside-surface file, the PR
+# merged it and made its own edit, the merge ref's first parent is the pre-advance tip, and the remote's
+# live base ref is at the newer main.
+fx_stale() {
+  local d="$FX/$1"
+  git -C "$d" checkout -q main \
+    && printf 'main-side\n' >> "$d/scripts/foo.sh" \
+    && git -C "$d" add scripts/foo.sh \
+    && git -C "$d" commit -q -m main2 \
+    && git -C "$d" update-ref refs/heads/zzleak-pr-base main \
+    && git -C "$d" checkout -q pr \
+    && git -C "$d" merge -q --no-ff -m merge-main main \
+    && printf '%s\n' "$3" >> "$d/$2" \
+    && git -C "$d" add -- "$2" \
+    && git -C "$d" commit -q -m pr \
+    && git -C "$d" checkout -q --detach 'main~1' \
+    && git -C "$d" merge -q --no-ff -m merge-ref pr
+}
+fx_case stale; fx_stale stale "$KB_A" 'doc' || { printf 'FAIL: fixture stale\n' >&2; exit 2; }
+# `stale_code`: identical topology, but the PR's own delta carries a code file — proves a PR-side code
+# path still pays the battery on a merge-carrying branch.
+fx_case stale_code; fx_stale stale_code apps/web-platform/zzleak-app.ts 'x' || { printf 'FAIL: fixture stale_code\n' >&2; exit 2; }
+# `behind`: the MIRROR direction — merge-base(HEAD^2, live) is BEHIND the merge ref's HEAD^1 (the branch
+# never synced the main-side commit the merge ref's first parent already carries). Only the true three-dot
+# pair — merge-base..HEAD^2 — classifies the PR's own delta; pairing the merge-base against the merge
+# RESULT would re-count the base-side arc the other way.
+fx_case behind
+{ git -C "$FX/behind" checkout -q main \
+  && printf 'main-side\n' >> "$FX/behind/scripts/foo.sh" \
+  && git -C "$FX/behind" add scripts/foo.sh \
+  && git -C "$FX/behind" commit -q -m main2 \
+  && git -C "$FX/behind" update-ref refs/heads/zzleak-pr-base main \
+  && git -C "$FX/behind" checkout -q pr \
+  && printf 'doc\n' >> "$FX/behind/$KB_A" \
+  && git -C "$FX/behind" add -- "$KB_A" \
+  && git -C "$FX/behind" commit -q -m pr \
+  && git -C "$FX/behind" checkout -q main \
+  && git -C "$FX/behind" merge -q --no-ff -m merge-ref pr; } \
+  || { printf 'FAIL: fixture behind\n' >&2; exit 2; }
+# `unrel`: the fetched live base shares NO ancestor with the PR head — merge-base is empty, fail closed.
+# An empty-tree root commit via commit-tree: unrelated history, no checkout churn.
+cp -a "$FX/accept" "$FX/unrel"
+{ git -C "$FX/unrel" update-ref refs/heads/zzleak-pr-base \
+    "$(git -C "$FX/unrel" commit-tree "$(git -C "$FX/unrel" mktree </dev/null)" -m unrel)"; } \
+  || { printf 'FAIL: fixture unrel\n' >&2; exit 2; }
+
 # ── drive(): run the driver once, hermetically, and assert the invariants every run must hold ──
 RUN_N=0
 EXPECT_KILLED=0
@@ -541,6 +592,13 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   head=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head="0000000000000000000000000000000000000000"
   prhead=$(git -C "$repo" rev-parse 'HEAD^2' 2>/dev/null) || prhead="$head"
   base=$(git -C "$repo" rev-parse 'HEAD^1' 2>/dev/null) || base="$head"
+  # The live base ref the pull_request arm fetches (#12418): a self `file://` origin plus a `zzleak-pr-base`
+  # branch at the merge ref's first parent keeps merge-base(HEAD^2, FETCH_HEAD) == HEAD^1 — the pre-#12418
+  # diff — for every fixture that does not pre-create the ref elsewhere (the stale-base ones do).
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 \
+    || git -C "$repo" remote add origin "file://$repo" 2>/dev/null || true
+  git -C "$repo" rev-parse --verify -q refs/heads/zzleak-pr-base >/dev/null 2>&1 \
+    || git -C "$repo" update-ref refs/heads/zzleak-pr-base "$base" 2>/dev/null || true
   local -a e=(
     "PATH=$BIN" "HOME=$SANDBOX/home" "TMPDIR=$SANDBOX/tmp" "LANG=C"
     "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" "GIT_CONFIG_NOSYSTEM=1" "GIT_CONFIG_GLOBAL=/dev/null"
@@ -548,6 +606,7 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
     "EVENT_NAME=pull_request" "SWITCH=on" "GITHUB_SHA=$head" "PR_HEAD_SHA=$prhead"
     "HEAD_REPO=$REPO_NAME" "GH_REPO=$REPO_NAME" "RUN_ATTEMPT=1"
     "MERGE_GROUP_HEAD_SHA=$head" "MERGE_GROUP_BASE_SHA=$base"
+    "PR_BASE_REF=zzleak-pr-base"
     "GITHUB_OUTPUT=$o/gh.out" "GITHUB_STEP_SUMMARY=$o/sum.out" "RUNNER_TEMP=$SANDBOX/rt"
     "DRV=$drv"
   )
@@ -711,7 +770,51 @@ row_shape_ok() {  # the validated pull_request shape emits the audit values
   drive accept "$d"
   p1=$(git -C "$FX/accept" rev-parse 'HEAD^1'); p2=$(git -C "$FX/accept" rev-parse 'HEAD^2')
   check_eq "O-1 valid shape: head_sha is HEAD^2" "$O_HEAD" "$p2"
-  check_eq "O-1 valid shape: base_sha is HEAD^1" "$O_BASE" "$p1"
+  check_eq "O-1 valid shape: base_sha is the resolved merge-base (== HEAD^1 in this fixture)" "$O_BASE" "$p1"
+}
+row_stale_base() {  # #12418: diff base is the merge-base against the fetched live base, never frozen HEAD^1
+  local d="$1" m2
+  # `stale`: HEAD^1 is a stale base tip and the PR head merged a newer main carrying an outside-surface edit.
+  # The frozen-parent derivation re-counts that main-side file (outside_surface); the merge-base diff is the
+  # PR's own delta only — one doc — so the lane fires and base_sha is the merge-base, not HEAD^1.
+  drive stale "$d"
+  expect_lane "O-BASE stale merge-ref: lane classifies on the PR's own delta"
+  check_eq "O-BASE stale: files counts the PR delta only" "$N_FILES" "1"
+  m2=$(git -C "$FX/stale" rev-parse refs/heads/zzleak-pr-base)
+  check_eq "O-BASE stale: base_sha is the live merge-base, not HEAD^1" "$O_BASE" "$m2"
+  # the same topology with a PR-side code file still pays the battery — the gate is not reject-everything
+  drive stale_code "$d"
+  expect_full "O-BASE stale merge-ref + PR-side code pays the battery"
+  check_eq "O-BASE stale+code: reason" "$N_REASON" "outside_surface"
+  # the mirror direction: the branch never synced the main-side commit the merge ref's first parent already
+  # carries — merge-base is BEHIND HEAD^1, and only the D..HEAD^2 pairing classifies the PR delta
+  drive behind "$d"
+  expect_lane "O-BASE behind merge-ref: lane classifies on the PR's own delta"
+  check_eq "O-BASE behind: files counts the PR delta only" "$N_FILES" "1"
+  m2=$(git -C "$FX/behind" merge-base 'HEAD^2' refs/heads/zzleak-pr-base)
+  check_eq "O-BASE behind: merge-base is behind HEAD^1 (precondition)" \
+    "$([ "$m2" != "$(git -C "$FX/behind" rev-parse 'HEAD^1')" ] && echo behind)" "behind"
+  check_eq "O-BASE behind: base_sha is the merge-base, behind HEAD^1" "$O_BASE" "$m2"
+  # every resolution failure is a named fail-closed arm, never a partial classification
+  drive accept "$d" "PR_BASE_REF=zzleak-no-such-ref"
+  expect_full "O-BASE an unresolvable live base fails closed"
+  check_eq "O-BASE missing remote ref: reason" "$N_REASON" "base_fetch"
+  drive unrel "$d"
+  expect_full "O-BASE an unrelated live base (empty merge-base) fails closed"
+  check_eq "O-BASE empty merge-base: reason" "$N_REASON" "no_merge_base"
+  drive accept "$d" "PR_BASE_REF=+refs/heads/x:refs/heads/y"
+  expect_full "O-BASE a refspec-shaped base ref is rejected before fetch"
+  check_eq "O-BASE refspec-shaped ref: reason" "$N_REASON" "bad_base_ref"
+  drive accept "$d" "PR_BASE_REF="
+  expect_full "O-BASE an empty base ref is rejected before fetch"
+  check_eq "O-BASE empty ref: reason" "$N_REASON" "bad_base_ref"
+  # the refs/heads/ pin: a hex- or tags/-shaped base.ref must never FETCH_HEAD outside the named branch
+  drive accept "$d" "PR_BASE_REF=0123456789012345678901234567890123456789"
+  expect_full "O-BASE a hex-shaped base ref cannot SHA-want outside refs/heads/"
+  check_eq "O-BASE hex ref: reason" "$N_REASON" "base_fetch"
+  drive accept "$d" "PR_BASE_REF=tags/v9"
+  expect_full "O-BASE a tags/-shaped base ref cannot dwim outside refs/heads/"
+  check_eq "O-BASE tags/ ref: reason" "$N_REASON" "base_fetch"
 }
 row_shape() {  # two-parent merge-ref only: octopus, non-merge HEAD, HEAD^2 != PR head, empty, shallow, not a repo
   local d="$1" b
@@ -1035,6 +1138,7 @@ _c0=$fails
 row_oracle_surface "$PRISTINE"
 row_shape_ok "$PRISTINE"
 row_shape "$PRISTINE"
+row_stale_base "$PRISTINE"
 row_exclusions "$PRISTINE"
 row_extent_out "$PRISTINE"
 row_elem_grammar "$PRISTINE"
@@ -1556,6 +1660,12 @@ mutate "O-MODES any mode is accepted"                           "$PRISTINE" "$(k
 mutate "O-PATH-CHARS control/odd characters accepted in a path" "$PRISTINE" "$(kill_guard O-PATH-CHARS)"     row_odd
 mutate "O-EMPTY-DIFF a zero-path diff classifies (the vacuous arm)" "$PRISTINE" "$(kill_guard O-EMPTY-DIFF)" row_empty
 mutate "O-DIFF a failed git diff is trusted anyway"             "$PRISTINE" 's/ || return 0/ # MUTATED/'    row_diff_error
+# #12418: the discriminating mutations — reverting either endpoint of the three-dot pair re-opens a
+# stale-base miscount the fix exists to close, and the stale/behind fixtures must see it.
+mutate "O-BASE the diff base reverts to the frozen HEAD^1"      "$PRISTINE" 's|\$(git merge-base HEAD\^2 FETCH_HEAD 2>/dev/null)|HEAD^1|' row_stale_base
+mutate "O-BASE the diff head reverts to the merge result"       "$PRISTINE" 's|diff_head="\$p2"|diff_head="HEAD"|' row_stale_base
+mutate "O-BASE the audit base_sha reverts to HEAD^1"            "$PRISTINE" 's|base_sha="\$diff_base"|base_sha="$p1"|' row_stale_base
+mutate "O-BASE-REF the base-ref grammar admits a refspec"       "$PRISTINE" 's|\^\[A-Za-z0-9\]\[A-Za-z0-9._/-\]\*\$|.*|' row_stale_base
 # the arm, the lock, the defaults
 mutate "O-SWITCH the exact-on compare becomes non-empty"        "$UNLOCKED"  's|= on \]|=~ ^on]|'            row_switch
 mutate "O-SWITCH any non-empty switch arms"                     "$UNLOCKED"  's|\[ "\${SWITCH:-}" = on \]|[ -n "${SWITCH:-}" ]|' row_switch

@@ -65,7 +65,7 @@ jobs:
     # from surfacing later as an unexplained timeout.
     # 15 -> 30 (#11215, CTO ruling 2026-10-29): runs 40776246270, 40702857885 and
     # 40587723911 were cancelled at the 15m ceiling because four slow probes
-    # (ci-draft-light-soak-9728, pr-battery-gate-saving-9323, ci-push-dedupe-soak-9512,
+    # (the #9728 draft-light soak, pr-battery-gate-saving-9323, ci-push-dedupe-soak-9512,
     # bearer-curl-s4-first-runs-9905) take 1.5-5 min each. Individual probes are now
     # capped at FT_PROBE_TIMEOUT (300s, scripts/sweep-followthroughs.sh); this job
     # ceiling must stay well above 300s x the number of slow probes.

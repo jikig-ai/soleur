@@ -48,6 +48,11 @@ import {
 } from "./tool-path-checker";
 import { patternEscapesWorkspace } from "./tool-pattern-checker";
 import { isPathInWorkspace } from "./sandbox";
+import {
+  createGitCarrierDenyReporter,
+  GIT_CARRIER_DENY_MESSAGE,
+  gitCarrierMatch,
+} from "./git-carrier-guard";
 import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
 import {
@@ -133,6 +138,7 @@ import {
   isBashCommandSafe,
   SAFE_BASH_PATTERNS,
   SAFE_BASH_NEAR_MISS_PREFIX,
+  firstRejectedGitFlag,
 } from "./safe-bash";
 export { isBashCommandSafe, SAFE_BASH_PATTERNS };
 
@@ -146,6 +152,8 @@ const NEAR_MISS_PER_CTX_BUDGET = 32;
 const NEAR_MISS_LEADING_TOKEN_MAX = 32;
 type NearMissState = { seen: Set<string>; emitted: number };
 const NEAR_MISS_STATE = new WeakMap<CanUseToolContext, NearMissState>();
+// #9600 — separate dedupe + budget for the git-flag fall-through event (same cap, own key space).
+const GIT_FALL_STATE = new WeakMap<CanUseToolContext, NearMissState>();
 
 // Safe UX-flow tools surfaced by the soleur plugin that carry no path
 // args and no command execution. Kept separate from `SAFE_TOOLS` in
@@ -387,6 +395,8 @@ const RESTORE_GUARD: StatusGuard = { onlyIfStatusIn: ["waiting_for_user"] };
 
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
+  // #9600 — one budgeted reporter per session for the `.git` file-tool deny below.
+  const reportGitCarrierDeny = createGitCarrierDenyReporter();
   // #9556 — one injection point for the deny→handoff flag: every support deny
   // path THAT ESCALATES calls `deny(`, which stamps the dispatch-resolved
   // repo-connected state onto the escalation record. (The deliberately
@@ -558,6 +568,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           { sec: true, toolName, inputKeys: Object.keys(toolInput) },
           "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
         );
+      }
+      // #9600 — layer 2 of the `.git` carrier guard (layer 1 is the PreToolUse sandbox hook). A write into any
+      // `.git` path plants a repo-local config that the auto-approved git reads would execute. The deny
+      // message is plain; the agent can still reach `git config` through Bash, which takes the review card.
+      const carrierMatch = gitCarrierMatch(toolName, toolInput, ctx.workspacePath);
+      if (carrierMatch) {
+        logPermissionDecision("canUseTool-file-tool", toolName, "deny", "git-carrier-path");
+        reportGitCarrierDeny(toolName, "canUseTool", carrierMatch);
+        return { behavior: "deny" as const, message: `${GIT_CARRIER_DENY_MESSAGE}${subagentCtx}` };
       }
       logPermissionDecision("canUseTool-file-tool", toolName, "allow");
       return allow(toolInput);
@@ -817,6 +836,44 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             extra: { leadingToken },
           });
         }
+      }
+
+      // #9600 — closed git-flag grammar fall-through telemetry. A `git log|diff|show` segment that missed
+      // the allowlist because of a flag outside GIT_READ_FLAG reaches the review card (or, for the support
+      // persona, a hard deny); one budgeted, deduped event per (verb, rejected flag) measures that UX cost
+      // so the list is widened by evidence (with a real-git table row), never by guess. Every `&&`
+      // segment is examined (a leading `cd repo &&` must not hide it), the reported flag is the first
+      // dash-token the grammar actually rejects, and its name is validated so agent-controlled text
+      // is bounded: `--flag=value` is cut at `=`, an attached short-flag value (`-Sneedle`) is cut to the flag
+      // letter, and a name that is not a plain flag name (<= 31 chars of [A-Za-z0-9-]) is reported as `other`.
+      // Own budget (not the near-miss one): a loop of unique git flags must not silence near-miss.
+      for (const segment of trimmedCmd.split("&&")) {
+        const gitFall = /^\s*git\s+(log|diff|show)(?=\s|$)([\s\S]{0,256})/.exec(segment);
+        if (!gitFall) continue;
+        // Examine only the git part of the segment (a pipe, `;`, redirect or substitution ends it) and drop
+        // a token cut by the 256-char cap, so a shell word or half a flag is never reported as a flag.
+        let tail = gitFall[2].split(/[|;&<>$`()\\\n\r]/)[0];
+        if (tail === gitFall[2] && gitFall[2].length === 256) tail = tail.replace(/\S+$/, "");
+        const rejected = firstRejectedGitFlag(tail);
+        if (rejected === null) continue;
+        const cut = /^-[^-]/.test(rejected) ? rejected.slice(0, 2) : rejected.split("=")[0];
+        const flag = /^--?[A-Za-z][A-Za-z0-9-]{0,30}$/.test(cut) ? cut : "other";
+        const key = `${gitFall[1]}:${flag}`;
+        let state = GIT_FALL_STATE.get(ctx);
+        if (!state) {
+          state = { seen: new Set(), emitted: 0 };
+          GIT_FALL_STATE.set(ctx, state);
+        }
+        if (state.emitted < NEAR_MISS_PER_CTX_BUDGET && !state.seen.has(key)) {
+          state.seen.add(key);
+          state.emitted += 1;
+          warnSilentFallback(null, {
+            feature: "cc-permissions",
+            op: "safe-bash-git-flag-fallthrough",
+            extra: { verb: gitFall[1], flag },
+          });
+        }
+        break;
       }
 
       // Support persona (#9539): a non-safe Bash command on a support turn
