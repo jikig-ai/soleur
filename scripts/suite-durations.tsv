@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1261
-# generated-at=2026-11-08T03:56:53Z
+# default-weight-ms=1272
+# generated-at=2026-11-09T16:40:25Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -193,7 +193,6 @@ plugins/soleur/test/ci-e2e-skip-anchors.test.sh	111	measured
 plugins/soleur/test/ci-head-verdict.test.sh	276015	measured
 plugins/soleur/test/ci-path-gating.test.sh	205	measured
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1222	floor
-# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)
 plugins/soleur/test/ci-pr-affected-replay-a	160004	measured
 plugins/soleur/test/ci-pr-affected-replay-b	399378	measured
 plugins/soleur/test/ci-pr-affected-replay-c	326172	measured
@@ -451,6 +450,8 @@ scripts/git-data-reboot-evidence-landed-8210	1324	measured
 scripts/git-data-rehearsal-evidence-8211	1222	floor
 scripts/git-data-replication-signal-11704	1222	floor
 scripts/guard-vacuity-floor	44880	measured
+scripts/host-kernel-cadence-12008	1272	floor
+scripts/host-tcp-exposure	1272	floor
 scripts/hosted-destroy-ask-window-9776	1222	floor
 scripts/hostname-mislabel-web1-6616	221	measured
 scripts/image-cve-db-pin	1223	floor
@@ -750,3 +751,4 @@ tests/scripts/zot-disk-sample	435	measured
 tests/scripts/zot-inventory	17903	measured
 tests/scripts/zot-inventory-assert-marker	3908	measured
 tests/scripts/zot-log-channel-probe	3650	measured
+# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)

@@ -4984,3 +4984,22 @@ AFFECTED_PLUGINS_SOLEUR_TEST_CI_PR_AFFECTED_REPLAY_C_PATHS=(
   "scripts/lib/test-affected-paths.sh"
 )
 
+
+# scripts/host-tcp-exposure (#12008): reads every Terraform file in the infra directory as TEXT (no host, no
+# network); a change to any of them can move the declared-design verdict, which the argv self-edge and the
+# name-stem convention cannot reach.
+AFFECTED_SCRIPTS_HOST_TCP_EXPOSURE_PATHS=(
+  "scripts/host-tcp-exposure.test.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "glob:apps/web-platform/infra/**.tf"
+)
+# scripts/host-kernel-cadence-12008 (#12008): its hygiene section reads the cadence runbook, the exposure suite and
+# the server name values in the infra Terraform; the probe itself is reached by the name-stem convention.
+AFFECTED_SCRIPTS_HOST_KERNEL_CADENCE_12008_PATHS=(
+  "scripts/followthroughs/host-kernel-cadence-12008.sh"
+  "scripts/lib/test-affected-paths.sh"
+  "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
+  "scripts/host-tcp-exposure.test.sh"
+  "knowledge-base/engineering/operations/runbooks/host-kernel-patch-cadence.md"
+  "glob:apps/web-platform/infra/**.tf"
+)
