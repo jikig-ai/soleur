@@ -16,6 +16,43 @@ lane: cross-domain
 
 # feat(relay): accept-only hello key slot and self-reporting GHCR push denials
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-10. **Sections enhanced:** B.1, C.1, C.2, User-Brand Impact, Observability, Guard Contract
+(Guards 1 to 4), and the Acceptance Criteria.
+
+**Agents used:**
+
+- the deterministic gates 4.6, 4.7, 4.8, 4.10, 4.11 and 4.12, a rule-id existence sweep and the technical-ruling gate,
+  all passing;
+- security-sentinel, test-design-reviewer, observability-coverage-reviewer, user-impact-reviewer;
+- a verify-the-negative and post-edit sweep;
+- CTO rulings D1 to D5, plus CLO (legal).
+
+Gates 4.5 (no network symptom), 4.55 (no reboot, replace, lock or drain change), 4.9 (no UI) and 4.13 (no new task
+surface) did not trigger. The machine is saturated, so the "run every agent" fan-out of Phase 5 was narrowed to the
+reviewers whose lens matches this plan. That is recorded as a deviation.
+
+### Key improvements
+
+1. **Build-record artifact upload is turned off on the release build step** (CTO D1). This is security hardening:
+   build records carry the step's build args, and this repository is public. An owner-side follow-up is tracked
+   privately (embargoed, CLO ruling 2026-11-10).
+2. **`denial=` is now an allowlist,** not a transformation (D2). Only a `denied: <code>: <reason>` fragment is ever
+   copied into the public log. A non-push build failure gets its own class, so it never sends the operator to Billing.
+3. **A planted accept-also slot now announces itself** with one warn event per boot (D3). The User-Brand Impact
+   section now names the leak window before #12538, and that onboarding is held only by the owner's decision (D4).
+4. **The planned tests can now go red.** That means per-rule fixtures, a strict-argv stub, the strict shell, fixtures
+   from a real registry denial, rows that mutate the code, and the both-compare spy row.
+5. **AC-P0 reads relay health over this PR's own roll.** Its rollback is an owner act.
+
+### New considerations discovered
+
+- The build-arg hardening relates to the open #7389. Any public note there waits for the owner-side follow-up (CLO
+  embargo).
+- The canary never prints a fingerprint row (it stops at `no_bind`). The fingerprint proves key state, not a serving
+  relay.
+
 ## Overview
 
 Follow-ups to PR #12462 (signed relay hello, ADR-323), merged as 289dcf6662 and deployed as v0.402.0. One PR, four parts:
@@ -197,7 +234,7 @@ Run 42707826766 (push arm, v0.402.0), step "Build and push Docker image" (`docke
   - `session-proxy-admission.test.ts`
   - `proxy-tls.test.ts`
   - `proxy-hello-key-isolation.test.ts`
-  - `proxy-deny-report.test.ts`
+  - `proxy-deny-report.test.ts` (run unchanged as a regression check; not edited, T1)
   - `server-index-boot-pin-line.test.ts`
 
 **Institutional learnings applied.**
@@ -259,9 +296,20 @@ Ruled by CTO agent, 2026-11-10 (B3, amended; plan-review rulings T1 to T6).
   - **Byte-equal to `current`:** **kept**, plus one **warn-level** Sentry event (`op: "proxy-hello.accept-also-equals-current"`).
     Accepting the current key twice is harmless, and `relay_hello_key_fp` then shows `accept_also == current`, which
     exposes the mistake (T2).
+  - **Well-formed and distinct from `current`:** kept, plus one **warn-level** event per boot,
+    `op: "proxy-hello.accept-also-active"`, with constant text and no value or fingerprint (Ruled by CTO agent,
+    2026-11-10, D3). The slot sits outside Terraform, so without this event a planted slot would be a silent second
+    key. The event is expected during a legitimate rotation.
   - **Set while `current` is `null`:** no extra event. The listener refuses to start and reports the existing
     `createProxyServer.no-hello-key`, and `acceptAlso` is never consulted (T6, dropping `no_current`).
 - Every event text is constant, with no value, length or prefix (`cq-silent-fallback-must-mirror-to-sentry`).
+  - Each op has its **own distinct message text**, because Sentry groups by message.
+  - `accept-also-ignored` goes through `reportSilentFallback`.
+  - `accept-also-equals-current` goes through `warnSilentFallback` (`server/observability.ts`) with `err = null`.
+  - Each fires once per process: the loader runs once and caches. A call-twice test row pins that.
+- **The returned key set is frozen and redacting** (security review). It defines `toJSON() { return "[proxy-hello-keys]" }`
+  and `[util.inspect.custom]`, so a stray log of the object never serializes the Buffers. An isolation-test row asserts
+  that neither `JSON.stringify` nor `util.inspect` of the result contains the fixture key's hex or byte list.
 
 **B.2 Verifier** (`apps/web-platform/server/proxy-hello.ts`):
 
@@ -386,54 +434,61 @@ Ruled by CTO agent, 2026-11-10 (C1-C3).
     # body in C.1 below; no ${{ }} inside run: (the release suites extract and execute it)
 ```
 
-- **Output.** It emits one stdout line, one `::error::` annotation and one `$GITHUB_STEP_SUMMARY` line, all in this
-  closed grammar:
-  `SOLEUR_GHCR_PUSH_FAILED image=<ref> version=<v> attempt=<n> run=<url> class=<denied_write_package|denied_other|unknown> denial=<text|see-step-log> runbook=knowledge-base/engineering/operations/runbooks/web-platform-release-image-push-failed.md`.
-  It also writes `class` and `attempt` to `$GITHUB_OUTPUT`.
-- **`denial=` source.** The work phase measures this first (the CTO marked it unverified). The runner's buildx is
-  v0.38.1, read from job 129469225249's "Buildx version" group; `setup-buildx-action` v3.12.0 pins no `version:`
-  here.
+- **Output.** The step emits one stdout line, one `::error::` annotation and one `$GITHUB_STEP_SUMMARY` line. The
+  summary line sits inside a backtick code span, so a URL in it never renders as a link. All three use this closed
+  grammar:
+  `SOLEUR_GHCR_PUSH_FAILED image=<ref> version=<v> attempt=<n|invalid> run=<url> class=<push_denied|push_other|not_push|unknown> denial=<registry-error|withheld|see-step-log> runbook=knowledge-base/engineering/operations/runbooks/web-platform-release-image-push-failed.md`.
+  - `attempt` must match `^[1-9][0-9]*$`; any other value becomes `invalid`.
+  - Only `class` and `attempt` go to `$GITHUB_OUTPUT`, and `class` is written only from literal `case` arms.
+  - `denial` is **never** written to `$GITHUB_OUTPUT` or the email (the email body is HTML).
+- **`denial=` source.** Ruled by CTO agent, 2026-11-10 (D2): an allowlist shape is the only safe policy for a public
+  log. The runner's buildx is v0.38.1, read from job 129469225249's "Buildx version" group; `setup-buildx-action`
+  v3.12.0 pins no `version:` here.
   - **Read only the error-message field** of the newest failed record:
     `timeout 10 docker buildx history ls --filter status=error --format json`, then
-    `timeout 10 docker buildx history inspect <ref> --format json | jq -r '<error-message field> // empty'`. The exact
-    field name is measured in Phase 4.
-  - **Never print anything else.** No arbitrary or pretty output, and no build-arg section. Reason (Kieran,
-    2026-11-10): `SENTRY_AUTH_TOKEN` is a build-arg of this job, a build record carries its build args, and character
-    replacement would defeat GitHub's secret masking.
-  - **No new permission and no network.**
-
-  Normalisation:
-  - keep the first line of the error field only;
-  - map CR and LF to `_`, so the text can never begin a line (workflow commands fire only at line start);
-  - collapse every run of two or more `:` to `_`;
-  - map every remaining character outside `[A-Za-z0-9 ._:/@-]` (including `%`) to `_`;
-  - cap at 300 characters.
-
-  The `class=` token is derived from the raw error field, before normalisation, so `denied: permission_denied:` still
-  matches.
-
-  If the history read fails or prints nothing, `denial=see-step-log`. This includes the case where no build ref exists
-  because the push failed before `build-push-action` recorded one. That path must still print a complete, valid
-  `SOLEUR_GHCR_PUSH_FAILED` line (`class=unknown`), and the step must exit 0. It is a Guard 4 must-PASS row.
-  `class=unknown` means "read the step log", not a different failure; the runbook and the email say so.
-- **`class=` derivation:**
-  - the text contains `denied: permission_denied: write_package` → `denied_write_package`;
-  - it contains `denied:` → `denied_other`;
-  - anything else, including `see-step-log` → `unknown`.
+    `timeout 10 docker buildx history inspect <ref> --format json | jq -r '<error-message field> // empty'`. Phase 4
+    measures the exact field name and the ordering of `ls`.
+  - **Never print anything else:** no pretty output and no build-arg section. `SENTRY_AUTH_TOKEN` is a build-arg of
+    this job, and a build record carries its build args.
+  - No new permission and no network.
+- **Classification of the raw first line of that field.** Nothing is ever transformed into `denial=`; only a matched
+  allowlisted fragment is copied.
+  - The line matches `^(ERROR: )?failed to push [^ ]+: (.*)$`, and the remainder matches `^denied: [a-z_]+: [a-z_]+$`
+    → `class=push_denied`, `denial=<that remainder>` (for v0.402.0: `denied: permission_denied: write_package`).
+  - The prefix matches but the remainder does not → `class=push_other`, `denial=withheld`.
+  - The prefix is absent (for example a failed `RUN npm run build`) → `class=not_push`, `denial=see-step-log`. The
+    runbook and the email say "not an image-push failure; this runbook does not apply; do not check Billing".
+  - The history read fails or returns nothing, including when no build ref exists → `class=unknown`,
+    `denial=see-step-log`. The step still prints a complete, valid line and exits 0 (a Guard 4 must-PASS row).
 - **What does not change.** No new `permissions:` and no secret read, so both callers and
   `reusable-release-caller-permissions.test.sh` are untouched. `continue-on-error: true` means the step can never
   change the job's verdict.
 - **Bounds.** `timeout-minutes: 1`. Without it, a hang would run to the job's 60-minute ceiling and end the job
   cancelled, and on a cancelled job the `if: failure()` email does not run (architecture review). The step only reads
   `VERSION`. It never writes `$GITHUB_ENV`, a tag or notes, so the version space is untouched.
+- **Stop uploading build records (CTO D1, hardening).** `docker/build-push-action` v6 uploads a build-record artifact
+  by default. Build records carry the step's build args, and this repository is public. The `docker_build` step
+  gains:
+
+  ```yaml
+  env:
+    DOCKER_BUILD_RECORD_UPLOAD: "false"
+    DOCKER_BUILD_SUMMARY: "false"
+  ```
+
+  A Guard 4 static row pins both, with a mutant that removes either one. A grep of every `docker/build-push-action`
+  use in `.github/workflows/` (`build-inngest-config-bundle.yml` and two uses in `ci.yml`, besides this one) found no
+  other secret build-arg: `ci.yml` passes placeholder values only. So the pair is needed only here. The marker's
+  `buildx history` read is runner-local and still works.
 - **The existing failure email.** "Email notification (release FAILED)" changes in two ways:
-  - **Re-run wording.** Its existing clause "so re-running this workflow is safe" becomes "so 'Re-run failed jobs' is
-    safe; a fresh 'Run workflow' dispatch is not (it loses the semver label)". As written, the clause reads as
-    permission for the dispatch the runbook forbids (spec-flow and Kieran).
+  - **Re-run wording.** The existing clause "so re-running this workflow is safe" becomes "so 'Re-run failed jobs' is
+    safe, on both the release run and the deploy-arm run; a fresh 'Run workflow' dispatch is not (it loses the semver
+    label)". As written, the old clause reads as permission for the dispatch the runbook forbids (spec-flow, Kieran,
+    CTO T6).
   - **One new conditional sentence.** It renders only when `steps.push_failed_marker.outputs.class` is non-empty:
-    "Image push failed (class `<class>`, attempt `<n>`; `unknown` means read the step log); see the runbook
-    `web-platform-release-image-push-failed.md`; first check Billing > Packages." Build it with `format()` inside the
-    existing single-quoted YAML scalar, with doubled `''`.
+    "Image step failed (class `<class>`, attempt `<n>`); see the runbook `web-platform-release-image-push-failed.md`;
+    for `push_denied` first check Billing > Packages." It carries the class and the attempt only, never `denial`. Build
+    it with `format()` inside the existing single-quoted YAML scalar, with doubled `''`.
 
   The step's `if: failure()` is unchanged.
 
@@ -445,7 +500,11 @@ the shape of `apply-web-platform-infra-red-run.md`. It carries:
   - A `SOLEUR_GHCR_PUSH_FAILED` annotation, or `gh run view <run> --log-failed | grep -F SOLEUR_GHCR_PUSH_FAILED`.
   - A deploy-arm run whose `resolve-target` failed with `release=skipped`. It carries no marker of its own.
   - During the gap, the prod version-drift alert is expected; it is not a separate incident.
-  - `class=unknown` means "read the step log", not a different failure.
+  - The classes:
+    - `push_denied` is a registry denial: check Billing > Packages first.
+    - `push_other` is a push failure whose registry text is withheld: read the step log.
+    - `not_push` is not an image-push failure, so this runbook does not apply and Billing is not the cause.
+    - `unknown` means the history was unreadable: read the step log.
 - **Residual: a cancelled or timed-out job emits neither the marker nor the email,** because `failure()` is false. The
   run's `cancelled` conclusion is the only signal. Read the push step's log before any re-run.
 - **First read, before anything else** (read-only; an agent can run it):
@@ -561,9 +620,15 @@ because the machine is saturated. CI is the gate. Scratch and logs go under `/va
      `--help` on buildx 0.38.1): `docker buildx history ls --filter status=error --format json` and
      `docker buildx history inspect <ref> --format json`. `setup-buildx-action` v3.12.0 pins no buildx version here, so
      the runner gets a current buildx.
-   - **The experiment:** on a throwaway `docker-container` builder under `/var/tmp`, build a two-line image and push it
-     to a closed localhost port, so the push fails. Then confirm that the record's error field carries the push error
-     text, and capture the JSON path the step will read.
+   - **The experiment.** On a throwaway `docker-container` builder under `/var/tmp`, build a two-line image and push it
+     to a local `registry:2` that has htpasswd and is given wrong credentials. That produces a real 401/403 denial.
+     Then:
+     - confirm the record's error field carries the `failed to push <ref>: ...` text;
+     - capture the JSON path the step will read;
+     - run two failed builds to measure the JSON-lines vs array shape of `ls` and its ordering;
+     - save sanitized fixtures, with any token replaced by a synthesized one.
+
+     Inspect artifacts through metadata only, never by downloading a secret-bearing record (CTO D1 dissent).
    - **If the field is absent or empty,** ship the fixed `denial=see-step-log` with `class=unknown` and name the residual
      in the PR body (AC-C4).
    - Then write `reusable-release-push-failed-marker.test.sh` (red), then the step.
@@ -674,28 +739,28 @@ error_reporting:
   fail_loud: true
 failure_modes:
   - mode: "hosts hold different CURRENT keys after a deploy (key drift)"
-    detection: "the two hosts' newest relay_hello_key_fp current= values differ; relay_hello_window denied>0 with Sentry reason mac"
-    alert_route: "Sentry bounded deny event (existing); fingerprint read in betterstack-log-query.md relay section"
+    detection: "layer 2 pino warn -> layer 3 vector app_container_warn_filter -> Better Stack: the two hosts' newest relay_hello_key_fp current= values (grouped by host_name) differ; layer 2 pino -> Sentry: bounded deny events with reason mac"
+    alert_route: "Sentry bounded deny event (existing); fingerprint read in betterstack-log-query.md relay section; these events page no one"
   - mode: "accept-also slot set but malformed"
-    detection: "one Sentry event op proxy-hello.accept-also-ignored reason=malformed; relay_hello_key_fp accept_also=none"
-    alert_route: "Sentry issue"
+    detection: "layer 2 pino -> Sentry: one event op proxy-hello.accept-also-ignored reason=malformed; layer 3 Better Stack: relay_hello_key_fp accept_also=none"
+    alert_route: "Sentry issue (pages no one; #12538 phase gate (e) reads it before each phase)"
   - mode: "accept-also slot equal to current (a rotation mistake)"
-    detection: "one warn Sentry event op proxy-hello.accept-also-equals-current; relay_hello_key_fp shows accept_also equal to current"
-    alert_route: "Sentry issue"
+    detection: "layer 2 pino -> Sentry: one warn event op proxy-hello.accept-also-equals-current; layer 3 Better Stack: relay_hello_key_fp shows accept_also equal to current"
+    alert_route: "Sentry issue (pages no one; #12538 phase gate (e) reads it before each phase)"
   - mode: "accept-also slot set outside a rotation window (a stale or planted slot)"
-    detection: "relay_hello_key_fp accept_also!=none outside a recorded rotation"
+    detection: "layer 3 Better Stack: relay_hello_key_fp accept_also!=none outside a recorded rotation; layer 2 pino -> Sentry: the per-boot slot-set event (decision row D3)"
     alert_route: "read rule in betterstack-log-query.md in this PR; a Better Stack alert is a #12538 requirement (B.7 (e))"
   - mode: "verifier regression refuses every hello"
-    detection: "relay_hello_window denied>0 with accepted=0 on the owner host; users on the peer host loop on 4014"
+    detection: "layer 2 pino warn -> layer 3 Better Stack: relay_hello_window denied>0 with accepted=0 on the owner host (AC-P0); layer 2 pino -> Sentry: bounded deny events; users on the peer host loop on 4014"
     alert_route: "Sentry bounded deny events (existing)"
   - mode: "GHCR image push denied"
-    detection: "SOLEUR_GHCR_PUSH_FAILED class=<...> attempt=<n> annotation in the push-arm run; email body sentence"
+    detection: "layer 6 GitHub Actions: SOLEUR_GHCR_PUSH_FAILED class=<...> attempt=<n> ::error:: annotation, run log and step summary in the push-arm run; the release-failed email sentence"
     alert_route: "release-failed email (Resend, existing) + run annotation"
 logs:
   where: "Better Stack Logs (container pino WARN+ via Vector) for the relay lines; GitHub Actions run log and step summary for the release marker"
   retention: "Better Stack source retention for 2457081; GitHub Actions default run-log retention (90 days)"
 discoverability_test:
-  command: "bash scripts/betterstack-query.sh --since 24h --grep relay_hello_key_fp"
+  command: "bash scripts/betterstack-query.sh --since 30d --grep relay_hello_key_fp"
   expected_output: "relay_hello_key_fp"
   credentials_required: "Better Stack read creds BETTERSTACK_QUERY_{HOST,USERNAME,PASSWORD}, injected by `doppler run -p soleur -c prd_terraform --` (the helper refuses without them) — host container logs have no unauthenticated reader"
 ```
@@ -711,6 +776,25 @@ discoverability_test:
   skew check on the accept-also path). That yields a token-less act-as-user session on the owner host
   (`attachProxiedSession`), which is account takeover. A logged fingerprint that leaks key bytes would be a second
   vector.
+- **This PR's own rolling deploy:** the slot is absent, so both images behave identically and there is no relay split.
+  If a verifier regression ships anyway, the symptom is the 4014 loop above. AC-P0 reads it after the roll: the agent
+  reads, and the owner decides any image rollback.
+- **The leak window before #12538 (deepen, user-impact reviewer):** until #12538 lands, a leaked
+  `PROXY_HELLO_HMAC_KEY` has no response and no kill switch. Containment is the pre-TLS allowlist only, so a forger
+  also needs a roster-host source address. web-2 already serves at LB weight 1. The only control that keeps external
+  users off is the owner's onboarding decision, tracked by the `--add-blocked-by 12538` link on #8211 (AC-S4). This PR
+  adds no technical onboarding gate; that is an operator scope decision (decision row D4).
+- **A planted accept-also slot:** a well-formed value written to Doppler `prd` as `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO`
+  would admit hellos forged under that value. The slot sits outside Terraform, so the HALT cannot see it. Detection: the
+  loader's per-boot event (decision row D3) and `relay_hello_key_fp accept_also!=none` (AC-P1). The alert is a #12538
+  requirement.
+- **Future rotations (scope-out to #12538):** a single-phase leak rotation accepts one stagger of 4014 loops for users
+  whose lease sits on the host not yet restarted. A routine single-phase rotation at `agent_sessions_live=0` carries a
+  check-then-act race with the same effect. Each rotation phase also clears every host's replay cache, a named ADR-323
+  residual: a hello captured before a restart can be replayed inside the skew window.
+- **A failed image push:** users stay on the previous image, and fixes are delayed, until the owner re-runs the failed
+  jobs. A fresh dispatch would also lose the semver label. A cancelled or timed-out push job emits neither the marker
+  nor the email (C.2 residual).
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** one forged hello is one user's account, so this sits above
   `aggregate pattern`. Live users are 0 today, but this code runs before the first external user.
@@ -739,13 +823,14 @@ At work time, `git grep` must show no other caller of `computeMac` with a loaded
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | Sender passes `acceptAlso` (or the key set) to `signProxyHello` | RED (the signed hello fails on a verifier holding only CURRENT; passing the set is a type error) |
+| 1 | Sender signs with `keys.acceptAlso ?? keys.current` (a mutation that compiles) | RED (the signed hello fails on a verifier holding only CURRENT) |
 | 2 | `createProxyServer` starts when `current` is `null` but `acceptAlso` is set (use `current ?? acceptAlso`) | RED |
 | 3 | Loader accepts a malformed accept-also value (drop `HELLO_KEY_RE` on the second read) | RED |
 | 4 | Accept-also path skips the replay check (return before `cache.checkAndInsert`) | RED (a replayed accept-also hello is admitted) |
 | 5 | Accept-also path skips the skew check | RED |
 | 6 | Own dispatch: the suite never exercises an accept-also accept (0 such rows) | RED (the suite asserts at least one accept-also accept and one `mac` refusal per run) |
 | 7 | Second member: a hello signed by a THIRD unrelated key while both slots are set | RED if admitted (it must be refused with `mac`) |
+| 8 | Short-circuit: compare `expectedAlso` only when the CURRENT compare fails | RED (extends the existing `timingSafeEqual` spy in `proxy-hello.test.ts`: with the slot set, a hello matching CURRENT gives exactly 2 calls; with the slot null it stays 1, so the existing row is unchanged) |
 
 **Harness rows.**
 
@@ -775,6 +860,7 @@ phases exist; the table is not a production definition.
 | 2 | Own dispatch: the pair loop iterates 0 pairs | RED (the suite asserts exactly 3 adjacent pairs x 2 directions = 6 round trips, plus 4 skip-case directions) |
 | 3 | Second member: P3 wrongly keeps the old key in the slot | RED (the P1→P3 skip case must be refused) |
 | 4 | The P2→P0 skip direction expected to pass | RED |
+| 5 | Code mutation: the verifier ignores `acceptAlso` | RED (P0→P2 and P3→P1 turn into `mac` refusals) |
 
 **Harness rows.**
 
@@ -800,9 +886,9 @@ this guard does not re-pin them.
 | # | Mutation | Expected |
 |---|---|---|
 | 1 | Remove `delete process.env.PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO` | RED (isolation test) |
-| 2 | Delete the accept-also variable only when it is well-formed (the deletion moves inside the shape branch) | RED (a malformed value stays in `process.env`) |
+| 2 | Delete the accept-also variable only when it is well-formed (the deletion moves inside the shape branch) | RED (a malformed value stays in `process.env`; this row lives in `proxy-tls.test.ts` beside the existing deletion rows, with the variable stubbed per row) |
 | 3 | Own dispatch: the isolation test's name list is empty | RED (the test asserts exactly the two names) |
-| 4 | Second member: add the accept-also name to `ALLOWED_SERVICE_ENV_VARS` while the CURRENT name stays correctly absent | RED |
+| 4 | Second member: add the accept-also name to `ALLOWED_SERVICE_ENV_VARS` while the CURRENT name stays correctly absent | RED (the isolation test's `ALLOWED_SERVICE_ENV_VARS.has` and `buildAgentEnv` rows are parametrized over both names) |
 
 **Harness rows.**
 
@@ -810,40 +896,59 @@ this guard does not re-pin them.
   RED.
 - **Must-PASS:** an unset accept-also variable (the default) passes with no Sentry event.
 
-### Guard 4 — the GHCR marker fires exactly on a failed push and never changes the verdict
+### Guard 4 — the GHCR marker fires exactly on a failed image step, never leaks, and never changes the verdict
 
-**Property.** When `docker_build` fails, exactly one closed-grammar `SOLEUR_GHCR_PUSH_FAILED` line is emitted with the
-run attempt. The step never runs on success, never fails the job, and its text cannot inject a workflow command.
+**Property.** When `docker_build` fails, exactly one closed-grammar `SOLEUR_GHCR_PUSH_FAILED` line is emitted, carrying
+the run attempt and a class. `denial=` carries only an allowlisted registry-error fragment. The step never runs on
+success and never fails the job, its text cannot inject a workflow command, and no build-arg value reaches any output.
 
 **Assembly.**
 
 - The one step `push_failed_marker` in `reusable-release.yml`: its `if:`, its position immediately after `docker_build`,
-  `continue-on-error`, its `env:` and its `run:` body.
-- The email step's one conditional sentence.
-- The extractor in `reusable-release-push-failed-marker.test.sh` (`extract_run_block` precedent).
+  `continue-on-error`, `timeout-minutes`, its `env:` and its `run:` body.
+- The `docker_build` step's `DOCKER_BUILD_RECORD_UPLOAD` / `DOCKER_BUILD_SUMMARY` env pair.
+- The email step's re-run wording and its one conditional sentence.
+- The test `reusable-release-push-failed-marker.test.sh`:
+  - it extracts the `run:` block with the `extract_run_block` precedent;
+  - it executes the block under `bash --noprofile --norc -eo pipefail`, as the zot suite does;
+  - it puts a strict-argv `docker` stub on PATH. The stub accepts exactly
+    `buildx history ls --filter status=error --format json` and `buildx history inspect <ref> --format json`, and
+    refuses anything else with exit 64 plus a refusal log, which the suite asserts is empty.
+
+**Fixtures** are captured from the Phase 4 experiment: a local `registry:2` with htpasswd and wrong credentials, so a
+real 401/403 push denial is observed, plus two failed builds to measure the JSON shape and ordering of `ls`. Any token
+in a captured fixture is replaced by a synthesized one (`cq-test-fixtures-synthesized-only`).
 
 **Mutation matrix:**
 
 | # | Mutation | Expected |
 |---|---|---|
-| 1 | `if:` becomes `failure()` only (fires on any earlier failure, e.g. JWT checks) | RED (static row pins the exact expression) |
+| 1 | `if:` becomes `failure()` only | RED (a static row pins the exact expression) |
 | 2 | Drop `continue-on-error: true` | RED |
 | 3 | Move the step after the zot mirror steps | RED (adjacency row) |
-| 4 | Normalisation keeps LF (or a `::` run), so a denial containing `\n::warning::x` forges a second workflow command | RED (fixture asserts exactly one output line starts with `::`, and it is the step's own `::error::SOLEUR_GHCR_PUSH_FAILED`) |
-| 4b | The `denial=` read prints a build record's build-arg section instead of only the error field | RED (fixture record carries a fake `SENTRY_AUTH_TOKEN=` build-arg; the token is absent from stdout, the summary and `$GITHUB_OUTPUT`) |
-| 4c | `timeout-minutes: 1` removed from the step | RED (static row) |
-| 4d | The email's "re-running this workflow is safe" wording restored | RED (static row pins "a fresh 'Run workflow' dispatch is not") |
-| 5 | Remove the 300-character cap | RED (400-character fixture) |
-| 6 | Own dispatch: the extractor returns an empty block and the behaviour rows run nothing | RED (suite asserts the block is non-empty and the stub `docker` was invoked) |
-| 7 | Second member: a second fixture record (an older failed build) placed after the newest one | RED if the step reads the older record's error (it must read the newest failed record only) |
+| 4a | Drop the CR → `_` mapping | RED (fixture: single-line `x\r::warning::y`) |
+| 4b | Keep more than the first line | RED (fixture: two-line error, `::warning::x` on line 2) |
+| 4c | The `denial=` copy bypasses the allowlist shape (copies the remainder whenever the prefix matches) | RED (fixture: `failed to push r: unexpected status 500 https://x/y?token=abc` must give `class=push_other denial=withheld`) |
+| 4d | The read prints a build record's build-arg section instead of only the error field | RED (the fixture record carries a synthesized `SENTRY_AUTH_TOKEN=` build-arg, which must be absent from stdout, the summary and `$GITHUB_OUTPUT`) |
+| 4e | Drop `--filter status=error` from the `ls` call | RED (the strict stub refuses with 64; the refusal log is non-empty) |
+| 4f | Drop `timeout 10`, or drop `timeout-minutes: 1` | RED (static rows) |
+| 4g | Remove `DOCKER_BUILD_RECORD_UPLOAD: "false"` or `DOCKER_BUILD_SUMMARY: "false"` from `docker_build` | RED (static rows, one per variable) |
+| 4h | `denial` written to `$GITHUB_OUTPUT` or into the email body | RED (static row: no `$GITHUB_OUTPUT` write and no email expression names `denial`) |
+| 4i | The email's old "re-running this workflow is safe" wording restored, or the conditional sentence rendered without the `class` output check | RED (static rows) |
+| 5 | Own dispatch: the extractor returns an empty block, or the stub is never invoked | RED (the suite asserts a non-empty block and at least one stub invocation) |
+| 6 | Second member: a second, older failed record placed after the newest one | RED if the step reads the older record's error (order measured in Phase 4) |
+| 7 | `attempt` taken unvalidated | RED (fixture `RUN_ATTEMPT=1;x` gives `attempt=invalid`) |
 | 8 | A `${{ }}` inside the `run:` body | RED |
 
 **Harness rows.**
 
-- Suite mutation: a stub `docker` that ignores its arguments. The class rows must still discriminate, so a stub that
-  makes every row `unknown` must go RED.
-- Must-PASS: a `denied:` line from a different registry message (`denied_other`). A history read that fails must give
-  `denial=see-step-log` with `class=unknown`.
+- **Suite mutation:** the stub ignores its argv. Row 4e must then go RED, which proves the stub is strict.
+- **Must-PASS (not the canonical v0.402.0 fixture):**
+  - a `RUN npm run build` failure line gives `class=not_push denial=see-step-log`;
+  - a failed history read gives `class=unknown denial=see-step-log`.
+
+  In both, rc is 0 and the line matches the full-grammar regex.
+- **The canonical row:** the v0.402.0 text gives `class=push_denied denial=denied: permission_denied: write_package`.
 
 ### Guard 5 — the fingerprint does not disclose key bytes
 
@@ -897,6 +1002,7 @@ only consumer.
 | `proxy-hello-rotation-phases.test.ts` | — | inferred — justification: the enforcement contract of the three-phase design; without it the reason the phases exist is untested (CTO guard row 4) |
 | C.1 marker step + email sentence; `reusable-release-push-failed-marker.test.sh` | ask 6 | asked |
 | C.2 runbook | asks 7, 9 | asked |
+| `DOCKER_BUILD_RECORD_UPLOAD`/`DOCKER_BUILD_SUMMARY` env pair on `docker_build` (C.1) | — | inferred — justification: safety. Public build records carry build args of the step C.1 reads; CTO D1 put the hardening in this PR |
 | #12538 tracking issue | ask 3 "minting the key outside Terraform" (the ruled second half) | asked |
 | #12539 tracking issue | ask 11 | asked (deferral needs a tracker, `wg-when-deferring-a-capability-create-a`) |
 | D post-merge read | ask 10 | asked |
@@ -918,12 +1024,16 @@ only consumer.
 
 - [ ] **AC-B1** (CPO 1): a hello signed with the accept-also key and replayed is refused with `replay`, and one outside
       +-30 s is refused with `skew` (`proxy-hello.test.ts`). Guard 1 rows 4 and 5.
-- [ ] **AC-B2** (CPO 2): with both keys set, the hello the sender emits verifies under CURRENT only and fails on a
-      verifier holding only the accept-also key (`session-proxy-hello.test.ts`). Guard 1 row 1.
+- [ ] **AC-B2** (CPO 2): with both keys set, the hello the sender emits verifies under CURRENT only, and it fails on a
+      verifier holding only the accept-also key, written `{ current: ACCEPT_KEY, acceptAlso: null }`
+      (`session-proxy-hello.test.ts`). Guard 1 row 1. A hello admitted through accept-also still gets the AP-2
+      membership deny when membership is false (pattern of the existing AP-2 row in `session-proxy-hello.test.ts`).
 - [ ] **AC-B3** (CPO 3): with the slot absent, the pre-existing rows of `proxy-hello.test.ts` (the known-answer vector
       included), `session-proxy.test.ts` and `session-proxy-hello.test.ts` keep their asserted values. The only edits to
       those rows are the key-set argument `{ current: KEY, acceptAlso: null }` and the loader's new name. The success
-      result shape `{ ok: true, userId, workspaceId }` is unchanged.
+      result shape `{ ok: true, userId, workspaceId }` is unchanged. Check: the `^-` lines of
+      `git diff origin/main...HEAD -- apps/web-platform/test/{proxy-hello,session-proxy,session-proxy-hello,proxy-tls,proxy-hello-key-isolation}.test.ts`,
+      after removing lines that contain `verifyProxyHello(` or `loadProxyHelloKey`, print nothing.
 - [ ] **AC-B4** (CPO 3): each loader state has its own test, which asserts relay behaviour and the exact Sentry events.
       Each event payload is scanned for the fixture key's hex and base64 forms, and they must be absent.
   - **Slot unset:** 0 events.
@@ -931,8 +1041,15 @@ only consumer.
     absent.
   - **Slot equal to current:** exactly 1 warn-level `proxy-hello.accept-also-equals-current` event, the slot is kept, and
     the fingerprint line shows equal values.
-  - **Slot set, current absent:** exactly 1 `createProxyServer.no-hello-key` event, 0 accept-also events, and no
-    listener.
+  - **Slot well-formed and distinct:** exactly 1 warn-level `proxy-hello.accept-also-active` event, with no value or
+    fingerprint in its payload.
+  - **Slot set and well-formed, current absent:** exactly 1 `createProxyServer.no-hello-key` event, 0 accept-also
+    events, and no listener.
+  - **Slot malformed, current absent:** exactly 1 `proxy-hello.accept-also-ignored` event (the loader runs first, at
+    boot) plus 1 `createProxyServer.no-hello-key` event, and no listener.
+  - **Call twice:** each state's events fire exactly once (cached loader).
+  - **Named spies:** `reportSilentFallback` and `warnSilentFallback` are named spies in both `proxy-tls.test.ts` and
+    `session-proxy-hello.test.ts`.
   - **Both unset:** exactly 1 `createProxyServer.no-hello-key` event.
 - [ ] **AC-B5** (CPO 4): `PROXY_HELLO_HMAC_KEY_ACCEPT_ALSO` is in `sensitive-keys.ts`. The isolation test proves it is
       absent from `process.env` after boot and from every child-env allowlist (Guard 3).
@@ -947,8 +1064,8 @@ only consumer.
 - [ ] **AC-B8**: ADR-323 is amended as in B.7 and cites #12538 and #12539. The `.tf` header, the HALT remediation line,
       `apply-web-platform-infra-job-rationale.md` and `betterstack-log-query.md` say the same. Check:
       `git grep -n '_PREVIOUS' -- apps/web-platform/infra/proxy-hello-hmac.tf .github/workflows/apply-web-platform-infra.yml knowledge-base/engineering/architecture/decisions/ADR-323-*.md knowledge-base/engineering/operations/runbooks/apply-web-platform-infra-job-rationale.md`
-      prints exactly the ADR-323 lines under `## Considered Options` that explain why `_PREVIOUS` was rejected, and no
-      other line.
+      prints only ADR-323 lines that fall between its `## Considered Options` heading and the next level-2 heading. A small
+      awk over the hit line numbers checks this mechanically.
 - [ ] **AC-B9**: the `relay_hello_key_changes` HALT's addresses, counter, forget/move counting and position are
       unchanged. `bash tests/scripts/test-destroy-guard-counter-web-platform.sh` and
       `bun test plugins/soleur/test/terraform-target-parity.test.ts` pass.
@@ -961,7 +1078,9 @@ only consumer.
   - the build-arg token fixture;
   - the LF-injection fixture;
   - the no-build-ref fallback;
-  - when `denial=` is measured, the v0.402.0 error text as a fixture, which yields `class=denied_write_package`.
+  - the `not_push` must-PASS row;
+  - the build-record env pair rows;
+  - the v0.402.0 error text as a fixture, which yields `class=push_denied denial=denied: permission_denied: write_package`.
 - [ ] **AC-C2**: the reusable `release` job's `permissions:` block is byte-identical to its merge-base copy. Compare the
       block in `git show "$(git merge-base origin/main HEAD)":.github/workflows/reusable-release.yml` with HEAD's.
       `bash plugins/soleur/test/reusable-release-caller-permissions.test.sh` passes unchanged.
@@ -1003,9 +1122,18 @@ only consumer.
 
 ### Post-merge (agent-runnable reads; the owner gates every write)
 
+- [ ] **AC-P0** (user-impact): over the roll window, from the deploy-arm start until 30 minutes after the second host
+      serves, there are no Sentry `createProxyServer.hello-deny` events with `reason=mac` or `reason=shape`, and no
+      owner-host `relay_hello_window` row with `denied>0` and `accepted=0`. If either appears, the agent stops and
+      reports with the counts. **Owner authorization line:** the image rollback dispatch is the owner's act; the agent
+      never runs it. Note: with no proxied session in the
+      window this read is empty, which is expected, not a pass signal. AC-P3 is the positive proof.
+
 - [ ] **AC-P1**: after the release deploys, run
       `doppler run -p soleur -c prd_terraform -- bash scripts/betterstack-query.sh --since 2h --grep relay_hello_key_fp`.
-      It must show one line per web host from this deploy, with the same `current=` value and `accept_also=none`.
+      Group the rows by `host_name` with `CONTAINER_NAME='soleur-web-platform'`, using the query shape of the relay
+      section of `betterstack-log-query.md` (archive union included). Each web host's newest row must be **newer than
+      that host's deploy time** (taken from the deploy-arm run's per-host deploy timestamps, not the time of the read), and all rows must show the same `current=` value and `accept_also=none`.
       Failure branches:
   - **Two `current=` values differ:** stop. File an issue referencing #8211. Do not roll back, because the key value did
     not change in this PR; it is pre-existing drift.

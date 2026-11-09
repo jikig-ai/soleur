@@ -20,24 +20,31 @@ CI is the gate. Scratch and logs go under `/var/tmp`.
 Each task starts with failing tests (`cq-write-failing-tests-before`).
 
 - [ ] 2.1 B.1 loader `loadProxyHelloKeys` (`server/proxy-tls.ts`): one cache, no wrapper.
-  - [ ] 2.1.1 Write failing rows in `test/proxy-tls.test.ts` for the AC-B4 loader states, and for the deletion of both
-        names.
+  - [ ] 2.1.1 Write failing rows in `test/proxy-tls.test.ts`:
+    - the AC-B4 loader states, including well-formed-and-distinct (`accept-also-active`), malformed with current absent,
+      and call-twice;
+    - named `reportSilentFallback` and `warnSilentFallback` spies;
+    - deletion of both names (the malformed-value deletion row lives here);
+    - the frozen key-set object redacts under `JSON.stringify` and `util.inspect`.
   - [ ] 2.1.2 Implement. Rename the three production callers: the `server/index.ts` boot call (same position), and the
         sender and server key reads in `server/session-proxy.ts`. Keep `__resetProxyHelloKeyForTests`. Update
         `test/server-index-boot-pin-line.test.ts`.
 - [ ] 2.2 B.2 key-set verifier and `helloKeyFingerprint` (`server/proxy-hello.ts`).
   - [ ] 2.2.1 Write Guard 1 and Guard 5 rows in `test/proxy-hello.test.ts`. The known-answer vector and the success
         result shape stay unchanged.
-  - [ ] 2.2.2 Implement. Both `timingSafeEqual` calls always run when the slot is set.
+  - [ ] 2.2.2 Implement. Both `timingSafeEqual` calls always run when the slot is set. Extend the existing spy row:
+        2 calls when the slot is set, 1 when it is null.
 - [ ] 2.3 B.3 call sites in `server/session-proxy.ts`. The sender signs with the current key only. The server starts
       only when a current key exists. The verifier receives the key set. Update the rows in
       `test/session-proxy-hello.test.ts` and `test/session-proxy.test.ts` (CPO conditions 1-3).
 - [ ] 2.4 B.5 `relay_hello_key_fp` warn line, emitted once from `createProxyServer` after the key check.
-- [ ] 2.5 B.6 name in `server/sensitive-keys.ts` and in `test/proxy-hello-key-isolation.test.ts` (Guard 3).
+- [ ] 2.5 B.6 add the name to `server/sensitive-keys.ts`, and parametrize `test/proxy-hello-key-isolation.test.ts` over both
+      names (Guard 3).
 - [ ] 2.6 Bump `BASELINE_DECLARED_PROBES` 96 → 97 in `plugins/soleur/test/preflight-discoverability-test.test.ts`. Add
       the `AFFECTED_PLUGINS_SOLEUR_TEST_REUSABLE_RELEASE_PUSH_FAILED_MARKER_TEST_SH_PATHS` entry to
       `scripts/lib/test-affected-paths.sh`.
-- [ ] 2.7 Create `test/proxy-hello-rotation-phases.test.ts` (Guard 2). It covers 6 adjacent round trips and 4
+- [ ] 2.7 Create `test/proxy-hello-rotation-phases.test.ts` (Guard 2), including the code-mutation row "the verifier
+      ignores `acceptAlso`". It covers 6 adjacent round trips and 4
       skip-case directions:
   - P2→P0 refused (`mac`);
   - P0→P2 accepted;
@@ -58,16 +65,22 @@ Each task starts with failing tests (`cq-write-failing-tests-before`).
         `runbooks/betterstack-log-query.md` (the fingerprint query, the `accept_also!=none` alarm rule and the AC-P1
         failure branches).
 - [ ] 2.10 C.1 marker step in `.github/workflows/reusable-release.yml`.
-  - [ ] 2.10.1 Measure locally, never by dispatch. Use a throwaway docker-container builder under `/var/tmp` and push
-        to a closed localhost port. Then find the error-message field in
+  - [ ] 2.10.1 Measure locally, never by dispatch. Use a throwaway docker-container builder under `/var/tmp`, and push to
+        a local `registry:2` with htpasswd and wrong credentials, so you see a real 401/403. Measure the shape and order
+        of `ls` over two failed builds, and save sanitized fixtures. Inspect artifacts by metadata only. Then find the error-message field in
         `docker buildx history inspect <ref> --format json` (buildx 0.38.1, the runner's version). Fall back to
         `see-step-log` if the field is absent.
-  - [ ] 2.10.2 Write `plugins/soleur/test/reusable-release-push-failed-marker.test.sh` red first (Guard 4). Include:
+  - [ ] 2.10.2 Write `plugins/soleur/test/reusable-release-push-failed-marker.test.sh` red first (Guard 4). Run it with a
+        strict-argv `docker` stub and `bash --noprofile --norc -eo pipefail`, with per-rule fixtures. Classes:
+        `push_denied`, `push_other`, `not_push`, `unknown`. Include:
     - the build-arg token fixture;
     - the LF-injection fixture;
     - the no-build-ref fallback;
     - the v0.402.0 error text.
-  - [ ] 2.10.3 Add the step, with `timeout-minutes: 1` and the JSON error field only. In the failure email:
+  - [ ] 2.10.3 Add `DOCKER_BUILD_RECORD_UPLOAD: "false"` and `DOCKER_BUILD_SUMMARY: "false"` as env on `docker_build`
+        (CTO D1). Then add the step, with `timeout-minutes: 1`, the JSON error field only and the allowlist
+        `denial=`. `denial` never goes to `GITHUB_OUTPUT` or the email; the summary line sits in a code span; `attempt`
+        is validated. In the failure email:
     - change the re-run wording to "'Re-run failed jobs' (on both the release run and the deploy-arm run) is safe; a
       fresh 'Run workflow' dispatch is not";
     - add the conditional sentence.
@@ -114,8 +127,11 @@ Each task starts with failing tests (`cq-write-failing-tests-before`).
   - `Closes #12167` only if AC-S3 passes, otherwise `Ref #12167`;
   - item D recorded as pre-existing.
 - [ ] 4.2 Run `gh issue edit 8211 --add-blocked-by 12538` (AC-S4), and post the epic comment on #8211 worded "in PR #12536, pending owner merge" (AC-S5).
-- [ ] 4.3 STOP BEFORE MERGE. Merging is owner-gated.
-- [ ] 4.4 After merge, agent reads only:
+- [ ] 4.3 The PR body keeps the D1 wording neutral (it says "hardening: build records carry build args"). Under the CLO
+      embargo, nothing names a run, an artifact or a token until the owner-side follow-up (D1-op) completes.
+- [ ] 4.4 STOP BEFORE MERGE. Merging is owner-gated.
+- [ ] 4.5 After merge, agent reads only:
+  - AC-P0: relay health over the roll window. The rollback dispatch is the owner's act.
   - AC-P1: fingerprint lines on both hosts;
   - AC-P2: the slot-state events, read only if a slot is set;
   - AC-P3: the deployed round trip is still open until a real session runs;
