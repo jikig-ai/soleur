@@ -5,7 +5,7 @@ date: 2026-11-07
 issue: 12197
 related: [12011, 12080, 12344, 12365, 12366]
 status: "CLO-AGENT V1 RULING, standing in for counsel on the operator's instruction. NOT a lawyer's opinion. Human-lawyer review owed."
-ruled_by: "soleur:legal:clo agent (two rounds, 2026-11-07; review round 1, 2026-11-08)"
+ruled_by: "soleur:legal:clo agent (two rounds, 2026-11-07; review round 1, 2026-11-08; review round 3, 2026-11-09)"
 text_sha256: "10d283e02d4543d291468750655bbaf4375f807a585cd5138724a362b993a287"
 text_version: "2026-11-07"
 ---
@@ -232,3 +232,11 @@ Ruled by CLO agent, 2026-11-08: a v1 internal ruling standing in for counsel on 
 - **R4 L7 concern.** Residual risk is small; #12080 must ship before 2031-11-07; when it ships, drop the "not yet built" sentences in the trio and in the text in a new version and a new Amended entry.
 - **R5 Pins.** No TC_VERSION bump and no re-acceptance (the Terms only). The three `LEGAL_DOC_SHAS` entries are re-pinned, the three mirrors are edited in lockstep, the `Last Updated` lines and all headings are untouched. A `November 8, 2026` Amended entry follows the November 6 entry in each document, with a `Superseded` marker under the November 6 entry. Public legal-document annotations carry no issue or pull request numbers, so the Amended entry and the marker omit them.
 - **R6 Deck wording** (code lifetime "about 10 minutes", first-ever terms text without "updated") is recorded in the same rulings file and applied in the card deck (#12366).
+
+## Review round 3 (2026-11-09): the CLO agent's rulings on the 16-seat panel's legal-wording findings (#12365, PR #12438)
+
+Ruled by CLO agent, 2026-11-09: a v1 internal ruling standing in for counsel on the operator's instruction of 2026-11-07; a human lawyer's review is still owed (#12365 stays open for it). The rulings are persisted verbatim, with the exact OLD and NEW strings, in `knowledge-base/project/specs/feat-one-shot-founder-acceptance-followups-12365/clo-review-round2-rulings.md` (that file is archived with the feature at ship; it then lives under `knowledge-base/project/specs/archive/`).
+
+- **Superseded 2026-11-09, as to the round 1 and round 2 statements that "the `approval-queue` flag is on for the Jikigai operator" (the marker under the L7 row and the "L7 superseded" bullet above):** the flag is on for every production workspace, not for the operator alone. The founder surface is limited by the configured founder id, not by the flag. The published sentence that the queue is not switched on for any workspace that Jikigai does not own was false and is replaced by a dated statement of the fact in all three documents and mirrors (R2-1d). The enabling gate for the approval queue is not discharged for a non-canary ON; that is recorded as a finding for the operator in the posture row, not as fixed.
+- **R2-1a/1b** status paragraph and status-check sentence no longer tie the queue or the status check to the operator. **R2-1c** the counts reader is disclosed as an aggregate reader, without saying "no personal data". **R2-1e** the monitoring-event list is exact per event kind; it supersedes the verbatim L2 sentence of round 1. **R2-1f** the Privacy Policy no longer refers to itself as "our Privacy Policy". **R2-1g/1h/1i** inline and block Superseded markers and a November 9, 2026 Amended entry that also lists the November 8 changes the earlier entry omitted.
+- DRAFT markers stay byte-identical; the new Amended entry carries one; no issue or pull request number appears in any new public annotation.
