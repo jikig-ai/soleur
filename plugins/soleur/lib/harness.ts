@@ -492,6 +492,8 @@ export function pollInstructions(harness: Harness): string {
         "  Pass `persistent: true` — the Monitor tool's `timeout_ms` DEFAULTS TO 5 MINUTES and",
         "  caps at 1 hour, while this script's default budget is 60 polls x 120s = 2 hours, so the",
         "  obvious invocation is killed after roughly one line.",
+        "  On a green BLOCKED armed PR the watch holds ~10 min and then reads the required-context set: the",
+        "  BLOCKED line is NOT the last line there, so wait for the process EXIT before stopping or re-arming it.",
         "  **It emits on every CHANGE, plus a heartbeat every `--heartbeat-every` polls (default 5)",
         "  when nothing changed.** Silence must never be the healthy signal — but emitting every",
         "  poll unconditionally is the opposite failure, since the Monitor tool auto-stops a watch",

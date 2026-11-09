@@ -88,6 +88,20 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
   Receipts:
   `knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/rerun/`.
 
+- 2026-11-08: the third re-ruling (the #9729 SCHEDULE term-2 window, run once the queue-cancel rate
+  settled) computed `computed=NO-GO reason=criterion-failed`: (a) fails the bound again —
+  point 2 of 398 (0.50%, passes), worst-case numerator 55 of 398 → cp95 bound 16.99% ≥ 12%
+  (the term-1 allowlist removed the `unclassified-job` bucket entirely — zero units vs 29 —
+  leaving 29 failed-job-without-fail-line and 23 unsettled suite legs as the whole
+  not-evaluable remainder); (b) passes (strict zero on pinned `404e4c626f`, accepted=1639);
+  (c) lands within-10% — per-full-run net 64.06 ≥ the 20.44 bar off a fresh 102.21 baseline,
+  but population-weighted by the test-scripts leg's 35.3% run share ≈ 19.76, inside the band
+  and under it; (d) passes. Window: 446 merge_group runs, 98 refused (75 failure, 23
+  cancelled), commits `4fba0d512e…c6cd57f31d`. Still nothing activated; the pre-activation
+  gate reads `ready=false missing=lock,artifacts,verdict,prereq5`; the retire-vs-schedule
+  call stays operator-owned per #10448. Receipts:
+  `knowledge-base/project/specs/archive/20261108-080602-feat-one-shot-ci-lever-residuals/receipts/r3/`.
+
 ## 3. Entry condition for a re-attempt (CTO ruling, ADR-276 amendment item 5)
 
 All of these, in this order:
@@ -141,6 +155,17 @@ python3 -I scripts/ci-pr-affected-replay.py aggregate "$OUT" --expect-commits 30
 python3 -I scripts/ci-pr-affected-replay.py cp-upper 0 300
 ```
 
+Adopting an orphaned collect's `--out` (a dead sibling session's still-running
+processes) requires TWO proofs before the dir is evidence, not one: the writer
+trees are byte-identical on the selector inputs (`ci-pr-affected-replay.py`,
+`test-all.sh`, `suite-durations{,-heavy}.tsv`, `suite-shard-legs.tsv`,
+`lib/test-relevance-paths.sh`), and every commit unit verifies per-idx
+`sha == rev_list(<window-tip>)[idx]` — a restart on a moved `origin/main`
+appends stale-window units whose `(kind, sha)` keys do NOT collide, so neither
+dedupe nor `check_complete`'s idx-contiguity catches them (2026-11-08 R3,
+`receipts/r3/adoption-note.md`). And kill any second concurrent writer first:
+two writers on one `--out` is the forbidden configuration.
+
 Read the output with these limits in mind (they are in the receipt too):
 
 - The commit population is survivorship-biased: every landed commit already passed the full battery on the identical tree.
@@ -160,12 +185,23 @@ Read the output with these limits in mind (they are in the receipt too):
   (`knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/cause.md`).
 - The ejections window listing `?event=merge_group&created=…` is the same GitHub search-index class as
   `?head_sha=`, and its `total_count` self-check cannot see a dropped run — the count is index-computed from
-  the same listing. A refused run the index dropped is absent from both the ejections file and the window
-  count, so the refused-merge_group population can be silently under-counted; the ejections are the only
-  population that can hold an escape, so an under-count biases the cp95 bound toward a false GO. Tracked as
-  #12428; recorded-not-built per the 2026-11-08 CTO ruling (row 4 of
-  `knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/decision-challenges.md`),
-  because no per-sha non-search read exists to pin a window listing against.
+  the same listing. Built per the 2026-11-08 CTO ruling (#12428): `ejections` corroborates the listing two
+  ways. (i) The **landed-sha arm** enumerates every merge_group ci.yml run whose `head_sha` is a landed
+  first-parent commit of the window through the commit-keyed `commits/{sha}/check-suites` → `check-runs`
+  join (github-actions suites on `gh-readonly-queue/` branches only, `total_count == seen` guarded), then
+  unions the runs the index dropped into the population — a corroborated `success` is a `by_pr`/cleared()
+  witness only (never a unit, or n would inflate), a corroborated non-success is a refused unit marked
+  `runs_via=check-runs-window`. (ii) The **queue-event oracle** bounds the refused count below per PR:
+  in-window `added_to_merge_queue` issue-timeline events vs distinct `pr-N-*` `head_branch` names observed;
+  each shortfall and each failed corroboration/timeline read is one `not-evaluable` synthetic unit
+  (`queue-oracle:`/`corroboration-read:`/`queue-oracle-read:`). `ejections-window.json` records
+  `corroborated`, `queue_oracle` and `expected_units`, and `aggregate` refuses (rc 2) a unit count that
+  does not match — old manifests still check against `refused`. THREE recorded residuals remain: an
+  `added_to_merge_queue` entry removed before the queue spawned a run over-counts expected (the
+  conservative worst_case direction); a queued PR whose EVERY run the index dropped is invisible to both
+  arms (events cannot name a branch nobody listed); and at a window edge `observed` can exceed in-window
+  adds — a pre-window add whose run landed in-window — so `max(0, added - observed)` can mask a partial
+  index drop there (CTO AMEND: the bound is necessary, not sufficient).
 
 ## 5. The four criteria and the verdict
 

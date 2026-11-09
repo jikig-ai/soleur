@@ -74,7 +74,7 @@ done
 # the registered-range re-split land in the same commit, because the B > DECLARED_TOTAL bound
 # refuses a range this file cannot execute. No flag runs every site — `--rows N-N` is the
 # cheap way to iterate on a single site locally.
-DECLARED_TOTAL=485   # top-level `^mutate ` call sites; ctl-* controls run ungated
+DECLARED_TOTAL=499   # top-level `^mutate ` call sites; ctl-* controls run ungated
 ROWS_UNIT=sites
 # shellcheck source=scripts/lib/rows-range.sh
 source "$SCRIPT_DIR/../../../scripts/lib/rows-range.sh"
@@ -236,6 +236,38 @@ jobs_body() {  # jobs_body <runid> then id:name:conclusion   (JOBS_TOTAL pins a 
     printf '{"id":%s,"name":"%s","conclusion":"%s"}' "$id" "$name" "$concl"
   done
   printf ']}'
+}
+suites_path() { printf 'repos/%s/commits/%s/check-suites?per_page=100' "${REPO_NAME:-$R}" "$1"; }
+suites_body() {  # suites_body then id:app-slug:head_branch per suite
+  local first=1 item id slug br
+  printf '{"total_count":%s,"check_suites":[' "$#"
+  for item in "$@"; do
+    IFS=: read -r id slug br <<<"$item"
+    [ "$first" = 1 ] || printf ','; first=0
+    printf '{"id":%s,"app":{"slug":"%s"},"head_branch":"%s"}' "$id" "$slug" "$br"
+  done
+  printf ']}'
+}
+checkruns_join_body() {  # checkruns_join_body then check_suite_id:details_url per check-run
+  local first=1 item sid u
+  printf '{"total_count":%s,"check_runs":[' "$#"
+  for item in "$@"; do
+    IFS=: read -r sid u <<<"$item"
+    [ "$first" = 1 ] || printf ','; first=0
+    printf '{"details_url":"%s","check_suite":{"id":%s}}' "$u" "$sid"
+  done
+  printf ']}'
+}
+timeline_path() { printf 'repos/%s/issues/%s/timeline?per_page=100' "${REPO_NAME:-$R}" "$1"; }
+ann_path() { printf 'repos/%s/check-runs/%s/annotations?per_page=100' "${REPO_NAME:-$R}" "$1"; }
+mgd() {  # mgd <id> <conclusion> <created-day> <head_sha> <head_branch> [attempt]: a merge_group run detail
+  printf '{"id":%s,"event":"merge_group","conclusion":"%s","run_attempt":%s,"created_at":"2031-01-%02dT00:00:00Z","head_sha":"%s","path":".github/workflows/ci.yml","head_branch":"%s"}' "$1" "$2" "${6:-1}" "$3" "$4" "$5"
+}
+empty_suites() {  # a landed commit that bypassed the queue: zero github-actions queue suites is a recorded zero
+  printf '{"total_count":0,"check_suites":[]}' | fx "$(suites_path "$1")"
+}
+empty_timelines() {  # empty_timelines <pr>...: no in-window queue events -> the oracle adds nothing
+  local p; for p in "$@"; do printf '[]' | fx "$(timeline_path "$p")"; done
 }
 
 # c1 clean merge_group; c2 failing selected suite; c3 failing would-skip suite (unverified); c4 e2e failure;
@@ -501,6 +533,10 @@ for rid in 8006 8007 8008; do
   jobs_body "$rid" "95${rid}1:test-scripts (1/8):failure" | fx "$(jobs_path "$rid")"
   printf '[FAIL] scripts/suitex (90ms) log=/l/x.log\n' | fx "$(log_path "95${rid}1")"
 done
+# the window corroboration enumerates every first-parent commit's queue-branch suites (zero here:
+# recorded zeros, so the listing alone is the population) and the oracle reads one timeline per distinct PR
+while read -r c; do empty_suites "$c"; done < <(gitq -C "$REPO" rev-list --first-parent origin/main)
+empty_timelines 11 12 13 14 15 16 17
 rm -rf "$OUT"; mkdir -p "$OUT"
 : > "$GHLOG"
 run_sut ejections --out "$OUT" --since "$since" --repo "$R" > "$SANDBOX/ej.out" 2>&1; rc=$?
@@ -592,6 +628,10 @@ print(json.dumps({'files': [{'filename': 'big/f%d.md' % i, 'sha': 's%d' % i} for
 f2 130 doc/m.md blobM2; jobs_body 8130 "95341:mystery-job:failure" | fx "$(jobs_path 8130)"
 # a failing job the #12089 umbrella fold removed from ci.yml (an aggregate member token): classified via FOLDED_JOBS, never unclassified
 f2 133 doc/fj.md blobFJ; jobs_body 8133 "95343:rule-body-lint:failure" | fx "$(jobs_path 8133)"
+# corroboration: the eight window commits carry zero queue suites (recorded zeros); the oracle reads
+# one empty timeline per distinct pr-N branch in the window (21-29 and 31-46; the weird branches name no PR)
+while read -r c; do empty_suites "$c"; done < <(gitq -C "$REPO" rev-list --first-parent origin/main)
+empty_timelines 21 22 23 24 25 26 27 28 29 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46
 rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
 run_sut ejections --out "$OUT" --since "$since" --repo "$R2" > "$SANDBOX/ej2.out" 2>&1; rc=$?
 E2="$OUT/units-ejections.jsonl"
@@ -623,6 +663,198 @@ done
 [[ "$(cls_of 133 | cut -d' ' -f1)" = rule-irrelevant && "$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')" = folded-job ]] && pass "a failing folded job name (an umbrella member token) is classified folded-job and lands rule-irrelevant, never not-evaluable" || fail "folded job: $(cls_of 133) note=$(unit_field "$E2" "$(SHA 133)" '.failing[0].note')"
 [[ "$(cls_of 131)" == "not-evaluable files: "* ]] && pass "a changed-file list of exactly 3000 files is the API's cap: truncated, so the unit is not-evaluable (never a shortened selector input)" || fail "3000-file cap: $(cls_of 131)"
 ! grep -q STUB-MISS "$GHLOG" && pass "the second window made no request the stub does not know" || fail "second window unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
+REPO_NAME=""
+
+echo "== ejections: the window corroboration and the queue oracle (#12428)"
+R5=jikig-ai/fifth
+REPO_NAME="$R5"
+SH60=6060606060606060606060606060606060606060; SH61=6161616161616161616161616161616161616161
+SH63=6363636363636363636363636363636363636363
+# three listed failures — 8602 and 8603 share ONE queue branch (a re-run pair: observed side is distinct
+# branch names, never run ids)
+mg_runs "$(mgrun 8601 failure 3 "$SH60" 60),$(mgrun 8602 failure 4 "$SH61" 61),$(mgrun 8603 failure 5 "$SH63" 61)" 3 \
+  | fx "repos/$R5/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+cfiles "$(cfile doc/m.md blobM)" | fx "repos/$R5/commits/$SH60?per_page=100"
+cfiles "$(cfile doc/n.md blobN)" | fx "repos/$R5/commits/$SH61?per_page=100"
+cfiles "$(cfile doc/o.md blobO)" | fx "repos/$R5/commits/$SH63?per_page=100"
+jobs_body 8601 "96801:test-scripts (1/8):failure" "96802:test:failure" | fx "$(jobs_path 8601)"
+printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path 96801)"
+jobs_body 8602 "96803:e2e:failure" | fx "$(jobs_path 8602)"
+jobs_body 8603 "96804:test-scripts (1/8):failure" | fx "$(jobs_path 8603)"
+printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path 96804)"
+# C[1]: one queue suite (501), one push suite (502), one third-party suite (503). Their check-runs name
+# run 8651 (merge_group success on this landed sha — the index dropped it: it joins by_pr and clears the
+# would-skip 8601 by identical content), 8652 (push run — event-filtered after the read), 8653 (a
+# merge_group run under the third-party suite — never fetched) and 8655 (a merge_group failure under the
+# PUSH suite — never fetched either: the queue-branch filter is what bounds the join)
+suites_body "501:github-actions:gh-readonly-queue/main/pr-60-x" "502:github-actions:main" "503:claude:gh-readonly-queue/main/pr-60-y" | fx "$(suites_path "${C[1]}")"
+checkruns_join_body "501:https://github.com/$R5/actions/runs/8651/job/1" "502:https://github.com/$R5/actions/runs/8652/job/1" "503:https://github.com/$R5/actions/runs/8653/job/1" "502:https://github.com/$R5/actions/runs/8655/job/1" | fx "$(checkruns_path "${C[1]}")"
+cfiles "$(cfile doc/m.md blobM)" | fx "repos/$R5/commits/${C[1]}?per_page=100"
+mgd 8651 success 6 "${C[1]}" gh-readonly-queue/main/pr-60-zzz | fx "$(rundetail_path 8651)"
+printf '{"id":8652,"event":"push","conclusion":"success","run_attempt":1,"created_at":"2031-01-06T00:00:00Z","head_sha":"%s","path":".github/workflows/ci.yml","head_branch":"main"}' "${C[1]}" | fx "$(rundetail_path 8652)"
+mgd 8653 failure 6 "${C[1]}" gh-readonly-queue/main/pr-60-yyy | fx "$(rundetail_path 8653)"
+mgd 8655 failure 6 "${C[1]}" gh-readonly-queue/main/pr-63-m | fx "$(rundetail_path 8655)"
+# C[2]: one queue suite naming a merge_group FAILURE the index dropped — a refused unit via check-runs-window
+suites_body "504:github-actions:gh-readonly-queue/main/pr-62-b" | fx "$(suites_path "${C[2]}")"
+checkruns_join_body "504:https://github.com/$R5/actions/runs/8654/job/1" | fx "$(checkruns_path "${C[2]}")"
+cfiles "$(cfile doc/p.md blobP)" | fx "repos/$R5/commits/${C[2]}?per_page=100"
+mgd 8654 failure 7 "${C[2]}" gh-readonly-queue/main/pr-62-q | fx "$(rundetail_path 8654)"
+jobs_body 8654 "96854:e2e:failure" | fx "$(jobs_path 8654)"
+# C[3]: the check-suites read itself fails — one synthetic corroboration-read unit, never a silent skip
+fx_err "$(suites_path "${C[3]}")"
+for c in "${C[0]}" "${C[4]}" "${C[5]}" "${C[6]}" "$(gitq -C "$REPO" rev-list --first-parent origin/main | tail -1)"; do empty_suites "$c"; done
+# the oracle: pr-60 adds two entries and two branches were observed (8601's pr-60-base + corroborated
+# pr-60-zzz) -> bound met; pr-61 added twice but only ONE branch was observed (the re-run pair) -> one
+# shortfall unit; pr-62's timeline read fails -> one oracle-read unit. An out-of-window add is ignored.
+printf '[{"event":"added_to_merge_queue","created_at":"2031-01-03T00:00:00Z"},{"event":"added_to_merge_queue","created_at":"2031-01-06T00:00:00Z"},{"event":"added_to_merge_queue","created_at":"2030-12-31T00:00:00Z"},{"event":"removed_from_merge_queue","created_at":"2031-01-06T01:00:00Z"}]' | fx "$(timeline_path 60)"
+printf '[{"event":"added_to_merge_queue","created_at":"2031-01-04T00:00:00Z"},{"event":"added_to_merge_queue","created_at":"2031-01-05T00:00:00Z"}]' | fx "$(timeline_path 61)"
+fx_err "$(timeline_path 62)"
+EJ5="$SANDBOX/ej5"
+ej5_run() {  # re-run the corroboration window into a fresh dir with the SUT under test; sets E5, W5
+  REPO_NAME="$R5"; rm -rf "$EJ5"; mkdir -p "$EJ5"; : > "$GHLOG"
+  run_sut ejections --out "$EJ5" --since "$since" --repo "$R5" > "$SANDBOX/ej5.out" 2>&1
+  E5="$EJ5/units-ejections.jsonl"; W5="$EJ5/ejections-window.json"; REPO_NAME=""
+}
+ej5_run; rc5=$?
+REPO_NAME="$R5"   # ej5_run clears it on return; it stays "$R5" until the reqs() calls below are done
+[[ "$rc5" -eq 0 && "$(wc -l < "$E5")" -eq 7 ]] && pass "the union population: 3 listed failures + 1 corroborated refusal + 1 corroboration-read + 1 oracle shortfall + 1 oracle-read = 7 units" || fail "corroboration window (rc=$rc5, lines=$(wc -l < "$E5" 2>/dev/null)): $(tail -3 "$SANDBOX/ej5.out")"
+[[ "$(unit_field "$E5" "$SH60" .cls)" = flake-cleared ]] && pass "an index-dropped SUCCESS run joins by_pr and clears the would-skip unit by identical content" || fail "corroborated witness clear: $(unit_field "$E5" "$SH60" '.cls+" "+.reason')"
+[[ -z "$(unit_field "$E5" "${C[1]}" .sha)" ]] && pass "the corroborated success is a clearing witness only — never a unit (a clean unit would dilute the cp95 bound)" || fail "a corroborated success run was written as a unit"
+[[ "$(unit_field "$E5" "${C[2]}" '.cls+" "+.runs_via')" = "rule-irrelevant check-runs-window" ]] && pass "an index-dropped REFUSED run is a classified unit with runs_via=check-runs-window" || fail "corroborated refusal: $(unit_field "$E5" "${C[2]}" '.cls+" "+(.runs_via//"-")')"
+[[ "$(unit_field "$E5" "corroboration-read:${C[3]}" '.cls+" "+.reason')" == not-evaluable\ corroboration-read:* ]] && pass "a failed per-commit corroboration read is one counted synthetic unit" || fail "corroboration-read unit: $(unit_field "$E5" "corroboration-read:${C[3]}" '.cls')"
+[[ "$(unit_field "$E5" "queue-oracle:pr-61-1" '.cls+" "+.reason')" == "not-evaluable queue-oracle-shortfall: pr-61 added=2 branches=1" ]] && pass "two queue adds against one observed branch yields one shortfall unit (re-runs share the branch)" || fail "shortfall unit: $(unit_field "$E5" "queue-oracle:pr-61-1" '.reason')"
+[[ "$(unit_field "$E5" "queue-oracle-read:pr-62" .cls)" = not-evaluable ]] && pass "a failed timeline read is one oracle-read unit, not a voided window" || fail "oracle-read unit: $(unit_field "$E5" "queue-oracle-read:pr-62" '.cls')"
+[[ "$(jq '.corroborated.commits' "$W5")" -eq 8 && "$(jq '.corroborated.merge_group_on_landed' "$W5")" -eq 2 && "$(jq '.corroborated.missing_refused' "$W5")" -eq 1 && "$(jq '.corroborated.read_failures' "$W5")" -eq 1 ]] \
+  && pass "the window json records the corroboration census (all 8 first-parent commits enumerated, 2 landed runs found, 1 refused missing, 1 read failure)" || fail "corroborated block: $(jq -c .corroborated "$W5")"
+[[ "$(jq '.queue_oracle.shortfall' "$W5")" -eq 1 && "$(jq '.queue_oracle.read_failures' "$W5")" -eq 1 && "$(jq '.expected_units' "$W5")" -eq 7 ]] \
+  && pass "the window json records the oracle counts and expected_units = refused + shortfall + read failures" || fail "oracle block: $(jq -c '{q:.queue_oracle,e:.expected_units}' "$W5")"
+[[ "$(reqs "$(rundetail_path 8653)")" -eq 0 && "$(reqs "$(rundetail_path 8655)")" -eq 0 && "$(reqs "$(rundetail_path 8652)")" -eq 0 ]] \
+  && pass "the join bounds run reads to queue-branch suites: third-party and push-branch check-runs are never fetched" || fail "join bounds (8652=$(reqs "$(rundetail_path 8652)") 8653=$(reqs "$(rundetail_path 8653)") 8655=$(reqs "$(rundetail_path 8655)"))"
+REPO_NAME=""
+run_sut aggregate "$EJ5" > "$SANDBOX/ej5-agg.out" 2>&1; rc=$?
+[[ "$rc" -eq 0 ]] && pass "aggregate accepts the union: 7 units against expected_units 7" || fail "aggregate on the corroborated window (rc=$rc): $(tail -3 "$SANDBOX/ej5-agg.out")"
+! grep -q STUB-MISS "$GHLOG" && pass "the corroboration window made no request the stub does not know" || fail "corroboration window unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
+row_corr_join() { ej5_run; [[ -z "$(unit_field "$E5" "${C[1]}" .sha)" && "$(wc -l < "$E5")" -eq 7 ]]; }
+row_corr_branch() { ej5_run; [[ -z "$(jq -r 'select((.run//{}).id==8655) | .sha' "$E5")" ]]; }
+row_corr_readfail() { ej5_run; [[ "$(unit_field "$E5" "corroboration-read:${C[3]}" .cls)" = not-evaluable ]]; }
+row_corr_census() { ej5_run; [[ "$(jq '.corroborated.commits' "$W5")" -eq 8 && "$(jq '.corroborated.merge_group_on_landed' "$W5")" -eq 2 ]]; }
+row_oracle_branches() { ej5_run; [[ "$(unit_field "$E5" "queue-oracle:pr-61-1" .cls)" = not-evaluable ]]; }
+row_oracle_expected() { ej5_run; run_sut aggregate "$EJ5" >/dev/null 2>&1; [[ $? -eq 0 ]]; }
+FO="$SANDBOX/stale-oracle"; mkdir -p "$FO"
+{ mkunit 1 e1 9 unverified would-skip-suite-failed h9; mkunit 2 "queue-oracle:pr-9-1" 9 not-evaluable queue-oracle-shortfall h9; mkunit 3 "queue-oracle:pr-9-2" 9 not-evaluable queue-oracle-shortfall h9; } > "$FO/units-ejections.jsonl"
+printf '{"since":"2031-01-01T00:00:00Z","until":"2031-01-09T00:00:00Z","runs":10,"refused":1,"conclusions":{"failure":1},"expected_units":2}\n' > "$FO/ejections-window.json"
+run_sut aggregate "$FO" >/dev/null 2>&1; rc=$?
+[[ "$rc" -eq 2 ]] && pass "aggregate refuses a stale population: three units on file against expected_units 2" || fail "stale oracle units (rc=$rc)"
+REPO_NAME=""
+
+echo "== classifier: widened FAIL_LINE, mid-termination, comms-loss, the unsettled-leg witness (#12444)"
+R6=jikig-ai/sixth
+REPO_NAME="$R6"
+SH71=7171717171717171717171717171717171717171; SH72=7272727272727272727272727272727272727272
+SH73=7373737373737373737373737373737373737373; SH74=7474747474747474747474747474747474747474
+SH75=7575757575757575757575757575757575757575; SH76=7676767676767676767676767676767676767676
+SH77=7777777777777777777777777777777777777777; SH78=7878787878787878787878787878787878787878
+SH80=8080808080808080808080808080808080808080; SH81=8181818181818181818181818181818181818181
+mg_runs "$(mgrun 8701 failure 1 "$SH71" 71),$(mgrun 8702 cancelled 2 "$SH72" 72),$(mgr2 8703 failure 3 "$SH73" 2 "$(qb 73)"),$(mgr2 8704 failure 4 "$SH74" 2 "$(qb 74)"),$(mgrun 8705 failure 5 "$SH75" 75),$(mgrun 8706 success 6 "$SH76" 75),$(mgrun 8707 failure 6 "$SH77" 77),$(mgr2 8708 failure 7 "$SH78" 2 "$(qb 78)"),$(mgrun 8710 failure 8 "$SH80" 80),$(mgr2 8711 failure 9 "$SH81" 2 "$(qb 81)")" 10 \
+  | fx "repos/$R6/actions/workflows/ci.yml/runs?event=merge_group&created=X&per_page=100"
+for s in 71 72 73 74 75 76 77 78 80 81; do eval "cfiles \"\$(cfile doc/cx.md blobCX)\" | fx \"repos/$R6/commits/\$SH$s?per_page=100\""; done
+# 8701: a [FAIL] label with spaces and brackets — the widened charset extracts it whole
+jobs_body 8701 "97011:test-scripts (1/8):failure" "97012:test:failure" | fx "$(jobs_path 8701)"
+printf '[FAIL] apps/web-platform [repo-wide+component] (90485ms) log=/l/w.log\n' | fx "$(log_path 97011)"
+# 8702: a cancelled leg with no witness anywhere -> unsettled-jobs
+jobs_body 8702 "97021:test-webplat (1/2):cancelled" "97022:test:failure" | fx "$(jobs_path 8702)"
+# 8703 (attempt 2): two unsettled legs, only one witnessed in attempt 1 -> stays unsettled (partial witness is no clearance)
+jobs_body 8703 "97031:test-scripts (1/8):cancelled" "97032:test-bun (1/2):cancelled" "97033:e2e:failure" | fx "$(jobs_path 8703)"
+jobs_body 8703 "97034:test-scripts (1/8):success" "97035:test-bun (1/2):skipped" "97036:e2e:failure" | fx "$(jobs1_path 8703)"
+# 8704 (attempt 2): the cancelled leg ran green in attempt 1 -> identical-tree-green
+jobs_body 8704 "97041:test-webplat (1/2):cancelled" "97042:e2e:failure" | fx "$(jobs_path 8704)"
+jobs_body 8704 "97043:test-webplat (1/2):success" "97044:e2e:failure" | fx "$(jobs1_path 8704)"
+# 8705: the job log 404s; the check-run annotations name the hosted-runner comms loss -> unsettled,
+# cleared wholesale by the later same-PR identical-content success 8706
+fx_err404 "$(log_path 97051)"
+jobs_body 8705 "97051:test-scripts (1/8):failure" | fx "$(jobs_path 8705)"
+printf '[{"message":"The hosted runner lost communication with the server"}]' | fx "$(ann_path 97051)"
+jobs_body 8706 "97061:test-scripts (1/8):success" | fx "$(jobs_path 8706)"
+# 8707: same shape but an unrelated annotation -> log-read, not-evaluable
+fx_err404 "$(log_path 97071)"
+jobs_body 8707 "97071:test-scripts (1/8):failure" | fx "$(jobs_path 8707)"
+printf '[{"message":"pull request merged"}]' | fx "$(ann_path 97071)"
+# 8708 (attempt 2): a mid-termination log (shutdown signature, no [FAIL]) -> unsettled, witnessed by attempt 1.
+# TWO in-flight labels: the later one is the freshest and must win
+jobs_body 8708 "97081:test-scripts (1/8):failure" | fx "$(jobs_path 8708)"
+printf 'some lines\n##[error]The runner has received a shutdown signal\nLast suite started: scripts/foo.test.sh\nmore lines\nLast suite started: scripts/bar.test.sh\n' | fx "$(log_path 97081)"
+jobs_body 8708 "97082:test-scripts (1/8):success" | fx "$(jobs1_path 8708)"
+# 8710: the shutdown signature beside a real [FAIL] line keeps the normal path — the verdict wins
+jobs_body 8710 "97101:test-scripts (1/8):failure" | fx "$(jobs_path 8710)"
+printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n##[error]The runner has received a shutdown signal\n' | fx "$(log_path 97101)"
+# 8711 (attempt 2): a would-skip failure beside a cancelled leg — would_skip_hit decides before the unsettled consult
+jobs_body 8711 "97111:test-scripts (1/8):failure" "97112:test-bun (1/2):cancelled" | fx "$(jobs_path 8711)"
+printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path 97111)"
+jobs_body 8711 "97113:test-scripts (1/8):failure" "97114:test-bun (1/2):success" | fx "$(jobs1_path 8711)"
+printf '[FAIL] scripts/suitey (90ms) log=/l/y.log\n' | fx "$(log_path 97113)"
+while read -r c; do empty_suites "$c"; done < <(gitq -C "$REPO" rev-list --first-parent origin/main)
+empty_timelines 71 72 73 74 75 76 77 78 80 81
+EJ6="$SANDBOX/ej6"
+ej6_run() {  # re-run the classifier window into a fresh dir with the SUT under test; sets E6
+  REPO_NAME="$R6"; rm -rf "$EJ6"; mkdir -p "$EJ6"; : > "$GHLOG"
+  run_sut ejections --out "$EJ6" --since "$since" --repo "$R6" > "$SANDBOX/ej6.out" 2>&1
+  E6="$EJ6/units-ejections.jsonl"; REPO_NAME=""
+}
+ej6_run; rc6=$?
+cls6() { unit_field "$E6" "$(eval "printf '%s' \"\$SH$1\"")" '.cls+" "+.reason'; }
+[[ "$rc6" -eq 0 && "$(wc -l < "$E6")" -eq 9 ]] && pass "nine non-success runs become nine units" || fail "classifier window (rc=$rc6, lines=$(wc -l < "$E6" 2>/dev/null)): $(tail -3 "$SANDBOX/ej6.out")"
+[[ "$(cls6 71 | cut -d' ' -f1)" = rule-irrelevant && "$(unit_field "$E6" "$SH71" '.failing[0].suites[0]')" = "apps/web-platform [repo-wide+component]" ]] \
+  && pass "a [FAIL] label with spaces and brackets is extracted whole — no failed-job-without-fail-line" || fail "wide label: $(cls6 71) suites=$(unit_field "$E6" "$SH71" '.failing[0].suites')"
+[[ "$(cls6 72)" == "not-evaluable unsettled-jobs: test-webplat (1/2)" ]] && pass "a cancelled leg with no witness stays unsettled" || fail "unsettled no-witness: $(cls6 72)"
+[[ "$(cls6 73)" == *"unsettled-jobs"* && "$(unit_field "$E6" "$SH73" '.cls')" = not-evaluable ]] && pass "two unsettled legs, one witnessed: a partial witness never clears" || fail "partial witness: $(cls6 73)"
+[[ "$(cls6 74)" = "flake-cleared identical-tree-green" && "$(unit_field "$E6" "$SH74" '.unsettled_legs[0]')" = "test-webplat (1/2)" ]] \
+  && pass "a cancelled leg green in an earlier attempt of the same run clears (attempt witness)" || fail "attempt witness: $(cls6 74)"
+[[ "$(cls6 75)" = "flake-cleared identical-tree-green" && "$(unit_field "$E6" "$SH75" '.unsettled_detail["test-scripts (1/8)"].signature')" = runner-comms-loss ]] \
+  && pass "a 404 log whose annotations name the comms loss is unsettled and clears on the later same-PR identical run" || fail "comms-loss: $(cls6 75) detail=$(unit_field "$E6" "$SH75" '.unsettled_detail')"
+[[ -z "$(unit_field "$E6" "$SH76" .sha)" ]] && pass "the later same-PR success is a witness for by_pr/cleared() only — a success is never a unit" || fail "success run became a unit: $(cls6 76)"
+[[ "$(cls6 77)" == "not-evaluable failed-job-without-fail-line" ]] && pass "an unrelated annotation keeps log-read -> not-evaluable" || fail "unrelated annotation: $(cls6 77)"
+[[ "$(cls6 78)" = "flake-cleared identical-tree-green" && "$(unit_field "$E6" "$SH78" '.unsettled_detail["test-scripts (1/8)"].in_flight')" = "scripts/bar.test.sh" ]] \
+  && pass "a shutdown signature with no [FAIL] is mid-termination unsettled, witnessed by attempt 1; the LAST in-flight label wins" || fail "mid-termination: $(cls6 78) detail=$(unit_field "$E6" "$SH78" '.unsettled_detail')"
+[[ "$(cls6 80 | cut -d' ' -f1)" = unverified ]] && pass "a log with a [FAIL] line AND a shutdown signature keeps the verdict: the signature does not reclass" || fail "verdict wins: $(cls6 80)"
+[[ "$(cls6 81)" = "escape deterministic" && "$(unit_field "$E6" "$SH81" '.unsettled_legs[0]')" = "test-bun (1/2)" ]] && pass "a would-skip failure decides before the unsettled consult — a witnessed cancelled leg cannot hide the escape; the unsettled leg is still recorded" || fail "ordering: $(cls6 81) legs=$(unit_field "$E6" "$SH81" '.unsettled_legs')"
+! grep -q STUB-MISS "$GHLOG" && pass "the classifier window made no request the stub does not know" || fail "classifier window unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
+row_wide_label() { ej6_run; [[ "$(unit_field "$E6" "$SH71" '.failing[0].suites[0]')" = "apps/web-platform [repo-wide+component]" ]]; }
+row_ctrl_label_wide() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 129)" .cls)" = not-evaluable ]]; }
+row_partial_witness() { ej6_run; [[ "$(unit_field "$E6" "$SH73" .cls)" = not-evaluable ]]; }
+row_unsettled_attempt() { ej6_run; [[ "$(unit_field "$E6" "$SH74" .cls)" = flake-cleared ]]; }
+row_comms_loss() { ej6_run; [[ "$(unit_field "$E6" "$SH75" .cls)" = flake-cleared ]]; }
+row_ann_shape() { ej6_run; [[ "$(unit_field "$E6" "$SH77" .reason)" = failed-job-without-fail-line ]]; }
+row_midterm() { ej6_run; [[ "$(unit_field "$E6" "$SH78" .cls)" = flake-cleared ]]; }
+row_verdict_wins() { ej6_run; [[ "$(unit_field "$E6" "$SH80" .cls)" = unverified ]]; }
+row_ordering() { ej6_run; [[ "$(unit_field "$E6" "$SH81" .cls)" = escape ]]; }
+REPO_NAME=""
+
+echo "== collect: the same-sha sibling witness for unsettled legs"
+R7=jikig-ai/seventh
+REPO_NAME="$R7"
+# each sha: a failed run with a cancelled leg (picked, newest) beside a sibling push run on the same sha.
+# C[6]: the sibling lists the leg green -> cleared. C[5]: the leg is skipped there -> still unsettled.
+# C[4]: the sibling's jobs read fails -> an unreadable witness is not evidence.
+runs_body "${C[6]}" "8809:push:failure" "8802:push:failure" | fx "$(runs_path "${C[6]}")"
+jobs_body 8809 "98809:test-webplat (1/2):cancelled" "98810:e2e:failure" | fx "$(jobs_path 8809)"
+jobs_body 8802 "98802:test-webplat (1/2):success" "98803:e2e:failure" | fx "$(jobs_path 8802)"
+runs_body "${C[5]}" "8808:push:failure" "8804:push:failure" | fx "$(runs_path "${C[5]}")"
+jobs_body 8808 "98808:test-bun (1/2):cancelled" "98811:e2e:failure" | fx "$(jobs_path 8808)"
+jobs_body 8804 "98804:test-bun (1/2):skipped" "98805:e2e:failure" | fx "$(jobs_path 8804)"
+runs_body "${C[4]}" "8807:push:failure" "8806:push:failure" | fx "$(runs_path "${C[4]}")"
+jobs_body 8807 "98807:test-webplat (1/2):cancelled" "98812:e2e:failure" | fx "$(jobs_path 8807)"
+fx_err "$(jobs_path 8806)"
+rm -rf "$OUT"; mkdir -p "$OUT"; : > "$GHLOG"
+run_sut collect --out "$OUT" --commits 3 --chunk 1/1 --repo "$R7" >/dev/null 2>&1; rc7=$?
+U7="$OUT/units-commits-1-of-1.jsonl"
+[[ "$rc7" -eq 0 && "$(unit_field "$U7" "${C[6]}" '.cls+" "+.reason')" = "flake-cleared identical-tree-green" ]] \
+  && pass "a commit unit whose cancelled leg is green in a sibling PUSH run on the same sha clears (same sha = identical tree)" || fail "sibling witness: $(unit_field "$U7" "${C[6]}" '.cls+" "+.reason')"
+[[ "$(unit_field "$U7" "${C[5]}" '.cls')" = not-evaluable && "$(unit_field "$U7" "${C[5]}" .reason)" == *"test-bun (1/2)"* ]] \
+  && pass "a skipped sibling leg is not a success witness — the unit stays unsettled" || fail "non-success sibling: $(unit_field "$U7" "${C[5]}" '.cls+" "+.reason')"
+[[ "$(unit_field "$U7" "${C[4]}" '.cls')" = not-evaluable ]] && pass "an unreadable witness read is not evidence — no clearing" || fail "unread sibling: $(unit_field "$U7" "${C[4]}" '.cls')"
+! grep -q STUB-MISS "$GHLOG" && pass "the sibling-witness collect made no request the stub does not know" || fail "sibling collect unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
+row_sibling_green() { REPO_NAME="$R7"; rm -rf "$OUT"; mkdir -p "$OUT"; run_sut collect --out "$OUT" --commits 3 --chunk 1/1 --repo "$R7" >/dev/null 2>&1; local v; v="$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[6]}" .cls)"; REPO_NAME=""; [[ "$v" = flake-cleared ]]; }
+row_sibling_nonsuccess() { REPO_NAME="$R7"; rm -rf "$OUT"; mkdir -p "$OUT"; run_sut collect --out "$OUT" --commits 3 --chunk 1/1 --repo "$R7" >/dev/null 2>&1; local v; v="$(unit_field "$OUT/units-commits-1-of-1.jsonl" "${C[5]}" .cls)"; REPO_NAME=""; [[ "$v" = not-evaluable ]]; }
 REPO_NAME=""
 
 echo "== the flake class and the escape, aggregated from hand-built units"
@@ -3647,7 +3879,7 @@ mutate always-on-skippable 'elif f[2] == "0" and f[3] != "always_on":' 'elif f[2
 mutate read-error-as-no-run 'runs, u["reason"] = None, "runs-read: %s" % e' 'runs, u["reason"] = [], "", ""' row_read_error
 mutate corroboration-dropped 'runs = corroborating_runs(repo, sha)' 'runs = []' row_corr_dropped
 mutate corroboration-sha-filter-dropped 'r.get("head_sha") == sha and r.get("event") in FULL_EVENTS' 'r.get("event") in FULL_EVENTS' row_corr_sha
-mutate corroboration-path-filter-dropped 'and r.get("path") == CI_WORKFLOW_PATH' '' row_corr_path
+mutate corroboration-path-filter-dropped 'r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH' 'r.get("event") in FULL_EVENTS' row_corr_path
 mutate corroboration-event-filter-dropped 'r.get("event") in FULL_EVENTS and r.get("path") == CI_WORKFLOW_PATH' 'r.get("path") == CI_WORKFLOW_PATH' row_corr_event
 mutate corroboration-namespace-ignored 'r"^https://github\.com/%s/actions/runs/(\d+)" % re.escape(repo)' 'r"^https://github\.com/[^/]+/[^/]+/actions/runs/(\d+)"' row_corr_foreign
 mutate corroboration-truncation-ignored 'if total != seen:' 'if False:' row_corr_trunc
@@ -3659,8 +3891,8 @@ mutate flake-distinct-prs-dropped 'and len({x.get("pr") or x["sha"] for x in us}
 mutate verdict-fail-dropped 'if "fail" in s:' 'if False:' row_verdict_fail
 mutate unmeasured-as-pass 'if "unmeasured" in s:' 'if False:' row_unmeasured
 mutate band-on-census-accepted 'if x == "within-10%":' 'if False:' row_band_b
-mutate fail-regex-loosened 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \((?:\d+ms|exit=)")' 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+)")' row_selftest_line
-mutate control-byte-label-accepted 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([A-Za-z0-9._/+-]+) \(' 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] (\S+) \(' row_ctrl_label
+mutate fail-regex-loosened 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([ -~]+?) \((?:\d+ms|exit=)")' 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([ -~]+?)")' row_selftest_line
+mutate control-byte-label-accepted 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] ([ -~]+?) \(' 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\] (\S+) \(' row_ctrl_label
 mutate killed-line-ignored 'FAIL_LINE = re.compile(r"^\[(?:FAIL|KILLED)\]' 'FAIL_LINE = re.compile(r"^\[(?:FAIL)\]' row_killed_line
 mutate same-tree-ignored 'pick = ok[0] if ok else sorted(runs, key=lambda r: r["created_at"])[-1]' 'pick = sorted(runs, key=lambda r: r["created_at"])[0]' row_clear
 mutate escape-from-attempt-counter 'elif unit.get("attempts_failed", 1) >= 2 and escape_confirmed(unit, repo, cache_dir, would_skip_hit):' 'elif unit.get("attempts_failed", 1) >= 2:' row_escape_unread
@@ -3672,8 +3904,8 @@ mutate unsettled-jobs-ignored '[j["name"] for j in jobs if j.get("conclusion") n
 mutate truncated-jobs-ignored 'if docs and docs[0].get("total_count") is not None and docs[0]["total_count"] != len(jobs):' 'if False:' row_trunc_jobs
 mutate empty-diff-irrelevant 'if unit.get("fallback") == "not-evaluable" and unit.get("reason") == "empty-diff":' 'if False:' row_empty_diff
 mutate window-offset-accepted 'if val and not ISO_UTC.match(val):' 'if False:' row_since_offset
-mutate zero-window-clean '    if not runs:' '    if False:' row_zero_window
-mutate truncated-runs-ignored 'if total is None or total != len(runs) or total >= SEARCH_CAP:' 'if False:' row_trunc_runs
+mutate zero-window-clean '    if not listed:' '    if False:' row_zero_window
+mutate truncated-runs-ignored 'if total is None or total != len(listed) or total >= SEARCH_CAP:' 'if False:' row_trunc_runs
 mutate selector-env-open 'SELECT_ENV_KEEP = ("PATH", "LANG", "TMPDIR", "TZ", "USER", "SHELL")' 'SELECT_ENV_KEEP = ("PATH", "LANG", "TMPDIR", "TZ", "USER", "SHELL", "GH_TOKEN")' row_env
 mutate git-location-inherited 'env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_VARS}' 'env = None' row_git_env
 mutate client-error-retried 'return not (m and m.group(1).startswith("4") and m.group(1) != "429")' 'return True' row_404
@@ -3717,7 +3949,7 @@ mutate bad-timeout-env-traceback 'except ValueError as _e:' 'except KeyError as 
 mutate ejections-manifest-optional '        if not os.path.exists(meta_path):' '        if not os.path.exists(meta_path):
             return
         if False:' row_agg_no_meta
-mutate ejections-count-unchecked '        if have != meta["refused"]:' '        if False:' row_agg_short
+mutate ejections-count-unchecked '        if have != expected:' '        if False:' row_agg_short
 mutate accepted-unread-counted-audited 'return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited} - self.accepted_unread_labels)' 'return len(self.labels - self.always_on_labels - {u[0] for u in self.unaudited})' row_accept_dir
 mutate accept-ignored '        if lines and all((a[0], a[1]) in want for a in lines):' '        if False:' row_accept_ok
 mutate accept-without-reason '        if not re.match(r"^false-positive: \S", f[4]):' '        if False:' row_accept_badreason
@@ -4393,6 +4625,26 @@ mutate gr-spot-suite-never-compared-passes '    if unseen:' '    if False:' row_
 mutate gr-spot-check-default-off 'default=3, dest="spot_check"' 'default=0, dest="spot_check"' row_gr_spot_default
 mutate gr-differing-rows-label-printed-raw 'has rows with differing edge sets: refused, not guessed" % quote_field(label))' 'has rows with differing edge sets: refused, not guessed" % label)' row_gr_quoted_labels
 mutate gr-suite-label-printed-raw 'out_rows.append((quote_field(suite), str(len(entries))' 'out_rows.append((suite, str(len(entries))' row_gr_quoted_labels
+mutate queue-branch-filter-dropped 'and (s.get("head_branch") or "").startswith(QUEUE_BRANCH):' ':' row_corr_branch
+mutate check-suite-join-dropped 'if (c.get("check_suite") or {}).get("id") in suite_ids and' 'if True and' row_corr_join
+mutate corroboration-read-swallowed '        except ReadError:
+            corr_failed.append(sha)' '        except ReadError:
+            pass' row_corr_readfail
+mutate corroboration-vacuous-dispatch '    for sha in shas:
+        try:
+            found += merge_group_runs_on(a.repo, sha)' '    for sha in []:
+        try:
+            found += merge_group_runs_on(a.repo, sha)' row_corr_census
+mutate oracle-counts-run-ids 'observed = len({r.get("head_branch") for r in runs if pr_of(r.get("head_branch")) == pr})' 'observed = len([r for r in runs if pr_of(r.get("head_branch")) == pr])' row_oracle_branches
+mutate expected-units-short 'expected_units = len(fail_runs) + len(corr_failed) + len(oracle_units)' 'expected_units = len(fail_runs)' row_oracle_expected
+mutate unsettled-any-leg 'all(leg_green(unit, leg) for leg in unsettled)' 'any(leg_green(unit, leg) for leg in unsettled)' row_partial_witness
+mutate sibling-non-success-counted 'return {j["name"] for j in jobs if j.get("conclusion") == "success"} & set(names)' 'return {j["name"] for j in jobs if j.get("conclusion") in SETTLED} & set(names)' row_sibling_nonsuccess
+mutate unsettled-consult-first '    if would_skip_hit:' '    if False:' row_ordering
+mutate midterm-with-verdict-line '        if not got:' '        if True:' row_verdict_wins
+mutate annotation-anything-accepted 'if COMMS_LOSS in haystack.lower():' 'if haystack:' row_ann_shape
+mutate fail-line-old-charset '([ -~]+?)' '([A-Za-z0-9._/+-]+)' row_wide_label
+mutate fail-line-past-printable '([ -~]+?)' '(.+?)' row_ctrl_label_wide
+mutate annotation-probe-skipped 'anns = gh_pages("repos/%s/check-runs/%s/annotations?per_page=100" % (repo, jid))' 'anns = []' row_comms_loss
 # ---------------------------------------------------------------------------------------------------------------------
 echo "== controls: the harness reports a survivor, an unparseable mutant, a red row and an edit that did not land"
 row_always_red() { false; }
@@ -4467,7 +4719,7 @@ if [[ "$MUT_KILLED" -eq "$MUT_RUN" ]]; then pass "every mutant was killed ($MUT_
 # the ranged share is exactly the EXECUTED in-range sites.
 SELF="${BASH_SOURCE[0]}"
 SITES_MUTATE="$(grep -c '^mutate ' "$SELF")"
-FLOOR_ASSERTIONS=1135   # measured post-#12412-merge: 650 unconditional + 485 gated sites (bounded --rows 1-10 run measured 660 = 650+10); kept equal to the measured full-run pass count
+FLOOR_ASSERTIONS=1178   # measured post-#12446-merge: 679 unconditional + 499 gated sites; kept equal to the measured full-run pass count
 EXPECTED_EXECUTED=$(( ROWS_HI == 0 ? DECLARED_TOTAL : ROWS_HI - ROWS_LO + 1 ))
 total=$((passes + fails))
 _expected_total=$(( FLOOR_ASSERTIONS - DECLARED_TOTAL + EXPECTED_EXECUTED ))
