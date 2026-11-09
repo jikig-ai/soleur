@@ -1901,6 +1901,17 @@
 "id": "1qaph839sxqkq",
 "title": "CONNECT tunnel per entitled session — Proxy-Authorization Basic <workspaceId>:<sessionToken>; TLS handshake metadata only, payloads end-to-end"
 },
+"1sqwkvp8bvaqw": {
+"technology": "HTTPS/SSH",
+"source": {
+"model": "platform.engine"
+},
+"target": {
+"model": "github"
+},
+"id": "1sqwkvp8bvaqw",
+"title": "Git operations and CI"
+},
 "1tsufuwjc2ho7": {
 "technology": "HTTPS",
 "source": {
@@ -2324,17 +2335,6 @@
 "id": "2h9xbajlmlyfd",
 "title": "Loads via .grok/config.toml; the plugin root resolves from the loader-substituted ${CLAUDE_PLUGIN_ROOT} token first, then GROK_PLUGIN_ROOT, then the two managed Devin plugin caches by manifest identity (ADR-179 decision 11 as amended by A16, #8401 — the cache arms are no longer confined to the cloud-mode gate)"
 },
-"2haat4v759yym": {
-"technology": "HTTPS/SSH",
-"source": {
-"model": "platform.engine"
-},
-"target": {
-"model": "github"
-},
-"id": "2haat4v759yym",
-"title": "Git operations and CI. In an entitled web-egress session whose connected repository is public, the Concierge cc dispatcher also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)"
-},
 "2hx5cdjc3tumy": {
 "technology": "HTTPS release-asset download (github.com, sha256-pinned, anonymous)",
 "source": {
@@ -2398,17 +2398,6 @@
 },
 "id": "2j2hmcu9o8e7p",
 "title": "Recommends ADR creation"
-},
-"2jy9gkus366d6": {
-"technology": "HTTPS (GitHub REST API)",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "github"
-},
-"id": "2jy9gkus366d6",
-"title": "Reads release notes for the in-app Releases page"
 },
 "2lu63nr6gqhmq": {
 "technology": "HTTPS (GitHub REST: rulesets + contents; git refs/tags write via POST git/tags + git/refs; Actions workflow_dispatch API); git push x-access-token + gh CLI for the internal write. The vinngest tag write is a SEPARATE credential: the mint job's GITHUB_TOKEN, not the soleur-infra App token",
@@ -3427,6 +3416,17 @@
 },
 "id": "m8sifjwi8k9t",
 "title": "PreToolUse ask/deny on destructive commands; no egress"
+},
+"mej2q3j6su6b": {
+"technology": "HTTPS (GitHub REST API)",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "github"
+},
+"id": "mej2q3j6su6b",
+"title": "Reads release notes for the in-app Releases page. In an entitled web-egress session whose repository was verified public at registration, the Concierge cc dispatcher in the web app also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)"
 },
 "nph1p3hmvtkx": {
 "technology": "Ephemeral git workspace → GitHub push/PR (safeCommitAndPr)",
@@ -6989,12 +6989,12 @@
 "relations": [
 "12uwtp6e65sao",
 "15jcg8gdjqck",
+"1sqwkvp8bvaqw",
 "21oqpwt1wvybl",
-"2haat4v759yym",
-"2jy9gkus366d6",
 "33oelk4lvl3u7",
 "3mxkvx15xswfp",
-"3q20kgm5yx0v"
+"3q20kgm5yx0v",
+"mej2q3j6su6b"
 ],
 "color": "gray",
 "line": "dashed",
@@ -10388,7 +10388,7 @@
 ],
 "notation": "Person",
 "kind": "actor",
-"x": 1159,
+"x": 1116,
 "y": 377,
 "width": 362,
 "height": 180,
@@ -11889,7 +11889,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 7507,
+"x": 7966,
 "y": 2503,
 "width": 388,
 "height": 180,
@@ -12084,36 +12084,36 @@
 "label": "Asks app-help questions via the support \nbubble — routed to the scope-reduced \nsupport persona (ADR-113)",
 "points": [
 [
-1304,
+1261,
 557
 ],
 [
-1288,
-611
+1245,
+612
 ],
 [
-1280,
+1237,
 680
 ],
 [
-1318,
+1275,
 727
 ],
 [
-1397,
-825
+1359,
+831
 ],
 [
-1745,
-873
+1735,
+877
 ],
 [
-1958,
-893
+1959,
+896
 ]
 ],
 "labelBBox": {
-"x": 1319,
+"x": 1276,
 "y": 635,
 "width": 252,
 "height": 72
@@ -13434,31 +13434,31 @@
 "id": "1bd791r",
 "source": "platform.webapp",
 "target": "github",
-"label": "Reads release notes for the in-app \nReleases page",
+"label": "Reads release notes for the in-app \nReleases page. In an entitled web-egress \nsession whose repository was verified \npublic at registration, the Concierge cc \ndispatcher in the web app also serves ",
 "points": [
 [
-2126,
+2111,
 818
 ],
 [
-2129,
-751
+2104,
+752
 ],
 [
-2145,
-664
+2108,
+666
 ],
 [
-2205,
+2162,
 617
 ],
 [
-2328,
-520
+2278,
+510
 ],
 [
-7281,
-477
+7276,
+475
 ],
 [
 8312,
@@ -13466,17 +13466,17 @@
 ]
 ],
 "labelBBox": {
-"x": 2206,
-"y": 643,
-"width": 219,
-"height": 56
+"x": 2163,
+"y": 618,
+"width": 262,
+"height": 106
 },
 "parent": null,
 "relations": [
 "12uwtp6e65sao",
 "21oqpwt1wvybl",
-"2jy9gkus366d6",
-"3q20kgm5yx0v"
+"3q20kgm5yx0v",
+"mej2q3j6su6b"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13487,7 +13487,7 @@
 "id": "953sr4",
 "source": "platform.engine",
 "target": "github",
-"label": "Git operations and CI. In an entitled \nweb-egress session whose connected \nrepository is public, the Concierge cc \ndispatcher also serves six read-only \nGitHub tools (pull-request list, ",
+"label": "Git operations and CI",
 "points": [
 [
 2288,
@@ -13556,13 +13556,13 @@
 ],
 "labelBBox": {
 "x": 5198,
-"y": 853,
-"width": 241,
-"height": 106
+"y": 887,
+"width": 136,
+"height": 39
 },
 "parent": null,
 "relations": [
-"2haat4v759yym",
+"1sqwkvp8bvaqw",
 "33oelk4lvl3u7"
 ],
 "color": "gray",
@@ -13790,32 +13790,32 @@
 469
 ],
 [
-7302,
+7300,
 473
 ],
 [
-2197,
+2170,
 502
 ],
 [
-2085,
+2057,
 617
 ],
 [
-2037,
-666
+2008,
+667
 ],
 [
-2052,
-745
+2031,
+746
 ],
 [
-2077,
-808
+2064,
+809
 ]
 ],
 "labelBBox": {
-"x": 2086,
+"x": 2058,
 "y": 659,
 "width": 25,
 "height": 18
@@ -14186,7 +14186,7 @@
 1914
 ],
 [
-7766,
+7765,
 2065
 ],
 [
@@ -15134,36 +15134,36 @@
 469
 ],
 [
-7292,
-476
+7291,
+478
 ],
 [
-2088,
-518
+2068,
+525
 ],
 [
-1766,
+1742,
 617
 ],
 [
-1680,
+1648,
 643
 ],
 [
-1682,
+1646,
 701
 ],
 [
-1595,
+1552,
 727
 ],
 [
-1563,
-737
+1521,
+736
 ],
 [
-407,
-723
+406,
+724
 ],
 [
 375,
@@ -15183,7 +15183,7 @@
 ]
 ],
 "labelBBox": {
-"x": 1767,
+"x": 1743,
 "y": 618,
 "width": 258,
 "height": 106
@@ -15761,24 +15761,24 @@
 2247
 ],
 [
-6295,
-2328
+6293,
+2332
 ],
 [
 6492,
 2443
 ],
 [
-6659,
-2539
+6618,
+2512
 ],
 [
-7198,
-2574
+7539,
+2563
 ],
 [
-7497,
-2586
+7956,
+2583
 ]
 ],
 "labelBBox": {
@@ -15819,12 +15819,24 @@
 617
 ],
 [
-8225,
-674
+8232,
+660
+],
+[
+8254,
+678
+],
+[
+8256,
+727
+],
+[
+8261,
+848
 ],
 [
 8233,
-888
+886
 ],
 [
 8278,
@@ -15847,28 +15859,28 @@
 1304
 ],
 [
-8491,
-1332
+8479,
+1330
 ],
 [
 8468,
 1409
 ],
 [
-8334,
-1862
+8416,
+1820
 ],
 [
-7966,
-2305
+8264,
+2292
 ],
 [
-7793,
-2495
+8195,
+2493
 ]
 ],
 "labelBBox": {
-"x": 8447,
+"x": 8461,
 "y": 1511,
 "width": 25,
 "height": 18
@@ -15889,36 +15901,36 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-9108,
+9106,
 2272
 ],
 [
-9061,
-2331
+9058,
+2330
 ],
 [
-8991,
-2404
+8989,
+2401
 ],
 [
 8911,
 2443
 ],
 [
-8739,
-2527
+8741,
+2534
 ],
 [
-8204,
-2566
+8522,
+2569
 ],
 [
-7906,
-2582
+8365,
+2583
 ]
 ],
 "labelBBox": {
-"x": 9054,
+"x": 9046,
 "y": 2333,
 "width": 264,
 "height": 106
@@ -15939,16 +15951,16 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-7507,
-2534
+7966,
+2575
 ],
 [
-7245,
-2446
+7615,
+2533
 ],
 [
-6785,
-2251
+6881,
+2390
 ],
 [
 6552,
@@ -15968,7 +15980,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6648,
+"x": 6643,
 "y": 1923,
 "width": 262,
 "height": 106
@@ -15989,16 +16001,16 @@
 "label": "Incident mirror (ADR-298, epic #10390): \nscheduled-betterstack-incident-mirror.yml \nruns every 15 min (watchdog-dispatch \nprimary — it watches the paging \nsubstrate, so it cannot be ",
 "points": [
 [
-7895,
-2590
+8354,
+2589
 ],
 [
-8969,
-2578
+9380,
+2572
 ],
 [
 14128,
-2504
+2480
 ],
 [
 14128,
@@ -16867,24 +16879,24 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-7507,
-2632
+7966,
+2624
 ],
 [
-7173,
-2699
+7550,
+2689
 ],
 [
-6494,
-2834
+6575,
+2842
 ],
 [
 6168,
-2899
+2906
 ]
 ],
 "labelBBox": {
-"x": 6947,
+"x": 7204,
 "y": 2744,
 "width": 214,
 "height": 38

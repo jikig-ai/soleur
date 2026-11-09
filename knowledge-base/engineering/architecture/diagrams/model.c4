@@ -619,9 +619,9 @@ model {
   webapp -> supabase "Auth and data. Includes the member egress-audit read path (#9545 PR2, ADR-288 amendment 2026-10-26): the server-rendered Scope Grants audit page calls the get_egress_audit_window_summary RPC and the card hint calls the get_egress_audit_summary RPC, through the signed-in member's cookie client over workspace_egress_audit_rollup. Authenticated workspace members only (membership and jti-denylist checks in the function body); no member SELECT policy, no table grant, no HTTP route; best-effort minimum counts over a 24-hour, 7-day or 30-day window (default 30 days)" { technology "HTTPS" }
   webapp -> stripe "Checkout and billing" { technology "HTTPS" }
   webapp -> plausible "Page view events" { technology "JS snippet" }
-  webapp -> github "Reads release notes for the in-app Releases page" { technology "HTTPS (GitHub REST API)" }
+  webapp -> github "Reads release notes for the in-app Releases page. In an entitled web-egress session whose repository was verified public at registration, the Concierge cc dispatcher in the web app also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)" { technology "HTTPS (GitHub REST API)" }
   engine -> anthropic "LLM calls with BYOK keys (the CLI process holds the key; sandboxed Bash does not, ADR-272)" { technology "HTTPS" }
-  engine -> github "Git operations and CI. In an entitled web-egress session whose connected repository is public, the Concierge cc dispatcher also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)" { technology "HTTPS/SSH" }
+  engine -> github "Git operations and CI" { technology "HTTPS/SSH" }
   engine -> supabase "Sessions and encrypted keys" { technology "HTTPS" }
   engine -> discord "Notifications" { technology "Webhook" }
   cloudflare -> webapp "Tunnel, DNS, CDN" { technology "HTTPS" }
