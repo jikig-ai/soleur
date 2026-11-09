@@ -2,10 +2,11 @@
 # Guard 1 (#12008 item 2): host-kernel-cadence-12008.sh decides, per host row of the #12007 reader, whether
 # the host is past its kernel patch cadence, and prints exactly one of three fixed lines.
 #
-# PROPERTY. No input in which any host row is past its cadence and not acknowledged prints the all-clear
-# line; no unknown, stale, absent or unreadable evidence is ever read as within-cadence; an acknowledgement
-# is not graded when it is an ignored role; stdout is always exactly one of
-# three fixed lines (no class name, no digit, no reader stderr), and the probe never exits 0 or 1.
+# PROPERTY. No input in which any host row is past its cadence prints the all-clear line; no unknown, stale,
+# absent, misshapen or unreadable evidence is ever read as within-cadence; an ignored role is never graded; stdout
+# is always exactly one of three fixed lines (no class name, no digit, no reader stderr), and the probe never
+# exits 0 or 1. The cadence numbers are READ from the probe's constants (the owner edits those four lines), so
+# this suite pins the mechanism at whatever value the owner sets, not the values themselves.
 #
 # The probe reads the reader (plugins/soleur/skills/cve-exposure/scripts/host-state.sh) through a stub that
 # this suite synthesizes (HKC_TEST=1 + HKC_READER, honoured only under HKC_TEST). Rows are synthesized
@@ -18,6 +19,8 @@
 #   M7 kernel_state check dropped        M8 unknown rows yield the all-clear
 #   M9 reader stderr passed through     M10 extra digit on stdout
 #   M11 cannot-establish exits 1         M12 duplicate role rows accepted
+#   M13 kernel column shape check dropped  M14 age column shape check dropped
+#   M15 field-count floor lowered to 3     M16 kernel_age shape check dropped
 # Floors: the case count, the mutant count and the assertion count are reported with printf + exit.
 
 set -uo pipefail
@@ -33,19 +36,24 @@ FAILURES=()
 ok()  { pass=$((pass + 1)); printf '[ok] %s\n' "$1"; }
 bad() { fail=$((fail + 1)); FAILURES+=("$1"); printf '[FAIL] %s\n' "$1"; }
 
-D="$(mktemp -d -t soleur-run.$$.XXXXXXXX)"
+D="$(mktemp -d -t soleur-run.$$.XXXXXXXX)" || { printf '[FATAL] mktemp failed\n' >&2; exit 1; }
 trap 'chmod -R u+rwx "$D" 2>/dev/null; rm -rf "$D"' EXIT
 export TMPDIR="$D"
 
 SEC=86400
+ALL_ROLES='web-1 web-2 inngest registry git-data'
 LINE_REVIEW='host-kernel-cadence: review-needed'
 LINE_CLEAR='host-kernel-cadence: nothing-to-report'
 LINE_CANNOT='host-kernel-cadence: cannot-establish'
 
 row() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" 5 kern-x "$4" 5 src-x; }
 sumline() { printf 'SOLEUR_CVE_HOST_STATE hosts=5 fresh=5 stale=0 silent=0 unknown=0\n'; }
-up_w() { case "$1" in git-data) echo $((40 * SEC)) ;; *) echo $((10 * SEC)) ;; esac; }
-up_o() { case "$1" in git-data) echo $((46 * SEC)) ;; *) echo $((31 * SEC)) ;; esac; }
+# Cadence days are READ from the probe's four constants; a value that is not a plain number fails the suite.
+cad() { sed -n "s/^readonly CADENCE_DAYS_$1=\([0-9]\{1,3\}\)\$/\1/p" "$PROBE" | head -1; }
+CAD_WEB="$(cad WEB)"; CAD_INNGEST="$(cad INNGEST)"; CAD_REGISTRY="$(cad REGISTRY)"; CAD_GIT_DATA="$(cad GIT_DATA)"
+cad_of() { case "$1" in git-data) echo "$CAD_GIT_DATA" ;; inngest) echo "$CAD_INNGEST" ;; registry) echo "$CAD_REGISTRY" ;; *) echo "$CAD_WEB" ;; esac; }
+up_w() { echo "$SEC"; }
+up_o() { echo $((($(cad_of "$1") + 1) * SEC)); }
 mkcase() { # name reader-exit-code ; rows on stdin
   mkdir -p "$D/$1"; cat > "$D/$1/rows"
   printf '#!/usr/bin/env bash\ncat %q\nprintf "LEAKTOKEN-ZZ\\n" >&2\nexit %s\n' "$D/$1/rows" "$2" > "$D/$1/reader.sh"
@@ -53,7 +61,7 @@ mkcase() { # name reader-exit-code ; rows on stdin
 build() { # name rc [role=ms/ks/up ...]  (up: w | o | literal; role=DROP removes the row)
   local n="$1" rc="$2" r spec v ms ks up skip; shift 2
   {
-    for r in web-1 web-2 inngest registry git-data; do
+    for r in $ALL_ROLES; do
       ms=fresh; ks=observed; up="$(up_w "$r")"; skip=0
       for spec in "$@"; do
         case "$spec" in
@@ -102,13 +110,14 @@ case_decision() {
   CASES=$((CASES + 1))
   build all_within 0;                         expect "all five rows within cadence" "$PROBE" all_within 2 "$LINE_CLEAR"
   local r
-  for r in web-1 web-2 inngest registry git-data; do
+  for r in $ALL_ROLES; do
     build "over_$r" 0 "$r=fresh/observed/o";  expect "$r alone past cadence" "$PROBE" "over_$r" 5 "$LINE_REVIEW"
   done
   build unk_silent 0 "inngest=silent/unknown/unknown"; expect "a silent row is unknown, never within" "$PROBE" unk_silent 3 "$LINE_CANNOT"
   build unk_stale 0 "registry=stale/stale/w";          expect "a stale row is unknown, never within" "$PROBE" unk_stale 3 "$LINE_CANNOT"
   build unk_ks 0 "git-data=fresh/unknown/w";           expect "kernel_state unknown is unknown" "$PROBE" unk_ks 3 "$LINE_CANNOT"
   build unk_ms 0 "web-2=stale/observed/w";             expect "marker_state stale with an observed kernel is unknown" "$PROBE" unk_ms 3 "$LINE_CANNOT"
+  build unk_ks2 0 "web-1=fresh/stale/w";                expect "a stale kernel_state with a fresh marker is unknown" "$PROBE" unk_ks2 3 "$LINE_CANNOT"
   build unk_ms2 0 "inngest=silent/observed/o";         expect "marker_state silent with an observed, overdue-looking uptime is unknown, not overdue" "$PROBE" unk_ms2 3 "$LINE_CANNOT"
 }
 case_precedence() {
@@ -118,17 +127,21 @@ case_precedence() {
 }
 case_boundary() {
   CASES=$((CASES + 1))
-  build b_eq 0 "web-1=fresh/observed/$((30 * SEC))";     expect "uptime exactly at the web cadence is within" "$PROBE" b_eq 2 "$LINE_CLEAR"
-  build b_plus 0 "web-1=fresh/observed/$((30 * SEC + 1))"; expect "one second over the web cadence is overdue" "$PROBE" b_plus 5 "$LINE_REVIEW"
-  build g_eq 0 "git-data=fresh/observed/$((45 * SEC))";    expect "uptime exactly at the git-data cadence is within" "$PROBE" g_eq 2 "$LINE_CLEAR"
-  build g_plus 0 "git-data=fresh/observed/$((45 * SEC + 1))"; expect "one second over the git-data cadence is overdue" "$PROBE" g_plus 5 "$LINE_REVIEW"
+  local r
+  for r in web-1 web-2 inngest registry git-data; do
+    build "b_eq_$r" 0 "$r=fresh/observed/$(($(cad_of "$r") * SEC))";     expect "$r: uptime exactly at its cadence is within" "$PROBE" "b_eq_$r" 2 "$LINE_CLEAR"
+    build "b_plus_$r" 0 "$r=fresh/observed/$(($(cad_of "$r") * SEC + 1))"; expect "$r: one second over its cadence is overdue" "$PROBE" "b_plus_$r" 5 "$LINE_REVIEW"
+  done
+  [[ "$CAD_WEB$CAD_INNGEST$CAD_REGISTRY$CAD_GIT_DATA" =~ ^[0-9]+$ ]] && [ "$CAD_WEB" -ge 1 ] && [ "$CAD_INNGEST" -ge 1 ] && [ "$CAD_REGISTRY" -ge 1 ] && [ "$CAD_GIT_DATA" -ge 1 ] \
+    && ok "the four cadence constants are plain positive day counts" || bad "a cadence constant is missing or not a plain positive number"
+  build b_big 0 "web-1=fresh/observed/1234567890123"; expect "a 13-digit uptime is unknown, not within" "$PROBE" b_big 3 "$LINE_CANNOT"
 }
 case_reader_problems() {
   CASES=$((CASES + 1))
   build rd4 4;  expect "reader exit 4 with otherwise-clean rows" "$PROBE" rd4 3 "$LINE_CANNOT"
   build rd2 2;  expect "reader exit 2 (dark source)" "$PROBE" rd2 3 "$LINE_CANNOT"
   build rd3 3;  expect "reader exit 3 (credentials absent)" "$PROBE" rd3 3 "$LINE_CANNOT"
-  build rd0over 4 "web-1=fresh/observed/o"; expect "reader exit 4 never hides an overdue row from the all-clear" "$PROBE" rd0over 3 "$LINE_CANNOT"
+  build rd4over 4 "web-1=fresh/observed/o"; expect "reader exit 4 never hides an overdue row from the all-clear" "$PROBE" rd4over 3 "$LINE_CANNOT"
   : | mkcase zero 0;                     expect "zero rows, reader exit 0" "$PROBE" zero 3 "$LINE_CANNOT"
   sumline | mkcase sumonly 0;            expect "only the summary line" "$PROBE" sumonly 3 "$LINE_CANNOT"
   mkdir -p "$D/noreader"; expect "reader script missing" "$PROBE" noreader 3 "$LINE_CANNOT"
@@ -149,6 +162,23 @@ case_census() {
   expect "rows with too few fields are unknown" "$PROBE" short 3 "$LINE_CANNOT"
   build shifted 0 "web-1=DROP"; printf 'web-1\tinserted\tfresh\tobserved\t5\tkern-x\t%s\t5\tsrc-x\n' "$(up_w web-1)" >> "$D/shifted/rows"
   expect "a column inserted before the fixed columns makes the row a problem, not a shifted reading" "$PROBE" shifted 3 "$LINE_CANNOT"
+  local a b c e f g
+  local sh_defects=("bogus|observed|5|kern-x|7|5" "fresh|bogus|5|kern-x|7|5" "fresh|observed|x5|kern-x|7|5" "fresh|observed|5|bad kern!|7|5" "fresh|observed|5|kern-x|7x|5" "fresh|observed|5|kern-x|7|x") d i=2
+  for d in "${sh_defects[@]}"; do
+    build "sh$i" 0 "web-1=DROP"
+    IFS='|' read -r a b c e f g <<<"$d"
+    printf 'web-1\t%s\t%s\t%s\t%s\t%s\t%s\tsrc-x\n' "$a" "$b" "$c" "$e" "$f" "$g" >> "$D/sh$i/rows"
+    expect "single-defect row $i (one fixed column breaks its shape) is a problem, not a reading" "$PROBE" "sh$i" 3 "$LINE_CANNOT"
+    i=$((i + 1))
+  done
+  build sh_nf 0 "web-1=DROP"; printf 'web-1\tfresh\tobserved\t5\tkern-x\t7\t5\n' >> "$D/sh_nf/rows"
+  expect "a row one field short (dropped column) is a problem" "$PROBE" sh_nf 3 "$LINE_CANNOT"
+  build junk 0; printf 'garbage without tabs\n' >> "$D/junk/rows"
+  expect "one malformed line is a problem even when every required role is present" "$PROBE" junk 3 "$LINE_CANNOT"
+  build ign3 0; row grok fresh observed 5 >> "$D/ign3/rows"
+  expect "a near-miss of an ignored role (grok) is an unknown role, not ignored" "$PROBE" ign3 3 "$LINE_CANNOT"
+  build ign4 0; row dogfood fresh observed 5 >> "$D/ign4/rows"
+  expect "a near-miss of an ignored role (dogfood) is an unknown role, not ignored" "$PROBE" ign4 3 "$LINE_CANNOT"
   build ign 0; printf 'grok-dogfood\tunknown\tunknown\tunknown\tunknown\tunknown\tunknown\tnone\n' >> "$D/ign/rows"
   expect "the reader's default-off dogfood row is skipped, so the all-clear stays reachable against the real row set" "$PROBE" ign 2 "$LINE_CLEAR"
   build ign2 0; row grok-dogfood fresh observed "$((900 * SEC))" >> "$D/ign2/rows"
@@ -161,6 +191,7 @@ case_non_canonical() {
     row registry fresh observed "$(up_w registry)"
     printf '%s\textra-field\tanother\n' "$(row inngest fresh observed "$(up_w inngest)")"
     row web-2 fresh observed "$(up_w web-2)"
+    printf '\n'
     row web-1 fresh observed "$(up_w web-1)"
     printf '\n'
   } | mkcase noncanon 0
@@ -169,7 +200,7 @@ case_non_canonical() {
 case_output_contract() {
   CASES=$((CASES + 1))
   local n bad_out=""
-  for n in all_within over_web-1 over_git-data unk_silent prec_a b_plus rd4 zero extra_role dup noncanon; do
+  for n in all_within over_web-1 over_git-data unk_silent prec_a b_plus_web-1 rd4 zero extra_role dup noncanon; do
     run_probe "$PROBE" "$n"
     case "$OUT" in "$LINE_REVIEW"|"$LINE_CLEAR"|"$LINE_CANNOT") : ;; *) bad_out="$bad_out $n" ;; esac
     [ "$(printf '%s\n' "$OUT" | wc -l)" -eq 1 ] || bad_out="$bad_out $n(lines)"
@@ -194,6 +225,27 @@ case_reader_contract() {
   hdr="$(sed -n 's/^#   host_role /host_role /p' "$reader" | head -1)"
   want="host_role marker_state kernel_state age_hours kernel uptime_s kernel_age_hours source_marker"
   case "$hdr" in "$want"*) ok "contract: the reader's documented column order starts with the eight columns the probe indexes" ;; *) bad "contract: reader column header is '$hdr' (probe indexes: $want)" ;; esac
+  # the header is a comment; the row is what the reader's printf emits, so pin that argument list too
+  grep -qF "printf '%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"\$role\" \"\$ms\" \"\$ks\" \"\$age\" \"\$kernel\" \"\$up\" \"\$kage\" \"\$src\"" "$reader" \
+    && ok "contract: the reader's row printf emits the eight columns in the documented order" || bad "contract: the reader's row printf no longer matches the documented column order"
+  # the reader's web roles are the Terraform web_hosts keys; a new web host must reach this probe's role lists
+  local tfkeys rdkeys
+  tfkeys="$(awk '/^variable "web_hosts"/ { b = 1 } b && /^}/ { b = 0 } b' "$REAL_TF/variables.tf" | grep -oE '"?web-[0-9]+"?[[:space:]]*=[[:space:]]*\{' | grep -oE 'web-[0-9]+' | sort -u | tr '\n' ' ')"
+  rdkeys="$(printf '%s\n' "$roles" | grep -E '^web-[0-9]+$' | sort -u | tr '\n' ' ')"
+  [ -n "$tfkeys" ] && [ "$tfkeys" = "$rdkeys" ] && ok "contract: the reader's web roles equal the Terraform web_hosts keys" || bad "contract: web roles differ (terraform: '$tfkeys' reader: '$rdkeys')"
+}
+case_units() { # the two decision functions, extracted from the probe and driven directly
+  CASES=$((CASES + 1))
+  local fn
+  fn="$(sed -n -e '/^readonly CADENCE_DAYS_/p' -e '/^cadence_days()/,/^}/p' -e '/^classify_row()/,/^}/p' -e '/^aggregate()/,/^}/p' "$PROBE")"
+  [ "$(grep -c '^aggregate()' <<<"$fn")" -eq 1 ] && [ "$(grep -c '^classify_row()' <<<"$fn")" -eq 1 ] && ok "units: both decision functions were extracted from the probe" || bad "units: the decision functions were not found in the probe"
+  [ "$( (eval "$fn"; aggregate within within) )" = nothing-to-report ] && ok "units: all within is the all-clear" || bad "units: all within is not the all-clear"
+  [ "$( (eval "$fn"; aggregate) )" = cannot-establish ] && ok "units: no classes at all is never the all-clear" || bad "units: an empty class list produced the all-clear"
+  [ "$( (eval "$fn"; aggregate within '') )" = cannot-establish ] && ok "units: an empty class string is never the all-clear" || bad "units: an empty class string produced the all-clear"
+  [ "$( (eval "$fn"; aggregate within garbage) )" = cannot-establish ] && ok "units: an unrecognised class string is never the all-clear" || bad "units: an unrecognised class produced the all-clear"
+  [ "$( (eval "$fn"; aggregate unknown overdue within) )" = review-needed ] && ok "units: overdue beats unknown" || bad "units: overdue did not beat unknown"
+  [ "$( (eval "$fn"; classify_row newrole fresh observed 5) )" = unknown ] && ok "units: a role with no cadence arm is unknown, never within" || bad "units: a role without a cadence arm was graded"
+  grep -qE '^out="\$\(timeout [0-9]+ bash "\$READER" 2>/dev/null\)"; rc=\$\?$' "$PROBE" && ok "units: the reader call is bounded by a timeout" || bad "units: the reader call has no timeout"
 }
 case_override_gate() {
   CASES=$((CASES + 1))
@@ -204,6 +256,8 @@ case_override_gate() {
   # fail closed at once (offline-safe), so the all-clear can never be produced through the override.
   OUT="$(env -i PATH="$shim:$PATH" TMPDIR="$D" HKC_READER="$D/ovr/reader.sh" bash "$PROBE" 2>/dev/null)"; RC=$?
   [ "$OUT" = "$LINE_CANNOT" ] && [ "$RC" -eq 3 ] && ok "HKC_READER is ignored without HKC_TEST (the stub's all-clear is not reachable)" || bad "override honoured without HKC_TEST: rc=$RC out='$OUT'"
+  OUT="$(env -i PATH="$shim:$PATH" TMPDIR="$D" HKC_TEST=0 HKC_READER="$D/ovr/reader.sh" bash "$PROBE" 2>/dev/null)"; RC=$?
+  [ "$OUT" = "$LINE_CANNOT" ] && [ "$RC" -eq 3 ] && ok "HKC_TEST=0 does not open the override" || bad "override honoured under HKC_TEST=0: rc=$RC out='$OUT'"
 }
 case_invocation() {
   CASES=$((CASES + 1))
@@ -234,9 +288,11 @@ server_names() {
   done | sort -u
 }
 VERDICT_RE='not'' affected|not'' exposed|is'' patched|are'' patched'
+SERVER_NAMES=""
 hygiene() { # file... -> prints one token per violation class found
   local f names n
-  names="$(server_names)"
+  [ -n "$SERVER_NAMES" ] || SERVER_NAMES="$(server_names)"
+  names="$SERVER_NAMES"
   for f in "$@"; do
     grep -qE 'CVE-[0-9]{4}-[0-9]{4,}' "$f" && echo "cve-id:${f##*/}"
     grep -qE '[0-9]+\.[0-9]+\.[0-9]+-[0-9]+(-generic)?' "$f" && echo "kernel-version:${f##*/}"
@@ -251,7 +307,8 @@ hygiene() { # file... -> prints one token per violation class found
 case_hygiene() {
   CASES=$((CASES + 1))
   local nn out f
-  nn="$(server_names | grep -c .)"
+  SERVER_NAMES="$(server_names)"
+  nn="$(grep -c . <<<"$SERVER_NAMES")"
   [ "$nn" -ge 3 ] && ok "hygiene: the scan read at least three server name values from the Terraform directory (liveness)" || bad "hygiene: fewer than three server names read ($nn)"
   # positive controls: each pattern class must fire on a synthesized offender
   mkdir -p "$D/hyg"
@@ -263,10 +320,14 @@ case_hygiene() {
   for f in cve-id kernel-version ipv4 verdict-words; do
     grep -q "^$f:" <<<"$out" && ok "hygiene control: $f fires on a synthesized offender" || bad "hygiene control: $f did not fire"
   done
-  local first; first="$(server_names | head -1)"
+  local first; first="$(head -1 <<<"$SERVER_NAMES")"
   printf 'host %s\n' "$first" > "$D/hyg/name.txt"
   grep -q '^host-name:' <<<"$(hygiene "$D/hyg/name.txt")" && ok "hygiene control: a real server name fires" || bad "hygiene control: a server name did not fire"
   [ -f "$RUNBOOK" ] && ok "the runbook exists" || bad "the runbook is missing: $RUNBOOK"
+  local l
+  for l in "$LINE_REVIEW" "$LINE_CLEAR" "$LINE_CANNOT"; do
+    grep -qF -- "$l" "$RUNBOOK" 2>/dev/null && ok "the runbook documents the public line '${l#host-kernel-cadence: }'" || bad "the runbook does not document the public line '$l'"
+  done
   local files=("$PROBE" "$HERE/host-kernel-cadence-12008.test.sh" "$ROOT/scripts/host-tcp-exposure.test.sh")
   [ -f "$RUNBOOK" ] && files+=("$RUNBOOK")
   out="$(hygiene "${files[@]}")"
@@ -281,64 +342,72 @@ if [ ! -f "$PROBE" ]; then
   bad "probe missing: $PROBE"
 else
   case_decision; case_precedence; case_boundary; case_reader_problems; case_census; case_non_canonical
-  case_output_contract; case_reader_contract; case_override_gate; case_invocation; case_env_i
+  case_output_contract; case_reader_contract; case_units; case_override_gate; case_invocation; case_env_i
 fi
 case_hygiene
 
 # ---- mutants: each is a copy of the probe with one edit; the discriminating cases must go RED ---------
-grade() { # probe-copy -> prints 1 when ANY discriminating case misbehaves (killed), else 0
-  local mp="$1" killed=0 spec n wrc
-  for spec in "all_within:2" "over_web-1:5" "over_git-data:5" "unk_silent:3" "unk_stale:3" "unk_ks:3" "unk_ms:3" "unk_ms2:3" "prec_a:5" "prec_b:5" \
-              "b_eq:2" "b_plus:5" "rd4:3" "zero:3" "extra_role:3" "drop_row:3" "dup:3" "nan:3"; do
+grade() { # probe-copy -> prints KILLED:<case> for the first discriminating case that misbehaves, else ALIVE
+  local mp="$1" killed="" spec n wrc
+  for spec in "all_within:2" "over_web-1:5" "over_git-data:5" "unk_silent:3" "unk_stale:3" "unk_ks:3" "unk_ks2:3" "unk_ms:3" "unk_ms2:3" "prec_a:5" "prec_b:5" \
+              "b_eq_web-1:2" "b_plus_web-1:5" "rd4:3" "zero:3" "extra_role:3" "drop_row:3" "dup:3" "nan:3" \
+              "sh2:3" "sh3:3" "sh4:3" "sh5:3" "sh6:3" "sh7:3" "sh_nf:3" "junk:3" "ign3:3" "b_big:3"; do
     n="${spec%%:*}"; wrc="${spec##*:}"
     run_probe "$mp" "$n"
-    [ "$RC" -eq "$wrc" ] || killed=1
-    case "$RC" in 2|3|5) : ;; *) killed=1 ;; esac
-    case "$OUT" in "$LINE_REVIEW"|"$LINE_CLEAR"|"$LINE_CANNOT") : ;; *) killed=1 ;; esac
-    [ -z "$ERR" ] || killed=1
-    [ "$killed" = 0 ] || break
+    [ "$RC" -eq "$wrc" ] || killed="$n"
+    case "$RC" in 2|3|5) : ;; *) killed="$n" ;; esac
+    case "$OUT" in "$LINE_REVIEW"|"$LINE_CLEAR"|"$LINE_CANNOT") : ;; *) killed="$n" ;; esac
+    [ -z "$ERR" ] || killed="$n"
+    [ -z "$killed" ] || break
   done
-  printf '%s' "$killed"
+  if [ -n "$killed" ]; then printf 'KILLED:%s' "$killed"; else printf 'ALIVE'; fi
 }
 mutate() { # name sed-expression
-  local name="$1" expr="$2" mp="$D/mut-$1.sh"
+  local name="$1" expr="$2" mp="$D/mut-$1.sh" res
+  MUTANTS=$((MUTANTS + 1))
   cp "$PROBE" "$mp"; sed -E -i "$expr" "$mp"
   if cmp -s "$PROBE" "$mp"; then bad "mutation $name did not land"; return; fi
-  [ "$(grade "$mp")" = 1 ] && ok "mutant $name is killed" || bad "mutant $name SURVIVED"
+  if ! bash -n "$mp" 2>/dev/null; then bad "mutation $name does not parse (a syntax error is not a kill)"; return; fi
+  res="$(grade "$mp")"
+  case "$res" in KILLED:*) ok "mutant $name is killed by ${res#KILLED:}" ;; *) bad "mutant $name SURVIVED" ;; esac
 }
 
 MUTANTS=0
 if [ -f "$PROBE" ]; then
   cp "$PROBE" "$D/mut-ctrl.sh"
-  [ "$(grade "$D/mut-ctrl.sh")" = 0 ] && ok "grader control: the unmutated probe survives the mutant loop" || bad "grader control: the unmutated probe was graded killed"
+  [ "$(grade "$D/mut-ctrl.sh")" = ALIVE ] && ok "grader control: the unmutated probe survives the mutant loop" || bad "grader control: the unmutated probe was graded killed"
   cp "$PROBE" "$D/mut-ctrl99.sh"; sed -E -i 's/^([[:space:]]*)exit "\$rc"$/\1exit 99/' "$D/mut-ctrl99.sh"
-  [ "$(grade "$D/mut-ctrl99.sh")" = 1 ] && ok "grader control: a probe exiting 99 is graded killed" || bad "grader control: a probe exiting 99 was not graded killed"
-  mutate M1  's/review-needed\) rc=5/review-needed) rc=2/';                                   MUTANTS=$((MUTANTS + 1))
-  mutate M2  's/= overdue \]/= __X__ ]/; s/= unknown \]/= overdue ]/; s/= __X__ \]/= unknown ]/'; MUTANTS=$((MUTANTS + 1))
-  mutate M3  's/^\[ "\$rc" -eq 0 \] \|\| emit cannot-establish$/true/';                         MUTANTS=$((MUTANTS + 1))
-  mutate M4  's/^(.*)\[ -n "\$\{SEEN\[\$r\]:-\}" \] \|\| classes\+=\("unknown"\)/\1true/';       MUTANTS=$((MUTANTS + 1))
-  mutate M5  's/-le \$\(\(days \* 86400\)\)/-lt $((days * 86400))/';                             MUTANTS=$((MUTANTS + 1))
-  mutate M6  's/\[ "\$ms" = fresh \] && //';                                                    MUTANTS=$((MUTANTS + 1))
-  mutate M7  's/ && \[ "\$ks" = observed \]//';                                                 MUTANTS=$((MUTANTS + 1))
-  mutate M8  's/(= unknown \].*)echo cannot-establish/\1echo nothing-to-report/';              MUTANTS=$((MUTANTS + 1))
-  mutate M9  's/bash "\$READER" 2>\/dev\/null/bash "$READER" 2>\&2/';                           MUTANTS=$((MUTANTS + 1))
-  mutate M10 "s/host-kernel-cadence: %s\\\\n/host-kernel-cadence: %s 1\\\\n/";                   MUTANTS=$((MUTANTS + 1))
-  mutate M11 's/cannot-establish\) rc=3/cannot-establish) rc=1/';                               MUTANTS=$((MUTANTS + 1))
-  mutate M12 's/^(.*)\[ -z "\$\{SEEN\[\$role\]:-\}" \] \|\| problem=1/\1true/';                 MUTANTS=$((MUTANTS + 1))
+  case "$(grade "$D/mut-ctrl99.sh")" in KILLED:*) ok "grader control: a probe exiting 99 is graded killed" ;; *) bad "grader control: a probe exiting 99 was not graded killed" ;; esac
+  mutate M1  's/review-needed\) rc=5/review-needed) rc=2/'
+  mutate M2  's/= overdue \]/= __X__ ]/; s/= unknown \]/= overdue ]/; s/= __X__ \]/= unknown ]/'
+  mutate M3  's/^\[ "\$rc" -eq 0 \] \|\| emit cannot-establish$/true/'
+  mutate M4  's/^(.*)\[ -n "\$\{SEEN\[\$r\]:-\}" \] \|\| classes\+=\("unknown"\)/\1true/'
+  mutate M5  's/-le \$\(\(days \* 86400\)\)/-lt $((days * 86400))/'
+  mutate M6  's/\[ "\$ms" = fresh \] && //'
+  mutate M7  's/ && \[ "\$ks" = observed \]//'
+  mutate M8  's/(!= within \].*)echo cannot-establish/\1echo nothing-to-report/'
+  mutate M9  's/bash "\$READER" 2>\/dev\/null/bash "$READER" 2>\&2/'
+  mutate M10 "s/host-kernel-cadence: %s\\\\n/host-kernel-cadence: %s 1\\\\n/"
+  mutate M11 's/cannot-establish\) rc=3/cannot-establish) rc=1/'
+  mutate M12 's/^(.*)\[ -z "\$\{SEEN\[\$role\]:-\}" \] \|\| problem=1/\1true/'
+  mutate M13 's# && \$5 ~ /\^\[A-Za-z0-9\._\+~:-\]\+\$/##'
+  mutate M14 's# && \$4 ~ /\^\(\[0-9\]\+\|unknown\)\$/##'
+  mutate M15 's/NF >= 8/NF >= 3/'
+  mutate M16 's# && \$7 ~ /\^\(\[0-9\]\+\|unknown\)\$/##'
 fi
 
 # ---- anti-vacuity floors (reported with printf + exit, not through the helpers) ------------------
-EXPECTED_CASES=12
+EXPECTED_CASES=13
 if [ "$CASES" -lt "$EXPECTED_CASES" ]; then
   printf '[FATAL] case-count floor: ran %s cases, want >= %s (a case was deleted or the list was emptied)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
 fi
-EXPECTED_MUTANTS=12
+EXPECTED_MUTANTS=16
 if [ "$MUTANTS" -lt "$EXPECTED_MUTANTS" ]; then
   printf '[FATAL] mutant-count floor: ran %s mutants, want >= %s\n' "$MUTANTS" "$EXPECTED_MUTANTS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=71
+MIN_ASSERTIONS=108
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: %s passed, want >= %s (an assertion was deleted)\n' "$pass" "$MIN_ASSERTIONS" >&2
   exit 1
