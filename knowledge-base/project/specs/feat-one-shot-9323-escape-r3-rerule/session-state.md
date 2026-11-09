@@ -24,3 +24,10 @@
 
 - constraint: stage 4 stays non-activated throughout - CI_PR_AFFECTED unset, PR_AFFECTED_LOCKED intact in scripts/ci-pr-selection.sh, merge_group keeps the full battery.
 - constraint: ONE PR (this branch) carries both items.
+
+## Work Phase
+
+- Status: complete
+- Item 1: Arm A implemented + 68/68 probe tests green; corrected verdict posted on #9323 (NOT YET, escape cleared); commits b86200705b.
+- Item 2: R3 re-ruling computed NO-GO (a: bound 16.99% >= 12%, b/c/d pass-or-band); 13 receipts committed; ADR-276 amended; runbook updated; verdict posted on #9729; commit 24587ea235.
+- AC8 non-activation sweep green.
