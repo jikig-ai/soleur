@@ -1002,7 +1002,7 @@ only consumer.
 | `proxy-hello-rotation-phases.test.ts` | — | inferred — justification: the enforcement contract of the three-phase design; without it the reason the phases exist is untested (CTO guard row 4) |
 | C.1 marker step + email sentence; `reusable-release-push-failed-marker.test.sh` | ask 6 | asked |
 | C.2 runbook | asks 7, 9 | asked |
-| `DOCKER_BUILD_RECORD_UPLOAD`/`DOCKER_BUILD_SUMMARY` env pair on `docker_build` (C.1) | — | inferred — justification: safety. Public build records carry build args of the step C.1 reads; CTO D1 put the hardening in this PR |
+| `DOCKER_BUILD_RECORD_UPLOAD`/`DOCKER_BUILD_SUMMARY` env pair on `docker_build` (C.1) | — | inferred — justification: CI artifact hygiene (fewer default uploads); CTO D1 put it in this PR |
 | #12538 tracking issue | ask 3 "minting the key outside Terraform" (the ruled second half) | asked |
 | #12539 tracking issue | ask 11 | asked (deferral needs a tracker, `wg-when-deferring-a-capability-create-a`) |
 | D post-merge read | ask 10 | asked |
