@@ -307,10 +307,19 @@ cf_lb_gate_ga_monitor_https() {
 #
 # `drain` pins EVERY origin at web-1's resolved IP to weight 1 and every origin
 # at web-2's resolved IP to weight 0 — name-independent, so a renamed origin
-# block cannot dodge the pin. `serve` is the #6027 window arm: the §(c) gate
-# chain ran in the job BEFORE plan, and the grader pins the declared post-flip
+# block cannot dodge the pin. `serve` is the web-2 serving arm: the §(c) gate
+# chain ran in the job BEFORE plan, and the grader pins the declared serving
 # shape — the web-1-named AND web-2-named origins at weight 1 AND every origin at
 # EITHER resolved IP at weight 1 (weights compared as numbers, not strings).
+# `serve` grades the pool whether the plan carries it as an `update` (the 0-to-1
+# flip) or as a `no-op` (live is already {web-1:1, web-2:1} since the 2026-11-08
+# serve flip, #12363): the public wrapper `cf_lb_gate_ga_pool_update` normalises
+# a provably-plain no-op pool entry into an update in a temp copy, then hands it
+# to the unchanged grader `_cf_lb_gate_ga_pool_update_graded`, so every origins,
+# enabled, monitor, resolved-IP and weight pin grades the no-op exactly as it
+# grades a 0-to-1 update. `serve` never skips the pool: a plan with no pool entry
+# (or several) is refused, because the pool-less remnant branch below is
+# drain-only.
 #
 # REMNANT-ONLY plans: a graded set with NO pool.web_1 update is admitted iff the
 # per-verb allow-set + the attribute pins below pass on whichever entries exist —
@@ -328,7 +337,7 @@ cf_lb_gate_ga_monitor_https() {
 # the signal the monitor-fix arm repairs); policy enabled==false, and on
 # ["create"] OR ["update"] a present alert_type must be
 # load_balancing_health_alert.
-cf_lb_gate_ga_pool_update() {
+_cf_lb_gate_ga_pool_update_graded() {
   local plan_json="$1" mode="${2:-drain}"
   plan_gate_assert_readable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
   plan_gate_assert_classifiable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
@@ -551,4 +560,89 @@ cf_lb_gate_ga_pool_update() {
   else
     echo "cf-lb-overlay gate[ga-pool-update:${mode}]: $updates change(s) within the pool/LB/policy set, origins ⊆ {web-1:${web1_ip},web-2:${web2_ip}}${suffix} — pass"
   fi
+}
+
+
+# Public entry point (the only function cf-lb-overlay.yml calls). A thin wrapper so
+# the pool selectors inside the graded function stay byte-identical:
+#   drain  -> the graded function, untouched (a no-op-only pool is the existing
+#             "empty change set" refusal; a policy-only remnant keeps its path);
+#   serve  -> ONE read of the RAW .resource_changes[] (the graded function's
+#             _CF_LB_CHANGES drops no-ops and reads, so it cannot see a no-op or
+#             read pool at all) yields a verdict token, and a `case` whose DEFAULT
+#             arm refuses dispatches on it:
+#               absent | ambiguous (0 or >1 pool entries) -> refuse;
+#               update                                    -> the graded function, original file;
+#               plain-noop (exact address, no previous_address / deposed / importing)
+#                                                         -> normalise in a copy, grade, remove;
+#               unplain-noop | anything else (replace, read, forget, unknown) -> refuse.
+# The normalised copy holds the plan's resource_changes only (the graded function
+# reads nothing else): the same content as the plan JSON already on the runner. It is
+# written beside the plan file (no mktemp: a sourced lib must not own the caller's
+# EXIT trap, and the census of trap-less tempfile owners only ratchets down) under
+# umask 077, opened O_EXCL so an existing path or symlink is refused atomically, and
+# removed on every normal return path (a SIGKILL or a cancelled run mid-grade leaves
+# one file on an ephemeral runner).
+# rc is returned explicitly: the call site runs under set -e, and errexit is
+# suppressed inside a function called in an || list.
+cf_lb_gate_ga_pool_update() {
+  local plan_json="$1" mode="${2:-drain}"
+  plan_gate_assert_readable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
+  plan_gate_assert_classifiable "cf_lb_gate_ga_pool_update" "$plan_json" || return 1
+  if [[ "$mode" != "drain" && "$mode" != "serve" ]]; then
+    echo "::error::ga-pool-update gate: mode must be drain|serve, got '${mode}'. Refusing."
+    return 1
+  fi
+  if [[ "$mode" == "drain" ]]; then
+    _cf_lb_gate_ga_pool_update_graded "$plan_json" "$mode"
+    return $?
+  fi
+  local verdict tmp rc=0
+  verdict=$(jq -r '
+    [.resource_changes[] | select((.address // "") | contains("cloudflare_load_balancer_pool.web_1"))] as $p
+    | if ($p | length) == 0 then "absent"
+      elif ($p | length) > 1 then "ambiguous"
+      elif $p[0].change.actions == ["update"] then "update"
+      elif $p[0].change.actions == ["no-op"] then
+        (if $p[0].address == "cloudflare_load_balancer_pool.web_1"
+            and ($p[0] | has("previous_address") | not)
+            and ($p[0] | has("deposed") | not)
+            and ($p[0].change | has("importing") | not)
+         then "plain-noop" else "unplain-noop" end)
+      else "other" end' "$plan_json") || return 1
+  case "$verdict" in
+    update)
+      _cf_lb_gate_ga_pool_update_graded "$plan_json" "$mode"
+      return $?
+      ;;
+    plain-noop)
+      # A path beside the plan, opened O_EXCL (dd conv=excl): an existing path or a symlink planted at the name,
+      # even one planted after a check, fails the write instead of being followed or truncated. No redirect and no
+      # mktemp: a sourced lib must not own the caller's EXIT trap, and the census of trap-less tempfile owners only
+      # ratchets down.
+      tmp="${plan_json}.serve-norm.$$"
+      ( set -o pipefail; umask 077; jq '{resource_changes: [.resource_changes[] | if .address == "cloudflare_load_balancer_pool.web_1" then (.change.actions = ["update"]) else . end]}' "$plan_json" | dd of="$tmp" conv=excl status=none ) || {
+        echo "::error::ga-pool-update gate[serve]: cannot write the normalised plan copy (${tmp} already exists, or the plan directory is not writable). NOTHING applied."
+        return 1
+      }
+      _cf_lb_gate_ga_pool_update_graded "$tmp" "$mode" || rc=$?
+      rm -f "$tmp"
+      if [[ "$rc" -eq 0 ]]; then
+        echo "cf-lb-overlay gate[ga-pool-update:serve]: pool already {web-1:1, web-2:1} (no-op against live, graded as the equivalent update)"
+      fi
+      return "$rc"
+      ;;
+    absent | ambiguous)
+      echo "::error::ga-pool-update gate[serve]: pool absent from, or ambiguous in, the plan (cloudflare_load_balancer_pool.web_1: ${verdict}, exactly 1 entry required) — serve grades the pool and a plan that carries none (or several) approves nothing about it. NOTHING applied."
+      return 1
+      ;;
+    unplain-noop)
+      echo "::error::ga-pool-update gate[serve]: the pool no-op entry carries a state move, import or deposed marker (or a non-exact address) — only a plain no-op against live is normalised. NOTHING applied."
+      return 1
+      ;;
+    *)
+      echo "::error::ga-pool-update gate[serve]: the pool entry is neither an update nor a plain no-op (verdict '${verdict:-none}') — a replace, read, forget or unknown verb has never been graded by this arm. NOTHING applied."
+      return 1
+      ;;
+  esac
 }

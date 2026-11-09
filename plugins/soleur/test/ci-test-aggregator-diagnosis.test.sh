@@ -245,6 +245,13 @@ if grep -qF -- "matrix" "$OUT"; then pass; else
   fail "R1j the test-scripts-heavy failure message does not say 'matrix' — the failure arm special-cases only test-scripts, but this job is a matrix rollup too (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
 fi
 
+# R1k — oracle-index-check is a K=5 matrix rollup too (#12393): its failure arm must use the
+# matrix wording, not the single-log pointer.
+run_body "$BODY" success success success push success success success true "" true true 1 failure
+if grep -qF -- "oracle-index-check: FAILED" "$OUT" && grep -qF -- "matrix" "$OUT"; then pass; else
+  fail "R1k the oracle-index-check failure message does not say 'matrix' — the failure arm must special-case this job too (rc=$RC): $(tr '\n' '|' <"$OUT" | head -c 200)"
+fi
+
 # R1k/R1l — the 6th leg (encryption-posture, #6907). Before #6907 it was a
 # standalone ADVISORY job: a PR could merge with the ledger sweep red. Joining
 # the aggregator is what arms it, so red ALONE must fail `test` and name the
