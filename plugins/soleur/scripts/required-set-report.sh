@@ -30,7 +30,7 @@
 # A SIGTERM runs the EXIT trap (no temp file leaks) but the already-started `timeout -k 5` child lives until its own bound, as in
 # the monitor: the orphan is read-only and bounded, so it is accepted rather than trapped.
 # Lifted from read_required_set / _req_degraded in monitor-pr-checks.sh (not sourced, not edited; dedupe is deferred, see
-# knowledge-base/project/plans/2026-11-09-feat-ship-phase7-required-set-read-plan.md, Deferred).
+# knowledge-base/project/plans/archive/20261109-212720-2026-11-09-feat-ship-phase7-required-set-read-plan.md, Deferred).
 set -uo pipefail
 
 # _deg — the ONE line for every read that produced no marker (never a forged marker-shaped line).
