@@ -26,3 +26,10 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 ## Technical Rulings
 
 - cto_spawns=1 — one batched `soleur:engineering:cto` consult ruled all 7 decision-challenges rows (defaults ratified; row 7 re-classed `operator (scope)` → `technical`). No dissent.
+
+## Work Phase Progress
+
+- Verdict: FLIP (27 cancelled merge_group ci.yml runs / 28d >= 2) — branch 3B executed.
+- Committed ac2fa472: flip on 4 surfaces (tf/DR/README/stall-env -> 1) + Guard-2 {1,2} pin + T-mq-1.m14/m15 + MQ_EXPECTED_OK 28->31 + followthrough probe + suite. Guard suite 69/0, probe suite 8/8.
+- stall-check suite fixtures made maxpos-aware (behav_check + lrow7) — uncommitted, suite re-run pending.
+- Remaining: commit suite patch; GDPR gate (likely skip); affected gate; fixture ratchets for new .test.sh; Phase 3 quality; Phase 4 guard -> review -> resolve -> qa -> compound -> ship.
