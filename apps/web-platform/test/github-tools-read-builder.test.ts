@@ -103,6 +103,14 @@ beforeEach(() => {
   for (const f of Object.values(r)) f.mockReset();
 });
 
+describe("the cc builder cannot be built unhardened (type level, checked by tsc)", () => {
+  it("`hardening` is REQUIRED on buildGithubReadTools", () => {
+    // @ts-expect-error hardening is required: tsc fails this directive (unused) if the option ever becomes optional again.
+    const build = () => buildGithubReadTools({ installationId: 1, owner: "o", repo: "r" });
+    expect(typeof build).toBe("function"); // never called: the point is the directive above
+  });
+});
+
 describe("the tool set", () => {
   it("is exactly the six read tools, in order, with matching FQNs", () => {
     const { built } = make();

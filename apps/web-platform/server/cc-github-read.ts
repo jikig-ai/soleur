@@ -152,7 +152,7 @@ export async function resolveCcGithubReadRegistration(args: ResolveCcGithubReadA
   } catch (err) {
     // null first, never the Error (#8629), and never the repo name.
     reportSilentFallback(null, {
-      feature: "cc-github-read",
+      feature: "cc-dispatcher",
       op: "cc-github-read-visibility-resolve",
       extra: { userId: args.userId, ...failureExtra(err) },
       message: "repository visibility lookup failed for the cc GitHub read tools; tools not registered (fail closed)",
@@ -177,7 +177,7 @@ export async function resolveCcGithubReadRegistration(args: ResolveCcGithubReadA
           mirrorWithDebounce(
             null,
             {
-              feature: "cc-github-read",
+              feature: "cc-dispatcher",
               op: "cc-github-read-tool",
               extra: { userId: args.userId, tool: fault.tool, errName: fault.errName, ...(fault.status !== undefined ? { status: fault.status } : {}) },
               message: "cc github read tool fault",
@@ -190,7 +190,7 @@ export async function resolveCcGithubReadRegistration(args: ResolveCcGithubReadA
     return done("registered", built.tools, false);
   } catch (err) {
     reportSilentFallback(null, {
-      feature: "cc-github-read",
+      feature: "cc-dispatcher",
       op: "cc-github-read-registration-failed",
       extra: { userId: args.userId, errName: err instanceof Error ? err.name : undefined },
       message: "cc github read tools build threw; tools not registered",

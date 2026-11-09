@@ -261,7 +261,7 @@ describe("containment", () => {
     const [first, ctx, userKey, cls] = h.mirrorWithDebounce.mock.calls[0];
     expect(first).toBeNull();
     expect(ctx).toMatchObject({
-      feature: "cc-github-read",
+      feature: "cc-dispatcher",
       op: "cc-github-read-tool",
       extra: { userId: USER, tool: "github_read_pr", errName: "GitHubApiError", status: 502 },
     });

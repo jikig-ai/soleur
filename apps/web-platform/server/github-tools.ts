@@ -248,7 +248,7 @@ export interface BuildGithubReadHardenedOpts extends BuildGithubReadToolsOpts {
   hardening: GithubReadHardening;
 }
 
-/** The soleur_platform FQNs of the six cc read tools, in builder order. The registrar's literal list is kept equal to this by a test. */
+/** The SHORT names (no `mcp__soleur_platform__` prefix) of the six cc read tools, in builder order. The registrar's FQN list is this list with that prefix; cc-github-read.test.ts keeps them equal. */
 export const GITHUB_READ_TOOL_NAMES = [
   "github_list_pull_requests",
   "github_read_pr",
