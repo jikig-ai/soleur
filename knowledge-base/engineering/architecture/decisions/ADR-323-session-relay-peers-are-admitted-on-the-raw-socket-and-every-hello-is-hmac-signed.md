@@ -42,8 +42,9 @@ the second host:
 - **`_PREVIOUS` dual-key verification.** The zero-downtime rotation pattern. Cut: rotation has no route in this PR; the new destroy-guard
   HALT blocks a replace instead.
 - **A new `ProxyState` value for "no hello key".** Cut: `error` already pages through `relay_listener_down`.
-- **A hello-deadline timer** (slow-peer bound). Cut: the serve-gate probe (`relay_peer_probe`) holds an allowlisted, hello-less upgrade
-  open for 700 ms to read `ok`; a shorter deadline would turn every healthy peer into `denied`. Named as a residual.
+- **A hello-deadline timer** (slow-peer bound). First cut (the serve-gate probe holds an allowlisted, hello-less upgrade open for 700 ms
+  to read `ok`), then REVERSED by the CTO ruling of 2026-11-09 (A2): a 10 s deadline sits far above the 700 ms probe hold and bounds an
+  idle allowlisted peer. See Decision 1.
 - **Edit `RELAY_PROBE_JS` so a pre-TLS reset reads `denied`.** Cut: it is a baked host script, so any byte changes the host-scripts
   coherence hash, for no gate benefit.
 - **Extend the LUKS no-ack set (`luks_passphrase_addrs`) with the hello pair.** Cut: its HALT text, closed-sequence parity test, ADR-282
@@ -55,8 +56,9 @@ the second host:
 
 1. **Pre-TLS admission (#12288).** A named listener `admitProxyPeer` is PREPENDED to the https server's raw `connection` event. A source
    whose normalized `remoteAddress` is absent or not in `SOLEUR_PROXY_PEER_ALLOWLIST` is destroyed before Node's TLS wrapper reads a
-   byte. The in-`wss` re-check stays as defence in depth and shares the predicate. No hello-deadline timer exists (see Considered
-   Options); a source comment pins the 700 ms probe constraint.
+   byte. The in-`wss` re-check stays as defence in depth and shares the predicate. An admitted peer that produces no message
+   within 10 s of admission (`HELLO_DEADLINE_MS`) is destroyed; the timer is cleared on the first message, and a test pins that the 700 ms
+   probe hold is not cut.
 2. **Bounded deny reporting.** Every refusal goes through one reporter (`proxy-deny-report.ts`): at most 5 Sentry events per reason per
    60 s window, an exact counter, one summary event for a window that suppressed anything, and one closed-grammar pino line
    `relay_hello_window accepted=<n> denied=<n> suppressed=<n>` per window with hello activity. That line is the only off-host positive
@@ -66,15 +68,18 @@ the second host:
    `"soleur-proxy-hello-v1\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce`. `ts` is Unix seconds as a decimal string,
    `nonce` 32 lowercase hex, `mac` 64 lowercase hex, both ids strict lowercase UUIDs. One shared module builds the canonical string for
    the sender and the verifier; a known-answer vector assembled by hand in the test pins it.
-4. **Check order, fail-closed.** allowlist (pre-TLS) → 1 KiB cap on the raw Buffer length → text frame, plain object with exactly the six
+4. **Check order, fail-closed.** allowlist (pre-TLS) → pre-hello byte guard (a peer that sends more than 2048 bytes before its first message is accepted is
+   terminated; the server-wide `maxPayload` cannot be lowered because the same socket later carries relayed client frames) → 1 KiB cap on
+   the raw Buffer length → text frame, plain object with exactly the six
    keys, shapes → MAC (`timingSafeEqual` on two 32-byte buffers) → ts within ±30 s → replay → AP-2 membership. The replay
    check-and-insert is synchronous and precedes the membership `await`. Every post-upgrade refusal closes with the single reason
    `relay refused`.
 5. **Replay cache.** 4096 live entries, per process. Each entry expires at `ts + 31 s` (derived from the hello's own `ts`, so the cache
    can neither outlive nor undercut the skew window; a receipt-based 60 s TTL expired exactly at the skew boundary). A full cache refuses
-   with its own reason `full` and never evicts. The total replay window is 60 s.
-6. **Key handling.** `loadProxyHelloKey` accepts exactly 64 lowercase hex characters and is read per call from `process.env`. It is in
-   `sensitive-keys.ts`, absent from `agent-env.ts`, `ALLOWED_SERVICE_ENV_VARS` and `providers.ts`, pinned by an isolation test. With
+   with its own reason `full` and never evicts. The total replay window is about 61 s (`ts - 30` to `ts + 31`).
+6. **Key handling.** `loadProxyHelloKey` accepts exactly 64 lowercase hex characters. It is called once at boot (`index.ts`, before any
+   child can be spawned), the value is cached in module state, and the variable is deleted from `process.env` so a default or spread child
+   environment cannot inherit it. It is in `sensitive-keys.ts`, absent from `agent-env.ts`, `ALLOWED_SERVICE_ENV_VARS` and `providers.ts`, pinned by an isolation test. With
    relay TLS enabled and the key absent or malformed, `createProxyServer` returns null, `proxy_state=error` and one constant-text
    `createProxyServer.no-hello-key` event; the check sits after the tls, bind and allowlist checks so `disabled`, `no_bind` and
    `no_allowlist` keep their meaning. Dev and CI without TLS stay `disabled` with no event.
@@ -84,7 +89,15 @@ the second host:
 8. **Guard rails around the key.** A dedicated destroy-guard counter `relay_hello_key_changes` with its own non-ackable HALT on the
    per-merge path (a replace, update, delete, forget, unreadable action list, or create of `random_bytes.proxy_hello_hmac` halts; a lone
    create of the secret is legal), and `PROXY_HELLO_HMAC_KEY` in the `REQUIRED` list of `verify-required-secrets.sh`, which the existing
-   `verify-doppler-secrets` job runs before `deploy`.
+   `verify-doppler-secrets` job runs before `deploy`. The gate is presence-only: it refuses an absent or empty key and does not check the
+   shape; a present-but-malformed key is caught at startup by `createProxyServer.no-hello-key`, which leaves the app serving with the relay
+   in `error`. The `migrate` job is not gated on `verify-doppler-secrets`, so on a release that carries a schema migration, a missing key
+   blocks the deploy AFTER the migration has run, leaving the schema ahead of the serving image until the key exists.
+9. **Leak response and kill switch.** If the key leaks, the hellos it signs can be forged until it changes. Containment: the relay is
+   switched off with `host_proxy_tls_enabled` false (a separately reviewed route, together with removing the `REQUIRED` entry); the app
+   keeps serving through the owner host. Replacement: the per-merge HALT refuses a replace on purpose, so a rotation is a reviewed full-root
+   run that replaces `random_bytes.proxy_hello_hmac` and the Doppler copy together, followed by a rolling redeploy of both hosts. Restoring
+   the previous value (the route for an out-of-band edit) re-installs a leaked key, so it is not the route for a leak.
 
 ## Consequences
 
@@ -96,18 +109,23 @@ the second host:
 - **`relay_peer_probe` shift.** A non-allowlisted source is now reset before `secureConnect`, so it reads `result=tls`; `denied` is
   unreachable from the probe. The grammar, the three `relay_*` alert queries and the serve gate (`result=ok`) are unchanged. The
   discriminator between a certificate fault and an allowlist deny is the receiver-side `peer` event. Node's TLS wrapper still raises one
-  `tlsClientError` per destroyed connection (measured on Node 22 and 26); `secureConnection` stays 0.
+  `tlsClientError` per destroyed connection (measured on Node 26; the admission test covers the CI Node); `secureConnection` stays 0.
 - **The probe cannot see a broken verifier.** It sends no hello. The deployed signed round trip (a `relay_hello_window accepted>0` row on
   the owner host from a real proxied session) is the evidence needed before the second host serves external users.
 - **Tier-A exposure.** The key is minted by `random_bytes` in the web-platform Terraform root, so anyone with Tier-A state read (ADR-320,
   ADR-241) can forge hellos. Accepted debt, identical to `PROXY_TLS_KEY`.
-- **Named residuals** (tracked in one issue): idle or slow allowlisted peers (no deadline); the first frame is buffered up to the `ws`
-  default `maxPayload` before any application check, and the server-wide limit cannot drop because the same socket then carries relayed
-  client frames; no `maxConnections` cap, because each proxied session holds one connection and a cap below the concurrent-session
-  ceiling would refuse legitimate users; a captured hello is replayable to a different roster host inside 60 s (the MAC does not bind the
-  target host; it needs a compromised roster host); the per-process replay cache is cleared by a container restart for up to 60 s, and a
-  backward clock step can re-admit a purged nonce; whether the agent sandbox can read the parent's `/proc/<pid>/environ` is checked
-  read-only at work time (deleting the key from `process.env` would not help, the original environment block stays in `/proc`).
+- **Agent sandbox and `/proc`.** The agent sandbox does not hide the parent's `/proc/<pid>/environ` (`agent-outer-wrap.ts`, #9723; the
+  ADR-272 sandbox tests cover the credential deny set, not this path), and `/proc` keeps the original environment block after a
+  `delete process.env.X`. The deletion therefore only stops inheritance by children; reading the key from `/proc` stays open as long as
+  #9723 does. This is why the key is also treated as leakable in Decision 9.
+- **ADR-320.** The key sits in Tier-A-readable state, which ADR-320 decision 1 forbids for a secret that grants production access. It is
+  recorded as existing debt under ADR-320 decision 3 (same as `PROXY_TLS_KEY`); moving the mint out of Terraform is the discharge, and
+  needs the same separately reviewed route as a rotation.
+- **Named residuals** (tracked in issues): the audience is not bound (a captured hello is replayable to a different roster host inside
+  the replay window; a `v2` domain tag with the target host would bind it); the first frame is buffered up to the `ws` default
+  `maxPayload`, but the pre-hello byte guard terminates a peer past 2048 bytes first; no `maxConnections` cap, because each proxied session holds one connection and a cap below the concurrent-session
+  ceiling would refuse legitimate users; replaying a captured hello needs a compromised roster host; the per-process replay cache is
+  cleared by a container restart for up to about 61 s, and a backward clock step can re-admit a purged nonce.
 - **No rotation route.** After this change a replace of the key is an outage: the HALT blocks it on the per-merge path, `_PREVIOUS`
   dual-key verification is the future pattern, and retiring the relay (`host_proxy_tls_enabled` false) needs a separately reviewed route
   and removing the `REQUIRED` entry in the same change.

@@ -2025,6 +2025,23 @@ t_relay_hello_indexed_forms_counted() { # T66h
       d="$(_rh_shape_check "$FILTER" "$f" "$(_rh_create_want "$a")")"; detail="${detail}${d}"
     done
   done
+  # previous_address sub-case: a state move off a key address (verb no-op) counts; a move onto one from elsewhere reads 0.
+  local tmp got; tmp="$(mktemp)"
+  for a in "${RH_ADDRS[@]}"; do
+    printf '{"resource_changes":[{"address":"x.moved","previous_address":"%s[0]","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' "$a" > "$tmp"
+    got="$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')"
+    [[ "$got" == "1" ]] || detail="${detail} previous_address=${a} got=${got} want=1;"
+  done
+  printf '{"resource_changes":[{"address":"x.moved","previous_address":"x.other","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
+  got="$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')"
+  [[ "$got" == "0" ]] || detail="${detail} previous_address=unrelated got=${got} want=0;"
+  # mutation (control green above): a filter that never reads previous_address must miss the moved-off-the-key case
+  local mut; mut="$(mktemp)"
+  sed '/^  relay_hello_key_changes: (/,/^  ),/ s/\.previous_address?/.previous_address_x?/g' "$FILTER" > "$mut"
+  printf '{"resource_changes":[{"address":"x.moved","previous_address":"random_bytes.proxy_hello_hmac","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
+  if cmp -s "$FILTER" "$mut"; then detail="${detail} previous_address mutation did not land;"
+  elif [[ "$(jq -f "$mut" "$tmp" | jq -r '.relay_hello_key_changes')" != "0" ]]; then detail="${detail} previous_address mutant still counts the move;"; fi
+  rm -f "$tmp" "$mut"
   if [[ -z "$detail" ]]; then
     _report "T66h indexed and module-prefixed forms of each hello-key address score like the bare address (create only at random_bytes)" ok
   else
@@ -2107,7 +2124,7 @@ t_relay_hello_mutant_doppler_secret_removed() { # T66l
 
 t_relay_hello_mutant_normalization_dropped() { # T66m
   local mut ctl got; mut="$(mktemp)"
-  sed 's/select(IN(\.address | strings | luks_passphrase_base; relay_hello_key_addrs\[\]))/select(IN(.address; relay_hello_key_addrs[]))/' "$FILTER" > "$mut"
+  sed 's/^          IN(\.address | strings | luks_passphrase_base; relay_hello_key_addrs\[\])$/          IN(.address; relay_hello_key_addrs[])/' "$FILTER" > "$mut"
   if cmp -s "$FILTER" "$mut"; then
     _report "T66m mutant: dropping the index/module normalization" fail "the mutation did not land"
     rm -f "$mut"; return

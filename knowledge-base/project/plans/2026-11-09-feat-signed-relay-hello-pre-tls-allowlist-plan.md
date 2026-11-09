@@ -64,11 +64,11 @@ New forks met while planning were ruled by the CTO agent (and the CPO for sign-o
 
 **Property List (Phase 0.6b).**
 - P1. A private-net host that is not an allowlisted peer costs no TLS handshake and cannot flood Sentry.
-- P2. A relayed session attaches only for a hello with a valid MAC under a key distinct from the TLS key, a timestamp inside +-30 s, and a nonce not seen in 60 s; every other hello is refused before the membership lookup.
+- P2. A relayed session attaches only for a hello with a valid MAC under a key distinct from the TLS key, a timestamp inside +-30 s, and a nonce not seen in about 61 s; every other hello is refused before the membership lookup.
 - P3. A bad `SOLEUR_PROXY_PORT` or a missing/invalid hello key stops only the relay, is reported, and the app keeps serving.
 - P4. The hello key never reaches an agent env, a log line or a Sentry event.
 - P5. A routine merge apply (or an `[ack-destroy]`) cannot replace, update, forget or re-mint the key.
-- P6. A release cannot deploy while the key is absent or malformed in prd.
+- P6. A release cannot deploy while the key is absent or empty in prd (presence-only gate; a present-but-malformed value is caught at app startup, which leaves the relay in `error` with the app serving).
 - P7. The `relay_probe` / `relay_peer_probe` grammars and the three `relay_*` alert queries stay valid.
 
 **Cut List.**

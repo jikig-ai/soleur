@@ -758,10 +758,10 @@ jobs:
             echo "::error::This pair mints PROXY_HELLO_HMAC_KEY, the secret relayed session hellos are signed with; both web hosts read it from Doppler. Any change leaves the hosts disagreeing on the key: a relay outage, not data loss."
             echo "::error::[ack-destroy] does NOT reach this HALT: acking an unrelated delete in the same merge would ack this one through with it."
             echo "::error::Remediation depends on what you intended:"
-            echo "::error::  • Not intended → something upstream forced a replace (byte_length, keepers, the count gate, a project or config reference). Revert it."
+            echo "::error::  • Not intended → something upstream forced a replace (length, keepers, the count gate, a project or config reference). Revert it."
             echo "::error::  • Intended rotation → no per-merge route exists; it needs the dual-key _PREVIOUS pattern (PROXY_HELLO_HMAC_KEY_PREVIOUS accepted during the roll), not built yet. Stop and escalate."
-            echo "::error::  • CREATE of random_bytes.proxy_hello_hmac → state lost the entry. Do NOT apply: a new value splits the hosts. A create of the Doppler copy alone is not refused."
-            echo "::error::  • Bare update of doppler_secret.proxy_hello_hmac_key → edited out of band. Restore the previous value in Doppler; never apply over it."
+            echo "::error::  • CREATE of random_bytes.proxy_hello_hmac → most likely lost state; on a FIRST birth the key is also absent from Doppler prd and the release gate refuses until an owner-run full apply mints it. Do NOT apply it from this path: a new value splits the hosts. A create of the Doppler copy alone is not refused."
+            echo "::error::  • Bare update of doppler_secret.proxy_hello_hmac_key → most likely an out-of-band edit. Restore the previous value, unless the key LEAKED (restoring re-installs it: use the reviewed rotation route); never apply over it."
             echo "::error::  • Retiring the relay (proxy-TLS gate variable off) destroys this pair and is closed on the per-merge path: it needs a separately reviewed route, with PROXY_HELLO_HMAC_KEY dropped from verify-required-secrets.sh in the same change."
             echo "::error::UNWEDGE (immediate): add a line containing exactly '[skip-web-platform-apply]' to the merge commit message. It skips the apply, it does not perform it."
             grep -F -e random_bytes.proxy_hello_hmac -e doppler_secret.proxy_hello_hmac_key -e 'Plan:' tfplan.txt >&2 || true

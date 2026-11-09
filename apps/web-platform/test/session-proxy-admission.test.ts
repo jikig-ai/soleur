@@ -25,6 +25,7 @@ vi.mock("@/server/observability", () => ({
 
 import { createProxyServer, isAllowedProxyPeer, parseProxyPeerAllowlist } from "@/server/session-proxy";
 import { __resetDenyReporterForTests, denyReporter } from "@/server/proxy-deny-report";
+import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
 import { __resetProxyListenerStatusForTests, getProxyStatus } from "@/server/proxy-listener-status";
 
 const TEST_BIND = { privateBindPrefix: "", bindAddress: "127.0.0.1", port: 0 } as const;
@@ -41,9 +42,9 @@ const opened: HttpsServer[] = [];
 const sockets: Socket[] = [];
 const onProxiedSession = vi.fn();
 
-async function start(allowlist: string): Promise<{ server: HttpsServer; port: number; secure: () => number; conns: () => number }> {
+async function start(allowlist: string, extra: { helloDeadlineMs?: number } = {}): Promise<{ server: HttpsServer; port: number; secure: () => number; conns: () => number }> {
   vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", allowlist);
-  const server = createProxyServer({ onProxiedSession, ...TEST_BIND });
+  const server = createProxyServer({ onProxiedSession, ...TEST_BIND, ...extra });
   if (!server) throw new Error("createProxyServer returned null");
   opened.push(server);
   let secure = 0;
@@ -65,6 +66,7 @@ beforeEach(() => {
   vi.stubEnv("PROXY_HELLO_HMAC_KEY", "a".repeat(64));
   __resetProxyListenerStatusForTests();
   __resetDenyReporterForTests();
+  __resetProxyHelloKeyForTests();
 });
 
 afterEach(async () => {
@@ -120,6 +122,25 @@ describe("pre-TLS admission", () => {
     expect(peerReports()[0][1].extra).toEqual({ reason: "peer", peer: "unknown" });
   });
 
+  it("(c2) a fault in the reporting path cannot leave a denied socket alive or throw out of the connection emit", async () => {
+    const s = await start("127.0.0.1");
+    mockReportSilentFallback.mockImplementationOnce(() => {
+      throw new Error("sentry down");
+    });
+    const fake = new Socket();
+    Object.defineProperty(fake, "remoteAddress", { value: "10.9.9.9" });
+    expect(() => s.server.emit("connection", fake)).not.toThrow();
+    expect(fake.destroyed).toBe(true);
+  });
+
+  it("(c3) the peer label is a fixed token for a value that is not an IP literal", async () => {
+    const s = await start("127.0.0.1");
+    const fake = new Socket();
+    Object.defineProperty(fake, "remoteAddress", { value: "not an ip!" });
+    s.server.emit("connection", fake);
+    expect(peerReports()[0][1].extra).toEqual({ reason: "peer", peer: "invalid" });
+  });
+
   it("(d) the IPv4-mapped spelling matches a plain-IPv4 allowlist; a trailing-space CSV entry matches too", () => {
     const allow = parseProxyPeerAllowlist("10.0.1.8, 10.0.1.9 ");
     expect(isAllowedProxyPeer("::ffff:10.0.1.9", allow)).toBe(true);
@@ -168,6 +189,25 @@ describe("pre-TLS admission", () => {
     await new Promise((r) => setTimeout(r, 1200));
     expect(ws.readyState).toBe(WebSocket.OPEN);
     ws.close();
+  });
+
+  it("(f2) a peer that connects and drops before the deadline leaves no timer behind: no hello_timeout deny fires later", async () => {
+    const s = await start("127.0.0.1", { helloDeadlineMs: 150 });
+    const c = netConnect({ host: "127.0.0.1", port: s.port });
+    sockets.push(c);
+    await new Promise<void>((r) => c.once("connect", () => r()));
+    await vi.waitFor(() => expect(s.conns()).toBe(1));
+    c.destroy();
+    await new Promise((r) => setTimeout(r, 450));
+    expect(denyReporter.counters("hello_timeout")).toEqual({ denied: 0, reported: 0, suppressed: 0 });
+  });
+
+  it("(f3) positive control: an admitted peer that stays silent past the deadline is destroyed and counted once", async () => {
+    const s = await start("127.0.0.1", { helloDeadlineMs: 150 });
+    const c = netConnect({ host: "127.0.0.1", port: s.port });
+    sockets.push(c);
+    await new Promise<void>((r) => c.once("close", () => r()));
+    expect(denyReporter.counters("hello_timeout")).toEqual({ denied: 1, reported: 1, suppressed: 0 });
   });
 
   it("(g) relay_probe still reads listening and the emitted line matches the closed grammar", async () => {

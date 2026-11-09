@@ -8,13 +8,21 @@
 // that suppressed anything ends with exactly ONE summary event {reason, denied, suppressed}.
 //
 // It also owns the `relay_hello_window accepted=<n> denied=<n> suppressed=<n>` pino line (one
-// per window that saw any hello activity). The serve-gate probe (`relay_peer_probe`) sends no
+// per window that saw hello activity). The serve-gate probe (`relay_peer_probe`) sends no
 // hello, so that line is the only off-host way to see that a SIGNED round trip happened. The
 // line carries counts only and does not match the `relay_probe proxy_state=` or
-// `relay_peer_probe peer=` alert filters.
+// `relay_peer_probe peer=` alert filters. Pre-hello connection denies (`peer`) and the sender
+// side's refusals are bounded like the rest but are NOT hellos, so they stay out of that line.
+//
+// Events are emitted with a null error and an explicit message: on the Error path
+// `reportSilentFallback` logs first, the pino mirror captures the SAME Error instance as
+// `feature=pino-mirror`, and Sentry drops the tagged second capture, so the event would arrive
+// without its `feature`/`op` tags and `extra` (the fleet-wide defect tracked in #8629; see
+// server/anthropic-credit.ts). With a null error the call goes through `captureMessage`.
 //
 // Extras are an enum, counts and the supplied peer address / authenticated id pair. An
-// unauthenticated reason never carries a byte derived from the hello.
+// unauthenticated reason never carries a byte derived from the hello. `record` never throws:
+// a fault in the reporting path must not turn a refusal into an uncaught exception.
 
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
@@ -25,23 +33,45 @@ export const DENY_MAX_EVENTS = 5;
 export const DENY_WINDOW_MS = 60_000;
 
 export type DenyReason =
+  // Owner side, before any hello is accepted.
   | "peer"
+  | "hello_timeout"
   | "size"
   | "shape"
   | "mac"
   | "skew"
   | "replay"
   | "full"
+  // Owner side, after a valid MAC.
   | "membership"
-  // Sender-side (proxying host) refusals: the client is closed before any dial. They share the cap and
-  // the counter, but are NOT part of the owner's relay_hello_window line (that line counts hellos).
+  | "internal"
+  // Sender (proxying host) side: the client is closed before or without a usable owner. They share
+  // the cap and the counter but are not part of the owner's relay_hello_window line.
   | "no_key"
+  | "no_ca"
   | "bad_ids"
-  | "bad_port";
+  | "bad_port"
+  | "owner_refused";
 
-const SENDER_SIDE: ReadonlySet<DenyReason> = new Set<DenyReason>(["no_key", "bad_ids", "bad_port"]);
+const REASONS: Record<DenyReason, { op: string; message: string; hello: boolean }> = {
+  peer: { op: "createProxyServer.peer-deny", message: "proxy connection from a non-peer private IP — rejected before handshake", hello: false },
+  hello_timeout: { op: "createProxyServer.hello-deny", message: "proxy hello not received before the deadline — connection closed", hello: true },
+  size: { op: "createProxyServer.hello-deny", message: "proxy hello refused (size)", hello: true },
+  shape: { op: "createProxyServer.hello-deny", message: "proxy hello refused (shape)", hello: true },
+  mac: { op: "createProxyServer.hello-deny", message: "proxy hello refused (mac)", hello: true },
+  skew: { op: "createProxyServer.hello-deny", message: "proxy hello refused (skew)", hello: true },
+  replay: { op: "createProxyServer.hello-deny", message: "proxy hello refused (replay)", hello: true },
+  full: { op: "createProxyServer.hello-deny", message: "proxy hello refused (replay cache full)", hello: true },
+  membership: { op: "createProxyServer.ap2-deny", message: "proxied session failed AP-2 membership re-verify — cross-tenant/ stale route rejected", hello: true },
+  internal: { op: "createProxyServer.hello-deny", message: "proxy hello handling failed internally — connection closed", hello: true },
+  no_key: { op: "proxyClientToOwner.no-hello-key", message: "proxy hello key unavailable — client closed without dialing the owner", hello: false },
+  no_ca: { op: "proxyClientToOwner.no-ca", message: "proxy client CA (PROXY_TLS_CERT) unavailable — client closed without dialing the owner", hello: false },
+  bad_ids: { op: "proxyClientToOwner.bad-ids", message: "proxy hello ids are not canonical UUIDs — client closed without dialing the owner", hello: false },
+  bad_port: { op: "proxyClientToOwner.bad-port", message: "SOLEUR_PROXY_PORT is not a valid port — client closed without dialing the owner", hello: false },
+  owner_refused: { op: "proxyClientToOwner.owner-refused", message: "owner refused the proxied session — client closed", hello: false },
+};
 
-type Report = (err: unknown, opts: { feature: "control_plane_route"; op: string; message?: string; extra?: Record<string, unknown> }) => void;
+type Report = typeof reportSilentFallback;
 
 export interface DenyReporterOptions {
   maxEvents?: number;
@@ -59,32 +89,6 @@ interface Bucket {
   suppressed: number;
 }
 
-function opFor(reason: DenyReason): string {
-  if (reason === "no_key") return "proxyClientToOwner.no-hello-key";
-  if (reason === "bad_ids") return "proxyClientToOwner.bad-ids";
-  if (reason === "bad_port") return "proxyClientToOwner.bad-port";
-  if (reason === "peer") return "createProxyServer.peer-deny";
-  if (reason === "membership") return "createProxyServer.ap2-deny";
-  return "createProxyServer.hello-deny";
-}
-
-function messageFor(reason: DenyReason): string {
-  switch (reason) {
-    case "peer":
-      return "proxy connection from a non-peer private IP — rejected before handshake";
-    case "membership":
-      return "proxied session failed AP-2 membership re-verify — cross-tenant/ stale route rejected";
-    case "no_key":
-      return "proxy hello key unavailable — client closed without dialing the owner";
-    case "bad_ids":
-      return "proxy hello ids are not canonical UUIDs — client closed without dialing the owner";
-    case "bad_port":
-      return "SOLEUR_PROXY_PORT is not a valid port — client closed without dialing the owner";
-    default:
-      return `proxy hello refused (${reason})`;
-  }
-}
-
 const defaultSetTimer = (fn: () => void, ms: number): void => {
   const t = setTimeout(fn, ms);
   if (typeof t === "object" && t && "unref" in t) (t as { unref: () => void }).unref();
@@ -93,7 +97,7 @@ const defaultSetTimer = (fn: () => void, ms: number): void => {
 export function createDenyReporter(opts: DenyReporterOptions = {}) {
   const maxEvents = opts.maxEvents ?? DENY_MAX_EVENTS;
   const windowMs = opts.windowMs ?? DENY_WINDOW_MS;
-  const report: Report = opts.report ?? (reportSilentFallback as unknown as Report);
+  const report: Report = opts.report ?? reportSilentFallback;
   const now = opts.now ?? Date.now;
   const setTimer = opts.setTimer ?? defaultSetTimer;
 
@@ -105,9 +109,10 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
   function flushBucket(reason: DenyReason, b: Bucket): void {
     if (buckets.get(reason) === b) buckets.delete(reason);
     if (b.suppressed > 0) {
-      report(new Error(`proxy relay denies suppressed (${reason})`), {
+      report(null, {
         feature: "control_plane_route",
-        op: `${opFor(reason)}-summary`,
+        op: `${REASONS[reason].op}-summary`,
+        message: `proxy relay denies suppressed (${reason})`,
         extra: { reason, denied: b.denied, suppressed: b.suppressed },
       });
     }
@@ -134,7 +139,7 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
       b = fresh;
       buckets.set(reason, fresh);
       setTimer(() => {
-        if (buckets.get(reason) === fresh) flushBucket(reason, fresh);
+        if (buckets.get(reason) === fresh) safely(() => flushBucket(reason, fresh));
       }, windowMs);
     }
     return b;
@@ -146,46 +151,68 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
       const fresh = { start: now(), accepted: 0, denied: 0, suppressed: 0 };
       win = fresh;
       setTimer(() => {
-        if (win === fresh) flushWindow(fresh);
+        if (win === fresh) safely(() => flushWindow(fresh));
       }, windowMs);
     }
     return win;
   }
 
+  function safely(fn: () => void): void {
+    try {
+      fn();
+    } catch {
+      /* a reporting fault must never become an uncaught exception on a refusal path */
+    }
+  }
+
   return {
-    /** Count one refusal; mirror it to Sentry only while the per-reason cap allows. */
+    /** Count one refusal; mirror it to Sentry only while the per-reason cap allows. Never throws. */
     record(reason: DenyReason, extra?: Record<string, unknown>): void {
-      const b = bucketFor(reason);
-      const w = SENDER_SIDE.has(reason) ? null : windowFor();
-      const life = lifetime.get(reason) ?? { denied: 0, reported: 0, suppressed: 0 };
-      lifetime.set(reason, life);
-      b.denied++;
-      if (w) w.denied++;
-      life.denied++;
-      if (b.reported < maxEvents) {
-        b.reported++;
-        life.reported++;
-        report(new Error(messageFor(reason)), {
-          feature: "control_plane_route",
-          op: opFor(reason),
-          extra: { reason, ...(extra ?? {}) },
-        });
-        return;
-      }
-      b.suppressed++;
-      if (w) w.suppressed++;
-      life.suppressed++;
+      safely(() => {
+        const meta = REASONS[reason];
+        const b = bucketFor(reason);
+        const w = meta.hello ? windowFor() : null;
+        const life = lifetime.get(reason) ?? { denied: 0, reported: 0, suppressed: 0 };
+        lifetime.set(reason, life);
+        b.denied++;
+        if (w) w.denied++;
+        life.denied++;
+        if (b.reported < maxEvents) {
+          b.reported++;
+          life.reported++;
+          report(null, {
+            feature: "control_plane_route",
+            op: meta.op,
+            message: meta.message,
+            extra: { reason, ...(extra ?? {}) },
+          });
+          return;
+        }
+        b.suppressed++;
+        if (w) w.suppressed++;
+        life.suppressed++;
+      });
     },
     /** Count one hello that passed every check and was handed to the session attach. */
     recordAccepted(): void {
-      acceptedTotal++;
-      windowFor().accepted++;
+      safely(() => {
+        acceptedTotal++;
+        windowFor().accepted++;
+      });
     },
-    acceptedCount(): number {
-      return acceptedTotal;
+    /** Emit every open summary event and the open window line now (graceful shutdown). */
+    flush(): void {
+      for (const [reason, b] of [...buckets]) safely(() => flushBucket(reason, b));
+      if (win) {
+        const w = win;
+        safely(() => flushWindow(w));
+      }
     },
     counters(reason: DenyReason): { denied: number; reported: number; suppressed: number } {
       return { ...(lifetime.get(reason) ?? { denied: 0, reported: 0, suppressed: 0 }) };
+    },
+    acceptedCount(): number {
+      return acceptedTotal;
     },
     reset(): void {
       buckets.clear();
@@ -196,7 +223,7 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
   };
 }
 
-/** Module default used by session-proxy.ts. Tests that use it call `__resetDenyReporterForTests`. */
+/** Module default used by session-proxy.ts. Tests that use it call `denyReporter.reset()`. */
 export const denyReporter = createDenyReporter();
 
 export function __resetDenyReporterForTests(): void {

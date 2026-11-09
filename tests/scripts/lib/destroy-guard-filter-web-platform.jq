@@ -580,9 +580,18 @@ def destroyed_at($addr):
   # restoring the previous value, which Terraform state no longer holds once overwritten.
   relay_hello_key_changes: (
     [ .resource_changes[]?
-      | select(IN(.address | strings | luks_passphrase_base; relay_hello_key_addrs[]))
+      # A state MOVE (`moved{}`) off a key address plans as `["no-op"]` at the NEW address with the key address in
+      # previous_address: the live entry leaves the address the HALT watches. Counted whatever the verb. Built as a
+      # boolean array so an absent previous_address yields `false`, never `empty` (which would drop the entry).
       | select(
-          ((.change.actions | type) != "array")
+          IN(.address | strings | luks_passphrase_base; relay_hello_key_addrs[])
+          or ([ (.previous_address? // empty) | strings | luks_passphrase_base
+                | IN(.; relay_hello_key_addrs[]) ] | any)
+        )
+      | select(
+          ([ (.previous_address? // empty) | strings | luks_passphrase_base
+             | IN(.; relay_hello_key_addrs[]) ] | any)
+          or ((.change.actions | type) != "array")
           or ((.change.actions | length) == 0)
           or (.change.actions | any(. == "update" or . == "delete" or . == "forget"))
           or (

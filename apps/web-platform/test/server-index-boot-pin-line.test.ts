@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   startClock: vi.fn(),
   stopClock: vi.fn(),
   reporterStartMock: vi.fn(),
+  order: [] as string[],
+  denyFlush: vi.fn(),
 }));
 
 vi.mock("../sentry.server.config", () => ({}));
@@ -38,8 +40,22 @@ vi.mock("../server/ws-handler", () => ({
   setupWebSocket: () => ({ clients: new Set() }),
   attachProxiedSession: vi.fn(),
 }));
-vi.mock("../server/session-proxy", () => ({ createProxyServer: () => null }));
-vi.mock("../server/proxy-tls", () => ({ logProxyCertExpiryAtStartup: vi.fn() }));
+vi.mock("../server/session-proxy", () => ({
+  createProxyServer: () => {
+    h.order.push("createProxyServer");
+    return null;
+  },
+}));
+// #12289 — the hello key is read (and deleted from process.env) at boot, before anything can spawn.
+vi.mock("../server/proxy-tls", () => ({
+  logProxyCertExpiryAtStartup: vi.fn(),
+  loadProxyHelloKey: vi.fn(() => {
+    h.order.push("loadProxyHelloKey");
+    return null;
+  }),
+}));
+// #12288 — SIGTERM flushes the open deny window before the process goes away.
+vi.mock("../server/proxy-deny-report", () => ({ denyReporter: { flush: h.denyFlush } }));
 vi.mock("../server/stream-replay-buffer", () => ({ streamReplayBuffer: { clearAll: vi.fn() } }));
 vi.mock("@/lib/types", () => ({ WS_CLOSE_CODES: { SERVER_GOING_AWAY: 1001 } }));
 vi.mock("../server/agent-runner", () => ({
@@ -134,6 +150,10 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
     };
     expect(reporterDeps.readCounts()).toEqual({ ccQueries: 0, legacySessions: expect.any(Number) });
 
+    // #12289 — the hello key is loaded exactly once, before the relay listener is created.
+    expect(h.order.filter((x) => x === "loadProxyHelloKey")).toHaveLength(1);
+    expect(h.order.indexOf("loadProxyHelloKey")).toBeLessThan(h.order.indexOf("createProxyServer"));
+
     // #8495 — the watchdog dispatch clock is armed exactly once, with defaults.
     expect(h.startClock).toHaveBeenCalledTimes(1);
     expect(h.startClock.mock.calls[0]).toEqual([]);
@@ -145,8 +165,11 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     try {
       expect(h.stopClock).not.toHaveBeenCalled();
+      expect(h.denyFlush).not.toHaveBeenCalled();
       void sigterm!();
       expect(h.stopClock).toHaveBeenCalledTimes(1);
+      // #12288 — the deny reporter is flushed during the shutdown (before the final Sentry flush).
+      await vi.waitFor(() => expect(h.denyFlush).toHaveBeenCalledTimes(1));
       await vi.waitFor(() => expect(exit).toHaveBeenCalled());
     } finally {
       exit.mockRestore();

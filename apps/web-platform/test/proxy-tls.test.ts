@@ -20,7 +20,7 @@ import {
   loadProxyTlsServerOptions,
   loadProxyTlsClientCa,
   getProxyCertNotAfter,
-  getProxyHelloKeyState,
+  __resetProxyHelloKeyForTests,
   loadProxyHelloKey,
 } from "@/server/proxy-tls";
 
@@ -167,12 +167,12 @@ describe("PROXY_TLS_KEY is a sensitive key; the public cert is not", () => {
   });
 });
 
-describe("loadProxyHelloKey (#12289): a 32-byte Buffer only for exactly 64 lowercase hex", () => {
+describe("loadProxyHelloKey (#12289): a 32-byte Buffer only for exactly 64 lowercase hex, read once, then deleted from the env", () => {
   const VALID = "0123456789abcdef".repeat(4);
+  beforeEach(() => __resetProxyHelloKeyForTests());
 
-  test("valid key: state ok and a 32-byte Buffer holding the decoded bytes", () => {
+  test("valid key: a 32-byte Buffer holding the decoded bytes", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", VALID);
-    expect(getProxyHelloKeyState()).toBe("ok");
     const key = loadProxyHelloKey();
     expect(key).toBeInstanceOf(Buffer);
     expect(key).toHaveLength(32);
@@ -185,30 +185,44 @@ describe("loadProxyHelloKey (#12289): a 32-byte Buffer only for exactly 64 lower
     expect(loadProxyHelloKey()?.toString("hex")).toBe(k);
   });
 
-  test("unset and empty read as absent", () => {
+  test("unset and empty read as null", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
-    expect(getProxyHelloKeyState()).toBe("absent");
     expect(loadProxyHelloKey()).toBeNull();
   });
 
   test.each([
     ["63 chars", VALID.slice(1)],
     ["65 chars", VALID + "a"],
-    ["uppercase", VALID.toUpperCase().replace(/0123456789ABCDEF/g, "0123456789ABCDEF")],
+    ["uppercase", VALID.toUpperCase()],
     ["leading space", " " + VALID],
     ["trailing newline", VALID + "\n"],
     ["non-hex char", VALID.slice(0, 63) + "g"],
     ["0x prefix", "0x" + VALID.slice(2)],
-  ])("%s reads as invalid and returns null", (_n, v) => {
+  ])("%s reads as null", (_n, v) => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", v);
-    expect(getProxyHelloKeyState()).toBe("invalid");
     expect(loadProxyHelloKey()).toBeNull();
   });
 
-  test("the key is read per call from process.env, not cached", () => {
+  test("the first read DELETES the variable from process.env (children spawned later cannot inherit it)", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", VALID);
-    expect(loadProxyHelloKey()).not.toBeNull();
-    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
+    expect(process.env.PROXY_HELLO_HMAC_KEY).toBe(VALID);
+    loadProxyHelloKey();
+    expect("PROXY_HELLO_HMAC_KEY" in process.env).toBe(false);
+  });
+
+  test("an invalid value is deleted too, and the verdict is cached", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "not-a-key");
     expect(loadProxyHelloKey()).toBeNull();
+    expect("PROXY_HELLO_HMAC_KEY" in process.env).toBe(false);
+  });
+
+  test("cached: a later env change is not re-read; the reset seam reloads", () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", VALID);
+    const first = loadProxyHelloKey();
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "f".repeat(64));
+    expect(loadProxyHelloKey()?.toString("hex")).toBe(first?.toString("hex"));
+    __resetProxyHelloKeyForTests();
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "f".repeat(64));
+    expect(loadProxyHelloKey()?.toString("hex")).toBe("f".repeat(64));
   });
 });

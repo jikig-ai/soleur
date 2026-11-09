@@ -26,6 +26,7 @@ import {
 } from "@/server/session-proxy";
 import { verifyProxyHello, createReplayCache } from "@/server/proxy-hello";
 import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
+import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
 
 const TEST_CERT = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
 const KEY_HEX = randomBytes(32).toString("hex");
@@ -52,6 +53,7 @@ beforeEach(() => {
   vi.stubEnv("PROXY_TLS_CERT", TEST_CERT);
   vi.stubEnv("PROXY_HELLO_HMAC_KEY", KEY_HEX);
   __resetDenyReporterForTests();
+  __resetProxyHelloKeyForTests();
 });
 afterEach(() => vi.unstubAllEnvs());
 

@@ -519,11 +519,15 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
   ```
 
 - **What a refusal looks like.** Sentry ops `createProxyServer.peer-deny` (reason `peer`, with the peer address),
-  `createProxyServer.hello-deny` (reason `size|shape|mac|skew|replay|full`), `createProxyServer.ap2-deny` (reason `membership`, with the
+  `createProxyServer.hello-deny` (reason `hello_timeout|size|shape|mac|skew|replay|full`; `hello_timeout` is an admitted peer that sent nothing for 10 s), `createProxyServer.ap2-deny` (reason `membership`, with the
   authenticated id pair). At most 5 events per reason per 60 s window, then one `-summary` event with `{reason, denied, suppressed}`.
   A sustained `reason=mac` stream after a deploy means the two hosts hold different keys; `reason=skew` means a clock problem (the
-  window needs NTP on both hosts); `reason=shape` right after a deploy is the old-sender stagger; `reason=full` is a mass reconnect
-  after an owner restart, not a replay.
+  window needs NTP on both hosts); `reason=shape` right after a deploy is the old-sender stagger; `reason=full` means the 4096-entry replay cache
+  holds live entries and refuses new ones (it never evicts); entries are only inserted after a valid MAC and timestamp, so it is 4096
+  validly signed hellos inside about 61 s, never an attacker without the key. Read it as a reconnect storm or a key holder flooding.
+- **Reading the reporter events in Better Stack.** The Sentry-mirrored events also reach the shipped log as pino rows; filter on
+  `message.op` (for example `JSONExtractString(raw,'message','op') = 'createProxyServer.hello-deny'`) and read `message.extra.reason`, a
+  fixed enum; a refusal row never carries a hello-derived byte.
 - **Key absent or malformed.** With relay TLS enabled and no usable `PROXY_HELLO_HMAC_KEY` the relay stays down: `relay_probe
   proxy_state=error` (`relay_listener_down` after about 5 minutes), one `createProxyServer.no-hello-key` event on the first host that
   starts, and the app keeps serving 80/443/3000. The release itself is blocked earlier by `verify-required-secrets.sh` in the
@@ -531,8 +535,9 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
 - **Bad port.** A `SOLEUR_PROXY_PORT` that is not 1-5 ASCII digits in 1..65535 stops only the relay (`createProxyServer.bad-port`,
   `proxy_state=error`); the sender never dials with it (`proxyClientToOwner.bad-port`). Production pins the literal 8443.
 - **No rotation route.** A replace, update, delete or forget of the key pair is blocked by the non-ackable `relay_hello_key_changes`
-  HALT on the per-merge apply (see the apply job rationale runbook). Treat a suspected key leak as an incident: the response needs a
-  separately reviewed route (tracked in the residuals issue).
+  HALT on the per-merge apply (see the apply job rationale runbook). Treat a suspected key leak as an incident: contain with the reviewed
+  kill switch (`host_proxy_tls_enabled` false), then replace the key through a reviewed full-root run and a rolling redeploy of both
+  hosts (ADR-323 Decision 9). Do NOT restore the previous value for a leak: that re-installs the leaked key.
 - **Restart and clocks.** The replay cache is per process, so a container restart clears it for up to 60 s (a hello captured before
   the restart stays skew-valid). A backward clock step can re-admit a purged nonce.
 

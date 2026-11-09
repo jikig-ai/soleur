@@ -24,6 +24,7 @@ vi.mock("@/server/observability", () => ({
 import { DEFAULT_PROXY_PORT, createProxyServer, proxyClientToOwner, resolveProxyPort } from "@/server/session-proxy";
 import { __resetProxyListenerStatusForTests, getProxyStatus } from "@/server/proxy-listener-status";
 import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
+import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
 
 const KEY_HEX = randomBytes(32).toString("hex");
 let tls: ProxyTestTls;
@@ -46,6 +47,7 @@ beforeEach(() => {
   vi.stubEnv("PROXY_HELLO_HMAC_KEY", KEY_HEX);
   __resetProxyListenerStatusForTests();
   __resetDenyReporterForTests();
+  __resetProxyHelloKeyForTests();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -107,6 +109,14 @@ describe("createProxyServer never throws on a bad port", () => {
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "");
     expect(createProxyServer({ onProxiedSession, ...BASE })).toBeNull();
     expect(getProxyStatus().state).toBe("no_allowlist");
+  });
+
+  it("a bad port does not precede the key guard: no key + bad port still reads no-hello-key", () => {
+    vi.stubEnv("SOLEUR_PROXY_PORT", "abc");
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
+    __resetProxyHelloKeyForTests();
+    expect(createProxyServer({ onProxiedSession, ...BASE })).toBeNull();
+    expect(mockReport.mock.calls.map((c) => c[1].op)).toEqual(["createProxyServer.no-hello-key"]);
   });
 
   it("a synchronously throwing listen() is caught: server closed once, state error, reported with the code only, null", () => {

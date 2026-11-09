@@ -9,10 +9,11 @@ import { makeProxyTestTls, type ProxyTestTls } from "./helpers/proxy-test-tls";
 // https/ws server, the real verifier; only the Supabase-backed membership call and the Sentry mirror are
 // replaced by spies so the ORDER (membership never reached by an earlier reject) can be asserted.
 
-const { mockMembership, mockReport, mockWarn } = vi.hoisted(() => ({
+const { mockMembership, mockReport, mockWarn, cacheArgs } = vi.hoisted(() => ({
   mockMembership: vi.fn(),
   mockReport: vi.fn(),
   mockWarn: vi.fn(),
+  cacheArgs: [] as unknown[],
 }));
 
 vi.mock("@/server/logger", () => {
@@ -30,12 +31,20 @@ vi.mock("@/lib/supabase/service", () => ({ createServiceClient: () => ({}) }));
 // its 4096 bound is pinned in proxy-hello.test.ts.
 vi.mock("@/server/proxy-hello", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/server/proxy-hello")>();
-  return { ...actual, createReplayCache: (o?: { max?: number }) => actual.createReplayCache({ ...o, max: 2 }) };
+  return {
+    ...actual,
+    createReplayCache: (o?: { max?: number }) => {
+      cacheArgs.push(o);
+      return actual.createReplayCache({ ...o, max: 2 });
+    },
+  };
 });
 
 import { createProxyServer } from "@/server/session-proxy";
 import { signProxyHello } from "@/server/proxy-hello";
+import * as denyReporterModule from "@/server/proxy-deny-report";
 import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
+import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
 import { __resetProxyListenerStatusForTests, getProxyStatus } from "@/server/proxy-listener-status";
 
 const TEST_BIND = { privateBindPrefix: "", bindAddress: "127.0.0.1", port: 0 } as const;
@@ -54,9 +63,9 @@ const opened: HttpsServer[] = [];
 const clients: WebSocket[] = [];
 const onProxiedSession = vi.fn();
 
-async function start(): Promise<{ server: HttpsServer; port: number }> {
+async function start(extra: { helloDeadlineMs?: number } = {}): Promise<{ server: HttpsServer; port: number }> {
   vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "127.0.0.1");
-  const server = createProxyServer({ onProxiedSession, ...TEST_BIND });
+  const server = createProxyServer({ onProxiedSession, ...TEST_BIND, ...extra });
   if (!server) throw new Error("createProxyServer returned null");
   opened.push(server);
   if (!server.listening) await new Promise<void>((r) => server.once("listening", () => r()));
@@ -77,7 +86,12 @@ function run(port: number, frames: Array<Buffer | string>, binary = false): Prom
     const ws = new WebSocket(`wss://127.0.0.1:${port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
     clients.push(ws);
     const out: Outcome = { ready: false };
-    ws.once("error", reject);
+    let opened = false;
+    // A server-side terminate can surface as a client socket error after the upgrade: that is an outcome
+    // (the close event follows), not a failure of the harness.
+    ws.on("error", (e) => {
+      if (!opened) reject(e);
+    });
     ws.on("message", (d) => {
       if (JSON.parse(String(d)).type === "proxy_ready") {
         out.ready = true;
@@ -90,6 +104,7 @@ function run(port: number, frames: Array<Buffer | string>, binary = false): Prom
       resolve(out);
     });
     ws.once("open", () => {
+      opened = true;
       for (const f of frames) ws.send(f, { binary });
     });
   });
@@ -111,6 +126,7 @@ function raw(over: Record<string, unknown> = {}, key: Buffer = KEY): string {
   return JSON.stringify(m);
 }
 
+const denyReporterAccepted = () => denyReporterModule.denyReporter.acceptedCount();
 const reports = () => mockReport.mock.calls.map((c) => ({ op: c[1]?.op as string, extra: c[1]?.extra as Record<string, unknown> | undefined }));
 
 beforeEach(() => {
@@ -123,6 +139,7 @@ beforeEach(() => {
   mockMembership.mockResolvedValue(true);
   __resetProxyListenerStatusForTests();
   __resetDenyReporterForTests();
+  __resetProxyHelloKeyForTests();
 });
 
 afterEach(async () => {
@@ -171,6 +188,8 @@ describe("every rejection class refuses with one uniform reason and never reache
     expect(mockMembership).not.toHaveBeenCalled();
     expect(onProxiedSession).not.toHaveBeenCalled();
     expect(reports().map((r) => r.extra?.reason)).toEqual([reason]);
+    // An unauthenticated class carries exactly {reason, peer}: no byte of the hello, no id.
+    expect(reports().map((r) => r.extra)).toEqual([{ reason, peer: "127.0.0.1" }]);
   });
 
   it("a replayed hello is refused with reason replay", async () => {
@@ -201,7 +220,9 @@ describe("every rejection class refuses with one uniform reason and never reache
     expect(out.ready).toBe(false);
     expect(out.closeReason).toBe("relay refused");
     expect(onProxiedSession).not.toHaveBeenCalled();
-    expect(reports()).toEqual([{ op: "createProxyServer.ap2-deny", extra: { reason: "membership", userId: U, workspaceId: W } }]);
+    expect(reports()).toEqual([
+      { op: "createProxyServer.ap2-deny", extra: { reason: "membership", peer: "127.0.0.1", userId: U, workspaceId: W } },
+    ]);
   });
 
   it("two hellos with the same nonce in the same tick yield exactly one proxy_ready (check-and-insert precedes the await)", async () => {
@@ -233,6 +254,105 @@ describe("every rejection class refuses with one uniform reason and never reache
     const blob = JSON.stringify(mockReport.mock.calls);
     expect(blob).not.toContain(secretish);
     expect(blob).not.toContain(KEY_HEX);
+  });
+});
+
+describe("pre-authentication hardening (review of #12462)", () => {
+  it("a malformed frame (invalid UTF-8) from an allowlisted peer with no key does not crash the process: closed, counted as shape", async () => {
+    const s = await start();
+    // Without a socket 'error' listener this is an uncaught exception (the vitest run itself would fail).
+    const out = await run(s.port, [Buffer.from([0xff, 0xfe, 0xfd])], false);
+    expect(out.ready).toBe(false);
+    expect(mockMembership).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(reports().map((r) => r.extra)).toEqual([{ reason: "shape", peer: "127.0.0.1" }]));
+  });
+
+  it("a 2 MiB first frame is cut off before it is buffered: closed, reason size, membership never reached", async () => {
+    const s = await start();
+    const out = await run(s.port, [Buffer.alloc(2 * 1024 * 1024, 0x20)], false);
+    expect(out.ready).toBe(false);
+    // Terminated by the byte guard (abnormal close), not refused by the verifier after buffering the whole
+    // frame (which would close 4014 "relay refused").
+    expect(out.closeReason).not.toBe("relay refused");
+    expect(mockMembership).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(reports().map((r) => r.extra?.reason)).toEqual(["size"]));
+  });
+
+  it("an admitted peer that never sends a message is closed at the deadline (hello_timeout)", async () => {
+    const s = await start({ helloDeadlineMs: 400 });
+    const closed = await new Promise<{ code: number; at: number }>((resolve, reject) => {
+      const t0 = Date.now();
+      const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+      clients.push(ws);
+      ws.on("error", () => undefined);
+      ws.once("close", (code) => resolve({ code, at: Date.now() - t0 }));
+      setTimeout(() => reject(new Error("not closed within 3 s")), 3000);
+    });
+    expect(closed.at).toBeGreaterThanOrEqual(300);
+    expect(reports().map((r) => r.extra)).toEqual([{ reason: "hello_timeout", peer: "127.0.0.1" }]);
+    expect(mockMembership).not.toHaveBeenCalled();
+  });
+
+  it("a valid hello clears the deadline: the session is still open well past it", async () => {
+    const s = await start({ helloDeadlineMs: 400 });
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    await new Promise<void>((resolve, reject) => {
+      ws.on("error", reject);
+      ws.on("message", (d) => JSON.parse(String(d)).type === "proxy_ready" && resolve());
+      ws.once("open", () => ws.send(signProxyHello(KEY, U, W)));
+    });
+    await new Promise((r) => setTimeout(r, 900));
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(reports()).toEqual([]);
+  });
+
+  it("frames after proxy_ready are NOT run through the hello verifier (the pipe stays open, nothing is reported)", async () => {
+    const s = await start();
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    await new Promise<void>((resolve, reject) => {
+      ws.on("error", reject);
+      ws.on("message", (d) => JSON.parse(String(d)).type === "proxy_ready" && resolve());
+      ws.once("open", () => ws.send(signProxyHello(KEY, U, W)));
+    });
+    ws.send("a relayed client frame, not a hello");
+    await new Promise((r) => setTimeout(r, 300));
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+    expect(reports()).toEqual([]);
+  });
+
+  it("a client that drops during the membership lookup is not attached (no supersede of the live session)", async () => {
+    let release: (v: boolean) => void = () => undefined;
+    mockMembership.mockImplementation(() => new Promise<boolean>((r) => (release = r)));
+    const s = await start();
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    ws.on("error", () => undefined);
+    await new Promise<void>((resolve) => ws.once("open", () => (ws.send(signProxyHello(KEY, U, W)), resolve())));
+    await vi.waitFor(() => expect(mockMembership).toHaveBeenCalledTimes(1));
+    ws.terminate();
+    await new Promise((r) => setTimeout(r, 150));
+    release(true);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(onProxiedSession).not.toHaveBeenCalled();
+    expect(denyReporterAccepted()).toBe(0);
+  });
+
+  it("a throwing membership lookup fails closed (relay refused, reason internal) instead of an unhandled rejection", async () => {
+    mockMembership.mockRejectedValue(new Error("db down"));
+    const s = await start();
+    const out = await run(s.port, [signProxyHello(KEY, U, W)]);
+    expect(out.ready).toBe(false);
+    expect(out.closeReason).toBe("relay refused");
+    expect(onProxiedSession).not.toHaveBeenCalled();
+    expect(reports().map((r) => r.extra?.reason)).toEqual(["internal"]);
+  });
+
+  it("the replay cache is built with the production bound (no max override reaches createReplayCache)", async () => {
+    await start();
+    expect(cacheArgs.length).toBeGreaterThan(0);
+    expect(cacheArgs.every((a) => a === undefined || (a as { max?: number }).max === undefined)).toBe(true);
   });
 });
 
@@ -271,9 +391,11 @@ describe("startup guard: hello key", () => {
     vi.stubEnv("PROXY_HELLO_HMAC_KEY", "a".repeat(63));
     vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", "127.0.0.1");
     createProxyServer({ onProxiedSession, ...BASE, bindAddress: "127.0.0.1" });
-    const err = mockReport.mock.calls[0][0] as Error;
-    expect(err.message).toMatch(/^PROXY_HELLO_HMAC_KEY missing or malformed/);
-    expect(err.message).not.toMatch(/63|invalid|absent/);
+    // Null error + explicit message: the event keeps its feature/op tags in Sentry (see proxy-deny-report.ts).
+    expect(mockReport.mock.calls[0][0]).toBeNull();
+    const message = String(mockReport.mock.calls[0][1].message);
+    expect(message).toMatch(/^PROXY_HELLO_HMAC_KEY missing or malformed/);
+    expect(message).not.toMatch(/63|invalid|absent/);
   });
 
   it("a valid key listens (positive control)", async () => {

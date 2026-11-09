@@ -115,6 +115,10 @@ describe("rejections, in the ruled order", () => {
     expect(verify(wide)).toEqual({ ok: false, reason: "size" });
   });
 
+  it("one byte over the cap is refused as size", () => {
+    expect(verify(Buffer.alloc(HELLO_MAX_BYTES + 1, 0x20))).toEqual({ ok: false, reason: "size" });
+  });
+
   it("a frame of exactly the cap is not refused as size", () => {
     const exact = Buffer.alloc(HELLO_MAX_BYTES, 0x20);
     const r = verify(exact);
@@ -142,7 +146,12 @@ describe("rejections, in the ruled order", () => {
     ["ts 9 digits", hello({ ts: "999999999" })],
     ["ts 11 digits", hello({ ts: "18000000000" })],
     ["ts as number", hello({ ts: T0_S })],
+    ["userId with a trailing character", hello({ userId: U + "x" })],
+    ["userId with a leading character", hello({ userId: "x" + U })],
+    ["userId carrying a newline splice", hello({ userId: U + "\n" + W })],
     ["nonce uppercase", hello({ nonce: NONCE.toUpperCase() })],
+    ["nonce 33 chars", hello({ nonce: NONCE + "a" })],
+    ["mac 65 chars", hello({ mac: "a".repeat(65) })],
     ["nonce 31 chars", hello({ nonce: NONCE.slice(1) })],
     ["mac 63 chars", hello({ mac: "a".repeat(63) })],
     ["mac uppercase", hello({ mac: "A".repeat(64) })],
@@ -236,6 +245,10 @@ describe("replay cache", () => {
     }
     expect(cache.size()).toBe(0);
     expect(verify(hello(), cache).ok).toBe(true);
+  });
+
+  it("the replay bound is the ruled 4096 (a literal, not whatever the constant says)", () => {
+    expect(REPLAY_MAX).toBe(4096);
   });
 
   it("the 4096th live entry is accepted, the 4097th is refused with reason full and nothing is evicted", () => {

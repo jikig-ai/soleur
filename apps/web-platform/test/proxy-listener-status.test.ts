@@ -31,6 +31,7 @@ vi.mock("@/server/observability", () => ({
 }));
 
 import { createProxyServer } from "@/server/session-proxy";
+import { __resetProxyHelloKeyForTests } from "@/server/proxy-tls";
 import {
   PROXY_REPORT_INTERVAL_MS,
   __resetProxyListenerStatusForTests,
@@ -97,6 +98,7 @@ beforeEach(() => {
   // #12289: the relay refuses to start without a hello key (the check sits after tls/bind/allowlist, so the
   // disabled / no_bind / no_allowlist assertions below keep their meaning).
   vi.stubEnv("PROXY_HELLO_HMAC_KEY", "a".repeat(64));
+  __resetProxyHelloKeyForTests();
   __resetProxyListenerStatusForTests();
 });
 

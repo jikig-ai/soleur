@@ -128,9 +128,13 @@ describe("report shape", () => {
     ["skew", "createProxyServer.hello-deny"],
     ["replay", "createProxyServer.hello-deny"],
     ["full", "createProxyServer.hello-deny"],
+    ["hello_timeout", "createProxyServer.hello-deny"],
+    ["internal", "createProxyServer.hello-deny"],
     ["no_key", "proxyClientToOwner.no-hello-key"],
+    ["no_ca", "proxyClientToOwner.no-ca"],
     ["bad_ids", "proxyClientToOwner.bad-ids"],
     ["bad_port", "proxyClientToOwner.bad-port"],
+    ["owner_refused", "proxyClientToOwner.owner-refused"],
   ];
   it.each(ops)("reason %s reports op %s with the reason enum in extra", (reason, op) => {
     const h = harness();
@@ -138,6 +142,19 @@ describe("report shape", () => {
     expect(h.reports[0].opts.op).toBe(op);
     expect(h.reports[0].opts.feature).toBe("control_plane_route");
     expect(h.reports[0].opts.extra?.reason).toBe(reason);
+  });
+
+  it("events carry a NULL error and an explicit message so Sentry keeps the feature/op tags and extras (#8629)", () => {
+    const h = harness();
+    h.reporter.record("mac", { peer: "10.0.1.9" });
+    expect(h.reports[0].err).toBeNull();
+    expect((h.reports[0].opts as { message?: string }).message).toBe("proxy hello refused (mac)");
+    for (let i = 0; i < 6; i++) h.reporter.record("shape");
+    h.advance(DENY_WINDOW_MS + 1);
+    h.fireTimers();
+    const summary = h.reports.find((r) => r.opts.op.endsWith("-summary"));
+    expect(summary?.err).toBeNull();
+    expect((summary?.opts as { message?: string }).message).toBe("proxy relay denies suppressed (shape)");
   });
 
   it("extras carry only the enum, counts and the supplied peer/ids; nothing else leaks in", () => {
@@ -169,6 +186,24 @@ describe("relay_hello_window line", () => {
     expect(windowLines()).toEqual([]);
   });
 
+  it("a pre-TLS peer deny is bounded like the rest but is not a hello deny: it stays out of the window line", () => {
+    const h = harness();
+    for (let i = 0; i < 9; i++) h.reporter.record("peer", { peer: "10.0.1.99" });
+    expect(h.reports.filter((r) => r.opts.op === "createProxyServer.peer-deny")).toHaveLength(5);
+    h.advance(DENY_WINDOW_MS + 1);
+    h.fireTimers();
+    expect(windowLines()).toEqual([]);
+  });
+
+  it("a hello deadline expiry and an internal fault ARE hello denies: they count in the window line", () => {
+    const h = harness();
+    h.reporter.record("hello_timeout");
+    h.reporter.record("internal");
+    h.advance(DENY_WINDOW_MS + 1);
+    h.fireTimers();
+    expect(windowLines()).toEqual(["relay_hello_window accepted=0 denied=2 suppressed=0"]);
+  });
+
   it("sender-side refusals are bounded like the rest but are not hello denies in the window line", () => {
     const h = harness();
     for (let i = 0; i < 9; i++) h.reporter.record("no_key");
@@ -187,6 +222,72 @@ describe("relay_hello_window line", () => {
     const line = windowLines()[0];
     expect(line).not.toContain("relay_probe proxy_state=");
     expect(line).not.toContain("relay_peer_probe peer=");
+  });
+});
+
+describe("timers and shutdown", () => {
+  it("the flush timers are scheduled for exactly one window", () => {
+    const h = harness();
+    h.reporter.record("mac");
+    expect(h.timers.map((t) => t.ms)).toEqual([DENY_WINDOW_MS, DENY_WINDOW_MS]);
+  });
+
+  it("the DEFAULT timer fires: an idle window's summary and relay_hello_window line are emitted without another event", () => {
+    vi.useFakeTimers();
+    try {
+      const reports: Array<{ op: string }> = [];
+      const r = createDenyReporter({ report: (_e, o) => void reports.push({ op: (o as { op: string }).op }) });
+      for (let i = 0; i < 6; i++) r.record("shape");
+      r.recordAccepted();
+      vi.advanceTimersByTime(DENY_WINDOW_MS + 1);
+      expect(reports.filter((x) => x.op.endsWith("-summary"))).toHaveLength(1);
+      expect(windowLines()).toEqual(["relay_hello_window accepted=1 denied=6 suppressed=1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the default timer is unref'd (it must never hold the process open)", () => {
+    const calls: Array<{ unref: ReturnType<typeof vi.fn> }> = [];
+    const real = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => void, ms?: number) => {
+      const t = { unref: vi.fn() };
+      calls.push(t);
+      void fn;
+      void ms;
+      return t as unknown as NodeJS.Timeout;
+    }) as typeof setTimeout);
+    try {
+      createDenyReporter({ report: () => undefined }).record("mac");
+    } finally {
+      vi.mocked(globalThis.setTimeout).mockRestore();
+      globalThis.setTimeout = real;
+    }
+    expect(calls.length).toBe(2);
+    expect(calls.every((c) => c.unref.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("flush() emits every open summary and the open window line now (graceful shutdown)", () => {
+    const h = harness();
+    for (let i = 0; i < 8; i++) h.reporter.record("mac");
+    h.reporter.recordAccepted();
+    expect(h.reports.filter((r) => r.opts.op.endsWith("-summary"))).toHaveLength(0);
+    h.reporter.flush();
+    expect(h.reports.filter((r) => r.opts.op.endsWith("-summary"))).toHaveLength(1);
+    expect(windowLines()).toEqual(["relay_hello_window accepted=1 denied=8 suppressed=3"]);
+    h.reporter.flush();
+    expect(windowLines()).toHaveLength(1);
+  });
+
+  it("record() never throws, even when the report function does (a fault in reporting is not a refusal-path crash)", () => {
+    const r = createDenyReporter({
+      report: () => {
+        throw new Error("sentry down");
+      },
+    });
+    expect(() => r.record("mac")).not.toThrow();
+    expect(() => r.recordAccepted()).not.toThrow();
+    expect(() => r.flush()).not.toThrow();
   });
 });
 
