@@ -336,10 +336,16 @@ newrow
 sut S13 "$PRN"
 [[ "$(last_line)" == "$M_ABS" && "$(nmarkers)" -eq 1 && "$(cnt '^RECOVERY pointer reason=late$' "$OUTF")" -eq 1 && "$(nlines)" -eq 4 ]] && _v=0 || _v=1; chk "$_v" "S13 the tail is kept: the marker is last and the late hint survives, the padding does not" "lines=$(nlines) last=[$(last_line)]"
 
+# ── S14 two markers for this PR in the resolver output: the LAST one is the answer, and only it is printed ──
+newrow; { printf '%s\n' "$R_HINT"; mk complete; mk absent; } > "$STUBD/body"
+sut S14 "$PRN"
+[[ "$(nmarkers)" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S14 two matching markers in the body: exactly one marker is printed and it is the LAST one (state=absent)" "out=[$OUT]"
+[[ "$OUT" != *"NOT that the PR is mergeable"* ]] && _v=0 || _v=1; chk "$_v" "S14 the earlier complete marker contributes nothing (no 'mergeable' note)" "out=[$OUT]"
+
 # ── totals and the assertion floor ──
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=216
+_min_cases=221
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
