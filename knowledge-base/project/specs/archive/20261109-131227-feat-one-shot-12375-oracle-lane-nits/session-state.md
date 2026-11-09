@@ -23,3 +23,10 @@ Skills run inline (no Skill/Task tool in subagent context): `soleur:plan` (all p
 ## Tally
 
 - cto_spawns=1
+
+## Ship Phase (in-flight, 2026-11-09)
+
+- PR #12475 marked ready, `gh pr merge --squash --auto` armed (merge queue).
+- Fix commit bb11c11386; archive commit after; all pushed.
+- Local coverage: 4 covering suites green; 220-suite affected gate timed out at ~102/220 on box contention (reported, unresolved remainder → CI owns full battery).
+- Backlog after this PR: #12269 (lever-1 eval), #11556 (epic), #9323 (path-gate), #9729 (S4 affected-only — SIBLING session active in .worktrees/feat-one-shot-9729-s4-evidence-rerun, do not double-dispatch).
