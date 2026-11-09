@@ -129,6 +129,7 @@ can fire on a healthy slow build. A run that prints "No changes to commit" is no
 a human pushed. If the runs are still held although the push, the PR and the auto-merge all ran as the App, this record's
 premise is wrong and it is reopened rather than patched. Recovery on a same-day re-run: the composite stops with the delete
 command for the leftover branch; otherwise the next scheduled run takes a new date-suffixed branch.
+
 - 2026-11-08 — second `WM_COMPOSITE_PIN` re-pin (Ref #10479): the gitleaks download `curl` gained `--fail --retry 5
   --retry-all-errors` (the pinned installs elsewhere got the same flags; `sha256sum -c` unchanged). Pin moved
   `5f736544…40fe` → `5f6a943e…71c1`; the change is logged in the composite CHANGELOG. CI refused the drifted composite
