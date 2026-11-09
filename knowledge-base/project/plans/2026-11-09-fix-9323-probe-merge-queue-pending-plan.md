@@ -282,6 +282,36 @@ None — `gh issue list --label code-review --state open` (200 issues) searched 
 - **API shape drift** (`head_sha` search staleness — the 2026-09-24 release-workflow precedent showed the filtered search can return `[]` transiently). Mitigated: a `fail` row on transport failure → CANNOT ESTABLISH (retried), an empty list → `pending` (NOT YET) — neither can silently `ok`; the probe errs toward more evidence, never less.
 - **A red mg run that postdates a green push run on the same sha** (re-run red). Not reachable under the read order: a conclusive push arm never issues the mg read — the push verdict stands, matching today's semantics.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09
+**Mode:** sequential-fallback (no subagent spawn available in the planning seat; research/learnings were folded in inline during plan construction rather than by fan-out — disclosed)
+**Sections enhanced:** Research Insights (premise re-verification against live API), Guard Contract (matrix rows derived from the live #12445/#12376/#12330 shapes), Acceptance Criteria (read-contract assertions AC3), Context (verbatim `gh api` evidence)
+
+### Gate results (all halt gates passed)
+
+- §4.6 User-Brand Impact — present, threshold `none` + scope-out reason
+- §4.7 Observability — 5-field schema present; `discoverability_test` = `bash <probe>` → `CANNOT ESTABLISH` (unauthenticated, <15s, literal)
+- §4.8 PAT-shaped variable sweep — clean
+- §4.9 UI-wireframe — N/A (no UI-surface files)
+- §4.10 Encryption Posture — N/A (no persistent store / new connection)
+- §4.11 Guard Contract — `lint-guard-contract.py` PASS (1 guard entry, 8 matrix rows)
+- §4.12 Scope Check — 1 unfenced section, all asks mapped/justified
+- §4.13 Task Design — N/A (no new autonomous-task surface)
+
+### Key Improvements
+
+1. **Premise re-verified live, not from the issue text:** all three cited merge commits probed directly — 0 push runs AND the `merge_group` runs located by full-SHA `head_sha`; #12445's failed run's jobs enumerated (`lint-bot-statuses` only → `unrelated` under the existing classifier).
+2. **API-shape gotcha surfaced at plan time:** a 10-char `head_sha` prefix returns an empty `merge_group` list while the full SHA returns the run — the plan pins "always the full `merge_commit_sha`" into both code and fixtures.
+3. **Sibling-surface audit:** `zot-mirror` and `web-platform-release.yml resolve-target` verified to be different, deliberately-pinned `event=push` surfaces — not the same defect; scoped out explicitly.
+4. **API-budget honesty:** `need_min` modeled to `4 * MAX_RUNS` for the new worst case (+1 mg read per qualifying run).
+
+### New considerations discovered
+
+- Seven workflows (not just ci.yml) run `merge_group` on a landed sha — the fallback MUST stay workflow-scoped (`workflows/ci.yml/runs`), matching the existing push-arm scope.
+- Push runs on main still exist for other commits (e.g. `42605214262` on `5990a567b3aa`) — the gap is specifically that queue-merged `merge_commit_sha`s carry `merge_group` runs; the issue's "never a push run" reads true at the merge-commit level, not the main-push level.
+- Multiple `merge_group` runs can exist per PR across retry attempts — but only the run sharing the landed `merge_commit_sha` is evidence, which the `head_sha=` filter enforces structurally.
+
 ## References
 
 - Issue: #12478 (this fix); trackers #9323 (soak, ADR-262), #12360 (open/dropped sibling)
