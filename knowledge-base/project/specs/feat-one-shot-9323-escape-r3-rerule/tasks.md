@@ -22,18 +22,18 @@ One PR carries both items. Stage 4 stays NON-ACTIVATED throughout (AC8).
 
 ## Phase 2 — Item 2: #9729 R3 re-ruling
 
-- [ ] 2.1 `python3 -I scripts/ci-pr-affected-replay.py collect --out <OUT> --commits 300 --base origin/main` (adopted or fresh per 0.2; `--chunk I/K` if parallelism needed).
-- [ ] 2.2 `python3 -I scripts/ci-pr-affected-replay.py ejections --out <OUT> --commits 300 --base origin/main`.
-- [ ] 2.3 `python3 -I scripts/ci-pr-affected-replay.py aggregate <OUT> --expect-commits 300 --out <OUT>/replay-summary.txt` + `cp-upper` reads.
-- [ ] 2.4 Criterion b: detached worktree at `origin/main`; `audit --root /var/tmp/s4-audit --all-refs --accept scripts/ci-pr-affected-audit.accept.tsv` + the bare no-accept run; remove the worktree.
-- [ ] 2.5 Criterion c: `scripts/ci-demand-census.sh` over two adjacent closed 12h windows → fresh baseline; 20-PR sampled saving per the `receipts/criterion-c.md` recipe; canary ≤120 s.
-- [ ] 2.6 Criterion d: `bash scripts/test-affected-kb-consumers.test.sh` + reader census → `reader-audit.md`.
-- [ ] 2.7 `verdict --a <s> --b <s> --c <s> --d <s>` → read `computed=` (exit code carries no verdict).
-- [ ] 2.8 Commit all 13 receipts under `knowledge-base/project/specs/archive/20261108-080602-feat-one-shot-ci-lever-residuals/receipts/r3/` incl. `go-no-go.md` ending `SOLEUR_PR_AFFECTED_VERDICT verdict=<V> ruled=confirmed date=2026-11-08` (AC5).
-- [ ] 2.9 ADR-276: `## Amendment 2026-11-08 (S4 go/no-go third re-ruling, #9729)` + new LAST `Go/no-go receipt:` line → `receipts/r3/go-no-go.md` (AC7).
-- [ ] 2.10 Runbook `ci-pr-affected-activation.md` §2: dated third-ruling status line (AC10).
-- [ ] 2.11 `bash scripts/ci-pr-affected-preactivation.sh` from a detached `origin/main` checkout → `receipts/r3/preactivation.out` (AC12).
-- [ ] 2.12 Verdict comment on #9729: `computed=<V> reason=…`, criterion table, non-activation statement, receipts path (AC6).
+- [x] 2.1 `python3 -I scripts/ci-pr-affected-replay.py collect --out <OUT> --commits 300 --base origin/main` (adopted or fresh per 0.2; `--chunk I/K` if parallelism needed).
+- [x] 2.2 `python3 -I scripts/ci-pr-affected-replay.py ejections --out <OUT> --commits 300 --base origin/main`.
+- [x] 2.3 `python3 -I scripts/ci-pr-affected-replay.py aggregate <OUT> --expect-commits 300 --out <OUT>/replay-summary.txt` + `cp-upper` reads.
+- [x] 2.4 Criterion b: detached worktree at `origin/main`; `audit --root /var/tmp/s4-audit --all-refs --accept scripts/ci-pr-affected-audit.accept.tsv` + the bare no-accept run; remove the worktree.
+- [x] 2.5 Criterion c: `scripts/ci-demand-census.sh` over two adjacent closed 12h windows → fresh baseline; 20-PR sampled saving per the `receipts/criterion-c.md` recipe; canary ≤120 s.
+- [x] 2.6 Criterion d: `bash scripts/test-affected-kb-consumers.test.sh` + reader census → `reader-audit.md`.
+- [x] 2.7 `verdict --a <s> --b <s> --c <s> --d <s>` → read `computed=` (exit code carries no verdict).
+- [x] 2.8 Commit all 13 receipts under `knowledge-base/project/specs/archive/20261108-080602-feat-one-shot-ci-lever-residuals/receipts/r3/` incl. `go-no-go.md` ending `SOLEUR_PR_AFFECTED_VERDICT verdict=<V> ruled=confirmed date=2026-11-08` (AC5).
+- [x] 2.9 ADR-276: `## Amendment 2026-11-08 (S4 go/no-go third re-ruling, #9729)` + new LAST `Go/no-go receipt:` line → `receipts/r3/go-no-go.md` (AC7).
+- [x] 2.10 Runbook `ci-pr-affected-activation.md` §2: dated third-ruling status line (AC10).
+- [x] 2.11 `bash scripts/ci-pr-affected-preactivation.sh` from a detached `origin/main` checkout → `receipts/r3/preactivation.out` (AC12).
+- [x] 2.12 Verdict comment on #9729: `computed=<V> reason=…`, criterion table, non-activation statement, receipts path (AC6).
 
 ## Phase 3 — Ship
 

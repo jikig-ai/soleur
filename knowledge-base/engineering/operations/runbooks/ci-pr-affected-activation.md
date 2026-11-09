@@ -88,6 +88,20 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
   Receipts:
   `knowledge-base/project/specs/archive/20261108-110953-feat-one-shot-10862-norun-investigation/receipts/rerun/`.
 
+- 2026-11-08: the third re-ruling (the #9729 SCHEDULE term-2 window, run once the queue-cancel rate
+  settled) computed `computed=NO-GO reason=criterion-failed`: (a) fails the bound again —
+  point 2 of 398 (0.50%, passes), worst-case numerator 55 of 398 → cp95 bound 16.99% ≥ 12%
+  (the term-1 allowlist removed the `unclassified-job` bucket entirely — zero units vs 29 —
+  leaving 29 failed-job-without-fail-line and 23 unsettled suite legs as the whole
+  not-evaluable remainder); (b) passes (strict zero on pinned `404e4c626f`, accepted=1639);
+  (c) lands within-10% — per-full-run net 64.06 ≥ the 20.44 bar off a fresh 102.21 baseline,
+  but population-weighted by the test-scripts leg's 35.3% run share ≈ 19.76, inside the band
+  and under it; (d) passes. Window: 446 merge_group runs, 98 refused (75 failure, 23
+  cancelled), commits `4fba0d512e…c6cd57f31d`. Still nothing activated; the pre-activation
+  gate reads `ready=false missing=lock,artifacts,verdict,prereq5`; the retire-vs-schedule
+  call stays operator-owned per #10448. Receipts:
+  `knowledge-base/project/specs/archive/20261108-080602-feat-one-shot-ci-lever-residuals/receipts/r3/`.
+
 ## 3. Entry condition for a re-attempt (CTO ruling, ADR-276 amendment item 5)
 
 All of these, in this order:
