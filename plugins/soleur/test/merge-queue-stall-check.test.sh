@@ -1379,7 +1379,69 @@ lrow29() { # a null, absent or malformed headCommit.oid is "cannot correlate": s
   return 0
 }
 
-CAUSE_ROWS=(1 2 3 4 5 6 7 8 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 26 27 28 29)
+# ---- promoted-head re-aging rows (#12507) ---------------------------------------------------------
+# Under max_entries_to_build=1 a depth-2+ entry promotes into the build window already older than the
+# enqueuedAt threshold: enqueuedAt measures queue WAIT, not build age, and the probe used to file a
+# SUSPECTED stall at the START of the entry's own legitimate build. The run body now re-ages a flagged
+# entry from its OWN merge_group build — the newest created_at among the fetched runs whose head_sha
+# byte-equals the entry's headCommit.oid — and skips the filing while that build is younger than the
+# threshold. An old head with NO oid-matching merge_group run is the true suspect and still files; a
+# null/malformed oid keeps the unchanged enqueuedAt verdict with zero Actions calls.
+NOTICE_PROMOTED="(promoted head)"
+lrow30() {
+  local wf="$1" rf="$WORK/runs.json" g="$WORK/q.json" ref oe_all; REASON=""; ref="$(qref 101 "$SHA1")"
+  # (a) promoted head, YOUNG build: enqueued 90 min ago but its own merge_group build is 10 min old -> NO filing.
+  { node 1 90 101 AWAITING_CHECKS "$TIP_SHA"; } | queue_json > "$g"
+  { mkrun 9001 merge_group CI "$WF_PATH_CI" 111 "$ref" "" 10
+    mkrun 9002 merge_group "Secret scan" .github/workflows/secret-scan.yml 202 "$ref" "" 10; } | jq -s '.' > "$rf"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 && "$CASE_ATTEMPTS" -eq 0 ]] \
+    || { REASON="L30 (a): a promoted head whose own build is younger than the threshold was filed (rc=$CASE_RC creates=$CASE_CREATES attempts=$CASE_ATTEMPTS)"; return 1; }
+  lookup_ran "L30 (a)" || return 1   # non-vacuity: the skip came from a lookup that ran, not from a broken one
+  oe_all="$(cat "$WORK/out.txt" "$WORK/err.txt")"
+  grep -qF -- "$NOTICE_PROMOTED" <<<"$oe_all" || { REASON="L30 (a): the promoted-head ::notice:: is missing"; return 1; }
+  # (b) promoted head, OLD build: the build itself is 60 min old -> still a suspect -> files.
+  { node 1 90 102 AWAITING_CHECKS "$TIP_SHA"; } | queue_json > "$g"
+  { mkrun 9003 merge_group CI "$WF_PATH_CI" 111 "$(qref 102 "$SHA1")" "" 60; } | jq -s '.' > "$rf"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L30 (b): a promoted head whose build is 60m old did not file (creates=$CASE_CREATES)"; return 1; }
+  check_suspected "L30 (b)" 1 102 || return 1
+  # (c) an OLD head with NO merge_group run on its refs is the true suspect -> files.
+  { node 1 90 103 AWAITING_CHECKS "$TIP_SHA"; } | queue_json > "$g"
+  { mkrun 9004 push CI "$WF_PATH_CI" 111 "$(qref 103 "$SHA1")" success 60; } | jq -s '.' > "$rf"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L30 (c): an old head with no merge_group run did not file (creates=$CASE_CREATES)"; return 1; }
+  check_suspected "L30 (c)" 1 103 || return 1
+  # (d) null headCommit.oid: the arm cannot correlate, so the enqueuedAt verdict stands -> files, ZERO Actions calls.
+  { node 1 90 104 QUEUED null; } | queue_json > "$g"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L30 (d): a null-oid entry did not file on its enqueuedAt age (creates=$CASE_CREATES)"; return 1; }
+  check_uncorrelated "L30 (d)" 104 || return 1
+  # (e) stale head: merge_group runs DO exist on the PR's temp refs but carry a different head_sha
+  #     (an earlier head's build) -> no current build -> files. Proves the oid join is load-bearing.
+  { node 1 90 105 AWAITING_CHECKS "$TIP_SHA"; } | queue_json > "$g"
+  { MKSHA="$SHA_B" mkrun 9005 merge_group CI "$WF_PATH_CI" 111 "$(qref 105 "$SHA1")" "" 10; } | jq -s '.' > "$rf"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] || { REASON="L30 (e): a head whose only merge_group runs belong to a stale head did not file (creates=$CASE_CREATES)"; return 1; }
+  check_suspected "L30 (e)" 1 105 || return 1
+  # (f) a retried build: matching runs at 50 AND 10 min -> the NEWEST run starts the clock -> no filing.
+  { node 1 90 106 AWAITING_CHECKS "$TIP_SHA"; } | queue_json > "$g"
+  { mkrun 9006 merge_group CI "$WF_PATH_CI" 111 "$(qref 106 "$SHA1")" "" 50
+    mkrun 9007 merge_group CI "$WF_PATH_CI" 111 "$(qref 106 "$SHA1")" "" 10; } | jq -s '.' > "$rf"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 ]] || { REASON="L30 (f): a build retried 10m ago was aged from its oldest run and filed (creates=$CASE_CREATES)"; return 1; }
+  # (g) a matching run with a malformed created_at is dropped, not fatal: the valid young run still re-ages.
+  #     "GARBAGE" survives the stub's created>= string filter ('G' sorts past '2'), so it DOES reach the
+  #     re-aging jq (a null/missing created_at would be filtered upstream and prove nothing).
+  { node 1 90 107 AWAITING_CHECKS "$TIP_SHA"; } | queue_json > "$g"
+  { mkrun 9008 merge_group CI "$WF_PATH_CI" 111 "$(qref 107 "$SHA1")" "" 10
+    mkrun 9009 merge_group CI "$WF_PATH_CI" 111 "$(qref 107 "$SHA1")" "" 10 | jq -c '.created_at = "GARBAGE"'; } | jq -s '.' > "$rf"
+  CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+  [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 ]] || { REASON="L30 (g): one run's malformed created_at poisoned the whole re-aging (creates=$CASE_CREATES)"; return 1; }
+  return 0
+}
+
+CAUSE_ROWS=(1 2 3 4 5 6 7 8 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 26 27 28 29 30)
 # cause_check <workflow> [rows...]: executes the real run body against the cause rows (default: all). L9 and L25 are
 # stub controls, run once on the real workflow.
 cause_check() {
@@ -1419,6 +1481,7 @@ ldesc() {
     27) echo "failed push run whose head_sha equals the entry's headCommit.oid (invented shas) -> named, one history lookup" ;;
     28) echo "stale ref on a new entry (head_sha != headCommit.oid) -> suspected, no history lookup, mismatch notice; a matching candidate beside a mismatching one is still named; a near-miss, longer or upper-case head_sha is still a mismatch" ;;
     29) echo "null or malformed headCommit.oid (QUEUED entry) -> suspected, zero Actions calls, 'no usable' notice and not the mismatch notice; empty never equals empty; 41-hex, prefixed, non-hex-letter and non-ASCII oids (also under en_US.utf8) read as unusable" ;;
+    30) echo "promoted-head re-aging: young build -> no filing (lookup ran, promoted notice); old build -> files; no oid-matching run -> files (true suspect); null oid -> files on enqueuedAt, zero calls; stale-head runs -> files; newest run starts the clock; malformed created_at is dropped not fatal" ;;
   esac
 }
 
@@ -1811,6 +1874,22 @@ mutate_lit "C40 oid validation loses its start anchor (a prefixed oid reads as u
 mutate_lit "C41 query selects commit { oid } instead of headCommit { oid } (a non-existent field) -> RED" causerow 'L27:' \
   'headCommit { oid }' 'commit { oid }'
 
+# ---- promoted-head re-aging mutations (#12507): each load-bearing literal of the arm, scored on L30.
+mutate_lit "C42 oid join dropped from the re-aging (a stale head's build re-ages the entry) -> RED" causerow 'L30 \(e\)' \
+  'select((.head_sha // "") == $oid)' 'select(true)'
+mutate_lit "C43 the young-build bound is lowered to 60 s (a 10m-old build no longer reads young) -> RED" causerow 'L30 \(a\)' \
+  '"$mg_age_s" -lt "${threshold_s:-$(( ${STALL_THRESHOLD_MINUTES:-45} * 60 ))}"' '"$mg_age_s" -lt "60"'
+mutate_lit "C44 the filing veto is never consulted (BUILD_YOUNG ignored) -> RED" causerow 'L30 \(a\)' \
+  'if [[ "$BUILD_YOUNG" -eq 1 ]]; then' 'if false; then'
+mutate_lit "C45 no-match reads as age 0 (an old head with NO run is seen as a young build) -> RED" causerow 'L30 \(c\)' \
+  'if length == 0 then -1 else' 'if length == 0 then 0 else'
+mutate_lit "C46 newest-run max -> oldest-run min (a build retried 10m ago files) -> RED" causerow 'L30 \(f\)' \
+  '$now - max' '$now - min'
+# (no C47: dropping the try/catch guard can only ever produce a jq: error crash signature — UNRESOLVED,
+#  never a kill — and L30 (g) already pins the behaviour: a malformed created_at must be dropped, not fatal)
+mutate_lit "C48 the veto flag is never set (BUILD_YOUNG=1 -> =0: a young build still files) -> RED" causerow 'L30 \(a\)' \
+  'BUILD_YOUNG=1' 'BUILD_YOUNG=0'
+
 # ---- controls: the mutation engine and the chk helper must FAIL on inputs that must fail ---------------
 # control_fails <label> <wanted-message-substring> <cmd...>: drive a verdict helper once with an input that
 # must fail; the failure counter must move by exactly one (and the message must carry the substring); the
@@ -1866,7 +1945,7 @@ printf '=== %s passed, %s failed ===\n' "$passes" "$fails"
 if [[ "$fails" -ne 0 ]]; then
   printf '[FAIL] rows failed:\n' >&2; printf '  %s\n' "${FAILED[@]}" >&2; exit 1
 fi
-EXPECTED_PASSES=166
+EXPECTED_PASSES=173
 if [[ "$passes" -ne "$EXPECTED_PASSES" ]]; then
   printf '[FAIL] pass count %s != exact floor %s (a row was dropped or added)\n' "$passes" "$EXPECTED_PASSES" >&2; exit 1
 fi
