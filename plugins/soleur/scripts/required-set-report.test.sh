@@ -49,7 +49,7 @@ else fail "INSTRUMENT: chk() does not discriminate on its status; every assertio
 # ONE root, ONE owning EXIT trap (ADR-129). The reaper also runs there, so an aborted row cannot leave a detached holder behind.
 assert_fixture_dir() {  # refuse an empty, relative, root-ish or synthetic-fs scratch dir before anything is armed to rm -rf it
   case "${1-}" in
-    "") printf 'FATAL: fixture dir is EMPTY\n' >&2; exit 2 ;;
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
     */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
     /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
     /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;

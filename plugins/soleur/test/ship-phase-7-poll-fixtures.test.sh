@@ -2307,11 +2307,13 @@ MERGED CLEAN" \
   "exiting poll|no marker|$R_FORBID"
 rm -f "$QF"
 # R2b — the verdict sample is bounded: a logging `timeout` shim first in PATH records the argv it was handed (the --queue-state child
-# also calls `timeout -k 2`, so only the verdict line is matched).
+# also calls `timeout -k 2`, so only the verdict line is matched). The shim is a BASH script, never `#!/bin/sh`: the harness mocks git and gh
+# with `export -f`, and dash (the /bin/sh on Debian and Ubuntu CI runners) drops exported functions from the environment it hands its
+# children, so the real gh ran inside `timeout -k 2 10 bash -c ...`, the queue read failed and the row went red on CI only.
 R2B_SHIM='real_to="$(command -v timeout)"
 mkdir -p "$MOCK_STATE/shim"
 cat > "$MOCK_STATE/shim/timeout" <<SHIM
-#!/bin/sh
+#!/usr/bin/env bash
 printf "%s\n" "\$*" >> "\$MOCK_STATE/timeout-calls"
 exec $real_to "\$@"
 SHIM
