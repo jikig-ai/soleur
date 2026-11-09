@@ -46,7 +46,7 @@ command -v timeout >/dev/null || { echo "FATAL: this suite needs timeout (the SU
 for f in delegation-valid.md envelope-valid.md envelope-two-sections.md holds-prose.md holds-none.md; do
   [[ -s "$FX/$f" ]] || { echo "FATAL: fixture missing: $FX/$f" >&2; exit 2; }
 done
-for f in plan-three-holds.md plan-web-acceptance-only.md plan-web-acceptance-mixed.md plan-reserved-only.md web-acceptance-text.md; do
+for f in plan-three-holds.md plan-web-acceptance-only.md plan-web-acceptance-mixed.md plan-reserved-only.md plan-authorizes-web-acceptance.md web-acceptance-text.md; do
   [[ -s "$FXH/$f" ]] || { echo "FATAL: fixture missing: $FXH/$f" >&2; exit 2; }
 done
 
@@ -459,6 +459,52 @@ resv innerzw     "Opera${ZW}tor-reser${SH}ved: approve the pricing copy"
 resv leadnb      "${NB}Operator-reserved: approve the pricing copy"
 resv dashed      '- Operator-reserved: approve the pricing copy'
 
+arm_begin auth
+echo "=== Arm 4f: Operator-authorizes holds are never discharged by a gate (the go-line class) ==="
+scn; mkplan auth1 's/^- Hold: do not ship while a release is running\./- Hold: Operator-authorizes: rotate the deploy credential./'; run_h --plan "$PLAN"
+expect "OA1: an Operator-authorizes hold stands even though its gate is true (exit 2)" 2 "holds: 3 discharged: 2 standing: 1"
+assert_eq "1" "$(grep -c '^Say go and I run it: Operator-authorizes: rotate the deploy credential. - only you can say go$' "$TMP/o")" "OA1b: it is printed as the go line, with 'only you can say go'"
+assert_eq "0" "$(calls '^run list')" "OA1c: its gate was not even probed"
+scn; mkplan auth2 's/^- Hold: do not ship while a release is running\./- Hold: OPERATOR-AUTHORIZES: rotate the deploy credential/'; run_h --plan "$PLAN"
+expect "OA2: the authorizes prefix is read in any case" 2 "holds: 3 discharged: 2 standing: 1"
+scn; mkplan auth3 's/^- Hold: do not ship while a release is running\./- Hold: ask first, this is Operator-authorizes: nothing special/'; run_h --plan "$PLAN"
+expect "OA3: the words in the middle of a hold do not make it an authorizes hold (it must BEGIN with the prefix)" 0 "holds: 3 discharged: 3 standing: 0"
+scn; mkplan auth4 's/^- Hold: do not ship while a release is running\./- Hold: Operator-authorizes: rotate the deploy credential/;/^  Gate: no-inflight-run/d'; run_h --plan "$PLAN"
+expect "OA4: an authorizes hold with no gate at all is the go line, not 'needs a person' by accident" 2 "holds: 3 discharged: 2 standing: 1"
+assert_eq "1" "$(grep -c '^Say go and I run it: ' "$TMP/o")" "OA4b: it is the go line"
+assert_eq "0" "$(grep -c '^Needs a person: ' "$TMP/o")" "OA4c: and never the person line"
+scn; mkplan auth5 's/^- Hold: do not ship while a release is running\./- Hold: Operator-authorization: rotate the deploy credential/'; run_h --plan "$PLAN"
+expect "OA5: 'Operator-authorization:' is not the prefix (a differently named policy is not this class)" 0 "holds: 3 discharged: 3 standing: 0"
+
+echo "=== Arm 4g: Operator-authorizes is recognised however it is spelt ==="
+auth() { # <name> <hold words>
+  scn; mkholds "$1" "$FIRST
+- Hold: $2
+  Gate: pr-merged 55"; run_h --plan "$PLAN"
+  expect "V6 $1: stands as the go line" 2 "holds: 2 discharged: 1 standing: 1"
+  assert_eq "1" "$(grep -c '^Say go and I run it: ' "$TMP/o")" "V6 $1: it is printed as the go line"
+}
+auth space       'Operator authorizes: rotate the deploy credential'
+auth spaced      'operator-authorizes : rotate the deploy credential'
+auth bold        '**Operator-authorizes:** rotate the deploy credential'
+auth nbhyphen    "Operator${NH}authorizes: rotate the deploy credential"
+auth underscore  'Operator_authorizes: rotate the deploy credential'
+auth fwcolon     "Operator-authorizes$FW rotate the deploy credential"
+auth quoted      '"Operator-authorizes: rotate the deploy credential"'
+auth leadzw      "${ZW}Operator-authorizes: rotate the deploy credential"
+auth innerzw     "Opera${ZW}tor-author${SH}izes: rotate the deploy credential"
+auth leadnb      "${NB}Operator-authorizes: rotate the deploy credential"
+auth dashed      '- Operator-authorizes: rotate the deploy credential'
+
+echo "=== Arm 4h: the two reserved-family classes print different verdict lines ==="
+scn; mkholds twoclass '- Hold: Operator-reserved: approve the pricing copy.
+- Hold: Operator-authorizes: rotate the deploy credential.'; run_h --plan "$PLAN"
+expect "TC1: a reserved hold and an authorizes hold in one plan both stand (exit 2)" 2 "holds: 2 discharged: 0 standing: 2"
+assert_eq "1" "$(grep -c '^Reserved for you: ' "$TMP/o")" "TC1b: the reserved hold prints the reserved line"
+assert_eq "1" "$(grep -c '^Say go and I run it: ' "$TMP/o")" "TC1c: the authorizes hold prints the go line"
+assert_eq "1" "$(awk '/^Reserved for you:/{r=NR} /^Say go and I run it:/{a=NR} END{print (r && a && r < a) ? 1 : 0}' "$TMP/o")" "TC1d: the lines print in hold order"
+arm_end auth
+
 echo "=== Arm 5: sections and headings ==="
 scn; run_h --plan "$FX/holds-none.md"
 expect "no Operator Holds section is a no-op" 0 "holds: 0 discharged: 0 standing: 0"
@@ -697,7 +743,7 @@ jargon_hits() { # <outfile>: count lines (other than the machine lines) with a d
 jargon_hits_ci() {
   grep -v '^\(holds\|delegation\): ' "$1" | grep -i -E -c '(^|[^a-z])(patch-id|rebase|merge-base|stdout|diff|commit|draft|pull request|branch|unarmed|hash|token|endpoint|registry|runbook)([^a-z]|$)' || true
 }
-for variant in mixed nogate unk uptodate edited noenv nodeleg-tools reserved nullmerge; do
+for variant in mixed nogate unk uptodate edited noenv nodeleg-tools reserved authorizes nullmerge; do
   scn
   case "$variant" in
     mixed) mkplan v ;; nogate) s_nogate ;; unk) s_unknown ;;
@@ -706,6 +752,7 @@ for variant in mixed nogate unk uptodate edited noenv nodeleg-tools reserved nul
     noenv) mkplan noenv '/^Envelope: /d' ;;
     nodeleg-tools) mkplan v; RUN_PATH="$TMP/nobin-timeout" ;;
     reserved) mkplan v 's/^- Hold: do not ship while a release is running\./- Hold: Operator-reserved: approve the new pricing copy./' ;;
+    authorizes) mkplan v 's/^- Hold: do not ship while a release is running\./- Hold: Operator-authorizes: rotate the deploy credential./' ;;
     nullmerge) echo '{"state":"MERGED","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-55.json"; mkplan v ;;
   esac
   run_h --plan "$PLAN"
@@ -1188,6 +1235,18 @@ assert_eq "0" "$(wa_calls curl-argv.log curl)" "ND10b: nothing was requested"
 scn; wa_init; { printf '# Plan\n\n## Operator Holds\n\n  Gate: web-acceptance wa-key %s\n- Hold: first wa-key.\n  Gate: web-acceptance wa-key %s\n\n## Next\n' "$WA_H" "$WA_H"; } > "$TMP/plans/nd11.md"; PLAN="$TMP/plans/nd11.md"; run_h --plan "$PLAN"
 assert_eq "2" "$(last_rc)" "ND11: a web-acceptance gate written outside any hold (an orphan) is exit 2"
 assert_eq "0" "$(wa_calls curl-argv.log curl)" "ND11b: nothing was requested"
+scn; wa_init; PLAN="$FXH/plan-authorizes-web-acceptance.md"; run_h --plan "$PLAN"
+assert_eq "2" "$(last_rc)" "ND12: an Operator-authorizes hold beside a web acceptance and no delegation: the acceptance is evaluated, the authorizes hold stands (exit 2)"
+assert_eq "1" "$(grep -c '^Say go and I run it: ' "$TMP/o")" "ND12b: the authorizes hold prints the go line"
+assert_eq "1" "$(grep -c '^Could not check: ' "$TMP/o")" "ND12c: the web acceptance could not be checked (the key is not in the project)"
+assert_eq "1" "$(machine | grep -c '^holds: 2 discharged: 0 standing: 2$')" "ND12d: both stand"
+assert_eq "0" "$(probed)" "ND12e: the authorizes hold's pr-merged gate is not probed"
+assert_eq "0" "$(wa_calls curl-argv.log curl)" "ND12f: nothing was requested for the absent key"
+scn; wa_init; printf '# Plan\n\n## Operator Holds\n\n- Hold: Operator-authorizes: rotate the deploy credential.\n- Hold: wait for the founder to read it.\n' > "$TMP/plans/ndauth.md"; PLAN="$TMP/plans/ndauth.md"; run_h --plan "$PLAN"
+assert_eq "3" "$(last_rc)" "ND13: authorizes and gate-less holds together: exit 3 (the prose path, like reserved)"
+scn; wa_init; { printf '# Plan\n\n## Operator Holds\n\n- Hold: Operator-authorizes: rotate the deploy credential.\n  Gate: web-acceptance wa-key %s\n\n## Next\n' "$WA_H"; } > "$TMP/plans/ndauth2.md"; PLAN="$TMP/plans/ndauth2.md"; run_h --plan "$PLAN"
+assert_eq "3" "$(last_rc)" "ND14: an authorizes-only plan keeps the prose path (exit 3), even when the hold carries a web-acceptance gate"
+assert_eq "0" "$(wa_calls curl-argv.log curl)" "ND14b: and nothing was requested"
 
 arm_begin bind
 echo "--- The hold must name the text its gate decides (CTO ruling D1) ---"
@@ -1435,6 +1494,14 @@ s_resv() { mkholds mresv '- Hold: do not ship while a release is running.
   Gate: no-inflight-run example-release.yml
 - Hold: **Operator-reserved:** approve the pricing copy
   Gate: pr-merged 55'; }
+s_auth() { mkholds mauth '- Hold: do not ship while a release is running.
+  Gate: no-inflight-run example-release.yml
+- Hold: **Operator-authorizes:** rotate the deploy credential
+  Gate: pr-merged 55'; }
+s_auth2() { mkholds mauth2 '- Hold: Operator-reserved: approve the pricing copy.
+- Hold: Operator-authorizes: rotate the deploy credential.'; }
+s_authmid() { mkplan mauthmid 's/^- Hold: do not ship while a release is running\./- Hold: ask first, this is Operator-authorizes: nothing special/'; }
+r_auth() { run_h --plan "$PLAN"; echo "holds: x $(machine | sed 's/^holds: //') auth=$(grep -c '^Say go and I run it: ' "$TMP/o")" >> "$TMP/o"; }
 s_hidden() { mkplan mhid ''; printf '\n## Operator Hold (misspelt, second)\n\n- Hold: Do not merge until Dana has signed off the copy.\n  Gate: pr-merged 9999\n' >> "$PLAN"; }
 s_dirty() { echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-120.json"; sed -i.bak '/^- Gate: pr-merged 120$/d' "$W/env-valid.md"; rm -f "$W/env-valid.md.bak"; }
 r_dirty() { run_h --file env-valid.md --section "Production Envelope"; git -C "$W" checkout -q -- env-valid.md; }
@@ -1528,6 +1595,11 @@ mutate marker-norm 's/nt = norm\(t\) # mut:marker-norm/nt = t # mut:marker-norm/
 mutate reserved-norm 's/^.*# mut:reserved-norm$/  rn="" # mut:reserved-norm/' && killed reserved-norm "2|holds: 2 discharged: 1 standing: 1" s_resv r_plan
 mutate file-head "$(noop file-head)" && killed file-head "1|holds: 1 discharged: 0 standing: 1" s_dirty r_dirty
 mutate reserved "$(noop reserved)" && killed reserved "2|holds: 3 discharged: 2 standing: 1" s_reserved r_plan
+# the Operator-authorizes class: recognizer, verdict line, eval-loop arm, mid-line scope, no-delegation skip
+mutate authorizes-norm 's/^.*# mut:authorizes-norm$/  an="" # mut:authorizes-norm/' && killed authorizes-norm "2|holds: x 2 discharged: 1 standing: 1 auth=1" s_auth r_auth
+mutate authorize "$(noop authorize)" && killed authorize "2|holds: 2 discharged: 1 standing: 1" s_auth r_plan
+mutate authorize-line 's/Say go and I run it: %s - only you can say go/Reserved for you: %s - only you can say go/' && killed authorize-line "2|holds: x 2 discharged: 1 standing: 1 auth=1" s_auth r_auth
+mutate authorizes-anywhere 's/\[ "\$an" = operatorauthorize \]/[[ "$lt" == *operator-authorizes* || "$lt" == *"operator authorizes"* ]]/' && killed authorizes-anywhere "0|holds: 3 discharged: 3 standing: 0" s_authmid r_plan
 # 11 structure
 mutate heading-ci 's/(rest = )tolower\(([^#]*)\) # mut:heading-ci/\1\2 # mut:heading-ci/' && killed heading-ci "0|holds: 3 discharged: 3 standing: 0" s_heading r_plan
 mutate fence-char 's/c == fc && n >= fn && //g' && killed fence-char "0|holds: 1 discharged: 1 standing: 0" s_fchar r_plan
@@ -1616,6 +1688,7 @@ w_two() { wa_init; : > "$STUB_DIR/eat-stdin"; printf 'ten bytes!' > "$TMP/stdin-
 w_mixed() { wa_init; sed -E -e "s|@KEY@|wa-key|g" -e "s|@HASH@|$WA_H|g" "$FXH/plan-web-acceptance-mixed.md" > "$TMP/plans/mmixed.md"; PLAN="$TMP/plans/mmixed.md"; }
 w_mixed_open() { w_mixed; echo '{"state":"OPEN","mergeCommit":null,"baseRefName":"main"}' > "$STUB_DIR/pr-55.json"; }
 w_resonly() { wa_init; sed -E -e "s|@KEY@|wa-key|g" -e "s|@HASH@|$WA_H|g" "$FXH/plan-reserved-only.md" > "$TMP/plans/mres.md"; PLAN="$TMP/plans/mres.md"; }
+w_authonly() { wa_init; { printf '# Plan\n\n## Operator Holds\n\n- Hold: Operator-authorizes: rotate the deploy credential.\n  Gate: web-acceptance wa-key %s\n\n## Next\n' "$WA_H"; } > "$TMP/plans/mauthonly.md"; PLAN="$TMP/plans/mauthonly.md"; }
 w_gateless() { wa_init; printf '# Plan\n\n## Operator Holds\n\n- Hold: wait for the founder to read it.\n' > "$TMP/plans/mgl.md"; PLAN="$TMP/plans/mgl.md"; }
 w_wa_gateless() { wa_init; { printf '# Plan\n\n## Operator Holds\n\n- Hold: first wa-key.\n  Gate: web-acceptance wa-key %s\n- Hold: wait for the founder to read it as well.\n\n## Next\n' "$WA_H"; } > "$TMP/plans/mwg.md"; PLAN="$TMP/plans/mwg.md"; }
 # 1 unreadable must hold: a timeout, a 5xx, a redirect, an empty body
@@ -1656,6 +1729,7 @@ mutate wa-mixed "$(noop wa-mixed)" && { killed wa-mixed "2|holds: 2 discharged: 
 # 9 the converse: reserved-only and gate-less no-delegation plans keep exit 3
 mutate wa-none 's/\[ "\$wa" -gt 0 \] \|\| return 0 # mut:wa-none/[ "$wa" -ge 0 ] || return 0 # mut:wa-none/' && killed wa-none "3|holds: 1 discharged: 0 standing: 1" w_gateless r_plan
 mutate wa-reserved-skip "$(noop wa-reserved-skip)" && killed wa-reserved-skip "3|holds: 1 discharged: 0 standing: 1" w_resonly r_plan
+mutate wa-authorizes-skip "$(noop wa-authorizes-skip)" && killed wa-authorizes-skip "3|holds: 1 discharged: 0 standing: 1" w_authonly r_plan
 mutate wa-gateless "$(noop wa-gateless)" && killed wa-gateless "2|holds: 2 discharged: 0 standing: 2" w_wa_gateless r_plan
 # 10 row_ok is checked with an explicit type predicate, never `//` or truthiness
 mutate row-ok-coalesce 's|\.row_ok == true and|(.row_ok // true) == true and|' && killed row-ok-coalesce "$PNU" w_rowfalse r_wa
@@ -1708,8 +1782,8 @@ else
   echo "  FAIL: gh stub calls $n_calls < 995 -- the rows did not drive the script"; FAIL=$((FAIL + 1))
 fi
 
-for armrow in "wa:1270:the whole of Arm 14" "nser:405:answers that cannot be understood, escapes, repeats and dates" "bind:145:the hold must name its text" "tab:11:a tab cannot split a gate" "vu:40:valid_until" "bind2:13:what the binding reads" "chg:26:who reads the note" "vu2:51:valid_until, the day before, zones, calendar" "nt:30:an acknowledgement key cannot back a production step"; do
+for armrow in "wa:1270:the whole of Arm 14" "nser:405:answers that cannot be understood, escapes, repeats and dates" "bind:145:the hold must name its text" "tab:11:a tab cannot split a gate" "vu:40:valid_until" "bind2:13:what the binding reads" "chg:26:who reads the note" "vu2:51:valid_until, the day before, zones, calendar" "nt:30:an acknowledgement key cannot back a production step" "auth:64:the Operator-authorizes class"; do
   arm_floor "${armrow%%:*}" "$(printf '%s' "$armrow" | cut -d: -f2)" "${armrow#*:*:}"
 done
 
-print_results 2045
+print_results 2143

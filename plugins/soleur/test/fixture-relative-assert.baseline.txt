@@ -411,7 +411,7 @@
 1	plugins/soleur/test/gitleaks-merge-commit.test.sh
 5	plugins/soleur/test/go-session-gates.test.sh
 5	plugins/soleur/test/harvest-debt.test.sh
-116	plugins/soleur/test/hold-gate-eval.test.sh
+120	plugins/soleur/test/hold-gate-eval.test.sh
 3	plugins/soleur/test/hook-git-env-coverage.mutation.sh
 4	plugins/soleur/test/lib/git-corrupt-graph.sh
 2	plugins/soleur/test/lint-bot-synthetic-completeness.test.sh
