@@ -286,6 +286,13 @@ in_queue() {
 # softer one. CI_HEAD_VERDICT_BIN is the test seam.
 VERDICT_SH="${CI_HEAD_VERDICT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/ci-head-verdict.sh}"
 V_STATE=""; V_WHY=""
+# Shared context-sanitize lib (#10395): the LF-only variant also drops the NEL/LS/PS line-break class. When the lib cannot be
+# sourced the fallback below is exactly this site's pre-adoption strip set.
+_ctx_lib="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd -P)/lib/context-sanitize.sh"
+# shellcheck source=lib/context-sanitize.sh disable=SC1091
+[[ -r "$_ctx_lib" ]] && source "$_ctx_lib" 2>/dev/null
+declare -F soleur_ctx_sanitize_nl >/dev/null 2>&1 \
+  || soleur_ctx_sanitize_nl() { LC_ALL=C tr -d '\000-\011\013-\037\177'; }
 ci_verdict() {
   local m
   V_STATE=""; V_WHY=""
@@ -331,7 +338,7 @@ read_required_set() {
   "$REQ_TIMEOUT_BIN" -k 5 "$REQ_TIMEOUT_S" bash "$VERDICT_SH" required "$PR" "${REPO_ARG[@]}" >"$REQ_OUT" 2>"$ERRTMP" </dev/null || rc=$?
   # Keep the TAIL (the marker is the last line) and drop control characters other than newline, so a smuggled CR or escape cannot
   # reshape a line; the resolver cleans its own output already (its rows R15/R16), this is the second layer.
-  out="$(tail -c 262144 "$REQ_OUT" 2>/dev/null | tr -d '\000-\011\013-\037\177')"
+  out="$(tail -c 262144 "$REQ_OUT" 2>/dev/null | soleur_ctx_sanitize_nl)"
   marker="$(grep -E "^SOLEUR_CI_REQUIRED_SET state=(complete|absent|pending|failed|error) pr=${PR} sha=[^ ]+ required=[^ ]+ reason=[^ ]+ absent=.* pending=.* failed=.*\$" <<<"$out" | tail -n 1)" || true
   if [[ -z "$marker" ]]; then
     err="$(head -c 160 "$ERRTMP" 2>/dev/null | tr '[:cntrl:]' ' ')"
