@@ -55,7 +55,7 @@ Derived from `knowledge-base/project/plans/2026-11-09-ci-s4-stage-retirement-pla
 
 ## 6. Phase 5 — Verification + merge prep
 
-- [ ] 6.1 Run the full verification battery in plan Phase 5 (all listed test files green).
+- [x] 6.1 Run the full verification battery in plan Phase 5 (all listed test files green).
 - [x] 6.2 Residual-zero census greps — zero hits outside §Historical record.
 - [x] 6.3 `python3 -c 'import yaml;print(len(yaml.safe_load(open(".github/workflows/ci.yml"))["jobs"]))'` == 20; ledger matches.
 - [x] 6.4 Local `test-all.sh --affected` probe exits 0.
