@@ -277,9 +277,10 @@ export function startOriginTlsListener(params: {
     ((code: number): void => {
       try {
         params.httpServer.close();
-        params.httpServer.closeAllConnections?.();
-      } catch {
+        params.httpServer.closeIdleConnections?.();
+      } catch (err) {
         // a server that cannot close must not stop the exit
+        log.warn({ err }, "origin-tls: could not close the plain HTTP server before the REQUIRED-mode exit");
       }
       flushThenExit(code);
     });

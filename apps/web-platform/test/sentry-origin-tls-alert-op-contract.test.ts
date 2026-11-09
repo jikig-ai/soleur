@@ -105,15 +105,16 @@ describe("origin-tls-event alert op contract", () => {
 
   it("the rule is attached to the project issue-stream monitor the siblings use, matches ALL of one condition, and carries no environment or other scope", () => {
     // monitor_ids = [] (or another monitor) leaves an enabled, correctly filtered rule attached to nothing: it would never page.
-    expect(rule).toMatch(/monitor_ids\s*=\s*\[data\.sentry_project_issue_stream_monitor\.web_platform\.id\]/);
-    expect(rule).toMatch(/logic_type\s*=\s*"all"/);
+    expect(rule).toMatch(/^\s*monitor_ids\s*=\s*\[data\.sentry_project_issue_stream_monitor\.web_platform\.id\]\s*$/m);
+    expect(rule).toMatch(/^\s*logic_type\s*=\s*"all"\s*$/m);
     expect(rule).not.toMatch(/^\s*environment\s*=/m);
     expect(rule).toMatch(/ignore_changes\s*=\s*\[environment\]/);
     // Exactly ONE entry in the conditions list, whatever its attribute order and whatever its kind: a second condition of any
     // type (a tag in another order, a level, an attribute) would narrow the rule below its emitter.
     const conds = rule.match(/(?<![A-Za-z_])conditions\s*=\s*\[([\s\S]*?)\n\s*\]/);
     expect(conds).not.toBeNull();
-    expect([...conds![1].matchAll(/\{\s*[a-z_]+\s*=\s*\{/g)]).toHaveLength(1);
+    // Exact text, not a count of `{ key = {` shapes: a quoted key, a reference, merge() or concat() would slip past a count.
+    expect(conds![1].replace(/\s+/g, " ").trim()).toBe(`{ tagged_event = { key = "feature", match = "eq", value = "${FEATURE}" } },`);
   });
 
   it("re-pages per event: the three transition triggers plus event_frequency_count {1h, 0}", () => {

@@ -329,15 +329,16 @@ app.prepare().then(() => {
 
   server.listen(port, () => {
     originTls = startOriginTlsListener({ httpServer: server });
-    // A REQUIRED start whose material is absent or invalid has already begun exiting (flush, then process.exit): do not run the
-    // rest of boot (ready log, startup event, reaper, probes) on a process that is dying.
-    if (originTls === null && process.env[ORIGIN_TLS_REQUIRED_ENV] === "1") return;
     // #9534 — reap orphaned forwarder processes + their gateway tokens before
     // serving dispatches (best-effort, never throws). Only on the owning
     // dispatcher — see the import comment.
     if (process.env.SOLEUR_EGRESS_REAPER === "1") {
       reapOrphanEgressForwarders();
     }
+    // A REQUIRED start whose material is absent or invalid has already begun exiting (flush, then process.exit; a bind error
+    // on :443 can still exit later, from its own handler): skip the ready log, startup event and probes on a process that is
+    // dying, so they cannot report a healthy start. The reaper above stays first: it is idempotent cleanup the next boot needs.
+    if (originTls === null && process.env[ORIGIN_TLS_REQUIRED_ENV] === "1") return;
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
     log.info({
       sentryConfigured: !!process.env.SENTRY_DSN,

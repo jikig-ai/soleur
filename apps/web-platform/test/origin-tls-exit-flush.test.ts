@@ -142,9 +142,10 @@ describe("startOriginTlsListener default exit", () => {
     flush.mockResolvedValue(true);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const close = vi.fn();
+    const closeIdleConnections = vi.fn();
     const closeAllConnections = vi.fn();
     const result = startOriginTlsListener({
-      httpServer: { on: vi.fn(), close, closeAllConnections } as never,
+      httpServer: { on: vi.fn(), close, closeIdleConnections, closeAllConnections } as never,
       env: { [ORIGIN_TLS_REQUIRED_ENV]: "1" },
     });
     expect(result).toBeNull();
@@ -153,17 +154,57 @@ describe("startOriginTlsListener default exit", () => {
     expect(flush).toHaveBeenCalledWith(2_000);
     // The :80 server stops accepting BEFORE the flush starts, so a dying REQUIRED start cannot answer the deploy canary's /health.
     expect(close).toHaveBeenCalledTimes(1);
-    expect(closeAllConnections).toHaveBeenCalledTimes(1);
+    // Idle sockets only: an in-flight request on :80 is not torn down by a process that is about to exit anyway.
+    expect(closeIdleConnections).toHaveBeenCalledTimes(1);
+    expect(closeAllConnections).not.toHaveBeenCalled();
+    expect(close.mock.invocationCallOrder[0]).toBeLessThan(closeIdleConnections.mock.invocationCallOrder[0]);
     expect(close.mock.invocationCallOrder[0]).toBeLessThan(flush.mock.invocationCallOrder[0]);
     // Without this the vitest process.exit trap could make the assertion vacuous: flush must come strictly first.
     expect(flush.mock.invocationCallOrder[0]).toBeLessThan(exitSpy.mock.invocationCallOrder[0]);
   });
 
-  test("a start that is not REQUIRED never exits and never flushes", () => {
+  test("a close() that throws does not stop the flush or the exit", async () => {
+    flush.mockResolvedValue(true);
     const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
-    const result = startOriginTlsListener({ httpServer: { on: vi.fn() } as never, env: {} });
+    const close = vi.fn(() => {
+      throw new Error("injected close failure");
+    });
+    const closeIdleConnections = vi.fn();
+    startOriginTlsListener({
+      httpServer: { on: vi.fn(), close, closeIdleConnections } as never,
+      env: { [ORIGIN_TLS_REQUIRED_ENV]: "1" },
+    });
+    await vi.waitFor(() => expect(exitSpy).toHaveBeenCalledWith(1));
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(flush).toHaveBeenCalledTimes(1);
+  });
+
+  test("an injected exit replaces the whole default path: no close, no flush", () => {
+    const close = vi.fn();
+    const closeIdleConnections = vi.fn();
+    const closeAllConnections = vi.fn();
+    const exit = vi.fn();
+    startOriginTlsListener({
+      httpServer: { on: vi.fn(), close, closeIdleConnections, closeAllConnections } as never,
+      env: { [ORIGIN_TLS_REQUIRED_ENV]: "1" },
+      exit,
+    });
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(close).not.toHaveBeenCalled();
+    expect(closeIdleConnections).not.toHaveBeenCalled();
+    expect(closeAllConnections).not.toHaveBeenCalled();
+    expect(flush).not.toHaveBeenCalled();
+  });
+
+  test("a start that is not REQUIRED never exits, never flushes and never closes the :80 server", () => {
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    const close = vi.fn();
+    const closeIdleConnections = vi.fn();
+    const result = startOriginTlsListener({ httpServer: { on: vi.fn(), close, closeIdleConnections } as never, env: {} });
     expect(result).toBeNull();
     expect(exitSpy).not.toHaveBeenCalled();
     expect(flush).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+    expect(closeIdleConnections).not.toHaveBeenCalled();
   });
 });

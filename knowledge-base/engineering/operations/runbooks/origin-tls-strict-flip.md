@@ -71,7 +71,8 @@ Both pre-flip samples agree within 4 ms at p50 and 6 ms at p90. The value 0.194 
 | Server wait (`time_starttransfer` minus `time_pretransfer`) for `app.soleur.ai/health`, about 16:37Z, interleaved with the apex | 30 | server wait | p50 0.154 s, p90 0.285 s |
 | Server wait for the apex `soleur.ai/` (a different origin), about 16:37Z, interleaved with the row above | 30 | server wait | p50 0.082 s, p90 0.111 s |
 | `origin-tls: listening` restart pairs, `soleur-web-platform` and `soleur-web-2` | 11 pairs | Better Stack rows between 01:05Z and 16:17Z (count and range only; the restart table above lists pairs only through 00:15Z, and no per-pair times are recorded here) | 11 |
-| Better Stack handshake-failure (`a client failed the TLS handshake`) or unexpected-close lines | since 00:20Z | line search | none found |
+| Better Stack handshake-failure (`a client failed the TLS handshake`) or unexpected-close lines | 00:20Z to 16:00Z on 2026-11-08 | line search | none found |
+| Same line search, 2026-11-08 16:00Z to 23:46Z (read at the +24h re-check) | 17 warn lines (`code=ECONNRESET`) on web-1 only, between 21:41Z and 22:07Z; none on web-2; none outside that window | line search; the line is rate-limited to one per minute with a suppressed count | about 3,700 resets in about 26 minutes, peak 589 in one minute (21:55Z to 21:57Z), plus 2 `ERR_TLS_HANDSHAKE_TIMEOUT`; a container restart at 21:49:32Z did not stop it. The log carries no source address; whether any user saw a 525/526/502/520 in that window is **unknown** (needs the Cloudflare analytics reader, #12441). No alert covers this signal. |
 | `origin-tls-probe.sh --require-tls`, about 16:35Z | 1 | exit and transport | passes, TLSv1.3 |
 
 No pre-flip server-wait decomposition exists, so the 0.154 s cannot be split into before and after.
@@ -211,11 +212,11 @@ If revived, the shape is: a `warn`-level line (Vector drops INFO, so an info mar
 
 ##### Verify `origin-tls-event` is live (read-only; run after the merge-triggered apply)
 
-1. `gh run list --workflow apply-sentry-infra.yml --branch main --limit 3 --json databaseId,conclusion,headSha,createdAt`. Expected: a run with `conclusion: success` whose `headSha` is the merge commit of PR #12434 or a later one on `main`.
-2. `gh run view <databaseId> --log | /usr/bin/grep -a -i 'live fidelity'`. Expected: a passing fidelity line and no divergence that names `origin-tls-event` (the step diffs every declared rule against live Sentry).
-3. The next `scheduled-sentry-alert-drift.yml` run is green (no drift issue). The workflows-endpoint read in `apps/web-platform/infra/sentry/README.md` (section "Audit") may print `{name, enabled, frequency}` for the rule: expected one row, `enabled: true`, `frequency: 47`.
+1. `gh run list --workflow apply-sentry-infra.yml --branch main --limit 3 --json databaseId,conclusion,headSha,createdAt`. Expected: a run whose `headSha` is the merge commit of PR #12434 or a later one on `main`. A `conclusion: success` alone is not enough: the kill switch (`[skip-sentry-apply]` on its own line of the merge commit message) skips the apply steps and the run can still end green.
+2. `gh run view <databaseId> --json jobs --jq '.jobs[] | select(.name | test("apply"; "i")) | .steps[] | select(.name | test("Terraform apply|live fidelity")) | {name, conclusion}'`. Expected: both steps, `Terraform apply (cron + uptime monitors)` and `sentry_alert live fidelity (AC19/AC20)`, with `conclusion: success`. `skipped` on either means nothing was applied or compared, so the rule is still **DECLARED**. The fidelity step compares every declared `sentry_alert` field by field against live Sentry and fails the run on a divergence; a pass is the evidence the rule exists live as declared.
+3. After the next scheduled `Sentry Alert Drift Detection` run (`scheduled-sentry-alert-drift.yml`): `gh issue list --label ci/sentry-alert-drift --state open --json number,title`. Expected: no open issue. That probe compares live Sentry with the committed `alert-reference.json`, which this PR extends with `origin-tls-event`. Optionally read the org workflows endpoint (README section "Audit") and look for the rule named `origin-tls-event`; the fidelity step in 2 already checks its fields, so this read is a convenience, not a gate.
 
-If step 1 shows no successful run, or step 2 names the rule, the state stays **DECLARED** (a merge commit message carrying `[skip-sentry-apply]` skips the apply). Do not write "live" anywhere until step 1 and step 2 pass.
+If step 1 shows no run for the merge commit, or step 2 shows `skipped` or `failure`, the state stays **DECLARED**. Do not write "live" anywhere until steps 1 and 2 pass.
 
 ### Open checks (plainly)
 

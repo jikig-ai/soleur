@@ -102,23 +102,37 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
     // Any spelling of a direct timeout write on the server (dot, bracket, Object.assign) other than the helper call is a bypass.
     expect(src).not.toMatch(/server\s*(?:\.|\[\s*["'])\s*(?:headers|request)Timeout/);
     expect(src).not.toMatch(/Object\.assign\(\s*server\b/);
+    // Whole-file rule: the property names appear nowhere in index.ts (an alias, a template-literal key, Reflect.set or
+    // Object.defineProperty cannot write them without spelling the name).
+    expect(src).not.toMatch(/headersTimeout|requestTimeout/);
     // The call is a top-level statement of the same block that sets the keep-alive, not nested in a conditional.
     expect(src).toMatch(/^ {2}server\.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;\n {2}applyPlainHttpTimeouts\(server\);$/m);
     // The keep-alive assignment is left exactly as it was.
     expect(src).toMatch(/^\s*server\.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;$/m);
   });
 
-  test("every HTTP(S) listener in server/ is known: a new createServer must be reviewed for its timeouts", () => {
+  test("every HTTP(S) listener in server/ is known: a new server creator must be reviewed for its timeouts", () => {
     const walk = (dir: string): string[] =>
       readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
-        e.isDirectory() ? walk(`${dir}/${e.name}`) : e.name.endsWith(".ts") ? [`${dir}/${e.name}`] : [],
+        e.isDirectory() ? walk(`${dir}/${e.name}`) : /\.[cm]?[jt]sx?$/.test(e.name) ? [`${dir}/${e.name}`] : [],
       );
+    // Only block comments and whole-line comments are removed: stripComments would mis-read a string such as "a//b" and hide the
+    // rest of its line. Any mention counts, so an aliased import (`createServer as mk`) and a bracket access
+    // (`http["createServer"]`) are seen as well as a call.
+    const uncommented = (f: string): string => read(f).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const creatorMention = /\bcreate(?:Secure|Https?)?Server\b|\bnew\s+(?:\w+\.)?Server\s*\(/;
+    const valueHttpImport = /^\s*import\s+(?!type\b)(?:\w+|\*\s+as\s+\w+)\s*(?:,[^;]*)?from\s+["'](?:node:)?(?:https?|http2)["']|require\(\s*["'](?:node:)?(?:https?|http2)["']\s*\)/m;
     const creators = walk("server")
-      .filter((f) => /\bcreate(?:Https?)?Server\s*\(/.test(stripComments(read(f))))
+      .filter((f) => {
+        const src = uncommented(f);
+        return creatorMention.test(src) || valueHttpImport.test(src);
+      })
       .sort();
     // index.ts: the :80 server (timeouts via http-timeouts.ts). origin-tls.ts: the :443 listener (Node defaults, pinned in
     // origin-tls.test.ts). session-proxy.ts: the private-net proxy, out of scope by design (ADR-321 item 12).
     expect(creators).toEqual(["server/index.ts", "server/origin-tls.ts", "server/session-proxy.ts"]);
+    // A second creator inside a known file is not a new file name: count them where the :80 timeouts are applied.
+    expect(stripComments(read("server/index.ts")).match(/\bcreateServer\s*\(/g)).toHaveLength(1);
   });
 
   test("http-timeouts.ts imports nothing from the server (it must stay import-safe for tests)", () => {

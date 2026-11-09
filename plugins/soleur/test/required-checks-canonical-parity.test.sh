@@ -591,11 +591,49 @@ scan_curl_flags() {
   local f scan_rc=0
   for f in "$@"; do
     awk -v file="$f" '
+      # Quote-aware: a `#`, `;`, `|` or `&` inside a quoted string (a header value, a URL query) is data, not shell syntax.
+      # \047 is a single quote (the whole program is single-quoted for bash).
+      function strip_comment(s,   i, n, c, q, p) {
+        n = length(s); q = ""; p = " "
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (q == "") {
+            if (c == "\\") { i++; p = "x"; continue }
+            if (c == "\"" || c == "\047") q = c
+            else if (c == "#" && (p == " " || p == "\t")) return substr(s, 1, i - 1)
+          } else if (q == "\"" && c == "\\") i++
+          else if (c == q) q = ""
+          p = c
+        }
+        return s
+      }
+      function split_cmds(s, out,   i, n, c, q, p, k, cur, nx) {
+        n = length(s); q = ""; k = 0; cur = ""; p = ""
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (q != "") {
+            cur = cur c
+            if (q == "\"" && c == "\\") { i++; cur = cur substr(s, i, 1) }
+            else if (c == q) q = ""
+            p = c; continue
+          }
+          if (c == "\\") { cur = cur c substr(s, i + 1, 1); i++; p = "x"; continue }
+          if (c == "\"" || c == "\047") { q = c; cur = cur c; p = c; continue }
+          if (c == ";" || c == "|" || c == "&") {
+            nx = substr(s, i + 1, 1)
+            if (c == "&" && (p == ">" || nx == ">")) { cur = cur c; p = c; continue }   # 2>&1 and &> are redirections
+            out[++k] = cur; cur = ""; p = c; continue
+          }
+          cur = cur c; p = c
+        }
+        out[++k] = cur
+        return k
+      }
       function finish(   kind, miss, n, i, seg, parts) {
-        n = split(buf, parts, /(;|&&|\|\|)/)
+        n = split_cmds(buf, parts)
         for (i = 1; i <= n; i++) {
           seg = parts[i]
-          if (seg !~ /(^|[[:space:]])curl[[:space:]]/) continue
+          if (seg !~ /(^|[[:space:]("`])curl[[:space:]]/) continue
           kind = ""
           if (index(seg, "gitleaks/gitleaks/releases/download")) kind = "gitleaks"
           else if (index(seg, "rhysd/actionlint/releases/download")) kind = "actionlint"
@@ -613,7 +651,7 @@ scan_curl_flags() {
       {
         if (buf == "") start = NR
         phys = $0
-        sub(/[[:space:]]+#.*$/, "", phys)   # a trailing comment is not part of the command
+        phys = strip_comment(phys)   # a trailing comment (a `#` outside quotes) is not part of the command
         if (phys ~ /\\$/) { sub(/\\$/, " ", phys); buf = buf " " phys; next }
         buf = buf " " phys
         finish()
@@ -643,11 +681,15 @@ strip_flag_once() {
 }
 
 echo "Test 10: gitleaks/actionlint release-download curls carry --fail --retry 5 --retry-all-errors"
-shopt -s nullglob
-shopt -s nullglob
-CURL_SCAN_FILES=("$REPO_ROOT"/.github/workflows/*.yml "$REPO_ROOT"/.github/workflows/*.yaml "$REPO_ROOT"/.github/actions/*/action.yml "$REPO_ROOT"/.github/actions/*/action.yaml)
-shopt -u nullglob
-shopt -u nullglob
+# collect_curl_scan_files ROOT: every workflow and composite-action file the scan covers (.yml and .yaml), one per line.
+collect_curl_scan_files() {
+  local root="$1" a=()
+  shopt -s nullglob
+  a=("$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml "$root"/.github/actions/*/action.yml "$root"/.github/actions/*/action.yaml)
+  shopt -u nullglob
+  if [[ ${#a[@]} -gt 0 ]]; then printf '%s\n' "${a[@]}"; fi
+}
+mapfile -t CURL_SCAN_FILES < <(collect_curl_scan_files "$REPO_ROOT")
 
 scan_rc=0
 scan_out=$(scan_curl_flags "${CURL_SCAN_FILES[@]}") || scan_rc=$?
@@ -656,7 +698,8 @@ n_al=$(printf '%s\n' "$scan_out" | grep -c '|actionlint|' || true)
 n_bad=$(printf '%s\n' "$scan_out" | grep -c '|MISSING' || true)
 # Independent raw count: NON-comment lines carrying the variable-form URL fragment
 # (the literal-version URL in a secret-scan.yml comment must not be counted).
-n_raw=$({ grep -h -E '^[^#]*releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "${CURL_SCAN_FILES[@]}" || true; } | wc -l | tr -d ' ')
+# Whole-line comments are skipped, but a `#` inside a quoted header earlier on the line must not hide the URL from this count.
+n_raw=$({ grep -h -E '^[[:space:]]*[^#[:space:]].*releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "${CURL_SCAN_FILES[@]}" || true; } | wc -l | tr -d ' ')
 
 assert_eq "0" "$n_bad" "(10a) no gitleaks/actionlint download curl is missing a hardening flag"
 if [[ "$n_bad" -ne 0 ]]; then printf '%s\n' "$scan_out" | grep '|MISSING' | sed 's/^/        /'; fi
@@ -766,6 +809,47 @@ neg_check second-copy-unhardened " --retry-all-errors" <<'YML'
         curl --fail --retry 5 -sSLo b.tgz \
           "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
 YML
+# Quote-awareness and command-boundary fixtures. A `#` or `;` inside a quoted header is data, so the curl is still seen
+# (and rejected); a `|` or `&` ends the command, so flags on the far side of it are not on the curl.
+neg_check quoted-hash-in-header " --fail" <<'YML'
+        curl -sSL -H "X: a #b" -o a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check semicolon-in-header " --fail" <<'YML'
+        curl -sSL -H "X: a;b" -o a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check flags-after-pipe " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tee --fail --retry 5 --retry-all-errors
+YML
+neg_check flags-after-background-amp " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" & echo --fail --retry 5 --retry-all-errors
+YML
+neg_check command-substitution " --fail" <<'YML'
+        x=$(curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz")
+YML
+cat > "$TMP/curl-pass-query.yml" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz?a=1;b=2&c=3"
+YML
+q_rc=0; q_out=$(scan_curl_flags "$TMP/curl-pass-query.yml") || q_rc=$?
+assert_eq "0" "$q_rc" "(10i) a quoted URL query containing ; and & is not split"
+assert_contains "$q_out" "|gitleaks|OK" "(10i) the quoted-query command is counted as one gitleaks curl"
+cat > "$TMP/curl-pass-redirect.yml" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" 2>&1 | cat
+YML
+r_rc=0; r_out=$(scan_curl_flags "$TMP/curl-pass-redirect.yml") || r_rc=$?
+assert_eq "0" "$r_rc" "(10i) a 2>&1 redirection is not a command boundary"
+assert_contains "$r_out" "|gitleaks|OK" "(10i) the redirected command is counted as one gitleaks curl"
+
+# (10j) the file collector covers .yml AND .yaml in both locations (a .yaml-only copy of the install would otherwise go unscanned).
+mkdir -p "$TMP/tree/.github/workflows" "$TMP/tree/.github/actions/x" "$TMP/tree/.github/actions/y"
+: > "$TMP/tree/.github/workflows/a.yml"; : > "$TMP/tree/.github/workflows/b.yaml"
+: > "$TMP/tree/.github/actions/x/action.yml"; : > "$TMP/tree/.github/actions/y/action.yaml"
+tree_out=$(collect_curl_scan_files "$TMP/tree")
+assert_eq "4" "$(printf '%s\n' "$tree_out" | grep -c . || true)" "(10j) the collector finds .yml and .yaml workflows and composite actions"
+assert_contains "$tree_out" "workflows/b.yaml" "(10j) a .yaml workflow is collected"
+assert_contains "$tree_out" "actions/y/action.yaml" "(10j) a .yaml composite action is collected"
+# Independent of the collector: the same set found with find must equal what the real scan covered.
+n_find=$({ find "$REPO_ROOT/.github/workflows" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \); find "$REPO_ROOT/.github/actions" -mindepth 2 -maxdepth 2 -type f \( -name action.yml -o -name action.yaml \); } | wc -l | tr -d ' ')
+assert_eq "$n_find" "${#CURL_SCAN_FILES[@]}" "(10j) the real scan covers every workflow and action file find sees"
 echo ""
 
-print_results 81
+print_results 94
