@@ -11,7 +11,7 @@ related_adrs: [ADR-068, ADR-118, ADR-263, ADR-282, ADR-320, ADR-241]
 Refs: #12288, #12289, #12290, #12167, #8211. Related: ADR-068 (user-sticky routing, peer allowlist), ADR-118 (proxy cert SANs track the
 roster; the hello key joined its count gate in the 2026-11-08 amendment), ADR-263 and ADR-282 (the LUKS no-ack set this PR deliberately
 does not extend), ADR-320 and ADR-241 (Tier-A state readers). Plan:
-`knowledge-base/project/plans/2026-11-09-feat-signed-relay-hello-pre-tls-allowlist-plan.md`.
+`knowledge-base/project/plans/archive/20261109-130604-2026-11-09-feat-signed-relay-hello-pre-tls-allowlist-plan.md`.
 
 ## Status
 
