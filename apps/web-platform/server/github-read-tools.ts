@@ -29,6 +29,8 @@ const ISSUE_BODY_CAP = 10 * 1024;
 const COMMENT_BODY_CAP = 4 * 1024;
 const PER_PAGE_MAX = 50;
 const PER_PAGE_DEFAULT = 10;
+// GitHub renders a deleted account as 'ghost'; the API answers `user: null`.
+const GHOST_LOGIN = "ghost";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -86,7 +88,7 @@ interface GhIssueResponse {
   created_at: string;
   updated_at: string;
   html_url: string;
-  user: GhUser;
+  user: GhUser | null;
   // The list-issues endpoint ALSO returns pull requests; each carries a
   // `pull_request` key (issues do not) — used to filter PRs out (#workstream).
   pull_request?: unknown;
@@ -106,7 +108,7 @@ interface GhPullRequestResponse extends GhIssueResponse {
 
 interface GhCommentResponse {
   id: number;
-  user: GhUser;
+  user: GhUser | null;
   body: string | null;
   created_at: string;
   html_url: string;
@@ -142,7 +144,7 @@ function narrowIssue(raw: GhIssueResponse): IssueSummary {
     created_at: raw.created_at,
     updated_at: raw.updated_at,
     html_url: raw.html_url,
-    user: raw.user.login,
+    user: raw.user?.login ?? GHOST_LOGIN,
   };
 }
 
@@ -150,7 +152,7 @@ function narrowComment(raw: GhCommentResponse, kind: CommentSummary["kind"]): Co
   return {
     id: raw.id,
     kind,
-    user: raw.user.login,
+    user: raw.user?.login ?? GHOST_LOGIN,
     body: truncateBody(raw.body, COMMENT_BODY_CAP, raw.html_url),
     created_at: raw.created_at,
     html_url: raw.html_url,
@@ -388,7 +390,9 @@ export async function listPullRequests(
     per_page: String(perPage + 1),
   });
   const raw = await apiGet<GhPullListItem[]>(installationId, `/repos/${owner}/${repo}/pulls?${params.toString()}`, fetchOpts);
-  const rows = Array.isArray(raw) ? raw : [];
+  // A non-array 200 is a malformed answer, NOT an empty list: reporting "0 pull requests" would be acted on as fact.
+  if (!Array.isArray(raw)) throw new Error("listPullRequests: GitHub answered with an unexpected shape");
+  const rows = raw;
   const hasMore = rows.length > perPage;
   const pull_requests = rows.slice(0, perPage).map(
     (r): PullRequestListItem => ({

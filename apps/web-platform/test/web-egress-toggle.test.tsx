@@ -209,11 +209,16 @@ describe("WebEgressToggle — gh disclosure (#12469)", () => {
 });
 
 describe("gh disclosure: the Scope Grants page carries the identical string (#12469, CPO condition)", () => {
-  it("the page paragraph, with JSX entities decoded and whitespace collapsed, contains the exact toggle sentence", async () => {
+  it("the page renders the SHARED constant (no hand-copied sentence), and the shared constant is the ruled literal", async () => {
     const { readFileSync } = await import("node:fs");
     const { resolve } = await import("node:path");
+    const { GH_DISCLOSURE: shared } = await import("@/lib/web-egress-disclosure");
+    expect(norm(shared)).toBe(norm(GH_DISCLOSURE));
     const page = readFileSync(resolve(__dirname, "../app/(dashboard)/dashboard/settings/scope-grants/page.tsx"), "utf8");
-    const text = page.replace(/&apos;/g, "'").replace(/\s+/g, " ");
-    expect(text).toContain(norm(GH_DISCLOSURE));
+    // JSX comments and string-literal decoys cannot satisfy this: it needs the import AND the expression container.
+    expect(page).toMatch(/^import \{ GH_DISCLOSURE \} from "@\/lib\/web-egress-disclosure";$/m);
+    expect(page.replace(/\{\/\*[\s\S]*?\*\/\}/g, "")).toMatch(/\{GH_DISCLOSURE\}/);
+    // and the page no longer carries its own copy of the sentence
+    expect(norm(page.replace(/&apos;/g, "'"))).not.toContain(norm(GH_DISCLOSURE));
   });
 });

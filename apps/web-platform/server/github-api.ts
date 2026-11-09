@@ -138,7 +138,9 @@ export async function githubApiGet<T = unknown>(
   );
 
   if (!response.ok) {
-    await handleErrorResponse(response, path);
+    // The cc read tools pass `redirect: "manual"`; their callers may hold a PRIVATE repo's name in `path`, so those faults are
+    // mirrored without the path or GitHub's message (status only). Every other caller keeps the full diagnostic.
+    await handleErrorResponse(response, path, opts?.redirect === "manual");
   }
 
   return response.json() as Promise<T>;
@@ -250,8 +252,35 @@ export async function githubApiDelete<T = unknown>(
 async function handleErrorResponse(
   response: Response,
   path: string,
+  scrub = false,
 ): Promise<never> {
   const bodyText = await response.text();
+
+  if (scrub) {
+    // Status only on every sink: no path (it embeds owner/repo), no GitHub message, no body.
+    if (response.status === 403) {
+      log.warn({ status: 403 }, "GitHub API 403 (scrubbed)");
+      reportSilentFallback(null, {
+        feature: "github-api",
+        op: "handle-403",
+        extra: { status: 403 },
+        message: "GitHub API returned 403",
+      });
+    } else {
+      log.error({ status: response.status }, "GitHub API request failed (scrubbed)");
+    }
+    // A secondary rate limit / abuse-detection 403 is not an access fault; keep that ONE fact (a fixed phrase, never GitHub's text)
+    // so the caller can tell the two apart.
+    const limited = response.status === 403 && /rate limit|abuse detection/i.test(bodyText.slice(0, 2000));
+    throw new GitHubApiError(
+      limited
+        ? "GitHub API 403: rate limit"
+        : response.status === 403
+          ? "GitHub API 403: the installation cannot access this resource"
+          : `GitHub API request failed: ${response.status}`,
+      response.status,
+    );
+  }
 
   if (response.status === 403) {
     // Surface the ACTUAL GitHub `message` instead of inventing a cause

@@ -58,8 +58,11 @@ const {
   mockGithubApiGet,
   mockHeadSha,
   registrarOverride,
+  readRegistrarOverride,
   conversationWriteOverride,
 } = vi.hoisted(() => ({
+  // #12469: the same for the READ registrar (null = the real one).
+  readRegistrarOverride: { fn: null as null | ((a: Record<string, unknown>) => Promise<unknown>) },
   conversationWriteOverride: { fn: null as null | (() => Promise<unknown>) },
   // #11636: a per-test replacement for the registrar (null = the REAL one). Lets a test hand the dispatcher a result the real
   // registrar can never produce (a foreign name), to prove the dispatcher's own runtime assertion rejects it.
@@ -436,6 +439,16 @@ vi.mock("@/server/cc-github-push", async (importOriginal) => {
   };
 });
 
+// #12469: the read registrar, delegating to the REAL one unless a test installs `readRegistrarOverride.fn`.
+vi.mock("@/server/cc-github-read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/cc-github-read")>();
+  return {
+    ...actual,
+    resolveCcGithubReadRegistration: (a: Parameters<typeof actual.resolveCcGithubReadRegistration>[0]) =>
+      readRegistrarOverride.fn ? readRegistrarOverride.fn(a as unknown as Record<string, unknown>) : actual.resolveCcGithubReadRegistration(a),
+  };
+});
+
 // #11636: the approval-queue flag read, shared by the registrar and the gate's default seam. A per-test switch.
 vi.mock("@/server/approval/flag", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/approval/flag")>()),
@@ -568,6 +581,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     vi.clearAllMocks();
     // #11636: the push registration's seams default to the dark path (flag OFF) so every pre-existing case is unaffected.
     registrarOverride.fn = null;
+    readRegistrarOverride.fn = null;
     conversationWriteOverride.fn = null;
     mockApprovalFlag.mockReset().mockResolvedValue(false);
     mockGithubApiGet.mockReset().mockResolvedValue({ default_branch: "trunk" });
@@ -1629,12 +1643,14 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     it.each([
       ["the lookup errors", () => mockGithubApiGet.mockRejectedValue(new Error("boom"))],
       ["the answer has no `private` field", () => github(undefined)],
-    ])("entitled + %s: fail closed => no tools (private)", async (_n, arrange) => {
+    ])("entitled + %s: fail closed => no tools, reason visibility-unknown (NOT claimed private), own prompt line", async (_n, arrange) => {
       entitled();
       arrange();
       await realSdkQueryFactory(makeArgs());
       expectNoReadTools();
-      expect(outcome()[0][1].tags.reason).toBe("repo-private");
+      expect(outcome()[0][1].tags).toMatchObject({ reason: "visibility-unknown", repoPrivate: "null" });
+      expect(prompt()).toContain("it could not be confirmed that the repository is public");
+      expect(prompt()).not.toContain("limited to public repositories");
     });
 
     it("NOT entitled: the tool list, canUseTool list and prompt are today's literals, and no event is emitted", async () => {
@@ -1656,19 +1672,57 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(outcome()).toHaveLength(0);
     });
 
-    it("the registrar THROWING never breaks Query construction: the Query is built dark and the failure is reported under its own op", async () => {
+    it("a registrar that REJECTS never breaks Query construction: the Query builds dark, the fault is reported under its own op, and the model still gets a truthful 'unavailable' line", async () => {
+      entitled();
+      github(false);
+      readRegistrarOverride.fn = async () => {
+        throw new Error("registrar boom for acme/kb-repo");
+      };
+      mockQuery.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expectNoReadTools();
+      const call = mockReportSilentFallback.mock.calls.find(([, o]) => o?.op === "cc-github-read-registration-failed")!;
+      expect(call[0]).toBeNull();
+      expect(JSON.stringify(call[1])).not.toMatch(/acme|kb-repo|boom/);
+      expect(prompt()).toContain("GitHub tools are unavailable in this session because of a platform fault");
+      expect(prompt()).toContain("Never ask the user for a token");
+    });
+
+    it("an emit that THROWS (telemetry fault) never breaks the dispatch either", async () => {
       entitled();
       github(false);
       mockInfoSilentFallback.mockImplementation((_e: unknown, o: { feature?: string }) => {
         if (o?.feature === "cc-github-read-registration") throw new Error("emit boom");
       });
       try {
+        mockQuery.mockClear();
         await realSdkQueryFactory(makeArgs());
       } finally {
         mockInfoSilentFallback.mockReset();
       }
-      // the emit threw AFTER registration; the Query still built, and the tools the registrar returned are intact
-      expect(mockQuery).toHaveBeenCalled();
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(toolNames()).toEqual(["narrate", "summarize", ...READ_SHORT]);
+    });
+
+    it("a registrar result with reason registration-failed gets the platform-fault line and emits NO outcome event", async () => {
+      entitled();
+      github(false);
+      readRegistrarOverride.fn = async () => ({ registered: false, reason: "registration-failed", tools: [], toolNames: [], repoPrivate: false });
+      await realSdkQueryFactory(makeArgs());
+      expectNoReadTools();
+      expect(prompt()).toContain("platform fault");
+      expect(outcome()).toHaveLength(0);
+    });
+
+    it("a startup throw AFTER registration drains the read cell (no stale published set)", async () => {
+      entitled();
+      github(false);
+      mockQuery.mockImplementationOnce(() => {
+        throw new Error("sdk construction boom");
+      });
+      await expect(realSdkQueryFactory(makeArgs())).rejects.toThrow(/sdk construction boom/);
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toEqual([]);
     });
 
     it("the cell is drained by the factory-entry reset, the conversation cleanup and the test reset (the same sites as the approval cell)", async () => {
@@ -1694,27 +1748,65 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(getCcRegisteredReadTools("user-1", "conv-1")).toEqual([]);
     });
 
-    it("the registered tools are CLOSED OVER the connected repo and revalidate it on every call: a repo switch refuses and reads nothing", async () => {
+    // The production `revalidate` closure (not a seam): driven through a registered tool's handler.
+    async function callReadIssue() {
+      return tools().find((t) => t.name === "github_read_issue")!.handler({ issue_number: 1 });
+    }
+    const githubCalls = () => mockGithubApiGet.mock.calls.length;
+
+    it("revalidate POSITIVE CONTROL: with the repo and installation unchanged the read goes through (a constant-false closure fails here)", async () => {
       entitled();
       github(false);
       await realSdkQueryFactory(makeArgs());
-      const readIssueTool = tools().find((t) => t.name === "github_read_issue")!;
-      // the repo the workspace is connected to NOW is a different one
-      mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/acme/another-repo");
-      const callsBefore = mockGithubApiGet.mock.calls.length;
-      const res = await readIssueTool.handler({ issue_number: 1 });
-      expect(res.isError).toBe(true);
-      expect(res.content[0].text).toContain("the connected repository changed; start a new conversation");
-      expect(mockGithubApiGet.mock.calls.length).toBe(callsBefore); // no GitHub request was made
+      const before = githubCalls();
+      await callReadIssue().catch(() => undefined);
+      expect(githubCalls()).toBeGreaterThan(before); // it reached GitHub (the mocked answer shape is irrelevant)
     });
 
-    it("a degraded repo read during revalidation is a refusal, never a pass", async () => {
+    it.each([
+      ["a different OWNER, same repo name", () => mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/other-org/kb-repo")],
+      ["the same owner, a different repo", () => mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/acme/another-repo")],
+      ["the same repo, a different installation", () => mockResolveInstallationId.mockResolvedValue(111222)],
+    ])("revalidate refuses a REAL switch (%s): fixed text, no GitHub request, RepoChanged", async (_n, change) => {
       entitled();
       github(false);
       await realSdkQueryFactory(makeArgs());
-      mockReadCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: true });
-      const res = await tools().find((t) => t.name === "github_read_pr")!.handler({ pull_number: 1 });
+      change();
+      const before = githubCalls();
+      const res = await callReadIssue();
       expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("the connected repository changed; start a new conversation");
+      expect(githubCalls()).toBe(before);
+    });
+
+    it.each([
+      ["a degraded repo read WITH a matching url (the url alone would pass)", () => mockReadCurrentRepoUrlResult.mockResolvedValue({ url: REPO_URL, degraded: true })],
+      ["the installation lookup returns null", () => mockResolveInstallationId.mockResolvedValue(null)],
+    ])("revalidate answers UNVERIFIABLE (not 'changed') for %s: its own text, no GitHub request", async (_n, blip) => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      blip();
+      const before = githubCalls();
+      const res = await callReadIssue();
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("could not confirm the connected repository right now");
+      expect(res.content[0].text).not.toContain("changed; start a new conversation");
+      expect(githubCalls()).toBe(before);
+    });
+
+    it("concurrent tool calls of one turn share ONE in-flight revalidation (no parallel tenant mints)", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      mockReadCurrentRepoUrlResult.mockClear();
+      mockResolveInstallationId.mockClear();
+      await Promise.all([callReadIssue().catch(() => 0), callReadIssue().catch(() => 0), callReadIssue().catch(() => 0)]);
+      expect(mockReadCurrentRepoUrlResult).toHaveBeenCalledTimes(1);
+      expect(mockResolveInstallationId).toHaveBeenCalledTimes(1);
+      // and the next call re-checks (the check is not cached beyond the in-flight window)
+      await callReadIssue().catch(() => 0);
+      expect(mockReadCurrentRepoUrlResult).toHaveBeenCalledTimes(2);
     });
 
     it("push registration and read registration compose: narrate, summarize, push, then the six reads", async () => {

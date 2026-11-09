@@ -70,7 +70,7 @@ function optsNameFor(fn: string): string {
  * one is really grant-free (its options interface declares no `grants` and no `requireGrant`), so this list cannot become a
  * way to hide a grant-reading builder.
  */
-const GRANT_FREE_READ_BUILDERS: ReadonlySet<string> = new Set(["buildGithubReadTools"]);
+const GRANT_FREE_READ_BUILDERS: ReadonlySet<string> = new Set(["github-tools.ts#buildGithubReadTools"]);
 
 function deriveBuilders(): Array<{ file: string; fn: string; iface: string }> {
   const out: Array<{ file: string; fn: string; iface: string }> = [];
@@ -86,7 +86,7 @@ function deriveBuilders(): Array<{ file: string; fn: string; iface: string }> {
     );
     const ifaces = grantsInterfaces(sf);
     for (const f of fns) {
-      if (GRANT_FREE_READ_BUILDERS.has(f.name!.text)) continue;
+      if (GRANT_FREE_READ_BUILDERS.has(`${relative(SERVER, full)}#${f.name!.text}`)) continue;
       const named = ifaces.find((i) => i.name.text === optsNameFor(f.name!.text));
       const iface = named ?? (ifaces.length === 1 ? ifaces[0] : undefined);
       out.push({ file: relative(SERVER, full), fn: f.name!.text, iface: iface?.name.text ?? "" });
@@ -165,16 +165,28 @@ describe("grants is a REQUIRED option of every grant-reading tool builder", () =
   });
 
   it("every grant-free read builder is really grant-free (its options interface declares no `grants` and no `requireGrant`)", () => {
-    for (const fn of GRANT_FREE_READ_BUILDERS) {
-      const sf = parse("github-tools.ts");
+    for (const key of GRANT_FREE_READ_BUILDERS) {
+      const [file, fn] = key.split("#");
+      const sf = parse(file);
       const decl = findFunction(sf, fn);
       expect(decl, `${fn} not found in github-tools.ts`).toBeDefined();
       const ifaceName = decl!.parameters[0].type?.getText() ?? "";
       const iface = findInterface(sf, ifaceName);
       expect(iface, `${ifaceName} not found`).toBeDefined();
-      const names = iface!.members.filter((m): m is ts.PropertySignature => ts.isPropertySignature(m)).map((m) => m.name.getText());
-      expect(names).not.toContain("grants");
-      expect(names).not.toContain("requireGrant");
+      // Walk the whole `extends` chain: an inherited `grants`/`requireGrant` would be invisible to an own-members check. The only
+      // base permitted is another interface in this file, and it is held to the same rule.
+      const seen = new Set<string>();
+      const check = (name: string): void => {
+        expect(seen.has(name), `${name}: cyclic heritage`).toBe(false);
+        seen.add(name);
+        const i = findInterface(sf, name);
+        expect(i, `${name} not found in ${file}`).toBeDefined();
+        const names = i!.members.filter((m): m is ts.PropertySignature => ts.isPropertySignature(m)).map((m) => m.name.getText());
+        expect(names, `${name} must not declare grants`).not.toContain("grants");
+        expect(names, `${name} must not declare requireGrant`).not.toContain("requireGrant");
+        for (const hc of i!.heritageClauses ?? []) for (const t of hc.types) check(t.expression.getText());
+      };
+      check(ifaceName);
     }
   });
 

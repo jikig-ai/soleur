@@ -47,6 +47,24 @@ describe("GitHub tiers (#12469)", () => {
     }
   });
 
+  test("the auto-approve github_* entries are a CLOSED literal set (a verb denylist cannot see a new write name; this can)", () => {
+    const autoGithub = Object.entries(TOOL_TIER_MAP)
+      .filter(([name, tier]) => /^mcp__soleur_platform__github_/.test(name) && tier === "auto-approve")
+      .map(([name]) => name.replace("mcp__soleur_platform__", ""))
+      .sort();
+    expect(autoGithub).toEqual(
+      [
+        "github_list_pr_comments",
+        "github_list_pull_requests",
+        "github_read_ci_status",
+        "github_read_issue",
+        "github_read_issue_comments",
+        "github_read_pr",
+        "github_read_workflow_logs",
+      ].sort(),
+    );
+  });
+
   test("no GitHub WRITE tool is auto-approve (a name that is not in the map is gated, fail-closed)", () => {
     for (const n of ["create_issue", "create_pull_request", "github_trigger_workflow", "github_push_branch", "github_create_issue", "github_comment"]) {
       expect(getToolTier(`mcp__soleur_platform__${n}`), n).not.toBe("auto-approve");

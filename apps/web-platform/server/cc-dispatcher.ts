@@ -2833,16 +2833,29 @@ export const realSdkQueryFactory: QueryFactory = async (
         installationId: effectiveInstallationId,
         webEgressEntitled,
         // Per-call revalidation: the tools are closed over this Query's repo and installation, so a mid-conversation repo switch
-        // must fail closed. A degraded read (a transient blip) is a refusal too, never a pass.
-        revalidate: async () => {
-          const [current, currentInstallation] = await Promise.all([
-            readCurrentRepoUrlResult(args.userId, activeWorkspaceId),
-            resolveInstallationId(args.userId, activeWorkspaceId),
-          ]);
-          if (current.degraded) return false;
-          const parsed = parseConnectedRepo(current.url);
-          return parsed?.owner === connectedOwner && parsed?.repo === connectedRepo && currentInstallation === installationId;
-        },
+        // must fail closed. It answers THREE things: `current`, `changed` (a real switch) and `unverifiable` (a read blip: nothing
+        // was confirmed, which is not a switch). It compares repository IDENTITY and the stored installation id only, never
+        // visibility (a named residual). Concurrent tool calls of one turn share ONE in-flight check, and its two reads run in
+        // series so the second hits the tenant client the first just minted (two parallel cold callers would each mint a JWT).
+        revalidate: (() => {
+          let inflight: Promise<"current" | "changed" | "unverifiable"> | null = null;
+          const check = async (): Promise<"current" | "changed" | "unverifiable"> => {
+            const current = await readCurrentRepoUrlResult(args.userId, activeWorkspaceId);
+            if (current.degraded) return "unverifiable";
+            const currentInstallation = await resolveInstallationId(args.userId, activeWorkspaceId);
+            if (currentInstallation === null) return "unverifiable";
+            const parsed = parseConnectedRepo(current.url);
+            return parsed?.owner === connectedOwner && parsed?.repo === connectedRepo && currentInstallation === installationId
+              ? "current"
+              : "changed";
+          };
+          return () => {
+            inflight ??= check().finally(() => {
+              inflight = null;
+            });
+            return inflight;
+          };
+        })(),
       });
       if (readRegistration.registered) {
         readTools = readRegistration.tools;
@@ -2851,7 +2864,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     } catch (err) {
       readTools = [];
       readToolNames = [];
-      readRegistration = undefined;
+      // A result (not undefined) so the prompt still gets a truthful "tools unavailable" line instead of the bare baseline claim
+      // that `gh` is authenticated; the outcome emitter stays silent for this reason (the error event below is its signal).
+      readRegistration = { registered: false, reason: "registration-failed", tools: [], toolNames: [], repoPrivate: null };
       reportSilentFallback(null, {
         feature: "cc-dispatcher",
         op: "cc-github-read-registration-failed",
@@ -3240,7 +3255,9 @@ export const realSdkQueryFactory: QueryFactory = async (
     // and returns `{}` for empty/unset (current behavior preserved bit-for-bit),
     // throws on Tier 3 denylist short-names (3 Plausible tools — permanent,
     // shared service-token cross-tenant credentials). Promotion of non-denylist
-    // tools is Phase 2 (#3722, blocked-by Stage 6 #2939).
+    // tools is Phase 2 (#3722, blocked-by Stage 6 #2939). The six read-only GitHub tools do NOT wait for it: they reach
+    // `soleur_platform` through the entitlement-gated registrar (`./cc-github-read`, #12469; ADR-278 amendment), which
+    // supersedes the 2026-05-13 deferral for that one set. Everything else still follows Phase 2.
 
     // #5274 PR B — acquire the workspace write-lease for the Query lifetime
     // (cc-soleur-go holds ONE Query across many turns). GATED behind
@@ -3385,7 +3402,8 @@ export const realSdkQueryFactory: QueryFactory = async (
           forwarderLive: webEgress !== undefined,
         });
       } catch {
-        // Telemetry must never break a dispatch.
+        // review: swallowed. Telemetry must never break a dispatch, and reporting a fault OF the reporter through the same
+        // sink would recurse; the registrar's own error ops are the signal for real failures.
       }
       if (webEgress !== undefined && webEgressEntitled) {
         const text = readRegistration.registered

@@ -60,10 +60,19 @@ describe("hardenReadResult", () => {
     expect(out.title).toBe("a@b.example");
   });
 
-  it("caps body and other strings at their own limits", () => {
-    const out = hardenReadResult({ body: "x".repeat(BODY_FIELD_CAP + 50), head_ref: "y".repeat(OTHER_FIELD_CAP + 50) }, { redact: false }) as Record<string, string>;
-    expect(Array.from(out.body.replace(TRUNCATION_SUFFIX, ""))).toHaveLength(BODY_FIELD_CAP);
-    expect(Array.from(out.head_ref.replace(TRUNCATION_SUFFIX, ""))).toHaveLength(OTHER_FIELD_CAP);
+  it("caps body and other strings at their own LITERAL limits (4096 and 512; not echoed from the module's constants)", () => {
+    const out = hardenReadResult({ body: "x".repeat(5000), head_ref: "y".repeat(600) }, { redact: false }) as Record<string, string>;
+    expect(Array.from(out.body.replace(TRUNCATION_SUFFIX, ""))).toHaveLength(4096);
+    expect(Array.from(out.head_ref.replace(TRUNCATION_SUFFIX, ""))).toHaveLength(512);
+    expect(BODY_FIELD_CAP).toBe(4096);
+    expect(OTHER_FIELD_CAP).toBe(512);
+    expect(RESPONSE_BUDGET_CHARS).toBe(64_000);
+  });
+
+  it("redaction runs ONCE regardless of how many cap passes the budget needs", () => {
+    const rows = Array.from({ length: 50 }, (_v, i) => ({ id: i, body: "z".repeat(20_000) + " a@b.example", html_url: "https://github.com/o/r/1" }));
+    const out = hardenReadResult(rows, { redact: true });
+    expect(JSON.stringify(out)).not.toContain("a@b.example");
   });
 
   it("keeps non-string leaves (numbers, booleans, null) and nested arrays untouched", () => {
@@ -79,13 +88,28 @@ describe("hardenReadResult", () => {
     expect((out as unknown[]).length).toBe(50); // all rows kept, bodies shrunk
   });
 
-  it("as a last resort drops trailing rows with an explicit marker, and says how many were kept", () => {
-    const rows = Array.from({ length: 50 }, (_v, i) => ({ id: i, title: "t".repeat(500), user: "u".repeat(500), head_ref: "h".repeat(500), html_url: "u".repeat(500), body: "b".repeat(500) }));
-    const out = hardenReadResult({ summary: "s", has_more: false, pull_requests: rows }, { redact: false }) as { truncated?: boolean; note?: string; result?: { pull_requests: unknown[] } };
+  const bigRows = () =>
+    Array.from({ length: 50 }, (_v, i) => ({ id: i, title: "t".repeat(500), user: "u".repeat(500), head_ref: "h".repeat(500), html_url: "u".repeat(500), body: "b".repeat(500) }));
+
+  it("last resort, LIST shape: trailing rows are dropped, the list keeps its own shape, summary and has_more are rewritten to match", () => {
+    const out = hardenReadResult({ summary: "50 pull requests (state=open)", has_more: false, pull_requests: bigRows() }, { redact: false }) as {
+      truncated?: boolean; note?: string; summary: string; has_more: boolean; pull_requests: unknown[];
+    };
     expect(out.truncated).toBe(true);
-    expect(out.note).toMatch(/showing \d+ of 50 items/);
-    expect(JSON.stringify(out.result).length).toBeLessThanOrEqual(RESPONSE_BUDGET_CHARS);
-    expect(out.result!.pull_requests.length).toBeGreaterThanOrEqual(1);
+    expect(out.pull_requests.length).toBeGreaterThanOrEqual(1);
+    expect(out.pull_requests.length).toBeLessThan(50);
+    expect(out.has_more).toBe(true);
+    expect(out.summary).toBe(`${out.pull_requests.length} of 50 pull requests shown (response size budget)`);
+    expect(out.note).toMatch(new RegExp(`showing ${out.pull_requests.length} of 50 items`));
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(RESPONSE_BUDGET_CHARS + 400);
+  });
+
+  it("last resort, ARRAY shape: wrapped as { truncated, note, items } and within the budget", () => {
+    const out = hardenReadResult(bigRows(), { redact: false }) as { truncated?: boolean; note?: string; items: unknown[] };
+    expect(out.truncated).toBe(true);
+    expect(Array.isArray(out.items)).toBe(true);
+    expect(out.items.length).toBeLessThan(50);
+    expect(JSON.stringify(out).length).toBeLessThanOrEqual(RESPONSE_BUDGET_CHARS + 400);
   });
 
   it("an undefined result stringifies to nothing and does not crash the size check", () => {

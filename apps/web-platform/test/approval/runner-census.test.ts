@@ -117,6 +117,10 @@ describe("runner registration census", () => {
   test("#12469: the cold factory publishes the registered read tools into a cell the warm path reads, and canUseTool's list takes the registrar's names only", () => {
     const cc = src("server/cc-dispatcher.ts");
     expect(cc).toMatch(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[[^\]]*getCcRegisteredReadTools\(userId,\s*conversationId\)/);
+    // The spread must be UNCONDITIONAL and in code: no ternary or comment between the list's `[` and the call can neuter it.
+    const spreadList = cc.match(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[([^\]]*getCcRegisteredReadTools\(userId,\s*conversationId\))/)?.[1] ?? "";
+    expect(spreadList.replace(/\/\/.*$/gm, "")).not.toMatch(/\?|\bfalse\b|&&|\|\|/);
+    expect(spreadList).toMatch(/\.\.\.getCcRegisteredReadTools\(userId,\s*conversationId\)\s*$/);
     expect(cc).toMatch(/platformToolNames:\s*\[[\s\S]{0,600}?\.\.\.readToolNames/);
     expect(cc).toMatch(/readToolNames\s*=\s*readRegistration\.toolNames/);
     expect(cc).toMatch(/_ccRegisteredReadTools\.set\(/);

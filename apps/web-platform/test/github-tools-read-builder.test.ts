@@ -52,6 +52,9 @@ import {
   GITHUB_RATE_LIMITED,
   GITHUB_READ_TOOL_NAMES,
   GITHUB_REPO_CHANGED,
+  GITHUB_REPO_UNVERIFIABLE,
+  GITHUB_READ_FAILED,
+  type GithubRevalidation,
   type GithubReadFault,
 } from "@/server/github-tools";
 import { GitHubApiError } from "@/server/github-app";
@@ -70,17 +73,21 @@ const SIX = [
   "github_read_ci_status",
 ];
 
-function make(over: { revalidate?: () => Promise<boolean>; redact?: boolean; owner?: string; repo?: string; hardened?: boolean } = {}) {
+function make(over: { revalidate?: () => Promise<GithubRevalidation>; redact?: boolean; owner?: string; repo?: string; hardened?: boolean } = {}) {
   const faults: GithubReadFault[] = [];
-  const revalidate = over.revalidate ?? (async () => true);
-  const built = buildGithubReadTools({
+  const revalidate = over.revalidate ?? (async () => "current" as const);
+  // `hardening` is REQUIRED by the type (the cc builder cannot be built unhardened). The legacy composition is exercised through
+  // the cast below only to prove the shared code path stays byte-identical when it is absent; production reaches that path
+  // through buildGithubTools.
+  const opts = {
     installationId: 7,
     owner: over.owner ?? "o",
     repo: over.repo ?? "r",
     ...(over.hardened === false
       ? {}
       : { hardening: { onFault: (f: GithubReadFault) => faults.push(f), revalidate, redact: over.redact } }),
-  });
+  };
+  const built = buildGithubReadTools(opts as unknown as Parameters<typeof buildGithubReadTools>[0]);
   const byName = (n: string) => {
     const t = (built.tools as unknown as ToolStub[]).find((x) => x.name === n);
     if (!t) throw new Error(`${n} not built`);
@@ -221,8 +228,8 @@ describe("hardening of the content", () => {
 });
 
 describe("per-call revalidation", () => {
-  it("refuses with the fixed text, calls no reader and reports once when the connected repo or installation changed", async () => {
-    const { byName, faults } = make({ revalidate: async () => false });
+  it("a REAL switch refuses with the fixed text, calls no reader and reports once", async () => {
+    const { byName, faults } = make({ revalidate: async () => "changed" });
     const resp = await byName("github_read_issue").handler({ issue_number: 1 });
     expect(resp.isError).toBe(true);
     expect(text(resp)).toContain(GITHUB_REPO_CHANGED);
@@ -230,26 +237,87 @@ describe("per-call revalidation", () => {
     expect(faults).toEqual([{ tool: "github_read_issue", errName: "RepoChanged" }]);
   });
 
-  it("a revalidation that THROWS is a refusal, never a pass", async () => {
-    const { byName } = make({ revalidate: async () => { throw new Error("db blip"); } });
+  it("an UNVERIFIABLE read is a different refusal (a blip is not a switch): own text, own fault class", async () => {
+    const { byName, faults } = make({ revalidate: async () => "unverifiable" });
     const resp = await byName("github_read_pr").handler({ pull_number: 1 });
     expect(resp.isError).toBe(true);
+    expect(text(resp)).toContain(GITHUB_REPO_UNVERIFIABLE);
+    expect(text(resp)).not.toContain(GITHUB_REPO_CHANGED);
     expect(r.readPullRequest).not.toHaveBeenCalled();
+    expect(faults).toEqual([{ tool: "github_read_pr", errName: "RevalidateUnverifiable" }]);
   });
 
-  it("a revalidation answering anything but exactly true is a refusal", async () => {
-    const { byName } = make({ revalidate: (async () => "yes") as unknown as () => Promise<boolean> });
-    expect((await byName("github_read_ci_status").handler({})).isError).toBe(true);
+  it("a revalidation that THROWS is the unverifiable refusal, never a pass", async () => {
+    const { byName, faults } = make({ revalidate: async () => { throw new Error("db blip"); } });
+    const resp = await byName("github_read_pr").handler({ pull_number: 1 });
+    expect(resp.isError).toBe(true);
+    expect(text(resp)).toContain(GITHUB_REPO_UNVERIFIABLE);
+    expect(r.readPullRequest).not.toHaveBeenCalled();
+    expect(faults[0].errName).toBe("RevalidateUnverifiable");
+  });
+
+  it.each([true, false, "yes", "ok", undefined, null, 1] as unknown[])("an answer other than the exact words is NOT a pass: %j", async (answer) => {
+    const { byName } = make({ revalidate: (async () => answer) as unknown as () => Promise<GithubRevalidation> });
+    const resp = await byName("github_read_ci_status").handler({});
+    expect(resp.isError).toBe(true);
     expect(r.readCiStatus).not.toHaveBeenCalled();
   });
 
   it("revalidation runs on EVERY call, not once at build", async () => {
-    const revalidate = vi.fn(async () => true);
+    const revalidate = vi.fn(async () => "current" as const);
     r.readIssue.mockResolvedValue({});
     const { byName } = make({ revalidate });
     await byName("github_read_issue").handler({ issue_number: 1 });
     await byName("github_read_issue").handler({ issue_number: 2 });
     expect(revalidate).toHaveBeenCalledTimes(2);
+  });
+
+  // ALL six tools go through the hardened wrapper: a tool that bypassed `run` (or dropped the fetch option) would have no
+  // revalidation, no redaction, no redirect refusal and no fault mirror, and a test on three of six cannot see which three.
+  const ALL: Array<[string, Record<string, unknown>, ReturnType<typeof vi.fn>]> = [
+    ["github_list_pull_requests", {}, r.listPullRequests],
+    ["github_read_pr", { pull_number: 1 }, r.readPullRequest],
+    ["github_read_issue", { issue_number: 1 }, r.readIssue],
+    ["github_read_issue_comments", { issue_number: 1 }, r.readIssueComments],
+    ["github_list_pr_comments", { pull_number: 1 }, r.listPullRequestComments],
+    ["github_read_ci_status", {}, r.readCiStatus],
+  ];
+
+  it.each(ALL)("%s: a switch refuses it and its reader is never called", async (name, args, reader) => {
+    const { byName, faults } = make({ revalidate: async () => "changed" });
+    const resp = await byName(name).handler(args);
+    expect(resp.isError).toBe(true);
+    expect(text(resp)).toContain(GITHUB_REPO_CHANGED);
+    expect(reader).not.toHaveBeenCalled();
+    expect(faults).toEqual([{ tool: name, errName: "RepoChanged" }]);
+  });
+
+  it.each(ALL)("%s: its reader receives the fail-closed redirect option as the LAST argument", async (name, args, reader) => {
+    reader.mockResolvedValue(name === "github_list_pull_requests" ? { summary: "0", has_more: false, pull_requests: [] } : []);
+    await make().byName(name).handler(args);
+    const last = reader.mock.calls[0].at(-1);
+    expect(last).toEqual({ redirect: "manual" });
+  });
+
+  it.each(ALL)("%s: the unhardened composition passes NO fetch option", async (name, args, reader) => {
+    reader.mockResolvedValue(name === "github_list_pull_requests" ? { summary: "0", has_more: false, pull_requests: [] } : []);
+    await make({ hardened: false }).byName(name).handler(args);
+    expect(reader.mock.calls[0].some((a) => a !== null && typeof a === "object" && "redirect" in (a as object))).toBe(false);
+  });
+
+  it.each(ALL)("%s: a result is size-capped and redacted by the shared wrapper (title/body redacted, format chars stripped)", async (name, args, reader) => {
+    const dirty = { title: "t bob@example.com\u200B", body: "b alice@example.com" };
+    reader.mockResolvedValue(
+      name === "github_list_pull_requests"
+        ? { summary: "1", has_more: false, pull_requests: [dirty] }
+        : name === "github_read_pr" || name === "github_read_issue"
+          ? dirty
+          : [dirty],
+    );
+    const resp = await make().byName(name).handler(args);
+    const dump = resp.content[1].text;
+    expect(dump).not.toMatch(/bob@example\.com|alice@example\.com/);
+    expect(dump).not.toContain("\u200B");
   });
 });
 
@@ -318,16 +386,41 @@ describe("faults: fixed texts, and a mirror that carries class name and status o
     expect(Object.keys(faults[0]).sort()).toEqual(["errName", "status", "tool"]);
   });
 
-  it("read_pr on an issue number answers with the read_issue hint, and the reverse (per-URL mock)", async () => {
+  it("read_pr on an issue number answers with the read_issue hint", async () => {
     r.readPullRequest.mockRejectedValueOnce(err(404));
     r.readIssue.mockResolvedValueOnce({ number: 9 });
     const a = await make().byName("github_read_pr").handler({ pull_number: 9 });
     expect(text(a)).toBe("#9 is an issue; use github_read_issue");
+  });
 
+  it("read_issue has NO pull-request hint: GitHub serves a PR through /issues/N with a 200, so an issue 404 never means 'it is a PR' (and costs no second request)", async () => {
     r.readIssue.mockRejectedValueOnce(err(404));
-    r.readPullRequest.mockResolvedValueOnce({ number: 9 });
-    const b = await make().byName("github_read_issue").handler({ issue_number: 9 });
-    expect(text(b)).toBe("#9 is a pull request; use github_read_pr");
+    r.readPullRequest.mockResolvedValue({ number: 9 });
+    const resp = await make().byName("github_read_issue").handler({ issue_number: 9 });
+    expect(text(resp)).toContain("Error reading issue");
+    expect(r.readPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("a revoked/uninstalled installation (the token mint throws a plain Error) gets the reconnect text, not a raw message", async () => {
+    r.readIssue.mockRejectedValue(new Error("GitHub installation token request failed: 404"));
+    const { byName, faults } = make();
+    const resp = await byName("github_read_issue").handler({ issue_number: 1 });
+    expect(text(resp)).toBe(GITHUB_ACCESS_NEEDS_RECONNECT);
+    expect(faults).toHaveLength(1);
+  });
+
+  it.each([
+    "GITHUB_APP_PRIVATE_KEY is not set",
+    "GITHUB_APP_ID is not set",
+    "error:1E08010C:DECODER routines::unsupported",
+    "Unexpected token < in JSON at position 0",
+  ])("a non-GitHub-API fault (%s) is NEVER forwarded to the model: a fixed text, and it mirrors", async (message) => {
+    r.readIssue.mockRejectedValue(new Error(message));
+    const { byName, faults } = make();
+    const resp = await byName("github_read_issue").handler({ issue_number: 1 });
+    expect(text(resp)).toBe(`Error reading issue: ${GITHUB_READ_FAILED}`);
+    expect(text(resp)).not.toContain(message);
+    expect(faults).toHaveLength(1);
   });
 
   it("a 404 whose probe also 404s (or throws) falls back to the plain error and still does not mirror", async () => {

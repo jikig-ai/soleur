@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   reportSilentFallback: vi.fn(),
   infoSilentFallback: vi.fn(),
   mirrorWarnWithDebounce: vi.fn(),
+  mirrorWithDebounce: vi.fn(),
   githubApiGet: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock("@/server/observability", async (importOriginal) => {
     reportSilentFallback: h.reportSilentFallback,
     infoSilentFallback: h.infoSilentFallback,
     mirrorWarnWithDebounce: h.mirrorWarnWithDebounce,
+    mirrorWithDebounce: h.mirrorWithDebounce,
   };
 });
 vi.mock("@/server/github-api", async (importOriginal) => {
@@ -64,7 +66,7 @@ function make(over: Partial<ResolveCcGithubReadArgs> = {}) {
     repo: "example-repo",
     installationId: 4242,
     webEgressEntitled: true,
-    revalidate: async () => true,
+    revalidate: async () => "current" as const,
     lookupVisibility,
     buildTools: buildTools as unknown as ResolveCcGithubReadArgs["buildTools"],
     ...over,
@@ -111,7 +113,7 @@ describe("registers when every precondition holds", () => {
   });
 
   it("the revalidate seam handed to the builder is the caller's own function", async () => {
-    const revalidate = vi.fn(async () => true);
+    const revalidate = vi.fn(async () => "current" as const);
     const { args, buildTools } = make({ revalidate });
     await resolveCcGithubReadRegistration(args);
     expect((buildTools.mock.calls[0][0] as any).hardening.revalidate).toBe(revalidate);
@@ -133,9 +135,19 @@ describe("every dark state returns the empty set with its own reason, and never 
     expect(buildTools).not.toHaveBeenCalled();
   });
 
-  it("a support persona wins over everything, even with an entitlement and a repo", async () => {
-    const { args } = make({ persona: "support" });
+  it("ordering: persona, then entitlement, then repo/installation (a row failing SEVERAL conditions reports the first)", async () => {
+    const { args } = make({ persona: "support", webEgressEntitled: false, installationId: null });
     expect((await resolveCcGithubReadRegistration(args)).reason).toBe("support-persona");
+    const b = make({ webEgressEntitled: false, installationId: null });
+    expect((await resolveCcGithubReadRegistration(b.args)).reason).toBe("not-entitled");
+    const c = make({ installationId: null, owner: "" });
+    expect((await resolveCcGithubReadRegistration(c.args)).reason).toBe("no-repo-or-installation");
+  });
+
+  it("the persona gate is an ALLOWLIST: any persona other than command_center is dark", async () => {
+    const { args, lookupVisibility } = make({ persona: "some_future_persona" as never });
+    expect((await resolveCcGithubReadRegistration(args)).reason).toBe("support-persona");
+    expect(lookupVisibility).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -158,25 +170,31 @@ describe("the public-repo gate fails CLOSED (the failure rows come after a passi
     expect((await resolveCcGithubReadRegistration(args)).registered).toBe(true);
   });
 
-  it.each([
-    ["private: true", async () => true as unknown],
-    ["a missing field", async () => undefined as unknown],
-    ["a null field", async () => null as unknown],
-    ["a string 'false'", async () => "false" as unknown],
-    ["0", async () => 0 as unknown],
-    ["an object", async () => ({}) as unknown],
-  ])("%s => repo-private, no tools, builder never loaded", async (_label, lookupVisibility) => {
-    const { args, buildTools } = make({ lookupVisibility });
+  it("private: true => repo-private (a normal dark state), builder never loaded", async () => {
+    const { args, buildTools } = make({ lookupVisibility: async () => true as unknown });
     const out = await resolveCcGithubReadRegistration(args);
     expect(out).toMatchObject({ registered: false, reason: "repo-private", tools: [], toolNames: [], repoPrivate: true });
     expect(buildTools).not.toHaveBeenCalled();
   });
 
-  it("a lookup ERROR => repo-private, reported once under its own op with class name and status only (never the repo)", async () => {
+  it.each([
+    ["a missing field", async () => undefined as unknown],
+    ["a null field", async () => null as unknown],
+    ["a string 'false'", async () => "false" as unknown],
+    ["0", async () => 0 as unknown],
+    ["an object", async () => ({}) as unknown],
+  ])("%s => visibility-unknown (fail closed, NOT reported as private), builder never loaded", async (_label, lookupVisibility) => {
+    const { args, buildTools } = make({ lookupVisibility });
+    const out = await resolveCcGithubReadRegistration(args);
+    expect(out).toMatchObject({ registered: false, reason: "visibility-unknown", tools: [], toolNames: [], repoPrivate: null });
+    expect(buildTools).not.toHaveBeenCalled();
+  });
+
+  it("a lookup ERROR => visibility-unknown, reported once under its own op with class name and status only (never the repo)", async () => {
     const err = Object.assign(new Error("GitHub API request failed: 500 /repos/example-org/example-repo"), { statusCode: 500 });
     const { args } = make({ lookupVisibility: async () => { throw err; } });
     const out = await resolveCcGithubReadRegistration(args);
-    expect(out.reason).toBe("repo-private");
+    expect(out.reason).toBe("visibility-unknown");
     expect(h.reportSilentFallback).toHaveBeenCalledTimes(1);
     const [first, ctx] = h.reportSilentFallback.mock.calls[0];
     expect(first).toBeNull();
@@ -185,7 +203,7 @@ describe("the public-repo gate fails CLOSED (the failure rows come after a passi
     expect(JSON.stringify(h.reportSilentFallback.mock.calls)).not.toMatch(/example-org|example-repo/);
   });
 
-  it("a lookup TIMEOUT => repo-private, the lookup is aborted, reported", async () => {
+  it("a lookup TIMEOUT => visibility-unknown, the lookup is aborted, reported", async () => {
     vi.useFakeTimers();
     let aborted = false;
     const { args } = make({
@@ -197,7 +215,7 @@ describe("the public-repo gate fails CLOSED (the failure rows come after a passi
     const pending = resolveCcGithubReadRegistration(args);
     await vi.advanceTimersByTimeAsync(RESOLVE_TIMEOUT_MS + 1);
     const out = await pending;
-    expect(out.reason).toBe("repo-private");
+    expect(out.reason).toBe("visibility-unknown");
     expect(aborted).toBe(true);
     expect(h.reportSilentFallback).toHaveBeenCalledTimes(1);
   });
@@ -211,13 +229,13 @@ describe("the public-repo gate fails CLOSED (the failure rows come after a passi
     expect(h.githubApiGet).toHaveBeenCalledWith(4242, "/repos/example-org/example-repo", { signal: expect.any(AbortSignal), redirect: "manual" });
   });
 
-  it("the real lookup treats private:true and an error as private", async () => {
+  it("the real lookup: private:true is repo-private; an error is visibility-unknown (both fail closed)", async () => {
     const { args } = make();
     delete (args as Partial<ResolveCcGithubReadArgs>).lookupVisibility;
     h.githubApiGet.mockResolvedValueOnce({ private: true });
     expect((await resolveCcGithubReadRegistration(args)).reason).toBe("repo-private");
     h.githubApiGet.mockRejectedValueOnce(new Error("boom"));
-    expect((await resolveCcGithubReadRegistration(args)).reason).toBe("repo-private");
+    expect((await resolveCcGithubReadRegistration(args)).reason).toBe("visibility-unknown");
   });
 });
 
@@ -233,25 +251,41 @@ describe("containment", () => {
     expect(JSON.stringify(ctx)).not.toMatch(/example-org|example-repo|exploded/);
   });
 
-  it("the tool-fault hook mirrors under op cc-github-read-tool with tool, class name and status only", async () => {
+  it("the tool-fault hook mirrors (debounced per user + fault class) under op cc-github-read-tool with tool, class name and status only", async () => {
     const { args, buildTools } = make();
     await resolveCcGithubReadRegistration(args);
     const hardening = (buildTools.mock.calls[0][0] as any).hardening;
     hardening.onFault({ tool: "github_read_pr", errName: "GitHubApiError", status: 502 });
     hardening.onFault({ tool: "github_read_issue", errName: "TypeError" });
-    expect(h.reportSilentFallback).toHaveBeenCalledTimes(2);
-    expect(h.reportSilentFallback.mock.calls[0][1]).toMatchObject({
+    expect(h.mirrorWithDebounce).toHaveBeenCalledTimes(2);
+    const [first, ctx, userKey, cls] = h.mirrorWithDebounce.mock.calls[0];
+    expect(first).toBeNull();
+    expect(ctx).toMatchObject({
       feature: "cc-github-read",
       op: "cc-github-read-tool",
       extra: { userId: USER, tool: "github_read_pr", errName: "GitHubApiError", status: 502 },
     });
-    expect(h.reportSilentFallback.mock.calls[1][1].extra).toEqual({ userId: USER, tool: "github_read_issue", errName: "TypeError" });
+    expect(userKey).toBe(USER);
+    expect(cls).toBe("cc-github-read-tool:github_read_pr:GitHubApiError:502");
+    expect(h.mirrorWithDebounce.mock.calls[1][1].extra).toEqual({ userId: USER, tool: "github_read_issue", errName: "TypeError" });
+    expect(h.mirrorWithDebounce.mock.calls[1][3]).toBe("cc-github-read-tool:github_read_issue:TypeError:-");
   });
 
-  it("the module does not load the GitHub tool graph on the dark path (lazy import)", async () => {
-    // A dark state must not need github-tools: the registrar resolves with a builder seam that would explode if reached.
+  it("a dark state never reaches the builder seam", async () => {
+    // Behavioural only: the lazy `import("./github-tools")` is pinned by the source test below.
     const { args } = make({ webEgressEntitled: false, buildTools: () => { throw new Error("must not be reached"); } });
     expect((await resolveCcGithubReadRegistration(args)).reason).toBe("not-entitled");
+  });
+});
+
+describe("the GitHub tool graph is imported lazily", () => {
+  it("cc-github-read.ts has no value import of ./github-tools (type imports only), so the dark path never loads it", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const src = readFileSync(resolve(__dirname, "../server/cc-github-read.ts"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    const staticImports = [...src.matchAll(/^import\s+(?!type\b)[^;]*?from\s+["']\.\/github-tools["'];?/gm)];
+    expect(staticImports).toEqual([]);
+    expect(src).toMatch(/await import\(["']\.\/github-tools["']\)/);
   });
 });
 
@@ -278,6 +312,19 @@ describe("the outcome event (T8)", () => {
     emitCcGithubReadOutcome(dark("repo-private", true), base);
     expect(h.infoSilentFallback).toHaveBeenCalledTimes(1);
     expect(h.infoSilentFallback.mock.calls[0][1].tags).toMatchObject({ reason: "repo-private", repoPrivate: "true", toolCount: "0" });
+  });
+
+  it("visibility-unknown => an info event with repoPrivate=null (never claimed private)", () => {
+    emitCcGithubReadOutcome(dark("visibility-unknown", null), base);
+    expect(h.infoSilentFallback).toHaveBeenCalledTimes(1);
+    expect(h.infoSilentFallback.mock.calls[0][1].tags).toMatchObject({ reason: "visibility-unknown", repoPrivate: "null", toolCount: "0" });
+  });
+
+  it("every outcome event carries the userId in extra (pseudonymized at the emit boundary), so it joins to a tenant", () => {
+    emitCcGithubReadOutcome(registered(), base);
+    expect(h.infoSilentFallback.mock.calls[0][1].extra.userId).toBe(USER);
+    emitCcGithubReadOutcome(dark("no-repo-or-installation"), base);
+    expect(h.mirrorWarnWithDebounce.mock.calls[0][1].extra.userId).toBe(USER);
   });
 
   it("a degraded forwarder is visible in the same row", () => {
@@ -312,20 +359,36 @@ describe("the outcome event (T8)", () => {
   });
 });
 
-describe("the short remedy lines for an entitled session without tools", () => {
-  it("no-repo and repo-private get a truthful line; every other reason none", () => {
-    expect(ccGithubReadUnavailableLine("no-repo-or-installation")).toMatch(/connect a repository/i);
-    expect(ccGithubReadUnavailableLine("repo-private")).toMatch(/public repositories/i);
-    expect(ccGithubReadUnavailableLine("repo-private")).toMatch(/Settings > Scope Grants/);
-    for (const reason of ["registered", "support-persona", "not-entitled", "registration-failed"] as const) {
-      expect(ccGithubReadUnavailableLine(reason)).toBeNull();
+describe("the short guidance for an entitled session without tools", () => {
+  const REASONS_WITH_LINE = ["no-repo-or-installation", "repo-private", "visibility-unknown", "registration-failed"] as const;
+
+  it("every dark reason a live-forwarder entitled session can reach gets a truthful line; the others get none", () => {
+    for (const reason of REASONS_WITH_LINE) expect(ccGithubReadUnavailableLine(reason), reason).toEqual(expect.any(String));
+    for (const reason of ["registered", "support-persona", "not-entitled"] as const) expect(ccGithubReadUnavailableLine(reason), reason).toBeNull();
+  });
+
+  it("each line says gh does not work by design, retrying does not help, never ask for a token, and names the owner's remedy", () => {
+    for (const reason of REASONS_WITH_LINE) {
+      const line = ccGithubReadUnavailableLine(reason) as string;
+      expect(line, reason).toMatch(/`gh` and git network commands in the shell do not work in this session by design/);
+      expect(line, reason).toMatch(/retrying does not help/);
+      expect(line, reason).toMatch(/Never ask the user for a token/);
+      expect(line, reason).toMatch(/Settings > Scope Grants/);
+      expect(line, reason).toMatch(/new conversation/);
     }
   });
 
-  it("neither line asks for a token or points at the project's own settings", () => {
-    for (const reason of ["no-repo-or-installation", "repo-private"] as const) {
-      const line = ccGithubReadUnavailableLine(reason) as string;
-      expect(line).not.toMatch(/project'?s own settings|set a (github )?token|paste (a|your) token/i);
+  it("the reason-specific lead is accurate: connect a repo / public only / could not confirm public / platform fault", () => {
+    expect(ccGithubReadUnavailableLine("no-repo-or-installation")).toMatch(/^GitHub tools are unavailable in this session: connect a repository in Workspace settings\./);
+    expect(ccGithubReadUnavailableLine("repo-private")).toMatch(/limited to public repositories/i);
+    expect(ccGithubReadUnavailableLine("visibility-unknown")).toMatch(/could not be confirmed that the repository is public/);
+    expect(ccGithubReadUnavailableLine("visibility-unknown")).not.toMatch(/limited to public repositories/i);
+    expect(ccGithubReadUnavailableLine("registration-failed")).toMatch(/platform fault/);
+  });
+
+  it("no line asks for a token or points at the project's own settings", () => {
+    for (const reason of REASONS_WITH_LINE) {
+      expect(ccGithubReadUnavailableLine(reason) as string, reason).not.toMatch(/project'?s own settings|set a (github )?token|paste (a|your) token/i);
     }
   });
 });

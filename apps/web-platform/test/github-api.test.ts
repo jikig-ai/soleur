@@ -101,6 +101,73 @@ describe("github-api fetch wrapper", () => {
       expect(getCall[1].method).toBeUndefined(); // GET is default
     });
 
+    // #12469: the cc read tools pass `redirect: "manual"`; these rows pin it at the layer that matters (the init handed to fetch),
+    // because every reader-level test sits above this seam and a dropped spread there left them all green.
+    test("redirect:'manual' reaches fetch's init; a plain call has NO redirect key", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
+      await githubApiGet(installationId, "/repos/alice/my-repo", { redirect: "manual" });
+      expect(mockFetch.mock.calls[1][1].redirect).toBe("manual");
+
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
+      await githubApiGet(uniqueInstallationId(), "/repos/alice/my-repo");
+      expect("redirect" in mockFetch.mock.calls[3][1]).toBe(false);
+    });
+
+    test("a 302 under redirect:'manual' throws a GitHubApiError with status 302 and is not retried", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({ ok: false, status: 302, text: async () => "" });
+      const err = await githubApiGet(installationId, "/repos/alice/secret-repo", { redirect: "manual" }).catch((e) => e);
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as InstanceType<typeof GitHubApiError>).statusCode).toBe(302);
+      expect(mockFetch).toHaveBeenCalledTimes(2); // token mint + exactly one GET
+    });
+
+    test("scrubbed mode (redirect:'manual'): a 403 mirrors status only, never the path (a private repo's name) or GitHub's text", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({ message: "Resource not accessible by integration for secret-org/secret-repo" }),
+      });
+      mockReportSilentFallback.mockClear();
+      const err = (await githubApiGet(installationId, "/repos/secret-org/secret-repo", { redirect: "manual" }).catch((e) => e)) as Error;
+      expect(err.message).not.toMatch(/secret-org|secret-repo|Resource not accessible/);
+      expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+      const dump = JSON.stringify(mockReportSilentFallback.mock.calls);
+      expect(dump).not.toMatch(/secret-org|secret-repo|Resource not accessible/);
+      expect(mockReportSilentFallback.mock.calls[0][1].extra).toEqual({ status: 403 });
+    });
+
+    test("scrubbed mode keeps ONE fact: a secondary-rate-limit 403 is still distinguishable from an access fault", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({ message: "You have exceeded a secondary rate limit" }),
+      });
+      const err = (await githubApiGet(installationId, "/repos/a/b", { redirect: "manual" }).catch((e) => e)) as Error;
+      expect(err.message).toMatch(/rate limit/);
+    });
+
+    test("the default (unscrubbed) 403 diagnostic is unchanged: path and GitHub message still mirror", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({ message: "Resource not accessible by integration" }),
+      });
+      mockReportSilentFallback.mockClear();
+      await githubApiGet(installationId, "/repos/alice/my-repo").catch(() => {});
+      expect(JSON.stringify(mockReportSilentFallback.mock.calls)).toMatch(/my-repo.*Resource not accessible/s);
+    });
+
     test("throws on non-ok response", async () => {
       const installationId = uniqueInstallationId();
       mockTokenResponse();

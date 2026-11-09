@@ -160,11 +160,11 @@ describe("listPullRequests result shape", () => {
     expect(out.has_more).toBe(false);
   });
 
-  it("a non-array answer is treated as empty, never a crash", async () => {
+  it("a non-array 200 is a malformed answer and THROWS: it must never read as '0 pull requests'", async () => {
     h.githubApiGet.mockResolvedValue({ message: "weird" });
-    const out = await listPullRequests(1, "o", "r", { state: "all" });
-    expect(out.pull_requests).toEqual([]);
-    expect(out.summary).toBe("0 pull requests (state=all)");
+    await expect(listPullRequests(1, "o", "r", { state: "all" })).rejects.toThrow(/unexpected shape/);
+    h.githubApiGet.mockResolvedValue(null);
+    await expect(listPullRequests(1, "o", "r")).rejects.toThrow(/unexpected shape/);
   });
 
   it("a deleted author (user: null) and a missing head do not crash", async () => {

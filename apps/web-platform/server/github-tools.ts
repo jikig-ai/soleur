@@ -202,6 +202,10 @@ export const GITHUB_ACCESS_NEEDS_RECONNECT =
 export const GITHUB_RATE_LIMITED = "GitHub is rate limiting this workspace; retry shortly";
 /** Fixed refusal when the workspace's connected repo or installation no longer matches the one the tools were built with. */
 export const GITHUB_REPO_CHANGED = "the connected repository changed; start a new conversation";
+/** Fixed refusal when the current repo/installation could not be confirmed right now (a read blip), which is not a repo switch. */
+export const GITHUB_REPO_UNVERIFIABLE = "could not confirm the connected repository right now; try again in a moment";
+/** Fixed text for any fault that is not a GitHub API response (a token mint, a missing config value, a parse error): no detail. */
+export const GITHUB_READ_FAILED = "GitHub could not be reached for this read; try again in a moment";
 const GITHUB_REDIRECT_REFUSED = "GitHub redirected this request; the redirect was not followed";
 
 /** A sanitized tool fault handed to the registrar's mirror: the tool name, the error class name and the HTTP status ONLY. */
@@ -217,11 +221,17 @@ export interface GithubReadFault {
  * any 3xx fails closed; every call first re-confirms the connected repo/installation; faults are mirrored (class name and
  * status only); 401/403 and the PR/issue 404 get the fixed texts below. Absent => the legacy tools, byte-for-byte unchanged.
  */
+export type GithubRevalidation = "current" | "changed" | "unverifiable";
+
 export interface GithubReadHardening {
   /** Called for faults worth a Sentry event (5xx, network, 401/403, 3xx, rate limit, repo changed). Never for plain 404/422. */
   onFault: (fault: GithubReadFault) => void;
-  /** Resolves true while the workspace's connected repo and installation still match the values the tools were built with. */
-  revalidate: () => Promise<boolean>;
+  /**
+   * Re-confirms, before every call, that the workspace's connected repo and installation still match the values the tools were
+   * built with: `current` (go ahead), `changed` (a real switch) or `unverifiable` (a read blip; nothing was confirmed). Anything
+   * else, or a throw, is treated as `unverifiable`: a call never proceeds unless this resolves exactly `current`.
+   */
+  revalidate: () => Promise<GithubRevalidation>;
   /** Redact `title`/`body` per field (data minimisation, not an exfiltration control). Default true. */
   redact?: boolean;
 }
@@ -231,6 +241,11 @@ export interface BuildGithubReadToolsOpts {
   owner: string;
   repo: string;
   hardening?: GithubReadHardening;
+}
+
+/** The cc builder's options: `hardening` is REQUIRED, so the six tools cannot be built (or registered) unhardened. */
+export interface BuildGithubReadHardenedOpts extends BuildGithubReadToolsOpts {
+  hardening: GithubReadHardening;
 }
 
 /** The soleur_platform FQNs of the six cc read tools, in builder order. The registrar's literal list is kept equal to this by a test. */
@@ -272,24 +287,31 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
   ): Promise<ToolTextResponse> => {
     if (!hardening) return wrapGithubRead(errorPrefix, fn);
     const refuse = (text: string): ToolTextResponse => ({ content: [{ type: "text", text }], isError: true });
-    let stillCurrent = false;
+    let verdict: GithubRevalidation = "unverifiable";
     try {
-      stillCurrent = (await hardening.revalidate()) === true;
+      const v = await hardening.revalidate();
+      verdict = v === "current" || v === "changed" ? v : "unverifiable"; // fail closed: only an exact `current` proceeds
     } catch {
-      stillCurrent = false; // fail closed: a revalidation fault is a refusal, never a pass
+      verdict = "unverifiable";
     }
-    if (!stillCurrent) {
-      hardening.onFault({ tool: toolName, errName: "RepoChanged" });
-      return refuse(`${errorPrefix}: ${GITHUB_REPO_CHANGED}`);
+    if (verdict !== "current") {
+      hardening.onFault({ tool: toolName, errName: verdict === "changed" ? "RepoChanged" : "RevalidateUnverifiable" });
+      return refuse(`${errorPrefix}: ${verdict === "changed" ? GITHUB_REPO_CHANGED : GITHUB_REPO_UNVERIFIABLE}`);
     }
     try {
       const result = await fn();
       if (result === undefined) throw new Error("reader returned no result");
       return untrustedRowsResponse("github", hardenReadResult(result, { redact }));
     } catch (err) {
-      const status = err instanceof GitHubApiError ? err.statusCode : undefined;
+      const isApiError = err instanceof GitHubApiError;
+      const status = isApiError ? err.statusCode : undefined;
       const message = err instanceof Error ? err.message : "";
-      if (status === 429 || (status === 403 && /rate limit/i.test(message))) {
+      // A revoked, uninstalled or suspended installation fails inside the token mint, which throws a plain Error (no status).
+      if (!isApiError && /installation token request failed/i.test(message)) {
+        hardening.onFault(readFault(err, toolName));
+        return refuse(GITHUB_ACCESS_NEEDS_RECONNECT);
+      }
+      if (status === 429 || (status === 403 && /rate limit|abuse detection/i.test(message))) {
         hardening.onFault(readFault(err, toolName));
         return refuse(`${errorPrefix}: ${GITHUB_RATE_LIMITED}`);
       }
@@ -306,12 +328,15 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
         try {
           hint = await on404();
         } catch {
-          hint = null; // the probe is best-effort: fall through to the plain 404 text
+          // review: swallowed. The probe is a best-effort hint; the plain 404 text below is the answer when it fails.
+          hint = null;
         }
         if (hint) return refuse(hint);
       }
       if (!isPlainClientOutcome(status)) hardening.onFault(readFault(err, toolName));
-      return refuse(`${errorPrefix}: ${message}`);
+      // Only a GitHub API response is forwarded to the model. Anything else (a mint failure, a missing config value, a parse
+      // error) can name server configuration, so it gets a fixed text.
+      return refuse(isApiError ? `${errorPrefix}: ${message}` : `${errorPrefix}: ${GITHUB_READ_FAILED}`);
     }
   };
 
@@ -319,7 +344,8 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
     "github_list_pull_requests",
     "List pull requests on the connected repository, newest-updated first. Returns metadata only " +
       "(number, title, state, author login, label names, updated_at, html_url, draft, head_ref) and has_more; " +
-      "use github_read_pr for one PR's details. state is open (default), closed or all.",
+      "use github_read_pr for one PR's details (closed includes merged; github_read_pr tells them apart). state is open (default), " +
+      "closed or all. If has_more is true, call again with per_page 50; more than 50 is not reachable.",
     {
       state: z.enum(["open", "closed", "all"]).default("open").describe("Which pull requests to list: open (default), closed or all"),
       per_page: z.number().int().min(1).max(50).default(10).describe("Number of pull requests to return (max 50)"),
@@ -354,14 +380,9 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
       issue_number: z.number().int().positive().describe("The issue number to read"),
     },
     async (args): Promise<ToolTextResponse> =>
-      run(
-        "github_read_issue",
-        "Error reading issue",
-        () => readIssue(installationId, owner, repo, args.issue_number, ...extra),
-        async () => {
-          await readPullRequest(installationId, owner, repo, args.issue_number, ...extra);
-          return `#${args.issue_number} is a pull request; use github_read_pr`;
-        },
+      // No PR hint on a 404: GitHub serves a pull request through /issues/N with a 200, so an issue 404 never means "it is a PR".
+      run("github_read_issue", "Error reading issue", () =>
+        readIssue(installationId, owner, repo, args.issue_number, ...extra),
       ),
   );
 
@@ -428,7 +449,7 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
  * open web egress; the registrar always passes it. `buildGithubTools` composes its five legacy reads from the same code with
  * no hardening.
  */
-export function buildGithubReadTools(opts: BuildGithubReadToolsOpts): BuildGithubToolsResult {
+export function buildGithubReadTools(opts: BuildGithubReadHardenedOpts): BuildGithubToolsResult {
   const t = makeReadTools(opts);
   const tools = [t.listPrs, t.readPr, t.readIssue, t.readIssueComments, t.listPrComments, t.readCi];
   return { tools, toolNames: GITHUB_READ_TOOL_NAMES.map((n) => `mcp__soleur_platform__${n}`) };

@@ -43,62 +43,85 @@ const BODY_KEYS = new Set(["body"]);
 const REDACTED_KEYS: Record<string, "pr_title" | "issue_body"> = { title: "pr_title", body: "issue_body" };
 
 /**
- * Deep-map every string leaf of `value`: strip format characters, redact `title`/`body` per field when `redact` is set, then
- * cap. Redaction runs per string field and NEVER over stringified JSON: its phone/UUID/IPv4 patterns would corrupt numeric ids,
+ * Pass 1 (cap-independent, done ONCE): strip invisible format characters from every string leaf and redact `title`/`body` per
+ * field. Redaction runs per string field and NEVER over stringified JSON: its phone/UUID/IPv4 patterns would corrupt numeric ids,
  * timestamps and URLs. Non-string leaves (numbers, booleans, null) are untouched.
  */
-function mapStrings(value: unknown, key: string, redact: boolean, bodyCap: number): unknown {
+function prepareStrings(value: unknown, key: string, redact: boolean): unknown {
   if (typeof value === "string") {
-    let out = stripFormatChars(value);
+    const out = stripFormatChars(value);
     const source = REDACTED_KEYS[key];
-    if (redact && source) out = redactGithubSourcedText(out, { source });
-    return capChars(out, BODY_KEYS.has(key) ? bodyCap : OTHER_FIELD_CAP);
+    return redact && source ? redactGithubSourcedText(out, { source }) : out;
   }
-  if (Array.isArray(value)) return value.map((v) => mapStrings(v, key, redact, bodyCap));
+  if (Array.isArray(value)) return value.map((v) => prepareStrings(v, key, redact));
   if (value !== null && typeof value === "object") {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = mapStrings(v, k, redact, bodyCap);
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = prepareStrings(v, k, redact);
     return out;
   }
   return value;
 }
 
-/** The array a response carries its rows in: the value itself, or its `pull_requests` member. */
-function rowsOf(value: unknown): unknown[] | null {
-  if (Array.isArray(value)) return value;
-  const rows = (value as { pull_requests?: unknown } | null)?.pull_requests;
-  return Array.isArray(rows) ? rows : null;
+/** Pass 2 (cheap, repeatable): cut every string leaf to its cap. */
+function capStrings(value: unknown, key: string, bodyCap: number): unknown {
+  if (typeof value === "string") return capChars(value, BODY_KEYS.has(key) ? bodyCap : OTHER_FIELD_CAP);
+  if (Array.isArray(value)) return value.map((v) => capStrings(v, key, bodyCap));
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = capStrings(v, k, bodyCap);
+    return out;
+  }
+  return value;
 }
 
-function withRows(value: unknown, rows: unknown[]): unknown {
-  return Array.isArray(value) ? rows : { ...(value as Record<string, unknown>), pull_requests: rows };
+type ListShape = { summary?: unknown; has_more?: unknown; pull_requests: unknown[] };
+
+function isListShape(value: unknown): value is ListShape {
+  return value !== null && typeof value === "object" && !Array.isArray(value) && Array.isArray((value as ListShape).pull_requests);
 }
 
 /**
- * Harden one tool response: per-field strip + redact + cap, then hold the JSON length under `RESPONSE_BUDGET_CHARS` by
- * halving the body cap (down to 64 characters) and, as the last resort, dropping trailing rows with an explicit marker.
- * The result is always a value that stringifies to at most the budget plus the small marker object.
+ * Harden one tool response: strip + redact once, then cap per field, then hold the JSON length under `RESPONSE_BUDGET_CHARS` by
+ * halving the body cap (down to 64 characters) and, as the last resort, dropping trailing rows. The list tool keeps its own shape
+ * (`summary`, `has_more` rewritten to say rows were dropped, plus `truncated`/`note` beside them); a bare array is wrapped as
+ * `{ truncated, note, items }`. The result stringifies to at most the budget plus a small marker.
  */
 export function hardenReadResult(value: unknown, opts: { redact: boolean }): unknown {
   const size = (v: unknown): number => JSON.stringify(v)?.length ?? 0;
+  const prepared = prepareStrings(value, "", opts.redact);
   let bodyCap = BODY_FIELD_CAP;
-  let out = mapStrings(value, "", opts.redact, bodyCap);
+  let out = capStrings(prepared, "", bodyCap);
   while (size(out) > RESPONSE_BUDGET_CHARS && bodyCap > 64) {
     bodyCap = Math.max(64, Math.floor(bodyCap / 2));
-    out = mapStrings(value, "", opts.redact, bodyCap);
+    out = capStrings(prepared, "", bodyCap);
   }
   if (size(out) <= RESPONSE_BUDGET_CHARS) return out;
-  const rows = rowsOf(out);
+
+  const rows: unknown[] | null = Array.isArray(out) ? out : isListShape(out) ? out.pull_requests : null;
   if (rows === null || rows.length === 0) return out;
+  const rebuild = (keep: number): unknown => {
+    const kept = rows.slice(0, keep);
+    if (isListShape(out)) {
+      return {
+        ...out,
+        summary: `${kept.length} of ${rows.length} pull requests shown (response size budget)`,
+        has_more: true,
+        truncated: true,
+        note: `response exceeded the size budget; showing ${kept.length} of ${rows.length} items. Ask for fewer items (a smaller per_page).`,
+        pull_requests: kept,
+      };
+    }
+    return {
+      truncated: true,
+      note: `response exceeded the size budget; showing ${kept.length} of ${rows.length} items. Ask for fewer items (a smaller per_page).`,
+      items: kept,
+    };
+  };
   let keep = rows.length;
-  let trimmed = withRows(out, rows.slice(0, keep));
+  let trimmed = rebuild(keep);
   while (keep > 1 && size(trimmed) > RESPONSE_BUDGET_CHARS) {
     keep = Math.max(1, Math.floor(keep * (RESPONSE_BUDGET_CHARS / size(trimmed)) * 0.9));
-    trimmed = withRows(out, rows.slice(0, keep));
+    trimmed = rebuild(keep);
   }
-  return {
-    truncated: true,
-    note: `response exceeded the size budget; showing ${keep} of ${rows.length} items. Ask for fewer items (a smaller per_page).`,
-    result: trimmed,
-  };
+  return trimmed;
 }

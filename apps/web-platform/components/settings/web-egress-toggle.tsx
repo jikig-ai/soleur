@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { NavLink } from "@/components/ui/nav-link";
 import { EGRESS_AUDIT_PATH, formatAgo, type CollectionState } from "@/lib/egress-audit/summary";
 import { usePendingAction } from "@/hooks/use-pending-action";
+import { GH_DISCLOSURE } from "@/lib/web-egress-disclosure";
 
 /**
  * feat-open-web-egress (#9534) — per-workspace "Agent web access" toggle.
@@ -24,14 +25,6 @@ import { usePendingAction } from "@/hooks/use-pending-action";
  * toggle's member treatment — rather than hiding the card, so members can
  * see whether the workspace runs agents with open egress.
  */
-/**
- * #12469: what stops working when Agent web access is on, and what replaces it. The sandbox carries no GitHub credentials in
- * this mode, so the command-line `gh` is unavailable; the platform's read tools cover public repositories. Shown in the ON
- * block and in the enable dialog, and mirrored on the Scope Grants page. Copy only: it asserts no gate and no write capability.
- */
-export const GH_DISCLOSURE =
-  "While this is on, the command-line gh tool is unavailable to agents. For public repositories, agents still read your issues, pull requests, and CI status through Soleur, but can't create or edit them; private repositories can't be read.";
-
 const RECORDING_NOTICE =
   "Hosts your agents contact are recorded as best-effort summary counts: the host, whether the request was allowed, blocked or ended another way, and the number of requests. Every current member of this workspace can view them, including activity from before they joined. No member or session is recorded, some entries may be missing, and counts are minimums. Records are deleted about 30 days after they were recorded. Turning web access off stops new records but does not delete existing ones.";
 // "unknown" = any case where the loader could not determine it (Flagsmith outage, failed org lookup,
