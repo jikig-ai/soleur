@@ -294,7 +294,7 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     *Superseded 2026-11-08 (item 12): that separate change is the rule `origin-tls-event` (`sentry_alert.origin_tls_event`, any `feature=origin_tls` event, `frequency_minutes = 47`), DECLARED in PR #12434 and live only after `apply-sentry-infra.yml` has applied it on merge; until the apply is read, the sentences "There is **no committed Sentry alert rule for `feature:origin_tls`**" and "a Sentry event is a pull-based check today" remain the operative state. A dead :443 that raises no event remains detectable only by the Better Stack monitors.*
 
 12. **Follow-up rulings (PR #12434, Ref #10479).** *Ruled by CTO agent, 2026-11-08 (planning and plan-review rounds), four technical forks.* The rows are in
-    `knowledge-base/project/specs/feat-one-shot-origin-tls-followups/decision-challenges.md`.
+    `knowledge-base/project/specs/archive/20261109-113347-feat-one-shot-origin-tls-followups/decision-challenges.md`.
     **(a) :80 slow-header cutoff.** Set `headersTimeout = 60_000` and pin `requestTimeout = 300_000` on the plain :80 server only, through the import-safe
     module `server/http-timeouts.ts` (`applyPlainHttpTimeouts`, which throws when the header bound exceeds the request bound). Rationale: the inert 910 s
     assignment left an inherited 300 s as the real cutoff; 60 s matches what the :443 listener gets from Node's default, so both listeners cut a stalled client at
