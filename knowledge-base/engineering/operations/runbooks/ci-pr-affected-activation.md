@@ -102,6 +102,17 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
   call stays operator-owned per #10448. Receipts:
   `knowledge-base/project/specs/archive/20261108-080602-feat-one-shot-ci-lever-residuals/receipts/r3/`.
 
+- 2026-11-09: the fourth re-ruling on a fresh 300-commit window (BASE `af764001ee`, ejection window
+  2026-10-30..11-09) computed `computed=NO-GO reason=criterion-failed`: (a) fails the bound again —
+  point 2 of 444 (0.45%, passes), worst-case 68 of 444 -> cp95 bound **18.41%** >= 12% (the day's
+  corroboration + classifier changes eliminated the unclassified buckets and witnessed 32 flake-cleared,
+  leaving `failed-job-without-fail-line` (22), `queue-oracle-shortfall` synthetics (~36) and unsettled
+  legs as the bucket); (b) passes (strict zero, accepted=1639); (c) within-10% — net 69.05 >= 22.11
+  per-full-run but ~92% of bar population-weighted; (d) passes. Corroboration: merge_group_on_landed=293/300,
+  missing=0, refused=0. Still nothing activated; `ready=false missing=lock,artifacts,verdict,prereq5`;
+  retire-vs-schedule stays operator-owned per #10448. Receipt:
+  `knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-rerun/receipts/go-no-go.md`.
+
 ## 3. Entry condition for a re-attempt (CTO ruling, ADR-276 amendment item 5)
 
 All of these, in this order:
