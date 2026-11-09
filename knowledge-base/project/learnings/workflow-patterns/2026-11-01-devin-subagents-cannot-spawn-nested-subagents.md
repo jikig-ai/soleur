@@ -33,6 +33,21 @@ honest.
 - Parent then ran `Own the epic` CTO + 12 total seat spawns via `run_subagent`
   with no nesting issues.
 
+## Additional instance: inline dispositions fail the machine-gated ruling shape (2026-11-08, PR #12446)
+
+The constraint bites one level earlier than panel seats: a planning
+subagent that cannot spawn at all writes its `decision-challenges.md`
+technical rows as **inline dispositions** — which
+`technical-ruling-gate.sh --branch` rejects identically to "Applied by the
+planner" (only `Ruled by CTO agent, <date>:` passes). The fix ran at the
+orchestrator: ONE batched `soleur:engineering:cto` spawn carried all 11
+technical rows (`cto_spawns=1`) and the cells were rewritten to the gated
+shape — the `plan-sharp-edges.md` batched-spawn remedy, issued one level up
+because the planner has no spawn tool. Rows the CTO had already ruled on the
+source issues (#12428/#10448) were carried as BINDING inputs, not re-ruled.
+Disclosure: `Reviewed-Coverage: sequential-fallback` in the file header,
+session-state.md and the PR body.
+
 ## Also learned this session
 
 - `gh pr merge --auto` on a merge-queue repo answers "already queued to merge"
