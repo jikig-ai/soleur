@@ -66,7 +66,10 @@
 # invisible characters are ignored, so `Operator reserved:` and `**Operator-reserved:**` count) marks a hold that reserves the decision to the
 # operator (pricing approval, brand copy, spend). A gate only says WHEN a condition is true, never WHO may clear the
 # hold, so such a hold always STANDS: it is printed `Reserved for you: ... - only you can clear this`, its gates are
-# not probed, and the run exits 2. Every `Hold:` or `Gate:` line must sit inside a readable hold section; one that does
+# not probed, and the run exits 2. `Operator-authorizes:` is the second always-standing prefix, for an act the agent
+# CAN run once the operator types a go naming it in-session: printed `Say go and I run it: ... - only you can say go`,
+# gates never probed, exit 2. It never covers a hold that reserves a founder decision or needs the operator's hands.
+# Every `Hold:` or `Gate:` line must sit inside a readable hold section; one that does
 # not (a misspelt second heading, text after the next heading) is exit 2, never silently dropped. --file mode reads the
 # COMMITTED blob (HEAD), exactly as the verifier does, never the working tree: an untracked, symlinked or dirty file
 # cannot change the answer. Test seam: HGE_VERIFY_TIMEOUT (seconds, 1-59) can only SHORTEN the 60 s verifier limit.
@@ -403,6 +406,7 @@ print_result_line() { # <verdict> <text> <why> <gate text> <notes>
     NEEDS) if [ -n "${3:-}" ]; then printf 'Needs a person: %s - only a person can settle this (%s)\n' "$(clean_text "$2")" "$3"
            else printf 'Needs a person: %s - only a person can settle this\n' "$(clean_text "$2")"; fi ;;
     RESERVED) printf 'Reserved for you: %s - only you can clear this\n' "$(clean_text "$2")" ;;
+    AUTHORIZE) printf 'Say go and I run it: %s - only you can say go\n' "$(clean_text "$2")" ;;
     *) printf 'Could not check: %s - %s\n' "$(clean_text "$2")" "$3" ;;
   esac
 }
@@ -413,6 +417,16 @@ reserved_hold() {
   lt="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
   rn="$(printf '%s' "$lt" | tr -cd 'a-z0-9' | cut -c1-16)" # mut:reserved-norm
   [ "$rn" = operatorreserved ]
+}
+
+# authorizes_hold <the hold's words>: 0 when they BEGIN with `Operator-authorizes:` however it is spelt (see the header).
+# The pinned token is `operatorauthorize` (17 normalized characters; the first-17 compare also keeps
+# `Operator-authorization:` and `Operator-authoriz:` out — they are not this class).
+authorizes_hold() {
+  local lt an
+  lt="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  an="$(printf '%s' "$lt" | tr -cd 'a-z0-9' | cut -c1-17)" # mut:authorizes-norm
+  [ "$an" = operatorauthorize ]
 }
 
 # stall_unchecked <sentence> <why>: every hold stays on hold because the record itself cannot be used (exit 2).
@@ -439,11 +453,13 @@ stand_all() {
 # every non-reserved hold carries at least one gate and ONLY `web-acceptance` gates. A plan that mixes a `web-acceptance` gate with
 # another kind of gate, or with a hold that has no gate, cannot ride the prose path and cannot be evaluated either: exit 2. A plan
 # with no `web-acceptance` gate on a non-reserved hold (reserved-only and gate-less plans included) leaves NODELEG=0: exit 3.
-# An `Operator-reserved:` hold is skipped here (its gates are never probed) and always stands in the evaluation loop.
+# An `Operator-reserved:` or `Operator-authorizes:` hold is skipped here (its gates are never probed) and always
+# stands in the evaluation loop.
 classify_no_delegation() {
   local i text g k wa=0 other=0 ng
   while IFS=$'\t' read -r _ i text; do
     reserved_hold "$text" && continue # mut:wa-reserved-skip
+    authorizes_hold "$text" && continue # mut:wa-authorizes-skip
     ng=0
     while IFS= read -r g; do
       ng=$((ng + 1)); k="${g%%[[:space:]]*}"
@@ -570,6 +586,7 @@ fi
 DISCHARGED=0; STANDING=0; ANY_UNEVAL=0
 while IFS=$'\t' read -r _ i text; do
   if reserved_hold "$text"; then print_result_line RESERVED "$text" ""; STANDING=$((STANDING + 1)); ANY_UNEVAL=1; continue; fi # mut:reserved
+  if authorizes_hold "$text"; then print_result_line AUTHORIZE "$text" ""; STANDING=$((STANDING + 1)); ANY_UNEVAL=1; continue; fi # mut:authorize
   awk -F'\t' -v i="$i" '$1 == "GATE" && $2 == i { print $3 }' "$WORK/items" > "$WORK/g.$i"
   ng="$(wc -l < "$WORK/g.$i" | tr -d ' ')"
   HV=OK; WHY=""; GTXT=""; GNOTES=""; HLINE=""
