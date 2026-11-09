@@ -12,6 +12,35 @@ brand_survival_threshold: none
 requires_cpo_signoff: false
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09
+**Sections enhanced:** Encryption Posture (full-schema form), Acceptance Criteria (pre/post-merge split + value-assertion ACs), probe spec (postdate check), rule-ID citations
+**Review coverage:** `Reviewed-Coverage: sequential-fallback` — all skill/agent fan-outs executed inline in this process (no subagent roster on this harness): deepen-plan halt gates §4.6–4.13 run mechanically; plan-review lenses (overengineering / correctness / simplicity / devex) applied inline.
+
+### Key Improvements
+1. Encryption Posture block rewritten to the sibling plan's full-schema "no store/connection introduced" form (deepen-plan §4.10 halt-safe).
+2. AC7/AC8 rewritten as per-surface value assertions (`grep` on live value) instead of token-diff greps — test-fixture literals would false-positive a `-G'max_entries_to_build'` diff scan.
+3. AC split into `### Pre-merge (PR)` / `### Post-merge` and probe gained the tracker-window postdate check (sharp-edges: diff-scope ACs, sample-after-X).
+
+### New Considerations Discovered
+- The executed lever-1 evaluation (issue comment 6717099123) already recommends **decline at current traffic** on a 12h window — the plan therefore gates the flip on a ~28-day re-instrumented window rather than assuming it.
+- A fourth live parity surface beyond the issue's named three exists: `.github/workflows/merge-queue-stall-check.yml:172` `MAX_ENTRIES_TO_BUILD` (S8-asserted mirror; flip narrows stall coverage to `position <= 1`).
+- Sweeper exit vocabulary verified: exit 5 = ACTION REQUIRED (designed nag), exit 1 = every-sweep FAIL comment (banned spam shape) — the probe computes the verdict and uses 0/5/3 only.
+- `follow-through` label verified to exist; `--status cancelled`/`--created`/`--event`/`--json` verified against `gh run list --help`.
+
+### Gate Results (deepen-plan)
+- §4.6 User-Brand Impact: PASS (section present, `none`, no sensitive-path match).
+- §4.7 Observability: PASS (5 fields, `grep` allowlisted, literal `expected_output "1"`).
+- §4.8 PAT-shaped variables: PASS (no hits).
+- §4.9 UI wireframe: SKIP (no UI surface).
+- §4.10 Encryption Posture: PASS (full schema, no store/connection).
+- §4.11 Guard Contract: PASS (`lint-guard-contract.py` rc=0, 1 entry).
+- §4.12 Scope Check: PASS (one unfenced section; all asks mapped; inferred rows justified).
+- §4.13 Task Design: SKIP (no new autonomous-task surface — probe enrolls in the existing sweeper).
+- §4.5 network-outage: SKIP (no connectivity-symptom content; no SSH-provisioned apply target).
+- §4.55 downtime/cutover: SKIP (GitHub-side ruleset parameter applies in place; no serving-surface offline operation).
+
 ## Overview
 
 Issue #12269 is a deferred lever from the congestion-relief plan (#12250, tracker #12089, epic #11556 lever E): evaluate whether lowering the merge queue's `max_entries_to_build` from 2 to 1 reduces hosted-runner demand enough to justify the serialized merge drain it causes. The issue prescribes a measured experiment, gated on the umbrella-consolidation soak data, with named instruments (`.github/workflows/wallclock-p90-watch.yml`, `scripts/ci-demand-census.sh`) and named parity surfaces (ruleset `.tf`, DR skeleton, README, Guard-2 suite T-mq-1) if the flip is taken.
@@ -73,7 +102,7 @@ A two-branch measured experiment honoring the issue's method exactly:
 - **Guard-2 mechanics (verified, not assumed).** `_mq_guard2` reads the seven-param tf/DR/README triple, then applies safety values. The `{1,2}` pin goes in the same `if` block as `max_entries_to_merge ∈ {1,3}` (~L901-905). Fixtures `_mq_write_queue_block` (~L1108) and `t_mq_param_parity_noncanonical_pass` (~L1177) are self-consistent (all three fixture sources agree internally) and stay GREEN at either live value — no edit needed; noted so nobody "fixes" them.
 - **Followthrough probe semantics (verified against `scripts/sweep-followthroughs.sh` header).** exit 0 = PASS comment + auto-close; exit 1 = FAIL comment every sweep (spam — banned shape); exit 5 = ACTION REQUIRED, never closes (nags until the label is removed — the designed alarm); exit 2/3 = TRANSIENT. The probe therefore computes the verdict itself: waste/drain-bad → 5; premise-still-absent/keep → 0; any `gh` read failure → 3. `earliest=` silences it until the re-eval/soak date — no perpetual ping.
 - **Directive timing.** The directive gate resolves `script=` under the main checkout — the probe must reach `main` before the directive is filed on #12269. Ordering: this PR merges the probe → work phase then adds the `follow-through` label + inline `<!-- soleur:followthrough … -->` directive at column 0 (outside any fence) on the issue body.
-- **No `Closes #12269` in the PR body** under either branch — the issue is the tracker and must stay open until the followthrough resolves it. PR body uses `Ref #12269` (`wg-use-closes-n-in-pr-body` governs issues the PR resolves; this one deliberately does not resolve it).
+- **No `Closes #12269` in the PR body** under either branch — the issue is the tracker and must stay open until the followthrough resolves it. PR body uses `Ref #12269` (`wg-use-closes-n-in-pr-body-not-title-to` governs issues the PR resolves; this one deliberately does not resolve it).
 - **Instrument limits.** `ci-demand-census.sh` covers ≤12h per call — a 28-day window means ~56 consecutive non-overlapping calls, so the gate instead uses it on a representative set of ≥4 non-overlapping 12h windows spread across the period (documented in the verdict comment), while the cheap `gh run list` counts cover the full window. The watch tracker already carries p50/p90 history.
 
 ## Implementation Phases
@@ -174,12 +203,22 @@ discoverability_test:
 
 ## Encryption Posture
 
-Detection note: `infra/github/ruleset-ci-required.tf` matches the `\.tf$` detection pattern, but the change introduces **no persistent data store and no new cross-component/network connection** — it adjusts an integer parameter on an existing GitHub ruleset resource (and only under the contingent 3B branch). The skip clause applies; emitted explicitly per the gate's reject-on-absent rule.
+Detection fired via `infra/github/ruleset-ci-required.tf` (`.tf$` glob). The change edits a scalar `merge_queue` parameter on an existing GitHub ruleset resource (and only under the contingent 3B branch) — no persistent store is introduced and no new cross-component/network connection is created.
 
 ```yaml
-at_rest: []   # no store introduced or modified — a scalar merge_queue parameter on an existing ruleset resource
-in_transit: []  # no new connection — the existing Terraform->GitHub-API provider path is unchanged
-# no exception block: nothing is plaintext-exception and no cert_verification is off
+at_rest:
+  mechanism: "none — no persistent store is introduced (a merge_queue build-concurrency integer is configuration, not data)"
+  evidence: "the diff edits a numeric parameter, doc text, a guard pin, and a probe script; no volume/db/bucket/queue/cache/log-sink resource is added"
+  defends_against: "n/a — there is no stored data to defend"
+  does_not_defend: "the queue/run metadata GitHub itself persists is outside this change and unchanged by it"
+  disclosed_as: "not a data store — no docs/legal disclosure needed"
+  live_verification: "terraform plan post-merge shows an in-place parameter update on the existing ruleset and nothing else"
+in_transit:
+  tls: "unchanged — same Terraform->GitHub-API provider channel and same GitHub Actions runners"
+  cert_verification: "on (platform default — no new endpoint, credential, or connection is introduced)"
+  does_not_defend: "check-run contents remain as exposed to repo collaborators as before"
+  disclosed_as: "no new connection — nothing to disclose"
+exception: ~
 ```
 
 ## Guard Contract
