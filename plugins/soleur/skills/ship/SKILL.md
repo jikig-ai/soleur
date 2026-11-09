@@ -2287,6 +2287,13 @@ if [[ -n "$SYNC_ROOT" && -r "$SYNC_ROOT/scripts/ci-head-verdict.sh" ]] \
    && grep -q '"name"[[:space:]]*:[[:space:]]*"soleur"' "$SYNC_ROOT/.claude-plugin/plugin.json" 2>/dev/null; then
   VERDICT_OK=1
 fi
+# Required-set read (#11544, inline half). The read waits for a GREEN DWELL: RS_AFTER consecutive ticks on which the PR is
+# OPEN BLOCKED, auto-merge is armed, the last queue read says not_queued and the last verdict sample is full-decided (both are
+# sampled in the every-5th-tick block below and reused between samples). Any miss restarts the count. At most RS_MAX reads per poll.
+# The parsing lives in plugins/soleur/scripts/required-set-report.sh (read live like ci-head-verdict.sh, not snapshotted) —
+# fix it THERE; this fence only dispatches on the marker.
+RS_AFTER=10; RS_MAX=3; rs_hold=0; rs_reads=0; rs_qs=""; rs_v=""
+RS_SH="$SYNC_ROOT/scripts/required-set-report.sh"
 # Required-check names: fetched ONCE (rules change only by operator action).
 # Fail-open by design: an API failure leaves REQUIRED_CHECKS empty and the per-tick
 # scan a no-op; do NOT "harden" to fail-closed (breaks repos without branch
@@ -2319,6 +2326,13 @@ while true; do
   echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
   if (( i % 5 == 0 )) && [[ "$s" == OPEN* && -n "$SYNC_SNAP" ]]; then
     qs="$(bash "$SYNC_SNAP" "$PR" --queue-state 2>/dev/null || true)"
+    rs_qs="$qs"; rs_v=""
+    if [[ "$s" == "OPEN BLOCKED" && "$rs_qs" == "not_queued OPEN armed "* && "$VERDICT_OK" -eq 1 ]]; then
+      rs_to=""; command -v timeout >/dev/null 2>&1 && rs_to="timeout -k 5 60"
+      rs_vo="$($rs_to bash "$SYNC_ROOT/scripts/ci-head-verdict.sh" verdict "$PR" 2>/dev/null)" || rs_vo=""
+      rs_vl="$(grep -m1 '^SOLEUR_CI_HEAD_VERDICT ' <<<"$rs_vo")" || rs_vl=""
+      rs_v="${rs_vl#*state=}"; rs_v="${rs_v%% *}"
+    fi
     [[ "$qs" == dequeued* ]] && { echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.dequeued] PR $PR left the merge queue unmerged ($qs). Stopping the poll; see ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/merge-queue-dequeue.md"; break; }
     [[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* && "$queued_reported" -eq 0 ]] && { queued_reported=1; echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.queued] PR $PR is in the merge queue ($qs) — no sync from here (a push would dequeue it); waiting for MERGED or removal"; }
     [[ "$QUEUE_RULE" -eq 1 && "$qs" == queued* ]] && qidle=0   # a PR the queue holds is not idle: this read runs every 5th tick, expiry needs 6 idle ticks (an unreadable read does not restart it)
@@ -2360,6 +2374,25 @@ while true; do
         break
       fi
     fi
+  fi
+
+  # Required-set read (#11544): count ticks on which every gate holds; a miss restarts the dwell, a read restarts it too.
+  if [[ "$s" == "OPEN BLOCKED" && "$rs_v" == full-decided ]]; then rs_hold=$((rs_hold+1)); else rs_hold=0; fi
+  if (( rs_hold >= RS_AFTER && rs_reads < RS_MAX )); then
+    rs_reads=$((rs_reads+1)); rs_hold=0; rs_state=""
+    echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_set] PR $PR has been BLOCKED for ${RS_AFTER} ticks with auto-merge armed, not queued and a full-decided verdict: required-set read ${rs_reads}/${RS_MAX} (up to ~125s; this poll is alive, do not stop or re-arm it)"
+    while IFS= read -r rs_line; do
+      echo "$rs_line"
+      [[ "$rs_line" == "SOLEUR_CI_REQUIRED_SET state="* ]] && { rs_state="${rs_line#*state=}"; rs_state="${rs_state%% *}"; }
+    done < <(bash "$RS_SH" "$PR" 2>/dev/null)
+    case "$rs_state" in
+      absent|failed)
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_set] state=${rs_state} — exiting poll. The RECOVERY lines above are hints; this poll ran none. Read ${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md (A green verdict that never enqueues) before acting; do not sync or re-arm."
+        break ;;
+      *)
+        echo "$(date +%H:%M:%S) [${i}/${MAX_POLL_MIN}] [ship.phase7.required_set] state=${rs_state:-none} — polling on ($((RS_MAX - rs_reads)) required-set reads left)."
+        [[ -n "$rs_state" ]] || echo "REQUIRED-SET READ — no marker: required-set-report.sh is missing or failed; treat as state=error and run ci-head-verdict.sh required $PR by hand" ;;
+    esac
   fi
 
   # A BEHIND that GitHub itself reported (not one the DIRTY block derives below): only that one may wait in queue mode.
@@ -2532,6 +2565,8 @@ Do NOT invert this into "ignore failures that look transient". The discriminator
 **Queue mode (#9710).** With a `merge_queue` rule on `main` (read once at loop entry) and auto-merge armed, a BEHIND that GitHub reported is not synced: the poll prints `[ship.phase7.queue_wait]` once (informational: take no action, and never sync, update-branch or merge it by hand until `[ship.phase7.queue_wait_expired]`, a push line, MERGED, a dequeue or any poll exit), `[ship.phase7.queued]` once, and falls back to the sync after the 6th consecutive idle tick. Every unreadable answer falls toward today's sync. Read [queue-mode.md](./references/queue-mode.md) on `queue_wait_expired`, and before changing anything about queue mode.
 
 **Required-check failure exit.** Each tick the loop intersects `gh pr checks --json name,bucket` failures (`bucket == "fail"`) with the repo's required-check set (fetched once at loop entry via `gh api 'repos/{owner}/{repo}/rules/branches/main'`). On the first intersection it exits, naming the failing check plus a pointer to `gh pr checks <number>` / `gh run view --log-failed`. A red `test` is first read through [ci-head-verdict.sh](../../scripts/ci-head-verdict.sh): `pending-full`/`no-run` skip it (the row is the draft run's), `stalled`/`awaiting-approval` exit `[ship.phase7.ready_unarmed]` with the recovery. If the required-check fetch fails (no auth, no ruleset, archived repo) the scan is a no-op and the CLOSED-on-CI-failure fallback below still catches the terminal case — fail-open is deliberate, do NOT "harden" to fail-closed.
+
+**Required-set read (#11544).** On a green dwell the loop reads the ruleset-required context set once through [required-set-report.sh](../../scripts/required-set-report.sh): 10 consecutive ticks on which the PR is `OPEN BLOCKED`, the every-5th-tick `--queue-state` sample says `not_queued OPEN armed` and the every-5th-tick `ci-head-verdict.sh verdict` sample says `full-decided` (the samples are reused between ticks, so a PR whose gates hold from the first sample is read at tick 14; any tick that misses a gate restarts the count, and the latch is at most 3 reads per poll, 10 gate-holding ticks apart). Marker `absent` or `failed` prints the script's lines and ends the poll with `[ship.phase7.required_set]` (read [ready-run-wait.md](${CLAUDE_PLUGIN_ROOT}/skills/ship/references/ready-run-wait.md), "A green verdict that never enqueues", before acting; do not sync or re-arm); `complete`, `pending`, `error` and a missing marker (read as `error`) print and keep polling. A read takes up to 125 s, so that tick is slow, not stuck (`MAX_POLL_MIN` counts iterations, so the wall clock can exceed it by at most 3 x 125 s): do not stop or re-arm the Monitor, and treat every RECOVERY line as a hint, because this poll never runs one. If the third read is still `pending`, or `complete` while the PR is still not in the queue, stop and report to the operator with the marker and the `--queue-state` output, as the reference's Bound says.
 
 **DIRTY exit (server-side merge conflict).** When `mergeStateStatus == DIRTY`, GitHub has computed a merge conflict that may or may not be visible locally. The loop first runs `git fetch origin main` and `git merge-tree --write-tree origin/main HEAD` (exit code only). A clean merge-tree means the server saw a conflict local git does not, and the loop rewrites state to `OPEN BEHIND` and falls through to the existing auto-sync (counts against `MAX_BEHIND_SYNCS`). A non-zero merge-tree gets ONE attempt at [resolve-regenerable-conflicts.sh](../../scripts/resolve-regenerable-conflicts.sh): if every conflicted path is regenerable it merges, regenerates from the merged sources and commits, then the loop pushes and keeps polling. It fails closed, so real conflicts are unchanged — the loop exits, prints merge-tree's `CONFLICT` lines (no merge is in progress, so `--diff-filter=U` would be empty), and points at `git merge origin/main`. A rejected push after a regen means `main` moved; the loop exits, commit local. The admin-merge hatch stays BEHIND-only.
 

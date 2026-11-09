@@ -2342,19 +2342,22 @@ ONCE="\[14/90\] $R_HEAD.*required-set read 1/3
   "read 4/3|\[44/90\] \[ship\.phase7\.required_set\]|exiting poll|Merge poll timed out|$R_FORBID"
 rm -f "$QF"
 
-# R6 — no marker is `error`: the script's own degraded line (exit 0, then exit 7) or, when the script is missing, the fence's own
-# line (the script's `REQUIRED-SET READ — running` line is then absent too). All three keep polling with `state=none`.
+# R6 — no marker is `error`: the script's own degraded line (exit 0, then exit 7) or, when the script is missing, nothing from the script
+# at all (its `no marker (` text is then absent). The fence adds its own `no marker: ... missing or failed` line whenever it saw no marker,
+# so all three print it, and all three keep polling with `state=none`.
 r_mocks 'REQUIRED-SET READ — no marker (stub degraded): treat as state=error' MOCK_MERGED_AT=16
 ONCE="^REQUIRED-SET READ — no marker \(stub degraded\): treat as state=error" X_RS_CALLS=1 r_both "R6a-degraded-line-keeps-polling" "$QF" \
   "\[ship\.phase7\.required_set\] state=none — polling on \(2 required-set reads left\)
+^REQUIRED-SET READ — no marker: required-set-report\.sh is missing or failed
 MERGED CLEAN" \
-  "is missing or failed|^SOLEUR_CI_REQUIRED_SET|exiting poll|$R_FORBID"
+  "^SOLEUR_CI_REQUIRED_SET|exiting poll|$R_FORBID"
 rm -f "$QF"
 r_mocks 'REQUIRED-SET READ — no marker (stub degraded): treat as state=error' MOCK_MERGED_AT=16 'echo 7 > "$MOCK_STATE/rs-rc"'
 ONCE="^REQUIRED-SET READ — no marker \(stub degraded\): treat as state=error" X_RS_CALLS=1 r_both "R6b-a-failing-script-keeps-polling" "$QF" \
   "\[ship\.phase7\.required_set\] state=none — polling on \(2 required-set reads left\)
+^REQUIRED-SET READ — no marker: required-set-report\.sh is missing or failed
 MERGED CLEAN" \
-  "is missing or failed|^SOLEUR_CI_REQUIRED_SET|exiting poll|$R_FORBID"
+  "^SOLEUR_CI_REQUIRED_SET|exiting poll|$R_FORBID"
 rm -f "$QF"
 r_mocks "$(rsm complete)" MOCK_MERGED_AT=16
 SCEN_ROOT="$RGONE" ONCE="^REQUIRED-SET READ — no marker: required-set-report\.sh is missing or failed; treat as state=error" r_both "R6c-a-missing-script-keeps-polling" "$QF" \
@@ -2678,7 +2681,7 @@ echo "ship-phase-7 fixture: $PASS pass, $FAIL fail"
 # run_scenario, a deleted call) must not read as green. Reported directly —
 # never through pass/fail, which is the machinery it backstops. Ratchet the
 # literal up when rows are added; never down.
-MIN_VERDICTS=1123
+MIN_VERDICTS=1700
 if (( PASS + FAIL < MIN_VERDICTS )); then
   printf '  FATAL: anti-vacuity: only %s verdicts; the floor is %s (fix the dispatch, do not lower it).\n' "$((PASS + FAIL))" "$MIN_VERDICTS" >&2
   exit 1
