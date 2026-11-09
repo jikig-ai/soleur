@@ -11,6 +11,11 @@
 # approval_environment_unprotected). The guard also refuses a ref other than main, a bot actor and any actor outside the
 # committed owner allowlist. A personal access token of the owner can still dispatch, but the reviewer's click remains a
 # distinct human act (residual, bounded by the gate).
+# RULING (2026-11-08, CTO): an agent may dispatch mode=rotate ONLY under a fresh, per-command, in-session owner go
+# naming the exact full command; the reviewer click on key-rotate-approval is NEVER delegated. Tap the approval inside a
+# measured release-quiet stretch: the apply path re-checks in-flight runs itself, so a run parked at approve CAN still
+# refuse post-approval. Environment split: rotate parks at key-rotate-approval (required reviewer deruelle); mode=plan
+# and apply/clear bind infra-privileged (branch policy, zero reviewers, no park); guard/redeploy/notify bind none.
 # `mode=plan` is the read-only rehearsal (it reads Doppler value-silently and plans, it writes nothing). There is no converge mode and
 # no redeploy-only mode: recovery is a fresh `rotate` of the same key under a fresh typed confirm. A GitHub "re-run" is refused by
 # every write job (a re-run reuses the first attempt's guard outputs and would bypass the go).

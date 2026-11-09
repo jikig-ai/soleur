@@ -26,8 +26,8 @@
 # into sha256sum (kr_hash); only booleans leave that function.
 #
 # FAILURE SEMANTICS (plan table "Failure semantics"). A refusal before any write prints one fixed verdict token and writes
-# nothing. A failure after a write prints ONE stop sentence with the exact `converge` command (it needs the owner's own
-# per-command go; no agent runs it), files one action-required issue, and exits non-zero. There is no automatic retry, no
+# nothing. A failure after a write prints ONE stop sentence with the exact `converge` command (it needs a fresh,
+# per-command, in-session owner go - an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated), files one action-required issue, and exits non-zero. There is no automatic retry, no
 # hard reset and no second reboot POST. `converge` never mints a key.
 #
 # Environment (supplied by the workflow; nothing is echoed):
@@ -554,11 +554,11 @@ kr_converge_cmd() {
 # (it refuses converge_source_missing), so the recovery is a fresh rotate under a fresh go.
 kr_stop_sentence() {
   if [[ "${2:-converge}" == rotate ]]; then
-    printf 'STOP: do not retry the failed jobs and do not run converge. %s Re-dispatch rotate with a fresh go; do not run converge. Until then an unrelated host restart loads the new dedicated key while the app holds the old. A rotate needs the owner'"'"'s own per-command go (no agent runs it). Read the verdict: %s' \
+    printf 'STOP: do not retry the failed jobs and do not run converge. %s Re-dispatch rotate with a fresh go; do not run converge. Until then an unrelated host restart loads the new dedicated key while the app holds the old. A rotate needs a fresh, per-command, in-session owner go (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated). Read the verdict: %s' \
       "$1" "$(kr_verdict_recipe)"
     return 0
   fi
-  printf 'STOP: do not retry and do not dispatch another rotate (a second rotate is a new rotation). %s The recovery is the converge mode; it needs the owner'"'"'s own per-command go naming this exact command (no agent runs it; replace YYYY-MM-DD in the confirm with the UTC date of that dispatch, today is %s UTC): %s Read the verdict: %s' \
+  printf 'STOP: do not retry and do not dispatch another rotate (a second rotate is a new rotation). %s The recovery is the converge mode; it needs a fresh, per-command, in-session owner go naming this exact command (an agent may dispatch it under that go; the key-rotate-approval reviewer click is never delegated; replace YYYY-MM-DD in the confirm with the UTC date of that dispatch, today is %s UTC): %s Read the verdict: %s' \
     "$1" "$(date -u +%F)" "$(kr_converge_cmd)" "$(kr_verdict_recipe)"
 }
 

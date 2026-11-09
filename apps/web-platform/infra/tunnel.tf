@@ -179,7 +179,9 @@ removed {
 locals {
   # Rotation PR-B: Tier-B copies + the redeploy canary proved the new pair, so the
   # old id (baa7825d-…) is dropped; the old token is revoked at the provider after
-  # this applies.
+  # this applies. NOTE for the next rotation: deploy_policy_gate wants the
+  # [ack-deploy-policy] token alone on its own line in a push commit message —
+  # inline in the squash title does not satisfy it.
   deploy_service_token_ids = ["d9204def-4154-4fea-b9ee-d419d8d665f7"]
 }
 
