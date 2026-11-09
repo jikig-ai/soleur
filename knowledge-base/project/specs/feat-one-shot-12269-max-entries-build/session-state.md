@@ -91,3 +91,9 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Post-merge (3B.5): apply-github-infra.yml verify; directive on #12269 earliest=<merge>+21d secrets=GH_TOKEN; file F3 follow-up issue (enqueuedAt promotion false-positive).
 - Backlog after: #9323, #11556. NEVER dispatch #9729 (sibling live).
 - F3 follow-up issue filed: #12507 (enqueuedAt promotion false-positive under build=1).
+
+## Resume Point 5 (fix-round verification)
+
+- Fix-round seats: code-quality found epilogue-registration P1 (moved to suite block ~7004, commit c1e1c80) + stale >=1 docs (fixed); security found whole-file strip P1 + octal/uniqueness P2s (fixed, commit 195da34). Suites re-green: probe 25/25, guard 74/0.
+- STILL RUNNING: d7afe284 (pattern+test-design). On return: resolve findings -> emit `## Review Phase Complete` -> Step 5.5 QA (soleur:qa skill via Task? or invoke skill) -> compound -> ship -> postmerge.
+- F3 issue filed: #12507.
