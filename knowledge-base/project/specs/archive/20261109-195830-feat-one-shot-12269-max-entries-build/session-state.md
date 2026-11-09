@@ -106,3 +106,10 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Disclosure: pattern+test-design fix-round seat (d7afe284) did not return within 30 min — treated as wedged; its scope (90543a00..5ffdcb85) was superseded by c1e1c80+195da34 and its lenses overlapped the two verification seats that did return. Suites re-verified green post-fix: probe 25/25, guard 74/0, stall-check 166/0.
 - PANEL_SHA: 90543a00 (main panel); fix range reviewed through 195da34.
 - QA: Test Scenarios are integration-level Given/When/Then prose (no executable Browser:/API verify: steps) — covered by unit test suite (probe 25/25, guard 74/0, stall-check 166/0). Skipping automated QA per soleur:qa Step 1.
+
+## Resume Point 6 (merge queue)
+
+- PR #12495: ready + auto-merge armed. Conflicts vs fresh main resolved (regenerated TSVs). CI failed twice: lint-shell-trace-credential-refusal (fixed: canonical case block after set) + affected-index-ratchet (fixed: 3 anchor-keyed accept rows with typed kind `data row not fed to a read loop`).
+- Latest commit df2bbdf9 on pushed head; matrix re-running (run 42681624241 family).
+- On merge: verify merge SHA via `gh pr view 12495 --json mergedAt,mergeCommit`, verify apply-github-infra.yml ran (value-only tf change) + live ruleset shows max_entries_to_build=1, file followthrough directive comment on #12269: `<!-- soleur:followthrough script=scripts/followthroughs/mq-lever-e-verdict-12269.sh earliest=<merge>+21d secrets=GH_TOKEN -->`, emit DONE resume prompt. F3 follow-up = #12507 already filed.
+- Backlog after: #9323, #11556. NEVER #9729.
