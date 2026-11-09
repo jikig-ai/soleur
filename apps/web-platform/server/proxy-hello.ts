@@ -14,7 +14,7 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
-export const HELLO_DOMAIN = "soleur-proxy-hello-v1";
+const HELLO_DOMAIN = "soleur-proxy-hello-v1";
 /** Hard cap on the first frame, checked on the raw Buffer length before any string conversion. */
 export const HELLO_MAX_BYTES = 1024;
 /** Accepted clock difference, in seconds, in either direction. */
@@ -28,8 +28,8 @@ const NONCE_RE = /^[0-9a-f]{32}$/;
 const MAC_RE = /^[0-9a-f]{64}$/;
 const HELLO_KEYS = ["type", "userId", "workspaceId", "ts", "nonce", "mac"] as const;
 
-export type HelloRejection = "size" | "shape" | "mac" | "skew" | "replay" | "full";
-export type VerifyResult = { ok: true; userId: string; workspaceId: string } | { ok: false; reason: HelloRejection };
+type HelloRejection = "size" | "shape" | "mac" | "skew" | "replay" | "full";
+type VerifyResult = { ok: true; userId: string; workspaceId: string } | { ok: false; reason: HelloRejection };
 
 export function isCanonicalUuid(v: unknown): v is string {
   return typeof v === "string" && UUID_RE.test(v);

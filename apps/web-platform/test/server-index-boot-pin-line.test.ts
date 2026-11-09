@@ -15,16 +15,28 @@ const h = vi.hoisted(() => ({
   stopClock: vi.fn(),
   reporterStartMock: vi.fn(),
   order: [] as string[],
-  denyFlush: vi.fn(),
+  denyFlush: vi.fn(() => {
+    h.order.push("denyFlush");
+  }),
+  sentryFlush: vi.fn(async () => {
+    h.order.push("sentryFlush");
+    return true;
+  }),
 }));
 
 vi.mock("../sentry.server.config", () => ({}));
-vi.mock("@sentry/nextjs", () => ({ captureMessage: vi.fn(), flush: vi.fn() }));
+vi.mock("@sentry/nextjs", () => ({ captureMessage: vi.fn(), flush: h.sentryFlush }));
 vi.mock("next", () => ({
-  default: () => ({
-    prepare: () => Promise.resolve(),
-    getRequestHandler: () => vi.fn(),
-  }),
+  default: () => {
+    h.order.push("next");
+    return {
+      prepare: () => {
+        h.order.push("prepare");
+        return Promise.resolve();
+      },
+      getRequestHandler: () => vi.fn(),
+    };
+  },
 }));
 vi.mock("http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("http")>()),
@@ -153,6 +165,10 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
     // #12289 — the hello key is loaded exactly once, before the relay listener is created.
     expect(h.order.filter((x) => x === "loadProxyHelloKey")).toHaveLength(1);
     expect(h.order.indexOf("loadProxyHelloKey")).toBeLessThan(h.order.indexOf("createProxyServer"));
+    // ...and before next() is even constructed, so no child the framework spawns can inherit the key.
+    expect(h.order.indexOf("next")).toBeGreaterThan(-1);
+    expect(h.order.indexOf("loadProxyHelloKey")).toBeLessThan(h.order.indexOf("next"));
+    expect(h.order.indexOf("loadProxyHelloKey")).toBeLessThan(h.order.indexOf("prepare"));
 
     // #8495 — the watchdog dispatch clock is armed exactly once, with defaults.
     expect(h.startClock).toHaveBeenCalledTimes(1);
@@ -171,6 +187,9 @@ describe("server/index.ts boot — git-data host-key pin line (#7226 AC16)", () 
       // #12288 — the deny reporter is flushed during the shutdown (before the final Sentry flush).
       await vi.waitFor(() => expect(h.denyFlush).toHaveBeenCalledTimes(1));
       await vi.waitFor(() => expect(exit).toHaveBeenCalled());
+      // The deny summaries are queued BEFORE the final Sentry flush, or they are lost with the process.
+      expect(h.order.indexOf("denyFlush")).toBeGreaterThan(-1);
+      expect(h.order.indexOf("denyFlush")).toBeLessThan(h.order.indexOf("sentryFlush"));
     } finally {
       exit.mockRestore();
     }

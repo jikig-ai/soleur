@@ -1,4 +1,8 @@
 import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { connect as netConnect } from "node:net";
+import { connect as tlsConnect } from "node:tls";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Server as HttpsServer } from "node:https";
 import { WebSocket } from "ws";
@@ -40,7 +44,7 @@ vi.mock("@/server/proxy-hello", async (importOriginal) => {
   };
 });
 
-import { createProxyServer } from "@/server/session-proxy";
+import { createProxyServer, HELLO_DEADLINE_MS, PRE_HELLO_MAX_BYTES } from "@/server/session-proxy";
 import { signProxyHello } from "@/server/proxy-hello";
 import * as denyReporterModule from "@/server/proxy-deny-report";
 import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
@@ -173,7 +177,9 @@ describe("every rejection class refuses with one uniform reason and never reache
     ["extra key", "shape", () => [raw({ extra: "x" })]],
     ["oversized frame (valid hello padded to 2 KiB)", "size", () => [raw() + " ".repeat(2048)]],
     ["non-UUID ids", "shape", () => [raw({ userId: "user-42", workspaceId: "ws-9" })]],
-    ["skew +31 s", "skew", () => [raw({ ts: String(Math.floor(Date.now() / 1000) + 31) })]],
+    // +33, not +31: the verifier floors `now` to whole seconds, so a second tick between building and verifying the
+    // hello turns a +31 s stamp into a 30 s skew (accepted). The exact boundary is pinned with an injected clock in proxy-hello.test.ts.
+    ["skew +33 s", "skew", () => [raw({ ts: String(Math.floor(Date.now() / 1000) + 33) })]],
     ["skew -31 s", "skew", () => [raw({ ts: String(Math.floor(Date.now() / 1000) - 31) })]],
     ["binary frame", "shape", () => [Buffer.from(raw())], true],
     ["not JSON", "shape", () => ["hello"]],
@@ -275,7 +281,107 @@ describe("pre-authentication hardening (review of #12462)", () => {
     // frame (which would close 4014 "relay refused").
     expect(out.closeReason).not.toBe("relay refused");
     expect(mockMembership).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(reports().map((r) => r.extra?.reason)).toEqual(["size"]));
+    await vi.waitFor(() => expect(reports().map((r) => r.extra)).toEqual([{ reason: "size", peer: "127.0.0.1" }]));
+  });
+
+  it("a verifier refusal ends in terminate(): a peer that ignores the close frame cannot keep streaming into a closing socket", async () => {
+    const terminate = vi.spyOn(WebSocket.prototype, "terminate");
+    const s = await start();
+    const out = await run(s.port, ["not json at all"]);
+    expect(out.closeCode).toBe(WS_CLOSE_CODES.ROUTING_UNAVAILABLE);
+    await vi.waitFor(() => expect(terminate.mock.contexts.some((c) => (c as unknown as { _isServer?: boolean })._isServer === true)).toBe(true), { timeout: 2000 });
+    terminate.mockRestore();
+  });
+
+  it("every owner-side refusal goes through refuse() (comment-stripped source: no bare uniform-reason close outside it)", () => {
+    // A behavioural check cannot tell refuse() from a graceful close here: the polite test client closes (and the
+    // server's own socket-error handler terminates) either way. The wire is pinned by call form instead.
+    const src = readFileSync(path.join(__dirname, "../server/session-proxy.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    expect(src.match(/safeClose\(ws, WS_CLOSE_CODES\.ROUTING_UNAVAILABLE, RELAY_REFUSED\)/g)).toHaveLength(1);
+    expect(src.match(/\brefuse\(ws\);/g)).toHaveLength(4); // defence-in-depth peer, verifier, membership, internal
+  });
+
+  it("the byte guard terminates the socket (not a graceful close)", async () => {
+    const terminate = vi.spyOn(WebSocket.prototype, "terminate");
+    const s = await start();
+    await run(s.port, [Buffer.alloc(64 * 1024, 0x20)], false);
+    await vi.waitFor(() => expect(terminate.mock.contexts.some((c) => (c as unknown as { _isServer?: boolean })._isServer === true)).toBe(true), { timeout: 2000 });
+    terminate.mockRestore();
+  });
+
+  it("the byte count is cumulative: 40 small pings (each under the bound) are cut off as size", async () => {
+    const s = await start();
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    ws.on("error", () => undefined);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    for (let i = 0; i < 40 && ws.readyState === WebSocket.OPEN; i++) {
+      ws.ping(Buffer.alloc(125));
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    await vi.waitFor(() => expect(reports().map((r) => r.extra?.reason)).toEqual(["size"]), { timeout: 3000 });
+    expect(reports()[0].extra).toEqual({ reason: "size", peer: "127.0.0.1" });
+  });
+
+  it("the production limits are pinned, and the deadline stays far above the serve-gate probe's hold", () => {
+    expect(HELLO_DEADLINE_MS).toBe(10_000);
+    expect(PRE_HELLO_MAX_BYTES).toBe(2048);
+    const probe = readFileSync(path.join(__dirname, "../infra/ci-deploy.sh"), "utf8");
+    const hold = [...probe.matchAll(/setTimeout\(verdict,(\d+)\)/g)].map((m) => Number(m[1]));
+    expect(hold).toHaveLength(1);
+    expect(HELLO_DEADLINE_MS).toBeGreaterThanOrEqual(10 * hold[0]);
+  });
+
+  it("the deadline is keyed per connection: a second silent peer from the same address neither orphans nor clears the first's timer", async () => {
+    const s = await start({ helloDeadlineMs: 400 });
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    ws.on("error", () => undefined);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    // The second peer is admitted while the first is still waiting to send its hello.
+    const second = tlsConnect({ host: "127.0.0.1", port: s.port, ca: tls.CERT });
+    second.on("error", () => undefined);
+    const secondClosed = new Promise<void>((r) => second.once("close", () => r()));
+    await new Promise<void>((r) => second.once("secureConnect", () => r()));
+    const ready = new Promise<void>((resolve) => ws.on("message", (d) => JSON.parse(String(d)).type === "proxy_ready" && resolve()));
+    ws.send(signProxyHello(KEY, U, W));
+    await ready;
+    await new Promise((r) => setTimeout(r, 900));
+    expect(ws.readyState).toBe(WebSocket.OPEN); // the accepted session survives the second peer's deadline
+    await secondClosed; // and the second, silent peer was dropped at its own deadline
+  });
+
+  it("the deadline destroys the socket: a half-open client that never sends FIN does not keep it alive", async () => {
+    const s = await start({ helloDeadlineMs: 250 });
+    const serverSide: import("node:stream").Duplex[] = [];
+    s.server.on("connection", (sock) => serverSide.push(sock));
+    const c = netConnect({ host: "127.0.0.1", port: s.port, allowHalfOpen: true });
+    c.on("error", () => undefined);
+    await vi.waitFor(() => expect(serverSide.length).toBe(1));
+    await vi.waitFor(() => expect(serverSide[0].destroyed).toBe(true), { timeout: 2000 });
+    c.destroy();
+  });
+
+  it("the injected deadline is honoured only under vitest (comment-stripped source, anchored on the expression)", () => {
+    // Behavioural form is not possible: the other test seams (port 0, bind prefix) also need VITEST, so the
+    // listener cannot start with it cleared.
+    const src = readFileSync(path.join(__dirname, "../server/session-proxy.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const decls = [...src.matchAll(/const deadlineMs = ([^;]+);/g)].map((m) => m[1].replace(/\s+/g, " "));
+    expect(decls).toEqual(["process.env.VITEST ? (params.helloDeadlineMs ?? HELLO_DEADLINE_MS) : HELLO_DEADLINE_MS"]);
+  });
+
+  it("the ws options the byte guard relies on are pinned in source (comment-stripped, scoped to the constructor)", () => {
+    const src = readFileSync(path.join(__dirname, "../server/session-proxy.ts"), "utf8")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    const calls = [...src.matchAll(/new WebSocketServer\(\{([^}]*)\}\)/g)].map((m) => m[1]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/perMessageDeflate:\s*false/);
+    expect(calls[0]).toMatch(/allowSynchronousEvents:\s*true/);
   });
 
   it("an admitted peer that never sends a message is closed at the deadline (hello_timeout)", async () => {
@@ -346,7 +452,27 @@ describe("pre-authentication hardening (review of #12462)", () => {
     expect(out.ready).toBe(false);
     expect(out.closeReason).toBe("relay refused");
     expect(onProxiedSession).not.toHaveBeenCalled();
-    expect(reports().map((r) => r.extra?.reason)).toEqual(["internal"]);
+    // Exact extras: the peer rides along, and only the error CLASS (never the message "db down").
+    expect(reports().map((r) => r.extra)).toEqual([{ reason: "internal", peer: "127.0.0.1", errName: "Error" }]);
+    expect(JSON.stringify(reports())).not.toContain("db down");
+  });
+
+  it("a protocol error AFTER proxy_ready is not counted as a hello refusal", async () => {
+    const s = await start();
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    ws.on("error", () => undefined);
+    await new Promise<void>((resolve, reject) => {
+      ws.on("message", (d) => JSON.parse(String(d)).type === "proxy_ready" && resolve());
+      ws.once("open", () => ws.send(signProxyHello(KEY, U, W)));
+      setTimeout(() => reject(new Error("no proxy_ready")), 3000);
+    });
+    // A frame with invalid UTF-8 in a text message makes the server-side receiver emit 'error'.
+    const sock = (ws as unknown as { _socket: import("node:net").Socket })._socket;
+    sock.write(Buffer.from([0x81, 0x83, 0, 0, 0, 0, 0xff, 0xfe, 0xfd]));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(reports()).toEqual([]);
+    expect(denyReporterModule.denyReporter.counters("shape")).toEqual({ denied: 0, reported: 0, suppressed: 0 });
   });
 
   it("the replay cache is built with the production bound (no max override reaches createReplayCache)", async () => {

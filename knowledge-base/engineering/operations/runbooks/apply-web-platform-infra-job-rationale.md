@@ -491,7 +491,7 @@ create. After the swap web-1's password leaves the push-apply graph; its address
 `doppler_secret.proxy_hello_hmac_key`, the pair in `apps/web-platform/infra/proxy-hello-hmac.tf` that mints
 `PROXY_HELLO_HMAC_KEY`.
 
-- **What it stops.** A planned `update`, `delete`, `forget` or unreadable action list at either address, and a `create` of
+- **What it stops.** A planned `update`, `delete`, `forget`, a state move off either address (`previous_address`, any verb) or an unreadable action list at either address, and a `create` of
   `random_bytes.proxy_hello_hmac`. A lone `create` of the Doppler copy reads 0 (it restores the state-held value and a
   missing copy must stay repairable), and the routine merge shape (both `no-op`) reads 0. Both addresses are
   `[0]`-indexed in a real plan, so the match goes through `luks_passphrase_base`, like the LUKS lists.

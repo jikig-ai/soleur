@@ -571,7 +571,8 @@ def destroyed_at($addr):
 
   # 12th surface (PR A of #8211 / #12167, CTO ruling F1): a CHANGE TO THE RELAY HELLO-KEY PAIR on the per-merge apply path.
   # Same verb semantics as luks_passphrase_rotations just above, over relay_hello_key_addrs: `update` OR `delete` OR
-  # `forget` counts, an entry whose verb set cannot be read counts (decidability first: `any(...)` over `[]` is false),
+  # `forget` counts, and so does ANY entry whose `previous_address` is a key address, whatever its verb (a `moved{}` plans
+  # as `no-op` at the new address and takes the live entry off the address the HALT watches), an entry whose verb set cannot be read counts (decidability first: `any(...)` over `[]` is false),
   # a CREATE counts at relay_hello_key_create_halt_addrs only (the random_bytes; a lone create of the Doppler copy reads 0),
   # and `["no-op"]` reads 0, the routine merge shape once the key exists. Matched through luks_passphrase_base because the
   # real addresses are `[0]`-indexed. Read OUTSIDE the destroy_count sum by the apply job, so `[ack-destroy]` cannot

@@ -9633,7 +9633,9 @@ describe("the relay hello-key pair is counted by a DEDICATED non-ackable HALT in
     // The LUKS set is NOT widened with the pair (F1: a dedicated counter, not an edit to luks_passphrase_addrs).
     for (const a of RELAY_HELLO_PAIR) expect(luksPassphraseAddrs(jq)).not.toContain(a);
     // The match goes THROUGH luks_passphrase_base (both addresses are [0]-indexed in a real plan).
-    expect(jq).toMatch(/select\(IN\(\.address \| strings \| luks_passphrase_base; relay_hello_key_addrs\[\]\)\)/);
+    expect(jq).toMatch(/select\(\s*IN\(\.address \| strings \| luks_passphrase_base; relay_hello_key_addrs\[\]\)/);
+    // ...and a state move OFF a key address (previous_address, any verb) counts too, matched the same way.
+    expect(jq).toMatch(/\(\.previous_address\? \/\/ empty\) \| strings \| luks_passphrase_base\s*\| IN\(\.; relay_hello_key_addrs\[\]\)/);
   });
 
   test("the apply job reads, validates and HALTs on the counter, structurally, BEFORE the destroy_count sum", () => {

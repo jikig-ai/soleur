@@ -77,7 +77,7 @@ New forks met while planning were ruled by the CTO agent (and the CPO for sign-o
 | Accept-unsigned-and-log phase then enforce flip (architecture reviewer) | smoother mixed-version window | CUT by CTO ruling: N=0 live users; re-ask the CTO if `agent_sessions_live` is not 0 at release time |
 | `_PREVIOUS` dual-key verification | zero-downtime rotation | CUT: rotation has no route; the new HALT blocks rotation instead |
 | New `ProxyState` value for "no hello key" | distinct alert | CUT by ruling: reuse `error` (the `relay_listener_down` alert already covers it) |
-| Hello deadline timer | slow-peer DoS bound | CUT (F3): conflicts with the probe's 700 ms `ok`; recorded as a named residual |
+| Hello deadline timer | slow-peer DoS bound | CUT (F3), then REVERSED in the review round by CTO ruling A2 (2026-11-09): a 10 s deadline sits far above the probe's 700 ms hold; shipped, see ADR-323 Decision 1 |
 | Edit `RELAY_PROBE_JS` so a pre-TLS reset reads `denied` | keep `denied` meaningful | CUT (F3): changes a baked host script and the coherence hash for no gate benefit |
 | Standalone preflight script + runbook step | key presence | CUT (F2): the existing `verify-doppler-secrets` job already gates `deploy` |
 | Reuse `luks_passphrase_addrs` | no-ack rotation | CUT (F1): wrong word, wrong text, wrong floor |
@@ -130,7 +130,7 @@ None. (Queried open `code-review` issues against every planned file path: `sessi
 | Strict port parse also applied on the sender | "a bad SOLEUR_PROXY_PORT" | inferred — justification: the same env var feeds the dial URL (`wss://host:NaN`) and an uncaught rejection from `proxyClientToOwner` is the same failure class; ~6 lines |
 | `relay_hello_window accepted=<n> denied=<n> suppressed=<n>` warn line per window | "new sender to old receiver works" (needs a positive, off-host signal to be provable) | inferred — justification: the serve-gate probe sends no hello, so only an accepted-hello count can prove a deployed signed round trip (CPO condition; PR B precondition); counts only, same timer as the reporter |
 | Runbook section "Signed hello rollout (#12289)" in `betterstack-log-query.md` | "Add a runbook note" | asked |
-| Tracking issue for the F3 residuals | "wg-defer-only-after-inline-triage" (AGENTS.md deferral rule) | inferred — justification: a deferral without a tracking issue is invisible |
+| Tracking issue for the F3 residuals (superseded: the deadline and a pre-hello byte guard shipped; the rest are recorded in ADR-323 and on #8211) | "wg-defer-only-after-inline-triage" (AGENTS.md deferral rule) | inferred — justification: a deferral without a tracking issue is invisible |
 | `proxy-hello-key` isolation test file | "keep it OUT of agent-env.ts and ALLOWED_SERVICE_ENV_VARS, with a test" | asked |
 
 ### Split Assessment
@@ -258,6 +258,9 @@ failure_modes:
   - mode: "forged, unsigned, stale or replayed hello from an allowlisted peer"
     detection: "bounded hello-deny events with reason size|shape|mac|skew|replay; close reason is uniform so the peer learns nothing"
     alert_route: "Sentry issue; a sustained reason=mac stream after a deploy means a key split between hosts"
+  - mode: "admitted peer that sends nothing (hello_timeout, 10 s), floods before its first message (size via the byte guard), or throws in the handler (internal, with errName)"
+    detection: "bounded createProxyServer.hello-deny events (Sentry, layer 5 release tag) mirrored as pino rows in Better Stack (layer 2; read message.op and message.reason); open window summaries are flushed on SIGTERM"
+    alert_route: "Sentry issue; no page. reason=internal sustained means a missing service-role env or a throwing session attach"
   - mode: "bad SOLEUR_PROXY_PORT"
     detection: "createProxyServer.bad-port / listen-throw event + proxy_state=error"
     alert_route: "relay_listener_down"
@@ -546,10 +549,10 @@ Not applicable (no `.tf` touched): `lint-encryption-posture.py --repo-sweep`, te
 - **R1. `tlsClientError` still fires once per denied connection** (measured in the spike with the prepended listener: Node's TLS wrapper is still constructed around the destroyed socket). Harmless; a test pins `secureConnection === 0`, not `tlsClientError === 0`. A front `net.Server` would remove it at the cost of changing the listening-server object three tests read (rejected, F3).
 - **R2. The serve-gate probe cannot see a broken verifier.** `relay_peer_probe` sends no hello. Positive proof of a signed round trip is a PR B precondition (tracked in the residuals issue); PR A's tests plus the bounded `reason` events are the only evidence until then.
 - **R3. Coupling.** Adding the key to `REQUIRED` blocks every deploy while the key is absent; removing the relay (`host_proxy_tls_enabled` false) now needs the entry removed in the same change, and the new HALT blocks the per-merge route for that flip (ADR-118 amendment states it).
-- **R4. Residuals accepted (F3/F4):** idle allowlisted peers; first-frame buffering up to `ws`'s default `maxPayload` (1 KiB is a length check on the first frame, not a socket bound; the server-wide limit cannot drop because the same socket then carries relayed client frames); a captured hello replayable to a different roster host within 60 s (the MAC does not bind the target host; needs a compromised roster host).
+- **R4. Residuals accepted (F3/F4) — SUPERSEDED in part by the review round (ADR-323: the 10 s deadline and the 2048-byte pre-hello byte guard shipped, so idle peers and unbounded first-frame buffering are no longer residuals):** idle allowlisted peers; first-frame buffering up to `ws`'s default `maxPayload` (1 KiB is a length check on the first frame, not a socket bound; the server-wide limit cannot drop because the same socket then carries relayed client frames); a captured hello replayable to a different roster host within 60 s (the MAC does not bind the target host; needs a compromised roster host).
 - **R10. No `maxConnections` cap (taste, recorded):** a small cap would also limit legitimate proxied sessions (one connection each) and needs the fleet's concurrent-session ceiling; not adopted here, listed in the residuals issue. The allowlist is a source-address check, not a credential: container egress or agent-run code on an allowlisted host presents that host's IP, which is why the MAC is the real gate and the pre-auth work is bounded (byte cap, text frame, six-key shape, bounded reporting).
-- **R5. Key read per call from `process.env`, not deleted** (parity with `PROXY_TLS_KEY`): a child process spawned with an inherited env would see it; agent subprocess envs are allowlisted (`buildAgentEnv`), and Guard 9 pins that. Any new `spawn` without an explicit env in `apps/web-platform/server/` is out of scope but would reopen it.
-- **R9. Replay cache is per process and clock-bound:** a container restart clears it for up to 60 s (a hello captured before the restart stays skew-valid), and a backward NTP step could re-admit a purged nonce; accepted, same trust model as R4.
+- **R5. (SUPERSEDED by ruling B: the key is now read once at boot, cached, and deleted from `process.env`.) Key read per call from `process.env`, not deleted** (parity with `PROXY_TLS_KEY`): a child process spawned with an inherited env would see it; agent subprocess envs are allowlisted (`buildAgentEnv`), and Guard 9 pins that. Any new `spawn` without an explicit env in `apps/web-platform/server/` is out of scope but would reopen it.
+- **R9. Replay cache is per process and clock-bound:** a container restart clears it for up to about 61 s (a hello captured before the restart stays skew-valid), and a backward NTP step could re-admit a purged nonce; accepted, same trust model as R4.
 - **R6. Sender/verifier drift** is closed by one shared canonical-string module plus the independent known-answer vector; do not add a second builder.
 - **R7. `## User-Brand Impact` must stay filled** (a missing or empty section or threshold fails `deepen-plan` Phase 4.6); this plan's section names the artifact, the vector and the threshold.
 - **R8. Test hygiene:** hex ids/nonces/macs make negative-substring assertions fragile (alphabet `[0-9a-f]`); assert on structured fields, not on substrings of generated values.

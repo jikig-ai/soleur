@@ -13,7 +13,9 @@
 //   proxying host → owner : {type:"proxy_hello", userId, workspaceId, ts, nonce, mac} — HMAC-signed
 //                           under PROXY_HELLO_HMAC_KEY (proxy-hello.ts; #12289, ADR-323)
 //   owner → proxying host : {type:"proxy_ready"}  (after size/shape/MAC/skew/replay AND AP-2 membership)
-//                         | close(ROUTING_UNAVAILABLE, "relay refused") (any refusal; one uniform reason)
+//                         | close(ROUTING_UNAVAILABLE, "relay refused") (any verifier refusal; one uniform reason,
+//                           then terminate() after REFUSE_LINGER_MS). The hello deadline, the pre-hello byte guard
+//                           and a protocol error drop the socket without a close frame (abnormal close, 1006).
 // After proxy_ready the two sockets are piped verbatim in BOTH directions,
 // including close frames + codes (a drain close from the owner reaches the client;
 // a client close tears down the owner leg) so grace-abort host-locality stays
@@ -70,10 +72,16 @@ const RELAY_REFUSED = "relay refused";
  *  hello-less upgrade ~700 ms to read `ok`, so 10 s is compatible with it. */
 export const HELLO_DEADLINE_MS = 10_000;
 
-/** Cumulative bytes an admitted peer may send on the upgraded socket before its first message is
- *  accepted: the 1 KiB hello cap plus the WebSocket frame header and slack. `ws` buffers a whole first
- *  frame (default maxPayload 100 MiB), so this is what bounds pre-authentication memory. */
+/** Cumulative bytes an admitted peer may send on the upgraded socket before its FIRST MESSAGE ARRIVES (not
+ *  until one is accepted: a refusal ends in `refuse()`): the 1 KiB hello cap plus the WebSocket frame header
+ *  and slack. The bound is this plus the read chunk that completes the first frame. `ws` buffers a whole
+ *  first frame (default maxPayload 100 MiB), so this is what bounds pre-authentication memory. */
 export const PRE_HELLO_MAX_BYTES = 2048;
+
+/** After a verifier refusal the close frame goes out and the socket is terminated this long after: `ws`
+ *  would otherwise keep reading a peer that ignores the close frame for up to 30 s, up to its 100 MiB
+ *  maxPayload per frame. Long enough for the 4014 frame to reach a legitimate sender. */
+const REFUSE_LINGER_MS = 250;
 
 /** Authenticated context a proxied connection carries once AP-2 passes — the
  *  owner attaches a PRE-authenticated session from this (no token re-auth; the
@@ -183,7 +191,10 @@ export async function proxyClientToOwner(params: {
   owner.on("close", (code: number, reason: Buffer) => {
     // The owner's uniform refusal reason before proxy_ready: the sender-side view of a hello it refused.
     if (!ready && reason.toString() === RELAY_REFUSED) denyReporter.record("owner_refused");
-    safeClose(clientWs, code, reason.toString());
+    // An owner-side terminate()/destroy() (hello deadline, byte guard, crash) reads as 1006 here, which `ws`
+    // cannot send: map it to the retryable 4014 so the browser reconnects instead of sitting on a dead socket.
+    if (isSendableCloseCode(code)) safeClose(clientWs, code, reason.toString());
+    else safeClose(clientWs, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner connection lost");
   });
   clientWs.on("close", (code: number, reason: Buffer) => safeClose(owner, code, reason.toString()));
 
@@ -370,7 +381,9 @@ export function createProxyServer(params: {
   try {
     httpsServer = createServer({ key: tls.key, cert: tls.cert });
     try {
-      wss = new WebSocketServer({ server: httpsServer, path: "/ws-proxy" });
+      // perMessageDeflate off and allowSynchronousEvents on are load-bearing for the pre-hello byte guard
+      // (see `cutOff` below): pinned explicitly so a `ws` default change cannot move them.
+      wss = new WebSocketServer({ server: httpsServer, path: "/ws-proxy", perMessageDeflate: false, allowSynchronousEvents: true });
     } catch (wssErr) {
       httpsServer.close(); // never listened; releases the parsed key/cert context
       throw wssErr;
@@ -411,18 +424,22 @@ export function createProxyServer(params: {
     helloDeadlines.delete(key);
   };
   httpsServer.prependListener("connection", function admitProxyPeer(socket: Socket) {
-    if (!isAllowedProxyPeer(socket.remoteAddress, peerAllowlist)) {
+    // Read once: a destroyed socket reports `remoteAddress` as undefined.
+    const remote = socket.remoteAddress;
+    const remotePort = socket.remotePort;
+    if (!isAllowedProxyPeer(remote, peerAllowlist)) {
       socket.destroy();
-      denyReporter.record("peer", { peer: peerLabel(socket.remoteAddress) });
+      denyReporter.record("peer", { peer: peerLabel(remote) });
       return;
     }
-    const key = peerKey(socket.remoteAddress, socket.remotePort);
+    const key = peerKey(remote, remotePort);
     const timer = setTimeout(() => {
       helloDeadlines.delete(key);
       socket.destroy();
-      denyReporter.record("hello_timeout", { peer: peerLabel(socket.remoteAddress) });
+      denyReporter.record("hello_timeout", { peer: peerLabel(remote) });
     }, deadlineMs);
     timer.unref();
+    clearDeadline(key); // a reused key must never orphan a live timer
     helloDeadlines.set(key, timer);
     socket.once("close", () => clearDeadline(key));
   });
@@ -434,16 +451,19 @@ export function createProxyServer(params: {
     // every session on the host. Terminate and count it instead. Registered FIRST.
     const peer = peerLabel(req.socket.remoteAddress);
     const deadlineKey = peerKey(req.socket.remoteAddress, req.socket.remotePort);
+    let accepted = false;
     ws.on("error", () => {
       clearDeadline(deadlineKey);
-      denyReporter.record("shape", { peer });
+      // After proxy_ready a protocol error belongs to the relayed session, not to the hello: do not count it
+      // as a hello refusal (it would inflate relay_hello_window denied and the `shape` bucket).
+      if (!accepted) denyReporter.record("shape", { peer });
       ws.terminate();
     });
     // Defence in depth: the same predicate again after TLS + upgrade (no input reaches here with a
     // denied peer while the pre-TLS listener is first).
     if (!isAllowedProxyPeer(req.socket.remoteAddress, peerAllowlist)) {
       denyReporter.record("peer", { peer });
-      safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
+      refuse(ws);
       return;
     }
     // Pre-authentication bound (CTO ruling 2026-11-09): count bytes on the UPGRADED socket until the first
@@ -475,11 +495,10 @@ export function createProxyServer(params: {
     // below, so two hellos with one nonce in the same tick cannot both pass. Every refusal closes with
     // the same reason, so a peer learns nothing about which check failed.
     ws.once("message", async (data: unknown, isBinary?: boolean) => {
-      // Defence in depth only: `ws` registered its data listener before ours, so a frame completed by a
-      // chunk reaches here with `handled` still false and the byte guard then skips it; a frame spread over
-      // several chunks is terminated by the guard before it completes. No input reaches this line with
-      // `cutOff` set (equivalent mutant, ADR-323 mutation ledger); it stays so a future reorder cannot count
-      // one frame twice.
+      // Guard for two `ws` options pinned above (perMessageDeflate off, allowSynchronousEvents on): with them,
+      // `ws` has already emitted the frame-completing chunk's message from its own data listener (which runs
+      // before ours), so the guard sees `handled` and this line never runs with `cutOff` set. Without them
+      // (async inflate, deferred emit) the message could arrive after the cut-off and be counted twice.
       if (cutOff) return;
       handled = true;
       req.socket.off("data", onPreHelloData);
@@ -488,7 +507,7 @@ export function createProxyServer(params: {
         const verdict = verifyProxyHello(data, Boolean(isBinary), helloKey, replayCache);
         if (!verdict.ok) {
           denyReporter.record(verdict.reason, { peer });
-          safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
+          refuse(ws);
           return;
         }
         const { userId, workspaceId } = verdict;
@@ -497,19 +516,22 @@ export function createProxyServer(params: {
         if (!ok) {
           // The pair is MAC-authenticated at this point, so it may ride the event (unauthenticated classes never do).
           denyReporter.record("membership", { peer, userId, workspaceId });
-          safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
+          refuse(ws);
           return;
         }
         // The proxying host may have dropped the client during the lookup: do not supersede the user's
         // live session on this host for a socket that is already gone.
         if (ws.readyState !== WebSocket.OPEN) return;
+        accepted = true;
         denyReporter.recordAccepted();
         ws.send(JSON.stringify({ type: "proxy_ready" }));
         params.onProxiedSession(ws, { userId, workspaceId });
-      } catch {
-        // An async handler's throw is an unhandledRejection -> process.exit(1). Fail closed instead.
-        denyReporter.record("internal", { peer });
-        safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
+      } catch (err) {
+        // An async handler's throw is an unhandledRejection -> process.exit(1). Fail closed instead. Only the
+        // error CLASS is recorded (never the message): that is what tells a missing service-role env from a
+        // throwing session attach.
+        denyReporter.record("internal", { peer, errName: err instanceof Error ? err.name : typeof err });
+        refuse(ws);
       }
     });
   });
@@ -575,6 +597,30 @@ function safeClose(ws: WebSocket, code: number, reason: string): void {
       ws.close(code, reason);
     }
   } catch {
-    /* best-effort */
+    // `ws` throws for a status code it cannot put on the wire (1005/1006/1015...). Leaving the socket
+    // open would strand the peer, so drop it.
+    try {
+      ws.terminate();
+    } catch {
+      /* best-effort */
+    }
   }
+}
+
+/** A close status code `ws` can send: 1000-1014 except 1004/1005/1006, or the private range 3000-4999. */
+function isSendableCloseCode(code: number): boolean {
+  return (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) || (code >= 3000 && code <= 4999);
+}
+
+/** Owner-side verifier refusal: the uniform close frame, then terminate so a peer that ignores it cannot keep
+ *  streaming into a closing socket. */
+function refuse(ws: WebSocket): void {
+  safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
+  setTimeout(() => {
+    try {
+      ws.terminate();
+    } catch {
+      /* already gone */
+    }
+  }, REFUSE_LINGER_MS).unref();
 }

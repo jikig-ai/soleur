@@ -220,6 +220,40 @@ describe("proxyClientToOwner", () => {
     expect(client.closed?.code).toBe(WS_CLOSE_CODES.ROUTING_MIGRATED);
   });
 
+  test.each([1005, 1006, 1015, 999, 2000])(
+    "an owner leg that ends with an unsendable status code (%i, e.g. an owner-side terminate) closes the client with the retryable 4014",
+    async (code) => {
+      const client = new FakeWs();
+      const owner = new FakeWs();
+      await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: (() => owner) as never });
+      owner.emit("open");
+      owner.emit("message", JSON.stringify({ type: "proxy_ready" }));
+      owner.emit("close", code, Buffer.alloc(0));
+      expect(client.closed?.code).toBe(WS_CLOSE_CODES.ROUTING_UNAVAILABLE);
+    },
+  );
+
+  test("a close(code) that ws refuses to send terminates the peer instead of leaving it open", async () => {
+    // Real ws throws for a status code it cannot send; a swallowed throw used to strand the socket in CLOSING.
+    class ThrowingWs extends FakeWs {
+      terminated = false;
+      close(code: number, reason: string) {
+        if (code === 1006) throw new TypeError("First argument must be a valid error code number");
+        super.close(code, reason);
+      }
+      terminate() {
+        this.terminated = true;
+      }
+    }
+    const client = new FakeWs();
+    const owner = new ThrowingWs();
+    await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: (() => owner) as never });
+    owner.emit("open");
+    owner.emit("message", JSON.stringify({ type: "proxy_ready" }));
+    client.emit("close", 1006, Buffer.alloc(0)); // the browser dropped abnormally
+    expect(owner.terminated).toBe(true);
+  });
+
   test("owner sends a non-ready control frame first → tears down both sockets", async () => {
     const client = new FakeWs();
     const owner = new FakeWs();

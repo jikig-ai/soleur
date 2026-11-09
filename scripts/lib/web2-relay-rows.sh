@@ -39,7 +39,7 @@
 #      silently misses it, measured 2026-11-08).
 #      No row, a malformed newest row, or any other result refuses. A refused/denied/tls/timeout newest row means: fix
 #      it, then redeploy web-1 (which re-probes) before dispatching. Since #12288 (ADR-323) a peer whose allowlist lacks
-#      web-1's address resets web-1 BEFORE the handshake, so that case reads result=tls (RED reason=peer_tls), never denied;
+#      web-1's address resets web-1 BEFORE the handshake, so that case reads result=tls (RED reason=peer_tls), never denied once web-2 runs that image;
 #      the peer's createProxyServer.peer-deny Sentry events tell it apart from a certificate fault. The peer SQL filters on SYSLOG_IDENTIFIER = 'ci-deploy' and
 #      startsWith(message, 'relay_peer_probe peer=<ip> '), and selects the line from that same field.
 #      ACCEPTED RESIDUAL (structural, not fixable here: no SSH at serve time): web-1's probe is journaled at web-1's deploy

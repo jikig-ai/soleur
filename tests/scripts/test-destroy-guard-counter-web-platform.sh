@@ -2035,13 +2035,25 @@ t_relay_hello_indexed_forms_counted() { # T66h
   printf '{"resource_changes":[{"address":"x.moved","previous_address":"x.other","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
   got="$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')"
   [[ "$got" == "0" ]] || detail="${detail} previous_address=unrelated got=${got} want=0;"
+  # a key address that merely carries an UNRELATED previous_address (no-op) is still the routine merge reading
+  for a in "${RH_ADDRS[@]}"; do
+    printf '{"resource_changes":[{"address":"%s","previous_address":"x.other","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' "$a" > "$tmp"
+    got="$(jq -f "$FILTER" "$tmp" | jq -r '.relay_hello_key_changes')"
+    [[ "$got" == "0" ]] || detail="${detail} key-address+unrelated-previous_address=${a} got=${got} want=0;"
+  done
   # mutation (control green above): a filter that never reads previous_address must miss the moved-off-the-key case
   local mut; mut="$(mktemp)"
   sed '/^  relay_hello_key_changes: (/,/^  ),/ s/\.previous_address?/.previous_address_x?/g' "$FILTER" > "$mut"
   printf '{"resource_changes":[{"address":"x.moved","previous_address":"random_bytes.proxy_hello_hmac","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
   if cmp -s "$FILTER" "$mut"; then detail="${detail} previous_address mutation did not land;"
   elif [[ "$(jq -f "$mut" "$tmp" | jq -r '.relay_hello_key_changes')" != "0" ]]; then detail="${detail} previous_address mutant still counts the move;"; fi
-  rm -f "$tmp" "$mut"
+  # mutation 2: the clause counts ANY previous_address (drops the key-membership test) -> the unrelated-previous_address row must go red
+  local mut2; mut2="$(mktemp)"
+  sed '/^  relay_hello_key_changes: (/,/^  ),/ s/| IN(\.; relay_hello_key_addrs\[\]) \] | any)/| true ] | any)/g' "$FILTER" > "$mut2"
+  printf '{"resource_changes":[{"address":"random_bytes.proxy_hello_hmac","previous_address":"x.other","type":"x","change":{"actions":["no-op"],"before":{"id":"x"},"after":{"id":"x"}}}]}' > "$tmp"
+  if cmp -s "$FILTER" "$mut2"; then detail="${detail} previous_address membership mutation did not land;"
+  elif [[ "$(jq -f "$mut2" "$tmp" | jq -r '.relay_hello_key_changes')" != "1" ]]; then detail="${detail} previous_address membership mutant not counting an unrelated previous_address;"; fi
+  rm -f "$tmp" "$mut" "$mut2"
   if [[ -z "$detail" ]]; then
     _report "T66h indexed and module-prefixed forms of each hello-key address score like the bare address (create only at random_bytes)" ok
   else
