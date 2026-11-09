@@ -117,10 +117,11 @@ describe("runner registration census", () => {
   test("#12469: the cold factory publishes the registered read tools into a cell the warm path reads, and canUseTool's list takes the registrar's names only", () => {
     const cc = src("server/cc-dispatcher.ts");
     expect(cc).toMatch(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[[^\]]*getCcRegisteredReadTools\(userId,\s*conversationId\)/);
-    // The spread must be UNCONDITIONAL and in code: no ternary or comment between the list's `[` and the call can neuter it.
-    const spreadList = cc.match(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[([^\]]*getCcRegisteredReadTools\(userId,\s*conversationId\))/)?.[1] ?? "";
-    expect(spreadList.replace(/\/\/.*$/gm, "")).not.toMatch(/\?|\bfalse\b|&&|\|\|/);
-    expect(spreadList).toMatch(/\.\.\.getCcRegisteredReadTools\(userId,\s*conversationId\)\s*$/);
+    // The spread must be UNCONDITIONAL, in code, and its VALUE USED: the list's last element is exactly the bare spread, so no
+    // ternary, comment, `.filter(...)` or other chained member after the call can neuter it.
+    const list = (cc.match(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[([^\]]*)\]\s*\)/)?.[1] ?? "").replace(/\/\/.*$/gm, "");
+    expect(list).not.toMatch(/\?|\bfalse\b|&&|\|\|/);
+    expect(list).toMatch(/(?:^|,)\s*\.\.\.getCcRegisteredReadTools\(userId,\s*conversationId\)\s*,?\s*$/);
     expect(cc).toMatch(/platformToolNames:\s*\[[\s\S]{0,600}?\.\.\.readToolNames/);
     expect(cc).toMatch(/readToolNames\s*=\s*readRegistration\.toolNames/);
     expect(cc).toMatch(/_ccRegisteredReadTools\.set\(/);

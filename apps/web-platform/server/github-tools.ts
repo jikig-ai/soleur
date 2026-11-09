@@ -197,29 +197,37 @@ export function buildGithubPushBranchTool(opts: BuildGithubPushBranchToolOpts): 
 
 /** Fixed agent-visible text for a GitHub access fault (401/403). Names the real remedy and rules out Agent web access as the cause. */
 export const GITHUB_ACCESS_NEEDS_RECONNECT =
-  "GitHub access for this workspace needs reconnecting in Settings; this is not caused by Agent web access";
+  "GitHub access for this workspace needs reconnecting in Settings; this is not caused by Agent web access. " +
+  "Tell the user to reconnect GitHub there; if it persists, the GitHub App may lack permission for this read";
 /** Fixed text for GitHub rate limiting (429, or a 403 whose GitHub message names a rate limit): not a reconnect case. */
-export const GITHUB_RATE_LIMITED = "GitHub is rate limiting this workspace; retry shortly";
+export const GITHUB_RATE_LIMITED =
+  "GitHub is rate limiting this workspace; wait about a minute and try once more, otherwise tell the user it is rate limited. Do not retry in a loop";
 /** Fixed refusal when the workspace's connected repo or installation no longer matches the one the tools were built with. */
 export const GITHUB_REPO_CHANGED = "the connected repository changed; start a new conversation";
 /** Fixed refusal when the current repo/installation could not be confirmed right now (a read blip), which is not a repo switch. */
-export const GITHUB_REPO_UNVERIFIABLE = "could not confirm the connected repository right now; try again in a moment";
+export const GITHUB_REPO_UNVERIFIABLE =
+  "could not confirm the connected repository right now; try once more, and if it persists tell the user to check the repository connection in Settings";
 /** Fixed text for any fault that is not a GitHub API response (a token mint, a missing config value, a parse error): no detail. */
 export const GITHUB_READ_FAILED = "GitHub could not be reached for this read; try again in a moment";
 const GITHUB_REDIRECT_REFUSED = "GitHub redirected this request; the redirect was not followed";
+/** Fixed text for a 404/410: GitHub's own message is scrubbed, and "request failed: 404" is not actionable for the user. */
+export const GITHUB_NOT_FOUND = "not found; check the number, or the item may have been deleted";
 
 /** A sanitized tool fault handed to the registrar's mirror: the tool name, the error class name and the HTTP status ONLY. */
 export interface GithubReadFault {
   tool: string;
   errName?: string;
   status?: number;
+  /** Low-cardinality class name of the error a swallowed path caught (the revalidation read), so a Sentry event can tell causes apart. */
+  cause?: string;
 }
 
 /**
  * The cc-only hardening of the read tools. Present => the tools are built for an entitled Command Center session:
  * results are redacted per field (title/body), stripped of invisible format characters, capped per field and per response;
  * any 3xx fails closed; every call first re-confirms the connected repo/installation; faults are mirrored (class name and
- * status only); 401/403 and the PR/issue 404 get the fixed texts below. Absent => the legacy tools, byte-for-byte unchanged.
+ * status only); 401/403 and the PR 404 hint get the fixed texts below. Absent => the legacy tools: the same requests, texts and
+ * result shapes, except that a deleted author now reads as "ghost" instead of throwing (shared reader code).
  */
 export type GithubRevalidation = "current" | "changed" | "unverifiable";
 
@@ -243,7 +251,7 @@ export interface BuildGithubReadToolsOpts {
   hardening?: GithubReadHardening;
 }
 
-/** The cc builder's options: `hardening` is REQUIRED, so the six tools cannot be built (or registered) unhardened. */
+/** The cc builder's options: `hardening` is REQUIRED at the type level; `buildGithubReadTools` also refuses an unhardened call at runtime. */
 export interface BuildGithubReadHardenedOpts extends BuildGithubReadToolsOpts {
   hardening: GithubReadHardening;
 }
@@ -287,40 +295,56 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
   ): Promise<ToolTextResponse> => {
     if (!hardening) return wrapGithubRead(errorPrefix, fn);
     const refuse = (text: string): ToolTextResponse => ({ content: [{ type: "text", text }], isError: true });
+    // A throwing mirror must never turn a tool answer into a raw error.
+    const fault = (f: GithubReadFault): void => {
+      try {
+        hardening.onFault(f);
+      } catch {
+        // review: swallowed. The mirror is best-effort; the tool answer below is the product.
+      }
+    };
     let verdict: GithubRevalidation = "unverifiable";
+    let cause: string | undefined;
     try {
       const v = await hardening.revalidate();
       verdict = v === "current" || v === "changed" ? v : "unverifiable"; // fail closed: only an exact `current` proceeds
-    } catch {
+    } catch (err) {
+      // review: swallowed. A read error is `unverifiable`; the class name rides on the fault so Sentry can tell causes apart.
       verdict = "unverifiable";
+      cause = err instanceof Error ? err.name : "NonError";
     }
     if (verdict !== "current") {
-      hardening.onFault({ tool: toolName, errName: verdict === "changed" ? "RepoChanged" : "RevalidateUnverifiable" });
+      fault({ tool: toolName, errName: verdict === "changed" ? "RepoChanged" : "RevalidateUnverifiable", ...(cause ? { cause } : {}) });
       return refuse(`${errorPrefix}: ${verdict === "changed" ? GITHUB_REPO_CHANGED : GITHUB_REPO_UNVERIFIABLE}`);
     }
     try {
       const result = await fn();
-      if (result === undefined) throw new Error("reader returned no result");
+      if (result === undefined) throw Object.assign(new Error("reader returned no result"), { name: "ReaderReturnedNoResult" });
       return untrustedRowsResponse("github", hardenReadResult(result, { redact }));
     } catch (err) {
       const isApiError = err instanceof GitHubApiError;
       const status = isApiError ? err.statusCode : undefined;
       const message = err instanceof Error ? err.message : "";
-      // A revoked, uninstalled or suspended installation fails inside the token mint, which throws a plain Error (no status).
-      if (!isApiError && /installation token request failed/i.test(message)) {
-        hardening.onFault(readFault(err, toolName));
-        return refuse(GITHUB_ACCESS_NEEDS_RECONNECT);
+      // The token mint throws a plain Error carrying GitHub's status in its text. A revoked, uninstalled or suspended installation
+      // answers 401/403/404 (reconnect); a transient 5xx is not a reconnect case, and a mint with no status is unknown.
+      const mint = !isApiError ? /installation token request failed:?\s*(\d{3})?/i.exec(message) : null;
+      if (mint) {
+        const mintStatus = mint[1] ? Number(mint[1]) : undefined;
+        fault({ ...readFault(err, toolName), ...(mintStatus ? { status: mintStatus } : {}) });
+        if (mintStatus === 401 || mintStatus === 403 || mintStatus === 404) return refuse(GITHUB_ACCESS_NEEDS_RECONNECT);
+        if (mintStatus === 429) return refuse(`${errorPrefix}: ${GITHUB_RATE_LIMITED}`);
+        return refuse(`${errorPrefix}: ${GITHUB_READ_FAILED}`);
       }
       if (status === 429 || (status === 403 && /rate limit|abuse detection/i.test(message))) {
-        hardening.onFault(readFault(err, toolName));
+        fault(readFault(err, toolName));
         return refuse(`${errorPrefix}: ${GITHUB_RATE_LIMITED}`);
       }
       if (status === 401 || status === 403) {
-        hardening.onFault(readFault(err, toolName));
+        fault(readFault(err, toolName));
         return refuse(GITHUB_ACCESS_NEEDS_RECONNECT);
       }
       if (typeof status === "number" && status >= 300 && status < 400) {
-        hardening.onFault(readFault(err, toolName));
+        fault(readFault(err, toolName));
         return refuse(`${errorPrefix}: ${GITHUB_REDIRECT_REFUSED}`);
       }
       if (status === 404 && on404) {
@@ -333,7 +357,8 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
         }
         if (hint) return refuse(hint);
       }
-      if (!isPlainClientOutcome(status)) hardening.onFault(readFault(err, toolName));
+      if (!isPlainClientOutcome(status)) fault(readFault(err, toolName));
+      if (status === 404 || status === 410) return refuse(`${errorPrefix}: ${GITHUB_NOT_FOUND}`);
       // Only a GitHub API response is forwarded to the model. Anything else (a mint failure, a missing config value, a parse
       // error) can name server configuration, so it gets a fixed text.
       return refuse(isApiError ? `${errorPrefix}: ${message}` : `${errorPrefix}: ${GITHUB_READ_FAILED}`);
@@ -345,7 +370,8 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
     "List pull requests on the connected repository, newest-updated first. Returns metadata only " +
       "(number, title, state, author login, label names, updated_at, html_url, draft, head_ref) and has_more; " +
       "use github_read_pr for one PR's details (closed includes merged; github_read_pr tells them apart). state is open (default), " +
-      "closed or all. If has_more is true, call again with per_page 50; more than 50 is not reachable.",
+      "closed or all. If has_more is true, call again with per_page 50; more than 50 is not reachable. If truncated is true the " +
+      "reply was cut to fit a size budget: call again with a smaller per_page instead.",
     {
       state: z.enum(["open", "closed", "all"]).default("open").describe("Which pull requests to list: open (default), closed or all"),
       per_page: z.number().int().min(1).max(50).default(10).describe("Number of pull requests to return (max 50)"),
@@ -374,7 +400,7 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
   const readIssueTool = tool(
     "github_read_issue",
     "Read a single issue from the connected repository by number. " +
-      "Returns number, title, state, body (truncated at 10 KB), labels, " +
+      `Returns number, title, state, body (${hardening ? "shortened" : "truncated at 10 KB"}), labels, ` +
       "assignees, milestone title, timestamps, author login, and html_url.",
     {
       issue_number: z.number().int().positive().describe("The issue number to read"),
@@ -389,7 +415,7 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
   const readIssueCommentsTool = tool(
     "github_read_issue_comments",
     "Read conversation comments on an issue. Returns id, author login, " +
-      "body (truncated at 4 KB), created_at, and html_url. Results are " +
+      `body (${hardening ? "shortened" : "truncated at 4 KB"}), created_at, and html_url. Results are ` +
       "tagged kind=\"conversation\" for symmetry with github_list_pr_comments.",
     {
       issue_number: z.number().int().positive().describe("The issue number to read comments from"),
@@ -450,6 +476,8 @@ function makeReadTools(opts: BuildGithubReadToolsOpts) {
  * no hardening.
  */
 export function buildGithubReadTools(opts: BuildGithubReadHardenedOpts): BuildGithubToolsResult {
+  // The type already requires it; this is the runtime half, for an `as` cast or a JS caller.
+  if (!opts.hardening) throw new Error("buildGithubReadTools: hardening is required");
   const t = makeReadTools(opts);
   const tools = [t.listPrs, t.readPr, t.readIssue, t.readIssueComments, t.listPrComments, t.readCi];
   return { tools, toolNames: GITHUB_READ_TOOL_NAMES.map((n) => `mcp__soleur_platform__${n}`) };

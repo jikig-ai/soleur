@@ -44,6 +44,23 @@ vi.mock("../server/observability", () => ({
     mockReportSilentFallback(...args),
 }));
 
+// Record what the github-api child logger is asked to write, so a scrubbed-mode test can prove no sink carries a path.
+const { logCalls } = vi.hoisted(() => ({ logCalls: [] as Array<{ level: string; args: unknown[] }> }));
+vi.mock("../server/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../server/logger")>();
+  return {
+    ...actual,
+    createChildLogger: (context: string) => {
+      const real = actual.createChildLogger(context);
+      if (context !== "github-api") return real;
+      const rec = (level: string) => (...args: unknown[]) => {
+        logCalls.push({ level, args });
+      };
+      return { ...real, warn: rec("warn"), error: rec("error"), info: rec("info"), debug: rec("debug") };
+    },
+  };
+});
+
 // Import AFTER env and fetch mocking
 import {
   githubApiDelete,
@@ -126,7 +143,7 @@ describe("github-api fetch wrapper", () => {
       expect(mockFetch).toHaveBeenCalledTimes(2); // token mint + exactly one GET
     });
 
-    test("scrubbed mode (redirect:'manual'): a 403 mirrors status only, never the path (a private repo's name) or GitHub's text", async () => {
+    test("scrubbed mode (redirect:'manual'): a 403 reaches NO sink with the path (a private repo's name) or GitHub's text, and sends no undebounced Sentry event", async () => {
       const installationId = uniqueInstallationId();
       mockTokenResponse();
       mockFetch.mockResolvedValueOnce({
@@ -135,12 +152,74 @@ describe("github-api fetch wrapper", () => {
         text: async () => JSON.stringify({ message: "Resource not accessible by integration for secret-org/secret-repo" }),
       });
       mockReportSilentFallback.mockClear();
+      logCalls.length = 0;
       const err = (await githubApiGet(installationId, "/repos/secret-org/secret-repo", { redirect: "manual" }).catch((e) => e)) as Error;
       expect(err.message).not.toMatch(/secret-org|secret-repo|Resource not accessible/);
-      expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
-      const dump = JSON.stringify(mockReportSilentFallback.mock.calls);
-      expect(dump).not.toMatch(/secret-org|secret-repo|Resource not accessible/);
-      expect(mockReportSilentFallback.mock.calls[0][1].extra).toEqual({ status: 403 });
+      // The caller's debounced onFault is the Sentry signal; this site has no user/tool identity, so it must not mirror per call.
+      expect(mockReportSilentFallback).not.toHaveBeenCalled();
+      expect(JSON.stringify(logCalls)).not.toMatch(/secret-org|secret-repo|Resource not accessible/);
+      expect(logCalls).toEqual([{ level: "warn", args: [{ status: 403, limited: false }, "GitHub API 403 (scrubbed)"] }]);
+    });
+
+    test.each([
+      [404, "not found"],
+      [422, "unprocessable"],
+      [302, "redirect"],
+    ])("scrubbed mode: a %i reaches NO sink and no message with the path", async (status, body) => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({ ok: false, status, text: async () => `${body} for secret-org/secret-repo` });
+      mockReportSilentFallback.mockClear();
+      logCalls.length = 0;
+      const err = (await githubApiGet(installationId, "/repos/secret-org/secret-repo", { redirect: "manual" }).catch((e) => e)) as InstanceType<typeof GitHubApiError>;
+      expect(err.statusCode).toBe(status);
+      expect(err.message).not.toMatch(/secret-org|secret-repo/);
+      expect(JSON.stringify(mockReportSilentFallback.mock.calls)).not.toMatch(/secret-org|secret-repo/);
+      expect(JSON.stringify(logCalls)).not.toMatch(/secret-org|secret-repo/);
+      expect(logCalls).toHaveLength(1);
+    });
+
+    test("scrubbed mode: a 403 whose body stream aborts is still an access fault (403), never a plain transport error", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => {
+          throw new TypeError("terminated");
+        },
+      });
+      const err = (await githubApiGet(installationId, "/repos/a/b", { redirect: "manual" }).catch((e) => e)) as InstanceType<typeof GitHubApiError>;
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect(err.statusCode).toBe(403);
+      expect(err.message).toMatch(/cannot access this resource/);
+    });
+
+    test("scrubbed mode: retry breadcrumbs carry no url (it embeds owner/repo); the default mode still logs it", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout"] });
+      try {
+        const scrubbedId = uniqueInstallationId();
+        mockTokenResponse();
+        mockFetch.mockResolvedValueOnce({ ok: false, status: 502, text: async () => "" });
+        mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
+        logCalls.length = 0;
+        const p = githubApiGet(scrubbedId, "/repos/secret-org/secret-repo", { redirect: "manual" });
+        await vi.advanceTimersByTimeAsync(60_000);
+        await p;
+        expect(logCalls.some((c) => c.level === "warn")).toBe(true);
+        expect(JSON.stringify(logCalls)).not.toMatch(/secret-org|secret-repo|api\.github\.com/);
+
+        mockTokenResponse();
+        mockFetch.mockResolvedValueOnce({ ok: false, status: 502, text: async () => "" });
+        mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) });
+        logCalls.length = 0;
+        const q = githubApiGet(uniqueInstallationId(), "/repos/alice/my-repo");
+        await vi.advanceTimersByTimeAsync(60_000);
+        await q;
+        expect(JSON.stringify(logCalls)).toMatch(/my-repo/);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     test("scrubbed mode keeps ONE fact: a secondary-rate-limit 403 is still distinguishable from an access fault", async () => {

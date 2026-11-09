@@ -212,7 +212,7 @@ import { resolveSandboxUnixDeny } from "./resolve-sandbox-unix-deny";
 import { sessionHasEgress } from "./agent-env";
 import { sandboxPostureOf, usesUnixDenyArtifact } from "./agent-sandbox-seccomp";
 import { parseConnectedRepo } from "./github-repo-parse";
-import { createProtectedBranchResolver } from "./resolve-protected-branches";
+import { createProtectedBranchResolver, RESOLVE_TIMEOUT_MS } from "./resolve-protected-branches";
 import { emitDebugEvent } from "./debug-event";
 // feat-bash-autonomous-default-on — first-run consent soft-gate inputs:
 // the ack timestamp (fail-closed null = HOLD) + workspace-ownership (fail-closed
@@ -2833,24 +2833,42 @@ export const realSdkQueryFactory: QueryFactory = async (
         installationId: effectiveInstallationId,
         webEgressEntitled,
         // Per-call revalidation: the tools are closed over this Query's repo and installation, so a mid-conversation repo switch
-        // must fail closed. It answers THREE things: `current`, `changed` (a real switch) and `unverifiable` (a read blip: nothing
-        // was confirmed, which is not a switch). It compares repository IDENTITY and the stored installation id only, never
-        // visibility (a named residual). Concurrent tool calls of one turn share ONE in-flight check, and its two reads run in
-        // series so the second hits the tenant client the first just minted (two parallel cold callers would each mint a JWT).
+        // must fail closed. It answers THREE things: `current`, `changed` (a real switch or a disconnect) and `unverifiable` (a read
+        // blip: nothing was confirmed, which is not a switch). It compares repository IDENTITY and the stored installation id only,
+        // never visibility (a named residual). Concurrent tool calls of one turn share ONE in-flight check, whose verdict can
+        // therefore be up to one check old; its two reads run in series so the second hits the tenant client the first just minted
+        // (a cold cache already coalesces, but on a stale entry two parallel callers would each mint a JWT). The whole check is
+        // bounded: a hung read settles as `unverifiable`, so the shared slot always clears. Named residual: `resolveInstallationId`
+        // returns null both for a read error and for a workspace with no installation, so that case reads as `unverifiable`.
         revalidate: (() => {
-          let inflight: Promise<"current" | "changed" | "unverifiable"> | null = null;
-          const check = async (): Promise<"current" | "changed" | "unverifiable"> => {
+          type Verdict = "current" | "changed" | "unverifiable";
+          let inflight: Promise<Verdict> | null = null;
+          const check = async (): Promise<Verdict> => {
             const current = await readCurrentRepoUrlResult(args.userId, activeWorkspaceId);
             if (current.degraded) return "unverifiable";
+            // Identity first: a disconnected or switched repository is a real change whatever the installation read says.
+            const parsed = parseConnectedRepo(current.url);
+            if (parsed?.owner !== connectedOwner || parsed?.repo !== connectedRepo) return "changed";
             const currentInstallation = await resolveInstallationId(args.userId, activeWorkspaceId);
             if (currentInstallation === null) return "unverifiable";
-            const parsed = parseConnectedRepo(current.url);
-            return parsed?.owner === connectedOwner && parsed?.repo === connectedRepo && currentInstallation === installationId
-              ? "current"
-              : "changed";
+            return currentInstallation === installationId ? "current" : "changed";
           };
+          const bounded = (): Promise<Verdict> =>
+            new Promise<Verdict>((resolve, reject) => {
+              const timer = setTimeout(() => resolve("unverifiable"), RESOLVE_TIMEOUT_MS);
+              check().then(
+                (v) => {
+                  clearTimeout(timer);
+                  resolve(v);
+                },
+                (e) => {
+                  clearTimeout(timer);
+                  reject(e);
+                },
+              );
+            });
           return () => {
-            inflight ??= check().finally(() => {
+            inflight ??= bounded().finally(() => {
               inflight = null;
             });
             return inflight;
@@ -2866,7 +2884,14 @@ export const realSdkQueryFactory: QueryFactory = async (
       readToolNames = [];
       // A result (not undefined) so the prompt still gets a truthful "tools unavailable" line instead of the bare baseline claim
       // that `gh` is authenticated; the outcome emitter stays silent for this reason (the error event below is its signal).
-      readRegistration = { registered: false, reason: "registration-failed", tools: [], toolNames: [], repoPrivate: null };
+      // A persona the registrar never admits is simply absent, not a platform fault.
+      readRegistration = {
+        registered: false,
+        reason: args.persona === "command_center" ? "registration-failed" : "support-persona",
+        tools: [],
+        toolNames: [],
+        repoPrivate: null,
+      };
       reportSilentFallback(null, {
         feature: "cc-dispatcher",
         op: "cc-github-read-registration-failed",

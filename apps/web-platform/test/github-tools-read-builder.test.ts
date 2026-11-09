@@ -48,12 +48,14 @@ vi.mock("@/server/push-branch", () => ({ pushBranch: vi.fn() }));
 
 import {
   buildGithubReadTools,
+  buildGithubTools,
   GITHUB_ACCESS_NEEDS_RECONNECT,
   GITHUB_RATE_LIMITED,
   GITHUB_READ_TOOL_NAMES,
   GITHUB_REPO_CHANGED,
   GITHUB_REPO_UNVERIFIABLE,
   GITHUB_READ_FAILED,
+  GITHUB_NOT_FOUND,
   type GithubRevalidation,
   type GithubReadFault,
 } from "@/server/github-tools";
@@ -76,18 +78,25 @@ const SIX = [
 function make(over: { revalidate?: () => Promise<GithubRevalidation>; redact?: boolean; owner?: string; repo?: string; hardened?: boolean } = {}) {
   const faults: GithubReadFault[] = [];
   const revalidate = over.revalidate ?? (async () => "current" as const);
-  // `hardening` is REQUIRED by the type (the cc builder cannot be built unhardened). The legacy composition is exercised through
-  // the cast below only to prove the shared code path stays byte-identical when it is absent; production reaches that path
-  // through buildGithubTools.
-  const opts = {
-    installationId: 7,
-    owner: over.owner ?? "o",
-    repo: over.repo ?? "r",
-    ...(over.hardened === false
-      ? {}
-      : { hardening: { onFault: (f: GithubReadFault) => faults.push(f), revalidate, redact: over.redact } }),
-  };
-  const built = buildGithubReadTools(opts as unknown as Parameters<typeof buildGithubReadTools>[0]);
+  // `hardening` is REQUIRED by the type AND at runtime (the cc builder cannot be built unhardened). The legacy composition is
+  // reached the way production reaches it: through buildGithubTools, which has the five legacy reads and no list tool.
+  const built =
+    over.hardened === false
+      ? buildGithubTools({
+          installationId: 7,
+          owner: over.owner ?? "o",
+          repo: over.repo ?? "r",
+          defaultBranch: "main",
+          workspacePath: "/tmp/ws",
+          workflowRateLimiter: {} as unknown as Parameters<typeof buildGithubTools>[0]["workflowRateLimiter"],
+          grants: {} as unknown as Parameters<typeof buildGithubTools>[0]["grants"],
+        })
+      : buildGithubReadTools({
+          installationId: 7,
+          owner: over.owner ?? "o",
+          repo: over.repo ?? "r",
+          hardening: { onFault: (f: GithubReadFault) => faults.push(f), revalidate, redact: over.redact },
+        });
   const byName = (n: string) => {
     const t = (built.tools as unknown as ToolStub[]).find((x) => x.name === n);
     if (!t) throw new Error(`${n} not built`);
@@ -103,7 +112,13 @@ beforeEach(() => {
   for (const f of Object.values(r)) f.mockReset();
 });
 
-describe("the cc builder cannot be built unhardened (type level, checked by tsc)", () => {
+describe("the cc builder cannot be built unhardened (type level, checked by tsc; runtime throw)", () => {
+  it("an `as`-cast call without hardening throws instead of building unhardened tools", () => {
+    expect(() => buildGithubReadTools({ installationId: 1, owner: "o", repo: "r" } as unknown as Parameters<typeof buildGithubReadTools>[0])).toThrow(
+      /hardening is required/,
+    );
+  });
+
   it("`hardening` is REQUIRED on buildGithubReadTools", () => {
     // @ts-expect-error hardening is required: tsc fails this directive (unused) if the option ever becomes optional again.
     const build = () => buildGithubReadTools({ installationId: 1, owner: "o", repo: "r" });
@@ -307,7 +322,8 @@ describe("per-call revalidation", () => {
     expect(last).toEqual({ redirect: "manual" });
   });
 
-  it.each(ALL)("%s: the unhardened composition passes NO fetch option", async (name, args, reader) => {
+  // The legacy composition has no list tool (it was added for the cc build only), so its five reads are the population here.
+  it.each(ALL.filter(([name]) => name !== "github_list_pull_requests"))("%s: the unhardened composition passes NO fetch option", async (name, args, reader) => {
     reader.mockResolvedValue(name === "github_list_pull_requests" ? { summary: "0", has_more: false, pull_requests: [] } : []);
     await make({ hardened: false }).byName(name).handler(args);
     expect(reader.mock.calls[0].some((a) => a !== null && typeof a === "object" && "redirect" in (a as object))).toBe(false);
@@ -357,7 +373,7 @@ describe("faults: fixed texts, and a mirror that carries class name and status o
     expect(faults).toHaveLength(1);
   });
 
-  it("a 429 and a rate-limit 403 map to the retry-shortly text, not to a reconnect case", async () => {
+  it("a 429 and a rate-limit 403 map to the bounded-retry text (one more try, never a loop), not to a reconnect case", async () => {
     const { byName, faults } = make();
     r.readIssue.mockRejectedValueOnce(err(429));
     expect(text(await byName("github_read_issue").handler({ issue_number: 1 }))).toContain(GITHUB_RATE_LIMITED);
@@ -366,6 +382,8 @@ describe("faults: fixed texts, and a mirror that carries class name and status o
     expect(second).toContain(GITHUB_RATE_LIMITED);
     expect(second).not.toContain(GITHUB_ACCESS_NEEDS_RECONNECT);
     expect(faults).toHaveLength(2);
+    expect(GITHUB_RATE_LIMITED).toMatch(/Do not retry in a loop/);
+    expect(GITHUB_RATE_LIMITED).not.toMatch(/retry shortly/);
   });
 
   it("a 3xx fails closed with a fixed text and mirrors", async () => {
@@ -394,11 +412,28 @@ describe("faults: fixed texts, and a mirror that carries class name and status o
     expect(Object.keys(faults[0]).sort()).toEqual(["errName", "status", "tool"]);
   });
 
-  it("read_pr on an issue number answers with the read_issue hint", async () => {
+  it("read_pr on an issue number answers with the read_issue hint, and the probe is hardened too (redirect refused, installation token never followed)", async () => {
     r.readPullRequest.mockRejectedValueOnce(err(404));
     r.readIssue.mockResolvedValueOnce({ number: 9 });
     const a = await make().byName("github_read_pr").handler({ pull_number: 9 });
     expect(text(a)).toBe("#9 is an issue; use github_read_issue");
+    expect(r.readIssue).toHaveBeenCalledTimes(1);
+    expect(r.readIssue.mock.calls[0].at(-1)).toEqual({ redirect: "manual" });
+  });
+
+  it("the 404 probe fires only on a 404 of the PR read itself: a 500 or a 403 never triggers the second request", async () => {
+    for (const status of [500, 403, 422]) {
+      r.readPullRequest.mockRejectedValueOnce(err(status));
+      await make().byName("github_read_pr").handler({ pull_number: 9 });
+    }
+    expect(r.readIssue).not.toHaveBeenCalled();
+  });
+
+  it.each([404, 410])("a %d with no hint reads as the fixed not-found phrase, not 'request failed: %d'", async (status) => {
+    r.readIssue.mockRejectedValue(err(status));
+    const resp = await make().byName("github_read_issue").handler({ issue_number: 1 });
+    expect(text(resp)).toBe(`Error reading issue: ${GITHUB_NOT_FOUND}`);
+    expect(text(resp)).not.toMatch(/secret-org|secret-repo|request failed/);
   });
 
   it("read_issue has NO pull-request hint: GitHub serves a PR through /issues/N with a 200, so an issue 404 never means 'it is a PR' (and costs no second request)", async () => {
@@ -415,6 +450,102 @@ describe("faults: fixed texts, and a mirror that carries class name and status o
     const resp = await byName("github_read_issue").handler({ issue_number: 1 });
     expect(text(resp)).toBe(GITHUB_ACCESS_NEEDS_RECONNECT);
     expect(faults).toHaveLength(1);
+  });
+
+  it.each([
+    [401, "reconnect"],
+    [403, "reconnect"],
+    [404, "reconnect"],
+    [429, "rate"],
+    [500, "failed"],
+    [502, "failed"],
+    [503, "failed"],
+    [undefined, "failed"],
+  ])("the token mint answering %s maps to %s: only a revoked/suspended installation says reconnect, a GitHub outage never does", async (mintStatus, expected) => {
+    r.readIssue.mockRejectedValue(new Error(`GitHub installation token request failed${mintStatus ? `: ${mintStatus}` : ""}`));
+    const { byName, faults } = make();
+    const resp = await byName("github_read_issue").handler({ issue_number: 1 });
+    const out = text(resp);
+    if (expected === "reconnect") expect(out).toBe(GITHUB_ACCESS_NEEDS_RECONNECT);
+    if (expected === "rate") expect(out).toBe(`Error reading issue: ${GITHUB_RATE_LIMITED}`);
+    if (expected === "failed") {
+      expect(out).toBe(`Error reading issue: ${GITHUB_READ_FAILED}`);
+      expect(out).not.toContain(GITHUB_ACCESS_NEEDS_RECONNECT);
+    }
+    expect(faults).toHaveLength(1);
+    expect(faults[0].errName).toBe("Error");
+    if (mintStatus) expect(faults[0].status).toBe(mintStatus);
+  });
+
+  it("plain-Error causes carry distinct class names, so Sentry and the debounce can tell them apart", async () => {
+    r.readIssue.mockResolvedValue(undefined);
+    const { byName, faults } = make();
+    const resp = await byName("github_read_issue").handler({ issue_number: 1 });
+    expect(text(resp)).toBe(`Error reading issue: ${GITHUB_READ_FAILED}`);
+    expect(faults).toEqual([{ tool: "github_read_issue", errName: "ReaderReturnedNoResult" }]);
+  });
+
+  it("a throwing fault mirror never turns a tool answer into a raw error", async () => {
+    r.readIssue.mockRejectedValue(err(500));
+    const built = buildGithubReadTools({
+      installationId: 7,
+      owner: "o",
+      repo: "r",
+      hardening: {
+        onFault: () => {
+          throw new Error("sentry is down");
+        },
+        revalidate: async () => "current",
+      },
+    });
+    const tool = (built.tools as unknown as ToolStub[]).find((t) => t.name === "github_read_issue") as ToolStub;
+    const resp = await tool.handler({ issue_number: 1 });
+    expect(resp.isError).toBe(true);
+    expect(text(resp)).toContain("Error reading issue");
+    // ...including on the refusal path, where the mirror runs before any reader.
+    const refused = buildGithubReadTools({
+      installationId: 7,
+      owner: "o",
+      repo: "r",
+      hardening: {
+        onFault: () => {
+          throw new Error("sentry is down");
+        },
+        revalidate: async () => "changed",
+      },
+    });
+    const t2 = (refused.tools as unknown as ToolStub[]).find((t) => t.name === "github_read_issue") as ToolStub;
+    expect(text(await t2.handler({ issue_number: 1 }))).toContain(GITHUB_REPO_CHANGED);
+  });
+
+  it("a revalidation that THROWS is unverifiable, and the fault names the class that was thrown (cause), not the message", async () => {
+    const { byName, faults } = make({
+      revalidate: async () => {
+        throw new TypeError("secret-org leaked in a message");
+      },
+    });
+    const resp = await byName("github_read_issue").handler({ issue_number: 1 });
+    expect(text(resp)).toContain(GITHUB_REPO_UNVERIFIABLE);
+    expect(faults).toEqual([{ tool: "github_read_issue", errName: "RevalidateUnverifiable", cause: "TypeError" }]);
+    expect(JSON.stringify(faults)).not.toContain("secret-org");
+    expect(r.readIssue).not.toHaveBeenCalled();
+  });
+
+  it("the unverifiable text tells the model what to do next (one more try, then the user checks the connection in Settings)", () => {
+    expect(GITHUB_REPO_UNVERIFIABLE).toMatch(/try once more/);
+    expect(GITHUB_REPO_UNVERIFIABLE).toMatch(/check the repository connection in Settings/);
+    expect(GITHUB_ACCESS_NEEDS_RECONNECT).toMatch(/GitHub App may lack permission/);
+  });
+
+  it("descriptions: hardened tools state no byte limits they cannot keep and point a truncated list at a smaller per_page; the legacy ones keep their limits", () => {
+    const hardened = make().built.tools as unknown as Array<{ name: string; description: string }>;
+    const legacy = make({ hardened: false }).built.tools as unknown as Array<{ name: string; description: string }>;
+    const d = (list: typeof hardened, n: string) => list.find((t) => t.name === n)?.description ?? "";
+    expect(d(hardened, "github_read_issue")).not.toMatch(/10 KB/);
+    expect(d(hardened, "github_read_issue_comments")).not.toMatch(/4 KB/);
+    expect(d(legacy, "github_read_issue")).toMatch(/truncated at 10 KB/);
+    expect(d(legacy, "github_read_issue_comments")).toMatch(/truncated at 4 KB/);
+    expect(d(hardened, "github_list_pull_requests")).toMatch(/If truncated is true.*smaller per_page/);
   });
 
   it.each([

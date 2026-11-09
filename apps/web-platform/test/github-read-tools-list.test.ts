@@ -163,6 +163,8 @@ describe("listPullRequests result shape", () => {
   it("a non-array 200 is a malformed answer and THROWS: it must never read as '0 pull requests'", async () => {
     h.githubApiGet.mockResolvedValue({ message: "weird" });
     await expect(listPullRequests(1, "o", "r", { state: "all" })).rejects.toThrow(/unexpected shape/);
+    // A distinct class name, so the fault mirror can tell this cause from every other plain Error.
+    await expect(listPullRequests(1, "o", "r", { state: "all" })).rejects.toMatchObject({ name: "UnexpectedShape" });
     h.githubApiGet.mockResolvedValue(null);
     await expect(listPullRequests(1, "o", "r")).rejects.toThrow(/unexpected shape/);
   });
@@ -170,7 +172,7 @@ describe("listPullRequests result shape", () => {
   it("a deleted author (user: null) and a missing head do not crash", async () => {
     h.githubApiGet.mockResolvedValue([row(1, { user: null, head: null, labels: null })]);
     const out = await listPullRequests(1, "o", "r");
-    expect(out.pull_requests[0].user).toBe("");
+    expect(out.pull_requests[0].user).toBe("ghost"); // the same name narrowIssue/narrowComment give a deleted account
     expect(out.pull_requests[0].head_ref).toBe("");
     expect(out.pull_requests[0].labels).toEqual([]);
   });

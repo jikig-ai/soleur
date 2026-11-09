@@ -383,6 +383,18 @@ describe("listPullRequestComments", () => {
     expect(result[0].body).toBe("Convo still works");
   });
 
+  test("HARDENED (redirect:'manual'): either leg failing is a fault, never a partial list that reads as 'no such comments'", async () => {
+    const okLeg = {
+      body: [{ id: 20, user: { login: "author" }, body: "x", created_at: "2026-01-04T00:00:00Z", html_url: "https://github.com/o/r/pull/100#issuecomment-20" }],
+    };
+    // review leg fails
+    mockFetchSequence([{ body: { message: "Forbidden" }, status: 403 }, okLeg]);
+    await expect(listPullRequestComments(12345, "o", "r", 100, undefined, { redirect: "manual" })).rejects.toThrow(/cannot access this resource/);
+    // conversation leg fails
+    mockFetchSequence([okLeg, { body: { message: "Forbidden" }, status: 403 }]);
+    await expect(listPullRequestComments(12345, "o", "r", 100, undefined, { redirect: "manual" })).rejects.toThrow(/cannot access this resource/);
+  });
+
   test("throws when BOTH endpoints fail (no silent empty-array)", async () => {
     // Both endpoints 503 — caller needs to know the agent cannot answer about
     // PR comments, rather than getting an empty list it might interpret as

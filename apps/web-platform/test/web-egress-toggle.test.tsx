@@ -217,7 +217,14 @@ describe("gh disclosure: the Scope Grants page carries the identical string (#12
     const page = readFileSync(resolve(__dirname, "../app/(dashboard)/dashboard/settings/scope-grants/page.tsx"), "utf8");
     // JSX comments and string-literal decoys cannot satisfy this: it needs the import AND the expression container.
     expect(page).toMatch(/^import \{ GH_DISCLOSURE \} from "@\/lib\/web-egress-disclosure";$/m);
-    expect(page.replace(/\{\/\*[\s\S]*?\*\/\}/g, "")).toMatch(/\{GH_DISCLOSURE\}/);
+    // Strip every comment form (JSX `{/* */}`, block, line) and every double-quoted string, so the bare expression container must
+    // survive in code: `{"" /* {GH_DISCLOSURE} */}` and `{"{GH_DISCLOSURE}"}` both lose it.
+    const code = page
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|[^:])\/\/.*$/gm, "$1")
+      .replace(/"[^"\n]*"/g, '""');
+    expect(code).toMatch(/\{GH_DISCLOSURE\}/);
     // and the page no longer carries its own copy of the sentence
     expect(norm(page.replace(/&apos;/g, "'"))).not.toContain(norm(GH_DISCLOSURE));
   });

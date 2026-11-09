@@ -83,7 +83,7 @@ function isListShape(value: unknown): value is ListShape {
 /**
  * Harden one tool response: strip + redact once, then cap per field, then hold the JSON length under `RESPONSE_BUDGET_CHARS` by
  * halving the body cap (down to 64 characters) and, as the last resort, dropping trailing rows. The list tool keeps its own shape
- * (`summary`, `has_more` rewritten to say rows were dropped, plus `truncated`/`note` beside them); a bare array is wrapped as
+ * (`summary` says how many rows were kept, `has_more` stays as GitHub reported, plus `truncated`/`note` beside them); a bare array is wrapped as
  * `{ truncated, note, items }`. The result stringifies to at most the budget plus a small marker.
  */
 export function hardenReadResult(value: unknown, opts: { redact: boolean }): unknown {
@@ -101,21 +101,21 @@ export function hardenReadResult(value: unknown, opts: { redact: boolean }): unk
   if (rows === null || rows.length === 0) return out;
   const rebuild = (keep: number): unknown => {
     const kept = rows.slice(0, keep);
+    const dropped = kept.length < rows.length;
+    const note = dropped
+      ? `response exceeded the size budget; showing ${kept.length} of ${rows.length} items. Call again with a smaller per_page.`
+      : undefined;
     if (isListShape(out)) {
+      // `has_more` stays what GitHub reported (it answers "are there more PRs on GitHub"); `truncated` answers "did we cut rows".
       return {
         ...out,
-        summary: `${kept.length} of ${rows.length} pull requests shown (response size budget)`,
-        has_more: true,
-        truncated: true,
-        note: `response exceeded the size budget; showing ${kept.length} of ${rows.length} items. Ask for fewer items (a smaller per_page).`,
+        ...(dropped ? { summary: `${out.summary ?? ""}; ${kept.length} of ${rows.length} shown (response size budget)` } : {}),
+        truncated: dropped,
+        ...(note ? { note } : {}),
         pull_requests: kept,
       };
     }
-    return {
-      truncated: true,
-      note: `response exceeded the size budget; showing ${kept.length} of ${rows.length} items. Ask for fewer items (a smaller per_page).`,
-      items: kept,
-    };
+    return { truncated: dropped, ...(note ? { note } : {}), items: kept };
   };
   let keep = rows.length;
   let trimmed = rebuild(keep);

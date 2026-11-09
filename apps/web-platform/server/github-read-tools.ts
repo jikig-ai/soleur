@@ -282,6 +282,13 @@ export async function listPullRequestComments(
     throw reviewResult.reason ?? convoResult.reason;
   }
 
+  // Hardened (cc) callers get no partial answer: a list that silently lacks one kind reads as "no such comments", and the partial
+  // path below logs owner/repo, which the scrubbed mode keeps off every sink. Either leg failing is a fault for them.
+  if (fetchOpts?.redirect === "manual") {
+    const failed = reviewResult.status === "rejected" ? reviewResult : convoResult.status === "rejected" ? convoResult : null;
+    if (failed) throw failed.reason;
+  }
+
   const review = reviewResult.status === "fulfilled"
     ? reviewResult.value.map((c) => narrowComment(c, "review"))
     : [];
@@ -391,7 +398,9 @@ export async function listPullRequests(
   });
   const raw = await apiGet<GhPullListItem[]>(installationId, `/repos/${owner}/${repo}/pulls?${params.toString()}`, fetchOpts);
   // A non-array 200 is a malformed answer, NOT an empty list: reporting "0 pull requests" would be acted on as fact.
-  if (!Array.isArray(raw)) throw new Error("listPullRequests: GitHub answered with an unexpected shape");
+  if (!Array.isArray(raw)) {
+    throw Object.assign(new Error("listPullRequests: GitHub answered with an unexpected shape"), { name: "UnexpectedShape" });
+  }
   const rows = raw;
   const hasMore = rows.length > perPage;
   const pull_requests = rows.slice(0, perPage).map(
@@ -399,7 +408,7 @@ export async function listPullRequests(
       number: r.number,
       title: capChars(String(r.title ?? ""), LIST_TITLE_CAP),
       state: r.state,
-      user: capChars(r.user?.login ?? "", LIST_NAME_CAP),
+      user: capChars(r.user?.login ?? GHOST_LOGIN, LIST_NAME_CAP),
       labels: (r.labels ?? []).slice(0, LIST_LABELS_MAX).map((l) => capChars(normalizeLabel(l), LIST_NAME_CAP)),
       updated_at: r.updated_at,
       html_url: r.html_url,

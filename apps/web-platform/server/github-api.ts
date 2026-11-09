@@ -58,6 +58,8 @@ async function fetchWithRetry(
   // url-refused mirror so the refusal is never silent.
   url = githubEgressUrl(url, "github-api");
   let lastError: Error | null = null;
+  // The cc read tools (redirect: "manual") may hold a PRIVATE repo's name in the URL: their retry breadcrumbs carry no url.
+  const logUrl = init?.redirect === "manual" ? {} : { url };
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     // A caller that has given up (a staging deadline, #8623) gets no further
     // attempts — without this a deadline would leave the retry loop running on.
@@ -79,7 +81,7 @@ async function fetchWithRetry(
         // Drain response body to prevent socket keep-alive issues
         await response.text().catch(() => {});
         log.warn(
-          { attempt: attempt + 1, status: response.status, url },
+          { attempt: attempt + 1, status: response.status, ...logUrl },
           "GitHub API fetch failed — retrying",
         );
         await delay(BASE_DELAY_MS * 2 ** attempt);
@@ -90,7 +92,7 @@ async function fetchWithRetry(
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < MAX_RETRIES && isRetryable(err) && !callerSignal?.aborted) {
         log.warn(
-          { attempt: attempt + 1, err: lastError.message, url },
+          { attempt: attempt + 1, err: lastError.message, ...logUrl },
           "GitHub API fetch failed — retrying",
         );
         await delay(BASE_DELAY_MS * 2 ** attempt);
@@ -254,24 +256,28 @@ async function handleErrorResponse(
   path: string,
   scrub = false,
 ): Promise<never> {
-  const bodyText = await response.text();
+  // A body stream that aborts mid-read must not turn an HTTP answer into "could not be reached": in scrubbed mode the
+  // status alone is enough, so a failed read degrades to an empty body.
+  let bodyText = "";
+  try {
+    bodyText = await response.text();
+  } catch {
+    // review: swallowed — the status is the signal; the body is only sniffed for the rate-limit phrase
+    bodyText = "";
+  }
 
   if (scrub) {
     // Status only on every sink: no path (it embeds owner/repo), no GitHub message, no body.
-    if (response.status === 403) {
-      log.warn({ status: 403 }, "GitHub API 403 (scrubbed)");
-      reportSilentFallback(null, {
-        feature: "github-api",
-        op: "handle-403",
-        extra: { status: 403 },
-        message: "GitHub API returned 403",
-      });
-    } else {
-      log.error({ status: response.status }, "GitHub API request failed (scrubbed)");
-    }
     // A secondary rate limit / abuse-detection 403 is not an access fault; keep that ONE fact (a fixed phrase, never GitHub's text)
     // so the caller can tell the two apart.
     const limited = response.status === 403 && /rate limit|abuse detection/i.test(bodyText.slice(0, 2000));
+    if (response.status === 403) {
+      // Breadcrumb only. No Sentry mirror here: this site has no user or tool identity and no debounce, so a looping agent would
+      // send one event per call. The caller's debounced onFault (cc-github-read-tool) carries tool + class + status.
+      log.warn({ status: 403, limited }, "GitHub API 403 (scrubbed)");
+    } else {
+      log.error({ status: response.status }, "GitHub API request failed (scrubbed)");
+    }
     throw new GitHubApiError(
       limited
         ? "GitHub API 403: rate limit"
