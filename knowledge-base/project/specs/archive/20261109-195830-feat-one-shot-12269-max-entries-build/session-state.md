@@ -120,3 +120,9 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - My own 2 lint findings fixed (guard-2 helpers) at HEAD. Baseline fixture-relative-assert regen done.
 - Resume: poll `gh pr view 12495 --json state,mergedAt` + check `git show origin/main:tests/scripts/test-sentry-destroy-counts.sh` line 95 — when main heals (violations fixed/baselined by sibling), merge main in, checks re-run green -> queue takes it. Then postmerge: verify merge SHA, apply-github-infra.yml applied (value-only tf), live ruleset max_entries_to_build=1, file directive on #12269 (`earliest=<merge>+21d secrets=GH_TOKEN`), DONE prompt.
 - F3 issue = #12507. Backlog after: #9323, #11556. NEVER #9729.
+
+## Resume Point 8 (healing main via #12520)
+
+- PR #12520 (branch fix-main-lint-capture-exit, worktree .worktrees/fix-main-lint-capture-exit): 204 lint-shell-capture-exit findings fixed mechanically on main (0 NEW, suite 133/133), auto-merge armed 21:11Z. Blocks #12495's required test leg until merged.
+- On #12520 merge: `git merge origin/main` in THIS worktree -> push -> checks re-run (lint now green) -> queue takes #12495 -> postmerge (merge SHA, apply-github-infra.yml, live ruleset=1, directive on #12269 earliest=<merge>+21d secrets=GH_TOKEN) -> DONE prompt. Trackers: #12516 (lint red-on-main, close on heal), #10613, #12507 (F3).
+- Backlog: #9323, #11556. NEVER #9729.
