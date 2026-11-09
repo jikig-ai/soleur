@@ -274,21 +274,7 @@ run() {
     [ "$h" = "$GITHUB_SHA" ] || return 0  # GUARD:O1-HEAD-IS-GITHUB-SHA
     [ "$p2" = "$PR_HEAD_SHA" ] || return 0  # GUARD:O-PRHEAD
     head_sha="$p2"
-    diff_head="HEAD"
-
-    # The diff base is the merge-base of the PR head against the LIVE base ref — never the merge ref's first
-    # parent. HEAD^1 freezes at merge-ref computation, so on a branch that already merged main it re-counts
-    # main-side changes as the PR's own (#12418). The fetch is unconditional: a payload base.sha can be
-    # stale-but-resolvable and would freeze the same defect class (CTO ruling 2026-11-09). Every failure arm
-    # is fail-closed with a named reason; the ref is branch-name grammar only — never a refspec.
-    reason=bad_base_ref
-    [[ "${PR_BASE_REF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 0  # GUARD:O-BASE-REF
-    reason=base_fetch
-    git fetch --no-tags --quiet origin "$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:O-BASE-FETCH
-    reason=no_merge_base
-    diff_base="$(git merge-base HEAD^2 FETCH_HEAD 2>/dev/null)" || return 0  # GUARD:O-NO-MERGE-BASE
-    [ -n "$diff_base" ] || return 0
-    base_sha="$diff_base"
+    diff_head="$p2"
 
     # (3a) full on a fork head.
     reason=fork
@@ -316,6 +302,27 @@ run() {
   # value. Deliberately before the diff: an off switch must never pay the classification cost.
   reason=switch_off
   [ "$sw" = on ] || return 0  # GUARD:O1-SWITCH-GATE
+
+  if [ "$EVENT_NAME" = pull_request ]; then
+    # The pull_request diff is GitHub three-dot — merge-base(HEAD^2, live base) .. HEAD^2. Never the merge
+    # ref's first parent (it freezes at merge-ref computation and re-counts main-side changes the branch
+    # already merged, #12418) and never the merge RESULT against that base (its tree carries the base-side
+    # arc whenever the frozen parent is ahead of the fork point — the common case for a PR that has not
+    # synced main). The fetch is unconditional — a payload base.sha can be stale-but-resolvable and would
+    # freeze the same defect class (CTO ruling 2026-11-09) — and is pinned to refs/heads/ so a hex- or
+    # tags/-shaped base.ref cannot FETCH_HEAD a commit outside the named branch. The grammar is a
+    # deliberate superset of refname rules (git-invalid-but-safe names simply fail the fetch) while still
+    # rejecting `+`/`:`/leading `-` — refspec writes and option injection. Deliberately AFTER the switch
+    # gate, on this file's own doctrine: an off switch must never pay the classification cost.
+    reason=bad_base_ref
+    [[ "${PR_BASE_REF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 0  # GUARD:O-BASE-REF
+    reason=base_fetch
+    git fetch --no-tags --quiet origin "refs/heads/$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:O-BASE-FETCH
+    reason=no_merge_base
+    diff_base="$(git merge-base HEAD^2 FETCH_HEAD 2>/dev/null)" || return 0  # GUARD:O-NO-MERGE-BASE
+    [ -n "$diff_base" ] || return 0  # belt: merge-base's rc on no-ancestor varies by git version; unreachable today
+    base_sha="$diff_base"
+  fi
 
   # (4) the listing goes to a FILE: never argv, never env, never an annotation.
   reason=diff_error

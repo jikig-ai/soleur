@@ -11,11 +11,11 @@
 - collision-precheck.sh exit 10 on PR #12480 — verified as this branch's own draft PR.
 
 ### Decisions
-- `diff_base` = `git merge-base HEAD^2 <live base>`; live base resolves payload `pull_request.base.sha` first, else `git fetch --no-tags origin $PR_BASE_REF` → FETCH_HEAD; every failure arm fails closed with named `reason=`; never HEAD^1 topology.
+- `diff_base` = `git merge-base HEAD^2 <live base>`; live base resolves by unconditional `git fetch --no-tags origin refs/heads/$PR_BASE_REF` → FETCH_HEAD (the payload-first arm was reversed by ruling 2 below; the merge-result pairing was reversed at review — the diff is three-dot `merge-base..HEAD^2`); every failure arm fails closed with named `reason=`; never HEAD^1 topology.
 - Retirement: 4 file deletions + 12 registration sites; `scripts/ci-draft-light` suite STAYS; KB/ADR/audit records untouched.
 - Basename-dropping `#9728` tombstones in all live comments (clean zero residual-reference AC).
 - 4 technical forks recorded `pending - assumed` in decision-challenges.md — CTO spawn pending in parent (has run_subagent).
-- `CI_ORACLE_LANE` verified on; misfire cost verified live.
+- `CI_ORACLE_LANE` verified on; review re-analysis: the defect direction is lane denial (outside_surface → full battery), never a fabricated oracle_only — the #12376 run was a correct verdict (the cancel was the separate #12393 bound).
 
 ### Components Invoked
 - soleur:plan, soleur:deepen-plan (inline, sequential-fallback)
