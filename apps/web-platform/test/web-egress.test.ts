@@ -163,6 +163,43 @@ describe("buildAgentSandboxConfig — allowWebEgress (#9534)", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
+  // #12469 T9 (characterization, green before and after): the GitHub read tools run in the dispatch process with the App
+  // installation token, so NOTHING about the sandbox credential posture may loosen. The entitled deny set EQUALS a literal list
+  // (membership of a few names is not enough: dropping the one name that matters must red this), and the non-entitled posture is
+  // the W1 baseline only, which is also what makes "turn Agent web access off" a real remedy for `gh`.
+  const ENTITLED_DENY_LITERAL = [
+    "ALL_PROXY", "ANTHROPIC_API_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "BLUESKY_APP_PASSWORD",
+    "BUTTONDOWN_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "CLOUDFLARE_API_TOKEN", "DOPPLER_TOKEN", "GH_ENTERPRISE_TOKEN", "GH_TOKEN",
+    "GITHUB_TOKEN", "GIT_ASKPASS", "GIT_INSTALLATION_TOKEN", "GIT_SSH_COMMAND", "GIT_TERMINAL_PROMPT", "GIT_USERNAME",
+    "GOOGLE_APPLICATION_CREDENTIALS", "HETZNER_API_TOKEN", "LINKEDIN_ACCESS_TOKEN", "OPENAI_API_KEY", "PLAUSIBLE_API_KEY",
+    "RESEND_API_KEY", "SSH_AGENT_PID", "SSH_AUTH_SOCK", "STRIPE_SECRET_KEY", "X_BEARER_TOKEN", "all_proxy",
+  ];
+  const denyNames = (allowWebEgress: boolean) =>
+    (buildAgentSandboxConfig(own, { allowWebEgress }) as { credentials: { envVars: { name: string }[] } }).credentials.envVars
+      .map((e) => e.name)
+      .sort();
+
+  it("an entitled session's credential deny set EQUALS the literal list (GitHub credentials stay out of the sandbox; read tools do not change this)", () => {
+    expect(denyNames(true)).toEqual([...ENTITLED_DENY_LITERAL].sort());
+  });
+
+  it("every GitHub credential name is denied for an entitled session (second and later members, not just GH_TOKEN)", () => {
+    const names = denyNames(true);
+    for (const n of ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GIT_ASKPASS", "GIT_INSTALLATION_TOKEN", "GIT_USERNAME", "GIT_TERMINAL_PROMPT"]) {
+      expect(names, `${n} must stay denied`).toContain(n);
+    }
+  });
+
+  it("a non-entitled session gets the W1 baseline ONLY, so `gh` keeps its credentials (the toggle-off remedy)", () => {
+    expect(denyNames(false)).toEqual(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]);
+    for (const n of ["GH_TOKEN", "GIT_ASKPASS", "GIT_INSTALLATION_TOKEN", "GITHUB_TOKEN"]) expect(denyNames(false)).not.toContain(n);
+  });
+
+  it("an extra BYOK service token is still denied for an entitled session (must-PASS non-canonical input)", () => {
+    expect(denyNames(true)).toContain("STRIPE_SECRET_KEY");
+    expect(denyNames(true)).toContain("DOPPLER_TOKEN");
+  });
+
   it("denyRead gains the token-dir + credential-file paths", () => {
     const cfg = buildAgentSandboxConfig(own, { allowWebEgress: true });
     const denyRead = cfg.filesystem!.denyRead;
