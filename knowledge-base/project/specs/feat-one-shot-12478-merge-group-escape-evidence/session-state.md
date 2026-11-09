@@ -19,3 +19,11 @@
 - Artifacts: plan file, decision-challenges.md, tasks.md
 - Commands: gh issue/pr view, gh api runs/jobs, collision-precheck.sh, lint-guard-contract.py; commits 1df4bdbcc3 + 3ef01ab678 pushed
 cto_spawns=1
+
+## Pipeline Position (2026-11-09)
+- Implementation committed+ pushed: fa95156a2f (merge_group fallback, shared _pbg_esc_classify, ok via_mg, via_mg note, need_min 4*MAX_RUNS, doc updates)
+- Suite: 84/84 assertions green; shellcheck clean; live PBG_UNBOUNDED verdict = PASS (2 via_mg, 1 unrelated, 0 escapes)
+- CTO rulings written into decision-challenges.md (3 rows, gate PASS); cto_spawns=1
+- Review panel armed, 10 background subagents: 13be3b57 code-simplicity | 4b0b56f0 arch-strategist | 38b760b8 git-history | 8e216916 pattern-recognition | 95f33479 security-sentinel | fcae979c performance-oracle | 74a58794 data-integrity | a982ca6c agent-native | dca61f70 code-quality | 2a19790d test-design
+- seats tally incr'd 8; next: collect findings → resolve P1-P3 inline → fix-round → qa → compound → ship → DONE
+- PR #12483 draft; #9323 watch subagent bf14895e armed until 23:59Z
