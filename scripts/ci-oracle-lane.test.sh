@@ -1226,7 +1226,7 @@ if [ -f "$MANIFEST" ]; then
   _mt=$(check_manifest "$_mm/badargv.txt")
   check_contains "G4 an argv whose script does not exist is caught" "$_mt" "MEMBER-BAD-ARGV:scripts/ci-pr-selection:zz/no-such-file.test.sh"
   # an argv that names a real file but drifts from the registration's argv (a different row window)
-  sed 's|--rows 1-158|--rows 1-160|' "$MANIFEST" > "$_mm/argvdrift.txt"
+  sed 's|--rows 1-167|--rows 1-160|' "$MANIFEST" > "$_mm/argvdrift.txt"
   _mt=$(check_manifest "$_mm/argvdrift.txt")
   check_contains "G4 an argv drifted from the registration is caught" "$_mt" "MEMBER-ARGV-DRIFT:plugins/soleur/test/ci-pr-affected-replay-a"
 else
