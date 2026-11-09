@@ -277,7 +277,7 @@ fire `push` workflows); queue merges are not token pushes, and canary 6 checks i
 `merge-queue-stall` and `action-required`, with agent-runnable `gh api graphql` and
 `gh run list --event merge_group` commands in the body) for a queue entry pending
 past 45 minutes, below the 120-minute timeout. It ages only entries at
-`position <= max_entries_to_build` (2), because an entry deeper in a healthy drain
+`position <= max_entries_to_build` (now 1 — see Addendum 2026-11-09), because an entry deeper in a healthy drain
 waits its turn and can pass 45 minutes from `enqueuedAt` without being stalled
 (`position` being 1-based is assumed, not yet observed on a live entry; if it is
 0-based the filter admits one extra entry, a false positive, not a miss). Detection
@@ -1177,7 +1177,7 @@ close comment reads "dismissed or fixed", and the recorded per-alert reason
 carries the actual state. `keep-open` and lookup-failure still keep the
 tracker open.
 
-## Addendum — 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
+### Addendum 2026-11-09: `max_entries_to_build` 2→1 shipped on the lever-E verdict (#12269)
 
 The #12269 measured experiment's 28-day decision gate (SINCE=2026-10-12T16:09:07Z) counted **27 cancelled `merge_group` `ci.yml` runs** (FLIP threshold ≥2; clustered 19+3 on the 2026-11-06/07 congestion burst — the waste premise the earlier 12h decline window could not see materialized at burst traffic). The gate was OR'd with a demand-share signal; the cancelled-run count alone decided it.
 

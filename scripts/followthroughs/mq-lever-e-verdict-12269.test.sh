@@ -11,8 +11,8 @@
 #   value==1 (post-flip regime): find the ci-wallclock-p90 standing tracker via
 #     find-or-file (issue list, exact title + github-actions author), read its
 #     body, require `Report refreshed:` to postdate the flip merge (derived via
-#     `git log -S'max_entries_to_build'` pickaxe), then read the REAL 8-column
-#     row `| test | merge_group | <n> | <p50 s> | <p90 s> | <dur> | <bound> | <goal> |`
+#     an anchored -G pickaxe), then read the REAL 8-column row
+#     `| test | merge_group | <n> | <p50 s> | <p90 s> | <dur> | <bound> | <goal> |`
 #     (SECONDS).  p50 > floor*1.2 OR p90 > floor*2.5 OR >=2 churn-cancelled runs
 #     since the flip -> exit 5 (revert).  Else -> exit 0 (keep).
 #
@@ -21,8 +21,9 @@
 #
 # STUBS. `gh` and `git` on PATH are fixture-backed stubs answering ONLY the
 # argv the probe may legitimately issue; anything else exits 64 and is logged
-# to calls.log (a wandering probe is loud, not silently vacuous). Values are
-# synthesized (cq-test-fixtures-synthesized-only).
+# to calls.log — run_probe ASSERTS the log stays clean (a wandering probe is
+# loud, not silently vacuous). The probe runs under `env -i` exactly as the
+# sweeper launches it. Values are synthesized (cq-test-fixtures-synthesized-only).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,19 +52,25 @@ assert_fixture_dir() {
 assert_fixture_dir "$WORK"
 
 command -v jq >/dev/null || { echo "FATAL: jq required for the fixture stub" >&2; exit 1; }
+[ -x "$PROBE" ] || { echo "FATAL: $PROBE is not executable (a 644 probe is silently quiet forever)" >&2; exit 1; }
 
 EARLIEST="2026-12-15T00:00:00Z"
 FLIP_MERGED="2026-11-10T00:00:00Z"
+CASE_DIRS=()
 
-# mkrepo <root> <value>: a minimal repo root whose tf carries the value, plus a
-# commented copy naming the OTHER sanctioned value first (the probe must read
-# the assignment, not the comment — the comment-first ordering is deliberate).
+# mkrepo <root> <value>: a minimal repo root whose tf carries the value inside
+# a merge_queue block, with BOTH a #-commented copy and a /* */-commented stale
+# copy of the OTHER sanctioned value placed FIRST — the probe must read the
+# block-scoped assignment, not any comment copy (the T-mq-1.m8 masquerade class).
 mkrepo() {
   local root="$1" v="$2" other=2
   [ "$v" = "2" ] && other=1
   mkdir -p "$root/infra/github"
   cat > "$root/infra/github/ruleset-ci-required.tf" <<TF
     # \`max_entries_to_build = $other\` (a historical value kept in comments)
+    /*
+      max_entries_to_build              = $other
+    */
     merge_queue {
       max_entries_to_build              = $v
     }
@@ -74,8 +81,9 @@ TF
 #   cancelled.json   -> gh run list ... --status cancelled (json array)
 #   issues.json      -> gh issue list --search ... (json array)
 #   tracker-body.txt -> gh issue view --json body (raw text)
-#   pickaxe.txt      -> git log -S'max_entries_to_build' output (ISO ts)
+#   pickaxe.txt      -> git log -G'max_entries...' output (ISO ts)
 #   fail             -> every gh call exits 1
+#   git-fail         -> every git call exits 1
 mkstub() {
   local d="$1"
   mkdir -p "$d"
@@ -93,6 +101,7 @@ STUB
   cat > "$d/git" <<'STUB'
 #!/usr/bin/env bash
 printf 'git %s\n' "$*" >> "$FIXTURE_DIR/calls.log"
+if [ -f "$FIXTURE_DIR/git-fail" ]; then echo "git: simulated failure" >&2; exit 1; fi
 case "$*" in
   "log "*"max_entries_to_build"*) cat "$FIXTURE_DIR/pickaxe.txt" ;;
   *) echo "STUB-UNEXPECTED: git $*" >> "$FIXTURE_DIR/calls.log"; exit 64 ;;
@@ -101,12 +110,15 @@ STUB
   chmod +x "$d/gh" "$d/git"
 }
 
-# run_probe <label> <want-rc> <want-reeval-regex|->
+# run_probe <label> <want-rc> <want-reeval-regex|-> [extra env as NAME=VALUE...]
+# Runs under `env -i` like the sweeper; afterwards asserts the stub log stayed
+# clean (any STUB-UNEXPECTED argv is a wandering probe, loud not silent).
 run_probe() {
-  local label="$1" want_rc="$2" want_re="$3"
+  local label="$1" want_rc="$2" want_re="$3"; shift 3
   local out rc
-  out="$(cd "$REPO_ROOT" && PATH="$STUB_DIR:$PATH" FIXTURE_DIR="$FIXTURE_DIR" \
-        SOLEUR_FT_EARLIEST="$EARLIEST" SOLEUR_FT_P50_FLOOR=49 \
+  out="$(cd "$REPO_ROOT" && env -i PATH="$STUB_DIR:/usr/bin:/bin" HOME="$FIXTURE_DIR" \
+        FIXTURE_DIR="$FIXTURE_DIR" REPO_ROOT="$REPO_ROOT" GH_TOKEN=fake \
+        SOLEUR_FT_EARLIEST="$EARLIEST" SOLEUR_FT_P50_FLOOR=49 "$@" \
         bash "$PROBE" 2>&1)"; rc=$?
   local ok=1
   [ "$rc" -eq "$want_rc" ] || { ok=0; fail "$label: rc=$rc want $want_rc :: $out"; }
@@ -116,11 +128,14 @@ run_probe() {
   if [ "$want_re" != "-" ] && ! grep -qE "$want_re" <<<"$out"; then
     ok=0; fail "$label: REEVAL line missing /$want_re/ :: $out"
   fi
+  if [ -s "$FIXTURE_DIR/calls.log" ] && grep -q 'STUB-UNEXPECTED' "$FIXTURE_DIR/calls.log"; then
+    ok=0; fail "$label: probe issued unstubbed argv :: $(grep STUB-UNEXPECTED "$FIXTURE_DIR/calls.log" | head -2)"
+  fi
   [ "$ok" -eq 1 ] && pass "$label"
 }
 
 newcase() {
-  FIXTURE_DIR="$(mktemp -d)"; assert_fixture_dir "$FIXTURE_DIR"
+  FIXTURE_DIR="$(mktemp -d "$WORK/case.XXXXXX")"; assert_fixture_dir "$FIXTURE_DIR"; CASE_DIRS+=("$FIXTURE_DIR")
   STUB_DIR="$FIXTURE_DIR/stub"; mkstub "$STUB_DIR"
   : > "$FIXTURE_DIR/calls.log"
   REPO_ROOT="$FIXTURE_DIR/repo"
@@ -146,7 +161,15 @@ run_probe "v2 two cancelled runs -> exit 5 waste-appeared" 5 'verdict=waste-appe
 
 newcase; mkrepo "$REPO_ROOT" 2
 : > "$FIXTURE_DIR/fail"
-run_probe "v2 gh failure -> exit 3 repoll" 3 '-'
+run_probe "v2 gh failure -> exit 3 repoll" 3 'reason=gh-failure'
+
+newcase; mkrepo "$REPO_ROOT" 2
+out="$(cd "$REPO_ROOT" && env -i PATH="$STUB_DIR:/usr/bin:/bin" HOME="$FIXTURE_DIR" FIXTURE_DIR="$FIXTURE_DIR" REPO_ROOT="$REPO_ROOT" GH_TOKEN=fake bash "$PROBE" 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && grep -q 'reason=earliest-unset' <<<"$out"; then pass "v2 EARLIEST unset -> repoll earliest-unset"; else fail "v2 EARLIEST unset -> rc=$rc :: $out"; fi
+
+newcase; mkrepo "$REPO_ROOT" 2
+out="$(cd "$REPO_ROOT" && env -i PATH="$STUB_DIR:/usr/bin:/bin" HOME="$FIXTURE_DIR" FIXTURE_DIR="$FIXTURE_DIR" REPO_ROOT="$REPO_ROOT" GH_TOKEN=fake SOLEUR_FT_EARLIEST=garbage-date bash "$PROBE" 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && grep -q 'reason=earliest-unparseable' <<<"$out"; then pass "v2 EARLIEST malformed -> repoll earliest-unparseable (not a 1969 window)"; else fail "v2 EARLIEST malformed -> rc=$rc :: $out"; fi
 
 # ── value==1 arm ────────────────────────────────────────────────────────────
 echo "-- value==1 arm --"
@@ -169,14 +192,29 @@ WORSE_P50_BODY='Report refreshed: 2026-11-20T09:00:00Z
 WORSE_P90_BODY='Report refreshed: 2026-11-20T09:00:00Z
 
 | test | merge_group | 30 | 2900 | 8000 | 3000 | 900 | 900 |'
+# zero-sample surface: the em-dash row the probe will actually read early in the soak
+EMDASH_BODY='Report refreshed: 2026-11-20T09:00:00Z
+
+| test | merge_group | 0 | — | — | — | 900 | 900 |'
+# no Report refreshed line at all -> repoll report-refreshed-missing
+NOREFRESH_BODY='| test | merge_group | 30 | 2926 | 4100 | 2200 | 900 | 900 |'
+# no test/merge_group row -> repoll tracker-row-missing
+NOROW_BODY='Report refreshed: 2026-11-20T09:00:00Z
+
+| build | pull_request | 30 | 900 | 1200 | 600 | 900 | 900 |'
 
 newcase; mkrepo "$REPO_ROOT" 1
 printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
 run_probe "v1 post-flip report, p50/p90 within tolerance -> exit 0 keep-flip" 0 'verdict=keep-flip'
 
 newcase; mkrepo "$REPO_ROOT" 1
+printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+printf '[{"databaseId":1}]' > "$FIXTURE_DIR/cancelled.json"
+run_probe "v1 churn=1 boundary -> exit 0 keep-flip" 0 'verdict=keep-flip.*churn=1'
+
+newcase; mkrepo "$REPO_ROOT" 1
 printf '%s\n' "$STALE_BODY" > "$FIXTURE_DIR/tracker-body.txt"
-run_probe "v1 pre-flip report -> exit 3 repoll" 3 '-'
+run_probe "v1 pre-flip report -> exit 3 repoll" 3 'reason=tracker-report-pre-flip'
 
 newcase; mkrepo "$REPO_ROOT" 1
 printf '%s\n' "$WORSE_P50_BODY" > "$FIXTURE_DIR/tracker-body.txt"
@@ -192,35 +230,71 @@ printf '[{"databaseId":1},{"databaseId":2}]' > "$FIXTURE_DIR/cancelled.json"
 run_probe "v1 churn >=2 cancelled since flip -> exit 5 revert" 5 'verdict=revert-warranted churn=2'
 
 newcase; mkrepo "$REPO_ROOT" 1
+printf '%s\n' "$EMDASH_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+run_probe "v1 zero-sample em-dash row -> exit 3 repoll p50-unparseable" 3 'reason=p50-unparseable'
+
+newcase; mkrepo "$REPO_ROOT" 1
+printf '%s\n' "$NOREFRESH_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+run_probe "v1 no Report refreshed line -> repoll report-refreshed-missing" 3 'reason=report-refreshed-missing'
+
+newcase; mkrepo "$REPO_ROOT" 1
+printf '%s\n' "$NOROW_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+run_probe "v1 test/merge_group row absent -> repoll tracker-row-missing" 3 'reason=tracker-row-missing'
+
+newcase; mkrepo "$REPO_ROOT" 1
+: > "$FIXTURE_DIR/tracker-body.txt"
+run_probe "v1 empty tracker body -> repoll tracker-body-empty" 3 'reason=tracker-body-empty'
+
+newcase; mkrepo "$REPO_ROOT" 1
 printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
 printf '[]' > "$FIXTURE_DIR/issues.json"
-run_probe "v1 tracker not found -> exit 3 repoll" 3 '-'
+run_probe "v1 tracker not found -> exit 3 repoll" 3 'reason=tracker-not-found'
 
 newcase; mkrepo "$REPO_ROOT" 1
 printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
 : > "$FIXTURE_DIR/fail"
-run_probe "v1 gh failure -> exit 3 repoll" 3 '-'
+run_probe "v1 gh failure -> exit 3 repoll" 3 'reason=gh-failure'
+
+newcase; mkrepo "$REPO_ROOT" 1
+printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+: > "$FIXTURE_DIR/git-fail"
+run_probe "v1 git failure -> exit 3 repoll" 3 'reason=flip-merged-underivable'
 
 newcase; mkrepo "$REPO_ROOT" 1
 printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
 : > "$FIXTURE_DIR/pickaxe.txt"
-run_probe "v1 pickaxe empty -> exit 3 repoll" 3 '-'
+run_probe "v1 pickaxe empty -> exit 3 repoll" 3 'reason=flip-merged-underivable'
+
+# Env overrides are the sanctioned fixture channel: TRACKER + FLIP_MERGED set
+# directly must skip both derivations and still converge on keep-flip.
+newcase; mkrepo "$REPO_ROOT" 1
+printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+printf '[]' > "$FIXTURE_DIR/issues.json"
+: > "$FIXTURE_DIR/git-fail"
+run_probe "v1 env overrides bypass find-or-file + pickaxe -> keep-flip" 0 'verdict=keep-flip' \
+  SOLEUR_FT_TRACKER=4242 SOLEUR_FT_FLIP_MERGED="$FLIP_MERGED"
 
 # ── degenerate inputs ───────────────────────────────────────────────────────
 echo "-- degenerate inputs --"
 
 newcase; mkrepo "$REPO_ROOT" 9
 printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
-out="$(cd "$REPO_ROOT" && PATH="$STUB_DIR:$PATH" FIXTURE_DIR="$FIXTURE_DIR" SOLEUR_FT_EARLIEST="$EARLIEST" bash "$PROBE" 2>&1)"; rc=$?
-if [ "$rc" -ne 0 ] && [ "$rc" -ne 5 ]; then
-  pass "v9 unsanctioned value refuses to arm (rc=$rc)"
+out="$(cd "$REPO_ROOT" && env -i PATH="$STUB_DIR:/usr/bin:/bin" HOME="$FIXTURE_DIR" FIXTURE_DIR="$FIXTURE_DIR" REPO_ROOT="$REPO_ROOT" GH_TOKEN=fake SOLEUR_FT_EARLIEST="$EARLIEST" bash "$PROBE" 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && grep -q 'reason=tf-value-unreadable-or-unsanctioned' <<<"$out"; then
+  pass "v9 unsanctioned value -> repoll (rc=3, named reason)"
 else
-  fail "v9 unsanctioned value armed anyway (rc=$rc) :: $out"
+  fail "v9 unsanctioned value -> rc=$rc :: $out"
 fi
 
 newcase; mkdir -p "$REPO_ROOT/infra/github" # tf absent entirely
-out="$(cd "$REPO_ROOT" && PATH="$STUB_DIR:$PATH" FIXTURE_DIR="$FIXTURE_DIR" SOLEUR_FT_EARLIEST="$EARLIEST" bash "$PROBE" 2>&1)"; rc=$?
-if [ "$rc" -eq 3 ]; then pass "missing tf -> exit 3 repoll"; else fail "missing tf -> rc=$rc :: $out"; fi
+out="$(cd "$REPO_ROOT" && env -i PATH="$STUB_DIR:/usr/bin:/bin" HOME="$FIXTURE_DIR" FIXTURE_DIR="$FIXTURE_DIR" REPO_ROOT="$REPO_ROOT" GH_TOKEN=fake SOLEUR_FT_EARLIEST="$EARLIEST" bash "$PROBE" 2>&1)"; rc=$?
+if [ "$rc" -eq 3 ] && grep -q 'reason=tf-missing' <<<"$out"; then pass "missing tf -> repoll tf-missing"; else fail "missing tf -> rc=$rc :: $out"; fi
 
 echo "=== $passes passed, $fails failed ==="
+# Exact floor: deleting a run_probe line or a degenerate case must shrink this.
+EXPECTED_PASSES=23
+if [ "$passes" -ne "$EXPECTED_PASSES" ]; then
+  printf 'FAIL: pass count %s != expected floor %s (a case was added/removed or pass() was neutered)\n' "$passes" "$EXPECTED_PASSES" >&2
+  exit 1
+fi
 [ "$fails" -eq 0 ]

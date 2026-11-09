@@ -74,3 +74,11 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Cancelled-run attribution sample recorded: 3 runs, 42-44 jobs started, ~44-50min runtime, group-reformation discards.
 - Main panel spawned (6 seats): git-history, pattern, security, code-quality, test-design, structural-enum. PANEL_SHA=90543a00. Dedup: arch/perf/simplicity ran in design pass; data-integrity+agent-native shed (tier none, not path-mapped).
 - Remaining: synthesize panel -> resolve findings -> Step 4 simplicity -> fix-round seats -> QA -> compound -> ship -> postmerge (directive earliest=<merge>+21d secrets=GH_TOKEN + F3 follow-up issue) -> DONE.
+
+## Resume Point 3 (review fix round)
+
+- Panel complete: 6 seats. Findings ledger resolved inline in WORKING TREE (uncommitted): probe rewritten (block-scoped+comment-stripped tf parse, -G anchored pickaxe, earliest epoch validation, Z-keeping refreshed regex, {1,9} digit bounds, P50_FLOOR validation, cn empty->gh_fail, credential-posture+xtrace-78+RETIREMENT header); test.sh rewritten (env -i, calls.log assert, pinned repoll reasons, churn=1/em-dash/earliest/git-fail/override cases, EXPECTED_PASSES=23, WORK cleanup) — probe suite GREEN 23/23.
+- Guard-2: uniqueness check `_mq_surface_uniqueness` + u1-u3 rows (second merge_queue block in tf/other tf ruleset/other DR skeleton -> RED), in-file block-count on comment-stripped tf, m14b (adjacent 3), ctl8 (m15 falsifiability), m15 landed-proof, m14 want-regex tightened, "deferred" wording — guard suite GREEN 74/0, MQ_EXPECTED_OK=36.
+- Stall-check suite: adjacent-boundary row node $((maxpos+1)), "behind young head" message fix — suite run IN FLIGHT (/tmp/stall-fix.txt).
+- Other: workflow comment ~15->~49min; ADR table annotate+heading h3+:280 fix; docs >=1->>=2; suite-durations.tsv floor row; test-all.sh registration moved to last run_suite; plan 24-vs-27 clause.
+- REMAINING: wait stall suite -> commit fix round -> push -> fix-round seats (fix-round-seats.sh on fix diff) -> Review Phase Complete -> soleur:qa -> compound -> ship -> postmerge (directive earliest=<merge>+21d secrets=GH_TOKEN + F3 follow-up issue for enqueuedAt promotion FP) -> DONE. Backlog: #9323, #11556. NEVER dispatch #9729.

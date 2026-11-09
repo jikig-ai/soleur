@@ -514,10 +514,12 @@ behav_check() {
   [[ "$pre_triage" != "$CASE_BODY" && "${#pre_triage}" -lt "${#pre_real}" ]] \
     || { REASON="issue body does not list the agent-runnable triage before the real-stall explanation"; return 1; }
 
-  { node 1 10 102; node 3 80 103; } | queue_json > "$g"
+  # Adjacent out-of-window boundary: position maxpos+1 is ALWAYS the closest
+  # non-filing slot under any mirror value (a position <= maxpos+1 mutant must die here).
+  { node 1 10 102; node "$((maxpos + 1))" 80 103; } | queue_json > "$g"
   run_case "$wf" "$g"
   [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 ]] \
-    || { REASON="position 3 older than threshold filed (healthy deep queue false positive; rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+    || { REASON="position $((maxpos + 1)) (just outside the aging window) older than threshold filed (healthy deep queue false positive; rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
 
   { node 1 10 104; } | queue_json > "$g"
   run_case "$wf" "$g"
@@ -557,7 +559,7 @@ behav_check() {
   fi
   run_case "$wf" "$g"
   [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #111 pending"* ]] \
-    || { REASON="stalled entry behind a young head was not filed (the query reads too few entries; creates=$CASE_CREATES)"; return 1; }
+    || { REASON="the second in-window entry (or the head under maxpos=1) was not filed (the query reads too few entries; creates=$CASE_CREATES)"; return 1; }
 
   # UNMERGEABLE (#10641, #10319): the queue is waiting for the author to rebase; the entry has no
   # merge_group build at all, so "pending > threshold" says nothing about a required check not

@@ -123,7 +123,7 @@ A two-branch measured experiment honoring the issue's method exactly:
 **Verdict: FLIP (branch 3B).** Measured 2026-11-09 over window SINCE=2026-10-12T16:09:07Z (~28d):
 
 - Cancelled `merge_group` `ci.yml` runs: **27** (threshold >= 2) — clustered 2026-11-06/07 (19+3) during the congestion episode; the waste premise materialized at burst traffic even though the earlier 12h window measured 0. **Signal 1 fired.**
-- merge_group `ci.yml` run totals over the window (capped listing): 500 runs — 389 success / 86 failure / 24 cancelled / 1 in_progress.
+- merge_group `ci.yml` run totals over the window (capped listing): 500 runs — 389 success / 86 failure / 24 cancelled / 1 in_progress (the `--limit 500` listing truncates the oldest window runs, so this under-counts the 27 measured by the dedicated cancelled listing).
 - Demand share (signal 2, OR'd): not needed for the verdict — measured sample census produced no parseable output; recorded as unmeasured-context, not a trigger either way.
 - `test` merge_group p50/p90 tracker row: context-only, never a trigger; before-window floor recorded as 49m (`SOLEUR_FT_P50_FLOOR` default) for the soak probe — the row is the REAL 8-column schema in seconds (see `scripts/watch-wallclock-p90-11774.sh` emitter).
 - Merged PRs in window: >=500 (listing capped; drain context only).

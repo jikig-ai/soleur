@@ -2,15 +2,22 @@
 # mq-lever-e-verdict-12269.sh — verdict probe for the #12269 lever-E measured
 # experiment (merge_queue.max_entries_to_build 2 -> 1).
 #
+# CREDENTIAL POSTURE: needs GH_TOKEN (sweeper forwards the names in `secrets=`;
+# the directive carries `secrets=GH_TOKEN`). With GH_TOKEN absent every gh call
+# fails -> exit 3 forever, so refuse loudly instead (sibling convention:
+# actions-queue-tail-8450.sh).
+case "$-" in *x*) [ -n "${GH_TOKEN:+x}" ] && exit 78 ;; esac  # xtrace refusal: never let a token reach a trace
+#
 # Followthrough-convention exit vocabulary:
 #   0 = verdict reached, tracker may close / soak passes
 #   5 = ACTION REQUIRED: the measured signal fired (waste appeared -> re-evaluate
 #       the flip; or post-flip soak materially worse -> revert warranted)
 #   3 = cannot determine state this sweep (gh/git failure, tracker not found, or
 #       the watch report does not yet postdate the flip merge) -> re-poll.
-#       NOTE: exit 3 maps to a CANNOT ESTABLISH comment per sweep — every
-#       repoll reason below is transient or bounded by the rolling-30 sample,
-#       never config-dead; a config-dead reason is a bug to fix, not a state.
+#       NOTE: exit 3 maps to a CANNOT ESTABLISH comment per sweep. The repoll
+#       reasons below are transient while the watch schema holds; a schema change
+#       or a renamed tf turns them config-dead — treat a persistent reason as a
+#       bug to fix, not a state to wait out.
 #
 # Dual-arm on the LIVE `max_entries_to_build` in infra/github/ruleset-ci-required.tf:
 #
@@ -22,7 +29,8 @@
 #   value==1 (post-flip regime): read the `test`/`merge_group` row of the
 #     ci-wallclock-p90 standing tracker — schema is
 #     `| <check> | <surface> | <n> | <p50 (s)> | <p90 (s)> | <p90 dur (s)> | <bound> | <goal> |`
-#     (SECONDS, emitted by scripts/watch-wallclock-p90-11774.sh). The body's
+#     (SECONDS, emitted by scripts/watch-wallclock-p90-11774.sh; a zero-sample
+#     surface emits `—` placeholders, which is a repoll not a verdict). The body's
 #     `Report refreshed: <ISO>` must postdate the flip merge, else exit 3 (the
 #     rolling-30 sample is pre-flip — repoll). Revert-warranted (exit 5) iff
 #     p50_s > P50_FLOOR*60*1.2 OR p90_s > P50_FLOOR*60*2.5 (the regression lives
@@ -37,13 +45,23 @@
 # Input derivation (followthrough-convention: required inputs must be derivable
 # under `env -i`; env vars remain OPTIONAL overrides for fixtures):
 #   SOLEUR_FT_TRACKER    standing tracker number; derived via the watch's own
-#                        find-or-file (exact title + github-actions author).
-#   SOLEUR_FT_FLIP_MERGED  ISO ts the flip landed on main; derived by pickaxe
-#                        `git log -S'max_entries_to_build'` on the tf (sweeper
-#                        checkout has fetch-depth: 0).
+#                        find-or-file (exact title + github-actions author). On a
+#                        duplicate-tracker state the LOWEST number wins (the
+#                        watch warns and takes list order; same net effect —
+#                        both watch-authored trackers carry the same report).
+#   SOLEUR_FT_FLIP_MERGED  ISO ts the flip landed on main; derived by an anchored
+#                        -G pickaxe on the tf's assignment line (comment edits
+#                        cannot move it; a value-only revert can, correctly).
 #   SOLEUR_FT_P50_FLOOR  before-window p50 floor in MINUTES (default 49).
 #   SOLEUR_FT_EARLIEST   directive `earliest=` (the re-eval date under decline).
 #   REPO_ROOT            repo root override (fixture suites); default = repo root.
+#
+# RETIREMENT: when this probe retires, also remove/consider: the
+# `scripts/followthroughs/mq-lever-e-verdict-12269` run_suite row in
+# scripts/test-all.sh, its floor row in scripts/suite-durations.tsv, the
+# fixture-guard rows in plugins/soleur/test/fixture-relative-assert.baseline.txt,
+# the directive comment on #12269, and the pointer sentences in
+# infra/github/ruleset-ci-required.tf, infra/github/README.md and ADR-270.
 set -uo pipefail
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -56,13 +74,19 @@ repoll() { printf 'REEVAL verdict=repoll reason=%s\n' "$1"; exit 3; }
 gh_fail() { repoll "gh-failure"; }
 
 [ -f "$TF" ] || repoll 'tf-missing'
-# Anchored to the assignment column-0 so `# ... max_entries_to_build = N` comment
-# copies cannot satisfy it (the tf documents prior values in comments).
-value="$(grep -oE '^[[:space:]]*max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' "$TF" | grep -oE '[0-9]+$' | head -1)"
+# Scoped to the FIRST `merge_queue {` block (matching _mq_parse_tf's window) and
+# anchored to the assignment column-0: `#` line comments cannot match, and
+# `/* */` interior lines are dropped by the comment-state awk — the tf documents
+# prior values in comments (the T-mq-1.m8 masquerade class).
+value="$(sed -n '/^[[:space:]]*merge_queue[[:space:]]*{/,/^[[:space:]]*}/p' "$TF" \
+  | awk 'BEGIN{c=0} /\/\*/{c=1; next} /\*\//{c=0; next} c==0{print}' \
+  | grep -oE '^[[:space:]]*max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' \
+  | grep -oE '[0-9]+$' | head -1)"
 case "$value" in
   1|2) : ;;
   *) repoll "tf-value-unreadable-or-unsanctioned value=${value:-none}" ;;
 esac
+[[ "$P50_FLOOR" =~ ^[0-9]+$ ]] || repoll 'p50-floor-unparseable'
 
 count_cancelled() { # <since-date YYYY-MM-DD> -> prints run count, or rc 1
   local runs
@@ -75,8 +99,11 @@ count_cancelled() { # <since-date YYYY-MM-DD> -> prints run count, or rc 1
 if [ "$value" = "2" ]; then
   # ---- decline regime: did the waste premise appear? ----
   [ -n "$EARLIEST" ] || repoll 'earliest-unset'
-  win_start="$(date -u -d "@$(( $(date -u -d "$EARLIEST" +%s) - 2419200 ))" +%Y-%m-%dT%H:%M:%SZ)" \
-    || repoll 'earliest-unparseable'
+  # Validate the epoch BEFORE arithmetic: a failed inner `date` inside $(( ))
+  # evaluates as unary-minus and silently produces a 1969 window -> false exit 5.
+  e_s="$(date -u -d "$EARLIEST" +%s 2>/dev/null)" || repoll 'earliest-unparseable'
+  [[ "$e_s" =~ ^[0-9]+$ ]] || repoll 'earliest-unparseable'
+  win_start="$(date -u -d "@$(( e_s - 2419200 ))" +%Y-%m-%dT%H:%M:%SZ)"
   n="$(count_cancelled "${win_start%%T*}")" || gh_fail
   [ -n "$n" ] || gh_fail
   if [ "$n" -ge 2 ]; then
@@ -89,16 +116,19 @@ fi
 
 # ---- value==1: post-flip soak ----
 
-# FLIP_MERGED: explicit env override, else pickaxe the tf for the commit that
-# last touched max_entries_to_build on the first-parent line (the flip merge).
+# FLIP_MERGED: explicit env override, else anchored -G pickaxe — fires on any
+# value edit on the assignment line; comment-only edits cannot match (comments
+# start with #) and a value-only revert moves it correctly.
 FLIP_MERGED="${SOLEUR_FT_FLIP_MERGED:-}"
 if [ -z "$FLIP_MERGED" ]; then
   FLIP_MERGED="$(cd "$REPO_ROOT" && git log -1 --first-parent --format=%cI \
-    -S'max_entries_to_build' -- infra/github/ruleset-ci-required.tf 2>/dev/null)" \
+    -G'^[[:space:]]*max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' \
+    -- infra/github/ruleset-ci-required.tf 2>/dev/null)" \
     || repoll 'flip-merged-underivable'
 fi
 [ -n "$FLIP_MERGED" ] || repoll 'flip-merged-underivable'
 flip_s="$(date -u -d "$FLIP_MERGED" +%s 2>/dev/null)" || repoll 'flip-merged-unparseable'
+[ -n "$flip_s" ] || repoll 'flip-merged-unparseable'
 
 # TRACKER: explicit env override, else the watch's own find-or-file (exact title
 # + github-actions author; a same-title issue filed by anyone else is never adopted).
@@ -119,7 +149,9 @@ body="$(gh issue view "$TRACKER" --repo jikig-ai/soleur --json body --jq .body 2
 # Postdate check: the body's `Report refreshed:` must postdate the flip merge —
 # the row carries a rolling last-30-green sample, so a fresh report after the
 # flip is post-flip-dominated; a stale report is a pre-flip sample -> repoll.
-refreshed="$(printf '%s\n' "$body" | grep -oE 'Report refreshed: [0-9T:+-]+' | head -1 | grep -oE '[0-9]{4}[^ ]+$' || true)"
+# The charset keeps Z and . so the emitted %FT%TZ parses as UTC (a zone-less
+# stamp would parse in host-local time and shift the gate by hours).
+refreshed="$(printf '%s\n' "$body" | grep -oE 'Report refreshed: [0-9T:.+Z-]+' | head -1 | grep -oE '[0-9]{4}[^ ]+$' || true)"
 [ -n "$refreshed" ] || repoll 'report-refreshed-missing'
 ref_s="$(date -u -d "$refreshed" +%s 2>/dev/null)" || repoll 'report-refreshed-unparseable'
 if [ "$ref_s" -le "$flip_s" ]; then
@@ -131,8 +163,10 @@ row="$(printf '%s\n' "$body" | grep -E '^\|[[:space:]]*test[[:space:]]*\|[[:spac
 [ -n "$row" ] || repoll 'tracker-row-missing'
 p50_s="$(printf '%s' "$row" | awk -F'|' '{gsub(/[[:space:]]/,"",$5); print $5}')"
 p90_s="$(printf '%s' "$row" | awk -F'|' '{gsub(/[[:space:]]/,"",$6); print $6}')"
-[[ "$p50_s" =~ ^[0-9]+$ ]] || repoll 'p50-unparseable'
-[[ "$p90_s" =~ ^[0-9]+$ ]] || repoll 'p90-unparseable'
+# Bounded-digit check: a huge field overflows shell arithmetic negative and the
+# -gt compare would fail OPEN to keep-flip; a `—` zero-sample row repolls here.
+[[ "$p50_s" =~ ^[0-9]{1,9}$ ]] || repoll 'p50-unparseable'
+[[ "$p90_s" =~ ^[0-9]{1,9}$ ]] || repoll 'p90-unparseable'
 floor_s=$(( P50_FLOOR * 60 ))
 
 # Tail regression: p50 > floor*1.2 OR p90 > floor*2.5 (p90 naturally ~1.4-2x p50).
@@ -143,9 +177,10 @@ fi
 
 # Churn signal: if cancelled merge_group runs REAPPEAR at >=2 since the flip,
 # serialization made it worse — the same cheap query the decline arm runs.
+# Empty output is a read failure like the decline arm's, never a silent zero.
 churn_since="${FLIP_MERGED%%T*}"
 cn="$(count_cancelled "$churn_since")" || gh_fail
-[ -n "$cn" ] || cn=0
+[ -n "$cn" ] || gh_fail
 if [ "$cn" -ge 2 ]; then
   printf 'REEVAL verdict=revert-warranted churn=%s p50=%ss p90=%ss floor=%ss tracker=%s\n' "$cn" "$p50_s" "$p90_s" "$floor_s" "$TRACKER"
   exit 5
