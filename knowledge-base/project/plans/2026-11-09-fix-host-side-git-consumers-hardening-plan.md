@@ -12,6 +12,20 @@ requires_cpo_signoff: true
 
 # fix: harden the host-side git consumers that run outside the sandbox
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09
+**Agents and passes used:** security-sentinel, a verify-the-negative code-claims pass, the CTO (round 3, R8a-R8f), plus the lead's own real-git spikes (git 2.56.0) and the mechanical halts 4.6-4.13 (all green).
+
+1. Two new carriers with cross-tenant consequence were found and measured: `core.worktree` pointing at a foreign tenant directory (closed by env `GIT_WORK_TREE=<cwd>`, not by `-c`) and local-exec transports on the network arms (`remote.<n>.uploadpack` on a local-path remote, `ext::`; closed by `GIT_ALLOW_PROTOCOL` and `-c protocol.ext.allow=never`). The earlier cut of the protocol allowlist is reversed.
+2. The residual set is wider and the key-auth wording is sharper: an executing helper can read the 0600 transport key file. `--attr-source` was measured and rejected (partial, new global option on an unmeasured image git).
+3. Sibling-test breakage is larger than argv slicing (mocks branching on `args[0]`, positional index reads); the plan names the files.
+
+### New considerations discovered
+
+- Only `-c key=value` and environment may be added to the helper: the built image's git version is unmeasured and an unknown global option exits 129 on git 2.38/2.39.
+- Unmeasured helper additions ship only if their Phase 1 row fires under the shared args (CTO R8c).
+
 Ref #9601 (agent security hardening epic, stays open; this plan never closes or edits it). Follow-on to the
 git-read hardening that merged 2026-11-09 (PR 12485, `Ref #9600`; ADR-050 amendment of the same date).
 Draft PR 12512 already exists on this branch; the work ships as exactly that one PR.
@@ -92,9 +106,22 @@ Cut List (mechanisms considered and removed before or during review):
   rather than a control, and it would refuse legitimate worktree-style workspaces.
 - Repo-wide sentinel sweep failing on any raw `execFile("git"` in `server/` -> cut as a separate mechanism; its
   one useful part survives inside Guard 1 as a single tree-wide census row (see Guard Contract), not as a new gate.
-- `allowProtocol` / `GIT_ALLOW_PROTOCOL` on the network arms -> cut (CTO R2, 2026-11-09): the plan's own real-git
-  drivers use `file://` and `http://127.0.0.1`, `ext::` is already off by default, and the exfiltration path that
-  matters is an https rewrite to an attacker host, which an https allowlist does not stop. Recorded as a residual.
+- `allowProtocol` / `GIT_ALLOW_PROTOCOL` on the network arms -> cut by CTO R2, then REINSTATED by CTO R8b (deepen-plan,
+  2026-11-09) on new evidence: repo config can switch `ext::` on, and a local-path remote with `remote.<n>.uploadpack`
+  executes a planted program on fetch (measured), while `GIT_ALLOW_PROTOCOL` blocks it. It stays a required parameter
+  for the network arms only; an https allowlist still does not stop an https rewrite to an attacker host (residual).
+- `--attr-source=<empty tree>` as a `filter.*` control -> cut (CTO R8d): measured partial. It stops worktree
+  `.gitattributes` filters but not `.git/info/attributes` (including via `commondir`), and it is a new global OPTION,
+  which hard-fails (exit 129) on git 2.38/2.39 while the Dockerfile floor is 2.38 and the built image's git version is
+  unmeasured.
+- Env-pair delivery (`GIT_CONFIG_COUNT`/`KEY_n`/`VALUE_n`) of the `-c` set instead of argv -> cut: it would stop the
+  hardening block shifting `args[0]` in sibling mocks, but the brief binds the helper to return `GIT_HARDENING_ARGS`;
+  the sibling mocks are edited instead.
+- Deepen-plan additions dropped by CTO R8c as redundant or not an independent control: `GIT_ASKPASS=/bin/false` /
+  `core.askPass` and `GIT_SSH_COMMAND=/bin/false` defaults (the protocol allowlist blocks the paths they target),
+  always-set `GIT_SSL_CAINFO` (subsumed by the pinned remote-rewrite residual), `core.excludesFile`, the four
+  `gpg.*.program` keys (nothing invokes gpg once signing and signature verification are off), and a `PATH` pin (the
+  helper filters empty and non-absolute `PATH` entries instead).
 - Option-bag test hooks (`base`, a runtime throw on a caller-supplied `opts.env`, an exported argv-prefix constant, a
   shimmed-`git --version` row, a space/unicode-path row, a non-`main` branch row, a `filter.other.clean` row) -> cut
   per code-simplicity and DHH review: they test the tests, not a property. The `opts.env` rule becomes a narrowed
@@ -125,13 +152,45 @@ core.fsmonitor=false -c core.attributesFile=/dev/null` plus a scrubbed env with 
 | `git commit` with `GIT_CONFIG_GLOBAL=/dev/null`, HOME a temp dir, no local identity | not run | rc=128 "Author identity unknown" (repo research pass) |
 | bare repository as cwd with `-c safe.bareRepository=explicit` | works | `fatal: cannot use bare repository` (refused) |
 | `HTTPS_PROXY`/`SSL_CERT_*` in the prod container env | grep of `apps/web-platform/Dockerfile`, `infra/cloud-init.yml`, `infra/ci-deploy.sh` finds none set | the passthrough list is a no-op in prod today |
+| `core.worktree=<other directory>` in `.git/config` (deepen-plan, measured) | status/add/commit/reset operate on the OTHER directory (a foreign tenant dir would be staged, pushed, or overwritten by `reset --hard`) | STILL REDIRECTS under `-c core.worktree=<cwd>`; CLOSED by env `GIT_WORK_TREE=<cwd>` (status clean) |
+| `remote.<n>.uploadpack` on a LOCAL-path remote (deepen-plan, measured) | planted program runs on fetch | STILL RUNS; CLOSED by env `GIT_ALLOW_PROTOCOL=https` (file transport refused); `GIT_ALLOW_PROTOCOL=file` set by a test restores the fixture |
+| `protocol.ext.allow=always` + `url.<x>.insteadOf=ext::...` (security-sentinel pass, confirmed there; the lead's own probe was inconclusive) | shell runs on fetch | STILL RUNS under the shared args; blocked by `-c protocol.ext.allow=never` (sentinel run) |
+| `--attr-source=<empty tree>` (git >= 2.40) (deepen-plan, measured) | not applicable | stops worktree `.gitattributes` filters; does NOT stop `.git/info/attributes` filters; named-filter `-c filter.zz.clean=` neutraliser works but cannot cover unknown names |
 
 Consequences carried into the design: `-c` arguments close fsmonitor, hooks, `config.worktree`, attribute-file
 sources and (with one added flag) commit signing; they do not close `filter.*`, `merge.*.driver` or URL rewriting.
-The env scrub closes server-secret exposure to any helper that runs, but a consumer's own auth variable still
-reaches it. Both open items are pinned as residuals (CTO F4, R7). Not yet measured (Phase 1 measures them and pins
-the ones that fire): `remote.origin.url`/`pushurl`, `http.proxy`, `http.sslVerify`, URL-scoped
-`credential.<url>.helper`.
+Two further carriers need ENV, not `-c`: `GIT_WORK_TREE=<cwd>` (foreign worktree) and `GIT_ALLOW_PROTOCOL`
+(local-exec transports on the network arms). The env scrub closes server-secret exposure to any helper that runs, but a
+consumer's own auth variable still reaches it. Open items are pinned as residuals (CTO F4, R7). Not yet measured
+(Phase 1 measures them and pins the ones that fire, or drops the matching helper addition): `remote.origin.url`/`pushurl`,
+`http.proxy`, `http.sslVerify`, URL-scoped `credential.<url>.helper`, `merge.verifySignatures` on `pull`,
+`submodule.recurse` with `submodule.<n>.update=!cmd` on `pull`, `core.bare=true` against `GIT_WORK_TREE`, and a gitfile
+`.git` pointing at a foreign gitdir.
+
+### Deepen-plan findings (2026-11-09)
+
+- Security-sentinel pass: the first measured table was not a complete carrier list. New rows above (`core.worktree`,
+  local-exec transports) are the two with cross-tenant consequence; the CTO ruled both closable by env in this PR
+  (R8a, R8b). The pass also asserts, from git docs, that `GIT_CONFIG_GLOBAL` stops the XDG config read, and that
+  `core.pager`/`core.editor`/`sequence.editor`/`commit.template` need a TTY or editor flow that `execFile` does not
+  provide (rated `needs-TTY`/`harmless`, not measured here).
+- Verify-the-negative pass against code: `syncPush` and `ensureGitDataRemote` are exported and drivable as planned
+  (`resolveInstallationId` is a dynamic import, intercepted by `vi.mock`; `ensureGitDataRemote` needs
+  `GIT_DATA_STORE_ENABLED=true` and, in production mode, `GIT_DATA_SSH_HOST`); `checkpointInflightWork` is the
+  exported entry for `runPlumbingGit` (also `restoreInflightCheckpoint`, `checkpointInflightWorkForConversation`);
+  no in-scope consumer runs with a bare repository as cwd (the bare git-data store is remote-only and the isolated path
+  sets `GIT_DIR`); `getAskpassDir()` reads the server's own `process.env.HOME`, not the child env; no test asserts
+  `process.env` passthrough into a child git. Sibling-test breakage is larger than argv slicing: `test/session-sync-path-allowlist.test.ts`
+  and `test/server/session-sync-protected-fallback.test.ts` mock `execFileSync` and branch on `args[0]` being the
+  subcommand, and `test/git-data-replication.test.ts` reads `args[2]`/`[4]` positionally (content anchors: the
+  `for-each-ref` and `update-ref` branches and the `remote` index read); these mocks must find the subcommand past the
+  hardening block. `reportSilentFallback` call-count assertions in the session-sync tests all filter by `op` first, so
+  new ops `auto-commit-pull`/`auto-commit-push` break none (reusing an existing op would).
+- Partial mocks of `@/server/agent-env` that omit `...actual` exist in about a dozen unrelated suites but none of the
+  in-scope server modules imports `agent-env` today; importing the new leaf directly avoids the exposure.
+- The built image's `git --version` is unmeasured (`node:22-slim`, digest-pinned, Debian; Dockerfile floor 2.38). The
+  helper therefore uses only `-c key=value` pairs and environment (never a new global option): unknown config keys
+  never fail an old git, an unknown option exits 129.
 
 ### Institutional learnings applied
 
@@ -224,7 +283,7 @@ Fixture contract (hermetic):
 - env built from scratch, no inherited `GIT_DIR`/`GIT_INDEX_FILE` (the vitest `globalSetup` tripwire exits rc=97 otherwise; a server-set `GIT_DIR` row sets it only inside the child-spawn scope, after the tripwire); throwaway root per test; synthesized fixtures (`cq-test-fixtures-synthesized-only`); ephemeral ports and bounded timeouts for the local `node:http` and `ssh` rows.
 - `process.env.SERVER_ONLY_SENTINEL = "SENTINEL-<random>"` set in `beforeEach`, restored in `afterEach`. Helper scripts append a tag line to a canary file OUTSIDE the workspace and write `env` to a per-helper dump file, so the test reads the exact environment a helper saw.
 - Workspace: real `git init`, baseline commit, `knowledge-base/` content, a local `user.name`/`user.email` (as `provisionWorkspaceWithRepo` seeds), a bare "upstream" for pull and push rows.
-- Carrier planters (a table, so rows are generated from it): `commondir` (a copied `.git` inside the workspace, e.g. `.cache-x/`, whose config carries fsmonitor, `filter.zz.clean`, `gpg.program` with `commit.gpgsign`, `diff.external`, `core.sshCommand`, `credential.helper`, `url.<x>.insteadOf`, plus `info/attributes`; `.git/commondir` pointing at it); `.git/config`; `config.worktree`; `.git/hooks/*`; `.git/modules/sub/config` with a gitlink `sub`; tracked `.gitattributes` with `filter` and `merge` drivers; `.git/info/attributes`; a repo `core.attributesFile`; a committed bare repository as cwd.
+- Carrier planters (a table, so rows are generated from it): `commondir` (a copied `.git` inside the workspace, e.g. `.cache-x/`, whose config carries fsmonitor, `filter.zz.clean`, `gpg.program` with `commit.gpgsign`, `diff.external`, `core.sshCommand`, `credential.helper`, `url.<x>.insteadOf`, plus `info/attributes`; `.git/commondir` pointing at it); `.git/config`; `config.worktree`; `.git/hooks/*`; `.git/modules/sub/config` with a gitlink `sub`; tracked `.gitattributes` with `filter` and `merge` drivers; `.git/info/attributes`; a repo `core.attributesFile`; a committed bare repository as cwd; `core.worktree` pointing at a sibling directory; `core.bare=true` against `GIT_WORK_TREE`; a gitfile `.git` pointing at a foreign gitdir; `remote.<n>.uploadpack` on a local-path remote; `protocol.ext.allow=always` plus an `ext::` `insteadOf`; `merge.verifySignatures` on `pull`; `submodule.recurse` with `submodule.<n>.update=!cmd` on `pull`.
 - Twin control, defined: each carrier type runs ONCE, in `beforeAll`, under raw `git <verb>` (no hardening, fresh copy of the fixture, so it cannot mutate the state the hardened rows use) and the result is cached. A carrier that cannot fire on this git fails every row that uses it as "carrier not live". Carriers that are already inert on today's code (`core.sshCommand` against the key-auth arm because `GIT_SSH_COMMAND` wins; `credential.helper` against the legacy arm because `HELPER_RESET` wins; `diff.external`/`textconv` on consumer verbs) are labelled "pre-existing control / regression pin", have no raw twin expectation, and are excluded from the RED expectation.
 
 Drivers (the real code paths; no new seams, CTO F5):
@@ -237,7 +296,7 @@ Drivers (the real code paths; no new seams, CTO F5):
 
 Assertions per row, on observed effects:
 
-- A1 no closable-carrier canary file written (fsmonitor, hook, `config.worktree`, `.git/modules/*/config`, `commit.gpgsign` program, attribute-file filter);
+- A1 no closable-carrier canary file written (fsmonitor, hook, `config.worktree`, `.git/modules/*/config`, `commit.gpgsign` program, attribute-file filter, `uploadpack` on a local-path remote, `ext::` rewrite); and with `core.worktree` pointing at a sibling directory, that directory's files are neither staged, committed, pushed nor overwritten by `reset --hard` (a content check on the sibling);
 - A2 the sentinel is absent from every env dump of every helper that did run (the weight of this assertion sits on the residual-pin rows, because closable carriers never run and leave no dump);
 - A3 the operation's own success (commit lands with the seeded local identity; reset moves HEAD; remote is configured; push reaches the bare remote; checkpoint ref is written);
 - A4 a committed bare repository as cwd is refused when the pin is present (helper-level row).
@@ -251,9 +310,9 @@ Expected RED on current code (and recorded): fsmonitor via `commondir` (A1) for 
 `apps/web-platform/server/host-git.ts` exports:
 
 - `buildScrubbedEnv` (moved verbatim with its regex and `BaseEnv`), `AGENT_GIT_GLOBAL_CONFIG` (moved; `agent-env.ts` re-exports).
-- `hostGitInvocation(args, opts?) -> { args: string[]; env: NodeJS.ProcessEnv }`, `opts = { extraEnv?, globalConfig? }` (`globalConfig` exists only for the helper-level identity rows and defaults to `AGENT_GIT_GLOBAL_CONFIG`; it is a parameter, not a consumer-visible seam).
-  - `args = [...GIT_HARDENING_ARGS, "-c", "safe.bareRepository=explicit", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args]`. A caller that prepends `HELPER_RESET` passes it inside `args`, after the block.
-  - `env = { ...buildScrubbedEnv({}, process.env), ...GIT_HARDENING_ENV, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", <passthrough keys when set>, ...extraEnv }`.
+- `hostGitInvocation(args, opts) -> { args: string[]; env: NodeJS.ProcessEnv }`, `opts = { cwd?, extraEnv?, allowProtocol?, globalConfig? }` (`globalConfig` exists only for the helper-level identity rows and defaults to `AGENT_GIT_GLOBAL_CONFIG`; it is a parameter, not a consumer-visible seam). `cwd` is the workspace root for every working-tree command (omitted for `clone`/`init`); `allowProtocol` is REQUIRED for the two network arms (`gitWithInstallationAuth` legacy passes `https`, `gitWithPrivateKeyAuth` passes `ssh`) and omitted for the local-only consumers; tests widen it through the same parameter (for example `file:https`), never through a separate seam, and a census assertion requires production call sites to pass only those two constants (CTO R8b).
+  - `args = [...GIT_HARDENING_ARGS, "-c", "safe.bareRepository=explicit", "-c", "protocol.ext.allow=never", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...<each of the following only if its Phase 1 row shows it fires under the shared args: "-c", "merge.verifySignatures=false", "-c", "log.showSignature=false", "-c", "submodule.recurse=false", "-c", "fetch.recurseSubmodules=false">, ...args]`. Only `-c key=value` pairs and environment are used, never a new global option (the built image's git is unmeasured and an unknown option exits 129; CTO R8c, R8d). A caller that prepends `HELPER_RESET` passes it inside `args`, after the block.
+  - `env = { ...buildScrubbedEnv({}, process.env) with empty and non-absolute PATH entries dropped, ...GIT_HARDENING_ENV, GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_WORK_TREE: cwd (when given), GIT_ALLOW_PROTOCOL: allowProtocol (when given), <passthrough keys when set>, ...extraEnv }`. Whether `core.bare=true` defeats `GIT_WORK_TREE` and whether a gitfile `.git` to a foreign gitdir escapes it is measured in Phase 1: if `isStrandingFilePointer` / the worktree-shape classifier in `git-worktree-validity.ts` can flag an escaping or unclassifiable pointer cheaply, the helper refuses that workspace and mirrors the refusal to Sentry; otherwise it is pinned as a named residual (CTO R8a).
   - Passthrough keys, only when set in the server env: `SSL_CERT_FILE`, `SSL_CERT_DIR`, `GIT_SSL_CAINFO`, `HTTPS_PROXY`, `https_proxy`, `NO_PROXY`, `no_proxy` (CTO R3; the server env is not agent-writable; prod sets none today). The list is defined in the leaf, not imported from `git-hardened-env.ts`.
   - `extraEnv` is merged AFTER the scrub (the scrub refuses `GIT_*`/`TOKEN`/`SECRET` extras by design; the call-site's own `GIT_ASKPASS`, `GIT_INSTALLATION_TOKEN`, `GIT_SSH_COMMAND`, author identity and temp index live here, code-authored, never agent-authored).
   - Server `GIT_*` variables (`GIT_DIR`, `GIT_EXEC_PATH`, `GIT_OPTIONAL_LOCKS`) are dropped by the scrub.
@@ -268,7 +327,9 @@ Commit order after the RED commit: (a) helper + moves; (b) local-only consumers 
 - `realLocalGit`: `execFileAsync("git", h.args, { cwd, env: h.env, timeout, killSignal, maxBuffer })`.
 - `gitWithPrivateKeyAuth`: `fullArgs = h.args` with `HELPER_RESET` inside; `extraEnv: { GIT_SSH_COMMAND, GIT_TERMINAL_PROMPT, GIT_TERMINAL_PROGRESS }`; no `GIT_CONFIG_*` of its own.
 - Legacy arm of `gitWithInstallationAuth`: hardening block first, then `HELPER_RESET`, then `args`; `extraEnv` is `authEnv` minus `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_NOSYSTEM`. In the `hardened` arm nothing changes (its argv order, which puts `HELPER_RESET` first, stays).
-- Existing exact-argv sibling assertions are updated to slice off the hardening block (computed from the helper's own output in the test, not a copied literal list).
+- Existing exact-argv sibling assertions are updated to slice off the hardening block (computed from the helper's own output in the test, not a copied literal list). The mocks that branch on `args[0]` being the subcommand (`test/session-sync-path-allowlist.test.ts`, `test/server/session-sync-protected-fallback.test.ts`) are changed to find the subcommand past the block, and the positional index reads in `test/git-data-replication.test.ts` shift by the block length.
+- Scheme grep (before wiring `allowProtocol`): every remote URL scheme the legacy and key-auth callers can see, including `test/` and e2e fixtures (`git grep -n 'https://\|ssh://\|file://' -- apps/web-platform/server apps/web-platform/test apps/web-platform/e2e`); results go in the PR body. A scheme outside `https`/`ssh` on a network arm becomes a documented parameter value, not a silent break.
+- `GIT_WORK_TREE` is set from the workspace path each consumer already holds (`workspacePath`/`cwd`); `clone` and `init` pass no `cwd`.
 
 ### Phase 4: residual wording and ADR
 
@@ -328,7 +389,8 @@ Amend ADR-050 (2026-11-09 amendment, host-side git bullet): now covered / still 
 | `SSL_CERT_*`, `GIT_SSL_CAINFO`, proxy passthrough when set | "and the commit still succeeds" (the network arms must keep working) | inferred - justification: CTO F3, R3; a no-op in prod today (no such env set), keeps TLS behaviour unchanged if it is ever set |
 | Sentry mirror at the two auto-commit catches | "the commit still succeeds" | inferred - justification: CTO R4 and `cq-silent-fallback-must-mirror-to-sentry`; the headline failure this change can expose (identity) was a bare `log.warn` |
 | ADR-050 bullet amendment | "State plainly in the PR what the control does NOT claim" | inferred - justification: the recorded residual lives in ADR-050; leaving it stale contradicts the plan-as-deliverable rule (CTO F7) |
-| Carrier-presence preflight, `allowProtocol` | - | descoped - justification: CTO F4, R2 |
+| `GIT_WORK_TREE=<cwd>`, `GIT_ALLOW_PROTOCOL` on the network arms, `-c protocol.ext.allow=never`, measured-or-dropped `-c` additions (`merge.verifySignatures`, `log.showSignature`, `submodule.recurse`, `fetch.recurseSubmodules`), PATH-entry filtering | "harden the host-side git consumers" | inferred - justification: CTO R8a-R8c; each closes a carrier measured or sentinel-confirmed at deepen-plan time (`core.worktree` redirect to a foreign tenant dir, local-exec transports on the network arms); the unmeasured ones ship only if their Phase 1 row fires |
+| Carrier-presence preflight | - | descoped - justification: CTO F4 |
 
 ### Split Assessment
 
@@ -345,6 +407,8 @@ Pre-merge (PR):
 - [ ] AC2. Every carrier type has a cached raw-git twin; a carrier that cannot fire fails its rows as "carrier not live"; carriers inert on today's code are labelled "pre-existing control / regression pin".
 - [ ] AC3. For each of the FIVE consumers (session-sync, ensure-workspace-repo, git-data-replication including the key-auth push, the legacy installation-auth arm, inflight-checkpoint): no fsmonitor, hook, `config.worktree`, `.git/modules/*/config`, attribute-file filter, signing program, `core.sshCommand`, `credential.helper` or `diff.external` canary is written; no server-only sentinel appears in any env dump; the operation succeeds.
 - [ ] AC4. Helper-level rows: a workspace with NO local identity commits through a temp identity file; the default `globalConfig` is `AGENT_GIT_GLOBAL_CONFIG` (one definition); an absent file fails with "Author identity unknown" (pinned); a consumer-level commit lands with the seeded local identity.
+- [ ] AC3a. With `core.worktree` pointing at a sibling directory, the sibling's content is untouched by every consumer (staging, commit, push, `reset --hard`); with `uploadpack` on a local-path remote and an `ext::` rewrite, no canary is written on the two network arms; a gitfile `.git` to a foreign gitdir is either refused by the shape check (with a Sentry mirror) or pinned as a named residual.
+- [ ] AC3b. Every helper addition outside the CTO's R6 and R8a-R8b rulings (`merge.verifySignatures`, `log.showSignature`, `submodule.recurse`, `fetch.recurseSubmodules`) ships only with a Phase 1 row showing it fires under the shared args; otherwise it is dropped from the PR. The helper uses only `-c key=value` pairs and environment, never a new global option.
 - [ ] AC5. `RESIDUAL` rows exist for `filter.*` (each attribute source), `merge.*.driver` on `pull`, repo-config remote rewriting (every measured key), the legacy arm's installation token and the key-auth arm's transport-key reference; comments say "measured open item, not a control". The key-auth rewritten-host row shows the host-key pin options in the recorded ssh argv.
 - [ ] AC6. Git older than 2.38 makes the suite THROW (`beforeAll`), no `skip`.
 - [ ] AC7. `buildScrubbedEnv` and `AGENT_GIT_GLOBAL_CONFIG` each have one definition (the leaf); `compound-promote-create-gates.test.ts` and `dockerfile-git-version-floor.test.ts` pass unmodified; `host-git.ts` imports only `node:os` and `_git-hardening`.
@@ -359,15 +423,19 @@ Post-merge (operator-free, agent-run, carry-forward): the Sentry read in Phase 6
 ### PR-body "does NOT claim" block (verbatim)
 
 > This change does not isolate host-side git from the workspace `.git`: host-side git still reads the repository's
-> config. It adds `-c` arguments and a scrubbed environment, which close fsmonitor, hooks, `config.worktree`,
-> attribute-file sources, commit signing and server-secret exposure to any helper that runs. It does NOT close
-> `filter.*` drivers (through `.git/info/attributes`, a `commondir` redirect or a tracked `.gitattributes`),
-> `merge.*.driver`, repo-config remote, proxy and TLS settings (including `url.<x>.insteadOf`), or a consumer's own
-> auth variable reaching a helper that runs (the installation token in the legacy arm; a reference to the transport
-> key file in the key-auth arm, where the pinned host key is the control against a rewritten host); those are pinned by
-> tests as measured open items. It says nothing about in-sandbox git, Bash-created `.git` members, `bash_autonomous`
-> or batch-grant grammar binding, pre-poisoned workspaces, or a production TLS or egress measurement (not measured).
-> The isolated-`GIT_DIR` push path and its tracking issue are not closed or touched. Ref #9601.
+> config. It adds `-c` arguments, a few environment pins (`GIT_WORK_TREE`, `GIT_ALLOW_PROTOCOL` on the two network
+> arms) and a scrubbed environment, which close fsmonitor, hooks, `config.worktree`, attribute-file sources, commit
+> signing, a `core.worktree` redirect, the measured local-exec transport carriers (`uploadpack` on a local-path remote,
+> `ext::`) and server-secret exposure to any helper that runs. It does NOT close `filter.*` drivers (through
+> `.git/info/attributes`, a `commondir` redirect or a tracked `.gitattributes`), `merge.*.driver`, repo-config remote,
+> proxy and TLS settings (including `url.<x>.insteadOf` toward an https or ssh host), a gitfile `.git` pointing at a
+> foreign gitdir unless the measured shape check below says otherwise, or any other repo-config execution path that
+> was not measured. A consumer's own auth variable still reaches any helper that runs: the installation token in the
+> legacy arm, and in the key-auth arm a helper that runs can READ the 0600 transport key file during the push (the
+> pinned host key protects the handshake, not the file). Those are pinned by tests as measured open items. It says
+> nothing about in-sandbox git, Bash-created `.git` members, `bash_autonomous` or batch-grant grammar binding,
+> pre-poisoned workspaces, or a production TLS or egress measurement (not measured). The isolated-`GIT_DIR` push path
+> and its tracking issue are not closed or touched. Ref #9601.
 
 ## Domain Review
 
@@ -383,7 +451,7 @@ Legal: not relevant. No public, marketing or legal text changes; any legal wordi
 ## User-Brand Impact
 
 - **If this lands broken, the user experiences:** the end-of-session auto-commit or pull silently stops (identity loss, or a scrubbed environment that breaks the HTTPS clone or pull), so a user's knowledge-base edits never reach their GitHub repository, or a new session cannot open the workspace; the visible symptom is "Sync pull failed - continuing with local state" and unpushed work. After this change the two auto-commit failures also reach Sentry.
-- **If this leaks, the user's data / workflow is exposed via:** a prompt-injected agent session in one workspace plants a `.git` carrier (a `commondir` redirect to a directory it authored); the server's next host-side git run, outside the sandbox, executes the carrier's helper with the server's environment, which holds the database service-role key, the BYOK encryption key and the git-data transport key. That reaches other tenants, not only the author. After this change the server-only variables do not reach a helper that runs. A `filter.*` or `merge.*.driver` helper still runs and still sees the consumer's own auth variable: the installation token of that same user's repository in the legacy arm, and, in the key-auth push, the `GIT_SSH_COMMAND` that names the cross-tenant git-data transport key file (readable by a same-uid helper). Repo-config remote rewriting can still redirect a tokened fetch or pull. Those are pinned residuals, not controls; the pinned host key is the only control named for a rewritten host on the key-auth arm.
+- **If this leaks, the user's data / workflow is exposed via:** a prompt-injected agent session in one workspace plants a `.git` carrier (a `commondir` redirect to a directory it authored); the server's next host-side git run, outside the sandbox, executes the carrier's helper with the server's environment, which holds the database service-role key, the BYOK encryption key and the git-data transport key. That reaches other tenants, not only the author. After this change the server-only variables do not reach a helper that runs. A `filter.*` or `merge.*.driver` helper still runs and still sees the consumer's own auth variable: the installation token of that same user's repository in the legacy arm, and, in the key-auth push, the `GIT_SSH_COMMAND` that names the cross-tenant git-data transport key file, which a same-uid helper that runs can read during the push. Repo-config remote rewriting toward an https or ssh host can still redirect a tokened fetch or pull. Those are pinned residuals, not controls. The env pins (`GIT_WORK_TREE`, `GIT_ALLOW_PROTOCOL` on the network arms) close the measured foreign-worktree and local-exec transport carriers; any other repo-config execution path that was not measured remains open.
 - **Brand-survival threshold:** `single-user incident`
 - **Threshold decision (challengeable):** ratified by the CTO 2026-11-09 for the preceding git-read change and carried forward unchanged: execution needs only one prompt-injected session in one workspace, and the server-environment reach is cross-tenant, so `aggregate pattern` would understate it.
 
@@ -440,6 +508,9 @@ discoverability_test:
 | 5 | helper puts `GIT_CONFIG_GLOBAL=/dev/null` last, or a network arm re-adds its own `/dev/null` after the helper | no-local-identity commit row and the legacy/key identity rows |
 | 6 | move the hardening block after `HELPER_RESET` / after the subcommand | argv-order row on the recorded spawn argv |
 | 7 | drop `commit.gpgsign=false` from the helper | gpg-program row |
+| 7a | stop setting `GIT_WORK_TREE=<cwd>` in the helper | `core.worktree` foreign-directory row (sibling content staged or overwritten) |
+| 7b | stop passing `allowProtocol` from the key-auth arm (or widen it to `file`) | `uploadpack` local-remote row and the census assertion on production call-site constants |
+| 7c | drop `-c protocol.ext.allow=never` | `ext::` rewrite row |
 | 8 | the battery's own dispatch: every driver returns early so zero canary-checked runs happen | floor row: `canaryCheckedRuns === carrierTypes.length * drivers.length` computed from the planter and driver tables, not a literal |
 | 9 | remove carrier B's per-carrier canary assertion (keep carrier A's) | the row-count/assertion-presence row for B, because each carrier asserts its own canary |
 
@@ -511,7 +582,7 @@ None. Queried open `code-review` issues for `session-sync.ts`, `ensure-workspace
 
 ## Handoff block for the final report (consumed by work/ship)
 
-- (a) Residuals: `filter.*` through every attribute source; `merge.*.driver` on pull; repo-config remote, proxy and TLS settings including `url.<x>.insteadOf`; the consumer's own auth variable reaching a helper that runs (legacy: installation token; key-auth: a reference to the cross-tenant transport key file, host-key pin as the only named control); host-side git not isolated from the workspace `.git`; census-only callers (`workspace.ts`, `git-config-atomic.ts`, `worktree-config-seed.ts`, `push-branch.ts` legacy branch, `context-queries-hook.ts`, `git-worktree-validity.ts`, `event-ship-merge.ts`, cron helpers); in-sandbox git, Bash-created `.git` members, `bash_autonomous`/batch-grant grammar binding and pre-poisoned workspaces untouched.
+- (a) Residuals: `filter.*` through every attribute source (`--attr-source` measured as a partial control and not adopted: git floor, `info/attributes` still fires); `merge.*.driver` on pull; repo-config remote, proxy and TLS settings including `url.<x>.insteadOf` toward https/ssh hosts; the consumer's own auth variable reaching a helper that runs (legacy: installation token; key-auth: the helper can read the 0600 cross-tenant transport key file during the push; the transport-key temp-file location is left as is, CTO R8e); a gitfile `.git` to a foreign gitdir unless the Phase 1 shape check closes it; any repo-config execution path not measured; host-side git not isolated from the workspace `.git`; census-only callers (`workspace.ts`, `git-config-atomic.ts`, `worktree-config-seed.ts`, `push-branch.ts` legacy branch, `context-queries-hook.ts`, `git-worktree-validity.ts`, `event-ship-merge.ts`, cron helpers); in-sandbox git, Bash-created `.git` members, `bash_autonomous`/batch-grant grammar binding and pre-poisoned workspaces untouched.
 - (b) Operator never-done items: creating or flipping any flag or environment; prd writes needing approval, prd migrations or psql; legal wording sign-off; public security claims ahead of a measured control; reading or flipping `AGENT_OUTER_WRAP` live; the isolated-`GIT_DIR` push path and its tracking issue; creating a Sentry alert.
 - (c) Open items: CODEOWNERS review for `git-auth.ts` and `git-data-replication.ts`; PR-body `Follow-ups not filed` (isolated-`GIT_DIR` extension to the legacy arm; `sshWithPrivateKeyAuth` and `git-config-atomic.ts` census items; repo-config remote rewriting closure; a Sentry alert on the new auto-commit ops) with draft text; Infra Validation (cloud-init pin drift) and the advisory affected-index ratchet deliberately not fixed.
 - The CTO's operator-needed actions: none (both rounds).
