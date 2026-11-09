@@ -414,7 +414,7 @@ sut S14 "$PRN"
 [[ "$OUT" != *"NOT that the PR is mergeable"* ]] && _v=0 || _v=1; chk "$_v" "S14 the earlier complete marker contributes nothing (no 'mergeable' note)" "out=[$OUT]"
 
 # ── S15 RECOVERY lines must match the resolver's CLOSED grammar; the rest is counted, not printed ──
-# Positive control first: one line of each of the nine shapes the resolver prints (ci-head-verdict.sh recover_required), all shown.
+# Positive control first: one line of each of the ten lines the resolver prints (ci-head-verdict.sh recover_required), all shown.
 newrow
 {
   printf 'RECOVERY rerun run=7 basis=workflow ctx="a" wf="W": gh run rerun 7\n'
@@ -431,7 +431,7 @@ newrow
   printf '%s\n' "$M_ABS"
 } > "$STUBD/body"
 sut S15a "$PRN"
-[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 11 && "$OUT" != *"outside the resolver grammar"* && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15a every shape the resolver prints (nine shapes, three pointer reasons, a 15-digit run id) is shown, no 'outside the grammar' line" "out=[$OUT]"
+[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 11 && "$OUT" != *"outside the resolver grammar"* && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15a every line the resolver prints (ten printf lines, three pointer reasons, a 15-digit run id) is shown, no 'outside the grammar' line" "out=[$OUT]"
 # Negative rows: each line below is outside the grammar and must be dropped and counted.
 newrow
 {

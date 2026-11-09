@@ -12,7 +12,7 @@
 #   2. REQUIRED-SET READ — read-only (...) note
 #   3. (state=complete only) the "NOT that the PR is mergeable" note
 #   4. RECOVERY lines in the resolver's own order (none when state=error). Each line must match the resolver's CLOSED grammar (the
-#      nine shapes ci-head-verdict.sh prints: rerun basis=workflow|candidate, owner not determined x2, no cancelled run, pointer
+#      ten lines ci-head-verdict.sh prints: rerun basis=workflow|candidate, owner not determined x2, no cancelled run, pointer
 #      reason=|failed=|pending=; a `gh run rerun <id>` tail must repeat the run id and the id has at most 15 digits); a line outside
 #      it is counted, not printed, and one "N RECOVERY line(s) ... not shown" line follows. Pointer lines are matched by prefix:
 #      they carry no command text beyond fixed words. Only `basis=candidate` lines are capped at 20, then one "N more candidate
