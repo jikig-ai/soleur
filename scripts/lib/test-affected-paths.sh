@@ -4999,6 +4999,8 @@ AFFECTED_SCRIPTS_HOST_TCP_EXPOSURE_PATHS=(
 AFFECTED_SCRIPTS_HOST_KERNEL_CADENCE_12008_PATHS=(
   "scripts/followthroughs/host-kernel-cadence-12008.sh"
   "plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
+  "scripts/betterstack-query.sh"
+  "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/test-affected-paths.sh"
   "scripts/followthroughs/host-kernel-cadence-12008.test.sh"
   "scripts/host-tcp-exposure.test.sh"
