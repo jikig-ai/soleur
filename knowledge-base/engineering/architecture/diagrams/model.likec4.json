@@ -2388,17 +2388,6 @@
 "id": "2j2hmcu9o8e7p",
 "title": "Recommends ADR creation"
 },
-"2jy9gkus366d6": {
-"technology": "HTTPS (GitHub REST API)",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "github"
-},
-"id": "2jy9gkus366d6",
-"title": "Reads release notes for the in-app Releases page"
-},
 "2lu63nr6gqhmq": {
 "technology": "HTTPS (GitHub REST: rulesets + contents; git refs/tags write via POST git/tags + git/refs; Actions workflow_dispatch API); git push x-access-token + gh CLI for the internal write. The vinngest tag write is a SEPARATE credential: the mint job's GITHUB_TOKEN, not the soleur-infra App token",
 "source": {
@@ -3405,6 +3394,17 @@
 },
 "id": "m8sifjwi8k9t",
 "title": "PreToolUse ask/deny on destructive commands; no egress"
+},
+"mej2q3j6su6b": {
+"technology": "HTTPS (GitHub REST API)",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "github"
+},
+"id": "mej2q3j6su6b",
+"title": "Reads release notes for the in-app Releases page. In an entitled web-egress session whose repository was verified public at registration, the Concierge cc dispatcher in the web app also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)"
 },
 "nph1p3hmvtkx": {
 "technology": "Ephemeral git workspace → GitHub push/PR (safeCommitAndPr)",
@@ -6991,10 +6991,10 @@
 "15jcg8gdjqck",
 "1sqwkvp8bvaqw",
 "21oqpwt1wvybl",
-"2jy9gkus366d6",
 "33oelk4lvl3u7",
 "3mxkvx15xswfp",
-"3q20kgm5yx0v"
+"3q20kgm5yx0v",
+"mej2q3j6su6b"
 ],
 "color": "gray",
 "line": "dashed",
@@ -10388,7 +10388,7 @@
 ],
 "notation": "Person",
 "kind": "actor",
-"x": 1159,
+"x": 1116,
 "y": 377,
 "width": 362,
 "height": 180,
@@ -12084,36 +12084,36 @@
 "label": "Asks app-help questions via the support \nbubble — routed to the scope-reduced \nsupport persona (ADR-113)",
 "points": [
 [
-1304,
+1261,
 557
 ],
 [
-1288,
-611
+1245,
+612
 ],
 [
-1280,
+1237,
 680
 ],
 [
-1318,
+1275,
 727
 ],
 [
-1397,
-825
+1359,
+831
 ],
 [
-1745,
-873
+1735,
+877
 ],
 [
-1958,
-893
+1959,
+896
 ]
 ],
 "labelBBox": {
-"x": 1319,
+"x": 1276,
 "y": 635,
 "width": 252,
 "height": 72
@@ -13434,31 +13434,31 @@
 "id": "1bd791r",
 "source": "platform.webapp",
 "target": "github",
-"label": "Reads release notes for the in-app \nReleases page",
+"label": "Reads release notes for the in-app \nReleases page. In an entitled web-egress \nsession whose repository was verified \npublic at registration, the Concierge cc \ndispatcher in the web app also serves ",
 "points": [
 [
-2126,
+2111,
 818
 ],
 [
-2129,
-751
+2104,
+752
 ],
 [
-2145,
-664
+2108,
+666
 ],
 [
-2205,
+2162,
 617
 ],
 [
-2328,
-520
+2278,
+510
 ],
 [
-7281,
-477
+7276,
+475
 ],
 [
 8312,
@@ -13466,17 +13466,17 @@
 ]
 ],
 "labelBBox": {
-"x": 2206,
-"y": 643,
-"width": 219,
-"height": 56
+"x": 2163,
+"y": 618,
+"width": 262,
+"height": 106
 },
 "parent": null,
 "relations": [
 "12uwtp6e65sao",
 "21oqpwt1wvybl",
-"2jy9gkus366d6",
-"3q20kgm5yx0v"
+"3q20kgm5yx0v",
+"mej2q3j6su6b"
 ],
 "color": "gray",
 "line": "dashed",
@@ -13790,32 +13790,32 @@
 469
 ],
 [
-7302,
+7300,
 473
 ],
 [
-2197,
+2170,
 502
 ],
 [
-2085,
+2057,
 617
 ],
 [
-2037,
-666
+2008,
+667
 ],
 [
-2052,
-745
+2031,
+746
 ],
 [
-2077,
-808
+2064,
+809
 ]
 ],
 "labelBBox": {
-"x": 2086,
+"x": 2058,
 "y": 659,
 "width": 25,
 "height": 18
@@ -15134,36 +15134,36 @@
 469
 ],
 [
-7292,
-476
+7291,
+478
 ],
 [
-2088,
-518
+2068,
+525
 ],
 [
-1766,
+1742,
 617
 ],
 [
-1680,
+1648,
 643
 ],
 [
-1682,
+1646,
 701
 ],
 [
-1595,
+1552,
 727
 ],
 [
-1563,
-737
+1521,
+736
 ],
 [
-407,
-723
+406,
+724
 ],
 [
 375,
@@ -15183,7 +15183,7 @@
 ]
 ],
 "labelBBox": {
-"x": 1767,
+"x": 1743,
 "y": 618,
 "width": 258,
 "height": 106

@@ -101,6 +101,32 @@ describe("runner registration census", () => {
     expect(users).toEqual(["server/cc-github-push.ts", "server/github-tools.ts"]);
   });
 
+  test("#12469: the cc runner reaches the read-only GitHub builder only through ./cc-github-read, and only that registrar and github-tools.ts mention it", () => {
+    const cc = src("server/cc-dispatcher.ts");
+    expect(cc).toMatch(/from\s+["']\.\/cc-github-read["']/);
+    expect(cc, "cc-dispatcher must not import the builder directly").not.toMatch(/\bbuildGithubReadTools\b/);
+    expect(cc, "cc-dispatcher must not register a read tool by literal name").not.toMatch(ccRegistrationRe("github_list_pull_requests"));
+    const walk = (dir: string): string[] =>
+      readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(`${dir}/${e.name}`) : /\.tsx?$/.test(e.name) ? [`${dir}/${e.name}`] : [],
+      );
+    const users = walk("server").filter((f) => /\bbuildGithubReadTools\b/.test(src(f))).sort();
+    expect(users).toEqual(["server/cc-github-read.ts", "server/github-tools.ts"]);
+  });
+
+  test("#12469: the cold factory publishes the registered read tools into a cell the warm path reads, and canUseTool's list takes the registrar's names only", () => {
+    const cc = src("server/cc-dispatcher.ts");
+    expect(cc).toMatch(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[[^\]]*getCcRegisteredReadTools\(userId,\s*conversationId\)/);
+    // The spread must be UNCONDITIONAL, in code, and its VALUE USED: the list's last element is exactly the bare spread, so no
+    // ternary, comment, `.filter(...)` or other chained member after the call can neuter it.
+    const list = (cc.match(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[([^\]]*)\]\s*\)/)?.[1] ?? "").replace(/\/\/.*$/gm, "");
+    expect(list).not.toMatch(/\?|\bfalse\b|&&|\|\|/);
+    expect(list).toMatch(/(?:^|,)\s*\.\.\.getCcRegisteredReadTools\(userId,\s*conversationId\)\s*,?\s*$/);
+    expect(cc).toMatch(/platformToolNames:\s*\[[\s\S]{0,600}?\.\.\.readToolNames/);
+    expect(cc).toMatch(/readToolNames\s*=\s*readRegistration\.toolNames/);
+    expect(cc).toMatch(/_ccRegisteredReadTools\.set\(/);
+  });
+
   test("the warm-path mirror consults the factory-published registered set, and canUseTool's platform list takes the registrar's names only", () => {
     const cc = src("server/cc-dispatcher.ts");
     expect(cc).toMatch(/shouldMirrorUnregisteredPlatformToolUse\(block\.name,\s*\[[^\]]*getCcRegisteredApprovalTools\(userId,\s*conversationId\)/);

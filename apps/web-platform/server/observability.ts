@@ -411,6 +411,10 @@ export function infoSilentFallback(
  *   op-slug emit sites in `cc-dispatcher.ts` reference
  *   `CC_OP_SLUGS.*` (e.g., `CC_OP_SLUGS.saveAssistant`,
  *   `CC_OP_SLUGS.persistUserMessage`) — see #3642 F7.
+ * - `cc-github-read` family (#12469): `cc-github-read-tool:<tool>:<errName>:<status>:<cause>` (one slot per user, tool and fault
+ *   class; tool is one of six fixed names, errName a class name, status an HTTP code, cause a class name or `-`),
+ *   `cc-github-read-visibility-resolve` (error level) and, via `mirrorWarnWithDebounce`, `cc-github-read-unavailable` and
+ *   `cc-github-read-visibility-unknown`.
  * - `agent-sandbox-bash-tool-result:<errorCode>` (cc-dispatcher `onToolResult` Bash denial mirror; one slot per
  *   classified code, so a code that fires does not mask another one for the same user, #10445).
  * - `kb-document-resolver` family: PDF text-extraction failure classes

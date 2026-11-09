@@ -43,6 +43,7 @@ const {
   mockResolveActiveWorkspacePath,
   mockResolveActiveWorkspace,
   mockGetCurrentRepoUrl,
+  mockMirrorWarnWithDebounce,
   mockReadCurrentRepoUrlResult,
   mockGetCurrentRepoStatus,
   mockGetInstallationAccount,
@@ -57,8 +58,11 @@ const {
   mockGithubApiGet,
   mockHeadSha,
   registrarOverride,
+  readRegistrarOverride,
   conversationWriteOverride,
 } = vi.hoisted(() => ({
+  // #12469: the same for the READ registrar (null = the real one).
+  readRegistrarOverride: { fn: null as null | ((a: Record<string, unknown>) => Promise<unknown>) },
   conversationWriteOverride: { fn: null as null | (() => Promise<unknown>) },
   // #11636: a per-test replacement for the registrar (null = the REAL one). Lets a test hand the dispatcher a result the real
   // registrar can never produce (a foreign name), to prove the dispatcher's own runtime assertion rejects it.
@@ -67,7 +71,7 @@ const {
   // per-test switch (default OFF = the dark path); the default-branch lookup and the workspace HEAD are canned.
   mockPushBranch: vi.fn(async (_o: Record<string, unknown>) => ({ branch: "feat-x", pushed: true })),
   mockApprovalFlag: vi.fn(async (): Promise<unknown> => false),
-  mockGithubApiGet: vi.fn(async (): Promise<unknown> => ({ default_branch: "trunk" })),
+  mockGithubApiGet: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ default_branch: "trunk" })),
   mockHeadSha: vi.fn(async () => "d".repeat(40)),
   mockResolveSandboxUnixDeny: vi.fn(async () => false),
   mockResolveC4FlagEnabled: vi.fn(async () => false),
@@ -97,6 +101,7 @@ const {
   mockResolveActiveWorkspacePath: vi.fn(),
   mockResolveActiveWorkspace: vi.fn(),
   mockGetCurrentRepoUrl: vi.fn(),
+  mockMirrorWarnWithDebounce: vi.fn(),
   mockReadCurrentRepoUrlResult: vi.fn(),
   mockGetCurrentRepoStatus: vi.fn(),
   mockGetInstallationAccount: vi.fn(),
@@ -299,6 +304,8 @@ vi.mock("@/server/observability", () => ({
   // These dispatcher tests do not exercise the debounce TTL, so
   // the stub forwards every call straight through to the spy.
   mirrorWithDebounce: mockReportSilentFallback,
+  // #12469: the read registrar's warning for an entitled session without a repo.
+  mirrorWarnWithDebounce: mockMirrorWarnWithDebounce,
   __resetMirrorDebounceForTests: vi.fn(),
   MIRROR_DEBOUNCE_MS: 5 * 60 * 1000,
 }));
@@ -432,6 +439,16 @@ vi.mock("@/server/cc-github-push", async (importOriginal) => {
   };
 });
 
+// #12469: the read registrar, delegating to the REAL one unless a test installs `readRegistrarOverride.fn`.
+vi.mock("@/server/cc-github-read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/cc-github-read")>();
+  return {
+    ...actual,
+    resolveCcGithubReadRegistration: (a: Parameters<typeof actual.resolveCcGithubReadRegistration>[0]) =>
+      readRegistrarOverride.fn ? readRegistrarOverride.fn(a as unknown as Record<string, unknown>) : actual.resolveCcGithubReadRegistration(a),
+  };
+});
+
 // #11636: the approval-queue flag read, shared by the registrar and the gate's default seam. A per-test switch.
 vi.mock("@/server/approval/flag", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/server/approval/flag")>()),
@@ -466,9 +483,11 @@ import {
   dispatchSoleurGo,
   __setCcRunnerForTests,
   getCcRegisteredApprovalTools,
+  getCcRegisteredReadTools,
   realSdkQueryFactory,
 } from "@/server/cc-dispatcher";
 import { ccPushPromptAddendum } from "@/server/cc-github-push";
+import { RESOLVE_TIMEOUT_MS } from "@/server/resolve-protected-branches";
 import { createApprovalGateDeps } from "@/server/approval/gate";
 import { recordSandboxPosture } from "@/server/agent-sandbox-seccomp";
 import { __resetAgentAuthDedupeForTests } from "@/server/agent-auth-failure";
@@ -563,6 +582,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     vi.clearAllMocks();
     // #11636: the push registration's seams default to the dark path (flag OFF) so every pre-existing case is unaffected.
     registrarOverride.fn = null;
+    readRegistrarOverride.fn = null;
     conversationWriteOverride.fn = null;
     mockApprovalFlag.mockReset().mockResolvedValue(false);
     mockGithubApiGet.mockReset().mockResolvedValue({ default_branch: "trunk" });
@@ -973,6 +993,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const PUSH_FQN = "mcp__soleur_platform__github_push_branch";
     const HEAD = "d".repeat(40);
     const REPO_URL = "https://github.com/acme/kb-repo";
+    // #12469: the read registrar's repository-visibility lookup goes through the same mocked `githubApiGet` (it is the only caller
+    // passing `redirect: "manual"`). The push assertions below count the DEFAULT-BRANCH lookup only, so they filter it out; the
+    // mock's answer has no `private` field, which the read registrar treats as private, so no read tool registers in these cases.
+    const pushLookupCalls = () =>
+      mockGithubApiGet.mock.calls.filter((c) => (c as unknown[])[2] === undefined || ((c as unknown[])[2] as { redirect?: string }).redirect !== "manual");
     // The default branch the mocked lookup answers with (see the hoisted `mockGithubApiGet` default).
     const ADDENDUM = ccPushPromptAddendum("trunk");
 
@@ -1027,7 +1052,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       eligible({ flag: false });
       await realSdkQueryFactory(makeArgs());
       expectDarkPath();
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
       expect(prompt().startsWith("system\n\n## GitHub `gh` errors")).toBe(true);
       const deps = ccCtx().deps;
       expect(deps.approval.grants).toBeInstanceOf(ExecutionGrants);
@@ -1042,7 +1067,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       await realSdkQueryFactory(makeArgs());
       expectDarkPath();
       expect(mockReportSilentFallback.mock.calls.some(([, o]) => o?.op === "cc-push-flag-resolve")).toBe(true);
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
     });
 
     it.each([
@@ -1054,7 +1079,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       row.set();
       await realSdkQueryFactory(makeArgs());
       expectDarkPath();
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
     });
 
     it("a registrar that THROWS never breaks Query construction: the Query is built on the dark path and the failure is reported", async () => {
@@ -1121,7 +1146,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       eligible();
       await realSdkQueryFactory(makeArgs({ persona: "support" }));
       expectDarkPath();
-      expect(mockGithubApiGet).not.toHaveBeenCalled();
+      expect(pushLookupCalls()).toHaveLength(0);
     });
 
     it("default-branch lookup fails: not registered (fail closed, never a 'main' fallback), reported under cc-push-default-branch-resolve", async () => {
@@ -1147,7 +1172,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(getCcRegisteredApprovalTools("user-1", "conv-1")).toEqual([PUSH_FQN]);
       // ADR-305: a gated tool never enters allowedTools (canUseTool, i.e. the gate, is its only allow source).
       expect(mockQuery.mock.calls.at(-1)![0].options.allowedTools).not.toContain(PUSH_FQN);
-      expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
+      expect(pushLookupCalls()).toHaveLength(1);
       expect(registrationEvents()[0][1]).toMatchObject({ tags: { reason: "registered" } });
     });
 
@@ -1277,8 +1302,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       expect(mockApprovalFlag.mock.calls[0]).toEqual([{ userId: "user-1", workspaceId: TEAM }]);
       expect(ccCtx().deps.approval.workspaceId).toBe(TEAM);
       // The default-branch lookup: the effective installation id, owner/repo in order, and an abort signal.
-      expect(mockGithubApiGet).toHaveBeenCalledTimes(1);
-      expect(mockGithubApiGet).toHaveBeenCalledWith(987654, "/repos/acme/kb-repo", { signal: expect.any(AbortSignal) });
+      expect(pushLookupCalls()).toHaveLength(1);
+      expect(pushLookupCalls()[0]).toEqual([987654, "/repos/acme/kb-repo", { signal: expect.any(AbortSignal) }]);
       // The handler pushes with that same installation.
       const deps = ccCtx().deps;
       deps.approval.grants.enforcing = true;
@@ -1485,6 +1510,403 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
         claudeTmpDir: expect.stringMatching(/^\/tmp\/\.cs\/[0-9a-f]{16}$/), sandboxUnixDeny: false,
       },
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // #12469: the six read-only GitHub tools are registered ONLY for a web-egress-entitled, non-support session whose connected
+  // repository is verified PUBLIC. Every other state is byte-identical to a build without them.
+  // -------------------------------------------------------------------------
+  describe("github read tools registration (#12469)", () => {
+    const READ_FQNS = [
+      "mcp__soleur_platform__github_list_pull_requests",
+      "mcp__soleur_platform__github_read_pr",
+      "mcp__soleur_platform__github_read_issue",
+      "mcp__soleur_platform__github_read_issue_comments",
+      "mcp__soleur_platform__github_list_pr_comments",
+      "mcp__soleur_platform__github_read_ci_status",
+    ];
+    const READ_SHORT = READ_FQNS.map((n) => n.replace("mcp__soleur_platform__", ""));
+    const REPO_URL = "https://github.com/acme/kb-repo";
+
+    /** A GitHub that answers the visibility lookup (the only `redirect: "manual"` caller) and anything else harmlessly. */
+    function github(visibility: unknown) {
+      mockGithubApiGet.mockImplementation(async (...a: unknown[]) => {
+        const [, path, opts] = a as [number, string, { redirect?: string } | undefined];
+        if (opts?.redirect === "manual" && path === "/repos/acme/kb-repo") return { private: visibility };
+        return { default_branch: "trunk" };
+      });
+    }
+    function entitled(over: { entitled?: boolean; repo?: boolean; forwarder?: boolean } = {}) {
+      mockApprovalFlag.mockResolvedValue(false); // the push tool stays out of these cases
+      mockResolveWebEgress.mockResolvedValue(over.entitled ?? true);
+      if (over.repo !== false) {
+        mockGetCurrentRepoUrl.mockResolvedValue(REPO_URL);
+        mockResolveInstallationId.mockResolvedValue(987654);
+      } else {
+        mockGetCurrentRepoUrl.mockResolvedValue(null);
+        mockResolveInstallationId.mockResolvedValue(null);
+      }
+      if ((over.entitled ?? true) && over.forwarder !== false) {
+        mockSpawnEgressForwarder.mockResolvedValue({ port: 28711, token: "tok-abc", pid: 4242 });
+      } else {
+        mockSpawnEgressForwarder.mockRejectedValue(new Error("bind boom"));
+      }
+    }
+
+    const ccCtx = () => {
+      const mock = createCanUseTool as unknown as { mock: { calls: unknown[][] } };
+      return mock.mock.calls.at(-1)![0] as { platformToolNames: string[] };
+    };
+    const tools = () =>
+      mockQuery.mock.calls.at(-1)![0].options.mcpServers.soleur_platform.tools as Array<{ name: string; handler: (a: Record<string, unknown>) => Promise<{ isError?: boolean; content: Array<{ text: string }> }> }>;
+    const toolNames = () => tools().map((t) => t.name);
+    const prompt = () => mockQuery.mock.calls.at(-1)![0].options.systemPrompt as string;
+    const outcome = () => mockInfoSilentFallback.mock.calls.filter(([, o]) => o?.feature === "cc-github-read-registration");
+    const ADDENDUM_HEAD = "## GitHub access while Agent web access is on";
+
+    beforeEach(() => {
+      __resetDispatcherForTests();
+      (createCanUseTool as unknown as { mockClear(): void }).mockClear();
+    });
+
+    function expectNoReadTools() {
+      expect(toolNames()).toEqual(["narrate", "summarize"]);
+      expect(ccCtx().platformToolNames).toEqual([]);
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toEqual([]);
+      expect(prompt()).not.toContain(ADDENDUM_HEAD);
+      const allowed = mockQuery.mock.calls.at(-1)![0].options.allowedTools as string[];
+      for (const n of READ_FQNS) expect(allowed).not.toContain(n);
+    }
+
+    it("entitled + public repo + live forwarder: the six tools are built, in canUseTool's list, in the published cell, NOT in allowedTools, and the addendum is in the prompt", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(toolNames()).toEqual(["narrate", "summarize", ...READ_SHORT]);
+      expect(ccCtx().platformToolNames).toEqual(READ_FQNS);
+      expect([...getCcRegisteredReadTools("user-1", "conv-1")]).toEqual(READ_FQNS);
+      const allowed = mockQuery.mock.calls.at(-1)![0].options.allowedTools as string[];
+      for (const n of READ_FQNS) expect(allowed).not.toContain(n);
+      expect(prompt()).toContain(ADDENDUM_HEAD);
+      expect(prompt()).toContain("`github_list_pull_requests`");
+      // ordered AFTER the web-egress addendum, and the web-egress addendum is unchanged
+      expect(prompt().indexOf("## Web access enabled for this session")).toBeLessThan(prompt().indexOf(ADDENDUM_HEAD));
+    });
+
+    it("the base registered-platform-tool constant is NEVER seeded with the read names (seeding it would silence the genuine unregistered-tool mirror)", () => {
+      for (const n of READ_FQNS) expect(CC_REGISTERED_PLATFORM_TOOL_NAMES).not.toContain(n);
+    });
+
+    it("exactly ONE outcome event per cold dispatch, with every discriminating field", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      const events = outcome();
+      expect(events).toHaveLength(1);
+      const [, ctx] = events[0];
+      expect(ctx.message).toBe("cc github read tools outcome");
+      expect(ctx.tags).toEqual({ reason: "registered", entitled: "true", persona: "command_center", toolCount: "6", forwarderLive: "true", repoPrivate: "false" });
+      expect(JSON.stringify(ctx)).not.toMatch(/acme|kb-repo/);
+    });
+
+    it("entitled + DEGRADED forwarder: the tools are present (the grant holds) but the addendum is absent, because gh still works; the event says forwarderLive=false", async () => {
+      entitled({ forwarder: false });
+      mockResolveWebEgress.mockResolvedValue(true);
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(toolNames()).toEqual(["narrate", "summarize", ...READ_SHORT]);
+      expect(prompt()).not.toContain(ADDENDUM_HEAD);
+      expect(prompt()).not.toContain("GitHub tools are unavailable");
+      expect(outcome()[0][1].tags.forwarderLive).toBe("false");
+    });
+
+    it("entitled + NO connected repo: no tools, the connect-a-repository line, a debounced warning with its OWN literal, no info event", async () => {
+      entitled({ repo: false });
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      expectNoReadTools();
+      expect(prompt()).toContain("GitHub tools are unavailable in this session: connect or reconnect the repository in Workspace settings.");
+      expect(outcome()).toHaveLength(0);
+      expect(mockMirrorWarnWithDebounce).toHaveBeenCalledTimes(1);
+      expect(mockMirrorWarnWithDebounce.mock.calls[0][1].message).toBe("cc github read tools unavailable");
+    });
+
+    it("entitled + PRIVATE repo: no tools, the public-only line, an info event with repoPrivate=true", async () => {
+      entitled();
+      github(true);
+      await realSdkQueryFactory(makeArgs());
+      expectNoReadTools();
+      expect(prompt()).toContain("GitHub reads are limited to public repositories while Agent web access is on");
+      expect(outcome()).toHaveLength(1);
+      expect(outcome()[0][1].tags).toMatchObject({ reason: "repo-private", repoPrivate: "true", toolCount: "0" });
+    });
+
+    it.each([
+      ["the lookup errors", () => mockGithubApiGet.mockRejectedValue(new Error("boom"))],
+      ["the answer has no `private` field", () => github(undefined)],
+    ])("entitled + %s: fail closed => no tools, reason visibility-unknown (NOT claimed private), own prompt line", async (_n, arrange) => {
+      entitled();
+      arrange();
+      await realSdkQueryFactory(makeArgs());
+      expectNoReadTools();
+      // A degraded state: a debounced WARNING with its own literal (an odd-typed answer has no error event of its own), not an info event.
+      expect(outcome()).toHaveLength(0);
+      const warn = mockMirrorWarnWithDebounce.mock.calls.find(([, o]) => o?.message === "cc github read tools: repository visibility unknown");
+      expect(warn![1].tags).toMatchObject({ reason: "visibility-unknown", repoPrivate: "null" });
+      expect(prompt()).toContain("it could not be confirmed that the repository is public");
+      expect(prompt()).not.toContain("limited to public repositories");
+    });
+
+    it("NOT entitled: the tool list, canUseTool list and prompt are today's literals, and no event is emitted", async () => {
+      entitled({ entitled: false });
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      expectNoReadTools();
+      expect(prompt()).not.toContain("GitHub tools are unavailable");
+      expect(prompt()).not.toContain("limited to public repositories");
+      expect(outcome()).toHaveLength(0);
+      expect(mockMirrorWarnWithDebounce).not.toHaveBeenCalled();
+    });
+
+    it("entitled + support persona: unchanged, no event (support never gets GitHub tools)", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs({ persona: "support" }));
+      expectNoReadTools();
+      expect(outcome()).toHaveLength(0);
+    });
+
+    it("a registrar that REJECTS never breaks Query construction: the Query builds dark, the fault is reported under its own op, and the model still gets a truthful 'unavailable' line", async () => {
+      entitled();
+      github(false);
+      readRegistrarOverride.fn = async () => {
+        throw new Error("registrar boom for acme/kb-repo");
+      };
+      mockQuery.mockClear();
+      await realSdkQueryFactory(makeArgs());
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expectNoReadTools();
+      const call = mockReportSilentFallback.mock.calls.find(([, o]) => o?.op === "cc-github-read-registration-failed")!;
+      expect(call[0]).toBeNull();
+      expect(JSON.stringify(call[1])).not.toMatch(/acme|kb-repo|boom/);
+      expect(prompt()).toContain("GitHub tools are unavailable in this session because of a platform fault");
+      expect(prompt()).toContain("Never ask the user for a token");
+    });
+
+    it("an emit that THROWS (telemetry fault) never breaks the dispatch either", async () => {
+      entitled();
+      github(false);
+      mockInfoSilentFallback.mockImplementation((_e: unknown, o: { feature?: string }) => {
+        if (o?.feature === "cc-github-read-registration") throw new Error("emit boom");
+      });
+      try {
+        mockQuery.mockClear();
+        await realSdkQueryFactory(makeArgs());
+      } finally {
+        mockInfoSilentFallback.mockReset();
+      }
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(toolNames()).toEqual(["narrate", "summarize", ...READ_SHORT]);
+    });
+
+    it("a registrar result with reason registration-failed gets the platform-fault line and emits NO outcome event", async () => {
+      entitled();
+      github(false);
+      readRegistrarOverride.fn = async () => ({ registered: false, reason: "registration-failed", tools: [], toolNames: [], repoPrivate: false });
+      await realSdkQueryFactory(makeArgs());
+      expectNoReadTools();
+      expect(prompt()).toContain("platform fault");
+      expect(outcome()).toHaveLength(0);
+    });
+
+    it("a startup throw AFTER registration drains the read cell (no stale published set)", async () => {
+      entitled();
+      github(false);
+      mockQuery.mockImplementationOnce(() => {
+        throw new Error("sdk construction boom");
+      });
+      await expect(realSdkQueryFactory(makeArgs())).rejects.toThrow(/sdk construction boom/);
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toEqual([]);
+    });
+
+    it("the cell is drained by the factory-entry reset, the conversation cleanup and the test reset (the same sites as the approval cell)", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toHaveLength(6);
+      cleanupCcBashGatesForConversation("user-1", "conv-1");
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toEqual([]);
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toHaveLength(6);
+      __resetDispatcherForTests();
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toEqual([]);
+    });
+
+    it("a cold rebuild with the entitlement gone forgets the previously published set (no stale advertise)", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toHaveLength(6);
+      entitled({ entitled: false });
+      await realSdkQueryFactory(makeArgs());
+      expect(getCcRegisteredReadTools("user-1", "conv-1")).toEqual([]);
+    });
+
+    // The production `revalidate` closure (not a seam): driven through a registered tool's handler.
+    async function callReadIssue() {
+      return tools().find((t) => t.name === "github_read_issue")!.handler({ issue_number: 1 });
+    }
+    const githubCalls = () => mockGithubApiGet.mock.calls.length;
+
+    it("revalidate POSITIVE CONTROL: with the repo and installation unchanged the read goes through (a constant-false closure fails here)", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      const before = githubCalls();
+      await callReadIssue().catch(() => undefined);
+      expect(githubCalls()).toBeGreaterThan(before); // it reached GitHub (the mocked answer shape is irrelevant)
+    });
+
+    it.each([
+      ["a different OWNER, same repo name", () => mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/other-org/kb-repo")],
+      ["the same owner, a different repo", () => mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/acme/another-repo")],
+      ["the same repo, a different installation", () => mockResolveInstallationId.mockResolvedValue(111222)],
+      [
+        "a DISCONNECT (no url, not degraded) whose installation also reads null: a real change, not a blip",
+        () => {
+          mockReadCurrentRepoUrlResult.mockResolvedValue({ url: null, degraded: false });
+          mockResolveInstallationId.mockResolvedValue(null);
+        },
+      ],
+    ])("revalidate refuses a REAL switch (%s): fixed text, no GitHub request, RepoChanged", async (_n, change) => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      change();
+      const before = githubCalls();
+      const res = await callReadIssue();
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("the connected repository changed; start a new conversation");
+      expect(githubCalls()).toBe(before);
+    });
+
+    it.each([
+      ["a degraded repo read WITH a matching url (the url alone would pass)", () => mockReadCurrentRepoUrlResult.mockResolvedValue({ url: REPO_URL, degraded: true })],
+      ["the installation lookup returns null while the repo still matches", () => mockResolveInstallationId.mockResolvedValue(null)],
+      ["the installation lookup THROWS", () => mockResolveInstallationId.mockRejectedValue(new TypeError("rpc down for secret-org"))],
+      ["the repo read THROWS", () => mockReadCurrentRepoUrlResult.mockRejectedValue(new RangeError("db down"))],
+    ])("revalidate answers UNVERIFIABLE (not 'changed') for %s: its own text, no GitHub request", async (_n, blip) => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      blip();
+      const before = githubCalls();
+      const res = await callReadIssue();
+      expect(res.isError).toBe(true);
+      expect(res.content[0].text).toContain("could not confirm the connected repository right now");
+      expect(res.content[0].text).not.toContain("changed; start a new conversation");
+      expect(githubCalls()).toBe(before);
+    });
+
+    it("an identity mismatch is answered from the repo read alone: the installation is not read at all (and a thrown read names its class in the fault, never its message)", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/other-org/kb-repo");
+      mockResolveInstallationId.mockClear();
+      const res = await callReadIssue();
+      expect(res.content[0].text).toContain("changed; start a new conversation");
+      expect(mockResolveInstallationId).not.toHaveBeenCalled();
+
+      mockGetCurrentRepoUrl.mockResolvedValue(REPO_URL);
+      mockResolveInstallationId.mockRejectedValue(new TypeError("rpc down for secret-org"));
+      mockReportSilentFallback.mockClear();
+      await callReadIssue();
+      const fault = mockReportSilentFallback.mock.calls.find(([, o]) => o?.op === "cc-github-read-tool")!;
+      expect(fault[1].extra).toMatchObject({ errName: "RevalidateUnverifiable", cause: "TypeError" });
+      expect(JSON.stringify(fault)).not.toContain("secret-org");
+    });
+
+    it("a HUNG revalidation read settles as unverifiable at the deadline, and the next call is not stuck behind it", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      mockReadCurrentRepoUrlResult.mockReturnValueOnce(new Promise(() => {})); // never settles
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const hung = callReadIssue();
+        await vi.advanceTimersByTimeAsync(RESOLVE_TIMEOUT_MS + 1);
+        const res = await hung;
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).toContain("could not confirm the connected repository right now");
+      } finally {
+        vi.useRealTimers();
+      }
+      const before = githubCalls();
+      await callReadIssue().catch(() => undefined);
+      expect(githubCalls()).toBeGreaterThan(before); // a fresh check ran and the read went through
+    });
+
+    it("the in-flight revalidation is PER QUERY: a second Query never answers with the first Query's pending verdict", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs()); // Query A: acme/kb-repo
+      const toolsA = tools();
+      mockGetCurrentRepoUrl.mockResolvedValue("https://github.com/other-org/kb-repo");
+      mockGithubApiGet.mockImplementation(async (...a: unknown[]) => {
+        const [, , opts] = a as [number, string, { redirect?: string } | undefined];
+        return opts?.redirect === "manual" ? { private: false } : { default_branch: "trunk" };
+      });
+      await realSdkQueryFactory(makeArgs({ conversationId: "conv-2" })); // Query B: other-org/kb-repo
+      const toolsB = tools();
+      expect(toolsB).not.toBe(toolsA);
+
+      // A's check is held pending; meanwhile B (built for other-org) sees the workspace now pointing at acme.
+      let release!: (v: { url: string | null; degraded: boolean }) => void;
+      mockReadCurrentRepoUrlResult.mockReset();
+      mockReadCurrentRepoUrlResult.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+      const aCall = toolsA.find((t) => t.name === "github_read_issue")!.handler({ issue_number: 1 });
+      await Promise.resolve();
+      mockReadCurrentRepoUrlResult.mockResolvedValue({ url: REPO_URL, degraded: false });
+      const bRes = await toolsB.find((t) => t.name === "github_read_issue")!.handler({ issue_number: 1 });
+      expect(bRes.content[0].text).toContain("changed; start a new conversation"); // B got its OWN verdict
+      release({ url: REPO_URL, degraded: false });
+      await aCall.catch(() => undefined);
+    });
+
+    it("a registrar that REJECTS for a persona it never admits is NOT reported to the model as a platform fault", async () => {
+      entitled();
+      github(false);
+      readRegistrarOverride.fn = async () => {
+        throw new Error("registrar boom");
+      };
+      await realSdkQueryFactory(makeArgs({ persona: "support" }));
+      expectNoReadTools();
+      expect(prompt()).not.toContain("platform fault");
+    });
+
+    it("concurrent tool calls of one turn share ONE in-flight revalidation (no parallel tenant mints)", async () => {
+      entitled();
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      mockReadCurrentRepoUrlResult.mockClear();
+      mockResolveInstallationId.mockClear();
+      await Promise.all([callReadIssue().catch(() => 0), callReadIssue().catch(() => 0), callReadIssue().catch(() => 0)]);
+      expect(mockReadCurrentRepoUrlResult).toHaveBeenCalledTimes(1);
+      expect(mockResolveInstallationId).toHaveBeenCalledTimes(1);
+      // and the next call re-checks (the check is not cached beyond the in-flight window)
+      await callReadIssue().catch(() => 0);
+      expect(mockReadCurrentRepoUrlResult).toHaveBeenCalledTimes(2);
+    });
+
+    it("push registration and read registration compose: narrate, summarize, push, then the six reads", async () => {
+      entitled();
+      mockApprovalFlag.mockResolvedValue(true);
+      github(false);
+      await realSdkQueryFactory(makeArgs());
+      expect(toolNames()).toEqual(["narrate", "summarize", "github_push_branch", ...READ_SHORT]);
+      expect(ccCtx().platformToolNames).toEqual(["mcp__soleur_platform__github_push_branch", ...READ_FQNS]);
+    });
   });
 
   // -------------------------------------------------------------------------

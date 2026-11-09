@@ -36,6 +36,47 @@ import {
 } from "../server/email-triage/outbound-compliance";
 import { EXPECTED_GATED } from "./helpers/expected-tool-tiers";
 
+describe("GitHub tiers (#12469)", () => {
+  test("github_list_pull_requests is auto-approve (read-only, metadata only)", () => {
+    expect(getToolTier("mcp__soleur_platform__github_list_pull_requests")).toBe("auto-approve");
+  });
+
+  test("the six cc read tools are all auto-approve", () => {
+    for (const n of ["github_list_pull_requests", "github_read_pr", "github_read_issue", "github_read_issue_comments", "github_list_pr_comments", "github_read_ci_status"]) {
+      expect(getToolTier(`mcp__soleur_platform__${n}`), n).toBe("auto-approve");
+    }
+  });
+
+  test("the auto-approve github_* entries are a CLOSED literal set (a verb denylist cannot see a new write name; this can)", () => {
+    const autoGithub = Object.entries(TOOL_TIER_MAP)
+      .filter(([name, tier]) => /^mcp__soleur_platform__github_/.test(name) && tier === "auto-approve")
+      .map(([name]) => name.replace("mcp__soleur_platform__", ""))
+      .sort();
+    expect(autoGithub).toEqual(
+      [
+        "github_list_pr_comments",
+        "github_list_pull_requests",
+        "github_read_ci_status",
+        "github_read_issue",
+        "github_read_issue_comments",
+        "github_read_pr",
+        "github_read_workflow_logs",
+      ].sort(),
+    );
+  });
+
+  test("no GitHub WRITE tool is auto-approve (a name that is not in the map is gated, fail-closed)", () => {
+    for (const n of ["create_issue", "create_pull_request", "github_trigger_workflow", "github_push_branch", "github_create_issue", "github_comment"]) {
+      expect(getToolTier(`mcp__soleur_platform__${n}`), n).not.toBe("auto-approve");
+    }
+    for (const [name, tier] of Object.entries(TOOL_TIER_MAP)) {
+      if (/^mcp__soleur_platform__(github_)?(create|update|delete|merge|push|trigger|comment|close|edit_issue)/.test(name)) {
+        expect(tier, `${name} writes to GitHub or the repo`).not.toBe("auto-approve");
+      }
+    }
+  });
+});
+
 describe("getToolTier", () => {
   test("returns auto-approve for github_read_ci_status", () => {
     expect(getToolTier("mcp__soleur_platform__github_read_ci_status")).toBe(
