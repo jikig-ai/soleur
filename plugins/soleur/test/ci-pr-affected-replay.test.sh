@@ -779,9 +779,10 @@ jobs_body 8706 "97061:test-scripts (1/8):success" | fx "$(jobs_path 8706)"
 fx_err404 "$(log_path 97071)"
 jobs_body 8707 "97071:test-scripts (1/8):failure" | fx "$(jobs_path 8707)"
 printf '[{"message":"pull request merged"}]' | fx "$(ann_path 97071)"
-# 8708 (attempt 2): a mid-termination log (shutdown signature, no [FAIL]) -> unsettled, witnessed by attempt 1
+# 8708 (attempt 2): a mid-termination log (shutdown signature, no [FAIL]) -> unsettled, witnessed by attempt 1.
+# TWO in-flight labels: the later one is the freshest and must win
 jobs_body 8708 "97081:test-scripts (1/8):failure" | fx "$(jobs_path 8708)"
-printf 'some lines\n##[error]The runner has received a shutdown signal\nLast suite started: scripts/foo.test.sh\n' | fx "$(log_path 97081)"
+printf 'some lines\n##[error]The runner has received a shutdown signal\nLast suite started: scripts/foo.test.sh\nmore lines\nLast suite started: scripts/bar.test.sh\n' | fx "$(log_path 97081)"
 jobs_body 8708 "97082:test-scripts (1/8):success" | fx "$(jobs1_path 8708)"
 # 8710: the shutdown signature beside a real [FAIL] line keeps the normal path — the verdict wins
 jobs_body 8710 "97101:test-scripts (1/8):failure" | fx "$(jobs_path 8710)"
@@ -812,10 +813,10 @@ cls6() { unit_field "$E6" "$(eval "printf '%s' \"\$SH$1\"")" '.cls+" "+.reason';
   && pass "a 404 log whose annotations name the comms loss is unsettled and clears on the later same-PR identical run" || fail "comms-loss: $(cls6 75) detail=$(unit_field "$E6" "$SH75" '.unsettled_detail')"
 [[ -z "$(unit_field "$E6" "$SH76" .sha)" ]] && pass "the later same-PR success is a witness for by_pr/cleared() only — a success is never a unit" || fail "success run became a unit: $(cls6 76)"
 [[ "$(cls6 77)" == "not-evaluable failed-job-without-fail-line" ]] && pass "an unrelated annotation keeps log-read -> not-evaluable" || fail "unrelated annotation: $(cls6 77)"
-[[ "$(cls6 78)" = "flake-cleared identical-tree-green" && "$(unit_field "$E6" "$SH78" '.unsettled_detail["test-scripts (1/8)"].in_flight')" = "scripts/foo.test.sh" ]] \
-  && pass "a shutdown signature with no [FAIL] is mid-termination unsettled, witnessed by attempt 1; in_flight recorded" || fail "mid-termination: $(cls6 78) detail=$(unit_field "$E6" "$SH78" '.unsettled_detail')"
+[[ "$(cls6 78)" = "flake-cleared identical-tree-green" && "$(unit_field "$E6" "$SH78" '.unsettled_detail["test-scripts (1/8)"].in_flight')" = "scripts/bar.test.sh" ]] \
+  && pass "a shutdown signature with no [FAIL] is mid-termination unsettled, witnessed by attempt 1; the LAST in-flight label wins" || fail "mid-termination: $(cls6 78) detail=$(unit_field "$E6" "$SH78" '.unsettled_detail')"
 [[ "$(cls6 80 | cut -d' ' -f1)" = unverified ]] && pass "a log with a [FAIL] line AND a shutdown signature keeps the verdict: the signature does not reclass" || fail "verdict wins: $(cls6 80)"
-[[ "$(cls6 81)" = "escape deterministic" ]] && pass "a would-skip failure decides before the unsettled consult — a witnessed cancelled leg cannot hide the escape" || fail "ordering: $(cls6 81)"
+[[ "$(cls6 81)" = "escape deterministic" && "$(unit_field "$E6" "$SH81" '.unsettled_legs[0]')" = "test-bun (1/2)" ]] && pass "a would-skip failure decides before the unsettled consult — a witnessed cancelled leg cannot hide the escape; the unsettled leg is still recorded" || fail "ordering: $(cls6 81) legs=$(unit_field "$E6" "$SH81" '.unsettled_legs')"
 ! grep -q STUB-MISS "$GHLOG" && pass "the classifier window made no request the stub does not know" || fail "classifier window unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
 row_wide_label() { ej6_run; [[ "$(unit_field "$E6" "$SH71" '.failing[0].suites[0]')" = "apps/web-platform [repo-wide+component]" ]]; }
 row_ctrl_label_wide() { ej2_run; [[ "$(unit_field "$E2" "$(SHA 129)" .cls)" = not-evaluable ]]; }
