@@ -53,13 +53,15 @@ if [[ "$VERDICT_SH" != /* ]]; then _deg "usage: CI_HEAD_VERDICT_BIN must be an a
 T_S="${REQUIRED_SET_TIMEOUT_S:-120}"; T_BIN="${REQUIRED_SET_TIMEOUT_BIN:-timeout}"
 if [[ ! "$T_S" =~ ^[123456789][0123456789]{0,5}$ ]]; then _deg "usage: REQUIRED_SET_TIMEOUT_S must be a positive integer of at most 6 digits"; exit 0; fi
 (( T_S > 120 )) && T_S=120
+# (This class uses letter ranges, which are locale-dependent: a non-ASCII name that slips through only makes `command -v` fail below.)
 if [[ ! "$T_BIN" =~ ^[A-Za-z0-9_./][A-Za-z0-9_./-]*$ ]]; then _deg "usage: REQUIRED_SET_TIMEOUT_BIN must be a binary name or path"; exit 0; fi
 if [[ "$T_BIN" == */* && "$T_BIN" != /* ]]; then _deg "usage: REQUIRED_SET_TIMEOUT_BIN must be a bare name or an absolute path"; exit 0; fi
 
 # Shared context-sanitize lib (#10395): the LF-only variant also drops the NEL/LS/PS line-break class, one pass per sequence, so a
-# nested sequence can re-form after a removal (and wf= text and stderr are NOT cleaned by the resolver first: only its stdout ctx
-# text is). _fix below therefore re-runs the sanitiser to a fixpoint on everything this script prints from the resolver. When the lib
-# cannot be sourced the fallback is the strip set of the monitor's pre-adoption site (C0 and DEL only: no NEL/LS/PS).
+# nested sequence can re-form after a removal. The resolver cleans its own STDOUT first (ctx is rejected by amr_arr_ok and wf= goes through
+# its `clean` filter: C0, DEL, C1, U+2028/9, bidi and tag characters) but not its STDERR, and this lib does not strip C1 (c2 9b), so on
+# stderr it is the only layer and covers C0, NEL, LS and PS. _fix below re-runs the sanitiser to a fixpoint on everything printed from the
+# resolver. When the lib cannot be sourced the fallback is the strip set of the monitor's pre-adoption site (C0 and DEL only).
 _ctx_lib="$HERE/lib/context-sanitize.sh"
 # shellcheck source=lib/context-sanitize.sh disable=SC1091
 [[ -r "$_ctx_lib" ]] && source "$_ctx_lib" 2>/dev/null
@@ -69,7 +71,7 @@ declare -F soleur_ctx_sanitize_nl >/dev/null 2>&1 \
 # pass in the pipeline (a bash string cannot hold one). If it has not converged after 32 passes (absurd nesting) every 0xC2 and 0xE2
 # byte is dropped, which is the lead byte of every sequence the lib strips.
 _fix() {
-  local t u n=0
+  local t u n=0 LC_ALL=C   # byte semantics: the UTF-8 locale made each pass about 13x slower on a 240 KB line, with identical output
   t="$(cat; printf x)"; t="${t%x}"
   while (( n < 32 )); do
     u="$(printf '%s' "$t" | soleur_ctx_sanitize_nl; printf x)"; u="${u%x}"

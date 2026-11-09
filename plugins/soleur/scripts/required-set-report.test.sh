@@ -479,18 +479,25 @@ newrow
   printf 'RECOVERY\n'                                                                                         # bare keyword
   printf 'RECOVERY pointer reason=stale-row ctx="test": do something else entirely\n'                         # fixed-reason pointer, other tail
   printf 'RECOVERY pointer reason=stalled ctx="x": %s and then more\n' "$P_UNDO"                              # stalled pointer, extra tail
+  printf 'RECOVERY pointer reason=awaiting-approval ctx="test": %s && x\n' "$P_APPR"                          # awaiting-approval, command tail
+  printf 'RECOVERY pointer reason=awaiting-approval ctx="test": %s and more\n' "$P_APPR"                      # awaiting-approval, longer tail
+  printf 'RECOVERY pointer reason=stale-row ctx="test": %s and more\n' "$P_UNDO"                              # stale-row, longer tail
+  printf 'RECOVERY pointer pending=["a"]: wait, then read the checks with gh pr checks 4387 && id\n'           # pending, command tail
+  printf 'RECOVERY pointer pending=["a"]: wait, then read the checks with gh pr checks 9999\n'                  # pending, another PR
+  printf 'RECOVERY pointer failed=[a b]: read the failing checks with gh pr checks 4387\n'                     # unquoted array element
   printf '%s\n' "$M_ABS"
 } > "$STUBD/body"
 sut S15b "$PRN"
-[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$(cnt "^REQUIRED-SET READ — 19 RECOVERY line(s) outside the resolver grammar not shown (run the read by hand: ready-run-wait.md, 'A green verdict that never enqueues')\$" "$OUTF")" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15b nineteen lines outside the grammar (command tails, id mismatch, 16- and 30-digit ids, bad bases, unquoted ctx, trailing text, unknown shape and pointer reason, empty array, other PR, embedded wf=, bare keyword): none printed, one count line with the by-hand pointer, marker last" "out=[$OUT]"
+[[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$(cnt "^REQUIRED-SET READ — 25 RECOVERY line(s) outside the resolver grammar not shown (run the read by hand: ready-run-wait.md, 'A green verdict that never enqueues')\$" "$OUTF")" -eq 1 && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S15b twenty-five lines outside the grammar (command tails, id mismatch, 16- and 30-digit ids, bad bases, unquoted ctx, trailing text, unknown shape and pointer reason, empty array, other PR, embedded wf=, bare keyword): none printed, one count line with the by-hand pointer, marker last" "out=[$OUT]"
 [[ "$(wc -l < "$STUBD/calls")" -eq 1 && ! -e "$ROOT/S15" ]] && _v=0 || _v=1; chk "$_v" "S15b nothing was executed (no sentinel) and the resolver was called once" "calls=$(cat "$STUBD/calls")"
 newrow
 { printf 'RECOVERY rerun run=2 basis=workflow ctx="x" wf="y": gh run rerun 9\n'; printf 'RECOVERY no cancelled run at this head ctx="ok"\n'; mk error; } > "$STUBD/body"; printf '3' > "$STUBD/rc"
 sut S15c "$PRN"
 [[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 0 && "$OUT" != *"outside the resolver grammar"* ]] && _v=0 || _v=1; chk "$_v" "S15c state=error prints neither hints nor a grammar count line" "out=[$OUT]"
 
-# ── S15d nested sequences inside wf= on a RECOVERY line that IS printed: only the resolver's ctx text is cleaned by the resolver first, wf=
-# is not, so the script must clean to a fixpoint ──
+# ── S15d nested sequences inside wf= on a RECOVERY line that IS printed. The real resolver cleans wf= (its `clean` filter) and rejects a ctx
+# with such code points (amr_arr_ok); it does NOT clean its stderr, and a substituted resolver cleans nothing, so the script itself must clean
+# to a fixpoint ──
 newrow
 {
   printf 'RECOVERY rerun run=9 basis=workflow ctx="c" wf="a\xc2\xc2\x85\x85b\xe2\x80\xe2\x80\xa8\xa8c\xe2\x80\xe2\x80\xa9\xa9d": gh run rerun 9\n'
@@ -500,14 +507,29 @@ newrow
 sut S15d "$PRN"
 [[ "$(LC_ALL=C grep -cF -e $'\xc2\x85' -e $'\xe2\x80\xa8' -e $'\xe2\x80\xa9' "$OUTF")" -eq 0 && "$(cnt '^RECOVERY rerun run=9 basis=workflow ctx="c" wf="abcd": gh run rerun 9$' "$OUTF")" -eq 1 && "$(cnt '^RECOVERY rerun run=10 basis=candidate' "$OUTF")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S15d nested NEL / LS / PS inside wf= (and 40-deep nesting) do not re-form; both lines are still printed" "out=[$(printf '%q' "$OUT")]"
 
+# ── S15e ordinary non-ASCII text survives untouched (the fixpoint must converge on it, not take the lead-byte fallback), and a non-canonical PR ──
+newrow; { printf 'RECOVERY no cancelled run at this head ctx="a\xc2\xa9b\xe2\x80\x94c"\n'; printf '%s\n' "$M_ABS"; } > "$STUBD/body"
+sut S15e "$PRN"
+[[ "$(cnt "^RECOVERY no cancelled run at this head ctx=\"a"$'\xc2\xa9'"b"$'\xe2\x80\x94'"c\"\$" "$OUTF")" -eq 1 ]] && _v=0 || _v=1; chk "$_v" "S15e a ctx with a copyright sign and an em dash is printed UNCHANGED (the fixpoint converges instead of dropping 0xC2/0xE2)" "out=[$(printf '%q' "$OUT")]"
+newrow; { printf 'RECOVERY pointer failed=["x"]: read the failing checks with gh pr checks 7\n'; printf 'RECOVERY pointer pending=["x"]: wait, then read the checks with gh pr checks 007\n'; mk absent 7; } > "$STUBD/body"
+sut S15f 007
+[[ "$(cnt '^RECOVERY pointer ' "$OUTF")" -eq 2 && "$OUT" != *"outside the resolver grammar"* && "$(last_line)" == "$(mk absent 7)" ]] && _v=0 || _v=1; chk "$_v" "S15f PR argument 007: pointers ending 'checks 7' (normalised) and 'checks 007' (as given) are both printed, no count line" "out=[$OUT]"
+# _fix runs in byte semantics (a 240 KB line took 6-32 s per read in a UTF-8 locale and 1-2 s in C, identical output). A wall-clock bound is not stable
+# across hosts, so the property is pinned on the source: the function declares LC_ALL=C for itself.
+grep -qF 'local t u n=0 LC_ALL=C' "$SUT" && _v=0 || _v=1; chk "$_v" "S15g _fix declares LC_ALL=C for itself (byte semantics, a UTF-8 locale made it 6-13x slower)" ""
+
 # ── S18 the grammar is tied to the resolver's SOURCE: every `printf 'RECOVERY` line of ci-head-verdict.sh, instantiated, is accepted ──
 # A resolver edit that adds or rewords a RECOVERY line fails here instead of silently dropping the hint in production. The count (10) is the
 # number of lines S15a covers; the positive control is that those ten instantiated lines all come out.
-mapfile -t _fmts < <(grep -o "printf 'RECOVERY[^']*'" "$DIR/ci-head-verdict.sh" | sed -e "s/^printf '//" -e "s/'\$//" \
+mapfile -t _fmts < <(grep -vE '^[[:space:]]*#' "$DIR/ci-head-verdict.sh" | grep -o "printf 'RECOVERY[^']*'" | sed -e "s/^printf '//" -e "s/'\$//" \
   -e 's/failed=%s/failed=["a"]/' -e 's/pending=%s/pending=["a"]/' -e 's/run=%s/run=12345/' -e 's/ctx=%s/ctx="c"/' -e 's/wf=%s/wf="w"/' \
   -e 's/gh run rerun %s/gh run rerun 12345/' -e 's/gh pr checks %s/gh pr checks 4387/' -e 's/\\n$//')
 _left=0; for _f in "${_fmts[@]}"; do [[ "$_f" == *%* ]] && _left=$((_left + 1)); done
-[[ "${#_fmts[@]}" -eq 10 && "$_left" -eq 0 ]] && _v=0 || _v=1; chk "$_v" "S18 ci-head-verdict.sh has exactly 10 printf 'RECOVERY lines and every %s in them is one this suite knows how to fill" "lines=${#_fmts[@]} unfilled=$_left"
+[[ "${#_fmts[@]}" -eq 10 && "$_left" -eq 0 ]] && _v=0 || _v=1; chk "$_v" "S18 ci-head-verdict.sh has exactly 10 (non-comment) printf 'RECOVERY lines and every %s in them is one this suite knows how to fill" "lines=${#_fmts[@]} unfilled=$_left"
+# Any OTHER non-comment line that mentions `RECOVERY ` is an emitter the extraction above cannot see (an echo, a double-quoted printf, a heredoc). The one
+# allowed mention is the --help sentence "RECOVERY lines before the marker print ...".
+_other="$(grep -vE '^[[:space:]]*#' "$DIR/ci-head-verdict.sh" | grep 'RECOVERY ' | grep -v "printf 'RECOVERY" | grep -vc '^  RECOVERY lines before the marker print')" || true
+[[ "${_other:-1}" -eq 0 ]] && _v=0 || _v=1; chk "$_v" "S18 no other non-comment line of ci-head-verdict.sh emits a RECOVERY line (an echo or a double-quoted printf would be invisible to the grammar check)" "other=$_other"
 newrow; { printf '%s\n' "${_fmts[@]}"; printf '%s\n' "$M_ABS"; } > "$STUBD/body"
 sut S18 "$PRN"
 [[ "$(cnt '^RECOVERY ' "$OUTF")" -eq 10 && "$OUT" != *"outside the resolver grammar"* && "$(last_line)" == "$M_ABS" ]] && _v=0 || _v=1; chk "$_v" "S18 all ten of the resolver's own RECOVERY lines pass the script's grammar (no 'outside the grammar' line)" "out=[$OUT]"
@@ -544,7 +566,7 @@ rm -f "$STUBD/stdin-rc"
 # ── totals and the assertion floor ──
 echo ""
 echo "cases_run=$CASES_RUN passes=$passes fails=$fails ledger=${#FAILED[@]}"
-_min_cases=358
+_min_cases=368
 if [[ "$CASES_RUN" -lt "$_min_cases" ]]; then
   printf '[FATAL] assertion floor: only %s case(s) ran, floor is %s\n' "$CASES_RUN" "$_min_cases" >&2; exit 1
 fi
