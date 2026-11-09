@@ -488,8 +488,11 @@ run_case() {
 
 # behav_check <workflow>: executes the run body against raw queues / raw issue lists. 0 = all behaviours hold.
 behav_check() {
-  local wf="$1" g="$WORK/q.json" iss="$WORK/issues.json"
+  local wf="$1" g="$WORK/q.json" iss="$WORK/issues.json" maxpos
   REASON=""
+  # The aging window is `position <= MAX_ENTRIES_TO_BUILD` read from THIS workflow — position-keyed
+  # fixtures below are written against it, never against the literal value (1 on #12269, was 2).
+  maxpos="$(python3 "$HELPER" wf "$wf" | jq -r '.env.MAX_ENTRIES_TO_BUILD // "999"')"
   { node 1 50 101; } | queue_json > "$g"
   run_case "$wf" "$g"
   [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #101 pending"* ]] \
@@ -532,10 +535,10 @@ behav_check() {
   [[ "$CASE_RC" -ne 0 && "$CASE_CREATES" -eq 0 ]] \
     || { REASON="gh error did not fail the step loudly (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
 
-  { node 2 50 106; } | queue_json > "$g"
+  { node "$maxpos" 50 106; } | queue_json > "$g"
   run_case "$wf" "$g"
   [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] \
-    || { REASON="position 2 (last building slot) older than threshold did not file (creates=$CASE_CREATES)"; return 1; }
+    || { REASON="position $maxpos (last building slot) older than threshold did not file (creates=$CASE_CREATES)"; return 1; }
 
   { node 1 50 107; node 3 90 108; } | queue_json > "$g"
   run_case "$wf" "$g"
@@ -543,7 +546,15 @@ behav_check() {
     || { REASON="mixed queue: wanted exactly PR #107 filed (creates=$CASE_CREATES titles=$CASE_TITLES)"; return 1; }
 
   # a stalled entry BEHIND a young head must still be read (entries(first:N) covers more than the head)
-  { node 1 10 110; node 2 50 111; } | queue_json > "$g"
+  # The "stalled behind a young head" shape needs TWO in-window slots; under
+  # MAX_ENTRIES_TO_BUILD=1 the only in-window entry IS the head, so the stalled
+  # entry sits at the head and the deep entry goes young — the coverage (a
+  # second entry is still read) survives through the swapped shape.
+  if (( maxpos >= 2 )); then
+    { node 1 10 110; node 2 50 111; } | queue_json > "$g"
+  else
+    { node 1 50 111; node 2 10 110; } | queue_json > "$g"
+  fi
   run_case "$wf" "$g"
   [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #111 pending"* ]] \
     || { REASON="stalled entry behind a young head was not filed (the query reads too few entries; creates=$CASE_CREATES)"; return 1; }
@@ -555,7 +566,14 @@ behav_check() {
   run_case "$wf" "$g"
   [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 0 ]] \
     || { REASON="an UNMERGEABLE entry older than threshold was filed as a stall (rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
-  { node 1 120 114 UNMERGEABLE; node 2 50 115; } | queue_json > "$g"
+  # Same one-slot constraint: the stall goes to the LAST building slot and the
+  # UNMERGEABLE sits beside it (position 2 under maxpos=1 — still in the queue,
+  # correctly never filed: it is both UNMERGEABLE and outside the window).
+  if (( maxpos >= 2 )); then
+    { node 1 120 114 UNMERGEABLE; node 2 50 115; } | queue_json > "$g"
+  else
+    { node 1 50 115; node 2 120 114 UNMERGEABLE; } | queue_json > "$g"
+  fi
   run_case "$wf" "$g"
   [[ "$CASE_CREATES" -eq 1 && "$CASE_TITLES" == *"PR #115 pending"* ]] \
     || { REASON="UNMERGEABLE head hid or replaced the real stall beside it (creates=$CASE_CREATES titles=$CASE_TITLES)"; return 1; }
@@ -882,8 +900,21 @@ lrow6() { # the runs list fails -> suspected, ONE bounded ASCII warning, rc 0
   return 0
 }
 lrow7() { # two stalled entries: the cause must not leak between iterations, in either order
-  local wf="$1" rf="$WORK/runs.json" g="$WORK/q.json" ref1 ref2; REASON=""
+  local wf="$1" rf="$WORK/runs.json" g="$WORK/q.json" ref1 ref2 maxpos; REASON=""
   ref1="$(qref 101 "$SHA1")"; ref2="$(qref 102 "$SHA1")"
+  maxpos="$(python3 "$HELPER" wf "$wf" | jq -r '.env.MAX_ENTRIES_TO_BUILD // "999"')"
+  if (( maxpos < 2 )); then
+    # One building slot: only the head can be in-window, so the two-entry leak has
+    # no second operand under MAX_ENTRIES_TO_BUILD=1. File-check the single
+    # stalled entry; the two-entry coverage is unreachable at this mirror value.
+    { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref1" failure 49; mg_noise "$ref1" 48 9100; } | jq -s '.' > "$rf"
+    { node 1 50 101; } | queue_json > "$g"
+    set_ever 111; CASE_RUNS="$rf"; run_case "$wf" "$g"; reset_runs
+    [[ "$CASE_RC" -eq 0 && "$CASE_CREATES" -eq 1 ]] \
+      || { REASON="L7: single stalled entry did not file (maxpos=$maxpos; rc=$CASE_RC creates=$CASE_CREATES)"; return 1; }
+    check_named L7 1 101 "$WF_PATH_CI" 9001 || return 1
+    return 0
+  fi
   # (a) only the SECOND entry carries the signature
   { mkrun 9001 push "$WF_PATH_CI" "$WF_PATH_CI" 111 "$ref2" failure 49; mg_noise "$ref2" 48 9100
     mg_noise "$ref1" 48 9300; } | jq -s '.' > "$rf"
@@ -1614,8 +1645,15 @@ mutate "Q3 state dropped from the query -> RED (the body loses the queue state)"
   "s.replace('${Q}state\n', '')"
 mutate "Q4 mergeQueue(branch:\"dev\") -> RED (reads the wrong branch)" behav 'position 1 older than threshold did not file' \
   "s.replace('mergeQueue(branch:\"main\")', 'mergeQueue(branch:\"dev\")')"
+# Q5 is only falsifiable while the aging window covers >1 slot: under
+# MAX_ENTRIES_TO_BUILD=1, entries(first:1) still returns every entry the probe may
+# file on — an equivalent mutant at this mirror value. Gate on the live tf value.
+if [[ "$TF_BUILD" -ge 2 ]]; then
 mutate "Q5 entries(first:50) -> first:1 -> RED (a stall behind the head is never read)" behav 'behind a young head' \
   "s.replace('entries(first:50)', 'entries(first:1)', 1)"
+else
+  pass "Q5 entries(first:N) shrink -> RED (skipped: equivalent under MAX_ENTRIES_TO_BUILD=1)"
+fi
 mutate "Q6 pullRequest url dropped from the query -> RED" behav 'lacks the PR url' \
   "s.replace('pullRequest { number url }', 'pullRequest { number }')"
 mutate "Q7 --state open dropped from the dedupe read -> RED (a closed issue suppresses a new stall)" behav 'CLOSED stall issue suppressed' \
@@ -1679,9 +1717,15 @@ mutate_lit "C4a lookup failure exits the step (|| return 0 -> || exit 1) -> RED"
   'fetch_runs push PUSH_LIST || return 0' 'fetch_runs push PUSH_LIST || exit 1'
 mutate_lit "C4b lookup failure is not captured (the explicit rc capture is dropped on the gh call) -> RED" causerow 'L6:' \
   '</dev/null)" || rc=$?' '</dev/null)"'
+# C5's only observable is the two-entry lrow7 — unreachable under
+# MAX_ENTRIES_TO_BUILD=1 (one in-window operand). Gate on the live tf value.
+if [[ "$TF_BUILD" -ge 2 ]]; then
 mutate_lit "C5 per-entry cause reset removed -> RED (the first entry's cause leaks into the second)" causerow 'L7:' \
   '            CAUSE_PATHS=""; CAUSE_LINES=""; CAUSE_REF=""; CAUSE_N=0
 ' ''
+else
+  pass "C5 per-entry cause reset removed -> RED (skipped: equivalent under MAX_ENTRIES_TO_BUILD=1)"
+fi
 mutate_lit "C6 cause suffix moved in front of the PR anchor -> RED (dedupe/drain anchors stop matching)" causerow 'L1:.*anchor' \
   'cause_title="merge-queue stall: PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m ${cause_suffix}"' 'cause_title="merge-queue stall: ${cause_suffix} PR #${pr} pending >${STALL_THRESHOLD_MINUTES}m"'
 mutate_lit "C7 conclusion == \"failure\" -> != null (a cancelled or success push run counts as failed) -> RED" causerow 'L8:|L11:' \
