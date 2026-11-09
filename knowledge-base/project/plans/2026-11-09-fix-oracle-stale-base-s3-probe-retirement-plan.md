@@ -12,6 +12,24 @@ brand_survival_threshold: none
 lane: cross-domain
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09
+**Sections enhanced:** Observability (emitted — deepen §4.7's non-pure-docs trigger is broader than plan §2.9's path list), Guard Contract (promoted to a top-level `##` section so `lint-guard-contract.py` resolves it — `###`-nested is invisible to the gate), Technical Considerations (merge-base repo precedents), retirement census dispositions (basename-dropping tombstones so the residual-zero AC is a clean universal).
+**Research agents used:** none — sequential-fallback (no Task/Agent tool in this pipeline subagent context); all gates run inline.
+
+### Key improvements
+
+1. Observability section present and schema-compliant (allowlisted probe verb, literal `expected_output`, <15 s command).
+2. Guard Contract lint-green (`python3 scripts/lint-guard-contract.py` → 1 entry, rc 0) with a design-derived 7-row mutation matrix including a guard-dispatch row and two must-PASS rows.
+3. Residual-reference AC made unconditional: every live comment drops the basename for a `#9728` tombstone — no self-exempting grep.
+4. Merge-base derivation grounded in sibling precedent (`check-backstop-revision.sh`, `legal-base-ref.sh`, `test-all.sh`), not a novel pattern.
+
+### New considerations discovered
+
+- `lint-guard-contract.py` keys on `^## Guard Contract` — a `###`-nested contract reads as absent at deepen §4.11.
+- `pending - assumed` rows in `decision-challenges.md` are flagged `unruled-technical` by `technical-ruling-gate.sh` at ship time; the work/ship phase must spawn `soleur:engineering:cto` to convert the four pending rows before merge.
+
 ## Overview
 
 Spec lacks valid `lane:` — defaulted to cross-domain (TR2 fail-closed). There is no spec.md for this branch.
@@ -113,32 +131,11 @@ No `AFFECTED_*_PATHS` entry in `scripts/lib/test-affected-paths.sh` names either
 - **Live-session warning honored:** nothing under `plugins/soleur/` is edited except the generated `fixture-relative-assert.baseline.txt` regen — required because the baseline pins deleted-file counts and would fail closed otherwise.
 - **NFR:** no runtime/user-facing NFR affected; CI-cost NFR is the point of the fix (a false `oracle_only` pays ~30-min × K legs).
 - **Retirement precedent:** footprint/disposition/verification shape follows the merged #10865 retirement plan (linked in References) — same census-first, atomic-deletion, dead-path-ratchet discipline.
-
-### Guard Contract
-
-The oracle-selection classifier is a gate whose diff window this fix redraws; the mutation matrix below is written against the design, exercised by the `ci-oracle-lane.test.sh` fixture suite.
-
-#### Guard 1 — pull_request diff base is the live merge-base
-
-**Property.** On `pull_request`, the diff the classifier surfaces covers exactly the PR's own delta: `diff_base` resolves to `merge-base(HEAD^2, <live base ref>)`, never the merge ref's frozen first parent, and every failure to resolve emits fail-closed defaults.
-
-**Assembly.** The single chokepoint is guard (2a) in `scripts/ci-oracle-lane.sh` `run()`: `diff_base`/`diff_head` are locals assigned only in the (2a) arm (pull_request) and the (2b) arm (merge_group, untouched), and every downstream read (`git diff` listing, `-U0` index diff, `git show $diff_base:`) consumes only those locals. The env injection point is the `oracle-selection` step's `env:` block in `ci.yml`.
-
-**Mutation matrix:**
-
-| # | Mutation | Expected |
-|---|----------|----------|
-| 1 | Revert `diff_base` to literal `HEAD^1` | RED — the merge-carrying-branch fixture classifies `oracle_only=true` on main-side churn |
-| 2 | Compute `git merge-base HEAD^1 HEAD` (wrong operands — resolves the frozen parent) | RED — same fixture fails: the property is about the *live* base, not either parent |
-| 3 | Drop the merge-base resolution entirely; `diff_base` empty while the diff still runs | RED — a suite row asserting `diff_base` resolves (non-empty, ancestor of `p2`) fails, and `git diff ""` rc fails closed |
-| 4 | Swallow the `git fetch`/merge-base failure and continue with an unset base | RED — the injected-failure fixture must emit the named fail-closed reason, not classify |
-| 5 | Emit `oracle_only=true` path that skips the (2a) shape guard (guard's own dispatch) | RED — existing bad-shape fixtures (octopus, non-merge, wrong head) already RED any dispatch that reaches classification without the shape |
-| 6 | Fixture where the branch merges main AND adds a code file | must-PASS (non-canonical input): `oracle_only=false` — proves the gate is not a reject-everything stub |
-| 7 | Fixture: fresh merge ref on a linear branch | must-PASS: merge-base result equals the old `HEAD^1` result — the fix is a strict improvement, no regression on the common case |
+- **Merge-base precedent (deepen §4.4):** the derivation is not novel — `scripts/check-backstop-revision.sh:64` resolves `git merge-base "origin/${BASE_REF}" HEAD`, `scripts/lib/legal-base-ref.sh:64-70` resolves `git merge-base HEAD "$base_sha"` with fail-closed error handling, and `scripts/test-all.sh:2941` diffs `origin/main...HEAD` for its affected set. The fix follows the same shape: resolve a live base ref, take the merge-base, fail closed on any step.
 
 ### Gates evaluated
 
-- **Observability (2.9):** Files-to-Edit sit under `scripts/`, `.github/`, `.claude/hooks/`, `plugins/soleur/test/` (baseline regen) and `knowledge-base/` — none under `apps/*/server|src|infra` or `plugins/*/scripts`, and the retirement half is deletion-only. The lane's own telemetry (`SOLEUR_ORACLE_LANE` notice, `reason=` grammar, step summary) is the observability surface and is preserved; new fail-closed reasons land in that existing grammar. Skipped per the gate's path scope.
+- **Observability (2.9):** Files-to-Edit sit under `scripts/`, `.github/`, `.claude/hooks/`, `plugins/soleur/test/` (baseline regen) and `knowledge-base/` — none under plan 2.9's `apps/*/server|src|infra` or `plugins/*/scripts` path list, but deepen-plan Phase 4.7's trigger is the broader non-pure-docs test, so a compliant `## Observability` section is emitted above. The lane's own telemetry (`SOLEUR_ORACLE_LANE` notice, `reason=` grammar, step summary) is the observability surface and is preserved; new fail-closed reasons land in that existing grammar.
 - **IaC (2.8):** skipped — no new infrastructure, service, secret, or host.
 - **Encryption (2.11):** skipped — no persistent store or new connection.
 - **Task Design (2.9.3):** skipped — no new autonomous-task surface; the sweeper keeps discovering probes from live tracker directives.
@@ -158,6 +155,56 @@ The oracle-selection classifier is a gate whose diff window this fix redraws; th
 - **Brand-survival threshold:** `none`
 - **Threshold decision (challengeable):** the diff touches CI machinery and deletes read-only probes; no user-facing artifact, data store, or credential surface changes.
 - `threshold: none, reason:` the diff touches `.github/workflows/ci.yml` and `scheduled-followthrough-sweeper.yml` (secrets-bearing paths under preflight's sensitive regex) but adds only env passthrough of already-public payload fields and leaves sweeper permissions untouched.
+
+## Observability
+
+The lane's own telemetry is the observability surface this fix must preserve and extend; the retirement half is deletion-only and creates no new surface.
+
+```yaml
+liveness_signal:
+  what:            # SOLEUR_ORACLE_LANE ::notice line per pull_request/merge_group run (event/switch/locked/attempt/files/reason/oracle_only/would_skip/active) plus the job's step summary
+  cadence:         # per CI run (only while vars.CI_ORACLE_LANE is non-empty)
+  alert_target:    # GitHub Actions run annotations on the PR
+  configured_in:   # .github/workflows/ci.yml oracle-selection job + scripts/ci-oracle-lane.sh notice emit
+error_reporting:
+  destination:     # GitHub Actions job conclusion + ::notice annotation stream
+  fail_loud:       # fail-closed defaults (oracle_only=false) force the full battery; a red oracle-index-check or test aggregate is the loud failure
+failure_modes:
+  - mode:          # stale-base misfire (the defect this fixes)
+    detection:     # reason=oracle with files=<N> on a diff the PR did not author — the measured signature on run 42459010986
+    alert_route:   # PR author / operator reading the run
+  - mode:          # unresolved live base (payload SHA missing AND fetch fails, or empty merge-base)
+    detection:     # new named reason= tokens (base_fetch / no_merge_base) in the SOLEUR_ORACLE_LANE notice with oracle_only=false
+    alert_route:   # PR author / operator reading the run
+logs:
+  where:           # GitHub Actions step output + GITHUB_STEP_SUMMARY for the oracle-selection job
+  retention:       # Actions run log retention (repo default)
+discoverability_test:
+  command:         grep -q 'merge-base' scripts/ci-oracle-lane.sh && printf 'ok\n'
+  expected_output: ok
+```
+
+## Guard Contract
+
+The oracle-selection classifier is a gate whose diff window this fix redraws; the mutation matrix below is written against the design, exercised by the `ci-oracle-lane.test.sh` fixture suite.
+
+### Guard 1 — pull_request diff base is the live merge-base
+
+**Property.** On `pull_request`, the diff the classifier surfaces covers exactly the PR's own delta: `diff_base` resolves to `merge-base(HEAD^2, <live base ref>)`, never the merge ref's frozen first parent, and every failure to resolve emits fail-closed defaults.
+
+**Assembly.** The single chokepoint is guard (2a) in `scripts/ci-oracle-lane.sh` `run()`: `diff_base`/`diff_head` are locals assigned only in the (2a) arm (pull_request) and the (2b) arm (merge_group, untouched), and every downstream read (`git diff` listing, `-U0` index diff, `git show $diff_base:`) consumes only those locals. The env injection point is the `oracle-selection` step's `env:` block in `ci.yml`.
+
+**Mutation matrix:**
+
+| # | Mutation | Expected |
+|---|----------|----------|
+| 1 | Revert `diff_base` to literal `HEAD^1` | RED — the merge-carrying-branch fixture classifies `oracle_only=true` on main-side churn |
+| 2 | Compute `git merge-base HEAD^1 HEAD` (wrong operands — resolves the frozen parent) | RED — same fixture fails: the property is about the *live* base, not either parent |
+| 3 | Drop the merge-base resolution entirely; `diff_base` empty while the diff still runs | RED — a suite row asserting `diff_base` resolves (non-empty, ancestor of `p2`) fails, and `git diff ""` rc fails closed |
+| 4 | Swallow the `git fetch`/merge-base failure and continue with an unset base | RED — the injected-failure fixture must emit the named fail-closed reason, not classify |
+| 5 | Emit `oracle_only=true` path that skips the (2a) shape guard (guard's own dispatch) | RED — existing bad-shape fixtures (octopus, non-merge, wrong head) already RED any dispatch that reaches classification without the shape |
+| 6 | Fixture where the branch merges main AND adds a code file | must-PASS (non-canonical input): `oracle_only=false` — proves the gate is not a reject-everything stub |
+| 7 | Fixture: fresh merge ref on a linear branch | must-PASS: merge-base result equals the old `HEAD^1` result — the fix is a strict improvement, no regression on the common case |
 
 ## Domain Review
 
