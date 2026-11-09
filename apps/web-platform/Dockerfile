@@ -393,6 +393,9 @@ COPY --from=builder \
   /app/infra/web-bash-synthetic.service \
   /app/infra/web-bash-synthetic.timer \
   /app/infra/sdk-bash-verdict.sh \
+  /app/infra/host-kernel-marker.sh \
+  /app/infra/host-kernel-marker.service \
+  /app/infra/host-kernel-marker.timer \
   /app/infra/web-zot-consumer-probe.sh \
   /app/infra/web-zot-consumer-probe.service \
   /app/infra/web-zot-consumer-probe.timer \

@@ -1700,3 +1700,99 @@ Table freshness and retention are checked without SSH by `bash scripts/egress-au
 With `EGRESS_AUDIT_EXPECT_COLLECTION=1` it also needs `EGRESS_AUDIT_CANARY_WORKSPACES` (comma-separated ids of the enabled canary workspaces) and
 the Better Stack query credential. It is not scheduled anywhere yet: until it is, it is a manual probe, and scheduling it is a precondition of
 enabling collection (ADR-288).
+
+## Querying `SOLEUR_HOST_KERNEL` (periodic host kernel marker, #12007, ADR-322 addendum 2026-11-08)
+
+Each running prod host reports its kernel every 6 hours and once per boot as one plain-text line. The marker feeds the
+`soleur:cve-exposure` host-state helper (`observed` / `stale` / `unknown`) and the per-host dead-man heartbeats
+`soleur-host-kernel-<role>-prd` (`<role>` is `web-1`, `web-2`, `inngest` or `registry`). It rides the log path each host already
+has: journald through Vector for the web hosts and the inngest host, all into the shared Logs source. The registry's direct post
+is future state: its emitter ships in a separate owner-approved follow-up PR (#12386, because that merge replaces the registry
+host), so until then the registry has no rows and reads `unknown`. Rollout is operator-held (#12386): until a host has been delivered it emits nothing and reads as `unknown`, which is the
+expected state and not a fault. How the marker reaches each host class (carrier, precondition, expected drift) is one table, the
+delivery matrix in the host-kernel section of `workspaces-luks-cutover-6604.md`; it is not restated here.
+
+**Interim state.** Until the arming change (#12386) no feeder verdict line and no page can exist for these hosts: the four
+targets are not in the feeder loop and the four heartbeats are paused. Interim: the only read is the credentialed query below or
+the credentialed helper (`host-state.sh`).
+
+```bash
+doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh --since 12h --grep SOLEUR_HOST_KERNEL --limit 20
+```
+
+The reader needs the injected query credential and has no unauthenticated substitute (see the "no creds" section above).
+`--grep` is an unanchored literal `LIKE`, so one grep per term; issue and PR text that quotes the marker name also matches, which
+is why the identity rules below decide whether a row counts. A 12 hour window holds about two rows per host in steady state; widen
+to `--since 48h` to see the freshness boundary and `--since 7d` for the helper's own window.
+
+### Decoding a line
+
+`raw` is double-encoded JSON, so decode before reading fields (`jq -r '.raw | fromjson'`).
+
+```text
+journald host (web or inngest), decoded object:
+  host_name           = <Vector-stamped host name>
+  SYSLOG_IDENTIFIER   = host-kernel-marker
+  _SYSTEMD_UNIT       = host-kernel-marker.service
+  message             = SOLEUR_HOST_KERNEL v=1 role=<web|inngest> kernel=<uname -r> uptime_s=<n|unknown> reboot_required=<0|1|unknown> sec_updates=<n|unknown>
+
+registry row (future state once the follow-up PR delivers it; posted directly, no Vector stamp, so no host_name and an empty SYSLOG_IDENTIFIER):
+  message             = SOLEUR_HOST_KERNEL v=1 role=registry kernel=<uname -r> uptime_s=<n|unknown> reboot_required=<0|1|unknown> sec_updates=<n|unknown> host=<registry host id>
+```
+
+- `v=1` is the format version. A row with another or a missing version token is ignored, never attributed.
+- `kernel=` must match the anchored kernel shape (a release string such as `<major>.<minor>.<patch>-<abi>-<flavour>`); `unreadable` or
+  anything else does not qualify, so the host reads `unknown` and the heartbeat is withheld.
+- `reboot_required`, `sec_updates` and `uptime_s` are best-effort and print `unknown` when unmeasurable. They are display only and
+  never feed `kernel_state`.
+
+### Identity rules (which row counts for which host)
+
+- **Journald hosts** (web-1, web-2, inngest): the identity is the Vector-stamped `host_name` plus the exact `SYSLOG_IDENTIFIER`
+  `host-kernel-marker` plus `_SYSTEMD_UNIT` equal to `host-kernel-marker.service` (a local process can forge the identifier with
+  `logger -t`, not the unit). There is no `_HOSTNAME` requirement, an accepted residual. `role=` is only a cross-check: if it
+  disagrees with the `host_name`, the row is dropped and the host stays `unknown`. A journald-path row whose message contains the
+  substring `host=` anywhere is rejected outright, in both readers.
+- **Registry** (future state; the readers already decode it, no row exists until the follow-up PR delivers the emitter): no Vector
+  stamp exists, so the identity is the in-message pair `role=registry` plus `host=<registry host id>`. Both must match; either one
+  alone does not qualify.
+- Both the helper and the feeder apply the same table, and a test pins the two copies together.
+- The residuals are the ones the ADR-322 addendum of 2026-11-08 (#12007 review) states. Journald path: with the unit pin a local
+  process cannot forge a row, so what remains is root on the host. Registry path: the identity is declared inside the message, so
+  the holder of the shared Logs ingest token can post a row that passes both checks. Freshness is measured on Better Stack
+  ingestion time (`dt`), not on a time the host wrote. A single valid row at most 48 hours old can ground `Affected=no` for the
+  kernel question; these residuals are what that costs.
+- The newest mapped periodic row of a host decides: if it is unreadable the host reads `stale` (the older valid row's kernel
+  and age stay visible), never `observed`.
+
+### Three empty-read states (do not collapse them)
+
+1. **The read itself failed.** A non-zero exit, a `TRANSIENT` classification or a credential refusal is not an answer about the
+   host. Fix the invocation (wrap it in `doppler run`) and read again; never report "no rows" from a failed read.
+2. **No row for a host at all.** Either the host has not been delivered yet (the expected rollout state, #12386), or its timer or
+   unit is dead, or the Vector allowlist drops the tag on that host. Treat it as a dark host only after the rollout for that host is
+   recorded as done; that record lives in the comments of the rollout issue (`gh issue view 12386 --comments`). A positive control from the SAME host and window (for example a `host_metrics` or journald row) proves the
+   window is covered; without one the answer is inconclusive, not zero.
+3. **Rows exist but none qualify.** The newest rows fail the identity rules, carry an unknown version, have an unreadable kernel
+   or are older than the window. The helper prints `stale` when a valid periodic row is older than 48 hours, and `unknown` when
+   there is no valid row.
+
+### The 36 hour window and how a page is read
+
+The heartbeat for a host is fed hourly by `scripts/deadman-heartbeat-feeder.sh` only while that host's own valid row exists inside
+a literal 36 hour window (hot table UNION archive). With period 3600 and grace 7200, the worst case from a host going dark to a
+page is about 40 hours, before the skill stops trusting a report at 48 hours. A native log alert cannot be used: its
+`query_period` is capped at 900 seconds, which is blind to a 6-hourly row.
+
+A page on `soleur-host-kernel-<role>-prd` means that host has had no qualifying row for about 36 hours. Read it in this order:
+
+1. Check the feeder first: the Sentry monitor `scheduled-deadman-heartbeat-feeder` and the workflow run list. A feeder fault
+   (`query_failed` or `beat_failed`) is distinct from the host being dark and is not a host problem.
+2. Read the feeder verdict for the target in the run log (`deadman-feeder: target=host-kernel-<role> verdict=...`).
+   `no_qualifying_row` names the dark host or source; `qualifying_row_heartbeat_paused` means the heartbeat is still unarmed.
+3. Run the query above and apply the three empty-read states to that host. A planned replace of the inngest or registry host goes
+   dark for up to the window on purpose, so its heartbeat is paused first (see the arming section of
+   `workspaces-luks-cutover-6604.md`).
+
+Remediation of a dark production host (restarting a unit, re-delivering the collector, a host replace) is operator-reserved and
+tracked in #12386; this section only reads.

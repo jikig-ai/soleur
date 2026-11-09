@@ -1,0 +1,14 @@
+[Unit]
+Description=Report the running kernel every 6 hours and shortly after boot (SOLEUR_HOST_KERNEL, #12007)
+
+[Timer]
+# One row shortly after every boot, then 00:00/06:00/12:00/18:00 plus a randomized delay: at least one row per day
+# survives a missed slot, and the 36 h dead-man tolerates five missed 6 h slots. Persistent=true replays
+# one missed slot after downtime; the oneshot service cannot overlap itself.
+OnBootSec=2min
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

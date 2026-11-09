@@ -494,6 +494,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CVE_EXPOSURE_TEST_HOST_STATE_TEST_SH_PATHS=(
   "plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
   "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
   "scripts/betterstack-query.sh"
+  "scripts/deadman-heartbeat-feeder.sh"
   "scripts/image-cve-scan.sh"
   "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
