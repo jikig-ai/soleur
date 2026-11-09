@@ -332,27 +332,25 @@ export async function gitWithInstallationAuth(
       // unexpected `$HOME` sibling ever becomes writeable.
       GIT_CONFIG_GLOBAL: "/dev/null",
     };
-    // Hardened: an allowlisted environment, never the server's (unchanged). Legacy: the shared host-git invocation
-    // (hardening arguments before the credential-helper reset, a scrubbed environment plus this arm's own auth
-    // variables). `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_NOSYSTEM` are NOT forwarded from `authEnv` on this arm: the
-    // helper owns them (the image identity file), and `/dev/null` there would drop the fallback identity.
-    let fullArgs: string[];
-    let env: NodeJS.ProcessEnv;
-    if (hardened) {
-      fullArgs = [...HELPER_RESET, ...HARDENED_GIT_ARGS, ...args];
-      env = buildIsolatedGitEnv(hardened, authEnv);
-    } else {
-      const { GIT_CONFIG_GLOBAL: _global, GIT_CONFIG_NOSYSTEM: _nosystem, ...legacyAuthEnv } = authEnv;
-      void _global;
-      void _nosystem;
-      const h = hostGitInvocation([...HELPER_RESET, ...args], {
-        cwd: execOpts.cwd,
-        extraEnv: legacyAuthEnv,
-        allowProtocol: LEGACY_ALLOW_PROTOCOL,
-      });
-      fullArgs = h.args;
-      env = h.env;
-    }
+    // Legacy: the shared host-git invocation (hardening arguments before the credential-helper reset, a scrubbed
+    // environment plus this arm's own auth variables). `GIT_CONFIG_GLOBAL` / `GIT_CONFIG_NOSYSTEM` are NOT forwarded from
+    // `authEnv` on this arm: the helper owns them (the image identity file), and `/dev/null` there would drop the fallback
+    // identity. The hardened arm below keeps its own argv and env exactly as before.
+    const { GIT_CONFIG_GLOBAL: _global, GIT_CONFIG_NOSYSTEM: _nosystem, ...legacyAuthEnv } = authEnv;
+    void _global;
+    void _nosystem;
+    const legacy = hardened
+      ? undefined
+      : hostGitInvocation([...HELPER_RESET, ...args], {
+          cwd: execOpts.cwd,
+          extraEnv: legacyAuthEnv,
+          allowProtocol: LEGACY_ALLOW_PROTOCOL,
+        });
+    const fullArgs = legacy ? legacy.args : [...HELPER_RESET, ...(hardened ? HARDENED_GIT_ARGS : []), ...args];
+    // Hardened: an allowlisted environment, never the server's.
+    const env: NodeJS.ProcessEnv = hardened
+      ? buildIsolatedGitEnv(hardened, authEnv)
+      : (legacy as { env: NodeJS.ProcessEnv }).env;
 
     // Async exec (non-blocking) — critical for Next.js route handlers
     // that invoke this helper on the request path (kb/upload pull,
