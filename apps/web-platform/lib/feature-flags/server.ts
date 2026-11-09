@@ -330,7 +330,10 @@ export async function isDebugModeAvailable(identity: Identity): Promise<boolean>
   return getRuntimeFlag("debug-mode", identity);
 }
 
-/** #4671 / ADR-287 — classify + annotate WebFetch results. Resolve with the session's REAL identity. */
+/**
+ * #4671 / ADR-287 — classify + annotate WebFetch results. Resolve with the session's REAL identity. The same flag also
+ * gates the static `gh` Bash framing note (#11076, ADR-287 addendum 2026-11-08): turning the scorer off removes that note too.
+ */
 export async function isUntrustedContentClassifyEnabled(identity: Identity): Promise<boolean> {
   return getRuntimeFlag("untrusted-content-classify", identity);
 }
