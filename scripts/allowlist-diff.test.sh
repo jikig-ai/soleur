@@ -134,6 +134,7 @@ install_sut() {
 R1="$(mk_repo unchanged)" || { echo "harness: setup failed" >&2; exit 2; }
 install_sut "$R1"
 printf 'y\n' > "$R1/sub/other.txt"
+assert_fixture_dir "$R1"
 git -C "$R1" add -A >/dev/null 2>&1
 git -C "$R1" commit -q -m "unrelated"
 run_sut "$R1" "$(git -C "$R1" rev-parse HEAD~1)" "$(git -C "$R1" rev-parse HEAD)"

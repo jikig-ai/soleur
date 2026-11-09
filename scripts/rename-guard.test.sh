@@ -320,7 +320,7 @@ d7_expect "TS-13b4 a double quote in the TARGET name exits 2" 2
 # un-allowlisted and the laundering rename passed. LC_ALL=C on every `grep -P` closes it; removing it reddens this row.
 UTF8_LOC=""
 for cand in C.utf8 C.UTF-8 en_US.utf8 en_US.UTF-8; do
-  if locale -a 2>/dev/null | grep -qix -- "$cand"; then UTF8_LOC="$cand"; break; fi
+  if grep -qix -- "$cand" < <(locale -a 2>/dev/null); then UTF8_LOC="$cand"; break; fi
 done
 if [[ -z "$UTF8_LOC" ]]; then
   fail "TS-13c needs a UTF-8 locale on the host" "none of C.utf8/en_US.utf8 is installed; the \\xff row would be vacuous"
@@ -351,7 +351,7 @@ cp "$RE/apps/web-platform/server/creds-e.ts" "$RE/knowledge-base/project/plans/c
 echo "// edited" >> "$RE/apps/web-platform/server/creds-e.ts"
 git -C "$RE" add -A >/dev/null 2>&1
 git -C "$RE" commit -q -m "copy into the allowlist and edit the source"
-if ! git -C "$RE" log --diff-filter=RC --find-copies=5% --name-status --pretty=format: -1 | grep -q '^C'; then
+if ! grep -q '^C' < <(git -C "$RE" log --diff-filter=RC --find-copies=5% --name-status --pretty=format: -1); then
   fail "TS-13e fixture sanity" "git did not report a C row for the copy fixture"
 fi
 guard_rc "$RE" "$(git -C "$RE" rev-list --max-parents=0 HEAD)" "$(git -C "$RE" rev-parse HEAD)"
