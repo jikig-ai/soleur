@@ -27,3 +27,11 @@ cto_spawns=1
 - Review panel armed, 10 background subagents: 13be3b57 code-simplicity | 4b0b56f0 arch-strategist | 38b760b8 git-history | 8e216916 pattern-recognition | 95f33479 security-sentinel | fcae979c performance-oracle | 74a58794 data-integrity | a982ca6c agent-native | dca61f70 code-quality | 2a19790d test-design
 - seats tally incr'd 8; next: collect findings → resolve P1-P3 inline → fix-round → qa → compound → ship → DONE
 - PR #12483 draft; #9323 watch subagent bf14895e armed until 23:59Z
+
+## Review synthesis (partial)
+- Seats returned: code-simplicity, arch-strategist (design pass: mechanism justified, ship), security-sentinel, performance-oracle, git-history, data-integrity, pattern-recognition, code-quality — ZERO P1/P2
+- Fix round 1 committed 90bd758fe3; suite 85/85 green (b7b added)
+- Reverted: sha hex guard (broke fixture shas; P3 hardening not a real vuln)
+- Pending seats: agent-native a982ca6c, test-design 2a19790d
+- Next: collect → push → qa → compound → ship (PR #12483: body needs Closes #12478, Ref #9323, Ref #12360, Changelog) → merge → postmerge → DONE
+- Advisory carry-forwards (documented, not blocking): grouped-queue head_sha under-resolution (safe→pending), dual-evidence push-first ordering, newest-of-N asymmetry
