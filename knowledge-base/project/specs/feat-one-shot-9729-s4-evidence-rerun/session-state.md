@@ -40,3 +40,11 @@
 - Census w1/w2 launched -> receipts/census-w{1,2}.txt.
 - Criterion (c) sampler: /var/tmp/s4-sample.sh -> /var/tmp/s4-sample/rows.tsv (11 newest) + chained runs2 (9 older) = 20-run sample.
 - Criterion (d): reader-audit.md written — kb-consumers 31/31, edge:consumed sel=0 datapoint.
+
+## VERDICT (2026-11-09 ~18:45Z)
+- Collect legs killed once at 53 units; relaunched --base origin/main which had drifted 3 commits past the pin; corrected by collecting the 3 missing tail commits (--commits 3 --base af764001ee~297), dropping 3 out-of-window units, dedup by sha, idx renumber -> /var/tmp/s4-rerun-9729-r4-final.
+- Ejections: 144 units (104 refused + 40 queue-oracle synthetics), 446 runs, corroboration 293/300 landed, 0 missing/refused/read-failures.
+- Aggregate: commits+ejections n=444, attributable=0, unverified=2 (0.45%), worst-case 68 -> cp95 18.41% >= 12% -> (a) FAILS bound. (b) pass, (c) within-10%, (d) pass.
+- verdict: computed=NO-GO reason=criterion-failed. Receipts committed; ADR-276 amendment appended (rebased over #12418 amendment); runbook §2 bullet added; #9729 comment posted.
+- Activation NOT taken: preactivation ready=false; CI_PR_AFFECTED stays unset; PR_AFFECTED_LOCKED=1 intact; only knowledge-base/ touched.
+- Review: non-code class, PANEL_SHA=f39c4dae6f, 4 seats spawned (githistory/patterns/security/quality).

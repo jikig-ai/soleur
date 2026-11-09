@@ -15,7 +15,7 @@ One measurement artifact, fixed: run 42520189031's first selection produced empt
 
 Raw rows (sample-rows.tsv): run_id, pr, files, fallback, skip_min, rows_sel0, ts-leg, heavy+other.
 
-3 runner-changed rows (12446, 12410, 12412 → full battery, saving 0, correctly). 17 priced rows.
+4 runner-changed rows (12446, 12410×2, 12412 → full battery, saving 0, correctly). 16 priced rows.
 
 - **Reading 1 (sample as drawn):** mean gross **73.35** suite-min/run (se 9.79); net of ~1 + ~3.3 debits ≈ **69.05 ≥ 22.11**. Even mean − 2se − debits ≈ 49.3.
 - **Reading 2 (population-weighted by leg share, the bar's denominator):** 0.337 × 73.35 − ~4.3 ≈ **20.4** vs bar **22.11** — ~92% of threshold, **inside the 10% band, not over**.

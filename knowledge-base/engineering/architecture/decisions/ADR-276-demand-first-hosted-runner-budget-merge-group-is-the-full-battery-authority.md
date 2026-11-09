@@ -70,6 +70,7 @@ criterion passed (ADR file statuses use `active`, so the stage word differs on p
 - 2026-11-07 S4 go/no-go re-ruling computed, verdict NO-GO (#9729; see `## Amendment 2026-11-07 (S4 go/no-go re-ruling, #9729)` below): the strict-zero index now passes criterion (b) and the saving passes (c), but the escape criterion (a) fails on the worst-case bound (19.38% ≥ 12%, numerator swollen by cancelled-run unsettled legs and pre-umbrella job-name drift); the lock stays, nothing is activated, `S4 live` is NOT recorded and the retire-vs-schedule decision returns to the operator per #10448
 - 2026-11-08 oracle-lane validation leg topology amended (#12393): oracle-index-check moved from running the committed manifest serially (measured 65.4 min vs the 30-min bound — activation rolled back 2026-11-08) to a K=5 `strategy.matrix.leg` split under the unchanged job ID, member assignment committed in scripts/ci-oracle-lane-legs.tsv (ADR-240 checked-in shape; check_legs() sentinel parity). Worst leg ~19 min (replay-a floor); +4 sub-minute no-op legs on non-oracle pull_request/merge_group runs is the recorded cost.
 - 2026-11-08 oracle-only fast lane re-activation canary (this PR): `CI_ORACLE_LANE=on` re-armed via `gh variable set` after #12393's K=5 topology landed (merged `780a7176662f`); this docs-only diff is the re-run of the first live canary per the runbook — its pull_request run must classify `oracle_only=true`, print `ORACLE-ONLY-SKIP` for the five legs, and run all 15 manifest members across `oracle-index-check (1/5..5/5)` green inside `timeout-minutes: 30` per leg. `S4 live` is recorded only if this run canaries green; a leg failure or a bound hit rolls back per §Rollback (`gh variable delete CI_ORACLE_LANE`).
+- 2026-11-09 S4 go/no-go fourth re-ruling computed, verdict NO-GO (#9729; see `## Amendment 2026-11-09 (S4 go/no-go re-ruling, #9729)` below): criterion (a) fails the worst-case bound again (cp95 18.41% ≥ 12%; point 0.45% holds); (b)/(d) pass, (c) within-10%; the lock stays, nothing is activated, `S4 live` is NOT recorded and the retire-vs-schedule decision remains operator-owned per #10448
 
 ## Context
 
@@ -680,7 +681,7 @@ Status stays `adopting`. The oracle-lane scope-bound text above describes the pu
 
 Status stays `adopting`. Fourth re-ruling under the same rule of the record, on a fresh 300-commit window (BASE `af764001ee`, ejection window `2026-10-30T09:03:16Z..2026-11-09T12:43:53Z`). **The re-ruled verdict is NO-GO** (`computed=NO-GO reason=criterion-failed` from `verdict --a fail --b pass --c within-10% --d pass`), again on criterion (a)'s worst-case bound. Non-activating, in full: `CI_PR_AFFECTED` stays unset, `PR_AFFECTED_LOCKED` stays in `scripts/ci-pr-selection.sh`, no workflow/ruleset/infra file touched; `S4 live` NOT recorded; activation still needs the budget owner's named-command go-ahead plus the issue's entry gates.
 
-Go/no-go receipt: knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-rerun/receipts/go-no-go.md
+Go/no-go receipt: knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-rerun/receipts/go-no-go.md (read from the committed tree; ship archives the spec dir and the gate reads the archived copy)
 
 | Criterion | Measured | Status |
 |---|---|---|
@@ -689,4 +690,4 @@ Go/no-go receipt: knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-re
 | (c) net saving | baseline 110.55 → bar 22.11; sample net 69.05 (reading 1, pass); population-weighted ~92% of bar | **within-10%** |
 | (d) reader audit | kb-consumers 31/31; edge:consumed sel=0 | **pass** |
 
-Notes: first window exercising the 2026-11-09 corroboration + classifier changes — corroboration found zero drops (merge_group_on_landed=293/300, missing=0, refused=0), unclassified buckets eliminated, flake-cleared=32. Remaining bound driver: `failed-job-without-fail-line` (22) + `queue-oracle-shortfall` synthetic units (~36) + unsettled legs — measurement coverage, not escapes. Retire-vs-schedule stays operator-owned.
+Notes: first window exercising the 2026-11-09 corroboration + classifier changes — corroboration found zero drops (merge_group_on_landed=293/300, missing=0, refused=0), the `unclassified-job` bucket stays at 0 (R3 also 0), flake-cleared=32. Remaining bound driver: `failed-job-without-fail-line` (22) + `queue-oracle-shortfall` synthetic units (40) + unsettled legs (4) — measurement coverage, not escapes. Retire-vs-schedule stays operator-owned.

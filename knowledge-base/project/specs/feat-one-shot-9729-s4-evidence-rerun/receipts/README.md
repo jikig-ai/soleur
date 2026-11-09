@@ -6,4 +6,4 @@ This run exercises the ejections corroboration + classifier-coverage changes mer
 
 Files: commands.txt, go-no-go.md (verdict receipt), replay-summary.txt, replay-commits.tsv,
 histograms.txt, ejections-window.json, index-audit.out / index-audit-bare-noaccept.out / index-audit.err,
-preactivation.out, criterion-c.md, census-w1.txt, census-w2.txt, reader-audit.md, sample-rows.tsv.
+preactivation.out, criterion-c.md, census-w1.txt, census-w2.txt, reader-audit.md, sample-rows.tsv, units-ejections.jsonl, ejections.log.

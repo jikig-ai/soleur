@@ -5,11 +5,11 @@ Ejection window: 2026-10-30T09:03:16Z..2026-11-09T12:43:53Z — 446 merge_group 
 
 ## Criteria
 
-- (a) escape bound: attributable=0/444, unverified_as_escape=2/444 (point 0.45%, passes ≤2%), worst_case=68/444 → cp95 18.41% ≥ 12% → **fail**. Not-evaluable=66 (failed-job-without-fail-line 22, queue-oracle-shortfall ~36 synthetic, unsettled-jobs ~5, +2 unverified would-skip-suite-failed).
+- (a) escape bound: attributable=0/444, unverified_as_escape=2/444 (point 0.45%, passes ≤2%), worst_case=68/444 → cp95 18.41% ≥ 12% → **fail**. Not-evaluable=66 (failed-job-without-fail-line 22, queue-oracle-shortfall 40 synthetic, unsettled-jobs 4) + unverified 2 = 68 worst-case numerator.
 - (b) index completeness: pinned audit rc=0, `unaudited=0 gap_suites=0 stale=0 accepted=1639 refs=4541 files_read=1269` → **pass**.
 - (c) saving: reading-1 net 69.05 ≥ 22.11 bar (M=110.55/run); reading-2 population-weighted ~92% of bar → **within-10%**.
 - (d) reader audit: kb-consumers 31/31, edge:consumed sel=0 on README-only diff → **pass**.
 
-Improvement vs R3: unclassified-* buckets eliminated (0 vs 29+20), corroboration exercised with zero drops, unsettled legs now witness-cleared (flake-cleared 32). Remaining bound driver = queue-oracle shortfall synthetics + failed-job-without-fail-line — coverage gaps in the measurement, not escapes.
+Improvement vs R3: the `unclassified-job` name-drift bucket stays eliminated (0 this window, 0 in R3 — the term-1 allowlist holds), corroboration exercised with zero drops. Remaining bound driver = queue-oracle shortfall synthetics + failed-job-without-fail-line — coverage gaps in the measurement, not escapes.
 
 SOLEUR_PR_AFFECTED_VERDICT verdict=NO-GO ruled=confirmed date=2026-11-09

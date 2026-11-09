@@ -98,7 +98,7 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
   but population-weighted by the test-scripts leg's 35.3% run share ≈ 19.76, inside the band
   and under it; (d) passes. Window: 446 merge_group runs, 98 refused (75 failure, 23
   cancelled), commits `4fba0d512e…c6cd57f31d`. Still nothing activated; the pre-activation
-  gate reads `ready=false missing=lock,artifacts,verdict,prereq5`; the retire-vs-schedule
+  gate reads `ready=false missing=lock,artifacts,verdict,prereq5,tree`; the retire-vs-schedule
   call stays operator-owned per #10448. Receipts:
   `knowledge-base/project/specs/archive/20261108-080602-feat-one-shot-ci-lever-residuals/receipts/r3/`.
 
@@ -109,7 +109,7 @@ a re-run on a later tree will not print 190). The receipts are in the PR C spec 
   leaving `failed-job-without-fail-line` (22), `queue-oracle-shortfall` synthetics (~36) and unsettled
   legs as the bucket); (b) passes (strict zero, accepted=1639); (c) within-10% — net 69.05 >= 22.11
   per-full-run but ~92% of bar population-weighted; (d) passes. Corroboration: merge_group_on_landed=293/300,
-  missing=0, refused=0. Still nothing activated; `ready=false missing=lock,artifacts,verdict,prereq5`;
+  missing=0, refused=0. Still nothing activated; `ready=false missing=lock,artifacts,verdict,prereq5,tree`;
   retire-vs-schedule stays operator-owned per #10448. Receipt:
   `knowledge-base/project/specs/feat-one-shot-9729-s4-evidence-rerun/receipts/go-no-go.md`.
 
