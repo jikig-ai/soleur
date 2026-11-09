@@ -13,7 +13,7 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 - [x] 0.5.1 Pin iron-proxy by digest; start it with one stub host and a throwaway logging hook, under `env -i`, a throwaway `HOME`, `GIT_CONFIG_GLOBAL=/dev/null` and an internal docker network with no route to real GitHub.
 - [x] 0.5.2 Answer the eight tracer items (upstream chaining, selective termination, hook body access incl. gzip and chunked receive-pack, upstream trust, whole-header replacement in configuration only incl. absent and duplicate headers, dead-hook fail-closed, inbound Proxy-Authorization, gRPC over a unix socket with per-call metadata) and the sandbox-to-injector binding mechanism.
-- [ ] 0.5.3 Record the answers in `iron-proxy-image.provenance.md`; any "no" configuration cannot fix goes to the CTO before Phase 1.
+- [x] 0.5.3 Record the answers in `iron-proxy-image.provenance.md`; any "no" configuration cannot fix goes to the CTO before Phase 1. (Items 2 and 8 no; CTO R24–R27; add-ons 2b, 7b, 9b yes.)
 
 ## Phase 1: Hermetic tests, then the harness
 
@@ -22,7 +22,8 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 - [ ] 1.3 Add exactly pinned devDependencies `graphql` and `@grpc/grpc-js@1.14.6` to `apps/web-platform` (package.json and lockfile together).
 - [ ] 1.4 Implement `policy.mjs` (closed write policy, protocol-classified reads, normalized hash recipe) until 1.2 is green.
 - [ ] 1.5 Write `policy.yaml`, `policy.add-verb.yaml` and `iron-proxy.config.tmpl.yaml`.
-- [ ] 1.6 Implement `approval-hook.mjs` (one process, per-session masked sockets with nonce and conversation binding, loopback-and-`supabase status` guard, create-then-consume, `get_approval_status` for rejected/expired, 5 s self-deadline, markers, no body or header logging).
+- [ ] 1.6 Implement `approval-hook.mjs` (one process, per-session masked sockets with mutual-TLS client identity (CN = conversation, R25), loopback-and-`supabase status` guard, create-then-consume, `get_approval_status` for rejected/expired, 5 s self-deadline, markers, no body or header logging).
+- [ ] 1.6b Write `apps/web-platform/test/egress-injector-router.test.ts` (failing first), then implement `connect-router.mjs` (R24, R26: exact four-host match on 443, inbound 407, router-only credential to iron-proxy, everything else to the forwarder).
 - [ ] 1.7 Implement `stub-github/server.mjs` (four hosts, REST, GraphQL, `git http-backend` on a synthetic repo, records `Authorization` class) and the stub Anthropic SSE with scripted `Read`/`WebFetch` tool calls.
 - [ ] 1.8 Implement `probes/sandbox-probe.sh` and `injector-spike-docker.test.sh` under `apps/web-platform/test/infra/egress-injector-spike/` (run tuple, real squid conf, local Supabase stack, inline CHECK widening, per-session CA function, forwarder plus injector per session, arms A and B, production deny list derived from code, criteria 1–9, outcome floor, never-skip).
 - [ ] 1.9 Implement `verdict.mjs` and `print-verdict.sh` (exit 0 on GO or NO-GO, 1 otherwise).

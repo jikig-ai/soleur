@@ -95,31 +95,41 @@ ADR-324, "Egress credential injection is a property of the hop, decided apart fr
 
 > "CLO gates for any managed platform: a signed DPA that names the product; an EEA contracting entity or a transfer mechanism covering that product; an acceptable sub-processor list; a transfer impact assessment and DPIA; a successor to the T-1 location gate with fresh operator acknowledgement; published documents changed before any tenant data moves."
 
-Beside the gates it notes that the T-1 to #5274 mapping is unverified. It cites ADR-311 Decision 4 for approval-on-every-vend rather than restating it, states that ADR-311 Decision 6 stays frozen as narrowed, names DPIA trigger t3 / #9853 as the production gate, lists the parked ePrivacy question, records the forwarder-first ordering as the alternative #11637 must weigh (a dead injector also stops `claude` streaming; CTO R17), names the hook's key custody (service-role and HMAC keys in one dispatcher-like process) as part of the blast radius, and states that the results go stale at merge until #11637 owns the job. It cites code by function name, and does not claim credential injection is offered, treat vendor documentation as a control, assert Cloudflare's DPA covers Sandbox or Containers, or claim EU placement. Its C4 section names an `egressInjector` container as a pending change assigned to #11637. It amends ADR-311 Decision 4 only through a measured hook (GO) in merge-conditioned wording ("on merge of PR #12518"); on NO-GO it adds a see-also to ADR-311 so its Consequences line about #11637 does not go stale. `## Measured outcome — injector` is appended after the run; `## Measured outcome — Cloudflare trial` is appended by the sibling PR.
+Beside the gates it notes that the T-1 to #5274 mapping is unverified. It cites ADR-311 Decision 4 for approval-on-every-vend rather than restating it, states that ADR-311 Decision 6 stays frozen as narrowed, names DPIA trigger t3 / #9853 as the production gate, lists the parked ePrivacy question, records the forwarder-first ordering as the alternative #11637 must weigh (a dead injector also stops `claude` streaming; CTO R17), names the hook's key custody (service-role and HMAC keys in one dispatcher-like process) as part of the blast radius, and states that the results go stale at merge until #11637 owns the job. It records the tracer's measured facts (R24–R27): v0.56.0 terminates every tunnel, so selective termination needs a router (production options: this router, forwarder-first, or an upstream passthrough); a frozen hook meets no iron-proxy deadline, so a hook deadline or watchdog is a #11637 precondition; the plain-HTTP, HTTPS and metrics listeners cannot be switched off and default to all interfaces; the hook channel is authenticated by mutual TLS. It cites code by function name, and does not claim credential injection is offered, treat vendor documentation as a control, assert Cloudflare's DPA covers Sandbox or Containers, or claim EU placement. Its C4 section names an `egressInjector` container as a pending change assigned to #11637. It amends ADR-311 Decision 4 only through a measured hook (GO) in merge-conditioned wording ("on merge of PR #12518"); on NO-GO it adds a see-also to ADR-311 so its Consequences line about #11637 does not go stale. `## Measured outcome — injector` is appended after the run; `## Measured outcome — Cloudflare trial` is appended by the sibling PR.
 
 ### Injector spike
 
 Topology, inside one CI job on the production run tuple:
 
 ```text
-sandbox (SDK/SRT bwrap, app image, uid 1001)     injector process (per session, outside bwrap, uid 1001)
-  git / gh / curl / node / claude  -- CONNECT -->  iron-proxy (digest-pinned), per-session Proxy-Authorization
-  holds no credential; CA cert only                 per-session CA key + real decoy token (masked paths, fd)
-                                                     |                                   |
-                                                     | gRPC over per-session socket      | CONNECT (workspace:token)
-                                                     v                                   v
-                                         approval hook (one process, host network,   egress-forwarder.mjs (real, unchanged)
-                                         stands in for the dispatcher: service-role     |
-                                         + HMAC keys; one socket per conversation)       v
-                                                     |                                squid gateway (real conf, unchanged)
-                                                     v                                   |
-                                         local Supabase stack (real RPCs, loopback)      v
-                                                                                     stub destinations (TLS, test root):
-                                                                                     github.com, api.github.com,
-                                                                                     uploads.github.com, codeload.github.com
-                                                                                     (git http-backend + REST/GraphQL stub,
-                                                                                      records the Authorization class received)
-                                                                                     + stub Anthropic SSE (tunneled, not terminated)
+sandbox (SDK/SRT bwrap, app image, uid 1001)
+  git / gh / curl / node / claude  -- CONNECT + per-session Proxy-Authorization -->
+  holds no credential; session CA cert only
+                                     |
+                                     v
+  connect-router.mjs (per session, outside bwrap, uid 1001, no TLS; R24, R26)
+    checks the session credential on every CONNECT, strips it, lowercases the target, drops a trailing dot
+     |                                                            |
+     | exact github.com, api.github.com, uploads.github.com,      | every other target (incl. other *.github.com,
+     | codeload.github.com on 443 (+ router-only credential)      | IP literals); an inject name on another port = 403
+     v                                                            |
+  iron-proxy tunnel_listen (digest-pinned, per session)           |
+    grpc transform, no rules (R26) --mTLS gRPC over per-session   |
+      unix socket (R25)--> approval hook (one process, host net,  |
+      service-role + HMAC keys, stands in for the dispatcher)     |
+                              --> local Supabase stack (loopback) |
+    allowlist transform: the four hosts only                      |
+    secrets transform: whole Authorization header (decoy, file)   |
+    per-session CA key (masked path); http/https/metrics on 127.0.0.1
+     | CONNECT (workspace:token)                                  | CONNECT (workspace:token)
+     v                                                            v
+  egress-forwarder.mjs (real, unchanged) --> squid gateway (real conf, unchanged)
+     |                                                            |
+     v                                                            v
+  stub destinations (TLS, test root): github.com,                 stub Anthropic SSE and open web
+  api.github.com, uploads.github.com, codeload.github.com         (tunneled, never terminated)
+  (git http-backend + REST/GraphQL stub, records the
+   Authorization class received)
 ```
 
 Rulings that shape it (CTO, binding, 2026-11-09; full text in `decision-challenges.md`):
@@ -129,15 +139,17 @@ Rulings that shape it (CTO, binding, 2026-11-09; full text in `decision-challeng
 - **F-c** one injector process per session beside the forwarder, outside bwrap, CONNECT-chained to the unchanged forwarder and squid. The decoy credential and CA key reach it through a file descriptor or a file under a path the sandbox config masks for every session; never env or argv.
 - **F-f** hermetic stub destinations; upstream verification stays on against a test root.
 - **F-g / R22 / D2** an on-demand recorded run in its own workflow file `.github/workflows/egress-injector-spike.yml` (`pull_request` with paths on the spike directories and `workflow_dispatch` only; never `push`), job-level concurrency group `sandbox-eval-${{ github.event.pull_request.number || github.run_id }}` with literal `cancel-in-progress: false`, a `scripts/pr-fanout-ledger.txt` row, `permissions: contents: read`, `actions/checkout` with `persist-credentials: false`, and no secrets or Doppler token; the suite never skips itself.
-- **R9** one approval-hook process holds the service-role and HMAC keys (as the dispatcher does in production). Each session reaches it through its own unix socket in a per-session directory masked for every session (the #10445 peer-socket pattern), the hook binds each socket to one conversation id and accepts only a per-session nonce held by that session's injector, and a probe proves sandboxed Bash cannot `connect()` the socket.
-- **R10** every secret (decoy token, CA key, hook socket, nonce) is out of env and argv and under masked paths; CLI-tier probes (below) prove the same-uid file tools cannot read them.
+- **R9** one approval-hook process holds the service-role and HMAC keys (as the dispatcher does in production). Each session reaches it through its own unix socket in a per-session directory masked for every session (the #10445 peer-socket pattern), the hook binds each socket to one conversation id and accepts a call only when the injector's per-session client certificate chains to the hook's client root and its CN equals that conversation (R25 replaces the nonce: iron-proxy cannot attach per-call metadata), and a probe proves sandboxed Bash cannot `connect()` the socket.
+- **R10** every secret (decoy token, CA key, hook socket, hook client key, router credentials) is out of env and argv and under masked paths; CLI-tier probes (below) prove the same-uid file tools cannot read them.
 - **R11** arm A runs with the exact `buildAgentEnv` output and records where GitHub traffic goes; arm B removes the four inject hosts from `NO_PROXY`, labelled a production change owned by #11637. Both run through the real SDK/SRT sandbox (`sdk-bash-probe.mjs` pattern).
-- **R20** the injector requires a per-session `Proxy-Authorization` on CONNECT; a CONNECT without it from container loopback gets 407.
+- **R20 as amended by R26** the router requires the session's `Proxy-Authorization` on every CONNECT (407 without it) and strips it; inside iron-proxy the gRPC transform has no `rules`, so the hook also refuses (407) any CONNECT without the router-only credential, and an `allowlist` transform limited to the four hosts refuses everything else (tracer 2b, 7b).
+- **R24** a per-session CONNECT router, `connect-router.mjs` (test path, no TLS, the bounded head parse of `egress-forwarder.mjs`), sends exact `github.com`, `api.github.com`, `uploads.github.com` and `codeload.github.com` on port 443 to that session's iron-proxy `tunnel_listen`, refuses an inject name on any other port (403), and sends every other CONNECT unchanged to the forwarder with the forwarder credential. iron-proxy v0.56.0 terminates every tunnel in `mitm` mode (tracer item 2), so the router is what keeps the Anthropic and open-web path untouched. It never logs header values.
+- **Listener binding (R26)** `dns.enabled: false`; explicit-proxy traffic uses `proxy.tunnel_listen`, reachable only by that session's router; `http_listen`, `https_listen` and `metrics.listen` cannot be switched off and default to all interfaces, so each is bound to `127.0.0.1` (tracer 9b). A CONNECT sent to `http_listen` is forwarded upstream with the credential injected (tracer hazard).
 - **R21** the hook runs in the runner host's network namespace (`--network host` if containerised) so `127.0.0.1` is the loopback `supabase-local.sh` binds. Before using the service-role key, the hook refuses unless the URL host is a loopback literal and the key and URL match `supabase status`.
 
 Policy data (`policy.yaml`) is the per-host classifier and the only place a verb is declared. The base policy is closed for writes (CTO R13):
 
-- Inject hosts: `github.com`, `api.github.com`, `uploads.github.com`, `codeload.github.com`. Every other host is tunneled without termination.
+- Inject hosts: `github.com`, `api.github.com`, `uploads.github.com`, `codeload.github.com`. Every other host is routed to the forwarder by the router and never reaches iron-proxy (R24).
 - Reads vend without a row, on the per-workspace repository allowlist: REST `GET`/`HEAD` on allowlisted paths; git `GET info/refs?service=git-upload-pack` and `POST git-upload-pack`; GraphQL documents whose selected operation (by `operationName`, parsed with the `graphql` package) is a `query`.
 - The push ref advertisement (`GET info/refs?service=git-receive-pack`) vends without a row on the same allowlist: it mutates nothing and carries no ref updates to hash (CTO R1).
 - Listed writes need a row: `POST git-receive-pack`; the REST write verbs and GraphQL mutation fields named in `policy.yaml`. An unlisted write, and any unparseable, batched (array) or multi-operation body without a resolvable `operationName`, is refused as `not-allowlisted` with no row.
@@ -157,7 +169,7 @@ The approval hook (`approval-hook.mjs`, importing `policy.mjs`) implements iron-
 
 Timeouts, together: the hook bounds its own work at 5 s; iron-proxy's 30 s upstream header timeout bounds a slow destination; clients must exit within 10 s of a refusal or a dead hook. Each is shorter than the layer above it, so a stall is reported by the innermost layer that can see it. The hook emits `SOLEUR_EGRESS_VEND` (fields: `session`, `host`, `method`, `class`, `rule`, `approval_id` or `read-allowlist`) and `SOLEUR_EGRESS_VEND_REFUSED` (fields: `session`, `host`, `method`, `class`, `reason` in `flag-off | not-allowlisted | pending | rejected | expired | cap | retry | closed | consume-failed | rpc-error | guard-refused | hook-timeout | no-hook-decision`, plus `subreason` for `not-allowlisted` in `unparseable | batched | unlisted-write | read-outside-allowlist` and for `consume-failed` in `already_consumed | decider_not_owner | requester_not_member`). Both markers carry `request_id` (joining the hook marker, iron-proxy's audit line, the client's exit and the stub's record), `source` (`hook | proxy | harness`), and on `_REFUSED` the first 12 hex characters of `action_sha256` and the `approval_id` when one exists. `cap` covers `AP429`/`AP430`, `retry` covers `40001`, `closed` covers an archived conversation. A request whose hash differs from an approved row simply finds no approved row, so the binding is proven by the stub's record, not by a reason code; cross-tenant isolation is likewise proven at the stub. When the hook is dead or frozen it cannot emit anything; the harness then emits `SOLEUR_EGRESS_VEND_REFUSED source=harness reason=no-hook-decision` for every request id with no hook marker, and reads iron-proxy's audit line for the failed call (its format is unverified until the tracer measures it). Nothing logs a body, a header value or a token.
 
-The per-session CA is minted by a suite function: an ephemeral EC root with critical `nameConstraints` permitting the four inject hosts and excluding IP ranges `0.0.0.0/0` and `::/0`, extended key usage `serverAuth`, `pathlen:0`, 24-hour validity, SAN-bearing leaves. A DNS constraint on `github.com` also permits every subdomain (RFC 5280), so the effective scope is the four hosts plus `*.github.com`; ADR-324 states this. Nonces and per-session proxy credentials come from `crypto.randomBytes`. The sandbox receives the certificate only, through `SSL_CERT_FILE` (gh, curl), `GIT_SSL_CAINFO` (git) and `NODE_EXTRA_CA_CERTS` (Node, Bun, `claude`), on a bundle that is the system bundle plus the session CA (the first two replace rather than append). The key never enters the sandbox and is deleted at session end.
+The per-session CA is minted by a suite function: an ephemeral EC root with critical `nameConstraints` permitting the four inject hosts and excluding IP ranges `0.0.0.0/0` and `::/0`, extended key usage `serverAuth`, `pathlen:0`, 24-hour validity, SAN-bearing leaves. A DNS constraint on `github.com` also permits every subdomain (RFC 5280), so the effective scope is the four hosts plus `*.github.com`; ADR-324 states this. Per-session proxy credentials (session-to-router, router-to-iron-proxy) come from `crypto.randomBytes`; each session's hook client certificate is minted by the suite under a hook client root whose key stays with the suite. The sandbox receives the certificate only, through `SSL_CERT_FILE` (gh, curl), `GIT_SSL_CAINFO` (git) and `NODE_EXTRA_CA_CERTS` (Node, Bun, `claude`), on a bundle that is the system bundle plus the session CA (the first two replace rather than append). The key never enters the sandbox and is deleted at session end.
 
 ### What the suite measures (criteria fixed before the run)
 
@@ -165,19 +177,19 @@ Each criterion yields `pass | fail | unmeasurable` with a positive observation r
 
 | # | Criterion | Probe |
 |---|---|---|
-| 1 | Real credential not observable in the sandbox or by the same-uid file tools | Sandbox side: scan of env, workspace and `$HOME` files and the process list through `scanSandboxSurfaces` (`test/helpers/broker-spike-scan.ts`, run with `tsx`); the scan must find a planted control string to count as live. CLI-tier side (CTO R10): the stub Anthropic server returns scripted `Read` and `WebFetch` tool calls for the decoy-token file, the CA key, the hook socket, the nonce and `/proc/<injector pid>/{environ,cmdline}`; each must be refused. Positive control: the harness, as the same uid outside the sandbox, reads `/proc/<injector pid>/environ` successfully first. Sandboxed Bash `connect()` on the hook socket fails (CTO R9) |
-| 2 | `git` clone, fetch, push; `gh` REST and GraphQL; Node `fetch`; `curl`; `claude` CLI streaming, all through the injector with the injected CA, on the production run tuple | Arm A (`buildAgentEnv` as is) records where each client's GitHub traffic goes. Arm B (inject hosts removed from `NO_PROXY`, labelled #11637's change): each command runs inside the sandbox; the destination stub records the real decoy token class for inject hosts; the stub Anthropic SSE (non-inject host) streams 50 events untouched (the client sees the stub's own certificate) |
+| 1 | Real credential not observable in the sandbox or by the same-uid file tools | Sandbox side: scan of env, workspace and `$HOME` files and the process list through `scanSandboxSurfaces` (`test/helpers/broker-spike-scan.ts`, run with `tsx`); the scan must find a planted control string to count as live. CLI-tier side (CTO R10): the stub Anthropic server returns scripted `Read` and `WebFetch` tool calls for the decoy-token file, the CA key, the hook socket, the hook client key and `/proc/<injector pid>/{environ,cmdline}`; each must be refused. Positive control: the harness, as the same uid outside the sandbox, reads `/proc/<injector pid>/environ` successfully first. Sandboxed Bash `connect()` on the hook socket fails (CTO R9) |
+| 2 | `git` clone, fetch, push; `gh` REST and GraphQL; Node `fetch`; `curl`; `claude` CLI streaming, all through the injector with the injected CA, on the production run tuple | Arm A (`buildAgentEnv` as is) records where each client's GitHub traffic goes. Arm B (inject hosts removed from `NO_PROXY`, labelled #11637's change): each command runs inside the sandbox; the destination stub records the real decoy token class for inject hosts; the stub Anthropic SSE (non-inject host) streams 50 events untouched (the client sees the stub's own certificate). Each request records the router branch it took (iron-proxy or forwarder); the SSE must take the forwarder branch |
 | 3 | A listed write with no approved row is denied and creates a pending row; with one it is consumed exactly once; flag off denies | Git push, full lifecycle (CTO R16): no row (REJECT `pending`, one pending row); retry before decision (still one row); owner `deny` via `decide_approval` with a JWT from the local stack's auth (REJECT `rejected`, then a new pending row on re-request); a row with `p_ttl_seconds=60` polled up to 70 s (REJECT `expired`); `approve` then retry (vend, `consumed`); retry again (REJECT, new pending row). After an allowlisted advertisement GET, a `POST git-receive-pack` with no row is refused and the stub records no real token (CTO R1). REST POST and GraphQL mutation: no row, approved-and-consumed, binding. **Binding** (CPO C4): a row approved for request X does not authorize request Y that differs in body, path, repository, ref or operation; the stub records no real token for Y. Flag input off: REJECT `flag-off`, no row. Recorded only (CTO R15): for `git`, `gh` and `claude`, whether the pending-approval message reached the agent |
 | 4 | Allowlisted read vends without a row | REST GET on an allowlisted path, git clone, GraphQL query: vend, zero rows; GET on a non-allowlisted path: REJECT; the same allowlisted reads with the flag input off: REJECT |
-| 5 | Session A cannot obtain session B's credential | Two sessions, workspaces, CAs, decoy tokens, hook sockets and nonces. From A: a request carrying B's token as an `Authorization` value; a request with B's proxy credential; a CONNECT to B's injector port (407 without B's per-session credential, CTO R20); A's CA presented to B's injector; A's nonce on B's hook socket. The stub never records B's token from A |
-| 6 | ADR-278 controls do not regress; no request body logged | Through the full chain: deny-CIDR, localhost, link-local and port-80 targets refused; forwarder 407 on a bad token; an unentitled session has no route. A grep of every log (injector audit, hook output, squid `soleur_json`) for the decoy token and a planted body canary finds nothing |
+| 5 | Session A cannot obtain session B's credential | Two sessions, workspaces, CAs, decoy tokens, hook sockets and hook client certificates. From A: a request carrying B's token as an `Authorization` value; a request with B's proxy credential; a CONNECT to B's router (407 without B's per-session credential, R20/R26); A's router credential at B's iron-proxy (407); A's CA presented to B's injector; A's hook client certificate (same root) on B's hook socket (refused: the CN does not match B's conversation); a hook client certificate from another root (TLS refused). The stub never records B's token from A |
+| 6 | ADR-278 controls do not regress; no request body logged | Through the full chain, on both router branches: deny-CIDR, localhost, link-local and port-80 targets refused; forwarder 407 on a bad token; an unentitled session has no route. iron-proxy's `http_listen`, `https_listen`, `metrics.listen` and `tunnel_listen` are unreachable from the sandbox, from container loopback and from session B (only the session's router reaches `tunnel_listen`). A grep of every log (injector audit, hook output, squid `soleur_json`) for the decoy token and a planted body canary finds nothing |
 | 7 | One new GitHub verb touches policy data only | A second pass applies the committed overlay `policy.add-verb.yaml` (create issue, `POST /repos/{o}/{r}/issues`) with the hook and `policy.mjs` unchanged (sha256 asserted equal across passes). Control: the same request is refused `not-allowlisted` in the first pass. Pass = in the second pass it is gated, consumed once and vended. The results note compares one data file with #12188's 9 source files, names what the overlay leaves out (tests, approval-card text), and states the claim's limit (CTO R4): REST verbs that fit the generic recipe only |
-| 8 | Failure is visible and closed, not a hang or a leak | Hook alive but stalled past its deadline: `git`, `gh`, `curl` exit non-zero within 10 s, `hook-timeout` is emitted, the stub records no real token. Hook killed: the same exit bound and no real token at the stub, with iron-proxy's audit line naming the failed call. Injector killed: clients exit non-zero within 10 s, and the effect on `claude` streaming is recorded (CTO R17) |
-| 9 | CA scope (spec TR3) | Two sessions have distinct CAs. A session-CA leaf for a non-inject name is rejected by every client; the TLS library each client links is recorded first. For a client linking GnuTLS, a mixed-case inject name is also tried and must be accepted (DNS names ignore case; a rejection is recorded as that client's defect, not a constraint failure). Session A's CA is not trusted in session B. The CA key file is absent after session end. Control: the same clients accept a session-CA leaf for an inject host |
+| 8 | Failure is visible and closed, not a hang or a leak | Hook alive but stalled past its deadline: `git`, `gh`, `curl` exit non-zero within 10 s, `hook-timeout` is emitted, the stub records no real token. Hook killed: the same exit bound and no real token at the stub, with iron-proxy's audit line naming the failed call. Router killed: all of the session's egress fails (recorded). iron-proxy killed: inject-host clients exit non-zero within 10 s and `claude` streaming continues on the forwarder branch (CTO R17, R27). Frozen hook (SIGSTOP): pass on no real token at the stub, `no-hook-decision` from the harness and uninterrupted non-inject SSE; the client's wait is recorded as unbounded by iron-proxy and ended by the harness's `timeout -k`, not scored (R27) |
+| 9 | CA scope (spec TR3) | Two sessions have distinct CAs. A session-CA leaf for a non-inject name is rejected by every client; the TLS library each client links is recorded first. For a client linking GnuTLS, a mixed-case inject name is also tried and must be accepted (DNS names ignore case; a rejection is recorded as that client's defect, not a constraint failure). Session A's CA is not trusted in session B. The CA key file is absent after session end. A non-inject CONNECT never reaches iron-proxy (router branch record); forced there directly, the client rejects the leaf and the `allowlist` transform refuses it (R24, R26). Control: the same clients accept a session-CA leaf for an inject host |
 
 Deepen-pass additions to the criteria (binding, 2026-11-09):
 
-- **Criterion 1.** Before any denial counts, the scripted CLI-tier path must read a planted file under an unmasked path (proving the tool can return content). The scan targets are the decoy, the base64 of `x-access-token:<decoy>`, the nonce, the injector's per-session proxy credential, the forwarder's `workspace:token`, the service-role and HMAC keys, the CA key PEM, and the CI runner's own tokens. Sandboxed processes and the same-uid file tools cannot reach the local Postgres (54322) or the Supabase API gateway; the app container never uses host networking.
+- **Criterion 1.** Before any denial counts, the scripted CLI-tier path must read a planted file under an unmasked path (proving the tool can return content). The scan targets are the decoy, the base64 of `x-access-token:<decoy>`, the hook client key PEM, the hook client-root key, the session-to-router and router-to-iron-proxy credentials, the forwarder's `workspace:token`, the service-role and HMAC keys, the CA key PEM, and the CI runner's own tokens. Sandboxed processes and the same-uid file tools cannot reach the local Postgres (54322) or the Supabase API gateway; the app container never uses host networking.
 - **Criterion 2.** The client's own `Idempotency-Key` header is stripped on inject hosts, so a retried POST cannot reuse one approval twice.
 - **Criterion 3.** The expiry arm uses its own conversation, seeded with `p_ttl_seconds=60` at suite start: it must read `pending` at about 50 s and `expired` once the deadline passes, checked at the end so the wait overlaps other arms. A write sent on the same keep-alive or HTTP/2 connection after an allowed read still reaches the hook. A body past the capture limit is refused. Every arm's leftover pending rows are short-TTL, and the database is reset per run (the per-workspace cap is 20).
 - **Criterion 5.** The stub records which session's token arrived (by decoy identity), and a control proves session B reaches the stub with B's own token in the same run.
@@ -206,22 +218,25 @@ Verdict, computed by the suite:
 Plain local docker, one stub host, a throwaway hook that logs what it receives, run with `env -i`, a throwaway `HOME`, `GIT_CONFIG_GLOBAL=/dev/null`, and an internal docker network with no route to the real GitHub, so the operator's own `gh` and git credentials cannot be inherited. Each answer is recorded in `iron-proxy-image.provenance.md`.
 
 1. **Upstream chaining:** iron-proxy CONNECTs to an upstream proxy with `workspace:token` proxy authorization.
-2. **Selective termination:** a non-inject host is tunneled, not terminated.
+2. **Selective termination:** measured no (iron-proxy v0.56.0 terminates every tunnel in `mitm` mode), so a per-session CONNECT router sends the four hosts to iron-proxy and everything else to the forwarder (R24).
 3. **Hook body access:** the hook receives the full buffered body of a gzip-encoded and a chunked `POST git-receive-pack` (decoded or not; this decides whether the pure parser must handle chunking), and a REJECT can carry a body the client shows.
 4. **Upstream trust:** a test upstream root is configurable without disabling upstream verification.
 5. **Whole-header replacement (CTO R8, D1):** iron-proxy configuration alone replaces the entire `Authorization` header on an inject host, including when the client sent none, and strips duplicate and case-variant copies. If it cannot, that is a mechanism failure under F-b; there is no hook fallback and no Bearer fallback.
 6. **Dead hook:** with the hook unreachable or frozen, iron-proxy blocks the request (fail closed) rather than passing it; the bound on how long it waits is recorded.
 7. **Inbound auth (CTO R20):** iron-proxy can require a per-session `Proxy-Authorization` on CONNECT.
-8. **Hook transport:** iron-proxy's gRPC client can dial a `unix:` socket and attach per-call metadata (the nonce). Without both, the nonce cannot travel or the hook would listen on loopback TCP; that is a mechanism failure under F-b.
+8. **Hook transport:** the `unix:` socket with mutual-TLS client identity (measured: per-call metadata is not configurable, R25).
 
 Plus the binding mechanism: the CLI process's `HTTPS_PROXY` (set server-side, per session) is the SDK sandbox proxy's only upstream, and the sandbox's localhost is not the container loopback (ADR-278 measurement 1); the tracer records the actual mechanism and criterion 5 probes it.
 
-Any "no" on 1–8 that configuration cannot fix stops the run and goes to the CTO (F-b) before Phase 1. Success: eight recorded answers and the binding mechanism.
+Add-ons required by R24–R26 before Phase 1: **2b** an `allowlist` transform for the four hosts refuses a CONNECT straight to a non-inject host (403) and nothing reaches the upstream; **7b** a gRPC transform with no `rules` sends a non-inject CONNECT to the hook (407 without the router credential); **9b** with `http_listen`, `https_listen` and the metrics listener bound to `127.0.0.1`, another container cannot connect to any of them.
+
+Any "no" on 1–8 that configuration cannot fix stops the run and goes to the CTO (F-b) before Phase 1. Success: eight recorded answers and the binding mechanism. **Outcome (2026-11-09/10):** items 2 and 8 were no; the CTO ruled R24–R27; 2b, 7b and 9b are yes; answers in `iron-proxy-image.provenance.md`. The binding mechanism needs the SDK sandbox and is left to criterion 5.
 
 #### Phase 1 — Hermetic tests, then the harness
 
 - Write the Guard Contract matrices (below) before code. Rows covered by the hermetic tests run there on every push; the rest (Guard 1, Guard 2 rows 2, 6 and 8, Guard 3 row 4) are run once by hand in a scratch sandbox copy of the tree (`scripts/soleur-sandbox.sh`), never the live worktree, and count as caught only when the suite fails with the expected message; results go in the results note.
 - `apps/web-platform/test/egress-injector-policy.test.ts`: hermetic tests over `policy.mjs`, over `approval-hook.mjs`'s exported `decide()` with a fake RPC client (decision order, every reason code, Guard 2 rows 1, 3, 4, 5, 7 and 9, unlisted write refused, canonical-path rows), and over `verdict.mjs`'s outcome floor against fixture JSON (Guard 3 rows 1–3, 5–6). The rest of this bullet covers `policy.mjs` (cq-write-failing-tests-before): every policy row; GraphQL single query, single mutation, multi-operation with and without `operationName`, batched array, unparseable body; receive-pack pkt-lines with one and two ref updates (and chunked bodies only if tracer item 3 says the hook sees them raw); each single hashed-field change produces a different hash; repository spelling variants hash equal and a fork hashes differently (CTO R6). They fail before `policy.mjs` exists.
+- `apps/web-platform/test/egress-injector-router.test.ts` (R24): hermetic tests over `connect-router.mjs`'s exported match and head parse: exact names, port, case, trailing dot, IP literals, non-CONNECT, 407 on a missing or wrong credential, the 16 KiB head cap. They fail before `connect-router.mjs` exists.
 - Add `graphql` and `@grpc/grpc-js` (at the locked 1.14.6) as exactly pinned devDependencies of `apps/web-platform`, updating `package.json` and `package-lock.json` together (CTO R23, `cq-before-pushing-package-json-changes`).
 - Pin iron-proxy by image digest; write `iron-proxy-image.provenance.md` (licence, release tag, digest, retrieval date, tracer answers, commit cadence, contributor count, hook proto revision, whether it builds from source). Mirroring the image into our registry and a bus-factor review are preconditions for #11637's production adoption, not spike criteria.
 - `stub-github/server.mjs`: TLS server for the four hosts on the test upstream root; REST and GraphQL stub; `git http-backend` behind CGI on a synthetic repository created in the suite (no real repository content, CLO); records method, path and the `Authorization` class received (`real-decoy | other | none`) per request.
@@ -276,6 +291,10 @@ This is the content posted to #9859 in Phase 3; that PR gets its own plan.
 | Required CI lane, or the shared `deploy-script-tests-fixed` job | Nothing serves tenants; the shared job's 15-minute cap cannot hold the stack (CTO F-g, R12) |
 | Cloudflare trial in this PR | Ties this merge to a 14-day window, a spend hold and a teardown (CTO F-d) |
 | Change `egress-forwarder.mjs` to route inject hosts to the injector (forwarder first) | Would put TLS termination on a tenant-serving hop and fire DPIA trigger t3 (CLO); recorded in ADR-324 as #11637's alternative (CTO R17) |
+| Widen the session CA so iron-proxy terminates all egress | Breaks spec TR3, puts an unconstrained root in the sandbox trust store and terminates the Anthropic and open-web path (R24) |
+| iron-proxy `tls.mode: sni-only` | Sees no headers, so it cannot inject (R24) |
+| Upstream per-host passthrough patch to iron-proxy | Cannot land against a digest-pinned image in the spike; recorded as a production option for #11637 (R24) |
+| Stop the spike as NO-GO on tracer item 2 | Discards a measurement a CONNECT shim already in the codebase unblocks (R24) |
 | A hand-written GraphQL operation classifier | Gets fragments, multiple operations and `operationName` wrong, and a wrong answer lets a write through (CTO R23) |
 
 Rejected vendors and set-aside candidates are in the brainstorm's table and carried into ADR-324 unchanged.
@@ -291,7 +310,7 @@ Artifact and vector pairs (for `soleur:engineering:review:user-impact-reviewer`)
 
 - Egress hop: a tenant credential attached to a request the founder did not approve (criterion 3).
 - Egress hop: a tenant credential attached to another tenant's request (criterion 5).
-- Sandbox and same-uid file tools: the real credential, CA key, hook socket or nonce readable from inside bwrap or by the CLI-process `Read`/`WebFetch` tools (criterion 1).
+- Sandbox and same-uid file tools: the real credential, CA key, hook socket or hook client key readable from inside bwrap or by the CLI-process `Read`/`WebFetch` tools (criterion 1).
 - Approval hook: a sandboxed process connecting to the hook socket and consuming approvals directly (criterion 1, CTO R9).
 - Approval hook custody: the service-role and HMAC keys in one process, recorded in ADR-324 as blast radius for #11637.
 - Managed platform (sibling PR): a third party holding decrypted tenant traffic and credentials.
@@ -380,7 +399,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 ### Guard 1 — Credential non-observability probe
 
-**Property.** No byte sequence equal to a session's real decoy credential, CA key, hook nonce or hook socket is readable or connectable from inside that session's sandbox or by its same-uid file tools.
+**Property.** No byte sequence equal to a session's real decoy credential, CA key, hook client key, router credentials or hook socket is readable or connectable from inside that session's sandbox or by its same-uid file tools.
 
 **Assembly.** Two chokepoints. Inside bwrap: the scan in arm `c1` of `injector-spike-docker.test.sh`, computed from `scanSandboxSurfaces`'s return, never from probe exit codes. Outside bwrap: the CLI-tier arm, whose verdict is computed from the stub Anthropic server's record of each scripted `Read`/`WebFetch` tool result. Every surface flows through one of the two; the positive control (same-uid harness reads `/proc/<injector pid>/environ`) proves the outside chokepoint can see.
 
@@ -399,7 +418,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 **Property.** A request to an inject host receives the real credential only if the policy classifies it as an allowlisted read, or one approved row whose hash equals this request's canonical action is consumed for it.
 
-**Assembly.** `approval-hook.mjs`'s single `decide(request, session)` function, called by the gRPC handler for every request iron-proxy forwards for the four inject hosts; the classifier and hash recipe are the pure functions in `policy.mjs` under test in `egress-injector-policy.test.ts`. Second chokepoint: iron-proxy's header-replacement transform must fire only after the hook returns CONTINUE; the suite asserts the ordering with a write the hook REJECTs, checking the stub recorded no request or no real token.
+**Assembly.** First chokepoint (R24): `connect-router.mjs`'s exact host-and-port match, the only path by which a CONNECT reaches iron-proxy; its pure match function is under test in `egress-injector-router.test.ts`. Then `approval-hook.mjs`'s single `decide(request, session)` function, called by the gRPC handler for every request iron-proxy forwards for the four inject hosts; the classifier and hash recipe are the pure functions in `policy.mjs` under test in `egress-injector-policy.test.ts`. Second chokepoint: iron-proxy's header-replacement transform must fire only after the hook returns CONTINUE; the suite asserts the ordering with a write the hook REJECTs, checking the stub recorded no request or no real token.
 
 **Mutation matrix:**
 
@@ -415,6 +434,11 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 | 8 | Reorder iron-proxy transforms so header replacement runs before the gRPC hook | RED: the REJECT arm sees the real token at the stub |
 | 9 | Harness: the flag-off arm reads the flag from the same input as flag-on | RED: the suite asserts the two arms received different flag inputs |
 | 10 | Must-PASS: a GraphQL `query` with variables and an `operationName` | PASS, vended without a row |
+| 11 | Router matches by suffix or substring, so `evilgithub.com` and `github.com.evil` go to iron-proxy | RED: hermetic router test, and the `allowlist` refuses them (403) |
+| 12 | Router sends a non-inject host to iron-proxy | RED: criterion 2's SSE sees a session-CA leaf |
+| 13 | The gRPC transform gets four-host `rules` | RED: a direct CONNECT to a non-inject host at iron-proxy is not refused 407 (tracer 7b shape) |
+| 14 | CONNECT target differs from the inner SNI or `Host`, in both directions | RED unless the stub records no real token |
+| 15 | `http_listen` left on its default (all interfaces) | RED: criterion 6's port probe reaches it |
 
 ### Guard 3 — Outcome floor and never-skip
 
@@ -454,6 +478,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 |-----------|-----------------------------------|---------|
 | ADR-324 | asks 3 | asked |
 | `injector-spike-docker.test.sh`, stub, hook, `policy.mjs`, policy data, config, probe | asks 4, 8 | asked |
+| `connect-router.mjs` and `egress-injector-router.test.ts` | — | inferred — justification: CTO R24; iron-proxy cannot leave a non-inject tunnel unterminated (tracer item 2) |
 | `print-verdict.sh` | — | inferred — justification: the discoverability probe cannot contain a pipe and must fail on a missing verdict (preflight Check 10) |
 | `iron-proxy-image.provenance.md` | — | inferred — justification: a digest-pinned third-party image without a provenance record breaks the `egress-gw-image.provenance.md` convention (CTO) |
 | `egress-injector-policy.test.ts` | — | inferred — justification: `cq-write-failing-tests-before`; the classifier is the property Guard 2 protects |
@@ -471,7 +496,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 ### Split Assessment
 
 - Subsystems touched: 4 — `apps/web-platform`, `knowledge-base`, `.github`, `scripts`
-- Planned files: 21 | Estimated changed lines: about 2,100 (suite about 800, stub about 300, hook and policy about 400, hermetic tests about 250, ADR about 200, results and provenance about 150)
+- Planned files: 23 | Estimated changed lines: about 2,350 (router and its tests about 250, suite about 800, stub about 300, hook and policy about 400, hermetic tests about 250, ADR about 200, results and provenance about 150)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
 - Recommendation: split — already applied: the Cloudflare trial is the sibling PR (CTO F-d). The `scripts` root is a one-line ledger row the new workflow requires. The rest is one measurement harness plus the decision record it feeds; splitting the ADR from the spike would merge a decision record whose measured-outcome section is empty, so this PR stays whole.
 
@@ -488,9 +513,11 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 - `apps/web-platform/test/infra/egress-injector-spike/policy.add-verb.yaml`
 - `apps/web-platform/test/infra/egress-injector-spike/policy.mjs`
 - `apps/web-platform/test/infra/egress-injector-spike/approval-hook.mjs`
+- `apps/web-platform/test/infra/egress-injector-spike/connect-router.mjs`
 - `apps/web-platform/test/infra/egress-injector-spike/stub-github/server.mjs`
 - `apps/web-platform/test/infra/egress-injector-spike/probes/sandbox-probe.sh`
 - `apps/web-platform/test/egress-injector-policy.test.ts`
+- `apps/web-platform/test/egress-injector-router.test.ts`
 - `knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.md`
 - `knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.json`
 
