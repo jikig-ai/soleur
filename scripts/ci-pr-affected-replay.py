@@ -940,7 +940,7 @@ def cmd_ejections(a):
                         removed += 1
         except ReadError:
             oracle["read_failures"] += 1
-            oracle_units.append(("queue-oracle-read: pr-%s" % pr, pr, "queue-oracle-read: pr-%s" % pr))
+            oracle_units.append(("queue-oracle-read:pr-%s" % pr, pr, "queue-oracle-read:pr-%s" % pr))
             continue
         oracle["added"] += added
         oracle["removed"] += removed
@@ -1032,7 +1032,7 @@ def cmd_ejections(a):
             out.write(json.dumps(u, sort_keys=True) + "\n")
             out.flush()
             n += 1
-        for usha, reason in (("corroboration-read: %s" % sha, "corroboration-read: %s" % sha[:10]) for sha in corr_failed):
+        for usha, reason in (("corroboration-read:%s" % sha, "corroboration-read:%s" % sha[:10]) for sha in corr_failed):
             if ("ejection", usha) in done:
                 continue
             u = base_unit("ejection", nidx, usha)

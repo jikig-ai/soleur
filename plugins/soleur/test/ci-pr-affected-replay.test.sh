@@ -716,25 +716,27 @@ ej5_run() {  # re-run the corroboration window into a fresh dir with the SUT und
   E5="$EJ5/units-ejections.jsonl"; W5="$EJ5/ejections-window.json"; REPO_NAME=""
 }
 ej5_run; rc5=$?
+REPO_NAME="$R5"   # ej5_run clears it on return; it stays "$R5" until the reqs() calls below are done
 [[ "$rc5" -eq 0 && "$(wc -l < "$E5")" -eq 7 ]] && pass "the union population: 3 listed failures + 1 corroborated refusal + 1 corroboration-read + 1 oracle shortfall + 1 oracle-read = 7 units" || fail "corroboration window (rc=$rc5, lines=$(wc -l < "$E5" 2>/dev/null)): $(tail -3 "$SANDBOX/ej5.out")"
 [[ "$(unit_field "$E5" "$SH60" .cls)" = flake-cleared ]] && pass "an index-dropped SUCCESS run joins by_pr and clears the would-skip unit by identical content" || fail "corroborated witness clear: $(unit_field "$E5" "$SH60" '.cls+" "+.reason')"
 [[ -z "$(unit_field "$E5" "${C[1]}" .sha)" ]] && pass "the corroborated success is a clearing witness only — never a unit (a clean unit would dilute the cp95 bound)" || fail "a corroborated success run was written as a unit"
 [[ "$(unit_field "$E5" "${C[2]}" '.cls+" "+.runs_via')" = "rule-irrelevant check-runs-window" ]] && pass "an index-dropped REFUSED run is a classified unit with runs_via=check-runs-window" || fail "corroborated refusal: $(unit_field "$E5" "${C[2]}" '.cls+" "+(.runs_via//"-")')"
-[[ "$(unit_field "$E5" "corroboration-read: ${C[3]}" '.cls+" "+.reason')" == not-evaluable\ corroboration-read:* ]] && pass "a failed per-commit corroboration read is one counted synthetic unit" || fail "corroboration-read unit: $(unit_field "$E5" "corroboration-read: ${C[3]}" '.cls')"
+[[ "$(unit_field "$E5" "corroboration-read:${C[3]}" '.cls+" "+.reason')" == not-evaluable\ corroboration-read:* ]] && pass "a failed per-commit corroboration read is one counted synthetic unit" || fail "corroboration-read unit: $(unit_field "$E5" "corroboration-read:${C[3]}" '.cls')"
 [[ "$(unit_field "$E5" "queue-oracle:pr-61-1" '.cls+" "+.reason')" == "not-evaluable queue-oracle-shortfall: pr-61 added=2 branches=1" ]] && pass "two queue adds against one observed branch yields one shortfall unit (re-runs share the branch)" || fail "shortfall unit: $(unit_field "$E5" "queue-oracle:pr-61-1" '.reason')"
-[[ "$(unit_field "$E5" "queue-oracle-read: pr-62" .cls)" = not-evaluable ]] && pass "a failed timeline read is one oracle-read unit, not a voided window" || fail "oracle-read unit: $(unit_field "$E5" "queue-oracle-read: pr-62" '.cls')"
+[[ "$(unit_field "$E5" "queue-oracle-read:pr-62" .cls)" = not-evaluable ]] && pass "a failed timeline read is one oracle-read unit, not a voided window" || fail "oracle-read unit: $(unit_field "$E5" "queue-oracle-read:pr-62" '.cls')"
 [[ "$(jq '.corroborated.commits' "$W5")" -eq 8 && "$(jq '.corroborated.merge_group_on_landed' "$W5")" -eq 2 && "$(jq '.corroborated.missing_refused' "$W5")" -eq 1 && "$(jq '.corroborated.read_failures' "$W5")" -eq 1 ]] \
   && pass "the window json records the corroboration census (all 8 first-parent commits enumerated, 2 landed runs found, 1 refused missing, 1 read failure)" || fail "corroborated block: $(jq -c .corroborated "$W5")"
 [[ "$(jq '.queue_oracle.shortfall' "$W5")" -eq 1 && "$(jq '.queue_oracle.read_failures' "$W5")" -eq 1 && "$(jq '.expected_units' "$W5")" -eq 7 ]] \
   && pass "the window json records the oracle counts and expected_units = refused + shortfall + read failures" || fail "oracle block: $(jq -c '{q:.queue_oracle,e:.expected_units}' "$W5")"
 [[ "$(reqs "$(rundetail_path 8653)")" -eq 0 && "$(reqs "$(rundetail_path 8655)")" -eq 0 && "$(reqs "$(rundetail_path 8652)")" -eq 0 ]] \
   && pass "the join bounds run reads to queue-branch suites: third-party and push-branch check-runs are never fetched" || fail "join bounds (8652=$(reqs "$(rundetail_path 8652)") 8653=$(reqs "$(rundetail_path 8653)") 8655=$(reqs "$(rundetail_path 8655)"))"
+REPO_NAME=""
 run_sut aggregate "$EJ5" > "$SANDBOX/ej5-agg.out" 2>&1; rc=$?
 [[ "$rc" -eq 0 ]] && pass "aggregate accepts the union: 7 units against expected_units 7" || fail "aggregate on the corroborated window (rc=$rc): $(tail -3 "$SANDBOX/ej5-agg.out")"
 ! grep -q STUB-MISS "$GHLOG" && pass "the corroboration window made no request the stub does not know" || fail "corroboration window unknown request: $(grep STUB-MISS "$GHLOG" | head -2)"
 row_corr_join() { ej5_run; [[ -z "$(unit_field "$E5" "${C[1]}" .sha)" && "$(wc -l < "$E5")" -eq 7 ]]; }
 row_corr_branch() { ej5_run; [[ -z "$(jq -r 'select((.run//{}).id==8655) | .sha' "$E5")" ]]; }
-row_corr_readfail() { ej5_run; [[ "$(unit_field "$E5" "corroboration-read: ${C[3]}" .cls)" = not-evaluable ]]; }
+row_corr_readfail() { ej5_run; [[ "$(unit_field "$E5" "corroboration-read:${C[3]}" .cls)" = not-evaluable ]]; }
 row_corr_census() { ej5_run; [[ "$(jq '.corroborated.commits' "$W5")" -eq 8 && "$(jq '.corroborated.merge_group_on_landed' "$W5")" -eq 2 ]]; }
 row_oracle_branches() { ej5_run; [[ "$(unit_field "$E5" "queue-oracle:pr-61-1" .cls)" = not-evaluable ]]; }
 row_oracle_expected() { ej5_run; run_sut aggregate "$EJ5" >/dev/null 2>&1; [[ $? -eq 0 ]]; }
