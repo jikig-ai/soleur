@@ -68,6 +68,29 @@ export function loadProxyTlsClientCa(): string | null {
   return normalizeProxyPem(process.env.PROXY_TLS_CERT) || null;
 }
 
+const HELLO_KEY_RE = /^[0-9a-f]{64}$/;
+
+/** State of `PROXY_HELLO_HMAC_KEY` in the container env: `absent` (unset or empty), `invalid`
+ *  (anything that is not exactly 64 lowercase hex characters) or `ok`. Reports a STATE only — never the
+ *  value, a length or a character class. */
+export function getProxyHelloKeyState(): "absent" | "invalid" | "ok" {
+  const raw = process.env.PROXY_HELLO_HMAC_KEY;
+  if (raw === undefined || raw === "") return "absent";
+  return HELLO_KEY_RE.test(raw) ? "ok" : "invalid";
+}
+
+/**
+ * The relay hello-signing key as a 32-byte Buffer, or `null` unless the env value is exactly 64
+ * lowercase hex characters (the shape `random_bytes.proxy_hello_hmac` hex-encodes). Read per call from
+ * `process.env` — not cached and not deleted from it (parity with `PROXY_TLS_KEY`; agent subprocess envs
+ * are allowlisted by `buildAgentEnv`, pinned by test/proxy-hello-key-isolation.test.ts). Distinct from the
+ * TLS key by construction: a leaked TLS key must not forge hellos.
+ */
+export function loadProxyHelloKey(): Buffer | null {
+  if (getProxyHelloKeyState() !== "ok") return null;
+  return Buffer.from(process.env.PROXY_HELLO_HMAC_KEY as string, "hex");
+}
+
 /**
  * Parse a PEM cert's `notAfter` expiry, or `null` when the PEM is
  * absent/unparseable. Pure — used both by the startup expiry log and by tests.
