@@ -126,6 +126,7 @@ sargs() {
 }
 
 # --- the stub curl (path rewritten into the sandbox copy of the wrapper) ---
+assert_fixture_dir "$STUB"
 cat > "$STUB/curl" <<'STUB_EOF'
 #!/bin/bash
 # Records argv FIRST (NUL-separated), then validates it against the CLOSED set of flags the wrapper is modeled to
