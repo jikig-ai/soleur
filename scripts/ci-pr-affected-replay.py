@@ -629,11 +629,10 @@ def fail_suites(repo, job_id, cache_dir):
     sig = None
     if not suites and any(tok in line for line in lines for tok in SHUTDOWN):
         sig = {"signature": "mid-termination", "in_flight": None}
-        for line in lines:
+        for line in lines:   # the freshest occurrence is the LAST, so the last match wins
             m2 = IN_FLIGHT.search(line)
             if m2:
                 sig["in_flight"] = m2.group(1).strip()
-                break
     return sorted(set(suites)), sig
 
 
@@ -728,6 +727,10 @@ def classify(unit, repo, cache_dir, same_tree_green, leg_green=None):
     if extra:
         unit["unsettled_detail"] = extra
         unsettled = sorted(set(unsettled) | set(extra))
+    if unsettled:
+        # the legs list is recorded on every unit that has one, not only where the unsettled arm decides:
+        # a would_skip_hit/ne unit carrying unsettled legs shows the same diagnostics as one the arm classed
+        unit["unsettled_legs"] = sorted(unsettled)
     would_skip_hit = sorted(s for s in names if s in skipped)
     if would_skip_hit:
         unit["would_skip_failures"] = would_skip_hit
@@ -742,7 +745,6 @@ def classify(unit, repo, cache_dir, same_tree_green, leg_green=None):
         unit["cls"], unit["reason"] = "not-evaluable", ("unclassified-job: %s" % ",".join(odd)[:120] if odd
                                                        else "failed-job-without-fail-line")
     elif unsettled:
-        unit["unsettled_legs"] = sorted(unsettled)
         if same_tree_green(unit) or (leg_green is not None and all(leg_green(unit, leg) for leg in unsettled)):
             unit["cls"], unit["reason"] = "flake-cleared", "identical-tree-green"
         else:
@@ -1061,8 +1063,8 @@ def cmd_ejections(a):
                                     "read_failures": len(corr_failed)},
                    "queue_oracle": oracle,
                    "expected_units": expected_units}, fh, sort_keys=True)
-    print("replay ejections: wrote %d units to %s (window %s..%s, %d merge_group runs, %d failed)"
-          % (n, path, since, until, len(listed), len(fail_runs)))
+    print("replay ejections: wrote %d units to %s (window %s..%s, %d listed merge_group runs + %d corroborated = %d union, %d non-success)"
+          % (n, path, since, until, len(listed), len(missing), len(runs), len(fail_runs)))
     print("replay ejections: conclusions %s" % json.dumps(hist, sort_keys=True))
     print("replay ejections: corroborated commits=%d merge_group_on_landed=%d missing=%d refused=%d read_failures=%d"
           % (len(shas), len(found), len(missing), missing_refused, len(corr_failed)))
@@ -2893,7 +2895,7 @@ def main(argv):
     e.add_argument("--out", required=True, help="the same directory collect wrote to")
     e.add_argument("--since", default="", help="window start, UTC; default: committer time of the oldest of the last N commits")
     e.add_argument("--until", default="", help="window end, UTC; default: committer time of the newest of them")
-    e.add_argument("--commits", type=int, default=300, help="size of the commit window the default --since/--until come from")
+    e.add_argument("--commits", type=int, default=300, help="size of the commit window the default --since/--until come from; it also bounds the corroboration anchor — the check-suites/check-runs join enumerates only these N first-parent commits, so with an explicit wider --since/--until older commits' queue runs stay outside the join arm")
     e.add_argument("--repo", default="jikig-ai/soleur", help="OWNER/REPO the merge_group runs are read from")
     e.add_argument("--base", default="origin/main", help="ref whose first-parent history defines the window")
     e.add_argument("--redo-unevaluable", action="store_true", dest="redo_unevaluable",
