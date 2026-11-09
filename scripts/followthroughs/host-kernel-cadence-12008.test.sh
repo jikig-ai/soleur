@@ -342,8 +342,10 @@ case_hygiene() {
   local files=("$PROBE" "$HERE/host-kernel-cadence-12008.test.sh" "$ROOT/scripts/host-tcp-exposure.test.sh")
   [ -f "$RUNBOOK" ] && files+=("$RUNBOOK")
   local extra
-  for extra in "$ROOT"/knowledge-base/project/plans/2026-11-09-feat-host-kernel-patch-cadence-and-nonweb-exposure-check-plan.md \
-               "$ROOT"/knowledge-base/project/specs/feat-one-shot-12008-kernel-cadence/*.md; do
+  for extra in "$ROOT"/knowledge-base/project/plans/*feat-host-kernel-patch-cadence-and-nonweb-exposure-check-plan.md \
+               "$ROOT"/knowledge-base/project/plans/archive/*feat-host-kernel-patch-cadence-and-nonweb-exposure-check-plan.md \
+               "$ROOT"/knowledge-base/project/specs/feat-one-shot-12008-kernel-cadence/*.md \
+               "$ROOT"/knowledge-base/project/specs/archive/*feat-one-shot-12008-kernel-cadence/*.md; do
     [ -f "$extra" ] && files+=("$extra")
   done
   out="$(hygiene "${files[@]}")"
