@@ -6598,6 +6598,45 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(v).not.toMatch(/^\s*default\s*=\s*false\s*$/m);
   });
 
+  // Release-time presence gate coupling (PR A of #8211 / #12167, F2, #12289): verify-required-secrets.sh REQUIRED lists
+  // PROXY_HELLO_HMAC_KEY IFF host_proxy_tls_enabled defaults true. With the flag on, the Terraform pair mints the key
+  // and the relay reads it, so a release without it must be refused; with the flag off the pair is destroyed and a
+  // REQUIRED entry would block every deploy on a key that no longer exists. Predicates take the source text so the
+  // instrument rows below drive the same code on mutated copies.
+  const requiredList = (sh: string): string[] => {
+    const m = /^REQUIRED=\(\n([\s\S]*?)^\)/m.exec(sh);
+    return m
+      ? m[1]
+          .split("\n")
+          .map((l) => l.replace(/#.*$/, "").trim())
+          .filter((l) => l !== "")
+      : [];
+  };
+  const defaultsTrue = (variablesTf: string): boolean => {
+    const v = block(variablesTf, /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
+    return /^\s*default\s*=\s*true\s*$/m.test(v) && !/^\s*default\s*=\s*false\s*$/m.test(v);
+  };
+  const flagCoupled = (sh: string, variablesTf: string): boolean => requiredList(sh).includes("PROXY_HELLO_HMAC_KEY") === defaultsTrue(variablesTf);
+
+  test("verify-required-secrets.sh REQUIRED lists PROXY_HELLO_HMAC_KEY iff host_proxy_tls_enabled defaults true (F2 flag coupling)", () => {
+    const sh = readFileSync(resolve(REPO_ROOT, "apps/web-platform/scripts/verify-required-secrets.sh"), "utf8");
+    const vars = tf("variables.tf");
+    const req = requiredList(sh);
+    expect(req, "REQUIRED must parse (non-vacuity)").toContain("NEXT_PUBLIC_APP_URL");
+    expect(req.length).toBeGreaterThanOrEqual(8);
+    expect(defaultsTrue(vars), "the flag default must parse as true today (non-vacuity of the iff)").toBe(true);
+    expect(req).toContain("PROXY_HELLO_HMAC_KEY");
+    expect(flagCoupled(sh, vars)).toBe(true);
+    // Instrument rows: each way of breaking the coupling is seen; both coherent states pass.
+    const entryRemoved = sh.replace(/^ {2}PROXY_HELLO_HMAC_KEY\n/m, "");
+    expect(entryRemoved).not.toBe(sh);
+    expect(flagCoupled(entryRemoved, vars), "flag true + entry removed").toBe(false);
+    const flagOff = vars.replace(/(variable\s+"host_proxy_tls_enabled"\s*\{[\s\S]*?default\s*=\s*)true/, "$1false");
+    expect(flagOff).not.toBe(vars);
+    expect(flagCoupled(sh, flagOff), "flag false + entry kept").toBe(false);
+    expect(flagCoupled(entryRemoved, flagOff), "flag false + entry removed (the coherent retirement state)").toBe(true);
+  });
+
   test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
     const res = block(tf("inngest-config-digest.tf"), /^resource\s+"doppler_secret"\s+"inngest_config_digest"\s*\{/m);
     expect(res).toMatch(/^\s*count\s*=\s*var\.inngest_config_digest\s*!=\s*""\s*\?\s*1\s*:\s*0\s*$/m);

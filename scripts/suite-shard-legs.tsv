@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1272
-# generated-at=2026-11-08T17:18:51Z
+# generated-at=2026-11-09T09:15:26Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -98,6 +98,7 @@ apps/web-platform/scripts/sdk-bump-sandbox-gate.test.sh	7
 apps/web-platform/scripts/seed-live-verify-user.test.sh	6
 apps/web-platform/scripts/sentry-monitors-audit.test.sh	8
 apps/web-platform/scripts/supabase-local.test.sh	4
+apps/web-platform/scripts/verify-required-secrets.test.sh	2
 apps/web-platform/test/parse-gitleaks-allowlists	2
 plugins/soleur/scripts/admin-merge-ready.test.sh	3
 plugins/soleur/scripts/affected-tests.test.sh	8
