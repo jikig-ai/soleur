@@ -179,7 +179,17 @@ and the sentinel registrations.
 ## After any driver edit: the sentinel
 
 `scripts/ci-oracle-lane.sh` and `scripts/ci-pr-selection.sh` carry parallel merge-ref/diff plumbing that can
-drift (ruling T5) — a fix to one is consciously ported to the other, never assumed to transfer. After ANY edit
+drift (ruling T5) — a fix to one is consciously ported to the other, never assumed to transfer.
+
+**Ports landed (dated):** the #12418 three-dot diff-base fix was ported to `scripts/ci-pr-selection.sh` as
+#12484 (2026-11-09) — the selector's `pull_request` diff is now `merge-base(HEAD^2, live base)..HEAD^2` with
+the same `bad_base_ref`/`base_fetch`/`no_merge_base` fail-closed reasons and the same refs/heads/-pinned
+unconditional fetch, wired from `PR_BASE_REF: ${{ github.event.pull_request.base.ref }}` in the pr-selection
+step env. One deliberate ordering difference, per each driver's own doctrine: the oracle resolves the base
+after its pre-classification switch gate; the selector resolves it after the cheap env gates (event, merge
+shape, fork, re-run) and before the listing, because its stage 1 runs on every well-formed `pull_request` run.
+
+After ANY edit
 to the driver, the manifest, the leg `if:` conjuncts, the aggregator arm or the push-dedupe proof:
 
 ```bash

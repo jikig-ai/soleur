@@ -24,7 +24,10 @@
 # never inheriting the step's output files, the notice fields (active, budget, sel_censored, groups) and the reasons
 # affected_degraded / signalled / lever_error, budget sanitation (08, 010, 0, abc, empty, over 6 digits), the remaining-budget
 # path (`rem`; a `timeout 0` can never occur), selection-shape fixtures, an advanced-base merge (the diff is the PR's own
-# paths), the argv cap, and a leak sweep (path token, repo name, raw switch, shas) with an empty stderr on the normal path.
+# paths), the #12484 three-dot diff base (stale/behind merge-ref fixtures where HEAD^1 != merge-base yields the PR-side
+# file list only, and the named fail-closed reasons bad_base_ref / base_fetch / no_merge_base on an ungrammatical,
+# unfetchable or unrelated live base), the argv cap, and a leak sweep (path token, repo name, raw switch, shas) with an
+# empty stderr on the normal path.
 #
 # EVERY GUARD ROW IS DRIVEN AGAINST A MUTANT. A sandbox copy of the driver has the guard deleted or neutered, the mutation
 # is confirmed LANDED (the copy differs from the pristine bytes), the unmutated CONTROL runs first and must be GREEN, and the
@@ -433,6 +436,54 @@ rm -f "$FX/broken/.git/objects/${_bt:0:2}/${_bt:2}"
 unset _bt
 mkdir -p "$FX/norepo"
 
+# STALE BASE (#12484, the #12418 port): the merge ref's HEAD^1 froze at a base tip BEFORE the main-side
+# commit the PR head already merged. `diff HEAD^1..HEAD` re-counts that main-side change; the three-dot
+# merge-base(HEAD^2, live base)..HEAD^2 does not. fx_stale <name> <pr-file> <pr-content>: that topology —
+# main advanced a non-doc file, the PR merged it and made its own edit, the merge ref's first parent is
+# the pre-advance tip, and the remote's live base ref is at the newer main.
+fx_stale() {
+  local d="$FX/$1"
+  git -C "$d" checkout -q main \
+    && printf 'main-side\n' >> "$d/apps/web-platform/zzleak-app.ts" \
+    && git -C "$d" add apps/web-platform/zzleak-app.ts \
+    && git -C "$d" commit -q -m main2 \
+    && git -C "$d" update-ref refs/heads/zzleak-pr-base main \
+    && git -C "$d" checkout -q pr \
+    && git -C "$d" merge -q --no-ff -m merge-main main \
+    && printf '%s\n' "$3" >> "$d/$2" \
+    && git -C "$d" add -- "$2" \
+    && git -C "$d" commit -q -m pr \
+    && git -C "$d" checkout -q --detach 'main~1' \
+    && git -C "$d" merge -q --no-ff -m merge-ref pr
+}
+fx_case stale; fx_stale stale "$KB_A" 'doc' || { printf 'FAIL: fixture stale\n' >&2; exit 2; }
+# `stale_code`: identical topology, but the PR's own delta carries a code file — proves a PR-side code
+# path still pays the battery on a merge-carrying branch.
+fx_case stale_code; fx_stale stale_code apps/web-platform/zzleak-app.ts 'x' || { printf 'FAIL: fixture stale_code\n' >&2; exit 2; }
+# `behind`: the MIRROR direction — merge-base(HEAD^2, live) is BEHIND the merge ref's HEAD^1 (the branch
+# never synced the main-side commit the merge ref's first parent already carries). Only the true three-dot
+# pair — merge-base..HEAD^2 — classifies the PR delta; pairing the merge-base against the merge RESULT
+# would re-count the base-side arc the other way.
+fx_case behind
+{ git -C "$FX/behind" checkout -q main \
+  && printf 'main-side\n' >> "$FX/behind/apps/web-platform/zzleak-app.ts" \
+  && git -C "$FX/behind" add apps/web-platform/zzleak-app.ts \
+  && git -C "$FX/behind" commit -q -m main2 \
+  && git -C "$FX/behind" update-ref refs/heads/zzleak-pr-base main \
+  && git -C "$FX/behind" checkout -q pr \
+  && printf 'doc\n' >> "$FX/behind/$KB_A" \
+  && git -C "$FX/behind" add -- "$KB_A" \
+  && git -C "$FX/behind" commit -q -m pr \
+  && git -C "$FX/behind" checkout -q main \
+  && git -C "$FX/behind" merge -q --no-ff -m merge-ref pr; } \
+  || { printf 'FAIL: fixture behind\n' >&2; exit 2; }
+# `unrel`: the fetched live base shares NO ancestor with the PR head — merge-base is empty, fail closed.
+# An empty-tree root commit via commit-tree: unrelated history, no checkout churn.
+cp -a "$FX/k1" "$FX/unrel"
+{ git -C "$FX/unrel" update-ref refs/heads/zzleak-pr-base \
+    "$(git -C "$FX/unrel" commit-tree "$(git -C "$FX/unrel" mktree </dev/null)" -m unrel)"; } \
+  || { printf 'FAIL: fixture unrel\n' >&2; exit 2; }
+
 # ── The stub test-all.sh: replays recorded shapes and logs what it was called with ──
 STUB="$SANDBOX/stub-test-all.sh"
 cat > "$STUB" <<'STUBEOF'
@@ -614,7 +665,7 @@ REPO_NAME="zzleak-org/zzleak-repo"   # carries the leak token: the repository na
 
 drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (later wins)
   local name="$1" drv="$2"; shift 2
-  local repo="$FX/$name" head prhead o line
+  local repo="$FX/$name" head prhead base o line
   RUN_N=$((RUN_N + 1))
   o="$SANDBOX/r/$RUN_N"
   assert_fixture_dir "$o"
@@ -623,11 +674,20 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   : > "$o/gh.out"; : > "$o/sum.out"
   head=$(git -C "$repo" rev-parse HEAD 2>/dev/null) || head="0000000000000000000000000000000000000000"
   prhead=$(git -C "$repo" rev-parse 'HEAD^2' 2>/dev/null) || prhead="$head"
+  base=$(git -C "$repo" rev-parse 'HEAD^1' 2>/dev/null) || base="$head"
+  # The live base ref the pull_request arm fetches (#12484, porting #12418): a self `file://` origin plus a
+  # `zzleak-pr-base` branch at the merge ref's first parent keeps merge-base(HEAD^2, FETCH_HEAD) == HEAD^1 —
+  # the pre-port pairing — for every fixture that does not pre-create the ref elsewhere (the stale-base,
+  # behind and unrelated ones do).
+  git -C "$repo" remote get-url origin >/dev/null 2>&1 \
+    || git -C "$repo" remote add origin "file://$repo" 2>/dev/null || true
+  git -C "$repo" rev-parse --verify -q refs/heads/zzleak-pr-base >/dev/null 2>&1 \
+    || git -C "$repo" update-ref refs/heads/zzleak-pr-base "$base" 2>/dev/null || true
   local -a e=(
     "PATH=$BIN" "HOME=$SANDBOX/home" "TMPDIR=$SANDBOX/tmp" "LANG=C"
     "GIT_CEILING_DIRECTORIES=$GIT_CEILING_DIRECTORIES" "GIT_CONFIG_NOSYSTEM=1" "GIT_CONFIG_GLOBAL=/dev/null"
     "GIT_ATTR_NOSYSTEM=1" "XDG_CONFIG_HOME=$XDG_CONFIG_HOME" "GIT_TERMINAL_PROMPT=0"
-    "EVENT_NAME=pull_request" "SWITCH=on" "GITHUB_SHA=$head" "PR_HEAD_SHA=$prhead"
+    "EVENT_NAME=pull_request" "SWITCH=on" "GITHUB_SHA=$head" "PR_HEAD_SHA=$prhead" "PR_BASE_REF=zzleak-pr-base"
     "HEAD_REPO=$REPO_NAME" "GH_REPO=$REPO_NAME" "RUN_ATTEMPT=1"
     "GITHUB_OUTPUT=$o/gh.out" "GITHUB_STEP_SUMMARY=$o/sum.out" "RUNNER_TEMP=$SANDBOX/rt"
     "GITHUB_ENV=$o/gh.env" "GITHUB_PATH=$o/gh.path" "GITHUB_STATE=$o/gh.state"
@@ -704,8 +764,7 @@ drive() {  # $1=fixture $2=driver-file; remaining args: KEY=VALUE overrides (lat
   else
     check_eq "run$RUN_N($name) skip_legs is empty unless active" "$O_SKIP" ""
   fi
-  local f leaked=0 shaleak=0 base
-  base=$(git -C "$repo" rev-parse 'HEAD^1' 2>/dev/null) || base="$head"
+  local f leaked=0 shaleak=0
   for f in "$o/gh.out" "$o/stdout" "$o/stderr" "$o/sum.out"; do
     if grep -qF "$LEAK" "$f"; then leaked=1; fi
   done
@@ -744,7 +803,7 @@ row_shape_ok() {  # the validated shape emits the audit values
   drive k1 "$d"
   p1=$(git -C "$FX/k1" rev-parse 'HEAD^1'); p2=$(git -C "$FX/k1" rev-parse 'HEAD^2')
   check_eq "G2-1 valid shape: head_sha is HEAD^2" "$O_HEAD" "$p2"
-  check_eq "G2-1 valid shape: base_sha is HEAD^1" "$O_BASE" "$p1"
+  check_eq "G2-1 valid shape: base_sha is the resolved merge-base (== HEAD^1 in this fixture)" "$O_BASE" "$p1"
   check_eq "G2-1 valid shape: reaches stage 2" "$N_STAGE" "2"
 }
 row_shape_count() {  # G2-1: exactly two parents (an octopus whose HEAD^2 IS the PR head still fails)
@@ -1139,6 +1198,49 @@ row_advanced_base() {  # main moved on after the branch point: the diff is HEAD^
   check_eq "ADV-BASE the selector receives the PR's own paths ONLY" "$(<"$O/stub/paths.1")" "$KB_A"
   check_eq "ADV-BASE one changed file" "$N_FILES" "1"
 }
+row_stale_base() {  # #12484 (the #12418 port): the diff base is merge-base(HEAD^2, fetched live base), never frozen HEAD^1
+  local d="$1" m2
+  # `stale`: HEAD^1 is a stale base tip and the PR head merged a newer main carrying a non-doc edit.
+  # The frozen-parent derivation re-counts that main-side file (non_doc); the three-dot diff is the
+  # PR's own delta only — one doc — so stage 2 runs and base_sha is the merge-base, not HEAD^1.
+  drive stale "$d"
+  check_eq "G2-BASE stale merge-ref: a doc-only PR delta reaches stage 2" "$N_REASON" "affected"
+  check_eq "G2-BASE stale: files counts the PR delta only" "$N_FILES" "1"
+  check_eq "G2-BASE stale: the selector is asked for the PR-side path only" "$(<"$O/stub/paths.1")" "$KB_A"
+  check_eq "G2-BASE stale: stage 2 ran (4 selector calls)" "$STUB_CALLS" "4"
+  m2=$(git -C "$FX/stale" rev-parse refs/heads/zzleak-pr-base)
+  check_eq "G2-BASE stale: base_sha is the live merge-base, not HEAD^1" "$O_BASE" "$m2"
+  # the same topology with a PR-side code file still pays the battery — the gate is not reject-everything
+  drive stale_code "$d"
+  expect_full "G2-BASE stale merge-ref + PR-side code pays the battery" non_doc 0
+  # the mirror direction: the branch never synced the main-side commit the merge ref's first parent already
+  # carries — merge-base is BEHIND HEAD^1, and only the D..HEAD^2 pairing classifies the PR delta
+  drive behind "$d"
+  check_eq "G2-BASE behind merge-ref: a doc-only PR delta reaches stage 2" "$N_REASON" "affected"
+  check_eq "G2-BASE behind: files counts the PR delta only" "$N_FILES" "1"
+  m2=$(git -C "$FX/behind" merge-base 'HEAD^2' refs/heads/zzleak-pr-base)
+  check_eq "G2-BASE behind: merge-base is behind HEAD^1 (precondition)" \
+    "$([ "$m2" != "$(git -C "$FX/behind" rev-parse 'HEAD^1')" ] && echo behind)" "behind"
+  check_eq "G2-BASE behind: base_sha is the merge-base, behind HEAD^1" "$O_BASE" "$m2"
+  # every resolution failure is a named fail-closed arm, never a partial classification
+  drive k1 "$d" "PR_BASE_REF=zzleak-no-such-ref"
+  expect_full "G2-BASE an unresolvable live base fails closed" base_fetch 0
+  drive unrel "$d"
+  expect_full "G2-BASE an unrelated live base (empty merge-base) fails closed" no_merge_base 0
+  drive k1 "$d" "PR_BASE_REF=+refs/heads/x:refs/heads/y"
+  expect_full "G2-BASE a refspec-shaped base ref is rejected before fetch" bad_base_ref 0
+  drive k1 "$d" "PR_BASE_REF="
+  expect_full "G2-BASE an empty base ref is rejected before fetch" bad_base_ref 0
+  # the refs/heads/ pin: a hex- or tags/-shaped base.ref must never FETCH_HEAD outside the named branch
+  drive k1 "$d" "PR_BASE_REF=0123456789012345678901234567890123456789"
+  expect_full "G2-BASE a hex-shaped base ref cannot SHA-want outside refs/heads/" base_fetch 0
+  drive k1 "$d" "PR_BASE_REF=tags/v9"
+  expect_full "G2-BASE a tags/-shaped base ref cannot dwim outside refs/heads/" base_fetch 0
+  # the up-to-date must-pass: live base == HEAD^1 — the resolved merge-base IS the frozen parent here
+  drive k1 "$d"
+  check_eq "G2-BASE up-to-date: base_sha is HEAD^1 == merge-base" "$O_BASE" "$(git -C "$FX/k1" rev-parse 'HEAD^1')"
+}
+
 row_selection_shapes() {  # selection-output shapes beyond the recorded ones
   local d="$1" v
   for v in norows:selector_unparsed twotabs:selector_unparsed nocls:selector_unparsed allnum:selector_fallback; do
@@ -1330,7 +1432,7 @@ PRISTINE_ROWS=(row_not_pr row_shape_ok row_shape_count row_shape_githubsha row_s
                row_trigger_core row_trigger_sourced row_lock row_skip_gated_on_active row_rerun row_odd_cntrl row_odd_colons
                row_odd_comma row_status row_docs_outside row_docs_inside row_fork row_maxfiles row_bigpaths row_empty
                row_ci_leak row_selector_unknowns row_selector_timeout row_groups row_real_shape row_must_pass
-               row_modes row_allowlist row_nonascii row_advanced_base row_selection_shapes row_argv_cap row_leak row_budget
+               row_modes row_allowlist row_nonascii row_advanced_base row_stale_base row_selection_shapes row_argv_cap row_leak row_budget
                row_switch_gate row_hang_first row_child_env row_lever_error row_empty_tok row_scratch row_signal_window)
 UNLOCKED_ROWS=(row_switch row_switch_gate_unlocked row_diagrams row_defaults_first row_term row_trigger_active)
 
@@ -1352,7 +1454,9 @@ echo "  control: $((passes)) checks green against the pristine and the lock-neut
 _lockn=$(grep -c -E "$LOCK_RE" "$PRISTINE")
 check_eq "G2-13 the activation lock is ONE literal line, byte-exact" "$_lockn" "1"
 _lockline=$(grep -n -E "$LOCK_RE" "$PRISTINE" | cut -d: -f1)
-check_true "G2-13 the lock line sits near the top of the driver (line $_lockline)" "$(rc_of test "$_lockline" -le 90)"
+# the bound is a "near the top" placement pin, widened 90 -> 120 at #12484 (the header's INPUTS/outputs/diff-shape
+# documentation for the three-dot base resolution grew eleven lines above the lock literal)
+check_true "G2-13 the lock line sits near the top of the driver (line $_lockline)" "$(rc_of test "$_lockline" -le 120)"
 check_eq "G2-13 the neutralized copy differs from the pristine driver by exactly the lock line" \
   "$(diff "$PRISTINE" "$UNLOCKED" | grep -c '^[<>]')" "1"
 check_eq "G2-13 the neutralized copy has no lock line" "$(grep -c -E '^readonly PR_AFFECTED_LOCKED=' "$UNLOCKED")" "0"
@@ -1516,8 +1620,14 @@ mutate "G2-15 a nested markdown file counts as root-level" "$PRISTINE" '/^    \*
 mutate "G2-15 any status letter is accepted"      "$PRISTINE" "$(kill_guard G2-STATUS)"                    row_status   # EQUIVALENT-LABEL (verified, PRSEL_PROBE_VERBOSE=all: only reason labels turn red): a typechange to a symlink is refused by the mode check, still full
 mutate "G2-15 diagrams edits do not block test-webplat" "$PRISTINE" "$(kill_guard G2-15-DIAGRAMS)"         row_diagrams
 mutate "G2-15 the diagrams path is not flagged"   "$PRISTINE" "$(kill_guard G2-15-DIAGRAMS-FLAG)"         row_diagrams
-mutate "G2-1 the diff is taken against the PR head (HEAD^1 HEAD^2), not the merge" "$PRISTINE" 's|HEAD^1 HEAD --|HEAD^1 HEAD^2 --|' row_advanced_base
-mutate "G2-1 the diff is taken HEAD^2..HEAD (main's own movement leaks in)" "$PRISTINE" 's|HEAD^1 HEAD --|HEAD^2 HEAD --|' row_advanced_base
+mutate "G2-1 the diff base reverts to the frozen merge-ref HEAD^1" "$PRISTINE" 's|"\$diff_base" "\$diff_head" --|HEAD^1 "$diff_head" --|' row_advanced_base row_stale_base
+mutate "G2-1 the diff head reverts to the merge RESULT (the base-side arc leaks in)" "$PRISTINE" 's|"\$diff_base" "\$diff_head" --|"$diff_base" HEAD --|' row_advanced_base row_stale_base
+# #12484: the discriminating mutations — reverting either side of the three-dot derivation re-opens the
+# stale-base miscount the port exists to close, and the stale/behind fixtures must see it.
+mutate "G2-1 the diff-base computation reverts to HEAD^1"       "$PRISTINE" 's|\$(git merge-base HEAD\^2 FETCH_HEAD 2>/dev/null)|HEAD^1|' row_stale_base
+mutate "G2-1 the audit base_sha reverts to HEAD^1"              "$PRISTINE" 's|base_sha="\$diff_base"|base_sha="$p1"|' row_stale_base
+mutate "G2-BASE-REF the base-ref grammar admits a refspec"      "$PRISTINE" 's|\^\[A-Za-z0-9\]\[A-Za-z0-9._/-\]\*\$|.*|' row_stale_base
+mutate "G2-BASE-FETCH a failed live-base fetch is ignored"      "$PRISTINE" "$(drop_return G2-BASE-FETCH)" row_stale_base
 mutate "G2-15 the joined --paths cap is not enforced" "$PRISTINE" "$(kill_guard G2-15-PATHS-CAP)" row_argv_cap
 mutate "G2-15 the joined --paths cap is 90000" "$PRISTINE" 's|\[ "\${#paths}" -le 100000 \]|[ "${#paths}" -le 90000 ]|' row_argv_cap
 mutate "G2-15 a fork head is not full"            "$PRISTINE" "$(kill_guard G2-FORK)"                      row_fork
@@ -1572,14 +1682,14 @@ fi
 # adding or removing a row:
 #   bash scripts/ci-pr-selection.test.sh | tail -1     then   BASE_ROWS = total - ROWS_PER_SOURCED_FILE * sourced_count
 ROWS_PER_SOURCED_FILE=19
-BASE_ROWS=4412
+BASE_ROWS=4629  # re-derived 2026-11-09 (#12484): the row_stale_base control + the six three-dot mutants
 MIN_ROWS=$((BASE_ROWS + ROWS_PER_SOURCED_FILE * ${#SOURCED[@]}))
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
   exit 1
 fi
-MIN_MUTANTS=101
+MIN_MUTANTS=105  # re-derived 2026-11-09 (#12484): the G2-BASE-* / three-dot discriminating mutants
 if [ "$MUT_TOTAL" -lt "$MIN_MUTANTS" ]; then
   printf 'FAIL: mutation floor: %d mutants executed, at least %d required.\n' "$MUT_TOTAL" "$MIN_MUTANTS" >&2
   exit 1

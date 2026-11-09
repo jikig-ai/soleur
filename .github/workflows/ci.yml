@@ -367,8 +367,9 @@ jobs:
   # pr-selection (ADR-276 S4, #9729, PR B): decide ONCE per pull_request run whether the affected suite set may skip the three
   # gateable groups (test-webplat, test-bun, test-scripts-heavy). A COST lever, allowed to fail in one direction only: every
   # unknown runs the full battery. The decision lives in scripts/ci-pr-selection.sh (this YAML stays thin; the driver holds the
-  # trigger list and the activation lock). It emits ONLY literal outputs: head_sha and base_sha (audit values, the merge commit's
-  # second and first parents), skip_legs (a comma list over the three groups, EMPTY unless active) and active (`true`/`false`).
+  # trigger list and the activation lock). It emits ONLY literal outputs: head_sha (audit value, the merge commit's second
+  # parent) and base_sha (the resolved three-dot merge-base, #12484), skip_legs (a comma list over the three groups, EMPTY
+  # unless active) and active (`true`/`false`).
   #
   # SWITCHED OFF, THEN DARK AND LOCKED. While the repository variable CI_PR_AFFECTED is unset or empty the job is SKIPPED (no runner, no
   # checkout, no dark cost): an undefined variable reads as an empty string in a job-level `if:`, so `vars.CI_PR_AFFECTED != ''` is false.
@@ -424,6 +425,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           SWITCH: ${{ vars.CI_PR_AFFECTED }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The live base ref the driver fetches for the three-dot diff base (#12484, porting #12418): HEAD^1 on the
+          # merge ref freezes at merge-ref computation and re-counts main-side changes on merge-carrying branches.
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           GH_REPO: ${{ github.repository }}
           RUN_ATTEMPT: ${{ github.run_attempt }}

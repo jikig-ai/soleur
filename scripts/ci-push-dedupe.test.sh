@@ -353,7 +353,8 @@ if mode == "prsel":
     if sel.get("timeout-minutes") != 2: tags.append("P-STEPTIMEOUT")
     if str(sel.get("run", "")).strip() != "bash scripts/ci-pr-selection" + ".sh": tags.append("P-RUN")  # split on purpose: a whole path literal makes the kb-consumer census hop into the driver and charge this suite with its knowledge-base strings
     exp = {"EVENT_NAME": "${{ github.event_name }}", "SWITCH": "${{ vars.CI_PR_AFFECTED }}",
-           "PR_HEAD_SHA": "${{ github.event.pull_request.head.sha }}", "HEAD_REPO": "${{ github.event.pull_request.head.repo.full_name }}",
+           "PR_HEAD_SHA": "${{ github.event.pull_request.head.sha }}", "PR_BASE_REF": "${{ github.event.pull_request.base.ref }}",
+           "HEAD_REPO": "${{ github.event.pull_request.head.repo.full_name }}",
            "GH_REPO": "${{ github.repository }}", "RUN_ATTEMPT": "${{ github.run_attempt }}", "PR_SELECTION_STAGE2_TIMEOUT": "90"}
     if (sel.get("env") or {}) != exp: tags.append("P-ENV")
     if "secrets." in json.dumps(job) or "GH_TOKEN" in json.dumps(job): tags.append("P-SECRETS")

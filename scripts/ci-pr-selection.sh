@@ -14,6 +14,12 @@
 #   SWITCH          vars.CI_PR_AFFECTED                      (only the exact string `on` runs stage 2 and can arm; compared in bash)
 #   GITHUB_SHA      the merge commit the checkout is at
 #   PR_HEAD_SHA     github.event.pull_request.head.sha
+#   PR_BASE_REF     github.event.pull_request.base.ref         (the live base ref to fetch — branch-name grammar
+#                                                              only, never a refspec. Trust model: a real
+#                                                              refs/heads/ base tip is attacker-influenceable only
+#                                                              to the degree GitHub's own three-dot Files view is.
+#                                                              The pin kills only the EXTRA surface: hex/tags/
+#                                                              resolving outside the named branch; #12484)
 #   HEAD_REPO       github.event.pull_request.head.repo.full_name   (a fork head is full)
 #   GH_REPO         github.repository
 #   RUN_ATTEMPT     github.run_attempt                       (a re-run reuses the original payload: full)
@@ -29,7 +35,8 @@
 #
 # OUTPUTS (grammar pinned by scripts/ci-pr-selection.test.sh):
 #   head_sha   ^([0-9a-f]{40})?$      HEAD^2 once the merge-ref shape is validated (an audit value; empty otherwise)
-#   base_sha   ^([0-9a-f]{40})?$      HEAD^1, same rule
+#   base_sha   ^([0-9a-f]{40})?$      merge-base(HEAD^2, live base ref) — the base the diff ran against (#12484;
+#                                     empty until the base resolves)
 #   active     ^(true|false)$         true ONLY when the switch is exactly `on`, the activation lock is absent, the
 #                                     diff is doc-only, the selector answered cleanly AND something would be skipped
 #   skip_legs  ^([a-z-]+(,[a-z-]+)*)?$  subset of {test-webplat,test-bun,test-scripts-heavy}; written ONLY when active
@@ -45,7 +52,11 @@
 # `signalled` (HUP/INT/TERM) and `lever_error` (an internal abort) are the two trap exits: both exit 0 with only the defaults.
 #
 # TWO STAGES (the cost shape, decision-challenges.md): STAGE 1 is a pure-bash positive allowlist over
-# `git diff -z --raw --no-renames --no-abbrev HEAD^1 HEAD` (records `:oldmode newmode oldsha newsha STATUS` NUL `path` NUL).
+# `git diff -z --raw --no-renames --no-abbrev <diff_base> <diff_head>` (records `:oldmode newmode oldsha newsha STATUS`
+# NUL `path` NUL). The pair is GitHub three-dot — merge-base(HEAD^2, live base ref) .. HEAD^2 (#12484, the #12418 port):
+# the merge ref's frozen first parent re-counts main-side changes the branch already merged, so the base is fetched
+# (refs/heads/-pinned) and the merge-base resolved before the listing; the resolution failures are the fail-closed
+# named reasons bad_base_ref, base_fetch and no_merge_base.
 # The diff LISTING is kept in a FILE under RUNNER_TEMP (never in an env var or an annotation); the comma `--paths=` list the
 # selector receives is derived from it and IS argv (bounded: over 100000 bytes is full, which is also well under the kernel's
 # 128 KiB single-argument limit). The allowlist grammar, ALL of which must hold for every changed path:
@@ -290,6 +301,7 @@ eval_group() {  # $1 = enumerate stream file
 run() {
   local parts p1 p2 h rl st p n nul size paths t0 rem rc g leg tok list diagrams
   local test_all sel_file enum_file groups_summary groups_n degraded meta om nm
+  local diff_base diff_head
 
   reason=not_pr
   [ "${EVENT_NAME:-}" = pull_request ] || return 0  # GUARD:G2-NOT-PR
@@ -306,7 +318,7 @@ run() {
   [ "$h" = "$GITHUB_SHA" ] || return 0  # GUARD:G2-1-HEAD-IS-GITHUB-SHA
   [ "$p2" = "$PR_HEAD_SHA" ] || return 0  # GUARD:G2-1-PARENT2-IS-PR-HEAD
   head_sha="$p2"
-  base_sha="$p1"
+  diff_head="$p2"
 
   # (3) full on a fork head, a re-run, an empty diff and a diff over 500 files.
   reason=fork
@@ -314,10 +326,31 @@ run() {
   reason=rerun
   [ "${RUN_ATTEMPT:-}" = 1 ] || return 0  # GUARD:G2-7-RERUN
 
+  # (3b) the diff is GitHub three-dot — merge-base(HEAD^2, live base) .. HEAD^2 (#12484, the #12418 port
+  # from ci-oracle-lane.sh). Never the merge ref's first parent (it freezes at merge-ref computation and
+  # re-counts main-side changes the branch already merged) and never the merge RESULT against that base
+  # (its tree carries the base-side arc whenever the frozen parent is ahead of the fork point — the
+  # common case for a PR that has not synced main). The fetch is unconditional — a payload base.sha can
+  # be stale-but-resolvable and would freeze the same defect class — and is pinned to refs/heads/ so a
+  # hex- or tags/-shaped base.ref cannot FETCH_HEAD a commit outside the named branch. The grammar is a
+  # deliberate superset of refname rules (git-invalid-but-safe names simply fail the fetch) while still
+  # rejecting `+`/`:`/leading `-` — refspec writes and option injection. Placed after the cheap env
+  # gates (event, merge shape, fork, re-run) and before the diff it feeds: this driver runs stage 1 on
+  # every well-formed pull_request run, so the base must resolve before the listing is taken — the
+  # switch gate here gates stage 2 only, unlike ci-oracle-lane.sh's off-switch cost doctrine.
+  reason=bad_base_ref
+  [[ "${PR_BASE_REF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 0  # GUARD:G2-BASE-REF
+  reason=base_fetch
+  git fetch --no-tags --quiet origin "refs/heads/$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:G2-BASE-FETCH
+  reason=no_merge_base
+  diff_base="$(git merge-base HEAD^2 FETCH_HEAD 2>/dev/null)" || return 0  # GUARD:G2-NO-MERGE-BASE
+  [ -n "$diff_base" ] || return 0  # belt: merge-base's rc on no-ancestor varies by git version; unreachable today
+  base_sha="$diff_base"
+
   # (4) the listing goes to a FILE: never argv, never env, never an annotation.
   reason=diff_error
   work="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/pr-selection.XXXXXX" 2>/dev/null)" || return 0
-  git diff -z --raw --no-renames --no-abbrev --no-ext-diff --no-color HEAD^1 HEAD -- > "$work/names.z" 2> "$work/diff.err" || return 0  # GUARD:G2-1-DIFF-RC
+  git diff -z --raw --no-renames --no-abbrev --no-ext-diff --no-color "$diff_base" "$diff_head" -- > "$work/names.z" 2> "$work/diff.err" || return 0  # GUARD:G2-1-DIFF-RC
   size="$(wc -c < "$work/names.z")" || return 0
   [[ "$size" =~ ^[0-9]+$ ]] || return 0
   reason=empty_diff
