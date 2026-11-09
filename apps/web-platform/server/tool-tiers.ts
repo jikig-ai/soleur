@@ -55,6 +55,8 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__github_read_issue_comments": "auto-approve",
   "mcp__soleur_platform__github_read_pr": "auto-approve",
   "mcp__soleur_platform__github_list_pr_comments": "auto-approve",
+  // #12469: the Command Center's PR list (metadata only), registered for web-egress-entitled sessions on a public repo.
+  "mcp__soleur_platform__github_list_pull_requests": "auto-approve",
 
   // Phase 3: Trigger workflows (gated — write action)
   // cc-router (#2909): Tier 2 candidate (Phase 2 via #3722; review-gate UX integration required)

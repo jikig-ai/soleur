@@ -58,6 +58,8 @@ async function fetchWithRetry(
   // url-refused mirror so the refusal is never silent.
   url = githubEgressUrl(url, "github-api");
   let lastError: Error | null = null;
+  // The cc read tools (redirect: "manual") may hold a PRIVATE repo's name in the URL: their retry breadcrumbs carry no url.
+  const logUrl = init?.redirect === "manual" ? {} : { url };
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     // A caller that has given up (a staging deadline, #8623) gets no further
     // attempts — without this a deadline would leave the retry loop running on.
@@ -79,7 +81,7 @@ async function fetchWithRetry(
         // Drain response body to prevent socket keep-alive issues
         await response.text().catch(() => {});
         log.warn(
-          { attempt: attempt + 1, status: response.status, url },
+          { attempt: attempt + 1, status: response.status, ...logUrl },
           "GitHub API fetch failed — retrying",
         );
         await delay(BASE_DELAY_MS * 2 ** attempt);
@@ -90,7 +92,7 @@ async function fetchWithRetry(
       lastError = err instanceof Error ? err : new Error(String(err));
       if (attempt < MAX_RETRIES && isRetryable(err) && !callerSignal?.aborted) {
         log.warn(
-          { attempt: attempt + 1, err: lastError.message, url },
+          { attempt: attempt + 1, err: lastError.message, ...logUrl },
           "GitHub API fetch failed — retrying",
         );
         await delay(BASE_DELAY_MS * 2 ** attempt);
@@ -103,6 +105,12 @@ async function fetchWithRetry(
   throw lastError;
 }
 
+/** Options of `githubApiGet`. `redirect: "manual"` makes any 3xx fail closed (see the call body). */
+export interface GithubGetOpts {
+  signal?: AbortSignal;
+  redirect?: "manual";
+}
+
 /**
  * Make an authenticated GET request to the GitHub API.
  * Handles 403 (permission upgrade needed) with a descriptive message.
@@ -111,7 +119,7 @@ async function fetchWithRetry(
 export async function githubApiGet<T = unknown>(
   installationId: number,
   path: string,
-  opts?: { signal?: AbortSignal },
+  opts?: GithubGetOpts,
 ): Promise<T> {
   const url = resolveApiUrl(path);
   const token = await generateInstallationToken(installationId);
@@ -124,12 +132,17 @@ export async function githubApiGet<T = unknown>(
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
       },
+      // Opt-in (cc read tools): a 3xx is returned as-is, so `!response.ok` below fails closed instead of following a
+      // redirect with the installation token attached. Absent => default fetch behaviour, unchanged for legacy callers.
+      ...(opts?.redirect === "manual" ? { redirect: "manual" as const } : {}),
     },
     opts?.signal,
   );
 
   if (!response.ok) {
-    await handleErrorResponse(response, path);
+    // The cc read tools pass `redirect: "manual"`; their callers may hold a PRIVATE repo's name in `path`, so those faults are
+    // mirrored without the path or GitHub's message (status only). Every other caller keeps the full diagnostic.
+    await handleErrorResponse(response, path, opts?.redirect === "manual");
   }
 
   return response.json() as Promise<T>;
@@ -241,8 +254,44 @@ export async function githubApiDelete<T = unknown>(
 async function handleErrorResponse(
   response: Response,
   path: string,
+  scrub = false,
 ): Promise<never> {
-  const bodyText = await response.text();
+  // Scrubbed mode (the cc read tools): a body stream that aborts mid-read must not turn an HTTP answer into "could not be
+  // reached" because the status alone is enough, so a failed read degrades to an empty body. The legacy callers keep the
+  // historical behaviour (the abort propagates).
+  let bodyText: string;
+  if (scrub) {
+    try {
+      bodyText = await response.text();
+    } catch {
+      // review: swallowed — the status is the signal; the body is only sniffed for the rate-limit phrase
+      bodyText = "";
+    }
+  } else {
+    bodyText = await response.text();
+  }
+
+  if (scrub) {
+    // Status only on every sink: no path (it embeds owner/repo), no GitHub message, no body.
+    // A secondary rate limit / abuse-detection 403 is not an access fault; keep that ONE fact (a fixed phrase, never GitHub's text)
+    // so the caller can tell the two apart.
+    const limited = response.status === 403 && /rate limit|abuse detection/i.test(bodyText.slice(0, 2000));
+    if (response.status === 403) {
+      // Breadcrumb only. No Sentry mirror here: this site has no user or tool identity and no debounce, so a looping agent would
+      // send one event per call. The caller's debounced onFault (cc-github-read-tool) carries tool + class + status.
+      log.warn({ status: 403, limited }, "GitHub API 403 (scrubbed)");
+    } else {
+      log.error({ status: response.status }, "GitHub API request failed (scrubbed)");
+    }
+    throw new GitHubApiError(
+      limited
+        ? "GitHub API 403: rate limit"
+        : response.status === 403
+          ? "GitHub API 403: the installation cannot access this resource"
+          : `GitHub API request failed: ${response.status}`,
+      response.status,
+    );
+  }
 
   if (response.status === 403) {
     // Surface the ACTUAL GitHub `message` instead of inventing a cause
