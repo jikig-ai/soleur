@@ -14,6 +14,39 @@ brand_survival_threshold: none
 
 # fix: feed coalesced push-commit messages to the kill-switch and [ack-destroy] gates
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09
+**Sections enhanced:** Research Insights (byte-budget measurement, cut list), Files to Edit
+(sweep enumerated), Acceptance Criteria (AC3 countable-probe fix, AC8 canonical lint
+invocation), Test Scenarios (executed-span rows), Guard Contract (2 entries)
+**Research approach:** inline (no subagent spawn in this context) — repo greps, precedent
+diff read of commit `f6c7ce7ddd` (#12404), live `gh`/`git` premise checks, mechanical
+deepen-plan halt-gate verification (4.6–4.13 all pass; `lint-guard-contract.py` green, 2
+entries).
+
+### Key Improvements
+
+1. Byte budget measured and made a first-class constraint: 489,262/490,000 — 738 bytes of
+   headroom (AC4), driving the "prose in runbook, not YAML" discipline and the
+   byte-neutral POLICY_MSGS→ALL_MSGS rename.
+2. Test-pin sweep enumerated: G11 literal (`"$POLICY_MSGS"`), `_ack_line` pin
+   (`HEAD_MSG.*ack-destroy`), and the counter suite's exact-count floor (121) all named as
+   same-commit updates — the three places the rename/feed would otherwise redden silently.
+3. Executed-step proof prescribed for the kill-switch (T66d–g) rather than text pins only —
+   the 2026-09-24 learning's "precedent is its whole job" applied to this mirror.
+4. Two pending technical rulings persisted to `decision-challenges.md` (any-commit reach for
+   each gate) — implementation is identical under either ruling.
+
+### New Considerations Discovered
+
+- `needs.preflight.outputs.skip` gates only the `apply` job — dispatch jobs never consulted
+  it (pre-existing; unchanged).
+- Sibling workflows `apply-github-infra.yml` / `apply-sentry-infra.yml` carry the same
+  tip-only readers — descoped to a follow-up (decision-challenges scope row).
+- `git grep -c` exits 1 with empty output on zero hits — AC3 uses `git grep -l | wc -l`
+  instead.
+
 ## Overview
 
 `github.event.head_commit.message` is only the push tip. PR #12404 (merged 2026-11-08,
@@ -428,8 +461,10 @@ reference to any planned file path (checked 2026-11-09).
       returns 1 hit; `grep -n 'HEAD_MSG.*ack-destroy' ...` returns 0 hits.
 - [ ] **AC3** — `deploy_policy_gate "$counts" "$ALL_MSGS" || exit 1` — G10/G11 green;
       no `POLICY_MSGS` remains:
-      `git grep -c 'POLICY_MSGS' -- .github tests scripts` returns 0 (note: this grep's
-      scope excludes `knowledge-base/` — the plan/tasks files legitimately name the old var).
+      `git grep -l 'POLICY_MSGS' -- .github tests scripts | wc -l` == 0 (`git grep -c`
+      exits 1 and prints nothing on zero hits; `wc -l` on the `-l` form is the countable
+      probe). Scope note: `knowledge-base/` is excluded — the plan/tasks files
+      legitimately name the old var.
 - [ ] **AC4** — Byte gate: `wc -c .github/workflows/apply-web-platform-infra.yml` ≤ 490000.
 - [ ] **AC5** — Both anchored regexes byte-identical to canonical:
       `bash tests/scripts/test-destroy-guard-regex-parity.sh` green, and the skip regex is
@@ -442,8 +477,9 @@ reference to any planned file path (checked 2026-11-09).
       (incl. re-derived exact-count floor), `bash tests/scripts/test-deploy-access-token-forget.sh`,
       `bash tests/scripts/test-destroy-guard-regex-parity.sh`,
       `bun test plugins/soleur/test/workflow-file-size.test.ts`.
-- [ ] **AC8** — Workflow syntax: `actionlint .github/workflows/apply-web-platform-infra.yml`
-      clean; each touched `run:` block extracted and `bash -n`-clean.
+- [ ] **AC8** — Workflow syntax: `bash scripts/lint-workflows.sh` (the repo's canonical
+      actionlint invocation) clean on the edited file; each touched `run:` block extracted
+      and `bash -n`-clean.
 - [ ] **AC9** — `git grep -cF 'toJSON(github.event.commits.*.message)'
       .github/workflows/apply-web-platform-infra.yml` == 2 (kill_switch + apply plan step).
 - [ ] **AC10** — Runbook documents the any-commit reach for both tokens AND the
