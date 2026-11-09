@@ -1133,10 +1133,25 @@ LUKS alert drift guard — is NOT a required context, so a PR that reverts
 that guard's subject with the guard red is mergeable (#6480, open).
 
 Kill switch: include `[skip-web-platform-apply]` on its own line in the merge
-commit message to skip auto-apply for that merge.
+commit message to skip auto-apply for that merge. Any-commit reach (CTO-ruled
+2026-11-09): the token counts on its own line in ANY of the push's commit
+messages, not only the tip — a merge-queue coalesce cannot bury it. A
+wrongly-suppressed apply is recoverable via the `manual-rerun` dispatch (on
+dispatch `head_commit` is absent so the token cannot arm). Note the carrier is
+the whole message: a bare token line inside a code fence DOES fire (only
+`>`-quoted lines and mid-line text are protected by the own-line anchor).
 
 Destroy acknowledgement: include `[ack-destroy]` on its own line in the merge
-commit message to acknowledge planned destroys (otherwise apply halts).
+commit message to acknowledge planned destroys (otherwise apply halts). Same
+any-commit reach — parity with `deploy_policy_gate` (#12404). Bounded residual:
+an ack authored for one commit's destroys arms every destroy in the same
+coalesced push — merge-queue reviewers are the control for that, and the ack's
+own warning already scopes it to "the WHOLE intended change".
+
+Residual (both tokens): `event.commits` is capped at 20 entries, so a token
+older than the window in a giant coalesced push still misses — fail-OPEN for
+the skip (the apply runs), fail-CLOSED for the ack (the apply refuses; re-merge
+carrying the token inside the window, or run the supervised apply).
 
 Manual escape hatch: `workflow_dispatch` is kept for re-runs after a transient
 failure or for ad-hoc applies (still target-scoped to the allow-list below).
