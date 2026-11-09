@@ -144,7 +144,7 @@
 #                        POSITIVE: `[[ "$NEWEST_BAD" > "$NEWEST_DONE" ]]` is a LEXICOGRAPHIC
 #                        comparison inside `[[ ]]`, not a redirect. Same reasoning as above.
 #
-#   2026-10-13   #9818 row moves (source edits, not detector). e09e4e614d: ci-draft-light-soak-9728.test.sh
+#   2026-10-13   #9818 row moves (source edits, not detector). e09e4e614d: the #9728 draft-light soak suite
 #                  20->22 (+2) and trusted-verdict.test.sh 18->22 (+4), the fixture writes the probe-trust change
 #                  added to both suites. Then 22->18 in each, in this series: the writes run under the canonical
 #                  `assert_fixture_dir` (the tracker-comment staging block in the S3 suite, the helpers and the
@@ -456,8 +456,6 @@
 6	scripts/check-backstop-revision.test.sh
 1	scripts/check-cloudflare-token-drift.sh
 1	scripts/check-cloudflare-token-drift.test.sh
-8	scripts/ci-draft-push-census.sh
-5	scripts/ci-draft-push-census.test.sh
 8	scripts/ci-oracle-lane.sh
 2	scripts/ci-oracle-lane.test.sh
 8	scripts/ci-oracle-review.sh
@@ -474,7 +472,6 @@
 1	scripts/follow-through-closure-guard.test.sh
 25	scripts/followthroughs/anthropic-admin-key-6297.test.sh
 5	scripts/followthroughs/ccla-representative-icla-7922.test.sh
-18	scripts/followthroughs/ci-draft-light-soak-9728.test.sh
 2	scripts/followthroughs/ci-leg-balance-9232.test.sh
 2	scripts/followthroughs/concierge-strand-754ee124-5733.test.sh
 1	scripts/followthroughs/cwv-field-rum-9178.sh
