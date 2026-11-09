@@ -14,6 +14,25 @@ brand_survival_threshold: none
 
 # fix: merge-queue residual batch — /tmp scratch leak, stale PR-selection base, coalesced-merge blind spots, stall-check false-positives, pin-bump red window
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09 (inline pass — the Devin-CLI planning seat has no spawn tool; the per-section/review-agent fan-outs this skill prescribes in parallel were discharged sequentially inline, disclosed per cloud-mode `sequential-fallback`)
+
+**Sections enhanced:** Gates verified — 4.6 User-Brand Impact (present, `none` + non-empty scope-out reason for the `apps/web-platform/server` sensitive path), 4.7 Observability (5 fields, allowlisted `rg` probe, literal expected output, <15s), 4.8 PAT (clean), 4.9 UI wireframe (non-UI, skipped), 4.10 Encryption (no new store, skipped), 4.11 Guard Contract (`lint-guard-contract.py`: 3 entries, green), 4.12 Scope Check (exactly 1 unfenced occurrence), 4.13 Task Design (no new autonomous task, skipped). 4.5 network-outage and 4.55 downtime gates: triggers absent.
+
+### Key Improvements
+
+1. **AC1 scoped to the diff line** — the original "zero matches for `HEAD^1 HEAD`" form would false-fail on explanatory comments kept beside the port (the oracle lane's own comments name `HEAD^1` to say why it is not the base); narrowed to the `git diff --raw` invocation shape.
+2. **AC12 count corrected** — four edited workflow files (ci.yml, apply-github-infra, apply-sentry-infra, merge-queue-stall-check), not three.
+3. **C4 completeness verified against all three model files** — `model.c4`/`views.c4`/`spec.c4` grep shows no merge-queue/tmpfs-guard/stall-check/pin-bump elements exist to update; the vinngest pin carrier is already modeled. The plan's "no C4 impact" conclusion is evidence-backed, not a bare None.
+4. **Verify-the-negative pass** — plan carries no NEVER/MUST NOT/exposure claims requiring contradiction checks; sibling-PR overlap claims (#12498 disjoint, #12495 adjacent) verified live 2026-11-09 and flagged as time-stamped observations to re-check at work time (task 1.1).
+
+### New Considerations Discovered
+
+- `tests/scripts/test-apply-github-infra-mint-shape.sh:245-248` pins the `HEAD_MSG` env block byte-shape — the `EVENT_MSGS_JSON` addition is a pinned-shape edit requiring a same-diff snapshot update (already in Files to Edit; called out so it is not discovered as a red test at GREEN time).
+- `test-sentry-alert-adoption-guards.sh:140` counts `HEAD_MSG|ack_destroy|head_commit|git log` occurrences — the combined-var edit may shift the pinned count; re-derive in the same diff (task 3.4).
+- `srt-ca-*`/`claude-http-*`/`postmerge-poll*` prefixes trace to the `srt` sandbox runtime and harness-side artifacts — external producers no repo-side trap can fix; the `TMPDIR`→`/tmp/.cs` routing plus the `.cs` age-reap arm is the only mechanism that reaches them, which is why both halves of the #11764 fix are load-bearing (routing alone relocates the pile; reclaim alone leaves producers scattering).
+
 ## Overview
 
 One PR fixes five open machinery issues as a single merge-queue residual batch:
@@ -345,7 +364,7 @@ All three guards compare live workflow/script text to committed fixtures in thei
 
 ### Pre-merge (PR)
 
-- [ ] AC1: `git grep -n 'HEAD\^1 HEAD' scripts/ci-pr-selection.sh` returns zero matches; `git grep -n 'merge-base HEAD\^2 FETCH_HEAD' scripts/ci-pr-selection.sh` returns ≥1; `git grep -n 'PR_BASE_REF' .github/workflows/ci.yml` returns ≥1 hit inside the pr-selection step env.
+- [ ] AC1: `git grep -n 'diff -z --raw.*HEAD\^1 HEAD' scripts/ci-pr-selection.sh` returns zero matches on the diff invocation (explanatory comments may still name `HEAD^1`); `git grep -n 'merge-base HEAD\^2 FETCH_HEAD' scripts/ci-pr-selection.sh` returns ≥1; `git grep -n 'PR_BASE_REF' .github/workflows/ci.yml` returns ≥1 hit inside the pr-selection step env.
 - [ ] AC2: `bash scripts/ci-pr-selection.test.sh` exits 0, including the new stale-frozen-parent fixture row (a `HEAD^1` ≠ merge-base shape yields only the PR-side file list) and the `bad_base_ref`/`base_fetch`/`no_merge_base` named-reason rows.
 - [ ] AC3: `git grep -n 'EVENT_MSGS_JSON' .github/workflows/apply-github-infra.yml` returns ≥2 hits (kill-switch + destroy-guard env); same for `apply-sentry-infra.yml`; every anchored token regex at the four sites reads the combined `POLICY_MSGS` var, not `HEAD_MSG` alone.
 - [ ] AC4: `bash tests/scripts/test-destroy-guard-regex-parity.sh`, `test-destroy-guard-counter.sh`, `test-destroy-guard-counter-sentry.sh`, `test-apply-github-infra-mint-shape.sh`, and `test-sentry-alert-adoption-guards.sh` all exit 0 — including the new below-tip-token fixtures.
@@ -356,7 +375,7 @@ All three guards compare live workflow/script text to committed fixtures in thei
 - [ ] AC9: `plugins/soleur/test/test-helpers.sh` exports `TMPDIR` at the owned sandbox in its no-outer-root arm; `git grep -n 'export TMPDIR' plugins/soleur/test/test-helpers.sh` returns ≥1.
 - [ ] AC10: `scripts/tmpfs-guard.sh` reaps entries under `/tmp/.cs` older than the 48h floor (owned-base age arm); `bash scripts/tmpfs-guard.test.sh` exits 0 with rows for the `.cs` arm (aged-out entry reaped; fresh entry kept; un-owned `/tmp` entry untouched).
 - [ ] AC11: every census-confirmed repo-owned `mktemp` producer in the recorded list carries a cleanup (`trap`/`rm -f`) or writes under an owned root — asserted per-site in the work log; no new bare-`tmp.*`-class producer is added by this diff (`git diff origin/main...HEAD -- '*.sh' | grep -c '+.*mktemp'` new sites each carry cleanup in the same hunk or a named owned root).
-- [ ] AC12: `actionlint` exits clean on the three edited workflows (`.github/workflows/{ci,apply-github-infra,apply-sentry-infra,merge-queue-stall-check}.yml` — four files) and `bash -n` clean on every edited `.sh`.
+- [ ] AC12: `actionlint` exits clean on the four edited workflows (`.github/workflows/{ci,apply-github-infra,apply-sentry-infra,merge-queue-stall-check}.yml`) and `bash -n` clean on every edited `.sh`.
 - [ ] AC13: ADR-270 and ADR-250 each carry a dated 2026-11-09 addendum recording the landed behavior (explicit enqueue for authored bot PRs; `.cs` owned-base routing + age reaping).
 - [ ] AC14: the PR body carries the producer census histogram (prefix → count → disposition: repo-fixed / agent-routed / external-documented) recorded by the work phase; `closes #11764`, `closes #12484`, `closes #12501`, `closes #12507`, `closes #12508` all present.
 
