@@ -662,8 +662,9 @@ def suites_failed_in(repo, fj, cache_dir):
                 anns = gh_pages("repos/%s/check-runs/%s/annotations?per_page=100" % (repo, jid))
                 haystack = " ".join(str(a.get("message") or "") for d in anns
                                     for a in (d if isinstance(d, list) else []))
-            except ReadError:
-                pass   # a failed probe is not evidence either: the log-read note stands
+            except ReadError as _probe_e:
+                # a failed probe is not evidence either: the log-read note stands
+                print("replay: annotation probe unreadable for job %s (%s); treated as no evidence" % (jid, _probe_e), file=sys.stderr)
             if COMMS_LOSS in haystack.lower():
                 failing.append({"job": name, "suites": [], "note": "runner-comms-loss"})
                 extra[name] = {"signature": "runner-comms-loss"}
@@ -845,7 +846,8 @@ def cmd_collect(a):
                         try:
                             if leg in run_leg_green(a.repo, unit["run"]["id"], (leg,), attempt=a_):
                                 return True
-                        except ReadError:
+                        except ReadError as _w_e:
+                            print("replay: unsettled-leg witness read failed for run %s attempt %s (%s); not evidence" % (unit["run"]["id"], a_, _w_e), file=sys.stderr)
                             continue
                     for o in runs:
                         if o["id"] == unit["run"]["id"]:
@@ -853,7 +855,8 @@ def cmd_collect(a):
                         try:
                             if leg in run_leg_green(a.repo, o["id"], (leg,)):
                                 return True
-                        except ReadError:
+                        except ReadError as _w_e:
+                            print("replay: unsettled-leg witness read failed for run %s (%s); not evidence" % (o["id"], _w_e), file=sys.stderr)
                             continue
                     return False
                 classify(u, a.repo, cache, lambda unit: False, leg_green)
@@ -1027,7 +1030,8 @@ def cmd_ejections(a):
                     try:
                         if leg in run_leg_green(a.repo, r["id"], (leg,), attempt=a_):
                             return True
-                    except ReadError:
+                    except ReadError as _w_e:
+                        print("replay: attempt witness read failed for run %s attempt %s (%s); not evidence" % (r["id"], a_, _w_e), file=sys.stderr)
                         continue
                 return False
             classify(u, a.repo, cache, cleared, leg_green)
