@@ -19,16 +19,17 @@ const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 // Current model landscape (2026-10). The auditor flags anything NOT in this set
 // that lives in a config-class path. Source of truth: claude-api skill table +
 // https://platform.claude.com/docs/en/about-claude/models/overview.md.
-// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch,
+// `claude-fable-5` moved OUT of this set at the Fable 5.1 launch and
+// `claude-fable-5-1` at the Fable 5.2 launch (2026-11-09),
 // `claude-opus-5` at the Opus 5.5 launch (2026-09-22), and `claude-sonnet-5`
 // at the Sonnet 5.5 launch (2026-09-28) — all are now source ids
-// (still served, but superseded in-tier by `claude-fable-5-1` / `claude-opus-5-5` /
+// (still served, but superseded in-tier by `claude-fable-5-2` / `claude-opus-5-5` /
 // `claude-sonnet-5-5`).
 const CURRENT_IDS = [
   "claude-opus-5-5",
   "claude-sonnet-5-5",
   "claude-haiku-5-5",
-  "claude-fable-5-1",
+  "claude-fable-5-2",
 ];
 
 /** Parse AUTOFIX_PAIRS out of the script so tests are driven BY the table
@@ -267,7 +268,8 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
       "claude-sonnet-5": "claude-sonnet-5-5",
       "claude-sonnet-4-6": "claude-sonnet-5-5",
       "claude-sonnet-4-5": "claude-sonnet-5-5",
-      "claude-fable-5": "claude-fable-5-1",
+      "claude-fable-5": "claude-fable-5-2",
+      "claude-fable-5-1": "claude-fable-5-2",
       // Haiku 5.5 (2026-10-08): BOTH spellings. The id boundary means the undated
       // pair does not match the dated id, so one pair alone leaves the other stale.
       "claude-haiku-4-5-20251001": "claude-haiku-5-5",
@@ -321,13 +323,13 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
   });
 
   test("a stale id that is a PREFIX of its successor does not self-flag forever", () => {
-    // Fable 5.1 is the first launch where the stale id (`claude-fable-5`) is a
-    // strict prefix of its target (`claude-fable-5-1`). The --fix sed was
+    // Fable 5.1 was the first launch where the stale id (`claude-fable-5`) is a
+    // strict prefix of its target (now `claude-fable-5-2`). The --fix sed was
     // always boundary-anchored, but SELECTION was a bare alternation, so a file
     // already on the CURRENT id matched, --fix reported "fixed" while changing
     // nothing, and --detect re-flagged it on every run: a permanently-red drift
     // cron auto-filing issues it cannot fix. assert_single_hop does not catch
-    // this ('claude-fable-5-1' is not itself a source id), so pin it here.
+    // this ('claude-fable-5-2' is not itself a source id), so pin it here.
     //
     // Derived from the pair table, not hardcoded — this must keep holding at
     // the next launch that introduces a prefix-shadowed pair.
@@ -336,7 +338,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     );
     expect(
       prefixPairs.length,
-      "expected at least one prefix-shadowed pair (claude-fable-5=claude-fable-5-1)",
+      "expected at least one prefix-shadowed pair (claude-fable-5=claude-fable-5-2)",
     ).toBeGreaterThan(0);
 
     for (const [, to] of prefixPairs) {
@@ -378,8 +380,8 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     const sandbox = mkdtempSync(join(tmpdir(), "mlr-synth-prefix-"));
     const script = join(sandbox, "audit-models.sh");
     const src = readFileSync(AUDIT_SH, "utf8").replace(
-      '  "claude-fable-5=claude-fable-5-1"\n',
-      '  "claude-fable-5=claude-fable-5-1"\n  "claude-zeta-1=claude-zeta-1-1"\n',
+      '  "claude-fable-5=claude-fable-5-2"\n',
+      '  "claude-fable-5=claude-fable-5-2"\n  "claude-zeta-1=claude-zeta-1-1"\n',
     );
     expect(src, "synthetic pair must have been injected").toContain(
       "claude-zeta-1=claude-zeta-1-1",
@@ -445,7 +447,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     // boundary, dropping the backreference, and skewing the boundary charset
     // away from selection's — each left the suite 17/17 green while corrupting
     // real source (`claude-opus-4-7-20260101` -> `claude-opus-5-5-20260101`,
-    // `claude-fable-5-1` -> `claude-fable-5-1-1`, and an eaten closing quote
+    // `claude-fable-5-2` -> `claude-fable-5-2-1`, and an eaten closing quote
     // that makes the file stop parsing). One fixture reds all three.
     const root = mkdtempSync(join(tmpdir(), "mlr-sed-anchor-"));
     const dir = join(root, "apps/web-platform/server/inngest/functions");
@@ -454,18 +456,20 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     const before =
       `export const STALE = "claude-opus-4-7";\n` +
       `export const DATED = "claude-opus-4-7-20260101";\n` +
-      `export const CURRENT = "claude-fable-5-1";\n`;
+      `export const CURRENT = "claude-fable-5-2";\n` +
+      `export const STALE_FABLE = "claude-fable-5-1";\n`;
     writeFileSync(file, before);
 
     expect(run(["--fix"], root).status).toBe(0);
 
     // Byte-exact: only the bare stale id moves. The dated variant is a DIFFERENT
     // model and must not be silently re-pointed; the current fable id must not
-    // grow a second `-1`; the quoting must survive intact.
+    // grow a second `-1`, and a stale `-5-1` lands on exactly `-5-2`; the quoting must survive intact.
     expect(readFileSync(file, "utf8")).toBe(
       `export const STALE = "claude-opus-5-5";\n` +
         `export const DATED = "claude-opus-4-7-20260101";\n` +
-        `export const CURRENT = "claude-fable-5-1";\n`,
+        `export const CURRENT = "claude-fable-5-2";\n` +
+        `export const STALE_FABLE = "claude-fable-5-2";\n`,
     );
 
     rmSync(root, { recursive: true, force: true });
@@ -712,8 +716,9 @@ describe("model-launch-review Haiku 5.5 launch", () => {
   }
 
   test("the pair table has a literal floor (a table-driven test over zero pairs passes vacuously)", () => {
-    // 8 pairs before Haiku 5.5, +2 (dated and undated Haiku 4.5) = 10.
-    expect(parseAutofixPairs().length).toBeGreaterThanOrEqual(10);
+    // 8 pairs before Haiku 5.5, +2 (dated and undated Haiku 4.5) = 10,
+    // +1 at the Fable 5.2 launch (claude-fable-5-1 became a source id) = 11.
+    expect(parseAutofixPairs().length).toBeGreaterThanOrEqual(11);
   });
 
   test("the DATED Haiku 4.5 id is detected and rewritten to claude-haiku-5-5", () => {
@@ -773,5 +778,33 @@ describe("model-launch-review Haiku 5.5 launch", () => {
     });
     expect(r.status).not.toBe(0);
     expect(r.stdout).not.toContain("model-drift: none");
+  });
+});
+
+// Fable 5.2 launch (2026-11-09): `claude-fable-5-1` becomes a source id and `claude-fable-5`
+// is retargeted past it. Fixtures are LITERAL ids so deleting a pair cannot delete its fixture.
+describe("model-launch-review Fable 5.2 launch", () => {
+  test("fable 5 / 5.1 / 5.2 converge in one --fix run; a dated variant is untouched", () => {
+    const root = mkdtempSync(join(tmpdir(), "mlr-fable52-"));
+    const dir = join(root, "apps/web-platform/server/inngest/functions");
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, "cron-fable.ts");
+    writeFileSync(
+      file,
+      `export const A = "claude-fable-5";\n` +
+        `export const B = "claude-fable-5-1";\n` +
+        `export const C = "claude-fable-5-2";\n` +
+        `export const D = "claude-fable-5-1-20261101";\n`,
+    );
+    expect(run(["--detect"], root).status).toBe(10);
+    expect(run(["--fix"], root).status).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(
+      `export const A = "claude-fable-5-2";\n` +
+        `export const B = "claude-fable-5-2";\n` +
+        `export const C = "claude-fable-5-2";\n` +
+        `export const D = "claude-fable-5-1-20261101";\n`,
+    );
+    expect(run(["--detect"], root).status).toBe(0);
+    rmSync(root, { recursive: true, force: true });
   });
 });
