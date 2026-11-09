@@ -1,0 +1,24 @@
+[Unit]
+Description=Report the running kernel to the host log (SOLEUR_HOST_KERNEL, #12007)
+Documentation=https://github.com/jikig-ai/soleur/issues/12007
+
+[Service]
+Type=oneshot
+# SyslogIdentifier retags the unit's stdout away from the ExecStart basename `bash` to the identifier
+# vector.toml Source 4 (host_scripts_journald) allowlists, so the one marker line reaches Better Stack off-box
+# (hr-no-ssh-fallback-in-runbooks). Mirrored in vector.toml; the AC3 derived-tag test in vector-pii-scrub.test.sh
+# derives this literal and reds if the allowlist entry and this line drift apart.
+SyslogIdentifier=host-kernel-marker
+# The collector reads uname, /proc/uptime, the reboot-required marker and the LOCAL apt lists; it needs no credential
+# and no EnvironmentFile. It exits 0 on every measurement failure (the failure is a token value in the line).
+TimeoutStartSec=60
+Nice=10
+# Background work: the simulated apt upgrade must never compete with the workload on the host. A MemoryMax OOM kill of apt must degrade
+# sec_updates to `unknown`, not stop the unit before the line prints: systemd's default OOMPolicy (stop) would tear the whole unit down on
+# the first kill in the cgroup, and the collector's contract is a printed line with token values, never a non-zero exit.
+# OOMPolicy=continue keeps the unit running so the collector prints its row. It does not take the host down either way.
+OOMPolicy=continue
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+MemoryMax=256M
+ExecStart=/usr/local/bin/host-kernel-marker.sh --role web

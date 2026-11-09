@@ -70,6 +70,8 @@ apps/web-platform/infra/git-data-wipe-access.test.sh	128500	measured
 apps/web-platform/infra/git-data-wipe-assert.test.sh	263000	measured
 apps/web-platform/infra/git-data-wipe.test.sh	46500	measured
 apps/web-platform/infra/git-lock-chardevice-sweep.test.sh	500	measured
+apps/web-platform/infra/host-kernel-marker-delivery.test.sh	6000	floor
+apps/web-platform/infra/host-kernel-marker.test.sh	6000	floor
 apps/web-platform/infra/htpasswd-stdin.test.sh	18000	measured
 apps/web-platform/infra/infra-config-apply.test.sh	40500	measured
 apps/web-platform/infra/infra-config-gate.test.sh	23000	measured

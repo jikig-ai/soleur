@@ -953,10 +953,12 @@ match; the listing's `url` attribute is deliberately not selected):
 
 ```bash
 set -uo pipefail
-: "${TARGET:?set TARGET=luks-monitor-host-timer or claude-cost-capture}"
+: "${TARGET:?set TARGET=luks-monitor-host-timer, claude-cost-capture or host-kernel-<web-1|web-2|inngest|registry>}"
 case "$TARGET" in
   luks-monitor-host-timer) HB_NAME=soleur-luks-monitor-host-timer-prd; INCIDENT=1023423999; ISSUE=11048 ;;
   claude-cost-capture)     HB_NAME=soleur-claude-cost-capture-prd;     INCIDENT=1020832712; ISSUE=11049 ;;
+  host-kernel-web-1|host-kernel-web-2|host-kernel-inngest|host-kernel-registry)
+                           HB_NAME="soleur-${TARGET}-prd";             INCIDENT=none;       ISSUE=12386 ;;
   *) echo "unknown target" >&2; exit 64 ;;
 esac
 WORKFLOW=scheduled-deadman-heartbeat-feeder.yml
@@ -1141,3 +1143,62 @@ incident mirror (`scheduled-betterstack-incident-mirror.yml`, ADR-298) comments 
 (`gh issue view <ISSUE> --json state`, with `<ISSUE>` 11048 for luks or 11049 for cost).
 
 <!-- lint-infra-ignore end -->
+
+### Host-kernel heartbeats (#12007, tracked in #12386)
+
+Four more dead-man heartbeats ship born paused, one per host that reports the periodic kernel marker
+`SOLEUR_HOST_KERNEL v=1` (how the marker is read: the "Querying `SOLEUR_HOST_KERNEL`" section of
+`betterstack-log-query.md`):
+
+| Feeder target | Heartbeat |
+|---|---|
+| `host-kernel-web-1` | `soleur-host-kernel-web-1-prd` |
+| `host-kernel-web-2` | `soleur-host-kernel-web-2-prd` |
+| `host-kernel-inngest` | `soleur-host-kernel-inngest-prd` |
+| `host-kernel-registry` | `soleur-host-kernel-registry-prd` |
+
+Each is period 3600, grace 7200, fed only while that host's own valid row exists inside a literal 36 hour window, so a dark host
+pages after about 40 hours at worst. The helpers block above accepts these four targets (`INCIDENT=none`: there is no retired
+logs alert behind them, so the incident GET in step 2 and the whole of step 5 do not apply to them). Everything in this section is
+an operator-reserved hold tracked in #12386: nothing here is run by an agent, and each production write needs the owner to
+authorize that exact command, as above.
+
+**Two-stage arming order.** Arming is staged so no step waits on itself, and each stage is ONE batched change, not one per host.
+
+1. **Stage 1 (loop membership while still paused).** After the owner's rollout shows a first qualifying row for a host, a small
+   change adds that host's target name to the loop in `scheduled-deadman-heartbeat-feeder.yml` while its heartbeat is still
+   paused. The feeder then reports `verdict=qualifying_row_heartbeat_paused` for it (healthy, no paging surface), and nothing goes
+   red. Until this stage the four names stay out of the loop on purpose, so the feeder does not file an hourly error check-in for a
+   deliberate interim.
+2. **Stage 2 (arm).** After TWO consecutive `qualifying_row_heartbeat_paused` runs for a target (step 1 above, per target), the
+   owner arms each heartbeat with steps 2 to 4 above (`TARGET=host-kernel-<role>`), and the `feeder` rows for the four targets in
+   `plugins/soleur/lib/heartbeat-manifest.ts` flip from `kind: "none"` to the cron form in one batched change.
+
+**Delivery matrix (the single source for how the marker reaches each host class).** The ADR-322 addendum, the C4 prose and
+the query runbook refer to this table and do not restate it. Every row is held (#12386); the nearest thing to a delivery event
+is named in the Precondition column.
+
+| Host class | Carrier | Precondition | Expected drift until delivered |
+|---|---|---|---|
+| web-1 (running) | `terraform_data.host_kernel_marker_install` (SSH provisioner over the tunnel) | the owner releases the hold by editing the SSH-stage `-target` list and both exclusion sets (`EXCLUSION_ALLOWLIST`, `OPERATOR_APPLIED_EXCLUSIONS`), then applying; no dispatch mode targets the installers (`server.tf` and `terraform-target-parity.test.ts` say so) | a standing create on the twice-daily plan |
+| web-2 (running) | `terraform_data.host_kernel_marker_install_web2` (same forward through the web-1 bastion as the other web-2 twins) | the same release as web-1 | a standing create on the twice-daily plan |
+| a freshly born web host | cloud-init bake of the collector and the timer | none: it ships with the image the host is born from | none |
+| inngest host | the emitter embedded in `inngest-bootstrap.sh`, delivered ONLY through the digest-pinned bootstrap OCI image | a new bootstrap tag is minted and the pin is bumped. A replaced host boots with whatever the pin names, and a routine bootstrap-version bump re-runs the bootstrap on the RUNNING host and installs the emitter too, so the pin bump itself is the delivery event | none until the pin moves; the pin bump then shows as its own change |
+| registry host | the registry emitter is not in the change that introduces the marker: it is a separate follow-up PR (6-hourly stamp-gated block in `zot-disk-heartbeat.sh`, baked through `cloud-init-registry.yml`) | its merge auto-fires `registry-host-replace-dispatch.yml` (ADR-190) and replaces the production registry host (the sole pull path, no rollback if the create fails): merge only with the owner's explicit go-ahead; do not merge ahead of the owner (verify target-type stock first) | none from the marker change (the registry user_data is unchanged, so the dispatcher emits deliver=false); the follow-up PR's merge IS the delivery event |
+| git-data host, grok-dogfood host | none | git-data is tracked in #12385; grok-dogfood is a census exemption (default off, no shipper) | none; both read `unknown` by design |
+
+Until a host class above is delivered, the marker for it does not exist and the host reads `unknown`; that is the honest
+state and not a fault. For the inngest host, #12386 must say that the pin bump is the delivery event, so nobody bumps the pin
+for another reason and installs the emitter by accident.
+
+**Replacing the inngest or registry host.** A planned replace of either host takes its emitter dark for up to the 36 hour window
+(the collector only runs again after the replacement boots and its first timer or post fires). Pause that host's heartbeat BEFORE
+the window opens and arm it again after the first row from the new host is visible, so the replace does not page. Web hosts need no
+replace for the marker, so this does not apply to them. Scheduling a replace is the owner's call, tracked in #12386.
+
+**`unknown` in the skill output is the expected rollout state.** Until a host has been delivered and has produced its first valid
+row, the `soleur:cve-exposure` host-state output prints `unknown` for it. For the registry and the inngest host that is the
+long-lived state, because each is delivered by the carrier in the delivery matrix above (the separate registry-emitter PR, or a bootstrap pin
+bump for the inngest host), not by being replaced for an unrelated reason. It is the honest answer and
+not a bug; a host that reads `unknown` is never read as clean. The git-data host (#12385) and the default-off grok-dogfood host
+have no heartbeat here and read `unknown` by design.

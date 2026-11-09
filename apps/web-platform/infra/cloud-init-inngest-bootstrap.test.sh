@@ -1794,8 +1794,9 @@ assert "GuardD dispatch: the operator count is a positive integer (got '$GD_ALL_
 assert "GuardD dispatch: every heredoc operator parsed (parsed $GD_ALL of $GD_ALL_PERMISSIVE)" \
   "(( GD_ALL == GD_ALL_PERMISSIVE ))"
 # #5150: two quoted heredocs (RETENTIONUNITEOF, RETENTIONTIMEREOF) raised the inventory 11 -> 13.
+# #12007: three quoted heredocs (HKMSCRIPTEOF, HKMUNITEOF, HKMTIMEREOF: the byte-copied SOLEUR_HOST_KERNEL collector and its inngest unit pair) raised it 13 -> 16.
 assert "GuardD dispatch: the heredoc scan found the full inventory (found $GD_ALL)" \
-  "(( GD_ALL == 13 ))"
+  "(( GD_ALL == 16 ))"
 # Rows 1-3: the unquoted set. Row 2 (an unquoted delimiter AFTER several compliant ones) is
 # why this counts every match rather than inspecting the first.
 # Unquoted == the delimiter carries neither ' nor ". Derived from the SAME scan as the
