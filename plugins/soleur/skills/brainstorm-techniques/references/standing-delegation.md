@@ -448,7 +448,7 @@ Credentials. A credential is used only inside a repo wrapper (`doppler run` is a
 
 Class R expressly excludes: dispatching any workflow (including a `mode=plan` run), merging, arming auto-merge, marking a pull request ready, and any production write.
 
-These hard limits are unchanged: never write the owner's hand-typed markers; every production write needs an in-session per-command owner go naming the command; no agent dispatches `key-rotate.yml` or `inngest-key-rotate.yml` without a typed go naming the exact command; signing records and extensions, closing a tracker, arming pull requests, the GitHub App webhook-secret PATCH and Doppler credential minting stay owner-only; a menu click is not a go. An `Operator-authorizes:` hold names the act that in-session go covers: the operator types a go naming the exact command and the agent then runs it.
+These hard limits are unchanged: never write the owner's hand-typed markers; every production write needs an in-session per-command owner go naming the command; no agent dispatches `key-rotate.yml` or `inngest-key-rotate.yml` without a fresh, per-command, in-session owner go naming the exact full command (the `key-rotate-approval` reviewer click is never delegated); signing records and extensions, closing a tracker, arming pull requests, the GitHub App webhook-secret PATCH and Doppler credential minting stay owner-only; a menu click is not a go. An `Operator-authorizes:` hold names the act that in-session go covers: the operator types a go naming the exact command and the agent then runs it.
 
 A key-rotation workflow is never a Scope item of a delegation (policy; `delegation-verify.sh` does not yet refuse it, so the CTO never writes one).
 
