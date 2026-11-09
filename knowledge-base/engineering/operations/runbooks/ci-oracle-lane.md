@@ -188,6 +188,9 @@ unconditional fetch, wired from `PR_BASE_REF: ${{ github.event.pull_request.base
 step env. One deliberate ordering difference, per each driver's own doctrine: the oracle resolves the base
 after its pre-classification switch gate; the selector resolves it after the cheap env gates (event, merge
 shape, fork, re-run) and before the listing, because its stage 1 runs on every well-formed `pull_request` run.
+A second deliberate divergence, same T5 doctrine: the selector's base fetch is wrapped in `timeout 30`
+(`GUARD:G2-BASE-FETCH`) while the oracle's fetch stays unguarded — a bound considered for back-port as a
+follow-up.
 
 After ANY edit
 to the driver, the manifest, the leg `if:` conjuncts, the aggregator arm or the push-dedupe proof:

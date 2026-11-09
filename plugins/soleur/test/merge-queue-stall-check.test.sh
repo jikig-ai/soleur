@@ -1885,8 +1885,10 @@ mutate_lit "C45 no-match reads as age 0 (an old head with NO run is seen as a yo
   'if length == 0 then -1 else' 'if length == 0 then 0 else'
 mutate_lit "C46 newest-run max -> oldest-run min (a build retried 10m ago files) -> RED" causerow 'L30 \(f\)' \
   '$now - max' '$now - min'
-# (no C47: dropping the try/catch guard can only ever produce a jq: error crash signature — UNRESOLVED,
-#  never a kill — and L30 (g) already pins the behaviour: a malformed created_at must be dropped, not fatal)
+# (no C47: dropping the try/catch IS a kill, not an UNRESOLVED — an unguarded fromdateiso8601 aborts
+#  the jq, mg_age_s comes back unparseable, the ::warning:: path leaves BUILD_YOUNG=0 and the entry
+#  files; but L30 (g)'s malformed-created_at fixture already drives exactly that mutant red, so a C47
+#  row would re-assert a kill the fixture row already scores rather than add discriminating coverage)
 mutate_lit "C48 the veto flag is never set (BUILD_YOUNG=1 -> =0: a young build still files) -> RED" causerow 'L30 \(a\)' \
   'BUILD_YOUNG=1' 'BUILD_YOUNG=0'
 

@@ -385,6 +385,13 @@ export function buildAgentEnv(
     // leak). Set AFTER the allowlist loop above so it beats an ambient
     // `process.env.TMPDIR` copy; TMPDIR was already allowlisted, and the
     // sandbox binds `/tmp/.cs` writable for exactly this path.
+    // Scope caveat: the injected path is authoritative ONLY on the direct
+    // spawn path. On the flag-gated outer-wrap arm, `agent-outer-wrap.ts:458`
+    // re-pins `TMPDIR=/tmp` over this built env (the session tmpfs the wrap
+    // itself provisions), and inside the inner sandbox `/tmp/.cs` is an
+    // ephemeral tmpfs mask — so this value never reaches the sandboxed
+    // child's /tmp tree on that arm.
+    // Callsite contract: the tenant dir exists because the Claude Code CLI creates CLAUDE_CODE_TMPDIR before spawning — an unsandboxed consumer in the window before creation gets ENOENT (loud, safe direction).
     env.TMPDIR = opts.claudeTmpDir;
   }
 

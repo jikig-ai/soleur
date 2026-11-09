@@ -643,7 +643,7 @@ if [[ "$MIRROR_ONLY" != "true" && "$SIGNED_TAG" == "$TARGET" && "$MIRROR_STATUS"
       # rebuilds every in-flight entry. Every failure here warns and continues:
       # armed auto-merge remains the fallback, strictly better than the
       # pre-#12508 no-enqueue path.
-      pr_node=$(gh pr view "$PR_NUM" --repo "$REPO" --json id 2>/dev/null \
+      pr_node=$(timeout 60 gh pr view "$PR_NUM" --repo "$REPO" --json id 2>/dev/null \
         | jq -r '.id // ""' 2>/dev/null || true)
       if [[ -z "$pr_node" ]]; then
         echo "::warning::could not resolve PR ${PR_NUM}'s GraphQL node id — explicit merge-queue enqueue skipped; armed auto-merge remains"

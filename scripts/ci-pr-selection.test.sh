@@ -1190,7 +1190,7 @@ row_nonascii() {  # a byte outside printable ASCII (U+2028, a C1 control, a UTF-
   drive nbad "$d" "LC_ALL=C.UTF-8"
   expect_full "NON-ASCII an invalid UTF-8 byte (0xff) under a UTF-8 caller locale (LC_ALL pinned to C)" odd_path 0
 }
-row_advanced_base() {  # main moved on after the branch point: the diff is HEAD^1..HEAD (the PR's OWN paths), not HEAD^1..HEAD^2
+row_advanced_base() {  # main moved on after the branch point: the diff is merge-base(HEAD^2, live base)..HEAD^2 (the PR's OWN paths) — the three-dot base sits BEHIND the merge ref's frozen HEAD^1 here (#12484)
   local d="$1"
   drive adv "$d"
   check_eq "ADV-BASE a doc-only PR on an advanced base reaches stage 2" "$N_REASON" "affected"
@@ -1682,7 +1682,11 @@ fi
 # adding or removing a row:
 #   bash scripts/ci-pr-selection.test.sh | tail -1     then   BASE_ROWS = total - ROWS_PER_SOURCED_FILE * sourced_count
 ROWS_PER_SOURCED_FILE=19
-BASE_ROWS=4629  # re-derived 2026-11-09 (#12484): the row_stale_base control + the six three-dot mutants
+# BASE_ROWS = measured TOTAL - ROWS_PER_SOURCED_FILE * ${#SOURCED[@]} AT RUN TIME.
+# The 2026-11-09 (#12484) re-derivation subtracted 19*7 — the STALE sourced count
+# from the comment above — off a 9-source run (4762 total), producing 4629 and a
+# floor (4800) no run could reach. Re-derived correctly: 4762 - 19*9 = 4591.
+BASE_ROWS=4591  # re-derived 2026-11-09 (#12484): the row_stale_base control + the six three-dot mutants
 MIN_ROWS=$((BASE_ROWS + ROWS_PER_SOURCED_FILE * ${#SOURCED[@]}))
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \

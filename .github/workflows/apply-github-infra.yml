@@ -94,6 +94,10 @@ jobs:
           # (#12501). event.commits caps at 20 entries — a token older than
           # the window in a giant coalesced push still misses (fail-open for
           # the skip), a documented residual, not engineered around.
+          # Widened attribution: ANY commit in a coalesced push can supply
+          # `[ack-destroy]`/`[skip-*]` to release or veto the batch — the same
+          # trust class (land-on-main actors) as the head_commit read, widened
+          # in scope within the push.
           POLICY_MSGS="$HEAD_MSG"
           more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
           [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"
@@ -350,6 +354,10 @@ jobs:
           # (#12501). event.commits caps at 20 entries — an older token still
           # misses (fail-closed for the ack), a documented residual, not
           # engineered around.
+          # Widened attribution: ANY commit in a coalesced push can supply
+          # `[ack-destroy]`/`[skip-*]` to release or veto the batch — the same
+          # trust class (land-on-main actors) as the head_commit read, widened
+          # in scope within the push.
           POLICY_MSGS="$HEAD_MSG"
           more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
           [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && POLICY_MSGS="${POLICY_MSGS}"$'\n'"${more_msgs}"

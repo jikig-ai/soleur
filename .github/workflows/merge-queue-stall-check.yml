@@ -409,7 +409,7 @@ jobs:
               [ .[] | select((.head_sha // "") == $oid) | (try (.created_at | fromdateiso8601) catch empty) ]
               | if length == 0 then -1 else (($now - max) | floor) end' <<<"$MG_LIST" 2>/dev/null)" || true
             if [[ "$mg_age_s" == "-1" ]]; then
-              echo "::notice::merge-queue-stall: PR #${pr}: no merge_group run carries the entry's headCommit.oid — an old head with no build at all; the enqueuedAt verdict stands."
+              echo "::notice::merge-queue-stall: PR #${pr}: no merge_group run carries the entry's headCommit.oid, or none with a parseable created_at — an old head with no build at all; the enqueuedAt verdict stands."
             elif [[ "$mg_age_s" =~ ^-?[0-9]+$ ]]; then
               if [[ "$mg_age_s" -lt "${threshold_s:-$(( ${STALL_THRESHOLD_MINUTES:-45} * 60 ))}" ]]; then
                 BUILD_YOUNG=1

@@ -481,4 +481,37 @@ describe("buildAgentEnv", () => {
       }
     });
   });
+
+  // --- claudeTmpDir / TMPDIR injection (#11764) ------------------------------
+  // Direct unit pin of the injection itself (not a mirroring mock): TMPDIR is
+  // the lever every descendant mktemp reads, so opts.claudeTmpDir must land on
+  // BOTH CLAUDE_CODE_TMPDIR and TMPDIR, and the per-dispatch value must beat
+  // the ambient allowlist copy (TMPDIR is in AGENT_ENV_ALLOWLIST).
+  describe("claudeTmpDir injection (#11764)", () => {
+    test("sets CLAUDE_CODE_TMPDIR and re-pins TMPDIR to the per-tenant dir", () => {
+      const env = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { claudeTmpDir: "/x" },
+      );
+      expect(env.CLAUDE_CODE_TMPDIR).toBe("/x");
+      expect(env.TMPDIR).toBe("/x");
+    });
+
+    test("claudeTmpDir beats an ambient process.env.TMPDIR (the allowlist copy loses)", () => {
+      vi.stubEnv("TMPDIR", "/ambient-shared-tmp");
+      const env = buildAgentEnv(
+        { value: "sk-ant-test", scheme: "api_key" },
+        undefined,
+        { claudeTmpDir: "/x" },
+      );
+      expect(env.TMPDIR).toBe("/x");
+    });
+
+    test("absent claudeTmpDir forwards the ambient TMPDIR unchanged (backward compatible)", () => {
+      const env = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+      expect(env.TMPDIR).toBe("test-tmpdir"); // the beforeEach ambient value
+      expect(env).not.toHaveProperty("CLAUDE_CODE_TMPDIR");
+    });
+  });
 });

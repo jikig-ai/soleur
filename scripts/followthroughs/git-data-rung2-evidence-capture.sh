@@ -425,8 +425,10 @@ _sentry_consult() {
   # stream" discipline the reader itself applies, violated in its consumer.
   #
   # Owning RETURN trap (ADR-129, #11764): the adjacent `rm -f` below covers the happy path,
-  # but a signal or an errexit between allocation and removal leaves `rung2-*.err` residue —
-  # the class measured at /tmp scale. The handler SELF-DISARMS first (`trap - RETURN`): a
+  # but the early `return` paths between allocation and removal (the case arms below) leave
+  # `rung2-*.err` residue — the class measured at /tmp scale. A RETURN trap fires on function
+  # return ONLY: a signal or an errexit abort does NOT trigger it, so that residue class is
+  # unchanged by this handler. The handler SELF-DISARMS first (`trap - RETURN`): a
   # RETURN trap is not scoped to the function that set it, so a live copy would fire at
   # every later return under possibly-reassigned names. The `/*/rung2-*.*.err` shape pins
   # are load-bearing — they anchor each `rm -f` to a name this function just allocated.

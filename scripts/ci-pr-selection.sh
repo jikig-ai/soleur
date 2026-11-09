@@ -341,7 +341,11 @@ run() {
   reason=bad_base_ref
   [[ "${PR_BASE_REF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 0  # GUARD:G2-BASE-REF
   reason=base_fetch
-  git fetch --no-tags --quiet origin "refs/heads/$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:G2-BASE-FETCH
+  # Bounded: an unwrapped fetch can stall on the network until the step's
+  # timeout-minutes kills the whole job — the step dies without the notice or
+  # the named reason. `timeout 30` (rc 124) lands on the same `|| return 0` as
+  # any other fetch failure: base_fetch, fail-open full battery.
+  timeout 30 git fetch --no-tags --quiet origin "refs/heads/$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:G2-BASE-FETCH
   reason=no_merge_base
   diff_base="$(git merge-base HEAD^2 FETCH_HEAD 2>/dev/null)" || return 0  # GUARD:G2-NO-MERGE-BASE
   [ -n "$diff_base" ] || return 0  # belt: merge-base's rc on no-ancestor varies by git version; unreachable today

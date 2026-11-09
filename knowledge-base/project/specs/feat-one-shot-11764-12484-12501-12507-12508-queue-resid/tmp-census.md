@@ -68,7 +68,7 @@ The `none`/`rm-only` buckets are dominated by `.md`, `.fixture`, `.service`,
 | `.claude/hooks/pre-merge-auto-close-scan.sh` | already-owned — `trap 'rm -f "$SCAN_FILE" "${GH_ERR:-}"' EXIT INT TERM` |
 | `.claude/hooks/ship-kb-archive-gate.sh` | already-owned — `trap 'rm -f "$_census_f"' EXIT` |
 | `.claude/hooks/ship-operator-step-gate.sh` | already-owned — `trap 'rm -f "$PR_BODY_FILE"' EXIT INT TERM` |
-| `.claude/hooks/memory-backstop-mutation-battery.sh` | **repo-fixed** — `HOPFX` synthetic /proc fixture added to the `cleanup` EXIT trap (shape-pinned `/*/hopfx.*`); previously only two explicit exit paths removed it |
+| `.claude/hooks/memory-backstop-mutation-battery.sh` | **repo-fixed** — `HOPFX` synthetic /proc fixture added to the `cleanup` EXIT trap (variable-bound `rm -rf "$HOPFX"` re-registered at the allocation site — the `/*/name.*` shape-pin is the rung2 edit above, a different file); previously only two explicit exit paths removed it |
 | `.claude/hooks/ship-soak-followthrough-gate.sh` | **repo-fixed** — `_plan_stripped` added to BOTH `rm -f` trap registrations (allocated between them; the signal window between allocation and re-registration was the strand) |
 | `.claude/hooks/skill-security-scan-write.sh` | already-owned — `sss-write.$$.err` `rm -f`'d on both branches; SIGKILL residue covered by run-scan.sh's family sweep |
 

@@ -237,7 +237,7 @@ error_reporting:
 failure_modes:
   - mode: base-ref fetch or merge-base resolution fails in ci-pr-selection
     detection: named fail-closed `reason=` output (base_fetch / no_merge_base / bad_base_ref)
-    alert_route: job continues fail-open per existing continue-on-error design; telemetry in step output
+    alert_route: job continues fail-open per existing continue-on-error design; `SOLEUR_PR_SELECTION` ::notice + workflow run log (layer 6)
   - mode: combined-message read returns empty/null
     detection: `more_msgs` empty → POLICY_MSGS falls back to HEAD_MSG (today's behavior)
     alert_route: none needed — same as today
