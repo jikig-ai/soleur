@@ -964,6 +964,99 @@ else
   fail "first run alarmed on state loss it cannot have suffered: $(cat "$TESTROOT/lost.alarm")"
 fi
 
+# --- Arm 30: the .cs owned-base age arm (#11764) ------------------------------
+# The spawned-agent CLI temp root is REPO-OWNED, so ADR-250's shared-/tmp
+# heuristic-reap rejection does not apply: age alone is the reclaim dimension
+# there (48h floor), gated by the same liveness + recursive-freshness
+# machinery Reaper 2 uses. These arms pin both directions — aged entries ARE
+# reclaimed, fresh/live/non-.cs work is NOT.
+#
+# The driver mirrors main()'s real call order: reap_scratch_entries builds
+# the shared _INUSE_TOP map first, then the .cs arm consumes it.
+reap_cs() { guard_env "$@" bash -c "source '$GUARD'; reap_scratch_entries 0; reap_owned_cs_base" 2>&1 || true; }
+mk_cs() { # path-under-.cs, age_min — a tenant dir holding one file, or a loose file
+  local p="$FAKE_TMP/.cs/$1" age="$2"
+  mkdir -p "$p"
+  printf 'x' > "$p/blob"
+  find "$p" -exec touch -d "-${age} minutes" {} + 2>/dev/null || true
+  touch -d "-${age} minutes" "$p"
+}
+
+# (a) aged reaped: a stale tenant dir AND a stale loose file under .cs.
+reset_fixtures
+mk_cs "deadbeefdeadbeef" 120
+mkdir -p "$FAKE_TMP/.cs"; printf 'e' > "$FAKE_TMP/.cs/stray.err"; touch -d "-120 minutes" "$FAKE_TMP/.cs/stray.err"
+out="$(reap_cs env TMPFS_GUARD_CS_AGE_MIN=60)"
+cases=$((cases + 1))
+if [[ ! -e "$FAKE_TMP/.cs/deadbeefdeadbeef" && ! -e "$FAKE_TMP/.cs/stray.err" ]]; then
+  pass "cs-arm: aged tenant dir AND aged loose file under .cs are reaped"
+else
+  fail "cs-arm: aged .cs residue survived; got: $out"
+fi
+
+# (b) fresh kept: a tenant dir whose tree holds a FRESH file is not
+# "fully-stale", and a fresh loose file is not aged. Both must survive.
+reset_fixtures
+mk_cs "livebeeflivebeef" 120
+touch "$FAKE_TMP/.cs/livebeeflivebeef/blob"   # nested fresh write the dir mtime cannot see
+mkdir -p "$FAKE_TMP/.cs"; printf 'e' > "$FAKE_TMP/.cs/recent.err"
+out="$(reap_cs env TMPFS_GUARD_CS_AGE_MIN=60)"
+cases=$((cases + 1))
+if [[ -e "$FAKE_TMP/.cs/livebeeflivebeef" && -e "$FAKE_TMP/.cs/recent.err" ]]; then
+  pass "cs-arm: a tenant dir with fresh content and a fresh loose file are KEPT"
+else
+  fail "cs-arm: reaped fresh work under .cs — the fully-stale or age gate is missing; got: $out"
+fi
+
+# (c) non-.cs untouched: a stale entry at the SAME level as .cs is outside the
+# arm's scope — this is the direction that pins the base boundary.
+reset_fixtures
+mk_cs "deadbeefdeadbeef" 120
+mkdir -p "$FAKE_TMP/notcs"; printf 'x' > "$FAKE_TMP/notcs/blob"; find "$FAKE_TMP/notcs" -exec touch -d "-120 minutes" {} + 2>/dev/null || true; touch -d "-120 minutes" "$FAKE_TMP/notcs"
+out="$(reap_cs env TMPFS_GUARD_CS_AGE_MIN=60)"
+cases=$((cases + 1))
+if [[ -e "$FAKE_TMP/notcs" && ! -e "$FAKE_TMP/.cs/deadbeefdeadbeef" ]]; then
+  pass "cs-arm: a stale sibling OUTSIDE .cs is untouched while .cs residue reaps"
+else
+  fail "cs-arm: base boundary broken — notcs=$(test -e "$FAKE_TMP/notcs" && echo kept || echo reaped); got: $out"
+fi
+
+# (d) a live handle inside a tenant dir keeps it — the shared _INUSE_TOP map
+# must mark $CS_BASE/<tenant>, which only works because _GUARD_BASES carries
+# the .cs base as a second-level key source.
+reset_fixtures
+mk_cs "busybeefbusybeef" 120
+mkdir -p "$FAKE_PROC/4343"
+ln -sfn "$FAKE_TMP/.cs/busybeefbusybeef" "$FAKE_PROC/4343/cwd"
+out="$(reap_cs env TMPFS_GUARD_CS_AGE_MIN=60)"
+cases=$((cases + 1))
+if [[ -e "$FAKE_TMP/.cs/busybeefbusybeef" ]]; then
+  pass "cs-arm: a tenant dir a live process sits in is NOT reaped"
+else
+  fail "cs-arm: reaped a live tenant dir — the second-level in-use key is missing; got: $out"
+fi
+# MUTATION CONTROL: with the handle gone the same dir IS reaped.
+rm -rf "$FAKE_PROC/4343"
+out="$(reap_cs env TMPFS_GUARD_CS_AGE_MIN=60)"
+cases=$((cases + 1))
+if [[ ! -e "$FAKE_TMP/.cs/busybeefbusybeef" ]]; then
+  pass "cs-arm: the same tenant dir IS reaped once no process cwd points into it"
+else
+  fail "cs-arm: liveness never releases; got: $out"
+fi
+
+# (e) fail-closed: with no liveness map built the arm reaps NOTHING. A guard
+# that "couldn't look" must never read "nothing is live" as "reap everything".
+reset_fixtures
+mk_cs "deadbeefdeadbeef" 120
+out="$(guard_env env TMPFS_GUARD_CS_AGE_MIN=60 bash -c "source '$GUARD'; reap_owned_cs_base" 2>&1 || true)"
+cases=$((cases + 1))
+if [[ -e "$FAKE_TMP/.cs/deadbeefdeadbeef" ]]; then
+  pass "cs-arm: an unbuilt liveness map skips the whole arm (fail closed)"
+else
+  fail "cs-arm: reaped without a liveness map — 'couldn't look' read as 'nothing live'; got: $out"
+fi
+
 
 # --- Minimum-cardinality guard ---------------------------------------------
 # Reads `cases`, NOT `pass_n`. Gating on the pass count conflates two unrelated

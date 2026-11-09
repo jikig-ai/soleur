@@ -49,6 +49,18 @@ case "${INCIDENTS_REPO_ROOT:-}" in
        }
        export INCIDENTS_REPO_ROOT="$_soleur_sb"
        export SOLEUR_TEST_INCIDENT_ROOT="$_soleur_sb"
+       # TMPDIR-at-owned-sandbox (#11764): route every descendant `mktemp` —
+       # suite fixture roots, hook subprocesses, tool scratch — INSIDE the
+       # owned dir the composed trap below already `rm -rf`s, so residue is
+       # reclaimed even when a suite's own traps do not run. A test harness is
+       # the one caller scratch-root.sh names as the correct exporter of
+       # TMPDIR ("correct for a test harness…"), and test-all.sh's
+       # `soleur_scratch_session_begin` already does the same for runner-led
+       # suites — this arm is the directly-invoked-suite counterpart. In the
+       # inherited-root arms above the outer root (or the session root) already
+       # governs TMPDIR, so this export is scoped to the arm that minted the
+       # sandbox.
+       export TMPDIR="$_soleur_sb"
        # Marker-at-creation (#9117): declare an owner the reapers can verify BEFORE anything can go
        # wrong. A suite that installs its own EXIT trap after sourcing this file replaces the one
        # composed below (33 did at measurement, swept by #8659 to trap-before-source or an explicit

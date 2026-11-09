@@ -387,6 +387,13 @@ case "$HOPFX" in
   *) printf 'battery: refusing a non-absolute fixture root %q (TMPDIR=%q)\n' "$HOPFX" "${TMPDIR-}" >&2
      exit 2 ;;
 esac
+# Reap HOPFX on EVERY exit path (#11764): its only `rm -rf`s sat on two explicit
+# paths below, so a signal or an early `exit 2` between here and there leaked the
+# synthetic /proc fixture. ADR-129 keeps ONE trap — the same `cleanup` handler is
+# re-registered with the rm appended rather than a second trap; the operand
+# resolves against the mktemp binding two lines up, and the registration sits
+# after it precisely so no ordering can leave it out of the body.
+trap 'cleanup; rm -rf "$HOPFX"' EXIT INT TERM HUP
 mkdir -p "$HOPFX/proc/100"
 printf 'Name:\tinit\nPid:\t100\nPPid:\t0\n' > "$HOPFX/proc/100/status"
 for i in $(seq 1 10); do
