@@ -3,7 +3,7 @@
 ## Plan Phase
 - Plan file: /data/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-9729-s4-retire/knowledge-base/project/plans/2026-11-09-ci-s4-stage-retirement-plan.md
 - Status: complete
-- cto_spawns=0 (planning); binding retire ruling already recorded on #9729 comment 6751457876 before pipeline start
+- cto_spawns=1 (technical-ruling gate, batched 4 rows); binding retire ruling already recorded on #9729 comment 6751457876 before pipeline start
 
 ### Errors
 - Plan subagent could not `git commit` (worktree-commit guard false positive on bare-root CWD); parent committed staged artifacts at f327453de5.

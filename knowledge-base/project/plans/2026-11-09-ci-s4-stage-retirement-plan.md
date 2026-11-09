@@ -29,7 +29,7 @@ refs: [9729, 10414, 10415, 10949]
 ### New considerations discovered
 
 - `plugins/soleur/scripts/lint-ratchet.py` is shared machinery (ADR-290; lefthook, `ruff.toml`, `tests/scripts/test_lint_ratchet.py`, `apps/web-platform/eslint.test-dirs.config.mjs`, C4 `model.c4:198`) — it sits in `RATCHET_ORACLE` but is NOT S4-scoped; the plan keeps it in both the re-scoped oracle surface and the lane exclusion list.
-- Two census-found issues the brief did not name are also retirement-scope: #12155 (ratchet-verdict drift gate) and #12456 (replay collect patch) — dispositioned `pending - assumed: not planned` in `decision-challenges.md` for ship-phase confirmation.
+- Two census-found issues the brief did not name are also retirement-scope: #12155 (ratchet-verdict drift gate) and #12456 (replay collect patch) — operator authorized 2026-11-09 to close *not planned* alongside the named set.
 - `scripts/ci-pr-affected-audit.baseline.tsv` and `scripts/followthroughs/ratchet-observation-window-10865.sh` are already gone (PR5z and an earlier retirement) — the deletion list and #10949 disposition reflect reality, not the brief's snapshot.
 
 ## Overview
@@ -117,7 +117,7 @@ Ordering inside the diff is semantic (one commit), but the *edit order* below is
 
 ### Phase 1 — Re-scope the oracle sentinel off `replay.py` (blocks everything)
 
-1. Create `scripts/ci-oracle-surface.txt` — one path per line, the new canonical oracle-surface list. Membership (pending-assumed ruling, see `decision-challenges.md`): `RATCHET_ORACLE` minus retired files, plus the lane's own machinery files already treated as oracle-grade — concretely:
+1. Create `scripts/ci-oracle-surface.txt` — one path per line, the new canonical oracle-surface list. Membership (ruled by CTO agent, 2026-11-09 — exactly this 11-member set): `RATCHET_ORACLE` minus retired files, plus the lane's own machinery files already treated as oracle-grade — concretely:
    ```
    .github/workflows/ci.yml
    plugins/soleur/scripts/lint-ratchet.py
@@ -132,7 +132,7 @@ Ordering inside the diff is semantic (one commit), but the *edit order* below is
    scripts/ci-oracle-surface.txt            # self-member: editing the list requires owner review
    ```
    Rationale: identical coverage of every kept file the sentinel already guards; adds `ci-oracle-lane-legs.tsv` (a lane member a hostile diff could otherwise edit unreviewed — it was in `is_excluded_path` but NOT in `RATCHET_ORACLE`, a pre-existing gap this re-scope closes) and the list file itself.
-2. `scripts/ci-oracle-review.sh` — replace the `ORACLE_REPLAY`/importlib extraction (`:59`, `:158-178`) with a base-sourced read chain: `git show "$base:scripts/ci-oracle-surface.txt"` → if absent (transition bases, including THIS PR's base), fall back to the legacy `git show "$base:scripts/ci-pr-affected-replay.py"` importlib arm verbatim → if both absent, the HEAD copy of the surface file is the last resort, mirroring the existing "pre-PR3b base runs the HEAD copy" convention. Update the header contract (`:4-13`) to name the new list. Output grammar unchanged.
+2. `scripts/ci-oracle-review.sh` — replace the `ORACLE_REPLAY`/importlib extraction (`:59`, `:158-178`) with a base-sourced read chain: `git show "$base:scripts/ci-oracle-surface.txt"` → if absent (transition bases, including THIS PR's base), fall back to the legacy `git show "$base:scripts/ci-pr-affected-replay.py"` importlib arm verbatim → if both absent, the HEAD copy of the surface file is the last resort, mirroring the existing "pre-PR3b base runs the HEAD copy" convention. Update the header contract (`:4-13`) to name the new list. Output grammar unchanged. **Ruled corrections (CTO, 2026-11-09):** this PR's own `oracle-review-required` stays green because the pull_request job re-execs the BASE driver (`ci.yml:630-641` extracts `${base_sha}:scripts/ci-oracle-review.sh`), which still reads the base's `replay.py` — the chain is for post-merge bases, not this PR. Arm order is canonical-first: `surface.txt` and `replay.py` never coexist on main but can coexist on a branch, where the new list must win. Arm 3 (HEAD) is unreachable from a main-tip base and ships ONLY with Guard 1's non-empty/fail-closed guard — an empty or unreadable resolved list fails `api`/`shape`, never `not-oracle`.
 3. `scripts/ci-oracle-review.test.sh` — repoint the stub surface (`:98-105`) at the new file; extend the stub `git show` dispatch (`:187`) to answer `*:scripts/ci-oracle-surface.txt`; add an arm asserting the legacy-fallback fires on a base lacking the new file.
 4. `plugins/soleur/test/bot-synthetic-unreachability.test.sh` — re-source the oracle list from `scripts/ci-oracle-surface.txt` (`:33`); update the required-set assertions (`:81-82`) for the post-removal context set.
 5. Verify: `bash scripts/ci-oracle-review.test.sh` and `bash plugins/soleur/test/bot-synthetic-unreachability.test.sh` green BEFORE any deletion is staged.
@@ -192,7 +192,7 @@ Ordering inside the diff is semantic (one commit), but the *edit order* below is
 
 **This plan follows #12089:**
 
-1. This PR strands its own `affected-index-ratchet` required context (the job is deleted; the live ruleset still requires it until the post-merge apply) → merge via `gh pr merge --admin`, recorded in the merge record. `oracle-review-required` still applies to this PR normally — and because this diff touches oracle-surface files (`ci.yml`, `test-all.sh`, `test-affected-paths.sh`, the lane files, the sentinel itself), it needs author==deruelle or a bound deruelle APPROVED review on the head SHA — the ship phase must plan on that.
+1. This PR strands its own `affected-index-ratchet` required context (the job is deleted; the live ruleset still requires it until the post-merge apply) → merge via `gh pr merge --admin`, recorded in the merge record, and the merge commit message MUST carry `[ack-destroy]` on its own line — removing a `required_check` block trips the destroy guard (`tests/scripts/lib/destroy-guard-filter.jq:32-41` counts `required_check` removals as `nested_deletes`), and `apply-github-infra.yml:336-342` fails the apply without it (#12282 was the carrier commit for the #12250 removal). `oracle-review-required` still applies to this PR normally — and because this diff touches oracle-surface files (`ci.yml`, `test-all.sh`, `test-affected-paths.sh`, the lane files, the sentinel itself), it needs author==deruelle or a bound deruelle APPROVED review on the head SHA — the ship phase must plan on that.
 2. On merge, `apply-github-infra.yml` auto-fires (the `infra/github/*.tf` path filter). Do NOT put `[skip-github-apply]` in the merge message.
 3. Post-merge verification (mirroring #12089 tasks 3.3-3.5):
    - `gh run list --workflow apply-github-infra.yml --limit 1` → watch to completion; its verify step must show live `required_status_checks` = the 11 CI names (no `affected-index-ratchet`); `bypass_actors` and `conditions` read unchanged before and after the apply (whole-payload replace receipt — record as a PR comment).
@@ -200,6 +200,7 @@ Ordering inside the diff is semantic (one commit), but the *edit order* below is
    - merge_group canary: one trivial PR through the queue after the apply verifies — confirms no required context lacks a producer.
    - Post-merge census delta: `gh api repos/{owner}/{repo}/rules/branches/main` required-context count 12 → 11.
 4. Ship phase closes `#9729`, `#10414`, `#10415`, `#10949` (and `#12151`, `#12154`, `#12155`, `#12456` per §Issue dispositions) as **not planned** — the PR body uses `Ref #N`, never `Closes`/`Fixes`.
+5. Ship phase files ONE follow-up issue (CTO dissent, Item 2): adjudicate whether `scripts/lib/affected-glob.sh` and `scripts/lib/test-suite-lanes.sh` — sourced at runtime by `scripts/test-all.sh` (`:1129-1132`, `:634`) and satisfying the old list's own membership criterion — should join the oracle surface. Deliberately NOT folded into this PR (widening a review boundary mid-teardown).
 
 ## Files to Create
 
@@ -457,11 +458,11 @@ The ADR amendment lands in the same commit as the teardown — the post-merge st
 
 | Item | Class | Ruling |
 |---|---|---|
-| New oracle-list home: committed `scripts/ci-oracle-surface.txt` vs embedding the list in `ci-oracle-review.sh` | technical | pending - assumed: dedicated committed list file — base-sourced, greppable, self-membered, and it frees the sentinel's extractor from importlib-on-.py |
-| Oracle-list membership: union(old RATCHET_ORACLE − retired) + `ci-oracle-lane-legs.tsv` + the list file itself | technical | pending - assumed: the set above — covers every live lane file; the legs.tsv addition closes a pre-existing gap (in `is_excluded_path` but not `RATCHET_ORACLE`) |
-| List-resolution fallback chain during transition (base-txt → base-replay.py → HEAD-txt) | technical | pending - assumed: the chain above — mirrors the driver's existing HEAD-copy fallback for pre-PR3b bases and is the only ordering that keeps THIS PR's own check green |
-| Atomic diff + `gh pr merge --admin` vs two-PR sequence | technical | pending - assumed: atomic + admin merge, mirroring the #12089 removal precedent exactly |
-| #12155 / #12456 not-planned dispositions | operator (scope) | pending - assumed: not planned — both patch retired machinery; surfaced for ship-phase confirmation rather than closed unilaterally |
+| New oracle-list home: committed `scripts/ci-oracle-surface.txt` vs embedding the list in `ci-oracle-review.sh` | technical | Ruled by CTO agent, 2026-11-09: dedicated committed list file — removes the importlib-exec-of-base-code channel, self-membered so a shrinking diff classifies oracle |
+| Oracle-list membership: union(old RATCHET_ORACLE − retired) + `ci-oracle-lane-legs.tsv` + the list file itself | technical | Ruled by CTO agent, 2026-11-09: exactly the 11-member set in Phase 1.1; dissent — `scripts/lib/affected-glob.sh` + `test-suite-lanes.sh` arguably meet the old criterion → post-merge follow-up issue, not folded into this PR |
+| List-resolution fallback chain during transition (base-txt → base-replay.py → HEAD-txt) | technical | Ruled by CTO agent, 2026-11-09: the chain in that order + Guard 1's fail-closed-on-empty guard; mechanism correction — this PR's own check is kept green by the base-driver re-exec (`ci.yml:630-641`), not the chain; arm 3 is main-unreachable |
+| Atomic diff + `gh pr merge --admin` vs two-PR sequence | technical | Ruled by CTO agent, 2026-11-09: atomic + admin merge mirroring #12250, WITH `[ack-destroy]` on its own merge-commit line (destroy guard on `required_check` removals); admin merge is a non-delegable operator act |
+| #12155 / #12456 not-planned dispositions | operator (scope) | Authorized by operator, 2026-11-09: both close *not planned* — they patch retired machinery |
 
 ## Sharp edges
 
