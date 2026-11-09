@@ -44,3 +44,11 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Remaining work-phase: commit suite patch; GDPR gate (regex likely no-match); affected gate (gate-or-skip.sh); Phase 0.5.6.6 fixture ratchets for new .test.sh (fixture-relative-assert, fixture-dir-operand-assert, lint-shell-capture-exit.py); Phase 3 quality; Phase 4 entry guard -> ## Work Phase Complete -> soleur:review -> resolve -> soleur:qa -> soleur:compound -> soleur:ship -> DONE.
 - Post-merge (3B.5): verify apply-github-infra.yml applies; file followthrough directive on #12269 with earliest=<merge>+21d (probe needs SOLEUR_FT_TRACKER/FLIP_MERGED/P50_FLOOR env or bake into directive secrets=).
 - Backlog after this PR: #9323, #11556 (needs triage). DO NOT dispatch #9729 (sibling session live).
+
+## Resume Point 2
+
+- Suite patch committed (91415ea), fixture baseline committed (2822633). All targeted suites green.
+- AFFECTED GATE (gate-or-skip.sh) IN FLIGHT — queued position=2 on test-all lock behind sibling battery (log: /tmp/affgate.txt). Wait for terminal `=== N/M suites passed ===` + rc file; report selected-N-of-M, never as pass if AFFECTED_GATE_SKIPPED.
+- Then: GDPR gate check (diff is CI/tf/shell — expect no regulated-data match), Phase 3 quality, Phase 4 entry guard, ## Work Phase Complete, then soleur:review -> resolve -> soleur:qa -> soleur:compound -> soleur:ship -> DONE.
+- Post-merge (3B.5): apply-github-infra.yml applies value-only; file followthrough directive on #12269 (earliest=<merge>+21d, secrets=GH_TOKEN SOLEUR_FT_TRACKER=<wallclock tracker #> SOLEUR_FT_FLIP_MERGED=<merge ts> SOLEUR_FT_P50_FLOOR=49).
+- Backlog: #9323, #11556. DO NOT dispatch #9729 (sibling live).
