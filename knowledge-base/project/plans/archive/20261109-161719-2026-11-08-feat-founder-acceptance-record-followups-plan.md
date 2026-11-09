@@ -381,11 +381,11 @@ logs:
   where: Sentry events and the pino line written by reportLegalOp (copied to Better Stack); Actions run logs for the member step
   retention: Sentry and Better Stack 90 days as stated in the Privacy Policy; Actions logs per repository settings
 discoverability_test:
-  command: bash scripts/ci-parked-hold.test.sh
-  expected_output: parked-hold selftest ok
+  command: bash scripts/lint-umbrella-aggregate.sh
+  expected_output: umbrella jobs verified
 ```
 
-(The counts helper and `parked-hold` print a status plus class line on failure and never a response body. The self-test uses a stubbed `gh` on a private `PATH` and needs no network or credentials; its assertion of that is part of the self-test. The counts-route probe is post-merge only. `curl -s -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/internal/legal-acceptance/founder-acceptance-record/counts` printing `401` is the post-deploy check in Phase 7.4; it is not the declared preflight command because it returns 404 before this PR is deployed. The self-test script must print exactly the final line `parked-hold selftest ok` and finish inside the 15-second preflight cap with a stubbed `gh`.)
+(The counts helper and `parked-hold` print a status plus class line on failure and never a response body. The self-test uses a stubbed `gh` on a private `PATH` and needs no network or credentials; its assertion of that is part of the self-test. The counts-route probe is post-merge only. `curl -s -o /dev/null -w '%{http_code}' https://app.soleur.ai/api/internal/legal-acceptance/founder-acceptance-record/counts` printing `401` is the post-deploy check in Phase 7.4; it is not the declared preflight command because it returns 404 before this PR is deployed. Amended 2026-11-09 at ship: the full self-test (`bash scripts/ci-parked-hold.test.sh`, final line `parked-hold selftest ok`) now runs 162 rows and takes longer than the 15-second preflight cap (measured rc 124 in the sandbox), so the declared command is the umbrella lint, which parses the three umbrella workflows and finishes in about 1 second; it proves the `parked-hold` members and the aggregate wiring are allow-listed. The self-test itself runs in the required `parked-hold-selftest` member step and in the local gate.)
 
 ## Encryption Posture
 
@@ -487,7 +487,7 @@ exception:        none
 ## Deepen-Plan Gate Results
 
 - 4.6 User-Brand Impact: present, concrete, threshold `single-user incident`. The impact reviewer added: the parked hold, the migration deploy and the founder's existing row are now covered in AC9/AC11/R8 and the Inbox fixture.
-- 4.7 Observability: all five fields present; `discoverability_test.command` is `bash scripts/ci-parked-hold.test.sh` (allowlisted verb, committed in this PR, stubbed `gh`, finishes inside the 15 s cap) and `expected_output` is the literal `parked-hold selftest ok`; no `ssh`. Failure modes now cite the layer.
+- 4.7 Observability: all five fields present; `discoverability_test.command` was `bash scripts/ci-parked-hold.test.sh` and is now `bash scripts/lint-umbrella-aggregate.sh` (see the amendment under the Observability block; the self-test outgrew the 15 s cap) with `expected_output` `umbrella jobs verified`; no `ssh`. Failure modes now cite the layer.
 - 4.8 PAT-shaped variables: none (grep clean). 4.9 UI wireframe: `approval-request.pen` is committed and referenced; the variance frame is AC16.
 - 4.10 Encryption Posture: section present, no new store or connection. 4.11 Guard Contract: `scripts/lint-guard-contract.py` exit 0, 2 guard entries; assembly is structural (events, read path, chokepoint script), not a member list. 4.12 Scope Check: one unfenced section. 4.13 Task Design: no new autonomous-task surface beyond a member step of an existing required umbrella (no new workflow file, cron or daemon), so the gate does not fire.
 - 4.55 Downtime and cutover: not triggered. Migration 186 is a `CREATE FUNCTION` only (no table rewrite, no lock-taking DDL on a hot table), applied before the deploy; the Inbox and counts changes are additive.
