@@ -317,6 +317,16 @@ row_bot_owner_spoof() {
     run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR='deruelle[bot]'
   want bot-owner-spoof 1 'review-required'
 }
+# The widened regex admits the literal suffix and nothing else — pin the rejection side:
+# a trailing byte after `[bot]`, a doubled suffix, a different case or bracket all fail `input`.
+row_bot_malformed_input() {
+  local bad
+  for bad in 'alice[bot]x' 'alice[bot][bot]' 'alice[BOT]' 'alice[bo]' '[bot]'; do
+    STUB_GIT_DIFF="$FX/diff-oracle.txt" \
+      run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR="$bad"
+    want "bot-malformed:${bad}" 1 'input' || return 1
+  done
+}
 row_api_fail() {
   STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_FAIL=1 \
     run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR=alice
@@ -371,7 +381,7 @@ chk() {  # chk <label> <cmd...> — runs the whole argv, never just $2 (fix-roun
 }
 
 for row in row_review_required row_stale_approval row_approved row_author row_not_oracle \
-           row_bot_author row_bot_not_oracle row_bot_owner_spoof \
+           row_bot_author row_bot_not_oracle row_bot_owner_spoof row_bot_malformed_input \
            row_api_fail row_api_malformed row_oracle_list_unreadable \
            row_mg_ok row_mg_missing_ctx row_mg_red_ctx row_mg_paginated row_mg_zero \
            row_mg_anchor row_mg_api_fail row_event_guard; do
@@ -403,11 +413,14 @@ mut_row_stale() { STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_REVIEWS="$FX/revie
 mut_row_red() { STUB_GH_MQ="$FX/mq-red.json" run_sut "$1" "${MG_ENV[@]}"; want mut-red 1 'member-context|anchor'; }
 # a mutant that turns a member-context miss into a pass must still red on the missing fixture
 mut_row_missing() { STUB_GH_MQ="$FX/mq-missing.json" run_sut "$1" "${MG_ENV[@]}"; want mut-miss 1 'member-context|anchor'; }
+# a mutant that re-drops the `[bot]` suffix must flip the bot-author row back to reason=input
+mut_row_bot() { STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_REVIEWS="$FX/reviews-none.json" run_sut "$1" "${PR_ENV[@]}" PR_AUTHOR='soleur-infra[bot]'; want mut-bot 1 'review-required'; }
 
 grep -q 'commit_id == \$sha' "$DRIVER" || { printf '[FATAL] driver names no commit_id binding to mutate\n' >&2; exit 2; }
 mutate binding-dropped ' and \.commit_id == \$sha' '' mut_row_stale
 mutate latest-run-lost '\x7c last' '\x7c first' mut_row_red
 mutate missing-is-pass '"missing"' '"completed/success"' mut_row_missing
+mutate bot-suffix-dropped '(\\\[bot\\\])?' '' mut_row_bot
 if [ "$MUT_SURVIVED" -gt 0 ]; then
   fail "mutation battery: $MUT_SURVIVED mutant(s) survived"
 else
