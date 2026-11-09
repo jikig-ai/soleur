@@ -319,9 +319,12 @@ row_bot_owner_spoof() {
 }
 # The widened regex admits the literal suffix and nothing else — pin the rejection side:
 # a trailing byte after `[bot]`, a doubled suffix, a different case or bracket all fail `input`.
+# `alice(bot)` is the load-bearing probe for the escaped brackets: a `.bot.` wildcard mutant
+# would admit it, the literal `(\[bot\])?` must not (a plain `alicexbotx` is a valid login in
+# both worlds, so it can never be a rejection probe).
 row_bot_malformed_input() {
   local bad
-  for bad in 'alice[bot]x' 'alice[bot][bot]' 'alice[BOT]' 'alice[bo]' '[bot]'; do
+  for bad in 'alice[bot]x' 'alice[bot][bot]' 'alice[BOT]' 'alice[bo]' '[bot]' 'alice(bot)'; do
     STUB_GIT_DIFF="$FX/diff-oracle.txt" \
       run_sut "$DRIVER" "${PR_ENV[@]}" PR_AUTHOR="$bad"
     want "bot-malformed:${bad}" 1 'input' || return 1
@@ -415,12 +418,15 @@ mut_row_red() { STUB_GH_MQ="$FX/mq-red.json" run_sut "$1" "${MG_ENV[@]}"; want m
 mut_row_missing() { STUB_GH_MQ="$FX/mq-missing.json" run_sut "$1" "${MG_ENV[@]}"; want mut-miss 1 'member-context|anchor'; }
 # a mutant that re-drops the `[bot]` suffix must flip the bot-author row back to reason=input
 mut_row_bot() { STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_REVIEWS="$FX/reviews-none.json" run_sut "$1" "${PR_ENV[@]}" PR_AUTHOR='soleur-infra[bot]'; want mut-bot 1 'review-required'; }
+# a mutant that un-escapes the brackets turns `(\[bot\])?` into `(.bot.)?`, admitting `alice(bot)`
+mut_row_malformed() { STUB_GIT_DIFF="$FX/diff-oracle.txt" STUB_GH_REVIEWS="$FX/reviews-none.json" run_sut "$1" "${PR_ENV[@]}" PR_AUTHOR='alice(bot)'; want mut-unesc 1 'input'; }
 
 grep -q 'commit_id == \$sha' "$DRIVER" || { printf '[FATAL] driver names no commit_id binding to mutate\n' >&2; exit 2; }
 mutate binding-dropped ' and \.commit_id == \$sha' '' mut_row_stale
 mutate latest-run-lost '\x7c last' '\x7c first' mut_row_red
 mutate missing-is-pass '"missing"' '"completed/success"' mut_row_missing
 mutate bot-suffix-dropped '(\\\[bot\\\])?' '' mut_row_bot
+mutate bot-bracket-unescaped '\\\[bot\\\]' '.bot.' mut_row_malformed
 if [ "$MUT_SURVIVED" -gt 0 ]; then
   fail "mutation battery: $MUT_SURVIVED mutant(s) survived"
 else
