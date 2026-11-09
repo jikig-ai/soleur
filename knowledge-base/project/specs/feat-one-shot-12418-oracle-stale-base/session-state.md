@@ -41,3 +41,9 @@
 - Filed: #12484 (ci-pr-selection.sh same-class sibling port, meta/machinery, Post-MVP).
 - Suite after fixes: 5184 rows green, 35/35 mutants killed; grep-q-pipe-guard green at 327 triples.
 - Fix-round seats (arch + security re-check) spawned on delta 80a2bffe60..2b65e94e9a.
+
+## Fix-Round + Compound + QA
+- Fix-round seats (arch + security on delta 80a2bffe60..2b65e94e9a): both confirm F1 closed, no new blocking findings. INFOs folded in (base-pivot threat-model note in driver header; runbook refs/heads/ precision).
+- Compound: learnings written — merge-base/mirror-direction fixture class + measured-misfire evidence-integrity miss. rule-metrics.json regenerated locally.
+- QA gate: gate-or-skip runner-refused (sibling full-gate in flight) → sanctioned battery-refusal-wait recipe running (30-min budget, contended).
+- Sibling issue filed: #12484 (ci-pr-selection.sh same-class port). PR body finalized: Closes #12418 + Changelog.
