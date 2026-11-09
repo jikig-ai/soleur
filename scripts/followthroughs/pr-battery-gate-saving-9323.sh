@@ -10,7 +10,7 @@
 #   (b) no escape: for the qualifying PRs, the ci.yml `push` run on that PR's merge commit is not red
 #       on a gated test-scripts* job — a red run whose failed jobs are all outside the gated family
 #       is reported in the note line (`unrelated`), never counted (2026-11-08 classifier ruling).
-#       A push run that is absent or not yet complete falls back to the merge commit's `merge_group`
+#       A push run that is absent, incomplete, or inconclusive falls back to the merge commit's `merge_group`
 #       run — ADR-276's full-battery authority; a queue-merged PR's merge commit carries merge_group
 #       runs, never a push run (#12478) — classified identically. No conclusive run of either event
 #       is NOT YET (exit 2), never "no escape".
@@ -321,7 +321,7 @@ _pbg_w_artdl() {
 }
 # _pbg_esc_classify <rf> <event> <concl> <rid> <sha> <pr>: the ONE conclusion→bucket path both the
 # push arm and the merge_group arm feed — a red run is an escape only when >=1 FAILED job is a gated
-# battery leg (the same test-scripts* prefix the qual arm derives (:283), not a second enumeration
+# battery leg (the same test-scripts* prefix the qual arm's `ran=` filter derives, not a second enumeration
 # that can drift). A jobs read that cannot be established (missing run id, transport failure,
 # empty/non-failed job list, or a gated job left cancelled/inconclusive) is `pending`, never `ok`.
 # <event> names the evidence source in the row detail (`push`/`merge_group`); a `success` sourced
@@ -360,8 +360,8 @@ _pbg_esc_classify() {
 }
 # _pbg_w_esc <pr>: $WORK/esc-<pr> = `dropped` (closed unmerged), `open` (state=="open" — #12360:
 # an unmerged PR's absent merge-commit push run is EXPECTED, not missing evidence; `state` rides
-# the same pulls/N meta read, so the bucket costs zero extra reads), `ok` / `ok via_mg` (a merge_
-# group-sourced ok — #12478), `escape <detail>`, `unrelated <detail>` (red run whose failed jobs are
+# the same pulls/N meta read, so the bucket costs zero extra reads), `ok` / `ok via_mg` (an
+# ok sourced from the merge_group run — #12478), `escape <detail>`, `unrelated <detail>` (red run whose failed jobs are
 # ALL outside the gated test-scripts* family — ADR-262 R1's escape is a battery breaking on an
 # undeclared path; a curl(56) infra flake in a job the path-gate cannot skip is not that, so it is
 # reported in the note line, never counted — 2026-11-08 #9323 verdict), `pending` (merged PR with
@@ -426,7 +426,7 @@ rl_rem="$(jq -r '.resources.core.remaining // 0' <<<"$rl" 2>/dev/null)"
 # (pull + push-run + merge_group-run) per qualifying run in the escape check — the mg read fires only on the
 # inconclusive-push arm, but at queue-merge volume every merged PR lands there (#12478), so the bound is 3, not 2;
 # the classifier's jobs read lands only on red runs of either event (rare; a green run needs no third read) and
-# rides the same rare carve-out as before. The parallel Stage-A wave lists ALL qualifying runs
+# rides the same rare carve-out as before (a green run never pays a jobs read). The parallel Stage-A wave lists ALL qualifying runs
 # unconditionally — runs past the ART_READ_CAP replay bound had their listing fetched where serial never did —
 # so the model carries one extra MAX_RUNS of listing prefetch on top of the cap.
 need_min=$(( 3 * EXAMINE_CAP + PAGE_CAP + ART_READ_CAP + 4 * MAX_RUNS + 20 ))

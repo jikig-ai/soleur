@@ -165,6 +165,9 @@ printf '{"workflow_runs":[]}\n' > "$TMP/b6/mg-sha101.json"   # absent push AND a
 build_fx "$TMP/b7" 25 40; printf '{"workflow_runs":[{"id":500777,"conclusion":"timed_out"}]}\n' > "$TMP/b7/push-sha102.json"
 printf '{"jobs":[{"name":"test-scripts (5/7)","conclusion":"timed_out"}]}' > "$TMP/b7/jobs-500777.json"
                                     expect "a timed_out push run on a green PR is an escape" 1 "ESCAPE: PR 102" "$TMP/b7"
+build_fx "$TMP/b7b" 25 40; printf '{"workflow_runs":[{"id":500778,"conclusion":"action_required"}]}\n' > "$TMP/b7b/push-sha103.json"
+printf '{"jobs":[{"name":"test-scripts (1/7)","conclusion":"failure"}]}' > "$TMP/b7b/jobs-500778.json"
+                                    expect "an action_required push run on a green PR is an escape (the conclusive list's membership is pinned)" 1 "ESCAPE: PR 103" "$TMP/b7b"
 # --- Guard Contract rows 2-5 (#9323, Arm A ruling 2026-11-08): a red push run is an ADR-262 R1
 # escape only when >=1 failed job is a gated test-scripts* leg; a run red solely on unrelated
 # infra jobs is reported, never counted; a jobs read that cannot be established is pending, never ok.
@@ -184,7 +187,7 @@ out="$(env FX="$TMP/e7" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; r
 if [[ "$rc" == 2 && "$out" == *"cancelled/inconclusive"* ]]; then pass "the inconclusive-gated pending row echoes its detail"; else fail "inconclusive-gated pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/e8" 25 40 0 0 118; printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"test-scripts (4/7)","conclusion":null}]}' > "$TMP/e8/jobs-500018.json"
                                     expect "a red push run whose gated job has null conclusion (still in flight at read) is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/e8"
-# --- Guard Contract: merge_queue fallback (#12478, Arm A ruling 2026-11-09) --------------------------------
+# --- Guard Contract: merge_group fallback (#12478, Arm A ruling 2026-11-09) --------------------------------
 # A merged qualifying PR whose merge commit carries no conclusive `push` run is classified by the
 # `merge_group` ci.yml run on that commit through the SAME classifier — a queue-merged PR's merge
 # commit never gets a push run, so push-only evidence pends forever (the shipped defect). The
