@@ -9,7 +9,8 @@ import { parse } from "url";
 import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
-import { logProxyCertExpiryAtStartup } from "./proxy-tls";
+import { loadProxyHelloKey, logProxyCertExpiryAtStartup } from "./proxy-tls";
+import { denyReporter } from "./proxy-deny-report";
 import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, ORIGIN_TLS_REQUIRED_ENV, startOriginTlsListener } from "./origin-tls";
 import { applyPlainHttpTimeouts } from "./http-timeouts";
 import { streamReplayBuffer } from "./stream-replay-buffer";
@@ -85,6 +86,11 @@ const log = createChildLogger("startup");
 // an un-attributable churn. sentry.server.config.ts disables Sentry's auto
 // OnUncaughtException/OnUnhandledRejection integrations so these report once.
 installCrashHandlers();
+
+// #12289 — read the relay hello key into module memory and delete it from process.env NOW, before the
+// server can spawn any child process (a child spawned with the default or a spread environment would
+// inherit it). A no-op value (null) when the relay is not configured (dev / single host).
+loadProxyHelloKey();
 
 const port = parseInt(process.env.PORT || "3000", 10);
 const dev = process.env.NODE_ENV !== "production";
@@ -183,8 +189,8 @@ app.prepare().then(() => {
   // proxy listener. A session that lands on a non-owning web host is relayed
   // here (session-proxy.ts) and attached as a PRE-AUTHENTICATED native session
   // via `attachProxiedSession`. `createProxyServer` returns null in dev/
-  // single-host (no PROXY_TLS material, or SOLEUR_PROXY_BIND unset) — entirely
-  // inert, no throw. Log the long-lived cert's expiry once at startup (the only
+  // single-host (no PROXY_TLS material, SOLEUR_PROXY_BIND unset, no peer allowlist,
+  // no usable hello key, a bad port, or a failed listen) — entirely inert, no throw. Log the long-lived cert's expiry once at startup (the only
   // expiry signal besides the Better Stack monitor).
   logProxyCertExpiryAtStartup();
   const proxyServer = createProxyServer({
@@ -475,6 +481,9 @@ app.prepare().then(() => {
     // (null) in dev/single-host. In-flight proxied sessions drain via the wss
     // client-close loop below, same as native ones.
     if (proxyServer) proxyServer.close();
+    // Emit the open deny-window summary events and the relay_hello_window line before the process goes
+    // away: a deploy (docker stop) lands exactly while a roll-stagger burst of denies is in flight.
+    denyReporter.flush();
 
     for (const client of wss.clients) {
       if (client.readyState === WebSocket.OPEN) {
