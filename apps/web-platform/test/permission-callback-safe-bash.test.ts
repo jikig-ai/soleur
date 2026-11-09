@@ -908,6 +908,60 @@ describe("#9600 — git log|diff|show exec flags reach the review card and emit 
     }
   });
 
+  const fallEvents = () =>
+    mockWarnSilentFallback.mock.calls
+      .filter((c) => (c[1] as { op: string }).op === "safe-bash-git-flag-fallthrough")
+      .map((c) => (c[1] as { extra: unknown }).extra);
+
+  test("names the flag the grammar REJECTED, not the first flag on the line", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log --oneline -p" }, sdkOptions());
+    await canUseTool("Bash", { command: "git diff --stat --ext-diff" }, sdkOptions());
+    await canUseTool("Bash", { command: "git log -n 5 --textconv" }, sdkOptions());
+    expect(fallEvents()).toEqual([
+      { verb: "log", flag: "-p" },
+      { verb: "diff", flag: "--ext-diff" },
+      { verb: "log", flag: "--textconv" },
+    ]);
+  });
+
+  test("a chained command is measured per && segment (a leading cd must not hide the flag)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "cd repo && git log -p" }, sdkOptions());
+    expect(fallEvents()).toEqual([{ verb: "log", flag: "-p" }]);
+  });
+
+  test("hyphenated git subcommands (diff-tree, show-ref, show-branch) are not the log/diff/show verbs", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    for (const command of ["git diff-tree -r HEAD", "git show-ref --heads", "git show-branch -a", "git diff-index HEAD"]) {
+      await canUseTool("Bash", { command }, sdkOptions());
+    }
+    expect(fallEvents()).toEqual([]);
+  });
+
+  test("an agent-chosen odd flag name is reported as `other` (no free text reaches Sentry)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "git log --" + "x".repeat(60) }, sdkOptions());
+    await canUseTool("Bash", { command: "git log --a.b" }, sdkOptions());
+    expect(fallEvents()).toEqual([
+      { verb: "log", flag: "other" },
+    ]);
+  });
+
+  test("own budget: 40 distinct rejected flags emit exactly 32 events, and near-miss telemetry still fires", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    for (let i = 0; i < 40; i++) await canUseTool("Bash", { command: `git log --flag${i}` }, sdkOptions());
+    expect(fallEvents()).toHaveLength(32);
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    const nearMiss = mockWarnSilentFallback.mock.calls.filter((c) => (c[1] as { op: string }).op === "safe-bash-near-miss");
+    expect(nearMiss).toHaveLength(1);
+  });
+
   test("an auto-approved git read emits no fall-through event", async () => {
     const { ctx } = buildContext();
     const canUseTool = createCanUseTool(ctx);

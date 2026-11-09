@@ -13,6 +13,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { GIT_CARRIER_ENV_PIN } from "@/server/agent-env";
 
 export type Channel = "ext-diff" | "textconv" | "fsmonitor" | "filter" | "gpg";
 export type Base = "repo" | "clone" | "sub";
@@ -23,6 +24,8 @@ export interface GitConfigExecFixture {
   bases: Record<Base, string>;
   gitVersion: string;
   run(cmd: string, base: Base, envKind: EnvKind): Channel[];
+  /** Like `run`, but also returns the command's exit status, so `[]` can be told apart from "git errored". */
+  runDetailed(cmd: string, base: Base, envKind: EnvKind): { channels: Channel[]; status: number | null };
   cleanup(): void;
 }
 
@@ -35,11 +38,16 @@ const IDENT = {
   GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z",
 };
 
-/** The pin `buildAgentEnv` applies (server/agent-env.ts), spelled as the raw git env it produces. */
-export const PINNED_GIT_ENV = {
-  GIT_CONFIG_COUNT: "1",
-  GIT_CONFIG_KEY_0: "safe.bareRepository",
-  GIT_CONFIG_VALUE_0: "explicit",
+/**
+ * The pin `buildAgentEnv` applies, taken from the shipped constant so a changed pin changes the real-git proof
+ * with it. NOSYSTEM/GLOBAL are also present in `baseGitEnv` (the fixture must be hermetic), so the real-git
+ * rows measure the `safe.bareRepository` half; the identity-file half is covered by the identity tests.
+ */
+export const PINNED_GIT_ENV: Record<string, string> = {
+  ...GIT_CARRIER_ENV_PIN,
+  // The shipped GLOBAL is an image path that does not exist on a test host; git reads a missing file as empty,
+  // but keep the fixture hermetic by leaving the base env's /dev/null in force.
+  GIT_CONFIG_GLOBAL: "/dev/null",
 };
 
 export function baseGitEnv(home: string): NodeJS.ProcessEnv {
@@ -117,6 +125,8 @@ export function buildGitConfigExecFixture(): GitConfigExecFixture {
   cfg("core.fsmonitor", join(helpers, "fsm.sh"));
   cfg("filter.zz.clean", join(helpers, "clean.sh"));
   cfg("gpg.program", join(helpers, "gpg.sh"));
+  // Makes BARE `git log|show <signed commit>` verify the signature, i.e. run gpg.program (measured by the review panel).
+  cfg("log.showSignature", "true");
 
   const outerObjects = join(repo, ".git", "objects");
   const head = git(repo, env, "rev-parse", "main").trim();
@@ -175,19 +185,21 @@ export function buildGitConfigExecFixture(): GitConfigExecFixture {
   const bases: Record<Base, string> = { repo, clone, sub: join(root, "clone2", "sub") };
   const gitVersion = git(repo, env, "--version").trim();
 
-  function run(cmd: string, base: Base, envKind: EnvKind): Channel[] {
+  function runDetailed(cmd: string, base: Base, envKind: EnvKind): { channels: Channel[]; status: number | null } {
     writeFileSync(marker, "");
     const e = envKind === "pinned" ? { ...env, ...PINNED_GIT_ENV } : env;
-    spawnSync("bash", ["-c", cmd], { cwd: bases[base], env: e, encoding: "utf8", timeout: 20_000 });
+    const r = spawnSync("bash", ["-c", cmd], { cwd: bases[base], env: e, encoding: "utf8", timeout: 20_000 });
     const seen = readFileSync(marker, "utf8").split("\n").filter(Boolean);
-    return [...new Set(seen)].sort() as Channel[];
+    return { channels: [...new Set(seen)].sort() as Channel[], status: r.status };
   }
+  const run = (cmd: string, base: Base, envKind: EnvKind): Channel[] => runDetailed(cmd, base, envKind).channels;
 
   return {
     root,
     bases,
     gitVersion,
     run,
+    runDetailed,
     cleanup: () => rmSync(root, { recursive: true, force: true }),
   };
 }

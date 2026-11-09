@@ -15,10 +15,10 @@ vi.mock("../server/observability", async (importOriginal) => ({
 
 import {
   GIT_CARRIER_DENY_MESSAGE,
+  GIT_CARRIER_DENY_REASON,
   GIT_CARRIER_WRITE_TOOLS,
   createGitCarrierDenyReporter,
   gitCarrierMatch,
-  gitCarrierTouched,
 } from "../server/git-carrier-guard";
 import { createSandboxHook } from "../server/sandbox-hook";
 import { createCanUseTool, type CanUseToolContext } from "../server/permission-callback";
@@ -42,6 +42,15 @@ beforeAll(() => {
   symlinkSync(join(ws, ".git"), join(ws, "g")); // g -> .git
   symlinkSync(join(ws, "sub", ".git"), join(ws, "docs", "link")); // nested symlink to a .git dir
   mkdirSync(outside, { recursive: true });
+  // Symlinks a COMMITTED repo can carry: a DANGLING link whose target text names a `.git` member (the
+  // target does not exist after a clone, so a realpath-based guard sees only the link's own name), a link
+  // to an absolute not-yet-existing `.git` path, a directory link to a missing `.git` dir, and a loop.
+  symlinkSync(".git/hooks/pre-commit", join(ws, "dangling"));
+  symlinkSync(join(ws, ".git", "nope", "deeper"), join(ws, "dangling-abs"));
+  symlinkSync(".git/missing-dir", join(ws, "dangling-dir"));
+  symlinkSync("loop", join(ws, "loop"));
+  symlinkSync("docs", join(ws, "to-docs")); // a safe link: must NOT be denied
+  writeFileSync(join(ws, "afile"), "x");
 });
 afterAll(() => rmSync(resolve(ws, ".."), { recursive: true, force: true }));
 
@@ -63,13 +72,17 @@ describe("gitCarrierMatch — the helper", () => {
     ["backslash separator", "Write", { file_path: "sub\\.git\\config" }, "lexical"],
     ["symlink g -> .git", "Write", { file_path: "g/config" }, "resolved"],
     ["symlink to nested .git, not-yet-existing leaf", "Write", { file_path: "docs/link/newfile" }, "resolved"],
+    ["DANGLING symlink whose target text names a .git member", "Write", { file_path: "dangling" }, "resolved"],
+    ["dangling symlink to an absolute missing .git path", "Write", { file_path: "dangling-abs" }, "resolved"],
+    ["path under a dangling directory link", "Edit", { file_path: "dangling-dir/config" }, "resolved"],
+    ["link then dot-dot then member (kernel expands the link first)", "Write", { file_path: "g/../config" }, "resolved"],
+    ["absolute spelling of a dangling link", "Write", { file_path: "<ws>/dangling" }, "resolved"],
   ];
   test.each(DENIED)("denies: %s", (_name, tool, input, match) => {
     const resolved = Object.fromEntries(
       Object.entries(input).map(([k, v]) => [k, typeof v === "string" ? v.replace("<ws>", ws) : v]),
     );
     expect(gitCarrierMatch(tool, resolved, ws)).toBe(match);
-    expect(gitCarrierTouched(tool, resolved, ws)).toBe(true);
   });
 
   const ALLOWED: Array<[string, string, Record<string, unknown>]> = [
@@ -88,6 +101,24 @@ describe("gitCarrierMatch — the helper", () => {
   ];
   test.each(ALLOWED)("does not match: %s", (_name, tool, input) => {
     expect(gitCarrierMatch(tool, input, ws)).toBeNull();
+  });
+
+  test("fails CLOSED when the walk cannot decide (loop, ENOTDIR, over-long path)", () => {
+    expect(gitCarrierMatch("Write", { file_path: "loop" }, ws)).toBe("malformed");
+    expect(gitCarrierMatch("Write", { file_path: "afile/x" }, ws)).toBe("malformed"); // ENOTDIR
+    expect(gitCarrierMatch("Write", { file_path: "a/".repeat(2100) + "x" }, ws)).toBe("malformed");
+  });
+
+  test("a safe symlink and ordinary missing paths are not denied", () => {
+    expect(gitCarrierMatch("Write", { file_path: "to-docs/new.md" }, ws)).toBeNull();
+    expect(gitCarrierMatch("Write", { file_path: "fresh/dir/never/created.txt" }, ws)).toBeNull();
+  });
+
+  test("a deep nonexistent path is resolved in one pass (no quadratic realpath retries)", () => {
+    const deep = "d/".repeat(1900) + "f.txt"; // 3805 chars, under the cap
+    const t0 = performance.now();
+    for (let i = 0; i < 20; i++) expect(gitCarrierMatch("Write", { file_path: deep }, ws)).toBeNull();
+    expect(performance.now() - t0).toBeLessThan(500); // quadratic version: ~280 ms per call at 4 KB
   });
 
   test("fails CLOSED on non-string and non-object input", () => {
@@ -121,20 +152,19 @@ describe("gitCarrierMatch — the helper", () => {
   });
 });
 
-describe("deny reporter — budgeted, deduped, no path or content in the event", () => {
+describe("deny reporter — deduped, no path or content in the event", () => {
   beforeEach(() => mockWarnSilentFallback.mockClear());
 
-  test("one event per (tool, enforcement, match); budget caps the total", () => {
+  test("one event per (tool, enforcement, match); extra carries only tool, enforcement and match", () => {
     const report = createGitCarrierDenyReporter();
     report("Write", "sandbox-hook", "lexical");
     report("Write", "sandbox-hook", "lexical");
     report("Write", "canUseTool", "lexical");
-    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(2);
+    report("Edit", "canUseTool", "resolved");
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(3);
     const call = mockWarnSilentFallback.mock.calls[0];
     expect(call[1]).toMatchObject({ feature: "cc-permissions", op: "git-carrier-write-denied" });
     expect(Object.keys(call[1].extra).sort()).toEqual(["enforcement", "match", "toolName"]);
-    for (let i = 0; i < 20; i++) report(`Tool${i}`, "canUseTool", "resolved");
-    expect(mockWarnSilentFallback.mock.calls.length).toBeLessThanOrEqual(8);
   });
 });
 
@@ -162,9 +192,21 @@ describe("enforcement point 1: PreToolUse sandbox hook", () => {
     const hso = out.hookSpecificOutput as Record<string, unknown>;
     expect(hso.permissionDecision).toBe("deny");
     expect(out.systemMessage).toBe(GIT_CARRIER_DENY_MESSAGE);
-    expect(GIT_CARRIER_DENY_MESSAGE).toContain("git config");
+    expect(hso.permissionDecisionReason).toBe(GIT_CARRIER_DENY_REASON);
+    // The agent-visible text states what is true and promises no approval path (autonomous workspaces
+    // show no card; support turns hard-deny non-safe Bash).
+    expect(GIT_CARRIER_DENY_MESSAGE).toContain("Bash");
+    expect(GIT_CARRIER_DENY_MESSAGE).not.toMatch(/will be asked|you will be/i);
+    expect(GIT_CARRIER_DENY_REASON).toContain("Bash");
     expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
     expect(mockWarnSilentFallback.mock.calls[0][1].extra).toMatchObject({ enforcement: "sandbox-hook" });
+  });
+
+  test("denies a dangling-symlink write and a missing tool_input (fail closed, same as canUseTool)", async () => {
+    const dangling = await run("Write", { file_path: "dangling" });
+    expect((dangling.hookSpecificOutput as Record<string, unknown>).permissionDecision).toBe("deny");
+    const missing = await run("Write", undefined as unknown as Record<string, unknown>);
+    expect((missing.hookSpecificOutput as Record<string, unknown>).permissionDecision).toBe("deny");
   });
 
   test("denies the symlink spelling", async () => {
@@ -213,6 +255,7 @@ describe("enforcement point 2: canUseTool file-tool branch", () => {
     ["Edit", { file_path: "sub/.git/hooks/pre-commit" }],
     ["NotebookEdit", { notebook_path: ".GIT/x.ipynb" }],
     ["Write", { file_path: "g/config" }],
+    ["Write", { file_path: "dangling" }],
   ])("denies %s %j with the plain message", async (tool, input) => {
     const can = createCanUseTool(ctx());
     const res = (await can(tool, input as Record<string, unknown>, opts())) as PermissionResult;

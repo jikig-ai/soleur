@@ -70,7 +70,9 @@ const ROWS: Row[] = [
   row("git log -n 5", [], true),
   row("git log --stat", [], true),
   row("git log --name-only", [], true),
-  row("git log --graph --all", [], true),
+  row("git log --graph --all", ["gpg"], true), // --all reaches the signed branch: log.showSignature runs gpg.program
+  row("git log --oneline -1 signed", ["gpg"], true), // BARE verb + log.showSignature=true: gpg.program runs
+  row("git show --stat signed", ["gpg"], true),
   row("git log --oneline -5 HEAD~1..HEAD", [], true),
   row("git log -p", ["textconv"], false),
   row("git log --patch", ["textconv"], false),
@@ -128,6 +130,9 @@ const CARRIER_DEPENDENT_APPROVED: ReadonlySet<string> = new Set([
   "repo|git diff --cached",
   "repo|git show HEAD",
   "repo|git show",
+  "repo|git log --graph --all",
+  "repo|git log --oneline -1 signed",
+  "repo|git show --stat signed",
   "repo|cd evil && git diff HEAD~1 HEAD",
   "clone|cd evil && git diff HEAD~1 HEAD",
 ]);
@@ -199,12 +204,16 @@ describe("safe-bash git config-exec falsifier (#9600)", () => {
     // control: the same command under the plain env DOES execute, so the empty result above is the pin, not a broken fixture
     expect(fx.run("cd evil && git diff HEAD~1 HEAD", "clone", "plain")).toEqual(["ext-diff"]);
   });
-  // ADMISSION RULE evidence: every flag the closed grammar admits is inert under real git on the verbs
-  // where it is meaningful. A flag is added to GIT_READ_FLAG only with a row here.
-  it("D: every admitted flag is approved AND inert (real git) on a commit-range log and a two-commit diff", () => {
+  // ADMISSION RULE evidence: every flag the closed grammar admits is approved AND adds no exec channel to the
+  // bare verb. Oracle: the channels a flag run produces must be a SUBSET of the bare verb's channels over the
+  // same repo, and git must have SUCCEEDED (exit 0), so a typo'd or renamed flag that errors out cannot read
+  // as "inert". `git diff HEAD~1 HEAD` is the bare baseline for diff (it already runs ext-diff under a planted
+  // config), `git log` for log and `git show` for show. `--all` is covered by its own approved+executing row
+  // above (it only widens the ref set a channel already acts on), so it is not in the list here.
+  it("D: every admitted flag is approved, succeeds, and adds no exec channel to the bare verb (real git)", () => {
     const LOG_FLAGS = [
       "--oneline", "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw",
-      "--graph", "--no-patch", "-s", "--no-color", "--abbrev-commit", "--decorate", "--all", "--first-parent",
+      "--graph", "--no-patch", "-s", "--no-color", "--abbrev-commit", "--decorate", "--first-parent",
       "--no-merges", "--merges", "--reverse", "-3", "-n 3", "--max-count=3", "--since=2020-01-01",
       "--until=2030-01-01", "--author=Fixture", "--grep=c1", "--diff-filter=A",
     ];
@@ -212,23 +221,43 @@ describe("safe-bash git config-exec falsifier (#9600)", () => {
       "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw", "--no-patch",
       "-s", "--no-color", "--diff-filter=A",
     ];
+    const SHOW_FLAGS = [
+      "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw", "--no-patch",
+      "-s", "--no-color", "--decorate", "--abbrev-commit", "--diff-filter=A", "--oneline",
+    ];
     const bad: string[] = [];
-    for (const f of LOG_FLAGS) {
-      const cmd = `git log ${f}`;
-      if (!isBashCommandSafe(cmd)) bad.push(`not approved: ${cmd}`);
-      const got = fx.run(cmd, "repo", "plain");
-      if (got.length) bad.push(`${cmd} executed ${JSON.stringify(got)}`);
-    }
-    // A flag may not add an exec channel the bare verb lacks: observed must be a subset of the bare baseline.
-    const baseline = fx.run("git diff HEAD~1 HEAD", "repo", "plain");
-    for (const f of DIFF_FLAGS) {
-      const cmd = `git diff HEAD~1 HEAD ${f}`;
-      if (!isBashCommandSafe(cmd)) bad.push(`not approved: ${cmd}`);
-      const got = fx.run(cmd, "repo", "plain");
-      const extra = got.filter((c) => !baseline.includes(c));
-      if (extra.length) bad.push(`${cmd} adds channels ${JSON.stringify(extra)} beyond bare diff ${JSON.stringify(baseline)}`);
-    }
+    const check = (verbCmd: string, flags: string[]) => {
+      const baseline = fx.runDetailed(verbCmd, "repo", "plain");
+      if (baseline.status !== 0) bad.push(`baseline \`${verbCmd}\` exited ${baseline.status}`);
+      for (const f of flags) {
+        const cmd = `${verbCmd} ${f}`;
+        if (!isBashCommandSafe(cmd)) bad.push(`not approved: ${cmd}`);
+        const r = fx.runDetailed(cmd, "repo", "plain");
+        if (r.status !== 0) bad.push(`${cmd} exited ${r.status} (inert only counts when git succeeded)`);
+        const extra = r.channels.filter((c) => !baseline.channels.includes(c));
+        if (extra.length) bad.push(`${cmd} adds channels ${JSON.stringify(extra)} beyond ${JSON.stringify(baseline.channels)}`);
+      }
+    };
+    check("git log", LOG_FLAGS);
+    check("git diff HEAD~1 HEAD", DIFF_FLAGS);
+    check("git show", SHOW_FLAGS);
     expect(bad).toEqual([]);
-    expect(LOG_FLAGS.length + DIFF_FLAGS.length).toBeGreaterThanOrEqual(36);
+    expect(LOG_FLAGS.length + DIFF_FLAGS.length + SHOW_FLAGS.length).toBeGreaterThanOrEqual(45);
+  });
+
+  it("D: the index/worktree flags --cached and --staged are approved and add no channel beyond the bare worktree diff", () => {
+    const baseline = fx.runDetailed("git diff", "repo", "plain").channels;
+    for (const cmd of ["git diff --cached", "git diff --staged", "git diff --cached --stat"]) {
+      expect(isBashCommandSafe(cmd), cmd).toBe(true);
+      const r = fx.runDetailed(cmd, "repo", "plain");
+      expect(r.status, cmd).toBe(0);
+      expect(r.channels.filter((c) => !baseline.includes(c)), cmd).toEqual([]);
+    }
+  });
+
+  it("D: flags deliberately NOT admitted fall to the card (no row may drift into the grammar unmeasured)", () => {
+    for (const cmd of ["git diff --no-index a b", "git log -w", "git log --follow f", "git diff --remerge-diff", "git log --color"]) {
+      expect(isBashCommandSafe(cmd), cmd).toBe(false);
+    }
   });
 });

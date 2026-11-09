@@ -138,6 +138,7 @@ import {
   isBashCommandSafe,
   SAFE_BASH_PATTERNS,
   SAFE_BASH_NEAR_MISS_PREFIX,
+  firstRejectedGitFlag,
 } from "./safe-bash";
 export { isBashCommandSafe, SAFE_BASH_PATTERNS };
 
@@ -151,6 +152,8 @@ const NEAR_MISS_PER_CTX_BUDGET = 32;
 const NEAR_MISS_LEADING_TOKEN_MAX = 32;
 type NearMissState = { seen: Set<string>; emitted: number };
 const NEAR_MISS_STATE = new WeakMap<CanUseToolContext, NearMissState>();
+// #9600 — separate dedupe + budget for the git-flag fall-through event (same cap, own key space).
+const GIT_FALL_STATE = new WeakMap<CanUseToolContext, NearMissState>();
 
 // Safe UX-flow tools surfaced by the soleur plugin that carry no path
 // args and no command execution. Kept separate from `SAFE_TOOLS` in
@@ -835,22 +838,27 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         }
       }
 
-      // #9600 — closed git-flag grammar fall-through telemetry. A `git log|diff|show` that missed the allowlist
-      // (a flag outside GIT_READ_FLAG) reaches the review card; one budgeted, deduped event per (verb, flag)
-      // measures that UX cost so the list is widened by evidence (with a real-git table row), never by guess.
-      // PII: only the verb and the first dash-token are sent; `--flag=value` is cut at `=` and an attached
-      // short-flag value (`-Sneedle`) is cut to the flag letter. Shares the near-miss per-ctx budget.
-      const gitFall = /^git\s+(log|diff|show)\b(.*)$/.exec(trimmedCmd);
-      if (gitFall) {
-        const dashToken = gitFall[2].split(/\s+/).find((t) => t.startsWith("-")) ?? "";
-        const flag = /^-[^-]/.test(dashToken)
-          ? dashToken.slice(0, 2)
-          : dashToken.split("=")[0].slice(0, NEAR_MISS_LEADING_TOKEN_MAX);
-        const key = `git:${gitFall[1]}:${flag}`;
-        let state = NEAR_MISS_STATE.get(ctx);
+      // #9600 — closed git-flag grammar fall-through telemetry. A `git log|diff|show` segment that missed
+      // the allowlist because of a flag outside GIT_READ_FLAG reaches the review card (or, for the support
+      // persona, a hard deny); one budgeted, deduped event per (verb, rejected flag) measures that UX cost
+      // so the list is widened by evidence (with a real-git table row), never by guess. Every `&&`
+      // segment is examined (a leading `cd repo &&` must not hide it), the reported flag is the first
+      // dash-token the grammar actually rejects, and its name is validated so agent-controlled text
+      // never reaches Sentry: `--flag=value` is cut at `=`, an attached short-flag value (`-Sneedle`) is
+      // cut to the flag letter, and anything that is not a plain flag name is reported as `other`.
+      // Own budget (not the near-miss one): a loop of unique git flags must not silence near-miss.
+      for (const segment of trimmedCmd.split("&&")) {
+        const gitFall = /^\s*git\s+(log|diff|show)(?=\s|$)(.{0,256})/.exec(segment);
+        if (!gitFall) continue;
+        const rejected = firstRejectedGitFlag(gitFall[2]);
+        if (rejected === null) continue;
+        const cut = /^-[^-]/.test(rejected) ? rejected.slice(0, 2) : rejected.split("=")[0];
+        const flag = /^--?[A-Za-z][A-Za-z0-9-]{0,30}$/.test(cut) ? cut : "other";
+        const key = `${gitFall[1]}:${flag}`;
+        let state = GIT_FALL_STATE.get(ctx);
         if (!state) {
           state = { seen: new Set(), emitted: 0 };
-          NEAR_MISS_STATE.set(ctx, state);
+          GIT_FALL_STATE.set(ctx, state);
         }
         if (state.emitted < NEAR_MISS_PER_CTX_BUDGET && !state.seen.has(key)) {
           state.seen.add(key);
@@ -861,6 +869,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             extra: { verb: gitFall[1], flag },
           });
         }
+        break;
       }
 
       // Support persona (#9539): a non-safe Bash command on a support turn

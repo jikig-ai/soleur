@@ -10,6 +10,7 @@ import { logPermissionDecision } from "./permission-log";
 import {
   createGitCarrierDenyReporter,
   GIT_CARRIER_DENY_MESSAGE,
+  GIT_CARRIER_DENY_REASON,
   gitCarrierMatch,
 } from "./git-carrier-guard";
 
@@ -57,7 +58,7 @@ export function createSandboxHook(workspacePath: string): HookCallback {
     // Write / Edit / NotebookEdit into any `.git` path plants a repo-local config that the auto-approved
     // git reads would execute. Plain deny; `git config` through Bash still reaches the review card.
     {
-      const carrierMatch = gitCarrierMatch(toolName, toolInput ?? {}, workspacePath);
+      const carrierMatch = gitCarrierMatch(toolName, toolInput, workspacePath);
       if (carrierMatch) {
         logPermissionDecision("sandbox-hook", toolName, "deny", "git-carrier-path");
         reportGitCarrierDeny(toolName, "sandbox-hook", carrierMatch);
@@ -66,7 +67,7 @@ export function createSandboxHook(workspacePath: string): HookCallback {
           hookSpecificOutput: {
             hookEventName: "PreToolUse" as const,
             permissionDecision: "deny" as const,
-            permissionDecisionReason: "Access denied: git configuration and hooks are protected",
+            permissionDecisionReason: GIT_CARRIER_DENY_REASON,
           },
         };
       }

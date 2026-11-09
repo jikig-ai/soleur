@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
-import { buildAgentEnv } from "../server/agent-env";
+import { ALLOWED_SERVICE_ENV_VARS, AGENT_GIT_GLOBAL_CONFIG, buildAgentEnv } from "../server/agent-env";
 
 // Force the production branch of the plugin-path guard (mirrors the harness in
 // plugin-path.test.ts). The `buildAgentEnv` describe's afterEach calls
@@ -60,7 +60,7 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   LAUNCH_CHECK_HEADLESS: "1",
   // #9600 git config-carrier pin, applied to every session (git-auth or not): see the describe below.
   GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_GLOBAL: "/usr/local/share/soleur/agent.gitconfig",
   GIT_CONFIG_COUNT: "1",
   GIT_CONFIG_KEY_0: "safe.bareRepository",
   GIT_CONFIG_VALUE_0: "explicit",
@@ -235,7 +235,7 @@ describe("buildAgentEnv", () => {
   describe("git config-carrier pin (#9600)", () => {
     const PIN = {
       GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_GLOBAL: "/usr/local/share/soleur/agent.gitconfig",
       GIT_CONFIG_COUNT: "1",
       GIT_CONFIG_KEY_0: "safe.bareRepository",
       GIT_CONFIG_VALUE_0: "explicit",
@@ -264,10 +264,26 @@ describe("buildAgentEnv", () => {
       expect(n).toBe(CREDS.length * OPTS.length); // floor: the loop really ran every combination
     });
 
-    test("an ambient GIT_CONFIG_* value or a service-token attempt cannot displace the pin", () => {
-      const savedAmbient = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_GLOBAL"].map(
-        (k) => [k, env[k]] as const,
-      );
+    test("GIT_CONFIG_GLOBAL is the image-owned identity file (never /dev/null, never HOME), shared with the Dockerfile", () => {
+      expect(AGENT_GIT_GLOBAL_CONFIG).toBe("/usr/local/share/soleur/agent.gitconfig");
+      const out = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
+      expect(out.GIT_CONFIG_GLOBAL).toBe(AGENT_GIT_GLOBAL_CONFIG);
+      expect(out.GIT_CONFIG_GLOBAL).not.toBe("/dev/null");
+    });
+
+    // The pin is spread into the overrides, so what keeps it from being displaced is that NO later source
+    // (the ambient allowlist, the BYOK service-token set) can name a GIT_CONFIG_* variable. Assert THAT
+    // set-level property directly: a behavioural "ambient value cannot displace it" test passes only
+    // because of this filtering and would stay green if the filtering were removed along with a re-assert.
+    test("no ambient-allowlisted or service-token variable may be a GIT_CONFIG_* name", () => {
+      expect(EXPECTED_ALLOWLIST.filter((k) => /^GIT_CONFIG_/.test(k))).toEqual([]);
+      expect([...ALLOWED_SERVICE_ENV_VARS].filter((k) => /^GIT_CONFIG_/.test(k))).toEqual([]);
+      expect(ALLOWED_SERVICE_ENV_VARS.size).toBeGreaterThan(0); // the set really was enumerated
+    });
+
+    test("an ambient GIT_CONFIG_* process value never reaches the agent env and the pin is exactly one config pair", () => {
+      const keys = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_GLOBAL"];
+      const saved = keys.map((k) => [k, env[k]] as const);
       try {
         env.GIT_CONFIG_COUNT = "9";
         env.GIT_CONFIG_KEY_0 = "core.fsmonitor";
@@ -278,13 +294,12 @@ describe("buildAgentEnv", () => {
           { GIT_CONFIG_VALUE_0: "all", GIT_CONFIG_COUNT: "0" },
         );
         for (const [k, v] of Object.entries(PIN)) expect(out[k], k).toBe(v);
-        // exactly one config pair: nothing else rides the GIT_CONFIG_KEY_/VALUE_ spelling
         expect(Object.keys(out).filter((k) => /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(k)).sort()).toEqual([
           "GIT_CONFIG_KEY_0",
           "GIT_CONFIG_VALUE_0",
         ]);
       } finally {
-        for (const [k, v] of savedAmbient) {
+        for (const [k, v] of saved) {
           if (v === undefined) delete env[k];
           else env[k] = v;
         }

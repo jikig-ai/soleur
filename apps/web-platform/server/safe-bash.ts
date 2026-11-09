@@ -111,12 +111,37 @@ const GIT_BRANCH_READ_FLAG = String.raw`(?:${GIT_BRANCH_LIST_FORCE}|-[v]+|--verb
 // with a row in test/safe-bash-git-config-exec.test.ts showing real git never runs a repo-config
 // helper, writes a file or reads an arbitrary file because of it, and never adds an exec channel the bare
 // verb does not already have (so --no-ext-diff / --no-textconv are OUT: they swap one config-driven
-// channel for another), plus a safe-bash test. A flag is
-// NEVER admitted by prefix or by a generic `--[\w-]+=value` shape: git accepts unique-prefix
-// abbreviations on some versions, so only exact spellings count. Deliberately absent (each asks
-// git to execute or read): --ext-diff, --textconv, -p/--patch/-u, -U<n>, --word-diff, -w, -S, -G,
-// -O<orderfile>, --show-signature, --output, -c/--cc, --stat-width style value flags.
-const GIT_READ_FLAG = String.raw`(?:--oneline|--stat|--name-only|--name-status|--numstat|--shortstat|--summary|--raw|--graph|--no-patch|-s|--cached|--staged|--no-color|--abbrev-commit|--decorate|--all|--first-parent|--no-merges|--merges|--reverse|-\d+|-n\s+\d+|--max-count=\d+|--(?:since|until|author|grep)=${PATH_TOKEN}|--diff-filter=[A-Za-z]+|--)`;
+// channel for another), plus a safe-bash test. A flag is NEVER admitted by prefix or by a generic
+// `--[\w-]+=value` shape: only exact spellings count. A flag that is ABSENT is "not yet measured", not
+// "known dangerous": most of what falls to the review card (-w, --follow, --date=, --color, -M,
+// --check, --exit-code, --quiet ...) is inert, and the fall-through telemetry in permission-callback.ts
+// is how the list is widened by evidence. Flags that DO ask git to execute a helper or read a file:
+// --ext-diff, --textconv, -p/--patch/-u and -U<n> (patch output), -S, -G, -c/--cc (imply -p),
+// -O<orderfile> (reads a file), --show-signature (gpg.program), --no-index (reads arbitrary paths),
+// --output (writes; also in FILE_WRITE_FLAG_DENYLIST).
+const GIT_READ_FLAG_TOKEN = String.raw`(?:--oneline|--stat|--name-only|--name-status|--numstat|--shortstat|--summary|--raw|--graph|--no-patch|-s|--cached|--staged|--no-color|--abbrev-commit|--decorate|--all|--first-parent|--no-merges|--merges|--reverse|-\d+|--max-count=\d+|--(?:since|until|author|grep)=${PATH_TOKEN}|--diff-filter=[A-Za-z]+|--)`;
+const GIT_READ_FLAG = String.raw`(?:${GIT_READ_FLAG_TOKEN}|-n\s+\d+)`;
+const GIT_READ_FLAG_TOKEN_RE = new RegExp(`^${GIT_READ_FLAG_TOKEN}$`);
+
+/**
+ * The first dash-token of a `git log|diff|show` tail that the closed grammar does NOT admit, or `null`
+ * when every flag is admitted (the command then missed the allowlist for another reason). Walks the
+ * SAME flag source as the allowlist pattern so the telemetry names the flag that actually fell
+ * through, not merely the first flag on the line. `-n` is the one two-token flag (`-n 5`).
+ */
+export function firstRejectedGitFlag(tail: string): string | null {
+  const tokens = tail.split(/\s+/).filter(Boolean);
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (!t.startsWith("-")) continue;
+    if (t === "-n" && /^\d+$/.test(tokens[i + 1] ?? "")) {
+      i += 1;
+      continue;
+    }
+    if (!GIT_READ_FLAG_TOKEN_RE.test(t)) return t;
+  }
+  return null;
+}
 
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // No-arg / fixed-form commands

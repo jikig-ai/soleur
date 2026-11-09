@@ -29,7 +29,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 import * as SentryMock from "@sentry/nextjs";
 
-import { buildAgentEnv } from "@/server/agent-env";
+import { buildAgentEnv, GIT_CARRIER_ENV_PIN } from "@/server/agent-env";
 import { buildAgentSandboxConfig } from "@/server/agent-runner-sandbox-config";
 import {
   withoutTokenPath,
@@ -152,10 +152,12 @@ describe("buildAgentSandboxConfig — allowWebEgress (#9534)", () => {
     for (const n of ["STRIPE_SECRET_KEY", "GITHUB_TOKEN", "DOPPLER_TOKEN"]) {
       expect(names).toContain(n);
     }
-    // GIT_CONFIG_* are /dev/null neutralizations — denied would UNDO them
-    // (plan review correction (a)).
-    expect(names).not.toContain("GIT_CONFIG_NOSYSTEM");
-    expect(names).not.toContain("GIT_CONFIG_GLOBAL");
+    // The git config-carrier pin (#9600) must never be denied: unsetting it for sandboxed commands would
+    // undo safe.bareRepository=explicit on exactly the most exposed (web-egress) sessions.
+    expect(Object.keys(GIT_CARRIER_ENV_PIN).length).toBeGreaterThanOrEqual(5);
+    for (const pinned of Object.keys(GIT_CARRIER_ENV_PIN)) {
+      expect(names).not.toContain(pinned);
+    }
     // Every entry is `deny` — no `mask` (masking would re-inject at the
     // SRT proxy for allowlisted hosts).
     expect(envVars.every((e) => e.mode === "deny")).toBe(true);

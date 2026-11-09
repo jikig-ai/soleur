@@ -17,7 +17,7 @@
  * behavior is covered by `permission-callback-safe-bash.test.ts`.
  */
 import { describe, test, expect } from "vitest";
-import { EXACT_LITERAL_SAFE_COMMANDS, isBashCommandSafe } from "../server/safe-bash";
+import { EXACT_LITERAL_SAFE_COMMANDS, firstRejectedGitFlag, isBashCommandSafe } from "../server/safe-bash";
 import { SOLEUR_PLUGIN_PATH_DEFAULT } from "../server/plugin-path";
 
 const WT = "bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh";
@@ -340,6 +340,29 @@ describe("#9600 — git log|diff|show closed flag grammar (exec-requesting flags
   ];
   test.each(NOT_VERB_LEADING)("not verb-leading: %s", (cmd) => {
     expect(isBashCommandSafe(cmd)).toBe(false);
+  });
+
+  // firstRejectedGitFlag walks the SAME flag source as the allowlist pattern, so the telemetry names the
+  // flag that fell through. Parity: a command is allowlisted by the pattern exactly when the walk finds
+  // no rejected flag (for tails that otherwise contain only flags and non-dash positionals).
+  test("firstRejectedGitFlag agrees with the allowlist pattern", () => {
+    const tails = [
+      "", "--oneline -5", "-n 5", "-n 5 HEAD~1", "--stat HEAD~1", "--since=2026-01-01 --author=a", "-- src/x.ts",
+      "-p", "--oneline -p", "--stat --ext-diff", "-n 5 --textconv", "-n", "-n x", "-Sneedle", "-w", "--follow f",
+      "--ext", "--no-ext-diff", "--first-parent --all --decorate", "--diff-filter=AM", "--max-count=3",
+    ];
+    for (const t of tails) {
+      const allowed = isBashCommandSafe(`git log ${t}`.trimEnd());
+      expect(firstRejectedGitFlag(t) === null, `tail ${JSON.stringify(t)}`).toBe(allowed);
+    }
+    expect(tails.length).toBeGreaterThanOrEqual(20);
+  });
+
+  test("firstRejectedGitFlag returns the rejected token itself", () => {
+    expect(firstRejectedGitFlag("--oneline -p")).toBe("-p");
+    expect(firstRejectedGitFlag("-n 5 --textconv")).toBe("--textconv");
+    expect(firstRejectedGitFlag("-n x")).toBe("-n");
+    expect(firstRejectedGitFlag("--oneline -5 HEAD~1")).toBeNull();
   });
 
   test("no catastrophic backtracking on a long failing tail of listed flags", () => {

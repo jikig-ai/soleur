@@ -148,9 +148,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # #9600 build-time floor: `safe.bareRepository=explicit` (the agent-env config-carrier pin,
 # server/agent-env.ts GIT_CARRIER_ENV_PIN) needs git 2.38 or later and is silently INERT below it, so
 # a base-image change that lowers git would reopen the committed-bare-repository carrier with every
-# test green. Fail the build instead. Guarded by test/dockerfile-git-version-floor.test.ts.
-RUN git --version | awk '{ split($3, v, "."); exit !(v[1] + 0 > 2 || (v[1] + 0 == 2 && v[2] + 0 >= 38)) }' \
-    || { echo "git $(git --version) is older than 2.38: the safe.bareRepository pin would be inert (#9600)" >&2; exit 1; }
+# test green. Fail the build instead. The awk END rule fails closed when `git --version` printed nothing
+# (a pipeline's status is awk's, and awk exits 0 on empty input). Guarded by
+# test/dockerfile-git-version-floor.test.ts.
+RUN git --version | awk '{ split($3, v, "."); exit !(v[1] + 0 > 2 || (v[1] + 0 == 2 && v[2] + 0 >= 38)) } END { if (NR == 0) exit 1 }' \
+    || { echo "$(git --version 2>&1): git older than 2.38 or unreadable, the safe.bareRepository pin would be inert (#9600)" >&2; exit 1; }
+
+# #9600 agent session identity. The agent env pins GIT_CONFIG_GLOBAL (server/agent-env.ts) so HOME's
+# writable ~/.gitconfig is never read; this root-owned, read-only (bound under /usr) identity-only file
+# is what it points at, restoring the fallback commit identity the HOME global used to supply. Local
+# workspace identity still wins. Identity ONLY: no safe.directory, credential.*, core.*, include, url.*
+# or filter.* may ever be added here. The last step proves git can parse the file and derive an identity from it.
+RUN mkdir -p /usr/local/share/soleur \
+    && printf '[user]\n\tname = github-actions[bot]\n\temail = 41898282+github-actions[bot]@users.noreply.github.com\n' > /usr/local/share/soleur/agent.gitconfig \
+    && chmod 0644 /usr/local/share/soleur/agent.gitconfig \
+    && GIT_CONFIG_GLOBAL=/usr/local/share/soleur/agent.gitconfig GIT_CONFIG_NOSYSTEM=1 git var GIT_AUTHOR_IDENT > /dev/null
 
 # #5863 arm F — the mountns-only outer session wrap deliberately carries ZERO
 # --unshare-* flags: the vendored inner sandbox unconditionally unshares
