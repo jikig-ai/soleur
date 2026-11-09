@@ -480,6 +480,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           SWITCH: ${{ vars.CI_ORACLE_LANE }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The live base ref the driver fetches for the merge-base diff base (#12418): HEAD^1 on the merge
+          # ref freezes at merge-ref computation and re-counts main-side changes on merge-carrying branches.
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           MERGE_GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
           MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}

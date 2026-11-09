@@ -139,7 +139,9 @@ canary per step 3.
    The notice deliberately carries NO diff identity: `head_sha`/`base_sha` go to `GITHUB_OUTPUT` only, which is
    not retrievable post-hoc. Reconstruct the classified diff from the run payload — `pull_request`: the run's
    `head_sha` is the merge ref and its parents are base/head in a `fetch-depth: 0` clone (`git log --format=%P
-   <sha> -1` → `p1` base, `p2` PR head, diff `p1..p2`); `merge_group`: the payload's `head_sha`/`base_sha`
+   <sha> -1` → `p2` PR head); the diff base is `git merge-base <p2> <live base tip>` (`git fetch origin
+   <base.ref>` then `git diff $(git merge-base <p2> FETCH_HEAD) <sha>`) — the frozen `p1` is NOT the base since
+   #12418; `merge_group`: the payload's `head_sha`/`base_sha`
    (`gh api repos/{owner}/{repo}/actions/runs/<id>` → `.head_sha`; the base is the batch's base commit). Then
    diff `base..head` and re-apply the surface check mentally — every path must be accept.tsv, an in-extent
    `AFFECTED_*_PATHS` hunk, or a doc path. The expected `would_skip` list is the FIVE legs, or the FOUR-leg

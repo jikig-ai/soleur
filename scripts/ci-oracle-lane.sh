@@ -18,6 +18,8 @@
 #   ORACLE_LANE_LOCKED   env re-lock (dark-mode revert path)         (=1 keeps active=false; no ci.yml env wires it —
 #                                                                     wiring is itself an excluded-path code edit)
 #   PR_HEAD_SHA          github.event.pull_request.head.sha         (pull_request)
+#   PR_BASE_REF          github.event.pull_request.base.ref         (pull_request; the live base ref to fetch —
+#                                                                     branch-name grammar only, never a refspec)
 #   HEAD_REPO            github.event.pull_request.head.repo.full_name  (pull_request; a fork head is full)
 #   MERGE_GROUP_HEAD_SHA github.event.merge_group.head_sha          (merge_group; the whole queued batch is diffed)
 #   MERGE_GROUP_BASE_SHA github.event.merge_group.base_sha          (merge_group)
@@ -38,7 +40,8 @@
 #   skip_legs    a comma list over    {test-webplat,test-bun,test-scripts,test-scripts-heavy,web-platform-build};
 #                                     written ONLY when active
 #   head_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^2 of the merge ref; merge_group: MERGE_GROUP_HEAD_SHA
-#   base_sha     ^([0-9a-f]{40})?$    pull_request: HEAD^1; merge_group: MERGE_GROUP_BASE_SHA
+#   base_sha     ^([0-9a-f]{40})?$    pull_request: merge-base(HEAD^2, live base ref) — the base the diff ran
+#                                     against (#12418); merge_group: MERGE_GROUP_BASE_SHA
 # The step also prints ONE `::notice title=ci-oracle-lane::SOLEUR_ORACLE_LANE ...` line (fixed tokens only: a path, a
 # ref name, a SHA from the diff, the repository name or the raw switch value is NEVER echoed) and a short step summary.
 # The notice carries, in this order: event, switch, locked, attempt, files, reason, oracle_only, would_skip, active.
@@ -271,9 +274,21 @@ run() {
     [ "$h" = "$GITHUB_SHA" ] || return 0  # GUARD:O1-HEAD-IS-GITHUB-SHA
     [ "$p2" = "$PR_HEAD_SHA" ] || return 0  # GUARD:O-PRHEAD
     head_sha="$p2"
-    base_sha="$p1"
-    diff_base="HEAD^1"
     diff_head="HEAD"
+
+    # The diff base is the merge-base of the PR head against the LIVE base ref — never the merge ref's first
+    # parent. HEAD^1 freezes at merge-ref computation, so on a branch that already merged main it re-counts
+    # main-side changes as the PR's own (#12418). The fetch is unconditional: a payload base.sha can be
+    # stale-but-resolvable and would freeze the same defect class (CTO ruling 2026-11-09). Every failure arm
+    # is fail-closed with a named reason; the ref is branch-name grammar only — never a refspec.
+    reason=bad_base_ref
+    [[ "${PR_BASE_REF:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || return 0  # GUARD:O-BASE-REF
+    reason=base_fetch
+    git fetch --no-tags --quiet origin "$PR_BASE_REF" 2>/dev/null || return 0  # GUARD:O-BASE-FETCH
+    reason=no_merge_base
+    diff_base="$(git merge-base HEAD^2 FETCH_HEAD 2>/dev/null)" || return 0  # GUARD:O-NO-MERGE-BASE
+    [ -n "$diff_base" ] || return 0
+    base_sha="$diff_base"
 
     # (3a) full on a fork head.
     reason=fork
