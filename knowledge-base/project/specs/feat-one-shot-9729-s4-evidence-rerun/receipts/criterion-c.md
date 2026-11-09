@@ -2,8 +2,8 @@
 
 ## Baseline (two adjacent closed 12h windows, ci-demand-census.sh --workflow ci.yml)
 
-- w1 2026-11-08T22:00Z→2026-11-09T10:00Z: 50 pull_request runs, 5,182 job-min → 103.65/run (TOTAL_JOB_MINUTES=11,385.6 all events; 1 not-yet-completed run excluded → lower bound)
-- w2 2026-11-08T10:00Z→22:00Z: 131 pull_request runs, 14,828 job-min → 113.19/run (TOTAL_JOB_MINUTES=25,298.8)
+- w1 2026-11-08T22:00Z→2026-11-09T10:00Z: 50 pull_request runs (= 53 pull_request runs in census − 3 RUNS_NOJOBS), 5,182 job-min → 103.65/run (TOTAL_JOB_MINUTES=11,385.6 all events; 1 not-yet-completed run excluded → lower bound)
+- w2 2026-11-08T10:00Z→22:00Z: 131 pull_request runs (= 140 − 9 RUNS_NOJOBS), 14,828 job-min → 113.19/run (TOTAL_JOB_MINUTES=25,298.8)
 - Combined baseline M = 20,010/181 ≈ **110.55** billed job-min per PR run; bar = 0.20·M ≈ **22.11**
 - `test-scripts` leg ran on 61/181 PR runs = **33.7%** (population weight); `affected-index-ratchet` billed ~3.33/2.89 min per PR run; `pr-selection` ran 0 (dark, CI_PR_AFFECTED unset)
 
@@ -30,3 +30,5 @@ Per-full-battery-run reading passes plainly; population-weighted lands ~92% of b
 Limits: suite-minutes ≈ billed job-minutes first-order; 20 consecutive successful runs not a random draw;
 runner-changed rows correctly zero saving; 1.18 s floor under-counts web-platform/bun axis; w1 excluded one
 still-running run (lower bound on M).
+
+Note: `replay-summary.txt`'s `saving` line uses the tool default `--baseline-min 99.8` (bar_min=19.96); this file's census-derived baseline (110.55, bar 22.11) is authoritative for criterion (c).
