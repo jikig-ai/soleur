@@ -56,3 +56,12 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Then: GDPR gate check (diff is CI/tf/shell — expect no regulated-data match), Phase 3 quality, Phase 4 entry guard, ## Work Phase Complete, then soleur:review -> resolve -> soleur:qa -> soleur:compound -> soleur:ship -> DONE.
 - Post-merge (3B.5): apply-github-infra.yml applies value-only; file followthrough directive on #12269 (earliest=<merge>+21d, secrets=GH_TOKEN SOLEUR_FT_TRACKER=<wallclock tracker #> SOLEUR_FT_FLIP_MERGED=<merge ts> SOLEUR_FT_P50_FLOOR=49).
 - Backlog: #9323, #11556. DO NOT dispatch #9729 (sibling live).
+
+## Work Phase Complete
+
+- Commits: ac2fa47 (impl), 91415ea (suite patch), 2822633 (baseline), 892e2b0 (lint+ticks). Pushed.
+- Suites green: test-audit-ruleset-bypass 69/0, mq-lever-e-verdict-12269.test.sh 8/8, merge-queue-stall-check.test.sh 166/0, fixture-relative-assert 63/0, fixture-dir-operand-assert 71/0, lint-shell-capture-exit 0 findings.
+- Affected gate: BUDGET-DEFERRED (gate-or-skip rc=6; lock-wait consumed budget behind sibling runs) -> authoritative gate = .github/workflows/ci.yml on PR #12495. CI-owned; disclose in PR body.
+- GDPR gate: skip (CI/tf/shell/docs only; no regulated-data surfaces).
+- Phase 3 quality: markdownlint clean on touched KB files.
+- Next: soleur:review -> resolve -> soleur:qa -> soleur:compound -> soleur:ship.
