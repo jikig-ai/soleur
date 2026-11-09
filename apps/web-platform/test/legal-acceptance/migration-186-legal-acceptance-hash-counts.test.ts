@@ -126,7 +126,7 @@ export function shapeProblems(sqlText: string, maxRows: number = MAX_ROWS): stri
   if (/\b(INSERT|UPDATE|DELETE|TRUNCATE)\b/i.test(b.replace(/'[^']*'/g, "''"))) p.push("must be read-only");
 
   // Grants: revoke from everyone including service_role, then grant to service_role only.
-  if (!new RegExp(`REVOKE ALL ON FUNCTION ${SIG.replace(/[().]/g, "\\$&")} FROM PUBLIC, anon, authenticated, service_role`, "i").test(flat)) p.push("REVOKE ALL FROM PUBLIC, anon, authenticated, service_role missing");
+  if (!new RegExp(`REVOKE ALL ON FUNCTION ${SIG.replace(/[\\().]/g, "\\$&")} FROM PUBLIC, anon, authenticated, service_role`, "i").test(flat)) p.push("REVOKE ALL FROM PUBLIC, anon, authenticated, service_role missing");
   const grants = flat.split(";").map((x) => x.trim()).filter((x) => /^GRANT /i.test(x));
   if (JSON.stringify(grants.map((g) => /TO (\w+)$/i.exec(g)?.[1])) !== JSON.stringify(["service_role"]) || !grants.every((g) => /^GRANT EXECUTE ON FUNCTION public\.legal_acceptance_hash_counts\(text\) TO service_role$/i.test(g))) {
     p.push("the only GRANT is EXECUTE on the function to service_role");
