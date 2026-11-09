@@ -2182,7 +2182,7 @@ _t66_kill_switch_run() {
 
 t66_coalesced_gate_feeds() {
   local blk
-  blk="$(_job_block "$WORKFLOW_YML" "preflight" | grep -vE '^[[:space:]]*#')"
+  blk="$(_job_block "$WORKFLOW_YML" "preflight" | grep -vE '^[[:space:]]*#' || true)"
   grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
     && _report "T66a: the preflight job carries the EVENT_MSGS_JSON feed env" ok \
     || _report "T66a: the preflight job carries the EVENT_MSGS_JSON feed env" FAIL \
@@ -2191,7 +2191,7 @@ t66_coalesced_gate_feeds() {
     && _report "T66b: the kill_switch token test reads ALL_MSGS" ok \
     || _report "T66b: the kill_switch token test reads ALL_MSGS" FAIL \
        "no ALL_MSGS-reads-skip-token line in comment-stripped preflight block"
-  blk="$(_job_block "$WORKFLOW_YML" "apply" | grep -vE '^[[:space:]]*#')"
+  blk="$(_job_block "$WORKFLOW_YML" "apply" | grep -vE '^[[:space:]]*#' || true)"
   grep -nE '\$ALL_MSGS.*ack-destroy' <<<"$blk" >/dev/null \
     && _report "T66c: the [ack-destroy] test reads ALL_MSGS" ok \
     || _report "T66c: the [ack-destroy] test reads ALL_MSGS" FAIL \
