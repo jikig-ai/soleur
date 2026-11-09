@@ -52,7 +52,7 @@ PANEL_SHA 76dba0103832e09f3b97eef7fc3bb8266512f3b0; class code; tier single-user
 ## Operator Constraints
 
 - constraint: Deliver exactly one PR for the chosen epic item through one-shot, with no standing delegation.
-- constraint: File no issue, do not edit the epic body, never edit dsar-export-allowlist.ts, do not touch the issue numbered 10613.
+- constraint: File no issue, do not edit the epic body, never edit dsar-export-allowlist.ts, do not touch the excluded issue named in the brief.
 - constraint: Never touch, read or reference the egress-audit enablement issue, and grep added diff lines and commit messages for the restricted number family before every push.
 - constraint: Operator-class actions are never done by the agent, including flag or environment creation or flips, prd writes, migrations, legal sign-off and public security claims ahead of a measured control.
 - constraint: PR body uses Ref only, a Changelog section, a Brand-survival threshold bullet, the ci_cycles tally after the final push, and records that the slow local affected battery was not awaited because CI is the ship gate.

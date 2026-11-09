@@ -338,7 +338,7 @@ discoverability_test:
 - `apps/web-platform/test/agent-env.test.ts` - pin assertions.
 - `knowledge-base/engineering/architecture/decisions/ADR-050-likec4-runtime-rerender-via-out-of-process-cli.md` - dated amendment line (work phase).
 
-Never edited: `apps/web-platform/server/dsar-export-allowlist.ts`; no file for issue 10613.
+Never edited: `apps/web-platform/server/dsar-export-allowlist.ts`; no file for the excluded issue.
 
 ## Files to Create
 
