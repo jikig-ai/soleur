@@ -9,6 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { stripHostGitBlock } from "./helpers/host-git-block";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
@@ -21,7 +22,8 @@ const calls: Call[] = [];
 let porcelainOutput = "";
 
 vi.mock("child_process", () => ({
-  execFileSync: vi.fn((cmd: string, args: string[], _opts?: unknown) => {
+  execFileSync: vi.fn((cmd: string, rawArgs: string[], _opts?: unknown) => {
+    const args = stripHostGitBlock(rawArgs);
     calls.push({ cmd, args });
     if (args[0] === "remote") {
       // Pretend a remote exists so syncPull/syncPush proceed.

@@ -28,7 +28,7 @@ import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { GIT_HARDENING_ARGS, GIT_HARDENING_ENV } from "./inngest/functions/_git-hardening";
+import { hostGitInvocation } from "./host-git";
 import { rm } from "node:fs/promises";
 
 import { reportSilentFallback } from "./observability";
@@ -83,23 +83,23 @@ async function runPlumbingGit(
   const { execFile } = await import("node:child_process");
   const execFileP = promisify(execFile);
   try {
-    // #9600: this runs on EVERY session abort, in a workspace an agent has used, OUTSIDE the sandbox and with
-    // the server's env. `-c core.fsmonitor=false` / `core.hooksPath=/dev/null` / `core.attributesFile=/dev/null`
-    // and `--no-replace-objects` (the shared hardening set) stop a planted fsmonitor or hook command from
-    // running with server secrets; GIT_NO_REPLACE_OBJECTS covers a child git. NOT covered: `filter.*`
-    // drivers, `.git/info/attributes` and a tracked `.gitattributes` (ADR-050 amendment, residuals).
-    const { stdout, stderr } = await execFileP("git", [...GIT_HARDENING_ARGS, ...args], {
+    // #9600: this runs on EVERY session abort, in a workspace an agent has used, OUTSIDE the sandbox. It goes through
+    // the shared host-git invocation (hardening arguments + a SCRUBBED environment; before #9601 follow-on it spread
+    // `process.env`, so a planted helper saw the server's secrets). NOT covered: `filter.*` drivers,
+    // `.git/info/attributes` and a tracked `.gitattributes` (ADR-050 amendment, residuals).
+    const h = hostGitInvocation(args, {
       cwd,
-      env: {
-        ...process.env,
-        // GLOBAL/SYSTEM/NOSYSTEM nulled + GIT_NO_REPLACE_OBJECTS: the args and env travel as one unit.
-        ...GIT_HARDENING_ENV,
+      extraEnv: {
         GIT_AUTHOR_NAME: "Soleur Checkpoint",
         GIT_AUTHOR_EMAIL: "checkpoint@soleur.local",
         GIT_COMMITTER_NAME: "Soleur Checkpoint",
         GIT_COMMITTER_EMAIL: "checkpoint@soleur.local",
         ...extraEnv,
       },
+    });
+    const { stdout, stderr } = await execFileP("git", h.args, {
+      cwd,
+      env: h.env,
       maxBuffer: 32 * 1024 * 1024,
     });
     return { ok: true, stdout, stderr };

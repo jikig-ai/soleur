@@ -1,4 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { stripHostGitBlock } from "../helpers/host-git-block";
 
 // ---------------------------------------------------------------------------
 // ADR-044 PR-B — session-sync write relocation (Test Scenarios 7,8,9,10).
@@ -74,7 +75,8 @@ vi.mock("@/server/observability", () => ({
 // hasRemote/hasLocalCommits report a remote with local commits and the
 // auto-commit sweep no-ops cleanly.
 vi.mock("child_process", () => ({
-  execFileSync: vi.fn((_bin: string, argv: string[]) => {
+  execFileSync: vi.fn((_bin: string, rawArgv: string[]) => {
+    const argv = stripHostGitBlock(rawArgv);
     if (argv[0] === "remote") return Buffer.from("origin\tgit@x (fetch)\n");
     if (argv[0] === "rev-list") return Buffer.from("1\n"); // hasLocalCommits → push
     if (argv[0] === "status") return Buffer.from(""); // no allowlisted changes

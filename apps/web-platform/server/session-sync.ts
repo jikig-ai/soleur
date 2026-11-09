@@ -6,7 +6,7 @@
 // the agent session.
 // ---------------------------------------------------------------------------
 
-import { execFileSync } from "child_process";
+import { execFileSync, type ExecFileSyncOptions } from "child_process";
 import { readdirSync } from "fs";
 import { join } from "path";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -20,6 +20,7 @@ import {
   warnSilentFallback,
 } from "@/server/observability";
 import { gitWithInstallationAuth } from "./git-auth";
+import { hostGitInvocation } from "./host-git";
 import { writeRepoColsToWorkspace } from "./workspace-repo-mirror";
 import { createChildLogger } from "./logger";
 
@@ -371,7 +372,8 @@ async function runProtectedFallback(
  */
 function runConnectedRepoGit(
   argv: string[],
-  opts: Parameters<typeof execFileSync>[2],
+  // No `env`: the environment is the helper's (scrubbed, hardened), never a caller's.
+  opts: Omit<ExecFileSyncOptions, "env"> & { cwd: string },
 ): Buffer {
   if (argv.length === 0) {
     throw new Error("connected-repo git: argv must include a subcommand");
@@ -389,7 +391,10 @@ function runConnectedRepoGit(
       );
     }
   }
-  return execFileSync("git", argv, opts) as Buffer;
+  // Host-side git in a workspace an agent session may have authored: shared hardening arguments + a scrubbed env
+  // (ADR-050 amendment; see server/host-git.ts for what that does and does not close).
+  const h = hostGitInvocation(argv, { cwd: opts.cwd });
+  return execFileSync("git", h.args, { ...opts, env: h.env }) as Buffer;
 }
 
 /**
@@ -849,6 +854,12 @@ export async function syncPull(
       }
     } catch (err) {
       log.warn({ err, userId }, "Auto-commit before pull failed");
+      reportSilentFallback(err, {
+        feature: "session-sync",
+        op: "auto-commit-pull",
+        extra: { userId },
+        message: "Auto-commit before sync pull failed",
+      });
     }
 
     // Use merge (not rebase) — shallow clones lack sufficient history for rebase
@@ -921,6 +932,12 @@ export async function syncPush(
       }
     } catch (err) {
       log.warn({ err, userId }, "Auto-commit before push failed");
+      reportSilentFallback(err, {
+        feature: "session-sync",
+        op: "auto-commit-push",
+        extra: { userId },
+        message: "Auto-commit before sync push failed",
+      });
     }
 
     if (!hasLocalCommits(workspacePath)) {

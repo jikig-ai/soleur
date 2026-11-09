@@ -9,9 +9,15 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { makeEd25519Pin } from "./helpers/ssh-host-key-fixture";
+import { hostGitInvocation } from "../server/host-git";
 import { gitFixtureEnv } from "../../../plugins/soleur/test/lib/git-fixture-env";
 
 const TEST_PIN = makeEd25519Pin();
+
+// Local git now rides the shared host-git invocation: the hardening block precedes the caller's args. The block is taken from
+// the helper itself (not a copied literal list), so a change to it moves the fake and production together.
+const HOST_GIT_BLOCK = hostGitInvocation([]).args;
+const stripBlock = (argv: string[]): string[] => argv.slice(HOST_GIT_BLOCK.length);
 
 const gitPush = vi.fn().mockResolvedValue(Buffer.from(""));
 const sshProvision = vi.fn().mockResolvedValue(Buffer.from(""));
@@ -84,7 +90,7 @@ function fakeLocalGit(opts: {
   failDelete?: boolean;
 }) {
   execFileSyncMock.mockImplementation((...a: unknown[]) => {
-    const args = a[1] as string[];
+    const args = stripBlock(a[1] as string[]);
     if (args[2] === "for-each-ref") {
       if (opts.listingThrows) throw opts.listingThrows;
       const honoured = args[0] === "-C" && args[1] === "/tmp/ws" && args.includes(RESCUE_PATTERN);
@@ -94,8 +100,8 @@ function fakeLocalGit(opts: {
     return Buffer.from("");
   });
 }
-const listingCalls = () => execFileSyncMock.mock.calls.filter((c) => (c[1] as string[])[2] === "for-each-ref");
-const deleteCalls = () => execFileSyncMock.mock.calls.filter((c) => (c[1] as string[])[2] === "update-ref");
+const listingCalls = () => execFileSyncMock.mock.calls.filter((c) => stripBlock(c[1] as string[])[2] === "for-each-ref");
+const deleteCalls = () => execFileSyncMock.mock.calls.filter((c) => stripBlock(c[1] as string[])[2] === "update-ref");
 
 describe("gitDataRemoteUrl / assertSafeWorkspaceId", () => {
   it("composes an absolute ssh:// URL under the git-data store bare-repo root", () => {
@@ -211,7 +217,7 @@ describe("replicateToGitData — gated on", () => {
       hasRescueBranch();
       await go();
       const [lookup] = listingCalls();
-      expect(lookup[1]).toEqual(["-C", "/tmp/ws", "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"]);
+      expect(stripBlock(lookup[1] as string[])).toEqual(["-C", "/tmp/ws", "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"]);
       expect(lookup[2]).toMatchObject({ cwd: "/tmp/ws", timeout: 5000 });
     });
 
@@ -307,7 +313,7 @@ describe("replicateToGitData — gated on", () => {
       fakeLocalGit({ refs: [[SHA_A, RESCUE_A], [SHA_B, RESCUE_B]] });
       await expect(go()).resolves.toEqual({ status: "replicated" });
       const dels = deleteCalls();
-      expect(dels.map((c) => c[1])).toEqual([
+      expect(dels.map((c) => stripBlock(c[1] as string[]))).toEqual([
         ["-C", "/tmp/ws", "update-ref", "-d", RESCUE_A, SHA_A],
         ["-C", "/tmp/ws", "update-ref", "-d", RESCUE_B, SHA_B],
       ]);
@@ -316,14 +322,14 @@ describe("replicateToGitData — gated on", () => {
 
     it("a listing line that is not `<full sha> <rescue ref>` is never passed to update-ref", async () => {
       execFileSyncMock.mockImplementation((...a: unknown[]) => {
-        const args = a[1] as string[];
+        const args = stripBlock(a[1] as string[]);
         if (args[2] === "for-each-ref") {
           return Buffer.from(`${SHA_A} ${RESCUE_A}\nzzzz ${RESCUE_B}\n${SHA_B} refs/heads/main\n`);
         }
         return Buffer.from("");
       });
       await go();
-      expect(deleteCalls().map((c) => (c[1] as string[])[4])).toEqual([RESCUE_A]);
+      expect(deleteCalls().map((c) => stripBlock(c[1] as string[])[4])).toEqual([RESCUE_A]);
     });
 
     it("a failing local delete is best-effort: both refs are still attempted, main is pushed, replication succeeds", async () => {

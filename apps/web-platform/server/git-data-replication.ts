@@ -23,6 +23,7 @@ import { createHash } from "crypto";
 import { createChildLogger } from "./logger";
 import { isGitDataStoreEnabled } from "./workspace-resolver";
 import { gitWithPrivateKeyAuth, sshWithPrivateKeyAuth } from "./git-auth";
+import { hostGitInvocation } from "./host-git";
 import { readGitDataKeyEnv, type GitDataKeyEnvName } from "./git-data-key";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
 import { hashUserId, reportSilentFallback } from "./observability";
@@ -629,14 +630,19 @@ export function ensureGitDataRemote(
   try {
     // Idempotent: add if absent, else re-point (host address may change during
     // Phase-2 fence iteration).
-    const existing = execFileSync("git", ["-C", workspacePath, "remote"], opts)
+    // Host-side git in a workspace an agent session may have authored: shared hardening + scrubbed env (host-git.ts).
+    const run = (args: string[]): Buffer => {
+      const h = hostGitInvocation(args, { cwd: workspacePath });
+      return execFileSync("git", h.args, { ...opts, env: h.env });
+    };
+    const existing = run(["-C", workspacePath, "remote"])
       .toString()
       .split("\n")
       .map((s) => s.trim());
     if (existing.includes("git-data")) {
-      execFileSync("git", ["-C", workspacePath, "remote", "set-url", "git-data", url], opts);
+      run(["-C", workspacePath, "remote", "set-url", "git-data", url]);
     } else {
-      execFileSync("git", ["-C", workspacePath, "remote", "add", "git-data", url], opts);
+      run(["-C", workspacePath, "remote", "add", "git-data", url]);
     }
   } catch (err) {
     // Surface (fail-loud) — an unconfigurable remote means the push below cannot
@@ -900,12 +906,12 @@ export async function replicateToGitData(params: {
     // Step 1 (only if a local rescue branch exists): the rescue refs alone, BEFORE `main` is touched.
     // A listing failure is not swallowed: it lands in the catch below like any other local-git fault.
     // The listing is local and bounded (5 s). Its lines are `<full sha> <refname>`.
+    const listing = hostGitInvocation(
+      ["-C", workspacePath, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"],
+      { cwd: workspacePath },
+    );
     const rescueListing = String(
-      execFileSync(
-        "git",
-        ["-C", workspacePath, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/soleur-store-tip-*"],
-        { cwd: workspacePath, stdio: "pipe", timeout: 5000 },
-      ) ?? "",
+      execFileSync("git", listing.args, { cwd: workspacePath, stdio: "pipe", timeout: 5000, env: listing.env }) ?? "",
     );
     if (rescueListing.trim() !== "") {
       await pushWithRetry(rescuePushArgs);
@@ -917,10 +923,12 @@ export async function replicateToGitData(params: {
         const m = /^([0-9a-f]{40,64}) (refs\/heads\/soleur-store-tip-\S+)$/.exec(line.trim());
         if (!m) continue;
         try {
-          execFileSync("git", ["-C", workspacePath, "update-ref", "-d", m[2], m[1]], {
+          const del = hostGitInvocation(["-C", workspacePath, "update-ref", "-d", m[2], m[1]], { cwd: workspacePath });
+          execFileSync("git", del.args, {
             cwd: workspacePath,
             stdio: "pipe",
             timeout: 5000,
+            env: del.env,
           });
         } catch {
           log.warn(

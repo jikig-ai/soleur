@@ -7,6 +7,7 @@
 // dedicated test file (kb-route-helpers-sentry-mirror.test.ts).
 
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { stripHostGitBlock } from "../helpers/host-git-block";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
@@ -24,7 +25,8 @@ const { reportSilentFallbackSpy, gitWithInstallationAuthSpy } = vi.hoisted(() =>
 let throwOnPullPush: "pull" | "push" | null = null;
 
 vi.mock("child_process", () => ({
-  execFileSync: vi.fn((cmd: string, args: string[]) => {
+  execFileSync: vi.fn((cmd: string, rawArgs: string[]) => {
+    const args = stripHostGitBlock(rawArgs);
     if (args[0] === "remote") {
       return Buffer.from("origin\tgit@github.com:t/t.git (fetch)\n");
     }

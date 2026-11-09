@@ -16,6 +16,7 @@
 // from cherry-pick (the understated R1 defect AC4 guards).
 
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { stripHostGitBlock } from "../helpers/host-git-block";
 
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY ??= "test-service-role-key";
@@ -42,7 +43,8 @@ const {
 // hasRemote() passes; `rev-list` returns 1 so hasLocalCommits() says yes;
 // `status -z` returns one allowlisted KB path so the auto-commit add/commit run.
 vi.mock("child_process", () => ({
-  execFileSync: vi.fn((_cmd: string, args: string[]) => {
+  execFileSync: vi.fn((_cmd: string, rawArgs: string[]) => {
+    const args = stripHostGitBlock(rawArgs);
     if (args[0] === "remote") {
       return Buffer.from("origin\tgit@github.com:acme/widgets.git (fetch)\n");
     }
