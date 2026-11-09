@@ -7,7 +7,9 @@
 #       suite-durations{,-heavy}.tsv prices of the `label\t0\tskip=relevance` rows that run's
 #       suite-timings-(scripts|scripts-heavy)-N artifacts record, deduped per label across the run's
 #       artifacts — is at least REQUIRED_SAVING_MIN (20) suite-minutes, and
-#   (b) no escape: for the qualifying PRs, the ci.yml `push` run on that PR's merge commit is not red.
+#   (b) no escape: for the qualifying PRs, the ci.yml `push` run on that PR's merge commit is not red
+#       on a gated test-scripts* job — a red run whose failed jobs are all outside the gated family
+#       is reported in the note line (`unrelated`), never counted (2026-11-08 classifier ruling).
 #       A push run that is absent or not yet complete is NOT YET (exit 2), never "no escape".
 # The realized-skip measure is drift-immune (the 2026-10-28 investigation on the tracker: whole-run
 # billable means measure suite growth, not the gate — same-shape pre-gate control ~113 vs post-gate
@@ -341,10 +343,10 @@ _pbg_w_esc() {
       # test-scripts* prefix the qual arm derives (:281), not a second enumeration that can drift.
       # A jobs read that cannot be established (missing run id, transport failure, empty/non-failed
       # job list, or a gated job left cancelled/inconclusive) is `pending`, never `ok`.
-      [ -n "$rid" ] || { _w_row "$rf" "pending"; return 0; }
-      jnames="$(api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" --jq '.jobs[] | select(.conclusion != null and .conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | "\(.name)\t\(.conclusion)"')" || rc=$?
+      [ -n "$rid" ] || { _w_row "$rf" "pending red push run on $sha carries no run id — cannot read its jobs"; return 0; }
+      jnames="$(api "repos/$REPO/actions/runs/$rid/jobs?per_page=100" --paginate --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped" and .conclusion != "neutral") | "\(.name)\t\(.conclusion)"')" || rc=$?
       if (( rc == 46 )); then _w_row "$rf" "cut the jobs read of push run $rid for $sha"; return 0; fi
-      if (( rc != 0 )) || [ -z "$jnames" ]; then _w_row "$rf" "pending"; return 0; fi
+      if (( rc != 0 )) || [ -z "$jnames" ]; then _w_row "$rf" "pending jobs read of red push run $rid on $sha failed or empty"; return 0; fi
       gated=""; gated_inc=""; unrel=""
       while IFS=$'\t' read -r jn jc; do
         [ -n "$jn" ] || continue
@@ -360,7 +362,7 @@ _pbg_w_esc() {
       if [ -n "$gated" ]; then
         _w_row "$rf" "escape PR $pr was green but its merge-commit push run on $sha is $concl (failed gated job(s): $gated)"
       elif [ -n "$gated_inc" ]; then
-        _w_row "$rf" "pending"
+        _w_row "$rf" "pending a gated test-scripts* job on push run $rid ($sha) is cancelled/inconclusive — cannot establish escape"
       else
         _w_row "$rf" "unrelated PR $pr push run on $sha is $concl on non-gated job(s): ${unrel:-names-unreadable}"
       fi ;;
@@ -583,9 +585,9 @@ for pr in $green_prs; do
   case "${srow%% *}" in
     dropped) dropped=$((dropped + 1)) ;;
     open) open_prs=$((open_prs + 1)) ;;
-    pending) pending=$((pending + 1)) ;;
+    pending) pending=$((pending + 1)); [ "${srow#* }" != "$srow" ] && echo "note: pending — ${srow#* }" ;;
     ok) : ;;
-    unrelated) unrelated=$((unrelated + 1)) ;;
+    unrelated) echo "note: ${srow#* }"; unrelated=$((unrelated + 1)) ;;
     escape) echo "ESCAPE: ${srow#* }"; escapes=$((escapes + 1)) ;;
     cut) cut_ny "${srow#* }" ;;
     fail) fail_api "${srow#* }" ;;
