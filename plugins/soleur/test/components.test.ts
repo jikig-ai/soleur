@@ -851,7 +851,7 @@ describe("Class R read-only ownership wiring (Ref #10205)", () => {
       "webhook-secret PATCH",
       "Doppler credential minting",
       "a menu click is not a go",
-      "without a typed go naming the exact command",
+      "without a fresh, per-command, in-session owner go naming the exact full command",
     ];
     for (const m of members) expect(p.includes(m), `the hard-limits sentence lost "${m}"`).toBe(true);
     expect(/\b(except|unless|but)\b/.test(p), "the hard-limits sentence carries a negating word").toBe(false);

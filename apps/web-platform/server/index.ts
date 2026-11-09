@@ -10,7 +10,8 @@ import { WebSocket } from "ws";
 import { setupWebSocket, attachProxiedSession } from "./ws-handler";
 import { createProxyServer } from "./session-proxy";
 import { logProxyCertExpiryAtStartup } from "./proxy-tls";
-import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, startOriginTlsListener } from "./origin-tls";
+import { ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS, ORIGIN_TLS_REQUIRED_ENV, startOriginTlsListener } from "./origin-tls";
+import { applyPlainHttpTimeouts } from "./http-timeouts";
 import { streamReplayBuffer } from "./stream-replay-buffer";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import {
@@ -161,13 +162,15 @@ app.prepare().then(() => {
 
   // #10479 (review of #12181): idle keep-alive must outlast Cloudflare's reuse of pooled origin connections.
   // Node's 5 s default closes them first, and Cloudflare then reuses a dead socket (intermittent 502/520) or
-  // re-handshakes constantly. Same keep-alive constant as the :443 listener. headersTimeout is set above it, but Node bounds the
-  // header phase by requestTimeout (default 300 s, measured), so 300 s is the operative slow-header cutoff on THIS server; the
-  // :443 listener deliberately keeps Node's 60 s headersTimeout default (ADR-321, ruling R-A of 2026-11-08). The
-  // canary is a health gate and does not exercise Cloudflare's connection reuse, so watch the 502/520
-  // rate after the deploy.
+  // re-handshakes constantly. Same keep-alive constant as the :443 listener. The header phase is bounded explicitly by
+  // applyPlainHttpTimeouts: 60 s for the headers inside a 300 s whole-request window (ADR-321 item 12, ruled by CTO agent
+  // 2026-11-08). The earlier `headersTimeout = keepAlive + 5 s` assignment was inert: Node bounds the header phase by
+  // min(headersTimeout, requestTimeout), so the operative cutoff was the inherited 300 s. The :443 listener keeps Node's
+  // own 60 s default and assigns neither property (ruling R-A). Node sweeps on a 30 s interval, so the real cutoff is the
+  // timeout plus up to 30 s. The canary is a health gate and does not exercise Cloudflare's connection reuse, so watch
+  // the 502/520 rate after the deploy.
   server.keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS;
-  server.headersTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS + 5_000;
+  applyPlainHttpTimeouts(server);
 
   const wss = setupWebSocket(server, dev);
 
@@ -332,6 +335,10 @@ app.prepare().then(() => {
     if (process.env.SOLEUR_EGRESS_REAPER === "1") {
       reapOrphanEgressForwarders();
     }
+    // A REQUIRED start whose material is absent or invalid has already begun exiting (flush, then process.exit; a bind error
+    // on :443 can still exit later, from its own handler): skip the ready log, startup event and probes on a process that is
+    // dying, so they cannot report a healthy start. The reaper above stays first: it is idempotent cleanup the next boot needs.
+    if (originTls === null && process.env[ORIGIN_TLS_REQUIRED_ENV] === "1") return;
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
     log.info({
       sentryConfigured: !!process.env.SENTRY_DSN,
