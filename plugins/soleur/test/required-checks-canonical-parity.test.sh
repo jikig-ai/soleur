@@ -18,8 +18,8 @@
 #      drift #6049 fixed and this test catches it (the action is exempt from
 #      lint-bot-synthetic-completeness.sh by construction).
 #   3. PIN-PARITY: the gitleaks version + SHA256 pin is identical across all
-#      three install sites (secret-scan.yml, ci.yml test-scripts, and the
-#      action) — a silent divergence would scan the bot diff with a different
+#      four install files (secret-scan.yml, ci.yml, main-health-monitor.yml, and
+#      the action) — a silent divergence would scan the bot diff with a different
 #      engine than the required `gitleaks scan` job.
 #
 # The CLA contexts {cla-check, cla-evidence} live in required-checks.txt AND now
@@ -254,7 +254,7 @@ else
 fi
 echo ""
 
-# --- Test 5: gitleaks pin-parity across all three install sites -------------
+# --- Test 5: gitleaks pin-parity across all four install files --------------
 
 echo "Test 5: gitleaks version + SHA256 pin is identical across all 4 sites"
 extract_version() {
@@ -574,4 +574,301 @@ else
 fi
 echo ""
 
-print_results
+# --- Test 10: pinned release-download curls carry --fail/--retry 5/--retry-all-errors
+#
+# Every `curl` that downloads a pinned gitleaks or actionlint release in a workflow
+# or composite action must carry `--fail`, `--retry 5` and `--retry-all-errors` as
+# exact tokens on the logical command (continuation lines joined, whole-line `#`
+# comments dropped). `-f`/`-fsSL` does NOT satisfy `--fail` (the owner named the long
+# flag), and `--retry 50` / `--fail-with-body` / a bare `--retry-all-errors` do not
+# satisfy the others. Flags in a comment or an `echo` line near the curl are not on it.
+# The retry budget is about 31 s: this survives a blip, not a multi-hour outage.
+#
+# scan_curl_flags prints one line per matching curl: FILE|LINE|KIND|OK or
+# FILE|LINE|KIND|MISSING <flags>, and exits 1 if any command is missing a flag.
+# POSIX awk only (the runner may have mawk): no gensub, IGNORECASE or {n} intervals.
+scan_curl_flags() {
+  local f scan_rc=0
+  for f in "$@"; do
+    awk -v file="$f" '
+      # Quote-aware: a `#`, `;`, `|` or `&` inside a quoted string (a header value, a URL query) is data, not shell syntax.
+      # \047 is a single quote (the whole program is single-quoted for bash).
+      function open_quote(s,   i, n, c, q) {
+        n = length(s); q = ""
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (q == "") {
+            if (c == "\\") i++
+            else if (c == "\"" || c == "\047") q = c
+          } else if (q == "\"" && c == "\\") i++
+          else if (c == q) q = ""
+        }
+        return q
+      }
+      function strip_comment(s, q0,   i, n, c, q, p) {
+        n = length(s); q = q0; p = " "
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (q == "") {
+            if (c == "\\") { i++; p = "x"; continue }
+            if (c == "\"" || c == "\047") q = c
+            else if (c == "#" && (p == " " || p == "\t")) return substr(s, 1, i - 1)
+          } else if (q == "\"" && c == "\\") i++
+          else if (c == q) q = ""
+          p = c
+        }
+        return s
+      }
+      function split_cmds(s, out,   i, n, c, q, p, k, cur, nx) {
+        n = length(s); q = ""; k = 0; cur = ""; p = ""
+        for (i = 1; i <= n; i++) {
+          c = substr(s, i, 1)
+          if (q != "") {
+            cur = cur c
+            if (q == "\"" && c == "\\") { i++; cur = cur substr(s, i, 1) }
+            else if (c == q) q = ""
+            p = c; continue
+          }
+          if (c == "\\") { cur = cur c substr(s, i + 1, 1); i++; p = "x"; continue }
+          if (c == "\"" || c == "\047") { q = c; cur = cur c; p = c; continue }
+          if (c == ";" || c == "|" || c == "&") {
+            nx = substr(s, i + 1, 1)
+            if (c == "&" && (p == ">" || nx == ">")) { cur = cur c; p = c; continue }   # 2>&1 and &> are redirections
+            out[++k] = cur; cur = ""; p = c; continue
+          }
+          cur = cur c; p = c
+        }
+        out[++k] = cur
+        return k
+      }
+      function finish(   kind, miss, n, i, seg, parts) {
+        n = split_cmds(buf, parts)
+        for (i = 1; i <= n; i++) {
+          seg = parts[i]
+          if (seg !~ /(^|[[:space:]("`])curl[[:space:]]/) continue
+          kind = ""
+          if (index(seg, "gitleaks/gitleaks/releases/download")) kind = "gitleaks"
+          else if (index(seg, "rhysd/actionlint/releases/download")) kind = "actionlint"
+          if (kind == "") continue
+          miss = ""
+          if (seg !~ /(^|[[:space:]])--fail([[:space:]]|$)/) miss = miss " --fail"
+          if (seg !~ /(^|[[:space:]])--retry[[:space:]]+5([[:space:]]|$)/) miss = miss " --retry-5"
+          if (seg !~ /(^|[[:space:]])--retry-all-errors([[:space:]]|$)/) miss = miss " --retry-all-errors"
+          if (miss != "") bad = 1
+          printf "%s|%d|%s|%s\n", file, start, kind, (miss == "" ? "OK" : "MISSING" miss)
+        }
+        buf = ""
+      }
+      # A line inside a quoted string that began on an earlier continuation line is data, even if it starts with `#`.
+      /^[[:space:]]*#/ { if (buf == "" || open_quote(buf) == "") next }
+      {
+        if (buf == "") start = NR
+        phys = $0
+        phys = strip_comment(phys, (buf == "" ? "" : open_quote(buf)))   # a trailing comment (a `#` outside quotes) is not part of the command
+        if (phys ~ /\\$/) { sub(/\\$/, " ", phys); buf = buf " " phys; next }
+        buf = buf " " phys
+        finish()
+      }
+      END { if (buf != "") finish(); exit bad }
+    ' "$f" || scan_rc=1
+  done
+  return "$scan_rc"
+}
+
+# strip_flag_once SRC DST FLAG: copy SRC to DST, removing the first occurrence of FLAG
+# (with its leading space) from the line directly above a gitleaks/actionlint download
+# URL line, i.e. from the curl command line of that download, never from another curl.
+strip_flag_once() {
+  awk -v flag=" $3" '
+    { l[NR] = $0 }
+    END {
+      for (i = 1; i < NR; i++) {
+        if (!done && l[i+1] ~ /releases\/download\/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}/ && (p = index(l[i], flag))) {
+          l[i] = substr(l[i], 1, p - 1) substr(l[i], p + length(flag))
+          done = 1
+        }
+      }
+      for (i = 1; i <= NR; i++) print l[i]
+    }
+  ' "$1" > "$2"
+}
+
+echo "Test 10: gitleaks/actionlint release-download curls carry --fail --retry 5 --retry-all-errors"
+# collect_curl_scan_files ROOT: every workflow and composite-action file the scan covers (.yml and .yaml), one per line.
+collect_curl_scan_files() {
+  local root="$1" a=()
+  shopt -s nullglob
+  a=("$root"/.github/workflows/*.yml "$root"/.github/workflows/*.yaml "$root"/.github/actions/*/action.yml "$root"/.github/actions/*/action.yaml)
+  shopt -u nullglob
+  if [[ ${#a[@]} -gt 0 ]]; then printf '%s\n' "${a[@]}"; fi
+}
+mapfile -t CURL_SCAN_FILES < <(collect_curl_scan_files "$REPO_ROOT")
+
+scan_rc=0
+scan_out=$(scan_curl_flags "${CURL_SCAN_FILES[@]}") || scan_rc=$?
+n_gl=$(printf '%s\n' "$scan_out" | grep -c '|gitleaks|' || true)
+n_al=$(printf '%s\n' "$scan_out" | grep -c '|actionlint|' || true)
+n_bad=$(printf '%s\n' "$scan_out" | grep -c '|MISSING' || true)
+# Independent raw count: NON-comment lines carrying the variable-form URL fragment
+# (the literal-version URL in a secret-scan.yml comment must not be counted).
+# Counts EVERY line carrying the variable-form URL, comment or not: a `#` inside a quoted header (even one that starts a
+# continuation line) must not hide a URL from this cross-check. A commented-out variable-form URL would make this
+# disagree loudly, which is the cheap direction to fail.
+n_raw=$({ grep -h -E 'releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "${CURL_SCAN_FILES[@]}" || true; } | wc -l | tr -d ' ')
+
+assert_eq "0" "$n_bad" "(10a) no gitleaks/actionlint download curl is missing a hardening flag"
+if [[ "$n_bad" -ne 0 ]]; then printf '%s\n' "$scan_out" | grep '|MISSING' | sed 's/^/        /'; fi
+assert_eq "0" "$scan_rc" "(10b) scanner exits 0 on the real tree"
+if [[ "$n_gl" -ge 7 ]]; then
+  echo "  PASS: (10c) non-vacuous — $n_gl gitleaks download curls scanned (floor 7)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (10c) only $n_gl gitleaks download curls scanned (floor 7)"
+  FAIL=$((FAIL + 1))
+fi
+if [[ "$n_al" -ge 1 ]]; then
+  echo "  PASS: (10d) non-vacuous — $n_al actionlint download curls scanned (floor 1)"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: (10d) only $n_al actionlint download curls scanned (floor 1)"
+  FAIL=$((FAIL + 1))
+fi
+assert_eq "$n_raw" "$((n_gl + n_al))" "(10e) scanner count == independent raw count of non-comment download URL lines"
+
+# (10f) mutation self-test: removing ONE flag from the curl line of the first download in a
+# temp copy of each scanned file must make the scanner FAIL it and name the missing flag.
+# A mutation that changed nothing (cmp equal) fails the arm instead of passing vacuously.
+for f in "${CURL_SCAN_FILES[@]}"; do
+  grep -qE 'releases/download/v\$\{(GITLEAKS|ACTIONLINT)_VERSION\}' "$f" || continue
+  base="${f##*/}"
+  [[ "$base" == "action.yml" ]] && base="bot-pr-action.yml"
+  for flag in --fail "--retry 5" --retry-all-errors; do
+    mut="$TMP/mut-${base}-${flag// /_}"
+    strip_flag_once "$f" "$mut" "$flag"
+    if cmp -s "$f" "$mut"; then
+      echo "  FAIL: (10f) mutation of '$flag' in $base changed nothing (flag absent on the curl line)"
+      FAIL=$((FAIL + 1))
+      continue
+    fi
+    m_rc=0
+    m_out=$(scan_curl_flags "$mut") || m_rc=$?
+    if [[ "$m_rc" -ne 0 && "$m_out" == *"|MISSING"* ]]; then
+      echo "  PASS: (10f) scanner FAILS $base with '$flag' stripped"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: (10f) scanner did not flag $base with '$flag' stripped (rc=$m_rc)"
+      FAIL=$((FAIL + 1))
+    fi
+  done
+done
+
+# (10g) synthesized fixtures. Must-PASS: flags in a different order, `-sSL` before them,
+# the output file given via `-o` after them.
+cat > "$TMP/curl-pass.yml" <<'YML'
+      run: |
+        curl -sSL --retry-all-errors --retry 5 --fail -o gitleaks.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        echo "${GITLEAKS_SHA256}  gitleaks.tgz" | sha256sum -c -
+YML
+p_rc=0; p_out=$(scan_curl_flags "$TMP/curl-pass.yml") || p_rc=$?
+assert_eq "0" "$p_rc" "(10g) flags in a different order still PASS"
+assert_contains "$p_out" "|gitleaks|OK" "(10g) the reordered command is counted as one gitleaks curl"
+
+# Must-FAIL fixtures, one defect each.
+neg_check() {  # neg_check NAME EXPECTED-MISSING-FLAG  (fixture body on stdin)
+  local name="$1" want="$2" nrc=0 nout
+  cat > "$TMP/neg-$name.yml"
+  nout=$(scan_curl_flags "$TMP/neg-$name.yml") || nrc=$?
+  if [[ "$nrc" -ne 0 && "$nout" == *"|MISSING"*"$want"* ]]; then
+    echo "  PASS: (10h) $name is rejected (missing$want)"
+    PASS=$((PASS + 1))
+  else
+    echo "  FAIL: (10h) $name was not rejected for $want (rc=$nrc out=$nout)"
+    FAIL=$((FAIL + 1))
+  fi
+}
+neg_check short-f " --fail" <<'YML'
+        curl -fsSL --retry 5 --retry-all-errors -o gitleaks.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check fail-with-body " --fail" <<'YML'
+        curl --fail-with-body --retry 5 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+YML
+neg_check retry-50 " --retry-5" <<'YML'
+        curl --fail --retry 50 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check flags-in-comment-and-echo " --fail" <<'YML'
+        # curl --fail --retry 5 --retry-all-errors
+        echo "--fail --retry 5 --retry-all-errors"
+        curl -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check flags-in-trailing-comment " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" # --fail --retry 5 --retry-all-errors
+YML
+neg_check flags-in-chained-echo " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" && echo --fail --retry 5 --retry-all-errors
+YML
+neg_check hardened-curl-masks-second-on-one-line " --retry-all-errors" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz "https://example.invalid/x"; curl --fail --retry 5 -sSLo b.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check standalone-f-with-retry " --fail" <<'YML'
+        curl -f --retry 5 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check second-copy-unhardened " --retry-all-errors" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+        curl --fail --retry 5 -sSLo b.tgz \
+          "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+# Quote-awareness and command-boundary fixtures. A `#` or `;` inside a quoted header is data, so the curl is still seen
+# (and rejected); a `|` or `&` ends the command, so flags on the far side of it are not on the curl.
+neg_check quoted-hash-in-header " --fail" <<'YML'
+        curl -sSL -H "X: a #b" -o a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check semicolon-in-header " --fail" <<'YML'
+        curl -sSL -H "X: a;b" -o a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+neg_check flags-after-pipe " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tee --fail --retry 5 --retry-all-errors
+YML
+neg_check flags-after-background-amp " --fail" <<'YML'
+        curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" & echo --fail --retry 5 --retry-all-errors
+YML
+neg_check command-substitution " --fail" <<'YML'
+        x=$(curl -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz")
+YML
+neg_check hash-line-inside-continued-quote " --fail" <<'YML'
+        curl -sSL -H "X: a \
+          #b" -o a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+YML
+cat > "$TMP/curl-pass-query.yml" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz?a=1;b=2&c=3"
+YML
+q_rc=0; q_out=$(scan_curl_flags "$TMP/curl-pass-query.yml") || q_rc=$?
+assert_eq "0" "$q_rc" "(10i) a quoted URL query containing ; and & is not split"
+assert_contains "$q_out" "|gitleaks|OK" "(10i) the quoted-query command is counted as one gitleaks curl"
+cat > "$TMP/curl-pass-redirect.yml" <<'YML'
+        curl --fail --retry 5 --retry-all-errors -sSLo a.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" 2>&1 | cat
+YML
+r_rc=0; r_out=$(scan_curl_flags "$TMP/curl-pass-redirect.yml") || r_rc=$?
+assert_eq "0" "$r_rc" "(10i) a 2>&1 redirection is not a command boundary"
+assert_contains "$r_out" "|gitleaks|OK" "(10i) the redirected command is counted as one gitleaks curl"
+
+# (10j) the file collector covers .yml AND .yaml in both locations (a .yaml-only copy of the install would otherwise go unscanned).
+mkdir -p "$TMP/tree/.github/workflows" "$TMP/tree/.github/actions/x" "$TMP/tree/.github/actions/y"
+: > "$TMP/tree/.github/workflows/a.yml"; : > "$TMP/tree/.github/workflows/b.yaml"
+: > "$TMP/tree/.github/actions/x/action.yml"; : > "$TMP/tree/.github/actions/y/action.yaml"
+tree_out=$(collect_curl_scan_files "$TMP/tree")
+assert_eq "4" "$(printf '%s\n' "$tree_out" | grep -c . || true)" "(10j) the collector finds .yml and .yaml workflows and composite actions"
+assert_contains "$tree_out" "workflows/b.yaml" "(10j) a .yaml workflow is collected"
+assert_contains "$tree_out" "actions/y/action.yaml" "(10j) a .yaml composite action is collected"
+# Independent of the collector: the same set found with find must equal what the real scan covered.
+n_find=$({ find "$REPO_ROOT/.github/workflows" -maxdepth 1 -type f \( -name '*.yml' -o -name '*.yaml' \); find "$REPO_ROOT/.github/actions" -mindepth 2 -maxdepth 2 -type f \( -name action.yml -o -name action.yaml \); } | wc -l | tr -d ' ')
+assert_eq "$n_find" "${#CURL_SCAN_FILES[@]}" "(10j) the real scan covers every workflow and action file find sees"
+echo ""
+
+print_results 95

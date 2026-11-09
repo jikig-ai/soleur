@@ -45,11 +45,16 @@
 // SCOPE. No client-certificate check (Authenticated Origin Pulls) here: ruled out for this
 // change in the plan (knowledge-base/project/plans/archive/20261105-200240-2026-11-05-feat-origin-tls-listener-plan.md).
 
+// Every Sentry report in this file tags `feature: "origin_tls"` as an INLINE literal on purpose: the alert rule
+// `sentry_alert.origin_tls_event` (apps/web-platform/infra/sentry/issue-alerts.tf) filters on that tag alone, and
+// test/sentry-origin-tls-alert-op-contract.test.ts derives the literal from these call sites. Hoisting it into a constant or
+// reporting through another helper hides it from that contract and silently un-pages the events.
 import { X509Certificate, createPrivateKey } from "node:crypto";
 import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
 import type { Server as HttpServer, IncomingMessage } from "node:http";
 import type { TLSSocket } from "node:tls";
 import { performance } from "node:perf_hooks";
+import * as Sentry from "@sentry/nextjs";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback, warnSilentFallback } from "./observability";
 
@@ -206,6 +211,48 @@ const TLS_CLIENT_ERROR_LOG_INTERVAL_MS = 60_000;
 /** Post-bind server 'error' reports: one a minute, with a suppressed count (same pattern as the client-error log). */
 const RUNTIME_ERROR_REPORT_INTERVAL_MS = 60_000;
 
+/** Bound on the Sentry flush before a REQUIRED-mode exit (the same 2 s as crash-handlers FATAL_FLUSH_MS). */
+export const EXIT_FLUSH_MS = 2_000;
+/** Hard stop: exit even if the flush neither resolves nor rejects, so a wedged transport cannot keep a dead listener alive. */
+const EXIT_HARD_TIMER_MS = EXIT_FLUSH_MS + 250;
+
+/**
+ * Builds an exit that first gives the Sentry SDK up to EXIT_FLUSH_MS to send what the report just queued (the SDK sends
+ * asynchronously, so a bare process.exit can drop the very event the origin_tls alert rule exists for). It always exits:
+ * on resolve, on reject, on a synchronous throw, on a non-promise return, or when the hard timer fires first. Idempotent per
+ * returned function, so a second fatal during the flush window neither re-flushes nor exits twice. The pino error line
+ * (shipped to Better Stack) is the second sink if the hard timer wins.
+ */
+export function createExitAfterFlush(
+  deps: { flush?: (timeoutMs: number) => unknown; exit?: (code: number) => void } = {},
+): (code: number) => void {
+  const flush = deps.flush ?? ((ms: number) => Sentry.flush(ms));
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
+  let exiting = false;
+  return (code: number): void => {
+    if (exiting) return;
+    exiting = true;
+    let done = false;
+    // `finish` is declared right after `timer` and before the try block, so every path that can call it (timer, flush callbacks, the sync-throw catch) sees both.
+    const timer = setTimeout(() => finish(), EXIT_HARD_TIMER_MS);
+    const finish = (): void => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try {
+        exit(code);
+      } catch {
+        // process.exit does not return; an injected exit that throws must not become an unhandled rejection or a crash loop
+      }
+    };
+    try {
+      Promise.resolve(flush(EXIT_FLUSH_MS)).then(finish, finish);
+    } catch {
+      finish();
+    }
+  };
+}
+
 /**
  * Start the origin TLS listener next to `httpServer`, or return null when it must not run (no
  * material, invalid material, or the port could not be bound). Never throws: the plain-HTTP
@@ -217,12 +264,26 @@ export function startOriginTlsListener(params: {
   /** 0 asks the OS for a free port (tests). */
   port?: number;
   onListening?: (port: number) => void;
-  /** Injected in tests; defaults to process.exit. Only called in REQUIRED mode. */
+  /** Injected in tests; defaults to a Sentry flush (bounded) then process.exit. Only called in REQUIRED mode. */
   exit?: (code: number) => void;
 }): OriginTlsListener | null {
   const env = params.env ?? process.env;
   const required = env[ORIGIN_TLS_REQUIRED_ENV] === "1";
-  const exit = params.exit ?? ((code: number) => process.exit(code));
+  // The default exit first stops the plain :80 server accepting (the flush below can take up to 2.25 s, and a dying REQUIRED
+  // start must not look healthy to the deploy canary in that window), then flushes Sentry, then exits.
+  const flushThenExit = createExitAfterFlush();
+  const exit =
+    params.exit ??
+    ((code: number): void => {
+      try {
+        params.httpServer.close();
+        params.httpServer.closeIdleConnections?.();
+      } catch (err) {
+        // a server that cannot close must not stop the exit
+        log.warn({ err }, "origin-tls: could not close the plain HTTP server before the REQUIRED-mode exit");
+      }
+      flushThenExit(code);
+    });
   const failClosed = (): null => {
     if (required) exit(1);
     return null;
@@ -290,11 +351,11 @@ export function startOriginTlsListener(params: {
   // the WebSocket upgrade listener (ws-handler.ts) are registered on `httpServer`, and ws accepts
   // any duplex socket, so a TLS socket upgrades like a plain one. Server-level options (timeouts,
   // maxHeaderSize) are per server instance and are NOT shared. This listener sets keepAliveTimeout and
-  // leaves headersTimeout at Node's 60 s default on purpose: the plain :80 server in index.ts also sets
-  // headersTimeout, but Node bounds the header phase by requestTimeout (default 300 s), so mirroring it
-  // here would LOOSEN the :443 slow-header cutoff from 60 s to 300 s for no demonstrated need (an idle
-  // keep-alive socket was measured open at 75 s with the default). Any OTHER option later set on the plain
-  // server in index.ts must be applied here too, deliberately.
+  // leaves headersTimeout and requestTimeout at Node's defaults (60 s / 300 s) on purpose. The plain :80
+  // server in index.ts states the same two numbers explicitly through ./http-timeouts (ADR-321 item 12),
+  // so both listeners cut a stalled client at the same bound; assigning either property here would risk
+  // LOOSENING it for no demonstrated need (an idle keep-alive socket was measured open at 75 s with the
+  // default). Any OTHER option later set on the plain server in index.ts must be applied here too, deliberately.
   httpsServer.on("request", (req, res) => {
     if (isHealthPath(req.url)) {
       res.setHeader(ORIGIN_TRANSPORT_HEADER, negotiatedProtocol(req));

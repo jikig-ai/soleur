@@ -699,7 +699,7 @@
 },
 "technology": "Next.js API",
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, and a flag-gated PostToolUse(Bash) gh-output framing note, annotate-only, registered under the same web-egress and classify-flag predicate, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "title": "API Routes",
 "kind": "container",
@@ -1565,17 +1565,6 @@
 "id": "189i3k1f8wlqb",
 "title": "Conversation PII origin — the operator captures notes about this third party"
 },
-"18qch4lqc3jab": {
-"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
-"source": {
-"model": "github"
-},
-"target": {
-"model": "doppler"
-},
-"id": "18qch4lqc3jab",
-"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). Since #10540 inngest-key-rotate.yml (environment infra-privileged, dispatch-only, ADR-307) is a loader consumer in its apply1, apply2 and reboot jobs; its guard job holds the Tier-A token only, and its redeploy job holds the deploy webhook credentials only. Since #11294 key-rotate.yml (environment infra-privileged, dispatch-only, ADR-314) is a loader consumer in its apply job alone: its guard, redeploy and notify jobs hold no Doppler credential (the guard reads the GitHub API only, the redeploy job names the deploy webhook credentials in one step, the notify job holds the issues scope). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main"
-},
 "18qt3whw1zxxc": {
 "source": {
 "model": "platform.plugin.oneshot"
@@ -1801,17 +1790,6 @@
 },
 "id": "1jn68nupn3hwr",
 "title": "The release-outcome operator email: an inline `curl` to the Resend API from the runner (NOT via webapp/api, which carry the statutory-triage edges), one of fourteen Resend emitters under .github/ (#8211 added the fourteenth, git-data-cutover.yml's notify-failure job, which emails a failed, stranded or cancelled cutover through the notify-ops-email composite and files a ci/git-data-cutover issue as the primary channel; before it, #7539 added the thirteenth: apply-web-platform-infra.yml's SSH-stage-skipped arm, which gives the ssh_token_gate green-skip a consumer — a green apply that delivered nothing is the failure mode that PR exists to close; #8189 added a fourteenth: apply-git-data-root-key.yml's notify-root-key-apply job, which emails on any non-success root-key apply; #8377 then removed one, taking the count back to thirteen — rule-metrics-aggregate.yml was deleted when rule-metrics.json became an untracked cache under ADR-235; #8511 added a fourteenth, git-data-pin-redeploy.yml, and #8211 PR2 removed it again, taking the count back to thirteen — the pin load is now the apply job's inline pin_load step, which needs no email arm because a skipped/failed pin_load reds the job itself) and the only one that fires regardless of which job in the release graph failed — `deploy`'s inline email and `reusable-release.yml`'s `notify-ops-email` step are job-scoped, so they are structurally silent for a failure outside their own job (#7138)"
-},
-"1jqvnjh6ie1uo": {
-"technology": "GitHub Actions environment protection (required_reviewers + deployment branch policy)",
-"source": {
-"model": "founder"
-},
-"target": {
-"model": "github"
-},
-"id": "1jqvnjh6ie1uo",
-"title": "Approves a queued production-mutating rotate dispatch at the reviewer-gated `key-rotate-approval` environment: the credential-free `approve` job of key-rotate.yml (mode=rotate) and inngest-key-rotate.yml (rotate + converge) parks in `Waiting` until a listed reviewer approves in the Actions UI — `mode=plan` never gates. The environment carries NO secrets (the approve job holds none and DOPPLER_TOKEN_INFRA_PRIVILEGED stays on infra-privileged), so no github -> doppler carrier row is needed. The guard live-reads the env's `protection_rules` and refuses `approval_environment_unprotected` when required_reviewers or the main branch policy is absent; the PAT-dispatch residual is bounded by this distinct human act (ADR-317 amendment 2026-11-05, #11923)"
 },
 "1l1gtz1pvduj9": {
 "technology": "HTTPS",
@@ -3214,6 +3192,17 @@
 "id": "8p9oloc4osac",
 "title": "Phase 0.5 assessment"
 },
+"9kpu4xmy19ky": {
+"technology": "doppler CLI (project-scoped read service token, delivered as a main-only GitHub environment secret)",
+"source": {
+"model": "github"
+},
+"target": {
+"model": "doppler"
+},
+"id": "9kpu4xmy19ky",
+"title": "Tier-B Terraform credentials (#8209, ADR-241 D2/D3): a Tier-B job loads the WHOLE soleur-infra-privileged/prd project through .github/actions/infra-credentials, using a read service token that is a GitHub ENVIRONMENT secret (DOPPLER_TOKEN_INFRA_PRIVILEGED) on an environment whose deployment-branch policy admits `main` ONLY — infra-privileged (no reviewers, for the unattended apply-on-merge and drift paths and, since #9262, the inngest pin bump and auto-mint, and, since #9454 item 4, the weekly weakness-digest PR author), web-platform-infra-apply, inngest-cutover and workspaces-luks-cutover. Since #10138 the `wipe` job of git-data-cutover.yml (environment web-platform-infra-apply) is a loader consumer too, and the first one in that workflow: it calls the loader once, with only the Tier-B token (no legacy token), and every step after the loader runs under an exec env -i allow-list (ADR-241 amendment 2026-10-14). Since #10540 inngest-key-rotate.yml (environment infra-privileged, dispatch-only, ADR-307) is a loader consumer in its apply1, apply2 and reboot jobs; its guard job holds the Tier-A token only, and its redeploy job holds the deploy webhook credentials only. Since #11294 key-rotate.yml (environment infra-privileged, dispatch-only, ADR-317) is a loader consumer in its apply and clear jobs: its guard, redeploy and notify jobs hold no Doppler credential (the guard reads the GitHub API only, the redeploy job names the deploy webhook credentials in one step, the notify job holds the issues scope). The boundary is the BRANCH POLICY, not the reviewer gate: GitHub evaluates it before the job starts and before the secret is materialized, which is the one thing a repo secret cannot do (any workflow on any branch of this PUBLIC repo can name a repo secret, and that is how DOPPLER_TOKEN_TF, HCLOUD_TOKEN, CF_API_TOKEN_R2 and a soleur-ai App key became branch-reachable). A PROJECT, never a prd_* branch config: a branch config resolves its root's secrets, which is how prd_terraform inherited prd. Terraform declares the project and its environment and mints NOTHING into them — the web-platform root's state is Tier-A readable, so a doppler_secret or doppler_service_token declared there would land in exactly the tier this edge exists to evict it from; the containers are IaC, the values are supplied out of band. Every doppler run in a Tier-B job carries --preserve-env, so a value planted in the Tier-A-writable prd_terraform can never shadow a loaded Tier-B value (doppler run OVERRIDES the environment by default; the flag is what makes precedence a property of the code). Enforced on every PR by tests/scripts/test-infra-privileged-tier-census.sh, which derives the Tier-B job set from references to the secret and the environment set from what those jobs declare, never from a hand-kept list. NOMINAL UNTIL R1: a holder of a prd repo-secret token still reads the soleur-ai runtime key, whose App carries administration:write on jikig-ai/soleur and can therefore rewrite the branch policy this edge rests on — which is why ADR-241 D2 is `proposed`, not `accepted`. SINCE #8609 (ADR-241 D10) the project also carries GITHUB_APP_RUNTIME_DOPPLER_TOKEN, the web host's read token for the isolated soleur-github-app project (see the doppler -> hetzner edge). It is operator-minted into Tier B, never Terraform-minted (ADR-241 D3). The loader always exports its TF_VAR_ name and fills it only for the jobs that opt in (the deploy-pipeline push and the web-host create/replace jobs), so the Tier-A prd_terraform arm can never supply it. R1 is CLOSING with this mechanism; the NOMINAL clause above holds until the old key's JWT gets 401 (runbook R7) and D2 flips. SINCE #9262 two unattended App-token consumers on infra-privileged — build-inngest-bootstrap-image.yml's bump-cloud-init-pin and mint-inngest-bootstrap-tag.yml's mint — and, since #9454 item 4 (ADR-285), a third, weakness-miner.yml's open-pr, which mints a contents+pull_requests token to author, push and arm the weekly digest PR as the App, do NOT load the project through infra-credentials: the ./.github/actions/mint-infra-app-token composite makes a single-key read of GITHUB_INFRA_APP_ID and GITHUB_INFRA_APP_PRIVATE_KEY (doppler secrets get with --project and --config prd in argv, the project one of two validated names). SINCE #9321 (ADR-241 D11) those consumers read the NARROW Doppler project soleur-infra-app/prd, which holds a copy of only the two App values (Terraform declares the empty project; an operator-run script copies the values and mints its read token) and is reached with a read token that is the environment secret DOPPLER_TOKEN_INFRA_APP, so none of those jobs holds the whole-project token or can reach GITHUB_APP_RUNTIME_DOPPLER_TOKEN. The composite's one broad-source caller, apply-github-infra.yml, names the whole project explicitly and keeps DOPPLER_TOKEN_INFRA_PRIVILEGED, which it already holds for Terraform. The narrowing is least privilege by reference under the main-only policy, not a boundary against a change merged to main"
+},
 "ajv7s70947f": {
 "technology": "Slack push",
 "source": {
@@ -3567,6 +3556,17 @@
 },
 "id": "uyddfvfidosi",
 "title": "crm_* MCP tools read AND write the owner-private CRM via auth.uid()-pinned RPCs (agent-native parity)"
+},
+"vbhbq1beo76i": {
+"technology": "GitHub Actions environment protection (required_reviewers + deployment branch policy)",
+"source": {
+"model": "founder"
+},
+"target": {
+"model": "github"
+},
+"id": "vbhbq1beo76i",
+"title": "Approves a queued production-mutating rotate dispatch at the reviewer-gated `key-rotate-approval` environment: the credential-free `approve` job of key-rotate.yml (mode=rotate) and inngest-key-rotate.yml (rotate + converge) parks in `Waiting` until a listed reviewer approves in the Actions UI — `mode=plan` never gates. The environment carries NO secrets (the approve job holds none and DOPPLER_TOKEN_INFRA_PRIVILEGED stays on infra-privileged), so no github -> doppler carrier row is needed. The guard live-reads the env's `protection_rules` and refuses `approval_environment_unprotected` when required_reviewers or the main branch policy is absent; the PAT-dispatch residual is bounded by this distinct human act (ADR-317 amendment 2026-11-05, #11923); since the 2026-11-08 ruling the parked dispatch may be owner- or agent-initiated under the owner's fresh, per-command, in-session go naming the exact full command, and the click stays the owner's"
 },
 "wpmscbozq4n1": {
 "technology": "WebSocket",
@@ -5908,7 +5908,7 @@
 "relations": [
 "14e78jcrtpvgn",
 "1d3me9ksz1bvh",
-"1jqvnjh6ie1uo"
+"vbhbq1beo76i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -9139,9 +9139,9 @@
 },
 "parent": null,
 "relations": [
-"18qch4lqc3jab",
 "32q0mefae0wq7",
 "3j05altb1wez",
+"9kpu4xmy19ky",
 "b5wqsiskal5e"
 ],
 "color": "gray",
@@ -13386,7 +13386,7 @@
 "relations": [
 "14e78jcrtpvgn",
 "1d3me9ksz1bvh",
-"1jqvnjh6ie1uo"
+"vbhbq1beo76i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -14590,9 +14590,9 @@
 },
 "parent": null,
 "relations": [
-"18qch4lqc3jab",
 "32q0mefae0wq7",
 "3j05altb1wez",
+"9kpu4xmy19ky",
 "b5wqsiskal5e"
 ],
 "color": "gray",
@@ -17715,7 +17715,7 @@
 "size": "md"
 },
 "description": {
-"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
+"txt": "REST endpoints for auth, sessions, and agent control. Registers in-process Agent-SDK options.hooks (sandbox, subagent-audit, phase-surface, tool-attempt-telemetry, context-queries, and a flag-gated PostToolUse(WebFetch) untrusted-content annotator and optional output rewriter that only runs with web egress, and a flag-gated PostToolUse(Bash) gh-output framing note, annotate-only, registered under the same web-egress and classify-flag predicate, ADR-287 #4671) on web agent sessions — settingSources:[] isolates these from the CLI .claude/ shell Hook Engine (ADR-070 #5772, #5843; ADR-086 #6046), but it does not exclude the platform-deployed plugin's hooks.json command hooks, which do execute in web sessions — the operator-CLI unkept-promise Stop hook, the staged-operator-script approval hook and the destructive-command guard each self-disable via a SOLEUR_DISABLE_* variable set by buildAgentEnv (SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK, SOLEUR_DISABLE_OPERATOR_STAGE_APPROVAL_HOOK, SOLEUR_DISABLE_DESTRUCTIVE_GUARD). Hosted Bash asks separately, not through that hook, before common forms of a default-branch force-push or delete, terraform destroy and a gh ref or repository delete (a must-ask lane in canUseTool, ADR-284, #9776). Behind the approval-queue flag, eight gated tools instead create and consume a durable single-use approval request in the same branch of canUseTool (ADR-309, #4672). The classification is partial: a census derives every PreToolUse hook from hooks.json (the destructive-command guard and the staged-approval hook web-disabled, browser-snapshot-credential-guard deliberately web-active), the Stop hooks are classified separately (stop-hook deferred under #9289), and the SessionStart and PreCompact hooks (welcome-hook, codex-session-start, devin-session-start, compaction-state — registered under both events, version-banner, ext-filter-detect, and bare-root-cwd-guard, the #10392 cross-repo arm) are unclassified with no web override — the latter two carry their own kill switches and bare-root-cwd-guard is context-only. buildAgentEnv decides the env of the hosted Concierge sessions only: the server-side scheduled agents that spawn claude --plugin-dir plugins/soleur through their own per-function buildSpawnEnv allowlists never receive these overrides, so the destructive-command guard is active there and an ask blocks (ADR-093 amendments 2026-09-30 and 2026-10-07; ADR-277; #9289)."
 },
 "tags": [],
 "notation": "Container",
@@ -23012,7 +23012,7 @@
 "relations": [
 "14e78jcrtpvgn",
 "1d3me9ksz1bvh",
-"1jqvnjh6ie1uo"
+"vbhbq1beo76i"
 ],
 "color": "gray",
 "line": "dashed",
@@ -24497,9 +24497,9 @@
 },
 "parent": null,
 "relations": [
-"18qch4lqc3jab",
 "32q0mefae0wq7",
 "3j05altb1wez",
+"9kpu4xmy19ky",
 "b5wqsiskal5e"
 ],
 "color": "gray",
