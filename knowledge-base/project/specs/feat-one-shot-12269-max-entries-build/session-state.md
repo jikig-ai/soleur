@@ -33,3 +33,14 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Committed ac2fa472: flip on 4 surfaces (tf/DR/README/stall-env -> 1) + Guard-2 {1,2} pin + T-mq-1.m14/m15 + MQ_EXPECTED_OK 28->31 + followthrough probe + suite. Guard suite 69/0, probe suite 8/8.
 - stall-check suite fixtures made maxpos-aware (behav_check + lrow7) — uncommitted, suite re-run pending.
 - Remaining: commit suite patch; GDPR gate (likely skip); affected gate; fixture ratchets for new .test.sh; Phase 3 quality; Phase 4 guard -> review -> resolve -> qa -> compound -> ship.
+
+## Resume Point (work phase, near-complete)
+
+- Branch: feat-one-shot-12269-max-entries-build | Worktree: .worktrees/feat-one-shot-12269-max-entries-build | Draft PR #12495 | Issue #12269 (tracker, stays OPEN — PR body uses Ref).
+- Committed: plan+deepen (70713d3,31f3764), CTO rulings+session-state (27422b5,7 rows ruled), implementation (ac2fa47), progress checkpoint (f7bf400).
+- Implementation done: flip max_entries_to_build 2->1 on 4 surfaces (ruleset-ci-required.tf, create-ci-required-ruleset.sh, README, merge-queue-stall-check.yml env+comments); Guard-2 {1,2} pin + T-mq-1.m14/m15 + MQ_EXPECTED_OK 31; new scripts/followthroughs/mq-lever-e-verdict-12269.sh + .test.sh (8/8); plan Decision Gate Result + tasks ticks + ADR-270 addendum; verdict FLIP (27 cancelled merge_group runs/28d >= 2).
+- Guard suite green 69/0; probe suite green 8/8.
+- IN FLIGHT: plugins/soleur/test/merge-queue-stall-check.test.sh patched (behav_check maxpos-aware rows; lrow7 single-slot arm; Q5/C5 gated on TF_BUILD>=2 — equivalent mutants under window=1) — UNCOMMITTED, suite re-run in progress (was 164 passed/2 failed before gating; expect all green).
+- Remaining work-phase: commit suite patch; GDPR gate (regex likely no-match); affected gate (gate-or-skip.sh); Phase 0.5.6.6 fixture ratchets for new .test.sh (fixture-relative-assert, fixture-dir-operand-assert, lint-shell-capture-exit.py); Phase 3 quality; Phase 4 entry guard -> ## Work Phase Complete -> soleur:review -> resolve -> soleur:qa -> soleur:compound -> soleur:ship -> DONE.
+- Post-merge (3B.5): verify apply-github-infra.yml applies; file followthrough directive on #12269 with earliest=<merge>+21d (probe needs SOLEUR_FT_TRACKER/FLIP_MERGED/P50_FLOOR env or bake into directive secrets=).
+- Backlog after this PR: #9323, #11556 (needs triage). DO NOT dispatch #9729 (sibling session live).
