@@ -2221,7 +2221,12 @@ jobs:
           # GH compare API (NOT `git diff`): actions/checkout is fetch-depth:1, so
           # `before..sha` errors on the zero-SHA / shallow graph. compare needs no
           # local history. A compare failure is CANT-RUN, never a silent SKIP.
-          if ! files=$(gh api "repos/${REPO}/compare/${BEFORE_SHA}...${AFTER_SHA}" --jq '.files[].filename' 2>/tmp/gate.err); then
+          # Line 1 of the output is the file COUNT, then each name and each rename's
+          # previous_filename: a file renamed AWAY from a gated path no longer has
+          # that path as its `filename`, so reading `.filename` alone would SKIP.
+          # `.files` is capped at 300 entries, so a count at the cap is unverified
+          # and reads as triggered (a triggered=1 costs minutes, never blocks).
+          if ! out=$(gh api "repos/${REPO}/compare/${BEFORE_SHA}...${AFTER_SHA}" --jq '(.files|length), (.files[] | .filename, (.previous_filename // empty))' 2>/tmp/gate.err); then
             echo "::warning::live-verify trigger-gate compare API failed: $(tr '\n' ' ' </tmp/gate.err)"
             {
               echo "triggered=0"
@@ -2229,9 +2234,24 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          count=${out%%$'\n'*}
+          case "$count" in
+            ''|*[!0-9]*)
+              echo "::error::live-verify trigger-gate: unreadable compare file count '${count}'"
+              exit 1
+              ;;
+          esac
+          if [ "$out" = "$count" ]; then files=""; else files=${out#*$'\n'}; fi
           patterns=$(grep -vE '^[[:space:]]*#|^[[:space:]]*$' \
-            apps/web-platform/scripts/live-verify/trigger-paths.txt)
-          if printf '%s\n' "$files" | grep -cE -f <(printf '%s\n' "$patterns") >/dev/null; then
+            apps/web-platform/scripts/live-verify/trigger-paths.txt) || patterns=""
+          if [ -z "$patterns" ]; then
+            echo "::error::live-verify trigger-gate: trigger-paths.txt yielded no patterns; an empty pattern set matches nothing and would SKIP every release"
+            exit 1
+          fi
+          if [ "$count" -ge 300 ]; then
+            echo "compare file list is at the 300-entry API cap; treating as triggered"
+            triggered=1
+          elif printf '%s\n' "$files" | grep -cE -f <(printf '%s\n' "$patterns") >/dev/null; then
             triggered=1
           else
             triggered=0

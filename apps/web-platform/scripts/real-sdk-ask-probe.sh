@@ -170,7 +170,8 @@ cmd_should_run() {
     echo "::notice::real-sdk-ask-probe: baseline ${baseline:0:12} could not be fetched, running"
     return 0
   fi
-  if ! files="$(git diff --no-renames --name-only "$baseline" "$sha" 2>/dev/null)"; then
+  # -z keeps a name git would C-quote (non-ASCII, tab) exact, so the allowlist `case` below can match it; pipefail makes a git failure the status.
+  if ! files="$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "$baseline" "$sha" 2>/dev/null | tr '\0' '\n')"; then
     emit run true
     echo "::notice::real-sdk-ask-probe: could not diff ${baseline:0:12}..${sha:0:12}, running"
     return 0

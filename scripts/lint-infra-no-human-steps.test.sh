@@ -395,6 +395,71 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# --changed reads git's path lists NUL-separated: a non-ASCII-named doc (committed on the
+# branch, and a second one still untracked) is C-quoted in the newline form, the quoted name
+# no longer ends in ".md", and the doc was silently skipped. Both must be SCANNED.
+# ---------------------------------------------------------------------------
+d10_status=0
+(
+  set -e
+  for v in $(git rev-parse --local-env-vars); do unset "$v"; done
+  REPO="$TMPDIR_TEST/gitnonascii"
+  mkdir -p "$REPO"
+  cd "$REPO"
+  git init -q -b main .
+  git config user.email t@t && git config user.name t
+  mkdir -p knowledge-base/project/plans
+  echo "# base" > knowledge-base/project/plans/base.md
+  git add -A && git commit -q -m base
+  git checkout -q -b feature
+  printf '# Runbook\n\nThe operator reboots web-1 by hand.\n' \
+    > "knowledge-base/project/plans/caf$(printf '\303\251')-committed.md"
+  git add -A && git commit -q -m feat
+  printf '# Runbook\n\nThe operator reboots web-1 by hand.\n' \
+    > "knowledge-base/project/plans/caf$(printf '\303\251')-untracked.md"
+  rc=0
+  out="$(python3 "$SUT" --changed --base main 2>&1)" || rc=$?
+  # errexit is off inside a subshell on the left of `||`, so each check exits explicitly.
+  [[ "$rc" == "1" ]] || exit 1
+  [[ "$out" == *"-committed.md"* ]] || exit 1
+  [[ "$out" == *"-untracked.md"* ]] || exit 1
+) || d10_status=$?
+if [[ "$d10_status" == "0" ]]; then
+  pass "D10 --changed scans non-ASCII-named docs (committed and untracked)"
+else
+  fail "D10 --changed scans non-ASCII-named docs (committed and untracked)" "sub-shell status=$d10_status"
+fi
+
+# --changed: a git that fails on the changed-set read is exit 2, never an empty set. A `git` shim
+# in front of PATH fails the named subcommand and passes everything else to the real git.
+REAL_GIT="$(command -v git)"
+for sub in diff ls-files; do
+  d11_status=0
+  (
+    set -e
+    for v in $(git rev-parse --local-env-vars); do unset "$v"; done
+    REPO="$TMPDIR_TEST/gitfail-$sub"
+    mkdir -p "$REPO/shim"
+    printf '#!/usr/bin/env bash\nfor a in "$@"; do [ "$a" = "%s" ] && exit 128; done\nexec "%s" "$@"\n' "$sub" "$REAL_GIT" > "$REPO/shim/git"
+    chmod +x "$REPO/shim/git"
+    cd "$REPO"
+    git init -q -b main .
+    git config user.email t@t && git config user.name t
+    mkdir -p knowledge-base/project/plans
+    echo "# base" > knowledge-base/project/plans/base.md
+    git add -A && git commit -q -m base
+    rc=0
+    PATH="$REPO/shim:$PATH" python3 "$SUT" --changed --base main >/dev/null 2>&1 || rc=$?
+    [[ "$rc" == "2" ]]
+  ) || d11_status=$?
+  if [[ "$d11_status" == "0" ]]; then
+    pass "D11 --changed with a failing git $sub exits 2 (fail-closed)"
+  else
+    fail "D11 --changed with a failing git $sub exits 2 (fail-closed)" "sub-shell status=$d11_status"
+  fi
+done
+
+# ---------------------------------------------------------------------------
 # Regression — the paired multi-line comment shape the PR docs already use.
 # ---------------------------------------------------------------------------
 f="$(mkcase <<'EOF'
@@ -977,10 +1042,10 @@ fi
 # deleting any case reds immediately. Raised 51 -> 58 by #7874 in the same edit
 # that added F22-F28 — adding cases without raising it would have handed the
 # floor 7 lines of slack and disarmed harness row (a) by the very change meant
-# to strengthen it. Second-order limit, recorded rather than fixed: TOTAL is
+# to strengthen it. Raised 65 -> 68 with D10/D11 (the changed-path NUL-separated read). Second-order limit, recorded rather than fixed: TOTAL is
 # incremented by both pass() and fail(), so this detects a DELETED case but
 # never a NEUTERED one; asserting the sorted set of case names would.
-MIN_CASES=65
+MIN_CASES=68
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 if [[ "$TOTAL" -lt "$MIN_CASES" ]]; then

@@ -46,7 +46,25 @@ fail() {
   TOTAL=$((TOTAL + 1))
 }
 
-WORK="$(mktemp -d)" || { echo "harness: mktemp -d failed" >&2; exit 2; }
+# Sourcing the library ARMS the git-location tripwire and supplies git_fixture_env.
+# shellcheck source=/dev/null
+source "$REPO_ROOT/plugins/soleur/test/lib/git-fixture-env.sh"
+
+# The body below is the CANONICAL copy, asserted byte-for-byte against every other copy by
+# plugins/soleur/test/fixture-dir-operand-assert.test.sh. Do not reword it in one file only. #7652
+assert_fixture_dir() {
+  case "${1-}" in
+    "") printf 'FATAL: fixture dir is EMPTY; git -C "" would operate on %s\n' "$PWD" >&2; exit 2 ;;
+    */../*|*/..) printf 'FATAL: fixture dir %s contains ..; refusing\n' "$1" >&2; exit 2 ;;
+    /proc/*|/sys/*|/dev/*) printf 'FATAL: fixture dir %s is a synthetic-fs path; refusing\n' "$1" >&2; exit 2 ;;
+    /|//|/.) printf 'FATAL: fixture dir resolves to the filesystem root; refusing\n' >&2; exit 2 ;;
+    /*) : ;;
+    *)  printf 'FATAL: fixture dir %s is RELATIVE; refusing\n' "$1" >&2; exit 2 ;;
+  esac
+}
+
+WORK="$(mktemp -d -t renameguard.XXXXXXXX)" || { echo "harness: mktemp -d failed" >&2; exit 2; }
+assert_fixture_dir "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 [[ -f "$SUT" ]] || { echo "FAIL: TS-0 SUT missing at $SUT"; exit 1; }
@@ -57,7 +75,9 @@ trap 'rm -rf "$WORK"' EXIT
 # Echoes the repo path.
 mk_repo() {
   local d="$WORK/$1"
+  assert_fixture_dir "$d"
   mkdir -p "$d/apps/web-platform/scripts" || return 1
+  git_fixture_env "$d" || return 1
   cp "$REPO_ROOT/$PARSER_REL" "$d/$PARSER_REL" || return 1
   cp "$REPO_ROOT/.gitleaks.toml" "$d/.gitleaks.toml" || return 1
   git -C "$d" init -q -b main || return 1
@@ -246,6 +266,98 @@ Rename-Allowed-By: Tester"
 assert_guard "TS-12 Rename-Allowed-By trailer suppresses a real violation" 0 "$R12" "$SUT"
 
 # ---------------------------------------------------------------------------
+# D7-remainder rows (CTO G1): the capture of `git log --name-status` is FAIL-CLOSED (a git failure is exit 2, never
+# "no renames in PR"), a path git C-quotes (tab, `"`, backslash, control, newline: leading `"`) is refused with exit 2
+# (the quoted form defeats every `$`-anchored allowlist regex, so it would read as un-allowlisted), and the
+# allowlist matching runs under LC_ALL=C so a name holding an invalid UTF-8 byte cannot slip past `grep -P`.
+# ---------------------------------------------------------------------------
+# guard_rc <repo> <base> <head> [locale] — sets G_RC / G_OUT. A locale is EXPORTED to the guard process (the
+# fixtures below must hold under whatever locale the CI runner or an operator shell carries).
+guard_rc() {
+  local d="$1" base="$2" head="$3" loc="${4:-}"
+  assert_fixture_dir "$d"
+  local lcenv=()
+  [[ -n "$loc" ]] && lcenv=(LC_ALL="$loc")
+  set +e
+  G_OUT="$(cd "$d" && env "${lcenv[@]}" BASE_SHA="$base" HEAD_SHA="$head" PR_LABELS='[]' bash "$SUT" 2>&1)"
+  G_RC=$?
+  set -e
+}
+ROWS_D7=0
+d7_expect() { # label want-rc
+  ROWS_D7=$((ROWS_D7 + 1))
+  if [[ "$G_RC" == "$2" ]]; then pass "$1"; else fail "$1" "expected rc=$2 got rc=$G_RC; output: $(printf '%s' "$G_OUT" | head -4 | tr '\n' ' ')"; fi
+}
+
+# (a) a bad BASE_SHA makes `git log` fail: exit 2, not "no renames in PR; nothing to guard" at exit 0.
+guard_rc "$R1" "0000000000000000000000000000000000000001" "$(git -C "$R1" rev-parse HEAD)"
+d7_expect "TS-13a a failing git log exits 2 (never 'no renames')" 2
+
+# (b) a C-quoted name in the SOURCE or the TARGET, separately -> exit 2 (refused, cause named).
+mk_quoted_case() { # <name> <source-rel> <target-rel>
+  local d
+  d="$(mk_repo "$1")" || { echo "harness: setup failed" >&2; exit 2; }
+  seed_file "$d" "$2" "const q = 'synthetic';"
+  commit_rename "$d" "$2" "$3"
+  printf '%s' "$d"
+}
+TAB="$(printf '\t')"
+RB1="$(mk_quoted_case quotesrctab "apps/web-platform/server/a${TAB}b.ts" "knowledge-base/project/plans/plain-target.md")"
+guard_rc "$RB1" "$(git -C "$RB1" rev-list --max-parents=0 HEAD)" "$(git -C "$RB1" rev-parse HEAD)"
+d7_expect "TS-13b1 a tab in the SOURCE name exits 2" 2
+RB2="$(mk_quoted_case quotetgttab "apps/web-platform/server/plain-source.ts" "knowledge-base/project/plans/a${TAB}b.md")"
+guard_rc "$RB2" "$(git -C "$RB2" rev-list --max-parents=0 HEAD)" "$(git -C "$RB2" rev-parse HEAD)"
+d7_expect "TS-13b2 a tab in the TARGET name exits 2" 2
+RB3="$(mk_quoted_case quotesrcdq 'apps/web-platform/server/a"b.ts' "knowledge-base/project/plans/plain-target2.md")"
+guard_rc "$RB3" "$(git -C "$RB3" rev-list --max-parents=0 HEAD)" "$(git -C "$RB3" rev-parse HEAD)"
+d7_expect "TS-13b3 a double quote in the SOURCE name exits 2" 2
+RB4="$(mk_quoted_case quotetgtdq "apps/web-platform/server/plain-source2.ts" 'knowledge-base/project/plans/a"b.md')"
+guard_rc "$RB4" "$(git -C "$RB4" rev-list --max-parents=0 HEAD)" "$(git -C "$RB4" rev-parse HEAD)"
+d7_expect "TS-13b4 a double quote in the TARGET name exits 2" 2
+
+# (c) a \xff laundering rename into knowledge-base/plans/, run under an exported UTF-8 locale. Under a UTF-8 locale
+# `grep -qP '^knowledge-base/plans/.*\.md$'` cannot match a name with an invalid UTF-8 byte, so the target read as
+# un-allowlisted and the laundering rename passed. LC_ALL=C on every `grep -P` closes it; removing it reddens this row.
+UTF8_LOC=""
+for cand in C.utf8 C.UTF-8 en_US.utf8 en_US.UTF-8; do
+  if locale -a 2>/dev/null | grep -qix -- "$cand"; then UTF8_LOC="$cand"; break; fi
+done
+if [[ -z "$UTF8_LOC" ]]; then
+  fail "TS-13c needs a UTF-8 locale on the host" "none of C.utf8/en_US.utf8 is installed; the \\xff row would be vacuous"
+else
+  BADNAME="bad$(printf '\377').md"
+  RC1="$(mk_repo xffloc)" || exit 2
+  seed_file "$RC1" "apps/web-platform/server/creds-xff.ts" "const x = 'synthetic';"
+  mkdir -p "$RC1/knowledge-base/plans"
+  git -C "$RC1" mv apps/web-platform/server/creds-xff.ts "knowledge-base/plans/$BADNAME"
+  git -C "$RC1" commit -q -m "launder through an invalid-UTF-8 name"
+  guard_rc "$RC1" "$(git -C "$RC1" rev-list --max-parents=0 HEAD)" "$(git -C "$RC1" rev-parse HEAD)" "$UTF8_LOC"
+  d7_expect "TS-13c a \\xff laundering rename is flagged under $UTF8_LOC" 1
+fi
+
+# (d) a rename in the SECOND commit of a range (the first commit is a plain add) is still seen.
+RD="$(mk_repo secondcommit)" || exit 2
+seed_file "$RD" "apps/web-platform/server/creds-d.ts" "const d = 'synthetic';"
+seed_file "$RD" "docs/unrelated-d.md" "unrelated"
+commit_rename "$RD" "apps/web-platform/server/creds-d.ts" "knowledge-base/project/plans/second.md"
+guard_rc "$RD" "$(git -C "$RD" rev-list --max-parents=0 HEAD)" "$(git -C "$RD" rev-parse HEAD)"
+d7_expect "TS-13d a rename in a later commit of the range is a violation" 1
+
+# (e) a COPY (status C) into an allowlisted path is seen: the source is edited in the same commit so git reports C.
+RE="$(mk_repo copyrow)" || exit 2
+seed_file "$RE" "apps/web-platform/server/creds-e.ts" "$(for i in $(seq 1 30); do echo "const e$i = 'synthetic$i';"; done)"
+mkdir -p "$RE/knowledge-base/project/plans"
+cp "$RE/apps/web-platform/server/creds-e.ts" "$RE/knowledge-base/project/plans/copied.md"
+echo "// edited" >> "$RE/apps/web-platform/server/creds-e.ts"
+git -C "$RE" add -A >/dev/null 2>&1
+git -C "$RE" commit -q -m "copy into the allowlist and edit the source"
+if ! git -C "$RE" log --diff-filter=RC --find-copies=5% --name-status --pretty=format: -1 | grep -q '^C'; then
+  fail "TS-13e fixture sanity" "git did not report a C row for the copy fixture"
+fi
+guard_rc "$RE" "$(git -C "$RE" rev-list --max-parents=0 HEAD)" "$(git -C "$RE" rev-parse HEAD)"
+d7_expect "TS-13e a copy into an allowlisted path is a violation" 1
+
+# ---------------------------------------------------------------------------
 # MB — mutation battery. Each mutant is proven landed with `diff -q` against a
 # PRISTINE BACKUP, never against HEAD.
 # ---------------------------------------------------------------------------
@@ -283,6 +395,22 @@ mb_delete "MB-1 deleting the scope-subset exemption reverts TS-2 to a violation"
 mb_delete "MB-3 deleting the low-similarity rename flag reverts TS-7" renamethresh "$R7" 0
 # MB-4 (r1): the trailer override block was entirely unfixtured.
 mb_delete "MB-4 deleting the trailer override reverts TS-12 to a violation" trailer "$R12" 1
+# MB-6 (G1 f): deleting the C-quoted-name refusal reverts the TS-13b2 target-tab row to a silent pass.
+mb_delete "MB-6 deleting the quoted-name refusal reverts TS-13b2 to a pass" quotecheck "$RB2" 0
+# MB-7 (G1): deleting the LC_ALL=C guard on the allowlist matcher reverts TS-13c to a pass under a UTF-8 locale.
+if [[ -n "$UTF8_LOC" ]]; then
+  MUT7="$WORK/mutant-lcall.sh"
+  cp "$PRISTINE" "$MUT7" || { echo "harness: cp failed" >&2; exit 2; }
+  sed -i 's/LC_ALL=C grep -qP/grep -qP/' "$MUT7"
+  if diff -q "$PRISTINE" "$MUT7" >/dev/null 2>&1; then
+    fail "MB-7 mutation" "the LC_ALL=C removal did not land"
+  else
+    SUT_SAVE="$SUT"; SUT="$MUT7"
+    guard_rc "$RC1" "$(git -C "$RC1" rev-list --max-parents=0 HEAD)" "$(git -C "$RC1" rev-parse HEAD)" "$UTF8_LOC"
+    SUT="$SUT_SAVE"
+    d7_expect "MB-7 without LC_ALL=C the \\xff laundering rename passes (TS-13c turns red)" 0
+  fi
+fi
 # MB-5 (G8): deleting the scope-subset check reverts TS-10 to a pass.
 
 
@@ -344,6 +472,12 @@ fi
 EXPECTED_MIN=16
 if [[ "$TOTAL" -lt "$EXPECTED_MIN" ]]; then
   echo "FAIL: harness dispatched only $TOTAL assertions (expected >= $EXPECTED_MIN) — vacuous run" >&2
+  exit 1
+fi
+
+MIN_D7_ROWS=9
+if [ "$ROWS_D7" -lt "$MIN_D7_ROWS" ]; then
+  echo "FAIL: only $ROWS_D7 D7-remainder rows ran (expected >= $MIN_D7_ROWS) — vacuous run" >&2
   exit 1
 fi
 

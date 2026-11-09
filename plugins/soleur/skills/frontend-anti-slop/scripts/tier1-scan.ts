@@ -11,7 +11,7 @@
  *   bun plugins/soleur/skills/frontend-anti-slop/scripts/tier1-scan.ts \
  *     [--paths <file-or-glob> ...] [--dry-run|--json] [--rule <id>]
  *
- * Default paths: `git diff --name-only --cached --diff-filter=AMR` filtered to
+ * Default paths: `git diff -z --no-renames --ignore-submodules=none --name-only --cached --diff-filter=AMR` filtered to
  * `apps/web-platform/(app|components)/**\*.(tsx|jsx|css)` AND
  * `apps/web-platform/server/**\*.(ts|tsx)` AND
  * `plugins/soleur/docs/**\*.(njk|css)`.
@@ -27,6 +27,7 @@
  *   1 — bad CLI / parse error / IO error, OR ≥ 1 blocking finding (a finding whose
  *       originating rule is `category === "brand" && severity === "high"`).
  *   See `computeExitCode`. Non-brand and brand-below-high findings remain advisory.
+ *   2 — the default staged-path read (`git diff --cached`) failed: scope is unknown, not empty.
  *
  * Per-file rule disable: `anti-slop:disable RULE_ID reason="..."` — matched as
  * a literal substring, so any comment form works (JSX, HTML, CSS block, line).
@@ -246,22 +247,33 @@ const DEFAULT_PATH_RE_SOURCE =
   "^(apps/web-platform/(app|components)/.*\\.(tsx|jsx|css)|apps/web-platform/server/.*\\.(ts|tsx)|plugins/soleur/docs/.*\\.(njk|css))$";
 
 function defaultPaths(): string[] {
-  try {
-    const p = Bun.spawnSync(
-      ["git", "diff", "--name-only", "--cached", "--diff-filter=AMR"],
-      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+  // SELECT reader feeding a `^`-anchored scope regex. `-z` keeps a name git would C-quote (non-ASCII, tab) exact;
+  // `--no-renames` lists a rename as D+A so the NEW path is scanned; `--ignore-submodules=none` is the family-wide
+  // flag. A git failure THROWS (main() exits 2): the old `[]` read as "no frontend files in scope" at exit 0.
+  const p = Bun.spawnSync(
+    [
+      "git",
+      "diff",
+      "-z",
+      "--no-renames",
+      "--ignore-submodules=none",
+      "--name-only",
+      "--cached",
+      "--diff-filter=AMR",
+    ],
+    { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+  );
+  if (p.exitCode !== 0) {
+    throw new Error(
+      `git diff --cached failed (exit ${p.exitCode}): ${new TextDecoder().decode(p.stderr).trim()}`,
     );
-    if (p.exitCode !== 0) return [];
-    const out = new TextDecoder().decode(p.stdout);
-    const all = out
-      .split("\n")
-      .map((p) => p.trim())
-      .filter(Boolean);
-    const re = new RegExp(DEFAULT_PATH_RE_SOURCE);
-    return all.filter((p) => re.test(p));
-  } catch {
-    return [];
   }
+  const all = new TextDecoder()
+    .decode(p.stdout)
+    .split("\0")
+    .filter((n) => n.length > 0);
+  const re = new RegExp(DEFAULT_PATH_RE_SOURCE);
+  return all.filter((n) => re.test(n));
 }
 
 function isContainedInRepo(abs: string): boolean {
@@ -475,10 +487,17 @@ function main() {
     }
   }
 
-  const candidatePaths =
-    args.paths.length > 0
-      ? expandPaths(args.paths)
-      : expandPaths(defaultPaths());
+  let candidatePaths: string[];
+  try {
+    candidatePaths =
+      args.paths.length > 0
+        ? expandPaths(args.paths)
+        : expandPaths(defaultPaths());
+  } catch (err) {
+    // Unknown, never "nothing in scope": a failed staged-path read must not look like a clean scan.
+    console.error(`[tier1-scan] cannot list the staged paths: ${(err as Error).message}`);
+    process.exit(2);
+  }
 
   if (candidatePaths.length === 0) {
     if (args.json) {

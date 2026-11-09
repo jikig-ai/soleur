@@ -1057,12 +1057,221 @@ else
 fi
 ASSERTED=$((ASSERTED + 1))
 
+# --- Arm 23: changed-path readers are NUL-delimited, rename-free, submodule-honest -
+printf '== arm 23: changed-path reader hazards\n'
+CONSUMER_REL=".github/workflows/ci.yml"
+seed_consumer() {
+  # seed_consumer — on main, add a ci.yml (a KB_CONSUMERS_INPUTS entry) with
+  # enough body to survive rename detection; push; put feat-x on top.
+  assert_fixture_dir "$F"
+  g "$F" checkout -q main
+  mkdir -p "$F/.github/workflows"
+  printf 'name: ci\non: push\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo one\n      - run: echo two\n' \
+    > "$F/$CONSUMER_REL"
+  g "$F" add "$CONSUMER_REL"
+  g "$F" commit -qm add-consumer
+  g "$F" push -q origin main
+  g "$F" fetch -q origin
+  g "$F" checkout -q feat-x
+  g "$F" rebase -q main
+}
+
+# (a) the BRANCH renames a declared input away: the old path must still be read
+# as touched (rename detection would show only the destination).
+new_fixture a23a
+assert_fixture_dir "$F"
+seed_consumer
+mkdir -p "$F/.github/workflows-old"
+g "$F" mv "$CONSUMER_REL" .github/workflows-old/ci-renamed.yml
+g "$F" commit -qm rename-consumer-away
+stub "$FD/kbc.sh" 'exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 1 ]] && has 'member=test-affected-kb-consumers' && has 'verdict=RED'; then
+  pass "branch-side rename-away from a declared input fires the conditional tier"
+else
+  fail "arm 23a: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (b) the MERGE DELTA (main) renames a declared input away after the fork.
+new_fixture a23b
+assert_fixture_dir "$F"
+seed_consumer
+g "$F" checkout -q main
+g "$F" mv "$CONSUMER_REL" .github/workflows/ci-renamed.yml
+g "$F" commit -qm main-renames-consumer
+g "$F" push -q origin main
+g "$F" fetch -q origin
+g "$F" checkout -q feat-x
+stub "$FD/kbc.sh" 'exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 1 ]] && has 'member=test-affected-kb-consumers' && has 'verdict=RED'; then
+  pass "main-side rename-away from a declared input fires the conditional tier"
+else
+  fail "arm 23b: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (c) a branch-touched suite whose NAME carries a tab (git C-quotes it, so the
+# basename suite test never matched) and that gains a knowledge-base/ read.
+new_fixture a23c
+assert_fixture_dir "$F"
+mkdir -p "$F/scripts"
+TABNAME="$(printf 'scripts/tab\tname.test.sh')"
+printf '#!/usr/bin/env bash\n# reads knowledge-base/ paths\necho kb\n' > "$F/$TABNAME"
+g "$F" add -- "$TABNAME"
+g "$F" commit -qm tab-named-kb-suite
+stub "$FD/kbc.sh" 'exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 1 ]] && has 'member=test-affected-kb-consumers' && has 'kb-reading-suite:'; then
+  pass "a tab-named kb-reading suite is selected (raw bytes, not the C-quoted name)"
+else
+  fail "arm 23c: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (d) a branch whose ONLY change is a gitlink, under a .gitmodules ignore=all,
+# is not an empty diff: the early PASS must not swallow it.
+new_fixture a23d
+assert_fixture_dir "$F"
+g "$F" checkout -q main
+printf '[submodule "sub"]\n\tpath = sub\n\turl = ./nowhere\n\tignore = all\n' > "$F/.gitmodules"
+g "$F" add .gitmodules
+g "$F" commit -qm gitmodules-ignore-all
+g "$F" push -q origin main
+g "$F" fetch -q origin
+g "$F" checkout -q feat-x
+g "$F" reset -q --hard main
+g "$F" update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,sub
+g "$F" commit -qm gitlink-only
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 0 ]] && has 'member=stub-pass' && ! has 'no-diff'; then
+  pass "a gitlink-only branch does not take the no-diff early PASS"
+else
+  fail "arm 23d: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (e) a baseline renamed inside scripts/*.baseline.txt on main is a new
+# baseline in the delta (rename detection would report R, not A).
+new_fixture a23e
+assert_fixture_dir "$F"
+g "$F" checkout -q main
+mkdir -p "$F/scripts"
+printf 'one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n' > "$F/scripts/old.baseline.txt"
+g "$F" add scripts/old.baseline.txt
+g "$F" commit -qm add-baseline
+g "$F" push -q origin main
+g "$F" fetch -q origin
+g "$F" checkout -q feat-x
+g "$F" rebase -q main
+g "$F" checkout -q main
+g "$F" mv scripts/old.baseline.txt scripts/renamed.baseline.txt
+g "$F" commit -qm rename-baseline
+g "$F" push -q origin main
+g "$F" fetch -q origin
+g "$F" checkout -q feat-x
+stub "$FD/kbc.sh" 'exit 1'
+stub "$FD/pass.sh" 'exit 0'
+write_members "$FD/members.txt" <<EOF
+stub-pass|fast|bash $FD/pass.sh
+test-affected-kb-consumers|conditional|bash $FD/kbc.sh
+EOF
+run_lane "$F" "$FD/members.txt"
+if [[ $LANE_RC -eq 1 ]] && has 'member=test-affected-kb-consumers'; then
+  pass "a baseline renamed within scripts/ on main fires as a new baseline"
+else
+  fail "arm 23e: rc=$LANE_RC; out: $(tail -8 "$LANE_OUT")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# --- Arm 24: scripts/hooks/pre-push emptiness diff is submodule-honest -----------
+printf '== arm 24: pre-push hook emptiness diff\n'
+HOOK_SUT="$SCRIPT_DIR/hooks/pre-push"
+# hook_run <repo> — run the real hook with cwd=<repo>; the lane and the battery
+# it delegates to are stubs that leave a marker, so "the lane ran" is observable.
+hook_run() {
+  local repo="$1"
+  assert_fixture_dir "$repo"
+  mkdir -p "$repo/scripts"
+  printf '#!/usr/bin/env bash\ntouch "%s/lane-ran"\n' "$repo" > "$repo/scripts/pre-push-ratchet-lane.sh"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$repo/scripts/test-all.sh"
+  rm -f "$repo/lane-ran"
+  HOOK_RC=0
+  ( cd "$repo" && env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE bash "$HOOK_SUT" ) \
+    >"$repo/hook.out" 2>&1 || HOOK_RC=$?
+}
+
+# (a) control: a branch that carries a plain file change reaches the lane.
+new_fixture a24a
+assert_fixture_dir "$F"
+hook_run "$F"
+if [[ $HOOK_RC -eq 0 && -f "$F/lane-ran" ]]; then
+  pass "pre-push hook: a branch with a plain change reaches the lane"
+else
+  fail "arm 24a: rc=$HOOK_RC; out: $(tail -5 "$F/hook.out")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (b) control: a truly empty branch exits before the lane.
+new_fixture a24b
+assert_fixture_dir "$F"
+g "$F" checkout -q main
+hook_run "$F"
+if [[ $HOOK_RC -eq 0 && ! -f "$F/lane-ran" ]]; then
+  pass "pre-push hook: an empty branch skips the lane"
+else
+  fail "arm 24b: rc=$HOOK_RC; out: $(tail -5 "$F/hook.out")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
+# (c) a branch whose ONLY change is a gitlink under .gitmodules ignore=all is
+# not empty: the hook must not skip the lane.
+new_fixture a24c
+assert_fixture_dir "$F"
+g "$F" checkout -q main
+printf '[submodule "sub"]\n\tpath = sub\n\turl = ./nowhere\n\tignore = all\n' > "$F/.gitmodules"
+g "$F" add .gitmodules
+g "$F" commit -qm gitmodules-ignore-all
+g "$F" push -q origin main
+g "$F" fetch -q origin
+g "$F" checkout -q feat-x
+g "$F" reset -q --hard main
+g "$F" update-index --add --cacheinfo 160000,1111111111111111111111111111111111111111,sub
+g "$F" commit -qm gitlink-only
+hook_run "$F"
+if [[ $HOOK_RC -eq 0 && -f "$F/lane-ran" ]]; then
+  pass "pre-push hook: a gitlink-only branch reaches the lane"
+else
+  fail "arm 24c: rc=$HOOK_RC; out: $(tail -5 "$F/hook.out")"
+fi
+ASSERTED=$((ASSERTED + 1))
+
 printf '\n=== Results: %s passed, %s failed ===\n' "$PASS" "$FAIL"
 
 # ANTI-VACUITY FLOOR — raise in lockstep when adding assertions. The floor
 # counts ASSERTED (call-site increments), not pass/fail, so a verdict-helper
 # mutation cannot satisfy it.
-MIN_ASSERTED=73
+MIN_ASSERTED=81
 if (( ASSERTED < MIN_ASSERTED )); then
   printf 'FAIL: only %s assertions ran (expected >= %s) — a suite that measured less certifies less\n' \
     "$ASSERTED" "$MIN_ASSERTED" >&2

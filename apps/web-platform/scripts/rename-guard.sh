@@ -49,7 +49,8 @@ fi
 # substitution. Without this, a parser failure produces ALLOW_RES=() and the
 # guard silently exits 0 — disabling the whole gate.
 TMP_PATHS="$(mktemp)"
-trap 'rm -f "${TMP_PATHS}"' EXIT
+TMP_LOG="$(mktemp)"
+trap 'rm -f "${TMP_PATHS}" "${TMP_LOG}"' EXIT
 if ! node "${PARSER}" "${GITLEAKS_TOML}" | jq -r '.[]' > "${TMP_PATHS}"; then
   echo "rename-guard: parser failed for ${GITLEAKS_TOML}" >&2
   exit 2
@@ -94,11 +95,18 @@ fi
 # `git log` (per commit) rather than `git diff BASE..HEAD` is deliberate and
 # unchanged: it is what makes a multi-commit chain (outside -> allowlisted ->
 # allowlisted) fire on its first hop.
-renames=$(git -c core.quotePath=false log --diff-merges=first-parent \
+#
+# The `git log` output goes to a FILE and its status is CHECKED (no `|| true`): a git failure (bad BASE_SHA, shallow
+# clone) used to read as "no renames in PR; nothing to guard" at exit 0, disarming the whole gate. awk then runs on
+# the file under LC_ALL=C (byte semantics: a name holding an invalid UTF-8 byte must not change what awk sees).
+if ! git -c core.quotePath=false log --diff-merges=first-parent \
   --diff-filter=RC \
   --find-renames=5% --find-copies=5% `# MUT:renamethresh` \
-  --name-status --pretty=format: "${BASE_SHA}..${HEAD_SHA}" \
-  | awk -F'\t' 'NF>=3 && $1 ~ /^[RC]/ { print }' || true)
+  --name-status --pretty=format: "${BASE_SHA}..${HEAD_SHA}" > "${TMP_LOG}"; then
+  echo "::error::rename-guard: git log ${BASE_SHA}..${HEAD_SHA} failed; cannot tell whether the PR renames anything." >&2
+  exit 2
+fi
+renames=$(LC_ALL=C awk -F'\t' 'NF>=3 && $1 ~ /^[RC]/ { print }' "${TMP_LOG}")
 if [[ -z "${renames}" ]]; then
   echo "rename-guard: no renames in PR; nothing to guard."
   exit 0
@@ -126,7 +134,9 @@ fi
 matched_allow_res() {
   local path="$1" re
   for re in "${ALLOW_RES[@]}"; do
-    if grep -qP "${re}" <<<"${path}"; then
+    # LC_ALL=C: under a UTF-8 locale `grep -P` cannot match a path holding an invalid UTF-8 byte (`\xff`), so a
+    # laundering rename into an allowlisted path read as un-allowlisted and passed.
+    if LC_ALL=C grep -qP "${re}" <<<"${path}"; then
       printf '%s\n' "${re}"
     fi
   done
@@ -136,6 +146,14 @@ violations=""
 exempted=0
 while IFS=$'\t' read -r status source target; do
   [[ -z "${target:-}" ]] && continue
+  # git C-quotes a name holding a tab, `"`, backslash, control byte or newline: the quoted form starts with `"` and
+  # ends with `"`, so it can never match a `$`-anchored allowlist regex and the pair would read as un-allowlisted.
+  # `core.quotePath=false` keeps non-ASCII raw, so this fires only for those names. Refuse rather than guess.
+  case "${source}${target:+$'\n'}${target}" in                                  # MUT:quotecheck
+    '"'*|*$'\n''"'*)                                                           # MUT:quotecheck
+      echo "::error::rename-guard: a renamed path is C-quoted by git (tab, double quote, backslash, control character or newline in the name): ${source} -> ${target}. Refusing to judge a path the allowlist regexes cannot match; rename it to a plain name." >&2  # MUT:quotecheck
+      exit 2 ;;                                                                 # MUT:quotecheck
+  esac                                                                          # MUT:quotecheck
 
   # Not landing in an allowlisted path — nothing to launder.
   dst_res="$(matched_allow_res "${target}")"

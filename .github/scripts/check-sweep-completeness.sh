@@ -69,10 +69,23 @@ else
   # NON-EMPTY string and an emptiness test reads it as a valid changeset -- the
   # could-not-measure/measured-clean collapse, which made a bogus PR number report
   # "no violations" instead of failing closed. Measured while writing this fix.
+  #
+  # ALLOW READER, so a hostile name must not forge a line. The match below is a
+  # line-wise `grep -Fxq`; a filename containing a newline (`z\n<dependent>`)
+  # becomes two lines and satisfies a dependent it never touched. jq therefore
+  # replaces any name carrying CR or LF with a sentinel BEFORE it is printed, and
+  # the raw-name refusal further down fails closed on it.
   changed=""
   if api_out=$(gh api "repos/{owner}/{repo}/pulls/$PR_NUMBER/files" --paginate \
-                 --jq '.[].filename' 2>/dev/null); then
+                 --jq '.[].filename | if test("[\r\n]") then "::NL-IN-PATH::" else . end' 2>/dev/null); then
     changed="$api_out"
+    # GitHub caps this listing at 3000 files: a listing that reaches the cap may be
+    # truncated, and a missed trigger would let its dependents pass. Fail closed
+    # (the 300-file `gh pr diff` fallback cannot do better, so no fallback here).
+    if [[ -n "$api_out" ]] && [[ "$(printf '%s\n' "$api_out" | wc -l)" -ge 3000 ]]; then
+      echo "::error::sweep-completeness: files API returned 3000 entries for PR $PR_NUMBER (GitHub's cap) — the listing may be truncated; cannot prove the invariant; fail-closed"
+      exit 1
+    fi
   fi
   if [[ -z "$changed" ]]; then
     if diff_out=$(gh pr diff "$PR_NUMBER" --name-only 2>/dev/null); then
@@ -90,7 +103,15 @@ else
     exit 1
   fi
 fi
-# Normalize: strip CR, drop blank lines.
+# Refuse a hostile path on EVERY route, on the RAW names, BEFORE the CR strip below:
+# a name ending in CR would otherwise equal a dependent once normalised, and a
+# newline name (files-API sentinel; `gh pr diff` and the changeset file are already
+# line-split, so only their CRs are visible) forges a line for `grep -Fxq`.
+if [[ "$changed" == *$'\r'* ]] || [[ $'\n'"$changed" == *$'\n::NL-IN-PATH::'* ]]; then
+  echo "::error::sweep-completeness: a changed path contains a newline or carriage return (cannot be matched line-wise; a forged line could satisfy a dependent) — fail-closed"
+  exit 1
+fi
+# Normalize: strip CR (none remain after the refusal above), drop blank lines.
 changed=$(printf '%s\n' "$changed" | tr -d '\r' | grep -v '^[[:space:]]*$' || true)
 
 # --- Pass 1: registry self-consistency (anti-rot) ---

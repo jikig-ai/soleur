@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -14,6 +14,7 @@ import {
 } from "../../skills/frontend-anti-slop/scripts/tier1-scan";
 import type { Finding } from "../../skills/frontend-anti-slop/scripts/tier1-scan";
 import { readFileSync } from "node:fs";
+import { gitFixture, gitFixtureEnv } from "../lib/git-fixture-env";
 
 // tier1-scan.test.ts — frontend-anti-slop v1 scanner.
 // 5 representative Tier 1 rules × positive + negative = 10 fixtures (per
@@ -707,5 +708,87 @@ describe("frontend-anti-slop tier1-scan: review hook path parity", () => {
     // #4635 false-clean) anywhere.
     expect(skill).not.toContain("grep -z");
     expect(skill).toContain("read -r -d ''");
+  });
+});
+
+describe("frontend-anti-slop tier1-scan: default (staged) path discovery", () => {
+  // The default path read is a SELECT reader: it feeds a `^`-anchored scope regex. Plain
+  // `git diff --name-only` C-quotes a name holding a non-ASCII byte or a tab (`"apps/.../caf\303\251.tsx"`),
+  // so the leading quote defeated the anchor and the staged file was silently skipped; and a git
+  // failure was `[]`, i.e. "no frontend files in scope" at exit 0. -z keeps names exact and a git
+  // failure is exit 2. The scanner is driven as a CLI inside a scratch repo (REPO_ROOT is the cwd's
+  // toplevel), under the constructed fixture environment (never the inherited GIT_* variables).
+  const SCRIPT = resolve(import.meta.dir, "../../skills/frontend-anti-slop/scripts/tier1-scan.ts");
+  const TMPL = `<button className="transition-all duration-200 hover:opacity-90">x</button>\n`;
+
+  function scratchRepo(): { dir: string; git: (args: string[]) => string } {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), "anti-slop-staged-")));
+    const git = gitFixture(dir);
+    git(["init", "-q", "-b", "main"]);
+    writeFileSync(join(dir, "README.md"), "x\n");
+    git(["add", "-A"]);
+    git(["commit", "-q", "-m", "base"]);
+    return { dir, git };
+  }
+
+  function runScan(dir: string): { code: number | null; out: string; err: string } {
+    const p = Bun.spawnSync([process.execPath, SCRIPT, "--json", "--rule", "TRANSITION-ALL"], {
+      cwd: dir,
+      env: gitFixtureEnv(dir),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return {
+      code: p.exitCode,
+      out: new TextDecoder().decode(p.stdout),
+      err: new TextDecoder().decode(p.stderr),
+    };
+  }
+
+  function stage(dir: string, git: (a: string[]) => string, rel: string): void {
+    mkdirSync(join(dir, rel.split("/").slice(0, -1).join("/")), { recursive: true });
+    writeFileSync(join(dir, rel), TMPL);
+    git(["add", "--", rel]);
+  }
+
+  test("a staged plain-named in-scope file is scanned (control)", () => {
+    const { dir, git } = scratchRepo();
+    try {
+      stage(dir, git, "apps/web-platform/components/plain.tsx");
+      const r = runScan(dir);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("plain.tsx#TRANSITION-ALL");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a staged NON-ASCII and a TAB-named in-scope file are both scanned (C-quoting must not hide them)", () => {
+    const { dir, git } = scratchRepo();
+    try {
+      stage(dir, git, "apps/web-platform/components/caf\u00e9.tsx");
+      stage(dir, git, "apps/web-platform/components/a\tb.tsx");
+      const r = runScan(dir);
+      expect(r.code).toBe(0);
+      const selectors = (JSON.parse(r.out) as { selector: string }[]).map((f) => f.selector);
+      expect(selectors).toContain("apps/web-platform/components/caf\u00e9.tsx#TRANSITION-ALL");
+      expect(selectors).toContain("apps/web-platform/components/a\tb.tsx#TRANSITION-ALL");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a failing `git diff --cached` exits 2, never 'no frontend files in scope' at exit 0", () => {
+    const { dir, git } = scratchRepo();
+    try {
+      stage(dir, git, "apps/web-platform/components/plain.tsx");
+      // A corrupt index: `git rev-parse --show-toplevel` still works, `git diff --cached` fails.
+      writeFileSync(join(dir, ".git", "index"), "this is not an index file\n");
+      const r = runScan(dir);
+      expect(r.code).toBe(2);
+      expect(r.out).not.toContain("no frontend files in scope");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

@@ -70,8 +70,13 @@ jobs:
           # Gate on exit status, not emptiness: --paginate can emit pages
           # 1..N then fail — a truncated list is a false-skip. Failure → all-true.
           if ! files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR_NUMBER/files" \
-            --jq '.[].filename, .[].previous_filename'); then emit true; exit 0; fi
+            --jq '.[] | .filename, .previous_filename, "::ENTRY::"'); then emit true; exit 0; fi
           if [ "$EVENT_NAME" != "pull_request" ] || [ -z "$files" ]; then emit true; exit 0; fi
+          # GitHub caps this listing at 3000 files: a listing that reaches the cap may be truncated, and a
+          # truncated list would skip the BLOCK steps through their `outputs == 'true'` conditions. Count
+          # entries via the per-entry marker below (previous_filename makes raw line counts ambiguous).
+          entries=$(printf '%s\n' "$files" | grep -c '^::ENTRY::$')
+          if [ "$entries" -ge 3000 ]; then emit true; exit 0; fi
           # Self/dependency triggers: a change to the checking machinery runs every gate.
           if printf '%s\n' "$files" | grep -cE '^\.github/workflows/pr-quality-guards\.yml$|^\.github/scripts/' >/dev/null; then emit true; exit 0; fi
           hit() { printf '%s\n' "$files" | grep -cE "$1" >/dev/null && echo true || echo false; }
@@ -485,17 +490,25 @@ jobs:
         if: ${{ !cancelled() && (needs.detect.result != 'success' || needs.detect.outputs.worktrees == 'true') && steps.swm-opt-out.outputs.skip != 'true' }}
         name: Check diff for .claude/worktrees/ entries
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -uo pipefail
-          STRAY=$(gh pr diff "$PR_NUMBER" --repo "$GH_REPO" --name-only \
-            | grep -E '^\.claude/worktrees/' || true)
+          # LOCAL git diff over the NUL stream (fetch-depth: 0 above), not `gh pr diff --name-only`: the
+          # diff endpoint C-quotes a non-ASCII name (a marker such as `.claude/worktrees/é` then starts with
+          # `"` and dodges the `^` match) and caps at 300 files. A git failure FAILS the step - it is never
+          # read as an empty diff. A newline name only adds fragment lines, i.e. false positives on a BLOCK.
+          rc=0
+          CHANGED=$(set -o pipefail; git diff -z --no-renames --ignore-submodules=none --name-only "${BASE_SHA}"...HEAD | tr '\0' '\n') || rc=$?
+          if [[ "$rc" -ne 0 ]]; then
+            echo "::error::git diff against the PR base failed (rc=$rc) - cannot prove the diff has no .claude/worktrees/ entries. See #2905."
+            exit 1
+          fi
+          STRAY=$(printf '%s\n' "$CHANGED" | grep -E '^\.claude/worktrees/' || true)
           if [[ -n "$STRAY" ]]; then
             echo "::error::Diff contains .claude/worktrees/ entries — these are agent-runtime markers, never commit them. See #2905."
             echo "Offending paths:"
-            echo "$STRAY" | sed 's/^/  - /'
+            # Control bytes become `?` for the log only (an attacker-chosen name must not forge a workflow command).
+            printf '%s\n' "$STRAY" | LC_ALL=C tr -c '[:print:]\n' '?' | sed 's/^/  - /'
             exit 1
           fi
 

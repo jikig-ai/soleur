@@ -586,6 +586,15 @@ run_should push "$A" "$(sha HEAD)"
 eq "lockfile-only, SDK versions equal -> run=false" "false" "$SR"
 eq "should-run exits 0 when skipping" "0" "$RC"
 
+# an allowlisted hook with a NON-ASCII name changes together with a lockfile-only (non-SDK) change: git C-quotes the name
+# (`"plugins/soleur/hooks/caf\303\251.sh"`), the quote defeats the `plugins/soleur/hooks/*` allowlist, and the push read as
+# lockfile-only -> a false skip of the paid probe. -z keeps the name exact.
+repo_init lkq; A=$(sha HEAD); mkdir -p "$REPO/plugins/soleur/hooks"; echo "h" >"$REPO/plugins/soleur/hooks/caf$(printf '\303\251').sh"
+lock_json 0.3.284 2.1.284 1.0.1 >"$REPO/apps/web-platform/package-lock.json"; git -C "$REPO" add -A; git -C "$REPO" commit -q -m B
+gd_new lkq; runs_json "$A:success" >"$GD/runs.json"
+run_should push "$A" "$(sha HEAD)"
+eq "non-ASCII allowlisted hook + lockfile-only change -> run=true (C-quoting must not hide the hook)" "true" "$SR"
+
 # lockfile-only, SDK moved
 repo_init lk2; A=$(sha HEAD); repo_commit_lock 0.3.290 2.1.284 1.0.0 B; gd_new lk2; runs_json "$A:success" >"$GD/runs.json"
 run_should push "$A" "$(sha HEAD)"
@@ -1037,7 +1046,7 @@ echo
 echo "real-sdk-ask-probe.test.sh: $PASS passed, $FAIL failed"
 # Anti-vacuity floor: a LOWER BOUND on the assertions that ran (the measured count at the last edit). Reported with printf + exit, not through
 # eq/check, so it does not route through the helpers it backstops. Raise it with a new row.
-MIN_ASSERTIONS=355
+MIN_ASSERTIONS=356
 if [[ $((PASS + FAIL)) -lt "$MIN_ASSERTIONS" ]]; then
   printf 'FATAL: anti-vacuity floor: only %s assertions ran, floor is %s\n' "$((PASS + FAIL))" "$MIN_ASSERTIONS" >&2
   exit 1
