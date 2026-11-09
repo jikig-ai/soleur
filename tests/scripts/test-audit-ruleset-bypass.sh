@@ -747,7 +747,7 @@ t_rsc_canonical_matches_terraform() {
   # Extract `context = "..."` (required_check blocks are the only `context =`
   # assignments in this root); strip quotes; sort for set comparison.
   tf_ctx=$(grep -oE 'context[[:space:]]*=[[:space:]]*"[^"]+"' "$tf" \
-    | sed -E 's/.*"([^"]+)"$/\1/' | sort)
+    | sed -E 's/.*"([^"]+)"$/\1/' | sort || true)
   if [[ "$json_ctx" == "$tf_ctx" ]]; then
     _report "T-rsc-9 canonical RSC context set == ruleset-ci-required.tf" ok
   else
@@ -1322,7 +1322,7 @@ t_mq_sanctioned_values_pass() {
     sed -E 's/("max_entries_to_build":[[:space:]]*)[0-9]+/\1'"$v"'/' "$d/pristine/dr" > "$d/work/dr"
     sed -E 's/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\1'"$v"'/' "$d/pristine/readme" > "$d/work/readme"
     local live_v
-    live_v=$(_mq_strip_hcl "$d/pristine/tf" | sed -n '/^[[:space:]]*merge_queue[[:space:]]*{/,/^[[:space:]]*}/p' | grep -oE 'max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1)
+    live_v=$(_mq_strip_hcl "$d/pristine/tf" | sed -n '/^[[:space:]]*merge_queue[[:space:]]*{/,/^[[:space:]]*}/p' | grep -oE 'max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1 || true)
     # Landed-proof: staging the NON-live value must change all three surfaces; staging
     # the live value is intentionally a no-op (the row still proves the pin accepts it).
     if [[ "$v" != "$live_v" ]] && { cmp -s "$d/pristine/tf" "$d/work/tf" || cmp -s "$d/pristine/dr" "$d/work/dr" || cmp -s "$d/pristine/readme" "$d/work/readme"; }; then
