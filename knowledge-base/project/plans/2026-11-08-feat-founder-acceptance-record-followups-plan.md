@@ -498,7 +498,7 @@ exception:        none
 ## Dependencies & Risks
 
 - R1 Public commitment with no control behind it (CLO residual): mitigated by "not yet built; will be built before any record reaches that age" in every statement; #12080 must ship before 2031-11-07. Tracked on #12080.
-- R2 Published trio claims "since the approval queue was switched on for the Jikigai operator in November 2026" without a date; if the operator has the date, replace the phrase (CLO).
+- R2 Published trio claims "since the approval queue was switched on for the Jikigai operator in November 2026" without a date; if the operator has the date, replace the phrase (CLO). Superseded 2026-11-09: the CLO fix-round ruling removed that phrase; the published text now carries only the facts read on 2026-11-08 and the dated notice of 2026-11-09 (clo-fixround-rulings.md).
 - R3 The live code lifetime may differ from `configure-auth.sh` (config drift); Phase 0.4 measures it or states it is unmeasured.
 - R4 Migration number 186 can be claimed by a sibling PR; re-check at work and at ship.
 - R5 The Inbox consumer sweep may exceed the CTO list; the plain-link fallback is the pre-agreed exit.
