@@ -6,40 +6,41 @@ Hard limits: no production write, dispatch, apply, merge, arm or mark-ready; no 
 
 ## Phase 0: Prerequisites (no repository change)
 
-- 0.1 Re-run the baseline `bash plugins/soleur/test/cloudflare-readonly.test.sh`: expect `1038 passed, 0 failed` and 108 of 108 mutation rows
-- 0.2 Real-curl proof (local loopback only, `python3 -I` one-shot listener): the exact config lines `cf_graphql` will build (`data-raw`, backslash then double quote escaped) deliver the body byte-exactly; record a `Checked:` line; on failure fall back to argv `--data-raw` and add a superseding CTO row
+- [x] 0.1 Re-run the baseline `bash plugins/soleur/test/cloudflare-readonly.test.sh`: expect `1038 passed, 0 failed` and 108 of 108 mutation rows
+- [x] 0.2 Real-curl proof (local loopback only, `python3 -I` one-shot listener): the exact config lines `cf_graphql` will build (`data-raw`, backslash then double quote escaped) deliver the body byte-exactly; record a `Checked:` line; on failure fall back to argv `--data-raw` and add a superseding CTO row
+  - Checked: 2026-11-09 real `/usr/bin/curl` 8.23.0 against a one-shot `python3 -I` loopback listener (127.0.0.1 only, no Cloudflare traffic): a stdin config with `header` x2 and `data-raw` (backslash then double quote escaped) delivered the 299-byte query body byte-for-byte equal (`cmp`), method POST, Content-Type application/json; no fallback needed
 - 0.3 PR body asks the owner to diff both query templates against the query they ran (the proven query text was not found in #12441, #10479 or PR 12434)
 
 ## Phase 1: Tests first (RED) in `plugins/soleur/test/cloudflare-readonly.test.sh`
 
-- 1.1 Take RED evidence from `CF_RO_GROUPS=<groups>` runs (the pristine control fails while RED and voids the battery); mutation rows are authored in RED and first validated after GREEN; run the instrument control once per distinct group-set
-- 1.2 Stub: compute `url` first; `-X GET` refused for the GraphQL URL; `-X POST` only for it; POST stdin has exactly Authorization, Content-Type and `data-raw` lines
-- 1.3 Wire: parameterise `check_wire` by vector (`EXP` / `EXP_POST`); controls (duplicated `-X`, glued `-XPOST`, no URL); keep the one-line-stdin row on the GET subcommands only
-- 1.4 `env -i` on every `"$CURL"` site: per-site census equals site count; `env[analytics]` row
-- 1.5 Body rows: fixed prefix, single line, zone equals env, stamps match `STAMP_RE`, `end` on the hour, `end - start` equals H*3600, masked body equals the constant, H=1 and H=216 only, hostile zone id refused, static no-`mutation`/`subscription`/`__schema` row; templates duplicated once in one marked block
-- 1.6 Clock: fakedate seam, `10#$t`, `[ -x /usr/bin/date ]` preflight exit 14, bad stamp exit 64
-- 1.7 Token binding rows (only old tokens set, only analytics token set, planted `CF_API_TOKEN`, 401/403 mirrors)
-- 1.8 Grammar rows (0, 217, -1, 07, 1.5, empty, extra, missing, unicode digit, `5` plus newline, old subcommand with a second argument, analytics with one) and the arity message text row
-- 1.9 Group loops: second array for the two analytics names in token, env, status, shape and tools groups (including `nodate` and `fakedate_*` variants); `SUBS` stays the four GET names
-- 1.10 Projection rows: 200 with errors, bounded message accept/refuse (newline, escape, 161 chars, credential words, live token, dotted quad, colon-hex), 400, `zones: []` to `no-zone-access`, two-element zones, wrong-typed or out-of-range fields, `data: null`, empty body, null duration passes, ascending order, `by_status` sums, `truncated` at 1000 (edge-errors only)
-- 1.11 Re-pin floors and censuses to exact new values (`-ge 108`, `-ge 400`, `PROJ_FLOOR=46`, `EXERCISED -ge 12`, refuse floor, `LEAK_NEEDLES` 13 to 14, `== 5` to 7 arm terminators, one curl site to two, `LIMIT=50` literal and `--argjson limit` text, token-variable lists, G1.4/G1.4b/G1.7/W6.9 expect-strings, non-unique mutation anchors, W4.16)
-- 1.12 Mutation rows from the Guard Contract (both guards)
+- [x] 1.1 Take RED evidence from `CF_RO_GROUPS=<groups>` runs (the pristine control fails while RED and voids the battery); mutation rows are authored in RED and first validated after GREEN; run the instrument control once per distinct group-set
+- [x] 1.2 Stub: compute `url` first; `-X GET` refused for the GraphQL URL; `-X POST` only for it; POST stdin has exactly Authorization, Content-Type and `data-raw` lines
+- [x] 1.3 Wire: parameterise `check_wire` by vector (`EXP` / `EXP_POST`); controls (duplicated `-X`, glued `-XPOST`, no URL); keep the one-line-stdin row on the GET subcommands only
+- [x] 1.4 `env -i` on every `"$CURL"` site: per-site census equals site count; `env[analytics]` row
+- [x] 1.5 Body rows: fixed prefix, single line, zone equals env, stamps match `STAMP_RE`, `end` on the hour, `end - start` equals H*3600, masked body equals the constant, H=1 and H=216 only, hostile zone id refused, static no-`mutation`/`subscription`/`__schema` row; templates duplicated once in one marked block
+- [x] 1.6 Clock: fakedate seam, `10#$t`, `[ -x /usr/bin/date ]` preflight exit 14, bad stamp exit 64
+- [x] 1.7 Token binding rows (only old tokens set, only analytics token set, planted `CF_API_TOKEN`, 401/403 mirrors)
+- [x] 1.8 Grammar rows (0, 217, -1, 07, 1.5, empty, extra, missing, unicode digit, `5` plus newline, old subcommand with a second argument, analytics with one) and the arity message text row
+- [x] 1.9 Group loops: second array for the two analytics names in token, env, status, shape and tools groups (including `nodate` and `fakedate_*` variants); `SUBS` stays the four GET names
+- [x] 1.10 Projection rows: 200 with errors, bounded message accept/refuse (newline, escape, 161 chars, credential words, live token, dotted quad, colon-hex), 400, `zones: []` to `no-zone-access`, two-element zones, wrong-typed or out-of-range fields, `data: null`, empty body, null duration passes, ascending order, `by_status` sums, `truncated` at 1000 (edge-errors only)
+- [x] 1.11 Re-pin floors and censuses to exact new values (`-ge 108`, `-ge 400`, `PROJ_FLOOR=46`, `EXERCISED -ge 12`, refuse floor, `LEAK_NEEDLES` 13 to 14, `== 5` to 7 arm terminators, one curl site to two, `LIMIT=50` literal and `--argjson limit` text, token-variable lists, G1.4/G1.4b/G1.7/W6.9 expect-strings, non-unique mutation anchors, W4.16)
+- [x] 1.12 Mutation rows from the Guard Contract (both guards)
 
 ## Phase 2: Wrapper (GREEN) in `plugins/soleur/scripts/cloudflare-readonly.sh`
 
-- 2.1 `GQL_URL`, `cf_graphql` (own call site, `/usr/bin/env -i "$CURL"`, closed POST vector, three stdin config lines), fixed-prefix and control-character pre-flight
-- 2.2 Two compiled-in templates (query 2 `datetimeHour_DESC`), epoch-arithmetic window, `guard_gql`, projections, `no-zone-access`, bounded `graphql:` message (token-copy check in bash)
-- 2.3 Arity and hours grammar through one shared `need_hours "$@"` called by each analytics arm, written with `if` or `case "$1"` (not a second `case "$SUB"`); `cf_graphql` calls `preflight()`; six `SUBCOMMANDS`; two dispatcher arms; `CF_API_TOKEN_ANALYTICS_READ` in the xtrace list; `--list`
-- 2.4 `project()` takes a per-query limit through its own `--argjson` name
-- 2.5 Header: subcommands, token binding, POST exception paragraph, message departure, unverified list (status dimension, range operators, `_DESC`), Records F and G with the reason-to-next-action table, expiry 2027-02-07, terse
-- 2.6 Run the suite to green; sweep `anchor matched 2 times`; scoped census `git grep -n -i -w -E 'four|4' -- <the five subject files>` (classify every hit; exempt the ADR-289 historical addenda); confirm `cto.md` does not enumerate subcommands
+- [x] 2.1 `GQL_URL`, `cf_graphql` (own call site, `/usr/bin/env -i "$CURL"`, closed POST vector, three stdin config lines), fixed-prefix and control-character pre-flight
+- [x] 2.2 Two compiled-in templates (query 2 `datetimeHour_DESC`), epoch-arithmetic window, `guard_gql`, projections, `no-zone-access`, bounded `graphql:` message (token-copy check in bash)
+- [x] 2.3 Arity and hours grammar through one shared `need_hours "$@"` called by each analytics arm, written with `if` or `case "$1"` (not a second `case "$SUB"`); `cf_graphql` calls `preflight()`; six `SUBCOMMANDS`; two dispatcher arms; `CF_API_TOKEN_ANALYTICS_READ` in the xtrace list; `--list`
+- [x] 2.4 `project()` takes a per-query limit through its own `--argjson` name
+- [x] 2.5 Header: subcommands, token binding, POST exception paragraph, message departure, unverified list (status dimension, range operators, `_DESC`), Records F and G with the reason-to-next-action table, expiry 2027-02-07, terse
+- [x] 2.6 Run the suite to green; sweep `anchor matched 2 times`; scoped census `git grep -n -i -w -E 'four|4' -- <the five subject files>` (classify every hit; exempt the ADR-289 historical addenda); confirm `cto.md` does not enumerate subcommands
 
 ## Phase 3: Doc parity and records
 
-- 3.1 `standing-delegation.md` section 9: apply the CLO text from `knowledge-base/project/specs/feat-one-shot-cf-analytics-reader-12441/clo-ruling-text.md` (sections A, B, C) without re-wording
-- 3.2 `components.test.ts`: six-name slice, five-token set equality, PAIRS rows, REQUIRED and clause `GET only` markers, new pins, `VENDOR_SENTENCE`, `hostTokens` host set, polarity test re-run
-- 3.3 ADR-289 addendum `## Addendum 2026-11-09 (Ref #12441, #10479, #10205)` (CLO text from `clo-ruling-text.md`, with the CLO message sentence); append 12441 to `related:`; no pointer key
-- 3.4 `bun test plugins/soleur/test/components.test.ts`, the cloudflare suite, `bash plugins/soleur/test/c4-count-parity.test.sh`
+- [x] 3.1 `standing-delegation.md` section 9: apply the CLO text from `knowledge-base/project/specs/feat-one-shot-cf-analytics-reader-12441/clo-ruling-text.md` (sections A, B, C) without re-wording
+- [x] 3.2 `components.test.ts`: six-name slice, five-token set equality, PAIRS rows, REQUIRED and clause `GET only` markers, new pins, `VENDOR_SENTENCE`, `hostTokens` host set, polarity test re-run
+- [x] 3.3 ADR-289 addendum `## Addendum 2026-11-09 (Ref #12441, #10479, #10205)` (CLO text from `clo-ruling-text.md`, with the CLO message sentence); append 12441 to `related:`; no pointer key
+- [x] 3.4 `bun test plugins/soleur/test/components.test.ts`, the cloudflare suite, `bash plugins/soleur/test/c4-count-parity.test.sh`
 
 ## Phase 4: Runbook addendum (append-only)
 
