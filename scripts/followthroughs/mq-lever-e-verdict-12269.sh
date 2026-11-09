@@ -6,7 +6,6 @@
 # the directive carries `secrets=GH_TOKEN`). With GH_TOKEN absent every gh call
 # fails -> exit 3 forever, so refuse loudly instead (sibling convention:
 # actions-queue-tail-8450.sh).
-case "$-" in *x*) [ -n "${GH_TOKEN:+x}" ] && { echo "FATAL: refusing to run under xtrace with GH_TOKEN set" >&2; exit 78; } ;; esac
 #
 # Followthrough-convention exit vocabulary:
 #   0 = verdict reached, tracker may close / soak passes
@@ -63,6 +62,16 @@ case "$-" in *x*) [ -n "${GH_TOKEN:+x}" ] && { echo "FATAL: refusing to run unde
 # the directive comment on #12269, and the pointer sentences in
 # infra/github/ruleset-ci-required.tf, infra/github/README.md and ADR-270.
 set -uo pipefail
+
+# xtrace refusal: never let a live credential reach a trace (see #7797)
+case "$-" in
+  *x*)
+    if [ -n "${GH_TOKEN:+x}" ]; then
+      printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
+      exit 78
+    fi
+    ;;
+esac
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 TF="$REPO_ROOT/infra/github/ruleset-ci-required.tf"
