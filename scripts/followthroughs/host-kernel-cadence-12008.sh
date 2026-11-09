@@ -119,7 +119,7 @@ if [ "${HKC_TEST:-}" = 1 ] && [ -n "${HKC_READER:-}" ]; then READER="$HKC_READER
 cd "$ROOT" || emit cannot-establish
 [ -f "$READER" ] || emit cannot-establish
 
-out="$(timeout 120 bash "$READER" 2>/dev/null)"; rc=$?
+out="$(timeout -k 10 120 bash "$READER" 2>/dev/null)"; rc=$?
 [ "$rc" -eq 0 ] || emit cannot-establish
 
 declare -A SEEN=()

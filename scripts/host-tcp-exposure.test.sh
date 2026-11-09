@@ -73,11 +73,11 @@ records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH / MODULE / UNSUPPO
   done | awk '
     function rep(n,   s) { s = ""; while (n-- > 0) s = s "_"; return s }
     function count_of(s, ch,   n, i) { n = 0; while ((i = index(s, ch)) > 0) { n++; s = substr(s, i + 1) } return n }
-    function collect(s, lit,   out, re, n) {
-      out = ""; re = lit; gsub(/[.]/, "[.]", re); re = re "[A-Za-z0-9_]+"; n = length(lit)
+    function collect(s, lit,   out, re, n) { # a token only counts when nothing identifier-like precedes it
+      out = ""; re = lit; gsub(/[.]/, "[.]", re); re = "[^A-Za-z0-9_.]" re "[A-Za-z0-9_]+"; n = length(lit); s = " " s
       while (match(s, re)) {
-        out = out (out == "" ? "" : ",") substr(s, RSTART + n, RLENGTH - n)
-        s = substr(s, RSTART + RLENGTH)
+        out = out (out == "" ? "" : ",") substr(s, RSTART + 1 + n, RLENGTH - 1 - n)
+        s = substr(s, RSTART + RLENGTH - 1)
       }
       return out
     }
@@ -97,8 +97,16 @@ records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH / MODULE / UNSUPPO
       scrub($0); b = B; c = C
       if (b ~ /\/\*/) print "UNSUPPORTED\tblock-comment"
       if (blk == "") {
+        if (inmod) {
+          if (c ~ /^[[:space:]]*source[[:space:]]*=/) { t = c; sub(/^[^"]*"/, "", t); sub(/".*$/, "", t); print "MODSRC\t" modlab "\t" t }
+          mdepth += count_of(b, "{") - count_of(b, "}")
+          if (mdepth <= 0) inmod = 0
+          next
+        }
         if (b ~ /^[[:space:]]*module[[:space:]]/) {
-          t = c; sub(/^[ \t]*module[ \t]+/, "", t); split(t, h, /[ \t{]+/); gsub(/[^A-Za-z0-9_-]/, "", h[1]); print "MODULE\t" h[1]; next
+          t = c; sub(/^[ \t]*module[ \t]+/, "", t); split(t, h, /[ \t{]+/); gsub(/[^A-Za-z0-9_-]/, "", h[1]); print "MODULE\t" h[1]
+          modlab = h[1]; mdepth = count_of(b, "{") - count_of(b, "}"); inmod = (mdepth > 0)
+          next
         }
         if (c ~ /^[[:space:]]*resource[[:space:]]+("|hcloud_)/) {
           if (c ~ /^[[:space:]]*resource[[:space:]]+"?[A-Za-z0-9_-]+"?[[:space:]]+"?[A-Za-z0-9_-]+"?[[:space:]]*\{[[:space:]]*$/) {
@@ -113,10 +121,13 @@ records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH / MODULE / UNSUPPO
         next
       }
       d = depth; hc = (blk ~ /^hcloud_/)
+      # a resource header at column 0 while a block is open means the brace count drifted: fail closed
+      if (c ~ /^resource[ \t]+"/) print "UNSUPPORTED\tbrace-desync"
+      if (hc && c ~ /\$\{[^}]*"/) print "UNSUPPORTED\tnested-interpolation"
       if (hc && b ~ /<</) print "UNSUPPORTED\theredoc"
       if (hc && index(b, "\"") > 0) print "UNSUPPORTED\tunbalanced-quote"
       if (blk == "hcloud_server" && d == 1) {
-        if (b ~ /^[[:space:]]*count[[:space:]]*=/) { hascount = 1; if (b ~ /\?[[:space:]]*1[[:space:]]*:[[:space:]]*0/) gated = 1 }
+        if (b ~ /^[[:space:]]*count[[:space:]]*=/) { hascount = 1; if (b ~ /\?[[:space:]]*1[[:space:]]*:[[:space:]]*0/ && b ~ /(grok_dogfood_enabled|enable_grok_dogfood)/) gated = 1 }
         if (b ~ /^[[:space:]]*for_each[[:space:]]*=/) hasfe = 1
         if (b ~ /^[[:space:]]*firewall_ids[[:space:]]*=/) in_fwids = 1
       }
@@ -157,14 +168,24 @@ analyze() { # dir -> prints FINDING lines; empty output = clean
   for g in "$dir"/override.tf "$dir"/*_override.tf; do
     if [ -e "$g" ]; then echo "FINDING override-file directory"; break; fi
   done
-  for g in "$dir"/*.tfvars "$dir"/*.auto.tfvars; do
+  for g in "$dir"/*.tfvars "$dir"/*.auto.tfvars "$dir"/*.tfvars.json "$dir"/*.auto.tfvars.json; do
     [ -f "$g" ] || continue
-    if grep -qE '^[[:space:]]*enable_grok_dogfood[[:space:]]*=[[:space:]]*true' "$g"; then echo "FINDING excluded-enabled hcloud_server.grok_dogfood"; fi
+    if grep -E 'enable_grok_dogfood' "$g" | grep -qvE 'false'; then echo "FINDING excluded-enabled hcloud_server.grok_dogfood"; fi
   done
+  # the default-off host stays default-off in the declaration itself: variable default false, local passes it through unchanged
+  if ! cat "$dir"/*.tf 2>/dev/null | awk '/^variable "enable_grok_dogfood"/ { v = 1 } v && /^}/ { v = 0 } v && /^[[:space:]]*default[[:space:]]*=[[:space:]]*false[[:space:]]*(#.*)?$/ { ok = 1 } END { exit ok ? 0 : 1 }'; then
+    echo "FINDING excluded-enabled hcloud_server.grok_dogfood"
+  fi
+  if cat "$dir"/*.tf 2>/dev/null | grep -E '^[[:space:]]*grok_dogfood_enabled[[:space:]]*=' | grep -qvE '=[[:space:]]*var\.enable_grok_dogfood[[:space:]]*(#.*)?$'; then
+    echo "FINDING excluded-enabled hcloud_server.grok_dogfood"
+  fi
   if [ -d "$dir/modules" ] && grep -rqE '^[[:space:]]*resource[[:space:]]+"?hcloud_' --include='*.tf' "$dir/modules"; then
     echo "FINDING module-hcloud-resource directory"
   fi
   grep '^UNSUPPORTED' <<<"$rec" | sort -u | while IFS=$'\t' read -r _ t; do echo "FINDING unsupported-syntax $t"; done
+  grep '^MODSRC' <<<"$rec" | while IFS=$'\t' read -r _ lab t; do
+    case "$t" in ./modules/*) : ;; *) echo "FINDING module-source module.${lab}" ;; esac
+  done
   grep '^MODULE' <<<"$rec" | while IFS=$'\t' read -r _ lab; do
     case " $MODULE_ALLOW " in *" $lab "*) : ;; *) echo "FINDING unlisted-module module.${lab}" ;; esac
   done
@@ -239,7 +260,7 @@ analyze() { # dir -> prints FINDING lines; empty output = clean
 # ---- fixture builders (synthesized; resource labels only, no real names or values) ---------------
 tf_server() { # label [count] [firewall-label]
   printf 'resource "hcloud_server" "%s" {\n' "$1"
-  [ "${2:-}" = count ] && printf '  count = local.enabled ? 1 : 0\n'
+  [ "${2:-}" = count ] && printf '  count = local.grok_dogfood_enabled ? 1 : 0\n'
   [ -n "${3:-}" ] && printf '  firewall_ids = [hcloud_firewall.%s.id]\n' "$3"
   printf '}\n\n'
 }
@@ -264,6 +285,7 @@ base_fixture() { # dir
     tf_server inngest "" inngest; tf_fw_plain inngest
     printf 'removed {\n  from = hcloud_firewall_attachment.inngest\n  lifecycle {\n    destroy = false\n  }\n}\n\n'
     printf 'module "git_data_userdata" {\n  source = "./modules/git-data-userdata"\n}\n\n'
+    printf 'variable "enable_grok_dogfood" {\n  type    = bool\n  default = false\n}\n\nlocals {\n  grok_dogfood_enabled = var.enable_grok_dogfood\n}\n\n'
     tf_server grok_dogfood count; tf_fw_plain grok_dogfood
   } > "$1/main.tf"
 }
@@ -398,6 +420,7 @@ case_noncanonical() {
     tf_server git_data; tf_fw_plain git_data; tf_attach git_data git_data 'hcloud_server.git_data.id'
     printf 'resource "hcloud_server" "inngest" {\n  firewall_ids = [\n    hcloud_firewall.inngest.id,\n  ]\n}\nresource "hcloud_firewall" "inngest" {\n}\n'
     tf_server grok_dogfood count; tf_fw_plain grok_dogfood
+    printf 'variable "enable_grok_dogfood" {\n  default = false\n}\nlocals {\n  grok_dogfood_enabled = var.enable_grok_dogfood\n}\n'
   } > "$D/nc/other-name.tf"
   expect_clean "different labels order, attribute order, odd indent and multiline lists still pass (must-PASS non-canonical input)" nc
 }
@@ -405,7 +428,7 @@ case_excluded() {
   CASES=$((CASES + 1))
   clone ctl ex; edit "$D/ex/main.tf" '/^resource "hcloud_server" "grok_dogfood"/,/^}/c\resource "hcloud_server" "grok_dogfood" {\n}'
   expect_finding "the excluded server must stay count-gated (default-off)" ex excluded-not-gated hcloud_server.grok_dogfood
-  clone ctl ex2; edit "$D/ex2/main.tf" 's/count = local.enabled ? 1 : 0/count = 1/'
+  clone ctl ex2; edit "$D/ex2/main.tf" 's/count = local.grok_dogfood_enabled ? 1 : 0/count = 1/'
   expect_finding "a count of one is a presence of the field, not a default-off gate" ex2 excluded-not-gated hcloud_server.grok_dogfood
   clone ctl ex3; edit "$D/ex3/main.tf" '/resource "hcloud_firewall" "grok_dogfood" {/a\  rule {\n    direction = "in"\n  }'
   expect_finding "a static inbound rule on the excluded host firewall" ex3 rule-block hcloud_firewall.grok_dogfood
@@ -420,13 +443,39 @@ case_files() {
   expect_finding "a tfvars file that enables the default-off host" tv excluded-enabled hcloud_server.grok_dogfood
   clone ctl md; printf 'module "extra" {\n  source = "./m"\n}\n' >> "$D/md/main.tf"
   expect_finding "a module that is not listed is refused" md unlisted-module module.extra
+  clone ctl ms2; edit "$D/ms2/main.tf" 's|source = "./modules/git-data-userdata"|source = "git::https://example.invalid/m.git"|'
+  expect_finding "a listed module whose source leaves modules/ is refused" ms2 module-source module.git_data_userdata
+  clone ctl tv2; printf '{"enable_grok_dogfood": true}\n' > "$D/tv2/prod.auto.tfvars.json"
+  expect_finding "a tfvars.json that enables the default-off host" tv2 excluded-enabled hcloud_server.grok_dogfood
+  clone ctl tv3; printf 'enable_grok_dogfood = "true"\n' > "$D/tv3/prod.tfvars"
+  expect_finding "a quoted true in tfvars is still an enable" tv3 excluded-enabled hcloud_server.grok_dogfood
+  clone ctl vd; edit "$D/vd/main.tf" 's/  default = false/  default = true/'
+  expect_finding "the variable default flipped to true" vd excluded-enabled hcloud_server.grok_dogfood
+  clone ctl lv; edit "$D/lv/main.tf" 's/grok_dogfood_enabled = var.enable_grok_dogfood/grok_dogfood_enabled = true/'
+  expect_finding "the local that gates the host flipped to a constant" lv excluded-enabled hcloud_server.grok_dogfood
   clone ctl mh; mkdir -p "$D/mh/modules/m"; printf 'resource "hcloud_server" "q" {\n}\n' > "$D/mh/modules/m/main.tf"
   expect_finding "an hcloud resource inside modules/ is refused" mh module-hcloud-resource directory
   clone ctl dup; tf_fw_plain inngest > "$D/dup/zz.tf"
   expect_finding "a duplicate resource label (an override in all but name)" dup duplicate-resource hcloud_firewall.inngest
+  clone ctl dup2; tf_server inngest > "$D/dup2/zz.tf"
+  expect_finding "a duplicate server label" dup2 duplicate-resource hcloud_server.inngest
+  clone ctl dup3; tf_attach git_data git_data 'hcloud_server.git_data.id' > "$D/dup3/zz.tf"
+  expect_finding "a duplicate attachment label" dup3 duplicate-resource hcloud_firewall_attachment.git_data
+  clone ctl tofu; printf '# empty\n' > "$D/tofu/ghost.tofu"
+  expect_finding "a .tofu file is refused" tofu unread-file directory
+  clone ctl ov2; printf '# empty\n' > "$D/ov2/zz_override.tf"
+  expect_finding "a *_override.tf file is refused" ov2 override-file directory
 }
 case_syntax() {
   CASES=$((CASES + 1))
+  clone ctl sq; edit "$D/sq/main.tf" '/^resource "hcloud_server" "inngest" {/a\  name = "oops'
+  expect_finding "a stray quote inside an hcloud resource is refused" sq unsupported-syntax unbalanced-quote
+  clone ctl ut2; printf 'resource "hcloud_ssh_key" "k" {\n  name = "x"\n' > "$D/ut2/aaa.tf"
+  expect_finding "a file that ends inside a resource is found even when it is not the last file" ut2 unsupported-syntax unterminated-resource
+  clone ctl ni; edit "$D/ni/main.tf" '/^resource "hcloud_firewall" "git_data" {/a\  note = "${var.a ? "}" : "x"}"'
+  expect_finding "a nested quote inside an interpolation is refused in an hcloud block (the quote pairing would drift)" ni unsupported-syntax nested-interpolation
+  clone ctl bd; { printf 'resource "aws_x" "y" {\n  note = "${var.a ? "{" : "x"}"\n}\n'; tf_server brand_new; } > "$D/bd/zz.tf"
+  expect_finding "a drifted brace count that swallows the next resource header is found" bd unsupported-syntax brace-desync
   clone ctl bc; printf '/* a block comment */\n' > "$D/bc/zz.tf"
   expect_finding "a block comment is refused (a commented binding must not read as live)" bc unsupported-syntax block-comment
   clone ctl ol; printf 'resource "hcloud_ssh_key" "k" { name = "x" }\n' > "$D/ol/zz.tf"
@@ -463,6 +512,21 @@ case_exposure_paths() {
   clone ctl mf; edit "$D/mf/main.tf" '/^resource "hcloud_server" "registry" {/a\  for_each = toset(["a"])'
   expect_finding "a plain server multiplied by for_each" mf server-multiplied hcloud_server.registry
 }
+case_binding_lists() {
+  CASES=$((CASES + 1))
+  clone ctl wfw; edit "$D/wfw/main.tf" '/^resource "hcloud_firewall_attachment" "registry"/,/^}/s/hcloud_firewall.registry.id/hcloud_firewall.git_data.id/'
+  expect_finding "an attachment naming the wrong firewall leaves the server unbound" wfw unbound hcloud_server.registry
+  clone ctl xt; edit "$D/xt/main.tf" 's|firewall_ids = \[hcloud_firewall.inngest.id\]|firewall_ids = [x_hcloud_firewall.inngest.id]|'
+  expect_finding "an identifier that merely ends in the token is not a binding" xt unbound hcloud_server.inngest
+  clone ctl wl; edit "$D/wl/main.tf" '/^resource "hcloud_firewall_attachment" "registry"/,/^}/s/hcloud_firewall.registry.id/hcloud_firewall.registry_old.id/'
+  expect_finding "an attachment whose firewall label merely starts with the mapped one" wl unbound hcloud_server.registry
+  clone ctl sub; edit "$D/sub/main.tf" 's|firewall_ids = \[hcloud_firewall.inngest.id\]|firewall_ids = [hcloud_firewall.inngest_old.id]|'
+  expect_finding "a firewall label that merely starts with the mapped one is not the mapped firewall" sub unbound hcloud_server.inngest
+  clone ctl ml; edit "$D/ml/main.tf" 's|firewall_ids = \[hcloud_firewall.inngest.id\]|firewall_ids = [hcloud_firewall.web.id, hcloud_firewall.inngest.id]|'
+  expect_finding "a multi-element firewall_ids list is split, so an extra id is seen wherever it sits" ml extra-firewall hcloud_server.inngest
+  clone ctl ms; edit "$D/ms/main.tf" '/^resource "hcloud_firewall_attachment" "registry"/,/^}/s/server_ids  = \[hcloud_server.registry.id\]/server_ids  = [hcloud_server.registry.id, hcloud_server.git_data.id]/'
+  expect_finding "a multi-element server_ids list is split, so the second server is seen bound to a second firewall" ms extra-firewall hcloud_server.git_data
+}
 case_real_tree() {
   CASES=$((CASES + 1))
   local out rec
@@ -477,14 +541,14 @@ case_real_tree() {
 [ -d "$REAL_TF" ] || { printf '[FATAL] real Terraform directory missing\n' >&2; exit 1; }
 case_baseline; case_inbound; case_second_member; case_empty; case_liveness; case_unmapped
 case_binding; case_ratchet; case_dynamic; case_ignored_constructs; case_noncanonical
-case_excluded; case_files; case_syntax; case_exposure_paths; case_real_tree
+case_excluded; case_files; case_syntax; case_exposure_paths; case_binding_lists; case_real_tree
 
 # ---- anti-vacuity floors (reported with printf + exit, not through the helpers) ------------------
-EXPECTED_CASES=16
+EXPECTED_CASES=17
 if [ "$CASES" -lt "$EXPECTED_CASES" ]; then
   printf '[FATAL] case-count floor: ran %s cases, want >= %s (a case was deleted)\n' "$CASES" "$EXPECTED_CASES" >&2; exit 1
 fi
-MIN_ASSERTIONS=57
+MIN_ASSERTIONS=76
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: %s passed, want >= %s (an assertion was deleted)\n' "$pass" "$MIN_ASSERTIONS" >&2; exit 1
 fi

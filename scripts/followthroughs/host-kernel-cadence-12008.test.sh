@@ -21,6 +21,7 @@
 #   M11 cannot-establish exits 1         M12 duplicate role rows accepted
 #   M13 kernel column shape check dropped  M14 age column shape check dropped
 #   M15 field-count floor lowered to 3     M16 kernel_age shape check dropped
+#   M17-M19 marker_state / kernel_state / uptime shape checks dropped (graded on an ignored role's row)
 # Floors: the case count, the mutant count and the assertion count are reported with printf + exit.
 
 set -uo pipefail
@@ -175,6 +176,16 @@ case_census() {
   expect "a row one field short (dropped column) is a problem" "$PROBE" sh_nf 3 "$LINE_CANNOT"
   build junk 0; printf 'garbage without tabs\n' >> "$D/junk/rows"
   expect "one malformed line is a problem even when every required role is present" "$PROBE" junk 3 "$LINE_CANNOT"
+  local k
+  for k in 2 3 6; do
+    build "ign_c$k" 0
+    case "$k" in
+      2) printf 'grok-dogfood\tbogus\tunknown\tunknown\tkern-x\tunknown\tunknown\tnone\n' ;;
+      3) printf 'grok-dogfood\tunknown\tbogus\tunknown\tkern-x\tunknown\tunknown\tnone\n' ;;
+      6) printf 'grok-dogfood\tunknown\tunknown\tunknown\tkern-x\tbad\tunknown\tnone\n' ;;
+    esac >> "$D/ign_c$k/rows"
+    expect "an ignored role's row with a malformed column $k is still a problem (the shape gate runs before the ignore)" "$PROBE" "ign_c$k" 3 "$LINE_CANNOT"
+  done
   build ign3 0; row grok fresh observed 5 >> "$D/ign3/rows"
   expect "a near-miss of an ignored role (grok) is an unknown role, not ignored" "$PROBE" ign3 3 "$LINE_CANNOT"
   build ign4 0; row dogfood fresh observed 5 >> "$D/ign4/rows"
@@ -245,7 +256,7 @@ case_units() { # the two decision functions, extracted from the probe and driven
   [ "$( (eval "$fn"; aggregate within garbage) )" = cannot-establish ] && ok "units: an unrecognised class string is never the all-clear" || bad "units: an unrecognised class produced the all-clear"
   [ "$( (eval "$fn"; aggregate unknown overdue within) )" = review-needed ] && ok "units: overdue beats unknown" || bad "units: overdue did not beat unknown"
   [ "$( (eval "$fn"; classify_row newrole fresh observed 5) )" = unknown ] && ok "units: a role with no cadence arm is unknown, never within" || bad "units: a role without a cadence arm was graded"
-  grep -qE '^out="\$\(timeout [0-9]+ bash "\$READER" 2>/dev/null\)"; rc=\$\?$' "$PROBE" && ok "units: the reader call is bounded by a timeout" || bad "units: the reader call has no timeout"
+  grep -qE '^out="\$\(timeout -k [0-9]+ [0-9]+ bash "\$READER" 2>/dev/null\)"; rc=\$\?$' "$PROBE" && ok "units: the reader call is bounded by a timeout" || bad "units: the reader call has no timeout"
 }
 case_override_gate() {
   CASES=$((CASES + 1))
@@ -330,6 +341,11 @@ case_hygiene() {
   done
   local files=("$PROBE" "$HERE/host-kernel-cadence-12008.test.sh" "$ROOT/scripts/host-tcp-exposure.test.sh")
   [ -f "$RUNBOOK" ] && files+=("$RUNBOOK")
+  local extra
+  for extra in "$ROOT"/knowledge-base/project/plans/2026-11-09-feat-host-kernel-patch-cadence-and-nonweb-exposure-check-plan.md \
+               "$ROOT"/knowledge-base/project/specs/feat-one-shot-12008-kernel-cadence/*.md; do
+    [ -f "$extra" ] && files+=("$extra")
+  done
   out="$(hygiene "${files[@]}")"
   [ -z "$out" ] && ok "hygiene: no CVE id, kernel version, address, server name or verdict words in the durable new files" || bad "hygiene violations: $(tr '\n' ' ' <<<"$out")"
   if [ -f "$RUNBOOK" ]; then
@@ -351,7 +367,7 @@ grade() { # probe-copy -> prints KILLED:<case> for the first discriminating case
   local mp="$1" killed="" spec n wrc
   for spec in "all_within:2" "over_web-1:5" "over_git-data:5" "unk_silent:3" "unk_stale:3" "unk_ks:3" "unk_ks2:3" "unk_ms:3" "unk_ms2:3" "prec_a:5" "prec_b:5" \
               "b_eq_web-1:2" "b_plus_web-1:5" "rd4:3" "zero:3" "extra_role:3" "drop_row:3" "dup:3" "nan:3" \
-              "sh2:3" "sh3:3" "sh4:3" "sh5:3" "sh6:3" "sh7:3" "sh_nf:3" "junk:3" "ign3:3" "b_big:3"; do
+              "sh2:3" "sh3:3" "sh4:3" "sh5:3" "sh6:3" "sh7:3" "sh_nf:3" "junk:3" "ign3:3" "ign_c2:3" "ign_c3:3" "ign_c6:3" "b_big:3"; do
     n="${spec%%:*}"; wrc="${spec##*:}"
     run_probe "$mp" "$n"
     [ "$RC" -eq "$wrc" ] || killed="$n"
@@ -394,6 +410,9 @@ if [ -f "$PROBE" ]; then
   mutate M14 's# && \$4 ~ /\^\(\[0-9\]\+\|unknown\)\$/##'
   mutate M15 's/NF >= 8/NF >= 3/'
   mutate M16 's# && \$7 ~ /\^\(\[0-9\]\+\|unknown\)\$/##'
+  mutate M17 's# && \$2 ~ /\^\(fresh\|stale\|silent\|unknown\)\$/##'
+  mutate M18 's# && \$3 ~ /\^\(observed\|stale\|unknown\)\$/##'
+  mutate M19 's# && \$6 ~ /\^\(\[0-9\]\+\|unknown\)\$/##'
 fi
 
 # ---- anti-vacuity floors (reported with printf + exit, not through the helpers) ------------------
@@ -402,12 +421,12 @@ if [ "$CASES" -lt "$EXPECTED_CASES" ]; then
   printf '[FATAL] case-count floor: ran %s cases, want >= %s (a case was deleted or the list was emptied)\n' "$CASES" "$EXPECTED_CASES" >&2
   exit 1
 fi
-EXPECTED_MUTANTS=16
+EXPECTED_MUTANTS=19
 if [ "$MUTANTS" -lt "$EXPECTED_MUTANTS" ]; then
   printf '[FATAL] mutant-count floor: ran %s mutants, want >= %s\n' "$MUTANTS" "$EXPECTED_MUTANTS" >&2
   exit 1
 fi
-MIN_ASSERTIONS=108
+MIN_ASSERTIONS=114
 if [ "$pass" -lt "$MIN_ASSERTIONS" ]; then
   printf '[FATAL] assertion floor: %s passed, want >= %s (an assertion was deleted)\n' "$pass" "$MIN_ASSERTIONS" >&2
   exit 1

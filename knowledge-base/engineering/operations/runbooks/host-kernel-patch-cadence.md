@@ -38,7 +38,7 @@ them: edit the constants, nothing else.
 | web (host the replace path accepts) | `web-host-replace` | typed confirm token, reviewer-gated environment, plan gate (exactly one delete and one create of that key) | owner, per dispatch | a fresh reader run shows a reset uptime and a changed kernel for that row |
 | web (row with no sanctioned act) | none | the replace path refuses that key at input validation and in the plan gate (see the web section) | owner decision, not an act | n/a |
 | inngest | `inngest-host-replace`, then the separately human-approved cutover resume | scheduler pause window, resume approval | owner, per dispatch | a fresh reader run, then the scheduler health the cutover runbook names |
-| registry | `registry-host-replace` (or the dispatcher re-fire, which has **no reviewer gate**) | registry preflight; the registry is the only image pull path and a replace destroys before it creates, so deploys are blocked while it is down | owner, per dispatch; an agent never dispatches either form without a typed go naming the command | a fresh reader run, then a read of an existing image pull or deploy log (never a new deploy) |
+| registry | `registry-host-replace` (or the dispatcher re-fire; neither form has a reviewer gate, they are main-only with the destroy guard) | registry preflight; the registry is the only image pull path and a replace destroys before it creates, so deploys are blocked while it is down | owner, per dispatch; an agent never dispatches either form without a typed go naming the command | a fresh reader run, then a read of an existing image pull or deploy log (never a new deploy) |
 | git-data | `git-data-host-replace` only | three interlocks (see the git-data section); volumes and the volume passphrase are preserved by omission | owner, per dispatch | a fresh reader run once the git-data emitter is delivered and the reader reads that source (#12385) |
 
 <!-- lint-infra-ignore end -->
@@ -58,7 +58,7 @@ When the owner types a go that names an exact command from the table:
 1. Run **only** the named command. A menu click, a bare "go" or an earlier approval is not a go. Do not chain a second route.
 2. In the same turn, arm a Monitor on the run that command started (`hr-dispatch-async-must-arm-watch`). Find your own run by
    workflow, commit and start time, not by "latest run", and read the verdict from the run log, never from the dispatch exit code.
-3. The reader's row role for a web row is the `web_host_key` input, and the confirm token is `REPLACE-` followed by that key.
+3. The reader's row role for a web row is the `web_host_key` input, and the confirm token is the one printed in that target's job header and runbook: the agent copies it from the owner's typed command and never composes it.
    Map the row you are acting on to its key before you type the command into the plan; the other routes take no key.
 4. The exact command lines live in each class's own runbook, linked from the sections below. Start with `plan_only` where offered.
 5. Verification is a fresh reader run (next section), not the workflow's green check.
@@ -69,7 +69,7 @@ When the owner types a go that names an exact command from the table:
 
 - Each web host is a `hcloud_server.web[<key>]`. The hosts the replace path accepts take the replace route in the table; its own
   runbook is [web-host-replace.md](./web-host-replace.md).
-- The replace path refuses one key (see the web-host-replace runbook section "`web-1` is refused"): its workspaces volume
+- The replace path refuses one key (see the refusal section of the web-host-replace runbook): its workspaces volume
   attachment is hardcoded to it and is ForceNew, and a rebirth of it is not a supported recovery until the de-pet rebuild (#9421).
   That row therefore has no sanctioned act today. Do not offer a replace for it; the refusal text in that runbook is the authority.
   The reboot workflow that once existed is retired (see [web-host-reboot.md](./web-host-reboot.md), and the ADR-263 addendum
