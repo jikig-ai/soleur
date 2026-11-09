@@ -37,9 +37,9 @@ One PR carries both items. Stage 4 stays NON-ACTIVATED throughout (AC8).
 
 ## Phase 3 — Ship
 
-- [ ] 3.1 Non-activation sweep (AC8): lock line present; `vars.CI_PR_AFFECTED` at ci.yml:399; `git diff --name-only origin/main...HEAD` shows no activation-surface file.
-- [ ] 3.2 PR body: `Ref #9323` / `Ref #9729` — no `Closes`/`Fixes`/`Resolves` (AC9); restate the term-1 allowlist verification (AC11).
-- [ ] 3.3 Commit `decision-challenges.md` amendments if later phases surface new rows.
+- [x] 3.1 Non-activation sweep (AC8): lock line present; `vars.CI_PR_AFFECTED` at ci.yml:399; `git diff --name-only origin/main...HEAD` shows no activation-surface file.
+- [x] 3.2 PR body: `Ref #9323` / `Ref #9729` — no `Closes`/`Fixes`/`Resolves` (AC9); restate the term-1 allowlist verification (AC11).
+- [x] 3.3 Commit `decision-challenges.md` amendments if later phases surface new rows.
 
 ## Acceptance mapping
 
