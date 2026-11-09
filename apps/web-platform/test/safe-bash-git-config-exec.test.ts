@@ -48,8 +48,8 @@ const ROWS: Row[] = [
   row("git diff --stat", FM_F, true),
   row("git diff --name-only", FM_F, true),
   row("git diff --cached", ["fsmonitor"], true),
-  row("git diff --no-ext-diff", ["filter", "fsmonitor", "textconv"], true),
-  row("git diff --no-ext-diff --no-textconv", FM_F, true),
+  row("git diff --no-ext-diff", ["filter", "fsmonitor", "textconv"], false), // swaps ext-diff for textconv: not inert, not admitted
+  row("git diff --no-ext-diff --no-textconv", FM_F, false),
   row("git diff HEAD~1 HEAD --stat", [], true),
   // ---- diff: exec-requesting flags (denied; some execute even though the flag only RE-asks for it)
   row("git diff --ext-diff", ALL3, false),
@@ -88,7 +88,7 @@ const ROWS: Row[] = [
   row("git show --name-only", [], true),
   row("git show -s", [], true),
   row("git show HEAD:f.txt", [], true),
-  row("git show --no-ext-diff --no-textconv", [], true),
+  row("git show --no-ext-diff --no-textconv", [], false),
   row("git show --ext-diff", ["ext-diff"], false),
   row("git show --ext-diff HEAD", ["ext-diff"], false),
   row("git show --show-signature signed", ["gpg"], false),
@@ -126,8 +126,6 @@ const CARRIER_DEPENDENT_APPROVED: ReadonlySet<string> = new Set([
   "repo|git diff --stat",
   "repo|git diff --name-only",
   "repo|git diff --cached",
-  "repo|git diff --no-ext-diff",
-  "repo|git diff --no-ext-diff --no-textconv",
   "repo|git show HEAD",
   "repo|git show",
   "repo|cd evil && git diff HEAD~1 HEAD",
@@ -200,5 +198,37 @@ describe("safe-bash git config-exec falsifier (#9600)", () => {
     }
     // control: the same command under the plain env DOES execute, so the empty result above is the pin, not a broken fixture
     expect(fx.run("cd evil && git diff HEAD~1 HEAD", "clone", "plain")).toEqual(["ext-diff"]);
+  });
+  // ADMISSION RULE evidence: every flag the closed grammar admits is inert under real git on the verbs
+  // where it is meaningful. A flag is added to GIT_READ_FLAG only with a row here.
+  it("D: every admitted flag is approved AND inert (real git) on a commit-range log and a two-commit diff", () => {
+    const LOG_FLAGS = [
+      "--oneline", "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw",
+      "--graph", "--no-patch", "-s", "--no-color", "--abbrev-commit", "--decorate", "--all", "--first-parent",
+      "--no-merges", "--merges", "--reverse", "-3", "-n 3", "--max-count=3", "--since=2020-01-01",
+      "--until=2030-01-01", "--author=Fixture", "--grep=c1", "--diff-filter=A",
+    ];
+    const DIFF_FLAGS = [
+      "--stat", "--name-only", "--name-status", "--numstat", "--shortstat", "--summary", "--raw", "--no-patch",
+      "-s", "--no-color", "--diff-filter=A",
+    ];
+    const bad: string[] = [];
+    for (const f of LOG_FLAGS) {
+      const cmd = `git log ${f}`;
+      if (!isBashCommandSafe(cmd)) bad.push(`not approved: ${cmd}`);
+      const got = fx.run(cmd, "repo", "plain");
+      if (got.length) bad.push(`${cmd} executed ${JSON.stringify(got)}`);
+    }
+    // A flag may not add an exec channel the bare verb lacks: observed must be a subset of the bare baseline.
+    const baseline = fx.run("git diff HEAD~1 HEAD", "repo", "plain");
+    for (const f of DIFF_FLAGS) {
+      const cmd = `git diff HEAD~1 HEAD ${f}`;
+      if (!isBashCommandSafe(cmd)) bad.push(`not approved: ${cmd}`);
+      const got = fx.run(cmd, "repo", "plain");
+      const extra = got.filter((c) => !baseline.includes(c));
+      if (extra.length) bad.push(`${cmd} adds channels ${JSON.stringify(extra)} beyond bare diff ${JSON.stringify(baseline)}`);
+    }
+    expect(bad).toEqual([]);
+    expect(LOG_FLAGS.length + DIFF_FLAGS.length).toBeGreaterThanOrEqual(36);
   });
 });

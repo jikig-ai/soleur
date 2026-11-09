@@ -107,6 +107,17 @@ const GH_ARG = String.raw`[\w./~+:=@,-]+`;
 const GIT_BRANCH_LIST_FORCE = String.raw`(?:--list|--show-current|--all|--remotes|--contains|--no-contains|--merged|--no-merged|--points-at|-(?=[arv]*[ar])[arv]+)`;
 const GIT_BRANCH_READ_FLAG = String.raw`(?:${GIT_BRANCH_LIST_FORCE}|-[v]+|--verbose|--sort=${PATH_TOKEN}|--format=${PATH_TOKEN}|--abbrev(?:=\d+)?|--column|--no-column|--color(?:=${PATH_TOKEN})?|--no-color|--ignore-case)`;
 
+// git log|diff|show — the CLOSED flag grammar (#9600). ADMISSION RULE: a flag is added here only
+// with a row in test/safe-bash-git-config-exec.test.ts showing real git never runs a repo-config
+// helper, writes a file or reads an arbitrary file because of it, and never adds an exec channel the bare
+// verb does not already have (so --no-ext-diff / --no-textconv are OUT: they swap one config-driven
+// channel for another), plus a safe-bash test. A flag is
+// NEVER admitted by prefix or by a generic `--[\w-]+=value` shape: git accepts unique-prefix
+// abbreviations on some versions, so only exact spellings count. Deliberately absent (each asks
+// git to execute or read): --ext-diff, --textconv, -p/--patch/-u, -U<n>, --word-diff, -w, -S, -G,
+// -O<orderfile>, --show-signature, --output, -c/--cc, --stat-width style value flags.
+const GIT_READ_FLAG = String.raw`(?:--oneline|--stat|--name-only|--name-status|--numstat|--shortstat|--summary|--raw|--graph|--no-patch|-s|--cached|--staged|--no-color|--abbrev-commit|--decorate|--all|--first-parent|--no-merges|--merges|--reverse|-\d+|-n\s+\d+|--max-count=\d+|--(?:since|until|author|grep)=${PATH_TOKEN}|--diff-filter=[A-Za-z]+|--)`;
+
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   // No-arg / fixed-form commands
   /^pwd\s*$/,
@@ -132,20 +143,18 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^which\s+${PATH_TOKEN}\s*$`),
   // uname with optional flags
   /^uname(?:\s+-[a-zA-Z]+)*\s*$/,
-  // git read-only verbs. Arg shape is a SINGLE non-overlapping token branch
-  // (`${PATH_TOKEN}` already covers `-flag`, `--flag`, `--flag=value`, paths,
-  // and bare numbers — all within the metachar-free PATH_TOKEN charset). The
-  // prior multi-branch form (`-[a-zA-Z]+ | --[a-zA-Z][\w-]* | PATH_TOKEN`) was
-  // exponentially ambiguous: a `--foo` token matched BOTH the `--flag` branch
-  // and the PATH_TOKEN branch, so a failing tail (e.g. a char outside the
-  // charset) forced ~2^n backtracking — a per-Bash-call ReDoS reachable under
-  // prompt injection (review PR #4868). One branch = linear. The
-  // GIT_OUTPUT_REDIRECT_DENYLIST below rejects `--output=<file>` so this
-  // read-allowlist cannot be turned into an arbitrary-file-write primitive.
+  // git read-only verbs. `git status` is bare-only. `git log|diff|show` take a CLOSED flag
+  // grammar (#9600): every flag must be in GIT_READ_FLAG, a positional must not start with `-`,
+  // and anything else — including every unknown flag, every unique-prefix abbreviation and every
+  // `--flag=value` outside the list — misses this pattern and falls to the review card (never a
+  // hard deny). The prior free tail (`${PATH_TOKEN}` for every token) auto-approved
+  // `--ext-diff`, `--textconv`, `-p`, `-S`, `-G`, `-O<file>` and `--show-signature`, each of which
+  // asks git to run a repo-config helper (diff.external, textconv, gpg.program) or read a file.
+  // A token is EITHER a listed flag OR a non-dash positional, so no token matches both branches
+  // and a failing tail cannot backtrack exponentially (the #4868 ReDoS lesson). The
+  // FILE_WRITE_FLAG_DENYLIST below still rejects `--output` as a second layer.
   /^git\s+status\s*$/,
-  new RegExp(String.raw`^git\s+log(?:\s+${PATH_TOKEN})*\s*$`),
-  new RegExp(String.raw`^git\s+diff(?:\s+${PATH_TOKEN})*\s*$`),
-  new RegExp(String.raw`^git\s+show(?:\s+${PATH_TOKEN})*\s*$`),
+  new RegExp(String.raw`^git\s+(?:log|diff|show)(?:\s+(?:${GIT_READ_FLAG}|(?!-)${PATH_TOKEN}))*\s*$`),
   // Arm 1: bare `git branch` or flag-only forms (incl. --show-current, -v).
   new RegExp(String.raw`^git\s+branch(?:\s+${GIT_BRANCH_READ_FLAG})*\s*$`),
   // Arm 2: the leading flag run must contain ≥1 list-FORCING flag before any

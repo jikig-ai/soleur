@@ -265,6 +265,95 @@ describe("review PR #4868 — git arg-pattern hardening", () => {
   });
 });
 
+describe("#9600 — git log|diff|show closed flag grammar (exec-requesting flags fall through to the gate)", () => {
+  // Measured with real git in safe-bash-git-config-exec.test.ts; each flag below asks git to run a
+  // repo-config helper (diff.external / textconv / gpg.program) or to read a file.
+  const EXEC_FLAGS = [
+    "git diff --ext-diff",
+    "git diff --ext-diff=x",
+    "git log -p --ext-diff",
+    "git show --ext-diff HEAD",
+    "git diff --textconv",
+    "git diff HEAD~1 --textconv --stat",
+    "git log -p",
+    "git log --patch",
+    "git log -u",
+    "git diff -U3",
+    "git diff --word-diff",
+    "git log -S needle",
+    "git log -Sneedle",
+    "git log -G needle",
+    "git log -Gneedle",
+    "git log --show-signature",
+    "git show --show-signature HEAD",
+    "git diff -O/etc/hostname",
+    "git diff -Oorder",
+    "git log -c",
+    "git log --cc",
+    "git diff --ext",
+    "git diff --textc",
+    "git diff --no-ext-diff",
+    "git log --pretty=format:%H", // unknown flag family: card, not hard deny
+    "git log --oneline && git diff --ext-diff", // one bad segment denies the chain
+    "git status && git log -p",
+  ];
+  test.each(EXEC_FLAGS)("falls through: %s", (cmd) => {
+    expect(isBashCommandSafe(cmd)).toBe(false);
+  });
+
+  const STILL_APPROVED = [
+    "git status",
+    "git log --oneline -5",
+    "git log -n 5",
+    "git log --stat",
+    "git log --name-only --oneline",
+    "git log --graph --all --decorate",
+    "git log --since=2026-01-01 --author=alice",
+    "git log --oneline -5 HEAD~2..HEAD",
+    "git diff",
+    "git diff HEAD~1",
+    "git diff HEAD~1 --stat",
+    "git diff main...HEAD --name-only",
+    "git diff --cached --stat",
+    "git diff -- src/index.ts",
+    "git show HEAD",
+    "git show HEAD --name-only",
+    "git show HEAD:apps/web-platform/package.json",
+    "git show --stat",
+    "pwd && git diff HEAD~1 --stat",
+  ];
+  test.each(STILL_APPROVED)("stays approved: %s", (cmd) => {
+    expect(isBashCommandSafe(cmd)).toBe(true);
+  });
+
+  // Env-prefix and global-option forms never reached the read patterns (they start at `git <verb>`);
+  // pinned here so a future widening of the leading token cannot silently admit them.
+  const NOT_VERB_LEADING = [
+    "GIT_EXTERNAL_DIFF=/tmp/x git diff",
+    "GIT_CONFIG_COUNT=0 git status",
+    "GIT_DIR=x git log",
+    "git -c core.fsmonitor=x status",
+    "git -c diff.external=/tmp/x diff",
+    "git --git-dir=x log",
+    "git --bare log",
+    "git --no-pager log",
+  ];
+  test.each(NOT_VERB_LEADING)("not verb-leading: %s", (cmd) => {
+    expect(isBashCommandSafe(cmd)).toBe(false);
+  });
+
+  test("no catastrophic backtracking on a long failing tail of listed flags", () => {
+    const evil = "git log " + "--oneline ".repeat(300) + "!";
+    const t0 = Date.now();
+    expect(isBashCommandSafe(evil)).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(250);
+    const evil2 = "git diff " + "HEAD~1 ".repeat(300) + "--textconv";
+    const t1 = Date.now();
+    expect(isBashCommandSafe(evil2)).toBe(false);
+    expect(Date.now() - t1).toBeLessThan(250);
+  });
+});
+
 describe("#9555 — git branch read-only arms (create/delete/rename fall through to the gate)", () => {
   // Contract: `git branch` auto-approves iff every post-`branch` token is a
   // member of the closed read-only flag set, or — reachable only after a
