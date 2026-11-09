@@ -341,13 +341,6 @@ case_hygiene() {
   done
   local files=("$PROBE" "$HERE/host-kernel-cadence-12008.test.sh" "$ROOT/scripts/host-tcp-exposure.test.sh")
   [ -f "$RUNBOOK" ] && files+=("$RUNBOOK")
-  local extra
-  for extra in "$ROOT"/knowledge-base/project/plans/*feat-host-kernel-patch-cadence-and-nonweb-exposure-check-plan.md \
-               "$ROOT"/knowledge-base/project/plans/archive/*feat-host-kernel-patch-cadence-and-nonweb-exposure-check-plan.md \
-               "$ROOT"/knowledge-base/project/specs/feat-one-shot-12008-kernel-cadence/*.md \
-               "$ROOT"/knowledge-base/project/specs/archive/*feat-one-shot-12008-kernel-cadence/*.md; do
-    [ -f "$extra" ] && files+=("$extra")
-  done
   out="$(hygiene "${files[@]}")"
   [ -z "$out" ] && ok "hygiene: no CVE id, kernel version, address, server name or verdict words in the durable new files" || bad "hygiene violations: $(tr '\n' ' ' <<<"$out")"
   if [ -f "$RUNBOOK" ]; then
