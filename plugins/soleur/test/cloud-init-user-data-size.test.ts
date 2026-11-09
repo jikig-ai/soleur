@@ -1893,7 +1893,8 @@ describe("Dockerfile <-> server.tf baked-set parity (AC2)", () => {
     // soleur-egress-gw; the forwarder rides the image for the PR-B dispatcher.
     // +4 (=67): the runtime Bash synthetic (#10455 b, ADR-079 addendum 2026-10-22) — web-bash-synthetic.{sh,service,timer} plus
     // sdk-bash-verdict.sh, the verdict mapping it shares with ci-deploy.sh (installed beside it, sourced not executed).
-    expect(serverTfBakedSet().length).toBe(67);
+    // +3 (=70): the SOLEUR_HOST_KERNEL collector (#12007) — host-kernel-marker.{sh,service,timer}, plain (non-template) unit names.
+    expect(serverTfBakedSet().length).toBe(70);
   });
 
   // ASSERTION A (build-integrity). server.tf computes local.host_scripts_content_hash over

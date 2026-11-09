@@ -696,3 +696,102 @@ resource "betteruptime_team_member" "ops" {
 # http_alert_origin_error, re-introduce this resource with the v4 syntax
 #   filters { zones = [var.cf_zone_id]; slo = ["99.9"] }
 # documented in PR #4018 before deletion.
+
+# #12007 - per-host dead-man heartbeats for the periodic SOLEUR_HOST_KERNEL marker (web-1, web-2, inngest, registry).
+# Each is fed hourly by scripts/deadman-heartbeat-feeder.sh (targets host-kernel-<role>) ONLY while that host's own
+# valid marker row exists inside a literal 36 h window (129600 s, hot UNION archive); with none the beat is withheld, so
+# the heartbeat times out and pages. Worst case from a dead emitter to a page is about 40 h (36 h + the hourly feeder +
+# period 3600 + grace 7200), inside the 48 h bound after which host-state.sh stops calling a kernel `observed`. A native
+# logs alert cannot do this: newly created alerts with a query_period above 900 s have been refused with a 422 (the repo
+# sentinel logs-alert-query-period-ceiling.test.sh enforces 900 s), so one is blind to rows this sparse (incident 1023423999).
+#
+# paused = true until the owner arms them (#12386): the emitter is delivered to running hosts only by held steps, and the
+# four names are not in the feeder workflow loop yet, so an unpaused heartbeat would page falsely. ignore_changes =
+# [paused] so a later apply never reverts the owner's unpause. No doppler_secret: the feeder resolves the ping URL
+# through the read-only API by exact name. policy_id is gated on var.betterstack_paid_tier exactly as the luks sibling.
+#
+# REGISTRY: this PR ships NO registry emitter. The host_kernel_registry heartbeat below stays PAUSED, and the registry emitter is a separate owner-approved
+# follow-up PR (#12386): merging a change to cloud-init-registry.yml auto-fires registry-host-replace-dispatch.yml, which REPLACES the production registry host,
+# so that PR is the owner's decision, not a side effect of this one. Arming (unpausing) host-kernel-registry before that PR has shipped and the replaced host
+# has emitted would page falsely, because no registry row can exist until then.
+resource "betteruptime_heartbeat" "host_kernel_web_1" {
+  name      = "soleur-host-kernel-web-1-prd"
+  period    = 3600
+  grace     = 7200
+  call      = false
+  sms       = false
+  email     = true
+  push      = true
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Armed out-of-band by the owner after observed qualifying rows (#12386); a later apply
+    # MUST NOT revert the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
+
+resource "betteruptime_heartbeat" "host_kernel_web_2" {
+  name      = "soleur-host-kernel-web-2-prd"
+  period    = 3600
+  grace     = 7200
+  call      = false
+  sms       = false
+  email     = true
+  push      = true
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Armed out-of-band by the owner after observed qualifying rows (#12386); a later apply
+    # MUST NOT revert the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
+
+resource "betteruptime_heartbeat" "host_kernel_inngest" {
+  name      = "soleur-host-kernel-inngest-prd"
+  period    = 3600
+  grace     = 7200
+  call      = false
+  sms       = false
+  email     = true
+  push      = true
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Armed out-of-band by the owner after observed qualifying rows (#12386); a later apply
+    # MUST NOT revert the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
+
+# PAUSED, and it must stay paused until the registry emitter ships: that emitter is a separate owner-approved follow-up PR (#12386) because its merge triggers
+# the registry host replace (registry-host-replace-dispatch.yml). No registry row exists before it, so unpausing this earlier would page falsely.
+resource "betteruptime_heartbeat" "host_kernel_registry" {
+  name      = "soleur-host-kernel-registry-prd"
+  period    = 3600
+  grace     = 7200
+  call      = false
+  sms       = false
+  email     = true
+  push      = true
+  team_wait = 0
+  team_name = "Your team"
+  policy_id = var.betterstack_paid_tier ? betteruptime_policy.uptime[0].id : null
+  paused    = true
+
+  lifecycle {
+    # Armed out-of-band by the owner after observed qualifying rows (#12386); a later apply
+    # MUST NOT revert the unpause (mirrors every sibling heartbeat).
+    ignore_changes = [paused]
+  }
+}
