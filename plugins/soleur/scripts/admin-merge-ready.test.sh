@@ -69,8 +69,8 @@ TIMEOUT_BIN="$(command -v timeout)" || { echo "[FATAL] timeout(1) required" >&2;
 
 # ── H6: fixture preconditions every row depends on ──────────────────────────────────────────
 pre() { jq -e "$1" "$2" >/dev/null || { echo "[FATAL] H6 fixture precondition failed: $3 -- recapture the base (see README)" >&2; exit 1; }; }
-pre '[.[0][] | select(.type=="required_status_checks") | .parameters.required_status_checks[]] | length >= 13' \
-  "$BASE_FX/rules-branches-main.json" ">=13 required entries"
+pre '[.[0][] | select(.type=="required_status_checks") | .parameters.required_status_checks[]] | length >= 12' \
+  "$BASE_FX/rules-branches-main.json" ">=12 required entries"
 pre '[.[0][] | select(.ruleset_id==13304872) | .parameters.required_status_checks[]?.context] | index("cla-evidence") != null' \
   "$BASE_FX/rules-branches-main.json" "cla-evidence in ruleset 13304872"
 pre '[.[0][] | select(.ruleset_id!=13304872) | .parameters.required_status_checks[]?.context] | index("cla-evidence") == null' \
@@ -334,7 +334,7 @@ row_R22() { local d; d=$(mkrow R22); assert_fixture_dir "$d"; setrun "$d" CodeQL
   run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  CodeQL (failure)"; }
 row_R23() { local d; d=$(mkrow R23); assert_fixture_dir "$d"; drop "$d" test
   jqf "$d" rules.json '.[0] |= map(if .ruleset_id == 13304872 and .type == "required_status_checks" then .parameters.required_status_checks += [{context: "test", integration_id: 15368}] else . end)'
-  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && count "$d" '^ABSENT  test$' 1 && tailis "$d" 'required=15 absent=["test"] pending=[] failed=[]'; }
+  run "$d" "$PR" "$SHA"; rc_is "$d" 1 && nomiss "$d" && count "$d" '^ABSENT  test$' 1 && tailis "$d" 'required=14 absent=["test"] pending=[] failed=[]'; }
 row_R24() { local d; d=$(mkrow R24); assert_fixture_dir "$d"; setrun "$d" test '.status = "mystery" | .conclusion = null'; run "$d" "$PR" "$SHA"
   rc_is "$d" 1 && nomiss "$d" && line "$d" "FAILED  test (unknown status mystery)"; }
 row_R25() { local d i; d=$(mkrow R25); assert_fixture_dir "$d"

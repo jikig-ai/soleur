@@ -9,26 +9,24 @@
 # live matrix set, and no duplicate assignment — membership changes need a row here or the
 # sentinel reds.
 #
-# Provenance: LPT-packed from scripts/suite-durations.tsv measured 2026-11-08 — serial total
-# 65.4 min; worst leg is leg 1 (ci-pr-affected-replay-a alone, 17.2 min measured) + ~1.5 min
-# checkout/fetch ≈ 19 min wall, ~37% under the 30-min bound. Rebalance trigger: re-pack when
-# a member's measured duration moves any leg's projected total within ~5 min of the bound,
-# or when the manifest gains a member. The manifest stays label<TAB>argv (2 fields) — leg
-# assignment lives ONLY here; do not add a manifest column (check_manifest MEMBER-BAD-FIELDS).
+# Provenance: LPT-packed from scripts/suite-durations.tsv measured 2026-11-08, repacked
+# 2026-11-09 after the S4 retirement removed the five retired evidence/lever
+# members (the three replay arms, the preactivation suite and the pr-selection suite) —
+# serial total ~36.0 min; worst leg is leg 1 (test-all-affected-d alone, ~10.2 min
+# measured) + ~1.5 min checkout/fetch ≈ 12 min wall, ~61% under the 30-min bound.
+# Rebalance trigger: re-pack when a member's measured duration moves any leg's projected
+# total within ~5 min of the bound, or when the manifest gains a member. The manifest
+# stays label<TAB>argv (2 fields) — leg assignment lives ONLY here; do not add a manifest
+# column (check_manifest MEMBER-BAD-FIELDS).
 # regen: manual — repack by editing this file from scripts/suite-durations.tsv totals (see
 # Provenance); check_legs() pins legs ≡ manifest parity, matrix coverage and per-leg budget.
-plugins/soleur/test/ci-pr-affected-replay-a	1/5
-scripts/test-all-affected-d	2/5
-scripts/test-affected-kb-consumers	2/5
-scripts/lint-orphan-test-suites	2/5
-scripts/ci-oracle-review	2/5
-scripts/test-all-affected-c	3/5
-plugins/soleur/test/ci-pr-affected-replay-c	3/5
-plugins/soleur/test/ci-pr-affected-preactivation.test.sh	3/5
-scripts/test-all-affected-b	4/5
+scripts/ci-oracle-review	1/5
+scripts/test-all-affected-d	1/5
+scripts/test-all-affected-c	2/5
+scripts/test-all-affected-b	3/5
 scripts/test-all-group-affected	4/5
-scripts/test-affected-derive-cache	4/5
-plugins/soleur/test/ci-pr-affected-replay-b	5/5
+scripts/test-affected-kb-consumers	5/5
 scripts/test-all-affected-a	5/5
+scripts/lint-orphan-test-suites	5/5
 scripts/test-affected-derive	5/5
-scripts/ci-pr-selection	5/5
+scripts/test-affected-derive-cache	5/5

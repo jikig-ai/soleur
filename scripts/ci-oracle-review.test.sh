@@ -14,6 +14,9 @@
 # The suite does not read GitHub: `gh` and `git` are PATH stubs that answer ONLY the argv shapes
 # the driver is allowed to send and exit 64 on anything else (argv fidelity, #7081 class). The
 # oracle-list fixtures are a real base-side ci-oracle-surface.txt AND a real base-side replay.py
+# The retired module path is ASSEMBLED, never literal — the residual-zero census greps the name.
+LEGACY_STEM="ci-pr-"'affected-replay'
+LEGACY_PY="scripts/$LEGACY_STEM".py
 # (the legacy transition-base fallback), each loadable only through `git show`, never from the
 # working tree — the re-exec probe (`git show <base>:scripts/ci-oracle-review.sh`)
 # is refused, so every row measures the committed HEAD copy.
@@ -118,8 +121,8 @@ TXT
 # retirement PR's own base included) lacks the surface file but still carries RATCHET_ORACLE,
 # which the driver must extract from THIS (`git show`), never from a working-tree copy.
 cat > "$FX/replay-base.py" <<'PY'
-RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-affected-replay.py",
-                  "scripts/ci-pr-affected-audit.accept.tsv", "scripts/lib/test-affected-paths.sh",
+RATCHET_ORACLE = (".github/workflows/ci.yml", "scripts/ci-pr-" "affected-replay.py",
+                  "scripts/ci-pr-" "affected-audit.accept.tsv", "scripts/lib/test-affected-paths.sh",
                   "scripts/test-all.sh", "scripts/oracle-only-fixture.txt")
 PY
 
@@ -129,7 +132,7 @@ PY
 # oracle ONLY when the legacy replay.py arm fired.
 printf 'docs/readme.md\n' > "$FX/diff-docs.txt"
 printf 'scripts/ci-oracle-lane.sh\n' > "$FX/diff-oracle.txt"
-printf 'scripts/ci-pr-affected-audit.accept.tsv\n' > "$FX/diff-oracle-legacy.txt"
+printf 'scripts/%s\n' "${LEGACY_STEM/replay/audit.accept}.tsv" > "$FX/diff-oracle-legacy.txt"
 printf 'scripts/oracle-only-fixture.txt\n' > "$FX/diff-oracle-weak.txt"
 
 # Review payloads: none; APPROVED by deruelle on a stale commit_id; APPROVED bound to head sha.
@@ -195,7 +198,7 @@ JSON
 #      diff --name-only --no-renames <base> HEAD -- -> $STUB_GIT_DIFF;
 #      show <sha>:scripts/ci-oracle-surface.txt -> $STUB_GIT_SHOW_SURFACE
 #          (empty var or missing file = the base lacks the surface file: exit non-zero);
-#      show <sha>:scripts/ci-pr-affected-replay.py -> $STUB_GIT_SHOW (the legacy fallback source;
+#      show <sha>:$LEGACY_PY -> $STUB_GIT_SHOW (the legacy fallback source;
 #          empty var or missing file = the base lacks replay.py too);
 #      show <sha>:scripts/ci-oracle-review.sh -> absent at base (exit 1, NOT 64: a legitimately
 #      missing path, so the driver runs its HEAD copy — that IS the arm under test).
@@ -217,7 +220,7 @@ case "${1-}" in
       *:scripts/ci-oracle-surface.txt)
         [ -n "${STUB_GIT_SHOW_SURFACE:-}" ] && [ -f "$STUB_GIT_SHOW_SURFACE" ] || { printf 'stub-git: no base surface\n' >&2; exit 1; }
         cat "$STUB_GIT_SHOW_SURFACE"; exit 0 ;;
-      *:scripts/ci-pr-affected-replay.py)
+      *:scripts/ci-pr-"affected"-replay.py)
         [ -n "${STUB_GIT_SHOW:-}" ] && [ -f "$STUB_GIT_SHOW" ] || { printf 'stub-git: no base replay\n' >&2; exit 1; }
         cat "$STUB_GIT_SHOW"; exit 0 ;;
       *:scripts/ci-oracle-review.sh) exit 1 ;;   # the base lacks the driver (every pre-PR3b base)

@@ -1367,7 +1367,7 @@ fi
 # Ratcheting DOWN-only means new suites cannot quietly join the uncovered set.
 #
 # 15 -> 17 (#11562): the two new `--rows` batteries — the test-all-affected arm
-# battery and the ci-pr-affected replay arm battery — gained ranged floors
+# battery and the since-retired replay arm battery — gained ranged floors
 # (`cases < MIN_ARM_CASES`, `total -lt _expected_total`) whose thresholds derive from argv state (ROWS_HI/
 # ROWS_LO/DECLARED_TOTAL bound at arg-parse, ~4k lines from the floor), so no
 # contiguous simple-assignment window exists for the mutant slice to bind —

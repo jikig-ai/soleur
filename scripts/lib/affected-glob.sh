@@ -28,10 +28,9 @@
 # in scripts/test-affected-kb-consumers.test.sh must classify a shape
 # identically; GLOBENT (the registration-only classifier's awk regex) is a
 # deliberate SUPERSET — admission can only widen, never narrow. The true site
-# count is wider: scripts/ci-pr-affected-replay.py's edge_hit() is a Python
-# MIRROR of the hit arm (bash-vs-python parity pinned by a differential row),
-# and materialise() in scripts/lint-orphan-test-suites.test.sh splits payloads
-# test-side. The four bash sites plus materialise() classify through THIS
+# count is wider: materialise() in scripts/lint-orphan-test-suites.test.sh
+# splits payloads test-side (the replay.py edge_hit() Python mirror retired
+# with the S4 evidence layer, 2026-11-09). The four bash sites plus materialise() classify through THIS
 # function; the Python and awk mirrors keep the same verdicts by inspection —
 # a drift there is what the differential and k5/Rg fixtures exist to catch.
 #

@@ -24,8 +24,8 @@
 # markdown, and the old "accepted here" exposure covered exec-bit rows too. The census reads `*.sh`/`*.bash` and extensionless
 # shebang files, never a dotted name such as `.md`, so the mode gate is defence in depth, not a closed census hole. Only (A, 000000 -> 100644) and (M, 100644 -> 100644) may skip;
 # 100755, 120000, 160000, a mode-changing M and an A with a non-null old mode all emit `true`. This is deliberately
-# STRICTER than the PR B driver's allowlist in scripts/ci-pr-selection.sh (which also admits 100755): the driver has later
-# stages, a classifier skip has none. A row that does not match the raw-row grammar (legacy `--name-status`, a bare path, a
+# STRICTER than the retired PR B driver's allowlist (removed with the S4 evidence
+# layer, 2026-11-09), which also admitted 100755): that driver had later stages, a classifier skip has none. A row that does not match the raw-row grammar (legacy `--name-status`, a bare path, a
 # rename's second path, upper-case hex) emits `true`; the legacy "bare path is modified" rule is gone. Revisit before any
 # widening of a doc-only allowlist, or if this skip is ever used for a context other than a non-required job.
 #

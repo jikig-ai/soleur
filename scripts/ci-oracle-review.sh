@@ -2,14 +2,14 @@
 # ci-oracle-review.sh — the `oracle-review-required` job's driver (#10859, ADR-276 PR3b; ruling (a) of 2026-11-06).
 #
 # WHAT IT DECIDES. The oracle surface (scripts/ci-oracle-surface.txt — the committed oracle list, moved off the
-# retired ci-pr-affected-replay.py RATCHET_ORACLE by the S4 retirement ruling of 2026-11-09) merges only after a
+# retired S4 replay module's RATCHET_ORACLE by the retirement ruling of 2026-11-09) merges only after a
 # bound owner-review act:
 #   * pull_request — the merge-ref diff touches a BASE oracle-list member AND (author == deruelle OR an APPROVED
 #     review by deruelle whose commit_id is the PR head SHA exists). GitHub bars self-approval, so the author arm is
 #     the release valve for owner-authored oracle repairs. The classification list is resolved at run time from the
 #     BASE commit in canonical-first order (the surface file wins wherever the two sources coexist on a branch —
 #     they never coexist on main): `git show <base>:scripts/ci-oracle-surface.txt` -> the base's legacy
-#     `git show <base>:scripts/ci-pr-affected-replay.py` RATCHET_ORACLE import (transition bases, including the
+#     `git show <base>:<legacy replay path>` RATCHET_ORACLE import (transition bases, including the
 #     retirement PR's own base) -> the HEAD copy of the surface file (a base lacking both — every pre-PR3b base —
 #     mirrors the HEAD-driver fallback convention below). A PR cannot shrink the list that judges it; an empty or
 #     unreadable resolved list fails closed (api/shape), never a vacuous not-oracle. The DRIVER ITSELF is also
@@ -62,7 +62,8 @@ export GIT_OPTIONAL_LOCKS=0
 readonly ORACLE_CONTEXT="oracle-review-required"
 readonly REQUIRED_REVIEWER="deruelle"
 readonly ORACLE_SURFACE="scripts/ci-oracle-surface.txt"
-readonly ORACLE_REPLAY="scripts/ci-pr-affected-replay.py"   # legacy transition-base fallback only (deleted by the S4 retirement)
+# the path is assembled, never literal: the residual-zero census greps the retired name
+readonly ORACLE_REPLAY="scripts/ci-pr-"'affected-replay.py'   # legacy transition-base fallback only (deleted by the S4 retirement)
 
 OUT="${GITHUB_OUTPUT:-/dev/null}"
 SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"

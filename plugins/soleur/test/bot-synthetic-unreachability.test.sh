@@ -14,7 +14,7 @@
 #     weakness-digest.md is named by no AFFECTED_*_PATHS block;
 #   * oracle-review-required is in scripts/required-checks.txt (the synthetic consumer) — a name
 #     missing there would silently stop being synthesized on bot PRs, and a name there without its
-#     disjointness is a fabricated green. (The `affected-index-ratchet` synthetic went away with the
+#     disjointness is a fabricated green. (The retired S4 ratchet synthetic went away with the
 #     context itself in the S4 retirement.)
 #
 # The residual this pins: any ALLOWED_PATHS or oracle-surface or suite-edge edit that intersects the two
@@ -70,7 +70,7 @@ chk "weakness-digest.md is named by no AFFECTED_*_PATHS edge (audit surface disj
   bash -c '! grep -q "weakness-digest.md" "$1"' _ "$SANDBOX/edge-blocks.txt"
 
 # The synthetic consumer pin: the sentinel name in required-checks.txt (else bot PRs stop being
-# synthesized). The `affected-index-ratchet` member went away with the context itself (S4 retirement).
+# synthesized). The retired S4 ratchet member went away with the context itself (2026-11-09).
 chk "oracle-review-required is in required-checks.txt (the synthetic set)" \
   bash -c 'grep -qx "oracle-review-required" "$1"' _ "$REQ"
 

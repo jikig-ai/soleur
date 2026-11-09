@@ -253,10 +253,10 @@ const PUSH_DEDUPE_IF = "${{ !cancelled() && (github.event_name == 'merge_group' 
 // ADR-276 S3 (#9728): the four heavy jobs (test-webplat and test-scripts carry the likec4 install) append the draft-light clause to
 // that condition; scripts/ci-draft-light.test.sh pins the same string against ci.yml. web-platform-build does NOT take it.
 const DRAFT_LIGHT_IF = PUSH_DEDUPE_IF.replace(" }}", " && needs.draft-light.outputs.light != 'true' }}");
-// ADR-276 S4 (#9729, PR B): test-webplat appends the PR-affected skip term to that condition, exactly. The term is inert while the
-// activation lock holds (`active` is never 'true'); scripts/ci-push-dedupe.test.sh and scripts/ci-draft-light.test.sh pin the same
-// string against ci.yml, so the install it gates cannot be made conditional by any other spelling.
-const PR_AFFECTED_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", " && !(github.event_name == 'pull_request' && needs.pr-selection.outputs.active == 'true' && needs.pr-selection.outputs.head_sha != '' && needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',test-webplat,')) }}");
+// ADR-276 S4 (#9729, PR B) — RETIRED 2026-11-09 (the NO-GO ruling): the PR-affected skip term and its lever are
+// gone. test-webplat's `if:` is the draft-light condition plus the oracle-lane conjunct below; the retired term's
+// spelling is deliberately NOT reconstructed here — scripts/ci-push-dedupe.test.sh's zero-reference census pins
+// that no `needs.pr-selection` read can reappear anywhere in ci.yml.
 // ADR-276 oracle-only lane (#12156, amendment): the five lane-gated legs append ONE more `!(…)` conjunct after every
 // earlier term — event disjunct covering pull_request AND merge_group, `active == 'true'`, head_sha non-empty, head
 // bound to either event's sha, and membership in `oracle-selection`'s `skip_legs` list — and add `oracle-selection`
@@ -267,7 +267,7 @@ const PR_AFFECTED_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", " && !(github.event
 // spelling lives in exactly one place per harness.
 const ORACLE_LANE_TERM = (leg: string): string =>
   ` && !((github.event_name == 'pull_request' || github.event_name == 'merge_group') && needs.oracle-selection.outputs.active == 'true' && needs.oracle-selection.outputs.head_sha != '' && needs.oracle-selection.outputs.head_sha == (github.event.pull_request.head.sha || github.event.merge_group.head_sha) && contains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',${leg},'))`;
-const ORACLE_WEBPLAT_IF = PR_AFFECTED_WEBPLAT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-webplat")} }}`);
+const ORACLE_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-webplat")} }}`);
 const ORACLE_SCRIPTS_IF = DRAFT_LIGHT_IF.replace(" }}", `${ORACLE_LANE_TERM("test-scripts")} }}`);
 const ORACLE_BUILD_IF = PUSH_DEDUPE_IF.replace(" }}", `${ORACLE_LANE_TERM("web-platform-build")} }}`);
 const RUNNER_PM_ALLOWED = [/^RUN npm ci --omit=dev$/, /^RUN npx playwright@\S+ install --with-deps chromium$/];

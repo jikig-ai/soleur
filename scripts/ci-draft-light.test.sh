@@ -82,15 +82,12 @@ HEAVY_PINNED="shard-totality-mutations test-scripts test-scripts-heavy test-webp
 # e2e is a required context and must keep reporting on drafts (#8450); test-bun is 1.81 min/run (below the 3 min bar);
 # web-platform-build and the aggregator `test` are checked on their own below.
 S2_ONLY_PINNED="e2e test-bun web-platform-build"
-# ADR-276 S4 (#9729, PR B): three jobs (two heavy ones and the S2-only test-bun) additionally carry `pr-selection` in `needs:` and a PR-skip
-# term appended AFTER every earlier term, so the S2 and S3 terms stay verbatim. scripts/ci-push-dedupe.test.sh pins the term's grammar and
-# executes its truth table; this suite only has to keep seeing the S3 terms intact, so it derives the term from the same prefix.
-PR_GATED_PINNED="test-bun test-scripts-heavy test-webplat"
-PR_T_EV="github.event_name == 'pull_request' && "
-PR_T_AC="needs.pr-selection.outputs.active == 'true' && "
-PR_T_HN="needs.pr-selection.outputs.head_sha != '' && "
-PR_T_HE="needs.pr-selection.outputs.head_sha == github.event.pull_request.head.sha && "
-PR_TERM_PRE="!($PR_T_EV$PR_T_AC$PR_T_HN${PR_T_HE}contains(format(',{0},', needs.pr-selection.outputs.skip_legs), ',"
+# ADR-276 S4 (#9729, PR B) — RETIRED 2026-11-09 (the NO-GO ruling): the pr-selection lever, its needs edges and
+# its PR-skip term are gone. PR_GATED_PINNED is the EMPTY set on purpose: this suite re-asserts the post-removal
+# needs grammar (no job may edge to the retired job), and scripts/ci-push-dedupe.test.sh pins the zero-reference
+# census in both directions.
+PR_GATED_PINNED=""
+PR_TERM_PRE=""   # dead prefix kept exported so chk.py's environment read stays uniform
 pr_term() { printf "%s%s,'))" "$PR_TERM_PRE" "$1"; }
 # oracle-only lane (#12156): five legs (spanning HEAVY and S2_ONLY) additionally carry `oracle-selection` in
 # `needs:` and the skip conjunct appended AFTER every earlier term — the same four-term shape as the S4 PR term
@@ -107,7 +104,7 @@ OR_TERM_PRE="!($OR_T_EV$OR_T_AC$OR_T_HN$OR_T_HE"
 or_term() { printf "%scontains(format(',{0},', needs.oracle-selection.outputs.skip_legs), ',%s,'))" "$OR_TERM_PRE" "$1"; }
 SHARD_TERM="!($OR_T_EV$OR_T_AC$OR_T_HN${OR_T_HE% && })"
 # Every other job: cheap guards and the lever itself. A NEW job must be classified: add it to HEAVY_PINNED or here.
-LIGHT_PINNED="affected-index-ratchet critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection pr-selection push-dedupe"
+LIGHT_PINNED="critical-css-gate detect-changes draft-light encryption-posture guards-advisory guards-ruleset lint-bot-statuses lint-webplat oracle-index-check oracle-review-required oracle-selection push-dedupe"
 TYPES_PINNED='["opened", "synchronize", "reopened", "ready_for_review"]'
 REASONS="bad_pr ready fork read_error not_draft switch_off ok"
 REPO_SLUG="jikig-ai/soleur"
@@ -156,7 +153,7 @@ def gate(n):
 def canon_heavy(n): return "${{ !cancelled() && " + TAIL + " && " + CLAUSE + gate(n) + " }}"
 def canon_s2(n): return "${{ !cancelled() && " + TAIL + gate(n) + " }}"
 def want_needs(n, dl):
-    out = ["push-dedupe"] + (["draft-light"] if dl else []) + (["pr-selection"] if n in PRGATED else [])
+    out = ["push-dedupe"] + (["draft-light"] if dl else [])
     if n in ORGATED or n in SHARDG: out += ["oracle-selection"]
     return sorted(out)
 CANON_TEST = "${{ always() && " + TAIL + " }}"
@@ -181,8 +178,9 @@ def ev(expr, event, elide, light, need_results, cancelled=False):
     e = e[3:-2].strip()
     has_status = bool(re.search(r"\b(cancelled|always|success|failure)\(\)", e))
     e = e.replace("!cancelled()", "(not CANC)").replace("always()", "True").replace("success()", "(NEEDOK)")
-    # the PR-skip term (ADR-276 S4): this suite grades the S3 terms, so the S4 inputs are held at their INERT point (no activation, no
-    # listed leg); scripts/ci-push-dedupe.test.sh executes that term's own truth table over every input combination.
+    # the retired S4 term's translation stays so a re-introduced `needs.pr-selection` term still parses to its
+    # inert point rather than crashing the eval (the zero-reference census in ci-push-dedupe.test.sh is the
+    # load-bearing pin that it can never reappear).
     e = re.sub(r"contains\(format\(',\{0\},', needs\.pr-selection\.outputs\.skip_legs\), ',([a-z-]+),'\)", lambda m: '(",%s," in ",,")' % m.group(1), e)
     # the oracle-lane terms are likewise held at their INERT point (active='', so both `!(active == 'true' && ...)`
     # and `active != 'true'` evaluate true); scripts/ci-push-dedupe.test.sh executes the oracle truth table.
@@ -350,7 +348,7 @@ if mode == "agg":
     tags = []
     n = needs(t)
     if "draft-light" not in n: tags.append("A-NEEDS")
-    if sorted(x for x in n if x not in LEGS) != ["draft-light", "oracle-selection", "pr-selection", "push-dedupe"]: tags.append("A-NEEDS-SET")
+    if sorted(x for x in n if x not in LEGS) != ["draft-light", "oracle-selection", "push-dedupe"]: tags.append("A-NEEDS-SET")
     st = (t.get("steps") or [{}])[0]
     env = st.get("env") or {}
     if "".join(str(env.get("DRAFT_LIGHT", "")).split()) != "${{needs.draft-light.outputs.light}}": tags.append("A-ENV")
@@ -975,9 +973,9 @@ mutate_yml y-dl-no-step-coe "        continue-on-error: true
           PR_NUMBER" wrapper W-COE
 # the gated set
 mutate_yml y-gate-no-clause "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $WEBPLAT_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-webplat) && $(or_term test-webplat) }}" gated G-COND:test-webplat
 mutate_yml y-gate-no-need "  test-scripts:
     needs: [push-dedupe, draft-light, oracle-selection]" "  test-scripts:
@@ -988,14 +986,14 @@ mutate_yml y-gate-heavy-missing-clause "  shard-totality-mutations:
     needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $SHARD_TERM }}" gated G-SET-IF
 mutate_yml y-gate-success-fn "  test-scripts-heavy:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $HEAVYSC_IF" "  test-scripts-heavy:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ success() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-scripts-heavy) && $(or_term test-scripts-heavy) }}" truth TT:test-scripts-heavy
 mutate_yml y-gate-lost-cancelled "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $WEBPLAT_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-webplat) && $(or_term test-webplat) }}" truth TT:test-webplat
 mutate_yml y-gate-light-eq-false "  test-scripts:
     needs: [push-dedupe, draft-light, oracle-selection]
@@ -1050,9 +1048,9 @@ mutate_yml y-e2e-if "  e2e:
     needs: [push-dedupe]
     $HEAVY_IF" gated G-S2ONLY-TOUCHED:e2e
 mutate_yml y-test-bun-gated "  test-bun:
-    needs: [push-dedupe, pr-selection, oracle-selection]
+    needs: [push-dedupe, oracle-selection]
     $BUN_IF" "  test-bun:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-bun) && $(or_term test-bun) }}" gated G-S2ONLY-TOUCHED:test-bun
 mutate_yml y-build-gated "  web-platform-build:
     needs: [push-dedupe, oracle-selection]
@@ -1060,7 +1058,7 @@ mutate_yml y-build-gated "  web-platform-build:
     needs: [push-dedupe, draft-light, oracle-selection]
     $HEAVY_IF" gated G-S2ONLY-TOUCHED:web-platform-build
 # the aggregator: draft-light in needs and env; its own `if:` must not gain the term (it would skip a required context)
-mutate_yml y-agg-no-need "web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe, pr-selection]" agg A-NEEDS
+mutate_yml y-agg-no-need "web-platform-build, encryption-posture, push-dedupe, draft-light, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe]" agg A-NEEDS
 mutate_yml y-agg-no-env "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}
 " "" agg A-ENV
 mutate_yml y-agg-env-literal "          DRAFT_LIGHT: \${{ needs.draft-light.outputs.light }}" "          DRAFT_LIGHT: \${{ needs.draft-light.result }}" agg A-ENV
@@ -1095,11 +1093,11 @@ live_control gated gated "  e2e:
     needs: [push-dedupe]" "  e2e:
     needs: [push-dedupe, draft-light]" "TAGS:G-"
 live_control truth truth "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     $WEBPLAT_IF" "  test-webplat:
-    needs: [push-dedupe, draft-light, pr-selection, oracle-selection]
+    needs: [push-dedupe, draft-light, oracle-selection]
     if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-webplat) && $(or_term test-webplat) }}" "TAGS:TT:"
-live_control agg agg "web-platform-build, encryption-posture, push-dedupe, draft-light, pr-selection, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe, pr-selection]" "TAGS:A-"
+live_control agg agg "web-platform-build, encryption-posture, push-dedupe, draft-light, oracle-selection, oracle-index-check]" "web-platform-build, encryption-posture, push-dedupe]" "TAGS:A-"
 case "$(live_verdict wrapper "$SANDBOX/does-not-exist.yml")" in CRASH:*) pass ;; *) fail "LIVE CONTROL: a missing workflow file did not read as a checker crash" ;; esac
 # names_clean: a doctored required-set file must be reported, a missing one must be reported as MISSING
 _nr="$SANDBOX/mut/nc-root"; rm -rf "$_nr"; mkdir -p "$_nr"

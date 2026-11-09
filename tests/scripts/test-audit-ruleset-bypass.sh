@@ -698,9 +698,14 @@ t_rsc_order_insensitive() {
 # into the three umbrella contexts guards-ruleset / quality-guards /
 # secret-guards in the same PR that produced them — ADR-032 amendment
 # 2026-11-06; per-member history above records each member's lineage).
-# bumped 10->12 by #10859 (PR3b: affected-index-ratchet flipped advisory->required
+# bumped 10->12 by #10859 (PR3b: the S4 ratchet context flipped advisory->required
 # and the new oracle-review-required context — ADR-276 rulings (a)/(b)
-# 2026-11-06, budget-owner go-ahead 2026-11-07).
+# 2026-11-06, budget-owner go-ahead 2026-11-07);
+# bumped 12->11 by the S4 retirement of 2026-11-09 (#9729 ruling: the stage never
+# activated — the repo variable stayed unset and the activation lock intact — so
+# the full battery already runs on every PR and merge_group entry;
+# oracle-review-required stays required and re-scoped onto
+# scripts/ci-oracle-surface.txt).
 # The exact count is kept in lockstep
 # with infra/github/ruleset-ci-required.tf by T-rsc-9 below.
 #
@@ -718,10 +723,10 @@ t_rsc_real_canonical_shape() {
   codeql_rows=$(jq '[.[] | select(.context=="CodeQL")] | length' < "$real")
   # Every check is a GitHub Actions context (15368). CodeQL (GHAS 57789) is NOT required.
   non_15368_apps=$(jq -r '[.[] | select(.integration_id != 15368) | .context] | join(",")' < "$real")
-  if [[ "$n" == "12" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
-    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" ok
+  if [[ "$n" == "11" && "$codeql_rows" == "0" && -z "$non_15368_apps" ]]; then
+    _report "T-rsc-7 real canonical RSC: 11 entries, no CodeQL row, all 15368" ok
   else
-    _report "T-rsc-7 real canonical RSC: 12 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
+    _report "T-rsc-7 real canonical RSC: 11 entries, no CodeQL row, all 15368" fail "n=$n codeql_rows=$codeql_rows non_15368=$non_15368_apps"
   fi
 }
 
