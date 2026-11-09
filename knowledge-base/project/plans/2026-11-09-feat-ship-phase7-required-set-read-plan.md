@@ -190,7 +190,7 @@ Registry rows (append minimally; three open draft PRs also append):
 
 1. Run the suite once, bracketing with `date +%s%N`, to get the real duration in ms.
 2. In a scratch copy of the two registries run `python3 scripts/regenerate-shard-manifest.py --incremental --write` to learn the leg it assigns; do NOT keep the regenerated header stamps (`# generated-at`, `# default-weight-ms`): they conflict with every sibling PR.
-3. In the real files insert exactly one data row each at its label-sorted position: `plugins/soleur/scripts/required-set-report.test.sh<TAB><leg>` in `scripts/suite-shard-legs.tsv`, and `plugins/soleur/scripts/required-set-report.test.sh<TAB><ms><TAB>measured` in `scripts/suite-durations.tsv`. Per learning 2026-10-09 a never-measured label keeps a floor price (about 1 s) through regeneration, so the `measured` value is the point of step 1.
+3. In the real files insert exactly one data row each at its label-sorted position: `plugins/soleur/scripts/required-set-report.test.sh<TAB><leg>` in `scripts/suite-shard-legs.tsv`, and `plugins/soleur/scripts/required-set-report.test.sh<TAB><ms><TAB>measured` in `scripts/suite-durations.tsv`. Per the `floor` rows of `scripts/suite-durations.tsv` itself (about 1.2 s, `default-weight-ms` in its header) a never-measured label keeps a floor price, so the `measured` value is the point of step 1.
 4. `plugins/soleur/test/ship-phase-7-poll-fixtures.test.sh` (tsv weight 124725 ms) gains rows; re-time it. Under a 15 s delta leave its row alone (the shard-balance watch reprices it); otherwise record the new figure in the PR body and leave the edit to the repricing PRs, since the registries are contended.
 
 ### Phase 3 — the fence in `plugins/soleur/skills/ship/SKILL.md` (canonical)
