@@ -188,6 +188,11 @@ def ev(expr, event, elide, light, need_results, cancelled=False):
     e = e.replace("needs.oracle-selection.outputs.active", "''").replace("needs.oracle-selection.outputs.head_sha", "''").replace("needs.oracle-selection.outputs.oracle_only", "''")
     e = e.replace("github.event.pull_request.head.sha || github.event.merge_group.head_sha", "''")
     e = e.replace("needs.pr-selection.outputs.active", "''").replace("needs.pr-selection.outputs.head_sha", "''").replace("github.event.pull_request.head.sha", "''")
+    # the retired term's dead tail: with the S4 prefix gone, a leftover `$(pr_term leg)` emits `<leg>,'))` —
+    # the orphaned tail of the old contains() call (the well-formed heads are consumed by the subs above, so a
+    # surviving tail is by definition the residue). Read it as that same membership test — False at the inert
+    # point — so a re-introduction reaches a verdict mismatch (TT:) instead of crashing eval to TT-ERR.
+    e = re.sub(r"([a-z-]+),'\)\)", lambda m: '(",%s," in ",,")' % m.group(1), e)
     e = re.sub(r"!(?=\()", " not ", e)
     e = e.replace("github.event_name", "EV").replace("needs.push-dedupe.outputs.elide", "EL").replace("needs.draft-light.outputs.light", "LT")
     e = e.replace("&&", " and ").replace("||", " or ")
