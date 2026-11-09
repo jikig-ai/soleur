@@ -1100,11 +1100,11 @@ _mq_surface_uniqueness() { # <repo-root>; 0 = queue surface lives only in the pi
   while IFS= read -r f; do
     stripped=$(awk 'BEGIN{c=0}{line=$0;out="";for(i=1;i<=length(line);i++){two=substr(line,i,2);if(c==0&&two=="/*"){c=1;i++;continue}if(c==1&&two=="*/"){c=0;i++;continue}if(c==1)continue;if(two=="//"||substr(line,i,1)=="#")break;out=out substr(line,i,1)}print out}' "$f")
     if grep -qE 'merge_queue[[:space:]]*\{|dynamic[[:space:]]+"merge_queue"' <<<"$stripped"; then hits="${hits}${f}"$'\n'; fi
-  done < <(find "$root" -name '*.tf' -type f 2>/dev/null | sort)
+  done < <(find "$root" \( -name .git -o -name .worktrees -o -name .claude -o -name node_modules \) -prune -o -name '*.tf' -type f -print 2>/dev/null | sort)
   # Terraform JSON files: "merge_queue" : { is a rule object — scan separately.
   while IFS= read -r f; do
     grep -q '"merge_queue"' "$f" && hits="${hits}${f}"$'\n'
-  done < <(find "$root" -name '*.tf.json' -type f 2>/dev/null | sort)
+  done < <(find "$root" \( -name .git -o -name .worktrees -o -name .claude -o -name node_modules \) -prune -o -name '*.tf.json' -type f -print 2>/dev/null | sort)
   # DR skeletons: any *ruleset*.sh carrying a merge_queue rule type outside the pinned one.
   while IFS= read -r f; do
     grep -qE '"type"[^a-zA-Z0-9_]{1,4}"merge_queue"' "$f" && dr_hits="${dr_hits}${f}"$'\n'
@@ -1322,7 +1322,7 @@ t_mq_sanctioned_values_pass() {
     sed -E 's/("max_entries_to_build":[[:space:]]*)[0-9]+/\1'"$v"'/' "$d/pristine/dr" > "$d/work/dr"
     sed -E 's/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\1'"$v"'/' "$d/pristine/readme" > "$d/work/readme"
     local live_v
-    live_v=$(grep -oE 'max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' "$d/pristine/tf" | grep -oE '[0-9]+$' | head -1)
+    live_v=$(_mq_strip_hcl "$d/pristine/tf" | sed -n '/^[[:space:]]*merge_queue[[:space:]]*{/,/^[[:space:]]*}/p' | grep -oE 'max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | head -1)
     # Landed-proof: staging the NON-live value must change all three surfaces; staging
     # the live value is intentionally a no-op (the row still proves the pin accepts it).
     if [[ "$v" != "$live_v" ]] && { cmp -s "$d/pristine/tf" "$d/work/tf" || cmp -s "$d/pristine/dr" "$d/work/dr" || cmp -s "$d/pristine/readme" "$d/work/readme"; }; then

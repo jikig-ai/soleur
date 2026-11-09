@@ -1,10 +1,11 @@
-# suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
-# group=light
+# default-weight-ms=1272
+# generated-at=2026-11-09T18:53:45Z
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1261
-# generated-at=2026-11-08T03:56:53Z
 # generator=regenerate-shard-manifest.py v3
+# group=light
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
+# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)
+# suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
 .claude/hooks/bare-head-self-heal.test.sh	1222	floor
@@ -193,7 +194,6 @@ plugins/soleur/test/ci-e2e-skip-anchors.test.sh	111	measured
 plugins/soleur/test/ci-head-verdict.test.sh	276015	measured
 plugins/soleur/test/ci-path-gating.test.sh	205	measured
 plugins/soleur/test/ci-pr-affected-preactivation.test.sh	1222	floor
-# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)
 plugins/soleur/test/ci-pr-affected-replay-a	160004	measured
 plugins/soleur/test/ci-pr-affected-replay-b	399378	measured
 plugins/soleur/test/ci-pr-affected-replay-c	326172	measured
@@ -433,11 +433,11 @@ scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
 scripts/followthroughs/inngest-bs-token-restage-7596	1222	floor
-scripts/followthroughs/mq-lever-e-verdict-12269	1222	floor
 scripts/followthroughs/inngest-cli-apply-window-7463	1251	floor
 scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
+scripts/followthroughs/mq-lever-e-verdict-12269	1272	floor
 scripts/followthroughs/parked-green-synthesis-11362	1222	floor
 scripts/followthroughs/post-deploy-incident-soak	1222	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured

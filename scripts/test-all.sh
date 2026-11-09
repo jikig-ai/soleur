@@ -7186,6 +7186,13 @@ if want_scripts; then
   # a mutation battery on the binding/latest-run/missing axes, and the cla-verify enumeration parity pin).
   # Same explicit-registration and LAST-in-block reasons as above. Declared edge set, not always-on.
   run_suite "scripts/ci-oracle-review" bash scripts/ci-oracle-review.test.sh
+  # #12269 (lever E): exit-code harness for the merge-queue max_entries_to_build soak probe —
+  # both tf-value arms, the real 8-col wallclock tracker schema (seconds), the Report-refreshed
+  # postdate check, and the churn signal. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
+  # vacuous PASS must redden CI.
+  run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
+  
 fi
 
 # Named bun-test entries — bun shard.
@@ -7699,12 +7706,6 @@ if want_scripts_heavy; then
     skip_suite ".github/scripts/test/run-all.sh" "relevance" \
       "bash .github/scripts/test/run-all.sh"
   fi
-  # #12269 (lever E): exit-code harness for the merge-queue max_entries_to_build soak probe —
-  # both tf-value arms, the real 8-col wallclock tracker schema (seconds), the Report-refreshed
-  # postdate check, and the churn signal. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
-  # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
-  # vacuous PASS must redden CI.
-  run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
 fi
 
 # --- A LEG THAT OWNS NOTHING IS A FAIL, NOT A PASS (#7902) ----------------------------------
