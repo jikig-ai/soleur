@@ -6,7 +6,7 @@
 # the directive carries `secrets=GH_TOKEN`). With GH_TOKEN absent every gh call
 # fails -> exit 3 forever, so refuse loudly instead (sibling convention:
 # actions-queue-tail-8450.sh).
-case "$-" in *x*) [ -n "${GH_TOKEN:+x}" ] && exit 78 ;; esac  # xtrace refusal: never let a token reach a trace
+case "$-" in *x*) [ -n "${GH_TOKEN:+x}" ] && { echo "FATAL: refusing to run under xtrace with GH_TOKEN set" >&2; exit 78; } ;; esac
 #
 # Followthrough-convention exit vocabulary:
 #   0 = verdict reached, tracker may close / soak passes
@@ -74,19 +74,32 @@ repoll() { printf 'REEVAL verdict=repoll reason=%s\n' "$1"; exit 3; }
 gh_fail() { repoll "gh-failure"; }
 
 [ -f "$TF" ] || repoll 'tf-missing'
-# Scoped to the FIRST `merge_queue {` block (matching _mq_parse_tf's window) and
-# anchored to the assignment column-0: `#` line comments cannot match, and
-# `/* */` interior lines are dropped by the comment-state awk — the tf documents
-# prior values in comments (the T-mq-1.m8 masquerade class).
-value="$(sed -n '/^[[:space:]]*merge_queue[[:space:]]*{/,/^[[:space:]]*}/p' "$TF" \
-  | awk 'BEGIN{c=0} /\/\*/{c=1; next} /\*\//{c=0; next} c==0{print}' \
+# Comment-strip the WHOLE file first (mirrors _mq_strip_hcl: #, //, and /* */
+# state), THEN window to the FIRST `merge_queue {` block, THEN anchored-assign
+# grep. Order matters: a /* */-wrapped whole block placed above the real one is
+# the T-mq-1.m8 masquerade — stripping inside the window cannot see its opener.
+value="$(awk '
+  BEGIN { c=0 }
+  {
+    line=$0; out=""
+    for (i=1; i<=length(line); i++) {
+      two=substr(line,i,2)
+      if (c==0 && (two=="/*")) { c=1; i++; continue }
+      if (c==1 && (two=="*/")) { c=0; i++; continue }
+      if (c==1) continue
+      if (two=="//" || substr(line,i,1)=="#") break
+      out=out substr(line,i,1)
+    }
+    print out
+  }' "$TF" \
+  | sed -n '/^[[:space:]]*merge_queue[[:space:]]*{/,/^[[:space:]]*}/p' \
   | grep -oE '^[[:space:]]*max_entries_to_build[[:space:]]*=[[:space:]]*[0-9]+' \
   | grep -oE '[0-9]+$' | head -1)"
 case "$value" in
   1|2) : ;;
   *) repoll "tf-value-unreadable-or-unsanctioned value=${value:-none}" ;;
 esac
-[[ "$P50_FLOOR" =~ ^[0-9]+$ ]] || repoll 'p50-floor-unparseable'
+[[ "$P50_FLOOR" =~ ^[0-9]{1,6}$ ]] || repoll 'p50-floor-unparseable'
 
 count_cancelled() { # <since-date YYYY-MM-DD> -> prints run count, or rc 1
   local runs
@@ -167,10 +180,10 @@ p90_s="$(printf '%s' "$row" | awk -F'|' '{gsub(/[[:space:]]/,"",$6); print $6}')
 # -gt compare would fail OPEN to keep-flip; a `—` zero-sample row repolls here.
 [[ "$p50_s" =~ ^[0-9]{1,9}$ ]] || repoll 'p50-unparseable'
 [[ "$p90_s" =~ ^[0-9]{1,9}$ ]] || repoll 'p90-unparseable'
-floor_s=$(( P50_FLOOR * 60 ))
+floor_s=$(( 10#$P50_FLOOR * 60 ))
 
 # Tail regression: p50 > floor*1.2 OR p90 > floor*2.5 (p90 naturally ~1.4-2x p50).
-if [ "$(( p50_s * 10 ))" -gt "$(( floor_s * 12 ))" ] || [ "$(( p90_s * 10 ))" -gt "$(( floor_s * 25 ))" ]; then
+if [ "$(( 10#$p50_s * 10 ))" -gt "$(( floor_s * 12 ))" ] || [ "$(( 10#$p90_s * 10 ))" -gt "$(( floor_s * 25 ))" ]; then
   printf 'REEVAL verdict=revert-warranted p50=%ss p90=%ss floor=%ss tracker=%s\n' "$p50_s" "$p90_s" "$floor_s" "$TRACKER"
   exit 5
 fi

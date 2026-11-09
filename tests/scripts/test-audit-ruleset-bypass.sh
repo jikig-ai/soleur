@@ -1091,16 +1091,32 @@ t_mq_mutations() {
 # block 1 only) reaches apply-github-infra.yml with Guard 2 fully green, and
 # GitHub accepts a second merge queue on one branch (deadlock, not a 422). Same
 # for a merge_queue rule in a different create-*-required-ruleset.sh skeleton.
-_mq_surface_uniqueness() { # <repo-root>; 0 = queue surface lives in exactly the pinned files
-  local root="$1" hits dr_hits
-  hits=$(grep -rlE --include='*.tf' 'merge_queue[[:space:]]*\{' "$root" 2>/dev/null | sort || true)
-  dr_hits=$(grep -l '"type":[[:space:]]*"merge_queue"' "$root"/scripts/*-required-ruleset.sh 2>/dev/null | sort || true)
+_mq_surface_uniqueness() { # <repo-root>; 0 = queue surface lives only in the pinned files
+  local root="$1" f hits="" dr_hits="" stripped
+  # HCL forms that produce a merge_queue rule: a literal block OR a dynamic block.
+  # Comment-stripped so a /* */-wrapped or commented copy cannot count (m8 class);
+  # `dynamic "merge_queue"` carries '"' before '{', so a single anchored pattern
+  # cannot cover both — scan each form separately.
+  while IFS= read -r f; do
+    stripped=$(awk 'BEGIN{c=0}{line=$0;out="";for(i=1;i<=length(line);i++){two=substr(line,i,2);if(c==0&&two=="/*"){c=1;i++;continue}if(c==1&&two=="*/"){c=0;i++;continue}if(c==1)continue;if(two=="//"||substr(line,i,1)=="#")break;out=out substr(line,i,1)}print out}' "$f")
+    if grep -qE 'merge_queue[[:space:]]*\{|dynamic[[:space:]]+"merge_queue"' <<<"$stripped"; then hits="${hits}${f}"$'\n'; fi
+  done < <(find "$root" -name '*.tf' -type f 2>/dev/null | sort)
+  # Terraform JSON files: "merge_queue" : { is a rule object — scan separately.
+  while IFS= read -r f; do
+    grep -q '"merge_queue"' "$f" && hits="${hits}${f}"$'\n'
+  done < <(find "$root" -name '*.tf.json' -type f 2>/dev/null | sort)
+  # DR skeletons: any *ruleset*.sh carrying a merge_queue rule type outside the pinned one.
+  while IFS= read -r f; do
+    grep -qE '"type"[^a-zA-Z0-9_]{1,4}"merge_queue"' "$f" && dr_hits="${dr_hits}${f}"$'\n'
+  done < <(find "$root/scripts" -maxdepth 1 -name '*ruleset*.sh' -type f 2>/dev/null | sort)
+  hits=$(printf '%s' "$hits" | sort | sed '/^$/d'); dr_hits=$(printf '%s' "$dr_hits" | sort | sed '/^$/d')
   MQ_REASON=""
-  if [[ "$hits" != "$root/infra/github/ruleset-ci-required.tf" ]]; then
-    MQ_REASON="merge_queue in tf outside infra/github/ruleset-ci-required.tf: ${hits:-<none>}"; return 1
+  # Queue-off is a sanctioned rollback state: an EMPTY surface is not a violation.
+  if [ -n "$hits" ] && [[ "$hits" != "$root/infra/github/ruleset-ci-required.tf" ]]; then
+    MQ_REASON="merge_queue in tf outside infra/github/ruleset-ci-required.tf: $hits"; return 1
   fi
-  if [[ "$dr_hits" != "$root/scripts/create-ci-required-ruleset.sh" ]]; then
-    MQ_REASON="merge_queue rule in a DR skeleton outside create-ci-required-ruleset.sh: ${dr_hits:-<none>}"; return 1
+  if [ -n "$dr_hits" ] && [[ "$dr_hits" != "$root/scripts/create-ci-required-ruleset.sh" ]]; then
+    MQ_REASON="merge_queue rule in a DR skeleton outside create-ci-required-ruleset.sh: $dr_hits"; return 1
   fi
   return 0
 }

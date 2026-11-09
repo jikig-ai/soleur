@@ -274,6 +274,27 @@ printf '[]' > "$FIXTURE_DIR/issues.json"
 run_probe "v1 env overrides bypass find-or-file + pickaxe -> keep-flip" 0 'verdict=keep-flip' \
   SOLEUR_FT_TRACKER=4242 SOLEUR_FT_FLIP_MERGED="$FLIP_MERGED"
 
+newcase
+# m8 masquerade: a /* */-wrapped WHOLE merge_queue block above the real one —
+# the strip must remove it BEFORE windowing, else head -1 arms the stale arm.
+mkdir -p "$REPO_ROOT/infra/github"
+cat > "$REPO_ROOT/infra/github/ruleset-ci-required.tf" <<'TF'
+  /*
+    merge_queue {
+      max_entries_to_build              = 2
+    }
+  */
+  merge_queue {
+    max_entries_to_build              = 1
+  }
+TF
+printf '%s\n' "$GOOD_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+run_probe "v1 /* */-wrapped stale block above real -> still reads live value (keep-flip)" 0 'verdict=keep-flip'
+
+newcase; mkrepo "$REPO_ROOT" 1
+printf '%s\n' "$WORSE_P50_BODY" > "$FIXTURE_DIR/tracker-body.txt"
+run_probe "v1 p50 worse under octal-typed floor (P50_FLOOR=08) -> still reverts, not keep-flip" 5 'verdict=revert-warranted'   SOLEUR_FT_P50_FLOOR=08
+
 # ── degenerate inputs ───────────────────────────────────────────────────────
 echo "-- degenerate inputs --"
 
@@ -292,7 +313,7 @@ if [ "$rc" -eq 3 ] && grep -q 'reason=tf-missing' <<<"$out"; then pass "missing 
 
 echo "=== $passes passed, $fails failed ==="
 # Exact floor: deleting a run_probe line or a degenerate case must shrink this.
-EXPECTED_PASSES=23
+EXPECTED_PASSES=25
 if [ "$passes" -ne "$EXPECTED_PASSES" ]; then
   printf 'FAIL: pass count %s != expected floor %s (a case was added/removed or pass() was neutered)\n' "$passes" "$EXPECTED_PASSES" >&2
   exit 1
