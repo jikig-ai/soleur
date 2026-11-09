@@ -245,7 +245,7 @@ None written or amended (CTO F3, 2026-11-09): this plan decides nothing architec
 
 No C4 impact. All three files (`model.c4`, `views.c4`, `spec.c4`) were read. Checked and already modeled:
 (a) external human actors: the founder, with `founder -> betterstack` already describing the `host-state.sh` read (session-only); no new actor.
-(b) external systems: Better Stack (`github -> betterstack` already names the follow-through soak probes reading Logs through `betterstack-query.sh`), GitHub (the sweeper), Hetzner (`github -> hetzner` control-plane edge); no vendor is added.
+(b) external systems: Better Stack (`github -> betterstack` already names the follow-through probes reading Logs through `betterstack-query.sh`), GitHub (the sweeper), Hetzner (`github -> hetzner` control-plane edge); no vendor is added.
 (c) containers and stores: inngest, the zot registry and git-data hosts exist; no container or store is added; the probe is a script on the existing sweeper and the exposure suite reads repo text.
 (d) actor-to-surface access relationships: unchanged; no new access path.
 `plugins/soleur/test/c4-count-parity.test.sh` was run at plan time: 13 passed, 0 failed. It is re-run in AC8 because the change adds no workflow, monitor or heartbeat and must leave every derived cardinality unchanged.

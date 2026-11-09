@@ -19,3 +19,7 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan; CTO, DHH, Kieran, code-simp
 ## Review Phase
 - cto_spawns=1 in the lead context (review design-pass dissents A to E); planning rounds were recorded in the plan phase.
 - Design-validity pass (code-simplicity, architecture) ran first; its fixes were applied before the full panel.
+
+## Operator Constraints
+
+- ci-is-the-gate: the brief says CI is the merge gate unless a local battery is requested, and none was requested
