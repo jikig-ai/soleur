@@ -83,7 +83,7 @@ for f in ci-deploy.sh ci-deploy-wrapper.sh cat-deploy-state.sh canary-bundle-cla
          cron-egress-postapply-assert.sh cron-egress-enforce-probe.sh \
          orphan-reaper.sh \
          web-private-nic-guard.sh web-zot-consumer-probe.sh web-git-data-probe.sh \
-         web-bash-synthetic.sh \
+         web-bash-synthetic.sh host-kernel-marker.sh \
          inngest-consumer-probe.sh inngest-registry-probe.sh \
          web-probe-envwrite.sh \
          egress-gateway-bootstrap.sh egress-auth-helper.sh \
@@ -108,6 +108,7 @@ for f in container-restart-monitor.service container-restart-monitor.timer \
          orphan-reaper.service orphan-reaper.timer bwrap-userns-sysctl.service \
          web-private-nic-guard.service web-private-nic-guard.timer \
          web-bash-synthetic.service web-bash-synthetic.timer \
+         host-kernel-marker.service host-kernel-marker.timer \
          web-zot-consumer-probe.service web-zot-consumer-probe.timer \
          web-git-data-probe.service web-git-data-probe.timer \
          inngest-consumer-probe.service inngest-consumer-probe.timer \

@@ -120,3 +120,133 @@ The two edges are in `knowledge-base/engineering/architecture/diagrams/model.c4`
 ClickHouse SQL, session-only output) and `founder -> github` (gap issues in the Soleur repository only, through the chokepoint,
 visible to `publicReader`). There is deliberately no `plugin -> betterstack` edge: it would contradict the customer-facing edges
 that state Jikigai receives nothing from the customer's repository.
+
+## Addendum 2026-11-08 (#12007): the periodic kernel marker
+
+Decision 6 said a periodic report "no marker supplies until #12007 ships". This addendum records that the marker now exists. It
+amends decision 6 and leaves decisions 1 to 5 unchanged; the text above is not rewritten.
+
+**Rollout status: adopting.** The target state below lands in the repository in this change. No running host emits the marker
+yet: delivery to running hosts, the inngest and registry re-provision and arming the heartbeats are operator-reserved holds
+tracked in #12386. Until a host emits, it stays `unknown` in the skill output, which is the honest state and not a defect.
+
+1. **The marker.** `SOLEUR_HOST_KERNEL v=1` is printed by one shared collector every 6 hours and once per boot on web-1, web-2,
+   the inngest host and the registry. Journald hosts ship it through the Vector path they already have; the registry posts it
+   directly through its existing disk-heartbeat sender.
+2. **Identity.** For journald hosts the identity is the Vector-stamped `host_name` plus the exact `SYSLOG_IDENTIFIER`; a
+   self-declared `role=` field is only a cross-check, and a mismatch drops the row. The registry has no Vector stamp, so its
+   identity is `role=registry` plus `host=<registry host id>`, and both must match. A row on the journald path that carries a
+   `host=` field is rejected. A row with an unknown version token is ignored, and the kernel must match the existing anchored
+   kernel shape. The residual stays the one decision 5 and the Consequences already accept: a holder of the ingest token can
+   forge a row.
+3. **A third `kernel_state` value, `stale`.** The enum becomes `observed | stale | unknown`. `observed` needs a valid kernel
+   shape on the newest valid periodic row, at most `FRESH_HOURS` = 48 hours old. `stale` keeps the kernel string and its age
+   visible for an older periodic row or for a failed-deploy row alone, and never grounds `Affected=no`. Anything else is
+   `unknown`. Precedence: a fresh periodic row, then the newest older periodic row, then the failed-deploy row. A newest row
+   with an unreadable kernel does not shadow an older valid one.
+4. **The staleness alert is a per-host dead-man heartbeat, not a native alert.** There is one Better Stack heartbeat per host
+   (`soleur-host-kernel-<role>-prd`), fed hourly by the existing dead-man feeder only while that host has a qualifying row inside
+   a literal 36 hour window. With period 3600 and grace 7200 the worst case from a host going dark to a page is about 40 hours,
+   before the skill stops trusting a report at 48 hours. A native alert cannot do this: its `query_period` is capped at 900
+   seconds, and a row that arrives every 6 hours is invisible to a window that short, so a native alert would be blind.
+   The heartbeats are born paused and armed by the owner (#12386).
+5. **Hosts that stay `unknown` by design.** The git-data host ships to its own Logs source and needs a table pin in two readers;
+   it is tracked in #12385. The grok-dogfood host is default-off with no shipper and is a census exemption. Both remain
+   `unknown` and are never read as clean.
+6. **Display-only fields.** `reboot_required`, `sec_updates` and uptime are emitted on a best-effort basis, print `unknown` when
+   unmeasurable, and never feed `kernel_state`. The patching-cadence alert that would use them belongs to #12008.
+
+### Alternatives considered in this addendum
+
+- **A native Better Stack log alert for staleness (rejected).** The 900 second `query_period` ceiling makes it blind to a
+  6-hourly row; it would either never fire or fire constantly. This is the reason for the dead-man design above.
+- **One aggregate heartbeat for all hosts (rejected).** A single beat fed while any host reports hides the one host that went
+  dark, which is the failure the alert exists to catch. One heartbeat per host names the dark host.
+- **Per-class emitters (rejected).** A separate emitter for each shipper class (journald hosts, registry) would be a second and
+  third copy of the line format and the kernel shape. One shared collector prints one canonical line and thin sink adapters
+  carry it.
+- **`--sink post` in the collector (rejected).** Letting the collector post directly would add a fifth hand-pinned copy of the
+  ingest-token judge. The collector only prints; the registry's existing sender, which already holds that judge, posts it.
+
+### Consequences of this addendum
+
+- The skill can ground `Affected=no` on a mutable host for the first time, but only from an `observed` row at most 48 hours
+  old; `stale` and `unknown` never do, and one marker still never grounds `no` on a path it cannot observe.
+- A planned replace of the inngest or registry host goes dark for up to the 36 hour window, so its heartbeat is paused first
+  (runbook `workspaces-luks-cutover-6604.md`, arming section).
+- No new ordinal, container, store or link is introduced. The C4 edge prose in `model.c4` is extended for the existing edges
+  to `betterstack`; no element or relationship is added.
+
+## Addendum 2026-11-08 (#12007 review)
+
+Append-only: the addendum above is not rewritten. Where this section disagrees with it, this section governs. The rulings are
+recorded in `knowledge-base/project/specs/archive/20261108-210325-feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
+
+1. **Item 3 is amended (unreadable newest row).** The newest mapped periodic row of a host decides. If that row is unreadable,
+   `kernel_state` is capped at `stale`: the kernel string and the age of the older valid row stay visible and never ground
+   `Affected=no`. The sentence "a newest row with an unreadable kernel does not shadow an older valid one" is withdrawn, as is
+   the matching G1 wording. The `LIMIT 6 BY` bound on the kernel bucket is unchanged: eviction can only lose the older kernel
+   shown in a `stale` display and cannot create a false `observed`, because the newest rows are the ones kept.
+2. **What "decisions 1 to 5 are unchanged" does not cover.** The Consequences bullet "Telemetry rows are trusted as written",
+   whose second sentence reads "The skill never lets a single marker ground `Affected=no`", is superseded for the periodic
+   marker. A single valid periodic row at most 48 hours old may ground `Affected=no` on the kernel question, because that is
+   the point of the marker; the matching clause "one marker still never grounds `no` on a path it cannot observe" in the
+   addendum's consequences is withdrawn in the same sense. The bullet stands for everything else the skill reads.
+3. **Residuals, stated for each path.**
+   - *Freshness clock.* Freshness is measured on Better Stack ingestion time (`dt`), not on a time the host wrote, and there is
+     no `ts=` field. A delayed delivery makes a row look younger than it is. Accepted and documented; evidence that would flip
+     it is Vector's journald events carrying the original `__REALTIME_TIMESTAMP` in `raw` (unverified, a follow-up).
+   - *Journald path.* Identity additionally pins `_SYSTEMD_UNIT` to `host-kernel-marker.service` in the helper and in the three
+     feeder journald predicates. A local process can forge `SYSLOG_IDENTIFIER` with `logger -t`; it cannot choose the systemd
+     unit of its message, so local-process forgery is closed. What remains on this path is root on the host. There is no
+     `_HOSTNAME` requirement, recorded as an accepted residual; evidence that would flip it is `host_name` proving not constant
+     per host. Both readers also reject any occurrence of the substring `host=` in a journald-path message, not only a trailing
+     token.
+   - *Registry path.* The registry has no Vector stamp, so its identity (`role=registry` plus a trailing `host=<registry host
+     id>`) is declared inside the message itself. The residual is the holder of the shared Logs ingest token, who can post a
+     row that satisfies both checks. The runbook sentence that a marker never grounds `Affected=no` by itself on a path it
+     cannot observe is read as this residual and nothing wider; it does not promise more than the registry can give.
+4. **The 900 second figure is a repo policy ceiling, not an incident cause.** The sentinel test
+   `logs-alert-query-period-ceiling.test.sh` enforces 900 seconds for new native logs alerts, and a 2026-11-07 vendor
+   measurement (see the logs-alert comments near the dead-man heartbeats in `uptime-alerts.tf`) found newly created alerts above
+   900 seconds refused with a 422. ADR-218 records a contrary read-back of 97200, so the vendor limit is not treated as a
+   stable fact. Incident 1023423999 is not evidence of a cap: it was a 97200 second window reading 0 on a once-daily row. The
+   decision rests on the cadence argument, which holds either way: a window shorter than 6 hours cannot see a 6-hourly row, so
+   a native alert is blind to this marker. Where the earlier text above attributes the choice to a "900 second cap", read it as
+   this.
+5. **Identity safety across a host rename.** Until 2026-09-19 Vector stamped web-1's rows with the inngest host's `host_name`
+   (see the comment on the shared-predicate alerts in `betterstack-logs-alerts.tf`). The `role=` cross-check and the 36 hour
+   window keep identity safe: a stale row under the wrong stamp is outside the window, and a current row whose `role=`
+   disagrees with its `host_name` is dropped.
+6. **Delivery caveat and what "held" means for the inngest host.** The inngest host receives the emitter only through the
+   digest-pinned bootstrap OCI image. A new bootstrap tag must be minted and the pin bumped before a replaced host boots with
+   it, and a routine bootstrap-version bump re-runs the bootstrap on the running inngest host, which would also install the
+   emitter. So for the inngest host "held" means the pin bump is itself the delivery event, and #12386 must say so. The
+   per-host-class carrier, precondition and expected drift are in one table, the delivery matrix in the host-kernel section of
+   `knowledge-base/engineering/operations/runbooks/workspaces-luks-cutover-6604.md`; this ADR, the C4 prose and the query
+   runbook refer to it and do not restate it.
+
+## Addendum 2026-11-08 (#12007 fix round)
+
+Append-only: the earlier addenda are not rewritten. Where this section disagrees with them, this section governs. The ruling is
+recorded in `knowledge-base/project/specs/archive/20261108-210325-feat-one-shot-12007-host-kernel-marker/decision-challenges.md`.
+
+1. **The registry emitter is deferred to an owner-approved follow-up PR.** The earlier addendum of this date (item 1, "the registry posts it
+   directly through its existing disk-heartbeat sender") states that the registry
+   emits the marker. That statement is superseded by this addendum: the registry does not emit the marker in the change that
+   introduces it, and no registry emitter edit is in that change.
+2. **Why.** Merging a change to the registry host's cloud-init auto-fires the registry-host-replace dispatcher
+   (`.github/workflows/registry-host-replace-dispatch.yml`). The dispatcher renders the registry user_data offline and, when it
+   differs from the merge base, emits deliver=true and, after a read-only preflight, runs the registry-host-replace apply with no
+   reviewer gate and no confirm token (ADR-190: the merge is the intent to deliver). That replaces the production registry host,
+   the sole pull path, with no rollback if the create fails after the destroy. The follow-up PR is therefore merged only with the
+   owner's explicit go-ahead and never ahead of the owner; it is tracked in #12386.
+3. **What stays in the first change.** The collector's `--role registry` support, the helper and feeder registry decode (the
+   identity rule of the earlier addenda, `role=registry` plus the trailing `host=<registry host id>`), and the paused
+   `host-kernel-registry` heartbeat. They are inert for the registry until the follow-up merges.
+4. **Expected state.** The registry reads `unknown` in the skill output until the follow-up merges and the host is replaced. That
+   is the honest state, not a defect, and it is never read as clean. Until the heartbeats are armed, the only read for any host is
+   the credentialed query or the credentialed helper (`host-state.sh`).
+5. **Decisions 1 to 5 and the other addendum items are unchanged.** The journald-path residual, the registry-path residual (the
+   holder of the shared ingest token) and the freshness-clock residual of the review addendum stand; the registry-path residual
+   applies from the day the follow-up delivers a row.
