@@ -419,3 +419,29 @@ surface such as nf_tables" — is **closed** by the shared artifact
   capability-free (bwrap zeroes the capset before exec), so a nested `CLONE_NEWNS`
   needs a `CAP_SYS_ADMIN` it never holds: EPERM on every kernel (kernel 7.2.5 / bwrap 0.12). The
   over-broad control is a real fork instead.
+
+## Amendment — 2026-11-09 (#9600): the agent's own git invocation treats the workspace `.git` as untrusted too
+
+The 2026-09-24 invariant above ("tenant workspace content — the worktree **and** its `.git` — is
+untrusted input") was recorded for the server-side render path, and its parenthetical ("the built-in
+deny list covers `.git/hooks` and `.git/config` …") must not be read as the whole control for the
+agent's own git reads. Measured with real git on 2026-11-09 (`apps/web-platform/test/safe-bash-git-config-exec.test.ts`):
+a repo-local config makes even the auto-approved `git status`, `git diff` and `git show` execute a
+helper (`core.fsmonitor`, `diff.external`, textconv, `filter.*.clean`, `gpg.program`), and a bare
+repository **committed** into the connected repo is a working config carrier after a plain clone,
+reached by the already-approved `cd <dir> && git diff`. A flag denylist therefore cannot close it.
+Three controls ship together, ranked by what they cover:
+
+1. **Env pin (primary).** `buildAgentEnv` sets `safe.bareRepository=explicit` (protected
+   configuration, so repo-local config cannot undo it), `GIT_CONFIG_NOSYSTEM=1` and
+   `GIT_CONFIG_GLOBAL=/dev/null` for every session, git-auth or not. The pin is a no-op below git 2.38,
+   so the runner image asserts the floor at build time (`apps/web-platform/Dockerfile`).
+2. **File-tool guard (secondary).** `Write`, `Edit` and `NotebookEdit` are refused on any `.git` path
+   component (case-insensitive, any depth, after symlink resolution) at both enforcement points, the
+   PreToolUse sandbox hook and `canUseTool` (`server/git-carrier-guard.ts`). The CLI-side behaviour for
+   the same write is unmeasured, so this guard is recorded as the sole barrier on that path.
+3. **Closed flag grammar (tertiary).** `git log|diff|show` accept only the flags in `GIT_READ_FLAG`
+   (`server/safe-bash.ts`); every other flag falls to the review card, never a hard deny.
+
+Bare `git diff` and `git status` still execute a config that is present: the hole is closed at the
+carriers, not at the verb. Residuals are listed in the PR that landed this amendment.
