@@ -23,7 +23,7 @@
 
 import { WebSocket, WebSocketServer } from "ws";
 import { createServer, type Server as HttpsServer } from "node:https";
-import { isIPv4 } from "node:net";
+import { isIPv4, type Socket } from "node:net";
 import type { IncomingMessage } from "node:http";
 import { WS_CLOSE_CODES } from "@/lib/types";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -32,6 +32,7 @@ import { reportSilentFallback } from "./observability";
 import { loadProxyTlsClientCa, loadProxyTlsServerOptions } from "./proxy-tls";
 import { verifyProxiedSessionMembership } from "./session-router";
 import { recordProxyNotStarted, recordProxyServer } from "./proxy-listener-status";
+import { denyReporter } from "./proxy-deny-report";
 
 const log = createChildLogger("session-proxy");
 
@@ -164,6 +165,22 @@ export function normalizeProxyPeerAddress(addr: string | undefined | null): stri
   return addr.startsWith("::ffff:") ? addr.slice("::ffff:".length) : addr;
 }
 
+/** One predicate for both admission points (the pre-TLS `connection` listener and the in-`wss`
+ *  re-check): a peer is admitted only when its normalized address is non-empty AND listed.
+ *  A missing `remoteAddress` (socket already torn down) is a deny, never an allow. */
+export function isAllowedProxyPeer(addr: string | undefined | null, allowlist: ReadonlySet<string>): boolean {
+  const peer = normalizeProxyPeerAddress(addr);
+  return peer !== "" && allowlist.has(peer);
+}
+
+/** The peer label a deny report carries: the kernel-supplied address when it has the shape of an IP
+ *  literal, else a fixed token — never an arbitrary string. */
+function peerLabel(addr: string | undefined | null): string {
+  if (!addr) return "unknown";
+  const peer = normalizeProxyPeerAddress(addr);
+  return /^[0-9a-fA-F:.]{1,45}$/.test(peer) ? peer : "invalid";
+}
+
 /** Parse the comma-separated peer allowlist env into a Set of trimmed, non-empty IPs. */
 export function parseProxyPeerAllowlist(csv: string | undefined | null): Set<string> {
   return new Set(
@@ -286,15 +303,28 @@ export function createProxyServer(params: {
     return null;
   }
 
+  // #12288 — admit a peer on the raw TCP stream BEFORE Node's TLS wrapper reads a byte. The https server
+  // is a tls.Server, so its own `connection` listener starts the handshake; this listener is PREPENDED
+  // (named, so a structural test can assert it is first) and destroys a non-allowlisted source before that
+  // listener runs. A missing `remoteAddress` is a deny. A destroyed socket still reaches Node's wrapper
+  // (one `tlsClientError` per deny, measured on Node 22 and 26); `secureConnection` never fires.
+  //
+  // PROBE CONTRACT (ci-deploy.sh RELAY_PROBE_JS): an allowlisted peer that sends NO hello must NOT be
+  // closed within ~700 ms — the serve-gate probe holds the upgrade open that long to read `ok`, and it
+  // sends no hello. Do not add a hello-deadline timer here without changing that contract in the same PR.
+  // Residual (named in ADR-323): after this change a non-allowlisted source reads `relay_peer_probe
+  // result=tls` (reset before secureConnect) and `denied` is unreachable from the probe.
+  httpsServer.prependListener("connection", function admitProxyPeer(socket: Socket) {
+    if (isAllowedProxyPeer(socket.remoteAddress, peerAllowlist)) return;
+    denyReporter.record("peer", { peer: peerLabel(socket.remoteAddress) });
+    socket.destroy();
+  });
+
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
-    // Reject any connection whose private-net source is not a known web-host peer
-    // BEFORE the handshake — closes the git-data-host / non-web-host takeover vector.
-    const peer = normalizeProxyPeerAddress(req.socket.remoteAddress);
-    if (!peerAllowlist.has(peer)) {
-      reportSilentFallback(
-        new Error("proxy connection from a non-peer private IP — rejected before handshake"),
-        { feature: "control_plane_route", op: "createProxyServer.peer-deny", extra: { peer } },
-      );
+    // Defence in depth: the same predicate again after TLS + upgrade (no input reaches here with a
+    // denied peer while the pre-TLS listener is first).
+    if (!isAllowedProxyPeer(req.socket.remoteAddress, peerAllowlist)) {
+      denyReporter.record("peer", { peer: peerLabel(req.socket.remoteAddress) });
       safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "not a routing peer");
       return;
     }
