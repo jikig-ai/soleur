@@ -4,7 +4,7 @@ Derived from `knowledge-base/project/plans/2026-11-09-chore-hold-taxonomy-operat
 
 ## Phase 1 — evaluator + contract
 
-- [x] 1.1 `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh`: add `authorizes_hold()` (normalized prefix `operatorauthorize`, first-16 alnum compare, start-of-words only), an `AUTHORIZE` verdict printing `Say go and I run it: <words> - only you can say go`, skip it in `classify_no_delegation` like reserved, and handle it in the eval loop as always-standing/exit-2 with gates never probed. Update the header comment's grammar paragraph.
+- [x] 1.1 `plugins/soleur/skills/ship/scripts/hold-gate-eval.sh`: add `authorizes_hold()` (normalized prefix `operatorauthorize`, first-17 alnum compare, start-of-words only), an `AUTHORIZE` verdict printing `Say go and I run it: <words> - only you can say go`, skip it in `classify_no_delegation` like reserved, and handle it in the eval loop as always-standing/exit-2 with gates never probed. Update the header comment's grammar paragraph.
 - [x] 1.2 `plugins/soleur/skills/ship/references/operator-holds.md`: §1 format block + class paragraph (both prefixes, executor split, lifecycle: cleared by the operator's go, then the agent runs the act and the line is removed or rewritten); §2 exit-2 wording; §3 "What this does not cover"; §5 prints list.
 - [x] 1.3 `plugins/soleur/test/fixtures/hold-gate-eval/plan-authorizes-web-acceptance.md` (new synthesized fixture: authorizes hold first, `web-acceptance`-gated sibling whose key is absent from `apps/web-platform/server/legal-acceptance/texts/`).
 - [x] 1.4 `plugins/soleur/test/hold-gate-eval.test.sh`: new arms mirroring 4c/4e — verdict line, exit 2, spelling variants, mid-line negative, gates-never-probed, the two-class fixture, authorizes-only → exit 3.

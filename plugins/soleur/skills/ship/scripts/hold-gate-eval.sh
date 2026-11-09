@@ -414,7 +414,7 @@ print_result_line() { # <verdict> <text> <why> <gate text> <notes>
 # reserved_hold <the hold's words>: 0 when they BEGIN with `Operator-reserved:` however it is spelt (see the header).
 reserved_hold() {
   local lt rn
-  lt="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  lt="$(printf '%s' "$1" | sed 's/<!--.*-->//g; s/<!--.*//' | tr 'A-Z' 'a-z')"
   rn="$(printf '%s' "$lt" | tr -cd 'a-z0-9' | cut -c1-16)" # mut:reserved-norm
   [ "$rn" = operatorreserved ]
 }
@@ -424,7 +424,7 @@ reserved_hold() {
 # `Operator-authorization:` and `Operator-authoriz:` out — they are not this class).
 authorizes_hold() {
   local lt an
-  lt="$(printf '%s' "$1" | tr 'A-Z' 'a-z')"
+  lt="$(printf '%s' "$1" | sed 's/<!--.*-->//g; s/<!--.*//' | tr 'A-Z' 'a-z')"
   an="$(printf '%s' "$lt" | tr -cd 'a-z0-9' | cut -c1-17)" # mut:authorizes-norm
   [ "$an" = operatorauthorize ]
 }
