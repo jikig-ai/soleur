@@ -1,7 +1,7 @@
 # Tasks: fix cloud sandbox gh auth missing for web-egress sessions
 
 Plan: knowledge-base/project/plans/2026-11-09-fix-cloud-sandbox-gh-auth-missing-for-web-egress-sessions-plan.md
-Issue: #12469 (Closes). Deferred: #12467, #12468, #12470.
+Issue: #12469 (Closes). Deferred: #12467, #12468, #12470, #12471, #12472.
 
 ## Phase 0: RED tests and behavioural probe
 - 0.1 Add stub exports that throw (`buildGithubReadTools`, `listPullRequests`, `resolveCcGithubReadRegistration`) so new tests fail on assertions
@@ -13,15 +13,17 @@ Issue: #12469 (Closes). Deferred: #12467, #12468, #12470.
 - 0.7 Write T7 `cc-github-read-prompt.test.ts` (parsed-set equality, guardrail presence)
 - 0.8 Write T9 deny-census characterization rows in `web-egress.test.ts`
 - 0.9 Write T10 in `web-egress-toggle.test.tsx`; extend `runner-census.test.ts`; extend tool-tiers tests and `expected-tool-tiers.ts`
-- 0.10 Behavioural probe (broker-mechanism-spike harness pattern): `printenv GH_TOKEN` entitled vs non-entitled; record result and SDK version in the plan Research Insights (settles H3)
+- 0.10 Create T9b `agent-sandbox-credential-deny-behavioural.test.ts` (broker-mechanism-spike harness pattern): same env both arms, `echo START; printenv GH_TOKEN; echo END`, loud skip; record result and SDK version in the plan Research Insights (settles H3)
+- 0.11 Write the public-repo-gate rows (T4), per-call revalidation, cap/redaction/Cf rows and error-mirror hygiene rows (T3), `canUseTool` permission arm, boundary-exact `has_more` (T1), literal deny-set equality incl. GH_ENTERPRISE_TOKEN (T9)
 
 ## Phase 1: Readers
-- 1.1 `listPullRequests` in `server/github-read-tools.ts` (metadata only, `has_more`, state closed set, SAFE_SEGMENT_RE, 0-results text, 64 KB cap)
+- 1.1 `listPullRequests` in `server/github-read-tools.ts` (metadata only, `has_more`, zod-enum state, URLSearchParams, SAFE_SEGMENT_RE, 0-results text)
+- 1.2 `redirect: "manual"` optional parameter on `githubApiGet` in `server/github-api.ts` (legacy default unchanged)
 
 ## Phase 2: Builder, registrar, wiring
 - 2.1 Export `buildGithubReadTools` from `server/github-tools.ts` (new tool, `onError`, `redact`, 401/403 string, 404 hints); compose `buildGithubTools` from it
-- 2.2 Create `server/cc-github-read.ts` (registrar, reasons, FQN list constant, addendum, event)
-- 2.3 Wire `cc-dispatcher.ts`: registrar outside the repo/installation block, tools merge, `platformToolNames`, `_ccRegisteredReadTools` cell (set/delete/clear beside the approval cell), advertise from the cell, addendum under `registered && webEgress`, connect-a-repository line
+- 2.2 Create `server/cc-github-read.ts` (registrar with SAFE_SEGMENT_RE validation and fail-closed public-repo lookup, reasons incl. `repo-private`, FQN list constant, addendum, `emitCcGithubReadOutcome`)
+- 2.3 Wire `cc-dispatcher.ts`: registrar outside the repo/installation block, tools merge, `platformToolNames`, `_ccRegisteredReadTools` cell (set/delete/clear beside the approval cell), advertise from the cell, addendum + outcome event at the WEB_EGRESS_PROMPT_ADDENDUM seam under `registered && webEgress`, connect-a-repository / public-only lines
 - 2.4 `server/tool-tiers.ts` entry for `github_list_pull_requests`
 
 ## Phase 3: Prompts
