@@ -5,19 +5,20 @@
 # WHAT THIS PROVES, from the live files (never a pinned copy):
 #   * ALLOWED_PATHS of .github/actions/bot-pr-with-synthetic-checks/action.yml is exactly
 #     {knowledge-base/project/weakness-digest.md} — the surface every bot PR diff is confined to;
-#   * RATCHET_ORACLE of scripts/ci-pr-affected-replay.py (imported, not grepped) is non-empty and names
-#     both oracle-review-required producers (scripts/ci-oracle-review.sh + its suite);
-#   * ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅ — so a bot PR's `oracle-review-required` synthetic asserts the
-#     `not-oracle` verdict the real sentinel would emit, and its `affected-index-ratchet` synthetic
-#     asserts the unchanged-live-set verdict the real ratchet would emit;
-#   * the audit input surface a bot PR could perturb (suite files + the accept file) is likewise
-#     disjoint — weakness-digest.md is named by no AFFECTED_*_PATHS block and appears in no accept row;
-#   * both new names are in scripts/required-checks.txt (the synthetic consumer) — a name missing there
-#     would silently stop being synthesized on bot PRs, and a name here without its disjointness is a
-#     fabricated green.
+#   * the oracle surface list scripts/ci-oracle-surface.txt (the sentinel's committed list, moved
+#     off the retired replay.py RATCHET_ORACLE by the S4 retirement of 2026-11-09) is non-empty and
+#     names both oracle-review-required producers (scripts/ci-oracle-review.sh + its suite);
+#   * ALLOWED_PATHS ∩ oracle surface = ∅ — so a bot PR's `oracle-review-required` synthetic asserts
+#     the `not-oracle` verdict the real sentinel would emit;
+#   * the audit input surface a bot PR could perturb (suite files) is likewise disjoint —
+#     weakness-digest.md is named by no AFFECTED_*_PATHS block;
+#   * oracle-review-required is in scripts/required-checks.txt (the synthetic consumer) — a name
+#     missing there would silently stop being synthesized on bot PRs, and a name there without its
+#     disjointness is a fabricated green. (The `affected-index-ratchet` synthetic went away with the
+#     context itself in the S4 retirement.)
 #
-# The residual this pins: any ALLOWED_PATHS or RATCHET_ORACLE or suite-edge edit that intersects the two
-# sets turns BOTH synthetic greens live — the PR that does it must first reproduce the real gates in the
+# The residual this pins: any ALLOWED_PATHS or oracle-surface or suite-edge edit that intersects the two
+# sets turns the synthetic green live — the PR that does it must first reproduce the real gates in the
 # action's Phase-4 ceiling (action.yml #6049).
 set -uo pipefail
 export TMPDIR="${TMPDIR:-/var/tmp}"
@@ -30,10 +31,10 @@ chk() { local d="$1"; shift; if "$@"; then pass; else fail "$d"; fi; }
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)
 ACT="$REPO_ROOT/.github/actions/bot-pr-with-synthetic-checks/action.yml"
-REPLAY="$REPO_ROOT/scripts/ci-pr-affected-replay.py"
+SURFACE="$REPO_ROOT/scripts/ci-oracle-surface.txt"
 REQ="$REPO_ROOT/scripts/required-checks.txt"
 PATHSLIB="$REPO_ROOT/scripts/lib/test-affected-paths.sh"
-for f in "$ACT" "$REPLAY" "$REQ" "$PATHSLIB"; do
+for f in "$ACT" "$SURFACE" "$REQ" "$PATHSLIB"; do
   [[ -s "$f" ]] || { printf 'FATAL: %s missing\n' "$f" >&2; exit 2; }
 done
 
@@ -46,40 +47,30 @@ awk '/ALLOWED_PATHS=\(/{f=1;next} f&&/^\s*\)/{f=0} f' "$ACT" | tr -d ' "' > "$SA
 chk "ALLOWED_PATHS is exactly {knowledge-base/project/weakness-digest.md} (anti-vacuity + bound)" \
   test "$(sort "$SANDBOX/allowed.txt")" = "knowledge-base/project/weakness-digest.md"
 
-# RATCHET_ORACLE: imported from the replay module — never grepped, so a renamed constant cannot pass vacuously.
-python3 - "$REPLAY" > "$SANDBOX/oracle.txt" 2>"$SANDBOX/oracle.err" <<'PY'
-import importlib.util, sys
-spec = importlib.util.spec_from_file_location("replay", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-oracle = getattr(mod, "RATCHET_ORACLE", None)
-if not isinstance(oracle, (tuple, list)) or not oracle:
-    sys.exit(3)
-for p in oracle:
-    print(p)
-PY
-chk "RATCHET_ORACLE imports from the live replay module and is non-empty" \
+# The oracle surface: the committed list file — a data file, so read line-wise (blank lines and
+# comments dropped); a renamed or emptied file cannot pass vacuously.
+grep -vE '^[[:space:]]*(#|$)' "$SURFACE" > "$SANDBOX/oracle.txt" 2>"$SANDBOX/oracle.err" || true
+chk "ci-oracle-surface.txt reads as a non-empty list" \
   test -s "$SANDBOX/oracle.txt"
-chk "RATCHET_ORACLE names both oracle-review-required producers" \
+chk "the surface names both oracle-review-required producers" \
   bash -c 'grep -qxF "scripts/ci-oracle-review.sh" "$1" && grep -qxF "scripts/ci-oracle-review.test.sh" "$1"' _ "$SANDBOX/oracle.txt"
 
 # The disjointness itself: a bot PR diff is confined to ALLOWED_PATHS; none of those paths is oracle surface.
-chk "ALLOWED_PATHS ∩ RATCHET_ORACLE = ∅ (the synthetic green is not-oracle, earned by shape)" \
+chk "ALLOWED_PATHS ∩ oracle surface = ∅ (the synthetic green is not-oracle, earned by shape)" \
   bash -c '! grep -q . < <(grep -xFf "$1" "$2")' _ "$SANDBOX/allowed.txt" "$SANDBOX/oracle.txt"
 
 # weakness-digest.md must appear in no AFFECTED_*_PATHS edge: a declared edge naming it would bind a
-# bot-diff-reachable path into the selector's audit surface. (It MAY appear as an accept-row TARGET —
-# accept rows exempt a named path; the named file's content never moves the live set, only suite text,
-# edges, oracle files and the accept file itself do — none of which a bot PR can touch.)
+# bot-diff-reachable path into the selector's audit surface. (The accept-row machinery this comment
+# once cited retired with S4; the edge-surface argument is unchanged — only suite text, edges and
+# oracle files move the live set, none of which a bot PR can touch.)
 awk '/AFFECTED_[A-Z0-9_]*_PATHS=\(/{f=1; sub(/AFFECTED_[A-Z0-9_]*_PATHS=\(/,""); print; next} f&&/^[[:space:]]*\)/{f=0} f' "$PATHSLIB" > "$SANDBOX/edge-blocks.txt"
 chk "edge-block extraction is non-vacuous (the AFFECTED_*_PATHS convention still parses)" \
   test -s "$SANDBOX/edge-blocks.txt"
 chk "weakness-digest.md is named by no AFFECTED_*_PATHS edge (audit surface disjoint)" \
   bash -c '! grep -q "weakness-digest.md" "$1"' _ "$SANDBOX/edge-blocks.txt"
 
-# The synthetic consumer pins: both names in required-checks.txt (else bot PRs stop being synthesized).
-chk "affected-index-ratchet is in required-checks.txt (the synthetic set)" \
-  bash -c 'grep -qx "affected-index-ratchet" "$1"' _ "$REQ"
+# The synthetic consumer pin: the sentinel name in required-checks.txt (else bot PRs stop being
+# synthesized). The `affected-index-ratchet` member went away with the context itself (S4 retirement).
 chk "oracle-review-required is in required-checks.txt (the synthetic set)" \
   bash -c 'grep -qx "oracle-review-required" "$1"' _ "$REQ"
 
