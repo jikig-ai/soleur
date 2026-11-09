@@ -159,7 +159,7 @@ records() { # dir -> tab-separated SERVER / FIREWALL / ATTACH / MODULE / UNSUPPO
 field() { awk -F'\t' -v k="$1" -v l="$2" -v n="$3" '$1 == k && $2 == l { print $n; exit }'; } # kind label col <records
 
 analyze() { # dir -> prints FINDING lines; empty output = clean
-  local dir="$1" rec nserv nfw srv fw kind has fwids inline viaatt bound b attach_actual="" a g lab t
+  local dir="$1" rec nserv nfw srv fw kind has fwids inline viaatt bound b attach_actual="" a g gl lab t
   local inb ndyn ndyna nfe
   rec="$(records "$dir")"
   for g in "$dir"/*.tf.json "$dir"/*.tofu "$dir"/*.tofu.json; do
@@ -170,13 +170,15 @@ analyze() { # dir -> prints FINDING lines; empty output = clean
   done
   for g in "$dir"/*.tfvars "$dir"/*.auto.tfvars "$dir"/*.tfvars.json "$dir"/*.auto.tfvars.json; do
     [ -f "$g" ] || continue
-    if grep -E 'enable_grok_dogfood' "$g" | grep -qvE 'false'; then echo "FINDING excluded-enabled hcloud_server.grok_dogfood"; fi
+    gl="$(grep -E 'enable_grok_dogfood' "$g" | grep -vE 'false')"
+    if [ -n "$gl" ]; then echo "FINDING excluded-enabled hcloud_server.grok_dogfood"; fi
   done
   # the default-off host stays default-off in the declaration itself: variable default false, local passes it through unchanged
   if ! cat "$dir"/*.tf 2>/dev/null | awk '/^variable "enable_grok_dogfood"/ { v = 1 } v && /^}/ { v = 0 } v && /^[[:space:]]*default[[:space:]]*=[[:space:]]*false[[:space:]]*(#.*)?$/ { ok = 1 } END { exit ok ? 0 : 1 }'; then
     echo "FINDING excluded-enabled hcloud_server.grok_dogfood"
   fi
-  if cat "$dir"/*.tf 2>/dev/null | grep -E '^[[:space:]]*grok_dogfood_enabled[[:space:]]*=' | grep -qvE '=[[:space:]]*var\.enable_grok_dogfood[[:space:]]*(#.*)?$'; then
+  gl="$(cat "$dir"/*.tf 2>/dev/null | grep -E '^[[:space:]]*grok_dogfood_enabled[[:space:]]*=' | grep -vE '=[[:space:]]*var\.enable_grok_dogfood[[:space:]]*(#.*)?$')"
+  if [ -n "$gl" ]; then
     echo "FINDING excluded-enabled hcloud_server.grok_dogfood"
   fi
   if [ -d "$dir/modules" ] && grep -rqE '^[[:space:]]*resource[[:space:]]+"?hcloud_' --include='*.tf' "$dir/modules"; then
