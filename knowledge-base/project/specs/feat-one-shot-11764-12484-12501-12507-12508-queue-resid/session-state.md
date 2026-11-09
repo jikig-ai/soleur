@@ -51,6 +51,25 @@ Lead already applied inline: `_FRESH_TOP[__built__]` fail-closed check in script
 6. P3 defer: cron buildSpawnEnv TMPDIR residual -> document in PR body; Reaper-2 _FRESH_TOP sentinel backfill + `.cs` protect-list -> follow-up issue; oracle-lane timeout divergence -> record deliberate in ci-oracle-lane.md.
 7. Ship: PR body = 5x `Closes #N` own-line + census histogram + blast-radius line (workflows inert until next matching push; pr-selection lever dark); expect rebase vs PR #12495 hunks.
 
+## Reviewed-Fix-Round: verification (2026-11-09, ship-phase inline pass over b817157324..15c5149dc2)
+Fix-range diff verified against the consolidated fix list — every finding landed:
+freshness-map `_FRESH_TOP[__built__]` fail-closed, verified-delete count (`find -delete`
+guarded by `if`, failed delete = retain + log), `timeout 30` base fetch
+(ci-pr-selection.sh GUARD:G2-BASE-FETCH), `timeout 60` on the enqueue `gh pr view`,
+notice reword ("or none with a parseable created_at"), CS_BASE pinned to
+`$TMP_ROOT/.cs` (fail closed, logged), `.soleur-owned` marker deference,
+`CS_MAX_REAP` per-run cap (default 500, cap logged + alarm_record), accept.tsv
+anchor row `7811c4a3878a/1`, agent-env.test.ts three direct assertions + scope
+comment (agent-outer-wrap.ts:458 re-pin), `BASE_ROWS=4591` with derivation
+comment, C47 rationale / rung2 / tmp-census / ci-oracle-lane / plan comment-doc fixes.
+Suites re-run green: tmpfs-guard 75/75; ci-pr-selection 4762/4762 rows +
+105/105 mutants; merge-queue-stall-check 173/173; bump-inngest-bootstrap-pin
+712/712; destroy-guard-regex-parity all-ok; ci-pr-affected-replay ratchet
+`pass live=0 baseline=0 accept=3235`.
+QA: skipped per graceful-skip contract — plan has no UI Test Scenarios
+(machinery-only diff).
+NEXT: compound -> ship (Phases 1-8) -> DONE.
+
 ## Outstanding
 - Affected gate: background shell 0bcd0e (check before ship).
 - After fixes: commit+push, verification pass over fix range, qa (skip - no UI), compound, ship -> DONE.
