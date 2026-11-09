@@ -69,7 +69,7 @@ Two CI-lever items under epic #11556 land in one PR. First, the `oracle-selectio
 ### Relevant files
 
 - `scripts/ci-oracle-lane.sh:256-330` — `run()` and the (2a) pull_request arm (`diff_base="HEAD^1"` at 275; `base_sha="$p1"` at 274; diff at 313; index extent diff at 356-359).
-- `.github/workflows/ci.yml:454-510` — `oracle-selection` job: env block at 475-489 (add `PR_BASE_REF`/`PR_BASE_SHA`), driver-source `base="HEAD^1"` at ~494 (kept), `no_base_driver` fallback at ~503.
+- `.github/workflows/ci.yml:454-510` — `oracle-selection` job: env block at 475-489 (add `PR_BASE_REF`), driver-source `base="HEAD^1"` at ~494 (kept), `no_base_driver` fallback at ~503.
 - `.github/workflows/ci.yml:2211-2320` — `oracle-index-check` (K=5 legs, the consumer that pays on a misfire; its "Fetch origin/main" step at ~2258 is precedent for an explicit base fetch: `git fetch --no-tags --quiet origin main`).
 - `scripts/ci-oracle-lane.test.sh` — fixture-repo suite (~1594 lines); `drive()` at ~530 derives `base` from `HEAD^1` and injects `MERGE_GROUP_BASE_SHA`; a merge-carrying-branch fixture + `PR_BASE_*` env covers the fix.
 - `knowledge-base/engineering/operations/runbooks/ci-oracle-lane.md:139-146` — the manual replay recipe diffs `p1..p2`; must be updated to the merge-base recipe.
@@ -113,8 +113,8 @@ No `AFFECTED_*_PATHS` entry in `scripts/lib/test-affected-paths.sh` names either
 
 **D1 — derive `diff_base` from the merge-base, keep everything else.** In `scripts/ci-oracle-lane.sh` guard (2a), after the two-parent shape validates (`h == GITHUB_SHA`, `p2 == PR_HEAD_SHA`), resolve the live base and compute `diff_base` as the merge-base of the PR head against it:
 
-- New env inputs in the `oracle-selection` step (`ci.yml`): `PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}` and `PR_BASE_REF: ${{ github.event.pull_request.base.ref }}` — all inputs through `env:` per the job's existing contract.
-- Resolution order inside the driver: (i) if `PR_BASE_SHA` is 40-hex and `git rev-parse --verify --quiet "${PR_BASE_SHA}^{commit}"` resolves in the fetch-depth-0 checkout, use it as the base ref; (ii) else `git fetch --no-tags --quiet origin "$PR_BASE_REF"` (guarded: fetch failure is fail-closed — same precedent as `oracle-index-check`'s "Fetch origin/main" step) and use `FETCH_HEAD`; (iii) `diff_base="$(git merge-base HEAD^2 "$resolved")"` — an empty/failed merge-base is fail-closed (`reason=<named>` → `oracle_only=false`, full battery). A `git fetch` inside the driver must be reachable-or-nothing: the guard suite replays the step in a bare sandbox where fetch exits 128, which is exactly the fail-closed arm (the arm exists; the tests exercise it via fixtures with file:// origins or an injected failure).
+- New env input in the `oracle-selection` step (`ci.yml`): `PR_BASE_REF: ${{ github.event.pull_request.base.ref }}` — all inputs through `env:` per the job's existing contract. (CTO ruling 2026-11-09 reversed the payload-first design: `PR_BASE_SHA` is not wired — see Decisions.)
+- Resolution inside the driver: `git fetch --no-tags --quiet origin "$PR_BASE_REF"` unconditionally (guarded: fetch failure is fail-closed — same precedent as `oracle-index-check`'s "Fetch origin/main" step) and use `FETCH_HEAD`; then `diff_base="$(git merge-base HEAD^2 FETCH_HEAD)"` — an empty/failed merge-base is fail-closed (`reason=<named>` → `oracle_only=false`, full battery). A `git fetch` inside the driver must be reachable-or-nothing: the guard suite replays the step in a bare sandbox where fetch exits 128, which is exactly the fail-closed arm (the arm exists; the tests exercise it via fixtures with file:// origins or an injected failure).
 - `diff_head="HEAD"` stays. `base_sha`/`head_sha` outputs keep their audit semantics: `head_sha` stays `$p2`; `base_sha` emits the resolved merge-base — the value the diff actually ran against (see Decisions; no workflow consumes it).
 - The (2a) shape guard, fork guard, re-run guard, switch gate and every downstream consumer (`git diff` listing, `-U0` index extent diff, `git show $diff_base:$ORACLE_INDEX`) are untouched — the merge-base SHA is an ancestor of `p2`, always resolvable in the checkout.
 - The driver-source line `base="HEAD^1"` in `ci.yml` (~494) stays — per #12329, first-parent sourcing guards the classifier tree, a different invariant.
@@ -125,7 +125,7 @@ No `AFFECTED_*_PATHS` entry in `scripts/lib/test-affected-paths.sh` names either
 ## Technical Considerations
 
 - **Why merge-base of `HEAD^2` against the live base ref, not `HEAD^1`:** `HEAD^1` freezes at merge-ref computation; the merge-base recomputes against the base as it exists at run time — identical to GitHub's three-dot `base...head` semantics, so the diff covers exactly the PR's own delta. For a linear branch (no main merge), merge-base(`p2`, base) == `p1`'s descendant chain head the branch forked from — when the merge ref is fresh the results coincide, so the fix is a strict improvement, not a behavior swap.
-- **Why not `pull_request.base.sha` directly as the diff base:** the payload SHA is the base tip at event time — fresher than `HEAD^1` but still capturable stale; `merge-base(p2, base.sha)` self-corrects (a stale base.sha that is already an ancestor of `p2` yields itself — still stale). The merge-base against the *live* base ref is the only derivation that cannot freeze. `base.sha` is used only as the zero-cost candidate the verify step tries first, never trusted as the diff base itself.
+- **Why not `pull_request.base.sha` as the base candidate (CTO ruling 2026-11-09):** the payload SHA is the base tip at event time — fresher than `HEAD^1` but still capturable stale, and a stale-but-resolvable `base.sha` defeats the merge-base self-correction (`merge-base(p2, stale-sha)` yields the stale SHA itself), leaving the exact defect class alive in the event→run window. Unconditional `git fetch --no-tags origin "$PR_BASE_REF"` → `FETCH_HEAD` is the only derivation that cannot freeze, is one code path (halves the test surface, drops the `PR_BASE_SHA` env input), and fails closed on fetch failure — a ~1 s network call against a misfire measured at ~65 min.
 - **Fail-closed surface (ADR-276's design contract):** every new resolution step returns 0 with a named `reason` on failure — a mis-resolved base must never produce a partial classification. New reason tokens (e.g. `base_fetch`, `no_merge_base`) join the driver's reason grammar; the notice schema is unchanged.
 - **Race discipline (operator-accepted):** #12434 and #12475 also edit `ci.yml`; #7390 races the suite TSVs. Edits stay tight and comment-anchored: the oracle env additions append to the existing env block, the TSV regen touches only the two removed labels (sticky-LPT keeps incumbents), and no refactors ride along.
 - **Live-session warning honored:** nothing under `plugins/soleur/` is edited except the generated `fixture-relative-assert.baseline.txt` regen — required because the baseline pins deleted-file counts and would fail closed otherwise.
@@ -173,7 +173,7 @@ failure_modes:
   - mode:          # stale-base misfire (the defect this fixes)
     detection:     # reason=oracle with files=<N> on a diff the PR did not author — the measured signature on run 42459010986
     alert_route:   # PR author / operator reading the run
-  - mode:          # unresolved live base (payload SHA missing AND fetch fails, or empty merge-base)
+  - mode:          # unresolved live base (base-ref fetch fails, or empty merge-base)
     detection:     # new named reason= tokens (base_fetch / no_merge_base) in the SOLEUR_ORACLE_LANE notice with oracle_only=false
     alert_route:   # PR author / operator reading the run
 logs:
@@ -237,7 +237,7 @@ No cross-domain implications detected — infrastructure/tooling change. (Sweep 
 
 - `scripts/ci-oracle-lane.sh` — (2a) arm: `diff_base` from merge-base; `base_sha` emits the merge-base; header line 41; new fail-closed reasons
 - `scripts/ci-oracle-lane.test.sh` — `drive()` env + merge-carrying fixture + new assertion rows (mutation matrix above)
-- `.github/workflows/ci.yml` — `oracle-selection` env: `PR_BASE_SHA`/`PR_BASE_REF` (+ anchored comment); no other job touched
+- `.github/workflows/ci.yml` — `oracle-selection` env: `PR_BASE_REF` (+ anchored comment); no other job touched
 - `scripts/test-all.sh` — remove two `run_suite` blocks (comment + line)
 - `.github/CODEOWNERS` — remove four rows (26-27, 33-34)
 - `scripts/ci-pr-affected-audit.accept.tsv` — remove the stale row at 1806 (per the audit's stale report)
@@ -272,7 +272,7 @@ No cross-domain implications detected — infrastructure/tooling change. (Sweep 
 | Plan item | User words cited (verbatim quote) | Verdict |
 |-----------|-----------------------------------|---------|
 | `base_sha` emits the merge-base value | "keep `base_sha`/`head_sha` semantics identical downstream" | inferred — the output is audit-only (zero workflow consumers); emitting the SHA the diff actually ran against preserves "the base" semantics downstream readers use to replay |
-| New env `PR_BASE_SHA`/`PR_BASE_REF` in `ci.yml` | "or `github.event.pull_request.base.sha` verified resolvable" / "the fetched base ref" | asked (both named sources need env wiring) |
+| New env `PR_BASE_REF` in `ci.yml` | "the fetched base ref" / merge-base derivation | asked — `PR_BASE_SHA` dropped per CTO ruling (payload candidate retains the event→run staleness window) |
 | Runbook + ADR-276 doc updates | "update doc references or leave a tombstone note per repo convention" | asked |
 | Re-attribute `sweep-followthroughs.test.sh` comments; keep sweeper-yml history | "update doc references or leave a tombstone note per repo convention" | inferred — repo convention (the #10865 retirement) re-attributes comments describing LIVE consumers and keeps dated measurements |
 | ADR-276 amendment note | "update doc references" + `wg-architecture-decision-is-a-plan-deliverable` (recorded authority must not lag the shipped derivation) | inferred — justification: the ADR's scope-bound text names `HEAD^1` base; an append-only dated note keeps the record true |
@@ -287,11 +287,11 @@ No cross-domain implications detected — infrastructure/tooling change. (Sweep 
 
 ## Acceptance Criteria
 
-- [ ] `scripts/ci-oracle-lane.sh` (2a) arm computes `diff_base` as `git merge-base` of the PR head against the resolved live base (`PR_BASE_SHA` verified resolvable, else fetched `PR_BASE_REF`); the literal `diff_base="HEAD^1"` is gone; the two-parent shape guard, fork/re-run/switch guards and `diff_head="HEAD"` are unchanged.
-- [ ] Every new resolution failure (unresolvable payload SHA AND failed fetch, or empty merge-base) emits the fail-closed defaults with a named `reason=` — verified by a suite row per arm.
+- [ ] `scripts/ci-oracle-lane.sh` (2a) arm computes `diff_base` as `git merge-base` of the PR head against the fetched live base (`git fetch --no-tags --quiet origin "$PR_BASE_REF"` → `FETCH_HEAD`, unconditional per CTO ruling); the literal `diff_base="HEAD^1"` is gone; the two-parent shape guard, fork/re-run/switch guards and `diff_head="HEAD"` are unchanged.
+- [ ] Every new resolution failure (failed base-ref fetch, or empty merge-base) emits the fail-closed defaults with a named `reason=` — verified by a suite row per arm.
 - [ ] A merge-carrying-branch fixture in `scripts/ci-oracle-lane.test.sh` fails on the old `HEAD^1` derivation and passes on the merge-base derivation (the fixture's `git diff merge_base HEAD` names no main-side path).
 - [ ] `base_sha` output emits the resolved merge-base SHA and `head_sha` stays `HEAD^2`; the driver header and the runbook's manual-replay recipe say so.
-- [ ] `ci.yml` `oracle-selection` gains `PR_BASE_SHA`/`PR_BASE_REF` env lines and nothing else in the job changes; the `base="HEAD^1"` driver-source line is untouched.
+- [ ] `ci.yml` `oracle-selection` gains the `PR_BASE_REF` env line and nothing else in the job changes; the `base="HEAD^1"` driver-source line is untouched.
 - [ ] `git rm` removes all four files; `rg -n 'ci-draft-light-soak-9728|ci-draft-push-census' scripts/ .github/ .claude/ plugins/` returns zero hits (every live comment carries only the `#9728` issue tombstone; `knowledge-base/**` historical records are out of grep scope by convention).
 - [ ] `scripts/test-all.sh` has no `run_suite` line for either label; `bash scripts/lint-orphan-test-suites.sh` exits 0.
 - [ ] `git diff` on `suite-shard-legs.tsv`/`suite-durations.tsv` removes exactly the two label rows each (regen output reviewed — no unrelated rebalance).
@@ -302,8 +302,8 @@ No cross-domain implications detected — infrastructure/tooling change. (Sweep 
 
 ## Test Scenarios
 
-- **Given** a fixture merge ref whose `HEAD^1` is a stale base tip and whose PR head merged a newer `main` carrying oracle-surface paths, **when** the driver runs with `PR_BASE_SHA`/`PR_BASE_REF` env, **then** `oracle_only=false` (or true only if the PR's own delta is in-surface) and `files=` counts the PR's own delta only — `unit` (fixture repo, hermetic `drive()`).
-- **Given** the payload `PR_BASE_SHA` does not resolve in the checkout and `git fetch` fails (injected), **when** the driver runs, **then** fail-closed: `oracle_only=false`, named `reason`, defaults emitted — `unit`.
+- **Given** a fixture merge ref whose `HEAD^1` is a stale base tip and whose PR head merged a newer `main` carrying oracle-surface paths, **when** the driver runs with `PR_BASE_REF` env (base ref served by a `file://` origin fixture), **then** `oracle_only=false` (or true only if the PR's own delta is in-surface) and `files=` counts the PR's own delta only — `unit` (fixture repo, hermetic `drive()`).
+- **Given** `git fetch` of the base ref fails (injected), **when** the driver runs, **then** fail-closed: `oracle_only=false`, named `reason`, defaults emitted — `unit`.
 - **Given** a linear PR branch (no main merge) with a fresh merge ref, **when** the driver runs, **then** classification identical to the pre-fix run — `unit` (regression row).
 - **Given** the deleted suites, **when** `bash scripts/test-all.sh --list` (or shard select) runs, **then** neither label appears and no `run_suite` references a missing file — `integration`.
 - **Given** the regenerated baseline/TSVs, **when** `fixture-relative-assert.test.sh`, `lint-orphan-test-suites.sh`, the affected-index ratchet (`--print-baseline`/audit stale report) and `scripts-shard-totality` run, **then** all green — `integration`.
@@ -311,7 +311,7 @@ No cross-domain implications detected — infrastructure/tooling change. (Sweep 
 
 ## Context / Risks
 
-- **Fetch inside a 2-minute step:** the `git fetch --no-tags origin "$PR_BASE_REF"` fallback adds one network op to a `timeout-minutes: 2` step — bounded by the step timeout; failure is fail-closed (full battery), the safe direction.
+- **Fetch inside a 2-minute step:** the unconditional `git fetch --no-tags origin "$PR_BASE_REF"` adds one network op to a `timeout-minutes: 2` step — bounded by the step timeout; failure is fail-closed (full battery), the safe direction.
 - **Fork PRs:** the fork guard (`HEAD_REPO == GH_REPO`) runs after (2a); on a fork the classification already returns before the merge-base fetch matters — but the fetch itself must still fail closed on a fork's base ref name (base ref is always the upstream's, resolvable).
 - **merge_group untouched:** (2b) semantics (`MERGE_GROUP_BASE_SHA..HEAD_SHA`, batch fail-closed) are unchanged by design.
 - **Degenerate merge-base shapes:** a criss-cross history can yield multiple merge bases — `git merge-base` prints one best common ancestor, which suffices for a two-dot diff; an empty result (unrelated histories) is the fail-closed arm, not a guessed base.

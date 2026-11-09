@@ -4,10 +4,10 @@ Derived from `knowledge-base/project/plans/2026-11-09-fix-oracle-stale-base-s3-p
 
 ## 1. Oracle fix (issue #12418)
 
-- [ ] 1.1 `.github/workflows/ci.yml` `oracle-selection` step: add `PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}` and `PR_BASE_REF: ${{ github.event.pull_request.base.ref }}` to the `env:` block with an anchored comment; leave the `base="HEAD^1"` driver-source line untouched
-- [ ] 1.2 `scripts/ci-oracle-lane.sh` (2a) arm: resolve the live base (payload `PR_BASE_SHA` verified resolvable → else `git fetch --no-tags --quiet origin "$PR_BASE_REF"` → `FETCH_HEAD`), set `diff_base=$(git merge-base HEAD^2 "$resolved")`; every failure arm emits fail-closed defaults with a named `reason=`; `base_sha` emits the merge-base
+- [ ] 1.1 `.github/workflows/ci.yml` `oracle-selection` step: add `PR_BASE_REF: ${{ github.event.pull_request.base.ref }}` to the `env:` block with an anchored comment (no `PR_BASE_SHA` — dropped per CTO ruling 2026-11-09); leave the `base="HEAD^1"` driver-source line untouched
+- [ ] 1.2 `scripts/ci-oracle-lane.sh` (2a) arm: `git fetch --no-tags --quiet origin "$PR_BASE_REF"` unconditionally → `FETCH_HEAD`, set `diff_base=$(git merge-base HEAD^2 FETCH_HEAD)`; every failure arm emits fail-closed defaults with a named `reason=`; `base_sha` emits the merge-base
 - [ ] 1.3 Update the driver header grammar comment (line ~41) and the runbook `knowledge-base/engineering/operations/runbooks/ci-oracle-lane.md` manual-replay recipe to the merge-base derivation
-- [ ] 1.4 `scripts/ci-oracle-lane.test.sh`: `drive()` env for `PR_BASE_*`, a merge-carrying-branch fixture (stale `HEAD^1`, branch merged newer main carrying oracle-surface paths), linear-branch regression row, fetch-failure and empty-merge-base fail-closed rows
+- [ ] 1.4 `scripts/ci-oracle-lane.test.sh`: `drive()` env for `PR_BASE_REF`, a merge-carrying-branch fixture (stale `HEAD^1`, branch merged newer main carrying oracle-surface paths, `file://` origin serving the base ref), linear-branch regression row, fetch-failure and empty-merge-base fail-closed rows
 - [ ] 1.5 Append a dated amendment note to ADR-276 recording the #12418 diff-base correction
 
 ## 2. Retirement (trackers #9728 + S3-EXIT-CENSUS)
