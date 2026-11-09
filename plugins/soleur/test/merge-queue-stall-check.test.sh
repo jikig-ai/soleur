@@ -1579,7 +1579,7 @@ mutate "M2 threshold made non-numeric -> RED" structural 'not numeric' \
   "re.sub(r\"STALL_THRESHOLD_MINUTES: '[0-9]+'\", \"STALL_THRESHOLD_MINUTES: 'soon'\", s)"
 mutate "M3 position filter removed from the run body -> RED (structural)" structural 'position filter' \
   "s.replace('            | select(.position <= \$maxpos)\n', '')"
-mutate "M3b position filter removed -> RED (behavioural: depth-3 entry now files)" behav 'position 3 older than threshold filed' \
+mutate "M3b position filter removed -> RED (behavioural: depth-3 entry now files)" behav 'just outside the aging window.*older than threshold filed' \
   "s.replace('            | select(.position <= \$maxpos)\n', '')"
 mutate "M4 MAX_ENTRIES_TO_BUILD drifted from the .tf -> RED" structural 'MAX_ENTRIES_TO_BUILD' \
   "s.replace(\"MAX_ENTRIES_TO_BUILD: '$TF_BUILD'\", \"MAX_ENTRIES_TO_BUILD: '$((TF_BUILD + 3))'\")"
@@ -1641,7 +1641,7 @@ else fail "PT1 headSha last in the --json list ($REASON)"; fi
 Q="                        "
 mutate "Q1 enqueuedAt dropped from the query -> RED (the age can never be computed, the probe never fires)" behav 'position 1 older than threshold did not file' \
   "s.replace('${Q}enqueuedAt\n', '')"
-mutate "Q2 position dropped from the query -> RED (the false-positive filter reads null)" behav 'position 3 older than threshold filed' \
+mutate "Q2 position dropped from the query -> RED (the false-positive filter reads null)" behav 'just outside the aging window.*older than threshold filed' \
   "s.replace('${Q}position\n', '')"
 mutate "Q3 state dropped from the query -> RED (the body loses the queue state)" behav 'lacks the queue state' \
   "s.replace('${Q}state\n', '')"
