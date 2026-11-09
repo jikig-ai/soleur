@@ -39,7 +39,7 @@ Epic: #11556 lever E | Prior ruling: CTO 2026-11-06 (defer to measured experimen
 
 ## Phase 4 — Verification
 
-- [ ] 4.1 `bash tests/scripts/test-audit-ruleset-bypass.sh` green incl. m14 + must-PASS rows.
-- [ ] 4.2 `bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh` green.
-- [ ] 4.3 `plugins/soleur/test/merge-queue-stall-check.test.sh` S8 green (env mirror == live `.tf`).
+- [x] 4.1 `bash tests/scripts/test-audit-ruleset-bypass.sh` green incl. m14 + must-PASS rows.
+- [x] 4.2 `bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh` green.
+- [x] 4.3 `plugins/soleur/test/merge-queue-stall-check.test.sh` S8 green (env mirror == live `.tf`).
 - [ ] 4.4 AC sweep: AC1-AC12 per the branch taken; PR body uses `Ref #12269`.
