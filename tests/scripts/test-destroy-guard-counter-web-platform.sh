@@ -2198,8 +2198,8 @@ t66_coalesced_gate_feeds() {
        "no ALL_MSGS-reads-ack-token line in comment-stripped apply block"
   grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
     && grep -qF 'jq -r '"'"'join("\n")'"'"'' <<<"$blk" \
-    && _report "T66h: the apply step carries the EVENT_MSGS_JSON feed + concat" ok \
-    || _report "T66h: the apply step carries the EVENT_MSGS_JSON feed + concat" FAIL \
+    && _report "T66h: the apply job carries the EVENT_MSGS_JSON feed + concat" ok \
+    || _report "T66h: the apply job carries the EVENT_MSGS_JSON feed + concat" FAIL \
        "apply block lost the feed env or the jq concat — consumer name alone reverts to tip-only"
 }
 
