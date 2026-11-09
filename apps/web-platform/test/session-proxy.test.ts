@@ -8,15 +8,30 @@
  */
 
 import { EventEmitter } from "node:events";
+import { randomBytes, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WS_CLOSE_CODES } from "@/lib/types";
+
+const { mockReport } = vi.hoisted(() => ({ mockReport: vi.fn() }));
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReport,
+  warnSilentFallback: vi.fn(),
+  infoSilentFallback: vi.fn(),
+}));
+
 import {
   proxyClientToOwner,
   normalizeProxyPeerAddress,
   parseProxyPeerAllowlist,
 } from "@/server/session-proxy";
+import { verifyProxyHello, createReplayCache } from "@/server/proxy-hello";
+import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
 
 const TEST_CERT = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----";
+const KEY_HEX = randomBytes(32).toString("hex");
+const KEY = Buffer.from(KEY_HEX, "hex");
+const U = randomUUID();
+const W = randomUUID();
 
 class FakeWs extends EventEmitter {
   readyState = 1; // ws.WebSocket.OPEN
@@ -32,8 +47,11 @@ class FakeWs extends EventEmitter {
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.unstubAllEnvs();
   vi.stubEnv("PROXY_TLS_CERT", TEST_CERT);
+  vi.stubEnv("PROXY_HELLO_HMAC_KEY", KEY_HEX);
+  __resetDenyReporterForTests();
 });
 afterEach(() => vi.unstubAllEnvs());
 
@@ -83,8 +101,8 @@ describe("proxyClientToOwner", () => {
     await proxyClientToOwner({
       clientWs: client as never,
       ownerAddress: "10.0.1.12",
-      userId: "u",
-      workspaceId: "w",
+      userId: U,
+      workspaceId: W,
       dial: dial as never,
     });
     expect(dial).not.toHaveBeenCalled();
@@ -98,8 +116,8 @@ describe("proxyClientToOwner", () => {
     await proxyClientToOwner({
       clientWs: client as never,
       ownerAddress: "10.0.1.12",
-      userId: "user-42",
-      workspaceId: "ws-9",
+      userId: U,
+      workspaceId: W,
       dial: dial as never,
     });
     expect(dial).toHaveBeenCalledTimes(1);
@@ -108,11 +126,68 @@ describe("proxyClientToOwner", () => {
     expect(opts).toMatchObject({ ca: TEST_CERT, rejectUnauthorized: true });
 
     owner.emit("open");
-    expect(JSON.parse(owner.sent[0] as string)).toEqual({
-      type: "proxy_hello",
-      userId: "user-42",
-      workspaceId: "ws-9",
+    const sent = JSON.parse(owner.sent[0] as string);
+    expect(Object.keys(sent).sort()).toEqual(["mac", "nonce", "ts", "type", "userId", "workspaceId"]);
+    expect(sent).toMatchObject({ type: "proxy_hello", userId: U, workspaceId: W });
+    // The hello verifies under the same key through the REAL verifier (sender and verifier agree).
+    expect(verifyProxyHello(Buffer.from(owner.sent[0] as string), false, KEY, createReplayCache())).toEqual({
+      ok: true,
+      userId: U,
+      workspaceId: W,
     });
+  });
+
+  test("two sends differ in nonce (fresh randomness per hello)", async () => {
+    const nonces: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const owner = new FakeWs();
+      await proxyClientToOwner({
+        clientWs: new FakeWs() as never,
+        ownerAddress: "10.0.1.12",
+        userId: U,
+        workspaceId: W,
+        dial: (() => owner) as never,
+      });
+      owner.emit("open");
+      nonces.push(JSON.parse(owner.sent[0] as string).nonce);
+    }
+    expect(nonces[0]).not.toBe(nonces[1]);
+  });
+
+  test.each([
+    ["absent", ""],
+    ["63 hex", "a".repeat(63)],
+    ["uppercase", "A".repeat(64)],
+  ])("hello key %s -> client closed ROUTING_UNAVAILABLE, never dials, one bounded no-hello-key event", async (_n, value) => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", value);
+    const client = new FakeWs();
+    const dial = vi.fn();
+    await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: dial as never });
+    expect(dial).not.toHaveBeenCalled();
+    expect(client.closed?.code).toBe(WS_CLOSE_CODES.ROUTING_UNAVAILABLE);
+    expect(mockReport.mock.calls.map((c) => c[1].op)).toEqual(["proxyClientToOwner.no-hello-key"]);
+    expect(JSON.stringify(mockReport.mock.calls)).not.toContain(value || "\u0000never");
+  });
+
+  test.each([
+    ["non-UUID userId", "user-42", W],
+    ["non-UUID workspaceId", U, "ws-9"],
+    ["uppercase userId", U.toUpperCase(), W],
+  ])("%s -> client closed, never dials, bounded bad-ids event", async (_n, uid, wid) => {
+    const client = new FakeWs();
+    const dial = vi.fn();
+    await proxyClientToOwner({ clientWs: client as never, ownerAddress: "10.0.1.12", userId: uid, workspaceId: wid, dial: dial as never });
+    expect(dial).not.toHaveBeenCalled();
+    expect(client.closed?.code).toBe(WS_CLOSE_CODES.ROUTING_UNAVAILABLE);
+    expect(mockReport.mock.calls.map((c) => c[1].op)).toEqual(["proxyClientToOwner.bad-ids"]);
+  });
+
+  test("a burst of 20 refused sends reports at most 5 events", async () => {
+    vi.stubEnv("PROXY_HELLO_HMAC_KEY", "");
+    for (let i = 0; i < 20; i++) {
+      await proxyClientToOwner({ clientWs: new FakeWs() as never, ownerAddress: "10.0.1.12", userId: U, workspaceId: W, dial: vi.fn() as never });
+    }
+    expect(mockReport.mock.calls.filter((c) => c[1].op === "proxyClientToOwner.no-hello-key")).toHaveLength(5);
   });
 
   test("after proxy_ready, forwards frames BOTH ways; forwards owner close code to the client", async () => {
@@ -121,8 +196,8 @@ describe("proxyClientToOwner", () => {
     await proxyClientToOwner({
       clientWs: client as never,
       ownerAddress: "10.0.1.12",
-      userId: "u",
-      workspaceId: "w",
+      userId: U,
+      workspaceId: W,
       dial: (() => owner) as never,
     });
     owner.emit("open");
@@ -149,8 +224,8 @@ describe("proxyClientToOwner", () => {
     await proxyClientToOwner({
       clientWs: client as never,
       ownerAddress: "10.0.1.12",
-      userId: "u",
-      workspaceId: "w",
+      userId: U,
+      workspaceId: W,
       dial: (() => owner) as never,
     });
     owner.emit("open");
@@ -165,8 +240,8 @@ describe("proxyClientToOwner", () => {
     await proxyClientToOwner({
       clientWs: client as never,
       ownerAddress: "10.0.1.12",
-      userId: "u",
-      workspaceId: "w",
+      userId: U,
+      workspaceId: W,
       dial: (() => owner) as never,
     });
     owner.emit("open");

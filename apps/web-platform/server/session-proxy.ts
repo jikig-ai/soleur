@@ -10,9 +10,10 @@
 //
 // Wire format on the private-net leg (JSON control frame, then a raw bidirectional
 // byte pipe):
-//   proxying host → owner : {type:"proxy_hello", userId, workspaceId}
-//   owner → proxying host : {type:"proxy_ready"}  (after AP-2 membership re-verify)
-//                         | close(ROUTING_UNAVAILABLE) (AP-2 denied / not member)
+//   proxying host → owner : {type:"proxy_hello", userId, workspaceId, ts, nonce, mac} — HMAC-signed
+//                           under PROXY_HELLO_HMAC_KEY (proxy-hello.ts; #12289, ADR-323)
+//   owner → proxying host : {type:"proxy_ready"}  (after size/shape/MAC/skew/replay AND AP-2 membership)
+//                         | close(ROUTING_UNAVAILABLE, "relay refused") (any refusal; one uniform reason)
 // After proxy_ready the two sockets are piped verbatim in BOTH directions,
 // including close frames + codes (a drain close from the owner reaches the client;
 // a client close tears down the owner leg) so grace-abort host-locality stays
@@ -29,7 +30,8 @@ import { WS_CLOSE_CODES } from "@/lib/types";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "./logger";
 import { reportSilentFallback } from "./observability";
-import { loadProxyTlsClientCa, loadProxyTlsServerOptions } from "./proxy-tls";
+import { getProxyHelloKeyState, loadProxyHelloKey, loadProxyTlsClientCa, loadProxyTlsServerOptions } from "./proxy-tls";
+import { createReplayCache, isCanonicalUuid, signProxyHello, verifyProxyHello } from "./proxy-hello";
 import { verifyProxiedSessionMembership } from "./session-router";
 import { recordProxyNotStarted, recordProxyServer } from "./proxy-listener-status";
 import { denyReporter } from "./proxy-deny-report";
@@ -40,15 +42,12 @@ const log = createChildLogger("session-proxy");
  *  public app port). The proxying host dials `wss://<ownerAddress>:<port>`. */
 export const PROXY_LISTEN_PORT = Number(process.env.SOLEUR_PROXY_PORT || 8443);
 
-export interface ProxyHello {
-  type: "proxy_hello";
-  userId: string;
-  workspaceId: string;
-}
-
 /** Authenticated context a proxied connection carries once AP-2 passes — the
  *  owner attaches a PRE-authenticated session from this (no token re-auth; the
  *  proxying host already authenticated, and AP-2 re-verifies membership). */
+/** The single close reason for every owner-side refusal after the upgrade (never says which check failed). */
+const RELAY_REFUSED = "relay refused";
+
 export interface ProxiedSessionContext {
   userId: string;
   workspaceId: string;
@@ -86,6 +85,21 @@ export async function proxyClientToOwner(params: {
     return;
   }
 
+  // The hello is signed with the dedicated hello key. Without a valid key, or with ids that are not
+  // canonical UUIDs, there is nothing the owner could accept: close the client (non-transiently, like the
+  // CA case) and never dial. Reported through the bounded reporter, no key detail in the event.
+  const helloKey = loadProxyHelloKey();
+  if (!helloKey) {
+    denyReporter.record("no_key");
+    safeClose(clientWs, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner unreachable");
+    return;
+  }
+  if (!isCanonicalUuid(userId) || !isCanonicalUuid(workspaceId)) {
+    denyReporter.record("bad_ids");
+    safeClose(clientWs, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner unreachable");
+    return;
+  }
+
   const url = `wss://${ownerAddress}:${port}/ws-proxy`;
   // Pinned CA + rejectUnauthorized TRUE — never disable verification.
   const owner = params.dial
@@ -100,7 +114,7 @@ export async function proxyClientToOwner(params: {
   };
 
   owner.on("open", () => {
-    owner.send(JSON.stringify({ type: "proxy_hello", userId, workspaceId } satisfies ProxyHello));
+    owner.send(signProxyHello(helloKey, userId, workspaceId));
   });
 
   owner.on("message", (data: unknown, isBinary?: boolean) => {
@@ -274,6 +288,21 @@ export function createProxyServer(params: {
     return null;
   }
 
+  // Hello-signing key (#12289). Placed AFTER the tls/bind/allowlist checks so `disabled`, `no_bind` and
+  // `no_allowlist` keep their meaning (a dev/CI box without TLS is `disabled`, never an error). With relay
+  // TLS enabled and no usable key the relay stays down and reports `error`: the deploy canary catches it on
+  // the first host, the app keeps serving. The event text is a constant: no value, length or state.
+  if (getProxyHelloKeyState() !== "ok") {
+    recordProxyNotStarted("error");
+    reportSilentFallback(
+      new Error("PROXY_HELLO_HMAC_KEY missing or malformed — refusing to start the owner proxy listener"),
+      { feature: "control_plane_route", op: "createProxyServer.no-hello-key" },
+    );
+    return null;
+  }
+  const helloKey = loadProxyHelloKey() as Buffer;
+  const replayCache = createReplayCache();
+
   const port = params.port ?? PROXY_LISTEN_PORT;
   // Everything that can throw synchronously on bad TLS material (an unparseable or
   // mismatched PEM throws ERR_OSSL_* out of https.createServer) is fenced: an unhandled
@@ -325,36 +354,33 @@ export function createProxyServer(params: {
     // denied peer while the pre-TLS listener is first).
     if (!isAllowedProxyPeer(req.socket.remoteAddress, peerAllowlist)) {
       denyReporter.record("peer", { peer: peerLabel(req.socket.remoteAddress) });
-      safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "not a routing peer");
+      safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
       return;
     }
-    // First frame MUST be proxy_hello; anything else → reject.
-    ws.once("message", async (data: unknown) => {
-      let hello: ProxyHello | null = null;
-      try {
-        const parsed = JSON.parse(String(data)) as ProxyHello;
-        if (parsed?.type === "proxy_hello" && typeof parsed.userId === "string" && typeof parsed.workspaceId === "string") {
-          hello = parsed;
-        }
-      } catch {
-        /* invalid */
-      }
-      if (!hello) {
-        safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "malformed proxy handshake");
+    // First frame MUST be a signed proxy_hello; anything else → reject. Check order (CTO ruling,
+    // ADR-323): allowlist (already passed pre-TLS) → 1 KiB cap → shape → MAC (constant time) → ts →
+    // replay → AP-2 membership. The replay check-and-insert is SYNCHRONOUS and runs before the `await`
+    // below, so two hellos with one nonce in the same tick cannot both pass. Every refusal closes with
+    // the same reason, so a peer learns nothing about which check failed.
+    ws.once("message", async (data: unknown, isBinary?: boolean) => {
+      const verdict = verifyProxyHello(data, Boolean(isBinary), helloKey, replayCache);
+      if (!verdict.ok) {
+        denyReporter.record(verdict.reason);
+        safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
         return;
       }
+      const { userId, workspaceId } = verdict;
       // AP-2: the OWNER re-verifies membership before serving a proxied session.
-      const ok = await verifyProxiedSessionMembership(hello.userId, hello.workspaceId, createServiceClient());
+      const ok = await verifyProxiedSessionMembership(userId, workspaceId, createServiceClient());
       if (!ok) {
-        reportSilentFallback(
-          new Error("proxied session failed AP-2 membership re-verify — cross-tenant/ stale route rejected"),
-          { feature: "control_plane_route", op: "createProxyServer.ap2-deny", extra: { userId: hello.userId, workspaceId: hello.workspaceId } },
-        );
-        safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "not authorized for this workspace");
+        // The pair is MAC-authenticated at this point, so it may ride the event (unauthenticated classes never do).
+        denyReporter.record("membership", { userId, workspaceId });
+        safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
         return;
       }
+      denyReporter.recordAccepted();
       ws.send(JSON.stringify({ type: "proxy_ready" }));
-      params.onProxiedSession(ws, { userId: hello.userId, workspaceId: hello.workspaceId });
+      params.onProxiedSession(ws, { userId, workspaceId });
     });
   });
 

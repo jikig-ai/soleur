@@ -24,7 +24,22 @@ const log = createChildLogger("proxy-deny-report");
 export const DENY_MAX_EVENTS = 5;
 export const DENY_WINDOW_MS = 60_000;
 
-export type DenyReason = "peer" | "size" | "shape" | "mac" | "skew" | "replay" | "full" | "membership" | "no_key";
+export type DenyReason =
+  | "peer"
+  | "size"
+  | "shape"
+  | "mac"
+  | "skew"
+  | "replay"
+  | "full"
+  | "membership"
+  // Sender-side (proxying host) refusals: the client is closed before any dial. They share the cap and
+  // the counter, but are NOT part of the owner's relay_hello_window line (that line counts hellos).
+  | "no_key"
+  | "bad_ids"
+  | "bad_port";
+
+const SENDER_SIDE: ReadonlySet<DenyReason> = new Set<DenyReason>(["no_key", "bad_ids", "bad_port"]);
 
 type Report = (err: unknown, opts: { feature: "control_plane_route"; op: string; message?: string; extra?: Record<string, unknown> }) => void;
 
@@ -45,6 +60,9 @@ interface Bucket {
 }
 
 function opFor(reason: DenyReason): string {
+  if (reason === "no_key") return "proxyClientToOwner.no-hello-key";
+  if (reason === "bad_ids") return "proxyClientToOwner.bad-ids";
+  if (reason === "bad_port") return "proxyClientToOwner.bad-port";
   if (reason === "peer") return "createProxyServer.peer-deny";
   if (reason === "membership") return "createProxyServer.ap2-deny";
   return "createProxyServer.hello-deny";
@@ -56,6 +74,12 @@ function messageFor(reason: DenyReason): string {
       return "proxy connection from a non-peer private IP — rejected before handshake";
     case "membership":
       return "proxied session failed AP-2 membership re-verify — cross-tenant/ stale route rejected";
+    case "no_key":
+      return "proxy hello key unavailable — client closed without dialing the owner";
+    case "bad_ids":
+      return "proxy hello ids are not canonical UUIDs — client closed without dialing the owner";
+    case "bad_port":
+      return "SOLEUR_PROXY_PORT is not a valid port — client closed without dialing the owner";
     default:
       return `proxy hello refused (${reason})`;
   }
@@ -75,6 +99,7 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
 
   const buckets = new Map<DenyReason, Bucket>();
   const lifetime = new Map<DenyReason, { denied: number; reported: number; suppressed: number }>();
+  let acceptedTotal = 0;
   let win: { start: number; accepted: number; denied: number; suppressed: number } | null = null;
 
   function flushBucket(reason: DenyReason, b: Bucket): void {
@@ -131,11 +156,11 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
     /** Count one refusal; mirror it to Sentry only while the per-reason cap allows. */
     record(reason: DenyReason, extra?: Record<string, unknown>): void {
       const b = bucketFor(reason);
-      const w = windowFor();
+      const w = SENDER_SIDE.has(reason) ? null : windowFor();
       const life = lifetime.get(reason) ?? { denied: 0, reported: 0, suppressed: 0 };
       lifetime.set(reason, life);
       b.denied++;
-      w.denied++;
+      if (w) w.denied++;
       life.denied++;
       if (b.reported < maxEvents) {
         b.reported++;
@@ -148,12 +173,16 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
         return;
       }
       b.suppressed++;
-      w.suppressed++;
+      if (w) w.suppressed++;
       life.suppressed++;
     },
     /** Count one hello that passed every check and was handed to the session attach. */
     recordAccepted(): void {
+      acceptedTotal++;
       windowFor().accepted++;
+    },
+    acceptedCount(): number {
+      return acceptedTotal;
     },
     counters(reason: DenyReason): { denied: number; reported: number; suppressed: number } {
       return { ...(lifetime.get(reason) ?? { denied: 0, reported: 0, suppressed: 0 }) };
@@ -161,6 +190,7 @@ export function createDenyReporter(opts: DenyReporterOptions = {}) {
     reset(): void {
       buckets.clear();
       lifetime.clear();
+      acceptedTotal = 0;
       win = null;
     },
   };

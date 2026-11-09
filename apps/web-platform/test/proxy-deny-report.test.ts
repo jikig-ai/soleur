@@ -128,6 +128,9 @@ describe("report shape", () => {
     ["skew", "createProxyServer.hello-deny"],
     ["replay", "createProxyServer.hello-deny"],
     ["full", "createProxyServer.hello-deny"],
+    ["no_key", "proxyClientToOwner.no-hello-key"],
+    ["bad_ids", "proxyClientToOwner.bad-ids"],
+    ["bad_port", "proxyClientToOwner.bad-port"],
   ];
   it.each(ops)("reason %s reports op %s with the reason enum in extra", (reason, op) => {
     const h = harness();
@@ -161,6 +164,16 @@ describe("relay_hello_window line", () => {
 
   it("emits nothing for a window with no accepted and no denied hellos", () => {
     const h = harness();
+    h.advance(DENY_WINDOW_MS + 1);
+    h.fireTimers();
+    expect(windowLines()).toEqual([]);
+  });
+
+  it("sender-side refusals are bounded like the rest but are not hello denies in the window line", () => {
+    const h = harness();
+    for (let i = 0; i < 9; i++) h.reporter.record("no_key");
+    expect(h.reports.filter((r) => r.opts.op === "proxyClientToOwner.no-hello-key")).toHaveLength(5);
+    expect(h.reporter.counters("no_key")).toEqual({ denied: 9, reported: 5, suppressed: 4 });
     h.advance(DENY_WINDOW_MS + 1);
     h.fireTimers();
     expect(windowLines()).toEqual([]);

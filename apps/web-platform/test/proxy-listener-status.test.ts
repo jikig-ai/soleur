@@ -94,6 +94,9 @@ beforeEach(() => {
   vi.stubEnv("PROXY_TLS_CERT", CERT);
   vi.stubEnv("SOLEUR_PROXY_PEER_ALLOWLIST", PEER);
   vi.stubEnv("SOLEUR_PROXY_BIND", "");
+  // #12289: the relay refuses to start without a hello key (the check sits after tls/bind/allowlist, so the
+  // disabled / no_bind / no_allowlist assertions below keep their meaning).
+  vi.stubEnv("PROXY_HELLO_HMAC_KEY", "a".repeat(64));
   __resetProxyListenerStatusForTests();
 });
 
