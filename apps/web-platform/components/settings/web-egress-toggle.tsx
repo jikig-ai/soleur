@@ -24,6 +24,14 @@ import { usePendingAction } from "@/hooks/use-pending-action";
  * toggle's member treatment — rather than hiding the card, so members can
  * see whether the workspace runs agents with open egress.
  */
+/**
+ * #12469: what stops working when Agent web access is on, and what replaces it. The sandbox carries no GitHub credentials in
+ * this mode, so the command-line `gh` is unavailable; the platform's read tools cover public repositories. Shown in the ON
+ * block and in the enable dialog, and mirrored on the Scope Grants page. Copy only: it asserts no gate and no write capability.
+ */
+export const GH_DISCLOSURE =
+  "While this is on, the command-line gh tool is unavailable to agents. For public repositories, agents still read your issues, pull requests, and CI status through Soleur, but can't create or edit them; private repositories can't be read.";
+
 const RECORDING_NOTICE =
   "Hosts your agents contact are recorded as best-effort summary counts: the host, whether the request was allowed, blocked or ended another way, and the number of requests. Every current member of this workspace can view them, including activity from before they joined. No member or session is recorded, some entries may be missing, and counts are minimums. Records are deleted about 30 days after they were recorded. Turning web access off stops new records but does not delete existing ones.";
 // "unknown" = any case where the loader could not determine it (Flagsmith outage, failed org lookup,
@@ -120,7 +128,8 @@ export function WebEgressToggle({
               On. Sandboxed commands run without stored credentials — agents
               can't push to git remotes or use stored API keys while this is
               on. Applies to sessions started after enabling; turning off
-              revokes live access on the session's next dispatch.
+              revokes live access on the session's next dispatch.{" "}
+              {GH_DISCLOSURE}
             </span>
           )}
           {/* The wireframe's "Widens the security boundary" risk callout is
@@ -188,7 +197,8 @@ export function WebEgressToggle({
             Agents will reach the public internet over HTTPS and could send
             data to external hosts if compromised or prompt-injected.
             Sandboxed commands run without stored credentials while this is
-            on — agents can't push to git remotes or use stored API keys.
+            on — agents can't push to git remotes or use stored API keys.{" "}
+            {GH_DISCLOSURE}
           </p>
           {collection === true && (
             <p className="text-xs text-soleur-text-secondary">

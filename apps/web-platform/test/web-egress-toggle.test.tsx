@@ -177,3 +177,43 @@ describe("WebEgressToggle — enable dialog copy", () => {
     expect(text).not.toMatch(/recorded/i);
   });
 });
+
+// #12469 T10 — the toggle must tell the owner what stops working (the command-line `gh`) and what replaces it, in the SAME
+// release that ships the replacement. Independent literal from the CPO ruling (decision-challenges.md), deliberately NOT
+// imported from the component, so a copy edit cannot pass by echo.
+const GH_DISCLOSURE =
+  "While this is on, the command-line gh tool is unavailable to agents. For public repositories, agents still read your issues, pull requests, and CI status through Soleur, but can't create or edit them; private repositories can't be read.";
+const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+
+describe("WebEgressToggle — gh disclosure (#12469)", () => {
+  it("shows the gh-unavailable sentence exactly once in the ON block and once in the enable dialog (twice per owner flow)", () => {
+    const { container, rerender } = card({ initialWebEgress: true });
+    const onText = norm(container.textContent ?? "");
+    expect(onText.split(norm(GH_DISCLOSURE)).length - 1).toBe(1);
+    rerender(<WebEgressToggle initialWebEgress={false} isOwner lastRequestAt={null} collection={false} />);
+    fireEvent.click(screen.getByRole("switch"));
+    const dialogText = norm(document.body.textContent ?? "");
+    expect(dialogText.split(norm(GH_DISCLOSURE)).length - 1).toBe(1);
+  });
+
+  it("the disclosure names `gh`, public repositories, and that private repositories can't be read", () => {
+    expect(GH_DISCLOSURE).toMatch(/gh tool is unavailable/);
+    expect(GH_DISCLOSURE).toMatch(/public repositories/);
+    expect(GH_DISCLOSURE).toMatch(/private repositories can't be read/);
+  });
+
+  it("does not claim a write capability or a scope-grant gate", () => {
+    const { container } = card({ initialWebEgress: true });
+    expect(container.textContent ?? "").not.toMatch(/scope.grant gate|can create|can edit/i);
+  });
+});
+
+describe("gh disclosure: the Scope Grants page carries the identical string (#12469, CPO condition)", () => {
+  it("the page paragraph, with JSX entities decoded and whitespace collapsed, contains the exact toggle sentence", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const page = readFileSync(resolve(__dirname, "../app/(dashboard)/dashboard/settings/scope-grants/page.tsx"), "utf8");
+    const text = page.replace(/&apos;/g, "'").replace(/\s+/g, " ");
+    expect(text).toContain(norm(GH_DISCLOSURE));
+  });
+});
