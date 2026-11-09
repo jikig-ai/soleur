@@ -71,6 +71,13 @@ one-command falsifier; none was run when the sentence was written.
 7. **Collision pre-check exited 10** because other worktrees were running `test-all.sh`. Reported and continued; the
    hits were other issues' runs, not a duplicate of this work. **Prevention:** none needed (the hook's message was
    accurate); the one-line report is the contract.
+8. **CI went red on a coverage table my file-selected run could not see.** `plugins/soleur/test/real-sdk-ask-probe-workflow.test.sh`
+   requires every DIRECT import of `permission-callback.ts` to be a row in its classification table; the new
+   `git-carrier-guard.ts` was an unclassified import, so the `test` aggregate failed on one scripts shard after the first
+   push. The suite references `permission-callback.ts`, not the new file, so a selection keyed on changed files missed it.
+   Recovery: one EXCLUDED row (file-tool guard, not the Bash lane), suite 307/307. **Prevention:** when a diff adds an
+   import to a file named in a coverage or allowlist table, grep the plugin and scripts suites for the IMPORTING file
+   (`git grep -l "server/<importer>" -- plugins scripts`) and run those, not only the suites that name the new file.
 
 ## Tags
 category: security-issues
