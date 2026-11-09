@@ -27,3 +27,4 @@ soleur:plan, soleur:plan-review, soleur:deepen-plan, soleur:engineering:cto, sol
 - constraint: Review panel includes security-sentinel and test-design-reviewer at minimum.
 - constraint: Stop with the PR ready and end with a Paused sentence naming the merge for the owner.
 - constraint: Do not start PR B.
+- ci-is-the-gate: Rely on CI instead of the local affected battery, the machine is saturated and the browser crashed during a call.
