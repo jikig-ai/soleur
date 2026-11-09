@@ -140,7 +140,7 @@ expect() {
 }
 
 build_fx "$TMP/s1" 25 40;           expect "PASS: 25 runs at 40 runner-min (realized ~49.3 suite-min clears the 20-min bar), a skipped job is not counted" 0 "PASS" "$TMP/s1"
-if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the classifier's third read is red-only"; else pass "a green push run issues no jobs read (the need_min 2-read bound holds)"; fi
+if grep -q 'runs/500[0-9]*/jobs' "$TMP/s1/requests.log"; then fail "a green push run issued a jobs read — the jobs read is red-run-only"; else pass "a green push run issues no jobs read (the need_min listing bound holds)"; fi
 build_fx "$TMP/s2" 25 70 0 0 "" lite; expect "FAIL: realized saving 0.24 suite-min is under the 20-min bar" 1 "FAIL: mean realized saving" "$TMP/s2"
 build_fx "$TMP/s3" 25 40 0 0 110;   expect "FAIL: a green PR whose merge-commit push run is red is an escape" 1 "ESCAPE: PR 110" "$TMP/s3"
 build_fx "$TMP/s4" 5 40;            expect "NOT YET: 5 qualifying runs (< 20)" 2 "NOT YET" "$TMP/s4"
