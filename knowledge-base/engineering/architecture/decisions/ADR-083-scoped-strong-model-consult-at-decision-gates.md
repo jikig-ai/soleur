@@ -7,7 +7,7 @@
 
 ## Context
 
-> **Superseded 2026-11-09:** Fable 5.2 lists at $8/$40 per MTok; see the Fable 5.2 addendum below and the 2026-11-09 addendum in [ADR-053](ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md).
+> **Superseded 2026-11-09:** the "$10/$50 per MTok — 2× Opus 4.8" below is the Fable 5 basis this decision was made on. Fable 5.2 lists at $8/$40, 2× Opus 5.5 ($4/$20); see the Fable 5.2 addendum below and the 2026-11-09 addendum in [ADR-053](ADR-053-per-call-model-tiering-for-workflow-subagent-spawns.md).
 
 Fable 5 prices at $10/$50 per MTok — 2× Opus 4.8 (per ADR-053). Two ways to get Fable-grade judgment at a task's decision points:
 
@@ -83,10 +83,10 @@ this addendum records what the launch article offered and was **not** adopted, s
 |---|---|---|
 | Advisor role | Unchanged | Already this ADR: the two gates (`plan` Step 4.5, `ship` Phase 5.5) stay the only Fable sites. |
 | Orchestrator role | Not adopted | Would add Fable sites beyond the gate admission rule above. |
-| Fast mode ($16/$80, up to 2.5× faster) | Not adopted | Doubles the per-token price; a spend increase is an operator authorization, not a launch-day edit. |
+| Fast mode (vendor-stated up to 2.5× faster; price in the ADR-053 addendum) | Not adopted | Doubles the per-token price; a spend increase is an operator authorization, not a launch-day edit. |
 | Preserved thinking (all accounts) | Not adopted | No Soleur consumer reads a prior thinking block. |
-| `AUDIT_EFFORT` / effort default | No change | `AUDIT_EFFORT` governs the Sonnet/Haiku audit tier. Fable 5.2's Medium default in Claude Code is noted, not measured here. |
-| Mythos 5.2 | Not usable | No public API id; vetted-organization access only. |
+| `AUDIT_EFFORT` / effort default | No change | `AUDIT_EFFORT` pins effort for the Opus 5.5 audit tier (`AUDIT_MODEL`). The article states a Medium default for Fable 5.2 in Claude Code; that is vendor-stated and not checked against the pinned CLI's model table. |
+| Mythos 5.2 | Not usable | No public API id; vetted-organization access only (vendor-stated). |
 
 The `fable` alias is version-agnostic, but whether it resolves to 5.2 on the pinned CLI 2.1.311 is unverified and
 tracked in #12514. Nothing in this addendum claims 5.2 is in effect for the consult gates.

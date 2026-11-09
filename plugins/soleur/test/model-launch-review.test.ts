@@ -16,7 +16,7 @@ const SKILL_DIR = resolve(REPO_ROOT, "plugins/soleur/skills/model-launch-review"
 const SKILL_MD = resolve(SKILL_DIR, "SKILL.md");
 const AUDIT_SH = resolve(SKILL_DIR, "scripts/audit-models.sh");
 
-// Current model landscape (2026-10). The auditor flags anything NOT in this set
+// Current model landscape (2026-11). The auditor flags anything NOT in this set
 // that lives in a config-class path. Source of truth: claude-api skill table +
 // https://platform.claude.com/docs/en/about-claude/models/overview.md.
 // `claude-fable-5` moved OUT of this set at the Fable 5.1 launch and
@@ -38,7 +38,9 @@ function parseAutofixPairs(): Array<[string, string]> {
   const src = readFileSync(AUDIT_SH, "utf8");
   const block = src.match(/AUTOFIX_PAIRS=\(([\s\S]*?)\)/);
   if (!block) throw new Error("AUTOFIX_PAIRS block not found in audit-models.sh");
-  return [...block[1].matchAll(/"([^"=]+)=([^"]+)"/g)].map(
+  // Comment lines are not pairs: a commented-out pair must not parse as live.
+  const body = block[1].replace(/^[ \t]*#.*$/gm, "");
+  return [...body.matchAll(/"([^"=]+)=([^"]+)"/g)].map(
     (m) => [m[1], m[2]] as [string, string],
   );
 }
@@ -447,7 +449,7 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
     // boundary, dropping the backreference, and skewing the boundary charset
     // away from selection's — each left the suite 17/17 green while corrupting
     // real source (`claude-opus-4-7-20260101` -> `claude-opus-5-5-20260101`,
-    // `claude-fable-5-2` -> `claude-fable-5-2-1`, and an eaten closing quote
+    // `claude-fable-5-2` -> `claude-fable-5-2-2`, and an eaten closing quote
     // that makes the file stop parsing). One fixture reds all three.
     const root = mkdtempSync(join(tmpdir(), "mlr-sed-anchor-"));
     const dir = join(root, "apps/web-platform/server/inngest/functions");
@@ -464,7 +466,8 @@ describe("model-launch-review multi-tier auto-fix (Sonnet 5 launch)", () => {
 
     // Byte-exact: only the bare stale id moves. The dated variant is a DIFFERENT
     // model and must not be silently re-pointed; the current fable id must not
-    // grow a second `-1`, and a stale `-5-1` lands on exactly `-5-2`; the quoting must survive intact.
+    // grow a second suffix, a stale `-5-1` lands on exactly `-5-2`, and the quoting
+    // must survive intact.
     expect(readFileSync(file, "utf8")).toBe(
       `export const STALE = "claude-opus-5-5";\n` +
         `export const DATED = "claude-opus-4-7-20260101";\n` +

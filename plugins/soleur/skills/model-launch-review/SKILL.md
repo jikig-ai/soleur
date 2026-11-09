@@ -76,8 +76,11 @@ Only item 1 is applied by `--fix`. Items 2–7 are reported in the PR body for a
    intermediate id, which `--detect` then re-flags forever — a permanently-red drift cron
    auto-filing issues it cannot fix. `assert_single_hop` enforces this (exit 78) and
    `model-launch-review.test.ts` pins it, so a chained table fails fast rather than silently.
-   A new or retargeted pair also touches that test file in five places: `CURRENT_IDS`, the `SUPERSEDED`
-   map, the synthetic-prefix source string, the sed-anchor fixture and the pair-count floor.
+   A new or retargeted pair also touches that test file in six places: `CURRENT_IDS`, the `SUPERSEDED`
+   map, the synthetic-prefix source string, the id named in the prefix test's floor message, the sed-anchor
+   fixture and the pair-count floor. For a Fable pair, do not merge a `--fix` until the pinned CLI bundle
+   contains the new id (`grep -a` the unpacked platform package): `[2b]` probes only ids that appear as
+   literals in `model-tiers.ts` and `constants.ts`, and no Fable literal does today (#12514).
 
    Then verify item 2b: the new ID must appear in the **pinned** `@anthropic-ai/claude-code`
    bundle (`[2b]` in the audit output). If it reports DRIFT, in ONE PR: (1) bump the pin in
@@ -189,7 +192,7 @@ change" trigger never fired when Fable 5 shipped. The cron files an issue, never
   changing nothing (the sed's boundary correctly declines), and `--detect` re-flags it forever —
   a permanently-red drift cron auto-filing issues it cannot fix, with no fable involved. So the
   invariant is the general one, and dated ids were its standing violation.
-  `claude-fable-5` → `claude-fable-5-1` (retargeted to `claude-fable-5-2` at the 5.2 launch) is what made it *unavoidable*: it is the first pair whose
+  `claude-fable-5` → `claude-fable-5-1` is what made it *unavoidable* (that pair was retargeted to `claude-fable-5-2` at the 5.2 launch, 2026-11-09): it is the first pair whose
   stale id is a strict PREFIX of its own target, so the mismatch fires on the id that is CURRENT
   rather than only on a longer variant nobody had written yet. `assert_single_hop` catches
   neither shape (the target is not itself a source id). Both halves now derive from `ID_BOUNDARY`

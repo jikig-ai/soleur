@@ -12,6 +12,8 @@ superseded 2026-09-03 — see the Fable 5.1 re-tier review below. Sonnet 5 bills
 Fable-vs-Sonnet multiple is now 5×, not 3.3×. The ratios in this paragraph are retained as the
 basis the original decision was made on, not as current pricing.)** All 66 plugin agents use `model: inherit` and no workflow script passed `opts.model`, so a Fable 5 session ran every mechanical subagent step (diff classification, GitHub-issue filing, comment fetching, commit-message generation, report assembly) at top-tier rates. Anthropic's agent-design guidance endorses cheaper-model subagents for sub-tasks, and the web platform already tiers in production (Sonnet crons, Haiku routing, deliberate sonnet→opus upgrades for scoring workloads).
 
+> **Superseded 2026-11-09 (Fable 5.2 launch):** the "5×" Fable-vs-Sonnet multiple above compares Fable 5.1 with Sonnet 5; Fable 5.2 ($8/$40) against Sonnet 5.5 ($2/$10) is 4×. See the 2026-11-09 addendum at the end.
+
 ## Decision
 
 1. **Frontmatter stays `inherit` for all agents** (operator session-model agency preserved; overrides still need written justification).
@@ -474,10 +476,8 @@ inherited from the tables above. $/MTok, Anthropic list price:
 
 Fast mode for Fable 5.2 lists at $16 input / $80 output.
 
-Multiples against Fable 5.2, derived from those rows: Opus 5.5 is 2× cheaper on input and output with an equal
-cache-read rate; Sonnet 5.5 is 4× cheaper on input and output and 2× on cache read; Haiku 5.5 is 80× cheaper on
-the short-prompt card. The 5.1 → 5.2 delta that matters for this workload is the cache-read line: this ADR
-measured Task spawns as cache-read dominated (section above), and that rate moved $0.25 → $0.20.
+The 5.1 → 5.2 delta that matters for this workload is the cache-read line: this ADR measured Task spawns as
+cache-read dominated (section above), and that rate moved $0.25 → $0.20 (Opus 5.5: $0.20; Sonnet 5.5: $0.10).
 
 `MODEL_PRICING` (`agent-on-spawn-requested.ts`) is untouched: it is a billing constant, and no Fable id appears
 under `apps/web-platform/server/` (`git grep -inwE 'fable|claude-fable[-0-9a-z]*' -- 'apps/web-platform/server/**/*.ts'`
