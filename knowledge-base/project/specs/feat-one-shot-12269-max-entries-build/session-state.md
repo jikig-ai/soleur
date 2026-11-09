@@ -90,3 +90,4 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - NEXT: read seat outputs -> resolve any new findings -> `## Review Phase Complete` (pipeline mode marker only, no compound/ship inline) -> wait — review skill standalone handoff says one-shot parent owns pipeline: emit Review Phase Complete, then Step 5 resolve findings, 5.5 QA, 6 compound, 7 ship, 8 DONE.
 - Post-merge (3B.5): apply-github-infra.yml verify; directive on #12269 earliest=<merge>+21d secrets=GH_TOKEN; file F3 follow-up issue (enqueuedAt promotion false-positive).
 - Backlog after: #9323, #11556. NEVER dispatch #9729 (sibling live).
+- F3 follow-up issue filed: #12507 (enqueuedAt promotion false-positive under build=1).
