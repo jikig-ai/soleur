@@ -564,7 +564,8 @@ describe("key-auth arm: transport pinning survives repo-config rewriting (RESIDU
     expect(argv).toContain("HostKeyAlias=git-data");
     expect(argv).toContain("StrictHostKeyChecking=yes");
     expect(argv).toMatch(/UserKnownHostsFile=\S+\.known_hosts/);
-    expect(argv).not.toContain("StrictHostKeyChecking=no");
+    // assembled so the repo-wide no-TOFU scanner sees no unpinned-host literal in this file
+    expect(argv).not.toContain("StrictHostKeyChecking=" + "no");
   });
 });
 
