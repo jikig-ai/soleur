@@ -21,4 +21,4 @@ Plan: `knowledge-base/project/plans/2026-11-09-fix-oracle-bot-author-regex-plan.
 ## Phase 4 — ship (AC4)
 
 - [x] 4.1 PR body: `Closes #12509`, `Ref #12329`, `Ref #9927`, `Ref #12489` (live victim).
-- [ ] 4.2 Ready + green checks; do NOT merge unilaterally — `oracle_diff=1` requires a bound owner review (`verdict=fail reason=review-required` until a `deruelle` APPROVED review bound to head SHA lands). Report the owner-review requirement.
+- [x] 4.2 Ready + green checks; do NOT merge unilaterally — `oracle_diff=1` requires a bound owner review (`verdict=fail reason=review-required` until a `deruelle` APPROVED review bound to head SHA lands). Report the owner-review requirement.

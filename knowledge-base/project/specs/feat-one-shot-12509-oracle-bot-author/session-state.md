@@ -23,3 +23,6 @@ soleur:one-shot Steps 0–2 (workspace gate, collision checks, worktree, draft P
 ## Ship Phase
 - PR #12511: body written, lint PASS, semver:patch applied, marked ready. Pushed through 27393e1c54.
 - Owner-review note: oracle-review-required resolves via author arm (PR author = deruelle = REQUIRED_REVIEWER); the base-side driver re-execs the PRE-FIX copy but deruelle matches either regex. Merge NOT executed per pipeline instruction.
+- CI outcome (head 6ae787df91): all 14 required checks PASS incl. test aggregate, e2e, affected-index-ratchet, quality-guards, oracle-review-required (22s, author arm). 29 pass / 7 skip / 0 fail overall.
+- Pipeline end state: PR ready + green + review findings resolved. Merge left to the operator per the run brief (oracle-surface PRs are owner-territory even though the author arm satisfied the check).
+- NOTE: this bookkeeping commit is intentionally UNPUSHED — pushing it would restart the ~40-min battery for a docs-only delta and degrade the green head the operator merges. Push it only if the final spec record should travel with the merge.
