@@ -1186,3 +1186,9 @@ The #12269 measured experiment's 28-day decision gate (SINCE=2026-10-12T16:09:07
 **Hazards recorded:** (a) serialized drain — one `merge_group` build in flight at a time; the `test` merge_group p50 (~49m before-window floor) is the soak metric, watched by `scripts/followthroughs/mq-lever-e-verdict-12269.sh` (exit 5 = revert warranted, filed on #12269 with `earliest=<merge>+21d`); (b) stall-probe coverage narrows to `position <= 1` — deeper queued entries pending past 45 min are expected under serialization and no longer reported as stalls.
 
 **Revert recipe:** one PR restoring `2` on the same four surfaces; `apply-github-infra.yml` auto-applies on merge.
+
+**Attribution sample (review pass).** Three sampled cancelled runs (42292851112, 42285771527, 42330322542) had all 42–44 jobs started and ran ~44–50 min before cancellation — in-flight builds discarded by group reformation (repeated same-PR queue refs on 2026-11-06). The flip removes second-build speculation but NOT head-build reformation churn; net benefit is what the soak measures.
+
+**Known hazard — promotion false-positive.** Under `position <= 1` a depth-≥2 entry promotes to head already past the 45-min enqueuedAt threshold during congestion, filing a SUSPECTED stall at the start of its own legitimate build. Filings dedupe per PR and self-close on merge via the drain step; the fix (age from the correlated `merge_group` run's `createdAt` when `headCommit.oid` is non-null) is tracked as a follow-up issue.
+
+**Probe rework (review pass).** The soak probe was reworked after the design-validity pass: inputs are derived in-probe (tracker via the watch's own find-or-file; flip timestamp via `git log -S` pickaxe — `SOLEUR_FT_*` env is a reserved sweeper prefix and `secrets=` forwards names not values), the tracker parse reads the real 8-column seconds schema, and `Report refreshed:` is the postdate carrier (the body has no per-row window column).

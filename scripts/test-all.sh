@@ -6268,6 +6268,12 @@ if want_scripts; then
   # PASS — before the first post-secret publish lands, or on an unmeasured Sentry read — must
   # redden CI.
   run_suite "scripts/followthroughs/discord-blog-webhook-fallback" bash scripts/followthroughs/discord-blog-webhook-fallback.test.sh
+  # #12269 (lever E): exit-code harness for the merge-queue max_entries_to_build soak probe —
+  # both tf-value arms, the real 8-col wallclock tracker schema (seconds), the Report-refreshed
+  # postdate check, and the churn signal. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
+  # vacuous PASS must redden CI.
+  run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
   # #10548: exit-code harness for the SDK Bash smoke promotion soak (5 greens over 3 days with full coverage). Registered EXPLICITLY
   # (scripts/followthroughs/*.test.sh is not in SUITE_GLOBS). A vacuous PASS (replay_only coverage, a held counter under an infra
   # error, 4 greens) would close the promotion tracker on a smoke that proved nothing, so it must redden CI.

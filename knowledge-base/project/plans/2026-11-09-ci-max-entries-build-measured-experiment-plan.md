@@ -125,7 +125,7 @@ A two-branch measured experiment honoring the issue's method exactly:
 - Cancelled `merge_group` `ci.yml` runs: **27** (threshold >= 2) — clustered 2026-11-06/07 (19+3) during the congestion episode; the waste premise materialized at burst traffic even though the earlier 12h window measured 0. **Signal 1 fired.**
 - merge_group `ci.yml` run totals over the window (capped listing): 500 runs — 389 success / 86 failure / 24 cancelled / 1 in_progress.
 - Demand share (signal 2, OR'd): not needed for the verdict — measured sample census produced no parseable output; recorded as unmeasured-context, not a trigger either way.
-- `test` merge_group p50/p90 tracker row: context-only, never a trigger; before-window floor recorded as 49m in `SOLEUR_FT_P50_FLOOR` for the soak probe.
+- `test` merge_group p50/p90 tracker row: context-only, never a trigger; before-window floor recorded as 49m (`SOLEUR_FT_P50_FLOOR` default) for the soak probe — the row is the REAL 8-column schema in seconds (see `scripts/watch-wallclock-p90-11774.sh` emitter).
 - Merged PRs in window: >=500 (listing capped; drain context only).
 
 Branch taken: **3B — FLIP** (`max_entries_to_build` 2 -> 1 on all four surfaces; soak verdict on #12269 via `scripts/followthroughs/mq-lever-e-verdict-12269.sh` with `earliest=<merge>+21d`).
