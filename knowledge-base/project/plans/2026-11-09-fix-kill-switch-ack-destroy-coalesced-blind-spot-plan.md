@@ -382,7 +382,7 @@ variable (`ALL_MSGS`) built once and consumed by both `deploy_policy_gate` and t
 |---|----------|----------|
 | 1 | Revert the ack test to `[[ "$HEAD_MSG" =~ ... ]]` — the `_ack_line`/T66c pin sees a HEAD_MSG-keyed read | RED |
 | 2 | Drop `more_msgs` from the `ALL_MSGS` concat (gate input silently narrows to tip-only; deploy-policy loses its own feed) | RED |
-| 3 | Delete the `!= "null"` guard — a literal `null` line lands in the message window on every dispatch; the pin asserts the guard line's presence | RED |
+| 3 | Delete the `!= "null"` guard — only a real push whose sole non-tip message is literally `null` is affected (`jq join` on `null` errors, not emits `"null"`); T66h's concat pin + the `:-null` arm cover the dispatch shape | RED |
 | 4 | Harness: buried-ack shape pin (T66c) — a workflow whose ack regex reads any HEAD_MSG-only var | RED |
 | 5 | Harness must-PASS: `EVENT_MSGS_JSON=null` (dispatch shape) → concat adds nothing, ack verdict identical to today (shape preserved by the T66f executed sibling) | PASS |
 

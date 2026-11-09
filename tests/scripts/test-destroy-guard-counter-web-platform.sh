@@ -2196,44 +2196,50 @@ t66_coalesced_gate_feeds() {
     && _report "T66c: the [ack-destroy] test reads ALL_MSGS" ok \
     || _report "T66c: the [ack-destroy] test reads ALL_MSGS" FAIL \
        "no ALL_MSGS-reads-ack-token line in comment-stripped apply block"
+  grep -qF 'EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}' <<<"$blk" \
+    && grep -qF 'jq -r '"'"'join("\n")'"'"'' <<<"$blk" \
+    && _report "T66h: the apply step carries the EVENT_MSGS_JSON feed + concat" ok \
+    || _report "T66h: the apply step carries the EVENT_MSGS_JSON feed + concat" FAIL \
+       "apply block lost the feed env or the jq concat — consumer name alone reverts to tip-only"
 }
 
 t66_executed_kill_switch_span() {
-  local run_body out
+  local run_body out log rc
   run_body="$(_t66_kill_switch_run)"
   out="$(mktemp -t t66-goutput.XXXXXX)"
+  log="$(mktemp -t t66-runlog.XXXXXX)"
 
-  : > "$out"
+  : > "$out"; rc=0
   HEAD_MSG='chore: tip' \
     EVENT_MSGS_JSON='["feat: infra\n\n[skip-web-platform-apply]"]' \
-    GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
-  grep -qF 'skip=true' "$out" \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=true' "$out" \
     && _report "T66d executed: a line-anchored token buried in event.commits arms the kill-switch" ok \
     || _report "T66d executed: a line-anchored token buried in event.commits arms the kill-switch" FAIL \
-       "GITHUB_OUTPUT: $(cat "$out")"
+       "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
 
-  : > "$out"
+  : > "$out"; rc=0
   HEAD_MSG='chore: tip' \
     EVENT_MSGS_JSON='["feat: see [skip-web-platform-apply] note"]' \
-    GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
-  grep -qF 'skip=false' "$out" \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=false' "$out" \
     && _report "T66e executed: a mid-line token does not arm (anchor preserved through the concat)" ok \
-    || _report "T66e executed: a mid-line token does not arm" FAIL "GITHUB_OUTPUT: $(cat "$out")"
+    || _report "T66e executed: a mid-line token does not arm" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
 
-  : > "$out"
-  HEAD_MSG='chore: tip' GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
-  grep -qF 'skip=false' "$out" \
+  : > "$out"; rc=0
+  HEAD_MSG='chore: tip' GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=false' "$out" \
     && _report "T66f executed: EVENT_MSGS_JSON absent (dispatch shape) degrades to tip-only" ok \
-    || _report "T66f executed: EVENT_MSGS_JSON absent degrades to tip-only" FAIL "GITHUB_OUTPUT: $(cat "$out")"
+    || _report "T66f executed: EVENT_MSGS_JSON absent degrades to tip-only" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
 
-  : > "$out"
+  : > "$out"; rc=0
   HEAD_MSG=$'chore\n\n[skip-web-platform-apply]' \
-    GITHUB_OUTPUT="$out" bash -e -c "$run_body" 2>/dev/null
-  grep -qF 'skip=true' "$out" \
+    GITHUB_OUTPUT="$out" bash -e -c "$run_body" >"$log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] && grep -qF 'skip=true' "$out" \
     && _report "T66g executed: a tip-carried token still arms (baseline preserved)" ok \
-    || _report "T66g executed: a tip-carried token still arms" FAIL "GITHUB_OUTPUT: $(cat "$out")"
+    || _report "T66g executed: a tip-carried token still arms" FAIL "rc=$rc GITHUB_OUTPUT: $(cat "$out") log: $(cat "$log")"
 
-  rm -f "$out"
+  rm -f "$out" "$log"
 }
 
 t66_coalesced_gate_feeds
@@ -2264,15 +2270,16 @@ _ran=$((pass + fail))
 # T64n create scope plus the must-HALT harness row, T64o x 1 create-list removal mutant) = 107, + 4 inngest create-arm rows (#9879: T60l, T60m, T60n, and the second
 # T64o create-list removal mutant for random_password.inngest_redis_luks; T60d flipped, not added) = 111, + 2 proxy-TLS flip rows (#12167, T47b flip CREATEs are not a retirement,
 # T47c roster-change cert replace is ackable) = 113, + 8 origin-TLS rollback replay rows (ADR-321 item 10: T65 x 5 toggles, 2 cleanup, 1 hazard) = 121, + 7 coalesced-feed rows (#12403:
-# T66a-c feed pins + T66d-g executed kill-switch span) = 128. Exact, not a
-# ceiling: deleting a single arm invocation reports "only 127 assertions ran, floor is 128". The floor sits at the
+# T66a-c feed pins + T66d-g executed kill-switch span) = 128, + 1 apply-step feed pin (T66h, review fix-round:
+# the consumer name alone does not pin the feed) = 129. Exact, not a
+# ceiling: deleting a single arm invocation reports "only 128 assertions ran, floor is 129". The floor sits at the
 # current count rather than leaving slack: the review panel showed 3 assertions of headroom absorbed a deleted arm
 # silently, and slack in an anti-vacuity floor is attack budget, not padding. Re-derive with a green run when adding rows.
-if [[ "$_ran" -lt 128 ]]; then
+if [[ "$_ran" -lt 129 ]]; then
   fail=$((fail + 1))
-  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 128. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
+  printf '  FAIL ANTI-VACUITY: only %s assertions ran, floor is 129. Arms were deleted, skipped, or the suite exited early.\n' "$_ran"
 else
-  printf '  ok   anti-vacuity floor: %s assertions ran (floor 128)\n' "$_ran"
+  printf '  ok   anti-vacuity floor: %s assertions ran (floor 129)\n' "$_ran"
 fi
 
 echo "=== $pass passed, $fail failed ==="

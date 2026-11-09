@@ -250,9 +250,9 @@ jobs:
           HEAD_MSG: ${{ github.event.head_commit.message }}
           EVENT_MSGS_JSON: ${{ toJSON(github.event.commits.*.message) }}
         # Anchor `[skip-web-platform-apply]` to its own line so it cannot
-        # fire from a quoted block, code fence, or trailer that happens
-        # to carry the literal substring. Symmetric posture with the
-        # `[ack-destroy]` gate in the apply job. Reads all push commits.
+        # fire mid-line or from a `>`-quoted line or trailer carrying the
+        # substring. A bare token line inside a code fence DOES fire — the
+        # carrier is the whole message. Symmetric with `[ack-destroy]`.
         run: |
           set -euo pipefail
           ALL_MSGS="$HEAD_MSG"
@@ -869,6 +869,7 @@ jobs:
           source "${GITHUB_WORKSPACE}/tests/scripts/lib/deploy-policy-gate.sh"
           # The ack can sit below the tip when the merge queue coalesces: the
           # squash that changed the policy is in event.commits, not head_commit.
+          # ALL_MSGS feeds deploy_policy_gate and the [ack-destroy] test below.
           ALL_MSGS="$HEAD_MSG"
           more_msgs="$(jq -r 'join("\n")' <<<"${EVENT_MSGS_JSON:-null}" 2>/dev/null || true)"
           [[ -n "$more_msgs" && "$more_msgs" != "null" ]] && ALL_MSGS="${ALL_MSGS}"$'\n'"${more_msgs}"
@@ -876,8 +877,8 @@ jobs:
           destroy_count=$((resource_deletes + nested_deletes + reboot_updates))
           # Anchor `[ack-destroy]` to its own line (start-of-string OR
           # preceded by newline; followed by newline OR end-of-string) so
-          # the token cannot fire from a quoted block, code fence, or
-          # `Co-Authored-By:` trailer carrying that literal substring.
+          # it cannot fire mid-line or from a `>`-quoted line or trailer.
+          # A bare token line inside a code fence DOES fire.
           ack_destroy=false
           if [[ "$ALL_MSGS" =~ (^|$'\n')\[ack-destroy\]($|$'\n') ]]; then
             ack_destroy=true
