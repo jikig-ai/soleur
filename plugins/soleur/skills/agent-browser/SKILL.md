@@ -673,6 +673,7 @@ sink, so do not suggest it):
   `chromium` is accepted and maps to the bundled browser. A registration
   without the flag (a customer's own) still needs real Chrome or an explicit
   `--browser chromium`.
+- **On Node 26 the browser install can stall** (0% CPU after the download reaches 100%, extractor stops mid-file): run the same pinned install under Bun, `bunx --bun @playwright/mcp@0.0.78 install-browser chromium`.
 - **`Chromium sandboxing failed!` / `No usable sandbox!` on the first browser call**
   (bundled Chromium, sandbox kept on): the host does not allow unprivileged user
   namespaces (common on Ubuntu 23.10+/24.04, in containers, or as root). Do NOT try

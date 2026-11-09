@@ -20,3 +20,5 @@ npx playwright install chromium >"$QA_PW_LOG" 2>&1 \
   || PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64 npx playwright install chromium
 # on failure read it for the diagnosis, then `rm -f "$QA_PW_LOG"` (#10017).
 ```
+
+On Node 26 the install can stall with 0% CPU after the download reaches 100% (the zip extractor stops mid-file); run it under Bun instead: `bunx --bun playwright install chromium`.

@@ -204,6 +204,90 @@ If revived, the shape is: a `warn`-level line (Vector drops INFO, so an info mar
 - Whether the 11 restart pairs between 01:05Z and 16:17Z coincide with any tail samples (no per-pair times are recorded here).
 - That the token `CF_API_TOKEN_ANALYTICS_READ` and its wrapper subcommand will be accepted (the POST exception is a design change, not yet reviewed).
 
+##### Addendum 2026-11-09: origin response time for /health (Cloudflare analytics)
+
+Read this first: this addendum supersedes the "Token prerequisite" paragraph, the Step C text that says the token and subcommand do not exist, and the "Real 502/520 rate" row of the open-checks table below. Those rows are left as written (append-only); what changed is stated at the end of this addendum. It is conditioned on the merge of the change that adds the subcommands (Ref #12441, #10479, #10205). No cause is claimed for anything below.
+
+Every figure in the first two lists is **owner-supplied, not re-derived by this wrapper**: the owner ran the first query live against Cloudflare GraphQL `httpRequestsAdaptiveGroups` (path filter `/health`, hourly groups) before this change; nothing here was re-read by an agent.
+
+**Origin response time for `/health`, hourly rows (owner-supplied, not re-derived)**
+
+- Window: 217 hourly rows, 2026-10-31T20Z to 2026-11-09T20Z.
+- Before the flip (171 h): median hourly p50 332 ms, median hourly p90 477 ms.
+- After the flip (45 h): median hourly p50 269 ms, median hourly p90 855 ms.
+- Daily median hourly p90: 462 to 645 ms for each day from 11-01 to 11-07 (11-02 was the highest, 645 ms), then 851 ms on 11-08 and 859 ms on 11-09.
+- The step coincides with the strict flip at 2026-11-07T23:43Z.
+- p50 did not rise; only the tail did (about +385 ms).
+- The tail clusters near 850 ms and 1390 ms.
+
+**Figures that do not agree with each other (recorded, not fixed, not reconciled)**
+
+- 171 h + 45 h is 216, against the 217 rows stated for the window. The hour 2026-11-07T23Z straddles the flip and the owner's split does not say where it went.
+- The difference of the stated p90 medians is 855 - 477 = 378 ms, against "about +385 ms". The owner's figure was not re-derived, so which pairing gives +385 ms is not known.
+
+**What the code on this branch says about keep-alive (read by this change, not measured)**
+
+- The plain `:80` server (`apps/web-platform/server/index.ts`) and the `:443` TLS listener (`apps/web-platform/server/origin-tls.ts`) both assign `keepAliveTimeout = ORIGIN_TLS_KEEPALIVE_TIMEOUT_MS` (905000 ms, defined once in `origin-tls.ts`). A shorter keep-alive on `:443` than on `:80` is therefore ruled out as a configuration difference.
+- The remaining candidates are NOT separated by anything in this addendum: a new-connection TLS handshake on the Cloudflare-to-origin hop, redeploy restarts, and TLS CPU. The tail clusters above are a description of the data, not evidence for any one of them. A controlled flip-back is the owner's production decision and is not proposed here.
+
+**5xx histogram (502, 520, 525, 526 and the other 5xx statuses)**
+
+| Row | Status |
+|---|---|
+| Edge 5xx counts by hour and status, 216-hour window | `not yet read; first sanctioned read after merge` |
+
+The exact command, run from a fresh checkout where `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` is empty:
+
+```text
+doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh analytics-edge-errors 216
+```
+
+The matching `/health` read is the same command with `analytics-health 216`. No wrapper run is recorded in this addendum; a result is recorded in a second dated addendum after the first sanctioned read, and the `not yet read` row above is then left as written.
+
+**Caveats that apply to any figure read with the new subcommands**
+
+- Counts are sampled estimates (adaptive sampling); never compute an exact error rate from `count`.
+- The dataset may under-report edge-generated blank 502/503/504 pages.
+- The `/health` query is filtered by path only: it is not scoped to a host or to `requestSource`.
+- Complete hours only, so the series lags by up to one hour.
+- The window maximum is 216 hours, so it cannot reproduce the owner's 217-row window.
+- The status dimension, the status range operators, `_DESC` ordering and the quantile field names for this dataset are not documented publicly; they are unverified until the first sanctioned read returns `ok`.
+
+**Median of the hourly p90, to reproduce the owner's before/after comparison.** The input is the stored second output line of `analytics-health 216` (the evidence file `knowledge-base/engineering/operations/runbooks/evidence/<UTC date>-analytics-health-216h.json`, which is created by the post-merge follow-up and does not exist in this change). `--arg lo` is the first hour included, `--arg hi` the first hour excluded, both as `YYYY-MM-DDTHH:MM:SSZ` strings that sort as text. Run once for the hours before the flip and once for the hours after it, and decide where the 2026-11-07T23Z hour goes before running:
+
+```bash
+jq --arg lo "<first hour included>" --arg hi "<first hour excluded>" \
+  '[.series[] | select(.hour >= $lo and .hour < $hi and .p90_ms != null) | .p90_ms] | sort
+   | length as $n | if $n == 0 then null elif $n % 2 == 1 then .[($n - 1) / 2] else (.[$n / 2 - 1] + .[$n / 2]) / 2 end' \
+  <evidence file>
+```
+
+**Handoff for the post-merge read (ready to paste)**
+
+1. Preflight: `git fetch origin main`, then `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` must print nothing.
+2. Run `doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh analytics-health 216`, then the same with `analytics-edge-errors 216`.
+3. Keep an output only when the exit code is 0 and its first line is exactly `cloudflare-readonly: <subcommand> ok`; store line 2 only, after `jq -e .` parses it; never store stderr.
+4. Record `Checked:` or `Unverified:` lines in a second dated addendum. At most two fix PRs in total across both queries.
+
+| Wrapper output | Meaning | Next action |
+|---|---|---|
+| `unverified - api-error (graphql: unknown field ...)` | a field or filter name in a fixed query is wrong for this dataset | a fix PR to the wrapper (cap two in total across both queries) |
+| `unverified - no-zone-access` | the zone is not visible to the token, or the zone id is wrong (not told apart) | check the zone id and the token's zone |
+| `unverified - token-invalid` | the token is expired or revoked (it expires 2027-02-07) | rotation is the owner's credential change |
+| `unverified - no-credential` | the Doppler config lacks `CF_API_TOKEN_ANALYTICS_READ` | add the token to the config; never borrow another token |
+
+**Reconciliation with Step C and the token description above**
+
+- Step C's request shape listed `clientRequestHTTPHost` and `requestSource: "eyeball"`. The owner-proven first query drops both and filters on the `/health` path only, so the `/health` series is not host- or `requestSource`-scoped.
+- The "Token prerequisite" paragraph says Analytics:Read and Zone:Read. The owner-supplied description of the minted token is Analytics:Read on one zone, expiring 2027-02-07.
+
+**Other results recorded 2026-11-09 (owner-supplied, not re-derived by this change)**
+
+- Live-verify against production passed on 2026-11-09, as reported by the owner: `RESULT: PASS fresh conversation persisted and appeared in the rail via=reload elapsed=48s checks=33`. This change did not re-derive it: the CI log was searched and the line was not found. Searched: the 20 newest runs of `web-platform-release.yml` (all created 2026-11-09), by `gh run view <id> --log` limited to the first matching line per run. A first pass on `RESULT: PASS` matched only the workflow's own script text in 8 of those runs; a second pass on `appeared in the rail via=` over those 8 found no line. This is not a failure of the check; it means the line was not located.
+- WebSocket upgrade through the strict hop returned `101` (unauthenticated; not a signed-in check). The owner's brief puts it at 2026-11-08T14:49:20Z. The comment on #10479 (issuecomment-6725639019, an agent session, posted 2026-11-08T18:54:17Z) reports the same unauthenticated `101 Switching Protocols` result in its bake re-check at 16:35-16:37Z. The two times conflict and neither was re-derived; this change claims neither as the probe time. It shows an upgrade through the strict hop only: the signed-in WebSocket run is not done.
+
+**What changed in the status tables above.** As of the merge of this change, the token `CF_API_TOKEN_ANALYTICS_READ` exists and `plugins/soleur/scripts/cloudflare-readonly.sh` has the subcommands `analytics-health` and `analytics-edge-errors` (fixed read-only GraphQL queries sent as a POST; see ADR-289 and `standing-delegation.md` section 9), so Step C is runnable through the wrapper after the merge, from a checkout that matches `origin/main`. Until a sanctioned read is recorded, the "Real 502/520 rate" row stays open and every analytics figure above is the owner's, not the wrapper's.
+
 #### What was NOT run before the flip
 
 - The local read-only plan (Act 0): not run. The flip plan itself (1 change) was read after the fact in the apply log.
