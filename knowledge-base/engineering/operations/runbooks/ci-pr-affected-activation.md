@@ -155,6 +155,17 @@ python3 -I scripts/ci-pr-affected-replay.py aggregate "$OUT" --expect-commits 30
 python3 -I scripts/ci-pr-affected-replay.py cp-upper 0 300
 ```
 
+Adopting an orphaned collect's `--out` (a dead sibling session's still-running
+processes) requires TWO proofs before the dir is evidence, not one: the writer
+trees are byte-identical on the selector inputs (`ci-pr-affected-replay.py`,
+`test-all.sh`, `suite-durations{,-heavy}.tsv`, `suite-shard-legs.tsv`,
+`lib/test-relevance-paths.sh`), and every commit unit verifies per-idx
+`sha == rev_list(<window-tip>)[idx]` — a restart on a moved `origin/main`
+appends stale-window units whose `(kind, sha)` keys do NOT collide, so neither
+dedupe nor `check_complete`'s idx-contiguity catches them (2026-11-08 R3,
+`receipts/r3/adoption-note.md`). And kill any second concurrent writer first:
+two writers on one `--out` is the forbidden configuration.
+
 Read the output with these limits in mind (they are in the receipt too):
 
 - The commit population is survivorship-biased: every landed commit already passed the full battery on the identical tree.
