@@ -445,8 +445,11 @@ Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts
   `message.msg`, with `message.proxyState` / `message.addr` / `message.port` alongside.
 - **The peer line.** `ci-deploy.sh` `relay_peer_probe` journals `relay_peer_probe peer=<10.0.1.x> result=<ok|refused|timeout|tls|denied>`
   (`SYSLOG_IDENTIFIER = 'ci-deploy'`) once per peer after this host's prod swap. `refused` is nothing listening or unreachable,
-  `tls` is a failed handshake or certificate pin, `timeout` is no answer in time, `denied` is a peer that closed right after the
-  upgrade (its allowlist does not carry this host). `skipped=no_bind|no_roster|no_peers|exec_failed` is "nothing to dial" or "the
+  `tls` is a failed handshake or certificate pin, or (since #12288, ADR-323) a source the peer's allowlist does not carry: the
+  peer resets it before the handshake, so the probe sees a reset before `secureConnect`. `timeout` is no answer in time, `denied`
+  is a peer that closed right after the upgrade, which can no longer happen for a missing allowlist entry (the pre-TLS check runs
+  first); the receiver-side bounded `createProxyServer.peer-deny` Sentry event is what separates an allowlist deny from a certificate
+  fault. `skipped=no_bind|no_roster|no_peers|exec_failed` is "nothing to dial" or "the
   probe could not run" and never pages. The serve-evidence reader (`scripts/lib/web2-relay-rows.sh` `wrr_peer_sql`) reads this row from the hot table
   UNION ALL the S3 archive, because it is written once per deploy and is usually older than the ~40-minute hot window.
 - **Reading a page (counts and enum words only, no secrets in these rows).** Per host, last hour, with the delivery control first:
@@ -476,13 +479,62 @@ Three Terraform-managed alerts (`apps/web-platform/infra/betterstack-logs-alerts
   `egress_gw_probe_silent` open question, #12190), not the fleet; verify with the query before acting.
 - **`relay_peer_probe_failed` fired.** Read `peer` and `result`. A `refused` or `timeout` seconds after the peer's own deploy can be
   its container mid-swap: re-read the peer's `relay_probe` line (it must say `listening`) and the next deploy's peer line before
-  treating it as a defect. A `denied` is an allowlist that lacks this host's source address; `tls` is the pinned certificate.
+  treating it as a defect. A `tls` is the pinned certificate OR an allowlist that lacks this host's source address (read the peer's
+  `createProxyServer.peer-deny` events to tell them apart); a `denied` is a peer that closed right after the upgrade.
 - **Verified when this shipped.** The nested `message.msg` row shape of the relay line and the plain-string peer row were
   live-probed 2026-11-07 (rows from both hosts, `CONTAINER_NAME` = `soleur-web-platform`).
 - **Not verified when this shipped (REQUIRED post-merge check).** That the evaluator delivers a value for the silence shape
   (`relay_probe_silent`, the `egress_gw_probe_silent` open question #12190) was not measured, and this change ships no canary for
   it. After the merge's apply, read the alert in Better Stack: with both hosts reporting its value must be 0 and it must not be
   open. If it is open while the query above shows rows from every host, the evaluator is the suspect (#12190), not the fleet.
+
+## Signed hello rollout (#12289, #12288, #12290; ADR-323)
+
+The owner's relay listener now admits a peer on the raw TCP stream (before TLS) and only accepts a signed hello. This section is what
+a reader needs to verify the rollout and to read a refusal, without SSH.
+
+- **Wire format and check order.** `{type, userId, workspaceId, ts, nonce, mac}`; `mac` = HMAC-SHA256 under `PROXY_HELLO_HMAC_KEY`
+  over `"soleur-proxy-hello-v1\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce`. Order: allowlist (pre-TLS) -> 1 KiB cap ->
+  shape -> MAC -> ts within 30 s -> replay (60 s) -> AP-2 membership. Every refusal after the upgrade closes with the single reason
+  `relay refused`; the discriminator is the bounded Sentry event's `reason` enum, never the close text.
+- **Rolling deploy.** The container swap is sequential (the ingress host first, then the fan-out to the peer). New sender -> old
+  receiver works (the old parser ignores the extra hello keys). Old sender -> new receiver is refused with `reason=shape` for the
+  stagger, a few minutes; a user whose lease sits on the lagging host sees close code 4014 and the generic reconnect loop. Live users
+  are 0 today; the merge is itself the release trigger, so the release is named only after `agent_sessions_live=0` has been read on
+  both hosts (two reporter rows per host at least 90 s apart, newest under 2 minutes old). If it is not 0, the CTO is asked again
+  (ruling on #12289). Rolling back to a pre-PR image re-opens unsigned hellos until the roll-forward.
+- **Per-stage verification (read-only).** After the first host: `relay_probe proxy_state=listening` for that host (query above) and no
+  `createProxyServer.no-hello-key` issue in Sentry. After the second host: both hosts listening. Once a real proxied session exists, a
+  `relay_hello_window accepted=<n>` row with `n>0` on the OWNER host is the positive signed-round-trip signal; the serve-gate probe
+  (`relay_peer_probe`) sends no hello and cannot show it:
+
+  ```bash
+  doppler run -p soleur -c prd_terraform -- scripts/betterstack-query.sh \
+    "SELECT JSONExtractString(raw,'host_name') AS host, JSONExtractString(raw,'message','msg') AS line, max(dt) AS last
+     FROM (SELECT dt, raw FROM remote(\$BS_TABLE)
+           UNION ALL SELECT dt, raw FROM s3Cluster(primary, \$BS_TABLE_S3) WHERE _row_type = 1)
+     WHERE dt > now() - INTERVAL 1 HOUR
+       AND startsWith(JSONExtractString(raw,'message','msg'), 'relay_hello_window ')
+     GROUP BY host, line ORDER BY last DESC FORMAT JSONEachRow"
+  ```
+
+- **What a refusal looks like.** Sentry ops `createProxyServer.peer-deny` (reason `peer`, with the peer address),
+  `createProxyServer.hello-deny` (reason `size|shape|mac|skew|replay|full`), `createProxyServer.ap2-deny` (reason `membership`, with the
+  authenticated id pair). At most 5 events per reason per 60 s window, then one `-summary` event with `{reason, denied, suppressed}`.
+  A sustained `reason=mac` stream after a deploy means the two hosts hold different keys; `reason=skew` means a clock problem (the
+  window needs NTP on both hosts); `reason=shape` right after a deploy is the old-sender stagger; `reason=full` is a mass reconnect
+  after an owner restart, not a replay.
+- **Key absent or malformed.** With relay TLS enabled and no usable `PROXY_HELLO_HMAC_KEY` the relay stays down: `relay_probe
+  proxy_state=error` (`relay_listener_down` after about 5 minutes), one `createProxyServer.no-hello-key` event on the first host that
+  starts, and the app keeps serving 80/443/3000. The release itself is blocked earlier by `verify-required-secrets.sh` in the
+  `verify-doppler-secrets` job (presence only; the shape is checked by the app startup guard).
+- **Bad port.** A `SOLEUR_PROXY_PORT` that is not 1-5 ASCII digits in 1..65535 stops only the relay (`createProxyServer.bad-port`,
+  `proxy_state=error`); the sender never dials with it (`proxyClientToOwner.bad-port`). Production pins the literal 8443.
+- **No rotation route.** A replace, update, delete or forget of the key pair is blocked by the non-ackable `relay_hello_key_changes`
+  HALT on the per-merge apply (see the apply job rationale runbook). Treat a suspected key leak as an incident: the response needs a
+  separately reviewed route (tracked in the residuals issue).
+- **Restart and clocks.** The replay cache is per process, so a container restart clears it for up to 60 s (a hello captured before
+  the restart stays skew-valid). A backward clock step can re-admit a purged nonce.
 
 ## ⚠️ A "no creds" / TRANSIENT error is NOT "no access" (repeat misdiagnosis)
 
