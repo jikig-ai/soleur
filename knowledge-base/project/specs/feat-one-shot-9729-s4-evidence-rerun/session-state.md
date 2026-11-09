@@ -30,3 +30,13 @@
 ## Pre-work phase (parent)
 - cto_spawns=1 (batched 4-row ruling of decision-challenges; all 4 `pending - assumed` confirmed as binding: ADR-276 amendment append, #9729 comment, `ruled=confirmed` on confirmation, record-then-fail criterion (b) with no in-PR drain).
 - technical-ruling-gate.sh --branch rc=0 after stamping.
+
+## WORK phase progress (2026-11-09 ~11:05Z)
+- Window pinned: BASE=af764001eebe535b44af468c9f3904f2809f8220 (single fetch 10:32:53Z).
+- gh-seam smoke rc=0 (2 units, runs_via=head-sha); no live writer; ratchet required (required-checks.txt:251).
+- Pinned audit: --accept rc=0 `unaudited=0 gap_suites=0 stale=0 refs=4541 files_read=1269` (/var/tmp/s4-audit.out); bare rc=1 `gap_suites=266 gap_refs=1639 accepted=0` (/var/tmp/s4-audit-bare.out). Criterion (b) = PASS.
+- Preactivation: ready=false missing=lock,artifacts,verdict,prereq5,tree (/var/tmp/preactivation.out).
+- Collect 4-way launched 10:57Z -> /var/tmp/s4-rerun-9729-r4 (units-commits-{1..4}-of-4.jsonl; ~2.5min/unit on loaded host, ETA hours).
+- Census w1/w2 launched -> receipts/census-w{1,2}.txt.
+- Criterion (c) sampler: /var/tmp/s4-sample.sh -> /var/tmp/s4-sample/rows.tsv (11 newest) + chained runs2 (9 older) = 20-run sample.
+- Criterion (d): reader-audit.md written — kb-consumers 31/31, edge:consumed sel=0 datapoint.
