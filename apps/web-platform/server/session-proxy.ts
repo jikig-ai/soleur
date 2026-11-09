@@ -38,9 +38,29 @@ import { denyReporter } from "./proxy-deny-report";
 
 const log = createChildLogger("session-proxy");
 
-/** Private-net TLS port the owner's proxy listener binds (distinct from the
- *  public app port). The proxying host dials `wss://<ownerAddress>:<port>`. */
-export const PROXY_LISTEN_PORT = Number(process.env.SOLEUR_PROXY_PORT || 8443);
+/** Default private-net TLS port the owner's proxy listener binds (distinct from the public app port);
+ *  prod pins it to the literal 8443 in ci-deploy.sh. The proxying host dials
+ *  `wss://<ownerAddress>:<port>`. */
+export const DEFAULT_PROXY_PORT = 8443;
+
+/**
+ * Strict parse of `SOLEUR_PROXY_PORT` (#12290), evaluated at call time (never a module-load constant that
+ * could re-enter as `NaN`): unset or empty is the default; otherwise 1-5 ASCII digits in 1..65535, nothing
+ * else. `Number()` would accept "0x20fb", "1e3" and " 8443 ", and `listen(NaN | 70000)` throws
+ * ERR_SOCKET_BAD_PORT out of createProxyServer into index.ts (a restart loop for a relay-only fault).
+ * Returns null for an invalid value.
+ */
+export function resolveProxyPort(raw: string | undefined = process.env.SOLEUR_PROXY_PORT): number | null {
+  if (raw === undefined || raw === "") return DEFAULT_PROXY_PORT;
+  if (!/^[0-9]{1,5}$/.test(raw)) return null;
+  const n = Number(raw);
+  return n >= 1 && n <= 65535 ? n : null;
+}
+
+/** A port handed in by a caller: an integer in range. `allowEphemeral` admits 0 (the owner's test seam). */
+function isUsablePort(p: unknown, allowEphemeral: boolean): p is number {
+  return typeof p === "number" && Number.isInteger(p) && p >= (allowEphemeral ? 0 : 1) && p <= 65535;
+}
 
 /** Authenticated context a proxied connection carries once AP-2 passes — the
  *  owner attaches a PRE-authenticated session from this (no token re-auth; the
@@ -74,7 +94,6 @@ export async function proxyClientToOwner(params: {
   dial?: (url: string, opts: { ca: string; rejectUnauthorized: true }) => WebSocket;
 }): Promise<void> {
   const { clientWs, ownerAddress, userId, workspaceId } = params;
-  const port = params.port ?? PROXY_LISTEN_PORT;
   const ca = loadProxyTlsClientCa();
   if (!ca) {
     reportSilentFallback(
@@ -96,6 +115,13 @@ export async function proxyClientToOwner(params: {
   }
   if (!isCanonicalUuid(userId) || !isCanonicalUuid(workspaceId)) {
     denyReporter.record("bad_ids");
+    safeClose(clientWs, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner unreachable");
+    return;
+  }
+
+  const port = params.port === undefined ? resolveProxyPort() : isUsablePort(params.port, false) ? params.port : null;
+  if (port === null) {
+    denyReporter.record("bad_port");
     safeClose(clientWs, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, "owner unreachable");
     return;
   }
@@ -303,7 +329,17 @@ export function createProxyServer(params: {
   const helloKey = loadProxyHelloKey() as Buffer;
   const replayCache = createReplayCache();
 
-  const port = params.port ?? PROXY_LISTEN_PORT;
+  // #12290: a bad port stops only the relay. Checked after the key guard so every earlier state keeps its
+  // meaning; the event carries no value.
+  const port = params.port === undefined ? resolveProxyPort() : isUsablePort(params.port, true) ? params.port : null;
+  if (port === null) {
+    recordProxyNotStarted("error");
+    reportSilentFallback(new Error("SOLEUR_PROXY_PORT is not a valid port — refusing to start the owner proxy listener"), {
+      feature: "control_plane_route",
+      op: "createProxyServer.bad-port",
+    });
+    return null;
+  }
   // Everything that can throw synchronously on bad TLS material (an unparseable or
   // mismatched PEM throws ERR_OSSL_* out of https.createServer) is fenced: an unhandled
   // throw here would reach index.ts un-caught and restart-loop the WHOLE app for a
@@ -405,9 +441,30 @@ export function createProxyServer(params: {
 
   // Bind the PRIVATE address only: `listen(port, cb)` would bind the wildcard (`::`),
   // exposing a token-less pre-authenticated session port beyond the private net.
-  httpsServer.listen(port, bindAddress, () =>
-    log.info({ port, bindAddress }, "session-proxy: owner proxy listener started (one-way TLS)"),
-  );
+  // `listen()` can still throw synchronously (ERR_SOCKET_BAD_PORT, ERR_INVALID_ARG_*), which would reach
+  // index.ts un-caught and restart-loop the whole app. Fence it: close the never-listening server, report
+  // the error CODE only, and leave the relay down with proxy_state=error.
+  try {
+    httpsServer.listen(port, bindAddress, () =>
+      log.info({ port, bindAddress }, "session-proxy: owner proxy listener started (one-way TLS)"),
+    );
+  } catch (err) {
+    const rawCode = (err as NodeJS.ErrnoException | undefined)?.code;
+    const code = typeof rawCode === "string" && /^[A-Z0-9_]{1,64}$/.test(rawCode) ? rawCode : undefined;
+    try {
+      httpsServer.close();
+    } catch {
+      /* never listened */
+    }
+    recordProxyNotStarted("error");
+    reportSilentFallback(new Error(`owner proxy listen() threw (${code ?? "unknown"})`), {
+      feature: "control_plane_route",
+      op: "createProxyServer.listen-throw",
+      message: "owner proxy listener could not start; relay not serving on this host",
+      extra: { code },
+    });
+    return null;
+  }
   return httpsServer;
 }
 
