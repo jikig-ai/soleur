@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# cloudflare-readonly.sh - four READ-ONLY Cloudflare checks for the Class R live-read acts (#10479, Ref #10205).
+# cloudflare-readonly.sh - six READ-ONLY Cloudflare checks for the Class R live-read acts (#10479, #12441, Ref #10205):
+# four GET reads and two fixed read-only GraphQL analytics reads (the one documented POST exception, below).
 #
 # Jikigai-internal. It is inert wherever the CF_* token variables are absent, and it refuses unless it runs under the
 # Doppler project `soleur` and config `prd_terraform` (those two variables are a mistake-guard: the environment can be forged).
@@ -9,10 +10,14 @@
 #   config-entrypoint   B. config-settings ruleset entrypoint  GET /zones/{zone}/rulesets/phases/http_config_settings/entrypoint
 #   pagerules-ssl       C. legacy page rules, SSL actions only GET /zones/{zone}/pagerules?status=active
 #   change-history      E. bounded 7-day audit-log read        GET /accounts/{account}/logs/audit  (counts only)
-#   --list              print the four names, exit 0 (no credential, no network)
+#   analytics-health <hours>       F. /health origin response time per hour   POST /graphql, one fixed query (#12441)
+#   analytics-edge-errors <hours>  G. edge 5xx status counts per hour         POST /graphql, one fixed query (#12441)
+#   --list              print the six names, exit 0 (no credential, no network)
+# The four GET subcommands take no further argument. The two analytics ones take exactly one more: a whole number of hours, 1 to
+# 216 (9 days, the one verified window), no default, checked before any credential is read.
 #
 # Invocation (direct exec; never wrap this file in a shell under doppler run, the Credentials paragraph forbids it):
-#   doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh <subcommand>
+#   doppler run -p soleur -c prd_terraform -- plugins/soleur/scripts/cloudflare-readonly.sh <subcommand> [<hours>]
 # Run it from the repository checkout where `git diff origin/main -- plugins/soleur/scripts/cloudflare-readonly.sh` is
 # empty (a freshly fetched origin/main), never from a plugin-cache copy. Until this file is on origin/main that diff cannot
 # be empty, so the first live read is after the merge.
@@ -22,15 +27,26 @@
 #   pagerules-ssl -> CF_API_TOKEN_PAGERULES_READ (zone-scoped Page Rules: Read on soleur.ai only; read-only; no fallback to
 #   CF_API_TOKEN_RULESETS, which returned 403 on /pagerules, and no fallback to any other token)
 #   change-history -> CF_API_TOKEN_AUDIT plus CF_ACCOUNT_ID       the others also need CF_ZONE_ID
+#   analytics-health, analytics-edge-errors -> CF_API_TOKEN_ANALYTICS_READ (Analytics:Read on the zone soleur.ai only; read-only;
+#   expires 2027-02-07, after which a 401 records `token-invalid`; no fallback to any other token). Nothing else reads it.
 # CF_API_TOKEN_ZONE_SETTINGS and CF_API_TOKEN_RULESETS are Terraform-scoped and write-capable (no read-only equivalent exists
 # yet); that exception is removable when read-only equivalents are minted, which is a credential change and the owner's.
 # CF_API_TOKEN_PAGERULES_READ is the read-only token minted for check C (#10479), so C is no longer part of that exception.
 # CF_API_TOKEN_AUDIT is read-only but is documented under the Doppler dev config, so change-history is expected to record
 # `no-credential` or `other: refused-source` until the owner relocates it (where it lives is an open question). This wrapper's
-# safety is structural: one GET request through one curl call site, absolute curl path, fixed URL templates, an EMPTY
+# safety is structural: one GET call site plus ONE read-only-POST call site (cf_graphql), absolute curl path, fixed URLs, an EMPTY
 # environment for curl AND for every jq and date child (`/usr/bin/env -i`; an empty HOME means a planted ~/.jq is not
 # loaded and `$ENV` is empty, verified on jq 1.8.2), the credential on curl's stdin config only, and the xtrace refusal. See standing-delegation.md
 # section 9 (Credentials) for the stated exception. A 403 is recorded as unverified and never answered by a token swap.
+#
+# READ-ONLY POST EXCEPTION (#12441): a GraphQL read is an HTTP POST that only reads. Exactly two fixed queries are compiled into this
+# file (GQL_HEALTH_TPL, GQL_EDGE_TPL); the only substitutions are the zone id and two window stamps computed from the clock, so the
+# caller's integer never enters the query text and no query text, filter, path, host or method comes from the caller. The body
+# reaches curl only as a data-raw line of the stdin config, beside the Authorization and Content-Type lines, never on argv. The
+# window is complete UTC hours, [end - hours, end), so the newest series point lags by up to one hour. Counts are sampled estimates.
+# A zone the token cannot see and a wrong zone id are not distinguished (`no-zone-access`), like the 401 / 403 note below.
+# Unverified (public docs do not cover them; the first sanctioned read after the merge is the check, at most two fix PRs in total):
+# the edgeResponseStatus dimension and its range operators, orderBy datetimeHour_DESC on this node, and the duration quantile names.
 #
 # RESIDUAL, not fixed here: BASH_ENV, exported BASH_FUNC_* functions, SHELLOPTS and PS4, LD_PRELOAD and the shebang's PATH lookup
 # (`#!/usr/bin/env bash`) are caller-environment channels that act in this script's OWN bash before and around its checks, so
@@ -60,7 +76,10 @@
 # Output contract: the first stdout line is `cloudflare-readonly: <subcommand> ok` or
 # `cloudflare-readonly: <subcommand> unverified - <reason>`, then (ok only) one JSON projection line, EXCEPT exits 64 and 78
 # and the `--list` mode: exits 64 and 78 write one fixed line to stderr only (nothing was sent). Messages are fixed,
-# single-line and value-free. A response body, a rule expression, a description, a page-rule pattern, an actor or an IP
+# single-line and value-free, with ONE stated exception: on an analytics api-error the FIRST GraphQL error message is printed as
+# `api-error (graphql: <msg>)` only when it passes a fixed in-full check (letters, digits, space and . _ ' " ( ) -, 1 to 160
+# characters; no credential word, no copy of the live token, no dotted quad); otherwise plain `api-error`. It is vendor text, so data.
+# A response body, a rule expression, a description, a page-rule pattern, an actor or an IP
 # is never printed; every vendor string that is printed is enum- or regex-checked first. curl and jq diagnostics are
 # captured and reduced to `curl exit <n>` / `jq exit <n>` (the one stated exception to "stderr is never discarded":
 # they can quote body fragments); this wrapper's own diagnostics always reach stderr.
@@ -69,13 +88,14 @@
 # The 401 / 403 reasons (token-invalid / token-lacks-scope) are keyed on the HTTP status alone: the cause is NOT distinguished
 # from an IP or WAF block.
 #
-# Exit codes: 0 ok | 10 no-credential | 11 token-invalid / token-lacks-scope (401, 403) | 14 not-found, api-error,
+# Exit codes: 0 ok | 10 no-credential | 11 token-invalid / token-lacks-scope (401, 403) | 14 not-found, api-error, no-zone-access,
 #   upstream-error (429, 5xx, other non-2xx, curl failure), bad-response or no-tool | 64 usage or refused source / token
 #   shape / id shape / date failure (nothing was sent) | 78 refused to run under shell tracing with a live credential.
 #
 # Records mapping (section 9 Records; the wrapper verdict is NOT a Records verdict). Each check is its own
 # Checked: / Unverified: line with a stable key: `Cloudflare ssl-mode (A) #10479`, `Cloudflare config-entrypoint (B) #10479`,
-# `Cloudflare pagerules-ssl (C) #10479`, `Cloudflare change-history (E) #10479`.
+# `Cloudflare pagerules-ssl (C) #10479`, `Cloudflare change-history (E) #10479`, `Cloudflare analytics-health (F) #12441`,
+# `Cloudflare analytics-edge-errors (G) #12441`.
 #   A ssl-mode          figure value=<value>; Records ok when value is strict (the runbook claim), bad on any other value.
 #                       An A ok NEVER stands alone for a flip go: read it together with B.
 #   B config-entrypoint figures rule_count, enabled_ssl_rules (the count of rules that are enabled, i.e. `enabled != false`,
@@ -103,7 +123,13 @@
 #   E change-history    figures rows, truncated, by_action_type (every type with its count) and by_resource_type. Never a
 #                       `Checked:` line: always `Unverified: ..., other: window-7d-only` unless it yields a positive change
 #                       finding. Evidence only, never a gate.
-# Reasons to Records vocabulary: exit 10 -> no-credential; exits 11 and 14 -> `other: <reason token>`; exit 64 for a
+#   F analytics-health  figures rows and the per-hour count, avg_ms, p50_ms and p90_ms; evidence only, never a gate, `Unverified:` until
+#                       the first sanctioned read. G analytics-edge-errors  figures by_status (counts per observed 5xx status) and
+#                       truncated; same rule. Neither computes an exact error rate (counts are sampled).
+#   What to do next, by reason: `api-error (graphql: unknown field ...)` -> a wrapper fix PR (at most two in total across both
+#   queries); `no-zone-access` -> check the zone id and the token's zone; `token-invalid` -> the token (expires 2027-02-07) was
+#   rotated or expired, which is the owner's credential change; `no-credential` -> the Doppler config lacks the token.
+# Reasons to Records vocabulary: exit 10 -> no-credential; exits 11 and 14 -> `other: <reason token>` (the vocabulary includes no-zone-access); exit 64 for a
 # usage error records nothing (re-run correctly); exit 64 for a refused source or token shape -> `other: refused-source`;
 # status 78 -> `other: xtrace`; a checkout whose diff against origin/main for this file is non-empty -> `other: wrapper-drift`
 # (fetch, rebase, re-diff, re-run); 429 / 5xx -> one re-run after a pause is allowed, the newest line governs.
@@ -114,7 +140,7 @@ set -uo pipefail
 # expansion, so the Bearer value would leak the moment it is bound. Test the STATE, not a list of ways to enable it.
 case "$-" in
   *x*)
-    if [ -n "${CF_API_TOKEN_ZONE_SETTINGS:+x}${CF_API_TOKEN_RULESETS:+x}${CF_API_TOKEN_PAGERULES_READ:+x}${CF_API_TOKEN_AUDIT:+x}${CF_API_TOKEN:+x}" ]; then
+    if [ -n "${CF_API_TOKEN_ZONE_SETTINGS:+x}${CF_API_TOKEN_RULESETS:+x}${CF_API_TOKEN_PAGERULES_READ:+x}${CF_API_TOKEN_AUDIT:+x}${CF_API_TOKEN_ANALYTICS_READ:+x}${CF_API_TOKEN:+x}" ]; then
       printf '[FATAL] refusing to trace with a live credential set (see #7797)\n' >&2
       exit 78
     fi
@@ -131,16 +157,29 @@ unset SSLKEYLOGFILE CURL_CA_BUNDLE SSL_CERT_FILE SSL_CERT_DIR CURL_HOME \
 CURL=/usr/bin/curl
 
 BASE='https://api.cloudflare.com/client/v4'
-SUBCOMMANDS=(ssl-mode config-entrypoint pagerules-ssl change-history)
+GQL_URL="$BASE/graphql"
+SUBCOMMANDS=(ssl-mode config-entrypoint pagerules-ssl change-history analytics-health analytics-edge-errors)
 TOKEN_RE='^[A-Za-z0-9._~+/=-]+$'
 ID_RE='^[0-9a-f]{32}$'
 STAMP_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
 LIMIT=50
+QLIMIT=0
+HOURS=0
+MAX_HOURS=216
+GQL_MSG_RE='^[A-Za-z0-9 ._'"'"'"()-]{1,160}$'
+WIN_START=""
+WIN_END=""
+GQL_MSG=""
 SUB=""
 TOKVAR=""
 TOK=""
 BODY=""
 STATUS=""
+
+# The two fixed GraphQL query bodies (compiled in; the only substitutions are the zone id and the two window stamps, each validated
+# upstream). Read-only by construction: no mutation, no subscription, no introspection. Placeholders: @ZONE@ @START@ @END@.
+GQL_HEALTH_TPL='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:300,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestPath:\"/health\"},orderBy:[datetimeHour_ASC]){count dimensions{datetimeHour} avg{originResponseDurationMs} quantiles{originResponseDurationMsP50 originResponseDurationMsP90}}}}}"}'
+GQL_EDGE_TPL='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:1000,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestHTTPHost:\"app.soleur.ai\",edgeResponseStatus_geq:500,edgeResponseStatus_lt:600},orderBy:[datetimeHour_DESC]){count dimensions{datetimeHour edgeResponseStatus}}}}}"}'
 
 die() { # $1 = exit code, $2 = fixed message (never a value)
   printf 'cloudflare-readonly: %s\n' "$2" >&2
@@ -168,6 +207,9 @@ def rfc: "\\A[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z\
 def tsn: if . == null then null elif type == "string" and test(rfc) then . else "invalid" end;
 def gk: if type == "string" and test("\\A[a-z_.]{1,64}\\z") then . else "invalid" end;
 def tkey: sub("Z$"; "") | if contains(".") then . else . + ".0" end;
+def dur: . == null or (type == "number" and . >= 0 and . <= 1e7);
+def cnt: type == "number" and . == floor and . >= 0 and . <= 1e12;
+def r1: if . == null then null else ((. * 10 | round) / 10) end;
 def verstr: if . == null then null elif (type == "string" or type == "number") and (tostring | test("\\A[0-9]{1,10}\\z")) then tostring else "invalid" end;'
 
 # guard_body <jq condition>: type guard on the whole body. success:false is an api-error, anything
@@ -186,7 +228,7 @@ guard_body() {
 # project <jq program>: run the projection and emit it; a jq failure never prints jq's diagnostic.
 project() {
   local res jrc
-  res=$(/usr/bin/env -i /usr/bin/jq -c --argjson limit "$LIMIT" "$JQ_DEFS $1" < <(printf '%s' "$BODY") 2>&1)
+  res=$(/usr/bin/env -i /usr/bin/jq -c --argjson limit "$LIMIT" --argjson qlimit "$QLIMIT" --argjson hours "$HOURS" "$JQ_DEFS $1" < <(printf '%s' "$BODY") 2>&1)
   jrc=$?
   if [ "$jrc" -ne 0 ]; then bad_jq "$jrc"; fi
   emit_ok "$res"
@@ -248,7 +290,109 @@ cf_get() { # $1 = full URL ; sets BODY, or exits with the mapped verdict
   esac
 }
 
-# --- the four reads ---
+# --- the ONE read-only POST chokepoint (the two analytics subcommands): a compiled-in query, one call, empty curl environment ---
+# A GraphQL read is an HTTP POST. The body is a fixed template with a zone id and two window stamps substituted; it reaches curl
+# only as a `data-raw` line of the stdin config (never argv), beside the Authorization and Content-Type header lines.
+gql_stdin() { # $1 = the escaped body ; the three config lines of the POST
+  printf 'header = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\ndata-raw = "%s"\n' "$TOK" "$1"
+}
+cf_graphql() { # $1 = the finished one-line JSON body ; sets BODY, or exits with the mapped verdict
+  local body="$1" esc out rc
+  preflight
+  case "$body" in
+    '{"query":"query{viewer{zones(filter:{zoneTag:\"'*) : ;;
+    *) die 64 "refused: request body does not start with the fixed query prefix" ;;
+  esac
+  if [[ "$body" =~ [[:cntrl:]] ]]; then die 64 "refused: request body holds a control character"; fi
+  esc="${body//\\/\\\\}"
+  esc="${esc//\"/\\\"}"
+  out=$(/usr/bin/env -i "$CURL" --disable --noproxy '*' -X POST -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "$GQL_URL" < <(gql_stdin "$esc") 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then unverified "upstream-error (curl exit $rc)" 14; fi
+  STATUS="${out##*$'\n'}"
+  BODY="${out%$'\n'*}"
+  if [[ ! "$STATUS" =~ ^[0-9]{3}$ ]]; then unverified bad-response 14; fi
+  case "$STATUS" in
+    2??) : ;;
+    400) gql_api_error ;;
+    401) unverified token-invalid 11 ;;
+    403) unverified token-lacks-scope 11 ;;
+    404) unverified not-found 14 ;;
+    *) unverified upstream-error 14 ;;
+  esac
+}
+# gql_message: sets GQL_MSG to the FIRST error message only when it passes a fixed in-full check (one short plain-text line), else "".
+# The whole gate runs in bash (jq's ^ and $ are line anchors, so a multi-line message would pass a jq regex). Vendor text, so data.
+gql_message() {
+  local m jrc lm
+  GQL_MSG=""
+  m=$(/usr/bin/env -i /usr/bin/jq -j 'if (.errors | type) == "array" and (.errors[0].message | type) == "string" then .errors[0].message else empty end' < <(printf '%s' "$BODY") 2>&1)
+  jrc=$?
+  if [ "$jrc" -ne 0 ]; then return 0; fi
+  if [[ "$m" =~ [[:cntrl:]] ]]; then return 0; fi
+  if [[ ! "$m" =~ $GQL_MSG_RE ]]; then return 0; fi
+  lm="${m,,}"
+  case "$lm" in *bearer* | *token* | *authorization*) return 0 ;; esac
+  if [ -n "$TOK" ] && [[ "$m" == *"$TOK"* ]]; then return 0; fi
+  if [[ "$m" =~ [0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3} ]]; then return 0; fi
+  GQL_MSG="$m"
+}
+gql_api_error() { # an api-error, with the bounded vendor message when it passes the gate
+  gql_message
+  if [ -n "$GQL_MSG" ]; then unverified "api-error (graphql: $GQL_MSG)" 14; fi
+  unverified api-error 14
+}
+# guard_gql <jq condition on the groups array>: GraphQL has no .success. An error list is an api-error; zones [] is no-zone-access;
+# one zone whose groups satisfy the condition is ok; anything else (including data null and two zones) is bad-response (shape).
+guard_gql() {
+  local kind jrc
+  kind=$(/usr/bin/env -i /usr/bin/jq -r "$JQ_DEFS if ((.errors | type) == \"array\" and (.errors | length) > 0) then \"api\" elif ((.errors == null or (.errors | type) == \"array\") and (.data.viewer.zones | type) == \"array\") then (.data.viewer.zones | if length == 0 then \"nozone\" elif (length == 1 and (.[0] | type) == \"object\" and (.[0].httpRequestsAdaptiveGroups | type) == \"array\" and (.[0].httpRequestsAdaptiveGroups | ($1))) then \"ok\" else \"bad\" end) else \"bad\" end" < <(printf '%s' "$BODY") 2>&1)
+  jrc=$?
+  if [ "$jrc" -ne 0 ]; then bad_jq "$jrc"; fi
+  case "$kind" in
+    ok) : ;;
+    api) gql_api_error ;;
+    nozone) unverified no-zone-access 14 ;;
+    *) bad_shape ;;
+  esac
+}
+# gql_fill <template>: substitute the zone id and the two stamps (all validated: a 32-hex id and two UTC stamps)
+gql_fill() {
+  local b="$1"
+  b="${b//@ZONE@/$CF_ZONE_ID}"
+  b="${b//@START@/$WIN_START}"
+  b="${b//@END@/$WIN_END}"
+  printf '%s' "$b"
+}
+# gql_window: complete UTC hours only, [end - HOURS h, end), by epoch arithmetic; the partial current hour is excluded, so the
+# series lags by up to one hour. The caller's integer never enters the query text: only the two computed stamps do.
+gql_window() {
+  local t end start rc
+  [ -x /usr/bin/date ] || unverified "no-tool (date)" 14
+  t=$(/usr/bin/env -i /usr/bin/date -u +%s)
+  rc=$?
+  if [ "$rc" -ne 0 ] || [[ ! "$t" =~ ^[0-9]{10}$ ]]; then die 64 "refused: date produced no valid UTC stamp"; fi
+  end=$((10#$t - 10#$t % 3600))
+  start=$((end - HOURS * 3600))
+  WIN_END=$(/usr/bin/env -i /usr/bin/date -u -d "@$end" +%Y-%m-%dT%H:%M:%SZ)
+  rc=$?
+  if [ "$rc" -ne 0 ] || [[ ! "$WIN_END" =~ $STAMP_RE ]]; then die 64 "refused: date produced no valid UTC stamp"; fi
+  WIN_START=$(/usr/bin/env -i /usr/bin/date -u -d "@$start" +%Y-%m-%dT%H:%M:%SZ)
+  rc=$?
+  if [ "$rc" -ne 0 ] || [[ ! "$WIN_START" =~ $STAMP_RE ]]; then die 64 "refused: date produced no valid UTC stamp"; fi
+}
+# need_hours "$@": the analytics arity and hours grammar, checked before load_credential (a bad argument with no token exits 64, not
+# 10). A whole number, no default, 1 to 216 (9 days, the one verified window). Written with `if`, never a second `case "$SUB"`.
+need_hours() {
+  if [ "$#" -ne 2 ]; then
+    die 64 "usage: cloudflare-readonly.sh analytics-health|analytics-edge-errors <hours> (refused: missing or extra argument; the analytics subcommands take hours 1-$MAX_HOURS)"
+  fi
+  if [[ ! "$2" =~ ^[1-9][0-9]{0,2}$ ]]; then die 64 "refused: hours must be a whole number from 1 to $MAX_HOURS"; fi
+  if [ "$2" -gt "$MAX_HOURS" ]; then die 64 "refused: hours is above the maximum of $MAX_HOURS"; fi
+  HOURS="$2"
+}
+
+# --- the six reads (four GET, two read-only POST) ---
 sub_ssl_mode() {
   cf_get "$BASE/zones/$CF_ZONE_ID/settings/ssl"
   guard_body '.success == true and (.result | type) == "object"'
@@ -278,15 +422,38 @@ sub_change_history() {
   project '.result as $r | [$r[] | (.action | if type == "object" then .time else null end) | select(type == "string" and test(rfc))] as $times | {subcommand: "change-history", rows: ($r | length), truncated: (($r | length) >= $limit), oldest_time: ($times | min_by(tkey)), newest_time: ($times | max_by(tkey)), by_action_type: ([$r[] | ((.action | if type == "object" then .type else null end) | gk)] | group_by(.) | map({key: .[0], value: length}) | from_entries), by_resource_type: ([$r[] | ((.resource | if type == "object" then .type else null end) | gk)] | group_by(.) | map({key: .[0], value: length}) | from_entries)}'
 }
 
-# --- argument handling: exactly one argument, parsed with $# so `set -u` never fires ---
+sub_analytics_health() {
+  local body
+  gql_window
+  body=$(gql_fill "$GQL_HEALTH_TPL")
+  cf_graphql "$body"
+  guard_gql 'all(.[]; type == "object" and (.count | cnt) and ((.dimensions | type) == "object") and (.dimensions.datetimeHour | type == "string" and test(rfc)) and ((.avg | type) == "object") and (.avg.originResponseDurationMs | dur) and ((.quantiles | type) == "object") and (.quantiles.originResponseDurationMsP50 | dur) and (.quantiles.originResponseDurationMsP90 | dur))'
+  project '.data.viewer.zones[0].httpRequestsAdaptiveGroups as $g | {subcommand: "analytics-health", window_hours: $hours, rows: ($g | length), note: "count is a sampled estimate (adaptive sampling); durations are origin response time for /health, not host- or requestSource-scoped", series: [$g[] | {hour: .dimensions.datetimeHour, count: .count, avg_ms: (.avg.originResponseDurationMs | r1), p50_ms: (.quantiles.originResponseDurationMsP50 | r1), p90_ms: (.quantiles.originResponseDurationMsP90 | r1)}]}'
+}
+sub_analytics_edge_errors() {
+  local body
+  gql_window
+  body=$(gql_fill "$GQL_EDGE_TPL")
+  cf_graphql "$body"
+  guard_gql 'all(.[]; type == "object" and (.count | cnt) and ((.dimensions | type) == "object") and (.dimensions.datetimeHour | type == "string" and test(rfc)) and (.dimensions.edgeResponseStatus | type == "number" and . == floor and . >= 500 and . <= 599))'
+  QLIMIT=1000
+  project '.data.viewer.zones[0].httpRequestsAdaptiveGroups as $g | {subcommand: "analytics-edge-errors", window_hours: $hours, rows: ($g | length), truncated: (($g | length) >= $qlimit), note: "counts are sampled estimates (adaptive sampling); edge-generated blank 502/503/504 pages may be under-reported by this dataset", by_status: ([$g[] | {k: (.dimensions.edgeResponseStatus | tostring), c: .count}] | group_by(.k) | map({key: .[0].k, value: (map(.c) | add)}) | from_entries), hourly: ([$g[] | {hour: .dimensions.datetimeHour, status: .dimensions.edgeResponseStatus, count: .count}] | sort_by([.hour, .status]))}'
+}
+
+# --- argument handling: one argument (the analytics subcommands take hours as a second, validated by need_hours in their arm) ---
 if [ "$#" -eq 1 ] && [ "$1" = "--list" ]; then
   printf '%s\n' "${SUBCOMMANDS[@]}"
   exit 0
 fi
-if [ "$#" -ne 1 ]; then
-  die 64 "usage: cloudflare-readonly.sh <subcommand> | --list (refused: missing or extra argument)"
-fi
-SUB="$1"
+case "${1:-}" in
+  analytics-health | analytics-edge-errors) : ;;
+  *)
+    if [ "$#" -ne 1 ]; then
+      die 64 "usage: cloudflare-readonly.sh <subcommand> | --list (refused: missing or extra argument)"
+    fi
+    ;;
+esac
+SUB="${1:-}"
 
 # --- dispatcher: the only place a request can be selected; anything unlisted is refused before any request ---
 case "$SUB" in
@@ -294,6 +461,8 @@ case "$SUB" in
   config-entrypoint) TOKVAR=CF_API_TOKEN_RULESETS; load_credential zone; sub_config_entrypoint ;;
   pagerules-ssl) TOKVAR=CF_API_TOKEN_PAGERULES_READ; load_credential zone; sub_pagerules_ssl ;;
   change-history) TOKVAR=CF_API_TOKEN_AUDIT; load_credential account; sub_change_history ;;
+  analytics-health) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ; load_credential zone; sub_analytics_health ;;
+  analytics-edge-errors) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ; load_credential zone; sub_analytics_edge_errors ;;
   *) die 64 "refused: unknown subcommand" ;;
 esac
 exit 0

