@@ -894,6 +894,9 @@ _mq_guard2() {
   #    (head_ref names only the deepest), so multi-PR groups are supported — but the set is
   #    deliberately {1,3} so an unsanctioned raise still fails while a value-only 1<->3
   #    rollback/re-raise needs no guard edit (#11678 adoption window).
+  #  - max_entries_to_build in {1,2}: sanctions the current value AND the deferred #12269
+  #    measured-experiment value so a value-only 1<->2 PR needs no guard edit; any other
+  #    value (0, 3, ...) fails here even with parity.
   #  - merge_method == SQUASH: matches `gh pr merge --squash` and the repo's linear-history contract.
   #  - check_response_timeout_minutes > the stall probe's threshold: else the probe cannot report before the queue
   #    ejects the entry silently.
@@ -901,6 +904,11 @@ _mq_guard2() {
   me=$(_mq_val "$tf_p" max_entries_to_merge); mm=$(_mq_val "$tf_p" merge_method); to=$(_mq_val "$tf_p" check_response_timeout_minutes)
   if [[ "$me" != "1" && "$me" != "3" ]]; then
     MQ_REASON="max_entries_to_merge=$me, must be in {1,3} (sanctioned set; the CLA verify enumerates group members — an unsanctioned raise is a deliberate act needing this guard's own edit)"; return 1
+  fi
+  local mb
+  mb=$(_mq_val "$tf_p" max_entries_to_build)
+  if [[ "$mb" != "1" && "$mb" != "2" ]]; then
+    MQ_REASON="max_entries_to_build=$mb, must be in {1,2} (sanctioned set; current value plus the deferred #12269 2->1 experiment — an unsanctioned raise/lower is a deliberate act needing this guard's own edit)"; return 1
   fi
   if [[ "$mm" != "SQUASH" ]]; then MQ_REASON="merge_method=$mm, must be SQUASH"; return 1; fi
   thr=$(_mq_stall_threshold "$wf")
@@ -1061,6 +1069,11 @@ t_mq_mutations() {
   _mq_mutation "T-mq-1.m13 stall workflow threshold made non-numeric (underivable) -> RED" \
     'stall threshold not derivable' wf \
     "s/(STALL_THRESHOLD_MINUTES:[[:space:]]*')[0-9]+'/\1soon'/"
+  # 14 — max_entries_to_build outside the sanctioned {1,2} set, parity preserved -> RED
+  _mq_mutation "T-mq-1.m14 max_entries_to_build -> 4 in tf+DR+README (parity holds, unsanctioned value) -> RED on the safety value" \
+    'max_entries_to_build' tf,dr,readme \
+    's/(max_entries_to_build[[:space:]]*=[[:space:]]*)[0-9]+/\14/; s/("max_entries_to_build":[[:space:]]*)[0-9]+/\14/; s/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\14/'
+
 }
 
 # ---- queue-OFF (rollback) state, #9454 L5 ----
@@ -1214,6 +1227,27 @@ FIX
     _report "T-mq-1.H2 must-PASS non-canonical layout (aligned =, trailing comments, reordered keys) -> GREEN" fail "$MQ_REASON"
   fi
   rm -rf "$d"
+}
+
+# T-mq-1.m15 (must-PASS): each member of the sanctioned {1,2} set staged consistently across
+# tf+DR+README must go GREEN — covers the reject-everything guard class (a pin that fails its own
+# sanctioned values is worse than no pin). Driven on staged copies so the row is live-value agnostic.
+t_mq_sanctioned_values_pass() {
+  local d v
+  for v in 1 2; do
+    _mq_stage; d="$MQ_STAGE_DIR"
+    sed -E \
+      's/(max_entries_to_build[[:space:]]*=[[:space:]]*)[0-9]+/\1'"$v"'/; s/("max_entries_to_build":[[:space:]]*)[0-9]+/\1'"$v"'/; s/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\1'"$v"'/' \
+      "$d/pristine/tf" > "$d/work/tf"
+    sed -E 's/("max_entries_to_build":[[:space:]]*)[0-9]+/\1'"$v"'/' "$d/pristine/dr" > "$d/work/dr"
+    sed -E 's/^(\|[[:space:]]*`max_entries_to_build`[[:space:]]*\|[[:space:]]*`?)[0-9]+/\1'"$v"'/' "$d/pristine/readme" > "$d/work/readme"
+    if _mq_guard2 "$d/work/tf" "$d/work/dr" "$d/work/readme" "$d/work/canon" "$d/work/wf"; then
+      _report "T-mq-1.m15 sanctioned max_entries_to_build=$v (parity holds) -> GREEN" ok
+    else
+      _report "T-mq-1.m15 sanctioned max_entries_to_build=$v (parity holds) -> GREEN" fail "$MQ_REASON"
+    fi
+    rm -rf "$d"
+  done
 }
 
 # ---- Guard 2 controls: the guard and its row batteries must be provably FALSIFIABLE (#9454 L17/L18) ----
@@ -1586,6 +1620,7 @@ t_rsc_canonical_matches_terraform
 t_mq_param_parity_real
 t_mq_mutations
 t_mq_param_parity_noncanonical_pass
+t_mq_sanctioned_values_pass
 t_mq_queue_off
 t_mq_controls
 
@@ -1601,7 +1636,8 @@ echo "=== $pass passed, $fail failed ==="
 # EXACT floor on the Guard 2 rows (printf + exit, independent of the verdict helpers it audits). Deleting a Guard
 # 2 invocation, dropping a row, or neutering _report (which stops counting T-mq-* oks) moves MQ_OK off the
 # constant. Update MQ_EXPECTED_OK deliberately when a Guard 2 row is added or removed.
-MQ_EXPECTED_OK=28
+# 28 -> 31 on #12269: +m14 (unsanctioned 4 -> RED) +m15 x2 (sanctioned 1 and 2 -> GREEN).
+MQ_EXPECTED_OK=31
 if [[ "$MQ_OK" -ne "$MQ_EXPECTED_OK" ]]; then
   printf 'FAIL: Guard 2 reported %s ok T-mq rows, expected exactly %s (an invocation or row was deleted/added, or _report was neutered)\n' "$MQ_OK" "$MQ_EXPECTED_OK" >&2
   exit 1

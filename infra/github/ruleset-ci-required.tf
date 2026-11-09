@@ -248,8 +248,14 @@ resource "github_repository_ruleset" "ci_required" {
     # because the 5-minute default would add that wait to every merge. A parity gate
     # (tests/scripts/test-audit-ruleset-bypass.sh, T-mq-1) holds this block equal to
     # the DR skeleton in scripts/create-ci-required-ruleset.sh and the README table.
-    # `max_entries_to_build = 2` bounds hosted-runner contention (each candidate
-    # runs all 12 contexts); raise only after the canary measures it.
+    # `max_entries_to_build = 1` (lowered from 2 on #12269, lever E of epic
+    # #11556 — the measured experiment): the 28-day decision window counted 27
+    # cancelled `merge_group` ci.yml runs (threshold >= 2; clustered on the
+    # 2026-11-06/07 congestion burst), so queue-side speculative demand was
+    # real and the flip signal fired. Soak verdict lives on #12269 via
+    # scripts/followthroughs/mq-lever-e-verdict-12269.sh; revert is a
+    # value-only diff back to 2 on all four surfaces (this file, the DR
+    # skeleton, the README table, merge-queue-stall-check.yml).
     # `check_response_timeout_minutes` (120) must exceed the slowest required check on
     # `merge_group` INCLUDING runner start spread, else a green PR is dequeued. Raised
     # from 60 on 2026-10-11 (#9454 canary item 5): 240 `merge_group` CI runs measured
@@ -271,7 +277,7 @@ resource "github_repository_ruleset" "ci_required" {
       max_entries_to_merge              = 3
       min_entries_to_merge              = 1
       min_entries_to_merge_wait_minutes = 0
-      max_entries_to_build              = 2
+      max_entries_to_build              = 1
       check_response_timeout_minutes    = 120
     }
   }

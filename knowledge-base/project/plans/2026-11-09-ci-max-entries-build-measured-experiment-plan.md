@@ -113,7 +113,19 @@ A two-branch measured experiment honoring the issue's method exactly:
   `gh run list --repo jikig-ai/soleur --event merge_group --workflow ci.yml --status cancelled --created ">=${SINCE%%T*}" --json databaseId,conclusion,createdAt --limit 400 | jq 'length'` — FLIP signal if `>= 2`.
 - Drain + demand share: merge count via `gh pr list --repo jikig-ai/soleur --state merged --search "merged:>=${SINCE%%T*}" --json number --limit 500 | jq 'length'`; `bash scripts/ci-demand-census.sh --start <w0> --end <w1> --summary` over ≥4 spread 12h windows → `BY_WORKFLOW ci.yml merge_group` share of `TOTAL_JOB_MINUTES` — FLIP signal if `>= 40%`.
 - `test` merge_group p50/p90: read the standing `ci-wallclock-p90` tracker body (the watch rewrites it) for the current merge_group-surface row — recorded as context, never a FLIP trigger.
-- Record the raw numbers into `## Decision Gate Result` on this plan (or the session state) before branching.
+- Record the raw numbers into `## Decision Gate Result
+
+**Verdict: FLIP (branch 3B).** Measured 2026-11-09 over window SINCE=2026-10-12T16:09:07Z (~28d):
+
+- Cancelled `merge_group` `ci.yml` runs: **27** (threshold >= 2) — clustered 2026-11-06/07 (19+3) during the congestion episode; the waste premise materialized at burst traffic even though the earlier 12h window measured 0. **Signal 1 fired.**
+- merge_group `ci.yml` run totals over the window (capped listing): 500 runs — 389 success / 86 failure / 24 cancelled / 1 in_progress.
+- Demand share (signal 2, OR'd): not needed for the verdict — measured sample census produced no parseable output; recorded as unmeasured-context, not a trigger either way.
+- `test` merge_group p50/p90 tracker row: context-only, never a trigger; before-window floor recorded as 49m in `SOLEUR_FT_P50_FLOOR` for the soak probe.
+- Merged PRs in window: >=500 (listing capped; drain context only).
+
+Branch taken: **3B — FLIP** (`max_entries_to_build` 2 -> 1 on all four surfaces; soak verdict on #12269 via `scripts/followthroughs/mq-lever-e-verdict-12269.sh` with `earliest=<merge>+21d`).
+
+## Decision Gate Result` on this plan (or the session state) before branching.
 
 ### Phase 2 — Verdict-independent hardening + record
 
