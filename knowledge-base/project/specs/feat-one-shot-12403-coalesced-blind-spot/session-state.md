@@ -28,3 +28,7 @@
 ## Technical-Ruling Gate
 - cto_spawns=1 (batched, 3 rows) — all ruled 2026-11-09: kill-switch any-commit, ack-destroy any-commit, sibling-scope → web-platform only + follow-up filed.
 - Follow-up issue: #12501 (four sibling readers in apply-github-infra.yml + apply-sentry-infra.yml).
+
+## Work Phase
+- Status: complete. All ACs verified: suites green (counter 128/128 incl. T66 + floor re-derived 121→128, forget 52/52, regex-parity, workflow-file-size 9/9), actionlint findings info-level only (pre-existing, none in touched regions), POLICY_MSGS=0 in .github/tests/scripts, toJSON count=2, wc -c=489,575≤490,000.
+- Implementation commit: 35dc910077.
