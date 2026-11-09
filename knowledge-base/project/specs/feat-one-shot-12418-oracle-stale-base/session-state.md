@@ -47,3 +47,10 @@
 - Compound: learnings written — merge-base/mirror-direction fixture class + measured-misfire evidence-integrity miss. rule-metrics.json regenerated locally.
 - QA gate: gate-or-skip runner-refused (sibling full-gate in flight) → sanctioned battery-refusal-wait recipe running (30-min budget, contended).
 - Sibling issue filed: #12484 (ci-pr-selection.sh same-class port). PR body finalized: Closes #12418 + Changelog.
+
+## Ship phase
+- QA: gate refused (sibling contention) → battery-refusal-wait 1823s → verdict=CI_IS_THE_GATE; line added to PR test plan.
+- Review evidence: Reviewed-Coverage trailer emitted (full 8/8 agents, aggregate pattern, 33 findings) on d9a0204aa6.
+- prepush-secret-scan: CLEAN.
+- gh pr ready: marked ready. First CI run cancelled (superseded by trailer push); fresh run on d9a0204aa6 queued — monitor armed via `gh pr checks --watch`.
+- Remaining: CI green → merge → release polling → postmerge verification → resume prompt.
