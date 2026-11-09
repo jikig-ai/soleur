@@ -293,9 +293,10 @@ const ENTITLED_EGRESS_DOMAINS = Object.freeze([
 //     them; model calls unaffected — see plan §corrections).
 //   - every ALLOWED_SERVICE_ENV_VARS name — the full BYOK service-token
 //     census (STRIPE_SECRET_KEY, GITHUB_TOKEN, DOPPLER_TOKEN, …).
-// `GIT_CONFIG_NOSYSTEM`/`GIT_CONFIG_GLOBAL` are deliberately ABSENT: they
-// are `/dev/null` neutralizations, and denying them would undo the
-// neutralization (plan review correction (a)).
+// Every GIT_CARRIER_ENV_PIN name (GIT_CONFIG_NOSYSTEM/GLOBAL/COUNT/KEY_0/VALUE_0) is deliberately
+// ABSENT: they are git-config neutralizations and the safe.bareRepository pin (#9600), and denying
+// them would unset the pin for sandboxed commands (plan review correction (a); asserted in
+// test/web-egress.test.ts against Object.keys(GIT_CARRIER_ENV_PIN)).
 // Deduped: GITHUB_TOKEN appears in BOTH the fixed list and
 // ALLOWED_SERVICE_ENV_VARS (plan review correction (b)). The two Anthropic
 // auth vars are absent on purpose — the W1 baseline denies them for every

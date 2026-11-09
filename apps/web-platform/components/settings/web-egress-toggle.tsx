@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { NavLink } from "@/components/ui/nav-link";
 import { EGRESS_AUDIT_PATH, formatAgo, type CollectionState } from "@/lib/egress-audit/summary";
 import { usePendingAction } from "@/hooks/use-pending-action";
+import { GH_DISCLOSURE } from "@/lib/web-egress-disclosure";
 
 /**
  * feat-open-web-egress (#9534) — per-workspace "Agent web access" toggle.
@@ -120,7 +121,8 @@ export function WebEgressToggle({
               On. Sandboxed commands run without stored credentials — agents
               can't push to git remotes or use stored API keys while this is
               on. Applies to sessions started after enabling; turning off
-              revokes live access on the session's next dispatch.
+              revokes live access on the session's next dispatch.{" "}
+              {GH_DISCLOSURE}
             </span>
           )}
           {/* The wireframe's "Widens the security boundary" risk callout is
@@ -188,7 +190,8 @@ export function WebEgressToggle({
             Agents will reach the public internet over HTTPS and could send
             data to external hosts if compromised or prompt-injected.
             Sandboxed commands run without stored credentials while this is
-            on — agents can't push to git remotes or use stored API keys.
+            on — agents can't push to git remotes or use stored API keys.{" "}
+            {GH_DISCLOSURE}
           </p>
           {collection === true && (
             <p className="text-xs text-soleur-text-secondary">

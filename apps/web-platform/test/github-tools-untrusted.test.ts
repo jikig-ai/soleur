@@ -150,3 +150,65 @@ describe("write tools are unchanged", () => {
     expect(res.content[0].text).not.toContain("UNTRUSTED");
   });
 });
+
+// #12469 T2 characterization: the cc read builder shares code with `buildGithubTools`. The legacy runner's tool list, its order
+// and its read-tool OUTPUT must be exactly what they were before the builder was extracted. The list below is a LITERAL captured
+// from `origin/main` before the change (not a snapshot, not derived from the module under test).
+describe("legacy buildGithubTools is unchanged by the shared read builder (characterization)", () => {
+  const LEGACY_NAMES_IN_ORDER = [
+    "mcp__soleur_platform__create_pull_request",
+    "mcp__soleur_platform__create_issue",
+    "mcp__soleur_platform__github_read_ci_status",
+    "mcp__soleur_platform__github_read_workflow_logs",
+    "mcp__soleur_platform__github_trigger_workflow",
+    "mcp__soleur_platform__github_push_branch",
+    "mcp__soleur_platform__github_read_issue",
+    "mcp__soleur_platform__github_read_issue_comments",
+    "mcp__soleur_platform__github_read_pr",
+    "mcp__soleur_platform__github_list_pr_comments",
+  ];
+  const build = () =>
+    buildGithubTools({
+      installationId: 1,
+      owner: "o",
+      repo: "r",
+      defaultBranch: "main",
+      workspacePath: "/w",
+      workflowRateLimiter: {} as never,
+      grants: new ExecutionGrants(),
+    });
+
+  it("registers exactly the ten legacy tools in the legacy order, and NOT the new cc-only list tool", () => {
+    const { toolNames, tools } = build();
+    expect(toolNames).toEqual(LEGACY_NAMES_IN_ORDER);
+    expect((tools as unknown as ToolStub[]).map((t) => `mcp__soleur_platform__${t.name}`)).toEqual(LEGACY_NAMES_IN_ORDER);
+    expect(toolNames).not.toContain("mcp__soleur_platform__github_list_pull_requests");
+  });
+
+  it("the read tools do NOT redact, strip or cap: an email, a zero-width character and a 20 KB body come back untouched", async () => {
+    const body = "mail alice@example.com​" + "z".repeat(20_000);
+    readers.readIssue.mockResolvedValue({ title: "t@example.com", body });
+    const res = await toolByName("github_read_issue").handler({ issue_number: 1 });
+    const payload = JSON.parse(res.content[1].text);
+    expect(payload.title).toBe("t@example.com");
+    expect(payload.body).toBe(body);
+  });
+
+  it("the read tools call their readers with EXACTLY the legacy argument lists (no fetch options)", async () => {
+    readers.readIssue.mockResolvedValue({});
+    readers.readPullRequest.mockResolvedValue({});
+    readers.readIssueComments.mockResolvedValue([]);
+    readers.listPullRequestComments.mockResolvedValue([]);
+    readers.readCiStatus.mockResolvedValue([]);
+    await toolByName("github_read_issue").handler({ issue_number: 3 });
+    await toolByName("github_read_pr").handler({ pull_number: 4 });
+    await toolByName("github_read_issue_comments").handler({ issue_number: 5, per_page: 7 });
+    await toolByName("github_list_pr_comments").handler({ pull_number: 6, per_page: 8 });
+    await toolByName("github_read_ci_status").handler({ branch: "b", per_page: 99 });
+    expect(readers.readIssue).toHaveBeenLastCalledWith(1, "o", "r", 3);
+    expect(readers.readPullRequest).toHaveBeenLastCalledWith(1, "o", "r", 4);
+    expect(readers.readIssueComments).toHaveBeenLastCalledWith(1, "o", "r", 5, { per_page: 7 });
+    expect(readers.listPullRequestComments).toHaveBeenLastCalledWith(1, "o", "r", 6, { per_page: 8 });
+    expect(readers.readCiStatus).toHaveBeenLastCalledWith(1, "o", "r", { branch: "b", per_page: 30 });
+  });
+});

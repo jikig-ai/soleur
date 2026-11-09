@@ -494,6 +494,7 @@ AFFECTED_PLUGINS_SOLEUR_SKILLS_CVE_EXPOSURE_TEST_HOST_STATE_TEST_SH_PATHS=(
   "plugins/soleur/skills/cve-exposure/scripts/host-state.sh"
   "plugins/soleur/skills/cve-exposure/test/host-state.test.sh"
   "scripts/betterstack-query.sh"
+  "scripts/deadman-heartbeat-feeder.sh"
   "scripts/image-cve-scan.sh"
   "scripts/lib/betterstack-read-classify.sh"
   "scripts/lib/test-affected-paths.sh"  # THIS FILE
@@ -2091,7 +2092,7 @@ AFFECTED_SCRIPTS_CI_PR_SELECTION_PATHS=(
 )
 
 # scripts/ci-oracle-lane (#12156, ADR-276 amendment) — the suite EXECUTES the oracle-lane driver against throwaway git
-# fixtures (surface members, every exclusion, the hunk-extent arms, output grammar, the activation lock and the
+# fixtures (surface members, every exclusion, the hunk-extent arms, output grammar, the lock env-read and the
 # fail-closed defaults) and asserts manifest↔registration parity for scripts/ci-oracle-lane-suites.txt. ci.yml is an
 # edge because the suite pins the oracle-selection/oracle-index-check wiring and the ORACLE-ONLY-SKIP arm. Declared
 # edge set, not always-on; self-includes this file per the SELF-INCLUSION rule.
