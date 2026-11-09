@@ -1232,6 +1232,7 @@ FIX
 # T-mq-1.m15 (must-PASS): each member of the sanctioned {1,2} set staged consistently across
 # tf+DR+README must go GREEN — covers the reject-everything guard class (a pin that fails its own
 # sanctioned values is worse than no pin). Driven on staged copies so the row is live-value agnostic.
+# shellcheck disable=SC2016  # sed scripts are single-quoted on purpose; $v interpolates via '...'"$v"'...' concatenation
 t_mq_sanctioned_values_pass() {
   local d v
   for v in 1 2; do
