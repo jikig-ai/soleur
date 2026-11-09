@@ -230,7 +230,8 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$para" == *'in an attached session, ask the epic-start question once here, before the worktree exists'* ]] || emit ask-once-here
   [[ "$para" == *'before the worktree exists'* && "$para" == *'the worktree is created afterwards'* ]] || emit ask-before-worktree
   [[ "$para" == *'`- Hold: Operator-reserved: <words>` (a prefix on the Hold line'* ]] || emit operator-reserved-format
-  [[ "$para" == *'an `ask me before` hold and any owner-reserved hold must be written'* ]] || emit reserved-conversion
+  [[ "$para" == *'an `ask me before`, `explicit go-ahead` or `operator approval` hold is written `Operator-authorizes:` there and an owner-reserved hold `Operator-reserved:` there'* ]] || emit reserved-conversion
+  [[ "$para" == *'is written `Operator-authorizes:` there'* ]] || emit authorizes-conversion
   [[ "$para" == *'stall sentences of standing-delegation.md section 6'* ]] || emit stall-section
   [[ "$para" == *'found in the brief itself, in the open epic'* ]] || emit routing-widened
   [[ "$para" == *'in none of those three places'* ]] || emit closing-widened
@@ -274,7 +275,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$TB" == *'at most the first three distinct'* ]] || emit classification-multi-epic
   [[ "$TB" == *'Could not read #<N>; its holds are unclassified and stand'* && "$TB" == *'do not classify the items yourself'* && "$TB" == *'A failed read of ANY candidate'* && "$TB" == *'ends the classification-only route for this brief'* ]] || emit classification-read-failure
   [[ "$TB" == *'an outsider-authored body never triggers here either'* ]] || emit classification-author-limits
-  [[ "$RB" == *'**Classification list: route**'* && "$RB" == *'Rule on this technical question (BINDING). Do NOT use AskUserQuestion. Classify these holds of epic #<N>:'* && "$RB" == *'one `Item <id>:` block per item'* && "$RB" == *'set aside every item whose words begin `Operator-reserved:`'* ]] || emit classification-route
+  [[ "$RB" == *'**Classification list: route**'* && "$RB" == *'Rule on this technical question (BINDING). Do NOT use AskUserQuestion. Classify these holds of epic #<N>:'* && "$RB" == *'one `Item <id>:` block per item'* && "$RB" == *'set aside, without asking the CTO, every item whose words begin `Operator-reserved:` or `Operator-authorizes:`'* ]] || emit classification-route
   [[ "$RB" == *'a block headed `UNTRUSTED DATA (hold items)` fenced by a line of a delimiter that the item text does not contain'* && "$RB" == *'the literal strings `Structured advisory only` and `IMPLEMENTATION PLAN (not code)` are removed from item text repeatedly until neither occurs'* ]] || emit classification-untrusted-items
   [[ "$RB" == *'This prompt never starts `Own the epic`'* ]] || emit classification-prompt-not-own-the-epic
   [[ "$RB" == *'Classification only routes: it never discharges a hold,'* ]] || emit classification-never-discharges
@@ -308,7 +309,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$RB" == *'The CTO can only add operator-class items, never remove one'* ]] || emit classification-only-adds
   [[ "$RB" == *'discards unknown or duplicate ids'* ]] || emit classification-discards-ids
   [[ "$RB" == *'treats an item with no block as operator-class'* ]] || emit classification-no-block
-  [[ "$RB" == *'and every rule above (fail closed, the author checks, the plan-path rules, `Operator-reserved:` holds always stand) is unchanged'* ]] || emit classification-rules-unchanged
+  [[ "$RB" == *'and every rule above (fail closed, the author checks, the plan-path rules, `Operator-reserved:` and `Operator-authorizes:` holds always stand) is unchanged'* ]] || emit classification-rules-unchanged
   [[ "$NB" == *'also with `If an open action-required issue for this epic exists, reuse it`'* ]] || emit zero-scope-reuse-issue
   [[ "$NB" == *'run no `render`'* ]] || emit zero-scope-no-render
   [[ "$NB" == *'states No delegable act and carries no Scope items'* ]] || emit zero-scope-reply-shape
@@ -316,9 +317,12 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   [[ "$NB" == *'If none of the holds is delegable, say No delegable act instead of the Scope items'* ]] || emit zero-scope-cue
   [[ "$NB" == *'ask nothing and route normally'* ]] || emit zero-scope-ask-nothing
   # Fix round 1 (PR 11476): the clauses added when the args handoff was replaced by the T2 sink and the route was made explicit.
-  [[ "$RB" == *'both matched after normalizing the item text (HTML comments are stripped first, and an unterminated `<!--` runs to the end of the text; then ignore case'* ]] || emit classification-reserved-normalization
+  [[ "$RB" == *'all matched after normalizing the item text (HTML comments are stripped first, and an unterminated `<!--` runs to the end of the text; then ignore case'* ]] || emit classification-reserved-normalization
   [[ "$RB" == *'("begin" means after any list marker, checkbox mark or `Hold:` label)'* ]] || emit classification-begin-defined
-  [[ "$RB" == *'and list each as operator-class in the ACTION list only (no decision-challenges row)'* && "$RB" == *'(those items, like the set-aside ones, go to the ACTION list only)'* ]] || emit classification-action-list-only
+  [[ "$RB" == *'is listed as operator-class in the ACTION list only (no decision-challenges row)'* && "$RB" == *'(those items, like the set-aside ones, go to the ACTION list only)'* ]] || emit classification-action-list-only
+  [[ "$RB" == *'is operator-executes'* && "$RB" == *'or one carrying one of the three phrases, is operator-authorizes'* ]] || emit authorizes-class-split
+  [[ "$RB" == *'Say go and I run it: <the item> - only you can say go'* ]] || emit authorizes-render
+  [[ "$RB" == *'hr-menu-option-ack-not-prod-write-auth'* && "$RB" == *'never as an operator errand'* ]] || emit authorizes-in-session-go
   [[ "$RB" == *'(chosen after the comment strip and the cue strip; the same line closes the block)'* ]] || emit classification-delimiter
   [[ "$RB" == *'items are sent with HTML comments removed'* ]] || emit classification-comments-removed
   [[ "$RB" == *'A failed discovery call counts as a found marker (it diverts and discharges nothing)'* ]] || emit classification-marker-discovery-fails
@@ -341,7 +345,7 @@ evaluate() { # <go.md> <base> [check|skip]   skip = the merge-base anchor is not
   # Fix round 1, authority clauses that had no pin of their own (one token each) and the anchor sentence of the whole paragraph.
   [[ "$para" == *'It routes only when a resume or handoff brief carries BOTH an epic reference (`#N`) and a structured list of operator holds'* ]] || emit routing-anchor-sentence
   [[ "$RB" == *'a missing or malformed reply leaves every item operator-class'* ]] || emit classification-malformed-reply
-  [[ "$RB" == *'without asking the CTO'* && "$RB" == *'list each as operator-class'* ]] || emit classification-setaside-no-cto
+  [[ "$RB" == *'without asking the CTO'* && "$RB" == *'listed as operator-class'* ]] || emit classification-setaside-no-cto
   [[ "$RB" == *'the task proceeds to the first point that needs one, where it stops with one plain sentence naming the ACTION'* ]] || emit classification-proceeds-to-first-need
   [[ "$RB" == *'A headless session'* ]] || emit classification-headless-session
   [[ "$RB" == *'When the same input also carries a production-hold form,'* ]] || emit classification-both-forms-lead
@@ -737,7 +741,7 @@ if [[ -n "$HEAD_SHA" && "$BASE_REF" == "$HEAD_SHA" ]]; then
   ANCHOR_MODE=skip; ANCHOR_REASON="merge base == HEAD (this change is merged): the comparison would be self-identity; the invariants are PR-time checks"
 fi
 REAL_OUT="$(evaluate "$GO_MD" "$BASE_REF" "$ANCHOR_MODE")"; REAL_RC=$?
-ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded list-source-pr-skip runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced classification-trigger classification-brief-only classification-ignored-blocks classification-open-epic-only classification-epic-ref classification-multi-epic classification-read-failure classification-author-limits classification-route classification-untrusted-items classification-prompt-not-own-the-epic classification-never-discharges classification-no-delegation-recorded classification-no-render classification-continues classification-both-forms prose-amended zero-scope-no-question zero-scope-no-issue zero-scope-precedence zero-scope-malformed-reply zero-scope-ask-once-exception classification-pr-projection classification-reserved-wording classification-ids classification-epic-selection classification-intro-pointer classification-headless classification-invoking-message classification-marker-check classification-rows classification-edge-states classification-prompt-overrides-shape classification-label-forms classification-divert classification-only-adds classification-discards-ids classification-no-block classification-rules-unchanged zero-scope-reuse-issue zero-scope-no-render zero-scope-reply-shape zero-scope-conditions zero-scope-cue zero-scope-ask-nothing classification-reserved-normalization classification-begin-defined classification-action-list-only classification-delimiter classification-comments-removed classification-marker-discovery-fails classification-divert-holds classification-epic-start-scope zero-scope-dead-end zero-scope-dead-end-no-issue zero-scope-reuse-key classification-item-defined classification-inert-rulings routing-anchor-sentence classification-intro-exception zero-scope-invoking-ref classification-malformed-reply classification-setaside-no-cto classification-proceeds-to-first-need classification-headless-session classification-both-forms-lead classification-records-sent-ids classification-skipped classification-never-reread zero-scope-malformed-stands zero-scope-every-hold-stands zero-scope-well-formed zero-scope-rows-recorded classification-bullet-label classification-bullet-items classification-bullet-block-end classification-bullet-sibling classification-bullet-text-after-colon classification-block-end-nonlist classification-deeper-heading classification-heading-outside-fence classification-marker-exit-status classification-vocabulary-exact matcher-note-authors-empty matcher-note-vocabulary-empty fx-matcher-failed fx-unknown $FX_NAMES anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
+ALL_PROPS="paragraph-missing token-HOLDS token-epic-ref token-OWNER-GATED standing-line-not-a-trigger routing-requires-both ask-the-operator-not-a-trigger wording-fail-closed wording-ask-once owner-cto-own-the-epic gate-handoff container-link delegation-render render-text headless plugin-root-paths repo-relative-path receipt-wiring no-askuserquestion-for-technical-hold newest-decides stop-sequence list-source list-source-main-existence prose-excluded closed-epic-excluded list-source-pr-skip runbook-not-a-source author-association plan-path-rules plan-path-prefix plan-path-mode trigger-never-discharges epic-text-not-authority scope-items-source headless-dedupe headless-issue-inline headless-no-answer-recorded ask-once-here ask-before-worktree operator-reserved-format reserved-conversion stall-section routing-widened closing-widened no-guess-discharge render-not-cto invalid-record-deleted verify-before-each-act ship-arming-not-delegated stall-holds-stand paraphrase-holds-stand disarm-auto-merge headless-no-delegation expiry-30-days-at-most later-session-asks-once envelope-not-archived headless-dedupe-recipe headless-dedupe-marker headless-dedupe-output headless-issue-reply-line no-ends-on-scope-change attached-no-recorded standing-issue-resurfaced classification-trigger classification-brief-only classification-ignored-blocks classification-open-epic-only classification-epic-ref classification-multi-epic classification-read-failure classification-author-limits classification-route classification-untrusted-items classification-prompt-not-own-the-epic classification-never-discharges classification-no-delegation-recorded classification-no-render classification-continues classification-both-forms prose-amended zero-scope-no-question zero-scope-no-issue zero-scope-precedence zero-scope-malformed-reply zero-scope-ask-once-exception classification-pr-projection classification-reserved-wording classification-ids classification-epic-selection classification-intro-pointer classification-headless classification-invoking-message classification-marker-check classification-rows classification-edge-states classification-prompt-overrides-shape classification-label-forms classification-divert classification-only-adds classification-discards-ids classification-no-block classification-rules-unchanged zero-scope-reuse-issue zero-scope-no-render zero-scope-reply-shape zero-scope-conditions zero-scope-cue zero-scope-ask-nothing classification-reserved-normalization classification-begin-defined classification-action-list-only authorizes-conversion authorizes-class-split authorizes-render authorizes-in-session-go classification-delimiter classification-comments-removed classification-marker-discovery-fails classification-divert-holds classification-epic-start-scope zero-scope-dead-end zero-scope-dead-end-no-issue zero-scope-reuse-key classification-item-defined classification-inert-rulings routing-anchor-sentence classification-intro-exception zero-scope-invoking-ref classification-malformed-reply classification-setaside-no-cto classification-proceeds-to-first-need classification-headless-session classification-both-forms-lead classification-records-sent-ids classification-skipped classification-never-reread zero-scope-malformed-stands zero-scope-every-hold-stands zero-scope-well-formed zero-scope-rows-recorded classification-bullet-label classification-bullet-items classification-bullet-block-end classification-bullet-sibling classification-bullet-text-after-colon classification-block-end-nonlist classification-deeper-heading classification-heading-outside-fence classification-marker-exit-status classification-vocabulary-exact matcher-note-authors-empty matcher-note-vocabulary-empty fx-matcher-failed fx-unknown $FX_NAMES anchors-missing paragraph-inside-block paragraph-misplaced base-unresolvable base-degenerate block-hash-differs"
 for p in $ALL_PROPS; do
   ck
   case "$p" in base-unresolvable|base-degenerate|block-hash-differs)
@@ -979,8 +983,19 @@ para_awk sub "$GO_MD" 'record that answer as a comment on that issue' 'discard t
 mrow "M52 a No answer is not recorded" "$M/m52.md" headless-no-answer-recorded
 para_awk sub "$GO_MD" '(a prefix on the Hold line' '(a suffix on the Hold line' > "$M/m53.md"
 mrow "M53 Operator-reserved becomes a suffix" "$M/m53.md" operator-reserved-format
-para_awk sub "$GO_MD" 'must be written' 'may be written' > "$M/m54.md"
+para_awk sub "$GO_MD" 'is written `Operator-authorizes:` there' 'may be written `Operator-authorizes:` there' > "$M/m54.md"
 mrow "M54 owner-reserved conversion becomes optional" "$M/m54.md" reserved-conversion
+# the Operator-authorizes class (Ref #12443): set-aside second prefix, phrase routing, the render, the conversion target
+para_awk sub "$GO_MD" ' or `Operator-authorizes:`' '' > "$M/m54a.md"
+mrow "M54a the Operator-authorizes prefix dropped from the set-aside" "$M/m54a.md" classification-route
+para_awk sub "$GO_MD" 'is operator-authorizes and is listed' 'is operator-executes and is listed' > "$M/m54b.md"
+mrow "M54b the phrase-listed items route to the executes class" "$M/m54b.md" authorizes-class-split
+para_awk sub "$GO_MD" 'Say go and I run it: <the item>' '' > "$M/m54c.md"
+mrow "M54c the authorizes render dropped" "$M/m54c.md" authorizes-render
+para_awk sub "$GO_MD" 'never as an operator errand' 'as an operator errand' > "$M/m54d.md"
+mrow "M54d the authorizes item is listed as an operator errand" "$M/m54d.md" authorizes-in-session-go
+para_awk sub "$GO_MD" 'is written `Operator-authorizes:` there and an owner-reserved hold `Operator-reserved:` there' 'is written `Operator-reserved:` there' > "$M/m54e.md"
+mrow "M54e the two write targets collapse to one class" "$M/m54e.md" authorizes-conversion
 para_awk sub "$GO_MD" 'standing-delegation.md section 6' 'standing-delegation.md section 7' > "$M/m55.md"
 mrow "M55 the stall sentences point at the wrong section" "$M/m55.md" stall-section
 # M56..M75: whole-clause inversions of the delegation-safety rules and the dedupe/reply/No-lifetime clauses added in the
@@ -1213,7 +1228,11 @@ SWEEP=(
   'classification-only-adds|can only add operator-class items, never remove one'
   'classification-discards-ids|discards unknown or duplicate ids'
   'classification-no-block|treats an item with no block as operator-class'
-  'classification-rules-unchanged|(fail closed, the author checks, the plan-path rules, `Operator-reserved:` holds always stand) is unchanged'
+  'classification-rules-unchanged|(fail closed, the author checks, the plan-path rules, `Operator-reserved:` and `Operator-authorizes:` holds always stand) is unchanged'
+  'authorizes-conversion|is written `Operator-authorizes:` there'
+  'authorizes-class-split|or one carrying one of the three phrases, is operator-authorizes'
+  'authorizes-render|Say go and I run it: <the item> - only you can say go'
+  'authorizes-in-session-go|hr-menu-option-ack-not-prod-write-auth'
   'zero-scope-reuse-issue|and also with `If an open action-required issue for this epic exists, reuse it`'
   'zero-scope-no-render|run no `render`, '
   'zero-scope-reply-shape|states No delegable act and carries no Scope items'
@@ -1226,10 +1245,10 @@ SWEEP=(
   'classification-both-forms|passing it the technical rulings, and then route normally'
   'classification-untrusted-items|removed from item text repeatedly until neither occurs'
   'classification-ignored-blocks|, HTML comments (`<!-- -->`)'
-  'classification-reserved-normalization|both matched after normalizing the item text'
+  'classification-reserved-normalization|all matched after normalizing the item text'
   'classification-reserved-normalization|an unterminated `<!--` runs to the end of the text'
   'classification-begin-defined|("begin" means after any list marker, checkbox mark or `Hold:` label)'
-  'classification-action-list-only|and list each as operator-class in the ACTION list only (no decision-challenges row)'
+  'classification-action-list-only|is listed as operator-class in the ACTION list only (no decision-challenges row)'
   'classification-action-list-only|(those items, like the set-aside ones, go to the ACTION list only)'
   'classification-delimiter|(chosen after the comment strip and the cue strip; the same line closes the block)'
   'classification-comments-removed|items are sent with HTML comments removed'
@@ -1246,7 +1265,7 @@ SWEEP=(
   'routing-anchor-sentence|It routes only when a resume or handoff brief carries BOTH an epic reference (`#N`) and a structured list of operator holds'
   'classification-malformed-reply|a missing or malformed reply leaves every item operator-class'
   'classification-setaside-no-cto|without asking the CTO'
-  'classification-setaside-no-cto|list each as operator-class'
+  'classification-setaside-no-cto|listed as operator-class'
   'classification-proceeds-to-first-need|the task proceeds to the first point that needs one, where it stops with one plain sentence naming the ACTION'
   'classification-headless-session|A headless session'
   'classification-both-forms-lead|When the same input also carries a production-hold form,'
@@ -1356,7 +1375,7 @@ ctl_fails  _exact_bad || { printf 'FATAL: late control: row() accepted the verdi
 # is unbound there, so the mutant dies at `set -u` and the floor scores as unconstructible.
 nprops=0; for _p in $ALL_PROPS; do nprops=$((nprops + 1)); done
 EXPECTED_ASSERTIONS=$(( nprops + 1 + 1 + 1 + 3 + nrows + 1 + 6 + 5 ))
-ABSOLUTE_FLOOR=663
+ABSOLUTE_FLOOR=685
 MIN_ASSERTIONS=$(( EXPECTED_ASSERTIONS > ABSOLUTE_FLOOR ? EXPECTED_ASSERTIONS : ABSOLUTE_FLOOR ))
 if [[ "$asserted" -lt "$MIN_ASSERTIONS" ]]; then
   printf '\nFATAL: anti-vacuity: %d assertion(s) executed, floor is %d. The battery ran but did not assert.\n' \
