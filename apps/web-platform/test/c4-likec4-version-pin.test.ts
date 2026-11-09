@@ -261,7 +261,8 @@ const PR_AFFECTED_WEBPLAT_IF = DRAFT_LIGHT_IF.replace(" }}", " && !(github.event
 // earlier term — event disjunct covering pull_request AND merge_group, `active == 'true'`, head_sha non-empty, head
 // bound to either event's sha, and membership in `oracle-selection`'s `skip_legs` list — and add `oracle-selection`
 // to `needs:`. The term is inert while `CI_ORACLE_LANE` is unset and while `ORACLE_LANE_LOCKED=1` is set in the
-// job's environment (the dark-mode revert path — the committed lock literal was removed by the activation PR);
+// job's environment (the dark-mode revert path — unwired today; the committed lock literal was removed by the
+// activation PR);
 // scripts/ci-push-dedupe.test.sh pins the same conjunct via or_term() against ci.yml, so the sanctioned
 // spelling lives in exactly one place per harness.
 const ORACLE_LANE_TERM = (leg: string): string =>

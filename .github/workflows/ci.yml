@@ -434,16 +434,17 @@ jobs:
   # path is inside the oracle surface — the ratchet's data files, AFFECTED_*_PATHS array extents in
   # scripts/lib/test-affected-paths.sh, or a doc path. A COST lever, allowed to fail in one direction only: every unknown
   # runs the full battery. The decision lives in scripts/ci-oracle-lane.sh (this YAML stays thin; the driver holds the
-  # surface, the exclusion list, the hunk-extent check and the activation lock). It emits ONLY literal outputs:
+  # surface, the exclusion list, the hunk-extent check and the env re-lock read). It emits ONLY literal outputs:
   # oracle_only, active, skip_legs (a comma list over the five heavy legs, EMPTY unless active), head_sha and base_sha.
   #
-  # STAGED, NOW ARMED — the same staging shape as pr-selection above. While the repository variable
-  # CI_ORACLE_LANE is unset or empty the job is SKIPPED (no runner, no checkout, no dark cost). The `if:` only tests
-  # "non-empty" on purpose: Actions compares strings WITHOUT regard to case, so the exact `on` compare lives in the
-  # driver's bash. The compile-time activation lock was removed by #12300 (2026-11-08): with `SWITCH=on` and an
-  # oracle-only diff, `active` becomes `true` and the five heavy legs skip. `ORACLE_LANE_LOCKED=1` set in the job's
-  # environment remains as the dark-mode revert path — it re-darkens the lane (`active` stays `false`,
-  # `would_skip` telemetry only) without a driver edit.
+  # STAGED, NOW ARMED — the same staging machinery as pr-selection above (which remains dark-and-locked). While
+  # the repository variable CI_ORACLE_LANE is unset or empty the job is SKIPPED (no runner, no checkout, no dark
+  # cost). The `if:` only tests "non-empty" on purpose: Actions compares strings WITHOUT regard to case, so the
+  # exact `on` compare lives in the driver's bash. The compile-time activation lock was removed by #12300
+  # (2026-11-08): with `SWITCH=on` and an oracle-only diff, `active` becomes `true` and the five heavy legs skip.
+  # `ORACLE_LANE_LOCKED=1` remains as the dark-mode revert path — no `env:` mapping wires it today, so wiring it
+  # (itself an excluded-path ci.yml edit) re-darkens the lane (`active` stays `false`, `would_skip` telemetry
+  # only) without a driver edit.
   #
   # `timeout-minutes` is written alone on its line and there is NO `needs:` on purpose: the release workflow's CI budget
   # awk sums the longest declared `needs:` path, so a 3-minute parallel root does not lengthen it (the pr-selection job
@@ -2435,8 +2436,9 @@ jobs:
           # ADR-276 amendment (#12156): the `oracle-selection` outputs, read ONLY by the named ORACLE-ONLY-SKIP tolerance
           # below — the same intra-run-string shape as the S4 inputs above. ORACLE_HEAD_OK binds the head event-agnostically:
           # `github.event.pull_request.head.sha` is empty on a merge_group payload, so the `||` yields the event's own head
-          # SHA on either event. An `ORACLE_LANE_LOCKED=1` env re-lock (the dark-mode revert path) keeps `active`
-          # `false` and nothing tolerated; armed, `active` may be `true` and the ORACLE-ONLY-SKIP tolerance applies.
+          # SHA on either event. An `ORACLE_LANE_LOCKED=1` env re-lock (the dark-mode revert path — unwired today)
+          # keeps `active` `false` and nothing tolerated; armed, `active` may be `true` and the ORACLE-ONLY-SKIP
+          # tolerance applies.
           # ORACLE_INDEX_RESULT is the validation leg's own result — a member of entries[], read like every leg.
           ORACLE_SKIP_LEGS: ${{ needs.oracle-selection.outputs.skip_legs }}
           ORACLE_ACTIVE: ${{ needs.oracle-selection.outputs.active }}

@@ -940,7 +940,7 @@ row_lock() {  # post-activation: SWITCH=on classifies, annotates AND arms; the e
   # ORACLE_LANE_LOCKED remains as the dark-mode revert path (a mapped env can re-lock the lane —
   # no step env wires it today, so wiring is itself an excluded-path edit; O-LOCK-READ is still
   # live machinery, so it is covered here).
-  local d="$1"
+  local d="$1" v
   drive accept "$d" "SWITCH=on"
   check_eq "O-ARM unlocked + SWITCH=on: active" "$O_ACTIVE" "true"
   check_eq "O-ARM unlocked + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
@@ -952,8 +952,9 @@ row_lock() {  # post-activation: SWITCH=on classifies, annotates AND arms; the e
   check_eq "O-LOCK env re-lock + SWITCH=on: notice locked" "$N_LOCKED" "true"
   check_eq "O-LOCK env re-lock keeps would_skip telemetry" "$N_WOULD" "$ORACLE_FIVE"
   # Non-`1` values must NOT lock: the O-LOCK-READ compare is exact-`1`. `on` is the highest-value member
-  # (the plausible "same as the switch" fat-finger); `0` and `true` cover the numeric/string truthy spellings.
-  for v in 0 true on; do
+  # (the plausible "same as the switch" fat-finger); `0` and `true` cover the numeric/string truthy spellings;
+  # `10` pins against a `=~ ^1`-family prefix loosening (locks on `10`, `1 `, `1x`).
+  for v in 0 true on 10; do
     drive accept "$d" "SWITCH=on" "ORACLE_LANE_LOCKED=$v"
     check_eq "O-LOCK env=$v (non-1) + SWITCH=on: active" "$O_ACTIVE" "true"
     check_eq "O-LOCK env=$v (non-1) + SWITCH=on: skip_legs" "$O_SKIP" "$ORACLE_FIVE"
@@ -1558,8 +1559,9 @@ mutate "O-DIFF a failed git diff is trusted anyway"             "$PRISTINE" 's/ 
 # the arm, the lock, the defaults
 mutate "O-SWITCH the exact-on compare becomes non-empty"        "$UNLOCKED"  's|= on \]|=~ ^on]|'            row_switch
 mutate "O-SWITCH any non-empty switch arms"                     "$UNLOCKED"  's|\[ "\${SWITCH:-}" = on \]|[ -n "${SWITCH:-}" ]|' row_switch
-# a dead arm is verdict-identical on the LOCKED copy (active stays false by construction), so this one mutates the
-# lock-neutralized driver and is read by the unlocked rows that expect active=true.
+# this one mutates the lock-neutralized driver and is read by the unlocked rows that expect active=true
+# ($UNLOCKED is byte-identical to $PRISTINE today — the cmp pin above proves it; it stays the base for
+# symmetry with the O-SWITCH mutants).
 mutate "O-ARM the whole arm line is deleted (arm-presence, not lock-conjunct)" "$UNLOCKED" "$(kill_guard O-ARM)" row_switch
 mutate "O-LOCK the arm's lock conjunct is dropped"              "$PRISTINE"  's| && \[ "\$locked" = false \]||' row_lock
 mutate "O-LOCK the lock is not read"                            "$PRISTINE"  "$(kill_guard O-LOCK-READ)"     row_lock
@@ -1586,7 +1588,7 @@ fi
 # ASSERTION FLOOR, reported with printf + exit rather than through the helpers it backstops
 # (ADR-193). DERIVED FROM A MEASURED GREEN RUN, not guessed: re-derive after adding a row —
 #   bash scripts/ci-oracle-lane.test.sh | tail -1
-MIN_ROWS=5022
+MIN_ROWS=5043
 if [ "$TOTAL" -lt "$MIN_ROWS" ]; then
   printf 'FAIL: assertion floor: %d rows executed, at least %d required. Rows were removed or a loop stopped early.\n' \
     "$TOTAL" "$MIN_ROWS" >&2
