@@ -1901,17 +1901,6 @@
 "id": "1qaph839sxqkq",
 "title": "CONNECT tunnel per entitled session — Proxy-Authorization Basic <workspaceId>:<sessionToken>; TLS handshake metadata only, payloads end-to-end"
 },
-"1sqwkvp8bvaqw": {
-"technology": "HTTPS/SSH",
-"source": {
-"model": "platform.engine"
-},
-"target": {
-"model": "github"
-},
-"id": "1sqwkvp8bvaqw",
-"title": "Git operations and CI"
-},
 "1tsufuwjc2ho7": {
 "technology": "HTTPS",
 "source": {
@@ -2334,6 +2323,17 @@
 },
 "id": "2h9xbajlmlyfd",
 "title": "Loads via .grok/config.toml; the plugin root resolves from the loader-substituted ${CLAUDE_PLUGIN_ROOT} token first, then GROK_PLUGIN_ROOT, then the two managed Devin plugin caches by manifest identity (ADR-179 decision 11 as amended by A16, #8401 — the cache arms are no longer confined to the cloud-mode gate)"
+},
+"2haat4v759yym": {
+"technology": "HTTPS/SSH",
+"source": {
+"model": "platform.engine"
+},
+"target": {
+"model": "github"
+},
+"id": "2haat4v759yym",
+"title": "Git operations and CI. In an entitled web-egress session whose connected repository is public, the Concierge cc dispatcher also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)"
 },
 "2hx5cdjc3tumy": {
 "technology": "HTTPS release-asset download (github.com, sha256-pinned, anonymous)",
@@ -6989,8 +6989,8 @@
 "relations": [
 "12uwtp6e65sao",
 "15jcg8gdjqck",
-"1sqwkvp8bvaqw",
 "21oqpwt1wvybl",
+"2haat4v759yym",
 "2jy9gkus366d6",
 "33oelk4lvl3u7",
 "3mxkvx15xswfp",
@@ -11889,7 +11889,7 @@
 ],
 "notation": "System",
 "kind": "system",
-"x": 7966,
+"x": 7507,
 "y": 2503,
 "width": 388,
 "height": 180,
@@ -13487,7 +13487,7 @@
 "id": "953sr4",
 "source": "platform.engine",
 "target": "github",
-"label": "Git operations and CI",
+"label": "Git operations and CI. In an entitled \nweb-egress session whose connected \nrepository is public, the Concierge cc \ndispatcher also serves six read-only \nGitHub tools (pull-request list, ",
 "points": [
 [
 2288,
@@ -13556,13 +13556,13 @@
 ],
 "labelBBox": {
 "x": 5198,
-"y": 887,
-"width": 136,
-"height": 39
+"y": 853,
+"width": 241,
+"height": 106
 },
 "parent": null,
 "relations": [
-"1sqwkvp8bvaqw",
+"2haat4v759yym",
 "33oelk4lvl3u7"
 ],
 "color": "gray",
@@ -14186,7 +14186,7 @@
 1914
 ],
 [
-7765,
+7766,
 2065
 ],
 [
@@ -15761,24 +15761,24 @@
 2247
 ],
 [
-6293,
-2332
+6295,
+2328
 ],
 [
 6492,
 2443
 ],
 [
-6618,
-2512
+6659,
+2539
 ],
 [
-7539,
-2563
+7198,
+2574
 ],
 [
-7956,
-2583
+7497,
+2586
 ]
 ],
 "labelBBox": {
@@ -15819,24 +15819,12 @@
 617
 ],
 [
-8232,
-660
-],
-[
-8254,
-678
-],
-[
-8256,
-727
-],
-[
-8261,
-848
+8225,
+674
 ],
 [
 8233,
-886
+888
 ],
 [
 8278,
@@ -15859,28 +15847,28 @@
 1304
 ],
 [
-8479,
-1330
+8491,
+1332
 ],
 [
 8468,
 1409
 ],
 [
-8416,
-1820
+8334,
+1862
 ],
 [
-8264,
-2292
+7966,
+2305
 ],
 [
-8195,
-2493
+7793,
+2495
 ]
 ],
 "labelBBox": {
-"x": 8461,
+"x": 8447,
 "y": 1511,
 "width": 25,
 "height": 18
@@ -15901,36 +15889,36 @@
 "label": "Ships disk-state observability — df% of \n/var/lib/zot + resize2fs before/after + \nzot health — as one SOLEUR_ZOT_DISK \nevent, plus a SOLEUR_PRIVATE_NIC \nprivate-NIC convergence event (#6415), ",
 "points": [
 [
-9106,
+9108,
 2272
 ],
 [
-9058,
-2330
+9061,
+2331
 ],
 [
-8989,
-2401
+8991,
+2404
 ],
 [
 8911,
 2443
 ],
 [
-8741,
-2534
+8739,
+2527
 ],
 [
-8522,
-2569
+8204,
+2566
 ],
 [
-8365,
-2583
+7906,
+2582
 ]
 ],
 "labelBBox": {
-"x": 9046,
+"x": 9054,
 "y": 2333,
 "width": 264,
 "height": 106
@@ -15951,16 +15939,16 @@
 "label": "Pages the operator INDEPENDENTLY of \nSentry — the second source. The apex \nuptime monitor, the database-readiness \nkeyword monitor on app.soleur.ai/health \n(#7884/ADR-222: pages when the /health ",
 "points": [
 [
-7966,
-2575
+7507,
+2534
 ],
 [
-7615,
-2533
+7245,
+2446
 ],
 [
-6881,
-2390
+6785,
+2251
 ],
 [
 6552,
@@ -15980,7 +15968,7 @@
 ]
 ],
 "labelBBox": {
-"x": 6643,
+"x": 6648,
 "y": 1923,
 "width": 262,
 "height": 106
@@ -16001,16 +15989,16 @@
 "label": "Incident mirror (ADR-298, epic #10390): \nscheduled-betterstack-incident-mirror.yml \nruns every 15 min (watchdog-dispatch \nprimary — it watches the paging \nsubstrate, so it cannot be ",
 "points": [
 [
-8354,
-2589
+7895,
+2590
 ],
 [
-9380,
-2572
+8969,
+2578
 ],
 [
 14128,
-2480
+2504
 ],
 [
 14128,
@@ -16879,24 +16867,24 @@
 "label": "Incident alerts (native integration)",
 "points": [
 [
-7966,
-2624
+7507,
+2632
 ],
 [
-7550,
-2689
+7173,
+2699
 ],
 [
-6575,
-2842
+6494,
+2834
 ],
 [
 6168,
-2906
+2899
 ]
 ],
 "labelBBox": {
-"x": 7204,
+"x": 6947,
 "y": 2744,
 "width": 214,
 "height": 38

@@ -100,3 +100,27 @@ On any of these, re-run this screening before merge:
 - **(t5)** WebSearch or another server-side tool is coupled to the grant.
 - **(t6)** First observed exfiltration incident through an entitled
   session, or the audit-log viewer (#9545) lands.
+
+## 4. Addendum — 2026-11-09 (#12469): re-screening for the entitled-session GitHub read tools
+
+This addendum is append-only; sections 1 to 3 above are the 2026-10-05 record and are not rewritten. It is written in the present tense on the footing that the change lands on merge.
+
+**Trigger.** Re-screening trigger **(t5) fires**: tools are coupled to the grant. An entitled hosted session (Agent web access on, the credential quarantine in force) now receives six server-side, read-only GitHub tools: `github_list_pull_requests`, `github_read_pr`, `github_read_issue`, `github_read_issue_comments`, `github_list_pr_comments` and `github_read_ci_status`. They exist because in-sandbox `gh` has no credentials in an entitled session (ADR-278 Decision 5), so reads were lost with the writes. **Trigger (t2) does not fire**: the deny census and `denyRead` additions are unchanged, and the installation token runs in the dispatch process and never enters the sandbox (ADR-278 amendment and ADR-311 addendum of the same date).
+
+**Conclusion.** A full DPIA remains NOT required. The processing is the same owner-opted-in, default-off, fail-closed sub-purpose, and the tools add a read path from the owner's own connected repository, not a new recipient or a new data subject population beyond the third-party authors named below.
+
+**Residual (a): accepted with a named widening, narrowed by the public-repository gate.** Third-party issue, pull-request, comment and CI text becomes agent input in a session that has open egress. This widens residual (a), because that text is now co-resident with an egress path. The widening is bounded as follows.
+
+- The tools register only when the connected repository is verified PUBLIC (one bounded lookup; any error, timeout or missing field counts as private). A private repository never gets the tools and keeps today's behaviour, so no private issue, pull-request, comment or CI text is made co-resident with open egress by this change.
+- Widening to private repositories needs a new CLO ruling and an owner-acknowledgement flow before it can ship; it is tracked in #12471.
+- The repository, owner and installation are closed over server-side; the model never supplies them, and each call re-checks them and fails closed on a mismatch.
+- The tool results carry untrusted-content framing. That framing covers comments and CI text as well as titles and bodies.
+- `redactGithubSourcedText` is **data minimisation**. It is NOT a confidentiality control and NOT an anti-exfiltration control: it does not stop an agent from sending what it has read to an external host.
+
+**Point-in-time production read, dated 2026-11-09.** Exactly one workspace has `web_egress=true` (the jikig-ai/soleur dogfood workspace, with egress audit rows since at least 2026-10-24). Its owner is the requester of this change, and its connected repository is public. On that footing no re-acknowledgement gate is added for already-enabled workspaces: the new toggle copy ships in the same change as the tools and is shown before every future enable. **Re-evaluate if another workspace enables Agent web access before the copy ships.**
+
+**Readers.** Workspace members also receive the tools in an entitled session, although only the owner consented to the toggle. Members are named here as readers of the public repository's issue, pull-request and CI text through the agent.
+
+**No scope-grant gate.** There is no scope-grant gate on this path. Scope Grants governs scheduled-template action classes, not interactive reads. The workspace toggle is the only control, and no document may state otherwise.
+
+**Unchanged.** The privacy policy and the data protection disclosure are not edited by this change (CLO ruling, 2026-11-09). Writes, workflow logs, private repositories, read-tool refinements and legacy redirect handling are deferred to #12467, #12468, #12471, #12470 and #12472.

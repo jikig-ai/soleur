@@ -621,7 +621,7 @@ model {
   webapp -> plausible "Page view events" { technology "JS snippet" }
   webapp -> github "Reads release notes for the in-app Releases page" { technology "HTTPS (GitHub REST API)" }
   engine -> anthropic "LLM calls with BYOK keys (the CLI process holds the key; sandboxed Bash does not, ADR-272)" { technology "HTTPS" }
-  engine -> github "Git operations and CI" { technology "HTTPS/SSH" }
+  engine -> github "Git operations and CI. In an entitled web-egress session whose connected repository is public, the Concierge cc dispatcher also serves six read-only GitHub tools (pull-request list, pull-request and issue reads, issue and pull-request comments, CI status) in-process with the App installation token, which never enters the sandbox (ADR-278 amendment 2026-11-09, ADR-311 addendum)" { technology "HTTPS/SSH" }
   engine -> supabase "Sessions and encrypted keys" { technology "HTTPS" }
   engine -> discord "Notifications" { technology "Webhook" }
   cloudflare -> webapp "Tunnel, DNS, CDN" { technology "HTTPS" }
