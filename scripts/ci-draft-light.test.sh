@@ -915,11 +915,11 @@ mutate_yml() {
 HEAVY_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE }}"
 S2_IF="if: \${{ !cancelled() && $ELIDE_TAIL }}"
 # the jobs that carry the S4 PR-skip term and/or the oracle-lane conjunct (appended last): their live conditions and needs lines
-WEBPLAT_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-webplat) && $(or_term test-webplat) }}"
-HEAVYSC_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(pr_term test-scripts-heavy) && $(or_term test-scripts-heavy) }}"
+WEBPLAT_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(or_term test-webplat) }}"
+HEAVYSC_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(or_term test-scripts-heavy) }}"
 SCRIPTS_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $(or_term test-scripts) }}"
 SHARD_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $LIGHT_CLAUSE && $SHARD_TERM }}"
-BUN_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $(pr_term test-bun) && $(or_term test-bun) }}"
+BUN_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $(or_term test-bun) }}"
 BUILD_IF="if: \${{ !cancelled() && $ELIDE_TAIL && $(or_term web-platform-build) }}"
 # trigger
 mutate_yml y-types-no-ready "    types: [opened, synchronize, reopened, ready_for_review]" "    types: [opened, synchronize, reopened]" trigger T-TYPES
