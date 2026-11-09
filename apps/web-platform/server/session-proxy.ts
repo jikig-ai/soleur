@@ -14,8 +14,9 @@
 //                           under PROXY_HELLO_HMAC_KEY (proxy-hello.ts; #12289, ADR-323)
 //   owner → proxying host : {type:"proxy_ready"}  (after size/shape/MAC/skew/replay AND AP-2 membership)
 //                         | close(ROUTING_UNAVAILABLE, "relay refused") (any verifier refusal; one uniform reason,
-//                           then terminate() after REFUSE_LINGER_MS). The hello deadline, the pre-hello byte guard
-//                           and a protocol error drop the socket without a close frame (abnormal close, 1006).
+//                           then terminate() after REFUSE_LINGER_MS). The hello deadline and the pre-hello byte guard
+//                           drop the socket without a close frame (abnormal close, 1006); a protocol error is terminated
+//                           right after `ws` queues its own close frame (1002/1007/1009).
 // After proxy_ready the two sockets are piped verbatim in BOTH directions,
 // including close frames + codes (a drain close from the owner reaches the client;
 // a client close tears down the owner leg) so grace-abort host-locality stays
@@ -81,7 +82,7 @@ export const PRE_HELLO_MAX_BYTES = 2048;
 /** After a verifier refusal the close frame goes out and the socket is terminated this long after: `ws`
  *  would otherwise keep reading a peer that ignores the close frame for up to 30 s, up to its 100 MiB
  *  maxPayload per frame. Long enough for the 4014 frame to reach a legitimate sender. */
-const REFUSE_LINGER_MS = 250;
+export const REFUSE_LINGER_MS = 250;
 
 /** Authenticated context a proxied connection carries once AP-2 passes — the
  *  owner attaches a PRE-authenticated session from this (no token re-auth; the
@@ -434,14 +435,16 @@ export function createProxyServer(params: {
     }
     const key = peerKey(remote, remotePort);
     const timer = setTimeout(() => {
-      helloDeadlines.delete(key);
+      if (helloDeadlines.get(key) === timer) helloDeadlines.delete(key);
       socket.destroy();
       denyReporter.record("hello_timeout", { peer: peerLabel(remote) });
     }, deadlineMs);
     timer.unref();
     clearDeadline(key); // a reused key must never orphan a live timer
     helloDeadlines.set(key, timer);
-    socket.once("close", () => clearDeadline(key));
+    socket.once("close", () => {
+      if (helloDeadlines.get(key) === timer) clearDeadline(key); // never clear a newer connection's timer
+    });
   });
 
   wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
@@ -456,7 +459,7 @@ export function createProxyServer(params: {
       clearDeadline(deadlineKey);
       // After proxy_ready a protocol error belongs to the relayed session, not to the hello: do not count it
       // as a hello refusal (it would inflate relay_hello_window denied and the `shape` bucket).
-      if (!accepted) denyReporter.record("shape", { peer });
+      if (!accepted && !refusedSockets.has(ws)) denyReporter.record("shape", { peer });
       ws.terminate();
     });
     // Defence in depth: the same predicate again after TLS + upgrade (no input reaches here with a
@@ -522,9 +525,9 @@ export function createProxyServer(params: {
         // The proxying host may have dropped the client during the lookup: do not supersede the user's
         // live session on this host for a socket that is already gone.
         if (ws.readyState !== WebSocket.OPEN) return;
-        accepted = true;
         denyReporter.recordAccepted();
         ws.send(JSON.stringify({ type: "proxy_ready" }));
+        accepted = true; // only once proxy_ready is on the wire
         params.onProxiedSession(ws, { userId, workspaceId });
       } catch (err) {
         // An async handler's throw is an unhandledRejection -> process.exit(1). Fail closed instead. Only the
@@ -608,13 +611,15 @@ function safeClose(ws: WebSocket, code: number, reason: string): void {
 }
 
 /** A close status code `ws` can send: 1000-1014 except 1004/1005/1006, or the private range 3000-4999. */
-function isSendableCloseCode(code: number): boolean {
+export function isSendableCloseCode(code: number): boolean {
   return (code >= 1000 && code <= 1014 && code !== 1004 && code !== 1005 && code !== 1006) || (code >= 3000 && code <= 4999);
 }
 
 /** Owner-side verifier refusal: the uniform close frame, then terminate so a peer that ignores it cannot keep
  *  streaming into a closing socket. */
+const refusedSockets = new WeakSet<WebSocket>();
 function refuse(ws: WebSocket): void {
+  refusedSockets.add(ws); // a refused peer's later socket error is not a second refusal
   safeClose(ws, WS_CLOSE_CODES.ROUTING_UNAVAILABLE, RELAY_REFUSED);
   setTimeout(() => {
     try {

@@ -44,7 +44,7 @@ vi.mock("@/server/proxy-hello", async (importOriginal) => {
   };
 });
 
-import { createProxyServer, HELLO_DEADLINE_MS, PRE_HELLO_MAX_BYTES } from "@/server/session-proxy";
+import { createProxyServer, HELLO_DEADLINE_MS, PRE_HELLO_MAX_BYTES, REFUSE_LINGER_MS, isSendableCloseCode } from "@/server/session-proxy";
 import { signProxyHello } from "@/server/proxy-hello";
 import * as denyReporterModule from "@/server/proxy-deny-report";
 import { __resetDenyReporterForTests } from "@/server/proxy-deny-report";
@@ -301,6 +301,50 @@ describe("pre-authentication hardening (review of #12462)", () => {
       .replace(/^\s*\/\/.*$/gm, "");
     expect(src.match(/safeClose\(ws, WS_CLOSE_CODES\.ROUTING_UNAVAILABLE, RELAY_REFUSED\)/g)).toHaveLength(1);
     expect(src.match(/\brefuse\(ws\);/g)).toHaveLength(4); // defence-in-depth peer, verifier, membership, internal
+    expect(src.match(/\bws\.close\(/g)).toHaveLength(1); // the one inside safeClose: no other direct close on the owner-side ws
+  });
+
+  it("the refusal linger is long enough for the 4014 frame to reach a legitimate sender and short enough to bound a streaming peer", () => {
+    expect(REFUSE_LINGER_MS).toBeGreaterThanOrEqual(100);
+    expect(REFUSE_LINGER_MS).toBeLessThanOrEqual(1000);
+  });
+
+  it.each([
+    [999, false], [1000, true], [1003, true], [1004, false], [1005, false], [1006, false], [1014, true], [1015, false],
+    [2999, false], [3000, true], [4014, true], [4999, true], [5000, false],
+  ])("isSendableCloseCode(%i) is %s (the exact set `ws` can put on the wire)", (code, want) => {
+    expect(isSendableCloseCode(code)).toBe(want);
+  });
+
+  it("a refused peer's later protocol error is not counted as a second refusal", async () => {
+    const s = await start();
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    ws.on("error", () => undefined);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    const sock = (ws as unknown as { _socket: import("node:net").Socket })._socket;
+    // One write, two masked text frames: "x" (refused as shape by the verifier), then invalid UTF-8 (a ws protocol error
+    // that arrives while the refusal is lingering).
+    sock.write(Buffer.concat([Buffer.from([0x81, 0x81, 0, 0, 0, 0, 0x78]), Buffer.from([0x81, 0x83, 0, 0, 0, 0, 0xff, 0xfe, 0xfd])]));
+    await vi.waitFor(() => expect(denyReporterModule.denyReporter.counters("shape").denied).toBe(1), { timeout: 2000 });
+    await new Promise((r) => setTimeout(r, 400));
+    expect(denyReporterModule.denyReporter.counters("shape").denied).toBe(1);
+  });
+
+  it("a protocol error while the AP-2 lookup is pending is still counted as a hello refusal (accepted is set only after proxy_ready)", async () => {
+    let release: (v: boolean) => void = () => undefined;
+    mockMembership.mockImplementation(() => new Promise<boolean>((r) => (release = r)));
+    const s = await start();
+    const ws = new WebSocket(`wss://127.0.0.1:${s.port}/ws-proxy`, { ca: tls.CERT, rejectUnauthorized: true });
+    clients.push(ws);
+    ws.on("error", () => undefined);
+    await new Promise<void>((r) => ws.once("open", () => r()));
+    ws.send(signProxyHello(KEY, U, W));
+    await vi.waitFor(() => expect(mockMembership).toHaveBeenCalledTimes(1));
+    const sock = (ws as unknown as { _socket: import("node:net").Socket })._socket;
+    sock.write(Buffer.from([0x81, 0x83, 0, 0, 0, 0, 0xff, 0xfe, 0xfd])); // invalid UTF-8 text frame
+    await vi.waitFor(() => expect(denyReporterModule.denyReporter.counters("shape").denied).toBe(1), { timeout: 2000 });
+    release(true);
   });
 
   it("the byte guard terminates the socket (not a graceful close)", async () => {

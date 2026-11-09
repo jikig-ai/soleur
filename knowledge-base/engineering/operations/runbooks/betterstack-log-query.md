@@ -496,8 +496,8 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
 - **Wire format and check order.** `{type, userId, workspaceId, ts, nonce, mac}`; `mac` = HMAC-SHA256 under `PROXY_HELLO_HMAC_KEY`
   over `"soleur-proxy-hello-v1\n" + userId + "\n" + workspaceId + "\n" + ts + "\n" + nonce`. Order: allowlist (pre-TLS) -> 1 KiB cap ->
   shape -> MAC -> ts within 30 s -> replay (about 61 s) -> AP-2 membership. Every verifier refusal closes with the single reason
-  `relay refused` (then the owner terminates the socket); the hello deadline, the pre-hello byte guard and a protocol error drop it without
-  a close frame (1006, which the sender maps to 4014). The discriminator is the bounded Sentry event's `reason` enum, never the close text.
+  `relay refused` (then the owner terminates the socket); the hello deadline and the pre-hello byte guard drop it without a close frame (1006, which the
+  sender maps to 4014), and a protocol error is terminated right after `ws` queues its own close frame (1002/1007/1009). The discriminator is the bounded Sentry event's `reason` enum, never the close text.
 - **Rolling deploy.** The container swap is sequential (the ingress host first, then the fan-out to the peer). New sender -> old
   receiver works (the old parser ignores the extra hello keys). Old sender -> new receiver is refused with `reason=shape` for the
   stagger, a few minutes; a user whose lease sits on the lagging host sees close code 4014 and the generic reconnect loop. Live users
@@ -539,7 +539,7 @@ a reader needs to verify the rollout and to read a refusal, without SSH.
   `proxy_state=error`); the sender never dials with it (`proxyClientToOwner.bad-port`). Production pins the literal 8443.
 - **No rotation route.** A replace, update, delete or forget of the key pair is blocked by the non-ackable `relay_hello_key_changes`
   HALT on the per-merge apply (see the apply job rationale runbook). Treat a suspected key leak as an incident for the owner: neither a kill switch nor a
-  rotation is a built route (ADR-323 Decision 9: `host_proxy_tls_enabled` is flipped only by editing its default, the per-merge HALT
+  rotation is a built route (ADR-323 Decision 9: flipping `host_proxy_tls_enabled` means editing its default, the per-merge HALT
   refuses both, containers read Doppler only at start, and users on the other host retry on 4014 while the relay is down). Do NOT
   restore the previous value for a leak: that re-installs the leaked key.
 - **Restart and clocks.** The replay cache is per process, so a container restart clears it for up to about 61 s (a hello captured before

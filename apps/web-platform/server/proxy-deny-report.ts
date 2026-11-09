@@ -20,7 +20,7 @@
 // without its `feature`/`op` tags and `extra` (the fleet-wide defect tracked in #8629; see
 // server/anthropic-credit.ts). With a null error the call goes through `captureMessage`.
 //
-// Extras are an enum, counts and the supplied peer address / authenticated id pair. An
+// Extras are an enum, counts, the supplied peer address / authenticated id pair and, for `internal`, the thrown error's CLASS name. An
 // unauthenticated reason never carries a byte derived from the hello. `record` never throws:
 // a fault in the reporting path must not turn a refusal into an uncaught exception.
 

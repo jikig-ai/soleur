@@ -75,8 +75,9 @@ the second host:
    keys, shapes → MAC (`timingSafeEqual` on two 32-byte buffers) → ts within ±30 s → replay → AP-2 membership. The replay
    check-and-insert is synchronous and precedes the membership `await`. Every verifier refusal closes with the single reason
    `relay refused` and the owner terminates the socket 250 ms later, so a peer that ignores the close frame cannot keep streaming into it.
-   The hello deadline, the byte guard and a protocol error drop the socket without a close frame (an abnormal close, 1006); the sending host
-   maps a 1006 from the owner leg to the retryable 4014 so the browser reconnects.
+   The hello deadline and the byte guard drop the socket without a close frame (an abnormal close, 1006); a protocol error is terminated right
+   after `ws` queues its own close frame (1002/1007/1009). The sending host maps a 1006 from the owner leg to the retryable 4014 so the
+   browser reconnects.
 5. **Replay cache.** 4096 live entries, per process. Each entry expires at `ts + 31 s` (derived from the hello's own `ts`, so the cache
    can neither outlive nor undercut the skew window; a receipt-based 60 s TTL expired exactly at the skew boundary). A full cache refuses
    with its own reason `full` and never evicts. The total replay window is about 61 s (`ts - 30` to `ts + 31`).
@@ -97,9 +98,10 @@ the second host:
    in `error`. The `migrate` job is not gated on `verify-doppler-secrets`, so on a release that carries a schema migration, a missing key
    blocks the deploy AFTER the migration has run, leaving the schema ahead of the serving image until the key exists.
 9. **Leak response and kill switch: neither is built.** If the key leaks, the hellos it signs can be forged until it changes, and no
-   operable route changes it. The per-merge HALT refuses a replace on purpose; `host_proxy_tls_enabled` is flipped only by editing its
-   `variables.tf` default (`terraform-target-parity.test.ts` pins that no workflow sets it), and the per-merge plan for that flip is a
-   destroy of the pair, which the same HALT refuses. The containers read Doppler only at start, so any change also needs a rolling restart
+   reviewed, rehearsed route changes it. The per-merge HALT refuses a replace on purpose; the repo's workflows never set
+   `host_proxy_tls_enabled` (`terraform-target-parity.test.ts` pins the workflow text, not a variable supplied from the secrets store), so
+   flipping it is an edit of its `variables.tf` default, and the per-merge plan for that flip is a destroy of the pair, which the same
+   HALT refuses. The containers read Doppler only at start, so any change also needs a rolling restart
    of both hosts, and while the relay is down users whose lease sits on the other host get 4014 and retry without limit (the app serves
    only the users routed to the local host). Restoring the previous Doppler value (the route for an out-of-band edit) re-installs a leaked
    key, so it is not a leak route. A rotation is therefore a separately reviewed change (dual-key `_PREVIOUS` verification, or minting the
@@ -124,13 +126,14 @@ the second host:
   2026-11-08, after ADR-320 (2026-11-04), and decision 1 forbids exactly this for a secret that grants production access; `PROXY_TLS_KEY`
   pre-dates the ADR. It is a departure from decision 1 that this PR introduces and records here, not a waiver; the move out of Terraform (decision 2) is the discharge, and ADR-320's own consequence
   applies: rotating a secret that sits in readable state does not repair the exposure, because the new value lands in the same state.
-- **Agent sandbox and `/proc`.** Sandboxed `Bash` cannot read the parent's `/proc/<pid>/environ`: the shim leaves an empty `/proc`
-  (`agent-runner-sandbox-config.ts`, #10032; ADR-272 measured 0 readable environs; `sandbox-isolation.test.ts` FR7/FR7b pin it; #9723 is
-  closed). The stale "residual" line in `agent-outer-wrap.ts` predates that. The readers that DO inherit the server environment are
+- **Agent sandbox and `/proc`.** `Bash` inside the inner sandbox cannot read the parent's `/proc/<pid>/environ`: the shim leaves an empty
+  `/proc` (`agent-runner-sandbox-config.ts`, #10032; ADR-272 measured 0 readable environs on its measurement host, not the production image;
+  `sandbox-isolation.test.ts` FR7/FR7b pin it; #9723 is closed). The opt-in outer wrap (`AGENT_OUTER_WRAP=1`, `agent-outer-wrap.ts`) still
+  binds the full `/proc` and keeps its residual. The readers that DO inherit the server environment are
   the ones outside the sandbox (hooks, in-process MCP tools, `pdf-chapter-router`; ADR-272), which is why the key is deleted from
   `process.env` after the boot read: `/proc/self/environ` keeps the original block either way, so the deletion stops inheritance by
   children and nothing more.
-- **Named residuals** (recorded here and on #8211; the child-environment allowlist follow-up on #2614): the audience is not bound (a captured hello is replayable to a different roster host inside
+- **Named residuals** (recorded here and on #8211 (comment of 2026-11-09), and the child-environment allowlist follow-up on #2614): the audience is not bound (a captured hello is replayable to a different roster host inside
   the replay window; a `v2` domain tag with the target host would bind it); the first frame is buffered up to the `ws` default
   `maxPayload`, but the pre-hello byte guard terminates a peer past 2048 bytes first; no `maxConnections` cap, because each proxied session holds one connection and a cap below the concurrent-session
   ceiling would refuse legitimate users; replaying a captured hello needs a compromised roster host; the per-process replay cache is
