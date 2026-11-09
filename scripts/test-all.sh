@@ -6996,6 +6996,12 @@ if want_scripts; then
   run_suite "tests/scripts/sentry-destroy-gate-verdict" bash tests/scripts/test-sentry-destroy-gate-verdict.sh
   run_suite "tests/scripts/sentry-squash-ack-detect" bash tests/scripts/test-sentry-squash-ack-detect.sh
   run_suite "tests/scripts/sentry-create-gate" bash tests/scripts/test-sentry-create-gate.sh
+  # #12269 (lever E): exit-code harness for the merge-queue max_entries_to_build soak probe —
+  # both tf-value arms, the real 8-col wallclock tracker schema (seconds), the Report-refreshed
+  # postdate check, and the churn signal. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
+  # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
+  # vacuous PASS must redden CI.
+  run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
   # #7650 Phase 2 — Guard A (create protection, now wired into BOTH workflow jobs)
   # and Guard B (the forget<->import bijection) for the sentry_alert adoption.
   # Registered HERE for the reason the neighbouring comments give and this suite
@@ -8006,12 +8012,6 @@ echo "=== $((suites - failed - killed - skipped - _ceiling_declined - ${_pj_unac
 #
 # Keyed on `_infra_ran`, which is set ONLY at the run_suite call site — an OBSERVED fact, not
   run_suite "scripts/followthroughs/discord-blog-webhook-fallback" bash scripts/followthroughs/discord-blog-webhook-fallback.test.sh
-  # #12269 (lever E): exit-code harness for the merge-queue max_entries_to_build soak probe —
-  # both tf-value arms, the real 8-col wallclock tracker schema (seconds), the Report-refreshed
-  # postdate check, and the churn signal. Registered EXPLICITLY (scripts/followthroughs/*.test.sh
-  # is not in SUITE_GLOBS). Its exit code drives the sweeper's keep/revert verdict on #12269, so a
-  # vacuous PASS must redden CI.
-  run_suite "scripts/followthroughs/mq-lever-e-verdict-12269" bash scripts/followthroughs/mq-lever-e-verdict-12269.test.sh
 # a predicted one. It previously keyed on `_infra_in_diff`, so the "IS covered above" line
 # printed in the three CI shards where want_infra is false and the runner never executed, and
 # the SOLEUR_INCIDENT_SKIP line attributed to the incident bypass any skip that happened for a
