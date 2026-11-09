@@ -34,7 +34,7 @@ export interface AgentCredential {
 // the allowlist is equivalent to blocking it.
 // ---------------------------------------------------------------------------
 
-const AGENT_ENV_ALLOWLIST = Object.freeze([
+export const AGENT_ENV_ALLOWLIST = Object.freeze([
   "HOME",
   "PATH",
   "NODE_ENV",
@@ -56,6 +56,33 @@ const AGENT_ENV_ALLOWLIST = Object.freeze([
   "SOLEUR_BWRAP_SECCOMP_BPF",
 ] as const);
 
+// #9600 — git config-carrier pin, applied to EVERY agent session (git-auth or not). A repo-local git
+// config can name helpers that auto-approved reads execute (core.fsmonitor, diff.external, textconv,
+// filter.*.clean, gpg.program), and a bare repository COMMITTED into an untrusted connected repo is a
+// working config carrier after a plain clone: the agent only needs the already-approved `cd <dir> && git
+// diff`. `safe.bareRepository=explicit` makes git REFUSE such a directory (a fatal "cannot use bare
+// repository", git 2.38+; protected configuration, so repo-local config cannot undo it; the Dockerfile
+// asserts the floor). GIT_CONFIG_NOSYSTEM keeps the system gitconfig out of the session, and
+// GIT_CONFIG_GLOBAL points at the IMAGE-owned identity-only file instead of HOME's gitconfig: HOME is
+// writable state, the image file under /usr is bound read-only into the sandbox, and a workspace's own
+// local identity still beats it (local > global). It must not be `/dev/null`: that would strip the
+// fallback identity from sessions with no git-auth and no seeded workspace identity (Start-Fresh
+// workspaces, users with no email), and their `git commit` would fail with "Author identity unknown".
+// The identity rides this FILE, never GIT_CONFIG_COUNT pairs: command-scope config beats local config
+// and would override every real workspace identity. The file is created by the Dockerfile.
+// Set outside the git-auth block on purpose: a session with no installation token is exactly as exposed.
+// The GIT_CONFIG_COUNT/KEY/VALUE spelling is used because it needs no file the agent could rewrite.
+// Nothing in AGENT_ENV_ALLOWLIST or ALLOWED_SERVICE_ENV_VARS may ever carry a GIT_CONFIG_* name
+// (asserted in test/agent-env.test.ts), which is why the spread below needs no later re-assertion.
+export const AGENT_GIT_GLOBAL_CONFIG = "/usr/local/share/soleur/agent.gitconfig";
+export const GIT_CARRIER_ENV_PIN: Readonly<Record<string, string>> = Object.freeze({
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: AGENT_GIT_GLOBAL_CONFIG,
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "safe.bareRepository",
+  GIT_CONFIG_VALUE_0: "explicit",
+});
+
 const AGENT_ENV_OVERRIDES = Object.freeze({
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
@@ -67,6 +94,7 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // this variable and exits early. Rides the overrides, not the allowlist, so an
   // ambient value cannot re-enable it. See the ADR-093 amendment (2026-09-30).
   SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
+  ...GIT_CARRIER_ENV_PIN,
   // The same plugin hooks.json also registers `operator-stage-approval.sh` (ADR-264), the PreToolUse
   // hook that turns the harness approval prompt into the human acknowledgement of a generated
   // operator script's production write. The web runtime has no such prompt yet (the web approval
@@ -267,7 +295,7 @@ export function buildAgentEnv(
   // (a cosmetic progress-meter toggle, irrelevant to a non-interactive sandbox
   // subprocess) and cannot replicate its argv-level `HELPER_RESET`
   // (`-c credential.helper=`) because the agent builds its own `git` argv;
-  // `GIT_CONFIG_NOSYSTEM`+`GIT_CONFIG_GLOBAL=/dev/null` neutralize system/global
+  // `GIT_CONFIG_NOSYSTEM`+`GIT_CONFIG_GLOBAL` (now set for EVERY session by GIT_CARRIER_ENV_PIN) neutralize system/global
   // helpers, and the connected repo is freshly cloned with no repo-local
   // `credential.helper`, so `GIT_ASKPASS` is authoritative. The token rides
   // `GIT_INSTALLATION_TOKEN` (env) and is `printf`'d by the fixed askpass
@@ -281,8 +309,7 @@ export function buildAgentEnv(
     env.GIT_USERNAME = "x-access-token";
     env.GIT_INSTALLATION_TOKEN = opts.gitInstallationToken;
     env.GIT_TERMINAL_PROMPT = "0";
-    env.GIT_CONFIG_NOSYSTEM = "1";
-    env.GIT_CONFIG_GLOBAL = "/dev/null";
+    // GIT_CONFIG_NOSYSTEM / GIT_CONFIG_GLOBAL ride GIT_CARRIER_ENV_PIN for every session (#9600).
   }
 
   // feat-open-web-egress (#9534) — credentialed per-session proxy URL. Set

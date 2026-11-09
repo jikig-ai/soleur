@@ -1,8 +1,8 @@
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
-# default-weight-ms=1272
-# generated-at=2026-11-09T16:40:25Z
+# default-weight-ms=1251
+# generated-at=2026-11-09T17:01:51Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -392,7 +392,6 @@ scripts/check-web-host-escrow-config	144584	measured
 scripts/ci-demand-census	19491	measured
 scripts/ci-deploy-sentry-post-fail-6475	122	measured
 scripts/ci-draft-light	87009	measured
-scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
 scripts/ci-oracle-review	1261	floor
@@ -427,7 +426,6 @@ scripts/followthrough-exec-bit	16	measured
 scripts/followthrough-predicate-parity	2020	measured
 scripts/followthrough-varq-ban	24476	measured
 scripts/followthrough-varq-ban-live	1544	measured
-scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
@@ -450,8 +448,8 @@ scripts/git-data-reboot-evidence-landed-8210	1324	measured
 scripts/git-data-rehearsal-evidence-8211	1222	floor
 scripts/git-data-replication-signal-11704	1222	floor
 scripts/guard-vacuity-floor	44880	measured
-scripts/host-kernel-cadence-12008	1272	floor
-scripts/host-tcp-exposure	1272	floor
+scripts/host-kernel-cadence-12008	1251	floor
+scripts/host-tcp-exposure	1251	floor
 scripts/hosted-destroy-ask-window-9776	1222	floor
 scripts/hostname-mislabel-web1-6616	221	measured
 scripts/image-cve-db-pin	1223	floor
