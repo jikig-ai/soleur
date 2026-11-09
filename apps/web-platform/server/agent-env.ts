@@ -56,6 +56,23 @@ const AGENT_ENV_ALLOWLIST = Object.freeze([
   "SOLEUR_BWRAP_SECCOMP_BPF",
 ] as const);
 
+// #9600 — git config-carrier pin, applied to EVERY agent session (git-auth or not). A repo-local git
+// config can name helpers that auto-approved reads execute (core.fsmonitor, diff.external, textconv,
+// filter.*.clean, gpg.program), and a bare repository COMMITTED into an untrusted connected repo is a
+// working config carrier after a plain clone: the agent only needs the already-approved `cd <dir> && git
+// diff`. `safe.bareRepository=explicit` makes git ignore a bare dir it was not pointed at (git 2.38+;
+// protected configuration, so repo-local config cannot undo it; the Dockerfile asserts the floor), and
+// GIT_CONFIG_NOSYSTEM / GIT_CONFIG_GLOBAL=/dev/null keep system and HOME gitconfig out of the session.
+// Set outside the git-auth block on purpose: a session with no installation token is exactly as exposed.
+// The GIT_CONFIG_COUNT/KEY/VALUE spelling is used because it needs no file the agent could rewrite.
+export const GIT_CARRIER_ENV_PIN: Readonly<Record<string, string>> = Object.freeze({
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "safe.bareRepository",
+  GIT_CONFIG_VALUE_0: "explicit",
+});
+
 const AGENT_ENV_OVERRIDES = Object.freeze({
   DISABLE_AUTOUPDATER: "1",
   DISABLE_TELEMETRY: "1",
@@ -67,6 +84,7 @@ const AGENT_ENV_OVERRIDES = Object.freeze({
   // this variable and exits early. Rides the overrides, not the allowlist, so an
   // ambient value cannot re-enable it. See the ADR-093 amendment (2026-09-30).
   SOLEUR_DISABLE_UNKEPT_PROMISE_HOOK: "1",
+  ...GIT_CARRIER_ENV_PIN,
   // The same plugin hooks.json also registers `operator-stage-approval.sh` (ADR-264), the PreToolUse
   // hook that turns the harness approval prompt into the human acknowledgement of a generated
   // operator script's production write. The web runtime has no such prompt yet (the web approval
@@ -251,6 +269,10 @@ export function buildAgentEnv(
     }
   }
 
+  // Re-assert the config-carrier pin AFTER the allowlist and service-token loops: no ambient or service
+  // value may displace it, whatever those sets later grow to contain (#9600).
+  Object.assign(env, GIT_CARRIER_ENV_PIN);
+
   // GitHub App installation token (Issue A). Injected as GH_TOKEN OUTSIDE
   // the service-token loop and OUTSIDE the auth switch — it is neither a
   // PROVIDER_CONFIG service var nor an Anthropic auth var. Empty/undefined
@@ -281,8 +303,7 @@ export function buildAgentEnv(
     env.GIT_USERNAME = "x-access-token";
     env.GIT_INSTALLATION_TOKEN = opts.gitInstallationToken;
     env.GIT_TERMINAL_PROMPT = "0";
-    env.GIT_CONFIG_NOSYSTEM = "1";
-    env.GIT_CONFIG_GLOBAL = "/dev/null";
+    // GIT_CONFIG_NOSYSTEM / GIT_CONFIG_GLOBAL now ride GIT_CARRIER_ENV_PIN for every session (#9600).
   }
 
   // feat-open-web-egress (#9534) — credentialed per-session proxy URL. Set

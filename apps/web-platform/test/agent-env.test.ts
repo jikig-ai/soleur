@@ -58,6 +58,12 @@ const EXPECTED_OVERRIDES: Record<string, string> = {
   SOLEUR_DISABLE_DESTRUCTIVE_GUARD: "1",
   // launch-check refuses to file issues or write its report when unattended; a hosted session is unattended (ADR-314).
   LAUNCH_CHECK_HEADLESS: "1",
+  // #9600 git config-carrier pin, applied to every session (git-auth or not): see the describe below.
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "safe.bareRepository",
+  GIT_CONFIG_VALUE_0: "explicit",
 };
 
 describe("buildAgentEnv", () => {
@@ -221,6 +227,69 @@ describe("buildAgentEnv", () => {
     const envWithout = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" });
     const envWith = buildAgentEnv({ value: "sk-ant-test", scheme: "api_key" }, {});
     expect(Object.keys(envWith).length).toBe(Object.keys(envWithout).length);
+  });
+
+  // #9600 — the git config-carrier pin. A bare repository committed into an untrusted connected repo is a
+  // working config carrier after a plain clone (the real-git proof is in safe-bash-git-config-exec.test.ts);
+  // `safe.bareRepository=explicit` makes git ignore it. The pin must hold for every session shape.
+  describe("git config-carrier pin (#9600)", () => {
+    const PIN = {
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "safe.bareRepository",
+      GIT_CONFIG_VALUE_0: "explicit",
+    } as const;
+    const CREDS = [
+      { value: "sk-ant-test", scheme: "api_key" as const },
+      { value: "sk-oauth-test", scheme: "oauth_token" as const },
+    ];
+    const OPTS = [
+      undefined,
+      {},
+      { ghToken: "ghs_minted_install_token" },
+      { gitAskpassScriptPath: "/workspaces/w/.askpass.sh", gitInstallationToken: "ghs_install_token_value" },
+      { egressProxy: { workspaceId: "w", token: "t", port: 3128 } },
+    ];
+
+    test("present for every auth scheme x session shape (with and without git-auth)", () => {
+      let n = 0;
+      for (const cred of CREDS) {
+        for (const opts of OPTS) {
+          const out = buildAgentEnv(cred, undefined, opts);
+          for (const [k, v] of Object.entries(PIN)) expect(out[k], `${cred.scheme} ${JSON.stringify(opts)} ${k}`).toBe(v);
+          n++;
+        }
+      }
+      expect(n).toBe(CREDS.length * OPTS.length); // floor: the loop really ran every combination
+    });
+
+    test("an ambient GIT_CONFIG_* value or a service-token attempt cannot displace the pin", () => {
+      const savedAmbient = ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_GLOBAL"].map(
+        (k) => [k, env[k]] as const,
+      );
+      try {
+        env.GIT_CONFIG_COUNT = "9";
+        env.GIT_CONFIG_KEY_0 = "core.fsmonitor";
+        env.GIT_CONFIG_VALUE_0 = "/tmp/evil";
+        env.GIT_CONFIG_GLOBAL = "/tmp/evil-gitconfig";
+        const out = buildAgentEnv(
+          { value: "sk-ant-test", scheme: "api_key" },
+          { GIT_CONFIG_VALUE_0: "all", GIT_CONFIG_COUNT: "0" },
+        );
+        for (const [k, v] of Object.entries(PIN)) expect(out[k], k).toBe(v);
+        // exactly one config pair: nothing else rides the GIT_CONFIG_KEY_/VALUE_ spelling
+        expect(Object.keys(out).filter((k) => /^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(k)).sort()).toEqual([
+          "GIT_CONFIG_KEY_0",
+          "GIT_CONFIG_VALUE_0",
+        ]);
+      } finally {
+        for (const [k, v] of savedAmbient) {
+          if (v === undefined) delete env[k];
+          else env[k] = v;
+        }
+      }
+    });
   });
 
   // --- GH_TOKEN injection (Issue A — Concierge gh-auth, AC3) ---------------
