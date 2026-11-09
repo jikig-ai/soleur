@@ -122,7 +122,9 @@ describe("plain :80 server timeouts (http-timeouts.ts)", () => {
     // (`http["createServer"]`) are seen as well as a call.
     const uncommented = (f: string): string => stripCommentsAst(read(f), f);
     const creatorMention = /\bcreate(?:Secure|Https?)?Server\b|\bnew\s+(?:\w+\.)?Server\s*\(/;
-    const valueHttpImport = /^\s*import\s+(?!type\b)(?:\w+|\*\s+as\s+\w+)\s*(?:,[^;]*)?from\s+["'](?:node:)?(?:https?|http2)["']|require\(\s*["'](?:node:)?(?:https?|http2)["']\s*\)/m;
+    const valueImportStmt = /^\s*import\s+(?!type\b)(?:\w+|\*\s+as\s+\w+)\s*(?:,[^;]*)?from\s+["'](?:node:)?(?:https?|http2)["']/m;
+    const valueRequireCall = /require\(\s*["'](?:node:)?(?:https?|http2)["']\s*\)/;
+    const valueHttpImport = { test: (src: string): boolean => valueImportStmt.test(src) || valueRequireCall.test(src) };
     // `import { Server as S } from "node:http"; new S()`: the constructor under any alias (a type-only use is not a listener).
     const aliasedConstructor = (src: string): boolean =>
       [...src.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?(?:https?|http2)["']/g)].some((m) => {
