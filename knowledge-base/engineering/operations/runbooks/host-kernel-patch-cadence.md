@@ -23,7 +23,7 @@ written into a file, a tracker comment or an issue.
 
 | Check | File | What it answers |
 |---|---|---|
-| Cadence probe | `scripts/followthroughs/host-kernel-cadence-12008.sh` (suite: the `.test.sh` beside it) | Is any host row past its cadence? One fixed line, notify-only. |
+| Cadence probe | `scripts/followthroughs/host-kernel-cadence-12008.sh` (suite: the `.test.sh` beside it) | Is any host row's uptime past its cadence? One fixed line, notify-only. |
 | Exposure suite | `scripts/host-tcp-exposure.test.sh` | Does the Terraform still declare deny-all inbound on the non-web firewalls, with every server bound? |
 
 The cadence numbers (one per class) are the four `CADENCE_DAYS_*` constants at the top of the probe. This runbook never copies
@@ -35,10 +35,10 @@ them: edit the constants, nothing else.
 
 | Class | Route (an `apply_target` of `apply-web-platform-infra.yml`) | Interlock | Authorizes | Verify after |
 |---|---|---|---|---|
-| web (standby host) | `web-host-replace` | typed confirm token, reviewer-gated environment, plan gate (exactly one delete and one create of that key) | owner, per dispatch | a fresh reader run shows a reset uptime and a changed kernel for that row |
-| web (primary host) | none | the replace path refuses it at input validation and in the plan gate (see the web section) | owner decision, not an act | n/a |
+| web (host the replace path accepts) | `web-host-replace` | typed confirm token, reviewer-gated environment, plan gate (exactly one delete and one create of that key) | owner, per dispatch | a fresh reader run shows a reset uptime and a changed kernel for that row |
+| web (row with no sanctioned act) | none | the replace path refuses that key at input validation and in the plan gate (see the web section) | owner decision, not an act | n/a |
 | inngest | `inngest-host-replace`, then the separately human-approved cutover resume | scheduler pause window, resume approval | owner, per dispatch | a fresh reader run, then the scheduler health the cutover runbook names |
-| registry | `registry-host-replace` (or the dispatcher re-fire) | registry preflight; the registry is the only image pull path and a replace destroys before it creates | owner, per dispatch | a fresh reader run, then an image pull from a web host |
+| registry | `registry-host-replace` (or the dispatcher re-fire, which has **no reviewer gate**) | registry preflight; the registry is the only image pull path and a replace destroys before it creates, so deploys are blocked while it is down | owner, per dispatch; an agent never dispatches either form without a typed go naming the command | a fresh reader run, then a read of an existing image pull or deploy log (never a new deploy) |
 | git-data | `git-data-host-replace` only | three interlocks (see the git-data section); volumes and the volume passphrase are preserved by omission | owner, per dispatch | a fresh reader run once the git-data emitter is delivered and the reader reads that source (#12385) |
 
 <!-- lint-infra-ignore end -->
@@ -47,17 +47,34 @@ Every route starts with its rehearsal (`plan_only` where the workflow offers it)
 **not** by itself guarantee a patched kernel: no cloud-init file runs a package upgrade, so a new host boots the base image
 plus whatever package state the mirror holds that day. The verification step is therefore mandatory,
 and "the uptime reset" without "the kernel changed" means the host was rebuilt but not patched. Whether cloud-init should upgrade
-packages is tracked separately; do not edit a cloud-init file to find out (see the registry section).
+packages is tracked as #12503; do not edit a cloud-init file to find out (see the registry section).
+
+## After a typed go
+
+<!-- lint-infra-ignore start: states how an agent behaves after the owner authorizes one named command; it prescribes no human step -->
+
+When the owner types a go that names an exact command from the table:
+
+1. Run **only** the named command. A menu click, a bare "go" or an earlier approval is not a go. Do not chain a second route.
+2. In the same turn, arm a Monitor on the run that command started (`hr-dispatch-async-must-arm-watch`). Find your own run by
+   workflow, commit and start time, not by "latest run", and read the verdict from the run log, never from the dispatch exit code.
+3. The reader's row role for a web row is the `web_host_key` input, and the confirm token is `REPLACE-` followed by that key.
+   Map the row you are acting on to its key before you type the command into the plan; the other routes take no key.
+4. The exact command lines live in each class's own runbook, linked from the sections below. Start with `plan_only` where offered.
+5. Verification is a fresh reader run (next section), not the workflow's green check.
+
+<!-- lint-infra-ignore end -->
 
 ## web
 
-- Each web host is a `hcloud_server.web[<key>]`. The standby host takes the replace route in the table; its own runbook is
-  [web-host-replace.md](./web-host-replace.md).
-- The primary web host has **no activation path**. The replace path refuses it (see the web-host-replace runbook section
-  "`web-1` is refused"), because it is topologically different (the workspaces volume attachment is hardcoded to it and is ForceNew). The reboot workflow that once existed
-  is retired (see [web-host-reboot.md](./web-host-reboot.md), ADR-263 addendum 2026-10-12: "a host is replaced, not rebooted").
-  So a primary-host row past its cadence has no sanctioned act today. That is an owner decision, not a gap an agent closes:
-  escalate it. Acknowledging a row that is overdue by design is deferred to the change that arms the tracker.
+- Each web host is a `hcloud_server.web[<key>]`. The hosts the replace path accepts take the replace route in the table; its own
+  runbook is [web-host-replace.md](./web-host-replace.md).
+- The replace path refuses one key (see the web-host-replace runbook section "`web-1` is refused"): its workspaces volume
+  attachment is hardcoded to it and is ForceNew, and a rebirth of it is not a supported recovery until the de-pet rebuild (#9421).
+  That row therefore has no sanctioned act today. Do not offer a replace for it; the refusal text in that runbook is the authority.
+  The reboot workflow that once existed is retired (see [web-host-reboot.md](./web-host-reboot.md), and the ADR-263 addendum
+  2026-10-08, "immutability, not reboot": a host is replaced, not rebooted).
+  A row with no sanctioned act is an owner decision, not a gap an agent closes: escalate it (see Escalation).
 
 ## inngest
 
@@ -67,9 +84,9 @@ window. Runbooks: [inngest-server.md](./inngest-server.md), [inngest-luks-cutove
 ## registry
 
 Replace through its own route. **No cadence act edits** `cloud-init-registry.yml`, `zot-registry.tf` or `variables.tf`: a merge that
-touches any of the three auto-fires the registry host replace with no reviewer gate
-([registry-host-replace-dispatch.md](./registry-host-replace-dispatch.md)). Anything that needs a change to those files is its own
-owner-authorized plan, not a cadence act.
+touches any of the three wakes the registry delivery gate, which replaces the host when the rendered `user_data` changes, with
+no reviewer gate ([registry-host-replace-dispatch.md](./registry-host-replace-dispatch.md)). Anything that needs a change to those
+files is its own owner-authorized plan, not a cadence act.
 
 ## git-data (its own path)
 
@@ -89,32 +106,91 @@ Until the interlocks clear, a git-data row past its cadence is escalated to the 
 
 ## Per-class view (a session procedure, not a mode)
 
-In a session, with the Better Stack read credentials injected, run the reader (the cve-exposure skill's `host-state.sh`) and divide
-each row's `uptime_s` by 86400, then compare it with that class's constant in the probe header. The reader's output stays in the
-session. There is no table script and no stored view, deliberately: a stored per-host table is the exposure register ADR-322 rejected.
+In a session, with the Better Stack read credentials injected, run the reader (the cve-exposure skill's `host-state.sh`). Run it
+in its own Bash call so the exit code is visible:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash plugins/soleur/skills/cve-exposure/scripts/host-state.sh
+```
+
+Then divide each row's `uptime_s` by 86400 and compare it with that class's constant in the probe header. This one-liner prints
+role, states and uptime in days for every row and leaves the kernel column out; the pipe's output stays in the session:
+
+```bash
+doppler run -p soleur -c prd_terraform -- bash plugins/soleur/skills/cve-exposure/scripts/host-state.sh \
+  | awk -F'\t' '$1 !~ /^SOLEUR_CVE_HOST_STATE/ { d = ($6 ~ /^[0-9]+$/) ? sprintf("%.1f", $6/86400) : "n/a"; print $1, $2, $3, d " days" }'
+```
+
+Only a row with `marker_state=fresh` and `kernel_state=observed` and a numeric uptime is gradable; every other row is unknown.
+The roles the probe ignores (default-off hosts) and the roles it requires are listed in the probe header. The reader's output
+stays in the session. There is no table script and no stored view, deliberately: a stored per-host table is the exposure register
+ADR-322 rejected.
 
 ## Reading the tracker line
 
-Once the tracker is armed, the daily follow-through sweeper posts exactly one of three lines and nothing else (no class,
-count or version): `host-kernel-cadence: review-needed` (exit 5, some row is past its cadence), `host-kernel-cadence:
-cannot-establish` (exit 3, some row is unknown or the reader failed) and `host-kernel-cadence: nothing-to-report` (exit 2,
-every required row is fresh, observed and within its cadence; not an assurance about unmeasured hosts). Which row, and why, is
-answered in a session only. The probe header owns the rules, including the uptime proxy caveat and the roles it grades or ignores.
+Once the tracker is armed, the daily follow-through sweeper posts the probe's stdout, which is exactly one of three fixed lines
+(no class, count or version), inside the sweeper's own heading and `<details>` fold. The heading carries a verdict word, the exit
+code and a timestamp, and the comment names the script path. So the public surface is the fixed line **inside the sweeper's
+heading and fold**, not the line alone.
 
-**Arming precondition.** The tracker (#12504) is armed only once a session run of the probe prints `review-needed` or
-`nothing-to-report`, never `cannot-establish`. That needs the emitter roll-out (#12386) and the git-data reader source (#12385);
-armed earlier, the sweeper would post a content-free `cannot-establish` every day. Any row that is overdue by design at that
-point needs the acknowledgement mechanism first, which is added with the arming change.
+- `host-kernel-cadence: review-needed` (exit 5): some row's uptime is past its cadence.
+- `host-kernel-cadence: cannot-establish` (exit 3): some row is unknown, or the reader failed.
+- `host-kernel-cadence: nothing-to-report` (exit 2): every required row is fresh, observed and within its cadence.
+
+**What `nothing-to-report` does not say.** `uptime_s` is the time since the last boot: a **lower bound** on how long the running
+kernel has been running, never an upper bound on its age. Only an overdue verdict is therefore sound. `nothing-to-report` means
+the uptime is inside the cadence, **not** that the running kernel carries the fix: a reboot onto the same unpatched kernel, or a
+replace onto a base image that is not patched, resets the uptime and reads as within cadence. The uptime can also come from a row
+up to 48 hours older than the row that carries the state, which understates it further. It is also not an assurance about
+unmeasured hosts. The verify step after any act (a changed kernel, not only a reset uptime) is what shows a patch arrived; the
+`reboot_required` clause that would narrow the gap is tracked as #12502.
+
+Which row, and why, is answered in a session only. The probe header owns the rules, including the proxy caveat and the roles it
+grades or ignores.
+
+### Arming the tracker (#12504)
+
+The tracker is filed unarmed. All of these hold before it is armed:
+
+1. A session run of the probe prints `review-needed` or `nothing-to-report`, never `cannot-establish`. `review-needed` can print
+   as soon as one required row is fresh and over its cadence (the emitter roll-out, #12386); `nothing-to-report` also needs the
+   git-data reader source (#12385). #12385 is priority p3-low, so this precondition is structurally tied to a low-priority open
+   issue: raise #12385's priority, or re-evaluate #12504 no later than 2027-02-09 (a proposed date; the owner may move it), so
+   that "never armed" is a visible state and not a quiet one.
+2. The acknowledgement mechanism for a row that is overdue by design has landed (its scope is recorded on #12504). It is a
+   precondition, not a follow-up: without it the first dated `review-needed` is permanent, masks every later overdue row and
+   dates when a row crossed its threshold on a public tracker.
+3. The directive's `earliest=` is set to a real UTC timestamp (for example the output of `date -u +%Y-%m-%dT%H:%M:%SZ`), not the
+   placeholder text, which would fail the date parse.
+4. The `follow-through` label and the body edit that adds the unfenced directive are applied together, outside the 18:00 UTC
+   cron window, so no real sweep lands between them.
+5. Dispatch the sweeper in dry-run mode and read its log for the `issue #12504` lines: they must show the directive honored and a
+   probe verdict. If they are wrong, remove the label.
+
+Verification is the sweeper log, not a hook: the issue-create hook fires only on `gh issue create`, so the label-add and
+body-edit path has no mechanical gate of its own.
+
+### Accepted public residual
+
+The thresholds are public in the probe, and a dated daily line on a public tracker can date a reboot or replace window (a move
+from `review-needed` to `nothing-to-report`) or a lag (sustained `review-needed`). That is an accepted timing disclosure under
+ADR-322, ended by closing the tracker and removing its label.
 
 ## Exposure suite
 
 `scripts/host-tcp-exposure.test.sh` asserts a **declared design**, not live state; its header owns the rules and the mapping. It
 cannot see console drift, a stale attachment id or a firewall that was never applied: those need a live read of the provider, a
-session-only step this suite does not do. A new server added to the Terraform makes the suite fail until its row is added to the
-mapping, by design.
+session-only step this suite does not do. The live read is not yet written as a procedure; it is tracked as the live
+firewall corroboration on #6442 (the attachment binding), and until that lands a green suite says only that the Terraform text
+declares the design. A new server added to the Terraform makes the suite fail until its row is added to the mapping, by design.
 
 ## Escalation
 
 If a verification step shows no change after a replace (uptime reset but the same kernel, or no new row at all), the host was
 rebuilt but not patched, or its emitter is not delivering. Do not retry the route. Report it to the owner in the session; the next
-step is the package-upgrade question above, which needs an owner-authorized plan.
+step is the package-upgrade question above (#12503), which needs an owner-authorized plan.
+
+**With no interactive session** (a scheduled or headless agent that sees `review-needed` on the tracker): stop. Do not write any
+class, row or host detail into the repository, the tracker or an issue (ADR-322), and do not dispatch any route. No private
+notification path dedicated to this signal exists yet, so the sweeper's generic comment is the only record and the owner reads
+the verdict from the reader in the next session. Adding a private path is part of the arming change (#12504).
