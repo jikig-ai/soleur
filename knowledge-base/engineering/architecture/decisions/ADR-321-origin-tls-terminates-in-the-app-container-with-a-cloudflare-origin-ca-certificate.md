@@ -105,7 +105,8 @@ here and this change must not touch it.
   alert and none is planned in the mint slice** (the earlier forward reference to one is withdrawn). The certificate is
   15 years old at expiry, so the first possible expiry event is in 2041; a Better Stack Logs alert built now would be
   untestable against a real event for 15 years and would add a Terraform apply to a slice that touches no Terraform.
-  Until a trigger exists (see "Amendment, slice 2" below) the signals are the Sentry warning at container start and the
+  Until a trigger exists (see "Amendment, slice 2" below) the signals are the Sentry warning at container start (which the
+  `origin-tls-event` rule, declared by item 12, pages on once applied) and the
   mint workflow's `mode=plan`, which prints `existing state=... days_left=...` on any date and reports `near_expiry`
   at 90 days or less. Mid-life expiry under `ORIGIN_TLS_REQUIRED=1` crash-loops on
   restart, which is acceptable because under `strict` users would already be getting 525/526 and the canary rolls the
@@ -119,9 +120,9 @@ here and this change must not touch it.
   claim per-host proof before this has been read. `apps/web-platform/.env.example` carries no `ORIGIN_TLS_*` entry
   (editing it is blocked for agents); the variable table in decision 2 is the contract.
 - Idle keep-alive is set above Cloudflare's reuse window (`keepAliveTimeout` 905 s) on BOTH servers, from one shared
-  constant. `headersTimeout` is a separate matter (item 11, R-A): the plain :80 server sets 910 s, but Node bounds the header phase by
-  `requestTimeout` (default 300 s, measured), so 300 s is its operative slow-header cutoff; the :443 listener sets none and keeps
-  Node's 60 s default. The ~900 s figure is unverified; a larger value only narrows the 502/520 race (Node closing first), so it is
+  constant. `headersTimeout` is a separate matter (item 11, R-A, superseded for the :80 server by item 12): the plain :80 server now states
+  60 s for the header phase inside a 300 s whole-request window (`server/http-timeouts.ts`); the :443 listener sets neither and
+  keeps Node's own 60 s / 300 s defaults. The ~900 s figure is unverified; a larger value only narrows the 502/520 race (Node closing first), so it is
   conservative if the real window is lower. The canary is a health gate and does not exercise Cloudflare's connection
   reuse, so the 502/520 rate is watched after the deploy.
 - Unverified preconditions carried forward from the plan: legacy page rules may override SSL for the app host (the
@@ -195,6 +196,9 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
 7. **Expiry alert: deferred, documented here, not filed.** See Consequences. Trigger to build it: the strict flip landing (PR-5) plus a
    decision that 15-year expiry needs an external signal; or Cloudflare shortening Origin CA validity. *Status 2026-11-08:* the first half of the trigger has occurred (the flip landed 2026-11-07); the decision that
    an external expiry signal is needed has NOT been made, so the alert is still deferred.
+   *Addendum 2026-11-08 (item 12):* the `origin-tls-event` rule pages on ANY `feature=origin_tls` event, which includes the
+   `cert_expiry` warning (emitted once per start while under 90 days remain), so a start-time expiry warning is now routed once the
+   rule is applied. The deferral of a dedicated 15-year expiry alert (a Better Stack or scheduled check) stands.
 
 8. **LB monitor move (R7), amended 2026-11-07.** `cloudflare_load_balancer_monitor.web` becomes https/:443, `Host: app.soleur.ai`,
    `allow_insecure = false` (certificate validated), applied only by the dispatch-only `ga-monitor-https` arm of `cf-lb-overlay.yml`, whose
@@ -274,6 +278,7 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     an idle socket stayed open at 75 s and the second request was answered on the same socket, on Node 22.23.4 and 26.13.0. Nothing demonstrates a need, so nothing is loosened: the assignment
     and its shared constant are removed, `index.ts` is unchanged in effect from main (comment corrected), and a test pins that `origin-tls.ts` assigns neither `headersTimeout` nor `requestTimeout`.
     Pre-existing and out of scope: the plain :80 server's partial-header window has been 300 s (not 60 s) since the slice-1 deploy, because of the same assignment.
+    *Superseded 2026-11-08 for the :80 server (item 12): the 910 s assignment is replaced by an explicit 60 s header phase inside a 300 s request window; the :443 conclusion above stands unchanged.*
     **R-B. Post-bind policy.** Three options were weighed: keep report-and-continue for every post-bind event; exit under REQUIRED on any `error` (the old behaviour); or exit only on an unexpected `close`.
     Facts: Node's `net` layer emits a server `error` from its connection handler and leaves the listener open, so a post-bind `error` is not a dead listener and `exit(1)` would drop every WebSocket on the
     plain listener for a transient condition; the realistic ways :443 dies (docker-proxy or iptables failure, a rejected certificate) raise neither `error` nor `close`; a server `close` that nobody requested is the
@@ -286,3 +291,23 @@ Refs: #10479. Ruled by the CTO agent. Implements decision 2's "minted outside Te
     failures) and the https LB monitor, which only emails ("Unhealthy") and does not drain web-1 (the B1 fallback pool is web-1 itself). There is **no committed Sentry alert rule for `feature:origin_tls`**: a Sentry event is a
     pull-based check today. A Sentry alert on `feature:origin_tls` (any event; `phase:runtime` and `reason:unexpected-close` are the interesting ones) is warranted, is production-effecting, and belongs in a separate infra
     change; it is not bundled here.
+    *Superseded 2026-11-08 (item 12): that separate change is the rule `origin-tls-event` (`sentry_alert.origin_tls_event`, any `feature=origin_tls` event, `frequency_minutes = 47`), DECLARED in PR #12434 and live only after `apply-sentry-infra.yml` has applied it on merge; until the apply is read, the sentences "There is **no committed Sentry alert rule for `feature:origin_tls`**" and "a Sentry event is a pull-based check today" remain the operative state. A dead :443 that raises no event remains detectable only by the Better Stack monitors.*
+
+12. **Follow-up rulings (PR #12434, Ref #10479).** *Ruled by CTO agent, 2026-11-08 (planning and plan-review rounds), four technical forks.* The rows are in
+    `knowledge-base/project/specs/archive/20261109-113347-feat-one-shot-origin-tls-followups/decision-challenges.md`.
+    **(a) :80 slow-header cutoff.** Set `headersTimeout = 60_000` and pin `requestTimeout = 300_000` on the plain :80 server only, through the import-safe
+    module `server/http-timeouts.ts` (`applyPlainHttpTimeouts`, which throws when the header bound exceeds the request bound). Rationale: the inert 910 s
+    assignment left an inherited 300 s as the real cutoff; 60 s matches what the :443 listener gets from Node's default, so both listeners cut a stalled client at
+    the same bound, and 300 s keeps the whole-request window where it already was. Node sweeps on a 30 s interval, so the real cutoff is the timeout plus up to 30 s.
+    The :443 server's timeouts are not touched (R-A). A 408 that Node writes on :80 raises no event and no log line, so it is not observable in Sentry or Better Stack; under `strict` no user request path reaches :80 (the edge dials :443), and Cloudflare 408 counts need the analytics token (#12441). Measured on Node 26.13.0 in the planning pass and the review pass (R-A measured 22.23.4 and 26.13.0; production runs 22.23.4, where these semantics are stable but were not re-measured here): both properties are read live after
+    construction and an idle keep-alive socket is not closed by a small `headersTimeout`.
+    **(b) No `/health` timing marker.** A handler-side marker cannot see TLS setup cost (it runs after the handshake), and `/health` includes a Supabase round trip on
+    every request, so a marker would blur the two candidates it is meant to separate. Revival triggers (runbook `origin-tls-strict-flip.md`): the Supabase-free control also
+    regresses by more than 50 ms at p90; a step change in Cloudflare origin duration aligned with the flip; or a user-facing latency complaint. The isolation procedure, which
+    needs an analytics token, is tracked in #12441.
+    **(c) Alert shape.** One any-event rule on `feature=origin_tls` with the feature tag as its only filter, the four re-page triggers of the sibling rules and an email to
+    the issue owners; no second broad/narrow rule. `op=cert_expiry` pages, but only on a container start within 90 days of expiry: there is no scheduled check, so time-to-expiry does not page by itself and the dedicated expiry alert stays deferred (item 7). The rule is DECLARED by this change and live only after the merge-triggered apply.
+    **(d) Flush before exit.** The REQUIRED fatal paths in `origin-tls.ts` (which `exit(1)` after reporting) flush Sentry for up to 2 s (hard timer 2.25 s) before exiting, via
+    `createExitAfterFlush`; otherwise the SDK's asynchronous send could drop the very event the rule pages on. If the hard timer wins, the pino error line is the only record and no alert covers it (accepted residual). That second sink exists for the PRODUCTION container only: the canary container's stdout is deliberately not shipped (Vector matches `soleur-web-platform` exactly), and on a failed canary the only trace is the `docker logs --tail 30` dump that `ci-deploy.sh` writes on rollback, which ships to Better Stack under the tag `ci-deploy` (not a host log read over SSH). The default exit first closes the plain :80 server (`close()`, then `closeIdleConnections()`: new connections are refused and idle keep-alive sockets are dropped, in-flight requests are not torn down) and `index.ts` skips the ready log, the startup event and the probes after the reaper, so a dying REQUIRED start does not report itself healthy to the deploy canary during the flush window. A bind error on :443 exits later, from its own handler, and is not covered by that early return. Injected `exit` in tests is unchanged.
+    **Also in this change (not an architectural fork):** the pinned gitleaks installs (seven) and the actionlint install carry `--fail --retry 5 --retry-all-errors`; the roughly 31 s retry
+    budget rides out blips and not an 80-minute CDN outage. The wider release-download class (crane and others) is tracked in #12440.
