@@ -202,8 +202,8 @@ out="$(env FX="$TMP/mg1" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; 
 if [[ "$rc" == 0 && "$out" == *"note: 1 qualifying PR(s) verified via merge_group run(s)"* ]]; then
   pass "the via_mg note names the count and the evidence source"
 else fail "via_mg note line: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
-if [ "$(grep -c 'event=merge_group.*head_sha=sha101' "$TMP/mg1/requests.log")" = "1" ]; then
-  pass "an absent-push merged PR issues exactly one merge_group read"
+if [ "$(grep -c 'event=merge_group.*head_sha=sha101' "$TMP/mg1/requests.log")" = "1" ] && [ "$(grep -c 'event=merge_group' "$TMP/mg1/requests.log")" = "1" ]; then
+  pass "an absent-push merged PR issues exactly one merge_group read (sha-scoped and sweep-total)"
 else fail "mg read count for the absent-push PR: $(grep -c 'event=merge_group' "$TMP/mg1/requests.log") total mg reads"; fi
 if grep -q 'event=merge_group' "$TMP/s1/requests.log"; then
   fail "a conclusive push arm issued a merge_group read — the fallback is inconclusive-only"
@@ -212,7 +212,7 @@ build_fx "$TMP/mg2" 25 40
 printf '{"workflow_runs":[]}\n' > "$TMP/mg2/push-sha103.json"
 printf '{"workflow_runs":[{"id":600103,"conclusion":"failure"}]}\n' > "$TMP/mg2/mg-sha103.json"
 printf '{"jobs":[{"name":"test-scripts (6/7)","conclusion":"failure"}]}' > "$TMP/mg2/jobs-600103.json"
-expect "a queue-merged PR whose mg run is red on a gated test-scripts* leg is an escape" 1 "ESCAPE: PR 103" "$TMP/mg2"
+expect "a queue-merged PR whose mg run is red on a gated test-scripts* leg is an escape" 1 "merge-commit merge_group run" "$TMP/mg2"
 build_fx "$TMP/mg3" 25 40
 printf '{"workflow_runs":[]}\n' > "$TMP/mg3/push-sha104.json"
 printf '{"workflow_runs":[{"id":600104,"conclusion":"failure"}]}\n' > "$TMP/mg3/mg-sha104.json"
@@ -220,13 +220,17 @@ printf '{"jobs":[{"name":"lint-bot-statuses","conclusion":"failure"},{"name":"te
 expect "a queue-merged PR whose mg run is red on non-gated jobs only is unrelated, never an escape" 0 "never an escape" "$TMP/mg3"
 build_fx "$TMP/mg4" 25 40
 printf '{"workflow_runs":[]}\n' > "$TMP/mg4/push-sha105.json"
-printf '{"workflow_runs":[]}\n' > "$TMP/mg4/mg-sha105.json"
-expect "absent push AND absent merge_group runs is still NOT YET, never 'no escape'" 2 "no completed push or merge_group run" "$TMP/mg4"
+# no mg-sha105.json — a MISSING mg fixture is a transport failure (fake gh exits 1), not an empty
+# list: the fail row is CANNOT ESTABLISH, never folded into pending (the transport-vs-absent
+# distinction the suite already enforces at b6/t1; absent-both pending is pinned at b6 + d3).
+expect "absent push AND a failed merge_group read is CANNOT ESTABLISH, never pending" 3 "merge_group run" "$TMP/mg4"
 build_fx "$TMP/mg5" 25 40
 printf '{"workflow_runs":[]}\n' > "$TMP/mg5/push-sha106.json"
 printf '{"workflow_runs":[{"id":600106,"conclusion":"failure"}]}\n' > "$TMP/mg5/mg-sha106.json"
 # no jobs-600106.json — the jobs read fails; unreadable red evidence is pending, never ok
 expect "a red merge_group run whose jobs read fails is NOT YET, never ok" 2 "no completed push or merge_group run" "$TMP/mg5"
+out="$(env FX="$TMP/mg5" PATH="$TMP/bin:$PATH" GH_TOKEN=x bash "$PROBE" 2>&1)"; rc=$?
+if [[ "$rc" == 2 && "$out" == *"jobs read of red merge_group"* ]]; then pass "the mg jobs-read pending row echoes its event and detail"; else fail "mg5 pending detail: rc=$rc: $(printf '%s' "$out" | head -3 | tr '\n' '|')"; fi
 build_fx "$TMP/mg6" 25 40
 printf '{"workflow_runs":[]}\n' > "$TMP/mg6/push-sha107.json"
 printf '{"workflow_runs":[{"id":600107,"conclusion":null}]}\n' > "$TMP/mg6/mg-sha107.json"
