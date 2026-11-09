@@ -32,7 +32,7 @@ function runWithGit(body: string, versionLine: string): { status: number | null;
     writeFileSync(path.join(dir, "git"), `#!/bin/sh\necho '${versionLine}'\n`);
     chmodSync(path.join(dir, "git"), 0o755);
     const r = spawnSync("sh", ["-c", body], {
-      env: { PATH: `${dir}:/usr/bin:/bin` },
+      env: { PATH: `${dir}:/usr/bin:/bin`, NODE_ENV: "test" },
       encoding: "utf8",
     });
     return { status: r.status, stderr: r.stderr };

@@ -7,8 +7,15 @@ import { containsSensitiveEnvAccess } from "./bash-sandbox";
 import { isFileTool, pathFieldsEscape } from "./tool-path-checker";
 import { patternEscapesWorkspace } from "./tool-pattern-checker";
 import { logPermissionDecision } from "./permission-log";
+import {
+  createGitCarrierDenyReporter,
+  GIT_CARRIER_DENY_MESSAGE,
+  gitCarrierMatch,
+} from "./git-carrier-guard";
 
 export function createSandboxHook(workspacePath: string): HookCallback {
+  // #9600 — one budgeted reporter per hook instance (a session) for the `.git` file-tool deny.
+  const reportGitCarrierDeny = createGitCarrierDenyReporter();
   return async (input, _toolUseID, _options) => {
     const preInput = input as PreToolUseHookInput;
     const toolInput = preInput.tool_input as Record<string, unknown>;
@@ -41,6 +48,25 @@ export function createSandboxHook(workspacePath: string): HookCallback {
             permissionDecision: "deny" as const,
             permissionDecisionReason:
               "Access denied: file path outside workspace boundary",
+          },
+        };
+      }
+    }
+
+    // --- Git config-carrier guard (#9600) ---
+    // Write / Edit / NotebookEdit into any `.git` path plants a repo-local config that the auto-approved
+    // git reads would execute. Plain deny; `git config` through Bash still reaches the review card.
+    {
+      const carrierMatch = gitCarrierMatch(toolName, toolInput ?? {}, workspacePath);
+      if (carrierMatch) {
+        logPermissionDecision("sandbox-hook", toolName, "deny", "git-carrier-path");
+        reportGitCarrierDeny(toolName, "sandbox-hook", carrierMatch);
+        return {
+          systemMessage: GIT_CARRIER_DENY_MESSAGE,
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse" as const,
+            permissionDecision: "deny" as const,
+            permissionDecisionReason: "Access denied: git configuration and hooks are protected",
           },
         };
       }

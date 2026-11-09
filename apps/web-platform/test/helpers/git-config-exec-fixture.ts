@@ -42,7 +42,7 @@ export const PINNED_GIT_ENV = {
   GIT_CONFIG_VALUE_0: "explicit",
 };
 
-export function baseGitEnv(home: string): Record<string, string> {
+export function baseGitEnv(home: string): NodeJS.ProcessEnv {
   return {
     PATH: process.env.PATH ?? "/usr/bin:/bin",
     HOME: home,
@@ -51,11 +51,12 @@ export function baseGitEnv(home: string): Record<string, string> {
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
+    NODE_ENV: "test",
     ...IDENT,
   };
 }
 
-function git(cwd: string, env: Record<string, string>, ...args: string[]): string {
+function git(cwd: string, env: NodeJS.ProcessEnv, ...args: string[]): string {
   return execFileSync("git", args, { cwd, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 

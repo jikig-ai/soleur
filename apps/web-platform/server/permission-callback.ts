@@ -48,6 +48,11 @@ import {
 } from "./tool-path-checker";
 import { patternEscapesWorkspace } from "./tool-pattern-checker";
 import { isPathInWorkspace } from "./sandbox";
+import {
+  createGitCarrierDenyReporter,
+  GIT_CARRIER_DENY_MESSAGE,
+  gitCarrierMatch,
+} from "./git-carrier-guard";
 import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
 import {
@@ -387,6 +392,8 @@ const RESTORE_GUARD: StatusGuard = { onlyIfStatusIn: ["waiting_for_user"] };
 
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
   const { deps } = ctx;
+  // #9600 — one budgeted reporter per session for the `.git` file-tool deny below.
+  const reportGitCarrierDeny = createGitCarrierDenyReporter();
   // #9556 — one injection point for the deny→handoff flag: every support deny
   // path THAT ESCALATES calls `deny(`, which stamps the dispatch-resolved
   // repo-connected state onto the escalation record. (The deliberately
@@ -558,6 +565,15 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           { sec: true, toolName, inputKeys: Object.keys(toolInput) },
           "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
         );
+      }
+      // #9600 — layer 2 of the `.git` carrier guard (layer 1 is the PreToolUse sandbox hook). A write into any
+      // `.git` path plants a repo-local config that the auto-approved git reads would execute. The deny
+      // message is plain; the agent can still reach `git config` through Bash, which takes the review card.
+      const carrierMatch = gitCarrierMatch(toolName, toolInput, ctx.workspacePath);
+      if (carrierMatch) {
+        logPermissionDecision("canUseTool-file-tool", toolName, "deny", "git-carrier-path");
+        reportGitCarrierDeny(toolName, "canUseTool", carrierMatch);
+        return { behavior: "deny" as const, message: `${GIT_CARRIER_DENY_MESSAGE}${subagentCtx}` };
       }
       logPermissionDecision("canUseTool-file-tool", toolName, "allow");
       return allow(toolInput);
@@ -815,6 +831,34 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             feature: "cc-permissions",
             op: "safe-bash-near-miss",
             extra: { leadingToken },
+          });
+        }
+      }
+
+      // #9600 — closed git-flag grammar fall-through telemetry. A `git log|diff|show` that missed the allowlist
+      // (a flag outside GIT_READ_FLAG) reaches the review card; one budgeted, deduped event per (verb, flag)
+      // measures that UX cost so the list is widened by evidence (with a real-git table row), never by guess.
+      // PII: only the verb and the first dash-token are sent; `--flag=value` is cut at `=` and an attached
+      // short-flag value (`-Sneedle`) is cut to the flag letter. Shares the near-miss per-ctx budget.
+      const gitFall = /^git\s+(log|diff|show)\b(.*)$/.exec(trimmedCmd);
+      if (gitFall) {
+        const dashToken = gitFall[2].split(/\s+/).find((t) => t.startsWith("-")) ?? "";
+        const flag = /^-[^-]/.test(dashToken)
+          ? dashToken.slice(0, 2)
+          : dashToken.split("=")[0].slice(0, NEAR_MISS_LEADING_TOKEN_MAX);
+        const key = `git:${gitFall[1]}:${flag}`;
+        let state = NEAR_MISS_STATE.get(ctx);
+        if (!state) {
+          state = { seen: new Set(), emitted: 0 };
+          NEAR_MISS_STATE.set(ctx, state);
+        }
+        if (state.emitted < NEAR_MISS_PER_CTX_BUDGET && !state.seen.has(key)) {
+          state.seen.add(key);
+          state.emitted += 1;
+          warnSilentFallback(null, {
+            feature: "cc-permissions",
+            op: "safe-bash-git-flag-fallthrough",
+            extra: { verb: gitFall[1], flag },
           });
         }
       }
