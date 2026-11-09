@@ -6623,6 +6623,45 @@ describe("#8754 PR-B standing tail converges on the per-merge saved plan", () =>
     expect(v).not.toMatch(/^\s*default\s*=\s*false\s*$/m);
   });
 
+  // Release-time presence gate coupling (PR A of #8211 / #12167, F2, #12289): verify-required-secrets.sh REQUIRED lists
+  // PROXY_HELLO_HMAC_KEY IFF host_proxy_tls_enabled defaults true. With the flag on, the Terraform pair mints the key
+  // and the relay reads it, so a release without it must be refused; with the flag off the pair is destroyed and a
+  // REQUIRED entry would block every deploy on a key that no longer exists. Predicates take the source text so the
+  // instrument rows below drive the same code on mutated copies.
+  const requiredList = (sh: string): string[] => {
+    const m = /^REQUIRED=\(\n([\s\S]*?)^\)/m.exec(sh);
+    return m
+      ? m[1]
+          .split("\n")
+          .map((l) => l.replace(/#.*$/, "").trim())
+          .filter((l) => l !== "")
+      : [];
+  };
+  const defaultsTrue = (variablesTf: string): boolean => {
+    const v = block(variablesTf, /^variable\s+"host_proxy_tls_enabled"\s*\{/m);
+    return /^\s*default\s*=\s*true\s*$/m.test(v) && !/^\s*default\s*=\s*false\s*$/m.test(v);
+  };
+  const flagCoupled = (sh: string, variablesTf: string): boolean => requiredList(sh).includes("PROXY_HELLO_HMAC_KEY") === defaultsTrue(variablesTf);
+
+  test("verify-required-secrets.sh REQUIRED lists PROXY_HELLO_HMAC_KEY iff host_proxy_tls_enabled defaults true (F2 flag coupling)", () => {
+    const sh = readFileSync(resolve(REPO_ROOT, "apps/web-platform/scripts/verify-required-secrets.sh"), "utf8");
+    const vars = tf("variables.tf");
+    const req = requiredList(sh);
+    expect(req, "REQUIRED must parse (non-vacuity)").toContain("NEXT_PUBLIC_APP_URL");
+    expect(req.length).toBeGreaterThanOrEqual(8);
+    expect(defaultsTrue(vars), "the flag default must parse as true today (non-vacuity of the iff)").toBe(true);
+    expect(req).toContain("PROXY_HELLO_HMAC_KEY");
+    expect(flagCoupled(sh, vars)).toBe(true);
+    // Instrument rows: each way of breaking the coupling is seen; both coherent states pass.
+    const entryRemoved = sh.replace(/^ {2}PROXY_HELLO_HMAC_KEY\n/m, "");
+    expect(entryRemoved).not.toBe(sh);
+    expect(flagCoupled(entryRemoved, vars), "flag true + entry removed").toBe(false);
+    const flagOff = vars.replace(/(variable\s+"host_proxy_tls_enabled"\s*\{[\s\S]*?default\s*=\s*)true/, "$1false");
+    expect(flagOff).not.toBe(vars);
+    expect(flagCoupled(sh, flagOff), "flag false + entry kept").toBe(false);
+    expect(flagCoupled(entryRemoved, flagOff), "flag false + entry removed (the coherent retirement state)").toBe(true);
+  });
+
   test("the inngest config-digest pointer exists only once a digest is promoted, default empty", () => {
     const res = block(tf("inngest-config-digest.tf"), /^resource\s+"doppler_secret"\s+"inngest_config_digest"\s*\{/m);
     expect(res).toMatch(/^\s*count\s*=\s*var\.inngest_config_digest\s*!=\s*""\s*\?\s*1\s*:\s*0\s*$/m);
@@ -9060,7 +9099,9 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
   const COUNTS = 'counts=$(jq -f "${GITHUB_WORKSPACE}/tests/scripts/lib/destroy-guard-filter-web-platform.jq" < tfplan.json)';
   const READ_RE = /^([a-z_]+)=\$\(echo "\$counts" \| jq -r '\.([a-z_]+)'\)$/;
   const GREP_RE = /^grep -F( -e (?:random_password|doppler_secret)\.[a-z_]+){6} -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
-  const COUNTERS = ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"];
+  const COUNTERS = ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries", "relay_hello_key_changes"];
+  // The hello-key HALT carries its OWN plan-line grep (two addresses); the luks block keeps the literal six-address form above.
+  const RELAY_GREP_RE = /^grep -F -e random_bytes\.proxy_hello_hmac -e doppler_secret\.proxy_hello_hmac_key -e 'Plan:' tfplan\.txt >&2 \|\| true$/;
   const READS = [...COUNTERS, "plan_ok"];
   const KNOWN_VARS = new Set([...READS, "rc", "luks_passphrase_rotations"]);
   /** A complete `echo "::error::..."` whose body cannot run code: no unescaped quote/backtick, no `$(`, and every `$` is a plain known variable. */
@@ -9080,7 +9121,7 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
   type Step =
     | { kind: "stmt"; name: string; test: (t: string) => boolean }
     | { kind: "reads" }
-    | { kind: "block"; name: string; header: (t: string) => boolean; grep: boolean; exit: string };
+    | { kind: "block"; name: string; header: (t: string) => boolean; grep: boolean; grepRe?: RegExp; exit: string };
   const eq = (x: string) => (t: string) => t === x;
   // A CLOSED SEQUENCE: every line from the step start through the luks HALT's `fi` is consumed by exactly one step below,
   // in this order, and nothing else may appear. `exit`, `fi` and the `rc` block exist only at their one expected place,
@@ -9103,6 +9144,7 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
     { kind: "block", name: "the plan_ok check", header: eq('if [[ "$plan_ok" != "true" ]]; then'), grep: false, exit: "exit 1" },
     { kind: "block", name: "the numeric validation (every counter)", header: numericOk, grep: false, exit: "exit 1" },
     { kind: "block", name: "the undecidable HALT", header: eq('if [[ "$undecidable_entries" -gt 0 ]]; then'), grep: false, exit: "exit 1" },
+    { kind: "block", name: "the hello-key HALT", header: eq('if [[ "$relay_hello_key_changes" -gt 0 ]]; then'), grep: true, grepRe: RELAY_GREP_RE, exit: "exit 1" },
     { kind: "block", name: "the luks HALT", header: eq('if [[ "$luks_rotations" -gt 0 ]]; then'), grep: true, exit: "exit 1" },
   ];
   const WHY = "a statement outside the destroy-guard allow-list between the step start and the luks HALT";
@@ -9147,8 +9189,8 @@ function destroyGuardPrefixViolations(lines: string[], readIdx: number, start: n
         break walk;
       }
       if (st.grep) {
-        if (!GREP_RE.test(peek())) {
-          v.push(`${WHY} (expected the literal six-address grep -F in ${st.name}): ${peek().slice(0, 90)}`);
+        if (!(st.grepRe ?? GREP_RE).test(peek())) {
+          v.push(`${WHY} (expected the literal ${st.grepRe ? "two" : "six"}-address grep -F in ${st.name}): ${peek().slice(0, 90)}`);
           break walk;
         }
         at++;
@@ -9455,7 +9497,7 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
       expect(luksHaltViolations(m).join("\n")).toContain("numeric validation");
     });
     test("removing ANY single counter from the numeric validation is refused", () => {
-      for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries"]) {
+      for (const c of ["resource_deletes", "nested_deletes", "reboot_updates", "host_creates", "apex_move_orphans", "luks_rotations", "undecidable_entries", "relay_hello_key_changes"]) {
         const m = mutate(applyCode, (l) => {
           const n = l.findIndex((x) => x.includes(`! "$${c}" =~ ^[0-9]+$`));
           const before = l[n];
@@ -9513,6 +9555,242 @@ describe("the web-class passphrase pair is reachable only from the apply job, wh
     const droppedWeb = message.replace(", random_password.workspaces_luks_web", "");
     expect(droppedWeb).not.toBe(message);
     expect(missingAddrs(droppedWeb, addrs)).toEqual(["random_password.workspaces_luks_web"]);
+  });
+});
+
+// ─── PR A of #8211 / #12167 (F1): the relay hello-key pair joins a DEDICATED non-ackable HALT ────────────────────────
+//
+// random_bytes.proxy_hello_hmac and doppler_secret.proxy_hello_hmac_key (proxy-hello-hmac.tf) mint PROXY_HELLO_HMAC_KEY.
+// Since the signed-hello change the key is READ, so a replace, update, delete or forget of the pair is a relay outage, and
+// `[ack-destroy]` cannot discriminate it from any other delete in the same merge. The counter `relay_hello_key_changes` is
+// read in the `apply` job only, outside and before the destroy_count sum, with its own HALT text (a relay outage, NOT a
+// LUKS data-loss message) and its own plan-line grep. The same job-reach discipline as the web-class passphrase pair above:
+// the pair is `-target`ed by `apply` and by NO other job or workflow file, because only `apply` carries the HALT.
+const RELAY_HELLO_PAIR = ["random_bytes.proxy_hello_hmac", "doppler_secret.proxy_hello_hmac_key"];
+const RELAY_HELLO_GREP = "grep -F -e random_bytes.proxy_hello_hmac -e doppler_secret.proxy_hello_hmac_key -e 'Plan:' tfplan.txt >&2 || true";
+
+/** The members of a `def <name>: [ "a", "b" ];` list in the filter, read from the filter itself (ONE source). */
+function jqAddrList(jqSource: string, name: string): string[] {
+  const m = new RegExp(`def ${name}: \\[([^\\]]*)\\];`).exec(jqSource);
+  return m ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]) : [];
+}
+
+/** Structural violations of the apply job's relay_hello_key_changes HALT, on the job's comment-stripped code. */
+function relayHelloHaltViolations(code: string): string[] {
+  const lines = code.split("\n");
+  const ifRe = /^(\s*)if \[\[ "\$relay_hello_key_changes" -gt 0 \]\]; then\s*$/;
+  const start = lines.findIndex((l) => ifRe.test(l));
+  if (start < 0) return ['no `if [[ "$relay_hello_key_changes" -gt 0 ]]; then` HALT (exact, unconditioned) found'];
+  const indent = ifRe.exec(lines[start])![1];
+  const v: string[] = [];
+  const indentOf = (l: string) => /^(\s*)/.exec(l)![1];
+  const readIdx = lines.findIndex((l) => /^\s*relay_hello_key_changes=\$\(echo "\$counts" \| jq -r '\.relay_hello_key_changes'\)\s*$/.test(l));
+  const sumIdx = lines.findIndex((l) => /^\s*destroy_count=\$\(\(resource_deletes\b/.test(l));
+  if (readIdx < 0) v.push("the relay_hello_key_changes counter is not read from the destroy-guard filter output");
+  else if (indentOf(lines[readIdx]) !== indent) v.push("the HALT is nested at a different level than the counter read (inside a conditional?)");
+  if (sumIdx < 0) v.push("the destroy_count sum was not found");
+  else if (indentOf(lines[sumIdx]) !== indent) v.push("the destroy_count sum is at a different level than the HALT");
+  if (readIdx >= 0 && start < readIdx) v.push("the HALT precedes the counter read");
+  if (sumIdx >= 0 && start > sumIdx) v.push("the HALT is positioned AFTER the destroy_count sum ([ack-destroy] could then reach it)");
+  let end = -1;
+  for (let i = start + 1; i < lines.length; i++) {
+    if (lines[i] === `${indent}fi`) {
+      end = i;
+      break;
+    }
+  }
+  if (end < 0) return [...v, "the HALT block has no closing fi at its own indent"];
+  const body = lines.slice(start + 1, end).filter((l) => l.trim() !== "");
+  const bodyIndent = `${indent}  `;
+  if (body[body.length - 1] !== `${bodyIndent}exit 1`) v.push("the HALT body does not END in an unconditional `exit 1`");
+  const echoes: string[] = [];
+  for (const l of body) {
+    if (indentOf(l) !== bodyIndent) {
+      v.push(`HALT body line nested or mis-indented (a conditional around the exit?): ${l.trim().slice(0, 60)}`);
+      continue;
+    }
+    const t = l.trim();
+    if (t === "exit 1") continue;
+    if (t.startsWith('echo "::error::') && t.endsWith('"')) {
+      const inner = t.slice('echo "'.length, -1).replace(/\\./g, "");
+      if (/["`]|\$\(/.test(inner)) v.push(`an echo in the HALT body can run code (unescaped quote, backtick or $( ): ${t.slice(0, 60)}`);
+      echoes.push(t);
+      continue;
+    }
+    if (t === RELAY_HELLO_GREP) continue;
+    v.push(`executable line in the HALT body that is not an echo, the two-address plan-line grep or the final exit 1: ${t.slice(0, 80)}`);
+  }
+  if (body.filter((l) => l.trim() === RELAY_HELLO_GREP).length !== 1) v.push("the HALT body does not carry its own literal two-address plan-line grep exactly once");
+  if (body.some((l) => /\bexit 0\b/.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body can `exit 0`");
+  if (body.some((l) => /ack|skip|override|bypass/i.test(l) && !/^\s*echo\b/.test(l))) v.push("the HALT body carries an acknowledgement/skip path");
+  const text = echoes.join("\n");
+  if (/luks/i.test(text)) v.push("the hello-key HALT text carries LUKS wording (it is a relay outage, not data loss)");
+  for (const need of ["[skip-web-platform-apply]", "_PREVIOUS", "relay outage", "UNWEDGE"]) {
+    if (!text.includes(need)) v.push(`the hello-key HALT text lacks '${need}'`);
+  }
+  return v;
+}
+
+describe("the relay hello-key pair is counted by a DEDICATED non-ackable HALT in the apply job, and reachable only from it (F1)", () => {
+  let wf: string;
+  let jobIds: string[];
+  let applyCode: string;
+  let jq: string;
+  const baseOf = (a: string) => a.replace(/\[.*$/, "");
+  const reachesByFlag = (code: string, a: string) =>
+    new RegExp(`-(?:replace|target)(?:=\\s*|\\s+)\\\\?['"]?${escRe(a)}(?![A-Za-z0-9_])`).test(code);
+
+  beforeAll(() => {
+    wf = readFileSync(WEB_PLATFORM_WORKFLOW, "utf8");
+    const idx = wf.indexOf("\njobs:\n");
+    jobIds = wf
+      .slice(idx)
+      .split("\n")
+      .map((l) => /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(l)?.[1])
+      .filter((x): x is string => !!x);
+    applyCode = stripShellLineComments(extractJobBlock(wf, "apply"));
+    jq = readFileSync(LUKS_FILTER, "utf8");
+  });
+
+  test("the address lists are read from the filter itself and match the pair (create-halt subset is random_bytes only)", () => {
+    expect(jqAddrList(jq, "relay_hello_key_addrs")).toEqual(RELAY_HELLO_PAIR);
+    expect(jqAddrList(jq, "relay_hello_key_create_halt_addrs")).toEqual(["random_bytes.proxy_hello_hmac"]);
+    // The LUKS set is NOT widened with the pair (F1: a dedicated counter, not an edit to luks_passphrase_addrs).
+    for (const a of RELAY_HELLO_PAIR) expect(luksPassphraseAddrs(jq)).not.toContain(a);
+    // The match goes THROUGH luks_passphrase_base (both addresses are [0]-indexed in a real plan).
+    expect(jq).toMatch(/select\(\s*IN\(\.address \| strings \| luks_passphrase_base; relay_hello_key_addrs\[\]\)/);
+    // ...and a state move OFF a key address (previous_address, any verb) counts too, matched the same way.
+    expect(jq).toMatch(/\(\.previous_address\? \/\/ empty\) \| strings \| luks_passphrase_base\s*\| IN\(\.; relay_hello_key_addrs\[\]\)/);
+  });
+
+  test("the apply job reads, validates and HALTs on the counter, structurally, BEFORE the destroy_count sum", () => {
+    expect(applyCode).toContain("relay_hello_key_changes=$(echo \"$counts\" | jq -r '.relay_hello_key_changes')");
+    expect(applyCode.indexOf("destroy_count=$((resource_deletes")).toBeGreaterThan(applyCode.indexOf('"$relay_hello_key_changes" -gt 0'));
+    expect(relayHelloHaltViolations(applyCode)).toEqual([]);
+    // The closed sequence from the step start through the luks HALT now includes this block and its own grep form.
+    expect(luksHaltViolations(applyCode)).toEqual([]);
+  });
+
+  test("the HALT names every counted address and its plan-line grep reaches all of them (derived from the filter)", () => {
+    const addrs = jqAddrList(jq, "relay_hello_key_addrs");
+    const lines = applyCode.split("\n");
+    const start = lines.findIndex((l) => /^\s*if \[\[ "\$relay_hello_key_changes" -gt 0 \]\]; then\s*$/.test(l));
+    const end = lines.findIndex((l, i) => i > start && /^ {10}fi\s*$/.test(l));
+    const body = lines.slice(start, end);
+    const message = body.find((l) => l.includes("relay hello key resource(s)")) ?? "";
+    const grepLine = body.find((l) => /^\s*grep -F\b/.test(l)) ?? "";
+    expect(message, "the HALT headline must exist").not.toBe("");
+    expect(missingAddrs(message, addrs), "the HALT headline must name every counted address").toEqual([]);
+    expect(missingAddrs(grepLine, addrs), "the plan-line grep must name every counted address").toEqual([]);
+    expect(grepLine, "the plan-line grep must not truncate the lines it exists to show").not.toMatch(/\|\s*head\b/);
+    for (const verb of ["CREATE", "UPDATE", "DELETE", "FORGET", "could not be read"]) expect(message).toContain(verb);
+  });
+
+  test("the pair is -targeted by the apply job (bare addresses, as the web pair is)", () => {
+    const applyTargets = new Set(extractTargetsWithKeys(extractJobBlock(wf, "apply")).map(baseOf));
+    for (const a of RELAY_HELLO_PAIR) expect(applyTargets.has(a), `${a} must be in the apply job's -target list`).toBe(true);
+  });
+
+  test("NO other job in the workflow -targets or -replaces either member of the pair", () => {
+    expect(jobIds).toContain("apply");
+    expect(jobIds.length).toBeGreaterThanOrEqual(15);
+    for (const id of jobIds.filter((j) => j !== "apply")) {
+      const text = extractJobBlock(wf, id);
+      expect(text, `job ${id} must extract non-empty`).not.toEqual("");
+      const code = joinContinuations(stripComments(text));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of RELAY_HELLO_PAIR) {
+        expect(targets.has(a), `job ${id} must not -target ${a}`).toBe(false);
+        expect(reachesByFlag(code, a), `job ${id} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("NO other workflow FILE -targets or -replaces either member of the pair", () => {
+    const dir = resolve(REPO_ROOT, ".github/workflows");
+    const files = readdirSync(dir).filter((f) => /\.ya?ml$/.test(f) && f !== "apply-web-platform-infra.yml");
+    expect(files, "the scan must cover the sibling main-root planners").toContain("apply-deploy-pipeline-fix.yml");
+    expect(files.length).toBeGreaterThan(10);
+    for (const f of files) {
+      const code = joinContinuations(stripComments(readFileSync(join(dir, f), "utf8")));
+      const targets = new Set(extractTargetsWithKeys(code).map(baseOf));
+      for (const a of RELAY_HELLO_PAIR) {
+        expect(targets.has(a), `${f} must not -target ${a}`).toBe(false);
+        expect(reachesByFlag(code, a), `${f} must not -replace or -target ${a}`).toBe(false);
+      }
+    }
+  });
+
+  test("job-reach instrument: a second job that -targets the pair is seen (mutation 9 of the plan's Guard 8)", () => {
+    const evil = `${wf}\n  evil_job:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          terraform plan \\\n            -target=random_bytes.proxy_hello_hmac \\\n            -out=tfplan\n`;
+    const text = extractJobBlock(evil, "evil_job");
+    expect(text).not.toEqual("");
+    const code = joinContinuations(stripComments(text));
+    expect(extractTargetsWithKeys(code).map(baseOf)).toContain("random_bytes.proxy_hello_hmac");
+    expect(reachesByFlag(code, "random_bytes.proxy_hello_hmac")).toBe(true);
+  });
+
+  describe("relayHelloHaltViolations rejects each way of defeating the HALT", () => {
+    const mutate = (edit: (lines: string[], start: number, end: number, read: number, sum: number) => string[]): string => {
+      const lines = applyCode.split("\n");
+      const start = lines.findIndex((l) => /^\s*if \[\[ "\$relay_hello_key_changes" -gt 0 \]\]; then\s*$/.test(l));
+      expect(start, "the HALT must be locatable for the mutant").toBeGreaterThan(-1);
+      const ind = /^(\s*)/.exec(lines[start])![1];
+      const end = lines.findIndex((l, i) => i > start && l === `${ind}fi`);
+      const read = lines.findIndex((l) => l.includes("relay_hello_key_changes=$(echo"));
+      const sum = lines.findIndex((l) => l.includes("destroy_count=$((resource_deletes"));
+      return edit(lines, start, end, read, sum).join("\n");
+    };
+    test("control: the unmutated code is clean", () => {
+      expect(relayHelloHaltViolations(applyCode)).toEqual([]);
+    });
+    test("an exit 0 in place of the exit 1 is refused", () => {
+      const m = mutate((l, s, e) => ((l[e - 1] = l[e - 1].replace("exit 1", "exit 0")), l));
+      expect(relayHelloHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("an [ack-destroy] bypass before the exit is refused", () => {
+      const m = mutate((l, s, e) => (l.splice(e - 1, 0, '            [[ "${ack_destroy:-false}" == "true" ]] && exit 0'), l));
+      expect(relayHelloHaltViolations(m).join("\n")).toMatch(/executable line in the HALT body|acknowledgement\/skip path|can `exit 0`/);
+    });
+    test("a conditional exit 1 is refused", () => {
+      const m = mutate((l, s, e) => ((l[e - 1] = '            [[ -z "${ALLOW_RELAY:-}" ]] && exit 1'), l));
+      expect(relayHelloHaltViolations(m).join("\n")).toContain("END in an unconditional");
+    });
+    test("a HALT moved after the destroy_count sum is refused", () => {
+      const m = mutate((l, s, e) => {
+        const block = l.splice(s, e - s + 1);
+        const newSum = l.findIndex((x) => x.includes("destroy_count=$((resource_deletes"));
+        l.splice(newSum + 1, 0, ...block);
+        return l;
+      });
+      expect(relayHelloHaltViolations(m).join("\n")).toContain("AFTER the destroy_count sum");
+    });
+    test("a removed counter read is refused", () => {
+      const m = mutate((l, s, e, r) => (l.splice(r, 1), l));
+      expect(relayHelloHaltViolations(m).join("\n")).toContain("is not read from the destroy-guard filter output");
+    });
+    test("LUKS wording in the HALT text is refused", () => {
+      const m = mutate((l, s) => ((l[s + 1] = l[s + 1].replace("relay hello key", "LUKS passphrase")), l));
+      expect(relayHelloHaltViolations(m).join("\n")).toContain("LUKS wording");
+    });
+    test("a plan-line grep that borrows the LUKS block's six-address form is refused", () => {
+      const m = mutate((l, s, e) => {
+        const g = l.findIndex((x, i) => i > s && i < e && /^\s*grep -F\b/.test(x));
+        l[g] = "            grep -F -e random_password.inngest_redis_luks -e 'Plan:' tfplan.txt >&2 || true";
+        return l;
+      });
+      expect(relayHelloHaltViolations(m).join("\n")).toContain("two-address plan-line grep");
+      expect(luksHaltViolations(m).join("\n")).toContain("outside the destroy-guard allow-list");
+    });
+    test("the closed sequence refuses a short-circuit inserted between the counter read and the hello-key HALT", () => {
+      const m = mutate((l, s, e, r) => (l.splice(r + 1, 0, '          [[ -n "${ALLOW_RELAY:-}" ]] && exit 0'), l));
+      expect(luksHaltViolations(m).join("\n")).toContain("outside the destroy-guard allow-list");
+    });
+    test("the hello-key HALT deleted outright is refused by both checkers", () => {
+      const m = mutate((l, s, e) => (l.splice(s, e - s + 1), l));
+      expect(relayHelloHaltViolations(m).join("\n")).toContain("no `if [[ \"$relay_hello_key_changes\" -gt 0 ]]; then` HALT");
+      expect(luksHaltViolations(m).join("\n")).toContain("hello-key HALT");
+    });
   });
 });
 
