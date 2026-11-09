@@ -6,6 +6,7 @@
 process.env.HOME = process.env.HOME || "/tmp";
 
 import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
+import { AGENT_GIT_GLOBAL_CONFIG, hostGitInvocation } from "../server/host-git";
 import {
   existsSync,
   statSync,
@@ -494,9 +495,10 @@ describe("gitWithPrivateKeyAuth (git-data private-net SSH transport, #5274 Phase
     // Prompt-free + no system/global gitconfig leak (mirror the askpass path).
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
     expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
-    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+    expect(env.GIT_CONFIG_GLOBAL).toBe(AGENT_GIT_GLOBAL_CONFIG);
     // HELPER_RESET is prepended.
-    expect(capturedCalls[0].args.slice(0, 2)).toEqual(["-c", "credential.helper="]);
+    const keyBlock = hostGitInvocation([]).args;
+    expect(capturedCalls[0].args.slice(keyBlock.length, keyBlock.length + 2)).toEqual(["-c", "credential.helper="]);
 
     // The key material is on disk 0600 during the call, with the real key bytes,
     // and is removed afterward.

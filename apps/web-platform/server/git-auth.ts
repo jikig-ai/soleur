@@ -28,6 +28,7 @@ import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
 import { GIT_DATA_HOST_KEY_PIN_RE } from "./git-data-host-key-pin-shape";
+import { hostGitInvocation } from "./host-git";
 import { HARDENED_GIT_ARGS, assertIsolatedPushDir, buildIsolatedGitEnv, type IsolatedPushDir } from "./git-hardened-env";
 
 const execFileAsync = promisify(execFile);
@@ -63,6 +64,13 @@ const TOKEN_FORMAT_RE = /^ghs_[A-Za-z0-9._~+/=-]{36,}$/;
 // authoritative. Git ≥ 2.9 treats `credential.helper=` (empty) as the
 // clear sentinel; the node:22-slim runtime ships git ≥ 2.39.
 const HELPER_RESET: readonly string[] = ["-c", "credential.helper="];
+
+// `GIT_ALLOW_PROTOCOL` for the two network arms of the shared host-git invocation (server/host-git.ts): the installation
+// arm only ever talks https to GitHub, the key-auth arm only ssh to the git-data host. A repo-config-switched local-exec
+// transport (`uploadpack` on a local-path remote, `ext::`) is refused. This does NOT stop an https rewrite toward an
+// attacker host (a measured RESIDUAL pinned in test/host-git-consumers-real-git.test.ts).
+export const LEGACY_ALLOW_PROTOCOL = "https";
+export const KEY_AUTH_ALLOW_PROTOCOL = "ssh";
 
 function isWriteable(dir: string): boolean {
   try {
@@ -498,19 +506,22 @@ export async function gitWithPrivateKeyAuth(
       "BatchMode=yes",
     ].join(" ");
 
-    const fullArgs = [...HELPER_RESET, ...args];
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      GIT_SSH_COMMAND: sshCommand,
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_TERMINAL_PROGRESS: "0",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: "/dev/null",
-    };
+    // The shared host-git invocation: hardening arguments, a scrubbed environment (the server's secrets never reach a
+    // helper a planted carrier runs), the image identity file as the global config, and ssh as the only transport.
+    // Only this arm's own variables ride `extraEnv`; it sets no `GIT_CONFIG_*` of its own.
+    const h = hostGitInvocation([...HELPER_RESET, ...args], {
+      cwd: opts.cwd,
+      extraEnv: {
+        GIT_SSH_COMMAND: sshCommand,
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_TERMINAL_PROGRESS: "0",
+      },
+      allowProtocol: KEY_AUTH_ALLOW_PROTOCOL,
+    });
 
-    const { stdout } = await execFileAsync("git", fullArgs, {
+    const { stdout } = await execFileAsync("git", h.args, {
       ...opts,
-      env,
+      env: h.env,
       maxBuffer: 10 * 1024 * 1024,
     });
     return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
