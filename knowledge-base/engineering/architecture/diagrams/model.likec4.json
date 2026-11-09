@@ -2890,17 +2890,6 @@
 "id": "3l5r1fws1vcau",
 "title": "Bootstrap downloads the pinned inngest CLI tarball (inngest_<ver>_linux_<arch>.tar.gz, arch from local.inngest_arch) and sha256-verifies it against the committed inngest_cli_sha256{,_arm64} before extracting/running — live edge on first boot, host replace, and version bump (the version file short-circuits same-version reboots) (#7463). Trust anchor is the reviewed embed in inngest.tf, not upstream's checksums.txt (release-shipped, unsigned). Anonymous GET, no credential"
 },
-"3mhg1xa7cfyqr": {
-"technology": "PostgreSQL / PostgREST RPC",
-"source": {
-"model": "platform.webapp"
-},
-"target": {
-"model": "platform.infra.legalAcceptanceStore"
-},
-"id": "3mhg1xa7cfyqr",
-"title": "Founder records a decision on a legal text via record_legal_acceptance as the authenticated user; the server issues and checks the email-code challenge and reads the record through service_role RPCs. The Inbox row (server/legal-acceptance/inbox-rows.ts) additionally reads the founder's own rows directly as the authenticated user under row-level security, selecting key, text_hash and choice only (service_role has no table grant, and this read is not an RPC). Screens ship behind the approval-queue flag (PR-C). PR-D adds the bearer-gated read-only check endpoint (GET /api/internal/legal-acceptance/[key]?hash=, four fields, never the note, founder id from configuration; its sibling /counts returns only a key's total and per-hash counts) and the acknowledgement write after a flushed accepted event (ADR-319)"
-},
 "3mxkvx15xswfp": {
 "technology": "HTTPS (git ls-remote, GitHub REST API, gh CLI)",
 "source": {
@@ -3309,6 +3298,17 @@
 },
 "id": "giowg6p8w1jd",
 "title": "Reads worktree lease"
+},
+"grkahxeo5a1": {
+"technology": "PostgreSQL / PostgREST RPC",
+"source": {
+"model": "platform.webapp"
+},
+"target": {
+"model": "platform.infra.legalAcceptanceStore"
+},
+"id": "grkahxeo5a1",
+"title": "Founder records a decision on a legal text via record_legal_acceptance as the authenticated user; the server issues and checks the email-code challenge and reads the record through service_role RPCs. The Inbox row (server/legal-acceptance/inbox-rows.ts) additionally reads the founder's own rows directly as the authenticated user under row-level security, selecting key, text_hash and choice only (service_role has no table grant, and this read is not an RPC). Screens ship behind the approval-queue flag (PR-C). PR-D adds the bearer-gated read-only check endpoint (GET /api/internal/legal-acceptance/[key]?hash=, four fields, never the note, founder id from configuration; its sibling /counts returns only a key's total and per-hash counts) and the acknowledgement write after a flushed accepted event (ADR-319)"
 },
 "gxkkp0qf6t0l": {
 "technology": "CLI (doppler run / scoped read-only service tokens: prd_workspaces_luks, prd_workspaces_luks_web, soleur-github-app)",
@@ -28992,7 +28992,7 @@
 },
 "parent": null,
 "relations": [
-"3mhg1xa7cfyqr"
+"grkahxeo5a1"
 ],
 "color": "gray",
 "line": "dashed",

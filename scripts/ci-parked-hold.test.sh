@@ -632,8 +632,8 @@ PYEOF
 COE_STEP='disallowed step key `continue-on-error`'
 lint_mutant coe-on-parked-hold secret-scan.yml secret-guards parked-hold "$COE_STEP"
 lint_mutant coe-on-secret-guards-job secret-scan.yml secret-guards JOB 'job key `continue-on-error`'
-lint_mutant coe-on-guards-ruleset-step ci.yml guards-ruleset "$(sed -n '/^  guards-ruleset:/,/^  guards-advisory:/p' "$ROOT/.github/workflows/ci.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')" "$COE_STEP"
-lint_mutant coe-on-quality-guards-step pr-quality-guards.yml quality-guards "$(sed -n '/^  quality-guards:/,/^  quality-advisory:/p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')" "$COE_STEP"
+lint_mutant coe-on-guards-ruleset-step ci.yml guards-ruleset "$(sed -n '/^  guards-ruleset:/,/^  guards-advisory:/p' "$ROOT/.github/workflows/ci.yml" | sed -nE 's/^      - id: ([A-Za-z0-9_-]+).*/\1/p' | sed -n 1p)" "$COE_STEP"
+lint_mutant coe-on-quality-guards-step pr-quality-guards.yml quality-guards "$(sed -n '/^  quality-guards:/,/^  quality-advisory:/p' "$ROOT/.github/workflows/pr-quality-guards.yml" | sed -nE 's/^      - id: ([A-Za-z0-9_-]+).*/\1/p' | sed -n 1p)" "$COE_STEP"
 # Every other spelling or route by which a member is neutralised while rules (a)-(f) still hold. Each mutant is a
 # python re.sub (MULTILINE, count=1) on one workflow copy; it must change the copy, the lint must exit non-zero, and
 # its output must carry the finding that names THAT rule (a crash or an unrelated finding does not count as caught).
@@ -667,7 +667,7 @@ lint_resub job-if-false-guards-ruleset ci.yml '^(  guards-ruleset:\n)' '\1    if
 lint_resub job-if-false-quality-guards pr-quality-guards.yml '^(  quality-guards:\n)' '\1    if: ${{ false }}\n' 'job key `if`'
 lint_resub local-composite-action $SS '^(      - name: Checkout \(full history for diff scans\)\n        uses: )[^\n]*\n' '\1./.github/actions/x\n' '`uses` must be an owner/repo@<40-hex sha> action'
 # quality-advisory is NOT exempt from the continue-on-error rule (it has no use of it); guards-advisory still is
-lint_mutant coe-on-quality-advisory-step pr-quality-guards.yml quality-advisory "$(sed -n '/^  quality-advisory:/,$p' "$ROOT/.github/workflows/pr-quality-guards.yml" | grep -m1 -oE '^      - id: [A-Za-z0-9_-]+' | sed 's/^      - id: //')" "$COE_STEP"
+lint_mutant coe-on-quality-advisory-step pr-quality-guards.yml quality-advisory "$(sed -n '/^  quality-advisory:/,$p' "$ROOT/.github/workflows/pr-quality-guards.yml" | sed -nE 's/^      - id: ([A-Za-z0-9_-]+).*/\1/p' | sed -n 1p)" "$COE_STEP"
 # rule (g2): workflow top-level keys, env names (every level) and the aggregate env; plus step shape and jobs shape
 TOPDEF='defaults:\n  run:\n    shell: "echo {0}"\n'
 lint_resub workflow-defaults-shell-secret-scan $SS '^(concurrency:)' "$TOPDEF"'\1' 'workflow key `defaults`'
