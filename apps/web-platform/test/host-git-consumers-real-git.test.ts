@@ -615,8 +615,16 @@ describe("census: every host-side git exec site is classified (consistency with 
       expect(src, `${rel} does not use hostGitInvocation`).toContain("hostGitInvocation(");
       // every exec of git in an in-scope file passes an env: no bare `execFile*("git", args)` with the server environment
       for (const m of src.matchAll(/(?:execFile|execFileSync|execFileAsync|execFileP)\(\s*"git"/g)) {
-        const window = src.slice(m.index, m.index + 500);
-        expect(window, `${rel}: a git exec without an explicit env: ${window.slice(0, 80)}`).toMatch(/env/);
+        // the call's own argument list: paren-balanced, so a neighbouring `env` cannot satisfy it
+        const open = src.indexOf("(", m.index);
+        let depth = 0;
+        let end = open;
+        for (; end < src.length; end++) {
+          if (src[end] === "(") depth++;
+          else if (src[end] === ")" && --depth === 0) break;
+        }
+        const call = src.slice(open, end + 1);
+        expect(call, `${rel}: a git exec without an explicit env: ${call.slice(0, 80)}`).toMatch(/\benv\b/);
       }
     }
   });
