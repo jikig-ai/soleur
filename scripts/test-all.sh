@@ -6228,6 +6228,13 @@ if want_scripts; then
   # Registered explicitly (orphan-suite class above); a probe that stops at its first member would go quiet
   # while the token is still in config.
   run_suite "scripts/arm-token-revisit-12229" bash scripts/followthroughs/arm-token-revisit-12229.test.sh
+  # #12008: exit-code harness for the host kernel cadence probe (notify-only; exits 2, 3 or 5, never 0 or 1).
+  # Registered explicitly (orphan-suite class above); an unknown row read as within-cadence would turn the
+  # tracker's all-clear into a false assurance about host patching.
+  run_suite "scripts/host-kernel-cadence-12008" bash scripts/followthroughs/host-kernel-cadence-12008.test.sh
+  # #12008: declared-design check of the non-web firewalls (no inbound rule, every mapped server bound). Registered
+  # explicitly (orphan-suite class above); it reads Terraform text only, so it never gates a host.
+  run_suite "scripts/host-tcp-exposure" bash scripts/host-tcp-exposure.test.sh
   # #6616: exit-code harness for the host_name-mislabel follow-through's decision tree (identity,
   # liveness, TRANSIENT-not-PASS). Registered explicitly (orphan-suite class above) — its exit code
   # gates whether the sweeper auto-closes #6616, so a vacuous PASS regression must redden CI.

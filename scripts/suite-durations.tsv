@@ -2,7 +2,7 @@
 # group=light
 # generated-from-runs=durations:seed-durations.tsv
 # default-weight-ms=1251
-# generated-at=2026-11-09T19:08:04Z
+# generated-at=2026-11-09T23:02:38Z
 # generator=regenerate-shard-manifest.py v3
 # growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
@@ -451,6 +451,8 @@ scripts/git-data-reboot-evidence-landed-8210	1324	measured
 scripts/git-data-rehearsal-evidence-8211	1222	floor
 scripts/git-data-replication-signal-11704	1222	floor
 scripts/guard-vacuity-floor	44880	measured
+scripts/host-kernel-cadence-12008	1251	floor
+scripts/host-tcp-exposure	1251	floor
 scripts/hosted-destroy-ask-window-9776	1222	floor
 scripts/hostname-mislabel-web1-6616	221	measured
 scripts/image-cve-db-pin	1223	floor

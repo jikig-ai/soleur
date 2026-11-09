@@ -3,7 +3,7 @@
 # generated-from-run=incremental
 # generated-from-runs=incremental
 # default-weight-ms=1251
-# generated-at=2026-11-09T19:08:04Z
+# generated-at=2026-11-09T23:02:38Z
 # generator=regenerate-shard-manifest.py v3
 # regen: python3 scripts/regenerate-shard-manifest.py --incremental --write   # suite added/removed; --runs 5 --write rebalances
 # runner: scripts/test-all.sh `_shard_selects` (untabled labels hash-fallback)
@@ -453,6 +453,8 @@ scripts/git-data-reboot-evidence-landed-8210	6
 scripts/git-data-rehearsal-evidence-8211	1
 scripts/git-data-replication-signal-11704	3
 scripts/guard-vacuity-floor	7
+scripts/host-kernel-cadence-12008	2
+scripts/host-tcp-exposure	2
 scripts/hosted-destroy-ask-window-9776	8
 scripts/hostname-mislabel-web1-6616	6
 scripts/image-cve-db-pin	5
