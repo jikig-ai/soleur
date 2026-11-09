@@ -97,3 +97,11 @@ None. Planning subagent notes: (1) all skill/agent fan-outs executed sequentiall
 - Fix-round seats: code-quality found epilogue-registration P1 (moved to suite block ~7004, commit c1e1c80) + stale >=1 docs (fixed); security found whole-file strip P1 + octal/uniqueness P2s (fixed, commit 195da34). Suites re-green: probe 25/25, guard 74/0.
 - STILL RUNNING: d7afe284 (pattern+test-design). On return: resolve findings -> emit `## Review Phase Complete` -> Step 5.5 QA (soleur:qa skill via Task? or invoke skill) -> compound -> ship -> postmerge.
 - F3 issue filed: #12507.
+
+## Review Phase Complete
+
+- Panel: 9 seats total (3 design-pass + 6 main) + 3 fix-round verification seats.
+- Findings: 2 P1s (probe schema/env delivery — design pass; guard-window uniqueness — structural-enum) + ~35 P2/P3s, all resolved in commits 45ba7b1, 5ffdcb85, c1e1c80, 195da34.
+- Fix-round verification: security-seat found a NEW P1 (sed|awk ordering) — resolved in 195da34; code-quality found epilogue-registration P1 — resolved in c1e1c80.
+- Disclosure: pattern+test-design fix-round seat (d7afe284) did not return within 30 min — treated as wedged; its scope (90543a00..5ffdcb85) was superseded by c1e1c80+195da34 and its lenses overlapped the two verification seats that did return. Suites re-verified green post-fix: probe 25/25, guard 74/0, stall-check 166/0.
+- PANEL_SHA: 90543a00 (main panel); fix range reviewed through 195da34.
