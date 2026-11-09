@@ -19,17 +19,20 @@ requires_cpo_signoff: false
 **Review coverage:** `Reviewed-Coverage: sequential-fallback` — all skill/agent fan-outs executed inline in this process (no subagent roster on this harness): deepen-plan halt gates §4.6–4.13 run mechanically; plan-review lenses (overengineering / correctness / simplicity / devex) applied inline.
 
 ### Key Improvements
+
 1. Encryption Posture block rewritten to the sibling plan's full-schema "no store/connection introduced" form (deepen-plan §4.10 halt-safe).
 2. AC7/AC8 rewritten as per-surface value assertions (`grep` on live value) instead of token-diff greps — test-fixture literals would false-positive a `-G'max_entries_to_build'` diff scan.
 3. AC split into `### Pre-merge (PR)` / `### Post-merge` and probe gained the tracker-window postdate check (sharp-edges: diff-scope ACs, sample-after-X).
 
 ### New Considerations Discovered
+
 - The executed lever-1 evaluation (issue comment 6717099123) already recommends **decline at current traffic** on a 12h window — the plan therefore gates the flip on a ~28-day re-instrumented window rather than assuming it.
 - A fourth live parity surface beyond the issue's named three exists: `.github/workflows/merge-queue-stall-check.yml:172` `MAX_ENTRIES_TO_BUILD` (S8-asserted mirror; flip narrows stall coverage to `position <= 1`).
 - Sweeper exit vocabulary verified: exit 5 = ACTION REQUIRED (designed nag), exit 1 = every-sweep FAIL comment (banned spam shape) — the probe computes the verdict and uses 0/5/3 only.
 - `follow-through` label verified to exist; `--status cancelled`/`--created`/`--event`/`--json` verified against `gh run list --help`.
 
 ### Gate Results (deepen-plan)
+
 - §4.6 User-Brand Impact: PASS (section present, `none`, no sensitive-path match).
 - §4.7 Observability: PASS (5 fields, `grep` allowlisted, literal `expected_output "1"`).
 - §4.8 PAT-shaped variables: PASS (no hits).
@@ -54,6 +57,7 @@ Issue #12269 is a deferred lever from the congestion-relief plan (#12250, tracke
 **Value-Proposition Measurement (Phase 0.6c).** The issue's claimed saving is "~25-30 job slots at peak per concurrent candidate". Measured anchors (all in-repo): `knowledge-base/engineering/audits/2026-11-04-ci-runner-minute-accounting.md` — ~375 job-min per `merge_group` `ci.yml` run pre-fold; post-fold census on #12089 — 363 counted job-min/run, 29 dispatches/run, ≈25% of all-repo demand in the window. Counter-side measured: speculation costed **zero** discarded builds in the 12h window — every speculative build ran to conclusion and merged. The unmeasured remainder is whether a longer window (the evaluation's own caveat) shows a different regime — that is what Phase 1 of this plan measures.
 
 **Relevant file paths (verified present on this branch).**
+
 - `infra/github/ruleset-ci-required.tf:271-275` — `merge_queue { ... max_entries_to_build = 2 ... }` (all 7 params explicit; comment block at 249-270 explains each knob and names T-mq-1).
 - `scripts/create-ci-required-ruleset.sh:117-120` — DR skeleton JSON mirror (`"max_entries_to_build": 2`).
 - `infra/github/README.md` — params table row `max_entries_to_build | 2` + the "Guard 2 compares all three" contract (~lines 104-113).
@@ -111,6 +115,7 @@ A two-branch measured experiment honoring the issue's method exactly:
 
 - `SINCE=$(date -u -d '-28 days' +%Y-%m-%dT%H:%M:%SZ)`; count discarded speculation:
   `gh run list --repo jikig-ai/soleur --event merge_group --workflow ci.yml --status cancelled --created ">=${SINCE%%T*}" --json databaseId,conclusion,createdAt --limit 400 | jq 'length'` — FLIP signal if `>= 2`.
+
 - Drain + demand share: merge count via `gh pr list --repo jikig-ai/soleur --state merged --search "merged:>=${SINCE%%T*}" --json number --limit 500 | jq 'length'`; `bash scripts/ci-demand-census.sh --start <w0> --end <w1> --summary` over ≥4 spread 12h windows → `BY_WORKFLOW ci.yml merge_group` share of `TOTAL_JOB_MINUTES` — FLIP signal if `>= 40%`.
 - `test` merge_group p50/p90: read the standing `ci-wallclock-p90` tracker body (the watch rewrites it) for the current merge_group-surface row — recorded as context, never a FLIP trigger.
 - Record the raw numbers into `## Decision Gate Result
