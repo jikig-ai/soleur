@@ -13,6 +13,23 @@ requires_cpo_signoff: true
 
 # Agent runtime sandbox evaluation, injector first
 
+## Enhancement Summary
+
+**Deepened on:** 2026-11-09. **Gates:** 4.6, 4.7, 4.8, 4.11, 4.12, 4.13 pass; 4.5, 4.55, 4.9, 4.10 not triggered. **Agents:** security-sentinel, data-integrity-guardian, test-design-reviewer, observability-coverage-reviewer, a verify-the-negative sweep, and a CTO ruling batch (D1–D4). The full all-agent fan-out was not repeated: a seven-seat plan review ran on this plan the same day.
+
+### Key Improvements
+
+1. Credential isolation for the run itself: the CI job holds no real token (`persist-credentials: false`, no secrets) and the tracer runs with a scrubbed environment and no route to real GitHub.
+2. The spike gets its own workflow file (CTO D2), since `infra-validation.yml`'s workflow-level cancellation would kill a running spike on every push.
+3. Every RPC outcome the real `180_approval_request.sql` can return now has a reason code, and the markers carry `request_id`, `source` and a hash prefix, so one event names the cause.
+4. Positive controls for every negative verdict (CLI-tier reads, log greps, exit bounds, per-session token identity), and the hook's decision logic plus the outcome floor move into hermetic tests.
+
+### New Considerations Discovered
+
+- Merging this PR triggers `web-platform-release.yml` (a redeploy of unchanged runtime code) because the suite, test and devDependencies live under `apps/web-platform/`; CTO D3 accepts it with disclosure.
+- A DNS name constraint on `github.com` also permits every subdomain, and leaves IP names open unless excluded.
+- `create_approval_request` returns the existing live row and ignores a new TTL, so the expiry arm needs its own conversation.
+
 ## Overview
 
 This plan turns the 2026-11-09 brainstorm into a decision record and one measurement. The decision is that egress credential injection is decided at the egress hop's interface (a CONNECT proxy with per-session authentication), apart from the isolation runtime (bwrap today, the gVisor epic #9842 tomorrow). The measurement is a go/no-go on a self-run TLS-terminating injector (iron-proxy) for GitHub hosts, run in a hermetic suite on the production run tuple, against criteria fixed before the run: the brainstorm's seven, split and extended to nine (criteria 1–9 below; the mapping is in the spec edit). The Cloudflare Sandbox trial, the measured contingency, ships as a sibling PR under widened #9859 (Arm D) on this same spec (CTO ruling F-d). No credential-bearing surface reaches any tenant: the injector, its CA, its policy and its approval hook live under a test path only.
@@ -111,7 +128,7 @@ Rulings that shape it (CTO, binding, 2026-11-09; full text in `decision-challeng
 - **F-b** iron-proxy, digest-pinned, is the only arm; a failure configuration cannot fix stops the run and goes to the CTO.
 - **F-c** one injector process per session beside the forwarder, outside bwrap, CONNECT-chained to the unchanged forwarder and squid. The decoy credential and CA key reach it through a file descriptor or a file under a path the sandbox config masks for every session; never env or argv.
 - **F-f** hermetic stub destinations; upstream verification stays on against a test root.
-- **F-g / R22** an on-demand recorded run in a dedicated job (`pull_request` and `workflow_dispatch`, `if: github.event_name != 'push'`), job-level concurrency group `sandbox-eval-${{ github.event.pull_request.number }}` with `cancel-in-progress: false`; the suite never skips itself.
+- **F-g / R22 / D2** an on-demand recorded run in its own workflow file `.github/workflows/egress-injector-spike.yml` (`pull_request` with paths on the spike directories and `workflow_dispatch` only; never `push`), job-level concurrency group `sandbox-eval-${{ github.event.pull_request.number || github.run_id }}` with literal `cancel-in-progress: false`, a `scripts/pr-fanout-ledger.txt` row, `permissions: contents: read`, `actions/checkout` with `persist-credentials: false`, and no secrets or Doppler token; the suite never skips itself.
 - **R9** one approval-hook process holds the service-role and HMAC keys (as the dispatcher does in production). Each session reaches it through its own unix socket in a per-session directory masked for every session (the #10445 peer-socket pattern), the hook binds each socket to one conversation id and accepts only a per-session nonce held by that session's injector, and a probe proves sandboxed Bash cannot `connect()` the socket.
 - **R10** every secret (decoy token, CA key, hook socket, nonce) is out of env and argv and under masked paths; CLI-tier probes (below) prove the same-uid file tools cannot read them.
 - **R11** arm A runs with the exact `buildAgentEnv` output and records where GitHub traffic goes; arm B removes the four inject hosts from `NO_PROXY`, labelled a production change owned by #11637. Both run through the real SDK/SRT sandbox (`sdk-bash-probe.mjs` pattern).
@@ -126,9 +143,9 @@ Policy data (`policy.yaml`) is the per-host classifier and the only place a verb
 - Listed writes need a row: `POST git-receive-pack`; the REST write verbs and GraphQL mutation fields named in `policy.yaml`. An unlisted write, and any unparseable, batched (array) or multi-operation body without a resolvable `operationName`, is refused as `not-allowlisted` with no row.
 - Each write rule names the canonical-action fields hashed into `action_sha256` (HMAC-SHA-256 with a spike-only key), always including host and repository path: REST = method, host, path, sha256 of body; GraphQL = host, operation name, operation type, sha256 of normalized document and variables; git push = host, repository path, and the ref-update commands from the receive-pack pkt-lines (old sha, new sha, ref). Host case, the repository path's `.git` suffix and percent-encoding are normalized first (CTO R6). `canonical_action` stores the same fields readably, so the results note records what an approval card could show.
 
-The classifier and hash recipe are pure functions in `policy.mjs` over a normalized request struct `{method, host, path, query, headers, body}` with no top-level server or network imports, so #11637 can port them into `server/` unchanged.
+Allowlist matching and hashing both use the canonical path: `..`, `%2e`, `%2F`, `//` and owner/repo case variants are normalized or refused before either. The classifier and hash recipe are pure functions in `policy.mjs`, which takes the HMAC key as a required parameter with no default, over a normalized request struct `{method, host, path, query, headers, body}` with no top-level server or network imports, so #11637 can port them into `server/` unchanged.
 
-Credential carriage (CTO R8): on the four inject hosts the injector replaces the whole `Authorization` header with the real one (HTTP Basic `x-access-token:<token>` for git smart HTTP, `token <t>` for the REST and GraphQL APIs) and ignores whatever the client sent; it never substitutes text inside a header. The sandbox therefore holds no token-shaped value for git. Every criterion 2 client runs under the production web-egress credential-deny list derived from `buildAgentSandboxConfig`'s census (never hand-copied). `gh` refuses to call the API without some token, so the suite records which harmless value `gh` can be given under that list; if the only route is exempting a name from it, the results note labels that a production change owned by #11637.
+Credential carriage (CTO R8): on the four inject hosts the injector replaces the whole `Authorization` header with the real one (HTTP Basic `x-access-token:<token>` for git smart HTTP, `token <t>` for the REST and GraphQL APIs) and ignores whatever the client sent: it sets the header when the client sent none (git sends none until challenged) and strips duplicate and case-variant copies; it never substitutes text inside a header, and it does this in iron-proxy configuration only, never in the hook (CTO D1). The sandbox therefore holds no token-shaped value for git. Every criterion 2 client runs under the production web-egress credential-deny list derived from `buildAgentSandboxConfig`'s census (never hand-copied). `gh` refuses to call the API without some token, so the suite records which harmless value `gh` can be given under that list; if the only route is exempting a name from it, the results note labels that a production change owned by #11637.
 
 The approval hook (`approval-hook.mjs`, importing `policy.mjs`) implements iron-proxy's `TransformService`. Its decision order:
 
@@ -136,11 +153,11 @@ The approval hook (`approval-hook.mjs`, importing `policy.mjs`) implements iron-
 2. Unparseable, unclassifiable or unlisted write: REJECT `not-allowlisted`, no row.
 3. Allowlisted read or push advertisement: CONTINUE.
 4. Read outside the allowlist: REJECT `not-allowlisted`, no row.
-5. Listed write: compute the hash; call `create_approval_request`, which returns the existing live row for this hash or inserts a pending one; if the row is `approved`, call `consume_approval(id, hash, conversation)` and CONTINUE on success; otherwise REJECT with a body naming the pending approval (`pending`), and report `rejected` or `expired` by checking `get_approval_status` for the ids it previously returned for this hash (the hook remembers them).
+5. Listed write: compute the hash; call `create_approval_request` with the one spike tool name (CTO D4), which returns the existing live row for this hash (`created=false`, ignoring any new TTL) or inserts a pending one (`created=true`); if the row is `approved` and the hook's own comparison of `expires_at` with the clock says it is live, call `consume_approval(id, hash, conversation)` and CONTINUE on success; otherwise REJECT with a body naming the pending approval (`pending`). When `create` returns `created=true` for a hash whose previous id the hook remembers, report that previous id's `get_approval_status` result (`rejected` or `expired`) once; later retries report `pending`.
 
-Timeouts, together: the hook bounds its own work at 5 s; iron-proxy's 30 s upstream header timeout bounds a slow destination; clients must exit within 10 s of a refusal or a dead hook. Each is shorter than the layer above it, so a stall is reported by the innermost layer that can see it. The hook emits `SOLEUR_EGRESS_VEND` (fields: `session`, `host`, `method`, `class`, `rule`, `approval_id` or `read-allowlist`) and `SOLEUR_EGRESS_VEND_REFUSED` (fields: `session`, `host`, `method`, `class`, `reason` in `flag-off | not-allowlisted | pending | rejected | expired | hook-timeout`). A request whose hash differs from an approved row simply finds no approved row, so the binding is proven by the stub's record, not by a reason code; cross-tenant isolation is likewise proven at the stub. When the hook is dead or frozen it cannot emit anything; the suite then reads iron-proxy's own audit line for the failed gRPC call. Nothing logs a body, a header value or a token.
+Timeouts, together: the hook bounds its own work at 5 s; iron-proxy's 30 s upstream header timeout bounds a slow destination; clients must exit within 10 s of a refusal or a dead hook. Each is shorter than the layer above it, so a stall is reported by the innermost layer that can see it. The hook emits `SOLEUR_EGRESS_VEND` (fields: `session`, `host`, `method`, `class`, `rule`, `approval_id` or `read-allowlist`) and `SOLEUR_EGRESS_VEND_REFUSED` (fields: `session`, `host`, `method`, `class`, `reason` in `flag-off | not-allowlisted | pending | rejected | expired | cap | retry | closed | consume-failed | rpc-error | guard-refused | hook-timeout | no-hook-decision`, plus `subreason` for `not-allowlisted` in `unparseable | batched | unlisted-write | read-outside-allowlist` and for `consume-failed` in `already_consumed | decider_not_owner | requester_not_member`). Both markers carry `request_id` (joining the hook marker, iron-proxy's audit line, the client's exit and the stub's record), `source` (`hook | proxy | harness`), and on `_REFUSED` the first 12 hex characters of `action_sha256` and the `approval_id` when one exists. `cap` covers `AP429`/`AP430`, `retry` covers `40001`, `closed` covers an archived conversation. A request whose hash differs from an approved row simply finds no approved row, so the binding is proven by the stub's record, not by a reason code; cross-tenant isolation is likewise proven at the stub. When the hook is dead or frozen it cannot emit anything; the harness then emits `SOLEUR_EGRESS_VEND_REFUSED source=harness reason=no-hook-decision` for every request id with no hook marker, and reads iron-proxy's audit line for the failed call (its format is unverified until the tracer measures it). Nothing logs a body, a header value or a token.
 
-The per-session CA is minted by a suite function: an ephemeral EC root with critical `nameConstraints` permitting the four inject hosts, `pathlen:0`, 24-hour validity, SAN-bearing leaves. The sandbox receives the certificate only, through `SSL_CERT_FILE` (gh, curl), `GIT_SSL_CAINFO` (git) and `NODE_EXTRA_CA_CERTS` (Node, Bun, `claude`), on a bundle that is the system bundle plus the session CA (the first two replace rather than append). The key never enters the sandbox and is deleted at session end.
+The per-session CA is minted by a suite function: an ephemeral EC root with critical `nameConstraints` permitting the four inject hosts and excluding IP ranges `0.0.0.0/0` and `::/0`, extended key usage `serverAuth`, `pathlen:0`, 24-hour validity, SAN-bearing leaves. A DNS constraint on `github.com` also permits every subdomain (RFC 5280), so the effective scope is the four hosts plus `*.github.com`; ADR-324 states this. Nonces and per-session proxy credentials come from `crypto.randomBytes`. The sandbox receives the certificate only, through `SSL_CERT_FILE` (gh, curl), `GIT_SSL_CAINFO` (git) and `NODE_EXTRA_CA_CERTS` (Node, Bun, `claude`), on a bundle that is the system bundle plus the session CA (the first two replace rather than append). The key never enters the sandbox and is deleted at session end.
 
 ### What the suite measures (criteria fixed before the run)
 
@@ -157,6 +174,17 @@ Each criterion yields `pass | fail | unmeasurable` with a positive observation r
 | 7 | One new GitHub verb touches policy data only | A second pass applies the committed overlay `policy.add-verb.yaml` (create issue, `POST /repos/{o}/{r}/issues`) with the hook and `policy.mjs` unchanged (sha256 asserted equal across passes). Control: the same request is refused `not-allowlisted` in the first pass. Pass = in the second pass it is gated, consumed once and vended. The results note compares one data file with #12188's 9 source files, names what the overlay leaves out (tests, approval-card text), and states the claim's limit (CTO R4): REST verbs that fit the generic recipe only |
 | 8 | Failure is visible and closed, not a hang or a leak | Hook alive but stalled past its deadline: `git`, `gh`, `curl` exit non-zero within 10 s, `hook-timeout` is emitted, the stub records no real token. Hook killed: the same exit bound and no real token at the stub, with iron-proxy's audit line naming the failed call. Injector killed: clients exit non-zero within 10 s, and the effect on `claude` streaming is recorded (CTO R17) |
 | 9 | CA scope (spec TR3) | Two sessions have distinct CAs. A session-CA leaf for a non-inject name is rejected by every client; the TLS library each client links is recorded first. For a client linking GnuTLS, a mixed-case inject name is also tried and must be accepted (DNS names ignore case; a rejection is recorded as that client's defect, not a constraint failure). Session A's CA is not trusted in session B. The CA key file is absent after session end. Control: the same clients accept a session-CA leaf for an inject host |
+
+Deepen-pass additions to the criteria (binding, 2026-11-09):
+
+- **Criterion 1.** Before any denial counts, the scripted CLI-tier path must read a planted file under an unmasked path (proving the tool can return content). The scan targets are the decoy, the base64 of `x-access-token:<decoy>`, the nonce, the injector's per-session proxy credential, the forwarder's `workspace:token`, the service-role and HMAC keys, the CA key PEM, and the CI runner's own tokens. Sandboxed processes and the same-uid file tools cannot reach the local Postgres (54322) or the Supabase API gateway; the app container never uses host networking.
+- **Criterion 2.** The client's own `Idempotency-Key` header is stripped on inject hosts, so a retried POST cannot reuse one approval twice.
+- **Criterion 3.** The expiry arm uses its own conversation, seeded with `p_ttl_seconds=60` at suite start: it must read `pending` at about 50 s and `expired` once the deadline passes, checked at the end so the wait overlaps other arms. A write sent on the same keep-alive or HTTP/2 connection after an allowed read still reaches the hook. A body past the capture limit is refused. Every arm's leftover pending rows are short-TTL, and the database is reset per run (the per-workspace cap is 20).
+- **Criterion 5.** The stub records which session's token arrived (by decoy identity), and a control proves session B reaches the stub with B's own token in the same run.
+- **Criterion 6.** Every log grep first requires the log to be non-empty and to contain a planted canary in a control copy; the CI job log itself is scanned; the suite forbids `set -x` and masks every generated value with `::add-mask::`.
+- **Criterion 8.** Each client runs under its own `timeout -k` and its elapsed time is measured with a monotonic clock; a positive control shows the same client succeeding through a healthy hook in the same arm, so a broken CA or a 407 cannot pass as "refused". A frozen hook yields `no-hook-decision` from the harness.
+- **Criterion 9.** Also probed: a leaf with an IP-address name (rejected), a leaf with only a common name (rejected), and `gist.github.com` (accepted, recorded as within scope by design). The CA key's absence after session end is checked by the suite after the injector has exited on its own, not deleted by the suite.
+- **Criterion 7.** The second pass restarts only the hook with the overlay, never the stack.
 
 Verdict, computed by the suite:
 
@@ -175,35 +203,37 @@ Verdict, computed by the suite:
 
 #### Phase 0.5 — Tracer: prove the injector's assumptions before anything else is built
 
-Plain local docker, one stub host, a throwaway hook that logs what it receives. Each answer is recorded in `iron-proxy-image.provenance.md`.
+Plain local docker, one stub host, a throwaway hook that logs what it receives, run with `env -i`, a throwaway `HOME`, `GIT_CONFIG_GLOBAL=/dev/null`, and an internal docker network with no route to the real GitHub, so the operator's own `gh` and git credentials cannot be inherited. Each answer is recorded in `iron-proxy-image.provenance.md`.
 
 1. **Upstream chaining:** iron-proxy CONNECTs to an upstream proxy with `workspace:token` proxy authorization.
 2. **Selective termination:** a non-inject host is tunneled, not terminated.
 3. **Hook body access:** the hook receives the full buffered body of a gzip-encoded and a chunked `POST git-receive-pack` (decoded or not; this decides whether the pure parser must handle chunking), and a REJECT can carry a body the client shows.
 4. **Upstream trust:** a test upstream root is configurable without disabling upstream verification.
-5. **Whole-header replacement (CTO R8):** on an inject host the injector can replace the entire `Authorization` header, through configuration first, then through the hook. Neither working is a mechanism failure under F-b; it is never a quiet fallback to a Bearer header.
+5. **Whole-header replacement (CTO R8, D1):** iron-proxy configuration alone replaces the entire `Authorization` header on an inject host, including when the client sent none, and strips duplicate and case-variant copies. If it cannot, that is a mechanism failure under F-b; there is no hook fallback and no Bearer fallback.
 6. **Dead hook:** with the hook unreachable or frozen, iron-proxy blocks the request (fail closed) rather than passing it; the bound on how long it waits is recorded.
 7. **Inbound auth (CTO R20):** iron-proxy can require a per-session `Proxy-Authorization` on CONNECT.
+8. **Hook transport:** iron-proxy's gRPC client can dial a `unix:` socket and attach per-call metadata (the nonce). Without both, the nonce cannot travel or the hook would listen on loopback TCP; that is a mechanism failure under F-b.
 
 Plus the binding mechanism: the CLI process's `HTTPS_PROXY` (set server-side, per session) is the SDK sandbox proxy's only upstream, and the sandbox's localhost is not the container loopback (ADR-278 measurement 1); the tracer records the actual mechanism and criterion 5 probes it.
 
-Any "no" on 1–7 that configuration cannot fix stops the run and goes to the CTO (F-b) before Phase 1. Success: seven recorded answers and the binding mechanism.
+Any "no" on 1–8 that configuration cannot fix stops the run and goes to the CTO (F-b) before Phase 1. Success: eight recorded answers and the binding mechanism.
 
 #### Phase 1 — Hermetic tests, then the harness
 
-- Write the Guard Contract matrices (below) before code; each row is run once by hand against the finished suite and its result recorded in the results note.
-- `apps/web-platform/test/egress-injector-policy.test.ts`: hermetic tests over `policy.mjs` (cq-write-failing-tests-before): every policy row; GraphQL single query, single mutation, multi-operation with and without `operationName`, batched array, unparseable body; receive-pack pkt-lines with one and two ref updates (and chunked bodies only if tracer item 3 says the hook sees them raw); each single hashed-field change produces a different hash; repository spelling variants hash equal and a fork hashes differently (CTO R6). They fail before `policy.mjs` exists.
+- Write the Guard Contract matrices (below) before code. Rows covered by the hermetic tests run there on every push; the rest (Guard 1, Guard 2 rows 2, 6 and 8, Guard 3 row 4) are run once by hand in a scratch sandbox copy of the tree (`scripts/soleur-sandbox.sh`), never the live worktree, and count as caught only when the suite fails with the expected message; results go in the results note.
+- `apps/web-platform/test/egress-injector-policy.test.ts`: hermetic tests over `policy.mjs`, over `approval-hook.mjs`'s exported `decide()` with a fake RPC client (decision order, every reason code, Guard 2 rows 1, 3, 4, 5, 7 and 9, unlisted write refused, canonical-path rows), and over `verdict.mjs`'s outcome floor against fixture JSON (Guard 3 rows 1–3, 5–6). The rest of this bullet covers `policy.mjs` (cq-write-failing-tests-before): every policy row; GraphQL single query, single mutation, multi-operation with and without `operationName`, batched array, unparseable body; receive-pack pkt-lines with one and two ref updates (and chunked bodies only if tracer item 3 says the hook sees them raw); each single hashed-field change produces a different hash; repository spelling variants hash equal and a fork hashes differently (CTO R6). They fail before `policy.mjs` exists.
 - Add `graphql` and `@grpc/grpc-js` (at the locked 1.14.6) as exactly pinned devDependencies of `apps/web-platform`, updating `package.json` and `package-lock.json` together (CTO R23, `cq-before-pushing-package-json-changes`).
 - Pin iron-proxy by image digest; write `iron-proxy-image.provenance.md` (licence, release tag, digest, retrieval date, tracer answers, commit cadence, contributor count, hook proto revision, whether it builds from source). Mirroring the image into our registry and a bus-factor review are preconditions for #11637's production adoption, not spike criteria.
 - `stub-github/server.mjs`: TLS server for the four hosts on the test upstream root; REST and GraphQL stub; `git http-backend` behind CGI on a synthetic repository created in the suite (no real repository content, CLO); records method, path and the `Authorization` class received (`real-decoy | other | none`) per request.
-- `injector-spike-docker.test.sh` under `apps/web-platform/test/infra/egress-injector-spike/` (CTO R12; no `PRIVILEGED_WHY` entry): derives the run tuple, starts the gateway from the real `egress-gateway-squid.conf`, starts the local Supabase stack, seeds two synthetic workspaces and owners, widens the `tool_name` CHECK inline with `psql` only after the loopback-and-`supabase status` guard (CTO R5, R21) and records the exact change for #11637, starts the hook, spawns per session the real forwarder and the injector, runs the probes through the real SDK/SRT sandbox, writes raw JSON (`INJECTOR_SPIKE_OUT`) carrying the run's verdict, and fails the run if any criterion has no verdict. A missing tool or daemon is FAIL, never SKIP.
-- `print-verdict.sh` beside it: prints `verdict=<GO|NO-GO|INCONCLUSIVE>` from the committed results JSON and exits 1 on any other value.
-- `.github/workflows/infra-validation.yml`: new job `egress-injector-spike` (CTO R22: `pull_request` and `workflow_dispatch` only, `if: github.event_name != 'push'`, its own path check on the spike directories, `timeout-minutes: 30`, job-level concurrency `sandbox-eval-<pr>` with `cancel-in-progress: false`, plain `bash` invocation, raw JSON uploaded as an artifact). No new trigger is added to the workflow.
+- `injector-spike-docker.test.sh` under `apps/web-platform/test/infra/egress-injector-spike/` (CTO R12; no `PRIVILEGED_WHY` entry): derives the run tuple, starts the gateway from the real `egress-gateway-squid.conf`, starts the local Supabase stack, seeds two synthetic workspaces and owners, widens the `tool_name` CHECK for the one spike tool name (CTO D4) with `docker exec <db container> psql --no-psqlrc` inside the database container, looking the constraint up in `pg_constraint` rather than assuming its name, only after the loopback-and-`supabase status` guard (CTO R5, R21); resets the database per run; creates synthetic users through the GoTrue admin API (the `handle_new_user` trigger makes the personal workspace and owner membership) and conversations with `user_id` and `workspace_id` set; seeds approved rows only through `create_approval_request` then `decide_approval` with the owner's JWT from a real sign-in and records the exact change for #11637, starts the hook, spawns per session the real forwarder and the injector, runs the probes through the real SDK/SRT sandbox (sandbox workspace is a fresh synthetic directory, never the checkout), records elapsed time per arm, stops itself at an internal 25-minute deadline and writes partial JSON as INCONCLUSIVE, writes raw JSON (`INJECTOR_SPIKE_OUT`) carrying the run's verdict, and fails the run if any criterion has no verdict. A missing tool or daemon is FAIL, never SKIP.
+- `verdict.mjs` (pure): computes the outcome floor and the verdict from the arms' JSON; the suite and `print-verdict.sh` both call it.
+- `print-verdict.sh` beside it: prints `verdict=<GO|NO-GO|INCONCLUSIVE>` from the committed results JSON; exits 0 on GO or NO-GO and 1 on INCONCLUSIVE or any other value.
+- `.github/workflows/egress-injector-spike.yml` (CTO D2): one job, `pull_request` with paths on the spike directories plus `workflow_dispatch`, `timeout-minutes: 30`, job-level concurrency with `cancel-in-progress: false`, `permissions: contents: read`, `persist-credentials: false`, no secrets, plain `bash` invocation of the suite (satisfying the registration gate's Arm 3b), raw JSON uploaded as an artifact, and a failing criterion surfaced as an `::error::` annotation naming the criterion and reason. Add its row to `scripts/pr-fanout-ledger.txt`.
 - Success: the tracer answers hold, the hermetic tests are green, and the suite reaches a verdict.
 
 #### Phase 2 — Run and record
 
-- Read the job's run on the PR; use `gh workflow run infra-validation.yml --ref feat-agent-runtime-sandbox-eval` only for a re-run (the workflow exists on the default branch, so a branch dispatch runs the branch's job).
+- Read the workflow's run on the PR. A new workflow file is not on the default branch, so `workflow_dispatch` cannot run it before merge; re-runs before merge come from a push touching the spike directories or `gh run rerun`.
 - Write `knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/injector-spike-results.md` and commit `injector-spike-results.json` beside it. The note opens with three plain sentences: what was tested, the verdict, what happens next. Then: machine class and date, SDK pin, image digests, run URL, commit SHA, each criterion's verdict and raw outcome, each claim labelled `measured | read from file | unverified` (TR9), the re-measure trigger (a change to the SDK pin, the sandbox flags in `buildAgentSandboxConfig`, the iron-proxy digest or `egress-gateway-squid.conf`; no bot bumps the digest, so a bump is a manual PR that re-runs the job), the guard-matrix by-hand results, and the verdict.
 - Record what `canonical_action` shows for each write class, the per-client pending-approval message (CTO R15), the arm A `NO_PROXY` finding, the `gh` carriage finding, and the confused-deputy residual (reads plus open-web egress).
 
@@ -281,8 +311,8 @@ CPO sign-off (2026-11-09): approved with conditions C1 (milestone move and block
 liveness_signal:
   what: the egress-injector-spike CI job writes injector-spike-results.json with a top-level verdict field on every run
   cadence: per dispatch and per pull request push that changes the spike directories
-  alert_target: the pull request's check status (a missing verdict or INCONCLUSIVE fails the job)
-  configured_in: .github/workflows/infra-validation.yml job egress-injector-spike
+  alert_target: layer 6 (the workflow run log) - an ::error:: annotation naming the criterion and reason, and the pull request's check status; a missing verdict or INCONCLUSIVE fails the job
+  configured_in: .github/workflows/egress-injector-spike.yml
 error_reporting:
   destination: the suite's stdout markers and the uploaded raw JSON (nothing leaves the suite; the production Sentry mirror is #11637's)
   fail_loud: SOLEUR_EGRESS_VEND_REFUSED reason=<reason> on stdout for every refusal, and a non-zero suite exit when any criterion lacks a verdict or the verdict is INCONCLUSIVE
@@ -293,8 +323,8 @@ failure_modes:
   - mode: the suite skips because docker, bwrap or the Supabase stack is missing
     detection: the suite treats a missing dependency as FAIL, never SKIP
     alert_route: pull request check status
-  - mode: approval hook stalls or dies and the injector holds or passes the request
-    detection: criterion 8 probes, SOLEUR_EGRESS_VEND_REFUSED reason=hook-timeout, iron-proxy's audit line, and the stub's token record
+  - mode: approval hook stalls, freezes or dies and the injector holds or passes the request
+    detection: criterion 8 probes, SOLEUR_EGRESS_VEND_REFUSED reason=hook-timeout from the hook or reason=no-hook-decision source=harness, iron-proxy's audit line, and the stub's token record
     alert_route: pull request check status
   - mode: a secret reaches a log or a same-uid reader
     detection: criterion 6 log grep and criterion 1 CLI-tier probes
@@ -304,10 +334,10 @@ logs:
   retention: CI artifacts 90 days; the committed JSON for the life of the repository
 discoverability_test:
   command: bash apps/web-platform/test/infra/egress-injector-spike/print-verdict.sh
-  expected_output: verdict=
+  expected_output: verdict=GO, verdict=NO-GO
 ```
 
-The probe prints `verdict=GO`, `verdict=NO-GO` or `verdict=INCONCLUSIVE` and exits 1 on a missing or unknown verdict; it confirms a verdict was recorded, not which one. In-surface probe (Phase 2.9.2): every detection is emitted from inside the suite's sandbox, injector, hook or stub; the marker fields (`class`, `rule`, `reason`) discriminate classifier error, missing row, pending, rejected, expired, flag and timeout in one event.
+The probe prints `verdict=GO` or `verdict=NO-GO` and exits 0, or prints `verdict=INCONCLUSIVE` (or nothing) and exits 1; it confirms a completed measurement, not which verdict. It fails until the results JSON is committed. Before tenants, #11637 must add: a Sentry mirror through `reportSilentFallback` with one message literal per op, an alert that pages on hook-dead and timeout rates, a liveness monitor outside the hook and injector, Vector allowlisting for any `logger -t` tag, a credential check on iron-proxy's stderr before it ships anywhere, and an iron-proxy-side deadline on the hook call. In-surface probe (Phase 2.9.2): every detection is emitted from inside the suite's sandbox, injector, hook or stub; the marker fields (`class`, `rule`, `reason`) discriminate classifier error, missing row, pending, rejected, expired, flag and timeout in one event.
 
 ## Encryption Posture
 
@@ -319,7 +349,18 @@ This PR provisions nothing: no Terraform, cloud-init, compose or host change, an
 
 ## Task Design
 
-Not triggered: no new workflow file and no new trigger (the new job joins `infra-validation.yml` on its existing `pull_request` and `workflow_dispatch` triggers), and the 2026-11-30 reminder reuses the existing schedule-reminder endpoint rather than creating a task surface.
+```yaml
+tasks:
+  - task: egress-injector-spike (the .github/workflows/egress-injector-spike.yml job)
+    trigger: pull_request pushes that change the spike directories, and workflow_dispatch for re-runs
+    services: reads the repository checkout (no credentials); starts local containers (app image, squid, iron-proxy, stubs) and a local Supabase stack; writes the raw JSON artifact
+    next: nothing; the results note and ADR-324 are written by a person or agent reading the artifact
+    human_reentry: cancel the run from the Actions UI or gh run cancel; re-run by workflow_dispatch; the job never runs on push to main
+    dedupe: one job-level concurrency group per pull request with cancel-in-progress false, so GitHub keeps one pending run and never two concurrent spikes; each run's JSON carries its commit SHA and run id, so a stale artifact cannot be read as current
+    source_dedupe: not a ticket source
+```
+
+The 2026-11-30 reminder reuses the existing schedule-reminder endpoint and creates no task surface.
 
 ## Architecture Decision (ADR/C4)
 
@@ -417,7 +458,8 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 | `iron-proxy-image.provenance.md` | — | inferred — justification: a digest-pinned third-party image without a provenance record breaks the `egress-gw-image.provenance.md` convention (CTO) |
 | `egress-injector-policy.test.ts` | — | inferred — justification: `cq-write-failing-tests-before`; the classifier is the property Guard 2 protects |
 | `package.json` and `package-lock.json` edits | — | inferred — justification: CTO R23; a real GraphQL parser and the gRPC library the hook needs |
-| `infra-validation.yml` job | — | inferred — justification: CTO F-g, R12, R22 |
+| `egress-injector-spike.yml` workflow and its fan-out ledger row | — | inferred — justification: CTO F-g, R12, D2 (a workflow-level cancel in `infra-validation.yml` would kill the spike) |
+| `verdict.mjs` | — | inferred — justification: the outcome floor must be testable hermetically (test-design review) and shared by the suite and the discoverability probe |
 | injector-spike-results.md and .json | asks 4 | asked |
 | ADR-311 addendum (GO) or see-also (NO-GO) | "It amends ADR-311 Decision 4 only if the spike measures a hook that satisfies it." | asked |
 | Issue edits on #12467, #11637, #9845, #9859, #12517 | asks 6, 7 | asked |
@@ -428,16 +470,18 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 ### Split Assessment
 
-- Subsystems touched: 3 — `apps/web-platform`, `knowledge-base`, `.github`
-- Planned files: 18 | Estimated changed lines: about 2,100 (suite about 800, stub about 300, hook and policy about 400, hermetic tests about 250, ADR about 200, results and provenance about 150)
+- Subsystems touched: 4 — `apps/web-platform`, `knowledge-base`, `.github`, `scripts`
+- Planned files: 21 | Estimated changed lines: about 2,100 (suite about 800, stub about 300, hook and policy about 400, hermetic tests about 250, ADR about 200, results and provenance about 150)
 - Thresholds: >= 4 subsystem roots OR > 25 planned files OR > 800 estimated lines
-- Recommendation: split — already applied: the Cloudflare trial is the sibling PR (CTO F-d). The rest is one measurement harness plus the decision record it feeds; splitting the ADR from the spike would merge a decision record whose measured-outcome section is empty, so this PR stays whole.
+- Recommendation: split — already applied: the Cloudflare trial is the sibling PR (CTO F-d). The `scripts` root is a one-line ledger row the new workflow requires. The rest is one measurement harness plus the decision record it feeds; splitting the ADR from the spike would merge a decision record whose measured-outcome section is empty, so this PR stays whole.
 
 ## Files to Create
 
 - `knowledge-base/engineering/architecture/decisions/ADR-324-egress-credential-injection-is-a-property-of-the-hop.md`
 - `apps/web-platform/test/infra/egress-injector-spike/injector-spike-docker.test.sh`
 - `apps/web-platform/test/infra/egress-injector-spike/print-verdict.sh`
+- `apps/web-platform/test/infra/egress-injector-spike/verdict.mjs`
+- `.github/workflows/egress-injector-spike.yml`
 - `apps/web-platform/test/infra/egress-injector-spike/iron-proxy-image.provenance.md`
 - `apps/web-platform/test/infra/egress-injector-spike/iron-proxy.config.tmpl.yaml`
 - `apps/web-platform/test/infra/egress-injector-spike/policy.yaml`
@@ -452,7 +496,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 ## Files to Edit
 
-- `.github/workflows/infra-validation.yml` — new `egress-injector-spike` job (CTO R22)
+- `scripts/pr-fanout-ledger.txt` — row for `egress-injector-spike.yml` (one job, paths yes, cancel no)
 - `apps/web-platform/package.json` and `apps/web-platform/package-lock.json` — exactly pinned devDependencies `graphql` and `@grpc/grpc-js@1.14.6`
 - `knowledge-base/engineering/architecture/decisions/ADR-311-credential-broker-mechanism-measured-before-built.md` — merge-conditioned addendum on GO, or see-also on NO-GO
 - `knowledge-base/project/specs/feat-agent-runtime-sandbox-eval/spec.md` — FR3 moves to the sibling PR; FR2 maps the brainstorm's seven criteria to criteria 1–9 (criterion 8 fail-closed and 9 CA scope added, 3 extended with binding); TR1 reads "the sandbox holds no credential; the injector replaces the whole `Authorization` header"; TR2 lists protocol-classified reads (upload-pack POST, GraphQL query POST, push ref advertisement); the file-count baseline 36 / 42; the verdict set GO / NO-GO / INCONCLUSIVE
@@ -460,10 +504,7 @@ ADR-324 is `adopting` now and describes the target state; the measured outcome i
 
 ## Open Code-Review Overlap
 
-Two open code-review issues touch `.github/workflows/infra-validation.yml`: #8735 (notify-main-failure misses cancelled jobs), #7942 (two mutation batteries run in no gate).
-
-- #8735 — Acknowledge: a different concern (main-branch failure email); the new job never runs on push to main.
-- #7942 — Acknowledge: concerns `plugins/soleur/test/*.mutation.sh`; this plan's mutation rows run by hand against its own suite.
+None. Re-checked 2026-11-09 after the deepen pass moved the job out of `infra-validation.yml`: no open code-review issue names `scripts/pr-fanout-ledger.txt`, `apps/web-platform/package.json`, `package-lock.json` or the spike paths.
 
 ## Operator Holds
 
@@ -476,13 +517,15 @@ Two open code-review issues touch `.github/workflows/infra-validation.yml`: #873
 - [ ] ADR-324 exists with status `adopting`, the interface-scoped independence claim, the ranked options, flip facts F1–F4, the CLO gates quoted verbatim, the T-1 mapping marked unverified, the hook key custody and forwarder-first alternative, `egressInjector` named as pending in its C4 section, and a `## Measured outcome — injector` section citing `injector-spike-results.md`.
 - [ ] `injector-spike-results.md` opens with three plain sentences and records a verdict (`pass | fail | unmeasurable`) and raw outcome for criteria 1–9, the run URL, commit SHA, image digests, SDK pin, machine class, date, each claim's label, the re-measure trigger, the guard-matrix by-hand results, and GO or NO-GO (an INCONCLUSIVE run is not shipped).
 - [ ] `bash apps/web-platform/test/infra/egress-injector-spike/print-verdict.sh` prints `verdict=GO` or `verdict=NO-GO` and exits 0.
+- [ ] The PR body's first line states that merging redeploys unchanged runtime code via `web-platform-release.yml` and changes no infrastructure.
 - [ ] Criterion 7's comparison names one data file against #12188's 9 source files and what the overlay leaves out.
 - [ ] #12517 is in milestone "Phase 4: Validate + Scale"; #12467 and #11637 are blocked by #12517; #9845 carries the linked section and #9859 the widened Arm D, both linking the spec; #12467 carries the pause comment; the demand-side telemetry issue exists.
 - [ ] On GO only, the ADR-311 addendum exists and is worded "on merge of PR #12518"; on NO-GO, the ADR-311 see-also exists.
 - [ ] `git diff --name-only origin/main...HEAD` contains none of `apps/web-platform/infra/egress-forwarder.mjs`, `apps/web-platform/infra/egress-gateway-squid.conf`, `apps/web-platform/server/agent-env.ts`, any path under `apps/web-platform/supabase/migrations/` or `apps/web-platform/server/`, or any `.tf` file (CLO: DPIA trigger t3 does not fire on this PR).
-- [ ] The committed results JSON and note contain no string matching a GitHub token format (`gh[pousr]_` prefix); only generated decoys appear, none in a real token format.
+- [ ] The committed results JSON and note contain no string matching a GitHub token format (`gh[pousr]_` or `github_pat_` prefix); only generated decoys appear, none in a real token format.
+- [ ] `git grep -l 'egress-injector-spike' -- apps/web-platform/server apps/web-platform/app` prints nothing (no production code imports spike code).
 - [ ] NFR register assessment run (`soleur:architecture assess`) and recorded in the ADR.
-- [ ] `egress-injector-policy.test.ts` green in the `webplat` shard; the `egress-injector-spike` job green on the PR; `.github/scripts/test/test-infra-suite-registration.sh` green.
+- [ ] `egress-injector-policy.test.ts` green in the `webplat` shard; the `egress-injector-spike` workflow green on the PR; `.github/scripts/test/test-infra-suite-registration.sh` and `plugins/soleur/test/pr-fanout-ledger.test.sh` green.
 - [ ] `python3 scripts/lint-guard-contract.py` passes on this plan; the C4 tests listed above are green; `technical-ruling-gate.sh --branch` passes.
 
 ### Post-merge (on merge, by `soleur:ship`)
@@ -493,7 +536,7 @@ Two open code-review issues touch `.github/workflows/infra-validation.yml`: #873
 ## Test Scenarios
 
 - Hermetic: every policy row; GraphQL single query, single mutation, multi-operation with and without `operationName`, batched array, unparseable body; receive-pack pkt-lines with one and two ref updates; hash differs for each single-field change; repository spelling variants hash equal; a fork hashes differently.
-- Suite: criteria 1–9 as tabled; each Guard mutation row run once by hand and recorded in the results note with the run URL that reddened.
+- Suite: criteria 1–9 as tabled, with the deepen-pass additions; the hand-run Guard rows are recorded in the results note with the run URL that reddened and the message it printed.
 
 ## Domain Review
 
@@ -531,7 +574,7 @@ Not applicable: tier NONE, no UI surface in Files to Create or Edit. CPO plan-ti
 - A "not observable" verdict needs a positive observation (2026-10-30 learning): `/proc` is not mounted in bwrap, so a read error there is not evidence; the CLI-tier positive control is.
 - Keep the model out of the assertion path: sandbox probes are direct invocations through the sandbox wrapper, and CLI-tier probes are scripted tool calls from the stub Anthropic server, never natural-language prompts.
 - Turn git's tracing off with `unset GIT_TRACE GIT_CURL_VERBOSE`, never `=0`: `GIT_CURL_VERBOSE` is presence-checked, and `=0` would print credential-bearing headers into the logs criterion 6 scans.
-- Merging this PR mutates no production surface: it adds a CI job, devDependencies and test-path files only, and no apply or deploy workflow's `paths:` matches them (the `push` trigger of `infra-validation.yml` matches `apps/web-platform/test/infra/**`, and the new job's `if:` excludes push). The PR body's first line says so.
+- Merging this PR changes no infrastructure and no runtime code, but it does trigger `web-platform-release.yml` (path filter `apps/web-platform/**`), which rebuilds and redeploys the app with unchanged runtime code; CTO D3 accepts this as the normal path for a test-only web-platform PR. The PR body's first line says exactly that. Neither SDK version changes in `package.json` or the lockfile, so `scheduled-real-sdk-ask-probe.yml` exits early; if either SDK version changes, that is one paid probe run and must be disclosed.
 - New `SOLEUR_EGRESS_VEND*` markers live in test-path code; before the first push, `git grep -n 'SOLEUR_EGRESS_VEND'` and run any marker-vocabulary census the full battery carries.
 - The expiry arm waits at least 60 s (`p_ttl_seconds` minimum; `expires_at` is immutable); budget it inside the job's 30-minute timeout.
 - Run `npx markdownlint-cli2` on this plan and `tasks.md` before committing them.

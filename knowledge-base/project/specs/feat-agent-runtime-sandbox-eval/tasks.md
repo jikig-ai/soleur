@@ -11,23 +11,23 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 
 ## Phase 0.5: Tracer (local docker, before anything else is built)
 
-- [ ] 0.5.1 Pin iron-proxy by digest; start it with one stub host and a throwaway logging hook.
-- [ ] 0.5.2 Answer the seven tracer items (upstream chaining, selective termination, hook body access incl. gzip and chunked receive-pack, upstream trust, whole-header replacement, dead-hook fail-closed, inbound Proxy-Authorization) and the sandbox-to-injector binding mechanism.
+- [ ] 0.5.1 Pin iron-proxy by digest; start it with one stub host and a throwaway logging hook, under `env -i`, a throwaway `HOME`, `GIT_CONFIG_GLOBAL=/dev/null` and an internal docker network with no route to real GitHub.
+- [ ] 0.5.2 Answer the eight tracer items (upstream chaining, selective termination, hook body access incl. gzip and chunked receive-pack, upstream trust, whole-header replacement in configuration only incl. absent and duplicate headers, dead-hook fail-closed, inbound Proxy-Authorization, gRPC over a unix socket with per-call metadata) and the sandbox-to-injector binding mechanism.
 - [ ] 0.5.3 Record the answers in `iron-proxy-image.provenance.md`; any "no" configuration cannot fix goes to the CTO before Phase 1.
 
 ## Phase 1: Hermetic tests, then the harness
 
 - [ ] 1.1 Write the three Guard Contract matrices before code.
-- [ ] 1.2 Write `apps/web-platform/test/egress-injector-policy.test.ts` (failing first) over `policy.mjs`'s normalized request struct.
+- [ ] 1.2 Write `apps/web-platform/test/egress-injector-policy.test.ts` (failing first) over `policy.mjs`'s normalized request struct, `decide()` with a fake RPC client (every reason code, canonical-path rows) and `verdict.mjs`'s outcome floor on fixture JSON.
 - [ ] 1.3 Add exactly pinned devDependencies `graphql` and `@grpc/grpc-js@1.14.6` to `apps/web-platform` (package.json and lockfile together).
 - [ ] 1.4 Implement `policy.mjs` (closed write policy, protocol-classified reads, normalized hash recipe) until 1.2 is green.
 - [ ] 1.5 Write `policy.yaml`, `policy.add-verb.yaml` and `iron-proxy.config.tmpl.yaml`.
 - [ ] 1.6 Implement `approval-hook.mjs` (one process, per-session masked sockets with nonce and conversation binding, loopback-and-`supabase status` guard, create-then-consume, `get_approval_status` for rejected/expired, 5 s self-deadline, markers, no body or header logging).
 - [ ] 1.7 Implement `stub-github/server.mjs` (four hosts, REST, GraphQL, `git http-backend` on a synthetic repo, records `Authorization` class) and the stub Anthropic SSE with scripted `Read`/`WebFetch` tool calls.
 - [ ] 1.8 Implement `probes/sandbox-probe.sh` and `injector-spike-docker.test.sh` under `apps/web-platform/test/infra/egress-injector-spike/` (run tuple, real squid conf, local Supabase stack, inline CHECK widening, per-session CA function, forwarder plus injector per session, arms A and B, production deny list derived from code, criteria 1–9, outcome floor, never-skip).
-- [ ] 1.9 Implement `print-verdict.sh`.
-- [ ] 1.10 Add the `egress-injector-spike` job to `.github/workflows/infra-validation.yml` (pull_request and workflow_dispatch, `if: github.event_name != 'push'`, own path check, 30-minute timeout, per-PR concurrency without cancel-in-progress, artifact upload).
-- [ ] 1.11 Run `.github/scripts/test/test-infra-suite-registration.sh` and any `SOLEUR_*` marker census; fix registration before the first push.
+- [ ] 1.9 Implement `verdict.mjs` and `print-verdict.sh` (exit 0 on GO or NO-GO, 1 otherwise).
+- [ ] 1.10 Create `.github/workflows/egress-injector-spike.yml` (pull_request paths plus workflow_dispatch, 30-minute timeout, per-PR concurrency with cancel-in-progress false, `permissions: contents: read`, `persist-credentials: false`, no secrets, `::error::` per failing criterion, artifact upload) and its `scripts/pr-fanout-ledger.txt` row.
+- [ ] 1.11 Run `.github/scripts/test/test-infra-suite-registration.sh`, `plugins/soleur/test/pr-fanout-ledger.test.sh` and any `SOLEUR_*` marker census; fix them before the first push.
 
 ## Phase 2: Run and record
 
@@ -49,4 +49,4 @@ Plan: `knowledge-base/project/plans/2026-11-09-feat-agent-runtime-sandbox-eval-i
 - [ ] 4.1 Confirm the diff touches none of `egress-forwarder.mjs`, `egress-gateway-squid.conf`, `agent-env.ts`, `supabase/migrations/`, `server/` or any `.tf` file.
 - [ ] 4.2 Confirm no GitHub-token-format string in the committed results.
 - [ ] 4.3 Run the C4 tests, `lint-guard-contract.py`, `technical-ruling-gate.sh --branch` and markdownlint.
-- [ ] 4.4 Ship: the PR body's first line states that merging mutates no production surface; issue lines are derived from the committed verdict; on-merge dispositions per the plan's Post-merge criteria.
+- [ ] 4.4 Ship: the PR body's first line states that merging redeploys unchanged runtime code via `web-platform-release.yml` and changes no infrastructure; issue lines are derived from the committed verdict; on-merge dispositions per the plan's Post-merge criteria.
