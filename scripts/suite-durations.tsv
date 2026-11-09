@@ -1,11 +1,10 @@
-# default-weight-ms=1272
-# generated-at=2026-11-09T18:53:45Z
-# generated-from-runs=durations:seed-durations.tsv
-# generator=regenerate-shard-manifest.py v3
-# group=light
-# growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
-# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)
 # suite-durations.tsv — aggregated per-suite durations (ADR-240 amd.)
+# group=light
+# generated-from-runs=durations:seed-durations.tsv
+# default-weight-ms=1251
+# generated-at=2026-11-09T19:08:04Z
+# generator=regenerate-shard-manifest.py v3
+# growth-acked=7e1f41b701afbf1cbd6c72b44383ac15ade199db6f498b0d330d58783862c3d3
 .claude/hooks/agent-token-tee.test.sh	6781	measured
 .claude/hooks/background-poll-prefer-monitor.test.sh	777	measured
 .claude/hooks/bare-head-self-heal.test.sh	1222	floor
@@ -393,7 +392,6 @@ scripts/check-web-host-escrow-config	144584	measured
 scripts/ci-demand-census	19491	measured
 scripts/ci-deploy-sentry-post-fail-6475	122	measured
 scripts/ci-draft-light	87009	measured
-scripts/ci-draft-push-census	2079	measured
 scripts/ci-leg-balance-9232	6184	measured
 scripts/ci-oracle-lane	45000	floor
 scripts/ci-oracle-review	1261	floor
@@ -428,7 +426,6 @@ scripts/followthrough-exec-bit	16	measured
 scripts/followthrough-predicate-parity	2020	measured
 scripts/followthrough-varq-ban	24476	measured
 scripts/followthrough-varq-ban-live	1544	measured
-scripts/followthroughs/ci-draft-light-soak-9728	104456	measured
 scripts/followthroughs/ci-push-dedupe-soak-9512	87919	measured
 scripts/followthroughs/discord-blog-webhook-fallback	1222	floor
 scripts/followthroughs/dispatch-recovery-sweeper-11211	1222	floor
@@ -437,7 +434,7 @@ scripts/followthroughs/inngest-cli-apply-window-7463	1251	floor
 scripts/followthroughs/inngest-hostmetrics-trim-11602	1222	floor
 scripts/followthroughs/inngest-luks-keeper-dark-11265	1222	floor
 scripts/followthroughs/inngest-provision-rehearsal-capture	1223	measured
-scripts/followthroughs/mq-lever-e-verdict-12269	1272	floor
+scripts/followthroughs/mq-lever-e-verdict-12269	1251	floor
 scripts/followthroughs/parked-green-synthesis-11362	1222	floor
 scripts/followthroughs/post-deploy-incident-soak	1222	floor
 scripts/followthroughs/pr-battery-gate-saving-9323	11826	measured
@@ -751,3 +748,4 @@ tests/scripts/zot-disk-sample	435	measured
 tests/scripts/zot-inventory	17903	measured
 tests/scripts/zot-inventory-assert-marker	3908	measured
 tests/scripts/zot-log-channel-probe	3650	measured
+# replay-a re-priced post-#12296 (observation-window retirement): median of green merge_group runs 42447940669/42442159415/42439386564 (2026-11-08)

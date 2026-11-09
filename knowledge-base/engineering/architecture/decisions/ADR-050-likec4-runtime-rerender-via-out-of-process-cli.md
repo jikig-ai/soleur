@@ -419,3 +419,76 @@ surface such as nf_tables" — is **closed** by the shared artifact
   capability-free (bwrap zeroes the capset before exec), so a nested `CLONE_NEWNS`
   needs a `CAP_SYS_ADMIN` it never holds: EPERM on every kernel (kernel 7.2.5 / bwrap 0.12). The
   over-broad control is a real fork instead.
+
+## Amendment — 2026-11-09 (#9600): the agent's own git invocation treats the workspace `.git` as untrusted too
+
+The 2026-09-24 invariant above ("tenant workspace content — the worktree **and** its `.git` — is
+untrusted input") was recorded for the server-side render path, and its parenthetical ("the built-in
+deny list covers `.git/hooks` and `.git/config` …") must not be read as the whole control for the
+agent's own git reads. Measured with real git on 2026-11-09 (`apps/web-platform/test/safe-bash-git-config-exec.test.ts`):
+a repo-local config makes even the auto-approved `git status`, `git diff` and `git show` execute a
+helper (`core.fsmonitor`, `diff.external`, textconv, `filter.*.clean`, `gpg.program`; with
+`log.showSignature` also a bare `git log` of a signed commit), and a bare repository **committed** into
+the connected repo is a working config carrier after a plain clone, reached by the already-approved
+`cd <dir> && git diff`. A flag denylist therefore cannot close it. Three controls ship together, ranked
+by what they cover:
+
+1. **Env pin (primary).** `buildAgentEnv` sets, for every tenant Concierge session, git-auth or not,
+   `safe.bareRepository=explicit` (protected configuration, so repo-local config cannot undo it; git
+   then REFUSES such a directory with a fatal error rather than ignoring it), `GIT_CONFIG_NOSYSTEM=1`,
+   and `GIT_CONFIG_GLOBAL` pointed at an image-owned, identity-only file
+   (`/usr/local/share/soleur/agent.gitconfig`, bound read-only under `/usr`) instead of HOME's writable
+   gitconfig. It is not `/dev/null`: that would strip the fallback commit identity from sessions with no
+   git-auth and no seeded workspace identity (Start-Fresh workspaces, users with no email), and a
+   workspace's own local identity still beats the file. The pin is a no-op below git 2.38, so the
+   runner image asserts the floor at build time (`apps/web-platform/Dockerfile`). Scope: sessions built
+   by `buildAgentEnv`; the cron/Inngest agents build their own env (ADR-277) and are not covered.
+2. **File-tool guard (secondary).** `Write`, `Edit` and `NotebookEdit` are refused on any `.git` path
+   component (case-insensitive, any depth) at both enforcement points, the PreToolUse sandbox hook and
+   `canUseTool` (`server/git-carrier-guard.ts`). The path is resolved top-down the way the kernel
+   resolves it, expanding symlinks from their `readlink` text, so a dangling link whose target names a
+   `.git` member is refused; anything the walk cannot decide fails closed.
+3. **Closed flag grammar (tertiary).** `git log|diff|show` accept only the flags in `GIT_READ_FLAG`
+   (`server/safe-bash.ts`); every other flag falls to the review card, never a hard deny. A flag outside
+   the list is "not yet measured", not "known dangerous"; the `safe-bash-git-flag-fallthrough` event
+   names the rejected flag so the list is widened by evidence.
+
+The honest claim is narrower than "the carrier is closed": no auto-approved `log|diff|show` carries an
+exec-requesting flag, the agent's own git refuses a committed bare repository and reads no HOME or
+system gitconfig, and file tools cannot write into `.git`. Bare `git diff` and `git status` still
+execute a config that is present. `Ref #9600`, not `Closes`, until the built image's `git --version` is
+measured at 2.38 or later with the real-git tests passing on it, and the in-sandbox delivery of the pin
+(`printenv GIT_CONFIG_COUNT` inside the sandbox) is probed.
+
+**Where the controls do not bind.** The grammar sits in `isBashCommandSafe`, which ADR-284 places
+before the destroy-ask lane and the `bash_autonomous` bypass. Under that default-on bypass every
+non-blocked Bash command is allowed and under a batch approval grant the approved `git <verb>` prefix is
+allowed, so there only the env pin and the file-tool guard hold.
+
+**Residuals (recorded, not closed by this change):**
+
+- Bash-created `.git` members. The CLI sandbox's built-in deny-write names `.git/hooks` and
+  `.git/config`; whether the sandbox can write `.git/commondir`, `.git/info/attributes`,
+  `.git/modules/*/config` or `.git/config.worktree` is unmeasured. A `commondir` redirect to an
+  attacker-authored directory was measured to run `core.fsmonitor` under the pin. `agent-runner-sandbox-config.ts`
+  exposes no `denyWrite` expression, so closing this is a separate SDK-settings change.
+- The pointee of a nested `sub/.git` gitdir file is not a `.git` component and is Write-authorable.
+- Hardlinks to `.git` files. The CLI-side behaviour of the same file-tool write is unmeasured, so the
+  guard is the sole barrier on that path.
+- Host-side git in tenant workspaces, outside the sandbox and with the server's environment, is
+  unchanged except `inflight-checkpoint`'s plumbing git (which runs on every session abort) now carries
+  the shared hardening args: `session-sync` `runConnectedRepoGit` (add, commit, hooks),
+  `ensure-workspace-repo` `realLocalGit`, `git-data-replication`, and the legacy `gitWithInstallationAuth`
+  and its callers. Even the hardened call does not cover `filter.*` drivers, `.git/info/attributes` or a
+  tracked `.gitattributes`. This exposure predates the change and reaches server secrets; the earlier
+  "sandbox-contained, not cross-tenant" framing applies to the agent's own git only.
+- Scripts that assume a bare-root layout (`worktree-manager.sh` calls `git -C <bare common dir>
+  rev-parse --is-bare-repository`) fail under `safe.bareRepository=explicit`; a normal-clone Concierge
+  workspace is unaffected, and a legitimate bare repository needs `--git-dir` or `GIT_DIR`.
+- Sessions that started before the deploy keep the old env until restart, and a workspace `.git/config`
+  poisoned before the deploy is not scanned.
+- In-session `git config --global ...` writes now fail (the pinned global file is read-only by design); a session that needs a global setting uses `--local` or a `-c` flag.
+- Check-to-use gap: a symlink swapped between the guard's `lstat` walk and the CLI's `open(2)` by a concurrent Bash process (same class as the hardlink residual).
+- Server-fixed writers that follow a committed symlink (`attachments/<convId>/`, `knowledge-base/overview/vision.md`) can land inside `.git/hooks` under names that are not hook names today; and the bundled CLI's own `git status`/`diff` subprocesses run outside the wrap with the agent env. Pager channels (`core.pager`, `pager.<verb>`) would run only under a PTY; safety rests on agent Bash stdout never being a TTY. The batch-approval prefix cache exists on the cc-dispatcher lineage only.
+- `~/.gitconfig` is still bound read-write into every sandbox (`agent-outer-wrap.ts`) and HOME is shared across tenants; the agent's git no longer reads it, but host-side git that sets no `GIT_CONFIG_GLOBAL` and scripts that run `env -u GIT_CONFIG_GLOBAL` still do. In-session `gh auth setup-git`, `git lfs install` and `git config --global` writes fail by design.
+- The in-sandbox delivery of the pin and the readability of the identity file are probed together by `printenv GIT_CONFIG_COUNT` and `git var GIT_AUTHOR_IDENT` inside a real sandbox (not yet run); an unreadable or missing global file is read as empty, which would only cost the fallback identity.
